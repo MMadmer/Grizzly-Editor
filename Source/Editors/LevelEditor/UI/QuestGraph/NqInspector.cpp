@@ -1629,7 +1629,11 @@ bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v)
 				ch = true;
 			}
 			int count = (int)e.GetNumber("count", 1);
-			ImGui::SetNextItemWidth(90.f);
+			// InputInt spends the item width on its own -/+ buttons first: a flat 90
+			// left about eight pixels for the digits. The steppers are measured and
+			// added on top, so the number keeps its room at any font size.
+			const float steppers = 2.0f * (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
+			ImGui::SetNextItemWidth(70.f + steppers);
 			if (ImGui::InputInt("\xD1\x88\xD1\x82##il", &count))
 			{
 				if (count < 1) count = 1;
