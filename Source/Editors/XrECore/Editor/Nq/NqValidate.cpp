@@ -111,6 +111,8 @@ namespace
 				ERR(c, "E006", node, 0, "map_spot/spot_text are gone - bind the marker with spot_task (and spot_objective for a step)");
 			if (params.Has("spot_objective") && !params.Has("spot_task"))
 				ERR(c, "E022", node, 0, "spot_objective needs spot_task");
+			if (params.Has("spot_done") && !params.Has("spot_task"))
+				ERR(c, "E022", node, 0, "spot_done needs spot_task");
 		}
 
 		// the fetch modifiers do not fit the one-form table
