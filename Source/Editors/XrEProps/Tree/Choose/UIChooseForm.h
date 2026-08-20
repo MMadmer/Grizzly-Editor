@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 class XREPROPS_API UIChooseForm :  public XrUI
 {
     friend class UIChooseFormItem;
@@ -47,6 +47,9 @@ public:
     static void SetNullTexture(ImTextureID Texture);
     static void Update();
     static bool IsActive();
+    // Selects one item by its tree path and confirms, exactly like picking it and
+    // pressing Ok - the programmatic half of the modal.
+    static bool PickAndConfirm(LPCSTR name);
     static bool GetResult(bool&change,shared_str&result);
     static bool GetResult(bool& change, xr_string& result);
     static bool GetResult(bool& change, xr_vector<xr_string>& result);

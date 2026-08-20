@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "UIChooseForm.h"
 UIChooseForm::EventsMap	UIChooseForm::m_Events;
 UIChooseForm* UIChooseForm::Form = 0;
@@ -237,6 +237,25 @@ void UIChooseForm::Update()
 bool UIChooseForm::IsActive()
 {
     return Form;
+}
+
+// The tree stores a leaf under "<path>*", so that is what the caller passes.
+bool UIChooseForm::PickAndConfirm(LPCSTR name)
+{
+    if (!Form) return false;
+    if (name && name[0])
+    {
+        UITreeItem* Item = Form->m_RootItem.FindItem(name);
+        if (!Item) return false;
+        ((UIChooseFormItem*)Item)->bSelected = true;
+        Form->UpdateSelected((UIChooseFormItem*)Item);
+    }
+    if (!Form->GetSelectedItem()) return false;
+    if (!Form->m_Flags.is(cfMultiSelect))
+        Form->m_SelectedItems.push_back(Form->GetSelectedItem());
+    Form->m_Result = R_Ok;
+    Form->bOpen = false;
+    return true;
 }
 
 bool UIChooseForm::GetResult(bool& change, shared_str& result)

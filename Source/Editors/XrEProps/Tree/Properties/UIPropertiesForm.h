@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 class XREPROPS_API UIPropertiesForm :public XrUI
 {
 	friend class UIPropertiesItem;
@@ -10,6 +10,10 @@ public:
 	PropItem* FindItem(const char* path);
 	PropItem* FindItemOfName(shared_str name);
 	void ClearProperties();
+	// Opens the chooser bound to a PROP_CHOOSE row exactly like clicking that row
+	// does - the same entry point the mouse uses, so both paths cannot drift apart.
+	bool BeginChooseEdit(PropItem* item);
+	bool HasPendingChooseEdit() const { return !!m_EditChooseValue; }
 	void SetFilter(LPCSTR filter);
 	LPCSTR GetFilter() const { return m_Filter; }
 	void ExpandAll();
@@ -29,6 +33,9 @@ public:
 private:
 	PropItemVec m_Items;
 	PropItem* m_EditChooseValue;
+	// the row a pending chooser edit belongs to, kept by key so a properties
+	// rebuild while the modal is open can hand the edit back to the new item
+	shared_str m_PendingChooseKey;
 	PropItem* m_EditTextureValue;
 	PropItem* m_EditShortcutValue;
 private:

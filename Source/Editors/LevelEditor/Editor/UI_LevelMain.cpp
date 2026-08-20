@@ -3624,6 +3624,48 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // The MCP half of a PROP_CHOOSE row: open the modal the row owns, pick one item
+    // by its tree path (a leaf carries a trailing '*') and confirm. Same entry point
+    // the mouse uses, so a chooser that works here works for the author too.
+    //   {"cmd":"property_choose","action":"open","key":"Visual"}
+    //   {"cmd":"property_choose","action":"pick","item":"dynamics\\box\\box_metall_01*"}
+    //   {"cmd":"property_choose","action":"status","key":"Visual"}
+    if (0 == xr_strcmp(cmd, "property_choose"))
+    {
+        char action[32] = {}, key[256] = {}, item[256] = {};
+        XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+        XFinedMCP::GetArg(raw, "key", key, sizeof(key));
+        XFinedMCP::GetArg(raw, "item", item, sizeof(item));
+        UIPropertiesForm* props = LTools->GetProperties();
+        if (0 == _stricmp(action, "open"))
+        {
+            PropItem* p = props->FindItemOfName(key[0] ? key : "Visual");
+            if (!p) { out = "{\"ok\":false,\"error\":\"no such property row\"}"; return true; }
+            const bool started = props->BeginChooseEdit(p);
+            char tmp[512];
+            sprintf_s(tmp, "{\"ok\":%s,\"key\":\"%s\",\"value\":\"%s\"}",
+                started ? "true" : "false", JsonEscapePath(p->Key()).c_str(), JsonEscapePath(p->GetDrawText().c_str()).c_str());
+            out = tmp;
+            return true;
+        }
+        if (0 == _stricmp(action, "pick"))
+        {
+            const bool picked = UIChooseForm::PickAndConfirm(item);
+            char tmp[256];
+            sprintf_s(tmp, "{\"ok\":%s}", picked ? "true" : "false");
+            out = tmp;
+            return true;
+        }
+        PropItem* p = props->FindItemOfName(key[0] ? key : "Visual");
+        char tmp[512];
+        sprintf_s(tmp, "{\"ok\":true,\"form_alive\":%s,\"pending\":%s,\"value\":\"%s\"}",
+            UIChooseForm::IsActive() ? "true" : "false",
+            props->HasPendingChooseEdit() ? "true" : "false",
+            p ? JsonEscapePath(p->GetDrawText().c_str()).c_str() : "");
+        out = tmp;
+        return true;
+    }
+
     // {"name":..., "visual":"dynamics\\box\\box_wood_01"} - sets Model\Visual of a spawn
     // entity, the MCP half of the property inspector chooser. Empty visual is
     // refused: clearing it re-reads the section default only on reload, which lies.

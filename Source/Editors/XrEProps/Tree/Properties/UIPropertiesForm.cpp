@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 UIPropertiesForm::UIPropertiesForm():m_Root("",this)
 {
 	m_bModified = false;
@@ -40,6 +40,12 @@ void UIPropertiesForm::Draw()
 							Modified();
 						}
 				}
+				m_EditChooseValue = nullptr;
+			}
+			else if (!UIChooseForm::IsActive())
+			{
+				// the form died without handing the result over - somebody else consumed it.
+				// Keeping the edit pending would arm it for the NEXT chooser the author opens
 				m_EditChooseValue = nullptr;
 			}
 
@@ -163,6 +169,13 @@ void UIPropertiesForm::AssignItems(PropItemVec& items)
 		VERIFY(Item);
 		Item->PItem = item;
 	}
+	if (m_PendingChooseKey.size())
+	{
+		// gone from the new list means the edit has nothing to land on: the result
+		// is dropped in Draw() when it arrives with no item waiting for it
+		m_EditChooseValue = FindItem(m_PendingChooseKey.c_str());
+		m_PendingChooseKey = nullptr;
+	}
 	RefreshFilter();
 }
 
@@ -221,9 +234,38 @@ PropItem* UIPropertiesForm::FindItemOfName(shared_str name)
 	return nullptr;
 }
 
+bool UIPropertiesForm::BeginChooseEdit(PropItem* item)
+{
+	if (!item || item->Type() != PROP_CHOOSE) return false;
+	if (m_EditChooseValue || UIChooseForm::IsActive()) return false;
+	ChooseValue* V = dynamic_cast<ChooseValue*>(item->GetFrontValue());
+	if (!V) return false;
+
+	shared_str edit_val = V->GetValue();
+	if (!edit_val.size()) edit_val = V->m_StartPath;
+	item->BeforeEdit<ChooseValue, shared_str>(edit_val);
+	ChooseItemVec items;
+	if (!V->OnChooseFillEvent.empty())
+	{
+		V->m_Items = &items;
+		V->OnChooseFillEvent(V);
+	}
+	UIChooseForm::SelectItem(V->m_ChooseID, V->subitem, edit_val.c_str(), 0, V->m_FillParam, 0, items.size() ? &items : 0, V->m_ChooseFlags);
+	m_EditChooseValue = item;
+	return true;
+}
+
 void UIPropertiesForm::ClearProperties()
 {
-	VERIFY(!m_EditChooseValue);
+	// The modal outlives the list: anything that rebuilds the properties while a
+	// chooser is open would leave the pending edit pointing at a freed item, and
+	// the pick would land in nothing. Remember the row, re-find it after the
+	// rebuild - the key survives, the pointer does not.
+	if (m_EditChooseValue)
+	{
+		m_PendingChooseKey = m_EditChooseValue->Key();
+		m_EditChooseValue = nullptr;
+	}
 	for (PropItem* I : m_Items)
 	{
 		xr_delete(I);
