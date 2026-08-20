@@ -4,6 +4,7 @@
 #include "Recovery/EditorRecovery.h"
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\XrECore\Editor\EditorGameModes.h"
 #include "..\..\XrECore\Editor\EditorFileOps.h"
@@ -3678,6 +3679,41 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         char tmp[400];
         sprintf_s(tmp, "{\"ok\":true,\"visual\":\"%s\",\"draws_nothing\":%s}",
             JsonEscapePath(vname).c_str(), EditorModScene::VisualDrawsNothing(vname) ? "true" : "false");
+        out = tmp;
+        return true;
+    }
+
+    // {"name":..., "bones":"link"} - Model\Fixed bones of a physic-object spawn
+    // entity: the bones welded to the world, so the prop stands where it is put.
+    // Empty bones clears the field (a free physics body again).
+    if (0 == xr_strcmp(cmd, "spawn_set_fixed_bones"))
+    {
+        char name[256] = {}, bones[256] = {};
+        XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+        XFinedMCP::GetArg(raw, "bones", bones, sizeof(bones));
+        if (!name[0])
+        {
+            out = "{\"ok\":false,\"error\":\"need 'name'\"}";
+            return true;
+        }
+        CCustomObject* obj = FindObjectRelaxed(name);
+        CSpawnPoint* sp = obj ? dynamic_cast<CSpawnPoint*>(obj) : 0;
+        if (!sp || !sp->m_SpawnData.Valid())
+        {
+            out = "{\"ok\":false,\"error\":\"spawn object not found\"}";
+            return true;
+        }
+        CSE_ALifeObjectPhysic* po = dynamic_cast<CSE_ALifeObjectPhysic*>(sp->m_SpawnData.m_Data);
+        if (!po)
+        {
+            out = "{\"ok\":false,\"error\":\"this section has no fixed bones (not a physic object)\"}";
+            return true;
+        }
+        po->fixed_bones = bones;
+        Scene->UndoSave();
+        ExecCommand(COMMAND_UPDATE_PROPERTIES);
+        char tmp[340];
+        sprintf_s(tmp, "{\"ok\":true,\"fixed_bones\":\"%s\"}", JsonEscapePath(bones).c_str());
         out = tmp;
         return true;
     }

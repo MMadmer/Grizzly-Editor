@@ -787,6 +787,19 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_spawn_set_fixed_bones",
+        "description": "Set Model\Fixed bones of a physic-object spawn entity (e.g. 'link'): the bones "
+        "welded to the world so the placed prop stands still. Empty clears it back to a free body.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "scene object name"},
+                "bones": {"type": "string", "description": "comma separated bone names, e.g. link"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "xfined_spawn_set_visual",
         "description": "Set Model\Visual of a spawn entity (meshes-relative path, extension optional). "
         "Refuses a mesh the game cannot resolve; draws_nothing=true in the answer means the model is "
@@ -1286,6 +1299,7 @@ CMD_MAP = {
     "xfined_view_mode": "view_mode",
     "xfined_list_assets": "list_assets",
     "xfined_asset_preview": "asset_preview",
+    "xfined_spawn_set_fixed_bones": "spawn_set_fixed_bones",
     "xfined_spawn_set_visual": "spawn_set_visual",
     "xfined_rename_object": "rename_object",
     "xfined_delete_selected": "delete_selected",

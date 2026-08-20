@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "EditorModScene.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
+#include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorModManifest)
@@ -874,6 +875,17 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				if (src) strncpy_s(vname, src, _TRUNCATE);
 				for (char* c = vname; *c; ++c) if (*c == '/') *c = '\\';
 				if (char* dot = strrchr(vname, '.')) *dot = 0;
+				// the section's own visual is not an override: the game re-derives it, and
+				// a stash keeping its ghost DEFAULT is the vanilla recipe, not a mistake
+				if (vname[0] && pSettings && pSettings->section_exist(sp_section) &&
+					pSettings->line_exist(sp_section, "visual"))
+				{
+					char def_v[256] = {};
+					strncpy_s(def_v, pSettings->r_string(sp_section, "visual"), _TRUNCATE);
+					for (char* c = def_v; *c; ++c) if (*c == '/') *c = '\\';
+					if (char* dot = strrchr(def_v, '.')) *dot = 0;
+					if (0 == _stricmp(vname, def_v)) vname[0] = 0;
+				}
 				if (vname[0])
 				{
 					if (EditorModScene::VisualReachable(vname))
@@ -892,6 +904,19 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 					else
 						Msg("! [XMS] spawn export: visual '%s' of '%s' is neither in the game nor in the project - "
 							"the op ships without it, the game falls back to the section default", vname, op_name);
+				}
+			}
+
+			// Fixed bones share the visual's fate: the chooser exists in the properties,
+			// but an op without the line spawns a FREE physics body - the trader-style
+			// chest slides when pushed instead of standing where the author nailed it.
+			if (CSE_ALifeObjectPhysic* po = dynamic_cast<CSE_ALifeObjectPhysic*>(pt->m_SpawnData.m_Data))
+			{
+				if (po->fixed_bones.size())
+				{
+					char fline[300];
+					sprintf_s(fline, "fixed_bones = %s\r\n", po->fixed_bones.c_str());
+					fresh += fline;
 				}
 			}
 
