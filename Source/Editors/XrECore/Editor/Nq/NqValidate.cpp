@@ -102,18 +102,25 @@ namespace
 		}
 		// objective.fetch has no meaning without a form; the kill_count filters are optional
 		if (used == 0 && kind == "objective.fetch")
-			ERR(c, "E022", node, 0, "objective.fetch needs 'section', 'items' or 'item' - one of them");
+			ERR(c, "E022", node, 0, "objective.fetch needs an items list (or its one-line spelling, section)");
 
-		// the fetch modifiers do not fit the one-form table: from/spawn ride on the
-		// section forms and exclude each other, and item accepts neither
+		// the fetch modifiers do not fit the one-form table
 		if (kind == "objective.fetch" && params.IsTable())
 		{
-			const bool has_item = params.Has("item"), has_from = params.Has("from"), has_spawn = params.Has("spawn");
-			if (has_item && has_from)	ERR(c, "E022", node, 0, "item is one concrete object and cannot be combined with from");
-			if (has_item && has_spawn)	ERR(c, "E022", node, 0, "item is one concrete object and cannot be combined with spawn");
-			if (has_from && has_spawn)	ERR(c, "E022", node, 0, "spawn already decides where the loot is - from would watch a second container");
+			if (params.Has("item"))
+				ERR(c, "E006", node, 0, "the separate 'item' parameter is gone - use an items row { item = { ref = ... } }");
+			if (params.Has("from") && params.Has("spawn"))
+				ERR(c, "E022", node, 0, "spawn already decides where the loot is - from would watch a second container");
 			if (params.Has("count") && params.Has("items"))
 				ERR(c, "E022", node, 0, "count belongs to section - the items list carries its own counts");
+			if (params.Has("spawn"))
+				if (const SNqValue* rows = params.Get("items"))
+					for (u32 r = 0; r < rows->arr.size(); ++r)
+						if (rows->arr[r].IsTable() && rows->arr[r].Has("item"))
+						{
+							ERR(c, "E022", node, 0, "spawn creates its own instances - a concrete-object row cannot be combined with it");
+							break;
+						}
 		}
 	}
 
@@ -279,12 +286,13 @@ namespace
 			if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawned squad without hold - it may leave for the simulation");
 	}
 
-	// items: a non-empty array of { section, count } - several kinds at once
-	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot)
+	// items: a non-empty array of rows; a row is a section with a count, or one
+	// concrete object ({ item = { ref | story } }) - the two mix freely
+	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order)
 	{
 		if (!v.IsTable() || v.arr.empty())
 		{
-			ERR(c, "E006", node, slot, "items must be a non-empty list of { section = ..., count = N }");
+			ERR(c, "E006", node, slot, "items must be a non-empty list of rows: { section = ..., count = N } or { item = { ref/story } }");
 			return;
 		}
 		xr_vector<xr_string> seen;
@@ -292,9 +300,19 @@ namespace
 		{
 			const SNqValue& e = v.arr[i];
 			const xr_string sl = NqUtil::Format("%s/item:%u", slot ? slot : "", i);
-			if (!e.IsTable() || e.GetString("section").empty())
+			if (!e.IsTable()) { ERR(c, "E006", node, sl.c_str(), "a row must be a table"); continue; }
+			const bool has_section = !e.GetString("section").empty();
+			const bool has_item = e.Has("item");
+			if (has_section == has_item)
 			{
-				ERR(c, "E006", node, sl.c_str(), "each entry needs a section");
+				ERR(c, "E006", node, sl.c_str(), "a row is either a section or a concrete object, not %s", has_item ? "both" : "neither");
+				continue;
+			}
+			if (has_item)
+			{
+				if (e.Has("count")) ERR(c, "E006", node, sl.c_str(), "a concrete object IS one - it takes no count");
+				CheckObjectRef(c, *e.Get("item"), node, sl.c_str(), nidx, order, "object_ref");
+				NoteItemUse(c, *e.Get("item"), nidx, order, sl.c_str());
 				continue;
 			}
 			const xr_string sect = e.GetString("section");
@@ -528,7 +546,7 @@ namespace
 			return;
 		}
 		if (t == "spawn_spec") { CheckSpawnSpec(c, v, node, slot, nidx, order, p.name.c_str()); return; }
-		if (t == "item_list") { CheckItemList(c, v, node, slot); return; }
+		if (t == "item_list") { CheckItemList(c, v, node, slot, nidx, order); return; }
 		if (t == "loot_spawn") { CheckLootSpawn(c, v, node, slot, nidx, order); return; }
 		if (t == "spawn_section")
 		{

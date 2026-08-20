@@ -49,6 +49,8 @@ public:
 	// placed a second ago has to be in the list without a save and without a reload.
 	typedef void (*TSceneRestrictors)(xr_vector<SEntry>& out);
 	static void						SetSceneRestrictors(TSceneRestrictors fn);
+	// authored [story_object] ids of the OPEN scene, merged like the restrictors
+	static void						SetSceneStories(TSceneRestrictors fn);
 
 	// true when a linked game backs the indexes (otherwise every index is empty
 	// and W060 is not raised)

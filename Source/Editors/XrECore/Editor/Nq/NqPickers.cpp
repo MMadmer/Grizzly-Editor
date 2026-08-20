@@ -15,9 +15,12 @@ namespace
 	bool							s_Available	= false;
 	xr_string						s_BuiltFor;			// fingerprint + project root
 	xr_string						s_ProjectRoot;
-	// restrictors as the level files have them; the open scene is merged on top
+	// restrictors and authored story ids as the level files have them; the open
+	// scene is merged on top of both
 	xr_vector<NqPickers::SEntry>	s_DiskRestrictors;
+	xr_vector<NqPickers::SEntry>	s_DiskStories;
 	NqPickers::TSceneRestrictors	s_SceneRestrictors	= 0;
+	NqPickers::TSceneRestrictors	s_SceneStories		= 0;
 	u32								s_SceneStamp		= 0;
 
 	const char* kTypeNames[NqPickers::tCount] =
@@ -642,6 +645,10 @@ namespace
 			cut = level.find_last_of("\\/");
 			if (cut != xr_string::npos) level.erase(0, cut + 1);
 
+			// A typed "Story ID (script)" lands in the object's custom data, which the
+			// scene save writes INLINE as the quoted 000024 value (real newlines inside
+			// the quotes). Without reading it here the picker only learns the id after an
+			// export - the author types a name and the node's list pretends it is unknown.
 			// [object_N_spawndata] is positional: 000002 is the spawn section and 000003
 			// the object name the runtime looks a zone up by. The [object_N] header is
 			// no use here - an attached shape sits between it and the spawndata, and
@@ -653,6 +660,7 @@ namespace
 			// perfectly good name read as "not placed in this project".
 			xr_string section, name, where, hdr_name, hdr_where;
 			bool in_spawndata = false, in_header = false;
+			int cd = 0;		// 0 outside 000024, 1 inside it, 2 inside its [story_object]
 			size_t pos = 0;
 			while (pos < text.size())
 			{
@@ -661,6 +669,42 @@ namespace
 				xr_string line = NqUtil::Trim(text.substr(pos, eol - pos));
 				pos = eol + 1;
 				if (line.empty()) continue;
+				// Inside a quoted 000024 value: its lines - [logic], [story_object], the
+				// keys under them - belong to the VALUE, not to the .part structure, so
+				// they are consumed here before the header branch can misread them.
+				// The value ends where the next NNNNNN packet key or a real [object_
+				// header begins.
+				if (cd)
+				{
+					const bool real_header = 0 == _strnicmp(line.c_str(), "[object_", 8);
+					xr_string body = line;
+					while (!body.empty() && (body.back() == '"' || body.back() == '\r')) body.pop_back();
+					size_t ceq = body.find('=');
+					xr_string ckey = (ceq == xr_string::npos) ? xr_string() : NqUtil::Trim(body.substr(0, ceq));
+					const bool packet_key = ckey.size() == 6 && ckey.find_first_not_of("0123456789") == xr_string::npos;
+					if (real_header || packet_key)
+						cd = 0;				// fall through to the normal handling below
+					else
+					{
+						if (body.find("[story_object]") != xr_string::npos) { cd = 2; continue; }
+						if (!body.empty() && body[0] == '[') { cd = 1; continue; }
+						if (cd == 2 && !body.empty())
+						{
+							xr_string sid = body;
+							if (ceq != xr_string::npos)
+							{
+								if (ckey != "story_id") { cd = 1; continue; }
+								sid = body.substr(ceq + 1);
+							}
+							sid = NqUtil::Trim(sid.c_str());
+							if (!sid.empty())
+								Add(NqPickers::tStory, sid, xr_string(),
+									xr_string("project: ") + (name.empty() ? hdr_name : name));
+							cd = 1;
+						}
+						continue;
+					}
+				}
 				if (line[0] == '[')
 				{
 					NoteSpawnObject(section, name.empty() ? hdr_name : name, level,
@@ -680,8 +724,8 @@ namespace
 					continue;
 				}
 				const size_t eq = line.find('=');
+				const xr_string key = (eq == xr_string::npos) ? xr_string() : NqUtil::Trim(line.substr(0, eq));
 				if (eq == xr_string::npos) continue;
-				const xr_string key = NqUtil::Trim(line.substr(0, eq));
 				xr_string value = NqUtil::Trim(line.substr(eq + 1));
 				if (value.size() >= 2 && value[0] == '"') value = value.substr(1, value.size() - 2);
 				if (in_header)
@@ -691,6 +735,9 @@ namespace
 					continue;
 				}
 				if (!in_spawndata) continue;
+				// raw line, not the stripped value: the strip eats the closing bracket
+				// of a value that is exactly "[story_object]"
+				if (key == "000024") { cd = line.find("[story_object]") != xr_string::npos ? 2 : 1; continue; }
 				if (key != "000002" && key != "000003" && key != "000006") continue;
 				if (key == "000002") section = value;
 				else if (key == "000003") name = value;
@@ -704,7 +751,7 @@ namespace
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 8 ";
+	const char* kCacheFormat = "nqindex 9 ";
 
 	void CachePath(string_path& out)
 	{
@@ -843,6 +890,7 @@ namespace
 			std::sort(s_Index[project_fed[i]].begin(), s_Index[project_fed[i]].end(),
 					  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
 		s_DiskRestrictors = s_Index[NqPickers::tRestrictor];
+		s_DiskStories = s_Index[NqPickers::tStory];
 	}
 
 	void Ensure()
@@ -869,6 +917,19 @@ namespace
 			s_Known[NqPickers::tRestrictor].insert(s_Index[NqPickers::tRestrictor][i].id);
 		for (u32 i = 0; i < live.size(); ++i)
 			Add(NqPickers::tRestrictor, live[i].id, live[i].name, live[i].extra);
+		// authored story ids straight from the open scene: the property is usable in
+		// the node's pickers the moment it is typed, no save or export needed
+		if (s_SceneStories)
+		{
+			xr_vector<NqPickers::SEntry> stories;
+			s_SceneStories(stories);
+			s_Index[NqPickers::tStory] = s_DiskStories;
+			s_Known[NqPickers::tStory].clear();
+			for (u32 i = 0; i < s_Index[NqPickers::tStory].size(); ++i)
+				s_Known[NqPickers::tStory].insert(s_Index[NqPickers::tStory][i].id);
+			for (u32 i = 0; i < stories.size(); ++i)
+				Add(NqPickers::tStory, stories[i].id, stories[i].name, stories[i].extra);
+		}
 		std::sort(s_Index[NqPickers::tRestrictor].begin(), s_Index[NqPickers::tRestrictor].end(),
 				  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
 	}
@@ -878,11 +939,12 @@ namespace
 bool NqPickers::Available()		{ Ensure(); return s_Available; }
 void NqPickers::Invalidate()	{ s_Built = false; s_SceneStamp = 0; }
 void NqPickers::SetSceneRestrictors(TSceneRestrictors fn) { s_SceneRestrictors = fn; s_SceneStamp = 0; }
+void NqPickers::SetSceneStories(TSceneRestrictors fn) { s_SceneStories = fn; s_SceneStamp = 0; }
 
 const xr_vector<NqPickers::SEntry>& NqPickers::Index(EType t)
 {
 	Ensure();
-	if (t == tRestrictor) EnsureSceneRestrictors();
+	if (t == tRestrictor || t == tStory) EnsureSceneRestrictors();
 	static xr_vector<SEntry> empty;
 	return (t >= 0 && t < tCount) ? s_Index[t] : empty;
 }

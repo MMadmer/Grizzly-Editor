@@ -404,9 +404,8 @@ void NqCatalog::ExclusiveForms(LPCSTR kind, xr_vector<xr_string>& out)
 	const xr_string k = kind;
 	if (k == "objective.fetch")
 	{
-		// one named object, one section, or a list of sections; from/spawn are
-		// modifiers shared by the last two and are checked separately
-		out.push_back("item");
+		// section+count is the one-line spelling of items; the modifiers from/spawn
+		// ride on either and are checked separately
 		out.push_back("section,count");
 		out.push_back("items");
 	}

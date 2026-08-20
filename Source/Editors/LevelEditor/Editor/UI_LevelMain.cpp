@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "../../XrECore/Editor/Nq/NqPickers.h"
+#include "../../XrECore/Editor/Nq/NqUtil.h"
 #include "Recovery/EditorRecovery.h"
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
@@ -43,11 +44,58 @@ static void CollectSceneRestrictors(xr_vector<NqPickers::SEntry>& out)
     }
 }
 
+// The typed "Story ID (script)" of every spawn object in the open scene: the block sits
+// in the object's custom data, and picking it up live means the name is usable in the
+// quest pickers the moment the author writes it - no save, no export.
+static void CollectSceneStories(xr_vector<NqPickers::SEntry>& out)
+{
+    out.clear();
+    if (!Scene) return;
+    ObjectList& lst = Scene->ListObj(OBJCLASS_SPAWNPOINT);
+    for (ObjectIt it = lst.begin(); it != lst.end(); ++it)
+    {
+        CSpawnPoint* sp = dynamic_cast<CSpawnPoint*>(*it);
+        if (!sp) continue;
+        ISE_Abstract* se = sp->m_SpawnData.m_Data;
+        if (!se) continue;
+        LPCSTR ini = se->m_ini_string.c_str();
+        if (!ini || !strstr(ini, "[story_object]")) continue;
+        // minimal ini scan: story_id = X, or the bare-id line right under the header
+        xr_string text = ini;
+        size_t pos = text.find("[story_object]") + xr_strlen("[story_object]");
+        xr_string sid;
+        while (pos < text.size())
+        {
+            size_t eol = text.find('\n', pos);
+            if (eol == xr_string::npos) eol = text.size();
+            xr_string line = NqUtil::Trim(text.substr(pos, eol - pos).c_str());
+            pos = eol + 1;
+            if (line.empty()) continue;
+            if (line[0] == '[') break;
+            const size_t eq = line.find('=');
+            if (eq != xr_string::npos)
+            {
+                if (NqUtil::Trim(line.substr(0, eq).c_str()) != "story_id") break;
+                sid = NqUtil::Trim(line.substr(eq + 1).c_str());
+            }
+            else sid = line;
+            break;
+        }
+        if (sid.empty()) continue;
+        NqPickers::SEntry e;
+        e.id = sid;
+        LPCSTR name = sp->GetName();
+        e.extra = xr_string("scene: ") + (name ? name : "");
+        out.push_back(e);
+    }
+}
+
 CLevelMain::CLevelMain()
 {
     m_Cursor        = xr_new<C3DCursor>();
     EPrefs			= xr_new<CLevelPreferences>();
     NqPickers::SetSceneRestrictors(CollectSceneRestrictors);
+    NqPickers::SetSceneStories(CollectSceneStories);
 }
 
 CLevelMain::~CLevelMain()
