@@ -1,4 +1,5 @@
 ﻿#include "stdafx.h"
+#include "UITitleBar.h"
 #include "..\XrECore\Editor\EditorChooseEvents.h"
 #include "..\..\XrECore\Editor\EditorGameConfigs.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
@@ -18,6 +19,9 @@ IC ImTextureID ui_imtex(ref_texture& t) { return t->surface_get(); }
 UIMainForm* MainForm = nullptr;
 UIMainForm::UIMainForm()
 {
+	// the ImGui bar is the caption from here on (see EditorTitleBar.h)
+	UITitleBar::Install();
+
     EnableReceiveCommands();
     if (!ExecCommand(COMMAND_INITIALIZE, (u32)0, (u32)0))
     {

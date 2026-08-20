@@ -1,7 +1,8 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
+#include "UITitleBar.h"
 UIMainMenuForm::UIMainMenuForm()
 {
 }
@@ -15,6 +16,7 @@ void UIMainMenuForm::Draw()
   
     if (ImGui::BeginMainMenuBar())
     {
+        UITitleBar::DrawLeft();
         if (ImGui::BeginMenu("File"))
         {
             if (ImGui::MenuItem("Clear", "")) { ExecCommand(COMMAND_CLEAR); }
@@ -615,6 +617,7 @@ void UIMainMenuForm::Draw()
 
            ImGui::EndMenu();
         }
+        UITitleBar::DrawRight();
         ImGui::EndMainMenuBar();
     }
 }

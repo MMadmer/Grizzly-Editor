@@ -12,6 +12,7 @@
 #include "..\..\XrECore\Editor\UI_CommandPalette.h"
 #include "..\..\XrECore\Editor\UI_ViewportNavigation.h"
 #include "..\..\XrECore\Editor\Nq\NqMcp.h"
+#include "..\UI\UITitleBar.h"
 #include "..\UI\QuestGraph\UIQuestGraph.h"
 #include "EditorModScene.h"
 #include "Utils\Cursor3D.h"
@@ -3630,6 +3631,13 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     //   {"cmd":"property_choose","action":"open","key":"Visual"}
     //   {"cmd":"property_choose","action":"pick","item":"dynamics\\box\\box_metall_01*"}
     //   {"cmd":"property_choose","action":"status","key":"Visual"}
+    // geometry and state of the custom window chrome, for tests and layout checks
+    if (0 == xr_strcmp(cmd, "titlebar_info"))
+    {
+        UITitleBar::McpInfo(out);
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "property_choose"))
     {
         char action[32] = {}, key[256] = {}, item[256] = {};

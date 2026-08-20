@@ -727,6 +727,44 @@ void SetPreferredGpu(LPCSTR description)
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+// ---------------------------------------------------------------------------
+// Custom window chrome (EditorTitleBar.h). The ImGui main bar of the editor
+// that registered a provider doubles as the caption: WM_NCCALCSIZE folds the
+// system title bar into the client area (the resize borders, Aero snap, the
+// DWM shadow and the minimize animations all survive, because the window
+// KEEPS its WS_OVERLAPPEDWINDOW style), and WM_NCHITTEST asks the provider
+// which parts of the band drag the window.
+// ---------------------------------------------------------------------------
+#include "EditorTitleBar.h"
+
+namespace EditorTitleBar
+{
+static THitTest s_HitTest = 0;
+
+void SetHitTest(THitTest fn) { s_HitTest = fn; }
+bool Enabled() { return !!s_HitTest; }
+int HitTest(int x, int y) { return s_HitTest ? s_HitTest(x, y) : 0; }
+
+int MaximizedTopPad(void* hwnd)
+{
+	// per-monitor DPI when the OS can say, the system metric otherwise
+	if (HMODULE user32 = ::GetModuleHandleA("user32.dll"))
+	{
+		typedef UINT(WINAPI* GetDpiWndFn)(HWND);
+		typedef int(WINAPI* MetricDpiFn)(int, UINT);
+		GetDpiWndFn get_dpi = (GetDpiWndFn)::GetProcAddress(user32, "GetDpiForWindow");
+		MetricDpiFn metric = (MetricDpiFn)::GetProcAddress(user32, "GetSystemMetricsForDpi");
+		if (get_dpi && metric)
+		{
+			const UINT dpi = get_dpi((HWND)hwnd);
+			return metric(SM_CYSIZEFRAME, dpi) + metric(SM_CXPADDEDBORDER, dpi);
+		}
+	}
+	return ::GetSystemMetrics(SM_CYSIZEFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER);
+}
+} // namespace EditorTitleBar
+
+
 void CEditorRenderDevice::CreateWindow()
 {
 	// Editors are DPI-unaware by default, so Windows bitmap-stretches them on
@@ -779,6 +817,43 @@ void CEditorRenderDevice::DestryWindow()
 }
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+	// the caption trick, only for the editor that registered a title bar
+	if (EditorTitleBar::Enabled())
+	{
+		if (msg == WM_NCCALCSIZE && wParam)
+		{
+			// let Windows lay out the borders, then take the caption back into
+			// the client. Maximized, the frame hangs past the monitor edge - the
+			// pad keeps the bar readable instead of clipped by the screen.
+			NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
+			const LONG top = p->rgrc[0].top;
+			const LRESULT res = ::DefWindowProcW(hWnd, msg, wParam, lParam);
+			p->rgrc[0].top = top + (::IsZoomed(hWnd) ? EditorTitleBar::MaximizedTopPad(hWnd) : 0);
+			return res;
+		}
+		if (msg == WM_NCHITTEST)
+		{
+			const LRESULT def = ::DefWindowProcW(hWnd, msg, wParam, lParam);
+			if (def != HTCLIENT) return def;
+			POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+			::ScreenToClient(hWnd, &pt);
+			// the caption ate the top resize border: give the top strip back
+			if (!::IsZoomed(hWnd))
+			{
+				const int band = EditorTitleBar::MaximizedTopPad(hWnd);
+				if (pt.y >= 0 && pt.y < band)
+				{
+					RECT rc; ::GetClientRect(hWnd, &rc);
+					if (pt.x < band)				return HTTOPLEFT;
+					if (pt.x >= rc.right - band)	return HTTOPRIGHT;
+					return HTTOP;
+				}
+			}
+			const int ht = EditorTitleBar::HitTest(pt.x, pt.y);
+			if (ht) return ht;
+			return HTCLIENT;
+		}
+	}
 	switch (msg)
 	{
 	case WM_ACTIVATE:
