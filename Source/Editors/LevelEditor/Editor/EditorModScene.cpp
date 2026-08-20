@@ -813,6 +813,65 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				sprintf_s(op_name, "%.*s_%u", int(sizeof(op_name) - 8), base, dup);
 			}
 
+			// The model is resolved BEFORE the op is written, because a model the game
+			// cannot load must skip the WHOLE op: a physic entity that spawns without a
+			// visual crashes the client inside net_Spawn (Center() reads a null
+			// renderable) - the delayed fatal this bake exists to prevent.
+			char vname[256] = {};
+			if (ISE_Visual* vis = pt->m_SpawnData.m_Data->visual())
+			{
+				LPCSTR src_ref = vis->get_visual();
+				if (src_ref && (0 == _strnicmp(src_ref, "meshes\\", 7) || 0 == _strnicmp(src_ref, "meshes/", 7))) src_ref += 7;
+				if (src_ref) strncpy_s(vname, src_ref, _TRUNCATE);
+				for (char* c = vname; *c; ++c) if (*c == '/') *c = '\\';
+				if (char* dot = strrchr(vname, '.')) *dot = 0;
+			}
+			// the section's own visual is not an override: the game re-derives it, and
+			// a stash keeping its ghost DEFAULT is the vanilla recipe, not a mistake
+			const bool section_has_visual = pSettings && pSettings->section_exist(sp_section) &&
+				pSettings->line_exist(sp_section, "visual");
+			if (vname[0] && section_has_visual)
+			{
+				char def_v[256] = {};
+				strncpy_s(def_v, pSettings->r_string(sp_section, "visual"), _TRUNCATE);
+				for (char* c = def_v; *c; ++c) if (*c == '/') *c = '\\';
+				if (char* dot = strrchr(def_v, '.')) *dot = 0;
+				if (0 == _stricmp(vname, def_v)) vname[0] = 0;
+			}
+			if (vname[0] && !EditorModScene::VisualReachable(vname))
+			{
+				// the chooser lists the SDK's own meshes too: a model picked there is
+				// staged into the project, so the module carries it like any project mesh
+				string_path sdk_name, sdk_src;
+				sprintf_s(sdk_name, "%s.ogf", vname);
+				if (FS.exist(sdk_src, "$game_meshes$", sdk_name))
+				{
+					string_path staged, dir;
+					sprintf_s(staged, "%s\\gamedata\\meshes\\%s.ogf", EditorProject::Root(), vname);
+					strcpy_s(dir, staged);
+					if (char* cut = strrchr(dir, '\\')) *cut = 0;
+					CreateDirChain(dir);
+					if (::CopyFileA(sdk_src, staged, FALSE))
+						Msg("* [XMS] spawn export: staged SDK model -> gamedata\\meshes\\%s.ogf", vname);
+				}
+			}
+			if (vname[0] && !EditorModScene::VisualReachable(vname))
+			{
+				Msg("! [XMS] spawn export: visual '%s' of '%s' exists neither in the game, the project, "
+					"nor the SDK - op skipped, it would crash the game", vname, op_name);
+				++res.missing; ++res.skipped;
+				continue;
+			}
+			// no model anywhere is the same crash spelled differently; a section with
+			// its own default (the inventory_box ghost) is fine without a line
+			if (!vname[0] && !section_has_visual && dynamic_cast<CSE_ALifeObjectPhysic*>(pt->m_SpawnData.m_Data))
+			{
+				Msg("! [XMS] spawn export: '%s' (%s) has no model at all - op skipped, it would "
+					"crash the game; pick one in Model\\Visual", op_name, sp_section);
+				++res.missing; ++res.skipped;
+				continue;
+			}
+
 			const Fmatrix& xf = pt->_Transform();
 			Fvector angles;
 			xf.getXYZ(angles);
@@ -830,46 +889,17 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				angles.x, angles.y, angles.z);
 			fresh += entry;
 
-			// The model is an authored property of the entity (Model\Visual). Without
-			// carrying it here the property is dead: the game falls back to the section
-			// default, and for a stash that default draws nothing at all.
-			if (ISE_Visual* vis = pt->m_SpawnData.m_Data->visual())
+			if (vname[0])
 			{
-				char vname[256] = {};
-				LPCSTR src = vis->get_visual();
-				if (src && (0 == _strnicmp(src, "meshes\\", 7) || 0 == _strnicmp(src, "meshes/", 7))) src += 7;
-				if (src) strncpy_s(vname, src, _TRUNCATE);
-				for (char* c = vname; *c; ++c) if (*c == '/') *c = '\\';
-				if (char* dot = strrchr(vname, '.')) *dot = 0;
-				// the section's own visual is not an override: the game re-derives it, and
-				// a stash keeping its ghost DEFAULT is the vanilla recipe, not a mistake
-				if (vname[0] && pSettings && pSettings->section_exist(sp_section) &&
-					pSettings->line_exist(sp_section, "visual"))
+				char vline[300];
+				sprintf_s(vline, "visual    = %s\r\n", vname);
+				fresh += vline;
+				if (EditorModScene::VisualDrawsNothing(vname))
 				{
-					char def_v[256] = {};
-					strncpy_s(def_v, pSettings->r_string(sp_section, "visual"), _TRUNCATE);
-					for (char* c = def_v; *c; ++c) if (*c == '/') *c = '\\';
-					if (char* dot = strrchr(def_v, '.')) *dot = 0;
-					if (0 == _stricmp(vname, def_v)) vname[0] = 0;
-				}
-				if (vname[0])
-				{
-					if (EditorModScene::VisualReachable(vname))
-					{
-						char vline[300];
-						sprintf_s(vline, "visual    = %s\r\n", vname);
-						fresh += vline;
-						if (EditorModScene::VisualDrawsNothing(vname))
-						{
-							++res.invisible;
-							Msg("! [XMS] spawn export: '%s' keeps '%s', a model the engine draws nothing for - "
-								"the object works but stays invisible in game; pick a real mesh in Model\\Visual",
-								op_name, vname);
-						}
-					}
-					else
-						Msg("! [XMS] spawn export: visual '%s' of '%s' is neither in the game nor in the project - "
-							"the op ships without it, the game falls back to the section default", vname, op_name);
+					++res.invisible;
+					Msg("! [XMS] spawn export: '%s' keeps '%s', a model the engine draws nothing for - "
+						"the object works but stays invisible in game; pick a real mesh in Model\\Visual",
+						op_name, vname);
 				}
 			}
 

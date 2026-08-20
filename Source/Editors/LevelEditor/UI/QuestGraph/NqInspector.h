@@ -93,7 +93,7 @@ private:
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
 	bool			DrawItemList	(LPCSTR label, SNqValue& v);
-	bool			DrawFetchParams	(SNqValue& params);
+	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
 	bool			DrawLootSpawn	(LPCSTR label, SNqValue& v);
 	bool			DrawCases		(LPCSTR label, SNqValue& v, bool weights);
 	bool			DrawCondList	(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int depth);
