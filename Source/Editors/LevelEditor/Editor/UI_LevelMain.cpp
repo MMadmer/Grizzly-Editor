@@ -3623,6 +3623,65 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // {"name":..., "visual":"dynamics\\box\\box_wood_01"} - sets Model\Visual of a spawn
+    // entity, the MCP half of the property inspector chooser. Empty visual is
+    // refused: clearing it re-reads the section default only on reload, which lies.
+    if (0 == xr_strcmp(cmd, "spawn_set_visual"))
+    {
+        char name[256] = {}, visual[256] = {};
+        XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+        XFinedMCP::GetArg(raw, "visual", visual, sizeof(visual));
+        if (!name[0] || !visual[0])
+        {
+            out = "{\"ok\":false,\"error\":\"need 'name' and non-empty 'visual'\"}";
+            return true;
+        }
+        CCustomObject* obj = FindObjectRelaxed(name);
+        CSpawnPoint* sp = obj ? dynamic_cast<CSpawnPoint*>(obj) : 0;
+        if (!sp)
+        {
+            out = "{\"ok\":false,\"error\":\"spawn object not found\"}";
+            return true;
+        }
+        if (!sp->m_SpawnData.Valid())
+        {
+            out = "{\"ok\":false,\"error\":\"object carries no spawn data\"}";
+            return true;
+        }
+        ISE_Visual* vis = sp->m_SpawnData.m_Data->visual();
+        if (!vis)
+        {
+            out = "{\"ok\":false,\"error\":\"this section has no visual\"}";
+            return true;
+        }
+        // normalized to what configs carry: meshes-relative, backslashes, no .ogf
+        char vname[256];
+        {
+            LPCSTR src = visual;
+            if (0 == _strnicmp(src, "meshes\\", 7) || 0 == _strnicmp(src, "meshes/", 7)) src += 7;
+            strncpy_s(vname, src, _TRUNCATE);
+            for (char* c = vname; *c; ++c) if (*c == '/') *c = '\\';
+            if (char* dot = strrchr(vname, '.')) *dot = 0;
+        }
+        // a name nothing resolves would crash the game at online spawn - refuse it
+        if (!EditorModScene::VisualReachable(vname))
+        {
+            out = "{\"ok\":false,\"error\":\"mesh not found in the game or the project (meshes\\\\<visual>.ogf)\"}";
+            return true;
+        }
+        vis->set_visual(vname);
+        // same signal the UI chooser sends: the viewport model reloads next frame
+        sp->m_SpawnData.m_Data->set_editor_flag(ISE_Abstract::flVisualChange);
+        Scene->UndoSave();
+        ExecCommand(COMMAND_UPDATE_PROPERTIES);
+        UI->RedrawScene(true);
+        char tmp[400];
+        sprintf_s(tmp, "{\"ok\":true,\"visual\":\"%s\",\"draws_nothing\":%s}",
+            JsonEscapePath(vname).c_str(), EditorModScene::VisualDrawsNothing(vname) ? "true" : "false");
+        out = tmp;
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "rename_object"))
     {
         char name[256], new_name[256];

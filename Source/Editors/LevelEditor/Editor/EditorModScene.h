@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // XMS scene-side mod exports (level overlays).
 //
@@ -25,6 +25,13 @@ namespace EditorModScene
 	void McpExportCut			(LPCSTR raw, xr_string& out);	// mod_export_cut
 	void McpExportXCForm		(LPCSTR raw, xr_string& out);	// mod_export_xcform
 	void McpExportOGF			(LPCSTR raw, xr_string& out);	// mod_export_ogf_probe
+
+	// Visual checks shared with spawn_set_visual: a meshes-relative name (no
+	// extension) resolved the way the game will - the project's gamedata first,
+	// then the linked game content. DrawsNothing detects the glow_ghost skin
+	// X-Ray uses for models that exist but are never rendered (stash boxes).
+	bool VisualReachable		(LPCSTR visual);
+	bool VisualDrawsNothing		(LPCSTR visual);
 
 	// pre-build hook (EditorMod::SetPreBuildBake): mirrors the OPEN scene into
 	// its level's spawn file, so "save scene, press Build" ships what you see -

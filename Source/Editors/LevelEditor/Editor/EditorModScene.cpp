@@ -26,6 +26,97 @@ static void CreateDirChain(const char* folder)
 	}
 }
 
+// A meshes-relative visual (no extension) as the game will resolve it: staged in
+// the project's gamedata or shipped by the game itself.
+static bool VisualBytes(LPCSTR visual, xr_vector<u8>& out)
+{
+	out.clear();
+	string_path staged;
+	sprintf_s(staged, "%s\\gamedata\\meshes\\%s.ogf", EditorProject::Root(), visual);
+	if (FILE* f = ::fopen(staged, "rb"))
+	{
+		::fseek(f, 0, SEEK_END);
+		const long len = ::ftell(f);
+		::fseek(f, 0, SEEK_SET);
+		if (len > 0)
+		{
+			out.resize(u32(len));
+			const size_t got = ::fread(&out[0], 1, size_t(len), f);
+			out.resize(u32(got));
+		}
+		::fclose(f);
+		return !out.empty();
+	}
+	char rel[300];
+	sprintf_s(rel, "meshes\\%s.ogf", visual);
+	xr_string err;
+	if (!EditorGameContent::EnsureMounted(err)) return false;
+	const int idx = EditorGameContent::Find(rel);
+	if (idx < 0) return false;
+	u32 size = 0;
+	u8* data = EditorGameContent::ReadBytes(idx, size);
+	if (!data) return false;
+	if (size) out.assign(data, data + size);
+	EditorGameContent::FreeBytes(data);
+	return !out.empty();
+}
+
+bool EditorModScene::VisualReachable(LPCSTR visual)
+{
+	string_path staged;
+	sprintf_s(staged, "%s\\gamedata\\meshes\\%s.ogf", EditorProject::Root(), visual);
+	if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(staged)) return true;
+	char rel[300];
+	sprintf_s(rel, "meshes\\%s.ogf", visual);
+	xr_string err;
+	return EditorGameContent::EnsureMounted(err) && EditorGameContent::Find(rel) >= 0;
+}
+
+// One chunk of an OGF container: id is masked because a compressed chunk carries
+// the high bit. Offsets are relative to the base handed in.
+static bool OgfChunk(const u8* data, u32 size, u32 want, u32& body, u32& body_size, u32 from = 0)
+{
+	u32 off = from;
+	while (off + 8 <= size)
+	{
+		const u32 id = *(const u32*)(data + off) & ~0x80000000u;
+		const u32 sz = *(const u32*)(data + off + 4);
+		if (off + 8 + sz > size) break;
+		if (id == want) { body = off + 8; body_size = sz; return true; }
+		off += 8 + sz;
+	}
+	return false;
+}
+
+// X-Ray's way of saying "there, but not drawn": every mesh of the model is painted
+// with the transparent glow_ghost. Stash containers ship exactly like that - the box
+// the player sees is supposed to be the level's own geometry around them, so one
+// placed in the open is a map marker and nothing else.
+bool EditorModScene::VisualDrawsNothing(LPCSTR visual)
+{
+	xr_vector<u8> buf;
+	if (!VisualBytes(visual, buf) || buf.size() < 16) return false;
+	const u8* base = &buf[0];
+	u32 kids = 0, kids_size = 0;
+	if (!OgfChunk(base, u32(buf.size()), 9 /*OGF_CHILDREN*/, kids, kids_size)) return false;
+	u32 seen = 0, off = 0;
+	while (off + 8 <= kids_size)
+	{
+		const u32 sz = *(const u32*)(base + kids + off + 4);
+		if (off + 8 + sz > kids_size) break;
+		u32 tex = 0, tex_size = 0;
+		if (OgfChunk(base + kids + off + 8, sz, 2 /*OGF_TEXTURE*/, tex, tex_size) && tex_size)
+		{
+			const char* name = (const char*)(base + kids + off + 8 + tex);
+			if (::strnlen(name, tex_size) >= tex_size) return false;		// not a string, do not guess
+			if (0 != _stricmp(name, "glow\\glow_ghost")) return false;
+			++seen;
+		}
+		off += 8 + sz;
+	}
+	return seen > 0;
+}
+
 static bool WriteBinFile(const char* path, const void* data, u32 size)
 {
 	HANDLE h = ::CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -492,9 +583,10 @@ struct SSpawnResult
 	int			skipped;		// no reference / unusable object
 	int			scaled;			// non-unit scale: the spawn path has no scale
 	int			missing;		// visual found neither in the game nor the project
+	int			invisible;		// shipped, but the engine draws nothing for its model
 	xr_string	path;
 	xr_string	names_json;
-	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0) {}
+	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0), invisible(0) {}
 };
 
 // section names double as file-safe ids; keep the xspawn key charset tight
@@ -771,6 +863,38 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				angles.x, angles.y, angles.z);
 			fresh += entry;
 
+			// The model is an authored property of the entity (Model\Visual). Without
+			// carrying it here the property is dead: the game falls back to the section
+			// default, and for a stash that default draws nothing at all.
+			if (ISE_Visual* vis = pt->m_SpawnData.m_Data->visual())
+			{
+				char vname[256] = {};
+				LPCSTR src = vis->get_visual();
+				if (src && (0 == _strnicmp(src, "meshes\\", 7) || 0 == _strnicmp(src, "meshes/", 7))) src += 7;
+				if (src) strncpy_s(vname, src, _TRUNCATE);
+				for (char* c = vname; *c; ++c) if (*c == '/') *c = '\\';
+				if (char* dot = strrchr(vname, '.')) *dot = 0;
+				if (vname[0])
+				{
+					if (EditorModScene::VisualReachable(vname))
+					{
+						char vline[300];
+						sprintf_s(vline, "visual    = %s\r\n", vname);
+						fresh += vline;
+						if (EditorModScene::VisualDrawsNothing(vname))
+						{
+							++res.invisible;
+							Msg("! [XMS] spawn export: '%s' keeps '%s', a model the engine draws nothing for - "
+								"the object works but stays invisible in game; pick a real mesh in Model\\Visual",
+								op_name, vname);
+						}
+					}
+					else
+						Msg("! [XMS] spawn export: visual '%s' of '%s' is neither in the game nor in the project - "
+							"the op ships without it, the game falls back to the section default", vname, op_name);
+				}
+			}
+
 			// The zone's own geometry. A restrictor composed without it arrives with an
 			// empty shape list, so nothing is ever inside it: the marker lands in the
 			// right place and walking in does nothing at all. Baked here instead of
@@ -1020,10 +1144,22 @@ void EditorModScene::RequestExportSpawn()
 	SSpawnResult res;
 	xr_string err;
 	if (DoExportSpawn(0, true, 0, 0, res, err))
+	{
 		sprintf_s(s_Message,
 			"Spawn layer exported: %d op(s)\n%s\n\nskipped: %d\nobjects with a non-unit scale: %d "
 			"(the spawn path carries no scale)",
 			res.exported, res.path.c_str(), res.skipped, res.scaled);
+		// a stash keeps its ghost model unless the author picks another one:
+		// it spawns, it can be opened, and nobody ever sees it
+		if (res.invisible)
+		{
+			char warn[220];
+			sprintf_s(warn, "\n\nWARNING: %d object(s) use a model the engine draws nothing for - "
+				"they work but stay invisible in game. Give them a real mesh in Model\\Visual (see the log).",
+				res.invisible);
+			strcat_s(s_Message, warn);
+		}
+	}
 	else
 		sprintf_s(s_Message, "Spawn layer export failed:\n%s", err.c_str());
 	s_WantMessage = true;
@@ -1107,6 +1243,12 @@ void EditorModScene::BakeCurrentSceneSpawn(xr_string& note)
 			sprintf_s(warn, "\nWARNING: %d object(s) NOT baked - their model exists neither in the game nor in the project (see the log)", res.missing);
 			strcat_s(buf, warn);
 		}
+		if (res.invisible)
+		{
+			char warn[200];
+			sprintf_s(warn, "\nWARNING: %d object(s) keep a model the engine draws nothing for - they work but stay invisible (see the log)", res.invisible);
+			strcat_s(buf, warn);
+		}
 	}
 	else
 		sprintf_s(buf, "Scene bake FAILED for '%s': %s", level, err.c_str());
@@ -1135,8 +1277,8 @@ void EditorModScene::McpExportSpawn(LPCSTR raw, xr_string& out)
 		return;
 	}
 	char head[160];
-	sprintf_s(head, "{\"ok\":true,\"exported\":%d,\"skipped\":%d,\"scaled\":%d,\"path\":\"",
-		res.exported, res.skipped, res.scaled);
+	sprintf_s(head, "{\"ok\":true,\"exported\":%d,\"skipped\":%d,\"scaled\":%d,\"invisible\":%d,\"path\":\"",
+		res.exported, res.skipped, res.scaled, res.invisible);
 	out = head;
 	JsonAppendPath(out, res.path.c_str());
 	out += "\",\"names\":";

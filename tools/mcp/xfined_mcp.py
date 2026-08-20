@@ -787,6 +787,20 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_spawn_set_visual",
+        "description": "Set Model\Visual of a spawn entity (meshes-relative path, extension optional). "
+        "Refuses a mesh the game cannot resolve; draws_nothing=true in the answer means the model is "
+        "an X-Ray ghost (glow_ghost skin) the engine never renders - stash boxes ship like that.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "scene object name"},
+                "visual": {"type": "string", "description": "e.g. dynamics\box\box_wood_01"},
+            },
+            "required": ["name", "visual"],
+        },
+    },
+    {
         "name": "xfined_rename_object",
         "description": "Rename a scene object (names are lowercased; the new name must be unique).",
         "inputSchema": {
@@ -1272,6 +1286,7 @@ CMD_MAP = {
     "xfined_view_mode": "view_mode",
     "xfined_list_assets": "list_assets",
     "xfined_asset_preview": "asset_preview",
+    "xfined_spawn_set_visual": "spawn_set_visual",
     "xfined_rename_object": "rename_object",
     "xfined_delete_selected": "delete_selected",
     "xfined_save_scene": "save_scene",
