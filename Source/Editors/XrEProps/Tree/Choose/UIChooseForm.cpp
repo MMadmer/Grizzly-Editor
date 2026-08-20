@@ -240,16 +240,20 @@ bool UIChooseForm::IsActive()
 }
 
 // The tree stores a leaf under "<path>*", so that is what the caller passes.
+bool UIChooseForm::Pick(LPCSTR name)
+{
+    if (!Form || !name || !name[0]) return false;
+    UITreeItem* Item = Form->m_RootItem.FindItem(name);
+    if (!Item) return false;
+    ((UIChooseFormItem*)Item)->bSelected = true;
+    Form->UpdateSelected((UIChooseFormItem*)Item);
+    return true;
+}
+
 bool UIChooseForm::PickAndConfirm(LPCSTR name)
 {
     if (!Form) return false;
-    if (name && name[0])
-    {
-        UITreeItem* Item = Form->m_RootItem.FindItem(name);
-        if (!Item) return false;
-        ((UIChooseFormItem*)Item)->bSelected = true;
-        Form->UpdateSelected((UIChooseFormItem*)Item);
-    }
+    if (name && name[0] && !Pick(name)) return false;
     if (!Form->GetSelectedItem()) return false;
     if (!Form->m_Flags.is(cfMultiSelect))
         Form->m_SelectedItems.push_back(Form->GetSelectedItem());

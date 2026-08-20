@@ -3542,6 +3542,14 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         // the adapter allocates a fresh texture per call - release it after use
         ImTextureID tex = 0;
         events->on_get_texture(name, tex);
+        if (!tex && UIContentBrowser::CategoryId(cat) == smVisual)
+        {
+            // the visual hook answers through a per-frame queue; a one-shot
+            // MCP call cannot wait for it, so render right here instead
+            U32Vec pixels;
+            if (RenderVisualThumbnail(name, pixels))
+                tex = static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+        }
         if (!tex)
         {
             out = "{\"ok\":false,\"error\":\"no preview for this asset (missing thumbnail or wrong name)\"}";
@@ -3653,6 +3661,14 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             char tmp[512];
             sprintf_s(tmp, "{\"ok\":%s,\"key\":\"%s\",\"value\":\"%s\"}",
                 started ? "true" : "false", JsonEscapePath(p->Key()).c_str(), JsonEscapePath(p->GetDrawText().c_str()).c_str());
+            out = tmp;
+            return true;
+        }
+        if (0 == _stricmp(action, "select"))
+        {
+            const bool picked = UIChooseForm::Pick(item);
+            char tmp[256];
+            sprintf_s(tmp, "{\"ok\":%s}", picked ? "true" : "false");
             out = tmp;
             return true;
         }

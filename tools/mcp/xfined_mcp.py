@@ -790,14 +790,14 @@ TOOLS = [
         "name": "xfined_property_choose",
         "description": "Drive the chooser modal of a PROP_CHOOSE property row (the same path a mouse "
         "click takes): action='open' opens the modal for the row whose short name is 'key' (e.g. Visual), "
-        "action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
+        "action='select' highlights 'item' without confirming (the preview pane reacts as to a click), action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
         "'dynamics\box\box_metall_01*') and presses Ok, action='status' reports the form, the pending "
         "edit and the row's current value. The editor redraws on demand - after 'pick' make it draw "
         "(e.g. a screenshot) so the result is consumed.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["open", "pick", "status"]},
+                "action": {"type": "string", "enum": ["open", "select", "pick", "status"]},
                 "key": {"type": "string", "description": "short row name, default Visual"},
                 "item": {"type": "string", "description": "tree path of the item for action=pick"},
             },

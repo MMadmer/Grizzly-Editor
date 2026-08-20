@@ -189,12 +189,18 @@ void DrawRight()
 			title = EditorProject::Name();
 			title += " - XFined Editor";
 		}
+		// centered on the WINDOW, like every OS caption - the free band is not
+		// symmetric (menus left, buttons right), centering on it drifts the text
 		const ImVec2 sz = ImGui::CalcTextSize(title.c_str());
-		float tx = (s_Band.menus_end_x + s_Band.buttons_x0 - sz.x) * 0.5f;
-		tx = std::max(tx, s_Band.menus_end_x + 12.f);
-		if (tx + sz.x < s_Band.buttons_x0 - 8.f)
+		const float lo = s_Band.menus_end_x + 12.f;
+		const float hi = s_Band.buttons_x0 - 8.f - sz.x;
+		if (hi >= lo)
+		{
+			float tx = (s_Band.bar_x0 + s_Band.bar_x1 - sz.x) * 0.5f;
+			tx = std::min(std::max(tx, lo), hi);
 			ImGui::GetWindowDrawList()->AddText(ImVec2(tx, wp.y + (h - sz.y) * 0.5f),
 				ImGui::GetColorU32(ImGuiCol_TextDisabled), title.c_str());
+		}
 	}
 
 	// frameless right-aligned button strip, flush with the window edge

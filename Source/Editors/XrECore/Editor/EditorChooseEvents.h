@@ -1,4 +1,4 @@
-#ifndef EditorChooseEventsH
+﻿#ifndef EditorChooseEventsH
 #define EditorChooseEventsH
 #include "SoundManager.h"
 #include "Library.h"
@@ -10,9 +10,12 @@
 #include "ParticleGroup.h"
 #include "defines.h"
 #include "EditObject.h"
+#include "EThumbnailVisual.h"
+#include "XFinedMCP.h"
 #if defined(USE_DX11)
 #include "EDX11Utils.h"
 #endif
+extern BOOL ENGINE_API g_bRendering;
 ref_sound* choose_snd;
 
 namespace ChoseEvents
@@ -136,21 +139,56 @@ namespace ChoseEvents
     }
     void   SelectVisual(SChooseItem* item, PropItemVec& info_items)
     {
-        /*
-        //.
-            AnsiString fn					= ChangeFileExt(item->name.c_str(),".ogf");
-            IRender_Visual* visual			= ::Render->model_Create(fn.c_str());
-            if (visual){
-                PHelper().CreateCaption	(info_items,	"Source",	*visual->desc.source_file?*visual->desc.source_file:"unknown");
-                PHelper().CreateCaption	(info_items, 	"Creator N",*visual->desc.create_name?*visual->desc.create_name:"unknown");
-                PHelper().CreateCaption	(info_items,	"Creator T",Trim(AnsiString(ctime(&visual->desc.create_time))).c_str());
-                PHelper().CreateCaption	(info_items,	"Modif N",	*visual->desc.modif_name ?*visual->desc.modif_name :"unknown");
-                PHelper().CreateCaption	(info_items,	"Modif T",	Trim(AnsiString(ctime(&visual->desc.modif_time))).c_str());
-                PHelper().CreateCaption	(info_items,	"Build N",	*visual->desc.build_name ?*visual->desc.build_name :"unknown");
-                PHelper().CreateCaption	(info_items,	"Build T",	Trim(AnsiString(ctime(&visual->desc.build_time))).c_str());
+        // The old body read ogf_desc through fields IRenderVisual no longer
+        // exposes. Size and bones are what an author actually picks a model by.
+        if (!item || !item->name.size())	return;
+        // CModelPool::Delete refuses to discard while the engine believes a
+        // frame is in flight - same dance as UIVisualPreview::SetVisual
+        const BOOL saved_rendering = g_bRendering;
+        g_bRendering = FALSE;
+        if (IRenderVisual* visual = ::Render->model_Create(item->name.c_str()))
+        {
+            Fvector sz;
+            visual->getVisData().box.getsize(sz);
+            string128 buf;
+            xr_sprintf(buf, sizeof(buf), "%.2f x %.2f x %.2f m", sz.x, sz.y, sz.z);
+            PHelper().CreateCaption(info_items, "Bounds", buf);
+            if (IKinematics* k = visual->dcast_PKinematics())
+            {
+                xr_sprintf(buf, sizeof(buf), "%u", u32(k->LL_BoneCount()));
+                PHelper().CreateCaption(info_items, "Bones", buf);
             }
-            ::Render->model_Delete(visual);
-        */
+            ::Render->model_Delete(visual, TRUE);
+        }
+        g_bRendering = saved_rendering;
+    }
+
+    // The chooser draws inside the ImGui pass, where rendering a model is
+    // illegal (EThumbnailVisual.h): poll the deferred queue, on a miss queue the
+    // model and let flAnimated bring the hook back next frame. One visual is on
+    // screen at a time, so the form's own texture is the whole cache; the last
+    // failure is remembered so a model the loaders reject is not re-queued
+    // every frame.
+    static xr_string s_VisualThumbKey;
+    static bool      s_VisualThumbFailed = false;
+
+    void   UpdateVisualTHM(LPCSTR name, ImTextureID& ID)
+    {
+        if (ID)								return;		// already on screen
+        if (!name || !name[0])				return;
+        U32Vec pixels;
+        bool failed = false;
+        if (TakeVisualThumbnail(name, pixels, failed))
+        {
+            s_VisualThumbKey = name;
+            s_VisualThumbFailed = failed;
+            if (!failed)
+                ID = static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+            return;
+        }
+        if (HasVisualThumbnailRequest(name))				return;	// still queued
+        if (s_VisualThumbFailed && s_VisualThumbKey == name)	return;	// known bad
+        QueueVisualThumbnail(name, name);
     }
     //---------------------------------------------------------------------------
     void   FillGameObjectMots(ChooseItemVec& items, void* param)
@@ -448,7 +486,8 @@ void FillChooseEvents()
     UIChooseForm::AppendEvents(smTexture, "Select Texture", ChoseEvents::FillTexture, ChoseEvents::SelectTexture, ChoseEvents::UpdateTextureTHM, 0, SChooseEvents::flClearTexture);
     UIChooseForm::AppendEvents(smEntityType, "Select Entity", ChoseEvents::FillEntity, 0, 0, 0, 0);
     UIChooseForm::AppendEvents(smLAnim, "Select Light Animation", ChoseEvents::FillLAnim, 0, ChoseEvents::UpdateLAnim, 0, SChooseEvents::flAnimated);
-    UIChooseForm::AppendEvents(smVisual, "Select Visual", ChoseEvents::FillVisual, ChoseEvents::SelectVisual, 0, 0, 0);
+    UIChooseForm::AppendEvents(smVisual, "Select Visual", ChoseEvents::FillVisual, ChoseEvents::SelectVisual,
+        ChoseEvents::UpdateVisualTHM, 0, SChooseEvents::flAnimated | SChooseEvents::flClearTexture);
     UIChooseForm::AppendEvents(smSkeletonAnims, "Select Skeleton Animation", ChoseEvents::FillSkeletonAnims, 0, 0, 0, 0);
     UIChooseForm::AppendEvents(smSkeletonBones, "Select Skeleton Bones", ChoseEvents::FillSkeletonBones, 0, 0, 0, 0);
     UIChooseForm::AppendEvents(smSkeletonBonesInObject, "Select Skeleton Bones", ChoseEvents::FillSkeletonBonesObject, 0, 0, 0, 0);
