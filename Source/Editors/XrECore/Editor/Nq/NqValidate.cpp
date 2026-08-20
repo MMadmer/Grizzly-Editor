@@ -104,6 +104,15 @@ namespace
 		if (used == 0 && kind == "objective.fetch")
 			ERR(c, "E022", node, 0, "objective.fetch needs an items list (or its one-line spelling, section)");
 
+		// kill/fetch/reach: the marker binds to a task now, the old spellings are named
+		if ((kind == "objective.fetch" || kind == "objective.kill" || kind == "objective.reach") && params.IsTable())
+		{
+			if (params.Has("map_spot") || params.Has("spot_text"))
+				ERR(c, "E006", node, 0, "map_spot/spot_text are gone - bind the marker with spot_task (and spot_objective for a step)");
+			if (params.Has("spot_objective") && !params.Has("spot_task"))
+				ERR(c, "E022", node, 0, "spot_objective needs spot_task");
+		}
+
 		// the fetch modifiers do not fit the one-form table
 		if (kind == "objective.fetch" && params.IsTable())
 		{
@@ -580,7 +589,9 @@ namespace
 		{
 			if (!v.IsString()) { ERR(c, "E006", node, slot, "'%s' must be an objective id", p.name.c_str()); return; }
 			// only meaningful next to its task, which every kind taking one passes along
+			// (task for the task.* actions, spot_task for the objective nodes)
 			const SNqValue* owner = siblings ? siblings->Get("task") : 0;
+			if (!owner && siblings) owner = siblings->Get("spot_task");
 			const SNqTask* task = (owner && owner->IsString()) ? c.q.FindTask(owner->s.c_str()) : 0;
 			if (!task) ERR(c, "E030", node, slot, "objective '%s' names no task", v.s.c_str());
 			else if (!task->FindObjective(v.s.c_str()))

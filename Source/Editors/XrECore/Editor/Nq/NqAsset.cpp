@@ -16,7 +16,7 @@ static const char* kKeyOrder[] =
 	"restrictor", "ref", "hold", "pos", "radius", "x", "y", "z",
 	"text", "title", "descr", "initiator", "sender", "icon", "spot",
 	"op", "value", "delta", "is", "by_actor", "count", "amount", "info",
-	"map_spot", "spot_text", "follow_actor", "allow_break",
+	"spot_task", "spot_objective", "follow_actor", "allow_break",
 	"status", "restart", "repeat", "cooldown", "timeout",
 	"since", "node", "duration", "seconds", "game_hours", "game_minutes",
 	"from", "to", "percent", "theme", "code", "of", "cond", "weight",

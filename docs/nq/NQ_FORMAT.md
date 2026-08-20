@@ -207,7 +207,7 @@ finish (flow.end; status=completed)
 | `dialog.actor_phrase` | Диалог: реплика игрока | **`text: text`** | `next` | | `false` | Вариант ответа игрока. `cond` ноды — условие показа |
 | `objective.kill` | Убить цель | **`target: kill_target`**, `by_actor: bool = false` | `done` | ✔ | `false` | Ждёт смерти цели: NPC по story id, ранее созданный `ref`, или отряд из `spawn` (создаётся при входе и запоминается под `ref`) |
 | `objective.fetch` | Добыть предмет | **`section: item_section`**, `count: int = 1` | `done` | ✔ | `false` | Ждёт, пока в инвентаре игрока будет нужное количество предметов секции. `count` — всегда штуки предметов: для секции патронов это коробки, а не патроны |
-| `objective.reach` | Дойти до места | **`place: place`**, `map_spot: bool = true`, `spot_text: text` | `done` | ✔ | `false` | Ждёт, пока игрок окажется в месте (точка с радиусом, рестриктор или смарт). `map_spot` ставит метку на карте |
+| `objective.reach` | Дойти до места | **`place: place`**, `spot_task: task_id`, `spot_objective: objective_id` | `done` | ✔ | `false` | Ждёт, пока игрок окажется в месте (точка с радиусом, рестриктор или смарт). `spot_task` ведёт на него маркер задачи/подзадачи |
 | `wait.timer` | Подождать | **`duration: duration`** | `done` | ✔ | `false` | Ждёт заданное время: игровое (`game_hours`, `game_minutes`) или реальное (`seconds`) |
 | `wait.when` | Ждать условия | `timeout: duration` | `done`, `timeout` | ✔ | `false` | Ждёт, пока условия ноды (`cond`) станут истинны. `timeout` — необязательный предел ожидания |
 | `wait.any` | Ждать одно из | **`cases: cases_cond`** | по кейсам | ✔ | `false` | Несколько именованных наборов условий, срабатывает первый истинный. Каждый кейс — свой выход |
