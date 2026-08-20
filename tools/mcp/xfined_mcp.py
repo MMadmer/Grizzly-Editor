@@ -818,7 +818,7 @@ TOOLS = [
         "click takes): action='open' opens the modal for the row whose short name is 'key' (e.g. Visual), "
         "action='select' highlights 'item' without confirming (the preview pane reacts as to a click), action='cancel' closes the form without applying, action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
         "'dynamics\box\box_metall_01*') and presses Ok, action='status' reports the form, the highlighted item ('selected'), the pending "
-        "edit and the row's current value. The editor redraws on demand - after 'pick' make it draw "
+        "edit and the row's current value. The editor redraws on demand - after 'pick' or 'cancel' make it draw "
         "(e.g. a screenshot) so the result is consumed.",
         "inputSchema": {
             "type": "object",
