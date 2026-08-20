@@ -52,6 +52,10 @@ public:
     static bool PickAndConfirm(LPCSTR name);
     // same selection, no Ok - the pane (preview, info) reacts as to a click
     static bool Pick(LPCSTR name);
+    // name of the item highlighted in the open form, "" when none/no form
+    static LPCSTR SelectedName();
+    // closes the open form without applying, like the Cancel button
+    static bool CancelForm();
     static bool GetResult(bool&change,shared_str&result);
     static bool GetResult(bool& change, xr_string& result);
     static bool GetResult(bool& change, xr_vector<xr_string>& result);

@@ -3639,6 +3639,28 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     //   {"cmd":"property_choose","action":"open","key":"Visual"}
     //   {"cmd":"property_choose","action":"pick","item":"dynamics\\box\\box_metall_01*"}
     //   {"cmd":"property_choose","action":"status","key":"Visual"}
+    // the window buttons' programmatic half: what a click on the caption strip does
+    if (0 == xr_strcmp(cmd, "window_control"))
+    {
+        char action[32] = {};
+        XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+        if (0 == _stricmp(action, "minimize"))		::ShowWindow(EDevice->m_hWnd, SW_MINIMIZE);
+        else if (0 == _stricmp(action, "maximize"))	::ShowWindow(EDevice->m_hWnd, SW_MAXIMIZE);
+        else if (0 == _stricmp(action, "restore"))	::ShowWindow(EDevice->m_hWnd, SW_RESTORE);
+        else if (0 == _stricmp(action, "close"))	::PostMessageW(EDevice->m_hWnd, WM_CLOSE, 0, 0);
+        else
+        {
+            out = "{\"ok\":false,\"error\":\"action must be minimize, maximize, restore or close\"}";
+            return true;
+        }
+        char tmp[128];
+        sprintf_s(tmp, "{\"ok\":true,\"maximized\":%s,\"minimized\":%s}",
+            ::IsZoomed(EDevice->m_hWnd) ? "true" : "false",
+            ::IsIconic(EDevice->m_hWnd) ? "true" : "false");
+        out = tmp;
+        return true;
+    }
+
     // geometry and state of the custom window chrome, for tests and layout checks
     if (0 == xr_strcmp(cmd, "titlebar_info"))
     {
@@ -3664,6 +3686,14 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             out = tmp;
             return true;
         }
+        if (0 == _stricmp(action, "cancel"))
+        {
+            const bool closed = UIChooseForm::CancelForm();
+            char tmp[64];
+            sprintf_s(tmp, "{\"ok\":%s}", closed ? "true" : "false");
+            out = tmp;
+            return true;
+        }
         if (0 == _stricmp(action, "select"))
         {
             const bool picked = UIChooseForm::Pick(item);
@@ -3681,10 +3711,11 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         PropItem* p = props->FindItemOfName(key[0] ? key : "Visual");
-        char tmp[512];
-        sprintf_s(tmp, "{\"ok\":true,\"form_alive\":%s,\"pending\":%s,\"value\":\"%s\"}",
+        char tmp[768];
+        sprintf_s(tmp, "{\"ok\":true,\"form_alive\":%s,\"pending\":%s,\"selected\":\"%s\",\"value\":\"%s\"}",
             UIChooseForm::IsActive() ? "true" : "false",
             props->HasPendingChooseEdit() ? "true" : "false",
+            JsonEscapePath(UIChooseForm::SelectedName()).c_str(),
             p ? JsonEscapePath(p->GetDrawText().c_str()).c_str() : "");
         out = tmp;
         return true;

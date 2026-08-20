@@ -787,17 +787,43 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_titlebar_info",
+        "description": "Geometry and state of the custom window chrome: the caption band rect, where the "
+        "menus end and the window buttons start (client px), whether the window is maximized and whether "
+        "the app icon texture loaded.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_window_control",
+        "description": "The window buttons' programmatic half: minimize, maximize, restore or close the "
+        "editor window. 'close' takes the same COMMAND_EXIT path as the caption cross and MAY end the "
+        "editor process. Returns the maximized/minimized state after the action.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["minimize", "maximize", "restore", "close"]},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "xfined_scene_load_status",
+        "description": "Whether the last open_scene attempt finished, succeeded, or rolled back - poll "
+        "this after xfined_open_scene instead of sleeping blind.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "xfined_property_choose",
         "description": "Drive the chooser modal of a PROP_CHOOSE property row (the same path a mouse "
         "click takes): action='open' opens the modal for the row whose short name is 'key' (e.g. Visual), "
-        "action='select' highlights 'item' without confirming (the preview pane reacts as to a click), action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
-        "'dynamics\box\box_metall_01*') and presses Ok, action='status' reports the form, the pending "
+        "action='select' highlights 'item' without confirming (the preview pane reacts as to a click), action='cancel' closes the form without applying, action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
+        "'dynamics\box\box_metall_01*') and presses Ok, action='status' reports the form, the highlighted item ('selected'), the pending "
         "edit and the row's current value. The editor redraws on demand - after 'pick' make it draw "
         "(e.g. a screenshot) so the result is consumed.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["open", "select", "pick", "status"]},
+                "action": {"type": "string", "enum": ["open", "select", "pick", "cancel", "status"]},
                 "key": {"type": "string", "description": "short row name, default Visual"},
                 "item": {"type": "string", "description": "tree path of the item for action=pick"},
             },
@@ -1317,6 +1343,9 @@ CMD_MAP = {
     "xfined_view_mode": "view_mode",
     "xfined_list_assets": "list_assets",
     "xfined_asset_preview": "asset_preview",
+    "xfined_titlebar_info": "titlebar_info",
+    "xfined_window_control": "window_control",
+    "xfined_scene_load_status": "scene_load_status",
     "xfined_property_choose": "property_choose",
     "xfined_spawn_set_fixed_bones": "spawn_set_fixed_bones",
     "xfined_spawn_set_visual": "spawn_set_visual",

@@ -250,6 +250,20 @@ bool UIChooseForm::Pick(LPCSTR name)
     return true;
 }
 
+LPCSTR UIChooseForm::SelectedName()
+{
+    if (!Form || !Form->m_SelectedItem || !Form->m_SelectedItem->Object) return "";
+    return Form->m_SelectedItem->Object->name.c_str();
+}
+
+bool UIChooseForm::CancelForm()
+{
+    if (!Form) return false;
+    Form->m_Result = R_Cancel;
+    Form->bOpen = false;
+    return true;
+}
+
 bool UIChooseForm::PickAndConfirm(LPCSTR name)
 {
     if (!Form) return false;

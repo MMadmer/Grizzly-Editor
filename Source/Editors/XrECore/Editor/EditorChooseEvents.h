@@ -137,6 +137,12 @@ namespace ChoseEvents
             for (; it != _E; it++)		items.push_back(SChooseItem(it->name.c_str(), ""));
         }
     }
+    // what SelectVisual learned about the CURRENT selection - UpdateSelected
+    // calls on_sel before the texture hook, so the hook reads a warm cache
+    static xr_string s_SelName;
+    static Fvector   s_SelSize = {};
+    static bool      s_SelGhost = false;
+
     void   SelectVisual(SChooseItem* item, PropItemVec& info_items)
     {
         // The old body read ogf_desc through fields IRenderVisual no longer
@@ -158,6 +164,12 @@ namespace ChoseEvents
                 xr_sprintf(buf, sizeof(buf), "%u", u32(k->LL_BoneCount()));
                 PHelper().CreateCaption(info_items, "Bones", buf);
             }
+            s_SelName = item->name.c_str();
+            s_SelSize = sz;
+            s_SelGhost = VisualDrawsNothing(item->name.c_str());
+            if (s_SelGhost)
+                PHelper().CreateCaption(info_items, "Ghost",
+                    "painted with glow_ghost - INVISIBLE in game (stash volume)");
             ::Render->model_Delete(visual, TRUE);
         }
         g_bRendering = saved_rendering;
@@ -171,11 +183,59 @@ namespace ChoseEvents
     // every frame.
     static xr_string s_VisualThumbKey;
     static bool      s_VisualThumbFailed = false;
+    // A ghost renders as an empty square - truthful and unreadable. Paint a
+    // proportioned silhouette instead: the model exists, it just has no pixels.
+    // The accent is hardcoded: this header also compiles into editor tools
+    // that do not link XrEUI, where the theme lives.
+    void   MakeGhostThumb(U32Vec& px, float w_over_h)
+    {
+        const int   S = THUMB_WIDTH;
+        const u32   bg = 0xFF17161A, line = 0xFF7971BD, faint = 0x407971BD;
+        px.assign(size_t(S) * S, bg);
+        float aspect = w_over_h;
+        if (!(aspect > 0.f))    aspect = 1.f;
+        aspect = std::min(3.f, std::max(0.33f, aspect));
+        int w = S - 48, h = S - 48;
+        if (aspect > 1.f)   h = int(w / aspect); else w = int(h * aspect);
+        const int x0 = (S - w) / 2, y0 = (S - h) / 2, x1 = x0 + w - 1, y1 = y0 + h - 1;
+        for (int t = 0; t < 2; ++t)
+            for (int x = x0; x <= x1; ++x)
+            {
+                px[size_t(y0 + t) * S + x] = line;
+                px[size_t(y1 - t) * S + x] = line;
+            }
+        for (int t = 0; t < 2; ++t)
+            for (int y = y0; y <= y1; ++y)
+            {
+                px[size_t(y) * S + x0 + t] = line;
+                px[size_t(y) * S + x1 - t] = line;
+            }
+        // faint diagonals: the "empty volume" glyph
+        const int steps = std::max(w, h);
+        for (int i = 0; i <= steps; ++i)
+        {
+            const int x = x0 + i * (w - 1) / steps;
+            const int ya = y0 + i * (h - 1) / steps;
+            px[size_t(ya) * S + x] = faint;
+            px[size_t(y1 - (ya - y0)) * S + x] = faint;
+        }
+    }
 
     void   UpdateVisualTHM(LPCSTR name, ImTextureID& ID)
     {
         if (ID)								return;		// already on screen
         if (!name || !name[0])				return;
+        // ghosts never reach the queue: their true render is an empty square
+        const bool cached = (s_SelName == name);
+        if (cached ? s_SelGhost : VisualDrawsNothing(name))
+        {
+            const float wd = cached ? std::max(s_SelSize.x, s_SelSize.z) : 1.f;
+            const float ht = cached ? s_SelSize.y : 1.f;
+            U32Vec ghost;
+            MakeGhostThumb(ghost, ht > 0.001f ? wd / ht : 1.f);
+            ID = static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(ghost));
+            return;
+        }
         U32Vec pixels;
         bool failed = false;
         if (TakeVisualThumbnail(name, pixels, failed))

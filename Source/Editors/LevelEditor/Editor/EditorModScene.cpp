@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "EditorModScene.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
+#include "..\..\XrECore\Editor\EThumbnailVisual.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 
 //------------------------------------------------------------------------------
@@ -73,49 +74,14 @@ bool EditorModScene::VisualReachable(LPCSTR visual)
 	return EditorGameContent::EnsureMounted(err) && EditorGameContent::Find(rel) >= 0;
 }
 
-// One chunk of an OGF container: id is masked because a compressed chunk carries
-// the high bit. Offsets are relative to the base handed in.
-static bool OgfChunk(const u8* data, u32 size, u32 want, u32& body, u32& body_size, u32 from = 0)
-{
-	u32 off = from;
-	while (off + 8 <= size)
-	{
-		const u32 id = *(const u32*)(data + off) & ~0x80000000u;
-		const u32 sz = *(const u32*)(data + off + 4);
-		if (off + 8 + sz > size) break;
-		if (id == want) { body = off + 8; body_size = sz; return true; }
-		off += 8 + sz;
-	}
-	return false;
-}
-
-// X-Ray's way of saying "there, but not drawn": every mesh of the model is painted
-// with the transparent glow_ghost. Stash containers ship exactly like that - the box
-// the player sees is supposed to be the level's own geometry around them, so one
-// placed in the open is a map marker and nothing else.
+// X-Ray's way of saying "there, but not drawn" - see OgfIsGhost. This wrapper
+// reads through the EXPORT resolution order (project staging first), which is
+// why it does not reuse the FS-order VisualDrawsNothing from EThumbnailVisual.
 bool EditorModScene::VisualDrawsNothing(LPCSTR visual)
 {
 	xr_vector<u8> buf;
 	if (!VisualBytes(visual, buf) || buf.size() < 16) return false;
-	const u8* base = &buf[0];
-	u32 kids = 0, kids_size = 0;
-	if (!OgfChunk(base, u32(buf.size()), 9 /*OGF_CHILDREN*/, kids, kids_size)) return false;
-	u32 seen = 0, off = 0;
-	while (off + 8 <= kids_size)
-	{
-		const u32 sz = *(const u32*)(base + kids + off + 4);
-		if (off + 8 + sz > kids_size) break;
-		u32 tex = 0, tex_size = 0;
-		if (OgfChunk(base + kids + off + 8, sz, 2 /*OGF_TEXTURE*/, tex, tex_size) && tex_size)
-		{
-			const char* name = (const char*)(base + kids + off + 8 + tex);
-			if (::strnlen(name, tex_size) >= tex_size) return false;		// not a string, do not guess
-			if (0 != _stricmp(name, "glow\\glow_ghost")) return false;
-			++seen;
-		}
-		off += 8 + sz;
-	}
-	return seen > 0;
+	return OgfIsGhost(&buf[0], u32(buf.size()));
 }
 
 static bool WriteBinFile(const char* path, const void* data, u32 size)

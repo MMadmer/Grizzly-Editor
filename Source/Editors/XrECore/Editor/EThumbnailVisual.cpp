@@ -1,4 +1,4 @@
-//---------------------------------------------------------------------------
+﻿//---------------------------------------------------------------------------
 #include "stdafx.h"
 #pragma hdrstop
 
@@ -1097,3 +1097,73 @@ ECORE_API void ClearVisualThumbnailQueue()
 	s_QueuedBytes = 0;
 }
 //------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Ghost detection (see the header). The chunk ids are the OGF container ones:
+// 0x9 OGF_CHILDREN, 0x2 OGF_TEXTURE ("texture\0shader"); a compressed chunk
+// carries the high bit, hence the mask.
+// ---------------------------------------------------------------------------
+static bool OgfFindChunk(const u8* data, u32 size, u32 want, u32& body, u32& body_size)
+{
+	u32 off = 0;
+	while (off + 8 <= size)
+	{
+		const u32 id = *(const u32*)(data + off) & ~0x80000000u;
+		const u32 sz = *(const u32*)(data + off + 4);
+		if (off + 8 + sz > size)			break;
+		if (id == want)					{ body = off + 8; body_size = sz; return true; }
+		off += 8 + sz;
+	}
+	return false;
+}
+
+ECORE_API bool OgfIsGhost(const void* data_, u32 size)
+{
+	const u8* base = (const u8*)data_;
+	if (!base || size < 16)				return false;
+	u32 kids = 0, kids_size = 0;
+	if (!OgfFindChunk(base, size, 9, kids, kids_size))	return false;
+	u32 seen = 0, off = 0;
+	while (off + 8 <= kids_size)
+	{
+		const u32 sz = *(const u32*)(base + kids + off + 4);
+		if (off + 8 + sz > kids_size)		break;
+		u32 tex = 0, tex_size = 0;
+		if (OgfFindChunk(base + kids + off + 8, sz, 2, tex, tex_size) && tex_size)
+		{
+			const char* name = (const char*)(base + kids + off + 8 + tex);
+			if (::strnlen(name, tex_size) >= tex_size)			return false;
+			if (0 != _stricmp(name, "glow\\glow_ghost"))		return false;
+			++seen;
+		}
+		off += 8 + sz;
+	}
+	return seen > 0;
+}
+
+ECORE_API bool VisualDrawsNothing(LPCSTR visual_name)
+{
+	if (!visual_name || !visual_name[0])	return false;
+	string_path fn;
+	if (ResolveVisualFile(visual_name, fn))
+	{
+		IReader* r = FS.r_open(fn);
+		if (!r)							return false;
+		const bool ghost = OgfIsGhost(r->pointer(), u32(r->length()));
+		FS.r_close(r);
+		return ghost;
+	}
+	// not on the editor FS: a mesh of the linked game, read from its archives
+	char rel[300];
+	xr_sprintf(rel, sizeof(rel), "meshes\\%s.ogf", visual_name);
+	xr_string err;
+	if (!EditorGameContent::EnsureMounted(err))	return false;
+	const int idx = EditorGameContent::Find(rel);
+	if (idx < 0)						return false;
+	u32 size = 0;
+	u8* data = EditorGameContent::ReadBytes(idx, size);
+	if (!data)							return false;
+	const bool ghost = OgfIsGhost(data, size);
+	EditorGameContent::FreeBytes(data);
+	return ghost;
+}

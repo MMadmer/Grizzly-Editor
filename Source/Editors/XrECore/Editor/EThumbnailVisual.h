@@ -1,4 +1,4 @@
-#ifndef EThumbnailVisualH
+﻿#ifndef EThumbnailVisualH
 #define EThumbnailVisualH
 #pragma once
 
@@ -21,6 +21,13 @@
 // Renders a model resolved through the editor FS ($level$ / $game_meshes$).
 // Returns false if the device is not ready, the file is missing, its visual type
 // is not supported by the editor, or the model failed to load.
+// The stash convention: every mesh of the model is painted with the transparent
+// glow_ghost, so the model exists but the engine draws nothing for it. The
+// by-name form resolves like the renderer ($level$/$game_meshes$), then falls
+// back to the linked game archives.
+ECORE_API bool OgfIsGhost(const void* data, u32 size);
+ECORE_API bool VisualDrawsNothing(LPCSTR visual_name);
+
 ECORE_API bool RenderVisualThumbnail(LPCSTR visual_name, U32Vec& out);
 
 // Same, but the OGF comes from a memory block (files packed into game archives
