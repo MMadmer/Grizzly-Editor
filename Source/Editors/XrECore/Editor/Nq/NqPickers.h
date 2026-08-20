@@ -32,6 +32,7 @@ public:
 		tInfo,			// info
 		tSpot,			// spot_type
 		tRestrictor,	// restrictor
+		tSpawnSection,	// spawn_section - any section placeable in the world ($spawn)
 		tCount
 	};
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // NQ - the validator (docs/NQ_ARCHITECTURE.md par. 15). One rule list with the
 // same codes the game runtime prints; errors block the build, warnings do not.
@@ -46,4 +46,6 @@ namespace NqValidate
 
 	// ref names declared by the quest (spawn.*.ref, item.spawn.ref, objective.kill spawn ref)
 	ECORE_API void	DeclaredRefs	(const SNqQuest& q, xr_vector<xr_string>& out);
+	// same, with what created each ref ("squad" | "object" | "item" | "") in step
+	ECORE_API void	DeclaredRefsEx	(const SNqQuest& q, xr_vector<xr_string>& out, xr_vector<xr_string>& kinds);
 }

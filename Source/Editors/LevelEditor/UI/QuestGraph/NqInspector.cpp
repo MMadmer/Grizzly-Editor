@@ -115,10 +115,10 @@ namespace
 		return changed;
 	}
 
-	xr_vector<xr_string> Items(LPCSTR a, LPCSTR b = 0, LPCSTR c = 0, LPCSTR d = 0, LPCSTR e = 0)
+	xr_vector<xr_string> Items(LPCSTR a, LPCSTR b = 0, LPCSTR c = 0, LPCSTR d = 0, LPCSTR e = 0, LPCSTR f = 0)
 	{
 		xr_vector<xr_string> v;
-		if (a) v.push_back(a); if (b) v.push_back(b); if (c) v.push_back(c); if (d) v.push_back(d); if (e) v.push_back(e);
+		if (a) v.push_back(a); if (b) v.push_back(b); if (c) v.push_back(c); if (d) v.push_back(d); if (e) v.push_back(e); if (f) v.push_back(f);
 		return v;
 	}
 
@@ -1141,6 +1141,8 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "kill_target")			return DrawNpcRef(label, v, false, true);
 	if (t == "place")				return DrawPlace(label, v);
 	if (t == "spawn_spec")			return DrawSpawnSpec(label, v);
+	if (t == "item_list")			return DrawItemList(label, v);
+	if (t == "loot_spawn")			return DrawLootSpawn(label, v);
 	if (t == "cases_cond")			return DrawCases(label, v, false);
 	if (t == "cases_weight")		return DrawCases(label, v, true);
 	if (t == "cond_list")			return DrawCondValue(label, v, 1);
@@ -1204,7 +1206,8 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 		if (t == "task_id")	for (u32 i = 0; i < q.tasks.size(); ++i) ids.push_back(q.tasks[i].id);
 		if (t == "var_name") for (u32 i = 0; i < q.vars.size(); ++i) ids.push_back(q.vars[i].name);
 		if (t == "node_id")	for (u32 i = 0; i < q.nodes.size(); ++i) ids.push_back(q.nodes[i].id);
-		if (t == "ref_name") NqValidate::DeclaredRefs(q, ids);
+		xr_vector<xr_string> ref_kinds;
+		if (t == "ref_name") NqValidate::DeclaredRefsEx(q, ids, ref_kinds);
 		if (t == "quest_id")
 		{
 			if (m_ProjectQuestIdsSerial != NqProjectIndex::InvalidationSerial()) RefreshProjectQuestIds();
@@ -1215,7 +1218,16 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			if (m_Search[0] && !ContainsNoCaseAscii(ids[i], m_Search)) continue;
 			labels.push_back(ids[i]);
 			values.push_back(ids[i]);
-			extras.push_back(xr_string());
+			// a ref is just a name: without its origin the list offers squads where an
+			// item belongs, and nothing warns the author which is which
+			xr_string extra;
+			if (i < ref_kinds.size())
+			{
+				if (ref_kinds[i] == "squad")		extra = "Ð¾ÑÑÑÐ´ (spawn.squad)";
+				else if (ref_kinds[i] == "object")	extra = "Ð¾Ð±ÑÐµÐºÑ (spawn.object)";
+				else if (ref_kinds[i] == "item")	extra = "Ð¿ÑÐµÐ´Ð¼ÐµÑ (item.spawn)";
+			}
+			extras.push_back(extra);
 		}
 		if (labels.empty()) note = ids.empty() ? "nothing declared in this quest" : "nothing matches";
 	}
@@ -1569,6 +1581,178 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 	if (ImGui::Checkbox("hold", &hold)) { v.Set("hold", SNqValue::Bool(hold)); ch = true; }
 	Hint("pins the squad to its smart, so the simulation cannot send it elsewhere");
 	ImGui::Unindent();
+	ImGui::PopID();
+	return ch;
+}
+
+// Several kinds of loot at once: one row per section, each with its own count.
+bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v)
+{
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	if (!v.IsTable()) { if (!v.IsNil()) { v = SNqValue::Table(); ch = true; } }
+	int kill = -1;
+	for (u32 i = 0; v.IsTable() && i < v.arr.size(); ++i)
+	{
+		SNqValue& e = v.arr[i];
+		if (!e.IsTable()) e = SNqValue::Table();
+		ImGui::PushID((int)i);
+		xr_string sect = e.GetString("section");
+		if (DrawPicked("Ð¿ÑÐµÐ´Ð¼ÐµÑ##il", "item_section", sect))
+		{
+			e.Set("section", SNqValue::String(sect));
+			ch = true;
+		}
+		int count = (int)e.GetNumber("count", 1);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(70.f);
+		if (ImGui::InputInt("ÑÑ##il", &count))
+		{
+			if (count < 1) count = 1;
+			e.Set("count", SNqValue::Number(count));
+			ch = true;
+		}
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x")) kill = (int)i;
+		ImGui::PopID();
+	}
+	if (kill >= 0) { v.arr.erase(v.arr.begin() + kill); if (v.arr.empty()) v = SNqValue::Nil(); ch = true; }
+	if (ImGui::SmallButton("+ Ð¿ÑÐµÐ´Ð¼ÐµÑ"))
+	{
+		if (!v.IsTable()) v = SNqValue::Table();
+		SNqValue e = SNqValue::Table();
+		e.Set("section", SNqValue::String(""));
+		v.Push(e);
+		ch = true;
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+// WHERE the node puts the loot it creates. One mode at a time, each with its own little form.
+bool NqInspector::DrawLootSpawn(LPCSTR label, SNqValue& v)
+{
+	xr_vector<xr_string> modes = Items("place", "into", "stash", "npc", "corpse", "new_corpse");
+	xr_string mode = ModeOf(v, modes);
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ComboRoom(modes, "(unset)"));
+	xr_string m = mode;
+	if (ComboStr("##ls_mode", m, modes, "(unset)"))
+	{
+		ch = true;
+		if (m.empty()) v = SNqValue::Nil();
+		else
+		{
+			SNqValue t = SNqValue::Table();
+			if (m == "place")
+			{
+				SNqValue pl = SNqValue::Table();
+				pl.Set("level", SNqValue::String(NqDocs::CurrentLevel()));
+				SNqValue pp = SNqValue::Table(); pp.Push(SNqValue::Number(0)); pp.Push(SNqValue::Number(0)); pp.Push(SNqValue::Number(0));
+				pl.Set("pos", pp);
+				t.Set("place", pl);
+			}
+			else if (m == "new_corpse")
+			{
+				SNqValue nc = SNqValue::Table();
+				nc.Set("section", SNqValue::String(""));
+				SNqValue pl = SNqValue::Table();
+				pl.Set("level", SNqValue::String(NqDocs::CurrentLevel()));
+				SNqValue pp = SNqValue::Table(); pp.Push(SNqValue::Number(0)); pp.Push(SNqValue::Number(0)); pp.Push(SNqValue::Number(0));
+				pl.Set("pos", pp);
+				nc.Set("place", pl);
+				t.Set("new_corpse", nc);
+			}
+			else if (m == "stash" || m == "corpse")	t.Set(m.c_str(), SNqValue::Table());
+			else									{ SNqValue r = SNqValue::Table(); r.Set("story", SNqValue::String("")); t.Set(m.c_str(), r); }
+			v = t;
+		}
+		mode = m;
+	}
+	if (mode == "place")
+	{
+		ch |= DrawPlace("ÐºÑÐ´Ð°##ls", v.Set("place"));
+		Hint("Ð¿ÑÐµÐ´Ð¼ÐµÑÑ Ð»ÑÐ³ÑÑ Ð½Ð° Ð·ÐµÐ¼Ð»Ñ Ð² ÑÑÐ¾Ð¹ ÑÐ¾ÑÐºÐµ");
+	}
+	else if (mode == "into")
+	{
+		ch |= DrawObjectRef("Ð² ÐºÐ¾Ð³Ð¾##ls", v.Set("into"));
+		Hint("ÐºÐ¾Ð½ÐºÑÐµÑÐ½ÑÐ¹ ÑÑÐ¸Ðº/Ð¾Ð±ÑÐµÐºÑ: story id Ð¸Ð»Ð¸ ref, ÑÐ¾Ð·Ð´Ð°Ð½Ð½ÑÐ¹ ÑÑÐ¸Ð¼ Ð¶Ðµ ÐºÐ²ÐµÑÑÐ¾Ð¼ (spawn.object)");
+	}
+	else if (mode == "npc")
+	{
+		ch |= DrawNpcRef("ÐºÐ¾Ð¼Ñ##ls", v.Set("npc"), false, false);
+		Hint("Ð¶Ð¸Ð²Ð¾Ð¼Ñ NPC Ð² Ð¸Ð½Ð²ÐµÐ½ÑÐ°ÑÑ - Ð´Ð¾ÑÑÐ°Ð½ÐµÑÑÑ Ð¿Ð¾ÑÐ»Ðµ ÐµÐ³Ð¾ ÑÐ¼ÐµÑÑÐ¸ (profile/community ÑÑÐµÐ±ÑÑÑ, ÑÑÐ¾Ð±Ñ Ð¾Ð½ Ð±ÑÐ» Ð¾Ð½Ð»Ð°Ð¹Ð½)");
+	}
+	else if (mode == "stash" || mode == "corpse")
+	{
+		SNqValue& sel = v.Set(mode.c_str());
+		if (!sel.IsTable()) sel = SNqValue::Table();
+		xr_vector<xr_string> picks = Items("random", "nearest", "farthest");
+		xr_string pick = sel.GetString("pick");
+		ImGui::SetNextItemWidth(ComboRoom(picks, "(default)"));
+		if (ComboStr("Ð²ÑÐ±Ð¾Ñ##ls_pick", pick, picks, "(default)"))
+		{
+			if (pick.empty()) sel.Erase("pick"); else sel.Set("pick", SNqValue::String(pick));
+			ch = true;
+		}
+		if (mode == "stash")
+		{
+			xr_vector<xr_string> states = Items("any", "full", "empty");
+			xr_string st = sel.GetString("state");
+			ImGui::SetNextItemWidth(ComboRoom(states, "(any)"));
+			if (ComboStr("ÑÐ¾ÑÑÐ¾ÑÐ½Ð¸Ðµ##ls_state", st, states, "(any)"))
+			{
+				if (st.empty()) sel.Erase("state"); else sel.Set("state", SNqValue::String(st));
+				ch = true;
+			}
+			Hint("full = Ð² Ð½ÑÐ¼ ÑÑÐ¾-ÑÐ¾ Ð»ÐµÐ¶Ð¸Ñ (Ð½Ðµ Ð·Ð°Ð»ÑÑÐ°Ð½), empty = Ð¿ÑÑÑÐ¾Ð¹ (Ð·Ð°Ð»ÑÑÐ°Ð½ Ð¸Ð»Ð¸ Ð½ÐµÑÑÐ¾Ð½ÑÑÑÐ¹ Ð¿ÑÑÑÐ¾Ð¹)");
+		}
+		float within = (float)sel.GetNumber("within", 0);
+		ImGui::SetNextItemWidth(90.f);
+		if (ImGui::InputFloat("Ð² ÑÐ°Ð´Ð¸ÑÑÐµ, Ð¼##ls_w", &within, 0.f, 0.f, "%.0f"))
+		{
+			if (within <= 0.f) sel.Erase("within"); else sel.Set("within", SNqValue::Number(within));
+			ch = true;
+		}
+		float beyond = (float)sel.GetNumber("beyond", 0);
+		ImGui::SetNextItemWidth(90.f);
+		if (ImGui::InputFloat("Ð´Ð°Ð»ÑÑÐµ ÑÐ°Ð´Ð¸ÑÑÐ°, Ð¼##ls_b", &beyond, 0.f, 0.f, "%.0f"))
+		{
+			if (beyond <= 0.f) sel.Erase("beyond"); else sel.Set("beyond", SNqValue::Number(beyond));
+			ch = true;
+		}
+		Hint("0 = Ð±ÐµÐ· Ð¾Ð³ÑÐ°Ð½Ð¸ÑÐµÐ½Ð¸Ñ. ÐÑÐ»Ð¸ Ð² ÑÐ°Ð´Ð¸ÑÑÐµ Ð½Ð¸ÑÐµÐ³Ð¾ Ð½ÐµÑ - Ð±ÐµÑÑÑÑÑ Ð±Ð»Ð¸Ð¶Ð°Ð¹ÑÐ¸Ð¹ Ð¿Ð¾Ð´ÑÐ¾Ð´ÑÑÐ¸Ð¹, ÐµÑÐ»Ð¸ ÑÐ½Ð°ÑÑÐ¶Ð¸ Ð½ÐµÑ - ÑÐ°Ð¼ÑÐ¹ Ð´Ð°Ð»ÑÐ½Ð¸Ð¹");
+		if (mode == "stash")
+		{
+			bool scatter = sel.GetBool("scatter", false);
+			if (ImGui::Checkbox("ÑÐ°Ð·Ð½ÐµÑÑÐ¸ Ð¿Ð¾ ÑÐ°Ð·Ð½ÑÐ¼##ls_sc", &scatter))
+			{
+				if (scatter) sel.Set("scatter", SNqValue::Bool(true)); else sel.Erase("scatter");
+				ch = true;
+			}
+			Hint("ÐºÐ°Ð¶Ð´ÑÐ¹ Ð¿ÑÐµÐ´Ð¼ÐµÑ - Ð² ÑÐ²Ð¾Ð¹ ÑÐ»ÑÑÐ°Ð¹Ð½ÑÐ¹ ÑÐ°Ð¹Ð½Ð¸Ðº (ÑÐ°ÑÑÐ¸ Ð´Ð¾ÐºÑÐ¼ÐµÐ½ÑÐ¾Ð² Ð¿Ð¾ ÑÑÑÐ¼ ÑÐ°Ð¹Ð½Ð¸ÐºÐ°Ð¼)");
+		}
+	}
+	else if (mode == "new_corpse")
+	{
+		SNqValue& nc = v.Set("new_corpse");
+		if (!nc.IsTable()) nc = SNqValue::Table();
+		xr_string sect = nc.GetString("section");
+		if (DrawPicked("ÐºÑÐ¾ Ð»ÐµÐ¶Ð¸Ñ##ls_ncs", "spawn_section", sect))
+		{
+			nc.Set("section", SNqValue::String(sect));
+			ch = true;
+		}
+		ch |= DrawPlace("Ð³Ð´Ðµ##ls_ncp", nc.Set("place"));
+		Hint("ÑÑÑÐ¿ ÑÐ¾Ð·Ð´Ð°ÑÑÑÑ Ñ Ð´Ð¾Ð±ÑÑÐµÐ¹ Ð²Ð½ÑÑÑÐ¸ Ð¸ Ð»Ð¾Ð¶Ð¸ÑÑÑ, ÐºÐ°Ðº ÑÐ¾Ð»ÑÐºÐ¾ Ð¿Ð¾Ð¿Ð°Ð´ÑÑ Ð² Ð¾Ð½Ð»Ð°Ð¹Ð½ - Ð´Ð°Ð»ÐµÐºÐ¾ Ð·Ð° Ð¿ÑÐµÐ´ÐµÐ»Ð°Ð¼Ð¸ Ð²Ð¸Ð´Ð¸Ð¼Ð¾ÑÑÐ¸");
+	}
 	ImGui::PopID();
 	return ch;
 }

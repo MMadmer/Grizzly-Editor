@@ -1,4 +1,4 @@
-////////////////////////////////////////////////////////////////////////////
+﻿////////////////////////////////////////////////////////////////////////////
 //	Module 		: xrServer_Objects_ALife.cpp
 //	Created 	: 19.09.2002
 //  Modified 	: 04.06.2003
@@ -504,11 +504,82 @@ void CSE_ALifeObject::UPDATE_Read(NET_Packet& tNetPacket)
 };
 
 #ifndef XRGAME_EXPORTS
+namespace
+{
+	// [story_object] story_id = <x> inside the custom data text; "" when absent
+	xr_string ScriptStoryOf(LPCSTR ini)
+	{
+		if (!ini) return "";
+		xr_string text = ini;
+		size_t sec = text.find("[story_object]");
+		if (sec == xr_string::npos) return "";
+		size_t pos = sec + xr_strlen("[story_object]");
+		while (pos < text.size())
+		{
+			size_t eol = text.find('\n', pos);
+			if (eol == xr_string::npos) eol = text.size();
+			xr_string line = text.substr(pos, eol - pos);
+			pos = eol + 1;
+			if (line.find('[') != xr_string::npos) break;		// next section
+			size_t eq = line.find('=');
+			xr_string key = (eq == xr_string::npos) ? line : line.substr(0, eq);
+			xr_string val = (eq == xr_string::npos) ? line : line.substr(eq + 1);
+			while (!key.empty() && (key.back() == ' ' || key.back() == '\t' || key.back() == '\r')) key.pop_back();
+			while (!key.empty() && (key[0] == ' ' || key[0] == '\t')) key.erase(0, 1);
+			while (!val.empty() && (val[0] == ' ' || val[0] == '\t')) val.erase(0, 1);
+			while (!val.empty() && (val.back() == ' ' || val.back() == '\t' || val.back() == '\r')) val.pop_back();
+			if (eq == xr_string::npos)
+			{
+				if (!key.empty()) return key;					// the bare "[story_object] \n id" form
+				continue;
+			}
+			if (key == "story_id" && !val.empty()) return val;
+		}
+		return "";
+	}
+
+	// custom data with the [story_object] block replaced (or removed for an empty id),
+	// everything else byte-for-byte as the author wrote it
+	xr_string WithScriptStory(LPCSTR ini, LPCSTR id)
+	{
+		xr_string text = ini ? ini : "";
+		size_t sec = text.find("[story_object]");
+		if (sec != xr_string::npos)
+		{
+			size_t end = text.find('[', sec + 1);
+			if (end == xr_string::npos) end = text.size();
+			text.erase(sec, end - sec);
+			while (sec > 0 && (text[sec - 1] == '\n' || text[sec - 1] == '\r')) { text.erase(sec - 1, 1); --sec; }
+		}
+		if (id && id[0])
+		{
+			if (!text.empty() && text.back() != '\n') text += "\r\n";
+			text += "[story_object]\r\nstory_id = ";
+			text += id;
+			text += "\r\n";
+		}
+		return text;
+	}
+}
+
+void CSE_ALifeObject::OnChangeScriptStory(PropValue* value)
+{
+	xr_string id = m_script_story_edit.c_str() ? m_script_story_edit.c_str() : "";
+	// spaces inside would split the ini line and quietly change the name
+	for (size_t i = 0; i < id.size(); ++i) if (id[i] == ' ' || id[i] == '\t') id[i] = '_';
+	m_script_story_edit = id.c_str();
+	m_ini_string = WithScriptStory(m_ini_string.c_str(), id.c_str()).c_str();
+}
+
 void CSE_ALifeObject::FillProps(LPCSTR pref, PropItemVec& items)
 {
 #	ifdef XRSEFACTORY_EXPORTS
 	inherited::FillProps(pref, items);
 	PHelper().CreateRText(items, PrepareKey(pref, *s_name, "Custom data"), &m_ini_string);
+	// the address quests use: [story_object] in the custom data, surfaced as its own field
+	m_script_story_edit = ScriptStoryOf(m_ini_string.c_str()).c_str();
+	PropValue* sv = PHelper().CreateRText(items, PrepareKey(pref, *s_name, "ALife\\Story ID (script)"), &m_script_story_edit);
+	sv->OnChangeEvent.bind(this, &CSE_ALifeObject::OnChangeScriptStory);
 	if (m_flags.is(flUseSwitches)) {
 		PHelper().CreateFlag32(items, PrepareKey(pref, *s_name, "ALife\\Can switch online"), &m_flags, flSwitchOnline);
 		PHelper().CreateFlag32(items, PrepareKey(pref, *s_name, "ALife\\Can switch offline"), &m_flags, flSwitchOffline);

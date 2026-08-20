@@ -92,6 +92,8 @@ private:
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
+	bool			DrawItemList	(LPCSTR label, SNqValue& v);
+	bool			DrawLootSpawn	(LPCSTR label, SNqValue& v);
 	bool			DrawCases		(LPCSTR label, SNqValue& v, bool weights);
 	bool			DrawCondList	(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int depth);
 	bool			DrawCondValue	(LPCSTR label, SNqValue& v, int depth);		// cond_list inside params

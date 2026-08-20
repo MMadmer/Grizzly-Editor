@@ -27,11 +27,11 @@ namespace
 	const char* kTypes[] =
 	{
 		"string", "int", "float", "bool", "enum", "text", "duration", "npc_ref", "target_ref",
-		"place", "spawn_spec", "item_section", "squad_section", "level", "smart", "story_id",
+		"place", "spawn_spec", "item_list", "loot_spawn", "spawn_section", "item_section", "squad_section", "level", "smart", "story_id",
 		"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
 		"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 		"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
-		"squad_ref", "object_ref" "objective_id",
+		"squad_ref", "object_ref", "objective_id",
 	};
 
 	bool IsTypeName(const xr_string& s)
@@ -404,9 +404,11 @@ void NqCatalog::ExclusiveForms(LPCSTR kind, xr_vector<xr_string>& out)
 	const xr_string k = kind;
 	if (k == "objective.fetch")
 	{
-		// one named object, or a section (optionally out of one named container)
+		// one named object, one section, or a list of sections; from/spawn are
+		// modifiers shared by the last two and are checked separately
 		out.push_back("item");
-		out.push_back("section,count,from");
+		out.push_back("section,count");
+		out.push_back("items");
 	}
 	else if (k == "objective.kill_count")
 	{

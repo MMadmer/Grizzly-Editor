@@ -1,4 +1,4 @@
-////////////////////////////////////////////////////////////////////////////
+﻿////////////////////////////////////////////////////////////////////////////
 //	Module 		: xrServer_Objects_ALife.h
 //	Created 	: 19.09.2002
 //  Modified 	: 04.06.2003
@@ -112,6 +112,14 @@ public:
 
 #ifdef XRGAME_EXPORTS
 	CALifeSimulator* m_alife_simulator;
+#endif
+
+#ifndef XRGAME_EXPORTS
+	// The name scripts find the object by (get_story_object_id). It lives as a
+	// [story_object] block inside Custom data; this property reads and writes that
+	// block so nobody edits raw ini text to make a stash addressable by a quest.
+	shared_str				m_script_story_edit;
+	void					OnChangeScriptStory(PropValue* value);
 #endif
 
 	CSE_ALifeObject(LPCSTR caSection);

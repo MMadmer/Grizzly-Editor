@@ -27,6 +27,7 @@ namespace
 		int			node;
 		int			order;		// cond: i, on_enter: 100+i, main: 200, on_exit: 300+i
 		xr_string	slot;
+		xr_string	kind;		// declarations: what made it - "squad" | "object" | "item"
 	};
 
 	struct SCtx
@@ -37,6 +38,7 @@ namespace
 		bool							catalog;
 		bool							pickers;
 		xr_vector<SRefSite>				decls;
+		xr_vector<SRefSite>				item_uses;	// {ref=} given to an item/container slot
 		xr_vector<SRefSite>				uses;
 		SCtx(const SNqQuest& q_, const NqValidate::SContext& c, xr_vector<SNqProblem>& o)
 			: q(q_), ctx(c), out(o), catalog(false), pickers(false) {}
@@ -100,7 +102,19 @@ namespace
 		}
 		// objective.fetch has no meaning without a form; the kill_count filters are optional
 		if (used == 0 && kind == "objective.fetch")
-			ERR(c, "E022", node, 0, "objective.fetch needs either 'section' or 'item'");
+			ERR(c, "E022", node, 0, "objective.fetch needs 'section', 'items' or 'item' - one of them");
+
+		// the fetch modifiers do not fit the one-form table: from/spawn ride on the
+		// section forms and exclude each other, and item accepts neither
+		if (kind == "objective.fetch" && params.IsTable())
+		{
+			const bool has_item = params.Has("item"), has_from = params.Has("from"), has_spawn = params.Has("spawn");
+			if (has_item && has_from)	ERR(c, "E022", node, 0, "item is one concrete object and cannot be combined with from");
+			if (has_item && has_spawn)	ERR(c, "E022", node, 0, "item is one concrete object and cannot be combined with spawn");
+			if (has_from && has_spawn)	ERR(c, "E022", node, 0, "spawn already decides where the loot is - from would watch a second container");
+			if (params.Has("count") && params.Has("items"))
+				ERR(c, "E022", node, 0, "count belongs to section - the items list carries its own counts");
+		}
 	}
 
 	// ---- W060 through the pickers -----------------------------------------------
@@ -142,16 +156,29 @@ namespace
 			}
 	}
 
-	void NoteRefDecl(SCtx& c, const xr_string& name, int node, int order, LPCSTR slot)
+	void NoteRefDecl(SCtx& c, const xr_string& name, int node, int order, LPCSTR slot, LPCSTR kind = "")
 	{
 		if (name.empty()) return;
 		SRefSite s; s.ref = name; s.node = node; s.order = order; s.slot = slot ? slot : "";
+		s.kind = kind ? kind : "";
 		c.decls.push_back(s);
+	}
+
+	// a slot that expects an item or a container remembers the {ref=} it was given, and
+	// CheckRefs compares that against what actually created the ref - a squad in an item
+	// slot is the "why does the picker offer squads here" complaint made checkable
+	void NoteItemUse(SCtx& c, const SNqValue& v, int node, int order, LPCSTR slot)
+	{
+		if (!v.IsTable() || !v.Has("ref")) return;
+		SRefSite s; s.ref = v.GetString("ref"); s.node = node; s.order = order; s.slot = slot ? slot : "";
+		if (!s.ref.empty()) c.item_uses.push_back(s);
 	}
 
 	// npc_ref: { story } | { ref } | { profile } | { community[, level] }
 	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order);
 	void CheckSpawnSpec(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR what);
+	void CheckObjectRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR type);
+	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn);
 
 	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn)
 	{
@@ -247,9 +274,103 @@ namespace
 		CheckIndexed(c, NqPickers::tSmart, smart, node, slot);
 		if (const SNqValue* pl = v.Get("place")) CheckPlace(c, *pl, node, slot, nidx, order);
 		if (v.Has("restrictor")) CheckIndexed(c, NqPickers::tRestrictor, v.GetString("restrictor"), node, slot);
-		NoteRefDecl(c, v.GetString("ref"), nidx, order, slot);
+		NoteRefDecl(c, v.GetString("ref"), nidx, order, slot, "squad");
 		if (const SNqValue* h = v.Get("hold"))
 			if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawned squad without hold - it may leave for the simulation");
+	}
+
+	// items: a non-empty array of { section, count } - several kinds at once
+	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot)
+	{
+		if (!v.IsTable() || v.arr.empty())
+		{
+			ERR(c, "E006", node, slot, "items must be a non-empty list of { section = ..., count = N }");
+			return;
+		}
+		xr_vector<xr_string> seen;
+		for (u32 i = 0; i < v.arr.size(); ++i)
+		{
+			const SNqValue& e = v.arr[i];
+			const xr_string sl = NqUtil::Format("%s/item:%u", slot ? slot : "", i);
+			if (!e.IsTable() || e.GetString("section").empty())
+			{
+				ERR(c, "E006", node, sl.c_str(), "each entry needs a section");
+				continue;
+			}
+			const xr_string sect = e.GetString("section");
+			for (u32 k = 0; k < seen.size(); ++k)
+				if (seen[k] == sect) ERR(c, "E006", node, sl.c_str(), "section '%s' is listed twice - the counts would be ambiguous", sect.c_str());
+			seen.push_back(sect);
+			CheckIndexed(c, NqPickers::tItem, sect, node, sl.c_str());
+			if (const SNqValue* n = e.Get("count"))
+				if (!n->IsNumber() || n->n < 1) ERR(c, "E006", node, sl.c_str(), "count must be an integer >= 1");
+		}
+	}
+
+	// loot_spawn: WHERE fetch puts the loot it creates - exactly one placement key
+	void CheckLootSpawn(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order)
+	{
+		static LPCSTR kKeys[] = { "place", "into", "stash", "npc", "corpse", "new_corpse" };
+		if (!v.IsTable())
+		{
+			ERR(c, "E006", node, slot, "spawn must be a table with one of place | into | stash | npc | corpse | new_corpse");
+			return;
+		}
+		int used = 0;
+		for (u32 i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); ++i) if (v.Has(kKeys[i])) ++used;
+		if (used != 1)
+		{
+			ERR(c, "E006", node, slot, "spawn needs exactly one of place | into | stash | npc | corpse | new_corpse (%d set)", used);
+			return;
+		}
+		if (const SNqValue* pl = v.Get("place")) CheckPlace(c, *pl, node, slot, nidx, order);
+		if (const SNqValue* in = v.Get("into"))
+		{
+			CheckObjectRef(c, *in, node, slot, nidx, order, "object_ref");
+			NoteItemUse(c, *in, nidx, order, slot);
+		}
+		if (const SNqValue* np = v.Get("npc")) CheckNpcRef(c, *np, node, slot, nidx, order, false, false);
+		for (int which = 0; which < 2; ++which)
+		{
+			const SNqValue* sel = v.Get(which ? "corpse" : "stash");
+			if (!sel) continue;
+			if (!sel->IsTable()) { ERR(c, "E006", node, slot, "%s must be a table of filters", which ? "corpse" : "stash"); continue; }
+			const xr_string pick = sel->GetString("pick");
+			if (!pick.empty() && pick != "random" && pick != "nearest" && pick != "farthest")
+				ERR(c, "E006", node, slot, "pick must be random | nearest | farthest");
+			double within = 0, beyond = 0;
+			if (const SNqValue* w = sel->Get("within"))
+			{
+				if (!w->IsNumber() || w->n <= 0) ERR(c, "E006", node, slot, "within must be a radius > 0");
+				else within = w->n;
+			}
+			if (const SNqValue* b = sel->Get("beyond"))
+			{
+				if (!b->IsNumber() || b->n <= 0) ERR(c, "E006", node, slot, "beyond must be a radius > 0");
+				else beyond = b->n;
+			}
+			if (within > 0 && beyond > 0 && within <= beyond)
+				WARN(c, "W031", node, slot, "within %.0f <= beyond %.0f leaves an empty ring - the fallback will decide every time", within, beyond);
+			if (!which)
+			{
+				const xr_string st = sel->GetString("state");
+				if (!st.empty() && st != "any" && st != "full" && st != "empty")
+					ERR(c, "E006", node, slot, "state must be any | full | empty");
+			}
+			else if (sel->Has("state") || sel->Has("scatter"))
+				ERR(c, "E006", node, slot, "corpse filters are pick / within / beyond only");
+		}
+		if (const SNqValue* nc = v.Get("new_corpse"))
+		{
+			if (!nc->IsTable() || nc->GetString("section").empty())
+				ERR(c, "E006", node, slot, "new_corpse needs { section = ..., place = ... }");
+			else
+			{
+				CheckIndexed(c, NqPickers::tSpawnSection, nc->GetString("section"), node, slot);
+				if (const SNqValue* pl = nc->Get("place")) CheckPlace(c, *pl, node, slot, nidx, order);
+				else ERR(c, "E006", node, slot, "new_corpse needs a place to lie in");
+			}
+		}
 	}
 
 	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order)
@@ -398,8 +519,23 @@ namespace
 		if (t == "npc_ref")		{ CheckNpcRef(c, v, node, slot, nidx, order, false, false); return; }
 		if (t == "target_ref")	{ CheckNpcRef(c, v, node, slot, nidx, order, true, false); return; }
 		if (t == "kill_target")	{ CheckNpcRef(c, v, node, slot, nidx, order, false, true); return; }
-		if (t == "squad_ref" || t == "object_ref") { CheckObjectRef(c, v, node, slot, nidx, order, t.c_str()); return; }
+		if (t == "squad_ref" || t == "object_ref")
+		{
+			CheckObjectRef(c, v, node, slot, nidx, order, t.c_str());
+			// fetch's item and from expect a thing with an inventory or a lootable body -
+			// a squad ref there is the classic authoring mistake worth naming
+			if (k.id == "objective.fetch" && t == "object_ref") NoteItemUse(c, v, nidx, order, slot);
+			return;
+		}
 		if (t == "spawn_spec") { CheckSpawnSpec(c, v, node, slot, nidx, order, p.name.c_str()); return; }
+		if (t == "item_list") { CheckItemList(c, v, node, slot); return; }
+		if (t == "loot_spawn") { CheckLootSpawn(c, v, node, slot, nidx, order); return; }
+		if (t == "spawn_section")
+		{
+			if (!v.IsString() || v.s.empty()) { ERR(c, "E006", node, slot, "'%s' must be a spawn section name", p.name.c_str()); return; }
+			CheckIndexed(c, NqPickers::tSpawnSection, v.s, node, slot);
+			return;
+		}
 		if (t == "cases_cond")		{ CheckCases(c, v, node, slot, nidx, order, false, events_ok); return; }
 		if (t == "cases_weight")	{ CheckCases(c, v, node, slot, nidx, order, true, events_ok); return; }
 		if (t == "cond_list")
@@ -417,7 +553,9 @@ namespace
 		if (t == "ref_name")
 		{
 			// a `ref` parameter of a spawning kind declares the name
-			if (k.id == "spawn.squad" || k.id == "spawn.object" || k.id == "item.spawn") NoteRefDecl(c, v.s, nidx, order, slot);
+			if (k.id == "spawn.squad")		NoteRefDecl(c, v.s, nidx, order, slot, "squad");
+			else if (k.id == "spawn.object")	NoteRefDecl(c, v.s, nidx, order, slot, "object");
+			else if (k.id == "item.spawn")	NoteRefDecl(c, v.s, nidx, order, slot, "item");
 			return;
 		}
 		if (t == "objective_id")
@@ -691,6 +829,20 @@ namespace
 	void CheckRefs(SCtx& c)
 	{
 		const SNqQuest& q = c.q;
+		// item/container slots holding a ref that spawn.squad made: the slot wants a thing
+		// with an inventory, and a squad is neither lootable nor a box
+		for (u32 u = 0; u < c.item_uses.size(); ++u)
+		{
+			const SRefSite& use = c.item_uses[u];
+			LPCSTR node = (use.node >= 0 && use.node < (int)q.nodes.size()) ? q.nodes[use.node].id.c_str() : 0;
+			for (u32 d = 0; d < c.decls.size(); ++d)
+				if (c.decls[d].ref == use.ref && c.decls[d].kind == "squad")
+				{
+					WARN(c, "W031", node, use.slot.c_str(),
+						"ref '%s' was created by spawn.squad - it is a squad, not an item or a container", use.ref.c_str());
+					break;
+				}
+		}
 		for (u32 u = 0; u < c.uses.size(); ++u)
 		{
 			const SRefSite& use = c.uses[u];
@@ -932,6 +1084,35 @@ xr_string NqValidate::ToText(const xr_vector<SNqProblem>& v)
 	xr_string s = "problems:";
 	for (u32 i = 0; i < v.size(); ++i) { s += "\n"; s += v[i].Text(); }
 	return s;
+}
+
+void NqValidate::DeclaredRefsEx(const SNqQuest& q, xr_vector<xr_string>& out, xr_vector<xr_string>& kinds)
+{
+	out.clear();
+	kinds.clear();
+	xr_vector<SNqProblem> sink;
+	SContext ctx;
+	ctx.use_pickers = false;
+	SCtx c(q, ctx, sink);
+	c.catalog = NqCatalog::Ensure();
+	c.pickers = false;
+	for (u32 i = 0; i < q.nodes.size(); ++i)
+	{
+		const SNqNode& n = q.nodes[i];
+		if (const SKind* k = NqCatalog::Find(n.kind.c_str())) CheckParams(c, *k, n.params, n.id.c_str(), "", (int)i, 200, true);
+		for (u32 a = 0; a < n.on_enter.size(); ++a)
+			if (const SKind* k = NqCatalog::Find(n.on_enter[a].kind.c_str())) CheckParams(c, *k, n.on_enter[a].params, n.id.c_str(), "", (int)i, 100 + a, false);
+		for (u32 a = 0; a < n.on_exit.size(); ++a)
+			if (const SKind* k = NqCatalog::Find(n.on_exit[a].kind.c_str())) CheckParams(c, *k, n.on_exit[a].params, n.id.c_str(), "", (int)i, 300 + a, false);
+	}
+	for (u32 d = 0; d < c.decls.size(); ++d)
+	{
+		bool dup = false;
+		for (u32 k = 0; k < out.size(); ++k) if (out[k] == c.decls[d].ref) dup = true;
+		if (dup) continue;
+		out.push_back(c.decls[d].ref);
+		kinds.push_back(c.decls[d].kind);
+	}
 }
 
 void NqValidate::DeclaredRefs(const SNqQuest& q, xr_vector<xr_string>& out)

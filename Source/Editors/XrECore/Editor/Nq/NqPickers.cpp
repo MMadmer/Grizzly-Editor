@@ -23,7 +23,7 @@ namespace
 	const char* kTypeNames[NqPickers::tCount] =
 	{
 		"item_section", "squad_section", "level", "smart", "story_id", "profile", "community", "info", "spot_type",
-		"restrictor",
+		"restrictor", "spawn_section",
 	};
 
 	xr_string CurrentKey()
@@ -144,6 +144,10 @@ namespace
 				xr_string name = inv_caption.empty() ? NqUtil::Cp1251ToUtf8(key.c_str()) : inv_caption;
 				Add(NqPickers::tItem, xr_string(*S->Name), name, xr_string());
 			}
+			// anything the world can hold: the same $spawn line the spawn tool lists by.
+			// The path doubles as the description ("devices\inventory box" says plenty).
+			if (S->line_exist("$spawn", &v) && v && v[0])
+				Add(NqPickers::tSpawnSection, xr_string(*S->Name), xr_string(), NqUtil::Cp1251ToUtf8(v));
 			if (S->line_exist("class", &v) && v && 0 == _stricmp(v, "ON_OFF_S"))
 			{
 				// A squad id says nothing about what is in it, and the section is the
@@ -700,7 +704,7 @@ namespace
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 7 ";
+	const char* kCacheFormat = "nqindex 8 ";
 
 	void CachePath(string_path& out)
 	{
