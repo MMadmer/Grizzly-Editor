@@ -952,6 +952,13 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 			ERR(c, "E006", 0, "param:vars", "variable name '%s' must be [a-z0-9_]+", q.vars[i].name.c_str());
 		if (q.vars[i].value.IsTable() || q.vars[i].value.IsNil())
 			ERR(c, "E006", 0, "param:vars", "variable '%s' default must be a bool, number or string", q.vars[i].name.c_str());
+		// a string default is spliced into task and phrase text through {var:name},
+		// so it faces the same cp1251 wall the text itself does
+		if (q.vars[i].value.IsString())
+		{
+			xr_string slot = NqUtil::Format("param:vars/%s", q.vars[i].name.c_str());
+			CheckText(c, q.vars[i].value, 0, slot.c_str());
+		}
 	}
 	for (u32 i = 0; i < q.tasks.size(); ++i)
 	{

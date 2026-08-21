@@ -1281,7 +1281,7 @@ state; existing state does not migrate.
 | W022 | one target listed twice on one pin; the repeated edge is ignored |
 | W030 | a `ref` is used before the node that creates it (not along all paths) |
 | W031 | `spawn.squad` without `hold` — the squad may wander off into the simulation |
-| W040 | a character outside cp1251 in a text |
+| W040 | a character outside cp1251 in a text, or in a string `vars` default (`{var:name}` splices it into text) |
 | W050 | Lua syntax not checked (no LuaJIT) — editor only |
 | W060 | the value is not found in the game index (story id/section/level/smart/profile/info portion) — editor only |
 | W061 | the file name does not match the quest `id` — editor only |

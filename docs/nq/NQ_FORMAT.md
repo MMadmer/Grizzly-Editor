@@ -376,7 +376,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `W022` | one target listed twice on one pin | remove the duplicate; the repeated edge is ignored |
 | `W030` | a `ref` is used before the node that creates it (not along all paths) | order the graph so `spawn.*` / `objective.kill{spawn}` runs first on every path to the use |
 | `W031` | `spawn.squad` with `hold = false` | the squad may wander off into the simulation; keep `hold = true` when the target must wait for the player in place |
-| `W040` | a character outside cp1251 in a text | drop the emoji/exotic typography — in the game they become `?` |
+| `W040` | a character outside cp1251 in a text, or in a string `vars` default | drop the emoji/exotic typography — in the game they become `?`. A string variable counts because `{var:name}` splices it into task and phrase text |
 | `W050` | Lua could not be checked (no LuaJIT) | editor only; review the code by hand |
 | `W060` | the value is not found in the linked game's index | a typo in the section/story id/level/smart/profile/info portion — or it is your own mod's object, then the warning is expected |
 | `W061` | the file name does not match the quest `id` | a hint, not an error; rename the file or the `id` if you want order |
