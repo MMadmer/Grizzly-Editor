@@ -1075,9 +1075,16 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 				for (u32 i = 0; i < q.nodes.size(); ++i) { SEntry e; e.id = q.nodes[i].id; e.name = q.nodes[i].kind; doc_entries.push_back(e); }
 			else
 			{
-				xr_vector<xr_string> refs;
-				NqValidate::DeclaredRefs(q, refs);
-				for (u32 i = 0; i < refs.size(); ++i) { SEntry e; e.id = refs[i]; doc_entries.push_back(e); }
+				// the same category the picker shows a human (squad / object / item):
+				// a bare list of names cannot tell an AI which ref belongs in an item slot
+				xr_vector<xr_string> refs, kinds;
+				NqValidate::DeclaredRefsEx(q, refs, kinds);
+				for (u32 i = 0; i < refs.size(); ++i)
+				{
+					SEntry e; e.id = refs[i];
+					if (i < kinds.size()) e.extra = kinds[i];
+					doc_entries.push_back(e);
+				}
 			}
 		}
 		else { NqUtil::JsonError(out, "unknown lookup type"); return; }

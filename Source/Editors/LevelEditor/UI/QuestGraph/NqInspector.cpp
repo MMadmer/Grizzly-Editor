@@ -1260,14 +1260,16 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			if (m_Search[0] && !ContainsNoCaseAscii(ids[i], m_Search)) continue;
 			labels.push_back(ids[i]);
 			values.push_back(ids[i]);
-			// a ref is just a name: without its origin the list offers squads where an
-			// item belongs, and nothing warns the author which is which
+			// a ref is just a name: without its category the list offers squads where an
+			// item belongs, and nothing warns the author which is which. The category is
+			// what the validator actually knows - a squad ref can come from spawn.squad
+			// or from objective.kill{spawn}, so naming one node kind here would lie
 			xr_string extra;
 			if (i < ref_kinds.size())
 			{
-				if (ref_kinds[i] == "squad")		extra = "Ð¾ÑÑÑÐ´ (spawn.squad)";
-				else if (ref_kinds[i] == "object")	extra = "Ð¾Ð±ÑÐµÐºÑ (spawn.object)";
-				else if (ref_kinds[i] == "item")	extra = "Ð¿ÑÐµÐ´Ð¼ÐµÑ (item.spawn)";
+				if (ref_kinds[i] == "squad")		extra = "squad";
+				else if (ref_kinds[i] == "object")	extra = "object";
+				else if (ref_kinds[i] == "item")	extra = "item";
 			}
 			extras.push_back(extra);
 		}

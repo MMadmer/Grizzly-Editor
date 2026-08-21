@@ -62,6 +62,18 @@ if ($Clean -and (Test-Path $bin)) {
     Remove-Item -LiteralPath $resolvedBin -Recurse -Force
 }
 
+# --- encoding gate --------------------------------------------------------------
+# ImGui draws a codepoint it has no glyph for as '?', so two authoring accidents
+# reach the user as a run of question marks: C1 control codepoints (UTF-8 text
+# decoded as latin1 and re-encoded) and bytes that are not valid UTF-8 at all.
+# Both are cheap to detect and impossible to spot in review, so they are gated
+# here. The check needs python; without it the build proceeds rather than block.
+$python = (Get-Command python -ErrorAction SilentlyContinue).Source
+if ($python) {
+    & $python (Join-Path $root 'tools\lint\check_encoding.py') --quiet
+    if ($LASTEXITCODE) { Fail "encoding check failed - the listed text would show as '?' in the UI." }
+}
+
 & $cmake --preset $preset -S $root
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
