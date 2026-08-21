@@ -55,8 +55,10 @@ FATAL_CODES = {'C1CTRL', 'MOJIBAKE'}
 
 CODE_EXT = {'.cpp', '.cxx', '.cc', '.c', '.h', '.hpp', '.inl'}
 
-# The game reads these with its own ini parser, which is byte-oriented cp1251.
-CP1251_PREFIXES = ('gamedata/configs/',)
+# Everything under a gamedata tree is read by the game's own byte-oriented
+# parsers, which assume cp1251. A file there saved as UTF-8 does not fail loudly:
+# the game just shows mojibake, so it is worth naming.
+CP1251_EXT = {'.ltx', '.xml', '.script', '.ini', '.ltxp', '.xmlp'}
 
 
 def tracked_files(root):
@@ -75,7 +77,8 @@ def tracked_files(root):
 
 def expects_cp1251(rel):
     low = rel.lower()
-    return any(low.startswith(p) for p in CP1251_PREFIXES) and low.endswith('.ltx')
+    return ('gamedata/' in low or low.startswith('gamedata/')) and \
+        os.path.splitext(low)[1] in CP1251_EXT
 
 
 def looks_binary(data):
