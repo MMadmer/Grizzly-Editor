@@ -1,135 +1,152 @@
-# XFined Editor — правила проекта
+# XFined Editor — project rules
 
-XFined Editor — редактор уровней и модов для Dead Air Refined
-(движок игры: `D:\Games\Dead Air\DeadAir-x64`, его правила —
-`PROJECT_RULES.md` там же). Моды, созданные этим редактором, целятся
-СТРОГО в Dead Air Refined и не обязаны работать на оригинальном Dead Air.
+XFined Editor is the level and mod editor for Dead Air Refined
+(game engine: `D:\Games\Dead Air\DeadAir-x64`, its rules live in
+`PROJECT_RULES.md` there). Mods built with this editor target Dead Air
+Refined STRICTLY and are not required to work on the original Dead Air.
 
-## Совместимость
+## Compatibility
 
-- **Редактор ещё не выходил в релиз.** До первого публичного релиза
-  архитектуру редактора и протокол «игра ↔ новые (XMS) моды» можно свободно
-  перестраивать: без фоллбэков на прежние ревизии редактора, без миграций
-  его старых форматов экспорта и без deprecation-обвязки. Если завтра формат
-  манифеста или дельт станет другим — старый просто перестаёт существовать.
-- **Обязательства игры при этом неприкасаемы:** Dead Air Refined обязан
-  поддерживать старые моды (XDB, loose `gamedata`, JSGME, контентные аддоны)
-  и сохранения. Перестройка протокола XMS выполняется парой правок
-  (редактор + движок) в обоих репозиториях, но со стороны игры она не имеет
-  права задеть старый способ моддинга и save-контракт (`.scop`/`.scoc`/
-  `.scov` — см. `docs/dead-air/SAVE_COMPATIBILITY.md` игры).
-- **После релиза редактора** это правило переворачивается: контракт форматов
-  экспорта замораживается, игра начинает гарантировать работу модов, собранных
-  любой прошлой релизной версией редактора (это уже вписано в PROJECT_RULES.md
-  игры). Не удалять это напоминание — на релизе этот раздел переписать.
+- **The editor has not shipped yet.** Until the first public release the
+  editor architecture and the "game ↔ new (XMS) mods" protocol may be rebuilt
+  freely: no fallbacks to earlier editor revisions, no migrations of its old
+  export formats, no deprecation scaffolding. If the manifest or delta format
+  changes tomorrow, the old one simply ceases to exist.
+- **The game's obligations stay untouchable:** Dead Air Refined must keep
+  supporting old mods (XDB, loose `gamedata`, JSGME, content addons) and
+  savegames. An XMS protocol rebuild is a paired change (editor + engine)
+  across both repositories, but on the game side it must not disturb the old
+  modding path or the save contract (`.scop`/`.scoc`/`.scov` — see the game's
+  `docs/dead-air/SAVE_COMPATIBILITY.md`).
+- **After the editor's release** the rule flips: the export format contract
+  freezes and the game starts guaranteeing that mods built by any past release
+  of the editor keep working (already written into the game's
+  PROJECT_RULES.md). Do not delete this reminder — rewrite this section at
+  release.
 
-## Философия модов
+## Mod philosophy
 
-- Мод = самодостаточный проект в СВОЕЙ папке. При установке в игру он живёт
-  отдельной папкой (mods/<имя>), игра подтягивает данные из неё сама.
-  Ничего не копируется и не сливается в `gamedata`/корневые папки игры,
-  никакого перезатирания чужих файлов по совпадению имён.
-- Структура папок внутри мода — произвольная; связывает её манифест мода
-  и ссылки/редиректы на ассеты (ориентир — asset registry и redirectors UE).
-- Дельты уровней (`.xspawn`, `.xcform`, aimap, overlay_visuals, фрагменты
-  `game.graph`) обязаны работать независимо от чужих модов настолько,
-  насколько это возможно.
+- A mod is a self-contained project in ITS OWN folder. Installed into the
+  game it lives as a separate folder (mods/<name>); the game pulls its data
+  from there itself. Nothing is copied or merged into `gamedata` or the game
+  root, no clobbering of other people's files on name collisions.
+- The folder layout inside a mod is arbitrary; the mod manifest and asset
+  links/redirects tie it together (reference points: UE's asset registry and
+  redirectors).
+- Level deltas (`.xspawn`, `.xcform`, aimap, overlay_visuals, `game.graph`
+  fragments) must work independently of other mods as far as possible.
 
-## Сборка и проверка
+## Build and verification
 
-- Сборка: `pwsh -NoProfile -File .\Build.ps1` (строго pwsh 7 — в
-  PowerShell 5.1 git-stderr валит скрипт). Артефакты: `Bin\x64\Release`.
-- Запуск для тестов: `LevelEditor.exe -project "D:\XFinedProjects\Test" -nodlg`
-  (`-nodlg` — без модалок: авто-ответ No/OK в лог, краш = симв. стек + дамп +
-  выход с кодом 3).
-- Редактор управляется целиком через MCP (TCP 127.0.0.1:28016,
-  `tools/mcp/xfined_mcp.py`, документация — `tools/mcp/AI_SETUP.md`).
-  Новые фичи UI сопровождаются MCP-командой: редактор AI-friendly by design.
-- Скриншоты: `xfined_screenshot_editor` взводится первым вызовом, отдаёт кадр
-  вторым; `xfined_screenshot_viewport` — вьюпорт сразу.
+- Build: `pwsh -NoProfile -File .\Build.ps1` (pwsh 7 strictly — in
+  PowerShell 5.1 git stderr kills the script). Artifacts: `Bin\x64\Release`.
+- Test run: `LevelEditor.exe -project "D:\XFinedProjects\Test" -nodlg`
+  (`-nodlg` = no modals: auto-answer No/OK into the log; a crash = symbolized
+  stack + dump + exit code 3).
+- The editor is fully drivable over MCP (TCP 127.0.0.1:28016,
+  `tools/mcp/xfined_mcp.py`, documentation in `tools/mcp/AI_SETUP.md`).
+  New UI features ship with an MCP command: the editor is AI-friendly by
+  design.
+- Screenshots: `xfined_screenshot_editor` arms on the first call and returns
+  the frame on the second; `xfined_screenshot_viewport` returns the viewport
+  immediately.
 
-## Режимы игры
+## Game modes
 
-- Мод всегда строится под ОДИН таргет: обычная игра, режим, уже существующий
-  в подключённой игре, либо новый режим, который мод сам приносит. «Не
-  выбрано» — не третий вариант: экспорт модуля без таргета запрещён.
-- Список режимов НЕ хардкодить: он сканируется из подключённой игры
-  (`EditorGameModes`), потому что глобальный мод (Revolution II и подобные)
-  подменяет и скрипт `ui_mm_faction_select.script`, и разметку
-  `ui_mm_faction_select_16.xml` целиком. Режим от опции отличается КОЛОНКОЙ в
-  этой разметке (`dar2_mode` против `dar2_option`) — «одна жизнь», «жирные
-  тайники», «высокие награды» это опции и в списке им не место.
-- Выбирать автор должен по названиям, которые видит игрок (string table игры,
-  cp1251 → UTF-8), а не по техническим id.
-- Новый режим от мода = фактически отдельная новая игра; на оригинальном Dead
-  Air она не заводится, и это нормально. Ломаться не имеет права только то,
-  что работало на оригинале.
-- Свой режим экспорт РЕГИСТРИРУЕТ сам (`WriteModeRegistration`): без чекбокса
-  на экране новой игры режим для игрока не существует, движок его не рисует —
-  этот экран собирается луа-скриптом игры. Генерится три файла, перезаписываются
-  при каждом экспорте: `patch\<id>_mode.xmlp` (чекбокс + подпись в `main_dialog`,
-  рамка колонки растёт, всё что под ней — уезжает вниз),
-  `gamedata\configs\text\rus\<id>_mode.xml` (подпись, cp1251) и
-  `scripts\register.script` (оборачивает `faction_ui:InitControls` и
+- A mod always targets ONE mode: the plain game, a mode that already exists
+  in the linked game, or a new mode the mod itself brings. "Not selected" is
+  not a third option: exporting a module without a target is forbidden.
+- Do NOT hardcode the mode list: it is scanned from the linked game
+  (`EditorGameModes`), because a global mod (Revolution II and the like)
+  replaces both the `ui_mm_faction_select.script` script and the whole
+  `ui_mm_faction_select_16.xml` layout. A mode differs from an option by its
+  COLUMN in that layout (`dar2_mode` vs `dar2_option`) — "one life", "rich
+  stashes", "high rewards" are options and do not belong in the list.
+- The author picks by the names the player sees (the game's string table,
+  cp1251 → UTF-8), not by technical ids.
+- A new mode brought by a mod is effectively a separate new game; it does not
+  start on the original Dead Air, and that is fine. Only what worked on the
+  original must never break.
+- The export REGISTERS its own mode (`WriteModeRegistration`): without the
+  checkbox on the new-game screen the mode does not exist for the player —
+  the engine does not draw it, that screen is assembled by a game Lua script.
+  Three files are generated, overwritten on every export:
+  `patch\<id>_mode.xmlp` (checkbox + caption in `main_dialog`, the column
+  frame grows and everything below shifts down),
+  `gamedata\configs\text\rus\<id>_mode.xml` (the caption, cp1251) and
+  `scripts\register.script` (wraps `faction_ui:InitControls` and
   `faction_ui:OnStartGame`).
-- Имена не декоративные: движок превращает `new_game_<id>_mode` обратно в id
-  режима, с ним же сравнивается `mode=` в манифесте и `xms.mode_active`.
-- Координаты чекбокса МЕРЯЮТСЯ (`EditorGameModes::SuggestSlot`) по разметке той
-  игры, что подключена, а не берутся из головы: у Revolution II своя разметка,
-  у стока своя. Проверено вживую: контрол встаёт в 305,605 в колонке кампаний
-  DAR2, подпись тянется из своей string table.
-- Скрипт экрана держит `CScriptXmlInit` локальным (`self.xml` не существует) —
-  обёртке нужен свой `xml:ParseFile("ui_mm_faction_select.xml")`; вариант под
-  соотношение сторон движок подставляет сам.
+- The names are not decorative: the engine turns `new_game_<id>_mode` back
+  into the mode id, and the same id is compared against `mode=` in the
+  manifest and `xms.mode_active`.
+- The checkbox coordinates are MEASURED (`EditorGameModes::SuggestSlot`)
+  against the layout of the game that is linked, not invented: Revolution II
+  has its own layout, stock has its own. Verified live: the control lands at
+  305,605 in the DAR2 campaign column, the caption comes from its own string
+  table.
+- The screen script keeps `CScriptXmlInit` local (`self.xml` does not
+  exist) — the wrapper needs its own
+  `xml:ParseFile("ui_mm_faction_select.xml")`; the engine substitutes the
+  aspect-ratio variant itself.
 
-## Куда экспортируется мод
+## Where a mod exports to
 
-- Модуль уезжает в `<игра>\modules\<id>`, а НЕ в `mods\`. `mods\` это папка
-  JSGME (та же самая, что `MODS` — винда регистр не различает): JSGME показывает
-  каждую её подпапку как свой мод и по «активации» копирует её поверх игры —
-  ровно то слияние с gamedata, ради отказа от которого модуль и существует.
-- Плоский экспорт (`gamedata_<id>`) — наоборот, ЭТО и есть JSGME-мод, и он
-  остаётся под своим именем.
-- Включение/выключение модуля — движковое: `xms_disable <id>` / `xms_enable <id>`
-  пишут id в `modules\disabled.ltx` и ничего никуда не копируют.
-- Сканеры редактора (режимы, занятые ряды чекбоксов) читают ОБА корня: `modules\`
-  и `mods\`, потому что уже установленное ломать нельзя.
+- A module goes to `<game>\modules\<id>`, NOT to `mods\`. `mods\` is the
+  JSGME folder (the same one as `MODS` — Windows is case-insensitive): JSGME
+  shows every subfolder there as a mod of its own and "activation" copies it
+  over the game — exactly the gamedata merge the module exists to avoid.
+- The flat export (`gamedata_<id>`) is the opposite: it IS a JSGME mod and
+  keeps its name.
+- Enabling/disabling a module is engine-side: `xms_disable <id>` /
+  `xms_enable <id>` write the id into `modules\disabled.ltx` and copy nothing
+  anywhere.
+- The editor's scanners (modes, occupied checkbox rows) read BOTH roots,
+  `modules\` and `mods\`, because what is already installed must not break.
 
-## Квесты (NQ — нодовый граф)
+## Quests (NQ — node graph)
 
-- Архитектура и план внедрения — `docs/NQ_ARCHITECTURE.md`. Пока реализация не
-  начата, документ и есть контракт; менять его — правкой документа, не «по ходу».
-- Правило номер один: **редактор не компилирует граф в игровой Lua**. `.nqasset`
-  (декларативный Lua, `return {…}`) уезжает в модуль как есть, интерпретирует его
-  NQ-рантайм Dead Air Refined. Каталог видов (`configs\nq\catalog.ltx`) поставляет
-  игра, редактор его сканирует (бандл — только фоллбэк).
-- Ассеты квестов должны читаться и писаться нейронкой текстом: `pos` необязателен,
-  проблемы — кодами, `quest_get` отдаёт outline; скриншоты — не часть рабочего цикла.
+- Architecture and rollout plan: `docs/NQ_ARCHITECTURE.md`. Until the
+  implementation starts, the document IS the contract; change it by editing
+  the document, not "as you go".
+- Rule number one: **the editor does not compile the graph into game Lua.**
+  The `.nqasset` (declarative Lua, `return {…}`) travels into the module as
+  is; the NQ runtime of Dead Air Refined interprets it. The kind catalog
+  (`configs\nq\catalog.ltx`) is supplied by the game and scanned by the
+  editor (the bundled copy is a fallback only).
+- Quest assets must be readable and writable by an AI as text: `pos` is
+  optional, problems are coded, `quest_get` returns an outline; screenshots
+  are not part of the workflow.
 
-## Опасные операции
+## Dangerous operations
 
-- Перед любой деструктивной операцией из UI — подтверждение. Деструктивно
-  всё, что теряет чужие данные: удаление файлов/папок и объектов сцены,
-  перезапись существующего, очистка сцены, потеря несохранённых правок.
-  Диалог обязан НАЗЫВАТЬ, что именно исчезнет (имена, количество), а не
-  спрашивать «вы уверены?»; безопасная кнопка — по умолчанию (Enter/Escape
-  = отмена).
-- Удаление с диска идёт в Корзину (`SHFileOperation` + `FOF_ALLOWUNDO`), а не
-  через `DeleteFile`: у файловых операций нет undo редактора, и цена
-  промаха должна быть «восстановить», а не «переделать».
-- MCP-команды подтверждения НЕ показывают (вызывающий уже решил) и не имеют
-  права висеть на модалке — деструктивный UI-путь и программный путь делят
-  реализацию, но не диалог.
+- Any destructive operation from the UI requires confirmation. Destructive is
+  everything that loses someone's data: deleting files/folders or scene
+  objects, overwriting existing files, clearing the scene, losing unsaved
+  edits. The dialog must NAME what disappears (names, counts), not ask "are
+  you sure?"; the safe button is the default (Enter/Escape = cancel).
+- Disk deletion goes to the Recycle Bin (`SHFileOperation` +
+  `FOF_ALLOWUNDO`), not through `DeleteFile`: file operations have no editor
+  undo, and the cost of a miss must be "restore", not "redo".
+- MCP commands show NO confirmations (the caller already decided) and must
+  never hang on a modal — the destructive UI path and the programmatic path
+  share the implementation, but not the dialog.
 
-## Код
+## Code and text
 
-- Стиль — локальный стиль файла; комментарии только там, где без них неясно
-  «почему», кратко и на английском.
-- Обычные указатели проверять неявным булевым преобразованием
-  (`if (p)` / `if (!p)`), не сравнением с nullptr.
-- Из `Draw()` любой ImGui-панели НЕЛЬЗЯ вызывать ничего, что перерисовывает
-  кадр (`RedrawScene(true)` деградирует сам, но новые такие пути не создавать):
-  вложенный ImGui-фрейм убивает внешний — см. XrUIManager::InUIPass().
-- Правки файлов в `Source/XrRender/Private/` проверяй на близнецов: редактор
-  собирает СВОИ копии части файлов из `Source/Editors/XrECore/Editor/`
-  (пример: D3DUtils.cpp живёт в обоих местах, редактор компилирует редакторский).
+- Style: the local style of the file; comments only where the "why" is not
+  obvious, short and in English.
+- All product text is English in the official tone: UI labels, hints, the
+  kind catalog, logs, MCP descriptions, generated files, docs. Russian
+  remains only where it is game content the player sees (quest titles,
+  dialog phrases, string tables) or fixture data in encoding tests.
+- UI text is short. A label names the thing; details go into the hover hint.
+- Check plain pointers with the implicit boolean conversion
+  (`if (p)` / `if (!p)`), not by comparing with nullptr.
+- From any ImGui panel's `Draw()` never call anything that redraws the frame
+  (`RedrawScene(true)` degrades by itself, but do not create new such
+  paths): a nested ImGui frame kills the outer one — see
+  XrUIManager::InUIPass().
+- When editing files under `Source/XrRender/Private/`, check for twins: the
+  editor builds ITS OWN copies of some files from
+  `Source/Editors/XrECore/Editor/` (example: D3DUtils.cpp lives in both
+  places; the editor compiles the editor copy).

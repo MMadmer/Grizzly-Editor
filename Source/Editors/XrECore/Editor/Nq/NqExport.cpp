@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "NqExport.h"
 #include "NqDoc.h"
 #include "NqLua.h"
@@ -60,7 +60,7 @@ xr_string NqExport::TemplateText(LPCSTR id)
 	SNqQuest q;
 	q.nq = 1;
 	q.id = (id && id[0]) ? id : "new_quest";
-	q.title = SNqValue::String("\xD0\x9D\xD0\xBE\xD0\xB2\xD1\x8B\xD0\xB9 \xD0\xBA\xD0\xB2\xD0\xB5\xD1\x81\xD1\x82");	// UTF-8 for the Russian "New quest"
+	q.title = SNqValue::String("New quest");
 	q.activation = "auto";
 	SNqNode start;
 	start.id = "start"; start.kind = "trigger.start";

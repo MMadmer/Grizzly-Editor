@@ -993,7 +993,7 @@ TOOLS = [
     {
         "name": "xfined_quest_new",
         "description": "Create a quest file from the minimal template (trigger.start -> flow.end; id = file name, "
-                       "title 'Новый квест') at 'path' (project-relative, '.nqasset' appended when missing; refuses to "
+                       "title 'New quest') at 'path' (project-relative, '.nqasset' appended when missing; refuses to "
                        "overwrite) and open it. Returns the canonical text, outline and problems.",
         "inputSchema": {
             "type": "object",
