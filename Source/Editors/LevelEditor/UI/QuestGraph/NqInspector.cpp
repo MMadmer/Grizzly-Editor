@@ -1755,7 +1755,7 @@ bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& param
 			ch |= DrawParam(*sp, params, "sp", k->id.c_str());
 			ImGui::PopID();
 		}
-	Hint("condition 0..1 for weapons and armour. ammo: rounds loaded, or in the box of an ammo section. uses: what is left of a consumable. upgrades: comma-separated upgrade sections");
+	Hint("State of every item made. ammo: rounds loaded, or in an ammo box. upgrades: comma-separated sections");
 
 	if (const NqCatalog::SParam* rp = k ? k->Param("ref") : 0)
 	{
