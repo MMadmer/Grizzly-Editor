@@ -1,4 +1,4 @@
-﻿// LevelEditor.cpp : Определяет точку входа для приложения.
+﻿// LevelEditor.cpp : Defines the entry point for the application.
 //
 #include "stdafx.h"
 #include "..\..\XrAPI\xrGameManager.h"

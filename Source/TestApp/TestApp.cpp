@@ -1,4 +1,4 @@
-﻿//// TestApp.cpp : Этот файл содержит функцию "main". Здесь начинается и заканчивается выполнение программы.
+﻿//// TestApp.cpp : This file contains the "main" function. Program execution begins and ends here.
 ////
 //
 #include "..\XrEngine\stdafx.h"

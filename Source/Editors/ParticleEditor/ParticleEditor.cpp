@@ -1,4 +1,4 @@
-﻿// ParticleEditor.cpp : Определяет точку входа для приложения.
+﻿// ParticleEditor.cpp : Defines the entry point for the application.
 //
 #include "stdafx.h"
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)

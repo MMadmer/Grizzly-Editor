@@ -610,14 +610,14 @@ XRayPipelineRef XRayResourcesManager::GetPipeline(XRayPipeline& Pipeline)
 {
 	for(auto & ref: m_PipelinesRef)
 	{
-		auto& Сontainer1 = ref->Container;
-		auto& Сontainer2 = Pipeline.Container;
-		if (Сontainer1.size() == Сontainer2.size())
+		auto& Container1 = ref->Container;
+		auto& Container2 = Pipeline.Container;
+		if (Container1.size() == Container2.size())
 		{
 			bool Equal = true;
-			auto Begin1 = Сontainer1.begin();
-			auto Begin2 = Сontainer2.begin();
-			for (size_t i = 0; i < Сontainer1.size(); i++)
+			auto Begin1 = Container1.begin();
+			auto Begin2 = Container2.begin();
+			for (size_t i = 0; i < Container1.size(); i++)
 			{
 				Equal = Equal && (*Begin1 == *Begin2);
 				Begin1++; Begin2++;

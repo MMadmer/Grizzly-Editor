@@ -127,7 +127,7 @@ ICF static BOOL pick_trace_callback(collide::rq_result& result, LPVOID params)
 		*RQ				= result;
 		return FALSE;
 	}else{
-		//получить треугольник и узнать его материал
+		//get the triangle and read its material
 		CDB::TRI* T		= Level().ObjectSpace.GetStaticTris()+result.element;
 		if (GameMaterialLibrary->GetMaterialByIdx(T->material)->Flags.is(SGameMtl::flPassable)) 
 			return TRUE;
