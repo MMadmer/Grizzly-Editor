@@ -1,146 +1,162 @@
-# NQ — формат квестов `.nqasset`
+# NQ — the `.nqasset` quest format
 
-Один квест = один файл `.nqasset` = декларативная Lua-таблица. Редактор его
-**не компилирует**: при сборке мода он только валидирует ассет и кладёт в модуль
-как есть, а исполняет граф NQ-рантайм Dead Air Refined. Поэтому формат — это
-контракт с игрой, а не внутреннее представление редактора.
+One quest = one `.nqasset` file = a declarative Lua table. The editor does
+**not compile** it: at mod build it only validates the asset and puts it into
+the module as is, and the graph is executed by the Dead Air Refined NQ runtime.
+The format is therefore a contract with the game, not an internal editor
+representation.
 
-Документ описывает формат, каталог видов, коды валидации, MCP-инструменты и
-разбирает полный эталонный квест. Игровая сторона (модель исполнения,
-персистентность, движковые точки входа) — `docs/dead-air/NQ_RUNTIME.md` в репо
-игры. Архитектурный контракт — `docs/NQ_ARCHITECTURE.md`.
+This document describes the format, the kind catalog, the validation codes, the
+MCP tools, and walks through a complete reference quest. The game side (the
+execution model, persistence, engine entry points) — `docs/dead-air/NQ_RUNTIME.md`
+in the game repo. The architecture contract — `docs/NQ_ARCHITECTURE.md`.
 
 ---
 
-## 1. Правила файла
+## 1. File rules
 
-- UTF-8 без BOM, переводы строк `\n`, расширение `.nqasset`.
-- Содержимое — **один `return { … }`**. Файл грузится с пустым окружением
-  (`setfenv(chunk, {})`) и в редакторе, и в игре: ни библиотек, ни глобалов.
-  Любой код — вызов функции, обращение к глобалу, `local`, второе возвращаемое
-  значение — падает на загрузке, квест отклоняется с `E003`, соседние квесты не
-  затрагиваются.
-- Кастомный Lua допустим ровно в одном месте: строковый параметр `code` у вида
-  `lua` (доп. действие или условие).
-- Ключи таблиц пишутся идентификаторами (`id = …`). Ключи, совпадающие с
-  зарезервированными словами Lua, — в скобках: `["else"] = …` (пин `else` у
-  `flow.branch`), `["not"] = true` (инверсия условия), `["repeat"] = true`
-  (параметр `trigger.when`).
-- `pos` у ноды **необязателен** — это редакторские координаты канваса, игра их
-  игнорирует. Ноды без `pos` раскладываются автоматически при открытии.
-  `comment` — тоже редакторское поле.
-- При сохранении редактор переписывает файл **канонически**: фиксированный
-  порядок ключей, топологический порядок нод, отступ 2 пробела, в начале —
-  генерируемый блок комментариев с outline графа. Комментарии, написанные
-  рукой, при этом теряются (осознанно: диффы стабильны). Запись идемпотентна —
+- UTF-8 without BOM, `\n` line endings, the `.nqasset` extension.
+- The content is **one `return { … }`**. The file loads with an empty
+  environment (`setfenv(chunk, {})`) in both the editor and the game: no
+  libraries, no globals. Any code — a function call, a global access, `local`,
+  a second return value — fails at load, the quest is rejected with `E003`,
+  neighboring quests are unaffected.
+- Custom Lua is allowed in exactly one place: the string parameter `code` of the
+  `lua` kind (an extra action or a condition).
+- Table keys are written as identifiers (`id = …`). Keys that collide with Lua
+  reserved words go in brackets: `["else"] = …` (the `else` pin of
+  `flow.branch`), `["not"] = true` (condition inversion), `["repeat"] = true`
+  (a `trigger.when` parameter).
+- A node's `pos` is **optional** — editor canvas coordinates, the game ignores
+  them. Nodes without `pos` are laid out automatically on open. `comment` is an
+  editor-only field too.
+- On save the editor rewrites the file **canonically**: a fixed key order, a
+  topological node order, 2-space indent, and a generated comment block with
+  the graph outline at the top. Hand-written comments are lost in the process
+  (deliberate: diffs stay stable). Writing is idempotent —
   `write(read(x)) == x`.
 
-## 2. Схема
+## 2. Schema
 
 ```lua
 return {
-  nq         = 1,                     -- версия формата (обязательно, сейчас 1)
-  id         = "wolf_debt",           -- [a-z0-9_], уникален в модуле; uid в игре = "<модуль>.<id>"
+  nq         = 1,                     -- format version (required, currently 1)
+  id         = "wolf_debt",           -- [a-z0-9_], unique in the module; in-game uid = "<module>.<id>"
   title      = "Долг вежливости",     -- text
-  activation = "auto",                -- "auto" (по умолчанию) | "manual"
-  vars       = { <имя> = <bool|number|string по умолчанию>, … },
-  tasks      = { <id задания> = { title = <text>, descr = <text>,
-                                  type = "additional"|"storyline",
-                                  target = <target_ref|place>, icon = <string> }, … },
-  nodes      = { <нода>, <нода>, … },
+  activation = "auto",                -- "auto" (default) | "manual"
+  vars       = { <name> = <bool|number|string default>, … },
+  tasks      = { <task id> = { title = <text>, descr = <text>,
+                               type = "additional"|"storyline",
+                               target = <target_ref|place>, icon = <string>,
+                               auto_complete = <bool>,     -- default true
+                               -- task steps: each has its own text and its OWN map spot
+                               objectives = { { id = <ident>, title = <text>, descr = <text>,
+                                                target = <target_ref>, visible = <bool> }, … } }, … },
+  nodes      = { <node>, <node>, … },
 }
 
-<нода> = {
-  id       = "meet_wolf",             -- [a-z0-9_], уникален в квесте
-  kind     = "dialog.topic",          -- вид каталога с use ⊇ {main} или {trigger}
-  once     = true,                    -- необязательно; дефолт берётся из каталога
-  params   = { … },                   -- параметры вида
-  cond     = { <условие>, … },        -- необязательно; AND-список
-  on_enter = { <действие>, … },       -- по порядку, до основного действия
-  on_exit  = { <действие>, … },       -- по порядку, после него
-  out      = { <пин> = "<id ноды>" | { "<id>", "<id>" }, … },
-  pos      = { 0, 160 },              -- редакторское
-  comment  = "…",                     -- редакторское
+<node> = {
+  id       = "meet_wolf",             -- [a-z0-9_], unique in the quest
+  kind     = "dialog.topic",          -- a catalog kind with use ⊇ {main} or {trigger}
+  once     = true,                    -- optional; the default comes from the catalog
+  params   = { … },                   -- kind parameters
+  cond     = { <cond>, … },           -- optional; AND list
+  on_enter = { <action>, … },         -- in order, before the main action
+  on_exit  = { <action>, … },         -- in order, after it
+  out      = { <pin> = "<node id>" | { "<id>", "<id>" }, … },
+  pos      = { 0, 160 },              -- editor-only
+  comment  = "…",                     -- editor-only
 }
 
-<действие> = { kind = "item.give", params = { section = "wpn_pm", count = 1 } }
-<действие> = { kind = "lua",       params = { code = [[ nq.news("Привет") ]] } }
-<условие>  = { kind = "var", params = { name = "agreed", op = "eq", value = true } }
-<условие>  = { kind = "has_money", params = { amount = 500 }, ["not"] = true }
+<action> = { kind = "item.give", params = { section = "wpn_pm", count = 1 } }
+<action> = { kind = "lua",       params = { code = [[ nq.news("Привет") ]] } }
+<cond>   = { kind = "var", params = { name = "agreed", op = "eq", value = true } }
+<cond>   = { kind = "has_money", params = { amount = 500 }, ["not"] = true }
 ```
 
-Универсальное правило: **любая сущность каталога — `{ kind, params }`**;
-условие дополнительно принимает `["not"] = true`.
+The universal rule: **every catalog entity is `{ kind, params }`**; a condition
+additionally accepts `["not"] = true`.
 
-Пин без целей — ветка кончается. Пин с несколькими целями активирует **все**
-(развилка-fork). Ребро в триггер запрещено (`E007`).
+A pin with no targets — the branch ends. A pin with several targets activates
+**all** of them (a fork). An edge into a trigger is forbidden (`E007`).
 
-## 3. Типы значений параметров
+Task steps (`objectives`) are extra PDA rows of one task, each with its own map
+spot; their state is read by the `objective_status` condition. With
+`auto_complete` on (the default) the task completes itself once every step is
+`completed`; a failed step leaves the task open.
 
-| Тип | Как пишется | Заметки |
+## 3. Parameter value types
+
+| Type | How it is written | Notes |
 |---|---|---|
-| `text` | `"строка"` или `{ rus = "…", eng = "…" }` | UTF-8; плейсхолдеры `{var:имя}`, `{actor}` |
-| `string` | `"…"` | сюда же `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `var_name`, `task_id`, `quest_id`, `ref_name`, `signal_name`, `spot_type`, `node_id` — у всех свои пикеры |
-| `int` | `5` | целое; `min`/`max` из каталога проверяются |
-| `float` | `2.5` | `min`/`max` проверяются |
-| `bool` | `true` / `false` | строго булево |
-| `enum` | `"actor"` | одно из значений `enum=a\|b\|c` каталога |
+| `text` | `"string"` or `{ rus = "…", eng = "…" }` | UTF-8; placeholders `{var:name}`, `{actor}` |
+| `string` | `"…"` | a free string (e.g. the `section` filter of `objective.kill_count`) |
+| picker strings | `"…"` | `item_section`, `squad_section`, `spawn_section` (any section with `$spawn`), `level`, `smart`, `restrictor`, `community`, `info`, `var_name`, `task_id`, `objective_id` (a step of the task named by the neighboring `task` parameter), `quest_id` (`"<module>.<quest>"` or `"<quest>"` = own module), `ref_name`, `signal_name`, `spot_type`, `node_id` — each has its own picker (`quest_lookup`) |
+| `int` | `5` | integer; catalog `min`/`max` are checked |
+| `float` | `2.5` | `min`/`max` are checked |
+| `bool` | `true` / `false` | strictly boolean |
+| `enum` | `"actor"` | one of the catalog's `enum=a\|b\|c` values |
 | `relation` | `"enemy"` \| `"neutral"` \| `"friend"` | |
-| `value` | bool, число или строка | для `var.set` / `var` |
-| `count_or_all` | целое ≥ 1 или `"all"` | `item.take` |
-| `duration` | `{ seconds = N }` (реальное время), `{ game_minutes = N }`, `{ game_hours = N }`, `{ game_seconds = N }` (игровое), либо просто число (реальные секунды) | |
-| `npc_ref` | `{ story = "esc_2_12_stalker_wolf" }` \| `{ ref = "guard" }` \| `{ profile = "…" }` \| `{ community = "stalker", level = "l01_escape" }` | резолв: `ref` → `story` → первый онлайн-NPC по `profile`/`community` |
-| `target_ref` | любой `npc_ref`, либо `{ ref = "boars" }` (отряд/объект), либо `{ smart = "…" }` | |
-| `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ spawn = <spawn_spec> }` | только у `objective.kill` |
-| `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "имя_зоны" }` \| `{ smart = "…" }` | `radius` по умолчанию 5 |
-| `spawn_spec` | `{ section = "simulation_boar", smart = "…", ref = "boars", hold = true }` | `section` и `smart` обязательны |
-| `cases_cond` | `{ { name = "yes", cond = { … } }, … }` | имена кейсов = пины |
-| `cases_weight` | `{ { name = "a", weight = 3 }, … }` | вес по умолчанию 1, должен быть > 0 |
-| `cond_list` | `{ <условие>, … }` | параметр `of` у `any` |
-| `lua` | `[[ … ]]` | компилируется один раз при загрузке |
+| `value` | bool, number or string | for `var.set` / `var` |
+| `count_or_all` | an integer ≥ 1 or `"all"` | `item.take` |
+| `duration` | `{ seconds = N }` (real time), `{ game_minutes = N }`, `{ game_hours = N }`, `{ game_seconds = N }` (game time), or a plain number (real seconds) | |
+| `npc_ref` | `{ story = "esc_2_12_stalker_wolf" }` \| `{ ref = "guard" }` \| `{ profile = "…" }` \| `{ community = "stalker", level = "l01_escape" }` | resolve: `ref` → `story` → the first online NPC by `profile`/`community` |
+| `target_ref` | any `npc_ref`, or `{ ref = "boars" }` (squad/object), or `{ smart = "…" }` | |
+| `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing |
+| `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ spawn = { section, smart\|place, restrictor, spread, ref, hold } }` | only on `objective.kill`; `spawn` creates the squad on entry, `ref` saves it, `hold = true` pins it in place |
+| `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` | `radius` defaults to 5 |
+| `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once |
+| `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick, state, within, beyond, scatter } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` puts the loot it creates; radii are measured from the player |
+| `cases_cond` | `{ { name = "yes", cond = { … } }, … }` | case names = pins |
+| `cases_weight` | `{ { name = "a", weight = 3 }, … }` | the default weight is 1, must be > 0 |
+| `cond_list` | `{ <cond>, … }` | the `of` parameter of `any` |
+| `lua` | `[[ … ]]` | compiled once at load |
 
-Отсутствующий параметр берёт дефолт каталога; отсутствующий обязательный — это
-`E006`; неверный тип — тоже `E006`, параметр отбрасывается.
+A missing parameter takes the catalog default; a missing required one is
+`E006`; a wrong type is `E006` too, the parameter is dropped.
 
-## 4. AI-first: работа с квестом текстом
+## 4. AI-first: working with a quest as text
 
-Требование проекта: нейронка создаёт и правит квесты **текстом**, без скриншотов
-канваса. Что это гарантирует:
+The project requirement: an AI creates and edits quests **as text**, without
+canvas screenshots. What guarantees this:
 
-1. **Файл самодостаточен.** Всё, что редактор знает о квесте, лежит в
-   `.nqasset`. Никаких сайдкаров.
-2. **Координаты необязательны.** Пиши ноды без `pos` — редактор разложит сам
-   (`quest_layout` или просто открытие документа). Редакторские поля (`pos`,
-   `comment`) канонический писатель всегда ставит последними в ноде.
-3. **Схема по запросу.** `xfined_quest_catalog` отдаёт все виды с группами,
-   `use`, параметрами (тип/обязательность/дефолт/min/max/enum), пинами, флагами
-   `wait`/`once`/`event` и однострочным описанием. Этого достаточно, чтобы
-   написать квест с нуля.
-4. **Проблемы — текстом.** `xfined_quest_write` / `quest_apply` /
-   `quest_validate` возвращают `problems` — список `{code, severity, node, slot,
-   message}` с теми же кодами, что печатает игра. Позиция синтаксической ошибки
-   Lua — строка:колонка.
-5. **Чтение — текстом.** `xfined_quest_get` отдаёт канонический текст файла
-   (`lua`) и **outline** — линейное описание графа (§5). Работает и для
-   неоткрытого файла. `xfined_quest_list` даёт сводку по всем квестам проекта.
-6. **Правка — целиком или операциями.** Обычный цикл — переписать файл целиком
-   (`quest_write`); точечные правки — `quest_apply` со списком операций.
-7. **Генерируемый заголовок.** Канонический писатель кладёт в начало файла блок
-   комментариев с тем же outline: открыв `.nqasset` в любом редакторе, человек
-   или ИИ видит структуру квеста без графа.
-8. **Скриншоты возможны, но не нужны.** `xfined_quest_view` +
-   `xfined_screenshot_editor` остаются для контроля вида, ни один шаг рабочего
-   цикла от них не зависит.
+1. **The file is self-contained.** Everything the editor knows about a quest
+   lives in `.nqasset`. No sidecars.
+2. **Coordinates are optional.** Write nodes without `pos` — the editor lays
+   them out itself (`quest_layout` or simply opening the document). The
+   canonical writer always puts the editor fields (`pos`, `comment`) last in a
+   node.
+3. **The schema on demand.** `xfined_quest_catalog` returns every kind with its
+   groups, `use`, parameters (type/required/default/min/max/enum), pins, the
+   `wait`/`once`/`event` flags and a one-line description. That is enough to
+   write a quest from scratch.
+4. **Problems as text.** `xfined_quest_write` / `quest_apply` /
+   `quest_validate` return `problems` — a list of `{code, severity, node, slot,
+   message}` with the same codes the game prints. A Lua syntax error position
+   is line:column.
+5. **Reading as text.** `xfined_quest_get` returns the canonical file text
+   (`lua`) and an **outline** — a linear description of the graph (§5). Works
+   for an unopened file too. `xfined_quest_list` gives a summary of every
+   project quest.
+6. **Editing — whole-file or by operations.** The usual loop is to rewrite the
+   whole file (`quest_write`); targeted edits — `quest_apply` with an operation
+   list.
+7. **The generated header.** The canonical writer puts a comment block with the
+   same outline at the top of the file: opening the `.nqasset` in any editor, a
+   human or an AI sees the quest structure without the graph.
+8. **Screenshots are possible but unnecessary.** `xfined_quest_view` +
+   `xfined_screenshot_editor` remain for visual checks; no step of the workflow
+   depends on them.
 
-Рекомендуемый цикл: `quest_catalog` → написать текст → `quest_write` → прочитать
-`problems`/`outline` → `quest_apply` точечно → `quest_save` → `quest_check_all`
-(тот же гейт, что у сборки) → `mod_export`.
+The recommended loop: `quest_catalog` → write the text → `quest_write` → read
+`problems`/`outline` → `quest_apply` for spot fixes → `quest_save` →
+`quest_check_all` (the same gate the build uses) → `mod_export`.
 
-## 5. Формат outline
+## 5. The outline format
 
-Одна строка на ноду в топологическом порядке от триггеров. Это то, что отдают
-`quest_get` / `quest_validate` в поле `outline`, и то же самое редактор пишет
-блоком комментариев в начало файла при сохранении.
+One line per node in topological order from the triggers. This is what
+`quest_get` / `quest_validate` return in the `outline` field, and the same
+thing the editor writes as the comment block at the top of the file on save.
 
 ```
 quest dialog_branching "Долг вежливости" (active: auto; vars: agreed, asked; tasks: kill_boars)
@@ -154,248 +170,262 @@ kill (objective.kill; target=spawn simulation_boar@esc_smart_terrain_3_16 ref=bo
 finish (flow.end; status=completed)
 ```
 
-Как читать:
+How to read it:
 
-- `[T]` — триггер (корневая нода). У триггера с единственным подключённым пином
-  имя пина не печатается: сразу ` -> цель`.
-- В скобках — вид и сводка параметров, записанных в файле (`имя=значение` через
-  запятую); `text` выносится отдельно в кавычки; `once` печатается, когда он
-  явно задан в ноде (`; once` / `; once=false`).
-- `cond:` — список условий ноды через `and`, `not X` — инверсия.
-- `on_enter:` / `on_exit:` — доп. действия по порядку.
-- В конце строки — пины: `пин -> цель, цель`. `(leaf)` — ни один пин не
-  подключён.
+- `[T]` — a trigger (root node). For a trigger with a single connected pin the
+  pin name is not printed: just ` -> target`.
+- In parentheses — the kind and a summary of the parameters written in the file
+  (`name=value`, comma-separated); `text` goes separately in quotes; `once` is
+  printed when set explicitly on the node (`; once` / `; once=false`).
+- `cond:` — the node conditions joined with `and`, `not X` — inversion.
+- `on_enter:` / `on_exit:` — the extra actions in order.
+- At the end of the line — the pins: `pin -> target, target`. `(leaf)` — no pin
+  connected.
+- Problems are **not** part of the editor's outline: they come as the separate
+  `problems` field of the same MCP response (§8).
 
-Проблемы в outline редактора **не входят**: они лежат отдельным полем `problems`
-в том же ответе MCP (§8).
+> The game prints its own outline (`nq state <uid>`) by the same rules with
+> three differences: the header carries the full uid `<module>.<quest>`, the
+> conditions sit under an `if` key instead of `cond:`, parameters are separated
+> with `;` and only those differing from the catalog default are shown, and the
+> last line is `problems: none` or a `; `-separated list of
+> `CODE node[slot]: message`.
 
-> Игра печатает свой outline (`nq state <uid>`) по тем же правилам, но с тремя
-> отличиями: в шапке полный uid `<модуль>.<квест>`, условия под ключом `if`
-> вместо `cond:`, параметры разделены `;` и показываются только отличающиеся от
-> дефолта каталога, а в конце добавлена строка `problems: none` либо список
-> `КОД нода[слот]: сообщение` через `; `.
+## 6. Kind catalog v1
 
-## 6. Каталог видов v1
+The catalog is supplied by **the game** (`configs\nq\catalog.ltx` +
+`configs\nq\kinds\*.ltx` of the linked install and of installed modules); the
+editor bundle (`gamedata\configs\nq\catalog.ltx`) is only the fallback when no
+game is linked. `quest_catalog` shows the source (`game` / `bundled`) and the
+version.
 
-Каталог поставляет **игра** (`configs\nq\catalog.ltx` + `configs\nq\kinds\*.ltx`
-подключённого инстала и установленных модулей); бандл редактора
-(`gamedata\configs\nq\catalog.ltx`) — только фоллбэк, когда игра не подключена.
-`quest_catalog` показывает источник (`game` / `bundled`) и версию.
+The titles and descriptions below come from the catalog. Required parameters
+are **bold**, defaults follow `=`.
+### 6.1 Triggers (`use = trigger`)
 
-Названия и описания ниже — из каталога (cp1251 → UTF-8). Обязательные параметры
-выделены **жирным**, дефолты после `=`.
+A trigger is a root node with no input; it stays armed while the quest is
+active.
 
-### 6.1 Триггеры (`use = trigger`)
-
-Триггер — корневая нода без входа; взведён, пока квест активен.
-
-| Вид | Название | Параметры | Пины | `once` | Описание |
+| Kind | Title | Parameters | Pins | `once` | Description |
 |---|---|---|---|---|---|
-| `trigger.start` | Старт квеста | — | `next` | `true` | Срабатывает один раз при активации квеста |
-| `trigger.when` | Когда выполнены условия | `repeat: bool = false`, `cooldown: duration` | `next` | `false` | Срабатывает на восходящем фронте условий ноды (`cond`). `repeat` перевзводит после того как условия снова ложны, `cooldown` ограничивает частоту |
+| `trigger.start` | Quest start | — | `next` | `true` | Fires once when the quest activates. |
+| `trigger.when` | When conditions hold | `repeat: bool = false`, `cooldown: duration`, `check_every: float = 0.25` | `next`, `off` | `false` | Fires on the rising edge of the node conditions. repeat re-arms after they turn false, cooldown limits the rate, check_every sets the poll period. The off pin fires once per trigger when the conditions stop holding. |
 
-Условия триггера живут в `cond` ноды, а не в `params`. Если в списке есть
-событийное условие (`event.*`), триггер перестаёт опрашиваться и проверяется
-только в момент события — остальные условия списка проверяются там же.
+Trigger conditions live in the node's `cond`, not in `params`. When the list
+contains an event condition (`event.*`) the trigger stops polling and is
+checked only at the event's moment — the rest of the list is checked right
+there.
 
-### 6.2 Основные действия (`use = main`)
+### 6.2 Main actions (`use = main`)
 
-| Вид | Название | Параметры | Пины | wait | `once` | Описание |
+| Kind | Title | Parameters | Pins | wait | `once` | Description |
 |---|---|---|---|---|---|---|
-| `dialog.topic` | Диалог: тема | **`npc: npc_ref`**, **`text: text`**, `initiator: enum(actor\|npc) = actor` | `next`, `done` | ✔ | `true` | Тема разговора у NPC. Пока токен на ноде и `cond` истинны, тема есть в списке. `next` — фразы, `done` — когда сказана листовая фраза |
-| `dialog.npc_phrase` | Диалог: реплика NPC | **`text: text`** | `next` | | `false` | Реплика собеседника. `cond` ноды — условие показа. Первая по порядку реплика с истинным условием произносится |
-| `dialog.actor_phrase` | Диалог: реплика игрока | **`text: text`** | `next` | | `false` | Вариант ответа игрока. `cond` ноды — условие показа |
-| `objective.kill` | Убить цель | **`target: kill_target`**, `by_actor: bool = false` | `done` | ✔ | `false` | Ждёт смерти цели: NPC по story id, ранее созданный `ref`, или отряд из `spawn` (создаётся при входе и запоминается под `ref`) |
-| `objective.fetch` | Добыть предмет | **`section: item_section`**, `count: int = 1` | `done` | ✔ | `false` | Ждёт, пока в инвентаре игрока будет нужное количество предметов секции. `count` — всегда штуки предметов: для секции патронов это коробки, а не патроны |
-| `objective.reach` | Дойти до места | **`place: place`**, `spot_task: task_id`, `spot_objective: objective_id` | `done` | ✔ | `false` | Ждёт, пока игрок окажется в месте (точка с радиусом, рестриктор или смарт). `spot_task` ведёт на него маркер задачи/подзадачи |
-| `wait.timer` | Подождать | **`duration: duration`** | `done` | ✔ | `false` | Ждёт заданное время: игровое (`game_hours`, `game_minutes`) или реальное (`seconds`) |
-| `wait.when` | Ждать условия | `timeout: duration` | `done`, `timeout` | ✔ | `false` | Ждёт, пока условия ноды (`cond`) станут истинны. `timeout` — необязательный предел ожидания |
-| `wait.any` | Ждать одно из | **`cases: cases_cond`** | по кейсам | ✔ | `false` | Несколько именованных наборов условий, срабатывает первый истинный. Каждый кейс — свой выход |
-| `flow.branch` | Ветвление | **`cases: cases_cond`** | по кейсам, `else` | | `false` | Мгновенно выбирает первый кейс с истинными условиями, иначе `else` |
-| `flow.random` | Случайный выбор | **`cases: cases_weight`** | по кейсам | | `false` | Мгновенно выбирает кейс случайно с учётом весов |
-| `flow.join` | Дождаться всех | — | `next` | ✔ | `false` | Пропускает дальше, когда пришли токены по всем входящим рёбрам |
-| `flow.step` | Шаг | — | `next` | | `false` | Пустое основное действие: только `on_enter` и `on_exit` |
-| `flow.end` | Конец квеста | `status: enum(completed\|failed) = completed`, `restart: bool = false` | — | | `false` | Завершает квест со статусом. `restart` сбрасывает состояние и активирует квест заново |
+| `dialog.topic` | Dialog: topic | **`npc: npc_ref`**, **`text: text`**, `initiator: enum(actor\|npc) = actor` | `next`, `done` | ✔ | `true` | Adds a talk topic to the NPC while the node token and conditions hold. next: phrases, done: a leaf phrase was said. |
+| `dialog.npc_phrase` | Dialog: NPC phrase | **`text: text`** | `next` |  | `false` | NPC line. Node conditions gate visibility, the first matching phrase is spoken. |
+| `dialog.actor_phrase` | Dialog: player phrase | **`text: text`** | `next` |  | `false` | Player reply option. Node conditions gate visibility. |
+| `objective.kill` | Kill target | **`target: kill_target`**, `by_actor: bool = false`, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits for the target to die: an NPC by story id, a saved ref, or a squad from spawn (created on entry, saved under ref). spot_task points the bound task marker (spot_objective: its objective) at the target. spot_done completes the bound task or objective when the node closes. |
+| `objective.kill_count` | Kill N targets | `count: int = 1`, `by_actor: bool = true`, `community: community`, `squad: object_ref`, `section: string` | `done` | ✔ | `false` | Counts kills from node entry until count is reached, survives saves. by_actor counts only player kills. Optional single filter: community, squad, or section. |
+| `objective.fetch` | Fetch items | `section: item_section`, `count: int = 1`, `items: item_list`, `from: object_ref`, `spawn: loot_spawn`, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits until the player holds the items. items rows: a section with a count, or one concrete object (ref or story id), mixed freely. section+count is the one-row shorthand. from credits only items taken from that container. spawn creates the loot on entry and credits only those instances. spot_task (spot_objective: its objective) points the bound marker at the nearest pending source. spot_done completes the bound task or objective on close. count is in items (ammo: boxes). |
+| `objective.reach` | Reach location | **`place: place`**, `spot_task: task_id`, `spot_objective: objective_id`, `spot_done: bool = true` | `done` | ✔ | `false` | Waits until the player is inside the place: a point with radius, a restrictor, a smart, or a ref created by this quest. spot_task (spot_objective: its objective) points the bound marker. spot_done completes it on close. |
+| `wait.timer` | Wait | **`duration: duration`** | `done` | ✔ | `false` | Waits for game time (game_hours, game_minutes) or real seconds. |
+| `wait.when` | Wait for conditions | `timeout: duration` | `done`, `timeout` | ✔ | `false` | Waits until the node conditions hold. timeout is an optional limit. |
+| `wait.any` | Wait for any | **`cases: cases_cond`** | per case | ✔ | `false` | Several named condition sets, the first one to hold wins. Each case is an output pin. |
+| `flow.branch` | Branch | **`cases: cases_cond`** | per case, `else` |  | `false` | Instantly takes the first case whose conditions hold, otherwise else. |
+| `flow.random` | Random choice | **`cases: cases_weight`** | per case |  | `false` | Instantly picks a case at random, honoring weights. |
+| `flow.join` | Join | — | `next` | ✔ | `false` | Passes through once tokens arrived over every incoming edge. |
+| `flow.step` | Step | — | `next` |  | `false` | Empty main action: on_enter and on_exit only. |
+| `flow.end` | Quest end | `status: enum(completed\|failed) = completed`, `restart: bool = false` | — |  | `false` | Ends the quest with the given status. restart resets state and re-activates the quest. |
 
-Мгновенные операции мира (спавн, выдача, награды) — **не** основные действия, а
-доп. (§6.3). Нода — это ключевой этап квеста, всё остальное — обвязка вокруг
-него. Нужен «этап без ожидания» — `flow.step`.
+Instant world operations (spawning, handouts, rewards) are **not** main
+actions but extra ones (§6.3). A node is a key stage of the quest, everything
+else is plumbing around it. When a stage without waiting is needed —
+`flow.step`.
 
-### 6.3 Доп. действия (`use = extra`, все мгновенные)
+### 6.3 Extra actions (`use = extra`, all instant)
 
-| Вид | Название | Параметры | Описание |
+| Kind | Title | Parameters | Description |
 |---|---|---|---|
-| `item.give` | Выдать предмет | **`section: item_section`**, `count: int = 1` | Даёт игроку предметы секции. В диалоге — через передачу от NPC с уведомлением. `count` — всегда штуки предметов: для секции патронов это коробки, а не патроны |
-| `item.take` | Забрать предмет | **`section: item_section`**, `count: count_or_all = 1` | Забирает у игрока предметы секции. `count = "all"` забирает все. `count` считает те же единицы, что у `item.give`: штуки, для патронов — коробки |
-| `item.spawn` | Создать предмет в мире | **`section: item_section`**, `place: place`, `into: target_ref`, `ref: ref_name` | Создаёт предмет в точке (`place`) или внутри объекта (`into`). `ref` запоминает объект |
-| `money.give` | Выдать деньги | **`amount: int ≥ 1`** | Даёт игроку деньги |
-| `money.take` | Забрать деньги | **`amount: int ≥ 1`** | Забирает у игрока деньги |
-| `info.give` | Выдать инфопоршень | **`info: info`** | Выдаёт игроку инфопоршень (для связи с ванильной логикой) |
-| `info.disable` | Снять инфопоршень | **`info: info`** | Снимает инфопоршень у игрока |
-| `var.set` | Задать переменную | **`name: var_name`**, **`value: value`** | Присваивает переменной квеста значение |
-| `var.add` | Прибавить к переменной | **`name: var_name`**, **`delta: float`** | Прибавляет число к числовой переменной квеста |
-| `signal.send` | Послать сигнал | **`name: signal_name`** | Испускает сигнал для триггеров и ожиданий `event.signal` (в том числе других квестов) |
-| `quest.activate` | Активировать квест | **`quest: quest_id`** | Активирует другой квест с `activation = manual` |
-| `task.give` | Выдать задание | **`task: task_id`** | Создаёт задание PDA из объявления `tasks` квеста |
-| `task.complete` | Завершить задание | **`task: task_id`** | Отмечает задание PDA выполненным |
-| `task.fail` | Провалить задание | **`task: task_id`** | Отмечает задание PDA проваленным |
-| `task.remove` | Убрать задание | **`task: task_id`** | Убирает задание из PDA без статуса |
-| `task.set_target` | Цель задания | **`task: task_id`**, **`target: target_ref`** | Переставляет метку задания на цель |
-| `task.set_text` | Текст задания | **`task: task_id`**, `new_title: text`, `new_descr: text` | Меняет заголовок и/или описание задания |
-| `spawn.squad` | Создать отряд | **`section: squad_section`**, **`smart: smart`**, `ref: ref_name`, `hold: bool = true` | Создаёт отряд секции на смарт-террейне. `hold` удерживает отряд на смарте, `ref` запоминает отряд |
-| `spawn.object` | Создать объект | **`section: string`**, **`place: place`**, `ref: ref_name` | Создаёт объект произвольной секции в точке. `ref` запоминает объект |
-| `squad.move` | Отправить отряд | **`target: target_ref`**, `smart: smart`, `follow_actor: bool = false` | Посылает отряд на смарт или за игроком (`follow_actor`) |
-| `squad.remove` | Убрать отряд | **`target: target_ref`** | Удаляет отряд из мира |
-| `npc.remove` | Убрать NPC | **`npc: npc_ref`** | Удаляет NPC из мира |
-| `npc.kill` | Убить NPC | **`npc: npc_ref`** | Убивает NPC |
-| `relation.set` | Отношение к игроку | **`who: npc_ref`**, **`value: relation`** | Делает NPC/отряд/группировку врагом, нейтралом или другом игрока |
-| `relation.goodwill` | Изменить репутацию | **`who: npc_ref`**, **`delta: int`** | Прибавляет (или отнимает) goodwill NPC/группировки к игроку |
-| `news.tip` | Сообщение в PDA | **`text: text`**, `sender: npc_ref`, `icon: string`, `duration: float = 5` | Показывает новость игроку. `sender` — от чьего имени |
-| `map.spot` | Метка на карте | **`target: target_ref`**, `text: text`, `spot: spot_type = secondary_task_location` | Ставит метку на карте на цель |
-| `map.unspot` | Убрать метку с карты | **`target: target_ref`**, `spot: spot_type = secondary_task_location` | Снимает метку с цели |
-| `dialog.force` | Начать разговор | **`npc: npc_ref`**, `allow_break: bool = true` | Принудительно открывает разговор с NPC (NPC должен быть рядом и онлайн) |
-| `dialog.break` | Прервать разговор | — | Закрывает текущий разговор |
-| `actor.teleport` | Телепортировать игрока | **`place: place`** | Переносит игрока в точку текущего уровня |
-| `sound.play` | Проиграть звук | **`theme: string`** | Проигрывает звуковую тему на игроке |
-| `lua` | Свой код (Lua) | **`code: lua`** | Кастомный Lua. Как действие — выполняется. Как условие — должен вернуть `true`/`false`. Доступен объект `nq` и весь API игры |
+| `item.give` | Give item | **`section: item_section`**, `count: int = 1` | Gives the player items of the section. In dialog: handed over by the NPC with a notification. count is in items (ammo: boxes). |
+| `item.take` | Take item | **`section: item_section`**, `count: count_or_all = 1` | Takes items of the section from the player. count = all takes everything. count is in items (ammo: boxes). |
+| `item.spawn` | Spawn item | **`section: item_section`**, `place: place`, `into: target_ref`, `ref: ref_name` | Creates an item at a place or inside an object (into). ref saves the object. |
+| `money.give` | Give money | **`amount: int`** | Gives the player money. |
+| `money.take` | Take money | **`amount: int`** | Takes money from the player. |
+| `info.give` | Give info portion | **`info: info`** | Gives the player an info portion (bridge to vanilla logic). |
+| `info.disable` | Remove info portion | **`info: info`** | Removes an info portion from the player. |
+| `var.set` | Set variable | **`name: var_name`**, **`value: value`** | Assigns a value to a quest variable. |
+| `var.add` | Add to variable | **`name: var_name`**, **`delta: float`** | Adds a number to a numeric quest variable. |
+| `signal.send` | Send signal | **`name: signal_name`** | Emits a signal for event.signal triggers and waits, including other quests. |
+| `quest.activate` | Activate quest | **`quest: quest_id`** | Activates another quest declared with activation = manual. |
+| `task.give` | Give task | **`task: task_id`** | Creates a PDA task from the quest tasks declaration. |
+| `task.complete` | Complete task | **`task: task_id`** | Marks a PDA task completed. |
+| `task.fail` | Fail task | **`task: task_id`** | Marks a PDA task failed. |
+| `task.remove` | Remove task | **`task: task_id`** | Removes a task from the PDA without a status. |
+| `task.set_target` | Task target | **`task: task_id`**, `target: target_ref` | Re-points the task marker at a target. No target clears the marker. |
+| `task.set_text` | Task text | **`task: task_id`**, `new_title: text`, `new_descr: text` | Changes the task title and/or description. |
+| `task.objective_complete` | Complete objective | **`task: task_id`**, **`objective: objective_id`** | Marks one task objective completed. With auto_complete on, the last one also closes the task. |
+| `task.objective_fail` | Fail objective | **`task: task_id`**, **`objective: objective_id`** | Marks one task objective failed. |
+| `task.set_objective_target` | Objective target | **`task: task_id`**, **`objective: objective_id`**, `target: target_ref` | Re-points one objective marker. No target clears it. Each objective owns its marker. |
+| `task.set_objective_text` | Objective text | **`task: task_id`**, **`objective: objective_id`**, `new_title: text`, `new_descr: text` | Changes one objective title and description. |
+| `task.set_objective_visible` | Objective visibility | **`task: task_id`**, **`objective: objective_id`**, `visible: bool` | Shows or hides one objective in the PDA. A hidden objective still runs and can be completed. |
+| `spawn.squad` | Spawn squad | **`section: squad_section`**, `smart: smart`, `place: place`, `restrictor: restrictor`, `spread: float = 1`, `ref: ref_name`, `hold: bool = true` | Creates a squad of the section. smart is optional when place is set (the nearest one is used). place puts them there, inside a restrictor each member gets its own navmesh point and spread pulls the area toward the center. restrictor pens them in, hold pins the squad to its smart, ref saves the squad. |
+| `spawn.object` | Spawn object | **`section: spawn_section`**, **`place: place`**, `ref: ref_name` | Creates an object of any spawn section at a point (box, restrictor, physics). ref saves the object. |
+| `squad.move` | Move squad | **`target: target_ref`**, `smart: smart`, `follow_actor: bool = false` | Sends the squad to a smart or after the player (follow_actor). |
+| `squad.remove` | Remove squad | **`target: target_ref`** | Removes the squad from the world. |
+| `object.remove` | Remove object | **`target: object_ref`** | Removes an object created by this quest (spawn.object) or one by story id. The ref is cleared afterwards. |
+| `npc.remove` | Remove NPC | **`npc: npc_ref`** | Removes the NPC from the world. |
+| `npc.kill` | Kill NPC | **`npc: npc_ref`** | Kills the NPC. |
+| `relation.set` | Set relation | **`who: npc_ref`**, **`value: relation`** | Makes an NPC, squad, or community an enemy, neutral, or friend of the player. |
+| `relation.goodwill` | Change goodwill | **`who: npc_ref`**, **`delta: int`** | Adds (or subtracts) NPC or community goodwill toward the player. |
+| `news.tip` | PDA message | **`text: text`**, `sender: npc_ref`, `icon: string`, `duration: float = 5` | Shows a news tip to the player. sender sets the author. |
+| `map.spot` | Map spot | **`target: target_ref`**, `text: text`, `spot: spot_type = secondary_task_location` | Puts a map spot on the target. |
+| `map.unspot` | Remove map spot | **`target: target_ref`**, `spot: spot_type = secondary_task_location` | Removes the map spot from the target. |
+| `dialog.force` | Start dialog | **`npc: npc_ref`**, `allow_break: bool = true` | Force-opens a dialog with the NPC (must be nearby and online). |
+| `dialog.break` | Break dialog | — | Closes the current dialog. |
+| `actor.teleport` | Teleport player | **`place: place`** | Moves the player to a point on the current level. |
+| `sound.play` | Play sound | **`theme: string`** | Plays a sound theme on the player. |
+| `lua` | Custom Lua | **`code: lua`** | Custom Lua. As an action it runs, as a condition it must return true or false. The nq object and the full game API are available. |
 
-### 6.4 Условия (`use = cond`)
+### 6.4 Conditions (`use = cond`)
 
-Можно везде, где есть `cond`: у ноды, у фразы, в кейсах `flow.branch` и
-`wait.any`.
+Allowed anywhere a `cond` exists: on a node, on a phrase, in `flow.branch`
+and `wait.any` cases.
 
-| Вид | Название | Параметры | Описание |
+| Kind | Title | Parameters | Description |
 |---|---|---|---|
-| `has_info` | Есть инфопоршень | **`info: info`** | У игрока есть инфопоршень |
-| `has_item` | Есть предмет | **`section: item_section`**, `count: int = 1` | У игрока не меньше `count` предметов секции. `count` — штуки предметов: для патронов это коробки, а не патроны |
-| `has_money` | Есть деньги | **`amount: int`** | У игрока не меньше `amount` денег |
-| `var` | Переменная | **`name: var_name`**, `op: enum(eq\|ne\|lt\|le\|gt\|ge) = eq`, **`value: value`** | Сравнивает переменную квеста со значением |
-| `node_done` | Нода уже пройдена | **`node: node_id`** | Нода с `once` уже отработала |
-| `quest_status` | Статус квеста | **`quest: quest_id`**, **`is: enum(inactive\|active\|completed\|failed)`** | Другой квест в заданном статусе |
-| `task_status` | Статус задания | **`task: task_id`**, **`is: enum(none\|active\|completed\|failed)`** | Задание квеста в заданном статусе |
-| `actor_on_level` | Игрок на уровне | **`level: level`** | Игрок находится на уровне |
-| `actor_in_place` | Игрок в месте | **`place: place`** | Игрок в точке с радиусом, в рестрикторе или на смарте |
-| `npc_alive` | NPC жив | **`npc: npc_ref`** | NPC существует и жив |
-| `npc_dead` | NPC мёртв | **`npc: npc_ref`** | NPC мёртв или не существует |
-| `squad_alive` | Отряд жив | **`target: target_ref`** | Отряд (`ref` или `story`) существует |
-| `actor_community` | Группировка игрока | **`community: community`** | Игрок состоит в группировке |
-| `relation` | Отношение к игроку | **`who: npc_ref`**, **`is: relation`** | NPC/группировка враг, нейтрал или друг игрока |
-| `time_of_day` | Время суток | **`from: int 0..23`**, **`to: int 0..23`** | Игровой час в диапазоне `from..to` (через полночь тоже работает) |
-| `elapsed` | Прошло времени | `from: enum(quest\|node) = quest`, `node: node_id`, **`duration: duration`** | С момента активации квеста (`from=quest`) или входа в ноду (`from=node`) прошло не меньше `duration` |
-| `chance` | Шанс | **`percent: int 0..100`** | Случайно истинно с вероятностью `percent` (у фразы — на каждый показ) |
-| `any` | Любое из | **`of: cond_list`** | Истинно, если истинно хотя бы одно вложенное условие |
-| `lua` | Свой код (Lua) | **`code: lua`** | Код вернул истину |
+| `lua` | Custom Lua | **`code: lua`** | Custom Lua. As an action it runs, as a condition it must return true or false. The nq object and the full game API are available. |
+| `has_info` | Has info portion | **`info: info`** | The player has the info portion. |
+| `has_item` | Has item | **`section: item_section`**, `count: int = 1` | The player holds at least count items of the section. count is in items (ammo: boxes). |
+| `has_money` | Has money | **`amount: int`** | The player has at least amount money. |
+| `var` | Variable | **`name: var_name`**, `op: enum(eq\|ne\|lt\|le\|gt\|ge) = eq`, **`value: value`** | Compares a quest variable with a value. op: eq, ne, lt, le, gt, ge. |
+| `node_done` | Node done | **`node: node_id`** | A once node has already run. |
+| `quest_status` | Quest status | **`quest: quest_id`**, **`is: enum(inactive\|active\|completed\|failed)`** | Another quest is in the given status. |
+| `task_status` | Task status | **`task: task_id`**, **`is: enum(none\|active\|completed\|failed)`** | A quest task is in the given status. |
+| `objective_status` | Objective status | **`task: task_id`**, **`objective: objective_id`**, **`is: enum(none\|active\|completed\|failed)`** | One task objective is in the given status, so the graph can branch on a single objective. |
+| `actor_on_level` | Player on level | **`level: level`** | The player is on the level. |
+| `actor_in_place` | Player in place | **`place: place`** | The player is inside a point with radius, a restrictor, a smart, or a quest-created ref. |
+| `npc_alive` | NPC alive | **`npc: npc_ref`** | The NPC exists and is alive. |
+| `npc_dead` | NPC dead | **`npc: npc_ref`** | The NPC is dead or does not exist. |
+| `squad_alive` | Squad alive | **`target: target_ref`** | The squad (ref or story) exists. |
+| `actor_community` | Player community | **`community: community`** | The player belongs to the community. |
+| `relation` | Relation | **`who: npc_ref`**, **`is: relation`** | The NPC or community is an enemy, neutral, or friend of the player. |
+| `time_of_day` | Time of day | **`from: int`**, **`to: int`** | The in-game hour is within from..to (midnight wrap supported). |
+| `elapsed` | Time elapsed | `from: enum(quest\|node) = quest`, `node: node_id`, **`duration: duration`** | At least duration passed since quest activation (from=quest) or node entry (from=node). False when the node has no live token. |
+| `chance` | Chance | **`percent: int`** | Randomly true with the given percent. |
+| `any` | Any of | **`of: cond_list`** | True when at least one nested condition is true. |
 
-### 6.5 Событийные условия (`use = cond`, `event = true`)
+### 6.5 Event conditions (`use = cond`, `event = true`)
 
-Истинны ровно в момент события. Допустимы **только** в `trigger.when`,
-`wait.when` и `wait.any` — везде остальном это `E020`.
+True exactly at the moment of the event. Allowed **only** in `trigger.when`,
+`wait.when` and `wait.any` — anywhere else it is `E020`.
 
-| Вид | Название | Параметры | Описание |
+| Kind | Title | Parameters | Description |
 |---|---|---|---|
-| `event.item_taken` | Событие: предмет подобран | `section: item_section` | Игрок взял предмет (`section` пустой — любой) |
-| `event.item_dropped` | Событие: предмет выброшен | `section: item_section` | Игрок выбросил предмет |
-| `event.item_used` | Событие: предмет использован | `section: item_section` | Игрок использовал предмет |
-| `event.npc_killed` | Событие: NPC убит | `who: npc_ref`, `by_actor: bool = false` | Убит NPC (`who` пустой — любой). `by_actor` — только если убил игрок |
-| `event.squad_dead` | Событие: отряд уничтожен | **`target: target_ref`** | Отряд (`ref` или `story`) перестал существовать |
-| `event.info_given` | Событие: выдан инфопоршень | **`info: info`** | Игрок получил инфопоршень |
-| `event.level_entered` | Событие: вход на уровень | **`level: level`** | Игрок пришёл на уровень |
-| `event.talk_started` | Событие: начат разговор | `npc: npc_ref` | Игрок начал разговор с NPC (`npc` пустой — любой) |
-| `event.talk_ended` | Событие: разговор окончен | `npc: npc_ref` | Игрок закрыл разговор с NPC |
-| `event.signal` | Событие: сигнал | **`name: signal_name`** | Получен сигнал `signal.send` |
-| `event.trade_done` | Событие: торговля | `npc: npc_ref` | Игрок совершил торговую операцию (`npc` пустой — с любым) |
+| `event.item_taken` | Event: item taken | `section: item_section` | The player picked up an item (empty section: any). |
+| `event.item_dropped` | Event: item dropped | `section: item_section` | The player dropped an item. |
+| `event.item_used` | Event: item used | `section: item_section` | The player used an item. |
+| `event.npc_killed` | Event: NPC killed | `who: npc_ref`, `by_actor: bool = false` | An NPC died (empty who: any). by_actor: only player kills. |
+| `event.squad_dead` | Event: squad dead | **`target: squad_ref`** | The squad (ref or story) ceased to exist. |
+| `event.info_given` | Event: info given | **`info: info`** | The player received an info portion. |
+| `event.level_entered` | Event: level entered | **`level: level`** | The player arrived on the level. |
+| `event.talk_started` | Event: talk started | `npc: npc_ref` | The player started a dialog with the NPC (empty npc: any). |
+| `event.talk_ended` | Event: talk ended | `npc: npc_ref` | The player closed a dialog with the NPC. |
+| `event.signal` | Event: signal | **`name: signal_name`** | A signal.send signal was received. |
+| `event.trade_done` | Event: trade | `npc: npc_ref` | The player completed a trade (empty npc: any). |
 
-### 6.6 Расширение каталога модулем
+### 6.6 Extending the catalog from a module
 
-Модуль кладёт `gamedata\configs\nq\kinds\<mod>.ltx` с новыми секциями `[nq.*]` и
-регистрирует реализации в своём `scripts\register.script` через
-`xms.registry.get("nq.kinds"):add("<kind>", { … })`. Редактор сканирует ту же
-папку у подключённой игры и у установленных модулей (оба корня — `modules\` и
-`mods\`), так что такие виды появляются в дропдаунах сами. Контракт реализации
-вида — `NQ_RUNTIME.md` §4.3.
+A module ships `gamedata\configs\nq\kinds\<mod>.ltx` with new `[nq.*]` sections
+and registers the implementations in its own `scripts\register.script` via
+`xms.registry.get("nq.kinds"):add("<kind>", { … })`. The editor scans the same
+folder of the linked game and of installed modules (both roots — `modules\` and
+`mods\`), so such kinds show up in the dropdowns by themselves. The kind
+implementation contract — `NQ_RUNTIME.md` §4.3.
 
 ---
 
-## 7. Коды валидации и что с ними делать
+## 7. Validation codes and what to do about them
 
-`E` блокирует сборку мода и загрузку квеста в игре, `W` — только предупреждает.
-Строка проблемы: `КОД нода[слот]: сообщение`, где слот — `param:<имя>`,
-`cond:<i>`, `enter:<i>`, `exit:<i>`, `out:<пин>` или `cond:<i>/case:<j>`.
+`E` blocks the mod build and the quest's load in the game, `W` only warns.
+A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
+`cond:<i>`, `enter:<i>`, `exit:<i>`, `out:<pin>` or `cond:<i>/case:<j>`.
 
-| Код | Что не так | Что делать |
+| Code | What is wrong | What to do |
 |---|---|---|
-| `E001` | нет `nq` или версия не поддерживается | поставить `nq = 1` первой строкой таблицы |
-| `E002` | `id` квеста не `[a-z0-9_]` или занят другим квестом | переименовать `id`; он не обязан совпадать с именем файла (за несовпадение только `W061`) |
-| `E003` | файл не одна декларативная таблица | убрать всё, что не данные: вызовы, `local`, конкатенацию, второй `return`. Позиция синтаксической ошибки — в сообщении |
-| `E004` | `id` ноды пустой, не `[a-z0-9_]` или дублируется | дать нодам уникальные строчные id |
-| `E005` | неизвестный вид или вид не для этой позиции | свериться с `quest_catalog`: `use` вида должен содержать `main`/`trigger` для ноды, `extra` для `on_enter`/`on_exit`, `cond` для условия |
-| `E006` | обязательный параметр отсутствует / неверный тип / вне диапазона или enum | посмотреть тип в каталоге (§3, §6); тот же код ловит плохие `activation`, `vars`, `tasks`, `once` |
-| `E007` | пин не объявлен у вида; цель ребра не существует; ребро ведёт в триггер | пины брать из каталога (у `wait.any`/`flow.*` пины = имена кейсов); проверить опечатку в id цели; триггер может быть только источником |
-| `E008` | нет ни одного триггера или нет списка `nodes` | добавить `trigger.start` (или `trigger.when`) |
-| `E009` | `flow.join` без входящих рёбер | подключить к нему ветки или убрать ноду |
-| `E010` | нарушено чередование говорящих или фраза недостижима из темы | между двумя репликами одной стороны вставить реплику другой («…»); фраза должна быть достижима из `dialog.topic` по `next` |
-| `E011` | во фразу ведёт ребро из не-диалоговой ноды | вход в диалог — только через `dialog.topic`; из мира ведите ребро в тему, а не во фразу |
-| `E020` | событийное условие вне `trigger.when` / `wait.when` / `wait.any` | заменить на уровневое (`has_item` вместо `event.item_taken`) или перенести событие в отдельный `trigger.when` |
-| `E021` | `cases` пусты, имя кейса плохое или дублируется, `weight ≤ 0` | у каждого кейса `name` из `[a-z0-9_]`, уникальное; вес строго > 0 |
-| `E030` | ссылка на необъявленные `var` / `task` / `node` / `quest`, либо `ref`, который никто не создаёт | объявить переменную в `vars`, задание в `tasks`, объект — через `spawn.*` или `objective.kill{spawn}` до его использования; для чужого квеста писать `"<модуль>.<квест>"`. Игра отвечает тем же кодом, так что квест с такой ссылкой в неё просто не загрузится |
-| `E031` | `actor.teleport` в место на другом уровне | межуровневых телепортов в Dead Air нет — переход только через level changer |
-| `E050` | синтаксическая ошибка в кастомном Lua | исправить `code`; кнопка «check syntax» в инспекторе проверяет его отдельно |
-| `W011` | продолжения не-листовой фразы: среди ответов игрока безусловны **не все**, либо среди реплик NPC нет ни одной безусловной (безусловная = без `cond` и без `once`) | рантайм добавит скрытый лист («Пока.» / «...»). Для реплик NPC он недостижим, так что достаточно одной безусловной реплики. Для ответов игрока это видимая строка, которая закрывает разговор мимо `done` темы — сделайте безусловными все ответы или уведите логику с `done` внутрь самих ответов |
-| `W012` | у `dialog.topic` нет фраз-продолжений | подключить `next` к реплике, иначе тема закроется сразу после открытия |
-| `W013` | тема с `once = false` без условий | добавить `cond` или `once = true`, иначе тема будет висеть у NPC вечно |
-| `W020` | нода недостижима из триггеров | подключить её или удалить |
-| `W021` | у ожидающей ноды нет исходящих рёбер | квест зависнет на ней — подключить пин или закончить `flow.end` |
-| `W031` | `spawn.squad` с `hold = false` | отряд может уйти в симуляцию; оставьте `hold = true`, если цель должна ждать игрока на месте |
-| `W040` | символ вне cp1251 в тексте | убрать эмодзи/редкую типографику — в игре они станут `?` |
-| `W050` | Lua не удалось проверить (нет LuaJIT) | только в редакторе; проверьте код руками |
-| `W060` | значение не найдено в индексе подключённой игры | опечатка в секции/story id/уровне/смарте/профиле/инфопоршне — либо это объект вашего мода, тогда предупреждение ожидаемо |
-| `W061` | имя файла не совпадает с `id` квеста | подсказка, не ошибка; переименуйте файл или `id`, если хотите порядок |
-| `W070` | у квеста нет `flow.end` | квест завершится неявно, когда кончатся токены и триггеры; добавьте `flow.end`, если хотите явный статус |
+| `E001` | no `nq` or the version is unsupported | put `nq = 1` as the first line of the table |
+| `E002` | the quest `id` is not `[a-z0-9_]` or taken by another quest | rename the `id`; it need not match the file name (a mismatch is only `W061`) |
+| `E003` | the file is not one declarative table | remove everything that is not data: calls, `local`, concatenation, a second `return`. The syntax error position is in the message |
+| `E004` | a node `id` is empty, not `[a-z0-9_]` or duplicated | give the nodes unique lowercase ids |
+| `E005` | an unknown kind, or a kind in the wrong position | check `quest_catalog`: the kind's `use` must contain `main`/`trigger` for a node, `extra` for `on_enter`/`on_exit`, `cond` for a condition |
+| `E006` | a required parameter is missing / wrong type / outside the range or enum | look the type up in the catalog (§3, §6); the same code catches bad `activation`, `vars`, `tasks`, `once` |
+| `E007` | the pin is not declared on the kind; the edge target does not exist; the edge leads into a trigger | take pins from the catalog (for `wait.any`/`flow.*` the pins = case names); check the target id for a typo; a trigger can only be a source |
+| `E008` | not a single trigger, or no `nodes` list | add a `trigger.start` (or `trigger.when`) |
+| `E009` | `flow.join` with no incoming edges | connect branches to it or remove the node |
+| `E010` | speaker alternation broken, or a phrase unreachable from its topic | put a phrase of the other side ("…") between two lines of the same side; a phrase must be reachable from a `dialog.topic` over `next` |
+| `E011` | an edge into a phrase from a non-dialog node | a dialog is entered only through `dialog.topic`; route world edges into the topic, not into a phrase |
+| `E020` | an event condition outside `trigger.when` / `wait.when` / `wait.any` | replace it with a level condition (`has_item` instead of `event.item_taken`) or move the event into its own `trigger.when` |
+| `E021` | `cases` are empty, a case name is bad or duplicated, `weight ≤ 0` | every case needs a unique `[a-z0-9_]` `name`; weights strictly > 0 |
+| `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter) | pick exactly one form; the inspector dims the losing fields |
+| `E030` | a reference to an undeclared `var` / `task` / `objective` / `node` / `quest`, or a `ref` nothing creates | declare the variable in `vars`, the task (and its steps) in `tasks`, the object via `spawn.*` or `objective.kill{spawn}` before use; for a foreign quest write `"<module>.<quest>"`. The game answers with the same code, so a quest with such a reference simply will not load there |
+| `E031` | `actor.teleport` to a place on another level | Dead Air has no cross-level teleports — transitions go through a level changer |
+| `E050` | a syntax error in custom Lua | fix the `code`; the "check syntax" button in the inspector verifies it separately |
+| `W011` | continuations of a non-leaf phrase: among player replies **not all** are unconditional, or among NPC lines not a single one is (unconditional = no `cond` and no `once`) | the runtime will add a hidden leaf ("Пока." / "…"). For NPC lines it is unreachable, so one unconditional line is enough. For player replies it is a visible row that closes the talk past the topic's `done` — make every reply unconditional, or move the logic off `done` into the replies themselves |
+| `W012` | a `dialog.topic` with no continuation phrases | connect `next` to a phrase, otherwise the topic closes right after opening |
+| `W013` | a topic with `once = false` and no conditions | add a `cond` or `once = true`, otherwise the topic hangs on the NPC forever |
+| `W020` | a node unreachable from the triggers | connect it or delete it |
+| `W021` | a waiting node with no outgoing edges | the quest will hang on it — connect a pin or finish with `flow.end` |
+| `W022` | one target listed twice on one pin | remove the duplicate; the repeated edge is ignored |
+| `W030` | a `ref` is used before the node that creates it (not along all paths) | order the graph so `spawn.*` / `objective.kill{spawn}` runs first on every path to the use |
+| `W031` | `spawn.squad` with `hold = false` | the squad may wander off into the simulation; keep `hold = true` when the target must wait for the player in place |
+| `W040` | a character outside cp1251 in a text | drop the emoji/exotic typography — in the game they become `?` |
+| `W050` | Lua could not be checked (no LuaJIT) | editor only; review the code by hand |
+| `W060` | the value is not found in the linked game's index | a typo in the section/story id/level/smart/profile/info portion — or it is your own mod's object, then the warning is expected |
+| `W061` | the file name does not match the quest `id` | a hint, not an error; rename the file or the `id` if you want order |
+| `W070` | the quest has no `flow.end` | it will finish implicitly when tokens and triggers run out; add a `flow.end` if you want an explicit status |
 
 ---
 
-## 8. MCP-инструменты `quest_*`
+## 8. The `quest_*` MCP tools
 
-Редактор слушает TCP `127.0.0.1:28016`, один JSON-объект на строку. Структурные
-аргументы передаются **строкой с Lua-таблицей**, ответы — JSON.
-Общие поля ответа: `ok`, при ошибке — `error`. У большинства команд ответ
-содержит `path`, `id`, `title`, `nodes`, `errors`, `warnings`, `problems`
-(список `{code, severity, node, slot, message}`), `outline`, `open`, `dirty`,
-`undo`, `redo`.
+The editor listens on TCP `127.0.0.1:28016`, one JSON object per line.
+Structured arguments travel as **a string holding a Lua table**, responses are
+JSON. Common response fields: `ok`, on failure `error`. Most commands respond
+with `path`, `id`, `title`, `nodes`, `errors`, `warnings`, `problems`
+(a list of `{code, severity, node, slot, message}`), `outline`, `open`,
+`dirty`, `undo`, `redo`.
 
-Деструктивность: MCP-команды не показывают диалогов. `quest_close` при
-несохранённом документе отвечает ошибкой `unsaved`, если не передан
-`discard: true`.
+Destructiveness: MCP commands show no dialogs. `quest_close` on an unsaved
+document answers with an `unsaved` error unless `discard: true` is passed.
 
-| Инструмент | Аргументы | Ответ |
+| Tool | Arguments | Response |
 |---|---|---|
-| `xfined_quest_catalog` | — | `source` (`game`/`bundled`), `version`, `api`, `files`, `count`, `kinds[]` — по виду: `id`, `group`, `title`, `desc`, `use[]`, `params[]` (`name`, `type`, `required`, `default`, `min`, `max`, `enum[]`), `pins[]`, `wait`, `once`, `event`, `impl`, `since` |
-| `xfined_quest_list` | — | `count`, `quests[]`: `path`, `readable`, `id`, `title`, `nodes`, `errors`, `warnings`, `open`, `dirty`. Нечитаемый файл — `readable:false` + `error` |
-| `xfined_quest_new` | `path` | создаёт файл из шаблона (`trigger.start → flow.end`, `id` = имя файла, title «Новый квест»), открывает вкладку. Отказывает, если файл есть. Ответ со сводкой и `lua` |
-| `xfined_quest_open` | `path` | открывает документ (читает файл, раскладывает ноды без `pos`, валидирует). Повторное открытие просто возвращает состояние |
+| `xfined_quest_catalog` | — | `source` (`game`/`bundled`), `version`, `api`, `files`, `count`, `kinds[]` — per kind: `id`, `group`, `title`, `desc`, `use[]`, `params[]` (`name`, `type`, `required`, `default`, `min`, `max`, `enum[]`), `pins[]`, `wait`, `once`, `event`, `impl`, `since` |
+| `xfined_quest_list` | — | `count`, `quests[]`: `path`, `readable`, `id`, `title`, `nodes`, `errors`, `warnings`, `open`, `dirty`. An unreadable file — `readable:false` + `error` |
+| `xfined_quest_new` | `path` | creates the file from the template (`trigger.start → flow.end`, `id` = the file name, title "New quest"), opens the tab. Refuses when the file exists. Responds with the summary and `lua` |
+| `xfined_quest_open` | `path` | opens the document (reads the file, lays out `pos`-less nodes, validates). Re-opening just returns the state |
 | `xfined_quest_close` | `path`, `discard?` | `{ok:true}` |
-| `xfined_quest_get` | `path` | сводка + `lua` (канонический текст) + `outline`. Работает и для неоткрытого файла (читает с диска) |
-| `xfined_quest_write` | `path`, `lua` | заменяет квест целиком. Открытый документ — в памяти со снимком undo (`saved:false`, потом `quest_save`); закрытый или новый файл — канонический текст пишется на диск (`saved:true`). Проблемы возвращаются, но запись не блокируют — блокирует только сборка |
-| `xfined_quest_undo` / `xfined_quest_redo` | `path` | откат/повтор в собственном кольце документа (сценовый undo не трогается). Ошибка `nothing to undo`, если нечего |
-| `xfined_quest_apply` | `path`, `ops` | применяет список операций (всё или ничего, один шаг undo). Ответ + `applied` — сколько операций применено |
-| `xfined_quest_validate` | `path` | сводка + `outline`; открытый документ перевалидируется |
-| `xfined_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Отказ `modified externally`, если файл изменился на диске после загрузки — тогда `force: true` |
-| `xfined_quest_reload` | `path` | перечитывает открытый документ с диска (теряет несохранённые правки и историю undo) |
-| `xfined_quest_layout` | `path`, `all?` | детерминированная pin-aware раскладка сверху вниз: полные границы вложенных ветвей и эксклюзивных деревьев триггеров не пересекаются, а общие потомки занимают отдельные merge-блоки между входящими ветвями. `all:false` двигает только ноды без `pos`. Ответ: `moved`, `positions[]` (`id`, `x`, `y`) |
-| `xfined_quest_view` | `path`, `frame?` (`"all"` или id ноды), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?` | открывает/фокусирует вкладку графа и ставит вид. Raw-ответ: `path`, `zoom_level`, `zoom`, `center`, `nodes`, `open_tabs`, `pending`; первый `frame:all` может быть `pending:true` до Draw, Python bridge прозрачно перечитывает итоговый вид после кадра. Дальше — `xfined_screenshot_editor` |
-| `xfined_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | полнотекстовый поиск нод по id/видам/параметрам/условиям/действиям/связям/комментариям; `get` с `query` атомарно меняет запрос без навигации, `next`/`previous` фокусируют результат. Токены соединяются через AND, кавычки сохраняют фразу, `-токен` исключает |
-| `xfined_quest_project_find` | `query`, `limit?` | read-only поиск по всем отсортированным `*.nqasset` проекта без открытия документов; синтаксис запроса совпадает с `quest_find`. Грязный открытый документ перекрывает дисковую копию. Результаты содержат `source` (`disk`/`memory`), а ответ — `complete`, `diagnostics`, `generation`, детерминированный `fingerprint` |
-| `xfined_quest_references` | `type`, `value`, `path?`, `limit?` | точные ссылки только в параметрах, которым текущий каталог назначил `type`; `path` ограничивает один квест и обязателен по смыслу для локального `task_id`. Обход включает вложенные `cond_list`/`cases_cond`; неизвестный kind/параметр, malformed-значение, Lua и нечитаемый файл дают `complete:false` с точной диагностикой, а не ложную полноту |
-| `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | внутри одного документа переименовывает объявление task и все доказанные каталогом `task_id` ссылки одним шагом undo. До `Snapshot` отказывает при неизвестной/Lua/malformed/частично прочитанной области. Ack обязателен: task id сохраняется в runtime/save state, старое состояние не мигрирует |
-| `xfined_quest_bookmarks` | `path`, `action?`, `node?` | transient-закладки нод (`get/add/remove/toggle/next/previous/clear`), не меняют ассет/dirty/undo |
-| `xfined_quest_history` | `path`, `action?` | transient-история вида (`get/back/forward/clear`): центр, зум, выделение и слот инспектора |
-| `xfined_quest_minimap` | `path`, `action?` | интерактивная transient-миникарта (`get/show/hide/toggle`), ответ с границами графа и текущего viewport |
-| `xfined_quest_lookup` | `type`, `query?`, `limit?` (по умолчанию 50), `path?` | данные пикеров. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (из подключённой игры, кэшируются) либо документные `task_id`, `var_name`, `ref_name`, `node_id` (нужен `path`), `quest_id` (квесты проекта) |
-| `xfined_quest_check_all` | — | гейт сборки: `passed`, `errors`, `warnings`, `error`, `log[]` (строки `<путь>: <код> <нода>: <сообщение>`) |
+| `xfined_quest_get` | `path` | the summary + `lua` (canonical text) + `outline`. Works for an unopened file too (reads from disk) |
+| `xfined_quest_write` | `path`, `lua` | replaces the quest whole. An open document — in memory with an undo snapshot (`saved:false`, then `quest_save`); a closed or new file — the canonical text goes to disk (`saved:true`). Problems are returned but do not block the write — only the build |
+| `xfined_quest_undo` / `xfined_quest_redo` | `path` | undo/redo in the document's own ring (the scene undo is untouched). Error `nothing to undo` when empty |
+| `xfined_quest_apply` | `path`, `ops` | applies the operation list (all or nothing, one undo step). The response + `applied` — how many operations went through |
+| `xfined_quest_validate` | `path` | the summary + `outline`; an open document is re-validated |
+| `xfined_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Refuses with `modified externally` when the file changed on disk after loading — then `force: true` |
+| `xfined_quest_reload` | `path` | re-reads the open document from disk (drops unsaved edits and the undo history) |
+| `xfined_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`) |
+| `xfined_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the inspector follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action in the inspector), `scroll?` (`"top"`/`"bottom"`/`"task:<id>"`/`"task:<id>/steps"` — scrolls the inspector) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom`, `center`, `nodes`, `open_tabs`, `pending`; the first `frame:all` may be `pending:true` until Draw, the Python bridge transparently re-reads the final view after the frame. Then — `xfined_screenshot_editor` |
+| `xfined_quest_edit` | `path`, `op`, `nodes?` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
+| `xfined_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | full-text node search over ids/kinds/parameters/conditions/actions/links/comments; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the result. Tokens are AND-joined, quotes keep a phrase, `-token` excludes |
+| `xfined_quest_project_find` | `query`, `limit?` | a read-only search over all sorted project `*.nqasset` without opening documents; the query syntax matches `quest_find`. A dirty open document overlays its disk copy. Results carry `source` (`disk`/`memory`); the response — `complete`, `diagnostics`, `generation`, a deterministic `fingerprint` |
+| `xfined_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only in parameters the current catalog typed as `type`; `path` narrows to one quest and is effectively mandatory for a local `task_id`. The walk includes nested `cond_list`/`cases_cond`; an unknown kind/parameter, a malformed value, Lua or an unreadable file give `complete:false` with precise diagnostics rather than fake completeness |
+| `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | renames the task declaration and every catalog-proven `task_id` reference inside one document as one undo step. Refuses before the `Snapshot` on an unknown/Lua/malformed/partially read area. The ack is mandatory: the task id is stored in runtime/save state, old state does not migrate |
+| `xfined_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
+| `xfined_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the inspector slot |
+| `xfined_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); the response carries the graph and viewport bounds |
+| `xfined_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests) |
+| `xfined_quest_check_all` | — | the build gate: `passed`, `errors`, `warnings`, `error`, `log[]` (lines `<path>: <code> <node>: <message>`) |
 
-### 8.1 Операции `quest_apply`
+### 8.1 `quest_apply` operations
 
-`ops` — текст Lua-списка (можно без `return`). Индексы **с единицы**.
+`ops` is the text of a Lua list (`return` optional). Indices are **1-based**.
 
 ```lua
 {
@@ -404,10 +434,10 @@ finish (flow.end; status=completed)
   { op = "set_node",     id = "ask", patch = { once = true, params = { … }, cond = { … },
                                                on_enter = { … }, on_exit = { … }, out = { … },
                                                kind = "…", pos = { 0, 160 }, comment = "…" } },
-  { op = "rename_node",  id = "ask", new_id = "ask_more" },   -- обновляет ссылки
-  { op = "remove_node",  id = "ask" },                        -- снимает ведущие в неё рёбра
+  { op = "rename_node",  id = "ask", new_id = "ask_more" },   -- updates references
+  { op = "remove_node",  id = "ask" },                        -- drops the edges leading into it
   { op = "connect",      from = "wolf_1", pin = "next", to = "ask_more" },
-  { op = "disconnect",   from = "wolf_1", pin = "next", to = "ask_more" }, -- без `to` — весь пин
+  { op = "disconnect",   from = "wolf_1", pin = "next", to = "ask_more" }, -- without `to` — the whole pin
   { op = "add_action",   id = "ask_more", slot = "exit", index = 1,
                          action = { kind = "var.add", params = { name = "asked", delta = 1 } } },
   { op = "set_action",   id = "ask_more", slot = "exit", index = 1, patch = { kind = "…", params = { … } } },
@@ -422,16 +452,16 @@ finish (flow.end; status=completed)
 
 ---
 
-## 9. Разбор эталонного квеста
+## 9. The reference quest, node by node
 
-`docs/nq/examples/dialog_branching.nqasset` целиком:
+`docs/nq/examples/dialog_branching.nqasset` in full:
 
 ```lua
 -- nq: dialog_branching "Долг вежливости"
--- Волк (Кордон, деревня новичков) просит перебить кабанов. Эталон для тест-плана (§16 игра п.2):
--- две темы у одного NPC, реплики игрока с развилкой, реплика NPC по условию (has_money),
--- цикл фраз через реплику игрока, once у темы, выход из диалога в objective.kill{spawn} и
--- награда в on_exit финальной реплики.
+-- Wolf (Cordon, the rookie village) wants the boars culled. The reference for the test plan (§16 game item 2):
+-- two topics on one NPC, a player reply fork, an NPC phrase gated by a condition (has_money),
+-- a phrase loop through a player reply, once on the topic, a dialog exit into objective.kill{spawn} and
+-- the reward in the on_exit of the final phrase.
 return {
   nq = 1,
   id = "dialog_branching",
@@ -446,7 +476,7 @@ return {
   nodes = {
     { id = "start", kind = "trigger.start", out = { next = "meet" } },
 
-    -- тема 1: предложение
+    -- topic 1: the offer
     { id = "meet", kind = "dialog.topic",
       params = { npc = { story = "esc_2_12_stalker_wolf" }, text = "Слышал, у тебя проблемы с кабанами." },
       once = true,
@@ -476,12 +506,12 @@ return {
       out = { next = "kill" } },
     { id = "decline", kind = "dialog.actor_phrase", params = { text = "Не моё дело." } },
 
-    -- цель
+    -- the objective
     { id = "kill", kind = "objective.kill",
       params = { target = { spawn = { section = "simulation_boar", smart = "esc_smart_terrain_3_16", ref = "boars", hold = true } } },
       out = { done = "report" } },
 
-    -- тема 2: отчёт
+    -- topic 2: the report
     { id = "report", kind = "dialog.topic",
       params = { npc = { story = "esc_2_12_stalker_wolf" }, text = "Кабаны мертвы." },
       once = true,
@@ -499,101 +529,108 @@ return {
 }
 ```
 
-Что происходит в игре, нода за нодой:
+What happens in the game, node by node:
 
-**Заголовок.** `activation = "auto"` — квест активируется на первом апдейте
-актора в любой игре и на любой загрузке, если модуль включён и подходит по
-`mode=`, и в состоянии нет записи о квесте. То есть квест доедет и до уже
-начатого прохождения — просто стартует при следующей загрузке. Переменные
-`agreed` и `asked` создаются со значениями по умолчанию; `tasks.kill_boars` —
-пока только объявление, задания в PDA ещё нет.
+**The header.** `activation = "auto"` — the quest activates on the actor's
+first update in any game and on any load, as long as the module is enabled,
+matches by `mode=`, and the state has no record of the quest. So the quest
+reaches an already started playthrough too — it simply starts on the next
+load. The variables `agreed` and `asked` are created with their defaults;
+`tasks.kill_boars` is only a declaration so far, there is no PDA task yet.
 
-**`start` (`trigger.start`).** Взводится при активации и сразу срабатывает: пин
-`next` кладёт в очередь переход на `meet`. Нода `once` по дефолту вида, так что
-второй раз не сработает.
+**`start` (`trigger.start`).** Arms on activation and fires immediately: the
+`next` pin queues a transition to `meet`. The node is `once` by the kind's
+default, so it never fires twice.
 
-**`meet` (`dialog.topic`, `once = true`).** Токен встаёт на ноду и остаётся
-(вид ожидающий). Пока токен тут, рантайм отвечает движку на запрос «какие темы у
-этого NPC»: тема попадает в список Волка, потому что `npc = { story =
-"esc_2_12_stalker_wolf" }` совпадает с собеседником, а условий у ноды нет.
-Движок строит из этой ветки один диалог `nq.<модуль>.dialog_branching.meet`, где
-корневая фраза `"0"` — текст темы.
+**`meet` (`dialog.topic`, `once = true`).** A token lands on the node and
+stays (the kind waits). While the token is here, the runtime answers the
+engine's "which topics does this NPC have" query: the topic enters Wolf's
+list because `npc = { story = "esc_2_12_stalker_wolf" }` matches the partner
+and the node has no conditions. The engine builds one dialog
+`nq.<module>.dialog_branching.meet` out of this branch, with root phrase `"0"`
+being the topic text.
 
-**`wolf_1` (`dialog.npc_phrase`).** Глубина 1 от корня — говорит собеседник
-(инициатор `actor`, значит нечётная глубина = NPC). Реплика безусловная. Её
-`next` перечисляет три ответа игрока **в порядке показа**: `accept`, `ask_more`,
-`decline`.
+**`wolf_1` (`dialog.npc_phrase`).** Depth 1 from the root — the partner speaks
+(the initiator is `actor`, so odd depth = the NPC). The line is unconditional.
+Its `next` lists three player replies **in display order**: `accept`,
+`ask_more`, `decline`.
 
-**`ask_more` → `wolf_rich` / `wolf_poor`.** Ответ игрока «А что дашь?» в
-`on_exit` увеличивает `asked` на 1 — это происходит синхронно, сразу после того
-как фраза сказана, поэтому следующий уровень фраз уже видит новое значение.
-Дальше NPC выбирает **первую по порядку** реплику с истинным условием: у
-`wolf_rich` условие `has_money(amount = 1000)`, у `wolf_poor` условий нет. Игрок
-с деньгами услышит первую, бедный — вторую. Порядок здесь не случайность:
-рантайм раздаёт фразам goodwill `-10000 - индекс`, а движок сортирует по
-убыванию goodwill — «первая объявленная выигрывает». Безусловный `wolf_poor` в
-конце списка снимает `W011` и убирает `R_ASSERT2("No available phrase to say")`:
-у `ask_more` есть продолжение, которое никогда не отфильтруется. Скрытый лист
-рантайм при этом всё равно добавит — он добавляется, когда безусловны **не все**
-продолжения, а `wolf_rich` условный, — но здесь лист безвреден: он на
-минимальном goodwill, под `wolf_poor`, а реплику NPC выбирает движок, так что до
-листа очередь не дойдёт. С ответами игрока этот же расклад уже опасен: там
-показывают все прошедшие варианты, лист становится видимой строкой, и выбор её
-закрывает разговор, не засчитав тему — ни `on_exit` темы, ни пина `done`, токен
-остаётся на теме. Поэтому у `dialog.actor_phrase` `W011` ругается уже на
-«безусловны не все».
+**`ask_more` → `wolf_rich` / `wolf_poor`.** The player reply "А что дашь?"
+bumps `asked` by 1 in its `on_exit` — synchronously, right after the phrase is
+said, so the next level of phrases already sees the new value. Then the NPC
+picks the **first in order** line whose condition holds: `wolf_rich` carries
+`has_money(amount = 1000)`, `wolf_poor` has no conditions. A player with money
+hears the first, a poor one — the second. The order is no accident: the
+runtime hands the phrases goodwill `-10000 - index` and the engine sorts by
+descending goodwill — "the first declared wins". The unconditional `wolf_poor`
+at the end of the list clears `W011` and rules out
+`R_ASSERT2("No available phrase to say")`: `ask_more` has a continuation that
+can never be filtered out. The runtime still adds its hidden leaf — it is
+added whenever **not all** continuations are unconditional, and `wolf_rich` is
+conditional — but here the leaf is harmless: it sits at minimal goodwill,
+below `wolf_poor`, and NPC lines are picked by the engine, so the queue never
+reaches it. With player replies the same layout is already dangerous: every
+passing option is displayed, the leaf becomes a visible row, and choosing it
+closes the talk without crediting the topic — no topic `on_exit`, no `done`
+pin, the token stays on the topic. That is why for `dialog.actor_phrase` the
+`W011` complains already at "not all are unconditional".
 
-**`back` → `wolf_1`.** Цикл: ответ игрока ведёт обратно к первой реплике NPC.
-Циклы в фразовом графе легальны — движок при повторном id просто добавляет
-ребро. Игрок может спрашивать «а что дашь?» сколько угодно раз (`asked` считает
-эти разы), пока не выберет `accept` или `decline`.
+**`back` → `wolf_1`.** A loop: the player reply leads back to the NPC's first
+line. Cycles in the phrase graph are legal — on a repeated id the engine just
+adds an edge. The player may ask "а что дашь?" any number of times (`asked`
+counts them) until picking `accept` or `decline`.
 
-**`accept`.** В `on_exit` два доп. действия по порядку: `var.set` ставит
-`agreed = true`, `task.give` создаёт задание PDA
-`nq.<модуль>.dialog_branching.kill_boars` с заголовком и описанием из объявления
-`tasks`. У задания `target = { ref = "boars" }` — на этот момент отряда ещё нет,
-поэтому метка на карте появится позже, когда `ref` будет создан.
-`out.next = "kill"` — это **выход из диалога в мир**: `kill` не фразовая нода,
-поэтому переход кладётся в очередь и выполнится на следующем кадре, а не внутри
-`SayPhrase`. Диалоговых детей у `accept` нет, значит фраза листовая: разговор
-закрывается, тема считается пройденной, `once` снимает токен с `meet` и
-срабатывает пин `done` (у `meet` он не подключён — ветка просто кончается там).
+**`accept`.** Two extra actions in `on_exit`, in order: `var.set` sets
+`agreed = true`, `task.give` creates the PDA task
+`nq.<module>.dialog_branching.kill_boars` with the title and description from
+the `tasks` declaration. The task has `target = { ref = "boars" }` — at this
+point the squad does not exist yet, so the map spot appears later, once the
+`ref` is created. `out.next = "kill"` is **an exit from the dialog into the
+world**: `kill` is not a phrase node, so the transition is queued and runs on
+the next frame, not inside `SayPhrase`. `accept` has no dialog children, so
+the phrase is a leaf: the talk closes, the topic counts as passed, `once`
+removes the token from `meet` and the `done` pin fires (unconnected on `meet` —
+the branch simply ends there).
 
-**`decline`.** Лист без `out` вообще: игрок отказался, тема закрылась, квест
-остаётся активным с токеном… нигде. Токенов не осталось, взведённых триггеров
-тоже (`start` уже отработал и он `once`) — рантайм закрывает квест **неявно** со
-статусом `completed` и пишет об этом в лог. Валидатор на это не ругается:
-`W070` смотрит на квест целиком, а `flow.end` в квесте есть (`finish`), поэтому
-у этого ассета `problems: none`. Хотите явный статус на отказе — доведите
-`decline` до своего `flow.end` со `status = "failed"`.
+**`decline`.** A leaf with no `out` at all: the player refused, the topic
+closed, the quest stays active with a token… nowhere. No tokens remain, no
+armed triggers either (`start` has fired and it is `once`) — the runtime closes
+the quest **implicitly** with status `completed` and logs it. The validator
+does not mind: `W070` looks at the quest as a whole, and the quest does have a
+`flow.end` (`finish`), so this asset reports `problems: none`. Want an
+explicit status on refusal — route `decline` to its own `flow.end` with
+`status = "failed"`.
 
-**`kill` (`objective.kill`).** При входе `begin` разрешает цель: у неё
-`spawn`, значит рантайм создаёт отряд `simulation_boar` на смарте
-`esc_smart_terrain_3_16` и запоминает его под `ref = "boars"` (`hold = true`
-прибивает отряд к смарту — иначе симуляция уведёт кабанов гулять; движок
-`scripted_target` не сохраняет, поэтому рантайм переставляет его после каждой
-загрузки и при `squad_on_register`). Заодно ref регистрируется как story id
-`nq.<модуль>.dialog_branching.boars`, и метка задания получает свой объект.
-Дальше нода ждёт: подписана на события `npc_killed`, `squad_npc_death`,
-`squad_dead`, плюс раз в 250 мс опрашивает серверный объект — оффлайн-смерти
-коллбеков не дают. Когда в отряде не остаётся никого, срабатывает пин `done` →
-`report`.
+**`kill` (`objective.kill`).** On entry `begin` resolves the target: it has
+`spawn`, so the runtime creates a `simulation_boar` squad on smart
+`esc_smart_terrain_3_16` and remembers it under `ref = "boars"` (`hold = true`
+pins the squad to the smart — otherwise the simulation would walk the boars
+away; the engine does not persist `scripted_target`, so the runtime re-applies
+it after every load and on `squad_on_register`). The ref is also registered as
+story id `nq.<module>.dialog_branching.boars`, and the task marker gets its
+object. Then the node waits: it is subscribed to `npc_killed`,
+`squad_npc_death`, `squad_dead`, plus polls the server object every 250 ms —
+offline deaths deliver no callbacks. When nobody is left in the squad, the
+`done` pin fires → `report`.
 
-**`report` (`dialog.topic`, `once = true`).** Вторая тема у того же Волка.
-Появится в списке только сейчас, когда на ней токен, — до этого её просто не
-было. Один NPC спокойно держит сколько угодно тем от разных квестов и модулей.
+**`report` (`dialog.topic`, `once = true`).** A second topic on the same Wolf.
+It appears in the list only now, when it holds a token — before that it simply
+did not exist. One NPC comfortably carries any number of topics from
+different quests and modules.
 
-**`wolf_thanks`.** Реплика NPC глубины 1. В `on_exit` три действия по порядку:
-`item.give` (в контексте диалога передача идёт через NPC, поэтому игрок видит
-окно «получено»), `money.give` (то же самое для денег) и `task.complete` —
-задание в PDA закрывается как выполненное с новостью. Фраза не имеет фразовых
-детей → лист: разговор закрывается, тема `report` проходится, `once` снимает
-токен, а `out.next = "finish"` уводит поток в мир.
+**`wolf_thanks`.** An NPC line at depth 1. Three actions in `on_exit`, in
+order: `item.give` (in a dialog context the handover goes through the NPC, so
+the player sees the "received" window), `money.give` (same for the money) and
+`task.complete` — the PDA task closes as completed with a news line. The
+phrase has no phrase children → a leaf: the talk closes, the `report` topic is
+passed, `once` removes the token, and `out.next = "finish"` takes the flow
+into the world.
 
-**`finish` (`flow.end`).** Терминал: снимает все токены (их уже нет), гасит
-триггеры и ставит статус `completed`. Явный конец — в отличие от ветки
-`decline`, где сработало неявное завершение.
+**`finish` (`flow.end`).** The terminal: removes all tokens (none are left),
+disarms the triggers and sets status `completed`. An explicit end — unlike the
+`decline` branch, where the implicit completion kicked in.
 
-Проверить в игре: `nq list` покажет `<модуль>.dialog_branching [active] "Долг
-вежливости" tokens=1`, `nq state <uid>` — токен, значения `agreed`/`asked`, ref
-`boars`, статус задания и полный outline графа.
+To check in the game: `nq list` shows
+`<module>.dialog_branching [active] "Долг вежливости" tokens=1`,
+`nq state <uid>` — the token, the `agreed`/`asked` values, the `boars` ref,
+the task status and the full graph outline.

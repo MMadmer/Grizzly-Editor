@@ -1,7 +1,7 @@
 -- nq: linear_fetch "Хлеб для новичков"
--- Линейный квест без диалогов: старт -> задание -> добыть хлеб -> награда -> конец.
--- Эталон для тест-плана (§16 игра п.1): проверяет trigger.start, flow.step, objective.fetch,
--- task.give/complete, item.give, money.give, news.tip, flow.end и сейв/лоад на середине.
+-- A linear quest with no dialogs: start -> task -> fetch bread -> reward -> end.
+-- The reference for the test plan (§16 game item 1): covers trigger.start, flow.step, objective.fetch,
+-- task.give/complete, item.give, money.give, news.tip, flow.end and a mid-quest save/load.
 return {
   nq = 1,
   id = "linear_fetch",
