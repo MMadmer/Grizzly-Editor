@@ -75,7 +75,8 @@ namespace
 	// The catalog line cannot yet say "these two cancel out", so the shape comes from
 	// NqCatalog::ExclusiveForms. The message names the parameters that collided: the
 	// inspector shows every one of them at once, so "wrong combination" alone is no help.
-	void CheckKindForm(SCtx& c, const xr_string& kind, const SNqValue& params, LPCSTR node)
+	// `slot` is set for an extra action (enter:N / exit:N) and null for a node's own params
+	void CheckKindForm(SCtx& c, const xr_string& kind, const SNqValue& params, LPCSTR node, LPCSTR slot = 0)
 	{
 		xr_vector<xr_string> forms;
 		NqCatalog::ExclusiveForms(kind.c_str(), forms);
@@ -97,12 +98,13 @@ namespace
 			xr_string list;
 			for (u32 f = 0; f < forms.size(); ++f)
 				if (!picked[f].empty()) { if (!list.empty()) list += " and "; list += "'" + picked[f] + "'"; }
-			ERR(c, "E022", node, 0, "%s takes only one of these at a time, %s are set together",
+			ERR(c, "E022", node, slot, "%s takes only one of these at a time, %s are set together",
 				kind.c_str(), list.c_str());
 		}
-		// objective.fetch has no meaning without a form; the kill_count filters are optional
-		if (used == 0 && kind == "objective.fetch")
-			ERR(c, "E022", node, 0, "objective.fetch needs an items list (or its one-line spelling, section)");
+		// objective.fetch and item.spawn have no meaning without a form; the kill_count
+		// filters are optional
+		if (used == 0 && (kind == "objective.fetch" || kind == "item.spawn"))
+			ERR(c, "E022", node, slot, "%s needs an items list (or its one-line spelling, section)", kind.c_str());
 
 		// kill/fetch/reach: the marker binds to a task now, the old spellings are named
 		if ((kind == "objective.fetch" || kind == "objective.kill" || kind == "objective.reach") && params.IsTable())
@@ -298,12 +300,14 @@ namespace
 	}
 
 	// items: a non-empty array of rows; a row is a section with a count, or one
-	// concrete object ({ item = { ref | story } }) - the two mix freely
-	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order)
+	// concrete object ({ item = { ref | story } }) - the two mix freely. A kind that
+	// CREATES the rows (item.spawn) takes sections only: an existing object cannot be made
+	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool objects_ok = true)
 	{
 		if (!v.IsTable() || v.arr.empty())
 		{
-			ERR(c, "E006", node, slot, "items must be a non-empty list of rows: { section = ..., count = N } or { item = { ref/story } }");
+			if (objects_ok) ERR(c, "E006", node, slot, "items must be a non-empty list of rows: { section = ..., count = N } or { item = { ref/story } }");
+			else			ERR(c, "E006", node, slot, "items must be a non-empty list of rows: { section = ..., count = N }");
 			return;
 		}
 		xr_vector<xr_string> seen;
@@ -321,6 +325,7 @@ namespace
 			}
 			if (has_item)
 			{
+				if (!objects_ok) { ERR(c, "E006", node, sl.c_str(), "a concrete object cannot be spawned - this list takes sections only"); continue; }
 				if (e.Has("count")) ERR(c, "E006", node, sl.c_str(), "a concrete object IS one - it takes no count");
 				CheckObjectRef(c, *e.Get("item"), node, sl.c_str(), nidx, order, "object_ref");
 				NoteItemUse(c, *e.Get("item"), nidx, order, sl.c_str());
@@ -406,8 +411,17 @@ namespace
 	{
 		if (!v.IsTable())
 		{
-			ERR(c, "E006", node, slot, "expected a place { level = ..., pos = { x, y, z }, radius = r } / { restrictor = ... } / { smart = ... } / { ref = ... }");
+			ERR(c, "E006", node, slot, "expected a place { level = ..., pos = { x, y, z }, radius = r } / { restrictor = ... } / { smart = ... } / { ref = ... } / { actor = true, distance = m }");
 			return false;
+		}
+		// relative to the player: resolved at run time, nothing to look up
+		if (v.Has("actor"))
+		{
+			const SNqValue* a = v.Get("actor");
+			if (!a->IsBool() || !a->b) ERR(c, "E006", node, slot, "actor must be true: { actor = true, distance = metres ahead of the player }");
+			if (const SNqValue* d = v.Get("distance"))
+				if (!d->IsNumber() || d->n < 0) ERR(c, "E006", node, slot, "distance must be a number of metres >= 0");
+			return true;
 		}
 		// an object the quest creates: nothing to look up in a picker, but it has to
 		// be a ref this quest actually declares
@@ -435,7 +449,7 @@ namespace
 				if (!r->IsNumber() || r->n <= 0) ERR(c, "E006", node, slot, "radius must be a positive number");
 			return true;
 		}
-		ERR(c, "E006", node, slot, "place needs level+pos, restrictor, smart or ref");
+		ERR(c, "E006", node, slot, "place needs level+pos, restrictor, smart, ref or actor");
 		return false;
 	}
 
@@ -547,7 +561,16 @@ namespace
 			return;
 		}
 		if (t == "duration")	{ CheckDuration(c, v, node, slot); return; }
-		if (t == "place")		{ CheckPlace(c, v, node, slot, nidx, order); return; }
+		if (t == "place")
+		{
+			CheckPlace(c, v, node, slot, nidx, order);
+			// "where the player stands" is a spawn point, not a destination: a reach, a
+			// zone test or a teleport relative to the actor is always true / a no-op
+			if (v.IsTable() && v.Has("actor") &&
+				(k.id == "objective.reach" || k.id == "actor_in_place" || k.id == "actor.teleport"))
+				ERR(c, "E006", node, slot, "a place relative to the player means nothing for %s - name a point, a restrictor, a smart or a ref", k.id.c_str());
+			return;
+		}
 		if (t == "npc_ref")		{ CheckNpcRef(c, v, node, slot, nidx, order, false, false); return; }
 		if (t == "target_ref")	{ CheckNpcRef(c, v, node, slot, nidx, order, true, false); return; }
 		if (t == "kill_target")	{ CheckNpcRef(c, v, node, slot, nidx, order, false, true); return; }
@@ -560,7 +583,7 @@ namespace
 			return;
 		}
 		if (t == "spawn_spec") { CheckSpawnSpec(c, v, node, slot, nidx, order, p.name.c_str()); return; }
-		if (t == "item_list") { CheckItemList(c, v, node, slot, nidx, order); return; }
+		if (t == "item_list") { CheckItemList(c, v, node, slot, nidx, order, k.id != "item.spawn"); return; }
 		if (t == "loot_spawn") { CheckLootSpawn(c, v, node, slot, nidx, order); return; }
 		if (t == "spawn_section")
 		{
@@ -718,9 +741,26 @@ namespace
 			return;
 		}
 		CheckParams(c, *k, a.params, node, slot, nidx, order, false);
+		// an action kind with exclusive forms (item.spawn) is checked like a node kind
+		CheckKindForm(c, k->id, a.params, node, slot);
 		if (k->id == "spawn.squad")
 			if (const SNqValue* h = a.params.Get("hold"))
 				if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawn.squad without hold - the squad may leave for the simulation");
+		// a ref names ONE object; the runtime would name the first of several and
+		// warn, which is a quest that quietly points at the wrong medkit
+		if (k->id == "item.spawn" && a.params.Has("ref"))
+		{
+			double total = 0;
+			if (const SNqValue* rows = a.params.Get("items"))
+			{
+				if (rows->IsTable())
+					for (u32 i = 0; i < rows->arr.size(); ++i)
+						total += rows->arr[i].IsTable() ? rows->arr[i].GetNumber("count", 1) : 1;
+			}
+			else total = a.params.GetNumber("count", 1);
+			if (total > 1)
+				ERR(c, "E006", node, slot, "ref names one object - spawn a single item or drop the ref (%d would be made)", int(total));
+		}
 		if (k->id == "actor.teleport" && c.ctx.level && c.ctx.level[0])
 		{
 			const SNqValue* place = a.params.Get("place");

@@ -416,6 +416,13 @@ void NqCatalog::ExclusiveForms(LPCSTR kind, xr_vector<xr_string>& out)
 		out.push_back("squad");
 		out.push_back("section");
 	}
+	else if (k == "item.spawn")
+	{
+		// the same two spellings of "what" as fetch; "where" is one parameter with
+		// its own forms inside, so it never collides with anything here
+		out.push_back("section,count");
+		out.push_back("items");
+	}
 }
 
 static bool FormHasParam(const xr_string& form, LPCSTR param)

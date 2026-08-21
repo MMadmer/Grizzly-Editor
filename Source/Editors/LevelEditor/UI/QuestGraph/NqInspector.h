@@ -92,8 +92,9 @@ private:
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
-	bool			DrawItemList	(LPCSTR label, SNqValue& v);
+	bool			DrawItemList	(LPCSTR label, SNqValue& v, bool objects_ok = true);
 	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
+	bool			DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params);
 
 public:
 	// Scroll the panel to something on the next frame: "top", "bottom", or

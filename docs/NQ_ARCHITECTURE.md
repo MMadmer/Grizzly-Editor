@@ -247,9 +247,9 @@ additionally take `["not"] = true` to invert the result.
 | `duration` | `{ seconds = N }` (real) or `{ game_hours = N }` / `{ game_minutes = N }` | |
 | `npc_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "guard" }` \| `{ profile = "sim_default_stalker_1" }` \| `{ community = "stalker", level = "l01_escape" }` | resolve order §8 |
 | `target_ref` | `npc_ref` \| `{ ref = "boars" }` (squad/object) \| `{ smart = "esc_smart_terrain_2_12" }` | for task targets/map spots |
-| `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` | |
+| `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` \| `{ ref = "anchor" }` \| `{ actor = true, distance = 2 }` | `ref` = where an object this quest created stands; `actor` = that many metres in front of the player, resolved when the action runs (spawn points only — E006 on reach/teleport/`actor_in_place`) |
 | `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: section×N or a specific object; a section appears once |
-| `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick = random\|nearest\|farthest, state = any\|full\|empty, within = R, beyond = R, scatter = bool } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` puts the loot it creates. Radii are measured from the player; nothing within the radius → the nearest match, nothing outside → the farthest one. `state`: full — the container holds something, empty — it is empty. `scatter` — each item goes to its own random stash. `new_corpse` — the corpse is created with the loot inside and drops as soon as it goes online |
+| `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick = random\|nearest\|farthest, state = any\|full\|empty, within = R, beyond = R, scatter = bool } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` (`spawn`) and `item.spawn` (`where`) put the loot they create. Radii are measured from the player; nothing within the radius → the nearest match, nothing outside → the farthest one. `state`: full — the container holds something, empty — it is empty. `scatter` — each item goes to its own random stash. `new_corpse` — the corpse is created with the loot inside and drops as soon as it goes online |
 | `spawn_section` | `"inventory_box"` | any section with `$spawn` (anything placeable in the world); the editor provides a picker |
 | `objective_id` | `"bread"` | a step of the task named by the neighboring `task` parameter. The editor provides a dropdown of that task's steps |
 | `object_ref`, `squad_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "stash" }` | ONE specific world object. Narrower than `npc_ref`: `profile`/`community` name a kind of creature, not a thing you can loot, remember under a ref or count the death of |
@@ -576,7 +576,7 @@ it. When a "stage without waiting" is needed — `flow.step`.
 |---|---|---|
 | `item.give` | `section`, `count=1` (item units: for ammo — boxes, not rounds) | in a dialog context — `dialogs.relocate_item_section_to_actor(npc, actor, section, count)` (`dialogs.script:1976`, with the "received" UI); otherwise `alife():create(section, actor pos, lvid, gvid, actor:id())`×count (ammo — `create_ammo`, `_g.script:1438`) + `news_manager.relocate_item(actor,"in",…)` (`news_manager.script:247`) |
 | `item.take` | `section`, `count=1` \| `"all"` (same units as `item.give`: items, boxes for ammo) | in a dialog — `dialogs.relocate_item_section_from_actor` (`:2058`); otherwise iterate `db.actor:iterate_inventory` + `alife():release` |
-| `item.spawn` | `section`, `place` \| `into: target_ref` (container/NPC), `ref?` | `alife():create(section, pos, lvid, gvid[, parent_id])`; lvid/gvid for a foreign level — `xms.graph_vertex` + `game_graph():vertex(gvid):level_vertex_id()` |
+| `item.spawn` | `section`+`count` \| `items: item_list` (section rows only), **`where: loot_spawn`** (the fetch forms: place / into / stash / npc / corpse / new_corpse), `condition`, `ammo`, `uses`, `upgrades`, `ref?` (one item only) | the fetch host resolver + `alife():create(section, pos, lvid, gvid[, parent_id])` (`create_ammo` for an ammo section with `ammo`); `condition`/`upgrades` go on the server entity at once, `ammo` (magazine) and `uses` wait as online jobs (`qs.jobs`, applied by the poll when the client object appears); several instances on a `place` spread over its radius |
 | `money.give` / `money.take` | `amount` | `db.actor:give_money(±n)`; in a dialog `dialogs.relocate_money_to_actor/from_actor` (`:2025/:2031`) |
 | `info.give` / `info.disable` | `info` | `db.actor:give_info_portion/disable_info_portion` — an unknown id does **not** assert (`InfoPortion.cpp:28-36`) |
 | `var.set` / `var.add` | `name`, `value` / `delta` | quest variables (persistent) |
@@ -586,7 +586,7 @@ it. When a "stage without waiting" is needed — `flow.step`.
 | `task.set_target` | `task`, `target: target_ref` | §9 |
 | `task.set_text` | `task`, `new_title?`, `new_descr?` | §9 (not `title`: a reserved catalog key) |
 | `spawn.squad` | `spawn_spec` (`section`, `smart`, `ref`, `hold=true`) | `SIMBOARD:create_squad(SIMBOARD.smarts_by_names[smart], section)` (`sim_board.script:176,142`) + `setup_squad_and_group` for the members (like `xr_effects.create_squad`, `xr_effects.script:3542`); `hold` → `squad.scripted_target = smart` (`sim_squad_scripted.script:102-106`), **not persisted by the engine** → the runtime re-applies it from `refs` on `squad_on_register`/first update |
-| `spawn.object` | `section`, `place`, `ref?` | `alife():create` |
+| `spawn.object` | `section`, `place`, `yaw=0`, `dead=false`, `ref?` | `alife():create`; `yaw` → the server entity's `angle`; `dead` → an online kill job (the new_corpse mechanism) for a creature section |
 | `squad.move` | `target: {ref}\|{story}`, `smart` \| `follow_actor: bool` | `squad.scripted_target = smart` or `"actor"` (`sim_squad_scripted.script:128`) |
 | `squad.remove` | `target` | `SIMBOARD:remove_squad` via `safe_release_manager.release` (`xr_effects.script:3642,3316`) |
 | `npc.remove` | `npc_ref` | `safe_release_manager.release(alife():object(id))` |
@@ -867,6 +867,7 @@ state = {
       tasks  = { kill_boars = "active" },
       errors = { kill = "…" },
       timers = { wait_1 = { real_left = 12.5 } },
+      jobs   = { [5124] = { ammo = 30 } },  -- online jobs: applied by the poll once the client object exists (kill / ammo / uses)
     },
   },
 }
@@ -1190,7 +1191,7 @@ built by string emitters (no JSON library).
 | `xfined_quest_save` | `path`[, `force`] | |
 | `xfined_quest_reload` | `path` | re-read from disk |
 | `xfined_quest_layout` | `path` | auto-layout |
-| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the inspector follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the inspector), `scroll:"top"\|"bottom"\|"task:<id>"\|"task:<id>/steps"` (scroll the inspector) | the resulting `zoom_level`/`center`/`selected`/`slot`; the raw response marks a deferred first `frame:all` as `pending:true`, the Python bridge re-reads the view after the next Draw; then `xfined_screenshot_editor` |
+| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the inspector follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the inspector), `scroll:"top"\|"bottom"\|"task:<id>"\|"task:<id>/steps"\|"action:top"\|"action:bottom"` (scroll the inspector, or the action panel that scrolls on its own) | the resulting `zoom_level`/`center`/`selected`/`slot`; the raw response marks a deferred first `frame:all` as `pending:true`, the Python bridge re-reads the view after the next Draw; then `xfined_screenshot_editor` |
 | `xfined_quest_edit` | `path`, `op`, `nodes` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays in place, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
 | `xfined_quest_find` | `path`, `action`, `query`, `select`, `limit` | full-text results in file order, the active result and the view state; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the node |
 | `xfined_quest_project_find` | `query`, `limit` | a read-only search over a direct sorted scan of all `*.nqasset`, opening no documents; dirty documents act as a memory overlay. The response: `source` on each result, `complete`/`diagnostics`, the cache `generation` and a deterministic content `fingerprint` |

@@ -1006,6 +1006,8 @@ void NqInspector::DrawActionSection()
 	xr_vector<SNqAction>& v = m_Node.Slot(slot.c_str());
 	if (index < 0 || index >= (int)v.size()) { ImGui::TextDisabled("no action selected"); m_Doc->sel_slot.clear(); return; }
 	SNqAction& a = v[index];
+	// the action panel scrolls on its own, so quest_view's scroll reaches it by name
+	if (s_ScrollTo == "action:top") { ImGui::SetScrollY(0.f); s_ScrollTo.clear(); }
 	ImGui::TextDisabled("Action  %s #%d", slot.c_str(), index + 1);
 	// a flat 90px reservation is not enough for these three at any DPI, and what
 	// does not fit is drawn past the edge where it cannot be clicked
@@ -1032,6 +1034,7 @@ void NqInspector::DrawActionSection()
 	}
 	else ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "unknown kind");
 	if (ch) m_NodeDirty = true;
+	if (s_ScrollTo == "action:bottom") { ImGui::SetScrollY(ImGui::GetScrollMaxY()); s_ScrollTo.clear(); }
 }
 
 //------------------------------------------------------------------------------
@@ -1064,11 +1067,11 @@ bool NqInspector::DrawParams(const NqCatalog::SKind* k, SNqValue& params, LPCSTR
 	bool ch = false;
 	if (!params.IsTable()) params = SNqValue::Table();
 	ImGui::PushID(id_prefix);
-	// fetch draws one form of its own: a list of rows plus the modifiers, instead of
-	// three interleaved spellings nobody could tell apart
-	if (k->id == "objective.fetch")
+	// fetch and item.spawn draw one form of their own: a list of rows plus the
+	// modifiers, instead of three interleaved spellings nobody could tell apart
+	if (k->id == "objective.fetch" || k->id == "item.spawn")
 	{
-		ch |= DrawFetchParams(k, params);
+		ch |= (k->id == "objective.fetch") ? DrawFetchParams(k, params) : DrawItemSpawnParams(k, params);
 		for (u32 i = 0; i < params.keys.size(); ++i)
 		{
 			if (k->Param(params.keys[i].c_str())) continue;
@@ -1632,13 +1635,14 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 }
 
 // The rows of "what to bring": a section with a count, or one concrete object.
-bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v)
+bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok)
 {
 	bool ch = false;
 	ImGui::PushID(label);
 	xr_string lt;
 	ImGui::TextUnformatted(Shown(label, lt));
-	Hint("A row is either N items of a section, or one concrete object (ref/story id). Rows mix freely");
+	if (objects_ok)	Hint("A row is either N items of a section, or one concrete object (ref/story id). Rows mix freely");
+	else			Hint("A row is N items of a section. An ammo section counts in boxes");
 	if (!v.IsTable()) { if (!v.IsNil()) { v = SNqValue::Table(); ch = true; } }
 	int kill = -1;
 	for (u32 i = 0; v.IsTable() && i < v.arr.size(); ++i)
@@ -1684,18 +1688,82 @@ bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v)
 		v.Push(e);
 		ch = true;
 	}
-	ImGui::SameLine();
-	if (ImGui::SmallButton("+ concrete object"))
+	if (objects_ok)
 	{
-		if (!v.IsTable()) v = SNqValue::Table();
-		SNqValue e = SNqValue::Table();
-		SNqValue r = SNqValue::Table();
-		r.Set("story", SNqValue::String(""));
-		e.Set("item", r);
-		v.Push(e);
-		ch = true;
+		ImGui::SameLine();
+		if (ImGui::SmallButton("+ concrete object"))
+		{
+			if (!v.IsTable()) v = SNqValue::Table();
+			SNqValue e = SNqValue::Table();
+			SNqValue r = SNqValue::Table();
+			r.Set("story", SNqValue::String(""));
+			e.Set("item", r);
+			v.Push(e);
+			ch = true;
+		}
 	}
 	ImGui::PopID();
+	return ch;
+}
+
+// item.spawn as ONE form: what (the rows), where (one destination), the state of
+// every instance, and the name. Mirrors fetch so the two read alike.
+bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params)
+{
+	bool ch = false;
+
+	// the one-line spelling (section+count) is shown as a one-row list; the first edit
+	// rewrites it as `items`, untouched assets keep their spelling
+	SNqValue rows = SNqValue::Nil();
+	if (const SNqValue* it = params.Get("items")) rows = *it;
+	else if (params.Has("section"))
+	{
+		rows = SNqValue::Table();
+		SNqValue e = SNqValue::Table();
+		e.Set("section", SNqValue::String(params.GetString("section")));
+		const double n = params.GetNumber("count", 1);
+		if (n > 1) e.Set("count", SNqValue::Number(n));
+		rows.Push(e);
+	}
+	if (DrawItemList("items *##spawn_items", rows, false))
+	{
+		ch = true;
+		params.Erase("section");
+		params.Erase("count");
+		if (rows.IsNil() || (rows.IsTable() && rows.arr.empty())) params.Erase("items");
+		else params.Set("items", rows);
+	}
+
+	ImGui::Separator();
+	{
+		SNqValue v = params.Has("where") ? *params.Get("where") : SNqValue::Nil();
+		if (DrawLootSpawn("where *##spawn_where", v))
+		{
+			ch = true;
+			if (v.IsNil() || v.IsEmpty()) params.Erase("where"); else params.Set("where", v);
+		}
+		Hint("Where they land: on the ground, inside a container or NPC, in a stash or a corpse, or in a fresh corpse. One form, required");
+	}
+
+	ImGui::Separator();
+	// the state of every instance, straight from the catalog rows
+	static const char* kState[] = { "condition", "ammo", "uses", "upgrades" };
+	for (int i = 0; i < 4; ++i)
+		if (const NqCatalog::SParam* sp = k ? k->Param(kState[i]) : 0)
+		{
+			ImGui::PushID(3000 + i);
+			ch |= DrawParam(*sp, params, "sp", k->id.c_str());
+			ImGui::PopID();
+		}
+	Hint("condition 0..1 for weapons and armour. ammo: rounds loaded, or in the box of an ammo section. uses: what is left of a consumable. upgrades: comma-separated upgrade sections");
+
+	if (const NqCatalog::SParam* rp = k ? k->Param("ref") : 0)
+	{
+		ImGui::PushID(3100);
+		ch |= DrawParam(*rp, params, "sp", k->id.c_str());
+		ImGui::PopID();
+		Hint("A name to refer to the item later. Only when a single item is made");
+	}
 	return ch;
 }
 
@@ -1891,8 +1959,9 @@ bool NqInspector::DrawLootSpawn(LPCSTR label, SNqValue& v)
 bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 {
 	// "ref" names an object this quest created - the only way to point at something
-	// that did not exist when the graph was written
-	xr_vector<xr_string> modes = Items("pos", "restrictor", "smart", "ref");
+	// that did not exist when the graph was written; "actor" is a point relative to
+	// the player, resolved at run time
+	xr_vector<xr_string> modes = Items("pos", "restrictor", "smart", "ref", "actor");
 	xr_string mode = ModeOf(v, modes);
 	if (mode.empty() && v.IsTable() && v.Has("level")) mode = "pos";
 	bool ch = false;
@@ -1910,12 +1979,27 @@ bool NqInspector::DrawPlace(LPCSTR label, SNqValue& v)
 		{
 			SNqValue t = SNqValue::Table();
 			if (m == "pos") { t.Set("level", SNqValue::String(NqDocs::CurrentLevel())); SNqValue p = SNqValue::Table(); p.Push(SNqValue::Number(0)); p.Push(SNqValue::Number(0)); p.Push(SNqValue::Number(0)); t.Set("pos", p); t.Set("radius", SNqValue::Number(5)); }
+			else if (m == "actor") { t.Set("actor", SNqValue::Bool(true)); t.Set("distance", SNqValue::Number(2)); }
 			else t.Set(m.c_str(), SNqValue::String(""));
 			v = t;
 		}
 		mode = m;
 	}
 	if (mode == "pos") ch |= DrawPosition(v);
+	else if (mode == "actor")
+	{
+		ImGui::Indent();
+		float d = (float)v.GetNumber("distance", 0.0);
+		ImGui::SetNextItemWidth(90.f);
+		if (ImGui::InputFloat("distance ahead, m##place_actor_d", &d, 0.f, 0.f, "%.1f"))
+		{
+			if (d <= 0.f) v.Erase("distance"); else v.Set("distance", SNqValue::Number(d));
+			ch = true;
+		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Resolved when the action runs: that many metres in front of the player, snapped to the navmesh. 0 = at their feet.");
+		ImGui::Unindent();
+	}
 	else if (!mode.empty())
 	{
 		// The field is labelled with the mode: an unnamed box under a combo, next to a
