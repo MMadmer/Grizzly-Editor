@@ -420,7 +420,7 @@ document answers with an `unsaved` error unless `discard: true` is passed.
 | `xfined_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
 | `xfined_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the inspector slot |
 | `xfined_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); the response carries the graph and viewport bounds |
-| `xfined_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests) |
+| `xfined_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
 | `xfined_quest_check_all` | — | the build gate: `passed`, `errors`, `warnings`, `error`, `log[]` (lines `<path>: <code> <node>: <message>`) |
 
 ### 8.1 `quest_apply` operations

@@ -1266,7 +1266,8 @@ TOOLS = [
         "description": "Search the game data behind the parameter pickers: type = item_section | squad_section | "
                        "level | smart | story_id | profile | community | info | spot_type (from the linked game, cached), "
                        "or the document-scoped task_id | var_name | ref_name | node_id (needs 'path') | quest_id "
-                       "(quests of the project). 'query' is a case-insensitive substring of id or name; 'limit' default 50.",
+                       "(quests of the project). 'query' is a case-insensitive substring of id or name; 'limit' default 50. "
+                       "A ref_name entry carries its category (squad | object | item) in 'extra', the same hint the picker shows.",
         "inputSchema": {
             "type": "object",
             "properties": {
