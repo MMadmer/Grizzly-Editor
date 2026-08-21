@@ -348,6 +348,11 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 //------------------------------------------------------------------------------
 // quest header
 //------------------------------------------------------------------------------
+// what the next frame should scroll to, consumed by the frame that honours it
+static xr_string s_ScrollTo;
+
+void NqInspector::RequestScroll(LPCSTR where) { s_ScrollTo = where ? where : ""; }
+
 void NqInspector::DrawQuestSection()
 {
 	ImGui::TextDisabled("Quest");
@@ -364,10 +369,17 @@ void NqInspector::DrawQuestSection()
 
 	if (ImGui::CollapsingHeader("Tasks", ImGuiTreeNodeFlags_DefaultOpen))
 	{
+		if (s_ScrollTo == "top")	{ ImGui::SetScrollY(0.f); s_ScrollTo.clear(); }
 		ImGui::PushID("tasks");
 		for (u32 i = 0; i < m_Quest.tasks.size(); ++i)
 		{
 			SNqTask& t = m_Quest.tasks[i];
+			if (s_ScrollTo.size() > 5 && 0 == strncmp(s_ScrollTo.c_str(), "task:", 5) &&
+				t.id == s_ScrollTo.c_str() + 5)
+			{
+				ImGui::SetScrollHereY(0.f);
+				s_ScrollTo.clear();
+			}
 			ImGui::PushID((int)i);
 			bool open = ImGui::TreeNodeEx("##task", ImGuiTreeNodeFlags_DefaultOpen, "%s", t.id.c_str());
 			ImGui::SameLine();
@@ -392,7 +404,18 @@ void NqInspector::DrawQuestSection()
 				// marker, which is how one task covers "collect X, then Y, then report"
 				// instead of needing a quest apiece.
 				ImGui::Separator();
+				{
+					xr_string want = "task:" + t.id + "/steps";
+					if (s_ScrollTo == want) { ImGui::SetScrollHereY(0.f); s_ScrollTo.clear(); }
+				}
 				ImGui::TextDisabled("objectives (%d)", (int)t.objectives.size());
+				// meaningless without steps to wait for, so it lives with them and
+				// disappears with them
+				if (!t.objectives.empty())
+				{
+					if (ImGui::Checkbox("\xD0\xB7\xD0\xB0\xD0\xB2\xD0\xB5\xD1\x80\xD1\x88\xD0\xB0\xD1\x82\xD1\x8C\x20\xD0\xB7\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x87\xD1\x83\x2C\x20\xD0\xBA\xD0\xBE\xD0\xB3\xD0\xB4\xD0\xB0\x20\xD0\xB2\xD1\x81\xD0\xB5\x20\xD0\xBF\xD0\xBE\xD0\xB4\xD0\xB7\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x87\xD0\xB8\x20\xD0\xB2\xD1\x8B\xD0\xBF\xD0\xBE\xD0\xBB\xD0\xBD\xD0\xB5\xD0\xBD\xD1\x8B##t_auto", &t.auto_complete)) ch = true;
+					Hint("\xD0\xBF\xD0\xBE\xD1\x81\xD0\xBB\xD0\xB5\xD0\xB4\xD0\xBD\xD1\x8F\xD1\x8F\x20\xD0\xB7\xD0\xB0\xD0\xBA\xD1\x80\xD1\x8B\xD1\x82\xD0\xB0\xD1\x8F\x20\xD0\xBF\xD0\xBE\xD0\xB4\xD0\xB7\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x87\xD0\xB0\x20\xD0\xB7\xD0\xB0\xD0\xB2\xD0\xB5\xD1\x80\xD1\x88\xD0\xB0\xD0\xB5\xD1\x82\x20\xD1\x81\xD0\xB0\xD0\xBC\xD1\x83\x20\xD0\xB7\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x87\xD1\x83\x2E\x20\xD0\xA1\xD0\xBD\xD0\xB8\xD0\xBC\xD0\xB8\x2C\x20\xD0\xB5\xD1\x81\xD0\xBB\xD0\xB8\x20\xD0\xB7\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x87\xD0\xB0\x20\xD0\xB7\xD0\xB0\xD0\xBA\xD0\xB0\xD0\xBD\xD1\x87\xD0\xB8\xD0\xB2\xD0\xB0\xD0\xB5\xD1\x82\xD1\x81\xD1\x8F\x20\xD1\x87\xD0\xB5\xD0\xBC\x2D\xD1\x82\xD0\xBE\x2C\x20\xD1\x87\xD0\xB5\xD0\xB3\xD0\xBE\x20\xD0\xBF\xD0\xBE\xD0\xB4\xD0\xB7\xD0\xB0\xD0\xB4\xD0\xB0\xD1\x87\xD0\xB8\x20\xD0\xBD\xD0\xB5\x20\xD0\xBF\xD0\xBE\xD0\xBA\xD1\x80\xD1\x8B\xD0\xB2\xD0\xB0\xD1\x8E\xD1\x82");
+				}
 				for (u32 j = 0; j < t.objectives.size(); ++j)
 				{
 					SNqObjective& o = t.objectives[j];
@@ -464,6 +487,7 @@ void NqInspector::DrawQuestSection()
 	if (ch) m_QuestDirty = true;
 	if (!references_requested.empty()) BeginTaskReferences(references_requested.c_str());
 	if (!rename_requested.empty()) BeginTaskRename(rename_requested.c_str());
+	if (s_ScrollTo == "bottom") { ImGui::SetScrollY(ImGui::GetScrollMaxY()); s_ScrollTo.clear(); }
 	DrawTaskRename();
 	DrawTaskReferences();
 

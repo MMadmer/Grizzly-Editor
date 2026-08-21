@@ -1067,6 +1067,11 @@ namespace UIQuestGraph
 		// is a feature an agent does not have
 		string_path keys = "";
 		XFinedMCP::GetArg(raw, "keys", keys, sizeof(keys));
+		// the inspector is taller than its panel: a row far down it (a task's steps)
+		// could be neither read nor screenshotted from outside without this
+		string_path scroll = "";
+		XFinedMCP::GetArg(raw, "scroll", scroll, sizeof(scroll));
+		if (scroll[0]) NqInspector::RequestScroll(scroll);
 		if (keys[0])
 		{
 			if (0 == strcmp(keys, "show"))			w->SetShowKeys(true);

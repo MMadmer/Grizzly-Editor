@@ -1116,7 +1116,7 @@ TOOLS = [
                        "zoom_level 0..9 (6 = 100%), cx/cy = world centre (cx/cy override 'frame'), "
                        "select='<node id>' (or a comma separated list, or 'none') selects nodes - the inspector "
                        "follows the graph selection, so this is what puts a node in it; "
-                       "slot='enter:0'/'exit:1' opens that action of the selected node in the inspector ('none' clears it). "
+                       "slot='enter:0'/'exit:1' opens that action of the selected node in the inspector ('none' clears it). scroll='top'/'bottom'/'task:<id>'/'task:<id>/steps' scrolls the inspector panel there on the next frame (the panel is taller than its box - a task's steps and its checkboxes sit below the fold). "
                        "keys='show'/'hide'/'toggle' folds the shortcut list into the tab. "
                        "The bridge waits for deferred frame-all layout before returning when the editor is drawing. "
                        "Then use xfined_screenshot_editor to look at it.",
@@ -1124,6 +1124,7 @@ TOOLS = [
             "type": "object",
             "properties": {"path": {"type": "string"}, "frame": {"type": "string"}, "zoom_level": {"type": "integer"},
                            "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"},
+                "scroll": {"type": "string", "description": "top | bottom | task:<id> | task:<id>/steps"},
                            "select": {"type": "string"}, "keys": {"type": "string",
                            "enum": ["show", "hide", "toggle"]}},
             "required": ["path"],

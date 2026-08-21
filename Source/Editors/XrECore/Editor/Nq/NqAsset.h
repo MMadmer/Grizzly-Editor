@@ -156,7 +156,11 @@ struct ECORE_API SNqTask
 	SNqValue				target;			// target_ref table or nil
 	xr_string				icon;
 	xr_vector<SNqObjective>	objectives;		// ordered; the engine numbers them from 1
+	// every step completed completes the task itself - the usual shape of a task of
+	// steps, so it is the default and only a task that ends on something else says no
+	bool					auto_complete;
 
+				SNqTask() : auto_complete(true) {}
 	const SNqObjective*		FindObjective(LPCSTR id) const;
 };
 

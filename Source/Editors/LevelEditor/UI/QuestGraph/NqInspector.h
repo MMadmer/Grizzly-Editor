@@ -94,6 +94,13 @@ private:
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
 	bool			DrawItemList	(LPCSTR label, SNqValue& v);
 	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
+
+public:
+	// Scroll the panel to something on the next frame: "top", "bottom", or
+	// "task:<id>". The inspector redraws on demand, so the caller has to let a
+	// frame happen before the move is visible.
+	static void		RequestScroll	(LPCSTR where);
+private:
 	bool			DrawLootSpawn	(LPCSTR label, SNqValue& v);
 	bool			DrawCases		(LPCSTR label, SNqValue& v, bool weights);
 	bool			DrawCondList	(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int depth);

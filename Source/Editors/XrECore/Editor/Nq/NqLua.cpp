@@ -419,6 +419,7 @@ void NqLua::TaskFromValue(LPCSTR id, const SNqValue& v, SNqTask& t)
 	t.type = v.GetString("type", "additional");
 	if (const SNqValue* x = v.Get("target"))	t.target = *x;
 	t.icon = v.GetString("icon", "");
+	if (const SNqValue* x = v.Get("auto_complete"))	t.auto_complete = x->AsBool(true);
 	if (const SNqValue* objs = v.Get("objectives"))
 		for (u32 i = 0; i < objs->arr.size(); ++i)
 		{
@@ -769,6 +770,10 @@ void NqLua::QuestToValue(const SNqQuest& q, SNqValue& out)
 			Put(tv, "type", SNqValue::String(t.type.empty() ? "additional" : t.type.c_str()));
 			if (!t.target.IsNil())	Put(tv, "target", t.target);
 			if (!t.icon.empty())	Put(tv, "icon", SNqValue::String(t.icon));
+			// closing itself on the last step is the default: only a task that must not
+			// says so, and a task with no steps has nothing to say either way
+			if (!t.auto_complete && !t.objectives.empty())
+				Put(tv, "auto_complete", SNqValue::Bool(false));
 			if (!t.objectives.empty())
 			{
 				// an array, because the order is the order the engine numbers them in

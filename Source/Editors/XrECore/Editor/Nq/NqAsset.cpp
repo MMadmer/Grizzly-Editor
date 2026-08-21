@@ -606,6 +606,7 @@ bool SNqQuest::Equals(const SNqQuest& o) const
 	{
 		const SNqTask& a = tasks[i]; const SNqTask& b = o.tasks[i];
 		if (a.id != b.id || a.type != b.type || a.icon != b.icon) return false;
+		if (a.auto_complete != b.auto_complete) return false;
 		if (!a.title.Equals(b.title) || !a.descr.Equals(b.descr) || !a.target.Equals(b.target)) return false;
 		// the steps are part of the task: an edit to one has to mark the document dirty
 		if (a.objectives.size() != b.objectives.size()) return false;
