@@ -857,6 +857,7 @@ void NqInspector::DrawVarsSection()
 //------------------------------------------------------------------------------
 void NqInspector::DrawNodeSection()
 {
+	if (s_ScrollTo == "top")	{ ImGui::SetScrollY(0.f); s_ScrollTo.clear(); }
 	const NqCatalog::SKind* k = NqCatalog::Find(m_Node.kind.c_str());
 	bool trig = NqText::IsTrigger(m_Node.kind.c_str());
 	ImGui::TextDisabled(trig ? "Trigger" : "Node");
@@ -989,6 +990,7 @@ void NqInspector::DrawNodeSection()
 		}
 
 	if (ch) m_NodeDirty = true;
+	if (s_ScrollTo == "bottom") { ImGui::SetScrollY(ImGui::GetScrollMaxY()); s_ScrollTo.clear(); }
 }
 
 //------------------------------------------------------------------------------
