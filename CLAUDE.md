@@ -70,12 +70,15 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The export REGISTERS its own mode (`WriteModeRegistration`): without the
   checkbox on the new-game screen the mode does not exist for the player —
   the engine does not draw it, that screen is assembled by a game Lua script.
-  Three files are generated, overwritten on every export:
-  `patch\<id>_mode.xmlp` (checkbox + caption in `main_dialog`, the column
-  frame grows and everything below shifts down),
-  `gamedata\configs\text\rus\<id>_mode.xml` (the caption, cp1251) and
-  `scripts\register.script` (wraps `faction_ui:InitControls` and
-  `faction_ui:OnStartGame`).
+  Three files are generated per module, overwritten on every export:
+  `gamedata\configs\ui\<module id>_modes<aspect>.xml` (the module's own
+  layout with the checkbox and its caption, one per aspect-ratio variant),
+  `gamedata\configs\text\rus\<module id>_modes.xml` (the captions, cp1251)
+  and `scripts\mode_register.script` (creates the controls at runtime and
+  writes the `[character_creation]` keys). The names carry the MODULE id, not
+  the mode id: renaming a mode rewrites the same files instead of leaving a
+  stale checkbox behind. `scripts\register.script` stays the author's own and
+  is never touched; the legacy `patch\xms_modes.xmlp` is only cleaned up.
 - The names are not decorative: the engine turns `new_game_<id>_mode` back
   into the mode id, and the same id is compared against `mode=` in the
   manifest and `xms.mode_active`.

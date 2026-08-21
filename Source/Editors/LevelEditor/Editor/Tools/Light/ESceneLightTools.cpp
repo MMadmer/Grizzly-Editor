@@ -138,7 +138,7 @@ void ESceneLightTool::OnControlAppendClick(ButtonValue* sender, bool& bDataModif
 
 void ESceneLightTool::OnControlRenameRemoveClick(ButtonValue* V, bool& bDataModified, bool& bSafe)
 {
-    R_ASSERT(!"�������� �� �����������");
+    R_ASSERT(!"light control rename/remove is not implemented");
   /*  xr_string item_name = V->Owner()->Item()->Text;
     switch (V->btn_num){
     case 0:{ 

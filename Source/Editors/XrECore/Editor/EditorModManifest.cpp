@@ -663,6 +663,12 @@ static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifes
 	for (u32 i = 0; i < modes.size(); ++i)
 	{
 		const xr_string& title	= modes[i].title.empty() ? modes[i].id : modes[i].title;
+		// the conversion below is lossy by design (best-fit, then '?'); an export
+		// driven from MCP never sees the field's inline warning, so say it here
+		xr_string outside;
+		if (!NqUtil::Cp1251Covers(title, outside))
+			Msg("! [XMS] mode '%s': the caption has characters outside cp1251 (%s) - the player will "
+				"see a look-alike or '?'", modes[i].id.c_str(), outside.c_str());
 		const xr_string caption	= XmlEscape(Utf8ToCp1251(title.c_str()).c_str());
 		sprintf_s(&body[0], body.size(),
 			"\t<string id=\"st_cap_check_%s_mode\">\r\n"
@@ -1388,6 +1394,24 @@ static void DrawManifestModal()
 			ImGui::InputText("mode id", s_EdPModeId, sizeof(s_EdPModeId));
 			ImGui::InputText("mode title", s_EdPModeTitle, sizeof(s_EdPModeTitle));
 			ImGui::TextDisabled("the id the module gates on, and the name the player will see");
+
+			// The caption ships in a cp1251 string table. Anything outside that
+			// page is either swapped for a look-alike or dropped to '?' on the
+			// way out, while this field keeps showing the original - so the
+			// author would only find out from the new-game screen.
+			{
+				xr_string bad;
+				if (!NqUtil::Cp1251Covers(s_EdPModeTitle, bad))
+				{
+					ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f),
+						"title has characters outside cp1251 (%s)", bad.c_str());
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip(
+							"The new-game screen reads a cp1251 string table, so these characters cannot\n"
+							"survive the export: the player sees a look-alike letter or '?'. Keep the title\n"
+							"to characters that codepage has.");
+				}
+			}
 
 			// A mode nobody can tick does not exist. Export generates the three
 			// files that put it on the new-game screen; measuring where the row

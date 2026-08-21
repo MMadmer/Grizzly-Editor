@@ -148,6 +148,46 @@ static bool HasLiveScene()
 	return s_LiveSceneQuery && s_LiveSceneQuery();
 }
 
+// A path lives its whole life in the system ANSI codepage: the folder dialog
+// produces it, the ini stores it, and the X-Ray filesystem hands it to
+// CreateFileA. ImGui, on the other hand, reads UTF-8 - so the very same bytes
+// drawn as they are form invalid sequences, each decodes to U+FFFD, and the
+// atlas has no glyph for that, which is why "D:\Games\Test" in a Cyrillic
+// folder came out as a row of '?'. Nothing that reaches the filesystem may
+// change, so the conversion sits exactly at the ImGui boundary and nowhere else.
+static void AcpToUtf8(LPCSTR src, char* dst, u32 dst_size)
+{
+	if (!dst || !dst_size) return;
+	dst[0] = 0;
+	if (!src || !src[0]) return;
+	wchar_t w[MAX_PATH * 2];
+	if (::MultiByteToWideChar(CP_ACP, 0, src, -1, w, sizeof(w) / sizeof(w[0])) <= 0 ||
+		::WideCharToMultiByte(CP_UTF8, 0, w, -1, dst, (int)dst_size, 0, 0) <= 0)
+		strncpy_s(dst, dst_size, src, _TRUNCATE);	// unconvertible: better raw than empty
+}
+
+// The way back, for text the user typed into a field. Returns false when the
+// result does not fit, so the caller keeps the value it already had rather than
+// storing a half path.
+static bool Utf8ToAcp(LPCSTR src, char* dst, u32 dst_size)
+{
+	if (!dst || !dst_size) return false;
+	if (!src || !src[0]) { dst[0] = 0; return true; }
+	wchar_t w[MAX_PATH * 2];
+	if (::MultiByteToWideChar(CP_UTF8, 0, src, -1, w, sizeof(w) / sizeof(w[0])) <= 0) return false;
+	return ::WideCharToMultiByte(CP_ACP, 0, w, -1, dst, (int)dst_size, 0, 0) > 0;
+}
+
+// An editable path field: shows the stored ANSI path as UTF-8 and writes back
+// only when the text actually changed.
+static void PathInput(LPCSTR id, char* stored, u32 stored_size)
+{
+	char shown[MAX_PATH * 3];
+	AcpToUtf8(stored, shown, sizeof(shown));
+	if (ImGui::InputText(id, shown, sizeof(shown)))
+		Utf8ToAcp(shown, stored, stored_size);
+}
+
 bool EditorProject::PickFolder(char* dest, u32 dest_size, const wchar_t* title)
 {
 	bool ok = false;
@@ -834,20 +874,26 @@ bool EditorProject::DrawBrowser()
 			ImGui::PushID(i);
 			ImGui::BeginGroup();
 
+			// both are ANSI - the name is the path's last segment, so a folder
+			// outside ASCII makes them a row of '?' when drawn raw
+			char shown_path[MAX_PATH * 3], shown_name[MAX_PATH * 3];
+			AcpToUtf8(r.path, shown_path, sizeof(shown_path));
+			AcpToUtf8(r.name, shown_name, sizeof(shown_name));
+
 			bool clicked;
 			if (r.preview)
 				clicked = ImGui::ImageButton("##Preview", r.preview, ImVec2(tile_w, tile_h - 30));
 			else
-				clicked = ImGui::Button(r.name, ImVec2(tile_w + 8, tile_h - 22));
+				clicked = ImGui::Button(shown_name, ImVec2(tile_w + 8, tile_h - 22));
 
 			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
-			ImGui::TextUnformatted(r.name);
-			ImGui::TextDisabled("%s", r.path);
+			ImGui::TextUnformatted(shown_name);
+			ImGui::TextDisabled("%s", shown_path);
 			ImGui::PopTextWrapPos();
 			ImGui::EndGroup();
 			ImGui::PopID();
 
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.path);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", shown_path);
 			// Open() mutates the recent list — leave the loop immediately
 			if (clicked) { if (Open(r.path)) ImGui::CloseCurrentPopup(); break; }
 		}
@@ -858,7 +904,7 @@ bool EditorProject::DrawBrowser()
 	ImGui::Separator();
 	ImGui::TextUnformatted("New project");
 	ImGui::SetNextItemWidth(420);
-	ImGui::InputText("##parent", s_NewParent, sizeof(s_NewParent));
+	PathInput("##parent", s_NewParent, sizeof(s_NewParent));
 	ImGui::SameLine();
 	if (ImGui::Button("Browse..."))
 	{
@@ -928,7 +974,7 @@ bool EditorProject::DrawGameLink()
 	ImGui::Separator();
 
 	ImGui::SetNextItemWidth(560);
-	ImGui::InputText("##gameroot", s_LinkPath, sizeof(s_LinkPath));
+	PathInput("##gameroot", s_LinkPath, sizeof(s_LinkPath));
 	ImGui::SameLine();
 	if (ImGui::Button("Browse..."))
 	{

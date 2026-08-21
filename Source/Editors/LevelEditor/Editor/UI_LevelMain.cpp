@@ -1474,17 +1474,13 @@ static bool GetArgFloat(LPCSTR raw, LPCSTR field, float& out)
     return true;
 }
 
-// asset and file names carry backslashes, which JSON needs doubled
+// Asset and file names carry backslashes, which JSON needs doubled - which is
+// what JsonStr already does. The one thing this must NOT do is drop control
+// bytes: a caller that silently loses them hands the bridge a string that no
+// longer names the file it came from.
 static xr_string JsonEscapePath(LPCSTR text)
 {
-    xr_string out;
-    for (LPCSTR c = text ? text : ""; *c; ++c)
-    {
-        if (*c == '\\' || *c == '"') out += '\\';
-        if (u8(*c) < 0x20) continue;
-        out += *c;
-    }
-    return out;
+    return JsonStr(text);
 }
 
 static void RespondThemeJson(xr_string& out)
