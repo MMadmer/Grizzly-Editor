@@ -520,6 +520,9 @@ namespace
 		if (t == "value")
 		{
 			if (v.IsTable()) ERR(c, "E006", node, slot, "'%s' must be a bool, number or string", p.name.c_str());
+			// a string written into a variable ends up in task and phrase text
+			// through {var:name}, so it meets the same cp1251 wall the text does
+			else if (v.IsString()) CheckText(c, v, node, slot);
 			return;
 		}
 		if (t == "count_or_all")
