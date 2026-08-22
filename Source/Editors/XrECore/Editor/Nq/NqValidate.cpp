@@ -2,6 +2,7 @@
 #include "NqValidate.h"
 #include "NqCatalog.h"
 #include "NqPickers.h"
+#include "NqItemCaps.h"
 #include "NqLua.h"
 #include "NqUtil.h"
 
@@ -198,6 +199,9 @@ namespace
 	bool CheckPlace(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order);
 	void CheckSpawnSpec(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR what);
 	void CheckObjectRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR type);
+	// a row of a spawn list is typed by the catalog exactly like a parameter
+	void CheckParamValue(SCtx& c, const SKind& k, const SParam& p, const SNqValue& v, LPCSTR node, LPCSTR slot,
+						 int nidx, int order, bool events_ok, const SNqValue* siblings);
 	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn);
 
 	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn)
@@ -299,10 +303,108 @@ namespace
 			if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawned squad without hold - it may leave for the simulation");
 	}
 
+	// One row of a spawn list against the section it names: a field that means nothing for
+	// that section is a warning, never an error - the editor reads the LINKED game's
+	// system.ltx, which knows nothing of the sections a module brings with itself.
+	void CheckRowState(SCtx& c, const SNqValue& e, const NqCatalog::SKind& k, const xr_string& sect,
+					   LPCSTR node, LPCSTR sl, int nidx, int order)
+	{
+		const NqItemCaps::SCaps& caps = NqItemCaps::Of(sect.c_str());
+		for (u32 i = 0; i < e.keys.size(); ++i)
+		{
+			const xr_string& key = e.keys[i];
+			if (key == "section" || key == "item") continue;
+			const NqCatalog::SParam* rp = k.RowParam(key.c_str());
+			if (!rp)
+			{
+				// a key nobody reads would silently do nothing, which is the exact bug
+				// per-row state exists to kill
+				xr_string names;
+				for (u32 j = 0; j < k.row_params.size(); ++j)
+				{
+					if (!names.empty()) names += ", ";
+					names += k.row_params[j].name;
+				}
+				ERR(c, "E006", node, sl, "unknown row key '%s' - a spawn row takes %s", key.c_str(), names.c_str());
+				continue;
+			}
+			const SNqValue& val = e.vals[i];
+			// the row schema is a catalog schema, so it is type-checked like any parameter
+			CheckParamValue(c, k, *rp, val, node, sl, nidx, order, false, &e);
+
+			const u32 need = NqItemCaps::CapOfKey(key.c_str());
+			if (need != NqItemCaps::capAll && caps.known && !caps.Has((NqItemCaps::ECap)need))
+				WARN(c, "W062", node, sl, "%s does not apply to %s - %s",
+					NqItemCaps::FieldName((NqItemCaps::ECap)need), sect.c_str(),
+					NqItemCaps::Why((NqItemCaps::ECap)need));
+		}
+		// ceilings: a value the section itself cannot hold. The runtime clamps, so this is
+		// a warning - and an installed upgrade can legitimately raise a magazine
+		if (const SNqValue* a = e.Get("ammo"))
+		{
+			if (a->IsNumber())
+			{
+				if (caps.Has(NqItemCaps::capAmmoBox) && caps.box_size > 0 && a->n > caps.box_size)
+					WARN(c, "W063", node, sl, "ammo %d is over the box of %s (%d)", int(a->n), sect.c_str(), caps.box_size);
+				else if (!caps.Has(NqItemCaps::capAmmoBox) && caps.mag_size > 0 && a->n > caps.mag_size)
+					WARN(c, "W063", node, sl, "ammo %d is over the magazine of %s (%d)", int(a->n), sect.c_str(), caps.mag_size);
+			}
+		}
+		if (const SNqValue* u = e.Get("uses"))
+			if (u->IsNumber() && caps.max_uses > 0 && u->n > caps.max_uses)
+				WARN(c, "W063", node, sl, "uses %d is over max_uses of %s (%d)", int(u->n), sect.c_str(), caps.max_uses);
+		// the cartridge has to be one this weapon takes: a foreign one silently loads the
+		// first round instead, which is not what the quest said
+		if (const SNqValue* ak = e.Get("ammo_kind"))
+			if (ak->IsString() && !ak->s.empty() && caps.known && !caps.ammo_class.empty())
+			{
+				bool found = false;
+				for (u32 i = 0; i < caps.ammo_class.size(); ++i) if (caps.ammo_class[i] == ak->s) found = true;
+				if (!found)
+				{
+					xr_string takes;
+					for (u32 i = 0; i < caps.ammo_class.size(); ++i)
+					{
+						if (!takes.empty()) takes += ", ";
+						takes += caps.ammo_class[i];
+					}
+					ERR(c, "E006", node, sl, "%s does not chamber '%s' - its ammo_class is %s",
+						sect.c_str(), ak->s.c_str(), takes.c_str());
+				}
+			}
+		if (const SNqValue* up = e.Get("upgrades"))
+			if (up->IsString())
+			{
+				xr_vector<xr_string> list;
+				NqUtil::Split(up->s.c_str(), ',', list);
+				xr_vector<xr_string> seen;
+				for (u32 i = 0; i < list.size(); ++i)
+				{
+					const xr_string id = NqUtil::Trim(list[i]);
+					if (id.empty()) continue;
+					bool dup = false;
+					for (u32 j = 0; j < seen.size(); ++j) if (seen[j] == id) dup = true;
+					// the engine FATALs on a duplicate upgrade, and no pcall catches that
+					if (dup) ERR(c, "E006", node, sl, "upgrade '%s' is listed twice - the game aborts on a duplicate upgrade", id.c_str());
+					seen.push_back(id);
+				}
+			}
+		// a ref names ONE object
+		if (const SNqValue* r = e.Get("ref"))
+			if (r->IsString() && !r->s.empty())
+			{
+				const int n = (int)e.GetNumber("count", 1);
+				if (n > 1) ERR(c, "E006", node, sl, "ref names one object - this row makes %d items", n);
+				else NoteRefDecl(c, r->s, nidx, order, sl, "item");
+			}
+	}
+
 	// items: a non-empty array of rows; a row is a section with a count, or one
 	// concrete object ({ item = { ref | story } }) - the two mix freely. A kind that
-	// CREATES the rows (item.spawn) takes sections only: an existing object cannot be made
-	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool objects_ok = true)
+	// CREATES the rows (item.spawn) takes sections only: an existing object cannot be made,
+	// and only such a kind declares row state in the catalog.
+	void CheckItemList(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order,
+					   bool objects_ok, const NqCatalog::SKind* rows_of)
 	{
 		if (!v.IsTable() || v.arr.empty())
 		{
@@ -338,6 +440,13 @@ namespace
 			CheckIndexed(c, NqPickers::tItem, sect, node, sl.c_str());
 			if (const SNqValue* n = e.Get("count"))
 				if (!n->IsNumber() || n->n < 1) ERR(c, "E006", node, sl.c_str(), "count must be an integer >= 1");
+			if (rows_of) CheckRowState(c, e, *rows_of, sect, node, sl.c_str(), nidx, order);
+			else
+				// the rows of objective.fetch say what the player must BRING: state there
+				// would describe an item nobody creates
+				for (u32 kk = 0; kk < e.keys.size(); ++kk)
+					if (e.keys[kk] != "section" && e.keys[kk] != "count" && e.keys[kk] != "item")
+						ERR(c, "E006", node, sl.c_str(), "unknown row key '%s' - a row here takes section and count", e.keys[kk].c_str());
 		}
 	}
 
@@ -583,7 +692,9 @@ namespace
 			return;
 		}
 		if (t == "spawn_spec") { CheckSpawnSpec(c, v, node, slot, nidx, order, p.name.c_str()); return; }
-		if (t == "item_list") { CheckItemList(c, v, node, slot, nidx, order, k.id != "item.spawn"); return; }
+		// a kind that declares a row schema is the one that CREATES the items, so its rows
+		// carry state and take no concrete object
+		if (t == "item_list") { CheckItemList(c, v, node, slot, nidx, order, !k.HasRows(), k.HasRows() ? &k : 0); return; }
 		if (t == "loot_spawn") { CheckLootSpawn(c, v, node, slot, nidx, order); return; }
 		if (t == "spawn_section")
 		{
@@ -746,20 +857,29 @@ namespace
 		if (k->id == "spawn.squad")
 			if (const SNqValue* h = a.params.Get("hold"))
 				if (h->IsBool() && !h->b) WARN(c, "W031", node, slot, "spawn.squad without hold - the squad may leave for the simulation");
-		// a ref names ONE object; the runtime would name the first of several and
-		// warn, which is a quest that quietly points at the wrong medkit
-		if (k->id == "item.spawn" && a.params.Has("ref"))
+		// The one-line spelling IS one row, so the state written beside `section` belongs to
+		// it. Beside an `items` list the same keys describe nothing: which row would they
+		// apply to? That is the v10 shape, and it is named rather than silently ignored.
+		if (k->id == "item.spawn" && a.params.IsTable())
 		{
-			double total = 0;
-			if (const SNqValue* rows = a.params.Get("items"))
+			const bool listed = a.params.Has("items");
+			for (u32 i = 0; i < k->row_params.size(); ++i)
 			{
-				if (rows->IsTable())
-					for (u32 i = 0; i < rows->arr.size(); ++i)
-						total += rows->arr[i].IsTable() ? rows->arr[i].GetNumber("count", 1) : 1;
+				const xr_string& rn = k->row_params[i].name;
+				if (rn == "section" || rn == "count") continue;
+				if (!a.params.Has(rn.c_str())) continue;
+				if (listed)
+					ERR(c, "E022", node, slot, "item.spawn: the state belongs to the rows now - move '%s' into the row it applies to", rn.c_str());
 			}
-			else total = a.params.GetNumber("count", 1);
-			if (total > 1)
-				ERR(c, "E006", node, slot, "ref names one object - spawn a single item or drop the ref (%d would be made)", int(total));
+			// the one-liner is checked as the single row it stands for
+			if (!listed && !a.params.GetString("section").empty())
+			{
+				SNqValue row = SNqValue::Table();
+				for (u32 i = 0; i < a.params.keys.size(); ++i)
+					if (k->RowParam(a.params.keys[i].c_str()))
+						row.Set(a.params.keys[i].c_str(), a.params.vals[i]);
+				CheckRowState(c, row, *k, a.params.GetString("section"), node, slot, nidx, order);
+			}
 		}
 		if (k->id == "actor.teleport" && c.ctx.level && c.ctx.level[0])
 		{

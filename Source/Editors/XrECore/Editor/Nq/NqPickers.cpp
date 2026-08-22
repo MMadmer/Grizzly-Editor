@@ -3,6 +3,7 @@
 #include "NqUtil.h"
 #include "NqDoc.h"
 #include "NqValidate.h"
+#include "NqItemCaps.h"
 #include "../EditorGameContent.h"
 #include "../EditorGameConfigs.h"
 #include "../EditorProject.h"
@@ -937,7 +938,7 @@ namespace
 
 //------------------------------------------------------------------------------
 bool NqPickers::Available()		{ Ensure(); return s_Available; }
-void NqPickers::Invalidate()	{ s_Built = false; s_SceneStamp = 0; }
+void NqPickers::Invalidate()	{ s_Built = false; s_SceneStamp = 0; NqItemCaps::Invalidate(); }
 void NqPickers::SetSceneRestrictors(TSceneRestrictors fn) { s_SceneRestrictors = fn; s_SceneStamp = 0; }
 void NqPickers::SetSceneStories(TSceneRestrictors fn) { s_SceneStories = fn; s_SceneStamp = 0; }
 

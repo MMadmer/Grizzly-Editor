@@ -22,6 +22,9 @@ public:
 	u32  QuestInspectorSplit;
 	// height of the variables pane inside that inspector, permille of the column
 	u32  QuestVarsSplit;
+	// how much of the node/action column the NODE keeps, permille: a spawn action with
+	// several item rows needs far more room than a one-field action
+	u32  QuestActionSplit;
 	BOOL RecoveryEnabled = TRUE;
 	u32 RecoveryIntervalMinutes = 10;
 	u32 RecoveryInteractionDelaySeconds = 15;

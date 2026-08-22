@@ -35,6 +35,7 @@ private:
 	// height of the variables pane as a fraction of the column, so the split
 	// survives a resized window; kept in the editor preferences between sessions
 	float			m_VarsFrac;
+	float			m_ActionFrac;	// share of the node/action column the NODE keeps
 	// the parameter table the current widget belongs to, so a `value` can ask what
 	// type the `name` beside it was declared with
 	SNqValue*		m_ParamsCtx;
@@ -67,7 +68,7 @@ private:
 	void			DrawTaskRename	();
 	void			BeginTaskReferences(LPCSTR id);
 	void			DrawTaskReferences();
-	void			DrawHSplitter	(LPCSTR id, float& frac, float total);
+	void			DrawHSplitter	(LPCSTR id, float& frac, float total, bool grows_down = false);
 
 	// ---- variables -----------------------------------------------------------
 	// A variable's type is the type of its declared default, so every value tied
@@ -92,7 +93,9 @@ private:
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
-	bool			DrawItemList	(LPCSTR label, SNqValue& v, bool objects_ok = true);
+	bool			DrawItemList	(LPCSTR label, SNqValue& v, bool objects_ok = true,
+									 const NqCatalog::SKind* rows_of = 0);
+	bool			DrawRowState	(const NqCatalog::SKind* k, SNqValue& e);
 	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
 	bool			DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params);
 

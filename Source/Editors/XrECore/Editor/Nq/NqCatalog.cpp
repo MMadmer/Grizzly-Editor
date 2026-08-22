@@ -41,7 +41,7 @@ namespace
 		return false;
 	}
 
-	const char* kAttrs[] = { "group", "title", "desc", "use", "params", "pins", "wait", "once", "event", "impl", "since", "alias" };
+	const char* kAttrs[] = { "group", "title", "desc", "use", "params", "rows", "pins", "wait", "once", "event", "impl", "since", "alias" };
 
 	bool IsAttr(const xr_string& k)
 	{
@@ -85,7 +85,7 @@ namespace
 	{
 		xr_string sect;
 		NqCatalog::SKind* cur = 0;
-		xr_vector<xr_string> param_names;
+		xr_vector<xr_string> param_names, row_names;
 		bool after_params = false;
 		xr_vector<xr_string> lines;
 		{
@@ -147,6 +147,28 @@ namespace
 			}
 			if (!cur) continue;
 
+			// row.<name>: the schema of one row of this kind's list parameter. Kept apart
+			// from `params` so a row key never collides with an action key of the same name
+			if (0 == strncmp(key.c_str(), "row.", 4))
+			{
+				const xr_string rname = key.substr(4);
+				bool named = false;
+				for (u32 i = 0; i < row_names.size(); ++i) if (row_names[i] == rname) named = true;
+				if (named)
+				{
+					bool have = false;
+					for (u32 i = 0; i < cur->row_params.size(); ++i)
+						if (cur->row_params[i].name == rname) have = true;
+					if (!have)
+					{
+						NqCatalog::SParam rp;
+						ParseParamDef(rname, val, rp);
+						cur->row_params.push_back(rp);
+					}
+				}
+				continue;
+			}
+
 			bool in_params = false;
 			for (u32 i = 0; i < param_names.size(); ++i) if (param_names[i] == key) in_params = true;
 			bool have_def = false;
@@ -200,6 +222,10 @@ namespace
 			{
 				NqUtil::Split(val.c_str(), ',', param_names);
 				after_params = true;
+			}
+			else if (key == "rows")
+			{
+				NqUtil::Split(val.c_str(), ',', row_names);
 			}
 			else if (key == "pins")
 			{
@@ -349,6 +375,13 @@ const NqCatalog::SParam* NqCatalog::SKind::Param(LPCSTR name) const
 {
 	if (!name) return 0;
 	for (u32 i = 0; i < params.size(); ++i) if (params[i].name == name) return &params[i];
+	return 0;
+}
+
+const NqCatalog::SParam* NqCatalog::SKind::RowParam(LPCSTR name) const
+{
+	if (!name) return 0;
+	for (u32 i = 0; i < row_params.size(); ++i) if (row_params[i].name == name) return &row_params[i];
 	return 0;
 }
 

@@ -2,6 +2,7 @@
 #include "NqInspector.h"
 #include "../../../XrECore/Editor/Nq/NqLua.h"
 #include "../../../XrECore/Editor/Nq/NqPickers.h"
+#include "../../../XrECore/Editor/Nq/NqItemCaps.h"
 #include "../../../XrECore/Editor/Nq/NqUtil.h"
 
 // One line under a field saying what it is for; defined further down, used from the
@@ -207,6 +208,7 @@ NqInspector::NqInspector(NqDoc* doc) : m_Doc(doc)
 	m_FocusRename = m_FocusAction = false;
 	m_Search[0] = 0;
 	m_VarsFrac = 0.30f;
+	m_ActionFrac = 0.50f;
 	m_ParamsCtx = 0;
 	m_OpenTaskRename = false;
 	m_OpenTaskReferences = false;
@@ -214,7 +216,10 @@ NqInspector::NqInspector(NqDoc* doc) : m_Doc(doc)
 	m_TaskReferencesGeneration = 0;
 	m_ProjectQuestIdsSerial = 0;
 	if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
+	{
 		m_VarsFrac = float(_max(_min(prefs->QuestVarsSplit, 800u), 100u)) / 1000.f;
+		m_ActionFrac = float(_max(_min(prefs->QuestActionSplit, 900u), 100u)) / 1000.f;
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -315,7 +320,12 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 	const float props_min = _min(row * 6.f, total * 0.35f);
 	const float vars_h	= _max(vars_min, _min(m_VarsFrac * total, _max(total - grab - props_min, vars_min)));
 	const float props_h	= _max(row, total - grab - vars_h);
-	const float upper	= has_action ? props_h * 0.6f : props_h;
+	// The node keeps the fraction the author chose. A fixed 60/40 was fine while an action
+	// was two fields, and useless for a spawn with several item rows - the form simply did
+	// not fit, and no amount of scrolling makes a four-line window a form.
+	const float upper	= has_action
+						? _max(row * 2.f, _min(props_h * m_ActionFrac, props_h - grab - row * 3.f))
+						: props_h;
 
 	ImGui::BeginChild("nq_insp_top", ImVec2(0, upper), true);
 	if (m_NodeId.empty())	DrawQuestSection();
@@ -324,7 +334,8 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 
 	if (has_action)
 	{
-		ImGui::BeginChild("nq_insp_bottom", ImVec2(0, _max(row, props_h - upper - st.ItemSpacing.y)), true);
+		DrawHSplitter("##nq_action_split", m_ActionFrac, props_h, true);
+		ImGui::BeginChild("nq_insp_bottom", ImVec2(0, _max(row, props_h - upper - grab)), true);
 		DrawActionSection();
 		ImGui::EndChild();
 	}
@@ -634,7 +645,9 @@ void NqInspector::DrawTaskReferences()
 //------------------------------------------------------------------------------
 // variables
 //------------------------------------------------------------------------------
-void NqInspector::DrawHSplitter(LPCSTR id, float& frac, float total)
+// `grows_down` = the fraction belongs to the pane ABOVE the splitter (the node/action
+// divider), so dragging down gives it height. The variables pane below works the other way.
+void NqInspector::DrawHSplitter(LPCSTR id, float& frac, float total, bool grows_down)
 {
 	const ImGuiStyle& st = ImGui::GetStyle();
 	const float grab = ImGui::GetFrameHeight() * 0.35f + st.ItemSpacing.y;
@@ -643,17 +656,23 @@ void NqInspector::DrawHSplitter(LPCSTR id, float& frac, float total)
 	const bool active = ImGui::IsItemActive();
 	const bool hovered = ImGui::IsItemHovered();
 
-	if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) frac = 0.30f;
-	// the pane grows upwards, so dragging down takes height away from it
-	else if (active && total > 1.f) frac -= ImGui::GetIO().MouseDelta.y / total;
+	if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) frac = grows_down ? 0.50f : 0.30f;
+	else if (active && total > 1.f)
+	{
+		const float d = ImGui::GetIO().MouseDelta.y / total;
+		frac += grows_down ? d : -d;
+	}
 	if (active || hovered)
 	{
 		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 		if (active)
 		{
-			frac = _max(0.10f, _min(frac, 0.80f));
+			frac = _max(0.10f, _min(frac, grows_down ? 0.90f : 0.80f));
 			if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
-				prefs->QuestVarsSplit = u32(frac * 1000.f + 0.5f);
+			{
+				if (grows_down)	prefs->QuestActionSplit = u32(frac * 1000.f + 0.5f);
+				else			prefs->QuestVarsSplit = u32(frac * 1000.f + 0.5f);
+			}
 		}
 	}
 
@@ -1635,14 +1654,97 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 }
 
 // The rows of "what to bring": a section with a count, or one concrete object.
-bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok)
+// One line under a row that carries state, so a three-row list stays readable folded.
+static xr_string RowStateSummary(const SNqValue& e)
+{
+	xr_string s;
+	const char* keys[] = { "condition", "ammo", "ammo_kind", "uses", "upgrades", "ref" };
+	for (int i = 0; i < 6; ++i)
+	{
+		const SNqValue* v = e.Get(keys[i]);
+		if (!v || v->IsNil()) continue;
+		// ASCII only: the atlas has no glyph for a middle dot and draws it as '?'
+		if (!s.empty()) s += ", ";
+		if (0 == strcmp(keys[i], "upgrades"))
+		{
+			xr_vector<xr_string> list;
+			NqUtil::Split(v->AsString("").c_str(), ',', list);
+			s += NqUtil::Format("%d upgrade%s", (int)list.size(), list.size() == 1 ? "" : "s");
+		}
+		else if (0 == strcmp(keys[i], "ref"))		s += "ref " + v->AsString("");
+		else if (0 == strcmp(keys[i], "ammo_kind"))	s += v->AsString("");
+		else if (v->IsNumber())						s += NqUtil::Format("%s %g", keys[i], v->n);
+		else										s += keys[i];
+	}
+	return s;
+}
+
+// The state of ONE row, filtered by what the section can actually carry. With no linked game
+// or an unknown section every field is drawn: the editor must never hide a field it cannot
+// judge, because a module ships sections the linked game has never heard of.
+bool NqInspector::DrawRowState(const NqCatalog::SKind* k, SNqValue& e)
+{
+	bool ch = false;
+	const xr_string sect = e.GetString("section");
+	const NqItemCaps::SCaps& caps = NqItemCaps::Of(sect.c_str());
+	const int count = (int)e.GetNumber("count", 1);
+	ImGui::Indent();
+	for (u32 i = 0; i < k->row_params.size(); ++i)
+	{
+		const NqCatalog::SParam& rp = k->row_params[i];
+		if (rp.name == "section" || rp.name == "count") continue;
+		// a ref names one object, so it is offered only where it can mean something -
+		// but a ref already written stays visible, with the error to explain it
+		if (rp.name == "ref" && count > 1 && !e.Has("ref")) continue;
+		const u32 need = NqItemCaps::CapOfKey(rp.name.c_str());
+		if (need != NqItemCaps::capAll && caps.known && !caps.Has((NqItemCaps::ECap)need) && !e.Has(rp.name.c_str()))
+			continue;
+		ImGui::PushID(400 + (int)i);
+		SNqValue val = e.Has(rp.name.c_str()) ? *e.Get(rp.name.c_str()) : SNqValue::Nil();
+		bool one = false;
+		if (rp.name == "ammo_kind" && !caps.ammo_class.empty())
+		{
+			// the rounds this weapon takes, not every item section in the game
+			xr_string cur = val.AsString("");
+			if (ComboStr("cartridge", cur, caps.ammo_class, "(default)"))
+			{
+				val = cur.empty() ? SNqValue::Nil() : SNqValue::String(cur);
+				one = true;
+			}
+		}
+		else
+		{
+			xr_string lbl = rp.name;
+			// the section's own ceiling, so "30 of what" needs no config spelunking
+			if (rp.name == "ammo" && caps.known)
+			{
+				const int cap = caps.Has(NqItemCaps::capAmmoBox) ? caps.box_size : caps.mag_size;
+				if (cap > 0) lbl += NqUtil::Format(" / %d", cap);
+			}
+			else if (rp.name == "uses" && caps.max_uses > 0) lbl += NqUtil::Format(" / %d", caps.max_uses);
+			one = DrawTyped(rp.type.c_str(), &rp, lbl.c_str(), val);
+		}
+		if (one)
+		{
+			if (val.IsNil()) e.Erase(rp.name.c_str()); else e.Set(rp.name.c_str(), val);
+			ch = true;
+		}
+		ImGui::PopID();
+	}
+	Hint("condition: wear, 0 ruined. ammo: rounds loaded, or in one box. uses: doses left. ref: one item only");
+	ImGui::Unindent();
+	return ch;
+}
+
+bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok, const NqCatalog::SKind* rows_of)
 {
 	bool ch = false;
 	ImGui::PushID(label);
 	xr_string lt;
 	ImGui::TextUnformatted(Shown(label, lt));
-	if (objects_ok)	Hint("A row is either N items of a section, or one concrete object (ref/story id). Rows mix freely");
-	else			Hint("A row is N items of a section. An ammo section counts in boxes");
+	if (objects_ok)		Hint("A row is either N items of a section, or one concrete object (ref/story id). Rows mix freely");
+	else if (rows_of)	Hint("A row is N items of a section with its own state. An ammo section counts in boxes");
+	else				Hint("A row is N items of a section. An ammo section counts in boxes");
 	if (!v.IsTable()) { if (!v.IsNil()) { v = SNqValue::Table(); ch = true; } }
 	int kill = -1;
 	for (u32 i = 0; v.IsTable() && i < v.arr.size(); ++i)
@@ -1677,6 +1779,20 @@ bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok)
 		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton("x")) kill = (int)i;
+		// the state of this row, folded away unless it already carries some: three rows
+		// with every field open is a wall nobody reads
+		if (rows_of && !e.Has("item"))
+		{
+			const xr_string sum = RowStateSummary(e);
+			ImGui::SetNextItemOpen(!sum.empty(), ImGuiCond_FirstUseEver);
+			xr_string head = sum.empty() ? xr_string("state") : ("state:  " + sum);
+			head += "##rowstate";
+			if (ImGui::TreeNodeEx(head.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth))
+			{
+				ch |= DrawRowState(rows_of, e);
+				ImGui::TreePop();
+			}
+		}
 		ImGui::PopID();
 	}
 	if (kill >= 0) { v.arr.erase(v.arr.begin() + kill); if (v.arr.empty()) v = SNqValue::Nil(); ch = true; }
@@ -1712,8 +1828,8 @@ bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& param
 {
 	bool ch = false;
 
-	// the one-line spelling (section+count) is shown as a one-row list; the first edit
-	// rewrites it as `items`, untouched assets keep their spelling
+	// The one-line spelling (section + its own state) is shown as a one-row list; the first
+	// edit rewrites it as `items`, untouched assets keep their spelling.
 	SNqValue rows = SNqValue::Nil();
 	if (const SNqValue* it = params.Get("items")) rows = *it;
 	else if (params.Has("section"))
@@ -1723,13 +1839,21 @@ bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& param
 		e.Set("section", SNqValue::String(params.GetString("section")));
 		const double n = params.GetNumber("count", 1);
 		if (n > 1) e.Set("count", SNqValue::Number(n));
+		for (u32 i = 0; k && i < k->row_params.size(); ++i)
+		{
+			const xr_string& rn = k->row_params[i].name;
+			if (rn == "section" || rn == "count") continue;
+			if (const SNqValue* sv = params.Get(rn.c_str())) e.Set(rn.c_str(), *sv);
+		}
 		rows.Push(e);
 	}
-	if (DrawItemList("items *##spawn_items", rows, false))
+	if (DrawItemList("items *##spawn_items", rows, false, k))
 	{
 		ch = true;
 		params.Erase("section");
 		params.Erase("count");
+		// the state moved into the row it belongs to; nothing of it stays on the action
+		for (u32 i = 0; k && i < k->row_params.size(); ++i) params.Erase(k->row_params[i].name.c_str());
 		if (rows.IsNil() || (rows.IsTable() && rows.arr.empty())) params.Erase("items");
 		else params.Set("items", rows);
 	}
@@ -1745,25 +1869,8 @@ bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& param
 		Hint("Where they land: on the ground, inside a container or NPC, in a stash or a corpse, or in a fresh corpse. One form, required");
 	}
 
-	ImGui::Separator();
-	// the state of every instance, straight from the catalog rows
-	static const char* kState[] = { "condition", "ammo", "uses", "upgrades" };
-	for (int i = 0; i < 4; ++i)
-		if (const NqCatalog::SParam* sp = k ? k->Param(kState[i]) : 0)
-		{
-			ImGui::PushID(3000 + i);
-			ch |= DrawParam(*sp, params, "sp", k->id.c_str());
-			ImGui::PopID();
-		}
-	Hint("State of every item made. ammo: rounds loaded, or in an ammo box. upgrades: comma-separated sections");
-
-	if (const NqCatalog::SParam* rp = k ? k->Param("ref") : 0)
-	{
-		ImGui::PushID(3100);
-		ch |= DrawParam(*rp, params, "sp", k->id.c_str());
-		ImGui::PopID();
-		Hint("A name to refer to the item later. Only when a single item is made");
-	}
+	// The state and the ref live on the rows: one list of two rifles and a medkit has three
+	// different answers, and one set of fields on the action could only give it one.
 	return ch;
 }
 

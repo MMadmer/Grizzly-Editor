@@ -27,6 +27,7 @@ void CLevelPreferences::Load(CInifile* I)
     {
         QuestInspectorSplit = R_U32_SAFE("windows", "quest_inspector_split", 320);
         QuestVarsSplit = R_U32_SAFE("windows", "quest_vars_split", 300);
+        QuestActionSplit = R_U32_SAFE("windows", "quest_action_split", 500);
     }
     {
         RecoveryEnabled = R_BOOL_SAFE("recovery", "enabled", true);
@@ -66,6 +67,7 @@ void CLevelPreferences::Save(CInifile* I)
     I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
     I->w_u32("windows", "quest_inspector_split", QuestInspectorSplit);
     I->w_u32("windows", "quest_vars_split", QuestVarsSplit);
+    I->w_u32("windows", "quest_action_split", QuestActionSplit);
     I->w_bool("recovery", "enabled", RecoveryEnabled);
     I->w_u32("recovery", "interval_minutes", RecoveryIntervalMinutes);
     I->w_u32("recovery", "interaction_delay_seconds", RecoveryInteractionDelaySeconds);

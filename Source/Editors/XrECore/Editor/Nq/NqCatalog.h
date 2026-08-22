@@ -42,6 +42,11 @@ public:
 		xr_string			desc;		// UTF-8
 		u32					use;		// EUse mask
 		xr_vector<SParam>	params;		// catalog order
+		// The schema of ONE ROW of a list parameter, declared as `rows` + `row.<name>`.
+		// A list type (item_list) is shared by the kind that CREATES the things and the one
+		// that asks the player to bring them; only the former declares row state, so the
+		// permission travels with the kind instead of being wired into the type.
+		xr_vector<SParam>	row_params;
 		xr_vector<xr_string> pins;		// declared pins; "cases" = pins come from params.cases
 		bool				pins_from_cases;
 		bool				wait;
@@ -56,6 +61,8 @@ public:
 
 		bool				Is			(EUse u) const { return 0 != (use & u); }
 		const SParam*		Param		(LPCSTR name) const;
+		const SParam*		RowParam	(LPCSTR name) const;
+		bool				HasRows		() const { return !row_params.empty(); }
 		// declared (static) pin?
 		bool				HasPin		(LPCSTR pin) const;
 	};

@@ -85,6 +85,30 @@ spot; their state is read by the `objective_status` condition. With
 `auto_complete` on (the default) the task completes itself once every step is
 `completed`; a failed step leaves the task open.
 
+A list parameter whose kind declares a **row schema** carries per-row state.
+`item.spawn` is the one that does today: a row is what to make and everything
+about the thing it makes, so two rifles and a medkit in one list do not share a
+condition.
+
+```lua
+{ kind = "item.spawn", params = {
+    where = { into = { story = "esc_stash_1" } },
+    items = {
+      { section = "wpn_ak74", condition = 0.72, ammo = 30,
+        ammo_kind = "ammo_5.45x39_ap", upgrades = "up_firsta_ak74", ref = "prize_rifle" },
+      { section = "medkit", count = 2, uses = 0 },   -- both spawn already used up
+      { section = "ammo_5.45x39_ap", count = 3, ammo = 45 },   -- three boxes of 45
+    } } }
+```
+
+The editor reads the linked game's configs and offers a row only the fields its
+section can carry: an epinephrine has no magazine and no wear, a rifle has no
+doses. With no game linked, or a section the game does not know, every field is
+offered and no capability warning is raised — a module ships sections the linked
+game has never heard of. The one-line spelling (`section` + `count`) is one row,
+so it may carry the same state beside it; next to an `items` list those keys
+belong to no row and are refused (`E022`).
+
 ## 3. Parameter value types
 
 | Type | How it is written | Notes |
@@ -105,7 +129,7 @@ spot; their state is read by the `objective_status` condition. With
 | `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing |
 | `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ spawn = { section, smart\|place, restrictor, spread, ref, hold } }` | only on `objective.kill`; `spawn` creates the squad on entry, `ref` saves it, `hold = true` pins it in place |
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` \| `{ ref = "anchor" }` \| `{ actor = true, distance = 2 }` | `radius` defaults to 5; `ref` is where an object this quest created stands; `actor` is that many metres in front of the player, resolved when the action runs — a spawn point, not a destination (refused on `objective.reach`, `actor_in_place`, `actor.teleport`) |
-| `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once |
+| `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once. A kind that CREATES the items declares a **row schema** in the catalog (`rows` + `row.<name>`), and then each row also carries its own state — see `item.spawn` |
 | `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick, state, within, beyond, scatter } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` (its `spawn`) and `item.spawn` (its `where`) put the loot they create; radii are measured from the player |
 | `cases_cond` | `{ { name = "yes", cond = { … } }, … }` | case names = pins |
 | `cases_weight` | `{ { name = "a", weight = 3 }, … }` | the default weight is 1, must be > 0 |
@@ -247,7 +271,7 @@ else is plumbing around it. When a stage without waiting is needed —
 |---|---|---|---|
 | `item.give` | Give item | **`section: item_section`**, `count: int = 1` | Gives the player items of the section. In dialog: handed over by the NPC with a notification. count is in items (ammo: boxes). |
 | `item.take` | Take item | **`section: item_section`**, `count: count_or_all = 1` | Takes items of the section from the player. count = all takes everything. count is in items (ammo: boxes). |
-| `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `condition: float`, `ammo: int`, `uses: int`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. condition, ammo, uses and upgrades set their state. ref names a single item. |
+| `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `condition: float`, `ammo: int`, `ammo_kind: item_section`, `uses: int`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. Every row carries its own state. |
 | `money.give` | Give money | **`amount: int`** | Gives the player money. |
 | `money.take` | Take money | **`amount: int`** | Takes money from the player. |
 | `info.give` | Give info portion | **`info: info`** | Gives the player an info portion (bridge to vanilla logic). |
@@ -364,7 +388,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `E011` | an edge into a phrase from a non-dialog node | a dialog is entered only through `dialog.topic`; route world edges into the topic, not into a phrase |
 | `E020` | an event condition outside `trigger.when` / `wait.when` / `wait.any` | replace it with a level condition (`has_item` instead of `event.item_taken`) or move the event into its own `trigger.when` |
 | `E021` | `cases` are empty, a case name is bad or duplicated, `weight ≤ 0` | every case needs a unique `[a-z0-9_]` `name`; weights strictly > 0 |
-| `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter) | pick exactly one form; the inspector dims the losing fields |
+| `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter); or `item.spawn` state written beside an `items` list | pick exactly one form; the inspector dims the losing fields. For `item.spawn` move the state into the row it applies to |
 | `E030` | a reference to an undeclared `var` / `task` / `objective` / `node` / `quest`, or a `ref` nothing creates | declare the variable in `vars`, the task (and its steps) in `tasks`, the object via `spawn.*` or `objective.kill{spawn}` before use; for a foreign quest write `"<module>.<quest>"`. The game answers with the same code, so a quest with such a reference simply will not load there |
 | `E031` | `actor.teleport` to a place on another level | Dead Air has no cross-level teleports — transitions go through a level changer |
 | `E050` | a syntax error in custom Lua | fix the `code`; the "check syntax" button in the inspector verifies it separately |
@@ -380,6 +404,8 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `W050` | Lua could not be checked (no LuaJIT) | editor only; review the code by hand |
 | `W060` | the value is not found in the linked game's index | a typo in the section/story id/level/smart/profile/info portion — or it is your own mod's object, then the warning is expected |
 | `W061` | the file name does not match the quest `id` | a hint, not an error; rename the file or the `id` if you want order |
+| `W062` | a spawn row sets a field its section cannot carry (a magazine on a medkit, doses on a rifle) | drop the field, or check the section — it is only a warning, because the editor reads the LINKED game's configs and a module's own sections are not in them |
+| `W063` | a spawn row's value is over the section's own ceiling (`ammo_mag_size`, `box_size`, `max_uses`) | the runtime clamps it, so this is a warning; an installed upgrade can legitimately raise a magazine |
 | `W070` | the quest has no `flow.end` | it will finish implicitly when tokens and triggers run out; add a `flow.end` if you want an explicit status |
 
 ---
