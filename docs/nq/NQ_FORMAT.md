@@ -96,18 +96,27 @@ condition.
     items = {
       { section = "wpn_ak74", condition = 0.72, ammo = 30,
         ammo_kind = "ammo_5.45x39_ap", upgrades = "up_firsta_ak74", ref = "prize_rifle" },
-      { section = "medkit", count = 2, uses = 0 },   -- both spawn already used up
+      { section = "medkit", count = 2, condition = 0.4 },     -- both worn the same
       { section = "ammo_5.45x39_ap", count = 3, ammo = 45 },   -- three boxes of 45
     } } }
 ```
 
+**Everything unset means full.** A quest that hands out a rifle means a working
+rifle: an unwritten `condition` is a new item, and an unwritten `ammo` is a full
+magazine (or a full box for an ammo section) — the engine's own default of zero
+rounds reads as a broken gift. Write `ammo = 0` for a deliberately empty one.
+
 The editor reads the linked game's configs and offers a row only the fields its
-section can carry: an epinephrine has no magazine and no wear, a rifle has no
-doses. With no game linked, or a section the game does not know, every field is
-offered and no capability warning is raised — a module ships sections the linked
-game has never heard of. The one-line spelling (`section` + `count`) is one row,
-so it may carry the same state beside it; next to an `items` list those keys
-belong to no row and are refused (`E022`).
+section can carry: an epinephrine has no magazine and no wear, a knife has no
+cartridge to choose. `upgrades` picks from the set the section can really
+install (`upgrades` names GROUPS, and what installs is a group's `elements`,
+plus whatever an element's `effects` unlocks), because the engine aborts on a
+duplicate and crashes later on an id that does not belong. With no game linked,
+or a section the game does not know, every field is offered and no capability
+warning is raised — a module ships sections the linked game has never heard of.
+The one-line spelling (`section` + `count`) is one row, so it may carry the same
+state beside it; next to an `items` list those keys belong to no row and are
+refused (`E022`).
 
 ## 3. Parameter value types
 
@@ -271,7 +280,7 @@ else is plumbing around it. When a stage without waiting is needed —
 |---|---|---|---|
 | `item.give` | Give item | **`section: item_section`**, `count: int = 1` | Gives the player items of the section. In dialog: handed over by the NPC with a notification. count is in items (ammo: boxes). |
 | `item.take` | Take item | **`section: item_section`**, `count: count_or_all = 1` | Takes items of the section from the player. count = all takes everything. count is in items (ammo: boxes). |
-| `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `condition: float`, `ammo: int`, `ammo_kind: item_section`, `uses: int`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. Every row carries its own state. |
+| `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `condition: float = 1`, `ammo: int`, `ammo_kind: item_section`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. Every row carries its own state, full by default. |
 | `money.give` | Give money | **`amount: int`** | Gives the player money. |
 | `money.take` | Take money | **`amount: int`** | Takes money from the player. |
 | `info.give` | Give info portion | **`info: info`** | Gives the player an info portion (bridge to vanilla logic). |
@@ -404,8 +413,8 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `W050` | Lua could not be checked (no LuaJIT) | editor only; review the code by hand |
 | `W060` | the value is not found in the linked game's index | a typo in the section/story id/level/smart/profile/info portion — or it is your own mod's object, then the warning is expected |
 | `W061` | the file name does not match the quest `id` | a hint, not an error; rename the file or the `id` if you want order |
-| `W062` | a spawn row sets a field its section cannot carry (a magazine on a medkit, doses on a rifle) | drop the field, or check the section — it is only a warning, because the editor reads the LINKED game's configs and a module's own sections are not in them |
-| `W063` | a spawn row's value is over the section's own ceiling (`ammo_mag_size`, `box_size`, `max_uses`) | the runtime clamps it, so this is a warning; an installed upgrade can legitimately raise a magazine |
+| `W062` | a spawn row sets a field its section cannot carry (a magazine on a medkit, a cartridge on a knife) | drop the field, or check the section — it is only a warning, because the editor reads the LINKED game's configs and a module's own sections are not in them |
+| `W063` | a spawn row's value is over the section's own ceiling (`ammo_mag_size`, `box_size`) | the runtime clamps it, so this is a warning; an installed upgrade can legitimately raise a magazine |
 | `W070` | the quest has no `flow.end` | it will finish implicitly when tokens and triggers run out; add a `flow.end` if you want an explicit status |
 
 ---

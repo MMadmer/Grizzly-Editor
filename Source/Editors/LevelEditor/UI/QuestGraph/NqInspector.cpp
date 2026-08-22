@@ -1658,8 +1658,8 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 static xr_string RowStateSummary(const SNqValue& e)
 {
 	xr_string s;
-	const char* keys[] = { "condition", "ammo", "ammo_kind", "uses", "upgrades", "ref" };
-	for (int i = 0; i < 6; ++i)
+	const char* keys[] = { "condition", "ammo", "ammo_kind", "upgrades", "ref" };
+	for (int i = 0; i < 5; ++i)
 	{
 		const SNqValue* v = e.Get(keys[i]);
 		if (!v || v->IsNil()) continue;
@@ -1677,6 +1677,66 @@ static xr_string RowStateSummary(const SNqValue& e)
 		else										s += keys[i];
 	}
 	return s;
+}
+
+// The upgrades installed on the item. `upgrades` in a section names GROUPS; what
+// add_upgrade takes is a group's `elements`, and an element's `effects` names further
+// groups - so a plain text box asked the author for ids they had no way to look up. This
+// picks from the set the section can really install, and the engine aborts on a duplicate,
+// so the list is a set of checkboxes rather than free text.
+bool NqInspector::DrawUpgrades(const NqItemCaps::SCaps& caps, SNqValue& v)
+{
+	bool ch = false;
+	xr_vector<xr_string> chosen;
+	NqUtil::Split(v.AsString("").c_str(), ',', chosen);
+	for (u32 i = 0; i < chosen.size(); ++i) chosen[i] = NqUtil::Trim(chosen[i]);
+
+	xr_string shown;
+	for (u32 i = 0; i < chosen.size(); ++i)
+	{
+		if (chosen[i].empty()) continue;
+		if (!shown.empty()) shown += ", ";
+		shown += chosen[i];
+	}
+	ImGui::SetNextItemWidth(-(LabelRoom("upgrades") + ButtonRoom("...")));
+	xr_string edited = shown;
+	if (InputStr("upgrades", edited, false, 0.f, ButtonRoom("...")))
+	{
+		v = NqUtil::Trim(edited).empty() ? SNqValue::Nil() : SNqValue::String(edited);
+		ch = true;
+	}
+	ImGui::SameLine();
+	if (ImGui::SmallButton("...")) ImGui::OpenPopup("upgrade_pick");
+	if (ImGui::BeginPopup("upgrade_pick"))
+	{
+		if (caps.upgrades.empty())
+			ImGui::TextDisabled(caps.known ? "this item has no upgrades" : "link a game to list upgrades");
+		for (u32 i = 0; i < caps.upgrades.size(); ++i)
+		{
+			const xr_string& id = caps.upgrades[i];
+			bool on = false;
+			for (u32 j = 0; j < chosen.size(); ++j) if (chosen[j] == id) on = true;
+			if (ImGui::Checkbox(id.c_str(), &on))
+			{
+				xr_string out;
+				for (u32 j = 0; j < caps.upgrades.size(); ++j)
+				{
+					const xr_string& c = caps.upgrades[j];
+					bool keep = (c == id) ? on : false;
+					if (c != id)
+						for (u32 kx = 0; kx < chosen.size(); ++kx) if (chosen[kx] == c) keep = true;
+					if (!keep) continue;
+					if (!out.empty()) out += ", ";
+					out += c;
+				}
+				v = out.empty() ? SNqValue::Nil() : SNqValue::String(out);
+				ch = true;
+				break;		// `chosen` is stale now; the next frame redraws from the value
+			}
+		}
+		ImGui::EndPopup();
+	}
+	return ch;
 }
 
 // The state of ONE row, filtered by what the section can actually carry. With no linked game
@@ -1702,28 +1762,46 @@ bool NqInspector::DrawRowState(const NqCatalog::SKind* k, SNqValue& e)
 		ImGui::PushID(400 + (int)i);
 		SNqValue val = e.Has(rp.name.c_str()) ? *e.Get(rp.name.c_str()) : SNqValue::Nil();
 		bool one = false;
+		// a field that is set but means nothing for this section stays visible - it has to
+		// be deletable - and says so in red rather than looking like a working setting
+		const bool stale = need != NqItemCaps::capAll && caps.known && !caps.Has((NqItemCaps::ECap)need);
+		if (stale) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.45f, 0.45f, 1.f));
 		if (rp.name == "ammo_kind" && !caps.ammo_class.empty())
 		{
 			// the rounds this weapon takes, not every item section in the game
 			xr_string cur = val.AsString("");
-			if (ComboStr("cartridge", cur, caps.ammo_class, "(default)"))
+			if (ComboStr("cartridge", cur, caps.ammo_class, "(first)"))
 			{
 				val = cur.empty() ? SNqValue::Nil() : SNqValue::String(cur);
 				one = true;
 			}
 		}
+		else if (rp.name == "upgrades")
+		{
+			one = DrawUpgrades(caps, val);
+		}
 		else
 		{
 			xr_string lbl = rp.name;
-			// the section's own ceiling, so "30 of what" needs no config spelunking
-			if (rp.name == "ammo" && caps.known)
+			// An unset value means FULL, so that is what the field shows: the number in the
+			// box is what the item will really have, not a zero that reads as "ruined".
+			SNqValue shown = val;
+			if (rp.name == "ammo" && val.IsNil() && caps.FullAmmo() > 0)
+				shown = SNqValue::Number(caps.FullAmmo());
+			if (rp.name == "ammo" && caps.known && caps.FullAmmo() > 0)
+				lbl += NqUtil::Format(" / %d", caps.FullAmmo());
+			one = DrawTyped(rp.type.c_str(), &rp, lbl.c_str(), shown);
+			if (one)
 			{
-				const int cap = caps.Has(NqItemCaps::capAmmoBox) ? caps.box_size : caps.mag_size;
-				if (cap > 0) lbl += NqUtil::Format(" / %d", cap);
+				val = shown;
+				// typing the full value back is the same statement as saying nothing
+				if (rp.name == "ammo" && val.IsNumber() && (int)val.n == caps.FullAmmo()) val = SNqValue::Nil();
 			}
-			else if (rp.name == "uses" && caps.max_uses > 0) lbl += NqUtil::Format(" / %d", caps.max_uses);
-			one = DrawTyped(rp.type.c_str(), &rp, lbl.c_str(), val);
 		}
+		if (stale) ImGui::PopStyleColor();
+		if (stale && ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s does not apply to %s - %s", rp.name.c_str(), sect.c_str(),
+				NqItemCaps::Why((NqItemCaps::ECap)need));
 		if (one)
 		{
 			if (val.IsNil()) e.Erase(rp.name.c_str()); else e.Set(rp.name.c_str(), val);
@@ -1731,7 +1809,7 @@ bool NqInspector::DrawRowState(const NqCatalog::SKind* k, SNqValue& e)
 		}
 		ImGui::PopID();
 	}
-	Hint("condition: wear, 0 ruined. ammo: rounds loaded, or in one box. uses: doses left. ref: one item only");
+	Hint("Everything unset means full. condition: wear, 0 ruined. ammo: rounds loaded, or in one box. ref: one item only");
 	ImGui::Unindent();
 	return ch;
 }

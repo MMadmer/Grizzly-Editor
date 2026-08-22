@@ -350,9 +350,6 @@ namespace
 					WARN(c, "W063", node, sl, "ammo %d is over the magazine of %s (%d)", int(a->n), sect.c_str(), caps.mag_size);
 			}
 		}
-		if (const SNqValue* u = e.Get("uses"))
-			if (u->IsNumber() && caps.max_uses > 0 && u->n > caps.max_uses)
-				WARN(c, "W063", node, sl, "uses %d is over max_uses of %s (%d)", int(u->n), sect.c_str(), caps.max_uses);
 		// the cartridge has to be one this weapon takes: a foreign one silently loads the
 		// first round instead, which is not what the quest said
 		if (const SNqValue* ak = e.Get("ammo_kind"))
@@ -387,6 +384,15 @@ namespace
 					// the engine FATALs on a duplicate upgrade, and no pcall catches that
 					if (dup) ERR(c, "E006", node, sl, "upgrade '%s' is listed twice - the game aborts on a duplicate upgrade", id.c_str());
 					seen.push_back(id);
+					// an id this section cannot install validates nothing at spawn: the
+					// crash lands later, on the client, in release
+					if (caps.known && !caps.upgrades.empty())
+					{
+						bool legal = false;
+						for (u32 j = 0; j < caps.upgrades.size(); ++j) if (caps.upgrades[j] == id) legal = true;
+						if (!legal)
+							ERR(c, "E006", node, sl, "upgrade '%s' does not belong to %s - it would crash on spawn", id.c_str(), sect.c_str());
+					}
 				}
 			}
 		// a ref names ONE object

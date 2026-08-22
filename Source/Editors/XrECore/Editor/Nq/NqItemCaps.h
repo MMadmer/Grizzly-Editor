@@ -33,10 +33,9 @@ namespace NqItemCaps
 		capCondition	= 1 << 0,
 		capAmmo			= 1 << 1,	// a loaded magazine
 		capAmmoKind		= 1 << 2,	// which cartridge is in it
-		capUses			= 1 << 3,
-		capUpgrades		= 1 << 4,
-		capAmmoBox		= 1 << 5,	// the section IS ammo: `ammo` means the box content
-		capAll			= 0x3F,
+		capUpgrades		= 1 << 3,
+		capAmmoBox		= 1 << 4,	// the section IS ammo: `ammo` means the box content
+		capAll			= 0x1F,
 	};
 
 	struct ECORE_API SCaps
@@ -45,11 +44,15 @@ namespace NqItemCaps
 		bool					known;		// false = no game, unknown section, or unknown class
 		int						mag_size;	// ammo_mag_size, 0 when there is none
 		int						box_size;	// box_size of an ammo section, 0 otherwise
-		int						max_uses;	// effective max_uses, 0 when the section has none
 		xr_vector<xr_string>	ammo_class;	// the rounds this weapon takes, in catalog order
+		// the upgrade ELEMENT ids this section can install: `upgrades` names groups, a
+		// group's `elements` install, and an element's `effects` names further groups
+		xr_vector<xr_string>	upgrades;
 
-		SCaps() : mask(capAll), known(false), mag_size(0), box_size(0), max_uses(0) {}
+		SCaps() : mask(capAll), known(false), mag_size(0), box_size(0) {}
 		bool Has(ECap c) const { return 0 != (mask & (u32)c); }
+		// what the engine gives an item of this section when the quest says nothing
+		int	 FullAmmo() const { return Has(capAmmoBox) ? box_size : mag_size; }
 	};
 
 	// Cached per section for as long as the linked game does not change.

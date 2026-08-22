@@ -3,6 +3,7 @@
 #include "NqUtil.h"
 #include "NqPickers.h"
 #include "../EditorGameContent.h"
+#include "../EditorGameConfigs.h"
 
 namespace
 {
@@ -176,7 +177,64 @@ namespace
 
 	typedef xr_map<xr_string, NqItemCaps::SCaps> TCache;
 	TCache					s_Cache;
+	xr_string				s_CacheFor;		// EditorGameConfigs fingerprint the cache belongs to
 	NqItemCaps::SCaps		s_Unknown;		// default-constructed: capAll, known = false
+
+	// Nothing else notices when the linked game's configs replace the editor's bundled
+	// ones: pSettings is swapped under everyone. An entry cached before that swap says
+	// "unknown section" about every weapon in the game, and the inspector would go on
+	// offering doses on a rifle for the rest of the session.
+	void EnsureCacheFresh()
+	{
+		LPCSTR fp = EditorGameConfigs::ActiveFingerprint();
+		const xr_string now = fp ? fp : "";
+		if (now == s_CacheFor) return;
+		s_Cache.clear();
+		s_Fam.clear();
+		s_FamReady = false;
+		s_CacheFor = now;
+	}
+
+	// upgrades = <group ids>; a group's `elements` are the ids add_upgrade takes, and an
+	// element's `effects` names further groups - so the installable set is a walk.
+	void CollectUpgrades(LPCSTR section, xr_vector<xr_string>& out)
+	{
+		xr_string roots;
+		if (!ReadStr(section, "upgrades", roots)) return;
+		xr_vector<xr_string> queue;
+		NqUtil::Split(roots.c_str(), ',', queue);
+		xr_vector<xr_string> seen;
+		u32 guard = 0;
+		while (!queue.empty() && guard < 512)
+		{
+			++guard;
+			const xr_string g = NqUtil::Trim(queue.back());
+			queue.pop_back();
+			bool dup = false;
+			for (u32 i = 0; i < seen.size(); ++i) if (seen[i] == g) dup = true;
+			if (dup || g.empty()) continue;
+			seen.push_back(g);
+			xr_string els;
+			if (!ReadStr(g.c_str(), "elements", els)) continue;
+			xr_vector<xr_string> list;
+			NqUtil::Split(els.c_str(), ',', list);
+			for (u32 i = 0; i < list.size(); ++i)
+			{
+				const xr_string el = NqUtil::Trim(list[i]);
+				if (el.empty()) continue;
+				bool have = false;
+				for (u32 j = 0; j < out.size(); ++j) if (out[j] == el) have = true;
+				if (!have) out.push_back(el);
+				xr_string eff;
+				if (ReadStr(el.c_str(), "effects", eff))
+				{
+					xr_vector<xr_string> more;
+					NqUtil::Split(eff.c_str(), ',', more);
+					for (u32 j = 0; j < more.size(); ++j) queue.push_back(NqUtil::Trim(more[j]));
+				}
+			}
+		}
+	}
 }
 
 void NqItemCaps::Invalidate()
@@ -184,6 +242,7 @@ void NqItemCaps::Invalidate()
 	s_Cache.clear();
 	s_Fam.clear();
 	s_FamReady = false;
+	s_CacheFor.clear();
 }
 
 const NqItemCaps::SCaps& NqItemCaps::Of(LPCSTR section)
@@ -192,6 +251,7 @@ const NqItemCaps::SCaps& NqItemCaps::Of(LPCSTR section)
 	// no linked game: every index is empty and W060 is silent - the capability verdict
 	// has to be silent with it
 	if (!pSettings || !NqPickers::Available()) return s_Unknown;
+	EnsureCacheFresh();
 
 	const xr_string key = section;
 	TCache::iterator it = s_Cache.find(key);
@@ -216,7 +276,6 @@ const NqItemCaps::SCaps& NqItemCaps::Of(LPCSTR section)
 	// ceilings are read whatever the family says: they are facts of the section
 	c.mag_size	= ReadInt(section, "ammo_mag_size", 0);
 	c.box_size	= ReadInt(section, "box_size", 0);
-	c.max_uses	= ReadInt(section, "max_uses", 0);
 	xr_string ac;
 	if (ReadStr(section, "ammo_class", ac)) NqUtil::Split(ac.c_str(), ',', c.ammo_class);
 	for (u32 i = 0; i < c.ammo_class.size(); ++i) c.ammo_class[i] = NqUtil::Trim(c.ammo_class[i]);
@@ -255,11 +314,12 @@ const NqItemCaps::SCaps& NqItemCaps::Of(LPCSTR section)
 		if (c.ammo_class.size() > 1) c.mask |= capAmmoKind;
 	}
 
-	if (fam == famEatable) c.mask |= capUses;
-	if (fam != famEatable) c.max_uses = 0;
-
 	xr_string up;
-	if (ReadStr(section, "upgrades", up)) c.mask |= capUpgrades;
+	if (ReadStr(section, "upgrades", up))
+	{
+		c.mask |= capUpgrades;
+		CollectUpgrades(section, c.upgrades);
+	}
 
 	s_Cache[key] = c;
 	return s_Cache[key];
@@ -272,7 +332,6 @@ LPCSTR NqItemCaps::Why(ECap c)
 	case capCondition:	return "its condition is never read";
 	case capAmmo:		return "it takes no magazine";
 	case capAmmoKind:	return "it has only one cartridge";
-	case capUses:		return "it has no doses";
 	case capUpgrades:	return "it has no upgrades";
 	case capAmmoBox:	return "it is not an ammo box";
 	default:			return "it does not apply";
@@ -286,7 +345,6 @@ LPCSTR NqItemCaps::FieldName(ECap c)
 	case capCondition:	return "condition";
 	case capAmmo:		return "ammo";
 	case capAmmoKind:	return "ammo_kind";
-	case capUses:		return "uses";
 	case capUpgrades:	return "upgrades";
 	default:			return "field";
 	}
@@ -299,7 +357,6 @@ u32 NqItemCaps::CapOfKey(LPCSTR row_key)
 	if (k == "condition")	return capCondition;
 	if (k == "ammo")		return capAmmo;
 	if (k == "ammo_kind")	return capAmmoKind;
-	if (k == "uses")		return capUses;
 	if (k == "upgrades")	return capUpgrades;
 	return capAll;			// section, count, ref - always applicable
 }

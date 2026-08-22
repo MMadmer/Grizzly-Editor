@@ -576,7 +576,7 @@ it. When a "stage without waiting" is needed — `flow.step`.
 |---|---|---|
 | `item.give` | `section`, `count=1` (item units: for ammo — boxes, not rounds) | in a dialog context — `dialogs.relocate_item_section_to_actor(npc, actor, section, count)` (`dialogs.script:1976`, with the "received" UI); otherwise `alife():create(section, actor pos, lvid, gvid, actor:id())`×count (ammo — `create_ammo`, `_g.script:1438`) + `news_manager.relocate_item(actor,"in",…)` (`news_manager.script:247`) |
 | `item.take` | `section`, `count=1` \| `"all"` (same units as `item.give`: items, boxes for ammo) | in a dialog — `dialogs.relocate_item_section_from_actor` (`:2058`); otherwise iterate `db.actor:iterate_inventory` + `alife():release` |
-| `item.spawn` | `section`+`count` \| `items: item_list` (section rows only, EACH with its own state), **`where: loot_spawn`** (the fetch forms: place / into / stash / npc / corpse / new_corpse) | the fetch host resolver + `alife():create`; a row carries `condition`, `ammo` (magazine, or the content of one box), `ammo_kind` (index into the weapon's `ammo_class`), `uses`, `upgrades` and its own `ref`. Everything but `uses` is written on the SERVER entity before it is registered - with an ONLINE host the client twin is built at once, so the entity is created unregistered (`create(..., false)`), filled, then `register`ed. `uses` has no server side and stays an online job. Several instances on a `place` spread over its radius |
+| `item.spawn` | `section`+`count` \| `items: item_list` (section rows only, EACH with its own state), **`where: loot_spawn`** (the fetch forms) | a row carries `condition`, `ammo` (magazine, or the content of one box), `ammo_kind` (index into the weapon's `ammo_class`), `upgrades` and its own `ref`. **Unset means full**: an unwritten condition is a new item and an unwritten magazine is a full one - the engine's own zero rounds reads as a broken gift. All of it is written on the SERVER entity before it is registered; with an ONLINE host the client twin is built at once, so the entity is created unregistered (`create(..., false)`), filled, then `register`ed. Upgrade ids are checked against the section's own tree (`upgrades` -> `elements` -> `effects`) and deduped: the engine FATALs on a duplicate and crashes later on a foreign id. Several instances on a `place` spread over its radius |
 | `money.give` / `money.take` | `amount` | `db.actor:give_money(±n)`; in a dialog `dialogs.relocate_money_to_actor/from_actor` (`:2025/:2031`) |
 | `info.give` / `info.disable` | `info` | `db.actor:give_info_portion/disable_info_portion` — an unknown id does **not** assert (`InfoPortion.cpp:28-36`) |
 | `var.set` / `var.add` | `name`, `value` / `delta` | quest variables (persistent) |
@@ -867,7 +867,7 @@ state = {
       tasks  = { kill_boars = "active" },
       errors = { kill = "…" },
       timers = { wait_1 = { real_left = 12.5 } },
-      jobs   = { [5124] = { uses = 0 } },   -- online jobs: applied by the poll once the client object exists (kill / uses)
+      jobs   = { [5124] = { kill = true } },  -- online jobs: applied by the poll once the client object exists
     },
   },
 }
@@ -1287,7 +1287,7 @@ state; existing state does not migrate.
 | W060 | the value is not found in the game index (story id/section/level/smart/profile/info portion) — editor only |
 | W061 | the file name does not match the quest `id` — editor only |
 | W062 | a spawn row sets a field its section cannot carry (a magazine on a medkit, doses on a rifle) — editor only, and only when the linked game knows the section |
-| W063 | a spawn row's value is over the section's own ceiling (`ammo_mag_size` / `box_size` / `max_uses`) — the runtime clamps it — editor only |
+| W063 | a spawn row's value is over the section's own ceiling (`ammo_mag_size` / `box_size`) — the runtime clamps it — editor only |
 | W070 | a quest without `flow.end` (will finish implicitly) |
 
 The runtime prints the same codes to the log; the editor — to the problems row

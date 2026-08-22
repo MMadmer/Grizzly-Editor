@@ -8,6 +8,7 @@
 
 #include "../../../XrECore/Editor/Nq/NqDoc.h"
 #include "../../../XrECore/Editor/Nq/NqCatalog.h"
+#include "../../../XrECore/Editor/Nq/NqItemCaps.h"
 #include "../../../XrECore/Editor/Nq/NqReferences.h"
 
 class NqInspector
@@ -96,6 +97,7 @@ private:
 	bool			DrawItemList	(LPCSTR label, SNqValue& v, bool objects_ok = true,
 									 const NqCatalog::SKind* rows_of = 0);
 	bool			DrawRowState	(const NqCatalog::SKind* k, SNqValue& e);
+	bool			DrawUpgrades	(const NqItemCaps::SCaps& caps, SNqValue& v);
 	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
 	bool			DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params);
 
