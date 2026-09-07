@@ -1119,7 +1119,10 @@ ImGui 1.88 docking in `Source/Editors/XrEUI/`; third-party ones
   under the node; edges are vertical cubic béziers with an arrow.
 - **A node**: the top chip strip `on_enter` ("1 | 2 | 3 | +"), the body (the kind
   title, a summary line of key parameters: NPC/text/section…), the bottom
-  `on_exit` strip ("1 | 2 | +"). Colors follow the kind family
+  `on_exit` strip ("1 | 2 | +"). A strip holds eight chips per row (the add
+  button counts as one) and wraps: the ninth starts a new row and the node grows
+  to hold it — `NqLayout::StripHeight` is the one source of that geometry for the
+  layout pass, the canvas and the hit test. Colors follow the kind family
   (dialog/objective/wait/flow/end), a trigger is an oval "T · <kind>". An
   error/warning badge; an unreachable node is dimmed; `once` nodes get a ↻̸ mark.
 - **Interaction**: LMB — select/drag (everything selected), a rubber band on

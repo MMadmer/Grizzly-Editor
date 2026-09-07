@@ -103,7 +103,7 @@ private:
 	{
 		ImVec2	pos, size;			// world, top-left + size
 		bool	trigger;
-		float	strip_h;			// chip strip height (0 for triggers)
+		float	enter_h, exit_h;	// chip strip heights (0 for triggers); a strip wraps into rows
 		int		enter_n, exit_n;	// chip counts
 		xr_vector<xr_string> pins;	// output pins in draw order
 		int		declared;			// pins[0..declared) come from the catalog, the rest only from the file

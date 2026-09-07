@@ -11,8 +11,8 @@ namespace
 	const int	kZoomCount = sizeof(kZoom) / sizeof(kZoom[0]);
 	const int	kZoomDefault = 6;
 
-	const float kChipW		= 26.f;		// one chip in world units
-	const float kChipPad	= 4.f;
+	const float kChipW		= NqLayout::kChipW;		// one chip in world units
+	const float kChipPad	= NqLayout::kChipPad;
 	const float kPinR		= 5.f;
 	const float kFontBase	= 14.f;		// world font size at zoom 1
 	const float kLinkTangent = 48.f;
@@ -707,9 +707,10 @@ void NqCanvas::BuildGeometry()
 		g.pos = ImVec2(n.pos.x, n.pos.y);
 		g.size = ImVec2(sz.x, sz.y);
 		g.trigger = NqText::IsTrigger(n.kind.c_str());
-		g.strip_h = g.trigger ? 0.f : NqLayout::kChipStrip;
 		g.enter_n = (int)n.on_enter.size();
 		g.exit_n = (int)n.on_exit.size();
+		g.enter_h = g.trigger ? 0.f : NqLayout::StripHeight(g.enter_n);
+		g.exit_h = g.trigger ? 0.f : NqLayout::StripHeight(g.exit_n);
 		g.pins.clear();
 		const NqCatalog::SKind* k = NqCatalog::Find(n.kind.c_str());
 		if (k)
@@ -941,22 +942,24 @@ bool NqCanvas::HitChip(int node, const ImVec2& s, xr_string& slot, int& index, b
 	if (g.trigger || Zoom() < 0.5f) return false;
 	float z = Zoom();
 	ImVec2 tl = ToScreen(g.pos);
-	float chip = kChipW * z, pad = kChipPad * z, strip = g.strip_h * z;
+	float chip = kChipW * z, pad = kChipPad * z, row_h = NqLayout::kChipStrip * z;
+	const int per_row = NqLayout::ChipsPerRow();
 	for (int pass = 0; pass < 2; ++pass)
 	{
+		const float strip = (pass == 0 ? g.enter_h : g.exit_h) * z;
 		float y0 = pass == 0 ? tl.y : tl.y + g.size.y * z - strip;
 		if (s.y < y0 || s.y > y0 + strip) continue;
 		int count = pass == 0 ? g.enter_n : g.exit_n;
-		float x = tl.x + pad;
 		for (int i = 0; i <= count; ++i)
 		{
-			if (s.x >= x && s.x <= x + chip)
+			const float x = tl.x + pad + float(i % per_row) * (chip + pad);
+			const float y = y0 + float(i / per_row) * row_h;
+			if (s.x >= x && s.x <= x + chip && s.y >= y && s.y <= y + row_h)
 			{
 				slot = pass == 0 ? "enter" : "exit";
 				index = i; plus = (i == count);
 				return true;
 			}
-			x += chip + pad;
 		}
 	}
 	return false;
@@ -1119,10 +1122,11 @@ void NqCanvas::DrawChipStrip(ImDrawList* dl, int index, LPCSTR slot, const ImVec
 	const SNqNode& n = m_Doc->quest.nodes[index];
 	const xr_vector<SNqAction>* acts = n.SlotC(slot);
 	float z = Zoom();
-	float chip = kChipW * z, pad = kChipPad * z, h = NqLayout::kChipStrip * z;
+	float chip = kChipW * z, pad = kChipPad * z, row_h = NqLayout::kChipStrip * z;
 	xr_string prefix = xr_string(slot) + ":";
-	float x = tl.x + pad;
 	int count = acts ? (int)acts->size() : 0;
+	const int per_row = NqLayout::ChipsPerRow();
+	const float h = NqLayout::StripHeight(count) * z;
 	ImFont* font = ImGui::GetFont();
 	float fs = kFontBase * z * 0.85f;
 	// while an action is in the air this strip says whether it would land here, and
@@ -1135,11 +1139,14 @@ void NqCanvas::DrawChipStrip(ImDrawList* dl, int index, LPCSTR slot, const ImVec
 
 	for (int i = 0; i <= count; ++i)
 	{
-		ImVec2 a(x, tl.y + pad * 0.5f), b(x + chip, tl.y + h - pad * 0.5f);
+		// eight to a row, the ninth starts the next one
+		const float x = tl.x + pad + float(i % per_row) * (chip + pad);
+		const float y = tl.y + float(i / per_row) * row_h;
+		ImVec2 a(x, y + pad * 0.5f), b(x + chip, y + row_h - pad * 0.5f);
 		bool plus = (i == count);
 		bool selected = !plus && m_Doc->sel_slot == prefix + NqUtil::Format("%d", i);
 		bool dragging = !plus && m_ChipDragging && m_ChipDragIndex == i && m_ChipDragSlot == slot && m_ChipDragNode == n.id;
-		if (drop_here && mouse.x >= a.x - pad && mouse.x <= b.x)
+		if (drop_here && mouse.x >= a.x - pad && mouse.x <= b.x && mouse.y >= y && mouse.y <= y + row_h)
 			dl->AddRectFilled(ImVec2(a.x - pad * 0.5f, a.y), ImVec2(a.x - pad * 0.5f + _max(2.f, 2.f * z), b.y),
 				Col(120, 200, 255, 230));
 		ImU32 bg = plus ? Col(255, 255, 255, 28) : (selected ? Col(255, 210, 90, 220) : Col(255, 255, 255, 60));
@@ -1149,8 +1156,6 @@ void NqCanvas::DrawChipStrip(ImDrawList* dl, int index, LPCSTR slot, const ImVec
 		if (plus) xr_strcpy(label, "+"); else xr_sprintf(label, "%d", i + 1);
 		ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.f, label);
 		dl->AddText(font, fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), plus ? Col(230, 230, 230, 160) : Col(20, 20, 20), label);
-		x += chip + pad;
-		if (x > tl.x + w) break;
 	}
 }
 
@@ -1191,26 +1196,26 @@ void NqCanvas::DrawNode(ImDrawList* dl, int index)
 	}
 	else
 	{
-		float strip = g.strip_h * z;
+		const float enter_h = g.enter_h * z, exit_h = g.exit_h * z;
 		dl->AddRectFilled(a, b, body, round);
 		// coloured body band between the strips
-		dl->AddRectFilled(ImVec2(a.x, a.y + strip), ImVec2(b.x, b.y - strip), fam);
+		dl->AddRectFilled(ImVec2(a.x, a.y + enter_h), ImVec2(b.x, b.y - exit_h), fam);
 		if (z >= 0.5f)
 		{
 			DrawChipStrip(dl, index, "enter", a, b.x - a.x);
-			DrawChipStrip(dl, index, "exit", ImVec2(a.x, b.y - strip), b.x - a.x);
+			DrawChipStrip(dl, index, "exit", ImVec2(a.x, b.y - exit_h), b.x - a.x);
 		}
 		else
 		{
 			// LOD: strips as thin bars carrying the counts
 			ImU32 bar = Col(255, 255, 255, 40);
-			dl->AddRectFilled(a, ImVec2(b.x, a.y + strip), bar, round, ImDrawFlags_RoundCornersTop);
-			dl->AddRectFilled(ImVec2(a.x, b.y - strip), b, bar, round, ImDrawFlags_RoundCornersBottom);
+			dl->AddRectFilled(a, ImVec2(b.x, a.y + enter_h), bar, round, ImDrawFlags_RoundCornersTop);
+			dl->AddRectFilled(ImVec2(a.x, b.y - exit_h), b, bar, round, ImDrawFlags_RoundCornersBottom);
 		}
 		dl->AddRect(a, b, outline, round, 0, selected ? 2.5f : 1.f);
 		if (z >= 0.3f)
 		{
-			float tx = a.x + 8.f * z, ty = a.y + strip + 5.f * z;
+			float tx = a.x + 8.f * z, ty = a.y + enter_h + 5.f * z;
 			xr_string title = NodeTitle(n);
 			dl->AddText(font, fs, ImVec2(tx, ty), Col(255, 255, 255), title.c_str());
 			ImVec2 ts = font->CalcTextSizeA(fs * 0.8f, FLT_MAX, 0.f, n.id.c_str());
@@ -1223,7 +1228,7 @@ void NqCanvas::DrawNode(ImDrawList* dl, int index)
 				// `once` absent from the file means the catalog default applies
 				const NqCatalog::SKind* nk = NqCatalog::Find(n.kind.c_str());
 				if (n.once_set ? n.once : (nk && nk->once_default))
-					dl->AddText(font, fs * 0.8f, ImVec2(tx, b.y - strip - fs), Col(255, 230, 150, 200), "once");
+					dl->AddText(font, fs * 0.8f, ImVec2(tx, b.y - exit_h - fs), Col(255, 230, 150, 200), "once");
 			}
 		}
 	}

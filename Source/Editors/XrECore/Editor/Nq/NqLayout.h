@@ -12,7 +12,9 @@ namespace NqLayout
 	// canvas metrics shared with the Phase 4 canvas (world units at zoom 1.0)
 	const float kNodeWidth		= 240.f;
 	const float kNodeHeight		= 96.f;		// body without chip strips
-	const float kChipStrip		= 26.f;		// one on_enter / on_exit strip
+	const float kChipStrip		= 26.f;		// one ROW of an on_enter / on_exit strip
+	const float kChipW			= 26.f;		// one action chip
+	const float kChipPad		= 4.f;		// gap around a chip
 	const float kTriggerHeight	= 56.f;
 	const float kGapX			= 64.f;
 	const float kTreeGapX		= 160.f;
@@ -31,6 +33,11 @@ namespace NqLayout
 
 	// estimated size of a node box
 	ECORE_API Fvector2	NodeSize	(const SNqNode& n);
+	// chips per row of a strip, and the rows a strip of `count` actions needs: the
+	// add button is one more chip, so a full row of eight wraps the ninth
+	ECORE_API int		ChipsPerRow	();
+	ECORE_API int		ChipRows	(int count);
+	ECORE_API float		StripHeight	(int count);
 	// positions every node (`only_missing` = keep nodes that already have pos
 	// and place the rest below the existing layout); returns the number of
 	// nodes moved

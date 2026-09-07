@@ -2,12 +2,32 @@
 #include "NqLayout.h"
 #include "NqCatalog.h"
 
+int NqLayout::ChipsPerRow()
+{
+	// chip i spans [pad + i*(w+pad), pad + i*(w+pad) + w]; the last one ends at n*(w+pad)
+	return _max(1, int(kNodeWidth / (kChipW + kChipPad)));
+}
+
+int NqLayout::ChipRows(int count)
+{
+	// the strip always carries its add button, so an empty strip is still one row
+	const int chips = _max(0, count) + 1;
+	return (chips + ChipsPerRow() - 1) / ChipsPerRow();
+}
+
+float NqLayout::StripHeight(int count)
+{
+	return kChipStrip * float(ChipRows(count));
+}
+
 Fvector2 NqLayout::NodeSize(const SNqNode& n)
 {
 	Fvector2 s;
 	if (NqText::IsTrigger(n.kind.c_str())) { s.set(kNodeWidth, kTriggerHeight); return s; }
-	// Both chip strips are always drawn because an empty strip still carries its add button.
-	s.set(kNodeWidth, kNodeHeight + 2.f * kChipStrip);
+	// Both chip strips are always drawn because an empty strip still carries its add
+	// button; a strip with more actions than fit one row grows downwards, and the node
+	// grows with it instead of cutting the ninth chip off.
+	s.set(kNodeWidth, kNodeHeight + StripHeight((int)n.on_enter.size()) + StripHeight((int)n.on_exit.size()));
 	return s;
 }
 
