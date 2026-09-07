@@ -100,6 +100,7 @@ private:
 	bool			DrawUpgrades	(const NqItemCaps::SCaps& caps, SNqValue& v);
 	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
 	bool			DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params);
+	bool			DrawItemRowsParams(const NqCatalog::SKind* k, SNqValue& params);
 
 public:
 	// Scroll the panel to something on the next frame: "top", "bottom", or

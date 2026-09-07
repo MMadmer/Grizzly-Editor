@@ -102,9 +102,9 @@ namespace
 			ERR(c, "E022", node, slot, "%s takes only one of these at a time, %s are set together",
 				kind.c_str(), list.c_str());
 		}
-		// objective.fetch and item.spawn have no meaning without a form; the kill_count
-		// filters are optional
-		if (used == 0 && (kind == "objective.fetch" || kind == "item.spawn"))
+		// the item kinds have no meaning without a form - nothing to bring, make, give or
+		// take; the kill_count filters are optional
+		if (used == 0 && (kind == "objective.fetch" || kind == "item.spawn" || kind == "item.give" || kind == "item.take"))
 			ERR(c, "E022", node, slot, "%s needs an items list (or its one-line spelling, section)", kind.c_str());
 
 		// kill/fetch/reach: the marker binds to a task now, the old spellings are named
@@ -444,8 +444,11 @@ namespace
 				if (seen[k] == sect) ERR(c, "E006", node, sl.c_str(), "section '%s' is listed twice - the counts would be ambiguous", sect.c_str());
 			seen.push_back(sect);
 			CheckIndexed(c, NqPickers::tItem, sect, node, sl.c_str());
-			if (const SNqValue* n = e.Get("count"))
-				if (!n->IsNumber() || n->n < 1) ERR(c, "E006", node, sl.c_str(), "count must be an integer >= 1");
+			// a row schema types the count itself (item.take's rows say "all"); the plain
+			// list keeps the integer rule
+			if (!(rows_of && rows_of->RowParam("count")))
+				if (const SNqValue* n = e.Get("count"))
+					if (!n->IsNumber() || n->n < 1) ERR(c, "E006", node, sl.c_str(), "count must be an integer >= 1");
 			if (rows_of) CheckRowState(c, e, *rows_of, sect, node, sl.c_str(), nidx, order);
 			else
 				// the rows of objective.fetch say what the player must BRING: state there

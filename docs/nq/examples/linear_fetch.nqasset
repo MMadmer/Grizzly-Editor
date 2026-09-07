@@ -30,7 +30,8 @@ return {
     { id = "reward", kind = "flow.step",
       on_enter = {
         { kind = "item.take", params = { section = "bread", count = 2 } },
-        { kind = "item.give", params = { section = "medkit", count = 1 } },
+        -- the list spelling: one row per section, the same as item.take's one-line form above
+        { kind = "item.give", params = { items = { { section = "medkit", count = 1 } } } },
         { kind = "money.give", params = { amount = 500 } },
         { kind = "task.complete", params = { task = "bring_bread" } },
         { kind = "news.tip", params = { text = "Спасибо, сталкер. Держи аптечку и немного денег." } },

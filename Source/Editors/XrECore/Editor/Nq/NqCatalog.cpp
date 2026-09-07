@@ -449,10 +449,11 @@ void NqCatalog::ExclusiveForms(LPCSTR kind, xr_vector<xr_string>& out)
 		out.push_back("squad");
 		out.push_back("section");
 	}
-	else if (k == "item.spawn")
+	else if (k == "item.spawn" || k == "item.give" || k == "item.take")
 	{
-		// the same two spellings of "what" as fetch; "where" is one parameter with
-		// its own forms inside, so it never collides with anything here
+		// the same two spellings of "what" as fetch: one section with a count, or a
+		// list of rows. item.spawn's "where" is one parameter with its own forms
+		// inside, so it never collides with anything here
 		out.push_back("section,count");
 		out.push_back("items");
 	}
@@ -494,6 +495,26 @@ bool NqCatalog::FormRuledOut(LPCSTR kind, LPCSTR param, const SNqValue& params)
 	return false;
 }
 
+// one parameter list as JSON - the kind's own params and its row schema use the same shape
+static void emit_params(xr_string& out, const xr_vector<NqCatalog::SParam>& list)
+{
+	out += "[";
+	for (u32 p = 0; p < list.size(); ++p)
+	{
+		const NqCatalog::SParam& pr = list[p];
+		if (p) out += ",";
+		out += "{\"name\":";	NqUtil::JsonString(out, pr.name);
+		out += ",\"type\":";	NqUtil::JsonString(out, pr.type);
+		out += ",\"required\":"; NqUtil::JsonBool(out, pr.required);
+		if (pr.has_default)	{ out += ",\"default\":"; NqUtil::JsonString(out, pr.def); }
+		if (pr.has_min)		{ out += ",\"min\":"; NqUtil::JsonNumber(out, pr.min); }
+		if (pr.has_max)		{ out += ",\"max\":"; NqUtil::JsonNumber(out, pr.max); }
+		if (!pr.enums.empty()) { out += ",\"enum\":"; NqUtil::JsonStringArray(out, pr.enums); }
+		out += "}";
+	}
+	out += "]";
+}
+
 void NqCatalog::McpCatalog(xr_string& out)
 {
 	if (!Ensure())
@@ -522,21 +543,10 @@ void NqCatalog::McpCatalog(xr_string& out)
 		if (k.use & useMain)	{ if (!first) out += ","; out += "\"main\"";	first = false; }
 		if (k.use & useExtra)	{ if (!first) out += ","; out += "\"extra\"";	first = false; }
 		if (k.use & useCond)	{ if (!first) out += ","; out += "\"cond\"";	first = false; }
-		out += "],\"params\":[";
-		for (u32 p = 0; p < k.params.size(); ++p)
-		{
-			const SParam& pr = k.params[p];
-			if (p) out += ",";
-			out += "{\"name\":";	NqUtil::JsonString(out, pr.name);
-			out += ",\"type\":";	NqUtil::JsonString(out, pr.type);
-			out += ",\"required\":"; NqUtil::JsonBool(out, pr.required);
-			if (pr.has_default)	{ out += ",\"default\":"; NqUtil::JsonString(out, pr.def); }
-			if (pr.has_min)		{ out += ",\"min\":"; NqUtil::JsonNumber(out, pr.min); }
-			if (pr.has_max)		{ out += ",\"max\":"; NqUtil::JsonNumber(out, pr.max); }
-			if (!pr.enums.empty()) { out += ",\"enum\":"; NqUtil::JsonStringArray(out, pr.enums); }
-			out += "}";
-		}
-		out += "]";
+		out += "],\"params\":";
+		emit_params(out, k.params);
+		// the row schema of a list parameter, when the kind declares one
+		if (!k.row_params.empty()) { out += ",\"rows\":"; emit_params(out, k.row_params); }
 		if (k.use & (useMain | useTrigger))
 		{
 			out += ",\"pins\":";	NqUtil::JsonStringArray(out, k.pins);

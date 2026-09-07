@@ -1086,11 +1086,13 @@ bool NqInspector::DrawParams(const NqCatalog::SKind* k, SNqValue& params, LPCSTR
 	bool ch = false;
 	if (!params.IsTable()) params = SNqValue::Table();
 	ImGui::PushID(id_prefix);
-	// fetch and item.spawn draw one form of their own: a list of rows plus the
-	// modifiers, instead of three interleaved spellings nobody could tell apart
-	if (k->id == "objective.fetch" || k->id == "item.spawn")
+	// fetch and the item actions draw one form of their own: a list of rows plus the
+	// modifiers, instead of two interleaved spellings nobody could tell apart
+	if (k->id == "objective.fetch" || k->HasRows())
 	{
-		ch |= (k->id == "objective.fetch") ? DrawFetchParams(k, params) : DrawItemSpawnParams(k, params);
+		if (k->id == "objective.fetch")		ch |= DrawFetchParams(k, params);
+		else if (k->id == "item.spawn")		ch |= DrawItemSpawnParams(k, params);
+		else								ch |= DrawItemRowsParams(k, params);
 		for (u32 i = 0; i < params.keys.size(); ++i)
 		{
 			if (k->Param(params.keys[i].c_str())) continue;
@@ -1654,6 +1656,16 @@ bool NqInspector::DrawSpawnSpec(LPCSTR label, SNqValue& v)
 }
 
 // The rows of "what to bring": a section with a count, or one concrete object.
+// Does the row schema carry anything beyond what to make and how many? item.spawn's does;
+// item.give's and item.take's rows are section and count and fold away nothing.
+static bool RowsHaveState(const NqCatalog::SKind* k)
+{
+	if (!k) return false;
+	for (u32 i = 0; i < k->row_params.size(); ++i)
+		if (k->row_params[i].name != "section" && k->row_params[i].name != "count") return true;
+	return false;
+}
+
 // One line under a row that carries state, so a three-row list stays readable folded.
 static xr_string RowStateSummary(const SNqValue& e)
 {
@@ -1820,9 +1832,12 @@ bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok, const
 	ImGui::PushID(label);
 	xr_string lt;
 	ImGui::TextUnformatted(Shown(label, lt));
-	if (objects_ok)		Hint("A row is either N items of a section, or one concrete object (ref/story id). Rows mix freely");
-	else if (rows_of)	Hint("A row is N items of a section with its own state. An ammo section counts in boxes");
-	else				Hint("A row is N items of a section. An ammo section counts in boxes");
+	const NqCatalog::SParam* row_count = rows_of ? rows_of->RowParam("count") : 0;
+	const bool count_or_all = row_count && row_count->type == "count_or_all";
+	if (objects_ok)							Hint("A row is either N items of a section, or one concrete object (ref/story id). Rows mix freely");
+	else if (rows_of && RowsHaveState(rows_of))	Hint("A row is N items of a section with its own state. An ammo section counts in boxes");
+	else if (count_or_all)					Hint("A row is N items of a section, or all of them. An ammo section counts in boxes");
+	else									Hint("A row is N items of a section. An ammo section counts in boxes");
 	if (!v.IsTable()) { if (!v.IsNil()) { v = SNqValue::Table(); ch = true; } }
 	int kill = -1;
 	for (u32 i = 0; v.IsTable() && i < v.arr.size(); ++i)
@@ -1842,24 +1857,48 @@ bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok, const
 				e.Set("section", SNqValue::String(sect));
 				ch = true;
 			}
-			int count = (int)e.GetNumber("count", 1);
-			// InputInt spends the item width on its own -/+ buttons first: a flat 90
-			// left about eight pixels for the digits. The steppers are measured and
-			// added on top, so the number keeps its room at any font size.
-			const float steppers = 2.0f * (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
-			ImGui::SetNextItemWidth(70.f + steppers);
-			if (ImGui::InputInt("count##il", &count))
+			if (count_or_all)
 			{
-				if (count < 1) count = 1;
-				if (count == 1) e.Erase("count"); else e.Set("count", SNqValue::Number(count));
-				ch = true;
+				// A take row may say "all". Drawn narrow, like the integer row beside it:
+				// the generic string widget spans the panel and pushes the remove button
+				// off the edge. The default of 1 is not written.
+				const SNqValue* cv = e.Get("count");
+				xr_string s = !cv ? xr_string("1") : cv->IsNumber() ? NqUtil::Format("%d", (int)cv->n) : cv->AsString("");
+				char buf[32];
+				xr_strcpy(buf, sizeof buf, s.c_str());
+				ImGui::SetNextItemWidth(70.f);
+				if (ImGui::InputText("count##il", buf, sizeof buf))
+				{
+					const xr_string v = NqUtil::Trim(buf);
+					bool digits = !v.empty();
+					for (u32 ci = 0; ci < v.size(); ++ci) if (!isdigit((unsigned char)v[ci])) digits = false;
+					if (v.empty() || v == "1")	e.Erase("count");
+					else if (digits)			e.Set("count", SNqValue::Number(atof(v.c_str())));
+					else						e.Set("count", SNqValue::String(v));	// "all", or a typo the validator names
+					ch = true;
+				}
+			}
+			else
+			{
+				int count = (int)e.GetNumber("count", 1);
+				// InputInt spends the item width on its own -/+ buttons first: a flat 90
+				// left about eight pixels for the digits. The steppers are measured and
+				// added on top, so the number keeps its room at any font size.
+				const float steppers = 2.0f * (ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x);
+				ImGui::SetNextItemWidth(70.f + steppers);
+				if (ImGui::InputInt("count##il", &count))
+				{
+					if (count < 1) count = 1;
+					if (count == 1) e.Erase("count"); else e.Set("count", SNqValue::Number(count));
+					ch = true;
+				}
 			}
 		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton("x")) kill = (int)i;
 		// the state of this row, folded away unless it already carries some: three rows
 		// with every field open is a wall nobody reads
-		if (rows_of && !e.Has("item"))
+		if (rows_of && RowsHaveState(rows_of) && !e.Has("item"))
 		{
 			const xr_string sum = RowStateSummary(e);
 			ImGui::SetNextItemOpen(!sum.empty(), ImGuiCond_FirstUseEver);
@@ -1902,12 +1941,12 @@ bool NqInspector::DrawItemList(LPCSTR label, SNqValue& v, bool objects_ok, const
 
 // item.spawn as ONE form: what (the rows), where (one destination), the state of
 // every instance, and the name. Mirrors fetch so the two read alike.
-bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params)
+// The list of rows of an item action. The one-line spelling (section + count, and for
+// item.spawn its own state) is shown as a one-row list; the first edit rewrites it as
+// `items`, untouched assets keep their spelling.
+bool NqInspector::DrawItemRowsParams(const NqCatalog::SKind* k, SNqValue& params)
 {
 	bool ch = false;
-
-	// The one-line spelling (section + its own state) is shown as a one-row list; the first
-	// edit rewrites it as `items`, untouched assets keep their spelling.
 	SNqValue rows = SNqValue::Nil();
 	if (const SNqValue* it = params.Get("items")) rows = *it;
 	else if (params.Has("section"))
@@ -1915,8 +1954,8 @@ bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& param
 		rows = SNqValue::Table();
 		SNqValue e = SNqValue::Table();
 		e.Set("section", SNqValue::String(params.GetString("section")));
-		const double n = params.GetNumber("count", 1);
-		if (n > 1) e.Set("count", SNqValue::Number(n));
+		if (const SNqValue* cnt = params.Get("count"))
+			if (!(cnt->IsNumber() && cnt->n == 1)) e.Set("count", *cnt);
 		for (u32 i = 0; k && i < k->row_params.size(); ++i)
 		{
 			const xr_string& rn = k->row_params[i].name;
@@ -1925,16 +1964,22 @@ bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& param
 		}
 		rows.Push(e);
 	}
-	if (DrawItemList("items *##spawn_items", rows, false, k))
+	if (DrawItemList("items *##rows_items", rows, false, k))
 	{
 		ch = true;
 		params.Erase("section");
 		params.Erase("count");
-		// the state moved into the row it belongs to; nothing of it stays on the action
+		// whatever the rows carry moved into them; nothing of it stays on the action
 		for (u32 i = 0; k && i < k->row_params.size(); ++i) params.Erase(k->row_params[i].name.c_str());
 		if (rows.IsNil() || (rows.IsTable() && rows.arr.empty())) params.Erase("items");
 		else params.Set("items", rows);
 	}
+	return ch;
+}
+
+bool NqInspector::DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params)
+{
+	bool ch = DrawItemRowsParams(k, params);
 
 	ImGui::Separator();
 	{

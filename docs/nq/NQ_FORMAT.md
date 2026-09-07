@@ -85,10 +85,13 @@ spot; their state is read by the `objective_status` condition. With
 `auto_complete` on (the default) the task completes itself once every step is
 `completed`; a failed step leaves the task open.
 
-A list parameter whose kind declares a **row schema** carries per-row state.
-`item.spawn` is the one that does today: a row is what to make and everything
-about the thing it makes, so two rifles and a medkit in one list do not share a
-condition.
+A list parameter whose kind declares a **row schema** is typed row by row.
+Three kinds do: `item.give` and `item.take` take plain rows (a section and a
+count - `"all"` for a take row), and `item.spawn` adds state to its rows: a row
+is what to make and everything about the thing it makes, so two rifles and a
+medkit in one list do not share a condition. All three accept the one-line
+spelling `section` + `count` as well - it IS one row - and refuse both
+spellings at once (`E022`).
 
 ```lua
 { kind = "item.spawn", params = {
@@ -138,7 +141,7 @@ refused (`E022`).
 | `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing |
 | `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ spawn = { section, smart\|place, restrictor, spread, ref, hold } }` | only on `objective.kill`; `spawn` creates the squad on entry, `ref` saves it, `hold = true` pins it in place |
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` \| `{ ref = "anchor" }` \| `{ actor = true, distance = 2 }` | `radius` defaults to 5; `ref` is where an object this quest created stands; `actor` is that many metres in front of the player, resolved when the action runs — a spawn point, not a destination (refused on `objective.reach`, `actor_in_place`, `actor.teleport`) |
-| `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once. A kind that CREATES the items declares a **row schema** in the catalog (`rows` + `row.<name>`), and then each row also carries its own state — see `item.spawn` |
+| `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once. A kind that CREATES or CONSUMES the items declares a **row schema** in the catalog (`rows` + `row.<name>`): its rows are sections only, typed by that schema — `item.give`, `item.take` (a row may say `count = "all"`), `item.spawn` (each row carries its own state) |
 | `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick, state, within, beyond, scatter } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` (its `spawn`) and `item.spawn` (its `where`) put the loot they create; radii are measured from the player |
 | `cases_cond` | `{ { name = "yes", cond = { … } }, … }` | case names = pins |
 | `cases_weight` | `{ { name = "a", weight = 3 }, … }` | the default weight is 1, must be > 0 |
@@ -278,8 +281,8 @@ else is plumbing around it. When a stage without waiting is needed —
 
 | Kind | Title | Parameters | Description |
 |---|---|---|---|
-| `item.give` | Give item | **`section: item_section`**, `count: int = 1` | Gives the player items of the section. In dialog: handed over by the NPC with a notification. count is in items (ammo: boxes). |
-| `item.take` | Take item | **`section: item_section`**, `count: count_or_all = 1` | Takes items of the section from the player. count = all takes everything. count is in items (ammo: boxes). |
+| `item.give` | Give items | `section: item_section`, `count: int = 1`, `items: item_list` | Gives the player items: one section with a count, or a list of rows. In dialog: handed over by the NPC with a notification. count is in items (ammo: boxes). |
+| `item.take` | Take items | `section: item_section`, `count: count_or_all = 1`, `items: item_list` | Takes items from the player: one section with a count, or a list of rows. count = all takes every one. count is in items (ammo: boxes). |
 | `item.spawn` | Spawn items | `section: item_section`, `count: int = 1`, `items: item_list`, **`where: loot_spawn`**, `condition: float = 1`, `ammo: int`, `ammo_kind: item_section`, `upgrades: string`, `ref: ref_name` | Creates items where you say - the same destination forms as fetch. Every row carries its own state, full by default. |
 | `money.give` | Give money | **`amount: int`** | Gives the player money. |
 | `money.take` | Take money | **`amount: int`** | Takes money from the player. |
