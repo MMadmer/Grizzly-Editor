@@ -237,6 +237,8 @@ void Reap()
 //------------------------------------------------------------------------------
 // starting a job - the one path the dialog and MCP share
 //------------------------------------------------------------------------------
+bool ManageRunning();	// the release list below: publishing and deleting never run side by side
+
 struct SOptions
 {
 	xr_string	tag, title, notes;
@@ -279,6 +281,7 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	if (!EditorProject::Active())	{ err = "no active project"; return false; }
 	Reap();
 	if (JobRunning())				{ err = "a release is being published already"; return false; }
+	if (ManageRunning())			{ err = "the release list is busy - try again in a moment"; return false; }
 
 	EditorMod::SManifest m;
 	if (!EditorMod::Load(EditorProject::Root(), m)) { err = "mod.ltx not found in the project"; return false; }
@@ -754,6 +757,390 @@ void DrawResult()
 	ImGui::EndPopup();
 }
 
+//------------------------------------------------------------------------------
+// the releases that are already out: the list, and deleting one
+//------------------------------------------------------------------------------
+enum EManageState { msIdle, msRunning, msDone, msFailed };
+
+struct SManageView
+{
+	EManageState							state;
+	xr_string								repo;
+	bool									deleting;	// the job in flight deletes before it lists
+	xr_string								error;		// why the last job failed
+	xr_string								note;		// what a deletion did
+	bool									tag_kept;	// ...and whether it left the tag behind
+	bool									listed;		// `releases` is GitHub's answer, not an empty start
+	xr_vector<EditorGithub::SReleaseInfo>	releases;
+
+	SManageView() : state(msIdle), deleting(false), tag_kept(false), listed(false) {}
+};
+
+std::mutex				s_ManageLock;
+SManageView				s_Manage;			// guarded by s_ManageLock
+std::thread				s_ManageThread;
+EditorGithub::CCancel	s_ManageCancel;
+
+SManageView ManageSnapshot()
+{
+	std::lock_guard<std::mutex> guard(s_ManageLock);
+	return s_Manage;
+}
+
+bool ManageRunning() { return msRunning == ManageSnapshot().state; }
+
+void ManageReap()
+{
+	if (!ManageRunning() && s_ManageThread.joinable()) s_ManageThread.join();
+}
+
+// delete_id / delete_tag name what goes before the list is read; neither = list only
+void ManageWorker(xr_string repo, xr_string token, u64 delete_id, xr_string delete_tag)
+{
+	xr_string error, note;
+	bool tag_kept = false;
+	xr_vector<EditorGithub::SReleaseInfo> releases;
+
+	if (!delete_id && !delete_tag.empty() && EditorGithub::ListReleases(repo, token, s_ManageCancel, releases, error))
+	{
+		// a tag names one published release, but any number of drafts may share it
+		u32 matches = 0;
+		for (u32 i = 0; i < releases.size(); ++i)
+			if (releases[i].tag == delete_tag) { ++matches; delete_id = releases[i].id; }
+		if (!matches)
+			error = NqUtil::Format("no release carries the tag %s", delete_tag.c_str());
+		else if (matches > 1)
+		{
+			error = NqUtil::Format("%u releases carry the tag %s - name one by its id", matches, delete_tag.c_str());
+			delete_id = 0;
+		}
+	}
+	if (error.empty() && delete_id)
+	{
+		EditorGithub::SDeleteResult result;
+		if (EditorGithub::DeleteRelease(repo, token, delete_id, s_ManageCancel, result, error))
+		{
+			if (result.draft)
+				note = NqUtil::Format("Draft release %s is deleted.", result.tag.c_str());
+			else if (result.tag_removed)
+				note = NqUtil::Format("Release %s and its tag are deleted.", result.tag.c_str());
+			else
+			{
+				tag_kept = true;
+				note = NqUtil::Format("Release %s is deleted, its tag is not: %s", result.tag.c_str(), result.tag_note.c_str());
+			}
+		}
+	}
+
+	// whatever happened above, the window shows what GitHub has now
+	xr_string list_error;
+	const bool listed = EditorGithub::ListReleases(repo, token, s_ManageCancel, releases, list_error);
+	if (error.empty()) error = list_error;
+	EditorGithub::WipeString(token);
+
+	std::lock_guard<std::mutex> guard(s_ManageLock);
+	s_Manage.state		= error.empty() ? msDone : msFailed;
+	s_Manage.error		= error;
+	s_Manage.note		= note;
+	s_Manage.tag_kept	= tag_kept;
+	if (listed)
+	{
+		s_Manage.listed		= true;
+		s_Manage.releases	= releases;
+	}
+}
+
+bool ManageStart(u64 delete_id, const xr_string& delete_tag, xr_string& err)
+{
+	err.clear();
+	if (!EditorProject::Active())	{ err = "no active project"; return false; }
+	Reap();
+	ManageReap();
+	if (JobRunning())				{ err = "a release is being published - wait for it to finish"; return false; }
+	if (ManageRunning())			{ err = "the release list is busy - try again in a moment"; return false; }
+
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m)) { err = "mod.ltx not found in the project"; return false; }
+	if (m.update_github.empty() || !EditorMod::ValidateGithubRepo(m.update_github.c_str()))
+	{
+		err = "no GitHub repository in the manifest: set it in Mod > Publish Release or Mod > Edit Manifest "
+			  "(MCP: mod_set_manifest github=owner/repo)";
+		return false;
+	}
+	EditorGithub::SAccount account;
+	EditorGithub::ResolveAccount(account);
+	if (EditorGithub::asNone == account.source)
+	{
+		err = "not signed in to GitHub: sign in from Mod > Publish Release, sign in to the GitHub CLI (gh auth login) "
+			  "or set GH_TOKEN";
+		return false;
+	}
+
+	const bool deleting = delete_id || !delete_tag.empty();
+	{
+		std::lock_guard<std::mutex> guard(s_ManageLock);
+		// another repository's releases are not this one's
+		if (s_Manage.repo != m.update_github)
+		{
+			s_Manage.releases.clear();
+			s_Manage.listed = false;
+		}
+		s_Manage.state		= msRunning;
+		s_Manage.repo		= m.update_github;
+		s_Manage.deleting	= deleting;
+		s_Manage.error.clear();
+		s_Manage.note.clear();
+		s_Manage.tag_kept	= false;
+	}
+	if (deleting)
+		Msg("* [XMS] deleting release %s from %s", delete_id ? NqUtil::Format("#%llu", delete_id).c_str() : delete_tag.c_str(),
+			m.update_github.c_str());
+	s_ManageCancel.Reset();
+	s_ManageThread = std::thread(&ManageWorker, m.update_github, account.token, delete_id, delete_tag);
+	return true;
+}
+
+xr_string SizeText(u64 bytes)
+{
+	return bytes >= (1u << 20)	? NqUtil::Format("%.1f MB", double(bytes) / 1048576.0)
+								: NqUtil::Format("%.0f KB", double(bytes) / 1024.0);
+}
+
+LPCSTR ReleaseStateText(const EditorGithub::SReleaseInfo& r)
+{
+	return r.draft ? "Draft" : r.prerelease ? "Pre-release" : r.latest ? "Latest" : "";
+}
+
+const char* kTitleReleases	= "XFined Editor - Releases";
+const char* kTitleDelete	= "XFined Editor - Delete Release";
+
+bool							s_WantReleases	= false;
+bool							s_WantDelete	= false;
+u64								s_SelectedId	= 0;
+EditorGithub::SReleaseInfo		s_DeleteTarget;		// what the confirmation names
+xr_string						s_DeleteNext;		// the release players fall back to, when the target is the latest
+
+// the confirmation names this release; when it is the latest one, also what players get next
+void PrepareDelete(const SManageView& view, const EditorGithub::SReleaseInfo& target)
+{
+	s_DeleteTarget = target;
+	s_DeleteNext.clear();
+	// the list is newest first: the first other release players may receive is the fallback
+	for (u32 i = 0; i < view.releases.size() && s_DeleteNext.empty(); ++i)
+	{
+		const EditorGithub::SReleaseInfo& r = view.releases[i];
+		if (r.id != target.id && !r.draft && !r.prerelease) s_DeleteNext = r.tag;
+	}
+	s_WantReleases = false;
+	s_WantDelete = true;
+}
+
+void DrawReleases()
+{
+	if (!s_WantReleases) return;
+	ManageReap();
+	const SManageView view = ManageSnapshot();
+	const float em = ImGui::GetFontSize();
+	if (!ImGui::BeginPopupModal(kTitleReleases, &s_WantReleases, ImGuiWindowFlags_AlwaysAutoResize, true))
+		return;
+
+	const bool busy = msRunning == view.state;
+	ImGui::Text("Repository: %s", view.repo.c_str());
+	if (busy)
+	{
+		ImGui::SameLine();
+		ImGui::TextDisabled(view.deleting ? "- deleting..." : "- loading...");
+	}
+	if (!view.note.empty())
+		ImGui::TextColored(view.tag_kept ? ImVec4(1.f, 0.8f, 0.3f, 1.f) : ImVec4(0.6f, 0.9f, 0.6f, 1.f), "%s", view.note.c_str());
+	if (!view.error.empty())
+	{
+		ImGui::PushTextWrapPos(em * 46.f);
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
+		ImGui::PopTextWrapPos();
+	}
+
+	const EditorGithub::SReleaseInfo* selected = 0;
+	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV |
+								  ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+	if (ImGui::BeginTable("##releases", 5, flags, ImVec2(em * 46.f, em * 14.f)))
+	{
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Tag", 0, 2.f);
+		ImGui::TableSetupColumn("Title", 0, 4.f);
+		ImGui::TableSetupColumn("State", 0, 1.6f);
+		ImGui::TableSetupColumn("Published (UTC)", 0, 2.6f);
+		ImGui::TableSetupColumn("Files", 0, 2.2f);
+		ImGui::TableHeadersRow();
+		for (u32 i = 0; i < view.releases.size(); ++i)
+		{
+			const EditorGithub::SReleaseInfo& r = view.releases[i];
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::PushID((int)i);
+			const bool is_selected = r.id == s_SelectedId;
+			if (ImGui::Selectable(r.tag.empty() ? "(no tag)" : r.tag.c_str(), is_selected, ImGuiSelectableFlags_SpanAllColumns))
+				s_SelectedId = r.id;
+			ImGui::PopID();
+			if (is_selected) selected = &r;
+			ImGui::TableNextColumn(); ImGui::TextUnformatted(r.title.c_str());
+			ImGui::TableNextColumn(); ImGui::TextUnformatted(ReleaseStateText(r));
+			ImGui::TableNextColumn(); ImGui::TextUnformatted(r.published.empty() ? "-" : r.published.c_str());
+			ImGui::TableNextColumn(); ImGui::Text("%u, %s", (u32)r.assets.size(), SizeText(r.bytes).c_str());
+		}
+		ImGui::EndTable();
+	}
+	if (view.listed && view.releases.empty() && !busy)
+		ImGui::TextDisabled("This repository has no releases yet.");
+
+	ImGui::BeginDisabled(busy || !selected);
+	if (ImGui::Button("Delete..."))
+	{
+		PrepareDelete(view, *selected);
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndDisabled();
+	Hint("Deletes the selected release and its git tag from GitHub. Asks first.");
+	ImGui::SameLine();
+	ImGui::BeginDisabled(busy);
+	if (ImGui::Button("Refresh"))
+	{
+		xr_string err;
+		if (!ManageStart(0, "", err))
+		{
+			std::lock_guard<std::mutex> guard(s_ManageLock);
+			s_Manage.error = err;
+		}
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button(selected ? "Open Release Page" : "Open on GitHub"))
+	{
+		const xr_string url = selected ? selected->url : EditorGithub::ReleasesPage(view.repo.c_str());
+		// GitHub's own pages only: the address of a release comes over the network
+		if (0 == strncmp(url.c_str(), "https://github.com/", 19))
+			::ShellExecuteA(0, "open", url.c_str(), 0, 0, SW_SHOWNORMAL);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Close"))
+	{
+		s_WantReleases = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+}
+
+void DrawDeleteConfirm()
+{
+	if (!s_WantDelete) return;
+	const bool was_wanted = s_WantDelete;
+	if (!ImGui::BeginPopupModal(kTitleDelete, &s_WantDelete, ImGuiWindowFlags_AlwaysAutoResize, true))
+	{
+		// the caption cross: back to the list, nothing deleted
+		if (was_wanted && !s_WantDelete) s_WantReleases = true;
+		return;
+	}
+
+	const EditorGithub::SReleaseInfo& r = s_DeleteTarget;
+	const SManageView view = ManageSnapshot();
+	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.f);
+	ImGui::Text("Delete %s %s \"%s\" from %s?", r.draft ? "draft release" : "release", r.tag.c_str(), r.title.c_str(),
+		view.repo.c_str());
+	ImGui::Spacing();
+	ImGui::TextUnformatted("Removed from GitHub for good:");
+	ImGui::BulletText("the release with its %u file(s), %s", (u32)r.assets.size(), SizeText(r.bytes).c_str());
+	if (!r.draft) ImGui::BulletText("the git tag %s", r.tag.c_str());
+	ImGui::Spacing();
+	if (r.latest)
+	{
+		if (s_DeleteNext.empty())
+			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "It is the latest release. Players are offered no update until another release is published.");
+		else
+			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "It is the latest release. GitHub then serves %s to players.", s_DeleteNext.c_str());
+	}
+	if (!r.draft && !r.prerelease)
+		ImGui::TextUnformatted("Players who already have this version keep it, and a release published again under the same version does not reach them.");
+	ImGui::TextUnformatted("GitHub keeps no copy: this cannot be undone.");
+	ImGui::PopTextWrapPos();
+	ImGui::Separator();
+
+	// Cancel is the default: Enter and Escape both back out
+	const bool confirm = ImGui::Button("Delete", ImVec2(120, 0));
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0)) ||
+						ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+						ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+	ImGui::SetItemDefaultFocus();
+
+	if (confirm)
+	{
+		xr_string err;
+		if (!ManageStart(r.id, "", err))
+		{
+			std::lock_guard<std::mutex> guard(s_ManageLock);
+			s_Manage.error = err;
+		}
+		s_SelectedId = 0;
+	}
+	if (confirm || cancel)
+	{
+		s_WantDelete = false;
+		s_WantReleases = true;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+}
+
+void ReleasesJson(xr_string& out)
+{
+	ManageReap();
+	const SManageView view = ManageSnapshot();
+	static const char* names[] = { "idle", "running", "done", "failed" };
+	out = msFailed == view.state ? "{\"ok\":false" : "{\"ok\":true";
+	JsonField(out, "state", names[view.state]);
+	out += msRunning == view.state ? ",\"pending\":true" : ",\"pending\":false";
+	JsonField(out, "repo", view.repo.c_str());
+	JsonField(out, "note", view.note.c_str());
+	out += view.tag_kept ? ",\"tag_kept\":true" : ",\"tag_kept\":false";
+	JsonField(out, "error", view.error.c_str());
+	out += view.listed ? ",\"listed\":true,\"releases\":[" : ",\"listed\":false,\"releases\":[";
+	for (u32 i = 0; i < view.releases.size(); ++i)
+	{
+		const EditorGithub::SReleaseInfo& r = view.releases[i];
+		out += NqUtil::Format("%s{\"id\":%llu", i ? "," : "", r.id);
+		JsonField(out, "tag", r.tag.c_str());
+		JsonField(out, "title", r.title.c_str());
+		out += NqUtil::Format(",\"draft\":%s,\"prerelease\":%s,\"latest\":%s", r.draft ? "true" : "false",
+			r.prerelease ? "true" : "false", r.latest ? "true" : "false");
+		JsonField(out, "published", r.published.c_str());
+		JsonField(out, "url", r.url.c_str());
+		out += NqUtil::Format(",\"bytes\":%llu,\"assets\":[", r.bytes);
+		for (u32 a = 0; a < r.assets.size(); ++a)
+		{
+			out += a ? ",\"" : "\"";
+			JsonAppend(out, r.assets[a].c_str());
+			out += "\"";
+		}
+		out += "]}";
+	}
+	out += "]}";
+}
+
+// "id" as a bare number or a quoted one
+u64 ArgU64(LPCSTR raw, LPCSTR field)
+{
+	char pat[64];
+	sprintf_s(pat, "\"%s\"", field);
+	const char* k = raw ? strstr(raw, pat) : 0;
+	if (!k) return 0;
+	const char* c = strchr(k + xr_strlen(pat), ':');
+	if (!c) return 0;
+	do ++c; while (*c == ' ' || *c == '"');
+	u64 value = 0;
+	for (; *c >= '0' && *c <= '9'; ++c) value = value * 10 + (u64)(*c - '0');
+	return value;
+}
+
 void StatusJson(xr_string& out)
 {
 	Reap();
@@ -775,7 +1162,7 @@ void StatusJson(xr_string& out)
 	out += "}";
 }
 
-// the source alone: a token never leaves through MCP
+// the source alone: a token goes in through MCP (save_token) and never comes out
 void AccountJson(xr_string& out)
 {
 	EditorGithub::SAccount account;
@@ -785,8 +1172,8 @@ void AccountJson(xr_string& out)
 	out += EditorGithub::DeviceSignInAvailable() ? ",\"device_sign_in\":true}" : ",\"device_sign_in\":false}";
 }
 
-// The code is for a person: the caller shows it, the person confirms it on
-// GitHub, and the token goes from GitHub straight into the Credential Manager.
+// The caller gets the code, it is confirmed on GitHub, and the token goes from
+// GitHub straight into the Credential Manager.
 void SignJson(xr_string& out)
 {
 	const SSignView sign = SignSnapshot();
@@ -826,7 +1213,8 @@ void EditorPublish::ButtonText(char* dst, u32 size)
 
 void EditorPublish::RequestPublish()
 {
-	if (!CanPublish()) return;
+	// one modal at a time: two self-opening popups close each other every frame
+	if (!CanPublish() || s_WantReleases || s_WantDelete) return;
 	Reap();
 	if (JobRunning()) { s_WantProgress = true; return; }
 
@@ -854,13 +1242,33 @@ void EditorPublish::RequestPublish()
 	s_WantDialog	= true;
 }
 
+void EditorPublish::RequestReleases()
+{
+	if (!CanPublish() || s_WantDialog || s_WantResult || s_WantDelete) return;
+	Reap();
+	if (JobRunning()) { s_WantProgress = true; return; }
+	if (s_WantProgress) return;
+
+	xr_string err;
+	if (!ManageStart(0, "", err))
+	{
+		ShowResult("Cannot list the releases: " + err);
+		return;
+	}
+	s_SelectedId	= 0;
+	s_WantReleases	= true;
+}
+
 void EditorPublish::DrawUI()
 {
 	Reap();
 	if (!EditorProject::Active()) return;
 	DrawDialog();
 	DrawProgress();
-	DrawResult();
+	DrawReleases();
+	DrawDeleteConfirm();
+	// a job that ends while the release list is up waits its turn
+	if (!s_WantReleases && !s_WantDelete) DrawResult();
 }
 
 void EditorPublish::Shutdown()
@@ -869,7 +1277,47 @@ void EditorPublish::Shutdown()
 	if (s_JobThread.joinable()) s_JobThread.join();
 	s_SignCancel.Cancel();
 	if (s_SignThread.joinable()) s_SignThread.join();
+	s_ManageCancel.Cancel();
+	if (s_ManageThread.joinable()) s_ManageThread.join();
 	EditorGithub::WipeString(s_Account.token);
+}
+
+void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
+{
+	char action[32] = {};
+	if (!XFinedMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "list");
+
+	if (0 == xr_strcmp(action, "status"))	{ ReleasesJson(out); return; }
+	if (0 == xr_strcmp(action, "cancel"))
+	{
+		if (ManageRunning()) s_ManageCancel.Cancel();
+		ReleasesJson(out);
+		return;
+	}
+	const bool deleting = 0 == xr_strcmp(action, "delete");
+	if (!deleting && 0 != xr_strcmp(action, "list"))
+		{ out = "{\"ok\":false,\"error\":\"unknown action: list, delete, status or cancel expected\"}"; return; }
+
+	// MCP is the programmatic path: the caller has decided, nothing is asked
+	u64 id = 0;
+	xr_string tag;
+	if (deleting)
+	{
+		xr_vector<char> arg(xr_strlen(raw) + 1);
+		if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size())) tag = arg.data();
+		id = ArgU64(raw, "id");
+		if (!id && tag.empty())
+			{ out = "{\"ok\":false,\"error\":\"delete needs the release: 'id' or 'tag'\"}"; return; }
+	}
+	xr_string err;
+	if (!ManageStart(id, tag, err))
+	{
+		out = "{\"ok\":false,\"error\":\"";
+		JsonAppend(out, err.c_str());
+		out += "\"}";
+		return;
+	}
+	ReleasesJson(out);
 }
 
 void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
@@ -903,6 +1351,25 @@ void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 		SignJson(out);
 		return;
 	}
+	if (0 == xr_strcmp(action, "save_token"))
+	{
+		// The one request that carries a token. It goes into the Credential Manager
+		// and nowhere else: not into the answer, not into the log.
+		xr_vector<char> arg(xr_strlen(raw) + 1);
+		xr_string err;
+		const bool given = XFinedMCP::GetArg(raw, "token", arg.data(), (u32)arg.size());
+		const bool saved = given && EditorGithub::SaveToken(arg.data(), err);
+		SecureZeroMemory(arg.data(), arg.size());
+		if (!saved)
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			JsonAppend(out, given ? err.c_str() : "save_token needs 'token'");
+			out += "\"}";
+			return;
+		}
+		AccountJson(out);
+		return;
+	}
 	if (0 == xr_strcmp(action, "sign_out"))
 	{
 		SignStop();
@@ -912,7 +1379,7 @@ void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 	}
 	if (0 != xr_strcmp(action, "start"))
 	{
-		out = "{\"ok\":false,\"error\":\"unknown action: start, status, cancel, account, sign_in, sign_in_status or sign_out expected\"}";
+		out = "{\"ok\":false,\"error\":\"unknown action: start, status, cancel, account, save_token, sign_in, sign_in_status or sign_out expected\"}";
 		return;
 	}
 

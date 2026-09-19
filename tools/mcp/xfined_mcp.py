@@ -224,26 +224,29 @@ TOOLS = [
                        "was packaged (name, size, SHA-256), and only then the draft is published as the latest "
                        "release, so players never see a release that is half there. A tag that is already "
                        "published is refused - raise the version; a draft an interrupted attempt left is reused. "
-                       "The account is never an argument: it comes from XFINED_GITHUB_TOKEN / GH_TOKEN / "
-                       "GITHUB_TOKEN, a token saved from Mod > Publish Release, or the GitHub CLI (gh auth login), "
-                       "in that order. action: 'start' (default) packages, starts the upload and - with wait, the "
+                       "The account comes from XFINED_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN, a saved token "
+                       "(action 'save_token' or Mod > Publish Release; Windows Credential Manager), or the GitHub "
+                       "CLI (gh auth login), in that order. action: 'start' (default) packages, starts the upload and - with wait, the "
                        "default - follows it to the end; 'status' reports a running or finished job "
                        "(state idle|uploading|done|failed|cancelled, stage, sent, total, url, served, warnings, "
                        "error); 'cancel' stops it before anything is published; 'account' tells whether and how "
                        "the editor is signed in. 'served' = the address the game asks already returns the new "
                        "descriptor. An upload that outlasts the wait comes back with pending=true - ask again "
-                       "with action='status'. Signing in is for a person: 'sign_in' starts GitHub's device "
-                       "sign-in and returns user_code and verification_uri - show both to the user, who confirms "
-                       "the code on GitHub; 'sign_in_status' reports starting|waiting|done|failed; the token "
-                       "goes from GitHub into the Windows Credential Manager and is never part of an answer. "
-                       "'sign_out' forgets that saved token (a GitHub CLI or environment sign-in is not touched). "
+                       "with action='status'. Two ways to sign in from here: 'save_token' stores the 'token' it "
+                       "is given (a fine-grained token needs Contents: Read and write on the repository) - it goes "
+                       "into the Windows Credential Manager and is never echoed or logged; 'sign_in' starts "
+                       "GitHub's device sign-in and returns user_code and verification_uri to confirm on GitHub, "
+                       "'sign_in_status' reports starting|waiting|done|failed. 'sign_out' forgets the saved token "
+                       "(a GitHub CLI or environment sign-in is not touched). "
                        "The device sign-in exists only in a build that has its OAuth client id "
                        "('account' says device_sign_in).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string",
-                           "enum": ["start", "status", "cancel", "account", "sign_in", "sign_in_status", "sign_out"]},
+                           "enum": ["start", "status", "cancel", "account", "save_token", "sign_in", "sign_in_status",
+                                    "sign_out"]},
+                "token": {"type": "string", "description": "save_token: the GitHub token to store"},
                 "tag": {"type": "string", "description": "git tag of the release; omit = v<version>"},
                 "title": {"type": "string", "description": "release title; omit = '<module name> <version>'"},
                 "notes": {"type": "string", "description": "release notes, Markdown"},
@@ -252,6 +255,47 @@ TOOLS = [
                 "requires_game": {"type": "string", "description": "lowest Dead Air: Refined version the release runs on, MAJOR.MINOR.PATCH; "
                                                                    "omit = the linked game's version, empty = no requirement"},
                 "wait": {"type": "boolean", "description": "follow the upload until it ends or about 150 s pass (default true)"},
+            },
+        },
+    },
+    {
+        "name": "xfined_mod_releases",
+        "description": "The releases the manifest's 'github' repository already holds, newest first, drafts included: "
+                       "releases [{id, tag, title, draft, prerelease, latest, published (UTC), url, bytes, assets}]. "
+                       "'latest' marks the one release the game reads. Reads only; xfined_mod_release_delete removes "
+                       "one. The list is fetched on a worker: with wait (default) the bridge follows it to the end, "
+                       "otherwise ask again with action='status'. The account comes from where xfined_mod_publish "
+                       "takes it.",
+        "annotations": {"title": "List GitHub releases of the mod", "readOnlyHint": True, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "status", "cancel"]},
+                "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
+            },
+        },
+    },
+    {
+        "name": "xfined_mod_release_delete",
+        "description": "Delete ONE release of the manifest's 'github' repository, named by 'tag' or 'id', and then its git "
+                       "tag - in that order, because a published release whose tag vanishes first turns into a draft "
+                       "instead of going away. A draft owns no tag, so none is touched for it; several drafts may share "
+                       "a tag, and then only 'id' names one. PERMANENT: GitHub keeps no copy of a deleted release, its "
+                       "files or its tag. The editor asks NOTHING on this path - no window, no confirmation - so the "
+                       "permission is the caller's business: call it when the user explicitly asked for this deletion, "
+                       "and when they did not, ask them in the conversation first. Deleting the latest release makes "
+                       "GitHub serve the newest remaining one to players; a player who already has the deleted version "
+                       "keeps it, and a release published again under the same version does not reach that player. The "
+                       "answer carries 'note' (what was done), 'tag_kept' (the release is gone but GitHub refused to "
+                       "delete the tag - the reason is in the note) and the refreshed list.",
+        "annotations": {"title": "Delete a GitHub release of the mod and its tag", "readOnlyHint": False,
+                        "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tag": {"type": "string", "description": "tag of the release, e.g. v1.0.2"},
+                "id": {"type": "integer", "description": "id of the release, from xfined_mod_releases - the only way to name a draft that shares its tag"},
+                "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
             },
         },
     },
@@ -1377,6 +1421,8 @@ CMD_MAP = {
     "xfined_mod_export": "mod_export",
     "xfined_mod_package": "mod_package",
     "xfined_mod_publish": "mod_publish",
+    "xfined_mod_releases": "mod_releases",
+    "xfined_mod_release_delete": "mod_releases",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",
     "xfined_theme": "theme",
@@ -1521,10 +1567,13 @@ def tool_result(name: str, args: dict) -> dict:
         }
         # a tool result like any other: a bare dict here reaches the client as an answer with no content
         return {"content": [{"type": "text", "text": json.dumps(refusal, ensure_ascii=False)}], "isError": True}
-    if name == "xfined_mod_publish":
-        # 'wait' is this bridge's own: the editor answers at once and uploads on a worker
+    if name in ("xfined_mod_publish", "xfined_mod_releases", "xfined_mod_release_delete"):
+        # 'wait' is this bridge's own: the editor answers at once and works on a worker
         args = dict(args)
         wait = args.pop("wait", True)
+    if name == "xfined_mod_release_delete":
+        # a tool of its own so that a client can tell the one destructive call from the reads
+        args["action"] = "delete"
     data = editor_call(CMD_MAP[name], args)
     follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
     if follows_job and data.get("ok") and data.get("pending"):
@@ -1543,6 +1592,11 @@ def tool_result(name: str, args: dict) -> dict:
         while data.get("state") == "starting" and time.monotonic() < deadline:
             time.sleep(0.25)
             data = editor_call("mod_publish", {"action": "sign_in_status"})
+    if name in ("xfined_mod_releases", "xfined_mod_release_delete") and wait and data.get("ok") and data.get("pending"):
+        deadline = time.monotonic() + 90.0
+        while data.get("pending") and time.monotonic() < deadline:
+            time.sleep(0.25)
+            data = editor_call("mod_releases", {"action": "status"})
     if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
         deadline = time.monotonic() + 1.0
         while data.get("pending") and time.monotonic() < deadline:

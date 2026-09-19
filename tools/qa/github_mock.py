@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local stand-in for the GitHub endpoints the editor's release publisher uses.
 
-Covers the REST API (repository, releases, release assets, uploads), the
+Covers the REST API (repository, releases, release assets, uploads, tag refs), the
 anonymous web download path (releases/latest/download -> CDN redirect), the
 OAuth device flow and a set of fault switches (see --help). All state lives in
 memory. Self-test: test_github_mock.py.
@@ -18,6 +18,10 @@ Behaviour worth knowing before writing a client against it:
     header, whatever its value. Web, CDN and device-flow requests must show
     false: a true there is a client leaking its token.
   * /__state and /__shutdown are harness traffic and are not logged.
+  * Publishing a release creates its git tag, deleting the release leaves the tag
+    behind, and deleting the tag of a release that is still published turns that
+    release into a draft - all three as on GitHub, which is why a client that
+    removes a release removes the release first and the tag second.
 """
 
 from __future__ import annotations
@@ -90,6 +94,10 @@ def read_text(body: dict, key: str, default: str) -> str:
     return value
 
 
+def timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def parse_range(header: str | None, total: int) -> tuple[int, int] | None:
     """Resolve a single bytes range. None means the whole body: no header, or a form this mock ignores."""
     unit, _, spec = (header or "").partition("=")
@@ -132,6 +140,8 @@ class Release:
     draft: bool
     prerelease: bool
     untagged: str
+    created_at: str = ""
+    published_at: str | None = None
     assets: list[Asset] = field(default_factory=list)
 
     @property
@@ -153,6 +163,7 @@ class GitHubMock:
         self.port = 0
         self.log_file = None
         self.releases: list[Release] = []
+        self.tags: set[str] = set()
         self.latest_id: int | None = None
         # CDN lag: the web download path serves `stale_id` for `stale_left` more requests.
         self.stale_id: int | None = None
@@ -231,6 +242,8 @@ class GitHubMock:
             "body": release.body,
             "draft": release.draft,
             "prerelease": release.prerelease,
+            "created_at": release.created_at,
+            "published_at": release.published_at,
             "html_url": f"{self.origin}/{self.args.repo}/releases/tag/{quote(release.slug)}",
             "upload_url": f"{self.origin}/upload/repos/{self.args.repo}/releases/{release.id}/assets{{?name,label}}",
             "assets": [self.asset_json(release, asset, with_sha256) for asset in release.assets],
@@ -240,6 +253,7 @@ class GitHubMock:
         return {
             "latest_id": self.latest_id,
             "releases": [self.release_json(release, True) for release in reversed(self.releases)],
+            "tags": sorted(self.tags),
             "requests": list(self.requests),
             "uploads": self.uploads,
         }
@@ -247,10 +261,33 @@ class GitHubMock:
     # ---- releases -------------------------------------------------------
 
     def new_release(self, tag: str, name: str, body: str, draft: bool, prerelease: bool) -> Release:
-        release = Release(self.next_release_id, tag, name, body, draft, prerelease, secrets.token_hex(10))
+        release = Release(self.next_release_id, tag, name, body, draft, prerelease, secrets.token_hex(10), timestamp())
         self.next_release_id += 1
         self.releases.append(release)
+        self.mark_published(release)
         return release
+
+    def mark_published(self, release: Release) -> None:
+        """A release that is out has a publication time and a git tag; the tag outlives the release."""
+        if release.draft:
+            release.published_at = None
+            return
+        release.published_at = release.published_at or timestamp()
+        self.tags.add(release.tag_name)
+
+    def delete_tag(self, tag: str) -> None:
+        if tag not in self.tags:
+            raise ApiError(422, "Reference does not exist")
+        if self.args.protect_tags:
+            raise ApiError(422, "Repository rule violations found\n\nCannot delete this protected ref.")
+        self.tags.discard(tag)
+        # GitHub does not drop a release whose tag goes away: it falls back to a draft
+        release = self.published_by_tag(tag)
+        if release:
+            release.draft = True
+            release.published_at = None
+            if self.latest_id == release.id:
+                self.set_latest(self.newest_eligible_id())
 
     def new_asset(self, release: Release, name: str, content_type: str, data, sha256=None, state="uploaded") -> Asset:
         asset = Asset(self.next_asset_id, name, content_type, data, sha256 or hashlib.sha256(data).hexdigest(), state)
@@ -352,6 +389,7 @@ class GitHubMock:
         was_eligible = release.eligible
         release.tag_name, release.name, release.body = tag, name, text
         release.draft, release.prerelease = draft, prerelease
+        self.mark_published(release)
         if make_latest == "true" or (make_latest == "legacy" and release.eligible and not was_eligible):
             self.set_latest(release.id)
         elif self.latest_id == release.id and not release.eligible:
@@ -674,6 +712,13 @@ class Handler(BaseHTTPRequestHandler):
             case ("GET", ["releases", release_id, "assets"]):
                 release = mock.release_by_id(parse_id(release_id))
                 return Answer(200, [mock.asset_json(release, asset) for asset in release.assets])
+            case ("GET", ["git", "refs", "tags", *tag]) if tag:
+                if "/".join(tag) not in mock.tags:
+                    raise not_found()
+                return Answer(200, {"ref": "refs/tags/" + "/".join(tag)})
+            case ("DELETE", ["git", "refs", "tags", *tag]) if tag:
+                mock.delete_tag("/".join(tag))
+                return Answer(204)
         raise not_found()
 
     def route_upload(self, segments: list[str], query: dict) -> Answer | None:
@@ -773,6 +818,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", metavar="FILE", help="JSON list of releases to pre-create")
     parser.add_argument("--drop-upload", type=int, default=0, metavar="N", help="reset the N-th upload mid-body")
     parser.add_argument("--rename-assets", action="store_true", help="store asset names with '-' replaced by '.'")
+    parser.add_argument("--protect-tags", action="store_true", help="deleting a tag ref answers 422, as a tag ruleset does")
     parser.add_argument("--no-digest", action="store_true", help="asset JSON carries no digest")
     parser.add_argument("--corrupt-digest", metavar="SUFFIX", help="report a wrong digest for matching asset names")
     parser.add_argument("--stale-latest", type=int, default=0, metavar="N",

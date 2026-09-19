@@ -150,6 +150,25 @@ A version that is already published is refused: a player who has it never looks
 at it again, so changed files would reach nobody - raise the version. An
 interrupted upload leaves its draft on GitHub, and the next attempt picks it up.
 
+**Taking a release back.** **Releases** on the toolbar (**Mod → Manage
+Releases…**, MCP: `xfined_mod_releases` / `xfined_mod_release_delete`) lists what the repository holds, newest
+first, drafts included, and marks the one release the game reads. **Delete…**
+removes the selected release and then its git tag, so the version number is free
+again. The window names what goes and asks first, because GitHub keeps no copy:
+the release, its files and the tag are gone for good. Two things to know before
+pressing it:
+
+- Deleting the **latest** release makes GitHub serve the newest remaining one.
+  Players who have not updated yet are offered that one instead; with nothing
+  left they are offered nothing.
+- A player who already installed the deleted version keeps it, and a release
+  published again under the same number never reaches that player - the game
+  only moves to a higher version. Deleting is for a release nobody should
+  install; the fix for a release people already have is the next version.
+
+A draft that a cancelled or failed publication left behind can be deleted here
+too; publishing the same version again would have reused it anyway.
+
 Doing it by hand still works - attach **all** the files from
 `releases\<version>\` under their own names, the zip byte for byte as written
 (re-zipping moves the data and breaks the index), and publish the release as the

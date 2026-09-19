@@ -135,4 +135,44 @@ namespace EditorGithub
 
 	// owner/repo -> https://github.com/owner/repo/releases (QA: the mock's)
 	xr_string ReleasesPage	(LPCSTR repo);
+
+	//--------------------------------------------------------------------------
+	// what is already out there
+	//--------------------------------------------------------------------------
+	struct SReleaseInfo
+	{
+		u64						id;
+		xr_string				tag;
+		xr_string				title;
+		xr_string				url;
+		xr_string				published;		// "2026-09-19 12:34" UTC; empty for a draft
+		bool					draft;
+		bool					prerelease;
+		bool					latest;			// the one the game reads
+		xr_vector<xr_string>	assets;
+		u64						bytes;			// all assets together
+
+								SReleaseInfo	() : id(0), draft(false), prerelease(false), latest(false), bytes(0) {}
+	};
+
+	// newest first, drafts included - those are what a failed attempt leaves behind
+	bool	ListReleases	(const xr_string& repo, const xr_string& token, CCancel& cancel,
+							 xr_vector<SReleaseInfo>& out, xr_string& err);
+
+	struct SDeleteResult
+	{
+		xr_string		tag;
+		bool			draft;			// it was one: no tag to remove
+		bool			tag_removed;
+		xr_string		tag_note;		// why the tag is still there, when it is
+
+						SDeleteResult	() : draft(false), tag_removed(false) {}
+	};
+
+	// The release goes first and its git tag second: a published release whose tag
+	// vanishes turns into a draft instead of going away. A draft owns no tag, so
+	// none is touched for it. GitHub keeps nothing of either - there is no undo.
+	// true = the release is gone; the tag's fate is in `result`.
+	bool	DeleteRelease	(const xr_string& repo, const xr_string& token, u64 id, CCancel& cancel,
+							 SDeleteResult& result, xr_string& err);
 }

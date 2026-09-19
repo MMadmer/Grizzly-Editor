@@ -87,7 +87,9 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_mod_manifest` | XMS mod manifest of the active project: id, name, version, Mods menu metadata (`author`, `description`, `website`, `github`), `api`, `target`, target game `mode`, declared `provides_mode` list, requires/after/before/conflicts, existing module dirs |
 | `xfined_mod_set_manifest` | update mod.ltx fields: `id`/`name`/`version`/`mode` strings (`version` = 1-4 numbers separated by dots), Mods menu metadata `author`, `description` (line breaks allowed, 4095 bytes at most), `website` (`https://ap-pro.ru/...` or `https://moddb.com/...` only), `github` (`owner/repo`; a repository URL is reduced to it), `provides_mode_id`+`provides_mode_title` (declare a game mode, empty id removes — the title is what the player reads, any language), `target` (`default`/`existing`/`new`, inferred from the mode fields when omitted, but "the ordinary game" must be said out loud), `requires`/`after`/`before`/`conflicts` comma-joined lists. An invalid value answers `ok:false` and nothing is written; an empty string clears an optional key |
 | `xfined_mod_export` | export the project to `<target>/modules/<id>/` as an XMS module (no `target` = deploy to the linked game's `modules/`; **not** `mods/` — that is JSGME's folder, and a module sitting there is one JSGME offers to copy over the game); a **clean build** — the target module folder is emptied first, so nothing a previous build left can survive; refuses targets inside the game's `gamedata`; `flat=true` for a plain `gamedata_<id>` overlay + compatibility report. A module that declares a mode also gets `patch/xms_modes.xmlp`, `gamedata/configs/text/rus/<id>_modes.xml` and `scripts/mode_register.script` written for it — the checkbox that puts the mode on the new-game screen, measured against the layout the linked game really ships |
-| `xfined_mod_publish` | package the project and publish it as a GitHub release of the manifest's `github` repository - the release the game's Mods menu updates from. Draft first, every asset verified (name, size, SHA-256), then published as the latest release. Args `action` (`start` default, `status`, `cancel`, `account`, `sign_in`, `sign_in_status`, `sign_out`), `tag` (default `v<version>`), `title`, `notes`, `prerelease`, `latest` (default true), `requires_game`, `wait` (bridge only, default true). Returns `state` (`idle`/`uploading`/`done`/`failed`/`cancelled`), `pending`, `stage`, `sent`, `total`, `url`, `served`, `warnings`, `error`, and from `start` also `assets` `[{name,size,sha256}]`, `files`, `requires_game`, `baked`, `package_warnings`. The account comes from the environment, the Credential Manager or the GitHub CLI - never from an argument |
+| `xfined_mod_publish` | package the project and publish it as a GitHub release of the manifest's `github` repository - the release the game's Mods menu updates from. Draft first, every asset verified (name, size, SHA-256), then published as the latest release. Args `action` (`start` default, `status`, `cancel`, `account`, `save_token` + `token`, `sign_in`, `sign_in_status`, `sign_out`), `tag` (default `v<version>`), `title`, `notes`, `prerelease`, `latest` (default true), `requires_game`, `wait` (bridge only, default true). Returns `state` (`idle`/`uploading`/`done`/`failed`/`cancelled`), `pending`, `stage`, `sent`, `total`, `url`, `served`, `warnings`, `error`, and from `start` also `assets` `[{name,size,sha256}]`, `files`, `requires_game`, `baked`, `package_warnings`. The account comes from the environment, the Credential Manager (`save_token`) or the GitHub CLI |
+| `xfined_mod_releases` | the releases the manifest's `github` repository holds, newest first, drafts included. Reads only. Args `action` (`list` default, `status`, `cancel`), `wait` (bridge only, default true). Returns `releases` `[{id, tag, title, draft, prerelease, latest, published, url, bytes, assets}]`, `listed`, `state`, `pending`, `error` |
+| `xfined_mod_release_delete` | delete ONE of those releases, named by `tag` or `id` (only `id` names one of several drafts that share a tag), and then its git tag. Permanent - GitHub keeps no copy - and the editor asks nothing on this path; the tool carries MCP's `destructiveHint`, so a client that wants a permission asks for it on its own side. Returns `note`, `tag_kept` and the refreshed `releases` |
 | `xfined_mod_package` | package a release for the game's module updater: the descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. The index states every file's SHA-256 and the byte range of its data inside a package, read back from the finished archive - the game downloads only the files that differ. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (Recycle Bin). Returns `descriptor`, `out_dir`, `index` `{name,size,sha256}`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings`. Cancelable through `xfined_progress` |
 | `xfined_mod_export_spawn` | export placed objects as an additive spawn layer `spawn/<level>.xspawn` (`op=add` + section + world transform + visual override) — the composable way to add things to a base level; only AUTHORED objects ship (see `xfined_mark_authored`); a project-local model is staged into `gamedata/meshes/`, a model found nowhere skips its op instead of shipping a crash; args `level`, `selected_only`, `section`, `mode`. `xfined_mod_export` runs this bake automatically for the open scene (mirror semantics: the scene is the level file's source of truth) |
 | `xfined_mark_authored` | flip the mod-content flag on the selection (`authored`, default true) — the build ships only authored objects; an imported base level's objects stay base and never export |
@@ -249,20 +251,37 @@ build. The format is a frozen contract with the game
    published as the **latest** release. The package also serves as the manual
    install: extracted into the game folder it lands in `modules/<id>/`.
 
-The account is never an argument and never part of an answer. The editor takes
-it from `XFINED_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`, from a token saved
-in Mod > Publish Release (Windows Credential Manager) or from the GitHub CLI
-(`gh auth login`), in that order; `action=account` tells which one is in effect.
+The editor takes the account from `XFINED_GITHUB_TOKEN` / `GH_TOKEN` /
+`GITHUB_TOKEN`, from a saved token (Windows Credential Manager) or from the
+GitHub CLI (`gh auth login`), in that order; `action=account` tells which one is
+in effect. A token is never part of an answer or a log.
 The upload runs on a worker, so the editor stays responsive: `action=start`
 answers as soon as the release is packaged, the bridge then follows
 `action=status` for up to 150 s (`wait=false` returns at once), and
 `action=cancel` stops the job before anything is published.
 
-Signing in is a person's job, and an agent can only carry it: `action=sign_in`
-starts GitHub's device sign-in and returns `user_code` and `verification_uri` -
-show both to the user, who confirms the code in a browser; `action=sign_in_status`
-reports `starting`/`waiting`/`done`/`failed`. The token goes from GitHub straight
-into the Windows Credential Manager. `action=sign_out` forgets that saved token
+`xfined_mod_releases` lists what is already out; `xfined_mod_release_delete`
+deletes one release together with its git tag - the release first, the tag
+second, because a published release whose tag vanishes first turns into a draft
+instead of going away. It is the one command here that destroys something nobody
+can restore: GitHub keeps no copy of a release, its files or its tag. The editor
+asks nothing on the MCP path, ever - an unattended agent runs straight through.
+Whether to ask is the caller's side of the line: the tool is a separate one and
+carries `destructiveHint`, so a client can put its own permission prompt on
+exactly this call; an agent calls it when the user explicitly asked for the
+deletion and asks in its conversation when they did not. Deleting the latest
+release makes GitHub serve the newest remaining one; a player who already has the
+deleted version keeps it, and the same version published again does not reach
+that player. When GitHub refuses to delete the tag (a tag ruleset), the answer
+says `tag_kept=true` and quotes GitHub in `note`.
+
+Signing in over MCP: `action=save_token` stores the `token` it is given in the
+Windows Credential Manager (a fine-grained token needs **Contents: Read and
+write** on the repository) - the same thing the window's Save Token does.
+`action=sign_in` starts GitHub's device sign-in and returns `user_code` and
+`verification_uri`; once the code is confirmed on GitHub the token goes straight
+into the Credential Manager, and `action=sign_in_status` reports
+`starting`/`waiting`/`done`/`failed`. `action=sign_out` forgets the saved token
 and leaves a GitHub CLI or environment sign-in alone. The device sign-in exists
 only in a build that carries the editor's OAuth client id - `action=account`
 says so in `device_sign_in`.

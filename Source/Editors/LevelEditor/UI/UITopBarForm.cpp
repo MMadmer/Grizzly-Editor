@@ -238,6 +238,12 @@ void UITopBarForm::Draw()
 			ExecCommand(COMMAND_MOD_PUBLISH);
 		ImGui::EndDisabled();
 		ToolBarTip("Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.");
+		ImGui::SameLine(0, 6);
+		ImGui::BeginDisabled(!EditorPublish::CanPublish());
+		if (ImGui::Button("Releases", ImVec2(0, icon + UIToolBarFramePad() * 2.f)))
+			ExecCommand(COMMAND_MOD_RELEASES);
+		ImGui::EndDisabled();
+		ToolBarTip("The releases already on GitHub.\nDeletes one together with its git tag.");
 	}
 	ImGui::SameLine(0,1);
 	ImGui::PopStyleVar();

@@ -148,6 +148,26 @@ def publish(version: str, wait_seconds: float = 180.0, **extra) -> dict:
     return data
 
 
+def releases(wait_seconds: float = 60.0, **extra) -> dict:
+    """mod_releases, followed until the worker is done."""
+    data = mcp("mod_releases", **extra)
+    deadline = time.monotonic() + wait_seconds
+    while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
+        time.sleep(0.2)
+        data = mcp("mod_releases", action="status")
+    return data
+
+
+def mock_api(mock: "Mock", method: str, path: str, body: dict | None = None):
+    """The harness talking to the mock as the repository owner would, past the editor."""
+    request = urllib.request.Request(mock.base + path, method=method, data=json.dumps(body).encode() if body else None,
+                                     headers={"Authorization": "Bearer " + TOKEN, "User-Agent": "qa-harness",
+                                              "Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as r:
+        raw = r.read()
+    return json.loads(raw.decode("utf-8")) if raw else None
+
+
 def sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -323,6 +343,69 @@ def main() -> int:
         data = publish("0.9.7")
         check(not data.get("ok") and "empty" in str(data.get("error")).lower(), "J an empty repository: GitHub's own words reach the author", str(data))
 
+        # ---- the releases that are out: list, delete with the tag ---------------------------
+        mock.stop()
+        mock = Mock(port)
+        for version in ("0.9.10", "0.9.11"):
+            data = publish(version)
+            check(data.get("state") == "done", f"R publish {version} for the list", str(data))
+        mock_api(mock, "POST", f"/repos/{GITHUB_REPO}/releases",
+                 {"tag_name": "v0.9.12", "name": "Left behind", "draft": True, "prerelease": False})
+        data = releases()
+        listed = {r["tag"]: r for r in data.get("releases", [])}
+        check(data.get("ok") and data.get("listed") and sorted(listed) == ["v0.9.10", "v0.9.11", "v0.9.12"],
+              "R the list holds both releases and the draft", str(data))
+        check([r["tag"] for r in data.get("releases", [])] == ["v0.9.12", "v0.9.11", "v0.9.10"], "R newest first")
+        check(listed.get("v0.9.11", {}).get("latest") is True and not listed.get("v0.9.10", {}).get("latest"),
+              "R the latest release is marked", str(listed.get("v0.9.11")))
+        check(listed.get("v0.9.12", {}).get("draft") is True and listed.get("v0.9.12", {}).get("published") == "",
+              "R the draft is marked and has no publication time", str(listed.get("v0.9.12")))
+        check(len(listed.get("v0.9.11", {}).get("assets", [])) == 3 and listed.get("v0.9.11", {}).get("bytes", 0) > 0 and
+              len(listed.get("v0.9.11", {}).get("published", "")) == 16, "R files, size and time of a release", str(listed.get("v0.9.11")))
+
+        data = releases(action="delete", tag="v0.9.11")
+        state = mock.state()
+        check(data.get("ok") and "and its tag are deleted" in str(data.get("note")) and data.get("tag_kept") is False,
+              "R deleting by tag reports the release and the tag gone", str(data))
+        check(sorted(r["tag_name"] for r in state["releases"]) == ["v0.9.10", "v0.9.12"] and state["tags"] == ["v0.9.10"],
+              "R GitHub holds neither the release nor its tag", f"{[r['tag_name'] for r in state['releases']]} {state['tags']}")
+        check(not [r for r in state["releases"] if r["tag_name"] == "v0.9.10" and r["draft"]],
+              "R the release that stays is still published")
+        deletes = [r["path"] for r in state["requests"] if r["method"] == "DELETE"]
+        check(len(deletes) == 2 and "/releases/" in deletes[0] and deletes[1].endswith("/git/refs/tags/v0.9.11"),
+              "R the release goes first, the tag second", str(deletes))
+        after = {r["tag"]: r for r in data.get("releases", [])}
+        check(sorted(after) == ["v0.9.10", "v0.9.12"] and after["v0.9.10"]["latest"] is True,
+              "R the answer carries the refreshed list, latest moved back", str(data.get("releases")))
+        with urllib.request.urlopen(f"{mock.base}/{GITHUB_REPO}/releases/latest/download/{descriptor_name}", timeout=10) as r:
+            served = r.read().decode("utf-8")
+        check("0.9.10" in served and "0.9.11" not in served, "R the game is served the previous release again", served[:200])
+
+        draft_id = after.get("v0.9.12", {}).get("id", 0)
+        data = releases(action="delete", id=draft_id)
+        state = mock.state()
+        check(data.get("ok") and "Draft release" in str(data.get("note")), "R deleting a draft by id", str(data))
+        check([r["tag_name"] for r in state["releases"]] == ["v0.9.10"] and state["tags"] == ["v0.9.10"],
+              "R the draft is gone and no tag was touched for it", f"{state['tags']}")
+        data = publish("0.9.11")
+        check(data.get("state") == "done", "R the freed version can be published again", str(data))
+
+        data = releases(action="delete", tag="v7.7.7")
+        check(not data.get("ok") and "no release carries the tag" in str(data.get("error")), "R an unknown tag is refused", str(data))
+        data = mcp("mod_releases", action="delete")
+        check(not data.get("ok") and "'id' or 'tag'" in str(data.get("error")), "R delete without a target is refused", str(data))
+        check(len(mock.state()["releases"]) == 2, "R and nothing else was deleted")
+
+        mock.stop()
+        mock = Mock(port, "--protect-tags")
+        data = publish("0.9.13")
+        check(data.get("state") == "done", "R publish 0.9.13 under a protected tag", str(data))
+        data = releases(action="delete", tag="v0.9.13")
+        state = mock.state()
+        check(data.get("ok") and data.get("tag_kept") is True and "its tag is not" in str(data.get("note")) and
+              "protected" in str(data.get("note")), "R a tag GitHub refuses to delete is reported, in GitHub's words", str(data))
+        check(not state["releases"] and state["tags"] == ["v0.9.13"], "R the release is gone, the tag stayed")
+
         bad = mcp("mod_publish", tag="bad tag")
         check(not bad.get("ok") and "invalid tag" in str(bad.get("error")), "K an invalid tag is refused", str(bad))
         open(manifest_path, "wb").write(original)
@@ -343,6 +426,23 @@ def main() -> int:
         data = publish("0.9.8")
         check(not data.get("ok") and "not signed in" in str(data.get("error")), "L and publishing says so before it packages anything", str(data))
         check(not os.path.isdir(os.path.join(releases_root, "0.9.8")), "L nothing was packaged for it")
+        data = mcp("mod_releases")
+        check(not data.get("ok") and "not signed in" in str(data.get("error")), "L the release list asks for a sign-in too", str(data))
+
+        # the account over MCP alone: what a window's Save Token does, without the window
+        account = mcp("mod_publish", action="save_token", token=TOKEN)
+        check(account.get("signed_in") is True and account.get("source") == "token saved by the editor" and
+              TOKEN not in json.dumps(account), "N save_token signs the editor in and echoes nothing", str(account))
+        refused = mcp("mod_publish", action="save_token", token="not a token")
+        check(not refused.get("ok") and "does not look like" in str(refused.get("error")), "N a string that is no token is refused", str(refused))
+        refused = mcp("mod_publish", action="save_token")
+        check(not refused.get("ok") and "needs 'token'" in str(refused.get("error")), "N save_token without a token is refused", str(refused))
+        data = publish("0.9.14")
+        check(data.get("state") == "done" and data.get("served") is True, "N publishing works with the token saved over MCP", str(data))
+        data = releases(action="delete", tag="v0.9.14")
+        check(data.get("ok") and "and its tag are deleted" in str(data.get("note")), "N and so does deleting", str(data))
+        account = mcp("mod_publish", action="sign_out")
+        check(account.get("signed_in") is False, "N sign_out forgets the saved token", str(account))
 
         data = mcp("mod_publish", action="sign_in")
         deadline = time.monotonic() + 30
@@ -383,6 +483,14 @@ def main() -> int:
         if os.path.exists(seed):
             os.remove(seed)
         check(restored, "Z the project's mod.ltx is back byte for byte")
+        # a token is allowed into the editor, never into what the editor writes down
+        leaked = []
+        logs = os.path.join(REPO, "logs")
+        for name in os.listdir(logs) if os.path.isdir(logs) else []:
+            path = os.path.join(logs, name)
+            if os.path.isfile(path) and TOKEN.encode() in open(path, "rb").read():
+                leaked.append(name)
+        check(not leaked, "Z no log holds the token", str(leaked))
 
     passed = sum(1 for ok, _ in results if ok)
     print(f"MOD PUBLISH: DONE {passed}/{len(results)}", flush=True)

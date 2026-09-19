@@ -153,9 +153,22 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   published tag is never touched again (refused: raise the version); a leftover
   draft of the same tag is reused; a latest release that carries another
   module's descriptor is refused, because this release would hide it.
+- **Releases** (toolbar, Mod > Manage Releases) / `mod_releases` lists what the
+  repository holds, drafts included, and deletes one release together with its
+  git tag - the release FIRST, the tag second: a published release whose tag
+  vanishes first turns into a draft instead of going away. A draft owns no tag,
+  so none is touched for it. This is the one deletion in the editor that no
+  Recycle Bin backs: GitHub keeps no copy. The window therefore names the
+  release, its files and the tag, says what players get instead when it is the
+  latest one, and keeps Cancel as the default; the MCP path asks nothing and
+  never opens a window of the editor. A permission prompt, where one is wanted,
+  belongs to the caller: the bridge exposes the deletion as a tool of its own
+  (`xfined_mod_release_delete`, MCP `destructiveHint`) so that a client can ask
+  on exactly that call, and an unattended agent still runs straight through.
 - The account token comes from the environment, the Windows Credential Manager
   or `gh auth token`, in that order. It is never written into the project, a
-  log or an MCP answer, no MCP request carries one, and it is sent to
+  log or an MCP answer; the one MCP request that carries one is
+  `mod_publish action=save_token`, which stores it. It is sent to
   `api.github.com` / `uploads.github.com` only - the upload address comes out of
   a response body and is checked before the token goes there. `-qa_github` plus
   `XFINED_GITHUB_API` / `XFINED_GITHUB_WEB` point the client at

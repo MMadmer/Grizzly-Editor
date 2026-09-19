@@ -1145,3 +1145,145 @@ bool EditorGithub::Publish(const SPublishRequest& rq, CCancel& cancel, IPublishS
 						  "page that it is marked Latest.";
 	return true;
 }
+
+//------------------------------------------------------------------------------
+// listing and deleting
+//------------------------------------------------------------------------------
+namespace
+{
+// 2026-09-19T12:34:56Z -> 2026-09-19 12:34
+xr_string ShortTime(LPCSTR iso)
+{
+	xr_string s = iso;
+	if (s.size() < 16 || s[10] != 'T') return s;
+	s[10] = ' ';
+	return s.substr(0, 16);
+}
+
+// a ref keeps its slashes; everything between them is escaped
+xr_string EncodeRef(const xr_string& ref)
+{
+	xr_string out;
+	size_t from = 0;
+	for (;;)
+	{
+		const size_t slash = ref.find('/', from);
+		out += UrlEncode(ref.substr(from, slash == xr_string::npos ? xr_string::npos : slash - from));
+		if (slash == xr_string::npos) return out;
+		out += '/';
+		from = slash + 1;
+	}
+}
+
+// the refusals that mean the same thing whatever was asked
+xr_string AccessProblem(const SHttpResponse& r, const xr_string& repo)
+{
+	if (r.status == 401) return "GitHub rejected the sign-in. Sign in again.";
+	if (r.status >= 300 && r.status < 400)
+		return NqUtil::Format("Repository %s has moved. Set its current name in Mod > Edit Manifest.", repo.c_str());
+	return Problem(r);
+}
+} // namespace
+
+bool EditorGithub::ListReleases(const xr_string& repo, const xr_string& token, CCancel& cancel,
+								xr_vector<SReleaseInfo>& out, xr_string& err)
+{
+	out.clear();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, token);
+	const xr_string repo_url = ApiBase() + "/repos/" + repo;
+	SJson j;
+
+	// the list does not say which release is the latest; this does
+	u64 latest_id = 0;
+	SHttpResponse r = api.Get(repo_url + "/releases/latest");
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	if (r.status == 200 && ParseJson(r.body, j))	latest_id = j.U64("id");
+	// 404 is "no latest release" as much as "no such repository"; the list below tells them apart
+	else if (r.status != 404)						{ err = AccessProblem(r, repo); return false; }
+
+	for (u32 page = 1; page <= 10; ++page)
+	{
+		r = api.Get(repo_url + NqUtil::Format("/releases?per_page=100&page=%u", page));
+		if (cancel.Cancelled()) { err = "cancelled"; return false; }
+		if (r.status == 404)
+		{
+			err = NqUtil::Format("Repository %s was not found, or this account cannot see it.", repo.c_str());
+			return false;
+		}
+		if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) { err = AccessProblem(r, repo); return false; }
+		for (u32 i = 0; i < j.items.size(); ++i)
+		{
+			const SJson& item = j.items[i];
+			SReleaseInfo info;
+			info.id			= item.U64("id");
+			info.tag		= item.Str("tag_name");
+			info.title		= item.Str("name");
+			info.url		= item.Str("html_url");
+			info.draft		= item.Bool("draft");
+			info.prerelease	= item.Bool("prerelease");
+			info.published	= info.draft ? xr_string() : ShortTime(item.Str("published_at"));
+			info.latest		= info.id && info.id == latest_id;
+			const SJson* assets = item.Find("assets");
+			if (assets && assets->type == SJson::jArray)
+				for (u32 a = 0; a < assets->items.size(); ++a)
+				{
+					info.assets.push_back(assets->items[a].Str("name"));
+					info.bytes += assets->items[a].U64("size");
+				}
+			if (info.id) out.push_back(info);
+		}
+		if (j.items.size() < 100) break;
+	}
+	return true;
+}
+
+bool EditorGithub::DeleteRelease(const xr_string& repo, const xr_string& token, u64 id, CCancel& cancel,
+								 SDeleteResult& result, xr_string& err)
+{
+	result = SDeleteResult();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, token);
+	const xr_string repo_url = ApiBase() + "/repos/" + repo;
+	const xr_string release_url = repo_url + NqUtil::Format("/releases/%llu", id);
+	SJson j;
+
+	// as it is now, not as a list drawn a minute ago had it
+	SHttpResponse r = api.Get(release_url);
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	if (r.status == 404) { err = "The release no longer exists."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j)) { err = AccessProblem(r, repo); return false; }
+	result.tag = j.Str("tag_name");
+	result.draft = j.Bool("draft");
+
+	r = api.Delete(release_url);
+	if (r.status == 404) { err = "The release no longer exists."; return false; }
+	if (r.status == 403)
+	{
+		err = NqUtil::Format("This sign-in cannot delete releases in %s. A fine-grained token needs the Contents "
+			"permission set to Read and write; a classic one needs public_repo.", repo.c_str());
+		return false;
+	}
+	if (r.status != 204)
+	{
+		// the request may have landed before the connection was cut
+		err = cancel.Cancelled() ? "Cancelled while the release was being deleted. Refresh the list: it may be gone."
+								 : AccessProblem(r, repo);
+		return false;
+	}
+
+	if (result.draft || result.tag.empty()) return true;
+	r = api.Delete(repo_url + "/git/refs/tags/" + EncodeRef(result.tag));
+	if (r.status == 204)
+		result.tag_removed = true;
+	// "Reference does not exist": nothing to remove is as good as removed
+	else if (r.status == 404 || (r.status == 422 && xr_string::npos != r.body.find("does not exist")))
+		result.tag_removed = true;
+	else
+		result.tag_note = cancel.Cancelled() ? xr_string("cancelled before the tag was removed") : Problem(r);
+	return true;
+}

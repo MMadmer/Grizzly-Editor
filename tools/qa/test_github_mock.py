@@ -776,6 +776,49 @@ def flow_explicit_port(checks: Checks, options) -> None:
         checks.equal("O the mock answers there", mock.api("GET", API).status, 200)
 
 
+def flow_tags(checks: Checks, options) -> None:
+    """Q: a release's git tag - made by publishing, left behind by deleting the release, removed as a ref."""
+    assets = {"qa.mod.update.ltx": b"[release]\n"}
+    with Mock() as mock:
+        draft = create_release(mock, "v1.0.0").json()
+        checks.equal("Q a draft creates no tag", mock.state()["tags"], [])
+        checks.equal("Q a draft has no publication time", draft["published_at"], None)
+        checks.equal("Q a tag that does not exist cannot be deleted: 422",
+                     mock.api("DELETE", f"{API}/git/refs/tags/v1.0.0").status, 422)
+        mock.api("DELETE", f"{API}/releases/{draft['id']}")
+
+        first = publish_release(mock, "v1.0.0", assets)
+        second = publish_release(mock, "v1.1.0", assets)
+        checks.equal("Q publishing creates the tags", mock.state()["tags"], ["v1.0.0", "v1.1.0"])
+        checks.check("Q a published release carries its publication time", bool(second["published_at"]), str(second))
+        checks.equal("Q the tag ref reads back", mock.api("GET", f"{API}/git/refs/tags/v1.1.0").status, 200)
+
+        checks.equal("Q deleting the release: 204", mock.api("DELETE", f"{API}/releases/{second['id']}").status, 204)
+        state = mock.state()
+        checks.equal("Q the tag outlives its release", state["tags"], ["v1.0.0", "v1.1.0"])
+        checks.equal("Q latest falls back to the release that is left", state["latest_id"], first["id"])
+        checks.equal("Q deleting the tag ref: 204", mock.api("DELETE", f"{API}/git/refs/tags/v1.1.0").status, 204)
+        checks.equal("Q and it is gone", mock.state()["tags"], ["v1.0.0"])
+        checks.equal("Q deleting it twice: 422", mock.api("DELETE", f"{API}/git/refs/tags/v1.1.0").status, 422)
+        checks.equal("Q the tag can be published again", publish_release(mock, "v1.1.0", assets)["tag_name"], "v1.1.0")
+
+        # the wrong order: the tag first
+        checks.equal("Q deleting the tag under a published release: 204",
+                     mock.api("DELETE", f"{API}/git/refs/tags/v1.0.0").status, 204)
+        left = next(item for item in mock.state()["releases"] if item["id"] == first["id"])
+        checks.check("Q leaves that release behind as a draft", left["draft"] and left["published_at"] is None, str(left))
+        checks.equal("Q a tag ref needs the token: 401",
+                     mock.call("DELETE", f"{API}/git/refs/tags/v1.1.0").status, 401)
+
+    with Mock("--protect-tags") as mock:
+        release = publish_release(mock, "v2.0.0", assets)
+        mock.api("DELETE", f"{API}/releases/{release['id']}")
+        reply = mock.api("DELETE", f"{API}/git/refs/tags/v2.0.0")
+        checks.check("Q --protect-tags refuses the deletion: 422 with GitHub's words",
+                     reply.status == 422 and "protected" in (reply.json() or {}).get("message", ""), str(reply.body))
+        checks.equal("Q and the tag stays", mock.state()["tags"], ["v2.0.0"])
+
+
 FLOWS = {
     "A": flow_happy_path,
     "C": flow_second_release,
@@ -792,6 +835,7 @@ FLOWS = {
     "N": flow_large_upload,
     "O": flow_explicit_port,
     "P": flow_parallel,
+    "Q": flow_tags,
 }
 
 

@@ -96,6 +96,11 @@ void UIMainMenuForm::Draw()
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Packages the module and publishes it as a GitHub release.\nPlayers receive it through the game's Mods menu.");
+            ImGui::BeginDisabled(!EditorPublish::CanPublish());
+            if (ImGui::MenuItem("Manage Releases...", ""))			EditorPublish::RequestReleases();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("The releases the repository holds, drafts included.\nDeletes a release together with its git tag.");
             ImGui::Separator();
             if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
             ImGui::Separator();

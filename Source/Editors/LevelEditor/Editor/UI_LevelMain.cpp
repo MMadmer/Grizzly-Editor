@@ -1406,6 +1406,12 @@ CCommandVar CommandModPublish(CCommandVar p1, CCommandVar p2)
     return TRUE;
 }
 
+CCommandVar CommandModReleases(CCommandVar p1, CCommandVar p2)
+{
+    EditorPublish::RequestReleases();
+    return TRUE;
+}
+
 //------------------------------------------------------------------------------
 // MCP inspector: scene / selection / per-object info for AI agents
 //------------------------------------------------------------------------------
@@ -2239,6 +2245,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_export"))			{ EditorMod::McpExport(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_publish"))			{ EditorPublish::McpPublish(raw, out);	return true; }
+    if (0 == xr_strcmp(cmd, "mod_releases"))		{ EditorPublish::McpReleases(raw, out);	return true; }
     // the modes a module can target, scanned from the linked game install
     if (0 == xr_strcmp(cmd, "game_modes"))			{ EditorGameModes::McpList(out);		return true; }
     // level overlays check the scene/project themselves and report json errors
@@ -4066,6 +4073,7 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_SE	    (COMMAND_MOD_EDIT_MANIFEST,			"Mod\\Edit Manifest",			CommandModEditManifest,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_PACKAGE,				"Mod\\Package Release",			CommandModPackage,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_PUBLISH,				"Mod\\Publish Release",			CommandModPublish,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_RELEASES,				"Mod\\Manage Releases",			CommandModReleases,true);
 
 	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
 	// level.ini actually lists, so a rebind still wins.
