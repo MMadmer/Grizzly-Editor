@@ -377,6 +377,10 @@ class GitHubMock:
         draft = read_flag(body, "draft", release.draft)
         prerelease = read_flag(body, "prerelease", release.prerelease)
         make_latest = self.read_make_latest(body, draft, prerelease)
+        if "make_latest" not in body and self.args.latest_on_edit:
+            # "Default: true" is what GitHub documents for an update too: an edit that says nothing
+            # about the mark takes it.
+            make_latest = "true" if not draft and not prerelease else "false"
         if not tag:
             raise validation_failed("Release", "missing_field", "tag_name")
         # A draft may sit on a published tag it already had; taking the tag or publishing onto it is refused.
@@ -819,6 +823,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drop-upload", type=int, default=0, metavar="N", help="reset the N-th upload mid-body")
     parser.add_argument("--rename-assets", action="store_true", help="store asset names with '-' replaced by '.'")
     parser.add_argument("--protect-tags", action="store_true", help="deleting a tag ref answers 422, as a tag ruleset does")
+    parser.add_argument("--latest-on-edit", action="store_true",
+                        help="a PATCH without make_latest marks a published full release latest, GitHub's documented default")
     parser.add_argument("--no-digest", action="store_true", help="asset JSON carries no digest")
     parser.add_argument("--corrupt-digest", metavar="SUFFIX", help="report a wrong digest for matching asset names")
     parser.add_argument("--stale-latest", type=int, default=0, metavar="N",

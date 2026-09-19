@@ -810,6 +810,15 @@ def flow_tags(checks: Checks, options) -> None:
         checks.equal("Q a tag ref needs the token: 401",
                      mock.call("DELETE", f"{API}/git/refs/tags/v1.1.0").status, 401)
 
+    with Mock("--latest-on-edit") as mock:
+        old = publish_release(mock, "v1.0.0", assets)
+        new = publish_release(mock, "v1.1.0", assets)
+        mock.api("PATCH", f"{API}/releases/{old['id']}", {"body": "Edited."})
+        checks.equal("Q --latest-on-edit: an edit that names no make_latest takes the mark", mock.state()["latest_id"], old["id"])
+        mock.api("PATCH", f"{API}/releases/{new['id']}", {"body": "Edited.", "make_latest": "true"})
+        mock.api("PATCH", f"{API}/releases/{old['id']}", {"body": "Edited again.", "make_latest": "false"})
+        checks.equal("Q and one that says false leaves it", mock.state()["latest_id"], new["id"])
+
     with Mock("--protect-tags") as mock:
         release = publish_release(mock, "v2.0.0", assets)
         mock.api("DELETE", f"{API}/releases/{release['id']}")

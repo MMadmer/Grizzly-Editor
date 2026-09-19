@@ -144,6 +144,7 @@ namespace EditorGithub
 		u64						id;
 		xr_string				tag;
 		xr_string				title;
+		xr_string				notes;			// the release body, Markdown
 		xr_string				url;
 		xr_string				published;		// "2026-09-19 12:34" UTC; empty for a draft
 		bool					draft;
@@ -158,6 +159,13 @@ namespace EditorGithub
 	// newest first, drafts included - those are what a failed attempt leaves behind
 	bool	ListReleases	(const xr_string& repo, const xr_string& token, CCancel& cancel,
 							 xr_vector<SReleaseInfo>& out, xr_string& err);
+
+	// Title and notes of a release that is already out; null = keep what it has.
+	// Touches nothing else: not the assets, not the tag, and not which release is
+	// the latest - GitHub's default for an edit would move that mark onto the
+	// edited release, so the request always states where the mark is now.
+	bool	EditRelease		(const xr_string& repo, const xr_string& token, u64 id, const xr_string* title,
+							 const xr_string* notes, CCancel& cancel, xr_string& tag, xr_string& err);
 
 	struct SDeleteResult
 	{

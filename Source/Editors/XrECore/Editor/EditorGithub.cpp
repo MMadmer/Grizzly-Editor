@@ -996,8 +996,9 @@ bool EditorGithub::Publish(const SPublishRequest& rq, CCancel& cancel, IPublishS
 	CHECK_CANCEL();
 	if (r.status == 200)
 	{
-		err = NqUtil::Format("Release %s is already published in %s. A player who has this version never looks at it "
-			"again - raise the version.", rq.tag.c_str(), rq.repo.c_str());
+		err = NqUtil::Format("Release %s is already published in %s, and a published release is never overwritten. "
+			"Raise the version - or, to put other files out under this one, delete that release in Releases first: "
+			"the game then offers the new one to players who have it as a fix.", rq.tag.c_str(), rq.repo.c_str());
 		return false;
 	}
 	if (r.status != 404) { err = Problem(r); return false; }
@@ -1221,6 +1222,7 @@ bool EditorGithub::ListReleases(const xr_string& repo, const xr_string& token, C
 			info.id			= item.U64("id");
 			info.tag		= item.Str("tag_name");
 			info.title		= item.Str("name");
+			info.notes		= item.Str("body");
 			info.url		= item.Str("html_url");
 			info.draft		= item.Bool("draft");
 			info.prerelease	= item.Bool("prerelease");
@@ -1236,6 +1238,66 @@ bool EditorGithub::ListReleases(const xr_string& repo, const xr_string& token, C
 			if (info.id) out.push_back(info);
 		}
 		if (j.items.size() < 100) break;
+	}
+	return true;
+}
+
+bool EditorGithub::EditRelease(const xr_string& repo, const xr_string& token, u64 id, const xr_string* title,
+							   const xr_string* notes, CCancel& cancel, xr_string& tag, xr_string& err)
+{
+	tag.clear();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, token);
+	const xr_string repo_url = ApiBase() + "/repos/" + repo;
+	const xr_string release_url = repo_url + NqUtil::Format("/releases/%llu", id);
+	SJson j;
+
+	SHttpResponse r = api.Get(release_url);
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	if (r.status == 404) { err = "The release no longer exists."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j)) { err = AccessProblem(r, repo); return false; }
+	tag = j.Str("tag_name");
+	const bool can_be_latest = !j.Bool("draft") && !j.Bool("prerelease");
+
+	// where the mark is now - see the header
+	bool is_latest = false;
+	if (can_be_latest)
+	{
+		r = api.Get(repo_url + "/releases/latest");
+		if (cancel.Cancelled()) { err = "cancelled"; return false; }
+		SJson latest;
+		if (r.status == 200 && ParseJson(r.body, latest))	is_latest = latest.U64("id") == id;
+		else if (r.status != 404)							{ err = AccessProblem(r, repo); return false; }
+	}
+
+	xr_string body = "{";
+	if (title)
+	{
+		body += "\"name\":\"";
+		JsonEscape(body, *title);
+		body += "\",";
+	}
+	if (notes)
+	{
+		body += "\"body\":\"";
+		JsonEscape(body, *notes);
+		body += "\",";
+	}
+	body += NqUtil::Format("\"make_latest\":\"%s\"}", is_latest ? "true" : "false");
+	r = api.Send("PATCH", release_url, body);
+	if (r.status == 403)
+	{
+		err = NqUtil::Format("This sign-in cannot edit releases in %s. A fine-grained token needs the Contents "
+			"permission set to Read and write; a classic one needs public_repo.", repo.c_str());
+		return false;
+	}
+	if (r.status != 200)
+	{
+		err = cancel.Cancelled() ? "Cancelled while the release was being saved. Refresh the list to see what it holds."
+								 : AccessProblem(r, repo);
+		return false;
 	}
 	return true;
 }

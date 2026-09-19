@@ -18,12 +18,13 @@ namespace EditorPublish
 	// opens the dialog - or, while a job runs, its progress
 	ECORE_API void	RequestPublish	();
 	ECORE_API bool	CanPublish		();
-	// The releases the repository already holds, drafts included, and deleting one
-	// of them together with its git tag. The window asks first and says that
-	// GitHub keeps no copy; MCP does not ask.
+	// The releases the repository already holds, drafts included: editing the title
+	// and the notes of one, and deleting one together with its git tag. The window
+	// asks before it deletes and says that GitHub keeps no copy; MCP does not ask.
 	ECORE_API void	RequestReleases	();
-	// {"action":"list"|"delete"|"status"|"cancel", "id"|"tag": which one to delete};
-	// both run on a worker - the answer is pending until status says otherwise
+	// {"action":"list"|"edit"|"delete"|"status"|"cancel", "id"|"tag": which release,
+	// "title"/"notes": what an edit sets}; all three run on a worker - the answer
+	// is pending until status says otherwise
 	ECORE_API void	McpReleases		(LPCSTR raw, xr_string& out);
 	// toolbar label: "Publish Release", or the progress of the running job
 	ECORE_API void	ButtonText		(char* dst, u32 size);

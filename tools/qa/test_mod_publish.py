@@ -346,9 +346,10 @@ def main() -> int:
         data = publish("0.9.7")
         check(not data.get("ok") and "empty" in str(data.get("error")).lower(), "J an empty repository: GitHub's own words reach the author", str(data))
 
-        # ---- the releases that are out: list, delete with the tag ---------------------------
+        # ---- the releases that are out: list, edit, delete with the tag ---------------------
+        # --latest-on-edit: an edit that leaves make_latest to GitHub's default moves the mark
         mock.stop()
-        mock = Mock(port)
+        mock = Mock(port, "--latest-on-edit")
         for version in ("0.9.10", "0.9.11"):
             data = publish(version)
             check(data.get("state") == "done", f"R publish {version} for the list", str(data))
@@ -365,6 +366,35 @@ def main() -> int:
               "R the draft is marked and has no publication time", str(listed.get("v0.9.12")))
         check(len(listed.get("v0.9.11", {}).get("assets", [])) == 3 and listed.get("v0.9.11", {}).get("bytes", 0) > 0 and
               len(listed.get("v0.9.11", {}).get("published", "")) == 16, "R files, size and time of a release", str(listed.get("v0.9.11")))
+
+        notes = "Line one.\nLine \"two\" with a \\ backslash."
+        data = releases(action="edit", tag="v0.9.10", title="Renamed 0.9.10", notes=notes)
+        state = mock.state()
+        edited = next((r for r in state["releases"] if r["tag_name"] == "v0.9.10"), {})
+        newest = next((r for r in state["releases"] if r["tag_name"] == "v0.9.11"), {})
+        check(data.get("ok") and "v0.9.10 is updated" in str(data.get("note")), "R editing a release by tag", str(data))
+        check(edited.get("name") == "Renamed 0.9.10" and edited.get("body") == notes, "R title and notes arrive unharmed", str(edited))
+        check(state["latest_id"] == newest.get("id"), "R editing an older release leaves the latest mark where it was",
+              f"latest {state['latest_id']}, newest {newest.get('id')}")
+        check(len(edited.get("assets", [])) == 3 and not edited.get("draft"), "R its files and its state are untouched")
+        answered = {r["tag"]: r for r in data.get("releases", [])}
+        check(answered.get("v0.9.10", {}).get("notes") == notes and answered.get("v0.9.10", {}).get("title") == "Renamed 0.9.10",
+              "R the refreshed list carries the new text", str(answered.get("v0.9.10")))
+        data = releases(action="edit", tag="v0.9.11", notes="Only the notes.")
+        state = mock.state()
+        newest = next((r for r in state["releases"] if r["tag_name"] == "v0.9.11"), {})
+        check(data.get("ok") and newest.get("body") == "Only the notes." and newest.get("name") == "Test 0.9.11" and
+              state["latest_id"] == newest.get("id"), "R a field that is left out keeps its value; the latest stays the latest", str(newest))
+        draft_id = listed.get("v0.9.12", {}).get("id", 0)
+        data = releases(action="edit", id=draft_id, title="Left behind, renamed")
+        state = mock.state()
+        draft = next((r for r in state["releases"] if r["id"] == draft_id), {})
+        check(data.get("ok") and draft.get("name") == "Left behind, renamed" and draft.get("draft") is True,
+              "R a draft is edited by id and stays a draft", str(draft))
+        refused = mcp("mod_releases", action="edit", tag="v0.9.10")
+        check(not refused.get("ok") and "'title' or 'notes'" in str(refused.get("error")), "R an edit that changes nothing is refused", str(refused))
+        refused = releases(action="edit", tag="v7.7.7", title="x")
+        check(not refused.get("ok") and "no release carries the tag" in str(refused.get("error")), "R an edit of an unknown tag is refused", str(refused))
 
         data = releases(action="delete", tag="v0.9.11")
         state = mock.state()

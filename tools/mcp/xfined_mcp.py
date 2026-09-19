@@ -261,9 +261,9 @@ TOOLS = [
     {
         "name": "xfined_mod_releases",
         "description": "The releases the manifest's 'github' repository already holds, newest first, drafts included: "
-                       "releases [{id, tag, title, draft, prerelease, latest, published (UTC), url, bytes, assets}]. "
-                       "'latest' marks the one release the game reads. Reads only; xfined_mod_release_delete removes "
-                       "one. The list is fetched on a worker: with wait (default) the bridge follows it to the end, "
+                       "releases [{id, tag, title, notes, draft, prerelease, latest, published (UTC), url, bytes, assets}]. "
+                       "'latest' marks the one release the game reads. Reads only; xfined_mod_release_edit changes "
+                       "the title and notes of one, xfined_mod_release_delete removes one. The list is fetched on a worker: with wait (default) the bridge follows it to the end, "
                        "otherwise ask again with action='status'. The account comes from where xfined_mod_publish "
                        "takes it.",
         "annotations": {"title": "List GitHub releases of the mod", "readOnlyHint": True, "openWorldHint": True},
@@ -271,6 +271,28 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["list", "status", "cancel"]},
+                "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
+            },
+        },
+    },
+    {
+        "name": "xfined_mod_release_edit",
+        "description": "Change the title and/or the notes of ONE release of the manifest's 'github' repository, named by "
+                       "'tag' or 'id' (only 'id' names one of several drafts that share a tag). A field that is "
+                       "omitted keeps its value; an empty string clears it. Nothing else is touched: not the files, "
+                       "not the tag, and not which release is the latest - GitHub's default for an edit would move "
+                       "that mark onto the edited release, so the editor always states where the mark is now. The "
+                       "game reads neither field; they are what a visitor of the release page sees. The answer "
+                       "carries 'note' and the refreshed list.",
+        "annotations": {"title": "Edit title and notes of a GitHub release of the mod", "readOnlyHint": False,
+                        "destructiveHint": False, "idempotentHint": True, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tag": {"type": "string", "description": "tag of the release, e.g. v1.0.2"},
+                "id": {"type": "integer", "description": "id of the release, from xfined_mod_releases"},
+                "title": {"type": "string", "description": "new title, 200 characters at most; omit = keep"},
+                "notes": {"type": "string", "description": "new notes, Markdown, 120 000 characters at most; omit = keep"},
                 "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
             },
         },
@@ -285,7 +307,8 @@ TOOLS = [
                        "permission is the caller's business: call it when the user explicitly asked for this deletion, "
                        "and when they did not, ask them in the conversation first. Deleting the latest release makes "
                        "GitHub serve the newest remaining one to players; a player who already has the deleted version "
-                       "keeps it, and a release published again under the same version does not reach that player. The "
+                       "keeps it - and when that version is published again, the game compares content, not numbers, "
+                       "and offers it to that player as a fix. The "
                        "answer carries 'note' (what was done), 'tag_kept' (the release is gone but GitHub refused to "
                        "delete the tag - the reason is in the note) and the refreshed list.",
         "annotations": {"title": "Delete a GitHub release of the mod and its tag", "readOnlyHint": False,
@@ -1423,6 +1446,7 @@ CMD_MAP = {
     "xfined_mod_publish": "mod_publish",
     "xfined_mod_releases": "mod_releases",
     "xfined_mod_release_delete": "mod_releases",
+    "xfined_mod_release_edit": "mod_releases",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",
     "xfined_theme": "theme",
@@ -1567,13 +1591,15 @@ def tool_result(name: str, args: dict) -> dict:
         }
         # a tool result like any other: a bare dict here reaches the client as an answer with no content
         return {"content": [{"type": "text", "text": json.dumps(refusal, ensure_ascii=False)}], "isError": True}
-    if name in ("xfined_mod_publish", "xfined_mod_releases", "xfined_mod_release_delete"):
+    if name in ("xfined_mod_publish", "xfined_mod_releases", "xfined_mod_release_delete", "xfined_mod_release_edit"):
         # 'wait' is this bridge's own: the editor answers at once and works on a worker
         args = dict(args)
         wait = args.pop("wait", True)
     if name == "xfined_mod_release_delete":
         # a tool of its own so that a client can tell the one destructive call from the reads
         args["action"] = "delete"
+    if name == "xfined_mod_release_edit":
+        args["action"] = "edit"
     data = editor_call(CMD_MAP[name], args)
     follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
     if follows_job and data.get("ok") and data.get("pending"):
@@ -1592,7 +1618,7 @@ def tool_result(name: str, args: dict) -> dict:
         while data.get("state") == "starting" and time.monotonic() < deadline:
             time.sleep(0.25)
             data = editor_call("mod_publish", {"action": "sign_in_status"})
-    if name in ("xfined_mod_releases", "xfined_mod_release_delete") and wait and data.get("ok") and data.get("pending"):
+    if CMD_MAP[name] == "mod_releases" and wait and data.get("ok") and data.get("pending"):
         deadline = time.monotonic() + 90.0
         while data.get("pending") and time.monotonic() < deadline:
             time.sleep(0.25)

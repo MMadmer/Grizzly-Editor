@@ -761,19 +761,34 @@ void DrawResult()
 // the releases that are already out: the list, and deleting one
 //------------------------------------------------------------------------------
 enum EManageState { msIdle, msRunning, msDone, msFailed };
+enum EManageOp { moList, moDelete, moEdit };
+
+// what a job does before it reads the list: nothing, or one release deleted or edited
+struct SManageRequest
+{
+	EManageOp	op;
+	u64			id;			// the release, or
+	xr_string	tag;		// its tag, when that is what the caller knows
+	bool		has_title;	// moEdit: a field that is absent keeps its value
+	bool		has_notes;
+	xr_string	title;
+	xr_string	notes;
+
+	SManageRequest() : op(moList), id(0), has_title(false), has_notes(false) {}
+};
 
 struct SManageView
 {
 	EManageState							state;
 	xr_string								repo;
-	bool									deleting;	// the job in flight deletes before it lists
+	EManageOp								op;			// what the job in flight does before it lists
 	xr_string								error;		// why the last job failed
 	xr_string								note;		// what a deletion did
 	bool									tag_kept;	// ...and whether it left the tag behind
 	bool									listed;		// `releases` is GitHub's answer, not an empty start
 	xr_vector<EditorGithub::SReleaseInfo>	releases;
 
-	SManageView() : state(msIdle), deleting(false), tag_kept(false), listed(false) {}
+	SManageView() : state(msIdle), op(moList), tag_kept(false), listed(false) {}
 };
 
 std::mutex				s_ManageLock;
@@ -794,31 +809,30 @@ void ManageReap()
 	if (!ManageRunning() && s_ManageThread.joinable()) s_ManageThread.join();
 }
 
-// delete_id / delete_tag name what goes before the list is read; neither = list only
-void ManageWorker(xr_string repo, xr_string token, u64 delete_id, xr_string delete_tag)
+void ManageWorker(xr_string repo, xr_string token, SManageRequest rq)
 {
 	xr_string error, note;
 	bool tag_kept = false;
 	xr_vector<EditorGithub::SReleaseInfo> releases;
 
-	if (!delete_id && !delete_tag.empty() && EditorGithub::ListReleases(repo, token, s_ManageCancel, releases, error))
+	if (moList != rq.op && !rq.id && EditorGithub::ListReleases(repo, token, s_ManageCancel, releases, error))
 	{
 		// a tag names one published release, but any number of drafts may share it
 		u32 matches = 0;
 		for (u32 i = 0; i < releases.size(); ++i)
-			if (releases[i].tag == delete_tag) { ++matches; delete_id = releases[i].id; }
+			if (releases[i].tag == rq.tag) { ++matches; rq.id = releases[i].id; }
 		if (!matches)
-			error = NqUtil::Format("no release carries the tag %s", delete_tag.c_str());
+			error = NqUtil::Format("no release carries the tag %s", rq.tag.c_str());
 		else if (matches > 1)
 		{
-			error = NqUtil::Format("%u releases carry the tag %s - name one by its id", matches, delete_tag.c_str());
-			delete_id = 0;
+			error = NqUtil::Format("%u releases carry the tag %s - name one by its id", matches, rq.tag.c_str());
+			rq.id = 0;
 		}
 	}
-	if (error.empty() && delete_id)
+	if (error.empty() && rq.id && moDelete == rq.op)
 	{
 		EditorGithub::SDeleteResult result;
-		if (EditorGithub::DeleteRelease(repo, token, delete_id, s_ManageCancel, result, error))
+		if (EditorGithub::DeleteRelease(repo, token, rq.id, s_ManageCancel, result, error))
 		{
 			if (result.draft)
 				note = NqUtil::Format("Draft release %s is deleted.", result.tag.c_str());
@@ -830,6 +844,13 @@ void ManageWorker(xr_string repo, xr_string token, u64 delete_id, xr_string dele
 				note = NqUtil::Format("Release %s is deleted, its tag is not: %s", result.tag.c_str(), result.tag_note.c_str());
 			}
 		}
+	}
+	if (error.empty() && rq.id && moEdit == rq.op)
+	{
+		xr_string tag;
+		if (EditorGithub::EditRelease(repo, token, rq.id, rq.has_title ? &rq.title : 0, rq.has_notes ? &rq.notes : 0,
+				s_ManageCancel, tag, error))
+			note = NqUtil::Format("Release %s is updated.", tag.c_str());
 	}
 
 	// whatever happened above, the window shows what GitHub has now
@@ -850,7 +871,7 @@ void ManageWorker(xr_string repo, xr_string token, u64 delete_id, xr_string dele
 	}
 }
 
-bool ManageStart(u64 delete_id, const xr_string& delete_tag, xr_string& err)
+bool ManageStart(const SManageRequest& rq, xr_string& err)
 {
 	err.clear();
 	if (!EditorProject::Active())	{ err = "no active project"; return false; }
@@ -876,7 +897,6 @@ bool ManageStart(u64 delete_id, const xr_string& delete_tag, xr_string& err)
 		return false;
 	}
 
-	const bool deleting = delete_id || !delete_tag.empty();
 	{
 		std::lock_guard<std::mutex> guard(s_ManageLock);
 		// another repository's releases are not this one's
@@ -887,16 +907,16 @@ bool ManageStart(u64 delete_id, const xr_string& delete_tag, xr_string& err)
 		}
 		s_Manage.state		= msRunning;
 		s_Manage.repo		= m.update_github;
-		s_Manage.deleting	= deleting;
+		s_Manage.op			= rq.op;
 		s_Manage.error.clear();
 		s_Manage.note.clear();
 		s_Manage.tag_kept	= false;
 	}
-	if (deleting)
-		Msg("* [XMS] deleting release %s from %s", delete_id ? NqUtil::Format("#%llu", delete_id).c_str() : delete_tag.c_str(),
-			m.update_github.c_str());
+	if (moList != rq.op)
+		Msg("* [XMS] %s release %s in %s", moDelete == rq.op ? "deleting" : "editing",
+			rq.id ? NqUtil::Format("#%llu", rq.id).c_str() : rq.tag.c_str(), m.update_github.c_str());
 	s_ManageCancel.Reset();
-	s_ManageThread = std::thread(&ManageWorker, m.update_github, account.token, delete_id, delete_tag);
+	s_ManageThread = std::thread(&ManageWorker, m.update_github, account.token, rq);
 	return true;
 }
 
@@ -913,9 +933,14 @@ LPCSTR ReleaseStateText(const EditorGithub::SReleaseInfo& r)
 
 const char* kTitleReleases	= "XFined Editor - Releases";
 const char* kTitleDelete	= "XFined Editor - Delete Release";
+const char* kTitleEdit		= "XFined Editor - Edit Release";
 
 bool							s_WantReleases	= false;
 bool							s_WantDelete	= false;
+bool							s_WantEdit		= false;
+EditorGithub::SReleaseInfo		s_EditTarget;		// the release the edit window is about
+char							s_EditTitle[256] = {};
+xr_string						s_EditNotes;		// grows with the text: a release body runs to 125 000 characters
 u64								s_SelectedId	= 0;
 EditorGithub::SReleaseInfo		s_DeleteTarget;		// what the confirmation names
 xr_string						s_DeleteNext;		// the release players fall back to, when the target is the latest
@@ -949,7 +974,7 @@ void DrawReleases()
 	if (busy)
 	{
 		ImGui::SameLine();
-		ImGui::TextDisabled(view.deleting ? "- deleting..." : "- loading...");
+		ImGui::TextDisabled(moDelete == view.op ? "- deleting..." : moEdit == view.op ? "- saving..." : "- loading...");
 	}
 	if (!view.note.empty())
 		ImGui::TextColored(view.tag_kept ? ImVec4(1.f, 0.8f, 0.3f, 1.f) : ImVec4(0.6f, 0.9f, 0.6f, 1.f), "%s", view.note.c_str());
@@ -994,6 +1019,19 @@ void DrawReleases()
 		ImGui::TextDisabled("This repository has no releases yet.");
 
 	ImGui::BeginDisabled(busy || !selected);
+	if (ImGui::Button("Edit..."))
+	{
+		s_EditTarget = *selected;
+		strncpy_s(s_EditTitle, sizeof(s_EditTitle), selected->title.c_str(), _TRUNCATE);
+		s_EditNotes = selected->notes;
+		s_WantReleases = false;
+		s_WantEdit = true;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndDisabled();
+	Hint("Title and notes of the selected release. Its files, its tag and the latest mark stay as they are.");
+	ImGui::SameLine();
+	ImGui::BeginDisabled(busy || !selected);
 	if (ImGui::Button("Delete..."))
 	{
 		PrepareDelete(view, *selected);
@@ -1006,7 +1044,7 @@ void DrawReleases()
 	if (ImGui::Button("Refresh"))
 	{
 		xr_string err;
-		if (!ManageStart(0, "", err))
+		if (!ManageStart(SManageRequest(), err))
 		{
 			std::lock_guard<std::mutex> guard(s_ManageLock);
 			s_Manage.error = err;
@@ -1059,7 +1097,7 @@ void DrawDeleteConfirm()
 			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "It is the latest release. GitHub then serves %s to players.", s_DeleteNext.c_str());
 	}
 	if (!r.draft && !r.prerelease)
-		ImGui::TextUnformatted("Players who already have this version keep it, and a release published again under the same version does not reach them.");
+		ImGui::TextUnformatted("Players who already have this version keep it. Publish the version again and the game offers it to them as a fix.");
 	ImGui::TextUnformatted("GitHub keeps no copy: this cannot be undone.");
 	ImGui::PopTextWrapPos();
 	ImGui::Separator();
@@ -1075,7 +1113,10 @@ void DrawDeleteConfirm()
 	if (confirm)
 	{
 		xr_string err;
-		if (!ManageStart(r.id, "", err))
+		SManageRequest rq;
+		rq.op = moDelete;
+		rq.id = r.id;
+		if (!ManageStart(rq, err))
 		{
 			std::lock_guard<std::mutex> guard(s_ManageLock);
 			s_Manage.error = err;
@@ -1085,6 +1126,74 @@ void DrawDeleteConfirm()
 	if (confirm || cancel)
 	{
 		s_WantDelete = false;
+		s_WantReleases = true;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+}
+
+// ImGui writes into the string's own buffer and asks here when it runs out of room
+int GrowNotes(ImGuiInputTextCallbackData* data)
+{
+	if (ImGuiInputTextFlags_CallbackResize == data->EventFlag)
+	{
+		xr_string* text = (xr_string*)data->UserData;
+		text->resize((size_t)data->BufTextLen);
+		data->Buf = &(*text)[0];
+	}
+	return 0;
+}
+
+void DrawEditRelease()
+{
+	if (!s_WantEdit) return;
+	const bool was_wanted = s_WantEdit;
+	if (!ImGui::BeginPopupModal(kTitleEdit, &s_WantEdit, ImGuiWindowFlags_AlwaysAutoResize, true))
+	{
+		// the caption cross: back to the list, nothing saved
+		if (was_wanted && !s_WantEdit) s_WantReleases = true;
+		return;
+	}
+
+	const float em = ImGui::GetFontSize();
+	const EditorGithub::SReleaseInfo& r = s_EditTarget;
+	ImGui::Text("%s %s", r.draft ? "Draft release" : "Release", r.tag.c_str());
+	ImGui::TextUnformatted("Title");
+	ImGui::SetNextItemWidth(em * 34.f);
+	ImGui::InputText("##title", s_EditTitle, sizeof(s_EditTitle));
+	ImGui::TextUnformatted("Notes");
+	ImGui::InputTextMultiline("##notes", &s_EditNotes[0], s_EditNotes.capacity() + 1, ImVec2(em * 34.f, em * 14.f),
+		ImGuiInputTextFlags_CallbackResize, &GrowNotes, &s_EditNotes);
+	Hint("What changed - shown on the release page. Markdown.");
+	ImGui::TextDisabled("The files, the tag and the latest mark of the release stay as they are.");
+	const bool too_long = s_EditNotes.size() > kMaxNotes;
+	if (too_long)
+		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "GitHub takes notes of 120 000 characters at most.");
+	ImGui::Separator();
+
+	ImGui::BeginDisabled(too_long);
+	const bool save = ImGui::Button("Save", ImVec2(120, 0));
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0));
+	if (save)
+	{
+		SManageRequest rq;
+		rq.op = moEdit;
+		rq.id = r.id;
+		rq.has_title = rq.has_notes = true;
+		rq.title = s_EditTitle;
+		rq.notes = s_EditNotes.c_str();	// up to the terminator: the buffer may run past the text
+		xr_string err;
+		if (!ManageStart(rq, err))
+		{
+			std::lock_guard<std::mutex> guard(s_ManageLock);
+			s_Manage.error = err;
+		}
+	}
+	if (save || cancel)
+	{
+		s_WantEdit = false;
 		s_WantReleases = true;
 		ImGui::CloseCurrentPopup();
 	}
@@ -1110,6 +1219,7 @@ void ReleasesJson(xr_string& out)
 		out += NqUtil::Format("%s{\"id\":%llu", i ? "," : "", r.id);
 		JsonField(out, "tag", r.tag.c_str());
 		JsonField(out, "title", r.title.c_str());
+		JsonField(out, "notes", r.notes.c_str());
 		out += NqUtil::Format(",\"draft\":%s,\"prerelease\":%s,\"latest\":%s", r.draft ? "true" : "false",
 			r.prerelease ? "true" : "false", r.latest ? "true" : "false");
 		JsonField(out, "published", r.published.c_str());
@@ -1214,7 +1324,7 @@ void EditorPublish::ButtonText(char* dst, u32 size)
 void EditorPublish::RequestPublish()
 {
 	// one modal at a time: two self-opening popups close each other every frame
-	if (!CanPublish() || s_WantReleases || s_WantDelete) return;
+	if (!CanPublish() || s_WantReleases || s_WantDelete || s_WantEdit) return;
 	Reap();
 	if (JobRunning()) { s_WantProgress = true; return; }
 
@@ -1244,13 +1354,13 @@ void EditorPublish::RequestPublish()
 
 void EditorPublish::RequestReleases()
 {
-	if (!CanPublish() || s_WantDialog || s_WantResult || s_WantDelete) return;
+	if (!CanPublish() || s_WantDialog || s_WantResult || s_WantDelete || s_WantEdit) return;
 	Reap();
 	if (JobRunning()) { s_WantProgress = true; return; }
 	if (s_WantProgress) return;
 
 	xr_string err;
-	if (!ManageStart(0, "", err))
+	if (!ManageStart(SManageRequest(), err))
 	{
 		ShowResult("Cannot list the releases: " + err);
 		return;
@@ -1267,8 +1377,9 @@ void EditorPublish::DrawUI()
 	DrawProgress();
 	DrawReleases();
 	DrawDeleteConfirm();
+	DrawEditRelease();
 	// a job that ends while the release list is up waits its turn
-	if (!s_WantReleases && !s_WantDelete) DrawResult();
+	if (!s_WantReleases && !s_WantDelete && !s_WantEdit) DrawResult();
 }
 
 void EditorPublish::Shutdown()
@@ -1294,23 +1405,32 @@ void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 		ReleasesJson(out);
 		return;
 	}
-	const bool deleting = 0 == xr_strcmp(action, "delete");
-	if (!deleting && 0 != xr_strcmp(action, "list"))
-		{ out = "{\"ok\":false,\"error\":\"unknown action: list, delete, status or cancel expected\"}"; return; }
+	SManageRequest rq;
+	rq.op = 0 == xr_strcmp(action, "delete") ? moDelete : 0 == xr_strcmp(action, "edit") ? moEdit : moList;
+	if (moList == rq.op && 0 != xr_strcmp(action, "list"))
+		{ out = "{\"ok\":false,\"error\":\"unknown action: list, edit, delete, status or cancel expected\"}"; return; }
 
 	// MCP is the programmatic path: the caller has decided, nothing is asked
-	u64 id = 0;
-	xr_string tag;
-	if (deleting)
+	if (moList != rq.op)
 	{
 		xr_vector<char> arg(xr_strlen(raw) + 1);
-		if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size())) tag = arg.data();
-		id = ArgU64(raw, "id");
-		if (!id && tag.empty())
-			{ out = "{\"ok\":false,\"error\":\"delete needs the release: 'id' or 'tag'\"}"; return; }
+		if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size())) rq.tag = arg.data();
+		rq.id = ArgU64(raw, "id");
+		if (!rq.id && rq.tag.empty())
+			{ out = "{\"ok\":false,\"error\":\"name the release: 'id' or 'tag'\"}"; return; }
+		if (moEdit == rq.op)
+		{
+			// a field that is absent keeps its value; an empty one clears it
+			if ((rq.has_title = XFinedMCP::GetArg(raw, "title", arg.data(), (u32)arg.size())))	rq.title = arg.data();
+			if ((rq.has_notes = XFinedMCP::GetArg(raw, "notes", arg.data(), (u32)arg.size())))	rq.notes = arg.data();
+			if (!rq.has_title && !rq.has_notes)
+				{ out = "{\"ok\":false,\"error\":\"edit needs 'title' or 'notes'\"}"; return; }
+			if (rq.title.size() > 200 || rq.notes.size() > kMaxNotes)
+				{ out = "{\"ok\":false,\"error\":\"the title takes 200 characters, the notes 120 000\"}"; return; }
+		}
 	}
 	xr_string err;
-	if (!ManageStart(id, tag, err))
+	if (!ManageStart(rq, err))
 	{
 		out = "{\"ok\":false,\"error\":\"";
 		JsonAppend(out, err.c_str());

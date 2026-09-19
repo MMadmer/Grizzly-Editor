@@ -150,11 +150,17 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   stored asset is checked against the package result (name, size, SHA-256
   digest), and only then the draft is published with `make_latest` - the game
   reads the latest release alone and must never see one that is half there. A
-  published tag is never touched again (refused: raise the version); a leftover
-  draft of the same tag is reused; a latest release that carries another
+  published tag is never overwritten (refused: raise the version, or delete
+  the release first - the game compares content for a release of the installed
+  version and offers a republished one as a fix, game repo MOD_UPDATES.md 3.1);
+  a leftover draft of the same tag is reused; a latest release that carries another
   module's descriptor is refused, because this release would hide it.
 - **Releases** (toolbar, Mod > Manage Releases) / `mod_releases` lists what the
-  repository holds, drafts included, and deletes one release together with its
+  repository holds, drafts included, edits the title and the notes of a release
+  (`EditorGithub::EditRelease` always sends `make_latest` with the mark's
+  current place - GitHub's default for an edit would move Latest onto the
+  edited release, and Latest is what players are served), and deletes one
+  release together with its
   git tag - the release FIRST, the tag second: a published release whose tag
   vanishes first turns into a draft instead of going away. A draft owns no tag,
   so none is touched for it. This is the one deletion in the editor that no
