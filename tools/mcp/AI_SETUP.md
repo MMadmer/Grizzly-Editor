@@ -127,6 +127,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_content_browser_open` | reveal an asset **or a folder** in the Content Browser: opens the panel, switches `source` (`project`/`editor`/`darf`), navigates there and selects it; a folder path (`levels`, `levels\l07_military`) is how the grid is walked into a folder without a mouse; `open=true` also opens an asset's viewer (the double-click action) |
 | `xfined_content_browser_selection` | read the browser's open/source/folder/ordered selection state, or use `action=select` / `toggle` / `range` / `clear` on an exact entry in the complete current view (offscreen virtualized rows included; `select` establishes the range anchor) |
 | `xfined_content_browser_copy` | copy assets out of a READ-ONLY source into the project: `names` (`;`-separated) or `folder` (recursive), optional `source`/`category`, `overwrite` (default true). With `dst` they land in that project-relative folder, a folder keeping its own name and subtree — the same clipboard and paste the browser's menu uses. Without `dst` each asset is mirrored where the engine expects it instead: an Objects entry in `<project>/rawdata/objects/...`, a mesh in `<project>/gamedata/meshes/...`, a texture with its `.thm` |
+| `xfined_content_rename` | rename a file or folder of the project in place (`path`, `name` = the new leaf name). A change of case alone is a rename; a quest keeps its `.nqasset` when the new name names no extension; open quest documents follow the renamed file or folder |
 | `xfined_content_copy` / `xfined_content_move` | copy/move files or folders by path; `src` accepts a `;`-separated list, `dst` is a folder inside the project, `recursive`/`overwrite`. Moving out of a read-only source is refused — a move deletes its source |
 | `xfined_content_delete` | delete files/folders inside the project; `recursive` defaults to false so a non-empty folder is reported instead of wiped |
 | `xfined_content_mkdir` | create a folder (with missing parents) inside the project |
@@ -244,7 +245,12 @@ build. The format is a frozen contract with the game
    release. `served=true` in the answer means the address the game itself asks
    already returns the new descriptor. A tag that is already published is
    refused - raise the version; an interrupted attempt leaves a draft that the
-   next one reuses.
+   next one reuses. Without `tag` the editor picks `v<version>`, or
+   `v<version>-r2`, `-r3`, ... when this project deleted that tag within the last hour:
+   a release deleted and published again under the SAME tag keeps its download
+   address, and GitHub goes on serving the deleted files from that address for
+   minutes (`served=false` with a warning that says so). A fresh tag is a fresh
+   address.
 3. `xfined_mod_package` alone stops after step one of that and returns the
    descriptor path, the index and the packages with their sizes and SHA-256 -
    for a release that is attached by hand: every file under its own name, the

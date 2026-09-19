@@ -20,7 +20,9 @@ const char* kClientId = "";
 const u32 kMaxResponse		= 32u << 20;
 const u32 kUploadChunk		= 256u << 10;
 const u32 kUploadAttempts	= 3;
-const u32 kServeAttempts	= 6;
+// A release under a tag that was never used is served at once; one under a tag that is used
+// again is not - see the warning at the end of Publish. Long enough to tell the two apart.
+const u32 kServeAttempts	= 15;
 
 //------------------------------------------------------------------------------
 // QA
@@ -1017,6 +1019,24 @@ bool EditorGithub::Publish(const SPublishRequest& rq, CCancel& cancel, IPublishS
 			upload_url = j.items[i].Str("upload_url");
 			ReadAssets(j.items[i], leftovers);
 		}
+	// The editor's tags for one version are v<version> and v<version>-r<N>: the suffix is how a
+	// version goes out again under a fresh address, not a way around "this version is out".
+	const xr_string version_tag = "v" + rq.version;
+	for (u32 i = 0; i < j.items.size(); ++i)
+	{
+		const xr_string other = j.items[i].Str("tag_name");
+		if (j.items[i].Bool("draft") || other == rq.tag || 0 != other.compare(0, version_tag.size(), version_tag))
+			continue;
+		LPCSTR rest = other.c_str() + version_tag.size();
+		bool reissue_tag = '-' == rest[0] && 'r' == rest[1] && rest[2];
+		for (LPCSTR c = rest + 2; reissue_tag && *c; ++c) reissue_tag = *c >= '0' && *c <= '9';
+		if (rest[0] && !reissue_tag) continue;
+		err = NqUtil::Format("Version %s is already published in %s as %s, and a published release is never "
+			"overwritten. Raise the version - or, to put other files out under this one, delete that release in "
+			"Releases first: the game then offers the new one to players who have it as a fix.",
+			rq.version.c_str(), rq.repo.c_str(), other.c_str());
+		return false;
+	}
 
 	// 5. the draft
 	sink.Stage(release_id ? "Reusing the draft release" : "Creating a draft release");
@@ -1134,7 +1154,7 @@ bool EditorGithub::Publish(const SPublishRequest& rq, CCancel& cancel, IPublishS
 	ReadWholeFile(rq.descriptor.c_str(), local);
 	for (u32 attempt = 0; attempt < kServeAttempts && !result.served && !cancel.Cancelled(); ++attempt)
 	{
-		if (attempt) Pause(cancel, 2000);
+		if (attempt) Pause(cancel, 3000);
 		SHttpRequest check;
 		check.url = WebBase() + "/" + rq.repo + "/releases/latest/download/" + descriptor_name;
 		check.redirects = true;
@@ -1142,8 +1162,11 @@ bool EditorGithub::Publish(const SPublishRequest& rq, CCancel& cancel, IPublishS
 		result.served = served.status == 200 && !local.empty() && served.body == local;
 	}
 	if (!result.served)
-		result.warnings = "GitHub does not serve this release at the address the game asks yet. Check on the release "
-						  "page that it is marked Latest.";
+		// Seen live: a release deleted and published again under the same tag keeps its download
+		// address, and GitHub goes on answering that address with the deleted files for minutes.
+		result.warnings = "GitHub still answers the address the game asks with the previous files. That is GitHub's "
+						  "own cache - it happens when a tag is used a second time - and it passes within minutes; "
+						  "the game offers this release after that.";
 	return true;
 }
 

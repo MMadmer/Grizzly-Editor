@@ -153,7 +153,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   published tag is never overwritten (refused: raise the version, or delete
   the release first - the game compares content for a release of the installed
   version and offers a republished one as a fix, game repo MOD_UPDATES.md 3.1);
-  a leftover draft of the same tag is reused; a latest release that carries another
+  a leftover draft of the same tag is reused; a tag this project deleted within
+  the last hour is not offered again (`releases\deleted.tags`, `FreshTag`:
+  `v<version>`, `-r2`, `-r3`, ...) because GitHub keeps serving a deleted
+  release's files under a reused tag for minutes - seen live - while any
+  published `v<version>[-rN]` still means "this version is out"; a latest release that carries another
   module's descriptor is refused, because this release would hide it.
 - **Releases** (toolbar, Mod > Manage Releases) / `mod_releases` lists what the
   repository holds, drafts included, edits the title and the notes of a release

@@ -422,6 +422,13 @@ def main() -> int:
               "R the draft is gone and no tag was touched for it", f"{state['tags']}")
         data = publish("0.9.11")
         check(data.get("state") == "done", "R the freed version can be published again", str(data))
+        # A tag that is used again keeps its download address, and GitHub serves the deleted files
+        # from it for minutes - so the editor never offers a tag twice.
+        check(data.get("tag") == "v0.9.11-r2" and "v0.9.11-r2" in mock.state()["tags"],
+              "R under a fresh tag, so that its files get a fresh address", f"{data.get('tag')} {mock.state()['tags']}")
+        data = publish("0.9.11")
+        check(not data.get("ok") and "already published" in str(data.get("error")) and "v0.9.11-r2" in str(data.get("error")),
+              "R a fresh tag is no way around a version that is out", str(data))
 
         data = releases(action="delete", tag="v7.7.7")
         check(not data.get("ok") and "no release carries the tag" in str(data.get("error")), "R an unknown tag is refused", str(data))
@@ -508,8 +515,14 @@ def main() -> int:
         restored = open(manifest_path, "rb").read() == original
         if os.path.isdir(releases_root):
             for name in os.listdir(releases_root):
-                if name not in known_releases:
-                    shutil.rmtree(os.path.join(releases_root, name), ignore_errors=True)
+                if name in known_releases:
+                    continue
+                path = os.path.join(releases_root, name)
+                # the release folders of this run, and the list of tags it published
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
             if not had_releases_root and not os.listdir(releases_root):
                 os.rmdir(releases_root)
         seed = os.path.join(HERE, "_seed_foreign.json")

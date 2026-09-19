@@ -8,6 +8,7 @@
 #include "Nq/NqUtil.h"
 #include <shellapi.h>
 #include <thread>
+#include <ctime>
 
 namespace
 {
@@ -174,6 +175,7 @@ char		s_Title[256]	= {};
 char		s_Notes[16384]	= {};
 char		s_TokenInput[300] = {};
 bool		s_TagAuto		= true;		// follows the version until the author edits it
+xr_string	s_TagFor;					// the version the automatic tag was worked out for
 bool		s_TitleAuto		= true;
 bool		s_Prerelease	= false;
 bool		s_Latest		= true;
@@ -249,6 +251,60 @@ struct SOptions
 	SOptions() : requires_given(false), prerelease(false), latest(true) {}
 };
 
+// Tags this project deleted and when, one per line, in <project>\releases - a folder no build,
+// package or content view ever touches. A release deleted and published again under the same
+// tag keeps its download address, and GitHub goes on answering that address with the deleted
+// files for minutes (seen live: still stale after 40 s, fresh after 8 min). So a tag deleted
+// within the last hour is not offered again; under a fresh tag the address is new.
+const long long kTagRestSeconds = 3600;
+
+xr_string DeletedTagsFile(LPCSTR project_root)
+{
+	return xr_string(project_root) + "\\releases\\deleted.tags";
+}
+
+bool TagJustDeleted(const xr_string& tag)
+{
+	FILE* file = 0;
+	if (fopen_s(&file, DeletedTagsFile(EditorProject::Root()).c_str(), "rb") || !file) return false;
+	const long long now = (long long)time(0);
+	char line[300];
+	bool recent = false;
+	while (!recent && fgets(line, sizeof(line), file))
+	{
+		char* tab = strchr(line, '\t');
+		if (!tab) continue;
+		*tab = 0;
+		recent = 0 == _stricmp(line, tag.c_str()) && now - _atoi64(tab + 1) < kTagRestSeconds;
+	}
+	fclose(file);
+	return recent;
+}
+
+// worker thread: the file is named by the request, the project may have moved on by now
+void NoteDeletedTag(const xr_string& tags_file, const xr_string& tag)
+{
+	if (tags_file.empty() || tag.empty()) return;
+	xr_string folder(tags_file);
+	const size_t cut = folder.find_last_of('\\');
+	if (cut != xr_string::npos) folder.erase(cut);
+	::CreateDirectoryA(folder.c_str(), 0);
+	FILE* file = 0;
+	if (fopen_s(&file, tags_file.c_str(), "ab") || !file) return;
+	fprintf(file, "%s\t%lld\n", tag.c_str(), (long long)time(0));
+	fclose(file);
+}
+
+// v1.0.0 - or v1.0.0-r2, -r3, ... while the plainer ones were deleted a moment ago
+xr_string FreshTag(LPCSTR version)
+{
+	const xr_string base = xr_string("v") + version;
+	xr_string tag = base;
+	for (u32 n = 2; n < 1000 && TagJustDeleted(tag); ++n)
+		tag = base + NqUtil::Format("-r%u", n);
+	return tag;
+}
+
 // a git tag name, kept to what every tool accepts
 bool ValidTag(LPCSTR tag)
 {
@@ -294,7 +350,7 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	if (!EditorMod::ValidateGithubRepo(m.update_github.c_str()))
 		{ err = "invalid [update] github in mod.ltx: owner/repo expected"; return false; }
 
-	const xr_string tag		= options.tag.empty() ? "v" + m.version : options.tag;
+	const xr_string tag		= options.tag.empty() ? FreshTag(m.version.c_str()) : options.tag;
 	const xr_string title	= options.title.empty() ? DefaultTitle(m.id, m.name, m.version.c_str()) : options.title;
 	if (!ValidTag(tag.c_str()))
 		{ err = "invalid tag: 1-100 characters of A-Z a-z 0-9 . _ -, not starting with '-' or '.'"; return false; }
@@ -641,14 +697,21 @@ void DrawDialog()
 	ImGui::InputText("##requires", s_Requires, sizeof(s_Requires));
 	Hint("Lowest Dead Air: Refined version this release runs on. Empty = any.");
 
-	if (s_TagAuto)		sprintf_s(s_Tag, "v%s", s_Version);
+	// the used-tag list is a file: read it when the version changes, not every frame
+	if (s_TagAuto && s_TagFor != s_Version)
+	{
+		s_TagFor = s_Version;
+		strncpy_s(s_Tag, sizeof(s_Tag), FreshTag(s_Version).c_str(), _TRUNCATE);
+	}
 	if (s_TitleAuto)	strncpy_s(s_Title, sizeof(s_Title), DefaultTitle(s_ModuleId, s_ModuleName, s_Version).c_str(), _TRUNCATE);
 
 	ImGui::SeparatorText("Release");
 	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Tag"); ImGui::SameLine(label);
 	ImGui::SetNextItemWidth(narrow);
 	if (ImGui::InputText("##tag", s_Tag, sizeof(s_Tag))) s_TagAuto = false;
-	Hint("Git tag GitHub creates for the release. The game does not read it.");
+	Hint("Git tag GitHub creates for the release. The game does not read it.\n"
+		 "A tag deleted within the last hour is not offered again: GitHub keeps\n"
+		 "serving a deleted release's files under a reused tag for minutes.");
 
 	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Title"); ImGui::SameLine(label);
 	ImGui::SetNextItemWidth(field);
@@ -773,6 +836,7 @@ struct SManageRequest
 	bool		has_notes;
 	xr_string	title;
 	xr_string	notes;
+	xr_string	tags_file;	// moDelete: where a deleted tag is noted - see FreshTag
 
 	SManageRequest() : op(moList), id(0), has_title(false), has_notes(false) {}
 };
@@ -834,6 +898,7 @@ void ManageWorker(xr_string repo, xr_string token, SManageRequest rq)
 		EditorGithub::SDeleteResult result;
 		if (EditorGithub::DeleteRelease(repo, token, rq.id, s_ManageCancel, result, error))
 		{
+			if (!result.draft) NoteDeletedTag(rq.tags_file, result.tag);
 			if (result.draft)
 				note = NqUtil::Format("Draft release %s is deleted.", result.tag.c_str());
 			else if (result.tag_removed)
@@ -916,7 +981,9 @@ bool ManageStart(const SManageRequest& rq, xr_string& err)
 		Msg("* [XMS] %s release %s in %s", moDelete == rq.op ? "deleting" : "editing",
 			rq.id ? NqUtil::Format("#%llu", rq.id).c_str() : rq.tag.c_str(), m.update_github.c_str());
 	s_ManageCancel.Reset();
-	s_ManageThread = std::thread(&ManageWorker, m.update_github, account.token, rq);
+	SManageRequest job(rq);
+	job.tags_file = DeletedTagsFile(EditorProject::Root());
+	s_ManageThread = std::thread(&ManageWorker, m.update_github, account.token, job);
 	return true;
 }
 
@@ -1343,6 +1410,7 @@ void EditorPublish::RequestPublish()
 	strncpy_s(s_Requires, sizeof(s_Requires), game_version.c_str(), _TRUNCATE);
 	s_Notes[0]		= 0;
 	s_TagAuto		= true;
+	s_TagFor.clear();
 	s_TitleAuto		= true;
 	s_Prerelease	= false;
 	s_Latest		= true;

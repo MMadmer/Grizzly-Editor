@@ -169,7 +169,10 @@ pressing it:
   by the author - the changed files only, like any update. A published release
   itself is never overwritten, so "delete, then publish again" is the way to
   put other files out under one number; a higher version is still the plain way
-  to ship a change.
+  to ship a change. Right after a deletion the editor offers the tag
+  `v<version>-r2` instead of `v<version>`: under a tag that is used again GitHub
+  keeps answering the download address with the deleted files for several
+  minutes, and the game would see the old release until that cache lets go.
 
 A draft that a cancelled or failed publication left behind can be deleted here
 too; publishing the same version again would have reused it anyway.
