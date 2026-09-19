@@ -432,11 +432,13 @@ void EditorProject::CreateLayout()
 // on this list is the author's mod: any folder they create in the project root
 // is module content by definition ([vfs] can publish it anywhere), so the
 // content browser shows it and the export ships it.
+// releases\ holds packaged releases (Mod > Package Release): build output that
+// must never travel inside the module it was built from.
 bool EditorProject::IsEditorOnlyEntry(LPCSTR n)
 {
 	static const char* editor_only[] =
 	{
-		"import", "temp", "logs", "savedgames", "screenshots", "backup",
+		"import", "temp", "logs", "savedgames", "screenshots", "backup", "releases",
 		"project.ltx", "preview.png",
 	};
 	for (int i = 0; i < (int)(sizeof(editor_only)/sizeof(editor_only[0])); ++i)

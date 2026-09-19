@@ -12,7 +12,11 @@ and what to do when it refuses.
 | Field | What it is |
 |---|---|
 | `id` | Folder name in the game (`a-z 0-9 _ . -`). The module lands in `<game>\modules\<id>`. |
-| `name`, `version` | Shown to the player. |
+| `name` | Shown to the player in the game's Mods menu. |
+| `version` | One to four numbers separated by dots: `1`, `1.2`, `1.2.0`, `1.2.0.4`. The game offers an update only when the released version is higher than the installed one. |
+| `author`, `description` | Optional. Shown in the Mods menu; the description may span lines. Both (and `name`) may be a string table id the module ships in its own `gamedata\configs\text\<language>\*.xml`. |
+| `website` | Optional. The mod's page, opened from the Mods menu. Only `https://ap-pro.ru/...` and `https://moddb.com/...` (with or without `www.`) are accepted — the game ignores anything else, so the editor refuses to save it. |
+| `GitHub repository` | Optional, `owner/repo` (a pasted repository URL is reduced to it). Written as `[update] github`; the game checks that repository's latest release for updates — see §4. |
 | **Target mode** | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
 
 If you declare a **new mode**, the export also generates the new-game-screen
@@ -52,7 +56,9 @@ anything.
 Other outputs, when you need them:
 
 - **Mod → Build to Another Folder…** — same module layout, arbitrary target.
-  Use it to build into a second install, or to a staging folder before zipping.
+  Use it to build into a second install.
+- **Mod → Package Release…** — the zip and the update descriptor for other
+  people, see §4.
 - **Mod → Export Flat Gamedata…** — a plain `gamedata_<id>` folder for people
   running a JSGME-style setup instead of XMS.
 
@@ -92,18 +98,52 @@ enabling and disabling never touches the module's own files.
 
 ## 4. Shipping it to other people
 
-Yes — zip the folder, that's the whole thing:
+**Mod → Package Release…** (MCP: `xfined_mod_package`) builds the module and
+writes a release into `<project>\releases\<version>\`:
 
-```
-<game>\modules\<id>\        ->  <id>-1.0.0.zip
-```
+| File | What it is |
+|---|---|
+| `<id>-<version>.zip` | The package: the complete module, every entry under `modules/<id>/`. A module too big for one GitHub asset (2 GiB) is split into `<id>-<version>.part1.zip`, `.part2.zip`, … |
+| `<id>.update.ltx` | The release descriptor: id, version, the lowest game version the release runs on, and the name, size and SHA-256 of every package. The game reads it to decide whether an update exists and to verify what it downloads. |
 
-The recipient unpacks it into their own `<game>\modules\`, so they end up with
-`<game>\modules\<id>\mod.ltx` and the rest beside it. Nothing is written into
-the game's own files, on your machine or theirs, which is why uninstalling is
-just deleting the folder.
+`releases\` is editor-only: it is never shown as content and never ships inside
+the module. Packaging the same version again replaces its files (the old ones
+go to the Recycle Bin).
 
-Tell them the target mode you picked — a module gated to `survival` does
+**Manual install.** The package is an ordinary zip. Extracted into the game
+folder it lands in `<game>\modules\<id>\`, which is where the game reads modules
+from. Nothing is written into the game's own files, which is why uninstalling is
+just deleting that folder.
+
+**Updates through the game.** The first install is the zip above. After that the
+game's Mods menu offers every later version, as long as the releases are on
+GitHub:
+
+1. Put the repository into the manifest: **Mod → Edit Manifest… → GitHub
+   repository** (`owner/repo`), then package.
+2. In that repository create a release and attach **all** the files from
+   `releases\<version>\` — the descriptor and every package part. Keep the file
+   names as they are.
+3. Publish it as the **latest** release. A draft or a pre-release is invisible
+   to the game.
+4. For the next update raise `version` in the manifest, package and release
+   again. Players are offered an update only when the released version is
+   higher than the one they have; re-releasing the same number changes nothing
+   for them.
+
+**Requires game** in the packaging window is the lowest Dead Air: Refined
+version the release runs on. It defaults to the version of the linked game;
+leave it empty when any version will do.
+
+`website` takes only AP-PRO and ModDB links. The allow-list is enforced by the
+game as well, so a link to anywhere else would simply never open.
+
+The release format is a frozen contract between the editor and the game. Its
+normative text lives in the game repository, `docs/dead-air/MOD_UPDATES.md` —
+manifest metadata in section 1, the descriptor and the package layout in
+section 2.
+
+Tell players the target mode you picked — a module gated to `survival` does
 nothing in a `metro` playthrough, and that looks like a broken mod if nobody
 said so.
 
@@ -170,6 +210,8 @@ engine repo as `docs/dead-air/NQ_RUNTIME.md`.
 | `No linked game` | Link a game — the build target is that install. |
 | `target already holds a module: N file(s) there are not in this project` | Something else owns that folder. Confirm only if you're sure it's yours. |
 | `quest graph errors: N (see log)` | Open the log, fix the listed `E…` codes — see [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). |
+| `a release needs an orderable version` | Package Release only: set `version` to 1-4 numbers separated by dots (`1.2.0`). |
+| `package … is N bytes - GitHub refuses a release asset of 2 GiB and more` | Package Release only: one file is too big to ship as a GitHub asset even alone. The message names it. |
 
 ## Not the same thing
 

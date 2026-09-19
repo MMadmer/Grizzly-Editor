@@ -1386,6 +1386,19 @@ CCommandVar CommandModBuild(CCommandVar p1, CCommandVar p2)
     return TRUE;
 }
 
+// the two Mod dialogs, reachable from the palette, a shortcut and exec_command
+CCommandVar CommandModEditManifest(CCommandVar p1, CCommandVar p2)
+{
+    EditorMod::RequestEditManifest();
+    return TRUE;
+}
+
+CCommandVar CommandModPackage(CCommandVar p1, CCommandVar p2)
+{
+    EditorMod::RequestPackageRelease();
+    return TRUE;
+}
+
 //------------------------------------------------------------------------------
 // MCP inspector: scene / selection / per-object info for AI agents
 //------------------------------------------------------------------------------
@@ -2217,6 +2230,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_manifest"))		{ EditorMod::McpManifest(out);			return true; }
     if (0 == xr_strcmp(cmd, "mod_set_manifest"))	{ EditorMod::McpSetManifest(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "mod_export"))			{ EditorMod::McpExport(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
     // the modes a module can target, scanned from the linked game install
     if (0 == xr_strcmp(cmd, "game_modes"))			{ EditorGameModes::McpList(out);		return true; }
     // level overlays check the scene/project themselves and report json errors
@@ -4041,6 +4055,8 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_SE	    (COMMAND_TOGGLE_AIMAP_VISIBILITY,   "Visibility\\Toggle AIMap",			CommandToggleAiMapVisibility,true);
 	REGISTER_CMD_S	    (COMMAND_SHOW_CLIP_EDITOR,			CommandShowClipEditor);
 	REGISTER_CMD_SE	    (COMMAND_MOD_BUILD,					"Mod\\Build Into Game",			CommandModBuild,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_EDIT_MANIFEST,			"Mod\\Edit Manifest",			CommandModEditManifest,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_PACKAGE,				"Mod\\Package Release",			CommandModPackage,true);
 
 	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
 	// level.ini actually lists, so a rebind still wins.

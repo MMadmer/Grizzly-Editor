@@ -106,6 +106,34 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The editor's scanners (modes, occupied checkbox rows) read BOTH roots,
   `modules\` and `mods\`, because what is already installed must not break.
 
+## Mod releases
+
+- **Mod → Package Release…** / `mod_package` (`EditorMod::PackageRelease`)
+  writes `<id>.update.ltx` plus `<id>-<version>.zip` (`.partN.zip` when split)
+  into `<project>\releases\<version>`. The game's module updater downloads
+  exactly these files from the latest GitHub release of `[update] github`.
+- The descriptor name and format, the package names and the package layout
+  (every entry under `modules/<id>/`, UTF-8 names, no path twice) are a
+  **FROZEN contract shared with the game**. The normative text is the game
+  repo's `docs/dead-air/MOD_UPDATES.md`. This is the one exception to the
+  pre-release freedom above: a published release lives on GitHub, outside both
+  repositories, and has to install forever. Change it ONLY by adding optional
+  keys or sections; anything else is a paired change that starts in that
+  document.
+- A package always holds the COMPLETE module - never a patch or a delta. It is
+  staged through the real module export (`EditorMod::Export`), so a release
+  ships what a build ships and refuses what a build refuses. The same zip is
+  the manual install: extracted into the game folder it lands in
+  `modules\<id>`.
+- Manifest metadata rules (`ValidateVersion`, `ValidateWebsite`,
+  `ValidateGithubRepo`, the quoting of `name`/`author`/`description`) mirror
+  section 1 of the same document. The website allow-list (AP-PRO, ModDB) is
+  enforced on BOTH sides: the game ignores any other link, the editor refuses
+  to save it. Extending it is a game release first.
+- `releases\` is editor-only (`EditorProject::IsEditorOnlyEntry`): never shown
+  as content, never exported, never packaged. Inside the project a release may
+  only be written under `releases\`.
+
 ## Quests (NQ — node graph)
 
 - Architecture and rollout plan: `docs/NQ_ARCHITECTURE.md`. Until the

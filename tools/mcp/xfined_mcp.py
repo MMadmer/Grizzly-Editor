@@ -128,14 +128,19 @@ TOOLS = [
     {
         "name": "xfined_mod_manifest",
         "description": "XMS mod manifest (mod.ltx) of the active project: id, name, version, "
-                       "target game mode + declared modes, requires/after/before/conflicts lists "
+                       "Mods menu metadata (author, description, website, github update source), api, "
+                       "target + game mode + declared modes, requires/after/before/conflicts lists "
                        "and which module dirs exist.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "xfined_mod_set_manifest",
         "description": "Update fields of the active project's mod.ltx. Strings: id (validated, [a-z0-9_.-]+), "
-                       "name, version, mode (game mode the module is limited to; empty = all modes). "
+                       "name, version (1-4 numbers separated by dots), mode (game mode the module is limited to; "
+                       "empty = all modes). Mods menu metadata: author, description (line breaks allowed), "
+                       "website (https://ap-pro.ru or https://moddb.com only), github (owner/repo whose latest "
+                       "release updates the module; a repository URL is reduced to it). An invalid value is "
+                       "refused and nothing is written; an empty string clears the key. "
                        "provides_mode_id/provides_mode_title declare a new game mode (empty id drops it) - "
                        "export then generates the checkbox that puts it on the new-game screen. "
                        "target states which of the three the module is built for and is REQUIRED before "
@@ -148,7 +153,11 @@ TOOLS = [
             "properties": {
                 "id": {"type": "string"},
                 "name": {"type": "string"},
-                "version": {"type": "string"},
+                "version": {"type": "string", "description": "1-4 numbers separated by dots, e.g. 1.2.0"},
+                "author": {"type": "string"},
+                "description": {"type": "string", "description": "shown in the game's Mods menu; up to 4095 bytes"},
+                "website": {"type": "string", "description": "the mod's page: https://ap-pro.ru/... or https://moddb.com/..."},
+                "github": {"type": "string", "description": "owner/repo of the GitHub repository whose releases update the module"},
                 "mode": {"type": "string", "description": "target game mode id, empty = all modes"},
                 "provides_mode_id": {"type": "string", "description": "declare a new game mode (empty = remove)"},
                 "provides_mode_title": {"type": "string", "description": "the mode name the player will see"},
@@ -180,6 +189,27 @@ TOOLS = [
             "properties": {
                 "target": {"type": "string", "description": "target root folder (created if missing); omit = linked game root"},
                 "flat": {"type": "boolean", "description": "flat gamedata export (default false)"},
+            },
+        },
+    },
+    {
+        "name": "xfined_mod_package",
+        "description": "Package the active project as a release for the game's module updater: the descriptor "
+                       "<id>.update.ltx plus <id>-<version>.zip (split into .partN.zip to stay under GitHub's "
+                       "2 GiB asset limit). Every package holds the complete module under modules/<id>/, so it "
+                       "doubles as the manual install. Runs the same gate as xfined_mod_export and also needs an "
+                       "orderable version (1-4 numbers separated by dots). Files an earlier packaging of the same "
+                       "version left in out_dir are replaced without asking. Returns descriptor, out_dir, "
+                       "packages [{name,size,sha256}], files, unpacked, packed, requires_game, baked, warnings. "
+                       "Upload every returned file to a GitHub release of the manifest's 'github' repository "
+                       "and publish it as the latest release.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "out_dir": {"type": "string", "description": "output folder (created if missing); omit = <project>/releases/<version>. "
+                                                             "Inside the project only releases/ is accepted"},
+                "requires_game": {"type": "string", "description": "lowest Dead Air: Refined version the release runs on, MAJOR.MINOR.PATCH; "
+                                                                   "omit = the linked game's version, empty = no requirement"},
             },
         },
     },
@@ -1303,6 +1333,7 @@ CMD_MAP = {
     "xfined_mod_manifest": "mod_manifest",
     "xfined_mod_set_manifest": "mod_set_manifest",
     "xfined_mod_export": "mod_export",
+    "xfined_mod_package": "mod_package",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",
     "xfined_theme": "theme",

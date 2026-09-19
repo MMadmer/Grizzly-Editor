@@ -73,6 +73,8 @@ enum
     COMMAND_SHOW_WORLD_OUTLINER,
     COMMAND_DROP_TO_GROUND,		// End: settle the selection on the surface below
     COMMAND_MOD_BUILD,			// Ctrl+B: clean build of the mod into the linked game
+    COMMAND_MOD_EDIT_MANIFEST,	// opens Mod > Edit Manifest...
+    COMMAND_MOD_PACKAGE,		// opens Mod > Package Release...
 };
 
 class CLevelMain: public TUI{

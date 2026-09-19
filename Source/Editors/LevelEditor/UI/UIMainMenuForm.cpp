@@ -87,6 +87,9 @@ void UIMainMenuForm::Draw()
 
             if (ImGui::MenuItem("Build to Another Folder...", ""))	EditorMod::RequestExportModule();
             if (ImGui::MenuItem("Export Flat Gamedata...", ""))		EditorMod::RequestExportFlat();
+            if (ImGui::MenuItem("Package Release...", ""))			EditorMod::RequestPackageRelease();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Zip package(s) and the update descriptor for a GitHub release.\nThe zip installs by extraction into the game folder; the Mods menu updates from it.");
             ImGui::Separator();
             if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
             ImGui::Separator();

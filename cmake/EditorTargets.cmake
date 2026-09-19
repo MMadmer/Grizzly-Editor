@@ -139,10 +139,13 @@ target_include_directories(XrECore PRIVATE
 # d3d9 is gone: under USE_DX11 nothing creates a D3D9 device any more.
 # d3dx9 stays for now - the editor still leans on its CPU math (D3DXMatrix*,
 # D3DXVec*, FVF declarator helpers); replacing those is the rest of S7.
+# zlib (minizip), Bcrypt (SHA-256) and Version (the linked game's exe version)
+# serve Mod > Package Release; the zip headers come in as "Zlib/zip.h" through
+# External/Public, so no include directory is added for them.
 target_link_libraries(XrECore PRIVATE
     Luabind Ogg RedImageTool Theora Vorbis XrAPI XrCDB XrCore XrEngine XrParticles
-    XrPhysics XrSound FreeMagic XrDXT XrEProps XrETools XrEUI
-    d3d11 dxgi d3dcompiler vfw32 Winmm dxguid dinput8 Rpcrt4 lua51)
+    XrPhysics XrSound FreeMagic XrDXT XrEProps XrETools XrEUI zlib
+    d3d11 dxgi d3dcompiler vfw32 Winmm dxguid dinput8 Rpcrt4 Bcrypt Version lua51)
 
 #-- LevelEditor ----------------------------------------------------------------
 file(GLOB_RECURSE LE_SRC CONFIGURE_DEPENDS "${ED}/LevelEditor/*.cpp")

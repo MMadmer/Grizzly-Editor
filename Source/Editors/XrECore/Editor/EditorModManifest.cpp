@@ -8,6 +8,9 @@
 #include "Nq/NqExport.h"
 #include "Nq/NqDoc.h"
 #include "Nq/NqUtil.h"
+#include <shellapi.h>	// SHFileOperation: replaced release files go to the Recycle Bin
+#include <bcrypt.h>		// SHA-256 of a finished package
+#include "Zlib/zip.h"	// minizip, release packages
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorProject)
@@ -84,6 +87,29 @@ static xr_string Utf8ToCp1251(const char* src)
 	xr_vector<char> ansi(ansi_len);
 	::WideCharToMultiByte(1251, 0, wide.data(), -1, ansi.data(), ansi_len, "?", NULL);
 	out = ansi.data();
+	return out;
+}
+
+static bool HasNonAscii(const char* s)
+{
+	for (; *s; ++s)
+		if ((unsigned char)*s >= 0x80) return true;
+	return false;
+}
+
+// File names come out of the ANSI file APIs; a zip entry name is UTF-8.
+static xr_string AnsiToUtf8(const char* src)
+{
+	xr_string out = src;
+	const int wide_len = ::MultiByteToWideChar(CP_ACP, 0, src, -1, NULL, 0);
+	if (wide_len <= 0) return out;
+	xr_vector<wchar_t> wide(wide_len);
+	::MultiByteToWideChar(CP_ACP, 0, src, -1, wide.data(), wide_len);
+	const int utf8_len = ::WideCharToMultiByte(CP_UTF8, 0, wide.data(), -1, NULL, 0, NULL, NULL);
+	if (utf8_len <= 0) return out;
+	xr_vector<char> utf8(utf8_len);
+	::WideCharToMultiByte(CP_UTF8, 0, wide.data(), -1, utf8.data(), utf8_len, NULL, NULL);
+	out = utf8.data();
 	return out;
 }
 
@@ -250,8 +276,177 @@ void EditorMod::DeriveId(LPCSTR project_name, char* dst, u32 dst_size)
 }
 
 //------------------------------------------------------------------------------
+// metadata rules - the game enforces the same ones (MOD_UPDATES.md, section 1)
+//------------------------------------------------------------------------------
+// `min_parts`..`max_parts` dot-separated decimal numbers, 9 digits each at most
+static bool DottedNumber(LPCSTR v, int min_parts, int max_parts)
+{
+	if (!v || !v[0]) return false;
+	int parts = 1, digits = 0;
+	for (const char* p = v; *p; ++p)
+	{
+		if (*p >= '0' && *p <= '9')
+		{
+			if (++digits > 9) return false;
+		}
+		else if (*p == '.')
+		{
+			if (!digits || ++parts > max_parts) return false;
+			digits = 0;
+		}
+		else return false;
+	}
+	return digits > 0 && parts >= min_parts;
+}
+
+bool EditorMod::ValidateVersion(LPCSTR version)
+{
+	return DottedNumber(version, 1, 4);
+}
+
+static bool IsAlnum(char c)
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+}
+
+bool EditorMod::ValidateWebsite(LPCSTR url)
+{
+	if (!url || !url[0]) return true;
+	if (xr_strlen(url) > 512) return false;
+	static const char kScheme[] = "https://";
+	if (0 != strncmp(url, kScheme, sizeof(kScheme) - 1)) return false;
+
+	// The host is everything up to the first '/', compared whole: "user@host",
+	// "host:port" and "host.evil.com" all land inside it and fail the match.
+	const char* host = url + sizeof(kScheme) - 1;
+	const char* rest = strchr(host, '/');
+	const size_t host_len = rest ? size_t(rest - host) : xr_strlen(host);
+	static const char* kHosts[] = { "ap-pro.ru", "www.ap-pro.ru", "moddb.com", "www.moddb.com" };
+	bool known = false;
+	for (int i = 0; i < (int)(sizeof(kHosts) / sizeof(kHosts[0])); ++i)
+		if (host_len == xr_strlen(kHosts[i]) && 0 == _strnicmp(host, kHosts[i], host_len)) known = true;
+	if (!known) return false;
+
+	for (const char* p = rest; p && *p; ++p)
+		if (!IsAlnum(*p) && !strchr("-._~/?#&=%+", *p)) return false;
+	return true;
+}
+
+bool EditorMod::ValidateGithubRepo(LPCSTR repo)
+{
+	if (!repo || !repo[0]) return true;
+	const char* slash = strchr(repo, '/');
+	if (!slash) return false;
+	const size_t owner_len = size_t(slash - repo);
+	const char* name = slash + 1;
+	const size_t name_len = xr_strlen(name);
+	if (owner_len < 1 || owner_len > 39 || name_len < 1 || name_len > 100) return false;
+	for (const char* p = repo; p < slash; ++p)
+		if (!IsAlnum(*p) && *p != '-') return false;
+	// a second '/' is not in the repository charset, so "a/b/c" fails here
+	for (const char* p = name; *p; ++p)
+		if (!IsAlnum(*p) && *p != '-' && *p != '.' && *p != '_') return false;
+	return 0 != strcmp(name, ".") && 0 != strcmp(name, "..");
+}
+
+void EditorMod::NormalizeGithubRepo(LPCSTR in, xr_string& out)
+{
+	out = in ? in : "";
+	Trim(out);
+	static const char* kPrefixes[] =
+	{
+		"https://github.com/", "http://github.com/", "https://www.github.com/",
+		"http://www.github.com/", "github.com/", "www.github.com/",
+	};
+	for (int i = 0; i < (int)(sizeof(kPrefixes) / sizeof(kPrefixes[0])); ++i)
+	{
+		const size_t n = xr_strlen(kPrefixes[i]);
+		if (0 != _strnicmp(out.c_str(), kPrefixes[i], n)) continue;
+		out.erase(0, n);
+		// a page URL carries more than the repository: ?tab=, #readme, /tree/main
+		const size_t query = out.find_first_of("?#");
+		if (query != xr_string::npos) out.erase(query);
+		const size_t owner_end = out.find('/');
+		const size_t repo_end = (owner_end == xr_string::npos) ? owner_end : out.find('/', owner_end + 1);
+		if (repo_end != xr_string::npos) out.erase(repo_end);
+		break;
+	}
+	// clone URLs end in .git; GitHub allows no repository name that does
+	if (out.size() > 4 && 0 == _stricmp(out.c_str() + out.size() - 4, ".git"))
+		out.erase(out.size() - 4);
+}
+
+//------------------------------------------------------------------------------
 // mod.ltx parse / write
 //------------------------------------------------------------------------------
+// Offset of the ';' that starts a comment, npos when the line has none. A ';'
+// between a pair of double quotes belongs to the value (MOD_UPDATES.md 1.1);
+// a quote that never closes is an ordinary character.
+static size_t FindComment(const xr_string& s)
+{
+	for (size_t i = 0; i < s.size(); ++i)
+	{
+		if (s[i] == ';') return i;
+		if (s[i] != '"') continue;
+		size_t close = i + 1;
+		for (; close < s.size() && s[close] != '"'; ++close)
+			if (s[close] == '\\' && close + 1 < s.size()) ++close;
+		if (close < s.size()) i = close;
+	}
+	return xr_string::npos;
+}
+
+// "..." -> text: \n, \" and \\ are decoded, anything else stays as written.
+// False (dst untouched) when `val` is not exactly one quoted string.
+static bool Unquote(const xr_string& val, xr_string& dst)
+{
+	if (val.size() < 2 || val[0] != '"') return false;
+	xr_string out;
+	size_t i = 1;
+	for (; i < val.size() && val[i] != '"'; ++i)
+	{
+		if (val[i] == '\\' && i + 1 < val.size())
+		{
+			const char next = val[i + 1];
+			if (next == 'n' || next == '"' || next == '\\')
+			{
+				out += (next == 'n') ? '\n' : next;
+				++i;
+				continue;
+			}
+		}
+		out += val[i];
+	}
+	if (i + 1 != val.size()) return false;	// never closed, or text after the closing quote
+	dst = out;
+	return true;
+}
+
+static xr_string Quote(const xr_string& s)
+{
+	xr_string out = "\"";
+	for (size_t i = 0; i < s.size(); ++i)
+	{
+		switch (s[i])
+		{
+		case '\\':	out += "\\\\";	break;
+		case '"':	out += "\\\"";	break;
+		case '\n':	out += "\\n";	break;
+		default:	out += s[i];	break;
+		}
+	}
+	out += '"';
+	return out;
+}
+
+// name and author stay bare unless the bare form would not read back as written
+static bool NeedsQuotes(const xr_string& s)
+{
+	if (s.empty()) return false;
+	if (s.find_first_of(";\"\n") != xr_string::npos) return true;
+	return s[0] == ' ' || s[0] == '\t' || s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t';
+}
+
 bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 {
 	m = SManifest();
@@ -260,8 +455,11 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 	sprintf_s(path, "%s\\mod.ltx", project_root);
 	xr_string text;
 	if (!ReadTextFile(path, text)) return false;
+	// UTF-8, a BOM is skipped, anything that is not valid UTF-8 is cp1251 -
+	// the same reading the game gives the file
+	text = NqUtil::GameTextToUtf8(text.data(), (u32)text.size());
 
-	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secExtra };
+	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExtra };
 	ESec sec = secNone;
 
 	size_t pos = 0;
@@ -275,7 +473,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 
 		// known sections drop comments; unknown ones are kept verbatim
 		xr_string line = raw;
-		const size_t sc = line.find(';');
+		const size_t sc = FindComment(line);
 		if (sc != xr_string::npos) { line = line.substr(0, sc); Trim(line); }
 
 		if (!line.empty() && line[0] == '[')
@@ -290,13 +488,14 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 			else if (sn == "order")			sec = secOrder;
 			else if (sn == "conflicts")		sec = secConflicts;
 			else if (sn == "provides_mode")	sec = secProvides;
+			else if (sn == "update")		sec = secUpdate;
 			else { sec = secExtra; m.extra.push_back(raw); }
 			continue;
 		}
 		if (sec == secExtra) { if (!raw.empty()) m.extra.push_back(raw); continue; }
 		if (line.empty()) continue;
 
-		if (sec == secModule || sec == secOrder || sec == secProvides)
+		if (sec == secModule || sec == secOrder || sec == secProvides || sec == secUpdate)
 		{
 			xr_string key = line, val;
 			const size_t eq = line.find('=');
@@ -304,18 +503,27 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 			Trim(key); Trim(val);
 			if (sec == secModule)
 			{
-				if      (key == "id")		m.id = val;
-				else if (key == "name")		m.name = val;
-				else if (key == "version")	m.version = val;
-				else if (key == "api")		m.api = val;
-				else if (key == "mode")		m.mode = val;
-			else if (key == "target")	m.target = val;
-				else						m.module_extra.push_back(line);
+				// the three display texts may be quoted; every other value is taken as written
+				if      (key == "id")			m.id = val;
+				else if (key == "name")			{ if (!Unquote(val, m.name)) m.name = val; }
+				else if (key == "version")		m.version = val;
+				else if (key == "author")		{ if (!Unquote(val, m.author)) m.author = val; }
+				else if (key == "description")	{ if (!Unquote(val, m.description)) m.description = val; }
+				else if (key == "website")		m.website = val;
+				else if (key == "api")			m.api = val;
+				else if (key == "mode")			m.mode = val;
+				else if (key == "target")		m.target = val;
+				else							m.module_extra.push_back(line);
 			}
 			else if (sec == secOrder)
 			{
 				if      (key == "after")	SplitList(m.after, val.c_str(), ',');
 				else if (key == "before")	SplitList(m.before, val.c_str(), ',');
+			}
+			else if (sec == secUpdate)
+			{
+				if (key == "github")		m.update_github = val;
+				else						m.update_extra.push_back(line);
 			}
 			else
 			{
@@ -338,14 +546,27 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 	return true;
 }
 
-static void AppendKey(xr_string& out, LPCSTR key, LPCSTR val)
+// `width` 11 fits "description", the longest mod.ltx key; the release
+// descriptor asks for 13 ("requires_game")
+static void AppendKey(xr_string& out, LPCSTR key, LPCSTR val, int width = 11)
 {
-	char pad[16];
-	sprintf_s(pad, "%-10s", key);	// keys are short literals only
+	char pad[24];
+	sprintf_s(pad, "%-*s", width, key);	// keys are short literals only
 	out += pad;
 	out += " = ";
 	out += val;
 	out += "\r\n";
+}
+
+// a display text key: quoted and escaped when `always`, or when it has to be
+static void AppendText(xr_string& out, LPCSTR key, const xr_string& val, bool always)
+{
+	// CR goes before the choice is made: CRLF text from a paste or a JSON
+	// argument becomes one \n, and a stray CR would end the line in the file
+	xr_string text;
+	for (size_t i = 0; i < val.size(); ++i)
+		if (val[i] != '\r') text += val[i];
+	AppendKey(out, key, (always || NeedsQuotes(text)) ? Quote(text).c_str() : text.c_str());
 }
 
 static void AppendJoined(xr_string& out, LPCSTR key, const xr_vector<xr_string>& v)
@@ -365,8 +586,16 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 	xr_string t;
 	t += "[module]\r\n";
 	AppendKey(t, "id", m.id.c_str());
-	AppendKey(t, "name", m.name.c_str());
+	AppendText(t, "name", m.name, false);
 	AppendKey(t, "version", m.version.empty() ? "1.0.0" : m.version.c_str());
+	// optional metadata: an empty key is left out. The description is always
+	// quoted - it is the one text that routinely holds ';' and line breaks.
+	if (!m.author.empty())
+		AppendText(t, "author", m.author, false);
+	if (!m.description.empty())
+		AppendText(t, "description", m.description, true);
+	if (!m.website.empty())
+		AppendKey(t, "website", m.website.c_str());
 	AppendKey(t, "api", m.api.empty() ? "1" : m.api.c_str());
 	// empty mode = active in all game modes; the key is omitted then
 	if (!m.mode.empty())
@@ -376,6 +605,14 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		AppendKey(t, "target", m.target.c_str());
 	for (u32 i = 0; i < m.module_extra.size(); ++i)
 		{ t += m.module_extra[i]; t += "\r\n"; }
+	if (!m.update_github.empty() || !m.update_extra.empty())
+	{
+		t += "\r\n[update]\r\n";
+		if (!m.update_github.empty())
+			AppendKey(t, "github", m.update_github.c_str());
+		for (u32 i = 0; i < m.update_extra.size(); ++i)
+			{ t += m.update_extra[i]; t += "\r\n"; }
+	}
 	if (!m.requires_list.empty())
 	{
 		t += "\r\n[requires]\r\n";
@@ -1089,23 +1326,555 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 }
 
 //------------------------------------------------------------------------------
+// release packaging
+//
+// The descriptor name and format, the package names and the package layout are
+// a FROZEN contract with the game's module updater - game repo,
+// docs/dead-air/MOD_UPDATES.md, section 2. It changes by adding optional keys
+// and in no other way: a published release has to install forever.
+//------------------------------------------------------------------------------
+// input bytes per package: deflate never grows data by more than a fraction of
+// a percent, so a package stays clear of the asset limit whatever it holds
+static const u64 kPartInputLimit	= 1536ull << 20;
+static const u64 kAssetLimit		= 2048ull << 20;	// GitHub refuses a release asset of 2 GiB
+static const u32 kMaxPackages		= 64;
+static const u32 kMaxAssetName		= 128;
+static const u32 kZipMadeBy			= 63;				// FAT host, spec 6.3 - the one that defines UTF-8 names
+static const u32 kZipUtf8Flag		= 1 << 11;
+
+struct SStagedFile
+{
+	xr_string	rel;		// below the staged module folder, as found on disk
+	xr_string	entry;		// zip entry name: modules/<id>/..., forward slashes, UTF-8
+	xr_string	key;		// lowercased entry - the package order
+	u64			size;
+	FILETIME	written;
+};
+
+static void ListStagedFiles(LPCSTR dir, const xr_string& rel_dir, xr_vector<SStagedFile>& out)
+{
+	string_path mask;
+	sprintf_s(mask, "%s\\*", dir);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return;
+	do
+	{
+		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		xr_string rel = rel_dir;
+		if (!rel.empty()) rel += "\\";
+		rel += fd.cFileName;
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			string_path sub;
+			sprintf_s(sub, "%s\\%s", dir, fd.cFileName);
+			ListStagedFiles(sub, rel, out);
+			continue;
+		}
+		SStagedFile f;
+		f.rel		= rel;
+		f.size		= (u64(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+		f.written	= fd.ftLastWriteTime;
+		out.push_back(f);
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+}
+
+// MOD_UPDATES.md 2.2: what a path below modules/<id>/ may look like. The game
+// refuses a whole package over one bad name, so the editor refuses first.
+static bool PackagePathOk(const xr_string& path)
+{
+	for (size_t b = 0; b <= path.size();)
+	{
+		size_t e = path.find('/', b);
+		if (e == xr_string::npos) e = path.size();
+		xr_string part = path.substr(b, e - b);
+		b = e + 1;
+
+		if (part.empty() || part == "." || part == "..") return false;
+		if (part[part.size() - 1] == '.' || part[part.size() - 1] == ' ') return false;
+		for (size_t i = 0; i < part.size(); ++i)
+		{
+			const unsigned char c = (unsigned char)part[i];
+			if (c < 0x20 || c == 0x7F || strchr("<>:\"|?*\\", c)) return false;
+		}
+		// device names are reserved with an extension too: nul, nul.txt
+		const size_t dot = part.find('.');
+		if (dot != xr_string::npos) part.erase(dot);
+		for (size_t i = 0; i < part.size(); ++i)
+			if (part[i] >= 'A' && part[i] <= 'Z') part[i] = char(part[i] - 'A' + 'a');
+		if (part == "con" || part == "prn" || part == "aux" || part == "nul") return false;
+		if (part.size() == 4 && (0 == part.compare(0, 3, "com") || 0 == part.compare(0, 3, "lpt")) &&
+			part[3] >= '1' && part[3] <= '9') return false;
+	}
+	return true;
+}
+
+static uLong ZipDosTime(const FILETIME& utc)
+{
+	FILETIME local;
+	WORD date = 0, time = 0;
+	if (::FileTimeToLocalFileTime(&utc, &local) && ::FileTimeToDosDateTime(&local, &date, &time))
+		return (uLong(date) << 16) | time;
+	return 0x00210000;	// 1980-01-01: minizip reads 0 as "no date given"
+}
+
+// keeps the window alive during the long loops; true = the user cancelled
+static bool PackagingAborted()
+{
+	if (!UI) return false;
+	UI->ProgressCheckpoint();
+	return UI->NeedAbort();
+}
+
+// files [first, last) of `files` into one zip. `done` counts input bytes across
+// all packages, for the progress bar.
+static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, const xr_vector<SStagedFile>& files,
+					   u32 first, u32 last, xr_vector<u8>& buf, SPBItem* pb, u64& done, xr_string& err)
+{
+	zipFile zip = zipOpen64(zip_path, APPEND_STATUS_CREATE);
+	if (!zip) { err = xr_string("can't create ") + zip_path; return false; }
+
+	for (u32 i = first; i < last && err.empty(); ++i)
+	{
+		const SStagedFile& f = files[i];
+		string_path src;
+		sprintf_s(src, "%s\\%s", module_dir, f.rel.c_str());
+		HANDLE h = ::CreateFileA(src, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+		if (INVALID_HANDLE_VALUE == h) { err = "can't read " + f.rel; break; }
+
+		zip_fileinfo info = {};
+		info.dosDate = ZipDosTime(f.written);
+		// zip64 only where 32 bits cannot hold the entry (with room for data deflate
+		// fails to shrink): every other entry stays readable by any unzip
+		const int zip64 = (f.size >= 0xFF000000ull) ? 1 : 0;
+		if (ZIP_OK != zipOpenNewFileInZip4_64(zip, f.entry.c_str(), &info, NULL, 0, NULL, 0, NULL,
+				Z_DEFLATED, 9, 0, -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, NULL, 0,
+				kZipMadeBy, HasNonAscii(f.entry.c_str()) ? kZipUtf8Flag : 0, zip64))
+			err = "can't add " + f.rel + " to the package";
+
+		if (pb) pb->Info(f.rel.c_str());
+		u64 packed = 0;
+		while (err.empty())
+		{
+			DWORD rd = 0;
+			if (!::ReadFile(h, buf.data(), (DWORD)buf.size(), &rd, NULL)) { err = "can't read " + f.rel; break; }
+			if (!rd) break;
+			if (ZIP_OK != zipWriteInFileInZip(zip, buf.data(), rd)) { err = "can't write " + xr_string(zip_path); break; }
+			packed	+= rd;
+			done	+= rd;
+			if (pb) pb->Update(float(done >> 10));
+			if (PackagingAborted()) err = "cancelled";
+		}
+		::CloseHandle(h);
+		if (err.empty() && packed != f.size) err = "size changed while packaging: " + f.rel;
+		if (ZIP_OK != zipCloseFileInZip(zip) && err.empty()) err = "can't write " + xr_string(zip_path);
+	}
+	if (ZIP_OK != zipClose(zip, NULL) && err.empty()) err = xr_string("can't write ") + zip_path;
+	if (err.empty()) return true;
+	::DeleteFileA(zip_path);
+	return false;
+}
+
+static bool Sha256File(LPCSTR path, xr_vector<u8>& buf, xr_string& hex, u64& size, xr_string& err)
+{
+	hex.clear();
+	size = 0;
+	HANDLE h = ::CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+	if (INVALID_HANDLE_VALUE == h) { err = xr_string("can't read ") + path; return false; }
+
+	BCRYPT_ALG_HANDLE	alg = 0;
+	BCRYPT_HASH_HANDLE	hash = 0;
+	u8					digest[32];
+	bool ok = BCRYPT_SUCCESS(::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0)) &&
+			  BCRYPT_SUCCESS(::BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0));
+	while (ok)
+	{
+		DWORD rd = 0;
+		ok = !!::ReadFile(h, buf.data(), (DWORD)buf.size(), &rd, NULL);
+		if (!ok || !rd) break;
+		ok = BCRYPT_SUCCESS(::BCryptHashData(hash, buf.data(), rd, 0));
+		size += rd;
+		if (PackagingAborted()) { err = "cancelled"; ok = false; }
+	}
+	ok = ok && BCRYPT_SUCCESS(::BCryptFinishHash(hash, digest, sizeof(digest), 0));
+	if (hash)	::BCryptDestroyHash(hash);
+	if (alg)	::BCryptCloseAlgorithmProvider(alg, 0);
+	::CloseHandle(h);
+	if (!ok)
+	{
+		if (err.empty()) err = xr_string("can't hash ") + path;
+		return false;
+	}
+	for (int i = 0; i < (int)sizeof(digest); ++i)
+	{
+		char byte[4];
+		sprintf_s(byte, "%02x", digest[i]);
+		hex += byte;
+	}
+	return true;
+}
+
+// <stem>.zip or <stem>.part<N>.zip - matched whole, so "test-1.0" never claims
+// a package of "test-1.0.1" that shares the folder
+static bool IsPackageName(LPCSTR name, const xr_string& stem)
+{
+	if (0 != _strnicmp(name, stem.c_str(), stem.size())) return false;
+	const char* tail = name + stem.size();
+	if (0 == _stricmp(tail, ".zip")) return true;
+	if (0 != _strnicmp(tail, ".part", 5)) return false;
+	tail += 5;
+	if (*tail < '0' || *tail > '9') return false;
+	while (*tail >= '0' && *tail <= '9') ++tail;
+	return 0 == _stricmp(tail, ".zip");
+}
+
+// what a packaging of this id + version left in `dir`: the descriptor and the
+// packages. These are the files the next packaging replaces.
+static void ListReleaseFiles(LPCSTR dir, const xr_string& id, const xr_string& version, xr_vector<xr_string>& names)
+{
+	names.clear();
+	const xr_string descriptor = id + ".update.ltx";
+	const xr_string stem = id + "-" + version;
+	string_path mask;
+	sprintf_s(mask, "%s\\*", dir);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return;
+	do
+	{
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+		if (0 == _stricmp(fd.cFileName, descriptor.c_str()) || IsPackageName(fd.cFileName, stem))
+			names.push_back(xr_string(fd.cFileName));
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+}
+
+// File work has no editor undo, so a replaced release goes to the Recycle Bin;
+// the shell may refuse (a network share, a full bin) - then it is a plain delete.
+static void RecycleFile(LPCSTR path)
+{
+	char from[MAX_PATH + 2] = {};	// SHFileOperation wants a double-null-terminated list
+	const size_t n = xr_strlen(path);
+	if (n + 2 <= sizeof(from))
+	{
+		CopyMemory(from, path, n);
+		SHFILEOPSTRUCTA op = {};
+		op.wFunc	= FO_DELETE;
+		op.pFrom	= from;
+		op.fFlags	= FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+		::SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+		if (0 == ::SHFileOperationA(&op) && !op.fAnyOperationsAborted) return;
+	}
+	::SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+	::DeleteFileA(path);
+}
+
+static DWORD CALLBACK MoveProgress(LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER,
+								   DWORD, DWORD, HANDLE, HANDLE, LPVOID)
+{
+	if (UI) UI->ProgressCheckpoint();
+	return PROGRESS_CONTINUE;
+}
+
+// everything that decides whether this manifest can be released at all
+static bool ReleaseGate(const EditorMod::SManifest& m, xr_string& err)
+{
+	if (!EditorMod::ValidateId(m.id.c_str()))
+		err = "module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)";
+	else if (!EditorMod::ValidateVersion(m.version.c_str()))
+		err = "a release needs an orderable version: 1-4 numbers separated by dots, e.g. 1.2.0";
+	else if (!EditorMod::ValidateWebsite(m.website.c_str()))
+		err = "invalid website in mod.ltx: only https://ap-pro.ru or https://moddb.com links are allowed";
+	else if (!EditorMod::ValidateGithubRepo(m.update_github.c_str()))
+		err = "invalid [update] github in mod.ltx: owner/repo expected";
+	// 2.1: an asset name is 1-128 characters and does not start with a dot
+	else if (m.id[0] == '.')
+		err = "module id starts with a dot - a release asset name cannot";
+	else if (m.id.size() + m.version.size() + xr_strlen("-.part64.zip") > kMaxAssetName)
+		err = "module id and version are too long for a release asset name (128 characters)";
+	return err.empty();
+}
+
+// "<project>\releases\<version>" by default; a relative folder is taken against
+// the project, never the process CWD. Inside the project only releases\ is
+// allowed: anywhere else the packages would ship inside the next build.
+static bool ResolveReleaseDir(LPCSTR project_root, LPCSTR out_dir, const xr_string& version,
+							  string_path& dst, xr_string& err)
+{
+	string_path asked = {}, joined;
+	NormalizePath(out_dir ? out_dir : "", asked, sizeof(asked));
+	const bool absolute = (asked[0] && asked[1] == ':') || (asked[0] == '\\' && asked[1] == '\\');
+	if (!asked[0])		sprintf_s(joined, "%s\\releases\\%s", project_root, version.c_str());
+	else if (absolute)	strcpy_s(joined, asked);
+	else				sprintf_s(joined, "%s\\%s", project_root, asked);
+	// resolves ".." too, so the check below looks at where the folder really is
+	string_path root;
+	if (!::GetFullPathNameA(joined, sizeof(dst), dst, NULL) ||
+		!::GetFullPathNameA(project_root, sizeof(root), root, NULL)) { err = "invalid output folder"; return false; }
+	size_t n = xr_strlen(root);
+	while (n && root[n - 1] == '\\') root[--n] = 0;
+
+	if (0 != _strnicmp(dst, root, n) || (dst[n] != '\\' && dst[n] != 0)) return true;
+	if (0 == _strnicmp(dst + n, "\\releases", 9) && (dst[n + 9] == '\\' || dst[n + 9] == 0)) return true;
+	err = "output folder is inside the project content - use <project>\\releases or a folder outside the project";
+	return false;
+}
+
+// stage -> packages -> hashes -> descriptor. `stage` is a private scratch
+// folder the caller creates and removes, so a failure leaves `out` untouched.
+static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPCSTR stage, LPCSTR out,
+						 LPCSTR requires_game, EditorMod::SPackageResult& result, xr_string& err, xr_string* warnings)
+{
+	// The real module export does the staging: what the release ships is what a
+	// build ships, and whatever a build refuses (no target mode, a broken quest)
+	// is refused here by the same code.
+	int exported = 0;
+	xr_string module_dir;
+	if (!EditorMod::Export(project_root, stage, false, exported, module_dir, err, true, warnings))
+		return false;
+
+	xr_vector<SStagedFile> files;
+	ListStagedFiles(module_dir.c_str(), "", files);
+	const xr_string prefix = "modules/" + m.id + "/";
+	bool has_manifest = false;
+	u64 unpacked = 0;
+	for (u32 i = 0; i < files.size(); ++i)
+	{
+		SStagedFile& f = files[i];
+		xr_string rel = AnsiToUtf8(f.rel.c_str());
+		for (size_t c = 0; c < rel.size(); ++c)
+			if (rel[c] == '\\') rel[c] = '/';
+		if (!PackagePathOk(rel))
+		{
+			err = "file name the game's updater refuses (reserved name, trailing dot or space, control character): " + f.rel;
+			return false;
+		}
+		f.entry = prefix + rel;
+		f.key = f.entry;
+		for (size_t c = 0; c < f.key.size(); ++c)
+			if (f.key[c] >= 'A' && f.key[c] <= 'Z') f.key[c] = char(f.key[c] - 'A' + 'a');
+		has_manifest = has_manifest || f.key == prefix + "mod.ltx";
+		unpacked += f.size;
+	}
+	if (!has_manifest) { err = "the staged module has no mod.ltx"; return false; }
+	// the same input always yields the same package order
+	std::sort(files.begin(), files.end(), [](const SStagedFile& a, const SStagedFile& b) { return a.key < b.key; });
+
+	// [first, last) of every package; a file over the limit ends up alone in its own
+	xr_vector<std::pair<u32, u32> > parts;
+	u64 part_bytes = 0;
+	u32 part_first = 0;
+	for (u32 i = 0; i < files.size(); ++i)
+	{
+		if (i > part_first && part_bytes + files[i].size > kPartInputLimit)
+		{
+			parts.push_back(std::make_pair(part_first, i));
+			part_first = i;
+			part_bytes = 0;
+		}
+		part_bytes += files[i].size;
+	}
+	parts.push_back(std::make_pair(part_first, (u32)files.size()));
+	if (parts.size() > kMaxPackages)
+	{
+		err = NqUtil::Format("the module needs %u packages - a release holds %u at most", (u32)parts.size(), kMaxPackages);
+		return false;
+	}
+
+	string_path packages_dir, path;
+	sprintf_s(packages_dir, "%s\\packages", stage);
+	CreateDirChain(packages_dir);
+
+	// on screen until the function returns: moving gigabytes to another drive
+	// is part of the wait
+	struct SProgress
+	{
+		SPBItem* item;
+		~SProgress() { if (item) UI->ProgressEnd(item); }
+	} progress = { UI ? UI->ProgressStart(float(unpacked >> 10) + 1.f, "Packaging release...") : 0 };
+	SPBItem* const pb = progress.item;
+	xr_vector<u8> buf(1 << 20);
+	u64 done = 0, packed = 0;
+	for (u32 p = 0; p < parts.size() && err.empty(); ++p)
+	{
+		EditorMod::SPackageFile pkg;
+		pkg.name = m.id + "-" + m.version;
+		if (parts.size() > 1) pkg.name += NqUtil::Format(".part%u", p + 1);
+		pkg.name += ".zip";
+		sprintf_s(path, "%s\\%s", packages_dir, pkg.name.c_str());
+		if (!ZipPackage(path, module_dir.c_str(), files, parts[p].first, parts[p].second, buf, pb, done, err)) break;
+		if (pb) pb->Info(pkg.name.c_str());
+		if (!Sha256File(path, buf, pkg.sha256, pkg.size, err)) break;
+		if (pkg.size >= kAssetLimit)
+		{
+			u32 biggest = parts[p].first;
+			for (u32 i = parts[p].first; i < parts[p].second; ++i)
+				if (files[i].size > files[biggest].size) biggest = i;
+			err = NqUtil::Format("package %s is %llu bytes - GitHub refuses a release asset of 2 GiB and more (largest file inside: %s)",
+				pkg.name.c_str(), pkg.size, files[biggest].rel.c_str());
+			break;
+		}
+		packed += pkg.size;
+		result.packages.push_back(pkg);
+	}
+	if (!err.empty()) return false;
+
+	// Only now is the output folder touched. What an earlier packaging of this id
+	// and version left there goes first - a 3-part build followed by a 1-part one
+	// must not leave part2 and part3 beside the new release.
+	CreateDirChain(out);
+	if (!DirExists(out)) { err = xr_string("can't create the output folder ") + out; return false; }
+	xr_vector<xr_string> old_files;
+	ListReleaseFiles(out, m.id, m.version, old_files);
+	for (u32 i = 0; i < old_files.size(); ++i)
+	{
+		sprintf_s(path, "%s\\%s", out, old_files[i].c_str());
+		RecycleFile(path);
+	}
+	for (u32 p = 0; p < result.packages.size(); ++p)
+	{
+		string_path from;
+		sprintf_s(from, "%s\\%s", packages_dir, result.packages[p].name.c_str());
+		sprintf_s(path, "%s\\%s", out, result.packages[p].name.c_str());
+		if (pb) pb->Info(path);
+		if (!::MoveFileWithProgressA(from, path, &MoveProgress, NULL, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING))
+			{ err = xr_string("can't write ") + path; return false; }
+	}
+
+	xr_string text = "; XMS module release descriptor. Generated by XFined Editor.\r\n[release]\r\n";
+	AppendKey(text, "schema", "1", 13);
+	AppendKey(text, "id", m.id.c_str(), 13);
+	AppendKey(text, "version", m.version.c_str(), 13);
+	if (requires_game[0])
+		AppendKey(text, "requires_game", requires_game, 13);
+	AppendKey(text, "files", NqUtil::Format("%u", (u32)files.size()).c_str(), 13);
+	AppendKey(text, "unpacked", NqUtil::Format("%llu", unpacked).c_str(), 13);
+	text += "\r\n[packages]\r\n";
+	for (u32 p = 0; p < result.packages.size(); ++p)
+		text += result.packages[p].name + NqUtil::Format(" = %llu, ", result.packages[p].size) + result.packages[p].sha256 + "\r\n";
+	sprintf_s(path, "%s\\%s.update.ltx", out, m.id.c_str());
+	if (!WriteTextFile(path, text.c_str())) { err = xr_string("can't write ") + path; return false; }
+
+	result.out_dir			= out;
+	result.descriptor		= path;
+	result.requires_game	= requires_game;
+	result.files			= (int)files.size();
+	result.unpacked			= unpacked;
+	result.packed			= packed;
+	Msg("* [XMS] release %s %s: %d file(s), %llu byte(s) in %u package(s) -> %s",
+		m.id.c_str(), m.version.c_str(), result.files, packed, (u32)result.packages.size(), out);
+	return true;
+}
+
+// A crashed packaging leaves its stage - a full copy of the module plus the
+// zips - in a folder the content browser never shows. Stages whose editor is
+// gone are removed; one that belongs to a live process may be at work.
+static void RemoveDeadStages(LPCSTR temp_dir)
+{
+	string_path mask;
+	sprintf_s(mask, "%s\\release_stage_*", temp_dir);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return;
+	do
+	{
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+		const DWORD pid = (DWORD)strtoul(fd.cFileName + xr_strlen("release_stage_"), 0, 10);
+		if (HANDLE owner = pid ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : 0)
+		{
+			::CloseHandle(owner);
+			continue;
+		}
+		string_path dead;
+		sprintf_s(dead, "%s\\%s", temp_dir, fd.cFileName);
+		WipeTree(dead);
+		::RemoveDirectoryA(dead);
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+}
+
+bool EditorMod::PackageRelease(LPCSTR project_root, LPCSTR out_dir, LPCSTR requires_game,
+							   SPackageResult& result, xr_string& err, xr_string* warnings)
+{
+	result = SPackageResult();
+	err.clear();
+	if (warnings) warnings->clear();
+	if (!project_root || !project_root[0])	{ err = "no active project"; return false; }
+	if (!requires_game) requires_game = "";
+
+	SManifest m;
+	if (!Load(project_root, m))				{ err = "mod.ltx not found in the project"; return false; }
+	if (!ReleaseGate(m, err))				return false;
+	if (requires_game[0] && !DottedNumber(requires_game, 3, 3))
+		{ err = "invalid requires_game: MAJOR.MINOR.PATCH expected, e.g. 1.4.1"; return false; }
+
+	string_path out, stage;
+	if (!ResolveReleaseDir(project_root, out_dir, m.version, out, err)) return false;
+
+	// temp\ is editor-only scratch that no export ever reads, so the stage can sit
+	// inside the project; the pid keeps two editors on one project apart
+	sprintf_s(stage, "%s\\temp", project_root);
+	RemoveDeadStages(stage);
+	sprintf_s(stage, "%s\\temp\\release_stage_%u", project_root, (u32)::GetCurrentProcessId());
+	CreateDirChain(stage);
+	if (!DirExists(stage))					{ err = "can't create the staging folder in the project's temp"; return false; }
+	WipeTree(stage);
+
+	const bool ok = BuildRelease(project_root, m, stage, out, requires_game, result, err, warnings);
+	WipeTree(stage);
+	::RemoveDirectoryA(stage);
+	if (!ok) result = SPackageResult();
+	return ok;
+}
+
+bool EditorMod::LinkedGameVersion(xr_string& out)
+{
+	out.clear();
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0]) return false;
+	string_path exe;
+	sprintf_s(exe, "%s\\xrEngine.exe", game);
+
+	DWORD unused = 0;
+	const DWORD size = ::GetFileVersionInfoSizeA(exe, &unused);
+	if (!size) return false;
+	xr_vector<u8> data(size);
+	VS_FIXEDFILEINFO* info = 0;
+	UINT info_size = 0;
+	if (!::GetFileVersionInfoA(exe, 0, size, data.data()) ||
+		!::VerQueryValueA(data.data(), "\\", (LPVOID*)&info, &info_size) || !info || info_size < sizeof(*info))
+		return false;
+	out = NqUtil::Format("%u.%u.%u", (u32)HIWORD(info->dwFileVersionMS), (u32)LOWORD(info->dwFileVersionMS),
+		(u32)HIWORD(info->dwFileVersionLS));
+	return true;
+}
+
+//------------------------------------------------------------------------------
 // UI: File\Mod modals
 //------------------------------------------------------------------------------
 static const char* kTitleManifest	= "XFined Editor - Mod Manifest";
 static const char* kTitleExport		= "XFined Editor - Export XMS Module";
 static const char* kTitleFlat		= "XFined Editor - Export Flat Gamedata";
 static const char* kTitleMessage	= "XFined Editor - Mod Export Result";
+static const char* kTitlePackage	= "XFined Editor - Package Release";
+static const char* kTitleReplace	= "XFined Editor - Replace Release Files";
 
 static bool					s_WantManifest	= false;
 static bool					s_WantExport	= false;
 static bool					s_WantFlat		= false;
 static bool					s_WantMessage	= false;
-static char					s_Message[1024]	= {};
+static char					s_Message[4096]	= {};
 
 static EditorMod::SManifest	s_Keep;			// api/extra preserved across the edit
 static char					s_EdId[128]		= {};
 static char					s_EdName[256]	= {};
 static char					s_EdVersion[64]	= {};
+static char					s_EdAuthor[256]	= {};
+static char					s_EdDescription[4096]	= {};
+// wider than the 512 bytes a website may have, so a longer one is flagged, not cut
+static char					s_EdWebsite[1024]	= {};
+static char					s_EdGithub[512]		= {};
 static char					s_EdMode[128]	= {};
 static char					s_EdTarget[32]	= {};
 static char					s_EdPModeId[128]	= {};
@@ -1135,6 +1904,20 @@ void EditorMod::RequestEditManifest()
 	strncpy_s(s_EdId, sizeof(s_EdId), s_Keep.id.c_str(), _TRUNCATE);
 	strncpy_s(s_EdName, sizeof(s_EdName), s_Keep.name.c_str(), _TRUNCATE);
 	strncpy_s(s_EdVersion, sizeof(s_EdVersion), s_Keep.version.c_str(), _TRUNCATE);
+	strncpy_s(s_EdAuthor, sizeof(s_EdAuthor), s_Keep.author.c_str(), _TRUNCATE);
+	// A hand-written text longer than the box is cut at a character boundary:
+	// one broken UTF-8 byte makes the game read the whole file as cp1251.
+	{
+		size_t cut = s_Keep.description.size();
+		if (cut >= sizeof(s_EdDescription))
+		{
+			cut = sizeof(s_EdDescription) - 1;
+			while (cut && ((unsigned char)s_Keep.description[cut] & 0xC0) == 0x80) --cut;
+		}
+		strncpy_s(s_EdDescription, sizeof(s_EdDescription), s_Keep.description.substr(0, cut).c_str(), _TRUNCATE);
+	}
+	strncpy_s(s_EdWebsite, sizeof(s_EdWebsite), s_Keep.website.c_str(), _TRUNCATE);
+	strncpy_s(s_EdGithub, sizeof(s_EdGithub), s_Keep.update_github.c_str(), _TRUNCATE);
 	strncpy_s(s_EdMode, sizeof(s_EdMode), s_Keep.mode.c_str(), _TRUNCATE);
 	strncpy_s(s_EdTarget, sizeof(s_EdTarget), s_Keep.target.c_str(), _TRUNCATE);
 	// the modal edits the first declared mode; extra pairs survive untouched
@@ -1286,7 +2069,7 @@ static void RunBuildIntoGame()
 static void DrawManifestModal()
 {
 	if (!s_WantManifest) return;
-	ImGui::SetNextWindowSize(ImVec2(620, 720), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(620, 860), ImGuiCond_FirstUseEver);
 	if (!ImGui::BeginPopupModal(kTitleManifest, &s_WantManifest, 0, true))
 		return;
 
@@ -1296,6 +2079,37 @@ static void DrawManifestModal()
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid id: non-empty, a-z 0-9 _ . - only");
 	ImGui::InputText("name", s_EdName, sizeof(s_EdName));
 	ImGui::InputText("version", s_EdVersion, sizeof(s_EdVersion));
+	const bool version_ok = EditorMod::ValidateVersion(s_EdVersion);
+	if (!version_ok)
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid version: 1-4 numbers separated by dots, e.g. 1.2.0");
+
+	// ---- what the game's Mods menu shows, and where it looks for updates -----
+	ImGui::InputText("author", s_EdAuthor, sizeof(s_EdAuthor));
+	ImGui::TextUnformatted("description:");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Shown in the game's Mods menu. Plain text or a string table id.");
+	ImGui::InputTextMultiline("##description", s_EdDescription, sizeof(s_EdDescription),
+		ImVec2(-1, ImGui::GetTextLineHeight() * 4.f + ImGui::GetStyle().FramePadding.y * 2.f));
+	ImGui::InputText("website", s_EdWebsite, sizeof(s_EdWebsite));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("The mod's page on AP-PRO or ModDB. The game opens it from the Mods menu.");
+	xr_string website = s_EdWebsite;
+	Trim(website);	// a pasted link often drags a space or a line break along
+	const bool website_ok = EditorMod::ValidateWebsite(website.c_str());
+	if (!website_ok)
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "only https://ap-pro.ru or https://moddb.com links are allowed");
+	ImGui::InputText("GitHub repository", s_EdGithub, sizeof(s_EdGithub));
+	const bool github_left = ImGui::IsItemDeactivatedAfterEdit();
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("owner/repo. The game checks its latest release for updates.");
+	// a pasted repository URL is fine: it is judged, and stored, as owner/repo
+	xr_string github;
+	EditorMod::NormalizeGithubRepo(s_EdGithub, github);
+	if (github_left)
+		strncpy_s(s_EdGithub, sizeof(s_EdGithub), github.c_str(), _TRUNCATE);
+	const bool github_ok = EditorMod::ValidateGithubRepo(github.c_str());
+	if (!github_ok)
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid repository: owner/repo, e.g. Madmer/agroprom-story");
 	ImGui::Separator();
 
 	// ---- what game mode is this module for ---------------------------------
@@ -1492,13 +2306,18 @@ static void DrawManifestModal()
 	ImGui::InputTextMultiline("##conflicts", s_EdConflicts, sizeof(s_EdConflicts), ImVec2(-1, 48));
 	ImGui::Separator();
 
-	ImGui::BeginDisabled(!id_ok || !mode_ok || !pmode_ok);
+	ImGui::BeginDisabled(!id_ok || !version_ok || !website_ok || !github_ok || !mode_ok || !pmode_ok);
 	if (ImGui::Button("Save", ImVec2(120, 0)))
 	{
 		EditorMod::SManifest m = s_Keep;
 		m.id = s_EdId;
 		m.name = s_EdName;
 		m.version = s_EdVersion;
+		m.author = s_EdAuthor;
+		m.description = s_EdDescription;
+		Trim(m.description);
+		m.website = website;
+		m.update_github = github;	// normalized above, whether or not the field lost focus
 		m.mode = s_EdMode;
 		m.target = s_EdTarget;
 		// only the first declared mode is edited here; empty id drops it
@@ -1613,6 +2432,162 @@ static void DrawExportModal(bool flat)
 	ImGui::EndPopup();
 }
 
+//------------------------------------------------------------------------------
+// Mod > Package Release...
+//------------------------------------------------------------------------------
+static bool					s_WantPackage		= false;
+static bool					s_WantReplace		= false;
+static bool					s_PackageQueued		= false;
+static EditorMod::SManifest	s_PkgManifest;		// what the modal names: id, version, update source
+static char					s_PkgOutDir[MAX_PATH]	= {};
+static char					s_PkgRequires[32]		= {};
+static xr_string			s_ReplaceText;		// the files the confirmation names
+
+void EditorMod::RequestPackageRelease()
+{
+	// a queued packaging still reads the fields below
+	if (!EditorProject::Active() || s_PackageQueued) return;
+	xr_string err;
+	if (!Load(EditorProject::Root(), s_PkgManifest))
+		err = "mod.ltx not found in the project";
+	else
+		ReleaseGate(s_PkgManifest, err);
+	if (!err.empty())
+	{
+		_snprintf_s(s_Message, sizeof(s_Message), _TRUNCATE,
+			"Cannot package a release: %s.\nFix it via Mod > Edit Manifest...", err.c_str());
+		s_WantMessage = true;
+		return;
+	}
+	sprintf_s(s_PkgOutDir, "%s\\releases\\%s", EditorProject::Root(), s_PkgManifest.version.c_str());
+	xr_string game_version;
+	LinkedGameVersion(game_version);
+	strncpy_s(s_PkgRequires, sizeof(s_PkgRequires), game_version.c_str(), _TRUNCATE);
+	s_WantPackage = true;
+}
+
+static void RunDeferredPackage()
+{
+	s_PackageQueued = false;
+	SProgressOperation progress(*UI, true);
+	xr_string bake_note;
+	EditorMod::RunPreBuildBake(bake_note);
+	EditorMod::SPackageResult res;
+	xr_string err, warn;
+	if (!EditorMod::PackageRelease(EditorProject::Root(), s_PkgOutDir, s_PkgRequires, res, err, &warn))
+	{
+		if (err == "cancelled")	strcpy_s(s_Message, "Packaging cancelled.");
+		else					_snprintf_s(s_Message, sizeof(s_Message), _TRUNCATE, "Packaging failed: %s", err.c_str());
+		s_WantMessage = true;
+		return;
+	}
+
+	xr_string text = bake_note;
+	if (!text.empty()) text += "\n";
+	text += NqUtil::Format("Release %s %s: %d file(s) packaged into\n%s\n\n  %s.update.ltx\n",
+		s_PkgManifest.id.c_str(), s_PkgManifest.version.c_str(), res.files, res.out_dir.c_str(), s_PkgManifest.id.c_str());
+	for (u32 i = 0; i < res.packages.size(); ++i)
+		text += NqUtil::Format("  %s  (%.1f MB)\n", res.packages[i].name.c_str(), double(res.packages[i].size) / 1048576.0);
+	if (s_PkgManifest.update_github.empty())
+		text += "\nUpload these files to a GitHub release and mark it as the latest release.\n"
+				"Set the repository in Mod > Edit Manifest - without it the game does not look for updates.";
+	else
+		text += NqUtil::Format("\nUpload these files to a GitHub release of %s\nand mark it as the latest release.",
+			s_PkgManifest.update_github.c_str());
+	if (!warn.empty())
+	{
+		text += "\n\n";
+		text += warn;
+	}
+	strncpy_s(s_Message, sizeof(s_Message), text.c_str(), _TRUNCATE);
+	s_WantMessage = true;
+}
+
+static void DrawPackageModal()
+{
+	if (!s_WantPackage) return;
+	ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_FirstUseEver);
+	if (!ImGui::BeginPopupModal(kTitlePackage, &s_WantPackage, ImGuiWindowFlags_AlwaysAutoResize, true))
+		return;
+
+	ImGui::Text("Module: %s  %s", s_PkgManifest.id.c_str(), s_PkgManifest.version.c_str());
+	ImGui::TextUnformatted("Output folder:");
+	ImGui::SetNextItemWidth(480);
+	ImGui::InputText("##out_dir", s_PkgOutDir, sizeof(s_PkgOutDir));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Receives <id>.update.ltx and the package zip(s).");
+	ImGui::SetNextItemWidth(160);
+	ImGui::InputText("Requires game", s_PkgRequires, sizeof(s_PkgRequires));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Lowest Dead Air: Refined version this release runs on. Empty = any.");
+	const bool requires_ok = !s_PkgRequires[0] || DottedNumber(s_PkgRequires, 3, 3);
+	if (!requires_ok)
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid game version: MAJOR.MINOR.PATCH, e.g. 1.4.1");
+	if (s_PkgManifest.update_github.empty())
+		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "No GitHub repository in the manifest - the game will not find this release.");
+	ImGui::Separator();
+
+	ImGui::BeginDisabled(!s_PkgOutDir[0] || !requires_ok || s_PackageQueued);
+	if (ImGui::Button("Package", ImVec2(120, 0)))
+	{
+		// An earlier packaging of this version is replaced - but only once the
+		// author has seen which files that is.
+		string_path dir;
+		xr_string ignored;
+		xr_vector<xr_string> old_files;
+		if (ResolveReleaseDir(EditorProject::Root(), s_PkgOutDir, s_PkgManifest.version, dir, ignored))
+			ListReleaseFiles(dir, s_PkgManifest.id, s_PkgManifest.version, old_files);
+		if (old_files.empty())
+			s_PackageQueued = UI->DeferUIWork(&RunDeferredPackage);
+		else
+		{
+			s_ReplaceText = NqUtil::Format("%u file(s) in\n%s\nwill be replaced:\n", (u32)old_files.size(), dir);
+			for (u32 i = 0; i < old_files.size(); ++i)
+				s_ReplaceText += "\n  " + old_files[i];
+			s_WantReplace = true;
+		}
+		s_WantPackage = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	if (ImGui::Button("Cancel", ImVec2(120, 0)))
+	{
+		s_WantPackage = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+}
+
+static void DrawReplaceModal()
+{
+	if (!s_WantReplace) return;
+	if (!ImGui::BeginPopupModal(kTitleReplace, &s_WantReplace, ImGuiWindowFlags_AlwaysAutoResize, true))
+		return;
+
+	ImGui::TextUnformatted(s_ReplaceText.c_str());
+	ImGui::Separator();
+	ImGui::TextDisabled("The old files go to the Recycle Bin.");
+	ImGui::Spacing();
+
+	// Cancel is the default: Enter and Escape both back out
+	const bool replace = ImGui::Button("Replace", ImVec2(120, 0));
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0)) ||
+						ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+						ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+	ImGui::SetItemDefaultFocus();
+
+	if (replace)
+		s_PackageQueued = UI->DeferUIWork(&RunDeferredPackage);
+	if (replace || cancel)
+	{
+		s_WantReplace = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
+}
+
 static void DrawMessageModal()
 {
 	if (!s_WantMessage) return;
@@ -1636,6 +2611,8 @@ void EditorMod::DrawUI()
 	DrawManifestModal();
 	DrawExportModal(false);
 	DrawExportModal(true);
+	DrawPackageModal();
+	DrawReplaceModal();
 	DrawMessageModal();
 }
 
@@ -1656,6 +2633,18 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppend(out, m.name.c_str());
 	out += "\",\"version\":\"";
 	JsonAppend(out, m.version.c_str());
+	out += "\",\"author\":\"";
+	JsonAppend(out, m.author.c_str());
+	out += "\",\"description\":\"";
+	JsonAppend(out, m.description.c_str());
+	out += "\",\"website\":\"";
+	JsonAppend(out, m.website.c_str());
+	out += "\",\"github\":\"";
+	JsonAppend(out, m.update_github.c_str());
+	out += "\",\"api\":\"";
+	JsonAppend(out, m.api.c_str());
+	out += "\",\"target\":\"";
+	JsonAppend(out, m.target.c_str());
 	out += "\",\"mode\":\"";
 	JsonAppend(out, m.mode.c_str());
 	out += "\",\"provides_mode\":[";
@@ -1701,23 +2690,54 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 		Load(EditorProject::Root(), m);
 	}
 
-	char v[2048];
-	if (XFinedMCP::GetArg(raw, "id", v, sizeof(v)))
+	// GetArg answers an oversized value like a missing one. A buffer the size of
+	// the request is never too small, so a long value is judged, not dropped.
+	xr_vector<char> arg(xr_strlen(raw) + 1);
+	char* const v = arg.data();
+	const u32 v_size = (u32)arg.size();
+	if (XFinedMCP::GetArg(raw, "id", v, v_size))
 	{
 		if (!ValidateId(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid id (allowed: a-z 0-9 _ . -)\"}"; return; }
 		m.id = v;
 	}
-	if (XFinedMCP::GetArg(raw, "name", v, sizeof(v)))		m.name = v;
-	if (XFinedMCP::GetArg(raw, "version", v, sizeof(v)))	m.version = v;
-	if (XFinedMCP::GetArg(raw, "mode", v, sizeof(v)))
+	if (XFinedMCP::GetArg(raw, "name", v, v_size))		m.name = v;
+	if (XFinedMCP::GetArg(raw, "version", v, v_size))
+	{
+		if (!ValidateVersion(v))
+			{ out = "{\"ok\":false,\"error\":\"invalid version (1-4 numbers separated by dots, e.g. 1.2.0)\"}"; return; }
+		m.version = v;
+	}
+	if (XFinedMCP::GetArg(raw, "author", v, v_size))		m.author = v;
+	if (XFinedMCP::GetArg(raw, "description", v, v_size))
+	{
+		m.description = v;
+		Trim(m.description);
+		// the same room the manifest window gives it
+		if (m.description.size() >= sizeof(s_EdDescription))
+			{ out = "{\"ok\":false,\"error\":\"description is too long (4095 bytes at most)\"}"; return; }
+	}
+	if (XFinedMCP::GetArg(raw, "website", v, v_size))
+	{
+		m.website = v;
+		Trim(m.website);
+		if (!ValidateWebsite(m.website.c_str()))
+			{ out = "{\"ok\":false,\"error\":\"invalid website (only https://ap-pro.ru or https://moddb.com links are allowed)\"}"; return; }
+	}
+	if (XFinedMCP::GetArg(raw, "github", v, v_size))
+	{
+		NormalizeGithubRepo(v, m.update_github);
+		if (!ValidateGithubRepo(m.update_github.c_str()))
+			{ out = "{\"ok\":false,\"error\":\"invalid github (owner/repo, e.g. Madmer/agroprom-story)\"}"; return; }
+	}
+	if (XFinedMCP::GetArg(raw, "mode", v, v_size))
 	{
 		if (!ValidateModeId(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid mode id (allowed: a-z 0-9 _ . - or empty)\"}"; return; }
 		m.mode = v;
 	}
 	// provides_mode edits touch only the first declared mode; empty id drops it
-	if (XFinedMCP::GetArg(raw, "provides_mode_id", v, sizeof(v)))
+	if (XFinedMCP::GetArg(raw, "provides_mode_id", v, v_size))
 	{
 		if (!ValidateModeId(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid provides_mode_id (allowed: a-z 0-9 _ . - or empty)\"}"; return; }
@@ -1729,13 +2749,13 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 		else if (!m.provides_modes.empty())
 			m.provides_modes.erase(m.provides_modes.begin());
 	}
-	if (XFinedMCP::GetArg(raw, "provides_mode_title", v, sizeof(v)) && !m.provides_modes.empty())
+	if (XFinedMCP::GetArg(raw, "provides_mode_title", v, v_size) && !m.provides_modes.empty())
 		m.provides_modes[0].title = v;
 	// The targeting choice itself. "default" cannot be inferred - a module with
 	// no mode set either targets the ordinary game on purpose or was never
 	// decided, and only the caller knows which - so it is stated explicitly;
 	// picking a mode states it implicitly.
-	if (XFinedMCP::GetArg(raw, "target", v, sizeof(v)))
+	if (XFinedMCP::GetArg(raw, "target", v, v_size))
 	{
 		if (0 != _stricmp(v, "default") && 0 != _stricmp(v, "existing") && 0 != _stricmp(v, "new"))
 			{ out = "{\"ok\":false,\"error\":\"invalid target (allowed: default, existing, new)\"}"; return; }
@@ -1743,10 +2763,10 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	}
 	else if (!m.provides_modes.empty())	m.target = "new";
 	else if (!m.mode.empty())			m.target = "existing";
-	if (XFinedMCP::GetArg(raw, "requires", v, sizeof(v)))	SplitList(m.requires_list, v, ',');
-	if (XFinedMCP::GetArg(raw, "after", v, sizeof(v)))		SplitList(m.after, v, ',');
-	if (XFinedMCP::GetArg(raw, "before", v, sizeof(v)))		SplitList(m.before, v, ',');
-	if (XFinedMCP::GetArg(raw, "conflicts", v, sizeof(v)))	SplitList(m.conflicts, v, ',');
+	if (XFinedMCP::GetArg(raw, "requires", v, v_size))	SplitList(m.requires_list, v, ',');
+	if (XFinedMCP::GetArg(raw, "after", v, v_size))		SplitList(m.after, v, ',');
+	if (XFinedMCP::GetArg(raw, "before", v, v_size))		SplitList(m.before, v, ',');
+	if (XFinedMCP::GetArg(raw, "conflicts", v, v_size))	SplitList(m.conflicts, v, ',');
 
 	if (!ValidateId(m.id.c_str()))
 		{ out = "{\"ok\":false,\"error\":\"module id missing or invalid (allowed: a-z 0-9 _ . -)\"}"; return; }
@@ -1791,6 +2811,59 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	JsonAppend(out, bake_note.c_str());
 	// an agent gets the same warnings the dialog shows: a build that shipped a quest
 	// naming something that does not exist is not a clean build
+	out += "\",\"warnings\":\"";
+	JsonAppend(out, warn.c_str());
+	out += "\"}";
+}
+
+void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())
+		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
+	// request-sized, so an over-long value reaches the checks instead of reading as absent
+	xr_vector<char> arg(xr_strlen(raw) + 1);
+	xr_string out_dir, game_version;
+	if (XFinedMCP::GetArg(raw, "out_dir", arg.data(), (u32)arg.size()))
+		out_dir = arg.data();
+	// absent = the linked game's version, present but empty = no requirement
+	if (XFinedMCP::GetArg(raw, "requires_game", arg.data(), (u32)arg.size()))
+		game_version = arg.data();
+	else
+		LinkedGameVersion(game_version);
+
+	// MCP is the programmatic path: it asks nothing, an earlier packaging of the
+	// same version is simply replaced
+	SProgressOperation progress(*UI, true);
+	xr_string bake_note;
+	RunPreBuildBake(bake_note);
+	SPackageResult res;
+	xr_string err, warn;
+	if (!PackageRelease(EditorProject::Root(), out_dir.c_str(), game_version.c_str(), res, err, &warn))
+	{
+		out = "{\"ok\":false,\"error\":\"";
+		JsonAppend(out, err.c_str());
+		out += "\"}";
+		return;
+	}
+	out = "{\"ok\":true,\"descriptor\":\"";
+	JsonAppendPath(out, res.descriptor.c_str());
+	out += "\",\"out_dir\":\"";
+	JsonAppendPath(out, res.out_dir.c_str());
+	out += "\",\"packages\":[";
+	for (u32 i = 0; i < res.packages.size(); ++i)
+	{
+		if (i) out += ",";
+		out += "{\"name\":\"";
+		JsonAppend(out, res.packages[i].name.c_str());
+		out += NqUtil::Format("\",\"size\":%llu,\"sha256\":\"", res.packages[i].size);
+		out += res.packages[i].sha256;
+		out += "\"}";
+	}
+	out += NqUtil::Format("],\"files\":%d,\"unpacked\":%llu,\"packed\":%llu,\"requires_game\":\"",
+		res.files, res.unpacked, res.packed);
+	JsonAppend(out, res.requires_game.c_str());
+	out += "\",\"baked\":\"";
+	JsonAppend(out, bake_note.c_str());
 	out += "\",\"warnings\":\"";
 	JsonAppend(out, warn.c_str());
 	out += "\"}";

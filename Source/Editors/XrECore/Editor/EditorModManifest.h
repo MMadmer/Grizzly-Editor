@@ -24,6 +24,12 @@ namespace EditorMod
 		xr_string				id;
 		xr_string				name;
 		xr_string				version;
+		// Mods menu metadata (game repo: docs/dead-air/MOD_UPDATES.md, section 1).
+		// name/author/description hold the decoded text - Save quotes and escapes.
+		xr_string				author;
+		xr_string				description;	// may hold real line breaks
+		xr_string				website;		// AP-PRO or ModDB page, see ValidateWebsite
+		xr_string				update_github;	// [update] github: owner/repo the game checks for releases
 		xr_string				api;
 		xr_string				mode;			// [module] mode: gate content by game mode, empty = all modes
 		// [module] target: which of the three targeting choices the author made.
@@ -37,6 +43,7 @@ namespace EditorMod
 		xr_vector<xr_string>	conflicts;		// raw entries
 		xr_vector<SProvidesMode> provides_modes;	// declared game modes
 		xr_vector<xr_string>	provides_extra;	// unknown [provides_mode] lines
+		xr_vector<xr_string>	update_extra;	// unknown [update] lines
 		xr_vector<xr_string>	module_extra;	// unknown [module] lines
 		xr_vector<xr_string>	extra;			// unknown sections, headers included
 	};
@@ -45,6 +52,17 @@ namespace EditorMod
 	ECORE_API bool	ValidateId			(LPCSTR id);
 	// mode ids follow the module id charset, but empty is allowed (= all modes)
 	ECORE_API bool	ValidateModeId		(LPCSTR id);
+	// strict form of MOD_UPDATES.md 1.2: 1-4 dot-separated numbers of at most
+	// 9 digits and nothing else - a release has to be orderable
+	ECORE_API bool	ValidateVersion		(LPCSTR version);
+	// MOD_UPDATES.md 1.3: https, host exactly (www.)ap-pro.ru or (www.)moddb.com,
+	// no user info or port, limited charset, 512 bytes at most; empty is valid
+	ECORE_API bool	ValidateWebsite		(LPCSTR url);
+	// MOD_UPDATES.md 1.4: owner/repo; empty is valid
+	ECORE_API bool	ValidateGithubRepo	(LPCSTR repo);
+	// reduces a pasted https://github.com/owner/repo[.git][/...] to owner/repo;
+	// anything else comes back trimmed for ValidateGithubRepo to judge
+	ECORE_API void	NormalizeGithubRepo	(LPCSTR in, xr_string& out);
 	// project name -> module id: lowercased, invalid chars become '_'
 	ECORE_API void	DeriveId			(LPCSTR project_name, char* dst, u32 dst_size);
 
@@ -75,11 +93,47 @@ namespace EditorMod
 										 int& files, xr_string& out_path, xr_string& err,
 										 bool confirmed = false, xr_string* warnings = 0);
 
+	// one package of a release, as the descriptor lists it
+	struct SPackageFile
+	{
+		xr_string				name;			// asset name: <id>-<version>[.partN].zip
+		u64						size;
+		xr_string				sha256;			// lowercase hex
+	};
+
+	struct SPackageResult
+	{
+		xr_string				out_dir;		// folder that holds everything below
+		xr_string				descriptor;		// full path of <id>.update.ltx
+		xr_vector<SPackageFile>	packages;
+		xr_string				requires_game;	// as written, empty = key omitted
+		int						files;			// files in all packages together
+		u64						unpacked;		// their size before compression
+		u64						packed;			// all packages together
+
+								SPackageResult	() : files(0), unpacked(0), packed(0) {}
+	};
+
+	// A release for the game's module updater: <id>.update.ltx + package zip(s)
+	// holding the COMPLETE module under modules/<id>/. Names, descriptor format
+	// and package layout are a frozen contract with the game - the normative text
+	// is docs/dead-air/MOD_UPDATES.md (section 2) in the game repo.
+	// The module is staged through Export, so everything a module build refuses
+	// is refused here too. `out_dir` empty = <project>\releases\<version>;
+	// `requires_game` empty = the key is left out. Files an earlier packaging of
+	// the same id+version left in `out_dir` are replaced (Recycle Bin) without
+	// asking - the UI asks first. Callers run RunPreBuildBake, like every build.
+	ECORE_API bool	PackageRelease		(LPCSTR project_root, LPCSTR out_dir, LPCSTR requires_game,
+										 SPackageResult& result, xr_string& err, xr_string* warnings = 0);
+	// MAJOR.MINOR.PATCH from the version resource of <linked game>\xrEngine.exe
+	ECORE_API bool	LinkedGameVersion	(xr_string& out);
+
 	// modal windows (drawn from CLevelMain::OnDrawUI) + Mod menu triggers
 	ECORE_API void	DrawUI				();
 	ECORE_API void	RequestEditManifest	();
 	ECORE_API void	RequestExportModule	();
 	ECORE_API void	RequestExportFlat	();
+	ECORE_API void	RequestPackageRelease();
 
 	// the everyday build: no target picker, no options - the linked game IS
 	// the target, so this is Export(flat=false) straight to <game>\modules\<id>
@@ -99,4 +153,5 @@ namespace EditorMod
 	ECORE_API void	McpManifest			(xr_string& out);
 	ECORE_API void	McpSetManifest		(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpExport			(LPCSTR raw, xr_string& out);
+	ECORE_API void	McpPackage			(LPCSTR raw, xr_string& out);
 }
