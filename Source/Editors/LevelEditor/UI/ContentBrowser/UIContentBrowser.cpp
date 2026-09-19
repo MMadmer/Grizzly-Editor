@@ -3266,54 +3266,26 @@ void UIContentBrowser::CommitRename()
 	const xr_string was = m_Rename;
 	m_Rename.clear();
 
-	// trim, then bail on anything that is not a plain leaf name
-	char leaf[128];
-	xr_strcpy(leaf, sizeof(leaf), m_RenameBuf);
-	char* s = leaf;
-	while (' ' == *s) ++s;
-	for (char* e = s + xr_strlen(s); e > s && ' ' == e[-1];) *--e = 0;
-
-	LPCSTR old_leaf = strrchr(was.c_str(), '\\');
-	old_leaf = old_leaf ? old_leaf + 1 : was.c_str();
-	if (!s[0] || 0 == xr_strcmp(s, old_leaf))	return;		// unchanged, nothing to do
-
-	if (strpbrk(s, "\\/:*?\"<>|"))
+	// EditorFileOps::Rename is the one implementation, shared with MCP content_rename:
+	// the leaf rules, the quest extension, and a change of case alone being a rename
+	string_path renamed;
+	xr_string err;
+	if (!EditorFileOps::Rename(was.c_str(), m_RenameBuf, renamed, err))
 	{
-		ELog.DlgMsg(mtError, "A name cannot contain \\ / : * ? \" < > |");
+		ELog.DlgMsg(mtError, "Cannot rename '%s': %s.", was.c_str(), err.c_str());
 		return;
 	}
-	// a quest renamed without an extension keeps being a quest; putting the
-	// extension back can land on the old name again ("Quest.nqasset" -> "Quest"),
-	// which is not a rename at all
-	xr_string keep_ext;
-	if (IsQuestExt(old_leaf) && !strrchr(s, '.'))
-	{
-		keep_ext = xr_string(s) + ".nqasset";
-		s = const_cast<char*>(keep_ext.c_str());
-		if (0 == xr_strcmp(s, old_leaf)) return;
-	}
+	LPCSTR s = strrchr(renamed, '\\');
+	s = s ? s + 1 : renamed;
+	LPCSTR old_leaf = strrchr(was.c_str(), '\\');
+	old_leaf = old_leaf ? old_leaf + 1 : was.c_str();
+	if (0 == xr_strcmp(s, old_leaf))	return;		// unchanged, nothing to do
 
 	xr_string parent(was);
 	if (LPCSTR cut = strrchr(parent.c_str(), '\\'))
 		parent.erase(size_t(cut - parent.c_str()));
 	else
 		parent.clear();
-
-	string_path from, to;
-	sprintf_s(from, "%s\\%s", EditorProject::Root(), was.c_str());
-	if (parent.empty())	sprintf_s(to, "%s\\%s", EditorProject::Root(), s);
-	else				sprintf_s(to, "%s\\%s\\%s", EditorProject::Root(), parent.c_str(), s);
-
-	if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(to))
-	{
-		ELog.DlgMsg(mtError, "'%s' is already there.", s);
-		return;
-	}
-	if (!::MoveFileA(from, to))
-	{
-		ELog.DlgMsg(mtError, "Cannot rename '%s' (error %d).", old_leaf, int(::GetLastError()));
-		return;
-	}
 
 	// keep the user where they were looking: the open folder may BE the renamed
 	// one, or sit under it

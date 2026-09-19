@@ -3,6 +3,7 @@
 #include "EditorGameContent.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
+#include "Nq/NqDoc.h"		// open quest documents follow a rename
 #include <shellapi.h>	// SHFileOperation: deletes go to the Recycle Bin
 
 //------------------------------------------------------------------------------
@@ -483,6 +484,89 @@ bool EditorFileOps::MakeDir(LPCSTR path, string_path& out, xr_string& err)
 		return false;
 	}
 	return true;
+}
+
+bool EditorFileOps::Rename(LPCSTR path, LPCSTR new_name, string_path& out, xr_string& err)
+{
+	out[0] = 0;
+	string_path from;
+	if (!ResolveInProject(path, from, err))	return false;
+	if (!DirExists(from) && !FileExists(from))	{ err = "source not found"; return false; }
+
+	xr_string leaf = new_name ? new_name : "";
+	while (!leaf.empty() && ' ' == leaf[0])					leaf.erase(0, 1);
+	while (!leaf.empty() && ' ' == leaf[leaf.size() - 1])	leaf.erase(leaf.size() - 1);
+	if (leaf.empty() || leaf == "." || leaf == "..")		{ err = "the new name is empty"; return false; }
+	if (leaf.find_first_of("\\/:*?\"<>|") != xr_string::npos)	{ err = "a name cannot contain \\ / : * ? \" < > |"; return false; }
+
+	LPCSTR old_leaf = LeafName(from);
+	// a quest renamed without an extension keeps being a quest
+	LPCSTR old_ext = strrchr(old_leaf, '.');
+	if (FileExists(from) && old_ext && 0 == _stricmp(old_ext, ".nqasset") && leaf.find('.') == xr_string::npos)
+		leaf += ".nqasset";
+
+	xr_string parent(from);
+	parent.erase(size_t(old_leaf - from));
+	if (parent.size() + leaf.size() >= sizeof(string_path))	{ err = "path too long"; return false; }
+	xr_strcpy(out, sizeof(out), (parent + leaf).c_str());
+	if (0 == xr_strcmp(from, out))	return true;	// the name it already has
+
+	// The same path in another case is this very entry, not a name that is taken.
+	const bool case_only = 0 == _stricmp(from, out);
+	if (!case_only && (FileExists(out) || DirExists(out)))
+	{
+		err = "'" + leaf + "' is already there";
+		out[0] = 0;
+		return false;
+	}
+	if (!::MoveFileA(from, out))
+	{
+		err = Win32Reason("cannot rename");
+		out[0] = 0;
+		return false;
+	}
+	NqDocs::Retarget(from, out);
+	return true;
+}
+
+void EditorFileOps::McpRename(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())
+	{
+		out = "{\"ok\":false,\"error\":\"no project is open\"}";
+		return;
+	}
+	char path[MAX_PATH] = {}, name[MAX_PATH] = {};
+	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0] ||
+		!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
+	{
+		out = "{\"ok\":false,\"error\":\"missing 'path' (file or folder inside the project) or 'name' (the new leaf name)\"}";
+		return;
+	}
+	// the raw json value still carries its escaped separators - see ForEachEntry
+	{
+		char* w = path;
+		for (const char* r = path; *r; ++r)
+			if (!(*r == '\\' && w > path && w[-1] == '\\')) *w++ = *r;
+		*w = 0;
+	}
+
+	string_path full;
+	xr_string err;
+	if (!Rename(path, name, full, err))
+	{
+		out = "{\"ok\":false,\"error\":\"";
+		for (LPCSTR p = err.c_str(); *p; ++p)
+		{
+			if ('"' == *p || '\\' == *p) out += '\\';
+			out += *p;
+		}
+		out += "\"}";
+		return;
+	}
+	out = "{\"ok\":true,\"path\":\"";
+	for (LPCSTR p = full; *p; ++p)	out += ('\\' == *p) ? '/' : *p;
+	out += "\"}";
 }
 
 //------------------------------------------------------------------------------

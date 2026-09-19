@@ -271,6 +271,11 @@ namespace NqText
 	ECORE_API xr_string	Preview		(const SNqValue& v);
 	// [a-z0-9_]+
 	ECORE_API bool		ValidId		(LPCSTR id);
+	// The id a file name stands for: lower case, anything outside [a-z0-9_] as '_'.
+	// "NewQuest" and "newquest" are one name to Windows and to the game's file
+	// system, so they are one id here too - a new quest is named by this rule, and
+	// W061 only speaks up when the id is not what the file name gives.
+	ECORE_API xr_string	IdFromName	(LPCSTR name);
 	// one-line summary of a param table for outlines: story:esc_m_trader,
 	// ref:boars, spawn simulation_boar@smart ref=boars, level:x, ...
 	ECORE_API xr_string	RefSummary	(const SNqValue& v);

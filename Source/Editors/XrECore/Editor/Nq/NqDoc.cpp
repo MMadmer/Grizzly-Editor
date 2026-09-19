@@ -724,7 +724,7 @@ NqDoc* NqDocs::Create(LPCSTR path, xr_string& err)
 	if (NqDoc* d = Get(abs.c_str())) return d;
 	NqDoc* d = xr_new<NqDoc>();
 	d->path = abs;
-	d->quest.id = NqUtil::BaseName(abs.c_str());
+	d->quest.id = NqText::IdFromName(NqUtil::BaseName(abs.c_str()).c_str());
 	d->dirty = true;
 	s_Docs.push_back(d);
 	return d;
@@ -749,6 +749,24 @@ bool NqDocs::Close(LPCSTR path, bool discard, xr_string& err)
 }
 
 void NqDocs::All(xr_vector<NqDoc*>& out)	{ out = s_Docs; }
+
+void NqDocs::Retarget(LPCSTR old_abs, LPCSTR new_abs)
+{
+	const xr_string was = NqUtil::PathKey(old_abs);
+	const size_t old_size = xr_strlen(old_abs);
+	for (u32 i = 0; i < s_Docs.size(); ++i)
+	{
+		xr_string& path = s_Docs[i]->path;
+		const xr_string key = NqUtil::PathKey(path.c_str());
+		if (key == was)
+			path = new_abs;
+		// the renamed entry was a folder above this document
+		else if (key.size() > was.size() && 0 == key.compare(0, was.size(), was) &&
+				 ('\\' == key[was.size()] || '/' == key[was.size()]) && path.size() > old_size)
+			path = xr_string(new_abs) + path.substr(old_size);
+	}
+	InvalidateProjectIndex();
+}
 
 int NqDocs::SaveDirty()
 {

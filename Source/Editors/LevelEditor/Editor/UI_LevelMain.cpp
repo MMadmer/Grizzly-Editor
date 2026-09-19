@@ -2345,6 +2345,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_move"))		{ EditorFileOps::McpMove(raw, out);				return true; }
     if (0 == xr_strcmp(cmd, "content_delete"))		{ EditorFileOps::McpDelete(raw, out);			return true; }
     if (0 == xr_strcmp(cmd, "content_mkdir"))		{ EditorFileOps::McpMakeDir(raw, out);			return true; }
+    if (0 == xr_strcmp(cmd, "content_rename"))		{ EditorFileOps::McpRename(raw, out);			return true; }
 
 	if (0 == xr_strcmp(cmd, "content_browser_navigation"))
 	{

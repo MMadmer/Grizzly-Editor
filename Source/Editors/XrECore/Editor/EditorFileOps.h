@@ -59,6 +59,13 @@ namespace EditorFileOps
 	// `out` receives the absolute path that now exists.
 	ECORE_API bool	MakeDir	(LPCSTR path, string_path& out, xr_string& err);
 
+	// Renames a file or a folder of the project in place. `new_name` is a leaf, not
+	// a path; a quest keeps its .nqasset when the new name names no extension. A
+	// name that differs in case alone IS a rename - Windows reports the old file
+	// as "already there", which is the file itself. Open quest documents follow.
+	// `out` = the new full path; true with an unchanged name does nothing.
+	ECORE_API bool	Rename	(LPCSTR path, LPCSTR new_name, string_path& out, xr_string& err);
+
 	// Where a file living under `fs_alias` belongs once it is inside the project.
 	// fs.ltx builds every alias below the SDK root, so the tail of that root is
 	// what gets mirrored: $objects$ -> <project>\rawdata\objects,
@@ -78,4 +85,5 @@ namespace EditorFileOps
 	ECORE_API void	McpMove		(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpDelete	(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpMakeDir	(LPCSTR raw, xr_string& out);
+	ECORE_API void	McpRename	(LPCSTR raw, xr_string& out);
 }

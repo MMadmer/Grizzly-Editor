@@ -654,6 +654,23 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_content_rename",
+        "description": "Rename a file or a folder of the project in place - what F2 does in the content browser. "
+                       "'path' is the entry (project-relative), 'name' the new leaf name, not a path. A change of "
+                       "case alone is a rename (NewQuest.nqasset -> newquest.nqasset). A quest keeps its .nqasset "
+                       "when the new name names no extension. Another entry's name is refused. Quest documents "
+                       "that are open follow the renamed file or folder, unsaved edits included. Returns the new "
+                       "full path.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "file or folder inside the project, e.g. scripts/NewQuest.nqasset"},
+                "name": {"type": "string", "description": "the new leaf name, e.g. delivery.nqasset"},
+            },
+            "required": ["path", "name"],
+        },
+    },
+    {
         "name": "xfined_content_mkdir",
         "description": "Create a folder inside the project, with any missing parent along the way. 'path' is "
                        "taken against the project root when relative (e.g. 'gamedata/meshes/mymod'). Anything "
@@ -1468,6 +1485,7 @@ CMD_MAP = {
     "xfined_content_move": "content_move",
     "xfined_content_delete": "content_delete",
     "xfined_content_mkdir": "content_mkdir",
+    "xfined_content_rename": "content_rename",
     "xfined_list_commands": "list_commands",
     "xfined_exec_command": "exec_command",
     "xfined_content_browser_open": "content_browser_open",

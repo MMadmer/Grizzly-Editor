@@ -662,6 +662,17 @@ bool NqText::ValidId(LPCSTR id)
 	return true;
 }
 
+xr_string NqText::IdFromName(LPCSTR name)
+{
+	xr_string id = name ? name : "";
+	for (u32 i = 0; i < id.size(); ++i)
+	{
+		const char c = (char)tolower((unsigned char)id[i]);
+		id[i] = ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') ? c : '_';
+	}
+	return id;
+}
+
 xr_string NqText::RefSummary(const SNqValue& v)
 {
 	if (!v.IsTable()) return v.AsString();

@@ -1157,7 +1157,8 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 	if (ctx.file_path && ctx.file_path[0])
 	{
 		xr_string base = NqUtil::BaseName(ctx.file_path);
-		if (!q.id.empty() && base != q.id)
+		// by the rule a new quest is named with: "NewQuest.nqasset" IS newquest
+		if (!q.id.empty() && NqText::IdFromName(base.c_str()) != q.id)
 			WARN(c, "W061", 0, 0, "file name '%s' differs from quest id '%s'", base.c_str(), q.id.c_str());
 	}
 

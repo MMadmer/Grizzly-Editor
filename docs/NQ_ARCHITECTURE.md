@@ -1288,7 +1288,7 @@ state; existing state does not migrate.
 | W040 | a character outside cp1251 in a text, or in a string `vars` default (`{var:name}` splices it into text) |
 | W050 | Lua syntax not checked (no LuaJIT) — editor only |
 | W060 | the value is not found in the game index (story id/section/level/smart/profile/info portion) — editor only |
-| W061 | the file name does not match the quest `id` — editor only |
+| W061 | the quest `id` is not the one the file name gives (lower case, other characters as `_`) — editor only |
 | W062 | a spawn row sets a field its section cannot carry (a magazine on a medkit, doses on a rifle) — editor only, and only when the linked game knows the section |
 | W063 | a spawn row's value is over the section's own ceiling (`ammo_mag_size` / `box_size`) — the runtime clamps it — editor only |
 | W070 | a quest without `flow.end` (will finish implicitly) |

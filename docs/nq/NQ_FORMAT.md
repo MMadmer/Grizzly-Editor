@@ -415,7 +415,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `W040` | a character outside cp1251 in a text, or in a string `vars` default | drop the emoji/exotic typography — in the game they become `?`. A string variable counts because `{var:name}` splices it into task and phrase text |
 | `W050` | Lua could not be checked (no LuaJIT) | editor only; review the code by hand |
 | `W060` | the value is not found in the linked game's index | a typo in the section/story id/level/smart/profile/info portion — or it is your own mod's object, then the warning is expected |
-| `W061` | the file name does not match the quest `id` | a hint, not an error; rename the file or the `id` if you want order |
+| `W061` | the quest `id` is not the one its file name gives (lower case, anything outside `[a-z0-9_]` as `_`: `NewQuest.nqasset` gives `newquest`) | a hint, not an error; rename the file or the `id` if you want order |
 | `W062` | a spawn row sets a field its section cannot carry (a magazine on a medkit, a cartridge on a knife) | drop the field, or check the section — it is only a warning, because the editor reads the LINKED game's configs and a module's own sections are not in them |
 | `W063` | a spawn row's value is over the section's own ceiling (`ammo_mag_size`, `box_size`) | the runtime clamps it, so this is a warning; an installed upgrade can legitimately raise a magazine |
 | `W070` | the quest has no `flow.end` | it will finish implicitly when tokens and triggers run out; add a `flow.end` if you want an explicit status |

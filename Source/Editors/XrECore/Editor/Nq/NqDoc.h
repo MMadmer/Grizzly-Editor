@@ -114,6 +114,9 @@ namespace NqDocs
 	// dirty documents refuse to close unless `discard` (err = "unsaved")
 	ECORE_API bool		Close		(LPCSTR path, bool discard, xr_string& err);
 	ECORE_API void		All			(xr_vector<NqDoc*>& out);
+	// A file or a folder was renamed on disk: open documents follow it. Without
+	// this the next save would write the old name back into existence.
+	ECORE_API void		Retarget	(LPCSTR old_abs, LPCSTR new_abs);
 	// writes every dirty document to disk and logs one line per file (saved or
 	// failed); returns the number saved. No dialogs - it runs on paths where a
 	// modal would stall MCP and -nodlg (project switch, shutdown).
