@@ -11,6 +11,7 @@
 #include <shellapi.h>	// SHFileOperation: replaced release files go to the Recycle Bin
 #include <bcrypt.h>		// SHA-256 of a finished package
 #include "Zlib/zip.h"	// minizip, release packages
+#include "Zlib/unzip.h"	// reading a finished package back for the file index
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorProject)
@@ -301,7 +302,8 @@ static bool DottedNumber(LPCSTR v, int min_parts, int max_parts)
 
 bool EditorMod::ValidateVersion(LPCSTR version)
 {
-	return DottedNumber(version, 1, 4);
+	// 1.2 caps a release version at 32 characters; four 9-digit numbers would be 39
+	return DottedNumber(version, 1, 4) && xr_strlen(version) <= 32;
 }
 
 static bool IsAlnum(char c)
@@ -1328,15 +1330,20 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 //------------------------------------------------------------------------------
 // release packaging
 //
-// The descriptor name and format, the package names and the package layout are
-// a FROZEN contract with the game's module updater - game repo,
+// The descriptor and index names and formats, the package names and the package
+// layout are a FROZEN contract with the game's module updater - game repo,
 // docs/dead-air/MOD_UPDATES.md, section 2. It changes by adding optional keys
-// and in no other way: a published release has to install forever.
+// and records and in no other way: a published release has to install forever.
+//
+// The game never reads a package as a zip. It asks GitHub for byte ranges the
+// file index names, so the index states where the data REALLY sits: offsets are
+// read back from the finished archive, never worked out from what was written.
 //------------------------------------------------------------------------------
 // input bytes per package: deflate never grows data by more than a fraction of
 // a percent, so a package stays clear of the asset limit whatever it holds
 static const u64 kPartInputLimit	= 1536ull << 20;
 static const u64 kAssetLimit		= 2048ull << 20;	// GitHub refuses a release asset of 2 GiB
+static const u64 kIndexLimit		= 64ull << 20;		// 2.2: the game reads an index of 64 MiB at most
 static const u32 kMaxPackages		= 64;
 static const u32 kMaxAssetName		= 128;
 static const u32 kZipMadeBy			= 63;				// FAT host, spec 6.3 - the one that defines UTF-8 names
@@ -1345,10 +1352,19 @@ static const u32 kZipUtf8Flag		= 1 << 11;
 struct SStagedFile
 {
 	xr_string	rel;		// below the staged module folder, as found on disk
-	xr_string	entry;		// zip entry name: modules/<id>/..., forward slashes, UTF-8
-	xr_string	key;		// lowercased entry - the package order
+	xr_string	path;		// the same as the index states it: forward slashes, UTF-8
+	xr_string	entry;		// zip entry name: modules/<id>/ + path
+	xr_string	key;		// lowercased entry - the order of packages and index alike
 	u64			size;
 	FILETIME	written;
+	// the index record, filled while the file is packed and read back afterwards
+	xr_string	sha256;		// of the content
+	u32			pack;		// 1-based package number, 0 = not read back yet
+	u64			offset;		// first byte of the stored data inside the package
+	u64			packed;		// length of that data
+	u32			method;		// 0 stored, 8 raw deflate
+
+				SStagedFile	() : size(0), written(), pack(0), offset(0), packed(0), method(0) {}
 };
 
 static void ListStagedFiles(LPCSTR dir, const xr_string& rel_dir, xr_vector<SStagedFile>& out)
@@ -1427,17 +1443,59 @@ static bool PackagingAborted()
 	return UI->NeedAbort();
 }
 
-// files [first, last) of `files` into one zip. `done` counts input bytes across
-// all packages, for the progress bar.
-static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, const xr_vector<SStagedFile>& files,
-					   u32 first, u32 last, xr_vector<u8>& buf, SPBItem* pb, u64& done, xr_string& err)
+// One SHA-256 object for a whole packaging: Finish leaves it ready for the next
+// input. Every path that abandons an input half-way ends the packaging as well.
+struct SSha256
+{
+	BCRYPT_ALG_HANDLE	alg;
+	BCRYPT_HASH_HANDLE	hash;
+
+	SSha256() : alg(0), hash(0)
+	{
+		if (!BCRYPT_SUCCESS(::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0)) ||
+			!BCRYPT_SUCCESS(::BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, BCRYPT_HASH_REUSABLE_FLAG)))
+			hash = 0;
+	}
+	~SSha256()
+	{
+		if (hash)	::BCryptDestroyHash(hash);
+		if (alg)	::BCryptCloseAlgorithmProvider(alg, 0);
+	}
+	SSha256(const SSha256&) = delete;
+	SSha256& operator=(const SSha256&) = delete;
+
+	bool Add(const void* data, u32 size)
+	{
+		return hash && BCRYPT_SUCCESS(::BCryptHashData(hash, (PUCHAR)data, size, 0));
+	}
+	// lowercase hex
+	bool Finish(xr_string& hex)
+	{
+		u8 digest[32];
+		hex.clear();
+		if (!hash || !BCRYPT_SUCCESS(::BCryptFinishHash(hash, digest, sizeof(digest), 0))) return false;
+		for (int i = 0; i < (int)sizeof(digest); ++i)
+		{
+			char byte[4];
+			sprintf_s(byte, "%02x", digest[i]);
+			hex += byte;
+		}
+		return true;
+	}
+};
+
+// files [first, last) of `files` into one zip. Every file is hashed on its way
+// in - the index wants the SHA-256 of the content, and the content is read once.
+// `done` counts input bytes across all packages, for the progress bar.
+static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, xr_vector<SStagedFile>& files,
+					   u32 first, u32 last, xr_vector<u8>& buf, SSha256& sha, SPBItem* pb, u64& done, xr_string& err)
 {
 	zipFile zip = zipOpen64(zip_path, APPEND_STATUS_CREATE);
 	if (!zip) { err = xr_string("can't create ") + zip_path; return false; }
 
 	for (u32 i = first; i < last && err.empty(); ++i)
 	{
-		const SStagedFile& f = files[i];
+		SStagedFile& f = files[i];
 		string_path src;
 		sprintf_s(src, "%s\\%s", module_dir, f.rel.c_str());
 		HANDLE h = ::CreateFileA(src, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
@@ -1461,6 +1519,7 @@ static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, const xr_vector<SStag
 			if (!::ReadFile(h, buf.data(), (DWORD)buf.size(), &rd, NULL)) { err = "can't read " + f.rel; break; }
 			if (!rd) break;
 			if (ZIP_OK != zipWriteInFileInZip(zip, buf.data(), rd)) { err = "can't write " + xr_string(zip_path); break; }
+			if (!sha.Add(buf.data(), rd)) { err = "can't hash " + f.rel; break; }
 			packed	+= rd;
 			done	+= rd;
 			if (pb) pb->Update(float(done >> 10));
@@ -1468,6 +1527,7 @@ static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, const xr_vector<SStag
 		}
 		::CloseHandle(h);
 		if (err.empty() && packed != f.size) err = "size changed while packaging: " + f.rel;
+		if (err.empty() && !sha.Finish(f.sha256)) err = "can't hash " + f.rel;
 		if (ZIP_OK != zipCloseFileInZip(zip) && err.empty()) err = "can't write " + xr_string(zip_path);
 	}
 	if (ZIP_OK != zipClose(zip, NULL) && err.empty()) err = xr_string("can't write ") + zip_path;
@@ -1476,41 +1536,74 @@ static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, const xr_vector<SStag
 	return false;
 }
 
-static bool Sha256File(LPCSTR path, xr_vector<u8>& buf, xr_string& hex, u64& size, xr_string& err)
+// Where every file of package `pack` really sits, asked of the FINISHED archive:
+// the data offset comes from the local header minizip's reader finds there, the
+// packed length and the method from its central directory. Nothing is assumed
+// about what the writer did, so an index can only ever state what is on disk.
+static bool ReadPackageLayout(LPCSTR zip_path, xr_vector<SStagedFile>& files, u32 first, u32 last,
+							  u32 pack, xr_string& err)
+{
+	unzFile zip = unzOpen64(zip_path);
+	if (!zip) { err = xr_string("can't read back ") + zip_path; return false; }
+
+	xr_vector<char> name(0x10000);	// a zip name is 65535 bytes at most
+	u32 found = 0;
+	for (int res = unzGoToFirstFile(zip); err.empty(); res = unzGoToNextFile(zip))
+	{
+		if (UNZ_END_OF_LIST_OF_FILE == res) break;
+		unz_file_info64 info;
+		if (UNZ_OK != res || UNZ_OK != unzGetCurrentFileInfo64(zip, &info, name.data(), (uLong)name.size() - 1, NULL, 0, NULL, 0))
+			{ err = xr_string("can't read back ") + zip_path; break; }
+		name[info.size_filename < name.size() ? info.size_filename : name.size() - 1] = 0;
+
+		// by name: the entry is looked up among the files this package was given
+		xr_string key = name.data();
+		for (size_t c = 0; c < key.size(); ++c)
+			if (key[c] >= 'A' && key[c] <= 'Z') key[c] = char(key[c] - 'A' + 'a');
+		xr_vector<SStagedFile>::iterator f = std::lower_bound(files.begin() + first, files.begin() + last, key,
+			[](const SStagedFile& file, const xr_string& k) { return file.key < k; });
+		if (f == files.begin() + last || f->entry != name.data() || f->pack)
+			{ err = xr_string("package does not read back as written: ") + name.data(); break; }
+
+		int method = 0, level = 0;
+		if ((info.flag & 1) || (0 != info.compression_method && Z_DEFLATED != info.compression_method) ||
+			info.uncompressed_size != f->size || UNZ_OK != unzOpenCurrentFile2(zip, &method, &level, 1))
+			{ err = "package does not read back as written: " + f->rel; break; }
+		f->offset	= unzGetCurrentFileZStreamPos64(zip);
+		f->packed	= info.compressed_size;
+		f->method	= (u32)info.compression_method;
+		f->pack		= pack;
+		unzCloseCurrentFile(zip);
+		if (!f->offset) { err = "package does not read back as written: " + f->rel; break; }
+		++found;
+	}
+	unzClose(zip);
+	if (err.empty() && found != last - first) err = xr_string("package does not read back as written: ") + zip_path;
+	return err.empty();
+}
+
+static bool Sha256File(LPCSTR path, xr_vector<u8>& buf, SSha256& sha, xr_string& hex, u64& size, xr_string& err)
 {
 	hex.clear();
 	size = 0;
 	HANDLE h = ::CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 	if (INVALID_HANDLE_VALUE == h) { err = xr_string("can't read ") + path; return false; }
 
-	BCRYPT_ALG_HANDLE	alg = 0;
-	BCRYPT_HASH_HANDLE	hash = 0;
-	u8					digest[32];
-	bool ok = BCRYPT_SUCCESS(::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0)) &&
-			  BCRYPT_SUCCESS(::BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0));
+	bool ok = true;
 	while (ok)
 	{
 		DWORD rd = 0;
 		ok = !!::ReadFile(h, buf.data(), (DWORD)buf.size(), &rd, NULL);
 		if (!ok || !rd) break;
-		ok = BCRYPT_SUCCESS(::BCryptHashData(hash, buf.data(), rd, 0));
+		ok = sha.Add(buf.data(), rd);
 		size += rd;
 		if (PackagingAborted()) { err = "cancelled"; ok = false; }
 	}
-	ok = ok && BCRYPT_SUCCESS(::BCryptFinishHash(hash, digest, sizeof(digest), 0));
-	if (hash)	::BCryptDestroyHash(hash);
-	if (alg)	::BCryptCloseAlgorithmProvider(alg, 0);
 	::CloseHandle(h);
-	if (!ok)
+	if (!(ok && sha.Finish(hex)))
 	{
 		if (err.empty()) err = xr_string("can't hash ") + path;
 		return false;
-	}
-	for (int i = 0; i < (int)sizeof(digest); ++i)
-	{
-		char byte[4];
-		sprintf_s(byte, "%02x", digest[i]);
-		hex += byte;
 	}
 	return true;
 }
@@ -1529,13 +1622,14 @@ static bool IsPackageName(LPCSTR name, const xr_string& stem)
 	return 0 == _stricmp(tail, ".zip");
 }
 
-// what a packaging of this id + version left in `dir`: the descriptor and the
-// packages. These are the files the next packaging replaces.
+// what a packaging of this id + version left in `dir`: the descriptor, the file
+// index and the packages. These are the files the next packaging replaces.
 static void ListReleaseFiles(LPCSTR dir, const xr_string& id, const xr_string& version, xr_vector<xr_string>& names)
 {
 	names.clear();
 	const xr_string descriptor = id + ".update.ltx";
 	const xr_string stem = id + "-" + version;
+	const xr_string index = stem + ".files";
 	string_path mask;
 	sprintf_s(mask, "%s\\*", dir);
 	WIN32_FIND_DATAA fd;
@@ -1544,7 +1638,8 @@ static void ListReleaseFiles(LPCSTR dir, const xr_string& id, const xr_string& v
 	do
 	{
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-		if (0 == _stricmp(fd.cFileName, descriptor.c_str()) || IsPackageName(fd.cFileName, stem))
+		if (0 == _stricmp(fd.cFileName, descriptor.c_str()) || 0 == _stricmp(fd.cFileName, index.c_str()) ||
+			IsPackageName(fd.cFileName, stem))
 			names.push_back(xr_string(fd.cFileName));
 	} while (::FindNextFileA(h, &fd));
 	::FindClose(h);
@@ -1588,7 +1683,9 @@ static bool ReleaseGate(const EditorMod::SManifest& m, xr_string& err)
 		err = "invalid website in mod.ltx: only https://ap-pro.ru or https://moddb.com links are allowed";
 	else if (!EditorMod::ValidateGithubRepo(m.update_github.c_str()))
 		err = "invalid [update] github in mod.ltx: owner/repo expected";
-	// 2.1: an asset name is 1-128 characters and does not start with a dot
+	// 2.1: an asset name - package or index - is 1-128 characters of a charset id
+	// and version stay inside, and does not start with a dot. The longest name a
+	// release can need is the last part's; "<id>-<version>.files" is shorter.
 	else if (m.id[0] == '.')
 		err = "module id starts with a dot - a release asset name cannot";
 	else if (m.id.size() + m.version.size() + xr_strlen("-.part64.zip") > kMaxAssetName)
@@ -1621,7 +1718,7 @@ static bool ResolveReleaseDir(LPCSTR project_root, LPCSTR out_dir, const xr_stri
 	return false;
 }
 
-// stage -> packages -> hashes -> descriptor. `stage` is a private scratch
+// stage -> packages -> file index -> descriptor. `stage` is a private scratch
 // folder the caller creates and removes, so a failure leaves `out` untouched.
 static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPCSTR stage, LPCSTR out,
 						 LPCSTR requires_game, EditorMod::SPackageResult& result, xr_string& err, xr_string* warnings)
@@ -1650,6 +1747,13 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 			err = "file name the game's updater refuses (reserved name, trailing dot or space, control character): " + f.rel;
 			return false;
 		}
+		// an index record is space-separated and the path is the rest of its line
+		if (rel[0] == ' ')
+		{
+			err = "file name starts with a space - the file index cannot state it safely: " + f.rel;
+			return false;
+		}
+		f.path = rel;
 		f.entry = prefix + rel;
 		f.key = f.entry;
 		for (size_t c = 0; c < f.key.size(); ++c)
@@ -1685,6 +1789,8 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 	string_path packages_dir, path;
 	sprintf_s(packages_dir, "%s\\packages", stage);
 	CreateDirChain(packages_dir);
+	SSha256 sha;
+	if (!sha.hash) { err = "SHA-256 is not available on this system"; return false; }
 
 	// on screen until the function returns: moving gigabytes to another drive
 	// is part of the wait
@@ -1703,9 +1809,10 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		if (parts.size() > 1) pkg.name += NqUtil::Format(".part%u", p + 1);
 		pkg.name += ".zip";
 		sprintf_s(path, "%s\\%s", packages_dir, pkg.name.c_str());
-		if (!ZipPackage(path, module_dir.c_str(), files, parts[p].first, parts[p].second, buf, pb, done, err)) break;
+		if (!ZipPackage(path, module_dir.c_str(), files, parts[p].first, parts[p].second, buf, sha, pb, done, err)) break;
 		if (pb) pb->Info(pkg.name.c_str());
-		if (!Sha256File(path, buf, pkg.sha256, pkg.size, err)) break;
+		if (!ReadPackageLayout(path, files, parts[p].first, parts[p].second, p + 1, err)) break;
+		if (!Sha256File(path, buf, sha, pkg.sha256, pkg.size, err)) break;
 		if (pkg.size >= kAssetLimit)
 		{
 			u32 biggest = parts[p].first;
@@ -1719,6 +1826,29 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		result.packages.push_back(pkg);
 	}
 	if (!err.empty()) return false;
+
+	// The file index (2.2). `pack` lines follow the descriptor's [packages] lines,
+	// `file` lines the package order; LF line ends. Nothing in it depends on when
+	// the packaging ran, so the same module always yields the same bytes.
+	xr_string index_text = "xms-files 1\n";
+	for (u32 p = 0; p < result.packages.size(); ++p)
+		index_text += "pack " + result.packages[p].name + "\n";
+	for (u32 i = 0; i < files.size(); ++i)
+	{
+		const SStagedFile& f = files[i];
+		index_text += NqUtil::Format("file %s %llu %u %llu %llu %u ", f.sha256.c_str(), f.size, f.pack, f.offset, f.packed, f.method);
+		index_text += f.path;
+		index_text += "\n";
+	}
+	if (index_text.size() > kIndexLimit)
+	{
+		err = NqUtil::Format("the file index is %llu bytes - the game reads 64 MiB at most", (u64)index_text.size());
+		return false;
+	}
+	result.index.name = m.id + "-" + m.version + ".files";
+	result.index.size = index_text.size();
+	if (!sha.Add(index_text.data(), (u32)index_text.size()) || !sha.Finish(result.index.sha256))
+		{ err = "can't hash the file index"; return false; }
 
 	// Only now is the output folder touched. What an earlier packaging of this id
 	// and version left there goes first - a 3-part build followed by a 1-part one
@@ -1741,7 +1871,10 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		if (!::MoveFileWithProgressA(from, path, &MoveProgress, NULL, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING))
 			{ err = xr_string("can't write ") + path; return false; }
 	}
+	sprintf_s(path, "%s\\%s", out, result.index.name.c_str());
+	if (!WriteTextFile(path, index_text.c_str())) { err = xr_string("can't write ") + path; return false; }
 
+	// the descriptor goes last: it is the file that vouches for the other two kinds
 	xr_string text = "; XMS module release descriptor. Generated by XFined Editor.\r\n[release]\r\n";
 	AppendKey(text, "schema", "1", 13);
 	AppendKey(text, "id", m.id.c_str(), 13);
@@ -1750,6 +1883,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		AppendKey(text, "requires_game", requires_game, 13);
 	AppendKey(text, "files", NqUtil::Format("%u", (u32)files.size()).c_str(), 13);
 	AppendKey(text, "unpacked", NqUtil::Format("%llu", unpacked).c_str(), 13);
+	AppendKey(text, "index", (result.index.name + NqUtil::Format(", %llu, ", result.index.size) + result.index.sha256).c_str(), 13);
 	text += "\r\n[packages]\r\n";
 	for (u32 p = 0; p < result.packages.size(); ++p)
 		text += result.packages[p].name + NqUtil::Format(" = %llu, ", result.packages[p].size) + result.packages[p].sha256 + "\r\n";
@@ -2484,8 +2618,9 @@ static void RunDeferredPackage()
 
 	xr_string text = bake_note;
 	if (!text.empty()) text += "\n";
-	text += NqUtil::Format("Release %s %s: %d file(s) packaged into\n%s\n\n  %s.update.ltx\n",
-		s_PkgManifest.id.c_str(), s_PkgManifest.version.c_str(), res.files, res.out_dir.c_str(), s_PkgManifest.id.c_str());
+	text += NqUtil::Format("Release %s %s: %d file(s) packaged into\n%s\n\n  %s.update.ltx\n  %s\n",
+		s_PkgManifest.id.c_str(), s_PkgManifest.version.c_str(), res.files, res.out_dir.c_str(),
+		s_PkgManifest.id.c_str(), res.index.name.c_str());
 	for (u32 i = 0; i < res.packages.size(); ++i)
 		text += NqUtil::Format("  %s  (%.1f MB)\n", res.packages[i].name.c_str(), double(res.packages[i].size) / 1048576.0);
 	if (s_PkgManifest.update_github.empty())
@@ -2494,6 +2629,8 @@ static void RunDeferredPackage()
 	else
 		text += NqUtil::Format("\nUpload these files to a GitHub release of %s\nand mark it as the latest release.",
 			s_PkgManifest.update_github.c_str());
+	// the index addresses the zip by byte offset; a re-zipped copy is another file
+	text += "\nUpload the zip exactly as written - repacking it breaks the file index.";
 	if (!warn.empty())
 	{
 		text += "\n\n";
@@ -2515,7 +2652,7 @@ static void DrawPackageModal()
 	ImGui::SetNextItemWidth(480);
 	ImGui::InputText("##out_dir", s_PkgOutDir, sizeof(s_PkgOutDir));
 	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Receives <id>.update.ltx and the package zip(s).");
+		ImGui::SetTooltip("Receives <id>.update.ltx, the file index and the package zip(s).");
 	ImGui::SetNextItemWidth(160);
 	ImGui::InputText("Requires game", s_PkgRequires, sizeof(s_PkgRequires));
 	if (ImGui::IsItemHovered())
@@ -2849,7 +2986,11 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 	JsonAppendPath(out, res.descriptor.c_str());
 	out += "\",\"out_dir\":\"";
 	JsonAppendPath(out, res.out_dir.c_str());
-	out += "\",\"packages\":[";
+	out += "\",\"index\":{\"name\":\"";
+	JsonAppend(out, res.index.name.c_str());
+	out += NqUtil::Format("\",\"size\":%llu,\"sha256\":\"", res.index.size);
+	out += res.index.sha256;
+	out += "\"},\"packages\":[";
 	for (u32 i = 0; i < res.packages.size(); ++i)
 	{
 		if (i) out += ",";

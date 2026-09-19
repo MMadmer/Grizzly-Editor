@@ -82,7 +82,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_mod_manifest` | XMS mod manifest of the active project: id, name, version, Mods menu metadata (`author`, `description`, `website`, `github`), `api`, `target`, target game `mode`, declared `provides_mode` list, requires/after/before/conflicts, existing module dirs |
 | `xfined_mod_set_manifest` | update mod.ltx fields: `id`/`name`/`version`/`mode` strings (`version` = 1-4 numbers separated by dots), Mods menu metadata `author`, `description` (line breaks allowed, 4095 bytes at most), `website` (`https://ap-pro.ru/...` or `https://moddb.com/...` only), `github` (`owner/repo`; a repository URL is reduced to it), `provides_mode_id`+`provides_mode_title` (declare a game mode, empty id removes — the title is what the player reads, any language), `target` (`default`/`existing`/`new`, inferred from the mode fields when omitted, but "the ordinary game" must be said out loud), `requires`/`after`/`before`/`conflicts` comma-joined lists. An invalid value answers `ok:false` and nothing is written; an empty string clears an optional key |
 | `xfined_mod_export` | export the project to `<target>/modules/<id>/` as an XMS module (no `target` = deploy to the linked game's `modules/`; **not** `mods/` — that is JSGME's folder, and a module sitting there is one JSGME offers to copy over the game); a **clean build** — the target module folder is emptied first, so nothing a previous build left can survive; refuses targets inside the game's `gamedata`; `flat=true` for a plain `gamedata_<id>` overlay + compatibility report. A module that declares a mode also gets `patch/xms_modes.xmlp`, `gamedata/configs/text/rus/<id>_modes.xml` and `scripts/mode_register.script` written for it — the checkbox that puts the mode on the new-game screen, measured against the layout the linked game really ships |
-| `xfined_mod_package` | package a release for the game's module updater: `<id>.update.ltx` + `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (Recycle Bin). Returns `descriptor`, `out_dir`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings`. Cancelable through `xfined_progress` |
+| `xfined_mod_package` | package a release for the game's module updater: the descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. The index states every file's SHA-256 and the byte range of its data inside a package, read back from the finished archive - the game downloads only the files that differ. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (Recycle Bin). Returns `descriptor`, `out_dir`, `index` `{name,size,sha256}`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings`. Cancelable through `xfined_progress` |
 | `xfined_mod_export_spawn` | export placed objects as an additive spawn layer `spawn/<level>.xspawn` (`op=add` + section + world transform + visual override) — the composable way to add things to a base level; only AUTHORED objects ship (see `xfined_mark_authored`); a project-local model is staged into `gamedata/meshes/`, a model found nowhere skips its op instead of shipping a crash; args `level`, `selected_only`, `section`, `mode`. `xfined_mod_export` runs this bake automatically for the open scene (mirror semantics: the scene is the level file's source of truth) |
 | `xfined_mark_authored` | flip the mod-content flag on the selection (`authored`, default true) — the build ships only authored objects; an imported base level's objects stay base and never export |
 | `xfined_asset_preview_model` | render a `.ogf` model preview as a base64 PNG (game meshes have no baked thumbnail); `name` + `source` = `visual` (editor FS) or `darf` (linked game install) |
@@ -217,20 +217,24 @@ codes), examples: `docs/nq/examples/*.nqasset`.
 ## Releasing a mod
 
 A release is what players install and update from the game's Mods menu: the
-descriptor `<id>.update.ltx` plus one or more package zips, attached to a GitHub
-release. The format is a frozen contract with the game
+descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and one or
+more package zips, attached to a GitHub release. Every release is complete; the
+index tells the game where each file's bytes sit inside a package, so it
+downloads only what differs from the installed module - there is no patch to
+build. The format is a frozen contract with the game
 (`docs/dead-air/MOD_UPDATES.md` in the game repository).
 
 1. `xfined_mod_set_manifest` — `version` (1-4 numbers separated by dots, higher
    than the last release, otherwise players are offered nothing), `github`
    (`owner/repo` of the repository that will carry the releases), optionally
    `author`, `description` and `website` (AP-PRO or ModDB only).
-2. `xfined_mod_package` — returns the descriptor path and the packages with
-   their sizes and SHA-256. Default output: `<project>/releases/<version>/`,
-   a folder the module export never ships.
+2. `xfined_mod_package` — returns the descriptor path, the index and the
+   packages with their sizes and SHA-256. Default output:
+   `<project>/releases/<version>/`, a folder the module export never ships.
 3. Create a release in that repository, attach **every** returned file under
-   its own name, and publish it as the **latest** release — a draft or a
-   pre-release is invisible to the game. The package also serves as the manual
+   its own name - descriptor, index and each package, the zip byte for byte as
+   written, since the index addresses it by offset - and publish it as the
+   **latest** release — a draft or a pre-release is invisible to the game. The package also serves as the manual
    install: extracted into the game folder it lands in `modules/<id>/`.
 
 Packaging compresses at the highest level, so a large mod can outlast the

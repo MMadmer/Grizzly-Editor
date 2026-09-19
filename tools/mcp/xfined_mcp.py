@@ -195,14 +195,17 @@ TOOLS = [
     {
         "name": "xfined_mod_package",
         "description": "Package the active project as a release for the game's module updater: the descriptor "
-                       "<id>.update.ltx plus <id>-<version>.zip (split into .partN.zip to stay under GitHub's "
-                       "2 GiB asset limit). Every package holds the complete module under modules/<id>/, so it "
-                       "doubles as the manual install. Runs the same gate as xfined_mod_export and also needs an "
+                       "<id>.update.ltx, the file index <id>-<version>.files and <id>-<version>.zip (split into "
+                       ".partN.zip to stay under GitHub's 2 GiB asset limit). Every package holds the complete "
+                       "module under modules/<id>/, so it doubles as the manual install; the index states each "
+                       "file's SHA-256 and the byte range of its data inside a package, so the game downloads "
+                       "only the files that differ. Runs the same gate as xfined_mod_export and also needs an "
                        "orderable version (1-4 numbers separated by dots). Files an earlier packaging of the same "
                        "version left in out_dir are replaced without asking. Returns descriptor, out_dir, "
-                       "packages [{name,size,sha256}], files, unpacked, packed, requires_game, baked, warnings. "
-                       "Upload every returned file to a GitHub release of the manifest's 'github' repository "
-                       "and publish it as the latest release.",
+                       "index {name,size,sha256}, packages [{name,size,sha256}], files, unpacked, packed, "
+                       "requires_game, baked, warnings. Upload every returned file - the zip exactly as written, "
+                       "repacking it breaks the index - to a GitHub release of the manifest's 'github' "
+                       "repository and publish it as the latest release.",
         "inputSchema": {
             "type": "object",
             "properties": {

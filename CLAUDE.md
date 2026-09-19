@@ -109,17 +109,28 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 ## Mod releases
 
 - **Mod → Package Release…** / `mod_package` (`EditorMod::PackageRelease`)
-  writes `<id>.update.ltx` plus `<id>-<version>.zip` (`.partN.zip` when split)
-  into `<project>\releases\<version>`. The game's module updater downloads
-  exactly these files from the latest GitHub release of `[update] github`.
-- The descriptor name and format, the package names and the package layout
-  (every entry under `modules/<id>/`, UTF-8 names, no path twice) are a
-  **FROZEN contract shared with the game**. The normative text is the game
+  writes three kinds of files into `<project>\releases\<version>`: the
+  descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and the
+  package `<id>-<version>.zip` (`.partN.zip` when split). The game's module
+  updater reads exactly these from the latest GitHub release of
+  `[update] github`.
+- The file index names every file's SHA-256, size, package, data offset,
+  packed length and method. The game never parses a package as a zip: it asks
+  GitHub for the byte ranges the index names and downloads only the files that
+  differ. So the index must state what is ON DISK — offsets, packed lengths
+  and methods are READ BACK from the finished archive (`ReadPackageLayout`,
+  minizip's unzip API), never worked out from what the writer was asked to do;
+  the content hash is taken while the file is fed to the zip. Anything that
+  rewrites a finished package (another zip tool, a changed compression
+  setting applied afterwards) invalidates its index.
+- The descriptor and index names and formats, the package names and the package
+  layout (every entry `modules/<id>/` + its index path, UTF-8 names, no path
+  twice) are a **FROZEN contract shared with the game**. The normative text is the game
   repo's `docs/dead-air/MOD_UPDATES.md`. This is the one exception to the
   pre-release freedom above: a published release lives on GitHub, outside both
   repositories, and has to install forever. Change it ONLY by adding optional
-  keys or sections; anything else is a paired change that starts in that
-  document.
+  keys, sections or index records; anything else is a paired change that
+  starts in that document.
 - A package always holds the COMPLETE module - never a patch or a delta. It is
   staged through the real module export (`EditorMod::Export`), so a release
   ships what a build ships and refuses what a build refuses. The same zip is

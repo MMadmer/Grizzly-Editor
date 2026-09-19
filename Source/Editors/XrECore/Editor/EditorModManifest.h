@@ -53,7 +53,7 @@ namespace EditorMod
 	// mode ids follow the module id charset, but empty is allowed (= all modes)
 	ECORE_API bool	ValidateModeId		(LPCSTR id);
 	// strict form of MOD_UPDATES.md 1.2: 1-4 dot-separated numbers of at most
-	// 9 digits and nothing else - a release has to be orderable
+	// 9 digits and nothing else, 32 characters in all - a release has to be orderable
 	ECORE_API bool	ValidateVersion		(LPCSTR version);
 	// MOD_UPDATES.md 1.3: https, host exactly (www.)ap-pro.ru or (www.)moddb.com,
 	// no user info or port, limited charset, 512 bytes at most; empty is valid
@@ -93,18 +93,21 @@ namespace EditorMod
 										 int& files, xr_string& out_path, xr_string& err,
 										 bool confirmed = false, xr_string* warnings = 0);
 
-	// one package of a release, as the descriptor lists it
+	// one asset of a release, as the descriptor lists it
 	struct SPackageFile
 	{
-		xr_string				name;			// asset name: <id>-<version>[.partN].zip
+		xr_string				name;			// asset name: <id>-<version>[.partN].zip, <id>-<version>.files
 		u64						size;
 		xr_string				sha256;			// lowercase hex
+
+								SPackageFile	() : size(0) {}
 	};
 
 	struct SPackageResult
 	{
 		xr_string				out_dir;		// folder that holds everything below
 		xr_string				descriptor;		// full path of <id>.update.ltx
+		SPackageFile			index;			// the file index, <id>-<version>.files
 		xr_vector<SPackageFile>	packages;
 		xr_string				requires_game;	// as written, empty = key omitted
 		int						files;			// files in all packages together
@@ -114,10 +117,12 @@ namespace EditorMod
 								SPackageResult	() : files(0), unpacked(0), packed(0) {}
 	};
 
-	// A release for the game's module updater: <id>.update.ltx + package zip(s)
-	// holding the COMPLETE module under modules/<id>/. Names, descriptor format
-	// and package layout are a frozen contract with the game - the normative text
-	// is docs/dead-air/MOD_UPDATES.md (section 2) in the game repo.
+	// A release for the game's module updater: <id>.update.ltx, the file index
+	// <id>-<version>.files and package zip(s) holding the COMPLETE module under
+	// modules/<id>/. The index says where inside a package every file's data
+	// sits, so the game downloads only the files that differ. Names, descriptor
+	// and index format and package layout are a frozen contract with the game -
+	// the normative text is docs/dead-air/MOD_UPDATES.md (section 2) in the game repo.
 	// The module is staged through Export, so everything a module build refuses
 	// is refused here too. `out_dir` empty = <project>\releases\<version>;
 	// `requires_game` empty = the key is left out. Files an earlier packaging of

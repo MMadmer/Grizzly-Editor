@@ -104,7 +104,8 @@ writes a release into `<project>\releases\<version>\`:
 | File | What it is |
 |---|---|
 | `<id>-<version>.zip` | The package: the complete module, every entry under `modules/<id>/`. A module too big for one GitHub asset (2 GiB) is split into `<id>-<version>.part1.zip`, `.part2.zip`, … |
-| `<id>.update.ltx` | The release descriptor: id, version, the lowest game version the release runs on, and the name, size and SHA-256 of every package. The game reads it to decide whether an update exists and to verify what it downloads. |
+| `<id>-<version>.files` | The file index: every file's SHA-256 and where its bytes sit inside the package. It is what lets the game download only the files that changed, however many versions the player skipped. |
+| `<id>.update.ltx` | The release descriptor: id, version, the lowest game version the release runs on, and the name, size and SHA-256 of the index and of every package. The game reads it to decide whether an update exists. |
 
 `releases\` is editor-only: it is never shown as content and never ships inside
 the module. Packaging the same version again replaces its files (the old ones
@@ -122,14 +123,20 @@ GitHub:
 1. Put the repository into the manifest: **Mod → Edit Manifest… → GitHub
    repository** (`owner/repo`), then package.
 2. In that repository create a release and attach **all** the files from
-   `releases\<version>\` — the descriptor and every package part. Keep the file
-   names as they are.
+   `releases\<version>\` — the descriptor, the file index and every package
+   part. Keep the file names as they are, and upload the zip exactly as it was
+   written: re-zipping it moves the data and breaks the index.
 3. Publish it as the **latest** release. A draft or a pre-release is invisible
    to the game.
 4. For the next update raise `version` in the manifest, package and release
    again. Players are offered an update only when the released version is
    higher than the one they have; re-releasing the same number changes nothing
    for them.
+
+There is nothing extra to do for a small update. Every release is complete; the
+game compares the index with the files the player already has and downloads
+only what differs, so a one-file fix costs a one-file download — from the last
+version or from one ten releases back.
 
 **Requires game** in the packaging window is the lowest Dead Air: Refined
 version the release runs on. It defaults to the version of the linked game;
@@ -140,8 +147,8 @@ game as well, so a link to anywhere else would simply never open.
 
 The release format is a frozen contract between the editor and the game. Its
 normative text lives in the game repository, `docs/dead-air/MOD_UPDATES.md` —
-manifest metadata in section 1, the descriptor and the package layout in
-section 2.
+manifest metadata in section 1, the descriptor, the file index and the package
+layout in section 2.
 
 Tell players the target mode you picked — a module gated to `survival` does
 nothing in a `metro` playthrough, and that looks like a broken mod if nobody
