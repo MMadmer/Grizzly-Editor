@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
 #include "UITitleBar.h"
@@ -90,6 +91,11 @@ void UIMainMenuForm::Draw()
             if (ImGui::MenuItem("Package Release...", ""))			EditorMod::RequestPackageRelease();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Zip package(s) and the update descriptor for a GitHub release.\nThe zip installs by extraction into the game folder; the Mods menu updates from it.");
+            ImGui::BeginDisabled(!EditorPublish::CanPublish());
+            if (ImGui::MenuItem("Publish Release...", ""))			EditorPublish::RequestPublish();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Packages the module and publishes it as a GitHub release.\nPlayers receive it through the game's Mods menu.");
             ImGui::Separator();
             if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
             ImGui::Separator();

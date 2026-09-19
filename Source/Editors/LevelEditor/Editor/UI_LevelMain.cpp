@@ -4,6 +4,7 @@
 #include "Recovery/EditorRecovery.h"
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\XrECore\Editor\EditorGameModes.h"
@@ -1399,6 +1400,12 @@ CCommandVar CommandModPackage(CCommandVar p1, CCommandVar p2)
     return TRUE;
 }
 
+CCommandVar CommandModPublish(CCommandVar p1, CCommandVar p2)
+{
+    EditorPublish::RequestPublish();
+    return TRUE;
+}
+
 //------------------------------------------------------------------------------
 // MCP inspector: scene / selection / per-object info for AI agents
 //------------------------------------------------------------------------------
@@ -2231,6 +2238,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_set_manifest"))	{ EditorMod::McpSetManifest(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "mod_export"))			{ EditorMod::McpExport(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "mod_publish"))			{ EditorPublish::McpPublish(raw, out);	return true; }
     // the modes a module can target, scanned from the linked game install
     if (0 == xr_strcmp(cmd, "game_modes"))			{ EditorGameModes::McpList(out);		return true; }
     // level overlays check the scene/project themselves and report json errors
@@ -4057,6 +4065,7 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_SE	    (COMMAND_MOD_BUILD,					"Mod\\Build Into Game",			CommandModBuild,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_EDIT_MANIFEST,			"Mod\\Edit Manifest",			CommandModEditManifest,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_PACKAGE,				"Mod\\Package Release",			CommandModPackage,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_PUBLISH,				"Mod\\Publish Release",			CommandModPublish,true);
 
 	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
 	// level.ini actually lists, so a rebind still wins.
@@ -4463,6 +4472,7 @@ void CLevelMain::OnDrawUI()
         UIImagePreview::Update();
         EditorProject::DrawUI();
         EditorMod::DrawUI();
+        EditorPublish::DrawUI();
         EditorModScene::DrawUI();
     }
     if (LTools->GetToolForm())

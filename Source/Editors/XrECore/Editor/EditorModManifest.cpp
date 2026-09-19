@@ -1889,6 +1889,11 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		text += result.packages[p].name + NqUtil::Format(" = %llu, ", result.packages[p].size) + result.packages[p].sha256 + "\r\n";
 	sprintf_s(path, "%s\\%s.update.ltx", out, m.id.c_str());
 	if (!WriteTextFile(path, text.c_str())) { err = xr_string("can't write ") + path; return false; }
+	// a publisher checks every uploaded asset against these, the descriptor included
+	result.descriptor_file.name = m.id + ".update.ltx";
+	result.descriptor_file.size = text.size();
+	if (!sha.Add(text.data(), (u32)text.size()) || !sha.Finish(result.descriptor_file.sha256))
+		{ err = "can't hash the release descriptor"; return false; }
 
 	result.out_dir			= out;
 	result.descriptor		= path;
@@ -1960,6 +1965,17 @@ bool EditorMod::PackageRelease(LPCSTR project_root, LPCSTR out_dir, LPCSTR requi
 	::RemoveDirectoryA(stage);
 	if (!ok) result = SPackageResult();
 	return ok;
+}
+
+void EditorMod::ListPackagedFiles(LPCSTR project_root, LPCSTR out_dir, LPCSTR id, LPCSTR version,
+								  xr_vector<xr_string>& names)
+{
+	names.clear();
+	string_path dir;
+	xr_string ignored;
+	if (project_root && project_root[0] && ValidateId(id) && ValidateVersion(version) &&
+		ResolveReleaseDir(project_root, out_dir, version, dir, ignored))
+		ListReleaseFiles(dir, id, version, names);
 }
 
 bool EditorMod::LinkedGameVersion(xr_string& out)
@@ -2631,6 +2647,7 @@ static void RunDeferredPackage()
 			s_PkgManifest.update_github.c_str());
 	// the index addresses the zip by byte offset; a re-zipped copy is another file
 	text += "\nUpload the zip exactly as written - repacking it breaks the file index.";
+	text += "\nMod > Publish Release packages and uploads in one step.";
 	if (!warn.empty())
 	{
 		text += "\n\n";

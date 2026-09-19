@@ -142,10 +142,12 @@ target_include_directories(XrECore PRIVATE
 # zlib (minizip), Bcrypt (SHA-256) and Version (the linked game's exe version)
 # serve Mod > Package Release; the zip headers come in as "Zlib/zip.h" through
 # External/Public, so no include directory is added for them.
+# Winhttp (the GitHub API) and Advapi32 (the token in the Credential Manager)
+# serve Mod > Publish Release.
 target_link_libraries(XrECore PRIVATE
     Luabind Ogg RedImageTool Theora Vorbis XrAPI XrCDB XrCore XrEngine XrParticles
     XrPhysics XrSound FreeMagic XrDXT XrEProps XrETools XrEUI zlib
-    d3d11 dxgi d3dcompiler vfw32 Winmm dxguid dinput8 Rpcrt4 Bcrypt Version lua51)
+    d3d11 dxgi d3dcompiler vfw32 Winmm dxguid dinput8 Rpcrt4 Bcrypt Version Winhttp Advapi32 lua51)
 
 #-- LevelEditor ----------------------------------------------------------------
 file(GLOB_RECURSE LE_SRC CONFIGURE_DEPENDS "${ED}/LevelEditor/*.cpp")

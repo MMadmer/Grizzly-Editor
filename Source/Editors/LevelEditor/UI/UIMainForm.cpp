@@ -3,6 +3,7 @@
 #include "..\XrECore\Editor\EditorChooseEvents.h"
 #include "..\..\XrECore\Editor\EditorGameConfigs.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
 #include "..\Editor\Utils\XrSEFactoryManager.h"
@@ -99,6 +100,8 @@ UIMainForm::~UIMainForm()
     dynamic_cast<CLevelPreferences*>(EPrefs)->OpenContentBrowser = UIContentBrowser::IsOpen();
     dynamic_cast<CLevelPreferences*>(EPrefs)->OpenWorldOutliner = UIWorldOutliner::IsOpen();
     XFinedMCP::Stop();
+    // an upload in flight is cut here; its draft stays on GitHub for the next attempt
+    EditorPublish::Shutdown();
     EditorRecovery::Shutdown();
     EditorProject::Close();		// preview + manifest while the device is alive
     UIContentBrowser::Close();

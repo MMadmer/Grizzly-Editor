@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "UITopBarForm.h"
 #include "../../XrECore/Editor/EditorModManifest.h"
+#include "../../XrECore/Editor/EditorModPublish.h"
 
 #if defined(USE_DX11)
 // ImGui binds a shader resource view under D3D11; surface_get() returns the
@@ -225,6 +226,18 @@ void UITopBarForm::Draw()
 				? "Clean build into the linked game (Ctrl+B):\n%s"
 				: "Link a game and set a valid module id first.%s",
 				build_target);
+
+		// the other half of shipping: the same module, out to the players
+		ImGui::SameLine(0, 6);
+		char publish_text[64] = {}, publish_label[96];
+		EditorPublish::ButtonText(publish_text, sizeof(publish_text));
+		// the caption turns into a percentage while a release uploads; the id must not follow it
+		sprintf_s(publish_label, "%s###PublishRelease", publish_text);
+		ImGui::BeginDisabled(!EditorPublish::CanPublish());
+		if (ImGui::Button(publish_label, ImVec2(0, icon + UIToolBarFramePad() * 2.f)))
+			ExecCommand(COMMAND_MOD_PUBLISH);
+		ImGui::EndDisabled();
+		ToolBarTip("Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.");
 	}
 	ImGui::SameLine(0,1);
 	ImGui::PopStyleVar();

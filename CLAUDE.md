@@ -144,6 +144,28 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - `releases\` is editor-only (`EditorProject::IsEditorOnlyEntry`): never shown
   as content, never exported, never packaged. Inside the project a release may
   only be written under `releases\`.
+- **Publish Release** (toolbar, Mod menu) / `mod_publish`
+  (`EditorPublish`, GitHub side in `EditorGithub`) packages and then publishes
+  to `[update] github`. The order is the point: assets go into a DRAFT, every
+  stored asset is checked against the package result (name, size, SHA-256
+  digest), and only then the draft is published with `make_latest` - the game
+  reads the latest release alone and must never see one that is half there. A
+  published tag is never touched again (refused: raise the version); a leftover
+  draft of the same tag is reused; a latest release that carries another
+  module's descriptor is refused, because this release would hide it.
+- The account token comes from the environment, the Windows Credential Manager
+  or `gh auth token`, in that order. It is never written into the project, a
+  log or an MCP answer, no MCP request carries one, and it is sent to
+  `api.github.com` / `uploads.github.com` only - the upload address comes out of
+  a response body and is checked before the token goes there. `-qa_github` plus
+  `XFINED_GITHUB_API` / `XFINED_GITHUB_WEB` point the client at
+  `tools/qa/github_mock.py`; in that mode only `XFINED_GITHUB_TOKEN` and a
+  separate QA credential are read, so a real token cannot reach a mock.
+  `tools/qa/test_mod_publish.py --project <project>` drives the whole path over
+  MCP against that mock and restores the project's `mod.ltx`. Publishing is
+  never tested against GitHub itself: a release there is public.
+- The device sign-in ("Sign in with GitHub") stays hidden until `kClientId` in
+  `EditorGithub.cpp` holds the client id of the editor's GitHub OAuth app.
 
 ## Quests (NQ — node graph)
 

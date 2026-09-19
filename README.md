@@ -34,6 +34,10 @@ port of the original GSC editors to x64 + ImGui.
 * **One-click mod build** — `Mod → Build Mod into Game` (`Ctrl+B`, or the
   toolbar button) does a clean mirrored build into `<game>\modules\<id>`.
   See [docs/MOD_QUICKSTART.md](docs/MOD_QUICKSTART.md).
+* **One-click release** — **Publish Release** next to it packages the module
+  and publishes it as a GitHub release of the mod's own repository: uploaded as
+  a draft, every asset verified, then made the latest release. The game's Mods
+  menu updates players from it and downloads only the files that changed.
 * Per-monitor DPI awareness, GPU picker for hybrid laptops
   (`Options → Render → GPU`), CoC/Dead Air data compatibility fixes.
 

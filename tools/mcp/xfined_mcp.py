@@ -217,6 +217,45 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_mod_publish",
+        "description": "Package the active project (as xfined_mod_package does, into <project>/releases/<version>) "
+                       "and publish it as a GitHub release of the manifest's 'github' repository - the release the "
+                       "game's Mods menu updates from. The assets go into a DRAFT, each one is checked against what "
+                       "was packaged (name, size, SHA-256), and only then the draft is published as the latest "
+                       "release, so players never see a release that is half there. A tag that is already "
+                       "published is refused - raise the version; a draft an interrupted attempt left is reused. "
+                       "The account is never an argument: it comes from XFINED_GITHUB_TOKEN / GH_TOKEN / "
+                       "GITHUB_TOKEN, a token saved from Mod > Publish Release, or the GitHub CLI (gh auth login), "
+                       "in that order. action: 'start' (default) packages, starts the upload and - with wait, the "
+                       "default - follows it to the end; 'status' reports a running or finished job "
+                       "(state idle|uploading|done|failed|cancelled, stage, sent, total, url, served, warnings, "
+                       "error); 'cancel' stops it before anything is published; 'account' tells whether and how "
+                       "the editor is signed in. 'served' = the address the game asks already returns the new "
+                       "descriptor. An upload that outlasts the wait comes back with pending=true - ask again "
+                       "with action='status'. Signing in is for a person: 'sign_in' starts GitHub's device "
+                       "sign-in and returns user_code and verification_uri - show both to the user, who confirms "
+                       "the code on GitHub; 'sign_in_status' reports starting|waiting|done|failed; the token "
+                       "goes from GitHub into the Windows Credential Manager and is never part of an answer. "
+                       "'sign_out' forgets that saved token (a GitHub CLI or environment sign-in is not touched). "
+                       "The device sign-in exists only in a build that has its OAuth client id "
+                       "('account' says device_sign_in).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string",
+                           "enum": ["start", "status", "cancel", "account", "sign_in", "sign_in_status", "sign_out"]},
+                "tag": {"type": "string", "description": "git tag of the release; omit = v<version>"},
+                "title": {"type": "string", "description": "release title; omit = '<module name> <version>'"},
+                "notes": {"type": "string", "description": "release notes, Markdown"},
+                "prerelease": {"type": "boolean", "description": "publish as a pre-release: players do not receive it (default false)"},
+                "latest": {"type": "boolean", "description": "mark as the latest release - the one players update to (default true)"},
+                "requires_game": {"type": "string", "description": "lowest Dead Air: Refined version the release runs on, MAJOR.MINOR.PATCH; "
+                                                                   "omit = the linked game's version, empty = no requirement"},
+                "wait": {"type": "boolean", "description": "follow the upload until it ends or about 150 s pass (default true)"},
+            },
+        },
+    },
+    {
         "name": "xfined_preview_model",
         "description": "Open the model preview window on a model (same as double-clicking it in the content browser). "
                        "source='visual' (editor FS, default) or 'darf' (linked game install). Without 'name' the "
@@ -1337,6 +1376,7 @@ CMD_MAP = {
     "xfined_mod_set_manifest": "mod_set_manifest",
     "xfined_mod_export": "mod_export",
     "xfined_mod_package": "mod_package",
+    "xfined_mod_publish": "mod_publish",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",
     "xfined_theme": "theme",
@@ -1473,13 +1513,36 @@ def tool_result(name: str, args: dict) -> dict:
     extra = unknown_args(name, args)
     if extra:
         known = sorted(TOOL_ARGS[name])
-        return {
+        refusal = {
             "ok": False,
             "error": "%s has no argument %s; it takes %s"
                      % (name, ", ".join("'%s'" % a for a in extra),
                         ", ".join(known) if known else "no arguments"),
         }
+        # a tool result like any other: a bare dict here reaches the client as an answer with no content
+        return {"content": [{"type": "text", "text": json.dumps(refusal, ensure_ascii=False)}], "isError": True}
+    if name == "xfined_mod_publish":
+        # 'wait' is this bridge's own: the editor answers at once and uploads on a worker
+        args = dict(args)
+        wait = args.pop("wait", True)
     data = editor_call(CMD_MAP[name], args)
+    follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
+    if follows_job and data.get("ok") and data.get("pending"):
+        started = data
+        deadline = time.monotonic() + 150.0
+        while data.get("pending") and time.monotonic() < deadline:
+            time.sleep(0.5)
+            data = editor_call("mod_publish", {"action": "status"})
+        # what was packaged is only in the first answer
+        for key in ("assets", "files", "requires_game", "baked", "package_warnings"):
+            if key in started:
+                data.setdefault(key, started[key])
+    if name == "xfined_mod_publish" and args.get("action") == "sign_in" and data.get("ok"):
+        # the code arrives a moment after the start; an answer without it is of no use
+        deadline = time.monotonic() + 20.0
+        while data.get("state") == "starting" and time.monotonic() < deadline:
+            time.sleep(0.25)
+            data = editor_call("mod_publish", {"action": "sign_in_status"})
     if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
         deadline = time.monotonic() + 1.0
         while data.get("pending") and time.monotonic() < deadline:

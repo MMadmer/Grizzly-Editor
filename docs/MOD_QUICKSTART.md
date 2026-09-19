@@ -118,20 +118,42 @@ just deleting that folder.
 
 **Updates through the game.** The first install is the zip above. After that the
 game's Mods menu offers every later version, as long as the releases are on
-GitHub:
+GitHub. The editor publishes them itself: **Publish Release** on the toolbar,
+next to **Build Mod** (also **Mod → Publish Release…**, MCP:
+`xfined_mod_publish`).
 
-1. Put the repository into the manifest: **Mod → Edit Manifest… → GitHub
-   repository** (`owner/repo`), then package.
-2. In that repository create a release and attach **all** the files from
-   `releases\<version>\` — the descriptor, the file index and every package
-   part. Keep the file names as they are, and upload the zip exactly as it was
-   written: re-zipping it moves the data and breaks the index.
-3. Publish it as the **latest** release. A draft or a pre-release is invisible
-   to the game.
-4. For the next update raise `version` in the manifest, package and release
-   again. Players are offered an update only when the released version is
-   higher than the one they have; re-releasing the same number changes nothing
-   for them.
+Once:
+
+1. Create a **public** repository on GitHub with at least one commit (a README
+   or a license is enough). One repository per module: the game reads the latest
+   release alone, so two modules in one repository would hide each other.
+2. Sign in. The window shows where the account comes from: the GitHub CLI when
+   `gh auth login` was done on this machine, a personal access token pasted into
+   the window (fine-grained, this repository, **Contents: Read and write**), or
+   `GH_TOKEN`. A pasted token is kept in the Windows Credential Manager - never
+   in the project, a log or an MCP answer.
+
+For every release:
+
+1. Press **Publish Release**. **Repository** takes `owner/repo` or the pasted
+   address the first time and stays in `mod.ltx`; **Version** has to be higher
+   than the last release, otherwise players are offered nothing.
+2. Tag, title and notes are GitHub's; the game reads none of them. A
+   **pre-release** never reaches players - that is what it is for.
+3. **Publish** packages the module and uploads it as a *draft*, checks every
+   stored asset against what was packaged (name, size, SHA-256), and only then
+   publishes the draft as the latest release. Players never see a release that
+   is half there. The last step asks GitHub for the descriptor at the very
+   address the game uses and says whether the update is already on offer.
+
+A version that is already published is refused: a player who has it never looks
+at it again, so changed files would reach nobody - raise the version. An
+interrupted upload leaves its draft on GitHub, and the next attempt picks it up.
+
+Doing it by hand still works - attach **all** the files from
+`releases\<version>\` under their own names, the zip byte for byte as written
+(re-zipping moves the data and breaks the index), and publish the release as the
+**latest**; a draft or a pre-release is invisible to the game.
 
 There is nothing extra to do for a small update. Every release is complete; the
 game compares the index with the files the player already has and downloads

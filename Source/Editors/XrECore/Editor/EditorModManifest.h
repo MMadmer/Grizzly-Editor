@@ -107,6 +107,7 @@ namespace EditorMod
 	{
 		xr_string				out_dir;		// folder that holds everything below
 		xr_string				descriptor;		// full path of <id>.update.ltx
+		SPackageFile			descriptor_file;	// the same file as a release asset
 		SPackageFile			index;			// the file index, <id>-<version>.files
 		xr_vector<SPackageFile>	packages;
 		xr_string				requires_game;	// as written, empty = key omitted
@@ -130,6 +131,10 @@ namespace EditorMod
 	// asking - the UI asks first. Callers run RunPreBuildBake, like every build.
 	ECORE_API bool	PackageRelease		(LPCSTR project_root, LPCSTR out_dir, LPCSTR requires_game,
 										 SPackageResult& result, xr_string& err, xr_string* warnings = 0);
+	// What an earlier packaging of this id + version left in the release folder -
+	// the files the next one sends to the Recycle Bin. A dialog names them first.
+	ECORE_API void	ListPackagedFiles	(LPCSTR project_root, LPCSTR out_dir, LPCSTR id, LPCSTR version,
+										 xr_vector<xr_string>& names);
 	// MAJOR.MINOR.PATCH from the version resource of <linked game>\xrEngine.exe
 	ECORE_API bool	LinkedGameVersion	(xr_string& out);
 

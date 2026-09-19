@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""End-to-end check of Mod > Publish Release against tools/qa/github_mock.py.
+
+Starts the editor with -qa_github on a project, drives mod_publish over the MCP
+socket and takes every verdict from the mock's own state. Never talks to GitHub:
+in QA mode the editor reads only XFINED_GITHUB_TOKEN and a separate QA
+credential, so the real account cannot leak into a test either.
+
+The project's mod.ltx is restored byte for byte and the release folders this run
+created are removed. The editor is closed the way its caption cross would.
+
+    python tools/qa/test_mod_publish.py --project D:\\XFinedProjects\\Test
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+MCP = ("127.0.0.1", 28016)
+TOKEN = "qa_token_0123456789abcdefghij"
+GITHUB_REPO = "QaOwner/qa-mod"
+
+results: list[tuple[bool, str]] = []
+
+
+def check(ok: bool, text: str, detail: str = "") -> bool:
+    results.append((bool(ok), text))
+    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
+    return bool(ok)
+
+
+def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
+    payload = {"cmd": cmd}
+    payload.update(extra)
+    with socket.create_connection(MCP, timeout=10) as s:
+        s.settimeout(timeout)
+        s.sendall((json.dumps(payload) + "\n").encode())
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(1 << 20)
+            if not chunk:
+                break
+            buf += chunk
+    return json.loads(buf.decode("utf-8"))
+
+
+def mcp_up() -> bool:
+    try:
+        socket.create_connection(MCP, timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class Mock:
+    def __init__(self, port: int, *flags: str, token: str = TOKEN):
+        self.port = port
+        self.base = f"http://127.0.0.1:{port}"
+        self.proc = subprocess.Popen(
+            [sys.executable, os.path.join(HERE, "github_mock.py"), "--port", str(port), "--token", token,
+             "--repo", GITHUB_REPO, *flags],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        line = self.proc.stdout.readline()
+        if json.loads(line)["port"] != port:
+            raise RuntimeError("the mock did not take its port: " + line)
+
+    def state(self) -> dict:
+        with urllib.request.urlopen(self.base + "/__state", timeout=10) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def stop(self) -> None:
+        try:
+            urllib.request.urlopen(urllib.request.Request(self.base + "/__shutdown", method="POST"), timeout=5).read()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+class Editor:
+    def __init__(self, exe: str, project: str, port: int, with_token: bool):
+        if mcp_up():
+            raise RuntimeError("an editor already answers on 127.0.0.1:28016 - close it first")
+        env = dict(os.environ)
+        for name in ("XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+            env.pop(name, None)
+        env["XFINED_GITHUB_API"] = f"http://127.0.0.1:{port}"
+        env["XFINED_GITHUB_WEB"] = f"http://127.0.0.1:{port}"
+        env["XFINED_GITHUB_CLIENT_ID"] = "qa-client"
+        if with_token:
+            env["XFINED_GITHUB_TOKEN"] = TOKEN
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        self.proc = subprocess.Popen([exe, "-qa_github", "-nodlg", "-project", project],
+                                     cwd=os.path.dirname(exe), env=env, startupinfo=startup)
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            try:
+                if mcp("mod_manifest", timeout=30).get("ok"):
+                    return
+            except OSError:
+                pass
+            if self.proc.poll() is not None:
+                raise RuntimeError("the editor exited during startup")
+            time.sleep(1)
+        raise RuntimeError("the editor never opened the project")
+
+    def close(self) -> None:
+        try:
+            mcp("window_control", action="close")
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            print("! the editor did not close on its own - leaving it to the operator", flush=True)
+
+
+def publish(version: str, wait_seconds: float = 180.0, **extra) -> dict:
+    """mod_set_manifest + mod_publish, followed to the end."""
+    set_result = mcp("mod_set_manifest", version=version, github=GITHUB_REPO)
+    if not set_result.get("ok"):
+        return set_result
+    data = mcp("mod_publish", **extra)
+    deadline = time.monotonic() + wait_seconds
+    while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
+        time.sleep(0.3)
+        data = mcp("mod_publish", action="status")
+    return data
+
+
+def sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def published(state: dict) -> list[dict]:
+    return [r for r in state["releases"] if not r["draft"]]
+
+
+def drafts(state: dict) -> list[dict]:
+    return [r for r in state["releases"] if r["draft"]]
+
+
+def web_requests(state: dict) -> list[dict]:
+    return [r for r in state["requests"] if "/releases/latest/download/" in r["path"] or r["path"].startswith("/cdn/")]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--project", required=True, help="project folder the editor opens")
+    parser.add_argument("--editor", default=os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe"))
+    args = parser.parse_args()
+
+    project = os.path.abspath(args.project)
+    manifest_path = os.path.join(project, "mod.ltx")
+    original = open(manifest_path, "rb").read()
+    releases_root = os.path.join(project, "releases")
+    had_releases_root = os.path.isdir(releases_root)
+    known_releases = set(os.listdir(releases_root)) if had_releases_root else set()
+
+    port = free_port()
+    mock = None
+    editor = None
+    try:
+        # ---- phase 1: the account comes from the environment -------------------------------
+        mock = Mock(port)
+        editor = Editor(args.editor, project, port, with_token=True)
+        module_id = mcp("mod_manifest")["id"]
+        descriptor_name = module_id + ".update.ltx"
+
+        account = mcp("mod_publish", action="account")
+        check(account.get("signed_in") and account.get("source") == "environment variable", "A account: the environment token is in effect", str(account))
+        check(account.get("device_sign_in") is True, "A account: the device sign-in is on offer in QA mode", str(account))
+
+        data = publish("0.9.1", notes="First line.\nSecond line with \"quotes\" and a \\ backslash.", title="QA release 0.9.1")
+        check(data.get("state") == "done", "A publish 0.9.1 ends in 'done'", str(data))
+        check(data.get("served") is True, "A the address the game asks serves the new descriptor", str(data))
+        check(str(data.get("url", "")).endswith("/releases/tag/v0.9.1"), "A the answer carries the release page", str(data.get("url")))
+        state = mock.state()
+        done = published(state)
+        check(len(done) == 1 and not drafts(state) and state["latest_id"] == done[0]["id"], "A one published release, no draft, marked latest")
+        release = done[0] if done else {"assets": [], "body": "", "name": ""}
+        check(release.get("name") == "QA release 0.9.1" and "Second line with \"quotes\" and a \\ backslash." in release.get("body", ""),
+              "A title and notes arrive unharmed", release.get("body", ""))
+        folder = os.path.join(releases_root, "0.9.1")
+        local = {name: sha256(os.path.join(folder, name)) for name in os.listdir(folder)} if os.path.isdir(folder) else {}
+        remote = {a["name"]: a["sha256"] for a in release["assets"]}
+        check(local and local == remote, "A GitHub holds exactly the packaged files, byte for byte", f"{local} vs {remote}")
+        check(descriptor_name in remote and f"{module_id}-0.9.1.files" in remote and f"{module_id}-0.9.1.zip" in remote,
+              "A descriptor, index and package carry the names the game expects", str(sorted(remote)))
+        order = [r["path"] for r in state["requests"] if r["method"] in ("POST", "PATCH")]
+        create_at = next((i for i, p in enumerate(order) if p.endswith("/releases")), -1)
+        publish_at = max((i for i, p in enumerate(order) if "/releases/" in p and "/assets" not in p and not p.startswith("/upload/")), default=-1)
+        uploads_at = [i for i, p in enumerate(order) if p.startswith("/upload/")]
+        check(create_at >= 0 and uploads_at and create_at < min(uploads_at) and max(uploads_at) < publish_at,
+              "A draft first, uploads next, publication last", str(order))
+        web = web_requests(state)
+        check(web and all(not r["authorized"] for r in web), "A the token never travels to the download address", str(web))
+
+        data = publish("0.9.1")
+        check(not data.get("ok") and "already published" in str(data.get("error")), "B the same version again is refused", str(data))
+        check(len(mock.state()["releases"]) == 1, "B and nothing was created for it")
+
+        mock.stop()
+        mock = Mock(port, "--drop-upload", "1")
+        data = publish("0.9.2")
+        state = mock.state()
+        check(data.get("state") == "done" and state["uploads"] == 4, "C a connection lost mid-upload is retried", f"{data} uploads={state.get('uploads')}")
+        check(len(published(state)) == 1 and all(a["state"] == "uploaded" for a in published(state)[0]["assets"]) and
+              len(published(state)[0]["assets"]) == 3, "C the stub the broken upload left is gone", str(state["releases"]))
+
+        mock.stop()
+        mock = Mock(port, "--rename-assets")
+        data = publish("0.9.3")
+        state = mock.state()
+        check(not data.get("ok") and "as it was packaged" in str(data.get("error")), "D an asset GitHub renamed stops the release", str(data))
+        check(not published(state) and state["latest_id"] is None, "D and nothing is published")
+
+        mock.stop()
+        mock = Mock(port, "--corrupt-digest", ".update.ltx")
+        data = publish("0.9.3")
+        state = mock.state()
+        check(not data.get("ok") and "SHA-256" in str(data.get("error")), "E a digest that differs stops the release", str(data))
+        check(not published(state), "E and nothing is published")
+
+        mock.stop()
+        seed = os.path.join(HERE, "_seed_foreign.json")
+        with open(seed, "w", encoding="utf-8") as f:
+            json.dump([{"tag_name": "v3.0.0", "name": "Other", "draft": False, "prerelease": False, "latest": True,
+                        "assets": {"other.mod.update.ltx": "[release]\n"}}], f)
+        mock = Mock(port, "--seed", seed)
+        data = publish("0.9.3")
+        state = mock.state()
+        check(not data.get("ok") and "another module" in str(data.get("error")), "F a repository that serves another module is refused", str(data))
+        check(len(state["releases"]) == 1, "F and no draft was created")
+        data = publish("0.9.3", prerelease=True)
+        state = mock.state()
+        check(data.get("state") == "done" and state["latest_id"] == [r for r in state["releases"] if r["tag_name"] == "v3.0.0"][0]["id"],
+              "F a pre-release is allowed there and leaves the latest release alone", str(data))
+
+        mock.stop()
+        mock = Mock(port, "--private")
+        data = publish("0.9.4")
+        check(data.get("state") == "done" and data.get("served") is False and "private" in str(data.get("warnings")),
+              "G a private repository publishes with a warning", str(data))
+
+        mock.stop()
+        mock = Mock(port, "--stale-latest", "2")
+        data = publish("0.9.5")
+        check(data.get("state") == "done" and data.get("served") is True, "H a lagging download address is asked again", str(data))
+
+        mock.stop()
+        mock = Mock(port, "--throttle-kbps", "96")
+        mcp("mod_set_manifest", version="0.9.6", github=GITHUB_REPO)
+        data = mcp("mod_publish")
+        check(data.get("ok") and data.get("pending"), "I the upload starts and the editor answers at once", str(data))
+        time.sleep(3)
+        mcp("mod_publish", action="cancel")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            data = mcp("mod_publish", action="status")
+            if not data.get("pending"):
+                break
+            time.sleep(0.3)
+        state = mock.state()
+        check(data.get("state") == "cancelled", "I cancel ends the job as 'cancelled'", str(data))
+        check(len(drafts(state)) == 1 and not published(state), "I nothing is published and the draft stays")
+        # the throttled mock drains what the socket had buffered before it meets the closed connection
+        stubs = []
+        deadline = time.monotonic() + 40
+        while not stubs and time.monotonic() < deadline:
+            state = mock.state()
+            stubs = [a["name"] for a in drafts(state)[0]["assets"] if a["state"] != "uploaded"] if drafts(state) else []
+            if not stubs:
+                time.sleep(0.5)
+        check(bool(stubs), "I the abandoned upload left its stub in the draft, as GitHub does", str(state["releases"]))
+        data = publish("0.9.6", wait_seconds=240)
+        state = mock.state()
+        check(data.get("state") == "done" and len(state["releases"]) == 1 and len(published(state)) == 1,
+              "I the next attempt reuses that draft", f"{data} releases={len(state['releases'])}")
+        assets = published(state)[0]["assets"] if published(state) else []
+        check(len(assets) == 3 and all(a["state"] == "uploaded" for a in assets),
+              "I the stub is cleared away and exactly the three assets remain", str(assets))
+
+        mock.stop()
+        mock = Mock(port, token="another_token_0123456789abcdef")
+        data = publish("0.9.7")
+        check(not data.get("ok") and "rejected the sign-in" in str(data.get("error")), "J a token GitHub does not accept is reported as such", str(data))
+
+        mock.stop()
+        mock = Mock(port, "--archived")
+        data = publish("0.9.7")
+        check(not data.get("ok") and "archived" in str(data.get("error")), "J an archived repository is refused", str(data))
+        mock.stop()
+        mock = Mock(port, "--no-push")
+        data = publish("0.9.7")
+        check(not data.get("ok") and "cannot write" in str(data.get("error")), "J a repository without push access is refused", str(data))
+        mock.stop()
+        mock = Mock(port, "--empty")
+        data = publish("0.9.7")
+        check(not data.get("ok") and "empty" in str(data.get("error")).lower(), "J an empty repository: GitHub's own words reach the author", str(data))
+
+        bad = mcp("mod_publish", tag="bad tag")
+        check(not bad.get("ok") and "invalid tag" in str(bad.get("error")), "K an invalid tag is refused", str(bad))
+        open(manifest_path, "wb").write(original)
+        if b"github" not in original:
+            data = mcp("mod_publish")
+            check(not data.get("ok") and "no GitHub repository" in str(data.get("error")), "K a manifest without a repository is refused", str(data))
+
+        editor.close()
+        editor = None
+        mock.stop()
+
+        # ---- phase 2: no environment token - the device sign-in and the saved credential ----
+        mock = Mock(port, "--device-approve-after", "2", "--device-interval", "1")
+        editor = Editor(args.editor, project, port, with_token=False)
+        mcp("mod_publish", action="sign_out")
+        account = mcp("mod_publish", action="account")
+        check(account.get("signed_in") is False, "L without a token the editor is not signed in", str(account))
+        data = publish("0.9.8")
+        check(not data.get("ok") and "not signed in" in str(data.get("error")), "L and publishing says so before it packages anything", str(data))
+        check(not os.path.isdir(os.path.join(releases_root, "0.9.8")), "L nothing was packaged for it")
+
+        data = mcp("mod_publish", action="sign_in")
+        deadline = time.monotonic() + 30
+        while data.get("state") == "starting" and time.monotonic() < deadline:
+            time.sleep(0.25)
+            data = mcp("mod_publish", action="sign_in_status")
+        check(data.get("state") == "waiting" and data.get("user_code") == "WDJB-MJHT", "M the sign-in hands out the code for the person", str(data))
+        check(TOKEN not in json.dumps(data), "M and no token")
+        deadline = time.monotonic() + 60
+        while data.get("pending") and time.monotonic() < deadline:
+            time.sleep(0.5)
+            data = mcp("mod_publish", action="sign_in_status")
+        check(data.get("state") == "done", "M the confirmation on GitHub completes it", str(data))
+        account = mcp("mod_publish", action="account")
+        check(account.get("source") == "token saved by the editor" and TOKEN not in json.dumps(account),
+              "M the token sits in the credential store, not in an answer", str(account))
+        data = publish("0.9.8")
+        check(data.get("state") == "done" and data.get("served") is True, "M publishing works with the saved sign-in", str(data))
+        sign_in_traffic = [r for r in mock.state()["requests"] if r["path"].startswith("/login/")]
+        check(sign_in_traffic and all(not r["authorized"] for r in sign_in_traffic),
+              "M the sign-in itself carries no token", str(sign_in_traffic))
+        account = mcp("mod_publish", action="sign_out")
+        check(account.get("signed_in") is False, "M sign_out forgets it", str(account))
+    finally:
+        open(manifest_path, "wb").write(original)
+        if editor:
+            editor.close()
+        if mock:
+            mock.stop()
+        restored = open(manifest_path, "rb").read() == original
+        if os.path.isdir(releases_root):
+            for name in os.listdir(releases_root):
+                if name not in known_releases:
+                    shutil.rmtree(os.path.join(releases_root, name), ignore_errors=True)
+            if not had_releases_root and not os.listdir(releases_root):
+                os.rmdir(releases_root)
+        seed = os.path.join(HERE, "_seed_foreign.json")
+        if os.path.exists(seed):
+            os.remove(seed)
+        check(restored, "Z the project's mod.ltx is back byte for byte")
+
+    passed = sum(1 for ok, _ in results if ok)
+    print(f"MOD PUBLISH: DONE {passed}/{len(results)}", flush=True)
+    return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
