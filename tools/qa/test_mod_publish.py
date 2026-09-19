@@ -6,8 +6,8 @@ socket and takes every verdict from the mock's own state. Never talks to GitHub:
 in QA mode the editor reads only XFINED_GITHUB_TOKEN and a separate QA
 credential, so the real account cannot leak into a test either.
 
-The project's mod.ltx is restored byte for byte and the release folders this run
-created are removed. The editor is closed the way its caption cross would.
+The project's mod.ltx and project.ltx are restored byte for byte and the release
+folders this run created are removed. The editor is closed the way its caption cross would.
 
     python tools/qa/test_mod_publish.py --project D:\\XFinedProjects\\Test
 """
@@ -197,6 +197,9 @@ def main() -> int:
     project = os.path.abspath(args.project)
     manifest_path = os.path.join(project, "mod.ltx")
     original = open(manifest_path, "rb").read()
+    # the editor's own file: a run must not cost the author the scene the project opens with
+    project_path = os.path.join(project, "project.ltx")
+    project_original = open(project_path, "rb").read()
     releases_root = os.path.join(project, "releases")
     had_releases_root = os.path.isdir(releases_root)
     known_releases = set(os.listdir(releases_root)) if had_releases_root else set()
@@ -483,6 +486,10 @@ def main() -> int:
         if os.path.exists(seed):
             os.remove(seed)
         check(restored, "Z the project's mod.ltx is back byte for byte")
+        untouched = open(project_path, "rb").read() == project_original
+        if not untouched:
+            open(project_path, "wb").write(project_original)
+        check(untouched, "Z project.ltx came out as it went in (put back if not)")
         # a token is allowed into the editor, never into what the editor writes down
         leaked = []
         logs = os.path.join(REPO, "logs")

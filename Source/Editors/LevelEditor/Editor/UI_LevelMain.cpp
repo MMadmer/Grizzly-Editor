@@ -348,6 +348,7 @@ CCommandVar CommandLoad(CCommandVar p1, CCommandVar p2)
 				ExecCommand(COMMAND_CHANGE_ACTION, etaSelect, estDefault);
                 EPrefs->AppendRecentFile(temp_fn.c_str());
                 EditorRecovery::OnSceneReplaced();
+				EditorProject::NoteSceneLoaded();
 				s_LastSceneLoadSucceeded = true;
 				s_LastSceneLoadError.clear();
             }else

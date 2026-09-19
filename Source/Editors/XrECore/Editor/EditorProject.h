@@ -78,6 +78,9 @@ public:
 	// live), but not shipped - the game has no use for them.
 	static bool		IsSourceOnlyEntry	(LPCSTR name_in_root);
 
+	// a scene load succeeded; Close() uses it to tell an autoload that never
+	// happened from a scene the author closed on purpose
+	static void		NoteSceneLoaded		();
 	// once, from the first frame tick: the recent list and the -project argument.
 	// Deliberately not tied to drawing - see the definition
 	static void		Startup				();

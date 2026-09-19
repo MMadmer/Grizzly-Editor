@@ -48,6 +48,10 @@ static int				s_RecentCount		= 0;
 static char				s_NewParent[MAX_PATH]= {};
 static char				s_NewName[64]		= {};
 static char				s_PendingScene[MAX_PATH] = {};
+// the autoload PopPendingScene handed out, and whether any scene load has
+// succeeded since the project opened - see Close()
+static char				s_PoppedScene[MAX_PATH] = {};
+static bool				s_SceneLoaded		= false;
 // tile previews outlive Open() by one frame - the click happens mid-draw
 static bool				s_ReleasePreviewsPending = false;
 static EditorProject::TLiveSceneQuery s_LiveSceneQuery = 0;
@@ -505,6 +509,8 @@ bool EditorProject::Open(LPCSTR folder)
 	xr_strcpy(s_Project, folder);
 	const char* leaf = strrchr(s_Project, '\\');
 	xr_strcpy(s_Name, leaf ? leaf + 1 : s_Project);
+	s_PoppedScene[0] = 0;
+	s_SceneLoaded = false;
 
 	CreateLayout();		// deliberately a no-op: a project's layout is the author's
 	// XMS: silently add mod.ltx + module dirs to projects that predate them
@@ -581,6 +587,7 @@ LPCSTR EditorProject::PopPendingScene()
 	}
 	static char out[MAX_PATH];
 	strcpy_s(out, s_PendingScene);
+	strcpy_s(s_PoppedScene, s_PendingScene);
 	s_PendingScene[0] = 0;
 	// crash insurance: clear last_scene BEFORE loading, so a load crash can't
 	// lock the project out; a successful session rewrites it on close
@@ -616,11 +623,26 @@ bool EditorProject::Create(LPCSTR parent, LPCSTR name)
 	return Open(folder);
 }
 
+void EditorProject::NoteSceneLoaded() { s_SceneLoaded = true; }
+
 void EditorProject::Close()
 {
 	if (!s_Active) return;
 	SavePreview();
 	SaveManifest();
+	// last_scene is cleared before the autoload so that a crash in it cannot lock the
+	// project out. This is not that crash: the editor is closing in good order, and
+	// the autoload simply never came to anything - a pending crash recovery refuses
+	// it, a broken file fails it. Without this the author's last scene was forgotten
+	// for good by a session that never touched it. A scene the author loaded and then
+	// closed stays forgotten: that was a choice.
+	if (s_PoppedScene[0] && !s_SceneLoaded && !(Tools && Tools->m_LastFileName.size()))
+	{
+		char manifest[MAX_PATH];
+		sprintf_s(manifest, "%s\\project.ltx", s_Project);
+		::WritePrivateProfileStringA("project", "last_scene", s_PoppedScene, manifest);
+	}
+	s_PoppedScene[0] = 0;
 	SaveRecent();
 	Unmount();
 	EditorGameContent::Unmount();	// closes the archive handles of the old link
