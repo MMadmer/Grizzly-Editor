@@ -572,6 +572,13 @@ LPCSTR EditorProject::PopPendingScene()
 	}
 
 	if (!s_Active || !s_PendingScene[0]) return 0;
+	// a window that started minimized gets here late: a scripted caller may have
+	// loaded a scene meanwhile, and the autoload must not replace it
+	if (HasLiveScene())
+	{
+		s_PendingScene[0] = 0;
+		return 0;
+	}
 	static char out[MAX_PATH];
 	strcpy_s(out, s_PendingScene);
 	s_PendingScene[0] = 0;
@@ -835,17 +842,23 @@ static bool OpenProjectFromCommandLine()
 	return false;
 }
 
+// Runs from the frame loop, not from the browser's Draw: a window that starts
+// minimized or hidden draws no UI at all, and a scripted run - the MCP port
+// answers from the first idle tick - would wait for a project forever.
+void EditorProject::Startup()
+{
+	static bool s_loaded = false;
+	if (s_loaded) return;
+	s_loaded = true;
+	ResolveAppRoot(); LoadRecent();
+	// after the recent list is up: matching by name needs it
+	OpenProjectFromCommandLine();
+}
+
 bool EditorProject::DrawBrowser()
 {
+	Startup();
 	if (s_Active) return false;
-
-	static bool s_loaded = false;
-	if (!s_loaded)
-	{
-		ResolveAppRoot(); LoadRecent(); s_loaded = true;
-		// done once, after the recent list is up: matching by name needs it
-		if (OpenProjectFromCommandLine())	return false;
-	}
 
 	// the editor's proven self-opening modal (imgui_user overload) — the same
 	// path UIChooseForm uses, so it is guaranteed to be visible and focused

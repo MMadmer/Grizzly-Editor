@@ -33,6 +33,11 @@ paths with spaces). An unopenable value is logged and the picker comes up as
 usual. `xfined_open_project` does the same thing on an editor that is already
 running.
 
+The project opens on the first frame tick, whether or not the window is ever
+drawn: a background editor does not draw, and an unattended one is always in the
+background. The last scene auto-loads only once the window is drawn, so an
+unattended run loads its scene with `xfined_open_scene`.
+
 **Always add `-nodlg` to an unattended run.** A fatal error then never opens a
 system-modal dialog: the log gets a real, symbolised stack trace, a minidump is
 written next to the logs, and the process terminates (exit code 3) instead of

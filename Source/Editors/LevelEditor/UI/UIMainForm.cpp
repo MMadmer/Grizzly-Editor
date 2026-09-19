@@ -221,6 +221,7 @@ void UIMainForm::Draw()
 
 bool UIMainForm::Frame()
 {
+    EditorProject::Startup();
     // Idle pumps MCP before drawing, so linked configs must be ready before a remote scene load.
     SyncGameConfigs();
     if (!UI)
