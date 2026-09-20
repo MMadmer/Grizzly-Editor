@@ -4,7 +4,7 @@
 #include "EditorProject.h"
 #include "XFinedMCP.h"
 #include "Nq/NqDoc.h"		// open quest documents follow a rename
-#include <shellapi.h>	// SHFileOperation: deletes go to the Recycle Bin
+#include <shellapi.h>
 
 //------------------------------------------------------------------------------
 // small filesystem predicates
@@ -817,30 +817,10 @@ void EditorFileOps::Move(LPCSTR src, LPCSTR dst_dir, bool recursive, bool overwr
 //------------------------------------------------------------------------------
 // delete
 //------------------------------------------------------------------------------
-// Deleting content is the one operation here with no undo of its own, so it
-// goes to the Recycle Bin: a wrong click costs a restore instead of the work.
-// Returns false when the shell refuses (a network share, a full bin, a path it
-// will not take) and the caller falls back to a plain delete.
-static bool RecycleToBin(LPCSTR path)
-{
-	// SHFileOperation wants a double-null-terminated list, and it must not put
-	// up UI of its own - the editor asks for confirmation itself, and an
-	// unattended run must never sit on a shell dialog
-	char from[MAX_PATH + 2] = {};
-	const size_t n = xr_strlen(path);
-	if (n + 2 > sizeof(from)) return false;
-	CopyMemory(from, path, n);
-
-	SHFILEOPSTRUCTA op = {};
-	op.wFunc	= FO_DELETE;
-	op.pFrom	= from;
-	op.fFlags	= FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR |
-				  FOF_NOERRORUI | FOF_SILENT;
-
-	::SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-	const int  res		= ::SHFileOperationA(&op);
-	return (0 == res) && !op.fAnyOperationsAborted;
-}
+// A delete here is FINAL - nothing goes to the Recycle Bin. The editor deletes
+// its own generated files and whole test projects often enough that a bin full
+// of them is its own problem, and what protects the author is the confirmation
+// that names what disappears, not a copy nobody wants afterwards.
 
 void EditorFileOps::Delete(LPCSTR path, bool recursive, SReport& rep)
 {
@@ -862,7 +842,6 @@ void EditorFileOps::Delete(LPCSTR path, bool recursive, SReport& rep)
 
 	if (FileExists(victim))
 	{
-		if (RecycleToBin(victim))	{ ++rep.files; return; }
 		::SetFileAttributesA(victim, FILE_ATTRIBUTE_NORMAL);
 		if (::DeleteFileA(victim))	++rep.files;
 		else						Fail(rep, victim, Win32Reason("delete failed"));
@@ -882,15 +861,6 @@ void EditorFileOps::Delete(LPCSTR path, bool recursive, SReport& rep)
 		return;
 	}
 
-	// count first: the bin takes the tree in one go and reports nothing back
-	int files = 0, dirs = 0;
-	CountTree(victim, files, dirs);
-	if (RecycleToBin(victim))
-	{
-		rep.files	+= files;
-		rep.dirs	+= dirs;
-		return;
-	}
 	DeleteTree(victim, rep);
 }
 

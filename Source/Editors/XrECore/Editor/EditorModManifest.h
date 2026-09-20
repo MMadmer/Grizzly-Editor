@@ -127,12 +127,12 @@ namespace EditorMod
 	// The module is staged through Export, so everything a module build refuses
 	// is refused here too. `out_dir` empty = <project>\releases\<version>;
 	// `requires_game` empty = the key is left out. Files an earlier packaging of
-	// the same id+version left in `out_dir` are replaced (Recycle Bin) without
+	// the same id+version left in `out_dir` are replaced (deleted) without
 	// asking - the UI asks first. Callers run RunPreBuildBake, like every build.
 	ECORE_API bool	PackageRelease		(LPCSTR project_root, LPCSTR out_dir, LPCSTR requires_game,
 										 SPackageResult& result, xr_string& err, xr_string* warnings = 0);
 	// What an earlier packaging of this id + version left in the release folder -
-	// the files the next one sends to the Recycle Bin. A dialog names them first.
+	// the files the next one deletes. A dialog names them first.
 	ECORE_API void	ListPackagedFiles	(LPCSTR project_root, LPCSTR out_dir, LPCSTR id, LPCSTR version,
 										 xr_vector<xr_string>& names);
 	// MAJOR.MINOR.PATCH from the version resource of <linked game>\xrEngine.exe

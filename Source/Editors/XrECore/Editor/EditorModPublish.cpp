@@ -749,7 +749,7 @@ void DrawDialog()
 	RefreshReplaced();
 	if (!s_Replaced.empty())
 	{
-		ImGui::TextDisabled("%u file(s) of an earlier packaging in releases\\%s go to the Recycle Bin:",
+		ImGui::TextDisabled("%u file(s) of an earlier packaging in releases\\%s are deleted:",
 			(u32)s_Replaced.size(), s_Version);
 		for (u32 i = 0; i < s_Replaced.size(); ++i)
 			ImGui::TextDisabled("  %s", s_Replaced[i].c_str());
