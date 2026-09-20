@@ -109,7 +109,7 @@ writes a release into `<project>\releases\<version>\`:
 
 `releases\` is editor-only: it is never shown as content and never ships inside
 the module. Packaging the same version again replaces its files (the old ones
-go to the Recycle Bin).
+are deleted).
 
 **Manual install.** The package is an ordinary zip. Extracted into the game
 folder it lands in `<game>\modules\<id>\`, which is where the game reads modules
@@ -264,6 +264,11 @@ things at once:
 - a **squad section** `<module>_<id>_squad` — what `spawn.squad` takes;
 - a **character profile** — what a stalker you placed yourself carries in its
   `character_profile` property.
+
+The Characters window shows `name` and `bio` for BOTH languages at once, one
+row each: fill `rus` and leave `eng` empty and an English install reads the
+Russian text; fill both and each install reads its own. A character that only
+has `rus` stays a plain string in the file.
 
 Fields: `name` and `bio` are a string or a table keyed by language; `community`
 is one of the game's (`stalker`, `bandit`, `dolg`, `freedom`, `ecolog`,

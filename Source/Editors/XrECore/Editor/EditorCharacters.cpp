@@ -70,6 +70,19 @@ xr_string TextIn(const SNqValue& v, LPCSTR lang)
 	return xr_string();
 }
 
+// What is actually STORED for a language - no falling back to another one.
+// Generation wants the fallback (an English install reading a Russian-only
+// character still gets a name); a form must not, or "not set" and "set to the
+// same thing" look identical and the author cannot tell them apart.
+xr_string TextRaw(const SNqValue& v, LPCSTR lang)
+{
+	if (v.IsString())					return 0 == strcmp(lang, "rus") ? v.s : xr_string();
+	if (!v.IsTable())					return xr_string();
+	if (const SNqValue* x = v.Get(lang))
+		if (x->IsString())				return x->s;
+	return xr_string();
+}
+
 bool TextEmpty(const SNqValue& v)
 {
 	xr_vector<xr_string> langs;
@@ -991,7 +1004,7 @@ void EditorCharacters::McpDelete(LPCSTR raw, xr_string& out)
 	xr_string abs, err;
 	if (!ResolveTarget(raw, abs, err))	{ NqUtil::JsonError(out, err); return; }
 
-	// The same rule every disk deletion in the editor follows: the Recycle Bin
+	// The same rule every disk deletion in the editor follows: gone for good
 	// backs it, because a file operation has no editor undo.
 	EditorFileOps::SReport rep;
 	EditorFileOps::Delete(abs.c_str(), false, rep);
@@ -1024,7 +1037,6 @@ int							s_Sel			= -1;
 EditorCharacters::SCharacter s_Edit;
 bool						s_Dirty			= false;
 bool						s_WantDelete	= false;
-int							s_Lang			= 0;			// 0 = rus, 1 = eng
 xr_string					s_Status;
 xr_string					s_PendingOpen;
 
@@ -1032,14 +1044,14 @@ xr_vector<EditorCharacters::SSupply>	s_Inherited;	// what the base contributes
 
 char	s_Id[64]		= "";
 char	s_Base[64]		= "";
-char	s_Name[256]		= "";
-char	s_Bio[1024]		= "";
+char	s_NameRus[256]	= "";
+char	s_NameEng[256]	= "";
+char	s_BioRus[1024]	= "";
+char	s_BioEng[1024]	= "";
 char	s_Community[64]	= "";
 char	s_Visual[260]	= "";
 char	s_Icon[128]		= "";
 char	s_Dialog[128]	= "";
-
-LPCSTR LangName(int i)	{ return i == 1 ? "eng" : "rus"; }
 
 // Writes one language back without losing the others: a plain string stays a
 // plain string while only rus is in play, and becomes a table the moment a
@@ -1067,6 +1079,15 @@ void TextSet(SNqValue& v, LPCSTR lang, const xr_string& text)
 	if (v.keys.empty())	v = SNqValue();
 }
 
+// { rus = "..." } and "..." mean the same thing downstream, so the simple case
+// stays simple in the file: only a real second language makes it a table.
+void TextCollapse(SNqValue& v)
+{
+	if (!v.IsTable() || v.keys.size() != 1 || v.keys[0] != "rus")	return;
+	if (!v.vals[0].IsString())										return;
+	v = SNqValue::String(v.vals[0].s);
+}
+
 void CopyTo(char* dst, u32 size, const xr_string& src)
 {
 	strncpy_s(dst, size, src.c_str(), _TRUNCATE);
@@ -1092,8 +1113,10 @@ void PullToBuffers()
 {
 	CopyTo(s_Id, sizeof(s_Id), s_Edit.id);
 	CopyTo(s_Base, sizeof(s_Base), s_Edit.base);
-	CopyTo(s_Name, sizeof(s_Name), TextIn(s_Edit.name, LangName(s_Lang)));
-	CopyTo(s_Bio, sizeof(s_Bio), TextIn(s_Edit.bio, LangName(s_Lang)));
+	CopyTo(s_NameRus, sizeof(s_NameRus), TextRaw(s_Edit.name, "rus"));
+	CopyTo(s_NameEng, sizeof(s_NameEng), TextRaw(s_Edit.name, "eng"));
+	CopyTo(s_BioRus, sizeof(s_BioRus), TextRaw(s_Edit.bio, "rus"));
+	CopyTo(s_BioEng, sizeof(s_BioEng), TextRaw(s_Edit.bio, "eng"));
 	CopyTo(s_Community, sizeof(s_Community), s_Edit.community);
 	CopyTo(s_Visual, sizeof(s_Visual), s_Edit.visual);
 	CopyTo(s_Icon, sizeof(s_Icon), s_Edit.icon);
@@ -1148,11 +1171,11 @@ void DrawDeleteConfirm()
 		return;
 
 	// Names what disappears, not "are you sure": the file itself goes to the
-	// Recycle Bin, but the module loses the character and anything aimed at it.
+	// disk, and the module loses the character and anything aimed at it.
 	ImGui::Text("Delete the character \"%s\"?", s_Edit.id.c_str());
 	ImGui::TextDisabled("%s", NqUtil::ProjectRelative(s_Edit.file.c_str()).c_str());
 	ImGui::Spacing();
-	ImGui::TextWrapped("The file goes to the Recycle Bin. The next build takes the character out"
+	ImGui::TextWrapped("The file is deleted for good. The next build takes the character out"
 					   " of the module, and a quest that spawns it will have nothing to spawn.");
 	ImGui::Spacing();
 
@@ -1317,17 +1340,29 @@ void EditorCharacters::DrawUI()
 		ImGui::SetTooltip("A template only: never becomes a character in the game, so it needs\n"
 						  "no name and no model. Use it to hold a kit several characters share.");
 
-	ImGui::Text("Language");	ImGui::SameLine(label_w);
-	ImGui::PushItemWidth(em * 6.f);
-	if (ImGui::Combo("##lang", &s_Lang, "rus\0eng\0"))	PullToBuffers();
-	ImGui::PopItemWidth();
-
+	// Both languages on screen at once. A dropdown that swaps one field cannot
+	// show what the other holds, and the text a character carries is exactly the
+	// thing an author wants to compare side by side.
 	ImGui::Text("Name");		ImGui::SameLine(label_w);
-	if (ImGui::InputText("##name", s_Name, sizeof(s_Name)))		changed = true;
+	ImGui::TextDisabled("rus");	ImGui::SameLine();
+	ImGui::SetNextItemWidth(-1.f);
+	if (ImGui::InputText("##name_rus", s_NameRus, sizeof(s_NameRus)))	changed = true;
 	if (ImGui::IsItemHovered())	ImGui::SetTooltip("What the player reads above them and in dialog.");
+	ImGui::Dummy(ImVec2(0.f, 0.f));	ImGui::SameLine(label_w);
+	ImGui::TextDisabled("eng");	ImGui::SameLine();
+	ImGui::SetNextItemWidth(-1.f);
+	if (ImGui::InputText("##name_eng", s_NameEng, sizeof(s_NameEng)))	changed = true;
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Left empty, an English install reads the Russian name.");
 
 	ImGui::Text("Bio");			ImGui::SameLine(label_w);
-	if (ImGui::InputTextMultiline("##bio", s_Bio, sizeof(s_Bio), ImVec2(-1.f, em * 3.f)))	changed = true;
+	ImGui::TextDisabled("rus");	ImGui::SameLine();
+	if (ImGui::InputTextMultiline("##bio_rus", s_BioRus, sizeof(s_BioRus), ImVec2(-1.f, em * 2.6f)))
+		changed = true;
+	ImGui::Dummy(ImVec2(0.f, 0.f));	ImGui::SameLine(label_w);
+	ImGui::TextDisabled("eng");	ImGui::SameLine();
+	if (ImGui::InputTextMultiline("##bio_eng", s_BioEng, sizeof(s_BioEng), ImVec2(-1.f, em * 2.6f)))
+		changed = true;
 
 	ImGui::Text("Community");	ImGui::SameLine(label_w);
 	if (ImGui::InputText("##community", s_Community, sizeof(s_Community)))	changed = true;
@@ -1452,8 +1487,12 @@ void EditorCharacters::DrawUI()
 		s_Edit.visual		= s_Visual;
 		s_Edit.icon			= s_Icon;
 		s_Edit.start_dialog	= s_Dialog;
-		TextSet(s_Edit.name, LangName(s_Lang), s_Name);
-		TextSet(s_Edit.bio, LangName(s_Lang), s_Bio);
+		TextSet(s_Edit.name, "rus", s_NameRus);
+		TextSet(s_Edit.name, "eng", s_NameEng);
+		TextSet(s_Edit.bio, "rus", s_BioRus);
+		TextSet(s_Edit.bio, "eng", s_BioEng);
+		TextCollapse(s_Edit.name);
+		TextCollapse(s_Edit.bio);
 		if (s_Edit.money_max < s_Edit.money_min)	s_Edit.money_max = s_Edit.money_min;
 		s_Dirty = true;
 	}
