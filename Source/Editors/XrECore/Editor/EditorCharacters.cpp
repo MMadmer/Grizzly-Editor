@@ -1001,7 +1001,7 @@ void EditorCharacters::DrawUI()
 	}
 
 	const float em = ImGui::GetFontSize();
-	ImGui::SetNextWindowSize(ImVec2(em * 46.f, em * 32.f), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(em * 48.f, em * 38.f), ImGuiCond_FirstUseEver);
 	if (!ImGui::Begin("Characters", &s_Open))
 	{
 		ImGui::End();
@@ -1061,7 +1061,7 @@ void EditorCharacters::DrawUI()
 	ImGui::Separator();
 
 	// ---- list + form ------------------------------------------------------
-	ImGui::BeginChild("##charlist", ImVec2(em * 12.f, -em * 7.f), ImGuiChildFlags_Borders);
+	ImGui::BeginChild("##charlist", ImVec2(em * 12.f, -em * 4.6f), ImGuiChildFlags_Borders);
 	for (u32 i = 0; i < s_All.size(); ++i)
 	{
 		const bool selected = (s_Sel == (int)i);
@@ -1072,7 +1072,7 @@ void EditorCharacters::DrawUI()
 	ImGui::EndChild();
 
 	ImGui::SameLine();
-	ImGui::BeginChild("##charform", ImVec2(0, -em * 7.f));
+	ImGui::BeginChild("##charform", ImVec2(0, -em * 4.6f));
 
 	const float label_w = em * 8.f;
 	bool changed = false;
