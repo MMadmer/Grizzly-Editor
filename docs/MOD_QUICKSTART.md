@@ -319,6 +319,44 @@ Format reference, kind catalog and the meaning of every problem code:
 [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). The game-side contract lives in the
 engine repo as `docs/dead-air/NQ_RUNTIME.md`.
 
+### Staging a scene: put it there, take it away
+
+A quest can create things and remove them again, which is how a scripted scene
+works: the player crosses one trigger and the scene appears, crosses another and
+it is gone.
+
+| put it there | take it away |
+|---|---|
+| `spawn.squad` — a squad at a smart or inside a place, `ref` saves it | `squad.remove` |
+| `spawn.object` — anything with a spawn section, at a place, `ref` saves it | `object.remove` |
+| `item.spawn` — items into a place, a stash, a corpse, a container or **an NPC's inventory** | `item.take` |
+| | `npc.remove` (an NPC by story id, ref, profile or community) |
+
+The trigger is whatever you already use: `trigger.when` with `actor_in_place`
+(a point with a radius, a restrictor or a smart), `objective.reach`,
+`event.level_entered`, an info portion, a variable — the same conditions the
+rest of the graph uses.
+
+```lua
+{ id = "at_the_bridge", kind = "trigger.when",
+  cond = { { kind = "actor_in_place", params = { place = { restrictor = "esc_bridge" } } } },
+  on_enter = { { kind = "spawn.squad",
+                 params = { section = "army_sim_squad_novice", place = { restrictor = "esc_bridge" },
+                            ref = "patrol", hold = true } } },
+  out = { next = "…" } }
+```
+
+**Removing something that is busy is safe.** An NPC being taken away is rarely
+idle — it may be in a scheme a scenario gave it, in a fight, or talking to the
+player. Before anything is released the runtime tells whatever was driving it to
+stop: a scenario drops it from its role, a talk with the player is ended, and the
+active scheme is switched off. Then the release itself goes through the engine's
+own safe release, which defers it when the object cannot go yet. Nothing is left
+pointing at an id that no longer exists.
+
+A `ref` that named something removed is cleared, so a later node cannot resolve
+a dead id.
+
 ## 6a. NPC scenarios
 
 **Content browser → Create → NPC Scenario** · `xfined_quest_write`

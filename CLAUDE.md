@@ -260,6 +260,14 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   optional, problems are coded, `quest_get` returns an outline; screenshots
   are not part of the workflow.
 
+- **Removing something that is busy goes through prepare_removal first**
+  (game repo, xms_nq_world.script): a scenario holding the NPC drops it, a talk
+  with the player is ended and the active scheme is switched off BEFORE the
+  engine safe-release runs. npc.remove, squad.remove (member by member) and
+  object.remove all take that path, so a quest can stage a scene on one
+  trigger and take it away on another without leaving anything pointing at a
+  dead id.
+
 ## Scenarios (NPC action assets)
 
 - The contract is `docs/NQ_ARCHITECTURE.md` §19; the reference is
