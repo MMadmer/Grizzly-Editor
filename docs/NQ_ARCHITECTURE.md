@@ -64,6 +64,11 @@ build gate.** Until the editor's first release the format may change freely
     variables), dialogs and tasks are registered by the runtime.
 12. **Rollout is 6 phases**; the game and the editor are built in parallel by
     subagents after the contract is fixed (§17).
+13. **NPC behaviour is a second kind of the same graph** (§19): a `scenario`
+    asset drives NPCs through **roles** that the calling quest binds, so one
+    file serves any cast. It reaches the NPCs by generating logic text for the
+    stock schemes and handing it over the way a smart terrain does — no second
+    movement or combat system.
 
 ---
 
@@ -1399,3 +1404,186 @@ Risks and how they are closed:
 | Node deletion without confirmation | a modal | the document has undo; the file is untouched until save; closing a dirty tab asks and names the asset |
 | The outline and the generated file header, `pos` optional | "the graph is readable only on the canvas" | the user's requirement: an AI creates and edits quests as text, without screenshots; the outline is the same function for the writer, `quest_get` and `quest_list`, so it cannot diverge |
 | Canonical node order is topological | creation order | the file reads top-down as the quest's story; the order is stable, diffs do not jump |
+
+## 19. Scenarios — NPC action assets
+
+### 19.1 What a scenario is, and why it is not a quest
+
+A quest tracks the player. A **scenario** drives NPCs: a squad walks to a
+courtyard, digs in and opens fire on whoever the quest points them at; a guide
+leads the player and stops to play an animation at a door. The author needs the
+same node graph for it — order, branches, waits, conditions — and needs to
+reuse one scenario for different casts.
+
+So a scenario is **the same graph in the same file format**, with a different
+job and a different vocabulary:
+
+- it has no tasks, no PDA text and no dialogs;
+- it never starts by itself — a quest node runs it;
+- its action kinds address **roles**, not the player;
+- several NPCs can share a role, and one graph can drive several roles at once.
+
+**The graph engine is not duplicated.** A scenario instance is an instance of
+the same interpreter as a quest (§5): same node walk, same pins, same
+conditions, same persistence (§11). Only the kind vocabulary and the lifecycle
+differ.
+
+### 19.2 Nothing about NPC behaviour is invented
+
+X-Ray already moves, posts, animates and fights with NPCs — that is what the
+logic schemes are (`xr_walker`, `xr_camper`, `xr_animpoint`, `xr_remark`,
+`xr_companion`, `xr_combat_ignore`, the `sr_*` family). Smart terrains drive
+them by **generating logic as text** and handing it over:
+`create_ini_file(<text>)` followed by `xr_logic.configure_schemes(...)` — see
+`xr_gulag.script`, which has done exactly this since CoP.
+
+A scenario step does the same thing. It writes a small logic section, applies it
+to the bound NPCs and steps on. This is the whole implementation strategy, and
+it is deliberate:
+
+- combat, cover, wounded, death and dialog keep working, because the stock
+  schemes keep running them;
+- an animation is a state the game already knows, not a bone track the editor
+  invents;
+- when the scenario lets an NPC go, the NPC returns to whatever logic owned it.
+
+A scenario therefore cannot do what the schemes cannot do. That is a feature:
+the alternative is a second AI fighting the first one.
+
+### 19.3 The document
+
+```lua
+return {
+  nq    = 1,
+  type  = "scenario",            -- "quest" (default, may be omitted) | "scenario"
+  id    = "bridge_ambush",       -- [a-z0-9_], unique in the module
+  title = "Засада у моста",      -- author-facing, never shown to the player
+  roles = {
+    leader    = { title = "Главный", default = { story = "esc_wolf" } },
+    attackers = { title = "Налётчики", many = true },
+  },
+  vars  = { … },                 -- as in a quest, scoped to the instance
+  nodes = { … },
+}
+```
+
+Differences from a quest document: `type` is required and `roles` replaces
+`tasks`; `activation` is forbidden (a scenario is started by a quest, never by
+the world).
+
+The extension stays `.nqasset`. One extension, one editor, one validator, one
+exporter, one MCP surface; the document says what it is, so a rename cannot lie
+about it and the game's loader files it under the right registry.
+
+### 19.4 Roles
+
+A role is a named slot the caller fills.
+
+```lua
+roles = {
+  guard = { title = "Охранник",            -- author-facing
+            many  = false,                 -- default false: exactly one NPC
+            default = { story = "esc_wolf" },   -- optional
+            optional = false },                 -- default false
+}
+```
+
+- **Binding** happens at the call site (§19.6) with the object reference forms
+  of §8: `{ story = … }`, `{ ref = … }`, `{ squad = … }`, `{ profile = … }`,
+  `{ community = … }`. `many = true` accepts a squad or a list; `many = false`
+  refuses more than one.
+- A role with a `default` needs no binding — a one-off scenario written for one
+  named NPC reads as it should, and the same file stays reusable.
+- A binding that resolves to nobody fails the run (`optional = true` makes the
+  role simply empty instead, and steps addressed to it do nothing).
+- Roles are resolved **once, on entry**, and kept in the instance: the cast
+  cannot change under the graph's feet. Members that die drop out; a step to an
+  empty role is a no-op, not an error.
+
+This is the answer to "bind the asset to an NPC, or pick the NPC in the node":
+both, and the asset stays reusable either way.
+
+### 19.5 Steps
+
+Every action of group `npc` carries `who` — one role name or a list of them.
+The graph provides the ordering, the branching and the waiting; a step itself is
+instant unless the catalog says otherwise.
+
+| kind | what it does |
+|---|---|
+| `npc.goto` | Sends the role to a `place` — a waypoint path, a smart, or an object by story id. `move = walk\|run`, `look` aims the look path, `arrive = true` makes the node wait until everyone is there. |
+| `npc.hold` | Posts the role at a place and lets it fight from there (`camper`). `fire = false` posts it without shooting first. |
+| `npc.anim` | Plays a state/animation where the NPC stands (`remark`/`animpoint`), `duration` or until the node is left. |
+| `npc.follow` | The role follows the actor or another role (`companion`), `distance` in metres. |
+| `npc.attack` | Points the role at a target (a role, the actor, a story id, a community) and makes it hostile to it. |
+| `npc.stance` | Relation to the actor, goodwill, `combat_ignore`, invulnerability. |
+| `npc.set_name` | The visible name of an NPC. The engine sets it directly — no character profile needed. |
+| `npc.release` | Gives the NPC back to the logic that owned it before the scenario touched it. |
+
+Conditions gain `npc_at_place` and `npc_in_combat`, both role-aware; everything
+else a scenario needs (`flow.*`, `wait.*`, `var.*`, `signal.*`, `sound.play`,
+`relation.*`, `item.*`, `npc.kill`, `npc.remove`, every `cond` kind) is the
+quest vocabulary and is shared.
+
+**A place for `goto`/`hold` is a waypoint path, a smart, or an object.** Paths
+are authored with the editor's WayPoint tool and ship in the module's spawn
+layer, which is exactly what `path_walk`/`path_look` want. A bare coordinate is
+not a destination: X-Ray walks patrol paths, and inventing one at runtime would
+be a second movement system.
+
+### 19.6 The quest side
+
+| kind | what it does |
+|---|---|
+| `scenario.run` | Starts a scenario. `asset` names it, `roles` binds its roles, `ref` saves the running instance, `wait = true` holds the node until the scenario ends (pin `done`). |
+| `scenario.stop` | Ends an instance and releases its NPCs. |
+| `scenario_running` / `scenario_done` | Conditions on an instance. |
+
+```lua
+{ id = "spring_the_trap", kind = "scenario.run",
+  params = {
+    asset = "bridge_ambush",
+    roles = {
+      leader    = { story = "esc_wolf" },
+      attackers = { ref = "ambush_squad" },
+    },
+    wait = true, ref = "ambush" },
+  out = { done = "after_the_fight" } }
+```
+
+The same scenario, another cast, another quest — that is the point of roles.
+
+### 19.7 Lifetime
+
+- A scenario ends when its graph reaches `flow.end`, when `scenario.stop` says
+  so, or when every role is empty (everybody died).
+- **On end every NPC the scenario touched is released**, in reverse order of
+  being taken. Release restores the logic the NPC had on entry; an NPC that had
+  none goes back to its smart terrain.
+- Instances survive saves like quests do (§11): the instance holds its scenario
+  id, the resolved role members by id, the node state and the vars.
+- A scenario whose asset is gone after an update stops and releases, with a
+  warning — it never pins an NPC in a scheme nothing drives any more.
+
+### 19.8 Validation
+
+On top of the shared rules (§15):
+
+- `type = "scenario"` forbids `tasks`, `activation`, `dialog.*`, `objective.*`,
+  `task.*`, `quest.activate`, `scenario.*`; `type = "quest"` forbids `npc.goto`,
+  `npc.hold`, `npc.anim`, `npc.follow`, `npc.attack`, `npc.release` and the role
+  conditions. The catalog carries this as `docs = quest,scenario` per kind.
+- `who` must name a declared role; a role never declared and never used is a
+  warning, a role used but not declared is an error.
+- `who` naming a `many = false` role from a step that only makes sense for a
+  group is not an error — one NPC is a group of one.
+- `scenario.run` must name an asset that exists in the project, of type
+  `scenario`, and may only bind roles that asset declares; a role without a
+  `default` and without a binding is an error at build time, not in game.
+
+### 19.9 What a scenario deliberately does not do
+
+- It does not author NPCs. Who exists in the world is the spawn layer's job
+  (the scene) or `spawn.squad` / `spawn.object`.
+- It does not talk. Dialogs stay in quests (§7), where the player is.
+- It does not carry its own movement, cover or combat code. See §19.2.

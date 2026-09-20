@@ -310,6 +310,7 @@ else is plumbing around it. When a stage without waiting is needed —
 | `object.remove` | Remove object | **`target: object_ref`** | Removes an object created by this quest (spawn.object) or one by story id. The ref is cleared afterwards. |
 | `npc.remove` | Remove NPC | **`npc: npc_ref`** | Removes the NPC from the world. |
 | `npc.kill` | Kill NPC | **`npc: npc_ref`** | Kills the NPC. |
+| `npc.set_name` | Set NPC name | **`npc: npc_ref`**, **`name: text`** | Renames the NPC - the name over their head, in the dialog window and in the PDA. No character profile is needed for it. An NPC that is offline is renamed the moment it comes online, so the name survives being set far from the player. |
 | `relation.set` | Set relation | **`who: npc_ref`**, **`value: relation`** | Makes an NPC, squad, or community an enemy, neutral, or friend of the player. |
 | `relation.goodwill` | Change goodwill | **`who: npc_ref`**, **`delta: int`** | Adds (or subtracts) NPC or community goodwill toward the player. |
 | `news.tip` | PDA message | **`text: text`**, `sender: npc_ref`, `icon: string`, `duration: float = 5` | Shows a news tip to the player. sender sets the author. |
