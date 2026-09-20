@@ -10,9 +10,13 @@
 #include "..\XrEngine\x_ray.h"
 #include "Engine/XRayEditor.h"
 #include "..\XrECore\Editor\EditorProject.h"
+#include "..\XrECore\Editor\EditorStartup.h"
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
 {
     if (!IsDebuggerPresent()) Debug._initialize(false);
+    // Before the first file is touched: the start reads gigabytes worth of
+    // directory entries and the desktop stays empty until it is done.
+    EditorStartup::SplashShow();
     const char* FSName = "fs.ltx";
     bool bDefaultFS = true;
     {
@@ -35,6 +39,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     // project selection is now an in-editor browser page (see EditorProject):
     // the FS boots on the plain SDK config and gets remounted at open time
     (void)bDefaultFS;
+    EditorStartup::Stage("Mounting the file system");
     Core._initialize("LevelEditor", ELogCallback, 1, FSName, true);
     Tools = xr_new<CLevelTool>();
     LTools = (CLevelTool*)Tools;
@@ -50,6 +55,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         return Scene && (Scene->ObjCount() || Scene->IsUnsaved() || Scene->IsModified());
     });
     UIMainForm* MainForm = xr_new< UIMainForm>();
+    EditorStartup::Stage("Loading game data");
     pApp = xr_new<XRayEditor>();
     g_XrGameManager = xr_new<XrGameManager>();
     g_SEFactoryManager = xr_new<XrSEFactoryManager>();
@@ -62,6 +68,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     Console->Hide();
     ::MainForm = MainForm;
     UI->Push(MainForm, false);
+    // the last stage covers opening the project and the scene it remembers -
+    // the splash stays up until the editor has a frame to show
+    EditorStartup::Stage("Opening the editor");
     while (MainForm->Frame())
     {
     }

@@ -22,6 +22,7 @@
 #include "engine\XrGamePersistentEditors.h"
 #include "Nq\NqDoc.h"
 #include "UI_CommandPalette.h"
+#include "EditorStartup.h"
 
 
 ECommandVec 		ECommands;
@@ -270,6 +271,7 @@ CCommandVar CommandInitialize(CCommandVar p1, CCommandVar p2)
     EDevice = xr_new< CEditorRenderDevice>();
     Device = EDevice;
 	CCommandVar res		= TRUE;
+    EditorStartup::Stage("Reading configuration");
     {
         string_path              fn;
         strconcat(sizeof(fn), fn, UI->EditorName(), ".log");
@@ -285,8 +287,10 @@ CCommandVar CommandInitialize(CCommandVar p1, CCommandVar p2)
     // make interface
     //----------------
     if(EPrefs)EPrefs->OnCreate		();
+    EditorStartup::Stage("Starting the render device");
     if (UI->OnCreate(/*(TD3DWindow*)(u32)p1,(TPanel*)(u32)p2)*/))
     {
+        EditorStartup::Stage("Loading the editor library");
         ExecCommand		(COMMAND_CREATE_SOUND_LIB);	R_ASSERT(SndLib);
         SndLib->OnCreate();
         LALib.OnCreate	();

@@ -2,6 +2,7 @@
 #pragma hdrstop
 #include "TextureDescrManager.h"
 #include "ETextureParams.h"
+#include <thread>	// the descriptions are read on a few threads, see LoadTHM
 
 // eye-params
 float					r__dtex_range	= 50;
@@ -28,6 +29,96 @@ void fix_texture_thm_name(LPSTR fn)
 		*_ext = 0;
 }
 
+//------------------------------------------------------------------------------
+// Reading the descriptions is one open, one read and one close per file, of a
+// file a few hundred bytes long - and a stock install has eight and a half
+// thousand of them. It is the largest burst of file operations anything does
+// before the editor can draw, and what it costs is the per-file latency, not
+// the bytes: cold, every one of those is a disk round trip that an on-access
+// scanner also gets a say in.
+//
+// So the READING is spread over a few threads, which is all it takes to
+// overlap that latency. The parsing stays on the calling thread: it fills
+// state shared with the renderer, and next to the I/O it is free.
+//------------------------------------------------------------------------------
+namespace
+{
+struct SThmFile
+{
+	string_path	path;
+	u8*			data;	// plain CRT allocation: filled off-thread, freed here
+	u32			size;
+};
+
+const u32	kThmMaxThreads	= 8;
+const u32	kThmPerThread	= 256;		// below this a single pass is cheaper
+const u32	kThmSizeLimit	= 1 << 20;	// a description this big is not one
+
+void ThmReadRange(SThmFile* files, u32 from, u32 to)
+{
+	for (u32 i = from; i < to; ++i)
+	{
+		SThmFile& f = files[i];
+		HANDLE handle = ::CreateFileA(f.path, GENERIC_READ, FILE_SHARE_READ, NULL,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+		if (INVALID_HANDLE_VALUE == handle)	continue;
+
+		LARGE_INTEGER size = {};
+		if (::GetFileSizeEx(handle, &size) && size.QuadPart > 0 && size.QuadPart < kThmSizeLimit)
+		{
+			const u32	bytes	= u32(size.QuadPart);
+			u8*			buffer	= (u8*)::malloc(bytes);
+			DWORD		got		= 0;
+			if (buffer && ::ReadFile(handle, buffer, bytes, &got, NULL) && got == bytes)
+			{
+				f.data	= buffer;
+				f.size	= got;
+			}
+			else
+				::free(buffer);
+		}
+		::CloseHandle(handle);
+	}
+}
+
+// Anything this misses simply arrives with data == 0 and is read the ordinary
+// way below - a file that moved, a path the engine resolves through an archive.
+void ThmPrefetch(xr_vector<SThmFile>& files)
+{
+	const u32 count = files.size();
+	if (count < kThmPerThread)
+	{
+		ThmReadRange(&files.front(), 0, count);
+		return;
+	}
+
+	u32 threads = count / kThmPerThread;
+	if (threads > kThmMaxThreads)	threads = kThmMaxThreads;
+	if (threads > std::thread::hardware_concurrency())
+		threads = std::thread::hardware_concurrency();
+	if (threads < 2)
+	{
+		ThmReadRange(&files.front(), 0, count);
+		return;
+	}
+
+	std::thread	workers[kThmMaxThreads];
+	u32			started	= 0;
+	const u32	span	= (count + threads - 1) / threads;
+	for (u32 t = 1; t < threads; ++t)
+	{
+		const u32 from	= t * span;
+		const u32 to	= (from + span < count) ? from + span : count;
+		if (from >= to)	break;
+		workers[started++] = std::thread(&ThmReadRange, &files.front(), from, to);
+	}
+	// the caller takes the first slice itself rather than waiting on it
+	ThmReadRange(&files.front(), 0, span < count ? span : count);
+	for (u32 t = 0; t < started; ++t)
+		workers[t].join();
+}
+} // namespace
+
 void CTextureDescrMngr::LoadTHM(LPCSTR initial)
 {
 	FS_FileSet				flist;
@@ -35,15 +126,29 @@ void CTextureDescrMngr::LoadTHM(LPCSTR initial)
 #ifdef DEBUG
 	Msg						("count of .thm files=%d", flist.size());
 #endif // #ifdef DEBUG
+	if (flist.empty())		return;
+
+	xr_vector<SThmFile>		prefetched;
+	prefetched.resize		(flist.size());
+	u32						slot = 0;
+	for (FS_FileSetIt I = flist.begin(); I != flist.end(); ++I, ++slot)
+	{
+		FS.update_path		(prefetched[slot].path, initial, (*I).name.c_str());
+		prefetched[slot].data = 0;
+		prefetched[slot].size = 0;
+	}
+	ThmPrefetch				(prefetched);
+
 	FS_FileSetIt It			= flist.begin();
 	FS_FileSetIt It_e		= flist.end();
 	STextureParams			tp;
 	string_path				fn;
-	for(;It!=It_e;++It)
+	slot					= 0;
+	for(;It!=It_e;++It,++slot)
 	{
-		
-		FS.update_path		(fn, initial, (*It).name.c_str());
-		IReader* F			= FS.r_open(fn);
+		SThmFile&	held	= prefetched[slot];
+		IReader		memory	(held.data, int(held.size));
+		IReader*	F		= held.data ? &memory : FS.r_open(held.path);
 		xr_strcpy			(fn,(*It).name.c_str());
 		fix_texture_thm_name(fn);
 
@@ -51,7 +156,8 @@ void CTextureDescrMngr::LoadTHM(LPCSTR initial)
 		F->r_u32			();
 		tp.Clear			();
 		tp.Load				(*F);
-		FS.r_close			(F);
+		if (F == &memory)	{ ::free(held.data); held.data = 0; }
+		else				FS.r_close(F);
 		if (STextureParams::ttImage		== tp.type ||
 			STextureParams::ttTerrain	== tp.type ||
 			STextureParams::ttNormalMap	== tp.type	)

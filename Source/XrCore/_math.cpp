@@ -99,17 +99,31 @@ namespace CPU
 
 		// Timers & frequency
 		u64			start,end;
-		u32			dwStart,dwTest;
 
 		SetPriorityClass		(GetCurrentProcess(),REALTIME_PRIORITY_CLASS);
 
 		// Detect Freq
-		dwTest	= timeGetTime();
-		do { dwStart = timeGetTime(); } while (dwTest==dwStart);
+		//
+		// The stock detection spun an empty loop for a FULL SECOND against
+		// timeGetTime, at realtime priority, on every single start - a second
+		// of every launch spent measuring a number the machine already knows.
+		// Counting the TSC against QPC instead needs a fraction of that: both
+		// are hardware counters, so twenty milliseconds land inside a thousandth
+		// of a percent, where the one-second wall-clock window was good to a
+		// tenth. Reading them as a RATIO also survives being preempted mid
+		// window, which the old one did not - hence the priority bump, now over
+		// in twenty milliseconds rather than one second.
+		QueryPerformanceFrequency	((PLARGE_INTEGER)&qpc_freq)	;
+		u64			qpc_start = 0, qpc_end = 0;
+		const u64	qpc_window	= qpc_freq / 50;	// 20 ms
+		QueryPerformanceCounter		((PLARGE_INTEGER)&qpc_start);
 		start	= GetCLK();
-		while (timeGetTime()-dwStart<1000) ;
+		do { QueryPerformanceCounter((PLARGE_INTEGER)&qpc_end); }
+		while (qpc_end - qpc_start < qpc_window);
 		end		= GetCLK();
-		clk_per_second = end-start;
+		clk_per_second = qpc_end > qpc_start
+			? u64(double(end - start) * double(qpc_freq) / double(qpc_end - qpc_start))
+			: end - start;
 
 		// Detect RDTSC Overhead
 		clk_overhead	= 0;
@@ -121,7 +135,6 @@ namespace CPU
 		clk_overhead		/=	256;
 
 		// Detect QPC Overhead
-		QueryPerformanceFrequency	((PLARGE_INTEGER)&qpc_freq)	;
 		qpc_overhead	= 0;
 		for (int i=0; i<256; i++)	{
 			start			=	QPC();

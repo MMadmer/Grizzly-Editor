@@ -11,6 +11,7 @@
 #include "UI_Main.h"
 #include "EditorPreferences.h"
 #include "EditorProject.h"
+#include "EditorStartup.h"
 #include "XFinedMCP.h"
 #include "EThumbnailVisual.h"
 #include "d3dutils.h"
@@ -1008,6 +1009,11 @@ bool TUI::Idle()
 #endif
 	if (draw && !m_Flags.is(flNeedQuit) && !m_AppClosed)
 		RealRedrawScene();
+
+	// The splash comes down once there is a frame to look at - or once the
+	// first pass is through, for an editor that started in the background and
+	// draws nothing at all. Every later call is a flag test.
+	EditorStartup::Finish();
 
     {
         for (u32 pit = 0; pit < Device->seqParallel.size(); pit++)

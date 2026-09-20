@@ -1,6 +1,7 @@
 ﻿//---------------------------------------------------------------------------
 #include "stdafx.h"
 #include "../../Public/xfined_resource.h"
+#include "EditorStartup.h"
 #pragma hdrstop
 #include "gamefont.h"
 #include <sal.h>
@@ -768,28 +769,21 @@ int MaximizedTopPad(void* hwnd)
 void CEditorRenderDevice::CreateWindow()
 {
 	// Editors are DPI-unaware by default, so Windows bitmap-stretches them on
-	// scaled displays (blurry UI). Opt into Per-Monitor V2 before creating the
-	// window; resolve APIs dynamically to keep older systems working.
-	float dpi_scale = 1.f;
-	if (HMODULE user32 = ::GetModuleHandleA("user32.dll"))
-	{
-		typedef BOOL(WINAPI* SetCtxFn)(HANDLE);
-		typedef BOOL(WINAPI* SetAwareFn)();
-		typedef UINT(WINAPI* GetDpiFn)();
-		SetCtxFn set_ctx = (SetCtxFn)::GetProcAddress(user32, "SetProcessDpiAwarenessContext");
-		SetAwareFn set_aware = (SetAwareFn)::GetProcAddress(user32, "SetProcessDPIAware");
-		// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (DPI_AWARENESS_CONTEXT)-4
-		const bool aware = set_ctx ? !!set_ctx((HANDLE)-4) : (set_aware && set_aware());
-		if (aware)
-			if (GetDpiFn get_dpi = (GetDpiFn)::GetProcAddress(user32, "GetDpiForSystem"))
-				dpi_scale = float(get_dpi()) / 96.f;
-	}
+	// scaled displays (blurry UI). The Per-Monitor V2 opt-in happens once for
+	// the process, in EditorStartup - the splash window is created before this
+	// one and awareness cannot be changed after a window exists.
+	const float dpi_scale = EditorStartup::DpiScale();
 
 	// Wide window class on purpose. A window is Unicode or ANSI as a whole, and
 	// an ANSI one gets its WM_CHAR pre-converted to the system codepage - which
 	// silently mangles every language the author's ACP cannot express. The pump
 	// in TUI::Idle() takes the W path for the same reason.
 	m_WC = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"XFined Editor", NULL };
+	// The window is up well before the first frame - the game library, its
+	// scripts and the project still have to load. Without a background brush
+	// Windows paints that gap white, which reads as a hung application; the
+	// editor's own backdrop reads as one that is still coming up.
+	m_WC.hbrBackground = ::CreateSolidBrush(RGB(24, 24, 27));
 	// The class icon is what the title bar, the taskbar button and Alt+Tab show.
 	// Both sizes are loaded from the executable's own resources so an editor tool
 	// without the icon resource simply keeps the system default instead of failing.
@@ -814,6 +808,7 @@ void CEditorRenderDevice::DestryWindow()
 {
 	::DestroyWindow(m_hWnd);
 	::UnregisterClassW(m_WC.lpszClassName, m_WC.hInstance);
+	if (m_WC.hbrBackground)	::DeleteObject(m_WC.hbrBackground);
 }
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {

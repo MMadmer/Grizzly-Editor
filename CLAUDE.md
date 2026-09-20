@@ -51,6 +51,33 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   the frame on the second; `xfined_screenshot_viewport` returns the viewport
   immediately.
 
+## Startup
+
+- `EditorStartup` owns everything between the double-click and the first
+  frame: the splash window (a thread of its own, so it keeps painting while
+  the main thread blocks in file work) and the stage profile the log ends
+  with. `Stage()` names a stage for both; `Finish()` runs at the first frame.
+- **Every start writes its own profile** — one line per stage with its
+  seconds, read calls and file operations, plus a `loader` line for what
+  Windows did before `wWinMain`. Read that before optimising or before
+  believing a report of a slow start; the first stage measured is the process
+  creation time, so a slow loader (a scanner meeting the binaries) is told
+  apart from slow editor work.
+- **What a start costs is the NUMBER of file touches, not the bytes.** Warm it
+  is ~19k reads and ~62k file operations for 26 MB. Cold — a file cache that
+  aged out, an on-access virus scanner seeing those files the first time —
+  every one of those is a round trip, which is the difference between three
+  seconds and a minute. So the thing to cut is always the operation count, or
+  to overlap the latency; reading less data is beside the point.
+- Two lessons already paid for: `CPU::Detect` spun a full second to measure
+  the TSC (it counts against QPC over 20 ms now - see `_math.cpp`), and the
+  8.5k texture descriptions were read one at a time (`LoadTHM` prefetches them
+  on a few threads and parses on the caller's; proved to produce identical
+  data).
+- The Per-Monitor V2 opt-in happens ONCE, in `EditorStartup::DpiScale()`,
+  because the splash exists before the editor window and awareness cannot be
+  changed after the first window.
+
 ## Game modes
 
 - A mod always targets ONE mode: the plain game, a mode that already exists
