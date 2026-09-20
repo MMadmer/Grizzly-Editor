@@ -3077,6 +3077,7 @@ void UIContentBrowser::DrawGridContextMenu()
 		{
 			if (ImGui::MenuItem("Quest Graph"))	CreateQuest();
 			if (ImGui::MenuItem("Character"))	CreateCharacter();
+			if (ImGui::MenuItem("NPC Scenario"))	CreateScenario();
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
@@ -3267,6 +3268,40 @@ void UIContentBrowser::CreateCharacter()
 	if (!NqLua::WriteFile(probe, EditorCharacters::Template(base.c_str()), err))
 	{
 		ELog.DlgMsg(mtError, "Cannot create the character: %s", err.c_str());
+		return;
+	}
+	Refresh			();
+	ClearSelection	();
+	BeginRename		(rel.c_str());
+}
+
+void UIContentBrowser::CreateScenario()
+{
+	if (m_Source != 0 || !EditorProject::Active())	return;
+
+	xr_string rel;
+	string_path probe;
+	for (int n = 1; n <= 999; ++n)
+	{
+		char leaf[64];
+		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "NewScenario.nqasset");
+		else		sprintf_s(leaf, "NewScenario%d.nqasset", n);
+		if (m_CurFolder.empty())	sprintf_s(probe, "%s\%s", EditorProject::Root(), leaf);
+		else						sprintf_s(probe, "%s\%s\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
+		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
+		{
+			rel = m_CurFolder;
+			if (!rel.empty()) rel += "\\";
+			rel += leaf;
+			break;
+		}
+	}
+	if (rel.empty())	{ ELog.DlgMsg(mtError, "Too many unnamed scenarios here."); return; }
+
+	xr_string err;
+	if (!NqExport::NewScenarioTemplate(probe, err))
+	{
+		ELog.DlgMsg(mtError, "Cannot create the scenario: %s", err.c_str());
 		return;
 	}
 	Refresh			();

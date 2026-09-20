@@ -673,3 +673,120 @@ To check in the game: `nq list` shows
 `<module>.dialog_branching [active] "Долг вежливости" tokens=1`,
 `nq state <uid>` — the token, the `agreed`/`asked` values, the `boars` ref,
 the task status and the full graph outline.
+
+## 10. Scenarios — graphs that drive NPCs
+
+A quest tracks the player. A **scenario** drives NPCs: a squad walks to a
+courtyard, digs in and opens fire on whoever the quest points it at. It is the
+**same file format and the same interpreter**, with `type = "scenario"`, and it
+is started by a quest node, never by itself.
+
+```lua
+return {
+  nq    = 1,
+  type  = "scenario",
+  id    = "bridge_ambush",
+  title = "Засада у моста",
+  roles = {
+    leader    = { title = "Главный", default = { story = "esc_wolf" } },
+    attackers = { title = "Налётчики", many = true },
+  },
+  nodes = {
+    { id = "start", kind = "trigger.start", out = { next = "move_in" } },
+    { id = "move_in", kind = "npc.goto",
+      params = { who = { "leader", "attackers" }, path = "bridge_walk", move = "run" },
+      out = { done = "dig_in" } },
+    { id = "dig_in", kind = "flow.step",
+      on_enter = {
+        { kind = "npc.hold",   params = { who = "attackers", path = "bridge_post", look = "bridge_look" } },
+        { kind = "npc.attack", params = { who = "attackers", target = { actor = true } } },
+      },
+      out = { next = "finish" } },
+    { id = "finish", kind = "flow.end" },
+  },
+}
+```
+
+### 10.1 Roles
+
+A role is a slot the **calling quest** fills, which is what makes one scenario
+serve any cast.
+
+| field | meaning |
+|---|---|
+| `title` | author-facing, never shown to the player |
+| `many` | `true` lets the role hold a group; `false` (default) refuses more than one |
+| `optional` | `true` makes an empty role legal - steps addressed to it do nothing |
+| `default` | the binding used when the caller names none: a reference table |
+
+Bindings take the object reference forms of §3 — `{ story = … }`, `{ ref = … }`,
+`{ squad = … }`, `{ profile = … }`, `{ community = … }` — or a list of them. A
+ref resolves against the **calling quest's** refs, so a squad that quest made
+with `spawn.squad` is bound by its name.
+
+Members are resolved **once, on entry**, and kept: the cast cannot change under
+the graph's feet. Members that die drop out; a step addressed to an empty role
+is a no-op, and a scenario whose every role is empty ends by itself.
+
+### 10.2 Steps
+
+Every action of group `npc` takes `who` — one role name or a list of them. The
+graph provides the ordering, branching and waiting; a step is instant unless the
+catalog says it waits.
+
+| kind | what it does |
+|---|---|
+| `npc.goto` | **`who: role`**, **`path: way_path`**, `look`, `move` (`walk`\|`run`), `arrive` (default true), `radius` → pin `done`. Walks a waypoint path (walker). `arrive` holds the node until everyone is within `radius` of the path's end. |
+| `npc.hold` | **`who`**, **`path`**, `look`, `radius`, `shoot`, `no_retreat`. With a look path it digs in and watches it (camper); without one it stands guard on the path. |
+| `npc.anim` | **`who`**, `state` (default `wait`), `look: target_ref`, `sound`. Plays an animation state where the NPC stands (remark). |
+| `npc.follow` | **`who`**, **`target: role_or_actor`**, `distance`. Follows the player or another role (companion). |
+| `npc.attack` | **`who`**, **`target: attack_target`**. Makes the role hostile to the target - the game's own combat does the rest. |
+| `npc.stance` | **`who`**, `to_actor: relation`, `goodwill`, `combat_ignore`, `invulnerable`. Only the fields you set change. |
+| `npc.release` | **`who`**. Hands the role back early; a scenario releases everyone it touched when it ends. |
+| `npc_at_place` | cond: **`who`**, **`path`**, `radius`. Every living member is at the path's end. |
+| `npc_in_combat` | cond: **`who`**. Any living member has an enemy. |
+| `role_alive` | cond: **`who`**, `all`. A member is alive (`all = true`: every one). |
+
+Everything else a scenario needs — `flow.*`, `wait.*`, `var.*`, `signal.*`,
+`sound.play`, `relation.*`, `item.*`, `npc.kill`, `npc.remove`, `npc.set_name`,
+`spawn.*`, `squad.*` and every condition — is the quest vocabulary, shared.
+
+**A place is a waypoint path, not a coordinate.** Paths are authored with the
+editor's WayPoint tool and ship in the module's spawn layer, which is exactly
+what `path_walk`/`path_look` want; X-Ray walks patrol paths, and a path invented
+at run time would be a second movement system.
+
+### 10.3 Running one from a quest
+
+| kind | what it does |
+|---|---|
+| `scenario.run` | **`asset: scenario_id`**, `roles: role_bindings`, `wait_end` (default true), `ref` → pin `done`. Starts the scenario. `wait_end` holds the node until it ends; `ref` saves the instance. |
+| `scenario.stop` | **`target: ref_name`**. Ends it and releases its NPCs. |
+| `scenario_running` / `scenario_done` | conds on that ref. |
+
+```lua
+{ id = "spring_the_trap", kind = "scenario.run",
+  params = { asset = "bridge_ambush", wait_end = true, ref = "ambush",
+             roles = { leader = { story = "esc_wolf" }, attackers = { ref = "ambush_squad" } } },
+  out = { done = "after_the_fight" } }
+```
+
+### 10.4 How a step reaches an NPC
+
+It does not move anything itself. A step writes a small logic section and hands
+it to the stock scheme with `create_ini_file` + `xr_logic.configure_schemes` —
+the same thing a smart terrain does. Combat, cover, danger, wounded and death
+keep working because the same schemes keep running them, and a scenario can only
+do what the schemes can do. That is the point: the alternative is a second AI
+fighting the first.
+
+An NPC that is **offline** has no game object to take a scheme, so the step is
+parked and applied the moment it spawns in.
+
+### 10.5 What the validator refuses
+
+| code | meaning |
+|---|---|
+| `E023` | a kind used in the wrong document (`npc.goto` in a quest, `task.give` in a scenario) |
+| `E024` | `who` names a role the scenario does not declare |
+| `E006` | `tasks`/`activation` in a scenario, `roles` in a quest, a scenario with no roles |

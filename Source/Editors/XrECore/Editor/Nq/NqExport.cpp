@@ -74,6 +74,45 @@ xr_string NqExport::TemplateText(LPCSTR id)
 	return NqLua::Write(q);
 }
 
+xr_string NqExport::ScenarioTemplateText(LPCSTR id)
+{
+	SNqQuest q;
+	q.nq	= 1;
+	q.type	= "scenario";
+	q.id	= (id && id[0]) ? id : "new_scenario";
+	q.title	= SNqValue::String("New scenario");
+	// one role to start from: the quest that runs this binds it, and every step
+	// says who = "squad" to address it
+	SNqRole role;
+	role.name	= "squad";
+	role.title	= SNqValue::String("Squad");
+	role.many	= true;
+	q.roles.push_back(role);
+
+	SNqNode start;
+	start.id = "start"; start.kind = "trigger.start";
+	start.Connect("next", "finish");
+	SNqNode finish;
+	finish.id = "finish"; finish.kind = "flow.end";
+	finish.params = SNqValue::Table();
+	finish.params.Set("status", SNqValue::String("completed"));
+	q.nodes.push_back(start);
+	q.nodes.push_back(finish);
+	return NqLua::Write(q);
+}
+
+bool NqExport::NewScenarioTemplate(LPCSTR path, xr_string& err)
+{
+	err.clear();
+	if (!path || !path[0]) { err = "path is empty"; return false; }
+	if (NqUtil::FileExists(path)) { err = "file already exists"; return false; }
+	xr_string id = NqText::IdFromName(NqUtil::BaseName(path).c_str());
+	if (id.empty()) id = "new_scenario";
+	if (!NqLua::WriteFile(path, ScenarioTemplateText(id.c_str()), err)) return false;
+	NqDocs::InvalidateProjectIndex();
+	return true;
+}
+
 bool NqExport::NewQuestTemplate(LPCSTR path, xr_string& err)
 {
 	err.clear();

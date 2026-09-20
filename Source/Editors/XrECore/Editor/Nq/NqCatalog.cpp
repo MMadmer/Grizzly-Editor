@@ -32,6 +32,9 @@ namespace
 		"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 		"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
 		"squad_ref", "object_ref", "objective_id",
+		// scenarios (par. 19): a role name, the waypoint path a step walks, who
+		// a follow or an attack is aimed at, and the bindings a quest passes in
+		"role", "way_path", "role_or_actor", "attack_target", "role_bindings", "scenario_id",
 	};
 
 	bool IsTypeName(const xr_string& s)
@@ -41,7 +44,7 @@ namespace
 		return false;
 	}
 
-	const char* kAttrs[] = { "group", "title", "desc", "use", "params", "rows", "pins", "wait", "once", "event", "impl", "since", "alias" };
+	const char* kAttrs[] = { "group", "title", "desc", "use", "docs", "params", "rows", "pins", "wait", "once", "event", "impl", "since", "alias" };
 
 	bool IsAttr(const xr_string& k)
 	{
@@ -216,6 +219,18 @@ namespace
 					else if (u[i] == "main")	cur->use |= NqCatalog::useMain;
 					else if (u[i] == "extra")	cur->use |= NqCatalog::useExtra;
 					else if (u[i] == "cond")	cur->use |= NqCatalog::useCond;
+				}
+			}
+			else if (key == "docs")
+			{
+				// absent = both; naming one narrows it (par. 19.8)
+				xr_vector<xr_string> d;
+				NqUtil::Split(val.c_str(), ',', d);
+				cur->in_quest = cur->in_scenario = d.empty();
+				for (u32 i = 0; i < d.size(); ++i)
+				{
+					if (d[i] == "quest")		cur->in_quest = true;
+					else if (d[i] == "scenario")	cur->in_scenario = true;
 				}
 			}
 			else if (key == "params")
@@ -421,11 +436,18 @@ const NqCatalog::SKind* NqCatalog::Find(LPCSTR id)
 	return 0;
 }
 
+static bool s_DocScenario = false;
+
+void NqCatalog::SetDocScenario(bool scenario)	{ s_DocScenario = scenario; }
+bool NqCatalog::DocScenario()					{ return s_DocScenario; }
+
 void NqCatalog::KindsFor(u32 use_mask, xr_vector<const SKind*>& out)
 {
 	Ensure();
 	out.clear();
-	for (u32 i = 0; i < s_Kinds.size(); ++i) if (s_Kinds[i].use & use_mask) out.push_back(&s_Kinds[i]);
+	for (u32 i = 0; i < s_Kinds.size(); ++i)
+		if ((s_Kinds[i].use & use_mask) && s_Kinds[i].InDoc(s_DocScenario))
+			out.push_back(&s_Kinds[i]);
 }
 
 // A catalog line says what a parameter is, not that two of them cancel out. Until it

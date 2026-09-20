@@ -14,6 +14,10 @@ namespace NqExport
 	// writes the minimal quest (trigger.start -> flow.end) at `path`; the id is
 	// the file name, the title is the Russian "New quest". Refuses to overwrite.
 	ECORE_API bool	NewQuestTemplate(LPCSTR path, xr_string& err);
+	// The same file with type = "scenario": one role, a start and an end, ready
+	// for the steps that drive it (NQ_ARCHITECTURE par. 19).
+	ECORE_API bool	NewScenarioTemplate(LPCSTR path, xr_string& err);
 	// canonical text of the template for `id`
 	ECORE_API xr_string TemplateText(LPCSTR id);
+	ECORE_API xr_string ScenarioTemplateText(LPCSTR id);
 }

@@ -260,6 +260,40 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   optional, problems are coded, `quest_get` returns an outline; screenshots
   are not part of the workflow.
 
+## Scenarios (NPC action assets)
+
+- The contract is `docs/NQ_ARCHITECTURE.md` §19; the reference is
+  `docs/nq/NQ_FORMAT.md` §10. A scenario is the SAME `.nqasset` and the SAME
+  interpreter with `type = "scenario"`: no tasks, no dialogs, never starts
+  itself, and its actions address **roles** the calling quest binds
+  (`scenario.run`). One asset therefore serves any cast, and a role holds a
+  group as happily as one stalker.
+- **A step does not move, aim or shoot anything.** It writes a logic section and
+  hands it to a stock scheme (`create_ini_file` + `xr_logic.configure_schemes`),
+  which is what a smart terrain does in `xr_gulag`/`smart_terrain`. Combat,
+  cover, danger, wounded and death keep working because the same schemes keep
+  running them. Do NOT add movement or combat code to the runtime: if a step
+  cannot be expressed as a scheme, the answer is a scheme, not a second AI.
+- Places are **waypoint paths** (the WayPoint tool, shipped in the module's
+  spawn layer), not coordinates: X-Ray walks patrol paths.
+- An NPC that is offline cannot take a scheme, so the step is parked in the
+  instance state and applied when it spawns in. A scenario releases everyone it
+  touched when it ends, in `xms_nq_scenario.release` - never leave an NPC in a
+  scheme nothing drives.
+- Game side: `gamedata\scripts\xms_nq_scenario.script`, registered in
+  `xms_nq.script`'s EXTENSIONS. An instance is an ordinary graph instance
+  (`core.instance_start/restore/forget`) with the uid `<module>.<scenario>#<n>`
+  - the `#` is what no asset id can contain, so an instance never collides with
+  a quest.
+- The catalog says which document may carry a kind (`docs = quest,scenario`;
+  absent = both). The editor enforces it (`E023`), so does the loader. `E024` is
+  a `who` naming a role that is not declared.
+- Catalog and runtime must stay in step: `tools/qa/Test-NqCatalogParity.ps1` in
+  the GAME repo fails the build when a kind is declared without an
+  implementation or the other way round.
+- QA: `tools/qa/test_scenarios.py --project <project>` drives the editor side
+  over MCP on a COPY of a project.
+
 ## Dangerous operations
 
 - Any destructive operation from the UI requires confirmation. Destructive is

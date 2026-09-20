@@ -319,6 +319,41 @@ Format reference, kind catalog and the meaning of every problem code:
 [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). The game-side contract lives in the
 engine repo as `docs/dead-air/NQ_RUNTIME.md`.
 
+## 6a. NPC scenarios
+
+**Content browser → Create → NPC Scenario** · `xfined_quest_write`
+
+A quest tracks the player; a **scenario** drives NPCs. Same file, same editor,
+`type = "scenario"`, and a quest node starts it:
+
+```lua
+{ id = "spring_the_trap", kind = "scenario.run",
+  params = { asset = "bridge_ambush", wait_end = true, ref = "ambush",
+             roles = { leader = { story = "esc_wolf" }, attackers = { ref = "ambush_squad" } } },
+  out = { done = "after_the_fight" } }
+```
+
+The scenario declares **roles**, not NPCs, so one file serves any cast — bind
+them at the call site, or give a role a `default` and bind nothing. A role holds
+a group as happily as one stalker: «отряд идёт в область и закрепляется» is one
+role and one node.
+
+Steps: `npc.goto` (a waypoint path, walk or run, wait for arrival), `npc.hold`
+(dig in and fight from there), `npc.anim`, `npc.follow`, `npc.attack`,
+`npc.stance` (relation, combat_ignore, invulnerable), `npc.release`. Conditions:
+`npc_at_place`, `npc_in_combat`, `role_alive`. Everything else — branches,
+waits, variables, signals, sounds, relations, items — is the quest vocabulary,
+shared.
+
+Where an NPC goes is a **waypoint path** you place with the WayPoint tool, not a
+coordinate: X-Ray walks patrol paths, and the path ships with the module.
+
+None of this is new AI. A step writes a logic section and hands it to the game's
+own schemes, exactly the way a smart terrain does, so cover, danger, wounded and
+death keep behaving like the base game.
+
+Full reference: `docs/nq/NQ_FORMAT.md` §10.
+
 ## 7. When the build refuses
 
 | Message | Fix |

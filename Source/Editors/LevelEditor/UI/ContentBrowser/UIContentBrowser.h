@@ -325,6 +325,7 @@ private:
 	void			CreateFolder		();
 	void			CreateQuest			();				// NewQuest.nqasset in the folder now open				// in the folder now open
 	void			CreateCharacter		();				// NewCharacter.npcasset in the folder now open
+	void			CreateScenario		();				// NewScenario.nqasset in the folder now open
 	void			BeginRename			(LPCSTR path);	// inline edit on that tile
 	void			CommitRename		();
 	// Inline rename of a folder tile: the created folder starts here with its

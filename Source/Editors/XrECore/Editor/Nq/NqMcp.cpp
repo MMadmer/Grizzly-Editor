@@ -141,6 +141,9 @@ namespace
 			if (d) { q = d->quest; problems = d->problems; }
 			else if (NqDocs::ReadQuest(all[i].path.c_str(), q, err)) NqDocs::Validate(q, all[i].path.c_str(), problems);
 			out += ",\"readable\":true,\"id\":";	NqUtil::JsonString(out, q.id);
+			// a scenario is listed with the quests but is not one: it drives NPCs
+			// and is started by a quest node, never by itself (par. 19)
+			out += ",\"type\":";					NqUtil::JsonString(out, q.IsScenario() ? "scenario" : "quest");
 			out += ",\"title\":";					NqUtil::JsonString(out, NqText::Preview(q.title));
 			out += ",\"nodes\":";					NqUtil::JsonInt(out, (int)q.nodes.size());
 			out += ",\"errors\":";					NqUtil::JsonInt(out, NqValidate::CountErrors(problems));

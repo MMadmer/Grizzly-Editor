@@ -590,8 +590,33 @@ void NqLua::QuestFromValue(const SNqValue& v, SNqQuest& q, xr_vector<xr_string>&
 	}
 	else q.nq = 0;		// absent -> E001 by the validator
 	q.id = v.GetString("id", "");
+	// quest or scenario: absent means quest, so every asset written before
+	// scenarios existed keeps its meaning (NQ_ARCHITECTURE par. 19.3)
+	q.type = v.GetString("type", "quest");
 	if (const SNqValue* x = v.Get("title")) q.title = *x;
 	q.activation = v.GetString("activation", "auto");
+	if (const SNqValue* roles = v.Get("roles"))
+	{
+		if (!roles->IsTable() || !roles->arr.empty())
+			ShapeErr(errs, "roles must be a table { name = { title, many, optional, default } }");
+		else
+			for (u32 i = 0; i < roles->keys.size(); ++i)
+			{
+				SNqRole r;
+				r.name = roles->keys[i];
+				const SNqValue& rv = roles->vals[i];
+				if (!rv.IsTable())
+				{
+					ShapeErr(errs, "role '%s' must be a table", r.name.c_str());
+					continue;
+				}
+				if (const SNqValue* t = rv.Get("title"))	r.title = *t;
+				r.many		= rv.GetBool("many", false);
+				r.optional	= rv.GetBool("optional", false);
+				if (const SNqValue* d = rv.Get("default"))	r.def = *d;
+				q.roles.push_back(r);
+			}
+	}
 	if (const SNqValue* vars = v.Get("vars"))
 	{
 		if (!vars->IsTable()) ShapeErr(errs, "vars must be a table { name = default }");
@@ -747,11 +772,30 @@ void NqLua::QuestToValue(const SNqQuest& q, SNqValue& out)
 {
 	out = SNqValue::Table();
 	Put(out, "nq", SNqValue::Number(q.nq));
+	// only a scenario says what it is: a quest is the default and stays quiet,
+	// so nothing that was written before scenarios existed changes on a save
+	if (q.IsScenario()) Put(out, "type", SNqValue::String("scenario"));
 	Put(out, "id", SNqValue::String(q.id));
 	// an absent title stays absent: the runtime falls back to the id for a nil
 	// title, but an empty string is a title, and the journal would show nothing
 	if (!q.title.IsNil()) Put(out, "title", q.title);
-	Put(out, "activation", SNqValue::String(q.activation));
+	// a scenario never starts itself, so activation is not its business
+	if (!q.IsScenario()) Put(out, "activation", SNqValue::String(q.activation));
+	if (!q.roles.empty())
+	{
+		SNqValue roles = SNqValue::Table();
+		for (u32 i = 0; i < q.roles.size(); ++i)
+		{
+			const SNqRole& r = q.roles[i];
+			SNqValue rv = SNqValue::Table();
+			if (!r.title.IsNil())	Put(rv, "title", r.title);
+			if (r.many)				Put(rv, "many", SNqValue::Bool(true));
+			if (r.optional)			Put(rv, "optional", SNqValue::Bool(true));
+			if (!r.def.IsNil())		Put(rv, "default", r.def);
+			Put(roles, r.name.c_str(), rv);
+		}
+		Put(out, "roles", roles);
+	}
 	if (!q.vars.empty())
 	{
 		SNqValue vars = SNqValue::Table();

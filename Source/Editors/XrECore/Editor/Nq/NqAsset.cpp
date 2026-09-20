@@ -298,21 +298,23 @@ namespace
 	{
 		std::swap(left.nq, right.nq);
 		left.id.swap(right.id);
+		left.type.swap(right.type);
 		SwapValue(left.title, right.title);
 		left.activation.swap(right.activation);
 		left.vars.swap(right.vars);
+		left.roles.swap(right.roles);
 		left.tasks.swap(right.tasks);
 		left.nodes.swap(right.nodes);
 	}
 }
 
-SNqQuest::SNqQuest() : nq(1), activation("auto"), m_LookupRevision(1)
+SNqQuest::SNqQuest() : nq(1), type("quest"), activation("auto"), m_LookupRevision(1)
 {
 }
 
 SNqQuest::SNqQuest(const SNqQuest& other)
-	: nq(other.nq), id(other.id), title(other.title), activation(other.activation), vars(other.vars),
-	  tasks(other.tasks), nodes(other.nodes), m_LookupRevision(1)
+	: nq(other.nq), id(other.id), type(other.type), title(other.title), activation(other.activation),
+	  vars(other.vars), roles(other.roles), tasks(other.tasks), nodes(other.nodes), m_LookupRevision(1)
 {
 }
 
@@ -327,9 +329,11 @@ SNqQuest& SNqQuest::operator=(const SNqQuest& other)
 	if (this == &other) return *this;
 	nq = other.nq;
 	id = other.id;
+	type = other.type;
 	title = other.title;
 	activation = other.activation;
 	vars = other.vars;
+	roles = other.roles;
 	tasks = other.tasks;
 	nodes = other.nodes;
 	ResetLookupIndices();
@@ -403,8 +407,8 @@ void SNqQuest::EnsureVarIndex() const
 
 void SNqQuest::Clear()
 {
-	nq = 1; id.clear(); title = SNqValue(); activation = "auto";
-	vars.clear(); tasks.clear(); nodes.clear();
+	nq = 1; id.clear(); type = "quest"; title = SNqValue(); activation = "auto";
+	vars.clear(); roles.clear(); tasks.clear(); nodes.clear();
 	InvalidateLookupIndices();
 }
 

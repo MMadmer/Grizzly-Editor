@@ -711,6 +711,75 @@ namespace
 			CheckIndexed(c, NqPickers::tSpawnSection, v.s, node, slot);
 			return;
 		}
+		// ---- scenarios (par. 19) --------------------------------------------------
+		// `who` is one role or a list of them: a step addressing three roles at
+		// once is how a whole ambush moves on one line.
+		if (t == "role")
+		{
+			if (v.IsString())
+			{
+				if (v.s.empty()) ERR(c, "E006", node, slot, "'%s' names no role", p.name.c_str());
+				return;
+			}
+			if (!v.IsTable() || v.arr.empty())
+			{
+				ERR(c, "E006", node, slot, "'%s' must be a role name or a list of them", p.name.c_str());
+				return;
+			}
+			for (u32 i = 0; i < v.arr.size(); ++i)
+				if (!v.arr[i].IsString() || v.arr[i].s.empty())
+					ERR(c, "E006", node, slot, "'%s' list must hold role names", p.name.c_str());
+			return;
+		}
+		if (t == "role_or_actor" || t == "attack_target")
+		{
+			if (!v.IsTable() || !v.arr.empty())
+			{
+				ERR(c, "E006", node, slot, "'%s' must be { actor = true } / { role = ... }%s",
+					p.name.c_str(), t == "attack_target" ? " / { community = ... } / { story = ... }" : "");
+				return;
+			}
+			int forms = 0;
+			if (const SNqValue* a = v.Get("actor"))	{ ++forms; if (!a->IsBool()) ERR(c, "E006", node, slot, "actor must be true"); }
+			if (const SNqValue* r = v.Get("role"))	{ ++forms; if (!r->IsString() || r->s.empty()) ERR(c, "E006", node, slot, "role must be a role name"); }
+			if (t == "attack_target")
+			{
+				if (const SNqValue* cm = v.Get("community"))	{ ++forms; if (!cm->IsString()) ERR(c, "E006", node, slot, "community must be a string"); }
+				if (v.Has("story") || v.Has("ref") || v.Has("profile"))
+				{
+					++forms;
+					CheckNpcRef(c, v, node, slot, nidx, order, true, false);
+				}
+			}
+			if (forms == 0)
+				ERR(c, "E006", node, slot, "'%s' names nobody", p.name.c_str());
+			else if (forms > 1)
+				ERR(c, "E006", node, slot, "'%s' must name exactly one target", p.name.c_str());
+			return;
+		}
+		// what the quest hands the scenario: role name -> a reference table, the
+		// same forms every other target takes
+		if (t == "role_bindings")
+		{
+			if (!v.IsTable() || !v.arr.empty())
+			{
+				ERR(c, "E006", node, slot, "'%s' must be a table { role = { story = ... }, ... }", p.name.c_str());
+				return;
+			}
+			for (u32 i = 0; i < v.keys.size(); ++i)
+			{
+				xr_string sl = NqUtil::Format("%s/%s", slot ? slot : "", v.keys[i].c_str());
+				const SNqValue& b = v.vals[i];
+				if (b.IsTable() && !b.arr.empty())
+				{
+					for (u32 j = 0; j < b.arr.size(); ++j)
+						CheckNpcRef(c, b.arr[j], node, sl.c_str(), nidx, order, true, true);
+				}
+				else
+					CheckNpcRef(c, b, node, sl.c_str(), nidx, order, true, true);
+			}
+			return;
+		}
 		if (t == "cases_cond")		{ CheckCases(c, v, node, slot, nidx, order, false, events_ok); return; }
 		if (t == "cases_weight")	{ CheckCases(c, v, node, slot, nidx, order, true, events_ok); return; }
 		if (t == "cond_list")
@@ -800,6 +869,40 @@ namespace
 		}
 	}
 
+	// A kind belongs to a quest, to a scenario, or to both. The catalog says
+	// which (docs=), and this is the one place the answer is enforced - for
+	// nodes, conditions and actions alike (NQ_ARCHITECTURE par. 19.8).
+	bool CheckDoc(SCtx& c, const SKind& k, LPCSTR node, LPCSTR slot)
+	{
+		const bool scenario = c.q.IsScenario();
+		if (k.InDoc(scenario)) return true;
+		ERR(c, "E023", node, slot, "'%s' cannot be used in a %s", k.id.c_str(),
+			scenario ? "scenario" : "quest");
+		return false;
+	}
+
+	// `who` names roles the scenario declares; a role it does not is the error
+	// that would otherwise only show up as an NPC quietly doing nothing.
+	void CheckWho(SCtx& c, const SKind& k, const SNqValue& params, LPCSTR node, LPCSTR slot)
+	{
+		if (!k.Param("who")) return;
+		const SNqValue* who = params.Get("who");
+		if (!who) return;
+		xr_vector<xr_string> names;
+		if (who->IsString())		names.push_back(who->s);
+		else if (who->IsTable())
+			for (u32 i = 0; i < who->arr.size(); ++i)
+				if (who->arr[i].IsString()) names.push_back(who->arr[i].s);
+		for (u32 i = 0; i < names.size(); ++i)
+		{
+			bool found = false;
+			for (u32 r = 0; r < c.q.roles.size(); ++r)
+				if (c.q.roles[r].name == names[i]) found = true;
+			if (!found)
+				ERR(c, "E024", node, slot, "no role called '%s' is declared by this scenario", names[i].c_str());
+		}
+	}
+
 	void CheckCond(SCtx& c, const SNqCond& cd, LPCSTR node, LPCSTR slot, int nidx, int order, bool events_ok)
 	{
 		const SKind* k = NqCatalog::Find(cd.kind.c_str());
@@ -808,9 +911,11 @@ namespace
 			if (c.catalog) ERR(c, "E005", node, slot, "'%s' is not a condition kind", cd.kind.c_str());
 			return;
 		}
+		if (!CheckDoc(c, *k, node, slot)) return;
 		if (k->event && !events_ok)
 			ERR(c, "E020", node, slot, "event condition '%s' is only allowed in trigger.when / wait.when / wait.any", cd.kind.c_str());
 		CheckParams(c, *k, cd.params, node, slot, nidx, order, events_ok);
+		CheckWho(c, *k, cd.params, node, slot);
 	}
 
 	void CheckCondValue(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool events_ok)
@@ -860,7 +965,9 @@ namespace
 			if (c.catalog) ERR(c, "E005", node, slot, "'%s' is not an extra-action kind", a.kind.c_str());
 			return;
 		}
+		if (!CheckDoc(c, *k, node, slot)) return;
 		CheckParams(c, *k, a.params, node, slot, nidx, order, false);
+		CheckWho(c, *k, a.params, node, slot);
 		// an action kind with exclusive forms (item.spawn) is checked like a node kind
 		CheckKindForm(c, k->id, a.params, node, slot);
 		if (k->id == "spawn.squad")
@@ -1108,7 +1215,34 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 		for (u32 i = 0; i < ctx.project_quest_ids->size(); ++i) if ((*ctx.project_quest_ids)[i] == q.id) ++dups;
 		if (dups) ERR(c, "E002", 0, 0, "quest id '%s' is used by another quest of this project", q.id.c_str());
 	}
-	if (q.activation != "auto" && q.activation != "manual")
+	// ---- quest or scenario ---------------------------------------------------------
+	// The type decides which half of the catalog the graph may use and whether
+	// it has tasks or roles at all (NQ_ARCHITECTURE par. 19.8).
+	const bool scenario = q.IsScenario();
+	if (!q.type.empty() && q.type != "quest" && q.type != "scenario")
+		ERR(c, "E006", 0, "param:type", "type must be \"quest\" or \"scenario\"");
+	if (scenario)
+	{
+		if (!q.tasks.empty())
+			ERR(c, "E006", 0, "param:tasks", "a scenario has no tasks of its own - those belong to the quest that runs it");
+		if (q.roles.empty())
+			ERR(c, "E006", 0, "param:roles", "a scenario needs at least one role - it has nobody to drive otherwise");
+		for (u32 i = 0; i < q.roles.size(); ++i)
+		{
+			const SNqRole& r = q.roles[i];
+			if (!NqText::ValidId(r.name.c_str()))
+				ERR(c, "E006", 0, "param:roles", "role name '%s' must be [a-z0-9_]+", r.name.c_str());
+			for (u32 j = i + 1; j < q.roles.size(); ++j)
+				if (q.roles[j].name == r.name)
+					ERR(c, "E006", 0, "param:roles", "role '%s' is declared twice", r.name.c_str());
+			if (!r.title.IsNil()) CheckText(c, r.title, 0, "param:roles");
+			if (!r.def.IsNil() && !r.def.IsTable())
+				ERR(c, "E006", 0, "param:roles", "the default of role '%s' must be a reference table { story = ... }", r.name.c_str());
+		}
+	}
+	else if (!q.roles.empty())
+		ERR(c, "E006", 0, "param:roles", "roles belong to a scenario - set type = \"scenario\"");
+	if (!scenario && q.activation != "auto" && q.activation != "manual")
 		ERR(c, "E006", 0, "param:activation", "activation must be \"auto\" or \"manual\"");
 	// an absent title is legal - the runtime falls back to the quest id; only a
 	// title that IS there and is not text is an error
@@ -1181,9 +1315,11 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 		}
 		else
 		{
+			CheckDoc(c, *k, nid, 0);
 			// event conditions are only for the edge-triggered kinds
 			const bool events_ok = (n.kind == "trigger.when" || n.kind == "wait.when" || n.kind == "wait.any");
 			CheckParams(c, *k, n.params, nid, "", (int)i, 200, events_ok);
+			CheckWho(c, *k, n.params, nid, 0);
 			CheckKindForm(c, n.kind, n.params, nid);
 			// pins
 			for (u32 p = 0; p < n.out.size(); ++p)

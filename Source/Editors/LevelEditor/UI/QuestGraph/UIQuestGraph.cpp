@@ -727,6 +727,10 @@ void UIQuestGraphWindow::Draw()
 	}
 	if (!open) RequestClose(false);
 
+	// The palette belongs to the document being drawn: a quest is never offered
+	// a step that drives an NPC, a scenario is never offered a task action.
+	NqCatalog::SetDocScenario(m_Doc && m_Doc->quest.IsScenario());
+
 	// hotkeys of the tab (the canvas handles its own when hovered/focused)
 	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput)
 	{

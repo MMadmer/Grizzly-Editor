@@ -170,15 +170,38 @@ struct ECORE_API SNqVar
 	SNqValue	value;			// bool / number / string default
 };
 
+//------------------------------------------------------------------------------
+// A role of a scenario: a slot the calling quest fills (NQ_ARCHITECTURE par. 19.4).
+// `def` is the binding used when the caller names none - a target reference
+// table like { story = "esc_wolf" }, kept generic because it is the same shape
+// every other target takes.
+//------------------------------------------------------------------------------
+struct ECORE_API SNqRole
+{
+	xr_string				name;
+	SNqValue				title;		// text
+	bool					many;		// the role may hold a group
+	bool					optional;	// empty is not an error
+	SNqValue				def;		// default binding, or nil
+
+							SNqRole	() : many(false), optional(false) {}
+};
+
 struct ECORE_API SNqQuest
 {
 	int						nq;			// format version (1)
 	xr_string				id;
+	// "quest" (the default, written only when it is a scenario) | "scenario".
+	// The same graph in the same file doing a different job - see par. 19.
+	xr_string				type;
 	SNqValue				title;		// text
 	xr_string				activation;	// auto | manual
 	xr_vector<SNqVar>		vars;
+	xr_vector<SNqRole>		roles;		// scenario only
 	xr_vector<SNqTask>		tasks;
 	xr_vector<SNqNode>		nodes;
+
+	bool					IsScenario	() const { return type == "scenario"; }
 
 	SNqQuest();
 	SNqQuest(const SNqQuest& other);
