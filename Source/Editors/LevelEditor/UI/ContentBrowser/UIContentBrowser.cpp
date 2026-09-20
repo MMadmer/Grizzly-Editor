@@ -8,6 +8,7 @@
 #include "..\..\..\XrECore\Editor\Nq\NqLua.h"
 #include "..\..\..\XrECore\Editor\Nq\NqUtil.h"
 #include "..\..\..\XrECore\Editor\EditorCharacters.h"
+#include "..\..\..\XrECore\Editor\EditorAssetIcons.h"
 #include "..\QuestGraph\UIQuestGraph.h"
 
 // image formats the thumbnail path can decode directly
@@ -50,6 +51,24 @@ static bool IsCharacterExt(LPCSTR name)
 {
 	LPCSTR ext = name ? strrchr(name, '.') : 0;
 	return ext && !_stricmp(ext, ".npcasset");
+}
+
+// Which drawn icon a listing entry gets. The icons tell a scenario from a
+// quest, and a template from a character, by looking INSIDE the file, so they
+// need a path that opens: the project listing keeps entries relative to the
+// project root. Anywhere else the extension alone decides, which still picks
+// the right family.
+static EditorAssetIcons::EKind IconOf(LPCSTR entry, int source)
+{
+	if (!IsQuestExt(entry) && !IsCharacterExt(entry))	return EditorAssetIcons::kNone;
+	string_path disk;
+	if (0 == source && EditorProject::Active() &&
+		xr_strlen(EditorProject::Root()) + xr_strlen(entry) + 2 < sizeof(disk))
+	{
+		sprintf_s(disk, "%s\\%s", EditorProject::Root(), entry);
+		return EditorAssetIcons::KindOf(disk);
+	}
+	return EditorAssetIcons::KindOf(entry);
 }
 
 // Nothing under the project root is registered in the editor FS: a project may
@@ -1057,6 +1076,9 @@ void UIContentBrowser::Refresh()
 {
 	m_NeedRefresh	= false;
 	InvalidateView	();
+	// what an .nqasset or an .npcasset IS was cached for the icons; the files may
+	// have changed, and the tiles must not ask the disk once per frame to find out
+	EditorAssetIcons::Invalidate();
 	m_Items.clear	();
 	m_Dirs.clear	();
 	DropCache		();
@@ -2022,11 +2044,18 @@ void UIContentBrowser::DrawTiles()
 				else
 				{
 					ImTextureID tex = GetThumb(full);
-					const bool clicked = tex ?
-						ImGui::ImageButton("##Thumbnail", tex, ImVec2(m_TileSize, m_TileSize)) :
-						ImGui::Button(leaf, ImVec2(tile_w, tile_w));
+					// An asset the editor invented has no picture anywhere, so it gets a
+					// drawn one - exact at any tile size, unlike a bitmap would be.
+					const EditorAssetIcons::EKind icon =
+						tex ? EditorAssetIcons::kNone : IconOf(full, m_Source);
+					const bool clicked = tex
+						? ImGui::ImageButton("##Thumbnail", tex, ImVec2(m_TileSize, m_TileSize))
+						: ImGui::Button(icon ? "##icon" : leaf, ImVec2(tile_w, tile_w));
 					const ImVec2 ra = ImGui::GetItemRectMin();
 					const ImVec2 rb = ImGui::GetItemRectMax();
+					// with the picture, under the selection wash: an icon stands
+					// in for a thumbnail and has to take the same highlight
+					if (icon) EditorAssetIcons::Draw(icon, ra.x, ra.y, rb.x, rb.y);
 					m_DrawnRects[rect_slot] = ImVec4(ra.x, ra.y, rb.x, rb.y);
 
 					if (sel)
@@ -2047,6 +2076,12 @@ void UIContentBrowser::DrawTiles()
 						m_Dragged = full;
 						ImGui::SetDragDropPayload(CB_DND_PAYLOAD, full, xr_strlen(full) + 1);
 						if (tex) ImGui::Image(tex, ImVec2(48, 48));
+						else if (icon)
+						{
+							const ImVec2 at = ImGui::GetCursorScreenPos();
+							ImGui::Dummy(ImVec2(48, 48));
+							EditorAssetIcons::Draw(icon, at.x, at.y, at.x + 48.f, at.y + 48.f);
+						}
 						ImGui::TextUnformatted(leaf);
 						if (m_Selection.size() > 1)
 							ImGui::Text("and %d more", int(m_Selection.size()) - 1);
@@ -2054,7 +2089,8 @@ void UIContentBrowser::DrawTiles()
 					}
 					if (ImGui::IsItemHovered())
 					{
-						ImGui::SetTooltip("%s", full);
+						if (icon)	ImGui::SetTooltip("%s\n%s", full, EditorAssetIcons::Name(icon));
+						else		ImGui::SetTooltip("%s", full);
 						if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 						{
 							SelectEntry(full, false, false, false);

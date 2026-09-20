@@ -348,3 +348,27 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   editor builds ITS OWN copies of some files from
   `Source/Editors/XrECore/Editor/` (example: D3DUtils.cpp lives in both
   places; the editor compiles the editor copy).
+
+## Icons for the editor's own assets
+
+- A quest, a scenario, a character and a character template have no picture
+  anywhere in the game, so the content browser DRAWS theirs
+  (`EditorAssetIcons`): a handful of rounded rectangles, polylines and dots in
+  a unit square, scaled into whatever rectangle the tile gives. Vector, not a
+  bitmap - the tile slider runs 48..192 and the editor runs at any DPI, and one
+  bitmap would be exact at one of those sizes and blurred at the rest.
+- Nothing is recomputed per frame: the geometry of each icon is built ONCE
+  (arcs tessellated then), the polylines go through one shared scratch buffer,
+  and what a file IS costs one read of its first kilobyte, cached per path
+  behind a generation that `Invalidate()` bumps from the browser's `Refresh()`.
+  A tile never touches the disk to draw itself.
+- The kind comes from the extension plus a peek INSIDE the file
+  (`type = "scenario"`, `abstract = true`), so `KindOf` needs a path that
+  opens: the browser listing is project-relative and joins the project root
+  first (`IconOf`). No new MCP command - `quest_list` already reports `type`
+  and `characters_list` reports `abstract`, which is the same answer.
+- Icons draw in the theme's text colour and go UNDER the selection wash, like
+  a thumbnail: a selected tile does not get its own icon palette.
+- A new asset kind of the editor's own adds a kind here. Give it a shape that
+  says what the thing DOES (a quest is a flow, a scenario is a route), keep it
+  to a few strokes, and check it at 48 and at 192.
