@@ -9,7 +9,7 @@
 #include "Nq/NqExport.h"
 #include "Nq/NqDoc.h"
 #include "Nq/NqUtil.h"
-#include <shellapi.h>	// SHFileOperation: replaced release files go to the Recycle Bin
+#include <shellapi.h>
 #include <bcrypt.h>		// SHA-256 of a finished package
 #include "Zlib/zip.h"	// minizip, release packages
 #include "Zlib/unzip.h"	// reading a finished package back for the file index
@@ -1660,22 +1660,10 @@ static void ListReleaseFiles(LPCSTR dir, const xr_string& id, const xr_string& v
 	::FindClose(h);
 }
 
-// File work has no editor undo, so a replaced release goes to the Recycle Bin;
-// the shell may refuse (a network share, a full bin) - then it is a plain delete.
-static void RecycleFile(LPCSTR path)
+// A release is rebuilt from the module every time, so the files it replaces are
+// deleted outright - the editor keeps nothing in the Recycle Bin.
+static void DeleteOutright(LPCSTR path)
 {
-	char from[MAX_PATH + 2] = {};	// SHFileOperation wants a double-null-terminated list
-	const size_t n = xr_strlen(path);
-	if (n + 2 <= sizeof(from))
-	{
-		CopyMemory(from, path, n);
-		SHFILEOPSTRUCTA op = {};
-		op.wFunc	= FO_DELETE;
-		op.pFrom	= from;
-		op.fFlags	= FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
-		::SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-		if (0 == ::SHFileOperationA(&op) && !op.fAnyOperationsAborted) return;
-	}
 	::SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
 	::DeleteFileA(path);
 }
@@ -1875,7 +1863,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 	for (u32 i = 0; i < old_files.size(); ++i)
 	{
 		sprintf_s(path, "%s\\%s", out, old_files[i].c_str());
-		RecycleFile(path);
+		DeleteOutright(path);
 	}
 	for (u32 p = 0; p < result.packages.size(); ++p)
 	{
@@ -2239,10 +2227,18 @@ static void DrawManifestModal()
 		return;
 
 	ImGui::InputText("id", s_EdId, sizeof(s_EdId));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Technical, never shown to the player: the folder the module installs into\n"
+						  "(<game>\\modules\\<id>) and the name other modules require it by.\n"
+						  "Seeded from the project folder - change it before the first release.");
 	const bool id_ok = EditorMod::ValidateId(s_EdId);
 	if (!id_ok)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid id: non-empty, a-z 0-9 _ . - only");
 	ImGui::InputText("name", s_EdName, sizeof(s_EdName));
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("The mod's title, as the game's Mods menu prints it. Free text - it owes\n"
+						  "nothing to the id or to the project folder, which only seed it, so a\n"
+						  "project folder and the name on screen may differ as much as you like.");
 	ImGui::InputText("version", s_EdVersion, sizeof(s_EdVersion));
 	const bool version_ok = EditorMod::ValidateVersion(s_EdVersion);
 	if (!version_ok)
@@ -2371,8 +2367,16 @@ static void DrawManifestModal()
 		else if (2 == kind)
 		{
 			ImGui::InputText("mode id", s_EdPModeId, sizeof(s_EdPModeId));
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Technical id of the MODE, not of the mod: the module's level work is\n"
+								  "gated on it, and the new-game checkbox is built from it. It may\n"
+								  "match the module id or not - nothing here requires either.");
 			ImGui::InputText("mode title", s_EdPModeTitle, sizeof(s_EdPModeTitle));
-			ImGui::TextDisabled("the id the module gates on, and the name the player will see");
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("The caption of that checkbox on the new-game screen. This is the mode's\n"
+								  "name, not the mod's - the Mods menu shows `name` above instead.");
+			ImGui::TextDisabled("A mode is a way to start a new game, not the mod itself: the player ticks");
+			ImGui::TextDisabled("its box next to Campaign. The title is that box's caption.");
 
 			// The caption ships in a cp1251 string table. Anything outside that
 			// page is either swapped for a look-alike or dropped to '?' on the
@@ -2736,7 +2740,7 @@ static void DrawReplaceModal()
 
 	ImGui::TextUnformatted(s_ReplaceText.c_str());
 	ImGui::Separator();
-	ImGui::TextDisabled("The old files go to the Recycle Bin.");
+	ImGui::TextDisabled("The old files are deleted.");
 	ImGui::Spacing();
 
 	// Cancel is the default: Enter and Escape both back out

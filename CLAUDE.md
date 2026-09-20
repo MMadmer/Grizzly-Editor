@@ -80,6 +80,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 ## Game modes
 
+- **A mode is not the mod.** `[module] name` is the mod's title, the one the
+  game's Mods menu prints (`UIModsWnd.cpp`); it is free text and owes nothing
+  to the module id or to the project folder, which only SEED it. `mode id` /
+  `mode title` belong to the new-game checkbox the module adds. Keep the two
+  apart in every label and hint - they were confused in the field once already.
 - A mod always targets ONE mode: the plain game, a mode that already exists
   in the linked game, or a new mode the mod itself brings. "Not selected" is
   not a third option: exporting a module without a target is forbidden.
@@ -194,8 +199,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   release together with its
   git tag - the release FIRST, the tag second: a published release whose tag
   vanishes first turns into a draft instead of going away. A draft owns no tag,
-  so none is touched for it. This is the one deletion in the editor that no
-  Recycle Bin backs: GitHub keeps no copy. The window therefore names the
+  so none is touched for it. GitHub keeps no copy. The window therefore names the
   release, its files and the tag, says what players get instead when it is the
   latest one, and keeps Cancel as the default; the MCP path asks nothing and
   never opens a window of the editor. A permission prompt, where one is wanted,
@@ -232,6 +236,13 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   without overwriting `system.ltx` and fighting every other module that wants
   the same. Never generate a whole `system.ltx`, and never patch the game's own
   `npc_profile.xml`: ship OWN files and append their names.
+- **`name` and `bio` carry every language at once** (`SNqValue`: a plain string
+  is rus, a table is keyed by language) and the window edits them side by side,
+  one row per language. Generation FALLS BACK - an English install with no
+  `eng` string reads the `rus` one - but the FORM must not: it binds to the raw
+  stored value (`TextRaw`), or "not set" and "set to the same text" look alike
+  and the author cannot tell them apart. A text that ends up with `rus` alone
+  collapses back to a plain string, so the simple case stays simple in the file.
 - The profile always names the `specific_character` outright. `class` alone
   makes the engine pick a RANDOM character of that class - fine for ambience,
   wrong for the NPC a quest points at.
@@ -322,9 +333,13 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   objects, overwriting existing files, clearing the scene, losing unsaved
   edits. The dialog must NAME what disappears (names, counts), not ask "are
   you sure?"; the safe button is the default (Enter/Escape = cancel).
-- Disk deletion goes to the Recycle Bin (`SHFileOperation` +
-  `FOF_ALLOWUNDO`), not through `DeleteFile`: file operations have no editor
-  undo, and the cost of a miss must be "restore", not "redo".
+- Disk deletion is FINAL: `DeleteFile`/`RemoveDirectory`, never the Recycle
+  Bin. The editor deletes its own generated files and whole throw-away test
+  projects often enough that a bin full of them is a chore of its own; what
+  protects the author is the confirmation that NAMES what disappears, not a
+  copy nobody goes back for. One choke point, `EditorFileOps::Delete`, and it
+  refuses the project root. Say so in the wording: "deleted for good", never
+  "restorable".
 - MCP commands show NO confirmations (the caller already decided) and must
   never hang on a modal — the destructive UI path and the programmatic path
   share the implementation, but not the dialog.
