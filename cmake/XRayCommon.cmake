@@ -47,7 +47,11 @@ function(xray_common target)
     )
 
     target_compile_options(${target} PRIVATE
-        /W0 /GR /Oi /Gy /arch:AVX
+        # /W0 silences the legacy tree, but C4129 stays an ERROR: an
+        # unrecognized escape is the compiler quietly DROPPING a backslash, so
+        # "%s\%s" becomes "%s%s" and a path is built without its separator.
+        # Cost a silent "Create > NPC Scenario does nothing" once already.
+        /W0 /we4129 /GR /Oi /Gy /arch:AVX
         # restores the C++03 functional helpers the modern STL dropped
         $<$<COMPILE_LANGUAGE:CXX>:/FI${XRAY_SOURCE}/xr_msvc_stl_compat.h>
     )

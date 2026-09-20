@@ -2535,6 +2535,26 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    if (0 == xr_strcmp(cmd, "content_create"))
+    {
+        char kind[32] = {};
+        XFinedMCP::GetArg(raw, "kind", kind, sizeof(kind));
+        xr_string made, err;
+        if (!UIContentBrowser::CreateAsset(kind, made, err))
+        {
+            out = "{\"ok\":false,\"error\":\"";
+            out += JsonEscapePath(err.c_str());
+            out += "\"}";
+            return true;
+        }
+        out = "{\"ok\":true,\"kind\":\"";
+        out += JsonEscapePath(kind);
+        out += "\",\"made\":\"";
+        out += JsonEscapePath(made.c_str());
+        out += "\"}";
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "content_browser_selection"))
     {
 		char action[32] = {}, name[512] = {};

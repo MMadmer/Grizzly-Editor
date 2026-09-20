@@ -61,6 +61,12 @@ public:
 	// MCP: apply file-manager selection semantics to an exact entry in the
 	// complete current view, including rows outside the virtualized viewport.
 	static bool		ModifySelection		(LPCSTR action, LPCSTR name, xr_string& err);
+	// MCP: the Create menu, without the menu. `kind` is quest / scenario /
+	// character (a folder has content_mkdir); the asset lands in the open folder,
+	// under the same first-free name the menu would pick, and `made` comes back
+	// project-relative. Nothing is renamed inline - that is the menu's own
+	// flourish and a caller renames through content_rename.
+	static bool		CreateAsset			(LPCSTR kind, xr_string& made, xr_string& err);
 	// MCP: copy items - or a whole folder, subfolders included - out of a
 	// read-only source into the project. Unlike the menu this never prompts;
 	// `overwrite` decides. `names` is a ';'-separated list and may be empty when

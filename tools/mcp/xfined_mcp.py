@@ -304,7 +304,7 @@ TOOLS = [
     },
     {
         "name": "xfined_characters_delete",
-        "description": "Removes a character from the project (the file goes to the Recycle Bin, and "
+        "description": "Removes a character from the project (the file is deleted for good, and "
                        "the next build takes it out of the module). Call it when the user asked for "
                        "this character to go; otherwise ask them first - the editor asks nothing.",
         "annotations": {"title": "Delete a character", "destructiveHint": True},
@@ -740,6 +740,26 @@ TOOLS = [
                 "path": {"type": "string", "description": "folder to create, relative to the project root"},
             },
             "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_content_create",
+        "description": "Create one of the editor's own assets in the folder the content browser has open "
+                       "(the Create menu, without the menu). 'kind' is quest, scenario or character; the "
+                       "file gets the first free NewQuest/NewScenario/NewCharacter name, which "
+                       "xfined_content_rename then changes. A folder is xfined_content_mkdir instead. "
+                       "Returns 'made', the new file project-relative.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["quest", "scenario", "character"],
+                    "description": "quest graph (.nqasset), NPC scenario (.nqasset, type=scenario) "
+                                   "or character (.npcasset)",
+                },
+            },
+            "required": ["kind"],
         },
     },
     {
@@ -1547,6 +1567,7 @@ CMD_MAP = {
     "xfined_content_move": "content_move",
     "xfined_content_delete": "content_delete",
     "xfined_content_mkdir": "content_mkdir",
+    "xfined_content_create": "content_create",
     "xfined_content_rename": "content_rename",
     "xfined_list_commands": "list_commands",
     "xfined_exec_command": "exec_command",

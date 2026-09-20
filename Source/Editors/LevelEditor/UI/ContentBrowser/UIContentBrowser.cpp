@@ -2891,7 +2891,7 @@ void UIContentBrowser::DeleteConfirmed()
 
 	ClearSelection();
 	m_NeedRefresh = true;
-	if (rep.ok())	ELog.Msg(mtInformation, "Deleted %d file(s), %d folder(s) - they are in the Recycle Bin.",
+	if (rep.ok())	ELog.Msg(mtInformation, "Deleted %d file(s), %d folder(s) - permanently.",
 							 rep.files, rep.dirs);
 	else			ELog.DlgMsg(mtError, "Deleted %d file(s); %d failed - %s", rep.files, rep.failed,
 								rep.failures.empty() ? "" : rep.failures[0].reason.c_str());
@@ -2903,7 +2903,7 @@ void UIContentBrowser::DrawConfirmDelete()
 
 	ImGui::TextUnformatted(m_ConfirmText.c_str());
 	ImGui::Separator();
-	ImGui::TextDisabled("Goes to the Recycle Bin - restorable from there.");
+	ImGui::TextDisabled("Deleted for good - this cannot be undone.");
 	ImGui::Spacing();
 
 	// Cancel is the default: Enter and Escape both back out, so a stray keypress
@@ -3322,8 +3322,8 @@ void UIContentBrowser::CreateScenario()
 		char leaf[64];
 		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "NewScenario.nqasset");
 		else		sprintf_s(leaf, "NewScenario%d.nqasset", n);
-		if (m_CurFolder.empty())	sprintf_s(probe, "%s\%s", EditorProject::Root(), leaf);
-		else						sprintf_s(probe, "%s\%s\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
+		if (m_CurFolder.empty())	sprintf_s(probe, "%s\\%s", EditorProject::Root(), leaf);
+		else						sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
 		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
 		{
 			rel = m_CurFolder;
@@ -3378,6 +3378,41 @@ void UIContentBrowser::CreateQuest()
 	Refresh			();
 	ClearSelection	();
 	BeginRename		(rel.c_str());
+}
+
+bool UIContentBrowser::CreateAsset(LPCSTR kind, xr_string& made, xr_string& err)
+{
+	made.clear();
+	err = "";
+	if (!kind || !kind[0])		{ err = "kind must be quest, scenario or character"; return false; }
+	if (!EditorProject::Active())	{ err = "no active project"; return false; }
+	Show();
+	if (!Form)					{ err = "content browser unavailable"; return false; }
+	if (Form->m_Source != 0)	{ err = "only the project source can be written to"; return false; }
+
+	// the menu items are the same three calls; they pick the first free name in
+	// the open folder and refresh, so the answer is whatever appeared
+	xr_vector<xr_string> before;
+	for (u32 i = 0; i < Form->m_Items.size(); ++i)	before.push_back(xr_string(Form->m_Items[i].name.c_str()));
+
+	if		(0 == _stricmp(kind, "quest"))		Form->CreateQuest();
+	else if (0 == _stricmp(kind, "scenario"))	Form->CreateScenario();
+	else if (0 == _stricmp(kind, "character"))	Form->CreateCharacter();
+	else	{ err = "kind must be quest, scenario or character"; return false; }
+
+	// the inline rename box belongs to the menu, not to a programmatic call
+	Form->m_Rename.clear();
+	Form->m_RenameFocus = false;
+
+	for (u32 i = 0; i < Form->m_Items.size(); ++i)
+	{
+		bool had = false;
+		for (u32 k = 0; k < before.size() && !had; ++k)
+			had = (0 == _stricmp(before[k].c_str(), Form->m_Items[i].name.c_str()));
+		if (!had)	{ made = Form->m_Items[i].name.c_str(); return true; }
+	}
+	err = "nothing was created";
+	return false;
 }
 
 void UIContentBrowser::BeginRename(LPCSTR path)
