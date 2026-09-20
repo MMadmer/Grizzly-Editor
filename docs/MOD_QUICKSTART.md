@@ -275,6 +275,61 @@ Problems are coded: `E…` stops a build (no name, no model, an id that is not
 `a-z0-9_`, two characters sharing an id), `W…` does not (a model the linked
 game cannot find, text cp1251 cannot carry).
 
+### One kit, many characters
+
+The tenth guard is the same twenty lines as the first, so a character can start
+from another one. `base` names it; everything this character does not set comes
+from there, and the **starting kits are merged**.
+
+```lua
+-- characters/kit_stalker.npcasset — a template, never a character in the game
+return {
+  npc      = 1,
+  id       = "kit_stalker",
+  abstract = true,
+  supplies = {
+    { section = "device_torch" },
+    { section = "wpn_knife" },
+    { section = "bandage", count = 2 },
+    { section = "medkit", count = 2 },
+    { section = "bread" },
+  },
+}
+```
+
+```lua
+-- characters/guard.npcasset
+return {
+  npc       = 1,
+  id        = "guard",
+  base      = "kit_stalker",
+  name      = "Охранник",
+  community = "dolg",
+  visual    = "actors\\stalker_dolg\\stalker_dolg_1",
+  supplies  = {
+    { section = "wpn_ak74u" },              -- added
+    { section = "medkit", count = 4 },      -- the inherited 2 become 4
+    { section = "bread", count = 0 },       -- the inherited bread is dropped
+  },
+}
+```
+
+| | |
+|---|---|
+| `base` | another character of this project. Chains are fine, a loop is `E112`, a base that does not exist is `E111` |
+| `abstract = true` | a template only: no profile, no spawn section, no string table, and it needs neither a name nor a model |
+| a repeated section | takes the new count, keeping its place in the list |
+| `count = 0` | takes an inherited item out |
+
+The **Characters** window shows what the base already gives, greyed out above
+your own rows, so you do not add the same torch twice.
+
+**The model is fixed.** `visual` is what the NPC spawns with and keeps: in Dead
+Air an outfit changes an NPC's protection, not its model — `ChangeVisual` is
+applied to the player only. A character that should look different is a
+different `visual` (a `base` with everything else shared is exactly the way to
+write that).
+
 **Renaming at run time** is a different thing and belongs to the quest:
 `npc.set_name` gives an NPC a name when the player learns it, and needs no
 profile at all.

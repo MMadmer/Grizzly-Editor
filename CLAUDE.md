@@ -241,6 +241,19 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `character_profile` of a stalker placed in a level.
 - Generated files are listed by `EditorMod::GetOwnedFiles`: the content browser
   hides them, and the last character deleted takes all of them with it.
+- **`base` + `abstract`**: a character starts from another one - unset fields
+  are inherited and the starting KITS ARE MERGED (a repeated section takes the
+  new count and keeps its place, `count = 0` drops an inherited row). An
+  `abstract` character is a template: never a profile, a spawn section or a
+  string-table line, so it needs no name and no model. Resolution happens once
+  (`EditorCharacters::Resolve` / `LoadResolved`) and EVERYTHING downstream
+  - validation, the build, the MCP answers - works on resolved characters;
+  `E111` is a base that does not exist, `E112` a chain that loops. Unset must
+  stay unset in the model (empty string, not the default), or a child would
+  override its base with a default it never asked for.
+- The visual an NPC spawns with is the one it keeps: `ChangeVisual` is applied
+  to the ACTOR only (CustomOutfit.cpp), so an outfit changes an NPC's
+  protection and not its model. A different look is a different character.
 - `npc.set_name` is NOT this. It renames an NPC at run time, for when the player
   learns who someone is; it needs no profile and changes nothing on disk.
 - QA: `tools/qa/test_characters.py --project <project>` runs the whole path over

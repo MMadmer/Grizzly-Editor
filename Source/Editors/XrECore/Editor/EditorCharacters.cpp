@@ -124,11 +124,15 @@ EditorCharacters::SCharacter::SCharacter()	{ Reset(); }
 
 void EditorCharacters::SCharacter::Reset()
 {
-	file.clear();	id.clear();
+	file.clear();	id.clear();	base.clear();
+	abstract_		= false;
 	name = SNqValue();	bio = SNqValue();
-	community		= "stalker";
+	// Empty means UNSET, not "the default": a default written here would
+	// override whatever the base said. The defaults are applied once, after the
+	// chain is flattened.
+	community.clear();
 	visual.clear();	icon.clear();	start_dialog.clear();
-	spec_rank		= "novice";
+	spec_rank.clear();
 	rank			= 0;
 	reputation		= 0;
 	has_rank		= false;
@@ -139,6 +143,7 @@ void EditorCharacters::SCharacter::Reset()
 	money_infinite	= false;
 	supplies.clear();
 	squad			= true;
+	has_squad		= false;
 }
 
 //------------------------------------------------------------------------------
@@ -164,14 +169,17 @@ bool EditorCharacters::Parse(LPCSTR text, u32 len, LPCSTR chunk_name, SCharacter
 	}
 
 	c.id			= v.GetString("id");
+	c.base			= v.GetString("base");
+	c.abstract_		= v.GetBool("abstract", false);
 	if (const SNqValue* n = v.Get("name"))	c.name = *n;
 	if (const SNqValue* b = v.Get("bio"))	c.bio  = *b;
-	c.community		= v.GetString("community", "stalker");
+	c.community		= v.GetString("community");
 	c.visual		= v.GetString("visual");
 	c.icon			= v.GetString("icon");
 	c.start_dialog	= v.GetString("start_dialog");
-	c.spec_rank		= v.GetString("spec_rank", "novice");
-	c.squad			= v.GetBool("squad", true);
+	c.spec_rank		= v.GetString("spec_rank");
+	if (const SNqValue* sq = v.Get("squad"))
+		if (sq->IsBool())	{ c.squad = sq->b; c.has_squad = true; }
 
 	if (const SNqValue* r = v.Get("rank"))
 		if (r->IsNumber())	{ c.rank = int(r->n); c.has_rank = true; }
@@ -200,7 +208,8 @@ bool EditorCharacters::Parse(LPCSTR text, u32 len, LPCSTR chunk_name, SCharacter
 				item.section	= row.GetString("section");
 				item.count		= int(row.GetNumber("count", 1.0));
 			}
-			if (item.count < 1)			item.count = 1;
+			// 0 is meaningful: it takes an inherited row away again
+			if (item.count < 0)			item.count = 0;
 			if (!item.section.empty())	c.supplies.push_back(item);
 		}
 
@@ -236,16 +245,21 @@ xr_string EditorCharacters::Write(const SCharacter& c)
 	s += "return {\n";
 	s += "\tnpc       = 1,\n";
 	s += "\tid        = " + LuaString(c.id) + ",\n";
+	if (!c.base.empty())
+		s += "\tbase      = " + LuaString(c.base) + ",\n";
+	if (c.abstract_)
+		s += "\tabstract  = true,\n";
 	if (!TextEmpty(c.name))
 		s += "\tname      = " + NqLua::WriteValue(c.name, 1) + ",\n";
 	if (!TextEmpty(c.bio))
 		s += "\tbio       = " + NqLua::WriteValue(c.bio, 1) + ",\n";
-	s += "\tcommunity = " + LuaString(c.community) + ",\n";
+	if (!c.community.empty())
+		s += "\tcommunity = " + LuaString(c.community) + ",\n";
 	if (!c.visual.empty())
 		s += "\tvisual    = " + LuaString(c.visual) + ",\n";
 	if (!c.icon.empty())
 		s += "\ticon      = " + LuaString(c.icon) + ",\n";
-	if (!c.spec_rank.empty() && c.spec_rank != "novice")
+	if (!c.spec_rank.empty())
 		s += "\tspec_rank = " + LuaString(c.spec_rank) + ",\n";
 	if (c.has_rank)
 		s += NqUtil::Format("\trank      = %d,\n", c.rank);
@@ -271,7 +285,7 @@ xr_string EditorCharacters::Write(const SCharacter& c)
 	}
 	if (!c.start_dialog.empty())
 		s += "\tstart_dialog = " + LuaString(c.start_dialog) + ",\n";
-	if (!c.squad)
+	if (c.has_squad && !c.squad)
 		s += "\tsquad     = false,\n";
 	s += "}\n";
 	return s;
@@ -288,6 +302,7 @@ xr_string EditorCharacters::Template(LPCSTR id)
 	c.id		= id && id[0] ? NqText::IdFromName(id) : xr_string("new_character");
 	// a placeholder the author replaces - the name is what the player reads,
 	// so it belongs to the mod's language, not to the editor's
+	c.community	= "stalker";
 	c.name		= SNqValue::String("New character");
 	c.visual	= "actors\\stalker_neutral\\stalker_neutral_1";
 	c.icon		= "ui_npc_u_stalker_neutral_1";
@@ -347,6 +362,153 @@ void EditorCharacters::LoadAll(LPCSTR project_root, xr_vector<SCharacter>& out,
 }
 
 //------------------------------------------------------------------------------
+// inheritance
+//
+// The tenth guard of a mod is the same twenty lines as the first. `base` names
+// another character to start from: every field this one does not set comes from
+// there, and the kits are MERGED - the base's items plus these, a row with the
+// same section replacing the inherited one, and count = 0 taking one away.
+//
+// A character marked `abstract` exists only to be inherited from: it never
+// becomes a profile, a spawn section or a line in the string table, so it needs
+// neither a name nor a model.
+//------------------------------------------------------------------------------
+namespace
+{
+const EditorCharacters::SCharacter* ById(const xr_vector<EditorCharacters::SCharacter>& all,
+										 const xr_string& id)
+{
+	for (u32 i = 0; i < all.size(); ++i)
+		if (all[i].id == id) return &all[i];
+	return 0;
+}
+
+// `src` wins wherever it actually says something; everything else stays.
+void ApplyOver(EditorCharacters::SCharacter& dst, const EditorCharacters::SCharacter& src)
+{
+	if (!src.name.IsNil())			dst.name		= src.name;
+	if (!src.bio.IsNil())			dst.bio			= src.bio;
+	if (!src.community.empty())		dst.community	= src.community;
+	if (!src.visual.empty())		dst.visual		= src.visual;
+	if (!src.icon.empty())			dst.icon		= src.icon;
+	if (!src.start_dialog.empty())	dst.start_dialog= src.start_dialog;
+	if (!src.spec_rank.empty())		dst.spec_rank	= src.spec_rank;
+	if (src.has_rank)				{ dst.rank = src.rank; dst.has_rank = true; }
+	if (src.has_reputation)			{ dst.reputation = src.reputation; dst.has_reputation = true; }
+	if (src.has_money)
+	{
+		dst.has_money		= true;
+		dst.money_min		= src.money_min;
+		dst.money_max		= src.money_max;
+		dst.money_infinite	= src.money_infinite;
+	}
+	if (src.has_squad)				{ dst.squad = src.squad; dst.has_squad = true; }
+
+	// the kit: the inherited rows keep their place, a repeat of a section takes
+	// over its count, a new section is appended, and zero means "not this one"
+	for (u32 i = 0; i < src.supplies.size(); ++i)
+	{
+		bool replaced = false;
+		for (u32 j = 0; j < dst.supplies.size(); ++j)
+			if (0 == _stricmp(dst.supplies[j].section.c_str(), src.supplies[i].section.c_str()))
+			{
+				dst.supplies[j].count = src.supplies[i].count;
+				replaced = true;
+				break;
+			}
+		if (!replaced) dst.supplies.push_back(src.supplies[i]);
+	}
+}
+
+void DropEmptyRows(xr_vector<EditorCharacters::SSupply>& rows)
+{
+	for (u32 i = 0; i < rows.size(); )
+		if (rows[i].count < 1)	rows.erase(rows.begin() + i);
+		else					++i;
+}
+} // namespace
+
+void EditorCharacters::Resolve(xr_vector<SCharacter>& all, xr_vector<xr_string>& problems)
+{
+	const xr_vector<SCharacter> raw = all;		// the chain is walked over the originals
+
+	for (u32 i = 0; i < all.size(); ++i)
+	{
+		SCharacter& c	= all[i];
+		const xr_string where = c.file.empty()
+			? c.id
+			: NqUtil::ProjectRelative(c.file.c_str());
+
+		if (!c.base.empty())
+		{
+			xr_vector<const SCharacter*>	chain;
+			xr_string						next = c.base;
+			bool							broken = false;
+
+			while (!next.empty())
+			{
+				if (next == c.id)
+				{
+					problems.push_back("E112 " + where + ": '" + c.id + "' inherits from itself");
+					broken = true;
+					break;
+				}
+				const SCharacter* b = ById(raw, next);
+				if (!b)
+				{
+					problems.push_back("E111 " + where + ": there is no character '" + next +
+						"' to inherit from");
+					broken = true;
+					break;
+				}
+				bool seen = false;
+				for (u32 k = 0; k < chain.size(); ++k)
+					if (chain[k] == b) seen = true;
+				if (seen || chain.size() > 32)
+				{
+					problems.push_back("E112 " + where + ": the base chain of '" + c.id +
+						"' comes back to where it started");
+					broken = true;
+					break;
+				}
+				chain.push_back(b);
+				next = b->base;
+			}
+			if (broken)
+			{
+				DropEmptyRows(c.supplies);
+				continue;
+			}
+
+			SCharacter merged;
+			merged.Reset();
+			// deepest base first, then each one closer, then the character itself
+			for (int k = (int)chain.size() - 1; k >= 0; --k)
+				ApplyOver(merged, *chain[k]);
+			ApplyOver(merged, c);
+
+			merged.file			= c.file;
+			merged.id			= c.id;
+			merged.base			= c.base;
+			merged.abstract_	= c.abstract_;
+			c = merged;
+		}
+
+		DropEmptyRows(c.supplies);
+		// the defaults, once, where they cannot override a base
+		if (c.community.empty())	c.community = "stalker";
+		if (c.spec_rank.empty())	c.spec_rank = "novice";
+	}
+}
+
+void EditorCharacters::LoadResolved(LPCSTR project_root, xr_vector<SCharacter>& out,
+									xr_vector<xr_string>& problems)
+{
+	LoadAll(project_root, out, problems);
+	Resolve(out, problems);
+}
+
+//------------------------------------------------------------------------------
 // validation
 //------------------------------------------------------------------------------
 void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector<xr_string>& problems)
@@ -359,12 +521,14 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 		problems.push_back("E102 " + where + ": id '" + c.id +
 			"' is not usable (a-z, 0-9 and _, not starting with a digit, up to 48)");
 
-	if (TextEmpty(c.name))
+	// A template is not a character: it exists to be inherited from, so it owes
+	// the player nothing.
+	if (!c.abstract_ && TextEmpty(c.name))
 		problems.push_back("E103 " + where + ": no name - it is what the player reads");
 
-	if (c.visual.empty())
+	if (!c.abstract_ && c.visual.empty())
 		problems.push_back("E104 " + where + ": no visual - an NPC without a model cannot spawn");
-	else if (linked_game && EditorGameContent::Mounted())
+	else if (!c.visual.empty() && linked_game && EditorGameContent::Mounted())
 	{
 		// Looked up in the linked game's content index, which is where an
 		// actor model lives; a model the project brings itself is staged by
@@ -375,9 +539,6 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 			problems.push_back("W105 " + where + ": the linked game has no model at '" +
 				rel + "' - check it is staged in the project");
 	}
-
-	if (c.community.empty())
-		problems.push_back("E106 " + where + ": no community");
 
 	// A text that cp1251 cannot carry silently loses characters in game: the
 	// string table, like every other game config, is cp1251.
@@ -397,6 +558,8 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 	{
 		if (c.supplies[i].section.empty())
 			problems.push_back("E108 " + where + ": a supply row without a section");
+		// a zero is how an inherited row is taken away, and it is gone by now;
+		// a negative one never meant anything
 		if (c.supplies[i].count < 1)
 			problems.push_back("E109 " + where + ": supply '" + c.supplies[i].section +
 				"' asks for less than one item");
@@ -409,7 +572,7 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 void EditorCharacters::ValidateAll(LPCSTR project_root, bool linked_game, xr_vector<xr_string>& problems)
 {
 	xr_vector<SCharacter> all;
-	LoadAll(project_root, all, problems);
+	LoadResolved(project_root, all, problems);
 	for (u32 i = 0; i < all.size(); ++i)
 		Validate(all[i], linked_game, problems);
 }
@@ -479,7 +642,7 @@ bool EditorCharacters::Generate(LPCSTR project_root, LPCSTR module_id, int& writ
 
 	xr_vector<SCharacter>	all;
 	xr_vector<xr_string>	problems;
-	LoadAll(project_root, all, problems);
+	LoadResolved(project_root, all, problems);
 	// A character that does not parse must stop the build: shipping half a
 	// roster produces a module whose quests point at NPCs that do not exist.
 	for (u32 i = 0; i < problems.size(); ++i)
@@ -488,6 +651,11 @@ bool EditorCharacters::Generate(LPCSTR project_root, LPCSTR module_id, int& writ
 			err = problems[i];
 			return false;
 		}
+
+	// templates are not characters: they exist for the others to inherit from
+	for (u32 i = 0; i < all.size(); )
+		if (all[i].abstract_)	all.erase(all.begin() + i);
+		else					++i;
 
 	if (all.empty())
 	{
@@ -687,6 +855,10 @@ void JsonCharacter(xr_string& out, const EditorCharacters::SCharacter& c)
 	NqUtil::JsonString(out, c.community);
 	out += ",\"visual\":";
 	NqUtil::JsonPath(out, c.visual.c_str());
+	out += ",\"base\":";
+	NqUtil::JsonString(out, c.base);
+	out += ",\"abstract\":";
+	NqUtil::JsonBool(out, c.abstract_);
 	out += ",\"supplies\":";
 	NqUtil::JsonInt(out, (int)c.supplies.size());
 	out += ",\"squad\":";
@@ -702,7 +874,7 @@ void EditorCharacters::McpList(LPCSTR raw, xr_string& out)
 
 	xr_vector<SCharacter>	all;
 	xr_vector<xr_string>	problems;
-	LoadAll(EditorProject::Root(), all, problems);
+	LoadResolved(EditorProject::Root(), all, problems);
 	for (u32 i = 0; i < all.size(); ++i)
 		Validate(all[i], EditorGameContent::Mounted(), problems);
 
@@ -732,7 +904,14 @@ void EditorCharacters::McpGet(LPCSTR raw, xr_string& out)
 	SCharacter c;
 	if (!Load(abs.c_str(), c, err))		{ NqUtil::JsonError(out, err); return; }
 
-	xr_vector<xr_string> problems;
+	// the answer describes what the character REALLY is, base chain and all;
+	// `text` below is still the file as written
+	xr_vector<SCharacter>	all;
+	xr_vector<xr_string>	problems;
+	LoadResolved(EditorProject::Root(), all, problems);
+	problems.clear();
+	for (u32 i = 0; i < all.size(); ++i)
+		if (all[i].id == c.id)	{ c = all[i]; break; }
 	Validate(c, EditorGameContent::Mounted(), problems);
 
 	xr_string text;
@@ -780,8 +959,21 @@ void EditorCharacters::McpWrite(LPCSTR raw, xr_string& out)
 	if (!NqLua::WriteFile(abs.c_str(), text, err))	{ NqUtil::JsonError(out, err); return; }
 
 	c.file = abs;
-	xr_vector<xr_string> problems;
-	Validate(c, EditorGameContent::Mounted(), problems);
+	// Validate what it RESOLVES to, not what the file literally says: a count of
+	// 0 is how an inherited row is dropped, and a base that does not exist only
+	// shows up once the chain is walked. The file is already on disk, so the
+	// resolve sees this write.
+	xr_vector<SCharacter>	all;
+	xr_vector<xr_string>	problems;
+	LoadResolved(EditorProject::Root(), all, problems);
+	xr_vector<xr_string> own;
+	for (u32 i = 0; i < problems.size(); ++i)
+		if (problems[i].find(NqUtil::ProjectRelative(abs.c_str())) != xr_string::npos)
+			own.push_back(problems[i]);
+	for (u32 i = 0; i < all.size(); ++i)
+		if (all[i].id == c.id)	{ c = all[i]; break; }
+	Validate(c, EditorGameContent::Mounted(), own);
+	problems = own;
 
 	out = "{\"ok\":true,\"file\":";
 	NqUtil::JsonPath(out, NqUtil::ProjectRelative(abs.c_str()).c_str());
@@ -836,7 +1028,10 @@ int							s_Lang			= 0;			// 0 = rus, 1 = eng
 xr_string					s_Status;
 xr_string					s_PendingOpen;
 
+xr_vector<EditorCharacters::SSupply>	s_Inherited;	// what the base contributes
+
 char	s_Id[64]		= "";
+char	s_Base[64]		= "";
 char	s_Name[256]		= "";
 char	s_Bio[1024]		= "";
 char	s_Community[64]	= "";
@@ -877,9 +1072,26 @@ void CopyTo(char* dst, u32 size, const xr_string& src)
 	strncpy_s(dst, size, src.c_str(), _TRUNCATE);
 }
 
+// What the base chain gives this character, so the form can show the kit that
+// is already there instead of letting the author add it a second time.
+void RecomputeInherited()
+{
+	s_Inherited.clear();
+	if (s_Edit.base.empty() || !EditorProject::Active())	return;
+
+	xr_vector<EditorCharacters::SCharacter>	all;
+	xr_vector<xr_string>					ignored;
+	EditorCharacters::LoadAll(EditorProject::Root(), all, ignored);
+	// ask for the BASE resolved, which is exactly what this character starts from
+	EditorCharacters::Resolve(all, ignored);
+	for (u32 i = 0; i < all.size(); ++i)
+		if (all[i].id == s_Edit.base)	{ s_Inherited = all[i].supplies; return; }
+}
+
 void PullToBuffers()
 {
 	CopyTo(s_Id, sizeof(s_Id), s_Edit.id);
+	CopyTo(s_Base, sizeof(s_Base), s_Edit.base);
 	CopyTo(s_Name, sizeof(s_Name), TextIn(s_Edit.name, LangName(s_Lang)));
 	CopyTo(s_Bio, sizeof(s_Bio), TextIn(s_Edit.bio, LangName(s_Lang)));
 	CopyTo(s_Community, sizeof(s_Community), s_Edit.community);
@@ -895,6 +1107,7 @@ void SelectIndex(int index)
 	else										s_Edit.Reset();
 	s_Dirty = false;
 	PullToBuffers();
+	RecomputeInherited();
 }
 
 void ReloadAll()
@@ -1031,6 +1244,7 @@ void EditorCharacters::DrawUI()
 			if (!taken)	break;
 			c.id = NqUtil::Format("new_character_%d", n);
 		}
+		c.community	= "stalker";
 		c.name		= SNqValue::String("New character");
 		c.visual	= "actors\\stalker_neutral\\stalker_neutral_1";
 		c.icon		= "ui_npc_u_stalker_neutral_1";
@@ -1084,6 +1298,24 @@ void EditorCharacters::DrawUI()
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("a-z, 0-9 and _. The game knows the character as %s_<id>.",
 			mod.empty() ? "<module>" : mod.c_str());
+
+	ImGui::Text("Base");		ImGui::SameLine(label_w);
+	if (ImGui::InputText("##base", s_Base, sizeof(s_Base)))
+	{
+		changed = true;
+		s_Edit.base = s_Base;
+		RecomputeInherited();
+	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Another character to start from: everything this one does not set\n"
+						  "comes from there, and the starting kits are merged. Leave it empty\n"
+						  "for a character that stands on its own.");
+
+	ImGui::Text("Template");	ImGui::SameLine(label_w);
+	if (ImGui::Checkbox("##abstract", &s_Edit.abstract_))	changed = true;
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("A template only: never becomes a character in the game, so it needs\n"
+						  "no name and no model. Use it to hold a kit several characters share.");
 
 	ImGui::Text("Language");	ImGui::SameLine(label_w);
 	ImGui::PushItemWidth(em * 6.f);
@@ -1154,6 +1386,15 @@ void EditorCharacters::DrawUI()
 		s_Edit.supplies.push_back(SSupply());
 		changed = true;
 	}
+	// what the base already gives: shown, not editable, and not repeated below
+	for (u32 i = 0; i < s_Inherited.size(); ++i)
+	{
+		ImGui::TextDisabled("%s x%d", s_Inherited[i].section.c_str(), s_Inherited[i].count);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("from %s - add a row with the same section to change the count,\n"
+							  "or a count of 0 to take it out", s_Edit.base.c_str());
+	}
+
 	int remove = -1;
 	for (u32 i = 0; i < s_Edit.supplies.size(); ++i)
 	{
@@ -1170,7 +1411,11 @@ void EditorCharacters::DrawUI()
 		ImGui::SameLine();
 		ImGui::PushItemWidth(em * 5.f);
 		if (ImGui::InputInt("##count", &s_Edit.supplies[i].count, 0, 0))	changed = true;
-		if (s_Edit.supplies[i].count < 1)	s_Edit.supplies[i].count = 1;
+		// 0 stays: with a base it means "not this one". Below zero never meant
+		// anything.
+		if (s_Edit.supplies[i].count < 0)	s_Edit.supplies[i].count = 0;
+		if (s_Edit.supplies[i].count == 0 && s_Inherited.empty())
+			s_Edit.supplies[i].count = 1;
 		ImGui::PopItemWidth();
 		ImGui::SameLine();
 		if (ImGui::SmallButton("x"))	remove = (int)i;
@@ -1202,6 +1447,7 @@ void EditorCharacters::DrawUI()
 	if (changed)
 	{
 		s_Edit.id			= s_Id;
+		s_Edit.base			= s_Base;
 		s_Edit.community	= s_Community;
 		s_Edit.visual		= s_Visual;
 		s_Edit.icon			= s_Icon;

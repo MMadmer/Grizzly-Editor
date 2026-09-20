@@ -56,6 +56,8 @@ namespace EditorCharacters
 	struct SSupply
 	{
 		xr_string	section;
+		// how many; 0 means "drop what the base gave me", which is the only way
+		// to take one item out of an inherited kit
 		int			count;
 
 					SSupply	() : count(1) {}
@@ -65,6 +67,15 @@ namespace EditorCharacters
 	{
 		xr_string	file;			// absolute path of the .npcasset (empty for a new one)
 		xr_string	id;				// [a-z0-9_], unique in the module
+		// Another character of this project to start from: every field this one
+		// does not set comes from there, and the kits are merged. A chain is
+		// allowed, a cycle is not. This is what stops the tenth guard from being
+		// the same twenty lines again.
+		xr_string	base;
+		// A template, never a character in the game: no profile, no spawn
+		// section, no string table. It exists to be inherited from, so it needs
+		// no name and no model of its own.
+		bool		abstract_;
 
 		SNqValue	name;			// string, or a table keyed by language
 		SNqValue	bio;
@@ -88,6 +99,7 @@ namespace EditorCharacters
 		xr_vector<SSupply>	supplies;
 
 		bool		squad;			// emit the one-man squad section (default true)
+		bool		has_squad;		// set here, or inherited from the base
 
 					SCharacter	();
 		void		Reset		();
@@ -111,6 +123,16 @@ namespace EditorCharacters
 	// "<module>_<id>" - the id the game knows the character by, in the profile
 	// list, the spawn section and the squad section alike
 	ECORE_API xr_string	GameId		(LPCSTR module_id, LPCSTR char_id);
+
+	// Flattens every `base` chain in place: each character comes back with the
+	// fields and the kit it really has. A missing base or a cycle is reported
+	// instead of looped over. Abstract characters stay in the list - the editor
+	// still shows them, the BUILD is what leaves them out.
+	ECORE_API void		Resolve		(xr_vector<SCharacter>& all, xr_vector<xr_string>& problems);
+	// Everything, resolved, in one call - what the build, the validator and the
+	// MCP answers all want.
+	ECORE_API void		LoadResolved(LPCSTR project_root, xr_vector<SCharacter>& out,
+									 xr_vector<xr_string>& problems);
 
 	// -- validation ----------------------------------------------------------
 	// Coded problems, the way quests report them: E<nnn> is fatal for a build,

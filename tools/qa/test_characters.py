@@ -123,6 +123,114 @@ BROKEN = """return {
 """
 
 
+KIT = """return {
+    npc      = 1,
+    id       = "qa_kit",
+    abstract = true,
+    community = "stalker",
+    rank     = 250,
+    supplies = {
+        { section = "device_torch" },
+        { section = "wpn_knife" },
+        { section = "bandage", count = 2 },
+        { section = "medkit", count = 2 },
+        { section = "bread" },
+    },
+}
+"""
+
+GUARD_KIT = """return {
+    npc      = 1,
+    id       = "qa_kitguard",
+    base     = "qa_kit",
+    name     = "Guard",
+    visual   = "actors\\\\stalker_dolg\\\\stalker_dolg_1",
+    community = "dolg",
+    supplies = {
+        { section = "wpn_ak74u" },
+        { section = "medkit", count = 4 },
+        { section = "bread", count = 0 },
+    },
+}
+"""
+
+NO_BASE = """return {
+    npc    = 1,
+    id     = "qa_orphan",
+    base   = "qa_nothing",
+    name   = "Orphan",
+    visual = "actors\\\\stalker_neutral\\\\stalker_neutral_1",
+}
+"""
+
+LOOP_A = """return {
+    npc = 1, id = "qa_loop_a", base = "qa_loop_b", name = "A",
+    visual = "actors\\\\stalker_neutral\\\\stalker_neutral_1",
+}
+"""
+
+LOOP_B = """return {
+    npc = 1, id = "qa_loop_b", base = "qa_loop_a", name = "B",
+    visual = "actors\\\\stalker_neutral\\\\stalker_neutral_1",
+}
+"""
+
+
+def run_base_checks(mcp, check, read, module, out_dir, os, json):
+    """Inheritance: a shared kit written once, and what refuses to inherit."""
+    k = mcp("characters_write", text=KIT)
+    check(k.get("ok"), "E a template is written", json.dumps(k)[:200])
+    check(k.get("character", {}).get("abstract") is True, "E and says it is one")
+    check(k.get("problems") == [], "E a template needs no name and no model",
+          json.dumps(k.get("problems")))
+
+    g = mcp("characters_write", text=GUARD_KIT)
+    check(g.get("ok"), "E a character inherits from it", json.dumps(g)[:200])
+    check(g.get("problems") == [], "E with no problems", json.dumps(g.get("problems")))
+
+    got = mcp("characters_get", id="qa_kitguard")
+    ch = got.get("character", {})
+    check(ch.get("base") == "qa_kit", "E it reports its base")
+    # torch, knife, bandage, medkit(4), ak74u  - bread was taken out by count = 0
+    check(ch.get("supplies") == 5, "E the kit is the base plus its own, merged",
+          str(ch.get("supplies")))
+
+    built = mcp("mod_export", target=out_dir)
+    check(built.get("ok"), "E the module builds", json.dumps(built)[:200])
+    root = os.path.join(out_dir, "modules", module)
+    desc = read(os.path.join(root, "gamedata", "configs", "gameplay",
+                             "character_desc_%s.xml" % module))
+    ltx = read(os.path.join(root, "gamedata", "configs", "xms", "%s_npc.ltx" % module))
+
+    gid = "%s_qa_kitguard" % module
+    check('<specific_character id="%s"' % gid in desc, "E the character is in the module")
+    check('<specific_character id="%s_qa_kit"' % module not in desc,
+          "E the template is NOT - it was never a character")
+    check("[%s_qa_kit]" % module not in ltx, "E and has no spawn section either")
+
+    block = desc.split('<specific_character id="%s"' % gid)[1].split("</specific_character>")[0]
+    check("device_torch \\n" in block and "wpn_knife \\n" in block,
+          "E the inherited items are in its kit")
+    check("medkit = 4 \\n" in block and "medkit = 2 \\n" not in block,
+          "E a repeated section takes the new count")
+    check("bread" not in block, "E and a count of 0 takes an inherited item away")
+    check("wpn_ak74u \\n" in block, "E its own items are there too")
+    check("<rank>250</rank>" in block, "E a field it does not set comes from the base")
+    check("<community>dolg</community>" in block, "E one it does set wins")
+
+    o = mcp("characters_write", text=NO_BASE)
+    check("E111" in " ".join(o.get("problems", [])), "E a base that does not exist is reported",
+          json.dumps(o.get("problems")))
+    mcp("characters_write", text=LOOP_A)
+    l = mcp("characters_write", text=LOOP_B)
+    check("E112" in " ".join(mcp("characters_list").get("problems", [])),
+          "E a base that comes back to itself is reported",
+          json.dumps(mcp("characters_list").get("problems"))[:200])
+
+    for gone in ("qa_orphan", "qa_loop_a", "qa_loop_b", "qa_kitguard", "qa_kit"):
+        mcp("characters_delete", id=gone)
+
+
 def read(path: str) -> str:
     with open(path, "rb") as f:
         return f.read().decode("cp1251", "replace")
@@ -220,6 +328,9 @@ def run(project: str) -> None:
         check("Courier" in s_eng, "C eng name is in place")
         check(f"{module}_qa_guard_name" in s_rus and "Guard" in s_rus,
               "C a single-language name lands in rus")
+
+        # ---------------------------------------------------------------- E: inheritance
+        run_base_checks(mcp, check, read, module, out_dir, os, json)
 
         # ---------------------------------------------------------------- D: removal
         d1 = mcp("characters_delete", id="qa_guard")
