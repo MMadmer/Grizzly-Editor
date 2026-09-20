@@ -259,6 +259,64 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_characters_list",
+        "description": "The module's OWN NPCs - one .npcasset per character. Returns "
+                       "characters [{id, file, name, community, visual, supplies, squad}] and the "
+                       "problems found in them (E... blocks a build, W... does not). The game knows "
+                       "each one as <module>_<id>, which is the spawn section a quest spawns and the "
+                       "character_profile a placed stalker carries.",
+        "annotations": {"title": "List the mod's characters", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_characters_get",
+        "description": "One character: its parsed fields, its problems and the whole file text. "
+                       "Name it by 'id' or by 'path'.",
+        "annotations": {"title": "Read a character", "readOnlyHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "character id, as xfined_characters_list reports it"},
+                "path": {"type": "string", "description": "project-relative path of the .npcasset"},
+            },
+        },
+    },
+    {
+        "name": "xfined_characters_write",
+        "description": "Creates or replaces a character. 'text' is the whole file: a declarative Lua "
+                       "table - return { npc = 1, id = ..., name = ..., community = ..., visual = ..., "
+                       "rank = ..., money = { min = ..., max = ... }, supplies = { { section = ..., "
+                       "count = ... }, ... } }. name and bio are a string or a table keyed by language "
+                       "({ rus = ..., eng = ... }). Without 'path' or 'id' the file is created at "
+                       "characters/<id>.npcasset. The build turns it into the module's character_desc, "
+                       "profile, string table, spawn section and the .ltxp patch that makes the game "
+                       "read them - nothing of the game is overwritten.",
+        "annotations": {"title": "Write a character", "idempotentHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "the whole .npcasset body"},
+                "id": {"type": "string", "description": "existing character to replace"},
+                "path": {"type": "string", "description": "project-relative path to write"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "xfined_characters_delete",
+        "description": "Removes a character from the project (the file goes to the Recycle Bin, and "
+                       "the next build takes it out of the module). Call it when the user asked for "
+                       "this character to go; otherwise ask them first - the editor asks nothing.",
+        "annotations": {"title": "Delete a character", "destructiveHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "path": {"type": "string"},
+            },
+        },
+    },
+    {
         "name": "xfined_mod_releases",
         "description": "The releases the manifest's 'github' repository already holds, newest first, drafts included: "
                        "releases [{id, tag, title, notes, draft, prerelease, latest, published (UTC), url, bytes, assets}]. "
@@ -1463,6 +1521,10 @@ CMD_MAP = {
     "xfined_mod_publish": "mod_publish",
     "xfined_mod_releases": "mod_releases",
     "xfined_mod_release_delete": "mod_releases",
+    "xfined_characters_list": "characters_list",
+    "xfined_characters_get": "characters_get",
+    "xfined_characters_write": "characters_write",
+    "xfined_characters_delete": "characters_delete",
     "xfined_mod_release_edit": "mod_releases",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",

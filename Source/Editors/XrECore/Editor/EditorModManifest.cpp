@@ -2,6 +2,7 @@
 #include "EditorGameContent.h"
 #include "EditorGameModes.h"
 #include "EditorModManifest.h"
+#include "EditorCharacters.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
 #include "ui_main.h"
@@ -786,6 +787,9 @@ void EditorMod::GetOwnedFiles(LPCSTR project_root, xr_vector<xr_string>& rel)
 		rel.push_back(xr_string("gamedata\\configs\\text\\rus\\") + m.id + "_modes.xml");
 		rel.push_back(xr_string("gamedata\\configs\\ui\\") + m.id + "_modes.xml");
 		rel.push_back(xr_string("gamedata\\configs\\ui\\") + m.id + "_modes_16.xml");
+		// the generated half of every character: hidden from the browser and
+		// removed with the last .npcasset, exactly like the mode files above
+		EditorCharacters::GeneratedFiles(m.id.c_str(), rel);
 	}
 }
 
@@ -1151,6 +1155,17 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	// that put it on the new-game screen are generated as part of the export.
 	if (!flat && !WriteModeRegistration(project_root, m, err))
 		return false;
+
+	// The module's own characters: one .npcasset each becomes a character_desc
+	// entry, a profile, a string table, a spawn section and the .ltxp patch
+	// that makes the game read all of it. Generated here so that a build always
+	// ships what the assets currently say - and a deleted character takes its
+	// generated half with it.
+	{
+		int characters = 0;
+		if (!EditorCharacters::Generate(project_root, m.id.c_str(), characters, err))
+			return false;
+	}
 
 	char target[MAX_PATH] = {};
 	NormalizePath(target_root ? target_root : "", target, sizeof(target));

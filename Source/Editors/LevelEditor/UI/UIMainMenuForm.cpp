@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
+#include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
 #include "UITitleBar.h"
@@ -88,6 +89,11 @@ void UIMainMenuForm::Draw()
 
             if (ImGui::MenuItem("Build to Another Folder...", ""))	EditorMod::RequestExportModule();
             if (ImGui::MenuItem("Export Flat Gamedata...", ""))		EditorMod::RequestExportFlat();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Characters...", ""))				EditorCharacters::Show();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The module's own NPCs: name, model, community and starting kit.\nThe build turns each one into a character profile and a spawn section of its own.");
+            ImGui::Separator();
             if (ImGui::MenuItem("Package Release...", ""))			EditorMod::RequestPackageRelease();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Zip package(s) and the update descriptor for a GitHub release.\nThe zip installs by extraction into the game folder; the Mods menu updates from it.");

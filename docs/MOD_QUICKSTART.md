@@ -217,6 +217,68 @@ Scene edits don't ship by themselves; they get baked into module files first.
 
 These write into the project. The next build ships them.
 
+## 5a. Characters — the mod's own NPCs
+
+**Mod → Characters…** · content browser **Create → Character** ·
+`xfined_characters_write`
+
+A story needs stalkers of its own. One `.npcasset` file per character:
+
+```lua
+return {
+  npc       = 1,
+  id        = "courier",
+  name      = { rus = "Курьер", eng = "Courier" },
+  community = "stalker",
+  visual    = "actors\\stalker_neutral\\stalker_neutral_1",
+  icon      = "ui_npc_u_stalker_neutral_1",
+  rank      = 300,
+  money     = { min = 500, max = 1500 },
+  supplies  = {
+    { section = "wpn_ak74u", count = 1 },
+    { section = "ammo_5.45x39_fmj", count = 3 },
+    { section = "medkit" },
+  },
+}
+```
+
+The build turns every character into the five files X-Ray wants and **appends**
+them to the game's lists instead of overwriting anything:
+
+| generated | what it is |
+|---|---|
+| `gamedata\configs\gameplay\character_desc_<module>.xml` | the character itself |
+| `gamedata\configs\gameplay\npc_profile_<module>.xml` | its profile, naming it outright so the engine cannot pick someone else |
+| `gamedata\configs\text\<lang>\<module>_npc.xml` | the name and the bio |
+| `gamedata\configs\xms\<module>_npc.ltx` | the spawn section and a one-man squad |
+| `patch\<module>_characters.ltxp` | `+files` / `+specific_characters_files` — `+` APPENDS |
+
+Nothing of the game and nothing of another module is touched. Delete the
+`.npcasset` and the next build takes all of that back out.
+
+**The game knows the character as `<module>_<id>`**, and that one name is three
+things at once:
+
+- a **spawn section** — it shows up in the editor's spawn roster, so the
+  character can be placed in a level by hand, and `spawn.object` creates it;
+- a **squad section** `<module>_<id>_squad` — what `spawn.squad` takes;
+- a **character profile** — what a stalker you placed yourself carries in its
+  `character_profile` property.
+
+Fields: `name` and `bio` are a string or a table keyed by language; `community`
+is one of the game's (`stalker`, `bandit`, `dolg`, `freedom`, `ecolog`,
+`killer`, `army`, `monolith`, `zombied`); `visual` is meshes-relative with the
+extension optional; `rank` runs 0-1000 (novice to master); `supplies` is the
+starting kit; `squad = false` leaves the squad section out.
+
+Problems are coded: `E…` stops a build (no name, no model, an id that is not
+`a-z0-9_`, two characters sharing an id), `W…` does not (a model the linked
+game cannot find, text cp1251 cannot carry).
+
+**Renaming at run time** is a different thing and belongs to the quest:
+`npc.set_name` gives an NPC a name when the player learns it, and needs no
+profile at all.
+
 ## 6. Quests (NQ)
 
 A quest is a node graph in its own file. Make one in the Content Browser —

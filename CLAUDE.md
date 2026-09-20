@@ -217,6 +217,35 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The device sign-in ("Sign in with GitHub") stays hidden until `kClientId` in
   `EditorGithub.cpp` holds the client id of the editor's GitHub OAuth app.
 
+## Characters (the module's own NPCs)
+
+- One `.npcasset` per character (`EditorCharacters`), declarative Lua like a
+  quest. **Mod → Characters…**, the content browser's **Create → Character**,
+  and `characters_list` / `characters_get` / `characters_write` /
+  `characters_delete` over MCP - the asset is text, so the AI path is the
+  primary one.
+- The build (`EditorCharacters::Generate`, called from `EditorMod::Export`)
+  turns them into the five files X-Ray needs and **appends** to the game's
+  lists: `+files` and `+specific_characters_files` in
+  `patch\<module>_characters.ltxp`. `+` is XMS's append directive
+  (`xms_ltx.cpp`), which is the whole reason a module can have characters
+  without overwriting `system.ltx` and fighting every other module that wants
+  the same. Never generate a whole `system.ltx`, and never patch the game's own
+  `npc_profile.xml`: ship OWN files and append their names.
+- The profile always names the `specific_character` outright. `class` alone
+  makes the engine pick a RANDOM character of that class - fine for ambience,
+  wrong for the NPC a quest points at.
+- `<module>_<id>` is one name doing three jobs: the spawn section (it carries
+  `$spawn`, so the character is placeable by hand and by `spawn.object`), the
+  squad section `<module>_<id>_squad` (`spawn.squad`), and the
+  `character_profile` of a stalker placed in a level.
+- Generated files are listed by `EditorMod::GetOwnedFiles`: the content browser
+  hides them, and the last character deleted takes all of them with it.
+- `npc.set_name` is NOT this. It renames an NPC at run time, for when the player
+  learns who someone is; it needs no profile and changes nothing on disk.
+- QA: `tools/qa/test_characters.py --project <project>` runs the whole path over
+  MCP on a COPY of the project and reads the generated files back.
+
 ## Quests (NQ — node graph)
 
 - Architecture and rollout plan: `docs/NQ_ARCHITECTURE.md`. Until the

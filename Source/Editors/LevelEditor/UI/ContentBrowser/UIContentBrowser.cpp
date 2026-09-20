@@ -1,10 +1,13 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "..\..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\..\XrECore\Editor\EThumbnailVisual.h"
 #include "..\..\..\XrECore\Editor\EDX11Utils.h"
 #include "..\..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\..\XrECore\Editor\Nq\NqExport.h"
+#include "..\..\..\XrECore\Editor\Nq\NqLua.h"
+#include "..\..\..\XrECore\Editor\Nq\NqUtil.h"
+#include "..\..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\QuestGraph\UIQuestGraph.h"
 
 // image formats the thumbnail path can decode directly
@@ -41,6 +44,12 @@ static bool IsQuestExt(LPCSTR name)
 {
 	LPCSTR ext = name ? strrchr(name, '.') : 0;
 	return ext && !_stricmp(ext, ".nqasset");
+}
+// The module's own NPC (EditorCharacters.h)
+static bool IsCharacterExt(LPCSTR name)
+{
+	LPCSTR ext = name ? strrchr(name, '.') : 0;
+	return ext && !_stricmp(ext, ".npcasset");
 }
 
 // Nothing under the project root is registered in the editor FS: a project may
@@ -1758,6 +1767,17 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		return true;
 	}
 
+	// A character opens in the Characters window - project files only, for the
+	// same reason a quest does: the window writes the asset back.
+	if (IsCharacterExt(name))
+	{
+		if (m_Source != 0) OPEN_FAILED("%s: characters open from the project only", name);
+		string_path abs;
+		sprintf_s(abs, "%s\\%s", EditorProject::Root(), name);
+		EditorCharacters::Open(abs);
+		return true;
+	}
+
 	// Quest graphs open in their own tab (project files only: the graph editor
 	// writes back through NqDoc, and the game/library sources are read-only)
 	if (IsQuestExt(name))
@@ -3056,6 +3076,7 @@ void UIContentBrowser::DrawGridContextMenu()
 		if (ImGui::BeginMenu("Create"))
 		{
 			if (ImGui::MenuItem("Quest Graph"))	CreateQuest();
+			if (ImGui::MenuItem("Character"))	CreateCharacter();
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
@@ -3208,6 +3229,46 @@ void UIContentBrowser::CreateFolder()
 
 	// the tile has to exist before it can be renamed, and only a refresh puts it
 	// in the tree - an empty folder has no items to derive it from
+	Refresh			();
+	ClearSelection	();
+	BeginRename		(rel.c_str());
+}
+
+void UIContentBrowser::CreateCharacter()
+{
+	if (m_Source != 0 || !EditorProject::Active())	return;
+
+	// first free NewCharacter.npcasset, NewCharacter2.npcasset, ... here
+	xr_string rel;
+	string_path probe;
+	for (int n = 1; n <= 999; ++n)
+	{
+		char leaf[64];
+		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "NewCharacter.npcasset");
+		else		sprintf_s(leaf, "NewCharacter%d.npcasset", n);
+		if (m_CurFolder.empty())	sprintf_s(probe, "%s\\%s", EditorProject::Root(), leaf);
+		else						sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
+		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
+		{
+			rel = m_CurFolder;
+			if (!rel.empty()) rel += "\\";
+			rel += leaf;
+			break;
+		}
+	}
+	if (rel.empty())	{ ELog.DlgMsg(mtError, "Too many unnamed characters here."); return; }
+
+	// the id follows the file name, the way a quest's does
+	xr_string base = NqUtil::BaseName(probe);
+	const size_t dot = base.find_last_of('.');
+	if (dot != xr_string::npos)	base.erase(dot);
+
+	xr_string err;
+	if (!NqLua::WriteFile(probe, EditorCharacters::Template(base.c_str()), err))
+	{
+		ELog.DlgMsg(mtError, "Cannot create the character: %s", err.c_str());
+		return;
+	}
 	Refresh			();
 	ClearSelection	();
 	BeginRename		(rel.c_str());
