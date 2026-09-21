@@ -175,7 +175,8 @@ bool NqProjectIndex::Snapshot(SSnapshot& out, xr_string& err, bool overlay_dirty
 	}
 
 	xr_vector<xr_string> files;
-	NqUtil::ListFiles(root.c_str(), ".nqasset", files, SkipEntry);
+	// quests and behaviour graphs alike: one project, one id space
+	NqUtil::ListGraphFiles(root.c_str(), files, SkipEntry);
 	std::sort(files.begin(), files.end(), [](const xr_string& left, const xr_string& right)
 	{
 		return NqUtil::PathKey(left.c_str()) < NqUtil::PathKey(right.c_str());
@@ -260,7 +261,7 @@ bool NqProjectIndex::Snapshot(SSnapshot& out, xr_string& err, bool overlay_dirty
 		for (u32 i = 0; i < docs.size(); ++i)
 		{
 			NqDoc* doc = docs[i];
-			if (!doc->dirty || !NqDocs::InsideProject(doc->path.c_str()) || NqUtil::Extension(doc->path.c_str()) != ".nqasset") continue;
+			if (!doc->dirty || !NqDocs::InsideProject(doc->path.c_str()) || !NqUtil::IsGraphPath(doc->path.c_str())) continue;
 			const xr_string path_key = NqUtil::PathKey(doc->path.c_str());
 			if (std::binary_search(seen.begin(), seen.end(), path_key)) continue;
 			SEntry entry;

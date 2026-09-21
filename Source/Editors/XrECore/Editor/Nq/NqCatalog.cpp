@@ -32,9 +32,10 @@ namespace
 		"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 		"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
 		"squad_ref", "object_ref", "objective_id",
-		// scenarios (par. 19): a role name, the waypoint path a step walks, who
-		// a follow or an attack is aimed at, and the bindings a quest passes in
-		"role", "way_path", "role_or_actor", "attack_target", "role_bindings", "scenario_id",
+		// behaviour graphs (par. 19): a role name, a waypoint path, where a step
+		// sends people, who a follow or an attack is aimed at, the bindings a
+		// caller passes in, and the graph a call names
+		"role", "way_path", "destination", "role_or_actor", "attack_target", "role_bindings", "behaviour_id",
 	};
 
 	bool IsTypeName(const xr_string& s)
@@ -226,11 +227,11 @@ namespace
 				// absent = both; naming one narrows it (par. 19.8)
 				xr_vector<xr_string> d;
 				NqUtil::Split(val.c_str(), ',', d);
-				cur->in_quest = cur->in_scenario = d.empty();
+				cur->in_quest = cur->in_behaviour = d.empty();
 				for (u32 i = 0; i < d.size(); ++i)
 				{
-					if (d[i] == "quest")		cur->in_quest = true;
-					else if (d[i] == "scenario")	cur->in_scenario = true;
+					if (d[i] == "quest")			cur->in_quest = true;
+					else if (d[i] == "behaviour")	cur->in_behaviour = true;
 				}
 			}
 			else if (key == "params")
@@ -436,17 +437,17 @@ const NqCatalog::SKind* NqCatalog::Find(LPCSTR id)
 	return 0;
 }
 
-static bool s_DocScenario = false;
+static bool s_DocBehaviour = false;
 
-void NqCatalog::SetDocScenario(bool scenario)	{ s_DocScenario = scenario; }
-bool NqCatalog::DocScenario()					{ return s_DocScenario; }
+void NqCatalog::SetDocBehaviour(bool behaviour)	{ s_DocBehaviour = behaviour; }
+bool NqCatalog::DocBehaviour()					{ return s_DocBehaviour; }
 
 void NqCatalog::KindsFor(u32 use_mask, xr_vector<const SKind*>& out)
 {
 	Ensure();
 	out.clear();
 	for (u32 i = 0; i < s_Kinds.size(); ++i)
-		if ((s_Kinds[i].use & use_mask) && s_Kinds[i].InDoc(s_DocScenario))
+		if ((s_Kinds[i].use & use_mask) && s_Kinds[i].InDoc(s_DocBehaviour))
 			out.push_back(&s_Kinds[i]);
 }
 

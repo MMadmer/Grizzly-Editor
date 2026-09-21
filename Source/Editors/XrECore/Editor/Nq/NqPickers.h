@@ -51,6 +51,11 @@ public:
 	static void						SetSceneRestrictors(TSceneRestrictors fn);
 	// authored [story_object] ids of the OPEN scene, merged like the restrictors
 	static void						SetSceneStories(TSceneRestrictors fn);
+	// The way paths of the OPEN scene (the WayPoint tool): what a behaviour step
+	// walks. Read live, like the restrictors - a path drawn a second ago has to
+	// be pickable without a save.
+	static void						SetSceneWayPaths(TSceneRestrictors fn);
+	static void						SceneWayPaths(xr_vector<SEntry>& out);
 
 	// true when a linked game backs the indexes (otherwise every index is empty
 	// and W060 is not raised)

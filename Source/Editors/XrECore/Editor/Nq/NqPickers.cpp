@@ -22,6 +22,7 @@ namespace
 	xr_vector<NqPickers::SEntry>	s_DiskStories;
 	NqPickers::TSceneRestrictors	s_SceneRestrictors	= 0;
 	NqPickers::TSceneRestrictors	s_SceneStories		= 0;
+	NqPickers::TSceneRestrictors	s_SceneWayPaths		= 0;
 	u32								s_SceneStamp		= 0;
 
 	const char* kTypeNames[NqPickers::tCount] =
@@ -941,6 +942,12 @@ bool NqPickers::Available()		{ Ensure(); return s_Available; }
 void NqPickers::Invalidate()	{ s_Built = false; s_SceneStamp = 0; NqItemCaps::Invalidate(); }
 void NqPickers::SetSceneRestrictors(TSceneRestrictors fn) { s_SceneRestrictors = fn; s_SceneStamp = 0; }
 void NqPickers::SetSceneStories(TSceneRestrictors fn) { s_SceneStories = fn; s_SceneStamp = 0; }
+void NqPickers::SetSceneWayPaths(TSceneRestrictors fn) { s_SceneWayPaths = fn; }
+void NqPickers::SceneWayPaths(xr_vector<SEntry>& out)
+{
+	out.clear();
+	if (s_SceneWayPaths) s_SceneWayPaths(out);
+}
 
 const xr_vector<NqPickers::SEntry>& NqPickers::Index(EType t)
 {
@@ -1043,7 +1050,7 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 	NqUtil::ArgString(raw, "path", path);
 	int limit = NqUtil::ArgInt(raw, "limit", 50);
 	if (limit <= 0) limit = 50;
-	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id)"); return; }
+	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id, behaviour_id, role, way_path)"); return; }
 
 	xr_vector<SEntry> doc_entries;
 	const EType t = TypeFromName(type.c_str());
@@ -1052,13 +1059,33 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 	{
 		doc_scoped = true;
 		// document sources
-		if (type == "quest_id")
+		if (type == "quest_id" || type == "behaviour_id")
 		{
+			// one project index, two kinds of document: each call names its own
+			const bool want_behaviour = (type == "behaviour_id");
 			xr_vector<NqDocs::SProjectQuest> all;
 			NqDocs::ProjectQuests(all);
 			for (u32 i = 0; i < all.size(); ++i)
 			{
+				if (all[i].behaviour != want_behaviour) continue;
 				SEntry e; e.id = all[i].id; e.name = all[i].title; e.extra = NqUtil::ProjectRelative(all[i].path.c_str());
+				doc_entries.push_back(e);
+			}
+		}
+		else if (type == "way_path")
+		{
+			SceneWayPaths(doc_entries);
+		}
+		else if (type == "role")
+		{
+			if (path.empty()) { NqUtil::JsonError(out, "document-scoped type needs 'path'"); return; }
+			SNqQuest q;
+			xr_string err;
+			if (!NqDocs::ReadQuest(path.c_str(), q, err)) { NqUtil::JsonError(out, err); return; }
+			for (u32 i = 0; i < q.roles.size(); ++i)
+			{
+				SEntry e; e.id = q.roles[i].name; e.name = NqText::Preview(q.roles[i].title);
+				e.extra = q.roles[i].many ? "group" : "one";
 				doc_entries.push_back(e);
 			}
 		}

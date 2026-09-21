@@ -690,7 +690,8 @@ bool NqDocs::Resolve(LPCSTR path, xr_string& abs, xr_string& err, bool for_write
 {
 	if (!NqUtil::ProjectPath(path, abs, err)) return false;
 	if (NqUtil::Extension(abs.c_str()).empty()) abs += ".nqasset";
-	if (for_write && !InsideProject(abs.c_str())) { err = "path is outside the project folder - quests are written into the project only"; return false; }
+	if (for_write && !InsideProject(abs.c_str())) { err = "path is outside the project folder - graphs are written into the project only"; return false; }
+	if (for_write && !NqUtil::IsGraphPath(abs.c_str())) { err = "a graph document is a .nqasset (quest) or a .behasset (behaviour graph)"; return false; }
 	return true;
 }
 
@@ -827,12 +828,14 @@ xr_string NqDocs::CurrentLevel()
 
 void NqDocs::Validate(const SNqQuest& q, LPCSTR path, xr_vector<SNqProblem>& out, bool disk_only)
 {
-	xr_vector<xr_string> others;
+	xr_vector<xr_string> others, quest_ids, behaviour_ids;
 	OtherQuestIds(path, others, disk_only);
+	ProjectIdsOfKind(true, behaviour_ids, disk_only);
 	xr_string level = CurrentLevel();
 	NqValidate::SContext ctx;
 	ctx.file_path = path;
 	ctx.project_quest_ids = &others;
+	ctx.project_behaviour_ids = &behaviour_ids;
 	ctx.level = level.empty() ? 0 : level.c_str();
 	ctx.use_pickers = true;
 	NqValidate::Run(q, ctx, out);
@@ -854,9 +857,21 @@ void NqDocs::ProjectQuests(xr_vector<SProjectQuest>& out, bool disk_only)
 		pq.id = entry.readable ? entry.quest.id : "";
 		pq.title = entry.readable ? NqText::Preview(entry.quest.title) : "";
 		pq.readable = entry.readable && entry.complete;
+		// an unreadable file is still told apart - by the one thing left, its name
+		pq.behaviour = entry.readable ? entry.quest.IsBehaviour() : NqUtil::IsBehaviourPath(entry.path.c_str());
 		pq.error = entry.error;
 		out.push_back(pq);
 	}
+}
+
+void NqDocs::ProjectIdsOfKind(bool behaviour, xr_vector<xr_string>& out, bool disk_only)
+{
+	out.clear();
+	xr_vector<SProjectQuest> all;
+	ProjectQuests(all, disk_only);
+	for (u32 i = 0; i < all.size(); ++i)
+		if (all[i].readable && !all[i].id.empty() && all[i].behaviour == behaviour)
+			out.push_back(all[i].id);
 }
 
 void NqDocs::OtherQuestIds(LPCSTR except_path, xr_vector<xr_string>& out, bool disk_only)

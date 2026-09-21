@@ -56,17 +56,17 @@ public:
 		// Which document may carry the kind (NQ_ARCHITECTURE par. 19.8). A kind
 		// that says nothing works in both: only the ones that speak to the
 		// player or to the PDA are quest-only, and only the ones that drive an
-		// NPC are scenario-only.
+		// NPC are behaviour-only.
 		bool				in_quest;
-		bool				in_scenario;
+		bool				in_behaviour;
 		int					since;
 		xr_vector<xr_string> alias;		// old kind names this one replaces (CSV in the file)
 		xr_string			source;		// file the section came from (for the UI badge)
 
 		SKind() : use(0), pins_from_cases(false), wait(false), once_default(false), event(false),
-				  in_quest(true), in_scenario(true), since(1) {}
+				  in_quest(true), in_behaviour(true), since(1) {}
 
-		bool				InDoc		(bool scenario) const { return scenario ? in_scenario : in_quest; }
+		bool				InDoc		(bool behaviour) const { return behaviour ? in_behaviour : in_quest; }
 
 		bool				Is			(EUse u) const { return 0 != (use & u); }
 		const SParam*		Param		(LPCSTR name) const;
@@ -90,11 +90,11 @@ public:
 	static const SKind*				Find		(LPCSTR id);
 	// kinds usable at a position, in catalog order (UI dropdowns)
 	// Only what the document being edited may carry: a quest is never offered
-	// npc.goto, a scenario is never offered a task action. The editor edits one
+	// npc.goto, a behaviour graph is never offered a task action. The editor edits one
 	// document at a time, so the filter is set when one becomes active rather
 	// than threaded through every picker (NQ_ARCHITECTURE par. 19.8).
-	static void						SetDocScenario(bool scenario);
-	static bool						DocScenario	();
+	static void						SetDocBehaviour(bool behaviour);
+	static bool						DocBehaviour();
 	static void						KindsFor	(u32 use_mask, xr_vector<const SKind*>& out);
 	// files that made up the catalog (diagnostics)
 	static const xr_vector<xr_string>& Files	();

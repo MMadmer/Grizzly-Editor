@@ -67,6 +67,13 @@ namespace NqUtil
 	// file name without directory and extension
 	ECORE_API xr_string	BaseName		(LPCSTR path);
 	ECORE_API xr_string	Extension		(LPCSTR path);		// ".nqasset" (lowercase)
+	// The two documents the graph editor owns, told apart by extension alone:
+	// a quest (.nqasset) and a behaviour graph (.behasset, NQ_ARCHITECTURE par. 19).
+	ECORE_API bool		IsQuestPath		(LPCSTR path);
+	ECORE_API bool		IsBehaviourPath	(LPCSTR path);
+	ECORE_API bool		IsGraphPath		(LPCSTR path);
+	// every graph document under `root`, both extensions, sorted
+	ECORE_API void		ListGraphFiles	(LPCSTR root, xr_vector<xr_string>& out, TSkipRootEntry skip = 0);
 
 	// -- misc ---------------------------------------------------------------------
 	ECORE_API void		Split			(LPCSTR s, char sep, xr_vector<xr_string>& out);	// trimmed, empties dropped

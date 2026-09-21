@@ -112,9 +112,9 @@ void BuildQuest(SIcon& icon)
 }
 
 //------------------------------------------------------------------------------
-// A scenario moves people: a route with its waypoints and an arrow at the end.
+// A behaviour graph moves people: a route with its waypoints and an arrow at the end.
 //------------------------------------------------------------------------------
-void BuildScenario(SIcon& icon)
+void BuildBehaviour(SIcon& icon)
 {
 	const ImVec2 route[] = { P(0.07f, 0.82f), P(0.30f, 0.44f), P(0.55f, 0.63f), P(0.753f, 0.286f) };
 	Line(icon, route, 4, false, 0.72f);
@@ -151,7 +151,7 @@ const SIcon& Icon(EditorAssetIcons::EKind kind)
 	switch (kind)
 	{
 	case EditorAssetIcons::kQuest:				BuildQuest(icon);				break;
-	case EditorAssetIcons::kScenario:			BuildScenario(icon);			break;
+	case EditorAssetIcons::kBehaviour:			BuildBehaviour(icon);			break;
 	case EditorAssetIcons::kCharacter:			BuildCharacter(icon, false);	break;
 	case EditorAssetIcons::kCharacterTemplate:	BuildCharacter(icon, true);		break;
 	default:																	break;
@@ -162,8 +162,9 @@ const SIcon& Icon(EditorAssetIcons::EKind kind)
 //------------------------------------------------------------------------------
 // what a file is
 //
-// The extension answers it for a character; a `.nqasset` has to say whether it
-// is a scenario, and an `.npcasset` whether it is a template. Both are in the
+// The extension answers it for a quest (.nqasset) and for a behaviour graph
+// (.behasset) - that is the point of giving each its own. Only an `.npcasset`
+// has to be looked INTO, to tell a template from a character; that is in the
 // first line or two of a canonical file, so a kilobyte is plenty - and the
 // answer is kept, because a tile that stats its file every frame is exactly the
 // kind of thing the startup profile was written to stop.
@@ -224,9 +225,10 @@ EditorAssetIcons::EKind EditorAssetIcons::KindOf(LPCSTR path)
 
 	LPCSTR ext = strrchr(path, '.');
 	if (!ext) return kNone;
-	const bool quest_ext	= (0 == _stricmp(ext, ".nqasset"));
-	const bool char_ext		= (0 == _stricmp(ext, ".npcasset"));
-	if (!quest_ext && !char_ext) return kNone;
+	// no file is touched for these two: the name is the whole answer
+	if (0 == _stricmp(ext, ".nqasset"))		return kQuest;
+	if (0 == _stricmp(ext, ".behasset"))	return kBehaviour;
+	if (0 != _stricmp(ext, ".npcasset"))	return kNone;
 
 	xr_string key = path;
 	xr_strlwr(&key[0]);
@@ -239,17 +241,11 @@ EditorAssetIcons::EKind EditorAssetIcons::KindOf(LPCSTR path)
 		if (k != s_CachedKind.end()) return (EKind)k->second;
 	}
 
-	EKind kind = quest_ext ? kQuest : kCharacter;
+	EKind kind = kCharacter;
 	char head[1024];
 	u32	 got = 0;
-	if (ReadHead(path, head, sizeof(head), got) && got)
-	{
-		if (quest_ext)
-		{
-			if (HeadSays(head, got, "type", "scenario"))		kind = kScenario;
-		}
-		else if (HeadSays(head, got, "abstract", "true"))	kind = kCharacterTemplate;
-	}
+	if (ReadHead(path, head, sizeof(head), got) && got && HeadSays(head, got, "abstract", "true"))
+		kind = kCharacterTemplate;
 
 	s_CachedGen[key]	= s_Generation;
 	s_CachedKind[key]	= (u8)kind;
@@ -273,7 +269,7 @@ LPCSTR EditorAssetIcons::Name(EKind kind)
 	switch (kind)
 	{
 	case kQuest:				return "quest";
-	case kScenario:				return "NPC scenario";
+	case kBehaviour:			return "behaviour graph";
 	case kCharacter:			return "character";
 	case kCharacterTemplate:	return "character template";
 	default:					return "";

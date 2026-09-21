@@ -171,7 +171,7 @@ struct ECORE_API SNqVar
 };
 
 //------------------------------------------------------------------------------
-// A role of a scenario: a slot the calling quest fills (NQ_ARCHITECTURE par. 19.4).
+// A role of a behaviour graph: a slot its caller fills (NQ_ARCHITECTURE par. 19.4).
 // `def` is the binding used when the caller names none - a target reference
 // table like { story = "esc_wolf" }, kept generic because it is the same shape
 // every other target takes.
@@ -191,17 +191,19 @@ struct ECORE_API SNqQuest
 {
 	int						nq;			// format version (1)
 	xr_string				id;
-	// "quest" (the default, written only when it is a scenario) | "scenario".
-	// The same graph in the same file doing a different job - see par. 19.
+	// "quest" | "behaviour": which of the two documents this is (par. 19). It is
+	// NEVER a key in the file - the header key says it (`nq` a quest, `beh` a
+	// behaviour graph) and the file's extension has to agree, so a rename is
+	// refused instead of believed.
 	xr_string				type;
 	SNqValue				title;		// text
 	xr_string				activation;	// auto | manual
 	xr_vector<SNqVar>		vars;
-	xr_vector<SNqRole>		roles;		// scenario only
+	xr_vector<SNqRole>		roles;		// behaviour graph only
 	xr_vector<SNqTask>		tasks;
 	xr_vector<SNqNode>		nodes;
 
-	bool					IsScenario	() const { return type == "scenario"; }
+	bool					IsBehaviour	() const { return type == "behaviour"; }
 
 	SNqQuest();
 	SNqQuest(const SNqQuest& other);

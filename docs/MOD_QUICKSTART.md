@@ -407,9 +407,9 @@ rest of the graph uses.
 ```
 
 **Removing something that is busy is safe.** An NPC being taken away is rarely
-idle — it may be in a scheme a scenario gave it, in a fight, or talking to the
+idle — it may be in a scheme a behaviour graph gave it, in a fight, or talking to the
 player. Before anything is released the runtime tells whatever was driving it to
-stop: a scenario drops it from its role, a talk with the player is ended, and the
+stop: a behaviour graph drops it from its role, a talk with the player is ended, and the
 active scheme is switched off. Then the release itself goes through the engine's
 own safe release, which defers it when the object cannot go yet. Nothing is left
 pointing at an id that no longer exists.
@@ -417,38 +417,73 @@ pointing at an id that no longer exists.
 A `ref` that named something removed is cleared, so a later node cannot resolve
 a dead id.
 
-## 6a. NPC scenarios
+## 6a. NPC behaviour graphs
 
-**Content browser → Create → NPC Scenario** · `xfined_quest_write`
+**Content browser → Create → NPC Behaviour** · `xfined_quest_new` with a
+`.behasset` path · `xfined_quest_write`
 
-A quest tracks the player; a **scenario** drives NPCs. Same file, same editor,
-`type = "scenario"`, and a quest node starts it:
+A quest tracks the player; a **behaviour graph** drives NPCs. It is its own
+asset - a `.behasset`, its own icon, its own window - on the node graph you
+already know. It shows the player nothing (no tasks, no dialogs, no map spots)
+and never starts itself: a quest runs it.
+
+**Spawn Valera, make him walk his route, and turn him on the player at the
+end** - the whole thing is one call in the quest:
 
 ```lua
-{ id = "spring_the_trap", kind = "scenario.run",
-  params = { asset = "bridge_ambush", wait_end = true, ref = "ambush",
-             roles = { leader = { story = "esc_wolf" }, attackers = { ref = "ambush_squad" } } },
-  out = { done = "after_the_fight" } }
+{ id = "bring_valera", kind = "flow.step",
+  on_enter = { { kind = "spawn.object", params = { section = "overnight_valera",
+                 place = { smart = "esc_smart_terrain_5_7" }, ref = "valera" } } },
+  out = { next = "his_route" } },
+
+{ id = "his_route", kind = "behaviour.run",
+  params = { asset = "valera_route", ref = "route",
+             roles = { valera = { ref = "valera" } } },
+  out = { started = "tell_the_player",     -- at once: the quest carries on
+          finished = "valera_is_hostile",  -- the route played out
+          aborted = "valera_never_made_it" } },  -- he died, or it was stopped
 ```
 
-The scenario declares **roles**, not NPCs, so one file serves any cast — bind
-them at the call site, or give a role a `default` and bind nothing. A role holds
-a group as happily as one stalker: «отряд идёт в область и закрепляется» is one
-role and one node.
+**Three exits, and the wiring is the mode.** Wire `started` alone and the quest
+carries on while the NPC does his thing. Wire `finished` alone and the quest
+waits for him. Wire both for both. `aborted` is the route that never played out.
+There is no wait flag to remember.
 
-Steps: `npc.goto` (a waypoint path, walk or run, wait for arrival), `npc.hold`
-(dig in and fight from there), `npc.anim`, `npc.follow`, `npc.attack`,
-`npc.stance` (relation, combat_ignore, invulnerable), `npc.release`. Conditions:
-`npc_at_place`, `npc_in_combat`, `role_alive`. Everything else — branches,
-waits, variables, signals, sounds, relations, items — is the quest vocabulary,
-shared.
+The graph itself (`valera_route.behasset`) declares **roles**, not NPCs, so the
+same file serves any cast - bind them at the call, or give a role a `default`
+and bind nothing. A role holds a group as happily as one stalker: «отряд идёт в
+область и закрепляется» is one role and one node. In the editor the roles sit
+where a quest keeps its tasks, a step's `who` is a tick per role, and the call's
+bindings are a form: pick the asset and one row per role appears.
 
-Where an NPC goes is a **waypoint path** you place with the WayPoint tool, not a
-coordinate: X-Ray walks patrol paths, and the path ships with the module.
+Steps: `npc.goto` (walk or run, wait for arrival), `npc.hold` (dig in and fight
+from there), `npc.anim`, `npc.follow`, `npc.attack`, `npc.stance` (relation,
+combat_ignore, invulnerable), `npc.release`. Conditions: `npc_at_place`,
+`npc_in_combat`, `role_alive`. Branches, waits, variables, signals, sounds,
+relations, spawns - the graph plumbing - are shared with quests; what belongs to
+the player (tasks, dialogs, money, news, map spots) is not offered here at all.
+
+**Where an NPC goes is a destination**, and it takes whatever you have:
+
+| write | to walk to |
+|---|---|
+| `place = { path = "valera_gate" }` | a way path you drew with the WayPoint tool - the best one: he gets a route and looks around on it |
+| `place = { ref = "dropped_case" }` | something the QUEST spawned - a behaviour graph sees the refs of the quest that runs it |
+| `place = { story = "esc_wolf" }` | an object of the level |
+| `place = { role = "leader" }` | wherever that role stands |
+| `{ smart = }`, `{ restrictor = }`, `{ pos = }`, `{ actor = true }` | a place |
+
+**A ref does not have to exist yet.** A step that names one not in the world
+parks until it appears, follows it when it moves, and lets go - the graph moves
+on - when it is removed. Spawn the case on one trigger, run the behaviour on
+another, delete the case on a third: nothing breaks and nothing waits forever.
 
 None of this is new AI. A step writes a logic section and hands it to the game's
 own schemes, exactly the way a smart terrain does, so cover, danger, wounded and
-death keep behaving like the base game.
+death keep behaving like the base game; for a destination nobody drew a path to,
+the ENGINE registers a one-point path on the fly and the same walker walks it. A
+save in the middle of a step is safe - the NPC comes back into the section he
+was in.
 
 Full reference: `docs/nq/NQ_FORMAT.md` §10.
 

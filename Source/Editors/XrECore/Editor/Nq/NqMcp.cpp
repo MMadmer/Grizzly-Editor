@@ -85,7 +85,7 @@ namespace
 	bool NeedPath(LPCSTR raw, xr_string& path, xr_string& out)
 	{
 		NqUtil::ArgString(raw, "path", path);
-		if (path.empty()) { NqUtil::JsonError(out, "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset)"); return false; }
+		if (path.empty()) { NqUtil::JsonError(out, "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset or npc/ambush.behasset)"); return false; }
 		return true;
 	}
 
@@ -141,9 +141,9 @@ namespace
 			if (d) { q = d->quest; problems = d->problems; }
 			else if (NqDocs::ReadQuest(all[i].path.c_str(), q, err)) NqDocs::Validate(q, all[i].path.c_str(), problems);
 			out += ",\"readable\":true,\"id\":";	NqUtil::JsonString(out, q.id);
-			// a scenario is listed with the quests but is not one: it drives NPCs
-			// and is started by a quest node, never by itself (par. 19)
-			out += ",\"type\":";					NqUtil::JsonString(out, q.IsScenario() ? "scenario" : "quest");
+			// a behaviour graph is listed beside the quests but is not one: it drives
+			// NPCs and is started by a caller, never by itself (par. 19)
+			out += ",\"kind\":";					NqUtil::JsonString(out, q.IsBehaviour() ? "behaviour" : "quest");
 			out += ",\"title\":";					NqUtil::JsonString(out, NqText::Preview(q.title));
 			out += ",\"nodes\":";					NqUtil::JsonInt(out, (int)q.nodes.size());
 			out += ",\"errors\":";					NqUtil::JsonInt(out, NqValidate::CountErrors(problems));
@@ -161,7 +161,11 @@ namespace
 		if (!NeedPath(raw, path, out)) return;
 		xr_string abs, err;
 		if (!NqDocs::Resolve(path.c_str(), abs, err, true)) { NqUtil::JsonError(out, err); return; }
-		if (!NqExport::NewQuestTemplate(abs.c_str(), err)) { NqUtil::JsonError(out, err); return; }
+		// the extension says what is being made: .behasset is a behaviour graph
+		const bool made = NqUtil::IsBehaviourPath(abs.c_str())
+			? NqExport::NewBehaviourTemplate(abs.c_str(), err)
+			: NqExport::NewQuestTemplate(abs.c_str(), err);
+		if (!made) { NqUtil::JsonError(out, err); return; }
 		NqDoc* d = NqDocs::Open(abs.c_str(), err);
 		if (!d) { NqUtil::JsonError(out, err); return; }
 		RespondDoc(out, d, true, true);

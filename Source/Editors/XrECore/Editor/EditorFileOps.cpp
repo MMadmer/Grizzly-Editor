@@ -500,10 +500,12 @@ bool EditorFileOps::Rename(LPCSTR path, LPCSTR new_name, string_path& out, xr_st
 	if (leaf.find_first_of("\\/:*?\"<>|") != xr_string::npos)	{ err = "a name cannot contain \\ / : * ? \" < > |"; return false; }
 
 	LPCSTR old_leaf = LeafName(from);
-	// a quest renamed without an extension keeps being a quest
+	// a graph renamed without an extension keeps being what it was: the
+	// extension IS the kind of document, so losing it would change the asset
 	LPCSTR old_ext = strrchr(old_leaf, '.');
-	if (FileExists(from) && old_ext && 0 == _stricmp(old_ext, ".nqasset") && leaf.find('.') == xr_string::npos)
-		leaf += ".nqasset";
+	if (FileExists(from) && old_ext && leaf.find('.') == xr_string::npos &&
+		(0 == _stricmp(old_ext, ".nqasset") || 0 == _stricmp(old_ext, ".behasset") || 0 == _stricmp(old_ext, ".npcasset")))
+		leaf += old_ext;
 
 	xr_string parent(from);
 	parent.erase(size_t(old_leaf - from));

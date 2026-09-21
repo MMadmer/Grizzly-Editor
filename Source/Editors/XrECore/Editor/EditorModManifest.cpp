@@ -1131,8 +1131,9 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		return false;
 	}
 
-	// Quest graphs ship as they are, so a broken one would only be found by
-	// the player: every *.nqasset must validate before anything is copied.
+	// Quest and behaviour graphs ship as they are, so a broken one would only be
+	// found by the player: every *.nqasset and *.behasset must validate before
+	// anything is copied.
 	{
 		xr_vector<xr_string> nq_log;
 		int nq_errors = 0, nq_warnings = 0;
@@ -1233,7 +1234,7 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			if (c_spawn)	{ sprintf_s(line, "spawn: %d file(s) - NOT exported (XMS-only)\r\n", c_spawn); rep += line; }
 			if (c_scripts)	{ sprintf_s(line, "scripts: %d file(s) - NOT exported (XMS-only)\r\n", c_scripts); rep += line; }
 			if (c_levels)	{ sprintf_s(line, "levels: %d overlay file(s) - NOT exported (XMS-only)\r\n", c_levels); rep += line; }
-			if (c_quests)	{ sprintf_s(line, "quests: %d .nqasset - NOT usable flat (the NQ runtime only scans <game>\\modules\\<id>)\r\n", c_quests); rep += line; }
+			if (c_quests)	{ sprintf_s(line, "graphs: %d .nqasset/.behasset - NOT usable flat (the NQ runtime only scans <game>\\modules\\<id>)\r\n", c_quests); rep += line; }
 			if (!m.mode.empty())
 			{
 				rep += "target mode: ";

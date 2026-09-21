@@ -52,6 +52,7 @@ private:
 	bool			m_TaskReferencesComplete;
 	u32			m_TaskReferencesGeneration;
 	xr_vector<xr_string>	m_ProjectQuestIds;
+	xr_vector<xr_string>	m_ProjectBehaviourIds;	// what behaviour.run may name
 	u32			m_ProjectQuestIdsSerial;
 
 	void			SyncNode		();
@@ -92,6 +93,12 @@ private:
 	bool			DrawObjectRef	(LPCSTR label, SNqValue& v);
 	bool			DrawObjectiveId	(LPCSTR label, SNqValue& v);
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
+	// the role vocabulary of a behaviour graph (NQ_ARCHITECTURE par. 19)
+	bool			DrawDestination	(LPCSTR label, SNqValue& v);
+	bool			DrawWho			(LPCSTR label, SNqValue& v);
+	bool			DrawRoleTarget	(LPCSTR label, SNqValue& v, bool attack);
+	bool			DrawRoleBindings(LPCSTR label, SNqValue& v);
+	void			DrawRolesSection(bool& changed);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
 	bool			DrawItemList	(LPCSTR label, SNqValue& v, bool objects_ok = true,

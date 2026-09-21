@@ -441,6 +441,19 @@ xr_string NqUtil::Extension(LPCSTR path)
 	return r;
 }
 
+bool NqUtil::IsQuestPath(LPCSTR path)		{ return Extension(path) == ".nqasset"; }
+bool NqUtil::IsBehaviourPath(LPCSTR path)	{ return Extension(path) == ".behasset"; }
+bool NqUtil::IsGraphPath(LPCSTR path)		{ return IsQuestPath(path) || IsBehaviourPath(path); }
+
+void NqUtil::ListGraphFiles(LPCSTR root, xr_vector<xr_string>& out, TSkipRootEntry skip)
+{
+	out.clear();
+	if (!root || !root[0]) return;
+	ListFilesRec(root, ".nqasset", out, skip, true);
+	ListFilesRec(root, ".behasset", out, skip, true);
+	std::sort(out.begin(), out.end());
+}
+
 //==============================================================================
 // misc
 //==============================================================================

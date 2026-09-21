@@ -711,7 +711,35 @@ namespace
 			CheckIndexed(c, NqPickers::tSpawnSection, v.s, node, slot);
 			return;
 		}
-		// ---- scenarios (par. 19) --------------------------------------------------
+		// ---- behaviour graphs (par. 19) -------------------------------------------
+		// Where a step sends people: everything a place is, plus a waypoint path
+		// (the best one - the walker gets a route, not just a point), an object by
+		// story id, and a role (wherever its first living member stands).
+		if (t == "destination")
+		{
+			if (!v.IsTable() || !v.arr.empty())
+			{
+				ERR(c, "E006", node, slot, "'%s' must be { path = } / { ref = } / { story = } / { role = } or a place", p.name.c_str());
+				return;
+			}
+			if (const SNqValue* path = v.Get("path"))
+			{
+				if (!path->IsString() || path->s.empty()) ERR(c, "E006", node, slot, "path must be a waypoint path name");
+				return;
+			}
+			if (const SNqValue* role = v.Get("role"))
+			{
+				if (!role->IsString() || role->s.empty()) ERR(c, "E006", node, slot, "role must be a role name");
+				return;
+			}
+			if (const SNqValue* story = v.Get("story"))
+			{
+				if (!story->IsString() || story->s.empty()) ERR(c, "E006", node, slot, "story must be a story id");
+				return;
+			}
+			CheckPlace(c, v, node, slot, nidx, order);
+			return;
+		}
 		// `who` is one role or a list of them: a step addressing three roles at
 		// once is how a whole ambush moves on one line.
 		if (t == "role")
@@ -736,7 +764,7 @@ namespace
 			if (!v.IsTable() || !v.arr.empty())
 			{
 				ERR(c, "E006", node, slot, "'%s' must be { actor = true } / { role = ... }%s",
-					p.name.c_str(), t == "attack_target" ? " / { community = ... } / { story = ... }" : "");
+					p.name.c_str(), t == "attack_target" ? " / { community = ... } / { story = ... }" : " / { ref = ... } / { story = ... }");
 				return;
 			}
 			int forms = 0;
@@ -751,13 +779,19 @@ namespace
 					CheckNpcRef(c, v, node, slot, nidx, order, true, false);
 				}
 			}
+			else if (v.Has("story") || v.Has("ref"))
+			{
+				// something to walk after: a ref the caller spawned, or an object of the level
+				++forms;
+				if (v.Has("ref")) NoteRefUse(c, v, nidx, order, slot);
+			}
 			if (forms == 0)
 				ERR(c, "E006", node, slot, "'%s' names nobody", p.name.c_str());
 			else if (forms > 1)
 				ERR(c, "E006", node, slot, "'%s' must name exactly one target", p.name.c_str());
 			return;
 		}
-		// what the quest hands the scenario: role name -> a reference table, the
+		// what the caller hands the graph: role name -> a reference table, the
 		// same forms every other target takes
 		if (t == "role_bindings")
 		{
@@ -830,6 +864,21 @@ namespace
 			if (!c.q.FindNode(v.s.c_str())) ERR(c, "E030", node, slot, "node '%s' does not exist", v.s.c_str());
 			return;
 		}
+		if (t == "behaviour_id")
+		{
+			// "<module>.<graph>" cannot be checked here; a bare id must be a graph of this project
+			if (v.s.find('.') == xr_string::npos && c.ctx.project_behaviour_ids)
+			{
+				bool known = false;
+				for (u32 i = 0; i < c.ctx.project_behaviour_ids->size() && !known; ++i)
+					known = ((*c.ctx.project_behaviour_ids)[i] == v.s);
+				if (!known) ERR(c, "E030", node, slot, "behaviour graph '%s' is not a graph of this project", v.s.c_str());
+			}
+			// the direct case of E113; a chain through other graphs is a project check
+			if (c.q.IsBehaviour() && v.s == c.q.id)
+				ERR(c, "E113", node, slot, "a behaviour graph may not run itself");
+			return;
+		}
 		if (t == "quest_id")
 		{
 			// "<module>.<quest>" cannot be checked here; a bare id must be a quest of this project
@@ -869,37 +918,46 @@ namespace
 		}
 	}
 
-	// A kind belongs to a quest, to a scenario, or to both. The catalog says
+	// A kind belongs to a quest, to a behaviour graph, or to both. The catalog says
 	// which (docs=), and this is the one place the answer is enforced - for
 	// nodes, conditions and actions alike (NQ_ARCHITECTURE par. 19.8).
 	bool CheckDoc(SCtx& c, const SKind& k, LPCSTR node, LPCSTR slot)
 	{
-		const bool scenario = c.q.IsScenario();
-		if (k.InDoc(scenario)) return true;
+		const bool behaviour = c.q.IsBehaviour();
+		if (k.InDoc(behaviour)) return true;
 		ERR(c, "E023", node, slot, "'%s' cannot be used in a %s", k.id.c_str(),
-			scenario ? "scenario" : "quest");
+			behaviour ? "behaviour graph" : "quest");
 		return false;
 	}
 
-	// `who` names roles the scenario declares; a role it does not is the error
-	// that would otherwise only show up as an NPC quietly doing nothing.
+	// `who` names roles the graph declares; a role it does not is the error
+	// that would otherwise only show up as an NPC quietly doing nothing. A role
+	// is also somewhere to go ({ role = } in a destination) and someone to
+	// follow, so those are read the same way.
 	void CheckWho(SCtx& c, const SKind& k, const SNqValue& params, LPCSTR node, LPCSTR slot)
 	{
-		if (!k.Param("who")) return;
-		const SNqValue* who = params.Get("who");
-		if (!who) return;
 		xr_vector<xr_string> names;
-		if (who->IsString())		names.push_back(who->s);
-		else if (who->IsTable())
-			for (u32 i = 0; i < who->arr.size(); ++i)
-				if (who->arr[i].IsString()) names.push_back(who->arr[i].s);
+		if (k.Param("who"))
+			if (const SNqValue* who = params.Get("who"))
+			{
+				if (who->IsString())		names.push_back(who->s);
+				else if (who->IsTable())
+					for (u32 i = 0; i < who->arr.size(); ++i)
+						if (who->arr[i].IsString()) names.push_back(who->arr[i].s);
+			}
+		static const char* kRoleHolders[] = { "place", "target" };
+		for (int h = 0; h < 2; ++h)
+			if (const SNqValue* holder = params.Get(kRoleHolders[h]))
+				if (holder->IsTable())
+					if (const SNqValue* role = holder->Get("role"))
+						if (role->IsString() && !role->s.empty() && c.q.IsBehaviour()) names.push_back(role->s);
 		for (u32 i = 0; i < names.size(); ++i)
 		{
 			bool found = false;
 			for (u32 r = 0; r < c.q.roles.size(); ++r)
 				if (c.q.roles[r].name == names[i]) found = true;
 			if (!found)
-				ERR(c, "E024", node, slot, "no role called '%s' is declared by this scenario", names[i].c_str());
+				ERR(c, "E024", node, slot, "no role called '%s' is declared by this behaviour graph", names[i].c_str());
 		}
 	}
 
@@ -1165,6 +1223,11 @@ namespace
 				declaring.push_back(c.decls[d].node);
 				if (c.decls[d].node == use.node && c.decls[d].order <= use.order) declared_here_before = true;
 			}
+			// A behaviour graph sees the refs of whoever runs it (the runtime walks up
+			// to the caller), so "the case the quest dropped" is a ref this document
+			// never creates. Which quest will call it cannot be known here: such a
+			// ref is taken on trust, and a step naming one that is not there parks.
+			if (declaring.empty() && q.IsBehaviour()) continue;
 			if (declaring.empty()) { ERR(c, "E030", node, use.slot.c_str(), "ref '%s' is never created by this quest", use.ref.c_str()); continue; }
 			if (declared_here_before || use.node < 0) continue;
 			// reachability from triggers avoiding declaring nodes (other than the using node itself)
@@ -1202,10 +1265,20 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 	c.pickers = ctx.use_pickers && NqPickers::Available();
 
 	// ---- quest level ---------------------------------------------------------------
+	const LPCSTR vkey = q.IsBehaviour() ? "beh" : "nq";
 	if (q.nq != 1)
 	{
-		if (q.nq == 0)	ERR(c, "E001", 0, 0, "nq (format version) is missing - write nq = 1");
-		else			ERR(c, "E001", 0, 0, "nq = %d is not supported (this editor writes nq = 1)", q.nq);
+		if (q.nq == 0)	ERR(c, "E001", 0, 0, "%s (format version) is missing - write %s = 1", vkey, vkey);
+		else			ERR(c, "E001", 0, 0, "%s = %d is not supported (this editor writes %s = 1)", vkey, q.nq, vkey);
+	}
+	// The extension is the kind of document and the header key has to agree: a
+	// renamed file is refused, never quietly read as the other thing.
+	if (ctx.file_path && ctx.file_path[0])
+	{
+		if (q.IsBehaviour() && NqUtil::IsQuestPath(ctx.file_path))
+			ERR(c, "E001", 0, 0, "a .nqasset is a quest, but this document says beh = - rename it to .behasset or write nq =");
+		else if (!q.IsBehaviour() && NqUtil::IsBehaviourPath(ctx.file_path))
+			ERR(c, "E001", 0, 0, "a .behasset is a behaviour graph, but this document says nq = - rename it to .nqasset or write beh =");
 	}
 	if (!NqText::ValidId(q.id.c_str()))
 		ERR(c, "E002", 0, 0, "quest id '%s' must be [a-z0-9_]+", q.id.c_str());
@@ -1215,18 +1288,16 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 		for (u32 i = 0; i < ctx.project_quest_ids->size(); ++i) if ((*ctx.project_quest_ids)[i] == q.id) ++dups;
 		if (dups) ERR(c, "E002", 0, 0, "quest id '%s' is used by another quest of this project", q.id.c_str());
 	}
-	// ---- quest or scenario ---------------------------------------------------------
-	// The type decides which half of the catalog the graph may use and whether
+	// ---- quest or behaviour graph --------------------------------------------------
+	// The kind decides which half of the catalog the graph may use and whether
 	// it has tasks or roles at all (NQ_ARCHITECTURE par. 19.8).
-	const bool scenario = q.IsScenario();
-	if (!q.type.empty() && q.type != "quest" && q.type != "scenario")
-		ERR(c, "E006", 0, "param:type", "type must be \"quest\" or \"scenario\"");
-	if (scenario)
+	const bool behaviour = q.IsBehaviour();
+	if (behaviour)
 	{
 		if (!q.tasks.empty())
-			ERR(c, "E006", 0, "param:tasks", "a scenario has no tasks of its own - those belong to the quest that runs it");
+			ERR(c, "E006", 0, "param:tasks", "a behaviour graph has no tasks of its own - those belong to the quest that runs it");
 		if (q.roles.empty())
-			ERR(c, "E006", 0, "param:roles", "a scenario needs at least one role - it has nobody to drive otherwise");
+			ERR(c, "E006", 0, "param:roles", "a behaviour graph needs at least one role - it has nobody to drive otherwise");
 		for (u32 i = 0; i < q.roles.size(); ++i)
 		{
 			const SNqRole& r = q.roles[i];
@@ -1241,8 +1312,8 @@ void NqValidate::Run(const SNqQuest& q, const SContext& ctx, xr_vector<SNqProble
 		}
 	}
 	else if (!q.roles.empty())
-		ERR(c, "E006", 0, "param:roles", "roles belong to a scenario - set type = \"scenario\"");
-	if (!scenario && q.activation != "auto" && q.activation != "manual")
+		ERR(c, "E006", 0, "param:roles", "roles belong to a behaviour graph (.behasset) - a quest has none");
+	if (!behaviour && q.activation != "auto" && q.activation != "manual")
 		ERR(c, "E006", 0, "param:activation", "activation must be \"auto\" or \"manual\"");
 	// an absent title is legal - the runtime falls back to the quest id; only a
 	// title that IS there and is not text is an error

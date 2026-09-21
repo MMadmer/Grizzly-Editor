@@ -61,7 +61,7 @@ public:
 	// MCP: apply file-manager selection semantics to an exact entry in the
 	// complete current view, including rows outside the virtualized viewport.
 	static bool		ModifySelection		(LPCSTR action, LPCSTR name, xr_string& err);
-	// MCP: the Create menu, without the menu. `kind` is quest / scenario /
+	// MCP: the Create menu, without the menu. `kind` is quest / behaviour /
 	// character (a folder has content_mkdir); the asset lands in the open folder,
 	// under the same first-free name the menu would pick, and `made` comes back
 	// project-relative. Nothing is renamed inline - that is the menu's own
@@ -331,7 +331,7 @@ private:
 	void			CreateFolder		();
 	void			CreateQuest			();				// NewQuest.nqasset in the folder now open				// in the folder now open
 	void			CreateCharacter		();				// NewCharacter.npcasset in the folder now open
-	void			CreateScenario		();				// NewScenario.nqasset in the folder now open
+	void			CreateBehaviour		();				// NewBehaviour.behasset in the folder now open
 	void			BeginRename			(LPCSTR path);	// inline edit on that tile
 	void			CommitRename		();
 	// Inline rename of a folder tile: the created folder starts here with its

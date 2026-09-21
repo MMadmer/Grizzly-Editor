@@ -28,9 +28,12 @@ namespace NqValidate
 		LPCSTR						file_path;			// for W061 (0 = skip)
 		const xr_vector<xr_string>*	project_quest_ids;	// ids of the OTHER quests of the project (E002) and
 														// all bare quest_id references (E030); 0 = skip
+		// ids of the behaviour graphs of the project: what behaviour.run may name
+		// (E030), 0 = skip
+		const xr_vector<xr_string>*	project_behaviour_ids;
 		LPCSTR						level;				// current scene level for E031 (0 = skip)
 		bool						use_pickers;		// W060 through NqPickers (needs a linked game)
-		SContext() : file_path(0), project_quest_ids(0), level(0), use_pickers(true) {}
+		SContext() : file_path(0), project_quest_ids(0), project_behaviour_ids(0), level(0), use_pickers(true) {}
 	};
 
 	// full rule set; appends to `out`

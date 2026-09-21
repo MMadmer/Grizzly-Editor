@@ -285,46 +285,83 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   are not part of the workflow.
 
 - **Removing something that is busy goes through prepare_removal first**
-  (game repo, xms_nq_world.script): a scenario holding the NPC drops it, a talk
+  (game repo, xms_nq_world.script): a behaviour graph holding the NPC drops it, a talk
   with the player is ended and the active scheme is switched off BEFORE the
   engine safe-release runs. npc.remove, squad.remove (member by member) and
   object.remove all take that path, so a quest can stage a scene on one
   trigger and take it away on another without leaving anything pointing at a
   dead id.
 
-## Scenarios (NPC action assets)
+## Behaviour graphs (the assets that drive NPCs)
 
 - The contract is `docs/NQ_ARCHITECTURE.md` §19; the reference is
-  `docs/nq/NQ_FORMAT.md` §10. A scenario is the SAME `.nqasset` and the SAME
-  interpreter with `type = "scenario"`: no tasks, no dialogs, never starts
-  itself, and its actions address **roles** the calling quest binds
-  (`scenario.run`). One asset therefore serves any cast, and a role holds a
-  group as happily as one stalker.
+  `docs/nq/NQ_FORMAT.md` §10; what the runtime does about it is the game repo's
+  `docs/dead-air/NQ_RUNTIME.md` §15.
+- **A behaviour graph is its own asset, not a quest with a flag**: `.behasset`,
+  header `beh = 1`, its own icon, its own window title, a roles editor where a
+  quest keeps its tasks. The author must never be shown quest machinery here -
+  that was the complaint that killed the first design (`type = "scenario"`
+  inside a `.nqasset`, 67 of 102 kinds leaking in from the quest side).
+- **The extension is the kind.** No `type` key (an error); the header key has to
+  agree with the extension (`E001`). That is also why the browser, the icons and
+  the double click need not open a file to know what it is.
+- **The ENGINE is shared and the VOCABULARY is split, and neither is an
+  accident.** Same interpreter, pins, conditions, saves. The catalog's `docs`
+  key (`quest` / `behaviour` / both when absent) splits the kinds: shared is what
+  is the GRAPH (`flow.*`, `wait.*`, `var.*`, world conditions, `spawn.*`,
+  `squad.*`, `relation.*`), quest-only is what the PLAYER sees or what belongs to
+  the quest system, behaviour-only is what addresses a role. An untagged kind is
+  shared, so a new player-facing kind MUST carry `docs = quest`.
+- **`behaviour.run` has three pins and no mode flag - the wiring is the mode**:
+  `started` at once (walked as a side branch with `core.enqueue_enter`, the node
+  keeps waiting - the `dialog.topic` precedent), then exactly one of `finished`
+  (reached `flow.end` by itself, completed, somebody alive) or `aborted`
+  (stopped, the cast died, `status = failed`, the asset gone). Never bring a
+  `wait` boolean back.
 - **A step does not move, aim or shoot anything.** It writes a logic section and
   hands it to a stock scheme (`create_ini_file` + `xr_logic.configure_schemes`),
-  which is what a smart terrain does in `xr_gulag`/`smart_terrain`. Combat,
-  cover, danger, wounded and death keep working because the same schemes keep
-  running them. Do NOT add movement or combat code to the runtime: if a step
-  cannot be expressed as a scheme, the answer is a scheme, not a second AI.
-- Places are **waypoint paths** (the WayPoint tool, shipped in the module's
-  spawn layer), not coordinates: X-Ray walks patrol paths.
-- An NPC that is offline cannot take a scheme, so the step is parked in the
-  instance state and applied when it spawns in. A scenario releases everyone it
-  touched when it ends, in `xms_nq_scenario.release` - never leave an NPC in a
-  scheme nothing drives.
-- Game side: `gamedata\scripts\xms_nq_scenario.script`, registered in
-  `xms_nq.script`'s EXTENSIONS. An instance is an ordinary graph instance
-  (`core.instance_start/restore/forget`) with the uid `<module>.<scenario>#<n>`
-  - the `#` is what no asset id can contain, so an instance never collides with
-  a quest.
-- The catalog says which document may carry a kind (`docs = quest,scenario`;
-  absent = both). The editor enforces it (`E023`), so does the loader. `E024` is
-  a `who` naming a role that is not declared.
+  which is what a smart terrain does. Combat, cover, danger, wounded and death
+  keep working because the same schemes keep running them.
+- **Where the schemes cannot go, the ENGINE is taught to - not the scripts.**
+  X-Ray walks patrol paths only, so XFined-Ray got `xms.patrol_point`
+  (`CPatrolPathStorage::set_runtime_point`): a one-point runtime path at the
+  nearest navmesh cell, walked by the very same walker/camper. The user's
+  standing permission: the game engine is theirs to change, limits like this are
+  to be REMOVED rather than worked around - as long as the original game, its
+  mods and its saves keep working (a runtime path is level data, never saved; a
+  script that never calls the function sees no difference).
+- A **destination** (`npc.goto`, `npc.hold`, `npc_at_place`) is its own param
+  type: `{ path = }` (the best one), `{ ref = }`, `{ story = }`, `{ role = }`, or
+  any place. A ref is not permanent: not there yet → the step PARKS, moved → the
+  path follows, gone → the step ends and the graph moves on. A behaviour graph
+  sees the refs of whoever runs it (`util.ref_record` walks the owner chain), so
+  a ref it never creates is legal there (`E030` does not apply).
+- The engine never frees a runtime path, it moves its point - an NPC's path
+  manager keeps a raw `CPatrolPath*`. Names are pooled (`xms_rt_<n>`) in the
+  instance state.
+- **A save in the middle of a step.** The game restores an NPC's logic by file
+  NAME; a generated one is `*<tag>` and is looked up in `db.dynamic_ltx`. So
+  `apply_now` stores the ini there, every step lives in the instance state
+  (`qs.steps` / `applied` / `pending`), and `restore_early` - on `on_game_load`,
+  i.e. the actor's net_spawn, before any NPC spawns - puts the inis and the
+  runtime paths back from `core.peek_state()`. Without it an NPC saved mid-step
+  loads into a nil logic file. `core.instance_restore` re-wires waiting tokens
+  itself (instances come back after `restore_quests`). `heal_applied` re-applies
+  a step to an NPC something else took back.
+- A new param type has to be taught in THREE places: the catalog, the editor
+  (`NqCatalog::kTypes` + `NqValidate::CheckParamValue` + an inspector editor in
+  `NqInspector::DrawTyped` - without the last one the value is only editable as
+  text), and `canon_value` in the game's `xms_nq_load.script`.
+- The editor reads the catalog of the LINKED GAME; the bundled copy
+  (`gamedata\configs\nq\catalog.ltx`) is a fallback and is kept byte-identical
+  to the game's. After a catalog change the game has to be deployed before the
+  editor's QA means anything.
 - Catalog and runtime must stay in step: `tools/qa/Test-NqCatalogParity.ps1` in
   the GAME repo fails the build when a kind is declared without an
   implementation or the other way round.
-- QA: `tools/qa/test_scenarios.py --project <project>` drives the editor side
-  over MCP on a COPY of a project.
+- QA: game `tools/nq/run_lua.py test_examples.lua` (the `(z17)` section: three
+  pins, parking / following / losing a ref, the mid-step load, self-heal), editor
+  `tools/qa/test_behaviours.py --project <project>` over MCP on a COPY.
 
 ## Dangerous operations
 
@@ -366,7 +403,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 ## Icons for the editor's own assets
 
-- A quest, a scenario, a character and a character template have no picture
+- A quest, a behaviour graph, a character and a character template have no picture
   anywhere in the game, so the content browser DRAWS theirs
   (`EditorAssetIcons`): a handful of rounded rectangles, polylines and dots in
   a unit square, scaled into whatever rectangle the tile gives. Vector, not a
@@ -377,13 +414,14 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   and what a file IS costs one read of its first kilobyte, cached per path
   behind a generation that `Invalidate()` bumps from the browser's `Refresh()`.
   A tile never touches the disk to draw itself.
-- The kind comes from the extension plus a peek INSIDE the file
-  (`type = "scenario"`, `abstract = true`), so `KindOf` needs a path that
-  opens: the browser listing is project-relative and joins the project root
-  first (`IconOf`). No new MCP command - `quest_list` already reports `type`
-  and `characters_list` reports `abstract`, which is the same answer.
+- The kind comes from the extension - `.nqasset`, `.behasset` - and only a
+  character is looked INTO (`abstract = true`), so `KindOf` needs a path that
+  opens for that one: the browser listing is project-relative and joins the
+  project root first (`IconOf`). No new MCP command - `quest_list` already
+  reports `kind` and `characters_list` reports `abstract`, which is the same
+  answer.
 - Icons draw in the theme's text colour and go UNDER the selection wash, like
   a thumbnail: a selected tile does not get its own icon palette.
 - A new asset kind of the editor's own adds a kind here. Give it a shape that
-  says what the thing DOES (a quest is a flow, a scenario is a route), keep it
+  says what the thing DOES (a quest is a flow, a behaviour graph is a route), keep it
   to a few strokes, and check it at 48 and at 192.

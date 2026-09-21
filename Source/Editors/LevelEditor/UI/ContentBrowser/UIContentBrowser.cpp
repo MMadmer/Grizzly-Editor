@@ -40,11 +40,12 @@ static bool IsObjectExt(LPCSTR name)
 	return ext && !_stricmp(ext, ".object");
 }
 
-// NQ quest graph asset (docs/NQ_ARCHITECTURE.md)
+// A graph the node editor opens: a quest (.nqasset) or a behaviour graph
+// (.behasset) - docs/NQ_ARCHITECTURE.md par. 19. The extension is the kind.
 static bool IsQuestExt(LPCSTR name)
 {
 	LPCSTR ext = name ? strrchr(name, '.') : 0;
-	return ext && !_stricmp(ext, ".nqasset");
+	return ext && (!_stricmp(ext, ".nqasset") || !_stricmp(ext, ".behasset"));
 }
 // The module's own NPC (EditorCharacters.h)
 static bool IsCharacterExt(LPCSTR name)
@@ -53,11 +54,11 @@ static bool IsCharacterExt(LPCSTR name)
 	return ext && !_stricmp(ext, ".npcasset");
 }
 
-// Which drawn icon a listing entry gets. The icons tell a scenario from a
-// quest, and a template from a character, by looking INSIDE the file, so they
-// need a path that opens: the project listing keeps entries relative to the
-// project root. Anywhere else the extension alone decides, which still picks
-// the right family.
+// Which drawn icon a listing entry gets. A quest and a behaviour graph are
+// told apart by extension; a character template is told from a character by
+// looking INSIDE the file, so the icons need a path that opens: the project
+// listing keeps entries relative to the project root. Anywhere else the
+// extension alone decides, which still picks the right family.
 static EditorAssetIcons::EKind IconOf(LPCSTR entry, int source)
 {
 	if (!IsQuestExt(entry) && !IsCharacterExt(entry))	return EditorAssetIcons::kNone;
@@ -3113,7 +3114,7 @@ void UIContentBrowser::DrawGridContextMenu()
 		{
 			if (ImGui::MenuItem("Quest Graph"))	CreateQuest();
 			if (ImGui::MenuItem("Character"))	CreateCharacter();
-			if (ImGui::MenuItem("NPC Scenario"))	CreateScenario();
+			if (ImGui::MenuItem("NPC Behaviour"))	CreateBehaviour();
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
@@ -3311,7 +3312,7 @@ void UIContentBrowser::CreateCharacter()
 	BeginRename		(rel.c_str());
 }
 
-void UIContentBrowser::CreateScenario()
+void UIContentBrowser::CreateBehaviour()
 {
 	if (m_Source != 0 || !EditorProject::Active())	return;
 
@@ -3320,8 +3321,8 @@ void UIContentBrowser::CreateScenario()
 	for (int n = 1; n <= 999; ++n)
 	{
 		char leaf[64];
-		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "NewScenario.nqasset");
-		else		sprintf_s(leaf, "NewScenario%d.nqasset", n);
+		if (1 == n)	xr_strcpy(leaf, sizeof(leaf), "NewBehaviour.behasset");
+		else		sprintf_s(leaf, "NewBehaviour%d.behasset", n);
 		if (m_CurFolder.empty())	sprintf_s(probe, "%s\\%s", EditorProject::Root(), leaf);
 		else						sprintf_s(probe, "%s\\%s\\%s", EditorProject::Root(), m_CurFolder.c_str(), leaf);
 		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(probe))
@@ -3332,12 +3333,12 @@ void UIContentBrowser::CreateScenario()
 			break;
 		}
 	}
-	if (rel.empty())	{ ELog.DlgMsg(mtError, "Too many unnamed scenarios here."); return; }
+	if (rel.empty())	{ ELog.DlgMsg(mtError, "Too many unnamed behaviour graphs here."); return; }
 
 	xr_string err;
-	if (!NqExport::NewScenarioTemplate(probe, err))
+	if (!NqExport::NewBehaviourTemplate(probe, err))
 	{
-		ELog.DlgMsg(mtError, "Cannot create the scenario: %s", err.c_str());
+		ELog.DlgMsg(mtError, "Cannot create the behaviour graph: %s", err.c_str());
 		return;
 	}
 	Refresh			();
@@ -3384,7 +3385,7 @@ bool UIContentBrowser::CreateAsset(LPCSTR kind, xr_string& made, xr_string& err)
 {
 	made.clear();
 	err = "";
-	if (!kind || !kind[0])		{ err = "kind must be quest, scenario or character"; return false; }
+	if (!kind || !kind[0])		{ err = "kind must be quest, behaviour or character"; return false; }
 	if (!EditorProject::Active())	{ err = "no active project"; return false; }
 	Show();
 	if (!Form)					{ err = "content browser unavailable"; return false; }
@@ -3396,9 +3397,9 @@ bool UIContentBrowser::CreateAsset(LPCSTR kind, xr_string& made, xr_string& err)
 	for (u32 i = 0; i < Form->m_Items.size(); ++i)	before.push_back(xr_string(Form->m_Items[i].name.c_str()));
 
 	if		(0 == _stricmp(kind, "quest"))		Form->CreateQuest();
-	else if (0 == _stricmp(kind, "scenario"))	Form->CreateScenario();
+	else if (0 == _stricmp(kind, "behaviour"))	Form->CreateBehaviour();
 	else if (0 == _stricmp(kind, "character"))	Form->CreateCharacter();
-	else	{ err = "kind must be quest, scenario or character"; return false; }
+	else	{ err = "kind must be quest, behaviour or character"; return false; }
 
 	// the inline rename box belongs to the menu, not to a programmatic call
 	Form->m_Rename.clear();

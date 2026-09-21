@@ -285,7 +285,7 @@ void NqInspector::CommitQuest()
 	m_Doc->Edit([&](SNqQuest& q)
 	{
 		q.id = h.id; q.title = h.title; q.activation = h.activation;
-		q.vars = h.vars; q.tasks = h.tasks;
+		q.vars = h.vars; q.tasks = h.tasks; q.roles = h.roles;
 	});
 	m_QuestRev = m_Doc->revision;
 }
@@ -364,15 +364,83 @@ static xr_string s_ScrollTo;
 
 void NqInspector::RequestScroll(LPCSTR where) { s_ScrollTo = where ? where : ""; }
 
+// The cast of a behaviour graph: named slots its caller fills. A step says
+// who = "<role>", so the roles are the first thing an author sets up - which is
+// why they sit where a quest keeps its tasks.
+void NqInspector::DrawRolesSection(bool& ch)
+{
+	if (!ImGui::CollapsingHeader("Roles", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	ImGui::PushID("roles");
+	for (u32 i = 0; i < m_Quest.roles.size(); ++i)
+	{
+		SNqRole& r = m_Quest.roles[i];
+		ImGui::PushID((int)i);
+		const bool open = ImGui::TreeNodeEx("##role", ImGuiTreeNodeFlags_DefaultOpen, "%s%s",
+			r.name.empty() ? "(no name)" : r.name.c_str(), r.many ? "  (group)" : "");
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x"))
+		{
+			m_Quest.roles.erase(m_Quest.roles.begin() + i);
+			ch = true;
+			if (open) ImGui::TreePop();
+			ImGui::PopID();
+			break;
+		}
+		if (open)
+		{
+			ch |= InputStr("name##r", r.name);
+			Hint("What the steps call it: who = \"<name>\". a-z, 0-9 and _ only");
+			ch |= DrawText("title##r", r.title, false);
+			Hint("For the author: shown where the caller binds the role. Never seen by the player");
+			if (ImGui::Checkbox("group##r", &r.many)) ch = true;
+			Hint("The role may hold several NPCs - a squad, a list. Off: exactly one");
+			if (ImGui::Checkbox("optional##r", &r.optional)) ch = true;
+			Hint("Bound to nobody is not an error: steps addressed to it do nothing");
+			ch |= DrawNpcRef("default##r", r.def, false, false);
+			Hint("Who fills the role when the caller names nobody. Leave unset to make the caller say");
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+	if (ImGui::SmallButton("+ role"))
+	{
+		SNqRole r;
+		for (u32 number = 1;; ++number)
+		{
+			r.name = NqUtil::Format("role%u", number);
+			bool used = false;
+			for (u32 i = 0; i < m_Quest.roles.size(); ++i)
+				if (m_Quest.roles[i].name == r.name) { used = true; break; }
+			if (!used) break;
+		}
+		r.title = SNqValue::String("");
+		m_Quest.roles.push_back(r);
+		ch = true;
+	}
+	ImGui::PopID();
+}
+
 void NqInspector::DrawQuestSection()
 {
-	ImGui::TextDisabled("Quest");
+	const bool behaviour = m_Quest.IsBehaviour();
+	ImGui::TextDisabled(behaviour ? "Behaviour graph" : "Quest");
 	ImGui::Separator();
 	bool ch = false;
 	xr_string rename_requested;
 	xr_string references_requested;
 	ch |= InputStr("id", m_Quest.id);
 	ch |= DrawText("title", m_Quest.title, false);
+	if (behaviour)
+	{
+		// never starts itself and owns no tasks: a caller runs it, and what it
+		// has instead is a cast
+		Hint("For the author only - a behaviour graph shows the player nothing");
+		DrawRolesSection(ch);
+		if (ch) m_QuestDirty = true;
+		ImGui::Separator();
+		ImGui::TextDisabled("%d node(s), %d error(s), %d warning(s)", int(m_Doc->quest.nodes.size()), m_Doc->ErrorCount(), m_Doc->WarningCount());
+		return;
+	}
 	{
 		xr_vector<xr_string> acts = Items("auto", "manual");
 		ch |= ComboStr("activation", m_Quest.activation, acts);
@@ -1206,6 +1274,11 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "objective_id")		return DrawObjectiveId(label, v);
 	if (t == "kill_target")			return DrawNpcRef(label, v, false, true);
 	if (t == "place")				return DrawPlace(label, v);
+	if (t == "destination")			return DrawDestination(label, v);
+	if (t == "role")				return DrawWho(label, v);
+	if (t == "role_or_actor")		return DrawRoleTarget(label, v, false);
+	if (t == "attack_target")		return DrawRoleTarget(label, v, true);
+	if (t == "role_bindings")		return DrawRoleBindings(label, v);
 	if (t == "spawn_spec")			return DrawSpawnSpec(label, v);
 	if (t == "item_list")			return DrawItemList(label, v);
 	if (t == "loot_spawn")			return DrawLootSpawn(label, v);
@@ -1261,7 +1334,8 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 	// has to be measured here - otherwise "bar_visitors_cardan_tech_squad - Гро..."
 	// is all the author ever gets to read.
 	const xr_string t = type;
-	const bool doc_scoped = (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id");
+	const bool doc_scoped = (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id" ||
+							 t == "behaviour_id" || t == "role" || t == "way_path");
 	xr_vector<xr_string> labels, values, extras;
 	LPCSTR note = 0;
 
@@ -1274,10 +1348,18 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 		if (t == "node_id")	for (u32 i = 0; i < q.nodes.size(); ++i) ids.push_back(q.nodes[i].id);
 		xr_vector<xr_string> ref_kinds;
 		if (t == "ref_name") NqValidate::DeclaredRefsEx(q, ids, ref_kinds);
-		if (t == "quest_id")
+		if (t == "quest_id" || t == "behaviour_id")
 		{
 			if (m_ProjectQuestIdsSerial != NqProjectIndex::InvalidationSerial()) RefreshProjectQuestIds();
-			ids = m_ProjectQuestIds;
+			ids = (t == "quest_id") ? m_ProjectQuestIds : m_ProjectBehaviourIds;
+		}
+		if (t == "role")	for (u32 i = 0; i < q.roles.size(); ++i) ids.push_back(q.roles[i].name);
+		if (t == "way_path")
+		{
+			// the way paths of the scene that is open, as they are this second
+			xr_vector<NqPickers::SEntry> ways;
+			NqPickers::SceneWayPaths(ways);
+			for (u32 i = 0; i < ways.size(); ++i) ids.push_back(ways[i].id);
 		}
 		for (u32 i = 0; i < ids.size(); ++i)
 		{
@@ -1297,7 +1379,14 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			}
 			extras.push_back(extra);
 		}
-		if (labels.empty()) note = ids.empty() ? "nothing declared in this quest" : "nothing matches";
+		if (labels.empty())
+		{
+			if (!ids.empty())				note = "nothing matches";
+			else if (t == "way_path")		note = "no way paths in the open scene - draw one with the WayPoint tool";
+			else if (t == "behaviour_id")	note = "no behaviour graphs in this project";
+			else if (t == "role")			note = "this graph declares no roles";
+			else							note = "nothing declared in this quest";
+		}
 	}
 	else
 	{
@@ -1389,7 +1478,7 @@ bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
 	if (ImGui::SmallButton("..."))
 	{
 		m_Search[0] = 0;
-		if (0 == strcmp(type, "quest_id")) RefreshProjectQuestIds();
+		if (0 == strcmp(type, "quest_id") || 0 == strcmp(type, "behaviour_id")) RefreshProjectQuestIds();
 		ImGui::OpenPopup("pick");
 	}
 	if (PickerPopup("pick", type, s)) ch = true;
@@ -1399,10 +1488,235 @@ bool NqInspector::DrawPicked(LPCSTR label, LPCSTR type, xr_string& s)
 
 void NqInspector::RefreshProjectQuestIds()
 {
-	m_ProjectQuestIds.clear();
-	NqDocs::OtherQuestIds(m_Doc->path.c_str(), m_ProjectQuestIds);
-	m_ProjectQuestIds.insert(m_ProjectQuestIds.begin(), m_Doc->quest.id);
+	// two lists, because a call names one kind: quest.activate a quest,
+	// behaviour.run a behaviour graph - and neither may offer the other's
+	NqDocs::ProjectIdsOfKind(false, m_ProjectQuestIds);
+	NqDocs::ProjectIdsOfKind(true, m_ProjectBehaviourIds);
 	m_ProjectQuestIdsSerial = NqProjectIndex::InvalidationSerial();
+}
+
+//------------------------------------------------------------------------------
+// the role vocabulary of a behaviour graph
+//------------------------------------------------------------------------------
+// Where a step sends people. A waypoint path first, because it is the best
+// destination - the walker gets a route, its look points and its stops, not
+// just a point. Everything else is a place the engine turns into a point.
+bool NqInspector::DrawDestination(LPCSTR label, SNqValue& v)
+{
+	xr_vector<xr_string> modes = Items("path", "ref", "story", "role");
+	modes.push_back("smart"); modes.push_back("restrictor"); modes.push_back("pos"); modes.push_back("actor");
+	xr_string mode = ModeOf(v, modes);
+	if (mode.empty() && v.IsTable() && v.Has("level")) mode = "pos";
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ComboRoom(modes, "(unset)"));
+	xr_string m = mode;
+	if (ComboStr("##mode", m, modes, "(unset)"))
+	{
+		ch = true;
+		if (m.empty()) v = SNqValue::Nil();
+		else
+		{
+			SNqValue t = SNqValue::Table();
+			if (m == "pos") { t.Set("level", SNqValue::String(NqDocs::CurrentLevel())); SNqValue p = SNqValue::Table(); p.Push(SNqValue::Number(0)); p.Push(SNqValue::Number(0)); p.Push(SNqValue::Number(0)); t.Set("pos", p); }
+			else if (m == "actor") t.Set("actor", SNqValue::Bool(true));
+			else t.Set(m.c_str(), SNqValue::String(""));
+			v = t;
+		}
+		mode = m;
+	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("path: a way path drawn with the WayPoint tool - the best destination.\n"
+						  "ref: something the caller spawned; if it is not there yet the step waits for it.\n"
+						  "story: an object of the level.  role: wherever that role stands.\n"
+						  "smart / restrictor / pos / actor: a place - the engine walks them to the nearest spot a stalker can stand on.");
+	if (mode == "pos") ch |= DrawPosition(v);
+	else if (mode == "actor") { /* where the player is when the step runs: nothing more to say */ }
+	else if (!mode.empty())
+	{
+		xr_string s = v.GetString(mode.c_str());
+		LPCSTR type = (mode == "ref") ? "ref_name" : (mode == "path") ? "way_path" : (mode == "story") ? "story_id" : mode.c_str();
+		xr_string field = mode + "##dest_value";
+		if (DrawPicked(field.c_str(), type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+// `who`: one role or several. A tick per declared role, so the author never
+// types a name the graph does not have.
+bool NqInspector::DrawWho(LPCSTR label, SNqValue& v)
+{
+	const xr_vector<SNqRole>& roles = m_Doc->quest.roles;
+	xr_vector<xr_string> picked;
+	if (v.IsString() && !v.s.empty())	picked.push_back(v.s);
+	else if (v.IsTable())
+		for (u32 i = 0; i < v.arr.size(); ++i)
+			if (v.arr[i].IsString()) picked.push_back(v.arr[i].s);
+
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	if (roles.empty())
+	{
+		ImGui::SameLine();
+		ImGui::TextDisabled("declare a role first (click the empty canvas)");
+	}
+	ImGui::Indent();
+	for (u32 i = 0; i < roles.size(); ++i)
+	{
+		bool on = std::find(picked.begin(), picked.end(), roles[i].name) != picked.end();
+		xr_string cap = roles[i].name + (roles[i].many ? "  (group)" : "");
+		if (ImGui::Checkbox(cap.c_str(), &on))
+		{
+			if (on)	picked.push_back(roles[i].name);
+			else	picked.erase(std::remove(picked.begin(), picked.end(), roles[i].name), picked.end());
+			ch = true;
+		}
+	}
+	// a name the graph no longer declares stays visible instead of vanishing
+	for (u32 i = 0; i < picked.size(); ++i)
+	{
+		bool known = false;
+		for (u32 r = 0; r < roles.size(); ++r) if (roles[r].name == picked[i]) known = true;
+		if (known) continue;
+		ImGui::TextColored(ImVec4(1.f, .45f, .4f, 1.f), "%s - not a role of this graph", picked[i].c_str());
+		ImGui::SameLine();
+		xr_string drop = "drop##" + picked[i];
+		if (ImGui::SmallButton(drop.c_str())) { picked.erase(picked.begin() + i); ch = true; break; }
+	}
+	ImGui::Unindent();
+	if (ch)
+	{
+		if (picked.empty())				v = SNqValue::Nil();
+		else if (picked.size() == 1)	v = SNqValue::String(picked[0]);
+		else
+		{
+			v = SNqValue::Table();
+			for (u32 i = 0; i < picked.size(); ++i) v.Push(SNqValue::String(picked[i]));
+		}
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+// Who a follow walks after, or who an attack is aimed at: the player, a role,
+// an object - and for an attack a whole community or a profile as well.
+bool NqInspector::DrawRoleTarget(LPCSTR label, SNqValue& v, bool attack)
+{
+	xr_vector<xr_string> modes = Items("actor", "role", "ref", "story");
+	if (attack) { modes.push_back("community"); modes.push_back("profile"); }
+	xr_string mode = ModeOf(v, modes);
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(ComboRoom(modes, "(unset)"));
+	xr_string m = mode;
+	if (ComboStr("##mode", m, modes, "(unset)"))
+	{
+		ch = true;
+		if (m.empty()) v = SNqValue::Nil();
+		else
+		{
+			SNqValue t = SNqValue::Table();
+			if (m == "actor")	t.Set("actor", SNqValue::Bool(true));
+			else				t.Set(m.c_str(), SNqValue::String(""));
+			v = t;
+		}
+		mode = m;
+	}
+	if (!mode.empty() && mode != "actor")
+	{
+		xr_string s = v.GetString(mode.c_str());
+		LPCSTR type = (mode == "ref") ? "ref_name" : (mode == "story") ? "story_id" : mode.c_str();
+		xr_string field = mode + "##target_value";
+		if (DrawPicked(field.c_str(), type, s)) { v.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+	}
+	ImGui::PopID();
+	return ch;
+}
+
+// What a caller hands the graph it runs: one row per role THAT graph declares,
+// read from the asset the node names - so the author fills a form instead of
+// remembering somebody else's role names.
+bool NqInspector::DrawRoleBindings(LPCSTR label, SNqValue& v)
+{
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+
+	xr_string asset = m_ParamsCtx ? m_ParamsCtx->GetString("asset", "") : xr_string();
+	xr_vector<SNqRole> roles;
+	xr_string found_error;
+	if (!asset.empty() && asset.find('.') == xr_string::npos)
+	{
+		xr_vector<NqDocs::SProjectQuest> all;
+		NqDocs::ProjectQuests(all);
+		bool found = false;
+		for (u32 i = 0; i < all.size() && !found; ++i)
+			if (all[i].behaviour && all[i].readable && all[i].id == asset)
+			{
+				SNqQuest q;
+				xr_string err;
+				if (NqDocs::ReadQuest(all[i].path.c_str(), q, err)) roles = q.roles;
+				else found_error = err;
+				found = true;
+			}
+		if (!found) found_error = "no behaviour graph called '" + asset + "' in this project";
+	}
+
+	if (asset.empty())				ImGui::TextDisabled("pick the asset first - its roles appear here");
+	else if (!found_error.empty())	ImGui::TextColored(ImVec4(1.f, .45f, .4f, 1.f), "%s", found_error.c_str());
+
+	if (!v.IsTable() && !roles.empty()) { /* made on first edit */ }
+	ImGui::Indent();
+	for (u32 i = 0; i < roles.size(); ++i)
+	{
+		const SNqRole& r = roles[i];
+		ImGui::PushID((int)i);
+		SNqValue binding;
+		if (v.IsTable()) if (const SNqValue* b = v.Get(r.name.c_str())) binding = *b;
+		xr_string cap = r.name;
+		const xr_string title = NqText::Preview(r.title);
+		if (!title.empty())	cap += "  -  " + title;
+		if (r.many)			cap += "  (group)";
+		if (!r.def.IsNil())	cap += "  [has a default]";
+		else if (r.optional) cap += "  [optional]";
+		ImGui::TextDisabled("%s", cap.c_str());
+		// a group takes a squad by ref as happily as one stalker by story id
+		if (DrawNpcRef("##bind", binding, false, false))
+		{
+			if (!v.IsTable()) v = SNqValue::Table();
+			if (binding.IsNil() || binding.IsEmpty())	v.Erase(r.name.c_str());
+			else										v.Set(r.name.c_str(), binding);
+			if (v.IsTable() && v.keys.empty() && v.arr.empty()) v = SNqValue::Nil();
+			ch = true;
+		}
+		ImGui::PopID();
+	}
+	// a binding for a role the asset no longer declares is shown, not swallowed
+	if (v.IsTable())
+		for (u32 k = 0; k < v.keys.size(); ++k)
+		{
+			bool known = roles.empty() && !found_error.empty();
+			for (u32 i = 0; i < roles.size(); ++i) if (roles[i].name == v.keys[k]) known = true;
+			if (known) continue;
+			if (roles.empty() && asset.empty()) continue;
+			ImGui::TextColored(ImVec4(1.f, .8f, .35f, 1.f), "%s - the asset declares no such role", v.keys[k].c_str());
+			ImGui::SameLine();
+			xr_string drop = "drop##" + v.keys[k];
+			if (ImGui::SmallButton(drop.c_str())) { v.Erase(v.keys[k].c_str()); ch = true; break; }
+		}
+	ImGui::Unindent();
+	ImGui::PopID();
+	return ch;
 }
 
 bool NqInspector::DrawText(LPCSTR label, SNqValue& v, bool multiline)

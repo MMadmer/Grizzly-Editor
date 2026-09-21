@@ -144,7 +144,9 @@ xr_string UIQuestGraphWindow::Title() const
 {
 	// the label carries the file name; the imgui id is pinned to the path
 	xr_string name = NqUtil::BaseName(m_Doc->path.c_str());
-	return NqUtil::Format("Quest: %s%s###nq_%s", name.c_str(), m_Doc->dirty ? " *" : "", NqUtil::PathKey(m_Doc->path.c_str()).c_str());
+	// a behaviour graph is not a quest and its tab does not say it is
+	return NqUtil::Format("%s: %s%s###nq_%s", m_Doc->quest.IsBehaviour() ? "Behaviour" : "Quest",
+		name.c_str(), m_Doc->dirty ? " *" : "", NqUtil::PathKey(m_Doc->path.c_str()).c_str());
 }
 
 void UIQuestGraphWindow::RequestClose(bool discard)
@@ -728,8 +730,8 @@ void UIQuestGraphWindow::Draw()
 	if (!open) RequestClose(false);
 
 	// The palette belongs to the document being drawn: a quest is never offered
-	// a step that drives an NPC, a scenario is never offered a task action.
-	NqCatalog::SetDocScenario(m_Doc && m_Doc->quest.IsScenario());
+	// a step that drives an NPC, a behaviour graph is never offered a task action.
+	NqCatalog::SetDocBehaviour(m_Doc && m_Doc->quest.IsBehaviour());
 
 	// hotkeys of the tab (the canvas handles its own when hovered/focused)
 	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput)
@@ -1030,7 +1032,7 @@ namespace UIQuestGraph
 	void McpClose(LPCSTR raw, xr_string& out)
 	{
 		xr_string path;
-		if (!NqUtil::ArgString(raw, "path", path) || path.empty()) { NqUtil::JsonError(out, "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset)"); return; }
+		if (!NqUtil::ArgString(raw, "path", path) || path.empty()) { NqUtil::JsonError(out, "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset or npc/ambush.behasset)"); return; }
 		NqDoc* doc = NqDocs::Get(path.c_str());
 		if (!doc) { NqUtil::JsonError(out, "not open"); return; }
 		const bool discard = NqUtil::ArgBool(raw, "discard", false);

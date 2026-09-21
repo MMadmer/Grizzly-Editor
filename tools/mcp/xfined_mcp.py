@@ -745,8 +745,8 @@ TOOLS = [
     {
         "name": "xfined_content_create",
         "description": "Create one of the editor's own assets in the folder the content browser has open "
-                       "(the Create menu, without the menu). 'kind' is quest, scenario or character; the "
-                       "file gets the first free NewQuest/NewScenario/NewCharacter name, which "
+                       "(the Create menu, without the menu). 'kind' is quest, behaviour or character; the "
+                       "file gets the first free NewQuest/NewBehaviour/NewCharacter name, which "
                        "xfined_content_rename then changes. A folder is xfined_content_mkdir instead. "
                        "Returns 'made', the new file project-relative.",
         "inputSchema": {
@@ -754,8 +754,8 @@ TOOLS = [
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["quest", "scenario", "character"],
-                    "description": "quest graph (.nqasset), NPC scenario (.nqasset, type=scenario) "
+                    "enum": ["quest", "behaviour", "character"],
+                    "description": "quest graph (.nqasset), NPC behaviour graph (.behasset) "
                                    "or character (.npcasset)",
                 },
             },
@@ -1499,8 +1499,9 @@ TOOLS = [
         "name": "xfined_quest_lookup",
         "description": "Search the game data behind the parameter pickers: type = item_section | squad_section | "
                        "level | smart | story_id | profile | community | info | spot_type (from the linked game, cached), "
-                       "or the document-scoped task_id | var_name | ref_name | node_id (needs 'path') | quest_id "
-                       "(quests of the project). 'query' is a case-insensitive substring of id or name; 'limit' default 50. "
+                       "or the document-scoped task_id | var_name | ref_name | node_id | role (need 'path') | quest_id "
+                       "(quests of the project) | behaviour_id (behaviour graphs of the project) | way_path (way paths "
+                       "of the open scene). 'query' is a case-insensitive substring of id or name; 'limit' default 50. "
                        "A ref_name entry carries its category (squad | object | item) in 'extra', the same hint the picker shows.",
         "inputSchema": {
             "type": "object",

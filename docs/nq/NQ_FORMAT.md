@@ -674,19 +674,20 @@ To check in the game: `nq list` shows
 `nq state <uid>` — the token, the `agreed`/`asked` values, the `boars` ref,
 the task status and the full graph outline.
 
-## 10. Scenarios — graphs that drive NPCs
+## 10. Behaviour graphs — the assets that drive NPCs
 
-A quest tracks the player. A **scenario** drives NPCs: a squad walks to a
-courtyard, digs in and opens fire on whoever the quest points it at. It is the
-**same file format and the same interpreter**, with `type = "scenario"`, and it
-is started by a quest node, never by itself.
+A quest tracks the player. A **behaviour graph** drives NPCs: a squad walks to a
+courtyard, digs in and opens fire on whoever its caller points it at; a courier
+walks his route and turns on the player at the end of it. It is **its own
+asset**, not a quest with a flag - a `.behasset` with the header `beh = 1` - on
+the same graph engine, so everything you know about nodes, pins, conditions and
+variables applies unchanged. It never starts itself: a caller runs it.
 
 ```lua
 return {
-  nq    = 1,
-  type  = "scenario",
+  beh   = 1,
   id    = "bridge_ambush",
-  title = "Засада у моста",
+  title = "Засада у моста",        -- for the author; the player never sees it
   roles = {
     leader    = { title = "Главный", default = { story = "esc_wolf" } },
     attackers = { title = "Налётчики", many = true },
@@ -694,11 +695,14 @@ return {
   nodes = {
     { id = "start", kind = "trigger.start", out = { next = "move_in" } },
     { id = "move_in", kind = "npc.goto",
-      params = { who = { "leader", "attackers" }, path = "bridge_walk", move = "run" },
+      params = { who = { "leader", "attackers" }, place = { path = "bridge_walk" }, move = "run" },
+      out = { done = "to_the_case" } },
+    { id = "to_the_case", kind = "npc.goto",
+      params = { who = "leader", place = { ref = "dropped_case" } },   -- the CALLER's ref
       out = { done = "dig_in" } },
     { id = "dig_in", kind = "flow.step",
       on_enter = {
-        { kind = "npc.hold",   params = { who = "attackers", path = "bridge_post", look = "bridge_look" } },
+        { kind = "npc.hold",   params = { who = "attackers", place = { role = "leader" }, look = "bridge_look" } },
         { kind = "npc.attack", params = { who = "attackers", target = { actor = true } } },
       },
       out = { next = "finish" } },
@@ -707,10 +711,16 @@ return {
 }
 ```
 
+**The extension is the kind of document.** There is no `type` key - writing one
+is an error - and the header key has to agree with the extension: `nq` in a
+`.nqasset`, `beh` in a `.behasset`. A renamed file is refused (`E001`) instead of
+being quietly read as the other thing. Quests and behaviour graphs share one id
+space per module (`E002`).
+
 ### 10.1 Roles
 
-A role is a slot the **calling quest** fills, which is what makes one scenario
-serve any cast.
+A role is a slot the **caller** fills, which is what makes one graph serve any
+cast. The Behaviour Graph window edits them where a quest keeps its tasks.
 
 | field | meaning |
 |---|---|
@@ -721,12 +731,12 @@ serve any cast.
 
 Bindings take the object reference forms of §3 — `{ story = … }`, `{ ref = … }`,
 `{ squad = … }`, `{ profile = … }`, `{ community = … }` — or a list of them. A
-ref resolves against the **calling quest's** refs, so a squad that quest made
-with `spawn.squad` is bound by its name.
+ref resolves against the **caller's** refs, so a squad the quest made with
+`spawn.squad` is bound by its name.
 
 Members are resolved **once, on entry**, and kept: the cast cannot change under
 the graph's feet. Members that die drop out; a step addressed to an empty role
-is a no-op, and a scenario whose every role is empty ends by itself.
+is a no-op, and a graph whose every role is empty ends by itself (`aborted`).
 
 ### 10.2 Steps
 
@@ -736,57 +746,116 @@ catalog says it waits.
 
 | kind | what it does |
 |---|---|
-| `npc.goto` | **`who: role`**, **`path: way_path`**, `look`, `move` (`walk`\|`run`), `arrive` (default true), `radius` → pin `done`. Walks a waypoint path (walker). `arrive` holds the node until everyone is within `radius` of the path's end. |
-| `npc.hold` | **`who`**, **`path`**, `look`, `radius`, `shoot`, `no_retreat`. With a look path it digs in and watches it (camper); without one it stands guard on the path. |
+| `npc.goto` | **`who: role`**, **`place: destination`**, `look`, `move` (`walk`\|`run`), `arrive` (default true), `radius` → pin `done`. Sends the role to a destination (10.3) with the stock walker. `arrive` holds the node until everyone is within `radius`. |
+| `npc.hold` | **`who`**, **`place: destination`**, `look`, `radius`, `shoot`, `no_retreat`. With a look path it digs in and watches it (camper); without one it stands guard. |
 | `npc.anim` | **`who`**, `state` (default `wait`), `look: target_ref`, `sound`. Plays an animation state where the NPC stands (remark). |
-| `npc.follow` | **`who`**, **`target: role_or_actor`**, `distance`. Follows the player or another role (companion). |
+| `npc.follow` | **`who`**, **`target: role_or_actor`**, `distance`. Follows the player, another role, or an object - `{ ref = }` / `{ story = }` (companion). |
 | `npc.attack` | **`who`**, **`target: attack_target`**. Makes the role hostile to the target - the game's own combat does the rest. |
 | `npc.stance` | **`who`**, `to_actor: relation`, `goodwill`, `combat_ignore`, `invulnerable`. Only the fields you set change. |
-| `npc.release` | **`who`**. Hands the role back early; a scenario releases everyone it touched when it ends. |
-| `npc_at_place` | cond: **`who`**, **`path`**, `radius`. Every living member is at the path's end. |
+| `npc.release` | **`who`**. Hands the role back early; a graph releases everyone it touched when it ends. |
+| `npc_at_place` | cond: **`who`**, **`place: destination`**, `radius`. Every living member is there. |
 | `npc_in_combat` | cond: **`who`**. Any living member has an enemy. |
 | `role_alive` | cond: **`who`**, `all`. A member is alive (`all = true`: every one). |
 
-Everything else a scenario needs — `flow.*`, `wait.*`, `var.*`, `signal.*`,
-`sound.play`, `relation.*`, `item.*`, `npc.kill`, `npc.remove`, `npc.set_name`,
-`spawn.*`, `squad.*` and every condition — is the quest vocabulary, shared.
+**The vocabulary is shared where it is the graph, and split where it is the
+subject.** A behaviour graph carries everything that is graph plumbing - `flow.*`,
+`wait.*`, `var.*`, `signal.*`, `trigger.*`, the world conditions and events,
+`info.*`, `relation.*`, `spawn.*`, `squad.*`, `sound.play`, `npc.kill`,
+`npc.remove`, `npc.set_name`, and `behaviour.*` itself (a graph may run another).
+It may NOT carry what belongs to the player or to the quest system: `task.*`,
+`objective.*`, `dialog.*`, `quest.activate`, `money.*`, `news.tip`, `map.spot` /
+`map.unspot`, `actor.teleport`, `item.give` / `item.take`, and the conditions
+`quest_status`, `task_status`, `objective_status` (`E023`). A quest, the other
+way round, may not carry the role vocabulary.
 
-**A place is a waypoint path, not a coordinate.** Paths are authored with the
-editor's WayPoint tool and ship in the module's spawn layer, which is exactly
-what `path_walk`/`path_look` want; X-Ray walks patrol paths, and a path invented
-at run time would be a second movement system.
+### 10.3 Destinations
 
-### 10.3 Running one from a quest
+`place` of a step is a **destination**:
+
+| shape | walks to |
+|---|---|
+| `{ path = "bridge_walk" }` | a waypoint path drawn with the WayPoint tool - **the best destination**: the walker gets a route, its look points and its stops |
+| `{ ref = "dropped_case" }` | something the caller spawned - see below |
+| `{ story = "esc_wolf" }` | an object of the level |
+| `{ role = "leader" }` | wherever that role's first living member stands |
+| `{ smart = … }`, `{ restrictor = … }`, `{ pos = {x,y,z}, level = … }`, `{ actor = true }` | a place |
+
+X-Ray walks patrol paths and nothing else. For every destination that is not a
+drawn path the ENGINE registers a one-point runtime path at the navmesh cell
+nearest to it (XFined-Ray, `xms.patrol_point`), and the same stock walker or
+camper walks there - so danger, cover, wounded and combat keep working whatever
+the destination is, and no step contains movement code.
+
+**A ref does not have to be there.** It names something a quest spawned and may
+remove again, so a step treats it as something that comes and goes:
+
+- not in the world yet (or on another level, or nowhere a stalker can stand
+  within 15 m) → the step **parks** and is applied the moment it resolves;
+- it moved → its path moves with it and the people on their way are sent again;
+- it went away mid-step → the step ends, the node leaves by `done`, the graph
+  moves on.
+
+**A behaviour graph sees the refs of whoever runs it**, which is what makes
+`{ ref = "dropped_case" }` mean the case the QUEST dropped - and why a ref the
+graph never creates is legal in a `.behasset` (in a quest it is `E030`). To keep
+a graph independent of its caller's ref names, take the thing as a role and
+write `{ role = … }` instead.
+
+### 10.4 Running one
 
 | kind | what it does |
 |---|---|
-| `scenario.run` | **`asset: scenario_id`**, `roles: role_bindings`, `wait_end` (default true), `ref` → pin `done`. Starts the scenario. `wait_end` holds the node until it ends; `ref` saves the instance. |
-| `scenario.stop` | **`target: ref_name`**. Ends it and releases its NPCs. |
-| `scenario_running` / `scenario_done` | conds on that ref. |
+| `behaviour.run` | **`asset: behaviour_id`**, `roles: role_bindings`, `ref` → pins `started`, `finished`, `aborted`. |
+| `behaviour.stop` | **`target: ref_name`**. Ends it and releases its NPCs; the call leaves by `aborted`. |
+| `behaviour_running` / `behaviour_done` | conds on that ref. |
+
+**Three pins, no mode flag - the wiring is the mode:**
+
+| pin | fires |
+|---|---|
+| `started` | at once; the node itself keeps waiting for its other exit |
+| `finished` | the graph reached `flow.end` by itself (`status = completed`) with somebody of its cast alive |
+| `aborted` | `behaviour.stop`, the whole cast dead, `flow.end` with `status = failed`, or the asset gone after an update |
+
+Wire `started` alone and the quest carries on (fire and forget). Wire `finished`
+alone and the quest waits. Wire both and it does both. `aborted` handles the
+ambush that never happened without a single condition. Exactly one of
+`finished` / `aborted` fires; a pin left loose is not an error.
 
 ```lua
-{ id = "spring_the_trap", kind = "scenario.run",
-  params = { asset = "bridge_ambush", wait_end = true, ref = "ambush",
+{ id = "spring_the_trap", kind = "behaviour.run",
+  params = { asset = "bridge_ambush", ref = "ambush",
              roles = { leader = { story = "esc_wolf" }, attackers = { ref = "ambush_squad" } } },
-  out = { done = "after_the_fight" } }
+  out = { started = "tell_the_player", finished = "after_the_fight", aborted = "they_never_showed" } }
 ```
 
-### 10.4 How a step reaches an NPC
+In the inspector the `roles` of the call are a FORM: pick the asset and one row
+per role that graph declares appears, captioned with its title, `(group)`,
+`[has a default]` or `[optional]`.
+
+### 10.5 How a step reaches an NPC
 
 It does not move anything itself. A step writes a small logic section and hands
 it to the stock scheme with `create_ini_file` + `xr_logic.configure_schemes` —
 the same thing a smart terrain does. Combat, cover, danger, wounded and death
-keep working because the same schemes keep running them, and a scenario can only
-do what the schemes can do. That is the point: the alternative is a second AI
-fighting the first.
+keep working because the same schemes keep running them.
 
 An NPC that is **offline** has no game object to take a scheme, so the step is
-parked and applied the moment it spawns in.
+parked and applied the moment it spawns in. A **save in the middle of a step** is
+safe: the instance keeps every step in its state, and the runtime puts the
+generated logic file and the runtime path back before the first NPC spawns, so
+the NPC comes back into the very section it was in. An NPC something else took
+back - a smart terrain handing out jobs - is given its step again.
 
-### 10.5 What the validator refuses
+### 10.6 What the validator refuses
 
 | code | meaning |
 |---|---|
-| `E023` | a kind used in the wrong document (`npc.goto` in a quest, `task.give` in a scenario) |
-| `E024` | `who` names a role the scenario does not declare |
-| `E006` | `tasks`/`activation` in a scenario, `roles` in a quest, a scenario with no roles |
+| `E001` | the header key disagrees with the extension (`nq` in a `.behasset`, `beh` in a `.nqasset`) |
+| `E002` | an id another document of the project already uses - quests and behaviour graphs share one id space |
+| `E003` | a `type` key: the extension and the header say what a document is |
+| `E006` | `tasks` / `activation` in a behaviour graph, `roles` in a quest, a behaviour graph with no roles |
+| `E023` | a kind used in the wrong document (`npc.goto` in a quest, `money.give` in a behaviour graph) |
+| `E024` | `who`, or `{ role = }` in a destination or a target, names a role the graph does not declare |
+| `E030` | `behaviour.run` names a graph that is not in the project |
+| `E113` | a behaviour graph that runs itself, directly or through the graphs it calls |

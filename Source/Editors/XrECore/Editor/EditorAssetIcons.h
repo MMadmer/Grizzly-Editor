@@ -30,13 +30,14 @@ namespace EditorAssetIcons
 	{
 		kNone = 0,
 		kQuest,				// .nqasset
-		kScenario,			// .nqasset with type = "scenario"
+		kBehaviour,			// .behasset
 		kCharacter,			// .npcasset
 		kCharacterTemplate,	// .npcasset with abstract = true
 	};
 
-	// What the file at `path` is, from its extension and (for the two that share
-	// one) a cached peek at its head. kNone for anything else.
+	// What the file at `path` is. The extension answers it for a quest and a
+	// behaviour graph; only a character has to be looked INTO, to tell a
+	// template from the real thing (a cached peek at its head). kNone otherwise.
 	ECORE_API EKind		KindOf		(LPCSTR path);
 	// Drops the cached answers; the next KindOf for a path reads it again.
 	ECORE_API void		Invalidate	();

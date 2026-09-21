@@ -143,11 +143,17 @@ namespace NqDocs
 		xr_string	id;			// "" when unreadable
 		xr_string	title;
 		bool		readable;
+		bool		behaviour;	// a behaviour graph (.behasset), not a quest
 		xr_string	error;		// parse error when !readable
+		SProjectQuest() : readable(false), behaviour(false) {}
 	};
+	// every graph document of the project - quests AND behaviour graphs
 	ECORE_API void		ProjectQuests(xr_vector<SProjectQuest>& out, bool disk_only = false);
-	// ids of the project's quests except the one at `except_path`
+	// ids of the project's OTHER graph documents, both kinds: quests and
+	// behaviour graphs share one id space, because the game names both by uid
 	ECORE_API void		OtherQuestIds(LPCSTR except_path, xr_vector<xr_string>& out, bool disk_only = false);
+	// ids of one kind only: what quest.activate / behaviour.run may name
+	ECORE_API void		ProjectIdsOfKind(bool behaviour, xr_vector<xr_string>& out, bool disk_only = false);
 	// name of the level of the current scene when it is a level of the linked game (E031)
 	ECORE_API xr_string	CurrentLevel();
 	// forget cached project scans (after writes from outside the doc layer)

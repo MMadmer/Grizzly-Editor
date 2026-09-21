@@ -48,6 +48,24 @@ static void CollectSceneRestrictors(xr_vector<NqPickers::SEntry>& out)
     }
 }
 
+// The way paths of the open scene - what a behaviour step walks (npc.goto,
+// npc.hold). Live, for the same reason the restrictors are.
+static void CollectSceneWayPaths(xr_vector<NqPickers::SEntry>& out)
+{
+    out.clear();
+    if (!Scene) return;
+    ObjectList& lst = Scene->ListObj(OBJCLASS_WAY);
+    for (ObjectIt it = lst.begin(); it != lst.end(); ++it)
+    {
+        LPCSTR name = (*it) ? (*it)->GetName() : 0;
+        if (!name || !name[0]) continue;
+        NqPickers::SEntry e;
+        e.id = name;
+        e.extra = "scene";
+        out.push_back(e);
+    }
+}
+
 // The typed "Story ID (script)" of every spawn object in the open scene: the block sits
 // in the object's custom data, and picking it up live means the name is usable in the
 // quest pickers the moment the author writes it - no save, no export.
@@ -100,6 +118,7 @@ CLevelMain::CLevelMain()
     EPrefs			= xr_new<CLevelPreferences>();
     NqPickers::SetSceneRestrictors(CollectSceneRestrictors);
     NqPickers::SetSceneStories(CollectSceneStories);
+    NqPickers::SetSceneWayPaths(CollectSceneWayPaths);
 }
 
 CLevelMain::~CLevelMain()

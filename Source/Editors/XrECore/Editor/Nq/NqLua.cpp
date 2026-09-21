@@ -583,16 +583,23 @@ void NqLua::QuestFromValue(const SNqValue& v, SNqQuest& q, xr_vector<xr_string>&
 {
 	q.Clear();
 	if (!v.IsTable()) { ShapeErr(errs, "the file must return one table"); return; }
-	if (const SNqValue* x = v.Get("nq"))
+	// The header key IS the kind of document: `nq` a quest, `beh` a behaviour
+	// graph (NQ_ARCHITECTURE par. 19.3). Whether it agrees with the file's
+	// extension is the validator's business (E001) - this reader sees text only.
+	const SNqValue* ver_nq	= v.Get("nq");
+	const SNqValue* ver_beh	= v.Get("beh");
+	if (ver_nq && ver_beh)
+		ShapeErr(errs, "a document is a quest (nq) or a behaviour graph (beh), not both");
+	q.type = (ver_beh && !ver_nq) ? "behaviour" : "quest";
+	if (const SNqValue* x = q.IsBehaviour() ? ver_beh : ver_nq)
 	{
 		if (x->IsNumber()) q.nq = (int)x->n;
-		else { q.nq = (int)x->AsNumber(-1); if (q.nq < 0) ShapeErr(errs, "nq must be a number"); }
+		else { q.nq = (int)x->AsNumber(-1); if (q.nq < 0) ShapeErr(errs, "the version must be a number"); }
 	}
 	else q.nq = 0;		// absent -> E001 by the validator
+	if (v.Has("type"))
+		ShapeErr(errs, "there is no type key: .nqasset + nq is a quest, .behasset + beh is a behaviour graph");
 	q.id = v.GetString("id", "");
-	// quest or scenario: absent means quest, so every asset written before
-	// scenarios existed keeps its meaning (NQ_ARCHITECTURE par. 19.3)
-	q.type = v.GetString("type", "quest");
 	if (const SNqValue* x = v.Get("title")) q.title = *x;
 	q.activation = v.GetString("activation", "auto");
 	if (const SNqValue* roles = v.Get("roles"))
@@ -771,16 +778,14 @@ void NqLua::NodeToValue(const SNqNode& n, SNqValue& out)
 void NqLua::QuestToValue(const SNqQuest& q, SNqValue& out)
 {
 	out = SNqValue::Table();
-	Put(out, "nq", SNqValue::Number(q.nq));
-	// only a scenario says what it is: a quest is the default and stays quiet,
-	// so nothing that was written before scenarios existed changes on a save
-	if (q.IsScenario()) Put(out, "type", SNqValue::String("scenario"));
+	// the header key is the kind (see the reader): nothing else in the file says it
+	Put(out, q.IsBehaviour() ? "beh" : "nq", SNqValue::Number(q.nq));
 	Put(out, "id", SNqValue::String(q.id));
 	// an absent title stays absent: the runtime falls back to the id for a nil
 	// title, but an empty string is a title, and the journal would show nothing
 	if (!q.title.IsNil()) Put(out, "title", q.title);
-	// a scenario never starts itself, so activation is not its business
-	if (!q.IsScenario()) Put(out, "activation", SNqValue::String(q.activation));
+	// a behaviour graph never starts itself, so activation is not its business
+	if (!q.IsBehaviour()) Put(out, "activation", SNqValue::String(q.activation));
 	if (!q.roles.empty())
 	{
 		SNqValue roles = SNqValue::Table();
@@ -1103,7 +1108,7 @@ xr_string NqLua::Write(const SNqQuest& q)
 {
 	xr_string out;
 	// header: the only comments the editor writes; ignored on read
-	out += "-- nq: ";
+	out += q.IsBehaviour() ? "-- beh: " : "-- nq: ";
 	out += q.id;
 	out += " \"";
 	out += OneLine(NqText::Preview(q.title));
