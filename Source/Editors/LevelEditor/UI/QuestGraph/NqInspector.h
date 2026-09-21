@@ -100,6 +100,8 @@ private:
 	bool			DrawRoleTarget	(LPCSTR label, SNqValue& v, bool attack);
 	bool			DrawRoleBindings(LPCSTR label, SNqValue& v);
 	void			DrawRolesSection(bool& changed);
+	// spawn.npc: one row per NPC - a character of the project or a section
+	bool			DrawNpcList		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
 	bool			DrawSpawnSpec	(LPCSTR label, SNqValue& v);
 	bool			DrawItemList	(LPCSTR label, SNqValue& v, bool objects_ok = true,

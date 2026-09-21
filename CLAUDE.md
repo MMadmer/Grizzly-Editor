@@ -270,6 +270,22 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The visual an NPC spawns with is the one it keeps: `ChangeVisual` is applied
   to the ACTOR only (CustomOutfit.cpp), so an outfit changes an NPC's
   protection and not its model. A different look is a different character.
+- **A quest spawns a character by its ASSET**: `spawn.npc` (catalog v17) takes
+  rows `{ character = "<id>" | section = "<spawn section>", ref, unique, dead,
+  yaw }`, and the game turns `character` into `<module>_<id>` itself
+  (`xms_nq_world.script`). The picker and the validator read
+  `EditorCharacters::Briefs()` - a cached list, dropped by `Invalidate()` from
+  every write/delete and from the browser's `Refresh()`; never scan the project
+  per frame or per validated row. A template is listed and refused (`E030`).
+- `unique` means "remove every NPC of that kind first" and its default follows
+  the row: ON for a character (one person), OFF for a section (a kind half the
+  zone shares - default-on there would wipe `sim_default_stalker_1` off the
+  map). Editor and runtime must agree on that default; only a value that
+  differs from it is written.
+- A kind with a row schema (`rows` in the catalog) is NOT automatically an item
+  kind: `NqInspector::DrawParams` sends only kinds with an `item_list` to the
+  item-rows form. `spawn.npc` has rows and goes through the typed editors
+  (`DrawNpcList`).
 - `npc.set_name` is NOT this. It renames an NPC at run time, for when the player
   learns who someone is; it needs no profile and changes nothing on disk.
 - QA: `tools/qa/test_characters.py --project <project>` runs the whole path over

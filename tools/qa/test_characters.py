@@ -176,6 +176,128 @@ LOOP_B = """return {
 """
 
 
+QA_TPL = """return {
+  npc      = 1,
+  id       = "qa_tpl",
+  abstract = true,
+}
+"""
+
+QA_RUNNER = """return {
+  npc       = 1,
+  id        = "qa_runner",
+  base      = "qa_tpl",
+  name      = "Runner",
+  community = "stalker",
+  visual    = "actors\\\\stalker_neutral\\\\stalker_neutral_1",
+}
+"""
+
+SPAWNER = """return {
+    nq = 1, id = "qa_spawner", title = "QA spawner",
+    nodes = {
+        { id = "start", kind = "trigger.start",
+          on_enter = {
+              { kind = "spawn.npc", params = {
+                    place = { smart = "esc_smart_terrain_2_12" },
+                    npcs  = {
+                        { character = "qa_courier", ref = "courier" },
+                        { character = "qa_runner", ref = "guard", unique = false },
+                        { section = "sim_default_stalker_1", ref = "extra", unique = false, dead = true },
+                    },
+              } },
+              { kind = "npc.set_name", params = { npc = { ref = "courier" }, name = "Tester" } },
+          },
+          out = { next = "finish" } },
+        { id = "finish", kind = "flow.end" },
+    },
+}
+"""
+
+SPAWNER_BAD = """return {
+    nq = 1, id = "qa_spawner_bad", title = "QA spawner, wrong",
+    nodes = {
+        { id = "start", kind = "trigger.start",
+          on_enter = {
+              { kind = "spawn.npc", params = {
+                    place = { smart = "esc_smart_terrain_2_12" },
+                    npcs  = {
+                        { character = "qa_nobody" },
+                        { character = "qa_tpl" },
+                        { character = "qa_courier", section = "stalker" },
+                        { ref = "lonely" },
+                        { character = "qa_courier", uniqe = true },
+                    },
+              } },
+          },
+          out = { next = "finish" } },
+        { id = "finish", kind = "flow.end" },
+    },
+}
+"""
+
+
+def run_spawn_checks(mcp, check, module, out_dir, os, json):
+    """spawn.npc: the character is named by its asset id, and a ref per NPC."""
+    # its own cast: a template and a character that starts from it
+    mcp("characters_write", text=QA_TPL)
+    mcp("characters_write", text=QA_RUNNER)
+    cat = mcp("quest_catalog")
+    by_id = {k.get("id"): k for k in cat.get("kinds", []) if isinstance(k, dict)}
+    kind = by_id.get("spawn.npc", {})
+    check(bool(kind), "F the catalog carries spawn.npc")
+    rows = [r.get("name") for r in kind.get("rows", [])] if isinstance(kind.get("rows"), list) else []
+    check("character" in rows and "unique" in rows and "ref" in rows,
+          "F its rows name a character, a ref and unique", json.dumps(kind)[:300])
+    # on for a character, off for a section: a default that follows the row is not a catalog default
+    unique = next((r for r in kind.get("rows", []) if r.get("name") == "unique"), {})
+    check("default" not in unique, "F unique declares no flat default - it follows what the row names", json.dumps(unique))
+
+    look = mcp("quest_lookup", type="character_id")
+    entries = {e.get("id"): e for e in look.get("entries", [])}
+    check("qa_courier" in entries and "qa_runner" in entries, "F lookup character_id lists the project's characters",
+          json.dumps(sorted(entries)))
+    check("template" in str(entries.get("qa_tpl", {}).get("extra", "")), "F and says which one is a template",
+          json.dumps(entries.get("qa_tpl")))
+
+    w = mcp("quest_write", path="quests/qa_spawner.nqasset", lua=SPAWNER)
+    errs = " ".join(p.get("code", "") for p in w.get("problems", []) if str(p.get("code", "")).startswith("E"))
+    check(w.get("ok") and errs == "", "F a quest that spawns characters by their asset id validates", errs or json.dumps(w)[:200])
+    refs = mcp("quest_lookup", type="ref_name", path="quests/qa_spawner.nqasset")
+    names = sorted(e.get("id") for e in refs.get("entries", []))
+    check(names == ["courier", "extra", "guard"], "F every row's ref is a ref of the graph", json.dumps(names))
+    outline = str(mcp("quest_get", path="quests/qa_spawner.nqasset").get("outline", ""))
+    check("npcs={qa_courier" in outline, "F the outline reads a row as who it creates, not as the ref it keeps", outline[:300])
+
+    b = mcp("quest_write", path="quests/qa_spawner_bad.nqasset", lua=SPAWNER_BAD)
+    text = " | ".join("%s %s" % (p.get("code"), p.get("message", "")) for p in b.get("problems", []))
+    check("not a character of this project" in text, "F a character that does not exist is refused", text[:300])
+    check("template" in text, "F a template cannot be spawned, and the message says why", text[:300])
+    check("exactly one" in text, "F a row names a character OR a section", text[:300])
+    check("unknown key 'uniqe'" in text, "F a misspelt key is an error, not a silent no-op", text[:300])
+    mcp("quest_close", path="quests/qa_spawner_bad.nqasset", discard=True)
+    mcp("content_delete", path="quests/qa_spawner_bad.nqasset")
+
+    built = mcp("mod_export", target=out_dir)
+    check(built.get("ok"), "F the module builds with the spawner in it", json.dumps(built)[:200])
+    shipped = os.path.join(out_dir, "modules", module, "quests", "qa_spawner.nqasset")
+    check(os.path.isfile(shipped), "F and the quest ships", shipped)
+    # the section the game will be asked for is the one the build generated
+    ltx = os.path.join(out_dir, "modules", module, "gamedata", "configs", "xms", module + "_npc.ltx")
+    body = open(ltx, encoding="cp1251", errors="replace").read() if os.path.isfile(ltx) else ""
+    check("[%s_qa_courier]" % module in body, "F <module>_<id> is exactly the spawn section the build wrote", ltx)
+
+    # deleting the character turns the same quest into an error - no restart, no refresh
+    mcp("characters_delete", id="qa_runner")
+    v = mcp("quest_validate", path="quests/qa_spawner.nqasset")
+    text = " | ".join("%s %s" % (p.get("code"), p.get("message", "")) for p in v.get("problems", []))
+    check("qa_runner" in text and "not a character" in text, "F a deleted character is an error in the quest that names it", text[:300])
+
+    mcp("characters_delete", id="qa_tpl")
+    mcp("quest_close", path="quests/qa_spawner.nqasset", discard=True)
+    mcp("content_delete", path="quests/qa_spawner.nqasset")
+
+
 def run_base_checks(mcp, check, read, module, out_dir, os, json):
     """Inheritance: a shared kit written once, and what refuses to inherit."""
     k = mcp("characters_write", text=KIT)
@@ -331,6 +453,9 @@ def run(project: str) -> None:
 
         # ---------------------------------------------------------------- E: inheritance
         run_base_checks(mcp, check, read, module, out_dir, os, json)
+
+        # ---------------------------------------------------------------- F: spawning by asset
+        run_spawn_checks(mcp, check, module, out_dir, os, json)
 
         # ---------------------------------------------------------------- D: removal
         d1 = mcp("characters_delete", id="qa_guard")

@@ -36,6 +36,8 @@ namespace
 		// sends people, who a follow or an attack is aimed at, the bindings a
 		// caller passes in, and the graph a call names
 		"role", "way_path", "destination", "role_or_actor", "attack_target", "role_bindings", "behaviour_id",
+		// spawn.npc: the rows of who to create, and a character of the project by its id
+		"npc_list", "character_id",
 	};
 
 	bool IsTypeName(const xr_string& s)

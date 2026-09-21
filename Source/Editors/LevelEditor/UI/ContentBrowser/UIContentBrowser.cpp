@@ -1080,6 +1080,8 @@ void UIContentBrowser::Refresh()
 	// what an .nqasset or an .npcasset IS was cached for the icons; the files may
 	// have changed, and the tiles must not ask the disk once per frame to find out
 	EditorAssetIcons::Invalidate();
+	// ... and who the project's characters are was cached for the quest validator
+	EditorCharacters::Invalidate();
 	m_Items.clear	();
 	m_Dirs.clear	();
 	DropCache		();

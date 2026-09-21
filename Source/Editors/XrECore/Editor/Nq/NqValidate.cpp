@@ -5,6 +5,7 @@
 #include "NqItemCaps.h"
 #include "NqLua.h"
 #include "NqUtil.h"
+#include "../EditorCharacters.h"
 
 //------------------------------------------------------------------------------
 xr_string SNqProblem::Text() const
@@ -709,6 +710,61 @@ namespace
 		{
 			if (!v.IsString() || v.s.empty()) { ERR(c, "E006", node, slot, "'%s' must be a spawn section name", p.name.c_str()); return; }
 			CheckIndexed(c, NqPickers::tSpawnSection, v.s, node, slot);
+			return;
+		}
+		// ---- spawn.npc: who to create --------------------------------------------
+		// A row names a CHARACTER of the project (the .npcasset, by id - the whole
+		// point: no engine ids to look up) or a spawn section, never both. A row's
+		// ref declares a ref like any other spawning parameter does.
+		if (t == "npc_list")
+		{
+			if (!v.IsTable() || v.arr.empty() || !v.keys.empty())
+			{
+				ERR(c, "E006", node, slot, "'%s' must be a non-empty list of rows", p.name.c_str());
+				return;
+			}
+			static const char* kRowKeys[] = { "character", "section", "ref", "unique", "dead", "yaw" };
+			for (u32 i = 0; i < v.arr.size(); ++i)
+			{
+				const SNqValue& row = v.arr[i];
+				const xr_string sl = NqUtil::Format("%s/row:%u", slot ? slot : "", i + 1);
+				if (!row.IsTable() || !row.arr.empty()) { ERR(c, "E006", node, sl.c_str(), "a row must be a table { character = ... | section = ..., ref = ..., unique = ... }"); continue; }
+				// a key nobody reads is a typo that would silently do nothing. The row
+				// schema is the catalog's; the built-in list covers a catalog without one
+				for (u32 rk = 0; rk < row.keys.size(); ++rk)
+				{
+					bool known = false;
+					if (k.HasRows()) known = k.RowParam(row.keys[rk].c_str()) != 0;
+					else for (int j = 0; j < 6; ++j) if (row.keys[rk] == kRowKeys[j]) known = true;
+					if (!known) ERR(c, "E006", node, sl.c_str(), "unknown key '%s' in a row", row.keys[rk].c_str());
+				}
+				const SNqValue* ch = row.Get("character");
+				const SNqValue* se = row.Get("section");
+				const bool has_ch = ch && ch->IsString() && !ch->s.empty();
+				const bool has_se = se && se->IsString() && !se->s.empty();
+				if (has_ch == has_se)
+					ERR(c, "E022", node, sl.c_str(), "a row names a character OR a section - exactly one");
+				if (has_ch && ch->s.find('.') == xr_string::npos && c.ctx.file_path)
+				{
+					// a bare id is a character of THIS project; "<module>.<id>" cannot be checked here
+					const xr_vector<EditorCharacters::SBrief>& all = EditorCharacters::Briefs();
+					const EditorCharacters::SBrief* found = 0;
+					for (u32 b = 0; b < all.size(); ++b) if (all[b].id == ch->s) found = &all[b];
+					if (!found)
+						ERR(c, "E030", node, sl.c_str(), "character '%s' is not a character of this project", ch->s.c_str());
+					else if (found->abstract_)
+						ERR(c, "E030", node, sl.c_str(), "character '%s' is a template - it never becomes an NPC, spawn one that starts from it", ch->s.c_str());
+				}
+				if (has_se) CheckIndexed(c, NqPickers::tSpawnSection, se->s, node, sl.c_str());
+				if (const SNqValue* r = row.Get("ref"))
+				{
+					if (!r->IsString() || !NqText::ValidId(r->s.c_str())) ERR(c, "E006", node, sl.c_str(), "ref must be a name [a-z0-9_]+");
+					else NoteRefDecl(c, r->s, nidx, order, sl.c_str(), "object");
+				}
+				if (const SNqValue* u = row.Get("unique"))	if (!u->IsBool()) ERR(c, "E006", node, sl.c_str(), "unique must be true or false");
+				if (const SNqValue* d = row.Get("dead"))	if (!d->IsBool()) ERR(c, "E006", node, sl.c_str(), "dead must be true or false");
+				if (const SNqValue* y = row.Get("yaw"))		if (!y->IsNumber()) ERR(c, "E006", node, sl.c_str(), "yaw must be a number");
+			}
 			return;
 		}
 		// ---- behaviour graphs (par. 19) -------------------------------------------

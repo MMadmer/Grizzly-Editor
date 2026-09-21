@@ -7,6 +7,7 @@
 #include "../EditorGameContent.h"
 #include "../EditorGameConfigs.h"
 #include "../EditorProject.h"
+#include "../EditorCharacters.h"
 
 namespace
 {
@@ -1050,7 +1051,7 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 	NqUtil::ArgString(raw, "path", path);
 	int limit = NqUtil::ArgInt(raw, "limit", 50);
 	if (limit <= 0) limit = 50;
-	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id, behaviour_id, role, way_path)"); return; }
+	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id, behaviour_id, role, way_path, character_id)"); return; }
 
 	xr_vector<SEntry> doc_entries;
 	const EType t = TypeFromName(type.c_str());
@@ -1075,6 +1076,19 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 		else if (type == "way_path")
 		{
 			SceneWayPaths(doc_entries);
+		}
+		else if (type == "character_id")
+		{
+			// the project's own NPCs: what spawn.npc names instead of an engine id.
+			// A template is listed and marked - it explains itself instead of being
+			// a name that mysteriously is not there.
+			const xr_vector<EditorCharacters::SBrief>& all = EditorCharacters::Briefs();
+			for (u32 i = 0; i < all.size(); ++i)
+			{
+				SEntry e; e.id = all[i].id; e.name = all[i].name;
+				e.extra = all[i].abstract_ ? "template - cannot be spawned" : all[i].file;
+				doc_entries.push_back(e);
+			}
 		}
 		else if (type == "role")
 		{

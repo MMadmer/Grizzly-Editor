@@ -11,7 +11,7 @@
 //------------------------------------------------------------------------------
 static const char* kKeyOrder[] =
 {
-	"kind", "name", "npc", "who", "task", "quest", "target", "section",
+	"kind", "name", "npc", "who", "task", "quest", "target", "character", "section",
 	"story", "profile", "community", "level", "place", "into", "smart", "spawn",
 	"restrictor", "ref", "hold", "pos", "radius", "x", "y", "z",
 	"text", "title", "descr", "initiator", "sender", "icon", "spot",
@@ -732,6 +732,9 @@ xr_string NqText::ValueSummary(const SNqValue& v, u32 max_len)
 	case SNqValue::tTable:
 		// text tables and refs read better through their dedicated summaries
 		if (v.Has("rus") || v.Has("eng")) return ValueSummary(SNqValue::String(Preview(v)), max_len);
+		// a row that CREATES something reads as what it creates, not as the ref it keeps
+		if (v.Has("character"))	return v.GetString("character");
+		if (v.Has("section") && v.Has("ref") && !v.Has("smart") && !v.Has("place")) return v.GetString("section");
 		if (v.Has("story") || v.Has("ref") || v.Has("profile") || v.Has("smart") || v.Has("spawn") ||
 			v.Has("restrictor") || v.Has("community") || v.Has("level") || v.Has("seconds") ||
 			v.Has("game_hours") || v.Has("game_minutes"))

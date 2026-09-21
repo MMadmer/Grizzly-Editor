@@ -4,10 +4,12 @@
 #include "../../../XrECore/Editor/Nq/NqPickers.h"
 #include "../../../XrECore/Editor/Nq/NqItemCaps.h"
 #include "../../../XrECore/Editor/Nq/NqUtil.h"
+#include "../../../XrECore/Editor/EditorCharacters.h"
 
 // One line under a field saying what it is for; defined further down, used from the
 // task editor above it
 static void Hint(LPCSTR text);
+static void Tip(LPCSTR text);
 
 namespace
 {
@@ -1175,8 +1177,14 @@ bool NqInspector::DrawParams(const NqCatalog::SKind* k, SNqValue& params, LPCSTR
 	if (!params.IsTable()) params = SNqValue::Table();
 	ImGui::PushID(id_prefix);
 	// fetch and the item actions draw one form of their own: a list of rows plus the
-	// modifiers, instead of two interleaved spellings nobody could tell apart
-	if (k->id == "objective.fetch" || k->HasRows())
+	// modifiers, instead of two interleaved spellings nobody could tell apart. Only
+	// ITEM rows: a kind whose rows belong to another list (spawn.npc's NPCs) goes
+	// through the typed editors like everything else.
+	bool item_rows = false;
+	if (k->HasRows())
+		for (u32 i = 0; i < k->params.size(); ++i)
+			if (k->params[i].type == "item_list") item_rows = true;
+	if (k->id == "objective.fetch" || item_rows)
 	{
 		if (k->id == "objective.fetch")		ch |= DrawFetchParams(k, params);
 		else if (k->id == "item.spawn")		ch |= DrawItemSpawnParams(k, params);
@@ -1299,6 +1307,7 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "role_or_actor")		return DrawRoleTarget(label, v, false);
 	if (t == "attack_target")		return DrawRoleTarget(label, v, true);
 	if (t == "role_bindings")		return DrawRoleBindings(label, v);
+	if (t == "npc_list")			return DrawNpcList(label, v);
 	if (t == "spawn_spec")			return DrawSpawnSpec(label, v);
 	if (t == "item_list")			return DrawItemList(label, v);
 	if (t == "loot_spawn")			return DrawLootSpawn(label, v);
@@ -1355,7 +1364,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 	// is all the author ever gets to read.
 	const xr_string t = type;
 	const bool doc_scoped = (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id" ||
-							 t == "behaviour_id" || t == "role" || t == "way_path");
+							 t == "behaviour_id" || t == "role" || t == "way_path" || t == "character_id");
 	xr_vector<xr_string> labels, values, extras;
 	LPCSTR note = 0;
 
@@ -1374,6 +1383,19 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			ids = (t == "quest_id") ? m_ProjectQuestIds : m_ProjectBehaviourIds;
 		}
 		if (t == "role")	for (u32 i = 0; i < q.roles.size(); ++i) ids.push_back(q.roles[i].name);
+		xr_vector<xr_string> char_notes;
+		if (t == "character_id")
+		{
+			// the project's own NPCs, by the names the author gave them - a template
+			// is shown and says why it cannot be picked
+			const xr_vector<EditorCharacters::SBrief>& all = EditorCharacters::Briefs();
+			for (u32 i = 0; i < all.size(); ++i)
+			{
+				ids.push_back(all[i].id);
+				char_notes.push_back(all[i].abstract_ ? xr_string("template - cannot be spawned")
+													  : (all[i].name.empty() ? all[i].file : all[i].name));
+			}
+		}
 		if (t == "way_path")
 		{
 			// the way paths of the scene that is open, as they are this second
@@ -1391,6 +1413,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			// what the validator actually knows - a squad ref can come from spawn.squad
 			// or from objective.kill{spawn}, so naming one node kind here would lie
 			xr_string extra;
+			if (i < char_notes.size()) extra = char_notes[i];
 			if (i < ref_kinds.size())
 			{
 				if (ref_kinds[i] == "squad")		extra = "squad";
@@ -1405,6 +1428,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			else if (t == "way_path")		note = "no way paths in the open scene - draw one with the WayPoint tool";
 			else if (t == "behaviour_id")	note = "no behaviour graphs in this project";
 			else if (t == "role")			note = "this graph declares no roles";
+			else if (t == "character_id")	note = "no characters in this project - Create > Character";
 			else							note = "nothing declared in this quest";
 		}
 	}
@@ -1513,6 +1537,127 @@ void NqInspector::RefreshProjectQuestIds()
 	NqDocs::ProjectIdsOfKind(false, m_ProjectQuestIds);
 	NqDocs::ProjectIdsOfKind(true, m_ProjectBehaviourIds);
 	m_ProjectQuestIdsSerial = NqProjectIndex::InvalidationSerial();
+}
+
+//------------------------------------------------------------------------------
+// spawn.npc: who to create
+//------------------------------------------------------------------------------
+// One row per NPC. A row names a CHARACTER of the project - the asset, picked by
+// the name its author gave it, no engine ids to look up - or a spawn section for
+// anybody the game already has. Each row keeps a ref of its own, which is how
+// the rest of the graph (and a behaviour it runs) points at that very NPC.
+bool NqInspector::DrawNpcList(LPCSTR label, SNqValue& v)
+{
+	if (!v.IsTable()) v = SNqValue::Table();
+	bool ch = false;
+	ImGui::PushID(label);
+	xr_string lt;
+	ImGui::TextUnformatted(Shown(label, lt));
+	// said once for the list; what each field of a row does is on its hover, or five
+	// NPCs turn the panel into a page of prose
+	Hint("A row is one NPC: a project character or a spawn section");
+	int remove = -1, up = -1, down = -1;
+	for (u32 i = 0; i < v.arr.size(); ++i)
+	{
+		SNqValue& row = v.arr[i];
+		if (!row.IsTable()) row = SNqValue::Table();
+		ImGui::PushID((int)i);
+		const bool by_section = row.Has("section") && !row.Has("character");
+		const xr_string who = by_section ? row.GetString("section") : row.GetString("character");
+		const bool open = ImGui::TreeNodeEx("##npc", ImGuiTreeNodeFlags_DefaultOpen, "%u. %s", i + 1,
+			who.empty() ? "(nobody yet)" : who.c_str());
+		ImGui::SameLine();
+		ImGui::BeginDisabled(i == 0);
+		if (ImGui::SmallButton("^")) up = (int)i;
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::BeginDisabled(i + 1 >= v.arr.size());
+		if (ImGui::SmallButton("v")) down = (int)i;
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		if (ImGui::SmallButton("x")) remove = (int)i;
+		if (open)
+		{
+			// what the row names: an asset of this project, or a section of the game
+			xr_vector<xr_string> modes = Items("character", "section");
+			xr_string mode = by_section ? "section" : "character";
+			ImGui::SetNextItemWidth(ComboRoom(modes, "character"));
+			if (ComboStr("##kind", mode, modes))
+			{
+				// the other name goes: a row names exactly one
+				row.Erase(mode == "section" ? "character" : "section");
+				if (!row.Has(mode.c_str())) row.Set(mode.c_str(), SNqValue::String(""));
+				// the default of `unique` follows the mode, and only what differs from it is kept
+				if (const SNqValue* u = row.Get("unique"))
+					if (u->IsBool() && u->b == (mode == "character")) row.Erase("unique");
+				ch = true;
+			}
+			Tip("character: an NPC of this project (Create > Character), picked by its id.\n"
+				"section: any spawn section the game has.");
+			{
+				xr_string s = row.GetString(mode.c_str());
+				LPCSTR type = (mode == "section") ? "spawn_section" : "character_id";
+				xr_string field = mode + "##npc_who";
+				if (DrawPicked(field.c_str(), type, s)) { row.Erase(mode == "section" ? "character" : "section"); row.Set(mode.c_str(), SNqValue::String(s)); ch = true; }
+			}
+			{
+				xr_string r = row.GetString("ref");
+				ImGui::BeginGroup();
+				if (DrawPicked("ref##npc_ref", "ref_name", r))
+				{
+					if (r.empty()) row.Erase("ref"); else row.Set("ref", SNqValue::String(r));
+					ch = true;
+				}
+				ImGui::EndGroup();
+				Tip("The name this NPC is known by from here on: { ref = ... } in a later node,\n"
+					"a role of behaviour.run, a kill objective. Type a new name or pick one.");
+			}
+			{
+				// On by default for a character - one person - and off for a section, which is
+				// a kind half the zone may share. Only what differs from that default is written.
+				const bool unique_def = (mode == "character");
+				bool unique = row.GetBool("unique", unique_def);
+				if (ImGui::Checkbox("unique##npc_unique", &unique))
+				{
+					if (unique == unique_def) row.Erase("unique"); else row.Set("unique", SNqValue::Bool(unique));
+					ch = true;
+				}
+				Tip("On: every NPC of this kind already in the world is removed first, so there is never a second one.\n"
+					"On by default for a character. A section is shared by many NPCs of the game - there it is off unless set.");
+				ImGui::SameLine();
+				bool dead = row.GetBool("dead", false);
+				if (ImGui::Checkbox("dead##npc_dead", &dead))
+				{
+					if (dead) row.Set("dead", SNqValue::Bool(true)); else row.Erase("dead");
+					ch = true;
+				}
+				Tip("Spawned as a corpse");
+				ImGui::SameLine();
+				float yaw = (float)row.GetNumber("yaw", 0.0);
+				ImGui::SetNextItemWidth(ImGui::GetFrameHeight() * 3.f);
+				if (ImGui::InputFloat("yaw##npc_yaw", &yaw, 0.f, 0.f, "%.0f"))
+				{
+					if (yaw == 0.f) row.Erase("yaw"); else row.Set("yaw", SNqValue::Number(yaw));
+					ch = true;
+				}
+				Tip("Where it faces, in degrees");
+			}
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+	if (remove >= 0)	{ v.arr.erase(v.arr.begin() + remove); ch = true; }
+	else if (up > 0)	{ std::swap(v.arr[up], v.arr[up - 1]); ch = true; }
+	else if (down >= 0 && down + 1 < (int)v.arr.size()) { std::swap(v.arr[down], v.arr[down + 1]); ch = true; }
+	if (ImGui::SmallButton("+ NPC"))
+	{
+		SNqValue row = SNqValue::Table();
+		row.Set("character", SNqValue::String(""));
+		v.Push(row);
+		ch = true;
+	}
+	ImGui::PopID();
+	return ch;
 }
 
 //------------------------------------------------------------------------------
@@ -1930,6 +2075,13 @@ bool NqInspector::DrawObjectRef(LPCSTR label, SNqValue& v)
 
 // One line under a field saying what it is for. Cheaper than a tooltip nobody hovers,
 // and these rows are the ones people cannot tell apart.
+// The long form of a field, on hover: for rows that repeat, where a line of prose
+// under every field would bury the fields themselves.
+static void Tip(LPCSTR text)
+{
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", text);
+}
+
 static void Hint(LPCSTR text)
 {
 	ImGui::Indent();

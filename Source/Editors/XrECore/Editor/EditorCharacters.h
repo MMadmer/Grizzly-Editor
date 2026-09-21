@@ -134,6 +134,23 @@ namespace EditorCharacters
 	ECORE_API void		LoadResolved(LPCSTR project_root, xr_vector<SCharacter>& out,
 									 xr_vector<xr_string>& problems);
 
+	// -- who the project has -------------------------------------------------
+	// What a quest names when it spawns a character (spawn.npc) and what the
+	// pickers offer. CACHED: a graph is re-validated on every edit and must not
+	// re-read every .npcasset each time - the list is rebuilt after Invalidate
+	// (a character was saved or deleted, the browser refreshed) or a project
+	// switch, and not otherwise.
+	struct SBrief
+	{
+		xr_string	id;
+		xr_string	name;		// the rus name, for the picker's caption
+		xr_string	file;		// project-relative
+		bool		abstract_;	// a template: never becomes an NPC, so it cannot be spawned
+		SBrief() : abstract_(false) {}
+	};
+	ECORE_API const xr_vector<SBrief>&	Briefs		();
+	ECORE_API void						Invalidate	();
+
 	// -- validation ----------------------------------------------------------
 	// Coded problems, the way quests report them: E<nnn> is fatal for a build,
 	// W<nnn> is a warning. `linked_game` enables the checks that need the game

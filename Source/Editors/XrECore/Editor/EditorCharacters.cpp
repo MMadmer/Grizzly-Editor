@@ -306,7 +306,44 @@ xr_string EditorCharacters::Write(const SCharacter& c)
 
 bool EditorCharacters::Save(LPCSTR path, const SCharacter& c, xr_string& err)
 {
+	EditorCharacters::Invalidate();
 	return NqLua::WriteFile(path, Write(c), err);
+}
+
+//------------------------------------------------------------------------------
+// who the project has (cached)
+//------------------------------------------------------------------------------
+namespace
+{
+xr_vector<EditorCharacters::SBrief>	s_Briefs;
+xr_string							s_BriefsRoot;
+bool								s_BriefsValid = false;
+}
+
+void EditorCharacters::Invalidate()	{ s_BriefsValid = false; }
+
+const xr_vector<EditorCharacters::SBrief>& EditorCharacters::Briefs()
+{
+	const xr_string root = EditorProject::Active() ? xr_string(EditorProject::Root()) : xr_string();
+	if (s_BriefsValid && root == s_BriefsRoot)	return s_Briefs;
+	s_Briefs.clear();
+	s_BriefsRoot	= root;
+	s_BriefsValid	= true;
+	if (root.empty())	return s_Briefs;
+
+	xr_vector<SCharacter>	all;
+	xr_vector<xr_string>	ignored;
+	LoadResolved(root.c_str(), all, ignored);
+	for (u32 i = 0; i < all.size(); ++i)
+	{
+		SBrief b;
+		b.id		= all[i].id;
+		b.name		= TextIn(all[i].name, "rus");
+		b.file		= NqUtil::ProjectRelative(all[i].file.c_str());
+		b.abstract_	= all[i].abstract_;
+		s_Briefs.push_back(b);
+	}
+	return s_Briefs;
 }
 
 xr_string EditorCharacters::Template(LPCSTR id)
@@ -970,6 +1007,7 @@ void EditorCharacters::McpWrite(LPCSTR raw, xr_string& out)
 	CreateDirChain(folder);
 
 	if (!NqLua::WriteFile(abs.c_str(), text, err))	{ NqUtil::JsonError(out, err); return; }
+	EditorCharacters::Invalidate();
 
 	c.file = abs;
 	// Validate what it RESOLVES to, not what the file literally says: a count of
@@ -1008,6 +1046,7 @@ void EditorCharacters::McpDelete(LPCSTR raw, xr_string& out)
 	// backs it, because a file operation has no editor undo.
 	EditorFileOps::SReport rep;
 	EditorFileOps::Delete(abs.c_str(), false, rep);
+	EditorCharacters::Invalidate();
 	if (!rep.ok())
 	{
 		NqUtil::JsonError(out, rep.failures.empty() ? xr_string("delete failed") : rep.failures[0].reason);
@@ -1189,6 +1228,7 @@ void DrawDeleteConfirm()
 	{
 		EditorFileOps::SReport rep;
 		EditorFileOps::Delete(s_Edit.file.c_str(), false, rep);
+		EditorCharacters::Invalidate();
 		s_Status = rep.ok()
 			? xr_string("Deleted ") + NqUtil::ProjectRelative(s_Edit.file.c_str())
 			: xr_string("Delete failed");

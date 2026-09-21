@@ -265,6 +265,29 @@ things at once:
 - a **character profile** — what a stalker you placed yourself carries in its
   `character_profile` property.
 
+**A quest needs none of those names.** `spawn.npc` takes the character itself:
+`character = "valera"`, picked from the list of the project's characters, and the
+runtime works the section out. One node holds as many NPCs as the scene needs,
+every row with a `ref` of its own - that ref is how later nodes, a kill
+objective or a behaviour graph point at exactly that NPC. A row may name a plain
+spawn section of the game instead, for anybody who is not yours.
+
+```lua
+{ kind = "spawn.npc", params = {
+    place = { smart = "esc_smart_terrain_5_7" },
+    npcs  = {
+      { character = "valera", ref = "valera" },
+      { section = "sim_default_stalker_1", ref = "his_friend" },
+    } } }
+```
+
+`unique` decides what happens to the ones already there. For a **character** it
+is on unless you switch it off: every Valera in the world is removed before the
+new one comes, so there is never a second one - and a ref that named the old one
+is cleared, not left pointing at nobody. For a **section** it is off unless you
+switch it on: a section is a kind half the zone may share, and clearing it out
+is never assumed.
+
 The Characters window shows `name` and `bio` for BOTH languages at once, one
 row each: fill `rus` and leave `eng` empty and an English install reads the
 Russian text; fill both and each install reads its own. A character that only
@@ -388,6 +411,7 @@ it is gone.
 | put it there | take it away |
 |---|---|
 | `spawn.squad` — a squad at a smart or inside a place, `ref` saves it | `squad.remove` |
+| `spawn.npc` — one NPC or several at a place: a character of the module or a spawn section, a `ref` each | `npc.remove`, `object.remove` |
 | `spawn.object` — anything with a spawn section, at a place, `ref` saves it | `object.remove` |
 | `item.spawn` — items into a place, a stash, a corpse, a container or **an NPC's inventory** | `item.take` |
 | | `npc.remove` (an NPC by story id, ref, profile or community) |
@@ -432,8 +456,9 @@ end** - the whole thing is one call in the quest:
 
 ```lua
 { id = "bring_valera", kind = "flow.step",
-  on_enter = { { kind = "spawn.object", params = { section = "overnight_valera",
-                 place = { smart = "esc_smart_terrain_5_7" }, ref = "valera" } } },
+  on_enter = { { kind = "spawn.npc", params = {
+                 place = { smart = "esc_smart_terrain_5_7" },
+                 npcs  = { { character = "valera", ref = "valera" } } } } },
   out = { next = "his_route" } },
 
 { id = "his_route", kind = "behaviour.run",
