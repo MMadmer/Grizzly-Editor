@@ -2,6 +2,7 @@
 #include "EditorFileOps.h"
 #include "EditorGameContent.h"
 #include "EditorProject.h"
+#include "EditorAssetIcons.h"
 #include "XFinedMCP.h"
 #include "Nq/NqDoc.h"		// open quest documents follow a rename
 #include <shellapi.h>
@@ -500,12 +501,26 @@ bool EditorFileOps::Rename(LPCSTR path, LPCSTR new_name, string_path& out, xr_st
 	if (leaf.find_first_of("\\/:*?\"<>|") != xr_string::npos)	{ err = "a name cannot contain \\ / : * ? \" < > |"; return false; }
 
 	LPCSTR old_leaf = LeafName(from);
-	// a graph renamed without an extension keeps being what it was: the
-	// extension IS the kind of document, so losing it would change the asset
-	LPCSTR old_ext = strrchr(old_leaf, '.');
-	if (FileExists(from) && old_ext && leaf.find('.') == xr_string::npos &&
-		(0 == _stricmp(old_ext, ".nqasset") || 0 == _stricmp(old_ext, ".behasset") || 0 == _stricmp(old_ext, ".npcasset")))
-		leaf += old_ext;
+	// The extension of one of the editor's own assets IS the kind of document, so a
+	// rename never changes it. The browser shows these files by name alone and hands
+	// over the name alone - dots and all, "route.v2" is a name. Typed back in full it
+	// is the same name; another extension of the family would turn a quest into a
+	// character, and is refused.
+	if (FileExists(from))
+		if (LPCSTR own = EditorAssetIcons::OwnExtension(old_leaf))
+		{
+			LPCSTR typed = EditorAssetIcons::OwnExtension(leaf.c_str());
+			if (typed && 0 != _stricmp(typed, own))
+			{
+				err = xr_string("a rename cannot turn a ") + own + " into a " + typed + " - the extension is the kind of the asset";
+				return false;
+			}
+			if (!typed)
+			{
+				if (0 == _stricmp(leaf.c_str(), own))	{ err = "the new name is empty"; return false; }
+				leaf += own;
+			}
+		}
 
 	xr_string parent(from);
 	parent.erase(size_t(old_leaf - from));

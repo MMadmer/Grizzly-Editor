@@ -61,6 +61,9 @@ public:
 	// MCP: apply file-manager selection semantics to an exact entry in the
 	// complete current view, including rows outside the virtualized viewport.
 	static bool		ModifySelection		(LPCSTR action, LPCSTR name, xr_string& err);
+	// the inline rename box, when one is open: the entry, the text it holds and how
+	// much of it is selected
+	static bool		GetRename			(xr_string& entry, xr_string& text, int& select);
 	// MCP: the Create menu, without the menu. `kind` is quest / behaviour /
 	// character (a folder has content_mkdir); the asset lands in the open folder,
 	// under the same first-free name the menu would pick, and `made` comes back
@@ -339,6 +342,8 @@ private:
 	xr_string						m_Rename;		// folder path being renamed, "" = none
 	char							m_RenameBuf[128];
 	bool							m_RenameFocus;	// grab the keyboard on the next frame
+	int								m_RenameSelect;	// chars to select once the box is active, -1 = done
+	int								m_RenameStem;	// the same number, kept for whoever asks
 
 	// clipboard - one set of commands for whatever is selected
 	void			ClipboardCopy		(bool cut);

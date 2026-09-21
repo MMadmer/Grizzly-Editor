@@ -3,7 +3,7 @@
 //------------------------------------------------------------------------------
 // Icons for the editor's own assets, drawn as vectors.
 //
-// A quest, a scenario and a character are files the editor invented, so nothing
+// A quest, a behaviour graph and a character are files the editor invented, so nothing
 // in the game ships a picture for them. They are drawn instead of loaded: a
 // handful of strokes, rounded rectangles and dots in a unit square, scaled into
 // whatever rectangle the caller gives. That is the whole reason to do it this
@@ -42,6 +42,10 @@ namespace EditorAssetIcons
 	// Drops the cached answers; the next KindOf for a path reads it again.
 	ECORE_API void		Invalidate	();
 	ECORE_API LPCSTR	Name		(EKind kind);
+	// The extension of `name` when it is one of the editor's own asset kinds, 0
+	// otherwise. For these the extension IS the kind and the icon already says it,
+	// so the browser shows the file by its name alone and a rename never touches it.
+	ECORE_API LPCSTR	OwnExtension(LPCSTR name);
 
 	// Draws into the rectangle on the CURRENT window's draw list, in the theme's
 	// text colour - the one that reads on a plain tile and on a selected one

@@ -333,6 +333,19 @@ def run(project: str) -> None:
         check(c.get("ok") and str(c.get("made", "")).lower().endswith(".behasset"),
               "E Create > NPC Behaviour makes a .behasset in the open folder", json.dumps(c)[:200])
         if c.get("made"):
+            # F2 over MCP: the box holds the NAME - the extension is the kind and is not on offer
+            box = mcp("content_browser_selection", action="rename", name=c["made"]).get("rename") or {}
+            check(box.get("text") == "NewBehaviour" and box.get("select") == len("NewBehaviour"),
+                  "E the inline rename box holds the name alone, all of it selected", json.dumps(box))
+            mcp("content_browser_selection", action="clear")
+            check(not mcp("content_browser_selection").get("rename"), "E clear closes the box without renaming")
+            dotted = mcp("content_rename", path=c["made"], name="patrol.v2")
+            check(dotted.get("ok") and os.path.isfile(os.path.join(project, "npc", "patrol.v2.behasset")),
+                  "E a name with a dot in it is still only a name", json.dumps(dotted)[:200])
+            turned = mcp("content_rename", path="npc/patrol.v2.behasset", name="patrol.nqasset")
+            check(not turned.get("ok") and "kind" in str(turned.get("error", "")),
+                  "E a rename cannot turn a behaviour graph into a quest", json.dumps(turned)[:200])
+            c["made"] = "npc/patrol.v2.behasset"
             renamed = mcp("content_rename", path=c["made"], name="patrol_route")
             check(renamed.get("ok") and str(renamed.get("path", renamed.get("to", ""))).lower().endswith(".behasset")
                   or os.path.isfile(os.path.join(project, "npc", "patrol_route.behasset")),

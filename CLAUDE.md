@@ -452,6 +452,18 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   answer.
 - Icons draw in the theme's text colour and go UNDER the selection wash, like
   a thumbnail: a selected tile does not get its own icon palette.
+- **These assets go by their NAME alone.** The extension is the kind and the
+  icon already says the kind, so a tile's caption, the drag label and the
+  inline rename box all leave it out (`EditorAssetIcons::OwnExtension` is the
+  one list of them; every other file keeps its extension on show). A rename can
+  never change it: `EditorFileOps::Rename` appends it to whatever name comes in
+  - dots and all, `route.v2` is a name - and refuses another extension of the
+  family, which would turn a quest into a character. For any other file the box
+  selects the name and leaves the extension out of the selection, like every
+  file browser. Paths in tooltips, confirmations, problems and MCP answers stay
+  whole: those name a FILE.
+- The inline box is reachable without a keyboard: `content_browser_selection
+  action=rename` opens it and the reply's `rename` says what it holds.
 - A new asset kind of the editor's own adds a kind here. Give it a shape that
   says what the thing DOES (a quest is a flow, a behaviour graph is a route), keep it
   to a few strokes, and check it at 48 and at 192.

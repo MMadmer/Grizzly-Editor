@@ -219,6 +219,16 @@ bool ReadHead(LPCSTR path, char* buf, u32 cap, u32& got)
 } // namespace
 
 //------------------------------------------------------------------------------
+LPCSTR EditorAssetIcons::OwnExtension(LPCSTR name)
+{
+	LPCSTR ext = name ? strrchr(name, '.') : 0;
+	// a dot in a folder of the path is not an extension, and an extension alone is not a name
+	if (!ext || ext == name || strpbrk(ext, "\\/") || '\\' == ext[-1] || '/' == ext[-1])	return 0;
+	if (0 == _stricmp(ext, ".nqasset") || 0 == _stricmp(ext, ".behasset") || 0 == _stricmp(ext, ".npcasset"))
+		return ext;
+	return 0;
+}
+
 EditorAssetIcons::EKind EditorAssetIcons::KindOf(LPCSTR path)
 {
 	if (!path || !path[0]) return kNone;

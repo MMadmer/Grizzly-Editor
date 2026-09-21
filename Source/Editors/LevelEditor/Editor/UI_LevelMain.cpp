@@ -2612,7 +2612,20 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             out += JsonEscapePath(sel[i].c_str());
             out += "\"";
         }
-        out += "]}";
+        out += "]";
+        // the inline rename box, while one is open: what it holds is what a hand would type over
+        xr_string r_entry, r_text;
+        int r_select = 0;
+        if (UIContentBrowser::GetRename(r_entry, r_text, r_select))
+        {
+            out += ",\"rename\":{\"entry\":\"";
+            out += JsonEscapePath(r_entry.c_str());
+            out += "\",\"text\":\"";
+            out += JsonEscapePath(r_text.c_str());
+            sprintf_s(tail, sizeof(tail), "\",\"select\":%d}", r_select);
+            out += tail;
+        }
+        out += "}";
         return true;
     }
 

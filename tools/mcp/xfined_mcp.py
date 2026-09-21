@@ -717,8 +717,10 @@ TOOLS = [
         "name": "xfined_content_rename",
         "description": "Rename a file or a folder of the project in place - what F2 does in the content browser. "
                        "'path' is the entry (project-relative), 'name' the new leaf name, not a path. A change of "
-                       "case alone is a rename (NewQuest.nqasset -> newquest.nqasset). A quest keeps its .nqasset "
-                       "when the new name names no extension. Another entry's name is refused. Quest documents "
+                       "case alone is a rename (NewQuest.nqasset -> newquest.nqasset). One of the editor's own assets "
+                       "(.nqasset / .behasset / .npcasset) ALWAYS keeps its extension - it is the kind of the asset: "
+                       "the name is taken as a name, dots and all ('route.v2' -> route.v2.behasset), the same "
+                       "extension typed back is fine, another one of the three is refused. Another entry's name is refused. Quest documents "
                        "that are open follow the renamed file or folder, unsaved edits included. Returns the new "
                        "full path.",
         "inputSchema": {
@@ -785,15 +787,18 @@ TOOLS = [
     {
         "name": "xfined_content_browser_selection",
         "description": "What the Content Browser is showing right now: whether it is open, the active source, "
-                       "the current folder and the ordered selection. With action=select/toggle/range/clear it "
+                       "the current folder and the ordered selection. action=rename opens the inline rename box on the "
+                       "entry (what F2 does) and the reply's 'rename' {entry, text, select} says what the box holds - "
+                       "one of the editor's own assets shows its name without the extension; the rename itself is "
+                       "xfined_content_rename, and action=clear closes the box. With action=select/toggle/range/clear it "
                        "also applies normal file-manager selection semantics against the complete filtered view, "
                        "including virtualized offscreen rows. select establishes the anchor; range extends from it. "
                        "Names must match an entry in the current view exactly. Omit action (or use get) to only read.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["get", "select", "toggle", "range", "clear"]},
-                "name": {"type": "string", "description": "exact asset or folder path for select/toggle/range"},
+                "action": {"type": "string", "enum": ["get", "select", "toggle", "range", "rename", "clear"]},
+                "name": {"type": "string", "description": "exact asset or folder path for select/toggle/range/rename"},
             },
         },
     },

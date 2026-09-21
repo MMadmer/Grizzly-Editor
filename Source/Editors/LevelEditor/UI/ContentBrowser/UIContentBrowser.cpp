@@ -311,6 +311,8 @@ UIContentBrowser::UIContentBrowser()
 	m_ConfirmDelete		= false;
 	m_RenameBuf[0]		= 0;
 	m_RenameFocus		= false;
+	m_RenameSelect		= -1;
+	m_RenameStem		= 0;
 	m_Marquee		= false;
 	m_MarqueeStart	= ImVec2(0, 0);
 	// preferences may not exist yet when the browser is constructed at startup
@@ -1932,7 +1934,9 @@ void UIContentBrowser::DrawTiles()
 		if (reveal_index < 0) ImGui::SetScrollY(0.f);
 	}
 
-	auto draw_caption = [&](LPCSTR label, bool renaming)
+	// `label_end` cuts the caption short without a copy: one of the editor's own assets
+	// goes by its name alone (EditorAssetIcons::OwnExtension)
+	auto draw_caption = [&](LPCSTR label, LPCSTR label_end, bool renaming)
 	{
 		if (renaming)
 		{
@@ -1942,8 +1946,26 @@ void UIContentBrowser::DrawTiles()
 				ImGui::SetKeyboardFocusHere();
 				m_RenameFocus = false;
 			}
+			// The NAME is selected, not the extension - what every file browser does, so
+			// typing replaces the name and leaves the kind of the file alone. ImGui selects
+			// everything when a box is focused from code; the callback has the last word.
+			struct Select
+			{
+				static int Stem(ImGuiInputTextCallbackData* data)
+				{
+					int& want = *(int*)data->UserData;
+					if (want >= 0)
+					{
+						data->SelectionStart	= 0;
+						data->SelectionEnd		= data->CursorPos = _min(want, data->BufTextLen);
+						want = -1;
+					}
+					return 0;
+				}
+			};
 			const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
-				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
+				&Select::Stem, &m_RenameSelect);
 			if (done || ImGui::IsItemDeactivated()) CommitRename();
 			const float remainder = caption_h - ImGui::GetFrameHeight() - st.ItemSpacing.y;
 			if (remainder > 0.f) ImGui::Dummy(ImVec2(tile_w, remainder));
@@ -1954,7 +1976,7 @@ void UIContentBrowser::DrawTiles()
 		ImGui::Dummy(ImVec2(tile_w, caption_h));
 		const ImVec4 clip(p.x, p.y, p.x + tile_w, p.y + caption_h);
 		ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(), p,
-			ImGui::GetColorU32(ImGuiCol_Text), label, 0, tile_w, &clip);
+			ImGui::GetColorU32(ImGuiCol_Text), label, label_end, tile_w, &clip);
 	};
 
 	const int up_slots = (!m_Filter.IsActive() && !m_CurFolder.empty()) ? 1 : 0;
@@ -1989,7 +2011,7 @@ void UIContentBrowser::DrawTiles()
 						GoUp(err);
 					}
 					if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
-					draw_caption("Parent folder", false);
+					draw_caption("Parent folder", 0, false);
 					ImGui::EndGroup();
 					ImGui::PopID();
 					continue;
@@ -2042,10 +2064,12 @@ void UIContentBrowser::DrawTiles()
 								: "%s", full);
 					}
 					DrawEntryContextMenu(full, true);
-					draw_caption(leaf, renaming);
+					draw_caption(leaf, 0, renaming);
 				}
 				else
 				{
+					// the drawn icon says what it is, the caption only what it is called
+					LPCSTR leaf_end = EditorAssetIcons::OwnExtension(leaf);
 					ImTextureID tex = GetThumb(full);
 					// An asset the editor invented has no picture anywhere, so it gets a
 					// drawn one - exact at any tile size, unlike a bitmap would be.
@@ -2085,7 +2109,7 @@ void UIContentBrowser::DrawTiles()
 							ImGui::Dummy(ImVec2(48, 48));
 							EditorAssetIcons::Draw(icon, at.x, at.y, at.x + 48.f, at.y + 48.f);
 						}
-						ImGui::TextUnformatted(leaf);
+						ImGui::TextUnformatted(leaf, leaf_end);
 						if (m_Selection.size() > 1)
 							ImGui::Text("and %d more", int(m_Selection.size()) - 1);
 						ImGui::EndDragDropSource();
@@ -2101,7 +2125,7 @@ void UIContentBrowser::DrawTiles()
 						}
 					}
 					DrawEntryContextMenu(full, false);
-					draw_caption(leaf, renaming);
+					draw_caption(leaf, leaf_end, renaming);
 				}
 
 				ImGui::EndGroup();
@@ -2311,40 +2335,48 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 	Form->EnsureListing();
 
 	int found = -1;
-	for (u32 i = 0; i < Form->m_Items.size(); ++i)
-		if (0 == _stricmp(Form->m_Items[i].name.c_str(), name)) { found = int(i); break; }
-
-	// A folder is a legitimate thing to reveal - "show me levels\" is what a
-	// caller browsing the tree actually wants, and there is no other way to
-	// get the grid there without a mouse. Selected like a folder tile, so the
-	// next frame scrolls the tree to it as well.
-	if (found < 0)
+	// The listing follows the disk through a watcher polled from Draw(), a debounce
+	// behind it - and a background editor draws nothing at all. A caller that has just
+	// written the file is right: on a miss the project is listed again, once.
+	for (int pass = 0; pass < 2 && found < 0; ++pass)
 	{
-		string_path folder;
-		strncpy_s(folder, sizeof(folder), name, _TRUNCATE);
-		for (char* p = folder; *p; ++p) if (*p == '/') *p = '\\';
-		if (const size_t n = xr_strlen(folder); n && folder[n - 1] == '\\') folder[n - 1] = 0;
-		if (Form->FindFolder(folder))
+		for (u32 i = 0; i < Form->m_Items.size(); ++i)
+			if (0 == _stricmp(Form->m_Items[i].name.c_str(), name)) { found = int(i); break; }
+
+		// A folder is a legitimate thing to reveal - "show me levels\" is what a
+		// caller browsing the tree actually wants, and there is no other way to
+		// get the grid there without a mouse. Selected like a folder tile, so the
+		// next frame scrolls the tree to it as well.
+		if (found < 0)
 		{
-			xr_string nav_err;
-			if (!Form->ApplyLocation(SLocation(Form->m_Source, int(Form->m_Category), folder), false, nav_err))
+			string_path folder;
+			strncpy_s(folder, sizeof(folder), name, _TRUNCATE);
+			for (char* p = folder; *p; ++p) if (*p == '/') *p = '\\';
+			if (const size_t n = xr_strlen(folder); n && folder[n - 1] == '\\') folder[n - 1] = 0;
+			if (Form->FindFolder(folder))
 			{
-				err = nav_err;
-				return false;
+				xr_string nav_err;
+				if (!Form->ApplyLocation(SLocation(Form->m_Source, int(Form->m_Category), folder), false, nav_err))
+				{
+					err = nav_err;
+					return false;
+				}
+				Form->RememberNavigation(origin);
+				Form->m_Filter.Clear();
+				Form->InvalidateView();
+				Form->ClearSelection();
+				Form->AddToSelection(SEntry(Form->m_CurFolder.c_str(), true));
+				Form->m_Anchor		= Form->m_Selection.back();
+				Form->m_HasAnchor	= true;
+				Form->m_ScrollToSelection = true;
+				// a game level is a folder on disk but a level to open
+				if (open_viewer && Form->IsGameLevelEntry(Form->m_CurFolder.c_str()))
+					return Form->OpenAsset(Form->m_CurFolder.c_str(), &err);
+				return true;
 			}
-			Form->RememberNavigation(origin);
-			Form->m_Filter.Clear();
-			Form->InvalidateView();
-			Form->ClearSelection();
-			Form->AddToSelection(SEntry(Form->m_CurFolder.c_str(), true));
-			Form->m_Anchor		= Form->m_Selection.back();
-			Form->m_HasAnchor	= true;
-			Form->m_ScrollToSelection = true;
-			// a game level is a folder on disk but a level to open
-			if (open_viewer && Form->IsGameLevelEntry(Form->m_CurFolder.c_str()))
-				return Form->OpenAsset(Form->m_CurFolder.c_str(), &err);
-			return true;
 		}
+		if (found >= 0 || pass || 0 != Form->m_Source)	break;
+		Form->Refresh();
 	}
 
 	// The SDK library is split into categories, and a caller naming an asset has
@@ -2435,6 +2467,15 @@ void UIContentBrowser::GetSelection(int& source, xr_string& folder, xr_vector<xr
 	}
 }
 
+bool UIContentBrowser::GetRename(xr_string& entry, xr_string& text, int& select)
+{
+	if (!Form || Form->m_Rename.empty())	return false;
+	entry	= Form->m_Rename;
+	text	= Form->m_RenameBuf;
+	select	= Form->m_RenameStem;
+	return true;
+}
+
 bool UIContentBrowser::ModifySelection(LPCSTR action, LPCSTR name, xr_string& err)
 {
 	err = "";
@@ -2446,15 +2487,21 @@ bool UIContentBrowser::ModifySelection(LPCSTR action, LPCSTR name, xr_string& er
 	{
 		Form->ClearSelection();
 		Form->m_ScrollToSelection = false;
+		// an inline rename nobody finished goes with it, unrenamed
+		Form->m_Rename.clear();
+		Form->m_RenameFocus = false;
 		return true;
 	}
 
 	const bool select = 0 == _stricmp(action, "select");
 	const bool toggle = 0 == _stricmp(action, "toggle");
 	const bool range = 0 == _stricmp(action, "range");
-	if (!select && !toggle && !range)
+	// F2 for a caller without a keyboard: the box opens on the tile, holding what a hand
+	// would find in it. The rename itself stays content_rename.
+	const bool rename = 0 == _stricmp(action, "rename");
+	if (!select && !toggle && !range && !rename)
 	{
-		err = "action must be select, toggle, range or clear";
+		err = "action must be select, toggle, range, rename or clear";
 		return false;
 	}
 	if (!name || !name[0])	{ err = "this action requires 'name'"; return false; }
@@ -2472,13 +2519,30 @@ bool UIContentBrowser::ModifySelection(LPCSTR action, LPCSTR name, xr_string& er
 	Form->EnsureListing();
 	Form->RebuildView();
 	const SEntry* entry = 0;
-	for (u32 i = 0; i < Form->m_ViewOrder.size(); ++i)
-		if (0 == _stricmp(Form->m_ViewOrder[i].path.c_str(), norm))
-		{
-			if (entry)			{ err = "entry is ambiguous in the current view"; return false; }
-			entry = &Form->m_ViewOrder[i];
-		}
+	// one more look at the disk on a miss - see RevealAsset
+	for (int pass = 0; pass < 2 && !entry; ++pass)
+	{
+		for (u32 i = 0; i < Form->m_ViewOrder.size(); ++i)
+			if (0 == _stricmp(Form->m_ViewOrder[i].path.c_str(), norm))
+			{
+				if (entry)			{ err = "entry is ambiguous in the current view"; return false; }
+				entry = &Form->m_ViewOrder[i];
+			}
+		if (entry || pass || 0 != Form->m_Source)	break;
+		Form->Refresh();
+		Form->RebuildView();
+	}
 	if (!entry)				{ err = "entry is not in the complete current view"; return false; }
+
+	if (rename)
+	{
+		if (Form->m_Source != 0)	{ err = "only the project's own content is renamed"; return false; }
+		const xr_string path = entry->path;
+		Form->SelectEntry(path.c_str(), entry->folder, false, false);
+		Form->BeginRename(path.c_str());
+		Form->m_ScrollToSelection = true;
+		return true;
+	}
 
 	if (range)
 	{
@@ -3427,6 +3491,30 @@ void UIContentBrowser::BeginRename(LPCSTR path)
 
 	LPCSTR leaf = strrchr(path, '\\');
 	xr_strcpy(m_RenameBuf, sizeof(m_RenameBuf), leaf ? leaf + 1 : path);
+
+	// A folder is its whole name. A file is renamed by its name: one of the editor's
+	// own assets does not even show its extension (it is the kind, and stays -
+	// EditorFileOps::Rename), any other file shows it and keeps it out of the selection.
+	m_RenameSelect = int(xr_strlen(m_RenameBuf));
+	string_path disk;
+	if (xr_strlen(EditorProject::Root()) + xr_strlen(path) + 2 < sizeof(disk))
+	{
+		sprintf_s(disk, "%s\\%s", EditorProject::Root(), path);
+		const DWORD attr = ::GetFileAttributesA(disk);
+		if (INVALID_FILE_ATTRIBUTES != attr && !(attr & FILE_ATTRIBUTE_DIRECTORY))
+		{
+			if (LPCSTR own = EditorAssetIcons::OwnExtension(m_RenameBuf))
+			{
+				m_RenameBuf[own - m_RenameBuf] = 0;
+				m_RenameSelect = int(xr_strlen(m_RenameBuf));
+			}
+			else if (LPCSTR dot = strrchr(m_RenameBuf, '.'))
+			{
+				if (dot != m_RenameBuf) m_RenameSelect = int(dot - m_RenameBuf);
+			}
+		}
+	}
+	m_RenameStem = m_RenameSelect;
 }
 
 void UIContentBrowser::CommitRename()
