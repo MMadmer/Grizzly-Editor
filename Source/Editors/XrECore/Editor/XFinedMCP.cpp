@@ -796,11 +796,10 @@ static void Execute(SMCPRequest& r)
 		xr_string b64;
 #if defined(USE_DX11)
 		// Straight from the presented frame. GDI shows a flip-model swap chain
-		// as blank, so PrintWindow is not an option any more. Arming first means
-		// the very first request after an idle spell answers "not ready".
+		// as blank, so PrintWindow is not an option any more. The capture was armed
+		// when the request was taken (see Pump) and its frames are in by now.
 		U32Vec	px;
 		u32		w = 0, h = 0;
-		DX11ArmFrameCapture();
 		// the two ways this fails are nothing alike, and one message for both
 		// sent the last debugging session chasing the wrong one
 		if (!DX11GetFrameCapture(px, w, h))
@@ -999,29 +998,114 @@ static SMCPRequest* TakeQueuedRequest(bool progress_only)
 	return request;
 }
 
-static void ExecuteQueuedRequest(SMCPRequest* request)
+// takes the request for the main thread; false = it is gone (cancelled, shutting down)
+static bool ClaimRequest(SMCPRequest* request)
 {
 	if (!request)
-		return;
+		return false;
 	if (!IsRunning())
 	{
 		request->Cancel();
 		request->Release();
-		return;
+		return false;
 	}
 	if (SMCPRequest::Queued == ::InterlockedCompareExchange(
 		&request->state, SMCPRequest::Executing, SMCPRequest::Queued))
-	{
-		Execute(*request);
-		::InterlockedExchange(&request->state, SMCPRequest::Completed);
-		::SetEvent(request->done);
-	}
+		return true;
 	request->Release();
+	return false;
+}
+
+static void CompleteRequest(SMCPRequest* request)
+{
+	Execute(*request);
+	::InterlockedExchange(&request->state, SMCPRequest::Completed);
+	::SetEvent(request->done);
+	request->Release();
+}
+
+static void ExecuteQueuedRequest(SMCPRequest* request)
+{
+	if (ClaimRequest(request))
+		CompleteRequest(request);
+}
+
+//------------------------------------------------------------------------------
+// screenshots wait for their frames
+//------------------------------------------------------------------------------
+// The editor redraws on demand and a background one does not draw at all. A picture
+// handed out at once therefore showed the frame from BEFORE the commands the caller
+// wanted to look at - and the UI never ran, so a scroll or a selection asked for over
+// MCP was not even applied. A screenshot request is held instead: it asks for frames,
+// the loop presents them (WantsFrame), and the answer is what the editor looks like
+// NOW, in one call. Whatever was queued behind it waits, so the order stays the
+// caller's. The hold is bounded: a window that cannot present (minimized, device
+// lost) is answered with the reason, not with silence.
+static SMCPRequest*	s_HeldShot		= 0;
+static u32			s_HeldSince		= 0;
+static u32			s_HeldFrames	= 0;	// presented frames the held request still waits for
+static u32			s_HeldPresented	= 0;	// frames presented since it was taken
+
+static const u32	kShotHoldMs		= 15000;	// the first frame of a heavy level takes seconds
+static const u32	kShotFrames		= 3;		// a scroll lands on the second frame, a dock layout settles on the third
+static const u32	kShotGiveUp		= 30;		// that many presented and nothing mirrored: it will not come
+
+static bool IsShot(const SMCPRequest& r)
+{
+	return r.cmd == "screenshot_editor" || r.cmd == "screenshot_viewport";
+}
+
+static bool HeldShotReady()
+{
+#if defined(USE_DX11)
+	if (s_HeldShot->cmd == "screenshot_editor")
+		return DX11FrameCaptureReady();
+#endif
+	return !s_HeldFrames;
+}
+
+bool XFinedMCP::WantsFrame() { return !!s_HeldShot; }
+
+void XFinedMCP::OnFramePresented()
+{
+	if (s_HeldFrames) --s_HeldFrames;
+	++s_HeldPresented;
 }
 
 void XFinedMCP::Pump()
 {
-	ExecuteQueuedRequest(TakeQueuedRequest(false));
+	if (s_HeldShot)
+	{
+		if (!HeldShotReady() && s_HeldPresented < kShotGiveUp && ::GetTickCount() - s_HeldSince < kShotHoldMs)
+		{
+			// its frames should follow one another, not the background poll interval
+			if (s_QueueEvent) ::SetEvent(s_QueueEvent);
+			return;
+		}
+		SMCPRequest* shot = s_HeldShot;
+		s_HeldShot = 0;
+		CompleteRequest(shot);
+		return;
+	}
+
+	SMCPRequest* request = TakeQueuedRequest(false);
+	if (!ClaimRequest(request))
+		return;
+	if (!IsShot(*request))
+	{
+		CompleteRequest(request);
+		return;
+	}
+	s_HeldShot		= request;
+	s_HeldSince		= ::GetTickCount();
+	s_HeldFrames	= kShotFrames;
+	s_HeldPresented	= 0;
+#if defined(USE_DX11)
+	if (request->cmd == "screenshot_editor") DX11ArmFrameCapture();
+#endif
+	// the viewport is a render target of its own and is only redrawn when asked
+	if (UI) UI->RedrawScene();
+	if (s_QueueEvent) ::SetEvent(s_QueueEvent);
 }
 
 void XFinedMCP::PumpProgressRequests()
@@ -1478,6 +1562,12 @@ void XFinedMCP::Stop()
 	{
 		abandoned[i]->Cancel();
 		abandoned[i]->Release();
+	}
+	// its client thread is gone by now (joined above), only this reference is left
+	if (s_HeldShot)
+	{
+		s_HeldShot->Release();
+		s_HeldShot = 0;
 	}
 
 	if (s_StopEvent)

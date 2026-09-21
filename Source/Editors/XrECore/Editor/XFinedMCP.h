@@ -26,6 +26,11 @@ public:
 	static void		Start		();		// spins up the listener thread
 	static void		Stop		();
 	static void		Pump		();		// main thread: execute one queued request
+	// A screenshot request is held until the frames it asked for were presented.
+	// WantsFrame lifts the "a background editor does not draw" rule for that long;
+	// OnFramePresented is the loop saying one more frame is out.
+	static bool		WantsFrame	();
+	static void		OnFramePresented();
 	// Guarded long operations may answer status/cancel without allowing a later
 	// scene-mutating request to run against partially loaded state.
 	static void		PumpProgressRequests();

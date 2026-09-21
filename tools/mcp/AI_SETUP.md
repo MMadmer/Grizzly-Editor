@@ -74,8 +74,8 @@ Replace `<repo>` with the folder the editor is installed in.
 |---|---|
 | `xfined_ping` | editor presence check |
 | `xfined_state` | active project name/path, opened scene, FPS |
-| `xfined_screenshot_viewport` | PNG image of the 3D viewport render target |
-| `xfined_screenshot_editor` | PNG image of the whole editor window (all panels), read from the presented frame, so it works even when the editor is covered by other windows. Mirroring the back buffer costs a full readback, so it only runs while armed: **the first call after an idle spell answers "capture just armed" — call it again** and the second one returns the image |
+| `xfined_screenshot_viewport` | PNG image of the 3D viewport render target. Held for its frames the same way, so a camera move or an edit sent just before it is in the picture |
+| `xfined_screenshot_editor` | PNG image of the whole editor window (all panels), read from the presented frame, so it works even when the editor is covered by other windows. **One call**: the editor holds the request until the frames it asked for are presented, so the picture shows the state AFTER every command sent before it - a background editor draws nothing unasked, and this is what makes it draw. ~0.3 s; the first one after a start can take seconds |
 | `xfined_scene_info` | opened scene file, modified flag, object counts per tool class |
 | `xfined_selection` | objects selected in the viewport: name, class, position/rotation/scale |
 | `xfined_object_info` | one object by exact `name`: class, selected/visible, transform |
@@ -159,7 +159,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_quest_validate` | problems of a quest (open document or file): `E001-E050` block the build, `W011-W070` warn |
 | `xfined_quest_save` / `xfined_quest_reload` | write the open document canonically (`force:true` overrides "modified externally") / re-read it from disk |
 | `xfined_quest_layout` | deterministic pin-aware top-down layout; separates complete nested branch bounds and exclusive trigger trees, while shared descendants become merge blocks between their incoming branches (`all:false` = only nodes without `pos`); returns the positions |
-| `xfined_quest_view` | open/focus the graph tab and set the view (`frame:"all"|<node>`, `zoom_level` 0..9, `cx`/`cy` which override `frame`, `select:"<node id>"`/`"a,b"`/`"none"` to set the graph selection - the inspector follows it, so this is what puts a node in it, `slot:"enter:0"`/`"exit:1"` to open that action of the selected node in the inspector, `"none"` to clear). Raw editor replies expose `pending:true` while first-frame geometry is deferred; the bridge polls a read-only view until the next draw resolves it. Answers with the resulting `zoom_level`/`center`/`selected`/`slot`; follow with `xfined_screenshot_editor` |
+| `xfined_quest_view` | open/focus the graph tab and set the view (`frame:"all"|<node>`, `zoom_level` 0..9, `cx`/`cy` which override `frame`, `select:"<node id>"`/`"a,b"`/`"none"` to set the graph selection - the inspector follows it, so this is what puts a node in it, `slot:"enter:0"`/`"exit:1"` to open that action of the selected node in the inspector, `"none"` to clear; `action_split`/`vars_split` 0.1..0.9 move the inspector's two splitters, so a form taller than its pane fits a screenshot - they are the author's saved preference and the reply reports both, put them back). The reply also carries `node_scroll` / `action_scroll` as `[y, max]` of the last frame drawn: `max` above `y` means there is more below, and `scroll` is how to get there. Raw editor replies expose `pending:true` while first-frame geometry is deferred; the bridge polls a read-only view until the next draw resolves it. Answers with the resulting `zoom_level`/`center`/`selected`/`slot`; follow with `xfined_screenshot_editor` |
 | `xfined_quest_edit` | every graph edit the canvas offers, without a mouse. `op` = `connect` (`from`+`pin`+`to`), `disconnect` (`from`, plus `pin`/`to` to name one link - omit them to drop a whole pin or node), `bypass` (the node stays put and the chain closes over it: A->B->C becomes A->C), `delete`, `duplicate`, `connect_nearest`, `select_all`. `nodes` (comma separated) picks what the op acts on instead of the current selection. The reply carries the outline, so the result is readable without a screenshot |
 | `xfined_quest_find` | graph-wide node search across ids, kind ids/titles, parameters, conditions, actions, links and comments. `action` = `get`/`set`/`next`/`previous`/`clear`, `query`, `select`, `limit`; `get` with `query` atomically replaces the current query without navigation. Terms are ANDed, quoted phrases stay together, `-term` excludes. Next/previous frames the active result and the response includes deterministic file-order results plus the exact view state |
 | `xfined_quest_project_find` | read-only search through every sorted `*.nqasset` without opening tabs. `query` uses the same AND/quoted/`-term`/UTF-8 case-folding rules as `xfined_quest_find`; `limit` defaults to 200. Dirty open documents overlay their disk entry. Every result says `source:"disk"|"memory"`; `generation` and `fingerprint` identify the exact indexed view, while `complete:false` + `diagnostics[]` names unreadable or partial files |
@@ -338,9 +338,9 @@ queues at most 64 main-thread requests; each request buffer is capped at 1 MiB.
 > open, and `xfined_screenshot_editor` / `xfined_screenshot_viewport` to see
 > the editor with your own eyes before and after any change you make. The
 > screenshots work even when the editor window is covered — always verify the
-> actual UI state visually instead of assuming. `xfined_screenshot_editor` arms
-> the capture on its first call and returns the image on the next one, so a
-> "capture just armed" answer means call it again, not that it failed.
+> actual UI state visually instead of assuming. A screenshot is one call: the
+> editor draws the frames it needs first, so the picture always shows the state
+> after the commands you sent before it.
 >
 > If you start the editor yourself, launch it as
 > `LevelEditor.exe -project "<project folder>"` so it opens straight into that

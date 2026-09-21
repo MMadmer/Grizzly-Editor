@@ -47,9 +47,14 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `tools/mcp/xfined_mcp.py`, documentation in `tools/mcp/AI_SETUP.md`).
   New UI features ship with an MCP command: the editor is AI-friendly by
   design.
-- Screenshots: `xfined_screenshot_editor` arms on the first call and returns
-  the frame on the second; `xfined_screenshot_viewport` returns the viewport
-  immediately.
+- Screenshots are ONE call and always current: the pump HOLDS a
+  `screenshot_editor` / `screenshot_viewport` request until the frames it asked
+  for were presented (`XFinedMCP::Pump`, `WantsFrame`), then answers. It has to:
+  the editor redraws on demand and a background one draws nothing at all, so an
+  answer given at once showed the frame from BEFORE the caller's last commands -
+  and because no UI pass ran, a scroll or a selection asked for over MCP was not
+  even applied. Anything that must be looked at from outside needs an MCP way to
+  get into view (`quest_view` scroll / `action_split` / `vars_split`).
 
 ## Startup
 

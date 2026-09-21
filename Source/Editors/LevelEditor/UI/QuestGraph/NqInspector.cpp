@@ -209,6 +209,8 @@ NqInspector::NqInspector(NqDoc* doc) : m_Doc(doc)
 	m_Search[0] = 0;
 	m_VarsFrac = 0.30f;
 	m_ActionFrac = 0.50f;
+	m_NodeScroll.set(0.f, 0.f);
+	m_ActionScroll.set(0.f, 0.f);
 	m_ParamsCtx = 0;
 	m_OpenTaskRename = false;
 	m_OpenTaskReferences = false;
@@ -330,6 +332,7 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 	ImGui::BeginChild("nq_insp_top", ImVec2(0, upper), true);
 	if (m_NodeId.empty())	DrawQuestSection();
 	else					DrawNodeSection();
+	m_NodeScroll.set(ImGui::GetScrollY(), ImGui::GetScrollMaxY());
 	ImGui::EndChild();
 
 	if (has_action)
@@ -337,8 +340,10 @@ void NqInspector::Draw(bool focus_rename, bool focus_action)
 		DrawHSplitter("##nq_action_split", m_ActionFrac, props_h, true);
 		ImGui::BeginChild("nq_insp_bottom", ImVec2(0, _max(row, props_h - upper - grab)), true);
 		DrawActionSection();
+		m_ActionScroll.set(ImGui::GetScrollY(), ImGui::GetScrollMaxY());
 		ImGui::EndChild();
 	}
+	else m_ActionScroll.set(0.f, 0.f);
 
 	DrawHSplitter("##nq_vars_split", m_VarsFrac, total);
 
@@ -752,6 +757,21 @@ void NqInspector::DrawHSplitter(LPCSTR id, float& frac, float total, bool grows_
 	ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(top.x, y - half),
 		ImVec2(top.x + ImGui::GetItemRectSize().x, y + half), col);
 	if (hovered && !active) ImGui::SetTooltip("Drag to resize, double-click to reset");
+}
+
+void NqInspector::SetSplit(float action_frac, float vars_frac)
+{
+	CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs);
+	if (action_frac >= 0.f)
+	{
+		m_ActionFrac = _max(0.10f, _min(action_frac, 0.90f));
+		if (prefs) prefs->QuestActionSplit = u32(m_ActionFrac * 1000.f + 0.5f);
+	}
+	if (vars_frac >= 0.f)
+	{
+		m_VarsFrac = _max(0.10f, _min(vars_frac, 0.80f));
+		if (prefs) prefs->QuestVarsSplit = u32(m_VarsFrac * 1000.f + 0.5f);
+	}
 }
 
 LPCSTR NqInspector::TypeName(SNqValue::EType t)

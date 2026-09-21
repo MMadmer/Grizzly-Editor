@@ -37,6 +37,7 @@ private:
 	// survives a resized window; kept in the editor preferences between sessions
 	float			m_VarsFrac;
 	float			m_ActionFrac;	// share of the node/action column the NODE keeps
+	Fvector2		m_NodeScroll, m_ActionScroll;
 	// the parameter table the current widget belongs to, so a `value` can ask what
 	// type the `name` beside it was declared with
 	SNqValue*		m_ParamsCtx;
@@ -114,6 +115,15 @@ public:
 	// "task:<id>". The inspector redraws on demand, so the caller has to let a
 	// frame happen before the move is visible.
 	static void		RequestScroll	(LPCSTR where);
+	// The two splitters for a caller without a mouse; a fraction below zero leaves
+	// that one alone. Same clamps and the same preference a drag writes.
+	void			SetSplit		(float action_frac, float vars_frac);
+	float			ActionSplit		() const { return m_ActionFrac; }
+	float			VarsSplit		() const { return m_VarsFrac; }
+	// where the node and the action panes stood on the last frame: {y, max}. A caller
+	// that cannot see the scrollbar learns from `max` that there is more below.
+	const Fvector2&	NodeScroll		() const { return m_NodeScroll; }
+	const Fvector2&	ActionScroll	() const { return m_ActionScroll; }
 private:
 	bool			DrawLootSpawn	(LPCSTR label, SNqValue& v);
 	bool			DrawCases		(LPCSTR label, SNqValue& v, bool weights);

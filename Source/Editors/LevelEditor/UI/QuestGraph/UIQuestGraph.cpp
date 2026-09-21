@@ -1078,6 +1078,12 @@ namespace UIQuestGraph
 		string_path scroll = "";
 		XFinedMCP::GetArg(raw, "scroll", scroll, sizeof(scroll));
 		if (scroll[0]) NqInspector::RequestScroll(scroll);
+		// the splitters answer to a drag only; a form taller than its pane (a spawn
+		// with several rows) could not be looked at from outside without these
+		float action_split = -1.f, vars_split = -1.f;
+		NqUtil::ArgFloat(raw, "action_split", action_split);
+		NqUtil::ArgFloat(raw, "vars_split", vars_split);
+		if (action_split >= 0.f || vars_split >= 0.f) w->Inspector()->SetSplit(action_split, vars_split);
 		if (keys[0])
 		{
 			if (0 == strcmp(keys, "show"))			w->SetShowKeys(true);
@@ -1140,6 +1146,12 @@ namespace UIQuestGraph
 		NqUtil::JsonStringArray(out, w->Doc()->selection);
 		out += ",\"keys\":";
 		NqUtil::JsonBool(out, w->ShowKeys());
+		out += NqUtil::Format(",\"action_split\":%.3f,\"vars_split\":%.3f",
+			w->Inspector()->ActionSplit(), w->Inspector()->VarsSplit());
+		// as of the last frame drawn: a scroll asked for in this call shows in the next answer
+		out += NqUtil::Format(",\"node_scroll\":[%.0f,%.0f],\"action_scroll\":[%.0f,%.0f]",
+			w->Inspector()->NodeScroll().x, w->Inspector()->NodeScroll().y,
+			w->Inspector()->ActionScroll().x, w->Inspector()->ActionScroll().y);
 		out += ",\"pending\":";
 		NqUtil::JsonBool(out, c->FramePending());
 		out += "}";

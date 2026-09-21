@@ -1007,8 +1007,13 @@ bool TUI::Idle()
 #if defined(USE_DX11)
 	if (!draw)	draw = DX11FrameCaptureWants();
 #endif
+	// a screenshot request held by the pump is waiting for exactly these frames
+	if (!draw)	draw = XFinedMCP::WantsFrame();
 	if (draw && !m_Flags.is(flNeedQuit) && !m_AppClosed)
+	{
 		RealRedrawScene();
+		XFinedMCP::OnFramePresented();
+	}
 
 	// The splash comes down once there is a frame to look at - or once the
 	// first pass is through, for an editor that started in the background and

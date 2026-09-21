@@ -25,11 +25,9 @@ namespace
 	const char*	g_last_bail		= 0;	// why the newest of those frames mirrored nothing
 	u32			g_want_frames	= 0;	// frames still to mirror before the picture is handed over
 
-	// Wall-clock, not frame counts: the arm window has to survive the gap between
-	// the request that arms it and the follow-up that reads the frame. Six
-	// seconds was not enough - an agent driving this does other work in between,
-	// and every request that lands after the window lapsed re-arms and fails
-	// again, so the capture never happens no matter how many times it is asked.
+	// How long mirroring stays on after a request. The request that arms it is held
+	// until its own frames are in, so nothing depends on this window for correctness;
+	// it keeps the diagnosis of a failed capture readable for a while.
 	const u32	CAPTURE_ARM_MS		= 30000;
 	const u32	CAPTURE_PERIOD_MS	= 100;
 	// how long a mirrored frame still counts as "what is on screen". Without
@@ -45,15 +43,17 @@ namespace
 void	DX11ArmFrameCapture()
 {
 	const u32 now = ::GetTickCount();
-	// a re-arm inside the window extends it without disowning the frame already
-	// mirrored for it - see the freshness rule in DX11GetFrameCapture
 	if (now > g_armed_until)
 	{
 		g_armed_at		= now;
 		g_frames_armed	= 0;
 		g_last_bail		= 0;
-		g_want_frames	= CAPTURE_SETTLE;
 	}
+	// Every request gets frames of its own. A re-arm inside the window used to keep the
+	// picture already mirrored, and a background editor draws nothing unasked - so for
+	// the whole window the caller was shown the frame from BEFORE whatever it had just
+	// done, reported as ok.
+	g_want_frames	= CAPTURE_SETTLE;
 	g_armed_until	= now + CAPTURE_ARM_MS;
 
 	// The editor redraws on demand: sitting idle it produces no frames at all,
@@ -98,8 +98,9 @@ void	DX11MirrorBackbuffer()
 	// one that gets here and bails are different faults with the same symptom
 	++g_frames_armed;
 	// a full readback every frame would stall the loop for as long as capture
-	// stays armed, and nothing needs that rate
-	if (g_last_mirror && (now - g_last_mirror) < CAPTURE_PERIOD_MS)	return;
+	// stays armed, and nothing needs that rate - except the request that is waiting
+	// for its frames right now
+	if (!g_want_frames && g_last_mirror && (now - g_last_mirror) < CAPTURE_PERIOD_MS)	return;
 	if (!HW.m_pSwapChain)							MIRROR_BAIL("no swap chain");
 
 	ID3D11Texture2D* bb = 0;
@@ -128,6 +129,11 @@ void	DX11MirrorBackbuffer()
 bool	DX11FrameCaptureWants()
 {
 	return ::GetTickCount() <= g_armed_until && g_want_frames > 0;
+}
+
+bool	DX11FrameCaptureReady()
+{
+	return g_last_mirror && !g_want_frames && g_frame_w && g_frame_h && !g_frame_px.empty();
 }
 
 void	DX11FrameCaptureWhy(xr_string& out)

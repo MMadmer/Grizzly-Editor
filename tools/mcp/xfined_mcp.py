@@ -40,13 +40,15 @@ TOOLS = [
     },
     {
         "name": "xfined_screenshot_viewport",
-        "description": "Screenshot of the 3D viewport render target (PNG image).",
+        "description": "Screenshot of the 3D viewport render target (PNG image). The editor draws fresh frames "
+                       "before answering, so a camera move or an edit sent just before it is in the picture.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "xfined_screenshot_editor",
-        "description": "Screenshot of the whole editor window incl. all panels (PNG). "
-                       "Captured via PrintWindow, so it works even when the editor is covered by other windows.",
+        "description": "Screenshot of the whole editor window incl. all panels (PNG), read from the presented frame, "
+                       "so it works even when the editor is covered by other windows. One call: the editor holds the "
+                       "request until its frames are presented, so the picture shows the state after every command sent before it.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -1352,6 +1354,10 @@ TOOLS = [
                        "follows the graph selection, so this is what puts a node in it; "
                        "slot='enter:0'/'exit:1' opens that action of the selected node in the inspector ('none' clears it). scroll='top'/'bottom'/'task:<id>'/'task:<id>/steps' scrolls the inspector panel there on the next frame (the panel is taller than its box - a task's steps and its checkboxes sit below the fold); 'action:top'/'action:bottom' scroll the action panel, which has its own scroll. "
                        "keys='show'/'hide'/'toggle' folds the shortcut list into the tab. "
+                       "action_split / vars_split (0.1..0.9) move the inspector's two splitters - the share the node keeps "
+                       "above its action, and the share of the variables pane - which is how a form taller than its pane "
+                       "gets into a screenshot; the reply reports both. They are the author's saved preference: put them back. "
+                       "node_scroll / action_scroll in the reply are [y, max] of the last frame drawn: max above y means there is more below. "
                        "The bridge waits for deferred frame-all layout before returning when the editor is drawing. "
                        "Then use xfined_screenshot_editor to look at it.",
         "inputSchema": {
@@ -1360,7 +1366,9 @@ TOOLS = [
                            "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"},
                 "scroll": {"type": "string", "description": "top | bottom | task:<id> | task:<id>/steps | action:top | action:bottom (the action panel has its own scroll)"},
                            "select": {"type": "string"}, "keys": {"type": "string",
-                           "enum": ["show", "hide", "toggle"]}},
+                           "enum": ["show", "hide", "toggle"]},
+                           "action_split": {"type": "number", "description": "0.1..0.9: share of the node/action column the NODE keeps"},
+                           "vars_split": {"type": "number", "description": "0.1..0.8: share of the inspector the variables pane keeps"}},
             "required": ["path"],
         },
     },

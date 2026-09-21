@@ -82,9 +82,10 @@ ECORE_API ID3D11ShaderResourceView* DX11TextureFromMemory	(const void* data, u32
 // with FLIP_DISCARD its contents are undefined after Present - so it has to be
 // mirrored just before presenting.
 //
-// Mirroring costs a full-frame readback, so it only runs while armed: a capture
-// request arms it for a few seconds, and the first request usually answers "not
-// ready" because the arming frame has not been presented yet.
+// Mirroring costs a full-frame readback, so it only runs while armed. A capture
+// request arms it and is then HELD by the MCP pump until the frames it asked for
+// have been presented (XFinedMCP::Pump), so the picture is of the editor as it is
+// after the request - never the frame that happened to be mirrored before it.
 //------------------------------------------------------------------------------
 ECORE_API void	DX11ArmFrameCapture		();
 ECORE_API bool	DX11GetFrameCapture		(U32Vec& out, u32& w, u32& h);
@@ -94,6 +95,8 @@ ECORE_API void	DX11MirrorBackbuffer	();
 // not draw when its window is in the background, so without this a screenshot asked
 // for over MCP - the only way anything but a human asks - could never be answered.
 ECORE_API bool	DX11FrameCaptureWants	();
+// the frames asked for by the last arm have all been mirrored
+ECORE_API bool	DX11FrameCaptureReady	();
 // why the last DX11GetFrameCapture came back empty, in words. "not ready yet" and
 // "the render loop never reached the mirror" are nothing alike, and one message for
 // both is what made this undiagnosable without a rebuild.

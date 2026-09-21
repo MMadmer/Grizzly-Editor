@@ -22,6 +22,7 @@ public:
 
 	NqDoc*			Doc					()	{ return m_Doc; }
 	NqCanvas*		Canvas				()	{ return m_Canvas; }
+	NqInspector*	Inspector			()	{ return m_Inspector; }
 	// Asks for the tab across a few frames, not one: a dock layout settles over
 	// several, and a single SetNextWindowFocus landing on an unsettled frame is
 	// simply lost - which is what left an MCP caller looking at the Render tab.
