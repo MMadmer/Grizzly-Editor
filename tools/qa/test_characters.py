@@ -400,6 +400,17 @@ def run(project: str) -> None:
         check("E104" in problems, "B and a missing visual", problems)
         mcp("characters_delete", id="QA Bad Id")
 
+        # a community is picked from the linked game's list in the window; the text path
+        # can still name one the game has never heard of, and the engine refuses those
+        odd = mcp("characters_write", text=COURIER.replace('"qa_courier"', '"qa_martian"')
+                  .replace('community = "stalker"', 'community = "martians"'))
+        odd_problems = " ".join(odd.get("problems", []))
+        if mcp("quest_lookup", type="community", limit=5).get("entries"):
+            check("W114" in odd_problems and "martians" in odd_problems,
+                  "B a community the linked game does not list is a warning that names it", odd_problems)
+            check("W114" not in " ".join(w.get("problems", [])), "B and one it does list is not")
+        mcp("characters_delete", id="qa_martian")
+
         # ---------------------------------------------------------------- C: the build
         built = mcp("mod_export", target=out_dir)
         check(built.get("ok"), "C the module builds", json.dumps(built)[:300])

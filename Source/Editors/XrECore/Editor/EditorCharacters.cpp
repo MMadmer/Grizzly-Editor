@@ -6,6 +6,7 @@
 #include "ui_main.h"
 #include "Nq/NqLua.h"
 #include "Nq/NqUtil.h"
+#include "Nq/NqPickers.h"
 #include "EditorFileOps.h"
 
 namespace
@@ -590,6 +591,14 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 				rel + "' - check it is staged in the project");
 	}
 
+	// The engine refuses a character of a community it has never heard of. A module
+	// can bring a community of its own, which the linked game knows nothing about -
+	// hence a warning and not an error, like the model above.
+	if (!c.community.empty() && linked_game && !NqPickers::Index(NqPickers::tCommunity).empty() &&
+		!NqPickers::Known(NqPickers::tCommunity, c.community.c_str()))
+		problems.push_back("W114 " + where + ": the linked game has no community '" + c.community +
+			"' - the engine refuses a character of a community it does not know");
+
 	// A text that cp1251 cannot carry silently loses characters in game: the
 	// string table, like every other game config, is cp1251.
 	xr_vector<xr_string> langs;
@@ -1080,6 +1089,7 @@ xr_string					s_Status;
 xr_string					s_PendingOpen;
 
 xr_vector<EditorCharacters::SSupply>	s_Inherited;	// what the base contributes
+xr_string					s_InheritedCommunity;	// and the community it would give
 
 char	s_Id[64]		= "";
 char	s_Base[64]		= "";
@@ -1137,6 +1147,7 @@ void CopyTo(char* dst, u32 size, const xr_string& src)
 void RecomputeInherited()
 {
 	s_Inherited.clear();
+	s_InheritedCommunity.clear();
 	if (s_Edit.base.empty() || !EditorProject::Active())	return;
 
 	xr_vector<EditorCharacters::SCharacter>	all;
@@ -1145,7 +1156,122 @@ void RecomputeInherited()
 	// ask for the BASE resolved, which is exactly what this character starts from
 	EditorCharacters::Resolve(all, ignored);
 	for (u32 i = 0; i < all.size(); ++i)
-		if (all[i].id == s_Edit.base)	{ s_Inherited = all[i].supplies; return; }
+		if (all[i].id == s_Edit.base)
+		{
+			s_Inherited				= all[i].supplies;
+			s_InheritedCommunity	= all[i].community;
+			return;
+		}
+}
+
+// A community a stalker can be of. The list of the linked game also carries the
+// monsters' (their own section, plus "monster" - what every one of them is to a
+// human) and the player's own, and none of those makes an NPC.
+bool StalkerCommunity(const NqPickers::SEntry& e)
+{
+	if (e.extra == "monster_communities" || e.id == "monster")	return false;
+	return e.id != "actor" && 0 != strncmp(e.id.c_str(), "actor_", 6);
+}
+
+// The communities of the LINKED game, under the names its player reads. Typed by
+// hand this was a field to get right from memory, and the engine refuses a
+// character of a community it does not know. A value the game does not list - a
+// community the module brings itself - is kept and shown as such, never corrected.
+bool CommunityCombo()
+{
+	const xr_vector<NqPickers::SEntry>& all = NqPickers::Index(NqPickers::tCommunity);
+	if (all.empty())
+	{
+		// no linked game to read the list from, so the field stays a field
+		const bool typed = ImGui::InputText("##community", s_Community, sizeof(s_Community));
+		if (ImGui::IsItemHovered())	ImGui::SetTooltip("No linked game to list the communities of - type the id.");
+		return typed;
+	}
+
+	const NqPickers::SEntry* cur = 0;
+	for (u32 i = 0; i < all.size(); ++i)
+		if (all[i].id == s_Community)	{ cur = &all[i]; break; }
+
+	// unset is a value of its own: a character with a base takes the base's
+	char unset[160];
+	if (s_Edit.base.empty())	xr_strcpy(unset, sizeof(unset), "(not set - stalker)");
+	else						sprintf_s(unset, "(from %s%s%s)", s_Edit.base.c_str(),
+									s_InheritedCommunity.empty() ? "" : " - ", s_InheritedCommunity.c_str());
+
+	char preview[256];
+	if (!s_Community[0])				xr_strcpy(preview, sizeof(preview), unset);
+	else if (cur && !cur->name.empty())	sprintf_s(preview, "%s  -  %s", cur->id.c_str(), cur->name.c_str());
+	else								xr_strcpy(preview, sizeof(preview), s_Community);
+
+	bool picked = false;
+	if (ImGui::BeginCombo("##community", preview, ImGuiComboFlags_HeightLarge))
+	{
+		if (ImGui::Selectable(unset, !s_Community[0]))	{ s_Community[0] = 0; picked = true; }
+		if (s_Community[0] && !cur)
+		{
+			ImGui::Selectable(s_Community, true);
+			ImGui::SameLine();
+			ImGui::TextDisabled("not in the linked game");
+		}
+		for (u32 i = 0; i < all.size(); ++i)
+		{
+			if (!StalkerCommunity(all[i]) && &all[i] != cur)	continue;
+			ImGui::PushID((int)i);
+			if (ImGui::Selectable(all[i].id.c_str(), &all[i] == cur))
+			{
+				CopyTo(s_Community, sizeof(s_Community), all[i].id);
+				picked = true;
+			}
+			if (!all[i].name.empty())
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("%s", all[i].name.c_str());
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndCombo();
+	}
+	return picked;
+}
+
+// Another character of the project to start from: picked from the ones that exist,
+// because a base that does not is E111 and nothing else.
+bool BaseCombo()
+{
+	bool known = !s_Base[0];
+	for (u32 i = 0; i < s_All.size() && !known; ++i)
+		known = ((int)i != s_Sel && s_All[i].id == s_Base);
+
+	bool picked = false;
+	if (ImGui::BeginCombo("##base", s_Base[0] ? s_Base : "(none)", ImGuiComboFlags_HeightLarge))
+	{
+		if (ImGui::Selectable("(none)", !s_Base[0]))	{ s_Base[0] = 0; picked = true; }
+		if (!known)
+		{
+			ImGui::Selectable(s_Base, true);
+			ImGui::SameLine();
+			ImGui::TextDisabled("not in the project");
+		}
+		for (u32 i = 0; i < s_All.size(); ++i)
+		{
+			// not itself: a character that starts from itself is E112
+			if ((int)i == s_Sel)	continue;
+			ImGui::PushID((int)i);
+			if (ImGui::Selectable(s_All[i].id.c_str(), s_All[i].id == s_Base))
+			{
+				CopyTo(s_Base, sizeof(s_Base), s_All[i].id);
+				picked = true;
+			}
+			if (s_All[i].abstract_)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("template");
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndCombo();
+	}
+	return picked;
 }
 
 void PullToBuffers()
@@ -1363,7 +1489,7 @@ void EditorCharacters::DrawUI()
 			mod.empty() ? "<module>" : mod.c_str());
 
 	ImGui::Text("Base");		ImGui::SameLine(label_w);
-	if (ImGui::InputText("##base", s_Base, sizeof(s_Base)))
+	if (BaseCombo())
 	{
 		changed = true;
 		s_Edit.base = s_Base;
@@ -1405,9 +1531,9 @@ void EditorCharacters::DrawUI()
 		changed = true;
 
 	ImGui::Text("Community");	ImGui::SameLine(label_w);
-	if (ImGui::InputText("##community", s_Community, sizeof(s_Community)))	changed = true;
+	if (CommunityCombo())	changed = true;
 	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("stalker, bandit, dolg, freedom, ecolog, killer, army, monolith, zombied");
+		ImGui::SetTooltip("The communities of the linked game. Not set: the base's, or stalker without one.");
 
 	ImGui::Text("Visual");		ImGui::SameLine(label_w);
 	if (ImGui::InputText("##visual", s_Visual, sizeof(s_Visual)))	changed = true;

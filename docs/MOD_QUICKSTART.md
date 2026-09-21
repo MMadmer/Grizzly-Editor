@@ -294,14 +294,18 @@ Russian text; fill both and each install reads its own. A character that only
 has `rus` stays a plain string in the file.
 
 Fields: `name` and `bio` are a string or a table keyed by language; `community`
-is one of the game's (`stalker`, `bandit`, `dolg`, `freedom`, `ecolog`,
-`killer`, `army`, `monolith`, `zombied`); `visual` is meshes-relative with the
+is one of the linked game's - the window offers them as a list, under the names
+the player reads (`stalker`, `bandit`, `dolg`, `freedom`, `ecolog`, `killer`,
+`army`, `monolith`, `zombied`, `csky`, `trader`, … - a global mod may change
+the set); `base` is picked from the project's other characters; `visual` is meshes-relative with the
 extension optional; `rank` runs 0-1000 (novice to master); `supplies` is the
 starting kit; `squad = false` leaves the squad section out.
 
 Problems are coded: `E…` stops a build (no name, no model, an id that is not
 `a-z0-9_`, two characters sharing an id), `W…` does not (a model the linked
-game cannot find, text cp1251 cannot carry).
+game cannot find, text cp1251 cannot carry, `W114` - a community the linked
+game does not list: the engine refuses a character of a community it does not
+know, so this one is only safe when the module brings that community itself).
 
 ### One kit, many characters
 

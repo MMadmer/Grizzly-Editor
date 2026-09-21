@@ -286,6 +286,15 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   kind: `NqInspector::DrawParams` sends only kinds with an `item_list` to the
   item-rows form. `spawn.npc` has rows and goes through the typed editors
   (`DrawNpcList`).
+- **What comes from a list is PICKED, not typed.** In the Characters window
+  `Community` is a combo over the linked game's communities
+  (`NqPickers::tCommunity`, under the names the player reads; the monsters' and
+  the player's own are left out) and `Base` a combo over the project's other
+  characters. Never hardcode that list - a global mod changes it. A value the
+  list does not hold is kept and shown, never corrected; "not set" is a value of
+  its own (the base's community, or `stalker` without one). On the text / MCP
+  path an unknown community is `W114`: the engine refuses such a character, but
+  a module may bring a community of its own, so it is a warning.
 - `npc.set_name` is NOT this. It renames an NPC at run time, for when the player
   learns who someone is; it needs no profile and changes nothing on disk.
 - QA: `tools/qa/test_characters.py --project <project>` runs the whole path over
