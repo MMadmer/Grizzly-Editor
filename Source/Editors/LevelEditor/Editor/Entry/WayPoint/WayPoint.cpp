@@ -765,6 +765,36 @@ bool CWayObject::ExportGame(SExportStreams* F)
 }
 
 
+void CWayObject::BuildPath(const xr_vector<Fvector>& positions, bool loop)
+{
+	if (positions.empty()) return;
+	Clear();
+	m_WayPoints.clear();
+	for (const Fvector& p : positions)
+		AppendWayPoint()->m_vPosition.set(p);
+	for (u32 i = 0; i + 1 < m_WayPoints.size(); ++i)
+		m_WayPoints[i]->AppendLink(m_WayPoints[i + 1], 1.f);
+	if (loop && m_WayPoints.size() > 2)
+		m_WayPoints.back()->AppendLink(m_WayPoints.front(), 1.f);
+	UpdateTransform();
+}
+
+void CWayObject::ExportPath(xr_vector<SExportPoint>& points, xr_vector<SExportLink>& links) const
+{
+	points.clear();
+	links.clear();
+	for (u32 i = 0; i < m_WayPoints.size(); ++i)
+	{
+		const CWayPoint* W = m_WayPoints[i];
+		points.push_back({ W->m_vPosition, W->m_Flags.get(), W->m_Name });
+		for (const SWPLink* link : W->m_Links)
+		{
+			const auto to = std::find(m_WayPoints.begin(), m_WayPoints.end(), link->way_point);
+			if (to != m_WayPoints.end())
+				links.push_back({ i, u32(to - m_WayPoints.begin()), link->probability });
+		}
+	}
+}
 CWayPoint* CWayObject::FindWayPoint(const shared_str& nm)
 {
     for (WPIt it=m_WayPoints.begin(); it!=m_WayPoints.end(); it++)

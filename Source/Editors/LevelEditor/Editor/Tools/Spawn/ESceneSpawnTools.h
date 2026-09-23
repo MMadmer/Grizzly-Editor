@@ -60,4 +60,6 @@ public:
 */
     virtual CCustomObject* CreateObject			(LPVOID data, LPCSTR name);
    CEditableObject*		get_draw_visual			(u8 _RP_TeamID, u8 _RP_Type, const GameTypeChooser& _GameType); 
+   // the figure a Player Start is drawn as (editor\telo_dm); null when the SDK lacks it
+   CEditableObject*		get_player_start_visual	();
 };

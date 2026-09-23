@@ -38,4 +38,7 @@ namespace EditorModScene
 	// nobody remembers a separate bake step, and stale ops of this level die.
 	// No scene open = does nothing. Other levels' files are never touched.
 	void BakeCurrentSceneSpawn	(xr_string& note);
+
+	// the level the open scene bakes into (spawn\<level>.xspawn); false with no scene
+	bool SceneLevelName			(xr_string& level);
 }

@@ -8,6 +8,7 @@
 #include "../EditorGameConfigs.h"
 #include "../EditorProject.h"
 #include "../EditorCharacters.h"
+#include "../EditorWorld.h"
 
 namespace
 {
@@ -31,6 +32,7 @@ namespace
 		"item_section", "squad_section", "level", "smart", "story_id", "profile", "community", "info", "spot_type",
 		"restrictor", "spawn_section",
 		"dialog_id", "character_icon", "rank",
+		"level_changer",
 	};
 
 	// the portraits the game's own characters wear: which texture sheets are
@@ -260,6 +262,21 @@ namespace
 			else if (k == "caption")	caption = v;
 		}
 		if (!name.empty() && sect != "levels") Add(NqPickers::tLevel, name, resolve(name, caption), sect);
+	}
+
+	// The linked game's transitions, read out of its all.spawn (EditorWorld): what
+	// world.transition closes and transition_open asks about. Runs after BuildLevels,
+	// whose captions name where each one leads.
+	void BuildLevelChangers()
+	{
+		const xr_vector<NqPickers::SEntry>& levels = s_Index[NqPickers::tLevel];
+		for (const EditorWorld::STransition& t : EditorWorld::Transitions())
+		{
+			xr_string to = t.to_level;
+			for (u32 i = 0; i < levels.size(); ++i)
+				if (levels[i].id == t.to_level && !levels[i].name.empty()) to = levels[i].name;
+			Add(NqPickers::tLevelChanger, t.name, "to " + to, t.level + " -> " + t.to_level);
+		}
 	}
 
 	void BuildSmarts(const TStrings& st)
@@ -962,7 +979,7 @@ namespace
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 11 ";
+	const char* kCacheFormat = "nqindex 12 ";
 
 	void CachePath(string_path& out)
 	{
@@ -1078,6 +1095,7 @@ namespace
 				BuildSpawnStories(st, profiles);
 				BuildFromSettings(st, profiles);
 				BuildLevels(st);
+				BuildLevelChangers();
 				BuildSmarts(st);
 				BuildCommunities(st);
 				BuildInfos();
@@ -1162,6 +1180,18 @@ void NqPickers::SceneWayPaths(xr_vector<SEntry>& out)
 {
 	out.clear();
 	if (s_SceneWayPaths) s_SceneWayPaths(out);
+	// the linked game's own paths walk just as well: a guard post or a patrol
+	// route of the base game is often exactly the route an order wants
+	xr_set<xr_string> taken;
+	for (const SEntry& e : out) taken.insert(e.id);
+	for (const xr_string& name : EditorWorld::GamePatrols())
+		if (!taken.count(name))
+		{
+			SEntry e;
+			e.id = name;
+			e.extra = "game";
+			out.push_back(e);
+		}
 }
 
 const xr_vector<NqPickers::SEntry>& NqPickers::Index(EType t)
@@ -1265,7 +1295,7 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 	NqUtil::ArgString(raw, "path", path);
 	int limit = NqUtil::ArgInt(raw, "limit", 50);
 	if (limit <= 0) limit = 50;
-	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id, behaviour_id, role, way_path, character_id)"); return; }
+	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id, behaviour_id, role, way_path, character_id, level_changer)"); return; }
 
 	xr_vector<SEntry> doc_entries;
 	const EType t = TypeFromName(type.c_str());

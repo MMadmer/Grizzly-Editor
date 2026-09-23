@@ -2,6 +2,7 @@
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
+#include "..\..\XrECore\Editor\EditorWorld.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
 #include "UITitleBar.h"
@@ -93,6 +94,9 @@ void UIMainMenuForm::Draw()
             if (ImGui::MenuItem("Characters...", ""))				EditorCharacters::Show();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("The module's own NPCs: name, model, community and starting kit.\nThe build turns each one into a character profile and a spawn section of its own.");
+            if (ImGui::MenuItem("World...", ""))					EditorWorld::Show();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("What the mode keeps of the original game: its NPCs, monsters and quests,\nthe levels the player may reach, the transitions that start closed, the Player Start.");
             ImGui::Separator();
             if (ImGui::MenuItem("Package Release...", ""))			EditorMod::RequestPackageRelease();
             if (ImGui::IsItemHovered())

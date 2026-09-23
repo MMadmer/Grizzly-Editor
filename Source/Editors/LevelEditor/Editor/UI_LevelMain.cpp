@@ -6,6 +6,7 @@
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
+#include "..\..\XrECore\Editor\EditorWorld.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\XrECore\Editor\EditorGameModes.h"
@@ -151,6 +152,80 @@ static void CollectSceneStories(xr_vector<NqPickers::SEntry>& out)
     }
 }
 
+// ---- the mode's world (EditorWorld) ----------------------------------------------
+// The Player Starts of the open scene, under the level the bake writes them for: the
+// World window and the build's check see a start the moment it is placed.
+static void CollectSceneStarts(xr_string& level, xr_vector<EditorWorld::SStart>& starts)
+{
+    level.clear();
+    starts.clear();
+    if (!Scene || !EditorModScene::SceneLevelName(level)) return;
+    ObjectList& lst = Scene->ListObj(OBJCLASS_SPAWNPOINT);
+    for (ObjectIt it = lst.begin(); it != lst.end(); ++it)
+    {
+        CSpawnPoint* sp = dynamic_cast<CSpawnPoint*>(*it);
+        if (!sp || sp->m_Type != ptPlayerStart) continue;
+        EditorWorld::SStart s;
+        s.level     = level;
+        s.name      = sp->GetName();
+        s.source    = "scene";
+        s.position  = sp->GetPosition();
+        sp->_Transform().getXYZ(s.direction);
+        starts.push_back(s);
+    }
+}
+
+u32 DropObjectsToGround(ObjectList& objects, bool align_normal, bool line_trace);
+
+// A Player Start in front of the camera, facing the way it looks, dropped onto the
+// ground. Called from the World window's Draw: the frame is asked for, never forced.
+static bool PlaceSceneStart(xr_string& err)
+{
+    if (!Scene || Scene->locked())  { err = "no scene is open, or it is locked"; return false; }
+    ESceneCustomOTool* tool = Scene->GetOTool(OBJCLASS_SPAWNPOINT);
+    if (!tool)                      { err = "no spawn tool in this build"; return false; }
+    string256 name;
+    Scene->GenObjectName(OBJCLASS_SPAWNPOINT, name, "player_start");
+    CCustomObject* obj = tool->CreateObject((LPVOID)PLAYERSTART_CHOOSE_NAME, name);
+    if (!obj)                       { err = "the spawn tool refused it"; return false; }
+    const Fvector& dir = EDevice->m_Camera.GetDirection();
+    Fvector pos;
+    pos.mad(EDevice->m_Camera.GetPosition(), dir, 5.f);
+    obj->SetPosition(pos);
+    obj->SetRotation(Fvector().set(0.f, atan2f(dir.x, dir.z), 0.f));
+    if (LTools->CurrentClassID() != OBJCLASS_SPAWNPOINT)
+        LTools->SetTarget(OBJCLASS_SPAWNPOINT, 0);
+    Scene->SelectObjects(false, OBJCLASS_DUMMY);
+    Scene->AppendObject(obj);
+    obj->Select(TRUE);
+    ObjectList batch;
+    batch.push_back(obj);
+    DropObjectsToGround(batch, false, false);
+    UI->RedrawScene();
+    return true;
+}
+
+// selects an object and frames it, like the F key
+static bool FocusSceneObject(LPCSTR name)
+{
+    if (!Scene || !name) return false;
+    CCustomObject* obj = Scene->FindObjectByName(name, (CCustomObject*)0);
+    if (!obj) return false;
+    Scene->SelectObjects(false, OBJCLASS_DUMMY);
+    obj->Select(TRUE);
+    if (LTools->CurrentClassID() != obj->FClassID)
+        LTools->SetTarget(obj->FClassID, 0);
+    Fbox box;
+    if (!obj->GetBox(box))
+    {
+        box.set(obj->GetPosition(), obj->GetPosition());
+        box.grow(2.f);
+    }
+    EDevice->m_Camera.ZoomExtents(box);
+    UI->RedrawScene();
+    return true;
+}
+
 CLevelMain::CLevelMain()
 {
     m_Cursor        = xr_new<C3DCursor>();
@@ -159,6 +234,9 @@ CLevelMain::CLevelMain()
     NqPickers::SetSceneStories(CollectSceneStories);
     NqPickers::SetSceneWayPaths(CollectSceneWayPaths);
     EditorCharacters::SetModelPreview(PreviewCharacterModel);
+    EditorWorld::SetSceneStarts(CollectSceneStarts);
+    EditorWorld::SetPlaceStart(PlaceSceneStart);
+    EditorWorld::SetFocusObject(FocusSceneObject);
 }
 
 CLevelMain::~CLevelMain()
@@ -1473,6 +1551,12 @@ CCommandVar CommandModCharacters(CCommandVar p1, CCommandVar p2)
     return TRUE;
 }
 
+CCommandVar CommandModWorld(CCommandVar p1, CCommandVar p2)
+{
+    EditorWorld::Show();
+    return TRUE;
+}
+
 CCommandVar CommandModReleases(CCommandVar p1, CCommandVar p2)
 {
     EditorPublish::RequestReleases();
@@ -2321,6 +2405,10 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "characters_delete"))	{ EditorCharacters::McpDelete(raw, out);	return true; }
     // the modes a module can target, scanned from the linked game install
     if (0 == xr_strcmp(cmd, "game_modes"))			{ EditorGameModes::McpList(out);		return true; }
+    // the mode's world: what of the original game it keeps, the area, the transitions
+    if (0 == xr_strcmp(cmd, "world_get"))			{ EditorWorld::McpGet(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "world_set"))			{ EditorWorld::McpSet(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "world_transitions"))	{ EditorWorld::McpTransitions(raw, out);	return true; }
     // level overlays check the scene/project themselves and report json errors
     // opens the model preview window - the same thing a double click in the
     // content browser does, reachable without driving the mouse
@@ -3278,9 +3366,13 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             out = "{\"ok\":false,\"error\":\"missing 'section' argument (see list_spawn_sections)\"}";
             return true;
         }
-        if (!pSettings || !pSettings->section_exist(section) || !pSettings->line_exist(section, "$spawn"))
+        // the module's Player Start is a point of its own, not a config section
+        const bool player_start = 0 == _stricmp(section, PLAYERSTART_CHOOSE_NAME) || 0 == _stricmp(section, "player_start");
+        if (player_start)
+            xr_strcpy(section, PLAYERSTART_CHOOSE_NAME);
+        else if (!pSettings || !pSettings->section_exist(section) || !pSettings->line_exist(section, "$spawn"))
         {
-            out = "{\"ok\":false,\"error\":\"no such spawn section in pSettings (see list_spawn_sections)\"}";
+            out = "{\"ok\":false,\"error\":\"no such spawn section in pSettings (see list_spawn_sections; player_start places the Player Start)\"}";
             return true;
         }
 
@@ -3303,7 +3395,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
 
         string256 namebuffer;
-        Scene->GenObjectName(OBJCLASS_SPAWNPOINT, namebuffer, section);
+        Scene->GenObjectName(OBJCLASS_SPAWNPOINT, namebuffer, player_start ? "player_start" : section);
         // the tool's own factory: builds the server entity from the section
         // and auto-attaches whatever the section declares ($def_sphere shapes)
         CCustomObject* obj = tool->CreateObject((LPVOID)section, namebuffer);
@@ -3334,6 +3426,173 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             out.erase(out.size() - 1);
             out += dropped ? ",\"snapped_to_ground\":true}" : ",\"snapped_to_ground\":false}";
         }
+        return true;
+    }
+
+    // A way path, drawn from points: what a patrol walks, a post watches and a quest's
+    // destination names. The WayPoint tool draws the same thing by hand.
+    if (0 == xr_strcmp(cmd, "place_way"))
+    {
+        if (Scene->locked())
+        {
+            out = "{\"ok\":false,\"error\":\"scene locked\"}";
+            return true;
+        }
+        char name[256];
+        xr_string text;
+        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
+        {
+            out = "{\"ok\":false,\"error\":\"missing 'name' - the path's name, what orders and quests call it\"}";
+            return true;
+        }
+        if (!NqUtil::ArgString(raw, "points", text))
+        {
+            out = "{\"ok\":false,\"error\":\"missing 'points': \\\"x,y,z; x,y,z; ...\\\"\"}";
+            return true;
+        }
+        if (Scene->FindObjectByName(name, (CCustomObject*)0))
+        {
+            out = "{\"ok\":false,\"error\":\"an object of that name exists already\"}";
+            return true;
+        }
+        xr_vector<Fvector> points;
+        xr_vector<xr_string> items;
+        NqUtil::Split(text.c_str(), ';', items);
+        for (const xr_string& item : items)
+        {
+            Fvector p;
+            if (3 != sscanf(item.c_str(), "%f , %f , %f", &p.x, &p.y, &p.z) || !_valid(p))
+            {
+                out = "{\"ok\":false,\"error\":\"a point is not x,y,z: ";
+                out += JsonStr(item.c_str());
+                out += "\"}";
+                return true;
+            }
+            points.push_back(p);
+        }
+        if (points.empty())
+        {
+            out = "{\"ok\":false,\"error\":\"a path needs at least one point\"}";
+            return true;
+        }
+        // each point onto what is under it, the way a hand-drawn point lands
+        if (GetArgBool(raw, "snap_to_ground", true))
+            for (Fvector& p : points)
+            {
+                Fvector start = p, down;
+                start.y += 2.f;
+                down.set(0.f, -1.f, 0.f);
+                SRayPickInfo pinf;
+                pinf.inf.range = kDropReach;
+                if (Scene->RayPickObject(pinf.inf.range, start, down, OBJCLASS_SCENEOBJECT, &pinf, 0))
+                {
+                    Fvector hit;
+                    RetrieveSceneObjPointAndNormal(hit, 0, pinf, 0);
+                    if (_valid(hit)) p = hit;
+                }
+            }
+        ESceneCustomOTool* tool = Scene->GetOTool(OBJCLASS_WAY);
+        CWayObject* way = tool ? dynamic_cast<CWayObject*>(tool->CreateObject(0, name)) : 0;
+        if (!way)
+        {
+            out = "{\"ok\":false,\"error\":\"no way tool in this build\"}";
+            return true;
+        }
+        way->BuildPath(points, GetArgBool(raw, "loop", true));
+        Scene->SelectObjects(false, OBJCLASS_WAY);
+        Scene->AppendObject(way);
+        UI->RedrawScene(true);
+        RespondObjectJson(out, way);
+        if (!out.empty() && out[out.size() - 1] == '}')
+        {
+            out.erase(out.size() - 1);
+            char tail[64];
+            sprintf_s(tail, ",\"points\":%u}", (u32)points.size());
+            out += tail;
+        }
+        return true;
+    }
+
+    // A placed stalker's standing order: what it does from its first frame in the game
+    // until a quest says otherwise. Without order fields the answer only reports it.
+    if (0 == xr_strcmp(cmd, "spawn_order"))
+    {
+        char name[256];
+        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)))
+        {
+            out = "{\"ok\":false,\"error\":\"missing 'name' (a stalker placed with the Spawn tool)\"}";
+            return true;
+        }
+        CSpawnPoint* sp = dynamic_cast<CSpawnPoint*>(FindObjectRelaxed(name));
+        if (!sp)
+        {
+            out = "{\"ok\":false,\"error\":\"no spawn object of that name\"}";
+            return true;
+        }
+        if (!sp->CanTakeOrder())
+        {
+            out = "{\"ok\":false,\"error\":\"only a stalker takes an order - the game's schemes drive stalkers alone\"}";
+            return true;
+        }
+        SXmsOrder o = sp->m_Order;
+        bool changed = false;
+        char text[256];
+        if (XFinedMCP::GetArg(raw, "order", text, sizeof(text)))
+        {
+            const u8 kind = SXmsOrder::KindFromKey(text);
+            if (kind == SXmsOrder::okNone && 0 != _stricmp(text, "none"))
+            {
+                out = "{\"ok\":false,\"error\":\"order must be guard, patrol, wander, follow or none\"}";
+                return true;
+            }
+            o.kind = kind;
+            changed = true;
+        }
+        if (XFinedMCP::GetArg(raw, "route", text, sizeof(text)))	{ o.route = text; changed = true; }
+        if (XFinedMCP::GetArg(raw, "look", text, sizeof(text)))		{ o.look = text; changed = true; }
+        if (XFinedMCP::GetArg(raw, "target", text, sizeof(text)))	{ o.target = text; changed = true; }
+        float number = 0.f;
+        if (GetArgFloat(raw, "radius", number))		{ o.radius = number; changed = true; }
+        if (GetArgFloat(raw, "distance", number))	{ o.distance = number; changed = true; }
+        // a flag is set only when the request names it: asked with both defaults, an
+        // absent field answers twice differently
+        auto flag = [&](LPCSTR field, u8 mask)
+        {
+            const bool a = GetArgBool(raw, field, false), b = GetArgBool(raw, field, true);
+            if (a == b) { o.flags.set(mask, a ? TRUE : FALSE); changed = true; }
+        };
+        flag("run", SXmsOrder::flRun);
+        flag("hostile", SXmsOrder::flHostile);
+        if (o.kind == SXmsOrder::okPatrol && !o.route.size())
+        {
+            out = "{\"ok\":false,\"error\":\"a patrol needs a route: a way path of this level ('route')\"}";
+            return true;
+        }
+        if (changed)
+        {
+            sp->m_Order = o;
+            Scene->UndoSave();
+            if (sp->Selected()) LTools->UpdateProperties(FALSE);
+            UI->RedrawScene();
+        }
+        xr_string section;
+        o.Section(section);
+        out = "{\"ok\":true,\"name\":\"";
+        out += JsonStr(sp->GetName());
+        out += "\",\"section\":\"";
+        out += JsonStr(sp->m_SpawnData.m_Data->name());
+        out += "\",\"order\":{\"kind\":\"";
+        out += SXmsOrder::KindKey(o.kind) ? SXmsOrder::KindKey(o.kind) : "none";
+        out += "\",\"route\":\"";		out += JsonStr(o.route.c_str());
+        out += "\",\"look\":\"";		out += JsonStr(o.look.c_str());
+        out += "\",\"target\":\"";		out += JsonStr(o.target.size() ? o.target.c_str() : "actor");
+        char nums[160];
+        sprintf_s(nums, "\",\"radius\":%g,\"distance\":%g,\"run\":%s,\"hostile\":%s},\"changed\":%s,\"custom_data\":\"",
+            o.radius, o.distance, o.flags.test(SXmsOrder::flRun) ? "true" : "false",
+            o.flags.test(SXmsOrder::flHostile) ? "true" : "false", changed ? "true" : "false");
+        out += nums;
+        out += JsonStr(section.c_str());
+        out += "\"}";
         return true;
     }
 
@@ -4182,6 +4441,7 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_SE	    (COMMAND_MOD_PUBLISH,				"Mod\\Publish Release",			CommandModPublish,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_RELEASES,				"Mod\\Manage Releases",			CommandModReleases,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_CHARACTERS,			"Mod\\Characters",				CommandModCharacters,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_WORLD,					"Mod\\World",					CommandModWorld,true);
 
 	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
 	// level.ini actually lists, so a rebind still wins.
@@ -4590,6 +4850,7 @@ void CLevelMain::OnDrawUI()
         EditorMod::DrawUI();
         EditorPublish::DrawUI();
         EditorCharacters::DrawUI();
+        EditorWorld::DrawUI();
         EditorModScene::DrawUI();
     }
     if (LTools->GetToolForm())

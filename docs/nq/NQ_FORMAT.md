@@ -127,7 +127,7 @@ refused (`E022`).
 |---|---|---|
 | `text` | `"string"` or `{ rus = "…", eng = "…" }` | UTF-8; placeholders `{var:name}`, `{actor}` |
 | `string` | `"…"` | a free string (e.g. the `section` filter of `objective.kill_count`) |
-| picker strings | `"…"` | `item_section`, `squad_section`, `spawn_section` (any section with `$spawn`), `level`, `smart`, `restrictor`, `community`, `info`, `var_name`, `task_id`, `objective_id` (a step of the task named by the neighboring `task` parameter), `quest_id` (`"<module>.<quest>"` or `"<quest>"` = own module), `character_id` (a character of this project by the `id` of its `.npcasset`; `"<module>.<id>"` reaches a character another module ships), `ref_name`, `signal_name`, `spot_type`, `node_id` — each has its own picker (`quest_lookup`) |
+| picker strings | `"…"` | `item_section`, `squad_section`, `spawn_section` (any section with `$spawn`), `level`, `smart`, `restrictor`, `community`, `info`, `var_name`, `task_id`, `objective_id` (a step of the task named by the neighboring `task` parameter), `quest_id` (`"<module>.<quest>"` or `"<quest>"` = own module), `character_id` (a character of this project by the `id` of its `.npcasset`; `"<module>.<id>"` reaches a character another module ships), `ref_name`, `signal_name`, `spot_type`, `node_id`, `level_changer` (a transition of the linked game by the object name the engine knows it by - `world_transitions` lists them per level) — each has its own picker (`quest_lookup`) |
 | `int` | `5` | integer; catalog `min`/`max` are checked |
 | `float` | `2.5` | `min`/`max` are checked |
 | `bool` | `true` / `false` | strictly boolean |
@@ -143,6 +143,9 @@ refused (`E022`).
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` \| `{ ref = "anchor" }` \| `{ actor = true, distance = 2 }` | `radius` defaults to 5; `ref` is where an object this quest created stands; `actor` is that many metres in front of the player, resolved when the action runs — a spawn point, not a destination (refused on `objective.reach`, `actor_in_place`, `actor.teleport`) |
 | `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once. A kind that CREATES or CONSUMES the items declares a **row schema** in the catalog (`rows` + `row.<name>`): its rows are sections only, typed by that schema — `item.give`, `item.take` (a row may say `count = "all"`), `item.spawn` (each row carries its own state) |
 | `npc_list` | `{ { character = "valera", ref = "valera" }, { section = "sim_default_stalker_1", ref = "his_friend" } }` | the rows of `spawn.npc`, one NPC each. A row names **exactly one** of `character` (`character_id` - the asset itself, no section to look up) or `section` (`spawn_section`); optional `ref` (each NPC keeps its own), `unique`, `dead`, `yaw`. `unique` first removes every NPC of that kind from the world: **on by default for a character** (one person - a second Valera is a bug), **off for a section** (a kind half the zone may share) unless the row sets it. A key the row schema does not know is an error, not a silent no-op |
+| `destination` | `{ path = "agro_patrol" }` \| `{ ref = "…" }` \| `{ story = "…" }` \| a `place` | where an order or a behaviour step sends people (§10.3). `{ role = … }` exists only in a behaviour graph - a quest casts nobody (`E024`) |
+| `role_or_actor` | `{ actor = true }` \| `{ ref = "…" }` \| `{ story = "…" }` | who to follow; a behaviour graph also takes `{ role = … }` |
+| `attack_target` | `{ actor = true }` \| `{ community = "…" }` \| any `npc_ref` form | who to turn on; a behaviour graph also takes `{ role = … }` |
 | `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick, state, within, beyond, scatter } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` (its `spawn`) and `item.spawn` (its `where`) put the loot they create; radii are measured from the player |
 | `cases_cond` | `{ { name = "yes", cond = { … } }, … }` | case names = pins |
 | `cases_weight` | `{ { name = "a", weight = 3 }, … }` | the default weight is 1, must be > 0 |
@@ -313,6 +316,14 @@ else is plumbing around it. When a stage without waiting is needed —
 | `npc.remove` | Remove NPC | **`npc: npc_ref`** | Removes the NPC from the world. |
 | `npc.kill` | Kill NPC | **`npc: npc_ref`** | Kills the NPC. |
 | `npc.set_name` | Set NPC name | **`npc: npc_ref`**, **`name: text`** | Renames the NPC - the name over their head, in the dialog window and in the PDA. No character profile is needed for it. An NPC that is offline is renamed the moment it comes online, so the name survives being set far from the player. |
+| `world.transition` | Open or close a way | `changer: level_changer`, `level: level`, `open: bool = true` | Opens or closes one level changer, or every changer on a level. A way the mode's world closed at the start opens this way too - the story decides when the player may leave. The game keeps it in the save. |
+| `world.area` | Grow or shrink the area | **`level: level`**, `include: bool = true` | Adds a level to the area the player may travel to, or takes one out. Only a mode that limits the area has one to change. |
+| `world.rule` | Change a world rule | **`rule: enum(original_npcs\|random_stalkers\|mutants\|npc_quests\|story_quests)`**, **`value: enum(keep\|remove\|default)`** | Changes one of the mode's world rules for the rest of the game - the simulation spawning random stalkers again once the story allows it, or the jobs of squad leaders coming back. default goes back to what the mode started with. |
+| `order.guard` | Order - guard | **`who: npc_ref`**, `place: destination`, `look: way_path`, `radius: float = 20` | The NPC, or every member of a squad, takes a post and fights from it - at a place, or where it stands now. With a look path it digs in and watches it. The order belongs to the NPC - it outlives the quest, survives saves and waits while a behaviour graph borrows the NPC. |
+| `order.patrol` | Order - patrol | **`who: npc_ref`**, `route: way_path`, `area: destination`, `radius: float = 15`, `move: enum(walk\|run) = walk` | The NPC walks a waypoint path over and over, or wanders the area around a place and rests at every stop - danger, cover and combat stay the game's own. Lasts until another order. |
+| `order.follow` | Order - follow | **`who: npc_ref`**, **`target: role_or_actor`**, `distance: float = 3` | The NPC follows the player or another NPC and keeps close - a companion that fights beside the one it follows. Lasts until another order. |
+| `order.attack` | Order - attack | **`who: npc_ref`**, **`target: attack_target`** | Makes the NPC hostile to the target and lets it engage - the player, another NPC or squad, or a whole community. Hostility is a relation and stays after the fight. An NPC that is offline turns hostile the moment it spawns. |
+| `order.clear` | Order - dismiss | **`who: npc_ref`** | Takes the NPC's standing order away - it goes back to its own logic, its smart terrain or what its spawn carries. |
 | `relation.set` | Set relation | **`who: npc_ref`**, **`value: relation`** | Makes an NPC, squad, or community an enemy, neutral, or friend of the player. |
 | `relation.goodwill` | Change goodwill | **`who: npc_ref`**, **`delta: int`** | Adds (or subtracts) NPC or community goodwill toward the player. |
 | `news.tip` | PDA message | **`text: text`**, `sender: npc_ref`, `icon: string`, `duration: float = 5` | Shows a news tip to the player. sender sets the author. |
@@ -350,6 +361,7 @@ and `wait.any` cases.
 | `time_of_day` | Time of day | **`from: int`**, **`to: int`** | The in-game hour is within from..to (midnight wrap supported). |
 | `elapsed` | Time elapsed | `from: enum(quest\|node) = quest`, `node: node_id`, **`duration: duration`** | At least duration passed since quest activation (from=quest) or node entry (from=node). False when the node has no live token. |
 | `chance` | Chance | **`percent: int`** | Randomly true with the given percent. |
+| `transition_open` | Way is open | **`changer: level_changer`** | True while the level changer lets the player through - the mode's world and the quests that opened or closed it both counted. |
 | `any` | Any of | **`of: cond_list`** | True when at least one nested condition is true. |
 
 ### 6.5 Event conditions (`use = cond`, `event = true`)
@@ -370,6 +382,24 @@ True exactly at the moment of the event. Allowed **only** in `trigger.when`,
 | `event.talk_ended` | Event: talk ended | `npc: npc_ref` | The player closed a dialog with the NPC. |
 | `event.signal` | Event: signal | **`name: signal_name`** | A signal.send signal was received. |
 | `event.trade_done` | Event: trade | `npc: npc_ref` | The player completed a trade (empty npc: any). |
+
+### 6.5a The mode's world and standing orders
+
+What a mode keeps of the original game - its NPCs, monsters, jobs and story quests, the playable area, the transitions that start closed, where a new game begins - is the MODULE's decision, made once in `mod.ltx [world]` and the level editor's Player Start (the editor's Mod > World window, MCP `world_get` / `world_set`). The `world.*` kinds change it while the game runs: the story opens the way out of Agroprom, grows the area, lets the simulation back in. Nothing of the game is rewritten for either - the engine composes the module's world over the game's own in memory, per new game, and keeps it in the save.
+
+An **order** is what an NPC does until told otherwise: guard a post, patrol a path, wander an area, follow someone, turn on someone. It belongs to the NPC, not to the quest that gave it: it survives saves, outlives the quest, waits while a behaviour graph borrows the NPC and comes back when the graph lets it go, and a new order replaces the old one. A stalker placed in the level editor carries one from its first frame (its Order properties, shipped as `[xms_order]` in its custom data); a quest gives one with `order.*` - typically right after `spawn.npc`:
+
+```lua
+{ id = "guards", kind = "flow.step",
+  on_enter = {
+    { kind = "spawn.npc", params = { npcs = { { character = "guard_a", ref = "guard_a" } },
+                                     place = { restrictor = "agr_gate" } } },
+    { kind = "order.patrol", params = { who = { ref = "guard_a" }, route = "agr_gate_walk" } },
+  },
+  out = { next = "night" } },
+```
+
+Orders are for NPCs a quest does not script step by step. When a scene needs several NPCs moving in concert, a behaviour graph (§10) is the tool; its steps outrank the order for as long as it runs.
 
 ### 6.6 Extending the catalog from a module
 
@@ -405,6 +435,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `E021` | `cases` are empty, a case name is bad or duplicated, `weight ≤ 0` | every case needs a unique `[a-z0-9_]` `name`; weights strictly > 0 |
 | `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter; a `spawn.npc` row with both `character` and `section`, or neither); or `item.spawn` state written beside an `items` list | pick exactly one form; the inspector dims the losing fields. For `item.spawn` move the state into the row it applies to |
 | `E030` | a reference to an undeclared `var` / `task` / `objective` / `node` / `quest`, a `ref` nothing creates, or a `spawn.npc` row whose `character` is not in the project - or is a template (`abstract`), which never becomes an NPC | declare the variable in `vars`, the task (and its steps) in `tasks`, the object via `spawn.*` or `objective.kill{spawn}` before use; for a foreign quest write `"<module>.<quest>"`. The game answers with the same code, so a quest with such a reference simply will not load there |
+| `E024` | `{ role = … }` in a quest's destination or target - a quest casts nobody | name the NPC by `{ ref = }` (something the quest spawned) or `{ story = }`; roles are a behaviour graph's cast (§10.1) |
 | `E031` | `actor.teleport` to a place on another level | Dead Air has no cross-level teleports — transitions go through a level changer |
 | `E050` | a syntax error in custom Lua | fix the `code`; the "check syntax" button in the inspector verifies it separately |
 | `W011` | continuations of a non-leaf phrase: among player replies **not all** are unconditional, or among NPC lines not a single one is (unconditional = no `cond` and no `once`) | the runtime will add a hidden leaf ("Пока." / "…"). For NPC lines it is unreachable, so one unconditional line is enough. For player replies it is a visible row that closes the talk past the topic's `done` — make every reply unconditional, or move the logic off `done` into the replies themselves |
@@ -755,6 +786,7 @@ catalog says it waits.
 | `npc.attack` | **`who`**, **`target: attack_target`**. Makes the role hostile to the target - the game's own combat does the rest. |
 | `npc.stance` | **`who`**, `to_actor: relation`, `goodwill`, `combat_ignore`, `invulnerable`. Only the fields you set change. |
 | `npc.release` | **`who`**. Hands the role back early; a graph releases everyone it touched when it ends. |
+| `npc.patrol` | **`who`**, `route: way_path`, `area: destination`, `radius` (15), `move`. Walks a drawn route over and over - along the links, back the way it came where the path has no way round - or, without a route, wanders `radius` metres around the area and rests at every stop. Instant: the role patrols until the next step. |
 | `npc_at_place` | cond: **`who`**, **`place: destination`**, `radius`. Every living member is there. |
 | `npc_in_combat` | cond: **`who`**. Any living member has an enemy. |
 | `role_alive` | cond: **`who`**, `all`. A member is alive (`all = true`: every one). |

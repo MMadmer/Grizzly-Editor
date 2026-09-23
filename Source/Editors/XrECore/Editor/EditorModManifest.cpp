@@ -3,6 +3,7 @@
 #include "EditorGameModes.h"
 #include "EditorModManifest.h"
 #include "EditorCharacters.h"
+#include "EditorWorld.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
 #include "ui_main.h"
@@ -462,7 +463,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 	// the same reading the game gives the file
 	text = NqUtil::GameTextToUtf8(text.data(), (u32)text.size());
 
-	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secExtra };
+	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secWorld, secExtra };
 	ESec sec = secNone;
 
 	size_t pos = 0;
@@ -493,6 +494,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 			else if (sn == "provides_mode")	sec = secProvides;
 			else if (sn == "update")		sec = secUpdate;
 			else if (sn == "exclude")		sec = secExclude;
+			else if (sn == "world")			sec = secWorld;
 			else { sec = secExtra; m.extra.push_back(raw); }
 			continue;
 		}
@@ -547,8 +549,55 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 		else if (sec == secRequires)	m.requires_list.push_back(line);
 		else if (sec == secConflicts)	m.conflicts.push_back(line);
 		else if (sec == secExclude)		m.exclude.push_back(line);
+		else if (sec == secWorld)
+		{
+			xr_string key = line, val;
+			const size_t eq = line.find('=');
+			if (eq != xr_string::npos) { key = line.substr(0, eq); val = line.substr(eq + 1); }
+			Trim(key); Trim(val);
+			SWorld& w = m.world;
+			const u32 rule = WorldRuleFromKey(key.c_str());
+			if (rule < wrCount)
+				// the engine's reading: only an explicit "no" changes anything
+				w.keep[rule] = !(val == "false" || val == "0" || val == "no" || val == "off");
+			else if (key == "levels")			SplitList(w.levels, val.c_str(), ',');
+			else if (key == "area")				SplitList(w.area, val.c_str(), ',');
+			else if (key == "locked_levels")	SplitList(w.locked_levels, val.c_str(), ',');
+			else if (key == "locked")			SplitList(w.locked, val.c_str(), ',');
+			else if (key == "player_choice")
+			{
+				xr_vector<xr_string> names;
+				SplitList(names, val.c_str(), ',');
+				for (u32 i = 0; i < names.size(); ++i)
+				{
+					const u32 r = WorldRuleFromKey(names[i].c_str());
+					if (r < wrCount) w.player_choice[r] = true;
+				}
+			}
+			else w.extra.push_back(line);
+		}
 	}
 	return true;
+}
+
+LPCSTR EditorMod::WorldRuleKey(u32 rule)
+{
+	static const char* keys[wrCount] = { "original_npcs", "random_stalkers", "mutants", "npc_quests", "story_quests" };
+	return rule < wrCount ? keys[rule] : 0;
+}
+
+u32 EditorMod::WorldRuleFromKey(LPCSTR key)
+{
+	for (u32 i = 0; key && i < wrCount; ++i)
+		if (0 == _stricmp(key, WorldRuleKey(i))) return i;
+	return wrCount;
+}
+
+bool EditorMod::SWorld::Empty() const
+{
+	for (u32 i = 0; i < wrCount; ++i)
+		if (!keep[i] || player_choice[i]) return false;
+	return levels.empty() && area.empty() && locked_levels.empty() && locked.empty() && extra.empty();
 }
 
 // `width` 11 fits "description", the longest mod.ltx key; the release
@@ -574,7 +623,7 @@ static void AppendText(xr_string& out, LPCSTR key, const xr_string& val, bool al
 	AppendKey(out, key, (always || NeedsQuotes(text)) ? Quote(text).c_str() : text.c_str());
 }
 
-static void AppendJoined(xr_string& out, LPCSTR key, const xr_vector<xr_string>& v)
+static void AppendJoined(xr_string& out, LPCSTR key, const xr_vector<xr_string>& v, int width = 11)
 {
 	xr_string all;
 	for (u32 i = 0; i < v.size(); ++i)
@@ -582,8 +631,13 @@ static void AppendJoined(xr_string& out, LPCSTR key, const xr_vector<xr_string>&
 		if (i) all += ", ";
 		all += v[i];
 	}
-	AppendKey(out, key, all.c_str());
+	AppendKey(out, key, all.c_str(), width);
 }
+
+// [world] keys are longer: "random_stalkers"
+static const int kWorldKeyWidth = 15;
+
+static u32 s_ManifestGeneration = 0;
 
 bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 {
@@ -655,6 +709,25 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		for (u32 i = 0; i < m.exclude.size(); ++i)
 			{ t += m.exclude[i]; t += "\r\n"; }
 	}
+	// the mode's world: every rule spelled out once the section exists, so the file
+	// reads as the whole decision, not as a diff against defaults nobody sees
+	if (!m.world.Empty())
+	{
+		const SWorld& w = m.world;
+		t += "\r\n[world]\r\n";
+		for (u32 i = 0; i < wrCount; ++i)
+			AppendKey(t, WorldRuleKey(i), w.keep[i] ? "true" : "false", kWorldKeyWidth);
+		xr_vector<xr_string> choices;
+		for (u32 i = 0; i < wrCount; ++i)
+			if (w.player_choice[i]) choices.push_back(WorldRuleKey(i));
+		if (!choices.empty())			AppendJoined(t, "player_choice", choices, kWorldKeyWidth);
+		if (!w.levels.empty())			AppendJoined(t, "levels", w.levels, kWorldKeyWidth);
+		if (!w.area.empty())			AppendJoined(t, "area", w.area, kWorldKeyWidth);
+		if (!w.locked_levels.empty())	AppendJoined(t, "locked_levels", w.locked_levels, kWorldKeyWidth);
+		if (!w.locked.empty())			AppendJoined(t, "locked", w.locked, kWorldKeyWidth);
+		for (u32 i = 0; i < w.extra.size(); ++i)
+			{ t += w.extra[i]; t += "\r\n"; }
+	}
 	if (!m.extra.empty())
 	{
 		t += "\r\n";
@@ -666,7 +739,13 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 	const bool ok = WriteTextFile(path, t.c_str());
 	// whatever read the list before now reads a stale one
 	InvalidateExclusions();
+	++s_ManifestGeneration;
 	return ok;
+}
+
+u32 EditorMod::ManifestGeneration()
+{
+	return s_ManifestGeneration;
 }
 
 //------------------------------------------------------------------------------
@@ -1469,6 +1548,33 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			}
 		}
 		if (!nq_ok) return false;
+	}
+
+	// The mode's world: a second Player Start or a fourth new-game choice is a
+	// decision the game would make for the author (the first start wins, the fourth
+	// row never shows) - refused; a level or transition the game lacks is a warning.
+	{
+		xr_vector<xr_string> problems;
+		EditorWorld::Validate(project_root, m, problems);
+		xr_string errors;
+		for (const xr_string& p : problems)
+		{
+			if (p[0] == 'E')
+			{
+				if (!errors.empty()) errors += "\n";
+				errors += p;
+			}
+			else if (warnings)
+			{
+				if (!warnings->empty()) *warnings += "\n";
+				*warnings += p;
+			}
+		}
+		if (!errors.empty())
+		{
+			err = errors;
+			return false;
+		}
 	}
 
 	// A declared mode is worthless until the player can tick it, so the files
@@ -3253,6 +3359,8 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppendArray(out, m.conflicts);
 	out += ",\"exclude\":";
 	JsonAppendArray(out, m.exclude);
+	out += ",\"world\":";
+	EditorWorld::JsonWorld(m.world, out);
 	out += ",\"has_dirs\":{";
 	static const char* dirs[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
 	for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i)

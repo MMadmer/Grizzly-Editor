@@ -38,6 +38,9 @@ public:
 		tIcon,			// character_icon - a portrait; extra = "<sheet>|x|y|w|h" (sheet under
 						// textures\, "project:" in front when the project brings it)
 		tRank,			// rank - [game_relations] rating; extra = the value the rank starts at
+		// the world (EditorWorld): a transition of the linked game, by the object name
+		// the engine knows it by; extra = "<level> -> <destination>"
+		tLevelChanger,	// level_changer
 		tCount
 	};
 
@@ -58,7 +61,8 @@ public:
 	static void						SetSceneStories(TSceneRestrictors fn);
 	// The way paths of the OPEN scene (the WayPoint tool): what a behaviour step
 	// walks. Read live, like the restrictors - a path drawn a second ago has to
-	// be pickable without a save.
+	// be pickable without a save. SceneWayPaths appends the linked game's own
+	// patrol paths after them (extra "game").
 	static void						SetSceneWayPaths(TSceneRestrictors fn);
 	static void						SceneWayPaths(xr_vector<SEntry>& out);
 

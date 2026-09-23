@@ -348,6 +348,112 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_world_get",
+        "description": "The mode's world: what the module's mode keeps of the ORIGINAL game (mod.ltx [world]). "
+                       "Returns world {rules {original_npcs, random_stalkers, mutants, npc_quests, story_quests: "
+                       "true = the game's content of that kind stays}, player_choice (rules the player may change "
+                       "on the new-game screen, three at most), levels (where the rules apply; empty = everywhere), "
+                       "area (the only levels the player may reach; empty = anywhere), locked_levels, locked "
+                       "(level changers that start closed), declared}, starts (every Player Start: baked ones and "
+                       "the open scene's), problems (E2xx blocks a build, W2xx does not) and game {available, "
+                       "levels, transitions} - what was read out of the linked game's all.spawn.",
+        "annotations": {"title": "Read the mode's world", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_world_set",
+        "description": "Changes the mode's world and saves mod.ltx. Only the fields given change. "
+                       "preset: 'empty' removes everything of the original game (NPCs, monsters, jobs, story quests) "
+                       "- the one-click empty world; 'stock' restores the game as it is. The five rule booleans "
+                       "(original_npcs, random_stalkers, mutants, npc_quests, story_quests) set one rule each: true = "
+                       "keep. player_choice, levels, area, locked_levels and locked replace a whole list "
+                       "(comma separated, empty string clears); lock/unlock, lock_level/unlock_level and "
+                       "area_add/area_remove add or take out single names. A transition is named by its object name "
+                       "(see xfined_world_transitions). Answers like xfined_world_get.",
+        "annotations": {"title": "Change the mode's world", "idempotentHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "preset": {"type": "string", "enum": ["empty", "stock"]},
+                "original_npcs": {"type": "boolean", "description": "traders, story characters, squads the game placed by story id"},
+                "random_stalkers": {"type": "boolean", "description": "the simulation's stalker squads, placed and respawned"},
+                "mutants": {"type": "boolean", "description": "the simulation's monster squads"},
+                "npc_quests": {"type": "boolean", "description": "jobs of squad leaders ('got any work?')"},
+                "story_quests": {"type": "boolean", "description": "tasks of named characters and the storylines"},
+                "player_choice": {"type": "string", "description": "rule keys the new-game screen offers, comma separated, 3 at most"},
+                "levels": {"type": "string", "description": "levels the rules apply on; empty = every level"},
+                "area": {"type": "string", "description": "the only levels the player may reach; empty = anywhere"},
+                "locked_levels": {"type": "string", "description": "levels whose every transition starts closed"},
+                "locked": {"type": "string", "description": "level changers (object names) that start closed"},
+                "lock": {"type": "string"}, "unlock": {"type": "string"},
+                "lock_level": {"type": "string"}, "unlock_level": {"type": "string"},
+                "area_add": {"type": "string"}, "area_remove": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "xfined_world_transitions",
+        "description": "The linked game's levels and level changers, read out of its all.spawn (read only - the "
+                       "file is never written; a module closes a transition through its own [world]). Returns "
+                       "levels [{name, caption, transitions}] and transitions [{name, level, to, to_caption, closed, "
+                       "closed_by: locked|level|area|'', position}] as the module's world leaves them at the start "
+                       "of a game. 'level' limits the transitions to one level. 'patrols' adds the game's own patrol "
+                       "paths whose name contains it (empty string = all, 'limit' caps the list, default 200) - routes "
+                       "an order may walk, and names a module path must not take.",
+        "annotations": {"title": "List the game's transitions", "readOnlyHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string", "description": "e.g. l03_agroprom"},
+                "patrols": {"type": "string", "description": "part of a patrol path name, e.g. agr_"},
+                "limit": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "xfined_place_way",
+        "description": "Draws a way path in the open scene - what the WayPoint tool draws by hand: 'points' in order "
+                       "(\"x,y,z; x,y,z; ...\"), each linked to the next, the last back to the first when loop "
+                       "(default true). snap_to_ground (default true) drops every point onto what is under it. The "
+                       "name is what orders (xfined_spawn_order route/look), behaviour steps and quests call the "
+                       "path; the bake ships it with the module as [path:<name>], and a name the linked game "
+                       "already uses is left out.",
+        "annotations": {"title": "Draw a way path"},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "points": {"type": "string", "description": "x,y,z; x,y,z; ..."},
+                "loop": {"type": "boolean"},
+                "snap_to_ground": {"type": "boolean"},
+            },
+            "required": ["name", "points"],
+        },
+    },
+    {
+        "name": "xfined_spawn_order",
+        "description": "The standing order of a stalker placed with the Spawn tool: what it does from its first frame "
+                       "in the game until a quest says otherwise (the export writes it into the NPC's custom data as "
+                       "[xms_order]). order: guard (holds where it stands; look = a way path it watches, radius), "
+                       "patrol (walks route = a way path of the level, over and over; run), wander (roams radius "
+                       "metres around its spawn; run), follow (target = actor or a story id; distance), none. "
+                       "hostile = true makes it an enemy of the player from the start, with any order. Without "
+                       "order fields it reports the current one.",
+        "annotations": {"title": "Order a placed NPC", "idempotentHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the scene object name of the placed stalker"},
+                "order": {"type": "string", "enum": ["guard", "patrol", "wander", "follow", "none"]},
+                "route": {"type": "string"}, "look": {"type": "string"},
+                "radius": {"type": "number"}, "run": {"type": "boolean"},
+                "target": {"type": "string", "description": "actor, or a story id"},
+                "distance": {"type": "number"}, "hostile": {"type": "boolean"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "xfined_mod_releases",
         "description": "The releases the manifest's 'github' repository already holds, newest first, drafts included: "
                        "releases [{id, tag, title, notes, draft, prerelease, latest, published (UTC), url, bytes, assets}]. "
@@ -991,11 +1097,13 @@ TOOLS = [
         "description": "Place a GAMEPLAY object (spawn element) by its config section (see list_spawn_sections): "
                        "the server entity is built from the section, shapes the section declares are attached, and "
                        "its properties (logic/custom_data included) are editable in the Properties panel. Optional "
-                       "x/y/z (default: in front of the camera), snap_to_ground, name.",
+                       "x/y/z (default: in front of the camera), snap_to_ground, name. section = player_start places "
+                       "the module's Player Start: where a new game of its mode begins (one per module; rotate it "
+                       "to set the way the player faces).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "section": {"type": "string", "description": "config section, e.g. stalker or space_restrictor"},
+                "section": {"type": "string", "description": "config section, e.g. stalker or space_restrictor; player_start for the Player Start"},
                 "x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"},
                 "snap_to_ground": {"type": "boolean"},
             },
@@ -1593,6 +1701,11 @@ CMD_MAP = {
     "xfined_characters_get": "characters_get",
     "xfined_characters_write": "characters_write",
     "xfined_characters_delete": "characters_delete",
+    "xfined_world_get": "world_get",
+    "xfined_world_set": "world_set",
+    "xfined_world_transitions": "world_transitions",
+    "xfined_spawn_order": "spawn_order",
+    "xfined_place_way": "place_way",
     "xfined_mod_release_edit": "mod_releases",
     "xfined_preview_model": "preview_model",
     "xfined_reset_layout": "reset_layout",

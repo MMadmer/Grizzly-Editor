@@ -24,14 +24,42 @@ public:
     CLE_Visual(ISE_Visual* src);
     virtual			~CLE_Visual();
 };
+// A placed stalker's standing order: what it does from the moment it spawns until a
+// quest tells it otherwise. The export writes it into the NPC's custom data as
+// [xms_order]; the game's orders runtime adopts it once (game repo:
+// docs/dead-air/NQ_RUNTIME.md, "Standing orders").
+struct SXmsOrder
+{
+	enum EKind : u8 { okNone = 0, okGuard, okPatrol, okWander, okFollow, okCount };
+	enum EFlags : u8
+	{
+		flRun		= 1 << 0,	// patrol / wander: run instead of walk
+		flHostile	= 1 << 1,	// an enemy of the player from the start
+	};
+	u8				kind		= okNone;
+	shared_str		route;				// patrol: the way path walked
+	shared_str		look;				// guard: a way path watched from the post
+	float			radius		= 20.f;	// guard: the post; wander: the area around the spawn
+	shared_str		target;				// follow: a story id; empty = the player
+	float			distance	= 3.f;	// follow: how close it keeps
+	Flags8			flags;
+
+					SXmsOrder	() { flags.zero(); }
+	bool			Empty		() const { return kind == okNone && !flags.test(flHostile); }
+	static LPCSTR	KindKey		(u8 kind);		// "guard", ... ; null for none
+	static u8		KindFromKey	(LPCSTR key);	// okNone when unknown
+	// the [xms_order] section, CRLF lines; empty when there is no order
+	void			Section		(xr_string& out) const;
+};
+
 class CSpawnPoint : public CCustomObject,
 	public CPhysicsShellHolderEditorBase
 {
 	typedef CCustomObject inherited;
 
     friend class    SceneBuilder;
-public:                           
-   
+public:
+
     class CLE_Motion
     {
     public:
@@ -93,6 +121,8 @@ public:
 
 	SSpawnData    	m_SpawnData;
 	CCustomObject*	m_AttachedObject;
+	// only a stalker takes one (CanTakeOrder)
+	SXmsOrder		m_Order;
 
     EPointType		m_Type;
     shared_str		m_rpProfile;
@@ -123,6 +153,10 @@ public:
 	void 	OnEnvModFlagChange		(PropValue* prop);
 	void 	OnFillChooseItems		(ChooseValue*);
     void 	OnFillRespawnItemProfile(ChooseValue*);
+	void	OnFillOrderPaths		(ChooseValue*);
+	void	OnFillOrderTargets		(ChooseValue*);
+	void	OnOrderKindChange		(PropValue* prop);
+	void	FillOrderProps			(LPCSTR pref, PropItemVec& values);
     bool 			OnAppendObject			(CCustomObject* object);
 protected:
     virtual void 	SetPosition		(const Fvector& pos);
@@ -170,6 +204,8 @@ public:
     virtual	void  ExportSpawn(xr_vector<NET_Packet>& Ps);
     virtual void	PreExportSpawn();
 	bool IsGraphPoint()const;
+	// a stalker: the orders runtime drives stalker schemes only
+	bool			CanTakeOrder	() const;
 public:
 
     IC ISE_Abstract* GetEntity() { PreExportSpawn(); return m_SpawnData.GetEntity(); }

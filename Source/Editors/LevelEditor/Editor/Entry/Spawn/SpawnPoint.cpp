@@ -1,6 +1,8 @@
 ﻿#include "stdafx.h"
 // game-archive fallback for spawn visuals
 #include "..\..\..\..\XrECore\Editor\EThumbnailVisual.h"
+// story ids a follow order can name
+#include "..\..\..\..\XrECore\Editor\Nq\NqPickers.h"
 
 
 #define SPAWNPOINT_CHUNK_VERSION		0xE411
@@ -21,12 +23,70 @@
 #define SPAWNPOINT_CHUNK_ENVMOD2		0xE423
 #define SPAWNPOINT_CHUNK_ENVMOD3		0xE424
 #define SPAWNPOINT_CHUNK_FLAGS			0xE425
+// XFined: a placed stalker's standing order (SXmsOrder)
+#define SPAWNPOINT_CHUNK_XMS_ORDER		0xE430
+#define XMS_ORDER_VERSION				1
 
 
 #define RPOINT_SIZE 0.5f
 #define ENVMOD_SIZE 0.25f
 #define MAX_TEAM 6
 const u32 RP_COLORS[MAX_TEAM]={0xff0000,0x00ff00,0x0000ff,0xffff00,0x00ffff,0xff00ff};
+// a standing person, so the start is picked and framed like one
+#define PLAYERSTART_HALF_WIDTH	0.4f
+#define PLAYERSTART_HEIGHT		1.8f
+#define PLAYERSTART_COLOR		0xFF30C060
+
+//------------------------------------------------------------------------------
+// SXmsOrder
+//------------------------------------------------------------------------------
+LPCSTR SXmsOrder::KindKey(u8 kind)
+{
+	static LPCSTR keys[okCount] = { 0, "guard", "patrol", "wander", "follow" };
+	return kind < okCount ? keys[kind] : 0;
+}
+
+u8 SXmsOrder::KindFromKey(LPCSTR key)
+{
+	for (u8 i = okGuard; key && i < okCount; ++i)
+		if (0 == _stricmp(key, KindKey(i))) return i;
+	return okNone;
+}
+
+// The keys the game reads (xms_nq_behaviour.script, adopt): order, route, look,
+// radius, move, target, distance, hostile. Only what the kind uses is written.
+void SXmsOrder::Section(xr_string& out) const
+{
+	out.clear();
+	if (Empty()) return;
+	out = "[xms_order]\r\n";
+	char line[512];
+	if (LPCSTR key = KindKey(kind))
+	{
+		sprintf_s(line, "order = %s\r\n", key);
+		out += line;
+	}
+	switch (kind)
+	{
+	case okGuard:
+		if (look.size())	{ sprintf_s(line, "look = %s\r\n", look.c_str());	out += line; }
+		sprintf_s(line, "radius = %g\r\n", radius);								out += line;
+		break;
+	case okPatrol:
+		sprintf_s(line, "route = %s\r\n", route.c_str());						out += line;
+		if (flags.test(flRun))	out += "move = run\r\n";
+		break;
+	case okWander:
+		sprintf_s(line, "radius = %g\r\n", radius);								out += line;
+		if (flags.test(flRun))	out += "move = run\r\n";
+		break;
+	case okFollow:
+		sprintf_s(line, "target = %s\r\n", target.size() ? target.c_str() : "actor");	out += line;
+		sprintf_s(line, "distance = %g\r\n", distance);							out += line;
+		break;
+	}
+	if (flags.test(flHostile))	out += "hostile = true\r\n";
+}
 // CLE_Visual
 CLE_Visual::CLE_Visual(ISE_Visual* src)
 {
@@ -593,6 +653,9 @@ void CSpawnPoint::Construct(LPVOID data)
             m_RP_Type			= rptActorSpawn;
             m_GameType.SetDefaults();
             m_RP_TeamID			= 1;
+        }else if (strcmp(LPSTR(data),PLAYERSTART_CHOOSE_NAME)==0)
+        {
+            m_Type 				= ptPlayerStart;
         }else if (strcmp(LPSTR(data),ENVMOD_CHOOSE_NAME)==0)
         {
             m_Type 				= ptEnvMod;
@@ -730,9 +793,17 @@ bool CSpawnPoint::GetBox( Fbox& box )
         box.max.y 	+= RPOINT_SIZE*2.f;
         box.max.z 	+= RPOINT_SIZE;
     break;
-    case ptEnvMod: 	
+    case ptEnvMod:
         box.set		(GetPosition(), GetPosition());
         box.grow	(Selected()?m_EM_Radius:ENVMOD_SIZE);
+    break;
+    case ptPlayerStart:
+        box.set		(GetPosition(), GetPosition());
+        box.min.x 	-= PLAYERSTART_HALF_WIDTH;
+        box.min.z 	-= PLAYERSTART_HALF_WIDTH;
+        box.max.x 	+= PLAYERSTART_HALF_WIDTH;
+        box.max.y 	+= PLAYERSTART_HEIGHT;
+        box.max.z 	+= PLAYERSTART_HALF_WIDTH;
     break;
     case ptSpawnPoint:
     	if (m_SpawnData.Valid()){
@@ -877,6 +948,20 @@ void CSpawnPoint::Render( int priority, bool strictB2F )
                         if (Selected())
                             DU_impl.DrawSphere(Fidentity,GetPosition(),m_EM_Radius,0x30FFAE00,0x00FFAE00,true,true);
                     }break;
+                    case ptPlayerStart:
+                    {
+                		ESceneSpawnTool* st	= dynamic_cast<ESceneSpawnTool*>(FParentTools); VERIFY(st);
+                        if (!st->get_player_start_visual())
+                            DU_impl.DrawEntity(PLAYERSTART_COLOR, EDevice->m_WireShader);
+                        // the way the player faces on the first frame: the model alone
+                        // does not say it from above
+                        EDevice->SetShader(EDevice->m_WireShader);
+                        const Fvector tail = { 0.f, 0.05f, 0.f }, tip = { 0.f, 0.05f, 1.2f };
+                        const Fvector left = { -0.25f, 0.05f, 0.9f }, right = { 0.25f, 0.05f, 0.9f };
+                        DU_impl.DrawLine(tail, tip, PLAYERSTART_COLOR);
+                        DU_impl.DrawLine(tip, left, PLAYERSTART_COLOR);
+                        DU_impl.DrawLine(tip, right, PLAYERSTART_COLOR);
+                    }break;
 
 	                default: THROW2("CSpawnPoint:: Unknown Type");
                 }
@@ -896,6 +981,7 @@ void CSpawnPoint::Render( int priority, bool strictB2F )
                     case ptEnvMod:
                     	s_name.sprintf("EnvMod V:%3.2f, F:%3.2f",m_EM_ViewDist,m_EM_FogDensity);
 					break;
+                    case ptPlayerStart: s_name = "Player Start"; break;
                     default: THROW2("CSpawnPoint:: Unknown Type");
                     }
                 }
@@ -920,8 +1006,14 @@ void CSpawnPoint::Render( int priority, bool strictB2F )
 	if(m_Type==ptRPoint)
     {
         ESceneSpawnTool* st		= dynamic_cast<ESceneSpawnTool*>(FParentTools); VERIFY(st);
-        CEditableObject* v		= st->get_draw_visual(m_RP_TeamID, m_RP_Type, m_GameType); 
+        CEditableObject* v		= st->get_draw_visual(m_RP_TeamID, m_RP_Type, m_GameType);
         if(v)
+        	v->Render				(FTransformRP, priority, strictB2F);
+    }
+	else if (m_Type == ptPlayerStart)
+    {
+        ESceneSpawnTool* st		= dynamic_cast<ESceneSpawnTool*>(FParentTools); VERIFY(st);
+        if (CEditableObject* v = st->get_player_start_visual())
         	v->Render				(FTransformRP, priority, strictB2F);
     }
     FTransformRP = SaveTransform;
@@ -1053,7 +1145,20 @@ bool CSpawnPoint::LoadLTX(CInifile& ini, LPCSTR sect_name)
             return false;
         }
         SetValid		(true);
+        if (ini.line_exist(sect_name, "xms_order"))
+        {
+            m_Order.kind		= SXmsOrder::KindFromKey(ini.r_string(sect_name, "xms_order"));
+            auto str = [&](LPCSTR key) -> shared_str { return ini.line_exist(sect_name, key) ? shared_str(ini.r_string(sect_name, key)) : shared_str(); };
+            m_Order.route		= str("xms_order_route");
+            m_Order.look		= str("xms_order_look");
+            m_Order.target		= str("xms_order_target");
+            if (ini.line_exist(sect_name, "xms_order_radius"))		m_Order.radius		= ini.r_float(sect_name, "xms_order_radius");
+            if (ini.line_exist(sect_name, "xms_order_distance"))	m_Order.distance	= ini.r_float(sect_name, "xms_order_distance");
+            if (ini.line_exist(sect_name, "xms_order_flags"))		m_Order.flags.assign(ini.r_u8(sect_name, "xms_order_flags"));
+        }
     }break;
+    case ptPlayerStart:
+    break;
     case ptRPoint:
         {
             if (!ini.line_exist(sect_name, "team_id") ||
@@ -1176,7 +1281,19 @@ void CSpawnPoint::SaveLTX(CInifile& ini, LPCSTR sect_name)
     {
         string128	buff;
         m_SpawnData.SaveLTX(ini, strconcat(sizeof(buff), buff, sect_name, "_spawndata"));
+        if (!m_Order.Empty())
+        {
+            ini.w_string	(sect_name, "xms_order", SXmsOrder::KindKey(m_Order.kind) ? SXmsOrder::KindKey(m_Order.kind) : "none");
+            ini.w_string	(sect_name, "xms_order_route", m_Order.route.c_str());
+            ini.w_string	(sect_name, "xms_order_look", m_Order.look.c_str());
+            ini.w_string	(sect_name, "xms_order_target", m_Order.target.c_str());
+            ini.w_float		(sect_name, "xms_order_radius", m_Order.radius);
+            ini.w_float		(sect_name, "xms_order_distance", m_Order.distance);
+            ini.w_u8		(sect_name, "xms_order_flags", m_Order.flags.get());
+        }
     }break;
+    case ptPlayerStart:
+    break;
     case ptRPoint:
     {
         ini.w_u8		(sect_name, "team_id", m_RP_TeamID);
@@ -1227,6 +1344,17 @@ bool CSpawnPoint::LoadStream(IReader& F)
         }
         SetValid	(true);
         m_Type			= ptSpawnPoint;
+        if (F.find_chunk(SPAWNPOINT_CHUNK_XMS_ORDER) && F.r_u8() == XMS_ORDER_VERSION)
+        {
+            m_Order.kind		= F.r_u8();
+            F.r_stringZ			(m_Order.route);
+            F.r_stringZ			(m_Order.look);
+            m_Order.radius		= F.r_float();
+            F.r_stringZ			(m_Order.target);
+            m_Order.distance	= F.r_float();
+            m_Order.flags.assign(F.r_u8());
+            if (m_Order.kind >= SXmsOrder::okCount) m_Order.kind = SXmsOrder::okNone;
+        }
     }else{
         if (F.find_chunk(SPAWNPOINT_CHUNK_TYPE) != sizeof(u32))
             return false;
@@ -1288,6 +1416,8 @@ bool CSpawnPoint::LoadStream(IReader& F)
             }
         }
         break;
+        case ptPlayerStart:
+        break;
         default:
             return false;
         }
@@ -1325,6 +1455,19 @@ void CSpawnPoint::SaveStream(IWriter& F)
 	if (m_SpawnData.Valid())
     {
     	m_SpawnData.SaveStream(F);
+        if (!m_Order.Empty())
+        {
+            F.open_chunk		(SPAWNPOINT_CHUNK_XMS_ORDER);
+            F.w_u8				(XMS_ORDER_VERSION);
+            F.w_u8				(m_Order.kind);
+            F.w_stringZ			(m_Order.route);
+            F.w_stringZ			(m_Order.look);
+            F.w_float			(m_Order.radius);
+            F.w_stringZ			(m_Order.target);
+            F.w_float			(m_Order.distance);
+            F.w_u8				(m_Order.flags.get());
+            F.close_chunk		();
+        }
     }else{
 		F.w_chunk	(SPAWNPOINT_CHUNK_TYPE,		&m_Type,	sizeof(u32));
     	switch (m_Type){
@@ -1353,6 +1496,8 @@ void CSpawnPoint::SaveStream(IWriter& F)
         	F.open_chunk(SPAWNPOINT_CHUNK_ENVMOD3);
             F.w_u16		(m_EM_Flags.get());
             F.close_chunk();
+        break;
+        case ptPlayerStart:
         break;
         default: THROW;
         }
@@ -1407,6 +1552,9 @@ bool CSpawnPoint::ExportGame(SExportStreams* F)
             F->envmodif.stream.w_fvector3(u32_3f(m_EM_HemiColor));
             F->envmodif.stream.w_u16(m_EM_Flags.get());
 			F->envmodif.stream.close_chunk();
+        break;
+        // not part of the level build: the module's spawn layer carries it (op = start)
+        case ptPlayerStart:
         break;
         default: THROW;
         }
@@ -1499,9 +1647,16 @@ void CSpawnPoint::FillProp(LPCSTR pref, PropItemVec& items)
         C->OnChooseFillEvent.bind	(this,&CSpawnPoint::OnFillChooseItems);
         C->OnChangeEvent.bind		(this,&CSpawnPoint::OnProfileChange);
     	m_SpawnData.FillProp		(pref,items);
+        if (CanTakeOrder())
+            FillOrderProps			(pref, items);
     }else{
     	switch (m_Type)
         {
+        case ptPlayerStart:
+            PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Starts"), "a new game of the module's mode");
+            PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Facing"), "the arrow; rotate to turn it");
+            PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Rules"), "one per module - Mod > World");
+        break;
         case ptRPoint:
         {
 
@@ -1561,6 +1716,77 @@ void CSpawnPoint::FillProp(LPCSTR pref, PropItemVec& items)
 void CSpawnPoint::OnEnvModFlagChange(PropValue* prop)
 {
 	LTools->UpdateProperties(FALSE);
+}
+
+bool CSpawnPoint::CanTakeOrder() const
+{
+	return m_SpawnData.Valid() && m_SpawnData.m_ClassID == TEXT2CLSID("AI_STL_S");
+}
+
+void CSpawnPoint::OnOrderKindChange(PropValue* prop)
+{
+	// each kind shows its own fields
+	LTools->UpdateProperties(FALSE);
+}
+
+// the scene's way paths: what a patrol walks and a post watches
+void CSpawnPoint::OnFillOrderPaths(ChooseValue* val)
+{
+	val->m_Items->clear();
+	ObjectList& ways = Scene->ListObj(OBJCLASS_WAY);
+	for (ObjectIt it = ways.begin(); it != ways.end(); ++it)
+		val->m_Items->push_back(SChooseItem((*it)->GetName(), "way path of this level"));
+}
+
+// the player, or any object the game or the project knows by a story id
+void CSpawnPoint::OnFillOrderTargets(ChooseValue* val)
+{
+	val->m_Items->clear();
+	val->m_Items->push_back(SChooseItem("actor", "the player"));
+	const xr_vector<NqPickers::SEntry>& stories = NqPickers::Index(NqPickers::tStory);
+	for (u32 i = 0; i < stories.size(); ++i)
+		val->m_Items->push_back(SChooseItem(stories[i].id.c_str(), stories[i].name.empty() ? stories[i].extra.c_str() : stories[i].name.c_str()));
+}
+
+void CSpawnPoint::FillOrderProps(LPCSTR pref, PropItemVec& items)
+{
+	static xr_token order_kinds[] =
+	{
+		{ "None",	SXmsOrder::okNone },
+		{ "Guard",	SXmsOrder::okGuard },
+		{ "Patrol",	SXmsOrder::okPatrol },
+		{ "Wander",	SXmsOrder::okWander },
+		{ "Follow",	SXmsOrder::okFollow },
+		{ 0,		0 }
+	};
+	Token8Value* kind = PHelper().CreateToken8(items, PrepareKey(pref, "Order\\Kind"), &m_Order.kind, order_kinds);
+	kind->OnChangeEvent.bind(this, &CSpawnPoint::OnOrderKindChange);
+	switch (m_Order.kind)
+	{
+	case SXmsOrder::okGuard:
+	{
+		ChooseValue* C = PHelper().CreateChoose(items, PrepareKey(pref, "Order\\Look path"), &m_Order.look, smCustom, 0, 0, 1, cfFullExpand | cfAllowNone);
+		C->OnChooseFillEvent.bind(this, &CSpawnPoint::OnFillOrderPaths);
+		PHelper().CreateFloat(items, PrepareKey(pref, "Order\\Radius"), &m_Order.radius, 1.f, 100.f, 1.f, 0);
+	}break;
+	case SXmsOrder::okPatrol:
+	{
+		ChooseValue* C = PHelper().CreateChoose(items, PrepareKey(pref, "Order\\Route"), &m_Order.route, smCustom, 0, 0, 1, cfFullExpand);
+		C->OnChooseFillEvent.bind(this, &CSpawnPoint::OnFillOrderPaths);
+		PHelper().CreateFlag8(items, PrepareKey(pref, "Order\\Run"), &m_Order.flags, SXmsOrder::flRun);
+	}break;
+	case SXmsOrder::okWander:
+		PHelper().CreateFloat(items, PrepareKey(pref, "Order\\Radius"), &m_Order.radius, 3.f, 150.f, 1.f, 0);
+		PHelper().CreateFlag8(items, PrepareKey(pref, "Order\\Run"), &m_Order.flags, SXmsOrder::flRun);
+	break;
+	case SXmsOrder::okFollow:
+	{
+		ChooseValue* C = PHelper().CreateChoose(items, PrepareKey(pref, "Order\\Target"), &m_Order.target, smCustom, 0, 0, 1, cfFullExpand | cfAllowNone);
+		C->OnChooseFillEvent.bind(this, &CSpawnPoint::OnFillOrderTargets);
+		PHelper().CreateFloat(items, PrepareKey(pref, "Order\\Distance"), &m_Order.distance, 1.f, 30.f, 0.5f, 1);
+	}break;
+	}
+	PHelper().CreateFlag8(items, PrepareKey(pref, "Order\\Hostile to player"), &m_Order.flags, SXmsOrder::flHostile);
 }
 
 

@@ -460,6 +460,41 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   pins, parking / following / losing a ref, the mid-step load, self-heal), editor
   `tools/qa/test_behaviours.py --project <project>` over MCP on a COPY.
 
+## The mode's world (EditorWorld)
+
+- What a module's mode keeps of the ORIGINAL game is `mod.ltx [world]`: five rules
+  (`original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests`; true =
+  keep), `levels` they apply on, `player_choice` (the rules the new-game screen offers -
+  **three at most**, the screen has three rows; `E202`), the playable `area`, and the
+  transitions that start closed (`locked`, `locked_levels`). Mod > World edits it and
+  saves at once, like Exclude from Build (the manifest is re-read first; windows follow
+  `EditorMod::ManifestGeneration`, never the disk per frame). MCP: `world_get`,
+  `world_set` (`preset=empty` is the one-click empty world), `world_transitions`.
+  Contract: `docs/NQ_ARCHITECTURE.md` §20, the game repo's MODDING.md "World rules".
+- **The game is never written.** The editor READS the linked game's `all.spawn` (levels
+  from its game graph, level changers with their level and destination, the game's
+  patrol names) and nothing else touches it; the engine lays a module's world over the
+  game in memory when a new game is composed and keeps the result in the save. Two
+  modules on one map keep working - this is the non-destructive rule, not an option.
+- **Player Start** is a point type of the Spawn tool (`ptPlayerStart`,
+  `$player_start`; `place_spawn section=player_start`). The bake writes it as
+  `[obj:<name>] op = start` + level/position/direction; the level build ignores it.
+  One per module (`E201` names every one found, scene included).
+- **Way paths ship as `[path:<name>]`** (points, flags, point names, links) and the
+  engine registers them as patrol paths when the level loads. A name the game already
+  uses is left out at the bake with a warning - a module path never replaces the game's.
+  MCP `place_way` draws one from points; the way path picker lists the game's own
+  patrols after the scene's (`world_transitions patrols=` over MCP).
+- **A placed stalker's Order** (`SXmsOrder`: guard / patrol / wander / follow, route,
+  look, radius, run, target, distance, hostile) is a property group of the spawn point,
+  stored in the scene, and baked into its custom data as `[xms_order]`. A hand-written
+  `[xms_order]` is replaced (with a warning), a non-stalker's order is dropped (with a
+  warning). MCP `spawn_order`. A quest gives orders at run time: `order.*`.
+- `level_changer` is a picker type of the quest editor (`NqPickers::tLevelChanger`,
+  from the same reader). `{ role = }` in a quest's destination or target is `E024`: a
+  quest casts nobody, roles are a behaviour graph's.
+- QA: `tools/qa/test_world.py --project <project>` over MCP on a COPY.
+
 ## Dangerous operations
 
 - Any destructive operation from the UI requires confirmation. Destructive is

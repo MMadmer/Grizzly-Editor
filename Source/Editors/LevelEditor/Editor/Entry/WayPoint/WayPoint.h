@@ -106,6 +106,14 @@ public:
   	virtual void 	SaveLTX			(CInifile& ini, LPCSTR sect_name);
 
     virtual bool	ExportGame		(SExportStreams* data);
+    // XFined: the path as the module's spawn layer writes it ([path:<name>]) - the
+    // same points and links the level build puts into the level's patrol paths
+    struct SExportPoint { Fvector position; u32 flags; shared_str name; };
+    struct SExportLink	{ u32 from, to; float weight; };
+    void			ExportPath		(xr_vector<SExportPoint>& points, xr_vector<SExportLink>& links) const;
+    // XFined: replaces the points with these, each linked to the next and the last
+    // back to the first when `loop` - what the tool draws by hand, for MCP
+    void			BuildPath		(const xr_vector<Fvector>& positions, bool loop);
 
 	virtual void	FillProp		(LPCSTR pref, PropItemVec& items);
 

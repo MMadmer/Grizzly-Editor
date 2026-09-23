@@ -2,6 +2,8 @@
 #include "EditorModScene.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\XrECore\Editor\EThumbnailVisual.h"
+#include "..\..\XrECore\Editor\EditorModManifest.h"
+#include "..\..\XrECore\Editor\EditorWorld.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 
 //------------------------------------------------------------------------------
@@ -551,10 +553,64 @@ struct SSpawnResult
 	int			scaled;			// non-unit scale: the spawn path has no scale
 	int			missing;		// visual found neither in the game nor the project
 	int			invisible;		// shipped, but the engine draws nothing for its model
+	int			starts;			// Player Starts (op = start)
+	int			paths;			// way paths ([path:<name>])
+	int			orders;			// placed stalkers that carry a standing order
 	xr_string	path;
 	xr_string	names_json;
-	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0), invisible(0) {}
+	// what was left out or changed on the way, one line each - shown with the result
+	xr_vector<xr_string> warnings;
+	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0), invisible(0), starts(0), paths(0), orders(0) {}
+	void		Warn			(LPCSTR fmt, ...)
+	{
+		char buf[512];
+		va_list args;
+		va_start(args, fmt);
+		vsprintf_s(buf, fmt, args);
+		va_end(args);
+		Msg("! [XMS] spawn export: %s", buf);
+		warnings.push_back(buf);
+	}
 };
+
+// A section of an ltx text, header to the next header, taken out; true when there was one.
+static bool StripIniSection(xr_string& text, LPCSTR name)
+{
+	xr_string out;
+	bool dropping = false, found = false;
+	size_t pos = 0;
+	while (pos < text.size())
+	{
+		size_t eol = text.find('\n', pos);
+		if (eol == xr_string::npos) eol = text.size();
+		const xr_string line = text.substr(pos, eol - pos + (eol < text.size() ? 1 : 0));
+		pos = eol + 1;
+		size_t first = line.find_first_not_of(" \t");
+		if (first != xr_string::npos && line[first] == '[')
+		{
+			const size_t close = line.find(']', first);
+			xr_string header = close != xr_string::npos ? line.substr(first + 1, close - first - 1) : xr_string();
+			dropping = 0 == _stricmp(header.c_str(), name);
+			found |= dropping;
+		}
+		if (!dropping) out += line;
+	}
+	text = out;
+	return found;
+}
+
+// a path name is a patrol name, an ltx section and a picker entry at once
+static bool ValidPathName(LPCSTR name)
+{
+	if (!name || !name[0]) return false;
+	for (const char* p = name; *p; ++p)
+	{
+		const char c = *p;
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.'))
+			return false;
+	}
+	return true;
+}
 
 // section names double as file-safe ids; keep the xspawn key charset tight
 static void SanitizeOpName(LPCSTR src, char* dst, u32 size)
@@ -651,6 +707,41 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 	xr_vector<xr_string> replaced;
 	res.names_json = "[";
 
+	// Sanitising collapses different scene names onto one key ("box 1" and
+	// "box-1" both become "box_1"); without the suffix the later op would silently
+	// replace the earlier one and an object would just not spawn.
+	auto unique_op = [&replaced](LPCSTR scene_name, char (&op_name)[128])
+	{
+		SanitizeOpName(scene_name, op_name, sizeof(op_name));
+		char base[128];
+		strcpy_s(base, op_name);
+		for (u32 dup = 2; ; ++dup)
+		{
+			bool taken = false;
+			for (u32 i = 0; i < replaced.size() && !taken; ++i)
+				taken = 0 == strncmp(replaced[i].c_str(), "obj:", 4) && 0 == xr_strcmp(replaced[i].c_str() + 4, op_name);
+			if (!taken) break;
+			sprintf_s(op_name, "%.*s_%u", int(sizeof(op_name) - 8), base, dup);
+		}
+	};
+	auto add_name = [&res](LPCSTR name)
+	{
+		if (res.exported) res.names_json += ",";
+		res.names_json += "\"";
+		JsonAppend(res.names_json, name);
+		res.names_json += "\"";
+		++res.exported;
+	};
+	auto mode_line = [&fresh, mode_arg]()
+	{
+		if (mode_arg && mode_arg[0])
+		{
+			fresh += "mode      = ";
+			fresh += mode_arg;
+			fresh += "\r\n";
+		}
+	};
+
 	ObjectList& lst = Scene->ListObj(OBJCLASS_SCENEOBJECT);
 	for (ObjectIt it = lst.begin(); it != lst.end(); ++it)
 	{
@@ -663,21 +754,8 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 		LPCSTR ref_name = so->RefName();
 		if (!ref_name || !ref_name[0])	{ ++res.skipped; continue; }
 
-		// Sanitising collapses different scene names onto one key ("box 1" and
-		// "box-1" both become "box_1"); without this the later op would silently
-		// replace the earlier one and an object would just not spawn.
 		char op_name[128];
-		SanitizeOpName(so->GetName(), op_name, sizeof(op_name));
-		for (u32 dup = 2; ; ++dup)
-		{
-			bool taken = false;
-			for (u32 i = 0; i < replaced.size(); ++i)
-				if (0 == xr_strcmp(replaced[i].c_str() + 4 /*"obj:"*/, op_name)) { taken = true; break; }
-			if (!taken) break;
-			char base[128];
-			SanitizeOpName(so->GetName(), base, sizeof(base));
-			sprintf_s(op_name, "%.*s_%u", int(sizeof(op_name) - 8), base, dup);
-		}
+		unique_op(so->GetName(), op_name);
 
 		// Visual paths in configs are meshes-relative and carry no extension -
 		// the engine prepends $game_meshes$ and appends .ogf itself. A raw-visual
@@ -761,23 +839,13 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 			angles.x, angles.y, angles.z,
 			visual);
 		fresh += entry;
-		if (mode_arg && mode_arg[0])
-		{
-			fresh += "mode      = ";
-			fresh += mode_arg;
-			fresh += "\r\n";
-		}
+		mode_line();
 		fresh += "\r\n";
 
 		char header[160];
 		sprintf_s(header, "obj:%s", op_name);
 		replaced.push_back(xr_string(header));
-
-		if (res.exported) res.names_json += ",";
-		res.names_json += "\"";
-		JsonAppend(res.names_json, op_name);
-		res.names_json += "\"";
-		++res.exported;
+		add_name(op_name);
 	}
 
 	// ---- gameplay objects: spawn elements travel with their REAL section ----
@@ -795,23 +863,44 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 			if (!(*it)->IsAuthorPlaced())	continue;
 			CSpawnPoint* pt = dynamic_cast<CSpawnPoint*>(*it);
 			if (!pt)								{ ++res.skipped; continue; }
+
+			// The module's Player Start: the actor of a new game stands here instead
+			// of at the faction's start. One per module - a second one is written
+			// too, so the build's check sees both and names them instead of the game
+			// quietly taking whichever it met first.
+			if (ptPlayerStart == pt->m_Type)
+			{
+				char op_name[128];
+				unique_op(pt->GetName(), op_name);
+				const Fmatrix& xf = pt->_Transform();
+				Fvector angles;
+				xf.getXYZ(angles);
+				char entry[512];
+				sprintf_s(entry,
+					"[obj:%s]\r\n"
+					"op        = start\r\n"
+					"level     = %s\r\n"
+					"position  = %f,%f,%f\r\n"
+					"direction = %f,%f,%f\r\n",
+					op_name, level, xf.c.x, xf.c.y, xf.c.z, angles.x, angles.y, angles.z);
+				fresh += entry;
+				mode_line();
+				fresh += "\r\n";
+				char header[160];
+				sprintf_s(header, "obj:%s", op_name);
+				replaced.push_back(xr_string(header));
+				add_name(op_name);
+				++res.starts;
+				continue;
+			}
+
 			if (ptSpawnPoint != pt->m_Type)			{ ++res.skipped; continue; }
 			if (!pt->m_SpawnData.Valid())			{ ++res.skipped; continue; }
 			LPCSTR sp_section = pt->m_SpawnData.m_Data->name();
 			if (!sp_section || !sp_section[0])		{ ++res.skipped; continue; }
 
 			char op_name[128];
-			SanitizeOpName(pt->GetName(), op_name, sizeof(op_name));
-			for (u32 dup = 2; ; ++dup)
-			{
-				bool taken = false;
-				for (u32 i = 0; i < replaced.size(); ++i)
-					if (0 == xr_strcmp(replaced[i].c_str() + 4, op_name)) { taken = true; break; }
-				if (!taken) break;
-				char base[128];
-				SanitizeOpName(pt->GetName(), base, sizeof(base));
-				sprintf_s(op_name, "%.*s_%u", int(sizeof(op_name) - 8), base, dup);
-			}
+			unique_op(pt->GetName(), op_name);
 
 			// The model is resolved BEFORE the op is written, because a model the game
 			// cannot load must skip the WHOLE op: a physic entity that spawns without a
@@ -954,15 +1043,39 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 
 			// logic: written as a module file so it stays multi-line ltx, and the
 			// op only carries the @reference the engine resolves inside the module
-			LPCSTR ini = pt->m_SpawnData.m_Data->m_ini_string.size()
-				? pt->m_SpawnData.m_Data->m_ini_string.c_str() : 0;
-			if (ini && ini[0])
+			xr_string cd = pt->m_SpawnData.m_Data->m_ini_string.size()
+				? pt->m_SpawnData.m_Data->m_ini_string.c_str() : "";
+			// the standing order rides in the same text: the game reads [xms_order]
+			// off the NPC's spawn ini once it is online
+			if (!pt->m_Order.Empty())
+			{
+				const SXmsOrder& o = pt->m_Order;
+				if (!pt->CanTakeOrder())
+					res.Warn("'%s' (%s) is no stalker - its order is left out", op_name, sp_section);
+				else if (o.kind == SXmsOrder::okPatrol && !o.route.size())
+					res.Warn("'%s' patrols without a route - its order is left out; pick one in Order\\Route", op_name);
+				else
+				{
+					if (o.kind == SXmsOrder::okPatrol && !Scene->FindObjectByName(o.route.c_str(), OBJCLASS_WAY) &&
+						!EditorWorld::GamePatrolExists(o.route.c_str()))
+						res.Warn("'%s' patrols '%s', which is neither a way path of this level nor a path of the game",
+							op_name, o.route.c_str());
+					if (StripIniSection(cd, "xms_order"))
+						res.Warn("'%s': the [xms_order] written into its custom data is replaced by its Order properties", op_name);
+					xr_string section_text;
+					o.Section(section_text);
+					if (!cd.empty() && cd[cd.size() - 1] != '\n') cd += "\r\n";
+					cd += section_text;
+					++res.orders;
+				}
+			}
+			if (!cd.empty())
 			{
 				string_path cd_dir, cd_file;
 				sprintf_s(cd_dir, "%s\\spawn\\custom_data", EditorProject::Root());
 				CreateDirChain(cd_dir);
 				sprintf_s(cd_file, "%s\\%s_%s.ltx", cd_dir, level, op_name);
-				if (WriteBinFile(cd_file, ini, (u32)xr_strlen(ini)))
+				if (WriteBinFile(cd_file, cd.c_str(), (u32)cd.size()))
 				{
 					char cd_line[300];
 					sprintf_s(cd_line, "custom_data = @spawn/custom_data/%s_%s.ltx\r\n", level, op_name);
@@ -971,23 +1084,83 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				else
 					Msg("! [XMS] spawn export: can't write custom_data for '%s'", op_name);
 			}
-			if (mode_arg && mode_arg[0])
-			{
-				fresh += "mode      = ";
-				fresh += mode_arg;
-				fresh += "\r\n";
-			}
+			mode_line();
 			fresh += "\r\n";
 
 			char header[160];
 			sprintf_s(header, "obj:%s", op_name);
 			replaced.push_back(xr_string(header));
+			add_name(op_name);
+		}
+	}
 
-			if (res.exported) res.names_json += ",";
-			res.names_json += "\"";
-			JsonAppend(res.names_json, op_name);
-			res.names_json += "\"";
-			++res.exported;
+	// ---- way paths: the module's own patrol paths ----------------------------
+	// The engine registers them when the level loads (XmsWorld::RegisterModulePaths)
+	// next to the level's own, so an order, a behaviour step and a quest all walk
+	// them by name. The game's names are the game's: a path named like one is left
+	// out rather than silently losing to it in game.
+	{
+		ObjectList& ways = Scene->ListObj(OBJCLASS_WAY);
+		xr_vector<CWayObject::SExportPoint> points;
+		xr_vector<CWayObject::SExportLink> links;
+		for (ObjectIt it = ways.begin(); it != ways.end(); ++it)
+		{
+			if (selected_only && !(*it)->Selected()) continue;
+			if (!(*it)->IsAuthorPlaced())	continue;
+			CWayObject* way = dynamic_cast<CWayObject*>(*it);
+			if (!way)						{ ++res.skipped; continue; }
+			LPCSTR name = way->GetName();
+			if (!ValidPathName(name))
+			{
+				res.Warn("way path '%s' is left out - a path name takes a-z, 0-9, _ - . only; rename it", name);
+				++res.skipped;
+				continue;
+			}
+			if (EditorWorld::GamePatrolExists(name))
+			{
+				res.Warn("way path '%s' is left out - the game has a path of that name; rename yours", name);
+				++res.skipped;
+				continue;
+			}
+			way->ExportPath(points, links);
+			if (points.empty())				{ ++res.skipped; continue; }
+
+			char line[512];
+			sprintf_s(line, "[path:%s]\r\nlevel  = %s\r\npoints = %u\r\n", name, level, (u32)points.size());
+			fresh += line;
+			for (u32 i = 0; i < points.size(); ++i)
+			{
+				sprintf_s(line, "p%u = %f,%f,%f\r\n", i, points[i].position.x, points[i].position.y, points[i].position.z);
+				fresh += line;
+				if (points[i].flags)
+				{
+					sprintf_s(line, "p%u_flags = %u\r\n", i, points[i].flags);
+					fresh += line;
+				}
+				if (points[i].name.size())
+				{
+					sprintf_s(line, "p%u_name = %s\r\n", i, points[i].name.c_str());
+					fresh += line;
+				}
+			}
+			if (!links.empty())
+			{
+				fresh += "links  = ";
+				for (u32 i = 0; i < links.size(); ++i)
+				{
+					sprintf_s(line, "%s%u-%u:%g", i ? ", " : "", links[i].from, links[i].to, links[i].weight);
+					fresh += line;
+				}
+				fresh += "\r\n";
+			}
+			mode_line();
+			fresh += "\r\n";
+
+			xr_string header = "path:";
+			header += name;
+			replaced.push_back(header);
+			add_name(name);
+			++res.paths;
 		}
 	}
 	res.names_json += "]";
@@ -1168,8 +1341,15 @@ void EditorModScene::RequestExportSpawn()
 	{
 		sprintf_s(s_Message,
 			"Spawn layer exported: %d op(s)\n%s\n\nskipped: %d\nobjects with a non-unit scale: %d "
-			"(the spawn path carries no scale)",
-			res.exported, res.path.c_str(), res.skipped, res.scaled);
+			"(the spawn path carries no scale)\nPlayer Starts: %d, way paths: %d, NPC orders: %d",
+			res.exported, res.path.c_str(), res.skipped, res.scaled, res.starts, res.paths, res.orders);
+		// as many as fit; the log has every one
+		for (u32 i = 0; i < res.warnings.size(); ++i)
+		{
+			if (xr_strlen(s_Message) + res.warnings[i].size() + 3 >= sizeof(s_Message)) break;
+			strcat_s(s_Message, i ? "\n" : "\n\n");
+			strcat_s(s_Message, res.warnings[i].c_str());
+		}
 		// a stash keeps its ghost model unless the author picks another one:
 		// it spawns, it can be opened, and nobody ever sees it
 		if (res.invisible)
@@ -1274,6 +1454,21 @@ void EditorModScene::BakeCurrentSceneSpawn(xr_string& note)
 	else
 		sprintf_s(buf, "Scene bake FAILED for '%s': %s", level, err.c_str());
 	note = buf;
+	// every left-out path and order, by name: the note is what the build shows
+	for (u32 i = 0; i < res.warnings.size(); ++i)
+	{
+		note += "\nWARNING: ";
+		note += res.warnings[i];
+	}
+}
+
+bool EditorModScene::SceneLevelName(xr_string& level)
+{
+	char name[128];
+	level.clear();
+	if (!Scene || !ResolveLevelName(0, name, sizeof(name))) return false;
+	level = name;
+	return true;
 }
 
 //------------------------------------------------------------------------------
@@ -1297,14 +1492,22 @@ void EditorModScene::McpExportSpawn(LPCSTR raw, xr_string& out)
 		out += "\"}";
 		return;
 	}
-	char head[160];
-	sprintf_s(head, "{\"ok\":true,\"exported\":%d,\"skipped\":%d,\"scaled\":%d,\"invisible\":%d,\"path\":\"",
-		res.exported, res.skipped, res.scaled, res.invisible);
+	char head[256];
+	sprintf_s(head, "{\"ok\":true,\"exported\":%d,\"skipped\":%d,\"scaled\":%d,\"invisible\":%d,"
+		"\"starts\":%d,\"paths\":%d,\"orders\":%d,\"path\":\"",
+		res.exported, res.skipped, res.scaled, res.invisible, res.starts, res.paths, res.orders);
 	out = head;
 	JsonAppendPath(out, res.path.c_str());
 	out += "\",\"names\":";
 	out += res.names_json;
-	out += "}";
+	out += ",\"warnings\":[";
+	for (u32 i = 0; i < res.warnings.size(); ++i)
+	{
+		out += i ? ",\"" : "\"";
+		JsonAppend(out, res.warnings[i].c_str());
+		out += "\"";
+	}
+	out += "]}";
 }
 
 void EditorModScene::McpExportCut(LPCSTR raw, xr_string& out)

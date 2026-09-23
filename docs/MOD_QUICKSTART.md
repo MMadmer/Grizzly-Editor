@@ -557,6 +557,85 @@ was in.
 
 Full reference: `docs/nq/NQ_FORMAT.md` §10.
 
+## 6b. The mode's world - an empty map of your own
+
+**Mod → World…** · `xfined_world_get` / `xfined_world_set` /
+`xfined_world_transitions` · Spawn tool → **Player Start** · a stalker's
+**Order** properties · `xfined_spawn_order`
+
+A story mod on one map wants the map to itself. Say: only НИИ Агропром (and its
+underground), the player starts at your spot, nobody of the game walks around,
+your own NPCs are placed and ordered about, and the story swaps them as it goes.
+That is four settings and no code.
+
+**1. Nothing of the original game.** Mod → World, *Original game*: untick what
+the mode does not keep, or press **Remove everything** - the one-click empty
+world. Five rules, each a row:
+
+| row | `mod.ltx` key | off means |
+|---|---|---|
+| Original characters | `original_npcs` | traders, story characters and every squad the game placed by name are not in the world |
+| Random stalkers | `random_stalkers` | the simulation's stalker squads neither start on the map nor respawn |
+| Mutants | `mutants` | the same for monster squads |
+| Jobs from NPCs | `npc_quests` | squad leaders offer no "got any work?" |
+| Story quests | `story_quests` | named characters offer no tasks, the storylines stay shut |
+
+*Applies on* narrows them to some levels (keep Cordon alive, empty Agroprom).
+*Player decides* puts a rule on the new-game screen as a checkbox, preset to
+your choice - three at most, the screen has three rows.
+
+**2. Where the player may go.** *Playable area → Only these levels*:
+`l03_agroprom`, `l03u_agr_underground`. A transition leading anywhere else stays
+closed - the game shows its own "the way is closed" message. *Transitions*
+lists every level changer of the linked game by level: tick one to close it,
+or close the whole level. A quest opens them later (`world.transition`,
+`world.area`), when the story says so.
+
+**3. Where the player starts.** Open the level's scene, Spawn tool →
+**Player Start** (or *Place in the scene* in the World window), put it down and
+turn it - the arrow is where the player faces. One per module. The new game
+begins there, whatever faction the player picked.
+
+**4. Your NPCs.** Place stalkers of your characters with the Spawn tool. Each
+one's Properties have an **Order** group: *Guard* (holds the spot, optionally
+watching a way path), *Patrol* (walks a way path you drew with the WayPoint
+tool), *Wander* (roams around its spawn), *Follow* (the player or a story id),
+plus *Hostile to player*. That is what it does from its first frame. Your way
+paths ship with the module under their own names; a name the game already uses
+is refused at the bake, so nobody's path gets replaced.
+
+**The story swaps them.** In a quest: `npc.remove` takes one out, `spawn.npc`
+brings the next one in with a `ref`, and an `order.*` tells it what to do:
+
+```lua
+{ id = "shift_change", kind = "wait.timer", params = { duration = { game_hours = 2 } },
+  on_exit = {
+    { kind = "npc.remove", params = { npc = { ref = "guard_a" } } },
+    { kind = "spawn.npc",  params = { place = { restrictor = "agr_gate" },
+                                       npcs = { { character = "guard_b", ref = "guard_b" } } } },
+    { kind = "order.patrol", params = { who = { ref = "guard_b" }, route = "agr_gate_walk" } },
+  },
+  out = { done = "night" } },
+```
+
+`order.guard`, `order.patrol` (a route, or an area to wander), `order.follow`
+(the player or another NPC), `order.attack` (the player, an NPC, a squad, a
+whole community), `order.clear`. An order belongs to the NPC: it survives
+saves, outlives the quest, and a behaviour graph borrowing the NPC simply takes
+precedence until it lets go.
+
+**Nothing of the game is overwritten.** The editor only READS the linked
+game's `all.spawn` to list levels and transitions; the rules, the start, the
+paths and the orders are the module's own files, and the engine lays them over
+the game in memory when a new game starts. Another module on the same map keeps
+working; two modules that both place a Player Start are reported, not silently
+merged. The rules take effect on a new game - a save keeps the world it began
+with.
+
+The build refuses a second Player Start (`E201`) and more than three player
+choices (`E202`), and warns about a level or a transition the linked game does
+not have, and about an area the Player Start is not in (`W203`-`W206`).
+
 ## 7. When the build refuses
 
 | Message | Fix |
@@ -566,6 +645,8 @@ Full reference: `docs/nq/NQ_FORMAT.md` §10.
 | `No linked game` | Link a game — the build target is that install. |
 | `target already holds a module: N file(s) there are not in this project` | Something else owns that folder. Confirm only if you're sure it's yours. |
 | `quest graph errors: N (see log)` | Open the log, fix the listed `E…` codes — see [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). |
+| `E201 world: N Player Starts` | A module has one Player Start - delete the others (the message names them and their levels). |
+| `E202 world: N rules offered to the player` | Mod → World: the new-game screen has room for three *Player decides* ticks. |
 | `a release needs an orderable version` | Package Release only: set `version` to 1-4 numbers separated by dots (`1.2.0`). |
 | `package … is N bytes - GitHub refuses a release asset of 2 GiB and more` | Package Release only: one file is too big to ship as a GitHub asset even alone. The message names it. |
 

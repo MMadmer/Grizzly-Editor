@@ -4,11 +4,14 @@
 
 #define RPOINT_CHOOSE_NAME 		"$rpoint"
 #define ENVMOD_CHOOSE_NAME 		"$env_mod"
+// XFined: where a new game of the module's mode starts (exported as an xspawn `op = start`)
+#define PLAYERSTART_CHOOSE_NAME	"$player_start"
 
 enum EPointType{
     ptRPoint=0,
     ptEnvMod,
     ptSpawnPoint,
+    ptPlayerStart,
     ptMaxType,
     pt_force_dword=u32(-1)
 };

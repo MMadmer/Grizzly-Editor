@@ -150,6 +150,10 @@ void UISpawnTool::RefreshList()
     ListItemsVec items;
     LHelper().CreateItem(items, RPOINT_CHOOSE_NAME, 0, 0, 0);
     LHelper().CreateItem(items, ENVMOD_CHOOSE_NAME, 0, 0, 0);
+    // the item carries its factory name, which is what placing it hands the tool
+    if (ListItem* start = LHelper().CreateItem(items, "Player Start", 0, 0, (LPVOID)PLAYERSTART_CHOOSE_NAME))
+        start->hint = "Where a new game of the module's mode begins: position and facing.\n"
+                      "One per module. The module's world (Mod > World) says what else the game keeps.";
     CInifile::Root& data = ((CInifile*)pSettings)->sections();
     for (CInifile::RootIt it = data.begin(); it != data.end(); it++) {
         LPCSTR val;

@@ -17,6 +17,31 @@ namespace EditorMod
 		xr_string				title;
 	};
 
+	// The five world rules, in the order the game's XMS::WorldRules keeps them. Each
+	// says whether the ORIGINAL game's content of that kind stays in the module's mode.
+	enum EWorldRule { wrOriginalNpcs = 0, wrRandomStalkers, wrMutants, wrNpcQuests, wrStoryQuests, wrCount };
+	// manifest key of a rule ("original_npcs", ...); null for an unknown index
+	ECORE_API LPCSTR	WorldRuleKey		(u32 rule);
+	// rule index of a manifest key; wrCount when unknown
+	ECORE_API u32		WorldRuleFromKey	(LPCSTR key);
+
+	// mod.ltx [world] (game repo: docs/dead-air/MODDING.md, "World rules"): what of the
+	// original game the module's mode keeps, which rules the player may change on the
+	// new-game screen, where the player may go and which ways start closed. The engine
+	// reads it; it takes effect on a new game.
+	struct SWorld
+	{
+		bool					keep[wrCount] = { true, true, true, true, true };
+		bool					player_choice[wrCount] = {};
+		xr_vector<xr_string>	levels;			// where the rules apply; empty = everywhere
+		xr_vector<xr_string>	area;			// the only levels the player may reach; empty = anywhere
+		xr_vector<xr_string>	locked_levels;	// every transition on these levels starts closed
+		xr_vector<xr_string>	locked;			// these transitions (level changer names) start closed
+		xr_vector<xr_string>	extra;			// unknown [world] lines, kept as written
+		// true when the world is the stock game's - the section is then not written
+		bool					Empty() const;
+	};
+
 	// parsed mod.ltx; unknown keys/sections ([budget], [declares], engine_min,
 	// ...) survive a load/save round-trip verbatim in the *_extra fields
 	struct SManifest
@@ -49,6 +74,8 @@ namespace EditorMod
 		// [exclude]: what the build leaves out on the author's say - project paths
 		// or patterns, one per line, kept as written (see ExcludeMatch)
 		xr_vector<xr_string>	exclude;
+		// [world]: the mode's world (EditorWorld)
+		SWorld					world;
 	};
 
 	// id charset per XMS spec: [a-z0-9_.\-]+
@@ -81,6 +108,9 @@ namespace EditorMod
 
 	ECORE_API bool	Load				(LPCSTR project_root, SManifest& m);
 	ECORE_API bool	Save				(LPCSTR project_root, const SManifest& m);
+	// bumped by every Save: a window showing part of the manifest re-reads it when
+	// this moves instead of asking the disk every frame
+	ECORE_API u32	ManifestGeneration	();
 
 	// ---- what the build leaves out -----------------------------------------
 	// A project folder is the author's working place as well as the module: a git

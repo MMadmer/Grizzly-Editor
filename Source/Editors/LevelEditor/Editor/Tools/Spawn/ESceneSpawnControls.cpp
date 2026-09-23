@@ -17,7 +17,8 @@ bool  TUI_ControlSpawnAdd::AppendCallback(SBeforeAppendCallbackParams* p)
 		p->name_prefix 	= 	Scene->LevelPrefix().c_str();
     	p->name_prefix 	+= 	"_";
     }
-	p->name_prefix 	+= 	ref_name;
+	// "$player_start" names the factory, not the object
+	p->name_prefix 	+= 	(ref_name[0] == '$') ? ref_name + 1 : ref_name;
 	p->data 		= (void*)ref_name;
     return (0!=p->name_prefix.length());
 }

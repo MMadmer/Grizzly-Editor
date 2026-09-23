@@ -1707,3 +1707,111 @@ system, behaviour-only if it addresses a role, shared otherwise. An untagged
 kind is shared, so a player-facing kind MUST carry `docs = quest` — the catalog
 parity test in the game repo fails the build when the tag and the implementation
 disagree.
+
+---
+
+## 20. The mode's world and standing orders
+
+A mode is a new game, and a story mode usually wants its world to itself: fewer
+(or none) of the game's own NPCs, no jobs and storylines of the base game, the
+player kept to a few levels and started where the author put them, the author's
+own NPCs placed and ordered about. This section is the contract for that; the
+game side is `docs/dead-air/MODDING.md` "World rules" and `NQ_RUNTIME.md` of the
+game repo.
+
+### 20.1 What the author decides, and where it lives
+
+| decision | lives in | written by |
+|---|---|---|
+| what the mode keeps of the original game: `original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests` (true = keep) | `mod.ltx [world]` | Mod > World, `world_set` |
+| where those rules apply (`levels`, empty = everywhere) | `mod.ltx [world]` | same |
+| the rules the player may change on the new-game screen (`player_choice`, three at most) | `mod.ltx [world]` | same |
+| the playable area (`area`, empty = anywhere) | `mod.ltx [world]` | same |
+| transitions that start closed (`locked`, `locked_levels`) | `mod.ltx [world]` | same |
+| where a new game starts | the spawn layer, `[obj:<name>] op = start` | the scene bake of a Player Start |
+| the module's own patrol paths | the spawn layer, `[path:<name>]` | the scene bake of a way path |
+| what a placed stalker does from its first frame | its custom data, `[xms_order]` | the scene bake of its Order properties |
+| what changes while the game runs | the quest graph: `world.*`, `order.*`, `transition_open` | the quest editor |
+
+Every rule is spelled out once the section exists (`Save` writes all five), so
+the file reads as the whole decision; a world equal to the stock game writes no
+section at all.
+
+### 20.2 Non-destructive by construction
+
+- **Nothing of the game is written.** The editor reads the linked game's
+  `all.spawn` - its game graph for the levels, its objects for the level
+  changers, its patrols for the names a module path must not take - and never
+  writes it. The engine applies a module's world in memory while it composes a
+  new game's spawn, over the game's own file.
+- **Only the original population is culled.** The spawn composer removes base
+  objects the rules do not keep BEFORE any module op runs; a module's own
+  objects are never "the original game". Scripted spawns of the base game (the
+  initial fill of the simulation, smart terrain respawns, story effects) are
+  filtered on the Lua side by the same rules.
+- **Modules compose.** A module's rules apply in its mode and on its `levels`;
+  areas of several modules are united; a quest that opens a transition beats
+  every lock; the first module's Player Start stands and a second one is logged
+  as a conflict; a module path named like one of the game's is refused by the
+  engine and not even exported by the editor.
+- **Saves keep their world.** The world is resolved once per new game and kept
+  in the save (`.scov` blob `0x584DFF02`); a module changed later does not
+  rewrite a running playthrough. A save without the blob plays the stock game.
+
+### 20.3 The editor side
+
+- `EditorWorld` (XrECore): the all.spawn reader (levels, level changers with the
+  level they stand on and the one they lead to, the game's patrol names), the
+  project's Player Starts (the spawn layer, with the open scene standing in for
+  its own level), validation, the World window and the MCP commands
+  `world_get` / `world_set` / `world_transitions`.
+- The window saves every edit at once, like Exclude from Build: the manifest is
+  re-read first, so the Manifest window's own edits are never written over, and
+  every window showing a part of `mod.ltx` follows `EditorMod::ManifestGeneration`.
+- **Player Start** is a point type of the Spawn tool (`ptPlayerStart`,
+  `$player_start`): the actor figure, an arrow for the facing, never part of the
+  level build. `place_spawn section=player_start` places it over MCP.
+- A stalker's **Order** properties (`SXmsOrder` on `CSpawnPoint`, chunk
+  `0xE430`) - kind, route, look path, radius, run, target, distance, hostile -
+  are appended to its custom data as `[xms_order]` by the bake. An `[xms_order]`
+  typed into the custom data by hand is replaced, with a warning.
+- Way paths bake to `[path:<name>]` with their points, flags, point names and
+  links - the same data the level build writes for a level's own patrols. MCP
+  `place_way` draws one from points; the way path picker lists the linked game's
+  own patrols after the scene's, since a stock route is often exactly what an
+  order wants.
+- `level_changer` is a picker type (`NqPickers::tLevelChanger`, fed by
+  `EditorWorld`); a quest's `{ role = }` in a destination or target is `E024`.
+- Codes: `E201` a second Player Start, `E202` a fourth player choice - both stop
+  a build; `W203` a level and `W204` a transition the linked game lacks, `W205`
+  the start outside the area, `W206` an area with no Player Start.
+
+### 20.4 Standing orders
+
+An order is what an NPC does until told otherwise. It is kept per NPC in the
+runtime state (`orders[id]`), not per quest: a quest ending, a save and a load,
+and the NPC going offline and back all leave it in force. It is applied the way
+every behaviour step is - a logic section handed to a stock scheme (walker,
+camper, companion) - so combat, cover and danger stay the game's own. A running
+behaviour graph that holds the NPC outranks the order; the order resumes when
+the graph lets go. A new order replaces the old one; `order.clear` hands the NPC
+back to whatever owned it. A placed stalker's `[xms_order]` is adopted once, the
+first time it comes online, so a quest that dismissed it later is not undone by
+the next load.
+
+### 20.5 Decisions
+
+- **Rules apply to a new game.** A save is a contract (the game's
+  SAVE_COMPATIBILITY.md); a world changing under a running playthrough would
+  break quests mid-way. The story changes the world through `world.*`.
+- **Three player choices** - the new-game screen of the linked game has three
+  free rows next to the campaign column; a fourth would be a rule the player
+  never sees. Refused in the window, the MCP path and the build.
+- **Only named squads count as original characters.** A squad section with a
+  `story_id` is a character the game placed on purpose; a monster faction is a
+  mutant; everything else is the simulation. Story effects that spawn random
+  squads are part of a story beat, so only original characters are refused
+  there.
+- **A developer's console jump ignores the area** (`jump_to_level`), and the
+  engine's `xms_world` console command shows and edits the live state - QA has to
+  be able to go anywhere.

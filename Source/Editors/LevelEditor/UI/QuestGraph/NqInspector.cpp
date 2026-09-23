@@ -1668,7 +1668,9 @@ bool NqInspector::DrawNpcList(LPCSTR label, SNqValue& v)
 // just a point. Everything else is a place the engine turns into a point.
 bool NqInspector::DrawDestination(LPCSTR label, SNqValue& v)
 {
-	xr_vector<xr_string> modes = Items("path", "ref", "story", "role");
+	// a role is a behaviour graph's cast; a quest only sees one it has to correct
+	xr_vector<xr_string> modes = Items("path", "ref", "story");
+	if ((m_Doc && m_Doc->quest.IsBehaviour()) || v.Has("role")) modes.push_back("role");
 	modes.push_back("smart"); modes.push_back("restrictor"); modes.push_back("pos"); modes.push_back("actor");
 	xr_string mode = ModeOf(v, modes);
 	if (mode.empty() && v.IsTable() && v.Has("level")) mode = "pos";
@@ -1773,7 +1775,8 @@ bool NqInspector::DrawWho(LPCSTR label, SNqValue& v)
 // an object - and for an attack a whole community or a profile as well.
 bool NqInspector::DrawRoleTarget(LPCSTR label, SNqValue& v, bool attack)
 {
-	xr_vector<xr_string> modes = Items("actor", "role", "ref", "story");
+	xr_vector<xr_string> modes = Items("actor", "ref", "story");
+	if ((m_Doc && m_Doc->quest.IsBehaviour()) || v.Has("role")) modes.insert(modes.begin() + 1, xr_string("role"));
 	if (attack) { modes.push_back("community"); modes.push_back("profile"); }
 	xr_string mode = ModeOf(v, modes);
 	bool ch = false;

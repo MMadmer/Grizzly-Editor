@@ -1001,12 +1001,17 @@ namespace
 					for (u32 i = 0; i < who->arr.size(); ++i)
 						if (who->arr[i].IsString()) names.push_back(who->arr[i].s);
 			}
-		static const char* kRoleHolders[] = { "place", "target" };
-		for (int h = 0; h < 2; ++h)
+		// a quest casts nobody: an order given from a quest names the NPC itself
+		static const char* kRoleHolders[] = { "place", "target", "area" };
+		for (int h = 0; h < 3; ++h)
 			if (const SNqValue* holder = params.Get(kRoleHolders[h]))
 				if (holder->IsTable())
 					if (const SNqValue* role = holder->Get("role"))
-						if (role->IsString() && !role->s.empty() && c.q.IsBehaviour()) names.push_back(role->s);
+						if (role->IsString() && !role->s.empty())
+						{
+							if (c.q.IsBehaviour())	names.push_back(role->s);
+							else					ERR(c, "E024", node, slot, "a quest has no roles - name the NPC by { ref = } or { story = } instead of { role = \"%s\" }", role->s.c_str());
+						}
 		for (u32 i = 0; i < names.size(); ++i)
 		{
 			bool found = false;

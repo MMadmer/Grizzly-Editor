@@ -85,6 +85,14 @@ CEditableObject* ESceneSpawnTool::get_draw_visual(u8 _RP_TeamID, u8 _RP_Type, co
     return ret;
 }
 
+CEditableObject* ESceneSpawnTool::get_player_start_visual()
+{
+	// the deathmatch actor figure: a person standing, facing +Z
+	GameTypeChooser dm;
+	dm.m_GameType.assign(u16(eGameIDDeathmatch));
+	return get_draw_visual(0, rptActorSpawn, dm);
+}
+
 void   FillSpawnItems	(ChooseItemVec& lst, void* param)
 {
 	LPCSTR gcs					= (LPCSTR)param;
@@ -241,8 +249,14 @@ int ESceneSpawnTool::MultiRenameObjects()
     for (ObjectIt o_it=m_Objects.begin(); o_it!=m_Objects.end(); o_it++){
     	CCustomObject* obj	= *o_it;
     	if (obj->Selected()){
+            // points without an entity (rpoints, env mods, the player start) have no
+            // section to be named after
+            LPCSTR ref			= obj->RefName();
+            CSpawnPoint* sp		= dynamic_cast<CSpawnPoint*>(obj);
+            if (!ref && sp && sp->m_Type == ptPlayerStart)	ref = "player_start";
+            if (!ref)			continue;
         	string256			pref;
-            strconcat			(sizeof(pref),pref,Scene->LevelPrefix().c_str(),"_",obj->RefName());
+            strconcat			(sizeof(pref),pref,Scene->LevelPrefix().c_str(),"_",ref);
             string256 			buf;
         	Scene->GenObjectName(obj->FClassID,buf,pref);
             if (xr_strcmp( obj->GetName(),buf)==0){
