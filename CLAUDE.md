@@ -143,6 +143,57 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The editor's scanners (modes, occupied checkbox rows) read BOTH roots,
   `modules\` and `mods\`, because what is already installed must not break.
 
+## What a build ships
+
+- A project folder is the author's working place as well as the module: a git
+  repository, design notes, tool settings. The build ships "everything the author
+  made" (any layout, `[vfs]` publishes it) EXCEPT, in this order:
+  - **tooling** - `EditorProject::IsToolingEntry`: every dot-name (`.git`,
+    `.gitignore`, `.github`, `.vscode`, `.idea`, `.vs`, ...), `Thumbs.db`,
+    `ehthumbs*.db`, `desktop.ini`, Office `~$` locks. At ANY depth, and not only
+    left out of the build: never listed by the content browser, never walked for
+    assets (NqUtil::ListFiles, the quest index, the characters), never a reason
+    for the browser's watcher to refresh - a `.git` is thousands of entries and git
+    rewrites it on every status;
+  - the editor's scratch and the sources at the root (`IsEditorOnlyEntry`,
+    `IsSourceOnlyEntry`), as before;
+  - **mod.ltx `[exclude]`** - the author's call (`EditorMod::ExcludeMatch`): a
+    project path (a folder takes everything below it) or a pattern (no slash = a
+    name at any depth, `*.psd`; with one = a path, `docs/*.md`). Set from the
+    browser (Exclude from Build / Include in Build, the tile is veiled and says
+    why on hover), the Manifest window's list, MCP `mod_exclude` /
+    `mod_set_manifest exclude=`. It lives in mod.ltx so it travels with the
+    repository (the game ignores the section, like `target`);
+  - links (junctions, symlinks): not followed - one may point at the project;
+  - `.npcasset` - a character's source, like an `.object` in rawdata: the game
+    reads the files the build generates from it, never the asset.
+- `EditorMod::OutsideBuild(root, rel)` is the one question every walk that feeds
+  a build asks: the graphs of the project, the characters and the export agree on
+  what the module is. A quest in an excluded folder is no quest of the build (it
+  cannot block it), a character there is not generated.
+- The export makes ONE list of what it will write (`SBuildWalk`) before anything
+  is written: the "target already holds files" question counts every target file
+  this build will not write (root level included), and `left_out` - what the walk
+  passed by - reaches the result dialog ("Not shipped: ..."), `mod_export`,
+  `mod_package` and the release dialog. A rule that would take out a file the
+  build generates (mode registration, character files) refuses the build.
+- The clean build empties the target first, so a target that is a link, or that
+  is/holds/sits in the project, is refused BEFORE a folder of it is created
+  (real paths, `GetFinalPathNameByHandle`); `WipeTree` removes a link without
+  following it. The release stage in the project's `temp\` is fine - no walk
+  enters editor scratch.
+- A project that is a git working copy and has no `.gitignore` gets one, once,
+  for the editor's own files (`EnsureGitIgnore`: project.ltx - this machine's paths
+  -, preview.png, releases, the scratch folders, Windows litter). An author's own
+  `.gitignore` is never touched. A folder with mod.ltx and no project.ltx is a
+  project (a fresh clone); Open writes project.ltx.
+- The game side agrees: XMS (`xms_core.cpp`, `tooling_entry`) does not mount or
+  list hidden/system entries, dot-names, Thumbs.db or desktop.ini of a module, so a
+  module that is a git working copy or a junction into one loads the same.
+- QA: `tools/qa/test_build_contents.py --project <project>` (editor, over MCP on a
+  COPY); the game's `tools/qa/nq/Run-NqQa.ps1 -Scenario Scout` puts a valid quest
+  into the QA module's `.git` and wants it not loaded.
+
 ## Mod releases
 
 - **Mod → Package Release…** / `mod_package` (`EditorMod::PackageRelease`)

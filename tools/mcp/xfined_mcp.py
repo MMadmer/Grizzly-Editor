@@ -131,7 +131,8 @@ TOOLS = [
         "name": "xfined_mod_manifest",
         "description": "XMS mod manifest (mod.ltx) of the active project: id, name, version, "
                        "Mods menu metadata (author, description, website, github update source), api, "
-                       "target + game mode + declared modes, requires/after/before/conflicts lists "
+                       "target + game mode + declared modes, requires/after/before/conflicts lists, "
+                       "'exclude' (what the build leaves out on the author's say - mod.ltx [exclude]) "
                        "and which module dirs exist.",
         "inputSchema": {"type": "object", "properties": {}},
     },
@@ -149,7 +150,10 @@ TOOLS = [
                        "an export succeeds; it is inferred from mode/provides_mode when omitted, but "
                        "'the ordinary game' has to be said out loud (target=default). "
                        "Comma-joined lists: requires, after, before, conflicts "
-                       "(a present-but-empty string clears the list). Omitted fields keep their value.",
+                       "(a present-but-empty string clears the list). 'exclude' replaces mod.ltx [exclude] - what "
+                       "the build leaves out: project paths (a folder takes everything below it) or patterns "
+                       "(*.psd = that name at any depth, docs/*.md = a path), one per line or comma separated; "
+                       "for one entry at a time use xfined_mod_exclude. Omitted fields keep their value.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -170,7 +174,26 @@ TOOLS = [
                 "after": {"type": "string"},
                 "before": {"type": "string"},
                 "conflicts": {"type": "string"},
+                "exclude": {"type": "string", "description": "the whole [exclude] list, one entry per line or comma separated"},
             },
+        },
+    },
+    {
+        "name": "xfined_mod_exclude",
+        "description": "Exclude one project entry from the build, or include it again - the content browser's "
+                       "Exclude from Build / Include in Build. 'path' is project-relative (docs, design/story.md). "
+                       "The entry goes into mod.ltx [exclude], so it travels with the project's repository; the "
+                       "build, the release package, the quest list and the character list all leave it out. "
+                       "Including an entry that another rule still takes out (a folder above it, a pattern) fails "
+                       "and names that rule. mod.ltx cannot be excluded. Tooling - .git, .gitignore, .github, "
+                       ".vscode, Thumbs.db, desktop.ini - never needs this: it never ships. Returns the list.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "project-relative file or folder"},
+                "excluded": {"type": "boolean", "description": "true (default) excludes, false includes it again"},
+            },
+            "required": ["path"],
         },
     },
     {
@@ -185,7 +208,10 @@ TOOLS = [
                        "a target inside the game's gamedata is refused - mods never merge into the game tree. "
                        "The answer carries 'warnings': quest problems that did not stop the build "
                        "(a restrictor the quest names but nobody placed, a section the game does not have) - "
-                       "a build with warnings shipped, but it probably does not do what the author meant.",
+                       "a build with warnings shipped, but it probably does not do what the author meant. "
+                       "'left_out' lists what the build passed by, project-relative: tooling (.git, .gitignore, "
+                       "Thumbs.db, ... at any depth), mod.ltx [exclude] entries and links. A target folder that is "
+                       "a link, or that overlaps the project, is refused before anything is written.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -205,7 +231,8 @@ TOOLS = [
                        "orderable version (1-4 numbers separated by dots). Files an earlier packaging of the same "
                        "version left in out_dir are replaced without asking. Returns descriptor, out_dir, "
                        "index {name,size,sha256}, packages [{name,size,sha256}], files, unpacked, packed, "
-                       "requires_game, baked, warnings. Upload every returned file - the zip exactly as written, "
+                       "requires_game, baked, warnings, left_out (what the build passed by, as in xfined_mod_export). "
+                       "Upload every returned file - the zip exactly as written, "
                        "repacking it breaks the index - to a GitHub release of the manifest's 'github' "
                        "repository and publish it as the latest release.",
         "inputSchema": {
@@ -1551,6 +1578,7 @@ CMD_MAP = {
     "xfined_focus_object": "focus_object",
     "xfined_mod_manifest": "mod_manifest",
     "xfined_mod_set_manifest": "mod_set_manifest",
+    "xfined_mod_exclude": "mod_exclude",
     "xfined_mod_export": "mod_export",
     "xfined_mod_package": "mod_package",
     "xfined_mod_publish": "mod_publish",

@@ -427,6 +427,9 @@ def run(project: str) -> None:
                            (ltx, "spawn sections"), (patch, "the ltxp patch"),
                            (st_rus, "the rus string table"), (st_eng, "the eng string table")):
             check(os.path.isfile(path), f"C {what} is in the module", path)
+        # the asset is the source; the game reads what was generated from it
+        sources = [os.path.join(b, f) for b, _, fs in os.walk(root) for f in fs if f.lower().endswith(".npcasset")]
+        check(not sources, "C the .npcasset sources stay in the project", json.dumps(sources)[:200])
 
         gid = f"{module}_qa_courier"
         d = read(desc)

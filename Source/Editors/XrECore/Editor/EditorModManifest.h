@@ -46,6 +46,9 @@ namespace EditorMod
 		xr_vector<xr_string>	update_extra;	// unknown [update] lines
 		xr_vector<xr_string>	module_extra;	// unknown [module] lines
 		xr_vector<xr_string>	extra;			// unknown sections, headers included
+		// [exclude]: what the build leaves out on the author's say - project paths
+		// or patterns, one per line, kept as written (see ExcludeMatch)
+		xr_vector<xr_string>	exclude;
 	};
 
 	// id charset per XMS spec: [a-z0-9_.\-]+
@@ -79,6 +82,33 @@ namespace EditorMod
 	ECORE_API bool	Load				(LPCSTR project_root, SManifest& m);
 	ECORE_API bool	Save				(LPCSTR project_root, const SManifest& m);
 
+	// ---- what the build leaves out -----------------------------------------
+	// A project folder is the author's working place as well as the module: a git
+	// repository, design notes, reference pictures. Tooling never ships (see
+	// EditorProject::IsToolingEntry); the rest is the author's call, made in the
+	// [exclude] section of mod.ltx. An entry there is a project-relative path - a
+	// folder takes everything below it - or a pattern: with no slash it matches a
+	// NAME at any depth (*.psd), with one a path from the root (docs/*.md). '*' and
+	// '?' never cross a folder boundary; case and slash direction do not matter.
+	// `rule` comes back with the entry that matched.
+	ECORE_API bool	ExcludeMatch		(const xr_vector<xr_string>& rules, LPCSTR rel, xr_string* rule = 0);
+	// A project's [exclude] list, read once and kept until mod.ltx is saved or
+	// InvalidateExclusions is called: the content browser asks per tile, per frame.
+	ECORE_API const xr_vector<xr_string>& Exclusions(LPCSTR project_root);
+	ECORE_API void	InvalidateExclusions();
+	// Is this project-relative entry out of the build: tooling at any depth, the
+	// editor's scratch and the sources at the root, whatever [exclude] names. Every
+	// walk that feeds a build asks it - the graphs, the characters, the export.
+	ECORE_API bool	OutsideBuild		(LPCSTR project_root, LPCSTR rel);
+	// Adds or removes one project-relative entry and saves mod.ltx. Removing fails,
+	// naming the rule, when something else still excludes the entry.
+	ECORE_API bool	SetExcluded			(LPCSTR project_root, LPCSTR rel, bool excluded, xr_string& err);
+	// What the content browser says about an entry: it ships; its own [exclude] line
+	// takes it out; another rule does (a folder above it, a pattern - `rule` names
+	// it); or it never ships at all (the editor's scratch, the sources).
+	enum EShipState { shipShipped = 0, shipExcluded, shipExcludedByRule, shipNever };
+	ECORE_API EShipState ShipState		(LPCSTR project_root, LPCSTR rel, xr_string* rule = 0);
+
 	// flat=false: mod.ltx + module dirs -> <target>\modules\<id>\
 	// flat=true : gamedata content -> <target>\gamedata_<id>\ + compat report
 	// The module export MIRRORS the project: files the target holds and the
@@ -89,9 +119,13 @@ namespace EditorMod
 	// build: a warning nobody is shown is a warning that does not exist, and the one
 	// that matters most - a quest naming a restrictor that was never placed - reads as
 	// a clean build otherwise.
+	// `left_out` (optional) comes back with what the build passed by and why it
+	// matters to know: every tooling entry, every [exclude]d one and every link,
+	// project-relative, at the level the walk stopped.
 	ECORE_API bool	Export				(LPCSTR project_root, LPCSTR target_root, bool flat,
 										 int& files, xr_string& out_path, xr_string& err,
-										 bool confirmed = false, xr_string* warnings = 0);
+										 bool confirmed = false, xr_string* warnings = 0,
+										 xr_vector<xr_string>* left_out = 0);
 
 	// one asset of a release, as the descriptor lists it
 	struct SPackageFile
@@ -114,6 +148,9 @@ namespace EditorMod
 		int						files;			// files in all packages together
 		u64						unpacked;		// their size before compression
 		u64						packed;			// all packages together
+
+		// what the staging build passed by (Export's left_out), for the release report
+		xr_vector<xr_string>	left_out;
 
 								SPackageResult	() : files(0), unpacked(0), packed(0) {}
 	};
@@ -163,5 +200,7 @@ namespace EditorMod
 	ECORE_API void	McpManifest			(xr_string& out);
 	ECORE_API void	McpSetManifest		(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpExport			(LPCSTR raw, xr_string& out);
+	// {"path":"docs","excluded":true|false} - the browser's Exclude from Build
+	ECORE_API void	McpExclude			(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpPackage			(LPCSTR raw, xr_string& out);
 }

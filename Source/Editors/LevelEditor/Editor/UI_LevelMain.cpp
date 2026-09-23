@@ -2269,6 +2269,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     // XMS mod commands are project-scoped and do not need an open scene
     if (0 == xr_strcmp(cmd, "mod_manifest"))		{ EditorMod::McpManifest(out);			return true; }
     if (0 == xr_strcmp(cmd, "mod_set_manifest"))	{ EditorMod::McpSetManifest(raw, out);	return true; }
+    if (0 == xr_strcmp(cmd, "mod_exclude"))		{ EditorMod::McpExclude(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_export"))			{ EditorMod::McpExport(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_publish"))			{ EditorPublish::McpPublish(raw, out);	return true; }

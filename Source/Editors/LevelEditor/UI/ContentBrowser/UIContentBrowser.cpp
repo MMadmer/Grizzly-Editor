@@ -831,6 +831,9 @@ static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out
 	do
 	{
 		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		// version control and tool litter: nobody's content, and a .git alone is
+		// thousands of entries walked on every refresh
+		if (EditorProject::IsToolingEntry(fd.cFileName)) continue;
 		const size_t sub_length = rel_length + (rel_length ? 1 : 0) + xr_strlen(fd.cFileName);
 		if (sub_length >= sizeof(string_path) || !ContentAbsolutePathFits(base, sub_length)) continue;
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
@@ -908,7 +911,24 @@ bool UIContentBrowser::WatchPathIsRelevant(LPCSTR relative_path) const
 	first[length] = 0;
 
 	if (m_Watcher->source == 0)
-		return !EditorProject::IsEditorOnlyEntry(first);
+	{
+		if (EditorProject::IsEditorOnlyEntry(first))	return false;
+		// tooling at any depth: git rewrites .git on every status and commit, and
+		// each of those would re-list the whole project
+		for (LPCSTR seg = relative_path; seg && *seg;)
+		{
+			LPCSTR sep = strpbrk(seg, "\\/");
+			const size_t n = sep ? size_t(sep - seg) : xr_strlen(seg);
+			if (n && n < sizeof(first))
+			{
+				CopyMemory(first, seg, n);
+				first[n] = 0;
+				if (EditorProject::IsToolingEntry(first))	return false;
+			}
+			seg = sep ? sep + 1 : 0;
+		}
+		return true;
+	}
 	if (m_Watcher->source == 2)
 		return 0 == _stricmp(first, "database") || 0 == _stricmp(first, "gamedata");
 	return false;
@@ -1082,8 +1102,10 @@ void UIContentBrowser::Refresh()
 	// what an .nqasset or an .npcasset IS was cached for the icons; the files may
 	// have changed, and the tiles must not ask the disk once per frame to find out
 	EditorAssetIcons::Invalidate();
-	// ... and who the project's characters are was cached for the quest validator
+	// ... and who the project's characters are was cached for the quest validator,
+	// and what the build leaves out for the tiles (mod.ltx may have changed on disk)
 	EditorCharacters::Invalidate();
+	EditorMod::InvalidateExclusions();
 	m_Items.clear	();
 	m_Dirs.clear	();
 	DropCache		();
@@ -1110,8 +1132,10 @@ void UIContentBrowser::Refresh()
 				do
 				{
 					if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-					// the editor's own scratch is not the author's content
+					// the editor's own scratch is not the author's content, and tooling
+					// (.git, .gitignore, Thumbs.db, ...) is nobody's
 					if (EditorProject::IsEditorOnlyEntry(fd.cFileName)) continue;
+					if (EditorProject::IsToolingEntry(fd.cFileName)) continue;
 					if (!ContentAbsolutePathFits(EditorProject::Root(), xr_strlen(fd.cFileName))) continue;
 					if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
 					if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -1582,7 +1606,13 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 	if (m_ScrollToSelection && !leaf && PathIsAncestor(f.path, m_CurFolder))
 		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
+	// a folder the build leaves out reads as such here too
+	const EditorMod::EShipState ship = (m_Source == 0 && EditorProject::Active() && !f.path.empty())
+		? EditorMod::ShipState(EditorProject::Root(), f.path.c_str()) : EditorMod::shipShipped;
+	const bool veiled = ship == EditorMod::shipExcluded || ship == EditorMod::shipExcludedByRule;
+	if (veiled)	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 	const bool open = ImGui::TreeNodeEx(f.name.c_str(), flags);
+	if (veiled)	ImGui::PopStyleColor();
 	if (ImGui::IsItemClicked())
 	{
 		xr_string err;
@@ -1936,7 +1966,7 @@ void UIContentBrowser::DrawTiles()
 
 	// `label_end` cuts the caption short without a copy: one of the editor's own assets
 	// goes by its name alone (EditorAssetIcons::OwnExtension)
-	auto draw_caption = [&](LPCSTR label, LPCSTR label_end, bool renaming)
+	auto draw_caption = [&](LPCSTR label, LPCSTR label_end, bool renaming, bool dim)
 	{
 		if (renaming)
 		{
@@ -1976,7 +2006,7 @@ void UIContentBrowser::DrawTiles()
 		ImGui::Dummy(ImVec2(tile_w, caption_h));
 		const ImVec4 clip(p.x, p.y, p.x + tile_w, p.y + caption_h);
 		ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(), p,
-			ImGui::GetColorU32(ImGuiCol_Text), label, label_end, tile_w, &clip);
+			ImGui::GetColorU32(dim ? ImGuiCol_TextDisabled : ImGuiCol_Text), label, label_end, tile_w, &clip);
 	};
 
 	const int up_slots = (!m_Filter.IsActive() && !m_CurFolder.empty()) ? 1 : 0;
@@ -2011,7 +2041,7 @@ void UIContentBrowser::DrawTiles()
 						GoUp(err);
 					}
 					if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
-					draw_caption("Parent folder", 0, false);
+					draw_caption("Parent folder", 0, false, false);
 					ImGui::EndGroup();
 					ImGui::PopID();
 					continue;
@@ -2024,6 +2054,14 @@ void UIContentBrowser::DrawTiles()
 				leaf = leaf ? leaf + 1 : full;
 				const bool sel = IsSelected(full, entry.folder);
 				const bool renaming = !m_Rename.empty() && m_Rename == full;
+				// what the build does with it: a veiled tile does not ship
+				xr_string ship_rule;
+				const EditorMod::EShipState ship = (m_Source == 0 && EditorProject::Active())
+					? EditorMod::ShipState(EditorProject::Root(), full, &ship_rule) : EditorMod::shipShipped;
+				const bool veiled = ship == EditorMod::shipExcluded || ship == EditorMod::shipExcludedByRule;
+				xr_string ship_note;
+				if (veiled)						ship_note = "\nnot shipped - mod.ltx [exclude]: " + ship_rule;
+				else if (ship == EditorMod::shipNever)	ship_note = "\nsources - never shipped";
 
 				ImGui::PushID(view_index);
 				ImGui::BeginGroup();
@@ -2040,6 +2078,7 @@ void UIContentBrowser::DrawTiles()
 					ImGui::PopStyleColor();
 					m_DrawnRects[rect_slot] = ImVec4(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
 						ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
+					if (veiled)	VeilTile(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 
 					string_path level_scene;
 					const bool as_level = IsGameLevelEntry(full) && 0 == strchr(full + 7, '\\') &&
@@ -2060,11 +2099,11 @@ void UIContentBrowser::DrawTiles()
 							}
 						}
 						if (!renaming)
-							ImGui::SetTooltip(as_level ? "%s\nlevel - double click to open the scene it was built from"
-								: "%s", full);
+							ImGui::SetTooltip(as_level ? "%s\nlevel - double click to open the scene it was built from%s"
+								: "%s%s", full, ship_note.c_str());
 					}
 					DrawEntryContextMenu(full, true);
-					draw_caption(leaf, 0, renaming);
+					draw_caption(leaf, 0, renaming, veiled);
 				}
 				else
 				{
@@ -2083,6 +2122,8 @@ void UIContentBrowser::DrawTiles()
 					// with the picture, under the selection wash: an icon stands
 					// in for a thumbnail and has to take the same highlight
 					if (icon) EditorAssetIcons::Draw(icon, ra.x, ra.y, rb.x, rb.y);
+					// over the picture, under the selection: selected still reads as selected
+					if (veiled)	VeilTile(ra, rb);
 					m_DrawnRects[rect_slot] = ImVec4(ra.x, ra.y, rb.x, rb.y);
 
 					if (sel)
@@ -2116,8 +2157,8 @@ void UIContentBrowser::DrawTiles()
 					}
 					if (ImGui::IsItemHovered())
 					{
-						if (icon)	ImGui::SetTooltip("%s\n%s", full, EditorAssetIcons::Name(icon));
-						else		ImGui::SetTooltip("%s", full);
+						if (icon)	ImGui::SetTooltip("%s\n%s%s", full, EditorAssetIcons::Name(icon), ship_note.c_str());
+						else		ImGui::SetTooltip("%s%s", full, ship_note.c_str());
 						if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 						{
 							SelectEntry(full, false, false, false);
@@ -2125,7 +2166,7 @@ void UIContentBrowser::DrawTiles()
 						}
 					}
 					DrawEntryContextMenu(full, false);
-					draw_caption(leaf, leaf_end, renaming);
+					draw_caption(leaf, leaf_end, renaming, veiled);
 				}
 
 				ImGui::EndGroup();
@@ -2247,6 +2288,12 @@ void UIContentBrowser::DrawEntryContextMenu(LPCSTR path, bool folder)
 			BeginRename(path);
 	}
 
+	if (m_Source == 0 && EditorProject::Active())
+	{
+		ImGui::Separator();
+		DrawBuildToggle();
+	}
+
 	ImGui::Separator();
 	if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(path);
 
@@ -2256,6 +2303,65 @@ void UIContentBrowser::DrawEntryContextMenu(LPCSTR path, bool folder)
 		ImGui::TextDisabled("read-only source");
 	}
 	ImGui::EndPopup();
+}
+
+// The project folder is the author's working place as well as the module - design
+// notes, a git repository, reference pictures - so what ships is a choice made here,
+// per entry, and kept in mod.ltx [exclude] with the repository.
+void UIContentBrowser::DrawBuildToggle()
+{
+	LPCSTR root = EditorProject::Root();
+	int shipped = 0, own = 0, never = 0;
+	xr_string by;
+	for (u32 i = 0; i < m_Selection.size(); ++i)
+	{
+		xr_string rule;
+		switch (EditorMod::ShipState(root, m_Selection[i].path.c_str(), &rule))
+		{
+		case EditorMod::shipShipped:			++shipped;		break;
+		case EditorMod::shipExcluded:			++own;			break;
+		case EditorMod::shipExcludedByRule:		by = rule;		break;
+		default:								++never;		break;
+		}
+	}
+	if (never && !shipped && !own && by.empty())
+	{
+		ImGui::MenuItem("Exclude from Build", "", false, false);
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("the editor's own files and the sources under rawdata are never shipped");
+		return;
+	}
+	xr_string err;
+	if (shipped)
+	{
+		if (ImGui::MenuItem("Exclude from Build"))
+			for (u32 i = 0; i < m_Selection.size() && err.empty(); ++i)
+				if (EditorMod::shipShipped == EditorMod::ShipState(root, m_Selection[i].path.c_str()))
+					EditorMod::SetExcluded(root, m_Selection[i].path.c_str(), true, err);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Left out of the module and its releases, kept in the project.\n"
+							  "Stored in mod.ltx [exclude] - the Manifest window lists them.");
+	}
+	else if (own && by.empty())
+	{
+		if (ImGui::MenuItem("Include in Build"))
+			for (u32 i = 0; i < m_Selection.size() && err.empty(); ++i)
+				EditorMod::SetExcluded(root, m_Selection[i].path.c_str(), false, err);
+	}
+	else
+	{
+		ImGui::MenuItem("Include in Build", "", false, false);
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("excluded by '%s' in mod.ltx [exclude] - include that one instead", by.c_str());
+	}
+	if (!err.empty())	ELog.DlgMsg(mtError, "%s", err.c_str());
+}
+
+// The tile of an entry the build leaves out: a veil of the panel's own colour over
+// whatever the tile shows, so a picture and a drawn icon fade alike.
+void UIContentBrowser::VeilTile(const ImVec2& a, const ImVec2& b)
+{
+	ImGui::GetWindowDrawList()->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_WindowBg, 0.6f), 3.f);
 }
 
 bool UIContentBrowser::ResolveDropRef(LPCSTR name, string_path& ref)

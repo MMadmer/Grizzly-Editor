@@ -60,10 +60,11 @@ namespace NqUtil
 	ECORE_API bool		ProjectPath		(LPCSTR rel_or_abs, xr_string& out, xr_string& err);
 	// path relative to the project root with forward slashes, or the input
 	ECORE_API xr_string	ProjectRelative	(LPCSTR abs);
-	// recursive file listing by extension (".nqasset"), absolute paths, sorted;
-	// `skip_root_entry` is asked for every top-level entry (editor-only folders)
-	typedef bool (*TSkipRootEntry)(LPCSTR name);
-	ECORE_API void		ListFiles		(LPCSTR root, LPCSTR ext, xr_vector<xr_string>& out, TSkipRootEntry skip = 0);
+	// recursive file listing by extension (".nqasset"), absolute paths, sorted.
+	// Tooling (.git and its kind - EditorProject::IsToolingEntry) and links are never
+	// walked; `skip` is asked about every other entry, with its path below `root`.
+	typedef bool (*TSkipEntry)(LPCSTR root, LPCSTR rel);
+	ECORE_API void		ListFiles		(LPCSTR root, LPCSTR ext, xr_vector<xr_string>& out, TSkipEntry skip = 0);
 	// file name without directory and extension
 	ECORE_API xr_string	BaseName		(LPCSTR path);
 	ECORE_API xr_string	Extension		(LPCSTR path);		// ".nqasset" (lowercase)
@@ -73,7 +74,7 @@ namespace NqUtil
 	ECORE_API bool		IsBehaviourPath	(LPCSTR path);
 	ECORE_API bool		IsGraphPath		(LPCSTR path);
 	// every graph document under `root`, both extensions, sorted
-	ECORE_API void		ListGraphFiles	(LPCSTR root, xr_vector<xr_string>& out, TSkipRootEntry skip = 0);
+	ECORE_API void		ListGraphFiles	(LPCSTR root, xr_vector<xr_string>& out, TSkipEntry skip = 0);
 
 	// -- misc ---------------------------------------------------------------------
 	ECORE_API void		Split			(LPCSTR s, char sep, xr_vector<xr_string>& out);	// trimmed, empties dropped

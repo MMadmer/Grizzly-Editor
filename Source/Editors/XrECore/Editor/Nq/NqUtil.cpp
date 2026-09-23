@@ -391,31 +391,46 @@ xr_string NqUtil::ProjectRelative(LPCSTR abs)
 	return n;
 }
 
-static void ListFilesRec(LPCSTR dir, LPCSTR ext, xr_vector<xr_string>& out, NqUtil::TSkipRootEntry skip, bool top)
+// every file below `root` whose name ends in one of `exts`. What a walk costs is the
+// number of entries it touches: a .git holds thousands and never anything of ours
+static void ListFilesRec(LPCSTR root, const xr_string& rel_dir, LPCSTR const* exts, u32 n_ext,
+						 xr_vector<xr_string>& out, NqUtil::TSkipEntry skip)
 {
+	const xr_string dir = rel_dir.empty() ? xr_string(root) : xr_string(root) + "\\" + rel_dir;
+	if (dir.size() + 3 >= sizeof(string_path)) return;
 	string_path mask;
-	sprintf_s(mask, "%s\\*", dir);
+	sprintf_s(mask, "%s\\*", dir.c_str());
 	WIN32_FIND_DATAA fd;
 	HANDLE h = ::FindFirstFileA(mask, &fd);
 	if (INVALID_HANDLE_VALUE == h) return;
 	do
 	{
 		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-		if (top && skip && skip(fd.cFileName)) continue;
-		string_path full;
-		sprintf_s(full, "%s\\%s", dir, fd.cFileName);
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { ListFilesRec(full, ext, out, skip, false); continue; }
-		const size_t nl = strlen(fd.cFileName), el = strlen(ext);
-		if (nl > el && 0 == _stricmp(fd.cFileName + nl - el, ext)) out.push_back(xr_string(full));
+		// a link may point anywhere, an ancestor included
+		if (EditorProject::IsToolingEntry(fd.cFileName) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+			continue;
+		const xr_string rel = rel_dir.empty() ? xr_string(fd.cFileName) : rel_dir + "\\" + fd.cFileName;
+		if (skip && skip(root, rel.c_str())) continue;
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) { ListFilesRec(root, rel, exts, n_ext, out, skip); continue; }
+		const size_t nl = strlen(fd.cFileName);
+		for (u32 e = 0; e < n_ext; ++e)
+		{
+			const size_t el = strlen(exts[e]);
+			if (nl > el && 0 == _stricmp(fd.cFileName + nl - el, exts[e]))
+			{
+				out.push_back(dir + "\\" + fd.cFileName);
+				break;
+			}
+		}
 	} while (::FindNextFileA(h, &fd));
 	::FindClose(h);
 }
 
-void NqUtil::ListFiles(LPCSTR root, LPCSTR ext, xr_vector<xr_string>& out, TSkipRootEntry skip)
+void NqUtil::ListFiles(LPCSTR root, LPCSTR ext, xr_vector<xr_string>& out, TSkipEntry skip)
 {
 	out.clear();
 	if (!root || !root[0] || !ext) return;
-	ListFilesRec(root, ext, out, skip, true);
+	ListFilesRec(root, xr_string(), &ext, 1, out, skip);
 	std::sort(out.begin(), out.end());
 }
 
@@ -445,12 +460,13 @@ bool NqUtil::IsQuestPath(LPCSTR path)		{ return Extension(path) == ".nqasset"; }
 bool NqUtil::IsBehaviourPath(LPCSTR path)	{ return Extension(path) == ".behasset"; }
 bool NqUtil::IsGraphPath(LPCSTR path)		{ return IsQuestPath(path) || IsBehaviourPath(path); }
 
-void NqUtil::ListGraphFiles(LPCSTR root, xr_vector<xr_string>& out, TSkipRootEntry skip)
+void NqUtil::ListGraphFiles(LPCSTR root, xr_vector<xr_string>& out, TSkipEntry skip)
 {
 	out.clear();
 	if (!root || !root[0]) return;
-	ListFilesRec(root, ".nqasset", out, skip, true);
-	ListFilesRec(root, ".behasset", out, skip, true);
+	// both kinds in ONE walk - the index asks for this on every project question
+	static LPCSTR const kGraphs[] = { ".nqasset", ".behasset" };
+	ListFilesRec(root, xr_string(), kGraphs, 2, out, skip);
 	std::sort(out.begin(), out.end());
 }
 

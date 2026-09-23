@@ -377,7 +377,9 @@ void EditorCharacters::List(LPCSTR project_root, xr_vector<xr_string>& files)
 {
 	files.clear();
 	if (!project_root || !project_root[0])	return;
-	NqUtil::ListFiles(project_root, ".npcasset", files, 0);
+	// the characters of the project are the ones its build generates: a character in
+	// an excluded folder, the editor's scratch or tooling is no character of the module
+	NqUtil::ListFiles(project_root, ".npcasset", files, &EditorMod::OutsideBuild);
 }
 
 void EditorCharacters::LoadAll(LPCSTR project_root, xr_vector<SCharacter>& out,

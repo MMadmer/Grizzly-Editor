@@ -114,10 +114,15 @@ static void RecentIni(char* dst, u32 size)
 	sprintf_s(dst, size, "%s_projects.ini", s_AppRoot);
 }
 
+// A project is a folder with project.ltx - or with mod.ltx alone: project.ltx is this
+// machine's bookkeeping (the SDK and game paths, the last scene) and a fresh clone of
+// a mod's repository does not carry it. Open() writes it.
 static bool HasManifest(const char* folder)
 {
 	char p[MAX_PATH];
 	sprintf_s(p, "%s\\project.ltx", folder);
+	if (::GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES)	return true;
+	sprintf_s(p, "%s\\mod.ltx", folder);
 	return ::GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES;
 }
 
@@ -458,6 +463,64 @@ bool EditorProject::IsSourceOnlyEntry(LPCSTR n)
 	return 0 == _stricmp(n, "rawdata") || 0 == _stricmp(n, "Content");
 }
 
+bool EditorProject::IsToolingEntry(LPCSTR n)
+{
+	if (!n || !n[0])	return false;
+	// A leading dot is how every tool marks its own - .git, .gitignore, .github,
+	// .vscode, .idea, .vs, .svn, .DS_Store, .editorconfig - and nothing the game
+	// reads is named that way.
+	if ('.' == n[0])	return true;
+	// what the Windows shell leaves in folders it has shown
+	static const char* shell[] = { "Thumbs.db", "ehthumbs.db", "ehthumbs_vista.db", "desktop.ini" };
+	for (int i = 0; i < (int)(sizeof(shell) / sizeof(shell[0])); ++i)
+		if (0 == _stricmp(n, shell[i]))	return true;
+	// an Office document open elsewhere keeps a lock file beside it
+	return '~' == n[0] && '$' == n[1];
+}
+
+// A project that is a git working copy gets the editor's own files ignored, ONCE:
+// the scratch and the packaged releases change with every session and every build,
+// and a repository that tracks them fills up with zip files, crash leftovers and one
+// machine's paths. Written only when there is no .gitignore at all - an author's own
+// is never touched, and this one is theirs to edit from then on.
+static void EnsureGitIgnore(LPCSTR root)
+{
+	string_path git, ignore;
+	sprintf_s(git, "%s\\.git", root);
+	sprintf_s(ignore, "%s\\.gitignore", root);
+	// a folder in a plain clone, a file in a worktree or a submodule: both mean git
+	if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(git))	return;
+	if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(ignore))	return;
+
+	static const char* text =
+		"# XFined Editor: its own files, never part of the mod. Written once because\n"
+		"# this project is a git repository - edit it freely, the editor will not again.\n"
+		"\n"
+		"# this machine's paths and last scene; the editor recreates it on open\n"
+		"/project.ltx\n"
+		"/preview.png\n"
+		"# packaged releases - rebuilt from the sources, published on GitHub\n"
+		"/releases/\n"
+		"# scratch\n"
+		"/backup/\n"
+		"/temp/\n"
+		"/logs/\n"
+		"/import/\n"
+		"/savedgames/\n"
+		"/screenshots/\n"
+		"\n"
+		"# Windows\n"
+		"Thumbs.db\n"
+		"desktop.ini\n";
+	// CREATE_NEW: a file that appeared in the meantime is the author's, not ours
+	HANDLE h = ::CreateFileA(ignore, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (INVALID_HANDLE_VALUE == h)	return;
+	DWORD written = 0;
+	::WriteFile(h, text, (DWORD)xr_strlen(text), &written, NULL);
+	::CloseHandle(h);
+	Msg("* Project is a git repository: .gitignore written for the editor's own files");
+}
+
 void EditorProject::Mount()
 {
 	for (int i = 0; i < kMountCount; ++i)
@@ -517,6 +580,7 @@ bool EditorProject::Open(LPCSTR folder)
 	EditorMod::EnsureScaffold(s_Project, s_Name);
 	LoadManifest();
 	Mount();
+	EnsureGitIgnore(s_Project);
 	// typing in the browser may have woken the in-engine console — put it away
 	if (Console) Console->Hide();
 	SaveManifest();
@@ -970,10 +1034,10 @@ bool EditorProject::DrawBrowser()
 	if (ImGui::Button("Open Existing...", ImVec2(140, 0)))
 	{
 		char picked[MAX_PATH] = {};
-		if (PickFolder(picked, sizeof(picked), L"Select a project folder (must contain project.ltx)"))
+		if (PickFolder(picked, sizeof(picked), L"Select a project folder (it holds mod.ltx or project.ltx)"))
 		{
 			if (HasManifest(picked))	{ if (Open(picked)) ImGui::CloseCurrentPopup(); }
-			else						ELog.DlgMsg(mtError, "Not a project folder: no project.ltx inside.");
+			else						ELog.DlgMsg(mtError, "Not a project folder: no mod.ltx or project.ltx inside.");
 		}
 	}
 	ImGui::SameLine(0, 24);

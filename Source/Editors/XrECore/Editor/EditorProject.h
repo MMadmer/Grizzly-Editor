@@ -77,6 +77,11 @@ public:
 	// Sources: shown and editable (this is where scenes and .object files
 	// live), but not shipped - the game has no use for them.
 	static bool		IsSourceOnlyEntry	(LPCSTR name_in_root);
+	// Tooling: version control, IDE and OS litter - .git, .gitignore, .github,
+	// .vscode, Thumbs.db, desktop.ini and the like. Nobody's content, neither the
+	// author's nor the editor's: never shown, never shipped and never walked, at
+	// ANY depth (a Thumbs.db sits in every folder of pictures the shell has shown).
+	static bool		IsToolingEntry		(LPCSTR name);
 
 	// a scene load succeeded; Close() uses it to tell an autoload that never
 	// happened from a scene the author closed on purpose

@@ -462,7 +462,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 	// the same reading the game gives the file
 	text = NqUtil::GameTextToUtf8(text.data(), (u32)text.size());
 
-	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExtra };
+	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secExtra };
 	ESec sec = secNone;
 
 	size_t pos = 0;
@@ -492,6 +492,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 			else if (sn == "conflicts")		sec = secConflicts;
 			else if (sn == "provides_mode")	sec = secProvides;
 			else if (sn == "update")		sec = secUpdate;
+			else if (sn == "exclude")		sec = secExclude;
 			else { sec = secExtra; m.extra.push_back(raw); }
 			continue;
 		}
@@ -545,6 +546,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 		}
 		else if (sec == secRequires)	m.requires_list.push_back(line);
 		else if (sec == secConflicts)	m.conflicts.push_back(line);
+		else if (sec == secExclude)		m.exclude.push_back(line);
 	}
 	return true;
 }
@@ -646,6 +648,13 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		for (u32 i = 0; i < m.provides_extra.size(); ++i)
 			{ t += m.provides_extra[i]; t += "\r\n"; }
 	}
+	// editor-side, like `target`: the game ignores the section, the build reads it
+	if (!m.exclude.empty())
+	{
+		t += "\r\n[exclude]\r\n";
+		for (u32 i = 0; i < m.exclude.size(); ++i)
+			{ t += m.exclude[i]; t += "\r\n"; }
+	}
 	if (!m.extra.empty())
 	{
 		t += "\r\n";
@@ -654,7 +663,191 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 	}
 	char path[MAX_PATH];
 	sprintf_s(path, "%s\\mod.ltx", project_root);
-	return WriteTextFile(path, t.c_str());
+	const bool ok = WriteTextFile(path, t.c_str());
+	// whatever read the list before now reads a stale one
+	InvalidateExclusions();
+	return ok;
+}
+
+//------------------------------------------------------------------------------
+// what the build leaves out
+//------------------------------------------------------------------------------
+// "/Docs/Drafts/" and "docs\drafts" are one rule: backslashes, no leading "./"
+// or separator, no trailing one
+static xr_string NormalizeRel(LPCSTR in)
+{
+	xr_string r;
+	for (LPCSTR p = in ? in : ""; *p; ++p) r += (*p == '/') ? '\\' : *p;
+	Trim(r);
+	for (;;)
+	{
+		if (0 == r.compare(0, 2, ".\\"))			r.erase(0, 2);
+		else if (!r.empty() && r[0] == '\\')		r.erase(0, 1);
+		else break;
+	}
+	while (!r.empty() && r[r.size() - 1] == '\\')	r.erase(r.size() - 1);
+	return r;
+}
+
+// '*' and '?' against `text`, case-insensitive; neither crosses `stop` ('\\' in a
+// path, 0 for a plain name)
+static bool GlobMatch(LPCSTR mask, LPCSTR text, char stop)
+{
+	LPCSTR star_mask = 0, star_text = 0;
+	while (*text)
+	{
+		if (*mask == '*')	{ star_mask = ++mask; star_text = text; continue; }
+		const bool one = (*mask == '?') ? (*text != stop || !stop)
+										: (*mask && tolower((u8)*mask) == tolower((u8)*text));
+		if (one)			{ ++mask; ++text; continue; }
+		// the star takes one more character - never a folder boundary
+		if (!star_mask || (stop && *star_text == stop))	return false;
+		mask = star_mask;
+		text = ++star_text;
+	}
+	while (*mask == '*') ++mask;
+	return !*mask;
+}
+
+bool EditorMod::ExcludeMatch(const xr_vector<xr_string>& rules, LPCSTR rel_in, xr_string* rule)
+{
+	const xr_string rel = NormalizeRel(rel_in);
+	if (rel.empty())	return false;
+	for (u32 i = 0; i < rules.size(); ++i)
+	{
+		const xr_string r = NormalizeRel(rules[i].c_str());
+		if (r.empty())	continue;
+		const bool wild = r.find_first_of("*?") != xr_string::npos;
+		const bool path = r.find('\\') != xr_string::npos;
+		// the entry itself and every folder above it: a folder takes what is below it
+		for (size_t end = rel.find('\\');; end = rel.find('\\', end + 1))
+		{
+			const xr_string prefix = (end == xr_string::npos) ? rel : rel.substr(0, end);
+			bool hit;
+			if (!wild)		hit = 0 == _stricmp(prefix.c_str(), r.c_str());
+			else if (path)	hit = GlobMatch(r.c_str(), prefix.c_str(), '\\');
+			else
+			{
+				const size_t cut = prefix.rfind('\\');
+				hit = GlobMatch(r.c_str(), prefix.c_str() + (cut == xr_string::npos ? 0 : cut + 1), 0);
+			}
+			if (hit)
+			{
+				if (rule)	*rule = rules[i];
+				return true;
+			}
+			if (end == xr_string::npos)	break;
+		}
+	}
+	return false;
+}
+
+static xr_string				s_ExcludeRoot;
+static xr_vector<xr_string>		s_ExcludeRules;
+static bool						s_ExcludeValid = false;
+
+const xr_vector<xr_string>& EditorMod::Exclusions(LPCSTR project_root)
+{
+	// "D:\\Mod" and "D:/mod/" ask for one list
+	xr_string root = project_root ? project_root : "";
+	for (size_t i = 0; i < root.size(); ++i) if (root[i] == '/') root[i] = '\\';
+	while (!root.empty() && root[root.size() - 1] == '\\') root.erase(root.size() - 1);
+	if (!s_ExcludeValid || 0 != _stricmp(root.c_str(), s_ExcludeRoot.c_str()))
+	{
+		SManifest m;
+		Load(root.c_str(), m);
+		s_ExcludeRules	= m.exclude;
+		s_ExcludeRoot	= root;
+		s_ExcludeValid	= true;
+	}
+	return s_ExcludeRules;
+}
+
+void EditorMod::InvalidateExclusions()
+{
+	s_ExcludeValid = false;
+	// what the build is made of has changed: the quest index and the character list
+	// are both answers to "what is in the build"
+	NqDocs::InvalidateProjectIndex();
+	EditorCharacters::Invalidate();
+}
+
+bool EditorMod::OutsideBuild(LPCSTR project_root, LPCSTR rel_in)
+{
+	const xr_string rel = NormalizeRel(rel_in);
+	if (rel.empty())	return false;
+	for (size_t b = 0; b <= rel.size();)
+	{
+		size_t e = rel.find('\\', b);
+		if (e == xr_string::npos) e = rel.size();
+		const xr_string seg = rel.substr(b, e - b);
+		if (EditorProject::IsToolingEntry(seg.c_str()))	return true;
+		// the editor's scratch and the sources are root entries only
+		if (b == 0 && (EditorProject::IsEditorOnlyEntry(seg.c_str()) || EditorProject::IsSourceOnlyEntry(seg.c_str())))
+			return true;
+		b = e + 1;
+	}
+	return ExcludeMatch(Exclusions(project_root), rel.c_str());
+}
+
+EditorMod::EShipState EditorMod::ShipState(LPCSTR project_root, LPCSTR rel_in, xr_string* rule)
+{
+	const xr_string rel = NormalizeRel(rel_in);
+	if (rel.empty())	return shipShipped;
+	const xr_string first = rel.substr(0, rel.find('\\'));
+	if (EditorProject::IsEditorOnlyEntry(first.c_str()) || EditorProject::IsSourceOnlyEntry(first.c_str()))
+		return shipNever;
+	xr_string r;
+	if (!ExcludeMatch(Exclusions(project_root), rel.c_str(), &r))	return shipShipped;
+	if (rule)	*rule = r;
+	return 0 == _stricmp(NormalizeRel(r.c_str()).c_str(), rel.c_str()) ? shipExcluded : shipExcludedByRule;
+}
+
+bool EditorMod::SetExcluded(LPCSTR project_root, LPCSTR rel_in, bool excluded, xr_string& err)
+{
+	err.clear();
+	SManifest m;
+	if (!Load(project_root, m))	{ err = "mod.ltx not found in the project"; return false; }
+	const xr_string rel = NormalizeRel(rel_in);
+	if (rel.empty())			{ err = "the project root cannot be excluded - that is the whole module"; return false; }
+	if (0 == _stricmp(rel.c_str(), "mod.ltx"))
+								{ err = "mod.ltx always ships - it is what makes the folder a module"; return false; }
+	// stored the way people write paths in a text file
+	xr_string stored = rel;
+	for (size_t i = 0; i < stored.size(); ++i) if (stored[i] == '\\') stored[i] = '/';
+
+	if (excluded)
+	{
+		if (ExcludeMatch(m.exclude, rel.c_str()))	return true;	// already out, nothing to write
+		// an entry below the new one says nothing any more
+		for (u32 i = 0; i < m.exclude.size();)
+		{
+			const xr_string r = NormalizeRel(m.exclude[i].c_str());
+			const bool below = r.size() > rel.size() && r[rel.size()] == '\\' &&
+							   0 == _strnicmp(r.c_str(), rel.c_str(), rel.size()) &&
+							   r.find_first_of("*?") == xr_string::npos;
+			if (below)	m.exclude.erase(m.exclude.begin() + i);
+			else		++i;
+		}
+		m.exclude.push_back(stored);
+	}
+	else
+	{
+		for (u32 i = 0; i < m.exclude.size();)
+		{
+			if (0 == _stricmp(NormalizeRel(m.exclude[i].c_str()).c_str(), rel.c_str()))
+				m.exclude.erase(m.exclude.begin() + i);
+			else ++i;
+		}
+		xr_string still;
+		if (ExcludeMatch(m.exclude, rel.c_str(), &still))
+		{
+			err = "still excluded by '" + still + "' in mod.ltx [exclude]";
+			return false;
+		}
+	}
+	if (!Save(project_root, m))	{ err = "can't write mod.ltx"; return false; }
+	return true;
 }
 
 //------------------------------------------------------------------------------
@@ -688,32 +881,152 @@ void EditorMod::EnsureScaffold(LPCSTR project_root, LPCSTR project_name)
 //------------------------------------------------------------------------------
 // export
 //------------------------------------------------------------------------------
-// recursive copy, returns files copied; `skip_file` name is excluded everywhere
-static int CopyTreeCount(const char* src, const char* dst, const char* skip_file)
+// ---- the build walk ---------------------------------------------------------
+// What a build ships, as ONE list made before anything is written. A clean build
+// has to know what it will write to tell what in the target it would throw away,
+// and the author is told what the walk passed by: a folder that silently did not
+// ship is the next bug report.
+struct SBuildFile
 {
-	::CreateDirectoryA(dst, NULL);
-	int files = 0;
-	string_path mask;
-	sprintf_s(mask, "%s\\*", src);
-	WIN32_FIND_DATAA fd;
-	HANDLE h = ::FindFirstFileA(mask, &fd);
-	if (h == INVALID_HANDLE_VALUE) return 0;
-	do
+	xr_string	src;		// absolute
+	xr_string	rel;		// project-relative, '\\'
+};
+
+struct SBuildWalk
+{
+	xr_string					root;
+	const xr_vector<xr_string>&	exclude;
+	xr_vector<SBuildFile>		files;
+	xr_vector<xr_string>		left_out;	// project-relative, where the walk stopped
+
+	SBuildWalk(LPCSTR project_root, const xr_vector<xr_string>& rules) : root(project_root), exclude(rules) {}
+
+	bool Skip(const xr_string& rel, const WIN32_FIND_DATAA& fd, bool at_root)
 	{
-		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-		string_path a, b;
-		sprintf_s(a, "%s\\%s", src, fd.cFileName);
-		sprintf_s(b, "%s\\%s", dst, fd.cFileName);
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-			files += CopyTreeCount(a, b, skip_file);
-		else
+		LPCSTR name = fd.cFileName;
+		// the manifest is what makes the folder a module - no rule takes it out
+		if (at_root && 0 == _stricmp(name, "mod.ltx"))	return false;
+		// the editor's scratch and the sources never ship, and the author knows it
+		if (at_root && (EditorProject::IsEditorOnlyEntry(name) || EditorProject::IsSourceOnlyEntry(name)))
+			return true;
+		// authoring help beside the patches, not content
+		if (0 == _stricmp(name, "_readme.txt") && 0 == _strnicmp(rel.c_str(), "patch\\", 6))
+			return true;
+		// a character's source, like an .object in rawdata: the game reads the files the
+		// build generates from it, never the asset itself
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && NqUtil::Extension(name) == ".npcasset")
+			return true;
+		// Tooling, a link (it may point anywhere, the project itself included) and
+		// what the author excluded: left out, and said so.
+		if (EditorProject::IsToolingEntry(name) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+			EditorMod::ExcludeMatch(exclude, rel.c_str()))
 		{
-			if (skip_file && 0 == _stricmp(fd.cFileName, skip_file)) continue;
-			if (::CopyFileA(a, b, FALSE)) ++files;
+			left_out.push_back(rel);
+			return true;
 		}
-	} while (::FindNextFileA(h, &fd));
-	::FindClose(h);
-	return files;
+		// X-Ray cannot open a path longer than this, and neither can the copy
+		if (root.size() + rel.size() + 2 >= sizeof(string_path))
+		{
+			left_out.push_back(rel + " (path too long)");
+			return true;
+		}
+		return false;
+	}
+
+	void Walk(const xr_string& rel_dir)
+	{
+		const xr_string dir = rel_dir.empty() ? root : root + "\\" + rel_dir;
+		if (dir.size() + 3 >= sizeof(string_path))	return;
+		string_path mask;
+		sprintf_s(mask, "%s\\*", dir.c_str());
+		WIN32_FIND_DATAA fd;
+		HANDLE h = ::FindFirstFileA(mask, &fd);
+		if (INVALID_HANDLE_VALUE == h)	return;
+		do
+		{
+			if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, ".."))	continue;
+			const xr_string rel = rel_dir.empty() ? xr_string(fd.cFileName) : rel_dir + "\\" + fd.cFileName;
+			if (Skip(rel, fd, rel_dir.empty()))	continue;
+			if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				Walk(rel);
+				continue;
+			}
+			SBuildFile f;
+			f.rel = rel;
+			f.src = root + "\\" + rel;
+			files.push_back(f);
+		} while (::FindNextFileA(h, &fd));
+		::FindClose(h);
+	}
+};
+
+// Writes the walked files below `dst`; `strip` leading characters of each relative
+// path are dropped (the flat overlay copies gamedata\\ into its own root)
+static int CopyBuildFiles(const SBuildWalk& walk, LPCSTR dst, size_t strip)
+{
+	int copied = 0;
+	xr_string made;		// the last folder created - files come in folder order
+	for (u32 i = 0; i < walk.files.size(); ++i)
+	{
+		const SBuildFile& f = walk.files[i];
+		const xr_string rel = f.rel.substr(_min(strip, f.rel.size()));
+		const xr_string to = xr_string(dst) + "\\" + rel;
+		if (to.size() >= sizeof(string_path))	continue;
+		const size_t cut = to.rfind('\\');
+		const xr_string folder = to.substr(0, cut);
+		if (folder != made)
+		{
+			CreateDirChain(folder.c_str());
+			made = folder;
+		}
+		if (::CopyFileA(f.src.c_str(), to.c_str(), FALSE))	++copied;
+		else Msg("! [XMS] build: cannot copy %s (error %u)", f.rel.c_str(), ::GetLastError());
+	}
+	return copied;
+}
+
+// Where a folder really is: links, junctions and 8.3 names resolved, so two spellings
+// of one place compare equal. False when it cannot be opened.
+static bool RealFolder(LPCSTR path, xr_string& out)
+{
+	HANDLE h = ::CreateFileA(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (INVALID_HANDLE_VALUE == h)	return false;
+	char buf[2048];
+	const DWORD n = ::GetFinalPathNameByHandleA(h, buf, sizeof(buf), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	::CloseHandle(h);
+	if (!n || n >= sizeof(buf))	return false;
+	out = buf;
+	if (0 == out.compare(0, 4, "\\\\?\\"))	out.erase(0, 4);
+	while (!out.empty() && out[out.size() - 1] == '\\')	out.erase(out.size() - 1);
+	return true;
+}
+
+// Where `path` would really be once created: the deepest part of it that exists,
+// resolved, with the rest appended as written - so a refused build creates nothing
+static bool ProjectedRealPath(LPCSTR path, xr_string& out)
+{
+	xr_string head = path ? path : "", tail;
+	while (!head.empty())
+	{
+		if (DirExists(head.c_str()) && RealFolder(head.c_str(), out))
+		{
+			if (!tail.empty()) { out += "\\"; out += tail; }
+			return true;
+		}
+		const size_t cut = head.rfind('\\');
+		if (cut == xr_string::npos)	return false;
+		tail = tail.empty() ? head.substr(cut + 1) : head.substr(cut + 1) + "\\" + tail;
+		head.erase(cut);
+	}
+	return false;
+}
+
+static bool SameOrBelow(const xr_string& path, const xr_string& folder)
+{
+	return path.size() >= folder.size() && 0 == _strnicmp(path.c_str(), folder.c_str(), folder.size()) &&
+		   (path.size() == folder.size() || path[folder.size()] == '\\');
 }
 
 static int CountFilesRec(const char* dir, const char* skip_file)
@@ -1064,7 +1377,10 @@ static int WipeTree(LPCSTR dir)
 		sprintf_s(p, "%s\\%s", dir, fd.cFileName);
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
-			removed += WipeTree(p);
+			// a link goes, what it points at stays - that may be anything, the
+			// author's working copy included
+			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+				removed += WipeTree(p);
 			::RemoveDirectoryA(p);
 		}
 		else
@@ -1078,43 +1394,44 @@ static int WipeTree(LPCSTR dir)
 	return removed;
 }
 
-// How much of the target the clean build would throw away, without throwing it
-// away - the export asks this before wiping a folder that may not be its own.
-static int CountOrphansRec(LPCSTR dst, LPCSTR src)
+// How much of the target the clean build would throw away: every file there that
+// this build does not write, root level included, and every link as one - asked
+// before a folder that may not be the editor's own is wiped.
+static int CountStaleRec(const xr_string& dir, const xr_string& rel_dir, const xr_set<xr_string>& will)
 {
 	int n = 0;
-	WIN32_FIND_DATAA fd;
+	if (dir.size() + 3 >= sizeof(string_path))	return 0;
 	string_path mask;
-	sprintf_s(mask, "%s\\*", dst);
+	sprintf_s(mask, "%s\\*", dir.c_str());
+	WIN32_FIND_DATAA fd;
 	HANDLE h = ::FindFirstFileA(mask, &fd);
-	if (INVALID_HANDLE_VALUE == h) return 0;
+	if (INVALID_HANDLE_VALUE == h)	return 0;
 	do
 	{
-		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-		string_path d, s;
-		sprintf_s(d, "%s\\%s", dst, fd.cFileName);
-		sprintf_s(s, "%s\\%s", src, fd.cFileName);
-		const DWORD sa = ::GetFileAttributesA(s);
+		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, ".."))	continue;
+		const xr_string rel = rel_dir.empty() ? xr_string(fd.cFileName) : rel_dir + "\\" + fd.cFileName;
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)	{ ++n; continue; }
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
-			if (INVALID_FILE_ATTRIBUTES == sa || !(sa & FILE_ATTRIBUTE_DIRECTORY))
-				n += CountFilesRec(d, 0);
-			else
-				n += CountOrphansRec(d, s);
+			n += CountStaleRec(dir + "\\" + fd.cFileName, rel, will);
+			continue;
 		}
-		else if (INVALID_FILE_ATTRIBUTES == sa || (sa & FILE_ATTRIBUTE_DIRECTORY))
-			++n;
+		xr_string key = rel;
+		xr_strlwr(&key[0]);
+		if (!will.count(key))	++n;
 	} while (::FindNextFileA(h, &fd));
 	::FindClose(h);
 	return n;
 }
 
+
 bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 					   int& files, xr_string& out_path, xr_string& err, bool confirmed,
-					   xr_string* warnings)
+					   xr_string* warnings, xr_vector<xr_string>* left_out)
 {
 	files = 0; out_path.clear(); err.clear();
 	if (warnings) warnings->clear();
+	if (left_out) left_out->clear();
 	if (!project_root || !project_root[0])	{ err = "no active project"; return false; }
 
 	SManifest m;
@@ -1187,14 +1504,51 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			  "(export to the game ROOT: the module goes to <game>\\modules\\<id>)";
 		return false;
 	}
+	// The clean build below empties the target first. A target that is a link - one
+	// made so the game runs the working copy directly - or that is, holds or sits in
+	// the project would take the author's sources with it. Judged on where the target
+	// would be, before a single folder of it is created.
+	{
+		xr_string real_dst, real_src;
+		const bool known = ProjectedRealPath(dst, real_dst) && RealFolder(project_root, real_src);
+		const DWORD attr = ::GetFileAttributesA(dst);
+		if (INVALID_FILE_ATTRIBUTES != attr && (attr & FILE_ATTRIBUTE_REPARSE_POINT))
+		{
+			err = "the target folder is a link";
+			if (known) { err += " to "; err += real_dst; }
+			err += " - a build empties it first, and would empty what it points at. Remove the link, or build to another folder";
+			out_path = dst;
+			return false;
+		}
+		// inside the editor's own scratch is fine - the release stage lives in temp\,
+		// and no build walks it
+		bool scratch = false;
+		if (known && real_dst.size() > real_src.size() && SameOrBelow(real_dst, real_src))
+		{
+			xr_string first = real_dst.substr(real_src.size() + 1);
+			const size_t cut = first.find('\\');
+			if (cut != xr_string::npos) first.erase(cut);
+			scratch = EditorProject::IsEditorOnlyEntry(first.c_str());
+		}
+		if (known && ((SameOrBelow(real_dst, real_src) && !scratch) || SameOrBelow(real_src, real_dst)))
+		{
+			err = "the target folder and the project overlap (" + real_dst + ") - the build would write into its own sources, or wipe them";
+			out_path = dst;
+			return false;
+		}
+	}
 	CreateDirChain(dst);
 	if (!DirExists(dst))					{ err = "can't create target folder"; return false; }
 
-	string_path src;
+	SBuildWalk walk(project_root, m.exclude);
 	if (flat)
 	{
-		sprintf_s(src, "%s\\gamedata", project_root);
-		if (DirExists(src)) files += CopyTreeCount(src, dst, 0);
+		// the overlay is gamedata alone, filtered exactly like a module build
+		if (ExcludeMatch(m.exclude, "gamedata"))
+			walk.left_out.push_back("gamedata");
+		else
+			walk.Walk("gamedata");
+		files += CopyBuildFiles(walk, dst, 9);	// "gamedata\\" off the front
 
 		// XMS-only content is not representable as a plain gamedata overlay
 		string_path d_patch, d_spawn, d_scripts, d_levels;
@@ -1248,29 +1602,29 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	}
 	else
 	{
-		string_path a, b;
-
 		// What ships is "everything the author made", not a fixed list of five
 		// folder names: a module may keep any layout it likes and publish it
-		// through mod.ltx [vfs]. Only the editor's own scratch and the sources
-		// the game cannot read (rawdata scenes, .object files) stay behind.
-		xr_vector<xr_string> parts;
+		// through mod.ltx [vfs]. What stays behind: the editor's own scratch, the
+		// sources the game cannot read (rawdata scenes, .object files), tooling
+		// (.git and its kind) and whatever the author put in [exclude].
+		walk.Walk(xr_string());
+
+		// A file the build itself generates is part of how the module works: a rule
+		// that takes one out would ship a module that silently does not.
 		{
-			WIN32_FIND_DATAA fd;
-			string_path mask;
-			sprintf_s(mask, "%s\\*", project_root);
-			HANDLE h = ::FindFirstFileA(mask, &fd);
-			if (INVALID_HANDLE_VALUE != h)
+			xr_vector<xr_string> owned;
+			GetOwnedFiles(project_root, owned);
+			for (u32 i = 0; i < owned.size(); ++i)
 			{
-				do
+				xr_string rule;
+				string_path abs;
+				sprintf_s(abs, "%s\\%s", project_root, owned[i].c_str());
+				if (FileExists(abs) && ExcludeMatch(m.exclude, owned[i].c_str(), &rule))
 				{
-					if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
-					if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))	continue;
-					if (EditorProject::IsEditorOnlyEntry(fd.cFileName))		continue;
-					if (EditorProject::IsSourceOnlyEntry(fd.cFileName))		continue;
-					parts.push_back(xr_string(fd.cFileName));
-				} while (::FindNextFileA(h, &fd));
-				::FindClose(h);
+					err = "mod.ltx [exclude] '" + rule + "' takes out " + owned[i] +
+						  ", which the build generates for the module to work - exclude something narrower";
+					return false;
+				}
 			}
 		}
 
@@ -1280,17 +1634,17 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		// happens to share the id - so say so, and only wipe once told to.
 		if (!confirmed && DirExists(dst))
 		{
-			int stale = 0;
-			for (u32 i = 0; i < parts.size(); ++i)
+			xr_set<xr_string> will;
+			for (u32 i = 0; i < walk.files.size(); ++i)
 			{
-				sprintf_s(src, "%s\\%s", project_root, parts[i].c_str());
-				sprintf_s(b, "%s\\%s", dst, parts[i].c_str());
-				if (DirExists(b)) stale += CountOrphansRec(b, src);
+				xr_string key = walk.files[i].rel;
+				xr_strlwr(&key[0]);
+				will.insert(key);
 			}
-			if (stale)
+			if (const int stale = CountStaleRec(dst, xr_string(), will))
 			{
 				err = "target already holds a module: ";
-				char n[64]; sprintf_s(n, "%d file(s) there are not in this project", stale);
+				char n[64]; sprintf_s(n, "%d file(s) there are not part of this build", stale);
 				err += n;
 				out_path = dst;
 				return false;	// caller re-runs with `confirmed` once the user agrees
@@ -1300,43 +1654,21 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		if (const int wiped = WipeTree(dst))
 			Msg("* [XMS] clean build: %d stale file(s) removed from %s", wiped, dst);
 
-		sprintf_s(a, "%s\\mod.ltx", project_root);
-		sprintf_s(b, "%s\\mod.ltx", dst);
-		if (::CopyFileA(a, b, FALSE)) ++files;
-
-		for (u32 i = 0; i < parts.size(); ++i)
-		{
-			sprintf_s(src, "%s\\%s", project_root, parts[i].c_str());
-			sprintf_s(b, "%s\\%s", dst, parts[i].c_str());
-			if (!DirExists(src)) continue;
-			// the patch readme is authoring help, not module content
-			files += CopyTreeCount(src, b, (0 == _stricmp(parts[i].c_str(), "patch")) ? "_readme.txt" : 0);
-			// a part that carried nothing leaves no folder behind either -
-			// RemoveDirectory only succeeds on an empty one, which is the test
-			::RemoveDirectoryA(b);
-		}
-
-		// loose files the author dropped in the root travel too
-		{
-			WIN32_FIND_DATAA fd;
-			string_path mask;
-			sprintf_s(mask, "%s\\*", project_root);
-			HANDLE h = ::FindFirstFileA(mask, &fd);
-			if (INVALID_HANDLE_VALUE != h)
-			{
-				do
-				{
-					if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)		continue;
-					if (EditorProject::IsEditorOnlyEntry(fd.cFileName))		continue;
-					if (0 == _stricmp(fd.cFileName, "mod.ltx"))				continue;	// already copied
-					sprintf_s(src, "%s\\%s", project_root, fd.cFileName);
-					sprintf_s(b, "%s\\%s", dst, fd.cFileName);
-					if (::CopyFileA(src, b, FALSE)) ++files;
-				} while (::FindNextFileA(h, &fd));
-				::FindClose(h);
-			}
-		}
+		files += CopyBuildFiles(walk, dst, 0);
 	}
+
+	if (!walk.left_out.empty())
+	{
+		xr_string list;
+		for (u32 i = 0; i < walk.left_out.size() && i < 12; ++i)
+		{
+			if (i) list += ", ";
+			list += walk.left_out[i];
+		}
+		if (walk.left_out.size() > 12) list += NqUtil::Format(" and %u more", u32(walk.left_out.size() - 12));
+		Msg("* [XMS] left out of the build: %s", list.c_str());
+	}
+	if (left_out) *left_out = walk.left_out;
 
 	out_path = dst;
 	Msg("* [XMS] export %s: %d file(s) -> %s", flat ? "flat" : "module", files, dst);
@@ -1732,7 +2064,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 	// is refused here by the same code.
 	int exported = 0;
 	xr_string module_dir;
-	if (!EditorMod::Export(project_root, stage, false, exported, module_dir, err, true, warnings))
+	if (!EditorMod::Export(project_root, stage, false, exported, module_dir, err, true, warnings, &result.left_out))
 		return false;
 
 	xr_vector<SStagedFile> files;
@@ -2037,10 +2369,27 @@ static char					s_EdRequires[2048]	= {};
 static char					s_EdAfter[1024]		= {};
 static char					s_EdBefore[1024]	= {};
 static char					s_EdConflicts[2048]	= {};
+static char					s_EdExclude[4096]	= {};
 static char					s_Target[MAX_PATH]	= {};
 // measured once per modal opening: reading the game's layout is not frame work
 static bool					s_SlotChecked		= false;
 static char					s_SlotText[256]		= {};
+
+// "Not shipped: design, docs, .git" - what a build passed by, in the words of the
+// result dialog: a folder that silently stayed behind is the next question
+static void AppendLeftOut(char* msg, u32 size, const xr_vector<xr_string>& left_out)
+{
+	if (left_out.empty())	return;
+	xr_string line = "\n\nNot shipped: ";
+	const u32 shown = _min((u32)left_out.size(), 10u);
+	for (u32 i = 0; i < shown; ++i)
+	{
+		if (i) line += ", ";
+		line += left_out[i];
+	}
+	if (left_out.size() > shown)	line += NqUtil::Format(" and %u more", u32(left_out.size() - shown));
+	xr_strcat(msg, size, line.c_str());
+}
 
 static void ProjectIni(char* dst, u32 size)
 {
@@ -2085,6 +2434,7 @@ void EditorMod::RequestEditManifest()
 	JoinList(s_Keep.after, s_EdAfter, sizeof(s_EdAfter), "\n");
 	JoinList(s_Keep.before, s_EdBefore, sizeof(s_EdBefore), "\n");
 	JoinList(s_Keep.conflicts, s_EdConflicts, sizeof(s_EdConflicts), "\n");
+	JoinList(s_Keep.exclude, s_EdExclude, sizeof(s_EdExclude), "\n");
 	s_SlotChecked = false;
 	s_WantManifest = true;
 }
@@ -2180,12 +2530,13 @@ static void RunBuildIntoGame()
 	EditorMod::RunPreBuildBake(bake_note);
 	int files = 0;
 	xr_string path, err, warn;
-	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, false, &warn);
+	xr_vector<xr_string> left_out;
+	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, false, &warn, &left_out);
 	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
 	{
 		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
 			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
-			ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, true, &warn);
+			ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, true, &warn, &left_out);
 		else
 		{
 			sprintf_s(s_Message, "Build cancelled.");
@@ -2206,6 +2557,7 @@ static void RunBuildIntoGame()
 			"Toggle the module from the console:  xms_enable %s  /  xms_disable %s",
 			bake_note.c_str(), bake_note.empty() ? "" : "\n",
 			files, path.c_str(), m.id.c_str(), m.id.c_str());
+		AppendLeftOut(s_Message, sizeof(s_Message), left_out);
 		// what shipped but is probably wrong: a restrictor nobody placed, a section the
 		// game does not have. The build does not stop for these, so this is the only
 		// place the author can learn of them
@@ -2476,6 +2828,22 @@ static void DrawManifestModal()
 	ImGui::InputTextMultiline("##conflicts", s_EdConflicts, sizeof(s_EdConflicts), ImVec2(-1, 48));
 	ImGui::Separator();
 
+	// The project folder is also the author's working place - design notes, a git
+	// repository, reference pictures - and the build ships everything in it but this.
+	ImGui::TextUnformatted("Not shipped - project paths or patterns, one per line:");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip(
+			"docs              a folder, with everything in it\n"
+			"design/story.md   one file\n"
+			"*.psd             every file with that name, at any depth\n"
+			"docs/*.md         a pattern below one folder\n\n"
+			"Also set from the Content Browser: right-click > Exclude from Build.\n"
+			"Never shipped anyway: version control and tool files (.git, .gitignore,\n"
+			"Thumbs.db, ...), the editor's own folders (releases, temp, backup, ...)\n"
+			"and the sources under rawdata.");
+	ImGui::InputTextMultiline("##exclude", s_EdExclude, sizeof(s_EdExclude), ImVec2(-1, 64));
+	ImGui::Separator();
+
 	ImGui::BeginDisabled(!id_ok || !version_ok || !website_ok || !github_ok || !mode_ok || !pmode_ok);
 	if (ImGui::Button("Save", ImVec2(120, 0)))
 	{
@@ -2503,6 +2871,7 @@ static void DrawManifestModal()
 		SplitList(m.after, s_EdAfter, '\n');
 		SplitList(m.before, s_EdBefore, '\n');
 		SplitList(m.conflicts, s_EdConflicts, '\n');
+		SplitList(m.exclude, s_EdExclude, '\n');
 		if (!EditorMod::Save(EditorProject::Root(), m))
 			ELog.DlgMsg(mtError, "Can't write mod.ltx.");
 		s_WantManifest = false;
@@ -2526,15 +2895,16 @@ static void RunDeferredExport()
 	EditorMod::RunPreBuildBake(bake_note);
 	int files = 0;
 	xr_string path, err, warn;
+	xr_vector<xr_string> left_out;
 	bool ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-		s_DeferredExportFlat, files, path, err, false, &warn);
+		s_DeferredExportFlat, files, path, err, false, &warn, &left_out);
 	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
 	{
 		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
 			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
 		{
 			ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-				s_DeferredExportFlat, files, path, err, true, &warn);
+				s_DeferredExportFlat, files, path, err, true, &warn, &left_out);
 		}
 		else
 		{
@@ -2550,6 +2920,7 @@ static void RunDeferredExport()
 		::WritePrivateProfileStringA("xms", "export_target", s_DeferredExportTarget, ini);
 		sprintf_s(s_Message, "%s%sExport complete: %d file(s) copied to\n%s",
 			bake_note.c_str(), bake_note.empty() ? "" : "\n", files, path.c_str());
+		AppendLeftOut(s_Message, sizeof(s_Message), left_out);
 		if (!warn.empty())
 		{
 			xr_strcat(s_Message, sizeof(s_Message), "\n\n");
@@ -2667,6 +3038,17 @@ static void RunDeferredPackage()
 			s_PkgManifest.update_github.c_str());
 	// the index addresses the zip by byte offset; a re-zipped copy is another file
 	text += "\nUpload the zip exactly as written - repacking it breaks the file index.";
+	if (!res.left_out.empty())
+	{
+		// what the players will not get, said where the release is made
+		text += "\n\nNot shipped: ";
+		for (u32 i = 0; i < res.left_out.size() && i < 10; ++i)
+		{
+			if (i) text += ", ";
+			text += res.left_out[i];
+		}
+		if (res.left_out.size() > 10) text += NqUtil::Format(" and %u more", u32(res.left_out.size() - 10));
+	}
 	text += "\nMod > Publish Release packages and uploads in one step.";
 	if (!warn.empty())
 	{
@@ -2839,6 +3221,8 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppendArray(out, m.before);
 	out += ",\"conflicts\":";
 	JsonAppendArray(out, m.conflicts);
+	out += ",\"exclude\":";
+	JsonAppendArray(out, m.exclude);
 	out += ",\"has_dirs\":{";
 	static const char* dirs[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
 	for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i)
@@ -2941,6 +3325,9 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	if (XFinedMCP::GetArg(raw, "after", v, v_size))		SplitList(m.after, v, ',');
 	if (XFinedMCP::GetArg(raw, "before", v, v_size))		SplitList(m.before, v, ',');
 	if (XFinedMCP::GetArg(raw, "conflicts", v, v_size))	SplitList(m.conflicts, v, ',');
+	// the whole list at once: one entry per line, or comma separated when on one line
+	if (XFinedMCP::GetArg(raw, "exclude", v, v_size))
+		SplitList(m.exclude, v, strchr(v, '\n') ? '\n' : ',');
 
 	if (!ValidateId(m.id.c_str()))
 		{ out = "{\"ok\":false,\"error\":\"module id missing or invalid (allowed: a-z 0-9 _ . -)\"}"; return; }
@@ -2968,9 +3355,10 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 
 	int files = 0;
 	xr_string path, err, warn;
+	xr_vector<xr_string> left_out;
 	// MCP is the programmatic path: the caller already decided, and it must
 	// never stall on a question
-	if (!Export(EditorProject::Root(), target, flat, files, path, err, true, &warn))
+	if (!Export(EditorProject::Root(), target, flat, files, path, err, true, &warn, &left_out))
 	{
 		out = "{\"ok\":false,\"error\":\"";
 		JsonAppend(out, err.c_str());
@@ -2987,7 +3375,39 @@ void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 	// naming something that does not exist is not a clean build
 	out += "\",\"warnings\":\"";
 	JsonAppend(out, warn.c_str());
-	out += "\"}";
+	// what the build passed by - tooling, [exclude], links - project-relative
+	out += "\",\"left_out\":";
+	JsonAppendArray(out, left_out);
+	out += "}";
+}
+
+void EditorMod::McpExclude(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())
+		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
+	char path[MAX_PATH] = {};
+	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
+		{ out = "{\"ok\":false,\"error\":\"missing 'path' (project-relative, e.g. docs or design/story.md)\"}"; return; }
+	// the raw json value still carries its escaped separators
+	{
+		char* w = path;
+		for (const char* r = path; *r; ++r)
+			if (!(*r == '\\' && w > path && w[-1] == '\\')) *w++ = *r;
+		*w = 0;
+	}
+	// true unless told otherwise - the menu item it stands for excludes
+	const bool excluded = NqUtil::ArgBool(raw, "excluded", true);
+	xr_string err;
+	if (!SetExcluded(EditorProject::Root(), path, excluded, err))
+	{
+		out = "{\"ok\":false,\"error\":\"";
+		JsonAppend(out, err.c_str());
+		out += "\"}";
+		return;
+	}
+	out = "{\"ok\":true,\"exclude\":";
+	JsonAppendArray(out, Exclusions(EditorProject::Root()));
+	out += "}";
 }
 
 void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
@@ -3044,5 +3464,7 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 	JsonAppend(out, bake_note.c_str());
 	out += "\",\"warnings\":\"";
 	JsonAppend(out, warn.c_str());
-	out += "\"}";
+	out += "\",\"left_out\":";
+	JsonAppendArray(out, res.left_out);
+	out += "}";
 }

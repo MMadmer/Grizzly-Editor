@@ -53,6 +53,30 @@ you. If the target already holds files this project didn't put there (someone
 else's module sharing your id), the build stops and asks before deleting
 anything.
 
+**What ships.** The project folder is yours to work in: a git repository, design
+notes, reference pictures can all sit beside the mod. The build leaves out on its
+own everything version control and tools keep there - `.git`, `.gitignore`,
+`.github`, `.vscode`, `Thumbs.db`, `desktop.ini`, any name starting with a dot -
+at any depth, together with the editor's own folders (`releases`, `temp`,
+`backup`, ...) and the sources under `rawdata`. What else stays behind is your
+call: right-click a folder or a file in the Content Browser > **Exclude from
+Build** (the tile greys out and says why on hover), or list paths and patterns
+in **Mod → Edit Manifest… > Not shipped**:
+
+```
+docs              a folder, with everything in it
+design/story.md   one file
+*.psd             that name at any depth
+```
+
+The list is kept in `mod.ltx` under `[exclude]`, so it travels with the
+repository. Every build and every release says what it left out ("Not shipped:
+..."). A quest or a character inside an excluded folder is no part of the build -
+a half-written quest there cannot stop it. When the project is a git repository
+without a `.gitignore`, the editor writes one for its own files (`project.ltx`,
+`releases/`, the scratch folders) the first time it opens the project; yours is
+never touched.
+
 Other outputs, when you need them:
 
 - **Mod → Build to Another Folder…** — same module layout, arbitrary target.
@@ -254,7 +278,8 @@ them to the game's lists instead of overwriting anything:
 | `patch\<module>_characters.ltxp` | `+files` / `+specific_characters_files` — `+` APPENDS |
 
 Nothing of the game and nothing of another module is touched. Delete the
-`.npcasset` and the next build takes all of that back out.
+`.npcasset` and the next build takes all of that back out. The `.npcasset` itself
+stays in the project: it is the source, and the game reads what was generated.
 
 **The game knows the character as `<module>_<id>`**, and that one name is three
 things at once:

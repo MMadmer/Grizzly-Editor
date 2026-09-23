@@ -5,6 +5,7 @@
 #include "NqUtil.h"
 #include "NqCatalog.h"
 #include "../EditorProject.h"
+#include "../EditorModManifest.h"
 
 namespace
 {
@@ -66,9 +67,11 @@ namespace
 		return HashBytes(kFnvOffset, text.data(), text.size());
 	}
 
-	bool SkipEntry(LPCSTR name)
+	// the graphs of the project are the graphs its build ships: nothing from the
+	// editor's scratch, the sources, tooling or mod.ltx [exclude]
+	bool SkipEntry(LPCSTR root, LPCSTR rel)
 	{
-		return EditorProject::IsEditorOnlyEntry(name) || EditorProject::IsSourceOnlyEntry(name);
+		return EditorMod::OutsideBuild(root, rel);
 	}
 
 	const SDiskCache* FindCache(const xr_string& path_key, u64 content_hash)

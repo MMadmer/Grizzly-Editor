@@ -336,6 +336,8 @@ private:
 	void			CreateCharacter		();				// NewCharacter.npcasset in the folder now open
 	void			CreateBehaviour		();				// NewBehaviour.behasset in the folder now open
 	void			BeginRename			(LPCSTR path);	// inline edit on that tile
+	void			DrawBuildToggle		();				// Exclude from / Include in Build for the selection
+	static void		VeilTile			(const ImVec2& a, const ImVec2& b);
 	void			CommitRename		();
 	// Inline rename of a folder tile: the created folder starts here with its
 	// name fully selected, so typing replaces it - the usual file-manager flow.
