@@ -209,6 +209,8 @@ TOOLS = [
                        "The answer carries 'warnings': quest problems that did not stop the build "
                        "(a restrictor the quest names but nobody placed, a section the game does not have) - "
                        "a build with warnings shipped, but it probably does not do what the author meant. "
+                       "It also names every file the game cannot open: a character outside cp1251 in the name "
+                       "(the game reads modules through the cp1251 ANSI file APIs); such files ship all the same. "
                        "'left_out' lists what the build passed by, project-relative: tooling (.git, .gitignore, "
                        "Thumbs.db, ... at any depth), mod.ltx [exclude] entries and links. A target folder that is "
                        "a link, or that overlaps the project, is refused before anything is written.",

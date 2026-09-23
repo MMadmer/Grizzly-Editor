@@ -403,4 +403,10 @@ ECORE_API void EditorStartup::Finish()
 	for (int i = 0; i < s_StageCount; ++i)
 		Msg("*   %-28s %6.2f s  %7u reads %7u ops", s_Stages[i].name,
 			s_Stages[i].seconds, u32(s_Stages[i].reads), u32(s_Stages[i].ops));
+
+	// LevelEditor.manifest asks for UTF-8 narrow APIs; Windows before 1903 ignores
+	// that, and a garbled file name is then explained by this line
+	const UINT acp = ::GetACP();
+	if (acp == CP_UTF8)	Msg("* file names: UTF-8 (ANSI code page %u)", acp);
+	else				Msg("! file names: ANSI code page %u, not UTF-8 - a name it cannot hold does not open", acp);
 }

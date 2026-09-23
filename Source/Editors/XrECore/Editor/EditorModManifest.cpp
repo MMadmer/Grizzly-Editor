@@ -1672,6 +1672,33 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	}
 	if (left_out) *left_out = walk.left_out;
 
+	// The editor takes any name (its file APIs speak UTF-8); the game reads a module
+	// through the ANSI APIs of a cp1251 system, where a character cp1251 lacks comes
+	// back as '?' and the file never opens. It still ships - it is the author's.
+	{
+		xr_vector<xr_string> unreadable;
+		for (u32 i = 0; i < walk.files.size(); ++i)
+		{
+			xr_string bad;
+			if (!NqUtil::Cp1251Covers(walk.files[i].rel, bad))
+				unreadable.push_back(walk.files[i].rel + " (" + bad + ")");
+		}
+		for (u32 i = 0; i < unreadable.size(); ++i)
+			Msg("! [XMS] build: the game cannot open %s - a character outside cp1251", unreadable[i].c_str());
+		if (warnings && !unreadable.empty())
+		{
+			if (!warnings->empty()) *warnings += "\n";
+			*warnings += NqUtil::Format("file names the game cannot open (characters outside cp1251): %u",
+										u32(unreadable.size()));
+			for (u32 i = 0; i < unreadable.size() && i < 12; ++i)
+			{
+				*warnings += "\n  ";
+				*warnings += unreadable[i];
+			}
+			if (unreadable.size() > 12) *warnings += NqUtil::Format("\n  and %u more", u32(unreadable.size() - 12));
+		}
+	}
+
 	out_path = dst;
 	Msg("* [XMS] export %s: %d file(s) -> %s", flat ? "flat" : "module", files, dst);
 	return true;

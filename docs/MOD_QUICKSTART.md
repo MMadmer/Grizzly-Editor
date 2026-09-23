@@ -78,6 +78,13 @@ without a `.gitignore`, the editor writes one for its own files (`project.ltx`,
 `releases/`, the scratch folders) the first time it opens the project; yours is
 never touched.
 
+**File names.** Name files as you like, Cyrillic included: the editor shows,
+renames and ships every name as it is. The game, though, opens module files
+through the ANSI file functions of a Russian Windows (cp1251), and a character
+that code page lacks - `✓`, `é`, an emoji, CJK - comes back as `?`: that file
+never opens in the game. It still ships, and the build lists it under "file
+names the game cannot open".
+
 Other outputs, when you need them:
 
 - **Mod → Build to Another Folder…** — same module layout, arbitrary target.

@@ -497,6 +497,22 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   editor builds ITS OWN copies of some files from
   `Source/Editors/XrECore/Editor/` (example: D3DUtils.cpp lives in both
   places; the editor compiles the editor copy).
+- **The editor process speaks UTF-8.** `LevelEditor.manifest` sets the ANSI code
+  page to UTF-8 (`activeCodePage`, Windows 10 1903+), so every narrow Win32/CRT
+  call - `FindFirstFileA`, `MoveFileA`, `fopen` - takes and returns the same
+  UTF-8 that ImGui draws and MCP carries: a file name is one string from the disk
+  to the screen and back, Cyrillic or not. Never push a path through a fixed code
+  page. The GAME stays cp1251: text it reads (string tables, captions) is
+  converted explicitly (`NqUtil::Utf8ToCp1251` / `Cp1251ToUtf8`), never through
+  `CP_ACP`. The startup profile ends with the code page the process really got
+  (`file names: UTF-8`); anything else there explains a garbled name.
+- The game reads a module through the ANSI file APIs of a cp1251 system, where a
+  character cp1251 lacks comes back as `?`. So a module file whose name has one
+  still ships (it is the author's) but the build names it in its warnings
+  ("file names the game cannot open"). QA: `tools/qa/test_unicode_names.py
+  --project <project>` (a Cyrillic folder, a Cyrillic file, a name outside
+  cp1251, a Cyrillic quest: browser, rename box, rename to disk, quest list,
+  build, package and its index, the log's code page line).
 
 ## Icons for the editor's own assets
 

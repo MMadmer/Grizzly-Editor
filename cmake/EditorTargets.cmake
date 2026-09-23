@@ -161,7 +161,9 @@ set(LE_EXTERNAL
     # DetailManager_VS.cpp only declares them
     "${SRC}/XrRender/DX10/dx10DetailManager_VS.cpp"
     "${SRC}/XrRender/Private/stats_manager.cpp")
-add_executable(LevelEditor WIN32 ${LE_SRC} ${LE_EXTERNAL} "${ED}/LevelEditor/LevelEditor.rc")
+# the .manifest is merged into the embedded one by the linker: UTF-8 ANSI code page
+add_executable(LevelEditor WIN32 ${LE_SRC} ${LE_EXTERNAL} "${ED}/LevelEditor/LevelEditor.rc"
+    "${ED}/LevelEditor/LevelEditor.manifest")
 xray_common(LevelEditor)
 xray_editor_cxx20(LevelEditor)
 xray_msvc_pch(LevelEditor "stdafx.h" "${ED}/LevelEditor/stdafx.cpp")
