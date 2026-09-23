@@ -391,6 +391,26 @@ ID3D11ShaderResourceView* DX11TextureFromFile(LPCSTR full_path)
 	return DX11ViewFromRedImage(img);
 }
 
+bool DX11TextureSize(ID3D11ShaderResourceView* view, u32& w, u32& h)
+{
+	w = h = 0;
+	if (!view)	return false;
+	ID3D11Resource* res = 0;
+	view->GetResource(&res);
+	if (!res)	return false;
+	D3D11_RESOURCE_DIMENSION dim;
+	res->GetType(&dim);
+	if (D3D11_RESOURCE_DIMENSION_TEXTURE2D == dim)
+	{
+		D3D11_TEXTURE2D_DESC desc;
+		static_cast<ID3D11Texture2D*>(res)->GetDesc(&desc);
+		w = desc.Width;
+		h = desc.Height;
+	}
+	res->Release();
+	return w && h;
+}
+
 ID3D11ShaderResourceView* DX11TextureFromMemory(const void* data, u32 size)
 {
 	if (!data || !size)	return 0;

@@ -73,6 +73,9 @@ ECORE_API ID3D11ShaderResourceView* DX11TextureFromPixels(const u32* pixels, u32
 // export. Caller owns the returned view.
 ECORE_API ID3D11ShaderResourceView* DX11TextureFromFile		(LPCSTR full_path);
 ECORE_API ID3D11ShaderResourceView* DX11TextureFromMemory	(const void* data, u32 size);
+// the pixel size of the texture behind a view - what a rectangle given in pixels
+// (a UI texture description) is divided by to become UVs
+ECORE_API bool	DX11TextureSize			(ID3D11ShaderResourceView* view, u32& w, u32& h);
 
 //------------------------------------------------------------------------------
 // Whole-window capture.

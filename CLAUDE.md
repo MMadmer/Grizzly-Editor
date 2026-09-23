@@ -346,6 +346,22 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   its own (the base's community, or `stalker` without one). On the text / MCP
   path an unknown community is `W114`: the engine refuses such a character, but
   a module may bring a community of its own, so it is a warning.
+- The same for the rest of a character: `Visual` picks from `meshes\actors` of the
+  linked game and the project (Preview opens the model viewer - the viewer lives in
+  LevelEditor, reached through `EditorCharacters::SetModelPreview`), `Icon` shows
+  the portrait and opens a gallery of portraits, `Dialog` lists the dialogs
+  captioned with their first line, `Rank` names the linked game's ranks (Dead Air
+  counts to 14000 in eight names - never assume the 0-1000 of the old games) next
+  to the number, a kit row picks an item by its in-game name. The lists are
+  NqPickers types `dialog_id`, `character_icon` (extra = `sheet|x|y|w|h`) and
+  `rank` (extra = where it starts), plus the project's own dialogs and portraits;
+  a portrait sheet is one named like one (`ui_actor_portrets`, `ui_npc_*`) - from
+  any other sheet only the pictures a game character wears. The sheets are loaded
+  once per session and dropped with the project. Unknown values are `W115`
+  (portrait), `W116` (dialog), `W117` (kit item - the game stops when it spawns
+  an item it does not know, unless the module brings it). The default portrait is
+  `ui_inGame2_neutral_2`: the SoC `ui_npc_u_stalker_neutral_1` is no picture in
+  Dead Air Refined.
 - `npc.set_name` is NOT this. It renames an NPC at run time, for when the player
   learns who someone is; it needs no profile and changes nothing on disk.
 - QA: `tools/qa/test_characters.py --project <project>` runs the whole path over

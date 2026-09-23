@@ -174,6 +174,11 @@ namespace EditorCharacters
 	ECORE_API void		McpDelete	(LPCSTR raw, xr_string& out);
 
 	// -- UI ------------------------------------------------------------------
+	// The model viewer lives a layer above this dll, so the editor hands over the
+	// function that opens it on a model (meshes-relative, extension optional) - the
+	// window's Preview button next to the model.
+	typedef void (*TModelPreview)(LPCSTR visual);
+	ECORE_API void		SetModelPreview	(TModelPreview fn);
 	ECORE_API void		DrawUI		();
 	ECORE_API void		Show		();
 	ECORE_API void		Open		(LPCSTR path);		// from the content browser

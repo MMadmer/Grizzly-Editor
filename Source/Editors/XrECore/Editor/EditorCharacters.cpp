@@ -8,6 +8,7 @@
 #include "Nq/NqUtil.h"
 #include "Nq/NqPickers.h"
 #include "EditorFileOps.h"
+#include "EDX11Utils.h"
 
 namespace
 {
@@ -356,7 +357,8 @@ xr_string EditorCharacters::Template(LPCSTR id)
 	c.community	= "stalker";
 	c.name		= SNqValue::String("New character");
 	c.visual	= "actors\\stalker_neutral\\stalker_neutral_1";
-	c.icon		= "ui_npc_u_stalker_neutral_1";
+	// a loner's face of Dead Air Refined - the old SoC id is no picture there
+	c.icon		= "ui_inGame2_neutral_2";
 	c.has_rank	= true;
 	c.rank		= 300;
 	return Write(c);
@@ -600,6 +602,23 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 		!NqPickers::Known(NqPickers::tCommunity, c.community.c_str()))
 		problems.push_back("W114 " + where + ": the linked game has no community '" + c.community +
 			"' - the engine refuses a character of a community it does not know");
+
+	// Picked from lists, but the text and MCP path can name anything: what the linked
+	// game does not list is said. Warnings - a module may bring its own portrait,
+	// dialog or item, and the linked game knows nothing of those.
+	if (linked_game && NqPickers::Available())
+	{
+		if (!c.icon.empty() && !NqPickers::Known(NqPickers::tIcon, c.icon.c_str()))
+			problems.push_back("W115 " + where + ": no portrait '" + c.icon +
+				"' in the linked game or the project - the player sees an empty frame");
+		if (!c.start_dialog.empty() && !NqPickers::Known(NqPickers::tDialog, c.start_dialog.c_str()))
+			problems.push_back("W116 " + where + ": no dialog '" + c.start_dialog +
+				"' in the linked game or the project");
+		for (u32 i = 0; i < c.supplies.size(); ++i)
+			if (!c.supplies[i].section.empty() && !NqPickers::Known(NqPickers::tItem, c.supplies[i].section.c_str()))
+				problems.push_back("W117 " + where + ": the linked game has no item '" + c.supplies[i].section +
+					"' - right only when the module brings that section, otherwise the game stops when the NPC spawns");
+	}
 
 	// A text that cp1251 cannot carry silently loses characters in game: the
 	// string table, like every other game config, is cp1251.
@@ -1236,6 +1255,323 @@ bool CommunityCombo()
 	return picked;
 }
 
+// ---- pickers -----------------------------------------------------------------
+// One picker popup is open at a time, so they share the filter.
+char							s_Filter[96]	= "";
+EditorCharacters::TModelPreview	s_ModelPreview	= 0;
+
+// ASCII and Cyrillic folded to lower case: what the author types is matched against
+// ids and against the captions the player reads
+void Fold(LPCSTR text, xr_string& out)
+{
+	out.clear();
+	if (!text)	return;
+	for (const u8* p = (const u8*)text; *p; ++p)
+	{
+		const u8 c = *p;
+		if (c >= 'A' && c <= 'Z')	{ out += char(c + 0x20); continue; }
+		if (c == 0xD0 && p[1])
+		{
+			const u8 d = p[1];
+			if (d == 0x81)					{ out += char(0xD1); out += char(0x91); ++p; continue; }
+			if (d >= 0x90 && d <= 0x9F)		{ out += char(0xD0); out += char(d + 0x20); ++p; continue; }
+			if (d >= 0xA0 && d <= 0xAF)		{ out += char(0xD1); out += char(d - 0x20); ++p; continue; }
+		}
+		out += char(c);
+	}
+}
+
+bool Matches(const NqPickers::SEntry& e, const xr_string& query)
+{
+	if (query.empty())	return true;
+	xr_string f;
+	Fold(e.id.c_str(), f);
+	if (f.find(query) != xr_string::npos)	return true;
+	Fold(e.name.c_str(), f);
+	return f.find(query) != xr_string::npos;
+}
+
+// the entry with that id - the lists come sorted by id
+const NqPickers::SEntry* FindEntry(const xr_vector<NqPickers::SEntry>& list, LPCSTR id)
+{
+	if (!id || !id[0])	return 0;
+	const xr_string key = id;
+	xr_vector<NqPickers::SEntry>::const_iterator it = std::lower_bound(list.begin(), list.end(), key,
+		[](const NqPickers::SEntry& e, const xr_string& k) { return e.id < k; });
+	return (it != list.end() && it->id == key) ? &*it : 0;
+}
+
+// A combo over a long list: a filter on top, only the rows in view drawn. The field
+// shows "id - caption"; a value the list does not hold stays and is marked, never
+// replaced - the text path may name what only the module brings.
+bool ListPicker(LPCSTR label, char* buf, u32 size, const xr_vector<NqPickers::SEntry>& list, LPCSTR none, float width)
+{
+	const NqPickers::SEntry* cur = FindEntry(list, buf);
+	xr_string preview = buf[0] ? xr_string(buf) : xr_string(none ? none : "");
+	if (cur && !cur->name.empty())	preview += "  -  " + cur->name;
+	const bool unknown = buf[0] && !cur && !list.empty();
+	bool picked = false;
+	ImGui::SetNextItemWidth(width);
+	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .8f, .35f, 1.f));
+	const bool open = ImGui::BeginCombo(label, preview.c_str(), ImGuiComboFlags_HeightLarge);
+	if (unknown)	ImGui::PopStyleColor();
+	if (unknown && !open && ImGui::IsItemHovered())
+		ImGui::SetTooltip("'%s' is not in the linked game or the project - kept as written", buf);
+	if (!open)	return false;
+
+	if (ImGui::IsWindowAppearing())	{ s_Filter[0] = 0; ImGui::SetKeyboardFocusHere(); }
+	ImGui::SetNextItemWidth(-1.f);
+	ImGui::InputTextWithHint("##filter", "type to filter", s_Filter, sizeof(s_Filter));
+	if (none && ImGui::Selectable(none, !buf[0]))	{ buf[0] = 0; picked = true; }
+	xr_string query;
+	Fold(s_Filter, query);
+	static xr_vector<u32> shown;
+	shown.clear();
+	for (u32 i = 0; i < list.size(); ++i)
+		if (Matches(list[i], query))	shown.push_back(i);
+	ImGuiListClipper clip;
+	clip.Begin((int)shown.size());
+	while (clip.Step())
+		for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r)
+		{
+			const NqPickers::SEntry& e = list[shown[r]];
+			ImGui::PushID(r);
+			if (ImGui::Selectable(e.id.c_str(), e.id == buf))	{ CopyTo(buf, size, e.id); picked = true; }
+			if (!e.name.empty())
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("%s", e.name.c_str());
+			}
+			ImGui::PopID();
+		}
+	if (shown.empty())	ImGui::TextDisabled("nothing matches");
+	ImGui::EndCombo();
+	return picked;
+}
+
+// ---- portraits ------------------------------------------------------------------
+// A portrait is a rectangle of a sheet that holds a hundred of them: every sheet is
+// loaded once, the first time a face on it is shown, and kept for the session.
+struct SSheet
+{
+	ID3D11ShaderResourceView*	view;
+	u32							w, h;
+	bool						tried;
+	SSheet() : view(0), w(0), h(0), tried(false) {}
+};
+xr_map<xr_string, SSheet>	s_Sheets;
+xr_string					s_SheetsRoot;
+
+void DropSheets()
+{
+	for (xr_map<xr_string, SSheet>::iterator it = s_Sheets.begin(); it != s_Sheets.end(); ++it)
+		if (it->second.view)	it->second.view->Release();
+	s_Sheets.clear();
+}
+
+// extra = "[project:]<sheet>|x|y|w|h", the sheet below textures\ of the game or the project
+bool Portrait(const NqPickers::SEntry& e, ImTextureID& tex, ImVec2& uv0, ImVec2& uv1)
+{
+	xr_string extra = e.extra;
+	const bool project = 0 == extra.compare(0, 8, "project:");
+	if (project)	extra.erase(0, 8);
+	xr_vector<xr_string> part;
+	NqUtil::Split(extra.c_str(), '|', part);
+	if (part.size() != 5)	return false;
+	SSheet& s = s_Sheets[(project ? "p|" : "g|") + part[0]];
+	if (!s.tried)
+	{
+		s.tried = true;
+		if (project)
+		{
+			string_path abs;
+			sprintf_s(abs, "%s\\gamedata\\textures\\%s.dds", EditorProject::Root(), part[0].c_str());
+			s.view = DX11TextureFromFile(abs);
+		}
+		else
+		{
+			xr_string rel = "textures\\" + part[0] + ".dds";
+			xr_strlwr(&rel[0]);
+			const int idx = EditorGameContent::Find(rel.c_str());
+			u32 size = 0;
+			u8* bytes = (idx >= 0) ? EditorGameContent::ReadBytes(idx, size) : 0;
+			if (bytes)
+			{
+				s.view = DX11TextureFromMemory(bytes, size);
+				EditorGameContent::FreeBytes(bytes);
+			}
+		}
+		if (s.view)	DX11TextureSize(s.view, s.w, s.h);
+	}
+	if (!s.view || !s.w || !s.h)	return false;
+	const float x = (float)atof(part[1].c_str()), y = (float)atof(part[2].c_str());
+	const float w = (float)atof(part[3].c_str()), h = (float)atof(part[4].c_str());
+	tex = (ImTextureID)s.view;
+	uv0 = ImVec2(x / s.w, y / s.h);
+	uv1 = ImVec2((x + w) / s.w, (y + h) / s.h);
+	return true;
+}
+
+// The face the player sees, beside a gallery of every face the linked game and the
+// project have. Picked by looking, not by remembering ui_inGame2_neutral_2_mask.
+bool IconPicker(char* buf, u32 size, float em)
+{
+	const xr_vector<NqPickers::SEntry>& list = NqPickers::Index(NqPickers::tIcon);
+	const NqPickers::SEntry* cur = FindEntry(list, buf);
+	const ImVec2 face(em * 5.4f, em * 3.8f);
+	ImTextureID tex = 0;
+	ImVec2 uv0, uv1;
+	if (cur && Portrait(*cur, tex, uv0, uv1))	ImGui::Image(tex, face, uv0, uv1);
+	else
+	{
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(face);
+		ImGui::GetWindowDrawList()->AddRect(at, ImVec2(at.x + face.x, at.y + face.y),
+			ImGui::GetColorU32(ImGuiCol_Border), 3.f);
+	}
+	if (ImGui::IsItemHovered())	ImGui::SetTooltip("%s", buf[0] ? buf : "no portrait");
+	ImGui::SameLine();
+
+	const bool unknown = buf[0] && !cur && !list.empty();
+	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .8f, .35f, 1.f));
+	ImGui::SetNextItemWidth(-1.f);
+	const bool open = ImGui::BeginCombo("##icon", buf[0] ? buf : "(none)", ImGuiComboFlags_HeightLargest);
+	if (unknown)	ImGui::PopStyleColor();
+	if (!open)	return false;
+
+	bool picked = false;
+	if (ImGui::IsWindowAppearing())	{ s_Filter[0] = 0; ImGui::SetKeyboardFocusHere(); }
+	ImGui::SetNextItemWidth(-1.f);
+	ImGui::InputTextWithHint("##filter", "type to filter", s_Filter, sizeof(s_Filter));
+	if (ImGui::Selectable("(none)", !buf[0]))	{ buf[0] = 0; picked = true; }
+	xr_string query;
+	Fold(s_Filter, query);
+	static xr_vector<u32> shown;
+	shown.clear();
+	for (u32 i = 0; i < list.size(); ++i)
+		if (Matches(list[i], query))	shown.push_back(i);
+
+	// a gallery: as many columns as fit, only the rows in view drawn
+	const ImGuiStyle& st = ImGui::GetStyle();
+	const ImVec2 cell(em * 6.2f, em * 4.4f);
+	const int cols = _max(1, int((ImGui::GetContentRegionAvail().x + st.ItemSpacing.x) /
+								(cell.x + st.FramePadding.x * 2.f + st.ItemSpacing.x)));
+	ImGuiListClipper clip;
+	clip.Begin((int(shown.size()) + cols - 1) / cols, cell.y + st.FramePadding.y * 2.f + st.ItemSpacing.y);
+	while (clip.Step())
+		for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r)
+			for (int c = 0; c < cols; ++c)
+			{
+				const int n = r * cols + c;
+				if (n >= (int)shown.size())	break;
+				const NqPickers::SEntry& e = list[shown[n]];
+				if (c)	ImGui::SameLine();
+				ImGui::PushID(n);
+				const bool clicked = Portrait(e, tex, uv0, uv1)
+					? ImGui::ImageButton("##face", tex, cell, uv0, uv1)
+					: ImGui::Button(e.id.c_str(), ImVec2(cell.x + st.FramePadding.x * 2.f, cell.y + st.FramePadding.y * 2.f));
+				if (clicked)	{ CopyTo(buf, size, e.id); picked = true; ImGui::CloseCurrentPopup(); }
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("%s%s", e.id.c_str(), 0 == e.extra.compare(0, 8, "project:") ? "\nthe project's" : "");
+				if (e.id == buf)
+					ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+						ImGui::GetColorU32(ImGuiCol_CheckMark), 3.f, 0, 2.f);
+				ImGui::PopID();
+			}
+	if (shown.empty())	ImGui::TextDisabled("nothing matches");
+	ImGui::EndCombo();
+	return picked;
+}
+
+// ---- models -------------------------------------------------------------------------
+// NPC models: meshes\actors of the linked game and of the project, spelled the way the
+// field wants them - below meshes\, no extension
+xr_vector<NqPickers::SEntry>	s_Visuals;
+xr_string						s_VisualsFor;
+
+const xr_vector<NqPickers::SEntry>& Visuals()
+{
+	const xr_string key = NqUtil::Format("%s|%d", EditorProject::Active() ? EditorProject::Root() : "",
+		EditorGameContent::Mounted() ? EditorGameContent::Count() : -1);
+	if (key == s_VisualsFor)	return s_Visuals;
+	s_VisualsFor = key;
+	s_Visuals.clear();
+	xr_set<xr_string> seen;
+	if (EditorGameContent::Mounted())
+	{
+		const int total = EditorGameContent::Count();
+		for (int i = 0; i < total; ++i)
+		{
+			const EditorGameContent::SItem* it = EditorGameContent::Get(i);
+			if (!it || it->path.size() < 19 || 0 != _strnicmp(it->path.c_str(), "meshes\\actors\\", 14))	continue;
+			if (0 != _stricmp(it->path.c_str() + it->path.size() - 4, ".ogf"))	continue;
+			NqPickers::SEntry e;
+			e.id = it->path.substr(7, it->path.size() - 7 - 4);
+			if (seen.insert(e.id).second)	s_Visuals.push_back(e);
+		}
+	}
+	if (EditorProject::Active())
+	{
+		string_path dir;
+		sprintf_s(dir, "%s\\gamedata\\meshes\\actors", EditorProject::Root());
+		xr_vector<xr_string> files;
+		NqUtil::ListFiles(dir, ".ogf", files);
+		const size_t cut = xr_strlen(EditorProject::Root()) + xr_strlen("\\gamedata\\meshes\\");
+		for (u32 i = 0; i < files.size(); ++i)
+		{
+			if (files[i].size() <= cut + 4)	continue;
+			NqPickers::SEntry e;
+			e.id = files[i].substr(cut, files[i].size() - cut - 4);
+			xr_strlwr(&e.id[0]);
+			e.name = "the project's";
+			if (seen.insert(e.id).second)	s_Visuals.push_back(e);
+		}
+	}
+	std::sort(s_Visuals.begin(), s_Visuals.end(),
+		[](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });
+	return s_Visuals;
+}
+
+// ---- ranks --------------------------------------------------------------------------
+// The linked game's ranks in its own words, lowest first, and the number kept beside
+// them: Dead Air counts to 14000, not the 1000 of the old games.
+bool RankPicker(int& rank, bool& has_rank)
+{
+	const xr_vector<NqPickers::SEntry>& all = NqPickers::Index(NqPickers::tRank);
+	xr_vector<const NqPickers::SEntry*> ranks;
+	for (u32 i = 0; i < all.size(); ++i)	ranks.push_back(&all[i]);
+	std::sort(ranks.begin(), ranks.end(), [](const NqPickers::SEntry* a, const NqPickers::SEntry* b)
+		{ return atoi(a->extra.c_str()) < atoi(b->extra.c_str()); });
+	if (ranks.empty())	return false;
+
+	int cur = -1;
+	for (u32 i = 0; i < ranks.size(); ++i)
+		if (rank >= atoi(ranks[i]->extra.c_str()))	cur = (int)i;
+	xr_string preview = !has_rank ? xr_string("(not set)")
+					  : cur < 0 ? xr_string("?")
+					  : (ranks[cur]->name.empty() ? ranks[cur]->id : ranks[cur]->name + "  (" + ranks[cur]->id + ")");
+	bool picked = false;
+	if (ImGui::BeginCombo("##rankname", preview.c_str()))
+	{
+		for (u32 i = 0; i < ranks.size(); ++i)
+		{
+			const int from = atoi(ranks[i]->extra.c_str());
+			const int to = (i + 1 < ranks.size()) ? atoi(ranks[i + 1]->extra.c_str()) - 1 : -1;
+			const xr_string item = (ranks[i]->name.empty() ? ranks[i]->id : ranks[i]->name + "  (" + ranks[i]->id + ")") +
+				(to >= 0 ? NqUtil::Format("   %d-%d", from, to) : NqUtil::Format("   %d+", from));
+			if (ImGui::Selectable(item.c_str(), has_rank && (int)i == cur))
+			{
+				// the number stays when it already is that rank
+				if (!has_rank || (int)i != cur)	rank = from;
+				has_rank = true;
+				picked = true;
+			}
+		}
+		ImGui::EndCombo();
+	}
+	return picked;
+}
+
 // Another character of the project to start from: picked from the ones that exist,
 // because a base that does not is E111 and nothing else.
 bool BaseCombo()
@@ -1383,9 +1719,19 @@ void EditorCharacters::Open(LPCSTR path)
 	s_PendingOpen	= path ? path : "";
 }
 
+void EditorCharacters::SetModelPreview(TModelPreview fn)	{ s_ModelPreview = fn; }
+
 void EditorCharacters::DrawUI()
 {
 	DrawDeleteConfirm();
+	// portraits of one project are not the next one's; dropped before anything of
+	// this frame can reference them
+	const xr_string root = EditorProject::Active() ? EditorProject::Root() : "";
+	if (root != s_SheetsRoot)
+	{
+		DropSheets();
+		s_SheetsRoot = root;
+	}
 	if (!s_Open)	return;
 
 	if (!EditorProject::Active())
@@ -1438,7 +1784,7 @@ void EditorCharacters::DrawUI()
 		c.community	= "stalker";
 		c.name		= SNqValue::String("New character");
 		c.visual	= "actors\\stalker_neutral\\stalker_neutral_1";
-		c.icon		= "ui_npc_u_stalker_neutral_1";
+		c.icon		= "ui_inGame2_neutral_2";
 		c.has_rank	= true;
 		c.rank		= 300;
 		s_Edit		= c;
@@ -1455,7 +1801,14 @@ void EditorCharacters::DrawUI()
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
-	if (ImGui::Button("Reload"))	s_NeedReload = true;
+	if (ImGui::Button("Reload"))
+	{
+		s_NeedReload = true;
+		// the project's own dialogs, portraits and models may have changed on disk
+		NqPickers::Invalidate();
+		s_VisualsFor.clear();
+		DropSheets();
+	}
 	ImGui::SameLine();
 	ImGui::BeginDisabled(s_Edit.file.empty());
 	if (ImGui::Button("Delete..."))	s_WantDelete = true;
@@ -1538,19 +1891,32 @@ void EditorCharacters::DrawUI()
 		ImGui::SetTooltip("The communities of the linked game. Not set: the base's, or stalker without one.");
 
 	ImGui::Text("Visual");		ImGui::SameLine(label_w);
-	if (ImGui::InputText("##visual", s_Visual, sizeof(s_Visual)))	changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Meshes-relative, extension optional.");
+	{
+		const ImGuiStyle& st = ImGui::GetStyle();
+		const float button = ImGui::CalcTextSize("Preview").x + st.FramePadding.x * 2.f + st.ItemSpacing.x;
+		if (ListPicker("##visual", s_Visual, sizeof(s_Visual), Visuals(),
+				s_Edit.base.empty() ? "(not set)" : "(from the base)", -button))
+			changed = true;
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("The model it spawns with and keeps: meshes\\actors of the linked game and the project.");
+		ImGui::SameLine();
+		ImGui::BeginDisabled(!s_ModelPreview || !s_Visual[0]);
+		if (ImGui::Button("Preview"))	s_ModelPreview(s_Visual);
+		ImGui::EndDisabled();
+	}
 
 	ImGui::Text("Icon");		ImGui::SameLine(label_w);
-	if (ImGui::InputText("##icon", s_Icon, sizeof(s_Icon)))		changed = true;
+	if (IconPicker(s_Icon, sizeof(s_Icon), em))	changed = true;
 
 	ImGui::Text("Rank");		ImGui::SameLine(label_w);
+	ImGui::PushItemWidth(em * 14.f);
+	if (RankPicker(s_Edit.rank, s_Edit.has_rank))	changed = true;
+	ImGui::PopItemWidth();
+	ImGui::SameLine();
 	ImGui::PushItemWidth(em * 6.f);
 	if (ImGui::InputInt("##rank", &s_Edit.rank, 0, 0))	{ changed = true; s_Edit.has_rank = true; }
 	ImGui::PopItemWidth();
-	ImGui::SameLine();
-	ImGui::TextDisabled("0-1000, novice to master");
+	if (ImGui::IsItemHovered())	ImGui::SetTooltip("The exact value; the name beside it follows the linked game's ranks.");
 
 	ImGui::Text("Money");		ImGui::SameLine(label_w);
 	if (ImGui::Checkbox("##hasmoney", &s_Edit.has_money))	changed = true;
@@ -1575,8 +1941,10 @@ void EditorCharacters::DrawUI()
 						  "character with spawn.squad as well as with spawn.object.");
 
 	ImGui::Text("Dialog");		ImGui::SameLine(label_w);
-	if (ImGui::InputText("##dialog", s_Dialog, sizeof(s_Dialog)))	changed = true;
-	if (ImGui::IsItemHovered())	ImGui::SetTooltip("start_dialog of the character (optional).");
+	if (ListPicker("##dialog", s_Dialog, sizeof(s_Dialog), NqPickers::Index(NqPickers::tDialog), "(none)", -1.f))
+		changed = true;
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("The dialog it opens with (start_dialog). Captioned with its first line.");
 
 	ImGui::PopItemWidth();
 
@@ -1590,9 +1958,12 @@ void EditorCharacters::DrawUI()
 		changed = true;
 	}
 	// what the base already gives: shown, not editable, and not repeated below
+	const xr_vector<NqPickers::SEntry>& items = NqPickers::Index(NqPickers::tItem);
 	for (u32 i = 0; i < s_Inherited.size(); ++i)
 	{
-		ImGui::TextDisabled("%s x%d", s_Inherited[i].section.c_str(), s_Inherited[i].count);
+		const NqPickers::SEntry* it = FindEntry(items, s_Inherited[i].section.c_str());
+		ImGui::TextDisabled("%s%s%s x%d", s_Inherited[i].section.c_str(), (it && !it->name.empty()) ? "  -  " : "",
+			(it && !it->name.empty()) ? it->name.c_str() : "", s_Inherited[i].count);
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("from %s - add a row with the same section to change the count,\n"
 							  "or a count of 0 to take it out", s_Edit.base.c_str());
@@ -1604,13 +1975,11 @@ void EditorCharacters::DrawUI()
 		ImGui::PushID((int)i);
 		char section[128];
 		CopyTo(section, sizeof(section), s_Edit.supplies[i].section);
-		ImGui::PushItemWidth(em * 16.f);
-		if (ImGui::InputText("##sect", section, sizeof(section)))
+		if (ListPicker("##sect", section, sizeof(section), items, 0, em * 22.f))
 		{
 			s_Edit.supplies[i].section = section;
 			changed = true;
 		}
-		ImGui::PopItemWidth();
 		ImGui::SameLine();
 		ImGui::PushItemWidth(em * 5.f);
 		if (ImGui::InputInt("##count", &s_Edit.supplies[i].count, 0, 0))	changed = true;

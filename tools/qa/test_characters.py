@@ -94,7 +94,7 @@ COURIER = """return {
     bio       = "QA character",
     community = "stalker",
     visual    = "actors\\\\stalker_neutral\\\\stalker_neutral_1",
-    icon      = "ui_npc_u_stalker_neutral_1",
+    icon      = "ui_inGame2_neutral_2",
     rank      = 300,
     money     = { min = 500, max = 1500 },
     supplies  = {
@@ -410,6 +410,22 @@ def run(project: str) -> None:
                   "B a community the linked game does not list is a warning that names it", odd_problems)
             check("W114" not in " ".join(w.get("problems", [])), "B and one it does list is not")
         mcp("characters_delete", id="qa_martian")
+
+        # the window picks portraits, dialogs and items from lists; the text path can name
+        # anything, and what the linked game does not have is said - the old SoC portrait id
+        # is the classic: no picture in Dead Air Refined
+        odd = mcp("characters_write", text=COURIER.replace('"qa_courier"', '"qa_oddlooks"')
+                  .replace('"ui_inGame2_neutral_2"', '"ui_npc_u_stalker_neutral_1"')
+                  .replace('rank      = 300,', 'rank      = 300,\n    start_dialog = "qa_no_such_dialog",')
+                  .replace('supplies  = {', 'supplies  = {\n        { section = "qa_no_such_item" },'))
+        odd_problems = " ".join(odd.get("problems", []))
+        if mcp("quest_lookup", type="character_icon", limit=5).get("entries"):
+            check("W115" in odd_problems, "B a portrait the linked game does not have is a warning", odd_problems)
+            check("W116" in odd_problems, "B and so is a dialog", odd_problems)
+            check("W117" in odd_problems and "qa_no_such_item" in odd_problems, "B and an item of the kit", odd_problems)
+            check(not any(c in " ".join(w.get("problems", [])) for c in ("W115", "W116", "W117")),
+                  "B while a character made of what the game has gets none of them")
+        mcp("characters_delete", id="qa_oddlooks")
 
         # ---------------------------------------------------------------- C: the build
         built = mcp("mod_export", target=out_dir)

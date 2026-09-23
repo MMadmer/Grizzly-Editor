@@ -30,7 +30,12 @@ namespace
 	{
 		"item_section", "squad_section", "level", "smart", "story_id", "profile", "community", "info", "spot_type",
 		"restrictor", "spawn_section",
+		"dialog_id", "character_icon", "rank",
 	};
+
+	// the portraits the game's own characters wear: which texture sheets are
+	// portrait sheets is read off the game, not guessed from file names alone
+	xr_set<xr_string>				s_UsedIcons;
 
 	xr_string CurrentKey()
 	{
@@ -372,6 +377,15 @@ namespace
 			if (text.empty()) continue;
 			xr_vector<std::pair<xr_string, size_t> > ids;
 			ScanIds(text, "specific_character", ids);
+			// every portrait a character of the game wears
+			for (size_t at = text.find("<icon>"); at != xr_string::npos; at = text.find("<icon>", at + 6))
+			{
+				const size_t end = text.find("</icon>", at);
+				if (end == xr_string::npos) break;
+				xr_string icon = NqUtil::Trim(text.substr(at + 6, end - at - 6));
+				xr_strlwr(&icon[0]);
+				if (!icon.empty()) s_UsedIcons.insert(icon);
+			}
 			for (u32 i = 0; i < ids.size(); ++i)
 			{
 				// <name>string_id</name> right after the tag; the string table turns it into a caption
@@ -391,6 +405,172 @@ namespace
 				}
 				Add(NqPickers::tProfile, ids[i].first, name, files[f]);
 			}
+		}
+	}
+
+	// A dialog, captioned with the first line it says: "hello_dialog" and a hundred
+	// others are then told apart by what the player reads, not by an id alone.
+	void AddDialogs(const xr_string& text, const TStrings& st, const xr_string& extra)
+	{
+		xr_vector<std::pair<xr_string, size_t> > ids;
+		ScanIds(text, "dialog", ids);
+		for (u32 i = 0; i < ids.size(); ++i)
+		{
+			const size_t end = (i + 1 < ids.size()) ? ids[i + 1].second : text.size();
+			xr_string caption;
+			const size_t t = text.find("<text>", ids[i].second);
+			if (t != xr_string::npos && t < end)
+			{
+				const size_t te = text.find("</text>", t);
+				if (te != xr_string::npos && te < end)
+				{
+					const xr_string key = NqUtil::Trim(text.substr(t + 6, te - t - 6));
+					caption = Caption(st, key);
+					if (caption.empty()) caption = NqUtil::Cp1251ToUtf8(key.c_str());
+					caption = NqUtil::ClipUtf8(caption, 64);
+				}
+			}
+			Add(NqPickers::tDialog, ids[i].first, caption, extra);
+		}
+	}
+
+	void BuildDialogs(const TStrings& st)
+	{
+		if (!pSettings || !pSettings->section_exist("dialogs") || !pSettings->line_exist("dialogs", "files")) return;
+		xr_vector<xr_string> files;
+		NqUtil::Split(pSettings->r_string("dialogs", "files"), ',', files);
+		for (u32 f = 0; f < files.size(); ++f)
+		{
+			string_path rel;
+			sprintf_s(rel, "configs\\gameplay\\%s.xml", files[f].c_str());
+			const xr_string text = ReadGameText(rel);
+			if (!text.empty()) AddDialogs(text, st, files[f]);
+		}
+	}
+
+	// value of `name="..."` inside one tag, "" when it is not there
+	xr_string TagAttr(const xr_string& tag, LPCSTR name)
+	{
+		const xr_string key = xr_string(name) + "=\"";
+		for (size_t at = tag.find(key); at != xr_string::npos; at = tag.find(key, at + 1))
+		{
+			// a whole attribute name, not the tail of a longer one
+			if (at && tag[at - 1] != ' ' && tag[at - 1] != '\t' && tag[at - 1] != '\n' && tag[at - 1] != '\r') continue;
+			const size_t b = at + key.size();
+			const size_t e = tag.find('"', b);
+			return (e == xr_string::npos) ? xr_string() : tag.substr(b, e - b);
+		}
+		return xr_string();
+	}
+
+	// One texture description: every <texture> with the sheet it is cut from and its
+	// rectangle, comments dropped (the game's own files keep dead lines in them).
+	struct SSheetTexture { xr_string id, sheet; int x, y, w, h; };
+	void ReadTextureDescr(const xr_string& raw, xr_vector<SSheetTexture>& out)
+	{
+		xr_string text;
+		for (size_t pos = 0; pos < raw.size();)
+		{
+			const size_t c = raw.find("<!--", pos);
+			if (c == xr_string::npos) { text += raw.substr(pos); break; }
+			text += raw.substr(pos, c - pos);
+			const size_t ce = raw.find("-->", c + 4);
+			pos = (ce == xr_string::npos) ? raw.size() : ce + 3;
+		}
+		xr_string sheet;
+		for (size_t pos = 0;;)
+		{
+			const size_t f = text.find("<file", pos), t = text.find("<texture", pos);
+			if (f == xr_string::npos && t == xr_string::npos) break;
+			const size_t at = (f != xr_string::npos && (t == xr_string::npos || f < t)) ? f : t;
+			const size_t gt = text.find('>', at);
+			if (gt == xr_string::npos) break;
+			const xr_string tag = text.substr(at, gt - at);
+			pos = gt + 1;
+			if (at == f) { sheet = TagAttr(tag, "name"); continue; }
+			SSheetTexture e;
+			e.id = TagAttr(tag, "id");
+			e.sheet = sheet;
+			e.x = atoi(TagAttr(tag, "x").c_str());
+			e.y = atoi(TagAttr(tag, "y").c_str());
+			e.w = atoi(TagAttr(tag, "width").c_str());
+			e.h = atoi(TagAttr(tag, "height").c_str());
+			if (!e.id.empty() && !e.sheet.empty() && e.w > 0 && e.h > 0) out.push_back(e);
+		}
+	}
+
+	xr_string IconExtra(const SSheetTexture& t, bool project)
+	{
+		return NqUtil::Format("%s%s|%d|%d|%d|%d", project ? "project:" : "", t.sheet.c_str(), t.x, t.y, t.w, t.h);
+	}
+
+	// Portraits. The descriptions hold every button and frame of the UI as well, so
+	// a sheet named like a portrait sheet (ui_actor_portrets, ui_npc_*) gives all of
+	// its pictures, and any other sheet only those a character of the game wears -
+	// a task icon sheet one story NPC borrows a face from is not a gallery.
+	void BuildIcons()
+	{
+		const LPCSTR prefix = "configs\\ui\\textures_descr\\";
+		const size_t plen = xr_strlen(prefix);
+		const int total = EditorGameContent::Count();
+		for (int i = 0; i < total; ++i)
+		{
+			const EditorGameContent::SItem* it = EditorGameContent::Get(i);
+			if (!it || 0 != _strnicmp(it->path.c_str(), prefix, plen)) continue;
+			if (it->path.size() < 4 || 0 != _stricmp(it->path.c_str() + it->path.size() - 4, ".xml")) continue;
+			LPCSTR leaf = it->path.c_str() + plen;
+			u32 size = 0;
+			u8* bytes = EditorGameContent::ReadBytes(i, size);
+			if (!bytes) continue;
+			xr_string raw;
+			raw.assign((const char*)bytes, (const char*)bytes + size);
+			EditorGameContent::FreeBytes(bytes);
+			xr_vector<SSheetTexture> all;
+			ReadTextureDescr(raw, all);
+			const bool sheet = 0 == _strnicmp(leaf, "ui_actor_portrets", 17) || 0 == _strnicmp(leaf, "ui_npc_", 7);
+			for (u32 t = 0; t < all.size(); ++t)
+			{
+				xr_string key = all[t].id;
+				xr_strlwr(&key[0]);
+				if (sheet || s_UsedIcons.count(key))
+					Add(NqPickers::tIcon, all[t].id, xr_string(), IconExtra(all[t], false));
+			}
+		}
+	}
+
+	// The game's ranks, in its own words: [game_relations] rating = novice, 499,
+	// trainee, 1499, ... is a name and the value where the NEXT one begins, and
+	// rating_names gives the string ids the player reads.
+	void BuildRanks(const TStrings& st)
+	{
+		const xr_string text = ReadGameText("configs\\creatures\\game_relations.ltx");
+		xr_string rating, names, sect;
+		size_t pos = 0;
+		while (pos < text.size())
+		{
+			size_t eol = text.find('\n', pos);
+			if (eol == xr_string::npos) eol = text.size();
+			xr_string line = NqUtil::Trim(text.substr(pos, eol - pos));
+			pos = eol + 1;
+			const size_t sc = line.find(';');
+			if (sc != xr_string::npos) line = NqUtil::Trim(line.substr(0, sc));
+			if (line.empty()) continue;
+			if (line[0] == '[') { const size_t c = line.find(']'); sect = line.substr(1, c == xr_string::npos ? xr_string::npos : c - 1); continue; }
+			if (sect != "game_relations") continue;
+			const size_t eq = line.find('=');
+			if (eq == xr_string::npos) continue;
+			const xr_string key = NqUtil::Trim(line.substr(0, eq));
+			if (key == "rating")			rating = line.substr(eq + 1);
+			else if (key == "rating_names")	names = line.substr(eq + 1);
+		}
+		xr_vector<xr_string> r, n;
+		NqUtil::Split(rating.c_str(), ',', r);
+		NqUtil::Split(names.c_str(), ',', n);
+		for (u32 i = 0; i < r.size(); i += 2)
+		{
+			const int from = (i == 0) ? 0 : atoi(r[i - 1].c_str());
+			const xr_string caption = (i < n.size()) ? Caption(st, n[i]) : xr_string();
+			Add(NqPickers::tRank, r[i], caption, NqUtil::Format("%d", from));
 		}
 	}
 
@@ -556,6 +736,34 @@ namespace
 	}
 
 	// [story_object] story_id = ... inside the project's spawn\custom_data\*.ltx
+	// The module's own dialogs and portraits: a story mod brings both, and its
+	// characters are picked from them like from the game's
+	void BuildProjectLooks()
+	{
+		if (!EditorProject::Active()) return;
+		TStrings none;
+		string_path dir;
+		xr_vector<xr_string> files;
+		sprintf_s(dir, "%s\\gamedata\\configs\\gameplay", EditorProject::Root());
+		NqUtil::ListFiles(dir, ".xml", files);
+		for (u32 f = 0; f < files.size(); ++f)
+		{
+			xr_string text;
+			if (ReadTextFile(files[f].c_str(), 8 << 20, text) && text.find("<dialog") != xr_string::npos)
+				AddDialogs(text, none, xr_string("project"));
+		}
+		sprintf_s(dir, "%s\\gamedata\\configs\\ui\\textures_descr", EditorProject::Root());
+		NqUtil::ListFiles(dir, ".xml", files);
+		for (u32 f = 0; f < files.size(); ++f)
+		{
+			xr_string text;
+			if (!ReadTextFile(files[f].c_str(), 8 << 20, text)) continue;
+			xr_vector<SSheetTexture> all;
+			ReadTextureDescr(text, all);
+			for (u32 t = 0; t < all.size(); ++t) Add(NqPickers::tIcon, all[t].id, xr_string(), IconExtra(all[t], true));
+		}
+	}
+
 	void BuildProjectStories()
 	{
 		if (!EditorProject::Active()) return;
@@ -754,7 +962,7 @@ namespace
 	// ---- disk cache ----------------------------------------------------------------
 	// bump the number on every change to what an entry stores, or caches written by
 	// an older editor come back with the fields it did not know how to fill
-	const char* kCacheFormat = "nqindex 9 ";
+	const char* kCacheFormat = "nqindex 11 ";
 
 	void CachePath(string_path& out)
 	{
@@ -827,7 +1035,8 @@ namespace
 			for (u32 i = 0; i < s_Index[t].size(); ++i)
 			{
 				const NqPickers::SEntry& e = s_Index[t][i];
-				if (e.extra == "project") continue;		// project entries are rebuilt each time
+				// project entries are rebuilt each time
+				if (e.extra == "project" || 0 == e.extra.compare(0, 8, "project:")) continue;
 				text += e.id; text += "\t"; text += e.name; text += "\t"; text += e.extra; text += "\n";
 			}
 		}
@@ -841,6 +1050,7 @@ namespace
 	void Build()
 	{
 		for (int t = 0; t < NqPickers::tCount; ++t) { s_Index[t].clear(); s_Known[t].clear(); }
+		s_UsedIcons.clear();
 		s_Built = true;
 		s_BuiltFor = CurrentKey();
 		s_Available = false;
@@ -871,6 +1081,9 @@ namespace
 				BuildSmarts(st);
 				BuildCommunities(st);
 				BuildInfos();
+				BuildDialogs(st);
+				BuildIcons();		// after BuildProfiles: it learns which sheets hold portraits
+				BuildRanks(st);
 				BuildSpots();
 				for (int t = 0; t < NqPickers::tCount; ++t)
 					std::sort(s_Index[t].begin(), s_Index[t].end(),
@@ -885,10 +1098,11 @@ namespace
 		}
 		BuildProjectStories();
 		BuildProjectRestrictors();
+		BuildProjectLooks();
 		s_SceneStamp = 0;			// the scene merge has to run again after a rebuild
 		// the project sources run after the game index was sorted (and after the cache,
 		// so a freshly placed object never needs a reindex), so they sort themselves
-		const NqPickers::EType project_fed[] = { NqPickers::tStory, NqPickers::tRestrictor };
+		const NqPickers::EType project_fed[] = { NqPickers::tStory, NqPickers::tRestrictor, NqPickers::tDialog, NqPickers::tIcon };
 		for (u32 i = 0; i < sizeof(project_fed) / sizeof(project_fed[0]); ++i)
 			std::sort(s_Index[project_fed[i]].begin(), s_Index[project_fed[i]].end(),
 					  [](const NqPickers::SEntry& a, const NqPickers::SEntry& b) { return a.id < b.id; });

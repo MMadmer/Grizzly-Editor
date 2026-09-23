@@ -1541,7 +1541,10 @@ TOOLS = [
                        "level | smart | story_id | profile | community | info | spot_type (from the linked game, cached), "
                        "or the document-scoped task_id | var_name | ref_name | node_id | role (need 'path') | quest_id "
                        "(quests of the project) | behaviour_id (behaviour graphs of the project) | character_id (characters "
-                       "of the project - what a spawn.npc row names; a template says so in 'extra') | way_path (way paths "
+                       "of the project - what a spawn.npc row names; a template says so in 'extra') | dialog_id (dialogs of the "
+                       "linked game and the project, captioned with their first line) | character_icon (portraits; "
+                       "'extra' = the sheet and the rectangle, sheet|x|y|w|h, 'project:' in front for the project's) | "
+                       "rank (the linked game's ranks, 'extra' = the value a rank starts at) | way_path (way paths "
                        "of the open scene). 'query' is a case-insensitive substring of id or name; 'limit' default 50. "
                        "A ref_name entry carries its category (squad | object | item) in 'extra', the same hint the picker shows.",
         "inputSchema": {

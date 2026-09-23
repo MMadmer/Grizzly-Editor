@@ -255,7 +255,7 @@ return {
   name      = { rus = "Курьер", eng = "Courier" },
   community = "stalker",
   visual    = "actors\\stalker_neutral\\stalker_neutral_1",
-  icon      = "ui_npc_u_stalker_neutral_1",
+  icon      = "ui_inGame2_neutral_2",
   rank      = 300,
   money     = { min = 500, max = 1500 },
   supplies  = {
@@ -322,15 +322,23 @@ Fields: `name` and `bio` are a string or a table keyed by language; `community`
 is one of the linked game's - the window offers them as a list, under the names
 the player reads (`stalker`, `bandit`, `dolg`, `freedom`, `ecolog`, `killer`,
 `army`, `monolith`, `zombied`, `csky`, `trader`, … - a global mod may change
-the set); `base` is picked from the project's other characters; `visual` is meshes-relative with the
-extension optional; `rank` runs 0-1000 (novice to master); `supplies` is the
-starting kit; `squad = false` leaves the squad section out.
+the set); `base` is picked from the project's other characters; `visual` is
+meshes-relative with the extension optional - the window lists `meshes\actors` of
+the game and the project, and **Preview** opens the model; `icon` is a portrait -
+the window shows it and opens a gallery; `rank` is a number on the linked game's
+scale (Dead Air: novice from 0 to legend from 13999, the window names the rank);
+`start_dialog` is picked from the game's dialogs by their first line; `supplies`
+is the starting kit, every row picked by the item's name; `squad = false` leaves
+the squad section out.
 
 Problems are coded: `E…` stops a build (no name, no model, an id that is not
 `a-z0-9_`, two characters sharing an id), `W…` does not (a model the linked
 game cannot find, text cp1251 cannot carry, `W114` - a community the linked
 game does not list: the engine refuses a character of a community it does not
-know, so this one is only safe when the module brings that community itself).
+know, so this one is only safe when the module brings that community itself;
+`W115` / `W116` / `W117` - a portrait, a dialog or a kit item neither the linked
+game nor the project has; an item the game does not know stops the game when the
+NPC spawns).
 
 ### One kit, many characters
 

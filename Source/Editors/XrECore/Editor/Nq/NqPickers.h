@@ -33,6 +33,11 @@ public:
 		tSpot,			// spot_type
 		tRestrictor,	// restrictor
 		tSpawnSection,	// spawn_section - any section placeable in the world ($spawn)
+		// what a character is made of (the Characters window picks these)
+		tDialog,		// dialog_id - [dialogs] files; the caption is the dialog's first line
+		tIcon,			// character_icon - a portrait; extra = "<sheet>|x|y|w|h" (sheet under
+						// textures\, "project:" in front when the project brings it)
+		tRank,			// rank - [game_relations] rating; extra = the value the rank starts at
 		tCount
 	};
 

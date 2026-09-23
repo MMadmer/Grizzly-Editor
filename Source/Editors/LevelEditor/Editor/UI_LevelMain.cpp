@@ -50,6 +50,45 @@ static void CollectSceneRestrictors(xr_vector<NqPickers::SEntry>& out)
 
 // The way paths of the open scene - what a behaviour step walks (npc.goto,
 // npc.hold). Live, for the same reason the restrictors are.
+// The Characters window's Preview: a character's model is below meshes\\, the
+// module's own first and the linked game's otherwise - both through the one viewer
+static void PreviewCharacterModel(LPCSTR visual)
+{
+    if (!visual || !visual[0]) return;
+    xr_string rel = xr_string("meshes\\") + visual;
+    for (size_t i = 0; i < rel.size(); ++i) if (rel[i] == '/') rel[i] = '\\';
+    if (rel.size() < 4 || 0 != _stricmp(rel.c_str() + rel.size() - 4, ".ogf")) rel += ".ogf";
+
+    if (EditorProject::Active())
+    {
+        string_path abs;
+        sprintf_s(abs, "%s\\gamedata\\%s", EditorProject::Root(), rel.c_str());
+        HANDLE h = ::CreateFileA(abs, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (INVALID_HANDLE_VALUE != h)
+        {
+            const DWORD size = ::GetFileSize(h, NULL);
+            xr_vector<u8> bytes(size ? size : 1);
+            DWORD got = 0;
+            const bool ok = size && size != INVALID_FILE_SIZE && ::ReadFile(h, bytes.data(), size, &got, NULL) && got == size;
+            ::CloseHandle(h);
+            if (ok)
+            {
+                UIVisualPreview::ShowFromMemory(visual, bytes.data(), size);
+                return;
+            }
+        }
+    }
+    xr_string err;
+    if (!EditorGameContent::EnsureMounted(err)) return;
+    xr_string key = rel;
+    xr_strlwr(&key[0]);
+    const int idx = EditorGameContent::Find(key.c_str());
+    u32 size = 0;
+    u8* bytes = (idx >= 0) ? EditorGameContent::ReadBytes(idx, size) : 0;
+    if (bytes && size) UIVisualPreview::ShowFromMemory(visual, bytes, size);
+    EditorGameContent::FreeBytes(bytes);
+}
+
 static void CollectSceneWayPaths(xr_vector<NqPickers::SEntry>& out)
 {
     out.clear();
@@ -119,6 +158,7 @@ CLevelMain::CLevelMain()
     NqPickers::SetSceneRestrictors(CollectSceneRestrictors);
     NqPickers::SetSceneStories(CollectSceneStories);
     NqPickers::SetSceneWayPaths(CollectSceneWayPaths);
+    EditorCharacters::SetModelPreview(PreviewCharacterModel);
 }
 
 CLevelMain::~CLevelMain()
