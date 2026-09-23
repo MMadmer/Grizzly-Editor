@@ -519,6 +519,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   answer.
 - Icons draw in the theme's text colour and go UNDER the selection wash, like
   a thumbnail: a selected tile does not get its own icon palette.
+- A tile caption breaks where a name breaks for a reader - spaces, `_`, `-`, `.`
+  and the words of a CamelCase name (`NewBehaviour` -> `New` / `Behaviour`) - and
+  mid-word only when one word is wider than the tile; what still does not fit ends
+  in `...` (`DrawTileCaption`). The tooltip has the whole path.
 - **These assets go by their NAME alone.** The extension is the kind and the
   icon already says the kind, so a tile's caption, the drag label and the
   inline rename box all leave it out (`EditorAssetIcons::OwnExtension` is the

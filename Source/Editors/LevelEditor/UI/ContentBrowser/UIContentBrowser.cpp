@@ -817,6 +817,64 @@ static bool ContentAbsolutePathFits(LPCSTR base, size_t relative_length)
 	return xr_strlen(base) + 1 + relative_length < sizeof(string_path);
 }
 
+// A tile caption over `max_lines` lines. It breaks where a name breaks for a reader:
+// after a space, '_', '-', '.' or ',', and between the words of a CamelCase name
+// (NewBehaviour -> New / Behaviour). Mid-word only when one word is wider than the
+// tile. What still does not fit ends in "..." - the tooltip has the full name.
+static void DrawTileCaption(ImDrawList* dl, const ImVec2& p, float width, int max_lines, ImU32 col,
+							LPCSTR text, LPCSTR end)
+{
+	if (!end) end = text + xr_strlen(text);
+	ImFont* font = ImGui::GetFont();
+	const float size = ImGui::GetFontSize();
+	const float line_h = ImGui::GetTextLineHeight();
+	const float dots_w = ImGui::CalcTextSize("...").x;
+	auto lower = [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); };
+	auto upper = [](char c) { return c >= 'A' && c <= 'Z'; };
+	LPCSTR start = text;
+	for (int line = 0; line < max_lines && start < end; ++line)
+	{
+		while (start < end && *start == ' ') ++start;
+		if (start >= end) break;
+		const bool last = (line == max_lines - 1);
+		float w = 0.f;
+		LPCSTR at = start, brk = 0;
+		while (at < end)
+		{
+			// one UTF-8 character: its lead byte says how many bytes it takes
+			const u8 lead = (u8)*at;
+			const int n = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+			LPCSTR next = (at + n <= end) ? at + n : end;
+			const float cw = ImGui::CalcTextSize(at, next).x;
+			// one character always goes, however narrow the tile
+			if (w + cw > width && at > start) break;
+			w += cw;
+			if (next < end && (strchr(" _-.,", *at) || (lower(*at) && upper(*next)))) brk = next;
+			at = next;
+		}
+		LPCSTR cut = at;
+		bool dots = false;
+		if (at < end)
+		{
+			if (last)
+			{
+				// the rest does not fit: room for the dots, taken off the end
+				dots = true;
+				while (cut > start && ImGui::CalcTextSize(start, cut).x + dots_w > width)
+				{
+					--cut;
+					while (cut > start && (*(const u8*)cut & 0xC0) == 0x80) --cut;
+				}
+			}
+			else if (brk) cut = brk;
+		}
+		const ImVec2 at_line(p.x, p.y + line * line_h);
+		dl->AddText(font, size, at_line, col, start, cut);
+		if (dots) dl->AddText(font, size, ImVec2(at_line.x + ImGui::CalcTextSize(start, cut).x, at_line.y), col, "...");
+		start = cut;
+	}
+}
+
 static void ScanContentDir(const char* base, const char* rel, ChooseItemVec& out,
 						   xr_vector<xr_string>& dirs)
 {
@@ -2004,9 +2062,9 @@ void UIContentBrowser::DrawTiles()
 
 		const ImVec2 p = ImGui::GetCursorScreenPos();
 		ImGui::Dummy(ImVec2(tile_w, caption_h));
-		const ImVec4 clip(p.x, p.y, p.x + tile_w, p.y + caption_h);
-		ImGui::GetWindowDrawList()->AddText(ImGui::GetFont(), ImGui::GetFontSize(), p,
-			ImGui::GetColorU32(dim ? ImGuiCol_TextDisabled : ImGuiCol_Text), label, label_end, tile_w, &clip);
+		const int lines = _max(1, int((caption_h + 0.5f) / ImGui::GetTextLineHeight()));
+		DrawTileCaption(ImGui::GetWindowDrawList(), p, tile_w, lines,
+			ImGui::GetColorU32(dim ? ImGuiCol_TextDisabled : ImGuiCol_Text), label, label_end);
 	};
 
 	const int up_slots = (!m_Filter.IsActive() && !m_CurFolder.empty()) ? 1 : 0;
