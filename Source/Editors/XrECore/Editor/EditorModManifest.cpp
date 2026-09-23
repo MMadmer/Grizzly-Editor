@@ -1067,20 +1067,22 @@ static bool InsideGameGamedata(LPCSTR path)
 
 // A module that brings its OWN game mode has to put the checkbox on the
 // new-game screen itself - the engine cannot, that screen is built in Lua by
-// the game. Three generated files do it, one set per module however many modes
-// it declares:
+// the game. Generated files do it, one set per module however many modes it
+// declares:
 //
-//   patch\xms_modes.xmlp            the checkboxes + labels, appended to the
-//                                   screen's main_dialog
+//   gamedata\configs\ui\<module id>_modes<aspect>.xml   the module's own layout
+//                                   with the checkboxes and their captions, one
+//                                   per aspect-ratio variant of the screen
 //   gamedata\configs\text\rus\<module id>_modes.xml   the captions
 //   scripts\mode_register.script    creates the controls at runtime and writes
 //                                   the [character_creation] keys the engine
 //                                   turns back into active XMS modes
 //
-// The names are fixed, not derived from the mode: renaming a mode rewrites the
-// same three files instead of leaving a stale checkbox behind in the project.
-// The string table is the one file that lands in the shared game namespace, so
-// that one carries the module id - two modules must not fight over it.
+// The names carry the module, not the mode: renaming a mode rewrites the same
+// files instead of leaving a stale checkbox behind in the project. The layouts
+// and the string table land in the game's shared namespace, which is why they
+// carry the module id - two modules must not fight over one file. The legacy
+// patch\xms_modes.xmlp is only cleaned up.
 //
 // mode_register is the name the engine reserves for generated startup code;
 // scripts\register.script stays the author's own and is never touched here.
@@ -2768,10 +2770,11 @@ static void DrawManifestModal()
 			ImGui::TextDisabled("%s", s_SlotText);
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip(
-					"Export writes three files into the project and keeps them in sync:\n"
-					"  patch\\<id>_mode.xmlp                     the checkbox and its label\n"
-					"  gamedata\\configs\\text\\rus\\<id>_mode.xml  the caption above\n"
-					"  scripts\\mode_register.script             hooks the screen at startup\n"
+					"Export writes these into the project and keeps them in sync:\n"
+					"  gamedata\\configs\\ui\\<id>_modes.xml, <id>_modes_16.xml\n"
+					"      the checkbox and its caption, one layout per screen aspect\n"
+					"  gamedata\\configs\\text\\rus\\<id>_modes.xml   the caption text\n"
+					"  scripts\\mode_register.script   hooks the screen at startup\n"
 					"Edit the manifest, not those files - they are rewritten every export.\n"
 					"scripts\\register.script is yours and is never touched.");
 		}

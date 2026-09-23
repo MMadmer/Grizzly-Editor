@@ -20,7 +20,8 @@ and what to do when it refuses.
 | **Target mode** | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
 
 If you declare a **new mode**, the export also generates the new-game-screen
-checkbox for it (the xml patch, the text entry and `mode_register.script`).
+checkbox for it (the module's own screen layout, the text entry and
+`mode_register.script`).
 Those files are machinery, not content — the content browser hides them so you
 can't delete one by accident, and the export regenerates them every time.
 
