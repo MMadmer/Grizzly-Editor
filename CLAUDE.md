@@ -299,6 +299,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   stored value (`TextRaw`), or "not set" and "set to the same text" look alike
   and the author cannot tell them apart. A text that ends up with `rus` alone
   collapses back to a plain string, so the simple case stays simple in the file.
+- The generated `specific_character` always carries `community` (`stalker` when unset),
+  `rank` and `reputation` (0 when unset): the engine asserts on all three while it loads
+  the profiles, so a character that sets none of them must not stop the game.
 - The profile always names the `specific_character` outright. `class` alone
   makes the engine pick a RANDOM character of that class - fine for ambience,
   wrong for the NPC a quest points at.

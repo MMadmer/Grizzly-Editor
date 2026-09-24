@@ -775,12 +775,13 @@ bool EditorCharacters::Generate(LPCSTR project_root, LPCSTR module_id, int& writ
 		if (!c.icon.empty())
 			desc += "\t\t<icon>" + Xml(c.icon) + "</icon>\r\n";
 		desc += "\t\t<class>" + Xml(gid) + "</class>\r\n";
-		desc += "\t\t<community>" + Xml(c.community) + "</community>\r\n";
+		// community, rank and reputation are the three the engine asserts on
+		// (CSpecificCharacter::load_shared): a character that sets none of them
+		// still gets all three, or the game stops while it loads the profiles
+		desc += "\t\t<community>" + Xml(c.community.empty() ? xr_string("stalker") : c.community) + "</community>\r\n";
 		desc += "\t\t<visual>" + Xml(c.visual) + "</visual>\r\n";
-		if (c.has_rank)
-			desc += NqUtil::Format("\t\t<rank>%d</rank>\r\n", c.rank);
-		if (c.has_reputation)
-			desc += NqUtil::Format("\t\t<reputation>%d</reputation>\r\n", c.reputation);
+		desc += NqUtil::Format("\t\t<rank>%d</rank>\r\n", c.has_rank ? c.rank : 0);
+		desc += NqUtil::Format("\t\t<reputation>%d</reputation>\r\n", c.has_reputation ? c.reputation : 0);
 		if (c.has_money)
 			desc += NqUtil::Format("\t\t<money min=\"%d\" max=\"%d\" infinitive=\"%d\"/>\r\n",
 				c.money_min, c.money_max, c.money_infinite ? 1 : 0);

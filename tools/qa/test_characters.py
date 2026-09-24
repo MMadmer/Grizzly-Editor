@@ -456,6 +456,12 @@ def run(project: str) -> None:
         check("wpn_ak74u \\n" in d and "ammo_5.45x39_fmj = 3 \\n" in d and "medkit \\n" in d,
               "C its kit is written the way the engine reads one")
         check('<money min="500" max="1500" infinitive="0"/>' in d, "C and its money")
+        # the engine asserts on these three (CSpecificCharacter::load_shared): a character that
+        # sets none of them must still carry all three, or the game stops loading profiles
+        blocks = d.split("<specific_character ")[1:]
+        bare = [b.split('"')[1] for b in blocks
+                if not all(tag in b.split("</specific_character>")[0] for tag in ("<community>", "<rank>", "<reputation>"))]
+        check(blocks and not bare, "C every character carries community, rank and reputation", json.dumps(bare))
 
         p = read(prof)
         check(f'<character id="{gid}">' in p and f"<specific_character>{gid}</specific_character>" in p,
