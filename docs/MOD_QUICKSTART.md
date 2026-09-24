@@ -636,6 +636,42 @@ The build refuses a second Player Start (`E201`) and more than three player
 choices (`E202`), and warns about a level or a transition the linked game does
 not have, and about an area the Player Start is not in (`W203`-`W206`).
 
+## 6c. The PDA interface - your own app in the PDA
+
+**Mod → PDA Interface…** · Content browser → **Create → PDA Interface** ·
+`xfined_pda_*`
+
+Your mod can put its own screens into the PDA: a courier app, a hacked military
+terminal, a scanner - pages, buttons, lists, pop-up menus, and the live map
+(with the player and every task marker) in a slot of your design. The device
+stays the game's, and so do the tasks, contacts and the rest: a page of yours
+can show any stock section.
+
+1. **Mod → PDA Interface…** makes `pda\<module>.pdaasset` from a template (home,
+   map, journal), writes `[pda] layout` into `mod.ltx` and opens the **preview
+   tab**: the 2D PDA with the interface in it, in the game's own textures and
+   fonts. Click through it - buttons, tabs, lists and menus work as in the game;
+   a quest signal or a script call shows as a note and goes into the action log.
+2. Edit the file (Source pane → Apply / Save, any text editor, or an AI agent
+   with `xfined_pda_write`): the tab follows the file. The format is
+   `docs/pda/PDA_FORMAT.md` - a canvas of 960x680, `chrome` under every page,
+   `pages`, an `overlay` on top, widgets `rect`, `image`, `text`, `button`,
+   `list`, `group`, `map`, and actions like `page:map`, `show:menu`,
+   `var:order=...`, `signal:order_taken`.
+3. **Problems** are listed beside the device (`E3xx` stops the build, the game
+   would not show it either; `W3xx` warns). **4:3 / 16:9** shows both screens.
+4. Build: the file ships as it is, and the game shows it while your module
+   applies (in your mode, for a mode mod). Without `[pda]` - the stock PDA.
+
+A quest hears the interface: `signal:order_taken` on a button is an
+`event.signal` with `name = "order_taken"` in any quest, and a script changes a
+live interface through `xms.pda` (`set`, `rows`, `page`, `show`, `open`, ...).
+
+Things that bite: Dead Air's fonts draw `—` and `–` blank and have no `→` or
+`★` - use `»`, `·`, `-` and the icons (`ui_xms_icon_star`, `_pin`, `_box`, ...);
+`letterica25` is as small as `letterica16` in Dead Air - headers want
+`graffiti22` or `graffiti32`.
+
 ## 7. When the build refuses
 
 | Message | Fix |

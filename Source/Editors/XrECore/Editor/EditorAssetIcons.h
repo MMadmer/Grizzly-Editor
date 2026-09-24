@@ -33,6 +33,7 @@ namespace EditorAssetIcons
 		kBehaviour,			// .behasset
 		kCharacter,			// .npcasset
 		kCharacterTemplate,	// .npcasset with abstract = true
+		kPda,				// .pdaasset
 	};
 
 	// What the file at `path` is. The extension answers it for a quest and a

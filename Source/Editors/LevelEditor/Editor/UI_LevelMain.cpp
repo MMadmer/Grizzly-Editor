@@ -7,6 +7,7 @@
 #include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
+#include "..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
 #include "..\..\XrECore\Editor\EditorGameModes.h"
@@ -1557,6 +1558,12 @@ CCommandVar CommandModWorld(CCommandVar p1, CCommandVar p2)
     return TRUE;
 }
 
+CCommandVar CommandModPda(CCommandVar p1, CCommandVar p2)
+{
+    EditorPda::ShowModuleLayout();
+    return TRUE;
+}
+
 CCommandVar CommandModReleases(CCommandVar p1, CCommandVar p2)
 {
     EditorPublish::RequestReleases();
@@ -2409,6 +2416,14 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "world_get"))			{ EditorWorld::McpGet(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "world_set"))			{ EditorWorld::McpSet(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "world_transitions"))	{ EditorWorld::McpTransitions(raw, out);	return true; }
+    // the module's own PDA interface (.pdaasset): text for an agent, a clickable preview tab
+    if (0 == xr_strcmp(cmd, "pda_list"))			{ EditorPda::McpList(raw, out);			return true; }
+    if (0 == xr_strcmp(cmd, "pda_get"))				{ EditorPda::McpGet(raw, out);			return true; }
+    if (0 == xr_strcmp(cmd, "pda_write"))			{ EditorPda::McpWrite(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "pda_delete"))			{ EditorPda::McpDelete(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "pda_use"))				{ EditorPda::McpUse(raw, out);			return true; }
+    if (0 == xr_strcmp(cmd, "pda_validate"))		{ EditorPda::McpValidate(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "pda_preview"))			{ EditorPda::McpPreview(raw, out);		return true; }
     // level overlays check the scene/project themselves and report json errors
     // opens the model preview window - the same thing a double click in the
     // content browser does, reachable without driving the mouse
@@ -4442,6 +4457,7 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_SE	    (COMMAND_MOD_RELEASES,				"Mod\\Manage Releases",			CommandModReleases,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_CHARACTERS,			"Mod\\Characters",				CommandModCharacters,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_WORLD,					"Mod\\World",					CommandModWorld,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_PDA,					"Mod\\PDA Interface",			CommandModPda,true);
 
 	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
 	// level.ini actually lists, so a rebind still wins.
@@ -4851,6 +4867,7 @@ void CLevelMain::OnDrawUI()
         EditorPublish::DrawUI();
         EditorCharacters::DrawUI();
         EditorWorld::DrawUI();
+        EditorPda::DrawUI();
         EditorModScene::DrawUI();
     }
     if (LTools->GetToolForm())

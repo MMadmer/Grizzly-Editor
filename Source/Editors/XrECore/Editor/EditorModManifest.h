@@ -76,6 +76,10 @@ namespace EditorMod
 		xr_vector<xr_string>	exclude;
 		// [world]: the mode's world (EditorWorld)
 		SWorld					world;
+		// [pda] layout: the module's own PDA interface, a project-relative .pdaasset
+		// (EditorPda); empty = the module leaves the PDA alone
+		xr_string				pda_layout;
+		xr_vector<xr_string>	pda_extra;		// unknown [pda] lines
 	};
 
 	// id charset per XMS spec: [a-z0-9_.\-]+

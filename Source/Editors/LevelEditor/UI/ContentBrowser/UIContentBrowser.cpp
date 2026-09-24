@@ -8,6 +8,7 @@
 #include "..\..\..\XrECore\Editor\Nq\NqLua.h"
 #include "..\..\..\XrECore\Editor\Nq\NqUtil.h"
 #include "..\..\..\XrECore\Editor\EditorCharacters.h"
+#include "..\..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\..\XrECore\Editor\EditorAssetIcons.h"
 #include "..\QuestGraph\UIQuestGraph.h"
 
@@ -52,6 +53,12 @@ static bool IsCharacterExt(LPCSTR name)
 {
 	LPCSTR ext = name ? strrchr(name, '.') : 0;
 	return ext && !_stricmp(ext, ".npcasset");
+}
+// The module's own PDA interface (EditorPda.h)
+static bool IsPdaExt(LPCSTR name)
+{
+	LPCSTR ext = name ? strrchr(name, '.') : 0;
+	return ext && !_stricmp(ext, ".pdaasset");
 }
 
 // Which drawn icon a listing entry gets. A quest and a behaviour graph are
@@ -1164,6 +1171,8 @@ void UIContentBrowser::Refresh()
 	// and what the build leaves out for the tiles (mod.ltx may have changed on disk)
 	EditorCharacters::Invalidate();
 	EditorMod::InvalidateExclusions();
+	// the preview's textures: the project's own sheets may have changed
+	EditorPda::Invalidate();
 	m_Items.clear	();
 	m_Dirs.clear	();
 	DropCache		();
@@ -1879,6 +1888,16 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		}
 		else if (s_ShowVisual)
 			s_ShowVisual(name);
+		return true;
+	}
+
+	// A PDA layout opens in its preview tab - project files only: the tab saves its text.
+	if (IsPdaExt(name))
+	{
+		if (m_Source != 0) OPEN_FAILED("%s: PDA layouts open from the project only", name);
+		string_path abs;
+		sprintf_s(abs, "%s\\%s", EditorProject::Root(), name);
+		EditorPda::Open(abs);
 		return true;
 	}
 
@@ -3345,6 +3364,9 @@ void UIContentBrowser::DrawGridContextMenu()
 			if (ImGui::MenuItem("Quest Graph"))	CreateQuest();
 			if (ImGui::MenuItem("Character"))	CreateCharacter();
 			if (ImGui::MenuItem("NPC Behaviour"))	CreateBehaviour();
+			if (ImGui::MenuItem("PDA Interface"))	CreatePda();
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("The module's own PDA screens (.pdaasset): pages, buttons, menus, the live map.");
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
@@ -3502,6 +3524,26 @@ void UIContentBrowser::CreateFolder()
 	BeginRename		(rel.c_str());
 }
 
+void UIContentBrowser::CreatePda()
+{
+	if (m_Source != 0 || !EditorProject::Active())	return;
+	string_path folder, made;
+	if (m_CurFolder.empty())	xr_strcpy(folder, sizeof(folder), EditorProject::Root());
+	else						sprintf_s(folder, "%s\\%s", EditorProject::Root(), m_CurFolder.c_str());
+	xr_string err;
+	if (!EditorPda::CreateIn(folder, made, err))
+	{
+		ELog.DlgMsg(mtError, "Cannot create the PDA interface: %s", err.c_str());
+		return;
+	}
+	xr_string rel = m_CurFolder;
+	if (!rel.empty()) rel += "\\";
+	rel += NqUtil::BaseName(made);
+	Refresh			();
+	ClearSelection	();
+	BeginRename		(rel.c_str());
+}
+
 void UIContentBrowser::CreateCharacter()
 {
 	if (m_Source != 0 || !EditorProject::Active())	return;
@@ -3615,7 +3657,7 @@ bool UIContentBrowser::CreateAsset(LPCSTR kind, xr_string& made, xr_string& err)
 {
 	made.clear();
 	err = "";
-	if (!kind || !kind[0])		{ err = "kind must be quest, behaviour or character"; return false; }
+	if (!kind || !kind[0])		{ err = "kind must be quest, behaviour, character or pda"; return false; }
 	if (!EditorProject::Active())	{ err = "no active project"; return false; }
 	Show();
 	if (!Form)					{ err = "content browser unavailable"; return false; }
@@ -3629,7 +3671,8 @@ bool UIContentBrowser::CreateAsset(LPCSTR kind, xr_string& made, xr_string& err)
 	if		(0 == _stricmp(kind, "quest"))		Form->CreateQuest();
 	else if (0 == _stricmp(kind, "behaviour"))	Form->CreateBehaviour();
 	else if (0 == _stricmp(kind, "character"))	Form->CreateCharacter();
-	else	{ err = "kind must be quest, behaviour or character"; return false; }
+	else if (0 == _stricmp(kind, "pda"))		Form->CreatePda();
+	else	{ err = "kind must be quest, behaviour, character or pda"; return false; }
 
 	// the inline rename box belongs to the menu, not to a programmatic call
 	Form->m_Rename.clear();

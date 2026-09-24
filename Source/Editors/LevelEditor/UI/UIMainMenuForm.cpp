@@ -3,6 +3,7 @@
 #include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
+#include "..\..\XrECore\Editor\EditorPda.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
 #include "UITitleBar.h"
@@ -97,6 +98,9 @@ void UIMainMenuForm::Draw()
             if (ImGui::MenuItem("World...", ""))					EditorWorld::Show();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("What the mode keeps of the original game: its NPCs, monsters and quests,\nthe levels the player may reach, the transitions that start closed, the Player Start.");
+            if (ImGui::MenuItem("PDA Interface...", ""))			EditorPda::ShowModuleLayout();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The module's own PDA screens: pages, buttons, menus and the live map.\nOpens the layout the module uses in a preview you can click through.");
             ImGui::Separator();
             if (ImGui::MenuItem("Package Release...", ""))			EditorMod::RequestPackageRelease();
             if (ImGui::IsItemHovered())

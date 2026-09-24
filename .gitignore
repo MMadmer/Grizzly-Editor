@@ -32,6 +32,8 @@ gamedata/anims/
 # file whose parent directory is excluded, hence the /* form on the parent.
 gamedata/configs/*
 !gamedata/configs/nq/
+# ... and the PDA layout reader with its texture sheet, the preview's fallback likewise
+!gamedata/configs/pda/
 gamedata/levels/
 gamedata/meshes/
 gamedata/scripts/

@@ -498,6 +498,54 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   quest casts nobody, roles are a behaviour graph's.
 - QA: `tools/qa/test_world.py --project <project>` over MCP on a COPY.
 
+## PDA interfaces (EditorPda)
+
+- A module can give the PDA its own screens: a `.pdaasset` (declarative Lua, `pda = 1`)
+  with pages, buttons, lists, menus and one slot for the live map, named by
+  `mod.ltx [pda] layout`. The device, the map, the tasks and every stock section stay the
+  game's; a stock section is reachable from a layout (`stock:<section>`, a page with
+  `stock =`). Contract: `docs/pda/PDA_FORMAT.md`; the game half is the game repo's
+  MODDING.md "PDA layouts".
+- **The editor compiles nothing and interprets nothing of its own.** What a layout MEANS
+  is the game's `scripts\xms_pda_layout.script`: pure Lua that turns the asset into a flat
+  item list (canvas units, colours as ARGB, every default applied) plus coded problems
+  (E3xx / W3xx). The editor runs that SAME file - the linked game's, or the bundled
+  `gamedata\configs\pda\` copy (kept byte-identical with the game's, with the texture
+  sheet; `test_pda.py` G checks it) - for the validator, the build gate and the preview.
+  The game's CUIPdaLayout draws the same list. A layout change is a change of that script
+  first; neither side may grow a rule the other lacks.
+- **The preview tab** (Mod > PDA Interface, a double click on the asset, MCP
+  `pda_preview`) draws the 2D PDA - `pda.xml` / `pda_16.xml` of the linked game, the
+  device texture, the screen noise - with the game's textures (every textures_descr, the
+  project's own) and the game's BITMAP fonts (fonts.ltx + the glyph ini, cp1251): a text
+  is as wide there as in the game. It plays the actions the way the engine does; what
+  cannot run outside the game is shown instead: a stock section as a labelled panel,
+  `signal:` / `lua:` as a toast and a line in the action log, the map as the level map of
+  `preview.level` with `preview.actor` and `preview.markers`. The tab follows the file
+  (polled, re-read when an agent writes it) and has its own source pane (Apply / Save).
+- The button placement rule (icon alone centred; `align=center` + `valign` not centre
+  stacks the icon over the caption; otherwise the icon at 12 and the caption after it)
+  is written down in PDA_FORMAT.md and implemented twice - `CUIPdaItem::InitParts` and
+  the preview's `DrawItem` - in canvas units scaled PER AXIS, so a square icon stays square
+  in 16:9. Change both or neither.
+- **Dead Air's fonts:** `letterica25` is the 16 px texture in Dead Air (fonts.ltx), the big
+  ones are `graffiti19/22/32/50`; the fonts have no `—` / `–` (they draw blank) and no
+  `→` / `★` / `×` (outside cp1251): use `»`, `·`, `-` and the icon sheet.
+- Refined ships `ui_xms_pda` (`textures\ui\ui_xms_pda.dds` + textures_descr, made by the
+  game repo's `tools/graphics/make_xms_pda_sheet.py`): a white block every rounded rect
+  samples, four fades and ~48 white icons (`ui_xms_icon_<name>`) to tint.
+- `[pda] layout` round-trips in `EditorMod::SManifest` (`pda_layout`, `pda_extra`); the
+  build refuses a used layout with an error, a missing file or one the build leaves out
+  (`ValidateForBuild`), and W320 names a texture neither the game nor the project has.
+- MCP: `pda_list`, `pda_get`, `pda_write` (template when no text; `use` picks it),
+  `pda_delete` (final; clears `[pda]`), `pda_use`, `pda_validate`, `pda_preview`
+  (open/state/click by id, list row, n or canvas point/page/key/aspect/lang/reset); the
+  preview's state answers in CANVAS units, with `map.bound` for placing preview markers.
+  The content browser: Create > PDA Interface, `content_create kind=pda`, a PDA icon.
+- QA: `tools/qa/test_pda.py --project <project> [--shots <dir>]` over MCP on a COPY; the
+  game's `tools/nq/test_pda_layout.lua` (the reader, headless) and `Run-NqQa.ps1
+  -Scenario Pda|PdaControl|PdaModule` (in game, captured).
+
 ## Dangerous operations
 
 - Any destructive operation from the UI requires confirmation. Destructive is

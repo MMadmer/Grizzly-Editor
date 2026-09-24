@@ -52,7 +52,7 @@ struct SIcon
 								SIcon() : built(false) {}
 };
 
-SIcon	s_Icons[EditorAssetIcons::kCharacterTemplate + 1];
+SIcon	s_Icons[EditorAssetIcons::kPda + 1];
 
 // One scratch buffer for every polyline this unit hands to ImGui. The uses do
 // not overlap, and a fresh vector per stroke would be an allocation per tile
@@ -143,6 +143,23 @@ void BuildCharacter(SIcon& icon, bool dashed)
 	Arc(icon, 0.50f, 0.98f, 0.36f, PI, PI_MUL_2, 26, false, 1.f, dashed);
 }
 
+//------------------------------------------------------------------------------
+// A PDA interface is screens you switch between: the device's screen with a card on
+// it and the tab bar at its foot.
+//------------------------------------------------------------------------------
+void BuildPda(SIcon& icon)
+{
+	SRect body;	body.a = P(0.04f, 0.14f);	body.b = P(0.96f, 0.86f);	body.rounding = 0.10f;
+	icon.rects.push_back(body);
+	SRect card;	card.a = P(0.20f, 0.30f);	card.b = P(0.80f, 0.52f);	card.rounding = 0.04f;
+	icon.rects.push_back(card);
+	const ImVec2 bar[] = { P(0.04f, 0.64f), P(0.96f, 0.64f) };
+	Line(icon, bar, 2, true);
+	SDot t0;	t0.c = P(0.27f, 0.75f);	t0.r = 0.055f;	icon.dots.push_back(t0);
+	SDot t1;	t1.c = P(0.50f, 0.75f);	t1.r = 0.055f;	icon.dots.push_back(t1);
+	SDot t2;	t2.c = P(0.73f, 0.75f);	t2.r = 0.055f;	icon.dots.push_back(t2);
+}
+
 const SIcon& Icon(EditorAssetIcons::EKind kind)
 {
 	SIcon& icon = s_Icons[kind];
@@ -154,6 +171,7 @@ const SIcon& Icon(EditorAssetIcons::EKind kind)
 	case EditorAssetIcons::kBehaviour:			BuildBehaviour(icon);			break;
 	case EditorAssetIcons::kCharacter:			BuildCharacter(icon, false);	break;
 	case EditorAssetIcons::kCharacterTemplate:	BuildCharacter(icon, true);		break;
+	case EditorAssetIcons::kPda:				BuildPda(icon);					break;
 	default:																	break;
 	}
 	return icon;
@@ -224,7 +242,8 @@ LPCSTR EditorAssetIcons::OwnExtension(LPCSTR name)
 	LPCSTR ext = name ? strrchr(name, '.') : 0;
 	// a dot in a folder of the path is not an extension, and an extension alone is not a name
 	if (!ext || ext == name || strpbrk(ext, "\\/") || '\\' == ext[-1] || '/' == ext[-1])	return 0;
-	if (0 == _stricmp(ext, ".nqasset") || 0 == _stricmp(ext, ".behasset") || 0 == _stricmp(ext, ".npcasset"))
+	if (0 == _stricmp(ext, ".nqasset") || 0 == _stricmp(ext, ".behasset") || 0 == _stricmp(ext, ".npcasset") ||
+		0 == _stricmp(ext, ".pdaasset"))
 		return ext;
 	return 0;
 }
@@ -238,6 +257,7 @@ EditorAssetIcons::EKind EditorAssetIcons::KindOf(LPCSTR path)
 	// no file is touched for these two: the name is the whole answer
 	if (0 == _stricmp(ext, ".nqasset"))		return kQuest;
 	if (0 == _stricmp(ext, ".behasset"))	return kBehaviour;
+	if (0 == _stricmp(ext, ".pdaasset"))	return kPda;
 	if (0 != _stricmp(ext, ".npcasset"))	return kNone;
 
 	xr_string key = path;
@@ -282,6 +302,7 @@ LPCSTR EditorAssetIcons::Name(EKind kind)
 	case kBehaviour:			return "behaviour graph";
 	case kCharacter:			return "character";
 	case kCharacterTemplate:	return "character template";
+	case kPda:					return "PDA interface";
 	default:					return "";
 	}
 }

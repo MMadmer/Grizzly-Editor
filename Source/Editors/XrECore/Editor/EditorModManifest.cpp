@@ -4,6 +4,7 @@
 #include "EditorModManifest.h"
 #include "EditorCharacters.h"
 #include "EditorWorld.h"
+#include "EditorPda.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
 #include "ui_main.h"
@@ -463,7 +464,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 	// the same reading the game gives the file
 	text = NqUtil::GameTextToUtf8(text.data(), (u32)text.size());
 
-	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secWorld, secExtra };
+	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secWorld, secPda, secExtra };
 	ESec sec = secNone;
 
 	size_t pos = 0;
@@ -495,12 +496,23 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 			else if (sn == "update")		sec = secUpdate;
 			else if (sn == "exclude")		sec = secExclude;
 			else if (sn == "world")			sec = secWorld;
+			else if (sn == "pda")			sec = secPda;
 			else { sec = secExtra; m.extra.push_back(raw); }
 			continue;
 		}
 		if (sec == secExtra) { if (!raw.empty()) m.extra.push_back(raw); continue; }
 		if (line.empty()) continue;
 
+		if (sec == secPda)
+		{
+			xr_string key = line, val;
+			const size_t eq = line.find('=');
+			if (eq != xr_string::npos) { key = line.substr(0, eq); val = line.substr(eq + 1); }
+			Trim(key); Trim(val);
+			if (key == "layout")	m.pda_layout = val;
+			else					m.pda_extra.push_back(line);
+			continue;
+		}
 		if (sec == secModule || sec == secOrder || sec == secProvides || sec == secUpdate)
 		{
 			xr_string key = line, val;
@@ -727,6 +739,15 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		if (!w.locked.empty())			AppendJoined(t, "locked", w.locked, kWorldKeyWidth);
 		for (u32 i = 0; i < w.extra.size(); ++i)
 			{ t += w.extra[i]; t += "\r\n"; }
+	}
+	// the module's own PDA interface (EditorPda)
+	if (!m.pda_layout.empty() || !m.pda_extra.empty())
+	{
+		t += "\r\n[pda]\r\n";
+		if (!m.pda_layout.empty())
+			AppendKey(t, "layout", m.pda_layout.c_str());
+		for (u32 i = 0; i < m.pda_extra.size(); ++i)
+			{ t += m.pda_extra[i]; t += "\r\n"; }
 	}
 	if (!m.extra.empty())
 	{
@@ -1573,6 +1594,25 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 		if (!errors.empty())
 		{
 			err = errors;
+			return false;
+		}
+	}
+
+	// The module's own PDA interface: the game refuses a layout with an error and keeps
+	// its stock PDA, so the build refuses it first, where the author can still fix it.
+	{
+		xr_vector<xr_string> pda_errors, pda_warnings;
+		EditorPda::ValidateForBuild(project_root, pda_errors, pda_warnings);
+		for (const xr_string& p : pda_warnings)
+			if (warnings)
+			{
+				if (!warnings->empty()) *warnings += "\n";
+				*warnings += p;
+			}
+		if (!pda_errors.empty())
+		{
+			err = "The PDA layout has errors:";
+			for (const xr_string& p : pda_errors) { err += "\n"; err += p; }
 			return false;
 		}
 	}
@@ -3361,7 +3401,9 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppendArray(out, m.exclude);
 	out += ",\"world\":";
 	EditorWorld::JsonWorld(m.world, out);
-	out += ",\"has_dirs\":{";
+	out += ",\"pda_layout\":\"";
+	JsonAppend(out, m.pda_layout.c_str());
+	out += "\",\"has_dirs\":{";
 	static const char* dirs[] = { "gamedata", "patch", "spawn", "scripts", "levels" };
 	for (int i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); ++i)
 	{

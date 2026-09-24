@@ -411,6 +411,100 @@ TOOLS = [
         },
     },
     {
+        "name": "xfined_pda_list",
+        "description": "The project's PDA interfaces (.pdaasset): each with its id, title, page and item counts and "
+                       "problem counts, 'used' marks the one mod.ltx [pda] layout names - the interface the game shows "
+                       "in the PDA instead of its stock tabs. 'reader' says whose reader judged them (the linked game's "
+                       "scripts\\xms_pda_layout.script, or the editor's bundled copy).",
+        "annotations": {"title": "List the PDA interfaces", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "lang": {"type": "string", "description": "language of the texts in the answer: rus (default) or eng"},
+        }},
+    },
+    {
+        "name": "xfined_pda_get",
+        "description": "One PDA interface: the whole file 'text', its outline (pages with widget counts, keys, vars, every "
+                       "addressable id), and problems (E3xx stop a build, W3xx do not). Without 'path' it is the layout "
+                       "the module uses. The file is declarative Lua; the format is docs/pda/PDA_FORMAT.md - read it "
+                       "before writing one.",
+        "annotations": {"title": "Read a PDA interface", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "project-relative path of the .pdaasset"},
+            "lang": {"type": "string"},
+        }},
+    },
+    {
+        "name": "xfined_pda_write",
+        "description": "Creates or replaces a PDA interface. 'text' is the whole file: return { pda = 1, id = ..., "
+                       "title = ..., start = <page>, keys = { map = <page> }, colors = { name = \"#RRGGBB[AA]\" }, "
+                       "styles = { name = { widget keys } }, vars = { name = text }, chrome = { widgets on every page }, "
+                       "pages = { { id = ..., title = ..., widgets = { ... } } | { id = ..., stock = \"eptTasks\" } }, "
+                       "overlay = { widgets above everything }, preview = { level = ..., vars = { ... } } }. Widgets: "
+                       "{ kind = rect|image|text|button|list|group|map, x, y, w, h (canvas 960x680), id, visible, "
+                       "style, hint, ... }; actions: page:<id>, back, close, show:/hide:/toggle:<id>, stock:<section>, "
+                       "map:actor|zoom_in|zoom_out|global, var:<name>=<value>, signal:<name> (quests hear it through "
+                       "event.signal), lua:<script.function>. Texts take {placeholders} ({time} {date} {actor} {money} "
+                       "{rank} {community} {level} {task} {title} {page} and the layout's vars) and { rus = ..., eng = ... }. "
+                       "Without 'text' a new file is made from the template (never over an existing one). Without "
+                       "'path', 'id' names pda/<id>.pdaasset. use (default: when the module uses no layout yet) writes "
+                       "[pda] layout into mod.ltx. A file that does not parse is refused with its line; problems are "
+                       "returned and do not block the write - only the build.",
+        "annotations": {"title": "Write a PDA interface", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "the whole .pdaasset body"},
+            "path": {"type": "string", "description": "project-relative path to write"},
+            "id": {"type": "string", "description": "for a new file: its id and name (pda/<id>.pdaasset)"},
+            "title": {"type": "string", "description": "for a new file from the template"},
+            "use": {"type": "boolean", "description": "make it the module's PDA interface"},
+        }},
+    },
+    {
+        "name": "xfined_pda_delete",
+        "description": "Deletes a PDA interface file for good; when the module used it, mod.ltx stops naming it and the "
+                       "game shows its stock PDA again. Call it when the user asked for this; otherwise ask them first - "
+                       "the editor asks nothing.",
+        "annotations": {"title": "Delete a PDA interface", "destructiveHint": True},
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    },
+    {
+        "name": "xfined_pda_use",
+        "description": "Picks the PDA interface the module ships: writes mod.ltx [pda] layout = <path> and saves at once. "
+                       "An empty path clears it - the game shows its stock PDA. A file the build leaves out is refused.",
+        "annotations": {"title": "Use a PDA interface", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+    },
+    {
+        "name": "xfined_pda_validate",
+        "description": "Checks a PDA interface with the game's own reader: a 'text' before writing it, or a file by "
+                       "'path' (default: the used one). Returns valid, errors, warnings, problems [{code, path, message}] "
+                       "and the outline.",
+        "annotations": {"title": "Check a PDA interface", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "text": {"type": "string"}, "path": {"type": "string"}, "lang": {"type": "string"},
+        }},
+    },
+    {
+        "name": "xfined_pda_preview",
+        "description": "The PDA preview tab: the 2D PDA with the interface in it, drawn with the linked game's textures "
+                       "and fonts, clickable like the game. action: open (opens and focuses the tab - then "
+                       "xfined_screenshot_editor shows it), state (default), click (by 'id' - with 'row' a list's row -, "
+                       "by 'n' from state.visible, or a canvas point 'x','y'), page ('page'), key ('key': map|tasks|contacts - what those keys "
+                       "open), aspect ('aspect': 4:3|16:9), lang ('lang'), reset (start page, declared vars), reload, "
+                       "close. The answer's state holds the page, a stock section when one shows, the vars, the action "
+                       "log (signals and lua calls the game would make) and every visible item with its CANVAS rect, "
+                       "text and actions. The tab follows the file: a write through xfined_pda_write shows at once.",
+        "annotations": {"title": "Preview a PDA interface"},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["open", "state", "click", "page", "key", "aspect", "lang", "reset", "reload", "close"]},
+            "path": {"type": "string"},
+            "id": {"type": "string"}, "row": {"type": "integer", "description": "with a list's id: its row, 1-based"},
+            "n": {"type": "integer"},
+            "x": {"type": "number"}, "y": {"type": "number"},
+            "page": {"type": "string"}, "key": {"type": "string"},
+            "aspect": {"type": "string"}, "lang": {"type": "string"},
+        }},
+    },
+    {
         "name": "xfined_place_way",
         "description": "Draws a way path in the open scene - what the WayPoint tool draws by hand: 'points' in order "
                        "(\"x,y,z; x,y,z; ...\"), each linked to the next, the last back to the first when loop "
@@ -884,8 +978,8 @@ TOOLS = [
     {
         "name": "xfined_content_create",
         "description": "Create one of the editor's own assets in the folder the content browser has open "
-                       "(the Create menu, without the menu). 'kind' is quest, behaviour or character; the "
-                       "file gets the first free NewQuest/NewBehaviour/NewCharacter name, which "
+                       "(the Create menu, without the menu). 'kind' is quest, behaviour, character or pda; the "
+                       "file gets the first free NewQuest/NewBehaviour/NewCharacter/NewPda name, which "
                        "xfined_content_rename then changes. A folder is xfined_content_mkdir instead. "
                        "Returns 'made', the new file project-relative.",
         "inputSchema": {
@@ -893,9 +987,9 @@ TOOLS = [
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["quest", "behaviour", "character"],
-                    "description": "quest graph (.nqasset), NPC behaviour graph (.behasset) "
-                                   "or character (.npcasset)",
+                    "enum": ["quest", "behaviour", "character", "pda"],
+                    "description": "quest graph (.nqasset), NPC behaviour graph (.behasset), "
+                                   "character (.npcasset) or PDA interface (.pdaasset)",
                 },
             },
             "required": ["kind"],
@@ -1704,6 +1798,13 @@ CMD_MAP = {
     "xfined_world_get": "world_get",
     "xfined_world_set": "world_set",
     "xfined_world_transitions": "world_transitions",
+    "xfined_pda_list": "pda_list",
+    "xfined_pda_get": "pda_get",
+    "xfined_pda_write": "pda_write",
+    "xfined_pda_delete": "pda_delete",
+    "xfined_pda_use": "pda_use",
+    "xfined_pda_validate": "pda_validate",
+    "xfined_pda_preview": "pda_preview",
     "xfined_spawn_order": "spawn_order",
     "xfined_place_way": "place_way",
     "xfined_mod_release_edit": "mod_releases",

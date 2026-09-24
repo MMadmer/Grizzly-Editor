@@ -335,6 +335,7 @@ private:
 	void			CreateQuest			();				// NewQuest.nqasset in the folder now open				// in the folder now open
 	void			CreateCharacter		();				// NewCharacter.npcasset in the folder now open
 	void			CreateBehaviour		();				// NewBehaviour.behasset in the folder now open
+	void			CreatePda			();				// NewPda.pdaasset in the folder now open
 	void			BeginRename			(LPCSTR path);	// inline edit on that tile
 	void			DrawBuildToggle		();				// Exclude from / Include in Build for the selection
 	static void		VeilTile			(const ImVec2& a, const ImVec2& b);
