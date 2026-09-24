@@ -540,7 +540,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - MCP: `pda_list`, `pda_get`, `pda_write` (template when no text; `use` picks it),
   `pda_delete` (final; clears `[pda]`), `pda_use`, `pda_validate`, `pda_preview`
   (open/state/click by id, list row, n or canvas point/page/key/aspect/lang/reset); the
-  preview's state answers in CANVAS units, with `map.bound` for placing preview markers.
+  preview's state answers in CANVAS units, with `map.bound` for placing preview markers and
+  `map.spots` (the player and the markers the slot shows); the game's `xms.pda.describe()`
+  lists the map slot's real spots (`spot <id> shown <x>,<y> <hint>`) - that is how QA proves
+  the player and an order are both on the app's map.
   The content browser: Create > PDA Interface, `content_create kind=pda`, a PDA icon.
 - QA: `tools/qa/test_pda.py --project <project> [--shots <dir>]` over MCP on a COPY; the
   game's `tools/nq/test_pda_layout.lua` (the reader, headless) and `Run-NqQa.ps1

@@ -990,41 +990,56 @@ namespace
 		return it.color;
 	}
 
+	// Where the preview map puts a world point inside a map slot: the level fits the slot at zoom
+	// 1 like the game's OptimalFit, world x right, world z up.
+	struct SMapView
+	{
+		ImVec2		mid;
+		float		fit;
+		ImVec2 W2P(float x, float z) const
+		{
+			return ImVec2(mid.x + (x - s_P.map_center.x) * fit, mid.y - (z - s_P.map_center.y) * fit);
+		}
+	};
+
+	bool MapView(const SLevelMap* m, const SAbs& a, SMapView& v)
+	{
+		if (!m) return false;
+		const EditorPda::SLayout& l = s_P.layout;
+		const float bw = m->bound.z - m->bound.x, bh = m->bound.w - m->bound.y;
+		if (bw <= 0 || bh <= 0) return false;
+		v.fit = _min((a.b.x - a.a.x) / bw, (a.b.y - a.a.y) / bh) * s_P.map_zoom;
+		if (!s_P.map_center_set)
+		{
+			// on the player; the whole level when zoomed all the way out
+			s_P.map_center = l.has_actor ? Fvector2().set(l.actor_x, l.actor_z)
+				: Fvector2().set((m->bound.x + m->bound.z) * 0.5f, (m->bound.y + m->bound.w) * 0.5f);
+			if (s_P.map_zoom <= 1.f) s_P.map_center.set((m->bound.x + m->bound.z) * 0.5f, (m->bound.y + m->bound.w) * 0.5f);
+			s_P.map_center_set = true;
+		}
+		v.mid = ImVec2((a.a.x + a.b.x) * 0.5f, (a.a.y + a.b.y) * 0.5f);
+		return true;
+	}
+
 	void DrawMap(int i, const SAbs& a)
 	{
 		const EditorPda::SLayout& l = s_P.layout;
 		s_DL->PushClipRect(a.a, a.b, true);
 		const SLevelMap* m = LevelMap(l.preview_level);
 		SSheet* sheet = m ? Sheet(m->tex, sfGame) : 0;
-		const float w = a.b.x - a.a.x, h = a.b.y - a.a.y;
-		if (m && sheet)
+		SMapView v;
+		if (sheet && MapView(m, a, v))
 		{
-			// the level fits the frame at zoom 1, like the game's OptimalFit
-			const float bw = m->bound.z - m->bound.x, bh = m->bound.w - m->bound.y;
-			const float fit = _min(w / bw, h / bh) * s_P.map_zoom;
-			if (!s_P.map_center_set)
-			{
-				// on the player; the whole level when zoomed all the way out
-				s_P.map_center = l.has_actor ? Fvector2().set(l.actor_x, l.actor_z)
-					: Fvector2().set((m->bound.x + m->bound.z) * 0.5f, (m->bound.y + m->bound.w) * 0.5f);
-				if (s_P.map_zoom <= 1.f) s_P.map_center.set((m->bound.x + m->bound.z) * 0.5f, (m->bound.y + m->bound.w) * 0.5f);
-				s_P.map_center_set = true;
-			}
-			const ImVec2 mid((a.a.x + a.b.x) * 0.5f, (a.a.y + a.b.y) * 0.5f);
-			// world x right, world z up
-			const auto W2P = [&](float x, float z) {
-				return ImVec2(mid.x + (x - s_P.map_center.x) * fit, mid.y - (z - s_P.map_center.y) * fit);
-			};
-			s_DL->AddImage((ImTextureID)sheet->view, W2P(m->bound.x, m->bound.w), W2P(m->bound.z, m->bound.y));
+			s_DL->AddImage((ImTextureID)sheet->view, v.W2P(m->bound.x, m->bound.w), v.W2P(m->bound.z, m->bound.y));
 			for (u32 k = 0; k < l.markers.size(); ++k)
 			{
-				const ImVec2 p = W2P(l.markers[k].x, l.markers[k].z);
+				const ImVec2 p = v.W2P(l.markers[k].x, l.markers[k].z);
 				const float s = 11.f * s_P.ky;
 				DrawTex(l.markers[k].icon, ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y), l.markers[k].color);
 				if (!l.markers[k].hint.empty() && ImGui::IsMouseHoveringRect(ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y)))
 					ImGui::SetTooltip("%s", l.markers[k].hint.c_str());
 			}
-			const ImVec2 ap = l.has_actor ? W2P(l.actor_x, l.actor_z) : mid;
+			const ImVec2 ap = l.has_actor ? v.W2P(l.actor_x, l.actor_z) : v.mid;
 			s_DL->AddCircleFilled(ap, 6.f * s_P.ky, IM_COL32(255, 255, 255, 255));
 			s_DL->AddCircleFilled(ap, 4.f * s_P.ky, IM_COL32(40, 160, 255, 255));
 		}
@@ -1432,8 +1447,34 @@ namespace
 		{
 			out += ",\"map\":{\"level\":";
 			NqUtil::JsonString(out, s_P.layout.preview_level);
-			out += NqUtil::Format(",\"bound\":[%g,%g,%g,%g],\"zoom\":%g}", m->bound.x, m->bound.y, m->bound.z, m->bound.w,
+			out += NqUtil::Format(",\"bound\":[%g,%g,%g,%g],\"zoom\":%g", m->bound.x, m->bound.y, m->bound.z, m->bound.w,
 				s_P.map_zoom);
+			// what the slot shows, in canvas units - the game's describe() lists its spots the same way
+			for (u32 i = 0; i < s_P.abs.size(); ++i)
+			{
+				SMapView v;
+				if (It(i).kind != "map" || !s_P.abs[i].shown || !MapView(m, s_P.abs[i], v)) continue;
+				const ImVec2 root = VPx(s_P.screen.x1, s_P.screen.y1);
+				const float cx = Cx(), cy = Cy();
+				const SAbs& slot = s_P.abs[i];
+				bool first_spot = true;
+				const auto spot = [&](LPCSTR what, const xr_string& hint, const ImVec2& p) {
+					if (!Inside(p, slot)) return;
+					out += first_spot ? "" : ",";
+					first_spot = false;
+					out += NqUtil::Format("{\"what\":\"%s\",\"x\":%.0f,\"y\":%.0f", what, (p.x - root.x) / cx, (p.y - root.y) / cy);
+					if (!hint.empty()) { out += ",\"hint\":"; NqUtil::JsonString(out, hint); }
+					out += "}";
+				};
+				out += ",\"spots\":[";
+				const EditorPda::SLayout& l = s_P.layout;
+				spot("player", xr_string(), l.has_actor ? v.W2P(l.actor_x, l.actor_z) : v.mid);
+				for (u32 k = 0; k < l.markers.size(); ++k)
+					spot("marker", l.markers[k].hint, v.W2P(l.markers[k].x, l.markers[k].z));
+				out += "]";
+				break;
+			}
+			out += "}";
 		}
 		out += ",\"vars\":{";
 		bool first = true;

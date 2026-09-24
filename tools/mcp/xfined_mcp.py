@@ -491,8 +491,10 @@ TOOLS = [
                        "by 'n' from state.visible, or a canvas point 'x','y'), page ('page'), key ('key': map|tasks|contacts - what those keys "
                        "open), aspect ('aspect': 4:3|16:9), lang ('lang'), reset (start page, declared vars), reload, "
                        "close. The answer's state holds the page, a stock section when one shows, the vars, the action "
-                       "log (signals and lua calls the game would make) and every visible item with its CANVAS rect, "
-                       "text and actions. The tab follows the file: a write through xfined_pda_write shows at once.",
+                       "log (signals and lua calls the game would make), every visible item with its CANVAS rect, "
+                       "text and actions, and map.bound / map.spots (the preview level's world rect; the player and "
+                       "the preview markers the map slot shows, in canvas units). The tab follows the file: a write "
+                       "through xfined_pda_write shows at once.",
         "annotations": {"title": "Preview a PDA interface"},
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["open", "state", "click", "page", "key", "aspect", "lang", "reset", "reload", "close"]},

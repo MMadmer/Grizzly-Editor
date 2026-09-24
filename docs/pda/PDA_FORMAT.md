@@ -202,7 +202,7 @@ Scripts change a live layout through `xms.pda` (feature-test `xms.pda_api == 1`)
 | `xms.pda.rows(id, rows)` | a list's rows: `{ { field = value, … }, … }` |
 | `xms.pda.click(id, row)` | what a click on the item does; with `row`, a list's row (1-based) |
 | `xms.pda.open(page)` / `close()` | the PDA itself ("a new order came in") |
-| `xms.pda.describe()` | the live layout as text (pages, items, what is shown) |
+| `xms.pda.describe()` | the live layout as text: pages, items with an id and what is shown, and while the map slot is up one `spot <object id> shown\|pointer <x>,<y> <hint>` line per map spot it draws (listed only while the slot holds it; a pointer is the edge arrow to one outside) - how a script or an agent knows the player and a quest's marker are on the app's map |
 
 Values may be UTF-8 or cp1251. Pages, visibility and rows start over with every level
 load; vars do not (engine blob `0x584DFF03` of the `.scov`).
@@ -254,7 +254,7 @@ stock PDA stays (the log says why).
 | `pda_delete` | delete (final); clears `[pda]` when it was the used one |
 | `pda_use` | set or clear `[pda] layout` |
 | `pda_validate` | check a text or a file |
-| `pda_preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; the state gives `map.bound`, the preview level's world rect |
+| `pda_preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; the state gives `map.bound`, the preview level's world rect, and `map.spots`: the player and the `preview.markers` the slot shows, in canvas units |
 
 The preview follows the file: a write shows at once. `screenshot_editor` after
 `pda_preview action=open` is what the author sees.

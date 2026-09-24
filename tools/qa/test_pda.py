@@ -266,6 +266,28 @@ def run(project: str, shots: str | None) -> None:
         check(p.get("state", {}).get("read") is True, "D the tab re-reads a file written behind it", json.dumps(p)[:200])
         g = mcp("pda_get", path="pda/courier.pdaasset")
         check(any(pg.get("title") == "Deliveries" for pg in g.get("layout", {}).get("pages", [])), "D and the change is there")
+        # the map slot lists what it shows, in canvas units: the player and the markers inside it
+        p = mcp("pda_preview", action="page", page="map")
+        mp = p.get("state", {}).get("map", {})
+        b = mp.get("bound") or [0, 0, 100, 100]
+        cx, cz = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        marked = fixture.replace('preview = { level = "l01_escape" },',
+                                 'preview = { level = "l01_escape", actor = { x = %g, z = %g }, markers = {'
+                                 ' { x = %g, z = %g, hint = "Parcel" }, { x = %g, z = %g, hint = "Far" } } },'
+                                 % (cx, cz, cx, cz + 20, b[0] + 1, b[1] + 1), 1)
+        check(marked != fixture, "D the fixture takes preview markers")
+        mcp("pda_write", path="pda/courier.pdaasset", text=marked, use=False)
+        time.sleep(1.5)
+        mcp("pda_preview", action="reset")
+        p = mcp("pda_preview", action="page", page="map")
+        spots = p.get("state", {}).get("map", {}).get("spots", [])
+        me = [s for s in spots if s.get("what") == "player"]
+        parcel = [s for s in spots if s.get("hint") == "Parcel"]
+        check(len(me) == 1 and len(parcel) == 1 and parcel[0]["y"] < me[0]["y"],
+              "D the map slot lists the player and a marker north of them", json.dumps(spots))
+        check(not [s for s in spots if s.get("hint") == "Far"], "D a marker outside the slot is not listed", json.dumps(spots))
+        mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
+        time.sleep(1.5)
 
         # ------------------------------------------------------------ E: the build
         ex = mcp("mod_export", target=out_dir)
