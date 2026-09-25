@@ -15,7 +15,9 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   D  the signed [card] of the release descriptor (4), verified with xms_catalog.py
   E  the release published to the mock
   F  the listing requirements (7) against the published release and the catalog index - a package VirusTotal does
-     not know is a 'required' finding, never a note; the window opened and closed over MCP (show / hide)
+     not know is a 'required' finding, never a note; the window opened and closed over MCP (show / hide), and drawn
+     where a screenshot holds it although the layout file saved its place far below the editor, and while the
+     editor is minimized (every later picture is taken of a minimized editor)
   G  VirusTotal with the author's own key (11), required: without one the check blocks and nothing is sent;
      the scan uploads what VirusTotal does not know, waits for the report and judges it; a block stops a submission
   H  the submission, scanned first: an issue 'Submit <id>' whose ini block is mods/<id>.ltx byte for byte, edited not
@@ -35,9 +37,11 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+import ctypes.wintypes
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -76,6 +80,12 @@ TRUSTED = "EngineT"
 VT_PAGE = "https://www.virustotal.com/gui/file/"
 JOB_SECONDS = 120.0
 SECRETS = (PASSWORD, PASSWORD2, VT_KEY, TOKEN)
+SUBMIT_WINDOW = "XFined Editor - Submit to Mod Browser"
+# the editor's ImGui layout ($local_root$) and the one a fresh checkout starts from, and its preferences - the
+# window's size and state among them: the editor writes both when it closes
+LAYOUT = os.path.join(REPO, "level_imgui.ini")
+LAYOUT_DEFAULT = os.path.join(REPO, "rawdata", "level_imgui_default.ini")
+PREFS = os.path.join(REPO, "level.ini")
 
 # the game repository's reference implementation, imported in main()
 xc = None
@@ -298,15 +308,100 @@ def job(action: str, seconds: float = JOB_SECONDS, **extra) -> dict:
     return follow(mcp("mod_catalog", action=action, **extra), seconds)
 
 
-def shot(folder: str | None, name: str) -> None:
+def shot(folder: str | None, name: str) -> dict:
     """The editor as it looks now, for the operator - only when --shots names a folder."""
     if not folder:
-        return
+        return {}
     pic = mcp("screenshot_editor")
     if pic.get("png_base64"):
         path = os.path.join(folder, name + ".png")
         write_bytes(path, base64.b64decode(pic["png_base64"]))
         print("screenshot: " + path, flush=True)
+    return pic
+
+
+def platform_windows(pid: int) -> list[str]:
+    """Titles of the visible windows ImGui opened for the process on its own ('ImGui Platform' class): what they
+    draw is in no screenshot of the editor, which mirrors the main window alone."""
+    user32 = ctypes.windll.user32
+    found: list[str] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            text = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, text, 256)
+            if "ImGui" in text.value:
+                user32.GetWindowTextW(hwnd, text, 256)
+                found.append(text.value)
+        return True
+
+    user32.EnumWindows(each, 0)
+    return found
+
+
+def png_rows(data: bytes, count: int) -> tuple[int, int, int, list[bytes]]:
+    """Width, height, bytes per pixel and the first `count` rows, unfiltered, of an 8-bit RGB or RGBA PNG."""
+    pos, idat, width, height, bpp = 8, [], 0, 0, 4
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            width, height, _, color = struct.unpack(">IIBB", body[:10])
+            bpp = 3 if color == 2 else 4
+        elif kind == b"IDAT":
+            idat.append(body)
+        pos += 12 + length
+    raw = zlib.decompress(b"".join(idat))
+    stride = width * bpp
+    rows, prev = [], bytes(stride)
+    for y in range(min(count, height)):
+        start = y * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1:start + 1 + stride])
+        if kind == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif kind == 2:
+            line = bytearray((a + b) & 255 for a, b in zip(line, prev))
+        elif kind == 3:
+            for i in range(stride):
+                line[i] = (line[i] + ((line[i - bpp] if i >= bpp else 0) + prev[i]) // 2) & 255
+        elif kind == 4:
+            for i in range(stride):
+                a, b, c = (line[i - bpp], prev[i], prev[i - bpp]) if i >= bpp else (0, prev[i], 0)
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append(bytes(line))
+        prev = rows[-1]
+    return width, height, bpp, rows
+
+
+def window_drawn(data: bytes, modal: dict) -> str:
+    """Why the picture does not hold a drawn window where the editor says the modal is - '' when it does: inside
+    the picture, and more than a flat fill there (a window has a frame, a title and text)."""
+    x, y, w, h = (int(modal.get(k, -1)) for k in ("x", "y", "w", "h"))
+    width, height, bpp, rows = png_rows(data, y + h)
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > width or y + h > height:
+        return "its rect %s leaves the %dx%d picture" % ([x, y, w, h], width, height)
+    colours = set()
+    for row in rows[y:y + h]:
+        line = row[x * bpp:(x + w) * bpp]
+        colours.update(line[i:i + bpp] for i in range(0, len(line), bpp))
+        if len(colours) > 16:
+            return ""
+    return "its rect %s holds %d colour(s): nothing is drawn there" % ([x, y, w, h], len(colours))
+
+
+def stale_layout(layout: bytes, title: str, y: int) -> bytes:
+    """The layout with the window's saved place y pixels down, below any editor window and any monitor."""
+    text = layout.decode("utf-8")
+    head = "[Window][%s]" % title
+    # the window's own entry goes - it may name a viewport of its own as well - and a new one comes last
+    text = re.sub(r"^%s\r?\n(?:[^\[\r\n].*(?:\r?\n|$))*" % re.escape(head), "", text, flags=re.M)
+    return (text.rstrip("\r\n") + "\n\n%s\nPos=784,%d\nSize=971,700\nCollapsed=0\n" % (head, y)).encode("utf-8")
 
 
 def job_state(data: dict) -> str:
@@ -626,10 +721,28 @@ class Run:
         self.key_id = ""
         self.plain_mode = True
         self.package = ("", 0, "")  # name, size, sha256 of the published zip
+        self.pid = 0  # the running editor's process
 
     def next_index(self, rows: list[str], withdrawn: tuple[str, ...] = ()) -> str:
         self.serial += 1
         return index_text(self.maintainer_key, self.serial, rows, withdrawn)
+
+    def window_in_shot(self, pic: dict, text: str) -> None:
+        """The window is in the picture: drawn into the editor's own window, which is what a screenshot mirrors - not
+        into a platform window of its own (a dimmed editor with no dialog), and not into a frame the editor drew
+        nothing of itself into (a minimized editor: one flat colour)."""
+        outside = pic.get("outside")
+        platform = platform_windows(self.pid)
+        modal = pic.get("modal") or {}
+        if not (pic.get("ok") is True and pic.get("png_base64")):
+            why = "no picture: " + short(pic)
+        elif not isinstance(outside, list) or SUBMIT_WINDOW in outside or SUBMIT_WINDOW in platform:
+            why = "in a window of its own: outside=%s, platform windows=%s" % (outside, platform)
+        elif modal.get("title") != SUBMIT_WINDOW:
+            why = "the modal on top: " + short(pic.get("modal"))
+        else:
+            why = window_drawn(base64.b64decode(pic["png_base64"]), modal)
+        check(not why, text, why)
 
     def window_shot(self, name: str) -> None:
         """The Submit to Mod Browser window with what it says now, for the operator - only when --shots names a folder."""
@@ -637,7 +750,7 @@ class Run:
             return
         # like the menu, show checks at once - and the check reads the submission too
         follow(mcp("mod_catalog", action="show"))
-        shot(self.shots, name)
+        self.window_in_shot(shot(self.shots, name), "shot %s holds the window" % name)
         mcp("mod_catalog", action="hide")
 
     # ------------------------------------------------------------------------------ run 1: an author
@@ -649,6 +762,7 @@ class Run:
             # a lowered line sends even this small package the way a module over 32 MB goes
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=False,
                             extra_env={"XFINED_VT_DIRECT_LIMIT": "1000"})
+            self.pid = editor.proc.pid
             phase("A", self.keys)
             phase("B", self.manifest)
             phase("C", self.content)
@@ -974,11 +1088,24 @@ class Run:
               "F show opens the window and starts a check", short(data.get("job")))
         data = follow(data)
         check(job_done(data, "check") and not blocks(data), "F the check it started runs to the end", short(data.get("job")))
+        # main() saved the window's place far below the editor, and ImGui gives a window outside the main viewport
+        # a platform window of its own - one no screenshot of the editor holds
+        self.window_in_shot(mcp("screenshot_editor"), "F the window opens inside the editor, and a screenshot holds it, "
+                            "wherever the layout saved it")
         shot(self.shots, "catalog_window")
         hidden = mcp("mod_catalog", action="hide")
         check(hidden.get("ok") and not (hidden.get("job") or {}).get("pending"), "F hide closes it and starts nothing",
               short(hidden.get("job")))
         shot(self.shots, "catalog_hidden")
+
+        # a minimized editor has no client area, and ImGui draws nothing of a minimized window: a screenshot of it
+        # was one flat colour. It stays minimized from here on, so every later picture is taken of a minimized editor
+        st = mcp("window_control", action="minimize")
+        check(st.get("ok") and st.get("minimized") is True, "F the editor is minimized", short(st))
+        follow(mcp("mod_catalog", action="show"))
+        self.window_in_shot(mcp("screenshot_editor"), "F a screenshot of the minimized editor holds the window as well")
+        shot(self.shots, "catalog_window_minimized")
+        mcp("mod_catalog", action="hide")
 
     # ------------------------------------------------------------------------------ G: VirusTotal
     def virustotal(self, mock: Mock) -> None:
@@ -1276,6 +1403,7 @@ class Run:
         try:
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
                             extra_env={"XFINED_VT_RATE_WAIT_MS": "200"})
+            self.pid = editor.proc.pid
             phase("J", self.own_listing, mock)
             phase("J", self.foreign_withdrawal, mock)
         finally:
@@ -1416,6 +1544,13 @@ def main() -> int:
     ini_backup = read_bytes(ini)
     real_home = os.path.join(documents_folder(), "XFined Editor")
     real_before = snapshot(real_home)
+    # F wants the Submit to Mod Browser window in the picture although the layout saved it far below the editor (a
+    # fresh checkout has no layout yet: the default one is planted). The editor rewrites its layout and preferences
+    # when it closes, so both come back byte for byte after the last one has
+    layout_backup = read_bytes(LAYOUT)
+    prefs_backup = read_bytes(PREFS)
+    write_bytes(LAYOUT, stale_layout(layout_backup if layout_backup is not None else read_bytes(LAYOUT_DEFAULT) or b"",
+                                     SUBMIT_WINDOW, 3000))
 
     try:
         run = Run(args, work, copy)
@@ -1426,6 +1561,13 @@ def main() -> int:
     finally:
         if ini_backup is not None:
             write_bytes(ini, ini_backup)
+        for path, backup in ((LAYOUT, layout_backup), (PREFS, prefs_backup)):
+            if backup is not None:
+                write_bytes(path, backup)
+            elif os.path.isfile(path):
+                os.remove(path)
+        check(read_bytes(LAYOUT) == layout_backup and read_bytes(PREFS) == prefs_backup,
+              "Z the editor's layout and preferences files are back as they were")
         check(snapshot(real_home) == real_before, "Z the real Documents\\XFined Editor was not touched")
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)

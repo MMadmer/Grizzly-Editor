@@ -7,6 +7,41 @@
 #include "imgui_impl_win32.h"
 #include "imgui_internal.h"	// DockBuilder* for the default layout
 #include "spectrum.h"
+
+// A minimized editor draws only when a screenshot asks for a frame, and that frame has to
+// show the editor the way it looks restored. ImGui draws nothing of a minimized viewport and
+// merges no window into it, so for such a frame it is told the main window is restored: where
+// it stood last, at the size the editor draws at. Not while a window of the editor is in front
+// (one dragged out of it): somebody is looking then, and a panel dropped where the main window
+// would be must not vanish into it.
+namespace
+{
+	bool (*s_GetWindowMinimized)(ImGuiViewport*) = nullptr;
+	ImVec2 (*s_GetWindowPos)(ImGuiViewport*) = nullptr;
+	bool s_DrawRestored = false;
+	ImVec2 s_RestoredPos;
+
+	bool GetWindowMinimized(ImGuiViewport* viewport)
+	{
+		return !(s_DrawRestored && viewport == ImGui::GetMainViewport()) && s_GetWindowMinimized(viewport);
+	}
+
+	ImVec2 GetWindowPos(ImGuiViewport* viewport)
+	{
+		return s_DrawRestored && viewport == ImGui::GetMainViewport() ? s_RestoredPos : s_GetWindowPos(viewport);
+	}
+
+	// the minimized main window itself may stay the foreground one, with nothing to show
+	bool OtherEditorWindowInFront(HWND main)
+	{
+		DWORD process = 0;
+		HWND front = ::GetForegroundWindow();
+		if (front && front != main)
+			::GetWindowThreadProcessId(front, &process);
+		return process == ::GetCurrentProcessId();
+	}
+}
+
 XrUIManager::XrUIManager()
 {
 }
@@ -44,6 +79,55 @@ void XrUIManager::Initialize(HWND hWnd, IDirect3DDevice9* device, const char* in
     ImGui_ImplDX9_Init(device);
 #endif
 
+    m_hWnd = hWnd;
+    ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+    if (platform.Platform_GetWindowMinimized && platform.Platform_GetWindowPos)
+    {
+        s_GetWindowMinimized = platform.Platform_GetWindowMinimized;
+        s_GetWindowPos = platform.Platform_GetWindowPos;
+        platform.Platform_GetWindowMinimized = GetWindowMinimized;
+        platform.Platform_GetWindowPos = GetWindowPos;
+    }
+    // an editor started minimized never had a client area: its restored frame will do
+    WINDOWPLACEMENT placement = { sizeof(placement) };
+    if (::GetWindowPlacement(hWnd, &placement))
+        s_RestoredPos = ImVec2(float(placement.rcNormalPosition.left), float(placement.rcNormalPosition.top));
+}
+
+void XrUIManager::NewPlatformFrame()
+{
+    ImGui_ImplWin32_NewFrame();
+    s_DrawRestored = false;
+    if (!m_hWnd || !s_GetWindowMinimized)
+        return;
+    if (!::IsIconic(m_hWnd))
+    {
+        POINT origin = { 0, 0 };
+        ::ClientToScreen(m_hWnd, &origin);
+        s_RestoredPos = ImVec2(float(origin.x), float(origin.y));
+    }
+    else if (m_RenderWidth > 0 && m_RenderHeight > 0 && !OtherEditorWindowInFront(m_hWnd))
+    {
+        s_DrawRestored = true;
+        ImGui::GetIO().DisplaySize = ImVec2(float(m_RenderWidth), float(m_RenderHeight));
+    }
+}
+
+bool XrUIManager::TopModal(xr_string& title, float rect[4]) const
+{
+    ImGuiWindow* modal = ImGui::GetTopMostAndVisiblePopupModal();
+    const ImGuiViewport* main = ImGui::GetMainViewport();
+    if (!modal || !modal->Viewport || modal->Viewport->ID != main->ID)
+        return false;
+    const char* name = modal->Name;
+    title.assign(name, ImGui::FindRenderedTextEnd(name));
+    // no platform on Windows sets the viewport's own scale: the draw data falls back the same way
+    const ImVec2 scale = main->FramebufferScale.x != 0.0f ? main->FramebufferScale : ImGui::GetIO().DisplayFramebufferScale;
+    rect[0] = (modal->Pos.x - main->Pos.x) * scale.x;
+    rect[1] = (modal->Pos.y - main->Pos.y) * scale.y;
+    rect[2] = modal->Size.x * scale.x;
+    rect[3] = modal->Size.y * scale.y;
+    return true;
 }
 
 void XrUIManager::Destroy()
@@ -261,7 +345,7 @@ void XrUIManager::Draw()
 #else
     ImGui_ImplDX9_NewFrame();
 #endif
-    ImGui_ImplWin32_NewFrame();
+    NewPlatformFrame();
     ImGui::NewFrame();
    // ImGui::DockSpaceOverViewport();
     {
@@ -351,7 +435,7 @@ void XrUIManager::DrawProgressOnly()
 #else
 		ImGui_ImplDX9_NewFrame();
 #endif
-		ImGui_ImplWin32_NewFrame();
+		NewPlatformFrame();
 		ImGui::NewFrame();
 		OnDrawProgressUI();
 		ImGui::EndFrame();

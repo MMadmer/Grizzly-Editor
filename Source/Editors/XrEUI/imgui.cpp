@@ -13387,6 +13387,18 @@ bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags fla
         return false;
     }
 
+    // XFined Editor: a modal is part of the editor's own window. With multi-viewports on, a popup
+    // may grow to the monitor's work area, and one whose rect left the main viewport - grown past
+    // its bottom, or placed by a position saved in the .ini - got a platform window of its own:
+    // outside the editor, and outside every screenshot of it (the capture mirrors the main swap
+    // chain; seen live, a dimmed editor with no dialog). Pinned to the main viewport, a modal is
+    // sized to that viewport's work area - a scrollbar when its content is taller - and is moved
+    // back inside it below whenever the last frame left it sticking out.
+    ImGuiViewport* main_viewport = GetMainViewport();
+    const bool pin_to_main = (g.NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasViewport) == 0;
+    if (pin_to_main)
+        SetNextWindowViewport(main_viewport->ID);
+
     // Center modal windows by default for increased visibility
     // (this won't really last as settings will kick in, and is mostly for backward compatibility. user may do the same themselves)
     // FIXME: Should test for (PosCond & window->SetWindowPosAllowFlags) with the upcoming window.
@@ -13394,6 +13406,18 @@ bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags fla
     {
         const ImGuiViewport* viewport = window->WasActive ? window->Viewport : GetMainViewport(); // FIXME-VIEWPORT: What may be our reference viewport?
         SetNextWindowPos(viewport->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+
+        // XFined Editor: inside the main viewport's work area, by the size the last frame gave it
+        ImGuiWindow* modal = pin_to_main ? FindWindowByName(name) : NULL;
+        if (modal && modal->WasActive)
+        {
+            const ImVec2 area_min = main_viewport->WorkPos;
+            const ImVec2 area_max = main_viewport->WorkPos + main_viewport->WorkSize;
+            const ImVec2 inside(ImMax(area_min.x, ImMin(modal->Pos.x, area_max.x - modal->Size.x)),
+                                ImMax(area_min.y, ImMin(modal->Pos.y, area_max.y - modal->Size.y)));
+            if (inside.x != modal->Pos.x || inside.y != modal->Pos.y)
+                SetNextWindowPos(inside);
+        }
     }
 
     flags |= ImGuiWindowFlags_Popup | ImGuiWindowFlags_Modal | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking;

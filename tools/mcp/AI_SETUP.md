@@ -75,7 +75,7 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_ping` | editor presence check |
 | `xfined_state` | active project name/path, opened scene, FPS |
 | `xfined_screenshot_viewport` | PNG image of the 3D viewport render target. Held for its frames the same way, so a camera move or an edit sent just before it is in the picture |
-| `xfined_screenshot_editor` | PNG image of the whole editor window (all panels), read from the presented frame, so it works even when the editor is covered by other windows. **One call**: the editor holds the request until the frames it asked for are presented, so the picture shows the state AFTER every command sent before it - a background editor draws nothing unasked, and this is what makes it draw. ~0.3 s; the first one after a start can take seconds |
+| `xfined_screenshot_editor` | PNG image of the whole editor window (all panels), read from the presented frame, so it works even when the editor is covered by other windows or minimized. **One call**: the editor holds the request until the frames it asked for are presented, so the picture shows the state AFTER every command sent before it - a background editor draws nothing unasked, and this is what makes it draw. ~0.3 s; the first one after a start can take seconds. Dialogs are always in the picture (`modal` names the one on top); a panel dragged out of the editor into a window of its own is not, and `outside` names it |
 | `xfined_scene_info` | opened scene file, modified flag, object counts per tool class |
 | `xfined_selection` | objects selected in the viewport: name, class, position/rotation/scale |
 | `xfined_object_info` | one object by exact `name`: class, selected/visible, transform |
@@ -555,8 +555,15 @@ One JSON object per line in, one per line out:
 < {"ok":true,"png_base64":"iVBORw0KGgo..."}
 
 > {"cmd":"screenshot_editor"}
-< {"ok":true,"png_base64":"iVBORw0KGgo..."}
+< {"ok":true,"png_base64":"iVBORw0KGgo...","outside":[],"modal":{"title":"XFined Editor - Submit to Mod Browser","x":795,"y":312,"w":971,"h":744}}
 ```
+
+`modal` is the dialog on top, with its rect in the picture's pixels (`null`
+without one). `outside` names the ImGui windows drawn in platform windows of
+their own - a panel dragged out of the editor - which the picture does not hold
+(the capture mirrors the editor's main window). A dialog is never there: every
+modal is pinned to the main window. A minimized editor is pictured the way it
+looks restored.
 
 Errors come back as `{"ok":false,"error":"..."}`. Requests execute on the
 editor's main thread; a busy editor can take up to three minutes before the
@@ -569,7 +576,7 @@ queues at most 64 main-thread requests; each request buffer is capped at 1 MiB.
 > with an MCP endpoint. Use `xfined_state` to learn which project and scene are
 > open, and `xfined_screenshot_editor` / `xfined_screenshot_viewport` to see
 > the editor with your own eyes before and after any change you make. The
-> screenshots work even when the editor window is covered — always verify the
+> screenshots work even when the editor window is covered or minimized — always verify the
 > actual UI state visually instead of assuming. A screenshot is one call: the
 > editor draws the frames it needs first, so the picture always shows the state
 > after the commands you sent before it.

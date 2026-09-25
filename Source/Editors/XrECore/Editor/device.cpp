@@ -135,7 +135,23 @@ void CEditorRenderDevice::Initialize()
 	// helper, and it forces the window to the swap-chain size (psCurrentVidMode,
 	// typically 1024x768) centred on screen - which threw away both the saved
 	// size and the saved maximised state.
-	if (EPrefs->start_maximized)
+	// A launcher that asks for a minimized start - a shortcut set to Run: Minimized, the QA
+	// harness - gets one, maximized again once restored. SW_SHOWMAXIMIZED overrode the request,
+	// which only SW_SHOWDEFAULT below honours; a minimized editor still answers screenshots.
+	STARTUPINFOW startup = { sizeof(startup) };
+	::GetStartupInfoW(&startup);
+	const WORD show = (startup.dwFlags & STARTF_USESHOWWINDOW) ? startup.wShowWindow : WORD(SW_SHOWDEFAULT);
+	const bool start_minimized = show == SW_SHOWMINIMIZED || show == SW_MINIMIZE || show == SW_SHOWMINNOACTIVE ||
+		show == SW_FORCEMINIMIZE;
+	if (EPrefs->start_maximized && start_minimized)
+	{
+		WINDOWPLACEMENT placement = { sizeof(placement) };
+		::GetWindowPlacement(m_hWnd, &placement);
+		placement.flags |= WPF_RESTORETOMAXIMIZED;
+		placement.showCmd = show;
+		::SetWindowPlacement(m_hWnd, &placement);
+	}
+	else if (EPrefs->start_maximized)
 		::ShowWindow(m_hWnd, SW_SHOWMAXIMIZED);
 	else
 	{

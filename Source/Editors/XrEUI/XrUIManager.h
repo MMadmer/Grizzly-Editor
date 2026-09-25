@@ -60,6 +60,13 @@ public:
 	bool InUIPass() const { return m_InUIPass; }
 	void SetProgressOnlyInput(bool active) { m_ProgressOnlyInput = active; }
 
+	// The size of the swap chain the UI is drawn into, given before every frame: a
+	// minimized window has no client area to take it from (see NewPlatformFrame).
+	void SetRenderSize(int width, int height) { m_RenderWidth = width; m_RenderHeight = height; }
+	// The modal on top when it is drawn in the editor's own window: its title and its
+	// rect (x, y, w, h) in the pixels of that window's frame. False when there is none.
+	bool TopModal(xr_string& title, float rect[4]) const;
+
 	// Where a window goes in the default layout. The right column is cut first
 	// so it spans the full height; the bottom strip therefore stops at it,
 	// exactly like Unreal's content drawer.
@@ -95,6 +102,10 @@ protected:
 	// nothing - each editor knows its own window names.
 	virtual void BuildDefaultDockLayout(unsigned int /*dockspace_id*/) {}
 private:
+	void NewPlatformFrame();
+	HWND m_hWnd{nullptr};
+	int m_RenderWidth{0};
+	int m_RenderHeight{0};
 	int m_BlockShortCutsFrame{-1};
 	unsigned int m_DockNodes[5]{};
 	unsigned int m_DockRoot{0};

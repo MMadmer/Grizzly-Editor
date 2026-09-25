@@ -620,6 +620,7 @@ void TUI::Redraw()
                 HW.pContext->RSSetViewports(1, &ui_vp);
 #endif
                 UI_TRACE("before imgui Draw");
+                SetRenderSize(int(EDevice->dwRealWidth), int(EDevice->dwRealHeight));
                 Draw();
                 UI_TRACE("after imgui Draw");
                 EDevice->SetRS(D3DRS_FILLMODE, EDevice->dwFillMode);
@@ -1272,6 +1273,7 @@ void TUI::DrawProgressFrame()
 		viewport.MaxDepth = 1.f;
 		HW.pContext->RSSetViewports(1, &viewport);
 #endif
+		SetRenderSize(int(EDevice->dwRealWidth), int(EDevice->dwRealHeight));
 		DrawProgressOnly();
 	}
 	catch (...)

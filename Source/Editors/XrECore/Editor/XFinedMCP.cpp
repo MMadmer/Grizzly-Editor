@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "XFinedMCP.h"
 #include "EditorProject.h"
+#include "Nq/NqUtil.h"
 #include "UI_ToolsCustom.h"
 #include "ui_main.h"
 #include <climits>
@@ -575,6 +576,42 @@ static void PngSink(void* ctx, void* data, int size)
 	buf->insert(buf->end(), (const u8*)data, (const u8*)data + size);
 }
 
+// What the picture holds of the editor's windows. "outside": the ImGui windows that live in
+// platform windows of their own - a panel dragged out of the editor: the capture mirrors the main
+// swap chain, so they are not in it. Named by their title, the ImGui window's name; a modal is never
+// one of them (BeginPopupModal pins it). "modal": the modal on top, and its rect in the picture.
+static void AppendShotWindows(xr_string& out)
+{
+	xr_vector<xr_string> names;
+	const ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
+	const ImGuiViewport* main = ImGui::GetMainViewport();
+	for (int i = 0; i < platform.Viewports.Size; ++i)
+	{
+		const ImGuiViewport* viewport = platform.Viewports[i];
+		if (viewport == main || !viewport->PlatformWindowCreated || !viewport->PlatformHandleRaw) continue;
+		HWND window = (HWND)viewport->PlatformHandleRaw;
+		if (!::IsWindowVisible(window)) continue;
+		char title[512] = {};
+		::GetWindowTextA(window, title, sizeof(title));
+		names.push_back(title);
+	}
+	out += ",\"outside\":";
+	NqUtil::JsonStringArray(out, names);
+
+	xr_string title;
+	float rect[4];
+	if (!UI || !UI->TopModal(title, rect))
+	{
+		out += ",\"modal\":null";
+		return;
+	}
+	out += ",\"modal\":{\"title\":";
+	NqUtil::JsonString(out, title);
+	char tail[96];
+	sprintf_s(tail, ",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}", iFloor(rect[0]), iFloor(rect[1]), iFloor(rect[2]), iFloor(rect[3]));
+	out += tail;
+}
+
 // Encodes a B8G8R8A8 block - the layout the readback and the thumbnail renderers
 // produce - as a base64 png. Row order is left alone: the D3D9 encoder was fed
 // top-down rows as well.
@@ -820,7 +857,9 @@ static void Execute(SMCPRequest& r)
 		{
 			r.response = "{\"ok\":true,\"png_base64\":\"";
 			r.response += b64;
-			r.response += "\"}";
+			r.response += "\"";
+			AppendShotWindows(r.response);
+			r.response += "}";
 		}
 #else
 		// resolved by window class — m_hWnd visibility varies across the tree

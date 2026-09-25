@@ -55,6 +55,30 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   and because no UI pass ran, a scroll or a selection asked for over MCP was not
   even applied. Anything that must be looked at from outside needs an MCP way to
   get into view (`quest_view` scroll / `action_split` / `vars_split`).
+- **A modal lives in the editor's own window.** Multi-viewports are on (a panel
+  may be dragged out), and ImGui gives any window whose rect leaves the main
+  viewport - or that opens while it is minimized - a platform window of its
+  own, which no screenshot holds: the capture mirrors the main swap chain. Seen
+  live as a dimmed editor with no dialog - a modal grown past the editor's
+  bottom, or opened where a stale `level_imgui.ini` put it. So
+  `BeginPopupModal` (imgui.cpp, `XFined Editor:`) pins every modal to the main
+  viewport and moves it back inside its work area; a taller one scrolls.
+  `screenshot_editor` answers `modal` (the dialog on top, its rect in the
+  picture) and `outside` (the windows the picture does not hold).
+- **A minimized editor is pictured the way it looks restored.** It draws only
+  when a screenshot asks, and ImGui draws nothing of a minimized viewport: the
+  picture was one flat colour. `XrUIManager::NewPlatformFrame` tells ImGui the
+  main window is restored for such a frame - where it stood last, at the swap
+  chain's size (`SetRenderSize`) - unless another window of the editor is in
+  front: somebody is looking then, and a panel dropped there must not vanish.
+  A launcher that asks for a minimized start (a shortcut's Run: Minimized, the
+  QA harness's `SW_SHOWMINNOACTIVE`) gets one whatever `level.ini [render]
+  maximized` says, restored to that state later (`CEditorRenderDevice::
+  Initialize`): QA editors no longer come up over the author's work.
+- QA: `tools/qa/test_mod_catalog.py` F saves the Submit window far below the
+  editor, then minimizes the editor, and each time wants the window in the
+  picture - `modal` inside it and more than a flat fill there (the PNG is
+  decoded); the layout and preferences files come back byte for byte.
 
 ## Startup
 

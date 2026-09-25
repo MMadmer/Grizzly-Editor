@@ -80,8 +80,10 @@ TOOLS = [
     {
         "name": "xfined_screenshot_editor",
         "description": "Screenshot of the whole editor window incl. all panels (PNG), read from the presented frame, "
-                       "so it works even when the editor is covered by other windows. One call: the editor holds the "
-                       "request until its frames are presented, so the picture shows the state after every command sent before it.",
+                       "so it works even when the editor is covered by other windows or minimized. One call: the editor holds the "
+                       "request until its frames are presented, so the picture shows the state after every command sent before it. "
+                       "Dialogs are always inside the picture, and the reply names the one on top; a panel the user dragged out "
+                       "of the editor into a window of its own is not, and the reply names such windows.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -2332,7 +2334,13 @@ def tool_result(name: str, args: dict) -> dict:
     content = []
     if png and data.get("ok"):
         content.append({"type": "image", "data": png, "mimeType": "image/png"})
-        content.append({"type": "text", "text": "screenshot captured"})
+        text = "screenshot captured"
+        if data.get("modal"):
+            text += "; the dialog on top: " + data["modal"].get("title", "")
+        # a panel dragged out of the editor lives in a window of its own, which the picture does not hold
+        if data.get("outside"):
+            text += "; not in it - drawn in windows of their own outside the editor: " + ", ".join(data["outside"])
+        content.append({"type": "text", "text": text})
     else:
         content.append({"type": "text", "text": json.dumps(data, ensure_ascii=False)})
     return {"content": content, "isError": not data.get("ok", False)}
