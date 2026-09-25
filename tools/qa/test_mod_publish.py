@@ -21,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -105,6 +106,8 @@ class Editor:
         env["XFINED_GITHUB_API"] = f"http://127.0.0.1:{port}"
         env["XFINED_GITHUB_WEB"] = f"http://127.0.0.1:{port}"
         env["XFINED_GITHUB_CLIENT_ID"] = "qa-client"
+        # the author key the releases are signed with: a throw-away home, never the user's own
+        env["XFINED_CATALOG_HOME"] = tempfile.mkdtemp(prefix="xfined_publish_home_")
         if with_token:
             env["XFINED_GITHUB_TOKEN"] = TOKEN
         startup = subprocess.STARTUPINFO()

@@ -54,6 +54,11 @@ namespace EditorMod
 		xr_string				author;
 		xr_string				description;	// may hold real line breaks
 		xr_string				website;		// AP-PRO or ModDB page, see ValidateWebsite
+		// The Mod Browser (game repo docs/dead-air/MOD_CATALOG.md 6): the picture next to the
+		// name - a 256 x 256 DXT1/DXT5 DDS inside the module, '\' separators - and the tags of the
+		// fixed vocabulary (TagVocabulary), in the order the author gave them
+		xr_string				thumbnail;
+		xr_vector<xr_string>	tags;
 		xr_string				update_github;	// [update] github: owner/repo the game checks for releases
 		xr_string				api;
 		xr_string				mode;			// [module] mode: gate content by game mode, empty = all modes
@@ -115,6 +120,15 @@ namespace EditorMod
 	// bumped by every Save: a window showing part of the manifest re-reads it when
 	// this moves instead of asking the disk every frame
 	ECORE_API u32	ManifestGeneration	();
+
+	// ---- the Mod Browser's picture and tags (game repo MOD_CATALOG 6) ------------
+	// `value` names what [module] thumbnail becomes: "" = none (the editor's own
+	// thumbnail.dds goes with it), a .dds of the project that already is a thumbnail,
+	// or a picture anywhere (PNG, JPG, TGA, BMP) that is turned into <project>\
+	// thumbnail.dds. Only `m` is changed; the caller saves it.
+	ECORE_API bool	ApplyThumbnail		(LPCSTR project_root, LPCSTR value, SManifest& m, xr_string& err);
+	// a comma list of the tag vocabulary; "" = none, an unknown word is an error
+	ECORE_API bool	ApplyTags			(LPCSTR value, SManifest& m, xr_string& err);
 
 	// ---- what the build leaves out -----------------------------------------
 	// A project folder is the author's working place as well as the module: a git
@@ -185,8 +199,17 @@ namespace EditorMod
 
 		// what the staging build passed by (Export's left_out), for the release report
 		xr_vector<xr_string>	left_out;
+		// the descriptor carries a [card] signed with the author key (Mod Browser, MOD_CATALOG 4);
+		// key_id names the key, empty when the release went out unsigned
+		bool					signed_;
+		xr_string				key_id;
+		// The Mod Browser's content rules over the staged files (MOD_CATALOG 8, 10.3): what the
+		// catalog refuses and what its review looks at. Reported only - a module outside the
+		// catalog ships what it likes, so the release is written either way.
+		xr_vector<xr_string>	catalog_block;
+		xr_vector<xr_string>	catalog_review;
 
-								SPackageResult	() : files(0), unpacked(0), packed(0) {}
+								SPackageResult	() : files(0), unpacked(0), packed(0), signed_(false) {}
 	};
 
 	// A release for the game's module updater: <id>.update.ltx, the file index

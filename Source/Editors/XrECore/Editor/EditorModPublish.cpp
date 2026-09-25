@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "EditorModPublish.h"
+#include "EditorCatalog.h"
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
 #include "EditorProject.h"
@@ -357,6 +358,16 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	if (title.size() > 200)				{ err = "the title is longer than 200 characters"; return false; }
 	if (options.notes.size() > kMaxNotes)	{ err = "the notes are longer than 120 000 characters"; return false; }
 
+	// A release that goes out unsigned while the author has a key would burn its version for
+	// the Mod Browser: a published tag is never overwritten. The key is opened first.
+	const EditorCatalog::SKeyState key = EditorCatalog::KeyState();
+	if (key.exists && key.error.empty() && key.locked)
+	{
+		err = "the author key is locked: give its password first (Mod > Publish Release, or MCP password=) - "
+			  "an unsigned release is one the Mod Browser does not take";
+		return false;
+	}
+
 	// before the packaging: no point in zipping a module nobody can upload
 	EditorGithub::SAccount account;
 	EditorGithub::ResolveAccount(account);
@@ -654,6 +665,13 @@ void CloseDialog()
 	ImGui::CloseCurrentPopup();
 }
 
+// the author key is there and wants its password before anything can be signed
+bool KeyLocked()
+{
+	const EditorCatalog::SKeyState key = EditorCatalog::KeyStateForUI();
+	return key.exists && key.error.empty() && key.locked;
+}
+
 // MAJOR.MINOR.PATCH, what PackageRelease accepts for requires_game
 bool GameVersionOk(LPCSTR v)
 {
@@ -732,6 +750,8 @@ void DrawDialog()
 	Hint("The latest release is the one players update to.");
 
 	DrawAccount();
+	ImGui::SeparatorText("Author key");
+	EditorCatalog::DrawKeyLine("publish");
 	ImGui::Separator();
 
 	xr_string repo;
@@ -743,6 +763,7 @@ void DrawDialog()
 	else if (s_Requires[0] && !GameVersionOk(s_Requires))		problem = "Invalid game version: MAJOR.MINOR.PATCH, e.g. 1.4.2.";
 	else if (!ValidTag(s_Tag))									problem = "Invalid tag: letters, digits, '.', '_' and '-'.";
 	else if (EditorGithub::asNone == s_Account.source)			problem = "Sign in to GitHub first.";
+	else if (KeyLocked())										problem = "Unlock the author key first: the release is signed with it.";
 	if (problem)
 		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s", problem);
 
@@ -1573,6 +1594,20 @@ void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 
 	// request-sized, so over-long notes reach the check instead of reading as absent
 	xr_vector<char> arg(xr_strlen(raw) + 1);
+	// the author key's password, when the key file has one; never echoed or logged
+	if (XFinedMCP::GetArg(raw, "password", arg.data(), (u32)arg.size()) && arg[0])
+	{
+		xr_string key_err;
+		const bool opened = EditorCatalog::Unlock(arg.data(), key_err);
+		SecureZeroMemory(arg.data(), arg.size());
+		if (!opened)
+		{
+			out = "{\"ok\":false,\"error\":\"author key: ";
+			JsonAppend(out, key_err.c_str());
+			out += "\"}";
+			return;
+		}
+	}
 	SOptions options;
 	if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size()))		options.tag = arg.data();
 	if (XFinedMCP::GetArg(raw, "title", arg.data(), (u32)arg.size()))	options.title = arg.data();

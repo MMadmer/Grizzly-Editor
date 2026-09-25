@@ -5,6 +5,7 @@
 #include "..\..\XrAPI\xrGameManager.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
+#include "..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
 #include "..\..\XrECore\Editor\EditorPda.h"
@@ -1570,6 +1571,12 @@ CCommandVar CommandModReleases(CCommandVar p1, CCommandVar p2)
     return TRUE;
 }
 
+CCommandVar CommandModCatalog(CCommandVar p1, CCommandVar p2)
+{
+    EditorCatalogSubmit::Request();
+    return TRUE;
+}
+
 //------------------------------------------------------------------------------
 // MCP inspector: scene / selection / per-object info for AI agents
 //------------------------------------------------------------------------------
@@ -2405,6 +2412,8 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_publish"))			{ EditorPublish::McpPublish(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "mod_releases"))		{ EditorPublish::McpReleases(raw, out);	return true; }
+    // the Mod Browser: author key, listing checks, VirusTotal, the pull request
+    if (0 == xr_strcmp(cmd, "mod_catalog"))			{ EditorCatalogSubmit::McpCatalog(raw, out);	return true; }
     // the module's own NPCs - the asset is text, so this is the primary path
     if (0 == xr_strcmp(cmd, "characters_list"))		{ EditorCharacters::McpList(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "characters_get"))		{ EditorCharacters::McpGet(raw, out);	return true; }
@@ -4458,6 +4467,7 @@ void CLevelMain::RegisterCommands()
 	REGISTER_CMD_SE	    (COMMAND_MOD_CHARACTERS,			"Mod\\Characters",				CommandModCharacters,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_WORLD,					"Mod\\World",					CommandModWorld,true);
 	REGISTER_CMD_SE	    (COMMAND_MOD_PDA,					"Mod\\PDA Interface",			CommandModPda,true);
+	REGISTER_CMD_SE	    (COMMAND_MOD_CATALOG,				"Mod\\Submit to Mod Browser",	CommandModCatalog,true);
 
 	// Ctrl+B out of the box. LoadShortcuts runs later and only touches keys
 	// level.ini actually lists, so a rebind still wins.
@@ -4865,6 +4875,7 @@ void CLevelMain::OnDrawUI()
         EditorProject::DrawUI();
         EditorMod::DrawUI();
         EditorPublish::DrawUI();
+        EditorCatalogSubmit::DrawUI();
         EditorCharacters::DrawUI();
         EditorWorld::DrawUI();
         EditorPda::DrawUI();

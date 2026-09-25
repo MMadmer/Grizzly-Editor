@@ -277,6 +277,56 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The device sign-in ("Sign in with GitHub") stays hidden until `kClientId` in
   `EditorGithub.cpp` holds the client id of the editor's GitHub OAuth app.
 
+## The Mod Browser (EditorCatalog, EditorCatalogSubmit)
+
+- The game's in-game Mod Browser lists modules from a catalog repository
+  (`MMadmer/darf-mods`, served by GitHub Pages / jsDelivr / raw - the same mirrors
+  as the game's `kMirrors`; change both together). The contract is the game repo's
+  `docs/dead-air/MOD_CATALOG.md`: normative, changed by editing the document.
+- **The author key is a FILE the author keeps**, never a secret of this computer:
+  `Documents\XFined Editor\Keys\author.xkey` unless the author picks another place,
+  never inside a project; `Documents\XFined Editor\catalog.ltx` remembers where it
+  is. Optionally password-protected (PBKDF2-SHA256 600000 + an HMAC-SHA256 stream +
+  a MAC, MOD_CATALOG 4.1), opened once per session, wiped when the editor closes.
+  `CreateKey` never overwrites a file. The format is byte-compatible with the
+  catalog's `tools/catalog/xms_catalog.py` - QA cross-checks it both ways.
+- **Package Release signs.** The descriptor gets `[card]` (the manifest with its
+  string ids resolved, the mode, the tags, the thumbnail and mod.ltx pinned by size
+  and hash) and a last `[signature]` over every byte before it, line ends as
+  written. A missing or locked key gives an unsigned release and a warning, never a
+  refused build. Nothing may edit a signed descriptor afterwards.
+- **The content rules run at packaging** (`CheckStagedContent`): MOD_CATALOG 8
+  (extensions, program/archive magic bytes, dot names) and the script report of
+  10.3 over the staged files - warnings plus `catalog_content` in `mod_package`,
+  the release is written anyway: a module outside the catalog ships what it likes.
+  The tokenizer, the rules and the messages are the catalog's `catalog.py`, ported;
+  change both or neither.
+- `[module] thumbnail` / `tags`: the editor makes `thumbnail.dds` at the module root
+  (the middle square, 256 x 256, DXT1 - DXT5 with transparency -, every mip level)
+  from any picture; Mod > Edit Manifest keeps a chosen picture in `temp\` until
+  Save, and Remove deletes only that editor-made file. Tags come from the fixed
+  vocabulary (`TagVocabulary`), picked, never typed. MCP: `mod_set_manifest
+  thumbnail=<picture> tags=<list>`.
+- **Mod > Submit to Mod Browser** / `mod_catalog`: one job at a time on a worker,
+  started by the window or MCP alike. `check` is section 7 against the latest
+  release fetched anonymously the way the game fetches it (the account must own
+  `[update] github`; content is read from this computer's copy only when the local
+  descriptor is byte-identical and every package hash matches - otherwise a note);
+  `vt` is the author's own VirusTotal key (Credential Manager
+  `XFinedEditor:VirusTotal`, or `VT_API_KEY`), uploading a package VirusTotal does
+  not know from the local release folder and waiting out the free API's 4 requests
+  a minute; `submit` checks again, then forks the catalog (or, for an account that
+  may push to it - the maintainer - uses a branch of the catalog itself: GitHub
+  cannot fork your own repository), resets `submit-<id>` onto the default branch,
+  writes the one file `mods/<id>.ltx` and opens the pull request or updates the
+  open one; `pull` follows it and says when the index lists the id with this key.
+  A pull request is public from its first second; the window says so under Submit.
+- QA: under `-qa_github` the catalog is `XFINED_CATALOG_REPO` / `XFINED_CATALOG_BASE`,
+  VirusTotal `XFINED_VT_API` / `XFINED_VT_KEY`, and `XFINED_CATALOG_HOME` replaces
+  `Documents\XFined Editor`, so a test never meets the author's own key.
+  `tools/qa/test_mod_catalog.py --project <project>` drives it all over MCP against
+  `github_mock.py` (the catalog, forks, pull requests and VirusTotal included).
+
 ## Characters (the module's own NPCs)
 
 - One `.npcasset` per character (`EditorCharacters`), declarative Lua like a

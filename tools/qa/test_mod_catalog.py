@@ -1,0 +1,1135 @@
+#!/usr/bin/env python3
+"""End-to-end check of Mod > Submit to Mod Browser (mod_catalog) against tools/qa/github_mock.py.
+
+Drives the editor over MCP on a THROW-AWAY COPY of a project. The editor runs with -qa_github:
+GitHub, the catalog repository, the catalog's public files and VirusTotal are all the mock, and the
+author key file and catalog.ltx live in a temporary XFINED_CATALOG_HOME instead of
+Documents\\XFined Editor - the real author key and the real Windows credentials are never touched.
+Every verdict about keys and signatures is taken from the game repository's own reference
+implementation (tools/catalog/xms_catalog.py and catalog.py), never from the editor's word.
+
+  A  the author key file (MOD_CATALOG 4.1): made protected, never overwritten, a wrong password,
+     another copy taken and unlocked - each read back with xms_catalog.py
+  B  the manifest: the thumbnail made from a picture (6.1) and the tags (6.2)
+  C  the content policy (8) and the script report (10.3) at package time
+  D  the signed [card] of the release descriptor (4), verified with xms_catalog.py
+  E  the release published to the mock
+  F  the listing requirements (7) against the published release and the catalog index; the window
+     opened and closed over MCP (show / hide)
+  G  VirusTotal with the author's own key (11): upload, queue, verdict, a block that stops a submission
+  H  the pull request: fork, branch, mods/<id>.ltx, updated not duplicated, merged, listed
+  I  hygiene: no token, password or VirusTotal key where it must not go
+  J  the maintainer listing a module of their own: a branch of the catalog, no fork
+
+    python tools/qa/test_mod_catalog.py --project D:\\XFinedProjects\\Test [--shots <folder>]
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import ctypes
+import hashlib
+import json
+import os
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+import urllib.parse
+import urllib.request
+import zlib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+MCP = ("127.0.0.1", 28016)
+TOKEN = "qa_token_catalog_0123456789abcdef"
+VT_KEY = "qa-vt-key-5b9e2c71d4"
+GITHUB_REPO = "QaOwner/qa-mod"
+MAINTAINER = "QaMaintainer"
+CATALOG_REPO = MAINTAINER + "/darf-mods"
+MAINTAINER_REPO = MAINTAINER + "/qa-mod"
+MODULE_ID = "qa_catalog_mod"
+MODULE_NAME = "QA Catalog Mod"
+AUTHOR = "QA Author"
+DESCRIPTION = 'Mod Browser QA module.\nA "quoted" word.'
+VERSION = "1.0.0"
+WEBSITE = "https://ap-pro.ru/stuff/qa/qa-mod-r1/"
+# Cyrillic, quotes and a backslash: the password crosses JSON, UTF-8 and PBKDF2 on both sides
+PASSWORD = 'Qa-пароль "7" \\ ok'
+PASSWORD2 = "second-key-pass-9"
+TRUSTED = "EngineT"
+VT_PAGE = "https://www.virustotal.com/gui/file/"
+JOB_SECONDS = 120.0
+SECRETS = (PASSWORD, PASSWORD2, VT_KEY, TOKEN)
+
+# the game repository's reference implementation, imported in main()
+xc = None
+cat = None
+
+results: list[tuple[bool, str]] = []
+# every MCP answer, for the secret scan
+answers: list[str] = []
+
+
+class Abort(Exception):
+    """Going on would do harm - e.g. write a key outside the QA home."""
+
+
+def check(ok: bool, text: str, detail: str = "") -> bool:
+    results.append((bool(ok), text))
+    print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
+    return bool(ok)
+
+
+def phase(name: str, step, *args) -> None:
+    """One phase; a phase that throws is a FAIL of its own and the next one still runs."""
+    try:
+        step(*args)
+    except Abort:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the report is the point
+        traceback.print_exc()
+        check(False, "%s ran to its end" % name, repr(exc))
+
+
+def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
+    payload = {"cmd": cmd}
+    payload.update(extra)
+    with socket.create_connection(MCP, timeout=10) as s:
+        s.settimeout(timeout)
+        s.sendall((json.dumps(payload) + "\n").encode())
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(1 << 20)
+            if not chunk:
+                break
+            buf += chunk
+    data = json.loads(buf.decode("utf-8"))
+    answers.append(json.dumps(data, ensure_ascii=False))
+    return data
+
+
+def mcp_up() -> bool:
+    try:
+        socket.create_connection(MCP, timeout=1).close()
+        return True
+    except OSError:
+        return False
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def short(data) -> str:
+    return json.dumps(data, ensure_ascii=False)[:600]
+
+
+class Mock:
+    def __init__(self, port: int, work: str, name: str, *flags: str, repo: str = GITHUB_REPO):
+        self.port = port
+        self.base = f"http://127.0.0.1:{port}"
+        self.log = os.path.join(work, name + ".log")
+        # a failing handler prints its traceback there; the operator reads it after a FAIL
+        self.errors = open(os.path.join(work, name + ".stderr.txt"), "w", encoding="utf-8")
+        self.proc = subprocess.Popen(
+            [sys.executable, os.path.join(HERE, "github_mock.py"), "--port", str(port), "--token", TOKEN,
+             "--repo", repo, "--catalog-repo", CATALOG_REPO, "--vt-key", VT_KEY, "--log", self.log, *flags],
+            stdout=subprocess.PIPE, stderr=self.errors, text=True)
+        line = self.proc.stdout.readline()
+        if not line or json.loads(line)["port"] != port:
+            raise RuntimeError("the mock did not take its port: " + line)
+
+    def get(self, path: str):
+        with urllib.request.urlopen(self.base + path, timeout=10) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def post(self, path: str, body: bytes = b"", content_type: str = "application/octet-stream"):
+        request = urllib.request.Request(self.base + path, data=body, method="POST",
+                                         headers={"Content-Type": content_type})
+        with urllib.request.urlopen(request, timeout=10) as r:
+            raw = r.read()
+        return json.loads(raw.decode("utf-8")) if raw else None
+
+    def state(self) -> dict:
+        return self.get("/__state")
+
+    def catalog(self) -> dict:
+        return self.get("/__catalog")
+
+    def vt(self) -> dict:
+        return self.get("/__vt")
+
+    def put_file(self, path: str, text: str, branch: str = "main") -> None:
+        """Commits one file to the catalog repository, past the editor - the maintainer's own push."""
+        query = urllib.parse.urlencode({"path": path, "branch": branch})
+        self.post("/__catalog/file?" + query, text.encode("utf-8"))
+
+    def merge(self, number: int) -> None:
+        self.post("/__catalog/merge?number=%d" % number)
+
+    def vt_seed(self, verdicts: dict) -> None:
+        self.post("/__vt/seed", json.dumps(verdicts).encode("utf-8"), "application/json")
+
+    def requests(self) -> list[dict]:
+        if not os.path.isfile(self.log):
+            return []
+        with open(self.log, encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def stop(self) -> None:
+        try:
+            urllib.request.urlopen(urllib.request.Request(self.base + "/__shutdown", method="POST"), timeout=5).read()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.errors.close()
+
+
+class Editor:
+    def __init__(self, exe: str, project: str, port: int, home: str, vt_variable: bool, extra_env: dict | None = None):
+        if mcp_up():
+            raise RuntimeError("an editor already answers on 127.0.0.1:28016 - close it first")
+        if not os.path.isfile(exe):
+            raise RuntimeError("build the editor first: " + exe)
+        env = dict(os.environ)
+        for name in ("XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "XFINED_VT_KEY", "VT_API_KEY"):
+            env.pop(name, None)
+        origin = f"http://127.0.0.1:{port}"
+        env.update({
+            "XFINED_GITHUB_API": origin,
+            "XFINED_GITHUB_WEB": origin,
+            "XFINED_GITHUB_CLIENT_ID": "qa-client",
+            "XFINED_GITHUB_TOKEN": TOKEN,
+            "XFINED_CATALOG_REPO": CATALOG_REPO,
+            "XFINED_CATALOG_BASE": origin + "/catalog/public/",
+            "XFINED_VT_API": origin + "/vt/api/v3",
+            "XFINED_CATALOG_HOME": home,
+        })
+        if vt_variable:
+            env["XFINED_VT_KEY"] = VT_KEY
+        env.update(extra_env or {})
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        self.proc = subprocess.Popen([exe, "-qa_github", "-nodlg", "-project", project],
+                                     cwd=os.path.dirname(exe), env=env, startupinfo=startup)
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            try:
+                if mcp("mod_manifest", timeout=30).get("ok"):
+                    return
+            except OSError:
+                pass
+            if self.proc.poll() is not None:
+                raise RuntimeError("the editor exited during startup")
+            time.sleep(1)
+        raise RuntimeError("the editor never opened the project")
+
+    def close(self) -> None:
+        try:
+            mcp("window_control", action="close")
+        except (OSError, ValueError):
+            pass
+        try:
+            self.proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            print("! the editor did not close on its own - leaving it to the operator", flush=True)
+
+
+# ---- MCP helpers ---------------------------------------------------------------------------------
+
+def follow(data: dict, seconds: float = JOB_SECONDS) -> dict:
+    """A mod_catalog answer, followed through action=status until its job is over."""
+    deadline = time.monotonic() + seconds
+    while data.get("ok") and (data.get("job") or {}).get("pending") and time.monotonic() < deadline:
+        time.sleep(0.5)
+        data = mcp("mod_catalog", action="status")
+    return data
+
+
+def job(action: str, seconds: float = JOB_SECONDS, **extra) -> dict:
+    """mod_catalog <action> on its worker, followed until the job is over."""
+    return follow(mcp("mod_catalog", action=action, **extra), seconds)
+
+
+def shot(folder: str | None, name: str) -> None:
+    """The editor as it looks now, for the operator - only when --shots names a folder."""
+    if not folder:
+        return
+    pic = mcp("screenshot_editor")
+    if pic.get("png_base64"):
+        path = os.path.join(folder, name + ".png")
+        write_bytes(path, base64.b64decode(pic["png_base64"]))
+        print("screenshot: " + path, flush=True)
+
+
+def job_state(data: dict) -> str:
+    return (data.get("job") or {}).get("state", "")
+
+
+def job_done(data: dict, kind: str) -> bool:
+    j = data.get("job") or {}
+    return bool(data.get("ok")) and j.get("kind") == kind and j.get("state") == "done" and not j.get("pending")
+
+
+def job_failed(data: dict) -> bool:
+    """Refused at once (ok:false) or started and failed on the worker - both are a refusal."""
+    return not data.get("ok") or job_state(data) == "failed"
+
+
+def job_error(data: dict) -> str:
+    return str(data.get("error") or "") + " " + str((data.get("job") or {}).get("error") or "")
+
+
+def findings(data: dict) -> list[dict]:
+    return list((data.get("check") or {}).get("findings") or [])
+
+
+def levels(data: dict, code: str) -> list[str]:
+    return [f.get("level", "") for f in findings(data) if f.get("code") == code]
+
+
+def blocks(data: dict) -> list[dict]:
+    return [f for f in findings(data) if f.get("level") == "block"]
+
+
+def vt_entry(data: dict, sha: str) -> dict:
+    return next((v for v in data.get("vt") or [] if str(v.get("sha256", "")).lower() == sha), {})
+
+
+def publish(wait_seconds: float = 240.0) -> dict:
+    """mod_publish with the manifest as it is, followed to the end."""
+    data = mcp("mod_publish")
+    deadline = time.monotonic() + wait_seconds
+    while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
+        time.sleep(0.3)
+        data = mcp("mod_publish", action="status")
+    return data
+
+
+# ---- files ----------------------------------------------------------------------------------------
+
+def read_bytes(path: str) -> bytes | None:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def write_bytes(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def same_path(a: str, b: str) -> bool:
+    return bool(a) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def png(width: int, height: int, pixel, alpha: bool) -> bytes:
+    """A PNG from pixel(x, y) -> (r, g, b[, a]): RGB when opaque by format, RGBA otherwise."""
+    raw = bytearray()
+    for y in range(height):
+        raw.append(0)
+        for x in range(width):
+            raw.extend(pixel(x, y))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6 if alpha else 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + \
+        chunk(b"IEND", b"")
+
+
+def opaque_picture() -> bytes:
+    """300 x 200: a red strip, a green middle square, a blue strip - only the square may reach the DDS."""
+    return png(300, 200, lambda x, y: (255, 0, 0) if x < 50 else (0, 0, 255) if x >= 250 else (0, 255, 0), False)
+
+
+def transparent_picture() -> bytes:
+    return png(64, 48, lambda x, y: (200, 180, 40, 0 if x < 32 else 255), True)
+
+
+def dds_info(data: bytes | None) -> dict:
+    if not data or len(data) < 128:
+        return {}
+    return {"size": len(data), "height": struct.unpack_from("<I", data, 12)[0],
+            "width": struct.unpack_from("<I", data, 16)[0], "mips": struct.unpack_from("<I", data, 28)[0],
+            "fourcc": data[84:88].decode("latin-1")}
+
+
+def top_level_is_green(data: bytes) -> bool:
+    """Every DXT1 block of the 256 x 256 level shows the middle square: green end points, no red, no blue."""
+    for at in range(128, 128 + 64 * 64 * 8, 8):
+        ends = struct.unpack_from("<HH", data, at)
+        if any((c >> 11) > 4 or (c & 31) > 4 for c in ends) or max((c >> 5) & 63 for c in ends) < 48:
+            return False
+    return True
+
+
+def plant_program() -> bytes:
+    """A PE image: MZ, e_lfanew at 0x3C pointing at PE\\0\\0."""
+    return b"MZ" + b"\0" * 58 + struct.pack("<I", 64) + b"PE\0\0" + b"\0" * 188
+
+
+BAD_SCRIPT = b"""-- QA: what a catalog module must not do
+local code = "return 1"
+os.execute("calc")
+local chunk = loadstring(code)
+"""
+
+
+def parse_signed_ini(data: bytes) -> dict:
+    """{section: {key: value}} of a signed descriptor's body, quotes resolved (catalog.py's parser)."""
+    body, _, _, _ = xc.split_signed(data)
+    return {name: {k: cat.unquote(v) for k, v in rows} for name, rows in cat.parse_ini(body.decode("utf-8")).items()}
+
+
+def read_index(path: str) -> dict[str, tuple[int, str]]:
+    """path -> (size, sha256) of every file record of a file index (MOD_UPDATES 2.2)."""
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    for line in lines[1:]:
+        parts = line.split(" ", 7)
+        if parts[0] == "file" and len(parts) == 8:
+            out[parts[7]] = (int(parts[2]), parts[1].lower())
+    return out
+
+
+def card_file(value: str) -> tuple[str, int, str]:
+    parts = [p.strip() for p in value.split(",")]
+    if len(parts) != 3 or not parts[1].isdigit():
+        return "", -1, ""
+    return parts[0], int(parts[1]), parts[2].lower()
+
+
+def index_text(maintainer: int, serial: int, rows: list[str]) -> str:
+    """public/index.ltx as the maintainer publishes it (MOD_CATALOG 5.2), signed with a QA maintainer key."""
+    body = "\n".join(["[catalog]", "format  = 1", "serial  = %d" % serial, "issued  = 2026-09-25", "",
+                      "[virustotal]", "trusted       = " + TRUSTED, "block_trusted = 1", "warn_trusted  = 1",
+                      "block_others  = 5", "warn_others   = 2", "",
+                      "[mods]", *rows, "", "[revoked]", ""]) + "\n"
+    return xc.sign_text(body, maintainer)
+
+
+def listing(module_id: str, github: str, key_text: str) -> str:
+    return "%s = %s, %s, 1.0.0, 2026-09-25" % (module_id, github, key_text)
+
+
+def submission_fields(text: str) -> dict:
+    return dict(cat.parse_ini(text).get("mod", []))
+
+
+def documents_folder() -> str:
+    buffer = ctypes.create_unicode_buffer(1024)
+    # CSIDL_PERSONAL: where Documents really is, OneDrive redirection included
+    ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buffer)
+    return buffer.value
+
+
+def snapshot(folder: str) -> dict:
+    """What the real Documents\\XFined Editor holds of the catalog - a QA run must leave it as it was."""
+    out = {}
+    for rel in ("catalog.ltx", os.path.join("Keys", "author.xkey")):
+        out[rel] = read_bytes(os.path.join(folder, rel))
+    keys = os.path.join(folder, "Keys")
+    out["Keys/"] = sorted(os.listdir(keys)) if os.path.isdir(keys) else None
+    return out
+
+
+def leaks_in(paths: list[str]) -> list[str]:
+    """Files under `paths` that hold a secret, as UTF-8 or as cp1251. A crash dump is process memory, where a
+    password lives while it is used - not something the editor writes down - so dumps are left out."""
+    needles = []
+    for secret in SECRETS:
+        needles.append(secret.encode("utf-8"))
+        needles.append(secret.encode("cp1251", "ignore"))
+    found = []
+    for root in paths:
+        if os.path.isfile(root):
+            walk = [(os.path.dirname(root), [], [os.path.basename(root)])]
+        elif os.path.isdir(root):
+            walk = os.walk(root)
+        else:
+            continue
+        for base, _, files in walk:
+            for name in files:
+                if name.lower().endswith((".mdmp", ".dmp")):
+                    continue
+                path = os.path.join(base, name)
+                data = read_bytes(path) or b""
+                if any(needle and needle in data for needle in needles):
+                    found.append(path)
+    return found
+
+
+def route_class(path: str) -> str:
+    p = urllib.parse.urlsplit(path).path
+    if p.startswith("/__"):
+        return "harness"
+    if p.startswith("/vt/"):
+        return "vt"
+    if p.startswith("/catalog/"):
+        return "catalog"
+    if p == "/user" or p.startswith(("/user/", "/repos/", "/upload/", "/graphql")):
+        return "api"
+    if p.startswith("/login/"):
+        return "device"
+    return "web"
+
+
+# ---- the mock's catalog network and VirusTotal, as its harness routes report them ------------------------
+# /__catalog: {"repositories": {"<owner/name>": {"fork", "pending", "branches": {"<name>": {"sha", "message",
+# "files": {path: text}, "files_base64": {...}}}}}, "pulls": [GitHub's pull JSON]}
+# /__vt: {"files": {"<sha256>": {"sha256", "size", "results", "queued", "uploads", "names"}}, "analyses": [...]}
+
+def repo_of(state: dict, full_name: str) -> dict:
+    repos = state.get("repositories") or {}
+    return next((repo for name, repo in repos.items() if name.lower() == full_name.lower()), {})
+
+
+def forks(state: dict) -> list[str]:
+    return [name for name, repo in (state.get("repositories") or {}).items() if repo.get("fork")]
+
+
+def branch_file(state: dict, full_name: str, branch: str, path: str) -> str | None:
+    return (((repo_of(state, full_name).get("branches") or {}).get(branch) or {}).get("files") or {}).get(path)
+
+
+def pulls(state: dict) -> list[dict]:
+    return list(state.get("pulls") or [])
+
+
+def pull_of(state: dict, number: int) -> dict:
+    return next((p for p in pulls(state) if p.get("number") == number), {})
+
+
+def head_label(pull: dict) -> str:
+    return (pull.get("head") or {}).get("label", "")
+
+
+def base_ref(pull: dict) -> str:
+    return (pull.get("base") or {}).get("ref", "")
+
+
+def uploads_of(vt_state: dict, sha: str) -> int:
+    return ((vt_state.get("files") or {}).get(sha) or {}).get("uploads", 0)
+
+
+# ---- the run -------------------------------------------------------------------------------------------
+
+class Run:
+    def __init__(self, args, work: str, copy: str):
+        self.exe = args.editor
+        self.shots = os.path.abspath(args.shots) if args.shots else None
+        self.work = work
+        self.copy = copy
+        self.home = os.path.join(work, "catalog_home")
+        self.key_path = os.path.join(self.home, "Keys", "author.xkey")
+        self.maintainer_key = xc.new_private()
+        self.stranger = xc.key_text(xc.public_of(xc.new_private()))
+        self.seed = os.path.join(work, "catalog_seed")
+        self.other_row = listing("qa-other-module", "QaSomeone/other-module", self.stranger)
+        self.serial = 1
+        write_bytes(os.path.join(self.seed, "public", "index.ltx"),
+                    index_text(self.maintainer_key, self.serial, [self.other_row]).encode("utf-8"))
+        write_bytes(os.path.join(self.seed, "mods", "qa-other-module.ltx"),
+                    ("[mod]\nid      = qa-other-module\ngithub  = QaSomeone/other-module\nkey     = %s\n"
+                     "version = 1.0.0\nwebsite = https://www.moddb.com/mods/qa-other-module\n" % self.stranger)
+                    .encode("utf-8"))
+        self.key_public = ""
+        self.key_id = ""
+        self.plain_mode = True
+        self.package = ("", 0, "")  # name, size, sha256 of the published zip
+        self.pull_number = 0
+
+    def next_index(self, rows: list[str]) -> str:
+        self.serial += 1
+        return index_text(self.maintainer_key, self.serial, rows)
+
+    # ------------------------------------------------------------------------------ run 1: an author
+    def author(self) -> None:
+        port = free_port()
+        # GitHub makes a fork in the background: the editor has to wait for it
+        mock = Mock(port, self.work, "mock_author", "--catalog-seed", self.seed, "--fork-delay", "2")
+        editor = None
+        try:
+            # a lowered line sends even this small package the way a module over 32 MB goes
+            editor = Editor(self.exe, self.copy, port, self.home, vt_variable=False,
+                            extra_env={"XFINED_VT_DIRECT_LIMIT": "1000"})
+            phase("A", self.keys)
+            phase("B", self.manifest)
+            phase("C", self.content)
+            phase("D", self.descriptor)
+            phase("E", self.release, mock)
+            phase("F", self.listing_check, mock)
+            phase("G", self.virustotal, mock)
+            phase("H", self.submission, mock)
+        finally:
+            if editor:
+                # the QA credential goes with the run
+                try:
+                    mcp("mod_catalog", action="vt_key_forget")
+                except (OSError, ValueError):
+                    pass
+                editor.close()
+            mock.stop()
+        phase("I", self.hygiene, mock, "author")
+
+    # ------------------------------------------------------------------------------ A: the author key
+    def keys(self) -> None:
+        st = mcp("mod_catalog")
+        key = st.get("key") or {}
+        if not check(st.get("ok"), "A mod_catalog answers with the status", short(st)):
+            raise Abort("mod_catalog does not answer - this editor build has no Submit to Mod Browser")
+        if not check(same_path(key.get("path", ""), self.key_path),
+                     "A the key would go to <XFINED_CATALOG_HOME>\\Keys\\author.xkey", short(st)):
+            raise Abort("the editor does not keep its key in XFINED_CATALOG_HOME - stopped before it writes one elsewhere")
+        check(st.get("ok") and key.get("exists") is False, "A a fresh catalog home has no author key", short(st))
+        check(st.get("catalog") == CATALOG_REPO, "A the catalog is the one XFINED_CATALOG_REPO names", str(st.get("catalog")))
+        check((st.get("account") or {}).get("signed_in") is True, "A the GitHub account of the environment is in effect",
+              short(st.get("account")))
+        check(job_state(st) == "idle" and not (st.get("job") or {}).get("pending") and
+              (st.get("pull") or {}).get("number") == 0 and not (st.get("check") or {}).get("done"),
+              "A no job, no check and no pull request yet", short(st))
+
+        st = mcp("mod_catalog", action="key_create", password=PASSWORD)
+        key = st.get("key") or {}
+        check(st.get("ok") and key.get("exists") is True and key.get("locked") is False,
+              "A key_create makes a key that is open for the session", short(st))
+        text = (read_bytes(self.key_path) or b"").decode("ascii", "replace")
+        fields = {}
+        try:
+            fields = xc.parse_key_file_text(text)
+        except ValueError as error:
+            check(False, "A the key file is an xms-key 1 file", str(error))
+        check({"public", "kdf", "cipher", "private", "mac"} <= set(fields) and
+              fields.get("kdf", "").replace(" ", "").startswith("pbkdf2-sha256,600000,") and
+              fields.get("cipher", "").replace(" ", "").startswith("hmac-sha256-ctr,"),
+              "A the file is in the protected format: pbkdf2-sha256 600000, hmac-sha256-ctr, private, mac", text)
+        try:
+            d = xc.read_key_text(text, PASSWORD)
+            point = xc.public_of(d)
+            check(xc.key_text(point) == fields.get("public") == key.get("public"),
+                  "A xms_catalog.py opens it with the password and its scalar gives the public key",
+                  f"{fields.get('public')} vs {key.get('public')}")
+            check(xc.key_id(point) == key.get("key_id"), "A the key id is the one xms_catalog.py computes",
+                  f"{xc.key_id(point)} vs {key.get('key_id')}")
+        except ValueError as error:
+            check(False, "A xms_catalog.py opens the editor's key file with the password", str(error))
+        self.key_public, self.key_id = key.get("public", ""), key.get("key_id", "")
+
+        before = read_bytes(self.key_path)
+        again = mcp("mod_catalog", action="key_create", password="something else")
+        check(not again.get("ok") and read_bytes(self.key_path) == before, "A a key file is never overwritten", short(again))
+        wrong = mcp("mod_catalog", action="key_unlock", password="not the password")
+        check(not wrong.get("ok") and "wrong password" in str(wrong.get("error")), "A a wrong password is refused as such",
+              short(wrong))
+
+        # another copy of a key, written by the reference implementation
+        other = os.path.join(self.work, "keys", "second.xkey")
+        os.makedirs(os.path.dirname(other), exist_ok=True)
+        d2 = xc.new_private()
+        xc.write_key_file(other, d2, PASSWORD2)
+        other_id = xc.key_id(xc.public_of(d2))
+        st = mcp("mod_catalog", action="key_use", path=other)
+        key = st.get("key") or {}
+        check(st.get("ok") and same_path(key.get("path", ""), other) and key.get("locked") is True and
+              key.get("key_id") == other_id, "A key_use takes another key file; a protected one starts locked", short(st))
+        remembered = (read_bytes(os.path.join(self.home, "catalog.ltx")) or b"").decode("utf-8", "replace")
+        check("second.xkey" in remembered, "A catalog.ltx remembers the key file in use", remembered)
+        st = mcp("mod_catalog", action="key_unlock", password=PASSWORD2)
+        key = st.get("key") or {}
+        check(st.get("ok") and key.get("locked") is False and key.get("key_id") == other_id and
+              key.get("public") == xc.key_text(xc.public_of(d2)),
+              "A key_unlock opens a key file xms_catalog.py wrote: same id, same public key", short(st))
+
+        st = mcp("mod_catalog", action="key_use", path=self.key_path)
+        st = mcp("mod_catalog", action="key_unlock", password=PASSWORD) if st.get("ok") else st
+        key = st.get("key") or {}
+        check(st.get("ok") and key.get("locked") is False and key.get("key_id") == self.key_id and
+              same_path(key.get("path", ""), self.key_path), "A back to the first key, unlocked", short(st))
+
+    # ------------------------------------------------------------------------------ B: thumbnail and tags
+    def manifest(self) -> None:
+        current = mcp("mod_manifest")
+        fields = {"id": MODULE_ID, "name": MODULE_NAME, "version": VERSION, "author": AUTHOR,
+                  "description": DESCRIPTION, "website": WEBSITE, "github": GITHUB_REPO}
+        if not current.get("target"):
+            fields["target"] = "default"
+        r = mcp("mod_set_manifest", **fields)
+        check(r.get("ok"), "B the manifest takes id, name, version, author, website and github", short(r))
+        self.plain_mode = not current.get("mode")
+
+        thumb = os.path.join(self.copy, "thumbnail.dds")
+        opaque = os.path.join(self.work, "pictures", "qa_opaque.png")
+        write_bytes(opaque, opaque_picture())
+        r = mcp("mod_set_manifest", thumbnail=opaque)
+        m = mcp("mod_manifest")
+        data = read_bytes(thumb)
+        info = dds_info(data)
+        check(r.get("ok") and m.get("thumbnail") == "thumbnail.dds" and data is not None,
+              "B an opaque PNG (absolute path) becomes thumbnail.dds", f"{short(r)} {m.get('thumbnail')}")
+        check(data is not None and cat.valid_thumbnail(data), "B the game's own test takes it as a thumbnail", str(info))
+        check(info.get("fourcc") == "DXT1" and info.get("mips") == 9 and info.get("size") == 43832,
+              "B 256x256 DXT1 with the full mip chain, exactly 43832 bytes", str(info))
+        check(info.get("fourcc") == "DXT1" and top_level_is_green(data),
+              "B the middle square is what it shows: the side strips are cut off", str(info))
+
+        alpha = os.path.join(self.copy, "qa_alpha.png")
+        write_bytes(alpha, transparent_picture())
+        r = mcp("mod_set_manifest", thumbnail="qa_alpha.png")
+        data = read_bytes(thumb)
+        info = dds_info(data)
+        os.remove(alpha)
+        check(r.get("ok") and mcp("mod_manifest").get("thumbnail") == "thumbnail.dds",
+              "B a PNG with transparency, relative to the project, is taken too", short(r))
+        check(data is not None and cat.valid_thumbnail(data) and info.get("fourcc") == "DXT5" and
+              info.get("mips") == 9 and info.get("size") == 87536, "B and becomes DXT5 with the full mip chain", str(info))
+
+        junk = os.path.join(self.work, "pictures", "qa_not_a_picture.png")
+        write_bytes(junk, b"this is not a picture\n")
+        r = mcp("mod_set_manifest", thumbnail=junk)
+        check(not r.get("ok") and r.get("error") and mcp("mod_manifest").get("thumbnail") == "thumbnail.dds" and
+              read_bytes(thumb) == data, "B a picture that cannot be read is refused and changes nothing", short(r))
+
+        # a DDS that already is a thumbnail is taken as it is - wherever the key ends up pointing
+        ready = os.path.join(self.copy, "art", "qa_ready.dds")
+        write_bytes(ready, data)
+        r = mcp("mod_set_manifest", thumbnail="art/qa_ready.dds")
+        named = str(mcp("mod_manifest").get("thumbnail", "")).replace("\\", "/")
+        check(r.get("ok") and named in ("art/qa_ready.dds", "thumbnail.dds") and
+              read_bytes(os.path.join(self.copy, *named.split("/"))) == data and read_bytes(ready) == data,
+              "B a valid thumbnail DDS inside the project is used as is", f"{short(r)} {named}")
+        r = mcp("mod_set_manifest", thumbnail="")
+        m = mcp("mod_manifest")
+        check(r.get("ok") and m.get("thumbnail") == "" and os.path.isfile(ready) and
+              os.path.isfile(thumb) == (named != "thumbnail.dds"),
+              "B clearing deletes thumbnail.dds only when that is the file the key named", f"{short(r)} {named}")
+        shutil.rmtree(os.path.join(self.copy, "art"), ignore_errors=True)
+
+        r = mcp("mod_set_manifest", thumbnail=opaque)
+        check(r.get("ok") and os.path.isfile(thumb), "B the opaque picture again", short(r))
+        r = mcp("mod_set_manifest", thumbnail="")
+        m = mcp("mod_manifest")
+        check(r.get("ok") and m.get("thumbnail") == "" and not os.path.exists(thumb),
+              "B thumbnail '' clears the key and deletes the thumbnail.dds it named", f"{short(r)} {m.get('thumbnail')}")
+        ltx = (read_bytes(os.path.join(self.copy, "mod.ltx")) or b"").decode("utf-8", "replace")
+        check(not [line for line in ltx.splitlines() if line.strip().startswith("thumbnail")],
+              "B mod.ltx no longer names a thumbnail", ltx)
+        r = mcp("mod_set_manifest", thumbnail=opaque)
+        check(r.get("ok") and dds_info(read_bytes(thumb)).get("fourcc") == "DXT1", "B and the opaque one for the release",
+              short(r))
+
+        r = mcp("mod_set_manifest", tags="story,quests")
+        check(r.get("ok") and mcp("mod_manifest").get("tags") == ["story", "quests"], "B tags story,quests are kept in order",
+              short(r))
+        r = mcp("mod_set_manifest", tags="story,nonsense")
+        check(not r.get("ok") and "unknown tag" in str(r.get("error")) and "nonsense" in str(r.get("error")),
+              "B a word outside the vocabulary is refused and named", short(r))
+        check(mcp("mod_manifest").get("tags") == ["story", "quests"], "B and the tags stay as they were")
+        r = mcp("mod_set_manifest", tags="")
+        check(r.get("ok") and mcp("mod_manifest").get("tags") == [], "B tags '' clears them", short(r))
+        mcp("mod_set_manifest", tags="story,quests")
+
+    # ------------------------------------------------------------------------------ C: content policy
+    def content(self) -> None:
+        planted = {
+            os.path.join(self.copy, "bin", "evil.dll"): plant_program(),
+            # a program under a name the catalog allows: the bytes are what counts
+            os.path.join(self.copy, "qa_disguised", "program.txt"): plant_program(),
+            os.path.join(self.copy, "gamedata", "scripts", "qa_bad.script"): BAD_SCRIPT,
+            # somebody's key file dropped into the project: the build must never ship it
+            os.path.join(self.copy, "qa_keys", "leaked.xkey"): b"xms-key 1\npublic  = p256:none\nprivate = none\n",
+        }
+        for path, data in planted.items():
+            write_bytes(path, data)
+        try:
+            r = mcp("mod_package")
+            content = r.get("catalog_content") or []
+            blocked = [c.get("text", "") for c in content if c.get("level") == "block"]
+            reviewed = [c.get("text", "") for c in content if c.get("level") == "review"]
+            check(r.get("ok"), "C a module the catalog would refuse still packages", short(r))
+            check(any("evil.dll" in t for t in blocked), "C a .dll is a blocking finding that names it", short(content))
+            check(any("program.txt" in t for t in blocked), "C so is a program under an allowed extension", short(content))
+            check(any("qa_bad.script" in t and "os.execute" in t for t in blocked),
+                  "C os.execute in a script blocks, with the script named", short(content))
+            check(any("qa_bad.script" in t and "loadstring" in t for t in reviewed),
+                  "C loadstring of a computed string is for review", short(content))
+            left = r.get("left_out") or []
+            check(any("leaked.xkey" in t and "never ships" in t for t in left),
+                  "C a key file inside the project is left out of the build, and said so", short(left))
+            index_name = "%s-%s.files" % (MODULE_ID, VERSION)
+            index = read_index(os.path.join(self.copy, "releases", VERSION, index_name))
+            check(index and not [p for p in index if p.lower().endswith(".xkey")], "C and it is in no package",
+                  short(sorted(index)))
+            inside = mcp("mod_catalog", action="key_create", path=os.path.join(self.copy, "qa_keys", "made_here.xkey"))
+            check(not inside.get("ok") and "inside a project" in str(inside.get("error", "")) and
+                  not os.path.exists(os.path.join(self.copy, "qa_keys", "made_here.xkey")),
+                  "C a key file is never made inside the project", short(inside))
+        finally:
+            for path in planted:
+                if os.path.exists(path):
+                    os.remove(path)
+            for folder in ("bin", "qa_disguised", "qa_keys"):
+                shutil.rmtree(os.path.join(self.copy, folder), ignore_errors=True)
+
+    # ------------------------------------------------------------------------------ D: the signed descriptor
+    def descriptor(self) -> None:
+        r = mcp("mod_package")
+        check(r.get("ok") and r.get("signed") is True and r.get("key_id") == self.key_id,
+              "D the package is signed with the author key", short(r))
+        check(not [c for c in r.get("catalog_content") or [] if c.get("level") == "block"],
+              "D and the module holds nothing the catalog refuses", short(r.get("catalog_content")))
+        folder = os.path.join(self.copy, "releases", VERSION)
+        data = read_bytes(os.path.join(folder, MODULE_ID + ".update.ltx")) or b""
+        try:
+            _, key_text, sid, _ = xc.split_signed(data)
+            check(key_text == self.key_public and sid == self.key_id, "D [signature] names the author key",
+                  f"{key_text} {sid}")
+            check(xc.verify_signed(data, xc.parse_key(self.key_public)), "D the signature verifies with xms_catalog.py")
+        except ValueError as error:
+            check(False, "D the descriptor carries a valid [signature]", str(error))
+            return
+        sections = parse_signed_ini(data)
+        release, card = sections.get("release", {}), sections.get("card", {})
+        check(release.get("id") == MODULE_ID and release.get("version") == VERSION, "D the descriptor is this release",
+              str(release))
+        check(card.get("name") == MODULE_NAME and card.get("author") == AUTHOR and card.get("description") == DESCRIPTION and
+              card.get("website") == WEBSITE, "D [card] carries name, author, description and website", str(card))
+        check(card.get("mode") == "plain" if self.plain_mode else str(card.get("mode", "")).startswith(("new ", "mode ")),
+              "D [card] names the mode", str(card.get("mode")))
+        check([t.strip() for t in card.get("tags", "").split(",")] == ["story", "quests"], "D [card] carries the tags",
+              str(card.get("tags")))
+        index = read_index(os.path.join(folder, "%s-%s.files" % (MODULE_ID, VERSION)))
+        thumb_path, thumb_size, thumb_sha = card_file(card.get("thumbnail", ""))
+        manifest_path, manifest_size, manifest_sha = card_file(card.get("manifest", ""))
+        thumb = read_bytes(os.path.join(self.copy, "thumbnail.dds")) or b""
+        check(thumb_path == "thumbnail.dds" and index.get("thumbnail.dds") == (thumb_size, thumb_sha) and
+              (len(thumb), sha256(thumb)) == (thumb_size, thumb_sha),
+              "D the card's thumbnail is the file the index lists, byte for byte", f"{card.get('thumbnail')} {index.get('thumbnail.dds')}")
+        check(manifest_path == "mod.ltx" and index.get("mod.ltx") == (manifest_size, manifest_sha),
+              "D the card's manifest is the mod.ltx the index lists", f"{card.get('manifest')} {index.get('mod.ltx')}")
+
+    # ------------------------------------------------------------------------------ E: publish
+    def release(self, mock: Mock) -> None:
+        data = publish()
+        check(data.get("state") == "done" and data.get("served") is True, "E the release is published and served", short(data))
+        state = mock.state()
+        done = [r for r in state.get("releases", []) if not r.get("draft")]
+        assets = {a["name"]: a for a in done[0]["assets"]} if done else {}
+        zips = sorted(n for n in assets if n.endswith(".zip"))
+        folder = os.path.join(self.copy, "releases", VERSION)
+        local = {n: sha256(read_bytes(os.path.join(folder, n)) or b"") for n in os.listdir(folder)} if os.path.isdir(folder) else {}
+        check(local and local == {n: a.get("sha256") for n, a in assets.items()},
+              "E GitHub holds exactly the packaged files", f"{sorted(local)} vs {sorted(assets)}")
+        if zips:
+            self.package = (zips[0], assets[zips[0]].get("size", 0), str(assets[zips[0]].get("sha256", "")).lower())
+        check(len(zips) == 1, "E one package", str(zips))
+
+    # ------------------------------------------------------------------------------ F: the listing requirements
+    def listing_check(self, mock: Mock) -> None:
+        data = job("check")
+        c = data.get("check") or {}
+        check(job_done(data, "check") and c.get("done") is True, "F check runs to the end", short(data.get("job")))
+        check(not blocks(data) and c.get("blocking") is False, "F nothing blocks the published release",
+              short(blocks(data)))
+        for code in ("release", "signature", "account", "catalog", "content"):
+            check("ok" in levels(data, code) and "block" not in levels(data, code), "F %s is ok" % code,
+                  short([f for f in findings(data) if f.get("code") == code]))
+        check(levels(data, "website") == ["note"], "F a QA run never opens the website: a note",
+              short([f for f in findings(data) if f.get("code") == "website"]))
+        release = c.get("release") or {}
+        check(release.get("version") == VERSION and release.get("signed") is True and release.get("key_id") == self.key_id,
+              "F the latest release is 1.0.0, signed by this key", short(release))
+        print("  findings: " + ", ".join("%s=%s" % (f.get("code"), f.get("level")) for f in findings(data)), flush=True)
+
+        # a local release that is not the published one vouches for nothing
+        descriptor = os.path.join(self.copy, "releases", VERSION, MODULE_ID + ".update.ltx")
+        original = read_bytes(descriptor)
+        try:
+            write_bytes(descriptor, (original or b"") + b"; changed after publishing\r\n")
+            data = job("check")
+            check(levels(data, "content") and set(levels(data, "content")) <= {"note"},
+                  "F a local release other than the published one leaves content a note",
+                  short([f for f in findings(data) if f.get("code") == "content"]))
+        finally:
+            if original is not None:
+                write_bytes(descriptor, original)
+
+        # the id is taken - by somebody else's key
+        mock.put_file("public/index.ltx", self.next_index([self.other_row, listing(MODULE_ID, GITHUB_REPO, self.stranger)]))
+        data = job("check")
+        check("block" in levels(data, "catalog") and (data.get("check") or {}).get("blocking") is True,
+              "F the id listed under another key blocks", short([f for f in findings(data) if f.get("code") == "catalog"]))
+        mock.put_file("public/index.ltx", self.next_index([self.other_row]))
+        data = job("check")
+        check("ok" in levels(data, "catalog") and not blocks(data), "F and the index as it was clears it", short(blocks(data)))
+
+        # the window, for whoever looks from outside: like the menu, show checks at once
+        data = mcp("mod_catalog", action="show")
+        check(data.get("ok") and (data.get("job") or {}).get("kind") == "check",
+              "F show opens the window and starts a check", short(data.get("job")))
+        data = follow(data)
+        check(job_done(data, "check") and not blocks(data), "F the check it started runs to the end", short(data.get("job")))
+        shot(self.shots, "catalog_window")
+        hidden = mcp("mod_catalog", action="hide")
+        check(hidden.get("ok") and not (hidden.get("job") or {}).get("pending"), "F hide closes it and starts nothing",
+              short(hidden.get("job")))
+        shot(self.shots, "catalog_hidden")
+
+    # ------------------------------------------------------------------------------ G: VirusTotal
+    def virustotal(self, mock: Mock) -> None:
+        name, size, sha = self.package
+        st = mcp("mod_catalog", action="vt_key_forget")
+        check(st.get("ok") and st.get("vt_key") is False, "G without a saved key or a variable there is no VirusTotal key",
+              short(st))
+        refused = job("vt")
+        check(job_failed(refused), "G vt without a key is refused", short(refused))
+        st = mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        check(st.get("ok") and st.get("vt_key") is True and VT_KEY not in json.dumps(st),
+              "G vt_key stores the key and echoes nothing", short(st))
+
+        data = job("vt")
+        entry = vt_entry(data, sha)
+        check(job_done(data, "vt"), "G vt runs to the end", short(data.get("job")))
+        check(entry.get("state") in ("uploaded", "queued"), "G a package VirusTotal does not know is uploaded", short(entry))
+        check(entry.get("package") == name and entry.get("size") == size and entry.get("url") == VT_PAGE + sha,
+              "G the entry names the package, its size and its report page", short(entry))
+        check(uploads_of(mock.vt(), sha) == 1, "G VirusTotal received the package once", short(mock.vt()))
+        posts = [r.get("path", "") for r in mock.requests() if r.get("method") == "POST" and r.get("path", "").startswith("/vt/")]
+        check(any(p.startswith("/vt/upload/") for p in posts) and not any(p.startswith("/vt/api/v3/files") for p in posts),
+              "G over the direct line it went to an address VirusTotal handed out (upload_url)", str(posts))
+        for _ in range(12):
+            if entry.get("state") not in ("uploaded", "queued"):
+                break
+            time.sleep(1)
+            data = job("vt")
+            entry = vt_entry(data, sha)
+        check(entry.get("state") == "clean" and entry.get("engines", 0) >= 3 and entry.get("trusted_malicious") == 0,
+              "G once analysed, the package is clean by the index's policy", short(entry))
+        check(uploads_of(mock.vt(), sha) == 1, "G a package VirusTotal knows is never uploaded again", short(mock.vt()))
+
+        mock.vt_seed({sha: {TRUSTED: "malicious"}})
+        data = job("vt")
+        entry = vt_entry(data, sha)
+        check(entry.get("state") == "block" and entry.get("trusted_malicious", 0) >= 1 and TRUSTED in (entry.get("flagged") or []),
+              "G one trusted engine calling it malicious is a block", short(entry))
+        data = job("check")
+        check("block" in levels(data, "virustotal"), "G check reports the VirusTotal block",
+              short([f for f in findings(data) if f.get("code") == "virustotal"]))
+        data = job("submit")
+        check(job_failed(data) and "virustotal" in job_error(data).lower(), "G submit refuses and names the block",
+              short(data.get("job")) + " " + str(data.get("error", "")))
+        state = mock.catalog()
+        check(not pulls(state) and not forks(state), "G nothing reached the catalog", short(state))
+
+        mock.vt_seed({sha: {TRUSTED: "undetected", "EngineA": "undetected", "EngineB": "harmless", "EngineC": "undetected"}})
+        data = job("vt")
+        check(vt_entry(data, sha).get("state") == "clean", "G a clean report clears it again", short(vt_entry(data, sha)))
+
+    # ------------------------------------------------------------------------------ H: the pull request
+    def submission(self, mock: Mock) -> None:
+        name, size, sha = self.package
+        fork = "QaOwner/" + CATALOG_REPO.split("/")[1]
+        branch = "submit-" + MODULE_ID
+        path = "mods/%s.ltx" % MODULE_ID
+        data = job("submit")
+        pull = data.get("pull") or {}
+        check(job_done(data, "submit") and pull.get("number", 0) > 0 and pull.get("state") == "open" and pull.get("url"),
+              "H submit opens a pull request", short(data.get("job")) + " " + short(pull))
+        self.pull_number = pull.get("number", 0)
+        state = mock.catalog()
+        check(repo_of(state, fork).get("fork") is True, "H from a fork of the catalog in the author's account",
+              short(sorted(state.get("repositories") or {})))
+        text = branch_file(state, fork, branch, path)
+        fields = submission_fields(text or "")
+        check(fields == {"id": MODULE_ID, "github": GITHUB_REPO, "key": self.key_public, "version": VERSION,
+                         "website": WEBSITE}, "H %s on %s holds exactly the [mod] fields" % (path, branch), str(text))
+        check(branch_file(state, CATALOG_REPO, "main", path) is None, "H the catalog's own main branch is untouched")
+        pr = pull_of(state, self.pull_number)
+        check(head_label(pr) == "QaOwner:" + branch and base_ref(pr) == "main", "H head QaOwner:%s, base main" % branch,
+              short(pr))
+        check(VT_PAGE + sha in str(pr.get("body", "")), "H the description links the VirusTotal report", str(pr.get("body")))
+
+        data = job("submit")
+        state = mock.catalog()
+        check(job_done(data, "submit") and (data.get("pull") or {}).get("number") == self.pull_number and len(pulls(state)) == 1,
+              "H submitting again updates the same pull request", short(data.get("pull")) + " " + str(len(pulls(state))))
+        check(submission_fields(branch_file(state, fork, branch, path) or "") == fields,
+              "H and the branch still holds the submission")
+
+        mock.merge(self.pull_number)
+        data = job("pull")
+        pull = data.get("pull") or {}
+        check(job_done(data, "pull") and pull.get("state") == "merged" and pull.get("listed") is False,
+              "H merged, but not listed until the maintainer publishes", short(pull))
+        mock.put_file("public/index.ltx", self.next_index([self.other_row, listing(MODULE_ID, GITHUB_REPO, self.key_public)]))
+        data = job("pull")
+        check((data.get("pull") or {}).get("listed") is True, "H listed once the index names the module with this key",
+              short(data.get("pull")))
+        data = job("submit")
+        pull = data.get("pull") or {}
+        state = mock.catalog()
+        check(job_done(data, "submit") and "already holds" in str(pull.get("note", "")) and pull.get("state") == "merged" and
+              len(pulls(state)) == 1, "H submitted again unchanged: nothing is sent, and the answer says why",
+              short(pull) + " " + str(len(pulls(state))))
+
+    # ------------------------------------------------------------------------------ I: hygiene
+    def hygiene(self, mock: Mock, run: str) -> None:
+        log = mock.requests()
+        by_class = {}
+        for r in log:
+            by_class.setdefault(route_class(r.get("path", "")), []).append(r)
+        token_out = [r["path"] for c in ("web", "catalog", "vt", "device") for r in by_class.get(c, []) if r.get("authorized")]
+        check(log and not token_out, "I %s: the GitHub token never left for the web, the catalog's files or VirusTotal" % run,
+              str(token_out))
+        key_out = [r["path"] for c in ("api", "web", "catalog", "device") for r in by_class.get(c, []) if r.get("vt_key")]
+        check(not key_out, "I %s: the VirusTotal key went to VirusTotal only" % run, str(key_out))
+        vt = by_class.get("vt", [])
+        if vt:
+            check(all(r.get("vt_key") for r in vt), "I %s: and every VirusTotal request carried it" % run,
+                  str([r["path"] for r in vt if not r.get("vt_key")]))
+        check(bool(by_class.get("catalog")), "I %s: the catalog index came from its public base" % run)
+        in_paths = [r["path"] for r in log if any(s in urllib.parse.unquote(r.get("path", "")) for s in SECRETS)]
+        check(not in_paths, "I %s: no secret in any address" % run, str(in_paths))
+        said = [a[:200] for a in answers if any(s in a for s in SECRETS)]
+        check(not said, "I %s: no MCP answer holds a password, the VirusTotal key or the token" % run, str(said))
+        leaked = leaks_in([os.path.join(REPO, "logs"), self.copy, self.home])
+        check(not leaked, "I %s: no log, project file or key file holds one either" % run, str(leaked))
+
+    # ------------------------------------------------------------------------------ run 2 / J: the maintainer
+    def maintainer(self) -> None:
+        port = free_port()
+        # two VirusTotal requests a minute: the free API's refusal, met in seconds
+        mock = Mock(port, self.work, "mock_maintainer", "--catalog-seed", self.seed, "--catalog-push",
+                    "--login", MAINTAINER, "--vt-rate", "2", repo=MAINTAINER_REPO)
+        editor = None
+        try:
+            editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
+                            extra_env={"XFINED_VT_RATE_WAIT_MS": "200"})
+            phase("J", self.own_listing, mock)
+        finally:
+            if editor:
+                editor.close()
+            mock.stop()
+        phase("I", self.hygiene, mock, "maintainer")
+
+    def own_listing(self, mock: Mock) -> None:
+        branch = "submit-" + MODULE_ID
+        st = mcp("mod_catalog")
+        key = st.get("key") or {}
+        check(st.get("ok") and key.get("exists") is True and key.get("locked") is True and key.get("key_id") == self.key_id,
+              "J a new session finds the remembered key, locked", short(key))
+        check(st.get("vt_key") is True, "J XFINED_VT_KEY is a VirusTotal key too", short(st))
+        r = mcp("mod_set_manifest", github=MAINTAINER_REPO)
+        check(r.get("ok"), "J the module moves to the maintainer's repository", short(r))
+        st = mcp("mod_catalog", action="key_unlock", password=PASSWORD)
+        check(st.get("ok") and (st.get("key") or {}).get("locked") is False, "J unlocked", short(st))
+        data = publish()
+        check(data.get("state") == "done", "J published to the maintainer's repository", short(data))
+
+        # a package under 32 MB goes straight to /files; the rate is met on the next look
+        data = job("vt")
+        states = [e.get("state") for e in data.get("vt") or []]
+        posts = [r.get("path", "") for r in mock.requests() if r.get("method") == "POST" and r.get("path", "").startswith("/vt/")]
+        check(job_done(data, "vt") and states == ["uploaded"] and any(p.startswith("/vt/api/v3/files") for p in posts),
+              "J a small package is uploaded to /files directly", short(data.get("vt")) + " " + str(posts))
+        data = job("vt")
+        entry = (data.get("vt") or [{}])[0]
+        refusals = [r for r in mock.requests() if r.get("status") == 429]
+        check(job_done(data, "vt") and entry.get("state") == "error" and "4 requests a minute" in str(entry.get("error", "")) and
+              len(refusals) >= 2, "J over the free API's rate: waited out a few times, then reported, not hidden",
+              short(entry) + " 429s: %d" % len(refusals))
+        data = job("submit")
+        pull = data.get("pull") or {}
+        check(job_done(data, "submit") and pull.get("number", 0) > 0 and pull.get("state") == "open",
+              "J submit opens a pull request", short(data.get("job")) + " " + short(pull))
+        check((data.get("account") or {}).get("login") == MAINTAINER, "J the job learned the account's login",
+              short(data.get("account")))
+        state = mock.catalog()
+        fields = submission_fields(branch_file(state, CATALOG_REPO, branch, "mods/%s.ltx" % MODULE_ID) or "")
+        check(fields.get("github") == MAINTAINER_REPO and fields.get("key") == self.key_public,
+              "J the branch %s is in the catalog itself" % branch, short(sorted(state.get("repositories") or {})))
+        check(not forks(state), "J and no fork was made", short(forks(state)))
+        pr = pull_of(state, pull.get("number", 0))
+        check(head_label(pr) == "%s:%s" % (MAINTAINER, branch) and base_ref(pr) == "main",
+              "J head %s:%s, base main" % (MAINTAINER, branch), short(pr))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--project", required=True, help="a project to COPY and run against")
+    parser.add_argument("--editor", default=os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe"))
+    parser.add_argument("--game-repo", default=r"D:\Games\Dead Air\DeadAir-x64",
+                        help="the game repository: its tools/catalog holds the reference implementation")
+    parser.add_argument("--shots", help="a folder for screenshots of the Submit to Mod Browser window")
+    parser.add_argument("--keep", action="store_true", help="keep the throw-away copy, the catalog home and the mock logs")
+    args = parser.parse_args()
+    # an answer may carry text the console's code page lacks: printed escaped, never a crash of the harness
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
+
+    src = os.path.abspath(args.project)
+    if not os.path.isdir(src):
+        print("no such project: " + src)
+        return 2
+    tools =os.path.join(os.path.abspath(args.game_repo), "tools", "catalog")
+    if not os.path.isfile(os.path.join(tools, "xms_catalog.py")) or not os.path.isfile(os.path.join(tools, "catalog.py")):
+        print("no reference implementation in " + tools)
+        return 2
+    global xc, cat
+    sys.path.insert(0, tools)
+    import xms_catalog  # noqa: E402
+    import catalog  # noqa: E402
+    xc, cat = xms_catalog, catalog
+
+    work = tempfile.mkdtemp(prefix="xfined_catalogproj_")
+    copy = os.path.join(work, "QaModCatalog")
+    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore", "releases"))
+    print("running against a copy: " + copy, flush=True)
+
+    ini = os.path.join(REPO, "_projects.ini")
+    ini_backup = read_bytes(ini)
+    real_home = os.path.join(documents_folder(), "XFined Editor")
+    real_before = snapshot(real_home)
+
+    try:
+        run = Run(args, work, copy)
+        run.author()
+        run.maintainer()
+    except Exception as exc:  # noqa: BLE001 - the report is the point
+        check(False, "the run finished", repr(exc))
+    finally:
+        if ini_backup is not None:
+            write_bytes(ini, ini_backup)
+        check(snapshot(real_home) == real_before, "Z the real Documents\\XFined Editor was not touched")
+        if not args.keep:
+            shutil.rmtree(work, ignore_errors=True)
+        else:
+            print("kept: " + work, flush=True)
+
+    passed = sum(1 for ok, _ in results if ok)
+    print(f"MODCATALOG: DONE {passed}/{len(results)}", flush=True)
+    return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

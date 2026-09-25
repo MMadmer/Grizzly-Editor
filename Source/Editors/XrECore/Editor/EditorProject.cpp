@@ -509,6 +509,9 @@ static void EnsureGitIgnore(LPCSTR root)
 		"/savedgames/\n"
 		"/screenshots/\n"
 		"\n"
+		"# author key files: never published, never shipped (Mod > Submit to Mod Browser)\n"
+		"*.xkey\n"
+		"\n"
 		"# Windows\n"
 		"Thumbs.db\n"
 		"desktop.ini\n";

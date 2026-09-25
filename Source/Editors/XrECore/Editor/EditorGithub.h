@@ -3,10 +3,11 @@
 #include <functional>
 #include <mutex>
 
-// GitHub side of Mod > Publish Release: where the account token comes from, the
-// device sign-in, and the publication of a packaged release. Everything here
-// blocks on the network and is meant for a worker thread; nothing touches the
-// editor state or ImGui.
+// The network side of the editor's release tools: where the GitHub account token
+// comes from, the device sign-in, the publication of a packaged release, the
+// Mod Browser submission (a pull request against the catalog) and VirusTotal
+// with the author's own key. Everything here blocks on the network and is meant
+// for a worker thread; nothing touches the editor state or ImGui.
 //
 // A release is published the way the game expects to find one (game repo,
 // docs/dead-air/MOD_UPDATES.md, section 2): descriptor, file index and packages
@@ -16,6 +17,9 @@
 
 namespace EditorGithub
 {
+	// -qa_github: every address below points at local mocks (XFINED_* variables)
+	bool	QaRun			();
+
 	// Breaks a network call that is blocked on another thread.
 	class CCancel
 	{
@@ -183,4 +187,100 @@ namespace EditorGithub
 	// true = the release is gone; the tag's fate is in `result`.
 	bool	DeleteRelease	(const xr_string& repo, const xr_string& token, u64 id, CCancel& cancel,
 							 SDeleteResult& result, xr_string& err);
+
+	//--------------------------------------------------------------------------
+	// public files: what the game itself reads, fetched the way it fetches them
+	//--------------------------------------------------------------------------
+	// An anonymous GET that follows redirects. No token travels with it, whatever
+	// the address: a release asset, the catalog index, a website.
+	bool	FetchPublic		(const xr_string& url, u64 limit, CCancel& cancel, u32& status, xr_string& body,
+							 xr_string& err);
+	// the address the game downloads `name` of the latest release of `repo` from
+	xr_string LatestDownload	(const xr_string& repo, const xr_string& name);
+	// https://github.com/<repo> (QA: the mock's)
+	xr_string RepoPage		(const xr_string& repo);
+
+	//--------------------------------------------------------------------------
+	// the Mod Browser catalog (game repo docs/dead-air/MOD_CATALOG.md 10)
+	//--------------------------------------------------------------------------
+	// owner/repo the editor submits to (QA: XFINED_CATALOG_REPO)
+	xr_string CatalogRepo	();
+	// the base URLs the catalog's public files are served from, in the order to try
+	void	CatalogMirrors	(xr_vector<xr_string>& out);
+
+	// the account's login name (GET /user)
+	bool	AccountLogin	(const xr_string& token, CCancel& cancel, xr_string& login, xr_string& err);
+
+	struct SCatalogPull
+	{
+		u64			number;			// 0 = none
+		xr_string	state;			// open, merged, closed; "none" when there is no pull request
+		xr_string	url;
+		xr_string	login;			// the account that asked
+		xr_string	note;			// a submission that sent nothing says why
+
+					SCatalogPull	() : number(0), state("none") {}
+	};
+
+	struct SCatalogSubmission
+	{
+		xr_string	module_id;
+		xr_string	file_text;		// mods/<id>.ltx
+		xr_string	title;
+		xr_string	body;			// the pull request's description, Markdown
+		xr_string	token;
+	};
+
+	typedef std::function<void(LPCSTR stage)> TStage;
+
+	// A fork of the catalog - or, for an account that may push to it, the catalog itself - gets
+	// the branch submit-<id> reset onto the catalog's default branch and the one file
+	// mods/<id>.ltx; then the pull request is opened, or the open one retitled: it follows its
+	// branch, so it already carries the new file. A pull request is public from the first second.
+	bool	CatalogSubmit	(const SCatalogSubmission& rq, CCancel& cancel, const TStage& stage,
+							 SCatalogPull& out, xr_string& err);
+	// the newest pull request of submit-<id> by this account, in any state
+	bool	CatalogPull		(const xr_string& module_id, const xr_string& token, CCancel& cancel,
+							 SCatalogPull& out, xr_string& err);
+
+	//--------------------------------------------------------------------------
+	// VirusTotal, with the author's own key (MOD_CATALOG 11)
+	//--------------------------------------------------------------------------
+	// XFINED_VT_KEY or VT_API_KEY first, then the key the editor saved in the Windows
+	// Credential Manager. Like the GitHub token it never reaches a log, a file or an answer.
+	bool	ReadVtKey		(xr_string& key);
+	bool	SaveVtKey		(LPCSTR key, xr_string& err);
+	void	ForgetVtKey		();
+	bool	PlausibleVtKey	(LPCSTR key);
+
+	struct SVtResult
+	{
+		xr_string	engine;
+		xr_string	category;		// malicious, suspicious, undetected, harmless, ...
+	};
+
+	struct SVtReport
+	{
+		u32						status;		// the HTTP answer; 429 = over the free API's rate
+		bool					known;		// VirusTotal has the file
+		bool					queued;		// known, analysis not finished: no results yet
+		xr_vector<SVtResult>	results;
+
+								SVtReport	() : status(0), known(false), queued(false) {}
+	};
+
+	// what VirusTotal says about a file, by its SHA-256
+	bool	VtLookup		(const xr_string& sha256, const xr_string& key, CCancel& cancel, SVtReport& out,
+							 xr_string& err);
+	// Sends a file for analysis (upload_url for one over 32 MB). VirusTotal shares uploaded files
+	// with the security industry; results follow within minutes. `status` = 429 when over the rate.
+	bool	VtUpload		(const xr_string& path, const xr_string& key, CCancel& cancel, u32& status,
+							 xr_string& err);
+	// the report page a person opens
+	xr_string VtReportPage	(const xr_string& sha256);
+	// The largest request VirusTotal takes. The multipart wrapper counts toward it, so a file
+	// within a margin of the limit is as good as over it.
+	const u64 kVtUploadLimit	= 650ull << 20;
+	const u64 kVtWrapping		= 64u << 10;
+	inline bool VtTooLarge		(u64 size) { return size + kVtWrapping > kVtUploadLimit; }
 }

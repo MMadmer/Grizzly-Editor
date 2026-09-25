@@ -3,7 +3,10 @@
 #include "Nq/NqUtil.h"
 #include <winhttp.h>
 #include <wincred.h>
+#include <bcrypt.h>
 #include <string>
+
+#pragma comment(lib, "bcrypt.lib")
 
 #ifndef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
 #define WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3 0x00002000
@@ -16,6 +19,15 @@ namespace
 // the device flow has no client secret. Empty = the sign-in button is not
 // offered and the account comes from a pasted token, the environment or gh.
 const char* kClientId = "";
+
+// The Mod Browser catalog of Dead Air: Refined and where its public files are served; the game
+// carries the same mirrors (xms_catalog.cpp, kMirrors).
+const char* kCatalogRepo = "MMadmer/darf-mods";
+const char* kCatalogMirrors[] = {
+	"https://mmadmer.github.io/darf-mods/",
+	"https://cdn.jsdelivr.net/gh/MMadmer/darf-mods@main/public/",
+	"https://raw.githubusercontent.com/MMadmer/darf-mods/main/public/",
+};
 
 const u32 kMaxResponse		= 32u << 20;
 const u32 kUploadChunk		= 256u << 10;
@@ -53,6 +65,7 @@ xr_string Base(LPCSTR variable, LPCSTR real)
 
 xr_string ApiBase()	{ return Base("XFINED_GITHUB_API", "https://api.github.com"); }
 xr_string WebBase()	{ return Base("XFINED_GITHUB_WEB", "https://github.com"); }
+xr_string VtBase()	{ return Base("XFINED_VT_API", "https://www.virustotal.com/api/v3"); }
 
 xr_string ClientId()
 {
@@ -358,6 +371,8 @@ struct SHttpRequest
 	xr_vector<xr_string>	headers;
 	xr_string				body;
 	xr_string				body_file;		// streamed instead of `body`
+	xr_string				body_prefix;	// sent around `body_file`: a multipart form's
+	xr_string				body_suffix;	// part headers and closing boundary
 	bool					redirects;		// follow them; never with a token on board
 
 	SHttpRequest() : method("GET"), redirects(false) {}
@@ -452,6 +467,18 @@ private:
 		return false;
 	}
 
+	static bool WriteAll(HINTERNET request, const xr_string& data)
+	{
+		for (size_t done = 0; done < data.size();)
+		{
+			DWORD written = 0;
+			if (!::WinHttpWriteData(request, data.data() + done, (DWORD)(data.size() - done), &written) || !written)
+				return false;
+			done += written;
+		}
+		return true;
+	}
+
 	bool Exchange(const SHttpRequest& rq, HINTERNET request, EditorGithub::CCancel& cancel,
 				  const TUploadProgress& progress, HANDLE& file, SHttpResponse& out)
 	{
@@ -483,10 +510,12 @@ private:
 			if (INVALID_HANDLE_VALUE == file || !::GetFileSizeEx(file, &size))
 				return Fail(out, "cannot read the file to upload");
 			// the length travels as a DWORD; a release asset is under 2 GiB anyway
-			if ((u64)size.QuadPart > 0xFFFFFFFFull)
+			const u64 wrapping = rq.body_prefix.size() + rq.body_suffix.size();
+			if ((u64)size.QuadPart + wrapping > 0xFFFFFFFFull)
 				return Fail(out, "the file is too large to upload");
 			const u64 total = (u64)size.QuadPart;
-			if (!::WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, (DWORD)total, 0))
+			if (!::WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, (DWORD)(total + wrapping), 0) ||
+				!WriteAll(request, rq.body_prefix))
 				return Fail(out);
 
 			xr_vector<u8> chunk(kUploadChunk);
@@ -508,6 +537,7 @@ private:
 				sent += got;
 				if (progress) progress(sent, total);
 			}
+			if (!WriteAll(request, rq.body_suffix)) return Fail(out);
 		}
 
 		if (!::WinHttpReceiveResponse(request, 0)) return Fail(out);
@@ -710,6 +740,8 @@ SHttpResponse PostForm(CHttp& http, EditorGithub::CCancel& cancel, const xr_stri
 	return http.Send(rq, cancel, TUploadProgress());
 }
 } // namespace
+
+bool EditorGithub::QaRun() { return QaMode(); }
 
 //------------------------------------------------------------------------------
 // CCancel
@@ -1370,5 +1402,498 @@ bool EditorGithub::DeleteRelease(const xr_string& repo, const xr_string& token, 
 		result.tag_removed = true;
 	else
 		result.tag_note = cancel.Cancelled() ? xr_string("cancelled before the tag was removed") : Problem(r);
+	return true;
+}
+
+//------------------------------------------------------------------------------
+// public files
+//------------------------------------------------------------------------------
+bool EditorGithub::FetchPublic(const xr_string& url, u64 limit, CCancel& cancel, u32& status, xr_string& body,
+							   xr_string& err)
+{
+	status = 0;
+	body.clear();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	SHttpRequest rq;
+	rq.url = url;
+	rq.redirects = true;
+	SHttpResponse r = http.Send(rq, cancel, TUploadProgress());
+	if (!r.status) { err = r.error; return false; }
+	status = r.status;
+	if (r.body.size() > limit) { err = NqUtil::Format("%s is larger than %llu bytes", url.c_str(), limit); return false; }
+	body.swap(r.body);
+	return true;
+}
+
+xr_string EditorGithub::LatestDownload(const xr_string& repo, const xr_string& name)
+{
+	return WebBase() + "/" + repo + "/releases/latest/download/" + UrlEncode(name);
+}
+
+xr_string EditorGithub::RepoPage(const xr_string& repo) { return WebBase() + "/" + repo; }
+
+//------------------------------------------------------------------------------
+// the Mod Browser catalog
+//------------------------------------------------------------------------------
+xr_string EditorGithub::CatalogRepo()
+{
+	const xr_string qa = QaMode() ? EnvText("XFINED_CATALOG_REPO") : xr_string();
+	return qa.empty() ? xr_string(kCatalogRepo) : qa;
+}
+
+void EditorGithub::CatalogMirrors(xr_vector<xr_string>& out)
+{
+	out.clear();
+	if (QaMode())
+	{
+		// loopback only, like the game's own QA override
+		const xr_string base = EnvText("XFINED_CATALOG_BASE");
+		if ((0 == base.compare(0, 17, "http://127.0.0.1:") || 0 == base.compare(0, 17, "http://localhost:")) &&
+			!base.empty() && base.back() == '/')
+			out.push_back(base);
+		return;
+	}
+	for (u32 i = 0; i < _countof(kCatalogMirrors); ++i)
+		out.push_back(kCatalogMirrors[i]);
+}
+
+bool EditorGithub::AccountLogin(const xr_string& token, CCancel& cancel, xr_string& login, xr_string& err)
+{
+	login.clear();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, token);
+	const SHttpResponse r = api.Get(ApiBase() + "/user");
+	if (cancel.Cancelled())		{ err = "cancelled"; return false; }
+	if (r.status == 401)		{ err = "GitHub rejected the sign-in. Sign in again."; return false; }
+	SJson j;
+	if (r.status != 200 || !ParseJson(r.body, j) || !j.Str("login")[0]) { err = Problem(r); return false; }
+	login = j.Str("login");
+	return true;
+}
+
+namespace
+{
+xr_string Base64(const xr_string& data)
+{
+	static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	xr_string out;
+	const u8* b = (const u8*)data.data();
+	for (size_t i = 0; i < data.size(); i += 3)
+	{
+		const u32 chunk = (u32(b[i]) << 16) | (i + 1 < data.size() ? u32(b[i + 1]) << 8 : 0) | (i + 2 < data.size() ? b[i + 2] : 0);
+		out += alphabet[(chunk >> 18) & 63];
+		out += alphabet[(chunk >> 12) & 63];
+		out += i + 1 < data.size() ? alphabet[(chunk >> 6) & 63] : '=';
+		out += i + 2 < data.size() ? alphabet[chunk & 63] : '=';
+	}
+	return out;
+}
+
+// base64 with the line breaks the contents API puts in
+bool UnBase64(const xr_string& text, xr_string& out)
+{
+	out.clear();
+	u32 buffer = 0, bits = 0;
+	for (size_t i = 0; i < text.size(); ++i)
+	{
+		const char c = text[i];
+		int v;
+		if (c >= 'A' && c <= 'Z')		v = c - 'A';
+		else if (c >= 'a' && c <= 'z')	v = c - 'a' + 26;
+		else if (c >= '0' && c <= '9')	v = c - '0' + 52;
+		else if (c == '+')				v = 62;
+		else if (c == '/')				v = 63;
+		else if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
+		else return false;
+		buffer = (buffer << 6) | u32(v);
+		bits += 6;
+		if (bits >= 8)
+		{
+			bits -= 8;
+			out += char((buffer >> bits) & 0xFF);
+		}
+	}
+	return true;
+}
+
+void ReadPull(const SJson& j, EditorGithub::SCatalogPull& out)
+{
+	out.number	= j.U64("number");
+	out.url		= j.Str("html_url");
+	// a merged pull request is closed as well; merged is what the author wants to hear
+	out.state	= (j.Bool("merged") || j.Str("merged_at")[0]) ? "merged" : j.Str("state");
+	if (out.state.empty()) out.state = "open";
+}
+
+// the catalog as this account sees it
+bool ReadCatalog(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, xr_string& default_branch,
+				 bool& push, xr_string& err)
+{
+	const SHttpResponse r = api.Get(ApiBase() + "/repos/" + catalog);
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	SJson j;
+	if (r.status == 404) { err = "The Mod Browser catalog " + catalog + " was not found."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j)) { err = AccessProblem(r, catalog); return false; }
+	default_branch = j.Str("default_branch");
+	if (default_branch.empty()) default_branch = "main";
+	const SJson* permissions = j.Find("permissions");
+	push = permissions && permissions->Bool("push");
+	return true;
+}
+} // namespace
+
+bool EditorGithub::CatalogSubmit(const SCatalogSubmission& rq, CCancel& cancel, const TStage& stage,
+								 SCatalogPull& out, xr_string& err)
+{
+	out = SCatalogPull();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, rq.token);
+	const xr_string catalog = CatalogRepo();
+	const xr_string catalog_url = ApiBase() + "/repos/" + catalog;
+	const xr_string catalog_owner = catalog.substr(0, catalog.find('/'));
+	const xr_string branch = "submit-" + rq.module_id;
+	const xr_string file = "mods/" + rq.module_id + ".ltx";
+	SJson j;
+	const auto say = [&stage](LPCSTR text) { if (stage) stage(text); };
+
+#define CHECK_CANCEL() if (cancel.Cancelled()) { err = "cancelled"; return false; }
+
+	// 1. who is asking, and what the catalog lets them do
+	say("Reading the GitHub account");
+	SHttpResponse r = api.Get(ApiBase() + "/user");
+	CHECK_CANCEL();
+	if (r.status == 401) { err = "GitHub rejected the sign-in. Sign in again."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j) || !j.Str("login")[0]) { err = Problem(r); return false; }
+	out.login = j.Str("login");
+	say("Reading the catalog");
+	xr_string base;
+	bool push = false;
+	if (!ReadCatalog(api, cancel, catalog, base, push, err)) return false;
+
+	// Nothing to send when the catalog already holds this very file - a module listed and
+	// submitted again unchanged: no commit, so no pull request could be opened.
+	{
+		r = api.Get(catalog_url + "/contents/" + file + "?ref=" + UrlEncode(base));
+		CHECK_CANCEL();
+		xr_string current;
+		if (r.status == 200 && ParseJson(r.body, j) && UnBase64(j.Str("content"), current) && current == rq.file_text)
+		{
+			const xr_string head = (push ? catalog_owner : out.login) + ":" + branch;
+			r = api.Get(catalog_url + "/pulls?state=all&per_page=10&head=" + UrlEncode(head));
+			CHECK_CANCEL();
+			if (r.status == 200 && ParseJson(r.body, j) && j.type == SJson::jArray && !j.items.empty())
+				ReadPull(j.items[0], out);
+			out.note = "The catalog already holds this exact submission - nothing was sent.";
+			return true;
+		}
+	}
+
+	// 2. The branch lives in a fork; an account that may push to the catalog - its maintainer
+	// listing a module of their own - cannot fork its own repository and needs no fork.
+	xr_string head_repo = catalog, head_owner = catalog_owner;
+	if (!push)
+	{
+		say("Forking the catalog");
+		r = api.Send("POST", catalog_url + "/forks", "{\"default_branch_only\":true}");
+		CHECK_CANCEL();
+		if ((r.status != 202 && r.status != 200) || !ParseJson(r.body, j) || !j.Str("full_name")[0])
+			{ err = "GitHub did not fork the catalog: " + Problem(r); return false; }
+		head_repo = j.Str("full_name");
+		const SJson* owner = j.Find("owner");
+		head_owner = (owner && owner->Str("login")[0]) ? xr_string(owner->Str("login")) : out.login;
+		// GitHub makes a fork in the background: its branches answer once it exists
+		say("Waiting for the fork");
+		bool ready = false;
+		for (u32 attempt = 0; attempt < 30 && !ready; ++attempt)
+		{
+			if (attempt) Pause(cancel, 2000);
+			CHECK_CANCEL();
+			r = api.Get(ApiBase() + "/repos/" + head_repo + "/git/ref/heads/" + EncodeRef(base));
+			CHECK_CANCEL();
+			ready = r.status == 200;
+			if (!ready && r.status != 404 && r.status != 409) { err = Problem(r); return false; }
+		}
+		if (!ready) { err = "The fork of the catalog did not appear within a minute. Submit again in a moment."; return false; }
+	}
+	const xr_string head_url = ApiBase() + "/repos/" + head_repo;
+
+	// 3. the branch starts from the catalog as it is now, whatever an earlier submission left on it
+	say("Preparing the branch");
+	r = api.Get(catalog_url + "/git/ref/heads/" + EncodeRef(base));
+	CHECK_CANCEL();
+	const SJson* object = 0;
+	if (r.status != 200 || !ParseJson(r.body, j) || !(object = j.Find("object")) || !object->Str("sha")[0])
+		{ err = Problem(r); return false; }
+	const xr_string base_sha = object->Str("sha");
+	r = api.Send("POST", head_url + "/git/refs", "{\"ref\":\"refs/heads/" + branch + "\",\"sha\":\"" + base_sha + "\"}");
+	CHECK_CANCEL();
+	if (r.status == 422)
+	{
+		r = api.Send("PATCH", head_url + "/git/refs/heads/" + EncodeRef(branch), "{\"sha\":\"" + base_sha + "\",\"force\":true}");
+		CHECK_CANCEL();
+	}
+	if (r.status != 200 && r.status != 201) { err = "Cannot prepare the branch " + branch + ": " + Problem(r); return false; }
+
+	// 4. the one file a submission changes
+	say("Writing the submission");
+	r = api.Get(head_url + "/contents/" + file + "?ref=" + UrlEncode(branch));
+	CHECK_CANCEL();
+	xr_string existing;
+	if (r.status == 200 && ParseJson(r.body, j))	existing = j.Str("sha");
+	else if (r.status != 404)						{ err = Problem(r); return false; }
+	xr_string body = "{\"message\":\"";
+	JsonEscape(body, (existing.empty() ? "Add " : "Update ") + rq.module_id);
+	body += "\",\"content\":\"" + Base64(rq.file_text) + "\",\"branch\":\"" + branch + "\"";
+	if (!existing.empty()) body += ",\"sha\":\"" + existing + "\"";
+	body += "}";
+	r = api.Send("PUT", head_url + "/contents/" + file, body);
+	CHECK_CANCEL();
+	if (r.status != 200 && r.status != 201) { err = "Cannot write " + file + ": " + Problem(r); return false; }
+
+	// 5. the pull request: an open one follows its branch, so only its text is updated
+	say("Opening the pull request");
+	const xr_string head = head_owner + ":" + branch;
+	r = api.Get(catalog_url + "/pulls?state=open&head=" + UrlEncode(head));
+	CHECK_CANCEL();
+	if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) { err = Problem(r); return false; }
+	const u64 open = j.items.empty() ? 0 : j.items[0].U64("number");
+	body = "{\"title\":\"";
+	JsonEscape(body, rq.title);
+	body += "\",\"body\":\"";
+	JsonEscape(body, rq.body);
+	body += "\"";
+	if (open)
+		r = api.Send("PATCH", catalog_url + NqUtil::Format("/pulls/%llu", open), body + "}");
+	else
+		r = api.Send("POST", catalog_url + "/pulls", body + ",\"head\":\"" + head + "\",\"base\":\"" + base + "\"" +
+			(push ? "" : ",\"maintainer_can_modify\":true") + "}");
+	CHECK_CANCEL();
+	if ((r.status != 200 && r.status != 201) || !ParseJson(r.body, j) || !j.U64("number"))
+		{ err = "GitHub refused the pull request: " + Problem(r); return false; }
+	ReadPull(j, out);
+
+#undef CHECK_CANCEL
+	return true;
+}
+
+bool EditorGithub::CatalogPull(const xr_string& module_id, const xr_string& token, CCancel& cancel, SCatalogPull& out,
+							   xr_string& err)
+{
+	out = SCatalogPull();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, token);
+	const xr_string catalog = CatalogRepo();
+	const xr_string catalog_owner = catalog.substr(0, catalog.find('/'));
+	SJson j;
+
+	SHttpResponse r = api.Get(ApiBase() + "/user");
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	if (r.status == 401) { err = "GitHub rejected the sign-in. Sign in again."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j) || !j.Str("login")[0]) { err = Problem(r); return false; }
+	out.login = j.Str("login");
+	xr_string base;
+	bool push = false;
+	if (!ReadCatalog(api, cancel, catalog, base, push, err)) return false;
+
+	// the branch is the account's own, or - for one that may push - the catalog's
+	xr_vector<xr_string> heads(1, out.login + ":submit-" + module_id);
+	if (push && 0 != _stricmp(catalog_owner.c_str(), out.login.c_str()))
+		heads.push_back(catalog_owner + ":submit-" + module_id);
+	for (u32 i = 0; i < heads.size(); ++i)
+	{
+		r = api.Get(ApiBase() + "/repos/" + catalog + "/pulls?state=all&per_page=10&head=" + UrlEncode(heads[i]));
+		if (cancel.Cancelled()) { err = "cancelled"; return false; }
+		if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) { err = Problem(r); return false; }
+		if (j.items.empty()) continue;
+		ReadPull(j.items[0], out);
+		return true;
+	}
+	return true;
+}
+
+//------------------------------------------------------------------------------
+// VirusTotal
+//------------------------------------------------------------------------------
+namespace
+{
+const wchar_t* VtCredentialTarget()
+{
+	return QaMode() ? L"XFinedEditor:VirusTotal:qa" : L"XFinedEditor:VirusTotal";
+}
+
+// VirusTotal answers {"error":{"code","message"}}
+xr_string VtProblem(const SHttpResponse& r)
+{
+	if (!r.status) return r.error;
+	if (r.status == 401) return "VirusTotal rejected the key";
+	if (r.status == 429) return "VirusTotal's free API takes 4 requests a minute and 500 a day - try again later";
+	SJson j;
+	const SJson* error = ParseJson(r.body, j) ? j.Find("error") : 0;
+	const xr_string text = error ? error->Str("message") : "";
+	return text.empty() ? NqUtil::Format("VirusTotal answered %u", r.status)
+						: NqUtil::Format("VirusTotal answered %u: %s", r.status, text.c_str());
+}
+
+SHttpResponse VtCall(CHttp& http, EditorGithub::CCancel& cancel, LPCSTR method, const xr_string& url, const xr_string& key)
+{
+	SHttpRequest rq;
+	rq.method = method;
+	rq.url = url;
+	rq.headers.push_back("Accept: application/json");
+	rq.headers.push_back("x-apikey: " + key);
+	SHttpResponse r = http.Send(rq, cancel, TUploadProgress());
+	EditorGithub::WipeString(rq.headers[1]);
+	return r;
+}
+} // namespace
+
+bool EditorGithub::PlausibleVtKey(LPCSTR key)
+{
+	const size_t n = key ? xr_strlen(key) : 0;
+	if (n < 8 || n > 128) return false;
+	for (size_t i = 0; i < n; ++i)
+	{
+		const char c = key[i];
+		if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+			return false;
+	}
+	return true;
+}
+
+bool EditorGithub::ReadVtKey(xr_string& key)
+{
+	// an explicit override first; a QA run reads its own variable and credential only
+	key = EnvText("XFINED_VT_KEY");
+	if (key.empty() && !QaMode()) key = EnvText("VT_API_KEY");
+	if (PlausibleVtKey(key.c_str())) return true;
+	WipeString(key);
+	PCREDENTIALW cred = 0;
+	if (!::CredReadW(VtCredentialTarget(), CRED_TYPE_GENERIC, 0, &cred)) return false;
+	key.assign((const char*)cred->CredentialBlob, cred->CredentialBlobSize);
+	SecureZeroMemory(cred->CredentialBlob, cred->CredentialBlobSize);
+	::CredFree(cred);
+	if (PlausibleVtKey(key.c_str())) return true;
+	WipeString(key);
+	return false;
+}
+
+bool EditorGithub::SaveVtKey(LPCSTR key, xr_string& err)
+{
+	err.clear();
+	if (!PlausibleVtKey(key)) { err = "this does not look like a VirusTotal API key"; return false; }
+	CREDENTIALW cred = {};
+	cred.Type				= CRED_TYPE_GENERIC;
+	cred.TargetName			= (LPWSTR)VtCredentialTarget();
+	cred.UserName			= (LPWSTR)L"virustotal.com";
+	cred.CredentialBlobSize	= (DWORD)xr_strlen(key);
+	cred.CredentialBlob		= (LPBYTE)key;
+	cred.Persist			= CRED_PERSIST_LOCAL_MACHINE;
+	if (::CredWriteW(&cred, 0)) return true;
+	err = NqUtil::Format("Windows refused to store the key (error %u)", (u32)::GetLastError());
+	return false;
+}
+
+void EditorGithub::ForgetVtKey()
+{
+	::CredDeleteW(VtCredentialTarget(), CRED_TYPE_GENERIC, 0);
+}
+
+xr_string EditorGithub::VtReportPage(const xr_string& sha256)
+{
+	return "https://www.virustotal.com/gui/file/" + sha256;
+}
+
+bool EditorGithub::VtLookup(const xr_string& sha256, const xr_string& key, CCancel& cancel, SVtReport& out, xr_string& err)
+{
+	out = SVtReport();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	const SHttpResponse r = VtCall(http, cancel, "GET", VtBase() + "/files/" + sha256, key);
+	out.status = r.status;
+	if (cancel.Cancelled())	{ err = "cancelled"; return false; }
+	if (r.status == 404)	return true;
+	SJson j;
+	const SJson* data = (r.status == 200 && ParseJson(r.body, j)) ? j.Find("data") : 0;
+	const SJson* attributes = data ? data->Find("attributes") : 0;
+	if (!attributes) { err = VtProblem(r); return false; }
+	out.known = true;
+	const SJson* results = attributes->Find("last_analysis_results");
+	if (results && results->type == SJson::jObject)
+		for (u32 i = 0; i < results->items.size(); ++i)
+		{
+			SVtResult result;
+			result.engine	= results->keys[i];
+			result.category	= results->items[i].Str("category");
+			out.results.push_back(result);
+		}
+	// an upload VirusTotal has not analysed yet is known without a verdict
+	out.queued = out.results.empty();
+	return true;
+}
+
+bool EditorGithub::VtUpload(const xr_string& path, const xr_string& key, CCancel& cancel, u32& status, xr_string& err)
+{
+	status = 0;
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	WIN32_FILE_ATTRIBUTE_DATA attributes;
+	if (!::GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &attributes)) { err = "cannot read " + path; return false; }
+	const u64 size = (u64(attributes.nFileSizeHigh) << 32) | attributes.nFileSizeLow;
+	if (VtTooLarge(size)) { err = "the file is larger than the 650 MB VirusTotal takes"; return false; }
+
+	// up to 32 MB straight to /files; a larger file to an address VirusTotal hands out for it
+	// (a QA run lowers the line to reach that path with a small package)
+	const xr_string qa_direct = QaMode() ? EnvText("XFINED_VT_DIRECT_LIMIT") : xr_string();
+	const u64 direct = qa_direct.empty() ? (32ull << 20) : _strtoui64(qa_direct.c_str(), 0, 10);
+	xr_string url = VtBase() + "/files";
+	if (size + kVtWrapping > direct)
+	{
+		const SHttpResponse r = VtCall(http, cancel, "GET", VtBase() + "/files/upload_url", key);
+		status = r.status;
+		if (cancel.Cancelled()) { err = "cancelled"; return false; }
+		SJson j;
+		const SJson* data = (r.status == 200 && ParseJson(r.body, j)) ? j.Find("data") : 0;
+		if (!data || data->type != SJson::jString) { err = VtProblem(r); return false; }
+		url = data->text;
+		// the key goes wherever that address points, and it came out of a response body
+		if (0 != _stricmp(Origin(url).c_str(), Origin(VtBase()).c_str()))
+			{ err = "VirusTotal named an upload address that is not VirusTotal's."; return false; }
+	}
+
+	u8 random[12];
+	::BCryptGenRandom(0, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+	xr_string boundary = "XFinedEditor";
+	for (u32 i = 0; i < sizeof(random); ++i) boundary += NqUtil::Format("%02x", (u32)random[i]);
+	xr_string name = path.substr(path.find_last_of("\\/") + 1);
+	for (size_t i = 0; i < name.size(); ++i)
+		if (name[i] == '"' || (unsigned char)name[i] < 0x20) name[i] = '_';
+
+	SHttpRequest rq;
+	rq.method = "POST";
+	rq.url = url;
+	rq.headers.push_back("Accept: application/json");
+	rq.headers.push_back("x-apikey: " + key);
+	rq.headers.push_back("Content-Type: multipart/form-data; boundary=" + boundary);
+	rq.body_file = path;
+	rq.body_prefix = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name +
+		"\"\r\nContent-Type: application/octet-stream\r\n\r\n";
+	rq.body_suffix = "\r\n--" + boundary + "--\r\n";
+	const SHttpResponse r = http.Send(rq, cancel, TUploadProgress());
+	WipeString(rq.headers[1]);
+	status = r.status;
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	SJson j;
+	const SJson* data = (r.status == 200 && ParseJson(r.body, j)) ? j.Find("data") : 0;
+	if (!data || !data->Str("id")[0]) { err = VtProblem(r); return false; }
 	return true;
 }

@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
+#include "..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
 #include "..\..\XrECore\Editor\EditorPda.h"
@@ -115,6 +116,11 @@ void UIMainMenuForm::Draw()
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("The releases the repository holds, drafts included.\nDeletes a release together with its git tag.");
+            ImGui::BeginDisabled(!EditorCatalogSubmit::CanRequest());
+            if (ImGui::MenuItem("Submit to Mod Browser...", ""))		EditorCatalogSubmit::Request();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Lists the module in the in-game Mod Browser: the author key, the requirements,\nVirusTotal and the pull request against the catalog.");
             ImGui::Separator();
             if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
             ImGui::Separator();

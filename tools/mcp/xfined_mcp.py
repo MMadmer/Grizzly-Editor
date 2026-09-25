@@ -130,7 +130,9 @@ TOOLS = [
     {
         "name": "xfined_mod_manifest",
         "description": "XMS mod manifest (mod.ltx) of the active project: id, name, version, "
-                       "Mods menu metadata (author, description, website, github update source), api, "
+                       "Mods menu metadata (author, description, website, github update source), "
+                       "Mod Browser metadata ('thumbnail' - module-relative path of the picture, empty when "
+                       "none - and 'tags', a list), api, "
                        "target + game mode + declared modes, requires/after/before/conflicts lists, "
                        "'exclude' (what the build leaves out on the author's say - mod.ltx [exclude]) "
                        "and which module dirs exist.",
@@ -142,7 +144,13 @@ TOOLS = [
                        "name, version (1-4 numbers separated by dots), mode (game mode the module is limited to; "
                        "empty = all modes). Mods menu metadata: author, description (line breaks allowed), "
                        "website (https://ap-pro.ru or https://moddb.com only), github (owner/repo whose latest "
-                       "release updates the module; a repository URL is reduced to it). An invalid value is "
+                       "release updates the module; a repository URL is reduced to it). Mod Browser metadata: "
+                       "thumbnail (a picture - PNG, JPG, TGA or BMP, absolute or project-relative - becomes "
+                       "<project>/thumbnail.dds: the middle square scaled to 256x256, DXT1, DXT5 when it has "
+                       "transparency; a .dds in the project that already is a valid thumbnail is used as is; "
+                       "empty removes the key and the thumbnail.dds it named), tags (comma list of story, "
+                       "quests, gameplay, weapons, equipment, npcs, mutants, locations, graphics, audio, "
+                       "interface, fixes; empty clears). An invalid value is "
                        "refused and nothing is written; an empty string clears the key. "
                        "provides_mode_id/provides_mode_title declare a new game mode (empty id drops it) - "
                        "export then generates the checkbox that puts it on the new-game screen. "
@@ -164,6 +172,9 @@ TOOLS = [
                 "description": {"type": "string", "description": "shown in the game's Mods menu; up to 4095 bytes"},
                 "website": {"type": "string", "description": "the mod's page: https://ap-pro.ru/... or https://moddb.com/..."},
                 "github": {"type": "string", "description": "owner/repo of the GitHub repository whose releases update the module"},
+                "thumbnail": {"type": "string", "description": "the Mod Browser picture: a PNG/JPG/TGA/BMP (absolute or "
+                                                               "project-relative) converted into thumbnail.dds; empty removes it"},
+                "tags": {"type": "string", "description": "comma list from the fixed vocabulary, e.g. story,quests; empty clears"},
                 "mode": {"type": "string", "description": "target game mode id, empty = all modes"},
                 "provides_mode_id": {"type": "string", "description": "declare a new game mode (empty = remove)"},
                 "provides_mode_title": {"type": "string", "description": "the mode name the player will see"},
@@ -231,9 +242,15 @@ TOOLS = [
                        "file's SHA-256 and the byte range of its data inside a package, so the game downloads "
                        "only the files that differ. Runs the same gate as xfined_mod_export and also needs an "
                        "orderable version (1-4 numbers separated by dots). Files an earlier packaging of the same "
-                       "version left in out_dir are replaced without asking. Returns descriptor, out_dir, "
+                       "version left in out_dir are replaced without asking. The descriptor carries the Mod "
+                       "Browser's [card] and, when the author key is open (xfined_mod_catalog), its [signature]; "
+                       "'password' opens a protected key for the session first. Returns descriptor, out_dir, "
                        "index {name,size,sha256}, packages [{name,size,sha256}], files, unpacked, packed, "
-                       "requires_game, baked, warnings, left_out (what the build passed by, as in xfined_mod_export). "
+                       "requires_game, baked, warnings, left_out (what the build passed by, as in xfined_mod_export), "
+                       "signed + key_id (the key that signed it; empty when the release went out unsigned) and "
+                       "catalog_content [{level: block|review, text}] - what the Mod Browser's content policy and "
+                       "script report say about the packaged files (a block keeps the module out of the "
+                       "catalog; the package is written all the same). "
                        "Upload every returned file - the zip exactly as written, "
                        "repacking it breaks the index - to a GitHub release of the manifest's 'github' "
                        "repository and publish it as the latest release.",
@@ -244,6 +261,7 @@ TOOLS = [
                                                              "Inside the project only releases/ is accepted"},
                 "requires_game": {"type": "string", "description": "lowest Dead Air: Refined version the release runs on, MAJOR.MINOR.PATCH; "
                                                                    "omit = the linked game's version, empty = no requirement"},
+                "password": {"type": "string", "description": "the password of a protected author key file; never echoed or logged"},
             },
         },
     },
@@ -270,7 +288,9 @@ TOOLS = [
                        "'sign_in_status' reports starting|waiting|done|failed. 'sign_out' forgets the saved token "
                        "(a GitHub CLI or environment sign-in is not touched). "
                        "The device sign-in exists only in a build that has its OAuth client id "
-                       "('account' says device_sign_in).",
+                       "('account' says device_sign_in). The release is signed with the Mod Browser author key when "
+                       "there is one (xfined_mod_catalog): a key that is locked is opened by 'password', and 'start' "
+                       "refuses while it stays locked - an unsigned release would burn its version for the Mod Browser.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -278,6 +298,8 @@ TOOLS = [
                            "enum": ["start", "status", "cancel", "account", "save_token", "sign_in", "sign_in_status",
                                     "sign_out"]},
                 "token": {"type": "string", "description": "save_token: the GitHub token to store"},
+                "password": {"type": "string", "description": "start: the author key's password when the key file has one. "
+                                                              "Never echoed or logged"},
                 "tag": {"type": "string", "description": "git tag of the release; omit = v<version>"},
                 "title": {"type": "string", "description": "release title; omit = '<module name> <version>'"},
                 "notes": {"type": "string", "description": "release notes, Markdown"},
@@ -610,6 +632,81 @@ TOOLS = [
                 "tag": {"type": "string", "description": "tag of the release, e.g. v1.0.2"},
                 "id": {"type": "integer", "description": "id of the release, from xfined_mod_releases - the only way to name a draft that shares its tag"},
                 "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
+            },
+        },
+    },
+    {
+        "name": "xfined_mod_catalog",
+        "description": "Mod > Submit to Mod Browser: lists the module in the game's in-game Mod Browser (game repo "
+                       "docs/dead-air/MOD_CATALOG.md). The flow: an author key signs the releases (key_create "
+                       "once), xfined_mod_publish puts out a signed release of version 1.0.0 or higher, then "
+                       "'check' -> 'vt' -> 'submit'. action: 'status' (default) answers key {exists, locked, path, "
+                       "key_id, public, error}, vt_key (a VirusTotal key is available), account {signed_in, source, "
+                       "login}, job {kind, state idle|running|done|failed|cancelled, pending, stage, error}, check "
+                       "{done, blocking, release {version, url, signed, key_id}, findings [{level ok|note|review|block, "
+                       "code, text}]}, vt [{package, sha256, size, state clean|warn|block|unknown|queued|uploaded|"
+                       "too_large|error, engines, trusted_malicious, trusted_suspicious, other_malicious, flagged, url, "
+                       "error}] and pull {number, state none|open|merged|closed, url, listed}. "
+                       "'key_create' makes the author key: a FILE ('path', default Documents\\XFined Editor\\Keys\\"
+                       "author.xkey; never put it inside the project - the build would ship it; an existing file is "
+                       "never overwritten), protected by 'password' unless it is empty - tell the user to keep a copy "
+                       "of the file: a listed module accepts no update signed by another key. 'key_use' makes another "
+                       "copy of a key file the one used ('path'); "
+                       "'key_unlock' opens a protected one for the session ('password'; a wrong one answers "
+                       "ok:false). 'vt_key' stores the user's own VirusTotal API key ('key', Windows Credential "
+                       "Manager); 'vt_key_forget' removes it. "
+                       "check, vt, submit and pull run on a worker: the answer is the status with job.pending = "
+                       "true; with wait (default) the bridge follows the job for up to about 150 s, and while "
+                       "job.pending stays true ask again with action='status'. 'cancel' stops the job. 'show' opens "
+                       "the Submit to Mod Browser window - like the menu, it starts a check when no job runs, and "
+                       "the bridge follows that check - and 'hide' closes it: to look at it, show -> "
+                       "xfined_screenshot_editor -> hide. 'check' "
+                       "tests the listing requirements against the LATEST GitHub release of [update] github; a "
+                       "'block' finding stops the submission. 'vt' (needs a VirusTotal key) looks every package up on "
+                       "VirusTotal and uploads one it does not know (files uploaded there are shared with the security "
+                       "industry): run it again later until no package is 'queued' or 'uploaded'. 'submit' runs the check again and "
+                       "refuses on a blocking finding; otherwise it opens a PUBLIC pull request from the user's "
+                       "GitHub account against the catalog repository - a fork, the branch submit-<id> reset to the "
+                       "catalog's default branch, one file mods/<id>.ltx - or updates the one already open: that is "
+                       "the separate tool xfined_mod_catalog_submit, so that a client can ask on exactly that call. "
+                       "'pull' refreshes pull; listed = the published catalog lists the "
+                       "module with this key. 'password' and 'key' are secrets: never echoed, logged or answered.",
+        "annotations": {"title": "The mod's Mod Browser listing: key, checks, VirusTotal", "readOnlyHint": False,
+                        "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string",
+                           "enum": ["status", "key_create", "key_use", "key_unlock", "vt_key", "vt_key_forget",
+                                    "check", "vt", "pull", "cancel", "show", "hide"]},
+                "path": {"type": "string", "description": "key_create: where the new key file goes (omit = the default); "
+                                                          "key_use: the key file to use from now on"},
+                "password": {"type": "string", "description": "key_create: protects the new key file (empty = none); "
+                                                              "key_unlock: opens it. Never echoed or logged"},
+                "key": {"type": "string", "description": "vt_key: the VirusTotal API key to store. Never echoed or logged"},
+                "wait": {"type": "boolean", "description": "follow a running job until it ends or about 150 s pass (default true)"},
+            },
+        },
+    },
+    {
+        "name": "xfined_mod_catalog_submit",
+        "description": "Submit the module to the game's Mod Browser: runs xfined_mod_catalog's check again and refuses on a "
+                       "'block' finding; otherwise opens a PUBLIC pull request from the user's GitHub account against the "
+                       "catalog repository - a fork (or, for an account that may push to the catalog, a branch of the "
+                       "catalog itself), the branch submit-<id> reset to the catalog's default branch, one file "
+                       "mods/<id>.ltx naming the repository, the author key, the version and the website - or updates "
+                       "the pull request already open. The pull request is public from its first second and the "
+                       "maintainer of the catalog reads it. The editor asks NOTHING on this path - no window, no "
+                       "confirmation - so the permission is the caller's business: call it when the user asked for the "
+                       "submission, otherwise ask them in the conversation first. The answer is xfined_mod_catalog's "
+                       "status; with wait (default) the bridge follows the job, and pull then carries the number, the "
+                       "state and the url.",
+        "annotations": {"title": "Open the Mod Browser pull request", "readOnlyHint": False,
+                        "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "wait": {"type": "boolean", "description": "follow the job until it ends or about 150 s pass (default true)"},
             },
         },
     },
@@ -1793,6 +1890,8 @@ CMD_MAP = {
     "xfined_mod_publish": "mod_publish",
     "xfined_mod_releases": "mod_releases",
     "xfined_mod_release_delete": "mod_releases",
+    "xfined_mod_catalog": "mod_catalog",
+    "xfined_mod_catalog_submit": "mod_catalog",
     "xfined_characters_list": "characters_list",
     "xfined_characters_get": "characters_get",
     "xfined_characters_write": "characters_write",
@@ -1956,7 +2055,8 @@ def tool_result(name: str, args: dict) -> dict:
         }
         # a tool result like any other: a bare dict here reaches the client as an answer with no content
         return {"content": [{"type": "text", "text": json.dumps(refusal, ensure_ascii=False)}], "isError": True}
-    if name in ("xfined_mod_publish", "xfined_mod_releases", "xfined_mod_release_delete", "xfined_mod_release_edit"):
+    if name in ("xfined_mod_publish", "xfined_mod_releases", "xfined_mod_release_delete", "xfined_mod_release_edit",
+                "xfined_mod_catalog", "xfined_mod_catalog_submit"):
         # 'wait' is this bridge's own: the editor answers at once and works on a worker
         args = dict(args)
         wait = args.pop("wait", True)
@@ -1965,6 +2065,9 @@ def tool_result(name: str, args: dict) -> dict:
         args["action"] = "delete"
     if name == "xfined_mod_release_edit":
         args["action"] = "edit"
+    if name == "xfined_mod_catalog_submit":
+        # the one call that opens a public pull request, a tool of its own like the release deletion
+        args["action"] = "submit"
     data = editor_call(CMD_MAP[name], args)
     follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
     if follows_job and data.get("ok") and data.get("pending"):
@@ -1988,6 +2091,15 @@ def tool_result(name: str, args: dict) -> dict:
         while data.get("pending") and time.monotonic() < deadline:
             time.sleep(0.25)
             data = editor_call("mod_releases", {"action": "status"})
+    # 'show' starts a check when no job runs: a screenshot after it should show the results
+    follows_catalog = CMD_MAP[name] == "mod_catalog" and wait and \
+        args.get("action", "status") in ("status", "check", "vt", "submit", "pull", "show")
+    if follows_catalog and data.get("ok") and (data.get("job") or {}).get("pending"):
+        # the catalog's status nests the job; a job that outlasts this comes back still pending
+        deadline = time.monotonic() + 150.0
+        while (data.get("job") or {}).get("pending") and time.monotonic() < deadline:
+            time.sleep(0.5)
+            data = editor_call("mod_catalog", {"action": "status"})
     if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
         deadline = time.monotonic() + 1.0
         while data.get("pending") and time.monotonic() < deadline:

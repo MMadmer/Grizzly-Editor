@@ -4,6 +4,7 @@
 #include "..\..\XrECore\Editor\EditorGameConfigs.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
+#include "..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\Editor\EditorModScene.h"
 #include "..\Editor\Recovery\EditorRecovery.h"
 #include "..\Editor\Utils\XrSEFactoryManager.h"
@@ -102,6 +103,8 @@ UIMainForm::~UIMainForm()
     XFinedMCP::Stop();
     // an upload in flight is cut here; its draft stays on GitHub for the next attempt
     EditorPublish::Shutdown();
+    // a Mod Browser job is cut the same way; the open author key is wiped
+    EditorCatalogSubmit::Shutdown();
     EditorRecovery::Shutdown();
     EditorProject::Close();		// preview + manifest while the device is alive
     UIContentBrowser::Close();

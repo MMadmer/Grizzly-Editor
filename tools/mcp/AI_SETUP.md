@@ -84,15 +84,17 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_open_scene` | load a `.level` scene in the active project (synchronous); refuses to replace unsaved work unless `discard=true`, and preserves the current scene if loading fails |
 | `xfined_list_objects` | scene object names; filters: `class`, `name_contains`, `limit` |
 | `xfined_focus_object` | frame the camera on object `name` like the F key; `select=true` also selects it |
-| `xfined_mod_manifest` | XMS mod manifest of the active project: id, name, version, Mods menu metadata (`author`, `description`, `website`, `github`), `api`, `target`, target game `mode`, declared `provides_mode` list, requires/after/before/conflicts, existing module dirs |
-| `xfined_mod_set_manifest` | update mod.ltx fields: `id`/`name`/`version`/`mode` strings (`version` = 1-4 numbers separated by dots), Mods menu metadata `author`, `description` (line breaks allowed, 4095 bytes at most), `website` (`https://ap-pro.ru/...` or `https://moddb.com/...` only), `github` (`owner/repo`; a repository URL is reduced to it), `provides_mode_id`+`provides_mode_title` (declare a game mode, empty id removes — the title is what the player reads, any language), `target` (`default`/`existing`/`new`, inferred from the mode fields when omitted, but "the ordinary game" must be said out loud), `requires`/`after`/`before`/`conflicts` comma-joined lists. An invalid value answers `ok:false` and nothing is written; an empty string clears an optional key. `exclude` replaces mod.ltx `[exclude]` - what the build leaves out: project paths (a folder takes everything below it) or patterns (`*.psd` = that name at any depth, `docs/*.md` = a path), one per line or comma separated |
+| `xfined_mod_manifest` | XMS mod manifest of the active project: id, name, version, Mods menu metadata (`author`, `description`, `website`, `github`), Mod Browser metadata (`thumbnail` - the module-relative path of the picture, `""` when there is none - and `tags`, a list), `api`, `target`, target game `mode`, declared `provides_mode` list, requires/after/before/conflicts, existing module dirs |
+| `xfined_mod_set_manifest` | update mod.ltx fields: `id`/`name`/`version`/`mode` strings (`version` = 1-4 numbers separated by dots), Mods menu metadata `author`, `description` (line breaks allowed, 4095 bytes at most), `website` (`https://ap-pro.ru/...` or `https://moddb.com/...` only), `github` (`owner/repo`; a repository URL is reduced to it), Mod Browser metadata `thumbnail` (a picture - PNG, JPG, TGA or BMP, absolute or project-relative - converted into `<project>/thumbnail.dds`: the middle square scaled to 256x256, DXT1, or DXT5 when the picture has transparency, every mip level; a `.dds` in the project that already is a valid thumbnail is used as is; `""` clears the key and deletes the `thumbnail.dds` it named) and `tags` (comma list from `story`, `quests`, `gameplay`, `weapons`, `equipment`, `npcs`, `mutants`, `locations`, `graphics`, `audio`, `interface`, `fixes`; an unknown word is refused), `provides_mode_id`+`provides_mode_title` (declare a game mode, empty id removes — the title is what the player reads, any language), `target` (`default`/`existing`/`new`, inferred from the mode fields when omitted, but "the ordinary game" must be said out loud), `requires`/`after`/`before`/`conflicts` comma-joined lists. An invalid value answers `ok:false` and nothing is written; an empty string clears an optional key. `exclude` replaces mod.ltx `[exclude]` - what the build leaves out: project paths (a folder takes everything below it) or patterns (`*.psd` = that name at any depth, `docs/*.md` = a path), one per line or comma separated |
 | `xfined_mod_exclude` | the content browser's Exclude from Build / Include in Build for one project-relative `path`; `excluded` = true (default) or false. Stored in mod.ltx `[exclude]`, so it travels with the repository; the build, the package, the quest list and the character list all leave the entry out. Including an entry another rule still takes out fails and names the rule; mod.ltx cannot be excluded. Tooling (.git, .gitignore, .github, .vscode, Thumbs.db, desktop.ini) never ships and needs no entry |
 | `xfined_mod_export` | export the project to `<target>/modules/<id>/` as an XMS module (no `target` = deploy to the linked game's `modules/`; **not** `mods/` — that is JSGME's folder, and a module sitting there is one JSGME offers to copy over the game); a **clean build** — the target module folder is emptied first, so nothing a previous build left can survive; refuses targets inside the game's `gamedata`; `flat=true` for a plain `gamedata_<id>` overlay + compatibility report. A module that declares a mode also gets `gamedata/configs/ui/<id>_modes.xml` (and `<id>_modes_16.xml`), `gamedata/configs/text/rus/<id>_modes.xml` and `scripts/mode_register.script` written for it — the checkbox that puts the mode on the new-game screen, measured against the layout the linked game really ships. The answer's `left_out` lists what the build passed by - tooling at any depth, `[exclude]` entries, links; a target that is a link or overlaps the project is refused before anything is written. `warnings` also names every file the game cannot open - a character outside cp1251 in its name; such files ship all the same |
-| `xfined_mod_publish` | package the project and publish it as a GitHub release of the manifest's `github` repository - the release the game's Mods menu updates from. Draft first, every asset verified (name, size, SHA-256), then published as the latest release. Args `action` (`start` default, `status`, `cancel`, `account`, `save_token` + `token`, `sign_in`, `sign_in_status`, `sign_out`), `tag` (default `v<version>`), `title`, `notes`, `prerelease`, `latest` (default true), `requires_game`, `wait` (bridge only, default true). Returns `state` (`idle`/`uploading`/`done`/`failed`/`cancelled`), `pending`, `stage`, `sent`, `total`, `url`, `served`, `warnings`, `error`, and from `start` also `assets` `[{name,size,sha256}]`, `files`, `requires_game`, `baked`, `package_warnings`. The account comes from the environment, the Credential Manager (`save_token`) or the GitHub CLI |
+| `xfined_mod_publish` | package the project and publish it as a GitHub release of the manifest's `github` repository - the release the game's Mods menu updates from. Draft first, every asset verified (name, size, SHA-256), then published as the latest release. Args `action` (`start` default, `status`, `cancel`, `account`, `save_token` + `token`, `sign_in`, `sign_in_status`, `sign_out`), `tag` (default `v<version>`), `title`, `notes`, `prerelease`, `latest` (default true), `requires_game`, `password` (the Mod Browser author key's, when it is locked - `start` refuses while it stays locked: an unsigned release would burn its version for the Mod Browser), `wait` (bridge only, default true). Returns `state` (`idle`/`uploading`/`done`/`failed`/`cancelled`), `pending`, `stage`, `sent`, `total`, `url`, `served`, `warnings`, `error`, and from `start` also `assets` `[{name,size,sha256}]`, `files`, `requires_game`, `baked`, `package_warnings`. The account comes from the environment, the Credential Manager (`save_token`) or the GitHub CLI |
 | `xfined_mod_releases` | the releases the manifest's `github` repository holds, newest first, drafts included. Reads only. Args `action` (`list` default, `status`, `cancel`), `wait` (bridge only, default true). Returns `releases` `[{id, tag, title, notes, draft, prerelease, latest, published, url, bytes, assets}]`, `listed`, `state`, `pending`, `error` |
 | `xfined_mod_release_edit` | change the title and/or the notes of one release, named by `tag` or `id`; an omitted field keeps its value. Files, tag and the latest mark are not touched. Returns `note` and the refreshed `releases` |
 | `xfined_mod_release_delete` | delete ONE of those releases, named by `tag` or `id` (only `id` names one of several drafts that share a tag), and then its git tag. Permanent - GitHub keeps no copy - and the editor asks nothing on this path; the tool carries MCP's `destructiveHint`, so a client that wants a permission asks for it on its own side. Returns `note`, `tag_kept` and the refreshed `releases` |
-| `xfined_mod_package` | package a release for the game's module updater: the descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. The index states every file's SHA-256 and the byte range of its data inside a package, read back from the finished archive - the game downloads only the files that differ. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (deleted, no Recycle Bin). Returns `descriptor`, `out_dir`, `index` `{name,size,sha256}`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings` and `left_out` (what the build passed by, as for `xfined_mod_export`). Cancelable through `xfined_progress` |
+| `xfined_mod_catalog` | Mod > Submit to Mod Browser: list the module in the game's in-game Mod Browser (see "Listing a mod in the Mod Browser" below). Args `action` (`status` default, `key_create` + optional `path`/`password`, `key_use` + `path`, `key_unlock` + `password`, `vt_key` + `key`, `vt_key_forget`, `check`, `vt`, `pull`, `cancel`, `show` / `hide` - the Submit to Mod Browser window, for a screenshot), `wait` (bridge only, default true). Every action answers the status: `catalog`, `key` `{exists, locked, path, key_id, public, error}`, `vt_key`, `account` `{signed_in, source, login}`, `job` `{kind, state, pending, stage, error}`, `check` `{done, blocking, release, findings}`, `vt` `[{package, sha256, size, state, engines, trusted_malicious, trusted_suspicious, other_malicious, flagged, url, error}]`, `pull` `{number, state, url, listed}`. `password` and `key` are secrets - never echoed, logged or answered. The pull request is `xfined_mod_catalog_submit` |
+| `xfined_mod_catalog_submit` | Submit the module to the Mod Browser: the check again, then a PUBLIC pull request from the user's GitHub account against the catalog (or an update of the open one). Arg `wait` (bridge only, default true); answers `xfined_mod_catalog`'s status with `pull`. The editor asks nothing; the tool carries `destructiveHint` and `openWorldHint` |
+| `xfined_mod_package` | package a release for the game's module updater: the descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. The index states every file's SHA-256 and the byte range of its data inside a package, read back from the finished archive - the game downloads only the files that differ. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement), `password` (opens a protected author key for the session first; never echoed or logged). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (deleted, no Recycle Bin). The descriptor carries the Mod Browser's `[card]` and, when the author key is open, its `[signature]` (see "Listing a mod in the Mod Browser"). Returns `descriptor`, `out_dir`, `index` `{name,size,sha256}`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings`, `left_out` (what the build passed by, as for `xfined_mod_export`), `signed` + `key_id` (the author key that signed the descriptor; `false` / `""` when it went out unsigned) and `catalog_content` `[{level, text}]` - the Mod Browser's content policy and script report over the packaged files (`block`: a file or a call the catalog does not take; `review`: something its maintainer looks at). The package is written either way. Cancelable through `xfined_progress` |
 | `xfined_characters_list` | the module's OWN NPCs, one `.npcasset` each. Returns `characters` `[{id, file, name, community, visual, supplies, squad}]`, `module` and `problems` (`E...` blocks a build, `W...` does not). The game knows a character as `<module>_<id>`: that is its spawn section, the squad section `<module>_<id>_squad` and the `character_profile` a placed stalker carries. A quest needs none of those names: `spawn.npc` takes rows `{ character = "<id>", ref = "..." }` (or `section = ` for anybody of the game's), one NPC and one ref per row; `unique` removes every NPC of that kind first and is ON by default for a character, OFF for a section |
 | `xfined_characters_get` | one character by `id` or `path`: its parsed fields, its `problems` and the whole file `text` |
 | `xfined_characters_write` | create or replace a character. `text` is the whole file - declarative Lua, `return { npc = 1, id, name, community, visual, icon, rank, reputation, money = { min, max, infinite }, supplies = { { section, count }, ... }, bio, start_dialog, squad }`. `name`/`bio` are a string or a table keyed by language (`{ rus = ..., eng = ... }`). `base` names another character to start from: unset fields are inherited and the starting KITS ARE MERGED - a repeated section takes the new count, `count = 0` drops an inherited row. `abstract = true` makes it a template only (no profile, no spawn section, no name or model needed), which is how several characters share one kit. `E111` is a base that does not exist, `E112` a chain that loops. Note the model is FIXED: an outfit changes an NPC's protection, not its visual. Without `path`/`id` the file lands at `characters/<id>.npcasset`. Canonical: write(read(x)) is byte-identical. A portrait, dialog or kit item the linked game (and the project) does not have is W115 / W116 / W117 - look them up with `xfined_quest_lookup` type `character_icon` / `dialog_id` / `item_section` |
@@ -320,6 +322,89 @@ request timeout (three minutes by default; raise `XFINED_MCP_REQUEST_TIMEOUT_MS`
 in the environment of both the editor and the bridge). The work continues
 either way: `xfined_progress` reports it, and `action=cancel` stops it with the
 output folder untouched.
+
+## Listing a mod in the Mod Browser
+
+The game's Mods window has a Browser: a catalog of modules a player installs
+from inside the game. Its contract is `docs/dead-air/MOD_CATALOG.md` in the game
+repository. A listed module is an ordinary module with ordinary GitHub releases
+(see above); the catalog adds that every release is signed with the author's
+key, that it holds game data only, and that the catalog's maintainer lists it
+once, from a pull request. `xfined_mod_catalog` is Mod > Submit to Mod Browser
+without the window.
+
+1. `action=key_create` - the author key, once per author. It is a FILE:
+   `Documents\XFined Editor\Keys\author.xkey` unless `path` says otherwise -
+   never inside the project, whose build would ship it - protected by `password`
+   unless that is empty; an existing file is never overwritten. Tell the user to
+   keep a copy somewhere else: a listed module accepts updates signed by this key
+   only. On another computer `action=key_use` + `path` picks up a copy; a
+   protected key is opened once per session with `action=key_unlock` + `password`
+   (a wrong one answers `wrong password`), or by the `password` of
+   `xfined_mod_package`.
+2. `xfined_mod_set_manifest` - `thumbnail` (any picture; the editor makes
+   `thumbnail.dds` of it) and `tags`, next to what a release needs anyway:
+   `version` 1.0.0 or higher, `github`, and a `website` that is the module's own
+   page - AP-PRO `/stuff/<section>/<slug>-r<number>/` or
+   `/forums/topic/<number>-<slug>/`, ModDB `/mods/<slug>`, `/addons/<slug>` or
+   `/games/<game>/addons/<slug>` - not the site or an index of it.
+3. `xfined_mod_package` shows what the catalog will say before anything is out:
+   every descriptor carries a `[card]` - what the Mod Browser shows before the
+   module is installed: the manifest with its string table ids resolved, the
+   mode, the tags, the thumbnail and `mod.ltx` pinned by size and SHA-256 - and a
+   `[signature]` by the author key over the whole descriptor, which covers every
+   file of the release through the hashes it names. `signed` says whether it was
+   signed (a locked key leaves the release unsigned, with a warning);
+   `catalog_content` names what the catalog refuses - a program or an archive
+   under any name, a file type outside its list, a dot-named file, `os.execute`,
+   `io.popen`, `ffi` and the like in a script (`block`) - and what its maintainer
+   will look at (`review`). Then `xfined_mod_publish` puts the release out.
+4. `action=check` - the listing requirements against the LATEST GitHub release:
+   `findings` `[{level, code, text}]`, `level` `ok` / `note` / `review` /
+   `block`, `code` one of - in the order they are checked - `key`, `repository`,
+   `account`, `release`, `version`, `manifest_version`, `card`, `signature`,
+   `website`, `content`, `script`, `catalog`, `thumbnail`, `tags`, `virustotal`.
+   `blocking` = at least one `block`: fix it, publish again, check again. The
+   files of the release are read from `<project>/releases/<version>/` when its
+   descriptor is the one published - the content policy answers as `content`,
+   the script report as `script`; otherwise `content` is a note. A QA run
+   (`-qa_github`) never opens the website: `website` is a note there.
+5. `action=vt` - with the user's own VirusTotal key (`action=vt_key` + `key`
+   stores it in the Windows Credential Manager; `vt_key_forget` removes it):
+   every package of the release is looked up, and one VirusTotal does not know is
+   uploaded from `<project>/releases/<version>/` - files uploaded there are
+   shared with the security industry. Such a package is `uploaded` or `queued`
+   until VirusTotal has analysed it; run `vt` again a minute later. The verdict
+   (`clean` / `warn` / `block`) follows the catalog's own policy; `block` stops
+   the submission, and the report `url` goes into the pull request.
+6. `xfined_mod_catalog_submit` - runs the check again and refuses on a blocking finding;
+   otherwise it opens a pull request against the catalog repository from the
+   user's GitHub account: a fork (a branch of the catalog itself when the account
+   may push there), the branch `submit-<id>`, one file `mods/<id>.ltx` (`id`,
+   `github`, `key`, `version`, `website`). Submitting again updates the pull
+   request that is open. `action=pull` follows it: `state` `open` / `merged` /
+   `closed`, and `listed` once the maintainer has published the catalog with the
+   module under this key.
+
+`check`, `vt`, the submission and `pull` run on a worker, like an upload: the answer
+is the status with `job.pending=true`, the bridge follows `action=status` for up
+to 150 s (`wait=false` returns at once), and a job that outlasts that comes back
+still pending - ask `action=status` until `job.pending` is false. `action=cancel`
+stops it. The GitHub account is the one `xfined_mod_publish` uses (`account`
+names its source, and `login` once a job has asked GitHub); it has to own the
+repository of `[update] github`.
+
+Everything above is in the answers; the window is for whoever has to look at it
+from outside. `action=show` opens Mod > Submit to Mod Browser - like the menu it
+starts a check when no job runs, and the bridge follows that check - and
+`action=hide` closes it: `show` -> `xfined_screenshot_editor` -> `hide`.
+
+A pull request is public, and the editor asks nothing on this path:
+`xfined_mod_catalog_submit` is called when the user asked for the submission, and
+asked about in the conversation when they did not. It is a tool of its own with
+`destructiveHint` and `openWorldHint`, so a client that wants a permission prompt
+puts one on exactly that call - the checks and the status stay prompt-free.
+The key's password and the VirusTotal key are never part of an answer or a log.
 
 ## Raw protocol (if you don't want the bridge)
 

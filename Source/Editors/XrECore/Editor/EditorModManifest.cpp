@@ -2,16 +2,19 @@
 #include "EditorGameContent.h"
 #include "EditorGameModes.h"
 #include "EditorModManifest.h"
+#include "EditorCatalog.h"
 #include "EditorCharacters.h"
 #include "EditorWorld.h"
 #include "EditorPda.h"
 #include "EditorProject.h"
 #include "XFinedMCP.h"
+#include "EDX11Utils.h"
 #include "ui_main.h"
 #include "Nq/NqExport.h"
 #include "Nq/NqDoc.h"
 #include "Nq/NqUtil.h"
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <bcrypt.h>		// SHA-256 of a finished package
 #include "Zlib/zip.h"	// minizip, release packages
 #include "Zlib/unzip.h"	// reading a finished package back for the file index
@@ -528,6 +531,8 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 				else if (key == "author")		{ if (!Unquote(val, m.author)) m.author = val; }
 				else if (key == "description")	{ if (!Unquote(val, m.description)) m.description = val; }
 				else if (key == "website")		m.website = val;
+				else if (key == "thumbnail")	m.thumbnail = val;
+				else if (key == "tags")			SplitList(m.tags, val.c_str(), ',');
 				else if (key == "api")			m.api = val;
 				else if (key == "mode")			m.mode = val;
 				else if (key == "target")		m.target = val;
@@ -667,6 +672,10 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		AppendText(t, "description", m.description, true);
 	if (!m.website.empty())
 		AppendKey(t, "website", m.website.c_str());
+	if (!m.thumbnail.empty())
+		AppendKey(t, "thumbnail", m.thumbnail.c_str());
+	if (!m.tags.empty())
+		AppendJoined(t, "tags", m.tags);
 	AppendKey(t, "api", m.api.empty() ? "1" : m.api.c_str());
 	// empty mode = active in all game modes; the key is omitted then
 	if (!m.mode.empty())
@@ -1016,6 +1025,12 @@ struct SBuildWalk
 		// build generates from it, never the asset itself
 		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && NqUtil::Extension(name) == ".npcasset")
 			return true;
+		// an author key file is a secret: whoever has it publishes updates in the author's name
+		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && NqUtil::Extension(name) == ".xkey")
+		{
+			left_out.push_back(rel + " (a key file never ships)");
+			return true;
+		}
 		// Tooling, a link (it may point anywhere, the project itself included) and
 		// what the author excluded: left out, and said so.
 		if (EditorProject::IsToolingEntry(name) || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
@@ -2229,6 +2244,45 @@ static bool ResolveReleaseDir(LPCSTR project_root, LPCSTR out_dir, const xr_stri
 	return false;
 }
 
+// The Mod Browser's content rules (MOD_CATALOG 8, 10.3) over what the release ships, read the
+// way the catalog reads a release: a script whole, anything else by what it starts with.
+static void CheckStagedContent(const xr_string& module_dir, const xr_vector<SStagedFile>& files,
+							   EditorMod::SPackageResult& result, xr_string* warnings)
+{
+	xr_vector<EditorCatalog::SFinding> findings;
+	xr_vector<char> data;
+	for (u32 i = 0; i < files.size(); ++i)
+	{
+		const SStagedFile& f = files[i];
+		string_path src;
+		sprintf_s(src, "%s\\%s", module_dir.c_str(), f.rel.c_str());
+		HANDLE h = ::CreateFileA(src, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+		if (INVALID_HANDLE_VALUE == h) continue;
+		size_t got = 0;
+		for (size_t want = EditorCatalog::ContentHead(f.path.c_str(), (size_t)f.size); want > got;
+			 want = EditorCatalog::ContentNeed(data.data(), got, (size_t)f.size))
+		{
+			data.resize(want);
+			DWORD read = 0;
+			if (!::ReadFile(h, data.data() + got, (DWORD)(want - got), &read, NULL) || !read) break;
+			got += read;
+		}
+		::CloseHandle(h);
+		EditorCatalog::CheckContent(f.path.c_str(), got ? data.data() : "", got, findings);
+	}
+	for (u32 i = 0; i < findings.size(); ++i)
+		(EditorCatalog::lvBlock == findings[i].level ? result.catalog_block : result.catalog_review).push_back(findings[i].text);
+	if (!warnings) return;
+	// the author learns it here, not from a refused pull request
+	for (u32 i = 0; i < result.catalog_block.size() && i < 10; ++i)
+		*warnings += "the Mod Browser refuses " + result.catalog_block[i] + "\n";
+	if (result.catalog_block.size() > 10)
+		*warnings += NqUtil::Format("the Mod Browser refuses %u more file(s)\n", u32(result.catalog_block.size() - 10));
+	if (!result.catalog_review.empty())
+		*warnings += NqUtil::Format("the Mod Browser's review looks at %u place(s) in the scripts, first: %s\n",
+			(u32)result.catalog_review.size(), result.catalog_review[0].c_str());
+}
+
 // stage -> packages -> file index -> descriptor. `stage` is a private scratch
 // folder the caller creates and removes, so a failure leaves `out` untouched.
 static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPCSTR stage, LPCSTR out,
@@ -2273,6 +2327,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		unpacked += f.size;
 	}
 	if (!has_manifest) { err = "the staged module has no mod.ltx"; return false; }
+	CheckStagedContent(module_dir, files, result, warnings);
 	// the same input always yields the same package order
 	std::sort(files.begin(), files.end(), [](const SStagedFile& a, const SStagedFile& b) { return a.key < b.key; });
 
@@ -2398,6 +2453,56 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 	text += "\r\n[packages]\r\n";
 	for (u32 p = 0; p < result.packages.size(); ++p)
 		text += result.packages[p].name + NqUtil::Format(" = %llu, ", result.packages[p].size) + result.packages[p].sha256 + "\r\n";
+
+	// The Mod Browser's card: what the browser shows before the module is installed, the
+	// manifest and the thumbnail pinned by their hashes (MOD_CATALOG 4, 6.1)
+	EditorCatalog::SCardFile manifest_ref, thumbnail_ref;
+	bool has_thumbnail = false;
+	xr_string thumbnail_path = m.thumbnail;
+	for (size_t c = 0; c < thumbnail_path.size(); ++c)
+		if (thumbnail_path[c] == '\\') thumbnail_path[c] = '/';
+	for (u32 i = 0; i < files.size(); ++i)
+	{
+		EditorCatalog::SCardFile* ref = files[i].path == "mod.ltx" ? &manifest_ref :
+			(!thumbnail_path.empty() && 0 == _stricmp(files[i].path.c_str(), thumbnail_path.c_str())) ? &thumbnail_ref : 0;
+		if (!ref) continue;
+		ref->path = files[i].path;
+		ref->size = files[i].size;
+		ref->sha256 = files[i].sha256;
+		has_thumbnail |= ref == &thumbnail_ref;
+	}
+	if (!thumbnail_path.empty() && warnings)
+	{
+		xr_string bytes;
+		string_path picture;
+		sprintf_s(picture, "%s\\%s", module_dir.c_str(), m.thumbnail.c_str());
+		if (!has_thumbnail)
+			*warnings += "the thumbnail " + m.thumbnail + " is not in the build - the Mod Browser shows no picture\n";
+		else if (!ReadTextFile(picture, bytes) || !EditorCatalog::ValidThumbnail(bytes.data(), bytes.size()))
+		{
+			*warnings += "the thumbnail " + m.thumbnail + " is not a 256 x 256 DXT1/DXT5 DDS - the Mod Browser shows no picture\n";
+			has_thumbnail = false;
+		}
+	}
+	text += EditorCatalog::CardSection(project_root, m, manifest_ref, has_thumbnail ? &thumbnail_ref : 0);
+
+	// signed with the author key when there is one to sign with: one signature covers the
+	// card, the index hash and the package hashes - every byte of the release
+	const EditorCatalog::SKeyState key = EditorCatalog::KeyState();
+	if (key.exists && key.error.empty() && !key.locked)
+	{
+		xr_string signed_text, sign_err;
+		if (!EditorCatalog::Sign(text, signed_text, sign_err))
+			{ err = "the release could not be signed: " + sign_err; return false; }
+		text = signed_text;
+		result.signed_ = true;
+		result.key_id = key.key_id;
+	}
+	else if (warnings)
+		*warnings += key.exists ? (key.locked ? "the release is not signed: the author key is locked - give its password first\n" :
+											  "the release is not signed: " + key.error + "\n") :
+			xr_string("the release is not signed - the Mod Browser takes signed releases only (Mod > Submit to Mod Browser sets up the author key)\n");
+
 	sprintf_s(path, "%s\\%s.update.ltx", out, m.id.c_str());
 	if (!WriteTextFile(path, text.c_str())) { err = xr_string("can't write ") + path; return false; }
 	// a publisher checks every uploaded asset against these, the descriptor included
@@ -2512,6 +2617,99 @@ bool EditorMod::LinkedGameVersion(xr_string& out)
 }
 
 //------------------------------------------------------------------------------
+// the Mod Browser's picture and tags
+//------------------------------------------------------------------------------
+static const char* kThumbnailName = "thumbnail.dds";
+
+// a picture on its way into the project waits in the editor's scratch
+static xr_string PendingThumbnailPath(LPCSTR project_root)
+{
+	return xr_string(project_root) + "\\temp\\thumbnail_pending.dds";
+}
+
+static bool ConvertThumbnail(LPCSTR project_root, LPCSTR picture, xr_string& pending, xr_string& err)
+{
+	pending = PendingThumbnailPath(project_root);
+	CreateDirChain((xr_string(project_root) + "\\temp").c_str());
+	return EditorCatalog::MakeThumbnail(picture, pending.c_str(), err);
+}
+
+static bool PlaceThumbnail(LPCSTR project_root, const xr_string& pending, xr_string& err)
+{
+	string_path target;
+	sprintf_s(target, "%s\\%s", project_root, kThumbnailName);
+	::SetFileAttributesA(target, FILE_ATTRIBUTE_NORMAL);
+	if (::MoveFileExA(pending.c_str(), target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) return true;
+	err = xr_string("can't write ") + target;
+	return false;
+}
+
+// Only the file the editor makes goes with the key: a thumbnail the author pointed at
+// elsewhere in the module is theirs.
+static bool OwnThumbnail(const xr_string& thumbnail) { return 0 == _stricmp(thumbnail.c_str(), kThumbnailName); }
+
+bool EditorMod::ApplyThumbnail(LPCSTR project_root, LPCSTR value, SManifest& m, xr_string& err)
+{
+	err.clear();
+	xr_string v = value ? value : "";
+	Trim(v);
+	for (size_t i = 0; i < v.size(); ++i)
+		if (v[i] == '/') v[i] = '\\';
+	if (v.empty())
+	{
+		if (OwnThumbnail(m.thumbnail))
+		{
+			string_path path;
+			sprintf_s(path, "%s\\%s", project_root, kThumbnailName);
+			DeleteOutright(path);
+		}
+		m.thumbnail.clear();
+		return true;
+	}
+	const bool absolute = v.size() > 2 && (v[1] == ':' || (v[0] == '\\' && v[1] == '\\'));
+	const xr_string full = absolute ? v : xr_string(project_root) + "\\" + v;
+	const size_t root_len = xr_strlen(project_root);
+	if (NqUtil::Extension(full.c_str()) == ".dds")
+	{
+		// a ready thumbnail inside the project is named as it is
+		xr_string bytes;
+		if (full.size() <= root_len + 1 || 0 != _strnicmp(full.c_str(), project_root, root_len) || full[root_len] != '\\')
+			{ err = "a .dds thumbnail has to be a file of the project: " + v; return false; }
+		if (!ReadTextFile(full.c_str(), bytes) || !EditorCatalog::ValidThumbnail(bytes.data(), bytes.size()))
+			{ err = v + " is not a 256 x 256 DXT1/DXT5 DDS (one mip level or all nine)"; return false; }
+		m.thumbnail = full.substr(root_len + 1);
+		return true;
+	}
+	xr_string pending;
+	if (!ConvertThumbnail(project_root, full.c_str(), pending, err) || !PlaceThumbnail(project_root, pending, err))
+		return false;
+	m.thumbnail = kThumbnailName;
+	return true;
+}
+
+bool EditorMod::ApplyTags(LPCSTR value, SManifest& m, xr_string& err)
+{
+	err.clear();
+	xr_vector<xr_string> tags, unique;
+	SplitList(tags, value ? value : "", ',');
+	for (u32 i = 0; i < tags.size(); ++i)
+	{
+		for (size_t c = 0; c < tags[i].size(); ++c) tags[i][c] = char(tolower((unsigned char)tags[i][c]));
+		if (!EditorCatalog::KnownTag(tags[i].c_str()))
+		{
+			err = "unknown tag '" + tags[i] + "' (allowed:";
+			for (u32 k = 0; k < EditorCatalog::TagVocabulary().size(); ++k)
+				err += (k ? ", " : " ") + EditorCatalog::TagVocabulary()[k];
+			err += ")";
+			return false;
+		}
+		if (std::find(unique.begin(), unique.end(), tags[i]) == unique.end()) unique.push_back(tags[i]);
+	}
+	m.tags = unique;
+	return true;
+}
+
+//------------------------------------------------------------------------------
 // UI: File\Mod modals
 //------------------------------------------------------------------------------
 static const char* kTitleManifest	= "XFined Editor - Mod Manifest";
@@ -2549,6 +2747,165 @@ static char					s_Target[MAX_PATH]	= {};
 // measured once per modal opening: reading the game's layout is not frame work
 static bool					s_SlotChecked		= false;
 static char					s_SlotText[256]		= {};
+// The Mod Browser row. Nothing reaches the project before Save: a chosen picture waits in
+// temp\, a removal is only a mark.
+static xr_string			s_ThumbPending;				// the converted picture, "" = none
+static bool					s_ThumbRemove		= false;
+static bool					s_ThumbPickQueued	= false;
+static xr_string			s_ThumbError;
+static void*				s_ThumbTexture		= 0;		// the preview
+static xr_string			s_ThumbTextureOf;				// the file it shows
+
+// drops the picture nobody saved and the preview; the dialog is closed
+static void ThumbnailCleanup()
+{
+	if (!s_ThumbPending.empty()) ::DeleteFileA(s_ThumbPending.c_str());
+	s_ThumbPending.clear();
+	s_ThumbRemove = false;
+	s_ThumbError.clear();
+	XFinedMCP::ReleaseTexture(s_ThumbTexture);
+	s_ThumbTexture = 0;
+	s_ThumbTextureOf.clear();
+}
+
+// the picture dialog is a native window: it runs outside the ImGui pass
+static void PickThumbnail()
+{
+	s_ThumbPickQueued = false;
+	if (!s_WantManifest || !EditorProject::Active()) return;
+	wchar_t picked[MAX_PATH] = {};
+	const HRESULT co = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	IFileOpenDialog* dlg = 0;
+	if (SUCCEEDED(::CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
+	{
+		const COMDLG_FILTERSPEC types[] = { { L"Pictures (PNG, JPG, TGA, BMP)", L"*.png;*.jpg;*.jpeg;*.tga;*.bmp" } };
+		dlg->SetFileTypes(1, types);
+		dlg->SetTitle(L"Choose the Mod Browser picture");
+		DWORD opts = 0;
+		dlg->GetOptions(&opts);
+		dlg->SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST);
+		IShellItem* item = 0;
+		if (SUCCEEDED(dlg->Show(EDevice ? EDevice->m_hWnd : NULL)) && SUCCEEDED(dlg->GetResult(&item)))
+		{
+			PWSTR w = 0;
+			if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &w)))
+			{
+				wcsncpy_s(picked, w, _TRUNCATE);
+				::CoTaskMemFree(w);
+			}
+			item->Release();
+		}
+		dlg->Release();
+	}
+	if (co == S_OK) ::CoUninitialize();
+	if (!picked[0]) return;
+
+	// the process speaks UTF-8 (LevelEditor.manifest): the path goes to the loader as it is
+	char path[MAX_PATH * 3] = {};
+	::WideCharToMultiByte(CP_UTF8, 0, picked, -1, path, sizeof(path), 0, 0);
+	xr_string pending, err;
+	if (ConvertThumbnail(EditorProject::Root(), path, pending, err))
+	{
+		s_ThumbPending = pending;
+		s_ThumbRemove = false;
+		s_ThumbError.clear();
+		// the preview reloads: the scratch file has the same name as the last one
+		s_ThumbTextureOf.clear();
+	}
+	else
+		s_ThumbError = err;
+}
+
+static void DrawThumbnailRow()
+{
+	const float em = ImGui::GetFontSize();
+	const xr_string shown = !s_ThumbPending.empty() ? s_ThumbPending :
+		(!s_ThumbRemove && !s_Keep.thumbnail.empty()) ? xr_string(EditorProject::Root()) + "\\" + s_Keep.thumbnail : xr_string();
+	if (shown != s_ThumbTextureOf)
+	{
+		// not drawn yet this frame, and the last frame is presented: safe to let go
+		XFinedMCP::ReleaseTexture(s_ThumbTexture);
+		s_ThumbTexture = shown.empty() ? 0 : DX11TextureFromFile(shown.c_str());
+		s_ThumbTextureOf = shown;
+	}
+
+	const ImVec2 box(em * 6.f, em * 6.f);
+	if (s_ThumbTexture)
+		ImGui::Image((ImTextureID)s_ThumbTexture, box);
+	else
+	{
+		// an empty frame the size of the picture, so the row does not jump
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		ImGui::GetWindowDrawList()->AddRect(at, ImVec2(at.x + box.x, at.y + box.y), ImGui::GetColorU32(ImGuiCol_Border), em * 0.25f);
+		ImGui::Dummy(box);
+	}
+	ImGui::SameLine();
+	ImGui::BeginGroup();
+	if (!s_ThumbPending.empty())
+		ImGui::TextUnformatted(OwnThumbnail(s_Keep.thumbnail) || s_Keep.thumbnail.empty() ?
+			"New picture - replaces thumbnail.dds when you save." : "New picture - saved as thumbnail.dds.");
+	else if (s_ThumbRemove)
+		ImGui::TextUnformatted(OwnThumbnail(s_Keep.thumbnail) ? "thumbnail.dds is deleted for good when you save." :
+			"The manifest stops naming it when you save; the file stays.");
+	else if (s_Keep.thumbnail.empty())
+		ImGui::TextDisabled("No picture: the Mods window shows the name's first letter.");
+	else
+	{
+		ImGui::TextUnformatted(s_Keep.thumbnail.c_str());
+		if (!s_ThumbTexture)
+			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "The file does not read as a picture.");
+	}
+	ImGui::BeginDisabled(s_ThumbPickQueued);
+	if (ImGui::Button("Choose Picture..."))
+		s_ThumbPickQueued = UI->DeferUIWork(&PickThumbnail);
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("PNG, JPG, TGA or BMP. The middle square is scaled to 256 x 256\n"
+						  "and saved as thumbnail.dds at the root of the module.");
+	const bool has_picture = !s_ThumbPending.empty() || (!s_ThumbRemove && !s_Keep.thumbnail.empty());
+	if (has_picture)
+	{
+		ImGui::SameLine();
+		if (ImGui::Button("Remove"))
+		{
+			if (!s_ThumbPending.empty()) ::DeleteFileA(s_ThumbPending.c_str());
+			s_ThumbPending.clear();
+			s_ThumbRemove = !s_Keep.thumbnail.empty();
+		}
+	}
+	else if (s_ThumbRemove)
+	{
+		ImGui::SameLine();
+		if (ImGui::Button("Undo")) s_ThumbRemove = false;
+	}
+	if (!s_ThumbError.empty())
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_ThumbError.c_str());
+	ImGui::EndGroup();
+}
+
+static void DrawTagRow()
+{
+	const xr_vector<xr_string>& vocabulary = EditorCatalog::TagVocabulary();
+	if (!ImGui::BeginTable("##tags", 4, ImGuiTableFlags_SizingStretchSame)) return;
+	for (u32 i = 0; i < vocabulary.size(); ++i)
+	{
+		ImGui::TableNextColumn();
+		const xr_vector<xr_string>::iterator it = std::find(s_Keep.tags.begin(), s_Keep.tags.end(), vocabulary[i]);
+		bool on = it != s_Keep.tags.end();
+		if (ImGui::Checkbox(EditorCatalog::TagLabel(vocabulary[i].c_str()), &on))
+		{
+			// kept in the vocabulary's order; a hand-written word the game ignores goes
+			xr_vector<xr_string> tags;
+			for (u32 k = 0; k < vocabulary.size(); ++k)
+			{
+				const bool had = std::find(s_Keep.tags.begin(), s_Keep.tags.end(), vocabulary[k]) != s_Keep.tags.end();
+				if (k == i ? on : had) tags.push_back(vocabulary[k]);
+			}
+			s_Keep.tags = tags;
+		}
+	}
+	ImGui::EndTable();
+}
 
 // "Not shipped: design, docs, .git" - what a build passed by, in the words of the
 // result dialog: a folder that silently stayed behind is the next question
@@ -2611,6 +2968,7 @@ void EditorMod::RequestEditManifest()
 	JoinList(s_Keep.conflicts, s_EdConflicts, sizeof(s_EdConflicts), "\n");
 	JoinList(s_Keep.exclude, s_EdExclude, sizeof(s_EdExclude), "\n");
 	s_SlotChecked = false;
+	ThumbnailCleanup();
 	s_WantManifest = true;
 }
 
@@ -2749,7 +3107,13 @@ static void RunBuildIntoGame()
 
 static void DrawManifestModal()
 {
-	if (!s_WantManifest) return;
+	// Closed - by Save, Cancel or the caption cross: the picture nobody saved and the preview
+	// go now, a frame after the preview was last drawn.
+	if (!s_WantManifest)
+	{
+		if (s_ThumbTexture || !s_ThumbPending.empty() || s_ThumbRemove) ThumbnailCleanup();
+		return;
+	}
 	ImGui::SetNextWindowSize(ImVec2(620, 860), ImGuiCond_FirstUseEver);
 	if (!ImGui::BeginPopupModal(kTitleManifest, &s_WantManifest, 0, true))
 		return;
@@ -2799,6 +3163,21 @@ static void DrawManifestModal()
 	const bool github_ok = EditorMod::ValidateGithubRepo(github.c_str());
 	if (!github_ok)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid repository: owner/repo, e.g. Madmer/agroprom-story");
+
+	// ---- the Mod Browser: the picture and the tags ------------------------------
+	ImGui::SeparatorText("Mod Browser");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Shown next to the module in the game's Mods window and Mod Browser.\n"
+						  "Listing it in the Mod Browser: Mod > Submit to Mod Browser.");
+	// the listing wants the module's own page, which the game's own check does not ask for
+	if (website_ok && !website.empty() && !EditorCatalog::WebsiteIsModulePage(website.c_str()))
+		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "The Mod Browser lists a module with its own page as the website,\n"
+			"e.g. https://ap-pro.ru/stuff/<section>/<name>-r<number>/");
+	DrawThumbnailRow();
+	ImGui::TextUnformatted("Tags:");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Players filter the Mod Browser by these.");
+	DrawTagRow();
 	ImGui::Separator();
 
 	// ---- what game mode is this module for ---------------------------------
@@ -3048,8 +3427,24 @@ static void DrawManifestModal()
 		SplitList(m.before, s_EdBefore, '\n');
 		SplitList(m.conflicts, s_EdConflicts, '\n');
 		SplitList(m.exclude, s_EdExclude, '\n');
+		// the picture: the one waiting in temp\ takes its place, or the removal is carried out
+		xr_string thumb_err;
+		if (!s_ThumbPending.empty())
+		{
+			if (PlaceThumbnail(EditorProject::Root(), s_ThumbPending, thumb_err))
+			{
+				m.thumbnail = kThumbnailName;
+				s_ThumbPending.clear();
+			}
+		}
+		else if (s_ThumbRemove)
+			EditorMod::ApplyThumbnail(EditorProject::Root(), "", m, thumb_err);
+		if (!thumb_err.empty())
+			ELog.DlgMsg(mtError, "The picture was not saved: %s", thumb_err.c_str());
 		if (!EditorMod::Save(EditorProject::Root(), m))
 			ELog.DlgMsg(mtError, "Can't write mod.ltx.");
+		// the preview is drawn in this frame: the next one lets it go (see the top)
+		s_ThumbRemove = false;
 		s_WantManifest = false;
 		ImGui::CloseCurrentPopup();
 	}
@@ -3214,6 +3609,10 @@ static void RunDeferredPackage()
 			s_PkgManifest.update_github.c_str());
 	// the index addresses the zip by byte offset; a re-zipped copy is another file
 	text += "\nUpload the zip exactly as written - repacking it breaks the file index.";
+	text += res.signed_ ? NqUtil::Format("\nSigned with the author key %s: the Mod Browser can list it.", res.key_id.c_str()) :
+		xr_string("\nNot signed: the Mod Browser does not list unsigned releases.");
+	if (!res.catalog_block.empty())
+		text += NqUtil::Format("\nThe Mod Browser refuses %u file(s) of it - see below.", (u32)res.catalog_block.size());
 	if (!res.left_out.empty())
 	{
 		// what the players will not get, said where the release is made
@@ -3257,6 +3656,7 @@ static void DrawPackageModal()
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid game version: MAJOR.MINOR.PATCH, e.g. 1.4.1");
 	if (s_PkgManifest.update_github.empty())
 		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "No GitHub repository in the manifest - the game will not find this release.");
+	EditorCatalog::DrawKeyLine("package");
 	ImGui::Separator();
 
 	ImGui::BeginDisabled(!s_PkgOutDir[0] || !requires_ok || s_PackageQueued);
@@ -3399,6 +3799,10 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppendArray(out, m.conflicts);
 	out += ",\"exclude\":";
 	JsonAppendArray(out, m.exclude);
+	out += ",\"thumbnail\":\"";
+	JsonAppendPath(out, m.thumbnail.c_str());
+	out += "\",\"tags\":";
+	JsonAppendArray(out, m.tags);
 	out += ",\"world\":";
 	EditorWorld::JsonWorld(m.world, out);
 	out += ",\"pda_layout\":\"";
@@ -3508,6 +3912,29 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	// the whole list at once: one entry per line, or comma separated when on one line
 	if (XFinedMCP::GetArg(raw, "exclude", v, v_size))
 		SplitList(m.exclude, v, strchr(v, '\n') ? '\n' : ',');
+	// the Mod Browser's picture (converted at once) and tags
+	if (XFinedMCP::GetArg(raw, "tags", v, v_size))
+	{
+		xr_string err;
+		if (!ApplyTags(v, m, err))
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			JsonAppend(out, err.c_str());
+			out += "\"}";
+			return;
+		}
+	}
+	if (XFinedMCP::GetArg(raw, "thumbnail", v, v_size))
+	{
+		xr_string err;
+		if (!ApplyThumbnail(EditorProject::Root(), v, m, err))
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			JsonAppend(out, err.c_str());
+			out += "\"}";
+			return;
+		}
+	}
 
 	if (!ValidateId(m.id.c_str()))
 		{ out = "{\"ok\":false,\"error\":\"module id missing or invalid (allowed: a-z 0-9 _ . -)\"}"; return; }
@@ -3605,6 +4032,21 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 	else
 		LinkedGameVersion(game_version);
 
+	// the author key's password, when the key file has one; never echoed or logged
+	if (XFinedMCP::GetArg(raw, "password", arg.data(), (u32)arg.size()) && arg[0])
+	{
+		xr_string key_err;
+		const bool opened = EditorCatalog::Unlock(arg.data(), key_err);
+		::SecureZeroMemory(arg.data(), arg.size());
+		if (!opened)
+		{
+			out = "{\"ok\":false,\"error\":\"author key: ";
+			JsonAppend(out, key_err.c_str());
+			out += "\"}";
+			return;
+		}
+	}
+
 	// MCP is the programmatic path: it asks nothing, an earlier packaging of the
 	// same version is simply replaced
 	SProgressOperation progress(*UI, true);
@@ -3644,7 +4086,17 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 	JsonAppend(out, bake_note.c_str());
 	out += "\",\"warnings\":\"";
 	JsonAppend(out, warn.c_str());
-	out += "\",\"left_out\":";
+	out += NqUtil::Format("\",\"signed\":%s,\"key_id\":\"%s\",\"left_out\":", res.signed_ ? "true" : "false", res.key_id.c_str());
 	JsonAppendArray(out, res.left_out);
-	out += "}";
+	// the Mod Browser's content rules: reported, the release is written either way
+	out += ",\"catalog_content\":[";
+	for (u32 i = 0; i < res.catalog_block.size() + res.catalog_review.size(); ++i)
+	{
+		const bool block = i < res.catalog_block.size();
+		out += i ? ",{\"level\":\"" : "{\"level\":\"";
+		out += block ? "block\",\"text\":\"" : "review\",\"text\":\"";
+		JsonAppend(out, (block ? res.catalog_block[i] : res.catalog_review[i - res.catalog_block.size()]).c_str());
+		out += "\"}";
+	}
+	out += "]}";
 }
