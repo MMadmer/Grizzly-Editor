@@ -241,7 +241,9 @@ def run(project: str) -> None:
         scene_now = (mcp("scene_info").get("scene") or "").lower()
         if "l01_escape" not in scene_now:
             opened = mcp("open_scene", timeout=900, scene="l01_escape.level")
-            check(opened.get("ok"), "C the project's Escape scene opens", json.dumps(opened)[:200])
+            if not check(opened.get("ok"), "C the project's Escape scene opens", json.dumps(opened)[:200]):
+                # everything below stands on that scene: waiting for one that did not open only burns minutes
+                raise RuntimeError("the Escape scene did not open")
         check(wait_scene("l01_escape"), "C the project's Escape scene is open")
         start = mcp("place_spawn", section="player_start", x=-223.0, y=-20.0, z=-143.0, snap_to_ground=True)
         start_name = placed_name(start)
@@ -352,6 +354,10 @@ def main() -> int:
     src = os.path.abspath(args.project)
     if not os.path.isdir(src):
         print("no such project: " + src)
+        return 2
+    # C to F place things in the Escape scene; D:\XFinedProjects\Test has one
+    if not os.path.isfile(os.path.join(src, "rawdata", "levels", "l01_escape.level")):
+        print("the project has no rawdata\\levels\\l01_escape.level - the world checks need that scene: " + src)
         return 2
 
     work = tempfile.mkdtemp(prefix="xfined_worldproj_")

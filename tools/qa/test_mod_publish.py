@@ -125,8 +125,9 @@ class Editor:
         env["XFINED_VT_PACE_MS"] = "100"
         env["XFINED_VT_SCAN_WAIT_MS"] = "4000"
         env["XFINED_VT_RATE_WAIT_MS"] = "200"
-        # the author key the releases are signed with: a throw-away home, never the user's own
-        env["XFINED_CATALOG_HOME"] = tempfile.mkdtemp(prefix="xfined_publish_home_")
+        # the author key the releases are signed with: a throw-away home, never the user's own - gone with the editor
+        self.home = tempfile.mkdtemp(prefix="xfined_publish_home_")
+        env["XFINED_CATALOG_HOME"] = self.home
         if with_token:
             env["XFINED_GITHUB_TOKEN"] = TOKEN
         startup = subprocess.STARTUPINFO()
@@ -153,6 +154,7 @@ class Editor:
             pass
         try:
             self.proc.wait(timeout=120)
+            shutil.rmtree(self.home, ignore_errors=True)
         except subprocess.TimeoutExpired:
             print("! the editor did not close on its own - leaving it to the operator", flush=True)
 

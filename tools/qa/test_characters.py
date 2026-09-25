@@ -368,6 +368,13 @@ def run(project: str) -> None:
         module = manifest.get("id", "")
         check(bool(module), "A the project has a module id", json.dumps(manifest)[:200])
 
+        # the checks count characters, and the last one deleted takes the generated half with it: an author's
+        # project may bring characters of its own, so the copy starts without them
+        own = [c["id"] for c in mcp("characters_list").get("characters", [])]
+        for cid in own:
+            mcp("characters_delete", id=cid)
+        check(mcp("characters_list").get("characters") == [], "A the copy starts without characters", str(own))
+
         # ---------------------------------------------------------------- A: write
         w = mcp("characters_write", text=COURIER)
         check(w.get("ok"), "A a character is written", json.dumps(w)[:200])
@@ -504,7 +511,7 @@ def run(project: str) -> None:
         gone = [os.path.isfile(x) for x in (desc, prof, ltx, patch, st_rus, st_eng)]
         check(not any(gone), "D the generated half went with them", str(gone))
 
-        # the project is left as it was found
+        # the copy is left without characters, as it started
         left = mcp("characters_list").get("characters", [])
         check(left == [], "D no character is left in the project", str(left))
 
