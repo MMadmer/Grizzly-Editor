@@ -727,7 +727,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 ## Icons for the editor's own assets
 
-- A quest, a behaviour graph, a character and a character template have no picture
+- **Every asset kind of the editor's own has its own icon, no exception.** A quest, a
+  behaviour graph, a character, a character template and a PDA interface have no picture
   anywhere in the game, so the content browser DRAWS theirs
   (`EditorAssetIcons`): a handful of rounded rectangles, polylines and dots in
   a unit square, scaled into whatever rectangle the tile gives. Vector, not a
@@ -738,12 +739,18 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   and what a file IS costs one read of its first kilobyte, cached per path
   behind a generation that `Invalidate()` bumps from the browser's `Refresh()`.
   A tile never touches the disk to draw itself.
-- The kind comes from the extension - `.nqasset`, `.behasset` - and only a
-  character is looked INTO (`abstract = true`), so `KindOf` needs a path that
+- The kind comes from the extension - `.nqasset`, `.behasset`, `.pdaasset` - and only
+  a character is looked INTO (`abstract = true`), so `KindOf` needs a path that
   opens for that one: the browser listing is project-relative and joins the
-  project root first (`IconOf`). No new MCP command - `quest_list` already
-  reports `kind` and `characters_list` reports `abstract`, which is the same
-  answer.
+  project root first (`IconOf`). WHICH entries get a drawn icon is asked of
+  `EditorAssetIcons::OwnExtension`, the one list of the editor's own kinds - never a
+  list of extensions of its own: the browser once kept one, and the PDA interface,
+  added later, was left without its icon.
+- An agent sees what a tile draws: `content_browser_selection` answers `icons`,
+  every selected own asset mapped to its icon's name (`EditorAssetIcons::Name`).
+  QA: `tools/qa/test_asset_icons.py --project <project>` creates one asset of every
+  kind on a COPY and wants each tile's icon, plus screenshots at the tile sizes 48
+  and 192 when `--shots` names a folder.
 - Icons draw in the theme's text colour and go UNDER the selection wash, like
   a thumbnail: a selected tile does not get its own icon palette.
 - A tile caption breaks where a name breaks for a reader - spaces, `_`, `-`, `.`

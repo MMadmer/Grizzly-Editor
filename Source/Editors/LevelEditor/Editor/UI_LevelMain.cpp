@@ -1973,6 +1973,9 @@ static void RespondContentNavigationJson(xr_string& out)
 
 	out = "{\"ok\":true,\"open\":";
 	out += UIContentBrowser::IsOpen() ? "true" : "false";
+	char tile[32];
+	sprintf_s(tile, sizeof(tile), ",\"tile\":%.0f", UIContentBrowser::TileSize());
+	out += tile;
 	out += ",\"current\":";
 	AppendBrowserLocationJson(out, current);
 	const char* names[] = { "back", "forward", "favorites" };
@@ -2554,6 +2557,15 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 
 		xr_string err;
 		bool success = true;
+		// the tile slider goes with any action
+		float tile = 0.f;
+		if (GetArgFloat(raw, "tile", tile) && !UIContentBrowser::SetTileSize(tile, err))
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			out += JsonEscapePath(err.c_str());
+			out += "\"}";
+			return true;
+		}
 		if (0 == _stricmp(action, "navigate"))
 			success = UIContentBrowser::NavigateToFolder(source, category, folder, err);
 		else if (0 == _stricmp(action, "back"))
@@ -2766,6 +2778,21 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
             out += "\"";
         }
         out += "]";
+        // the drawn icon of every selected asset of the editor's own kinds, as its tile shows it
+        out += ",\"icons\":{";
+        bool first_icon = true;
+        for (u32 i = 0; i < sel.size(); ++i)
+        {
+            LPCSTR icon = UIContentBrowser::IconName(sel[i].c_str());
+            if (!icon[0]) continue;
+            out += first_icon ? "\"" : ",\"";
+            out += JsonEscapePath(sel[i].c_str());
+            out += "\":\"";
+            out += icon;
+            out += "\"";
+            first_icon = false;
+        }
+        out += "}";
         // the inline rename box, while one is open: what it holds is what a hand would type over
         xr_string r_entry, r_text;
         int r_select = 0;

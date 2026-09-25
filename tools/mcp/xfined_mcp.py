@@ -845,7 +845,9 @@ TOOLS = [
     {
         "name": "xfined_content_browser_navigation",
         "description": "Inspect or drive Content Browser history, breadcrumbs, Back/Forward/Up/Home, and session "
-                       "favorite folders. Location state includes source, category, and source-relative folder.",
+                       "favorite folders. Location state includes source, category, and source-relative folder. "
+                       "'tile' (48..192) sets the tile slider - the side of a tile's picture - with any action, and "
+                       "the answer reports it.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -872,6 +874,8 @@ TOOLS = [
                 },
                 "folder": {"type": "string", "description": "source-relative folder; empty means root"},
                 "index": {"type": "integer", "minimum": 0, "description": "favorite index returned by get"},
+                "tile": {"type": "number", "minimum": 48, "maximum": 192,
+                         "description": "the tile slider: a tile's picture side in pixels"},
             },
         },
     },
@@ -1152,7 +1156,10 @@ TOOLS = [
                        "xfined_content_rename, and action=clear closes the box. With action=select/toggle/range/clear it "
                        "also applies normal file-manager selection semantics against the complete filtered view, "
                        "including virtualized offscreen rows. select establishes the anchor; range extends from it. "
-                       "Names must match an entry in the current view exactly. Omit action (or use get) to only read.",
+                       "Names must match an entry in the current view exactly. Omit action (or use get) to only read. "
+                       "'icons' maps every selected asset of the editor's own kinds to the icon its tile draws - quest, "
+                       "behaviour graph, character, character template, PDA interface - the way to see a tile's icon "
+                       "without a screenshot.",
         "inputSchema": {
             "type": "object",
             "properties": {

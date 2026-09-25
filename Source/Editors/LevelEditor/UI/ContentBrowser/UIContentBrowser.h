@@ -58,6 +58,12 @@ public:
 	static bool		RevealAsset			(LPCSTR name, int source, bool open_viewer, xr_string& err);
 	// MCP: what is selected right now, and in which source/folder
 	static void		GetSelection		(int& source, xr_string& folder, xr_vector<xr_string>& sel);
+	// The icon the browser draws for an entry - one of the editor's own asset kinds
+	// (EditorAssetIcons::Name) - or "" for any other file: what an agent reads instead of the tile.
+	static LPCSTR	IconName			(LPCSTR entry);
+	// MCP: the tile slider - the picture's side in pixels, 48..192 (the slider's range)
+	static float	TileSize			();
+	static bool		SetTileSize			(float size, xr_string& err);
 	// MCP: apply file-manager selection semantics to an exact entry in the
 	// complete current view, including rows outside the virtualized viewport.
 	static bool		ModifySelection		(LPCSTR action, LPCSTR name, xr_string& err);

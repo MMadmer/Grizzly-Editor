@@ -78,8 +78,12 @@ void Arc(SIcon& icon, float cx, float cy, float r, float a0, float a1, int steps
 		 bool secondary = false, float weight = 1.f, bool dashed = false)
 {
 	SStroke s;
-	s.pts.reserve(steps + 1);
-	for (int i = 0; i <= steps; ++i)
+	// a solid full turn is a closed loop: drawn open it meets itself end to end, and the two
+	// line caps stick out there as a notch. A dashed one keeps its last piece to dash.
+	s.closed = !dashed && _abs(a1 - a0) >= PI_MUL_2 - EPS_L;
+	const int last = s.closed ? steps - 1 : steps;
+	s.pts.reserve(last + 1);
+	for (int i = 0; i <= last; ++i)
 	{
 		const float a = a0 + (a1 - a0) * (float(i) / float(steps));
 		s.pts.push_back(ImVec2(cx + r * _cos(a), cy + r * _sin(a)));

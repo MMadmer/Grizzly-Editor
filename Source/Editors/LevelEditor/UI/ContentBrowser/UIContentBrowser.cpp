@@ -61,14 +61,15 @@ static bool IsPdaExt(LPCSTR name)
 	return ext && !_stricmp(ext, ".pdaasset");
 }
 
-// Which drawn icon a listing entry gets. A quest and a behaviour graph are
-// told apart by extension; a character template is told from a character by
-// looking INSIDE the file, so the icons need a path that opens: the project
-// listing keeps entries relative to the project root. Anywhere else the
-// extension alone decides, which still picks the right family.
+// Which drawn icon a listing entry gets: every kind of the editor's own assets
+// has one, and OwnExtension is the one list of them. The extension decides,
+// except that a character template is told from a character by looking INSIDE
+// the file, so the icons need a path that opens: the project listing keeps
+// entries relative to the project root. Anywhere else the extension alone
+// decides, which still picks the right family.
 static EditorAssetIcons::EKind IconOf(LPCSTR entry, int source)
 {
-	if (!IsQuestExt(entry) && !IsCharacterExt(entry))	return EditorAssetIcons::kNone;
+	if (!EditorAssetIcons::OwnExtension(entry))	return EditorAssetIcons::kNone;
 	string_path disk;
 	if (0 == source && EditorProject::Active() &&
 		xr_strlen(EditorProject::Root()) + xr_strlen(entry) + 2 < sizeof(disk))
@@ -455,6 +456,13 @@ bool UIContentBrowser::ApplyLocation(SLocation location, bool record, xr_string&
 	}
 
 	SFolder* folder = FindFolder(location.folder.c_str());
+	// a folder something else made a moment ago - an MCP write, a checkout - is one more look
+	// at the disk away; the watcher would get there too, only later
+	if (!folder && 0 == m_Source)
+	{
+		Refresh();
+		folder = FindFolder(location.folder.c_str());
+	}
 	if (!folder)
 	{
 		if (rebuild)
@@ -2648,6 +2656,24 @@ void UIContentBrowser::GetSelection(int& source, xr_string& folder, xr_vector<xr
 		if (Form->m_Selection[i].folder) s += "\\";
 		sel.push_back(s);
 	}
+}
+
+LPCSTR UIContentBrowser::IconName(LPCSTR entry)
+{
+	return EditorAssetIcons::Name(IconOf(entry, Form ? Form->m_Source : 0));
+}
+
+float UIContentBrowser::TileSize()
+{
+	return Form ? Form->m_TileSize : 0.f;
+}
+
+bool UIContentBrowser::SetTileSize(float size, xr_string& err)
+{
+	if (!Form)						{ err = "content browser unavailable"; return false; }
+	if (size < 48.f || size > 192.f)	{ err = "tile must be 48..192"; return false; }
+	Form->m_TileSize = size;
+	return true;
 }
 
 bool UIContentBrowser::GetRename(xr_string& entry, xr_string& text, int& select)
