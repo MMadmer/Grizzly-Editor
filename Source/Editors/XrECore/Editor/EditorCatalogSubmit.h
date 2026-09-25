@@ -3,8 +3,9 @@
 // Mod > Submit to Mod Browser: lists the project's module in the Mod Browser of Dead Air:
 // Refined (game repo docs/dead-air/MOD_CATALOG.md, sections 7 and 10). One job at a time runs
 // on a worker, whether the window or MCP started it: the listing requirements checked against
-// the latest GitHub release, a VirusTotal scan with the author's own key, the submission - an
-// issue of the catalog - and following that issue and the verdict the catalog comments on it.
+// the latest GitHub release, the VirusTotal scan every submission needs (EditorVirusTotal, with the
+// author's own key: the catalog only looks packages up), the submission - an issue of the catalog -
+// and following that issue and the verdict the catalog comments on it.
 //
 // The author key and the card are EditorCatalog, the network is EditorGithub. Like every MCP
 // path, mod_catalog asks nothing and opens no window; its secrets (a key password, a VirusTotal

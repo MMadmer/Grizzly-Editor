@@ -207,6 +207,9 @@ namespace EditorGithub
 	xr_string CatalogRepo	();
 	// the base URLs the catalog's public files are served from, in the order to try
 	void	CatalogMirrors	(xr_vector<xr_string>& out);
+	// the catalog's signed index from the first mirror that answers, not verified: it informs the
+	// author, and the catalog's own checks read it again
+	bool	FetchCatalogIndex	(CCancel& cancel, xr_string& text);
 
 	// the account's login name (GET /user)
 	bool	AccountLogin	(const xr_string& token, CCancel& cancel, xr_string& login, xr_string& err);
@@ -248,7 +251,9 @@ namespace EditorGithub
 							 SCatalogIssue& out, xr_string& err);
 
 	//--------------------------------------------------------------------------
-	// VirusTotal, with the author's own key (MOD_CATALOG 11)
+	// VirusTotal, with the author's own key (MOD_CATALOG 11). The free API takes 4 requests a
+	// minute: every request below waits for its turn, whichever job asks. The scan built on
+	// them is EditorVirusTotal.
 	//--------------------------------------------------------------------------
 	// XFINED_VT_KEY or VT_API_KEY first, then the key the editor saved in the Windows
 	// Credential Manager. Like the GitHub token it never reaches a log, a file or an answer.

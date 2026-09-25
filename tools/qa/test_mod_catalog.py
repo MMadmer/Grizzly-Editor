@@ -16,8 +16,9 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   E  the release published to the mock
   F  the listing requirements (7) against the published release and the catalog index; the window
      opened and closed over MCP (show / hide)
-  G  VirusTotal with the author's own key (11): upload, queue, verdict, a block that stops a submission
-  H  the submission: an issue 'Submit <id>' whose ini block is mods/<id>.ltx byte for byte, edited not
+  G  VirusTotal with the author's own key (11), required: without one the check blocks and nothing is sent;
+     the scan uploads what VirusTotal does not know, waits for the report and judges it; a block stops a submission
+  H  the submission, scanned first: an issue 'Submit <id>' whose ini block is mods/<id>.ltx byte for byte, edited not
      duplicated, the verdicts the catalog's workflow comments (github-actions[bot] only, the newest one, past
      the first page), accepted and listed, nothing sent once the catalog holds the file
   I  hygiene: no token, password or VirusTotal key where it must not go
@@ -199,6 +200,10 @@ class Mock:
     def vt_seed(self, verdicts: dict) -> None:
         self.post("/__vt/seed", json.dumps(verdicts).encode("utf-8"), "application/json")
 
+    def vt_forget(self, sha: str) -> None:
+        """VirusTotal no longer knows the file, as if it had never seen it."""
+        self.post("/__vt/forget?sha=" + sha)
+
     def requests(self) -> list[dict]:
         if not os.path.isfile(self.log):
             return []
@@ -236,6 +241,9 @@ class Editor:
             "XFINED_CATALOG_BASE": origin + "/catalog/public/",
             "XFINED_VT_API": origin + "/vt/api/v3",
             "XFINED_CATALOG_HOME": home,
+            # the free API's pace and the wait for a report, in QA terms
+            "XFINED_VT_PACE_MS": "100",
+            "XFINED_VT_SCAN_WAIT_MS": "15000",
         })
         if vt_variable:
             env["XFINED_VT_KEY"] = VT_KEY
@@ -326,7 +334,16 @@ def blocks(data: dict) -> list[dict]:
 
 
 def vt_entry(data: dict, sha: str) -> dict:
-    return next((v for v in data.get("vt") or [] if str(v.get("sha256", "")).lower() == sha), {})
+    packages = (data.get("virustotal") or {}).get("packages") or []
+    return next((v for v in packages if str(v.get("sha256", "")).lower() == sha), {})
+
+
+def vt_state(data: dict) -> str:
+    return (data.get("virustotal") or {}).get("state", "")
+
+
+def texts(data: dict, code: str) -> list[str]:
+    return [f.get("text", "") for f in findings(data) if f.get("code") == code]
 
 
 def publish(wait_seconds: float = 240.0) -> dict:
@@ -898,11 +915,20 @@ class Run:
 
     # ------------------------------------------------------------------------------ F: the listing requirements
     def listing_check(self, mock: Mock) -> None:
+        # the scan is the author's: without a key the check blocks, so the key is there from here on (G takes it away)
+        st = mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        check(st.get("ok") and st.get("vt_key") is True, "F the VirusTotal key is stored for the checks", short(st))
         data = job("check")
         c = data.get("check") or {}
         check(job_done(data, "check") and c.get("done") is True, "F check runs to the end", short(data.get("job")))
         check(not blocks(data) and c.get("blocking") is False, "F nothing blocks the published release",
               short(blocks(data)))
+        name, _, sha = self.package
+        check(levels(data, "virustotal") == ["note"] and
+              any("not scanned yet: Submit scans it first" in t for t in texts(data, "virustotal")) and
+              vt_entry(data, sha).get("state") == "unknown" and uploads_of(mock.vt(), sha) == 0,
+              "F the check only looks the package up: VirusTotal does not know it, Submit scans it first",
+              short(texts(data, "virustotal")) + " " + short(vt_entry(data, sha)))
         for code in ("release", "signature", "account", "catalog", "content"):
             check("ok" in levels(data, code) and "block" not in levels(data, code), "F %s is ok" % code,
                   short([f for f in findings(data) if f.get("code") == code]))
@@ -955,6 +981,15 @@ class Run:
               short(st))
         refused = job("vt")
         check(job_failed(refused), "G vt without a key is refused", short(refused))
+        data = job("check")
+        check("block" in levels(data, "virustotal") and (data.get("check") or {}).get("blocking") is True and
+              any("virustotal.com" in t and "VirusTotal section" in t for t in texts(data, "virustotal")) and
+              vt_state(data) == "no_key",
+              "G without a key the check blocks, and says where a key comes from and where it goes",
+              short(texts(data, "virustotal")))
+        refused = mcp("mod_catalog", action="submit")
+        check(job_failed(refused) and "no VirusTotal key" in job_error(refused) and not issues(mock.catalog()),
+              "G submit without a key sends nothing", short(refused))
         st = mcp("mod_catalog", action="vt_key", key=VT_KEY)
         check(st.get("ok") and st.get("vt_key") is True and VT_KEY not in json.dumps(st),
               "G vt_key stores the key and echoes nothing", short(st))
@@ -962,22 +997,19 @@ class Run:
         data = job("vt")
         entry = vt_entry(data, sha)
         check(job_done(data, "vt"), "G vt runs to the end", short(data.get("job")))
-        check(entry.get("state") in ("uploaded", "queued"), "G a package VirusTotal does not know is uploaded", short(entry))
-        check(entry.get("package") == name and entry.get("size") == size and entry.get("url") == VT_PAGE + sha,
+        check(entry.get("state") == "clean" and entry.get("engines", 0) >= 3 and entry.get("trusted_malicious") == 0 and
+              vt_state(data) == "clean",
+              "G the package VirusTotal did not know is uploaded, its report waited for: clean by the index's policy",
+              short(entry))
+        check(entry.get("name") == name and entry.get("size") == size and entry.get("url") == VT_PAGE + sha,
               "G the entry names the package, its size and its report page", short(entry))
         check(uploads_of(mock.vt(), sha) == 1, "G VirusTotal received the package once", short(mock.vt()))
         posts = [r.get("path", "") for r in mock.requests() if r.get("method") == "POST" and r.get("path", "").startswith("/vt/")]
         check(any(p.startswith("/vt/upload/") for p in posts) and not any(p.startswith("/vt/api/v3/files") for p in posts),
               "G over the direct line it went to an address VirusTotal handed out (upload_url)", str(posts))
-        for _ in range(12):
-            if entry.get("state") not in ("uploaded", "queued"):
-                break
-            time.sleep(1)
-            data = job("vt")
-            entry = vt_entry(data, sha)
-        check(entry.get("state") == "clean" and entry.get("engines", 0) >= 3 and entry.get("trusted_malicious") == 0,
-              "G once analysed, the package is clean by the index's policy", short(entry))
-        check(uploads_of(mock.vt(), sha) == 1, "G a package VirusTotal knows is never uploaded again", short(mock.vt()))
+        data = job("vt")
+        check(vt_entry(data, sha).get("state") == "clean" and uploads_of(mock.vt(), sha) == 1,
+              "G a package VirusTotal knows is never uploaded again", short(mock.vt()))
 
         mock.vt_seed({sha: {TRUSTED: "malicious"}})
         data = job("vt")
@@ -1008,8 +1040,18 @@ class Run:
         mock.issue("QaOwner", SUBMIT_TITLE + " please", "Almost the title.")
         decoys = {i.get("number"): (i.get("body"), i.get("state")) for i in issues(mock.catalog())}
 
+        # the catalog only looks packages up: the submission scans what VirusTotal does not know first
+        mock.vt_forget(sha)
         data = job("submit")
         sub = data.get("submission") or {}
+        log = mock.requests()
+        uploaded_at = [i for i, r in enumerate(log) if r.get("method") == "POST" and r.get("path", "").startswith("/vt/upload/")]
+        opened_at = [i for i, r in enumerate(log) if r.get("method") == "POST" and
+                     urllib.parse.urlsplit(r.get("path", "")).path.endswith("/issues")]
+        check(job_done(data, "submit") and uploads_of(mock.vt(), sha) == 1 and vt_entry(data, sha).get("state") == "clean" and
+              uploaded_at and opened_at and max(uploaded_at) < min(opened_at),
+              "H submit scans first: the package VirusTotal did not know goes up, its report comes back, then the issue",
+              short(data.get("virustotal")) + " uploads=%d" % uploads_of(mock.vt(), sha))
         check(job_done(data, "submit") and sub.get("number", 0) > 0 and sub.get("state") == "open" and sub.get("url"),
               "H submit opens a submission", short(data.get("job")) + " " + short(sub))
         check(sub.get("verdict") == "" and sub.get("verdict_text") == "", "H no verdict before the catalog speaks",
@@ -1029,8 +1071,10 @@ class Run:
         check(submission_fields(ini_block(body) or "") == {"id": MODULE_ID, "github": GITHUB_REPO, "key": self.key_public,
                                                            "version": VERSION, "website": WEBSITE},
               "H and the catalog's own parser reads exactly the [mod] fields from it", repr(ini_block(body)))
-        check(VT_PAGE + sha in after_block(body) and "Checked by XFined Editor" in after_block(body),
-              "H after the block: the VirusTotal report and the editor's check", repr(after_block(body)[:400]))
+        check(VT_PAGE + sha in after_block(body) and "Checked by XFined Editor" in after_block(body) and
+              ("`%s`: clean, " % name) in after_block(body),
+              "H after the block: the scan's verdict with the VirusTotal report, and the editor's check",
+              repr(after_block(body)[:400]))
         check(branch_file(state, CATALOG_REPO, "main", path) is None,
               "H the catalog's main is untouched: the catalog commits the file itself")
         check({i.get("number"): (i.get("body"), i.get("state")) for i in issues(state) if i.get("number") in decoys} ==
@@ -1155,22 +1199,32 @@ class Run:
         data = publish()
         check(data.get("state") == "done", "J published to the maintainer's repository", short(data))
 
-        # a package under 32 MB goes straight to /files; the rate is met on the next look
+        # a package under 32 MB goes straight to /files; two requests a minute leave nothing for the report
         data = job("vt")
-        states = [e.get("state") for e in data.get("vt") or []]
+        entry = ((data.get("virustotal") or {}).get("packages") or [{}])[0]
         posts = [r.get("path", "") for r in mock.requests() if r.get("method") == "POST" and r.get("path", "").startswith("/vt/")]
-        check(job_done(data, "vt") and states == ["uploaded"] and any(p.startswith("/vt/api/v3/files") for p in posts),
-              "J a small package is uploaded to /files directly", short(data.get("vt")) + " " + str(posts))
-        data = job("vt")
-        entry = (data.get("vt") or [{}])[0]
+        check(job_done(data, "vt") and any(p.startswith("/vt/api/v3/files") for p in posts),
+              "J a small package is uploaded to /files directly", short(data.get("virustotal")) + " " + str(posts))
         refusals = [r for r in mock.requests() if r.get("status") == 429]
-        check(job_done(data, "vt") and entry.get("state") == "error" and "4 requests a minute" in str(entry.get("error", "")) and
-              len(refusals) >= 2, "J over the free API's rate: waited out a few times, then reported, not hidden",
-              short(entry) + " 429s: %d" % len(refusals))
+        check(entry.get("state") == "unavailable" and "4 requests a minute" in str(entry.get("error", "")) and
+              len(refusals) >= 2, "J over the free API's rate: waited out a few times while the report is awaited, then "
+              "reported, not hidden", short(entry) + " 429s: %d" % len(refusals))
+        # only a package with a report leaves: the catalog takes one VirusTotal does not answer for as
+        # a package nobody scanned
+        data = job("submit")
+        check(job_failed(data) and "not submitted" in job_error(data) and "submit again when VirusTotal answers" in
+              job_error(data) and not submissions(mock.catalog(), MAINTAINER),
+              "J VirusTotal not answering: nothing is sent, and the author is told to submit again",
+              short(data.get("job")) + " " + job_error(data))
+        mock.vt_seed({entry.get("sha256", ""): {"Kaspersky": "undetected", "Microsoft": "undetected"}})
+        # the mock's rate window is a real minute (github_mock.VT_RATE_WINDOW): the next scan's lookup has
+        # to find it open again
+        time.sleep(61)
         data = job("submit")
         sub = data.get("submission") or {}
         check(job_done(data, "submit") and sub.get("number", 0) > 0 and sub.get("state") == "open",
-              "J submit opens a submission", short(data.get("job")) + " " + short(sub))
+              "J once VirusTotal has the report, submit opens a submission", short(data.get("job")) + " " + short(sub))
+        check(vt_state(data) == "clean", "J and it went out on the report", vt_state(data))
         check((data.get("account") or {}).get("login") == MAINTAINER, "J the job learned the account's login",
               short(data.get("account")))
         number = sub.get("number", 0)

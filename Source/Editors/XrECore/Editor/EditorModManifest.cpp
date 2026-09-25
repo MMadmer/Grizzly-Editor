@@ -1877,9 +1877,11 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 // file index names, so the index states where the data REALLY sits: offsets are
 // read back from the finished archive, never worked out from what was written.
 //------------------------------------------------------------------------------
-// input bytes per package: deflate never grows data by more than a fraction of
-// a percent, so a package stays clear of the asset limit whatever it holds
-static const u64 kPartInputLimit	= 1536ull << 20;
+// Input bytes per package. Deflate never grows data by more than a fraction of a
+// percent, so a package stays clear of VirusTotal's 650 MB - the Mod Browser lists
+// only packages VirusTotal knows - and of GitHub's asset limit alike; a single file
+// over this still gets a package of its own.
+static const u64 kPartInputLimit	= 512ull << 20;
 static const u64 kAssetLimit		= 2048ull << 20;	// GitHub refuses a release asset of 2 GiB
 static const u64 kIndexLimit		= 64ull << 20;		// 2.2: the game reads an index of 64 MiB at most
 static const u32 kMaxPackages		= 64;

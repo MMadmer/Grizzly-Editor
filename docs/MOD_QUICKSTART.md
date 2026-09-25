@@ -135,7 +135,7 @@ writes a release into `<project>\releases\<version>\`:
 
 | File | What it is |
 |---|---|
-| `<id>-<version>.zip` | The package: the complete module, every entry under `modules/<id>/`. A module too big for one GitHub asset (2 GiB) is split into `<id>-<version>.part1.zip`, `.part2.zip`, … |
+| `<id>-<version>.zip` | The package: the complete module, every entry under `modules/<id>/`. A bigger module is split into `<id>-<version>.part1.zip`, `.part2.zip`, … - every package stays under the 650 MB VirusTotal takes (the Mod Browser lists only packages VirusTotal knows) unless a single file alone is larger. |
 | `<id>-<version>.files` | The file index: every file's SHA-256 and where its bytes sit inside the package. It is what lets the game download only the files that changed, however many versions the player skipped. |
 | `<id>.update.ltx` | The release descriptor: id, version, the lowest game version the release runs on, and the name, size and SHA-256 of the index and of every package. The game reads it to decide whether an update exists. |
 
@@ -181,6 +181,17 @@ For every release:
 A version that is already published is refused: a player who has it never looks
 at it again, so changed files would reach nobody - raise the version. An
 interrupted upload leaves its draft on GitHub, and the next attempt picks it up.
+
+**A module in the Mod Browser.** The Mod Browser offers a release only once
+VirusTotal knows its packages, and it never uploads anything itself. So for a
+module the Mod Browser lists, Publish scans the packaged release on VirusTotal
+with your own free key first, before anything reaches GitHub: every package is
+looked up, one VirusTotal does not know is uploaded, and its report is awaited -
+a few minutes. Without a key, or when VirusTotal blocks a package, the release is
+not published and the result says why; add the key in **Mod → Submit to Mod
+Browser…** (a free account at virustotal.com has one). When VirusTotal is still
+analysing or does not answer, the release goes out with a warning and the Mod
+Browser offers it once VirusTotal knows it.
 
 **The releases that are out.** **Releases** on the toolbar (**Mod → Manage
 Releases…**, MCP: `xfined_mod_releases`, `xfined_mod_release_edit`,

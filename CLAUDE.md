@@ -199,9 +199,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **Mod → Package Release…** / `mod_package` (`EditorMod::PackageRelease`)
   writes three kinds of files into `<project>\releases\<version>`: the
   descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and the
-  package `<id>-<version>.zip` (`.partN.zip` when split). The game's module
-  updater reads exactly these from the latest GitHub release of
-  `[update] github`.
+  package `<id>-<version>.zip` (`.partN.zip` when split: every package stays
+  under the 650 MB VirusTotal takes - `kPartInputLimit` - unless a single file
+  alone is larger, because the Mod Browser lists only packages VirusTotal knows).
+  The game's module updater reads exactly these from the latest GitHub release
+  of `[update] github`.
 - The file index names every file's SHA-256, size, package, data offset,
   packed length and method. The game never parses a package as a zip: it asks
   GitHub for the byte ranges the index names and downloads only the files that
@@ -247,6 +249,16 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   release's files under a reused tag for minutes - seen live - while any
   published `v<version>[-rN]` still means "this version is out"; a latest release that carries another
   module's descriptor is refused, because this release would hide it.
+- **Publish Release scans a listed module's release first** (`ScanFirst`, the same
+  `EditorVirusTotal::Scan` Submit runs): after packaging and BEFORE anything is created
+  on GitHub it reads the catalog index, and a module the index lists has its packages
+  scanned on VirusTotal with the author's own key - the catalog only looks packages up
+  and holds back a release VirusTotal does not know. No key, `block` or `too_large`:
+  not published, the error says why (`refused`). `analysing` or `unavailable`:
+  published with a warning - the Mod Browser offers the release once VirusTotal knows
+  it. Not listed: no scan, no VirusTotal request. The index not answering: a key
+  scans, no key publishes with a note. The job's state is `scanning` meanwhile, and
+  `mod_publish` answers `virustotal` `{state, packages}` (`none` = no scan needed).
 - **Releases** (toolbar, Mod > Manage Releases) / `mod_releases` lists what the
   repository holds, drafts included, edits the title and the notes of a release
   (`EditorGithub::EditRelease` always sends `make_latest` with the mark's
@@ -277,7 +289,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The device sign-in ("Sign in with GitHub") stays hidden until `kClientId` in
   `EditorGithub.cpp` holds the client id of the editor's GitHub OAuth app.
 
-## The Mod Browser (EditorCatalog, EditorCatalogSubmit)
+## The Mod Browser (EditorCatalog, EditorCatalogSubmit, EditorVirusTotal)
 
 - The game's in-game Mod Browser lists modules from a catalog repository
   (`MMadmer/darf-mods`, served by GitHub Pages / jsDelivr / raw - the same mirrors
@@ -312,12 +324,32 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   release fetched anonymously the way the game fetches it (the account must own
   `[update] github`; content is read from this computer's copy only when the local
   descriptor is byte-identical and every package hash matches - otherwise a note);
-  `vt` is the author's own VirusTotal key (Credential Manager
-  `XFinedEditor:VirusTotal`, or `VT_API_KEY`), uploading a package VirusTotal does
-  not know from the local release folder and waiting out the free API's 4 requests
-  a minute; `submit` checks again, then submits (below); `submission` follows it:
-  its state, the catalog's verdict, and whether the index lists the id with this key.
+  `vt` runs the VirusTotal scan (below) with the author's own key (Credential
+  Manager `XFinedEditor:VirusTotal`, or `VT_API_KEY`); `submit` checks again, scans,
+  then submits (below); `submission` follows it: its state, the catalog's verdict,
+  and whether the index lists the id with this key.
   A submission is public from its first second; the window says so under Submit.
+- **The VirusTotal scan is the author's, and required** (`EditorVirusTotal`, one
+  routine for Submit and Publish Release). The catalog NEVER uploads and never waits
+  for an analysis: it only LOOKS packages up by SHA-256 - one VirusTotal does not know
+  refuses the submission ("scan it with your own key"), one still analysing waits,
+  `block` refuses, `clean` / `warn` pass - and a new release of a listed module whose
+  package VirusTotal does not know is held back until it does. The scan: every package
+  looked up, one VirusTotal does not know uploaded from this computer (only the bytes
+  the descriptor pins), its report waited for - a file VirusTotal never saw answers 404
+  until its first analysis ends, which is waited out too - about ten minutes at most,
+  cancellable, with stage text. Every VirusTotal request waits its turn at the free
+  API's 4 a minute (`VtPace` in EditorGithub, shared by every job), a 429 is waited out
+  a few times, a refused key or a used-up quota ends the scan. A package ends `clean` /
+  `warn` / `block` (the index's policy), `analysing`, `unknown`, `too_large`,
+  `unavailable` or `no_key`; the scan's state is the most decisive one (`kOrder`).
+  `check` only looks up: no key is a `block` finding that says where a free key comes
+  from, a package VirusTotal does not know a note ("not scanned yet: Submit scans it
+  first"). `submit` scans after the check and sends only on a report - `clean` / `warn`;
+  everything else sends nothing and says why, `analysing` / `unavailable` with "submit
+  again": VirusTotal answers 404 for a file until its first analysis ends, and the
+  catalog refuses a 404 as a package nobody scanned. `mod_catalog` answers `virustotal`
+  `{state, packages}` - what the last check looked up or the last scan found.
 - **A submission is an ISSUE of the catalog, not a pull request.** GitHub blocks
   `pull_request_target` by default in public repositories and holds a fork's first
   pull request for a manual approval nobody gives; an issue starts the catalog's
@@ -342,7 +374,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   repository, running as `github-actions[bot]`, judges every submission: accepted, it
   commits the file and closes the issue; refused, it closes the issue (a GitHub account
   younger than the catalog's minimum age is refused too, with the day it may submit
-  again); waiting (VirusTotal still scanning, the day's quota of new modules used up),
+  again); waiting (VirusTotal still analysing, the day's quota of new modules used up),
   it leaves the issue open and looks again every half hour. It says so in a comment: the body starts
   with the line `<!-- xms-catalog verdict=STATE -->` (`accepted` / `waiting` /
   `refused`), the next non-empty line is one plain-text sentence summing it up, then a
@@ -356,11 +388,16 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   closed without one (somebody closed it by hand).
 - QA: under `-qa_github` the catalog is `XFINED_CATALOG_REPO` / `XFINED_CATALOG_BASE`,
   VirusTotal `XFINED_VT_API` / `XFINED_VT_KEY`, and `XFINED_CATALOG_HOME` replaces
-  `Documents\XFined Editor`, so a test never meets the author's own key.
-  `tools/qa/test_mod_catalog.py --project <project>` drives it all over MCP against
-  `github_mock.py` (the catalog, its issues and their comments, VirusTotal; the
-  harness routes `/__catalog/comment`, `/__catalog/close` and `/__catalog/issue` play
-  the catalog's workflow or anyone else).
+  `Documents\XFined Editor`, so a test never meets the author's own key; the scan's
+  waits shrink with `XFINED_VT_PACE_MS`, `XFINED_VT_SCAN_WAIT_MS` and
+  `XFINED_VT_RATE_WAIT_MS`. `tools/qa/test_mod_catalog.py --project <project>` drives it
+  all over MCP against `github_mock.py` (the catalog, its issues and their comments,
+  VirusTotal; the harness routes `/__catalog/comment`, `/__catalog/close` and
+  `/__catalog/issue` play the catalog's workflow or anyone else, `/__vt/queue`,
+  `/__vt/forget` and `--vt-hide-new` VirusTotal still analysing or never having seen a
+  file). `tools/qa/test_mod_publish.py` phase V publishes a listed module: scanned
+  first, refused without a key or on a block with nothing on GitHub, and no VirusTotal
+  request at all for a module the index does not list.
 
 ## Characters (the module's own NPCs)
 

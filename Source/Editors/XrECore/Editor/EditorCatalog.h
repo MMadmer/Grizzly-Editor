@@ -4,8 +4,8 @@
 // The Mod Browser's catalog, the author's side (game repo: docs/dead-air/MOD_CATALOG.md): the
 // author key file that signs releases (4.1), the [card] Package Release writes into the
 // descriptor (4), the content rules a catalog module keeps (8, 10.3), the thumbnail (6.1), the
-// tags (6.2) and the VirusTotal verdict (11). The submission - checks, VirusTotal, the pull
-// request - is EditorCatalogSubmit.
+// tags (6.2) and the VirusTotal verdict (11). The submission - the checks and the issue - is
+// EditorCatalogSubmit; the author's VirusTotal scan is EditorVirusTotal.
 //
 // A key is a FILE the author keeps, never a secret of this computer: Documents\XFined Editor\
 // Keys\author.xkey unless the author picks another place, never inside a project. The editor
@@ -129,6 +129,8 @@ namespace EditorCatalog
 	};
 	ECORE_API void		ReadVtPolicy	(const xr_string& index_text, SVtPolicy& out);
 	ECORE_API SVtVerdict VtVerdict		(const xr_vector<SVtEngine>& results, const SVtPolicy& policy);
+	// the index's [mods] line for the module: true when it lists the id, `key` the key text it names
+	ECORE_API bool		ListedKey		(const xr_string& index_text, const xr_string& id, xr_string& key);
 
 	// ini text as the catalog files use it: the value of `key` in `section`, trimmed; comments
 	// after an unquoted ';' are dropped

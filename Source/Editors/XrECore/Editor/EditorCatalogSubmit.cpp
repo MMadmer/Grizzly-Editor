@@ -4,11 +4,11 @@
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
 #include "EditorProject.h"
+#include "EditorVirusTotal.h"
 #include "XFinedMCP.h"
 #include "ui_main.h"
 #include "Nq/NqUtil.h"
 #include "Zlib/unzip.h"
-#include <bcrypt.h>
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <thread>
@@ -51,17 +51,6 @@ struct SRelease
 						SRelease	() : card(false), signed_ok(false) {}
 };
 
-struct SVtRow
-{
-	xr_string					package, sha256;
-	u64							size;
-	xr_string					state;		// clean warn block unknown queued uploaded too_large error
-	EditorCatalog::SVtVerdict	verdict;
-	xr_string					error;
-
-								SVtRow	() : size(0) {}
-};
-
 struct SCheck
 {
 	bool				done, blocking;
@@ -72,6 +61,14 @@ struct SCheck
 						SCheck	() : done(false), blocking(false), signed_(false) {}
 };
 
+// what a check learned beyond its findings
+struct SChecked
+{
+	SRelease					rel;
+	EditorCatalog::SVtPolicy	policy;		// the index's; the catalog's defaults when it did not answer
+	EditorVirusTotal::SScan		vt;
+};
+
 // taken on the main thread when a job starts; the secrets go when the job ends
 struct SInput
 {
@@ -80,8 +77,7 @@ struct SInput
 	EditorCatalog::SKeyState	key;
 	bool						signed_in;
 	xr_string					token;
-	xr_string					vt_key;
-	xr_vector<SVtRow>			vt;			// the last scan: the check reads its verdict
+	xr_string					vt_key;		// empty = none
 
 								SInput	() : signed_in(false) {}
 								~SInput	() { EditorGithub::WipeString(token); EditorGithub::WipeString(vt_key); }
@@ -98,11 +94,12 @@ struct SView
 	xr_string					root, module_id;	// what the results below are about
 	xr_string					login;
 	SCheck						check;
-	xr_vector<SVtRow>			vt;
+	EditorVirusTotal::SScan		virustotal;		// what VirusTotal was asked last, by any job
+	bool						vt_scanned;		// by a scan, not by the check's lookups
 	EditorGithub::SCatalogIssue	submission;
 	bool						listed;
 
-								SView	() : job(jbNone), state(stIdle), listed(false) {}
+								SView	() : job(jbNone), state(stIdle), vt_scanned(false), listed(false) {}
 };
 
 std::mutex				s_Lock;
@@ -195,71 +192,30 @@ bool FetchRelease(const SInput& in, SRelease& rel, u32& status, xr_string& err)
 	return true;
 }
 
-// the catalog's signed index from the first mirror that answers; unverified here - it only
-// informs the author, and the catalog's own check reads it again
-bool FetchIndex(xr_string& text)
+// the release's packages the way VirusTotal gets them: this computer's copies from releases\<version>
+xr_vector<EditorVirusTotal::SPackage> ScanPackages(const SInput& in, const SRelease& rel)
 {
-	xr_vector<xr_string> mirrors;
-	EditorGithub::CatalogMirrors(mirrors);
-	for (u32 i = 0; i < mirrors.size() && !s_Cancel.Cancelled(); ++i)
+	xr_vector<EditorVirusTotal::SPackage> out;
+	for (u32 p = 0; p < rel.packages.size(); ++p)
 	{
-		u32 status = 0;
-		xr_string err;
-		if (EditorGithub::FetchPublic(mirrors[i] + "index.ltx", 1u << 20, s_Cancel, status, text, err) && 200 == status &&
-			text.find("[catalog]") != xr_string::npos)
-			return true;
+		EditorVirusTotal::SPackage package;
+		package.name	= rel.packages[p].name;
+		package.path	= in.root + "\\releases\\" + rel.version + "\\" + rel.packages[p].name;
+		package.size	= rel.packages[p].size;
+		package.sha256	= rel.packages[p].sha256;
+		out.push_back(package);
 	}
-	text.clear();
-	return false;
+	return out;
 }
 
-// the catalog's line for the module: its key text, and whether it was revoked outright
-bool ListedKey(const xr_string& index, const xr_string& id, xr_string& key)
+// A package VirusTotal does not know only waits for Submit's scan - unless the scan was the one
+// that could not get it there.
+ELevel VtLevel(const xr_string& state, bool scanned)
 {
-	key.clear();
-	xr_vector<std::pair<xr_string, xr_string> > rows;
-	EditorCatalog::IniSection(index, "mods", rows);
-	for (u32 i = 0; i < rows.size(); ++i)
-	{
-		if (rows[i].first != id) continue;
-		const size_t first = rows[i].second.find(',');
-		if (first == xr_string::npos) return true;
-		const size_t second = rows[i].second.find(',', first + 1);
-		key = rows[i].second.substr(first + 1, second == xr_string::npos ? xr_string::npos : second - first - 1);
-		while (!key.empty() && key[0] == ' ') key.erase(0, 1);
-		while (!key.empty() && key.back() == ' ') key.pop_back();
-		return true;
-	}
-	return false;
-}
-
-bool FileSha256(const xr_string& path, xr_string& hex, u64& size)
-{
-	hex.clear();
-	size = 0;
-	HANDLE f = ::CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, 0);
-	if (INVALID_HANDLE_VALUE == f) return false;
-	BCRYPT_ALG_HANDLE alg = 0;
-	BCRYPT_HASH_HANDLE hash = 0;
-	bool ok = BCRYPT_SUCCESS(::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, 0, 0)) &&
-		BCRYPT_SUCCESS(::BCryptCreateHash(alg, &hash, 0, 0, 0, 0, 0));
-	xr_vector<u8> buf(1u << 20);
-	while (ok && !s_Cancel.Cancelled())
-	{
-		DWORD got = 0;
-		if (!::ReadFile(f, buf.data(), (DWORD)buf.size(), &got, 0)) { ok = false; break; }
-		if (!got) break;
-		ok = BCRYPT_SUCCESS(::BCryptHashData(hash, buf.data(), got, 0));
-		size += got;
-	}
-	u8 digest[32];
-	ok = ok && !s_Cancel.Cancelled() && BCRYPT_SUCCESS(::BCryptFinishHash(hash, digest, 32, 0));
-	if (hash) ::BCryptDestroyHash(hash);
-	if (alg) ::BCryptCloseAlgorithmProvider(alg, 0);
-	::CloseHandle(f);
-	if (ok)
-		for (u32 i = 0; i < 32; ++i) hex += NqUtil::Format("%02x", (u32)digest[i]);
-	return ok;
+	if (state == "clean")												return lvOk;
+	if (state == "warn")												return lvReview;
+	if (EditorVirusTotal::Refuses(state) && (scanned || state != "unknown"))	return lvBlock;
+	return lvNote;
 }
 
 // the release's folder on this computer, when it holds exactly what was published
@@ -299,7 +255,7 @@ void CheckLocalRelease(const SInput& in, const SRelease& rel, SCheck& check)
 		Stage(("Checking " + rel.packages[p].name).c_str());
 		xr_string sha;
 		u64 size = 0;
-		if (!FileSha256(zip_path, sha, size) || sha != rel.packages[p].sha256)
+		if (!EditorVirusTotal::FileSha256(zip_path, s_Cancel, sha, size) || sha != rel.packages[p].sha256)
 		{
 			Add(check, lvNote, "content", "Content not checked here: the local " + rel.packages[p].name +
 				" is not the published one (the catalog checks it when it judges the submission).");
@@ -352,21 +308,17 @@ void CheckLocalRelease(const SInput& in, const SRelease& rel, SCheck& check)
 //------------------------------------------------------------------------------
 // the jobs
 //------------------------------------------------------------------------------
-LPCSTR VtStateText(const SVtRow& row)
-{
-	if (row.state == "queued")		return "VirusTotal is analysing it";
-	if (row.state == "uploaded")	return "uploaded - results in a few minutes";
-	if (row.state == "too_large")	return "larger than VirusTotal takes";
-	if (row.state == "unknown")		return "not known to VirusTotal";
-	if (row.state == "error")		return "not scanned";
-	return row.state.c_str();
-}
+const char* kNoVtKey = "No VirusTotal key: the catalog lists a package only when VirusTotal knows it. Create a free account "
+	"at virustotal.com and paste its API key into the VirusTotal section below.";
 
-// Section 7, in the order the window lists it. `rel` is filled when the release reads.
-void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCatalogIssue& submission, bool& listed)
+// Section 7, in the order the window lists it. `lookup` asks VirusTotal about the packages; a
+// submission leaves that to its scan, which follows at once.
+void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, EditorGithub::SCatalogIssue& submission,
+			  bool& listed)
 {
 	check = SCheck();
 	const EditorMod::SManifest& m = in.manifest;
+	SRelease& rel = seen.rel;
 
 	if (!in.key.exists)				Add(check, lvBlock, "key", "No author key: create one above - it signs every release.");
 	else if (!in.key.error.empty())	Add(check, lvBlock, "key", "The author key does not read: " + in.key.error + ".");
@@ -464,9 +416,11 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 	// the catalog: is the id free, or already this key's (7.6)
 	Stage("Reading the Mod Browser catalog");
 	xr_string index, listed_key;
-	if (!FetchIndex(index))
+	const bool reached = EditorGithub::FetchCatalogIndex(s_Cancel, index);
+	if (reached) EditorCatalog::ReadVtPolicy(index, seen.policy);
+	if (!reached)
 		Add(check, lvNote, "catalog", "The Mod Browser catalog did not answer: the catalog's own check covers the id.");
-	else if (!ListedKey(index, m.id, listed_key))
+	else if (!EditorCatalog::ListedKey(index, m.id, listed_key))
 		Add(check, lvOk, "catalog", "The id " + m.id + " is free in the Mod Browser.");
 	else if (listed_key == in.key.public_key)
 	{
@@ -497,34 +451,26 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 		else						Add(check, lvOk, "tags", "Tags: " + rel.tags + ".");
 	}
 
-	// VirusTotal: the verdict of the last scan of these very packages (7.7)
-	if (have)
-	{
-		bool scanned = false;
-		for (u32 p = 0; p < rel.packages.size(); ++p)
-			for (u32 v = 0; v < in.vt.size(); ++v)
-			{
-				const SVtRow& row = in.vt[v];
-				if (row.sha256 != rel.packages[p].sha256) continue;
-				scanned = true;
-				xr_string flagged;
-				for (u32 f = 0; f < row.verdict.flagged.size(); ++f)
-					flagged += (f ? ", " : "") + row.verdict.flagged[f];
-				if (row.state == "block")
-					Add(check, lvBlock, "virustotal", "VirusTotal blocks " + row.package + ": flagged by " + flagged + ".");
-				else if (row.state == "warn")
-					Add(check, lvReview, "virustotal", "VirusTotal warns about " + row.package + ": flagged by " + flagged + ".");
-				else if (row.state == "clean")
-					Add(check, lvOk, "virustotal", NqUtil::Format("VirusTotal: %s is clean (%u engines).", row.package.c_str(), row.verdict.engines));
-				else
-					Add(check, lvNote, "virustotal", "VirusTotal: " + row.package + " - " + VtStateText(row) + ".");
-			}
-		if (!scanned)
-			Add(check, lvNote, "virustotal", "VirusTotal not run here - optional: the catalog scans every listed release.");
-	}
+	// VirusTotal (7.7): the catalog only looks packages up and refuses one VirusTotal does not know,
+	// so the scan is the author's, with their own key
+	if (have && (lookup || in.vt_key.empty()))
+		EditorVirusTotal::Lookup(ScanPackages(in, rel), in.vt_key, seen.policy, s_Cancel, &Stage, seen.vt);
+	if (have && in.vt_key.empty())
+		Add(check, lvBlock, "virustotal", kNoVtKey);
+	else if (have && lookup)
+		for (u32 p = 0; p < seen.vt.packages.size(); ++p)
+		{
+			const EditorVirusTotal::SResult& r = seen.vt.packages[p];
+			xr_string text = EditorVirusTotal::Describe(r);
+			if (r.state == "unknown")			text += " - not scanned yet: Submit scans it first.";
+			else if (r.state == "analysing")	text += ": Submit waits for the report.";
+			else								text += ".";
+			Add(check, VtLevel(r.state, false), "virustotal", text);
+		}
+	if (s_Cancel.Cancelled()) return;
 
 	// and where the submission stands
-	if (in.signed_in && !s_Cancel.Cancelled())
+	if (in.signed_in)
 	{
 		Stage("Reading the submission");
 		xr_string err;
@@ -533,27 +479,8 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 	check.done = !s_Cancel.Cancelled();
 }
 
-// The rate of the free API is 4 requests a minute: a refusal for the rate is waited out. A QA
-// run shortens the wait (XFINED_VT_RATE_WAIT_MS) so the path is tested in seconds.
-template <class TCall>
-bool WithinRate(TCall call, u32& status)
+void RunVt(const SInput& in, EditorVirusTotal::SScan& vt, xr_string& err)
 {
-	u32 pause = 20000;
-	char qa[32] = {};
-	if (EditorGithub::QaRun() && ::GetEnvironmentVariableA("XFINED_VT_RATE_WAIT_MS", qa, sizeof(qa)) && qa[0])
-		pause = (u32)strtoul(qa, 0, 10);
-	for (u32 attempt = 0;; ++attempt)
-	{
-		const bool ok = call();
-		if (ok || 429 != status || attempt == 3 || s_Cancel.Cancelled()) return ok;
-		Stage("Waiting for VirusTotal's rate limit");
-		for (u32 waited = 0; waited < pause && !s_Cancel.Cancelled(); waited += 100) ::Sleep(100);
-	}
-}
-
-void RunVt(const SInput& in, xr_vector<SVtRow>& rows, xr_string& err)
-{
-	rows.clear();
 	Stage("Reading the latest release");
 	SRelease rel;
 	u32 status = 0;
@@ -566,64 +493,8 @@ void RunVt(const SInput& in, xr_vector<SVtRow>& rows, xr_string& err)
 	Stage("Reading the Mod Browser catalog");
 	EditorCatalog::SVtPolicy policy;
 	xr_string index;
-	if (FetchIndex(index)) EditorCatalog::ReadVtPolicy(index, policy);
-	const xr_string dir = in.root + "\\releases\\" + rel.version;
-
-	for (u32 p = 0; p < rel.packages.size() && !s_Cancel.Cancelled(); ++p)
-	{
-		const SPackage& package = rel.packages[p];
-		SVtRow row;
-		row.package	= package.name;
-		row.sha256	= package.sha256;
-		row.size	= package.size;
-		Stage(("Looking up " + package.name).c_str());
-		EditorGithub::SVtReport report;
-		if (!WithinRate([&]() { return EditorGithub::VtLookup(package.sha256, in.vt_key, s_Cancel, report, row.error); }, report.status))
-		{
-			row.state = "error";
-			rows.push_back(row);
-			if (401 == report.status) { err = row.error; return; }
-			continue;
-		}
-		if (report.known && !report.queued)
-		{
-			xr_vector<EditorCatalog::SVtEngine> results;
-			for (u32 i = 0; i < report.results.size(); ++i)
-			{
-				EditorCatalog::SVtEngine engine;
-				engine.engine = report.results[i].engine;
-				engine.category = report.results[i].category;
-				results.push_back(engine);
-			}
-			row.verdict = EditorCatalog::VtVerdict(results, policy);
-			row.state = row.verdict.verdict;
-		}
-		else if (report.known)
-			row.state = "queued";
-		else if (EditorGithub::VtTooLarge(package.size))
-			row.state = "too_large";
-		else
-		{
-			// VirusTotal has not seen it: this computer's copy goes up, if it is the published one
-			const xr_string path = dir + "\\" + package.name;
-			xr_string sha;
-			u64 size = 0;
-			Stage(("Hashing " + package.name).c_str());
-			if (!FileSha256(path, sha, size) || sha != package.sha256)
-			{
-				row.state = "unknown";
-				row.error = "VirusTotal does not know it and this computer has no copy of it to upload";
-			}
-			else
-			{
-				Stage(("Uploading " + package.name + " to VirusTotal").c_str());
-				u32 upload_status = 0;
-				row.state = WithinRate([&]() { return EditorGithub::VtUpload(path, in.vt_key, s_Cancel, upload_status, row.error); },
-					upload_status) ? "uploaded" : "error";
-			}
-		}
-		rows.push_back(row);
-	}
+	if (EditorGithub::FetchCatalogIndex(s_Cancel, index)) EditorCatalog::ReadVtPolicy(index, policy);
+	EditorVirusTotal::Scan(ScanPackages(in, rel), in.vt_key, policy, s_Cancel, &Stage, vt);
 	if (s_Cancel.Cancelled()) err = "cancelled";
 }
 
@@ -634,24 +505,21 @@ xr_string SubmissionText(const SInput& in, const SRelease& rel, const xr_string&
 }
 
 // what the issue says after the file: the module, the links, the verdicts, the editor's check
-xr_string SubmissionDetails(const SInput& in, const SRelease& rel, const SCheck& check, const xr_string& website)
+xr_string SubmissionDetails(const SInput& in, const SChecked& seen, const SCheck& check, const xr_string& website)
 {
 	const EditorMod::SManifest& m = in.manifest;
 	xr_string body = "**" + (m.name.empty() ? m.id : m.name) + "**" + (m.author.empty() ? xr_string() : " by " + m.author) +
-		" - `" + m.id + "` " + rel.version + "\n\n";
+		" - `" + m.id + "` " + seen.rel.version + "\n\n";
 	body += "- Repository: " + EditorGithub::RepoPage(m.update_github) + "\n";
 	body += "- Website: " + website + "\n";
 	body += "- Author key: `" + in.key.key_id + "`\n\n";
 	body += "VirusTotal:\n";
-	for (u32 p = 0; p < rel.packages.size(); ++p)
+	for (u32 p = 0; p < seen.vt.packages.size(); ++p)
 	{
-		xr_string verdict;
-		for (u32 v = 0; v < in.vt.size(); ++v)
-			if (in.vt[v].sha256 == rel.packages[p].sha256)
-				verdict = in.vt[v].state == "clean" || in.vt[v].state == "warn" || in.vt[v].state == "block" ?
-					NqUtil::Format("%s, %u engines - ", in.vt[v].state.c_str(), in.vt[v].verdict.engines) :
-					xr_string(VtStateText(in.vt[v])) + " - ";
-		body += "- `" + rel.packages[p].name + "`: " + verdict + EditorGithub::VtReportPage(rel.packages[p].sha256) + "\n";
+		const EditorVirusTotal::SResult& r = seen.vt.packages[p];
+		const xr_string verdict = r.state == "clean" || r.state == "warn" || r.state == "block" ?
+			NqUtil::Format("%s, %u engines", r.state.c_str(), r.verdict.engines) : EditorVirusTotal::Describe(r);
+		body += "- `" + r.package.name + "`: " + verdict + " - " + EditorGithub::VtReportPage(r.package.sha256) + "\n";
 	}
 	body += "\nChecked by XFined Editor:\n";
 	for (u32 i = 0; i < check.findings.size(); ++i)
@@ -659,19 +527,49 @@ xr_string SubmissionDetails(const SInput& in, const SRelease& rel, const SCheck&
 	return body;
 }
 
-bool RunSubmit(const SInput& in, SCheck& check, EditorGithub::SCatalogIssue& submission, bool& listed, xr_string& err)
+// why the scan keeps the submission back, and what helps
+xr_string VtRefusal(const EditorVirusTotal::SResult& r, const SChecked& seen)
 {
-	SRelease rel;
-	RunCheck(in, check, rel, submission, listed);
+	const xr_string what = EditorVirusTotal::Describe(r);
+	if (r.state == "block")		return what + ": the catalog would refuse it";
+	if (r.state == "too_large")	return what + ": package the release again - Package Release keeps every package under "
+									"that size unless a single file alone is larger";
+	if (r.state == "unknown")	return what + ": put the published files into releases\\" + seen.rel.version +
+									", or upload the package at virustotal.com";
+	if (r.state == "analysing")	return what + ": submit again in a few minutes";
+	if (r.state == "unavailable")	return what + ": submit again when VirusTotal answers";
+	return what;
+}
+
+bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, EditorGithub::SCatalogIssue& submission, bool& listed,
+			   xr_string& err)
+{
+	RunCheck(in, false, check, seen, submission, listed);
 	if (s_Cancel.Cancelled()) { err = "cancelled"; return false; }
 	for (u32 i = 0; i < check.findings.size(); ++i)
 		if (lvBlock == check.findings[i].level) { err = "not submitted: " + check.findings[i].text; return false; }
 
+	// The catalog only looks the packages up: what VirusTotal does not know goes up now, with the
+	// author's key, and its report is waited for. Only a package with a report is sent - VirusTotal
+	// answers 404 for a file until its first analysis ends, and the catalog refuses a 404 as a
+	// package nobody scanned.
+	EditorVirusTotal::Scan(ScanPackages(in, seen.rel), in.vt_key, seen.policy, s_Cancel, &Stage, seen.vt);
+	if (s_Cancel.Cancelled()) { err = "cancelled"; return false; }
+	for (u32 p = 0; p < seen.vt.packages.size(); ++p)
+		Add(check, VtLevel(seen.vt.packages[p].state, true), "virustotal", EditorVirusTotal::Describe(seen.vt.packages[p]) + ".");
+	const EditorVirusTotal::SResult* deciding = EditorVirusTotal::Deciding(seen.vt);
+	if (deciding && seen.vt.state != "clean" && seen.vt.state != "warn")
+	{
+		err = "not submitted: " + VtRefusal(*deciding, seen) + ".";
+		return false;
+	}
+
+	const SRelease& rel = seen.rel;
 	const xr_string website = (rel.card && !rel.website.empty()) ? rel.website : in.manifest.website;
 	EditorGithub::SCatalogRequest rq;
 	rq.module_id	= in.manifest.id;
 	rq.file_text	= SubmissionText(in, rel, website);
-	rq.details		= SubmissionDetails(in, rel, check, website);
+	rq.details		= SubmissionDetails(in, seen, check, website);
 	rq.token		= in.token;
 	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, submission, err);
 	EditorGithub::WipeString(rq.token);
@@ -681,22 +579,22 @@ bool RunSubmit(const SInput& in, SCheck& check, EditorGithub::SCatalogIssue& sub
 void Worker(EJob job, SInput in)
 {
 	SCheck check;
-	SRelease rel;
-	xr_vector<SVtRow> vt;
+	SChecked seen;
 	EditorGithub::SCatalogIssue submission;
 	bool listed = false, ok = true;
 	xr_string err;
 	switch (job)
 	{
-	case jbCheck:	RunCheck(in, check, rel, submission, listed); break;
-	case jbVt:		RunVt(in, vt, err); ok = err.empty(); break;
-	case jbSubmit:	ok = RunSubmit(in, check, submission, listed, err); break;
+	case jbCheck:	RunCheck(in, true, check, seen, submission, listed); break;
+	case jbVt:		RunVt(in, seen.vt, err); ok = err.empty(); break;
+	case jbSubmit:	ok = RunSubmit(in, check, seen, submission, listed, err); break;
 	case jbSubmission:
 	{
 		Stage("Reading the submission");
 		ok = EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, submission, err);
 		xr_string index, key;
-		if (ok && FetchIndex(index)) listed = ListedKey(index, in.manifest.id, key) && key == in.key.public_key;
+		if (ok && EditorGithub::FetchCatalogIndex(s_Cancel, index))
+			listed = EditorCatalog::ListedKey(index, in.manifest.id, key) && key == in.key.public_key;
 		break;
 	}
 	}
@@ -706,7 +604,11 @@ void Worker(EJob job, SInput in)
 	s_View.error = cancelled ? xr_string("cancelled") : ok ? xr_string() : err;
 	s_View.stage.clear();
 	if (check.done)		s_View.check = check;
-	if (!vt.empty())	s_View.vt = vt;
+	if (seen.vt.state != "none" && seen.vt.state != "cancelled")
+	{
+		s_View.virustotal = seen.vt;
+		s_View.vt_scanned = jbCheck != job;
+	}
 	// what the catalog and GitHub said about the submission, once a job asked them
 	const bool asked = jbSubmission == job ? ok : (jbCheck == job || jbSubmit == job) && check.done;
 	if (asked && !cancelled)
@@ -778,11 +680,15 @@ bool Start(EJob job, xr_string& err)
 	in.token = account.token;
 	if ((jbSubmit == job || jbSubmission == job) && !in.signed_in)
 		{ err = "not signed in to GitHub: sign in from Mod > Publish Release (MCP: mod_publish action=sign_in or save_token)"; return false; }
-	if (jbVt == job && !EditorGithub::ReadVtKey(in.vt_key))
-		{ err = "no VirusTotal key: add yours - a free account at virustotal.com has one (MCP: mod_catalog action=vt_key)"; return false; }
+	if (jbSubmission != job) EditorGithub::ReadVtKey(in.vt_key);
+	if ((jbVt == job || jbSubmit == job) && in.vt_key.empty())
+	{
+		err = "no VirusTotal key: the catalog lists a package only when VirusTotal knows it, and the packages are scanned "
+			  "with your own key - a free account at virustotal.com has one (MCP: mod_catalog action=vt_key)";
+		return false;
+	}
 	{
 		std::lock_guard<std::mutex> guard(s_Lock);
-		in.vt = s_View.vt;
 		s_View.job		= job;
 		s_View.state	= stRunning;
 		s_View.stage	= "Starting";
@@ -871,28 +777,9 @@ void StatusJson(xr_string& out)
 		JsonField(out, "text", v.check.findings[i].text.c_str());
 		out += "}";
 	}
-	out += "]},\"vt\":[";
-	for (u32 i = 0; i < v.vt.size(); ++i)
-	{
-		const SVtRow& row = v.vt[i];
-		out += i ? ",{" : "{";
-		JsonField(out, "package", row.package.c_str(), true);
-		JsonField(out, "sha256", row.sha256.c_str());
-		JsonField(out, "state", row.state.c_str());
-		out += NqUtil::Format(",\"size\":%llu,\"engines\":%u,\"trusted_malicious\":%u,\"trusted_suspicious\":%u,\"other_malicious\":%u,\"flagged\":[",
-			row.size, row.verdict.engines, row.verdict.trusted_malicious, row.verdict.trusted_suspicious, row.verdict.other_malicious);
-		for (u32 f = 0; f < row.verdict.flagged.size(); ++f)
-		{
-			out += f ? ",\"" : "\"";
-			JsonAppend(out, row.verdict.flagged[f].c_str());
-			out += "\"";
-		}
-		out += "]";
-		JsonField(out, "url", EditorGithub::VtReportPage(row.sha256).c_str());
-		JsonField(out, "error", row.error.c_str());
-		out += "}";
-	}
-	out += NqUtil::Format("],\"submission\":{\"number\":%llu", v.submission.number);
+	out += "]},\"virustotal\":";
+	EditorVirusTotal::Json(out, v.virustotal);
+	out += NqUtil::Format(",\"submission\":{\"number\":%llu", v.submission.number);
 	JsonField(out, "state", v.submission.state.c_str());
 	JsonField(out, "verdict", v.submission.verdict.c_str());
 	JsonField(out, "verdict_text", v.submission.verdict_text.c_str());
@@ -1179,8 +1066,8 @@ void DrawVirusTotal(const SView& view)
 	ImGui::SeparatorText("VirusTotal");
 	if (!s_VtKnown)
 	{
-		ImGui::TextWrapped("Optional: scan the release with your own VirusTotal key (a free account at virustotal.com has "
-			"one). The catalog scans every listed release anyway.");
+		ImGui::TextWrapped("Required: the catalog lists a package only when VirusTotal knows it, and every release is scanned "
+			"with your own VirusTotal key. A free account at virustotal.com has one.");
 		ImGui::SetNextItemWidth(ImGui::GetFontSize() * 20.f);
 		ImGui::InputTextWithHint("##vt_key", "VirusTotal API key", s_VtInput, sizeof(s_VtInput), ImGuiInputTextFlags_Password);
 		Hint("Kept in the Windows Credential Manager - never in the project.");
@@ -1196,28 +1083,18 @@ void DrawVirusTotal(const SView& view)
 		if (!s_VtError.empty()) ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_VtError.c_str());
 		return;
 	}
-	if (stRunning == view.state && jbVt == view.job)
+	if (stRunning == view.state && (jbVt == view.job || jbSubmit == view.job))
 		ImGui::TextDisabled("Scanning... %s", view.stage.c_str());
-	else if (view.vt.empty())
+	else if (view.virustotal.packages.empty())
 		ImGui::TextDisabled("Not scanned yet.");
-	for (u32 i = 0; i < view.vt.size(); ++i)
+	for (u32 i = 0; i < view.virustotal.packages.size(); ++i)
 	{
-		const SVtRow& row = view.vt[i];
+		const EditorVirusTotal::SResult& r = view.virustotal.packages[i];
 		ImGui::PushID((int)i);
-		const ELevel level = row.state == "clean" ? lvOk : row.state == "warn" ? lvReview : row.state == "block" ? lvBlock : lvNote;
-		xr_string text = row.package + " - ";
-		if (row.state == "clean" || row.state == "warn" || row.state == "block")
-		{
-			text += NqUtil::Format("%s, %u engines", row.state.c_str(), row.verdict.engines);
-			for (u32 f = 0; f < row.verdict.flagged.size(); ++f)
-				text += (f ? ", " : "; flagged by ") + row.verdict.flagged[f];
-		}
-		else
-			text += VtStateText(row) + (row.error.empty() ? xr_string() : ": " + row.error);
-		StatusLine(level, text.c_str());
+		StatusLine(VtLevel(r.state, view.vt_scanned), (EditorVirusTotal::Describe(r) + ".").c_str());
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Report"))
-			::ShellExecuteA(0, "open", EditorGithub::VtReportPage(row.sha256).c_str(), 0, 0, SW_SHOWNORMAL);
+			::ShellExecuteA(0, "open", EditorGithub::VtReportPage(r.package.sha256).c_str(), 0, 0, SW_SHOWNORMAL);
 		ImGui::PopID();
 	}
 	ImGui::BeginDisabled(stRunning == view.state);
@@ -1227,8 +1104,8 @@ void DrawVirusTotal(const SView& view)
 		s_VtError = Start(jbVt, err) ? xr_string() : err;
 	}
 	ImGui::EndDisabled();
-	Hint("Looks every package of the latest release up on VirusTotal and uploads one it does not know yet.\n"
-		 "VirusTotal shares uploaded files with the security industry.");
+	Hint("Looks every package of the latest release up on VirusTotal, uploads one it does not know and waits for its\n"
+		 "report - a few minutes. VirusTotal shares uploaded files with the security industry.");
 	ImGui::SameLine();
 	if (ImGui::SmallButton("Forget Key"))
 	{
@@ -1328,7 +1205,8 @@ void DrawWindow()
 	if (ImGui::Button(view.submission.number && view.submission.state == "open" ? "Update Submission" : "Submit", ImVec2(em * 10.f, 0)))
 		StartFromUI(jbSubmit);
 	ImGui::EndDisabled();
-	Hint(ready ? "Checks everything again, then opens the submission - or updates the open one." :
+	Hint(ready ? "Checks everything again and scans the packages on VirusTotal - uploading what it does not know and\n"
+				 "waiting for the report - then opens the submission, or updates the open one." :
 		"Available once every requirement above is met.");
 	ImGui::SameLine();
 	if (stRunning == view.state && jbSubmit == view.job)

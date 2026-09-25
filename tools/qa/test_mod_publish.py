@@ -6,8 +6,11 @@ socket and takes every verdict from the mock's own state. Never talks to GitHub:
 in QA mode the editor reads only XFINED_GITHUB_TOKEN and a separate QA
 credential, so the real account cannot leak into a test either.
 
-The project's mod.ltx and project.ltx are restored byte for byte and the release
-folders this run created are removed. The editor is closed the way its caption cross would.
+A module the Mod Browser lists (the mock's catalog index names its id) has every
+release scanned on VirusTotal - the mock's - before anything is created on GitHub:
+phase V. The project's mod.ltx and project.ltx are restored byte for byte, the release
+folders this run created are removed and the QA VirusTotal key is forgotten. The editor
+is closed the way its caption cross would.
 
     python tools/qa/test_mod_publish.py --project D:\\XFinedProjects\\Test
 """
@@ -30,6 +33,10 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = ("127.0.0.1", 28016)
 TOKEN = "qa_token_0123456789abcdefghij"
 GITHUB_REPO = "QaOwner/qa-mod"
+VT_KEY = "qa-vt-key-publish-7c1d"
+TRUSTED = "EngineT"
+# where the mock's catalog index comes from: seeds written by main()
+SEEDS: dict[str, str] = {}
 
 results: list[tuple[bool, str]] = []
 
@@ -70,12 +77,14 @@ def free_port() -> int:
 
 
 class Mock:
-    def __init__(self, port: int, *flags: str, token: str = TOKEN):
+    def __init__(self, port: int, *flags: str, token: str = TOKEN, catalog: str = "unlisted"):
+        """`catalog` names the seed of the catalog's public files: unlisted (an index without this module),
+        listed (with it) or none (no index at all)."""
         self.port = port
         self.base = f"http://127.0.0.1:{port}"
         self.proc = subprocess.Popen(
             [sys.executable, os.path.join(HERE, "github_mock.py"), "--port", str(port), "--token", token,
-             "--repo", GITHUB_REPO, *flags],
+             "--repo", GITHUB_REPO, "--vt-key", VT_KEY, "--catalog-seed", SEEDS[catalog], *flags],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         line = self.proc.stdout.readline()
         if json.loads(line)["port"] != port:
@@ -83,6 +92,10 @@ class Mock:
 
     def state(self) -> dict:
         with urllib.request.urlopen(self.base + "/__state", timeout=10) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def vt(self) -> dict:
+        with urllib.request.urlopen(self.base + "/__vt", timeout=10) as r:
             return json.loads(r.read().decode("utf-8"))
 
     def stop(self) -> None:
@@ -101,11 +114,17 @@ class Editor:
         if mcp_up():
             raise RuntimeError("an editor already answers on 127.0.0.1:28016 - close it first")
         env = dict(os.environ)
-        for name in ("XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        for name in ("XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "XFINED_VT_KEY", "VT_API_KEY"):
             env.pop(name, None)
         env["XFINED_GITHUB_API"] = f"http://127.0.0.1:{port}"
         env["XFINED_GITHUB_WEB"] = f"http://127.0.0.1:{port}"
         env["XFINED_GITHUB_CLIENT_ID"] = "qa-client"
+        # the Mod Browser's index and VirusTotal are the mock's too; the key is the QA credential (vt_key)
+        env["XFINED_CATALOG_BASE"] = f"http://127.0.0.1:{port}/catalog/public/"
+        env["XFINED_VT_API"] = f"http://127.0.0.1:{port}/vt/api/v3"
+        env["XFINED_VT_PACE_MS"] = "100"
+        env["XFINED_VT_SCAN_WAIT_MS"] = "4000"
+        env["XFINED_VT_RATE_WAIT_MS"] = "200"
         # the author key the releases are signed with: a throw-away home, never the user's own
         env["XFINED_CATALOG_HOME"] = tempfile.mkdtemp(prefix="xfined_publish_home_")
         if with_token:
@@ -191,6 +210,40 @@ def web_requests(state: dict) -> list[dict]:
     return [r for r in state["requests"] if "/releases/latest/download/" in r["path"] or r["path"].startswith("/cdn/")]
 
 
+def vt_requests(state: dict) -> list[dict]:
+    return [r for r in state["requests"] if r["path"].startswith("/vt/")]
+
+
+def github_requests(state: dict) -> list[dict]:
+    """What the job asked GitHub's API, the catalog's public files and VirusTotal left out."""
+    return [r for r in state["requests"] if r["path"].startswith(("/repos/", "/upload/", "/user"))]
+
+
+def write_seed(folder: str, module_id: str | None) -> str:
+    """A catalog whose public/index.ltx lists another module and, with `module_id`, this one; None = no index."""
+    os.makedirs(folder, exist_ok=True)
+    if module_id is None:
+        return folder
+    rows = ["qa-other-module = QaSomeone/other-module, p256:qa-other, 1.0.0, 2026-09-25"]
+    if module_id:
+        rows.append("%s = %s, p256:qa-author, 1.0.0, 2026-09-25" % (module_id, GITHUB_REPO))
+    text = "\n".join(["[catalog]", "format  = 1", "serial  = 1", "issued  = 2026-09-25", "",
+                      "[virustotal]", "trusted       = " + TRUSTED, "block_trusted = 1", "warn_trusted  = 1",
+                      "block_others  = 5", "warn_others   = 2", "", "[mods]", *rows, "", "[revoked]", ""]) + "\n"
+    os.makedirs(os.path.join(folder, "public"), exist_ok=True)
+    with open(os.path.join(folder, "public", "index.ltx"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    return folder
+
+
+def vt_forget_key() -> None:
+    """The QA VirusTotal credential goes with the run - and with a run before it that stopped halfway."""
+    try:
+        mcp("mod_catalog", action="vt_key_forget")
+    except (OSError, ValueError):
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", required=True, help="project folder the editor opens")
@@ -210,12 +263,17 @@ def main() -> int:
     port = free_port()
     mock = None
     editor = None
+    work = tempfile.mkdtemp(prefix="xfined_publish_qa_")
+    SEEDS["unlisted"] = write_seed(os.path.join(work, "unlisted"), "")
+    SEEDS["none"] = write_seed(os.path.join(work, "none"), None)
     try:
         # ---- phase 1: the account comes from the environment -------------------------------
         mock = Mock(port)
         editor = Editor(args.editor, project, port, with_token=True)
+        vt_forget_key()
         module_id = mcp("mod_manifest")["id"]
         descriptor_name = module_id + ".update.ltx"
+        SEEDS["listed"] = write_seed(os.path.join(work, "listed"), module_id)
 
         account = mcp("mod_publish", action="account")
         check(account.get("signed_in") and account.get("source") == "environment variable", "A account: the environment token is in effect", str(account))
@@ -449,6 +507,91 @@ def main() -> int:
               "protected" in str(data.get("note")), "R a tag GitHub refuses to delete is reported, in GitHub's words", str(data))
         check(not state["releases"] and state["tags"] == ["v0.9.13"], "R the release is gone, the tag stayed")
 
+        # ---- V: a module the Mod Browser lists has every release scanned on VirusTotal first --------
+        mock.stop()
+        mock = Mock(port, "--vt-hide-new", catalog="listed")
+        stored = mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        check(stored.get("ok") and stored.get("vt_key") is True and VT_KEY not in json.dumps(stored),
+              "V the author's VirusTotal key is stored, and not echoed", str(stored))
+        data = publish("0.9.30")
+        state = mock.state()
+        vt = data.get("virustotal") or {}
+        package = (vt.get("packages") or [{}])[0]
+        zip_path = os.path.join(releases_root, "0.9.30", f"{module_id}-0.9.30.zip")
+        uploads = (mock.vt()["files"].get(package.get("sha256", "")) or {}).get("uploads", 0)
+        check(data.get("state") == "done" and vt.get("state") == "clean" and package.get("state") == "clean" and
+              len(published(state)) == 1, "V listed: the package is scanned and the release goes out", str(data))
+        check(package.get("name") == f"{module_id}-0.9.30.zip" and os.path.isfile(zip_path) and
+              package.get("sha256") == sha256(zip_path) and uploads == 1,
+              "V the packaged zip itself went to VirusTotal once, and its report was waited for", f"{package} uploads={uploads}")
+        vt_at = [i for i, r in enumerate(state["requests"]) if r["path"].startswith("/vt/")]
+        writes = [i for i, r in enumerate(state["requests"]) if r["method"] != "GET" and not r["path"].startswith("/vt/")]
+        check(vt_at and writes and max(vt_at) < min(writes), "V the scan ran before anything was created on GitHub",
+              str([(r["method"], r["path"]) for r in state["requests"]][:12]))
+        check(all(r["vt_key"] for r in vt_requests(state)) and not any(r["vt_key"] for r in github_requests(state)) and
+              not any(r["authorized"] for r in vt_requests(state)), "V the key went to VirusTotal only, the token never did")
+
+        vt_forget_key()
+        mock.stop()
+        mock = Mock(port, catalog="listed")
+        data = publish("0.9.31")
+        state = mock.state()
+        error = str(data.get("error"))
+        check(not data.get("ok") and data.get("state") == "failed" and "is in the Mod Browser" in error and
+              "own free key" in error and "vt_key" in error, "V listed without a key: refused, saying why and where the key goes",
+              str(data))
+        check(not github_requests(state) and not state["releases"] and not state["tags"],
+              "V and nothing reached GitHub: no draft, no tag, no request", str(github_requests(state)))
+        check(not vt_requests(state) and (data.get("virustotal") or {}).get("state") == "no_key",
+              "V and VirusTotal was not asked", str(vt_requests(state)))
+
+        mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        mock.stop()
+        mock = Mock(port, "--vt-upload-results", json.dumps({TRUSTED: "malicious", "EngineA": "undetected"}), catalog="listed")
+        data = publish("0.9.32")
+        state = mock.state()
+        error = str(data.get("error"))
+        check(not data.get("ok") and "VirusTotal blocks" in error and TRUSTED in error and "withdraw" in error and
+              (data.get("virustotal") or {}).get("state") == "block",
+              "V listed, a package VirusTotal blocks: refused, the engine named", str(data))
+        check(not github_requests(state) and not state["releases"] and not state["tags"],
+              "V and nothing reached GitHub", str(github_requests(state)))
+
+        mock.stop()
+        mock = Mock(port, "--vt-queue", "1000", catalog="listed")
+        data = publish("0.9.33")
+        state = mock.state()
+        warnings = str(data.get("warnings"))
+        check(data.get("state") == "done" and len(published(state)) == 1 and
+              (data.get("virustotal") or {}).get("state") == "analysing" and "still analysing" in warnings and
+              "once VirusTotal knows" in warnings, "V still analysing after the wait: published, with a warning", str(data))
+
+        mock.stop()
+        mock = Mock(port, catalog="none")
+        data = publish("0.9.34")
+        state = mock.state()
+        check(data.get("state") == "done" and len(published(state)) == 1 and (data.get("virustotal") or {}).get("state") == "clean"
+              and vt_requests(state), "V the catalog does not answer: with a key, the release is scanned all the same",
+              str(data))
+        vt_forget_key()
+        mock.stop()
+        mock = Mock(port, catalog="none")
+        data = publish("0.9.35")
+        state = mock.state()
+        check(data.get("state") == "done" and len(published(state)) == 1 and not vt_requests(state) and
+              "did not answer" in str(data.get("warnings")) and "once VirusTotal knows" in str(data.get("warnings")),
+              "V the catalog does not answer and there is no key: published, with a note", str(data))
+
+        mcp("mod_catalog", action="vt_key", key=VT_KEY)
+        mock.stop()
+        mock = Mock(port)
+        data = publish("0.9.36")
+        state = mock.state()
+        check(data.get("state") == "done" and len(published(state)) == 1 and not vt_requests(state) and
+              (data.get("virustotal") or {}).get("state") == "none" and not data.get("warnings"),
+              "V not listed: no VirusTotal request at all, published as ever", str(data))
+        vt_forget_key()
+
         bad = mcp("mod_publish", tag="bad tag")
         check(not bad.get("ok") and "invalid tag" in str(bad.get("error")), "K an invalid tag is refused", str(bad))
         open(manifest_path, "wb").write(original)
@@ -512,9 +655,11 @@ def main() -> int:
     finally:
         open(manifest_path, "wb").write(original)
         if editor:
+            vt_forget_key()
             editor.close()
         if mock:
             mock.stop()
+        shutil.rmtree(work, ignore_errors=True)
         restored = open(manifest_path, "rb").read() == original
         if os.path.isdir(releases_root):
             for name in os.listdir(releases_root):

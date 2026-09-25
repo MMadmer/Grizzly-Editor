@@ -4,6 +4,7 @@
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
 #include "EditorProject.h"
+#include "EditorVirusTotal.h"
 #include "XFinedMCP.h"
 #include "ui_main.h"
 #include "Nq/NqUtil.h"
@@ -61,18 +62,32 @@ bool ArgBool(LPCSTR raw, LPCSTR field, bool def)
 //------------------------------------------------------------------------------
 // the upload job
 //------------------------------------------------------------------------------
-enum EJobState { jsIdle, jsUploading, jsDone, jsFailed, jsCancelled };
+enum EJobState { jsIdle, jsScanning, jsUploading, jsDone, jsFailed, jsCancelled };
 
 struct SJobView
 {
-	EJobState	state;
-	xr_string	id, version, repo, tag;
-	xr_string	stage;
-	u64			sent, total;		// bytes of the whole release
-	xr_string	url, error, warnings;
-	bool		served;
+	EJobState				state;
+	xr_string				id, version, repo, tag;
+	xr_string				stage;
+	u64						sent, total;		// bytes of the whole release
+	xr_string				url, error, warnings;
+	bool					served;
+	EditorVirusTotal::SScan	virustotal;			// none: the Mod Browser does not list the module
+	bool					refused;			// the scan kept the release back
+	bool					github;				// something was sent to GitHub
 
-	SJobView() : state(jsIdle), sent(0), total(0), served(false) {}
+	SJobView() : state(jsIdle), sent(0), total(0), served(false), refused(false), github(false) {}
+};
+
+// A module the Mod Browser lists has every release scanned first: the catalog only looks packages
+// up and holds back a release VirusTotal does not know. What the scan needs, taken with the job.
+struct SScanPlan
+{
+	xr_string								module_id;
+	xr_vector<EditorVirusTotal::SPackage>	packages;
+	xr_string								vt_key;		// empty = none
+
+	~SScanPlan() { EditorGithub::WipeString(vt_key); }
 };
 
 std::mutex				s_JobLock;
@@ -115,20 +130,89 @@ private:
 	xr_vector<u64>			m_Before;	// bytes of the assets ahead of this one
 };
 
-void JobWorker(EditorGithub::SPublishRequest request)
+void SetScan(EJobState state, const EditorVirusTotal::SScan& scan)
+{
+	std::lock_guard<std::mutex> guard(s_JobLock);
+	s_Job.state = state;
+	s_Job.virustotal = scan;
+}
+
+// Before anything is created on GitHub. A module the index does not list is published as ever;
+// one it lists - or any, while the index does not answer and there is a key - is scanned, and a
+// release the catalog would hold back does not go out. false = not published, `err` says why.
+bool ScanFirst(const SScanPlan& plan, CSink& sink, xr_string& err, xr_string& warnings)
+{
+	sink.Stage("Reading the Mod Browser catalog");
+	xr_string index, key_text;
+	const bool reached = EditorGithub::FetchCatalogIndex(s_JobCancel, index);
+	if (s_JobCancel.Cancelled()) { err = "cancelled"; return false; }
+	const bool listed = reached && EditorCatalog::ListedKey(index, plan.module_id, key_text);
+	if (reached && !listed) return true;
+
+	EditorCatalog::SVtPolicy policy;
+	if (reached) EditorCatalog::ReadVtPolicy(index, policy);
+	EditorVirusTotal::SScan scan;
+	if (plan.vt_key.empty())
+	{
+		EditorVirusTotal::Scan(plan.packages, plan.vt_key, policy, s_JobCancel, EditorVirusTotal::TStage(), scan);
+		SetScan(jsUploading, scan);
+		if (!listed)
+		{
+			warnings = "The Mod Browser catalog did not answer, and without a VirusTotal key nothing was scanned: if this "
+				"module is in the Mod Browser, the release is offered there only once VirusTotal knows its packages.";
+			return true;
+		}
+		err = plan.module_id + " is in the Mod Browser, and every release of it is scanned on VirusTotal with your own free "
+			"key before it goes out. Add the key in Mod > Submit to Mod Browser (MCP: mod_catalog action=vt_key) - a free "
+			"account at virustotal.com has one.";
+		return false;
+	}
+
+	scan.state = "scanning";
+	SetScan(jsScanning, scan);
+	EditorVirusTotal::Scan(plan.packages, plan.vt_key, policy, s_JobCancel, [&sink](LPCSTR text) { sink.Stage(text); }, scan);
+	SetScan(jsUploading, scan);
+	if (s_JobCancel.Cancelled()) { err = "cancelled"; return false; }
+	const EditorVirusTotal::SResult* deciding = EditorVirusTotal::Deciding(scan);
+	if (!deciding) return true;
+	const xr_string what = EditorVirusTotal::Describe(*deciding);
+	if (scan.state == "block")
+		err = what + ". The Mod Browser would withdraw this release.";
+	else if (scan.state == "too_large")
+		err = what + ", and the Mod Browser holds back a release VirusTotal cannot know. Package Release keeps every "
+			"package under that size unless a single file alone is larger: make that file smaller.";
+	else if (EditorVirusTotal::Refuses(scan.state))
+		err = what + ". The Mod Browser would hold this release back.";
+	else if (scan.state == "analysing" || scan.state == "unavailable")
+		warnings = what + ". The Mod Browser offers this release once VirusTotal knows every package of it.";
+	return err.empty();
+}
+
+void JobWorker(EditorGithub::SPublishRequest request, SScanPlan plan)
 {
 	CSink sink(request);
 	EditorGithub::SPublishResult result;
-	xr_string err;
-	const bool ok = EditorGithub::Publish(request, s_JobCancel, sink, result, err);
+	xr_string err, scan_warnings;
+	const bool scanned = ScanFirst(plan, sink, err, scan_warnings);
+	EditorGithub::WipeString(plan.vt_key);
+	bool ok = scanned;
+	if (ok)
+	{
+		{
+			std::lock_guard<std::mutex> guard(s_JobLock);
+			s_Job.github = true;
+		}
+		ok = EditorGithub::Publish(request, s_JobCancel, sink, result, err);
+	}
 	EditorGithub::WipeString(request.token);
 
 	std::lock_guard<std::mutex> guard(s_JobLock);
 	s_Job.state		= ok ? jsDone : (err == "cancelled" ? jsCancelled : jsFailed);
 	s_Job.url		= result.url;
-	s_Job.warnings	= result.warnings;
+	s_Job.warnings	= scan_warnings + (scan_warnings.empty() || result.warnings.empty() ? "" : "\n") + result.warnings;
 	s_Job.served	= result.served;
 	s_Job.error		= ok ? xr_string() : err;
+	s_Job.refused	= !scanned && err != "cancelled";
 	if (ok) s_Job.sent = s_Job.total;
 }
 
@@ -138,12 +222,15 @@ SJobView JobSnapshot()
 	return s_Job;
 }
 
-bool JobRunning() { return jsUploading == JobSnapshot().state; }
+bool Running(EJobState state) { return jsScanning == state || jsUploading == state; }
+
+bool JobRunning() { return Running(JobSnapshot().state); }
 
 LPCSTR StateText(EJobState state)
 {
 	switch (state)
 	{
+	case jsScanning:	return "scanning";
 	case jsUploading:	return "uploading";
 	case jsDone:		return "done";
 	case jsFailed:		return "failed";
@@ -205,7 +292,7 @@ void ShowResult(const xr_string& text, LPCSTR url = "")
 void Reap()
 {
 	const SJobView job = JobSnapshot();
-	if (jsUploading == job.state || jsIdle == job.state) return;
+	if (Running(job.state) || jsIdle == job.state) return;
 	if (s_JobThread.joinable()) s_JobThread.join();
 	if (s_JobReported) return;
 	s_JobReported = true;
@@ -221,7 +308,13 @@ void Reap()
 	else if (jsCancelled == job.state)
 	{
 		Msg("* [XMS] publishing %s %s cancelled", job.id.c_str(), job.version.c_str());
-		text = "Publishing cancelled. Nothing was published; the draft stays on GitHub and the next attempt reuses it.";
+		text = job.github ? "Publishing cancelled. Nothing was published; the draft stays on GitHub and the next attempt reuses it." :
+			"Publishing cancelled before anything reached GitHub. Nothing was published.";
+	}
+	else if (job.refused)
+	{
+		Msg("! [XMS] release %s %s not published: %s", job.id.c_str(), job.version.c_str(), job.error.c_str());
+		text = "The release was not published: " + job.error;
 	}
 	else
 	{
@@ -388,6 +481,19 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	}
 
 	const EditorMod::SPackageResult& res = started.package;
+	SScanPlan plan;
+	plan.module_id = m.id;
+	for (u32 i = 0; i < res.packages.size(); ++i)
+	{
+		EditorVirusTotal::SPackage package;
+		package.name	= res.packages[i].name;
+		package.path	= res.out_dir + "\\" + res.packages[i].name;
+		package.size	= res.packages[i].size;
+		package.sha256	= res.packages[i].sha256;
+		plan.packages.push_back(package);
+	}
+	EditorGithub::ReadVtKey(plan.vt_key);
+
 	EditorGithub::SPublishRequest request;
 	request.repo		= m.update_github;
 	request.module_id	= m.id;
@@ -432,7 +538,7 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	s_JobCancel.Reset();
 	Msg("* [XMS] publishing %s %s to %s as %s (%s)", m.id.c_str(), m.version.c_str(), m.update_github.c_str(),
 		tag.c_str(), EditorGithub::SourceText(account.source));
-	s_JobThread = std::thread(&JobWorker, std::move(request));
+	s_JobThread = std::thread(&JobWorker, std::move(request), plan);
 	return true;
 }
 
@@ -785,7 +891,8 @@ void DrawDialog()
 		CloseDialog();
 	}
 	ImGui::EndDisabled();
-	Hint("Packages the module, uploads it as a draft, checks every file and only then publishes it.");
+	Hint("Packages the module, uploads it as a draft, checks every file and only then publishes it.\n"
+		 "A module the Mod Browser lists is scanned on VirusTotal with your own key first.");
 	ImGui::SameLine();
 	if (ImGui::Button("Cancel", ImVec2(120, 0))) CloseDialog();
 	ImGui::EndPopup();
@@ -795,7 +902,7 @@ void DrawProgress()
 {
 	if (!s_WantProgress) return;
 	const SJobView job = JobSnapshot();
-	if (jsUploading != job.state) { s_WantProgress = false; return; }
+	if (!Running(job.state)) { s_WantProgress = false; return; }
 	ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_FirstUseEver);
 	if (!ImGui::BeginPopupModal(kTitleProgress, &s_WantProgress, ImGuiWindowFlags_AlwaysAutoResize, true))
 		return;
@@ -807,7 +914,8 @@ void DrawProgress()
 	ImGui::ProgressBar(fraction, ImVec2(ImGui::GetFontSize() * 28.f, 0), overlay.c_str());
 	ImGui::Spacing();
 	if (ImGui::Button("Cancel", ImVec2(120, 0))) s_JobCancel.Cancel();
-	Hint("Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
+	Hint(jsScanning == job.state ? "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub." :
+		"Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
 	ImGui::SameLine();
 	if (ImGui::Button("Hide", ImVec2(120, 0)))
 	{
@@ -1346,7 +1454,7 @@ void StatusJson(xr_string& out)
 	const bool failed = jsFailed == job.state || jsCancelled == job.state;
 	out = failed ? "{\"ok\":false" : "{\"ok\":true";
 	JsonField(out, "state", StateText(job.state));
-	out += jsUploading == job.state ? ",\"pending\":true" : ",\"pending\":false";
+	out += Running(job.state) ? ",\"pending\":true" : ",\"pending\":false";
 	JsonField(out, "id", job.id.c_str());
 	JsonField(out, "version", job.version.c_str());
 	JsonField(out, "repo", job.repo.c_str());
@@ -1357,6 +1465,8 @@ void StatusJson(xr_string& out)
 	out += job.served ? ",\"served\":true" : ",\"served\":false";
 	JsonField(out, "warnings", job.warnings.c_str());
 	JsonField(out, "error", jsCancelled == job.state ? "cancelled" : job.error.c_str());
+	out += ",\"virustotal\":";
+	EditorVirusTotal::Json(out, job.virustotal);
 	out += "}";
 }
 
@@ -1403,7 +1513,9 @@ bool EditorPublish::CanPublish()
 void EditorPublish::ButtonText(char* dst, u32 size)
 {
 	const SJobView job = JobSnapshot();
-	if (jsUploading == job.state)
+	if (jsScanning == job.state)
+		strcpy_s(dst, size, "Scanning Release");
+	else if (jsUploading == job.state)
 		sprintf_s(dst, size, "Publishing %u%%", job.total ? (u32)(job.sent * 100 / job.total) : 0u);
 	else
 		strcpy_s(dst, size, "Publish Release");

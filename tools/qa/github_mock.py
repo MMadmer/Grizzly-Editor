@@ -37,6 +37,11 @@ Harness routes take no token and are never logged:
                       reason= says otherwise
   GET  /__vt, POST /__vt/seed
                       VirusTotal's files and analyses; verdicts for known files
+  POST /__vt/queue?sha=S&lookups=N
+                      S is being analysed: its report stays out for N lookups (a
+                      file VirusTotal did not know gets --vt-upload-results)
+  POST /__vt/forget?sha=S
+                      VirusTotal no longer knows S, as if it had never seen it
   author= and by= default to github-actions[bot], the account a workflow writes
   as: that is how a test plays the catalog's workflow - and a stranger forging it.
 
@@ -82,7 +87,9 @@ Behaviour worth knowing before writing a client against it:
   * Every upload queues the file's report for --vt-queue lookups; GET /files/{sha}
     and GET /analyses/{id} of a queued analysis both count. A known file uploaded
     again keeps its verdicts, a new one gets --vt-upload-results, and a seeded
-    one reports size 0 until it is uploaded.
+    one reports size 0 until it is uploaded. While queued, GET /files answers a
+    report without results - or, with --vt-hide-new, 404 for a file whose FIRST
+    analysis is not done yet, which is what VirusTotal does.
 """
 
 from __future__ import annotations
@@ -1064,11 +1071,26 @@ class GitHubMock:
             self.vt_complete(entry)
         return True
 
+    def vt_queue(self, sha256: str, lookups: int) -> None:
+        """Harness: the file is being analysed - known or not - and its report stays out for `lookups` lookups."""
+        entry = self.vt_files.setdefault(sha256, VtFile(sha256, 0, dict(self.args.vt_upload_results)))
+        entry.queued = lookups
+
+    def vt_forget(self, sha256: str) -> None:
+        """Harness: VirusTotal no longer knows the file, nor any analysis of it."""
+        if self.vt_files.pop(sha256, None) is None:
+            raise not_found()
+        for analysis_id in [key for key, item in self.vt_analyses.items() if item.sha256 == sha256]:
+            del self.vt_analyses[analysis_id]
+
     def vt_file_json(self, file_id: str) -> dict:
         if not (entry := self.vt_files.get(file_id.lower())):
             raise vt_error(404, "NotFoundError", f'File "{file_id}" not found')
         attributes = {"sha256": entry.sha256, "size": entry.size}
+        first_analysis = entry.analysis_date is None
         if self.vt_lookup(entry):
+            if first_analysis and self.args.vt_hide_new:
+                raise vt_error(404, "NotFoundError", f'File "{file_id}" not found')
             attributes |= {"last_analysis_results": {}, "last_analysis_stats": vt_stats({})}
         else:
             results = {
@@ -1452,6 +1474,15 @@ class Handler(BaseHTTPRequestHandler):
                 return Answer(200, mock.harness_close(number, reason, query.get("by") or ACTIONS_BOT))
             case ("GET", ["__vt"]):
                 return Answer(200, mock.vt_state_json())
+            case ("POST", ["__vt", "queue"]):
+                sha, lookups = query.get("sha", "").lower(), query.get("lookups", "1")
+                if not re.fullmatch(r"[0-9a-f]{64}", sha) or not lookups.isdigit() or int(lookups) < 1:
+                    raise ApiError(400, "sha= takes a SHA-256 and lookups= a count from 1")
+                mock.vt_queue(sha, int(lookups))
+                return Answer(200, mock.vt_state_json())
+            case ("POST", ["__vt", "forget"]):
+                mock.vt_forget(query.get("sha", "").lower())
+                return Answer(200, mock.vt_state_json())
             case ("POST", ["__vt", "seed"]):
                 try:
                     mock.vt_seed(read_vt_seed(self.json_body(raw)))
@@ -1706,6 +1737,8 @@ def parse_args() -> argparse.Namespace:
                         help='JSON {"<sha256>": {"<engine>": "<category>"}}: files VirusTotal already knows')
     parser.add_argument("--vt-queue", type=int, default=1, metavar="N",
                         help="after an upload the file's report stays queued, without verdicts, for N lookups")
+    parser.add_argument("--vt-hide-new", action="store_true",
+                        help="while a file's first analysis is queued, GET /files answers 404, as VirusTotal does")
     parser.add_argument("--vt-upload-results", default=json.dumps(VT_DEFAULT_RESULTS), metavar="JSON",
                         help='the verdicts an uploaded file ends up with, {"<engine>": "<category>"}; categories: '
                              + ", ".join(VT_CATEGORIES))

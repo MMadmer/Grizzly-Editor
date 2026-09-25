@@ -58,6 +58,8 @@ STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
 VT_KEY = "qa-vt-key"
 VT_API = "/vt/api/v3"
 VT_ZERO = {"malicious": 0, "suspicious": 0, "undetected": 0, "harmless": 0, "type-unsupported": 0, "timeout": 0}
+# what an uploaded file ends up with unless --vt-upload-results says otherwise
+VT_DEFAULT_RESULTS = {"EngineA": "undetected", "EngineB": "undetected", "EngineC": "harmless"}
 # The mock reads request bodies in blocks of this size (READ_CHUNK there).
 MOCK_READ_CHUNK = 1 << 20
 
@@ -1506,6 +1508,60 @@ def flow_catalog_issue_edits(checks: Checks, options) -> None:
                      ({"login": CATALOG_OWNER.lower(), "id": 1001, "type": "User"}, "not_planned"))
 
 
+def flow_vt_analysis(checks: Checks, options) -> None:
+    """Z: VirusTotal still analysing - a known file queued by the harness, a forgotten one, and a new
+    upload that answers 404 until its first analysis is done (--vt-hide-new)."""
+    sample = b"a package VirusTotal already knows"
+    known = sha256(sample)
+    with tempfile.TemporaryDirectory() as folder:
+        seed_path = Path(folder, "vt.json")
+        seed_path.write_text(json.dumps({known: {"EngineA": "undetected", "EngineB": "harmless"}}), encoding="utf-8")
+        with Mock("--vt-seed", str(seed_path), "--vt-queue", "2", "--vt-hide-new") as mock:
+            queued = mock.harness(f"/__vt/queue?sha={known}&lookups=2")
+            checks.check("Z /__vt/queue: the file waits for its report", queued.status == 200 and
+                         queued.json()["files"][known]["queued"] == 2, repr(queued.body[:300]))
+            first = mock.vt("GET", f"{VT_API}/files/{known}")
+            attributes = (first.json() or {}).get("data", {}).get("attributes", {})
+            checks.check("Z a known file being analysed: its report without results, not a 404",
+                         first.status == 200 and attributes.get("last_analysis_results") == {}, repr(first.body[:300]))
+            mock.vt("GET", f"{VT_API}/files/{known}")
+            later = mock.vt("GET", f"{VT_API}/files/{known}").json()["data"]["attributes"]
+            checks.equal("Z a later lookup has the results again", sorted(later["last_analysis_results"]), ["EngineA", "EngineB"])
+
+            fresh = hashlib.sha256(b"never seen").hexdigest()
+            planted = mock.harness(f"/__vt/queue?sha={fresh}&lookups=1")
+            entry = planted.json()["files"].get(fresh, {})
+            checks.check("Z a file VirusTotal did not know is queued with --vt-upload-results",
+                         planted.status == 200 and entry.get("queued") == 1 and entry.get("results") == VT_DEFAULT_RESULTS,
+                         repr(entry))
+            checks.equal("Z --vt-hide-new: while its first analysis is queued, 404",
+                         mock.vt("GET", f"{VT_API}/files/{fresh}").status, 404)
+            checks.equal("Z and once it is done, the report", mock.vt("GET", f"{VT_API}/files/{fresh}").status, 200)
+
+            data = os.urandom(50000)
+            digest = sha256(data)
+            sent = mock.vt_upload(f"{VT_API}/files", data)
+            statuses = [mock.vt("GET", f"{VT_API}/files/{digest}").status for _ in range(3)]
+            checks.check("Z an upload never analysed before: 404, 404, then the report (--vt-queue 2)",
+                         sent.status == 200 and statuses == [404, 404, 200], repr(statuses))
+            again = mock.vt_upload(f"{VT_API}/files", data)
+            reanalysed = mock.vt("GET", f"{VT_API}/files/{digest}")
+            checks.check("Z the same file uploaded again is known: a report without results while queued",
+                         again.status == 200 and reanalysed.status == 200 and
+                         reanalysed.json()["data"]["attributes"]["last_analysis_results"] == {}, repr(reanalysed.body[:300]))
+
+            forgot = mock.harness(f"/__vt/forget?sha={digest}")
+            checks.check("Z /__vt/forget: VirusTotal no longer knows it, nor its analyses",
+                         forgot.status == 200 and digest not in forgot.json()["files"] and
+                         not [a for a in forgot.json()["analyses"] if a["sha256"] == digest], repr(forgot.body[:300]))
+            checks.equal("Z a forgotten file: 404", mock.vt("GET", f"{VT_API}/files/{digest}").status, 404)
+            checks.equal("Z forgetting a file VirusTotal does not know: 404", mock.harness(f"/__vt/forget?sha={digest}").status, 404)
+            checks.equal("Z /__vt/queue without a SHA-256: 400", mock.harness("/__vt/queue?sha=xyz").status, 400)
+            checks.equal("Z /__vt/queue with lookups=0: 400", mock.harness(f"/__vt/queue?sha={known}&lookups=0").status, 400)
+            checks.check("Z harness requests stay out of the log",
+                         not any(item["path"].startswith("/__") for item in mock.state()["requests"]))
+
+
 def flow_vt(checks: Checks, options) -> None:
     """V: VirusTotal - seeded verdicts, an upload through the queue, analyses, upload URLs, the log."""
     sample = b"a sample VirusTotal already knows"
@@ -1819,6 +1875,7 @@ FLOWS = {
     "W": flow_vt_faults,
     "X": flow_catalog_comments,
     "Y": flow_catalog_issue_edits,
+    "Z": flow_vt_analysis,
 }
 
 

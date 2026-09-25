@@ -1462,6 +1462,22 @@ void EditorGithub::CatalogMirrors(xr_vector<xr_string>& out)
 		out.push_back(kCatalogMirrors[i]);
 }
 
+bool EditorGithub::FetchCatalogIndex(CCancel& cancel, xr_string& text)
+{
+	xr_vector<xr_string> mirrors;
+	CatalogMirrors(mirrors);
+	for (u32 i = 0; i < mirrors.size() && !cancel.Cancelled(); ++i)
+	{
+		u32 status = 0;
+		xr_string err;
+		if (FetchPublic(mirrors[i] + "index.ltx", 1u << 20, cancel, status, text, err) && 200 == status &&
+			text.find("[catalog]") != xr_string::npos)
+			return true;
+	}
+	text.clear();
+	return false;
+}
+
 bool EditorGithub::AccountLogin(const xr_string& token, CCancel& cancel, xr_string& login, xr_string& err)
 {
 	login.clear();
@@ -1739,8 +1755,39 @@ xr_string VtProblem(const SHttpResponse& r)
 						: NqUtil::Format("VirusTotal answered %u: %s", r.status, text.c_str());
 }
 
+// The free API takes 4 requests a minute, and two jobs - a submission and a release - may ask at
+// once with the same key: every request waits for its turn, a little over 15 seconds after the last.
+std::mutex	s_VtPaceLock;
+ULONGLONG	s_VtNext = 0;
+
+void VtPace(EditorGithub::CCancel& cancel)
+{
+	static const ULONGLONG gap = []()
+	{
+		const xr_string qa = QaMode() ? EnvText("XFINED_VT_PACE_MS") : xr_string();
+		return qa.empty() ? 16000ull : _strtoui64(qa.c_str(), 0, 10);
+	}();
+	for (;;)
+	{
+		ULONGLONG wait = 0;
+		{
+			std::lock_guard<std::mutex> guard(s_VtPaceLock);
+			const ULONGLONG now = ::GetTickCount64();
+			if (s_VtNext <= now)
+			{
+				s_VtNext = now + gap;
+				return;
+			}
+			wait = s_VtNext - now;
+		}
+		if (cancel.Cancelled()) return;
+		::Sleep(DWORD(wait < 100 ? wait : 100));
+	}
+}
+
 SHttpResponse VtCall(CHttp& http, EditorGithub::CCancel& cancel, LPCSTR method, const xr_string& url, const xr_string& key)
 {
+	VtPace(cancel);
 	SHttpRequest rq;
 	rq.method = method;
 	rq.url = url;
@@ -1885,6 +1932,7 @@ bool EditorGithub::VtUpload(const xr_string& path, const xr_string& key, CCancel
 	rq.body_prefix = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + name +
 		"\"\r\nContent-Type: application/octet-stream\r\n\r\n";
 	rq.body_suffix = "\r\n--" + boundary + "--\r\n";
+	VtPace(cancel);
 	const SHttpResponse r = http.Send(rq, cancel, TUploadProgress());
 	WipeString(rq.headers[1]);
 	status = r.status;

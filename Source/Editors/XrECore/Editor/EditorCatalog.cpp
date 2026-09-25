@@ -1418,6 +1418,26 @@ EditorCatalog::SVtVerdict EditorCatalog::VtVerdict(const xr_vector<SVtEngine>& r
 	return v;
 }
 
+bool EditorCatalog::ListedKey(const xr_string& index_text, const xr_string& id, xr_string& key)
+{
+	key.clear();
+	xr_vector<std::pair<xr_string, xr_string> > rows;
+	IniSection(index_text, "mods", rows);
+	for (u32 i = 0; i < rows.size(); ++i)
+	{
+		if (rows[i].first != id) continue;
+		// github, key, version, date
+		const size_t first = rows[i].second.find(',');
+		if (first == xr_string::npos) return true;
+		const size_t second = rows[i].second.find(',', first + 1);
+		key = rows[i].second.substr(first + 1, second == xr_string::npos ? xr_string::npos : second - first - 1);
+		while (!key.empty() && key[0] == ' ') key.erase(0, 1);
+		while (!key.empty() && key.back() == ' ') key.pop_back();
+		return true;
+	}
+	return false;
+}
+
 //==============================================================================
 // ini text of the catalog files
 //==============================================================================
