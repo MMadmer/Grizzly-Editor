@@ -139,7 +139,8 @@ void SetScan(EJobState state, const EditorVirusTotal::SScan& scan)
 
 // Before anything is created on GitHub. A module the index does not list is published as ever;
 // one it lists - or any, while the index does not answer and there is a key - is scanned, and a
-// release the catalog would hold back does not go out. false = not published, `err` says why.
+// release of a listed module leaves only with a VirusTotal report of every package, one the catalog
+// would not hold back. false = not published, `err` says why.
 bool ScanFirst(const SScanPlan& plan, CSink& sink, xr_string& err, xr_string& warnings)
 {
 	sink.Stage("Reading the Mod Browser catalog");
@@ -147,7 +148,13 @@ bool ScanFirst(const SScanPlan& plan, CSink& sink, xr_string& err, xr_string& wa
 	const bool reached = EditorGithub::FetchCatalogIndex(s_JobCancel, index);
 	if (s_JobCancel.Cancelled()) { err = "cancelled"; return false; }
 	const bool listed = reached && EditorCatalog::ListedKey(index, plan.module_id, key_text);
-	if (reached && !listed) return true;
+	if (reached && !listed)
+	{
+		if (EditorCatalog::WithdrawnKey(index, plan.module_id, key_text))
+			warnings = plan.module_id + " is withdrawn from the Mod Browser: players who installed it there do not get this "
+				"release. Submitting the module again lists it again.";
+		return true;
+	}
 
 	EditorCatalog::SVtPolicy policy;
 	if (reached) EditorCatalog::ReadVtPolicy(index, policy);
@@ -183,8 +190,19 @@ bool ScanFirst(const SScanPlan& plan, CSink& sink, xr_string& err, xr_string& wa
 			"package under that size unless a single file alone is larger: make that file smaller.";
 	else if (EditorVirusTotal::Refuses(scan.state))
 		err = what + ". The Mod Browser would hold this release back.";
+	// No report yet: a listed module's release reaches players at once through their updates, so it
+	// never leaves before VirusTotal has spoken on every package. Without an index nobody can tell
+	// whether the catalog lists it, and it goes out with a warning as ever.
 	else if (scan.state == "analysing" || scan.state == "unavailable")
-		warnings = what + ". The Mod Browser offers this release once VirusTotal knows every package of it.";
+	{
+		if (listed)
+			err = what + ". A release of a module in the Mod Browser goes out only with a VirusTotal report of every package: " +
+				(scan.state == "analysing" ? "publish again in a few minutes - VirusTotal has the package already." :
+					"publish again when VirusTotal answers.");
+		else
+			warnings = what + ". The Mod Browser catalog did not answer: if this module is in the Mod Browser, it is offered "
+				"there only once VirusTotal has a report of every package.";
+	}
 	return err.empty();
 }
 

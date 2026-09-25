@@ -219,17 +219,18 @@ def github_requests(state: dict) -> list[dict]:
     return [r for r in state["requests"] if r["path"].startswith(("/repos/", "/upload/", "/user"))]
 
 
-def write_seed(folder: str, module_id: str | None) -> str:
-    """A catalog whose public/index.ltx lists another module and, with `module_id`, this one; None = no index."""
+def write_seed(folder: str, module_id: str | None, withdrawn: bool = False) -> str:
+    """A catalog whose public/index.ltx lists another module and, with `module_id`, this one - under [withdrawn]
+    when `withdrawn`; None = no index."""
     os.makedirs(folder, exist_ok=True)
     if module_id is None:
         return folder
     rows = ["qa-other-module = QaSomeone/other-module, p256:qa-other, 1.0.0, 2026-09-25"]
-    if module_id:
-        rows.append("%s = %s, p256:qa-author, 1.0.0, 2026-09-25" % (module_id, GITHUB_REPO))
+    own = ["%s = %s, p256:qa-author, 1.0.0, 2026-09-25" % (module_id, GITHUB_REPO)] if module_id else []
     text = "\n".join(["[catalog]", "format  = 1", "serial  = 1", "issued  = 2026-09-25", "",
                       "[virustotal]", "trusted       = " + TRUSTED, "block_trusted = 1", "warn_trusted  = 1",
-                      "block_others  = 5", "warn_others   = 2", "", "[mods]", *rows, "", "[revoked]", ""]) + "\n"
+                      "block_others  = 5", "warn_others   = 2", "", "[mods]", *rows, *([] if withdrawn else own), "",
+                      "[withdrawn]", *(own if withdrawn else []), "", "[revoked]", ""]) + "\n"
     os.makedirs(os.path.join(folder, "public"), exist_ok=True)
     with open(os.path.join(folder, "public", "index.ltx"), "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
@@ -271,9 +272,13 @@ def main() -> int:
         mock = Mock(port)
         editor = Editor(args.editor, project, port, with_token=True)
         vt_forget_key()
-        module_id = mcp("mod_manifest")["id"]
+        manifest = mcp("mod_manifest")
+        module_id = manifest["id"]
+        # a release is titled "<module name> <version>" - whatever project the run is given
+        module_name = manifest.get("name") or module_id
         descriptor_name = module_id + ".update.ltx"
         SEEDS["listed"] = write_seed(os.path.join(work, "listed"), module_id)
+        SEEDS["withdrawn"] = write_seed(os.path.join(work, "withdrawn"), module_id, withdrawn=True)
 
         account = mcp("mod_publish", action="account")
         check(account.get("signed_in") and account.get("source") == "environment variable", "A account: the environment token is in effect", str(account))
@@ -356,9 +361,14 @@ def main() -> int:
         data = publish("0.9.5")
         check(data.get("state") == "done" and data.get("served") is True, "H a lagging download address is asked again", str(data))
 
-        mock.stop()
-        mock = Mock(port, "--throttle-kbps", "96")
+        # the upload has to outlast the three seconds before the cancel, whatever the project weighs:
+        # the throttle is chosen from the package so that it takes about eight seconds
         mcp("mod_set_manifest", version="0.9.6", github=GITHUB_REPO)
+        packaged = mcp("mod_package")
+        weight = sum(p.get("size", 0) for p in packaged.get("packages", [])) + (packaged.get("index") or {}).get("size", 0)
+        kbps = max(2, min(96, weight * 8 // 1000 // 8))
+        mock.stop()
+        mock = Mock(port, "--throttle-kbps", str(kbps))
         data = mcp("mod_publish")
         check(data.get("ok") and data.get("pending"), "I the upload starts and the editor answers at once", str(data))
         time.sleep(3)
@@ -444,7 +454,7 @@ def main() -> int:
         data = releases(action="edit", tag="v0.9.11", notes="Only the notes.")
         state = mock.state()
         newest = next((r for r in state["releases"] if r["tag_name"] == "v0.9.11"), {})
-        check(data.get("ok") and newest.get("body") == "Only the notes." and newest.get("name") == "Test 0.9.11" and
+        check(data.get("ok") and newest.get("body") == "Only the notes." and newest.get("name") == module_name + " 0.9.11" and
               state["latest_id"] == newest.get("id"), "R a field that is left out keeps its value; the latest stays the latest", str(newest))
         draft_id = listed.get("v0.9.12", {}).get("id", 0)
         data = releases(action="edit", id=draft_id, title="Left behind, renamed")
@@ -561,10 +571,24 @@ def main() -> int:
         mock = Mock(port, "--vt-queue", "1000", catalog="listed")
         data = publish("0.9.33")
         state = mock.state()
+        error = str(data.get("error"))
+        check(not data.get("ok") and data.get("state") == "failed" and
+              (data.get("virustotal") or {}).get("state") == "analysing" and "still analysing" in error and
+              "only with a VirusTotal report of every package" in error and "publish again in a few minutes" in error,
+              "V still analysing after the wait: refused - a listed module's release leaves only with a report", str(data))
+        check(not github_requests(state) and not state["releases"] and not state["tags"],
+              "V and nothing reached GitHub", str(github_requests(state)))
+
+        mock.stop()
+        mock = Mock(port, catalog="withdrawn")
+        data = publish("0.9.33")
+        state = mock.state()
         warnings = str(data.get("warnings"))
-        check(data.get("state") == "done" and len(published(state)) == 1 and
-              (data.get("virustotal") or {}).get("state") == "analysing" and "still analysing" in warnings and
-              "once VirusTotal knows" in warnings, "V still analysing after the wait: published, with a warning", str(data))
+        check(data.get("state") == "done" and len(published(state)) == 1 and not vt_requests(state) and
+              (data.get("virustotal") or {}).get("state") == "none" and "withdrawn from the Mod Browser" in warnings and
+              "lists it again" in warnings,
+              "V withdrawn from the Mod Browser: published without a scan, with a warning its players there do not get it",
+              str(data))
 
         mock.stop()
         mock = Mock(port, catalog="none")

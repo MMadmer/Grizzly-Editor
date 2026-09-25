@@ -22,6 +22,7 @@ using EditorCatalog::ELevel;
 using EditorCatalog::lvOk;
 using EditorCatalog::lvNote;
 using EditorCatalog::lvReview;
+using EditorCatalog::lvRequired;
 using EditorCatalog::lvBlock;
 
 //------------------------------------------------------------------------------
@@ -61,12 +62,29 @@ struct SCheck
 						SCheck	() : done(false), blocking(false), signed_(false) {}
 };
 
+// where the published index has the module
+struct SListing
+{
+	xr_string	state;		// free, listed, withdrawn; unknown when the index did not answer; empty = not read yet
+	xr_string	github;		// the repository the index names for it
+	bool		this_key;	// bound to this computer's author key
+
+				SListing	() : this_key(false) {}
+};
+
 // what a check learned beyond its findings
 struct SChecked
 {
 	SRelease					rel;
 	EditorCatalog::SVtPolicy	policy;		// the index's; the catalog's defaults when it did not answer
 	EditorVirusTotal::SScan		vt;
+};
+
+// where the module stands with the catalog: the account's issues and the published index
+struct SStanding
+{
+	EditorGithub::SCatalogIssue	submission, withdrawal;
+	SListing					listing;
 };
 
 // taken on the main thread when a job starts; the secrets go when the job ends
@@ -83,7 +101,7 @@ struct SInput
 								~SInput	() { EditorGithub::WipeString(token); EditorGithub::WipeString(vt_key); }
 };
 
-enum EJob { jbNone, jbCheck, jbVt, jbSubmit, jbSubmission };
+enum EJob { jbNone, jbCheck, jbVt, jbSubmit, jbSubmission, jbWithdraw };
 enum EState { stIdle, stRunning, stDone, stFailed, stCancelled };
 
 struct SView
@@ -97,9 +115,11 @@ struct SView
 	EditorVirusTotal::SScan		virustotal;		// what VirusTotal was asked last, by any job
 	bool						vt_scanned;		// by a scan, not by the check's lookups
 	EditorGithub::SCatalogIssue	submission;
-	bool						listed;
+	EditorGithub::SCatalogIssue	withdrawal;
+	SListing					listing;
 
-								SView	() : job(jbNone), state(stIdle), vt_scanned(false), listed(false) {}
+								SView	() : job(jbNone), state(stIdle), vt_scanned(false) {}
+	bool						Listed	() const { return listing.state == "listed" && listing.this_key; }
 };
 
 std::mutex				s_Lock;
@@ -130,6 +150,7 @@ LPCSTR JobName(EJob job)
 	case jbVt:		return "vt";
 	case jbSubmit:	return "submit";
 	case jbSubmission:	return "submission";
+	case jbWithdraw:	return "withdraw";
 	}
 	return "";
 }
@@ -208,14 +229,59 @@ xr_vector<EditorVirusTotal::SPackage> ScanPackages(const SInput& in, const SRele
 	return out;
 }
 
-// A package VirusTotal does not know only waits for Submit's scan - unless the scan was the one
-// that could not get it there.
+// A report is required of every package: clean passes, warn is reported to players. A block, a
+// package too large for VirusTotal and one even a scan could not get there refuse; anything else -
+// not scanned yet, still analysing, no answer - is the requirement still open, never a mere note.
 ELevel VtLevel(const xr_string& state, bool scanned)
 {
-	if (state == "clean")												return lvOk;
-	if (state == "warn")												return lvReview;
+	if (state == "clean")	return lvOk;
+	if (state == "warn")	return lvReview;
 	if (EditorVirusTotal::Refuses(state) && (scanned || state != "unknown"))	return lvBlock;
-	return lvNote;
+	return lvRequired;
+}
+
+// every package has a report the catalog lists by
+bool VtSettled(const EditorVirusTotal::SScan& vt)
+{
+	return vt.state == "clean" || vt.state == "warn";
+}
+
+// the n-th comma-separated field of an index line, trimmed
+xr_string Field(const xr_string& value, u32 n)
+{
+	size_t from = 0;
+	for (u32 i = 0; i < n; ++i)
+	{
+		from = value.find(',', from);
+		if (from == xr_string::npos) return xr_string();
+		++from;
+	}
+	const size_t to = value.find(',', from);
+	xr_string text = value.substr(from, to == xr_string::npos ? xr_string::npos : to - from);
+	while (!text.empty() && text[0] == ' ') text.erase(0, 1);
+	while (!text.empty() && text.back() == ' ') text.pop_back();
+	return text;
+}
+
+// [mods] and [withdrawn] lines alike: github, key, version, date
+SListing ReadListing(bool reached, const xr_string& index, const xr_string& id, const xr_string& public_key)
+{
+	SListing out;
+	out.state = reached ? "free" : "unknown";
+	for (LPCSTR section : { "mods", "withdrawn" })
+	{
+		xr_vector<std::pair<xr_string, xr_string> > rows;
+		if (reached) EditorCatalog::IniSection(index, section, rows);
+		for (u32 i = 0; i < rows.size(); ++i)
+			if (rows[i].first == id)
+			{
+				out.state = 0 == xr_strcmp(section, "mods") ? "listed" : "withdrawn";
+				out.github = Field(rows[i].second, 0);
+				out.this_key = !public_key.empty() && Field(rows[i].second, 1) == public_key;
+				return out;
+			}
+	}
+	return out;
 }
 
 // the release's folder on this computer, when it holds exactly what was published
@@ -313,8 +379,7 @@ const char* kNoVtKey = "No VirusTotal key: the catalog lists a package only when
 
 // Section 7, in the order the window lists it. `lookup` asks VirusTotal about the packages; a
 // submission leaves that to its scan, which follows at once.
-void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, EditorGithub::SCatalogIssue& submission,
-			  bool& listed)
+void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SStanding& standing)
 {
 	check = SCheck();
 	const EditorMod::SManifest& m = in.manifest;
@@ -413,23 +478,27 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, Edit
 	if (have) CheckLocalRelease(in, rel, check);
 	if (s_Cancel.Cancelled()) return;
 
-	// the catalog: is the id free, or already this key's (7.6)
+	// the catalog: is the id free, or already this key's (7.7) - a withdrawn one stays bound to its key
 	Stage("Reading the Mod Browser catalog");
-	xr_string index, listed_key;
+	xr_string index;
 	const bool reached = EditorGithub::FetchCatalogIndex(s_Cancel, index);
 	if (reached) EditorCatalog::ReadVtPolicy(index, seen.policy);
+	standing.listing = ReadListing(reached, index, m.id, in.key.public_key);
+	const SListing& listing = standing.listing;
 	if (!reached)
 		Add(check, lvNote, "catalog", "The Mod Browser catalog did not answer: the catalog's own check covers the id.");
-	else if (!EditorCatalog::ListedKey(index, m.id, listed_key))
+	else if (listing.state == "free")
 		Add(check, lvOk, "catalog", "The id " + m.id + " is free in the Mod Browser.");
-	else if (listed_key == in.key.public_key)
-	{
-		listed = true;
+	else if (listing.state == "listed" && listing.this_key)
 		Add(check, lvOk, "catalog", "Listed in the Mod Browser with this key.");
-	}
-	else
+	else if (listing.state == "listed")
 		Add(check, lvBlock, "catalog", m.id + " is listed with another author key: sign the release with that key, or submit "
 			"the module under another id.");
+	else if (listing.this_key)
+		Add(check, lvNote, "catalog", "Withdrawn from the Mod Browser: submitting lists it again.");
+	else
+		Add(check, lvBlock, "catalog", m.id + " was withdrawn from the Mod Browser and stays bound to another author key: sign "
+			"the release with that key, or submit the module under another id.");
 	xr_vector<std::pair<xr_string, xr_string> > revoked;
 	EditorCatalog::IniSection(index, "revoked", revoked);
 	for (u32 i = 0; i < revoked.size(); ++i)
@@ -451,8 +520,8 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, Edit
 		else						Add(check, lvOk, "tags", "Tags: " + rel.tags + ".");
 	}
 
-	// VirusTotal (7.7): the catalog only looks packages up and refuses one VirusTotal does not know,
-	// so the scan is the author's, with their own key
+	// VirusTotal (7.10), required: the catalog only looks packages up and refuses one VirusTotal does
+	// not know, so the scan is the author's, with their own key
 	if (have && (lookup || in.vt_key.empty()))
 		EditorVirusTotal::Lookup(ScanPackages(in, rel), in.vt_key, seen.policy, s_Cancel, &Stage, seen.vt);
 	if (have && in.vt_key.empty())
@@ -462,19 +531,21 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, Edit
 		{
 			const EditorVirusTotal::SResult& r = seen.vt.packages[p];
 			xr_string text = EditorVirusTotal::Describe(r);
-			if (r.state == "unknown")			text += " - not scanned yet: Submit scans it first.";
-			else if (r.state == "analysing")	text += ": Submit waits for the report.";
+			if (r.state == "unknown")			text += " - a report is required: Submit scans it first.";
+			else if (r.state == "analysing")	text += " - a report is required: Submit waits for it.";
+			else if (r.state == "unavailable")	text += " - a report is required: Submit asks again.";
 			else								text += ".";
 			Add(check, VtLevel(r.state, false), "virustotal", text);
 		}
 	if (s_Cancel.Cancelled()) return;
 
-	// and where the submission stands
+	// and where the submission and a withdrawal stand
 	if (in.signed_in)
 	{
 		Stage("Reading the submission");
 		xr_string err;
-		EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, submission, err);
+		EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, standing.submission, err);
+		if (!s_Cancel.Cancelled()) EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, standing.withdrawal, err, EditorGithub::ciWithdrawal);
 	}
 	check.done = !s_Cancel.Cancelled();
 }
@@ -541,10 +612,9 @@ xr_string VtRefusal(const EditorVirusTotal::SResult& r, const SChecked& seen)
 	return what;
 }
 
-bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, EditorGithub::SCatalogIssue& submission, bool& listed,
-			   xr_string& err)
+bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, SStanding& standing, xr_string& err)
 {
-	RunCheck(in, false, check, seen, submission, listed);
+	RunCheck(in, false, check, seen, standing);
 	if (s_Cancel.Cancelled()) { err = "cancelled"; return false; }
 	for (u32 i = 0; i < check.findings.size(); ++i)
 		if (lvBlock == check.findings[i].level) { err = "not submitted: " + check.findings[i].text; return false; }
@@ -571,32 +641,77 @@ bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, EditorGithub::SC
 	rq.file_text	= SubmissionText(in, rel, website);
 	rq.details		= SubmissionDetails(in, seen, check, website);
 	rq.token		= in.token;
-	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, submission, err);
+	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, standing.submission, err);
 	EditorGithub::WipeString(rq.token);
 	return ok;
+}
+
+// the published index's word on the module
+void ReadListingNow(const SInput& in, SStanding& standing)
+{
+	Stage("Reading the Mod Browser catalog");
+	xr_string index;
+	const bool reached = EditorGithub::FetchCatalogIndex(s_Cancel, index);
+	standing.listing = ReadListing(reached, index, in.manifest.id, in.key.public_key);
+}
+
+// where the submission, a withdrawal and the listing stand
+bool RunStanding(const SInput& in, SStanding& standing, xr_string& err)
+{
+	Stage("Reading the submission");
+	if (!EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.submission, err)) return false;
+	Stage("Reading the withdrawal");
+	if (!EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.withdrawal, err, EditorGithub::ciWithdrawal))
+		return false;
+	ReadListingNow(in, standing);
+	return true;
+}
+
+// what the withdrawal issue says after its ini block, for people
+xr_string WithdrawalDetails(const SInput& in)
+{
+	const EditorMod::SManifest& m = in.manifest;
+	return "**" + (m.name.empty() ? m.id : m.name) + "**" + (m.author.empty() ? xr_string() : " by " + m.author) + " - `" +
+		m.id + "`\n\nThe author withdraws the module from the Mod Browser. Installed copies keep working, and submitting the "
+		"module again lists it again.\n";
+}
+
+// Only the account that owns the listed repository may withdraw a module: the editor refuses
+// anyone else before anything is sent, and the catalog checks again by itself.
+bool RunWithdraw(const SInput& in, SStanding& standing, xr_string& err)
+{
+	EditorGithub::SCatalogWithdrawal rq;
+	rq.module_id	= in.manifest.id;
+	rq.details		= WithdrawalDetails(in);
+	rq.token		= in.token;
+	const bool ok = EditorGithub::CatalogWithdraw(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, standing.withdrawal, err);
+	EditorGithub::WipeString(rq.token);
+	if (!ok) return false;
+	{
+		std::lock_guard<std::mutex> guard(s_Lock);
+		s_View.login = standing.withdrawal.login;
+	}
+	Stage("Reading the submission");
+	xr_string ignored;
+	EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.submission, ignored);
+	ReadListingNow(in, standing);
+	return true;
 }
 
 void Worker(EJob job, SInput in)
 {
 	SCheck check;
 	SChecked seen;
-	EditorGithub::SCatalogIssue submission;
-	bool listed = false, ok = true;
+	SStanding standing;
+	bool ok = true;
 	xr_string err;
 	switch (job)
 	{
-	case jbCheck:	RunCheck(in, true, check, seen, submission, listed); break;
-	case jbVt:		RunVt(in, seen.vt, err); ok = err.empty(); break;
-	case jbSubmit:	ok = RunSubmit(in, check, seen, submission, listed, err); break;
-	case jbSubmission:
-	{
-		Stage("Reading the submission");
-		ok = EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, submission, err);
-		xr_string index, key;
-		if (ok && EditorGithub::FetchCatalogIndex(s_Cancel, index))
-			listed = EditorCatalog::ListedKey(index, in.manifest.id, key) && key == in.key.public_key;
-		break;
-	}
+	case jbCheck:		RunCheck(in, true, check, seen, standing); break;
+	case jbVt:			RunVt(in, seen.vt, err); ok = err.empty(); break;
+	case jbSubmit:		ok = RunSubmit(in, check, seen, standing, err); break;
+	case jbSubmission:	ok = RunStanding(in, standing, err); break;
+	case jbWithdraw:	ok = RunWithdraw(in, standing, err); break;
 	}
 	const bool cancelled = s_Cancel.Cancelled();
 	std::lock_guard<std::mutex> guard(s_Lock);
@@ -609,12 +724,13 @@ void Worker(EJob job, SInput in)
 		s_View.virustotal = seen.vt;
 		s_View.vt_scanned = jbCheck != job;
 	}
-	// what the catalog and GitHub said about the submission, once a job asked them
-	const bool asked = jbSubmission == job ? ok : (jbCheck == job || jbSubmit == job) && check.done;
+	// what the catalog and GitHub said about the module, once a job asked them
+	const bool asked = jbSubmission == job || jbWithdraw == job ? ok : (jbCheck == job || jbSubmit == job) && check.done;
 	if (asked && !cancelled)
 	{
-		s_View.submission = in.signed_in ? submission : EditorGithub::SCatalogIssue();
-		s_View.listed = listed;
+		s_View.submission = in.signed_in ? standing.submission : EditorGithub::SCatalogIssue();
+		s_View.withdrawal = in.signed_in ? standing.withdrawal : EditorGithub::SCatalogIssue();
+		s_View.listing = standing.listing;
 	}
 }
 
@@ -678,9 +794,10 @@ bool Start(EJob job, xr_string& err)
 	NoteAccount(account.source);
 	in.signed_in = EditorGithub::asNone != account.source;
 	in.token = account.token;
-	if ((jbSubmit == job || jbSubmission == job) && !in.signed_in)
+	if ((jbSubmit == job || jbSubmission == job || jbWithdraw == job) && !in.signed_in)
 		{ err = "not signed in to GitHub: sign in from Mod > Publish Release (MCP: mod_publish action=sign_in or save_token)"; return false; }
-	if (jbSubmission != job) EditorGithub::ReadVtKey(in.vt_key);
+	// a withdrawal needs neither key: only the account that owns the listing counts
+	if (jbSubmission != job && jbWithdraw != job) EditorGithub::ReadVtKey(in.vt_key);
 	if ((jbVt == job || jbSubmit == job) && in.vt_key.empty())
 	{
 		err = "no VirusTotal key: the catalog lists a package only when VirusTotal knows it, and the packages are scanned "
@@ -739,6 +856,17 @@ bool HasVtKey()
 	return has;
 }
 
+// an issue's fields, left open for the caller to add its own and close
+void IssueJson(xr_string& out, const EditorGithub::SCatalogIssue& issue)
+{
+	out += NqUtil::Format("{\"number\":%llu", issue.number);
+	JsonField(out, "state", issue.state.c_str());
+	JsonField(out, "verdict", issue.verdict.c_str());
+	JsonField(out, "verdict_text", issue.verdict_text.c_str());
+	JsonField(out, "url", issue.url.c_str());
+	JsonField(out, "note", issue.note.c_str());
+}
+
 void StatusJson(xr_string& out)
 {
 	Reap();
@@ -779,13 +907,14 @@ void StatusJson(xr_string& out)
 	}
 	out += "]},\"virustotal\":";
 	EditorVirusTotal::Json(out, v.virustotal);
-	out += NqUtil::Format(",\"submission\":{\"number\":%llu", v.submission.number);
-	JsonField(out, "state", v.submission.state.c_str());
-	JsonField(out, "verdict", v.submission.verdict.c_str());
-	JsonField(out, "verdict_text", v.submission.verdict_text.c_str());
-	JsonField(out, "url", v.submission.url.c_str());
-	JsonField(out, "note", v.submission.note.c_str());
-	out += NqUtil::Format(",\"listed\":%s},\"window\":%s}", JsonBool(v.listed), JsonBool(s_Want));
+	out += ",\"submission\":";
+	IssueJson(out, v.submission);
+	out += NqUtil::Format(",\"listed\":%s},\"withdrawal\":", JsonBool(v.Listed()));
+	IssueJson(out, v.withdrawal);
+	out += "},\"listing\":{";
+	JsonField(out, "state", v.listing.state.c_str(), true);
+	JsonField(out, "github", v.listing.github.c_str());
+	out += NqUtil::Format(",\"this_key\":%s},\"window\":%s}", JsonBool(v.listing.this_key), JsonBool(s_Want));
 }
 
 void ErrorJson(xr_string& out, const xr_string& err)
@@ -814,6 +943,8 @@ xr_string					s_VtError;
 bool						s_PickQueued	= false;
 xr_string					s_StartError;				// why a job the window asked for did not start
 bool						s_HideRequested	= false;	// MCP closes the window from outside the ImGui pass
+bool						s_WantWithdraw	= false;	// the withdrawal's confirmation is open
+const char*					kTitleWithdraw	= "Withdraw from Mod Browser";
 
 void StartFromUI(EJob job)
 {
@@ -944,9 +1075,10 @@ ImU32 LevelColor(ELevel level)
 {
 	switch (level)
 	{
-	case lvOk:		return IM_COL32(110, 200, 110, 255);
-	case lvReview:	return IM_COL32(230, 190, 80, 255);
-	case lvBlock:	return IM_COL32(235, 95, 90, 255);
+	case lvOk:			return IM_COL32(110, 200, 110, 255);
+	case lvReview:		return IM_COL32(230, 190, 80, 255);
+	case lvRequired:	return IM_COL32(240, 140, 60, 255);
+	case lvBlock:		return IM_COL32(235, 95, 90, 255);
 	}
 	return IM_COL32(150, 150, 150, 255);
 }
@@ -1063,7 +1195,7 @@ void DrawRequirements(const SView& view)
 
 void DrawVirusTotal(const SView& view)
 {
-	ImGui::SeparatorText("VirusTotal");
+	ImGui::SeparatorText("VirusTotal (required)");
 	if (!s_VtKnown)
 	{
 		ImGui::TextWrapped("Required: the catalog lists a package only when VirusTotal knows it, and every release is scanned "
@@ -1085,8 +1217,12 @@ void DrawVirusTotal(const SView& view)
 	}
 	if (stRunning == view.state && (jbVt == view.job || jbSubmit == view.job))
 		ImGui::TextDisabled("Scanning... %s", view.stage.c_str());
-	else if (view.virustotal.packages.empty())
-		ImGui::TextDisabled("Not scanned yet.");
+	// the requirement stays in sight until every package has a report
+	if (view.virustotal.packages.empty())
+		StatusLine(lvRequired, "Not scanned yet. Every package needs a VirusTotal report before the module is listed: Scan "
+			"runs it now, and Submit scans first.");
+	else if (!VtSettled(view.virustotal))
+		StatusLine(lvRequired, "Not every package has a VirusTotal report yet: the module is not submitted without one.");
 	for (u32 i = 0; i < view.virustotal.packages.size(); ++i)
 	{
 		const EditorVirusTotal::SResult& r = view.virustotal.packages[i];
@@ -1137,7 +1273,7 @@ void DrawSubmission(const SView& view)
 		else if (submission.verdict == "accepted")
 		{
 			level = lvOk;
-			text = view.listed ? NqUtil::Format("#%llu was accepted: the module is in the Mod Browser.", submission.number) :
+			text = view.Listed() ? NqUtil::Format("#%llu was accepted: the module is in the Mod Browser.", submission.number) :
 				NqUtil::Format("#%llu was accepted: the module appears in the Mod Browser within minutes.", submission.number);
 		}
 		else if (submission.verdict == "refused")
@@ -1157,8 +1293,109 @@ void DrawSubmission(const SView& view)
 	ImGui::BeginDisabled(stRunning == view.state || EditorGithub::asNone == s_AccountSource);
 	if (ImGui::Button("Refresh")) StartFromUI(jbSubmission);
 	ImGui::EndDisabled();
-	if (stFailed == view.state && !view.error.empty())
+	Hint("Reads where the submission and a withdrawal stand, and what the published catalog lists.");
+	if (stFailed == view.state && !view.error.empty() && jbWithdraw != view.job)
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
+}
+
+// A listed module can be withdrawn by the account it was listed from; a withdrawal already sent is
+// followed like the submission.
+void DrawWithdrawal(const SView& view)
+{
+	const EditorGithub::SCatalogIssue& w = view.withdrawal;
+	const bool listed = view.listing.state == "listed", withdrawn = view.listing.state == "withdrawn";
+	const bool failed = stFailed == view.state && jbWithdraw == view.job && !view.error.empty();
+	if (!listed && !withdrawn && !w.number && w.note.empty() && !failed) return;
+	ImGui::SeparatorText("Withdrawal");
+	if (w.number)
+	{
+		xr_string text, verdict;
+		ELevel level = lvNote, verdict_level = lvNote;
+		if (w.state == "open")
+		{
+			text = NqUtil::Format("#%llu is open: the catalog checks it.", w.number);
+			verdict = w.verdict_text;
+			verdict_level = w.verdict == "accepted" ? lvOk : w.verdict == "refused" ? lvBlock : lvReview;
+		}
+		else if (w.verdict == "accepted")
+		{
+			level = lvOk;
+			text = withdrawn ? NqUtil::Format("#%llu was accepted: the module is withdrawn from the Mod Browser.", w.number) :
+				NqUtil::Format("#%llu was accepted: the module leaves the Mod Browser within minutes.", w.number);
+		}
+		else if (w.verdict == "refused")
+		{
+			level = verdict_level = lvBlock;
+			text = NqUtil::Format("#%llu was refused.", w.number);
+			verdict = w.verdict_text;
+		}
+		else
+			text = NqUtil::Format("#%llu was closed.", w.number);
+		StatusLine(level, text.c_str());
+		if (!verdict.empty()) StatusLine(verdict_level, verdict.c_str());
+	}
+	if (!w.note.empty()) StatusLine(lvNote, w.note.c_str());
+	if (withdrawn && w.number && w.verdict == "accepted")
+		ImGui::TextDisabled("Submitting the module again lists it again.");
+	else if (withdrawn)
+		StatusLine(lvNote, "Not in the Mod Browser: its author withdrew it. Submitting lists it again.");
+	if (listed)
+		ImGui::TextDisabled("Withdrawing takes the module out of the Mod Browser: it is no longer offered, and players who "
+			"installed it there get no more updates. Installed copies keep working.");
+
+	// only the account the listing came from may ask; the catalog checks it again by itself
+	const xr_string owner = Owner(view.listing.github);
+	const bool other_account = listed && !view.login.empty() && 0 != _stricmp(owner.c_str(), view.login.c_str());
+	if (listed)
+	{
+		ImGui::BeginDisabled(stRunning == view.state || EditorGithub::asNone == s_AccountSource || other_account);
+		if (ImGui::Button("Withdraw...")) s_WantWithdraw = true;
+		ImGui::EndDisabled();
+		Hint(other_account ? "Only the account the module was listed from can withdraw it." :
+			"Asks the catalog to withdraw the module: a public issue in the catalog repository, judged by the catalog's\n"
+			"own checks. The id stays bound to your author key.");
+		if (w.number) ImGui::SameLine();
+	}
+	if (w.number && ImGui::Button("Open Withdrawal")) ::ShellExecuteA(0, "open", w.url.c_str(), 0, 0, SW_SHOWNORMAL);
+	if (other_account)
+		ImGui::TextDisabled("Only %s, the owner of %s, can withdraw it.", owner.c_str(), view.listing.github.c_str());
+	if (stRunning == view.state && jbWithdraw == view.job)
+		ImGui::TextDisabled("Withdrawing... %s", view.stage.c_str());
+	if (failed)
+		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
+}
+
+// The one question before a withdrawal leaves: what it does, for whom, and that it is public.
+// Cancel is the default - Enter and Escape both back out.
+void DrawWithdrawConfirm(const SView& view)
+{
+	if (!s_WantWithdraw) return;
+	if (!ImGui::BeginPopupModal(kTitleWithdraw, &s_WantWithdraw, ImGuiWindowFlags_AlwaysAutoResize, true)) return;
+	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.f);
+	ImGui::Text("Withdraw %s (%s) from the Mod Browser?", s_Manifest.name.empty() ? s_Manifest.id.c_str() : s_Manifest.name.c_str(),
+		s_Manifest.id.c_str());
+	ImGui::Spacing();
+	ImGui::BulletText("The Mod Browser stops offering it, and players who installed it there get no more updates.");
+	ImGui::BulletText("Installed copies keep working.");
+	ImGui::BulletText("The id stays bound to your author key: submitting the module again lists it again.");
+	ImGui::Spacing();
+	ImGui::TextDisabled("The request is a public issue at github.com/%s%s%s, judged by the catalog's own checks.",
+		EditorGithub::CatalogRepo().c_str(), view.login.empty() ? "" : ", from ", view.login.c_str());
+	ImGui::PopTextWrapPos();
+	ImGui::Separator();
+
+	const bool confirm = ImGui::Button("Withdraw", ImVec2(ImGui::GetFontSize() * 8.f, 0));
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button("Cancel", ImVec2(ImGui::GetFontSize() * 8.f, 0)) ||
+		ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+	ImGui::SetItemDefaultFocus();
+	if (confirm) StartFromUI(jbWithdraw);
+	if (confirm || cancel)
+	{
+		s_WantWithdraw = false;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::EndPopup();
 }
 
 void DrawWindow()
@@ -1179,6 +1416,7 @@ void DrawWindow()
 	{
 		s_HideRequested = false;
 		s_Want = false;
+		s_WantWithdraw = false;
 		ImGui::CloseCurrentPopup();
 		ImGui::EndPopup();
 		return;
@@ -1197,16 +1435,22 @@ void DrawWindow()
 	DrawRequirements(view);
 	DrawVirusTotal(view);
 	DrawSubmission(view);
+	DrawWithdrawal(view);
 
 	ImGui::Separator();
 	const bool signed_in = EditorGithub::asNone != s_AccountSource;
 	const bool ready = view.check.done && !view.check.blocking && signed_in && stRunning != view.state;
+	// the scan is part of the submission, and the button says so while a report is missing
+	const bool update = view.submission.number && view.submission.state == "open";
+	const bool scan = !VtSettled(view.virustotal);
 	ImGui::BeginDisabled(!ready);
-	if (ImGui::Button(view.submission.number && view.submission.state == "open" ? "Update Submission" : "Submit", ImVec2(em * 10.f, 0)))
+	if (ImGui::Button(update ? (scan ? "Scan and Update" : "Update Submission") : (scan ? "Scan and Submit" : "Submit"),
+			ImVec2(em * 10.f, 0)))
 		StartFromUI(jbSubmit);
 	ImGui::EndDisabled();
-	Hint(ready ? "Checks everything again and scans the packages on VirusTotal - uploading what it does not know and\n"
-				 "waiting for the report - then opens the submission, or updates the open one." :
+	Hint(ready ? "Checks everything again and scans the packages on VirusTotal - required: uploading what it does not know\n"
+				 "and waiting for the report - then opens the submission, or updates the open one. Nothing is sent\n"
+				 "without a report of every package." :
 		"Available once every requirement above is met.");
 	ImGui::SameLine();
 	if (stRunning == view.state && jbSubmit == view.job)
@@ -1225,6 +1469,7 @@ void DrawWindow()
 			view.login.empty() ? "" : " from ", view.login.c_str());
 
 	ImGui::PopTextWrapPos();
+	DrawWithdrawConfirm(view);
 	ImGui::EndPopup();
 }
 } // namespace
@@ -1312,17 +1557,28 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	}
 	else if (0 == xr_strcmp(action, "vt_key_forget"))	EditorGithub::ForgetVtKey();
 	else if (0 == xr_strcmp(action, "cancel"))			{ if (Running()) s_Cancel.Cancel(); }
-	// the window, for whoever has to look at it from outside: a screenshot, a person
-	else if (0 == xr_strcmp(action, "show"))			{ s_HideRequested = false; if (!s_Want) Request(); }
+	// the window, for whoever has to look at it from outside: a screenshot, a person. confirm=withdraw
+	// puts the withdrawal's question over it - only a click in it withdraws anything
+	else if (0 == xr_strcmp(action, "show"))
+	{
+		s_HideRequested = false;
+		if (!s_Want) Request();
+		char confirm[16] = {};
+		XFinedMCP::GetArg(raw, "confirm", confirm, sizeof(confirm));
+		if (confirm[0] && 0 != xr_strcmp(confirm, "withdraw")) { ErrorJson(out, "confirm: withdraw expected"); return; }
+		s_WantWithdraw = 0 == xr_strcmp(confirm, "withdraw");
+	}
 	else if (0 == xr_strcmp(action, "hide"))			s_HideRequested = s_Want;
 	else
 	{
+		// withdraw asks nothing here: the caller decided, and the bridge marks the call destructive
 		const EJob job = 0 == xr_strcmp(action, "check") ? jbCheck : 0 == xr_strcmp(action, "vt") ? jbVt :
-			0 == xr_strcmp(action, "submit") ? jbSubmit : 0 == xr_strcmp(action, "submission") ? jbSubmission : jbNone;
+			0 == xr_strcmp(action, "submit") ? jbSubmit : 0 == xr_strcmp(action, "submission") ? jbSubmission :
+			0 == xr_strcmp(action, "withdraw") ? jbWithdraw : jbNone;
 		if (jbNone == job)
 		{
 			ErrorJson(out, "unknown action: status, key_create, key_use, key_unlock, vt_key, vt_key_forget, check, vt, submit, submission, "
-				"cancel, show or hide expected");
+				"withdraw, cancel, show or hide expected");
 			return;
 		}
 		if (!Start(job, err)) { ErrorJson(out, err); return; }

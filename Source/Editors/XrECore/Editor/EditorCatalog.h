@@ -74,7 +74,9 @@ namespace EditorCatalog
 	ECORE_API bool		WebsiteIsModulePage	(LPCSTR url);
 
 	// What a check found: the listing requirements (7), the content (8) and the scripts (10.3).
-	enum ELevel { lvOk, lvNote, lvReview, lvBlock };
+	// lvRequired is a requirement not met yet that the submission meets by itself - the VirusTotal
+	// report its scan waits for - so it does not block the Submit button the way lvBlock does.
+	enum ELevel { lvOk, lvNote, lvReview, lvRequired, lvBlock };
 	struct SFinding
 	{
 		ELevel		level;
@@ -131,6 +133,8 @@ namespace EditorCatalog
 	ECORE_API SVtVerdict VtVerdict		(const xr_vector<SVtEngine>& results, const SVtPolicy& policy);
 	// the index's [mods] line for the module: true when it lists the id, `key` the key text it names
 	ECORE_API bool		ListedKey		(const xr_string& index_text, const xr_string& id, xr_string& key);
+	// the index's [withdrawn] line: a module its author withdrew, whose id stays bound to `key`
+	ECORE_API bool		WithdrawnKey	(const xr_string& index_text, const xr_string& id, xr_string& key);
 
 	// ini text as the catalog files use it: the value of `key` in `section`, trimmed; comments
 	// after an unquoted ';' are dropped

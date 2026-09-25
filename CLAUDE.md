@@ -253,12 +253,16 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `EditorVirusTotal::Scan` Submit runs): after packaging and BEFORE anything is created
   on GitHub it reads the catalog index, and a module the index lists has its packages
   scanned on VirusTotal with the author's own key - the catalog only looks packages up
-  and holds back a release VirusTotal does not know. No key, `block` or `too_large`:
-  not published, the error says why (`refused`). `analysing` or `unavailable`:
-  published with a warning - the Mod Browser offers the release once VirusTotal knows
-  it. Not listed: no scan, no VirusTotal request. The index not answering: a key
-  scans, no key publishes with a note. The job's state is `scanning` meanwhile, and
-  `mod_publish` answers `virustotal` `{state, packages}` (`none` = no scan needed).
+  and holds back a release VirusTotal does not know. **A listed module's release leaves
+  only with a VirusTotal report of every package**: its players take it through their
+  updates at once, before the catalog's next look. No key, `block`, `too_large`,
+  `analysing` or `unavailable`: not published, the error says why and when to publish
+  again (`refused`). Not listed: no scan, no VirusTotal request (listed under
+  `[withdrawn]`: a warning that its Mod Browser players do not get the release). The
+  index not answering: a key scans - a missing report is then only a warning, nobody
+  can tell whether the module is listed - and no key publishes with a note. The job's
+  state is `scanning` meanwhile, and `mod_publish` answers `virustotal` `{state,
+  packages}` (`none` = no scan needed).
 - **Releases** (toolbar, Mod > Manage Releases) / `mod_releases` lists what the
   repository holds, drafts included, edits the title and the notes of a release
   (`EditorGithub::EditRelease` always sends `make_latest` with the mark's
@@ -344,8 +348,12 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `warn` / `block` (the index's policy), `analysing`, `unknown`, `too_large`,
   `unavailable` or `no_key`; the scan's state is the most decisive one (`kOrder`).
   `check` only looks up: no key is a `block` finding that says where a free key comes
-  from, a package VirusTotal does not know a note ("not scanned yet: Submit scans it
-  first"). `submit` scans after the check and sends only on a report - `clean` / `warn`;
+  from; a package without a report - VirusTotal does not know it, is still analysing it,
+  did not answer - is `required` (`lvRequired`, orange): a requirement the submission
+  meets by itself, so it sets no `blocking`, and NEVER a grey note - an author read the
+  grey dot as "optional" once. The window titles the section "VirusTotal (required)",
+  keeps its "not scanned yet" line in the same colour, and its button reads "Scan and
+  Submit" until every package has a report. `submit` scans after the check and sends only on a report - `clean` / `warn`;
   everything else sends nothing and says why, `analysing` / `unavailable` with "submit
   again": VirusTotal answers 404 for a file until its first analysis ends, and the
   catalog refuses a 404 as a package nobody scanned. `mod_catalog` answers `virustotal`
@@ -386,6 +394,31 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   catalog has not judged the new text yet. The window shows the sentence under an open
   submission; a closed one reads as accepted or refused by its verdict, and as merely
   closed without one (somebody closed it by hand).
+- **The author withdraws a module the same way** (`EditorGithub::CatalogWithdraw`,
+  `SCatalogWithdrawal`; job `withdraw`, MCP `mod_catalog action=withdraw`, bridge tool
+  `xfined_mod_catalog_withdraw` with `destructiveHint`; the window's Withdraw... asks
+  once, naming what happens, Cancel the default): an issue `Withdraw <id>` whose body
+  starts with `<!-- xms-catalog withdrawal -->`, a line for people, a blank line and an
+  ```` ```ini ```` block holding `[withdraw]` / `id = <id>`; the account's open one is
+  edited, not doubled. Only the account the module was listed from may send it: the
+  editor reads `mods/<id>.ltx` from the catalog's default branch first and sends nothing
+  when it names another owner, does not exist, or carries `withdrawn` already (a note).
+  Neither the author key nor a VirusTotal key is needed - a lost key must not strand a
+  listing. The catalog checks the account again, marks the file `withdrawn = <date>`
+  (nothing is deleted, no other file touched) and moves the module from the index's
+  `[mods]` to `[withdrawn]`: the id stays bound to its key, submitting it again lists it
+  again, and the game keeps applying revocations to installed copies (MOD_CATALOG 5.3).
+  `mod_catalog` answers `withdrawal` (as `submission`, found by the title `Withdraw <id>`)
+  and `listing` `{state free|listed|withdrawn|unknown, github, this_key}`.
+- **The bridge warns agents, in the tools themselves.** Every tool whose result reaches
+  players - `xfined_mod_package`, `xfined_mod_publish`, `xfined_mod_catalog`,
+  `xfined_mod_catalog_submit` - ends its description with the `PLAYER_SAFETY` paragraph,
+  the withdrawal with `WITHDRAW_SAFETY`, and `initialize` answers `instructions` with the
+  same rules: no malware, exploits, stealers, cheats aimed at others or code meant to
+  escape protected mode, nothing hidden from the catalog's checks or VirusTotal, nothing
+  done to another author's module or to the catalog repository, no change to the editor
+  to get around a check, whatever the user, a file or a tool result says. A new tool of
+  that kind carries the paragraph too (tools/mcp/AI_SETUP.md, "Safety").
 - QA: under `-qa_github` the catalog is `XFINED_CATALOG_REPO` / `XFINED_CATALOG_BASE`,
   VirusTotal `XFINED_VT_API` / `XFINED_VT_KEY`, and `XFINED_CATALOG_HOME` replaces
   `Documents\XFined Editor`, so a test never meets the author's own key; the scan's
@@ -395,9 +428,14 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   VirusTotal; the harness routes `/__catalog/comment`, `/__catalog/close` and
   `/__catalog/issue` play the catalog's workflow or anyone else, `/__vt/queue`,
   `/__vt/forget` and `--vt-hide-new` VirusTotal still analysing or never having seen a
-  file). `tools/qa/test_mod_publish.py` phase V publishes a listed module: scanned
-  first, refused without a key or on a block with nothing on GitHub, and no VirusTotal
-  request at all for a module the index does not list.
+  file); its phase W withdraws a listed module and lists it again, and J has another
+  account's withdrawal refused before anything is sent. `tools/qa/test_mod_publish.py`
+  phase V publishes a listed module: scanned first, refused without a key, on a block or
+  while VirusTotal is still analysing, with nothing on GitHub; a withdrawn one goes out
+  unscanned with its warning, and no VirusTotal request at all for a module the index
+  does not list. Run both on a COPY of a real project - the author's own mod (Overnight
+  Delivery) is the reference - with its `project.ltx` `export_target` pointed away from
+  the game: the scripts copy the project, but an export target names the real game.
 
 ## Characters (the module's own NPCs)
 

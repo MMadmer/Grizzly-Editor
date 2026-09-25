@@ -14,15 +14,19 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   C  the content policy (8) and the script report (10.3) at package time
   D  the signed [card] of the release descriptor (4), verified with xms_catalog.py
   E  the release published to the mock
-  F  the listing requirements (7) against the published release and the catalog index; the window
-     opened and closed over MCP (show / hide)
+  F  the listing requirements (7) against the published release and the catalog index - a package VirusTotal does
+     not know is a 'required' finding, never a note; the window opened and closed over MCP (show / hide)
   G  VirusTotal with the author's own key (11), required: without one the check blocks and nothing is sent;
      the scan uploads what VirusTotal does not know, waits for the report and judges it; a block stops a submission
   H  the submission, scanned first: an issue 'Submit <id>' whose ini block is mods/<id>.ltx byte for byte, edited not
      duplicated, the verdicts the catalog's workflow comments (github-actions[bot] only, the newest one, past
      the first page), accepted and listed, nothing sent once the catalog holds the file
+  W  the withdrawal: an issue 'Withdraw <id>' from the listing's owner whose ini block names the module, edited not
+     duplicated, the catalog's verdict, the index's [withdrawn], nothing sent once withdrawn, the check's note, and
+     a new submission that lists it again
   I  hygiene: no token, password or VirusTotal key where it must not go
-  J  the maintainer listing a module of their own the same way; refused and closed, then a new submission
+  J  the maintainer listing a module of their own the same way; refused and closed, then a new submission; a
+     withdrawal of a module the catalog does not hold, or one listed from another account, sends nothing
 
     python tools/qa/test_mod_catalog.py --project D:\\XFinedProjects\\Test [--shots <folder>]
 """
@@ -63,6 +67,8 @@ VERSION = "1.0.0"
 WEBSITE = "https://ap-pro.ru/stuff/qa/qa-mod-r1/"
 SUBMIT_TITLE = "Submit " + MODULE_ID
 SUBMITTED_LINE = "Submitted from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7)."
+WITHDRAW_TITLE = "Withdraw " + MODULE_ID
+WITHDRAWN_LINE = "Withdrawn by its author from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 10.2)."
 # Cyrillic, quotes and a backslash: the password crosses JSON, UTF-8 and PBKDF2 on both sides
 PASSWORD = 'Qa-пароль "7" \\ ok'
 PASSWORD2 = "second-key-pass-9"
@@ -459,12 +465,12 @@ def card_file(value: str) -> tuple[str, int, str]:
     return parts[0], int(parts[1]), parts[2].lower()
 
 
-def index_text(maintainer: int, serial: int, rows: list[str]) -> str:
+def index_text(maintainer: int, serial: int, rows: list[str], withdrawn: tuple[str, ...] = ()) -> str:
     """public/index.ltx as the maintainer publishes it (MOD_CATALOG 5.2), signed with a QA maintainer key."""
     body = "\n".join(["[catalog]", "format  = 1", "serial  = %d" % serial, "issued  = 2026-09-25", "",
                       "[virustotal]", "trusted       = " + TRUSTED, "block_trusted = 1", "warn_trusted  = 1",
                       "block_others  = 5", "warn_others   = 2", "",
-                      "[mods]", *rows, "", "[revoked]", ""]) + "\n"
+                      "[mods]", *rows, "", "[withdrawn]", *withdrawn, "", "[revoked]", ""]) + "\n"
     return xc.sign_text(body, maintainer)
 
 
@@ -556,10 +562,10 @@ def issue_of(state: dict, number: int) -> dict:
     return next((i for i in issues(state) if i.get("number") == number), {})
 
 
-def submissions(state: dict, creator: str) -> list[dict]:
-    """The creator's issues titled exactly 'Submit <id>', oldest first; a pull request is no submission."""
+def submissions(state: dict, creator: str, title: str = SUBMIT_TITLE) -> list[dict]:
+    """The creator's issues titled exactly 'Submit <id>' (or `title`), oldest first; a pull request is no submission."""
     return [i for i in issues(state) if str((i.get("user") or {}).get("login", "")).lower() == creator.lower()
-            and i.get("title") == SUBMIT_TITLE and "pull_request" not in i]
+            and i.get("title") == title and "pull_request" not in i]
 
 
 def ini_block(body: str) -> str | None:
@@ -621,9 +627,9 @@ class Run:
         self.plain_mode = True
         self.package = ("", 0, "")  # name, size, sha256 of the published zip
 
-    def next_index(self, rows: list[str]) -> str:
+    def next_index(self, rows: list[str], withdrawn: tuple[str, ...] = ()) -> str:
         self.serial += 1
-        return index_text(self.maintainer_key, self.serial, rows)
+        return index_text(self.maintainer_key, self.serial, rows, withdrawn)
 
     def window_shot(self, name: str) -> None:
         """The Submit to Mod Browser window with what it says now, for the operator - only when --shots names a folder."""
@@ -651,6 +657,7 @@ class Run:
             phase("F", self.listing_check, mock)
             phase("G", self.virustotal, mock)
             phase("H", self.submission, mock)
+            phase("W", self.withdrawal, mock)
         finally:
             if editor:
                 # the QA credential goes with the run
@@ -924,11 +931,11 @@ class Run:
         check(not blocks(data) and c.get("blocking") is False, "F nothing blocks the published release",
               short(blocks(data)))
         name, _, sha = self.package
-        check(levels(data, "virustotal") == ["note"] and
-              any("not scanned yet: Submit scans it first" in t for t in texts(data, "virustotal")) and
+        check(levels(data, "virustotal") == ["required"] and
+              any("a report is required: Submit scans it first" in t for t in texts(data, "virustotal")) and
               vt_entry(data, sha).get("state") == "unknown" and uploads_of(mock.vt(), sha) == 0,
-              "F the check only looks the package up: VirusTotal does not know it, Submit scans it first",
-              short(texts(data, "virustotal")) + " " + short(vt_entry(data, sha)))
+              "F the check only looks the package up: VirusTotal does not know it - a requirement, never a note - and "
+              "Submit scans it first", short(texts(data, "virustotal")) + " " + short(vt_entry(data, sha)))
         for code in ("release", "signature", "account", "catalog", "content"):
             check("ok" in levels(data, code) and "block" not in levels(data, code), "F %s is ok" % code,
                   short([f for f in findings(data) if f.get("code") == code]))
@@ -1146,6 +1153,96 @@ class Run:
               "H submitted again unchanged: nothing is sent - main holds the ini block's text byte for byte",
               short(sub) + " " + str(len(submissions(state, "QaOwner"))))
 
+    # ------------------------------------------------------------------------------ W: the withdrawal
+    def withdrawal(self, mock: Mock) -> None:
+        path = "mods/%s.ltx" % MODULE_ID
+        listed_text = submission_text(GITHUB_REPO, self.key_public)
+        mine_row = listing(MODULE_ID, GITHUB_REPO, self.key_public)
+        data = job("submission")
+        st = data.get("listing") or {}
+        check(job_done(data, "submission") and st.get("state") == "listed" and st.get("github") == GITHUB_REPO and
+              st.get("this_key") is True and (data.get("withdrawal") or {}).get("number") == 0,
+              "W listed from its repository with this key, and nothing withdrawn yet", short(st))
+
+        # another account's issue under the title is not the author's withdrawal
+        mock.issue("QaSomeone", WITHDRAW_TITLE, "Somebody else's.")
+        posts = len(api_requests(mock, "POST", "/issues"))
+        data = job("withdraw")
+        w = data.get("withdrawal") or {}
+        state = mock.catalog()
+        mine = submissions(state, "QaOwner", WITHDRAW_TITLE)
+        check(job_done(data, "withdraw") and w.get("number", 0) > 0 and w.get("state") == "open" and w.get("url") and
+              len(mine) == 1 and mine[0].get("number") == w.get("number") and
+              len(api_requests(mock, "POST", "/issues")) == posts + 1,
+              "W withdraw opens one issue '%s' from the owner's account" % WITHDRAW_TITLE, short(data.get("job")) + " " + short(w))
+        number = w.get("number", 0)
+        body = str(issue_of(state, number).get("body") or "")
+        check(body.split("\n")[:4] == ["<!-- xms-catalog withdrawal -->", WITHDRAWN_LINE, "", "```ini"] and
+              ini_block(body) == "[withdraw]\nid = %s\n" % MODULE_ID,
+              "W the body opens with the marker, a line for people, a blank line and an ini block naming the module",
+              repr(body[:300]))
+        check(dict(cat.parse_ini(ini_block(body) or "").get("withdraw", [])) == {"id": MODULE_ID},
+              "W and the catalog's own parser reads exactly the id from it", repr(ini_block(body)))
+        check(branch_file(state, CATALOG_REPO, "main", path) == listed_text and w.get("verdict") == "",
+              "W the catalog's main is untouched and there is no verdict yet: the catalog marks the file itself",
+              repr(branch_file(state, CATALOG_REPO, "main", path)))
+
+        data = job("withdraw")
+        state = mock.catalog()
+        check(job_done(data, "withdraw") and (data.get("withdrawal") or {}).get("number") == number and
+              len(submissions(state, "QaOwner", WITHDRAW_TITLE)) == 1 and
+              len(api_requests(mock, "PATCH", "/issues/%d" % number)) == 1 and
+              len(api_requests(mock, "POST", "/issues")) == posts + 1,
+              "W withdrawing again edits the open issue: one PATCH, no second issue", short(data.get("withdrawal")))
+
+        # the catalog accepts: it marks the file withdrawn, closes the issue and signs the module into [withdrawn]
+        accepted = ("Accepted: the module leaves the Mod Browser within minutes. Installed copies keep working, and "
+                    "submitting it again lists it again.")
+        mock.comment(number, "<!-- xms-catalog verdict=accepted -->\n%s\n" % accepted)
+        mock.put_file(path, listed_text + "withdrawn = 2026-09-26\n")
+        mock.close(number)
+        mock.put_file("public/index.ltx", self.next_index([self.other_row], (mine_row,)))
+        data = job("submission")
+        w = data.get("withdrawal") or {}
+        st = data.get("listing") or {}
+        check(job_done(data, "submission") and w.get("state") == "closed" and w.get("verdict") == "accepted" and
+              w.get("verdict_text") == accepted, "W the catalog's verdict: accepted and closed", short(w))
+        check(st.get("state") == "withdrawn" and st.get("this_key") is True and
+              (data.get("submission") or {}).get("listed") is False,
+              "W the index has it under [withdrawn], still bound to this key, and no longer listed", short(st))
+        self.window_shot("catalog_withdrawn")
+
+        data = job("withdraw")
+        w = data.get("withdrawal") or {}
+        check(job_done(data, "withdraw") and "withdrawn" in str(w.get("note", "")) and w.get("number") == number and
+              len(api_requests(mock, "POST", "/issues")) == posts + 1 and
+              len(api_requests(mock, "PATCH", "/issues/%d" % number)) == 1,
+              "W a withdrawn module is not withdrawn again: nothing is sent, a note says why", short(w))
+
+        data = job("check")
+        catalog_texts = texts(data, "catalog")
+        check(levels(data, "catalog") == ["note"] and any("submitting lists it again" in t for t in catalog_texts) and
+              not blocks(data), "W the check: withdrawn with this key is a note - submitting lists it again",
+              short(catalog_texts))
+
+        # submitting again lists it again: a new submission whose ini block is the plain listing
+        data = job("submit")
+        sub = data.get("submission") or {}
+        state = mock.catalog()
+        body = str(issue_of(state, sub.get("number", 0)).get("body") or "")
+        check(job_done(data, "submit") and sub.get("number", 0) > number and sub.get("state") == "open" and
+              ini_block(body) == listed_text and "withdrawn" not in (ini_block(body) or ""),
+              "W submitting the withdrawn module opens a new submission holding the plain listing", short(sub))
+        # the catalog lists it again
+        mock.comment(sub.get("number", 0), "<!-- xms-catalog verdict=accepted -->\nAccepted: the module is listed and "
+                                           "appears in the Mod Browser within minutes.\n")
+        mock.put_file(path, listed_text)
+        mock.close(sub.get("number", 0))
+        mock.put_file("public/index.ltx", self.next_index([self.other_row, mine_row]))
+        data = job("submission")
+        check((data.get("listing") or {}).get("state") == "listed" and (data.get("submission") or {}).get("listed") is True,
+              "W and once the catalog accepts, the index lists it again", short(data.get("listing")))
+
     # ------------------------------------------------------------------------------ I: hygiene
     def hygiene(self, mock: Mock, run: str) -> None:
         log = mock.requests()
@@ -1180,6 +1277,7 @@ class Run:
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
                             extra_env={"XFINED_VT_RATE_WAIT_MS": "200"})
             phase("J", self.own_listing, mock)
+            phase("J", self.foreign_withdrawal, mock)
         finally:
             if editor:
                 editor.close()
@@ -1250,6 +1348,9 @@ class Run:
               sub.get("verdict") == "refused" and sub.get("verdict_text") == refused,
               "J refused: closed, and the workflow's newest verdict says why", short(sub))
         self.window_shot("catalog_submission_refused")
+        if self.shots:
+            # the window's check looked the package up too: the mock's two requests a minute are a real minute
+            time.sleep(61)
 
         # a refused submission stays closed: submitting again opens a new one, without the old verdict
         data = job("submit")
@@ -1262,6 +1363,21 @@ class Run:
         again = data.get("submission") or {}
         check(job_done(data, "submission") and again.get("number") == sub.get("number") and again.get("verdict") == "" and
               again.get("verdict_text") == "", "J the new submission carries no verdict of the refused one", short(again))
+
+    def foreign_withdrawal(self, mock: Mock) -> None:
+        """A withdrawal leaves only from the account the listing came from, and only for a module the catalog holds."""
+        issues_before = len(api_requests(mock, "POST", "/issues"))
+        data = job("withdraw")
+        check(job_failed(data) and "not in the Mod Browser catalog" in job_error(data) and
+              not submissions(mock.catalog(), MAINTAINER, WITHDRAW_TITLE),
+              "J withdrawing a module the catalog does not hold sends nothing", short(data.get("job")))
+        mock.put_file("mods/%s.ltx" % MODULE_ID, submission_text(GITHUB_REPO, self.key_public))
+        data = job("withdraw")
+        check(job_failed(data) and "only QaOwner can withdraw it" in job_error(data) and
+              not submissions(mock.catalog(), MAINTAINER, WITHDRAW_TITLE) and
+              len(api_requests(mock, "POST", "/issues")) == issues_before,
+              "J the catalog's owner cannot withdraw a module listed from another account: nothing is sent",
+              short(data.get("job")) + " " + job_error(data))
 
 
 def main() -> int:

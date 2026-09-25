@@ -987,9 +987,10 @@ LPCSTR EditorCatalog::LevelName(ELevel level)
 {
 	switch (level)
 	{
-	case lvNote:	return "note";
-	case lvReview:	return "review";
-	case lvBlock:	return "block";
+	case lvNote:		return "note";
+	case lvReview:		return "review";
+	case lvRequired:	return "required";
+	case lvBlock:		return "block";
 	}
 	return "ok";
 }
@@ -1418,15 +1419,17 @@ EditorCatalog::SVtVerdict EditorCatalog::VtVerdict(const xr_vector<SVtEngine>& r
 	return v;
 }
 
-bool EditorCatalog::ListedKey(const xr_string& index_text, const xr_string& id, xr_string& key)
+namespace
+{
+// [mods] and [withdrawn] share one line format: github, key, version, date
+bool IndexKey(const xr_string& index_text, LPCSTR section, const xr_string& id, xr_string& key)
 {
 	key.clear();
 	xr_vector<std::pair<xr_string, xr_string> > rows;
-	IniSection(index_text, "mods", rows);
+	EditorCatalog::IniSection(index_text, section, rows);
 	for (u32 i = 0; i < rows.size(); ++i)
 	{
 		if (rows[i].first != id) continue;
-		// github, key, version, date
 		const size_t first = rows[i].second.find(',');
 		if (first == xr_string::npos) return true;
 		const size_t second = rows[i].second.find(',', first + 1);
@@ -1436,6 +1439,17 @@ bool EditorCatalog::ListedKey(const xr_string& index_text, const xr_string& id, 
 		return true;
 	}
 	return false;
+}
+} // namespace
+
+bool EditorCatalog::ListedKey(const xr_string& index_text, const xr_string& id, xr_string& key)
+{
+	return IndexKey(index_text, "mods", id, key);
+}
+
+bool EditorCatalog::WithdrawnKey(const xr_string& index_text, const xr_string& id, xr_string& key)
+{
+	return IndexKey(index_text, "withdrawn", id, key);
 }
 
 //==============================================================================

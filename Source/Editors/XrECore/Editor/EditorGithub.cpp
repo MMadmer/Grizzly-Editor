@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "EditorGithub.h"
+#include "EditorCatalog.h"
 #include "Nq/NqUtil.h"
 #include <winhttp.h>
 #include <wincred.h>
@@ -1543,12 +1544,19 @@ void ReadIssue(const SJson& j, EditorGithub::SCatalogIssue& out)
 	if (out.state.empty()) out.state = "open";
 }
 
-// The account's newest "Submit <id>" issue of the catalog, in any state; `out` keeps what it has
-// when there is none. The list is newest first and holds the account's pull requests as well.
-bool FindIssue(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, const xr_string& login,
-			   const xr_string& module_id, EditorGithub::SCatalogIssue& out, xr_string& err)
+xr_string IssueTitle(EditorGithub::ECatalogIssue kind, const xr_string& module_id)
 {
-	const xr_string title = "Submit " + module_id;
+	return (EditorGithub::ciWithdrawal == kind ? "Withdraw " : "Submit ") + module_id;
+}
+
+// The account's newest "Submit <id>" (or "Withdraw <id>") issue of the catalog, in any state; `out`
+// keeps what it has when there is none. The list is newest first and holds the account's pull
+// requests as well.
+bool FindIssue(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, const xr_string& login,
+			   const xr_string& module_id, EditorGithub::SCatalogIssue& out, xr_string& err,
+			   EditorGithub::ECatalogIssue kind = EditorGithub::ciSubmission)
+{
+	const xr_string title = IssueTitle(kind, module_id);
 	const u32 per_page = 100, pages = 10;
 	for (u32 page = 1; page <= pages; ++page)
 	{
@@ -1660,6 +1668,42 @@ xr_string SubmissionBody(const EditorGithub::SCatalogRequest& rq)
 	if (!rq.details.empty()) body += "\n" + rq.details;
 	return body;
 }
+
+// A withdrawal names the module in an ini block of its own; the catalog reads nothing else of it.
+xr_string WithdrawalBody(const EditorGithub::SCatalogWithdrawal& rq)
+{
+	xr_string body = "<!-- xms-catalog withdrawal -->\n"
+		"Withdrawn by its author from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 10.2).\n\n"
+		"```ini\n[withdraw]\nid = " + rq.module_id + "\n```\n";
+	if (!rq.details.empty()) body += "\n" + rq.details;
+	return body;
+}
+
+// A new issue, or the text of the account's open one - an edit makes the catalog judge it again.
+// `what` names it in an error: submission, withdrawal.
+bool SendIssue(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, const xr_string& title,
+			   const xr_string& text, LPCSTR what, EditorGithub::SCatalogIssue& out, xr_string& err)
+{
+	const xr_string catalog_url = ApiBase() + "/repos/" + catalog;
+	xr_string body = "{\"body\":\"";
+	JsonEscape(body, text);
+	body += "\"";
+	SHttpResponse r;
+	if (out.number && out.state == "open")
+		r = api.Send("PATCH", catalog_url + NqUtil::Format("/issues/%llu", out.number), body + "}");
+	else
+	{
+		body += ",\"title\":\"";
+		JsonEscape(body, title);
+		r = api.Send("POST", catalog_url + "/issues", body + "\"}");
+	}
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	SJson j;
+	if ((r.status != 200 && r.status != 201) || !ParseJson(r.body, j) || !j.U64("number"))
+		{ err = xr_string("GitHub refused the ") + what + ": " + AccessProblem(r, catalog); return false; }
+	ReadIssue(j, out);
+	return true;
+}
 } // namespace
 
 bool EditorGithub::CatalogSubmit(const SCatalogRequest& rq, CCancel& cancel, const TStage& stage, SCatalogIssue& out,
@@ -1681,7 +1725,7 @@ bool EditorGithub::CatalogSubmit(const SCatalogRequest& rq, CCancel& cancel, con
 
 	// Nothing to send when the catalog's default branch already holds this very file - a module
 	// listed and submitted again unchanged.
-	SHttpResponse r = api.Get(catalog_url + "/contents/mods/" + rq.module_id + ".ltx");
+	const SHttpResponse r = api.Get(catalog_url + "/contents/mods/" + rq.module_id + ".ltx");
 	if (cancel.Cancelled()) { err = "cancelled"; return false; }
 	SJson j;
 	xr_string current;
@@ -1695,30 +1739,59 @@ bool EditorGithub::CatalogSubmit(const SCatalogRequest& rq, CCancel& cancel, con
 
 	// The open submission takes the new text, and the edit makes the catalog judge it again. Once the
 	// last one is closed - accepted or refused - a new one opens.
-	xr_string body = "{\"body\":\"";
-	JsonEscape(body, SubmissionBody(rq));
-	body += "\"";
-	if (out.number && out.state == "open")
-	{
-		say("Updating the submission");
-		r = api.Send("PATCH", catalog_url + NqUtil::Format("/issues/%llu", out.number), body + "}");
-	}
-	else
-	{
-		say("Opening the submission");
-		body += ",\"title\":\"";
-		JsonEscape(body, "Submit " + rq.module_id);
-		r = api.Send("POST", catalog_url + "/issues", body + "\"}");
-	}
+	say(out.number && out.state == "open" ? "Updating the submission" : "Opening the submission");
+	return SendIssue(api, cancel, catalog, IssueTitle(ciSubmission, rq.module_id), SubmissionBody(rq), "submission", out, err);
+}
+
+bool EditorGithub::CatalogWithdraw(const SCatalogWithdrawal& rq, CCancel& cancel, const TStage& stage, SCatalogIssue& out,
+								   xr_string& err)
+{
+	out = SCatalogIssue();
+	err.clear();
+	CHttp http;
+	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
+	CApi api(http, cancel, rq.token);
+	const xr_string catalog = CatalogRepo();
+	const auto say = [&stage](LPCSTR text) { if (stage) stage(text); };
+
+	say("Reading the GitHub account");
+	if (!ReadLogin(api, cancel, out.login, err)) return false;
+
+	// the catalog judges by the file on its default branch, not by an index a mirror may still hold
+	say("Reading the listing");
+	const SHttpResponse r = api.Get(ApiBase() + "/repos/" + catalog + "/contents/mods/" + rq.module_id + ".ltx");
 	if (cancel.Cancelled()) { err = "cancelled"; return false; }
-	if ((r.status != 200 && r.status != 201) || !ParseJson(r.body, j) || !j.U64("number"))
-		{ err = "GitHub refused the submission: " + AccessProblem(r, catalog); return false; }
-	ReadIssue(j, out);
-	return true;
+	SJson j;
+	xr_string listing, github, withdrawn;
+	if (r.status == 404) { err = rq.module_id + " is not in the Mod Browser catalog: there is nothing to withdraw."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j) || !UnBase64(j.Str("content"), listing))
+		{ err = "The catalog's listing could not be read: " + AccessProblem(r, catalog); return false; }
+	EditorCatalog::IniValue(listing, "mod", "github", github);
+	EditorCatalog::IniValue(listing, "mod", "withdrawn", withdrawn);
+	const xr_string owner = github.substr(0, github.find('/'));
+	if (owner.empty()) { err = "The catalog's listing of " + rq.module_id + " names no repository."; return false; }
+	// the account the listing came from: the catalog accepts a withdrawal from nobody else
+	if (0 != _stricmp(owner.c_str(), out.login.c_str()))
+	{
+		err = "Signed in as " + out.login + ", but " + rq.module_id + " is listed from " + github + ", the repository of " +
+			owner + ": only " + owner + " can withdraw it.";
+		return false;
+	}
+
+	say("Reading the withdrawal");
+	if (!FindIssue(api, cancel, catalog, out.login, rq.module_id, out, err, ciWithdrawal)) return false;
+	if (!withdrawn.empty())
+	{
+		out.note = "The catalog has withdrawn " + rq.module_id + " already - nothing was sent.";
+		if (out.number && !ReadVerdict(api, cancel, catalog, out)) { err = "cancelled"; return false; }
+		return true;
+	}
+	say(out.number && out.state == "open" ? "Updating the withdrawal" : "Opening the withdrawal");
+	return SendIssue(api, cancel, catalog, IssueTitle(ciWithdrawal, rq.module_id), WithdrawalBody(rq), "withdrawal", out, err);
 }
 
 bool EditorGithub::CatalogIssue(const xr_string& module_id, const xr_string& token, CCancel& cancel, SCatalogIssue& out,
-								xr_string& err)
+								xr_string& err, ECatalogIssue kind)
 {
 	out = SCatalogIssue();
 	err.clear();
@@ -1727,7 +1800,7 @@ bool EditorGithub::CatalogIssue(const xr_string& module_id, const xr_string& tok
 	CApi api(http, cancel, token);
 	const xr_string catalog = CatalogRepo();
 	if (!ReadLogin(api, cancel, out.login, err)) return false;
-	if (!FindIssue(api, cancel, catalog, out.login, module_id, out, err)) return false;
+	if (!FindIssue(api, cancel, catalog, out.login, module_id, out, err, kind)) return false;
 	if (out.number && !ReadVerdict(api, cancel, catalog, out)) { err = "cancelled"; return false; }
 	return true;
 }

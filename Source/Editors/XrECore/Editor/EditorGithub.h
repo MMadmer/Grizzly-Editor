@@ -246,9 +246,26 @@ namespace EditorGithub
 	// this very file. An issue is public from the first second.
 	bool	CatalogSubmit	(const SCatalogRequest& rq, CCancel& cancel, const TStage& stage,
 							 SCatalogIssue& out, xr_string& err);
-	// the account's newest submission of the module, in any state, with the catalog's newest verdict
-	bool	CatalogIssue	(const xr_string& module_id, const xr_string& token, CCancel& cancel,
+
+	// A withdrawal is an issue too, "Withdraw <id>", and only the account that owns the listed
+	// repository may send one: the catalog then marks mods/<id>.ltx withdrawn - the id stays bound to
+	// its key - and the Mod Browser stops offering the module. Refused here, with nothing sent, when the
+	// catalog's default branch does not hold the module or names another owner; a note and nothing sent
+	// when it is withdrawn already. The account's open withdrawal is edited rather than doubled.
+	struct SCatalogWithdrawal
+	{
+		xr_string	module_id;
+		xr_string	details;		// Markdown after the ini block, for people
+		xr_string	token;
+	};
+	bool	CatalogWithdraw	(const SCatalogWithdrawal& rq, CCancel& cancel, const TStage& stage,
 							 SCatalogIssue& out, xr_string& err);
+
+	enum ECatalogIssue { ciSubmission, ciWithdrawal };
+	// the account's newest submission (or withdrawal) of the module, in any state, with the catalog's
+	// newest verdict
+	bool	CatalogIssue	(const xr_string& module_id, const xr_string& token, CCancel& cancel,
+							 SCatalogIssue& out, xr_string& err, ECatalogIssue kind = ciSubmission);
 
 	//--------------------------------------------------------------------------
 	// VirusTotal, with the author's own key (MOD_CATALOG 11). The free API takes 4 requests a
