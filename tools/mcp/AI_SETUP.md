@@ -79,8 +79,12 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_scene_info` | opened scene file, modified flag, object counts per tool class |
 | `xfined_selection` | objects selected in the viewport: name, class, position/rotation/scale |
 | `xfined_object_info` | one object by exact `name`: class, selected/visible, transform |
-| `xfined_list_projects` | recent projects (name + folder path) |
+| `xfined_list_projects` | recent projects - the project browser's tiles: `name`, folder `path` and `state` (`project`; `missing` - the folder is gone; `not_a_project` - it holds no project.ltx or mod.ltx any more) |
 | `xfined_open_project` | open a project by `path`; its last scene auto-loads |
+| `xfined_project_reveal` | Show in Explorer from the project browser's tile menu: opens a listed project's folder (`path`) in Windows Explorer; refuses a path that is not in the list and a folder that is gone. `dry_run=true` answers the folder and opens no window |
+| `xfined_project_delete` | delete a listed project (`path`) from disk for good - never the Recycle Bin; the git history and the packaged releases go with it. The editor asks nothing on this path; the tool carries `destructiveHint`. The window's checks, a refusal (`ok:false`, `refused:true`, the reason in `error`) deleting nothing: not in the list, not a project, the open project, a link, a drive root, a folder that is or holds the user's profile / Documents / Desktop, the editor or a linked game, one inside the editor or a game, one that holds another project (`nested`). A folder that is gone only leaves the list (`missing:true`). Answers `deleted` `{files, folders, links, bytes}`, `git`, `releases`, `removed_from_list`; what could not be deleted is in `failed` `[{path, reason}]` with `ok:false`, and the project stays in the list |
+| `xfined_project_forget` | Remove from List: takes an entry whose folder holds no project any more (`missing` / `not_a_project`) off the list; nothing on disk changes. A project that is there is refused |
+| `xfined_project_browser_menu` | brings the project browser's tile menu (`show=menu`) or the Delete Project confirmation (`show=confirm`) into view for `xfined_screenshot_editor`, `show=none` takes both down; without `show` it reports. To look at, never to act. Answers `menu` `{path, shown, state, items [{label, enabled}]}` and `confirm` `{shown, view, reason, files, folders, links, bytes, git, releases, release_files, release_bytes, nested, failed}` |
 | `xfined_open_scene` | load a `.level` scene in the active project (synchronous); refuses to replace unsaved work unless `discard=true`, and preserves the current scene if loading fails |
 | `xfined_list_objects` | scene object names; filters: `class`, `name_contains`, `limit` |
 | `xfined_focus_object` | frame the camera on object `name` like the F key; `select=true` also selects it |
@@ -218,6 +222,20 @@ members. Rename resolves the object by its stable original name when the modal
 is accepted. Delete names the object in a confirmation modal, defaults to
 Cancel, and remains undoable. MCP uses the existing non-modal
 `xfined_rename_object` and `xfined_delete_selected` paths.
+
+### Project browser
+
+A right click on a project tile offers Show in Explorer and Delete...; a tile
+whose folder is gone (or holds no project any more) is veiled and offers Remove
+from List instead. Delete... asks first, naming the project, its folder, how many
+files and folders and how much it holds, its git repository and its `releases\`
+when there are any - "Deleted for good - this cannot be undone.", Cancel the
+default. `xfined_project_delete` is that deletion without the question: the same
+checks refuse the same folders, links inside go as links and are never followed,
+the manifests go last (a deletion that stops at a file in use leaves a project
+that deletes again), and success means the folder is gone. Call it only when the
+user asked for exactly this deletion. `xfined_project_browser_menu` puts the menu
+or the confirmation on screen for a screenshot and acts on nothing.
 
 ## Quest workflow for AI (NQ quest graphs)
 

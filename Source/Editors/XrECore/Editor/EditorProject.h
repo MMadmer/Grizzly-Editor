@@ -100,6 +100,52 @@ public:
 	// recent projects as a JSON array — for the MCP list_projects command
 	static void		ListRecentJson		(xr_string& out);
 
+	// ---- the project browser's tile menu: Show in Explorer, Delete ----------
+	// A path is "listed" when _projects.ini names it. Only a listed folder is
+	// shown or deleted from here; the confirmation, the deletion and MCP all go
+	// through the same checks.
+	struct SDeleteFailure
+	{
+		xr_string	path;
+		xr_string	reason;
+	};
+	struct SDeleteInfo
+	{
+		xr_string	path;					// the folder, spelled as the list names it
+		xr_string	name;
+		xr_string	refused;				// why it is not deleted from here; empty = it may be
+		bool		missing		= false;	// no folder any more: only the list entry goes
+		// what the folder holds (the check) or what went (the deletion)
+		u32			files		= 0;
+		u32			folders		= 0;
+		u32			links		= 0;		// removed as links, never followed
+		u64			bytes		= 0;
+		bool		git			= false;	// a .git folder: the project's whole history
+		bool		releases	= false;	// releases\: packaged releases
+		u32			release_files = 0;
+		u64			release_bytes = 0;
+		xr_vector<xr_string>		nested;	// projects of their own below it
+		u32			nested_total = 0;
+		xr_vector<SDeleteFailure>	failed;	// what stayed behind, and why
+		u32			failed_total = 0;
+		bool		removed_from_list = false;
+	};
+	// Every check and a count of what the folder holds; deletes nothing
+	static bool		CheckDelete			(LPCSTR path, SDeleteInfo& info);
+	// Checks again, deletes the folder for good (never the Recycle Bin) and takes it
+	// off the list. A folder that is gone already only leaves the list. False on a
+	// refusal or when anything stayed behind - `info` names it, `err` sums it up.
+	static bool		DeleteProject		(LPCSTR path, SDeleteInfo& info, xr_string& err);
+	// Remove from List: only for an entry whose folder holds no project any more
+	static bool		ForgetProject		(LPCSTR path, xr_string& err);
+	// Show in Explorer: a listed folder that exists
+	static bool		RevealProject		(LPCSTR path, xr_string& err);
+	// MCP: project_reveal, project_delete, project_forget, project_browser_menu
+	static void		McpReveal			(LPCSTR raw, xr_string& out);
+	static void		McpDelete			(LPCSTR raw, xr_string& out);
+	static void		McpForget			(LPCSTR raw, xr_string& out);
+	static void		McpBrowserMenu		(LPCSTR raw, xr_string& out);
+
 private:
 	static void		Mount				();
 	static void		Unmount				();

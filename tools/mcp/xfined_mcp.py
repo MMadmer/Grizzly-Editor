@@ -96,7 +96,9 @@ TOOLS = [
     },
     {
         "name": "xfined_list_projects",
-        "description": "List recent projects (name + path) known to the editor.",
+        "description": "List recent projects known to the editor - the project browser's tiles: name, path and "
+                       "state: 'project', 'missing' (the folder is gone) or 'not_a_project' (the folder holds no "
+                       "project.ltx or mod.ltx any more).",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -107,6 +109,81 @@ TOOLS = [
             "type": "object",
             "properties": {"path": {"type": "string", "description": "project folder path"}},
             "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_project_reveal",
+        "description": "Show in Explorer, from the project browser's tile menu: opens a listed project's folder in "
+                       "Windows Explorer. Refuses a path that is not in the project list (xfined_list_projects) "
+                       "and a folder that does not exist any more. dry_run=true answers the folder it would open "
+                       "and opens no window.",
+        "annotations": {"title": "Show a project folder in Explorer", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "the project folder, as xfined_list_projects names it"},
+                "dry_run": {"type": "boolean", "description": "answer the folder, open no window (default false)"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_project_delete",
+        "description": "Delete a project from disk - the project browser's Delete... without its confirmation. "
+                       "PERMANENT: the folder is deleted for good, never to the Recycle Bin - its files, its git "
+                       "repository (.git: the whole history, anything never pushed included) and its packaged "
+                       "releases. The editor asks NOTHING on this path, so the permission is the caller's "
+                       "business: call it only when the user asked for exactly this deletion, and when they did "
+                       "not, ask them in the conversation first. The checks are the window's: only a folder in the "
+                       "project list (xfined_list_projects) that holds project.ltx or mod.ltx; never the open "
+                       "project, a link, a drive root, a folder that is or holds the user's profile, Documents or "
+                       "Desktop, the editor or a linked game, one inside the editor or a game, or one that holds "
+                       "another project - a refusal answers ok:false, refused:true and the reason in 'error', and "
+                       "deletes nothing. Inside, links go as links and are never followed; read-only files go too. "
+                       "A folder that does not exist any more is only taken off the list (missing:true). Answers "
+                       "deleted {files, folders, links, bytes}, git, releases, removed_from_list. When something "
+                       "could not be deleted (a file in use), ok:false, 'failed' names every entry, and the project "
+                       "stays in the list with its manifest, so a second call finishes it once the entry is free.",
+        "annotations": {"title": "Delete a project from disk", "readOnlyHint": False, "destructiveHint": True,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "the project folder, as xfined_list_projects names it"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_project_forget",
+        "description": "Remove from List, from the project browser's tile menu: takes an entry whose folder holds no "
+                       "project any more (state 'missing' or 'not_a_project' in xfined_list_projects) off the list. "
+                       "Nothing on disk changes. A folder that still holds a project is refused: it stays on the "
+                       "list, or goes with xfined_project_delete.",
+        "annotations": {"title": "Remove a project from the list", "readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "the folder, as xfined_list_projects names it"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "xfined_project_browser_menu",
+        "description": "Bring the project browser's tile menu or its Delete Project confirmation into view for "
+                       "xfined_screenshot_editor - to look at, never to act: nothing is shown in Explorer, deleted "
+                       "or taken off the list from here. show: 'menu' (the tile's right-click menu), 'confirm' "
+                       "(the confirmation, with what it would delete or why it refuses), 'none' (both go away); "
+                       "without 'show' it only reports. Works while the browser is on screen (no project open). "
+                       "Answers menu {path, shown, state, items [{label, enabled}]} and confirm {shown, view "
+                       "question|refused|result, reason, path, name, files, folders, links, bytes, git, releases, "
+                       "release_files, release_bytes, nested, failed}, null when not up; 'shown' turns true once a "
+                       "frame drew it - a screenshot draws the frames it needs.",
+        "annotations": {"title": "Show the project browser's tile menu or confirmation", "readOnlyHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "show": {"type": "string", "enum": ["menu", "confirm", "none"]},
+                "path": {"type": "string", "description": "the tile's project folder (menu, confirm)"},
+            },
         },
     },
     {
@@ -1996,6 +2073,10 @@ CMD_MAP = {
     "xfined_object_info": "object_info",
     "xfined_list_projects": "list_projects",
     "xfined_open_project": "open_project",
+    "xfined_project_reveal": "project_reveal",
+    "xfined_project_delete": "project_delete",
+    "xfined_project_forget": "project_forget",
+    "xfined_project_browser_menu": "project_browser_menu",
     "xfined_open_scene": "open_scene",
     "xfined_list_objects": "list_objects",
     "xfined_focus_object": "focus_object",

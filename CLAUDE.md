@@ -83,6 +83,48 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   because the splash exists before the editor window and awareness cannot be
   changed after the first window.
 
+## Project browser
+
+- A right click on a tile: **Show in Explorer** and **Delete...**. A tile whose
+  folder is gone, or holds no project.ltx / mod.ltx any more, stays on the list
+  (a drive that is not plugged in is not a project nobody wants), veiled, opens
+  nothing, and its menu offers **Remove from List** instead - no disk work, no
+  question. `list_projects` names every entry with its `state`.
+- **One set of checks, `EditorProject::CheckDelete`**, stands in front of the
+  confirmation, the deletion (`DeleteProject`, which checks again) and MCP alike:
+  only a folder `_projects.ini` lists that holds project.ltx or mod.ltx; never
+  the open project; never a link (refused, naming where it points - "delete it
+  where it really is"); never a drive root; never a folder that is or holds the
+  user's profile, Documents, Desktop, Downloads, AppData, Temp, Windows or
+  Program Files; never one that is, holds or lies inside the editor (the exe's
+  folder, `sdk_root`) or a game (`game_root` of any listed project or of the open
+  one, `[xms] export_target`); never one that holds ANOTHER project (a nested
+  project.ltx / mod.ltx, named; a crashed packaging's `temp\release_stage_*` is
+  the editor's own). Paths compare both as written and where they really are
+  (`GetFinalPathNameByHandle`). A folder inside that cannot be listed refuses the
+  whole deletion - it could hide a project.
+- The deletion is final (no Recycle Bin, like every deletion here). Inside, a
+  junction or symlink goes as a link and is never followed - a OneDrive
+  placeholder is a reparse point too but no link, so `IsReparseTagNameSurrogate`
+  decides; the read-only mark goes first, on the entry itself (git objects).
+  The manifests go LAST: a deletion that stops at a file in use leaves a project
+  that deletes again once the file is free; the answer names every entry that
+  stayed and the list keeps the project. Success means the folder is gone.
+  `EditorFileOps::Delete` keeps refusing the open project's root - a project is
+  deleted from the browser, never from inside itself.
+- The confirmation names what disappears - the project, its folder, files,
+  folders and size, the git repository (`.git`, the whole history) and
+  `releases\` when present, "Deleted for good - this cannot be undone." -
+  Cancel the default, Enter and Escape cancel. It is drawn INSIDE the browser's
+  own modal (a modal opened beside it would close it) and counts once, when it
+  opens. A tile that leaves the list hands its preview to `s_DeadPreviews`,
+  released on the next frame: the frame being drawn may still hold it.
+- MCP: `project_reveal` (`dry_run` opens nothing), `project_delete` (asks
+  nothing; the bridge tool carries `destructiveHint`), `project_forget`,
+  `project_browser_menu show=menu|confirm|none` (to look at, never to act).
+  QA: `tools/qa/test_project_browser.py [--shots <dir>]` works on throw-away
+  projects in a temp folder only and restores `_projects.ini` byte for byte.
+
 ## Game modes
 
 - **A mode is not the mod.** `[module] name` is the mod's title, the one the

@@ -866,6 +866,12 @@ static void Execute(SMCPRequest& r)
 			}
 		}
 	}
+	// the project browser's tile menu - Show in Explorer, Delete, Remove from List -
+	// and a way to bring the menu and the confirmation into view for a screenshot
+	else if (r.cmd == "project_reveal")			EditorProject::McpReveal(r.raw.c_str(), r.response);
+	else if (r.cmd == "project_delete")			EditorProject::McpDelete(r.raw.c_str(), r.response);
+	else if (r.cmd == "project_forget")			EditorProject::McpForget(r.raw.c_str(), r.response);
+	else if (r.cmd == "project_browser_menu")	EditorProject::McpBrowserMenu(r.raw.c_str(), r.response);
 	else if (r.cmd == "open_scene")
 	{
 		char scene[MAX_PATH];

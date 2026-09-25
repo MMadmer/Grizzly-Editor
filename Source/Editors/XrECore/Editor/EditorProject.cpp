@@ -15,6 +15,7 @@
 #endif
 #include <shobjidl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
 
@@ -23,17 +24,32 @@
 //------------------------------------------------------------------------------
 static const int kMaxRecent = 12;
 
+#if defined(USE_DX11)
+// the tile is drawn by ImGui, and ImGui binds a view, not a texture
+typedef ID3D11ShaderResourceView	TPreview;
+#else
+typedef IDirect3DTexture9			TPreview;
+#endif
+
+// What a recent entry is now: read when the list loads and again when its menu
+// opens. A folder that is gone stays on the list until the author takes it off -
+// a drive that is not plugged in is not a project nobody wants any more.
+enum ERecentState
+{
+	rsProject,		// the folder holds project.ltx or mod.ltx
+	rsMissing,		// the folder does not exist
+	rsNoProject,	// a folder with neither in it
+};
+// as list_projects and project_browser_menu name them
+static const char* kRecentStateNames[] = { "project", "missing", "not_a_project" };
+
 struct SRecentProject
 {
 	string_path				path;
 	string_path				name;
-#if defined(USE_DX11)
-	// the tile is drawn by ImGui, and ImGui binds a view, not a texture
-	ID3D11ShaderResourceView*	preview;
-#else
-	IDirect3DTexture9*		preview;
-#endif
+	TPreview*				preview;
 	bool					preview_tried;
+	ERecentState			state;
 };
 
 static char				s_AppRoot[MAX_PATH]	= {};
@@ -70,6 +86,19 @@ static char				s_LinkPath[MAX_PATH]	= {};
 static char				s_LinkChecked[MAX_PATH]	= {};
 static char				s_LinkHint[256]			= {};
 static bool				s_LinkHintOk			= false;
+// ---- the tile menu and the Delete Project confirmation ------------------------
+static string_path		s_MenuFor				= {};	// MCP: put up this tile's menu on the next frame
+static bool				s_MenuClose				= false;	// MCP: take any tile menu down on the next frame
+static string_path		s_MenuShown				= {};	// the tile whose menu the last frame drew
+static string_path		s_ForgetPending			= {};	// Remove from List, applied once the tiles are drawn
+static bool				s_DeleteWant			= false;
+static bool				s_DeleteClosing			= false;	// MCP took it down: one more Begin closes it in ImGui too
+static bool				s_DeleteShown			= false;	// the last frame drew the confirmation
+static bool				s_DeleteDone			= false;	// a deletion ran and left something: its result is up
+static EditorProject::SDeleteInfo	s_DeletePlan;
+static EditorProject::SDeleteInfo	s_DeleteResult;
+// previews of tiles that left the list: the frame that drew them may still hold them
+static xr_vector<TPreview*>	s_DeadPreviews;
 
 // aliases whose writes must land inside the project; second column is the
 // project-relative directory they get remounted to
@@ -130,6 +159,12 @@ static bool DirExists(const char* p)
 {
 	DWORD a = ::GetFileAttributesA(p);
 	return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static ERecentState RecentState(const char* folder)
+{
+	if (!DirExists(folder))	return rsMissing;
+	return HasManifest(folder) ? rsProject : rsNoProject;
 }
 
 static bool SamePath(LPCSTR left, LPCSTR right)
@@ -256,7 +291,7 @@ void EditorProject::LoadRecent()
 		sprintf_s(key, "p%d", i);
 		string_path v = {};
 		::GetPrivateProfileStringA("recent", key, "", v, sizeof(v), ini);
-		if (v[0] && DirExists(v) && HasManifest(v))
+		if (v[0])
 		{
 			SRecentProject& r = s_Recent[s_RecentCount++];
 			xr_strcpy(r.path, v);
@@ -264,6 +299,7 @@ void EditorProject::LoadRecent()
 			xr_strcpy(r.name, leaf ? leaf + 1 : v);
 			r.preview = 0;
 			r.preview_tried = false;
+			r.state = RecentState(v);
 		}
 	}
 	::GetPrivateProfileStringA("recent", "create_parent", "", s_NewParent, sizeof(s_NewParent), ini);
@@ -618,15 +654,16 @@ void EditorProject::ListRecentJson(xr_string& out)
 		sprintf_s(key, "p%d", i);
 		string_path v = {};
 		::GetPrivateProfileStringA("recent", key, "", v, sizeof(v), ini);
-		if (!v[0] || !DirExists(v) || !HasManifest(v)) continue;
+		if (!v[0]) continue;
+		// every entry the browser shows a tile for, a folder that is gone included
 		const char* leaf = strrchr(v, '\\');
-		char path[MAX_PATH];
-		u32 o = 0;
-		for (const char* p = v; *p && o + 2 < sizeof(path); ++p) path[o++] = (*p == '\\') ? '/' : *p;
-		path[o] = 0;
-		char tmp[MAX_PATH * 2];
-		sprintf_s(tmp, "%s{\"name\":\"%s\",\"path\":\"%s\"}", first ? "" : ",", leaf ? leaf + 1 : v, path);
-		out += tmp;
+		out += first ? "{\"name\":\"" : ",{\"name\":\"";
+		EditorGameContent::JsonAppendPath(out, leaf ? leaf + 1 : v);
+		out += "\",\"path\":\"";
+		EditorGameContent::JsonAppendPath(out, v);
+		out += "\",\"state\":\"";
+		out += kRecentStateNames[RecentState(v)];
+		out += "\"}";
 		first = false;
 	}
 	out += "]";
@@ -875,6 +912,1115 @@ void EditorProject::ReleasePreviews()
 	}
 }
 
+static void ReleaseDeadPreviews()
+{
+	for (u32 i = 0; i < s_DeadPreviews.size(); ++i)
+		s_DeadPreviews[i]->Release();
+	s_DeadPreviews.clear();
+}
+
+//------------------------------------------------------------------------------
+// the tile menu: Show in Explorer, Delete, Remove from List
+//
+// A deletion is final - no Recycle Bin, like every deletion of the editor - so
+// one set of checks stands in front of it, the same for the confirmation, the
+// deletion itself and MCP: only a listed folder that is a project, never the
+// open one, never a link, never a drive root or a folder that is or holds the
+// user's own folders, the editor or a game, never one inside the editor or a
+// game, and never one that holds another project. Inside, a link goes as a
+// link and is never followed, and the manifests go last: a deletion that stops
+// half way leaves a project that can be deleted again.
+//------------------------------------------------------------------------------
+// X:\... or \\server\share\... - a relative path would be read against the
+// process's working directory, which is nobody's project
+static bool IsAbsolutePath(LPCSTR p)
+{
+	if (!p || !p[0]) return false;
+	if (('\\' == p[0] || '/' == p[0]) && ('\\' == p[1] || '/' == p[1])) return true;
+	return 0 != isalpha(u8(p[0])) && ':' == p[1] && ('\\' == p[2] || '/' == p[2]);
+}
+
+// separators, "." and ".." resolved; no trailing separator but a drive root's
+static xr_string FullPath(LPCSTR path)
+{
+	char buf[MAX_PATH * 2];
+	const DWORD n = ::GetFullPathNameA(path, sizeof(buf), buf, NULL);
+	if (!n || n >= sizeof(buf)) return xr_string();
+	for (char* p = buf; *p; ++p) if ('/' == *p) *p = '\\';
+	xr_string out = buf;
+	while (out.size() > 3 && '\\' == out.back()) out.pop_back();
+	return out;
+}
+
+// Where a folder really is - links, junctions and 8.3 names resolved - so two
+// spellings of one place compare equal. Empty when it cannot be opened.
+static xr_string RealPath(LPCSTR path)
+{
+	HANDLE h = ::CreateFileA(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (INVALID_HANDLE_VALUE == h) return xr_string();
+	char buf[MAX_PATH * 4];
+	const DWORD n = ::GetFinalPathNameByHandleA(h, buf, sizeof(buf), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+	::CloseHandle(h);
+	if (!n || n >= sizeof(buf)) return xr_string();
+	xr_string out = buf;
+	if (0 == out.compare(0, 8, "\\\\?\\UNC\\"))	out = "\\\\" + out.substr(8);
+	else if (0 == out.compare(0, 4, "\\\\?\\"))	out.erase(0, 4);
+	while (out.size() > 3 && '\\' == out.back()) out.pop_back();
+	return out;
+}
+
+// `path` is `folder` or lies below it; both normalised
+static bool SameOrBelow(const xr_string& path, const xr_string& folder)
+{
+	if (path.empty() || folder.empty() || path.size() < folder.size())	return false;
+	if (0 != _strnicmp(path.c_str(), folder.c_str(), folder.size()))		return false;
+	return path.size() == folder.size() || '\\' == path[folder.size()] || '\\' == folder.back();
+}
+
+static LPCSTR LeafOf(LPCSTR path)
+{
+	LPCSTR cut = strrchr(path, '\\');
+	return cut ? cut + 1 : path;
+}
+
+// the folders _projects.ini names, spelled as it has them
+static void ListedFolders(xr_vector<xr_string>& out)
+{
+	char ini[MAX_PATH];
+	RecentIni(ini, sizeof(ini));
+	for (int i = 0; i < kMaxRecent; ++i)
+	{
+		char key[16];
+		sprintf_s(key, "p%d", i);
+		string_path v = {};
+		::GetPrivateProfileStringA("recent", key, "", v, sizeof(v), ini);
+		if (v[0]) out.push_back(v);
+	}
+}
+
+static bool FindListed(LPCSTR path, xr_string& listed)
+{
+	if (!IsAbsolutePath(path)) return false;
+	xr_vector<xr_string> all;
+	ListedFolders(all);
+	for (u32 i = 0; i < all.size(); ++i)
+		if (SamePath(all[i].c_str(), path))
+		{
+			listed = all[i];
+			return true;
+		}
+	return false;
+}
+
+// Takes a folder off the list: the file and the tiles alike
+static void ForgetRecent(LPCSTR path)
+{
+	char ini[MAX_PATH];
+	RecentIni(ini, sizeof(ini));
+	xr_vector<xr_string> all, keep;
+	ListedFolders(all);
+	for (u32 i = 0; i < all.size(); ++i)
+		if (!SamePath(all[i].c_str(), path)) keep.push_back(all[i]);
+	for (int i = 0; i < kMaxRecent; ++i)
+	{
+		char key[16];
+		sprintf_s(key, "p%d", i);
+		::WritePrivateProfileStringA("recent", key, i < int(keep.size()) ? keep[i].c_str() : "", ini);
+	}
+
+	int kept = 0;
+	for (int i = 0; i < s_RecentCount; ++i)
+	{
+		if (SamePath(s_Recent[i].path, path))
+		{
+			if (s_Recent[i].preview) s_DeadPreviews.push_back(s_Recent[i].preview);
+			continue;
+		}
+		if (kept != i) s_Recent[kept] = s_Recent[i];
+		++kept;
+	}
+	s_RecentCount = kept;
+}
+
+// A place no deletion may take with it: the folder itself and anything holding
+// it, and for the editor and the games anything inside it as well
+struct SGuard
+{
+	xr_string	path;
+	xr_string	real;
+	xr_string	what;
+	bool		inside;
+};
+
+static void AddGuard(xr_vector<SGuard>& guards, LPCSTR path, const xr_string& what, bool inside)
+{
+	if (!IsAbsolutePath(path)) return;
+	SGuard g;
+	g.path = FullPath(path);
+	if (g.path.empty()) return;
+	g.real		= RealPath(g.path.c_str());
+	g.what		= what;
+	g.inside	= inside;
+	guards.push_back(g);
+}
+
+static void AddKnownFolder(xr_vector<SGuard>& guards, REFKNOWNFOLDERID id, LPCSTR what)
+{
+	PWSTR wide = 0;
+	if (SUCCEEDED(::SHGetKnownFolderPath(id, 0, 0, &wide)) && wide)
+	{
+		char path[MAX_PATH * 2];
+		if (::WideCharToMultiByte(CP_ACP, 0, wide, -1, path, sizeof(path), 0, 0) > 0)
+			AddGuard(guards, path, what, false);
+	}
+	if (wide) ::CoTaskMemFree(wide);
+}
+
+static void GatherGuards(xr_vector<SGuard>& guards)
+{
+	ResolveAppRoot();
+	char exe[MAX_PATH] = {};
+	::GetModuleFileNameA(NULL, exe, sizeof(exe));
+	if (char* cut = strrchr(exe, '\\')) *cut = 0;
+	AddGuard(guards, exe, "the editor", true);
+	AddGuard(guards, s_AppRoot, "the editor", true);
+	AddKnownFolder(guards, FOLDERID_Profile, "your user profile");
+	AddKnownFolder(guards, FOLDERID_Documents, "your Documents folder");
+	AddKnownFolder(guards, FOLDERID_Desktop, "your Desktop");
+	AddKnownFolder(guards, FOLDERID_Downloads, "your Downloads folder");
+	AddKnownFolder(guards, FOLDERID_LocalAppData, "your AppData folder");
+	AddKnownFolder(guards, FOLDERID_RoamingAppData, "your AppData folder");
+	AddKnownFolder(guards, FOLDERID_Windows, "the Windows folder");
+	AddKnownFolder(guards, FOLDERID_ProgramFiles, "Program Files");
+	AddKnownFolder(guards, FOLDERID_ProgramFilesX86, "Program Files (x86)");
+	char temp[MAX_PATH + 1] = {};
+	if (::GetTempPathA(sizeof(temp), temp)) AddGuard(guards, temp, "the Temp folder", false);
+	if (s_Active && s_GameRoot[0])
+		AddGuard(guards, s_GameRoot, "the game the open project is linked to", true);
+
+	// what every listed project points at: its game, its editor, where it builds to
+	xr_vector<xr_string> listed;
+	ListedFolders(listed);
+	for (u32 i = 0; i < listed.size(); ++i)
+	{
+		const xr_string manifest = listed[i] + "\\project.ltx";
+		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(manifest.c_str())) continue;
+		const xr_string of = xr_string(" of the project ") + LeafOf(listed[i].c_str());
+		string_path v;
+		::GetPrivateProfileStringA("project", "game_root", "", v, sizeof(v), manifest.c_str());
+		AddGuard(guards, v, "the linked game" + of, true);
+		::GetPrivateProfileStringA("project", "sdk_root", "", v, sizeof(v), manifest.c_str());
+		AddGuard(guards, v, "the editor" + of, true);
+		::GetPrivateProfileStringA("xms", "export_target", "", v, sizeof(v), manifest.c_str());
+		AddGuard(guards, v, "the export target" + of, true);
+	}
+}
+
+// A junction or a symbolic link points at somebody's real folder. Other reparse
+// points - a OneDrive placeholder - are ordinary files and folders.
+static bool IsLink(DWORD attributes, DWORD tag)
+{
+	return (attributes & FILE_ATTRIBUTE_REPARSE_POINT) && IsReparseTagNameSurrogate(tag);
+}
+
+static bool IsManifestName(LPCSTR name)
+{
+	return 0 == _stricmp(name, "project.ltx") || 0 == _stricmp(name, "mod.ltx");
+}
+
+struct SDirEntry
+{
+	xr_string	name;
+	DWORD		attributes;
+	bool		link;
+	u64			size;
+};
+
+// One folder's entries, read in full before anything in it is touched. False when
+// the listing does not reach its end: a folder read half way hides what is there.
+static bool ListFolder(const xr_string& dir, xr_vector<SDirEntry>& out, DWORD& error)
+{
+	out.clear();
+	error = 0;
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA((dir + "\\*").c_str(), &fd);
+	if (INVALID_HANDLE_VALUE == h)
+	{
+		error = ::GetLastError();
+		return false;
+	}
+	do
+	{
+		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+		SDirEntry e;
+		e.name			= fd.cFileName;
+		e.attributes	= fd.dwFileAttributes;
+		e.link			= IsLink(fd.dwFileAttributes, fd.dwReserved0);
+		e.size			= (u64(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+		out.push_back(e);
+	} while (::FindNextFileA(h, &fd));
+	error = ::GetLastError();
+	::FindClose(h);
+	if (ERROR_NO_MORE_FILES != error) return false;
+	error = 0;
+	return true;
+}
+
+// a crashed packaging leaves its stage in temp\ - a copy of the module, no project
+static bool IsReleaseStage(const xr_string& root, const xr_string& dir)
+{
+	static const char stage[] = "\\temp\\release_stage_";
+	const size_t n = sizeof(stage) - 1;
+	return dir.size() > root.size() + n && 0 == _strnicmp(dir.c_str() + root.size(), stage, n);
+}
+
+struct SScan
+{
+	EditorProject::SDeleteInfo&	info;
+	xr_string					root;
+	xr_string					unreadable;
+	DWORD						error;
+};
+
+// counts what the folder holds and finds the projects of their own below it;
+// a link is counted, never entered
+static bool ScanFolder(SScan& s, const xr_string& dir, bool in_releases)
+{
+	xr_vector<SDirEntry> entries;
+	DWORD error = 0;
+	if (!ListFolder(dir, entries, error))
+	{
+		s.unreadable	= dir;
+		s.error			= error;
+		return false;
+	}
+	++s.info.folders;
+	const bool root = dir.size() == s.root.size();
+	bool manifest = false;
+	for (u32 i = 0; i < entries.size(); ++i)
+	{
+		const SDirEntry& e = entries[i];
+		if (e.link)
+		{
+			++s.info.links;
+			continue;
+		}
+		if (e.attributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			const bool releases = in_releases || (root && 0 == _stricmp(e.name.c_str(), "releases"));
+			if (root && 0 == _stricmp(e.name.c_str(), ".git"))	s.info.git = true;
+			if (root && releases)								s.info.releases = true;
+			if (!ScanFolder(s, dir + "\\" + e.name, releases))	return false;
+			continue;
+		}
+		++s.info.files;
+		s.info.bytes += e.size;
+		if (in_releases)
+		{
+			++s.info.release_files;
+			s.info.release_bytes += e.size;
+		}
+		if (!root && IsManifestName(e.name.c_str())) manifest = true;
+	}
+	if (manifest && !IsReleaseStage(s.root, dir))
+	{
+		++s.info.nested_total;
+		if (s.info.nested.size() < 16) s.info.nested.push_back(dir);
+	}
+	return true;
+}
+
+static xr_string Win32Text(const xr_string& what, DWORD code)
+{
+	char tail[32];
+	sprintf_s(tail, " (win32 %lu)", code);
+	return what + tail;
+}
+
+static xr_string FailReason(DWORD code)
+{
+	switch (code)
+	{
+	case ERROR_SHARING_VIOLATION:
+	case ERROR_LOCK_VIOLATION:	return Win32Text("in use by another program", code);
+	case ERROR_ACCESS_DENIED:	return Win32Text("access denied", code);
+	case ERROR_DIR_NOT_EMPTY:	return Win32Text("the folder is not empty", code);
+	default:					return Win32Text("cannot be deleted", code);
+	}
+}
+
+static void NoteFailure(EditorProject::SDeleteInfo& info, const xr_string& path, const xr_string& reason)
+{
+	++info.failed_total;
+	if (info.failed.size() >= 32) return;
+	EditorProject::SDeleteFailure f;
+	f.path		= path;
+	f.reason	= reason;
+	info.failed.push_back(f);
+}
+
+// The read-only mark goes first (git keeps its objects read-only) - on the entry
+// itself, never on what a link points at
+static void MakeWritable(const xr_string& path, DWORD attributes, bool link)
+{
+	if (INVALID_FILE_ATTRIBUTES == attributes || !(attributes & FILE_ATTRIBUTE_READONLY)) return;
+	const DWORD settable = FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_ARCHIVE |
+						   FILE_ATTRIBUTE_TEMPORARY | FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+	DWORD keep = attributes & settable & ~FILE_ATTRIBUTE_READONLY;
+	if (!keep) keep = FILE_ATTRIBUTE_NORMAL;
+	if (!link)
+	{
+		::SetFileAttributesA(path.c_str(), keep);
+		return;
+	}
+	HANDLE h = ::CreateFileA(path.c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	if (INVALID_HANDLE_VALUE == h) return;
+	FILE_BASIC_INFO basic = {};
+	basic.FileAttributes = keep;
+	::SetFileInformationByHandle(h, FileBasicInfo, &basic, sizeof(basic));
+	::CloseHandle(h);
+}
+
+// A scanner or an indexer that opened a file a moment ago lets go of it shortly,
+// and a folder whose last entry is still being let go of reads as not empty
+static bool DeleteEntry(const xr_string& path, bool folder, DWORD& error)
+{
+	for (int attempt = 0;; ++attempt)
+	{
+		if (folder ? ::RemoveDirectoryA(path.c_str()) : ::DeleteFileA(path.c_str())) return true;
+		error = ::GetLastError();
+		if (ERROR_FILE_NOT_FOUND == error || ERROR_PATH_NOT_FOUND == error) return true;
+		const bool passing = ERROR_SHARING_VIOLATION == error || ERROR_LOCK_VIOLATION == error ||
+							 ERROR_ACCESS_DENIED == error || (folder && ERROR_DIR_NOT_EMPTY == error);
+		if (!passing || attempt >= 5) return false;
+		::Sleep(30);
+	}
+}
+
+// Empties `dir` and removes it. At the root the manifests are handed back and the
+// folder stays: the caller finishes both once everything else is gone.
+static bool WipeFolder(const xr_string& dir, DWORD dir_attributes, EditorProject::SDeleteInfo& info,
+					   xr_vector<SDirEntry>* root_manifests)
+{
+	xr_vector<SDirEntry> entries;
+	DWORD error = 0;
+	if (!ListFolder(dir, entries, error))
+	{
+		NoteFailure(info, dir, Win32Text("cannot be read", error));
+		return false;
+	}
+	bool all = true;
+	for (u32 i = 0; i < entries.size(); ++i)
+	{
+		const SDirEntry& e = entries[i];
+		const xr_string path = dir + "\\" + e.name;
+		const bool folder = 0 != (e.attributes & FILE_ATTRIBUTE_DIRECTORY);
+		if (root_manifests && !folder && !e.link && IsManifestName(e.name.c_str()))
+		{
+			root_manifests->push_back(e);
+			continue;
+		}
+		if (folder && !e.link)
+		{
+			if (!WipeFolder(path, e.attributes, info, 0)) all = false;
+			continue;
+		}
+		MakeWritable(path, e.attributes, e.link);
+		if (DeleteEntry(path, folder, error))
+		{
+			if (e.link)	++info.links;
+			else
+			{
+				++info.files;
+				info.bytes += e.size;
+			}
+			continue;
+		}
+		NoteFailure(info, path, e.link ? Win32Text("the link cannot be removed", error) : FailReason(error));
+		all = false;
+	}
+	if (root_manifests)	return all;
+	// what stayed inside is named already, and keeps this folder from going anyway
+	if (!all)			return false;
+	MakeWritable(dir, dir_attributes, false);
+	if (DeleteEntry(dir, true, error))
+	{
+		++info.folders;
+		return true;
+	}
+	NoteFailure(info, dir, FailReason(error));
+	return false;
+}
+
+bool EditorProject::CheckDelete(LPCSTR path, SDeleteInfo& info)
+{
+	info = SDeleteInfo();
+	info.path = path ? path : "";
+	if (!IsAbsolutePath(path))
+	{
+		info.refused = "Name the project by the full path of its folder.";
+		return false;
+	}
+	xr_string listed;
+	const bool on_list = FindListed(path, listed);
+	info.path = on_list ? listed : FullPath(path);
+	info.name = LeafOf(info.path.c_str());
+
+	// gone already: the list entry is all there is to remove
+	const DWORD attributes = ::GetFileAttributesA(info.path.c_str());
+	if (INVALID_FILE_ATTRIBUTES == attributes)
+	{
+		if (!on_list)
+		{
+			info.refused = "There is no such folder, and it is not in the project list.";
+			return false;
+		}
+		info.missing = true;
+		return true;
+	}
+	if (!(attributes & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		info.refused = "It is a file, not a project folder.";
+		return false;
+	}
+	// a link: the folder it points at is deleted - if at all - where it really is
+	WIN32_FIND_DATAA self;
+	HANDLE find = ::FindFirstFileA(info.path.c_str(), &self);
+	const bool link = INVALID_HANDLE_VALUE != find ? IsLink(self.dwFileAttributes, self.dwReserved0)
+												   : 0 != (attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+	if (INVALID_HANDLE_VALUE != find) ::FindClose(find);
+	if (link)
+	{
+		const xr_string target = RealPath(info.path.c_str());
+		if (target.empty())	info.refused = "The project folder is a link whose target cannot be reached. Remove the link where it is.";
+		else				info.refused = "The project folder is a link to " + target + ". Delete the project where it really is.";
+		return false;
+	}
+	if (!HasManifest(info.path.c_str()))
+	{
+		info.refused = "It holds no project.ltx or mod.ltx - it is not a project.";
+		return false;
+	}
+	if (!on_list)
+	{
+		info.refused = "It is not in the project list - only a listed project is deleted from here.";
+		return false;
+	}
+
+	const xr_string full = FullPath(info.path.c_str());
+	const xr_string real = RealPath(info.path.c_str());
+	if (s_Active && (SamePath(s_Project, info.path.c_str()) || (!real.empty() && 0 == _stricmp(real.c_str(), RealPath(s_Project).c_str()))))
+	{
+		info.refused = "It is the open project. Close it first: File > Project > Switch Project...";
+		return false;
+	}
+	char volume[MAX_PATH * 2] = {};
+	if (::GetVolumePathNameA(full.c_str(), volume, sizeof(volume)))
+	{
+		xr_string root = volume;
+		while (root.size() > 3 && '\\' == root.back()) root.pop_back();
+		if (0 == _stricmp(root.c_str(), full.c_str()) || (!real.empty() && 0 == _stricmp(root.c_str(), real.c_str())))
+		{
+			info.refused = "It is the root of a drive.";
+			return false;
+		}
+	}
+	xr_vector<SGuard> guards;
+	GatherGuards(guards);
+	for (u32 i = 0; i < guards.size(); ++i)
+	{
+		const SGuard& g = guards[i];
+		const bool known = !real.empty() && !g.real.empty();
+		const bool same = 0 == _stricmp(g.path.c_str(), full.c_str()) || (known && 0 == _stricmp(g.real.c_str(), real.c_str()));
+		const bool holds = SameOrBelow(g.path, full) || (known && SameOrBelow(g.real, real));
+		const bool within = g.inside && (SameOrBelow(full, g.path) || (known && SameOrBelow(real, g.real)));
+		if (same || holds)
+		{
+			info.refused = (same ? "It is " : "It holds ") + g.what + ": " + g.path + ".";
+			return false;
+		}
+		if (within)
+		{
+			info.refused = "It lies inside " + g.what + ": " + g.path + ".";
+			return false;
+		}
+	}
+
+	SScan scan = { info, info.path, xr_string(), 0 };
+	if (!ScanFolder(scan, info.path, false))
+	{
+		info.refused = Win32Text("A folder inside cannot be read: " + scan.unreadable, scan.error) + ".";
+		return false;
+	}
+	if (info.nested_total)
+	{
+		char head[96];
+		if (1 == info.nested_total)	sprintf_s(head, "It holds another project: ");
+		else						sprintf_s(head, "It holds %u other projects, among them ", info.nested_total);
+		info.refused = head + info.nested[0] + ".";
+		return false;
+	}
+	return true;
+}
+
+bool EditorProject::DeleteProject(LPCSTR path, SDeleteInfo& info, xr_string& err)
+{
+	err.clear();
+	if (!CheckDelete(path, info))
+	{
+		err = info.refused;
+		return false;
+	}
+	if (info.missing)
+	{
+		ForgetRecent(info.path.c_str());
+		info.removed_from_list = true;
+		Msg("* Project list: %s removed, the folder does not exist any more", info.path.c_str());
+		return true;
+	}
+
+	// the check counted what is there; from here on the numbers are what went
+	SDeleteInfo done;
+	done.path			= info.path;
+	done.name			= info.name;
+	done.git			= info.git;
+	done.releases		= info.releases;
+	done.release_files	= info.release_files;
+	done.release_bytes	= info.release_bytes;
+	const DWORD root_attributes = ::GetFileAttributesA(info.path.c_str());
+	xr_vector<SDirEntry> manifests;
+	DWORD error = 0;
+	if (WipeFolder(info.path, root_attributes, done, &manifests))
+	{
+		for (u32 i = 0; i < manifests.size(); ++i)
+		{
+			const xr_string file = info.path + "\\" + manifests[i].name;
+			MakeWritable(file, manifests[i].attributes, false);
+			if (DeleteEntry(file, false, error))
+			{
+				++done.files;
+				done.bytes += manifests[i].size;
+			}
+			else NoteFailure(done, file, FailReason(error));
+		}
+		if (!done.failed_total)
+		{
+			MakeWritable(info.path, root_attributes, false);
+			if (DeleteEntry(info.path, true, error))	++done.folders;
+			else										NoteFailure(done, info.path, FailReason(error));
+		}
+	}
+	// never a success for a folder that is still there
+	if (!done.failed_total && INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(info.path.c_str()))
+		NoteFailure(done, info.path, "the folder is still there");
+	info = done;
+
+	if (info.failed_total)
+	{
+		char tmp[160];
+		sprintf_s(tmp, "Not deleted completely: %u %s stayed behind, so the project stays in the list.",
+			info.failed_total, 1 == info.failed_total ? "entry" : "entries");
+		err = tmp;
+		Msg("! Project %s not deleted completely: %u entries stayed behind, the first: %s (%s)", info.path.c_str(),
+			info.failed_total, info.failed[0].path.c_str(), info.failed[0].reason.c_str());
+		return false;
+	}
+	ForgetRecent(info.path.c_str());
+	info.removed_from_list = true;
+	Msg("* Project deleted: %s (%u files, %u folders, %u links)", info.path.c_str(), info.files, info.folders, info.links);
+	return true;
+}
+
+bool EditorProject::ForgetProject(LPCSTR path, xr_string& err)
+{
+	xr_string listed;
+	if (!FindListed(path, listed))
+	{
+		err = "It is not in the project list.";
+		return false;
+	}
+	if (rsProject == RecentState(listed.c_str()))
+	{
+		err = "The folder still holds a project, so it stays in the list.";
+		return false;
+	}
+	ForgetRecent(listed.c_str());
+	return true;
+}
+
+// the folder Show in Explorer opens: a listed one that is there
+static bool RevealTarget(LPCSTR path, xr_string& folder, xr_string& err)
+{
+	if (!FindListed(path, folder))
+	{
+		err = "It is not in the project list - only a listed project is shown from here.";
+		return false;
+	}
+	if (!DirExists(folder.c_str()))
+	{
+		err = "The folder does not exist any more.";
+		return false;
+	}
+	return true;
+}
+
+bool EditorProject::RevealProject(LPCSTR path, xr_string& err)
+{
+	xr_string folder;
+	if (!RevealTarget(path, folder, err)) return false;
+	while (folder.size() > 3 && '\\' == folder.back()) folder.pop_back();
+	// quoted, a path with spaces being the normal case; a drive root needs no quotes
+	// and would read its own trailing separator as an escaped quote
+	xr_string args = folder;
+	if ('\\' != folder.back()) args = "\"" + folder + "\"";
+	const INT_PTR code = (INT_PTR)::ShellExecuteA(NULL, "open", "explorer.exe", args.c_str(), NULL, SW_SHOWNORMAL);
+	if (code > 32) return true;
+	char tmp[96];
+	sprintf_s(tmp, "Windows did not start Explorer (code %d).", int(code));
+	err = tmp;
+	return false;
+}
+
+static void Hint(LPCSTR text)
+{
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		ImGui::SetTooltip("%s", text);
+}
+
+static LPCSTR StateText(ERecentState state)
+{
+	return rsMissing == state ? "Folder not found" : rsNoProject == state ? "No project in this folder" : "";
+}
+
+static xr_string SizeText(u64 bytes)
+{
+	char tmp[64];
+	if (bytes < 1024)				sprintf_s(tmp, "%llu bytes", bytes);
+	else if (bytes < (1ull << 20))	sprintf_s(tmp, "%.1f KB", double(bytes) / 1024.0);
+	else if (bytes < (1ull << 30))	sprintf_s(tmp, "%.1f MB", double(bytes) / 1048576.0);
+	else							sprintf_s(tmp, "%.2f GB", double(bytes) / 1073741824.0);
+	return tmp;
+}
+
+static xr_string CountText(u32 n, LPCSTR one, LPCSTR many)
+{
+	char tmp[64];
+	sprintf_s(tmp, "%u %s", n, 1 == n ? one : many);
+	return tmp;
+}
+
+static void OpenDeleteConfirm(LPCSTR path)
+{
+	EditorProject::CheckDelete(path, s_DeletePlan);
+	s_DeleteResult	= EditorProject::SDeleteInfo();
+	s_DeleteDone	= false;
+	s_DeleteClosing	= false;
+	s_DeleteWant	= true;
+}
+
+static void DrawTileMenu(SRecentProject& r, const ImVec2& at)
+{
+	// MCP puts the menu up the way a right click does - see McpBrowserMenu
+	if (s_MenuFor[0] && 0 == _stricmp(s_MenuFor, r.path))
+	{
+		s_MenuFor[0] = 0;
+		ImGui::OpenPopup("##menu");
+		ImGui::SetNextWindowPos(at);
+	}
+	if (!ImGui::BeginPopupContextItem("##menu"))
+		return;
+	if (s_MenuClose)
+	{
+		ImGui::CloseCurrentPopup();
+		ImGui::EndPopup();
+		return;
+	}
+	// the folder may have gone since the list was read
+	if (ImGui::IsWindowAppearing()) r.state = RecentState(r.path);
+	strncpy_s(s_MenuShown, sizeof(s_MenuShown), r.path, _TRUNCATE);
+
+	ImGui::BeginDisabled(rsMissing == r.state);
+	if (ImGui::MenuItem("Show in Explorer"))
+	{
+		xr_string err;
+		if (!EditorProject::RevealProject(r.path, err)) Msg("! Show in Explorer: %s", err.c_str());
+	}
+	ImGui::EndDisabled();
+	Hint(rsMissing == r.state ? "The folder does not exist any more." : "Opens the project folder in Windows Explorer.");
+	ImGui::Separator();
+	if (rsProject == r.state)
+	{
+		if (ImGui::MenuItem("Delete...")) OpenDeleteConfirm(r.path);
+		Hint("Deletes the project folder from disk for good. Asks first, naming what goes.");
+	}
+	else
+	{
+		if (ImGui::MenuItem("Remove from List")) strncpy_s(s_ForgetPending, sizeof(s_ForgetPending), r.path, _TRUNCATE);
+		Hint(rsMissing == r.state ? "Takes the project off this list. Its folder is gone already."
+								  : "Takes the folder off this list. It holds no project.ltx or mod.ltx any more; nothing on disk changes.");
+	}
+	ImGui::EndPopup();
+}
+
+static const char* kTitleDelete = "XFined Editor - Delete Project";
+
+// Drawn inside the browser's own modal: a modal opened next to it would close it
+static void DrawDeleteConfirm()
+{
+	// Taken down from outside, the modal still sits in ImGui's popup stack and would
+	// keep the browser under it blocked: a Begin with p_open false closes it there
+	if (!s_DeleteWant && !s_DeleteClosing) return;
+	if (!ImGui::BeginPopupModal(kTitleDelete, &s_DeleteWant, ImGuiWindowFlags_AlwaysAutoResize, s_DeleteWant))
+	{
+		s_DeleteClosing = false;
+		return;
+	}
+	s_DeleteShown = true;
+
+	const EditorProject::SDeleteInfo& d = s_DeleteDone ? s_DeleteResult : s_DeletePlan;
+	char name[MAX_PATH * 3], path[MAX_PATH * 3], line[MAX_PATH * 3];
+	AcpToUtf8(d.name.c_str(), name, sizeof(name));
+	AcpToUtf8(d.path.c_str(), path, sizeof(path));
+	const ImVec4 warn(1.f, 0.8f, 0.3f, 1.f);
+	const xr_string held = CountText(d.files, "file", "files") + " in " + CountText(d.folders, "folder", "folders") + ", " + SizeText(d.bytes);
+	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.f);
+
+	bool confirm = false;
+	const bool question = !s_DeleteDone && d.refused.empty() && !d.missing;
+	if (question)
+	{
+		ImGui::Text("Delete the project \"%s\" from disk?", name);
+		ImGui::TextDisabled("%s", path);
+		ImGui::Spacing();
+		ImGui::TextUnformatted("What goes:");
+		ImGui::BulletText("%s", held.c_str());
+		if (d.git)		ImGui::BulletText(".git - the git repository, with the project's whole history");
+		if (d.releases)	ImGui::BulletText("releases\\ - the files of published releases: %s, %s",
+							CountText(d.release_files, "file", "files").c_str(), SizeText(d.release_bytes).c_str());
+		if (d.links)	ImGui::BulletText("%s - removed as links; what they point at stays", CountText(d.links, "link", "links").c_str());
+		ImGui::Spacing();
+		ImGui::TextColored(warn, "Deleted for good - this cannot be undone.");
+	}
+	else if (s_DeleteDone && d.refused.empty())
+	{
+		ImGui::Text("The project \"%s\" was not deleted completely.", name);
+		ImGui::TextDisabled("%s", path);
+		ImGui::Spacing();
+		ImGui::Text("Deleted: %s. What stayed:", held.c_str());
+		for (u32 i = 0; i < d.failed.size(); ++i)
+		{
+			AcpToUtf8(d.failed[i].path.c_str(), line, sizeof(line));
+			ImGui::BulletText("%s - %s", line, d.failed[i].reason.c_str());
+		}
+		if (d.failed_total > d.failed.size())
+			ImGui::BulletText("and %u more", d.failed_total - u32(d.failed.size()));
+		ImGui::Spacing();
+		ImGui::TextUnformatted("The project stays in the list. Close whatever holds these files, then delete it again.");
+	}
+	else if (d.missing)
+	{
+		ImGui::Text("The folder of the project \"%s\" does not exist any more.", name);
+		ImGui::TextDisabled("%s", path);
+		ImGui::TextUnformatted("Nothing was deleted. Remove from List in its menu takes it off the list.");
+	}
+	else
+	{
+		ImGui::Text("The project \"%s\" cannot be deleted from here.", name);
+		ImGui::TextDisabled("%s", path);
+		ImGui::Spacing();
+		AcpToUtf8(d.refused.c_str(), line, sizeof(line));
+		ImGui::TextColored(warn, "%s", line);
+		for (u32 i = 1; i < d.nested.size(); ++i)
+		{
+			AcpToUtf8(d.nested[i].c_str(), line, sizeof(line));
+			ImGui::BulletText("%s", line);
+		}
+		ImGui::Spacing();
+		ImGui::TextUnformatted("Nothing was deleted.");
+	}
+	ImGui::PopTextWrapPos();
+	ImGui::Separator();
+
+	// Cancel is the default: Enter and Escape both back out. Not on the frame the
+	// window appears - the key that chose Delete... from the menu is still down.
+	const bool keys = !ImGui::IsWindowAppearing() &&
+					  (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+					   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
+	if (question)
+	{
+		confirm = ImGui::Button("Delete", ImVec2(120, 0));
+		ImGui::SameLine();
+	}
+	const bool cancel = ImGui::Button(question ? "Cancel" : "Close", ImVec2(120, 0)) || keys;
+	ImGui::SetItemDefaultFocus();
+
+	if (cancel)
+	{
+		s_DeleteWant = false;
+		ImGui::CloseCurrentPopup();
+	}
+	else if (confirm)
+	{
+		xr_string err;
+		if (EditorProject::DeleteProject(s_DeletePlan.path.c_str(), s_DeleteResult, err))
+		{
+			s_DeleteWant = false;
+			ImGui::CloseCurrentPopup();
+		}
+		else s_DeleteDone = true;
+	}
+	ImGui::EndPopup();
+}
+
+//------------------------------------------------------------------------------
+// MCP
+//------------------------------------------------------------------------------
+static bool ArgPath(LPCSTR raw, char* path, u32 size)
+{
+	if (!XFinedMCP::GetArg(raw, "path", path, size) || !path[0]) return false;
+	for (char* p = path; *p; ++p) if ('/' == *p) *p = '\\';
+	return true;
+}
+
+static bool ArgTrue(LPCSTR raw, LPCSTR field)
+{
+	char pat[64];
+	sprintf_s(pat, "\"%s\"", field);
+	LPCSTR k = raw ? strstr(raw, pat) : 0;
+	if (!k) return false;
+	k += xr_strlen(pat);
+	while (' ' == *k || '\t' == *k) ++k;
+	if (':' != *k) return false;
+	++k;
+	while (' ' == *k || '\t' == *k) ++k;
+	return 0 == strncmp(k, "true", 4);
+}
+
+static void JsonError(xr_string& out, const xr_string& err)
+{
+	out = "{\"ok\":false,\"error\":\"";
+	EditorGameContent::JsonAppendPath(out, err.c_str());
+	out += "\"}";
+}
+
+// the fields a deletion answers with; `counts` names the object the numbers go
+// into, or none for flat numbers
+static void AppendDeleteJson(xr_string& out, const EditorProject::SDeleteInfo& d, LPCSTR counts)
+{
+	out += ",\"path\":\"";
+	EditorGameContent::JsonAppendPath(out, d.path.c_str());
+	out += "\",\"name\":\"";
+	EditorGameContent::JsonAppendPath(out, d.name.c_str());
+	out += d.refused.empty() ? "\",\"refused\":false" : "\",\"refused\":true";
+	if (d.missing) out += ",\"missing\":true";
+	char tmp[320];
+	if (counts)
+	{
+		sprintf_s(tmp, ",\"%s\":{\"files\":%u,\"folders\":%u,\"links\":%u,\"bytes\":%llu}", counts, d.files, d.folders, d.links, d.bytes);
+		out += tmp;
+	}
+	else
+	{
+		sprintf_s(tmp, ",\"files\":%u,\"folders\":%u,\"links\":%u,\"bytes\":%llu", d.files, d.folders, d.links, d.bytes);
+		out += tmp;
+	}
+	sprintf_s(tmp, ",\"git\":%s,\"releases\":%s,\"release_files\":%u,\"release_bytes\":%llu,\"nested_total\":%u,\"failed_total\":%u",
+		d.git ? "true" : "false", d.releases ? "true" : "false", d.release_files, d.release_bytes, d.nested_total, d.failed_total);
+	out += tmp;
+	out += ",\"nested\":[";
+	for (u32 i = 0; i < d.nested.size(); ++i)
+	{
+		out += i ? ",\"" : "\"";
+		EditorGameContent::JsonAppendPath(out, d.nested[i].c_str());
+		out += "\"";
+	}
+	out += "],\"failed\":[";
+	for (u32 i = 0; i < d.failed.size(); ++i)
+	{
+		out += i ? ",{\"path\":\"" : "{\"path\":\"";
+		EditorGameContent::JsonAppendPath(out, d.failed[i].path.c_str());
+		out += "\",\"reason\":\"";
+		EditorGameContent::JsonAppendPath(out, d.failed[i].reason.c_str());
+		out += "\"}";
+	}
+	out += "]";
+}
+
+void EditorProject::McpReveal(LPCSTR raw, xr_string& out)
+{
+	char path[MAX_PATH * 2] = {};
+	if (!ArgPath(raw, path, sizeof(path)))
+	{
+		JsonError(out, "missing 'path' - a project folder from list_projects");
+		return;
+	}
+	xr_string folder, err;
+	if (!RevealTarget(path, folder, err))
+	{
+		JsonError(out, err);
+		return;
+	}
+	// dry_run answers the folder and opens nothing: a test leaves no window behind
+	const bool dry = ArgTrue(raw, "dry_run");
+	if (!dry && !RevealProject(folder.c_str(), err))
+	{
+		JsonError(out, err);
+		return;
+	}
+	out = "{\"ok\":true,\"path\":\"";
+	EditorGameContent::JsonAppendPath(out, folder.c_str());
+	out += dry ? "\",\"opened\":false,\"dry_run\":true}" : "\",\"opened\":true,\"dry_run\":false}";
+}
+
+void EditorProject::McpDelete(LPCSTR raw, xr_string& out)
+{
+	char path[MAX_PATH * 2] = {};
+	if (!ArgPath(raw, path, sizeof(path)))
+	{
+		JsonError(out, "missing 'path' - a project folder from list_projects");
+		return;
+	}
+	// the caller decided: no confirmation on this path, the same checks as the window's
+	SDeleteInfo info;
+	xr_string err;
+	const bool ok = DeleteProject(path, info, err);
+	out = ok ? "{\"ok\":true" : "{\"ok\":false,\"error\":\"";
+	if (!ok)
+	{
+		EditorGameContent::JsonAppendPath(out, err.c_str());
+		out += "\"";
+	}
+	if (ok && info.missing) out += ",\"note\":\"the folder does not exist any more - removed from the list only\"";
+	AppendDeleteJson(out, info, "deleted");
+	out += info.removed_from_list ? ",\"removed_from_list\":true}" : ",\"removed_from_list\":false}";
+}
+
+void EditorProject::McpForget(LPCSTR raw, xr_string& out)
+{
+	char path[MAX_PATH * 2] = {};
+	if (!ArgPath(raw, path, sizeof(path)))
+	{
+		JsonError(out, "missing 'path' - a folder from list_projects");
+		return;
+	}
+	xr_string err;
+	if (!ForgetProject(path, err))
+	{
+		JsonError(out, err);
+		return;
+	}
+	out = "{\"ok\":true,\"path\":\"";
+	EditorGameContent::JsonAppendPath(out, path);
+	out += "\",\"removed_from_list\":true}";
+}
+
+static SRecentProject* FindTile(LPCSTR path)
+{
+	for (int i = 0; i < s_RecentCount; ++i)
+		if (SamePath(s_Recent[i].path, path)) return &s_Recent[i];
+	return 0;
+}
+
+// the menu a tile offers in its state, as the window draws it
+static void AppendMenuItems(xr_string& out, ERecentState state)
+{
+	out += ",\"items\":[{\"label\":\"Show in Explorer\",\"enabled\":";
+	out += rsMissing == state ? "false}" : "true}";
+	out += rsProject == state ? ",{\"label\":\"Delete...\",\"enabled\":true}]" : ",{\"label\":\"Remove from List\",\"enabled\":true}]";
+}
+
+void EditorProject::McpBrowserMenu(LPCSTR raw, xr_string& out)
+{
+	char show[16] = {}, path[MAX_PATH * 2] = {};
+	XFinedMCP::GetArg(raw, "show", show, sizeof(show));
+	ArgPath(raw, path, sizeof(path));
+	if (show[0])
+	{
+		if (s_Active)
+		{
+			JsonError(out, "the project browser is not on screen: a project is open");
+			return;
+		}
+		if (0 == xr_strcmp(show, "none"))
+		{
+			// both go down, and nothing is deleted
+			s_MenuFor[0]	= 0;
+			s_MenuClose		= true;
+			s_DeleteClosing	= s_DeleteWant;
+			s_DeleteWant	= false;
+		}
+		else if (0 == xr_strcmp(show, "menu") || 0 == xr_strcmp(show, "confirm"))
+		{
+			SRecentProject* r = path[0] ? FindTile(path) : 0;
+			if (!r)
+			{
+				JsonError(out, xr_string("no tile of the project browser shows '") + path + "'");
+				return;
+			}
+			r->state = RecentState(r->path);
+			if (0 == xr_strcmp(show, "menu"))
+			{
+				s_DeleteClosing	= s_DeleteWant;
+				s_DeleteWant	= false;
+				s_MenuClose		= false;
+				strncpy_s(s_MenuFor, sizeof(s_MenuFor), r->path, _TRUNCATE);
+			}
+			else
+			{
+				if (rsProject != r->state)
+				{
+					JsonError(out, "that folder holds no project: its menu offers Remove from List, which asks nothing");
+					return;
+				}
+				s_MenuFor[0] = 0;
+				s_MenuClose = true;
+				// the window's own opening: the check and the count, then the question
+				OpenDeleteConfirm(r->path);
+			}
+		}
+		else
+		{
+			JsonError(out, "show: menu, confirm or none");
+			return;
+		}
+	}
+
+	out = s_Active ? "{\"ok\":true,\"browser\":false" : "{\"ok\":true,\"browser\":true";
+	// the menu: asked for and not drawn yet, or what the last frame drew
+	LPCSTR menu = s_MenuFor[0] ? s_MenuFor : (!s_MenuClose && s_MenuShown[0]) ? s_MenuShown : 0;
+	SRecentProject* tile = menu ? FindTile(menu) : 0;
+	if (tile)
+	{
+		out += ",\"menu\":{\"path\":\"";
+		EditorGameContent::JsonAppendPath(out, tile->path);
+		out += "\",\"shown\":";
+		out += s_MenuFor[0] ? "false" : "true";
+		out += ",\"state\":\"";
+		out += kRecentStateNames[tile->state];
+		out += "\"";
+		AppendMenuItems(out, tile->state);
+		out += "}";
+	}
+	else out += ",\"menu\":null";
+	if (s_DeleteWant)
+	{
+		const SDeleteInfo& d = s_DeleteDone ? s_DeleteResult : s_DeletePlan;
+		out += ",\"confirm\":{\"shown\":";
+		out += s_DeleteShown ? "true" : "false";
+		out += ",\"view\":\"";
+		out += s_DeleteDone ? "result" : (!d.refused.empty() || d.missing) ? "refused" : "question";
+		out += "\",\"reason\":\"";
+		EditorGameContent::JsonAppendPath(out, d.refused.c_str());
+		out += "\"";
+		AppendDeleteJson(out, d, 0);
+		out += "}";
+	}
+	else out += ",\"confirm\":null";
+	out += "}";
+}
+
 //------------------------------------------------------------------------------
 // the browser page (fullscreen, drawn instead of the editor UI)
 //------------------------------------------------------------------------------
@@ -946,6 +2092,8 @@ void EditorProject::Startup()
 
 bool EditorProject::DrawBrowser()
 {
+	// the frame that drew them is out by now
+	ReleaseDeadPreviews();
 	Startup();
 	if (s_Active) return false;
 
@@ -954,6 +2102,9 @@ bool EditorProject::DrawBrowser()
 	ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
 	if (!ImGui::BeginPopupModal("XFined Editor - Projects", nullptr, 0, true))
 		return true;
+	// what this frame draws of the menu and the confirmation, for McpBrowserMenu
+	s_MenuShown[0]	= 0;
+	s_DeleteShown	= false;
 
 	ImGui::TextDisabled("Select a project or create a new one");
 	ImGui::Separator();
@@ -972,10 +2123,12 @@ bool EditorProject::DrawBrowser()
 		for (int i = 0; i < s_RecentCount; ++i)
 		{
 			SRecentProject& r = s_Recent[i];
-			if (!r.preview_tried) { r.preview = LoadPreview(r.path); r.preview_tried = true; }
+			const bool here = rsProject == r.state;
+			if (here && !r.preview_tried) { r.preview = LoadPreview(r.path); r.preview_tried = true; }
 
 			if (i % per_row) ImGui::SameLine();
-			ImGui::PushID(i);
+			// by folder, not by slot: a tile leaving the list must not hand its menu on
+			ImGui::PushID(r.path);
 			ImGui::BeginGroup();
 
 			// both are ANSI - the name is the path's last segment, so a folder
@@ -984,25 +2137,48 @@ bool EditorProject::DrawBrowser()
 			AcpToUtf8(r.path, shown_path, sizeof(shown_path));
 			AcpToUtf8(r.name, shown_name, sizeof(shown_name));
 
+			// a folder that holds no project any more is veiled and opens nothing;
+			// its menu takes it off the list
+			if (!here) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
 			bool clicked;
 			if (r.preview)
 				clicked = ImGui::ImageButton("##Preview", r.preview, ImVec2(tile_w, tile_h - 30));
 			else
 				clicked = ImGui::Button(shown_name, ImVec2(tile_w + 8, tile_h - 22));
+			const ImVec2 corner = ImGui::GetItemRectMin();
 
 			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
 			ImGui::TextUnformatted(shown_name);
-			ImGui::TextDisabled("%s", shown_path);
+			ImGui::TextDisabled("%s", here ? shown_path : StateText(r.state));
 			ImGui::PopTextWrapPos();
+			if (!here) ImGui::PopStyleVar();
 			ImGui::EndGroup();
+
+			if (ImGui::IsItemHovered())
+			{
+				if (here)	ImGui::SetTooltip("%s", shown_path);
+				else		ImGui::SetTooltip("%s\n%s. Right-click to take it off the list.", shown_path, StateText(r.state));
+			}
+			DrawTileMenu(r, ImVec2(corner.x + tile_w * 0.5f, corner.y + 24.f));
 			ImGui::PopID();
 
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", shown_path);
 			// Open() mutates the recent list — leave the loop immediately
-			if (clicked) { if (Open(r.path)) ImGui::CloseCurrentPopup(); break; }
+			if (clicked && here)
+			{
+				if (Open(r.path))	ImGui::CloseCurrentPopup();
+				else				r.state = RecentState(r.path);	// gone since the list was read
+				break;
+			}
 		}
 	}
 	ImGui::EndChild();
+	// Remove from List, once the tiles are drawn: the list is what they walk
+	if (s_ForgetPending[0])
+	{
+		ForgetRecent(s_ForgetPending);
+		s_ForgetPending[0] = 0;
+	}
+	s_MenuClose = false;
 
 	// ---- create / open ---------------------------------------------------
 	ImGui::Separator();
@@ -1050,6 +2226,7 @@ bool EditorProject::DrawBrowser()
 			ExecCommand(COMMAND_QUIT);
 	}
 
+	DrawDeleteConfirm();
 	ImGui::EndPopup();
 	return true;
 }
