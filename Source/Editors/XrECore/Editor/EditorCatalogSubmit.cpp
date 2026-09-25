@@ -87,7 +87,7 @@ struct SInput
 								~SInput	() { EditorGithub::WipeString(token); EditorGithub::WipeString(vt_key); }
 };
 
-enum EJob { jbNone, jbCheck, jbVt, jbSubmit, jbPull };
+enum EJob { jbNone, jbCheck, jbVt, jbSubmit, jbSubmission };
 enum EState { stIdle, stRunning, stDone, stFailed, stCancelled };
 
 struct SView
@@ -99,7 +99,7 @@ struct SView
 	xr_string					login;
 	SCheck						check;
 	xr_vector<SVtRow>			vt;
-	EditorGithub::SCatalogPull	pull;
+	EditorGithub::SCatalogIssue	submission;
 	bool						listed;
 
 								SView	() : job(jbNone), state(stIdle), listed(false) {}
@@ -132,7 +132,7 @@ LPCSTR JobName(EJob job)
 	case jbCheck:	return "check";
 	case jbVt:		return "vt";
 	case jbSubmit:	return "submit";
-	case jbPull:	return "pull";
+	case jbSubmission:	return "submission";
 	}
 	return "";
 }
@@ -196,7 +196,7 @@ bool FetchRelease(const SInput& in, SRelease& rel, u32& status, xr_string& err)
 }
 
 // the catalog's signed index from the first mirror that answers; unverified here - it only
-// informs the author, and the catalog's own check and the maintainer read it again
+// informs the author, and the catalog's own check reads it again
 bool FetchIndex(xr_string& text)
 {
 	xr_vector<xr_string> mirrors;
@@ -285,7 +285,7 @@ void CheckLocalRelease(const SInput& in, const SRelease& rel, SCheck& check)
 	if (dir.empty())
 	{
 		Add(check, lvNote, "content", "Content not checked here: this computer has no copy of release " + rel.version +
-			" (the catalog checks it on the pull request).");
+			" (the catalog checks it when it judges the submission).");
 		return;
 	}
 	const xr_string prefix = "modules/" + in.manifest.id + "/";
@@ -302,7 +302,7 @@ void CheckLocalRelease(const SInput& in, const SRelease& rel, SCheck& check)
 		if (!FileSha256(zip_path, sha, size) || sha != rel.packages[p].sha256)
 		{
 			Add(check, lvNote, "content", "Content not checked here: the local " + rel.packages[p].name +
-				" is not the published one (the catalog checks it on the pull request).");
+				" is not the published one (the catalog checks it when it judges the submission).");
 			return;
 		}
 		unzFile zip = unzOpen64(zip_path.c_str());
@@ -363,7 +363,7 @@ LPCSTR VtStateText(const SVtRow& row)
 }
 
 // Section 7, in the order the window lists it. `rel` is filled when the release reads.
-void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCatalogPull& pull, bool& listed)
+void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCatalogIssue& submission, bool& listed)
 {
 	check = SCheck();
 	const EditorMod::SManifest& m = in.manifest;
@@ -377,7 +377,7 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 	else if (!repo_ok)				Add(check, lvBlock, "repository", "The manifest's GitHub repository is not owner/repo: " + m.update_github + ".");
 	else							Add(check, lvOk, "repository", "Repository " + m.update_github + ".");
 
-	// the pull request has to come from the account that owns the repository (7.6)
+	// the submission has to come from the account that owns the repository (7.6)
 	xr_string login;
 	if (!in.signed_in)
 		Add(check, lvBlock, "account", "Not signed in to GitHub: sign in from Mod > Publish Release.");
@@ -389,7 +389,7 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 			Add(check, lvBlock, "account", "The GitHub account does not answer: " + err);
 		else if (repo_ok && 0 != _stricmp(login.c_str(), Owner(m.update_github).c_str()))
 			Add(check, lvBlock, "account", "Signed in as " + login + ", but " + m.update_github + " belongs to " +
-				Owner(m.update_github) + ": the pull request has to come from the repository's owner.");
+				Owner(m.update_github) + ": the submission has to come from the repository's owner.");
 		else
 			Add(check, lvOk, "account", "Signed in to GitHub as " + login + ".");
 		std::lock_guard<std::mutex> guard(s_Lock);
@@ -452,7 +452,7 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 		EditorGithub::FetchPublic(website, 8u << 20, s_Cancel, status, body, err);
 		if (200 == status)									Add(check, lvOk, "website", "Website " + website + " answers.");
 		else if (moddb && (403 == status || 429 == status || 503 == status))
-			Add(check, lvNote, "website", "ModDB turns automated requests away: the maintainer opens " + website + " by hand.");
+			Add(check, lvNote, "website", "ModDB turns automated requests away: the page cannot be checked automatically.");
 		else if (status)									Add(check, lvBlock, "website", NqUtil::Format("Website %s answers HTTP %u.", website.c_str(), status));
 		else												Add(check, lvNote, "website", "Website " + website + " could not be reached: " + err + ".");
 	}
@@ -465,7 +465,7 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 	Stage("Reading the Mod Browser catalog");
 	xr_string index, listed_key;
 	if (!FetchIndex(index))
-		Add(check, lvNote, "catalog", "The Mod Browser catalog did not answer: the pull request's check covers the id.");
+		Add(check, lvNote, "catalog", "The Mod Browser catalog did not answer: the catalog's own check covers the id.");
 	else if (!ListedKey(index, m.id, listed_key))
 		Add(check, lvOk, "catalog", "The id " + m.id + " is free in the Mod Browser.");
 	else if (listed_key == in.key.public_key)
@@ -474,7 +474,8 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 		Add(check, lvOk, "catalog", "Listed in the Mod Browser with this key.");
 	}
 	else
-		Add(check, lvBlock, "catalog", m.id + " is listed with another author key: a key change is the maintainer's decision.");
+		Add(check, lvBlock, "catalog", m.id + " is listed with another author key: sign the release with that key, or submit "
+			"the module under another id.");
 	xr_vector<std::pair<xr_string, xr_string> > revoked;
 	EditorCatalog::IniSection(index, "revoked", revoked);
 	for (u32 i = 0; i < revoked.size(); ++i)
@@ -525,9 +526,9 @@ void RunCheck(const SInput& in, SCheck& check, SRelease& rel, EditorGithub::SCat
 	// and where the submission stands
 	if (in.signed_in && !s_Cancel.Cancelled())
 	{
-		Stage("Reading the pull request");
+		Stage("Reading the submission");
 		xr_string err;
-		EditorGithub::CatalogPull(m.id, in.token, s_Cancel, pull, err);
+		EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, submission, err);
 	}
 	check.done = !s_Cancel.Cancelled();
 }
@@ -632,8 +633,8 @@ xr_string SubmissionText(const SInput& in, const SRelease& rel, const xr_string&
 		in.key.public_key + "\nversion = " + rel.version + "\nwebsite = " + website + "\n";
 }
 
-// what the maintainer reads first: the module, the links, the verdicts, the editor's check
-xr_string PullBody(const SInput& in, const SRelease& rel, const SCheck& check, const xr_string& website)
+// what the issue says after the file: the module, the links, the verdicts, the editor's check
+xr_string SubmissionDetails(const SInput& in, const SRelease& rel, const SCheck& check, const xr_string& website)
 {
 	const EditorMod::SManifest& m = in.manifest;
 	xr_string body = "**" + (m.name.empty() ? m.id : m.name) + "**" + (m.author.empty() ? xr_string() : " by " + m.author) +
@@ -658,22 +659,21 @@ xr_string PullBody(const SInput& in, const SRelease& rel, const SCheck& check, c
 	return body;
 }
 
-bool RunSubmit(const SInput& in, SCheck& check, EditorGithub::SCatalogPull& pull, bool& listed, xr_string& err)
+bool RunSubmit(const SInput& in, SCheck& check, EditorGithub::SCatalogIssue& submission, bool& listed, xr_string& err)
 {
 	SRelease rel;
-	RunCheck(in, check, rel, pull, listed);
+	RunCheck(in, check, rel, submission, listed);
 	if (s_Cancel.Cancelled()) { err = "cancelled"; return false; }
 	for (u32 i = 0; i < check.findings.size(); ++i)
 		if (lvBlock == check.findings[i].level) { err = "not submitted: " + check.findings[i].text; return false; }
 
 	const xr_string website = (rel.card && !rel.website.empty()) ? rel.website : in.manifest.website;
-	EditorGithub::SCatalogSubmission rq;
+	EditorGithub::SCatalogRequest rq;
 	rq.module_id	= in.manifest.id;
 	rq.file_text	= SubmissionText(in, rel, website);
-	rq.title		= (in.manifest.name.empty() ? in.manifest.id : in.manifest.name) + " " + rel.version + " (" + in.manifest.id + ")";
-	rq.body			= PullBody(in, rel, check, website);
+	rq.details		= SubmissionDetails(in, rel, check, website);
 	rq.token		= in.token;
-	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, pull, err);
+	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, submission, err);
 	EditorGithub::WipeString(rq.token);
 	return ok;
 }
@@ -683,18 +683,18 @@ void Worker(EJob job, SInput in)
 	SCheck check;
 	SRelease rel;
 	xr_vector<SVtRow> vt;
-	EditorGithub::SCatalogPull pull;
+	EditorGithub::SCatalogIssue submission;
 	bool listed = false, ok = true;
 	xr_string err;
 	switch (job)
 	{
-	case jbCheck:	RunCheck(in, check, rel, pull, listed); break;
+	case jbCheck:	RunCheck(in, check, rel, submission, listed); break;
 	case jbVt:		RunVt(in, vt, err); ok = err.empty(); break;
-	case jbSubmit:	ok = RunSubmit(in, check, pull, listed, err); break;
-	case jbPull:
+	case jbSubmit:	ok = RunSubmit(in, check, submission, listed, err); break;
+	case jbSubmission:
 	{
-		Stage("Reading the pull request");
-		ok = EditorGithub::CatalogPull(in.manifest.id, in.token, s_Cancel, pull, err);
+		Stage("Reading the submission");
+		ok = EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, submission, err);
 		xr_string index, key;
 		if (ok && FetchIndex(index)) listed = ListedKey(index, in.manifest.id, key) && key == in.key.public_key;
 		break;
@@ -708,10 +708,10 @@ void Worker(EJob job, SInput in)
 	if (check.done)		s_View.check = check;
 	if (!vt.empty())	s_View.vt = vt;
 	// what the catalog and GitHub said about the submission, once a job asked them
-	const bool asked = jbPull == job ? ok : (jbCheck == job || jbSubmit == job) && check.done;
+	const bool asked = jbSubmission == job ? ok : (jbCheck == job || jbSubmit == job) && check.done;
 	if (asked && !cancelled)
 	{
-		s_View.pull = in.signed_in ? pull : EditorGithub::SCatalogPull();
+		s_View.submission = in.signed_in ? submission : EditorGithub::SCatalogIssue();
 		s_View.listed = listed;
 	}
 }
@@ -776,7 +776,7 @@ bool Start(EJob job, xr_string& err)
 	NoteAccount(account.source);
 	in.signed_in = EditorGithub::asNone != account.source;
 	in.token = account.token;
-	if ((jbSubmit == job || jbPull == job) && !in.signed_in)
+	if ((jbSubmit == job || jbSubmission == job) && !in.signed_in)
 		{ err = "not signed in to GitHub: sign in from Mod > Publish Release (MCP: mod_publish action=sign_in or save_token)"; return false; }
 	if (jbVt == job && !EditorGithub::ReadVtKey(in.vt_key))
 		{ err = "no VirusTotal key: add yours - a free account at virustotal.com has one (MCP: mod_catalog action=vt_key)"; return false; }
@@ -892,10 +892,12 @@ void StatusJson(xr_string& out)
 		JsonField(out, "error", row.error.c_str());
 		out += "}";
 	}
-	out += NqUtil::Format("],\"pull\":{\"number\":%llu", v.pull.number);
-	JsonField(out, "state", v.pull.state.c_str());
-	JsonField(out, "url", v.pull.url.c_str());
-	JsonField(out, "note", v.pull.note.c_str());
+	out += NqUtil::Format("],\"submission\":{\"number\":%llu", v.submission.number);
+	JsonField(out, "state", v.submission.state.c_str());
+	JsonField(out, "verdict", v.submission.verdict.c_str());
+	JsonField(out, "verdict_text", v.submission.verdict_text.c_str());
+	JsonField(out, "url", v.submission.url.c_str());
+	JsonField(out, "note", v.submission.note.c_str());
 	out += NqUtil::Format(",\"listed\":%s},\"window\":%s}", JsonBool(v.listed), JsonBool(s_Want));
 }
 
@@ -1237,35 +1239,46 @@ void DrawVirusTotal(const SView& view)
 	if (!s_VtError.empty()) ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_VtError.c_str());
 }
 
-void DrawPull(const SView& view)
+void DrawSubmission(const SView& view)
 {
-	ImGui::SeparatorText("Pull request");
-	const EditorGithub::SCatalogPull& pull = view.pull;
-	if (!pull.number)
+	ImGui::SeparatorText("Submission");
+	const EditorGithub::SCatalogIssue& submission = view.submission;
+	if (!submission.number)
 		ImGui::TextDisabled("Not submitted yet.");
 	else
 	{
-		xr_string text;
-		ELevel level = lvNote;
-		if (pull.state == "open")			text = NqUtil::Format("#%llu is open: the maintainer reviews it.", pull.number);
-		else if (pull.state == "merged")
+		// Open, the catalog's newest verdict says what it waits for. Closed, only an accepted or a
+		// refused one says what became of it: the author may have closed it after a waiting one.
+		xr_string text, verdict;
+		ELevel level = lvNote, verdict_level = lvNote;
+		if (submission.state == "open")
+		{
+			text = NqUtil::Format("#%llu is open: the catalog checks it.", submission.number);
+			verdict = submission.verdict_text;
+			verdict_level = submission.verdict == "accepted" ? lvOk : submission.verdict == "refused" ? lvBlock : lvReview;
+		}
+		else if (submission.verdict == "accepted")
 		{
 			level = lvOk;
-			text = view.listed ? NqUtil::Format("#%llu is merged: the module is in the Mod Browser.", pull.number) :
-				NqUtil::Format("#%llu is merged: the module appears in the Mod Browser when the maintainer publishes the catalog.", pull.number);
+			text = view.listed ? NqUtil::Format("#%llu was accepted: the module is in the Mod Browser.", submission.number) :
+				NqUtil::Format("#%llu was accepted: the module appears in the Mod Browser within minutes.", submission.number);
+		}
+		else if (submission.verdict == "refused")
+		{
+			level = verdict_level = lvBlock;
+			text = NqUtil::Format("#%llu was refused.", submission.number);
+			verdict = submission.verdict_text;
 		}
 		else
-		{
-			level = lvBlock;
-			text = NqUtil::Format("#%llu was closed without merging - the pull request says why.", pull.number);
-		}
+			text = NqUtil::Format("#%llu was closed.", submission.number);
 		StatusLine(level, text.c_str());
-		if (!pull.note.empty()) StatusLine(lvNote, pull.note.c_str());
-		if (ImGui::Button("Open Pull Request")) ::ShellExecuteA(0, "open", pull.url.c_str(), 0, 0, SW_SHOWNORMAL);
+		if (!verdict.empty()) StatusLine(verdict_level, verdict.c_str());
+		if (!submission.note.empty()) StatusLine(lvNote, submission.note.c_str());
+		if (ImGui::Button("Open Submission")) ::ShellExecuteA(0, "open", submission.url.c_str(), 0, 0, SW_SHOWNORMAL);
 		ImGui::SameLine();
 	}
 	ImGui::BeginDisabled(stRunning == view.state || EditorGithub::asNone == s_AccountSource);
-	if (ImGui::Button("Refresh")) StartFromUI(jbPull);
+	if (ImGui::Button("Refresh")) StartFromUI(jbSubmission);
 	ImGui::EndDisabled();
 	if (stFailed == view.state && !view.error.empty())
 		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
@@ -1300,22 +1313,22 @@ void DrawWindow()
 	ImGui::TextUnformatted(s_Manifest.name.empty() ? s_Manifest.id.c_str() : s_Manifest.name.c_str());
 	ImGui::SameLine();
 	ImGui::TextDisabled("(%s)", s_Manifest.id.c_str());
-	ImGui::TextDisabled("Lists the module in the Mod Browser of Dead Air: Refined. The maintainer of %s reviews every submission.",
-		EditorGithub::CatalogRepo().c_str());
+	ImGui::TextDisabled("Lists the module in the Mod Browser of Dead Air: Refined. Submissions that pass the checks of %s "
+		"are listed automatically.", EditorGithub::CatalogRepo().c_str());
 
 	DrawKey();
 	DrawRequirements(view);
 	DrawVirusTotal(view);
-	DrawPull(view);
+	DrawSubmission(view);
 
 	ImGui::Separator();
 	const bool signed_in = EditorGithub::asNone != s_AccountSource;
 	const bool ready = view.check.done && !view.check.blocking && signed_in && stRunning != view.state;
 	ImGui::BeginDisabled(!ready);
-	if (ImGui::Button(view.pull.number && view.pull.state == "open" ? "Update Submission" : "Submit", ImVec2(em * 10.f, 0)))
+	if (ImGui::Button(view.submission.number && view.submission.state == "open" ? "Update Submission" : "Submit", ImVec2(em * 10.f, 0)))
 		StartFromUI(jbSubmit);
 	ImGui::EndDisabled();
-	Hint(ready ? "Checks everything again, then opens the pull request - or updates the open one." :
+	Hint(ready ? "Checks everything again, then opens the submission - or updates the open one." :
 		"Available once every requirement above is met.");
 	ImGui::SameLine();
 	if (stRunning == view.state && jbSubmit == view.job)
@@ -1330,7 +1343,7 @@ void DrawWindow()
 		ImGui::CloseCurrentPopup();
 	}
 	if (signed_in)
-		ImGui::TextDisabled("Submitting opens a public pull request at github.com/%s%s%s.", EditorGithub::CatalogRepo().c_str(),
+		ImGui::TextDisabled("Submitting opens a public issue at github.com/%s%s%s.", EditorGithub::CatalogRepo().c_str(),
 			view.login.empty() ? "" : " from ", view.login.c_str());
 
 	ImGui::PopTextWrapPos();
@@ -1427,10 +1440,10 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	else
 	{
 		const EJob job = 0 == xr_strcmp(action, "check") ? jbCheck : 0 == xr_strcmp(action, "vt") ? jbVt :
-			0 == xr_strcmp(action, "submit") ? jbSubmit : 0 == xr_strcmp(action, "pull") ? jbPull : jbNone;
+			0 == xr_strcmp(action, "submit") ? jbSubmit : 0 == xr_strcmp(action, "submission") ? jbSubmission : jbNone;
 		if (jbNone == job)
 		{
-			ErrorJson(out, "unknown action: status, key_create, key_use, key_unlock, vt_key, vt_key_forget, check, vt, submit, pull, "
+			ErrorJson(out, "unknown action: status, key_create, key_use, key_unlock, vt_key, vt_key_forget, check, vt, submit, submission, "
 				"cancel, show or hide expected");
 			return;
 		}

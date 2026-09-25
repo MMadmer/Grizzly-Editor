@@ -120,7 +120,7 @@ void UIMainMenuForm::Draw()
             if (ImGui::MenuItem("Submit to Mod Browser...", ""))		EditorCatalogSubmit::Request();
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Lists the module in the in-game Mod Browser: the author key, the requirements,\nVirusTotal and the pull request against the catalog.");
+                ImGui::SetTooltip("Lists the module in the in-game Mod Browser: the author key, the requirements,\nVirusTotal and the submission to the catalog.");
             ImGui::Separator();
             if (ImGui::MenuItem("Edit Manifest...", ""))			EditorMod::RequestEditManifest();
             ImGui::Separator();

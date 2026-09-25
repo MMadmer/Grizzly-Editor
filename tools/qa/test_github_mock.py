@@ -42,15 +42,19 @@ LATEST_DESCRIPTOR = f"/{REPO}/releases/latest/download/{DESCRIPTOR}"
 API_ROOTS = ("/repos", "/upload", "/user")
 
 LOGIN = "QaOwner"
+ACCOUNT = {"login": LOGIN, "id": 1001, "type": "User"}
+BOT = {"login": "github-actions[bot]", "id": 41898282, "type": "Bot"}
 CATALOG_OWNER = "QaMaintainer"
 CATALOG = f"{CATALOG_OWNER}/darf-mods"
 CATALOG_API = f"/repos/{CATALOG}"
-FORK = f"{LOGIN}/darf-mods"
-FORK_API = f"/repos/{FORK}"
-BRANCH = "submit-qa_mod"
-HEAD = f"{LOGIN}:{BRANCH}"
+ISSUES_API = f"{CATALOG_API}/issues"
 MOD_FILE = "mods/qa_mod.ltx"
 MOD_TEXT = b"[mod]\nid = qa_mod\ntitle = QA Mod\nversion = 1.0.0\n"
+# A submission as the editor opens it: the module's file in a fenced ini block.
+SUBMISSION_TITLE = "Submit qa_mod"
+SUBMISSION = f"Submitted with XFined Editor.\n\n```ini\n{MOD_TEXT.decode()}```\n"
+FORBIDDEN = {"message": "Must have admin rights to Repository."}
+STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
 VT_KEY = "qa-vt-key"
 VT_API = "/vt/api/v3"
 VT_ZERO = {"malicious": 0, "suspicious": 0, "undetected": 0, "harmless": 0, "type-unsupported": 0, "timeout": 0}
@@ -64,10 +68,6 @@ def sha256(data: bytes) -> str:
 
 def git_blob_sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-
-
-def b64(data: bytes) -> str:
-    return base64.b64encode(data).decode("ascii")
 
 
 def multipart(data: bytes, filename: str = "qa_mod-1.0.0.zip",
@@ -258,41 +258,29 @@ def write_catalog_seed(folder: Path) -> dict[str, bytes]:
     return files
 
 
-def ref_sha(mock: Mock, repo_api: str, branch: str) -> str | None:
-    reply = mock.api("GET", f"{repo_api}/git/ref/heads/{branch}")
-    return reply.json()["object"]["sha"] if reply.status == 200 else None
+def main_sha(mock: Mock) -> str:
+    """The commit the catalog's main points at, as /__catalog reports it."""
+    return mock.catalog()["repositories"][CATALOG]["branches"]["main"]["sha"]
 
 
-def make_fork(mock: Mock) -> int:
-    """POST forks, then poll the fork's main until it answers; returns how many 404s that took."""
-    mock.api("POST", f"{CATALOG_API}/forks", {"default_branch_only": True})
-    for misses in range(20):
-        if mock.api("GET", f"{FORK_API}/git/ref/heads/main").status == 200:
-            return misses
-    raise AssertionError("the fork never became ready")
-
-
-def put_file(mock: Mock, repo_api: str, path: str, data: bytes, branch: str | None,
-             sha: str | None = None, message: str = "") -> Reply:
-    body = {"message": message or f"Add {path}", "content": b64(data)}
-    if branch:
-        body["branch"] = branch
-    if sha:
-        body["sha"] = sha
-    return mock.api("PUT", f"{repo_api}/contents/{path}", body)
-
-
-def read_file(mock: Mock, repo_api: str, path: str, ref: str) -> bytes | None:
-    reply = mock.api("GET", f"{repo_api}/contents/{path}?ref={quote(ref)}")
+def read_file(mock: Mock, path: str, ref: str | None = None) -> bytes | None:
+    """A catalog file through the contents API; without `ref` from the default branch."""
+    query = "" if ref is None else f"?ref={quote(ref, safe='')}"
+    reply = mock.api("GET", f"{CATALOG_API}/contents/{path}{query}")
     return base64.b64decode(reply.json()["content"]) if reply.status == 200 else None
 
 
-def open_pull(mock: Mock, head: str, title: str = "Add QA Mod", **extra) -> Reply:
-    body = {"title": title, "head": head, "base": "main", "body": "Submitted by the editor.", **extra}
-    return mock.api("POST", f"{CATALOG_API}/pulls", body)
+def open_issue(mock: Mock, title: str = SUBMISSION_TITLE, body: str = SUBMISSION) -> Reply:
+    return mock.api("POST", ISSUES_API, {"title": title, "body": body})
 
 
-def pull_numbers(reply: Reply) -> list[int] | bytes:
+def plant_issue(mock: Mock, creator: str, title: str, body: bytes = b"", pull: bool = False) -> Reply:
+    """/__catalog/issue: an issue - or an entry standing for a pull request - opened by anyone."""
+    query = {"creator": creator, "title": title} | ({"pull": 1} if pull else {})
+    return mock.harness(f"/__catalog/issue?{urlencode(query)}", body)
+
+
+def issue_numbers(reply: Reply) -> list[int] | bytes:
     return [item["number"] for item in reply.json()] if reply.status == 200 else reply.body
 
 
@@ -942,392 +930,288 @@ def flow_tags(checks: Checks, options) -> None:
         checks.equal("Q and the tag stays", mock.state()["tags"], ["v2.0.0"])
 
 
-def flow_catalog_fork(checks: Checks, options) -> None:
-    """R: the account, the catalog repository and the fork GitHub makes in the background."""
+def flow_catalog_repo(checks: Checks, options) -> None:
+    """R: the account, the catalog repository and its owner, and the routes a submission no longer has."""
     with Mock() as mock:
         user = mock.api("GET", "/user")
-        checks.check(
-            "R GET /user: the owner of --repo by default",
-            user.status == 200 and user.json() == {"login": LOGIN, "id": 1001, "type": "User"},
-            repr(user.body),
-        )
+        checks.check("R GET /user: the owner of --repo by default", user.status == 200 and user.json() == ACCOUNT, repr(user.body))
         catalog = mock.api("GET", CATALOG_API)
-        info = catalog.json()
+        info = catalog.json() or {}
+        expected = {
+            "full_name": CATALOG, "name": "darf-mods", "owner": {"login": CATALOG_OWNER}, "default_branch": "main",
+            "private": False, "fork": False, "archived": False, "permissions": {"push": False, "pull": True},
+            "html_url": f"http://127.0.0.1:{mock.port}/{CATALOG}",
+        }
         checks.check(
-            "R the catalog: public, branch main, no push for the account",
-            catalog.status == 200 and info["full_name"] == CATALOG and info["name"] == "darf-mods"
-            and info["owner"] == {"login": CATALOG_OWNER} and info["default_branch"] == "main"
-            and info["private"] is False and info["fork"] is False and info["archived"] is False
-            and info["permissions"] == {"push": False, "pull": True}
-            and info["html_url"] == f"http://127.0.0.1:{mock.port}/{CATALOG}",
+            "R the catalog: public, no fork, branch main, no push for the account",
+            catalog.status == 200 and isinstance(info.get("id"), int) and info == {**expected, "id": info.get("id")},
             repr(info),
         )
-        checks.equal("R the catalog's name matches case-insensitively", mock.api("GET", "/repos/qamaintainer/DARF-MODS").status, 200)
-        checks.equal("R the catalog needs the token: 401", mock.call("GET", CATALOG_API).status, 401)
-        checks.equal("R the catalog needs a User-Agent: 403", mock.api("GET", CATALOG_API, user_agent=None).status, 403)
-        checks.equal("R no fork before POST forks: 404", mock.api("GET", FORK_API).status, 404)
+        checks.equal("R the catalog's name matches case-insensitively, on its routes too",
+                     [mock.api("GET", path).status for path in ("/repos/qamaintainer/DARF-MODS", "/repos/QAMAINTAINER/darf-mods/issues")],
+                     [200, 200])
         checks.equal("R --repo keeps its own repository", mock.api("GET", API).json()["full_name"], REPO)
 
-        main_sha = ref_sha(mock, CATALOG_API, "main")
-        forked = mock.api("POST", f"{CATALOG_API}/forks", {"default_branch_only": True})
-        fork = forked.json()
-        checks.check(
-            "R POST forks: 202 with the fork",
-            forked.status == 202 and fork["full_name"] == FORK and fork["name"] == "darf-mods"
-            and fork["owner"] == {"login": LOGIN} and fork["fork"] is True and fork["parent"] == {"full_name": CATALOG}
-            and fork["permissions"] == {"push": True, "pull": True} and fork["default_branch"] == "main"
-            and fork["html_url"] == f"http://127.0.0.1:{mock.port}/{FORK}",
-            repr(fork),
-        )
-        checks.equal("R GET /repos of the fork answers at once", mock.api("GET", FORK_API).json(), fork)
-        early = mock.api("GET", f"{FORK_API}/git/ref/heads/main")
-        ready = mock.api("GET", f"{FORK_API}/git/ref/heads/main")
-        checks.check(
-            "R --fork-delay 1: the fork's main answers 404, then 200",
-            early.status == 404 and ready.status == 200,
-            f"{early.status}, {ready.status}",
-        )
-        checks.equal("R the fork's main is the catalog's commit", ready.json()["object"]["sha"], main_sha)
+        routes = [
+            ("GET", CATALOG_API, None),
+            ("GET", f"{CATALOG_API}/contents/README.md", None),
+            ("GET", ISSUES_API, None),
+            ("POST", ISSUES_API, {"title": SUBMISSION_TITLE, "body": SUBMISSION}),
+            ("GET", f"{ISSUES_API}/1", None),
+            ("PATCH", f"{ISSUES_API}/1", {"state": "closed"}),
+            ("GET", f"{ISSUES_API}/1/comments", None),
+            ("POST", f"{ISSUES_API}/1/comments", {"body": "Hello."}),
+        ]
+        checks.equal("R every catalog route needs the token: 401",
+                     [mock.call(method, path, body).status for method, path, body in routes], [401] * len(routes))
+        checks.equal("R a wrong token: 401", mock.call("POST", ISSUES_API, {"title": SUBMISSION_TITLE}, token="wrong-token").status, 401)
+        checks.equal("R no User-Agent: 403", mock.api("POST", ISSUES_API, {"title": SUBMISSION_TITLE}, user_agent=None).status, 403)
+        checks.equal("R the refused requests opened nothing", mock.catalog()["issues"], [])
 
-        created = mock.api("POST", f"{FORK_API}/git/refs", {"ref": f"refs/heads/{BRANCH}", "sha": main_sha})
-        checks.equal("R the account writes to its fork", created.status, 201)
-        again = mock.api("POST", f"{CATALOG_API}/forks", b"")
-        checks.check("R POST forks again, empty body: 202 with the same fork", again.status == 202 and again.json() == fork, repr(again.body))
-        checks.equal("R and its branches are left alone", sorted(mock.catalog()["repositories"][FORK]["branches"]), sorted(["main", BRANCH]))
-
-        refused = mock.api("POST", f"{CATALOG_API}/git/refs", {"ref": "refs/heads/direct", "sha": main_sha})
-        checks.check(
-            "R no push on the catalog: git/refs 403",
-            refused.status == 403 and refused.json() == {"message": "Resource not accessible by personal access token"},
-            repr(refused.body),
+        gone = [
+            ("POST", f"{CATALOG_API}/forks", {}),
+            ("GET", f"/repos/{LOGIN}/darf-mods", None),
+            ("GET", f"{CATALOG_API}/git/ref/heads/main", None),
+            ("POST", f"{CATALOG_API}/git/refs", {"ref": "refs/heads/submit-qa_mod", "sha": "0" * 40}),
+            ("PATCH", f"{CATALOG_API}/git/refs/heads/main", {"sha": "0" * 40, "force": True}),
+            ("PUT", f"{CATALOG_API}/contents/{MOD_FILE}", {"message": "Add qa_mod", "content": "eA=="}),
+            ("GET", f"{CATALOG_API}/pulls", None),
+            ("POST", f"{CATALOG_API}/pulls", {"title": "Add QA Mod", "head": f"{LOGIN}:submit-qa_mod", "base": "main"}),
+            ("GET", f"{CATALOG_API}/pulls/1", None),
+            ("GET", f"{API}/issues", None),
+        ]
+        statuses = [mock.api(method, path, body).status for method, path, body in gone]
+        checks.equal(
+            "R forks, git refs, content writes, pull requests and /__catalog/merge are gone, --repo has no issues: 404 each",
+            statuses + [mock.harness("/__catalog/merge?number=1").status],
+            [404] * (len(gone) + 1),
         )
-        checks.equal("R no push on the catalog: contents 403", put_file(mock, CATALOG_API, MOD_FILE, MOD_TEXT, None).status, 403)
-        moved = mock.api("PATCH", f"{CATALOG_API}/git/refs/heads/main", {"sha": main_sha})
-        checks.equal("R no push on the catalog: moving a branch 403", moved.status, 403)
-        checks.equal("R the account's own fork cannot be forked: 403", mock.api("POST", f"{FORK_API}/forks").status, 403)
+
+        refused = [
+            subprocess.run([sys.executable, str(MOCK), *flags], capture_output=True, text=True, timeout=60)
+            for flags in (["--catalog-push"], ["--fork-delay", "1"], ["--repo", CATALOG.lower()])
+        ]
+        checks.check(
+            "R --catalog-push and --fork-delay are gone, and --repo may not be the catalog: exit 2 each",
+            [item.returncode for item in refused] == [2, 2, 2] and "--repo must not be the catalog" in refused[2].stderr,
+            " | ".join(item.stderr.strip()[-160:] for item in refused),
+        )
 
     with Mock("--login", CATALOG_OWNER) as mock:
-        checks.equal("R --login names the account", mock.api("GET", "/user").json()["login"], CATALOG_OWNER)
-        own = mock.api("POST", f"{CATALOG_API}/forks")
-        checks.check(
-            "R the catalog's owner cannot fork it: 403",
-            own.status == 403 and own.json() == {"message": "Cannot fork a repository you own."},
-            repr(own.body),
-        )
-        checks.equal("R and no fork appears", list(mock.catalog()["repositories"]), [CATALOG])
-        checks.equal("R owning the catalog gives no push without --catalog-push",
-                     mock.api("GET", CATALOG_API).json()["permissions"]["push"], False)
-
-    with Mock("--fork-delay", "3", "--catalog-push") as mock:
-        main_sha = ref_sha(mock, CATALOG_API, "main")
-        mock.api("POST", f"{CATALOG_API}/git/refs", {"ref": "refs/heads/extra", "sha": main_sha})
-        mock.api("POST", f"{CATALOG_API}/forks")
-        early_write = mock.api("POST", f"{FORK_API}/git/refs", {"ref": "refs/heads/early", "sha": main_sha})
-        checks.check(
-            "R a fork still being made refuses git writes: 409",
-            early_write.status == 409 and early_write.json() == {"message": "Git Repository is empty."},
-            repr(early_write.body),
-        )
-        early_read = mock.api("GET", f"{FORK_API}/contents/README.md")
-        checks.check(
-            "R and has no contents yet: 404",
-            early_read.status == 404 and early_read.json() == {"message": "This repository is empty."},
-            repr(early_read.body),
-        )
-        early_pull = open_pull(mock, f"{LOGIN}:main")
-        checks.equal("R and no branch to open a pull request from: 422 head", early_pull.error().get("field"), "head")
-        statuses = [mock.api("GET", f"{FORK_API}/git/ref/heads/main").status for _ in range(4)]
-        checks.equal("R --fork-delay 3: three 404s, then 200; the refused requests did not count", statuses, [404, 404, 404, 200])
-        fork = mock.catalog()["repositories"][FORK]
-        checks.equal("R without default_branch_only the fork copies every branch", sorted(fork["branches"]), ["extra", "main"])
-        checks.equal("R /__catalog shows the delay used up", fork["pending"], 0)
+        checks.equal("R --login names the account", mock.api("GET", "/user").json(), {"login": CATALOG_OWNER, "id": 1001, "type": "User"})
+        checks.equal("R the catalog's owner may push", mock.api("GET", CATALOG_API).json()["permissions"], {"push": True, "pull": True})
 
 
-def flow_catalog_git(checks: Checks, options) -> None:
-    """S: git refs and the contents API in the catalog network."""
+def flow_catalog_contents(checks: Checks, options) -> None:
+    """S: the catalog's files through the contents API - the default branch, a branch by name, a commit."""
     with tempfile.TemporaryDirectory() as folder:
         seed = write_catalog_seed(Path(folder))
         with Mock("--catalog-seed", folder) as mock:
-            checks.equal("S the fork is ready after one 404", make_fork(mock), 1)
-            main_sha = ref_sha(mock, CATALOG_API, "main")
-            ref = mock.api("GET", f"{CATALOG_API}/git/ref/heads/main")
+            index, icon = seed["public/index.ltx"], seed["public/icons/qa_mod.dds"]
+            got = mock.api("GET", f"{CATALOG_API}/contents/public/index.ltx")
+            info = got.json() or {}
             checks.check(
-                "S GET git/ref: the branch and its commit",
-                ref.status == 200 and ref.json() == {"ref": "refs/heads/main", "object": {"sha": main_sha, "type": "commit"}}
-                and re.fullmatch(r"[0-9a-f]{40}", main_sha or ""),
-                repr(ref.body),
-            )
-            unknown = mock.api("GET", f"{CATALOG_API}/git/ref/heads/nothing")
-            checks.check("S an unknown branch: 404 Not Found", unknown.status == 404 and unknown.json() == {"message": "Not Found"})
-
-            refs = f"{FORK_API}/git/refs"
-            created = mock.api("POST", refs, {"ref": f"refs/heads/{BRANCH}", "sha": main_sha})
-            checks.check(
-                "S POST git/refs: 201 with the new ref",
-                created.status == 201
-                and created.json() == {"ref": f"refs/heads/{BRANCH}", "object": {"sha": main_sha, "type": "commit"}},
-                repr(created.body),
-            )
-            exists = mock.api("POST", refs, {"ref": f"refs/heads/{BRANCH}", "sha": main_sha})
-            checks.check(
-                "S the same ref again: 422 Reference already exists",
-                exists.status == 422 and exists.json() == {"message": "Reference already exists"},
-                repr(exists.body),
-            )
-            bogus = mock.api("POST", refs, {"ref": "refs/heads/other", "sha": "0" * 40})
-            checks.check(
-                "S a sha that is no commit: 422 Object does not exist",
-                bogus.status == 422 and bogus.json() == {"message": "Object does not exist"},
-                repr(bogus.body),
-            )
-            checks.equal("S a branch name git refuses: 422", mock.api("POST", refs, {"ref": "refs/heads/bad name", "sha": main_sha}).status, 422)
-            nested = mock.api("POST", refs, {"ref": "refs/heads/submit/nested", "sha": main_sha})
-            checks.check("S a branch name with a slash reads back", nested.status == 201 and ref_sha(mock, FORK_API, "submit/nested") == main_sha)
-
-            index = seed["public/index.ltx"]
-            got = mock.api("GET", f"{FORK_API}/contents/public/index.ltx?ref={BRANCH}")
-            info = got.json()
-            checks.check(
-                "S GET contents: the file with its blob sha and size",
-                got.status == 200 and info["type"] == "file" and info["name"] == "index.ltx" and info["path"] == "public/index.ltx"
-                and info["sha"] == git_blob_sha(index) and info["size"] == len(index) and info["encoding"] == "base64",
+                "S GET contents without ?ref: the default branch's file with its blob sha and size",
+                got.status == 200 and info.get("type") == "file" and info.get("name") == "index.ltx"
+                and info.get("path") == "public/index.ltx" and info.get("sha") == git_blob_sha(index)
+                and info.get("size") == len(index) and info.get("encoding") == "base64",
                 repr(info),
             )
             lines = info.get("content", "").split("\n")
             checks.check(
                 "S content: base64 broken after every 60 characters, a line break at the end",
                 len(lines) > 2 and all(len(line) == 60 for line in lines[:-2]) and 0 < len(lines[-2]) <= 60
-                and lines[-1] == "" and base64.b64decode(info["content"]) == index,
+                and lines[-1] == "" and base64.b64decode(info.get("content", "")) == index,
                 repr(info.get("content")),
             )
-            checks.equal("S without ?ref the default branch is read",
-                         mock.api("GET", f"{CATALOG_API}/contents/public/index.ltx").json().get("sha"), info["sha"])
-            checks.equal("S a missing file: 404", mock.api("GET", f"{FORK_API}/contents/{MOD_FILE}?ref={BRANCH}").status, 404)
-            checks.equal("S an unknown ref: 404", mock.api("GET", f"{FORK_API}/contents/public/index.ltx?ref=nothing").status, 404)
+            first = main_sha(mock)
+            checks.equal(
+                "S ?ref=main, refs/heads/main, an empty ?ref and the commit's sha read the same file",
+                [read_file(mock, "public/index.ltx", ref) for ref in ("main", "refs/heads/main", "", first)],
+                [index] * 4,
+            )
+            checks.equal("S a binary file comes back byte for byte", read_file(mock, "public/icons/qa_mod.dds"), icon)
 
-            put = put_file(mock, FORK_API, MOD_FILE, MOD_TEXT, BRANCH, message="Add qa_mod")
-            answer = put.json()
+            checks.equal("S a file main does not hold yet: 404", mock.api("GET", f"{CATALOG_API}/contents/{MOD_FILE}").status, 404)
+            wrote = mock.harness(f"/__catalog/file?path={MOD_FILE}", MOD_TEXT).json() or {}
+            head = main_sha(mock)
             checks.check(
-                "S PUT a new file: 201 with its blob and the commit",
-                put.status == 201 and answer["content"] == {"name": "qa_mod.ltx", "path": MOD_FILE, "sha": git_blob_sha(MOD_TEXT)}
-                and re.fullmatch(r"[0-9a-f]{40}", answer["commit"]["sha"]) and answer["commit"]["message"] == "Add qa_mod",
-                repr(put.body),
+                "S once the harness commits it, the default branch serves it",
+                wrote.get("commit") == head != first and read_file(mock, MOD_FILE) == MOD_TEXT
+                and read_file(mock, MOD_FILE, "main") == MOD_TEXT,
+                repr(wrote),
             )
-            checks.equal("S the branch moved to that commit", ref_sha(mock, FORK_API, BRANCH), answer["commit"]["sha"])
-            checks.equal("S the file reads back", read_file(mock, FORK_API, MOD_FILE, BRANCH), MOD_TEXT)
-            checks.equal("S the fork's main did not move", ref_sha(mock, FORK_API, "main"), main_sha)
+            checks.check(
+                "S the earlier commit still reads the files as they were",
+                mock.api("GET", f"{CATALOG_API}/contents/{MOD_FILE}?ref={first}").status == 404
+                and read_file(mock, "public/index.ltx", first) == index,
+            )
+            checks.equal("S a sha in capitals names the same commit", read_file(mock, MOD_FILE, head.upper()), MOD_TEXT)
 
-            changed = MOD_TEXT.replace(b"1.0.0", b"1.0.1")
-            no_sha = put_file(mock, FORK_API, MOD_FILE, changed, BRANCH)
+            missing = mock.api("GET", f"{CATALOG_API}/contents/mods/nothing.ltx")
+            checks.check("S a missing file: 404 Not Found", missing.status == 404 and missing.json() == {"message": "Not Found"},
+                         repr(missing.body))
+            unknown = mock.api("GET", f"{CATALOG_API}/contents/public/index.ltx?ref=nothing")
             checks.check(
-                'S an existing file without "sha": 422',
-                no_sha.status == 422 and no_sha.json() == {"message": 'Invalid request.\n\n"sha" wasn\'t supplied.'},
-                repr(no_sha.body),
+                "S an unknown ref: 404 No commit found",
+                unknown.status == 404 and unknown.json() == {"message": "No commit found for the ref nothing"},
+                repr(unknown.body),
             )
-            stale = put_file(mock, FORK_API, MOD_FILE, changed, BRANCH, sha="1" * 40)
-            checks.check(
-                "S a sha that is not the file's: 409 does not match",
-                stale.status == 409 and stale.json() == {"message": f"{MOD_FILE} does not match {'1' * 40}"},
-                repr(stale.body),
-            )
-            checks.equal("S a sha for a file that does not exist: 409",
-                         put_file(mock, FORK_API, "mods/new.ltx", b"x", BRANCH, sha="2" * 40).status, 409)
-            updated = put_file(mock, FORK_API, MOD_FILE, changed, BRANCH, sha=git_blob_sha(MOD_TEXT), message="Update qa_mod")
-            checks.check(
-                "S the file's own sha: 200 updated",
-                updated.status == 200 and updated.json()["content"]["sha"] == git_blob_sha(changed)
-                and read_file(mock, FORK_API, MOD_FILE, BRANCH) == changed,
-                repr(updated.body),
-            )
-            checks.equal("S PUT onto a missing branch: 404", put_file(mock, FORK_API, "mods/x.ltx", b"x", "nothing").status, 404)
-            not_base64 = mock.api("PUT", f"{FORK_API}/contents/mods/x.ltx", {"message": "x", "content": "@@@", "branch": BRANCH})
-            checks.equal("S content that is not base64: 422", not_base64.status, 422)
-            no_message = mock.api("PUT", f"{FORK_API}/contents/mods/x.ltx", {"content": b64(b"x"), "branch": BRANCH})
-            checks.equal("S no message: 422", no_message.status, 422)
+            checks.equal("S a folder is no file: 404", mock.api("GET", f"{CATALOG_API}/contents/public").status, 404)
+            checks.equal("S another repository's contents: 404",
+                         mock.api("GET", f"/repos/{LOGIN}/darf-mods/contents/README.md").status, 404)
 
-            head = ref_sha(mock, FORK_API, BRANCH)
-            branch_ref = f"{FORK_API}/git/refs/heads/{BRANCH}"
-            back = mock.api("PATCH", branch_ref, {"sha": main_sha})
+            state = mock.catalog()
+            repositories = state["repositories"]
+            main = repositories.get(CATALOG, {}).get("branches", {}).get("main", {})
             checks.check(
-                "S moving a branch back without force: 422 not a fast forward",
-                back.status == 422 and back.json() == {"message": "Update is not a fast forward"},
-                repr(back.body),
+                "S /__catalog: the catalog alone, main alone, its files as text and a binary one as base64",
+                list(repositories) == [CATALOG] and list(repositories[CATALOG]) == ["branches"]
+                and list(repositories[CATALOG]["branches"]) == ["main"]
+                and main.get("sha") == head and main.get("message") == f"Update {MOD_FILE}"
+                and main["files"].get(MOD_FILE) == MOD_TEXT.decode() and "public/icons/qa_mod.dds" not in main["files"]
+                and base64.b64decode(main["files_base64"].get("public/icons/qa_mod.dds", "")) == icon,
+                repr(state)[:400],
             )
-            forced = mock.api("PATCH", branch_ref, {"sha": main_sha, "force": True})
-            checks.check(
-                "S with force: 200, the branch is reset",
-                forced.status == 200 and forced.json()["object"]["sha"] == main_sha and ref_sha(mock, FORK_API, BRANCH) == main_sha,
-                repr(forced.body),
-            )
-            forward = mock.api("PATCH", branch_ref, {"sha": head, "force": False})
-            checks.check("S forward to a descendant without force: 200", forward.status == 200 and ref_sha(mock, FORK_API, BRANCH) == head)
-            missing = mock.api("PATCH", f"{FORK_API}/git/refs/heads/nothing", {"sha": main_sha})
-            checks.equal("S PATCH of a missing branch: 422", missing.json(), {"message": "Reference does not exist"})
-            nowhere = mock.api("PATCH", branch_ref, {"sha": "f" * 40, "force": True})
-            checks.equal("S PATCH to a sha that is no commit: 422", nowhere.json(), {"message": "Object does not exist"})
-
-            upstream = mock.harness("/__catalog/file?path=public/index.ltx", b"[catalog]\nversion = 2\n").json()["commit"]
-            shared = mock.api("POST", refs, {"ref": "refs/heads/sync", "sha": upstream})
-            checks.equal("S a fork's ref may name a commit made in the catalog", shared.status, 201)
-            fast = mock.api("PATCH", f"{FORK_API}/git/refs/heads/main", {"sha": upstream})
-            checks.check("S the fork's main follows the catalog's as a fast forward",
-                         fast.status == 200 and ref_sha(mock, FORK_API, "main") == upstream, repr(fast.body))
-            checks.equal("S a PUT without a branch writes the default branch", put_file(mock, FORK_API, "notes.txt", b"mine", None).status, 201)
-            checks.equal("S and reads back from it", read_file(mock, FORK_API, "notes.txt", "main"), b"mine")
-
-            repositories = mock.catalog()["repositories"]
-            fork_branch = repositories[FORK]["branches"][BRANCH]
-            checks.check(
-                "S /__catalog: a branch's files as text, a binary one as base64",
-                fork_branch["sha"] == head and fork_branch["message"] == "Update qa_mod"
-                and fork_branch["files"].get(MOD_FILE) == changed.decode() and "public/icons/qa_mod.dds" not in fork_branch["files"]
-                and base64.b64decode(fork_branch["files_base64"].get("public/icons/qa_mod.dds", "")) == seed["public/icons/qa_mod.dds"],
-                repr(fork_branch)[:400],
-            )
-            checks.equal("S /__catalog: the harness moved the catalog's main", repositories[CATALOG]["branches"]["main"]["sha"], upstream)
 
 
-def flow_catalog_pulls(checks: Checks, options) -> None:
-    """T: pull requests against the catalog, merged and closed by the harness."""
-    with tempfile.TemporaryDirectory() as folder:
-        write_catalog_seed(Path(folder))
-        with Mock("--catalog-seed", folder) as mock:
-            make_fork(mock)
-            main_sha = ref_sha(mock, CATALOG_API, "main")
-            mock.api("POST", f"{FORK_API}/git/refs", {"ref": f"refs/heads/{BRANCH}", "sha": main_sha})
+def flow_catalog_issues(checks: Checks, options) -> None:
+    """T: the catalog's issues - opening one, listing and reading them, and the entries the harness opens."""
+    with Mock() as mock:
+        origin = f"http://127.0.0.1:{mock.port}"
+        quiet = mock.api("GET", ISSUES_API)
+        checks.equal("T no issues yet: 200 []", (quiet.status, quiet.json()), (200, []))
 
-            empty = open_pull(mock, HEAD)
-            checks.check(
-                "T a head with nothing the base lacks: 422 No commits between",
-                empty.status == 422 and empty.json() == {"message": "Validation Failed", "errors": [
-                    {"resource": "PullRequest", "code": "custom", "message": f"No commits between main and {HEAD}"}]},
-                repr(empty.body),
-            )
-            put_file(mock, FORK_API, MOD_FILE, MOD_TEXT, BRANCH)
-            opened = open_pull(mock, HEAD, maintainer_can_modify=True)
-            pull = opened.json()
-            checks.check(
-                "T POST pulls from the fork: 201 with the pull request",
-                opened.status == 201 and pull["number"] == 1 and pull["state"] == "open" and pull["merged"] is False
-                and pull["merged_at"] is None and pull["html_url"] == f"http://127.0.0.1:{mock.port}/{CATALOG}/pull/1"
-                and pull["title"] == "Add QA Mod" and pull["body"] == "Submitted by the editor." and pull["user"] == {"login": LOGIN}
-                and pull["head"]["ref"] == BRANCH and pull["head"]["label"] == HEAD and pull["head"]["repo"] == {"full_name": FORK}
-                and pull["head"]["sha"] == ref_sha(mock, FORK_API, BRANCH) and pull["base"]["ref"] == "main"
-                and pull["changed_files"] == 1 and pull["maintainer_can_modify"] is True
-                and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", pull["created_at"]) and pull["updated_at"] == pull["created_at"],
-                repr(pull),
-            )
-            checks.equal("T opening it needed no push on the catalog", mock.api("GET", CATALOG_API).json()["permissions"]["push"], False)
-            duplicate = open_pull(mock, HEAD)
-            checks.check(
-                "T a second pull request for the head: 422 already exists",
-                duplicate.status == 422 and duplicate.json()["errors"] == [
-                    {"resource": "PullRequest", "code": "custom", "message": f"A pull request already exists for {HEAD}."}],
-                repr(duplicate.body),
-            )
-            missing = open_pull(mock, f"{LOGIN}:nothing")
-            checks.check(
-                "T a head branch that does not exist: 422 head invalid",
-                missing.status == 422 and missing.error() == {"resource": "PullRequest", "code": "invalid", "field": "head"},
-                repr(missing.body),
-            )
-            checks.equal("T a head owner nobody knows: 422 head", open_pull(mock, f"Stranger:{BRANCH}").error().get("field"), "head")
-            checks.equal("T a base that does not exist: 422 base", open_pull(mock, HEAD, base="nothing").error().get("field"), "base")
-            untitled = mock.api("POST", f"{CATALOG_API}/pulls", {"head": HEAD, "base": "main"})
-            checks.equal("T no title: 422 missing_field", untitled.error(), {"resource": "PullRequest", "code": "missing_field", "field": "title"})
+        opened = open_issue(mock)
+        issue = opened.json() or {}
+        created = issue.get("created_at") or ""
+        expected = {
+            "number": 1, "title": SUBMISSION_TITLE, "body": SUBMISSION, "state": "open", "state_reason": None,
+            "user": ACCOUNT, "html_url": f"{origin}/{CATALOG}/issues/1", "url": f"{origin}{ISSUES_API}/1",
+            "comments": 0, "locked": False, "created_at": created, "updated_at": created, "closed_at": None, "closed_by": None,
+        }
+        checks.check(
+            "T POST issues: 201 with the issue, opened by the token's account, no pull_request key",
+            opened.status == 201 and issue == {**expected, "id": issue.get("id")} and re.fullmatch(STAMP, created),
+            repr(opened.body[:600]),
+        )
+        checks.check("T an issue id does not fit a signed 32-bit integer",
+                     isinstance(issue.get("id"), int) and issue["id"] > 2**31 - 1, repr(issue.get("id")))
 
-            checks.equal("T GET pulls?head=: the open pull request", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?head={quote(HEAD)}")), [1])
-            checks.equal("T the head's owner matches case-insensitively",
-                         pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?head={quote(HEAD.lower())}")), [1])
-            checks.equal("T another head lists nothing", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?head={quote(LOGIN + ':other')}")), [])
+        refusals = {
+            "no title": ({"body": SUBMISSION}, "missing_field", "title"),
+            "an empty title": ({"title": "", "body": SUBMISSION}, "missing_field", "title"),
+            "a blank title": ({"title": " \t", "body": SUBMISSION}, "missing_field", "title"),
+            "a title that is no string": ({"title": 5, "body": SUBMISSION}, "invalid", "title"),
+            "a body that is no string": ({"title": SUBMISSION_TITLE, "body": ["x"]}, "invalid", "body"),
+        }
+        for name, (body, code, field) in refusals.items():
+            reply = mock.api("POST", ISSUES_API, body)
+            checks.check(
+                f"T POST with {name}: 422 {code} {field}",
+                reply.status == 422 and reply.json() == {"message": "Validation Failed",
+                                                         "errors": [{"resource": "Issue", "code": code, "field": field}]},
+                repr(reply.body),
+            )
+        garbage = mock.api("POST", ISSUES_API, b"{not json", headers={"Content-Type": "application/json"})
+        checks.equal("T POST with a body that is not JSON: 400", garbage.status, 400)
+        checks.equal("T the refused requests opened nothing", [item["number"] for item in mock.catalog()["issues"]], [1])
+        bare = mock.api("POST", ISSUES_API, {"title": "A question"})
+        checks.check("T no body: 201, and the body reads back null",
+                     bare.status == 201 and (bare.json() or {}).get("number") == 2 and (bare.json() or {}).get("body", "") is None,
+                     repr(bare.body[:300]))
 
-            icon = b"DDS |\x00\x01\x02\xff"
-            put_file(mock, FORK_API, "mods/qa_mod/icon.dds", icon, BRANCH)
-            followed = mock.api("GET", f"{CATALOG_API}/pulls/1").json()
-            checks.check(
-                "T a push to the head branch moves the pull request",
-                followed["head"]["sha"] == ref_sha(mock, FORK_API, BRANCH) and followed["changed_files"] == 2,
-                repr(followed["head"]),
-            )
-            edited = mock.api("PATCH", f"{CATALOG_API}/pulls/1", {"title": "Add QA Mod 1.0.1", "body": "Updated."})
-            checks.check(
-                "T PATCH title and body: 200",
-                edited.status == 200 and edited.json()["title"] == "Add QA Mod 1.0.1" and edited.json()["body"] == "Updated."
-                and edited.json()["state"] == "open",
-                repr(edited.body[:300]),
-            )
-            closed = mock.api("PATCH", f"{CATALOG_API}/pulls/1", {"state": "closed"})
-            checks.check(
-                "T PATCH state=closed: closed, not merged",
-                closed.status == 200 and closed.json()["state"] == "closed" and closed.json()["merged"] is False,
-                repr(closed.body[:300]),
-            )
-            checks.equal("T the default (open) list is empty", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls")), [])
-            checks.equal("T state=closed lists it", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?state=closed")), [1])
-            frozen = closed.json()["head"]["sha"]
-            current = mock.api("GET", f"{FORK_API}/contents/{MOD_FILE}?ref={BRANCH}").json()["sha"]
-            changed = MOD_TEXT.replace(b"1.0.0", b"1.0.1")
-            put_file(mock, FORK_API, MOD_FILE, changed, BRANCH, sha=current)
-            checks.equal("T a closed pull request keeps the head it had", mock.api("GET", f"{CATALOG_API}/pulls/1").json()["head"]["sha"], frozen)
+        text = "Другой мод.\r\n\r\n```ini\n[mod]\nid = other_mod\n```\n"
+        planted = plant_issue(mock, "Stranger", "Submit other_mod", text.encode("utf-8"))
+        theirs = planted.json() or {}
+        checks.check(
+            "T /__catalog/issue: an issue opened by anyone, its body byte for byte",
+            planted.status == 200 and theirs.get("number") == 3 and theirs.get("title") == "Submit other_mod"
+            and theirs.get("body") == text and (theirs.get("user") or {}).get("login") == "Stranger"
+            and (theirs.get("user") or {}).get("type") == "User" and theirs.get("state") == "open"
+            and theirs.get("html_url") == f"{origin}/{CATALOG}/issues/3" and "pull_request" not in theirs,
+            repr(planted.body[:400]),
+        )
+        pull = plant_issue(mock, "Stranger", "Add other_mod", pull=True).json() or {}
+        checks.check(
+            "T pull=1: an entry standing for a pull request, with GitHub's pull_request key",
+            pull.get("number") == 4 and pull.get("html_url") == f"{origin}/{CATALOG}/pull/4"
+            and pull.get("url") == f"{origin}{ISSUES_API}/4"
+            and pull.get("pull_request") == {"url": f"{origin}{CATALOG_API}/pulls/4", "html_url": f"{origin}/{CATALOG}/pull/4"}
+            and pull.get("body", "") is None,
+            repr(pull),
+        )
+        own = plant_issue(mock, LOGIN.lower(), "Add qa_mod", b"An old pull request.", pull=True).json() or {}
+        checks.equal("T the account's login in other letters is the account", own.get("user"), ACCOUNT)
+        harness_refusals = [
+            plant_issue(mock, "", "Submit other_mod").status,
+            plant_issue(mock, "Stranger", "").status,
+            plant_issue(mock, "Stranger", "Submit other_mod", b"\xff\xfe").status,
+            mock.harness("/__catalog/issue?creator=Stranger&title=Submit&pull=yes").status,
+        ]
+        checks.equal("T /__catalog/issue without creator, without title, with a body not UTF-8, with pull=yes: 400 each",
+                     harness_refusals, [400] * 4)
+        checks.equal("T and they opened nothing", len(mock.catalog()["issues"]), 5)
 
-            second = open_pull(mock, HEAD, title="Add QA Mod 1.0.1")
-            checks.check("T a new pull request once the first is closed: 201 #2", second.status == 201 and second.json()["number"] == 2, repr(second.body[:300]))
-            reopen = mock.api("PATCH", f"{CATALOG_API}/pulls/1", {"state": "open"})
-            checks.check("T reopening #1 while #2 is open for the head: 422", reopen.status == 422 and b"already exists" in reopen.body, repr(reopen.body))
+        def numbers(query: str = "") -> list[int] | bytes:
+            return issue_numbers(mock.api("GET", ISSUES_API + query))
 
-            index_v2 = b"[catalog]\nversion = 2\n"
-            mock.harness("/__catalog/file?path=public/index.ltx", index_v2)
-            merged = mock.harness("/__catalog/merge?number=2")
-            result = merged.json()
-            checks.check(
-                "T /__catalog/merge: closed, merged, merged_at set",
-                merged.status == 200 and result["state"] == "closed" and result["merged"] is True
-                and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", result["merged_at"] or "") and result["changed_files"] == 2,
-                repr(merged.body[:400]),
-            )
-            main = mock.catalog()["repositories"][CATALOG]["branches"]["main"]
-            checks.check(
-                "T main now holds the head's files",
-                main["files"].get(MOD_FILE) == changed.decode()
-                and base64.b64decode(main["files_base64"].get("mods/qa_mod/icon.dds", "")) == icon,
-                repr(main)[:400],
-            )
-            checks.equal("T and keeps what the harness changed on main meanwhile", main["files"].get("public/index.ltx"), index_v2.decode())
-            checks.equal("T main's head is the merge commit", main["message"], f"Merge pull request #2 from {LOGIN}/{BRANCH}")
-            checks.equal("T merging it again: 422", mock.harness("/__catalog/merge?number=2").status, 422)
-            checks.equal("T merging an unknown pull request: 404", mock.harness("/__catalog/merge?number=99").status, 404)
-            checks.equal("T a merged pull request cannot be reopened: 422",
-                         mock.api("PATCH", f"{CATALOG_API}/pulls/2", {"state": "open"}).status, 422)
-            again = open_pull(mock, HEAD)
-            checks.check("T the merged branch brings nothing new: 422 No commits between",
-                         again.status == 422 and b"No commits between" in again.body, repr(again.body))
+        checks.equal("T GET issues: the open ones, newest first, pull entries included", numbers(), [5, 4, 3, 2, 1])
+        checks.equal("T creator= picks one author's, pull entries included", numbers(f"?creator={LOGIN}"), [5, 2, 1])
+        checks.equal("T creator= matches case-insensitively", numbers(f"?creator={LOGIN.upper()}"), [5, 2, 1])
+        checks.equal("T creator= of somebody else", numbers("?creator=stranger"), [4, 3])
+        checks.equal("T an unknown creator: []", numbers("?creator=Nobody"), [])
+        marks = ["pull_request" in item for item in mock.api("GET", ISSUES_API).json()]
+        checks.equal("T the list marks the pull entries and only them", marks, [True, True, False, False, False])
 
-            # the editor's next submission starts the branch again from the catalog's main
-            mock.api("PATCH", f"{FORK_API}/git/refs/heads/{BRANCH}", {"sha": ref_sha(mock, CATALOG_API, "main"), "force": True})
-            current = mock.api("GET", f"{FORK_API}/contents/{MOD_FILE}?ref={BRANCH}").json()["sha"]
-            put_file(mock, FORK_API, MOD_FILE, MOD_TEXT.replace(b"1.0.0", b"1.0.2"), BRANCH, sha=current)
-            third = open_pull(mock, HEAD, title="Update QA Mod").json()
-            checks.equal("T the next submission from the same branch: #3, one changed file",
-                         (third.get("number"), third.get("changed_files")), (3, 1))
-            closed = mock.harness(f"/__catalog/close?number={third.get('number')}")
-            checks.check(
-                "T /__catalog/close: closed, not merged",
-                closed.status == 200 and closed.json()["state"] == "closed" and closed.json()["merged"] is False
-                and closed.json()["merged_at"] is None,
-                repr(closed.body[:300]),
-            )
-            checks.equal("T closing it again: 422", mock.harness(f"/__catalog/close?number={third.get('number')}").status, 422)
-            checks.equal("T state=all lists every pull request, newest first",
-                         pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?state=all&head={quote(HEAD)}")), [3, 2, 1])
-            checks.equal("T per_page limits the list", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?state=all&per_page=1")), [3])
-            checks.equal("T page picks the next slice", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?state=all&per_page=2&page=2")), [1])
-            checks.equal("T GET pulls/99: 404", mock.api("GET", f"{CATALOG_API}/pulls/99").status, 404)
-            checks.equal("T an unknown state: 422", mock.api("GET", f"{CATALOG_API}/pulls?state=merged").status, 422)
-            checks.equal("T /__catalog lists every pull request by number", [item["number"] for item in mock.catalog()["pulls"]], [1, 2, 3])
+        mock.harness("/__catalog/close?number=2")
+        checks.equal("T state=open by default: a closed issue is left out", numbers(), [5, 4, 3, 1])
+        checks.equal("T state=open says the same", numbers("?state=open"), [5, 4, 3, 1])
+        checks.equal("T state=closed: the closed ones", numbers("?state=closed"), [2])
+        checks.equal("T state=all: every one", numbers("?state=all"), [5, 4, 3, 2, 1])
+        checks.equal("T creator=, state=all, per_page=100, page=1: the account's, as the editor asks",
+                     numbers(f"?creator={LOGIN}&state=all&per_page=100&page=1"), [5, 2, 1])
+        invalid = mock.api("GET", f"{ISSUES_API}?state=merged")
+        checks.check(
+            "T an unknown state: 422 invalid state",
+            invalid.status == 422 and invalid.error() == {"resource": "Issue", "code": "invalid", "field": "state"},
+            repr(invalid.body),
+        )
+        checks.equal("T per_page slices the list", numbers("?state=all&per_page=2"), [5, 4])
+        checks.equal("T page picks the next slices, then nothing",
+                     [numbers(f"?state=all&per_page=2&page={page}") for page in (2, 3, 4)], [[3, 2], [1], []])
+        for index in range(31):
+            plant_issue(mock, "Filler", f"Filler {index}")
+        checks.equal("T 30 a page by default", len(numbers()), 30)
+        checks.equal("T per_page=100: all 35 open ones", len(numbers("?per_page=100")), 35)
+
+        one = mock.api("GET", f"{ISSUES_API}/1")
+        checks.check("T GET issues/1: the issue as POST answered it", one.status == 200 and one.json() == issue, repr(one.body[:400]))
+        checks.equal("T GET a pull entry's number: its issue JSON, pull_request included",
+                     mock.api("GET", f"{ISSUES_API}/4").json(), pull)
+        checks.equal("T GET issues/99, issues/0 and issues/abc: 404",
+                     [mock.api("GET", f"{ISSUES_API}/{number}").status for number in ("99", "0", "abc")], [404] * 3)
+        checks.equal("T another repository has no such issue: 404", mock.api("GET", f"/repos/{LOGIN}/darf-mods/issues/1").status, 404)
+
+        state = mock.catalog()
+        entries = state["issues"]
+        checks.check(
+            "T /__catalog: every issue oldest first, each its issue JSON plus an empty comment_list",
+            set(state) == {"repositories", "issues"} and [item["number"] for item in entries] == list(range(1, 37))
+            and {key: value for key, value in entries[0].items() if key != "comment_list"} == issue
+            and {key: value for key, value in entries[3].items() if key != "comment_list"} == pull
+            and all(item.get("comment_list") == [] for item in entries),
+            repr(entries[:1])[:400],
+        )
+        requests = mock.state()["requests"]
+        logged = [item for item in requests if item["path"].startswith(ISSUES_API)]
+        checks.check("T the issue requests are logged with the token", logged and all(item["authorized"] for item in logged),
+                     repr(logged[:3]))
+        checks.check("T harness requests stay out of the log", not any(item["path"].startswith("/__") for item in requests))
 
 
 def flow_catalog_public(checks: Checks, options) -> None:
-    """U: the catalog's public files on the web, the harness rewriting them, and a maintainer who pushes."""
+    """U: the catalog's public files on the web, and the harness rewriting them."""
     with tempfile.TemporaryDirectory() as folder:
         seed = write_catalog_seed(Path(folder))
         with Mock("--catalog-seed", folder) as mock:
@@ -1354,11 +1238,11 @@ def flow_catalog_public(checks: Checks, options) -> None:
             checks.check(
                 "U /__catalog/file: a commit on main with the file's blob",
                 wrote.status == 200 and wrote.json()["sha"] == git_blob_sha(rewritten) and wrote.json()["branch"] == "main"
-                and wrote.json()["commit"] == ref_sha(mock, CATALOG_API, "main"),
+                and wrote.json()["commit"] == main_sha(mock),
                 repr(wrote.body),
             )
             checks.equal("U the web serves the rewritten index", mock.web("/catalog/public/index.ltx").body, rewritten)
-            checks.equal("U the contents API reads it too", read_file(mock, CATALOG_API, "public/index.ltx", "main"), rewritten)
+            checks.equal("U the contents API reads it too", read_file(mock, "public/index.ltx", "main"), rewritten)
             added = mock.harness("/__catalog/file?path=public/new.ltx&branch=main", b"new")
             checks.check("U /__catalog/file creates a file", added.status == 200 and mock.web("/catalog/public/new.ltx").body == b"new")
             checks.equal("U /__catalog/file onto a missing branch: 404", mock.harness("/__catalog/file?path=x.ltx&branch=nothing", b"x").status, 404)
@@ -1369,29 +1253,257 @@ def flow_catalog_public(checks: Checks, options) -> None:
                          public and not any(item["authorized"] or item["vt_key"] for item in public), repr(public))
             checks.check("U harness requests stay out of the log", not any(item["path"].startswith("/__") for item in requests))
 
-        with Mock("--catalog-seed", folder, "--catalog-push") as mock:
-            checks.equal("U --catalog-push: the account may push", mock.api("GET", CATALOG_API).json()["permissions"], {"push": True, "pull": True})
-            direct = put_file(mock, CATALOG_API, "public/extra.ltx", b"extra", None)
-            checks.check(
-                "U --catalog-push: PUT straight onto the catalog's main",
-                direct.status == 201 and mock.web("/catalog/public/extra.ltx").body == b"extra",
-                repr(direct.body),
-            )
-            main_sha = ref_sha(mock, CATALOG_API, "main")
-            branch = mock.api("POST", f"{CATALOG_API}/git/refs", {"ref": f"refs/heads/{BRANCH}", "sha": main_sha})
-            checks.equal("U --catalog-push: a branch in the catalog itself", branch.status, 201)
-            put_file(mock, CATALOG_API, MOD_FILE, MOD_TEXT, BRANCH)
-            head = f"{CATALOG_OWNER}:{BRANCH}"
-            pull = open_pull(mock, head)
-            checks.check(
-                "U a pull request from a branch of the catalog",
-                pull.status == 201 and pull.json()["head"]["repo"] == {"full_name": CATALOG} and pull.json()["head"]["label"] == head,
-                repr(pull.body[:300]),
-            )
-            bare = open_pull(mock, BRANCH)
-            checks.check("U a bare branch names the same head: 422 already exists", bare.status == 422 and b"already exists" in bare.body, repr(bare.body))
-            checks.equal("U GET pulls by the catalog owner's head", pull_numbers(mock.api("GET", f"{CATALOG_API}/pulls?state=all&head={quote(head)}")), [1])
-            checks.equal("U no fork was needed", list(mock.catalog()["repositories"]), [CATALOG])
+
+def flow_catalog_comments(checks: Checks, options) -> None:
+    """X: comments on the catalog's issues and pull entries - the account's own, and the harness speaking as anyone."""
+    with Mock() as mock:
+        number = open_issue(mock).json()["number"]
+        comments = f"{ISSUES_API}/{number}/comments"
+        origin = f"http://127.0.0.1:{mock.port}"
+
+        quiet = mock.api("GET", comments)
+        checks.equal("X an issue nobody commented on: 200 []", (quiet.status, quiet.json()), (200, []))
+        own = mock.api("POST", comments, {"body": "Thanks!"})
+        comment = own.json() or {}
+        checks.check(
+            "X POST comments: 201, written by the token's account",
+            own.status == 201 and comment.get("body") == "Thanks!" and comment.get("user") == ACCOUNT
+            and comment.get("html_url") == f"{origin}/{CATALOG}/issues/{number}#issuecomment-{comment.get('id')}"
+            and comment.get("issue_url") == f"{origin}{ISSUES_API}/{number}"
+            and comment.get("url") == f"{origin}{ISSUES_API}/comments/{comment.get('id')}"
+            and re.fullmatch(STAMP, comment.get("created_at") or "") and comment.get("updated_at") == comment.get("created_at"),
+            repr(own.body[:400]),
+        )
+        checks.equal("X no body: 422 missing_field", mock.api("POST", comments, {}).error(),
+                     {"resource": "IssueComment", "code": "missing_field", "field": "body"})
+        checks.equal("X an empty body: 422 missing_field", mock.api("POST", comments, {"body": ""}).error().get("code"), "missing_field")
+        checks.equal("X a body that is no string: 422 invalid", mock.api("POST", comments, {"body": 5}).error().get("code"), "invalid")
+
+        verdict = "<!-- xms-catalog verdict=waiting -->\r\nWaiting: VirusTotal is scanning.\r\n\r\n## Report\r\n"
+        planted = mock.harness(f"/__catalog/comment?number={number}", verdict.encode("utf-8"))
+        bot = planted.json() or []
+        checks.check(
+            "X /__catalog/comment writes as github-actions[bot] by default, the body byte for byte",
+            planted.status == 200 and len(bot) == 1 and bot[0]["body"] == verdict and bot[0]["user"] == BOT,
+            repr(planted.body[:400]),
+        )
+        text = "Одобрено, честно"
+        stranger = mock.harness(f"/__catalog/comment?number={number}&author=Stranger", text.encode("utf-8")).json()
+        checks.check(
+            "X author= writes as somebody else, a User; UTF-8 survives",
+            stranger[0]["user"]["login"] == "Stranger" and stranger[0]["user"]["type"] == "User" and stranger[0]["body"] == text,
+            repr(stranger),
+        )
+        other_bot = mock.harness(f"/__catalog/comment?number={number}&author={quote('lookalike[bot]')}", b"beep").json()
+        checks.equal("X another app's [bot] account is a Bot too", other_bot[0]["user"]["type"], "Bot")
+        listed = mock.api("GET", comments).json()
+        checks.equal("X GET lists every comment oldest first",
+                     [(item["user"]["login"], item["body"]) for item in listed],
+                     [(LOGIN, "Thanks!"), ("github-actions[bot]", verdict), ("Stranger", text), ("lookalike[bot]", "beep")])
+        ids = [item["id"] for item in listed]
+        checks.check("X comment ids grow", ids == sorted(set(ids)) and ids[0] >= 2150000001, repr(ids))
+
+        filler = mock.harness(f"/__catalog/comment?number={number}&author=Stranger&count=100", b"filler")
+        checks.check("X count= plants that many at once", filler.status == 200 and len(filler.json()) == 100, repr(filler.body[:200]))
+        checks.equal("X 30 a page by default", len(mock.api("GET", comments).json()), 30)
+        checks.equal("X per_page=100: the first hundred", len(mock.api("GET", f"{comments}?per_page=100").json()), 100)
+        rest = mock.api("GET", f"{comments}?per_page=100&page=2").json()
+        checks.equal("X page=2: the rest, still oldest first", [item["body"] for item in rest], ["filler"] * 4)
+        checks.equal("X the issue counts its comments, read alone and listed",
+                     [mock.api("GET", f"{ISSUES_API}/{number}").json()["comments"], mock.api("GET", ISSUES_API).json()[0]["comments"]],
+                     [104, 104])
+
+        checks.equal("X an issue that does not exist: GET 404", mock.api("GET", f"{ISSUES_API}/99/comments").status, 404)
+        checks.equal("X and POST 404", mock.api("POST", f"{ISSUES_API}/99/comments", {"body": "x"}).status, 404)
+        checks.equal("X the harness on one: 404", mock.harness("/__catalog/comment?number=99", b"x").status, 404)
+        checks.equal("X the harness without a text: 400", mock.harness(f"/__catalog/comment?number={number}").status, 400)
+        checks.equal("X the harness with count=0 or count=1001: 400",
+                     [mock.harness(f"/__catalog/comment?number={number}&count={count}", b"x").status for count in (0, 1001)], [400, 400])
+        checks.equal("X the harness with a text that is not UTF-8: 400",
+                     mock.harness(f"/__catalog/comment?number={number}", b"\xff").status, 400)
+        checks.equal("X another repository has no such issue: 404",
+                     mock.api("GET", f"/repos/{LOGIN}/darf-mods/issues/{number}/comments").status, 404)
+        checks.equal("X comments need the token: 401", mock.call("GET", comments).status, 401)
+
+        pull = plant_issue(mock, "Stranger", "Add other_mod", pull=True).json()["number"]
+        posted = mock.api("POST", f"{ISSUES_API}/{pull}/comments", {"body": "Please submit it as an issue."}).json() or {}
+        answered = (mock.harness(f"/__catalog/comment?number={pull}", b"Pull requests are not reviewed here.").json() or [{}])[0]
+        checks.check(
+            "X a pull entry takes comments too, their html_url the pull request's",
+            posted.get("html_url") == f"{origin}/{CATALOG}/pull/{pull}#issuecomment-{posted.get('id')}"
+            and answered.get("html_url") == f"{origin}/{CATALOG}/pull/{pull}#issuecomment-{answered.get('id')}"
+            and posted.get("issue_url") == answered.get("issue_url") == f"{origin}{ISSUES_API}/{pull}",
+            repr((posted, answered))[:400],
+        )
+        checks.equal("X and keeps them apart from the issue's",
+                     [item["id"] for item in mock.api("GET", f"{ISSUES_API}/{pull}/comments").json()],
+                     [posted.get("id"), answered.get("id")])
+
+        mock.harness(f"/__catalog/close?number={number}")
+        late = mock.api("POST", comments, {"body": "Closed, then commented."})
+        refused = mock.harness(f"/__catalog/comment?number={number}", b"<!-- xms-catalog verdict=refused -->\nRefused.\n")
+        checks.check("X a closed issue still takes comments, from both",
+                     late.status == 201 and refused.status == 200 and mock.api("GET", f"{ISSUES_API}/{number}").json()["comments"] == 106,
+                     repr(late.body[:200]))
+
+        entry = next((item for item in mock.catalog()["issues"] if item["number"] == number), {})
+        tail = mock.api("GET", f"{comments}?per_page=100&page=2").json()
+        checks.check(
+            "X /__catalog: the issue's comment_list, oldest first, each comment as the API writes it",
+            len(entry.get("comment_list", [])) == entry.get("comments") == 106
+            and entry["comment_list"][0] == comment and entry["comment_list"][100:] == tail,
+            repr(entry)[:400],
+        )
+        requests = mock.state()["requests"]
+        logged = [item for item in requests if "/comments" in item["path"]]
+        checks.check("X the API's comment requests are logged with the token",
+                     logged and all(item["authorized"] for item in logged if item["status"] != 401), repr(logged[:3]))
+        checks.check("X harness comments stay out of the log", not any(item["path"].startswith("/__") for item in requests))
+
+
+def flow_catalog_issue_edits(checks: Checks, options) -> None:
+    """Y: editing and closing issues - the author, somebody else's issue, the workflow closing one, the owner."""
+    new_body = "```ini\n[mod]\nid = qa_mod\nversion = 1.0.1\n```\n"
+    with Mock() as mock:
+        mine = open_issue(mock).json()
+        path = f"{ISSUES_API}/{mine['number']}"
+
+        edited = mock.api("PATCH", path, {"title": "Submit qa_mod 1.0.1", "body": new_body})
+        result = edited.json() or {}
+        checks.check(
+            "Y the author edits title and body: 200, still open, updated_at a time no earlier than before",
+            edited.status == 200 and result.get("title") == "Submit qa_mod 1.0.1" and result.get("body") == new_body
+            and result.get("state") == "open" and re.fullmatch(STAMP, result.get("updated_at") or "")
+            and result["updated_at"] >= mine["updated_at"] and result.get("created_at") == mine["created_at"],
+            repr(edited.body[:400]),
+        )
+        checks.equal("Y and it reads back", mock.api("GET", path).json(), result)
+        body_only = mock.api("PATCH", path, {"body": SUBMISSION}).json() or {}
+        checks.check("Y a PATCH with the body alone keeps the title",
+                     body_only.get("title") == "Submit qa_mod 1.0.1" and body_only.get("body") == SUBMISSION, repr(body_only))
+        cleared = mock.api("PATCH", path, {"body": None}).json() or {}
+        checks.equal("Y body null clears the text", cleared.get("body", ""), None)
+        mock.api("PATCH", path, {"body": SUBMISSION})
+
+        closed = mock.api("PATCH", path, {"state": "closed", "state_reason": "not_planned"})
+        closure = closed.json() or {}
+        checks.check(
+            "Y the author closes it as not planned: state, state_reason, closed_at, closed_by",
+            closed.status == 200 and closure.get("state") == "closed" and closure.get("state_reason") == "not_planned"
+            and re.fullmatch(STAMP, closure.get("closed_at") or "") and closure.get("closed_by") == ACCOUNT,
+            repr(closed.body[:400]),
+        )
+        checks.equal("Y and the list files it under closed", issue_numbers(mock.api("GET", f"{ISSUES_API}?state=closed")), [1])
+        reopened = mock.api("PATCH", path, {"state": "open"})
+        back = reopened.json() or {}
+        checks.check(
+            "Y the author reopens what they closed: reopened, closed_at and closed_by cleared",
+            reopened.status == 200 and back.get("state") == "open" and back.get("state_reason") == "reopened"
+            and back.get("closed_at", "") is None and back.get("closed_by", "") is None,
+            repr(reopened.body[:400]),
+        )
+        plain = mock.api("PATCH", path, {"state": "closed"}).json() or {}
+        checks.equal("Y closing without a reason: completed", (plain.get("state"), plain.get("state_reason")), ("closed", "completed"))
+        wrong_way = mock.api("PATCH", path, {"state": "open", "state_reason": "completed"})
+        checks.check("Y reopening as completed: 422 invalid state_reason",
+                     wrong_way.status == 422 and wrong_way.error() == {"resource": "Issue", "code": "invalid", "field": "state_reason"},
+                     repr(wrong_way.body))
+        explicit = mock.api("PATCH", path, {"state": "open", "state_reason": "reopened"})
+        checks.check("Y reopening that names reopened: 200", explicit.status == 200 and (explicit.json() or {}).get("state") == "open",
+                     repr(explicit.body[:300]))
+
+        before = mock.api("GET", path).json()
+        refusals = {
+            "an empty title": ({"title": ""}, "missing_field", "title"),
+            "a title that is no string": ({"title": 7}, "invalid", "title"),
+            "a body that is no string": ({"body": {"text": "x"}}, "invalid", "body"),
+            "an unknown state next to a good title": ({"state": "merged", "title": "Changed"}, "invalid", "state"),
+            "a state that is no string": ({"state": False}, "invalid", "state"),
+            "an unknown state_reason": ({"state": "closed", "state_reason": "wontfix"}, "invalid", "state_reason"),
+            "closing as reopened": ({"state": "closed", "state_reason": "reopened"}, "invalid", "state_reason"),
+            "a state_reason that is no string": ({"state": "closed", "state_reason": 1}, "invalid", "state_reason"),
+        }
+        for name, (body, code, field) in refusals.items():
+            reply = mock.api("PATCH", path, body)
+            checks.check(f"Y PATCH with {name}: 422 {code} {field}",
+                         reply.status == 422 and reply.error() == {"resource": "Issue", "code": code, "field": field}, repr(reply.body))
+        checks.equal("Y the refused PATCHes changed nothing", mock.api("GET", path).json(), before)
+        checks.equal("Y PATCH of an issue that does not exist: 404", mock.api("PATCH", f"{ISSUES_API}/99", {"state": "closed"}).status, 404)
+
+        theirs = plant_issue(mock, "Stranger", "Submit other_mod", b"Their submission.").json()
+        their_path = f"{ISSUES_API}/{theirs['number']}"
+        denied = [mock.api("PATCH", their_path, body) for body in ({"title": "Hijacked"}, {"body": "Hijacked"}, {"state": "closed"}, {})]
+        checks.check(
+            "Y somebody else's issue: 403 Must have admin rights, whatever the PATCH says",
+            all(reply.status == 403 and reply.json() == FORBIDDEN for reply in denied),
+            repr([reply.body for reply in denied]),
+        )
+        checks.equal("Y and nothing changed", mock.api("GET", their_path).json(), theirs)
+
+        verdict = mock.harness(f"/__catalog/close?number={mine['number']}")
+        closure = verdict.json() or {}
+        checks.check(
+            "Y /__catalog/close: closed by github-actions[bot] as completed",
+            verdict.status == 200 and closure.get("state") == "closed" and closure.get("state_reason") == "completed"
+            and closure.get("closed_by") == BOT and re.fullmatch(STAMP, closure.get("closed_at") or ""),
+            repr(verdict.body[:400]),
+        )
+        reopen = mock.api("PATCH", path, {"state": "open"})
+        checks.check("Y the author cannot reopen what the workflow closed: 403", reopen.status == 403 and reopen.json() == FORBIDDEN,
+                     repr(reopen.body))
+        checks.equal("Y and it stays as the workflow left it", mock.api("GET", path).json(), closure)
+        note = mock.api("PATCH", path, {"body": "A note after the verdict.", "state": "closed", "state_reason": "not_planned"})
+        noted = note.json() or {}
+        checks.check(
+            "Y the author may still edit it; closing it again keeps the workflow's closure",
+            note.status == 200 and noted.get("body") == "A note after the verdict." and noted.get("state") == "closed"
+            and noted.get("state_reason") == "completed" and noted.get("closed_by") == BOT
+            and noted.get("closed_at") == closure.get("closed_at"),
+            repr(note.body[:400]),
+        )
+        checks.equal("Y /__catalog/close of a closed issue: 422", mock.harness(f"/__catalog/close?number={mine['number']}").status, 422)
+
+        other = open_issue(mock).json()["number"]
+        named = mock.harness(f"/__catalog/close?number={other}&reason=not_planned&by={CATALOG_OWNER}").json() or {}
+        checks.check(
+            "Y reason= and by= name the closure",
+            named.get("state_reason") == "not_planned" and (named.get("closed_by") or {}).get("login") == CATALOG_OWNER
+            and (named.get("closed_by") or {}).get("type") == "User",
+            repr(named),
+        )
+        own = open_issue(mock).json()["number"]
+        mock.harness(f"/__catalog/close?number={own}&by={LOGIN}")
+        checks.equal("Y closed by= the account itself, the author may reopen it",
+                     mock.api("PATCH", f"{ISSUES_API}/{own}", {"state": "open"}).status, 200)
+        checks.equal("Y /__catalog/close of an unknown number: 404", mock.harness("/__catalog/close?number=99").status, 404)
+        checks.equal("Y /__catalog/close for another reason: 400, and the issue stays open",
+                     (mock.harness(f"/__catalog/close?number={own}&reason=wontfix").status,
+                      mock.api("GET", f"{ISSUES_API}/{own}").json()["state"]),
+                     (400, "open"))
+        entry = plant_issue(mock, LOGIN, "Add qa_mod", pull=True).json()["number"]
+        shut = mock.harness(f"/__catalog/close?number={entry}").json() or {}
+        checks.check("Y the harness closes a pull entry as well", shut.get("state") == "closed" and "pull_request" in shut, repr(shut))
+
+    with Mock("--login", CATALOG_OWNER.lower()) as mock:
+        checks.equal("Y --login in other letters owns the catalog too: push",
+                     mock.api("GET", CATALOG_API).json()["permissions"]["push"], True)
+        submitted = plant_issue(mock, LOGIN, SUBMISSION_TITLE, SUBMISSION.encode("utf-8")).json()
+        path = f"{ISSUES_API}/{submitted['number']}"
+        mock.harness(f"/__catalog/close?number={submitted['number']}")
+        edited = mock.api("PATCH", path, {"title": "Submit qa_mod (checked)", "body": "Checked by the maintainer."})
+        result = edited.json() or {}
+        checks.check(
+            "Y the owner edits anybody's issue; the author stays the author",
+            edited.status == 200 and result.get("title") == "Submit qa_mod (checked)"
+            and (result.get("user") or {}).get("login") == LOGIN,
+            repr(edited.body[:300]),
+        )
+        reopened = mock.api("PATCH", path, {"state": "open"})
+        checks.check("Y and reopens what the workflow closed",
+                     reopened.status == 200 and (reopened.json() or {}).get("state_reason") == "reopened", repr(reopened.body[:300]))
+        closed = mock.api("PATCH", path, {"state": "closed", "state_reason": "not_planned"}).json() or {}
+        checks.equal("Y and closes it as themselves", (closed.get("closed_by"), closed.get("state_reason")),
+                     ({"login": CATALOG_OWNER.lower(), "id": 1001, "type": "User"}, "not_planned"))
 
 
 def flow_vt(checks: Checks, options) -> None:
@@ -1699,12 +1811,14 @@ FLOWS = {
     "O": flow_explicit_port,
     "P": flow_parallel,
     "Q": flow_tags,
-    "R": flow_catalog_fork,
-    "S": flow_catalog_git,
-    "T": flow_catalog_pulls,
+    "R": flow_catalog_repo,
+    "S": flow_catalog_contents,
+    "T": flow_catalog_issues,
     "U": flow_catalog_public,
     "V": flow_vt,
     "W": flow_vt_faults,
+    "X": flow_catalog_comments,
+    "Y": flow_catalog_issue_edits,
 }
 
 

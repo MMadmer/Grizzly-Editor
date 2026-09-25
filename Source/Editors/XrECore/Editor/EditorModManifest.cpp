@@ -2273,7 +2273,7 @@ static void CheckStagedContent(const xr_string& module_dir, const xr_vector<SSta
 	for (u32 i = 0; i < findings.size(); ++i)
 		(EditorCatalog::lvBlock == findings[i].level ? result.catalog_block : result.catalog_review).push_back(findings[i].text);
 	if (!warnings) return;
-	// the author learns it here, not from a refused pull request
+	// the author learns it here, not from a refused submission
 	for (u32 i = 0; i < result.catalog_block.size() && i < 10; ++i)
 		*warnings += "the Mod Browser refuses " + result.catalog_block[i] + "\n";
 	if (result.catalog_block.size() > 10)

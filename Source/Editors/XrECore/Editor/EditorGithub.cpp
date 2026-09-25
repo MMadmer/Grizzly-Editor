@@ -28,6 +28,9 @@ const char* kCatalogMirrors[] = {
 	"https://cdn.jsdelivr.net/gh/MMadmer/darf-mods@main/public/",
 	"https://raw.githubusercontent.com/MMadmer/darf-mods/main/public/",
 };
+// The catalog's workflow comments its verdicts as this account. A person cannot take a login with
+// brackets, so a comment by it is the workflow's own.
+const char* kCatalogBot = "github-actions[bot]";
 
 const u32 kMaxResponse		= 32u << 20;
 const u32 kUploadChunk		= 256u << 10;
@@ -1477,22 +1480,6 @@ bool EditorGithub::AccountLogin(const xr_string& token, CCancel& cancel, xr_stri
 
 namespace
 {
-xr_string Base64(const xr_string& data)
-{
-	static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	xr_string out;
-	const u8* b = (const u8*)data.data();
-	for (size_t i = 0; i < data.size(); i += 3)
-	{
-		const u32 chunk = (u32(b[i]) << 16) | (i + 1 < data.size() ? u32(b[i + 1]) << 8 : 0) | (i + 2 < data.size() ? b[i + 2] : 0);
-		out += alphabet[(chunk >> 18) & 63];
-		out += alphabet[(chunk >> 12) & 63];
-		out += i + 1 < data.size() ? alphabet[(chunk >> 6) & 63] : '=';
-		out += i + 2 < data.size() ? alphabet[chunk & 63] : '=';
-	}
-	return out;
-}
-
 // base64 with the line breaks the contents API puts in
 bool UnBase64(const xr_string& text, xr_string& out)
 {
@@ -1520,202 +1507,212 @@ bool UnBase64(const xr_string& text, xr_string& out)
 	return true;
 }
 
-void ReadPull(const SJson& j, EditorGithub::SCatalogPull& out)
+// the account the token belongs to
+bool ReadLogin(CApi& api, EditorGithub::CCancel& cancel, xr_string& login, xr_string& err)
+{
+	const SHttpResponse r = api.Get(ApiBase() + "/user");
+	SJson j;
+	if (cancel.Cancelled())	{ err = "cancelled"; return false; }
+	if (r.status == 401)	{ err = "GitHub rejected the sign-in. Sign in again."; return false; }
+	if (r.status != 200 || !ParseJson(r.body, j) || !j.Str("login")[0]) { err = Problem(r); return false; }
+	login = j.Str("login");
+	return true;
+}
+
+void ReadIssue(const SJson& j, EditorGithub::SCatalogIssue& out)
 {
 	out.number	= j.U64("number");
 	out.url		= j.Str("html_url");
-	// a merged pull request is closed as well; merged is what the author wants to hear
-	out.state	= (j.Bool("merged") || j.Str("merged_at")[0]) ? "merged" : j.Str("state");
+	out.state	= j.Str("state");
 	if (out.state.empty()) out.state = "open";
 }
 
-// the catalog as this account sees it
-bool ReadCatalog(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, xr_string& default_branch,
-				 bool& push, xr_string& err)
+// The account's newest "Submit <id>" issue of the catalog, in any state; `out` keeps what it has
+// when there is none. The list is newest first and holds the account's pull requests as well.
+bool FindIssue(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, const xr_string& login,
+			   const xr_string& module_id, EditorGithub::SCatalogIssue& out, xr_string& err)
 {
-	const SHttpResponse r = api.Get(ApiBase() + "/repos/" + catalog);
-	if (cancel.Cancelled()) { err = "cancelled"; return false; }
-	SJson j;
-	if (r.status == 404) { err = "The Mod Browser catalog " + catalog + " was not found."; return false; }
-	if (r.status != 200 || !ParseJson(r.body, j)) { err = AccessProblem(r, catalog); return false; }
-	default_branch = j.Str("default_branch");
-	if (default_branch.empty()) default_branch = "main";
-	const SJson* permissions = j.Find("permissions");
-	push = permissions && permissions->Bool("push");
+	const xr_string title = "Submit " + module_id;
+	const u32 per_page = 100, pages = 10;
+	for (u32 page = 1; page <= pages; ++page)
+	{
+		const SHttpResponse r = api.Get(ApiBase() + "/repos/" + catalog + "/issues?creator=" + UrlEncode(login) +
+			NqUtil::Format("&state=all&per_page=%u&page=%u", per_page, page));
+		if (cancel.Cancelled()) { err = "cancelled"; return false; }
+		SJson j;
+		if (r.status == 404) { err = "The Mod Browser catalog " + catalog + " was not found."; return false; }
+		if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) { err = AccessProblem(r, catalog); return false; }
+		for (u32 i = 0; i < j.items.size(); ++i)
+			if (!j.items[i].Find("pull_request") && title == j.items[i].Str("title"))
+			{
+				ReadIssue(j.items[i], out);
+				return true;
+			}
+		if (j.items.size() < per_page) break;
+	}
 	return true;
+}
+
+bool Blank(char c) { return c == ' ' || c == '\t' || c == '\r'; }
+
+// A verdict comment: "<!-- xms-catalog verdict=STATE -->" on its first line, one plain sentence on
+// the next line that holds anything, then a report for people. Spacing and line ends are the writer's.
+bool ParseVerdict(const xr_string& body, xr_string& state, xr_string& text)
+{
+	state.clear();
+	text.clear();
+	xr_string line[2];
+	u32 lines = 0;
+	for (size_t at = 0; at < body.size() && lines < 2;)
+	{
+		size_t end = body.find('\n', at);
+		if (end == xr_string::npos) end = body.size();
+		size_t first = at, last = end;
+		while (first < last && Blank(body[first])) ++first;
+		while (last > first && Blank(body[last - 1])) --last;
+		if (first < last) line[lines++] = body.substr(first, last - first);
+		at = end + 1;
+	}
+	const xr_string& marker = line[0];
+	if (marker.size() < 7 || 0 != marker.compare(0, 4, "<!--") || 0 != marker.compare(marker.size() - 3, 3, "-->"))
+		return false;
+	const char* p = marker.c_str() + 4;
+	const char* const stop = marker.c_str() + marker.size() - 3;
+	const auto skip = [&]() { while (p < stop && Blank(*p)) ++p; };
+	const auto take = [&](LPCSTR word)
+	{
+		const size_t n = xr_strlen(word);
+		if ((size_t)(stop - p) < n || 0 != strncmp(p, word, n)) return false;
+		p += n;
+		return true;
+	};
+	skip();
+	if (!take("xms-catalog") || p == stop || !Blank(*p)) return false;
+	skip();
+	if (!take("verdict")) return false;
+	skip();
+	if (!take("=")) return false;
+	skip();
+	xr_string word;
+	while (p < stop && !Blank(*p)) word += char(tolower((unsigned char)*p++));
+	if (word != "accepted" && word != "waiting" && word != "refused") return false;
+	state = word;
+	text = line[1];
+	return true;
+}
+
+// The comments come oldest first, a page at a time, and the newest verdict of the catalog's workflow
+// is the one in force; anyone may post a comment that looks like one. false = cancelled. A failed
+// page, or more comments than the pages hold, leaves the submission without a verdict rather than
+// with an old one.
+bool ReadVerdict(CApi& api, EditorGithub::CCancel& cancel, const xr_string& catalog, EditorGithub::SCatalogIssue& out)
+{
+	const u32 per_page = 100, pages = 30;
+	for (u32 page = 1; page <= pages; ++page)
+	{
+		const SHttpResponse r = api.Get(ApiBase() + "/repos/" + catalog +
+			NqUtil::Format("/issues/%llu/comments?per_page=%u&page=%u", out.number, per_page, page));
+		if (cancel.Cancelled()) return false;
+		SJson j;
+		if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) break;
+		for (u32 i = 0; i < j.items.size(); ++i)
+		{
+			const SJson* user = j.items[i].Find("user");
+			xr_string state, text;
+			if (user && 0 == strcmp(user->Str("login"), kCatalogBot) && ParseVerdict(j.items[i].Str("body"), state, text))
+			{
+				out.verdict = state;
+				out.verdict_text = text;
+			}
+		}
+		if (j.items.size() < per_page) return true;
+	}
+	out.verdict.clear();
+	out.verdict_text.clear();
+	return true;
+}
+
+// The issue's body: the marker, a line for people, then the file the catalog commits in an ini
+// block of its own - byte for byte, the catalog takes it from there - and the details after it.
+xr_string SubmissionBody(const EditorGithub::SCatalogRequest& rq)
+{
+	xr_string body = "<!-- xms-catalog submission -->\n"
+		"Submitted from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7).\n\n```ini\n" +
+		rq.file_text;
+	if (rq.file_text.empty() || rq.file_text.back() != '\n') body += '\n';
+	body += "```\n";
+	if (!rq.details.empty()) body += "\n" + rq.details;
+	return body;
 }
 } // namespace
 
-bool EditorGithub::CatalogSubmit(const SCatalogSubmission& rq, CCancel& cancel, const TStage& stage,
-								 SCatalogPull& out, xr_string& err)
+bool EditorGithub::CatalogSubmit(const SCatalogRequest& rq, CCancel& cancel, const TStage& stage, SCatalogIssue& out,
+								 xr_string& err)
 {
-	out = SCatalogPull();
+	out = SCatalogIssue();
 	err.clear();
 	CHttp http;
 	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
 	CApi api(http, cancel, rq.token);
 	const xr_string catalog = CatalogRepo();
 	const xr_string catalog_url = ApiBase() + "/repos/" + catalog;
-	const xr_string catalog_owner = catalog.substr(0, catalog.find('/'));
-	const xr_string branch = "submit-" + rq.module_id;
-	const xr_string file = "mods/" + rq.module_id + ".ltx";
-	SJson j;
 	const auto say = [&stage](LPCSTR text) { if (stage) stage(text); };
 
-#define CHECK_CANCEL() if (cancel.Cancelled()) { err = "cancelled"; return false; }
-
-	// 1. who is asking, and what the catalog lets them do
 	say("Reading the GitHub account");
-	SHttpResponse r = api.Get(ApiBase() + "/user");
-	CHECK_CANCEL();
-	if (r.status == 401) { err = "GitHub rejected the sign-in. Sign in again."; return false; }
-	if (r.status != 200 || !ParseJson(r.body, j) || !j.Str("login")[0]) { err = Problem(r); return false; }
-	out.login = j.Str("login");
-	say("Reading the catalog");
-	xr_string base;
-	bool push = false;
-	if (!ReadCatalog(api, cancel, catalog, base, push, err)) return false;
+	if (!ReadLogin(api, cancel, out.login, err)) return false;
+	say("Reading the submission");
+	if (!FindIssue(api, cancel, catalog, out.login, rq.module_id, out, err)) return false;
 
-	// Nothing to send when the catalog already holds this very file - a module listed and
-	// submitted again unchanged: no commit, so no pull request could be opened.
+	// Nothing to send when the catalog's default branch already holds this very file - a module
+	// listed and submitted again unchanged.
+	SHttpResponse r = api.Get(catalog_url + "/contents/mods/" + rq.module_id + ".ltx");
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
+	SJson j;
+	xr_string current;
+	if (r.status == 200 && ParseJson(r.body, j) && UnBase64(j.Str("content"), current) && current == rq.file_text)
 	{
-		r = api.Get(catalog_url + "/contents/" + file + "?ref=" + UrlEncode(base));
-		CHECK_CANCEL();
-		xr_string current;
-		if (r.status == 200 && ParseJson(r.body, j) && UnBase64(j.Str("content"), current) && current == rq.file_text)
-		{
-			const xr_string head = (push ? catalog_owner : out.login) + ":" + branch;
-			r = api.Get(catalog_url + "/pulls?state=all&per_page=10&head=" + UrlEncode(head));
-			CHECK_CANCEL();
-			if (r.status == 200 && ParseJson(r.body, j) && j.type == SJson::jArray && !j.items.empty())
-				ReadPull(j.items[0], out);
-			out.note = "The catalog already holds this exact submission - nothing was sent.";
-			return true;
-		}
+		out.note = "The catalog already holds this exact submission - nothing was sent.";
+		// a closed submission is told apart by its verdict: what the catalog said about the last one
+		if (out.number && !ReadVerdict(api, cancel, catalog, out)) { err = "cancelled"; return false; }
+		return true;
 	}
 
-	// 2. The branch lives in a fork; an account that may push to the catalog - its maintainer
-	// listing a module of their own - cannot fork its own repository and needs no fork.
-	xr_string head_repo = catalog, head_owner = catalog_owner;
-	if (!push)
-	{
-		say("Forking the catalog");
-		r = api.Send("POST", catalog_url + "/forks", "{\"default_branch_only\":true}");
-		CHECK_CANCEL();
-		if ((r.status != 202 && r.status != 200) || !ParseJson(r.body, j) || !j.Str("full_name")[0])
-			{ err = "GitHub did not fork the catalog: " + Problem(r); return false; }
-		head_repo = j.Str("full_name");
-		const SJson* owner = j.Find("owner");
-		head_owner = (owner && owner->Str("login")[0]) ? xr_string(owner->Str("login")) : out.login;
-		// GitHub makes a fork in the background: its branches answer once it exists
-		say("Waiting for the fork");
-		bool ready = false;
-		for (u32 attempt = 0; attempt < 30 && !ready; ++attempt)
-		{
-			if (attempt) Pause(cancel, 2000);
-			CHECK_CANCEL();
-			r = api.Get(ApiBase() + "/repos/" + head_repo + "/git/ref/heads/" + EncodeRef(base));
-			CHECK_CANCEL();
-			ready = r.status == 200;
-			if (!ready && r.status != 404 && r.status != 409) { err = Problem(r); return false; }
-		}
-		if (!ready) { err = "The fork of the catalog did not appear within a minute. Submit again in a moment."; return false; }
-	}
-	const xr_string head_url = ApiBase() + "/repos/" + head_repo;
-
-	// 3. the branch starts from the catalog as it is now, whatever an earlier submission left on it
-	say("Preparing the branch");
-	r = api.Get(catalog_url + "/git/ref/heads/" + EncodeRef(base));
-	CHECK_CANCEL();
-	const SJson* object = 0;
-	if (r.status != 200 || !ParseJson(r.body, j) || !(object = j.Find("object")) || !object->Str("sha")[0])
-		{ err = Problem(r); return false; }
-	const xr_string base_sha = object->Str("sha");
-	r = api.Send("POST", head_url + "/git/refs", "{\"ref\":\"refs/heads/" + branch + "\",\"sha\":\"" + base_sha + "\"}");
-	CHECK_CANCEL();
-	if (r.status == 422)
-	{
-		r = api.Send("PATCH", head_url + "/git/refs/heads/" + EncodeRef(branch), "{\"sha\":\"" + base_sha + "\",\"force\":true}");
-		CHECK_CANCEL();
-	}
-	if (r.status != 200 && r.status != 201) { err = "Cannot prepare the branch " + branch + ": " + Problem(r); return false; }
-
-	// 4. the one file a submission changes
-	say("Writing the submission");
-	r = api.Get(head_url + "/contents/" + file + "?ref=" + UrlEncode(branch));
-	CHECK_CANCEL();
-	xr_string existing;
-	if (r.status == 200 && ParseJson(r.body, j))	existing = j.Str("sha");
-	else if (r.status != 404)						{ err = Problem(r); return false; }
-	xr_string body = "{\"message\":\"";
-	JsonEscape(body, (existing.empty() ? "Add " : "Update ") + rq.module_id);
-	body += "\",\"content\":\"" + Base64(rq.file_text) + "\",\"branch\":\"" + branch + "\"";
-	if (!existing.empty()) body += ",\"sha\":\"" + existing + "\"";
-	body += "}";
-	r = api.Send("PUT", head_url + "/contents/" + file, body);
-	CHECK_CANCEL();
-	if (r.status != 200 && r.status != 201) { err = "Cannot write " + file + ": " + Problem(r); return false; }
-
-	// 5. the pull request: an open one follows its branch, so only its text is updated
-	say("Opening the pull request");
-	const xr_string head = head_owner + ":" + branch;
-	r = api.Get(catalog_url + "/pulls?state=open&head=" + UrlEncode(head));
-	CHECK_CANCEL();
-	if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) { err = Problem(r); return false; }
-	const u64 open = j.items.empty() ? 0 : j.items[0].U64("number");
-	body = "{\"title\":\"";
-	JsonEscape(body, rq.title);
-	body += "\",\"body\":\"";
-	JsonEscape(body, rq.body);
+	// The open submission takes the new text, and the edit makes the catalog judge it again. Once the
+	// last one is closed - accepted or refused - a new one opens.
+	xr_string body = "{\"body\":\"";
+	JsonEscape(body, SubmissionBody(rq));
 	body += "\"";
-	if (open)
-		r = api.Send("PATCH", catalog_url + NqUtil::Format("/pulls/%llu", open), body + "}");
+	if (out.number && out.state == "open")
+	{
+		say("Updating the submission");
+		r = api.Send("PATCH", catalog_url + NqUtil::Format("/issues/%llu", out.number), body + "}");
+	}
 	else
-		r = api.Send("POST", catalog_url + "/pulls", body + ",\"head\":\"" + head + "\",\"base\":\"" + base + "\"" +
-			(push ? "" : ",\"maintainer_can_modify\":true") + "}");
-	CHECK_CANCEL();
+	{
+		say("Opening the submission");
+		body += ",\"title\":\"";
+		JsonEscape(body, "Submit " + rq.module_id);
+		r = api.Send("POST", catalog_url + "/issues", body + "\"}");
+	}
+	if (cancel.Cancelled()) { err = "cancelled"; return false; }
 	if ((r.status != 200 && r.status != 201) || !ParseJson(r.body, j) || !j.U64("number"))
-		{ err = "GitHub refused the pull request: " + Problem(r); return false; }
-	ReadPull(j, out);
-
-#undef CHECK_CANCEL
+		{ err = "GitHub refused the submission: " + AccessProblem(r, catalog); return false; }
+	ReadIssue(j, out);
 	return true;
 }
 
-bool EditorGithub::CatalogPull(const xr_string& module_id, const xr_string& token, CCancel& cancel, SCatalogPull& out,
-							   xr_string& err)
+bool EditorGithub::CatalogIssue(const xr_string& module_id, const xr_string& token, CCancel& cancel, SCatalogIssue& out,
+								xr_string& err)
 {
-	out = SCatalogPull();
+	out = SCatalogIssue();
 	err.clear();
 	CHttp http;
 	if (!http.Ready()) { err = "WinHTTP is not available"; return false; }
 	CApi api(http, cancel, token);
 	const xr_string catalog = CatalogRepo();
-	const xr_string catalog_owner = catalog.substr(0, catalog.find('/'));
-	SJson j;
-
-	SHttpResponse r = api.Get(ApiBase() + "/user");
-	if (cancel.Cancelled()) { err = "cancelled"; return false; }
-	if (r.status == 401) { err = "GitHub rejected the sign-in. Sign in again."; return false; }
-	if (r.status != 200 || !ParseJson(r.body, j) || !j.Str("login")[0]) { err = Problem(r); return false; }
-	out.login = j.Str("login");
-	xr_string base;
-	bool push = false;
-	if (!ReadCatalog(api, cancel, catalog, base, push, err)) return false;
-
-	// the branch is the account's own, or - for one that may push - the catalog's
-	xr_vector<xr_string> heads(1, out.login + ":submit-" + module_id);
-	if (push && 0 != _stricmp(catalog_owner.c_str(), out.login.c_str()))
-		heads.push_back(catalog_owner + ":submit-" + module_id);
-	for (u32 i = 0; i < heads.size(); ++i)
-	{
-		r = api.Get(ApiBase() + "/repos/" + catalog + "/pulls?state=all&per_page=10&head=" + UrlEncode(heads[i]));
-		if (cancel.Cancelled()) { err = "cancelled"; return false; }
-		if (r.status != 200 || !ParseJson(r.body, j) || j.type != SJson::jArray) { err = Problem(r); return false; }
-		if (j.items.empty()) continue;
-		ReadPull(j.items[0], out);
-		return true;
-	}
+	if (!ReadLogin(api, cancel, out.login, err)) return false;
+	if (!FindIssue(api, cancel, catalog, out.login, module_id, out, err)) return false;
+	if (out.number && !ReadVerdict(api, cancel, catalog, out)) { err = "cancelled"; return false; }
 	return true;
 }
 

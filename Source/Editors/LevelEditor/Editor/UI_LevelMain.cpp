@@ -2412,7 +2412,7 @@ bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_publish"))			{ EditorPublish::McpPublish(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "mod_releases"))		{ EditorPublish::McpReleases(raw, out);	return true; }
-    // the Mod Browser: author key, listing checks, VirusTotal, the pull request
+    // the Mod Browser: author key, listing checks, VirusTotal, the submission
     if (0 == xr_strcmp(cmd, "mod_catalog"))			{ EditorCatalogSubmit::McpCatalog(raw, out);	return true; }
     // the module's own NPCs - the asset is text, so this is the primary path
     if (0 == xr_strcmp(cmd, "characters_list"))		{ EditorCharacters::McpList(raw, out);	return true; }

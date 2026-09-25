@@ -646,7 +646,8 @@ TOOLS = [
                        "{done, blocking, release {version, url, signed, key_id}, findings [{level ok|note|review|block, "
                        "code, text}]}, vt [{package, sha256, size, state clean|warn|block|unknown|queued|uploaded|"
                        "too_large|error, engines, trusted_malicious, trusted_suspicious, other_malicious, flagged, url, "
-                       "error}] and pull {number, state none|open|merged|closed, url, listed}. "
+                       "error}] and submission {number, state none|open|closed, verdict accepted|waiting|refused ('' "
+                       "until the catalog has spoken), verdict_text, url, note, listed}. "
                        "'key_create' makes the author key: a FILE ('path', default Documents\\XFined Editor\\Keys\\"
                        "author.xkey; never put it inside the project - the build would ship it; an existing file is "
                        "never overwritten), protected by 'password' unless it is empty - tell the user to keep a copy "
@@ -655,7 +656,7 @@ TOOLS = [
                        "'key_unlock' opens a protected one for the session ('password'; a wrong one answers "
                        "ok:false). 'vt_key' stores the user's own VirusTotal API key ('key', Windows Credential "
                        "Manager); 'vt_key_forget' removes it. "
-                       "check, vt, submit and pull run on a worker: the answer is the status with job.pending = "
+                       "check, vt, submit and submission run on a worker: the answer is the status with job.pending = "
                        "true; with wait (default) the bridge follows the job for up to about 150 s, and while "
                        "job.pending stays true ask again with action='status'. 'cancel' stops the job. 'show' opens "
                        "the Submit to Mod Browser window - like the menu, it starts a check when no job runs, and "
@@ -665,12 +666,18 @@ TOOLS = [
                        "'block' finding stops the submission. 'vt' (needs a VirusTotal key) looks every package up on "
                        "VirusTotal and uploads one it does not know (files uploaded there are shared with the security "
                        "industry): run it again later until no package is 'queued' or 'uploaded'. 'submit' runs the check again and "
-                       "refuses on a blocking finding; otherwise it opens a PUBLIC pull request from the user's "
-                       "GitHub account against the catalog repository - a fork, the branch submit-<id> reset to the "
-                       "catalog's default branch, one file mods/<id>.ltx - or updates the one already open: that is "
-                       "the separate tool xfined_mod_catalog_submit, so that a client can ask on exactly that call. "
-                       "'pull' refreshes pull; listed = the published catalog lists the "
-                       "module with this key. 'password' and 'key' are secrets: never echoed, logged or answered.",
+                       "refuses on a blocking finding; otherwise it opens a PUBLIC issue 'Submit <id>' in the catalog "
+                       "repository from the user's GitHub account - its body carries mods/<id>.ltx in an ini block - or "
+                       "edits the account's open one, which makes the catalog judge it again; nothing is sent when the "
+                       "catalog already holds that very file: that is the separate tool xfined_mod_catalog_submit, so "
+                       "that a client can ask on exactly that call. Nobody reviews by hand: the catalog's workflow "
+                       "judges every submission by itself - accepted, it commits the file and closes the issue; "
+                       "refused, it closes the issue; waiting, it keeps it open and looks again later. 'submission' "
+                       "refreshes submission, the account's newest 'Submit <id>' issue: verdict and verdict_text (one "
+                       "plain sentence - what it waits for, why it refused) come from the NEWEST verdict comment of "
+                       "github-actions[bot] on it - a comment by anyone else never counts; listed = the published "
+                       "catalog lists the module with this key, minutes after the acceptance. 'password' and 'key' "
+                       "are secrets: never echoed, logged or answered.",
         "annotations": {"title": "The mod's Mod Browser listing: key, checks, VirusTotal", "readOnlyHint": False,
                         "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
         "inputSchema": {
@@ -678,7 +685,7 @@ TOOLS = [
             "properties": {
                 "action": {"type": "string",
                            "enum": ["status", "key_create", "key_use", "key_unlock", "vt_key", "vt_key_forget",
-                                    "check", "vt", "pull", "cancel", "show", "hide"]},
+                                    "check", "vt", "submission", "cancel", "show", "hide"]},
                 "path": {"type": "string", "description": "key_create: where the new key file goes (omit = the default); "
                                                           "key_use: the key file to use from now on"},
                 "password": {"type": "string", "description": "key_create: protects the new key file (empty = none); "
@@ -691,17 +698,18 @@ TOOLS = [
     {
         "name": "xfined_mod_catalog_submit",
         "description": "Submit the module to the game's Mod Browser: runs xfined_mod_catalog's check again and refuses on a "
-                       "'block' finding; otherwise opens a PUBLIC pull request from the user's GitHub account against the "
-                       "catalog repository - a fork (or, for an account that may push to the catalog, a branch of the "
-                       "catalog itself), the branch submit-<id> reset to the catalog's default branch, one file "
-                       "mods/<id>.ltx naming the repository, the author key, the version and the website - or updates "
-                       "the pull request already open. The pull request is public from its first second and the "
-                       "maintainer of the catalog reads it. The editor asks NOTHING on this path - no window, no "
+                       "'block' finding; otherwise opens a PUBLIC issue 'Submit <id>' in the catalog repository from the "
+                       "user's GitHub account - its body carries mods/<id>.ltx (the repository, the author key, the "
+                       "version and the website) in an ini block - or edits the account's open one, which makes the "
+                       "catalog judge it again; nothing is sent when the catalog already holds that very file. The issue "
+                       "is public from its first second, and the catalog's workflow judges it by itself. The editor asks "
+                       "NOTHING on this path - no window, no "
                        "confirmation - so the permission is the caller's business: call it when the user asked for the "
                        "submission, otherwise ask them in the conversation first. The answer is xfined_mod_catalog's "
-                       "status; with wait (default) the bridge follows the job, and pull then carries the number, the "
-                       "state and the url.",
-        "annotations": {"title": "Open the Mod Browser pull request", "readOnlyHint": False,
+                       "status; with wait (default) the bridge follows the job, and submission then carries the number, "
+                       "the state and the url - its verdict stays empty until the catalog comments: follow it with "
+                       "xfined_mod_catalog action='submission'.",
+        "annotations": {"title": "Submit the module to the Mod Browser", "readOnlyHint": False,
                         "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
         "inputSchema": {
             "type": "object",
@@ -2066,7 +2074,7 @@ def tool_result(name: str, args: dict) -> dict:
     if name == "xfined_mod_release_edit":
         args["action"] = "edit"
     if name == "xfined_mod_catalog_submit":
-        # the one call that opens a public pull request, a tool of its own like the release deletion
+        # the one call that opens a public issue, a tool of its own like the release deletion
         args["action"] = "submit"
     data = editor_call(CMD_MAP[name], args)
     follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
@@ -2093,7 +2101,7 @@ def tool_result(name: str, args: dict) -> dict:
             data = editor_call("mod_releases", {"action": "status"})
     # 'show' starts a check when no job runs: a screenshot after it should show the results
     follows_catalog = CMD_MAP[name] == "mod_catalog" and wait and \
-        args.get("action", "status") in ("status", "check", "vt", "submit", "pull", "show")
+        args.get("action", "status") in ("status", "check", "vt", "submit", "submission", "show")
     if follows_catalog and data.get("ok") and (data.get("job") or {}).get("pending"):
         # the catalog's status nests the job; a job that outlasts this comes back still pending
         deadline = time.monotonic() + 150.0

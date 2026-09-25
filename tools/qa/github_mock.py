@@ -4,17 +4,41 @@
 Covers, for Publish Release: the REST API of the mod's own repository (--repo:
 repository, releases, release assets, uploads, tag refs), the anonymous web
 download path (releases/latest/download -> CDN redirect) and the OAuth device
-flow. For Submit to Mod Browser: GET /user, the catalog repository
-(--catalog-repo) and the account's fork of it (POST forks, git/ref, git/refs,
-contents, pulls) and the catalog's public files on the web (/catalog/public/..).
-For the package checks: VirusTotal's v3 file API under /vt/api/v3 (files,
-files/upload_url, analyses) with the author's own key. A set of fault switches
-comes with them (see --help). All state lives in memory. Harness routes:
-/__state, /__shutdown, /__catalog (+ /file, /merge, /close), /__vt (+ /seed).
-Self-test: test_github_mock.py.
+flow. For Submit to Mod Browser: GET /user and the catalog repository
+(--catalog-repo) - the repository, its files (GET contents), its issues (list,
+open, read, edit) with their comments - and the catalog's public files on the
+web (/catalog/public/..). For the package checks: VirusTotal's v3 file API
+under /vt/api/v3 (files, files/upload_url, analyses) with the author's own key.
+A set of fault switches comes with them (see --help). All state lives in
+memory. Self-test: test_github_mock.py.
 
 The first stdout line is {"port": N}. Nothing else is printed unless a request
 handler fails, so a harness may leave the pipes unread.
+
+Harness routes take no token and are never logged:
+  GET  /__state       the releases, tags, upload count and request log
+  POST /__shutdown
+  GET  /__catalog     {"repositories": {"<catalog>": {"branches": {"<name>":
+                      {"sha", "message", "files": {path: text},
+                      "files_base64": {path: base64}}}}}, "issues": [the issue
+                      JSON plus "comment_list": [the comment JSON]]}, oldest first
+  POST /__catalog/file?path=P[&branch=B]
+                      the request body becomes P in one commit on B (main): the
+                      catalog committing an accepted file or publishing its index
+  POST /__catalog/issue?creator=LOGIN&title=T[&pull=1]
+                      an issue opened by anyone, the request body (UTF-8, may be
+                      empty) its text; pull=1 makes it an entry standing for a
+                      pull request
+  POST /__catalog/comment?number=N[&author=LOGIN][&count=K]
+                      K comments (1..1000, default 1) on N, the request body
+                      (UTF-8) their text; answers the list of them
+  POST /__catalog/close?number=N[&reason=completed|not_planned][&by=LOGIN]
+                      closes N, which has to be open (422), as completed unless
+                      reason= says otherwise
+  GET  /__vt, POST /__vt/seed
+                      VirusTotal's files and analyses; verdicts for known files
+  author= and by= default to github-actions[bot], the account a workflow writes
+  as: that is how a test plays the catalog's workflow - and a stranger forging it.
 
 Behaviour worth knowing before writing a client against it:
   * Every response closes its connection. The request body is always consumed
@@ -26,30 +50,28 @@ Behaviour worth knowing before writing a client against it:
     requests must show false: a true there is a client leaking its token.
     "vt_key" means it carried an x-apikey header, whatever its value: only /vt/
     requests may show true.
-  * Harness routes (every path starting with /__) take no token and are not logged.
   * Publishing a release creates its git tag, deleting the release leaves the tag
     behind, and deleting the tag of a release that is still published turns that
     release into a draft - all three as on GitHub, which is why a client that
     removes a release removes the release first and the tag second.
-  * --repo keeps its releases-only model. Branches, contents and pull requests
-    live in the catalog network: the catalog and the fork <login>/<catalog name>,
-    which share one object store - a ref in the fork may name a commit made in
-    the catalog.
-  * GitHub forks in the background: the first --fork-delay GET git/ref/...
-    requests to a new fork answer 404. Until then its contents answer 404 "This
-    repository is empty." and git writes to it 409 "Git Repository is empty.";
-    neither counts toward the delay.
-  * Git and contents writes need push: the fork is the account's own, the
-    catalog needs --catalog-push. Opening or editing a pull request needs read
-    access only. Owning the catalog (--login = its owner) makes forking it a 403
-    and gives no push without --catalog-push.
-  * An open pull request follows its head branch; a closed one keeps the head it
-    had. Its diff (changed_files, what a merge takes) is what the head changed
-    since its merge base with the base branch. "No commits between" when that is
-    nothing or when head and base hold the same files. /__catalog/merge lays that
-    diff onto the base as a merge commit (parents: base, head): with a base that
-    did not move this is the head's snapshot, and a file the harness rewrote on
-    the base meanwhile survives.
+  * --repo keeps its releases-only model. The catalog has files and issues and
+    nothing else - no forks, git refs, content writes or pull request routes: a
+    submission is an issue, and the catalog's workflow judges it, comments,
+    commits the file itself and closes the issue.
+  * Issues and the entries standing for pull requests share one numbering from
+    1, as on GitHub, and GET issues lists both, newest first: state=open by
+    default, creator= matched case-insensitively, per_page / page as every list
+    here. A pull entry carries "pull_request", a plain issue no such key. An
+    issue without text has the body null.
+  * POST issues and POST issues/{n}/comments write as --login; a comment goes on
+    any issue, open or closed. PATCH issues/{n} needs --login to be the issue's
+    author or the catalog's owner (403 "Must have admin rights to Repository."
+    otherwise), and an author who is not the owner cannot reopen what somebody
+    else closed. Closing sets closed_at, closed_by and state_reason (completed
+    unless given); reopening clears the first two and says reopened. The
+    state_reason counts only when the state changes, and then it has to fit the
+    change. A refused PATCH changes nothing; an accepted one, a comment and a
+    closing move updated_at.
   * VirusTotal: an Authorization header on a /vt/ request answers 400 before the
     key is looked at, a wrong or missing x-apikey 401. Only requests with the
     right key count toward --vt-rate, and a 429 does not count.
@@ -95,8 +117,17 @@ READ_CHUNK = 1 << 20
 POLL_GRACE_SECONDS = 0.1
 DEFAULT_BRANCH = "main"
 CATALOG_ID = 2
-FORK_ID = 3
 USER_ID = 1001
+# Issue ids on github.com no longer fit a signed 32-bit integer; an issue's number is added to this.
+ISSUE_ID_BASE = 3000000000
+ISSUE_STATES = ("open", "closed")
+# The reasons GitHub records when an issue is closed, and the one when it is reopened.
+CLOSE_REASONS = ("completed", "not_planned")
+REOPENED = "reopened"
+FIRST_COMMENT_ID = 2150000001
+# The account GitHub Actions workflows comment as, with its id on github.com.
+ACTIONS_BOT = "github-actions[bot]"
+ACTIONS_BOT_ID = 41898282
 # The contents API breaks its base64 after every 60 characters.
 CONTENT_LINE = 60
 VT_CATEGORIES = ("malicious", "suspicious", "undetected", "harmless", "type-unsupported", "timeout")
@@ -149,13 +180,16 @@ def read_text(body: dict, key: str, default: str | None, resource: str = "Releas
     return value
 
 
-def missing_field(name: str) -> ApiError:
-    return ApiError(422, f'Invalid request.\n\n"{name}" wasn\'t supplied.')
+def no_admin_rights() -> ApiError:
+    return ApiError(403, "Must have admin rights to Repository.")
 
 
-def pull_refused(message: str) -> ApiError:
-    errors = [{"resource": "PullRequest", "code": "custom", "message": message}]
-    return ApiError(422, payload={"message": "Validation Failed", "errors": errors})
+def harness_text(raw: bytes, what: str) -> str:
+    """A harness request's body as text: UTF-8, or a 400."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ApiError(400, f"the {what} is not UTF-8") from None
 
 
 def vt_error(status: int, code: str, message: str) -> ApiError:
@@ -210,15 +244,6 @@ def git_blob_sha(data: bytes) -> str:
 def wrapped_base64(data: bytes) -> str:
     text = base64.b64encode(data).decode("ascii")
     return "".join(text[start:start + CONTENT_LINE] + "\n" for start in range(0, len(text), CONTENT_LINE))
-
-
-def valid_branch(name: str) -> bool:
-    """The git check-ref-format rules a client can realistically trip over."""
-    if name == "@" or name.startswith("-") or name.endswith(".") or ".." in name or "@{" in name:
-        return False
-    if any(char in " ~^:?*[\\" or ord(char) < 32 or ord(char) == 127 for char in name):
-        return False
-    return all(part and not part.startswith(".") and not part.endswith(".lock") for part in name.split("/"))
 
 
 def header_params(value: str) -> tuple[str, dict[str, str]]:
@@ -324,38 +349,43 @@ class Commit:
 
 
 @dataclass
-class Repository:
-    """The catalog, or the account's fork of it: branches over the object store the two share."""
-
+class Comment:
     id: int
+    body: str
+    user: dict
+    created_at: str
+
+
+@dataclass
+class Issue:
+    number: int
+    title: str
+    body: str
+    user: dict
+    created_at: str
+    updated_at: str
+    # An entry standing for a pull request: GitHub lists those with the issues.
+    pull: bool = False
+    state: str = "open"
+    state_reason: str | None = None
+    closed_at: str | None = None
+    closed_by: dict | None = None
+    # Oldest first.
+    comments: list[Comment] = field(default_factory=list)
+
+
+@dataclass
+class Catalog:
+    """The Mod Browser catalog: branches over the mock's commit store, and issues numbered from 1."""
+
     owner: str
     name: str
-    fork: bool
     branches: dict[str, str] = field(default_factory=dict)
-    # GET git/ref requests a new fork still answers 404.
-    pending: int = 0
+    issues: list[Issue] = field(default_factory=list)
 
     @property
     def full_name(self) -> str:
         return f"{self.owner}/{self.name}"
-
-
-@dataclass
-class Pull:
-    number: int
-    title: str
-    body: str | None
-    head_repo: Repository
-    head_ref: str
-    base_ref: str
-    maintainer_can_modify: bool
-    created_at: str
-    updated_at: str
-    state: str = "open"
-    merged_at: str | None = None
-    # A closed pull request stops following its branch.
-    closed_head: str | None = None
-    closed_changes: int = 0
 
 
 @dataclass
@@ -398,13 +428,12 @@ class GitHubMock:
         self.uploads = 0
         self.requests: list[dict] = []
         self.device_codes: dict[str, dict] = {}
-        # The Mod Browser catalog network; main gets its first commit from seed_catalog().
+        # The Mod Browser catalog; main gets its first commit from seed_catalog().
         catalog_owner, catalog_name = args.catalog_repo.split("/")
-        self.catalog = Repository(CATALOG_ID, catalog_owner, catalog_name, False)
-        self.fork: Repository | None = None
+        self.catalog = Catalog(catalog_owner, catalog_name)
         self.commits: dict[str, Commit] = {}
         self.commit_count = 0
-        self.pulls: list[Pull] = []
+        self.next_comment_id = FIRST_COMMENT_ID
         self.vt_files: dict[str, VtFile] = {}
         self.vt_analyses: dict[str, VtAnalysis] = {}
         self.vt_upload_tokens: set[str] = set()
@@ -725,10 +754,42 @@ class GitHubMock:
             return {"error": "access_denied"}
         return {"access_token": self.args.token, "token_type": "bearer", "scope": entry["scope"]}
 
-    # ---- the Mod Browser catalog network ------------------------------------
+    # ---- the Mod Browser catalog: the repository and its files --------------
 
-    def user_json(self) -> dict:
-        return {"login": self.args.login, "id": USER_ID, "type": "User"}
+    def user_json(self, login: str | None = None) -> dict:
+        """GitHub's user object: the account's (GET /user) unless `login` names another; an app's [bot] account is a Bot."""
+        login = login or self.args.login
+        if login.lower() == ACTIONS_BOT:
+            return {"login": ACTIONS_BOT, "id": ACTIONS_BOT_ID, "type": "Bot"}
+        if login.lower() == self.args.login.lower():
+            return {"login": self.args.login, "id": USER_ID, "type": "User"}
+        stable_id = 2000000 + int(hashlib.sha1(login.lower().encode("utf-8")).hexdigest()[:6], 16)
+        return {"login": login, "id": stable_id, "type": "Bot" if login.endswith("[bot]") else "User"}
+
+    def is_account(self, user: dict | None) -> bool:
+        return bool(user) and user["login"].lower() == self.args.login.lower()
+
+    def is_maintainer(self) -> bool:
+        """--login owns the catalog: push permission, and every issue is theirs to edit."""
+        return self.args.login.lower() == self.catalog.owner.lower()
+
+    def is_catalog(self, owner: str, repo: str) -> bool:
+        return f"{owner}/{repo}".lower() == self.catalog.full_name.lower()
+
+    def catalog_json(self) -> dict:
+        catalog = self.catalog
+        return {
+            "id": CATALOG_ID,
+            "full_name": catalog.full_name,
+            "name": catalog.name,
+            "owner": {"login": catalog.owner},
+            "default_branch": DEFAULT_BRANCH,
+            "private": False,
+            "fork": False,
+            "archived": False,
+            "permissions": {"push": self.is_maintainer(), "pull": True},
+            "html_url": f"{self.origin}/{catalog.full_name}",
+        }
 
     def seed_catalog(self, files: dict[str, bytes]) -> None:
         self.catalog.branches[DEFAULT_BRANCH] = self.new_commit(files, (), "Initial commit").sha
@@ -745,133 +806,17 @@ class GitHubMock:
         self.commits[commit.sha] = commit
         return commit
 
-    def ancestors(self, sha: str) -> set[str]:
-        seen, stack = set(), [sha]
-        while stack:
-            if (current := stack.pop()) not in seen:
-                seen.add(current)
-                stack.extend(self.commits[current].parents)
-        return seen
-
-    def merge_base(self, first: str, second: str) -> str | None:
-        """The nearest commit both descend from."""
-        reachable, queue, seen = self.ancestors(first), deque([second]), set()
-        while queue:
-            if (current := queue.popleft()) in reachable:
-                return current
-            if current not in seen:
-                seen.add(current)
-                queue.extend(self.commits[current].parents)
-        return None
-
-    def changes(self, head: str, base: str) -> dict[str, bytes | None]:
-        """What the head changed since it left the base: path -> its bytes, None when removed."""
-        root = self.merge_base(head, base)
-        before = self.commits[root].files if root else {}
-        after = self.commits[head].files
-        return {path: after.get(path) for path in before.keys() | after.keys() if before.get(path) != after.get(path)}
-
-    def network_repo(self, owner: str, name: str) -> Repository:
-        wanted = f"{owner}/{name}".lower()
-        for repo in (self.catalog, self.fork):
-            if repo and repo.full_name.lower() == wanted:
-                return repo
-        raise not_found()
-
-    def can_push(self, repo: Repository) -> bool:
-        return repo.fork or self.args.catalog_push
-
-    def check_write(self, repo: Repository) -> None:
-        if not self.can_push(repo):
-            raise ApiError(403, "Resource not accessible by personal access token")
-        if repo.pending > 0:
-            raise ApiError(409, "Git Repository is empty.")
-
-    def network_repo_json(self, repo: Repository) -> dict:
-        result = {
-            "id": repo.id,
-            "full_name": repo.full_name,
-            "name": repo.name,
-            "owner": {"login": repo.owner},
-            "default_branch": DEFAULT_BRANCH,
-            "private": False,
-            "fork": repo.fork,
-            "archived": False,
-            "permissions": {"push": self.can_push(repo), "pull": True},
-            "html_url": f"{self.origin}/{repo.full_name}",
-        }
-        if repo.fork:
-            result["parent"] = {"full_name": self.catalog.full_name}
-        return result
-
-    def create_fork(self, repo: Repository, body: dict) -> dict:
-        # The fork is the account's own too, so this also refuses forking the fork.
-        if repo.owner.lower() == self.args.login.lower():
-            raise ApiError(403, "Cannot fork a repository you own.")
-        only_default = read_flag(body, "default_branch_only", False, "Repository")
-        if not self.fork:
-            branches = {DEFAULT_BRANCH: repo.branches[DEFAULT_BRANCH]} if only_default else dict(repo.branches)
-            self.fork = Repository(FORK_ID, self.args.login, repo.name, True, branches, self.args.fork_delay)
-        return self.network_repo_json(self.fork)
-
-    @staticmethod
-    def ref_json(branch: str, sha: str) -> dict:
-        return {"ref": f"refs/heads/{branch}", "object": {"sha": sha, "type": "commit"}}
-
-    def get_ref(self, repo: Repository, parts: list[str]) -> dict:
-        if repo.pending > 0:
-            repo.pending -= 1
-            raise not_found()
-        branch = "/".join(parts[1:])
-        if parts[:1] != ["heads"] or branch not in repo.branches:
-            raise not_found()
-        return self.ref_json(branch, repo.branches[branch])
-
-    def commit_of(self, body: dict) -> str:
-        sha = body.get("sha")
-        if not isinstance(sha, str) or not sha:
-            raise missing_field("sha")
-        if sha.lower() not in self.commits:
-            raise ApiError(422, "Object does not exist")
-        return sha.lower()
-
-    def create_ref(self, repo: Repository, body: dict) -> dict:
-        self.check_write(repo)
-        ref = body.get("ref")
-        if not isinstance(ref, str) or not ref:
-            raise missing_field("ref")
-        # Only branches are modelled, under git's naming rules.
-        branch = ref.removeprefix("refs/heads/")
-        if branch == ref or not valid_branch(branch):
-            raise ApiError(422, "Reference name is invalid")
-        sha = self.commit_of(body)
-        if branch in repo.branches:
-            raise ApiError(422, "Reference already exists")
-        repo.branches[branch] = sha
-        return self.ref_json(branch, sha)
-
-    def update_ref(self, repo: Repository, branch: str, body: dict) -> dict:
-        self.check_write(repo)
-        force = read_flag(body, "force", False, "Reference")
-        if branch not in repo.branches:
-            raise ApiError(422, "Reference does not exist")
-        sha = self.commit_of(body)
-        if not force and repo.branches[branch] not in self.ancestors(sha):
-            raise ApiError(422, "Update is not a fast forward")
-        repo.branches[branch] = sha
-        return self.ref_json(branch, sha)
-
-    def snapshot(self, repo: Repository, ref: str) -> dict[str, bytes]:
-        """The files ?ref= names: a branch, refs/heads/<branch> or a commit of the network."""
-        if repo.pending > 0:
-            raise ApiError(404, "This repository is empty.")
-        sha = repo.branches.get(ref.removeprefix("refs/heads/")) or (ref.lower() if ref.lower() in self.commits else None)
+    def snapshot(self, ref: str) -> dict[str, bytes]:
+        """The files ?ref= names: a branch, refs/heads/<branch> or a commit."""
+        sha = self.catalog.branches.get(ref.removeprefix("refs/heads/"))
+        if not sha and ref.lower() in self.commits:
+            sha = ref.lower()
         if not sha:
             raise ApiError(404, f"No commit found for the ref {ref}")
         return self.commits[sha].files
 
-    def get_contents(self, repo: Repository, path: str, ref: str) -> dict:
-        if (data := self.snapshot(repo, ref).get(path)) is None:
+    def get_contents(self, path: str, ref: str) -> dict:
+        if (data := self.snapshot(ref).get(path)) is None:
             raise not_found()
         return {
             "type": "file",
@@ -882,171 +827,6 @@ class GitHubMock:
             "encoding": "base64",
             "content": wrapped_base64(data),
         }
-
-    def put_contents(self, repo: Repository, path: str, body: dict) -> tuple[bool, dict]:
-        """(created, answer): a new commit on the branch, its head the parent."""
-        self.check_write(repo)
-        message, content = body.get("message"), body.get("content")
-        if not isinstance(message, str) or not message:
-            raise missing_field("message")
-        if not isinstance(content, str):
-            raise missing_field("content")
-        try:
-            data = base64.b64decode("".join(content.split()), validate=True)
-        except ValueError:
-            raise ApiError(422, "content is not valid Base64") from None
-        branch = read_text(body, "branch", "", "Content") or DEFAULT_BRANCH
-        if branch not in repo.branches:
-            raise ApiError(404, f"Branch {branch} not found")
-        head = self.commits[repo.branches[branch]]
-        current, sha = head.files.get(path), body.get("sha")
-        if current is not None and sha is None:
-            raise missing_field("sha")
-        if sha is not None and (current is None or sha != git_blob_sha(current)):
-            raise ApiError(409, f"{path} does not match {sha}")
-        commit = self.new_commit({**head.files, path: data}, (head.sha,), message)
-        repo.branches[branch] = commit.sha
-        answer = {
-            "content": {"name": path.rsplit("/", 1)[-1], "path": path, "sha": git_blob_sha(data)},
-            "commit": {"sha": commit.sha, "message": message},
-        }
-        return current is None, answer
-
-    def resolve_head(self, head: str) -> tuple[Repository | None, str]:
-        """"owner:branch" (the fork's or the catalog's owner) or a bare branch of the catalog."""
-        owner, colon, branch = head.partition(":")
-        if not colon:
-            return self.catalog, head
-        repos = (repo for repo in (self.catalog, self.fork) if repo and repo.owner.lower() == owner.lower())
-        return next(repos, None), branch
-
-    def pull_head(self, pull: Pull) -> str:
-        return pull.closed_head or pull.head_repo.branches[pull.head_ref]
-
-    def open_pull_for(self, repo: Repository, branch: str, besides: Pull | None = None) -> Pull | None:
-        return next(
-            (pull for pull in self.pulls
-             if pull.state == "open" and pull.head_repo is repo and pull.head_ref == branch and pull is not besides),
-            None,
-        )
-
-    def pull_json(self, pull: Pull) -> dict:
-        head, base = self.pull_head(pull), self.catalog.branches[pull.base_ref]
-        return {
-            "number": pull.number,
-            "state": pull.state,
-            "merged": pull.merged_at is not None,
-            "merged_at": pull.merged_at,
-            "html_url": f"{self.origin}/{self.catalog.full_name}/pull/{pull.number}",
-            "title": pull.title,
-            "body": pull.body,
-            "user": {"login": self.args.login},
-            "head": {
-                "ref": pull.head_ref,
-                "label": f"{pull.head_repo.owner}:{pull.head_ref}",
-                "sha": head,
-                "repo": {"full_name": pull.head_repo.full_name},
-            },
-            "base": {"ref": pull.base_ref, "sha": base, "repo": {"full_name": self.catalog.full_name}},
-            "maintainer_can_modify": pull.maintainer_can_modify,
-            "changed_files": pull.closed_changes if pull.closed_head else len(self.changes(head, base)),
-            "created_at": pull.created_at,
-            "updated_at": pull.updated_at,
-        }
-
-    def list_pulls(self, query: dict) -> list[dict]:
-        state = query.get("state") or "open"
-        if state not in ("open", "closed", "all"):
-            raise validation_failed("PullRequest", "invalid", "state")
-        pulls = [pull for pull in reversed(self.pulls) if state in ("all", pull.state)]
-        if head := query.get("head"):
-            repo, branch = self.resolve_head(head)
-            pulls = [pull for pull in pulls if pull.head_repo is repo and pull.head_ref == branch]
-        return [self.pull_json(pull) for pull in page_of(pulls, query)]
-
-    def pull_by_number(self, number: int) -> Pull:
-        if not 0 < number <= len(self.pulls):
-            raise not_found()
-        return self.pulls[number - 1]
-
-    def create_pull(self, body: dict) -> dict:
-        title, head, base = (read_text(body, key, "", "PullRequest") for key in ("title", "head", "base"))
-        text = read_text(body, "body", None, "PullRequest")
-        can_modify = read_flag(body, "maintainer_can_modify", False, "PullRequest")
-        for key, value in (("title", title), ("head", head), ("base", base)):
-            if not value:
-                raise validation_failed("PullRequest", "missing_field", key)
-        if base not in self.catalog.branches:
-            raise validation_failed("PullRequest", "invalid", "base")
-        repo, branch = self.resolve_head(head)
-        if not repo or repo.pending > 0 or branch not in repo.branches:
-            raise validation_failed("PullRequest", "invalid", "head")
-        if self.open_pull_for(repo, branch):
-            raise pull_refused(f"A pull request already exists for {repo.owner}:{branch}.")
-        tip, target = repo.branches[branch], self.catalog.branches[base]
-        if self.commits[tip].files == self.commits[target].files or not self.changes(tip, target):
-            raise pull_refused(f"No commits between {base} and {head}")
-        now = timestamp()
-        pull = Pull(len(self.pulls) + 1, title, text, repo, branch, base, can_modify, now, now)
-        self.pulls.append(pull)
-        return self.pull_json(pull)
-
-    def update_pull(self, number: int, body: dict) -> dict:
-        pull = self.pull_by_number(number)
-        title = read_text(body, "title", pull.title, "PullRequest")
-        text = read_text(body, "body", None, "PullRequest") if "body" in body else pull.body
-        state = read_text(body, "state", pull.state, "PullRequest")
-        if not title:
-            raise validation_failed("PullRequest", "missing_field", "title")
-        if state not in ("open", "closed"):
-            raise validation_failed("PullRequest", "invalid", "state")
-        reopening = state == "open" and pull.state == "closed"
-        if reopening and pull.merged_at:
-            raise pull_refused("A merged pull request cannot be reopened.")
-        if reopening and self.open_pull_for(pull.head_repo, pull.head_ref, besides=pull):
-            raise pull_refused(f"A pull request already exists for {pull.head_repo.owner}:{pull.head_ref}.")
-
-        # Every check has passed: a refused PATCH leaves the pull request untouched.
-        pull.title, pull.body = title, text
-        if reopening:
-            pull.state, pull.closed_head, pull.closed_changes = "open", None, 0
-        elif state == "closed" and pull.state == "open":
-            self.freeze(pull)
-        pull.updated_at = timestamp()
-        return self.pull_json(pull)
-
-    def freeze(self, pull: Pull) -> None:
-        """Close a pull request: from now on it keeps the head it has."""
-        pull.closed_head = self.pull_head(pull)
-        pull.closed_changes = len(self.changes(pull.closed_head, self.catalog.branches[pull.base_ref]))
-        pull.state, pull.updated_at = "closed", timestamp()
-
-    def open_pull(self, number: int) -> Pull:
-        pull = self.pull_by_number(number)
-        if pull.state != "open":
-            raise ApiError(422, f"Pull request #{number} is not open")
-        return pull
-
-    def merge_pull(self, number: int) -> dict:
-        """Harness: the base takes what the head changed since their merge base, as a merge commit."""
-        pull = self.open_pull(number)
-        head, base = self.pull_head(pull), self.catalog.branches[pull.base_ref]
-        files = dict(self.commits[base].files)
-        for path, data in self.changes(head, base).items():
-            if data is None:
-                files.pop(path, None)
-            else:
-                files[path] = data
-        self.freeze(pull)
-        message = f"Merge pull request #{pull.number} from {pull.head_repo.owner}/{pull.head_ref}"
-        self.catalog.branches[pull.base_ref] = self.new_commit(files, (base, head), message).sha
-        pull.merged_at = pull.updated_at
-        return self.pull_json(pull)
-
-    def close_pull(self, number: int) -> dict:
-        pull = self.open_pull(number)
-        self.freeze(pull)
-        return self.pull_json(pull)
 
     def public_file(self, path: str) -> bytes:
         """public/<path> on the catalog's default branch: what the catalog publishes."""
@@ -1065,6 +845,163 @@ class GitHubMock:
         self.catalog.branches[branch] = commit.sha
         return {"branch": branch, "path": path, "sha": git_blob_sha(data), "commit": commit.sha}
 
+    # ---- the Mod Browser catalog: issues and their comments -----------------
+
+    def new_issue(self, login: str, title: str, body: str, pull: bool) -> Issue:
+        now = timestamp()
+        issue = Issue(len(self.catalog.issues) + 1, title, body, self.user_json(login), now, now, pull)
+        self.catalog.issues.append(issue)
+        return issue
+
+    def issue_by_number(self, number: int) -> Issue:
+        issues = self.catalog.issues
+        if not 0 < number <= len(issues):
+            raise not_found()
+        return issues[number - 1]
+
+    def issue_page(self, issue: Issue) -> str:
+        """The issue on the web; a pull entry's page is the pull request's."""
+        return f"{self.origin}/{self.catalog.full_name}/{'pull' if issue.pull else 'issues'}/{issue.number}"
+
+    def issue_json(self, issue: Issue) -> dict:
+        api = f"{self.origin}/repos/{self.catalog.full_name}"
+        result = {
+            "id": ISSUE_ID_BASE + issue.number,
+            "number": issue.number,
+            "title": issue.title,
+            # GitHub answers null for an issue without text.
+            "body": issue.body or None,
+            "state": issue.state,
+            "state_reason": issue.state_reason,
+            "user": dict(issue.user),
+            "html_url": self.issue_page(issue),
+            "url": f"{api}/issues/{issue.number}",
+            "comments": len(issue.comments),
+            "locked": False,
+            "created_at": issue.created_at,
+            "updated_at": issue.updated_at,
+            "closed_at": issue.closed_at,
+            "closed_by": dict(issue.closed_by) if issue.closed_by else None,
+        }
+        if issue.pull:
+            result["pull_request"] = {"url": f"{api}/pulls/{issue.number}", "html_url": self.issue_page(issue)}
+        return result
+
+    def list_issues(self, query: dict) -> list[dict]:
+        state = query.get("state") or "open"
+        if state not in ("open", "closed", "all"):
+            raise validation_failed("Issue", "invalid", "state")
+        creator = (query.get("creator") or "").lower()
+        issues = [
+            issue for issue in reversed(self.catalog.issues)
+            if state in ("all", issue.state) and creator in ("", issue.user["login"].lower())
+        ]
+        return [self.issue_json(issue) for issue in page_of(issues, query)]
+
+    def create_issue(self, body: dict) -> dict:
+        """POST issues: opened by the account the token belongs to."""
+        title = read_text(body, "title", "", "Issue")
+        text = read_text(body, "body", "", "Issue")
+        if not title.strip():
+            raise validation_failed("Issue", "missing_field", "title")
+        return self.issue_json(self.new_issue(self.args.login, title, text, False))
+
+    def update_issue(self, number: int, body: dict) -> dict:
+        """PATCH issues/{n}: the author's own issue, or any for the maintainer; an author reopens only what they closed."""
+        issue = self.issue_by_number(number)
+        if not self.is_maintainer() and not self.is_account(issue.user):
+            raise no_admin_rights()
+        title = read_text(body, "title", issue.title, "Issue")
+        # "body": null clears the text.
+        text = read_text(body, "body", "", "Issue") if "body" in body else issue.body
+        state = read_text(body, "state", issue.state, "Issue")
+        reason = read_text(body, "state_reason", None, "Issue")
+        if not title.strip():
+            raise validation_failed("Issue", "missing_field", "title")
+        if state not in ISSUE_STATES:
+            raise validation_failed("Issue", "invalid", "state")
+        # A reason counts only when the state changes, and then it has to fit the change.
+        changing = state != issue.state
+        fitting = CLOSE_REASONS if state == "closed" else (REOPENED,)
+        if reason is not None and (reason not in (*CLOSE_REASONS, REOPENED) or (changing and reason not in fitting)):
+            raise validation_failed("Issue", "invalid", "state_reason")
+        if changing and state == "open" and not self.is_maintainer() and not self.is_account(issue.closed_by):
+            raise no_admin_rights()
+
+        # Every check has passed: a refused PATCH leaves the issue untouched.
+        issue.title, issue.body = title, text
+        if changing and state == "closed":
+            self.close_issue(issue, self.args.login, reason or CLOSE_REASONS[0])
+        elif changing:
+            issue.state, issue.state_reason, issue.closed_at, issue.closed_by = "open", REOPENED, None, None
+        issue.updated_at = timestamp()
+        return self.issue_json(issue)
+
+    def close_issue(self, issue: Issue, login: str, reason: str) -> None:
+        issue.state, issue.state_reason, issue.closed_by = "closed", reason, self.user_json(login)
+        issue.closed_at = issue.updated_at = timestamp()
+
+    def harness_close(self, number: int, reason: str, login: str) -> dict:
+        """Harness: the catalog's workflow - or whoever `login` names - closes an open issue."""
+        issue = self.issue_by_number(number)
+        if reason not in CLOSE_REASONS:
+            raise ApiError(400, "reason= takes completed or not_planned")
+        if issue.state != "open":
+            raise ApiError(422, f"Issue #{number} is not open")
+        self.close_issue(issue, login, reason)
+        return self.issue_json(issue)
+
+    def plant_issue(self, creator: str, title: str, raw: bytes, pull: str) -> dict:
+        """Harness: an issue opened by anyone; pull=1 makes it an entry standing for a pull request."""
+        if not creator or not title.strip():
+            raise ApiError(400, "creator= and title= name the issue's author and its title")
+        if pull not in ("", "0", "1"):
+            raise ApiError(400, "pull= takes 1 or 0")
+        return self.issue_json(self.new_issue(creator, title, harness_text(raw, "issue's body"), pull == "1"))
+
+    def comment_json(self, issue: Issue, comment: Comment) -> dict:
+        api = f"{self.origin}/repos/{self.catalog.full_name}"
+        return {
+            "id": comment.id,
+            "url": f"{api}/issues/comments/{comment.id}",
+            "html_url": f"{self.issue_page(issue)}#issuecomment-{comment.id}",
+            "issue_url": f"{api}/issues/{issue.number}",
+            "user": dict(comment.user),
+            "body": comment.body,
+            "created_at": comment.created_at,
+            "updated_at": comment.created_at,
+        }
+
+    def list_comments(self, number: int, query: dict) -> list[dict]:
+        issue = self.issue_by_number(number)
+        return [self.comment_json(issue, comment) for comment in page_of(issue.comments, query)]
+
+    def add_comment(self, number: int, login: str, text: str) -> dict:
+        issue = self.issue_by_number(number)
+        comment = Comment(self.next_comment_id, text, self.user_json(login), timestamp())
+        self.next_comment_id += 1
+        issue.comments.append(comment)
+        issue.updated_at = comment.created_at
+        return self.comment_json(issue, comment)
+
+    def post_comment(self, number: int, body: dict) -> dict:
+        """POST issues/{n}/comments: written by the account the token belongs to, whatever the issue's state."""
+        self.issue_by_number(number)
+        text = read_text(body, "body", None, "IssueComment")
+        if not text:
+            raise validation_failed("IssueComment", "missing_field", "body")
+        return self.add_comment(number, self.args.login, text)
+
+    def plant_comments(self, number: int, author: str, raw: bytes, count_text: str) -> list[dict]:
+        """Harness: `count` comments by anyone - the catalog's workflow unless `author` names somebody else."""
+        self.issue_by_number(number)
+        text = harness_text(raw, "comment's body")
+        if not text:
+            raise ApiError(400, "the request body is the comment's text")
+        if not count_text.isdigit() or not 1 <= int(count_text) <= 1000:
+            raise ApiError(400, "count= takes 1 to 1000")
+        return [self.add_comment(number, author, text) for _ in range(int(count_text))]
+
     def catalog_state_json(self) -> dict:
         def branch_json(sha: str) -> dict:
             commit, files, binary = self.commits[sha], {}, {}
@@ -1075,16 +1012,17 @@ class GitHubMock:
                     binary[path] = base64.b64encode(data).decode("ascii")
             return {"sha": sha, "message": commit.message, "files": files, "files_base64": binary}
 
+        catalog = self.catalog
         return {
             "repositories": {
-                repo.full_name: {
-                    "fork": repo.fork,
-                    "pending": repo.pending,
-                    "branches": {name: branch_json(sha) for name, sha in sorted(repo.branches.items())},
-                }
-                for repo in (self.catalog, self.fork) if repo
+                catalog.full_name: {
+                    "branches": {name: branch_json(sha) for name, sha in sorted(catalog.branches.items())},
+                },
             },
-            "pulls": [self.pull_json(pull) for pull in self.pulls],
+            "issues": [
+                self.issue_json(issue) | {"comment_list": [self.comment_json(issue, comment) for comment in issue.comments]}
+                for issue in catalog.issues
+            ],
         }
 
     # ---- VirusTotal -------------------------------------------------------
@@ -1502,10 +1440,16 @@ class Handler(BaseHTTPRequestHandler):
             case ("POST", ["__catalog", "file"]):
                 path, branch = query.get("path", "").strip("/"), query.get("branch") or DEFAULT_BRANCH
                 return Answer(200, mock.harness_write(path, branch, raw))
-            case ("POST", ["__catalog", "merge"]):
-                return Answer(200, mock.merge_pull(parse_id(query.get("number", ""))))
+            case ("POST", ["__catalog", "issue"]):
+                creator, title = query.get("creator", ""), query.get("title", "")
+                return Answer(200, mock.plant_issue(creator, title, raw, query.get("pull", "")))
+            case ("POST", ["__catalog", "comment"]):
+                author = query.get("author") or ACTIONS_BOT
+                comments = mock.plant_comments(parse_id(query.get("number", "")), author, raw, query.get("count") or "1")
+                return Answer(200, comments)
             case ("POST", ["__catalog", "close"]):
-                return Answer(200, mock.close_pull(parse_id(query.get("number", ""))))
+                number, reason = parse_id(query.get("number", "")), query.get("reason") or CLOSE_REASONS[0]
+                return Answer(200, mock.harness_close(number, reason, query.get("by") or ACTIONS_BOT))
             case ("GET", ["__vt"]):
                 return Answer(200, mock.vt_state_json())
             case ("POST", ["__vt", "seed"]):
@@ -1520,8 +1464,8 @@ class Handler(BaseHTTPRequestHandler):
             case (_, ["repos", owner, repo, *rest]) if mock.is_repo(owner, repo):
                 mock.check_repo(owner, repo, writing=method != "GET")
                 return self.route_repo(rest, query, raw)
-            case (_, ["repos", owner, repo, *rest]):
-                return self.route_network(mock.network_repo(owner, repo), rest, query, raw)
+            case (_, ["repos", owner, repo, *rest]) if mock.is_catalog(owner, repo):
+                return self.route_catalog(rest, query, raw)
             case ("GET", ["catalog", "public", *path]) if path:
                 kind = "application/octet-stream" if path[-1].lower().endswith(".dds") else "text/plain; charset=utf-8"
                 return Answer(200, body=mock.public_file("/".join(path)), headers={"Content-Type": kind})
@@ -1579,34 +1523,26 @@ class Handler(BaseHTTPRequestHandler):
                 return Answer(204)
         raise not_found()
 
-    def route_network(self, repo: Repository, rest: list[str], query: dict, raw: bytes) -> Answer:
-        """The catalog and the account's fork of it."""
+    def route_catalog(self, rest: list[str], query: dict, raw: bytes) -> Answer:
+        """The Mod Browser catalog: the repository, its files, its issues and their comments."""
         mock = self.mock
-        catalog = repo is mock.catalog
         match (self.command, rest):
             case ("GET", []):
-                return Answer(200, mock.network_repo_json(repo))
-            case ("POST", ["forks"]):
-                return Answer(202, mock.create_fork(repo, self.json_body(raw) if raw.strip() else {}))
-            case ("GET", ["git", "ref", *ref]):
-                return Answer(200, mock.get_ref(repo, ref))
-            case ("POST", ["git", "refs"]):
-                return Answer(201, mock.create_ref(repo, self.json_body(raw)))
-            case ("PATCH", ["git", "refs", "heads", *branch]) if branch:
-                return Answer(200, mock.update_ref(repo, "/".join(branch), self.json_body(raw)))
+                return Answer(200, mock.catalog_json())
             case ("GET", ["contents", *path]) if path:
-                return Answer(200, mock.get_contents(repo, "/".join(path), query.get("ref") or DEFAULT_BRANCH))
-            case ("PUT", ["contents", *path]) if path:
-                created, answer = mock.put_contents(repo, "/".join(path), self.json_body(raw))
-                return Answer(201 if created else 200, answer)
-            case ("GET", ["pulls"]) if catalog:
-                return Answer(200, mock.list_pulls(query))
-            case ("POST", ["pulls"]) if catalog:
-                return Answer(201, mock.create_pull(self.json_body(raw)))
-            case ("GET", ["pulls", number]) if catalog:
-                return Answer(200, mock.pull_json(mock.pull_by_number(parse_id(number))))
-            case ("PATCH", ["pulls", number]) if catalog:
-                return Answer(200, mock.update_pull(parse_id(number), self.json_body(raw)))
+                return Answer(200, mock.get_contents("/".join(path), query.get("ref") or DEFAULT_BRANCH))
+            case ("GET", ["issues"]):
+                return Answer(200, mock.list_issues(query))
+            case ("POST", ["issues"]):
+                return Answer(201, mock.create_issue(self.json_body(raw)))
+            case ("GET", ["issues", number]):
+                return Answer(200, mock.issue_json(mock.issue_by_number(parse_id(number))))
+            case ("PATCH", ["issues", number]):
+                return Answer(200, mock.update_issue(parse_id(number), self.json_body(raw)))
+            case ("GET", ["issues", number, "comments"]):
+                return Answer(200, mock.list_comments(parse_id(number), query))
+            case ("POST", ["issues", number, "comments"]):
+                return Answer(201, mock.post_comment(parse_id(number), self.json_body(raw)))
         raise not_found()
 
     def route_vt(self, segments: list[str]) -> Answer:
@@ -1758,14 +1694,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-deny", action="store_true", help="the device flow ends with access_denied")
     parser.add_argument("--device-interval", type=int, default=1, metavar="S", help="minimum seconds between polls")
     parser.add_argument("--log", metavar="FILE", help="append one JSON line per request")
-    parser.add_argument("--login", metavar="NAME", help="the account's login (GET /user); default: the owner part of --repo")
+    parser.add_argument("--login", metavar="NAME",
+                        help="the account's login (GET /user; the API opens issues and writes comments as it); "
+                             "default: the owner part of --repo")
     parser.add_argument("--catalog-repo", default="QaMaintainer/darf-mods", metavar="O/N",
-                        help="owner/name of the Mod Browser catalog repository; default branch main")
+                        help="owner/name of the Mod Browser catalog repository (files and issues; default branch main); "
+                             "a --login that owns it is the maintainer: push permission, and every issue is theirs to edit")
     parser.add_argument("--catalog-seed", metavar="DIR", help="every file below DIR goes into the catalog's first commit")
-    parser.add_argument("--catalog-push", action="store_true",
-                        help="the account may push to the catalog (a maintainer submitting a module of their own; no fork)")
-    parser.add_argument("--fork-delay", type=int, default=1, metavar="N",
-                        help="a new fork's first N GET git/ref/... requests answer 404, as GitHub forks in the background")
     parser.add_argument("--vt-key", default="qa-vt-key", metavar="KEY", help="the only accepted VirusTotal key (x-apikey)")
     parser.add_argument("--vt-seed", metavar="FILE",
                         help='JSON {"<sha256>": {"<engine>": "<category>"}}: files VirusTotal already knows')
@@ -1786,12 +1721,11 @@ def parse_args() -> argparse.Namespace:
     args.login = args.login or args.repo.split("/")[0]
     if "/" in args.login:
         parser.error("--login takes a user name")
-    fork = f"{args.login}/{args.catalog_repo.split('/')[1]}"
-    if args.repo.lower() in (args.catalog_repo.lower(), fork.lower()):
-        parser.error("--repo must be neither the catalog nor the account's fork of it")
+    if args.repo.lower() == args.catalog_repo.lower():
+        parser.error("--repo must not be the catalog")
     if args.catalog_seed and not os.path.isdir(args.catalog_seed):
         parser.error("--catalog-seed takes a folder")
-    if min(args.fork_delay, args.vt_queue, args.vt_rate) < 0 or args.vt_max_upload <= 0:
+    if min(args.vt_queue, args.vt_rate) < 0 or args.vt_max_upload <= 0:
         parser.error("counts cannot be negative and --vt-max-upload must be positive")
     try:
         args.vt_upload_results = read_vt_results(json.loads(args.vt_upload_results), "--vt-upload-results")

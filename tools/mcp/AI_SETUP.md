@@ -92,9 +92,9 @@ Replace `<repo>` with the folder the editor is installed in.
 | `xfined_mod_releases` | the releases the manifest's `github` repository holds, newest first, drafts included. Reads only. Args `action` (`list` default, `status`, `cancel`), `wait` (bridge only, default true). Returns `releases` `[{id, tag, title, notes, draft, prerelease, latest, published, url, bytes, assets}]`, `listed`, `state`, `pending`, `error` |
 | `xfined_mod_release_edit` | change the title and/or the notes of one release, named by `tag` or `id`; an omitted field keeps its value. Files, tag and the latest mark are not touched. Returns `note` and the refreshed `releases` |
 | `xfined_mod_release_delete` | delete ONE of those releases, named by `tag` or `id` (only `id` names one of several drafts that share a tag), and then its git tag. Permanent - GitHub keeps no copy - and the editor asks nothing on this path; the tool carries MCP's `destructiveHint`, so a client that wants a permission asks for it on its own side. Returns `note`, `tag_kept` and the refreshed `releases` |
-| `xfined_mod_catalog` | Mod > Submit to Mod Browser: list the module in the game's in-game Mod Browser (see "Listing a mod in the Mod Browser" below). Args `action` (`status` default, `key_create` + optional `path`/`password`, `key_use` + `path`, `key_unlock` + `password`, `vt_key` + `key`, `vt_key_forget`, `check`, `vt`, `pull`, `cancel`, `show` / `hide` - the Submit to Mod Browser window, for a screenshot), `wait` (bridge only, default true). Every action answers the status: `catalog`, `key` `{exists, locked, path, key_id, public, error}`, `vt_key`, `account` `{signed_in, source, login}`, `job` `{kind, state, pending, stage, error}`, `check` `{done, blocking, release, findings}`, `vt` `[{package, sha256, size, state, engines, trusted_malicious, trusted_suspicious, other_malicious, flagged, url, error}]`, `pull` `{number, state, url, listed}`. `password` and `key` are secrets - never echoed, logged or answered. The pull request is `xfined_mod_catalog_submit` |
-| `xfined_mod_catalog_submit` | Submit the module to the Mod Browser: the check again, then a PUBLIC pull request from the user's GitHub account against the catalog (or an update of the open one). Arg `wait` (bridge only, default true); answers `xfined_mod_catalog`'s status with `pull`. The editor asks nothing; the tool carries `destructiveHint` and `openWorldHint` |
-| `xfined_mod_package` | package a release for the game's module updater: the descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. The index states every file's SHA-256 and the byte range of its data inside a package, read back from the finished archive - the game downloads only the files that differ. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement), `password` (opens a protected author key for the session first; never echoed or logged). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (deleted, no Recycle Bin). The descriptor carries the Mod Browser's `[card]` and, when the author key is open, its `[signature]` (see "Listing a mod in the Mod Browser"). Returns `descriptor`, `out_dir`, `index` `{name,size,sha256}`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings`, `left_out` (what the build passed by, as for `xfined_mod_export`), `signed` + `key_id` (the author key that signed the descriptor; `false` / `""` when it went out unsigned) and `catalog_content` `[{level, text}]` - the Mod Browser's content policy and script report over the packaged files (`block`: a file or a call the catalog does not take; `review`: something its maintainer looks at). The package is written either way. Cancelable through `xfined_progress` |
+| `xfined_mod_catalog` | Mod > Submit to Mod Browser: list the module in the game's in-game Mod Browser (see "Listing a mod in the Mod Browser" below). Args `action` (`status` default, `key_create` + optional `path`/`password`, `key_use` + `path`, `key_unlock` + `password`, `vt_key` + `key`, `vt_key_forget`, `check`, `vt`, `submission`, `cancel`, `show` / `hide` - the Submit to Mod Browser window, for a screenshot), `wait` (bridge only, default true). Every action answers the status: `catalog`, `key` `{exists, locked, path, key_id, public, error}`, `vt_key`, `account` `{signed_in, source, login}`, `job` `{kind, state, pending, stage, error}`, `check` `{done, blocking, release, findings}`, `vt` `[{package, sha256, size, state, engines, trusted_malicious, trusted_suspicious, other_malicious, flagged, url, error}]`, `submission` `{number, state, verdict, verdict_text, url, note, listed}` (`state` `none` / `open` / `closed`; `verdict` `accepted` / `waiting` / `refused`, empty until the catalog has spoken; `verdict_text` its one sentence). `password` and `key` are secrets - never echoed, logged or answered. The submission itself is `xfined_mod_catalog_submit` |
+| `xfined_mod_catalog_submit` | Submit the module to the Mod Browser: the check again, then a PUBLIC issue `Submit <id>` in the catalog from the user's GitHub account (or an edit of the account's open one; nothing when the catalog already holds the very file). Arg `wait` (bridge only, default true); answers `xfined_mod_catalog`'s status with `submission`. The editor asks nothing; the tool carries `destructiveHint` and `openWorldHint` |
+| `xfined_mod_package` | package a release for the game's module updater: the descriptor `<id>.update.ltx`, the file index `<id>-<version>.files` and `<id>-<version>.zip` (`.partN.zip` when it has to split under GitHub's 2 GiB asset limit), every package holding the complete module under `modules/<id>/`. The index states every file's SHA-256 and the byte range of its data inside a package, read back from the finished archive - the game downloads only the files that differ. Args `out_dir` (default `<project>/releases/<version>`; inside the project only `releases/` is accepted), `requires_game` (`MAJOR.MINOR.PATCH`; omitted = the linked game's version, empty = no requirement), `password` (opens a protected author key for the session first; never echoed or logged). Runs the pre-build bake and the same gate as `xfined_mod_export`, and also refuses a version that is not 1-4 numbers separated by dots. No questions asked: files an earlier packaging of the same version left in `out_dir` are replaced (deleted, no Recycle Bin). The descriptor carries the Mod Browser's `[card]` and, when the author key is open, its `[signature]` (see "Listing a mod in the Mod Browser"). Returns `descriptor`, `out_dir`, `index` `{name,size,sha256}`, `packages` `[{name,size,sha256}]`, `files`, `unpacked`, `packed`, `requires_game`, `baked`, `warnings`, `left_out` (what the build passed by, as for `xfined_mod_export`), `signed` + `key_id` (the author key that signed the descriptor; `false` / `""` when it went out unsigned) and `catalog_content` `[{level, text}]` - the Mod Browser's content policy and script report over the packaged files (`block`: a file or a call the catalog does not take; `review`: something the catalog's report flags). The package is written either way. Cancelable through `xfined_progress` |
 | `xfined_characters_list` | the module's OWN NPCs, one `.npcasset` each. Returns `characters` `[{id, file, name, community, visual, supplies, squad}]`, `module` and `problems` (`E...` blocks a build, `W...` does not). The game knows a character as `<module>_<id>`: that is its spawn section, the squad section `<module>_<id>_squad` and the `character_profile` a placed stalker carries. A quest needs none of those names: `spawn.npc` takes rows `{ character = "<id>", ref = "..." }` (or `section = ` for anybody of the game's), one NPC and one ref per row; `unique` removes every NPC of that kind first and is ON by default for a character, OFF for a section |
 | `xfined_characters_get` | one character by `id` or `path`: its parsed fields, its `problems` and the whole file `text` |
 | `xfined_characters_write` | create or replace a character. `text` is the whole file - declarative Lua, `return { npc = 1, id, name, community, visual, icon, rank, reputation, money = { min, max, infinite }, supplies = { { section, count }, ... }, bio, start_dialog, squad }`. `name`/`bio` are a string or a table keyed by language (`{ rus = ..., eng = ... }`). `base` names another character to start from: unset fields are inherited and the starting KITS ARE MERGED - a repeated section takes the new count, `count = 0` drops an inherited row. `abstract = true` makes it a template only (no profile, no spawn section, no name or model needed), which is how several characters share one kit. `E111` is a base that does not exist, `E112` a chain that loops. Note the model is FIXED: an outfit changes an NPC's protection, not its visual. Without `path`/`id` the file lands at `characters/<id>.npcasset`. Canonical: write(read(x)) is byte-identical. A portrait, dialog or kit item the linked game (and the project) does not have is W115 / W116 / W117 - look them up with `xfined_quest_lookup` type `character_icon` / `dialog_id` / `item_section` |
@@ -329,9 +329,15 @@ The game's Mods window has a Browser: a catalog of modules a player installs
 from inside the game. Its contract is `docs/dead-air/MOD_CATALOG.md` in the game
 repository. A listed module is an ordinary module with ordinary GitHub releases
 (see above); the catalog adds that every release is signed with the author's
-key, that it holds game data only, and that the catalog's maintainer lists it
-once, from a pull request. `xfined_mod_catalog` is Mod > Submit to Mod Browser
-without the window.
+key, that it holds game data only, and that it is listed once, from a
+submission: an issue `Submit <id>` in the catalog repository. Nobody reviews it
+by hand: the catalog's workflow judges it by itself - accepted, it commits the
+module's file and closes the issue; refused, it closes the issue (a GitHub
+account younger than the catalog's minimum age is refused too, with the day it
+may submit again); waiting (VirusTotal still scanning the package, the day's
+quota of new modules used up), it leaves the issue open and looks again every
+half hour.
+`xfined_mod_catalog` is Mod > Submit to Mod Browser without the window.
 
 1. `action=key_create` - the author key, once per author. It is a FILE:
    `Documents\XFined Editor\Keys\author.xkey` unless `path` says otherwise -
@@ -357,8 +363,8 @@ without the window.
    signed (a locked key leaves the release unsigned, with a warning);
    `catalog_content` names what the catalog refuses - a program or an archive
    under any name, a file type outside its list, a dot-named file, `os.execute`,
-   `io.popen`, `ffi` and the like in a script (`block`) - and what its maintainer
-   will look at (`review`). Then `xfined_mod_publish` puts the release out.
+   `io.popen`, `ffi` and the like in a script (`block`) - and what its report
+   flags (`review`). Then `xfined_mod_publish` puts the release out.
 4. `action=check` - the listing requirements against the LATEST GitHub release:
    `findings` `[{level, code, text}]`, `level` `ok` / `note` / `review` /
    `block`, `code` one of - in the order they are checked - `key`, `repository`,
@@ -376,17 +382,32 @@ without the window.
    shared with the security industry. Such a package is `uploaded` or `queued`
    until VirusTotal has analysed it; run `vt` again a minute later. The verdict
    (`clean` / `warn` / `block`) follows the catalog's own policy; `block` stops
-   the submission, and the report `url` goes into the pull request.
-6. `xfined_mod_catalog_submit` - runs the check again and refuses on a blocking finding;
-   otherwise it opens a pull request against the catalog repository from the
-   user's GitHub account: a fork (a branch of the catalog itself when the account
-   may push there), the branch `submit-<id>`, one file `mods/<id>.ltx` (`id`,
-   `github`, `key`, `version`, `website`). Submitting again updates the pull
-   request that is open. `action=pull` follows it: `state` `open` / `merged` /
-   `closed`, and `listed` once the maintainer has published the catalog with the
-   module under this key.
+   the submission, and the report `url` goes into it.
+6. `xfined_mod_catalog_submit` - runs the check again and refuses on a blocking
+   finding; otherwise it opens an issue `Submit <id>` in the catalog repository
+   from the user's GitHub account. Its body starts with the line
+   `<!-- xms-catalog submission -->`, then a line for people, then `mods/<id>.ltx`
+   (`id`, `github`, `key`, `version`, `website`) in a fenced block opened by a
+   line of exactly ```` ```ini ````, byte for byte the file the catalog commits,
+   and after it the links, the VirusTotal verdicts and the editor's check.
+   Submitting again edits the body of the account's open submission, which makes
+   the catalog judge it again; once the last one is closed (accepted or refused)
+   a new issue opens; nothing is sent when the catalog's default branch already
+   holds that very file (`note` says so). The account that owns the catalog
+   submits the same way. `action=submission` follows the account's newest
+   `Submit <id>` issue: `state` `open` / `closed`; `verdict` `accepted` /
+   `waiting` / `refused` and `verdict_text`, the one plain sentence that sums the
+   verdict up (what it waits for, why it refused) - both empty until the catalog
+   has spoken, so also in the answer of a submit that sent something; and
+   `listed` once the published index names the module under this key, minutes
+   after the acceptance. The verdict is the NEWEST comment on the issue that
+   starts with `<!-- xms-catalog verdict=STATE -->` and was written by
+   `github-actions[bot]`, the account the catalog's workflow comments as; anyone
+   can post a comment that looks like one, so no other author counts. A `closed`
+   submission was accepted or refused by its verdict; with neither, somebody
+   closed it by hand.
 
-`check`, `vt`, the submission and `pull` run on a worker, like an upload: the answer
+`check`, `vt`, `submit` and `submission` run on a worker, like an upload: the answer
 is the status with `job.pending=true`, the bridge follows `action=status` for up
 to 150 s (`wait=false` returns at once), and a job that outlasts that comes back
 still pending - ask `action=status` until `job.pending` is false. `action=cancel`
@@ -399,7 +420,7 @@ from outside. `action=show` opens Mod > Submit to Mod Browser - like the menu it
 starts a check when no job runs, and the bridge follows that check - and
 `action=hide` closes it: `show` -> `xfined_screenshot_editor` -> `hide`.
 
-A pull request is public, and the editor asks nothing on this path:
+A submission is public, and the editor asks nothing on this path:
 `xfined_mod_catalog_submit` is called when the user asked for the submission, and
 asked about in the conversation when they did not. It is a tool of its own with
 `destructiveHint` and `openWorldHint`, so a client that wants a permission prompt

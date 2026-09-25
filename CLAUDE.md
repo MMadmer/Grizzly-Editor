@@ -315,17 +315,52 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `vt` is the author's own VirusTotal key (Credential Manager
   `XFinedEditor:VirusTotal`, or `VT_API_KEY`), uploading a package VirusTotal does
   not know from the local release folder and waiting out the free API's 4 requests
-  a minute; `submit` checks again, then forks the catalog (or, for an account that
-  may push to it - the maintainer - uses a branch of the catalog itself: GitHub
-  cannot fork your own repository), resets `submit-<id>` onto the default branch,
-  writes the one file `mods/<id>.ltx` and opens the pull request or updates the
-  open one; `pull` follows it and says when the index lists the id with this key.
-  A pull request is public from its first second; the window says so under Submit.
+  a minute; `submit` checks again, then submits (below); `submission` follows it:
+  its state, the catalog's verdict, and whether the index lists the id with this key.
+  A submission is public from its first second; the window says so under Submit.
+- **A submission is an ISSUE of the catalog, not a pull request.** GitHub blocks
+  `pull_request_target` by default in public repositories and holds a fork's first
+  pull request for a manual approval nobody gives; an issue starts the catalog's
+  workflow with none of that. No fork, no branch, no pull request, and no special path
+  for the catalog's owner (`EditorGithub::CatalogSubmit` / `CatalogIssue`,
+  `SCatalogRequest` / `SCatalogIssue`):
+  - title `Submit <module id>`; the body starts with `<!-- xms-catalog submission -->`,
+    one line for people, a blank line, then a fenced block opened by a line of exactly
+    ```` ```ini ```` that holds EXACTLY the text of `mods/<id>.ltx` (`SubmissionText`) and
+    closes with ```` ``` ```` on its own line - the catalog commits that text itself -
+    then the links, the VirusTotal verdicts and the editor's check;
+  - one open submission per module and account: submitting again EDITS the body of the
+    account's open `Submit <id>` issue (the edit makes the catalog judge it again);
+    with none open - the last was accepted or refused - a new issue opens;
+  - nothing is sent when the catalog's default branch already holds `mods/<id>.ltx`
+    with exactly this text (a note says so);
+  - the submission is found as `GET issues?creator=<login>&state=all&per_page=100`
+    (newest first, every page): the newest entry titled exactly `Submit <id>` without
+    a `pull_request` key.
+- **The catalog judges and lists by itself** - nobody reviews by hand, and no editor
+  text may say that a maintainer reviews or merges. A workflow of the catalog
+  repository, running as `github-actions[bot]`, judges every submission: accepted, it
+  commits the file and closes the issue; refused, it closes the issue (a GitHub account
+  younger than the catalog's minimum age is refused too, with the day it may submit
+  again); waiting (VirusTotal still scanning, the day's quota of new modules used up),
+  it leaves the issue open and looks again every half hour. It says so in a comment: the body starts
+  with the line `<!-- xms-catalog verdict=STATE -->` (`accepted` / `waiting` /
+  `refused`), the next non-empty line is one plain-text sentence summing it up, then a
+  blank line and a Markdown report the editor ignores. The NEWEST such comment is the
+  verdict in force, and **only `github-actions[bot]` counts**: anyone can post a
+  comment that looks like one. The comments are read oldest first, every page, into
+  `SCatalogIssue::verdict` / `verdict_text` (`mod_catalog` `submission.verdict` /
+  `submission.verdict_text`); a submit that sent something leaves them empty - the
+  catalog has not judged the new text yet. The window shows the sentence under an open
+  submission; a closed one reads as accepted or refused by its verdict, and as merely
+  closed without one (somebody closed it by hand).
 - QA: under `-qa_github` the catalog is `XFINED_CATALOG_REPO` / `XFINED_CATALOG_BASE`,
   VirusTotal `XFINED_VT_API` / `XFINED_VT_KEY`, and `XFINED_CATALOG_HOME` replaces
   `Documents\XFined Editor`, so a test never meets the author's own key.
   `tools/qa/test_mod_catalog.py --project <project>` drives it all over MCP against
-  `github_mock.py` (the catalog, forks, pull requests and VirusTotal included).
+  `github_mock.py` (the catalog, its issues and their comments, VirusTotal; the
+  harness routes `/__catalog/comment`, `/__catalog/close` and `/__catalog/issue` play
+  the catalog's workflow or anyone else).
 
 ## Characters (the module's own NPCs)
 

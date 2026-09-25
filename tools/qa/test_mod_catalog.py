@@ -17,9 +17,11 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   F  the listing requirements (7) against the published release and the catalog index; the window
      opened and closed over MCP (show / hide)
   G  VirusTotal with the author's own key (11): upload, queue, verdict, a block that stops a submission
-  H  the pull request: fork, branch, mods/<id>.ltx, updated not duplicated, merged, listed
+  H  the submission: an issue 'Submit <id>' whose ini block is mods/<id>.ltx byte for byte, edited not
+     duplicated, the verdicts the catalog's workflow comments (github-actions[bot] only, the newest one, past
+     the first page), accepted and listed, nothing sent once the catalog holds the file
   I  hygiene: no token, password or VirusTotal key where it must not go
-  J  the maintainer listing a module of their own: a branch of the catalog, no fork
+  J  the maintainer listing a module of their own the same way; refused and closed, then a new submission
 
     python tools/qa/test_mod_catalog.py --project D:\\XFinedProjects\\Test [--shots <folder>]
 """
@@ -58,6 +60,8 @@ AUTHOR = "QA Author"
 DESCRIPTION = 'Mod Browser QA module.\nA "quoted" word.'
 VERSION = "1.0.0"
 WEBSITE = "https://ap-pro.ru/stuff/qa/qa-mod-r1/"
+SUBMIT_TITLE = "Submit " + MODULE_ID
+SUBMITTED_LINE = "Submitted from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7)."
 # Cyrillic, quotes and a backslash: the password crosses JSON, UTF-8 and PBKDF2 on both sides
 PASSWORD = 'Qa-пароль "7" \\ ok'
 PASSWORD2 = "second-key-pass-9"
@@ -167,12 +171,30 @@ class Mock:
         return self.get("/__vt")
 
     def put_file(self, path: str, text: str, branch: str = "main") -> None:
-        """Commits one file to the catalog repository, past the editor - the maintainer's own push."""
+        """Commits one file to the catalog repository, past the editor - the catalog's own push."""
         query = urllib.parse.urlencode({"path": path, "branch": branch})
         self.post("/__catalog/file?" + query, text.encode("utf-8"))
 
-    def merge(self, number: int) -> None:
-        self.post("/__catalog/merge?number=%d" % number)
+    def close(self, number: int, reason: str = "") -> None:
+        """Closes an issue of the catalog as its workflow (github-actions[bot]) does; `reason` completed by default."""
+        query = {"number": number}
+        if reason:
+            query["reason"] = reason
+        self.post("/__catalog/close?" + urllib.parse.urlencode(query))
+
+    def comment(self, number: int, text: str, author: str = "", count: int = 1) -> None:
+        """`count` comments on an issue of the catalog: its workflow's (github-actions[bot]) unless `author` says."""
+        query = {"number": number, "count": count}
+        if author:
+            query["author"] = author
+        self.post("/__catalog/comment?" + urllib.parse.urlencode(query), text.encode("utf-8"))
+
+    def issue(self, creator: str, title: str, body: str, pull: bool = False) -> None:
+        """An issue of the catalog by anyone; `pull` makes it an entry that stands for a pull request."""
+        query = {"creator": creator, "title": title}
+        if pull:
+            query["pull"] = 1
+        self.post("/__catalog/issue?" + urllib.parse.urlencode(query), body.encode("utf-8"))
 
     def vt_seed(self, verdicts: dict) -> None:
         self.post("/__vt/seed", json.dumps(verdicts).encode("utf-8"), "application/json")
@@ -495,9 +517,9 @@ def route_class(path: str) -> str:
     return "web"
 
 
-# ---- the mock's catalog network and VirusTotal, as its harness routes report them ------------------------
-# /__catalog: {"repositories": {"<owner/name>": {"fork", "pending", "branches": {"<name>": {"sha", "message",
-# "files": {path: text}, "files_base64": {...}}}}}, "pulls": [GitHub's pull JSON]}
+# ---- the mock's catalog and VirusTotal, as its harness routes report them ------------------------------------
+# /__catalog: {"repositories": {"<owner/name>": {"branches": {"<name>": {"sha", "message", "files": {path: text},
+# "files_base64": {...}}}}}, "issues": [GitHub's issue JSON + "comment_list": [GitHub's comment JSON]]}
 # /__vt: {"files": {"<sha256>": {"sha256", "size", "results", "queued", "uploads", "names"}}, "analyses": [...]}
 
 def repo_of(state: dict, full_name: str) -> dict:
@@ -505,28 +527,51 @@ def repo_of(state: dict, full_name: str) -> dict:
     return next((repo for name, repo in repos.items() if name.lower() == full_name.lower()), {})
 
 
-def forks(state: dict) -> list[str]:
-    return [name for name, repo in (state.get("repositories") or {}).items() if repo.get("fork")]
-
-
 def branch_file(state: dict, full_name: str, branch: str, path: str) -> str | None:
     return (((repo_of(state, full_name).get("branches") or {}).get(branch) or {}).get("files") or {}).get(path)
 
 
-def pulls(state: dict) -> list[dict]:
-    return list(state.get("pulls") or [])
+def issues(state: dict) -> list[dict]:
+    return list(state.get("issues") or [])
 
 
-def pull_of(state: dict, number: int) -> dict:
-    return next((p for p in pulls(state) if p.get("number") == number), {})
+def issue_of(state: dict, number: int) -> dict:
+    return next((i for i in issues(state) if i.get("number") == number), {})
 
 
-def head_label(pull: dict) -> str:
-    return (pull.get("head") or {}).get("label", "")
+def submissions(state: dict, creator: str) -> list[dict]:
+    """The creator's issues titled exactly 'Submit <id>', oldest first; a pull request is no submission."""
+    return [i for i in issues(state) if str((i.get("user") or {}).get("login", "")).lower() == creator.lower()
+            and i.get("title") == SUBMIT_TITLE and "pull_request" not in i]
 
 
-def base_ref(pull: dict) -> str:
-    return (pull.get("base") or {}).get("ref", "")
+def ini_block(body: str) -> str | None:
+    """What the first fenced ```ini block of an issue body holds, byte for byte, the fence lines left out."""
+    lines = body.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.rstrip("\r\n") == "```ini":
+            for j in range(i + 1, len(lines)):
+                if lines[j].rstrip("\r\n") == "```":
+                    return "".join(lines[i + 1:j])
+            return None
+    return None
+
+
+def after_block(body: str) -> str:
+    """What an issue body says after its ini block."""
+    return body.split("\n```\n", 1)[1] if "\n```\n" in body else ""
+
+
+def submission_text(github: str, key: str) -> str:
+    """mods/<id>.ltx as the catalog is to commit it: the text the editor submits."""
+    return "[mod]\nid      = %s\ngithub  = %s\nkey     = %s\nversion = %s\nwebsite = %s\n" % (
+        MODULE_ID, github, key, VERSION, WEBSITE)
+
+
+def api_requests(mock, method: str, tail: str) -> list[dict]:
+    """The API requests of the mock's log with this method whose path, query left out, ends with `tail`."""
+    return [r for r in mock.requests()
+            if r.get("method") == method and urllib.parse.urlsplit(r.get("path", "")).path.endswith(tail)]
 
 
 def uploads_of(vt_state: dict, sha: str) -> int:
@@ -558,17 +603,24 @@ class Run:
         self.key_id = ""
         self.plain_mode = True
         self.package = ("", 0, "")  # name, size, sha256 of the published zip
-        self.pull_number = 0
 
     def next_index(self, rows: list[str]) -> str:
         self.serial += 1
         return index_text(self.maintainer_key, self.serial, rows)
 
+    def window_shot(self, name: str) -> None:
+        """The Submit to Mod Browser window with what it says now, for the operator - only when --shots names a folder."""
+        if not self.shots:
+            return
+        # like the menu, show checks at once - and the check reads the submission too
+        follow(mcp("mod_catalog", action="show"))
+        shot(self.shots, name)
+        mcp("mod_catalog", action="hide")
+
     # ------------------------------------------------------------------------------ run 1: an author
     def author(self) -> None:
         port = free_port()
-        # GitHub makes a fork in the background: the editor has to wait for it
-        mock = Mock(port, self.work, "mock_author", "--catalog-seed", self.seed, "--fork-delay", "2")
+        mock = Mock(port, self.work, "mock_author", "--catalog-seed", self.seed)
         editor = None
         try:
             # a lowered line sends even this small package the way a module over 32 MB goes
@@ -607,8 +659,8 @@ class Run:
         check((st.get("account") or {}).get("signed_in") is True, "A the GitHub account of the environment is in effect",
               short(st.get("account")))
         check(job_state(st) == "idle" and not (st.get("job") or {}).get("pending") and
-              (st.get("pull") or {}).get("number") == 0 and not (st.get("check") or {}).get("done"),
-              "A no job, no check and no pull request yet", short(st))
+              (st.get("submission") or {}).get("number") == 0 and not (st.get("check") or {}).get("done"),
+              "A no job, no check and no submission yet", short(st))
 
         st = mcp("mod_catalog", action="key_create", password=PASSWORD)
         key = st.get("key") or {}
@@ -939,58 +991,116 @@ class Run:
         check(job_failed(data) and "virustotal" in job_error(data).lower(), "G submit refuses and names the block",
               short(data.get("job")) + " " + str(data.get("error", "")))
         state = mock.catalog()
-        check(not pulls(state) and not forks(state), "G nothing reached the catalog", short(state))
+        check(not issues(state), "G nothing reached the catalog", short(state))
 
         mock.vt_seed({sha: {TRUSTED: "undetected", "EngineA": "undetected", "EngineB": "harmless", "EngineC": "undetected"}})
         data = job("vt")
         check(vt_entry(data, sha).get("state") == "clean", "G a clean report clears it again", short(vt_entry(data, sha)))
 
-    # ------------------------------------------------------------------------------ H: the pull request
+    # ------------------------------------------------------------------------------ H: the submission
     def submission(self, mock: Mock) -> None:
         name, size, sha = self.package
-        fork = "QaOwner/" + CATALOG_REPO.split("/")[1]
-        branch = "submit-" + MODULE_ID
         path = "mods/%s.ltx" % MODULE_ID
+        expected = submission_text(GITHUB_REPO, self.key_public)
+        # none of these is the author's submission: a pull request under the title, another account's issue, a look-alike
+        mock.issue("QaOwner", SUBMIT_TITLE, "A pull request, not a submission.", pull=True)
+        mock.issue("QaSomeone", SUBMIT_TITLE, "Somebody else's.")
+        mock.issue("QaOwner", SUBMIT_TITLE + " please", "Almost the title.")
+        decoys = {i.get("number"): (i.get("body"), i.get("state")) for i in issues(mock.catalog())}
+
         data = job("submit")
-        pull = data.get("pull") or {}
-        check(job_done(data, "submit") and pull.get("number", 0) > 0 and pull.get("state") == "open" and pull.get("url"),
-              "H submit opens a pull request", short(data.get("job")) + " " + short(pull))
-        self.pull_number = pull.get("number", 0)
+        sub = data.get("submission") or {}
+        check(job_done(data, "submit") and sub.get("number", 0) > 0 and sub.get("state") == "open" and sub.get("url"),
+              "H submit opens a submission", short(data.get("job")) + " " + short(sub))
+        check(sub.get("verdict") == "" and sub.get("verdict_text") == "", "H no verdict before the catalog speaks",
+              short(sub))
+        number = sub.get("number", 0)
         state = mock.catalog()
-        check(repo_of(state, fork).get("fork") is True, "H from a fork of the catalog in the author's account",
-              short(sorted(state.get("repositories") or {})))
-        text = branch_file(state, fork, branch, path)
-        fields = submission_fields(text or "")
-        check(fields == {"id": MODULE_ID, "github": GITHUB_REPO, "key": self.key_public, "version": VERSION,
-                         "website": WEBSITE}, "H %s on %s holds exactly the [mod] fields" % (path, branch), str(text))
-        check(branch_file(state, CATALOG_REPO, "main", path) is None, "H the catalog's own main branch is untouched")
-        pr = pull_of(state, self.pull_number)
-        check(head_label(pr) == "QaOwner:" + branch and base_ref(pr) == "main", "H head QaOwner:%s, base main" % branch,
-              short(pr))
-        check(VT_PAGE + sha in str(pr.get("body", "")), "H the description links the VirusTotal report", str(pr.get("body")))
+        mine = submissions(state, "QaOwner")
+        check(len(mine) == 1 and mine[0].get("number") == number and mine[0].get("state") == "open" and
+              str(sub.get("url", "")).endswith("/issues/%d" % number),
+              "H one issue '%s' by the author: the pull request, the stranger's issue and the look-alike are not it"
+              % SUBMIT_TITLE,
+              short([(i.get("number"), i.get("title"), (i.get("user") or {}).get("login")) for i in issues(state)]))
+        body = str(issue_of(state, number).get("body") or "")
+        check(body.split("\n")[:4] == ["<!-- xms-catalog submission -->", SUBMITTED_LINE, "", "```ini"],
+              "H the body opens with the marker, a line for people, a blank line and the ini block", repr(body[:300]))
+        check(ini_block(body) == expected, "H the ini block holds %s byte for byte" % path, repr(ini_block(body)))
+        check(submission_fields(ini_block(body) or "") == {"id": MODULE_ID, "github": GITHUB_REPO, "key": self.key_public,
+                                                           "version": VERSION, "website": WEBSITE},
+              "H and the catalog's own parser reads exactly the [mod] fields from it", repr(ini_block(body)))
+        check(VT_PAGE + sha in after_block(body) and "Checked by XFined Editor" in after_block(body),
+              "H after the block: the VirusTotal report and the editor's check", repr(after_block(body)[:400]))
+        check(branch_file(state, CATALOG_REPO, "main", path) is None,
+              "H the catalog's main is untouched: the catalog commits the file itself")
+        check({i.get("number"): (i.get("body"), i.get("state")) for i in issues(state) if i.get("number") in decoys} ==
+              decoys, "H and the decoys are left as they were")
+
+        data = job("submission")
+        sub = data.get("submission") or {}
+        check(job_done(data, "submission") and sub.get("number") == number and sub.get("state") == "open" and
+              sub.get("verdict") == "" and sub.get("verdict_text") == "",
+              "H submission: no verdict while the catalog has not commented", short(sub))
 
         data = job("submit")
         state = mock.catalog()
-        check(job_done(data, "submit") and (data.get("pull") or {}).get("number") == self.pull_number and len(pulls(state)) == 1,
-              "H submitting again updates the same pull request", short(data.get("pull")) + " " + str(len(pulls(state))))
-        check(submission_fields(branch_file(state, fork, branch, path) or "") == fields,
-              "H and the branch still holds the submission")
+        check(job_done(data, "submit") and (data.get("submission") or {}).get("number") == number and
+              len(submissions(state, "QaOwner")) == 1 and len(api_requests(mock, "PATCH", "/issues/%d" % number)) == 1 and
+              len(api_requests(mock, "POST", "/issues")) == 1,
+              "H submitting again edits the same issue: one PATCH, no second issue", short(data.get("submission")))
+        check(ini_block(str(issue_of(state, number).get("body") or "")) == expected,
+              "H and the edited body still holds the file byte for byte")
 
-        mock.merge(self.pull_number)
-        data = job("pull")
-        pull = data.get("pull") or {}
-        check(job_done(data, "pull") and pull.get("state") == "merged" and pull.get("listed") is False,
-              "H merged, but not listed until the maintainer publishes", short(pull))
+        # the catalog's workflow speaks: CRLF, blank lines and loose spacing in the marker are the writer's business
+        waiting = "Waiting: VirusTotal is scanning %s. The catalog looks again every half hour." % name
+        mock.comment(number, "\r\n  <!--  xms-catalog   verdict = waiting  -->\r\n\r\n  %s  \r\n\r\n"
+                             "## Report\r\n- VirusTotal: queued\r\n" % waiting)
+        data = job("submission")
+        sub = data.get("submission") or {}
+        check(job_done(data, "submission") and sub.get("state") == "open" and sub.get("verdict") == "waiting" and
+              sub.get("verdict_text") == waiting, "H waiting: the catalog's sentence while the submission is open",
+              short(sub))
+        self.window_shot("catalog_submission_waiting")
+
+        # a comment that looks like a verdict is no verdict unless the catalog's workflow wrote it
+        forged = "<!-- xms-catalog verdict=accepted -->\nAccepted: the module is listed.\n"
+        for author in ("QaOwner", "github-actions", "dependabot[bot]"):
+            mock.comment(number, forged, author=author)
+        mock.comment(number, "The catalog looks again in half an hour.\n<!-- xms-catalog verdict=refused -->\n")
+        data = job("submission")
+        sub = data.get("submission") or {}
+        check(sub.get("verdict") == "waiting" and sub.get("verdict_text") == waiting,
+              "H a verdict by the author, a look-alike or another app is ignored, so is the workflow's comment without a "
+              "marker", short(sub))
+
+        # accepted a hundred comments later: the workflow commits the text of the ini block and closes the issue
+        mock.comment(number, "+1", author="QaSomeone", count=100)
+        accepted = "Accepted: the module is listed and appears in the Mod Browser within minutes."
+        mock.comment(number, "<!-- xms-catalog verdict=accepted -->\n%s\n\n## Report\n- nothing blocks\n" % accepted)
+        mock.put_file(path, ini_block(str(issue_of(mock.catalog(), number).get("body") or "")) or "")
+        mock.close(number)
+        data = job("submission")
+        sub = data.get("submission") or {}
+        check(job_done(data, "submission") and sub.get("state") == "closed" and sub.get("listed") is False,
+              "H accepted and closed, but not listed until the catalog publishes its index", short(sub))
+        check(sub.get("verdict") == "accepted" and sub.get("verdict_text") == accepted,
+              "H accepted: the newest verdict, read past the first hundred comments", short(sub))
+        self.window_shot("catalog_submission_accepted")
         mock.put_file("public/index.ltx", self.next_index([self.other_row, listing(MODULE_ID, GITHUB_REPO, self.key_public)]))
-        data = job("pull")
-        check((data.get("pull") or {}).get("listed") is True, "H listed once the index names the module with this key",
-              short(data.get("pull")))
+        data = job("submission")
+        check((data.get("submission") or {}).get("listed") is True, "H listed once the index names the module with this key",
+              short(data.get("submission")))
+
+        # the catalog's main holds the very text of the ini block now: nothing to send
         data = job("submit")
-        pull = data.get("pull") or {}
+        sub = data.get("submission") or {}
         state = mock.catalog()
-        check(job_done(data, "submit") and "already holds" in str(pull.get("note", "")) and pull.get("state") == "merged" and
-              len(pulls(state)) == 1, "H submitted again unchanged: nothing is sent, and the answer says why",
-              short(pull) + " " + str(len(pulls(state))))
+        check(job_done(data, "submit") and "already holds" in str(sub.get("note", "")) and sub.get("number") == number and
+              sub.get("state") == "closed" and sub.get("verdict") == "accepted" and
+              len(submissions(state, "QaOwner")) == 1 and len(api_requests(mock, "POST", "/issues")) == 1 and
+              len(api_requests(mock, "PATCH", "/issues/%d" % number)) == 1,
+              "H submitted again unchanged: nothing is sent - main holds the ini block's text byte for byte",
+              short(sub) + " " + str(len(submissions(state, "QaOwner"))))
 
     # ------------------------------------------------------------------------------ I: hygiene
     def hygiene(self, mock: Mock, run: str) -> None:
@@ -1019,8 +1129,8 @@ class Run:
     def maintainer(self) -> None:
         port = free_port()
         # two VirusTotal requests a minute: the free API's refusal, met in seconds
-        mock = Mock(port, self.work, "mock_maintainer", "--catalog-seed", self.seed, "--catalog-push",
-                    "--login", MAINTAINER, "--vt-rate", "2", repo=MAINTAINER_REPO)
+        mock = Mock(port, self.work, "mock_maintainer", "--catalog-seed", self.seed, "--login", MAINTAINER,
+                    "--vt-rate", "2", repo=MAINTAINER_REPO)
         editor = None
         try:
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
@@ -1033,7 +1143,6 @@ class Run:
         phase("I", self.hygiene, mock, "maintainer")
 
     def own_listing(self, mock: Mock) -> None:
-        branch = "submit-" + MODULE_ID
         st = mcp("mod_catalog")
         key = st.get("key") or {}
         check(st.get("ok") and key.get("exists") is True and key.get("locked") is True and key.get("key_id") == self.key_id,
@@ -1059,19 +1168,46 @@ class Run:
               len(refusals) >= 2, "J over the free API's rate: waited out a few times, then reported, not hidden",
               short(entry) + " 429s: %d" % len(refusals))
         data = job("submit")
-        pull = data.get("pull") or {}
-        check(job_done(data, "submit") and pull.get("number", 0) > 0 and pull.get("state") == "open",
-              "J submit opens a pull request", short(data.get("job")) + " " + short(pull))
+        sub = data.get("submission") or {}
+        check(job_done(data, "submit") and sub.get("number", 0) > 0 and sub.get("state") == "open",
+              "J submit opens a submission", short(data.get("job")) + " " + short(sub))
         check((data.get("account") or {}).get("login") == MAINTAINER, "J the job learned the account's login",
               short(data.get("account")))
+        number = sub.get("number", 0)
         state = mock.catalog()
-        fields = submission_fields(branch_file(state, CATALOG_REPO, branch, "mods/%s.ltx" % MODULE_ID) or "")
-        check(fields.get("github") == MAINTAINER_REPO and fields.get("key") == self.key_public,
-              "J the branch %s is in the catalog itself" % branch, short(sorted(state.get("repositories") or {})))
-        check(not forks(state), "J and no fork was made", short(forks(state)))
-        pr = pull_of(state, pull.get("number", 0))
-        check(head_label(pr) == "%s:%s" % (MAINTAINER, branch) and base_ref(pr) == "main",
-              "J head %s:%s, base main" % (MAINTAINER, branch), short(pr))
+        mine = submissions(state, MAINTAINER)
+        check(len(mine) == 1 and ini_block(str(mine[0].get("body") or "")) == submission_text(MAINTAINER_REPO, self.key_public),
+              "J the catalog's owner submits like anyone: an issue whose ini block names the owner's repository",
+              short(mine))
+        branches = sorted((repo_of(state, CATALOG_REPO).get("branches") or {}))
+        check(branches == ["main"] and branch_file(state, CATALOG_REPO, "main", "mods/%s.ltx" % MODULE_ID) is None,
+              "J and nothing is pushed to the catalog: no branch, no file", short(branches))
+
+        # the catalog refuses: it closes the issue, and its newest verdict says why
+        refused = "Refused: the release is not signed by the submitted key."
+        mock.comment(number, "<!-- xms-catalog verdict=waiting -->\nWaiting: VirusTotal is scanning the package.\n")
+        mock.comment(number, "<!-- xms-catalog verdict=refused -->\r\n%s\r\n\r\n### Blocking\r\n- signature\r\n" % refused)
+        # not even the catalog's owner speaks for its workflow
+        mock.comment(number, "<!-- xms-catalog verdict=accepted -->\nAccepted: overruled.\n", author=MAINTAINER)
+        mock.close(number, reason="not_planned")
+        data = job("submission")
+        sub = data.get("submission") or {}
+        check(job_done(data, "submission") and sub.get("number") == number and sub.get("state") == "closed" and
+              sub.get("verdict") == "refused" and sub.get("verdict_text") == refused,
+              "J refused: closed, and the workflow's newest verdict says why", short(sub))
+        self.window_shot("catalog_submission_refused")
+
+        # a refused submission stays closed: submitting again opens a new one, without the old verdict
+        data = job("submit")
+        sub = data.get("submission") or {}
+        state = mock.catalog()
+        check(job_done(data, "submit") and sub.get("number", 0) > number and sub.get("state") == "open" and
+              len(submissions(state, MAINTAINER)) == 2 and issue_of(state, number).get("state") == "closed",
+              "J after the refusal submitting again opens a new issue; the refused one stays closed", short(sub))
+        data = job("submission")
+        again = data.get("submission") or {}
+        check(job_done(data, "submission") and again.get("number") == sub.get("number") and again.get("verdict") == "" and
+              again.get("verdict_text") == "", "J the new submission carries no verdict of the refused one", short(again))
 
 
 def main() -> int:

@@ -5,8 +5,8 @@
 
 // The network side of the editor's release tools: where the GitHub account token
 // comes from, the device sign-in, the publication of a packaged release, the
-// Mod Browser submission (a pull request against the catalog) and VirusTotal
-// with the author's own key. Everything here blocks on the network and is meant
+// Mod Browser submission (an issue of the catalog) and VirusTotal with the
+// author's own key. Everything here blocks on the network and is meant
 // for a worker thread; nothing touches the editor state or ImGui.
 //
 // A release is published the way the game expects to find one (game repo,
@@ -211,37 +211,41 @@ namespace EditorGithub
 	// the account's login name (GET /user)
 	bool	AccountLogin	(const xr_string& token, CCancel& cancel, xr_string& login, xr_string& err);
 
-	struct SCatalogPull
+	// A submission is an issue of the catalog, "Submit <id>", opened by the account that owns the
+	// module's repository. The catalog's workflow judges it by itself, comments its verdict and, when
+	// it accepts, commits mods/<id>.ltx itself and closes the issue.
+	struct SCatalogIssue
 	{
 		u64			number;			// 0 = none
-		xr_string	state;			// open, merged, closed; "none" when there is no pull request
+		xr_string	state;			// open, closed; "none" when there is no submission
 		xr_string	url;
 		xr_string	login;			// the account that asked
 		xr_string	note;			// a submission that sent nothing says why
+		// the workflow's newest verdict comment
+		xr_string	verdict;		// accepted, waiting, refused; empty = it has not spoken yet
+		xr_string	verdict_text;	// the verdict's one plain sentence
 
-					SCatalogPull	() : number(0), state("none") {}
+					SCatalogIssue	() : number(0), state("none") {}
 	};
 
-	struct SCatalogSubmission
+	struct SCatalogRequest
 	{
 		xr_string	module_id;
-		xr_string	file_text;		// mods/<id>.ltx
-		xr_string	title;
-		xr_string	body;			// the pull request's description, Markdown
+		xr_string	file_text;		// mods/<id>.ltx, byte for byte as the catalog is to commit it
+		xr_string	details;		// Markdown after it: the links, the verdicts, the editor's check
 		xr_string	token;
 	};
 
 	typedef std::function<void(LPCSTR stage)> TStage;
 
-	// A fork of the catalog - or, for an account that may push to it, the catalog itself - gets
-	// the branch submit-<id> reset onto the catalog's default branch and the one file
-	// mods/<id>.ltx; then the pull request is opened, or the open one retitled: it follows its
-	// branch, so it already carries the new file. A pull request is public from the first second.
-	bool	CatalogSubmit	(const SCatalogSubmission& rq, CCancel& cancel, const TStage& stage,
-							 SCatalogPull& out, xr_string& err);
-	// the newest pull request of submit-<id> by this account, in any state
-	bool	CatalogPull		(const xr_string& module_id, const xr_string& token, CCancel& cancel,
-							 SCatalogPull& out, xr_string& err);
+	// The account's open submission takes the new text - an edit makes the catalog judge it again;
+	// without one a new issue opens. Nothing is sent when the catalog's default branch already holds
+	// this very file. An issue is public from the first second.
+	bool	CatalogSubmit	(const SCatalogRequest& rq, CCancel& cancel, const TStage& stage,
+							 SCatalogIssue& out, xr_string& err);
+	// the account's newest submission of the module, in any state, with the catalog's newest verdict
+	bool	CatalogIssue	(const xr_string& module_id, const xr_string& token, CCancel& cancel,
+							 SCatalogIssue& out, xr_string& err);
 
 	//--------------------------------------------------------------------------
 	// VirusTotal, with the author's own key (MOD_CATALOG 11)
