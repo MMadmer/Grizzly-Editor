@@ -2,6 +2,15 @@
 
 #ifndef ImageLibH
 #define ImageLibH
+#include "UIEditLightAnim.h"
+
+class ETextureThumbnail;
+
+// The Texture Library tab: the texture descriptions (.thm) of the editor's library - or, as New Textures, the
+// ones Check New Textures found in the import folder - as list | preview | properties. Save writes the
+// changed descriptions and rebuilds their game textures (Import brings the new ones in). The two share one
+// tab: Check New Textures turns a library without unsaved changes into New Textures, and the import brings
+// the library back.
 class UIImageEditorForm :public XrUI
 {
 public:
@@ -12,12 +21,17 @@ public:
 	static void Update();
 	static void Show(bool bImport);
 	static void ImportTextures();
+	static bool IsOpen() { return !!Form; }
+	// MCP library kind=texture_library: state, select item=, search=
+	static void Mcp(const xr_string& action, LPCSTR raw, xr_string& out);
 private:
 	DEFINE_VECTOR(ETextureThumbnail*, THMVec, THMIt);
 	DEFINE_MAP(shared_str, ETextureThumbnail*, THMMap, THMMapIt);
 	THMMap m_THM_Used;
 	THMVec m_THM_Current;
-	UIItemListForm* m_ItemList;
+	ListItemsVec m_List;
+	XUI_LocalLibraryList m_ListView;
+	xr_string m_Selected;
 	UIPropertiesForm* m_ItemProps;
 	FS_FileSet	texture_map;
 	FS_FileSet	modif_map;
@@ -25,20 +39,42 @@ private:
 	bool bReadonlyMode;
 	bool m_UpdateQueued;
 	bool m_CloseAfterUpdate;
+	// the tab closed while a save was queued: the form goes once the save is through
+	bool m_DeleteAfterUpdate;
+	// the unsaved prompt was answered Don't Save
+	bool m_Discarded;
+	// the description on show was edited since it was picked
+	bool m_ItemModified;
+	// New Textures took the library's tab: the library comes back once the import is through
+	bool m_ReturnToLibrary;
 	static UIImageEditorForm* Form;
 	ImTextureID m_Texture;
-	ImTextureID m_TextureRemove;
+	// previews replaced this frame: released once the frame that may have drawn them is through
+	xr_vector<ImTextureID> m_TextureDead;
+	int m_TextureDeadFrame;
 private:
 	ETextureThumbnail* FindUsedTHM(const shared_str& name);
 	void RegisterModifiedTHM();
 	void OnCubeMapBtnClick(ButtonValue* value, bool& bModif, bool& bSafe);
 	void OnTypeChange(PropValue* prop);
+	void OnPropModified();
 	void InitItemList();
+	// drops every description the tab holds, the preview and the unsaved marks with them
+	void ClearItems();
+	// the tab on what Form holds: the library read from disk, or New Textures on its texture_map
+	static void Present(bool bImport);
 	void HideLib();
 	bool UpdateLib();
 	static void UpdateLibDeferred();
 	void OnItemsFocused(ListItem* item);
 	void SaveUsedTHM();
+	bool Dirty();
+	void Revert();
+	bool QueueSave(xr_string& err);
+	void Select(int index);
+	void DrawToolbar(XUI::Toolbar& tb);
+	void DrawPreview();
+	void DrawStatus();
 private:
 	bool m_bFilterImage;
 	bool m_bFilterTerrain;
@@ -48,116 +84,4 @@ private:
 	void FilterUpdate();
 };
 //---------------------------------------------------------------------------
-/*#include <Classes.hpp>
-#include <Controls.hpp>
-#include <ExtCtrls.hpp>
-#include <StdCtrls.hpp>
-
-#include "ElXPThemedControl.hpp"
-#include "ExtBtn.hpp"
-#include "mxPlacemnt.hpp"
-#include <ImgList.hpp>
-
-#include "MXCtrls.hpp"
-
-//---------------------------------------------------------------------------
-// refs
-class ETextureThumbnail;
-class TProperties;
-//---------------------------------------------------------------------------
-
-class TfrmImageLib : public TForm
-{
-__published:	// IDE-managed Components
-	TPanel *paRight;
-	TFormStorage *fsStorage;
-	TPanel *paCommand;
-	TExtBtn *ebOk;
-	TBevel *Bevel1;
-	TPanel *paProperties;
-	TPanel *paItems;
-	TSplitter *Splitter1;
-	TBevel *Bevel2;
-	TImageList *ImageList;
-	TExtBtn *ebCancel;
-	TExtBtn *ebRemoveTexture;
-	TBevel *Bevel5;
-	TPanel *Panel1;
-	TMxPanel *paImage;
-	TPanel *paFilter;
-	TExtBtn *ttImage;
-	TExtBtn *ttBumpMap;
-	TExtBtn *ttNormalMap;
-	TExtBtn *ttCubeMap;
-	TExtBtn *ttTerrain;
-	TPanel *Panel2;
-	TExtBtn *btFilter;
-	TExtBtn *ExtBtn1;
-    void  ebOkClick(TObject *Sender);
-    void  FormShow(TObject *Sender);
-    void  FormClose(TObject *Sender, TCloseAction &Action);
-    void  FormKeyDown(TObject *Sender, WORD &Key,
-          TShiftState Shift);
-	void  fsStorageRestorePlacement(TObject *Sender);
-	void  fsStorageSavePlacement(TObject *Sender);
-	void  FormCreate(TObject *Sender);
-	void  ebCancelClick(TObject *Sender);
-	void  ebRemoveTextureClick(TObject *Sender);
-	void  FormDestroy(TObject *Sender);
-	void  paImagePaint(TObject *Sender);
-	void  ttImageClick(TObject *Sender);
-	void  btFilterClick(TObject *Sender);
-	void  ExtBtn1Click(TObject *Sender);
-private:
-// list functions
-    void  		RemoveTexture		(LPCSTR fname, EItemType type, bool& res);
-
-    void 				InitItemsList		();
-	void   	OnItemsFocused		(ListItemsVec& items);
-
-    void   	OnCubeMapBtnClick	(ButtonValue* value, bool& bModif, bool& bSafe);
-    
-	enum{
-    	flUpdateProperties = (1<<0),
-    };    
-    static Flags32		m_Flags;
-private:	// User declarations
-	static TfrmImageLib* form;
-
-    DEFINE_VECTOR		(ETextureThumbnail*,THMVec,THMIt);
-    DEFINE_MAP			(shared_str,ETextureThumbnail*,THMMap,THMMapIt);
-    THMMap				m_THM_Used;
-    THMVec				m_THM_Current;
-    TItemList*			m_ItemList;
-    TProperties* 		m_ItemProps;
-
-    ETextureThumbnail*	FindUsedTHM			(const shared_str& name);
-    void				SaveUsedTHM			();
-    void				DestroyUsedTHM		();
-
-	void  	RegisterModifiedTHM	();
-    
-    void 				OnModified			();
-    static FS_FileSet	texture_map;
-    static FS_FileSet	modif_map;
-    bool 				bImportMode;
-    bool 				bReadonlyMode;
-    void  	UpdateLib			();
-    static bool 		bFormLocked;
-    static void 		LockForm			(){ bFormLocked = true;	form->paProperties->Enabled = false; 	form->paItems->Enabled = false; }
-    static void 		UnlockForm			(){ bFormLocked = false;form->paProperties->Enabled = true; 	form->paItems->Enabled = true; 	}
-
-    void 		OnTypeChange		(PropValue* prop);
-    void 				SortList			(ETextureThumbnail* thm, xr_vector<xr_string>& sel_str_vec);
-    void bool  HideLib			();
-public:		// User declarations
-     			TfrmImageLib		(TComponent* Owner);
-// static function
-    static void  ImportTextures	();
-    static void  EditLib			(xr_string& title, bool bImport=false);
-    static bool  Visible			(){return !!form;}
-    static void 		OnFrame				();
-    static void			UpdateProperties	(){m_Flags.set(flUpdateProperties,TRUE);}
-};
-//---------------------------------------------------------------------------*/
 #endif

@@ -2179,7 +2179,7 @@ bool EScene::LoadSelection( LPCSTR fname )
     xr_string 		full_name;
     full_name 		= fname;
 
-	ELog.Msg( mtInformation, "EScene: loading part %s...", fname );
+	ELog.Progress((xr_string("EScene: loading part ") + fname + "...").c_str());
 
     bool res = true;
 

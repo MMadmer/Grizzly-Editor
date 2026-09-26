@@ -16,15 +16,6 @@ public:
 	bool OpenContentBrowser;
 	bool OpenWorldOutliner;
 	// content browser folder-tree width in pixels, dragged by its splitter
-	u32  ContentBrowserTreeWidth;
-	// quest graph inspector width, in permille of the tab body. A fraction and not
-	// pixels: the tab is resized and rescaled far oftener than the split is dragged
-	u32  QuestInspectorSplit;
-	// height of the variables pane inside that inspector, permille of the column
-	u32  QuestVarsSplit;
-	// how much of the node/action column the NODE keeps, permille: a spawn action with
-	// several item rows needs far more room than a one-field action
-	u32  QuestActionSplit;
 	BOOL RecoveryEnabled = TRUE;
 	u32 RecoveryIntervalMinutes = 10;
 	u32 RecoveryInteractionDelaySeconds = 15;

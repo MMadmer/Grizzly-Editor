@@ -6,6 +6,8 @@
 #include "../../../../XrRender/Public/KinematicsAnimated.h"
 // library objects (.object) draw through CEditableObject::RenderSingle
 #include "../../../XrECore/Editor/EditObject.h"
+#include "../../../XrECore/Editor/EditorGameContent.h"
+#include "../../../XrECore/Editor/Nq/NqUtil.h"
 
 extern BOOL ENGINE_API g_bRendering;
 
@@ -17,12 +19,53 @@ namespace
 	// a flat front view flattens most props into unreadable silhouettes.
 	static const Fvector	s_StartOffset		= {  1.0f,  0.8f, -1.0f };
 	static const float		s_FOVDegrees		= 45.f;
-	static const u32		s_BackgroundColor	= 0xff2b2b2b;
 	static const float		s_OrbitSpeed		= 0.008f;	// rad per pixel
 	static const float		s_PitchLimit		= 1.5533f;	// ~89 deg
 	static const float		s_JointSize			= 0.02f;
 	static const u32		s_JointColor		= 0xffffff00;
 	static const u32		s_LinkColor			= 0xffa0a000;
+
+	// pt (docs/UI_DESIGN.md, sections 2 and 6): the Details pane and what the viewport keeps
+	constexpr float			kDetailsW			= 320.f;
+	constexpr float			kSideMin			= 220.f;
+	constexpr float			kCanvasMin			= 400.f;
+	// the render target grows in steps: a splitter dragged across the tab does not rebuild it every pixel
+	constexpr u32			kTargetStep			= 64;
+
+	// a theme colour as the device wants it (0xAARRGGBB): the clear, the floor's lines
+	u32 DeviceColor(XFinedTheme::ColorToken token)
+	{
+		return 0xFF000000 | XFinedTheme::Rgb(token);
+	}
+
+	u32 BackgroundColor()
+	{
+		return DeviceColor(XFinedTheme::ColorToken::Canvas);
+	}
+
+	// the floor: at most this many lines each way, and the margin round the model's box in radii
+	constexpr int			kFloorLinesMax		= 48;
+	constexpr float			kFloorMargin		= .5f;
+
+#if defined(USE_DX11)
+	// The target's alpha is whatever the model's shader wrote - a character texture keeps its gloss mask there - and
+	// ImGui blends every image by its alpha, which would let the canvas show through the model. The view is a picture
+	// of the target, so it is drawn opaque; the backend's reset puts its own blending back after it.
+	ID3D11BlendState*	s_Opaque = nullptr;
+
+	void SetOpaqueBlend(const ImDrawList*, const ImDrawCmd*)
+	{
+		if (!s_Opaque && HW.pDevice)
+		{
+			D3D11_BLEND_DESC desc = {};
+			desc.RenderTarget[0].BlendEnable			= FALSE;
+			desc.RenderTarget[0].RenderTargetWriteMask	= D3D11_COLOR_WRITE_ENABLE_ALL;
+			HW.pDevice->CreateBlendState(&desc, &s_Opaque);
+		}
+		if (s_Opaque && HW.pContext)
+			HW.pContext->OMSetBlendState(s_Opaque, nullptr, 0xffffffff);
+	}
+#endif
 
 	//--------------------------------------------------------------------------
 	// We are a guest inside the editor's frame - the imgui pass runs between
@@ -123,37 +166,34 @@ namespace
 	};
 
 	//--------------------------------------------------------------------------
-	// The editor draws visuals through the fixed function T&L pipe, so the model
-	// needs real lights. Same rig the actor editor preview uses.
+	// The editor draws visuals through the fixed-function lighting it emulates
+	// (EDevice_PushFFConstants): Studio is a headlight - a light from the camera,
+	// so whatever faces the viewer is lit whichever way the model is turned - a
+	// soft key from above so the shape reads, over an ambient. Unlit enables no
+	// light at all, which the editor shaders take as "the texture as it is".
 	//--------------------------------------------------------------------------
-	void SetupPreviewLights()
+	void SetupPreviewLights(bool studio, const Fvector& view_dir)
 	{
+		for (u32 i=0; i<8; i++)
+			EDevice->LightEnable(i,FALSE);
+		if (!studio)
+			return;
+
 		Flight L;
 		ZeroMemory		(&L,sizeof(L));
 		L.type			= D3DLIGHT_DIRECTIONAL;
 
-		L.diffuse.set	(1.f,1.f,1.f,1.f);
-		L.direction.set	(1,-1,1);		L.direction.normalize();
+		L.diffuse.set	(.85f,.85f,.85f,1.f);
+		L.direction		= view_dir;
 		EDevice->SetLight(0,L);			EDevice->LightEnable(0,TRUE);
 
-		L.diffuse.set	(0.35f,0.35f,0.4f,1.f);
-		L.direction.set	(-1,-1,-1);		L.direction.normalize();
+		L.diffuse.set	(.35f,.35f,.38f,1.f);
+		L.direction.set	(.3f,-1.f,.2f);	L.direction.normalize();
 		EDevice->SetLight(1,L);			EDevice->LightEnable(1,TRUE);
-
-		L.diffuse.set	(0.3f,0.3f,0.3f,1.f);
-		L.direction.set	(-1,1,-1);		L.direction.normalize();
-		EDevice->SetLight(2,L);			EDevice->LightEnable(2,TRUE);
-
-		L.diffuse.set	(0.25f,0.25f,0.25f,1.f);
-		L.direction.set	(1,1,-1);		L.direction.normalize();
-		EDevice->SetLight(3,L);			EDevice->LightEnable(3,TRUE);
-
-		for (u32 i=4; i<8; i++)
-			EDevice->LightEnable(i,FALSE);
 	}
 
 	//--------------------------------------------------------------------------
-	void SetupPreviewStates(bool wireframe)
+	void SetupPreviewStates(bool wireframe, bool studio)
 	{
 		// states the shader passes do not own themselves: the editor may sit in
 		// wireframe/flat/fog mode and that must not leak into the preview
@@ -163,7 +203,7 @@ namespace
 		EDevice->SetRS(D3DRS_FILLMODE,			wireframe?D3DFILL_WIREFRAME:D3DFILL_SOLID);
 		EDevice->SetRS(D3DRS_SHADEMODE,			D3DSHADE_GOURAUD);
 		EDevice->SetRS(D3DRS_FOGENABLE,			FALSE);
-		EDevice->SetRS(D3DRS_AMBIENT,			0x30303030);
+		EDevice->SetRS(D3DRS_AMBIENT,			studio?0x40404040:0x00000000);
 		EDevice->SetRS(D3DRS_TEXTUREFACTOR,		0xffffffff);
 		for (u32 k=0; k<HW.Caps.raster.dwStages; k++)
 		{
@@ -309,6 +349,102 @@ namespace
 		if (IKinematics* K = visual->dcast_PKinematics())
 			K->CalculateBones(TRUE);
 	}
+
+	// the texture names a visual's shaders bind, each once; a hierarchy's own shader is empty, its children draw
+	void CollectTextures(dxRender_Visual* v, xr_vector<xr_string>& out)
+	{
+		if (!v)	return;
+		switch (v->getType())
+		{
+		case MT_HIERRARHY:
+		case MT_SKELETON_ANIM:
+		case MT_SKELETON_RIGID:
+			{
+				FHierrarhyVisual* h = (FHierrarhyVisual*)v;
+				for (u32 i=0; i<h->children.size(); i++)
+					CollectTextures(h->children[i],out);
+			}
+			return;
+		default:
+			break;
+		}
+		if (!v->shader)	return;
+		for (const ref_selement& E : v->shader->E)
+		{
+			if (!E)	continue;
+			for (u32 p=0; p<E->passes.size(); ++p)
+			{
+				const ref_pass& P = E->passes[p];
+				if (!P || !P->T)	continue;
+				for (const auto& stage : *P->T)
+				{
+					LPCSTR name = stage.second ? stage.second->cName.c_str() : nullptr;
+					// '$' names are the engine's own targets ($user$..., $null), no file behind them
+					if (!name || !name[0] || '$'==name[0])	continue;
+					if (std::find(out.begin(),out.end(),name)==out.end())
+						out.push_back(name);
+				}
+			}
+		}
+	}
+
+	// 1, 2 or 5 times a power of ten, near x
+	float RoundStep(float x)
+	{
+		const float p = powf(10.f,floorf(log10f(_max(x,1e-4f))));
+		const float m = x/p;
+		return p*(m<1.5f ? 1.f : m<3.5f ? 2.f : m<7.5f ? 5.f : 10.f);
+	}
+
+	//--------------------------------------------------------------------------
+	// The floor the model stands on, the way a mesh editor shows one: lines at a
+	// round step in metres, in world units, under the lowest point of the box
+	// and a margin wider than it. Every fifth line is stronger, the lines through
+	// the origin the strongest. It goes down before the model, which then covers
+	// what it stands on.
+	//--------------------------------------------------------------------------
+	void DrawFloor(const Fbox& box, float radius)
+	{
+		if (box.min.x>box.max.x||box.min.y>box.max.y||box.min.z>box.max.z)	return;
+		const float margin = radius*kFloorMargin;
+		float step = RoundStep(radius*.25f);
+		int i0, i1, k0, k1;
+		for (;;)
+		{
+			i0 = iFloor((box.min.x-margin)/step);	i1 = iCeil((box.max.x+margin)/step);
+			k0 = iFloor((box.min.z-margin)/step);	k1 = iCeil((box.max.z+margin)/step);
+			if (i1-i0<kFloorLinesMax && k1-k0<kFloorLinesMax)
+				break;
+			step = RoundStep(step*2.5f);
+		}
+
+		// minor, every fifth, the origin's: one draw per colour
+		static xr_vector<Fvector> s_Lines[3];
+		for (xr_vector<Fvector>& l : s_Lines)
+			l.clear();
+		const auto tier = [](int n) { return 0==n ? 2 : 0==n%5 ? 1 : 0; };
+		const float y = box.min.y;
+		for (int i=i0; i<=i1; ++i)
+		{
+			xr_vector<Fvector>& l = s_Lines[tier(i)];
+			l.push_back(Fvector().set(i*step,y,k0*step));
+			l.push_back(Fvector().set(i*step,y,k1*step));
+		}
+		for (int k=k0; k<=k1; ++k)
+		{
+			xr_vector<Fvector>& l = s_Lines[tier(k)];
+			l.push_back(Fvector().set(i0*step,y,k*step));
+			l.push_back(Fvector().set(i1*step,y,k*step));
+		}
+
+		static const XFinedTheme::ColorToken kTier[3] = { XFinedTheme::ColorToken::BorderSubtle, XFinedTheme::ColorToken::Border,
+			XFinedTheme::ColorToken::BorderStrong };
+		EDevice->SetShader		(EDevice->m_WireShader);
+		RCache.set_xform_world	(Fidentity);
+		for (int t=0; t<3; ++t)
+			if (!s_Lines[t].empty())
+				DU_impl.DrawPrimitiveL(D3DPT_LINELIST,u32(s_Lines[t].size()/2),s_Lines[t].data(),int(s_Lines[t].size()),DeviceColor(kTier[t]),TRUE,FALSE);
+	}
 }
 //------------------------------------------------------------------------------
 
@@ -329,7 +465,10 @@ UIVisualPreview::UIVisualPreview()
 	m_Pan.set		(0.f,0.f,0.f);
 	m_Wireframe		= false;
 	m_ShowBones		= false;
-	m_Focus			= true;
+	m_Lighting		= 0;
+	m_ShowDetails	= true;
+	m_DetailsW		= 0.f;
+	m_DrawnFrame	= -2;
 #if !defined(USE_DX11)
 	m_RTTex			= nullptr;
 	m_RTSurf		= nullptr;
@@ -345,16 +484,59 @@ UIVisualPreview::~UIVisualPreview()
 {
 	ReleaseVisual	();
 	ReleaseTarget	();
+#if defined(USE_DX11)
+	// a draw list still holding the callback makes a new one: never a dangling state
+	_RELEASE		(s_Opaque);
+#endif
 }
 
 //------------------------------------------------------------------------------
 // lifetime
 //------------------------------------------------------------------------------
+void UIVisualPreview::ShowTab()
+{
+	if (XUI::Shell::IsOpen("model"))
+	{
+		XUI::Shell::Activate("model");
+		return;
+	}
+	XUI::Shell::DocDesc d;
+	d.id = "model";
+	d.kind = "model";
+	d.icon = XUI::Icon::FileModel;
+	d.padded = false;
+	d.label = []
+	{
+		if (!Form || Form->m_Name.empty()) return xr_string("Model Preview");
+		// the model's own name, without its folders and extension
+		xr_string name = Form->m_Name;
+		const size_t slash = name.find_last_of("\\/");
+		if (slash != xr_string::npos) name = name.substr(slash + 1);
+		const size_t dot = name.rfind('.');
+		if (dot != xr_string::npos && dot) name.resize(dot);
+		return name;
+	};
+	d.tooltip = [] { return Form && !Form->m_Name.empty() ? Form->m_Name : xr_string("Model Preview"); };
+	d.alive = [] { return Form && !Form->IsClosed(); };
+	d.toolbar = [](XUI::Toolbar& tb) { if (Form) Form->DrawToolBar(tb); };
+	d.body = [] { if (Form) Form->Draw(); };
+	d.status = [] { if (Form) Form->DrawStatus(); };
+	// F frames the model
+	d.shortcut = [](int key, int mods)
+	{
+		if (!Form || key != ImGuiKey_F || mods) return false;
+		Form->FrameModel();
+		return true;
+	};
+	d.on_close = [] { Close(); };
+	XUI::Shell::Open(d, true);
+}
+
 void UIVisualPreview::Show(LPCSTR visual_name)
 {
 	if (!Form) Form = xr_new<UIVisualPreview>();
 	Form->bOpen		= true;
-	Form->m_Focus	= true;
+	ShowTab();
 
 	if (!visual_name||!visual_name[0])	return;
 	// already showing this one - just bring the window forward
@@ -406,7 +588,7 @@ void UIVisualPreview::ShowFromMemory(LPCSTR title, const void* data, u32 size)
 {
 	if (!Form) Form = xr_new<UIVisualPreview>();
 	Form->bOpen		= true;
-	Form->m_Focus	= true;
+	ShowTab();
 
 	Form->ReleaseVisual	();
 	Form->m_Name		= (title&&title[0])?title:"<memory>";
@@ -444,7 +626,7 @@ void UIVisualPreview::ShowObjectFromMemory(LPCSTR title, const void* data, u32 s
 {
 	if (!Form) Form = xr_new<UIVisualPreview>();
 	Form->bOpen		= true;
-	Form->m_Focus	= true;
+	ShowTab();
 
 	Form->ReleaseVisual	();
 	Form->m_Name		= (title&&title[0])?title:"<memory>";
@@ -475,7 +657,7 @@ void UIVisualPreview::ShowObject(LPCSTR object_name)
 {
 	if (!Form) Form = xr_new<UIVisualPreview>();
 	Form->bOpen		= true;
-	Form->m_Focus	= true;
+	ShowTab();
 
 	if (!object_name||!object_name[0])	return;
 	if ((Form->m_Visual||Form->m_Editable)&&(0==xr_strcmp(Form->m_Name.c_str(),object_name)))	return;
@@ -502,11 +684,9 @@ void UIVisualPreview::Close()
 	xr_delete(Form);
 }
 
+// the tab draws it; closing the tab closes the preview
 void UIVisualPreview::Update()
 {
-	if (!Form) return;
-	Form->Draw();
-	if (Form->IsClosed()) Close();
 }
 
 //------------------------------------------------------------------------------
@@ -527,7 +707,31 @@ void UIVisualPreview::SetVisual(IRenderVisual* v, LPCSTR name)
 	if (IKinematics* K = v->dcast_PKinematics())	m_Bones = K->LL_BoneCount();
 
 	m_Box		= v->getVisData().box;
+	ReadTextures();
 	ResetCamera	();
+}
+
+// Where the texture loader finds each texture, asked in its order (CRender::texture_load): the editor's folders - the
+// project's when the file lies in it - then the linked game; a texture neither has draws as the loader's placeholder.
+void UIVisualPreview::ReadTextures()
+{
+	m_Textures.clear();
+	xr_vector<xr_string> names;
+	CollectTextures(static_cast<dxRender_Visual*>(m_Visual),names);
+	LPCSTR root = EditorProject::Active() ? EditorProject::Root() : "";
+	const size_t root_len = xr_strlen(root);
+	for (const xr_string& name : names)
+	{
+		STexture t;
+		t.name = name;
+		string_path fn;
+		if (FS.exist(fn,"$level$",name.c_str(),".dds")||FS.exist(fn,"$game_saves$",name.c_str(),".dds")||
+			FS.exist(fn,"$game_textures$",name.c_str(),".dds"))
+			t.from = root_len&&0==_strnicmp(fn,root,root_len) ? tfProject : tfEditor;
+		else
+			t.from = EditorGameContent::Find(NqUtil::Format("textures\\%s.dds",name.c_str()).c_str())>=0 ? tfGame : tfMissing;
+		m_Textures.push_back(t);
+	}
 }
 
 void UIVisualPreview::SetEditable(CEditableObject* o, LPCSTR name)
@@ -536,7 +740,7 @@ void UIVisualPreview::SetEditable(CEditableObject* o, LPCSTR name)
 	m_Name		= name?name:"";
 	m_Error		= "";
 	// a library object is not an engine visual, so there is no MT_* for it;
-	// DrawInfo reports the kind from m_Editable instead
+	// DrawDetails reports the kind from m_Editable instead
 	m_Type		= u32(-1);
 	m_Verts		= u32(o->GetVertexCount());
 	m_Tris		= u32(o->GetFaceCount());
@@ -558,6 +762,7 @@ void UIVisualPreview::ReleaseVisual()
 	}
 	xr_delete	(m_Editable);
 	m_Visual	= nullptr;
+	m_Textures.clear();
 	m_Type		= u32(-1);
 	m_Verts		= 0;
 	m_Tris		= 0;
@@ -583,15 +788,19 @@ void UIVisualPreview::ReleaseTarget()
 	m_RTFailed	= false;
 }
 
-bool UIVisualPreview::EnsureTarget(u32 w, u32 h)
+bool UIVisualPreview::EnsureTarget(u32 view_w, u32 view_h)
 {
+	// the view fits into the target it has: only a bigger view, or a much smaller one, makes a new one
+	const u32 w = (view_w + kTargetStep - 1) / kTargetStep * kTargetStep;
+	const u32 h = (view_h + kTargetStep - 1) / kTargetStep * kTargetStep;
+	const bool fits = view_w <= m_RTW && view_h <= m_RTH && m_RTW <= w + kTargetStep * 4 && m_RTH <= h + kTargetStep * 4;
 #if defined(USE_DX11)
-	if (m_Target.valid()&&(m_RTW==w)&&(m_RTH==h))				return true;
+	if (m_Target.valid()&&fits)								return true;
 #else
-	if (m_RTTex&&m_RTSurf&&m_ZBSurf&&(m_RTW==w)&&(m_RTH==h))	return true;
+	if (m_RTTex&&m_RTSurf&&m_ZBSurf&&fits)					return true;
 #endif
 	// a refused size must not be retried every frame
-	if (m_RTFailed&&(m_RTW==w)&&(m_RTH==h))						return false;
+	if (m_RTFailed&&(m_RTW==w)&&(m_RTH==h))					return false;
 
 	ReleaseTarget	();
 	m_RTW	= w;
@@ -641,6 +850,15 @@ void UIVisualPreview::OnDeviceResetEnd()
 //------------------------------------------------------------------------------
 void UIVisualPreview::ResetCamera()
 {
+	Fvector dir	= s_StartOffset;	dir.normalize();
+	m_Pitch		= asinf(dir.y);
+	m_Yaw		= atan2f(dir.x,dir.z);
+	FrameModel	();
+}
+
+// the bounding sphere framed with a small margin, from wherever the camera looks now
+void UIVisualPreview::FrameModel()
+{
 	m_Pan.set	(0.f,0.f,0.f);
 
 	if (m_Box.min.x>m_Box.max.x||m_Box.min.y>m_Box.max.y||m_Box.min.z>m_Box.max.z)
@@ -655,11 +873,6 @@ void UIVisualPreview::ResetCamera()
 		m_Radius		= 0.5f*size.magnitude();
 		if (m_Radius<EPS_L)	m_Radius = EPS_L;
 	}
-
-	Fvector dir	= s_StartOffset;	dir.normalize();
-	m_Pitch		= asinf(dir.y);
-	m_Yaw		= atan2f(dir.x,dir.z);
-	// frame the bounding sphere with a small margin
 	m_Distance	= m_Radius/_sin(deg2rad(s_FOVDegrees)*0.5f)*1.12f;
 }
 
@@ -669,6 +882,13 @@ void UIVisualPreview::ResetCamera()
 void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 {
 	if ((!m_Visual&&!m_Editable)||!IsDeviceUsable())	return;
+	Fvector center	= m_Center;	center.add(m_Pan);
+	Fvector dir;
+	dir.x	= _cos(m_Pitch)*_sin(m_Yaw);
+	dir.y	= _sin(m_Pitch);
+	dir.z	= _cos(m_Pitch)*_cos(m_Yaw);
+	Fvector eye;	eye.mad(center,dir,m_Distance);
+	Fvector view;	view.sub(center,eye).normalize_safe();
 #if defined(USE_DX11)
 	if (!m_Target.valid())				return;
 
@@ -680,9 +900,16 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 	// only forgets the cache, so the bind below is what the device ends up with.
 	RCache.Invalidate();
 
-	// bind() also sets a full-size viewport, so w/h come from the target itself
+	// bind() sets a viewport over the whole target, which comes in 64 px steps: the view is its top-left corner
 	m_Target.bind	();
-	m_Target.clear	(s_BackgroundColor);
+	m_Target.clear	(BackgroundColor());
+	{
+		D3D11_VIEWPORT vp = {};
+		vp.Width	= float(w);
+		vp.Height	= float(h);
+		vp.MaxDepth	= 1.f;
+		HW.pContext->RSSetViewports(1, &vp);
+	}
 	// and now tell the cache what the device is actually bound to
 	RCache.set_RT	(m_Target.rtv);
 	RCache.set_ZB	(m_Target.dsv);
@@ -697,7 +924,7 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 	D3DVIEWPORT9 vp;
 	vp.X = 0; vp.Y = 0; vp.Width = w; vp.Height = h; vp.MinZ = 0.f; vp.MaxZ = 1.f;
 	HW.pDevice->SetViewport	(&vp);
-	HW.pDevice->Clear		(0,0,D3DCLEAR_ZBUFFER|D3DCLEAR_TARGET|(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),s_BackgroundColor,1.f,0);
+	HW.pDevice->Clear		(0,0,D3DCLEAR_ZBUFFER|D3DCLEAR_TARGET|(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),BackgroundColor(),1.f,0);
 #endif
 
 	// imgui (or the scene pass) may have written device state behind RCache's
@@ -706,15 +933,9 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 #if !defined(USE_DX11)
 	RCache.OnFrameEnd		();
 #endif
-	SetupPreviewStates		(m_Wireframe);
-	SetupPreviewLights		();
-
-	Fvector center	= m_Center;	center.add(m_Pan);
-	Fvector dir;
-	dir.x	= _cos(m_Pitch)*_sin(m_Yaw);
-	dir.y	= _sin(m_Pitch);
-	dir.z	= _cos(m_Pitch)*_cos(m_Yaw);
-	Fvector eye;	eye.mad(center,dir,m_Distance);
+	const bool studio = 0 == m_Lighting;
+	SetupPreviewStates		(m_Wireframe, studio);
+	SetupPreviewLights		(studio, view);
 
 	const float fov		= deg2rad(s_FOVDegrees);
 	const float znear	= _max(0.01f,m_Distance-m_Radius*2.f);
@@ -732,11 +953,12 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 	EDevice->mProject		= mP;
 	EDevice->mFullTransform.mul(mP,mV);
 	EDevice->vCameraPosition= eye;
-	EDevice->vCameraDirection.sub(center,eye).normalize_safe();
+	EDevice->vCameraDirection= view;
 	// CModelPool::Render culls through CRender::occ_visible - without this the
 	// model is thrown away before it is ever drawn
 	RImplementation.ViewBase.CreateFromMatrix(EDevice->mFullTransform,FRUSTUM_P_ALL);
 
+	DrawFloor			(m_Box,m_Radius);
 	if (m_Visual)	RImplementation.model_RenderSingle(m_Visual,Fidentity,1.f);
 	else			m_Editable->RenderSingle(Fidentity);
 
@@ -762,50 +984,58 @@ void UIVisualPreview::RenderToTarget(u32 w, u32 h)
 	}
 }
 
-void UIVisualPreview::DrawToolBar()
+void UIVisualPreview::DrawToolBar(XUI::Toolbar& tb)
 {
-	if (ImGui::Button("Reset View"))	ResetCamera();
-	ImGui::SameLine();
-	ImGui::Checkbox("Wireframe",&m_Wireframe);
-	if (m_Bones)
-	{
-		ImGui::SameLine();
-		ImGui::Checkbox("Bones",&m_ShowBones);
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("Unload"))
-	{
-		ReleaseVisual();
-		m_Name = "";
-	}
+	const bool model = m_Visual || m_Editable;
+	const char* none = "No model is open";
+	tb.Group(3);
+	if (tb.Action("frame", XUI::Icon::FrameAll, "Frame", model ? "Frame the model, keeping the angle (F)" : none, model))
+		FrameModel();
+	if (tb.Action("reset_view", XUI::Icon::Refresh, "Reset View", model ? "Back to the three-quarter view, framed" : none, model))
+		ResetCamera();
+
+	tb.Group(2);
+	if (tb.Action("wireframe", XUI::Icon::Wireframe, "Wireframe", "Draw the triangles' edges only", model, m_Wireframe))
+		m_Wireframe = !m_Wireframe;
+	const bool bones = m_Visual && m_Bones;
+	if (tb.Action("bones", XUI::Icon::Bones, "Bones", bones ? "Draw the skeleton over the model" : "The model has no bones", bones, m_ShowBones && bones))
+		m_ShowBones = !m_ShowBones;
+
+	tb.Group(5);
+	static const char* const kLighting[] = { "Studio", "Unlit" };
+	tb.Segmented("lighting", "Lighting", &m_Lighting, kLighting, 2,
+		"Studio lights the model from the camera, over a soft ambient; Unlit shows its textures as they are");
+
+	tb.Group(4);
+	if (tb.Action("details", XUI::Icon::SidebarRight, "Details", "Show what the model is made of beside the viewport", true, m_ShowDetails))
+		m_ShowDetails = !m_ShowDetails;
 }
 
-void UIVisualPreview::DrawViewport()
+void UIVisualPreview::DrawStatus()
 {
-	const float info_h	= ImGui::GetTextLineHeightWithSpacing()*3.f+ImGui::GetStyle().ItemSpacing.y*2.f;
-	ImVec2 avail		= ImGui::GetContentRegionAvail();
-	ImVec2 canvas_size	(avail.x,avail.y-info_h);
-	if (canvas_size.x<64.f)	canvas_size.x = 64.f;
-	if (canvas_size.y<64.f)	canvas_size.y = 64.f;
+	if (!m_Visual && !m_Editable)
+		return;
+	xr_string text = NqUtil::Format("%u verts \xC2\xB7 %u tris", m_Verts, m_Tris);
+	if (m_Bones)
+		text += NqUtil::Format(" \xC2\xB7 %u bones", u32(m_Bones));
+	text += m_Lighting ? " \xC2\xB7 Unlit" : " \xC2\xB7 Studio";
+	ImGui::TextUnformatted(text.c_str());
+}
 
-	const ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+// the orbit viewport: the left button turns the model, the right or middle one pans, the wheel dollies, a
+// double-click frames it
+void UIVisualPreview::DrawViewport(const ImVec2& canvas_pos, const ImVec2& avail)
+{
+	const ImVec2 canvas_size(_max(avail.x, 64.f), _max(avail.y, 64.f));
 
 	// the hit area goes down first so navigation is applied before the frame is
 	// rendered - otherwise every drag lags one frame behind the cursor
+	ImGui::SetCursorScreenPos(canvas_pos);
 	ImGui::InvisibleButton("##preview_canvas",canvas_size,
 		ImGuiButtonFlags_MouseButtonLeft|ImGuiButtonFlags_MouseButtonRight|ImGuiButtonFlags_MouseButtonMiddle);
 
 	const bool hovered	= ImGui::IsItemHovered();
 	const bool active	= ImGui::IsItemActive();
-
-	if (!m_Visual&&!m_Editable)
-	{
-		// nothing loaded - do not sit on a render target either
-		ReleaseTarget	();
-		ImGui::GetWindowDrawList()->AddRectFilled(canvas_pos,
-			ImVec2(canvas_pos.x+canvas_size.x,canvas_pos.y+canvas_size.y),s_BackgroundColor);
-		return;
-	}
 
 	if (active)
 	{
@@ -840,149 +1070,260 @@ void UIVisualPreview::DrawViewport()
 			if (m_Distance<lo)	m_Distance = lo;
 			if (m_Distance>hi)	m_Distance = hi;
 		}
+		if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+			FrameModel();
 	}
 
 	const u32 w = u32(canvas_size.x), h = u32(canvas_size.y);
 	if (EnsureTarget(w,h))
 	{
-		RenderToTarget			(w,h);
-		ImGui::SetCursorScreenPos(canvas_pos);
+		RenderToTarget(w,h);
+		// the view is the target's top-left corner
+		const ImVec2 uv1(float(w)/float(m_RTW), float(h)/float(m_RTH));
 #if defined(USE_DX11)
-		ImGui::Image			(m_Target.srv,canvas_size);
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+		const ImDrawCallback reset = ImGui::GetPlatformIO().DrawCallback_ResetRenderState;
+		// without a reset to follow it the opaque state would leak into the rest of the UI: blended as before then
+		if (reset)
+			dl->AddCallback(&SetOpaqueBlend, nullptr);
+		dl->AddImage(m_Target.srv,canvas_pos,ImVec2(canvas_pos.x+canvas_size.x,canvas_pos.y+canvas_size.y),ImVec2(0,0),uv1);
+		if (reset)
+			dl->AddCallback(reset, nullptr);
 #else
-		ImGui::Image			(m_RTTex,canvas_size);
+		ImGui::GetWindowDrawList()->AddImage(m_RTTex,canvas_pos,ImVec2(canvas_pos.x+canvas_size.x,canvas_pos.y+canvas_size.y),ImVec2(0,0),uv1);
 #endif
 	}
 	else
 	{
 		ImGui::SetCursorScreenPos(canvas_pos);
-		ImGui::TextDisabled		("cannot create a %ux%u render target",w,h);
+		XUI::EmptyState(XUI::Icon::Warning, "The viewport cannot be drawn", NqUtil::Format("The device refused a %u x %u render target.", w, h).c_str());
 	}
 }
 
-void UIVisualPreview::DrawInfo()
+void UIVisualPreview::DrawDetails()
 {
-	ImGui::Separator();
-	if (!m_Error.empty())
+	if (!m_Visual && !m_Editable)
 	{
-		ImGui::TextColored(ImVec4(1.f,0.4f,0.4f,1.f),"%s: %s",m_Name.c_str(),m_Error.c_str());
+		XUI::EmptyState(XUI::Icon::Info, "No facts", "Open a model to see what it is made of.");
 		return;
 	}
-	if (!m_Visual&&!m_Editable)
-	{
-		ImGui::TextDisabled("no model - double click an asset in the content browser");
-		return;
-	}
-
 	// library objects carry no MT_* type - name the format instead
 	LPCSTR	kind	= m_Editable ? "library object" : VisualTypeName(m_Type);
 	Fvector	size;	m_Box.getsize(size);
 	Fvector	centre;	m_Box.getcenter(centre);
-
-	if (ImGui::BeginTable("##modelinfo", 2, ImGuiTableFlags_SizingFixedFit))
+	if (!XUI::BeginPropertyGrid("model"))
+		return;
+	if (XUI::PropertySection("Asset"))
 	{
-		#define ROW(k, ...)	do {											\
-			ImGui::TableNextRow(); ImGui::TableNextColumn();				\
-			ImGui::TextDisabled(k); ImGui::TableNextColumn();			\
-			ImGui::Text(__VA_ARGS__); } while(0)
-
-		ROW("Asset",		"%s", m_Name.c_str());
-		ROW("Kind",			"%s", kind);
-		ROW("Geometry",		"%u verts, %u tris", m_Verts, m_Tris);
-		if (m_Bones)	ROW("Bones", "%u", u32(m_Bones));
-
-		ROW("Bounds",		"%.2f x %.2f x %.2f", size.x, size.y, size.z);
-		ROW("Centre",		"%.2f, %.2f, %.2f", centre.x, centre.y, centre.z);
-		ROW("Radius",		"%.2f", m_Radius);
-
+		xr_string leaf = m_Name;
+		const size_t slash = leaf.find_last_of("\\/");
+		if (slash != xr_string::npos) leaf = leaf.substr(slash + 1);
+		if (XUI::PropertyRow("Name", "The model's file name", XUI::PropReadOnly))
+			XUI::PropertyText(leaf.c_str());
+		if (XUI::PropertyRow("Path", "Where it lives, below the game's meshes or the project", XUI::PropReadOnly))
+		{
+			const float w = ImGui::CalcItemWidth();
+			ImGui::AlignTextToFramePadding();
+			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+			XUI::TextEllipsis(m_Name.c_str(), w, XUI::Clip::Start);
+			ImGui::PopStyleColor();
+		}
+		if (XUI::PropertyRow("Kind", "What kind of visual the engine sees", XUI::PropReadOnly))
+			XUI::PropertyText(kind);
+		XUI::EndPropertySection();
+	}
+	if (XUI::PropertySection("Geometry"))
+	{
+		if (XUI::PropertyRow("Vertices", nullptr, XUI::PropReadOnly))
+			XUI::PropertyText(NqUtil::Format("%u", m_Verts).c_str());
+		if (XUI::PropertyRow("Triangles", nullptr, XUI::PropReadOnly))
+			XUI::PropertyText(NqUtil::Format("%u", m_Tris).c_str());
+		if (m_Bones && XUI::PropertyRow("Bones", nullptr, XUI::PropReadOnly))
+			XUI::PropertyText(NqUtil::Format("%u", u32(m_Bones)).c_str());
 		if (m_Editable)
 		{
-			ROW("Meshes",	"%d", m_Editable->MeshCount());
-			ROW("Materials","%d", m_Editable->SurfaceCount());
-			// same null-when-empty shared_str trap as the material table below
+			if (XUI::PropertyRow("Meshes", nullptr, XUI::PropReadOnly))
+				XUI::PropertyText(NqUtil::Format("%d", m_Editable->MeshCount()).c_str());
+			// a shared_str that was never set is null, not empty
 			LPCSTR lods = m_Editable->GetLODs();
-			if (lods && lods[0])	ROW("LOD", "%s", lods);
-			if (m_Editable->IsSkeleton())
-				ROW("Motions", "%d", m_Editable->SMotionCount());
+			if (lods && lods[0] && XUI::PropertyRow("LOD", "The level-of-detail model it switches to", XUI::PropReadOnly))
+				XUI::PropertyText(lods);
+			if (m_Editable->IsSkeleton() && XUI::PropertyRow("Motions", nullptr, XUI::PropReadOnly))
+				XUI::PropertyText(NqUtil::Format("%d", m_Editable->SMotionCount()).c_str());
 		}
-		#undef ROW
-		ImGui::EndTable();
+		XUI::EndPropertySection();
 	}
-
-	// Surfaces are what a static mesh IS to whoever has to ship it: which
-	// shader, which texture, which game material. Unreal puts the same list in
-	// its material slots panel.
+	if (XUI::PropertySection("Bounds"))
+	{
+		if (XUI::PropertyRow("Size", "Its box, in metres", XUI::PropReadOnly))
+			XUI::PropertyText(NqUtil::Format("%.2f x %.2f x %.2f", size.x, size.y, size.z).c_str());
+		if (XUI::PropertyRow("Centre", "The box's centre", XUI::PropReadOnly))
+			XUI::PropertyText(NqUtil::Format("%.2f, %.2f, %.2f", centre.x, centre.y, centre.z).c_str());
+		if (XUI::PropertyRow("Radius", "The radius of the sphere around it", XUI::PropReadOnly))
+			XUI::PropertyText(NqUtil::Format("%.2f", m_Radius).c_str());
+		XUI::EndPropertySection();
+	}
+	// what the engine visual draws with, and where each texture comes from: one the loader cannot find draws as its
+	// placeholder, a dark blue that reads as an unlit model
+	if (!m_Textures.empty())
+	{
+		const xr_string badge = NqUtil::Format("%u", u32(m_Textures.size()));
+		if (XUI::PropertySection("Textures", true, badge.c_str()))
+		{
+			static const char* const kFrom[] = { "Not found", "Project", "Editor", "Game" };
+			static const char* const kWhy[] = {
+				"Neither the editor nor the linked game has it: the preview draws the placeholder",
+				"The project's own file",
+				"The editor's library",
+				"The linked game's archives or its gamedata folder" };
+			for (u32 i = 0; i < m_Textures.size(); ++i)
+			{
+				const STexture& t = m_Textures[i];
+				xr_string leaf = t.name;
+				const size_t slash = leaf.find_last_of("\\/");
+				if (slash != xr_string::npos) leaf = leaf.substr(slash + 1);
+				const xr_string hint = NqUtil::Format("%s\n%s", t.name.c_str(), kWhy[t.from]);
+				ImGui::PushID(int(i));
+				if (XUI::PropertyRow(leaf.c_str(), hint.c_str(), XUI::PropReadOnly))
+				{
+					if (tfMissing == t.from)
+					{
+						ImGui::AlignTextToFramePadding();
+						ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::Warning));
+						XUI::TextEllipsis(kFrom[t.from], ImGui::CalcItemWidth());
+						ImGui::PopStyleColor();
+					}
+					else
+						XUI::PropertyText(kFrom[t.from]);
+				}
+				ImGui::PopID();
+			}
+			XUI::EndPropertySection();
+		}
+	}
+	// Surfaces are what a static mesh IS to whoever has to ship it: which texture, which shader, which game
+	// material. Unreal puts the same list in its material slots panel.
 	if (m_Editable && m_Editable->SurfaceCount())
 	{
-		if (ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen))
+		const xr_string badge = NqUtil::Format("%d", m_Editable->SurfaceCount());
+		if (XUI::PropertySection("Materials", true, badge.c_str()))
 		{
-			if (ImGui::BeginTable("##surfaces", 4,
-				ImGuiTableFlags_Borders|ImGuiTableFlags_RowBg|ImGuiTableFlags_SizingStretchProp))
+			SurfaceVec& sv = m_Editable->Surfaces();
+			for (u32 i = 0; i < sv.size(); ++i)
 			{
-				ImGui::TableSetupColumn("Slot");
-				ImGui::TableSetupColumn("Texture");
-				ImGui::TableSetupColumn("Shader");
-				ImGui::TableSetupColumn("Game material");
-				ImGui::TableHeadersRow();
-
-				// A surface field that was never set is an EMPTY shared_str, and
-				// dereferencing one yields a NULL pointer, which TextUnformatted
-				// walks straight into. Several of these are legitimately empty -
-				// a game material is optional, for one.
-				#define CELL(x)	do {										\
-					ImGui::TableNextColumn();								\
-					LPCSTR _s = (x);										\
-					if (_s && _s[0])	ImGui::TextUnformatted(_s);			\
-					else				ImGui::TextDisabled("-");			\
-					} while(0)
-
-				SurfaceVec& sv = m_Editable->Surfaces();
-				for (u32 i = 0; i < sv.size(); ++i)
+				CSurface* s = sv[i];
+				if (!s) continue;
+				ImGui::PushID(int(i));
+				// a field that was never set is an EMPTY shared_str, which dereferences to null
+				LPCSTR name = s->_Name(), tex = s->_Texture(), shader = s->_ShaderName(), mtl = s->_GameMtlName();
+				if (XUI::PropertyRow(name && name[0] ? name : "(unnamed)", "The texture of this slot", XUI::PropReadOnly))
 				{
-					CSurface* s = sv[i];
-					if (!s) continue;
-					ImGui::TableNextRow();
-					CELL(s->_Name());
-					CELL(s->_Texture());
-					CELL(s->_ShaderName());
-					CELL(s->_GameMtlName());
+					const float w = ImGui::CalcItemWidth();
+					ImGui::AlignTextToFramePadding();
+					ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+					XUI::TextEllipsis(tex && tex[0] ? tex : "-", w, XUI::Clip::Start);
+					ImGui::PopStyleColor();
 				}
-				#undef CELL
-				ImGui::EndTable();
+				if (XUI::PropertyRow("Shader", "The engine shader it draws with", XUI::PropReadOnly, 1))
+					XUI::PropertyText(shader && shader[0] ? shader : "-");
+				if (XUI::PropertyRow("Game Material", "What the game makes of hits and steps on it", XUI::PropReadOnly, 1))
+					XUI::PropertyText(mtl && mtl[0] ? mtl : "-");
+				ImGui::PopID();
 			}
+			XUI::EndPropertySection();
 		}
+	}
+	XUI::EndPropertyGrid();
+}
+
+// the model tab's work area: viewport | Details; Details keeps its pt size, the viewport takes every resize
+void UIVisualPreview::Draw()
+{
+	m_DrawnFrame = ImGui::GetFrameCount();
+	const ImGuiWindowFlags still = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+	float details_w = kDetailsW;
+	if (m_ShowDetails)
+		XUI::SplitterTail("model.details", true, &details_w, kCanvasMin, kSideMin, kDetailsW);
+	m_DetailsW = m_ShowDetails ? details_w : 0.f;
+	const float canvas_w = m_ShowDetails ? _max(1.f, ImGui::GetContentRegionAvail().x - XUI::Pt(details_w) - ImGui::GetStyle().ItemSpacing.x) : 0.f;
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(XFinedTheme::ColorToken::Canvas));
+	const bool canvas = ImGui::BeginChild("##model_viewport", ImVec2(canvas_w, 0.f), ImGuiChildFlags_None, still);
+	ImGui::PopStyleColor();
+	if (canvas)
+	{
+		if (!m_Error.empty())
+		{
+			// nothing loaded - do not sit on a render target either
+			ReleaseTarget();
+			XUI::EmptyState(XUI::Icon::Warning, "This model cannot be shown", (m_Name + ": " + m_Error).c_str());
+		}
+		else if (!m_Visual && !m_Editable)
+		{
+			ReleaseTarget();
+			XUI::EmptyState(XUI::Icon::FileModel, "No model", "Double-click a model in the Content Browser to see it here.");
+		}
+		else
+			DrawViewport(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail());
+	}
+	ImGui::EndChild();
+	if (m_ShowDetails)
+	{
+		ImGui::SameLine();
+		if (ImGui::BeginChild("##model_details", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding))
+			DrawDetails();
+		ImGui::EndChild();
 	}
 }
 
-void UIVisualPreview::Draw()
+void UIVisualPreview::McpState(xr_string& out)
 {
-	// the label carries the model name, the "###" tail pins the window id -
-	// built as a string so a long asset name can never truncate that tail away
-	xr_string title("Model Preview");
-	if (!m_Name.empty())	{ title += ": "; title += m_Name; }
-	title += WindowID();
-
-	if (m_Focus)
-	{
-		ImGui::SetNextWindowFocus();
-		m_Focus = false;
-	}
-	ImGui::PushStyleVar	(ImGuiStyleVar_WindowMinSize,ImVec2(320,280));
-	ImGui::SetNextWindowSize(ImVec2(520,520),ImGuiCond_FirstUseEver);
-	// the wheel belongs to the viewport zoom, not to the window's scrolling
-	if (!ImGui::Begin(title.c_str(),&bOpen,ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse))
-	{
-		ImGui::PopStyleVar(1);
-		ImGui::End();
+	out += "\"open\":";
+	out += Form ? "true" : "false";
+	if (!Form)
 		return;
+	UIVisualPreview* f = Form;
+	out += ",\"name\":";
+	NqUtil::JsonString(out, f->m_Name);
+	out += ",\"error\":";
+	NqUtil::JsonString(out, f->m_Error);
+	out += ",\"kind\":";
+	NqUtil::JsonString(out, f->m_Editable ? "library object" : (f->m_Visual ? VisualTypeName(f->m_Type) : ""));
+	out += NqUtil::Format(",\"verts\":%u,\"tris\":%u,\"bones\":%u,\"lighting\":\"%s\",\"wireframe\":%s,\"bones_shown\":%s,"
+		"\"panes\":{\"details\":%s,\"details_width\":%.0f}", f->m_Verts, f->m_Tris, u32(f->m_Bones), f->m_Lighting ? "unlit" : "studio",
+		f->m_Wireframe ? "true" : "false", f->m_ShowBones && f->m_Bones && f->m_Visual ? "true" : "false", f->m_ShowDetails ? "true" : "false",
+		f->m_ShowDetails ? f->m_DetailsW : 0.f);
+	// where the texture loader finds each texture: project | editor | game | missing (drawn as its placeholder)
+	static const char* const kFrom[] = { "missing", "project", "editor", "game" };
+	out += ",\"textures\":[";
+	for (u32 i = 0; i < f->m_Textures.size(); ++i)
+	{
+		out += i ? ",{\"name\":" : "{\"name\":";
+		NqUtil::JsonPath(out, f->m_Textures[i].name.c_str());
+		out += NqUtil::Format(",\"from\":\"%s\"}", kFrom[f->m_Textures[i].from]);
 	}
+	out += "]";
+}
 
-	DrawToolBar	();
-	DrawViewport();
-	DrawInfo	();
+bool UIVisualPreview::DrawnLately()
+{
+	// the frame being built or the one before it
+	return Form && ImGui::GetCurrentContext() && Form->m_DrawnFrame >= ImGui::GetFrameCount() - 1;
+}
 
-	ImGui::PopStyleVar(1);
-	ImGui::End();
+bool UIVisualPreview::McpView(int lighting, int wireframe, int bones, int details, bool frame, bool reset, xr_string& err)
+{
+	if (!Form)
+	{
+		err = "no model is open";
+		return false;
+	}
+	if (lighting >= 0)	Form->m_Lighting = lighting ? 1 : 0;
+	if (wireframe >= 0)	Form->m_Wireframe = wireframe > 0;
+	if (bones >= 0)		Form->m_ShowBones = bones > 0;
+	if (details >= 0)	Form->m_ShowDetails = details > 0;
+	if (reset)			Form->ResetCamera();
+	else if (frame)		Form->FrameModel();
+	return true;
 }
 
 //------------------------------------------------------------------------------

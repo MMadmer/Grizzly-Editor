@@ -3,6 +3,7 @@
 #include "EditorCatalog.h"
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
+#include "EditorUiContract.h"
 #include "EditorProject.h"
 #include "EditorVirusTotal.h"
 #include "XFinedMCP.h"
@@ -84,7 +85,11 @@ struct SChecked
 struct SStanding
 {
 	EditorGithub::SCatalogIssue	submission, withdrawal;
+	bool						submission_read;	// GitHub answered: `submission` is its word, not an empty start
+	xr_string					submission_error;	// why it did not
 	SListing					listing;
+
+								SStanding	() : submission_read(false) {}
 };
 
 // taken on the main thread when a job starts; the secrets go when the job ends
@@ -115,10 +120,12 @@ struct SView
 	EditorVirusTotal::SScan		virustotal;		// what VirusTotal was asked last, by any job
 	bool						vt_scanned;		// by a scan, not by the check's lookups
 	EditorGithub::SCatalogIssue	submission;
+	bool						submission_read;	// looked up: "no submission" is known, not assumed
+	xr_string					submission_error;	// why the last look-up failed
 	EditorGithub::SCatalogIssue	withdrawal;
 	SListing					listing;
 
-								SView	() : job(jbNone), state(stIdle), vt_scanned(false) {}
+								SView	() : job(jbNone), state(stIdle), vt_scanned(false), submission_read(false) {}
 	bool						Listed	() const { return listing.state == "listed" && listing.this_key; }
 };
 
@@ -168,6 +175,13 @@ LPCSTR StateName(EState state)
 }
 
 xr_string Owner(const xr_string& repo) { return repo.substr(0, repo.find('/')); }
+
+// what GitHub or the network gave as the reason, for a sentence that ends after it: without its own period
+xr_string Reason(xr_string text)
+{
+	while (!text.empty() && (text.back() == '.' || text.back() == ' ')) text.pop_back();
+	return text;
+}
 
 void Add(SCheck& check, ELevel level, LPCSTR code, const xr_string& text)
 {
@@ -238,6 +252,12 @@ ELevel VtLevel(const xr_string& state, bool scanned)
 	if (state == "warn")	return lvReview;
 	if (EditorVirusTotal::Refuses(state) && (scanned || state != "unknown"))	return lvBlock;
 	return lvRequired;
+}
+
+// VirusTotal has a report page of a package only once it finished analysing it
+bool VtHasReport(const EditorVirusTotal::SResult& r)
+{
+	return r.state == "clean" || r.state == "warn" || r.state == "block";
 }
 
 // every package has a report the catalog lists by
@@ -390,7 +410,7 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SSta
 	else							Add(check, lvOk, "key", "Author key " + in.key.key_id + ".");
 
 	const bool repo_ok = !m.update_github.empty() && EditorMod::ValidateGithubRepo(m.update_github.c_str());
-	if (m.update_github.empty())	Add(check, lvBlock, "repository", "No GitHub repository in the manifest: set it in Mod > Edit Manifest.");
+	if (m.update_github.empty())	Add(check, lvBlock, "repository", "No GitHub repository in the manifest: set it in Mod > Mod Settings.");
 	else if (!repo_ok)				Add(check, lvBlock, "repository", "The manifest's GitHub repository is not owner/repo: " + m.update_github + ".");
 	else							Add(check, lvOk, "repository", "Repository " + m.update_github + ".");
 
@@ -403,7 +423,7 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SSta
 		Stage("Reading the GitHub account");
 		xr_string err;
 		if (!EditorGithub::AccountLogin(in.token, s_Cancel, login, err))
-			Add(check, lvBlock, "account", "The GitHub account does not answer: " + err);
+			Add(check, lvBlock, "account", "The GitHub account could not be read: " + Reason(err) + ".");
 		else if (repo_ok && 0 != _stricmp(login.c_str(), Owner(m.update_github).c_str()))
 			Add(check, lvBlock, "account", "Signed in as " + login + ", but " + m.update_github + " belongs to " +
 				Owner(m.update_github) + ": the submission has to come from the repository's owner.");
@@ -425,7 +445,7 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SSta
 		if (!have && !s_Cancel.Cancelled())
 			Add(check, lvBlock, "release", 404 == status ?
 				"The latest release of " + m.update_github + " carries no " + m.id + ".update.ltx: publish one first (Mod > Publish Release)." :
-				"The latest release could not be read: " + err + ".");
+				"The latest release could not be read: " + Reason(err) + ".");
 	}
 	if (s_Cancel.Cancelled()) return;
 	if (have)
@@ -471,7 +491,7 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SSta
 		else if (moddb && (403 == status || 429 == status || 503 == status))
 			Add(check, lvNote, "website", "ModDB turns automated requests away: the page cannot be checked automatically.");
 		else if (status)									Add(check, lvBlock, "website", NqUtil::Format("Website %s answers HTTP %u.", website.c_str(), status));
-		else												Add(check, lvNote, "website", "Website " + website + " could not be reached: " + err + ".");
+		else												Add(check, lvNote, "website", "Website " + website + " could not be reached: " + Reason(err) + ".");
 	}
 	if (s_Cancel.Cancelled()) return;
 
@@ -514,9 +534,9 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SSta
 
 	if (have && rel.card)
 	{
-		if (rel.thumbnail.empty())	Add(check, lvNote, "thumbnail", "No thumbnail: the Mod Browser shows the name's first letter (Mod > Edit Manifest).");
+		if (rel.thumbnail.empty())	Add(check, lvNote, "thumbnail", "No thumbnail: the Mod Browser shows the name's first letter (Mod > Mod Settings).");
 		else						Add(check, lvOk, "thumbnail", "Thumbnail.");
-		if (rel.tags.empty())		Add(check, lvNote, "tags", "No tags: players who filter by tag will not find it (Mod > Edit Manifest).");
+		if (rel.tags.empty())		Add(check, lvNote, "tags", "No tags: players who filter by tag will not find it (Mod > Mod Settings).");
 		else						Add(check, lvOk, "tags", "Tags: " + rel.tags + ".");
 	}
 
@@ -543,8 +563,8 @@ void RunCheck(const SInput& in, bool lookup, SCheck& check, SChecked& seen, SSta
 	if (in.signed_in)
 	{
 		Stage("Reading the submission");
+		standing.submission_read = EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, standing.submission, standing.submission_error);
 		xr_string err;
-		EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, standing.submission, err);
 		if (!s_Cancel.Cancelled()) EditorGithub::CatalogIssue(m.id, in.token, s_Cancel, standing.withdrawal, err, EditorGithub::ciWithdrawal);
 	}
 	check.done = !s_Cancel.Cancelled();
@@ -641,8 +661,13 @@ bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, SStanding& stand
 	rq.file_text	= SubmissionText(in, rel, website);
 	rq.details		= SubmissionDetails(in, seen, check, website);
 	rq.token		= in.token;
-	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, standing.submission, err);
+	EditorGithub::SCatalogIssue sent;
+	const bool ok = EditorGithub::CatalogSubmit(rq, s_Cancel, [](LPCSTR text) { Stage(text); }, sent, err);
 	EditorGithub::WipeString(rq.token);
+	// a failure may come after the issue went out: where the submission stands is not known then
+	if (ok) standing.submission = sent;
+	standing.submission_read = ok;
+	standing.submission_error.clear();
 	return ok;
 }
 
@@ -660,6 +685,7 @@ bool RunStanding(const SInput& in, SStanding& standing, xr_string& err)
 {
 	Stage("Reading the submission");
 	if (!EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.submission, err)) return false;
+	standing.submission_read = true;
 	Stage("Reading the withdrawal");
 	if (!EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.withdrawal, err, EditorGithub::ciWithdrawal))
 		return false;
@@ -692,8 +718,7 @@ bool RunWithdraw(const SInput& in, SStanding& standing, xr_string& err)
 		s_View.login = standing.withdrawal.login;
 	}
 	Stage("Reading the submission");
-	xr_string ignored;
-	EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.submission, ignored);
+	standing.submission_read = EditorGithub::CatalogIssue(in.manifest.id, in.token, s_Cancel, standing.submission, standing.submission_error);
 	ReadListingNow(in, standing);
 	return true;
 }
@@ -728,7 +753,10 @@ void Worker(EJob job, SInput in)
 	const bool asked = jbSubmission == job || jbWithdraw == job ? ok : (jbCheck == job || jbSubmit == job) && check.done;
 	if (asked && !cancelled)
 	{
-		s_View.submission = in.signed_in ? standing.submission : EditorGithub::SCatalogIssue();
+		// a submission GitHub did not name is unknown, never "not submitted"
+		s_View.submission_read = in.signed_in && standing.submission_read;
+		s_View.submission = s_View.submission_read ? standing.submission : EditorGithub::SCatalogIssue();
+		s_View.submission_error = standing.submission_error;
 		s_View.withdrawal = in.signed_in ? standing.withdrawal : EditorGithub::SCatalogIssue();
 		s_View.listing = standing.listing;
 	}
@@ -787,7 +815,7 @@ bool Start(EJob job, xr_string& err)
 	SInput in;
 	in.root = EditorProject::Root();
 	if (!EditorMod::Load(in.root.c_str(), in.manifest))			{ err = "mod.ltx not found in the project"; return false; }
-	if (!EditorMod::ValidateId(in.manifest.id.c_str()))			{ err = "the module id is missing or invalid (Mod > Edit Manifest)"; return false; }
+	if (!EditorMod::ValidateId(in.manifest.id.c_str()))			{ err = "the module id is missing or invalid (Mod > Mod Settings)"; return false; }
 	in.key = EditorCatalog::KeyState();
 	EditorGithub::SAccount account;
 	EditorGithub::ResolveAccount(account);
@@ -909,7 +937,7 @@ void StatusJson(xr_string& out)
 	EditorVirusTotal::Json(out, v.virustotal);
 	out += ",\"submission\":";
 	IssueJson(out, v.submission);
-	out += NqUtil::Format(",\"listed\":%s},\"withdrawal\":", JsonBool(v.Listed()));
+	out += NqUtil::Format(",\"known\":%s,\"listed\":%s},\"withdrawal\":", JsonBool(v.submission_read), JsonBool(v.Listed()));
 	IssueJson(out, v.withdrawal);
 	out += "},\"listing\":{";
 	JsonField(out, "state", v.listing.state.c_str(), true);
@@ -925,9 +953,12 @@ void ErrorJson(xr_string& out, const xr_string& err)
 }
 
 //------------------------------------------------------------------------------
-// the window
+// the window: an L dialog of cards whose height is fixed once it opens - what the checks find scrolls
+// inside it instead of growing it (docs/UI_DESIGN.md, section 6)
 //------------------------------------------------------------------------------
-const char* kTitle = "XFined Editor - Submit to Mod Browser";
+const char* kTitle			= EditorUiContract::kDialogSubmit;
+const char* kTitleWithdraw	= EditorUiContract::kDialogCatalogWithdraw;
+const float kBodyPt			= 600.f;	// the body's height while the work area has room for it
 
 EditorMod::SManifest		s_Manifest;					// what the window names
 u32							s_ManifestGen	= 0;
@@ -942,9 +973,7 @@ bool						s_VtKnown		= false;
 xr_string					s_VtError;
 bool						s_PickQueued	= false;
 xr_string					s_StartError;				// why a job the window asked for did not start
-bool						s_HideRequested	= false;	// MCP closes the window from outside the ImGui pass
-bool						s_WantWithdraw	= false;	// the withdrawal's confirmation is open
-const char*					kTitleWithdraw	= "Withdraw from Mod Browser";
+bool						s_WantWithdraw	= false;	// the withdrawal's question is up
 
 void StartFromUI(EJob job)
 {
@@ -952,31 +981,9 @@ void StartFromUI(EJob job)
 	s_StartError = Start(job, err) ? xr_string() : err;
 }
 
-void Hint(LPCSTR text)
+ImU32 Token(XFinedTheme::ColorToken token, float alpha = 1.f)
 {
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("%s", text);
-}
-
-// A path on one line up to `room` wide: folders are dropped from the left until it fits, and
-// the whole path is the hint. A path broken in the middle of a name reads as two.
-void PathText(const xr_string& path, float room)
-{
-	xr_string shown = path;
-	for (size_t cut = 0; ImGui::CalcTextSize(shown.c_str()).x > room;)
-	{
-		cut = path.find('\\', cut + 1);
-		if (cut == xr_string::npos) break;
-		shown = "..." + path.substr(cut);
-	}
-	ImGui::TextDisabled("%s", shown.c_str());
-	Hint(path.c_str());
-}
-
-// what is left of the window's text width after the cursor and `reserve`
-float RoomLeft(float reserve)
-{
-	return ImGui::GetFontSize() * 40.f - ImGui::GetCursorPosX() - reserve;
+	return XFinedTheme::U32(token, alpha);
 }
 
 void WipeInputs()
@@ -1071,53 +1078,88 @@ void PickKeyFile()
 	RefreshKey();
 }
 
-ImU32 LevelColor(ELevel level)
+// required is never grey: a requirement the submission still has to meet reads in its own tone
+XUI::Tone LevelTone(ELevel level)
 {
 	switch (level)
 	{
-	case lvOk:			return IM_COL32(110, 200, 110, 255);
-	case lvReview:		return IM_COL32(230, 190, 80, 255);
-	case lvRequired:	return IM_COL32(240, 140, 60, 255);
-	case lvBlock:		return IM_COL32(235, 95, 90, 255);
+	case lvOk:			return XUI::Tone::Success;
+	case lvReview:		return XUI::Tone::Warning;
+	case lvRequired:	return XUI::Tone::Required;
+	case lvBlock:		return XUI::Tone::Error;
 	}
-	return IM_COL32(150, 150, 150, 255);
+	return XUI::Tone::Muted;
 }
 
-// a status dot in front of a wrapped line
-void StatusLine(ELevel level, LPCSTR text)
+// the width a kit button of this label takes outside a dialog's footer
+float KitButtonWidth(LPCSTR label)
 {
-	const float h = ImGui::GetTextLineHeight();
-	const ImVec2 at = ImGui::GetCursorScreenPos();
-	ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(at.x + h * 0.35f, at.y + h * 0.5f), h * 0.22f, LevelColor(level));
-	ImGui::Dummy(ImVec2(h * 0.9f, h));
-	ImGui::SameLine(0.f, 0.f);
-	ImGui::TextWrapped("%s", text);
+	return ImGui::CalcTextSize(label, nullptr, true).x + XUI::Pt(20.f);
 }
 
-void DrawKey()
+// the next item, `width` wide, ends at the right edge of the current line
+void SameLineRight(float width)
 {
-	ImGui::SeparatorText("Author key");
-	const ImVec4 bad(1.f, 0.4f, 0.4f, 1.f), warn(1.f, 0.8f, 0.3f, 1.f);
+	ImGui::SameLine();
+	const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width;
+	ImGui::SameLine(_max(ImGui::GetCursorPosX(), x));
+}
+
+// a path in a property row's value: its end stays, the start is what the ellipsis drops
+void PathValue(const xr_string& path)
+{
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float width = ImGui::CalcItemWidth();
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + style.FramePadding.x);
+	ImGui::AlignTextToFramePadding();
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	XUI::TextEllipsis(path.c_str(), _max(XUI::Em(2.f), width - style.FramePadding.x * 2.f), XUI::Clip::Start);
+	ImGui::PopStyleColor();
+}
+
+// a password field and its button on one row, the field taking what the button leaves
+bool PasswordAndButton(LPCSTR id, LPCSTR hint, char* buf, size_t size, LPCSTR button, bool on, LPCSTR why)
+{
+	ImGui::SetNextItemWidth(_max(XUI::Em(6.f), ImGui::GetContentRegionAvail().x - KitButtonWidth(button) - ImGui::GetStyle().ItemSpacing.x));
+	const bool enter = ImGui::InputTextWithHint(id, hint, buf, size, ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+	ImGui::SameLine();
+	return XUI::Button(button, XUI::Kind::Secondary, on, why) || (enter && on);
+}
+
+void DrawKeyCard()
+{
+	const bool readable = s_Key.exists && s_Key.error.empty();
+	const XUI::Tone tone = !readable ? XUI::Tone::Error : s_Key.locked ? XUI::Tone::Required : XUI::Tone::Success;
+	XUI::BeginCard("##card_key", "Author Key", tone, !readable || s_Key.locked);
+	if (readable)
+	{
+		ImGui::SameLine();
+		XUI::Badge(s_Key.locked ? "Locked" : "Ready", tone);
+	}
 	if (!s_Key.exists)
 	{
-		ImGui::TextWrapped("No author key yet. The key signs every release of the module, and the Mod Browser lists "
-			"signed releases only. It is a file you keep - never part of the project.");
-		PathText(s_KeyTarget, RoomLeft(ImGui::CalcTextSize("Change...").x + ImGui::GetFontSize() * 2.f));
-		ImGui::SameLine();
-		ImGui::BeginDisabled(s_PickQueued);
-		if (ImGui::SmallButton("Change...")) s_PickQueued = UI->DeferUIWork(&PickKeyTarget);
-		ImGui::EndDisabled();
-		const float field = ImGui::GetFontSize() * 12.f;
-		ImGui::SetNextItemWidth(field);
-		ImGui::InputTextWithHint("##password", "password (optional)", s_Password, sizeof(s_Password), ImGuiInputTextFlags_Password);
-		Hint("Protects the file if it ever leaves your hands. The editor asks for it once per session.\n"
-			 "Forgotten, it cannot be recovered - and neither can the key.");
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(field);
-		ImGui::InputTextWithHint("##repeat", "repeat the password", s_Repeat, sizeof(s_Repeat), ImGuiInputTextFlags_Password);
+		XUI::StatusText(XUI::Tone::Muted, "No author key yet. It signs every release of the module, and the Mod Browser lists signed releases "
+			"only. It is a file you keep - never part of the project.");
 		const bool differ = 0 != strcmp(s_Password, s_Repeat);
-		ImGui::BeginDisabled(differ);
-		if (ImGui::Button("Create Key"))
+		if (XUI::BeginPropertyGrid("catalog_key"))
+		{
+			if (XUI::PropertyRow("Key File", "Where Create Key writes the new key file. It never replaces a file that is there."))
+			{
+				PathValue(s_KeyTarget);
+				if (!s_PickQueued && XUI::PropertyTrailing("##key_target", XUI::Icon::Open, "Choose where the new key goes"))
+					s_PickQueued = UI->DeferUIWork(&PickKeyTarget);
+			}
+			if (XUI::PropertyRow("Password", "Optional. Protects the file if it ever leaves your hands; the editor asks for it once per session. "
+					"Forgotten, it cannot be recovered - and neither can the key."))
+				ImGui::InputTextWithHint("##password", "Optional", s_Password, sizeof(s_Password), ImGuiInputTextFlags_Password);
+			if (XUI::PropertyRow("Repeat", "The password once more.", differ && s_Repeat[0] ? XUI::PropInvalid : 0))
+			{
+				ImGui::InputTextWithHint("##repeat", "Repeat the password", s_Repeat, sizeof(s_Repeat), ImGuiInputTextFlags_Password);
+				if (differ && s_Repeat[0]) XUI::PropertyMessage(XUI::Tone::Error, "The passwords differ.");
+			}
+			XUI::EndPropertyGrid();
+		}
+		if (XUI::Button("Create Key", XUI::Kind::Secondary, !differ, "The two passwords differ."))
 		{
 			if (EditorCatalog::CreateKey(s_KeyTarget.c_str(), s_Password, s_KeyError))
 			{
@@ -1127,350 +1169,462 @@ void DrawKey()
 			WipeInputs();
 			RefreshKey();
 		}
-		ImGui::EndDisabled();
 		ImGui::SameLine();
-		ImGui::BeginDisabled(s_PickQueued);
-		if (ImGui::Button("Use Key File...")) s_PickQueued = UI->DeferUIWork(&PickKeyFile);
-		ImGui::EndDisabled();
-		Hint("The key file from another computer or its copy.");
-		if (differ && s_Repeat[0]) ImGui::TextColored(bad, "The passwords differ.");
+		if (XUI::Button("Use Key File...", XUI::Kind::Secondary, !s_PickQueued, "A file dialog is open."))
+			s_PickQueued = UI->DeferUIWork(&PickKeyFile);
+		XUI::Tip("The key file from another computer, or its copy.");
 	}
 	else if (!s_Key.error.empty())
 	{
-		ImGui::TextColored(bad, "The key file does not read: %s", s_Key.error.c_str());
-		PathText(s_Key.path, RoomLeft(0.f));
-		ImGui::BeginDisabled(s_PickQueued);
-		if (ImGui::Button("Use Another Key File...")) s_PickQueued = UI->DeferUIWork(&PickKeyFile);
-		ImGui::EndDisabled();
+		XUI::StatusText(XUI::Tone::Error, ("The key file does not read: " + s_Key.error + ".").c_str());
+		if (XUI::BeginPropertyGrid("catalog_key"))
+		{
+			if (XUI::PropertyRow("Key File", "The key file the editor remembers.", XUI::PropReadOnly))
+				PathValue(s_Key.path);
+			XUI::EndPropertyGrid();
+		}
+		if (XUI::Button("Use Another Key File...", XUI::Kind::Secondary, !s_PickQueued, "A file dialog is open."))
+			s_PickQueued = UI->DeferUIWork(&PickKeyFile);
 	}
 	else
 	{
-		ImGui::Text("Key %s", s_Key.key_id.c_str());
-		ImGui::SameLine();
-		PathText(s_Key.path, RoomLeft(ImGui::CalcTextSize("Show in Folder").x + ImGui::GetFontSize() * 2.f));
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Show in Folder"))
-			::ShellExecuteA(0, "open", "explorer.exe", ("/select,\"" + s_Key.path + "\"").c_str(), 0, SW_SHOWNORMAL);
-		if (s_Key.locked)
+		if (XUI::BeginPropertyGrid("catalog_key"))
 		{
-			ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.f);
-			const bool enter = ImGui::InputTextWithHint("##unlock", "key password", s_Password, sizeof(s_Password),
-				ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
-			ImGui::SameLine();
-			if (ImGui::Button("Unlock") || enter)
+			if (XUI::PropertyRow("Key", "The key's id: what a signed release names.", XUI::PropReadOnly))
+				XUI::PropertyText(s_Key.key_id.c_str());
+			if (XUI::PropertyRow("Key File", "The key file this computer signs with.", XUI::PropReadOnly))
+				PathValue(s_Key.path);
+			if (s_Key.locked && XUI::PropertyRow("Password", "The key file is protected: its password opens it until the editor closes.",
+					XUI::PropRequired))
 			{
-				if (EditorCatalog::Unlock(s_Password, s_KeyError)) s_KeyError.clear();
-				WipeInputs();
-				RefreshKey();
+				if (PasswordAndButton("##unlock", "Key password", s_Password, sizeof(s_Password), "Unlock", s_Password[0] != 0,
+						"Type the key file's password first."))
+				{
+					if (EditorCatalog::Unlock(s_Password, s_KeyError)) s_KeyError.clear();
+					WipeInputs();
+					RefreshKey();
+				}
 			}
+			XUI::EndPropertyGrid();
 		}
-		ImGui::PushStyleColor(ImGuiCol_Text, s_KeyCreated ? warn : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-		ImGui::TextWrapped("Keep a copy of this file somewhere safe - a USB stick, a password manager. Without it no "
-			"update of this module can be signed.");
-		ImGui::PopStyleColor();
-		ImGui::BeginDisabled(s_PickQueued);
-		if (ImGui::SmallButton("Use Another Key File...")) s_PickQueued = UI->DeferUIWork(&PickKeyFile);
-		ImGui::EndDisabled();
+		XUI::StatusText(s_KeyCreated ? XUI::Tone::Warning : XUI::Tone::Muted, "Keep a copy of this file somewhere safe - a USB stick, a "
+			"password manager. Without it no update of this module can be signed.");
+		// the card's actions, named and framed like every other button of the window
+		if (XUI::Button("Use Another Key File...", XUI::Kind::Secondary, !s_PickQueued, "A file dialog is open."))
+			s_PickQueued = UI->DeferUIWork(&PickKeyFile);
+		if (!s_PickQueued)
+			XUI::Tip("Signs with another key file from now on: the key file from another computer, or its copy.");
+		ImGui::SameLine();
+		if (XUI::Button("Show in Folder", XUI::Kind::Secondary))
+			::ShellExecuteA(0, "open", "explorer.exe", ("/select,\"" + s_Key.path + "\"").c_str(), 0, SW_SHOWNORMAL);
+		XUI::Tip("Opens the key file's folder in Explorer, the file selected - to copy it somewhere safe.");
 	}
-	if (!s_KeyError.empty()) ImGui::TextColored(bad, "%s", s_KeyError.c_str());
+	if (!s_KeyError.empty())
+		XUI::StatusText(XUI::Tone::Error, s_KeyError.c_str());
+	XUI::EndCard();
 }
 
-void DrawRequirements(const SView& view)
+// What section 7 asks, failures first; the requirements that are met fold away - a wall of green reads as
+// nothing. The VirusTotal findings are the VirusTotal card's: its verdict appears there alone.
+void DrawRequirementsCard(const SView& view)
 {
-	ImGui::SeparatorText("Requirements");
-	const bool checking = stRunning == view.state && (jbCheck == view.job || jbSubmit == view.job);
+	xr_vector<const SFinding*> open, met;
+	for (const SFinding& f : view.check.findings)
+	{
+		if (f.code == "virustotal") continue;
+		(lvOk == f.level ? met : open).push_back(&f);
+	}
+	std::stable_sort(open.begin(), open.end(), [](const SFinding* a, const SFinding* b) { return a->level > b->level; });
+	u32 blocks = 0, required = 0;
+	for (const SFinding* f : open)
+	{
+		blocks += lvBlock == f->level ? 1 : 0;
+		required += lvRequired == f->level ? 1 : 0;
+	}
+	const bool running = stRunning == view.state;
+	const bool checking = running && (jbCheck == view.job || jbSubmit == view.job);
+	const XUI::Tone tone = blocks ? XUI::Tone::Error : required ? XUI::Tone::Required : view.check.done ? XUI::Tone::Success : XUI::Tone::Muted;
+	XUI::BeginCard("##card_requirements", "Requirements", tone, blocks > 0);
+	if (view.check.done && !checking)
+	{
+		ImGui::SameLine();
+		XUI::Badge(blocks ? NqUtil::Format("%u to fix", blocks).c_str() : "Met", blocks ? XUI::Tone::Error : XUI::Tone::Success);
+	}
+	SameLineRight(KitButtonWidth("Check Again"));
+	if (XUI::Button("Check Again", XUI::Kind::Secondary, !running, "A Mod Browser job is running."))
+		StartFromUI(jbCheck);
+	if (!running)
+		XUI::Tip("Reads the latest release the way the game does and checks what the Mod Browser requires.");
+
 	if (checking)
-		ImGui::TextDisabled("Checking... %s", view.stage.c_str());
+		XUI::BusyLine(view.stage.empty() ? "Checking..." : ("Checking: " + view.stage).c_str());
 	else if (!view.check.done)
-		ImGui::TextDisabled("Not checked yet.");
-	for (u32 i = 0; i < view.check.findings.size(); ++i)
-		StatusLine(view.check.findings[i].level, view.check.findings[i].text.c_str());
+		XUI::StatusText(XUI::Tone::Muted, "Not checked yet.");
+	for (const SFinding* f : open)
+		XUI::StatusText(LevelTone(f->level), f->text.c_str());
+	if (view.check.done && open.empty() && !checking)
+		XUI::StatusText(XUI::Tone::Success, "Every requirement is met.");
+	if (!met.empty())
+	{
+		if (XUI::Section(NqUtil::Format("Met (%u)###met", (u32)met.size()).c_str(), false))
+		{
+			for (const SFinding* f : met)
+				XUI::StatusText(XUI::Tone::Success, f->text.c_str());
+			XUI::EndSection();
+		}
+	}
 	if (!s_StartError.empty())
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_StartError.c_str());
-	ImGui::BeginDisabled(stRunning == view.state);
-	if (ImGui::Button("Check Again")) StartFromUI(jbCheck);
-	ImGui::EndDisabled();
-	Hint("Reads the latest release the way the game does and checks what the Mod Browser requires.");
+		XUI::StatusText(XUI::Tone::Error, s_StartError.c_str());
+	XUI::EndCard();
 }
 
-void DrawVirusTotal(const SView& view)
+// the one place the VirusTotal verdict appears; required, so its open state is never grey
+void DrawVirusTotalCard(const SView& view)
 {
-	ImGui::SeparatorText("VirusTotal (required)");
+	const bool settled = VtSettled(view.virustotal);
+	const bool running = stRunning == view.state;
+	const bool scanning = running && (jbVt == view.job || jbSubmit == view.job);
+	const XUI::Tone tone = s_VtKnown && !view.virustotal.packages.empty() ? LevelTone(VtLevel(view.virustotal.state, view.vt_scanned)) :
+		XUI::Tone::Required;
+	XUI::BeginCard("##card_vt", "VirusTotal (required)", tone, !settled, !settled);
 	if (!s_VtKnown)
 	{
-		ImGui::TextWrapped("Required: the catalog lists a package only when VirusTotal knows it, and every release is scanned "
-			"with your own VirusTotal key. A free account at virustotal.com has one.");
-		ImGui::SetNextItemWidth(ImGui::GetFontSize() * 20.f);
-		ImGui::InputTextWithHint("##vt_key", "VirusTotal API key", s_VtInput, sizeof(s_VtInput), ImGuiInputTextFlags_Password);
-		Hint("Kept in the Windows Credential Manager - never in the project.");
-		ImGui::SameLine();
-		ImGui::BeginDisabled(!s_VtInput[0]);
-		if (ImGui::Button("Save Key"))
+		XUI::StatusText(XUI::Tone::Required, "Required: the catalog lists a package only when VirusTotal knows it, and every release is "
+			"scanned with your own VirusTotal key. A free account at virustotal.com has one.");
+		if (PasswordAndButton("##vt_key", "VirusTotal API key", s_VtInput, sizeof(s_VtInput), "Save Key", s_VtInput[0] != 0,
+				"Paste the key first."))
 		{
 			if (EditorGithub::SaveVtKey(s_VtInput, s_VtError)) s_VtError.clear();
 			WipeInputs();
 			s_VtKnown = HasVtKey();
 		}
-		ImGui::EndDisabled();
-		if (!s_VtError.empty()) ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_VtError.c_str());
+		XUI::Tip("Kept in the Windows Credential Manager - never in the project.");
+		if (!s_VtError.empty())
+			XUI::StatusText(XUI::Tone::Error, s_VtError.c_str());
+		XUI::EndCard();
 		return;
 	}
-	if (stRunning == view.state && (jbVt == view.job || jbSubmit == view.job))
-		ImGui::TextDisabled("Scanning... %s", view.stage.c_str());
+	// a check looks the packages up: until it has, "not scanned" would be a guess
+	const bool looking = running && jbCheck == view.job && view.virustotal.packages.empty();
+	if (scanning)
+		XUI::BusyLine(view.stage.empty() ? "Scanning..." : ("Scanning: " + view.stage).c_str());
+	else if (looking)
+		XUI::BusyLine("Looking the packages up on VirusTotal...");
 	// the requirement stays in sight until every package has a report
-	if (view.virustotal.packages.empty())
-		StatusLine(lvRequired, "Not scanned yet. Every package needs a VirusTotal report before the module is listed: Scan "
+	if (view.virustotal.packages.empty() && !looking)
+		XUI::StatusText(XUI::Tone::Required, "Not scanned yet. Every package needs a VirusTotal report before the module is listed: Scan "
 			"runs it now, and Submit scans first.");
-	else if (!VtSettled(view.virustotal))
-		StatusLine(lvRequired, "Not every package has a VirusTotal report yet: the module is not submitted without one.");
-	for (u32 i = 0; i < view.virustotal.packages.size(); ++i)
+	else if (!view.virustotal.packages.empty() && !settled)
+		XUI::StatusText(XUI::Tone::Required, "Not every package has a VirusTotal report yet: the module is not submitted without one.");
+	u32 reports = 0;
+	for (const EditorVirusTotal::SResult& r : view.virustotal.packages)
 	{
-		const EditorVirusTotal::SResult& r = view.virustotal.packages[i];
-		ImGui::PushID((int)i);
-		StatusLine(VtLevel(r.state, view.vt_scanned), (EditorVirusTotal::Describe(r) + ".").c_str());
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Report"))
-			::ShellExecuteA(0, "open", EditorGithub::VtReportPage(r.package.sha256).c_str(), 0, 0, SW_SHOWNORMAL);
-		ImGui::PopID();
+		XUI::StatusText(LevelTone(VtLevel(r.state, view.vt_scanned)), (EditorVirusTotal::Describe(r) + ".").c_str());
+		if (VtHasReport(r))
+			++reports;
 	}
-	ImGui::BeginDisabled(stRunning == view.state);
-	if (ImGui::Button("Scan"))
+	if (XUI::Button("Scan", XUI::Kind::Secondary, !running, "A Mod Browser job is running."))
 	{
 		xr_string err;
 		s_VtError = Start(jbVt, err) ? xr_string() : err;
 	}
-	ImGui::EndDisabled();
-	Hint("Looks every package of the latest release up on VirusTotal, uploads one it does not know and waits for its\n"
-		 "report - a few minutes. VirusTotal shares uploaded files with the security industry.");
+	if (!running)
+		XUI::Tip("Looks every package of the latest release up on VirusTotal, uploads one it does not know and waits for its report - a "
+			"few minutes. VirusTotal shares uploaded files with the security industry.");
+	if (!view.virustotal.packages.empty())
+	{
+		static const LPCSTR kReportLabels[] = { "Open Report", "Open Reports" };
+		ImGui::SameLine();
+		if (XUI::Button(reports > 1 ? kReportLabels[1] : kReportLabels[0], XUI::Kind::Secondary, reports > 0,
+				"No package has a finished VirusTotal report yet.", kReportLabels, 2))
+		{
+			for (const EditorVirusTotal::SResult& r : view.virustotal.packages)
+				if (VtHasReport(r))
+					::ShellExecuteA(0, "open", EditorGithub::VtReportPage(r.package.sha256).c_str(), 0, 0, SW_SHOWNORMAL);
+		}
+		if (reports)
+			XUI::Tip(reports > 1 ? "Opens the VirusTotal report of every package in the browser." :
+				"Opens the package's VirusTotal report in the browser.");
+	}
 	ImGui::SameLine();
-	if (ImGui::SmallButton("Forget Key"))
+	if (XUI::Button("Forget VirusTotal Key", XUI::Kind::Secondary))
 	{
 		EditorGithub::ForgetVtKey();
 		s_VtKnown = HasVtKey();
 	}
-	Hint("Removes the key the editor saved. A key from VT_API_KEY stays in effect.");
-	if (!s_VtError.empty()) ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_VtError.c_str());
+	XUI::Tip("Removes the VirusTotal API key the editor saved in the Windows Credential Manager. A key from VT_API_KEY stays in "
+		"effect. The author key is not touched.");
+	if (!s_VtError.empty())
+		XUI::StatusText(XUI::Tone::Error, s_VtError.c_str());
+	XUI::EndCard();
 }
 
-void DrawSubmission(const SView& view)
+// the tone of a card about an issue of the catalog: open, accepted, refused, or merely closed
+XUI::Tone IssueTone(const EditorGithub::SCatalogIssue& issue)
 {
-	ImGui::SeparatorText("Submission");
+	if (!issue.number) return XUI::Tone::Muted;
+	if (issue.state == "open") return XUI::Tone::Info;
+	return issue.verdict == "accepted" ? XUI::Tone::Success : issue.verdict == "refused" ? XUI::Tone::Error : XUI::Tone::Muted;
+}
+
+// what an issue of the catalog says now
+void IssueLines(const EditorGithub::SCatalogIssue& issue, bool done_state, LPCSTR accepted_done, LPCSTR accepted_soon)
+{
+	// Open, the catalog's newest verdict says what it waits for. Closed, only an accepted or a refused one says
+	// what became of it: the author may have closed it after a waiting one.
+	xr_string text, verdict;
+	ELevel level = lvNote, verdict_level = lvNote;
+	if (issue.state == "open")
+	{
+		text = NqUtil::Format("#%llu is open: the catalog checks it.", issue.number);
+		verdict = issue.verdict_text;
+		verdict_level = issue.verdict == "accepted" ? lvOk : issue.verdict == "refused" ? lvBlock : lvReview;
+	}
+	else if (issue.verdict == "accepted")
+	{
+		level = lvOk;
+		text = NqUtil::Format(done_state ? accepted_done : accepted_soon, issue.number);
+	}
+	else if (issue.verdict == "refused")
+	{
+		level = verdict_level = lvBlock;
+		text = NqUtil::Format("#%llu was refused.", issue.number);
+		verdict = issue.verdict_text;
+	}
+	else
+		text = NqUtil::Format("#%llu was closed.", issue.number);
+	XUI::StatusText(LevelTone(level), text.c_str());
+	if (!verdict.empty())
+		XUI::StatusText(LevelTone(verdict_level), verdict.c_str());
+}
+
+void DrawSubmissionCard(const SView& view)
+{
 	const EditorGithub::SCatalogIssue& submission = view.submission;
-	if (!submission.number)
-		ImGui::TextDisabled("Not submitted yet.");
+	const bool signed_in = EditorGithub::asNone != s_AccountSource;
+	const XUI::Tone tone = IssueTone(submission);
+	XUI::BeginCard("##card_submission", "Submission", tone, XUI::Tone::Error == tone);
+	SameLineRight(KitButtonWidth("Refresh"));
+	if (XUI::Button("Refresh", XUI::Kind::Secondary, stRunning != view.state && signed_in,
+			signed_in ? "A Mod Browser job is running." : "Sign in to GitHub first: Publish Release."))
+		StartFromUI(jbSubmission);
+	if (stRunning != view.state && signed_in)
+		XUI::Tip("Reads where the submission and a withdrawal stand, and what the published catalog lists.");
+	// "not submitted" only once GitHub said so: every job but the scan looks the submission up; signed out, the
+	// line below says what is missing
+	if (!view.submission_read)
+	{
+		if (signed_in && stRunning == view.state && jbVt != view.job)
+			XUI::BusyLine("Looking up the submission...");
+		else if (signed_in && !view.submission_error.empty())
+			XUI::StatusText(XUI::Tone::Warning, ("The submission could not be looked up: " + Reason(view.submission_error) + ".").c_str());
+		else if (signed_in)
+			XUI::StatusText(XUI::Tone::Muted, "Not looked up yet: Refresh reads where it stands.");
+	}
+	else if (!submission.number)
+		XUI::StatusText(XUI::Tone::Muted, "Not submitted yet.");
 	else
 	{
-		// Open, the catalog's newest verdict says what it waits for. Closed, only an accepted or a
-		// refused one says what became of it: the author may have closed it after a waiting one.
-		xr_string text, verdict;
-		ELevel level = lvNote, verdict_level = lvNote;
-		if (submission.state == "open")
-		{
-			text = NqUtil::Format("#%llu is open: the catalog checks it.", submission.number);
-			verdict = submission.verdict_text;
-			verdict_level = submission.verdict == "accepted" ? lvOk : submission.verdict == "refused" ? lvBlock : lvReview;
-		}
-		else if (submission.verdict == "accepted")
-		{
-			level = lvOk;
-			text = view.Listed() ? NqUtil::Format("#%llu was accepted: the module is in the Mod Browser.", submission.number) :
-				NqUtil::Format("#%llu was accepted: the module appears in the Mod Browser within minutes.", submission.number);
-		}
-		else if (submission.verdict == "refused")
-		{
-			level = verdict_level = lvBlock;
-			text = NqUtil::Format("#%llu was refused.", submission.number);
-			verdict = submission.verdict_text;
-		}
-		else
-			text = NqUtil::Format("#%llu was closed.", submission.number);
-		StatusLine(level, text.c_str());
-		if (!verdict.empty()) StatusLine(verdict_level, verdict.c_str());
-		if (!submission.note.empty()) StatusLine(lvNote, submission.note.c_str());
-		if (ImGui::Button("Open Submission")) ::ShellExecuteA(0, "open", submission.url.c_str(), 0, 0, SW_SHOWNORMAL);
-		ImGui::SameLine();
+		IssueLines(submission, view.Listed(), "#%llu was accepted: the module is in the Mod Browser.",
+			"#%llu was accepted: the module appears in the Mod Browser within minutes.");
+		if (!submission.note.empty())
+			XUI::StatusText(XUI::Tone::Muted, submission.note.c_str());
+		if (XUI::Button("Open Submission", XUI::Kind::Secondary))
+			::ShellExecuteA(0, "open", submission.url.c_str(), 0, 0, SW_SHOWNORMAL);
 	}
-	ImGui::BeginDisabled(stRunning == view.state || EditorGithub::asNone == s_AccountSource);
-	if (ImGui::Button("Refresh")) StartFromUI(jbSubmission);
-	ImGui::EndDisabled();
-	Hint("Reads where the submission and a withdrawal stand, and what the published catalog lists.");
+	const xr_string where = "Submitting opens a public issue at github.com/" + EditorGithub::CatalogRepo() +
+		(view.login.empty() ? xr_string() : " from " + view.login) + ".";
+	XUI::StatusText(XUI::Tone::Muted, signed_in ? where.c_str() : "Submitting needs a GitHub account: sign in from Publish Release.");
 	if (stFailed == view.state && !view.error.empty() && jbWithdraw != view.job)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
+		XUI::StatusText(XUI::Tone::Error, view.error.c_str());
+	XUI::EndCard();
 }
 
 // A listed module can be withdrawn by the account it was listed from; a withdrawal already sent is
 // followed like the submission.
-void DrawWithdrawal(const SView& view)
+void DrawWithdrawalCard(const SView& view)
 {
 	const EditorGithub::SCatalogIssue& w = view.withdrawal;
 	const bool listed = view.listing.state == "listed", withdrawn = view.listing.state == "withdrawn";
 	const bool failed = stFailed == view.state && jbWithdraw == view.job && !view.error.empty();
 	if (!listed && !withdrawn && !w.number && w.note.empty() && !failed) return;
-	ImGui::SeparatorText("Withdrawal");
+	XUI::BeginCard("##card_withdrawal", "Withdrawal", failed ? XUI::Tone::Error : IssueTone(w), failed);
+	if (stRunning == view.state && jbWithdraw == view.job)
+		XUI::BusyLine(view.stage.empty() ? "Withdrawing..." : ("Withdrawing: " + view.stage).c_str());
 	if (w.number)
-	{
-		xr_string text, verdict;
-		ELevel level = lvNote, verdict_level = lvNote;
-		if (w.state == "open")
-		{
-			text = NqUtil::Format("#%llu is open: the catalog checks it.", w.number);
-			verdict = w.verdict_text;
-			verdict_level = w.verdict == "accepted" ? lvOk : w.verdict == "refused" ? lvBlock : lvReview;
-		}
-		else if (w.verdict == "accepted")
-		{
-			level = lvOk;
-			text = withdrawn ? NqUtil::Format("#%llu was accepted: the module is withdrawn from the Mod Browser.", w.number) :
-				NqUtil::Format("#%llu was accepted: the module leaves the Mod Browser within minutes.", w.number);
-		}
-		else if (w.verdict == "refused")
-		{
-			level = verdict_level = lvBlock;
-			text = NqUtil::Format("#%llu was refused.", w.number);
-			verdict = w.verdict_text;
-		}
-		else
-			text = NqUtil::Format("#%llu was closed.", w.number);
-		StatusLine(level, text.c_str());
-		if (!verdict.empty()) StatusLine(verdict_level, verdict.c_str());
-	}
-	if (!w.note.empty()) StatusLine(lvNote, w.note.c_str());
+		IssueLines(w, withdrawn, "#%llu was accepted: the module is withdrawn from the Mod Browser.",
+			"#%llu was accepted: the module leaves the Mod Browser within minutes.");
+	if (!w.note.empty())
+		XUI::StatusText(XUI::Tone::Muted, w.note.c_str());
 	if (withdrawn && w.number && w.verdict == "accepted")
-		ImGui::TextDisabled("Submitting the module again lists it again.");
+		XUI::StatusText(XUI::Tone::Muted, "Submitting the module again lists it again.");
 	else if (withdrawn)
-		StatusLine(lvNote, "Not in the Mod Browser: its author withdrew it. Submitting lists it again.");
+		XUI::StatusText(XUI::Tone::Muted, "Not in the Mod Browser: its author withdrew it. Submitting lists it again.");
 	if (listed)
-		ImGui::TextDisabled("Withdrawing takes the module out of the Mod Browser: it is no longer offered, and players who "
+		XUI::StatusText(XUI::Tone::Muted, "Withdrawing takes the module out of the Mod Browser: it is no longer offered, and players who "
 			"installed it there get no more updates. Installed copies keep working.");
 
 	// only the account the listing came from may ask; the catalog checks it again by itself
 	const xr_string owner = Owner(view.listing.github);
 	const bool other_account = listed && !view.login.empty() && 0 != _stricmp(owner.c_str(), view.login.c_str());
+	if (other_account)
+		XUI::StatusText(XUI::Tone::Warning, ("Only " + owner + ", the owner of " + view.listing.github + ", can withdraw it.").c_str());
 	if (listed)
 	{
-		ImGui::BeginDisabled(stRunning == view.state || EditorGithub::asNone == s_AccountSource || other_account);
-		if (ImGui::Button("Withdraw...")) s_WantWithdraw = true;
-		ImGui::EndDisabled();
-		Hint(other_account ? "Only the account the module was listed from can withdraw it." :
-			"Asks the catalog to withdraw the module: a public issue in the catalog repository, judged by the catalog's\n"
-			"own checks. The id stays bound to your author key.");
+		const bool can = stRunning != view.state && EditorGithub::asNone != s_AccountSource && !other_account;
+		// the button that opens the question is quiet; the one that acts, inside the question, is the Danger one
+		if (XUI::Button("Withdraw...", XUI::Kind::GhostDanger, can, other_account ? "Only the account the module was listed from can withdraw it." :
+				stRunning == view.state ? "A Mod Browser job is running." : "Sign in to GitHub first: Publish Release."))
+			s_WantWithdraw = true;
+		if (can)
+			XUI::Tip("Asks the catalog to withdraw the module: a public issue in the catalog repository, judged by the catalog's own checks. "
+				"The id stays bound to your author key. Asks first.");
 		if (w.number) ImGui::SameLine();
 	}
-	if (w.number && ImGui::Button("Open Withdrawal")) ::ShellExecuteA(0, "open", w.url.c_str(), 0, 0, SW_SHOWNORMAL);
-	if (other_account)
-		ImGui::TextDisabled("Only %s, the owner of %s, can withdraw it.", owner.c_str(), view.listing.github.c_str());
-	if (stRunning == view.state && jbWithdraw == view.job)
-		ImGui::TextDisabled("Withdrawing... %s", view.stage.c_str());
+	if (w.number && XUI::Button("Open Withdrawal", XUI::Kind::Secondary))
+		::ShellExecuteA(0, "open", w.url.c_str(), 0, 0, SW_SHOWNORMAL);
 	if (failed)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
+		XUI::StatusText(XUI::Tone::Error, view.error.c_str());
+	XUI::EndCard();
 }
 
-// The one question before a withdrawal leaves: what it does, for whom, and that it is public.
-// Cancel is the default - Enter and Escape both back out.
-void DrawWithdrawConfirm(const SView& view)
+// The one question before a withdrawal leaves, as a sheet over the window: what it does, for whom, and that it is
+// public. Cancel is the default - Enter and Esc both back out. Drawn whether or not dialogs are suppressed:
+// MCP show confirm=withdraw puts it up to be looked at, and only a click in it withdraws anything.
+void DrawWithdrawSheet(const SView& view)
 {
-	if (!s_WantWithdraw) return;
-	if (!ImGui::BeginPopupModal(kTitleWithdraw, &s_WantWithdraw, ImGuiWindowFlags_AlwaysAutoResize, true)) return;
-	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.f);
-	ImGui::Text("Withdraw %s (%s) from the Mod Browser?", s_Manifest.name.empty() ? s_Manifest.id.c_str() : s_Manifest.name.c_str(),
-		s_Manifest.id.c_str());
-	ImGui::Spacing();
-	ImGui::BulletText("The Mod Browser stops offering it, and players who installed it there get no more updates.");
-	ImGui::BulletText("Installed copies keep working.");
-	ImGui::BulletText("The id stays bound to your author key: submitting the module again lists it again.");
-	ImGui::Spacing();
-	ImGui::TextDisabled("The request is a public issue at github.com/%s%s%s, judged by the catalog's own checks.",
-		EditorGithub::CatalogRepo().c_str(), view.login.empty() ? "" : ", from ", view.login.c_str());
-	ImGui::PopTextWrapPos();
-	ImGui::Separator();
-
-	const bool confirm = ImGui::Button("Withdraw", ImVec2(ImGui::GetFontSize() * 8.f, 0));
-	ImGui::SameLine();
-	const bool cancel = ImGui::Button("Cancel", ImVec2(ImGui::GetFontSize() * 8.f, 0)) ||
-		ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-	ImGui::SetItemDefaultFocus();
-	if (confirm) StartFromUI(jbWithdraw);
-	if (confirm || cancel)
+	if (!XUI::BeginSheet(kTitleWithdraw, &s_WantWithdraw, XUI::DialogSize::M))
+		return;
+	XUI::BeginDialogBody();
 	{
-		s_WantWithdraw = false;
-		ImGui::CloseCurrentPopup();
+		XUI::FontScope strong(XUI::Font::Strong);
+		ImGui::PushTextWrapPos(0.f);
+		ImGui::TextUnformatted(NqUtil::Format("Withdraw %s (%s) from the Mod Browser?",
+			s_Manifest.name.empty() ? s_Manifest.id.c_str() : s_Manifest.name.c_str(), s_Manifest.id.c_str()).c_str());
+		ImGui::PopTextWrapPos();
 	}
-	ImGui::EndPopup();
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	XUI::StatusText(XUI::Tone::Warning, "The Mod Browser stops offering it, and players who installed it there get no more updates.");
+	XUI::StatusText(XUI::Tone::Muted, "Installed copies keep working.");
+	XUI::StatusText(XUI::Tone::Muted, "The id stays bound to your author key: submitting the module again lists it again.");
+	const xr_string where = "The request is a public issue at github.com/" + EditorGithub::CatalogRepo() +
+		(view.login.empty() ? xr_string() : ", from " + view.login) + ", judged by the catalog's own checks.";
+	XUI::StatusText(XUI::Tone::Muted, where.c_str());
+	if (XUI::BeginDialogFooter())
+	{
+		const bool signed_in = EditorGithub::asNone != s_AccountSource;
+		const bool can = stRunning != view.state && signed_in;
+		if (XUI::DialogButton("Withdraw", XUI::Kind::Danger, false, can, signed_in ? "A Mod Browser job is running." :
+				"Sign in to GitHub first: Publish Release."))
+		{
+			StartFromUI(jbWithdraw);
+			s_WantWithdraw = false;
+		}
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary, true))
+			s_WantWithdraw = false;
+	}
+	XUI::EndDialog();
 }
 
 void DrawWindow()
 {
 	static bool was_open = false;
-	if (!s_Want)
+	if (was_open && !s_Want)
 	{
-		if (was_open) WipeInputs();
-		was_open = false;
-		return;
-	}
-	was_open = true;
-	const float em = ImGui::GetFontSize();
-	ImGui::SetNextWindowSize(ImVec2(em * 42.f, 0), ImGuiCond_Appearing);
-	if (!ImGui::BeginPopupModal(kTitle, &s_Want, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-	if (s_HideRequested)
-	{
-		s_HideRequested = false;
-		s_Want = false;
+		WipeInputs();
 		s_WantWithdraw = false;
-		ImGui::CloseCurrentPopup();
-		ImGui::EndPopup();
-		return;
 	}
+	was_open = s_Want;
+	if (!XUI::BeginDialog(kTitle, &s_Want, XUI::DialogSize::L))
+		return;
 	RefreshManifest();
 	const SView view = Snapshot();
-	ImGui::PushTextWrapPos(em * 40.f);
+	XUI::BeginDialogBody();
+	const float top = ImGui::GetCursorPosY();
 
-	ImGui::TextUnformatted(s_Manifest.name.empty() ? s_Manifest.id.c_str() : s_Manifest.name.c_str());
-	ImGui::SameLine();
-	ImGui::TextDisabled("(%s)", s_Manifest.id.c_str());
-	ImGui::TextDisabled("Lists the module in the Mod Browser of Dead Air: Refined. Submissions that pass the checks of %s "
-		"are listed automatically.", EditorGithub::CatalogRepo().c_str());
-
-	DrawKey();
-	DrawRequirements(view);
-	DrawVirusTotal(view);
-	DrawSubmission(view);
-	DrawWithdrawal(view);
-
-	ImGui::Separator();
-	const bool signed_in = EditorGithub::asNone != s_AccountSource;
-	const bool ready = view.check.done && !view.check.blocking && signed_in && stRunning != view.state;
-	// the scan is part of the submission, and the button says so while a report is missing
-	const bool update = view.submission.number && view.submission.state == "open";
-	const bool scan = !VtSettled(view.virustotal);
-	ImGui::BeginDisabled(!ready);
-	if (ImGui::Button(update ? (scan ? "Scan and Update" : "Update Submission") : (scan ? "Scan and Submit" : "Submit"),
-			ImVec2(em * 10.f, 0)))
-		StartFromUI(jbSubmit);
-	ImGui::EndDisabled();
-	Hint(ready ? "Checks everything again and scans the packages on VirusTotal - required: uploading what it does not know\n"
-				 "and waiting for the report - then opens the submission, or updates the open one. Nothing is sent\n"
-				 "without a report of every package." :
-		"Available once every requirement above is met.");
-	ImGui::SameLine();
-	if (stRunning == view.state && jbSubmit == view.job)
+	// the module, and what the window does for it
+	const xr_string name = s_Manifest.name.empty() ? s_Manifest.id : s_Manifest.name;
 	{
-		if (ImGui::Button("Cancel", ImVec2(em * 6.f, 0))) s_Cancel.Cancel();
+		XUI::FontScope title(XUI::Font::Title);
+		XUI::TextEllipsis(name.c_str(), _max(XUI::Em(6.f), ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(s_Manifest.id.c_str()).x -
+			XUI::Em(2.f)));
+	}
+	if (!s_Manifest.name.empty() && s_Manifest.name != s_Manifest.id)
+	{
 		ImGui::SameLine();
-		ImGui::TextDisabled("%s", view.stage.c_str());
+		ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextMuted));
+		XUI::TextEllipsis(s_Manifest.id.c_str());
+		ImGui::PopStyleColor();
 	}
-	else if (ImGui::Button("Close", ImVec2(em * 6.f, 0)))
-	{
-		s_Want = false;
-		ImGui::CloseCurrentPopup();
-	}
-	if (signed_in)
-		ImGui::TextDisabled("Submitting opens a public issue at github.com/%s%s%s.", EditorGithub::CatalogRepo().c_str(),
-			view.login.empty() ? "" : " from ", view.login.c_str());
+	XUI::StatusText(XUI::Tone::Muted, "Lists the module in the Mod Browser of Dead Air: Refined. The catalog judges every submission by "
+		"itself and lists the ones that pass its checks.");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
 
-	ImGui::PopTextWrapPos();
-	DrawWithdrawConfirm(view);
-	ImGui::EndPopup();
+	DrawKeyCard();
+	DrawRequirementsCard(view);
+	DrawVirusTotalCard(view);
+	DrawSubmissionCard(view);
+	DrawWithdrawalCard(view);
+
+	// a fixed height: while the dialog fits itself to what it holds, the body asks for the room a finished check
+	// takes, so the check that ends later scrolls inside instead of growing the window (#8)
+	const float room = ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y * 2.f;
+	const float used = ImGui::GetCursorPosY() - top;
+	const float want = _min(XUI::Pt(kBodyPt), room);
+	if (used < want)
+		ImGui::Dummy(ImVec2(0.f, want - used));
+
+	const bool running = stRunning == view.state;
+	const bool signed_in = EditorGithub::asNone != s_AccountSource;
+	u32 blocks = 0;
+	LPCSTR first_block = nullptr;
+	for (const SFinding& f : view.check.findings)
+		if (lvBlock == f.level)
+		{
+			if (!blocks) first_block = f.text.c_str();
+			++blocks;
+		}
+	const bool ready = view.check.done && !view.check.blocking && signed_in && !running;
+	LPCSTR why = running ? "A Mod Browser job is running." : !signed_in ? "Sign in to GitHub first: Publish Release." :
+		!view.check.done ? "Check the requirements first." : first_block ? first_block : "Every requirement above has to be met.";
+	const xr_string status = !running && view.check.done && blocks ?
+		NqUtil::Format("%u %s to fix", blocks, blocks == 1 ? "requirement" : "requirements") : xr_string();
+	if (XUI::BeginDialogFooter(status.empty() ? nullptr : status.c_str(), XUI::Tone::Warning))
+	{
+		// the stage on the left, in what the buttons leave; the job's Stop is the first button, named after the job
+		if (running)
+		{
+			XUI::FooterBusy(view.stage.empty() ? "Working..." : view.stage.c_str());
+			static const LPCSTR kStopLabels[] = { "Stop Checking", "Stop Scanning", "Stop Submitting", "Stop Refreshing",
+				"Stop Withdrawing" };
+			const u32 which = jbVt == view.job ? 1 : jbSubmit == view.job ? 2 : jbSubmission == view.job ? 3 : jbWithdraw == view.job ? 4 : 0;
+			const bool stopping = s_Cancel.Cancelled();
+			if (XUI::Button(kStopLabels[which], XUI::Kind::Secondary, !stopping, "Stopping at the next step.", kStopLabels, 5))
+				s_Cancel.Cancel();
+			if (!stopping)
+				XUI::Tip("Stops the job at its next step: nothing more is sent. What already reached GitHub or VirusTotal stays there.");
+		}
+		// the scan is part of the submission, and the button says so while a report is missing; its width stays
+		static const LPCSTR kSubmitLabels[] = { "Scan and Submit", "Scan and Update", "Update Submission", "Submit" };
+		const bool update = view.submission.number && view.submission.state == "open";
+		const bool scan = !VtSettled(view.virustotal);
+		LPCSTR label = update ? (scan ? kSubmitLabels[1] : kSubmitLabels[2]) : (scan ? kSubmitLabels[0] : kSubmitLabels[3]);
+		if (XUI::Button(label, XUI::Kind::Primary, ready, why, kSubmitLabels, 4))
+			StartFromUI(jbSubmit);
+		if (ready)
+			XUI::Tip("Checks everything again and scans the packages on VirusTotal - required: uploading what it does not know and waiting "
+				"for the report - then opens the submission, or updates the open one. Nothing is sent without a report of every package.");
+		if (running)
+		{
+			if (XUI::DialogButton("Hide", XUI::Kind::Secondary, true))
+				s_Want = false;
+			XUI::Tip("The job goes on. Mod > Submit to Mod Browser brings this window back.");
+		}
+		else if (XUI::DialogButton("Close", XUI::Kind::Secondary))
+			s_Want = false;
+	}
+	DrawWithdrawSheet(view);
+	XUI::EndDialog();
 }
 } // namespace
 
@@ -1561,14 +1715,17 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	// puts the withdrawal's question over it - only a click in it withdraws anything
 	else if (0 == xr_strcmp(action, "show"))
 	{
-		s_HideRequested = false;
 		if (!s_Want) Request();
 		char confirm[16] = {};
 		XFinedMCP::GetArg(raw, "confirm", confirm, sizeof(confirm));
 		if (confirm[0] && 0 != xr_strcmp(confirm, "withdraw")) { ErrorJson(out, "confirm: withdraw expected"); return; }
 		s_WantWithdraw = 0 == xr_strcmp(confirm, "withdraw");
 	}
-	else if (0 == xr_strcmp(action, "hide"))			s_HideRequested = s_Want;
+	else if (0 == xr_strcmp(action, "hide"))
+	{
+		s_Want = false;
+		s_WantWithdraw = false;
+	}
 	else
 	{
 		// withdraw asks nothing here: the caller decided, and the bridge marks the call destructive

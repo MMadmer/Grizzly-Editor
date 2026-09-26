@@ -43,6 +43,24 @@ public:
 	CStatTimer	TEST2;				// debug counter
 	CStatTimer	TEST3;				// debug counter
 
+	// What the last scene pass counted, read by the viewport's stats pill: the pass resets the counters themselves.
+	struct SShown
+	{
+		float	fps = 0.f;
+		float	render_fps = 0.f;
+		float	tps = 0.f;				// millions of triangles a second
+		u32		verts = 0;
+		u32		polys = 0;
+		u32		calls = 0;
+		u32		lights_scene = 0;
+		u32		lights_total = 0;
+		float	skeletons_ms = 0.f;
+		u32		skeletons = 0;
+		float	skinning_ms = 0.f;
+	};
+	SShown		Shown;
+
+	// closes the frame's timers and counters into Shown; the font draws nothing any more (the pill does)
 	virtual void	Show		(CGameFont* font);
 
 	CEStats	();

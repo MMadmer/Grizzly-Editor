@@ -169,7 +169,7 @@ namespace ChoseEvents
             s_SelGhost = VisualDrawsNothing(item->name.c_str());
             if (s_SelGhost)
                 PHelper().CreateCaption(info_items, "Ghost",
-                    "painted with glow_ghost - INVISIBLE in game (stash volume)");
+                    "Drawn with glow_ghost: invisible in the game (a stash volume)");
             ::Render->model_Delete(visual, TRUE);
         }
         g_bRendering = saved_rendering;
@@ -185,12 +185,12 @@ namespace ChoseEvents
     static bool      s_VisualThumbFailed = false;
     // A ghost renders as an empty square - truthful and unreadable. Paint a
     // proportioned silhouette instead: the model exists, it just has no pixels.
-    // The accent is hardcoded: this header also compiles into editor tools
-    // that do not link XrEUI, where the theme lives.
+    // Pixels are 0xAARRGGBB; the colours are the theme's (canvas, accent).
     void   MakeGhostThumb(U32Vec& px, float w_over_h)
     {
         const int   S = THUMB_WIDTH;
-        const u32   bg = 0xFF17161A, line = 0xFF7971BD, faint = 0x407971BD;
+        const u32   accent = XFinedTheme::Rgb(XFinedTheme::ColorToken::Accent);
+        const u32   bg = 0xFF000000u | XFinedTheme::Rgb(XFinedTheme::ColorToken::Canvas), line = 0xFF000000u | accent, faint = 0x40000000u | accent;
         px.assign(size_t(S) * S, bg);
         float aspect = w_over_h;
         if (!(aspect > 0.f))    aspect = 1.f;
@@ -361,7 +361,7 @@ namespace ChoseEvents
     {
         string64 	str;
         u32 		i = 0;
-        PHelper().CreateCaption(info_items, "", "used in groups");
+        PHelper().CreateCaption(info_items, "Used in Groups", "");
         for (PS::PGDIt G = ::RImplementation.PSLibrary.FirstPGD(); G != ::RImplementation.PSLibrary.LastPGD(); ++G)
         {
             PS::CPGDef* def = (*G);
@@ -382,7 +382,7 @@ namespace ChoseEvents
     {
         string64 	str;
         u32 		i = 0;
-        PHelper().CreateCaption(info_items, "", "using effects");
+        PHelper().CreateCaption(info_items, "Effects", "");
         for (PS::PGDIt G = ::RImplementation.PSLibrary.FirstPGD(); G != ::RImplementation.PSLibrary.LastPGD(); G++)
         {
             PS::CPGDef* def = (*G);
@@ -517,23 +517,7 @@ namespace ChoseEvents
 
 void FillChooseEvents()
 {
-    {
-        ref_texture texture_null;
-        texture_null.create("ed\\ed_nodata");
-        texture_null->Load();
-#if defined(USE_DX11)
-        // ImGui binds a shader resource view; surface_get() gives the resource
-        // behind it, which the backend cannot bind. The AddRef still keeps the
-        // view alive after the local ref_texture goes out of scope.
-        VERIFY(texture_null->get_SRView());
-        texture_null->get_SRView()->AddRef();
-        UIChooseForm::SetNullTexture(texture_null->get_SRView());
-#else
-        VERIFY(texture_null->surface_get());
-        texture_null->surface_get()->AddRef();
-        UIChooseForm::SetNullTexture(texture_null->surface_get());
-#endif
-    }
+    // no ed\ed_nodata picture: an item without a thumbnail gets the chooser's own icon square (UIChooseForm::DrawInfo)
     UIChooseForm::AppendEvents(smSoundSource, "Select Sound Source", ChoseEvents::FillSoundSource, ChoseEvents::SelectSoundSource, 0, ChoseEvents::CloseSoundSource, 0);
     UIChooseForm::AppendEvents(smSoundEnv, "Select Sound Environment", ChoseEvents::FillSoundEnv, 0, 0, 0, 0);
     UIChooseForm::AppendEvents(smObject, "Select Library Object", ChoseEvents::FillObject, ChoseEvents::SelectObject, ChoseEvents::UpdateObjectTHM, 0, 0);

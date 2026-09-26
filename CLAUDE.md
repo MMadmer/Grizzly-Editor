@@ -53,18 +53,28 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   the editor redraws on demand and a background one draws nothing at all, so an
   answer given at once showed the frame from BEFORE the caller's last commands -
   and because no UI pass ran, a scroll or a selection asked for over MCP was not
-  even applied. Anything that must be looked at from outside needs an MCP way to
-  get into view (`quest_view` scroll / `action_split` / `vars_split`).
-- **A modal lives in the editor's own window.** Multi-viewports are on (a panel
-  may be dragged out), and ImGui gives any window whose rect leaves the main
-  viewport - or that opens while it is minimized - a platform window of its
-  own, which no screenshot holds: the capture mirrors the main swap chain. Seen
-  live as a dimmed editor with no dialog - a modal grown past the editor's
-  bottom, or opened where a stale `level_imgui.ini` put it. So
-  `BeginPopupModal` (imgui.cpp, `XFined Editor:`) pins every modal to the main
-  viewport and moves it back inside its work area; a taller one scrolls.
-  `screenshot_editor` answers `modal` (the dialog on top, its rect in the
-  picture) and `outside` (the windows the picture does not hold).
+  even applied. `ui_list`, `ui_audit` and `titlebar_info` read frames too and are
+  held the same way (`IsShot`). `quest_view`, `pda_preview`, `preview_model` and
+  `texture_preview` apply at once and, when their answer is `pending`, are held
+  for the frames that show it and read again with `answer_only` (`FollowsFrames`):
+  one call, raw socket included. Only the ACTIVE tab is drawn, so a picture shows
+  that tab: anything that must be looked at from outside needs an MCP way into
+  view (`ui_tab` / `ui_panel` / `ui_drawer` / `ui_dialog` / `ui_popup` / `ui_scroll`,
+  the openers, `quest_view` panes / `action_split` / `vars_split`).
+- **A modal lives in the editor's own window.** Multi-viewports are OFF unless
+  Preferences > General > Allow Panels Outside the Window (`[ui] floating_panels`,
+  takes a restart) is on; `outside` is empty then. With them on, ImGui gives any
+  window whose rect leaves the main viewport - or that opens while it is
+  minimized - a platform window of its own, which no screenshot holds: the
+  capture mirrors the main swap chain. Seen live as a dimmed editor with no
+  dialog - a modal grown past the editor's bottom, or opened where a stale
+  `level_imgui.ini` put it. So `BeginPopupModal` (imgui.cpp, `XFined Editor:`)
+  pins every modal to the main viewport, moves it back inside its work area,
+  centres it again when that area changes and never sizes it past it (a taller
+  one scrolls) - whatever the preference says. `screenshot_editor` answers
+  `active_tab`, `busy`, `dpi`, `modal` (the dialog on top: `title`, `id` - a kit
+  dialog's `dlg.<name>` -, its rect in the picture) and `outside` (the windows the
+  picture does not hold).
 - **A minimized editor is pictured the way it looks restored.** It draws only
   when a screenshot asks, and ImGui draws nothing of a minimized viewport: the
   picture was one flat colour. `XrUIManager::NewPlatformFrame` tells ImGui the
@@ -77,8 +87,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   Initialize`): QA editors no longer come up over the author's work.
 - QA: `tools/qa/test_mod_catalog.py` F saves the Submit window far below the
   editor, then minimizes the editor, and each time wants the window in the
-  picture - `modal` inside it and more than a flat fill there (the PNG is
-  decoded); the layout and preferences files come back byte for byte.
+  picture - `modal` inside it, centred, and more than a flat fill there (the PNG
+  is decoded); Submit is a kit dialog (`NoSavedSettings`), so the stale layout
+  entry is ignored rather than corrected, and its height must not move while the
+  check runs. The layout and preferences files come back byte for byte.
 
 ## Startup
 
@@ -106,10 +118,127 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The Per-Monitor V2 opt-in happens ONCE, in `EditorStartup::DpiScale()`,
   because the splash exists before the editor window and awareness cannot be
   changed after the first window.
+- The fonts load as a stage of their own (`Loading fonts`: segoeui, seguisb,
+  CascadiaMono); a frame drawn before it loads them itself.
 
-## Project browser
+## Editor UI (UI 2)
 
-- A right click on a tile: **Show in Explorer** and **Delete...**. A tile whose
+- **The contract is `docs/UI_DESIGN.md`.** A UI change is a change of that
+  document first; it names every surface, size, colour and MCP answer.
+- **The kit (`XUI`, `XrEUI/XrUIKit.h`) is the only way to draw UI.** Colours are
+  theme tokens (`XFinedTheme::U32` / `Vec4`, `XUI::ToneColor`), sizes are pt
+  (`XUI::Pt` / `Em`); DPI enters in ONE function, `XUI::SetDpi`, so a size in px is
+  right at one scale only. `tools/qa/lint_ui_units.py` fails raw px, colour
+  literals and a shortcut drawn by `ImGui::MenuItem` (use `XUI::MenuItem`: keycaps
+  of what is bound NOW); a line that really means it says `// ui-units: ok <why>`.
+  xrCore's `FLT_MIN` is `-FLT_MAX`: `SetNextItemWidth(-FLT_MIN)` asks for infinity -
+  pass `GetContentRegionAvail().x`. A widget the kit lacks starts as
+  `XUI_Local<Name>` in its file and moves into the kit when a second surface wants
+  it (UI_DESIGN.md section 8 lists what is still local).
+- **Icons are `XUI::Icon` vector glyphs** (`XrUIIcons`: a 16-unit grid, built
+  once, only scaled), `IconName` their MCP name; the 20 pt logo is the only bitmap
+  left. `-iconsheet` shows them all.
+- **The shell (`XrUIShell`) owns the window.** Every asset editor is a full-window
+  major tab (`XUI::Shell::Open`, `DocDesc`): Level is tab 1 and never closes; a
+  quest / behaviour graph is `quest:<rel>` / `beh:<rel>`; `pda`, `model`, `texture`
+  switch to a new target; `characters`, `mod_settings`, `world_rules`, `releases`,
+  `preferences` and the three libraries are singletons. Only the active tab is
+  drawn - Level behind another keeps its dockspace alive (`KeepAliveOnly`) and
+  renders no scene (`screenshot_viewport` forces a pass). Each tab has its toolbar
+  row (always ending in Build Mod, Publish Release, Releases), the status bar
+  carries the drawers' buttons, the last log line worth reading, the error and
+  warning counts since the project opened and the tasks / rebuild chips. The
+  Content Browser and the Output Log also open as drawers over any tab
+  (Ctrl+Space, Ctrl+\`), one at a time; another tab coming up closes it.
+- A project's tabs live in `<project>\temp\session.ltx` and come back lazily (a
+  placeholder until activated; "File not found" / `missing` when the file is
+  gone). Level has two size classes, **Wide** (1400 x 640 pt and up: browser and
+  log docked) and **Compact** (drawers only); crossing one rebuilds the layout
+  unless the author customized it (`[ui] level_layout_custom`). `[ui]
+  layout_version` other than 2 skips `level_imgui.ini` once - no migration.
+- **Keys, first taker wins:** a text field, the shell's chords (Ctrl+Shift+P,
+  Ctrl+(Shift+)Tab, Ctrl+F4, Ctrl+Space, Ctrl+\`, Ctrl+S, F11), the tab's
+  `shortcut()`, then the scene's bindings - only while `SceneKeysAllowed()` (Level
+  active, nothing modal, no key-owning panel focused). `BlockShortCuts` is gone:
+  Delete or Ctrl+D in a document can never reach the scene.
+- **Dialogs are `Title###dlg.<name>`** (no "XFined Editor - " prefix): modal,
+  `NoSavedSettings`, pinned and centred, S/M/L/XL, Enter = default, Esc cancels, a
+  question raised inside one is a sheet of it. Who answers a question (the kit's
+  `Confirm` / `UnsavedPrompt` and `ELog.DlgMsg` alike): **`FromMcp()`** - the caller
+  decided: `Confirm` is Yes and the action runs before the reply, losing data needs
+  `save=` / `discard=` or the command answers `{error:"unsaved", dirty}`, an ELog
+  box answers as under -nodlg; **`Unattended()`** (-nodlg) - the logged answers
+  (`~ [dlg suppressed]` for a No); otherwise the dialog opens and `then` runs on a
+  later frame. ELog errors and notes are queued Notices once the UI draws. Builds
+  started from the UI report in the one `XUI::Result` dialog; MCP builds answer
+  JSON only.
+- **`EditorUiContract.h` is the ONE place for a constant QA pins** - tile range,
+  panel / drawer / dialog window names, document kinds, popups, menus, card menu
+  labels. The code that draws it reads it from there, MCP `ui_contract` answers
+  it, and QA reads `ui_contract` instead of hardcoding a title.
+- **MCP drives all of it** without a mouse: `ui_list`, `ui_tab` (+ `ui_tab_discard`),
+  `ui_panel`, `ui_drawer`, `ui_dialog`, `ui_popup` (to look at, never to act),
+  `ui_scroll`, `ui_split`, `ui_audit` (what a frame cut short or let escape),
+  `ui_scale` (tests only, never saved), `ui_contract`, `window_control`
+  (+ `window_close_discard`), `project_close` (+ `project_close_discard`),
+  `titlebar_info`, `reset_layout`, `preferences`, `shortcuts`. Openers bring their
+  tab up in the same call, reads never switch tabs, answers give px with a `dpi`
+  and take pt. Unsaved work is lost ONLY through the three `*_discard` bridge
+  tools (`destructiveHint`); every other path refuses with `unsaved`.
+- The libraries are tabs too (Libraries menu, MCP `library`). The Texture Library
+  reads the `.tga` sources of `$textures$` (rawdata\textures); Check New Textures
+  turns a library tab without unsaved changes into New Textures (from `$import$`)
+  and the finished import brings the library back. An empty library says what it
+  reads (rawdata\sounds, gamedata\lanims.xr). The Detail Object list is the L
+  dialog `dlg.detail_objects`.
+- Gone for good: the Object List (Scene > Find in World Outliner focuses the
+  Outliner's search), the Minimap Editor, the `ed\bar` toolbar bitmaps,
+  `spectrum.*`, `rawdata/level_imgui_default.ini`. Viewport stats are off by default
+  and a Mono pill over the viewport - nothing is printed into the render target
+  (the Rebuild chip says what NEED REBUILD said). The render target grows in 64 px
+  buckets; whatever reads it back crops to the render size.
+- QA (each on a COPY, the ini files back byte for byte):
+  `tools/qa/test_ui_shell.py` (the frame, the caption hit test, tabs, drawers,
+  panels, dialogs, size classes, menus, the palette), `test_ui_tour.py` (the 35
+  audit issues at 1707x912 / 1.5 and 1280x720 / 1.0; `--before` shoots and never
+  fails), `lint_ui_units.py`, `test_graph_ui.py` (Frame All readable, panes,
+  splits, minimap, content-sized nodes), `test_previews.py` (model, texture,
+  libraries), `test_properties.py` (Details, Level Settings, choosers,
+  Preferences, shortcuts; needs the Escape scene).
+
+## The Start page (project browser)
+
+- With no project open the work area is the Start page (`Start Page###start_page`,
+  `XUI::BeginPage`) - a page, not a modal, so `screenshot_editor` answers `modal:
+  null` there. Left the New Project form (Location, Name with its rule as the hint,
+  Create - MCP `project_create`) and Open Folder...; right a search, a Last Opened /
+  Name sort (`_projects.ini [browser] sort`) and 232 x 184 pt cards: the preview
+  cropped to the card, the name on a row of its own with the ... menu, the path
+  with a start ellipsis (two cards of one name keep the differing parent folder
+  whole in the path line), a Missing / Not a project badge. The caption shows no
+  menus on it.
+- Link Game and Recover Unsaved Scene are M cards on the same page
+  (`XUI::BeginPageCard` / `CardFooter`): Link Game - Close Project | Link; Recovery -
+  Discard... (GhostDanger, a Confirm naming the snapshot's time and the older
+  snapshots) | Restore (the default). The caption shows no menus while Recovery
+  owns the page (`EditorRecovery::OfferPending`).
+- **preview.png is a pass of its own** (`EditorProject::CapturePreview`): the open
+  scene rendered once more from the viewport's camera, at its size, into a target
+  of its own - no grid, pivot, selection, gizmo, axis triad, stats or captions (the
+  level editor hides the selection and the gizmo for it, `SetPreviewScope` from
+  `EditorRecovery::Tick`). Never inside the UI pass, never during Play in Editor. A
+  close that clears the scene takes it BEFORE the clear (Switch Project - deferred
+  out of the UI pass for it -, `project_close`); `Close()` takes it for a scene
+  still up (the editor quitting). A picture of nothing (`ShowsNoScene`) keeps the
+  last good one; a card whose preview.png is such a frame draws the placeholder.
+- project.ltx `[project] last_scene` is project-relative and written by `Close()`
+  alone (a project that never had the key keeps not having it). An absolute path
+  counts only inside the project, so a copied project never opens - and then
+  Ctrl+S-saves into - the original's scene.
+- Import Base Scene is an M kit dialog (`dlg.import_base_scene`) with a search; it
+  reads the library (and which scenes the project holds) once.
+- A card's ... button (or a right click): **Show in Explorer** and **Delete...**
+  (in the error colour). A card whose
   folder is gone, or holds no project.ltx / mod.ltx any more, stays on the list
   (a drive that is not plugged in is not a project nobody wants), veiled, opens
   nothing, and its menu offers **Remove from List** instead - no disk work, no
@@ -139,15 +268,18 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The confirmation names what disappears - the project, its folder, files,
   folders and size, the git repository (`.git`, the whole history) and
   `releases\` when present, "Deleted for good - this cannot be undone." -
-  Cancel the default, Enter and Escape cancel. It is drawn INSIDE the browser's
-  own modal (a modal opened beside it would close it) and counts once, when it
-  opens. A tile that leaves the list hands its preview to `s_DeadPreviews`,
-  released on the next frame: the frame being drawn may still hold it.
-- MCP: `project_reveal` (`dry_run` opens nothing), `project_delete` (asks
-  nothing; the bridge tool carries `destructiveHint`), `project_forget`,
-  `project_browser_menu show=menu|confirm|none` (to look at, never to act).
-  QA: `tools/qa/test_project_browser.py [--shots <dir>]` works on throw-away
-  projects in a temp folder only and restores `_projects.ini` byte for byte.
+  Cancel the default, Enter and Escape cancel. It is the top-level kit dialog
+  `Delete Project###dlg.delete_project` (M; Delete is Danger), counts once, when
+  it opens, and a project that opens under it (MCP `open_project`) takes it down.
+  A card that leaves the list hands its preview to `s_DeadPreviews`, released on
+  the next frame: the frame being drawn may still hold it.
+- MCP: `project_create`, `project_reveal` (`dry_run` opens nothing),
+  `project_delete` (asks nothing; the bridge tool carries `destructiveHint`),
+  `project_forget`, `project_browser_menu show=menu|confirm|none` (to look at,
+  never to act; `search=` / `sort=` change what the page shows and `cards` answers
+  it, `preview` per card). QA: `tools/qa/test_project_browser.py [--shots <dir>]`
+  works on throw-away projects in a temp folder only and restores `_projects.ini`
+  byte for byte.
 
 ## Game modes
 
@@ -227,7 +359,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
     project path (a folder takes everything below it) or a pattern (no slash = a
     name at any depth, `*.psd`; with one = a path, `docs/*.md`). Set from the
     browser (Exclude from Build / Include in Build, the tile is veiled and says
-    why on hover), the Manifest window's list, MCP `mod_exclude` /
+    why on hover), the Mod Settings tab's Build Contents page, MCP `mod_exclude` /
     `mod_set_manifest exclude=`. It lives in mod.ltx so it travels with the
     repository (the game ignores the section, like `target`);
   - links (junctions, symlinks): not followed - one may point at the project;
@@ -243,6 +375,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   passed by - reaches the result dialog ("Not shipped: ..."), `mod_export`,
   `mod_package` and the release dialog. A rule that would take out a file the
   build generates (mode registration, character files) refuses the build.
+- Builds started from the UI report in the one kit Result dialog (`XUI::Result`:
+  `dlg.build_result`, `dlg.export_result`, `dlg.package_result`, `dlg.bake_result`);
+  MCP builds answer JSON only and never open it. The clean build's refusal is a
+  second question, `dlg.clean_target`, naming up to ten of the files it would
+  delete, Cancel the default.
 - The clean build empties the target first, so a target that is a link, or that
   is/holds/sits in the project, is refused BEFORE a folder of it is created
   (real paths, `GetFinalPathNameByHandle`); `WipeTree` removes a link without
@@ -315,6 +452,20 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   release's files under a reused tag for minutes - seen live - while any
   published `v<version>[-rN]` still means "this version is out"; a latest release that carries another
   module's descriptor is refused, because this release would hide it.
+- **The Publish Release dialog** (L) only SHOWS the module: its Module section (Name,
+  Repository, Version, Requires Game, Author Key) is read-only - Mod Settings edits
+  the first ones, Requires Game is the linked game's version (MCP `requires_game=`
+  names another), a locked key asks for its password in its row (the same
+  `EditorCatalog::DrawKeyLine` as Package Release's). The dialog never writes
+  `mod.ltx`. It reads the repository's releases as it opens (`ui_dialog open
+  id=publish_release` starts the read, `mod_releases action=status` follows it) and
+  lists a version that is already out - `v<version>` or `v<version>-rN` published -
+  as a problem before the click, with Open Mod Settings and Open Releases; Publish
+  stays off until the read ends, and a read that fails is only a note (GitHub
+  checks again). Every problem is listed at its top. It closes when the job starts:
+  the progress is `Publishing Release###dlg.publish_progress` (Stop Publishing,
+  Hide) and the toolbar's Publish button, whose label never changes with the job
+  (the state is in its tip); the result is the kit's Result dialog.
 - **Publish Release scans a listed module's release first** (`ScanFirst`, the same
   `EditorVirusTotal::Scan` Submit runs): after packaging and BEFORE anything is created
   on GitHub it reads the catalog index, and a module the index lists has its packages
@@ -329,18 +480,24 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   can tell whether the module is listed - and no key publishes with a note. The job's
   state is `scanning` meanwhile, and `mod_publish` answers `virustotal` `{state,
   packages}` (`none` = no scan needed).
-- **Releases** (toolbar, Mod > Manage Releases) / `mod_releases` lists what the
-  repository holds, drafts included, edits the title and the notes of a release
+- **Releases** (a tab of its own: toolbar, Mod > Releases, `ui_tab open
+  kind=releases`) / `mod_releases` lists what the repository holds, drafts
+  included, in a sortable table (Tag, Title, State, Published in local time, Files
+  "3 files · 15 KB") with the selected release's details beside it (`mod_releases
+  action=select`, `show=edit` puts `dlg.edit_release` up to look at). Delete...
+  (GhostDanger in the details toolbar, the row's context menu in the error colour,
+  Del) asks through the kit's Confirm. It edits the title and the notes of a release
   (`EditorGithub::EditRelease` always sends `make_latest` with the mark's
   current place - GitHub's default for an edit would move Latest onto the
   edited release, and Latest is what players are served), and deletes one
   release together with its
   git tag - the release FIRST, the tag second: a published release whose tag
   vanishes first turns into a draft instead of going away. A draft owns no tag,
-  so none is touched for it. GitHub keeps no copy. The window therefore names the
+  so none is touched for it. GitHub keeps no copy. The question therefore names the
   release, its files and the tag, says what players get instead when it is the
   latest one, and keeps Cancel as the default; the MCP path asks nothing and
-  never opens a window of the editor. A permission prompt, where one is wanted,
+  never opens a window of the editor. A failure is a banner sentence naming what
+  failed ("The releases could not be read: ..."); `mod_releases` `error` stays raw. A permission prompt, where one is wanted,
   belongs to the caller: the bridge exposes the deletion as a tool of its own
   (`xfined_mod_release_delete`, MCP `destructiveHint`) so that a client can ask
   on exactly that call, and an unattended agent still runs straight through.
@@ -385,8 +542,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   change both or neither.
 - `[module] thumbnail` / `tags`: the editor makes `thumbnail.dds` at the module root
   (the middle square, 256 x 256, DXT1 - DXT5 with transparency -, every mip level)
-  from any picture; Mod > Edit Manifest keeps a chosen picture in `temp\` until
-  Save, and Remove deletes only that editor-made file. Tags come from the fixed
+  from any picture; Mod Settings (Mod Browser page) keeps a chosen picture in
+  `temp\` until Save, and Remove deletes only that editor-made file. Tags come from the fixed
   vocabulary (`TagVocabulary`), picked, never typed. MCP: `mod_set_manifest
   thumbnail=<picture> tags=<list>`.
 - **Mod > Submit to Mod Browser** / `mod_catalog`: one job at a time on a worker,
@@ -399,6 +556,19 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   then submits (below); `submission` follows it: its state, the catalog's verdict,
   and whether the index lists the id with this key.
   A submission is public from its first second; the window says so under Submit.
+- **Submit is the L kit dialog `Submit to Mod Browser###dlg.catalog_submit`**, of a
+  fixed height (what the check finds scrolls inside; its height never moves while a
+  job runs), cards (`XUI::BeginCard`): Author Key; Requirements (failures first,
+  the met ones folded under "Met (n)", VirusTotal findings left out); "VirusTotal
+  (required)" - the one place the verdict appears, its open state in the Required
+  tone, never grey; [Scan] [Open Report] [Forget VirusTotal Key] (never the author
+  key); Submission ("Submitting opens a public issue at github.com/<catalog> from
+  <login>."; "Not submitted yet." only once GitHub answered - until then it looks
+  the submission up, `submission.known`); Withdrawal. Every card button is
+  Secondary. While a job runs the footer shows `XUI::FooterBusy` (spinner and
+  stage), a Stop button named after the job (Stop Checking, Stop Scanning, Stop
+  Submitting, ...) and Hide; the submit button keeps the width of its widest label
+  ("Scan and Submit", "Scan and Update", "Update Submission", "Submit").
 - **The VirusTotal scan is the author's, and required** (`EditorVirusTotal`, one
   routine for Submit and Publish Release). The catalog NEVER uploads and never waits
   for an analysis: it only LOOKS packages up by SHA-256 - one VirusTotal does not know
@@ -417,9 +587,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   from; a package without a report - VirusTotal does not know it, is still analysing it,
   did not answer - is `required` (`lvRequired`, orange): a requirement the submission
   meets by itself, so it sets no `blocking`, and NEVER a grey note - an author read the
-  grey dot as "optional" once. The window titles the section "VirusTotal (required)",
-  keeps its "not scanned yet" line in the same colour, and its button reads "Scan and
-  Submit" until every package has a report. `submit` scans after the check and sends only on a report - `clean` / `warn`;
+  grey dot as "optional" once. The dialog keeps its "not scanned yet" line in the
+  Required colour, and its button reads "Scan and Submit" until every package has a
+  report. `submit` scans after the check and sends only on a report - `clean` / `warn`;
   everything else sends nothing and says why, `analysing` / `unavailable` with "submit
   again": VirusTotal answers 404 for a file until its first analysis ends, and the
   catalog refuses a 404 as a package nobody scanned. `mod_catalog` answers `virustotal`
@@ -462,8 +632,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   closed without one (somebody closed it by hand).
 - **The author withdraws a module the same way** (`EditorGithub::CatalogWithdraw`,
   `SCatalogWithdrawal`; job `withdraw`, MCP `mod_catalog action=withdraw`, bridge tool
-  `xfined_mod_catalog_withdraw` with `destructiveHint`; the window's Withdraw... asks
-  once, naming what happens, Cancel the default): an issue `Withdraw <id>` whose body
+  `xfined_mod_catalog_withdraw` with `destructiveHint`; the dialog's Withdraw... - a
+  GhostDanger button - asks once in the sheet `Withdraw from Mod Browser###dlg.catalog_withdraw`
+  (`XUI::BeginSheet`), naming what happens, the Danger Withdraw and Cancel the
+  default; `mod_catalog show confirm=withdraw` puts it up to look at): an issue `Withdraw <id>` whose body
   starts with `<!-- xms-catalog withdrawal -->`, a line for people, a blank line and an
   ```` ```ini ```` block holding `[withdraw]` / `id = <id>`; the account's open one is
   edited, not doubled. Only the account the module was listed from may send it: the
@@ -506,10 +678,13 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 ## Characters (the module's own NPCs)
 
 - One `.npcasset` per character (`EditorCharacters`), declarative Lua like a
-  quest. **Mod → Characters…**, the content browser's **Create → Character**,
-  and `characters_list` / `characters_get` / `characters_write` /
-  `characters_delete` over MCP - the asset is text, so the AI path is the
-  primary one.
+  quest. **Mod → Characters** (a tab: a list, then the form), the content
+  browser's **Add > Character** (toolbar [+ Add] or the empty-space menu), and
+  `characters_list` / `characters_get` / `characters_write` / `characters_delete`
+  / `characters_view` over MCP - the asset is text, so the AI path is the primary
+  one. The tab shows a problem as a sentence under its field (the code stays in
+  MCP and the build); its Delete... is GhostDanger and asks through
+  `dlg.delete_character`.
 - The build (`EditorCharacters::Generate`, called from `EditorMod::Export`)
   turns them into the five files X-Ray needs and **appends** to the game's
   lists: `+files` and `+specific_characters_files` in
@@ -519,7 +694,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   the same. Never generate a whole `system.ltx`, and never patch the game's own
   `npc_profile.xml`: ship OWN files and append their names.
 - **`name` and `bio` carry every language at once** (`SNqValue`: a plain string
-  is rus, a table is keyed by language) and the window edits them side by side,
+  is rus, a table is keyed by language) and the tab edits them side by side,
   one row per language. Generation FALLS BACK - an English install with no
   `eng` string reads the `rus` one - but the FORM must not: it binds to the raw
   stored value (`TextRaw`), or "not set" and "set to the same text" look alike
@@ -566,7 +741,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   kind: `NqInspector::DrawParams` sends only kinds with an `item_list` to the
   item-rows form. `spawn.npc` has rows and goes through the typed editors
   (`DrawNpcList`).
-- **What comes from a list is PICKED, not typed.** In the Characters window
+- **What comes from a list is PICKED, not typed.** In the Characters tab
   `Community` is a combo over the linked game's communities
   (`NqPickers::tCommunity`, under the names the player reads; the monsters' and
   the player's own are left out) and `Base` a combo over the project's other
@@ -609,6 +784,23 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - Quest assets must be readable and writable by an AI as text: `pos` is
   optional, problems are coded, `quest_get` returns an outline; screenshots
   are not part of the workflow.
+- **The graph tab** (a quest or a behaviour graph): the Graph panel (280 pt: the
+  header, Tasks or Roles, Variables under `vars_split`) | the canvas | the Details
+  panel (360 pt: the selected node, the action open under it below
+  `action_split`), with a drawer under them (Problems, Find Results). The panels
+  keep their pt and the canvas takes every resize; under a 400 pt canvas the Graph
+  panel folds to a rail. Their sizes are `[XFinedLayout]` keys `graph.panel_w`,
+  `graph.details_w`, `graph.drawer_h`, `graph.vars_split`, `graph.action_split`
+  (pt / shares, `XUI::SplitterAt`); the old level.ini `quest_*_split` keys are gone,
+  unmigrated. `quest_view` reaches every one of them.
+- **A node's box has one source: `NqLayout::Box`.** The layout pass, the canvas's
+  drawing and hit tests, the minimap and `quest_layout` all read it; a node is 240
+  pt wide and as tall as its header (28), up to 3 "key: value" lines, up to 4
+  action rows ("+N more" after) and its pin names. The canvas scale is
+  `kZoom[level] * XUI::Dpi()`, applied once; Frame All never goes below 0.75 (a
+  title is then 12 px at 100%), and a graph too big for that is framed at 0.75
+  from its trigger. A behaviour graph never says "quest": titles and descriptions
+  go through `NqLook::KindTitle` / `KindDesc`.
 
 - **Removing something that is busy goes through prepare_removal first**
   (game repo, xms_nq_world.script): a behaviour graph holding the NPC drops it, a talk
@@ -624,8 +816,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `docs/nq/NQ_FORMAT.md` §10; what the runtime does about it is the game repo's
   `docs/dead-air/NQ_RUNTIME.md` §15.
 - **A behaviour graph is its own asset, not a quest with a flag**: `.behasset`,
-  header `beh = 1`, its own icon, its own window title, a roles editor where a
-  quest keeps its tasks. The author must never be shown quest machinery here -
+  header `beh = 1`, its own icon, its own tab, a roles editor in the Graph panel
+  where a quest keeps its tasks. The author must never be shown quest machinery here -
   that was the complaint that killed the first design (`type = "scenario"`
   inside a `.nqasset`, 67 of 102 kinds leaking in from the quest side).
 - **The extension is the kind.** No `type` key (an error); the header key has to
@@ -675,7 +867,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   itself (instances come back after `restore_quests`). `heal_applied` re-applies
   a step to an NPC something else took back.
 - A new param type has to be taught in THREE places: the catalog, the editor
-  (`NqCatalog::kTypes` + `NqValidate::CheckParamValue` + an inspector editor in
+  (`NqCatalog::kTypes` + `NqValidate::CheckParamValue` + a Details-panel editor in
   `NqInspector::DrawTyped` - without the last one the value is only editable as
   text), and `canon_value` in the game's `xms_nq_load.script`.
 - The editor reads the catalog of the LINKED GAME; the bundled copy
@@ -695,10 +887,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   (`original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests`; true =
   keep), `levels` they apply on, `player_choice` (the rules the new-game screen offers -
   **three at most**, the screen has three rows; `E202`), the playable `area`, and the
-  transitions that start closed (`locked`, `locked_levels`). Mod > World edits it and
-  saves at once, like Exclude from Build (the manifest is re-read first; windows follow
-  `EditorMod::ManifestGeneration`, never the disk per frame). MCP: `world_get`,
-  `world_set` (`preset=empty` is the one-click empty world), `world_transitions`.
+  transitions that start closed (`locked`, `locked_levels`). Mod > World Rules (a tab)
+  edits it and saves at once, like Exclude from Build (the manifest is re-read first;
+  tabs follow `EditorMod::ManifestGeneration`, never the disk per frame); Empty
+  World... asks through `dlg.empty_world`. MCP: `world_get`, `world_set`
+  (`preset=empty` is the one-click empty world), `world_transitions`, `world_view`.
   Contract: `docs/NQ_ARCHITECTURE.md` §20, the game repo's MODDING.md "World rules".
 - **The game is never written.** The editor READS the linked game's `all.spawn` (levels
   from its game graph, level changers with their level and destination, the game's
@@ -748,7 +941,16 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   cannot run outside the game is shown instead: a stock section as a labelled panel,
   `signal:` / `lua:` as a toast and a line in the action log, the map as the level map of
   `preview.level` with `preview.actor` and `preview.markers`. The tab follows the file
-  (polled, re-read when an agent writes it) and has its own source pane (Apply / Save).
+  (polled, re-read when an agent writes it) unless its Source pane holds edits.
+- The preview tab's toolbar: Save, Revert, Reload | Aspect, Language, Zoom (Fit /
+  100%; `Toolbar::Segmented`, radio items in the overflow) | Reset State | Source,
+  Details. The canvas pans (right / middle drag) and zooms at the mouse (Ctrl+wheel
+  always; over a PDA list or the map the wheel is the game's), F fits. Details
+  (320 pt) holds the file with Use in Module and the tabs Problems, Pages (with the
+  keys), Vars, Log; Source is a bottom split (Cascadia Mono, line numbers, the
+  reader's error line, Apply = Ctrl+Enter). Unsaved Source text is never lost
+  silently: Revert confirms naming the file, close and retarget ask Save / Don't
+  Save / Cancel; MCP answers `unsaved` unless `save=` / `discard=`.
 - The button placement rule (icon alone centred; `align=center` + `valign` not centre
   stacks the icon over the caption; otherwise the icon at 12 and the caption after it)
   is written down in PDA_FORMAT.md and implemented twice - `CUIPdaItem::InitParts` and
@@ -770,7 +972,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `map.spots` (the player and the markers the slot shows); the game's `xms.pda.describe()`
   lists the map slot's real spots (`spot <id> shown <x>,<y> <hint>`) - that is how QA proves
   the player and an order are both on the app's map.
-  The content browser: Create > PDA Interface, `content_create kind=pda`, a PDA icon.
+  The content browser: Add > PDA Interface, `content_create kind=pda`, a PDA icon.
 - QA: `tools/qa/test_pda.py --project <project> [--shots <dir>]` over MCP on a COPY; the
   game's `tools/nq/test_pda_layout.lua` (the reader, headless) and `Run-NqQa.ps1
   -Scenario Pda|PdaControl|PdaModule` (in game, captured).
@@ -781,7 +983,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   everything that loses someone's data: deleting files/folders or scene
   objects, overwriting existing files, clearing the scene, losing unsaved
   edits. The dialog must NAME what disappears (names, counts), not ask "are
-  you sure?"; the safe button is the default (Enter/Escape = cancel).
+  you sure?"; the safe button is the default (Enter/Escape = cancel). That dialog
+  is `XUI::Confirm` (up to ten items, then "and N more", the counts, the Danger
+  button alone filled) or `XUI::UnsavedPrompt`; the button that opens it is
+  `Kind::GhostDanger`, a menu entry `XUI::MenuItem(..., danger)`.
 - Disk deletion is FINAL: `DeleteFile`/`RemoveDirectory`, never the Recycle
   Bin. The editor deletes its own generated files and whole throw-away test
   projects often enough that a bin full of them is a chore of its own; what
@@ -801,7 +1006,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   kind catalog, logs, MCP descriptions, generated files, docs. Russian
   remains only where it is game content the player sees (quest titles,
   dialog phrases, string tables) or fixture data in encoding tests.
-- UI text is short. A label names the thing; details go into the hover hint.
+- UI text is short. A label names the thing (Title Case in grids and on buttons);
+  details go into the hover hint; a message is a sentence for the author, never a
+  bare problem code or a raw WinHTTP number.
 - Check plain pointers with the implicit boolean conversion
   (`if (p)` / `if (!p)`), not by comparing with nullptr.
 - From any ImGui panel's `Draw()` never call anything that redraws the frame
@@ -834,15 +1041,19 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **Every asset kind of the editor's own has its own icon, no exception.** A quest, a
   behaviour graph, a character, a character template and a PDA interface have no picture
   anywhere in the game, so the content browser DRAWS theirs
-  (`EditorAssetIcons`): a handful of rounded rectangles, polylines and dots in
-  a unit square, scaled into whatever rectangle the tile gives. Vector, not a
-  bitmap - the tile slider runs 48..192 and the editor runs at any DPI, and one
-  bitmap would be exact at one of those sizes and blurred at the rest.
+  (`EditorAssetIcons`, through the kit's icon engine: `XUI::Icon::Quest`,
+  `Behaviour`, `Character`, `CharacterTemplate`, `PdaInterface`), scaled into
+  whatever rectangle the tile gives and never above 48 pt. Vector, not a bitmap -
+  tiles are 48..192 pt (View menu, Ctrl+wheel, MCP `tile=`), fitted to their host
+  until a size is picked (`tile_fit`), the docked panel and the Content Drawer keep
+  one each, the list view draws the icon at 18 pt, and the editor runs at any DPI:
+  one bitmap would be exact at one of those sizes and blurred at the rest. Folders
+  and other files without a picture draw vector glyphs too (`XUI::Icon`);
+  `content_browser_selection` names them in `glyphs`.
 - Nothing is recomputed per frame: the geometry of each icon is built ONCE
-  (arcs tessellated then), the polylines go through one shared scratch buffer,
-  and what a file IS costs one read of its first kilobyte, cached per path
-  behind a generation that `Invalidate()` bumps from the browser's `Refresh()`.
-  A tile never touches the disk to draw itself.
+  (arcs tessellated then), and what a file IS costs one read of its first
+  kilobyte, cached per path behind a generation that `Invalidate()` bumps from the
+  browser's `Refresh()`. A tile never touches the disk to draw itself.
 - The kind comes from the extension - `.nqasset`, `.behasset`, `.pdaasset` - and only
   a character is looked INTO (`abstract = true`), so `KindOf` needs a path that
   opens for that one: the browser listing is project-relative and joins the
@@ -854,13 +1065,15 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   every selected own asset mapped to its icon's name (`EditorAssetIcons::Name`).
   QA: `tools/qa/test_asset_icons.py --project <project>` creates one asset of every
   kind on a COPY and wants each tile's icon, plus screenshots at the tile sizes 48
-  and 192 when `--shots` names a folder.
+  and 192 and of the list when `--shots` names a folder.
 - Icons draw in the theme's text colour and go UNDER the selection wash, like
   a thumbnail: a selected tile does not get its own icon palette.
 - A tile caption breaks where a name breaks for a reader - spaces, `_`, `-`, `.`
   and the words of a CamelCase name (`NewBehaviour` -> `New` / `Behaviour`) - and
-  mid-word only when one word is wider than the tile; what still does not fit ends
-  in `...` (`DrawTileCaption`). The tooltip has the whole path.
+  mid-word only when one word is wider than the tile, never right before the
+  extension; a last line that still does not fit keeps the extension and loses the
+  middle of the name (`DrawTileCaption`, reported to `ui_audit` as truncated). The
+  tooltip has the whole path.
 - **These assets go by their NAME alone.** The extension is the kind and the
   icon already says the kind, so a tile's caption, the drag label and the
   inline rename box all leave it out (`EditorAssetIcons::OwnExtension` is the
@@ -875,4 +1088,5 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   action=rename` opens it and the reply's `rename` says what it holds.
 - A new asset kind of the editor's own adds a kind here. Give it a shape that
   says what the thing DOES (a quest is a flow, a behaviour graph is a route), keep it
-  to a few strokes, and check it at 48 and at 192.
+  to a few strokes on the icon engine's 16-unit grid (`XUI::Icon`, UI_DESIGN.md
+  section 3), and check it at 48 and at 192, and in the list.

@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""The project browser's tile menu - Show in Explorer, Delete..., Remove from List - over MCP
-(EditorProject::CheckDelete / DeleteProject), on THROW-AWAY projects in a temp folder only.
+"""The Start page - its project cards, their menu (Show in Explorer, Delete..., Remove from List), the
+Delete Project dialog, the New Project form and the Link Game card - over MCP (EditorProject), on
+THROW-AWAY projects in a temp folder only.
 
 Nothing here touches a folder the test did not make: _projects.ini is replaced for the run by a list
 of the test's own projects (so the editor lists nothing else) and put back byte for byte at the end,
 and every path the test hands the editor lies inside its temp folder.
 
 What it proves:
-  A  the list: every entry is a tile, a gone folder included, each with its state
-  B  the menu and the confirmation on screen, to look at only: the question names what goes (the
-     counts match the deletion), a refusal says why, a gone tile offers Remove from List; nothing
-     is deleted by looking
+  A  the list: every entry is a card, a gone folder included, each with its state
+  S  the page: no modal, nothing escapes its window at UI scale 1.0 and 1.5, Create is off with a
+     reason while the form is empty; two cards of one name name the parent folders that differ, and
+     the name keeps its row whole (the parent sits in the path line); the search filters and the sort
+     orders the cards, and a sort it does not know is refused
+  B  the menu (anchored at the card's ... button) and the confirmation on screen, to look at only:
+     the question names what goes (the counts match the deletion), it is the top-level dialog
+     dlg.delete_project, a refusal says why, a gone card offers Remove from List; nothing is deleted
+     by looking
   C  a deletion: the folder is gone - a read-only file, a read-only folder, a hidden .git and the
      packaged releases with it -, a junction inside goes as a link while the folder it points at
      keeps its files, the entry leaves the list, the answer counts what went
@@ -22,7 +28,15 @@ What it proves:
      a second call finishes the job
   F  Remove from List: refused for a project, done for a folder without one, nothing on disk changes
   G  Show in Explorer: refusals, the folder it resolves, and one real window, closed again
-  H  the open project is refused, and the menu is not offered while a project is open
+  H  the open project is refused, and the menu is not offered while a project is open; a project
+     with no game shows the Link Game card, which is no modal and lets nothing escape
+  N  project_create: refused while a project is open, for a bad name and for a relative location;
+     after project_close it makes the project, opens it and puts it on the list
+  P  a card shows its preview.png; a black one, an empty grey one with stats text, none, or a gone
+     folder get the placeholder
+  L  project.ltx last_scene: an absolute path inside the project comes back below its root; a copy
+     naming the original's scene does not reopen it and forgets it; a project closed before its
+     scene loaded (no game linked) keeps it
   Z  _projects.ini is back byte for byte
 
     python tools/qa/test_project_browser.py [--shots <folder>] [--no-explorer] [--keep]
@@ -46,6 +60,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = ("127.0.0.1", 28016)
 INI = os.path.join(REPO, "_projects.ini")
+# two cards carry this name (S): as long as a real mod's, so a card that cuts it shows
+TWIN = "QaNested-Long-Delivery"
 
 results: list[tuple[bool, str]] = []
 
@@ -122,9 +138,10 @@ class Editor:
                 print("! the editor did not close on its own", flush=True)
 
 
-def shot(folder: str | None, name: str) -> None:
+def shot(folder: str | None, name: str) -> dict:
     """The editor as it looks now. Always taken - it is what makes a background editor draw the frames
-    the answers after it report on -, saved only when --shots names a folder."""
+    the answers after it report on -, saved only when --shots names a folder. The answer comes back
+    (modal, outside) without its picture."""
     pic = mcp("screenshot_editor")
     if folder and pic.get("png_base64"):
         os.makedirs(folder, exist_ok=True)
@@ -134,6 +151,22 @@ def shot(folder: str | None, name: str) -> None:
         print("screenshot: " + path, flush=True)
     elif not pic.get("ok"):
         print("! screenshot %s: %s" % (name, pic.get("error")), flush=True)
+    pic.pop("png_base64", None)
+    return pic
+
+
+def escaped(window: str) -> list:
+    """What the last frame let escape from a window (ui_audit), or the error as the one entry."""
+    audit = mcp("ui_audit", id=window)
+    if not audit.get("ok"):
+        return [audit.get("error", "ui_audit failed")]
+    return audit.get("escaped", [])
+
+
+def cards(state: dict | None = None) -> list:
+    """The Start page's cards as the page draws them: [(lowered forward-slash path, parent), ...]."""
+    data = state or mcp("project_browser_menu")
+    return [(fwd(c.get("path", "")).lower(), c.get("parent", "")) for c in data.get("cards", [])]
 
 
 def fwd(path: str) -> str:
@@ -150,6 +183,50 @@ def write(path: str, text: str) -> int:
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     return os.path.getsize(path)
+
+
+def write_png(path: str, w: int, h: int, pixel) -> None:
+    """A w x h RGB picture, pixel(x, y) -> (r, g, b), with no imaging library."""
+    import struct
+    import zlib
+    rows = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
+                chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def last_scene(project: str) -> str | None:
+    """project.ltx [project] last_scene as written, None when the key is not there."""
+    try:
+        text = open(os.path.join(project, "project.ltx"), encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    section = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            section = line.strip("[]").strip().lower()
+        elif section == "project" and "=" in line and line.split("=", 1)[0].strip().lower() == "last_scene":
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def set_last_scene(project: str, value: str) -> None:
+    """Puts last_scene into project.ltx [project], every other line as it was."""
+    path = os.path.join(project, "project.ltx")
+    lines = open(path, encoding="utf-8", errors="replace").read().splitlines() if os.path.isfile(path) else []
+    lines = [l for l in lines if l.split("=", 1)[0].strip().lower() != "last_scene"]
+    at = next((i + 1 for i, l in enumerate(lines) if l.strip().lower() == "[project]"), None)
+    if at is None:
+        lines, at = lines + ["[project]"], len(lines) + 1
+    lines.insert(at, "last_scene=" + value)
+    with open(path, "w", encoding="utf-8", newline="\r\n") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def set_attributes(path: str, readonly: bool = False, hidden: bool = False) -> None:
@@ -225,7 +302,7 @@ class Work:
         write(os.path.join(self.p["notproject"], "readme.txt"), "no manifest here\n")
         self.p["outside"] = self.path("QaOutside")
         write(os.path.join(self.p["outside"], "mod.ltx"), mod("qa_outside"))
-        self.p["nested"] = self.path("QaNested")
+        self.p["nested"] = self.path(TWIN)
         write(os.path.join(self.p["nested"], "mod.ltx"), mod("qa_nested"))
         write(os.path.join(self.p["nested"], "inner", "mod.ltx"), mod("qa_inner"))
         write(os.path.join(self.p["nested"], "inner", "gamedata", "x.ltx"), "[x]\n")
@@ -256,18 +333,33 @@ class Work:
         write(os.path.join(self.p["locked"], "other.txt"), "goes at once\n")
         write(os.path.join(self.p["locked"], "data", "locked.bin"), "held open by the test\n")
 
-        # H: the project that is opened
-        self.p["open"] = self.path("QaOpen")
+        # P: card pictures - a scene, a black frame, an empty grey one with stats text over it
+        write_png(os.path.join(self.p["nested"], "preview.png"), 320, 180,
+                  lambda x, y: ((x * 7) & 255, (y * 5) & 255, ((x + y) * 3) & 255))
+        write_png(os.path.join(self.p["locked"], "preview.png"), 320, 180, lambda x, y: (0, 0, 0))
+        write_png(os.path.join(self.p["holdsgame"], "preview.png"), 320, 180,
+                  lambda x, y: (230, 230, 230) if x < 30 and 10 < y < 40 and x % 3 else (83, 83, 83))
+
+        # H: the project that is opened - named like the nested one, so the two cards are twins (S). L: its last
+        # scene is named by an absolute path inside it, the way an older editor wrote it
+        self.p["open"] = self.path("Twin", TWIN)
         write(os.path.join(self.p["open"], "mod.ltx"), mod("qa_open"))
+        self.p["scene"] = os.path.join(self.p["open"], "rawdata", "levels", "qa_scene.level")
+        write(self.p["scene"], "; a scene the editor never loads here: no game is linked\n")
+        write(os.path.join(self.p["open"], "project.ltx"), "[project]\nname = %s\nlast_scene = %s\n" % (TWIN, self.p["scene"]))
+        # N: made by project_create; nothing is there before
+        self.p["created"] = self.path("QaCreated")
 
         for p in self.p.values():
             assert self.inside(p), p
 
+    # the list as _projects.ini hands it to the editor: Last Opened order
+    order = ["delete", "notproject", "nested", "junction", "gone", "missing", "holdsgame", "ingame", "linker",
+             "locked", "open"]
+
     def ini(self) -> bytes:
-        order = ["delete", "notproject", "nested", "junction", "gone", "missing", "holdsgame", "ingame", "linker",
-                 "locked", "open"]
-        lines = ["[recent]"] + ["p%d=%s" % (i, self.p[k]) for i, k in enumerate(order)]
-        lines += ["p%d=" % i for i in range(len(order), 12)]
+        lines = ["[recent]"] + ["p%d=%s" % (i, self.p[k]) for i, k in enumerate(self.order)]
+        lines += ["p%d=" % i for i in range(len(self.order), 12)]
         lines += ["create_parent=%s" % self.root, ""]
         return "\r\n".join(lines).encode("ascii")
 
@@ -317,7 +409,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
     p = w.p
     try:
         st = ed.start()
-        check(not st.get("project_active"), "A the editor starts on the project browser", short(st))
+        check(not st.get("project_active"), "A the editor starts on the Start page", short(st))
 
         # ------------------------------------------------------------------ A: the list
         lst = listed()
@@ -328,10 +420,60 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                          "open": "project"},
               "A every entry is listed with its state, gone folders included", json.dumps(states))
 
+        # ------------------------------------------------------------------ S: the page itself
+        listed_order = [fwd(p[k]).lower() for k in w.order]
+        pic = shot(shots, "start_page")
+        check(pic.get("ok") and pic.get("modal") is None and not pic.get("outside"),
+              "S the Start page is a page, not a modal, and nothing lives outside the window", short(pic))
+        page = mcp("project_browser_menu")
+        check(page.get("ok") and page.get("browser") and [c for c, _ in cards(page)] == listed_order,
+              "S a card per entry, in the order of the list (Last Opened)", short(page))
+        parents = dict(cards(page))
+        check(parents.get(fwd(p["nested"]).lower()) == os.path.basename(w.root) and
+              parents.get(fwd(p["open"]).lower()) == "Twin" and
+              not parents.get(fwd(p["locked"]).lower()),
+              "S two cards of one name name the parent folders that differ; others name none", json.dumps(parents))
+        pictures = {fwd(c.get("path", "")).lower(): c.get("preview") for c in page.get("cards", [])}
+        pictures = {k: pictures.get(fwd(p[k]).lower()) for k in ("nested", "locked", "holdsgame", "open", "gone")}
+        check(pictures == {"nested": "picture", "locked": "placeholder", "holdsgame": "placeholder",
+                           "open": "placeholder", "gone": "placeholder"},
+              "P a card shows its preview; a black or empty grey one, none, or a gone folder gets the placeholder",
+              json.dumps(pictures))
+        audit = mcp("ui_audit", id="start_page")
+        create = [c for c in audit.get("controls", []) if c.get("label") == "Create"]
+        check(audit.get("ok") and create and not create[0].get("enabled") and create[0].get("why"),
+              "S Create is off while the form has no name, and says why", short(audit))
+        before = mcp("ui_scale").get("ui_scale")
+        for scale in (1.0, 1.5):
+            mcp("ui_scale", value=scale)
+            shot(shots, "start_page_%g" % scale)
+            esc = escaped("start_page")
+            check(not esc, "S nothing escapes the Start page at UI scale %g" % scale, json.dumps(esc)[:600])
+            # the twins' parent lives in the path line: it no longer takes the name's room
+            cut = [t for t in mcp("ui_audit", id="start_page").get("truncated", []) if t.get("label") == TWIN]
+            check(not cut, "S a card's name has its row to itself: the twins' long name is whole at UI scale %g" % scale,
+                  json.dumps(cut)[:600])
+        if before:
+            mcp("ui_scale", value=before)
+
+        found = cards(mcp("project_browser_menu", search="qaLOCKED"))
+        check([c for c, _ in found] == [fwd(p["locked"]).lower()], "S the search ignores case", json.dumps(found))
+        found = cards(mcp("project_browser_menu", search="twin " + TWIN.lower()))
+        check([c for c, _ in found] == [fwd(p["open"]).lower()], "S every word of the search must match", json.dumps(found))
+        shot(shots, "start_page_search")
+        mcp("project_browser_menu", search="")
+        found = [c for c, _ in cards(mcp("project_browser_menu", sort="name"))]
+        by_name = sorted(listed_order, key=lambda path: path.rstrip("/").rsplit("/", 1)[-1])
+        check(found == by_name, "S sort by Name orders the cards by name", json.dumps(found))
+        bad = mcp("project_browser_menu", sort="size")
+        check(not bad.get("ok"), "S a sort it does not know is refused", short(bad))
+        found = [c for c, _ in cards(mcp("project_browser_menu", sort="recent"))]
+        check(found == listed_order, "S sort by Last Opened puts the list's order back", json.dumps(found))
+
         # ------------------------------------------------------------------ B: to look at, never to act
         m = mcp("project_browser_menu", show="menu", path=p["delete"])
         check(m.get("ok") and m.get("browser") and same((m.get("menu") or {}).get("path", ""), p["delete"]),
-              "B show=menu asks for the tile's menu", short(m))
+              "B show=menu asks for the card's menu", short(m))
         shot(shots, "menu")
         m = mcp("project_browser_menu")
         menu = m.get("menu") or {}
@@ -356,7 +498,11 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               (e["files"], e["folders"], e["links"], e["bytes"]) and c.get("git") and c.get("releases") and
               (c.get("release_files"), c.get("release_bytes")) == (e["release_files"], e["release_bytes"]),
               "B the confirmation counts what goes: files, folders, the link, bytes, .git, releases", short(m))
-        shot(shots, "confirm")
+        pic = shot(shots, "confirm")
+        check((pic.get("modal") or {}).get("id") == "dlg.delete_project" and c.get("id") == "dlg.delete_project",
+              "B the confirmation is the top-level dialog dlg.delete_project", short(pic))
+        esc = escaped("dlg.delete_project")
+        check(not esc, "B nothing escapes the confirmation", json.dumps(esc)[:600])
         m = mcp("project_browser_menu")
         check((m.get("confirm") or {}).get("shown") and m.get("menu") is None,
               "B the confirmation is drawn, and the menu is down", short(m))
@@ -370,13 +516,13 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         bad = mcp("project_browser_menu", show="confirm", path=p["gone"])
         check(not bad.get("ok"), "B a gone folder has no confirmation: Remove from List asks nothing", short(bad))
         bad = mcp("project_browser_menu", show="menu", path=p["outside"])
-        check(not bad.get("ok"), "B a folder that is not a tile has no menu", short(bad))
+        check(not bad.get("ok"), "B a folder that is not a card has no menu", short(bad))
         bad = mcp("project_browser_menu", show="everything")
         check(not bad.get("ok"), "B an unknown show is refused", short(bad))
         m = mcp("project_browser_menu", show="none")
-        shot(shots, "browser")
+        pic = shot(shots, "browser")
         m = mcp("project_browser_menu")
-        check(m.get("ok") and m.get("menu") is None and m.get("confirm") is None,
+        check(m.get("ok") and m.get("menu") is None and m.get("confirm") is None and pic.get("modal") is None,
               "B show=none takes both down", short(m))
         check(os.path.isfile(os.path.join(p["delete"], "mod.ltx")) and os.path.isfile(os.path.join(p["nested"], "mod.ltx")),
               "B looking deleted nothing")
@@ -395,7 +541,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "C the junction went as a link: the folder it pointed at keeps its files")
         check(fwd(p["delete"]).lower() not in listed(), "C the entry left the list")
         bad = mcp("project_browser_menu", show="menu", path=p["delete"])
-        check(not bad.get("ok"), "C and its tile is gone", short(bad))
+        check(not bad.get("ok"), "C and its card is gone", short(bad))
 
         # ------------------------------------------------------------------ D: refusals
         def refused(key_or_path: str, words: str, what: str, extra=None) -> dict:
@@ -487,9 +633,53 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
               "H the open project is refused", short(d))
         m = mcp("project_browser_menu", show="menu", path=p["nested"])
         check(not m.get("ok") and "not on screen" in m.get("error", ""),
-              "H no tile menu while a project is open", short(m))
+              "H no card menu while a project is open", short(m))
         m = mcp("project_browser_menu")
         check(m.get("ok") and m.get("browser") is False, "H the report still answers, browser:false", short(m))
+        link = mcp("game_link")
+        st = mcp("state")
+        pic = shot(shots, "link_game")
+        check(not link.get("linked") and st.get("start_page") and pic.get("modal") is None,
+              "H a project with no game shows the Link Game card, which is no modal", short(pic))
+        esc = escaped("start_page")
+        check(not esc, "H nothing escapes the Link Game card", json.dumps(esc)[:600])
+
+        # ------------------------------------------------------------------ N: New Project over MCP
+        n = mcp("project_create", parent=w.root, name="QaCreated")
+        check(not n.get("ok") and "project is open" in n.get("error", "") and not os.path.exists(p["created"]),
+              "N project_create is refused while a project is open", short(n))
+        c = mcp("project_close")
+        check(c.get("ok") and c.get("start_page"), "N project_close goes back to the Start page", short(c))
+        n = mcp("project_create", parent=w.root, name="Qa Created!")
+        check(not n.get("ok") and "Latin letters" in n.get("error", ""), "N a name with spaces or signs is refused", short(n))
+        n = mcp("project_create", parent="relative/folder", name="QaCreated")
+        check(not n.get("ok") and "full path" in n.get("error", "") and not os.path.exists(p["created"]),
+              "N a relative location is refused", short(n))
+        n = mcp("project_create", parent=w.root, name="QaCreated")
+        st = mcp("state")
+        check(n.get("ok") and same(n.get("path", ""), p["created"]) and n.get("existed") is False and
+              os.path.isfile(os.path.join(p["created"], "mod.ltx")) and st.get("project_active"),
+              "N project_create makes the project and opens it", short(n))
+        check(fwd(p["created"]).lower() in listed(), "N and it is on the list")
+
+        # ------------------------------------------------------------------ L: the last scene
+        rel = "rawdata\\levels\\qa_scene.level"
+        got = last_scene(p["open"])
+        check(got is not None and got.replace("/", "\\").lower() == rel,
+              "L a scene named by an absolute path inside the project is written back below its root", repr(got))
+        c = mcp("project_close")
+        # a copy of a project names the original's scene: it is never opened, and forgotten on close
+        set_last_scene(p["created"], p["scene"])
+        o = mcp("open_project", path=p["created"])
+        c = mcp("project_close")
+        got = last_scene(p["created"])
+        check(o.get("ok") and c.get("ok") and got == "",
+              "L a scene outside the project is not reopened: last_scene is left empty", repr(got))
+        o = mcp("open_project", path=p["open"])
+        c = mcp("project_close")
+        got = last_scene(p["open"])
+        check(o.get("ok") and c.get("ok") and got is not None and got.replace("/", "\\").lower() == rel,
+              "L a project closed before its scene loaded keeps it", repr(got))
     finally:
         ed.close()
 

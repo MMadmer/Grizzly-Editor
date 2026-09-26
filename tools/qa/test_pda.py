@@ -15,6 +15,10 @@ What it proves:
      an error
   F  deleting the used layout clears [pda]; Create > PDA Interface makes NewPda
   G  the editor's bundled reader and sheet are the game's, byte for byte
+  H  the tab: its panes, Details tab and zoom over MCP, each answer holding the frame it asked for (panes,
+     scale, device gap, screen edges - no second call); text put into the Source pane stays
+     unsaved (the file untouched) and is never dropped without save= or discard=; a text that
+     does not parse shows its line; nothing of the tab spills out of its window (ui_audit)
 
     python tools/qa/test_pda.py --project D:\\XFinedProjects\\Test [--shots <folder>]
 """
@@ -122,15 +126,108 @@ def visible(state: dict, **match) -> list[dict]:
 
 
 def shot(folder: str | None, name: str) -> None:
+    # a screenshot is also how a frame gets drawn in a minimized editor: the tab lays itself out in it
+    pic = mcp("screenshot_editor")
     if not folder:
         return
-    pic = mcp("screenshot_editor")
     if pic.get("png_base64"):
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, name + ".png")
         with open(path, "wb") as f:
             f.write(base64.b64decode(pic["png_base64"]))
         print("screenshot: " + path, flush=True)
+
+
+def escaped_in_tab() -> list | None:
+    """What the kit saw spill out of the work area's windows last frame; None when ui_audit is not there."""
+    a = mcp("ui_audit")
+    if not isinstance(a.get("escaped"), list):
+        return None
+    return [e for e in a["escaped"] if "doc.host" in str(e.get("window", ""))]
+
+
+def run_tab(project: str, fixture: str, shots: str | None) -> None:
+    courier = os.path.join(project, "pda", "courier.pdaasset")
+    before = sha(courier)
+    p = mcp("pda_preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems", zoom="fit")
+    panes = p.get("panes", {})
+    check(p.get("ok") and p.get("active") and panes.get("source") and panes.get("details") and panes.get("tab") == "problems"
+          and p.get("zoom") == "fit", "H open: the pda tab is up with Source, Details on Problems, fit", json.dumps(p)[:300])
+    # an opener answers the frames it owed, not the state before them (docs/UI_DESIGN.md, section 7)
+    check(p.get("pending") is False and 200 <= panes.get("details_width", 0) <= 480 and 100 <= panes.get("source_height", 0) <= 400
+          and p.get("device_gap", -1) >= 15.0 and p.get("screen_edges"), "H the opener's answer is the frame it opened: panes, gap, edges",
+          json.dumps({k: p.get(k) for k in ("pending", "panes", "device_gap", "screen_edges")}))
+    shot(shots, "pda_tab_both")
+    p = mcp("pda_preview", action="state")
+    panes = p.get("panes", {})
+    check(200 <= panes.get("details_width", 0) <= 480 and 100 <= panes.get("source_height", 0) <= 400,
+          "H Details and Source keep their pt size", json.dumps(panes))
+    esc = escaped_in_tab()
+    if esc is not None:
+        check(esc == [], "H nothing of the tab escapes its window", json.dumps(esc)[:400])
+    for tab in ("pages", "vars", "log"):
+        p = mcp("pda_preview", action="state", tab=tab)
+        check(p.get("panes", {}).get("tab") == tab, "H the Details tab " + tab, json.dumps(p.get("panes")))
+        shot(shots, "pda_tab_" + tab)
+    bad = mcp("pda_preview", action="state", tab="nope")
+    check(not bad.get("ok"), "H an unknown Details tab is refused", json.dumps(bad)[:200])
+    p = mcp("pda_preview", action="state", zoom="100")
+    check(p.get("zoom") == 1, "H zoom 100", json.dumps(p.get("zoom")))
+    # the same answer already holds the frame drawn at 100%
+    check(abs(p.get("scale", 0) - 1.0) < 0.01, "H at 100% the device is drawn pixel for pixel", str(p.get("scale")))
+    shot(shots, "pda_tab_100")
+    p = mcp("pda_preview", action="state", zoom="fit", pane="details")
+    check(p.get("zoom") == "fit" and not p.get("panes", {}).get("source"), "H back to fit, Source hidden")
+    # Fit fits the device - texture, screen and close button - with a 16 pt margin, on both aspects
+    for aspect in ("4:3", "16:9"):
+        # the aspect's own answer is the frame drawn at it
+        p = mcp("pda_preview", action="aspect", aspect=aspect)
+        check(15.0 <= p.get("device_gap", -1) <= 64.0, "H " + aspect + " fit keeps the device clear of the canvas' edges",
+              str(p.get("device_gap")))
+        # the device's art runs past the game's screen: the edges that crop it are drawn - its bottom on every aspect
+        edges = p.get("screen_edges", [])
+        check("bottom" in edges and (aspect == "16:9" or len(edges) == 4), "H " + aspect + " the screen's edge is drawn where it crops the device",
+              json.dumps(edges))
+        shot(shots, "pda_tab_fit_" + aspect.replace(":", "x"))
+    mcp("pda_preview", action="aspect", aspect="4:3")
+
+    # the Source pane: an applied text is shown, unsaved, and the file stays as it is
+    edited = fixture.replace('title = "Orders"', 'title = "Queue"', 1)
+    check(edited != fixture, "H the fixture takes an edit")
+    p = mcp("pda_preview", action="apply", text=edited)
+    titles = [pg.get("title") for pg in mcp("pda_get", path="pda/courier.pdaasset").get("layout", {}).get("pages", [])]
+    check(p.get("ok") and p.get("text_dirty") is True and sha(courier) == before and "Queue" not in titles,
+          "H apply shows the text unsaved and leaves the file alone", json.dumps(p)[:200])
+    shot(shots, "pda_tab_dirty")
+    other = mcp("pda_preview", action="open", path="pda/qa_app.pdaasset")
+    check(not other.get("ok") and other.get("error") == "unsaved" and other.get("dirty"),
+          "H opening another layout with unsaved text answers unsaved", json.dumps(other)[:200])
+    closed = mcp("pda_preview", action="close")
+    check(not closed.get("ok") and closed.get("error") == "unsaved", "H so does closing the tab", json.dumps(closed)[:200])
+    p = mcp("pda_preview", action="reload")
+    check(p.get("ok") and p.get("text_dirty") is True, "H reload keeps the Source pane's edits", json.dumps(p)[:200])
+    p = mcp("pda_preview", action="revert")
+    check(p.get("ok") and p.get("text_dirty") is False and sha(courier) == before, "H revert drops them, the file untouched")
+    mcp("pda_preview", action="apply", text=edited)
+    p = mcp("pda_preview", action="open", path="pda/qa_app.pdaasset", discard=True)
+    check(p.get("ok") and p.get("state", {}).get("path", "").endswith("qa_app.pdaasset") and sha(courier) == before,
+          "H discard=true opens the other layout and drops the edits", json.dumps(p)[:200])
+    p = mcp("pda_preview", action="open", path="pda/courier.pdaasset", pane="both", tab="problems")
+    check(p.get("ok") and p.get("text_dirty") is False, "H and the first layout comes back clean", json.dumps(p)[:200])
+
+    # a text that does not parse: its line, and nothing written
+    broken = fixture.replace('title = "Orders"', 'title = = "Orders"', 1)
+    p = mcp("pda_preview", action="apply", text=broken)
+    check(p.get("ok") and p.get("state", {}).get("read") is False and p.get("read_line", 0) > 0 and sha(courier) == before,
+          "H a text that does not parse shows its line and writes nothing", json.dumps(p)[:300])
+    shot(shots, "pda_tab_error")
+    p = mcp("pda_preview", action="save", pane="details")
+    check(p.get("ok") and p.get("text_dirty") is False, "H save writes the pane's text", json.dumps(p)[:200])
+    check(sha(courier) != before, "H and the file has it")
+    mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
+    time.sleep(1.5)
+    p = mcp("pda_preview", action="state")
+    check(p.get("state", {}).get("read") is True and p.get("text_dirty") is False, "H the fixture is back", json.dumps(p)[:200])
 
 
 def run(project: str, shots: str | None) -> None:
@@ -288,6 +385,9 @@ def run(project: str, shots: str | None) -> None:
         check(not [s for s in spots if s.get("hint") == "Far"], "D a marker outside the slot is not listed", json.dumps(spots))
         mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
         time.sleep(1.5)
+
+        # ------------------------------------------------------------ H: the tab
+        run_tab(project, fixture, shots)
 
         # ------------------------------------------------------------ E: the build
         ex = mcp("mod_export", target=out_dir)

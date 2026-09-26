@@ -486,7 +486,8 @@ void  CLevelTool::Render()
 
 void CLevelTool::ShowObjectList()
 {
- //if (pObjectListForm) pObjectListForm->ShowObjectList();
+	// the Object List is retired: the command finds an object in the World Outliner's search instead
+	UIWorldOutliner::Focus(true);
 }
 
 
@@ -605,7 +606,7 @@ void CLevelTool::RunGame(const char* Params)
 
 	string_path CommandLine;
 	xr_sprintf(CommandLine, "Xr3DA.exe %s", Params);
-	Msg("~ Run Game %s.\n", CommandLine);
+	Msg("* Run Game %s.\n", CommandLine);
 	// Start the child process. 
 	if (!CreateProcess(NULL,   // No module name (use command line)
 		CommandLine,        // Command line
@@ -641,7 +642,7 @@ void CLevelTool::RunXrLC()
 
 	string_path CommandLine;
 	xr_sprintf(CommandLine, "XrLC.exe -f %s", Scene->m_LevelOp.m_FNLevelPath.c_str());
-	Msg("~ Run %s.\n", CommandLine);
+	Msg("* Run %s.\n", CommandLine);
 	// Start the child process. 
 	if (!CreateProcess(NULL,   // No module name (use command line)
 		CommandLine,        // Command line
@@ -676,7 +677,7 @@ void CLevelTool::RunXrDO()
 
 	string_path CommandLine;
 	xr_sprintf(CommandLine, "xrDO_light.exe -f %s", Scene->m_LevelOp.m_FNLevelPath.c_str());
-	Msg("~ Run %s.\n", CommandLine);
+	Msg("* Run %s.\n", CommandLine);
 	// Start the child process. 
 	if (!CreateProcess(NULL,   // No module name (use command line)
 		CommandLine,        // Command line
@@ -711,7 +712,7 @@ void CLevelTool::RunXrAI_Spawn(bool current_level)
 
 	string_path CommandLine;
 	xr_sprintf(CommandLine, "xrAI.exe -no_separator_check -s %s -out all", current_level? Scene->m_LevelOp.m_FNLevelPath.c_str():"");
-	Msg("~ Run %s.\n", CommandLine);
+	Msg("* Run %s.\n", CommandLine);
 	// Start the child process. 
 	if (!CreateProcess(NULL,   // No module name (use command line)
 		CommandLine,        // Command line
@@ -746,7 +747,7 @@ void CLevelTool::RunXrAI_AIMap(bool draw)
 
 	string_path CommandLine;
 	xr_sprintf(CommandLine, "xrAI.exe -f %s %s", Scene->m_LevelOp.m_FNLevelPath.c_str(), draw?"-draft":"");
-	Msg("~ Run %s.\n", CommandLine);
+	Msg("* Run %s.\n", CommandLine);
 	// Start the child process. 
 	if (!CreateProcess(NULL,   // No module name (use command line)
 		CommandLine,        // Command line
@@ -781,7 +782,7 @@ void CLevelTool::RunXrAI_Verify()
 
 	string_path CommandLine;
 	xr_sprintf(CommandLine, "xrAI.exe -verify %s", Scene->m_LevelOp.m_FNLevelPath.c_str());
-	Msg("~ Run %s.\n", CommandLine);
+	Msg("* Run %s.\n", CommandLine);
 	// Start the child process. 
 	if (!CreateProcess(NULL,   // No module name (use command line)
 		CommandLine,        // Command line

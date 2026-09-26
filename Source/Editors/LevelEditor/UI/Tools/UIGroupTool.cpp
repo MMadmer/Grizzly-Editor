@@ -3,7 +3,8 @@
 UIGroupTool::UIGroupTool()
 {
 	m_ChooseGroup = false;
-	m_selPercent = true;
+	m_selPercent = 50.f;
+	m_AddPercent = false;
 }
 
 UIGroupTool::~UIGroupTool()
@@ -11,84 +12,82 @@ UIGroupTool::~UIGroupTool()
 }
 void UIGroupTool::Draw()
 {
-	ImGui::Separator();
+	if (XUI::Section("Commands"))
 	{
-		ImGui::BulletText("Commands", ImGuiDir_Left);
-		if (ImGui::BeginPopupContextItem("Commands", 1))
+		const XUI_LocalButton buttons[] =
 		{
-			if (ImGui::MenuItem("Group"))
-			{
-				ParentTools->GroupObjects();
-			}
-			if (ImGui::MenuItem("Ungroup"))
-			{
-				ParentTools->UngroupObjects();
-			}
-			ImGui::Separator();
-			if (ImGui::MenuItem("Make Thumbnail"))
-			{
-				ParentTools->MakeThumbnail();
-			}
-			ImGui::Separator();
-			if (ImGui::MenuItem("Save As ..."))
-			{
-				ParentTools->SaveSelectedObject();
-			}
-			ImGui::EndPopup();
+			{ "Group",			"Make one group of the selected objects" },
+			{ "Ungroup",		"Break the selected groups into their objects" },
+			{ "Make Thumbnail",	"Take the library thumbnail of the selected group from the viewport" },
+			{ "Save As...",		"Save the selected group to the library" },
+		};
+		switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+		{
+		case 0: ParentTools->GroupObjects(); break;
+		case 1: ParentTools->UngroupObjects(); break;
+		case 2: ParentTools->MakeThumbnail(); break;
+		case 3: ParentTools->SaveSelectedObject(); break;
+		default: break;
 		}
-		ImGui::OpenPopupOnItemClick("Commands", 0);
+		XUI::EndSection();
 	}
-	ImGui::Separator();
-	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-	if (ImGui::TreeNode("Current Object"))
+	if (XUI::Section("Group to Add"))
 	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+		if (XUI::BeginPropertyGrid("tools"))
 		{
-			ImGui::SetNextItemWidth(-1);
-			float size = float(ImGui::CalcItemWidth());
+			if (XUI::PropertyRow("Current", "The library group the viewport adds"))
 			{
-				if (ImGui::Button("Select ...", ImVec2(size / 2, 0))) 
+				if (XUI::PickField("##current", m_Current.c_str(), false) == XUI::PickBrowse)
 				{
 					UIChooseForm::SelectItem(smGroup, 1, m_Current.c_str());
 					m_ChooseGroup = true;
 				}
-				ImGui::SameLine(0, 2);
-				if (ImGui::Button("Reload Refs", ImVec2(size / 2, 0))) 
-				{
-					ParentTools->ReloadRefsSelectedObject();
-					//bForceInitListBox = TRUE;
-					Tools->UpdateProperties(TRUE);
-				}
 			}
-			ImGui::Text("Current:%s", m_Current.c_str()? m_Current.c_str():"");
+			XUI::EndPropertyGrid();
 		}
-		ImGui::Separator();
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-		ImGui::TreePop();
-	}
-	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-	if (ImGui::TreeNode("Reference Select"))
-	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+		const XUI_LocalButton buttons[] =
 		{
-			ImGui::Text("Select by Current: "); ImGui::SameLine(); if (ImGui::Button(" +")) { SelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button(" -")) { SelByRefObject(false); }
-			ImGui::Text("Select by Selected:"); ImGui::SameLine(); if (ImGui::Button("=%")) { MultiSelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button("+%")) { MultiSelByRefObject(false); } ImGui::SameLine(); ImGui::SetNextItemWidth(-ImGui::GetTextLineHeight() - 8); ImGui::DragFloat("%", &m_selPercent, 1, 0, 100, "%.1f");
-		}
-		ImGui::Separator();
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-		ImGui::TreePop();
-	}
-	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-	if (ImGui::TreeNode("Pivot Alignment"))
-	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+			{ "Reload References", "Read the library groups of the selected groups again" },
+		};
+		if (XUI_LocalButtonFlow(buttons, _countof(buttons)) == 0)
 		{
-			if(ImGui::Button("Center To Group", ImVec2(-1, 0))) { ParentTools->CenterToGroup(); }
-			if (ImGui::Button("Align To Object...", ImVec2(-1, 0))) { ParentTools->AlignToObject(); }
+			ParentTools->ReloadRefsSelectedObject();
+			Tools->UpdateProperties(TRUE);
 		}
-		ImGui::Separator();
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-		ImGui::TreePop();
+		XUI::EndSection();
+	}
+	if (XUI::Section("Select by Reference"))
+	{
+		const bool picked = !m_Current.empty();
+		const XUI_LocalButton same[] =
+		{
+			{ "Select Same",	"Select every visible group made from the current library group", picked, "Pick the current group first" },
+			{ "Deselect Same",	"Deselect every group made from the current library group", picked, "Pick the current group first" },
+		};
+		switch (XUI_LocalButtonFlow(same, _countof(same)))
+		{
+		case 0: SelByRefObject(true); break;
+		case 1: SelByRefObject(false); break;
+		default: break;
+		}
+		if (XUI_LocalPercentSelect(&m_selPercent, &m_AddPercent))
+			MultiSelByRefObject(!m_AddPercent);
+		XUI::EndSection();
+	}
+	if (XUI::Section("Pivot"))
+	{
+		const XUI_LocalButton buttons[] =
+		{
+			{ "Center to Group",	"Move the pivot of the selected group to its centre" },
+			{ "Align to Object...",	"Move the pivot of the selected group to one of its objects" },
+		};
+		switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+		{
+		case 0: ParentTools->CenterToGroup(); break;
+		case 1: ParentTools->AlignToObject(); break;
+		default: break;
+		}
+		XUI::EndSection();
 	}
 }
 
@@ -150,7 +149,7 @@ void UIGroupTool::SelByRefObject(bool flag)
 {
 	ObjectList objlist;
 	
-	if (m_Current.empty()) {
+	if (!m_Current.empty()) {
 		LPCSTR N = m_Current.c_str();
 		ObjectIt _F = Scene->FirstObj(OBJCLASS_GROUP);
 		ObjectIt _E = Scene->LastObj(OBJCLASS_GROUP);

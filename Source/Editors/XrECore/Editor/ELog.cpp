@@ -45,11 +45,26 @@ static bool no_dialogs()
 	return !!strstr(GetCommandLine(), "-nodlg");
 }
 
+// An error or a note is one of the UI's own notices once there is a UI to draw it - queued, it never stalls the
+// frame. Before the first frame, and while a blocking job holds the frame, it stays the native box. Over MCP and
+// under -nodlg nobody reads a box: the log has it.
+static bool AsNotice(TMsgDlgType mt, const char* text)
+{
+	if (mtConfirmation == mt || no_dialogs() || XUI::FromMcp())
+		return false;
+	if (!UI || !UI->m_bReady || !ImGui::GetCurrentContext() || ImGui::GetFrameCount() < 2 || UI->ProgressOperationActive())
+		return false;
+	XUI::Notice(mtError == mt ? XUI::Tone::Error : XUI::Tone::Info, mtError == mt ? "Error" : "Information", text);
+	return true;
+}
+
 inline TMsgDlgButtons MessageDlg(const char*text, TMsgDlgType mt, int btn)
 {
-	if (no_dialogs())
+	// the caller over MCP has decided: never a box that stalls the request, today's -nodlg answers instead
+	if (no_dialogs() || XUI::FromMcp())
 	{
-		Msg("! [dlg suppressed] %s%s", text,
+		// the box's own level: an error counts as one, a question answered for the caller is a warning, a note is a note
+		Msg("%s [dlg suppressed] %s%s", mtError == mt ? "!" : mtConfirmation == mt ? "~" : "*", text,
 			(mtConfirmation == mt) ? "  -> auto-answer: No" : "");
 		return (mtConfirmation == mt) ? mrNo : mrOK;
 	}
@@ -130,7 +145,12 @@ int CLog::DlgMsg (TMsgDlgType mt, int btn, LPCSTR _Format, ...)
 	vsprintf( buf, _Format, l );
 
 	int res=0;
-#if 1 
+	if (AsNotice(mt, buf))
+	{
+		in_use = false;
+		return mrOK;
+	}
+#if 1
     ExecCommand(COMMAND_RENDER_FOCUS);
 
     res=MessageDlg(buf, mt, btn);
@@ -158,7 +178,7 @@ int CLog::DlgMsg (TMsgDlgType mt, int btn, LPCSTR _Format, ...)
 	}
 #endif
 
-    Msg(mt, buf);
+    Msg(mt, "%s", buf);
 
     in_use = false;
 
@@ -181,6 +201,11 @@ int CLog::DlgMsg (TMsgDlgType mt, LPCSTR _Format, ...)
 	vsprintf( buf, _Format, l );
 
     int res=0;
+	if (AsNotice(mt, buf))
+	{
+		in_use = false;
+		return mrOK;
+	}
 #if 1
     ExecCommand(COMMAND_RENDER_FOCUS);
 
@@ -211,7 +236,7 @@ int CLog::DlgMsg (TMsgDlgType mt, LPCSTR _Format, ...)
 	}
 #endif
 
-    Msg(mt,buf);
+    Msg(mt, "%s", buf);
 
     in_use = false;
     
@@ -226,7 +251,10 @@ void CLog::Msg(TMsgDlgType mt, LPCSTR _Format, ...)
 	vsprintf( buf, _Format, l );
 
 #if 1
-    UILogForm::AddMessage(xr_string(buf));
+	// the editor's own report: its type is its level (the text carries no "! " of its own)
+	const UILogForm::Level level = mtError == mt ? UILogForm::Level::Error
+		: mtInformation == mt || mtConfirmation == mt ? UILogForm::Level::Info : UILogForm::Level::ByPrefix;
+	UILogForm::AddMessage(xr_string(buf), level, true);
 #endif
 #ifdef _MAX_EXPORT
 	EConsole.print(mt,buf);
@@ -238,7 +266,17 @@ void CLog::Msg(TMsgDlgType mt, LPCSTR _Format, ...)
 #endif
 
 	::LogExecCB = FALSE;
-    ::Msg		(buf);
+    ::Msg		("%s", buf);
 	::LogExecCB	= TRUE;
+}
+
+void CLog::Progress(LPCSTR text)
+{
+	if (!text || !*text)
+		return;
+	UILogForm::AddMessage(xr_string(text), UILogForm::Level::Info, false);
+	::LogExecCB = FALSE;
+	::Msg("%s", text);
+	::LogExecCB = TRUE;
 }
 //----------------------------------------------------

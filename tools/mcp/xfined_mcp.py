@@ -68,22 +68,29 @@ TOOLS = [
     },
     {
         "name": "xfined_state",
-        "description": "Editor state: active project (name/path), opened scene, FPS.",
+        "description": "Editor state: active project (name/path), opened scene, FPS; the major tabs (active_tab, tabs "
+                       "[{id, kind, label, path, dirty, active, missing}]), the dialog on top ({title, id} or null), "
+                       "start_page (true while the Start page is up: no project, or no linked game) and ui_scale.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "xfined_screenshot_viewport",
         "description": "Screenshot of the 3D viewport render target (PNG image). The editor draws fresh frames "
-                       "before answering, so a camera move or an edit sent just before it is in the picture.",
+                       "before answering, so a camera move or an edit sent just before it is in the picture - also while "
+                       "another tab (a quest, a preview) covers the Level tab: the scene gets a pass of its own.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "xfined_screenshot_editor",
-        "description": "Screenshot of the whole editor window incl. all panels (PNG), read from the presented frame, "
-                       "so it works even when the editor is covered by other windows or minimized. One call: the editor holds the "
-                       "request until its frames are presented, so the picture shows the state after every command sent before it. "
-                       "Dialogs are always inside the picture, and the reply names the one on top; a panel the user dragged out "
-                       "of the editor into a window of its own is not, and the reply names such windows.",
+        "description": "Screenshot of the editor window (PNG): the caption with the major tabs, the active tab and "
+                       "its panels, the status bar, an open drawer and any dialog - read from the presented frame, so it "
+                       "works even when the editor is covered by other windows or minimized. One call: the editor holds the "
+                       "request until its frames are presented, so the picture shows the state after every command sent "
+                       "before it; no tooltip is drawn into it, and it works during a blocking job (the busy frame). The "
+                       "reply names active_tab, busy, dpi and the dialog on top (modal {title, id, x, y, w, h} in px; id is "
+                       "its dlg.<name>); a panel dragged out of the editor into a window of its own is not in the picture, "
+                       "and 'outside' names such windows. Only the ACTIVE tab is drawn: bring another one up with "
+                       "xfined_ui_tab first.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -106,7 +113,8 @@ TOOLS = [
     {
         "name": "xfined_open_project",
         "description": "Open a project by its folder path (closes the current one if different). "
-                       "The project's last scene loads automatically on the next frame.",
+                       "The project's last scene loads automatically on the next frame: the scene it had open, "
+                       "stored project-relative in project.ltx - a copied project never opens the original's scene.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string", "description": "project folder path"}},
@@ -170,13 +178,21 @@ TOOLS = [
     },
     {
         "name": "xfined_project_browser_menu",
-        "description": "Bring the project browser's tile menu or its Delete Project confirmation into view for "
-                       "xfined_screenshot_editor - to look at, never to act: nothing is shown in Explorer, deleted "
-                       "or taken off the list from here. show: 'menu' (the tile's right-click menu), 'confirm' "
-                       "(the confirmation, with what it would delete or why it refuses), 'none' (both go away); "
-                       "without 'show' it only reports. Works while the browser is on screen (no project open). "
-                       "Answers menu {path, shown, state, items [{label, enabled}]} and confirm {shown, view "
-                       "question|refused|result, reason, path, name, files, folders, links, bytes, git, releases, "
+        "description": "Bring a project card's menu on the Start page (the project browser) or its Delete Project "
+                       "confirmation into view for xfined_screenshot_editor - to look at, never to act: nothing is shown "
+                       "in Explorer, deleted or taken off the list from here. show: 'menu' (the card's menu: Show in "
+                       "Explorer, Delete... or Remove from List), 'confirm' (the confirmation - dialog id "
+                       "dlg.delete_project - with what it would delete or why it refuses), 'none' (both go away); "
+                       "without 'show' it only reports. Works while the Start page is up (no project open; 'browser' "
+                       "says so). 'search' (what the page's search field holds; \"\" clears) and 'sort' (recent | name: "
+                       "Last Opened or Name) only change what the page shows - nothing is saved; the answer adds search, "
+                       "sort and cards [{path, name, state, parent, preview}] in the order the page draws them (parent: for "
+                       "two cards of one name, the parent folder that tells them apart; preview: picture when the card "
+                       "shows preview.png, placeholder when it shows the level icon instead - no preview.png, a black or "
+                       "empty grey one, or a folder that is not a project -, not_drawn before the card was first drawn). The menu is anchored at the card's "
+                       "... button; the confirmation is the top-level dialog dlg.delete_project. Answers menu {path, "
+                       "shown, state, items [{label, enabled}]} and confirm {id, shown, "
+                       "view question|refused|result, reason, path, name, files, folders, links, bytes, git, releases, "
                        "release_files, release_bytes, nested, failed}, null when not up; 'shown' turns true once a "
                        "frame drew it - a screenshot draws the frames it needs.",
         "annotations": {"title": "Show the project browser's tile menu or confirmation", "readOnlyHint": True},
@@ -184,7 +200,9 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "show": {"type": "string", "enum": ["menu", "confirm", "none"]},
-                "path": {"type": "string", "description": "the tile's project folder (menu, confirm)"},
+                "path": {"type": "string", "description": "the card's project folder (menu, confirm)"},
+                "search": {"type": "string", "description": "the page's search field; \"\" clears it"},
+                "sort": {"type": "string", "enum": ["recent", "name"]},
             },
         },
     },
@@ -634,19 +652,38 @@ TOOLS = [
     },
     {
         "name": "xfined_pda_preview",
-        "description": "The PDA preview tab: the 2D PDA with the interface in it, drawn with the linked game's textures "
-                       "and fonts, clickable like the game. action: open (opens and focuses the tab - then "
-                       "xfined_screenshot_editor shows it), state (default), click (by 'id' - with 'row' a list's row -, "
+        "description": "The PDA preview tab ('pda', a major tab of its own): the 2D PDA with the interface in it, drawn "
+                       "with the linked game's textures and fonts, clickable like the game. action: open (opens the tab "
+                       "and brings it up at once - then xfined_screenshot_editor shows it; state and the other actions "
+                       "never switch tabs), state (default), click (by 'id' - with 'row' a list's row -, "
                        "by 'n' from state.visible, or a canvas point 'x','y'), page ('page'), key ('key': map|tasks|contacts - what those keys "
                        "open), aspect ('aspect': 4:3|16:9), lang ('lang'), reset (start page, declared vars), reload, "
                        "close. The answer's state holds the page, a stock section when one shows, the vars, the action "
                        "log (signals and lua calls the game would make), every visible item with its CANVAS rect, "
                        "text and actions, and map.bound / map.spots (the preview level's world rect; the player and "
-                       "the preview markers the map slot shows, in canvas units). The tab follows the file: a write "
-                       "through xfined_pda_write shows at once.",
+                       "the preview markers the map slot shows, in canvas units). With any action, 'pane' shows the tab's "
+                       "panes (source | details | both | none), 'tab' picks the Details tab (problems | pages | vars | log) "
+                       "and 'zoom' sets the device's size (fit | 100 | a factor 0.25..4). apply puts 'text' into the Source "
+                       "pane unsaved and shows it (the file is not written); save writes the Source pane to the file. "
+                       "Opening another layout or closing the tab while the Source pane holds unsaved text refuses with "
+                       "error 'unsaved' and the dirty list unless save=true; dropping the text is xfined_ui_tab_discard "
+                       "with id=pda. reload reads the game's textures, fonts and layout reader again and keeps the Source "
+                       "pane's edits. The answer carries active, text_dirty, panes {source, details, tab, details_width, "
+                       "source_height (pt)}, zoom, scale (what the last frame drew at: 1 = the game's 1024x768 pixel for "
+                       "pixel), device_gap (pt between the device and the canvas' nearest edge as the last frame drew it; "
+                       "Fit keeps 16, below 0 = cut), screen_edges (the device's sides that lie on the game's screen edge - "
+                       "top, bottom, left, right: the preview draws that edge there, a little longer than the device, "
+                       "because the device's art runs past the screen) and read_line (the line the reader stopped at, "
+                       "0 when it read the text). The tab follows "
+                       "the file: a write through xfined_pda_write shows at once. The answer is the frame the call asked for: the editor holds it until the tab was drawn, so an opener's panes and zoom need no second call ('pending' is false).",
         "annotations": {"title": "Preview a PDA interface"},
         "inputSchema": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["open", "state", "click", "page", "key", "aspect", "lang", "reset", "reload", "close"]},
+            "action": {"type": "string", "enum": ["open", "state", "click", "page", "key", "aspect", "lang", "reset", "reload", "close", "apply", "save"]},
+            "pane": {"type": "string", "enum": ["source", "details", "both", "none"]},
+            "tab": {"type": "string", "enum": ["problems", "pages", "vars", "log"], "description": "the Details tab (shows Details)"},
+            "text": {"type": "string", "description": "apply: the layout's source text"},
+            "save": {"type": "boolean", "description": "an action that would drop unsaved Source text saves it first"},
+            "zoom": {"type": "string", "description": "fit | 100 | a factor 0.25..4"},
             "path": {"type": "string"},
             "id": {"type": "string"}, "row": {"type": "integer", "description": "with a list's id: its row, 1-based"},
             "n": {"type": "integer"},
@@ -705,12 +742,22 @@ TOOLS = [
                        "'latest' marks the one release the game reads. Reads only; xfined_mod_release_edit changes "
                        "the title and notes of one, xfined_mod_release_delete removes one. The list is fetched on a worker: with wait (default) the bridge follows it to the end, "
                        "otherwise ask again with action='status'. The account comes from where xfined_mod_publish "
-                       "takes it.",
+                       "takes it. The answer also says whether the Releases tab is up (tab) and which release its details "
+                       "show (selected, an id; 0 = none). action='select' with 'tag' or 'id' marks that release from the "
+                       "list as it was last read - nothing reaches GitHub; show='edit' with it puts the release's edit "
+                       "dialog dlg.edit_release up to be looked at (it saves nothing; ui_dialog close takes it down). The "
+                       "tab itself opens with xfined_ui_tab action=open kind=releases. published stays UTC here; the tab "
+                       "shows local time. Opening the Publish Release dialog reads the list too; action='status' "
+                       "follows that read.",
         "annotations": {"title": "List GitHub releases of the mod", "readOnlyHint": True, "openWorldHint": True},
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["list", "status", "cancel"]},
+                "action": {"type": "string", "enum": ["list", "status", "cancel", "select"]},
+                "tag": {"type": "string", "description": "select: the release by its tag"},
+                "id": {"type": "integer", "description": "select: the release by its id"},
+                "show": {"type": "string", "enum": ["edit"], "description": "select only: puts the release's edit dialog "
+                                                                          "dlg.edit_release up to be looked at"},
                 "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
             },
         },
@@ -779,7 +826,9 @@ TOOLS = [
                        "engines, trusted_malicious, trusted_suspicious, other_malicious, flagged, url, error}]} - what "
                        "the last check looked up or the last scan found -, submission {number, state none|open|closed, "
                        "verdict accepted|waiting|refused ('' "
-                       "until the catalog has spoken), verdict_text, url, note, listed}, withdrawal {number, state, "
+                       "until the catalog has spoken), verdict_text, url, note, listed, known - false until a job looked the submission up (the window's "
+                       "card says 'Looking up the submission...' meanwhile); number 0 with known=false means "
+                       "nothing}, withdrawal {number, state, "
                        "verdict, verdict_text, url, note} - the account's newest 'Withdraw <id>' issue, see "
                        "xfined_mod_catalog_withdraw - and listing {state free|listed|withdrawn|unknown ('' before any "
                        "job read the index), github - the repository the index names -, this_key - bound to this "
@@ -840,8 +889,10 @@ TOOLS = [
                                                               "key_unlock: opens it. Never echoed or logged"},
                 "key": {"type": "string", "description": "vt_key: the VirusTotal API key to store. Never echoed or logged"},
                 "confirm": {"type": "string", "enum": ["withdraw"],
-                            "description": "show only: puts the withdrawal's confirmation over the window, for a "
-                                           "screenshot - it withdraws nothing (only a click in it would); hide closes both"},
+                            "description": "show only: puts the withdrawal's question - the sheet dialog "
+                                           "dlg.catalog_withdraw with Withdraw (Danger) and Cancel - over the window, for a "
+                                           "screenshot; it withdraws nothing (only a click in it would); hide closes both. "
+                                           "The window itself is the dialog dlg.catalog_submit"},
                 "wait": {"type": "boolean", "description": "follow a running job until it ends or about 150 s pass (default true)"},
             },
         },
@@ -901,22 +952,38 @@ TOOLS = [
     },
     {
         "name": "xfined_preview_model",
-        "description": "Open the model preview window on a model (same as double-clicking it in the content browser). "
-                       "source='visual' (editor FS, default) or 'darf' (linked game install). Without 'name' the "
-                       "window just opens empty.",
+        "description": "Open the Model Preview tab ('model', a major tab) on a model - what a double click in the "
+                       "Content Browser does - and bring it up at once. source='visual' (editor FS, default) or 'darf' "
+                       "(linked game install). Without 'name' the tab comes up on the model it shows. lighting: studio (a "
+                       "headlight from the camera over an ambient - the default) or unlit (the textures as they are); "
+                       "wireframe, bones and details (the facts pane) switch; frame frames the model at its angle, reset "
+                       "goes back to the three-quarter view. The model stands on a floor grid (round metre steps under its "
+                       "lowest point). Answers tab, active, open, name, kind, error, verts, tris, bones, lighting, "
+                       "wireframe, bones_shown, panes {details, details_width (pt)} and textures [{name, from}]: every "
+                       "texture the engine visual draws with and where the loader finds it - project | editor | game "
+                       "(the linked game's archives or gamedata folder) | missing (drawn as the placeholder, a dark "
+                       "blue); empty for a library object (its Details list Materials). The answer is the frame the call asked for: the editor holds it until the tab was drawn, so an opener's panes and zoom need no second call ('pending' is false).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "model name or path"},
                 "source": {"type": "string", "description": "'visual' (default) or 'darf'"},
+                "lighting": {"type": "string", "enum": ["studio", "unlit"]},
+                "wireframe": {"type": "boolean"}, "bones": {"type": "boolean"}, "details": {"type": "boolean"},
+                "frame": {"type": "boolean"}, "reset": {"type": "boolean"},
             },
         },
     },
     {
         "name": "xfined_reset_layout",
-        "description": "Rebuild the default panel arrangement (same as Windows > Reset Layout). Useful when the "
-                       "docking layout ends up broken or level_imgui.ini was lost.",
-        "inputSchema": {"type": "object", "properties": {}},
+        "description": "Window > Reset Layout: the Level tab's panels (workspace XFinedLevel_v2) are laid out again "
+                       "for the window's size class - Wide (1400 x 640 pt and up: Tools left, Outliner over Details and "
+                       "Level Settings right, Content Browser and Output Log under the viewport) or Compact (the browser "
+                       "and the log live in drawers) - with every panel back, when Level draws next. scope='all' also "
+                       "puts every split and grid width (xfined_ui_split) back to its default.",
+        "inputSchema": {"type": "object", "properties": {
+            "scope": {"type": "string", "enum": ["level", "all"], "description": "level (default) or all"},
+        }},
     },
     {
         "name": "xfined_theme",
@@ -947,9 +1014,14 @@ TOOLS = [
     {
         "name": "xfined_command_palette",
         "description": "Search, open, close, inspect, or execute the editor command palette. action='query' returns "
-                       "the same ranked results shown by Ctrl+Shift+P. action='execute' accepts the returned numeric "
-                       "command/subcommand pair (preferred) or an exact id. Omitting action uses query when query is "
-                       "present, otherwise reports palette state.",
+                       "the same ranked results shown by Ctrl+Shift+P: the commands of the registry (kind 'command', "
+                       "name = its COMMAND_* id), the Level tab's panels and drawers (kind 'panel' / 'drawer') and the "
+                       "open tabs (kind 'tab'); each has label (what its row shows), path, shortcut and id. Words match "
+                       "the start of a word of the label first; only what a row shows is searched (label, path, keys), "
+                       "never the COMMAND_* id - list_commands has those. action='execute' accepts the returned numeric "
+                       "command/subcommand pair of a command, or any result's exact id (panel:<id>, drawer:<id> and "
+                       "tab:<id> bring that panel, drawer or tab up; their command is -1). Omitting action uses query "
+                       "when query is present, otherwise reports palette state.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -964,8 +1036,10 @@ TOOLS = [
     },
     {
         "name": "xfined_viewport_navigation",
-        "description": "Read or control the viewport camera widget. Set one of the six canonical axis views or "
-                       "return to the free perspective camera; action='frame' focuses all objects or the selection.",
+        "description": "Read or control the viewport's camera views - the axis gizmo at the top right of the "
+                       "viewport (hidden under 480 pt) and the Perspective pill's menu: set one of the six axis views or "
+                       "return to the free perspective camera; action='frame' focuses all objects (Frame All) or the "
+                       "selection (Frame Selection).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -977,9 +1051,14 @@ TOOLS = [
     },
     {
         "name": "xfined_progress",
-        "description": "Read the editor's non-modal task center, including nested task progress and elapsed time, "
-                       "or request cooperative cancellation when cancelable=true. Scene loading stays live but "
-                       "non-cancelable because it has no rollback transaction. Omitting action reads state.",
+        "description": "Read the editor's task center: the blocking job's tasks (nested progress, elapsed time) and "
+                       "'background' - the jobs that run beside the editor and block nothing (each with a key) - or "
+                       "request cooperative cancellation of the blocking job when cancelable=true. Scene loading stays "
+                       "live but non-cancelable because it has no rollback transaction. Omitting action reads state. "
+                       "Also answers the status bar's 'errors' / 'warnings' chips (since the project opened, a line that "
+                       "repeats counted once) and 'status_line', the log line shown "
+                       "beside Output Log: an author-facing report or a counted error / warning, never a job's own start, "
+                       "stage or finish line, so it does not read like a job still running once 'tasks' is empty.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -989,14 +1068,24 @@ TOOLS = [
     },
     {
         "name": "xfined_property_inspector",
-        "description": "Drive the Properties or World Properties panel: read counts/filter/open state, set a search "
-                       "filter, expand or collapse all matching branches, or open/close the panel.",
+        "description": "Drive the Details panel (target='selection', default) or the Level Settings panel "
+                       "(target='world'): read counts/filter/open state and the rows, set a search filter, expand or "
+                       "collapse all matching branches, or open/close the panel. 'open' brings the Level tab up with the "
+                       "panel in front (target='world' raises Level Settings); the other actions never switch tabs. "
+                       "Answers visible/total counts, open, and rows [{key, label, value, unit, enabled, mixed, help}] ('limit', "
+                       "default 200): label is what the grid shows (a range such as [0-3] moved into help), unit is "
+                       "there where a number has one ('m', '°', 'fps': the grid draws the value with it, value stays the "
+                       "number as text), help the row's "
+                       "tooltip and help-footer text (a number with limits says its range), mixed true where the selected "
+                       "objects differ; enabled is false for the rows of a read-only form too. Setting a row is "
+                       "xfined_property_set.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["get", "filter", "expand", "collapse", "open", "close"]},
                 "target": {"type": "string", "enum": ["selection", "world"]},
                 "filter": {"type": "string"},
+                "limit": {"type": "integer", "description": "rows answered at most (default 200)"},
             },
         },
     },
@@ -1004,12 +1093,28 @@ TOOLS = [
         "name": "xfined_content_browser_navigation",
         "description": "Inspect or drive Content Browser history, breadcrumbs, Back/Forward/Up/Home, and session "
                        "favorite folders. Location state includes source, category, and source-relative folder. "
-                       "'tile' (48..192) sets the tile slider - the side of a tile's picture - with any action, and "
-                       "the answer reports it.",
+                       "'tile' (tile_range, 48..192 pt) sets the side of a tile in pt for the host the browser is seen in - "
+                       "the docked panel and the Content Drawer keep one each (until a size is picked a host fits its "
+                       "tiles: the largest side up to 64 in the panel, 96 in the drawer, at which two rows show, 48 at "
+                       "least; tile_fit=true fits again), kept across sessions "
+                       "- with any action, brings the browser into view, and the answer reports it. A tile size shows tiles. "
+                       "'view' (tiles | list) sets how the host shown lays out its entries - the list is one line per "
+                       "entry in columns, what a short strip can show most of; the docked panel starts as a list, the "
+                       "Content Drawer as tiles - kept across sessions. 'search' sets the browser's search field: it lists the folder "
+                       "shown and everything below it whose path under that folder matches - spaces separate terms that "
+                       "must all match, case is folded (Cyrillic too), \"\" clears it. 'sources_pane' turns the Sources "
+                       "pane (source switch, favorites, folder tree) on or off; it shows only while the browser is at "
+                       "least 480 pt wide. action=refresh lists the source again now (View > Refresh, F5). up and home at "
+                       "the root succeed and change nothing; home with source (and category) goes to that source's root. "
+                       "Moving through the folders, a tile size, tile_fit, a view, a search or sources_pane brings the browser into view: "
+                       "the panel while the Level tab draws it - its tab raised when the Output Log covers it -, the "
+                       "Content Drawer over any other tab; 'get' and the favorite edits never switch anything. The answer says where it is seen: visible, host (panel | drawer | none) and view "
+                       "(tiles | list), tile (the side drawn, pt) and tile_fit, and adds tile_unit ('pt'), search, "
+                       "sources_pane {on, shown} and can_add (the toolbar's Add works: the open project's own source only).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["get", "navigate", "back", "forward", "up", "home", "favorite_add", "favorite_remove", "favorite_open"]},
+                "action": {"type": "string", "enum": ["get", "navigate", "back", "forward", "up", "home", "refresh", "favorite_add", "favorite_remove", "favorite_open"]},
                 "source": {
                     "description": "project/editor/darf or 0/1/2",
                     "oneOf": [
@@ -1033,7 +1138,18 @@ TOOLS = [
                 "folder": {"type": "string", "description": "source-relative folder; empty means root"},
                 "index": {"type": "integer", "minimum": 0, "description": "favorite index returned by get"},
                 "tile": {"type": "number", "minimum": 48, "maximum": 192,
-                         "description": "the tile slider: a tile's picture side in pixels"},
+                         "description": "the side of a tile in pt (48..192) of the host shown, kept across sessions: a "
+                                        "size picked, no longer fitted; shows tiles"},
+                "tile_fit": {"type": "boolean",
+                             "description": "true: the host shown fits its tiles again - the largest side up to its "
+                                            "default (panel 64, drawer 96) at which the grid shows two rows, 48 pt at "
+                                            "least; false: keep the side shown as the size picked. Shows tiles. With "
+                                            "'tile' only false is accepted"},
+                "view": {"type": "string", "enum": ["tiles", "list"],
+                         "description": "how the grid of the host shown shows its entries: tiles (a picture and a "
+                                        "two-line name) or the list (one line each, in columns); kept across sessions"},
+                "search": {"type": "string", "description": "the browser's search field; \"\" clears it"},
+                "sources_pane": {"type": "boolean", "description": "the Sources pane on or off (shown from 480 pt wide)"},
             },
         },
     },
@@ -1270,7 +1386,7 @@ TOOLS = [
     {
         "name": "xfined_content_create",
         "description": "Create one of the editor's own assets in the folder the content browser has open "
-                       "(the Create menu, without the menu). 'kind' is quest, behaviour, character or pda; the "
+                       "(the browser's Add menu, without the menu). 'kind' is quest, behaviour, character or pda; the "
                        "file gets the first free NewQuest/NewBehaviour/NewCharacter/NewPda name, which "
                        "xfined_content_rename then changes. A folder is xfined_content_mkdir instead. "
                        "Returns 'made', the new file project-relative.",
@@ -1289,12 +1405,16 @@ TOOLS = [
     },
     {
         "name": "xfined_content_browser_open",
-        "description": "Reveal an asset OR a folder in the editor's Content Browser: opens the panel, switches "
+        "description": "Reveal an asset OR a folder in the editor's Content Browser: brings the browser into view - "
+                       "the panel while the Level tab draws it (its tab raised when another covers it), the Content Drawer "
+                       "over any other tab -, switches "
                        "source when asked, navigates there and selects it. 'name' is an asset as returned by "
                        "list_assets (or darf_list for the game source), or a folder path like 'levels' or "
                        "'levels\\\\l07_military' - the only way to walk the grid into a folder without a mouse. "
-                       "'source' is project / editor / darf (omit to stay on the current tab). open=true also "
-                       "opens the asset's viewer, the same thing a double click does (ignored for folders).",
+                       "'source' is project / editor / darf (omit to stay on the current source). open=true also "
+                       "opens the asset's viewer, the same thing a double click does (ignored for folders). Answers "
+                       "the source and folder it landed in, visible, host (panel | drawer | none), view (tiles | list), "
+                       "tile_range and tile_unit ('pt').",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1317,12 +1437,18 @@ TOOLS = [
                        "Names must match an entry in the current view exactly. Omit action (or use get) to only read. "
                        "'icons' maps every selected asset of the editor's own kinds to the icon its tile draws - quest, "
                        "behaviour graph, character, character template, PDA interface - the way to see a tile's icon "
-                       "without a screenshot.",
+                       "without a screenshot; 'glyphs' maps every selected entry (a folder with a trailing \\) to the "
+                       "vector glyph its tile draws while it has no picture (folder, file_texture, file_model, file_sound, "
+                       "file_script, file_config, file_xml, file_text, file_archive, level, quest, behaviour, character, "
+                       "character_template, pda_interface, file; for the Editor source by category scene_object, group, "
+                       "particles, spawn, light). action=reveal shows a project entry ('name') in Explorer - dry_run=true "
+                       "opens nothing - and answers path and opened; an entry outside the project is refused.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["get", "select", "toggle", "range", "rename", "clear"]},
-                "name": {"type": "string", "description": "exact asset or folder path for select/toggle/range/rename"},
+                "action": {"type": "string", "enum": ["get", "select", "toggle", "range", "rename", "clear", "reveal"]},
+                "name": {"type": "string", "description": "exact asset or folder path for select/toggle/range/rename/reveal"},
+                "dry_run": {"type": "boolean", "description": "reveal only: answer the path, open nothing"},
             },
         },
     },
@@ -1488,11 +1614,14 @@ TOOLS = [
                        "its properties (logic/custom_data included) are editable in the Properties panel. Optional "
                        "x/y/z (default: in front of the camera), snap_to_ground, name. section = player_start places "
                        "the module's Player Start: where a new game of its mode begins (one per module; rotate it "
-                       "to set the way the player faces).",
+                       "to set the way the player faces); env_mod places an Environment Modifier and rpoint a (multiplayer) "
+                       "Respawn Point, named env_mod_NNNN / rpoint_NNNN like the Spawn tool names them.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "section": {"type": "string", "description": "config section, e.g. stalker or space_restrictor; player_start for the Player Start"},
+                "section": {"type": "string", "description": "config section, e.g. stalker or space_restrictor; player_start for "
+                                                          "the Player Start, env_mod for an Environment Modifier, rpoint for a "
+                                                          "(multiplayer) Respawn Point"},
                 "x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"},
                 "snap_to_ground": {"type": "boolean"},
             },
@@ -1507,7 +1636,8 @@ TOOLS = [
                        "geometry turns black; useful for checking where lights actually reach), wireframe, point. "
                        "fill: solid|wireframe|point; shade: flat|gouraud. Booleans: lighting, textures, edged_faces, "
                        "filter_linear, fog, environment, grid, safe_rect (raw engine flags - 'textures' has no "
-                       "visible effect in this render path). Explicit fields override the preset.",
+                       "visible effect in this render path), stats (the viewport's Stats pill, off by default). "
+                       "Explicit fields override the preset.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1522,6 +1652,7 @@ TOOLS = [
                 "environment": {"type": "boolean"},
                 "grid": {"type": "boolean"},
                 "safe_rect": {"type": "boolean"},
+                "stats": {"type": "boolean"},
             },
         },
     },
@@ -1555,20 +1686,29 @@ TOOLS = [
     },
     {
         "name": "xfined_titlebar_info",
-        "description": "Geometry and state of the custom window chrome: the caption band rect, where the "
-        "menus end and the window buttons start (client px), whether the window is maximized and whether "
-        "the app icon texture loaded.",
+        "description": "Geometry and state of the custom window chrome, valid on every page (the Start page "
+        "included): the caption band rect, caption_h, where the menus and major tabs end (menus_end) and the "
+        "window buttons start (buttons_x), the client-area ranges that take the mouse (interactive: the "
+        "menus and tabs, the window buttons - the rest of the band drags the window), every major tab's rect "
+        "(tabs [{id, rect}]), maximized, dpi, folded (the window is narrower than 1100 pt: the menus are one "
+        "Menu button) and whether the app icon loaded. Client px.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "xfined_window_control",
-        "description": "The window buttons' programmatic half: minimize, maximize, restore or close the "
-        "editor window. 'close' takes the same COMMAND_EXIT path as the caption cross and MAY end the "
-        "editor process. Returns the maximized/minimized state after the action.",
+        "description": "The window buttons' programmatic half: minimize, maximize, restore or close the editor "
+        "window, or resize its client area to width x height pt (restored first). 'close' ends the editor "
+        "process. With unsaved tabs (the scene, a quest, ...) it refuses with error 'unsaved' and the dirty "
+        "list unless save=true saves them first (a scene with no file yet cannot be); dropping them is "
+        "xfined_window_close_discard. Under -nodlg an unsaved close discards, as the exit prompt always "
+        "answered there. Returns maximized, minimized, client (px), client_pt, dpi and what was saved.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["minimize", "maximize", "restore", "close"]},
+                "action": {"type": "string", "enum": ["minimize", "maximize", "restore", "resize", "close"]},
+                "width": {"type": "number", "description": "resize: client width in pt (at least 320)"},
+                "height": {"type": "number", "description": "resize: client height in pt (at least 240)"},
+                "save": {"type": "boolean", "description": "close: save every unsaved tab first"},
             },
             "required": ["action"],
         },
@@ -1584,9 +1724,10 @@ TOOLS = [
         "description": "Drive the chooser modal of a PROP_CHOOSE property row (the same path a mouse "
         "click takes): action='open' opens the modal for the row whose short name is 'key' (e.g. Visual), "
         "action='select' highlights 'item' without confirming (the preview pane reacts as to a click), action='cancel' closes the form without applying, action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
-        "'dynamics\box\box_metall_01*') and presses Ok, action='status' reports the form, the highlighted item ('selected'), the pending "
+        "'dynamics\box\box_metall_01*') and presses OK, action='status' reports the form, the highlighted item ('selected'), the pending "
         "edit and the row's current value. The editor redraws on demand - after 'pick' or 'cancel' make it draw "
-        "(e.g. a screenshot) so the result is consumed.",
+        "(e.g. a screenshot) so the result is consumed. The chooser is the kit dialog <caption>###dlg.choose (L): "
+        "xfined_ui_dialog action=close id=choose closes it as Cancel does, and screenshot_editor names it as modal.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1670,7 +1811,8 @@ TOOLS = [
     },
     {
         "name": "xfined_outliner_show",
-        "description": "Open or close the World Outliner panel in the editor. open=false closes it (default true).",
+        "description": "Open or close the World Outliner panel. Opening brings the Level tab up with the panel in "
+                       "front; open=false closes it (default true).",
         "inputSchema": {
             "type": "object",
             "properties": {"open": {"type": "boolean", "description": "open the panel (default true)"}},
@@ -1694,9 +1836,10 @@ TOOLS = [
                        "-word excludes, \"two words\" match together. 'types' is a ';'-separated list of the "
                        "object classes to SHOW (empty string shows all; see scene_tree for the names). "
                        "'selected_only' limits the tree to the current selection; 'visibility' is all, visible, "
-                       "or hidden. Omitted arguments keep their current value. Invalid types or visibility leave "
-                       "the previous filter intact. Returns text, selected_only, hidden_types, visibility, shown "
-                       "and total.",
+                       "or hidden. 'layout' is type (grouped by class) or hierarchy; 'sort' is scene (the scene's "
+                       "order), az or za - the Filters menu's sort (the header does not sort). Omitted arguments keep "
+                       "their current value. Invalid types or visibility leave the previous filter intact. Returns text, "
+                       "selected_only, hidden_types, visibility, layout, sort, shown and total.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1708,6 +1851,8 @@ TOOLS = [
                     "enum": ["all", "visible", "hidden"],
                     "description": "visibility filter; omitted keeps the current mode",
                 },
+                "layout": {"type": "string", "enum": ["type", "hierarchy"]},
+                "sort": {"type": "string", "enum": ["scene", "az", "za"]},
             },
         },
     },
@@ -1870,7 +2015,9 @@ TOOLS = [
         "description": "Deterministic pin-aware top-down graph layout. Children follow the visible canvas pin order; "
                        "complete nested branch bounds stay apart, exclusive trigger trees use a larger gap, and "
                        "shared descendants become merge blocks between their incoming branches. "
-                       "all=false places only nodes without pos. Returns the positions; the document stays dirty.",
+                       "all=false places only nodes without pos. Returns the positions with each node's content-sized "
+                       "box (w, h: 240 pt wide, as tall as its header, lines, actions and pin names); the document stays "
+                       "dirty.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "all": {"type": "boolean"}},
@@ -1879,27 +2026,49 @@ TOOLS = [
     },
     {
         "name": "xfined_quest_view",
-        "description": "Open (or focus) the graph tab of a quest and set its view: frame='all' or a node id, "
-                       "zoom_level 0..9 (6 = 100%), cx/cy = world centre (cx/cy override 'frame'), "
-                       "select='<node id>' (or a comma separated list, or 'none') selects nodes - the inspector "
-                       "follows the graph selection, so this is what puts a node in it; "
-                       "slot='enter:0'/'exit:1' opens that action of the selected node in the inspector ('none' clears it). scroll='top'/'bottom'/'task:<id>'/'task:<id>/steps' scrolls the inspector panel there on the next frame (the panel is taller than its box - a task's steps and its checkboxes sit below the fold); 'action:top'/'action:bottom' scroll the action panel, which has its own scroll. "
-                       "keys='show'/'hide'/'toggle' folds the shortcut list into the tab. "
-                       "action_split / vars_split (0.1..0.9) move the inspector's two splitters - the share the node keeps "
-                       "above its action, and the share of the variables pane - which is how a form taller than its pane "
-                       "gets into a screenshot; the reply reports both. They are the author's saved preference: put them back. "
-                       "node_scroll / action_scroll in the reply are [y, max] of the last frame drawn: max above y means there is more below. "
-                       "The bridge waits for deferred frame-all layout before returning when the editor is drawing. "
+        "description": "Open (or bring up) the graph tab of a quest or behaviour graph - a major tab of its own, "
+                       "activated at once - and set its view: frame='all' or a node id (Frame All never zooms below "
+                       "0.75, where a node title is 12 px at 100%; a graph that does not fit there is shown at 0.75 "
+                       "from its trigger: the trigger and two levels under it at the top of the view), zoom_level 0..9 (6 = 100%), cx/cy = world centre (cx/cy override 'frame'), "
+                       "select='<node id>' (or a comma separated list, or 'none') selects nodes - the Details panel "
+                       "follows the graph selection, so this is what puts a node in it; slot='enter:0'/'exit:1' opens "
+                       "that action of the selected node under it in the Details panel and scrolls its row into the node "
+                       "pane ('none' clears it). "
+                       "The tab: the Graph panel (the quest's header, tasks or roles, variables) on the left, the "
+                       "canvas, the Details panel on the right, and a drawer under them. graph_panel / details / keys / "
+                       "problems = 'show'/'hide'/'toggle' show the Graph panel (below 400 pt of canvas it is a rail and "
+                       "'show' opens it over the canvas), the Details panel, the Shortcuts card over the canvas and the "
+                       "Problems drawer. graph_width / details_width (pt) size the two panels. action_split = the share "
+                       "of the Details column the node keeps above its action, vars_split = the share of the Graph panel "
+                       "the Variables get - how a form taller than its pane gets into a screenshot; they are the author's "
+                       "saved layout: put them back. scroll = top | bottom (the selected node's pane, or the Graph panel "
+                       "with nothing selected) | action:top | action:bottom | tasks | task:<id> | task:<id>/steps | "
+                       "variables - an error when that pane is not on screen. The reply: zoom_level, zoom (the level's "
+                       "factor) with ui_scale and title_px, graph_panel (open | rail | overlay | hidden), details, drawer "
+                       "(problems | find | none), minimap (drawn), beyond {above, below, left, right} (the nodes wholly "
+                       "past each edge of the view - the canvas shows them as edge pills when no minimap is drawn), "
+                       "graph_width, details_width, panes {graph, variables, "
+                       "canvas, details, node, action, drawer} as [x, y, w, h] in pt of the last frame drawn (null when not "
+                       "drawn), the two splits, and node_scroll / action_scroll / graph_scroll / variables_scroll as [y, max] "
+                       "- max above y means there is more below. "
+                       "The answer describes the frames this call changed: the editor holds it until they are drawn, "
+                       "like a screenshot (answer_only reads the view and applies nothing). "
                        "Then use xfined_screenshot_editor to look at it.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "frame": {"type": "string"}, "zoom_level": {"type": "integer"},
                            "cx": {"type": "number"}, "cy": {"type": "number"}, "slot": {"type": "string"},
-                "scroll": {"type": "string", "description": "top | bottom | task:<id> | task:<id>/steps | action:top | action:bottom (the action panel has its own scroll)"},
-                           "select": {"type": "string"}, "keys": {"type": "string",
-                           "enum": ["show", "hide", "toggle"]},
-                           "action_split": {"type": "number", "description": "0.1..0.9: share of the node/action column the NODE keeps"},
-                           "vars_split": {"type": "number", "description": "0.1..0.8: share of the inspector the variables pane keeps"}},
+                "scroll": {"type": "string", "description": "top | bottom | action:top | action:bottom | tasks | task:<id> | task:<id>/steps | variables"},
+                           "select": {"type": "string"},
+                           "graph_panel": {"type": "string", "enum": ["show", "hide", "toggle"]},
+                           "details": {"type": "string", "enum": ["show", "hide", "toggle"]},
+                           "keys": {"type": "string", "enum": ["show", "hide", "toggle"], "description": "the Shortcuts card over the canvas"},
+                           "problems": {"type": "string", "enum": ["show", "hide", "toggle"], "description": "the Problems drawer under the canvas"},
+                           "graph_width": {"type": "number", "description": "the Graph panel's width in pt (220..480)"},
+                           "details_width": {"type": "number", "description": "the Details panel's width in pt (280..640)"},
+                           "action_split": {"type": "number", "description": "0.1..0.9: share of the Details column the NODE keeps above its action"},
+                           "vars_split": {"type": "number", "description": "0.1..0.9: share of the Graph panel the Variables get"},
+                           "answer_only": {"type": "boolean", "description": "read the view and apply nothing"}},
             "required": ["path"],
         },
     },
@@ -1927,7 +2096,8 @@ TOOLS = [
                        "comments. Terms are ANDed; quoted phrases stay together; prefix a term with '-' to exclude it. "
                        "action=get|set|next|previous|clear; get with query atomically updates without navigating, "
                        "set can select the first result, next/previous frame a result. "
-                       "Returns deterministic file-order results plus the active result and exact graph view state.",
+                       "set and next/previous open the tab's Find Results drawer, clear closes it (the reply carries "
+                       "drawer). Returns deterministic file-order results plus the active result and exact graph view state.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2011,7 +2181,8 @@ TOOLS = [
     {
         "name": "xfined_quest_history",
         "description": "Read or navigate the transient graph view history. action=get|back|forward|clear. Each state "
-                       "contains world center, zoom level, selected node ids and inspector slot; no quest data changes.",
+                       "contains world center, zoom level, selected node ids and the action open in the Details panel (slot); no "
+                       "quest data changes.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2024,7 +2195,10 @@ TOOLS = [
     {
         "name": "xfined_quest_minimap",
         "description": "Read or control the transient interactive graph minimap with action=get|show|hide|toggle. "
-                       "Returns visibility, graph bounds, current viewport bounds, center, zoom and selection.",
+                       "visible is the toggle; available says whether the graph has min_nodes (12) nodes - the toolbar's "
+                       "toggle is disabled until it has; shown says whether the last frame drew it - it comes only for a graph of "
+                       "min_nodes (12) nodes and more, 180 x 120 pt in the canvas's corner. Also returns graph bounds, "
+                       "the current viewport bounds, center, zoom and selection.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -2062,6 +2236,380 @@ TOOLS = [
         "description": "The build gate: validate every quest of the project like xfined_mod_export does. Returns "
                        "passed (no errors), error/warning counts and the log lines ('<path>: <code> <node>: <message>').",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    # ---- the window model: major tabs, the Level tab's panels, drawers, dialogs, popups -------------------------------
+    {
+        "name": "xfined_ui_list",
+        "description": "What the editor window shows, from frames drawn after the last command: the major tabs "
+                       "(active_tab, tabs [{id, kind, label, path, dirty, active, missing, closable, loaded}]; 'level' is "
+                       "tab 1, files are '<kind>:<project-relative path>', tools are their kind), the Level tab's panels "
+                       "[{id, window, open, visible, docked, focused, closable, host, rect}] (ids tools, world_outliner, "
+                       "details, level_settings, content_browser, output_log, viewport; visible only while Level is up), "
+                       "the drawer that is open (content | log | none), the dialogs [{id, title, window, rect}] and popups "
+                       "open, work_area, start_page, size_class (wide | compact), layout_custom, viewport_maximized and "
+                       "ui_scale / dpi. Rects are px of the window's client area.",
+        "annotations": {"title": "List the editor's tabs, panels, drawers and dialogs", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_ui_tab",
+        "description": "The major tabs - every asset editor is a full-window tab, Level is tab 1 and never closes. "
+                       "action: list (default), activate (id), open (id, or kind + path: quest | beh + a project-relative "
+                       "path, pda [+ path], model + a visual, texture + path + source project|editor|darf, characters, "
+                       "world_rules, preferences, light_animations, texture_library, sound_library, mod_settings, "
+                       "releases, level), close (id, default the active tab), next, prev. "
+                       "Openers bring the tab up at once. Closing a tab with unsaved changes refuses with error "
+                       "'unsaved' and the dirty list unless save=true saves it first; dropping the changes is "
+                       "xfined_ui_tab_discard. Play in editor holds the Level tab.",
+        "annotations": {"title": "Open, activate or close a major tab", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "activate", "open", "close", "next", "prev"]},
+            "id": {"type": "string", "description": "a tab id from action=list (level, quest:<path>, pda, ...)"},
+            "kind": {"type": "string"},
+            "path": {"type": "string"},
+            "source": {"type": "string", "enum": ["project", "editor", "darf"], "description": "texture: where the file is"},
+            "save": {"type": "boolean", "description": "close: save the tab's changes first"},
+        }},
+    },
+    {
+        "name": "xfined_ui_tab_discard",
+        "description": "Close a major tab and DROP its unsaved changes (the file on disk stays as it was last saved; "
+                       "the edits are lost for good). id = the tab (default the active one). The editor asks nothing on "
+                       "this path; the tool carries destructiveHint so a client can ask on its own side.",
+        "annotations": {"title": "Close a tab and drop its unsaved changes", "readOnlyHint": False,
+                        "destructiveHint": True, "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
+    },
+    {
+        "name": "xfined_ui_panel",
+        "description": "The Level tab's panels: tools, world_outliner, details, level_settings, content_browser, "
+                       "output_log, viewport. action open | focus (default) brings Level up with the panel in front "
+                       "(in the Compact size class the browser and the log open in their drawer instead: host says "
+                       "which), close closes it (the viewport stays), toggle. Answers open, host and active_tab.",
+        "annotations": {"title": "Open, focus or close a Level panel", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["open", "close", "focus", "toggle"]},
+            "id": {"type": "string", "enum": ["tools", "world_outliner", "details", "level_settings", "content_browser",
+                                              "output_log", "viewport"]},
+        }, "required": ["id"]},
+    },
+    {
+        "name": "xfined_ui_drawer",
+        "description": "The Content Drawer (id=content) and the Log Drawer (id=log) over the bottom of any tab, one at "
+                       "a time. action open: on the Level tab with the panel on screen the panel comes to the front "
+                       "instead (host=panel). close: the drawer goes (id optional). Another tab coming up closes it too.",
+        "annotations": {"title": "Open or close a drawer", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["open", "close"]},
+            "id": {"type": "string", "enum": ["content", "log"]},
+        }, "required": ["action"]},
+    },
+    {
+        "name": "xfined_ui_dialog",
+        "description": "The dialogs: action list (default: what is open, and the known ids), open (id: package_release, "
+                       "publish_release, build_to_folder, export_flat, import_base_scene, submit - the way their menu "
+                       "items open them; it comes up when the editor draws next; Mod Settings and Releases are tabs: "
+                       "xfined_ui_tab), close (id - one of "
+                       "those, a kit dialog's dlg.<name>, or a dialog's window name - the way Esc or its cross does, "
+                       "running nothing). Opening one runs nothing either: its buttons stay the user's, or the matching "
+                       "mod_* tool's.",
+        "annotations": {"title": "Open or close a dialog", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "open", "close"]},
+            "id": {"type": "string"},
+        }},
+    },
+    {
+        "name": "xfined_ui_popup",
+        "description": "Put a popup up to look at it with xfined_screenshot_editor - never to act. show: menu:<name> "
+                       "(File, Edit, Scene, Build, View, Graph, Mod, Libraries, Window, Help; Scene/Build/View need the "
+                       "Level tab, Graph a graph tab; Menu is the one button the menus fold into under 1100 pt - in a "
+                       "narrow window a menu:<name> opens it and the menu inside; the Start page has no menus), "
+                       "tab_menu:<tab id>, "
+                       "tab_overflow, toolbar_overflow, toolbar_split:build_mod (the Build Mod button's menu), "
+                       "cb_context:<entry path> (as xfined_content_browser_selection "
+                       "names it), cb_add (the browser's Add menu; only where xfined_content_browser_navigation says "
+                       "can_add), cb_view, cb_favorites, cb_grid (the tiles' "
+                       "empty-space menu), outliner_filters, outliner_more, viewport:options|perspective|show|snap|grid|"
+                       "scale|angle, tasks (while a job runs), rebuild (while the scene needs its level builders); "
+                       "'none' takes them down. One at a time: the popup up before goes. "
+                       "It comes up when its owner draws next.",
+        "annotations": {"title": "Show a menu or popup for a screenshot", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {"show": {"type": "string"}}, "required": ["show"]},
+    },
+    {
+        "name": "xfined_ui_scroll",
+        "description": "Scroll a panel, drawer, dialog or the active tab's work area (id: a panel id, content | log, "
+                       "a dialog id, dlg.<name>, work_area, or a window's name): to=top | bottom | a number of pt | "
+                       "item:<name> (panels built on the UI kit; in the Tools panel also a row of a tool's list - a folder's "
+                       "name, a leaf's name or its whole key, its folders opened - or a section title). A tool's list "
+                       "fills what the tool body leaves under it and the body does not scroll; with less than four "
+                       "rows of room the list flows in the body's scroll - one scroll at a time, so id=tools to=bottom "
+                       "reaches Snap Objects. Applied at the next frame; the answer has the scroll position as the "
+                       "last frame left it.",
+        "annotations": {"title": "Scroll a panel or dialog", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "string"}, "to": {"type": "string"},
+        }, "required": ["id", "to"]},
+    },
+    {
+        "name": "xfined_ui_split",
+        "description": "The splits and grid label widths the layout keeps, in pt ([XFinedLayout] of level_imgui.ini). "
+                       "No key: every one. key: read it; key + value: set it (it is the author's saved preference - put "
+                       "it back after a test).",
+        "annotations": {"title": "Read or set a layout split", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "key": {"type": "string"}, "value": {"type": "number"},
+        }},
+    },
+    {
+        "name": "xfined_ui_audit",
+        "description": "What the editor's UI kit reports of the frames drawn after the last command: truncated "
+                       "(text cut with an ellipsis: what was shown), escaped (content wider or taller than a window "
+                       "that cannot scroll that way: by how much), controls (label, enabled, why it is disabled, help). "
+                       "id narrows it to one panel, drawer, dialog or window. Rects in px, with dpi.",
+        "annotations": {"title": "Audit the UI for clipping", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
+    },
+    {
+        "name": "xfined_ui_scale",
+        "description": "The UI scale (1.0 = 96 DPI). value 1.0..2.5 rescales the editor at once - for tests at another "
+                       "display scale; it is never saved and the next start takes the monitor's scale again. No value "
+                       "reads it.",
+        "annotations": {"title": "Read or set the UI scale for a test", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {"value": {"type": "number", "minimum": 1.0, "maximum": 2.5}}},
+    },
+    {
+        "name": "xfined_ui_contract",
+        "description": "The UI constants a test pins instead of hardcoding (EditorUiContract.h): tile_range, "
+                       "tile_default and tile_error of the Content Browser, theme_keys, categories, the Start page "
+                       "card_menu labels, delete_project_dialog, the panels / drawers / dialogs {id: window name - a "
+                       "dialog's is Title###dlg.<name>}, document_kinds, popups, menus, viewport_menus, palette (the "
+                       "Command Palette's modal id), ui_scale_range.",
+        "annotations": {"title": "Read the UI contract", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_window_close_discard",
+        "description": "Close the editor and DROP every unsaved change - the scene's and every tab's - for good. The "
+                       "editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its "
+                       "own side. To keep the work, xfined_window_control action=close save=true.",
+        "annotations": {"title": "Close the editor and drop unsaved work", "readOnlyHint": False,
+                        "destructiveHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_project_close",
+        "description": "Close the project and go back to the Start page (File > Project > Switch Project...). With "
+                       "unsaved tabs it refuses with error 'unsaved' and the dirty list unless save=true saves them first "
+                       "(a scene with no file yet cannot be); dropping them is xfined_project_close_discard. Under -nodlg "
+                       "unsaved work is discarded, as the editor always answered there. The project's open tabs are "
+                       "remembered in its session and come back when it opens again, and so is the scene it had open. "
+                       "The Start page's card gets a fresh picture of the open scene: rendered once more from the viewport's camera, without the selection, gizmo, grid, axis triad or stats.",
+        "annotations": {"title": "Close the project", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {"save": {"type": "boolean"}}},
+    },
+    {
+        "name": "xfined_project_close_discard",
+        "description": "Close the project, go back to the Start page and DROP every unsaved change - the scene's and "
+                       "every tab's - for good. The editor asks nothing on this path; the tool carries destructiveHint so "
+                       "a client can ask on its own side. The Start page's card gets a fresh picture of the open scene: rendered once more from the viewport's camera, without the selection, gizmo, grid, axis triad or stats.",
+        "annotations": {"title": "Close the project and drop unsaved work", "readOnlyHint": False,
+                        "destructiveHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "xfined_preferences",
+        "description": "The editor's settings by their .ini names: action get (default; no key = every one) or set "
+                       "key + value - applied at once and saved, like the Preferences tab. Keys: active_idle_fps, "
+                       "floating_panels (panels in windows of their own; a restart takes effect), view_np, view_fp, "
+                       "view_fov (deg), fog_color (0xAARRGGBB or #RRGGBB), fog_fogness, cam_fly_speed, cam_fly_alt, "
+                       "cam_sens_rot, cam_sens_move, tools_sens_move, tools_sens_rot, tools_sens_scale, "
+                       "tools_show_move_axis, bp_lim_depth, bp_cull, bp_depth_tolerance, snap_grid_step, snap_angle_step "
+                       "(deg), snap_scale_step (the viewport toolbar's Grid, Angle and Scale steps), "
+                       "snap_moveto, grid_cell_size, grid_cell_count, scene_undo_level, scene_recent_count, "
+                       "scene_clear_color, render_radius. The theme is xfined_theme. action show opens the Preferences "
+                       "tab on a page ('page': a top-level folder of its rows - General, Viewport, Tools, Objects, Recovery, "
+                       "Scene - or Keyboard) with its search ('search'); get answers the page the tab shows.",
+        "annotations": {"title": "Read or change a preference", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["get", "set", "show"]},
+            "key": {"type": "string"}, "value": {"type": "string"},
+            "page": {"type": "string", "description": "show: the page"}, "search": {"type": "string", "description": "show: the tab's search"},
+        }},
+    },
+    {
+        "name": "xfined_texture_preview",
+        "description": "The Texture Preview tab ('texture', a major tab): what a double click on an image in the "
+                       "Content Browser opens. action open (path + source project | editor | darf; brings the tab up), "
+                       "state (default; never switches tabs), close. With open and state: zoom (fit | a factor), mip, "
+                       "channel (rgba - over a checkerboard | r | g | b | a - the alpha as grey), details (the facts pane). "
+                       "Answers active, open, name, file (on disk; empty for a texture inside the game's archives), archive "
+                       "(its gamedata path then), format (the file's pixel format as the GPU holds it: a DDS the GPU "
+                       "takes as it is - BC1-BC7, 32-bit - is uploaded as it is with every mip it holds, 'BC1 (DXT1)'), "
+                       "container (DDS | TGA | PNG | JPEG | BMP | image), decoded (true: the GPU could not take the file "
+                       "as it is - a cube map, a volume, 24 or 16 bits, TGA/PNG - and the preview shows mip 0 decoded to "
+                       "B8G8R8A8), width, height, mips, mip, zoom (the factor in effect - with fit, the one the fit came "
+                       "to), fit, scale (what the frame drew at), channel, alpha (the view blends alpha: rgba), has_alpha (the "
+                       "format keeps alpha), bytes, origin (project | library - the editor's | game_folder - loose under the "
+                       "game's gamedata | game_archive; file / archive stay the path), panes {details, details_width "
+                       "(pt)} and error. The answer is the frame the call asked for: the editor holds it until the tab was drawn, so an opener's panes and zoom need no second call ('pending' is false).",
+        "annotations": {"title": "Preview a texture", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["open", "state", "close"]},
+            "path": {"type": "string"},
+            "source": {"type": "string", "enum": ["project", "editor", "darf"]},
+            "zoom": {"type": "string", "description": "fit or a factor (1 = 1:1)"},
+            "mip": {"type": "integer"},
+            "channel": {"type": "string", "enum": ["rgba", "r", "g", "b", "a"]},
+            "details": {"type": "boolean", "description": "the Details pane beside the canvas"},
+        }},
+    },
+    {
+        "name": "xfined_library",
+        "description": "The library tabs - light_animations (lanims.xr), texture_library (the texture descriptions) and "
+                       "sound_library (the sound descriptions) - each a major tab: list | preview | properties. action: "
+                       "open (brings the tab up at once), state (default; never switches tabs), select (item = a name, "
+                       "or the first one a search would pick; frame = a light animation's frame). search sets the list's "
+                       "search field. The list is in the order of the leaf names, by folder only among equal names. Answers "
+                       "tab, active, items, shown, first (the first item the list shows), selected, "
+                       "dirty, where the list is read from - file (light_animations: lanims.xr) or folder "
+                       "(texture_library: the source images, rawdata/textures - New Textures: the import folder; "
+                       "sound_library: rawdata/sounds; absolute, forward slashes) -, and per kind: frame, frames, fps, keys, on_key, alpha (light animations); width, height, "
+                       "format, alpha, preview, import, read_only, saving (textures); min_dist, max_dist, game_sound, "
+                       "bytes, ms, auto_play, read_only, saving (sounds). Nothing here saves: the tab's Save does, and "
+                       "xfined_ui_tab close save=true. With the Texture Library open and without unsaved changes, "
+                       "xfined_exec_command name=COMMAND_CHECK_TEXTURES turns its tab into New Textures; a finished "
+                       "import brings the library back.",
+        "annotations": {"title": "Look at a library tab", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["light_animations", "texture_library", "sound_library"]},
+            "action": {"type": "string", "enum": ["open", "state", "select"]},
+            "item": {"type": "string"},
+            "frame": {"type": "integer", "description": "light animations: the frame to point at"},
+            "search": {"type": "string", "description": "the list's search; \"\" clears it"},
+        }, "required": ["kind"]},
+    },
+    {
+        "name": "xfined_mod_settings_view",
+        "description": "The Mod Settings tab (mod.ltx as a form: General, Mod Browser, Game Mode, Relations, Build "
+                       "Contents, PDA). 'page' opens the tab on that page; without it this only reports. Answers "
+                       "{tab, open, active, page, dirty, pages [{id, label, state ok|error|required|warning}], "
+                       "problems [{page, field, tone, blocks_save, text}]}. The data path stays xfined_mod_manifest / "
+                       "xfined_mod_set_manifest; this is for looking at the tab (screenshots, tours).",
+        "annotations": {"title": "Show Mod Settings", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "page": {"type": "string", "enum": ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda"]},
+        }},
+    },
+    {
+        "name": "xfined_characters_view",
+        "description": "The Characters tab. 'select' (a character id) or 'path' (project-relative .npcasset) opens the "
+                       "tab on that character; 'open': true just opens it; without an argument it only reports. Edits "
+                       "in progress in the tab are settled by save=true or discard=true, otherwise the answer is "
+                       "{ok:false, error:'unsaved', dirty:[id]}. Answers {tab, open, active, selected, file, dirty, count, "
+                       "problems} - problems are the edited character's, resolved against its base like "
+                       "xfined_characters_write reports them.",
+        "annotations": {"title": "Show a character in the Characters tab", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "select": {"type": "string"}, "path": {"type": "string"}, "open": {"type": "boolean"},
+            "save": {"type": "boolean"}, "discard": {"type": "boolean"},
+        }},
+    },
+    {
+        "name": "xfined_world_view",
+        "description": "The World Rules tab (what the mode keeps of the original game; it saves to mod.ltx as it is "
+                       "edited). 'drawer' opens or closes its problems drawer, 'level' picks the level whose "
+                       "transitions it lists (a level of the linked game), 'filter' filters them; any of these, or "
+                       "'open': true, opens the tab. Without an argument it only reports: {tab, open, active, drawer, "
+                       "level, filter, status, problems}. The data path stays xfined_world_get / xfined_world_set.",
+        "annotations": {"title": "Show the World Rules tab", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "drawer": {"type": "string", "enum": ["open", "close"]}, "level": {"type": "string"},
+            "filter": {"type": "string"}, "open": {"type": "boolean"},
+        }},
+    },
+    {
+        "name": "xfined_project_create",
+        "description": "Create a project the way the Start page's New Project form does: <parent>\\<name> gets the "
+                       "module skeleton (mod.ltx) and is opened. name: Latin letters, digits, _ and -. parent: a full "
+                       "path; omitted, the form's location. Refused while a project is open (xfined_project_close "
+                       "first). Answers path, name, existed (a project was there already and was only opened) and opened.",
+        "annotations": {"title": "Create a project", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "parent": {"type": "string"}, "name": {"type": "string"},
+        }, "required": ["name"]},
+    },
+    {
+        "name": "xfined_property_set",
+        "description": "Set one row of the Details panel (target='selection', default) or Level Settings (target='world') "
+                       "the way editing the row does: its checks run, every selected object takes it, then one undo step "
+                       "and a properties refresh. key: the row's whole key as xfined_property_inspector lists it, its "
+                       "last part when that names one row, or the label the grid shows ('Weld distance' for "
+                       "'...\\Weld distance (m)'). value as text: a number (in the unit the row shows - degrees "
+                       "for angles; it may carry the unit, '1.5 m'), true/false, 'x, y, z', #RRGGBB or 0xAARRGGBB, a name from the row's list, text, a "
+                       "shortcut ('Ctrl+Shift+S'), or a button's caption to press it. Answers {target, key, value} (value "
+                       "as drawn), or an error naming what the row takes, that it is read-only, or that it cannot be set "
+                       "by text.",
+        "annotations": {"title": "Set a property row", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "target": {"type": "string", "enum": ["selection", "world"]},
+            "key": {"type": "string"}, "value": {"type": "string"},
+        }, "required": ["key", "value"]},
+    },
+    {
+        "name": "xfined_shortcuts",
+        "description": "The editor's keyboard shortcuts (the Keyboard page of Preferences). action list (default; "
+                       "'filter' narrows it, spaces separate terms that must all match) | set ('command', 'keys') | clear "
+                       "('command'). command is the id (the level.ini name: COMMAND_UNDO, COMMAND_ZOOM_EXTENTS.\"Selected\") "
+                       "or the label the Keyboard page shows - the menus' official names, 'Group · Name' ('Edit · Undo', "
+                       "'View · Frame Selection'). Rows are {id, label, keys}; set answers "
+                       "shortcut and moved_from (the command that had the shortcut and lost it, or null). Saved at once, "
+                       "like the page.",
+        "annotations": {"title": "List or rebind shortcuts", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "set", "clear"]},
+            "filter": {"type": "string"}, "command": {"type": "string"}, "keys": {"type": "string"},
+        }},
+    },
+    {
+        "name": "xfined_scene_visibility",
+        "description": "The eyes of the World Outliner and the Tools tiles: show or hide objects in the viewport. A "
+                       "target - class (a tool class as scene_tree names it), name (an object), selection=true or all=true "
+                       "- takes visible=true|false; with no target it only lists classes [{class, title, visible, "
+                       "objects, hidden_objects}]. Answers changed and the list. It only shows and hides: nothing is "
+                       "deleted.",
+        "annotations": {"title": "Show or hide objects in the viewport", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "class": {"type": "string"}, "name": {"type": "string"}, "selection": {"type": "boolean"},
+            "all": {"type": "boolean"}, "visible": {"type": "boolean"},
+        }},
+    },
+    {
+        "name": "xfined_viewport_controls",
+        "description": "The viewport's right pills: the transform tool (select | place | move | rotate | scale), the "
+                       "grid, scale and angle snaps with their steps (angle in degrees) and the object snap, vertex snap "
+                       "and normal alignment. Omitted arguments keep their value. Answers tool, grid|scale|angle {on, "
+                       "step}, object_snap, vertex_snap, normal_align and supports {move, rotate, scale}; a transform the "
+                       "active tool cannot do is an error that names the tool.",
+        "annotations": {"title": "Set the viewport's tool and snaps", "readOnlyHint": False, "destructiveHint": False},
+        "inputSchema": {"type": "object", "properties": {
+            "tool": {"type": "string", "enum": ["select", "place", "move", "rotate", "scale"]},
+            "grid": {"type": "number"}, "scale": {"type": "number"}, "angle": {"type": "number"},
+            "grid_snap": {"type": "boolean"}, "scale_snap": {"type": "boolean"}, "angle_snap": {"type": "boolean"},
+            "object_snap": {"type": "boolean"}, "vertex_snap": {"type": "boolean"}, "normal_align": {"type": "boolean"},
+        }},
+    },
+    {
+        "name": "xfined_snap_objects",
+        "description": "The Tools panel's Snap Objects: use (snap to the listed objects), pick, and action "
+                       "set_from_selection | add_selection | remove_selection | select | clear. Answers use, pick and "
+                       "objects [names]. clear empties the list (the objects themselves stay) and asks nothing.",
+        "annotations": {"title": "The snap objects list", "readOnlyHint": False, "destructiveHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "use": {"type": "boolean"}, "pick": {"type": "boolean"},
+            "action": {"type": "string", "enum": ["set_from_selection", "add_selection", "remove_selection", "select", "clear"]},
+        }},
     },
 ]
 
@@ -2195,6 +2743,33 @@ CMD_MAP = {
     "xfined_quest_minimap": "quest_minimap",
     "xfined_quest_lookup": "quest_lookup",
     "xfined_quest_check_all": "quest_check_all",
+    "xfined_ui_list": "ui_list",
+    "xfined_ui_tab": "ui_tab",
+    "xfined_ui_tab_discard": "ui_tab",
+    "xfined_ui_panel": "ui_panel",
+    "xfined_ui_drawer": "ui_drawer",
+    "xfined_ui_dialog": "ui_dialog",
+    "xfined_ui_popup": "ui_popup",
+    "xfined_ui_scroll": "ui_scroll",
+    "xfined_ui_split": "ui_split",
+    "xfined_ui_audit": "ui_audit",
+    "xfined_ui_scale": "ui_scale",
+    "xfined_ui_contract": "ui_contract",
+    "xfined_window_close_discard": "window_control",
+    "xfined_project_close": "project_close",
+    "xfined_project_close_discard": "project_close",
+    "xfined_preferences": "preferences",
+    "xfined_texture_preview": "texture_preview",
+    "xfined_library": "library",
+    "xfined_mod_settings_view": "mod_settings_view",
+    "xfined_characters_view": "characters_view",
+    "xfined_world_view": "world_view",
+    "xfined_project_create": "project_create",
+    "xfined_property_set": "property_set",
+    "xfined_shortcuts": "shortcuts",
+    "xfined_scene_visibility": "scene_visibility",
+    "xfined_viewport_controls": "viewport_controls",
+    "xfined_snap_objects": "snap_objects",
 }
 
 
@@ -2272,6 +2847,13 @@ def tool_result(name: str, args: dict) -> dict:
     if name == "xfined_mod_catalog_withdraw":
         # takes the module out of the Mod Browser: a tool of its own, marked destructive
         args["action"] = "withdraw"
+    # losing unsaved work is only ever these three tools, each marked destructive: the others cannot pass discard
+    if name == "xfined_ui_tab_discard":
+        args = dict(args, action="close", discard=True)
+    if name == "xfined_window_close_discard":
+        args = dict(args, action="close", discard=True)
+    if name == "xfined_project_close_discard":
+        args = dict(args, discard=True)
     data = editor_call(CMD_MAP[name], args)
     follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
     if follows_job and data.get("ok") and data.get("pending"):
@@ -2305,12 +2887,13 @@ def tool_result(name: str, args: dict) -> dict:
             time.sleep(0.5)
             data = editor_call("mod_catalog", {"action": "status"})
     if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
+        # the answer is the last frame drawn: a held request makes the editor draw (a background one too)
+        editor_call("titlebar_info")
+        data = editor_call("quest_view", {"path": args["path"]})
         deadline = time.monotonic() + 1.0
-        while data.get("pending") and time.monotonic() < deadline:
+        while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
             time.sleep(0.02)
             data = editor_call("quest_view", {"path": args["path"]})
-            if not data.get("ok"):
-                break
     if name == "xfined_recovery" and args.get("action", "get") in ("restore", "discard") \
             and data.get("ok") and data.get("pending"):
         operation_id = data.get("operation_id")

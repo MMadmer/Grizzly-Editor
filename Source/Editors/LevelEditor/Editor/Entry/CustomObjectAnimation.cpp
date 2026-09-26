@@ -207,7 +207,7 @@ void 	CCustomObject::OnMotionCommandsClick(ButtonValue* value, bool& bModif, boo
 		PHelper().CreateFloat	(items,"From Time", 	&m_FromTime, m_FromTime, m_ToTime, 	1.f/30.f, 3);
 		PHelper().CreateFloat	(items,"To Time",   	&m_ToTime, m_FromTime, m_ToTime, 	1.f/30.f, 3);
 		PHelper().CreateFloat	(items,"Scale",			&m_ScaleFactor, 	-1000.f, 1000.f);
-        UIPropertiesModal::Show(items);
+        UIPropertiesModal::Show(items, "Scale Keys");
         m_ButtonId = 2;
         EDevice->seqDrawUI.Add(this);
     }break;
@@ -220,7 +220,7 @@ void 	CCustomObject::OnMotionCommandsClick(ButtonValue* value, bool& bModif, boo
 		PHelper().CreateFloat	(items,"From Time", 	&m_FromTime, m_FromTime, m_ToTime, 	1.f/30.f, 3);
 		PHelper().CreateFloat	(items,"To Time",   	&m_ToTime, m_FromTime, m_ToTime, 	1.f/30.f, 3);
 		PHelper().CreateFloat	(items,"Speed (m/sec)", &m_Speed, 		0.f, 100.f);
-        UIPropertiesModal::Show(items);
+        UIPropertiesModal::Show(items, "Normalize Keys");
         m_ButtonId = 3;
         EDevice->seqDrawUI.Add(this);
     }break;
@@ -308,9 +308,9 @@ void CCustomObject::AnimationFillProp(LPCSTR pref, PropItemVec& items)
        				      PHelper().CreateCaption		(items,PrepareKey(pref,"Motion\\Hint"),		"Make KEY only on Parent CS");
 	    ButtonValue* B	= PHelper().CreateButton		(items,PrepareKey(pref,"Motion\\Files"),	"Import,Export", 0);
         B->OnBtnClickEvent.bind(this,&CCustomObject::OnMotionFilesClick);
-	    B				= PHelper().CreateButton		(items,PrepareKey(pref,"Motion\\Commands"),	"+ K,- K,Scale,Norm,Clamp", 0);
+	    B				= PHelper().CreateButton		(items,PrepareKey(pref,"Motion\\Commands"),	"Add Key,Delete Key,Scale Keys...,Normalize Keys...,Clamp", 0);
         B->OnBtnClickEvent.bind(this,&CCustomObject::OnMotionCommandsClick);
-	    B				= PHelper().CreateButton		(items,PrepareKey(pref,"Motion\\Controls"),	" |<<, +<<, <<, >, ||, >>, >>+, >>|", 0); 
+	    B				= PHelper().CreateButton		(items,PrepareKey(pref,"Motion\\Controls"),	"First Frame,Previous Key,Previous Frame,Play,Pause,Next Frame,Next Key,Last Frame", 0);
         B->OnBtnClickEvent.bind(this,&CCustomObject::OnMotionControlClick);
         				  PHelper().CreateFlag32		(items,PrepareKey(pref,"Motion\\Flags\\Auto Key"), 		&m_CO_Flags, flAutoKey);
         V				= PHelper().CreateFlag32		(items,PrepareKey(pref,"Motion\\Flags\\Camera View"), 	&m_CO_Flags, flCameraView);
@@ -322,7 +322,7 @@ void CCustomObject::AnimationFillProp(LPCSTR pref, PropItemVec& items)
 		V				= PHelper().CreateFloat		(items,PrepareKey(pref,"Motion\\Current Frame (sec)"),	&m_MotionParams->t_current, -10000.f, 10000.f,	1.f/30.f, 3);
     	V->OnChangeEvent.bind(this,&CCustomObject::OnMotionCurrentFrameChange);
 
-		V				= PHelper().CreateFloat		(items,PrepareKey(pref,"Motion\\ChangeKeyTime(sec)"),	&m_MotionParams->tmp, -10000.f, 10000.f,	1.f/30.f, 3);
+		V				= PHelper().CreateFloat		(items,PrepareKey(pref,"Motion\\Key Time (sec)"),	&m_MotionParams->tmp, -10000.f, 10000.f,	1.f/30.f, 3);
     	V->OnChangeEvent.bind(this,&CCustomObject::OnMotionKeyTimeChange);
 
         				  PHelper().CreateCaption		(items,PrepareKey(pref,"Motion\\Key Count"),			shared_str().printf("%d",m_Motion->KeyCount()));

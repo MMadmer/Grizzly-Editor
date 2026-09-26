@@ -45,9 +45,13 @@ namespace EditorCatalog
 										 xr_string& err);
 	// the editor is closing: the open key is wiped
 	ECORE_API void		Shutdown		();
-	// One line for a release dialog: what the release will be signed with, a password field when
-	// the key is locked, a hint when there is none. `id` keeps the widgets apart.
+	// The author key row of a release dialog, in the width the row leaves (a property row's value):
+	// what the release will be signed with, a password field when the key is locked, a warning when
+	// there is none. `id` keeps the widgets apart.
 	ECORE_API void		DrawKeyLine		(LPCSTR id);
+	// DrawKeyLine asks for the password: the key file reads and is locked. Its row is read-only otherwise
+	// (a property row's PropReadOnly). Main thread only, like KeyStateForUI.
+	ECORE_API bool		KeyWantsPassword();
 
 	// A file of the release the card names: path as in the file index, size, SHA-256.
 	struct SCardFile

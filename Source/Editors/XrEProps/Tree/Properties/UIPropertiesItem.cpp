@@ -1,34 +1,5 @@
 #include "stdafx.h"
-
-namespace
-{
-char LowerAscii(char value)
-{
-	return value >= 'A' && value <= 'Z' ? value + ('a' - 'A') : value;
-}
-
-bool ContainsNoCase(LPCSTR text, LPCSTR query)
-{
-	if (!query || !query[0])
-		return true;
-	if (!text)
-		return false;
-
-	for (; *text; ++text)
-	{
-		LPCSTR candidate = text;
-		LPCSTR expected = query;
-		while (*candidate && *expected && LowerAscii(*candidate) == LowerAscii(*expected))
-		{
-			++candidate;
-			++expected;
-		}
-		if (!*expected)
-			return true;
-	}
-	return false;
-}
-}
+#include "../../UIPropsLocal.h"
 
 UIPropertiesItem::UIPropertiesItem(shared_str Name, UIPropertiesForm* propertiesFrom):UITreeItem(Name),PropertiesFrom(propertiesFrom)
 {
@@ -41,179 +12,109 @@ UIPropertiesItem::~UIPropertiesItem()
 {
 }
 
-void UIPropertiesItem::Draw()
+void UIPropertiesItem::Draw(int depth)
 {
 	if (!m_FilterVisible)
 		return;
 
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
-	if (PItem&&PItem->m_Flags.test(PropItem::flShowCB))
+	// ids follow the key, not this node: a rebuild while a value is dragged or typed keeps the edit going
+	ImGui::PushID(m_Path.c_str());
+	const bool filtering = PropertiesFrom->IsFiltering();
+	const bool open = filtering || m_Expanded;
+	bool toggle = false;
+	if (PItem)
 	{
-		if (ImGui::CheckboxFlags("##value", &PItem->m_Flags.flags, PropItem::flCBChecked))
+		UIPropertiesForm* F = PropertiesFrom;
+		const bool read_only = F->IsReadOnly() || PItem->m_Flags.test(PropItem::flDisabled);
+		const bool mixed = PItem->m_Flags.test(PropItem::flMixed) && !PItem->m_Flags.test(PropItem::flIgnoreMixed);
+		// a switch is one box: a grid that puts labels above values keeps it on its label's line
+		const EPropType type = PItem->Type();
+		const bool box = (type == PROP_BOOLEAN || type == PROP_FLAG) && !PItem->m_Flags.test(PropItem::flShowCB);
+		const int flags = (read_only ? XUI::PropReadOnly : 0) | (mixed ? XUI::PropMixed : 0) | (box ? XUI::PropInline : 0);
+		const xr_string label = UIPropertiesForm::LabelOf(Name.c_str());
+		const xr_string help = F->GetHelp(PItem);
+		const int row_depth = Items.empty() ? depth : depth + 1;
+		// a row with rows under it keeps its value; the chevron before its label opens it
+		XUI::EndPropertySection();
+		const ImVec2 top = ImGui::GetCursorScreenPos();
+		// the grid's width: the row runs from its left edge to the end of the region
+		const float grid_w = _max(1.f, ImGui::GetContentRegionAvail().x);
+		if (XUI::PropertyRow(label.c_str(), help.c_str(), flags, row_depth))
 		{
-			PItem->OnChange();
-			PropertiesFrom->Modified();
-		}
-		ImGui::SameLine(0, 2);
-	}
-	if (!Items.empty())
-	{
-		ImGuiTreeNodeFlags FloderFlags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DefaultOpen;
-		// Filtering opens matching paths without discarding the user's expansion state.
-		ImGui::SetNextItemOpen(PropertiesFrom->IsFiltering() ? true : m_Expanded, ImGuiCond_Always);
-		bool open = ImGui::TreeNodeEx(Name.c_str(), FloderFlags);
-		if (!PropertiesFrom->IsFiltering())
-		{
-			m_Expanded = open;
-			PropertiesFrom->RememberExpansion(m_Path.c_str(), open);
-		}
-		ImGui::TableNextColumn();
-		DrawItem();
-		if (open)
-		{
-			for (UITreeItem* Item : Items)
+			ImVec2 value_pos = ImGui::GetCursorScreenPos();
+			float value_w = ImGui::CalcItemWidth();
+			const bool stacked = value_pos.y > top.y + XUI::Pt(20.f);
+			if (!Items.empty())
 			{
-				static_cast<UIPropertiesItem*>(Item)->Draw();
+				const float cy = stacked ? top.y + ImGui::GetTextLineHeight() * .5f : top.y + XUI::Pt(13.f);
+				const float x = top.x + XUI::Pt(12.f) * depth;
+				ImGui::SetCursorScreenPos(ImVec2(x, cy - XUI::Pt(11.f)));
+				toggle = ImGui::InvisibleButton("##toggle", ImVec2(XUI::Pt(22.f), XUI::Pt(22.f)));
+				XUI::Tip(open ? "Collapse" : "Expand");
+				XUI::DrawIcon(ImGui::GetWindowDrawList(), open ? XUI::Icon::ChevronDown : XUI::Icon::ChevronRight,
+					ImVec2(XUI_Local::Round(x + XUI::Pt(5.f)), XUI_Local::Round(cy - XUI::Pt(6.f))), 12.f,
+					XUI_Local::Col(ImGui::IsItemHovered() ? XUI_Local::Token::Text : XUI_Local::Token::TextSecondary));
 			}
-			ImGui::TreePop();
+			// A value that needs more than its column on one line (X, Y and Z side by side, a row of choices) takes the
+			// whole line under its label, the way a grid too narrow for two columns lays out every row
+			const float row_h = XUI::Pt(26.f);
+			const bool under = !stacked && OneLineWidth() > value_w + .5f;
+			if (under)
+			{
+				value_pos = ImVec2(top.x + XUI::Pt(12.f) * row_depth + XUI::Pt(6.f), top.y + row_h + (row_h - ImGui::GetFrameHeight()) * .5f);
+				value_w = _max(1.f, top.x + grid_w - XUI::Pt(2.f) - value_pos.x);
+			}
+			else if (F->m_ValueMaxEm > 0.f && !TakesTrailing())
+				value_w = _min(value_w, XUI::Em(F->m_ValueMaxEm));
+			ImGui::SetCursorScreenPos(value_pos);
+			ImGui::SetNextItemWidth(value_w);
+			DrawValue();
+			// the line under the label keeps the grid's rhythm
+			if (under && ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y < top.y + row_h * 2.f)
+			{
+				ImGui::SetCursorScreenPos(ImVec2(top.x, top.y + row_h * 2.f));
+				ImGui::Dummy(ImVec2(0.f, 0.f));
+			}
 		}
+		// the row ends here, a tall value included: the footer speaks of the row the mouse is over
+		XUI::EndPropertySection();
+		const float bottom = ImGui::GetCursorScreenPos().y;
+		if (bottom > top.y && ImGui::IsMouseHoveringRect(top, ImVec2(top.x + grid_w, bottom)) &&
+			ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+			F->m_HoverKey = PItem->Key();
+		if (!F->m_FooterShown && F->m_FooterKey == PItem->Key())
+			F->m_FooterShown = true;
 	}
-	else
+	else if (!Items.empty())
+		toggle = XUI_Local::CategoryRow(Name.c_str(), depth, open);
+
+	// a search keeps every branch that matches open; the author's own state comes back after it
+	if (toggle && !filtering)
 	{
-		ImGui::TreeNodeEx(Name.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_Bullet | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanFullWidth);
-		ImGui::TableNextColumn();
-		DrawItem();
+		m_Expanded = !m_Expanded;
+		PropertiesFrom->RememberExpansion(m_Path.c_str(), m_Expanded);
 	}
+	if (open && !Items.empty())
+		for (UITreeItem* Item : Items)
+			static_cast<UIPropertiesItem*>(Item)->Draw(depth + 1);
+	ImGui::PopID();
 }
 
 void UIPropertiesItem::DrawRoot()
 {
 	VERIFY(!PItem);
+	// a page of one top-level folder: its rows start at the left, its name is the page's title
+	const xr_string& root = PropertiesFrom->m_RootFolder;
+	if (!root.empty() && !PropertiesFrom->IsFiltering())
+	{
+		for (UITreeItem* Item : Items)
+			if (!xr_strcmp(Item->Name.c_str(), root.c_str()))
+				for (UITreeItem* Child : Item->Items)
+					static_cast<UIPropertiesItem*>(Child)->Draw(0);
+		return;
+	}
 	for (UITreeItem* Item : Items)
-	{
-		static_cast<UIPropertiesItem*>(Item)->Draw();
-	}
-}
-
-void UIPropertiesItem::DrawItem()
-{
-	if (!PItem)return;
-
-	EPropType type = PItem->Type();
-	//
-	switch (type)
-	{
-	case PROP_CANVAS:
-	{
-		if (PItem->m_Flags.test(PropItem::flMixed))
-		{
-			ImGui::TextDisabled(PItem->GetDrawText().c_str());
-
-		}
-		else
-		{
-			ImGui::PushItemWidth(-1);
-			CanvasValue* val = dynamic_cast<CanvasValue*>(PItem->GetFrontValue()); R_ASSERT(val);
-			if (!val->OnDrawCanvasEvent.empty())
-				val->OnDrawCanvasEvent(val);
-		}
-	}
-	break;
-	case PROP_BUTTON:
-
-		if (PItem->m_Flags.test(PropItem::flMixed))
-		{
-			ImGui::TextDisabled(PItem->GetDrawText().c_str());
-
-		}
-		else
-		{
-			ImGui::PushID(Name.c_str());
-			bool bRes = false;
-			bool bSafe = false;
-			ButtonValue* V = dynamic_cast<ButtonValue*>(PItem->GetFrontValue()); R_ASSERT(V);
-			if (!V->value.empty())
-			{
-				ImGui::PushItemWidth(-1);
-				float size = float(ImGui::CalcItemWidth());
-				float dx = floorf(size / float(V->value.size()));
-				float offset = size - (dx * V->value.size());
-				V->btn_num = V->value.size();
-				for (RStringVecIt it = V->value.begin(); it != V->value.end(); it++)
-				{
-
-					int k = it - V->value.begin();
-					if (ImGui::Button(it->c_str(), ImVec2(dx + offset, 0)))
-					{
-						V->btn_num = k;
-
-						bRes |= V->OnBtnClick(bSafe);
-					}
-					offset = 0;
-					ImGui::SameLine(0, 2);
-				}
-			}
-			else
-			{
-				ImGui::Text("");
-			}
-			ImGui::PopID();
-		}
-		break;
-	case PROP_WAVE:
-	case PROP_UNDEF:
-		break;
-	case PROP_CAPTION:
-	{
-		ImGui::TextDisabled(PItem->GetDrawText().c_str());
-	}
-	break;
-
-	default:
-		ImGui::PushID(Name.c_str());
-		if (PropertiesFrom->IsReadOnly())
-		{
-			if (type == PROP_BOOLEAN)
-			{
-				FlagValueCustom* V = dynamic_cast<FlagValueCustom*>(PItem->GetFrontValue()); VERIFY(V);
-				ImGui::TextDisabled(V->GetValueEx() ? "true" : "false");
-			}
-			else
-			{
-				ImGui::TextDisabled(PItem->GetDrawText().c_str());
-			}
-		}
-		else if (PItem->m_Flags.test(PropItem::flMixed) && !PItem->m_Flags.test(PropItem::flIgnoreMixed))
-		{
-			if (ImGui::Button("(Mixed)", ImVec2(-1, 0)))
-			{
-				RemoveMixed();
-			}
-		}
-		else
-		{
-			if (PItem->m_Flags.test(PropItem::flDisabled))
-			{
-				if (type == PROP_FLAG)
-				{
-					FlagValueCustom* V = dynamic_cast<FlagValueCustom*>(PItem->GetFrontValue()); VERIFY(V);
-					ImGui::TextDisabled(V->GetValueEx() ? "true" : "false");
-				}
-				else
-				{
-					ImGui::TextDisabled(PItem->GetDrawText().c_str());
-				}
-			}
-			else
-			{
-				ImGui::PushItemWidth(-1);
-				DrawProp();
-			}
-		}
-		ImGui::PopID();
-		break;
-	}
+		static_cast<UIPropertiesItem*>(Item)->Draw(0);
 }
 
 UITreeItem* UIPropertiesItem::CreateItem(shared_str Name)
@@ -235,7 +136,8 @@ bool UIPropertiesItem::RefreshFilter(LPCSTR filter, const xr_string& parentPath,
 	if (!m_Path.empty())
 		m_Expanded = PropertiesFrom->RestoreExpansion(m_Path.c_str(), m_Expanded);
 
-	const bool selfMatches = parentMatches || ContainsNoCase(path.c_str(), filter) || ContainsNoCase(Name.c_str(), filter);
+	// every word of the search in the row's path, any case, Cyrillic too (the kit's search rule)
+	const bool selfMatches = parentMatches || XUI::Match(filter, path.c_str());
 	bool childMatches = false;
 	for (UITreeItem* item : Items)
 	{
@@ -251,6 +153,34 @@ bool UIPropertiesItem::RefreshFilter(LPCSTR filter, const xr_string& parentPath,
 			++visibleCount;
 	}
 	return m_FilterVisible;
+}
+
+void UIPropertiesItem::Arrange()
+{
+	std::stable_partition(Items.begin(), Items.end(),
+		[](UITreeItem* item) { return !static_cast<UIPropertiesItem*>(item)->IsCategory(); });
+	for (UITreeItem* item : Items)
+		static_cast<UIPropertiesItem*>(item)->Arrange();
+}
+
+void UIPropertiesItem::CollectRows(PropItemVec& out) const
+{
+	if (PItem)
+		out.push_back(PItem);
+	for (UITreeItem* item : Items)
+		static_cast<const UIPropertiesItem*>(item)->CollectRows(out);
+}
+
+void UIPropertiesItem::CountRows(u32& total, u32& visible) const
+{
+	if (PItem)
+	{
+		++total;
+		if (m_FilterVisible)
+			++visible;
+	}
+	for (UITreeItem* item : Items)
+		static_cast<const UIPropertiesItem*>(item)->CountRows(total, visible);
 }
 
 void UIPropertiesItem::SetExpandedRecursive(bool expanded)

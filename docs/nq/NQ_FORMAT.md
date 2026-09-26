@@ -212,6 +212,10 @@ finish (flow.end; status=completed)
 
 How to read it:
 
+- The first line is the document: `quest <id> "<title>" (active: …; vars: …;
+  tasks: …)`. A behaviour graph has no activation and no tasks, and never says
+  "quest": `behaviour <id> "<title>" (roles: leader, attackers; vars: …)`, the
+  parentheses left out when it has neither roles nor variables (§10).
 - `[T]` — a trigger (root node). For a trigger with a single connected pin the
   pin name is not printed: just ` -> target`.
 - In parentheses — the kind and a summary of the parameters written in the file
@@ -385,7 +389,7 @@ True exactly at the moment of the event. Allowed **only** in `trigger.when`,
 
 ### 6.5a The mode's world and standing orders
 
-What a mode keeps of the original game - its NPCs, monsters, jobs and story quests, the playable area, the transitions that start closed, where a new game begins - is the MODULE's decision, made once in `mod.ltx [world]` and the level editor's Player Start (the editor's Mod > World window, MCP `world_get` / `world_set`). The `world.*` kinds change it while the game runs: the story opens the way out of Agroprom, grows the area, lets the simulation back in. Nothing of the game is rewritten for either - the engine composes the module's world over the game's own in memory, per new game, and keeps it in the save.
+What a mode keeps of the original game - its NPCs, monsters, jobs and story quests, the playable area, the transitions that start closed, where a new game begins - is the MODULE's decision, made once in `mod.ltx [world]` and the level editor's Player Start (the editor's World Rules tab, MCP `world_get` / `world_set`). The `world.*` kinds change it while the game runs: the story opens the way out of Agroprom, grows the area, lets the simulation back in. Nothing of the game is rewritten for either - the engine composes the module's world over the game's own in memory, per new game, and keeps it in the save.
 
 An **order** is what an NPC does until told otherwise: guard a post, patrol a path, wander an area, follow someone, turn on someone. It belongs to the NPC, not to the quest that gave it: it survives saves, outlives the quest, waits while a behaviour graph borrows the NPC and comes back when the graph lets it go, and a new order replaces the old one. A stalker placed in the level editor carries one from its first frame (its Order properties, shipped as `[xms_order]` in its custom data); a quest gives one with `order.*` - typically right after `spawn.npc`:
 
@@ -433,11 +437,11 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `E011` | an edge into a phrase from a non-dialog node | a dialog is entered only through `dialog.topic`; route world edges into the topic, not into a phrase |
 | `E020` | an event condition outside `trigger.when` / `wait.when` / `wait.any` | replace it with a level condition (`has_item` instead of `event.item_taken`) or move the event into its own `trigger.when` |
 | `E021` | `cases` are empty, a case name is bad or duplicated, `weight ≤ 0` | every case needs a unique `[a-z0-9_]` `name`; weights strictly > 0 |
-| `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter; a `spawn.npc` row with both `character` and `section`, or neither); or `item.spawn` state written beside an `items` list | pick exactly one form; the inspector dims the losing fields. For `item.spawn` move the state into the row it applies to |
+| `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter; a `spawn.npc` row with both `character` and `section`, or neither); or `item.spawn` state written beside an `items` list | pick exactly one form; the Details panel dims the losing fields. For `item.spawn` move the state into the row it applies to |
 | `E030` | a reference to an undeclared `var` / `task` / `objective` / `node` / `quest`, a `ref` nothing creates, or a `spawn.npc` row whose `character` is not in the project - or is a template (`abstract`), which never becomes an NPC | declare the variable in `vars`, the task (and its steps) in `tasks`, the object via `spawn.*` or `objective.kill{spawn}` before use; for a foreign quest write `"<module>.<quest>"`. The game answers with the same code, so a quest with such a reference simply will not load there |
 | `E024` | `{ role = … }` in a quest's destination or target - a quest casts nobody | name the NPC by `{ ref = }` (something the quest spawned) or `{ story = }`; roles are a behaviour graph's cast (§10.1) |
 | `E031` | `actor.teleport` to a place on another level | Dead Air has no cross-level teleports — transitions go through a level changer |
-| `E050` | a syntax error in custom Lua | fix the `code`; the "check syntax" button in the inspector verifies it separately |
+| `E050` | a syntax error in custom Lua | fix the `code`; Check Syntax in the Edit Lua dialog (the Details panel) verifies it separately |
 | `W011` | continuations of a non-leaf phrase: among player replies **not all** are unconditional, or among NPC lines not a single one is (unconditional = no `cond` and no `once`) | the runtime will add a hidden leaf ("Пока." / "…"). For NPC lines it is unreachable, so one unconditional line is enough. For player replies it is a visible row that closes the talk past the topic's `done` — make every reply unconditional, or move the logic off `done` into the replies themselves |
 | `W012` | a `dialog.topic` with no continuation phrases | connect `next` to a phrase, otherwise the topic closes right after opening |
 | `W013` | a topic with `once = false` and no conditions | add a `cond` or `once = true`, otherwise the topic hangs on the NPC forever |
@@ -482,16 +486,16 @@ document answers with an `unsaved` error unless `discard: true` is passed.
 | `xfined_quest_validate` | `path` | the summary + `outline`; an open document is re-validated |
 | `xfined_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Refuses with `modified externally` when the file changed on disk after loading — then `force: true` |
 | `xfined_quest_reload` | `path` | re-reads the open document from disk (drops unsaved edits and the undo history) |
-| `xfined_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`) |
-| `xfined_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the inspector follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action in the inspector), `scroll?` (`"top"`/`"bottom"`/`"task:<id>"`/`"task:<id>/steps"` — scrolls the inspector; `"action:top"`/`"action:bottom"` — the action panel, which scrolls on its own) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom`, `center`, `nodes`, `open_tabs`, `pending`; the first `frame:all` may be `pending:true` until Draw, the Python bridge transparently re-reads the final view after the frame. Then — `xfined_screenshot_editor` |
+| `xfined_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`, and `w`/`h` - the node's box as the canvas draws it, sized by its content) |
+| `xfined_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the Details panel follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action under the node in the Details panel), `graph_panel?`/`details?`/`keys?`/`problems?` (`"show"`/`"hide"`/`"toggle"` — the Graph panel, the Details panel, the Shortcuts card, the Problems drawer), `graph_width?`/`details_width?` (pt), `action_split?`/`vars_split?` (shares of their column), `scroll?` (`"top"`/`"bottom"` — the selected node's pane, or the Graph panel with nothing selected; `"action:top"`/`"action:bottom"` — the action pane; `"tasks"`/`"task:<id>"`/`"task:<id>/steps"`/`"variables"` — the Graph panel; an error when that pane is not on screen) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom` (the level's factor) with `ui_scale` and `title_px`, `center`, `nodes`, `open_tabs`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `panes` (pt; null when not drawn), `pending`; Frame All never goes below 0.75, where a title is 12 px at 100%. The answer describes the frames the call changed (a first `frame:all`, a selection, a slot, a pane, a split, a scroll): the MCP pump holds the request until they are drawn and answers from them, in one call, raw socket included (`answer_only: true` reads the view and applies nothing - the pump's own re-read). Then — `xfined_screenshot_editor` |
 | `xfined_quest_edit` | `path`, `op`, `nodes?` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
 | `xfined_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | full-text node search over ids/kinds/parameters/conditions/actions/links/comments; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the result. Tokens are AND-joined, quotes keep a phrase, `-token` excludes |
 | `xfined_quest_project_find` | `query`, `limit?` | a read-only search over all sorted project `*.nqasset` without opening documents; the query syntax matches `quest_find`. A dirty open document overlays its disk copy. Results carry `source` (`disk`/`memory`); the response — `complete`, `diagnostics`, `generation`, a deterministic `fingerprint` |
 | `xfined_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only in parameters the current catalog typed as `type`; `path` narrows to one quest and is effectively mandatory for a local `task_id`. The walk includes nested `cond_list`/`cases_cond`; an unknown kind/parameter, a malformed value, Lua or an unreadable file give `complete:false` with precise diagnostics rather than fake completeness |
 | `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | renames the task declaration and every catalog-proven `task_id` reference inside one document as one undo step. Refuses before the `Snapshot` on an unknown/Lua/malformed/partially read area. The ack is mandatory: the task id is stored in runtime/save state, old state does not migrate |
 | `xfined_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
-| `xfined_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the inspector slot |
-| `xfined_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); the response carries the graph and viewport bounds |
+| `xfined_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the Details slot |
+| `xfined_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); `visible` is the toggle, `shown` what the last frame drew (only from 12 nodes, `min_nodes`); the response carries the graph and viewport bounds |
 | `xfined_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
 | `xfined_quest_check_all` | — | the build gate: `passed`, `errors`, `warnings`, `error`, `log[]` (lines `<path>: <code> <node>: <message>`) |
 
@@ -753,7 +757,8 @@ space per module (`E002`).
 ### 10.1 Roles
 
 A role is a slot the **caller** fills, which is what makes one graph serve any
-cast. The Behaviour Graph window edits them where a quest keeps its tasks.
+cast. The behaviour graph's tab edits them in its Graph panel, where a quest
+keeps its tasks.
 
 | field | meaning |
 |---|---|
@@ -863,7 +868,7 @@ ambush that never happened without a single condition. Exactly one of
   out = { started = "tell_the_player", finished = "after_the_fight", aborted = "they_never_showed" } }
 ```
 
-In the inspector the `roles` of the call are a FORM: pick the asset and one row
+In the Details panel the `roles` of the call are a FORM: pick the asset and one row
 per role that graph declares appears, captioned with its title, `(group)`,
 `[has a default]` or `[optional]`.
 

@@ -8,17 +8,17 @@
 //   spawn ops  -> spawn\<level>.xspawn                     (preferred for props)
 //   collision  -> levels\<level>\overlay.xcform            (XCF1 binary)
 //   visuals    -> levels\<level>\visuals\<object>.ogf      (+ overlay_visuals.ltx)
-// Menu entries run on the current selection and pop a result modal; the MCP
-// handlers take level/sector/selected_only arguments. Mirrors EditorMod style.
+// Menu entries run on the current selection and report in the result dialog every
+// build shares; the MCP handlers take level/sector/selected_only arguments and
+// answer in JSON. Mirrors EditorMod style.
 
 namespace EditorModScene
 {
-	// File\Mod menu triggers (selected objects, sector 0) + the result modal
+	// Mod > Bake Scene Layer triggers (selected objects, sector 0)
 	void RequestExportSpawn		();
 	void RequestExportCut		();
 	void RequestExportXCForm	();
 	void RequestExportOGF		();
-	void DrawUI					();
 
 	// MCP command handlers: fill the full JSON response; raw = request line
 	void McpExportSpawn			(LPCSTR raw, xr_string& out);	// mod_export_spawn

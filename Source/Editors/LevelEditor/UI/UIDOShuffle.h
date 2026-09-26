@@ -2,6 +2,8 @@
 class EDetailManager;
 class EImageThumbnail;
 class UIDOOneColor;
+// The Detail Objects dialog (###dlg.detail_objects, L): the objects the level's details are made of with their
+// settings, and the colour indices that say which objects grow on which colour of the detail mask.
 class UIDOShuffle :
 	public XrUI
 {
@@ -18,11 +20,12 @@ private:
 private:
 	EDetailManager* DM;
 	void FillData();
+	void DrawObjects();
+	void DrawObjectList();
+	void DrawObjectSettings();
+	void DrawColorIndices();
+	void DrawColorIndexList();
 private:
-	UIPropertiesForm* m_Props;
-private:
-	EImageThumbnail* m_Thm;
-	ref_texture m_TextureNull;
 	ImTextureID m_Texture;
 	ImTextureID m_RealTexture;
 private:

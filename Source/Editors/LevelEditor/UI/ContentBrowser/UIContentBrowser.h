@@ -20,11 +20,28 @@ public:
 					UIContentBrowser	();
 	virtual			~UIContentBrowser	();
 	virtual void	Draw				();
+	// Everything under the panel's title: the panel draws it on the Level tab, the Content Drawer over any tab.
+	// One host a frame - while the drawer is open the panel only says so.
+	void			DrawBody			();
 
-	static void		Update				();
+	// the file watcher, every frame whatever shows the browser
+	static void		Tick				();
+	// the panel on the Level tab, when it is open
+	static void		DrawPanel			();
+	// the drawer's body: the same browser, created for it when the panel never was
+	static void		DrawDrawer			();
+	// the panel, focused - its tab raised when another one covers it - while Level draws it; the Content Drawer
+	// otherwise
+	static void		MakeVisible			();
+	// Level draws the panel - docked in the strip (behind another tab too) or floating - so it is the host, and
+	// a drawer over it is not needed
+	static bool		PanelLive			();
+	// where the browser is seen now: "panel", "drawer" or "none" (a panel raised by MakeVisible counts at once)
+	static LPCSTR	VisibleHost			();
 	static void		Show				();
 	static void		Close				();
-	static IC bool	IsOpen				() { return !!Form; }
+	static IC bool	IsOpen				() { return Form && Form->bOpen; }
+	static LPCSTR	PanelName			() { return "Content Browser"; }
 
 	// The viewport drop hands over the browser's own name for the asset; what
 	// placement needs is a library reference. Translates per the ACTIVE source:
@@ -61,9 +78,33 @@ public:
 	// The icon the browser draws for an entry - one of the editor's own asset kinds
 	// (EditorAssetIcons::Name) - or "" for any other file: what an agent reads instead of the tile.
 	static LPCSTR	IconName			(LPCSTR entry);
-	// MCP: the tile slider - the picture's side in pixels, 48..192 (the slider's range)
+	// The vector glyph a tile draws while it has no picture (XUI::IconName: "folder", "file_texture",
+	// "quest", ...); a folder is named with a trailing '\', as GetSelection lists it.
+	static LPCSTR	Glyph				(LPCSTR entry);
+	// MCP: the tile size - a tile's side in pt, 48..192 (EditorUiContract), kept in the layout. The docked panel
+	// and the drawer keep one each; these read and set the one of the host MakeVisible picks. A size asks for tiles.
+	// TileSize is the side the tiles are drawn at: the size picked, or while none is (TileFit) the fitted one.
 	static float	TileSize			();
 	static bool		SetTileSize			(float size, xr_string& err);
+	// MCP: whether the host's tiles fit its height (no size picked yet): the largest side up to the host's default
+	// (panel 64, drawer 96) at which the grid shows two rows, 48 at least. Off keeps the side shown as picked.
+	static bool		TileFit				();
+	static void		SetTileFit			(bool on);
+	// MCP: whether the toolbar's Add works here - only in the open project's own source
+	static bool		CanAdd				();
+	// MCP: how the grid shows its entries, "tiles" or "list" (one line each, in columns), per host like the tile
+	// size: the docked panel starts as a list - its strip is too short for two rows of tiles - the drawer as tiles
+	static LPCSTR	ViewMode			();
+	static bool		SetViewMode			(LPCSTR mode, xr_string& err);
+	// MCP: the search field; the grid lists the folder shown and everything below it that matches
+	static void		SetSearch			(LPCSTR text);
+	static LPCSTR	Search				();
+	// MCP: the Sources pane (source, favorites, folder tree). `on` is the author's choice; it is
+	// shown only while the browser is at least 480 pt wide.
+	static void		SetSourcesPane		(bool on);
+	static void		GetSourcesPane		(bool& on, bool& shown);
+	// Show in Explorer for a project entry; `dry_run` only answers the path it would select
+	static bool		RevealInExplorer	(LPCSTR entry, bool dry_run, xr_string& path, xr_string& err);
 	// MCP: apply file-manager selection semantics to an exact entry in the
 	// complete current view, including rows outside the virtualized viewport.
 	static bool		ModifySelection		(LPCSTR action, LPCSTR name, xr_string& err);
@@ -107,6 +148,8 @@ public:
 	static bool		NavigateForward		(xr_string& err);
 	static bool		NavigateUp			(xr_string& err);
 	static bool		NavigateHome		(xr_string& err);
+	// lists the source again now (View > Refresh, F5): what the file watcher does after a quiet moment
+	static void		RefreshNow			();
 
 	// Favorites live for the editor process and are never written to a project.
 	static void		GetFavorites		(xr_vector<SLocation>& out);
@@ -143,6 +186,19 @@ private:
 	{
 		ImTextureID					tex;
 		u32							last_used;
+		float						aspect;		// width / height: a picture keeps its shape in the square
+		// An image's picture is made for the size it is drawn at (ImGui samples one level): `side` is the long edge
+		// it was asked for - 0 for a model render or a library thumbnail, which come in one size - `edge` the long
+		// edge it got, `full` when that is the file's own size
+		u32							side;
+		u32							edge;
+		bool						full;
+		// what the tile says of an image: its transparency (STextureTile::alpha) and the file's own size
+		u8							alpha;
+		u32							src_w;
+		u32							src_h;
+									SThumb() : tex(0), last_used(0), aspect(1.f), side(0), edge(0), full(false),
+										alpha(0), src_w(0), src_h(0) {}
 	};
 	using ThumbMap = xr_flat_hash_map<shared_str, SThumb>;
 	using ThumbMapIt = ThumbMap::iterator;
@@ -166,16 +222,34 @@ private:
 	// linked game install, STRICTLY READ ONLY - see IsReadOnlySource)
 	int								m_Source;
 	bool							m_NeedRefresh;
-	float							m_TileSize;
-	// What one tile really occupies: m_TileSize is the PICTURE, a button adds
-	// its frame padding around it. Every tile is drawn at this width and the
-	// row wrap is computed from it, so folders and assets line up in the same
-	// columns and the last column stops falling off the right edge.
-	float							TileWidth() const;
-	// folder-tree width, dragged by the splitter between the two panes and
-	// persisted in the editor preferences
-	float							m_TreeWidth;
-	ImGuiTextFilter					m_Filter;
+	// A tile's side in pt (the square; its caption goes below it), one per host: the docked panel is a short
+	// strip in the Wide layout and fits smaller tiles than the drawer. m_Host is the one being drawn. 0 = no size
+	// picked: the tiles fit the host's height (ShownTile), measured at its last frame (m_GridHeight, pt).
+	enum { kHostDrawer = 0, kHostPanel = 1 };
+	float							m_TileSize[2];
+	float							m_GridHeight[2];
+	float			ShownTile			(int host) const;
+	// the list instead of the tiles, per host as well
+	bool							m_ListView[2];
+	int								m_Host;
+	// the last frame the panel was drawn; whether it was drawn at the last frame Level was up (Tick); frames a
+	// raised panel counts as seen before its tab has come to the front
+	int								m_PanelFrame;
+	bool							m_PanelLive;
+	int								m_RaiseFrames;
+	// the host MakeVisible and the tile size go to: the panel while it is live, the drawer otherwise
+	static int		TargetHost			();
+	// the view settings live in the layout, which is read with the .ini at the first frame
+	bool							m_ViewLoaded;
+	// the Sources pane: the author's choice, whether the width has room for it (480 pt), and
+	// whether it showed last frame
+	bool							m_SourcesPane;
+	bool							m_SourcesFit;
+	bool							m_SourcesShown;
+	char							m_Search[256];
+	// what the view holds, counted when it is rebuilt: the status strip reads it every frame
+	int								m_ViewFolders;
+	int								m_ViewFiles;
 	// One entry of the grid. A folder and an asset are THE SAME THING to the
 	// selection and to copy/cut/paste/delete - only the code that finally has to
 	// touch the disk looks at `folder`. Nothing else is allowed to branch on it,
@@ -247,8 +321,10 @@ private:
 	// DARF source state
 	bool							m_DarfReady;	// mounted and browsable
 	xr_string						m_DarfStatus;	// why not, when it is not
-	// the game tree dwarfs the SDK one: cap how much work one frame may do
+	// Pictures are decoded inline, but a folder of large textures is spread over frames: a frame decodes until its
+	// budget is spent, one picture at least (TakeDecodeTurn). The clock runs from the frame's first decode.
 	u32								m_ThumbsThisFrame;
+	CTimerBase						m_ThumbClock;
 
 	struct SDirectoryWatcher;
 	SDirectoryWatcher*				m_Watcher;
@@ -277,7 +353,16 @@ private:
 	void			RebuildView			();
 	void			CollectItems		(SFolder& f, xr_vector<int>& out, bool recursive);
 	SFolder*		FindFolder			(LPCSTR path);
-	ImTextureID		GetThumb			(LPCSTR name);
+	// The picture of `name` for a tile that draws it `px` px wide: null while there is none (yet). The entry lives
+	// in the cache - copy what is needed before the next call, which may add to it.
+	const SThumb*	GetThumb			(LPCSTR name, float px);
+	// an image file's picture of `side` px: from the game's archives in the Game source, from disk in the Project one;
+	// false (and no texture) when it cannot be read
+	bool			MakeImageThumb		(LPCSTR name, u32 side, SThumb& t);
+	// into the cache, evicting the coldest entry not drawn this frame once it is full
+	const SThumb*	StoreThumb			(const shared_str& key, const SThumb& t);
+	// whether this frame may decode one more picture
+	bool			TakeDecodeTurn		();
 	// queues an offscreen model render; the result is picked up on a later frame
 	void			RequestModelThumbnail(LPCSTR name);
 	// Double-click handler: opens the asset's viewer, never touches the scene.
@@ -303,11 +388,26 @@ private:
 	void			RememberNavigation	(const SLocation& origin);
 	int				FindFavorite			(const SLocation& location) const;
 	bool			ValidateFavorite		(SLocation& location, xr_string& err);
-	void			DrawNavigationBar	();
-	void			DrawBreadcrumbs		();
-	void			DrawFavoritesPopup	();
-	// vertical splitter between the folder tree and the tile grid
-	void			DrawSplitter		(float height);
+	// [+ Add] | Back Forward Up | breadcrumb | search | View | star | Favorites
+	void			DrawToolbar			();
+	// the crumbs in `width` px: the leading ones fold into a menu when they do not fit
+	void			DrawBreadcrumbs		(float width);
+	float			BreadcrumbWidth		() const;
+	LPCSTR			RootLabel			() const;
+	void			DrawAddMenu			();
+	// why Add is off here, or nullptr while it works: content is only ever added to the open project
+	LPCSTR			AddBlocked			() const;
+	void			DrawViewMenu		();
+	void			DrawFavoritesMenu	();
+	// Segmented source, the category of the Editor source, favorites and the folder tree
+	void			DrawSources			();
+	// counts of the folder shown, the selection, the clipboard; Read only
+	void			DrawStatusStrip		();
+	// the selected entries that are tiles of the view (a folder picked in the tree is not one)
+	int				SelectedTiles		() const;
+	void			LoadView			();
+	void			StoreView			();
+	void			LinkGameFolder		();
 	// The project's own Content is the only writable root. Editor Content is a
 	// shared SDK library and the game install is someone else's install - both
 	// are browse-and-copy-out sources, never edited in place.
@@ -338,18 +438,17 @@ private:
 
 	// folder authoring, project source only
 	void			CreateFolder		();
-	void			CreateQuest			();				// NewQuest.nqasset in the folder now open				// in the folder now open
+	void			CreateQuest			();				// NewQuest.nqasset in the folder now open
 	void			CreateCharacter		();				// NewCharacter.npcasset in the folder now open
 	void			CreateBehaviour		();				// NewBehaviour.behasset in the folder now open
 	void			CreatePda			();				// NewPda.pdaasset in the folder now open
 	void			BeginRename			(LPCSTR path);	// inline edit on that tile
 	void			DrawBuildToggle		();				// Exclude from / Include in Build for the selection
-	static void		VeilTile			(const ImVec2& a, const ImVec2& b);
 	void			CommitRename		();
 	// Inline rename of a folder tile: the created folder starts here with its
 	// name fully selected, so typing replaces it - the usual file-manager flow.
 	xr_string						m_Rename;		// folder path being renamed, "" = none
-	char							m_RenameBuf[128];
+	char							m_RenameBuf[512];
 	bool							m_RenameFocus;	// grab the keyboard on the next frame
 	int								m_RenameSelect;	// chars to select once the box is active, -1 = done
 	int								m_RenameStem;	// the same number, kept for whoever asks
@@ -361,13 +460,11 @@ private:
 	// scripted paste goes through exactly the code the menu does
 	int				PasteClipboardInto	(LPCSTR dst_root, bool overwrite, xr_string& err);
 	// Deleting content has no undo of its own, so it always asks first: this
-	// only arms the confirmation, DeleteConfirmed does the work. Everything
-	// destructive in this panel goes through that pair.
+	// only raises the confirmation (XUI::Confirm, naming what goes), and
+	// DeleteEntries does the work on what was named. Everything destructive in
+	// this panel goes through that pair.
 	void			DeleteSelection		();
-	void			DeleteConfirmed		();
-	void			DrawConfirmDelete	();
-	bool							m_ConfirmDelete;	// modal is armed
-	xr_string						m_ConfirmText;		// what is about to go
+	void			DeleteEntries		(const xr_vector<SEntry>& entries);
 	// materialises one clipboard entry under `dst_dir`
 	void			PasteEntry			(const SClip& c, LPCSTR dst_dir, bool overwrite,
 										 EditorFileOps::SReport& rep);
@@ -379,6 +476,8 @@ private:
 	LPCSTR			PasteBlockedReason	() const;
 	// Ctrl+C / Ctrl+V while the grid has focus
 	void			HandleShortcuts		();
+	// the double click: into a folder (a game level opens), an asset's viewer
+	void			OpenEntry			(const SEntry& entry);
 	// right-click on empty grid space
 	void			DrawGridContextMenu	();
 	// Right-click surface for ANY tile. One menu for folders and assets alike -

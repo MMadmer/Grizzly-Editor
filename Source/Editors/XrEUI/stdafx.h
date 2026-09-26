@@ -15,3 +15,6 @@
 
 #include "imgui.h"
 #include "XrUITheme.h"
+#include "XrUIIcons.h"
+#include "XrUIKit.h"
+#include "XrUIShell.h"

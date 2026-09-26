@@ -1272,23 +1272,33 @@ xr_string NqLua::OutlineNode(const SNqQuest& q, const SNqNode& n)
 
 xr_string NqLua::Outline(const SNqQuest& q)
 {
-	xr_string out = "quest ";
+	// a behaviour graph has no activation and no tasks, and never says "quest"
+	const bool behaviour = q.IsBehaviour();
+	xr_string out = behaviour ? "behaviour " : "quest ";
 	out += q.id;
 	out += " \"";
 	out += OneLine(NqText::Preview(q.title));
-	out += "\" (active: ";
-	out += q.activation;
+	out += "\"";
+	xr_string props;
+	if (!behaviour) props = "active: " + q.activation;
+	if (behaviour && !q.roles.empty())
+	{
+		props += "roles: ";
+		for (u32 i = 0; i < q.roles.size(); ++i) { if (i) props += ", "; props += q.roles[i].name; }
+	}
 	if (!q.vars.empty())
 	{
-		out += "; vars: ";
-		for (u32 i = 0; i < q.vars.size(); ++i) { if (i) out += ", "; out += q.vars[i].name; }
+		if (!props.empty()) props += "; ";
+		props += "vars: ";
+		for (u32 i = 0; i < q.vars.size(); ++i) { if (i) props += ", "; props += q.vars[i].name; }
 	}
-	if (!q.tasks.empty())
+	if (!behaviour && !q.tasks.empty())
 	{
-		out += "; tasks: ";
-		for (u32 i = 0; i < q.tasks.size(); ++i) { if (i) out += ", "; out += q.tasks[i].id; }
+		props += "; tasks: ";
+		for (u32 i = 0; i < q.tasks.size(); ++i) { if (i) props += ", "; props += q.tasks[i].id; }
 	}
-	out += ")\n";
+	if (!props.empty()) { out += " ("; out += props; out += ")"; }
+	out += "\n";
 	xr_vector<int> order;
 	q.TopoOrder(order);
 	for (u32 i = 0; i < order.size(); ++i)

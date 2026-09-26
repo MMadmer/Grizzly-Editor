@@ -1,33 +1,178 @@
 #include "stdafx.h"
 #include "NqLayout.h"
 #include "NqCatalog.h"
+#include "NqUtil.h"
 
-int NqLayout::ChipsPerRow()
+namespace
 {
-	// chip i spans [pad + i*(w+pad), pad + i*(w+pad) + w]; the last one ends at n*(w+pad)
-	return _max(1, int(kNodeWidth / (kChipW + kChipPad)));
+	// what a line shows of a value: text as the author wrote it, a reference by what it
+	// names, anything else as its short summary
+	xr_string LineValue(const NqCatalog::SParam& p, const SNqValue& v)
+	{
+		if (p.type == "text")	return NqText::Preview(v);
+		if (p.type == "lua")	return "Lua";
+		if (v.IsString())		return v.s;
+		if (v.IsBool())			return v.b ? "yes" : "no";
+		if (v.IsNumber())		return v.AsString();
+		return v.IsTable() ? NqText::ValueSummary(v, 64) : xr_string();
+	}
+
+	xr_string CondTitle(LPCSTR kind)
+	{
+		const NqCatalog::SKind* k = NqCatalog::Find(kind);
+		return k && !k->title.empty() ? k->title : xr_string(kind ? kind : "");
+	}
+
+	// What a condition checks, after its title: the values it is set to in catalog order.
+	// A flag that is on reads as its name, a nested list of conditions as their titles.
+	xr_string CondValue(const SNqCond& c)
+	{
+		const NqCatalog::SKind* kind = NqCatalog::Find(c.kind.c_str());
+		if (!kind)
+		{
+			const xr_string sum = NqText::ValueSummary(c.params, 64);
+			return sum == "{}" ? xr_string() : sum;
+		}
+		xr_string out;
+		for (u32 i = 0; i < kind->params.size(); ++i)
+		{
+			const NqCatalog::SParam& p = kind->params[i];
+			const SNqValue* v = c.params.Get(p.name.c_str());
+			if (!v || v->IsNil() || v->IsEmpty()) continue;
+			xr_string part;
+			if (p.type == "cond_list" && v->IsTable())
+			{
+				for (u32 j = 0; j < v->arr.size(); ++j)
+				{
+					if (!part.empty()) part += " or ";
+					part += CondTitle(v->arr[j].GetString("kind").c_str());
+				}
+			}
+			else if (v->IsBool())	part = v->b ? p.name : xr_string();
+			else					part = LineValue(p, *v);
+			if (part.empty()) continue;
+			if (!out.empty()) out += " ";
+			out += part;
+		}
+		return out;
+	}
 }
 
-int NqLayout::ChipRows(int count)
+xr_string NqLayout::CondKey(LPCSTR title, bool negate)
 {
-	// the strip always carries its add button, so an empty strip is still one row
-	const int chips = _max(0, count) + 1;
-	return (chips + ChipsPerRow() - 1) / ChipsPerRow();
+	xr_string key = title ? title : "";
+	if (!negate) return key;
+	// "Not has money", but "Not NPC alive": an acronym keeps its capitals
+	if (key.size() > 1 && key[0] >= 'A' && key[0] <= 'Z' && !(key[1] >= 'A' && key[1] <= 'Z')) key[0] = char(key[0] + 0x20);
+	return "Not " + key;
 }
 
-float NqLayout::StripHeight(int count)
+void NqLayout::Pins(const SNqNode& n, xr_vector<xr_string>& pins, int* declared)
 {
-	return kChipStrip * float(ChipRows(count));
+	pins.clear();
+	if (const NqCatalog::SKind* kind = NqCatalog::Find(n.kind.c_str()))
+	{
+		if (kind->pins_from_cases)
+			if (const SNqValue* cases = n.params.Get("cases"))
+				if (cases->IsTable())
+					for (u32 i = 0; i < cases->arr.size(); ++i)
+					{
+						xr_string name = cases->arr[i].GetString("name");
+						if (!name.empty()) pins.push_back(name);
+					}
+		for (u32 i = 0; i < kind->pins.size(); ++i)
+			if (kind->pins[i] != "cases") pins.push_back(kind->pins[i]);
+	}
+	// everything pushed so far is what the kind declares; what the file adds below
+	// would be an E007 pin, so automatic wiring must not aim at it
+	if (declared) *declared = (int)pins.size();
+	// pins present in the file but unknown to the catalog still get a handle
+	for (u32 i = 0; i < n.out.size(); ++i)
+		if (std::find(pins.begin(), pins.end(), n.out[i].first) == pins.end()) pins.push_back(n.out[i].first);
+}
+
+void NqLayout::Lines(const SNqNode& n, xr_vector<SLine>& out)
+{
+	out.clear();
+	// the conditions first: for a wait or a trigger they are what the node is about
+	for (u32 i = 0; i < n.cond.size(); ++i)
+	{
+		const SNqCond& c = n.cond[i];
+		SLine line;
+		line.cond = c.kind;
+		line.negate = c.negate;
+		line.key = CondKey(CondTitle(c.kind.c_str()).c_str(), c.negate);
+		line.value = CondValue(c);
+		out.push_back(line);
+	}
+	if (const NqCatalog::SKind* kind = NqCatalog::Find(n.kind.c_str()))
+		for (u32 i = 0; i < kind->params.size(); ++i)
+		{
+			const NqCatalog::SParam& p = kind->params[i];
+			// the case names are the pins already
+			if (p.type == "cases_cond" || p.type == "cases_weight") continue;
+			const SNqValue* v = n.params.Get(p.name.c_str());
+			if (!v || v->IsNil() || v->IsEmpty()) continue;
+			SLine line;
+			line.key = p.name;
+			line.value = LineValue(p, *v);
+			if (!line.value.empty()) out.push_back(line);
+		}
+	// what does not fit is counted on the last line: the Details panel has all of it
+	if ((int)out.size() > kMaxLines)
+	{
+		const int hidden = (int)out.size() - (kMaxLines - 1);
+		out.resize(kMaxLines - 1);
+		SLine more;
+		more.value = NqUtil::Format("+%d more", hidden);
+		out.push_back(more);
+	}
+}
+
+void NqLayout::Box(const SNqNode& n, SBox& out)
+{
+	out = SBox();
+	xr_vector<SLine> lines;
+	Lines(n, lines);
+	xr_vector<xr_string> pins;
+	Pins(n, pins);
+
+	float y = kHeader;
+	out.lines = (int)lines.size();
+	if (out.lines)
+	{
+		y += kPad;
+		out.lines_y = y;
+		y += kLine * float(out.lines);
+	}
+	// a trigger has no actions to run: the runtime reads on_enter / on_exit of a main node only
+	out.actions = NqText::IsTrigger(n.kind.c_str()) ? 0 : int(n.on_enter.size() + n.on_exit.size());
+	out.action_rows = _min(out.actions, kMaxActions);
+	out.more = out.actions > kMaxActions;
+	if (out.actions)
+	{
+		y += kPad;
+		out.actions_y = y;
+		y += kActionRow * float(out.action_rows + (out.more ? 1 : 0));
+	}
+	// a single "next" pin needs no name
+	out.pin_labels = pins.size() > 1 || (pins.size() == 1 && pins[0] != "next");
+	if (out.pin_labels)
+	{
+		y += kPad * 0.5f;
+		out.pins_y = y;
+		y += kPinRow;
+	}
+	else y += kPad;
+	out.h = y;
 }
 
 Fvector2 NqLayout::NodeSize(const SNqNode& n)
 {
+	SBox box;
+	Box(n, box);
 	Fvector2 s;
-	if (NqText::IsTrigger(n.kind.c_str())) { s.set(kNodeWidth, kTriggerHeight); return s; }
-	// Both chip strips are always drawn because an empty strip still carries its add
-	// button; a strip with more actions than fit one row grows downwards, and the node
-	// grows with it instead of cutting the ninth chip off.
-	s.set(kNodeWidth, kNodeHeight + StripHeight((int)n.on_enter.size()) + StripHeight((int)n.on_exit.size()));
+	s.set(box.w, box.h);
 	return s;
 }
 
@@ -68,35 +213,6 @@ namespace
 	};
 
 	float Snap(float v) { return floorf(v / NqLayout::kGrid + 0.5f) * NqLayout::kGrid; }
-
-	void BuildPinOrder(const SNqNode& n, xr_vector<xr_string>& pins)
-	{
-		pins.clear();
-		const NqCatalog::SKind* kind = NqCatalog::Find(n.kind.c_str());
-		if (kind)
-		{
-			// This must mirror NqCanvas::BuildGeometry: layout sides are the visible pin sides.
-			if (kind->pins_from_cases)
-			{
-				const SNqValue* cases = n.params.Get("cases");
-				if (cases && cases->IsTable())
-					for (u32 i = 0; i < cases->arr.size(); ++i)
-					{
-						xr_string name = cases->arr[i].GetString("name");
-						if (!name.empty()) pins.push_back(name);
-					}
-			}
-			for (u32 i = 0; i < kind->pins.size(); ++i)
-				if (kind->pins[i] != "cases") pins.push_back(kind->pins[i]);
-		}
-		for (u32 i = 0; i < n.out.size(); ++i)
-		{
-			bool found = false;
-			for (u32 p = 0; p < pins.size(); ++p)
-				if (pins[p] == n.out[i].first) { found = true; break; }
-			if (!found) pins.push_back(n.out[i].first);
-		}
-	}
 
 	float PinSide(int index, int count)
 	{
@@ -216,7 +332,7 @@ int NqLayout::Run(SNqQuest& q, bool only_missing)
 	for (u32 source_index = 0; source_index < count; ++source_index)
 	{
 		const SNqNode& source = q.nodes[source_index];
-		BuildPinOrder(source, pins);
+		Pins(source, pins);
 		for (u32 visual_pin = 0; visual_pin < pins.size(); ++visual_pin)
 		{
 			const SNqPin* output = 0;

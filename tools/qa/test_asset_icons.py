@@ -7,8 +7,15 @@ What it proves:
      interface - is made the way an author makes it (content_create, characters_write)
   B  selected in the content browser, each one's tile draws its own icon
      (content_browser_selection 'icons'), and a file of no kind of the editor's own draws none
-  C  the tile slider answers over MCP (content_browser_navigation tile=) at both ends of its
-     range, and refuses a size outside it; with --shots the tiles are captured at 48 and 192
+  C  the tile size answers over MCP (content_browser_navigation tile=, in pt) at both ends of its
+     range, shows tiles, and refuses a size outside it; with no size picked (tile_fit) the tiles fit
+     the host, 48 pt up to its default; view=list turns the grid into the list and view=tiles back,
+     anything else is refused; with --shots the tiles are captured fitted, at 48 and 192, and the list
+  D  every tile draws a vector glyph while it has no picture - a folder its folder, a text file its
+     file type, one of the editor's own assets its own icon (content_browser_selection 'glyphs');
+     the search narrows the view and the Sources pane turns off and on over MCP; Show in Explorer
+     answers the path it would select (dry run); the toolbar's Add is off, saying why, on a
+     read-only source and on in the project; with --shots the Add menu is captured
 
     python tools/qa/test_asset_icons.py --project D:\\XFinedProjects\\Test [--shots <folder>]
 """
@@ -167,15 +174,101 @@ def run(project: str, shots: str | None) -> None:
         # ------------------------------------------------------------ C: the tile slider
         mcp("content_browser_navigation", action="navigate", source="project", folder="qa_icons")
         mcp("content_browser_selection", action="clear")
-        for size in (48, 192):
+        contract = mcp("ui_contract")
+        low, high = (contract.get("tile_range") or [48, 192])[:2]
+        # the host shown keeps a size and a view of its own (the docked panel starts as a list, the drawer as tiles):
+        # put back those
+        before = mcp("content_browser_navigation")
+        kept = before.get("tile") or contract.get("tile_default", 96)
+        kept_fit = before.get("tile_fit")
+        kept_view = before.get("view") or "tiles"
+        check(kept_view in ("tiles", "list"), "C the answer says how the grid shows its entries", json.dumps(before)[:300])
+        check(isinstance(kept_fit, bool), "C the answer says whether the tiles fit the host", json.dumps(before)[:300])
+        # with no size picked the tiles fit the host: two rows where they can, never over its default, never under 48
+        fitted = mcp("content_browser_navigation", tile_fit=True)
+        most = contract.get("tile_default_panel", 64) if fitted.get("host") == "panel" else contract.get("tile_default", 96)
+        check(fitted.get("ok") and fitted.get("tile_fit") is True and fitted.get("view") == "tiles"
+              and low <= (fitted.get("tile") or 0) <= most,
+              "C tile_fit fits the tiles to the host (48..%d pt), and shows tiles" % most, json.dumps(fitted)[:300])
+        shot(shots, "tiles_fit")
+        bad = mcp("content_browser_navigation", tile=high, tile_fit=True)
+        check(not bad.get("ok") and "tile_fit" in str(bad.get("error")), "C a size and tile_fit=true together are refused",
+              json.dumps(bad)[:300])
+        for size in (low, high):
             n = mcp("content_browser_navigation", tile=size)
-            check(n.get("ok") and n.get("tile") == size, "C the tile slider goes to %d over MCP" % size,
-                  json.dumps(n)[:300])
+            check(n.get("ok") and n.get("tile") == size and n.get("tile_unit") == "pt" and n.get("view") == "tiles"
+                  and n.get("tile_fit") is False,
+                  "C the tile size goes to %d pt over MCP, shows tiles and is no longer fitted" % size, json.dumps(n)[:300])
             shot(shots, "tiles_%d" % size)
         bad = mcp("content_browser_navigation", tile=500)
-        check(not bad.get("ok") and "48..192" in str(bad.get("error")), "C a size outside the slider is refused",
+        check(not bad.get("ok") and "48..192" in str(bad.get("error")), "C a size outside the range is refused",
               json.dumps(bad)[:300])
-        mcp("content_browser_navigation", tile=96)
+        listed = mcp("content_browser_navigation", view="list")
+        check(listed.get("ok") and listed.get("view") == "list" and listed.get("tile") == high,
+              "C view=list shows the list and keeps the tile size", json.dumps(listed)[:300])
+        shot(shots, "list")
+        bad = mcp("content_browser_navigation", view="grid")
+        check(not bad.get("ok") and "tiles or list" in str(bad.get("error")), "C a view other than tiles or list is refused",
+              json.dumps(bad)[:300])
+        tiled = mcp("content_browser_navigation", view="tiles")
+        check(tiled.get("ok") and tiled.get("view") == "tiles", "C view=tiles shows the tiles again", json.dumps(tiled)[:300])
+        if kept_fit:
+            mcp("content_browser_navigation", tile_fit=True)
+        else:
+            mcp("content_browser_navigation", tile=kept)
+        mcp("content_browser_navigation", view=kept_view)
+
+        # ------------------------------------------------------------ D: glyphs, search, pane, reveal
+        mcp("content_mkdir", path="qa_icons/qa_sub")
+        mcp("content_browser_navigation", action="navigate", source="project", folder="qa_icons")
+        want = {"qa_icons\\qa_sub": "folder", plain: "file_text", made["quest"].replace("/", "\\"): "quest"}
+        for entry, glyph in want.items():
+            s = mcp("content_browser_selection", action="select", name=entry)
+            key = entry + ("\\" if glyph == "folder" else "")
+            check(s.get("ok") and (s.get("glyphs") or {}).get(key) == glyph,
+                  "D a %s tile draws the '%s' glyph" % (entry.rsplit("\\", 1)[-1], glyph), json.dumps(s)[:400])
+        mcp("content_browser_selection", action="clear")
+
+        n = mcp("content_browser_navigation", search="notes")
+        hit = mcp("content_browser_selection", action="select", name=plain)
+        miss = mcp("content_browser_selection", action="select", name=made["quest"].replace("/", "\\"))
+        check(n.get("ok") and n.get("search") == "notes" and hit.get("ok") and not miss.get("ok"),
+              "D the search lists what matches and nothing else",
+              json.dumps(n)[:200] + " | " + json.dumps(miss)[:200])
+        n = mcp("content_browser_navigation", search="")
+        check(n.get("ok") and n.get("search") == "", "D an empty search lists the folder again", json.dumps(n)[:200])
+        mcp("content_browser_selection", action="clear")
+
+        off = mcp("content_browser_navigation", sources_pane=False)
+        on = mcp("content_browser_navigation", sources_pane=True)
+        check((off.get("sources_pane") or {}).get("on") is False and (on.get("sources_pane") or {}).get("on") is True,
+              "D the Sources pane turns off and on over MCP", json.dumps(off)[:200] + " | " + json.dumps(on)[:200])
+
+        r = mcp("content_browser_selection", action="reveal", name=plain, dry_run=True)
+        check(r.get("ok") and not r.get("opened") and str(r.get("path", "")).lower().endswith(plain.lower()),
+              "D Show in Explorer answers the file it would select, and opens nothing on a dry run", json.dumps(r)[:300])
+
+        # Add works in the project's own source only: on a read-only one its button is off and says why. The audit is
+        # the last frame's, and a background editor draws only when asked: a screenshot draws one first.
+        def add_button() -> dict:
+            mcp("screenshot_editor")
+            return next((c for c in mcp("ui_audit").get("controls", [])
+                         if c.get("label") == "Add" and "Content" in str(c.get("window", ""))), {})
+
+        ro = mcp("content_browser_navigation", action="home", source="editor")
+        add = add_button()
+        check(ro.get("ok") and ro.get("can_add") is False and add and add.get("enabled") is False and add.get("why"),
+              "D Add is off on a read-only source, and says why", json.dumps(ro)[:200] + " | " + json.dumps(add)[:300])
+        rw = mcp("content_browser_navigation", action="navigate", source="project", folder="qa_icons")
+        add = add_button()
+        check(rw.get("ok") and rw.get("can_add") is True and add.get("enabled") is True,
+              "D and on in the project's own source", json.dumps(rw)[:200] + " | " + json.dumps(add)[:300])
+
+        if shots:
+            p = mcp("ui_popup", show="cb_add")
+            check(p.get("ok"), "D the Add menu comes up over MCP", json.dumps(p)[:200])
+            shot(shots, "add_menu")
+            mcp("ui_popup", show="none")
     finally:
         ed.close()
 
@@ -183,7 +276,7 @@ def run(project: str, shots: str | None) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", required=True, help="a project to COPY and run against")
-    ap.add_argument("--shots", help="a folder for the tiles at 48 and 192")
+    ap.add_argument("--shots", help="a folder for the tiles at 48 and 192 and the list")
     ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
     args = ap.parse_args()
 

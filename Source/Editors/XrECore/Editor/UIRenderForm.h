@@ -9,6 +9,8 @@ public:
 	UIRenderForm();
 	virtual ~UIRenderForm();
 	virtual void Draw();
+	// the picture and its input without a window of its own: Level's F11 draws it over the whole work area
+	void DrawCanvas();
 	IC Ivector2 GetMousePos()const { return m_mouse_position; }
 	IC void		SetContextMenuEvent(TOnRenderContextMenu e) { m_OnContextMenu = e; }
 	IC void		SetToolBarEvent(TOnRenderToolBar e) { m_OnToolBar = e; }

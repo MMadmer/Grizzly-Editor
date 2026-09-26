@@ -3,254 +3,114 @@
 #include "../../XrECore/Editor/EditorModManifest.h"
 #include "../../XrECore/Editor/EditorModPublish.h"
 
-#if defined(USE_DX11)
-// ImGui binds a shader resource view under D3D11; surface_get() returns the
-// resource behind it, which the backend cannot bind.
-IC ImTextureID ui_imtex(ref_texture& t) { return t->get_SRView(); }
-#else
-IC ImTextureID ui_imtex(ref_texture& t) { return t->surface_get(); }
-#endif
+namespace
+{
+// the shortcut bound to a command now, as a menu shows it; "" when none is
+xr_string BoundKeys(u32 command)
+{
+	ECommandVec& cmds = GetEditorCommands();
+	if (command >= cmds.size() || !cmds[command] || cmds[command]->sub_commands.empty())
+		return xr_string();
+	return XUI::ShortcutLabel(cmds[command]->sub_commands[0]->shortcut);
+}
+}
 
 UITopBarForm::UITopBarForm()
 {
-	m_tUndo = EDevice->Resources->_CreateTexture("ed\\bar\\Undo"); m_timeUndo = 0;
-	m_tRedo = EDevice->Resources->_CreateTexture("ed\\bar\\Redo"); m_timeRedo = 0;
-	m_tNew = EDevice->Resources->_CreateTexture("ed\\bar\\new");
-	m_tOpen = EDevice->Resources->_CreateTexture("ed\\bar\\open");
-	m_tSave= EDevice->Resources->_CreateTexture("ed\\bar\\save");
-	m_tCForm = EDevice->Resources->_CreateTexture("ed\\bar\\CForm");
-	m_tAIMap = EDevice->Resources->_CreateTexture("ed\\bar\\AIMap");
-	m_tGGraph = EDevice->Resources->_CreateTexture("ed\\bar\\GGraph");
-	m_tPlayInEditor = EDevice->Resources->_CreateTexture("ed\\bar\\play_in_editor");
-	m_tPlayPC = EDevice->Resources->_CreateTexture("ed\\bar\\play_pc");
-	m_tBuildAndMake = EDevice->Resources->_CreateTexture("ed\\bar\\build_all");
-	m_tPlayCleanGame= EDevice->Resources->_CreateTexture("ed\\bar\\play_clean_game");
-	m_tTerminated = EDevice->Resources->_CreateTexture("ed\\bar\\terminated");
-
-	m_tReloadConfigs = EDevice->Resources->_CreateTexture("ed\\bar\\reload_configs");
-	m_tOpenGameData = EDevice->Resources->_CreateTexture("ed\\bar\\open_gamedata");
 	m_VerifySpaceRestrictors = false;
 	RefreshBar();
 }
 
 UITopBarForm::~UITopBarForm()
 {
-	
 }
 
-// An icon strip with no labels is a guessing game, and several of these buttons
-// start a compile or launch the game. AllowWhenDisabled on purpose: the ones that
-// grey out while a build runs are exactly the ones worth naming.
-static void ToolBarTip(LPCSTR text)
+// Lowest priority first: what has a key and a menu item gives way first when the row is narrow.
+void UITopBarForm::DrawLevel(XUI::Toolbar& tb)
 {
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("%s", text);
-}
+	const bool running = LTools->IsCompilerRunning() || LTools->IsGameRunning();
+	const char* busy = "A compiler or the game is running.";
 
-void UITopBarForm::Draw()
-{
-	ImGuiViewport* viewport = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + UI->GetMenuBarHeight()));
-	ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, UIToolBarHeight()));
-	ImGui::SetNextWindowViewport(viewport->ID);
+	tb.Group(0);
+	if (tb.Action("save", XUI::Icon::Save, "", "Save the scene (Ctrl+S)"))
+		ClickSave();
+	tb.Separator();
+	if (tb.Action("undo", XUI::Icon::Undo, "", "Undo the last change (Ctrl+Z)"))
+		ClickUndo();
+	if (tb.Action("redo", XUI::Icon::Redo, "", "Redo the change that was undone (Ctrl+Y)"))
+		ClickRedo();
 
-	ImGuiWindowFlags window_flags = 0
-		| ImGuiWindowFlags_NoDocking
-		| ImGuiWindowFlags_NoTitleBar
-		| ImGuiWindowFlags_NoResize
-		| ImGuiWindowFlags_NoMove
-		| ImGuiWindowFlags_NoScrollbar
-		| ImGuiWindowFlags_NoSavedSettings
-		;
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(UIToolBarWindowPad(), UIToolBarWindowPad()));
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(2, 2));
-	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 2));
-	ImGui::Begin("TOOLBAR", NULL, window_flags);
-	const float icon = UIToolBarIconSize();
-	// the button frame the height was measured with
-	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(UIToolBarFramePad(), UIToolBarFramePad()));
+	tb.Group(1);
+	if (tb.Action("build_cform", XUI::Icon::BuildCollision, "", running ? busy : "Build the collision geometry (CForm) of this scene", !running))
+		ClickCForm();
+	if (tb.Action("build_aimap", XUI::Icon::BuildAIMap, "", running ? busy : "Build the AI map of this scene", !running))
+		ClickAIMap();
+	if (tb.Action("build_ggraph", XUI::Icon::BuildGameGraph, "", running ? busy : "Build the game graph of this scene", !running))
+		ClickGGraph();
+	if (tb.Action("build_all", XUI::Icon::BuildAll, "", running ? busy : "Compile the level and run the level builder (xrLC)", !running))
+		ClickBuildAndMake();
+
+	tb.Group(2);
+	if (tb.Action("play", XUI::Icon::Play, "Play", running ? busy : "Play the scene inside the editor", !running))
+		ClickPlayInEditor();
+	if (tb.Menu("play_options", XUI::Icon::None, "", "Options for playing in the editor"))
 	{
-
-
-		m_tUndo->Load();
-		if (ImGui::ImageButton("##Undo", ui_imtex(m_tUndo), ImVec2(icon, icon), ImVec2(m_timeUndo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeUndo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
-		{
-			m_timeUndo = EDevice->TimerAsync() + 130;
-			ClickUndo();
-		}
-		ToolBarTip("Undo the last change (Ctrl+Z)");ImGui::SameLine();
-		m_tRedo->Load();
-		if (ImGui::ImageButton("##Redo", ui_imtex(m_tRedo), ImVec2(icon, icon), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 0.5 : 0, 0), ImVec2(m_timeRedo > EDevice->TimerAsync() ? 1 : 0.5, 1), 0))
-		{
-			m_timeRedo = EDevice->TimerAsync() + 130;
-			ClickRedo();
-		}
-		ToolBarTip("Redo the change that was undone (Ctrl+Y)");ImGui::SameLine();
-
-		m_tNew->Load();
-		if (ImGui::ImageButton("##New", ui_imtex(m_tNew), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickNew();
-		}
-		ToolBarTip("New scene");ImGui::SameLine();
-		m_tOpen->Load();
-		if (ImGui::ImageButton("##Open", ui_imtex(m_tOpen), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickOpen();
-		}
-		ToolBarTip("Open a scene");ImGui::SameLine();
-		m_tSave->Load();
-		if (ImGui::ImageButton("##Save", ui_imtex(m_tSave), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickSave();
-		}
-		ToolBarTip("Save the scene");ImGui::SameLine();
-
-		m_tCForm->Load();
-		if (ImGui::ImageButton("##CForm", ui_imtex(m_tCForm), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickCForm();
-		}
-		ToolBarTip("Build the collision geometry (CForm) of this scene");ImGui::SameLine();
-		m_tAIMap->Load();
-		if (ImGui::ImageButton("##AIMap", ui_imtex(m_tAIMap), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickAIMap();
-		}
-		ToolBarTip("Build the AI map of this scene");ImGui::SameLine();
-		m_tGGraph->Load();
-		if (ImGui::ImageButton("##GGraph", ui_imtex(m_tGGraph), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickGGraph();
-		}
-		ToolBarTip("Build the game graph of this scene");ImGui::SameLine();
-
-
-
-		if (LTools->IsCompilerRunning() || LTools->IsGameRunning())
-		{
-			m_tTerminated->Load();
-			if (ImGui::ImageButton("##Terminate", ui_imtex(m_tTerminated), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-			{
-				ClickTerminated();
-			}
-		ToolBarTip("Stop the compiler or the game that is running");
-		}
-		else
-		{
-			m_tPlayInEditor->Load();
-			if (ImGui::ImageButton("##PlayInEditor", ui_imtex(m_tPlayInEditor), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-			{
-				ClickPlayInEditor();
-			}
-		ToolBarTip("Play the scene inside the editor");
-		}
-		{
-			ImGui::SameLine(0,0);
-			if (ImGui::ArrowButton("##PlaySettings", ImGuiDir_Down, ImVec2(ImGui::GetFrameHeight(), icon), 0))
-				ImGui::OpenPopup("test");
-			ToolBarTip("Options for playing in the editor");
-
-			ImGui::SameLine();
-			if (ImGui::BeginPopup("test"))
-			{
-				ImGui::Checkbox("Verify space restrictors",&m_VerifySpaceRestrictors);
-				ImGui::EndPopup();
-			}
-		}
-
-
-
-		if (LTools->IsCompilerRunning() || LTools->IsGameRunning())
-		{
-			ImGui::BeginDisabled();
-		}
-		ImGui::SameLine();
-		m_tReloadConfigs->Load();
-		if (ImGui::ImageButton("##ReloadConfigs", ui_imtex(m_tReloadConfigs), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickReloadConfigs();
-		}
-		ToolBarTip("Re-read the game configs from disk (system.ltx, game.ltx)");ImGui::SameLine();
-
-		m_tBuildAndMake->Load();
-		if (ImGui::ImageButton("##BuildAndMake", ui_imtex(m_tBuildAndMake), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickBuildAndMake();
-		}
-		ToolBarTip("Compile the level and run the level builder (xrLC)");
-		ImGui::SameLine();
-		m_tPlayPC->Load();
-
-		if (ImGui::ImageButton("##PlayPC", ui_imtex(m_tPlayPC), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickPlayPC();
-		}
-		ToolBarTip("Build the scene for play and launch the game on it");
-		ImGui::SameLine();
-		m_tPlayCleanGame->Load();
-		if (ImGui::ImageButton("##PlayCleanGame", ui_imtex(m_tPlayCleanGame), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickPlayCleanGame();
-		}
-		ToolBarTip("Launch the game as it is, without building anything");
-		ImGui::SameLine();
-
-		
-		if (LTools->IsCompilerRunning() || LTools->IsGameRunning())
-		{
-			ImGui::EndDisabled();
-		}
-
-		m_tOpenGameData->Load();
-		if (ImGui::ImageButton("##OpenGameData", ui_imtex(m_tOpenGameData), ImVec2(icon, icon), ImVec2(0, 0), ImVec2(1, 1), 0))
-		{
-			ClickOpenGameData();
-		}
-		ToolBarTip("Open the gamedata folder in Explorer");
-
-		// Shipping the mod is the single most-used action in this editor, so it
-		// gets a labelled button - the icon strip next to it is all level-compiler
-		// work and reads as the same kind of thing when it is not.
-		ImGui::SameLine(0, 12);
-		char build_target[MAX_PATH] = {};
-		EditorMod::BuildTargetText(build_target, sizeof(build_target));
-		ImGui::BeginDisabled(!EditorMod::CanBuildIntoGame());
-		if (ImGui::Button("Build Mod", ImVec2(0, icon + UIToolBarFramePad() * 2.f)))
-			ExecCommand(COMMAND_MOD_BUILD);
-		ImGui::EndDisabled();
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip(build_target[0]
-				? "Clean build into the linked game (Ctrl+B):\n%s"
-				: "Link a game and set a valid module id first.%s",
-				build_target);
-
-		// the other half of shipping: the same module, out to the players
-		ImGui::SameLine(0, 6);
-		char publish_text[64] = {}, publish_label[96];
-		EditorPublish::ButtonText(publish_text, sizeof(publish_text));
-		// the caption turns into a percentage while a release uploads; the id must not follow it
-		sprintf_s(publish_label, "%s###PublishRelease", publish_text);
-		ImGui::BeginDisabled(!EditorPublish::CanPublish());
-		if (ImGui::Button(publish_label, ImVec2(0, icon + UIToolBarFramePad() * 2.f)))
-			ExecCommand(COMMAND_MOD_PUBLISH);
-		ImGui::EndDisabled();
-		ToolBarTip("Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.");
-		ImGui::SameLine(0, 6);
-		ImGui::BeginDisabled(!EditorPublish::CanPublish());
-		if (ImGui::Button("Releases", ImVec2(0, icon + UIToolBarFramePad() * 2.f)))
-			ExecCommand(COMMAND_MOD_RELEASES);
-		ImGui::EndDisabled();
-		ToolBarTip("The releases already on GitHub.\nDeletes one together with its git tag.");
+		XUI::MenuItem("Verify Space Restrictors", nullptr, &m_VerifySpaceRestrictors);
+		XUI::Tip("Play checks the space restrictors of the scene before it starts.");
+		ImGui::EndPopup();
 	}
-	ImGui::SameLine(0,1);
-	ImGui::PopStyleVar();
-	ImGui::End();
-	ImGui::PopStyleVar(5);
-	
+	if (tb.Action("play_game", XUI::Icon::PlayGame, "", running ? busy : "Build the scene for play and launch the game on it", !running))
+		ClickPlayPC();
+	if (tb.Action("play_clean", XUI::Icon::PlayClean, "", running ? busy : "Launch the game as it is, without building anything", !running))
+		ClickPlayCleanGame();
+	if (tb.Action("stop", XUI::Icon::Stop, "", running ? "Stop the compiler or the game that is running" : "Nothing is running", running))
+		ClickTerminated();
+
+	tb.Group(3);
+	if (tb.Action("reload_configs", XUI::Icon::ReloadConfigs, "", running ? busy : "Re-read the game configs from disk (system.ltx, game.ltx)", !running))
+		ClickReloadConfigs();
+	if (tb.Action("game_folder", XUI::Icon::GameFolder, "", "Open the gamedata folder in Explorer"))
+		ClickOpenGameData();
 }
+
+// Shipping the mod is the single most-used action in this editor, so it is the one Primary button of the row,
+// on every tab: the level builds next to it are a different kind of thing.
+void UITopBarForm::DrawProject(XUI::Toolbar& tb)
+{
+	if (!EditorProject::Active())
+		return;
+	char build_target[MAX_PATH] = {};
+	EditorMod::BuildTargetText(build_target, sizeof(build_target));
+	const xr_string keys = BoundKeys(COMMAND_MOD_BUILD);
+	const xr_string build_tip = build_target[0]
+		? xr_string("A clean build into the linked game") + (keys.empty() ? xr_string() : " (" + keys + ")") + ":\n" + build_target
+		: xr_string("Link a game and set a valid module id first.");
+	bool more = false;
+	if (tb.Split("build_mod", XUI::Icon::BuildMod, "Build Mod", build_tip.c_str(), &more, EditorMod::CanBuildIntoGame()))
+		ExecCommand(COMMAND_MOD_BUILD);
+	if (more)
+	{
+		if (XUI::MenuItem("Build Into Game", keys.empty() ? nullptr : keys.c_str(), false, EditorMod::CanBuildIntoGame()))	ExecCommand(COMMAND_MOD_BUILD);
+		if (XUI::MenuItem("Build to Folder..."))		EditorMod::RequestExportModule();
+		if (XUI::MenuItem("Export Flat Gamedata..."))	EditorMod::RequestExportFlat();
+		ImGui::Separator();
+		if (XUI::MenuItem("Package Release..."))		EditorMod::RequestPackageRelease();
+		ImGui::EndPopup();
+	}
+	// the other half of shipping: the same module, out to the players. The label keeps its width (a label that follows
+	// the state would push the row around): what a running release does is in the tip, and the button is lit meanwhile
+	char state[64] = {};
+	EditorPublish::ButtonText(state, sizeof(state));
+	const bool running = xr_strcmp(state, "Publish Release") != 0;
+	xr_string publish_tip = running ? xr_string(state) + ".\n" : xr_string();
+	publish_tip += "Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.";
+	if (tb.Action("publish_release", XUI::Icon::Publish, "Publish Release", publish_tip.c_str(), EditorPublish::CanPublish(), running))
+		ExecCommand(COMMAND_MOD_PUBLISH);
+	if (tb.Action("releases", XUI::Icon::Releases, "Releases", "The releases already on GitHub.\nDeletes one together with its git tag.",
+		EditorPublish::CanPublish()))
+		ExecCommand(COMMAND_MOD_RELEASES);
+}
+
 void UITopBarForm::RefreshBar()
 {/*
 	{
@@ -285,14 +145,6 @@ void UITopBarForm::ClickRedo()
 	ExecCommand(COMMAND_REDO);
 }
 
-void UITopBarForm::ClickNew()
-{
-	ExecCommand(COMMAND_CLEAR);
-}
-void UITopBarForm::ClickOpen()
-{
-	ExecCommand(COMMAND_LOAD);
-}
 void UITopBarForm::ClickSave()
 {
 	ExecCommand(COMMAND_SAVE, xr_string(LTools->m_LastFileName.c_str()));
@@ -375,47 +227,3 @@ void UITopBarForm::ClickPlayCleanGame()
 {
 	LTools->RunGame("");
 }
-/*
-void UITopBarForm::ClickZoom()
-{
-	ExecCommand(COMMAND_ZOOM_EXTENTS, FALSE);
-}
-
-void UITopBarForm::ClickZoomSel()
-{
-	ExecCommand(COMMAND_ZOOM_EXTENTS, TRUE);
-}
-void  UITopBarForm::ClickSelect()
-{
-	ExecCommand(COMMAND_CHANGE_ACTION, etaSelect);
-	m_bSelect = true;
-	m_bAdd = false;
-}
-void  UITopBarForm::ClickAdd()
-{
-	ExecCommand(COMMAND_CHANGE_ACTION, etaAdd);
-	m_bSelect = false;
-	m_bAdd = true;
-}
-
-void  UITopBarForm::ClickCsLocal(){ ExecCommand(COMMAND_SET_SETTINGS, etfCSParent, m_bCsLocal); }
-void  UITopBarForm::ClickNuScale() { ExecCommand(COMMAND_SET_SETTINGS, etfNUScale, m_bNuScale); }
-void  UITopBarForm::ClickGSnap() { ExecCommand(COMMAND_SET_SETTINGS, etfGSnap, m_bGSnap); }
-void  UITopBarForm::ClickOSnap() { ExecCommand(COMMAND_SET_SETTINGS, etfOSnap, m_bOSnap); }
-void  UITopBarForm::ClickMoveToSnap() { ExecCommand(COMMAND_SET_SETTINGS, etfMTSnap, m_bMoveToSnap); }
-void  UITopBarForm::ClickNSnap() { ExecCommand(COMMAND_SET_SETTINGS, etfNormalAlign, m_bNSnap); }
-void  UITopBarForm::ClickVSnap() { ExecCommand(COMMAND_SET_SETTINGS, etfVSnap, m_bVSnap); }
-void  UITopBarForm::ClickASnap() { ExecCommand(COMMAND_SET_SETTINGS, etfASnap, m_bASnap); }
-void  UITopBarForm::ClickMSnap() { ExecCommand(COMMAND_SET_SETTINGS, etfMSnap, m_bMSnap); }
-
-void  UITopBarForm::ClickCameraP(){ EDevice->m_Camera.SetStyle(csPlaneMove); UI->RedrawScene();}
-void  UITopBarForm::ClickCameraA(){ EDevice->m_Camera.SetStyle(cs3DArcBall); UI->RedrawScene();}
-void  UITopBarForm::ClickCameraF(){ EDevice->m_Camera.SetStyle(csFreeFly); UI->RedrawScene();}
-
-void  UITopBarForm::ClickViewB1() { EDevice->m_Camera.ViewBack(); UI->RedrawScene(); }
-void  UITopBarForm::ClickViewB2() { EDevice->m_Camera.ViewBottom();UI->RedrawScene(); }
-void  UITopBarForm::ClickViewF() { EDevice->m_Camera.ViewFront(); UI->RedrawScene();}
-void  UITopBarForm::ClickViewL() { EDevice->m_Camera.ViewLeft();UI->RedrawScene(); }
-void  UITopBarForm::ClickViewR() { EDevice->m_Camera.ViewRight(); UI->RedrawScene();}
-void  UITopBarForm::ClickViewT() { EDevice->m_Camera.ViewTop();UI->RedrawScene(); }
-void  UITopBarForm::ClickViewX() { EDevice->m_Camera.ViewReset(); UI->RedrawScene();}*/

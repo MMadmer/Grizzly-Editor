@@ -716,7 +716,7 @@ bool EditorCharacters::Generate(LPCSTR project_root, LPCSTR module_id, int& writ
 	if (!project_root || !project_root[0])	return true;
 	if (!module_id || !module_id[0])
 	{
-		err = "the module has no id - Mod > Edit Manifest";
+		err = "the module has no id - Mod > Mod Settings";
 		return false;
 	}
 
@@ -1089,7 +1089,7 @@ void EditorCharacters::McpDelete(LPCSTR raw, xr_string& out)
 }
 
 //------------------------------------------------------------------------------
-// the window
+// the Characters tab
 //
 // The asset is text and an AI writes it directly; this is the hand path, and it
 // exists so that "give my stalker a name, a coat and a rifle" does not mean
@@ -1097,21 +1097,32 @@ void EditorCharacters::McpDelete(LPCSTR raw, xr_string& out)
 //------------------------------------------------------------------------------
 namespace
 {
-const char* kTitleDeleteChar = "Delete character###DeleteCharacter";
+using Token = XFinedTheme::ColorToken;
 
 bool						s_Open			= false;
 bool						s_NeedReload	= true;
 xr_vector<EditorCharacters::SCharacter>	s_All;
-xr_vector<xr_string>		s_Problems;
+xr_vector<xr_string>		s_Problems;		// files that did not load
 int							s_Sel			= -1;
 EditorCharacters::SCharacter s_Edit;
 bool						s_Dirty			= false;
-bool						s_WantDelete	= false;
 xr_string					s_Status;
 xr_string					s_PendingOpen;
+char						s_ListFilter[64]	= "";
 
 xr_vector<EditorCharacters::SSupply>	s_Inherited;	// what the base contributes
 xr_string					s_InheritedCommunity;	// and the community it would give
+struct SMoney { bool has = false; int min = 0, max = 0; bool infinite = false; };
+SMoney						s_InheritedMoney;		// and the money it would give
+
+// what is wrong with the edited character, worked out when it changes - never per frame
+xr_vector<xr_string>		s_Own;
+bool						s_OwnStale		= true;
+bool						s_OwnMounted	= false;
+
+// the module id, read when mod.ltx changes
+xr_string					s_ModuleId;
+u32							s_ModuleGen		= u32(-1);
 
 char	s_Id[64]		= "";
 char	s_Base[64]		= "";
@@ -1123,6 +1134,17 @@ char	s_Community[64]	= "";
 char	s_Visual[260]	= "";
 char	s_Icon[128]		= "";
 char	s_Dialog[128]	= "";
+
+const xr_string& CachedModuleId()
+{
+	if (s_ModuleGen != EditorMod::ManifestGeneration())
+	{
+		s_ModuleGen = EditorMod::ManifestGeneration();
+		s_ModuleId.clear();
+		ModuleId(s_ModuleId);
+	}
+	return s_ModuleId;
+}
 
 // Writes one language back without losing the others: a plain string stays a
 // plain string while only rus is in play, and becomes a table the moment a
@@ -1170,6 +1192,7 @@ void RecomputeInherited()
 {
 	s_Inherited.clear();
 	s_InheritedCommunity.clear();
+	s_InheritedMoney = SMoney();
 	if (s_Edit.base.empty() || !EditorProject::Active())	return;
 
 	xr_vector<EditorCharacters::SCharacter>	all;
@@ -1182,8 +1205,90 @@ void RecomputeInherited()
 		{
 			s_Inherited				= all[i].supplies;
 			s_InheritedCommunity	= all[i].community;
+			s_InheritedMoney		= { all[i].has_money, all[i].money_min, all[i].money_max, all[i].money_infinite };
 			return;
 		}
+}
+
+// The problems of the edited character as the build will see it: resolved against the
+// others (its base, the ids they take), then validated. The same answer characters_write gives.
+void Revalidate()
+{
+	s_OwnStale = false;
+	s_OwnMounted = EditorGameContent::Mounted();
+	s_Own.clear();
+	if (s_Sel < 0 && !s_Dirty) return;
+	xr_vector<EditorCharacters::SCharacter> all = s_All;
+	u32 at = (s_Sel >= 0 && s_Sel < (int)all.size()) ? (u32)s_Sel : (u32)all.size();
+	if (at == all.size())	all.push_back(s_Edit);
+	else					all[at] = s_Edit;
+	const xr_string where = s_Edit.file.empty() ? s_Edit.id : NqUtil::ProjectRelative(s_Edit.file.c_str());
+	xr_vector<xr_string> chain;
+	EditorCharacters::Resolve(all, chain);
+	for (const xr_string& p : chain)
+		if (p.find(" " + where + ": ") != xr_string::npos)
+			s_Own.push_back(p);
+	for (u32 i = 0; i < all.size(); ++i)
+		if (i != at && all[i].id == s_Edit.id)
+			s_Own.push_back("E101 " + where + ": another character has the id '" + s_Edit.id + "' - " +
+				NqUtil::ProjectRelative(all[i].file.c_str()));
+	EditorCharacters::Validate(all[at], s_OwnMounted, s_Own);
+}
+
+// the row a coded problem belongs under
+LPCSTR FieldOf(const xr_string& problem)
+{
+	static const struct { LPCSTR code; LPCSTR field; } kMap[] =
+	{
+		{ "E101", "id" }, { "E102", "id" }, { "E111", "base" }, { "E112", "base" }, { "E103", "name" },
+		{ "W107", "text" }, { "E104", "visual" }, { "W105", "visual" }, { "W115", "icon" }, { "W114", "community" },
+		{ "W116", "dialog" }, { "E110", "money" }, { "W117", "kit" }, { "E108", "kit" }, { "E109", "kit" },
+	};
+	for (const auto& m : kMap)
+		if (0 == problem.compare(0, 4, m.code))
+			return m.field;
+	return "";
+}
+
+// "E103 characters/x.npcasset: no name - ..." -> "No name - ...". The code and the file are for MCP and the log;
+// the author reads the sentence under the field it is about.
+xr_string ProblemText(const xr_string& problem)
+{
+	const size_t colon = problem.find(": ");
+	xr_string text = colon == xr_string::npos ? problem.substr(_min(problem.size(), size_t(5))) : problem.substr(colon + 2);
+	if (!text.empty() && text[0] >= 'a' && text[0] <= 'z')
+		text[0] = char(text[0] - 'a' + 'A');
+	if (!text.empty() && !strchr(".!?", text.back()))
+		text += '.';
+	return text;
+}
+
+bool FieldHasError(LPCSTR field)
+{
+	for (const xr_string& p : s_Own)
+		if (p[0] == 'E' && !strcmp(FieldOf(p), field))
+			return true;
+	return false;
+}
+
+int RowFlags(LPCSTR field, int flags = 0)
+{
+	return flags | (FieldHasError(field) ? XUI::PropInvalid : 0);
+}
+
+void FieldMessages(LPCSTR field)
+{
+	for (const xr_string& p : s_Own)
+		if (!strcmp(FieldOf(p), field))
+			XUI::PropertyMessage(p[0] == 'E' ? XUI::Tone::Error : XUI::Tone::Warning, ProblemText(p).c_str());
+}
+
+// the same, as lines of their own outside the grid
+void FieldStatus(LPCSTR field)
+{
+	for (const xr_string& p : s_Own)
+		if (!strcmp(FieldOf(p), field))
+			XUI::StatusText(p[0] == 'E' ? XUI::Tone::Error : XUI::Tone::Warning, ProblemText(p).c_str());
 }
 
 // A community a stalker can be of. The list of the linked game also carries the
@@ -1193,6 +1298,22 @@ bool StalkerCommunity(const NqPickers::SEntry& e)
 {
 	if (e.extra == "monster_communities" || e.id == "monster")	return false;
 	return e.id != "actor" && 0 != strncmp(e.id.c_str(), "actor_", 6);
+}
+
+// A combo's rows share one filter: one popup is open at a time.
+char							s_Filter[96]	= "";
+EditorCharacters::TModelPreview	s_ModelPreview	= 0;
+
+// the filter on top of a picker popup, focused when it opens
+void PickerFilter()
+{
+	if (ImGui::IsWindowAppearing())
+	{
+		s_Filter[0] = 0;
+		ImGui::SetKeyboardFocusHere();
+	}
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+	XUI::SearchField("##filter", s_Filter, sizeof(s_Filter), "Type to filter");
 }
 
 // The communities of the LINKED game, under the names its player reads. Typed by
@@ -1205,8 +1326,8 @@ bool CommunityCombo()
 	if (all.empty())
 	{
 		// no linked game to read the list from, so the field stays a field
-		const bool typed = ImGui::InputText("##community", s_Community, sizeof(s_Community));
-		if (ImGui::IsItemHovered())	ImGui::SetTooltip("No linked game to list the communities of - type the id.");
+		const bool typed = ImGui::InputTextWithHint("##community", "stalker", s_Community, sizeof(s_Community));
+		XUI::Tip("No linked game to list the communities of: type the id.");
 		return typed;
 	}
 
@@ -1215,81 +1336,37 @@ bool CommunityCombo()
 		if (all[i].id == s_Community)	{ cur = &all[i]; break; }
 
 	// unset is a value of its own: a character with a base takes the base's
-	char unset[160];
-	if (s_Edit.base.empty())	xr_strcpy(unset, sizeof(unset), "(not set - stalker)");
-	else						sprintf_s(unset, "(from %s%s%s)", s_Edit.base.c_str(),
-									s_InheritedCommunity.empty() ? "" : " - ", s_InheritedCommunity.c_str());
+	const xr_string unset = s_Edit.base.empty() ? xr_string("Not set: stalker") :
+		"From " + s_Edit.base + (s_InheritedCommunity.empty() ? xr_string() : ": " + s_InheritedCommunity);
+	xr_string preview;
+	if (!s_Community[0])				preview = unset;
+	else if (cur && !cur->name.empty())	preview = cur->name + "  (" + cur->id + ")";
+	else								preview = s_Community;
 
-	char preview[256];
-	if (!s_Community[0])				xr_strcpy(preview, sizeof(preview), unset);
-	else if (cur && !cur->name.empty())	sprintf_s(preview, "%s  -  %s", cur->id.c_str(), cur->name.c_str());
-	else								xr_strcpy(preview, sizeof(preview), s_Community);
-
+	const bool unknown = s_Community[0] && !cur;
+	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, XUI::ToneColor(XUI::Tone::Warning));
+	const bool open = ImGui::BeginCombo("##community", preview.c_str(), ImGuiComboFlags_HeightLarge);
+	if (unknown)	ImGui::PopStyleColor();
+	if (unknown)	XUI::Tip("Not a community of the linked game: kept as written, for one the module brings itself.");
+	if (!open)	return false;
 	bool picked = false;
-	if (ImGui::BeginCombo("##community", preview, ImGuiComboFlags_HeightLarge))
+	PickerFilter();
+	if (XUI::Match(s_Filter, unset.c_str()) && ImGui::Selectable(unset.c_str(), !s_Community[0]))	{ s_Community[0] = 0; picked = true; }
+	for (u32 i = 0; i < all.size(); ++i)
 	{
-		if (ImGui::Selectable(unset, !s_Community[0]))	{ s_Community[0] = 0; picked = true; }
-		if (s_Community[0] && !cur)
+		if (!StalkerCommunity(all[i]) && &all[i] != cur)	continue;
+		const xr_string label = all[i].name.empty() ? all[i].id : all[i].name + "  (" + all[i].id + ")";
+		if (!XUI::Match(s_Filter, label.c_str()))	continue;
+		ImGui::PushID((int)i);
+		if (ImGui::Selectable(label.c_str(), &all[i] == cur))
 		{
-			ImGui::Selectable(s_Community, true);
-			ImGui::SameLine();
-			ImGui::TextDisabled("not in the linked game");
+			CopyTo(s_Community, sizeof(s_Community), all[i].id);
+			picked = true;
 		}
-		for (u32 i = 0; i < all.size(); ++i)
-		{
-			if (!StalkerCommunity(all[i]) && &all[i] != cur)	continue;
-			ImGui::PushID((int)i);
-			if (ImGui::Selectable(all[i].id.c_str(), &all[i] == cur))
-			{
-				CopyTo(s_Community, sizeof(s_Community), all[i].id);
-				picked = true;
-			}
-			if (!all[i].name.empty())
-			{
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", all[i].name.c_str());
-			}
-			ImGui::PopID();
-		}
-		ImGui::EndCombo();
+		ImGui::PopID();
 	}
+	ImGui::EndCombo();
 	return picked;
-}
-
-// ---- pickers -----------------------------------------------------------------
-// One picker popup is open at a time, so they share the filter.
-char							s_Filter[96]	= "";
-EditorCharacters::TModelPreview	s_ModelPreview	= 0;
-
-// ASCII and Cyrillic folded to lower case: what the author types is matched against
-// ids and against the captions the player reads
-void Fold(LPCSTR text, xr_string& out)
-{
-	out.clear();
-	if (!text)	return;
-	for (const u8* p = (const u8*)text; *p; ++p)
-	{
-		const u8 c = *p;
-		if (c >= 'A' && c <= 'Z')	{ out += char(c + 0x20); continue; }
-		if (c == 0xD0 && p[1])
-		{
-			const u8 d = p[1];
-			if (d == 0x81)					{ out += char(0xD1); out += char(0x91); ++p; continue; }
-			if (d >= 0x90 && d <= 0x9F)		{ out += char(0xD0); out += char(d + 0x20); ++p; continue; }
-			if (d >= 0xA0 && d <= 0xAF)		{ out += char(0xD1); out += char(d - 0x20); ++p; continue; }
-		}
-		out += char(c);
-	}
-}
-
-bool Matches(const NqPickers::SEntry& e, const xr_string& query)
-{
-	if (query.empty())	return true;
-	xr_string f;
-	Fold(e.id.c_str(), f);
-	if (f.find(query) != xr_string::npos)	return true;
-	Fold(e.name.c_str(), f);
-	return f.find(query) != xr_string::npos;
 }
 
 // the entry with that id - the lists come sorted by id
@@ -1303,33 +1380,28 @@ const NqPickers::SEntry* FindEntry(const xr_vector<NqPickers::SEntry>& list, LPC
 }
 
 // A combo over a long list: a filter on top, only the rows in view drawn. The field
-// shows "id - caption"; a value the list does not hold stays and is marked, never
+// shows "caption (id)"; a value the list does not hold stays and is marked, never
 // replaced - the text path may name what only the module brings.
-bool ListPicker(LPCSTR label, char* buf, u32 size, const xr_vector<NqPickers::SEntry>& list, LPCSTR none, float width)
+bool ListPicker(LPCSTR label, char* buf, u32 size, const xr_vector<NqPickers::SEntry>& list, LPCSTR none)
 {
 	const NqPickers::SEntry* cur = FindEntry(list, buf);
 	xr_string preview = buf[0] ? xr_string(buf) : xr_string(none ? none : "");
-	if (cur && !cur->name.empty())	preview += "  -  " + cur->name;
+	if (cur && !cur->name.empty())	preview = cur->name + "  (" + buf + ")";
 	const bool unknown = buf[0] && !cur && !list.empty();
 	bool picked = false;
-	ImGui::SetNextItemWidth(width);
-	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .8f, .35f, 1.f));
+	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, XUI::ToneColor(XUI::Tone::Warning));
 	const bool open = ImGui::BeginCombo(label, preview.c_str(), ImGuiComboFlags_HeightLarge);
 	if (unknown)	ImGui::PopStyleColor();
-	if (unknown && !open && ImGui::IsItemHovered())
-		ImGui::SetTooltip("'%s' is not in the linked game or the project - kept as written", buf);
+	if (unknown && !open)
+		XUI::Tip((xr_string("'") + buf + "' is not in the linked game or the project: kept as written").c_str());
 	if (!open)	return false;
 
-	if (ImGui::IsWindowAppearing())	{ s_Filter[0] = 0; ImGui::SetKeyboardFocusHere(); }
-	ImGui::SetNextItemWidth(-1.f);
-	ImGui::InputTextWithHint("##filter", "type to filter", s_Filter, sizeof(s_Filter));
+	PickerFilter();
 	if (none && ImGui::Selectable(none, !buf[0]))	{ buf[0] = 0; picked = true; }
-	xr_string query;
-	Fold(s_Filter, query);
 	static xr_vector<u32> shown;
 	shown.clear();
 	for (u32 i = 0; i < list.size(); ++i)
-		if (Matches(list[i], query))	shown.push_back(i);
+		if (XUI::Match(s_Filter, (list[i].id + " " + list[i].name).c_str()))	shown.push_back(i);
 	ImGuiListClipper clip;
 	clip.Begin((int)shown.size());
 	while (clip.Step())
@@ -1337,15 +1409,11 @@ bool ListPicker(LPCSTR label, char* buf, u32 size, const xr_vector<NqPickers::SE
 		{
 			const NqPickers::SEntry& e = list[shown[r]];
 			ImGui::PushID(r);
-			if (ImGui::Selectable(e.id.c_str(), e.id == buf))	{ CopyTo(buf, size, e.id); picked = true; }
-			if (!e.name.empty())
-			{
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", e.name.c_str());
-			}
+			const xr_string row = e.name.empty() ? e.id : e.name + "  (" + e.id + ")";
+			if (ImGui::Selectable(row.c_str(), e.id == buf))	{ CopyTo(buf, size, e.id); picked = true; }
 			ImGui::PopID();
 		}
-	if (shown.empty())	ImGui::TextDisabled("nothing matches");
+	if (shown.empty())	XUI::StatusText(XUI::Tone::Muted, "Nothing matches.");
 	ImGui::EndCombo();
 	return picked;
 }
@@ -1413,52 +1481,58 @@ bool Portrait(const NqPickers::SEntry& e, ImTextureID& tex, ImVec2& uv0, ImVec2&
 	return true;
 }
 
-// The face the player sees, beside a gallery of every face the linked game and the
-// project have. Picked by looking, not by remembering ui_inGame2_neutral_2_mask.
-bool IconPicker(char* buf, u32 size, float em)
+// The face the player sees, `height` px tall, or a frame with a person in it when there is none.
+void DrawPortrait(LPCSTR icon, float height)
+{
+	const ImVec2 face(height * 1.42f, height);
+	const NqPickers::SEntry* cur = FindEntry(NqPickers::Index(NqPickers::tIcon), icon);
+	ImTextureID tex = 0;
+	ImVec2 uv0, uv1;
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	dl->AddRectFilled(at, ImVec2(at.x + face.x, at.y + face.y), XFinedTheme::U32(Token::Inset), XUI::Pt(4.f));
+	if (cur && Portrait(*cur, tex, uv0, uv1))
+		ImGui::Image(tex, face, uv0, uv1);
+	else
+	{
+		dl->AddRect(at, ImVec2(at.x + face.x, at.y + face.y), XFinedTheme::U32(Token::BorderSubtle), XUI::Pt(4.f));
+		const float glyph = _min(height, XUI::Pt(40.f)) * .6f;
+		XUI::DrawIcon(dl, XUI::Icon::Person, ImVec2(at.x + (face.x - glyph) * .5f, at.y + (face.y - glyph) * .5f), glyph / XUI::Dpi(),
+			XFinedTheme::U32(Token::TextMuted));
+		ImGui::Dummy(face);
+	}
+	XUI::Tip(icon && icon[0] ? icon : "No portrait");
+}
+
+// The portrait, picked from a gallery of every face the linked game and the project have: by
+// looking, not by remembering ui_inGame2_neutral_2_mask.
+bool IconPicker(char* buf, u32 size)
 {
 	const xr_vector<NqPickers::SEntry>& list = NqPickers::Index(NqPickers::tIcon);
 	const NqPickers::SEntry* cur = FindEntry(list, buf);
-	const ImVec2 face(em * 5.4f, em * 3.8f);
-	ImTextureID tex = 0;
-	ImVec2 uv0, uv1;
-	if (cur && Portrait(*cur, tex, uv0, uv1))	ImGui::Image(tex, face, uv0, uv1);
-	else
-	{
-		const ImVec2 at = ImGui::GetCursorScreenPos();
-		ImGui::Dummy(face);
-		ImGui::GetWindowDrawList()->AddRect(at, ImVec2(at.x + face.x, at.y + face.y),
-			ImGui::GetColorU32(ImGuiCol_Border), 3.f);
-	}
-	if (ImGui::IsItemHovered())	ImGui::SetTooltip("%s", buf[0] ? buf : "no portrait");
-	ImGui::SameLine();
-
 	const bool unknown = buf[0] && !cur && !list.empty();
-	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .8f, .35f, 1.f));
-	ImGui::SetNextItemWidth(-1.f);
-	const bool open = ImGui::BeginCombo("##icon", buf[0] ? buf : "(none)", ImGuiComboFlags_HeightLargest);
+	if (unknown)	ImGui::PushStyleColor(ImGuiCol_Text, XUI::ToneColor(XUI::Tone::Warning));
+	const bool open = ImGui::BeginCombo("##icon", buf[0] ? buf : "None", ImGuiComboFlags_HeightLargest);
 	if (unknown)	ImGui::PopStyleColor();
 	if (!open)	return false;
 
 	bool picked = false;
-	if (ImGui::IsWindowAppearing())	{ s_Filter[0] = 0; ImGui::SetKeyboardFocusHere(); }
-	ImGui::SetNextItemWidth(-1.f);
-	ImGui::InputTextWithHint("##filter", "type to filter", s_Filter, sizeof(s_Filter));
-	if (ImGui::Selectable("(none)", !buf[0]))	{ buf[0] = 0; picked = true; }
-	xr_string query;
-	Fold(s_Filter, query);
+	PickerFilter();
+	if (ImGui::Selectable("None", !buf[0]))	{ buf[0] = 0; picked = true; }
 	static xr_vector<u32> shown;
 	shown.clear();
 	for (u32 i = 0; i < list.size(); ++i)
-		if (Matches(list[i], query))	shown.push_back(i);
+		if (XUI::Match(s_Filter, (list[i].id + " " + list[i].name).c_str()))	shown.push_back(i);
 
 	// a gallery: as many columns as fit, only the rows in view drawn
 	const ImGuiStyle& st = ImGui::GetStyle();
-	const ImVec2 cell(em * 6.2f, em * 4.4f);
+	const ImVec2 cell(XUI::Em(6.2f), XUI::Em(4.4f));
 	const int cols = _max(1, int((ImGui::GetContentRegionAvail().x + st.ItemSpacing.x) /
 								(cell.x + st.FramePadding.x * 2.f + st.ItemSpacing.x)));
 	ImGuiListClipper clip;
 	clip.Begin((int(shown.size()) + cols - 1) / cols, cell.y + st.FramePadding.y * 2.f + st.ItemSpacing.y);
+	ImTextureID tex = 0;
+	ImVec2 uv0, uv1;
 	while (clip.Step())
 		for (int r = clip.DisplayStart; r < clip.DisplayEnd; ++r)
 			for (int c = 0; c < cols; ++c)
@@ -1472,14 +1546,13 @@ bool IconPicker(char* buf, u32 size, float em)
 					? ImGui::ImageButton("##face", tex, cell, uv0, uv1)
 					: ImGui::Button(e.id.c_str(), ImVec2(cell.x + st.FramePadding.x * 2.f, cell.y + st.FramePadding.y * 2.f));
 				if (clicked)	{ CopyTo(buf, size, e.id); picked = true; ImGui::CloseCurrentPopup(); }
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("%s%s", e.id.c_str(), 0 == e.extra.compare(0, 8, "project:") ? "\nthe project's" : "");
+				XUI::Tip((e.id + (0 == e.extra.compare(0, 8, "project:") ? xr_string("\nThe project's") : xr_string())).c_str());
 				if (e.id == buf)
 					ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-						ImGui::GetColorU32(ImGuiCol_CheckMark), 3.f, 0, 2.f);
+						XFinedTheme::U32(Token::AccentBright), XUI::Pt(3.f), 0, XUI::Pt(2.f));
 				ImGui::PopID();
 			}
-	if (shown.empty())	ImGui::TextDisabled("nothing matches");
+	if (shown.empty())	XUI::StatusText(XUI::Tone::Muted, "Nothing matches.");
 	ImGui::EndCombo();
 	return picked;
 }
@@ -1548,9 +1621,8 @@ bool RankPicker(int& rank, bool& has_rank)
 	int cur = -1;
 	for (u32 i = 0; i < ranks.size(); ++i)
 		if (rank >= atoi(ranks[i]->extra.c_str()))	cur = (int)i;
-	xr_string preview = !has_rank ? xr_string("(not set)")
-					  : cur < 0 ? xr_string("?")
-					  : (ranks[cur]->name.empty() ? ranks[cur]->id : ranks[cur]->name + "  (" + ranks[cur]->id + ")");
+	auto name = [](const NqPickers::SEntry* e) { return e->name.empty() ? e->id : e->name + "  (" + e->id + ")"; };
+	const xr_string preview = !has_rank ? xr_string("Not set") : cur < 0 ? xr_string("Below the lowest rank") : name(ranks[cur]);
 	bool picked = false;
 	if (ImGui::BeginCombo("##rankname", preview.c_str()))
 	{
@@ -1558,8 +1630,7 @@ bool RankPicker(int& rank, bool& has_rank)
 		{
 			const int from = atoi(ranks[i]->extra.c_str());
 			const int to = (i + 1 < ranks.size()) ? atoi(ranks[i + 1]->extra.c_str()) - 1 : -1;
-			const xr_string item = (ranks[i]->name.empty() ? ranks[i]->id : ranks[i]->name + "  (" + ranks[i]->id + ")") +
-				(to >= 0 ? NqUtil::Format("   %d-%d", from, to) : NqUtil::Format("   %d+", from));
+			const xr_string item = name(ranks[i]) + (to >= 0 ? NqUtil::Format("   %d-%d", from, to) : NqUtil::Format("   %d+", from));
 			if (ImGui::Selectable(item.c_str(), has_rank && (int)i == cur))
 			{
 				// the number stays when it already is that rank
@@ -1582,34 +1653,25 @@ bool BaseCombo()
 		known = ((int)i != s_Sel && s_All[i].id == s_Base);
 
 	bool picked = false;
-	if (ImGui::BeginCombo("##base", s_Base[0] ? s_Base : "(none)", ImGuiComboFlags_HeightLarge))
+	if (!known)	ImGui::PushStyleColor(ImGuiCol_Text, XUI::ToneColor(XUI::Tone::Warning));
+	const bool open = ImGui::BeginCombo("##base", s_Base[0] ? s_Base : "None", ImGuiComboFlags_HeightLarge);
+	if (!known)	ImGui::PopStyleColor();
+	if (!open)	return false;
+	if (ImGui::Selectable("None", !s_Base[0]))	{ s_Base[0] = 0; picked = true; }
+	for (u32 i = 0; i < s_All.size(); ++i)
 	{
-		if (ImGui::Selectable("(none)", !s_Base[0]))	{ s_Base[0] = 0; picked = true; }
-		if (!known)
+		// not itself: a character that starts from itself is E112
+		if ((int)i == s_Sel)	continue;
+		ImGui::PushID((int)i);
+		const xr_string label = s_All[i].abstract_ ? s_All[i].id + "  (template)" : s_All[i].id;
+		if (ImGui::Selectable(label.c_str(), s_All[i].id == s_Base))
 		{
-			ImGui::Selectable(s_Base, true);
-			ImGui::SameLine();
-			ImGui::TextDisabled("not in the project");
+			CopyTo(s_Base, sizeof(s_Base), s_All[i].id);
+			picked = true;
 		}
-		for (u32 i = 0; i < s_All.size(); ++i)
-		{
-			// not itself: a character that starts from itself is E112
-			if ((int)i == s_Sel)	continue;
-			ImGui::PushID((int)i);
-			if (ImGui::Selectable(s_All[i].id.c_str(), s_All[i].id == s_Base))
-			{
-				CopyTo(s_Base, sizeof(s_Base), s_All[i].id);
-				picked = true;
-			}
-			if (s_All[i].abstract_)
-			{
-				ImGui::SameLine();
-				ImGui::TextDisabled("template");
-			}
-			ImGui::PopID();
-		}
-		ImGui::EndCombo();
+		ImGui::PopID();
 	}
+	ImGui::EndCombo();
 	return picked;
 }
 
@@ -1633,21 +1695,28 @@ void SelectIndex(int index)
 	if (index >= 0 && index < (int)s_All.size())	s_Edit = s_All[index];
 	else										s_Edit.Reset();
 	s_Dirty = false;
+	s_OwnStale = true;
 	PullToBuffers();
 	RecomputeInherited();
 }
 
+// The list again from disk. Edits in progress stay: the edited character is found again by its file.
 void ReloadAll()
 {
-	const xr_string keep = (s_Sel >= 0 && s_Sel < (int)s_All.size()) ? s_All[s_Sel].id : xr_string();
+	const xr_string file = s_Edit.file;
 	s_Problems.clear();
 	EditorCharacters::LoadAll(EditorProject::Root(), s_All, s_Problems);
-
-	int sel = s_All.empty() ? -1 : 0;
-	for (u32 i = 0; i < s_All.size(); ++i)
-		if (s_All[i].id == keep)	sel = (int)i;
-	SelectIndex(sel);
 	s_NeedReload = false;
+	s_OwnStale = true;
+	int found = -1;
+	for (u32 i = 0; i < s_All.size(); ++i)
+		if (!file.empty() && 0 == _stricmp(s_All[i].file.c_str(), file.c_str()))	found = (int)i;
+	if (s_Dirty)
+	{
+		s_Sel = found;
+		return;
+	}
+	SelectIndex(found >= 0 ? found : (s_All.empty() ? -1 : 0));
 }
 
 bool SaveEdited(xr_string& err)
@@ -1664,46 +1733,562 @@ bool SaveEdited(xr_string& err)
 	if (!EditorCharacters::Save(s_Edit.file.c_str(), s_Edit, err))	return false;
 	s_Dirty			= false;
 	s_NeedReload	= true;
-	s_Status		= "Saved " + NqUtil::ProjectRelative(s_Edit.file.c_str());
+	s_Status.clear();
 	return true;
 }
 
-void DrawDeleteConfirm()
+void Discard()
 {
-	if (!s_WantDelete)	return;
-	if (!ImGui::BeginPopupModal(kTitleDeleteChar, &s_WantDelete, ImGuiWindowFlags_AlwaysAutoResize, true))
+	SelectIndex(s_Sel);
+	s_Status.clear();
+}
+
+// Unsaved edits ask before anything replaces them: Save, Don't Save, or stay.
+void AskThen(std::function<void()> action)
+{
+	if (!s_Dirty)
+	{
+		action();
 		return;
-
-	// Names what disappears, not "are you sure": the file itself goes to the
-	// disk, and the module loses the character and anything aimed at it.
-	ImGui::Text("Delete the character \"%s\"?", s_Edit.id.c_str());
-	ImGui::TextDisabled("%s", NqUtil::ProjectRelative(s_Edit.file.c_str()).c_str());
-	ImGui::Spacing();
-	ImGui::TextWrapped("The file is deleted for good. The next build takes the character out"
-					   " of the module, and a quest that spawns it will have nothing to spawn.");
-	ImGui::Spacing();
-
-	if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter))
-	{
-		s_WantDelete = false;
-		ImGui::CloseCurrentPopup();
 	}
-	ImGui::SameLine();
-	if (ImGui::Button("Delete"))
+	XUI::Strings what;
+	what.push_back(s_Edit.id.empty() ? xr_string("the new character") : s_Edit.id);
+	XUI::UnsavedPrompt("character", what, [action](XUI::Answer answer)
 	{
+		if (answer == XUI::Answer::Cancel) return;
+		if (answer == XUI::Answer::Yes)
+		{
+			xr_string err;
+			if (!SaveEdited(err))
+			{
+				s_Status = "Not saved: " + err;
+				return;
+			}
+			ReloadAll();
+		}
+		else
+			Discard();
+		action();
+	});
+}
+
+void NewCharacter()
+{
+	EditorCharacters::SCharacter c;
+	c.id = "new_character";
+	for (int n = 2; n < 1000; ++n)
+	{
+		bool taken = false;
+		for (u32 i = 0; i < s_All.size(); ++i)
+			if (s_All[i].id == c.id)	taken = true;
+		if (!taken)	break;
+		c.id = NqUtil::Format("new_character_%d", n);
+	}
+	c.community	= "stalker";
+	c.name		= SNqValue::String("New character");
+	c.visual	= "actors\\stalker_neutral\\stalker_neutral_1";
+	c.icon		= "ui_inGame2_neutral_2";
+	c.has_rank	= true;
+	c.rank		= 300;
+	s_Edit		= c;
+	s_Sel		= -1;
+	s_Dirty		= true;
+	s_OwnStale	= true;
+	PullToBuffers();
+	RecomputeInherited();
+}
+
+// Names what disappears: the file goes for good, the module loses the character and a quest
+// that spawns it has nothing to spawn.
+void AskDelete()
+{
+	if (s_Edit.file.empty()) return;
+	const xr_string file = s_Edit.file;
+	const xr_string headline = "Delete the character \"" + s_Edit.id + "\"?";
+	XUI::ConfirmSpec spec;
+	spec.id = "delete_character";
+	spec.title = "Delete Character";
+	spec.headline = headline.c_str();
+	spec.items.push_back(NqUtil::ProjectRelative(file.c_str()));
+	spec.consequence = "Deleted for good - this cannot be undone. The next build takes the character out of the module, "
+		"and a quest that spawns it has nothing to spawn.";
+	spec.action = "Delete";
+	spec.destructive = true;
+	XUI::Confirm(spec, [file](XUI::Answer answer)
+	{
+		if (answer != XUI::Answer::Yes) return;
 		EditorFileOps::SReport rep;
-		EditorFileOps::Delete(s_Edit.file.c_str(), false, rep);
+		EditorFileOps::Delete(file.c_str(), false, rep);
 		EditorCharacters::Invalidate();
-		s_Status = rep.ok()
-			? xr_string("Deleted ") + NqUtil::ProjectRelative(s_Edit.file.c_str())
-			: xr_string("Delete failed");
-		s_WantDelete	= false;
-		s_NeedReload	= true;
-		ImGui::CloseCurrentPopup();
+		s_Status = rep.ok() ? xr_string() : "Not deleted: " + (rep.failures.empty() ? xr_string("the file is in use") : rep.failures[0].reason);
+		if (rep.ok())
+		{
+			s_Dirty = false;
+			s_Edit.Reset();
+			s_Sel = -1;
+		}
+		s_NeedReload = true;
+	});
+}
+
+void XUI_LocalDirtyDot(const ImVec2& centre)
+{
+	ImGui::GetWindowDrawList()->AddCircleFilled(centre, XUI::Pt(3.5f), XFinedTheme::U32(Token::Text));
+}
+
+// ---- the list -----------------------------------------------------------------------
+void DrawList()
+{
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+	XUI::SearchField("##char_search", s_ListFilter, sizeof(s_ListFilter), "Search characters");
+	const float problems = s_Problems.empty() ? 0.f : ImGui::GetTextLineHeightWithSpacing() / XUI::Dpi() + 4.f;
+	if (XUI::BeginList("##char_list", ImVec2(0.f, -problems)))
+	{
+		// a new character nobody saved yet heads the list
+		if (s_Sel < 0 && s_Dirty)
+		{
+			XUI::ListRow("##new", true);
+			const ImVec2 row_max = ImGui::GetItemRectMax();
+			XUI::TextEllipsis(s_Edit.id.empty() ? "New character" : s_Edit.id.c_str(), _max(0.f, row_max.x - ImGui::GetCursorScreenPos().x - XUI::Pt(18.f)));
+			XUI::Tip("Not saved yet");
+			XUI_LocalDirtyDot(ImVec2(row_max.x - XUI::Pt(10.f), (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * .5f));
+		}
+		int shown = 0;
+		for (u32 i = 0; i < s_All.size(); ++i)
+		{
+			const EditorCharacters::SCharacter& c = s_All[i];
+			const xr_string name = TextIn(c.name, "rus");
+			if (!XUI::Match(s_ListFilter, (c.id + " " + name + " " + TextIn(c.name, "eng")).c_str()))	continue;
+			++shown;
+			const bool selected = s_Sel == (int)i;
+			ImGui::PushID((int)i);
+			const bool clicked = XUI::ListRow(c.id.c_str(), selected);
+			const ImVec2 row_min = ImGui::GetItemRectMin(), row_max = ImGui::GetItemRectMax();
+			const float cy = (row_min.y + row_max.y) * .5f;
+			const float x = ImGui::GetCursorScreenPos().x;
+			XUI::DrawIcon(ImGui::GetWindowDrawList(), c.abstract_ ? XUI::Icon::CharacterTemplate : XUI::Icon::Character,
+				ImVec2(floorf(x + .5f), floorf(cy - XUI::Pt(7.f) + .5f)), 14.f, XFinedTheme::U32(selected ? Token::AccentBright : Token::TextSecondary));
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + XUI::Pt(20.f));
+			// what sits at the right end: the template mark, the dot of unsaved edits
+			const float right = (c.abstract_ ? XUI::Em(4.5f) : 0.f) + (selected && s_Dirty ? XUI::Pt(16.f) : 0.f) + XUI::Pt(6.f);
+			const float room = _max(0.f, row_max.x - ImGui::GetCursorScreenPos().x - right);
+			const float id_w = _min(ImGui::CalcTextSize(c.id.c_str()).x, room);
+			XUI::TextEllipsis(c.id.c_str(), id_w);
+			XUI::Tip((NqUtil::ProjectRelative(c.file.c_str()) + (name.empty() ? xr_string() : "\n" + name)).c_str());
+			if (!name.empty() && room - id_w > XUI::Em(3.f))
+			{
+				ImGui::SameLine(0.f, XUI::Pt(8.f));
+				ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+				XUI::TextEllipsis(name.c_str(), room - id_w - XUI::Pt(8.f));
+				ImGui::PopStyleColor();
+			}
+			if (c.abstract_)
+			{
+				ImGui::SameLine();
+				ImGui::SetCursorScreenPos(ImVec2(row_max.x - right + XUI::Pt(2.f), ImGui::GetCursorScreenPos().y));
+				XUI::Badge("Template");
+			}
+			if (selected && s_Dirty)
+				XUI_LocalDirtyDot(ImVec2(row_max.x - XUI::Pt(10.f), cy));
+			ImGui::PopID();
+			if (clicked && !selected)
+			{
+				const int index = (int)i;
+				AskThen([index] { SelectIndex(index); });
+			}
+		}
+		if (s_All.empty() && !(s_Sel < 0 && s_Dirty))
+		{
+			if (XUI::EmptyState(XUI::Icon::Character, "No characters", "A character is one .npcasset file of the project.", "New Character"))
+				NewCharacter();
+		}
+		else if (!shown && s_ListFilter[0])
+			XUI::StatusText(XUI::Tone::Muted, "No character matches.");
 	}
-	ImGui::EndPopup();
+	XUI::EndList();
+	if (!s_Problems.empty())
+	{
+		XUI::StatusText(XUI::Tone::Error, s_Problems.size() == 1 ? "1 file does not read" : NqUtil::Format("%u files do not read", (u32)s_Problems.size()).c_str());
+		xr_string all;
+		for (const xr_string& p : s_Problems) all += (all.empty() ? "" : "\n") + p;
+		XUI::Tip(all.c_str());
+	}
+}
+
+// ---- the form -----------------------------------------------------------------------
+// true when something changed
+bool DrawKit()
+{
+	bool changed = false;
+	const xr_vector<NqPickers::SEntry>& items = NqPickers::Index(NqPickers::tItem);
+	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX;
+	if (s_Inherited.empty() && s_Edit.supplies.empty())
+		XUI::StatusText(XUI::Tone::Muted, "No starting kit: the NPC spawns with what its community gives.");
+	else if (ImGui::BeginTable("##kit", 3, flags))
+	{
+		ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, XUI::Em(5.f));
+		ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, XUI::Pt(24.f));
+		XUI::TableHeaders();
+		// what the base already gives: shown, not editable, and not repeated below
+		for (u32 i = 0; i < s_Inherited.size(); ++i)
+		{
+			const NqPickers::SEntry* it = FindEntry(items, s_Inherited[i].section.c_str());
+			ImGui::TableNextRow(0, XUI::Pt(26.f));
+			ImGui::TableNextColumn();
+			ImGui::AlignTextToFramePadding();
+			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+			XUI::TextEllipsis(((it && !it->name.empty() ? it->name + "  (" + s_Inherited[i].section + ")" : s_Inherited[i].section) +
+				"  - from " + s_Edit.base).c_str());
+			XUI::Tip(("From " + s_Edit.base + ". A row of the same item below changes the count; a count of 0 takes it out.").c_str());
+			ImGui::TableNextColumn();
+			ImGui::AlignTextToFramePadding();
+			XUI::TextEllipsis(NqUtil::Format("%d", s_Inherited[i].count).c_str());
+			ImGui::PopStyleColor();
+			ImGui::TableNextColumn();
+		}
+		int remove = -1;
+		for (u32 i = 0; i < s_Edit.supplies.size(); ++i)
+		{
+			ImGui::PushID((int)i);
+			ImGui::TableNextRow(0, XUI::Pt(26.f));
+			ImGui::TableNextColumn();
+			char section[128];
+			CopyTo(section, sizeof(section), s_Edit.supplies[i].section);
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+			if (ListPicker("##sect", section, sizeof(section), items, 0))
+			{
+				s_Edit.supplies[i].section = section;
+				changed = true;
+			}
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+			if (ImGui::InputInt("##count", &s_Edit.supplies[i].count, 0, 0))	changed = true;
+			// 0 stays: with a base it means "not this one". Below zero never meant anything.
+			if (s_Edit.supplies[i].count < 0)	s_Edit.supplies[i].count = 0;
+			if (s_Edit.supplies[i].count == 0 && s_Inherited.empty())
+				s_Edit.supplies[i].count = 1;
+			ImGui::TableNextColumn();
+			if (XUI::IconButton("##remove", XUI::Icon::Delete, "Take the row out"))	remove = (int)i;
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+		if (remove >= 0)
+		{
+			s_Edit.supplies.erase(s_Edit.supplies.begin() + remove);
+			changed = true;
+		}
+	}
+	FieldStatus("kit");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+	if (XUI::Button("Add Item"))
+	{
+		s_Edit.supplies.push_back(EditorCharacters::SSupply());
+		changed = true;
+	}
+	return changed;
+}
+
+void DrawHeader(float width)
+{
+	const xr_string& mod = CachedModuleId();
+	const float portrait = XUI::Pt(64.f);
+	ImGui::BeginGroup();
+	DrawPortrait(s_Icon, portrait);
+	ImGui::SameLine(0.f, XUI::Pt(12.f));
+	ImGui::BeginGroup();
+	const float delete_w = ImGui::CalcTextSize("Delete...").x + XUI::Pt(20.f);
+	const float text_w = _max(XUI::Em(4.f), width - portrait * 1.42f - XUI::Pt(12.f) - delete_w - XUI::Pt(8.f));
+	xr_string title = s_NameEng[0] ? s_NameEng : s_NameRus;
+	if (title.empty()) title = s_Edit.id.empty() ? xr_string("New character") : s_Edit.id;
+	{
+		XUI::FontScope font(XUI::Font::Title);
+		XUI::TextEllipsis(title.c_str(), text_w);
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextSecondary));
+	XUI::TextEllipsis(mod.empty() ? "The module has no id yet: Mod Settings" : ("In game: " + EditorCharacters::GameId(mod.c_str(), s_Edit.id.c_str())).c_str(), text_w);
+	XUI::Tip("The spawn section, the squad section (with _squad) and the profile a placed stalker carries.");
+	XUI::TextEllipsis(s_Edit.file.empty() ? "Not saved yet" : NqUtil::ProjectRelative(s_Edit.file.c_str()).c_str(), text_w, XUI::Clip::Start);
+	ImGui::PopStyleColor();
+	if (s_Edit.abstract_)
+		XUI::Badge("Template");
+	ImGui::EndGroup();
+	ImGui::EndGroup();
+	ImGui::SameLine(_max(0.f, width - delete_w));
+	if (XUI::Button("Delete...", XUI::Kind::GhostDanger, !s_Edit.file.empty(), "Not saved yet: nothing to delete"))
+		AskDelete();
+	for (const xr_string& p : s_Own)
+		if (!FieldOf(p)[0])
+			XUI::StatusText(p[0] == 'E' ? XUI::Tone::Error : XUI::Tone::Warning, ProblemText(p).c_str());
+	if (!s_Status.empty())
+		XUI::StatusText(XUI::Tone::Error, s_Status.c_str());
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(6.f)));
+}
+
+// One amount of the Money row: empty while the character sets no money of its own, the base's amount (or 0) as
+// the hint. A number typed in sets the money, starting from what the row showed.
+bool MoneyField(LPCSTR id, int& value, int hint)
+{
+	char text[16] = "";
+	if (s_Edit.has_money)
+		sprintf_s(text, "%d", value);
+	char hint_text[16];
+	sprintf_s(hint_text, "%d", hint);
+	if (!ImGui::InputTextWithHint(id, hint_text, text, sizeof(text), ImGuiInputTextFlags_CharsDecimal))
+		return false;
+	if (!s_Edit.has_money)
+	{
+		s_Edit.has_money		= true;
+		s_Edit.money_min		= s_InheritedMoney.min;
+		s_Edit.money_max		= s_InheritedMoney.max;
+		s_Edit.money_infinite	= s_InheritedMoney.infinite;
+	}
+	value = _max(0, atoi(text));
+	return true;
+}
+
+// Money: from, to and Never runs out, all on the row; Clear goes back to the base's money, or to none
+bool MoneyRow()
+{
+	bool changed = false;
+	const float full = ImGui::CalcItemWidth();
+	const float x0 = ImGui::GetCursorPosX();
+	const float number = XUI::Em(5.5f);
+	const float spacing = ImGui::GetStyle().ItemSpacing.x;
+	ImGui::SetNextItemWidth(number);
+	changed |= MoneyField("##money_min", s_Edit.money_min, s_InheritedMoney.min);
+	ImGui::SameLine();
+	ImGui::AlignTextToFramePadding();
+	ImGui::TextUnformatted("to");
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(number);
+	changed |= MoneyField("##money_max", s_Edit.money_max, s_InheritedMoney.max);
+	// the checkbox goes under the numbers when the row is too narrow for it
+	const float used = number * 2.f + ImGui::CalcTextSize("to").x + spacing * 3.f;
+	const float box = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize("Never runs out").x;
+	if (used + box <= full)
+		ImGui::SameLine();
+	else
+		ImGui::SetCursorPosX(x0);
+	bool infinite = s_Edit.has_money ? s_Edit.money_infinite : s_InheritedMoney.infinite;
+	if (ImGui::Checkbox("Never runs out", &infinite))
+	{
+		if (!s_Edit.has_money)
+		{
+			s_Edit.has_money	= true;
+			s_Edit.money_min	= s_InheritedMoney.min;
+			s_Edit.money_max	= s_InheritedMoney.max;
+		}
+		s_Edit.money_infinite = infinite;
+		changed = true;
+	}
+	XUI::Tip("Trading never lowers it.");
+	if (s_Edit.has_money && XUI::PropertyTrailing("##money_clear", XUI::Icon::Clear,
+		s_Edit.base.empty() ? "Clear: the NPC spawns without money" : "Clear: the base's money applies"))
+	{
+		s_Edit.has_money = false;
+		s_Edit.money_min = s_Edit.money_max = 0;
+		s_Edit.money_infinite = false;
+		changed = true;
+	}
+	return changed;
+}
+
+bool DrawForm(float width)
+{
+	bool changed = false;
+	const xr_string& mod = CachedModuleId();
+	DrawHeader(width);
+
+	if (XUI::BeginPropertyGrid("character", .30f))
+	{
+		if (XUI::PropertySection("Identity"))
+		{
+			if (XUI::PropertyRow("ID", NqUtil::Format("a-z, 0-9 and _. The game knows the character as %s_<id>.",
+				mod.empty() ? "<module>" : mod.c_str()).c_str(), RowFlags("id", XUI::PropRequired)))
+			{
+				if (ImGui::InputText("##id", s_Id, sizeof(s_Id)))	changed = true;
+				FieldMessages("id");
+			}
+			if (XUI::PropertyRow("Base", "Another character to start from: what this one does not set comes from there, and "
+				"the starting kits are merged. None: the character stands on its own.", RowFlags("base")))
+			{
+				if (BaseCombo())
+				{
+					changed = true;
+					s_Edit.base = s_Base;
+					RecomputeInherited();
+				}
+				FieldMessages("base");
+			}
+			if (XUI::PropertyRow("Template", "A template only: never a character in the game, so it needs no name and no model. "
+				"It holds what several characters share."))
+				if (ImGui::Checkbox("##abstract", &s_Edit.abstract_))	changed = true;
+			XUI::EndPropertySection();
+		}
+		// Both languages on screen at once: a dropdown that swaps one field cannot show what the
+		// other holds, and the text a character carries is what an author compares side by side.
+		if (XUI::PropertySection("Name and Bio"))
+		{
+			if (XUI::PropertyRow("Name (rus)", "What the player reads above the NPC and in dialog.", RowFlags("name")))
+			{
+				if (ImGui::InputText("##name_rus", s_NameRus, sizeof(s_NameRus)))	changed = true;
+				FieldMessages("name");
+			}
+			if (XUI::PropertyRow("Name (eng)", "Left empty, an English install reads the Russian name."))
+				if (ImGui::InputText("##name_eng", s_NameEng, sizeof(s_NameEng)))	changed = true;
+			XUI::EndPropertyGrid();
+			changed |= XUI::TextBlock("Bio (rus)", "The line the PDA shows about the character.", "##bio_rus", s_BioRus, sizeof(s_BioRus), 2);
+			changed |= XUI::TextBlock("Bio (eng)", "Left empty, an English install reads the Russian bio.", "##bio_eng", s_BioEng, sizeof(s_BioEng), 2);
+			FieldStatus("text");
+			XUI::BeginPropertyGrid("character", .30f);
+		}
+		if (XUI::PropertySection("Appearance"))
+		{
+			if (XUI::PropertyRow("Model", "The model the NPC spawns with and keeps: meshes\\actors of the linked game and the project. "
+				"An outfit changes its protection, never its model.", RowFlags("visual")))
+			{
+				if (ListPicker("##visual", s_Visual, sizeof(s_Visual), Visuals(), s_Edit.base.empty() ? "Not set" : "From the base"))
+					changed = true;
+				if (XUI::PropertyTrailing("##preview", XUI::Icon::Eye, s_ModelPreview && s_Visual[0] ? "Preview the model" : "Pick a model first") &&
+					s_ModelPreview && s_Visual[0])
+					s_ModelPreview(s_Visual);
+				FieldMessages("visual");
+			}
+			if (XUI::PropertyRow("Portrait", "The face the dialog window and the PDA show. The gallery holds every portrait of the "
+				"linked game and the project.", RowFlags("icon")))
+			{
+				if (IconPicker(s_Icon, sizeof(s_Icon)))	changed = true;
+				FieldMessages("icon");
+			}
+			XUI::EndPropertySection();
+		}
+		if (XUI::PropertySection("Profile"))
+		{
+			if (XUI::PropertyRow("Community", "The communities of the linked game. Not set: the base's, or stalker without one.", RowFlags("community")))
+			{
+				if (CommunityCombo())	changed = true;
+				FieldMessages("community");
+			}
+			if (XUI::PropertyRow("Rank", "The linked game's ranks by name; the number beside it is the exact value."))
+			{
+				const float number = XUI::Em(6.f);
+				const float full = ImGui::CalcItemWidth();
+				ImGui::SetNextItemWidth(_max(XUI::Em(6.f), full - number - ImGui::GetStyle().ItemSpacing.x));
+				if (RankPicker(s_Edit.rank, s_Edit.has_rank))	changed = true;
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(number);
+				if (ImGui::InputInt("##rank", &s_Edit.rank, 0, 0))	{ changed = true; s_Edit.has_rank = true; }
+			}
+			if (XUI::PropertyRow("Money", "What the NPC carries when it spawns: a random amount from the first number to the second. "
+				"Empty: the base's money, or none.", RowFlags("money")))
+			{
+				if (MoneyRow())	changed = true;
+				FieldMessages("money");
+			}
+			if (XUI::PropertyRow("Squad", "Also a one-man squad section, so a quest can create the character with spawn.squad "
+				"as well as with spawn.npc."))
+				if (ImGui::Checkbox("##squad", &s_Edit.squad))	changed = true;
+			XUI::EndPropertySection();
+		}
+		if (XUI::PropertySection("Dialogs"))
+		{
+			if (XUI::PropertyRow("Opening Dialog", "The dialog it opens with (start_dialog), captioned with its first line.", RowFlags("dialog")))
+			{
+				if (ListPicker("##dialog", s_Dialog, sizeof(s_Dialog), NqPickers::Index(NqPickers::tDialog), "None"))
+					changed = true;
+				FieldMessages("dialog");
+			}
+			XUI::EndPropertySection();
+		}
+		if (XUI::PropertySection("Starting Kit"))
+		{
+			XUI::EndPropertyGrid();
+			changed |= DrawKit();
+			XUI::BeginPropertyGrid("character", .30f);
+		}
+		XUI::EndPropertyGrid();
+	}
+	return changed;
+}
+
+void DrawToolbar(XUI::Toolbar& tb)
+{
+	const bool project = EditorProject::Active();
+	tb.Group(3);
+	if (tb.Action("new", XUI::Icon::Plus, "New", "A new character, saved to characters\\<id>.npcasset", project))
+		AskThen([] { NewCharacter(); });
+	if (tb.Action("save", XUI::Icon::Save, "Save", s_Dirty ? "Save the character" : "No changes to save", s_Dirty))
+	{
+		xr_string err;
+		if (!SaveEdited(err))	s_Status = "Not saved: " + err;
+	}
+	if (tb.Action("revert", XUI::Icon::Undo, "Revert", s_Dirty ? "Drop the changes: back to the file" : "Nothing to revert", s_Dirty))
+		Discard();
+	tb.Group(1);
+	if (tb.Action("reload", XUI::Icon::Refresh, "Reload", "Read the characters, the linked game's lists and the project's models again", project))
+	{
+		s_NeedReload = true;
+		// the project's own dialogs, portraits and models may have changed on disk
+		NqPickers::Invalidate();
+		s_VisualsFor.clear();
+		DropSheets();
+	}
 }
 } // namespace
+
+namespace EditorCharacters
+{
+static void DrawCharactersBody();
+}
+
+namespace
+{
+// Characters is one of the editor's major tabs (XUI::Shell), a tool without a file of its own
+void ShowTab(bool activate)
+{
+	if (XUI::Shell::IsOpen("characters"))
+	{
+		if (activate) XUI::Shell::Activate("characters");
+		return;
+	}
+	XUI::Shell::DocDesc d;
+	d.id = "characters";
+	d.kind = "characters";
+	d.icon = XUI::Icon::Character;
+	d.label = [] { return xr_string("Characters"); };
+	d.tooltip = [] { return xr_string("The module's own NPCs"); };
+	d.alive = [] { return s_Open; };
+	d.dirty = [] { return s_Dirty; };
+	d.toolbar = [](XUI::Toolbar& tb) { DrawToolbar(tb); };
+	d.body = [] { EditorCharacters::DrawCharactersBody(); };
+	d.save = [](xr_string& err) { return SaveEdited(err); };
+	d.discard = [] { Discard(); };
+	d.on_close = [] { s_Open = false; };
+	XUI::Shell::Open(d, activate);
+}
+
+// the list as the disk has it, and a character asked for by the content browser selected
+void Sync()
+{
+	if (!EditorProject::Active())
+	{
+		s_All.clear();
+		s_Sel = -1;
+		return;
+	}
+	if (s_NeedReload)
+		ReloadAll();
+	if (s_PendingOpen.empty())
+		return;
+	int index = -1;
+	for (u32 i = 0; i < s_All.size(); ++i)
+		if (0 == _stricmp(s_All[i].file.c_str(), s_PendingOpen.c_str()))	index = (int)i;
+	s_PendingOpen.clear();
+	if (index >= 0 && index != s_Sel)
+		AskThen([index] { SelectIndex(index); });
+}
+}
 
 bool EditorCharacters::IsOpen()	{ return s_Open; }
 
@@ -1711,6 +2296,7 @@ void EditorCharacters::Show()
 {
 	s_Open			= true;
 	s_NeedReload	= true;
+	ShowTab(true);
 }
 
 void EditorCharacters::Open(LPCSTR path)
@@ -1718,13 +2304,13 @@ void EditorCharacters::Open(LPCSTR path)
 	s_Open			= true;
 	s_NeedReload	= true;
 	s_PendingOpen	= path ? path : "";
+	ShowTab(true);
 }
 
 void EditorCharacters::SetModelPreview(TModelPreview fn)	{ s_ModelPreview = fn; }
 
 void EditorCharacters::DrawUI()
 {
-	DrawDeleteConfirm();
 	// portraits of one project are not the next one's; dropped before anything of
 	// this frame can reference them
 	const xr_string root = EditorProject::Active() ? EditorProject::Root() : "";
@@ -1734,288 +2320,56 @@ void EditorCharacters::DrawUI()
 		s_SheetsRoot = root;
 	}
 	if (!s_Open)	return;
+	Sync();
+	ShowTab(false);
+}
 
-	if (!EditorProject::Active())
+namespace EditorCharacters
+{
+static void DrawCharactersBody()
+{
+	// the tab draws before DrawUI: another project's portraits go before this frame can show them
+	const xr_string root = EditorProject::Active() ? EditorProject::Root() : "";
+	if (root != s_SheetsRoot)
 	{
-		s_All.clear();
-		s_Sel = -1;
-	}
-	else if (s_NeedReload)
-	{
-		ReloadAll();
-		if (!s_PendingOpen.empty())
-		{
-			for (u32 i = 0; i < s_All.size(); ++i)
-				if (0 == _stricmp(s_All[i].file.c_str(), s_PendingOpen.c_str()))	SelectIndex((int)i);
-			s_PendingOpen.clear();
-		}
-	}
-
-	const float em = ImGui::GetFontSize();
-	ImGui::SetNextWindowSize(ImVec2(em * 48.f, em * 38.f), ImGuiCond_FirstUseEver);
-	if (!ImGui::Begin("Characters", &s_Open))
-	{
-		ImGui::End();
-		return;
-	}
-
-	if (!EditorProject::Active())
-	{
-		ImGui::TextDisabled("Open a project first.");
-		ImGui::End();
-		return;
-	}
-
-	xr_string mod;
-	ModuleId(mod);
-
-	// ---- toolbar ----------------------------------------------------------
-	if (ImGui::Button("New"))
-	{
-		SCharacter c;
-		c.id = "new_character";
-		for (int n = 2; n < 1000; ++n)
-		{
-			bool taken = false;
-			for (u32 i = 0; i < s_All.size(); ++i)
-				if (s_All[i].id == c.id)	taken = true;
-			if (!taken)	break;
-			c.id = NqUtil::Format("new_character_%d", n);
-		}
-		c.community	= "stalker";
-		c.name		= SNqValue::String("New character");
-		c.visual	= "actors\\stalker_neutral\\stalker_neutral_1";
-		c.icon		= "ui_inGame2_neutral_2";
-		c.has_rank	= true;
-		c.rank		= 300;
-		s_Edit		= c;
-		s_Sel		= -1;
-		s_Dirty		= true;
-		PullToBuffers();
-	}
-	ImGui::SameLine();
-	ImGui::BeginDisabled(!s_Dirty);
-	if (ImGui::Button("Save"))
-	{
-		xr_string err;
-		if (!SaveEdited(err))	s_Status = "Save failed: " + err;
-	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	if (ImGui::Button("Reload"))
-	{
-		s_NeedReload = true;
-		// the project's own dialogs, portraits and models may have changed on disk
-		NqPickers::Invalidate();
-		s_VisualsFor.clear();
 		DropSheets();
+		s_SheetsRoot = root;
 	}
-	ImGui::SameLine();
-	ImGui::BeginDisabled(s_Edit.file.empty());
-	if (ImGui::Button("Delete..."))	s_WantDelete = true;
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	ImGui::TextDisabled("module: %s", mod.empty() ? "(no id)" : mod.c_str());
-
-	ImGui::Separator();
-
-	// ---- list + form ------------------------------------------------------
-	ImGui::BeginChild("##charlist", ImVec2(em * 12.f, -em * 4.6f), ImGuiChildFlags_Borders);
-	for (u32 i = 0; i < s_All.size(); ++i)
+	if (!EditorProject::Active())
 	{
-		const bool selected = (s_Sel == (int)i);
-		if (ImGui::Selectable(s_All[i].id.c_str(), selected))
-			SelectIndex((int)i);
+		XUI::EmptyState(XUI::Icon::Character, "No project", "Characters are .npcasset files of the open project.");
+		return;
 	}
-	if (s_All.empty())	ImGui::TextDisabled("no characters");
+	Sync();
+	if (s_OwnStale || s_OwnMounted != EditorGameContent::Mounted())
+		Revalidate();
+
+	// the list, a splitter, the form: the list keeps its width, the form takes the rest
+	float list_pt = 260.f;
+	XUI::Splitter("characters.list", true, &list_pt, 220.f, 400.f, 260.f);
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(Token::Base));
+	ImGui::BeginChild("##char_side", ImVec2(XUI::Pt(list_pt), 0.f));
+	DrawList();
 	ImGui::EndChild();
-
 	ImGui::SameLine();
-	ImGui::BeginChild("##charform", ImVec2(0, -em * 4.6f));
-
-	const float label_w = em * 8.f;
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(12.f), 0.f));
+	ImGui::BeginChild("##char_form", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding);
+	ImGui::PopStyleVar();
 	bool changed = false;
-
-	ImGui::PushItemWidth(-1.f);
-
-	ImGui::Text("Id");			ImGui::SameLine(label_w);
-	if (ImGui::InputText("##id", s_Id, sizeof(s_Id)))			changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("a-z, 0-9 and _. The game knows the character as %s_<id>.",
-			mod.empty() ? "<module>" : mod.c_str());
-
-	ImGui::Text("Base");		ImGui::SameLine(label_w);
-	if (BaseCombo())
 	{
-		changed = true;
-		s_Edit.base = s_Base;
-		RecomputeInherited();
-	}
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Another character to start from: everything this one does not set\n"
-						  "comes from there, and the starting kits are merged. Leave it empty\n"
-						  "for a character that stands on its own.");
-
-	ImGui::Text("Template");	ImGui::SameLine(label_w);
-	if (ImGui::Checkbox("##abstract", &s_Edit.abstract_))	changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("A template only: never becomes a character in the game, so it needs\n"
-						  "no name and no model. Use it to hold a kit several characters share.");
-
-	// Both languages on screen at once. A dropdown that swaps one field cannot
-	// show what the other holds, and the text a character carries is exactly the
-	// thing an author wants to compare side by side.
-	ImGui::Text("Name");		ImGui::SameLine(label_w);
-	ImGui::TextDisabled("rus");	ImGui::SameLine();
-	ImGui::SetNextItemWidth(-1.f);
-	if (ImGui::InputText("##name_rus", s_NameRus, sizeof(s_NameRus)))	changed = true;
-	if (ImGui::IsItemHovered())	ImGui::SetTooltip("What the player reads above them and in dialog.");
-	ImGui::Dummy(ImVec2(0.f, 0.f));	ImGui::SameLine(label_w);
-	ImGui::TextDisabled("eng");	ImGui::SameLine();
-	ImGui::SetNextItemWidth(-1.f);
-	if (ImGui::InputText("##name_eng", s_NameEng, sizeof(s_NameEng)))	changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Left empty, an English install reads the Russian name.");
-
-	ImGui::Text("Bio");			ImGui::SameLine(label_w);
-	ImGui::TextDisabled("rus");	ImGui::SameLine();
-	if (ImGui::InputTextMultiline("##bio_rus", s_BioRus, sizeof(s_BioRus), ImVec2(-1.f, em * 2.6f)))
-		changed = true;
-	ImGui::Dummy(ImVec2(0.f, 0.f));	ImGui::SameLine(label_w);
-	ImGui::TextDisabled("eng");	ImGui::SameLine();
-	if (ImGui::InputTextMultiline("##bio_eng", s_BioEng, sizeof(s_BioEng), ImVec2(-1.f, em * 2.6f)))
-		changed = true;
-
-	ImGui::Text("Community");	ImGui::SameLine(label_w);
-	if (CommunityCombo())	changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("The communities of the linked game. Not set: the base's, or stalker without one.");
-
-	ImGui::Text("Visual");		ImGui::SameLine(label_w);
-	{
-		const ImGuiStyle& st = ImGui::GetStyle();
-		const float button = ImGui::CalcTextSize("Preview").x + st.FramePadding.x * 2.f + st.ItemSpacing.x;
-		if (ListPicker("##visual", s_Visual, sizeof(s_Visual), Visuals(),
-				s_Edit.base.empty() ? "(not set)" : "(from the base)", -button))
-			changed = true;
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("The model it spawns with and keeps: meshes\\actors of the linked game and the project.");
-		ImGui::SameLine();
-		ImGui::BeginDisabled(!s_ModelPreview || !s_Visual[0]);
-		if (ImGui::Button("Preview"))	s_ModelPreview(s_Visual);
-		ImGui::EndDisabled();
-	}
-
-	ImGui::Text("Icon");		ImGui::SameLine(label_w);
-	if (IconPicker(s_Icon, sizeof(s_Icon), em))	changed = true;
-
-	ImGui::Text("Rank");		ImGui::SameLine(label_w);
-	ImGui::PushItemWidth(em * 14.f);
-	if (RankPicker(s_Edit.rank, s_Edit.has_rank))	changed = true;
-	ImGui::PopItemWidth();
-	ImGui::SameLine();
-	ImGui::PushItemWidth(em * 6.f);
-	if (ImGui::InputInt("##rank", &s_Edit.rank, 0, 0))	{ changed = true; s_Edit.has_rank = true; }
-	ImGui::PopItemWidth();
-	if (ImGui::IsItemHovered())	ImGui::SetTooltip("The exact value; the name beside it follows the linked game's ranks.");
-
-	ImGui::Text("Money");		ImGui::SameLine(label_w);
-	if (ImGui::Checkbox("##hasmoney", &s_Edit.has_money))	changed = true;
-	if (s_Edit.has_money)
-	{
-		ImGui::SameLine();
-		ImGui::PushItemWidth(em * 6.f);
-		if (ImGui::InputInt("##moneymin", &s_Edit.money_min, 0, 0))	changed = true;
-		ImGui::SameLine();
-		ImGui::TextDisabled("to");
-		ImGui::SameLine();
-		if (ImGui::InputInt("##moneymax", &s_Edit.money_max, 0, 0))	changed = true;
-		ImGui::PopItemWidth();
-		ImGui::SameLine();
-		if (ImGui::Checkbox("infinite", &s_Edit.money_infinite))	changed = true;
-	}
-
-	ImGui::Text("Squad");		ImGui::SameLine(label_w);
-	if (ImGui::Checkbox("##squad", &s_Edit.squad))	changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Also emit a one-man squad section, so a quest can create the\n"
-						  "character with spawn.squad as well as with spawn.object.");
-
-	ImGui::Text("Dialog");		ImGui::SameLine(label_w);
-	if (ListPicker("##dialog", s_Dialog, sizeof(s_Dialog), NqPickers::Index(NqPickers::tDialog), "(none)", -1.f))
-		changed = true;
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("The dialog it opens with (start_dialog). Captioned with its first line.");
-
-	ImGui::PopItemWidth();
-
-	// ---- the kit ----------------------------------------------------------
-	ImGui::Spacing();
-	ImGui::Text("Starting kit");
-	ImGui::SameLine();
-	if (ImGui::SmallButton("Add item"))
-	{
-		s_Edit.supplies.push_back(SSupply());
-		changed = true;
-	}
-	// what the base already gives: shown, not editable, and not repeated below
-	const xr_vector<NqPickers::SEntry>& items = NqPickers::Index(NqPickers::tItem);
-	for (u32 i = 0; i < s_Inherited.size(); ++i)
-	{
-		const NqPickers::SEntry* it = FindEntry(items, s_Inherited[i].section.c_str());
-		ImGui::TextDisabled("%s%s%s x%d", s_Inherited[i].section.c_str(), (it && !it->name.empty()) ? "  -  " : "",
-			(it && !it->name.empty()) ? it->name.c_str() : "", s_Inherited[i].count);
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("from %s - add a row with the same section to change the count,\n"
-							  "or a count of 0 to take it out", s_Edit.base.c_str());
-	}
-
-	int remove = -1;
-	for (u32 i = 0; i < s_Edit.supplies.size(); ++i)
-	{
-		ImGui::PushID((int)i);
-		char section[128];
-		CopyTo(section, sizeof(section), s_Edit.supplies[i].section);
-		if (ListPicker("##sect", section, sizeof(section), items, 0, em * 22.f))
+		const float column = _min(ImGui::GetContentRegionAvail().x, XUI::Pt(760.f));
+		ImGui::BeginChild("##char_column", ImVec2(column, 0.f), ImGuiChildFlags_AutoResizeY);
+		if (s_Sel < 0 && !s_Dirty)
 		{
-			s_Edit.supplies[i].section = section;
-			changed = true;
+			if (XUI::EmptyState(XUI::Icon::Character, "No character selected", "Pick one in the list, or make a new one.", "New Character"))
+				NewCharacter();
 		}
-		ImGui::SameLine();
-		ImGui::PushItemWidth(em * 5.f);
-		if (ImGui::InputInt("##count", &s_Edit.supplies[i].count, 0, 0))	changed = true;
-		// 0 stays: with a base it means "not this one". Below zero never meant
-		// anything.
-		if (s_Edit.supplies[i].count < 0)	s_Edit.supplies[i].count = 0;
-		if (s_Edit.supplies[i].count == 0 && s_Inherited.empty())
-			s_Edit.supplies[i].count = 1;
-		ImGui::PopItemWidth();
-		ImGui::SameLine();
-		if (ImGui::SmallButton("x"))	remove = (int)i;
-		ImGui::PopID();
+		else
+			changed = DrawForm(column);
+		ImGui::EndChild();
 	}
-	if (remove >= 0)
-	{
-		s_Edit.supplies.erase(s_Edit.supplies.begin() + remove);
-		changed = true;
-	}
-
 	ImGui::EndChild();
-
-	// ---- what is wrong with it --------------------------------------------
-	ImGui::BeginChild("##charproblems", ImVec2(0, 0), ImGuiChildFlags_Borders);
-	if (!s_Status.empty())	ImGui::TextDisabled("%s", s_Status.c_str());
-	xr_vector<xr_string> own;
-	Validate(s_Edit, EditorGameContent::Mounted(), own);
-	for (u32 i = 0; i < own.size(); ++i)
-	{
-		const bool fatal = own[i][0] == 'E';
-		ImGui::TextColored(fatal ? ImVec4(1.f, .45f, .4f, 1.f) : ImVec4(1.f, .8f, .35f, 1.f),
-			"%s", own[i].c_str());
-	}
-	if (own.empty())
-		ImGui::TextDisabled("Build the mod and the character is in the game.");
-	ImGui::EndChild();
+	ImGui::PopStyleColor();
 
 	if (changed)
 	{
@@ -2033,7 +2387,85 @@ void EditorCharacters::DrawUI()
 		TextCollapse(s_Edit.bio);
 		if (s_Edit.money_max < s_Edit.money_min)	s_Edit.money_max = s_Edit.money_min;
 		s_Dirty = true;
+		s_OwnStale = true;
 	}
+}
+}
 
-	ImGui::End();
+void EditorCharacters::McpView(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())	{ NqUtil::JsonError(out, "no active project"); return; }
+	xr_string id, path;
+	const bool by_id = NqUtil::ArgString(raw, "select", id) && !id.empty();
+	const bool by_path = NqUtil::ArgString(raw, "path", path) && !path.empty();
+	// anything to show opens the tab on it; without one this only looks
+	if (by_id || by_path || NqUtil::ArgBool(raw, "open", false))
+	{
+		s_Open = true;
+		ShowTab(true);
+	}
+	// a project path in either slash, any case
+	auto same_path = [](xr_string a, xr_string b)
+	{
+		for (char& c : a) if (c == '/') c = '\\';
+		for (char& c : b) if (c == '/') c = '\\';
+		return 0 == _stricmp(a.c_str(), b.c_str());
+	};
+	auto find = [&]()
+	{
+		int index = -1;
+		for (u32 i = 0; i < s_All.size(); ++i)
+			if ((by_id && s_All[i].id == id) || (by_path && same_path(NqUtil::ProjectRelative(s_All[i].file.c_str()), path)))
+				index = (int)i;
+		return index;
+	};
+	if (s_Open)
+	{
+		// the files as they are now: a write over MCP may have come after the tab last looked (edits in progress stay)
+		ReloadAll();
+		if (by_id || by_path)
+		{
+			int index = find();
+			if (index < 0)
+			{
+				NqUtil::JsonError(out, "no character " + (by_id ? "'" + id + "'" : "at " + path) + " (characters_list names them)");
+				return;
+			}
+			if (index != s_Sel && s_Dirty)
+			{
+				// the caller decides what happens to edits in progress: MCP never asks
+				if (NqUtil::ArgBool(raw, "save", false))
+				{
+					xr_string err;
+					if (!SaveEdited(err))	{ NqUtil::JsonError(out, "the edited character was not saved: " + err); return; }
+					ReloadAll();
+				}
+				else if (NqUtil::ArgBool(raw, "discard", false))
+					Discard();
+				else
+				{
+					out = "{\"ok\":false,\"error\":\"unsaved\",\"dirty\":";
+					NqUtil::JsonStringArray(out, xr_vector<xr_string>(1, s_Edit.id));
+					out += ",\"note\":\"save=true or discard=true settles the edits first\"}";
+					return;
+				}
+				index = find();
+			}
+			if (index != s_Sel) SelectIndex(index);
+		}
+		if (s_OwnStale || s_OwnMounted != EditorGameContent::Mounted()) Revalidate();
+	}
+	out = "{\"ok\":true,\"tab\":\"characters\",\"open\":";
+	NqUtil::JsonBool(out, s_Open);
+	out += ",\"active\":";
+	NqUtil::JsonBool(out, XUI::Shell::IsActive("characters"));
+	out += ",\"selected\":";
+	NqUtil::JsonString(out, s_Open && (s_Sel >= 0 || s_Dirty) ? s_Edit.id : xr_string());
+	out += ",\"file\":";
+	NqUtil::JsonPath(out, s_Edit.file.empty() ? "" : NqUtil::ProjectRelative(s_Edit.file.c_str()).c_str());
+	out += ",\"dirty\":";
+	NqUtil::JsonBool(out, s_Dirty);
+	out += NqUtil::Format(",\"count\":%u,\"problems\":", (u32)s_All.size());
+	NqUtil::JsonStringArray(out, s_Open ? s_Own : xr_vector<xr_string>());
+	out += "}";
 }

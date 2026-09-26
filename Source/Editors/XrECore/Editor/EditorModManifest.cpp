@@ -2,6 +2,7 @@
 #include "EditorGameContent.h"
 #include "EditorGameModes.h"
 #include "EditorModManifest.h"
+#include "EditorUiContract.h"
 #include "EditorCatalog.h"
 #include "EditorCharacters.h"
 #include "EditorWorld.h"
@@ -1513,8 +1514,10 @@ static int WipeTree(LPCSTR dir)
 
 // How much of the target the clean build would throw away: every file there that
 // this build does not write, root level included, and every link as one - asked
-// before a folder that may not be the editor's own is wiped.
-static int CountStaleRec(const xr_string& dir, const xr_string& rel_dir, const xr_set<xr_string>& will)
+// before a folder that may not be the editor's own is wiped. `names` gets the first
+// ten of them, for the question that names what goes.
+static int CountStaleRec(const xr_string& dir, const xr_string& rel_dir, const xr_set<xr_string>& will,
+						 xr_vector<xr_string>& names)
 {
 	int n = 0;
 	if (dir.size() + 3 >= sizeof(string_path))	return 0;
@@ -1523,23 +1526,32 @@ static int CountStaleRec(const xr_string& dir, const xr_string& rel_dir, const x
 	WIN32_FIND_DATAA fd;
 	HANDLE h = ::FindFirstFileA(mask, &fd);
 	if (INVALID_HANDLE_VALUE == h)	return 0;
+	auto stale = [&](const xr_string& rel)
+	{
+		++n;
+		if (names.size() < 10) names.push_back(rel);
+	};
 	do
 	{
 		if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, ".."))	continue;
 		const xr_string rel = rel_dir.empty() ? xr_string(fd.cFileName) : rel_dir + "\\" + fd.cFileName;
-		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)	{ ++n; continue; }
+		if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)	{ stale(rel); continue; }
 		if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
-			n += CountStaleRec(dir + "\\" + fd.cFileName, rel, will);
+			n += CountStaleRec(dir + "\\" + fd.cFileName, rel, will, names);
 			continue;
 		}
 		xr_string key = rel;
 		xr_strlwr(&key[0]);
-		if (!will.count(key))	++n;
+		if (!will.count(key))	stale(rel);
 	} while (::FindNextFileA(h, &fd));
 	::FindClose(h);
 	return n;
 }
+
+// what the last clean build refused to delete, for the UI's second question
+static xr_vector<xr_string>	s_StaleNames;
+static int					s_StaleCount	= 0;
 
 
 bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
@@ -1560,7 +1572,7 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 	// it was never built for.
 	if (m.mode.empty() && m.provides_modes.empty() && 0 != _stricmp(m.target.c_str(), "default"))
 	{
-		err = "no target game mode: open Mod > Edit Manifest and pick one "
+		err = "no target game mode: open Mod > Mod Settings, Game Mode, and pick one "
 			  "(the ordinary game, a mode of the linked game, or a new mode this module adds)";
 		return false;
 	}
@@ -1804,8 +1816,11 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 				xr_strlwr(&key[0]);
 				will.insert(key);
 			}
-			if (const int stale = CountStaleRec(dst, xr_string(), will))
+			xr_vector<xr_string> names;
+			if (const int stale = CountStaleRec(dst, xr_string(), will, names))
 			{
+				s_StaleNames = names;
+				s_StaleCount = stale;
 				err = "target already holds a module: ";
 				char n[64]; sprintf_s(n, "%d file(s) there are not part of this build", stale);
 				err += n;
@@ -2712,45 +2727,39 @@ bool EditorMod::ApplyTags(LPCSTR value, SManifest& m, xr_string& err)
 }
 
 //------------------------------------------------------------------------------
-// UI: File\Mod modals
+// UI: the Mod Settings tab, the build dialogs and the results they report
 //------------------------------------------------------------------------------
-static const char* kTitleManifest	= "XFined Editor - Mod Manifest";
-static const char* kTitleExport		= "XFined Editor - Export XMS Module";
-static const char* kTitleFlat		= "XFined Editor - Export Flat Gamedata";
-static const char* kTitleMessage	= "XFined Editor - Mod Export Result";
-static const char* kTitlePackage	= "XFined Editor - Package Release";
-static const char* kTitleReplace	= "XFined Editor - Replace Release Files";
+using ModToken = XFinedTheme::ColorToken;
 
-static bool					s_WantManifest	= false;
-static bool					s_WantExport	= false;
-static bool					s_WantFlat		= false;
-static bool					s_WantMessage	= false;
-static char					s_Message[4096]	= {};
+static const char* kTitleExport		= EditorUiContract::kDialogBuildToFolder;
+static const char* kTitleFlat		= EditorUiContract::kDialogExportFlat;
+static const char* kTitlePackage	= EditorUiContract::kDialogPackageRelease;
 
-static EditorMod::SManifest	s_Keep;			// api/extra preserved across the edit
-static char					s_EdId[128]		= {};
-static char					s_EdName[256]	= {};
-static char					s_EdVersion[64]	= {};
-static char					s_EdAuthor[256]	= {};
-static char					s_EdDescription[4096]	= {};
-// wider than the 512 bytes a website may have, so a longer one is flagged, not cut
-static char					s_EdWebsite[1024]	= {};
-static char					s_EdGithub[512]		= {};
-static char					s_EdMode[128]	= {};
-static char					s_EdTarget[32]	= {};
-static char					s_EdPModeId[128]	= {};
-static char					s_EdPModeTitle[256]	= {};
-static char					s_EdRequires[2048]	= {};
-static char					s_EdAfter[1024]		= {};
-static char					s_EdBefore[1024]	= {};
-static char					s_EdConflicts[2048]	= {};
-static char					s_EdExclude[4096]	= {};
-static char					s_Target[MAX_PATH]	= {};
-// measured once per modal opening: reading the game's layout is not frame work
-static bool					s_SlotChecked		= false;
-static char					s_SlotText[256]		= {};
-// The Mod Browser row. Nothing reaches the project before Save: a chosen picture waits in
-// temp\, a removal is only a mark.
+static xr_string CountText(int n, LPCSTR one, LPCSTR many)
+{
+	return n == 1 ? NqUtil::Format("1 %s", one) : NqUtil::Format("%d %s", n, many);
+}
+
+// the lines of a text, trimmed, empty ones dropped
+static void SplitLines(const xr_string& text, XUI::Strings& out)
+{
+	xr_vector<xr_string> lines;
+	SplitList(lines, text.c_str(), '\n');
+	out.insert(out.end(), lines.begin(), lines.end());
+}
+
+static void OpenFolder(const xr_string& path)
+{
+	if (!path.empty())
+		::ShellExecuteA(NULL, "open", path.c_str(), NULL, NULL, SW_SHOWNORMAL);
+}
+
+//------------------------------------------------------------------------------
+// the Mod Browser's picture
+//------------------------------------------------------------------------------
+static bool					s_SettingsOpen		= false;
+static xr_string			s_SettingsThumb;				// [module] thumbnail as the form loaded it
+// Nothing reaches the project before Save: a chosen picture waits in temp\, a removal is only a mark.
 static xr_string			s_ThumbPending;				// the converted picture, "" = none
 static bool					s_ThumbRemove		= false;
 static bool					s_ThumbPickQueued	= false;
@@ -2758,7 +2767,7 @@ static xr_string			s_ThumbError;
 static void*				s_ThumbTexture		= 0;		// the preview
 static xr_string			s_ThumbTextureOf;				// the file it shows
 
-// drops the picture nobody saved and the preview; the dialog is closed
+// drops the picture nobody saved and the preview; the tab is closed or reloaded
 static void ThumbnailCleanup()
 {
 	if (!s_ThumbPending.empty()) ::DeleteFileA(s_ThumbPending.c_str());
@@ -2774,7 +2783,7 @@ static void ThumbnailCleanup()
 static void PickThumbnail()
 {
 	s_ThumbPickQueued = false;
-	if (!s_WantManifest || !EditorProject::Active()) return;
+	if (!s_SettingsOpen || !EditorProject::Active()) return;
 	wchar_t picked[MAX_PATH] = {};
 	const HRESULT co = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	IFileOpenDialog* dlg = 0;
@@ -2818,11 +2827,543 @@ static void PickThumbnail()
 		s_ThumbError = err;
 }
 
-static void DrawThumbnailRow()
+//------------------------------------------------------------------------------
+// Mod Settings: mod.ltx as a form. The form is compared field by field with what
+// it was loaded from, so a save elsewhere (World Rules, Exclude from Build, MCP)
+// reaches every field the author has not touched and none that they have.
+//------------------------------------------------------------------------------
+struct SSettingsForm
 {
-	const float em = ImGui::GetFontSize();
+	char	id[128];
+	char	name[256];
+	char	version[64];
+	char	author[256];
+	char	description[4096];
+	// wider than the 512 bytes a website may have, so a longer one is flagged, not cut
+	char	website[1024];
+	char	github[512];
+	char	target[32];
+	char	mode[128];
+	char	pmode_id[128];			// the first declared mode; further ones survive untouched
+	char	pmode_title[256];
+	char	requires_[2048];
+	char	after[1024];
+	char	before[1024];
+	char	conflicts[2048];
+	char	exclude[4096];
+	char	tags[512];				// comma list
+	char	pda[MAX_PATH * 2];
+};
+
+struct SFormField { size_t offset, size; };
+static const SFormField kFormFields[] =
+{
+	{ offsetof(SSettingsForm, id),			sizeof(SSettingsForm::id) },
+	{ offsetof(SSettingsForm, name),		sizeof(SSettingsForm::name) },
+	{ offsetof(SSettingsForm, version),		sizeof(SSettingsForm::version) },
+	{ offsetof(SSettingsForm, author),		sizeof(SSettingsForm::author) },
+	{ offsetof(SSettingsForm, description),	sizeof(SSettingsForm::description) },
+	{ offsetof(SSettingsForm, website),		sizeof(SSettingsForm::website) },
+	{ offsetof(SSettingsForm, github),		sizeof(SSettingsForm::github) },
+	{ offsetof(SSettingsForm, target),		sizeof(SSettingsForm::target) },
+	{ offsetof(SSettingsForm, mode),		sizeof(SSettingsForm::mode) },
+	{ offsetof(SSettingsForm, pmode_id),	sizeof(SSettingsForm::pmode_id) },
+	{ offsetof(SSettingsForm, pmode_title),	sizeof(SSettingsForm::pmode_title) },
+	{ offsetof(SSettingsForm, requires_),	sizeof(SSettingsForm::requires_) },
+	{ offsetof(SSettingsForm, after),		sizeof(SSettingsForm::after) },
+	{ offsetof(SSettingsForm, before),		sizeof(SSettingsForm::before) },
+	{ offsetof(SSettingsForm, conflicts),	sizeof(SSettingsForm::conflicts) },
+	{ offsetof(SSettingsForm, exclude),		sizeof(SSettingsForm::exclude) },
+	{ offsetof(SSettingsForm, tags),		sizeof(SSettingsForm::tags) },
+	{ offsetof(SSettingsForm, pda),			sizeof(SSettingsForm::pda) },
+};
+
+enum ESettingsPage { pgGeneral = 0, pgBrowser, pgMode, pgRelations, pgContents, pgPda, pgCount };
+struct SSettingsPage { LPCSTR id; LPCSTR label; XUI::Icon icon; LPCSTR about; };
+static const SSettingsPage kSettingsPages[pgCount] =
+{
+	{ "general",		"General",			XUI::Icon::Info,			"What the game's Mods menu shows, and where the game looks for updates." },
+	{ "mod_browser",	"Mod Browser",		XUI::Icon::Globe,			"Shown next to the module in the game's Mods window and Mod Browser. Listing it there: Mod > Submit to Mod Browser." },
+	{ "game_mode",		"Game Mode",		XUI::Icon::Mode,			"A module targets one mode: the plain game, a mode the linked game has, or a new mode it brings. A mode is not the mod: the mod's name is on General." },
+	{ "relations",		"Relations",		XUI::Icon::Relations,		"The modules this one needs, loads around or cannot run with. Only matters when the player runs several modules at once: a standalone mod leaves all four empty." },
+	{ "build_contents",	"Build Contents",	XUI::Icon::Exclude,			"The project folder is your working place as well as the module. The build ships everything in it except what is listed here." },
+	{ "pda",			"PDA",				XUI::Icon::PdaInterface,	"A module can give the PDA screens of its own. The layout named here is the one the game shows." },
+};
+
+struct SSettingsProblem
+{
+	int			page;
+	LPCSTR		field;		// the row it is shown under
+	XUI::Tone	tone;
+	bool		blocks;		// Save waits until it is fixed
+	xr_string	text;
+};
+
+static SSettingsForm				s_Form;				// what the tab shows
+static SSettingsForm				s_FormBase;			// what it was loaded from
+static u32							s_FormGen		= u32(-1);
+static xr_string					s_FormRoot;
+static int							s_SettingsPage	= pgGeneral;
+static xr_string					s_SettingsStatus;	// the last save's failure
+static xr_vector<SSettingsProblem>	s_SettingsProblems;	// this frame's, for the rows, the nav, the footer and MCP
+// taken when the tab opens, never per frame: counting files and reading the game's layout is disk work
+static int							s_GatedFiles	= 0;
+static int							s_GatedPatches	= 0;
+static bool							s_SlotChecked	= false;
+static bool							s_SlotOk		= false;
+static xr_string					s_SlotError;
+static xr_vector<xr_string>			s_PdaFiles;			// project-relative .pdaasset files
+
+// the modules installed in the linked game, for the Relations pickers; read when that page is shown
+struct SInstalledModule
+{
+	xr_string	id;		// lower case, as the game compares it
+	xr_string	name;
+};
+static xr_vector<SInstalledModule>	s_Installed;
+static bool							s_InstalledScanned	= false;
+static char							s_ModuleSearch[64]	= {};
+
+static char* FormField(SSettingsForm& f, const SFormField& field) { return (char*)&f + field.offset; }
+
+static void FormFromManifest(const EditorMod::SManifest& m, SSettingsForm& f)
+{
+	ZeroMemory(&f, sizeof(f));
+	strncpy_s(f.id, m.id.c_str(), _TRUNCATE);
+	strncpy_s(f.name, m.name.c_str(), _TRUNCATE);
+	strncpy_s(f.version, m.version.c_str(), _TRUNCATE);
+	strncpy_s(f.author, m.author.c_str(), _TRUNCATE);
+	// A hand-written text longer than the box is cut at a character boundary:
+	// one broken UTF-8 byte makes the game read the whole file as cp1251.
+	size_t cut = m.description.size();
+	if (cut >= sizeof(f.description))
+	{
+		cut = sizeof(f.description) - 1;
+		while (cut && ((unsigned char)m.description[cut] & 0xC0) == 0x80) --cut;
+	}
+	strncpy_s(f.description, m.description.substr(0, cut).c_str(), _TRUNCATE);
+	strncpy_s(f.website, m.website.c_str(), _TRUNCATE);
+	strncpy_s(f.github, m.update_github.c_str(), _TRUNCATE);
+	strncpy_s(f.target, m.target.c_str(), _TRUNCATE);
+	strncpy_s(f.mode, m.mode.c_str(), _TRUNCATE);
+	if (!m.provides_modes.empty())
+	{
+		strncpy_s(f.pmode_id, m.provides_modes[0].id.c_str(), _TRUNCATE);
+		strncpy_s(f.pmode_title, m.provides_modes[0].title.c_str(), _TRUNCATE);
+	}
+	JoinList(m.requires_list, f.requires_, sizeof(f.requires_), "\n");
+	JoinList(m.after, f.after, sizeof(f.after), "\n");
+	JoinList(m.before, f.before, sizeof(f.before), "\n");
+	JoinList(m.conflicts, f.conflicts, sizeof(f.conflicts), "\n");
+	JoinList(m.exclude, f.exclude, sizeof(f.exclude), "\n");
+	JoinList(m.tags, f.tags, sizeof(f.tags), ",");
+	strncpy_s(f.pda, m.pda_layout.c_str(), _TRUNCATE);
+}
+
+// the form over a manifest read from disk: every other key of it stays as it is
+static void ApplyForm(const SSettingsForm& f, EditorMod::SManifest& m)
+{
+	m.id = f.id;
+	m.name = f.name;
+	m.version = f.version;
+	m.author = f.author;
+	m.description = f.description;
+	Trim(m.description);
+	m.website = f.website;
+	// a pasted link often drags a space or a line break along
+	Trim(m.website);
+	EditorMod::NormalizeGithubRepo(f.github, m.update_github);
+	m.mode = f.mode;
+	m.target = f.target;
+	// only the first declared mode is edited here; an empty id drops it
+	if (f.pmode_id[0])
+	{
+		if (m.provides_modes.empty()) m.provides_modes.push_back(EditorMod::SProvidesMode());
+		m.provides_modes[0].id = f.pmode_id;
+		m.provides_modes[0].title = f.pmode_title;
+	}
+	else if (!m.provides_modes.empty())
+		m.provides_modes.erase(m.provides_modes.begin());
+	SplitList(m.requires_list, f.requires_, '\n');
+	SplitList(m.after, f.after, '\n');
+	SplitList(m.before, f.before, '\n');
+	SplitList(m.conflicts, f.conflicts, '\n');
+	SplitList(m.exclude, f.exclude, '\n');
+	SplitList(m.tags, f.tags, ',');
+	m.pda_layout = f.pda;
+}
+
+static bool SettingsDirty()
+{
+	if (!s_ThumbPending.empty() || s_ThumbRemove) return true;
+	for (const SFormField& field : kFormFields)
+		if (strcmp(FormField(s_Form, field), FormField(s_FormBase, field)))
+			return true;
+	return false;
+}
+
+static void RefreshPdaFiles()
+{
+	s_PdaFiles.clear();
+	xr_vector<xr_string> files;
+	EditorPda::List(EditorProject::Root(), files);
+	for (const xr_string& abs : files)
+		s_PdaFiles.push_back(NqUtil::ProjectRelative(abs.c_str()));
+	std::sort(s_PdaFiles.begin(), s_PdaFiles.end());
+}
+
+// the form as mod.ltx says it, edits dropped
+static void LoadSettingsForm()
+{
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m))
+	{
+		EditorMod::EnsureScaffold(EditorProject::Root(), EditorProject::Name());
+		EditorMod::Load(EditorProject::Root(), m);
+	}
+	FormFromManifest(m, s_FormBase);
+	s_Form = s_FormBase;
+	s_SettingsThumb = m.thumbnail;
+	s_FormGen = EditorMod::ManifestGeneration();
+	s_FormRoot = EditorProject::Root();
+	s_SettingsStatus.clear();
+	ThumbnailCleanup();
+
+	string_path probe;
+	sprintf_s(probe, "%s\\gamedata", EditorProject::Root());
+	s_GatedFiles = CountFilesRec(probe, 0);
+	sprintf_s(probe, "%s\\patch", EditorProject::Root());
+	s_GatedPatches = CountFilesRec(probe, "_readme.txt");
+	s_SlotChecked = false;
+	s_InstalledScanned = false;
+	RefreshPdaFiles();
+}
+
+// mod.ltx saved by somebody else: the fields the author has not touched follow it
+static void SyncSettingsForm()
+{
+	if (s_FormRoot != EditorProject::Root())
+	{
+		LoadSettingsForm();
+		return;
+	}
+	if (s_FormGen == EditorMod::ManifestGeneration()) return;
+	s_FormGen = EditorMod::ManifestGeneration();
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m)) return;
+	SSettingsForm fresh;
+	FormFromManifest(m, fresh);
+	for (const SFormField& field : kFormFields)
+		if (!strcmp(FormField(s_Form, field), FormField(s_FormBase, field)))
+			strcpy_s(FormField(s_Form, field), field.size, FormField(fresh, field));
+	s_FormBase = fresh;
+	if (s_ThumbPending.empty() && !s_ThumbRemove)
+		s_SettingsThumb = m.thumbnail;
+	RefreshPdaFiles();
+}
+
+// 0 the plain game, 1 a mode of the linked game, 2 a mode the module brings, 3 every mode; -1 not chosen
+static int SettingsKind()
+{
+	const SSettingsForm& f = s_Form;
+	if (0 == _stricmp(f.target, "default"))		return 0;
+	if (0 == _stricmp(f.target, "existing"))	return 1;
+	if (0 == _stricmp(f.target, "new"))			return 2;
+	if (0 == _stricmp(f.target, "any"))			return 3;
+	// a manifest older than the target key: read off the mode fields
+	if (0 == strcmp(f.mode, "*"))				return 3;
+	if (f.pmode_id[0])							return 2;
+	if (f.mode[0])								return 1;
+	return -1;
+}
+
+// The module id of a relation line: a [requires] line may carry a value after '=' (other.mod = >=1.0), which the
+// game does not read; the id is what it compares, in lower case.
+static xr_string RelationId(const xr_string& line)
+{
+	xr_string id = line.substr(0, line.find('='));
+	Trim(id);
+	for (char& c : id) c = (char)tolower((u8)c);
+	return id;
+}
+
+static void RelationIds(LPCSTR text, xr_vector<xr_string>& ids)
+{
+	xr_vector<xr_string> lines;
+	SplitList(lines, text, '\n');
+	ids.clear();
+	for (const xr_string& line : lines)
+		ids.push_back(RelationId(line));
+}
+
+static void CheckRelations(const SSettingsForm& f, xr_vector<SSettingsProblem>& out)
+{
+	struct SRel { LPCSTR field; LPCSTR text; };
+	const SRel rels[] = { { "requires", f.requires_ }, { "after", f.after }, { "before", f.before }, { "conflicts", f.conflicts } };
+	xr_vector<xr_string> ids[4];
+	for (int i = 0; i < 4; ++i)
+		RelationIds(rels[i].text, ids[i]);
+	xr_string self = f.id;
+	for (char& c : self) c = (char)tolower((u8)c);
+	auto add = [&out](LPCSTR field, const xr_string& text)
+	{
+		SSettingsProblem& p = out.emplace_back();
+		p.page = pgRelations;
+		p.field = field;
+		p.tone = XUI::Tone::Warning;
+		p.blocks = false;
+		p.text = text;
+	};
+	auto has = [](const xr_vector<xr_string>& v, const xr_string& id) { return std::find(v.begin(), v.end(), id) != v.end(); };
+	for (int i = 0; i < 4; ++i)
+		if (!self.empty() && has(ids[i], self))
+			add(rels[i].field, "The module itself is listed here: the game ignores the line.");
+	for (const xr_string& id : ids[3])
+		if (has(ids[0], id))
+			add("conflicts", "Required and in conflict at once: " + id + ". The game refuses this module with it and without it.");
+	for (const xr_string& id : ids[2])
+		if (has(ids[1], id))
+			add("before", "Loads both before and after " + id + ": the game cannot keep both.");
+}
+
+static void CheckSettings()
+{
+	xr_vector<SSettingsProblem>& out = s_SettingsProblems;
+	out.clear();
+	const SSettingsForm& f = s_Form;
+	auto add = [&out](int page, LPCSTR field, XUI::Tone tone, bool blocks, const xr_string& text)
+	{
+		SSettingsProblem& p = out.emplace_back();
+		p.page = page;
+		p.field = field;
+		p.tone = tone;
+		p.blocks = blocks;
+		p.text = text;
+	};
+
+	if (!f.id[0])
+		add(pgGeneral, "id", XUI::Tone::Error, true, "Required: the folder the module installs into.");
+	else if (!EditorMod::ValidateId(f.id))
+		add(pgGeneral, "id", XUI::Tone::Error, true, "Use a-z, 0-9, _ . and - only.");
+	if (!EditorMod::ValidateVersion(f.version))
+		add(pgGeneral, "version", XUI::Tone::Error, true, "1 to 4 numbers separated by dots, e.g. 1.2.0.");
+	xr_string website = f.website;
+	Trim(website);
+	if (!EditorMod::ValidateWebsite(website.c_str()))
+		add(pgGeneral, "website", XUI::Tone::Error, true, "Only https://ap-pro.ru and https://moddb.com links are allowed.");
+	// the listing wants the module's own page, which the game's own check does not ask for
+	else if (!website.empty() && !EditorCatalog::WebsiteIsModulePage(website.c_str()))
+		add(pgGeneral, "website", XUI::Tone::Warning, false,
+			"The Mod Browser lists a module with its own page, e.g. https://ap-pro.ru/stuff/<section>/<name>-r<number>/.");
+	xr_string github;
+	EditorMod::NormalizeGithubRepo(f.github, github);
+	if (!EditorMod::ValidateGithubRepo(github.c_str()))
+		add(pgGeneral, "github", XUI::Tone::Error, true, "owner/repo, e.g. Madmer/agroprom-story.");
+
+	if (!s_ThumbError.empty())
+		add(pgBrowser, "picture", XUI::Tone::Error, false, s_ThumbError);
+
+	// the choice sticks while its details are still blank, so the missing detail is named instead
+	const int kind = SettingsKind();
+	if (kind < 0)
+		add(pgMode, "target", XUI::Tone::Required, false, "Not chosen yet: the module cannot be built.");
+	else if (kind == 1 && !f.mode[0])
+		add(pgMode, "mode", XUI::Tone::Required, false, "Pick the mode: the module cannot be built until then.");
+	else if (kind == 2 && !f.pmode_id[0])
+		add(pgMode, "pmode_id", XUI::Tone::Required, false, "Enter the mode's id: the module cannot be built until then.");
+	// "*" is the engine's no-gate wildcard: legal for mode=, never for a mode of the module's own
+	if (strcmp(f.mode, "*") && !EditorMod::ValidateModeId(f.mode))
+		add(pgMode, "mode", XUI::Tone::Error, true, "Use a-z, 0-9, _ . and - only.");
+	if (!EditorMod::ValidateModeId(f.pmode_id))
+		add(pgMode, "pmode_id", XUI::Tone::Error, true, "Use a-z, 0-9, _ . and - only.");
+	// The caption ships in a cp1251 string table: anything outside that page reaches the
+	// new-game screen as a look-alike or '?', while this field keeps showing the original.
+	xr_string bad;
+	if (kind == 2 && !NqUtil::Cp1251Covers(f.pmode_title, bad))
+		add(pgMode, "pmode_title", XUI::Tone::Warning, false,
+			"Outside cp1251 (" + bad + "): the new-game screen shows a look-alike letter or '?'.");
+
+	// the file is looked at when the choice or mod.ltx changes, not every frame
+	static xr_string s_PdaCheckedFor;
+	static u32 s_PdaCheckedGen = u32(-1);
+	static int s_PdaState = 0;
+	if (s_PdaCheckedFor != f.pda || s_PdaCheckedGen != EditorMod::ManifestGeneration())
+	{
+		s_PdaCheckedFor = f.pda;
+		s_PdaCheckedGen = EditorMod::ManifestGeneration();
+		string_path abs;
+		sprintf_s(abs, "%s\\%s", EditorProject::Root(), f.pda);
+		s_PdaState = !f.pda[0] ? 0 : !FileExists(abs) ? 1 : EditorMod::OutsideBuild(EditorProject::Root(), f.pda) ? 2 : 0;
+	}
+	if (s_PdaState == 1)
+		add(pgPda, "pda", XUI::Tone::Warning, false, "The file does not exist: the build refuses the module until it does.");
+	else if (s_PdaState == 2)
+		add(pgPda, "pda", XUI::Tone::Warning, false, "The build leaves this file out, so the game would never see it.");
+
+	CheckRelations(f, out);
+}
+
+static int SettingsBlocking(const SSettingsProblem** first = nullptr)
+{
+	int n = 0;
+	for (const SSettingsProblem& p : s_SettingsProblems)
+		if (p.blocks)
+		{
+			if (!n && first) *first = &p;
+			++n;
+		}
+	return n;
+}
+
+static int RowFlags(LPCSTR field, int flags = 0)
+{
+	for (const SSettingsProblem& p : s_SettingsProblems)
+		if (!strcmp(p.field, field) && p.tone == XUI::Tone::Error)
+			return flags | XUI::PropInvalid;
+	return flags;
+}
+
+static void RowMessages(LPCSTR field)
+{
+	for (const SSettingsProblem& p : s_SettingsProblems)
+		if (!strcmp(p.field, field))
+			XUI::PropertyMessage(p.tone, p.text.c_str());
+}
+
+// the worst tone a page has: the dot beside it in the nav
+static bool PageTone(int page, XUI::Tone& tone)
+{
+	int rank = 0;
+	for (const SSettingsProblem& p : s_SettingsProblems)
+	{
+		if (p.page != page) continue;
+		const int r = p.tone == XUI::Tone::Error ? 3 : p.tone == XUI::Tone::Required ? 2 : 1;
+		if (r > rank)
+		{
+			rank = r;
+			tone = p.tone;
+		}
+	}
+	return rank > 0;
+}
+
+static bool SaveSettings(xr_string& err)
+{
+	CheckSettings();
+	const SSettingsProblem* first = nullptr;
+	if (SettingsBlocking(&first))
+	{
+		err = xr_string(kSettingsPages[first->page].label) + ": " + first->text;
+		s_SettingsStatus = err;
+		return false;
+	}
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m))
+	{
+		EditorMod::EnsureScaffold(EditorProject::Root(), EditorProject::Name());
+		EditorMod::Load(EditorProject::Root(), m);
+	}
+	ApplyForm(s_Form, m);
+	// the picture: the one waiting in temp\ takes its place, or the removal is carried out
+	xr_string thumb_err;
+	if (!s_ThumbPending.empty())
+	{
+		if (PlaceThumbnail(EditorProject::Root(), s_ThumbPending, thumb_err))
+		{
+			m.thumbnail = kThumbnailName;
+			s_ThumbPending.clear();
+		}
+	}
+	else if (s_ThumbRemove)
+		EditorMod::ApplyThumbnail(EditorProject::Root(), "", m, thumb_err);
+	if (!EditorMod::Save(EditorProject::Root(), m))
+	{
+		err = "mod.ltx cannot be written";
+		s_SettingsStatus = err;
+		return false;
+	}
+	s_ThumbRemove = false;
+	s_ThumbError = thumb_err;
+	// what was written, normalized (the repository as owner/repo, the description trimmed)
+	FormFromManifest(m, s_FormBase);
+	s_Form = s_FormBase;
+	s_SettingsThumb = m.thumbnail;
+	s_FormGen = EditorMod::ManifestGeneration();
+	s_SettingsStatus = thumb_err.empty() ? xr_string() : "The picture was not saved: " + thumb_err;
+	return true;
+}
+
+static void RevertSettings()
+{
+	s_Form = s_FormBase;
+	if (!s_ThumbPending.empty()) ::DeleteFileA(s_ThumbPending.c_str());
+	s_ThumbPending.clear();
+	s_ThumbRemove = false;
+	s_ThumbError.clear();
+	s_SettingsStatus.clear();
+}
+
+// ---- the pages ------------------------------------------------------------------
+
+static void DrawGeneralPage()
+{
+	SSettingsForm& f = s_Form;
+	if (XUI::BeginPropertyGrid("mod_settings", .28f))
+	{
+		if (XUI::PropertyRow("Module ID", "Technical, never shown to the player: the folder the module installs into (<game>\\modules\\<id>) "
+			"and the name other modules require it by. Seeded from the project folder - change it before the first release.",
+			RowFlags("id", XUI::PropRequired)))
+		{
+			ImGui::InputText("##id", f.id, sizeof(f.id));
+			RowMessages("id");
+		}
+		if (XUI::PropertyRow("Name", "The mod's title, as the game's Mods menu prints it. Free text: it owes nothing to the module id "
+			"or the project folder, and it is not the title of a game mode."))
+			ImGui::InputText("##name", f.name, sizeof(f.name));
+		if (XUI::PropertyRow("Version", "1 to 4 numbers separated by dots. The game compares versions to offer an update.",
+			RowFlags("version", XUI::PropRequired)))
+		{
+			ImGui::InputText("##version", f.version, sizeof(f.version));
+			RowMessages("version");
+		}
+		if (XUI::PropertyRow("Author", "Shown in the game's Mods menu."))
+			ImGui::InputText("##author", f.author, sizeof(f.author));
+		XUI::EndPropertyGrid();
+	}
+	XUI::TextBlock("Description", "Shown in the game's Mods menu. Plain text or a string table id.", "##description",
+		f.description, sizeof(f.description), 4);
+	if (XUI::BeginPropertyGrid("mod_settings", .28f))
+	{
+		if (XUI::PropertyRow("Website", "The mod's page on AP-PRO or ModDB. The game opens it from the Mods menu.", RowFlags("website")))
+		{
+			ImGui::InputText("##website", f.website, sizeof(f.website));
+			RowMessages("website");
+		}
+		if (XUI::PropertyRow("GitHub Repository", "owner/repo. The game checks the latest release of this repository for updates. "
+			"A pasted address is fine: it is kept as owner/repo.", RowFlags("github")))
+		{
+			ImGui::InputText("##github", f.github, sizeof(f.github));
+			if (ImGui::IsItemDeactivatedAfterEdit())
+			{
+				xr_string repo;
+				EditorMod::NormalizeGithubRepo(f.github, repo);
+				strncpy_s(f.github, repo.c_str(), _TRUNCATE);
+			}
+			RowMessages("github");
+		}
+		XUI::EndPropertyGrid();
+	}
+}
+
+// The picture and what it becomes as one grid row: the frame, then its state and the buttons beside it. The grid keeps
+// the height a row took, so a value this tall scrolls like any other.
+static void PictureRow()
+{
+	if (!XUI::PropertyRow("Picture", "PNG, JPG, TGA or BMP. The middle square is scaled to 256 x 256 and saved as thumbnail.dds at the "
+		"root of the module.", RowFlags("picture")))
+		return;
 	const xr_string shown = !s_ThumbPending.empty() ? s_ThumbPending :
-		(!s_ThumbRemove && !s_Keep.thumbnail.empty()) ? xr_string(EditorProject::Root()) + "\\" + s_Keep.thumbnail : xr_string();
+		(!s_ThumbRemove && !s_SettingsThumb.empty()) ? xr_string(EditorProject::Root()) + "\\" + s_SettingsThumb : xr_string();
 	if (shown != s_ThumbTextureOf)
 	{
 		// not drawn yet this frame, and the last frame is presented: safe to let go
@@ -2831,188 +3372,626 @@ static void DrawThumbnailRow()
 		s_ThumbTextureOf = shown;
 	}
 
-	const ImVec2 box(em * 6.f, em * 6.f);
+	const ImVec2 box(XUI::Pt(96.f), XUI::Pt(96.f));
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	dl->AddRectFilled(at, ImVec2(at.x + box.x, at.y + box.y), XFinedTheme::U32(ModToken::Inset), XUI::Pt(4.f));
 	if (s_ThumbTexture)
 		ImGui::Image((ImTextureID)s_ThumbTexture, box);
 	else
 	{
-		// an empty frame the size of the picture, so the row does not jump
-		const ImVec2 at = ImGui::GetCursorScreenPos();
-		ImGui::GetWindowDrawList()->AddRect(at, ImVec2(at.x + box.x, at.y + box.y), ImGui::GetColorU32(ImGuiCol_Border), em * 0.25f);
+		// the frame of the picture, so the row does not jump
+		dl->AddRect(at, ImVec2(at.x + box.x, at.y + box.y), XFinedTheme::U32(ModToken::BorderSubtle), XUI::Pt(4.f));
+		XUI::DrawIcon(dl, XUI::Icon::Picture, ImVec2(at.x + box.x * .5f - XUI::Pt(16.f), at.y + box.y * .5f - XUI::Pt(16.f)), 32.f,
+			XFinedTheme::U32(ModToken::TextMuted));
 		ImGui::Dummy(box);
 	}
-	ImGui::SameLine();
+	ImGui::SameLine(0.f, XUI::Pt(12.f));
 	ImGui::BeginGroup();
+	const bool own = 0 == _stricmp(s_SettingsThumb.c_str(), kThumbnailName);
 	if (!s_ThumbPending.empty())
-		ImGui::TextUnformatted(OwnThumbnail(s_Keep.thumbnail) || s_Keep.thumbnail.empty() ?
-			"New picture - replaces thumbnail.dds when you save." : "New picture - saved as thumbnail.dds.");
+		XUI::Prose(own || s_SettingsThumb.empty() ? "A new picture: it becomes thumbnail.dds when you save." : "A new picture: it is saved as thumbnail.dds.");
 	else if (s_ThumbRemove)
-		ImGui::TextUnformatted(OwnThumbnail(s_Keep.thumbnail) ? "thumbnail.dds is deleted for good when you save." :
-			"The manifest stops naming it when you save; the file stays.");
-	else if (s_Keep.thumbnail.empty())
-		ImGui::TextDisabled("No picture: the Mods window shows the name's first letter.");
+		XUI::Prose(own ? "thumbnail.dds is deleted for good when you save." : "The manifest stops naming it when you save; the file stays.");
+	else if (s_SettingsThumb.empty())
+		XUI::Prose("No picture: the Mods window shows the first letter of the name.");
 	else
 	{
-		ImGui::TextUnformatted(s_Keep.thumbnail.c_str());
+		XUI::TextEllipsis(s_SettingsThumb.c_str(), -1.f, XUI::Clip::Start);
 		if (!s_ThumbTexture)
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "The file does not read as a picture.");
+			XUI::StatusText(XUI::Tone::Error, "The file does not read as a picture.");
 	}
-	ImGui::BeginDisabled(s_ThumbPickQueued);
-	if (ImGui::Button("Choose Picture..."))
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+	if (XUI::Button("Choose Picture...", XUI::Kind::Secondary, !s_ThumbPickQueued, "The picture dialog is open"))
 		s_ThumbPickQueued = UI->DeferUIWork(&PickThumbnail);
-	ImGui::EndDisabled();
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("PNG, JPG, TGA or BMP. The middle square is scaled to 256 x 256\n"
-						  "and saved as thumbnail.dds at the root of the module.");
-	const bool has_picture = !s_ThumbPending.empty() || (!s_ThumbRemove && !s_Keep.thumbnail.empty());
+	const bool has_picture = !s_ThumbPending.empty() || (!s_ThumbRemove && !s_SettingsThumb.empty());
 	if (has_picture)
 	{
 		ImGui::SameLine();
-		if (ImGui::Button("Remove"))
+		if (XUI::Button("Remove", XUI::Kind::Ghost))
 		{
 			if (!s_ThumbPending.empty()) ::DeleteFileA(s_ThumbPending.c_str());
 			s_ThumbPending.clear();
-			s_ThumbRemove = !s_Keep.thumbnail.empty();
+			s_ThumbRemove = !s_SettingsThumb.empty();
 		}
 	}
 	else if (s_ThumbRemove)
 	{
 		ImGui::SameLine();
-		if (ImGui::Button("Undo")) s_ThumbRemove = false;
+		if (XUI::Button("Keep Picture", XUI::Kind::Ghost))
+			s_ThumbRemove = false;
 	}
-	if (!s_ThumbError.empty())
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_ThumbError.c_str());
 	ImGui::EndGroup();
+	RowMessages("picture");
 }
 
-static void DrawTagRow()
+// The fixed vocabulary as checkboxes in the value column, as many columns as its width takes
+static void TagsRow()
 {
+	if (!XUI::PropertyRow("Tags", "Players filter the Mod Browser by these."))
+		return;
 	const xr_vector<xr_string>& vocabulary = EditorCatalog::TagVocabulary();
-	if (!ImGui::BeginTable("##tags", 4, ImGuiTableFlags_SizingStretchSame)) return;
-	for (u32 i = 0; i < vocabulary.size(); ++i)
+	xr_vector<xr_string> tags;
+	SplitList(tags, s_Form.tags, ',');
+	const float width = ImGui::CalcItemWidth();
+	const int columns = clampr(int(width / XUI::Em(9.f)), 1, 4);
+	if (ImGui::BeginTable("##tags", columns, ImGuiTableFlags_SizingStretchSame, ImVec2(width, 0.f)))
 	{
-		ImGui::TableNextColumn();
-		const xr_vector<xr_string>::iterator it = std::find(s_Keep.tags.begin(), s_Keep.tags.end(), vocabulary[i]);
-		bool on = it != s_Keep.tags.end();
-		if (ImGui::Checkbox(EditorCatalog::TagLabel(vocabulary[i].c_str()), &on))
+		for (u32 i = 0; i < vocabulary.size(); ++i)
 		{
-			// kept in the vocabulary's order; a hand-written word the game ignores goes
-			xr_vector<xr_string> tags;
-			for (u32 k = 0; k < vocabulary.size(); ++k)
+			ImGui::TableNextColumn();
+			bool on = std::find(tags.begin(), tags.end(), vocabulary[i]) != tags.end();
+			if (ImGui::Checkbox(EditorCatalog::TagLabel(vocabulary[i].c_str()), &on))
 			{
-				const bool had = std::find(s_Keep.tags.begin(), s_Keep.tags.end(), vocabulary[k]) != s_Keep.tags.end();
-				if (k == i ? on : had) tags.push_back(vocabulary[k]);
+				// kept in the vocabulary's order; a hand-written word the game ignores goes
+				xr_vector<xr_string> kept;
+				for (u32 k = 0; k < vocabulary.size(); ++k)
+				{
+					const bool had = std::find(tags.begin(), tags.end(), vocabulary[k]) != tags.end();
+					if (k == i ? on : had) kept.push_back(vocabulary[k]);
+				}
+				JoinList(kept, s_Form.tags, sizeof(s_Form.tags), ",");
 			}
-			s_Keep.tags = tags;
+		}
+		ImGui::EndTable();
+	}
+}
+
+static void DrawBrowserPage()
+{
+	if (!XUI::BeginPropertyGrid("mod_settings", .28f)) return;
+	PictureRow();
+	TagsRow();
+	XUI::EndPropertyGrid();
+}
+
+static void SetSettingsKind(int kind, const xr_vector<EditorGameModes::SMode>& modes)
+{
+	SSettingsForm& f = s_Form;
+	switch (kind)
+	{
+	case 0:
+		f.mode[0] = f.pmode_id[0] = f.pmode_title[0] = 0;
+		strcpy_s(f.target, "default");
+		break;
+	case 1:
+		f.pmode_id[0] = f.pmode_title[0] = 0;
+		strcpy_s(f.target, "existing");
+		if ((!f.mode[0] || !strcmp(f.mode, "*")) && !modes.empty())
+			strncpy_s(f.mode, modes[0].id.c_str(), _TRUNCATE);
+		else if (!strcmp(f.mode, "*"))
+			f.mode[0] = 0;
+		break;
+	case 2:
+		f.mode[0] = 0;
+		strcpy_s(f.target, "new");
+		break;
+	case 3:
+		f.pmode_id[0] = f.pmode_title[0] = 0;
+		strcpy_s(f.mode, "*");
+		strcpy_s(f.target, "any");
+		break;
+	}
+}
+
+static void DrawModePage()
+{
+	SSettingsForm& f = s_Form;
+	// The list is scanned from the linked game (a global mod like Revolution II replaces the stock one) and
+	// shown by the names the player sees: nobody should have to know that Dead Air Metro is new_game_metro_mode.
+	xr_string scan_err;
+	EditorGameModes::Scan(scan_err);
+	const xr_vector<EditorGameModes::SMode>& modes = EditorGameModes::All();
+	const int kind = SettingsKind();
+	static const char* kKinds[] = { "Plain Game", "Existing Mode", "New Mode", "Every Mode" };
+	static const char* kAbout[] =
+	{
+		"Applies only while no campaign mode is active: Revolution II and the like do not see this module's level work.",
+		"The level work applies only in that mode.",
+		"A new mode is a new game of its own: the player picks it on the new-game screen, by its title.",
+		"No gate: the level work lands in the plain game and in every campaign. Use it only for what belongs everywhere.",
+	};
+	if (!XUI::BeginPropertyGrid("mod_settings", .28f)) return;
+	if (XUI::PropertyRow("Target", "Which game the module's level work applies in: spawns, collision, AI map, visuals and "
+		"the game graph are gated on the mode.", RowFlags("target", XUI::PropRequired)))
+	{
+		int pick = kind;
+		if (XUI::Segmented("##target", &pick, kKinds, 4))
+			SetSettingsKind(pick, modes);
+		if (kind >= 0)
+			XUI::PropertyMessage(XUI::Tone::Muted, kAbout[kind]);
+		RowMessages("target");
+		// Files, configs and scripts mount at engine start, before any mode is picked: a weapon
+		// rebalance would leak into every campaign, and the author should hear it here.
+		if (kind > 0 && (s_GatedFiles || s_GatedPatches))
+			XUI::PropertyMessage(XUI::Tone::Warning, (CountText(s_GatedFiles, "file", "files") + " under gamedata and " +
+				CountText(s_GatedPatches, "config patch", "config patches") + " are not gated: they mount at engine start, in every game.").c_str());
+	}
+	if (kind == 1)
+	{
+		if (XUI::PropertyRow("Mode", "A mode of the linked game, by the name its new-game screen shows.", RowFlags("mode", XUI::PropRequired)))
+		{
+			xr_string current = f.mode;
+			for (const EditorGameModes::SMode& mode : modes)
+				if (0 == _stricmp(mode.id.c_str(), f.mode)) current = mode.caption;
+			if (ImGui::BeginCombo("##mode", current.empty() ? "None" : current.c_str(), ImGuiComboFlags_HeightLarge))
+			{
+				for (u32 i = 0; i < modes.size(); ++i)
+				{
+					ImGui::PushID((int)i);
+					if (ImGui::Selectable(modes[i].caption.c_str(), 0 == _stricmp(modes[i].id.c_str(), f.mode)))
+						strncpy_s(f.mode, modes[i].id.c_str(), _TRUNCATE);
+					XUI::Tip((modes[i].id + (modes[i].source == "game" ? xr_string(" - the linked game's") : " - module " + modes[i].source)).c_str());
+					ImGui::PopID();
+				}
+				ImGui::EndCombo();
+			}
+			if (XUI::PropertyTrailing("##rescan", XUI::Icon::Refresh, "Scan the linked game's modes again"))
+			{
+				EditorGameModes::Invalidate();
+				s_SlotChecked = false;
+			}
+			if (modes.empty())
+				XUI::PropertyMessage(XUI::Tone::Warning, scan_err.empty() ? "The linked game declares no modes, only options." : scan_err.c_str());
+			RowMessages("mode");
 		}
 	}
-	ImGui::EndTable();
-}
-
-// "Not shipped: design, docs, .git" - what a build passed by, in the words of the
-// result dialog: a folder that silently stayed behind is the next question
-static void AppendLeftOut(char* msg, u32 size, const xr_vector<xr_string>& left_out)
-{
-	if (left_out.empty())	return;
-	xr_string line = "\n\nNot shipped: ";
-	const u32 shown = _min((u32)left_out.size(), 10u);
-	for (u32 i = 0; i < shown; ++i)
+	else if (kind == 2)
 	{
-		if (i) line += ", ";
-		line += left_out[i];
+		if (XUI::PropertyRow("Mode ID", "Technical id of the MODE, not of the mod: the module's level work is gated on it and the "
+			"new-game checkbox is built from it. It may match the module id or not.", RowFlags("pmode_id", XUI::PropRequired)))
+		{
+			ImGui::InputText("##pmode_id", f.pmode_id, sizeof(f.pmode_id));
+			RowMessages("pmode_id");
+		}
+		if (XUI::PropertyRow("Mode Title", "The caption of the mode's checkbox on the new-game screen. It names the mode, not the mod: "
+			"the Mods menu shows the Name on General instead."))
+		{
+			ImGui::InputText("##pmode_title", f.pmode_title, sizeof(f.pmode_title));
+			RowMessages("pmode_title");
+		}
+		// A mode nobody can pick does not exist. The build generates the files that put it on the new-game
+		// screen, and refuses the module when the linked game's screen cannot be read: that is measured once.
+		if (!s_SlotChecked)
+		{
+			s_SlotChecked = true;
+			EditorGameModes::SSlot slot;
+			s_SlotError.clear();
+			s_SlotOk = EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select_16.xml", 1, f.id, slot, s_SlotError) ||
+				EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select.xml", 1, f.id, slot, s_SlotError);
+		}
+		if (XUI::PropertyRow("New-Game Screen", "Dead Air: Refined lists the mode among the module modes of the new-game screen; a screen "
+			"without that list gets a checkbox instead. Every build writes the files for both and keeps them in step: "
+			"gamedata\\configs\\ui\\<id>_modes.xml and <id>_modes_16.xml, gamedata\\configs\\text\\rus\\<id>_modes.xml (the caption) "
+			"and scripts\\mode_register.script. Edit these settings, not those files. scripts\\register.script is yours and is never touched.",
+			XUI::PropReadOnly))
+		{
+			XUI::PropertyText(s_SlotOk ? "Listed under the mode title" : "Not placed");
+			if (!s_SlotOk)
+				XUI::PropertyMessage(XUI::Tone::Warning, ("The build cannot read the linked game's new-game screen: " + s_SlotError + ".").c_str());
+		}
 	}
-	if (left_out.size() > shown)	line += NqUtil::Format(" and %u more", u32(left_out.size() - shown));
-	xr_strcat(msg, size, line.c_str());
+	XUI::EndPropertyGrid();
 }
 
-static void ProjectIni(char* dst, u32 size)
+static const SInstalledModule* FindInstalled(const xr_string& id)
 {
-	sprintf_s(dst, size, "%s\\project.ltx", EditorProject::Root());
+	for (const SInstalledModule& mod : s_Installed)
+		if (mod.id == id) return &mod;
+	return nullptr;
+}
+
+// Every module of the linked game: modules\, then the JSGME mods\ that still holds what was installed before the
+// split - the same two roots the game reads.
+static void ScanInstalledModules()
+{
+	s_InstalledScanned = true;
+	s_Installed.clear();
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0]) return;
+	static const char* kRoots[] = { "modules", "mods" };
+	for (LPCSTR root : kRoots)
+	{
+		string_path mask;
+		sprintf_s(mask, "%s\\%s\\*", game, root);
+		WIN32_FIND_DATAA fd;
+		HANDLE h = ::FindFirstFileA(mask, &fd);
+		if (INVALID_HANDLE_VALUE == h) continue;
+		do
+		{
+			// dot-names cover . and .. as well as tooling
+			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+			string_path dir;
+			sprintf_s(dir, "%s\\%s\\%s", game, root, fd.cFileName);
+			EditorMod::SManifest m;
+			if (!EditorMod::Load(dir, m)) continue;
+			SInstalledModule mod;
+			mod.id = RelationId(m.id.empty() ? xr_string(fd.cFileName) : m.id);
+			mod.name = m.name;
+			if (!mod.id.empty() && !FindInstalled(mod.id))
+				s_Installed.push_back(mod);
+		} while (::FindNextFileA(h, &fd));
+		::FindClose(h);
+	}
+	std::sort(s_Installed.begin(), s_Installed.end(), [](const SInstalledModule& a, const SInstalledModule& b)
+	{
+		const xr_string& ka = a.name.empty() ? a.id : a.name;
+		const xr_string& kb = b.name.empty() ? b.id : b.name;
+		return _stricmp(ka.c_str(), kb.c_str()) < 0;
+	});
+}
+
+// "Name  (id)" for a module the linked game has, the id alone otherwise
+static xr_string ModuleLabel(const xr_string& id)
+{
+	const SInstalledModule* mod = FindInstalled(id);
+	return mod && !mod->name.empty() && mod->name != id ? mod->name + "  (" + id + ")" : id;
+}
+
+// A module of the linked game, picked from a searchable list; the ones listed already and this module are left
+// out. An id typed into the search is taken as it is, for a module this computer does not have.
+static bool ModulePicker(LPCSTR popup, const xr_vector<xr_string>& taken, xr_string& picked)
+{
+	if (!ImGui::BeginPopup(popup)) return false;
+	bool done = false;
+	const float width = XUI::Em(24.f);
+	if (ImGui::IsWindowAppearing())
+	{
+		s_ModuleSearch[0] = 0;
+		ImGui::SetKeyboardFocusHere();
+	}
+	ImGui::SetNextItemWidth(width);
+	XUI::SearchField("##search", s_ModuleSearch, sizeof(s_ModuleSearch), "Search, or type a module id");
+	const xr_string self = RelationId(s_Form.id);
+	const xr_string typed = RelationId(s_ModuleSearch);
+	auto is_taken = [&](const xr_string& id) { return id == self || std::find(taken.begin(), taken.end(), id) != taken.end(); };
+	// id, label: the matches, then the typed id when the list does not hold it
+	xr_vector<std::pair<xr_string, xr_string>> rows;
+	for (const SInstalledModule& mod : s_Installed)
+	{
+		const xr_string label = ModuleLabel(mod.id);
+		if (!is_taken(mod.id) && XUI::Match(s_ModuleSearch, label.c_str()))
+			rows.emplace_back(mod.id, label);
+	}
+	const bool typed_row = !typed.empty() && !FindInstalled(typed) && !is_taken(typed) && EditorMod::ValidateId(typed.c_str());
+	if (typed_row)
+		rows.emplace_back(typed, "Add " + typed);
+	// Enter takes the first row
+	if (!rows.empty() && ImGui::IsKeyPressed(ImGuiKey_Enter, false) && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
+	{
+		picked = rows[0].first;
+		done = true;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::BeginChild("##modules", ImVec2(width, XUI::Pt(240.f)));
+	for (u32 i = 0; i < rows.size() && !done; ++i)
+	{
+		ImGui::PushID(rows[i].first.c_str());
+		if (ImGui::Selectable(rows[i].second.c_str()))
+		{
+			picked = rows[i].first;
+			done = true;
+			ImGui::CloseCurrentPopup();
+		}
+		if (typed_row && i + 1 == rows.size())
+			XUI::Tip("Not installed in the linked game: the id is taken as typed.");
+		ImGui::PopID();
+	}
+	if (rows.empty())
+	{
+		LPCSTR game = EditorProject::GameRoot();
+		XUI::StatusText(XUI::Tone::Muted, !s_Installed.empty() ? "No module matches. A module id typed here can be added as it is." :
+			game && game[0] ? "The linked game has no other module. Type a module id to add it as it is." :
+			"No game is linked. Type a module id to add it as it is.");
+	}
+	ImGui::EndChild();
+	ImGui::EndPopup();
+	return done;
+}
+
+// One relation as a grid row: its modules as chips, then Add Module..., the notes under them. The form keeps one line
+// per module, so Save, Revert and the unsaved mark work as before, and a line written by hand (a value after '=') is
+// kept as written.
+static void RelationRow(LPCSTR field, LPCSTR label, LPCSTR help, char* buf, size_t n)
+{
+	if (!XUI::PropertyRow(label, help, RowFlags(field)))
+		return;
+	ImGui::PushID(field);
+	// a group keeps the chips' second line and the button in the value column
+	ImGui::BeginGroup();
+	xr_vector<xr_string> lines, ids;
+	SplitList(lines, buf, '\n');
+	for (const xr_string& line : lines)
+		ids.push_back(RelationId(line));
+	bool changed = false;
+	if (!lines.empty())
+	{
+		XUI::Strings chips;
+		for (u32 i = 0; i < lines.size(); ++i)
+		{
+			const size_t eq = lines[i].find('=');
+			xr_string value = eq == xr_string::npos ? xr_string() : lines[i].substr(eq + 1);
+			Trim(value);
+			chips.push_back(value.empty() ? ModuleLabel(ids[i]) : ModuleLabel(ids[i]) + "  " + value);
+		}
+		const int removed = XUI::Chips("##chips", chips, true);
+		if (removed >= 0)
+		{
+			lines.erase(lines.begin() + removed);
+			ids.erase(ids.begin() + removed);
+			changed = true;
+		}
+	}
+	if (XUI::Button("Add Module..."))
+		XUI::Shell::OpenPopupAt("pick_module", ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f)));
+	xr_string picked;
+	if (ModulePicker("pick_module", ids, picked))
+	{
+		ids.push_back(picked);
+		lines.push_back(picked);
+		changed = true;
+	}
+	ImGui::EndGroup();
+	if (changed)
+		JoinList(lines, buf, (u32)n, "\n");
+	// modules this computer does not have: kept, said
+	LPCSTR game = EditorProject::GameRoot();
+	if (game && game[0])
+	{
+		xr_string missing;
+		for (const xr_string& id : ids)
+			if (!FindInstalled(id))
+				missing += (missing.empty() ? "" : ", ") + id;
+		if (!missing.empty())
+			XUI::PropertyMessage(XUI::Tone::Muted, ("Not installed in the linked game: " + missing + ".").c_str());
+	}
+	RowMessages(field);
+	ImGui::PopID();
+}
+
+static void DrawRelationsPage()
+{
+	SSettingsForm& f = s_Form;
+	if (!s_InstalledScanned)
+		ScanInstalledModules();
+	if (!XUI::BeginPropertyGrid("mod_settings", .28f)) return;
+	RelationRow("requires", "Requires", "The game refuses to load this module without these.", f.requires_, sizeof(f.requires_));
+	RelationRow("after", "Load After", "These load first; this module's changes go on top of theirs.", f.after, sizeof(f.after));
+	RelationRow("before", "Load Before", "This module loads first; their changes go on top of its.", f.before, sizeof(f.before));
+	RelationRow("conflicts", "Conflicts", "The game refuses to load this module together with these.", f.conflicts, sizeof(f.conflicts));
+	XUI::EndPropertyGrid();
+}
+
+static void DrawContentsPage()
+{
+	XUI::TextBlock("Not Shipped", "Project paths or patterns, one per line:\n"
+		"docs - a folder, with everything in it\n"
+		"design/story.md - one file\n"
+		"*.psd - every file of that name, at any depth\n"
+		"docs/*.md - a pattern below one folder\n"
+		"The Content Browser sets them too: right-click > Exclude from Build.",
+		"##exclude", s_Form.exclude, sizeof(s_Form.exclude), 8);
+	if (XUI::BeginPropertyGrid("mod_settings", .28f))
+	{
+		if (XUI::PropertyRow("Never Shipped", "Version control and tool files (.git, .gitignore, Thumbs.db, ...), the editor's own folders "
+			"(releases, temp, backup, ...) and the sources under rawdata. No rule is needed for these.", XUI::PropReadOnly))
+			XUI::PropertyText("Tooling, the editor's own folders, rawdata");
+		XUI::EndPropertyGrid();
+	}
+}
+
+static void DrawPdaPage()
+{
+	SSettingsForm& f = s_Form;
+	if (!XUI::BeginPropertyGrid("mod_settings", .28f)) return;
+	if (XUI::PropertyRow("Layout", "The .pdaasset of the project the game's PDA shows. None: the module leaves the PDA alone.", RowFlags("pda")))
+	{
+		if (ImGui::BeginCombo("##pda", f.pda[0] ? f.pda : "None", ImGuiComboFlags_HeightLarge))
+		{
+			if (ImGui::Selectable("None", !f.pda[0]))
+				f.pda[0] = 0;
+			for (const xr_string& rel : s_PdaFiles)
+				if (ImGui::Selectable(rel.c_str(), EditorPda::SamePath(rel.c_str(), f.pda)))
+					strncpy_s(f.pda, rel.c_str(), _TRUNCATE);
+			ImGui::EndCombo();
+		}
+		if (f.pda[0] && XUI::PropertyTrailing("##open_pda", XUI::Icon::External, "Open it in the PDA Interface tab"))
+		{
+			string_path abs;
+			sprintf_s(abs, "%s\\%s", EditorProject::Root(), f.pda);
+			EditorPda::Open(abs);
+		}
+		if (s_PdaFiles.empty())
+			XUI::PropertyMessage(XUI::Tone::Muted, "The project has no PDA interface yet.");
+		RowMessages("pda");
+	}
+	XUI::EndPropertyGrid();
+	if (s_PdaFiles.empty())
+	{
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + XUI::Pt(6.f));
+		// makes one from the template and names it in mod.ltx at once: the form follows that save
+		if (XUI::Button("Create PDA Interface"))
+			EditorPda::ShowModuleLayout();
+	}
+}
+
+// ---- the tab ----------------------------------------------------------------------
+
+static void DrawSettingsBody()
+{
+	if (!EditorProject::Active())
+	{
+		XUI::EmptyState(XUI::Icon::Settings, "No project", "Mod Settings edit the mod.ltx of the open project.");
+		return;
+	}
+	SyncSettingsForm();
+	CheckSettings();
+
+	const float footer = XUI::Pt(48.f);
+	const float nav_pt = _min(200.f, ImGui::GetContentRegionAvail().x / XUI::Dpi() * .3f);
+
+	// the pages
+	if (XUI::BeginList("##settings_nav", ImVec2(nav_pt, -48.f)))
+	{
+		for (int i = 0; i < pgCount; ++i)
+		{
+			XUI::NavRowSpec row;
+			row.icon = kSettingsPages[i].icon;
+			row.dot = PageTone(i, row.tone);
+			if (XUI::NavRow(kSettingsPages[i].id, kSettingsPages[i].label, s_SettingsPage == i, row))
+			{
+				s_SettingsPage = i;
+				if (i == pgPda) RefreshPdaFiles();
+				// a module installed while the tab was open is on the list the next time the page is picked
+				if (i == pgRelations) s_InstalledScanned = false;
+			}
+		}
+	}
+	XUI::EndList();
+	ImGui::SameLine(0.f, XUI::Pt(8.f));
+
+	// the form: one column of up to 44 em beside the nav, the scrollbar at the right edge of the tab
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(16.f), XUI::Pt(8.f)));
+	// layout children: the document's own fill, not the inset of a list
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(ModToken::Base));
+	ImGui::BeginChild("##settings_form", ImVec2(0.f, -footer), ImGuiChildFlags_AlwaysUseWindowPadding);
+	ImGui::PopStyleVar();
+	{
+		const float column = _min(ImGui::GetContentRegionAvail().x, XUI::Em(44.f));
+		ImGui::BeginChild("##settings_column", ImVec2(column, 0.f), ImGuiChildFlags_AutoResizeY);
+		ImGui::PopStyleColor();
+		const SSettingsPage& page = kSettingsPages[s_SettingsPage];
+		{
+			XUI::FontScope title(XUI::Font::Title);
+			XUI::TextEllipsis(page.label);
+		}
+		XUI::Prose(page.about);
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		switch (s_SettingsPage)
+		{
+		case pgGeneral:		DrawGeneralPage();	break;
+		case pgBrowser:		DrawBrowserPage();	break;
+		case pgMode:		DrawModePage();		break;
+		case pgRelations:	DrawRelationsPage();	break;
+		case pgContents:	DrawContentsPage();	break;
+		case pgPda:			DrawPdaPage();		break;
+		}
+		ImGui::EndChild();
+	}
+	ImGui::EndChild();
+
+	// the sticky footer: what stops the save on the left, Revert and Save on the right
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	const float right = at.x + ImGui::GetContentRegionAvail().x;
+	ImGui::GetWindowDrawList()->AddLine(ImVec2(at.x, at.y), ImVec2(right, at.y),
+		XFinedTheme::U32(ModToken::BorderSubtle));
+	ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + XUI::Pt(4.f)));
+	const bool dirty = SettingsDirty();
+	const SSettingsProblem* first = nullptr;
+	const int blocking = SettingsBlocking(&first);
+	xr_string why;
+	if (blocking)
+		why = xr_string(kSettingsPages[first->page].label) + ": " + first->text;
+	{
+		XUI::Toolbar tb("mod_settings_footer", XUI::ToolbarRow);
+		tb.Group(1);
+		if (blocking)
+			tb.Status(blocking == 1 ? "1 problem to fix before saving" : NqUtil::Format("%d problems to fix before saving", blocking).c_str(), XUI::Tone::Error);
+		else if (!s_SettingsStatus.empty())
+			tb.Status(s_SettingsStatus.c_str(), XUI::Tone::Error);
+		else
+			tb.Status(dirty ? "Unsaved changes" : "mod.ltx is up to date", XUI::Tone::Muted);
+		tb.Spring();
+		tb.Group(3);
+		if (tb.Action("revert", XUI::Icon::Undo, "Revert", dirty ? "Drop the changes: back to what mod.ltx says" : "Nothing to revert", dirty))
+			RevertSettings();
+		if (tb.Action("save", XUI::Icon::Save, "Save", !dirty ? "No changes to save" : blocking ? why.c_str() : "Write mod.ltx",
+			dirty && !blocking, false, XUI::Kind::Primary))
+		{
+			xr_string err;
+			SaveSettings(err);
+		}
+	}
+}
+
+static void ShowSettingsTab(bool activate)
+{
+	// the session reopens the tab with the project; registered on first use as well as at startup
+	static bool s_Factory = false;
+	if (!s_Factory)
+	{
+		s_Factory = true;
+		XUI::Shell::RegisterFactory("mod_settings", [](LPCSTR) { EditorMod::RequestEditManifest(); return true; });
+	}
+	if (XUI::Shell::IsOpen("mod_settings"))
+	{
+		if (activate) XUI::Shell::Activate("mod_settings");
+		return;
+	}
+	XUI::Shell::DocDesc d;
+	d.id = "mod_settings";
+	d.kind = "mod_settings";
+	d.icon = XUI::Icon::Settings;
+	d.label = [] { return xr_string("Mod Settings"); };
+	d.tooltip = [] { return xr_string("mod.ltx: the module's name, version, game mode and what the build ships"); };
+	d.alive = [] { return s_SettingsOpen; };
+	d.dirty = [] { return SettingsDirty(); };
+	d.body = [] { DrawSettingsBody(); };
+	d.save = [](xr_string& err) { return SaveSettings(err); };
+	d.discard = [] { RevertSettings(); };
+	// the frame that showed the preview is presented by now: the texture may go
+	d.on_close = [] { s_SettingsOpen = false; ThumbnailCleanup(); };
+	XUI::Shell::Open(d, activate);
 }
 
 void EditorMod::RequestEditManifest()
 {
 	if (!EditorProject::Active()) return;
-	if (!Load(EditorProject::Root(), s_Keep))
-	{
-		EnsureScaffold(EditorProject::Root(), EditorProject::Name());
-		Load(EditorProject::Root(), s_Keep);
-	}
-	strncpy_s(s_EdId, sizeof(s_EdId), s_Keep.id.c_str(), _TRUNCATE);
-	strncpy_s(s_EdName, sizeof(s_EdName), s_Keep.name.c_str(), _TRUNCATE);
-	strncpy_s(s_EdVersion, sizeof(s_EdVersion), s_Keep.version.c_str(), _TRUNCATE);
-	strncpy_s(s_EdAuthor, sizeof(s_EdAuthor), s_Keep.author.c_str(), _TRUNCATE);
-	// A hand-written text longer than the box is cut at a character boundary:
-	// one broken UTF-8 byte makes the game read the whole file as cp1251.
-	{
-		size_t cut = s_Keep.description.size();
-		if (cut >= sizeof(s_EdDescription))
-		{
-			cut = sizeof(s_EdDescription) - 1;
-			while (cut && ((unsigned char)s_Keep.description[cut] & 0xC0) == 0x80) --cut;
-		}
-		strncpy_s(s_EdDescription, sizeof(s_EdDescription), s_Keep.description.substr(0, cut).c_str(), _TRUNCATE);
-	}
-	strncpy_s(s_EdWebsite, sizeof(s_EdWebsite), s_Keep.website.c_str(), _TRUNCATE);
-	strncpy_s(s_EdGithub, sizeof(s_EdGithub), s_Keep.update_github.c_str(), _TRUNCATE);
-	strncpy_s(s_EdMode, sizeof(s_EdMode), s_Keep.mode.c_str(), _TRUNCATE);
-	strncpy_s(s_EdTarget, sizeof(s_EdTarget), s_Keep.target.c_str(), _TRUNCATE);
-	// the modal edits the first declared mode; extra pairs survive untouched
-	s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
-	if (!s_Keep.provides_modes.empty())
-	{
-		strncpy_s(s_EdPModeId, sizeof(s_EdPModeId), s_Keep.provides_modes[0].id.c_str(), _TRUNCATE);
-		strncpy_s(s_EdPModeTitle, sizeof(s_EdPModeTitle), s_Keep.provides_modes[0].title.c_str(), _TRUNCATE);
-	}
-	JoinList(s_Keep.requires_list, s_EdRequires, sizeof(s_EdRequires), "\n");
-	JoinList(s_Keep.after, s_EdAfter, sizeof(s_EdAfter), "\n");
-	JoinList(s_Keep.before, s_EdBefore, sizeof(s_EdBefore), "\n");
-	JoinList(s_Keep.conflicts, s_EdConflicts, sizeof(s_EdConflicts), "\n");
-	JoinList(s_Keep.exclude, s_EdExclude, sizeof(s_EdExclude), "\n");
-	s_SlotChecked = false;
-	ThumbnailCleanup();
-	s_WantManifest = true;
+	if (!s_SettingsOpen || s_FormRoot != EditorProject::Root())
+		LoadSettingsForm();
+	s_SettingsOpen = true;
+	ShowSettingsTab(true);
 }
-
-static void PrepareExport(bool flat)
-{
-	if (!EditorProject::Active()) return;
-	EditorMod::SManifest m;
-	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
-	{
-		sprintf_s(s_Message,
-			"Module id is missing or invalid.\n"
-			"Fix it via Mod > Edit Manifest... (allowed: a-z 0-9 _ . -)");
-		s_WantMessage = true;
-		return;
-	}
-	char ini[MAX_PATH];
-	ProjectIni(ini, sizeof(ini));
-	::GetPrivateProfileStringA("xms", "export_target", "", s_Target, sizeof(s_Target), ini);
-	// first export of a linked project: the game root IS the deploy target -
-	// the module lands in <game>\modules\<id>, which is where the game reads it
-	if (!s_Target[0] && EditorProject::GameRoot()[0])
-		strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
-	if (flat)	s_WantFlat = true;
-	else		s_WantExport = true;
-}
-
-void EditorMod::RequestExportModule()	{ PrepareExport(false); }
-void EditorMod::RequestExportFlat()		{ PrepareExport(true); }
 
 //------------------------------------------------------------------------------
-// one-click build into the linked game
+// builds: Build Into Game, Build to Folder, Export Flat Gamedata
 //
-// Every question the export modal asks has one right answer once a game is
+// Every question the export dialog asks has one right answer once a game is
 // linked: the target is that game, the layout is a module, and the id comes
-// from the manifest. So this path asks nothing - except before deleting files
-// it did not put there.
+// from the manifest. So Build Into Game asks nothing - except before deleting
+// files it did not put there.
 //------------------------------------------------------------------------------
-static bool					s_WantBuild		= false;
+static bool					s_WantExport		= false;
+static bool					s_WantFlat			= false;
+static string_path			s_Target			= {};
+static xr_string			s_ExportId;			// what the dialog names the destination by
+static bool					s_WantBuild			= false;
 static bool					s_BuildQueued		= false;
+static bool					s_BuildClean		= false;	// the author agreed to the files going
 static bool					s_ExportQueued		= false;
 static bool					s_DeferredExportFlat = false;
-static char					s_DeferredExportTarget[MAX_PATH] = {};
+static bool					s_DeferredClean		= false;
+static string_path			s_DeferredExportTarget = {};
 static EditorMod::TPreBuildBake	s_PreBuildBake	= 0;
 
 void EditorMod::SetPreBuildBake(TPreBuildBake fn)	{ s_PreBuildBake = fn; }
@@ -3032,15 +4011,111 @@ void EditorMod::BuildTargetText(char* dst, u32 size)
 	sprintf_s(dst, size, "%s\\modules\\%s", EditorProject::GameRoot(), m.id.c_str());
 }
 
+static void ProjectIni(char* dst, u32 size)
+{
+	sprintf_s(dst, size, "%s\\project.ltx", EditorProject::Root());
+}
+
+static void ReportMissingId(LPCSTR title)
+{
+	XUI::Result("build_result", title, XUI::Tone::Error,
+		"The module id is missing or invalid. Set it in Mod Settings: a-z, 0-9, _ . and - only.",
+		xr_vector<std::pair<xr_string, xr_string>>(), XUI::Strings(), XUI::Strings(),
+		"Mod Settings", [] { EditorMod::RequestEditManifest(); });
+}
+
+// A bake note is a line per layer and a WARNING line per thing left out: the first go to the
+// rows of the result, the others to its warnings.
+static void AddBakeNote(const xr_string& note, xr_vector<std::pair<xr_string, xr_string>>& rows, XUI::Strings& warnings)
+{
+	XUI::Strings lines;
+	SplitLines(note, lines);
+	for (const xr_string& line : lines)
+	{
+		if (!line.compare(0, 9, "WARNING: "))	warnings.push_back(line.substr(9));
+		else									rows.emplace_back("Scene", line);
+	}
+}
+
+// what a build or an export did, in the result dialog every build shares (UI runs only)
+static void ReportBuild(bool into_game, bool flat, bool ok, int files, const xr_string& path, const xr_string& err,
+						const xr_string& warn, const xr_vector<xr_string>& left_out, const xr_string& bake_note, const xr_string& id)
+{
+	xr_vector<std::pair<xr_string, xr_string>> rows;
+	XUI::Strings warnings;
+	if (ok) rows.emplace_back("Folder", path);
+	AddBakeNote(bake_note, rows, warnings);
+	SplitLines(warn, warnings);
+	const char* result_id = flat ? "export_result" : "build_result";
+	if (!ok)
+	{
+		XUI::Result(result_id, flat ? "Export Failed" : "Build Failed", XUI::Tone::Error, err.c_str(), rows, XUI::Strings(), warnings);
+		return;
+	}
+	xr_string headline;
+	if (into_game)
+	{
+		headline = "The module is in the game: " + CountText(files, "file", "files") + ". Added objects reach new games and loaded "
+			"saves; changes to existing objects need a new game.";
+		rows.emplace_back("Console", "xms_enable " + id + "  /  xms_disable " + id);
+	}
+	else if (flat)
+		headline = CountText(files, "file", "files") + " exported as a gamedata folder.";
+	else
+		headline = "The module is built: " + CountText(files, "file", "files") + ".";
+	XUI::Result(result_id, flat ? "Export Complete" : "Build Complete", warnings.empty() ? XUI::Tone::Success : XUI::Tone::Warning,
+		headline.c_str(), rows, left_out, warnings, "Open Folder", [path] { OpenFolder(path); });
+}
+
+static bool IsCleanRefusal(const xr_string& err)
+{
+	return 0 == strncmp(err.c_str(), "target already holds a module", 29);
+}
+
+static void RunDeferredExport();
+
+// The build is clean and refused to empty a folder of files it did not write: the second phase
+// names them and, on Yes, runs the build again with `clean`.
+static void AskClean(bool into_game, const xr_string& folder)
+{
+	const xr_string headline = folder + " holds " + CountText(s_StaleCount, "file", "files") + " this build does not write.";
+	XUI::ConfirmSpec spec;
+	spec.id = "clean_target";
+	spec.title = "Replace Module Files";
+	spec.headline = headline.c_str();
+	spec.items = s_StaleNames;
+	spec.total = (u32)s_StaleCount;
+	spec.consequence = "Deleted for good - this cannot be undone. The folder then holds exactly this build.";
+	spec.action = "Delete and Build";
+	spec.destructive = true;
+	XUI::Confirm(spec, [into_game](XUI::Answer answer)
+	{
+		if (answer != XUI::Answer::Yes)
+		{
+			XUI::Toast(XUI::Tone::Info, "Build cancelled: nothing was deleted.");
+			return;
+		}
+		if (into_game)
+		{
+			s_WantBuild = true;
+			s_BuildClean = true;
+		}
+		else
+		{
+			s_DeferredClean = true;
+			s_ExportQueued = UI->DeferUIWork(&RunDeferredExport);
+		}
+	});
+}
+
 void EditorMod::RequestBuildIntoGame()
 {
 	s_WantBuild = CanBuildIntoGame();
+	s_BuildClean = false;
 	if (s_WantBuild) return;
-	sprintf_s(s_Message,
-		"No linked game.\n\n"
-		"Link one first - the build writes the module into\n"
-		"<game>\\modules\\<id>, which is where the game reads it from.");
-	s_WantMessage = true;
+	XUI::Result("build_result", "Build Failed", XUI::Tone::Error,
+		"No game is linked. The build writes the module into <game>\\modules\\<id>, where the game reads it: link a game first.",
+		xr_vector<std::pair<xr_string, xr_string>>(), XUI::Strings(), XUI::Strings());
 }
 
 static void RunBuildIntoGame()
@@ -3048,15 +4123,14 @@ static void RunBuildIntoGame()
 	s_BuildQueued = false;
 	if (!s_WantBuild) return;
 	s_WantBuild = false;
+	const bool clean = s_BuildClean;
+	s_BuildClean = false;
 	SProgressOperation progress(*UI, false);
 
 	EditorMod::SManifest m;
 	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
 	{
-		sprintf_s(s_Message,
-			"Module id is missing or invalid.\n"
-			"Fix it via Mod > Edit Manifest... (allowed: a-z 0-9 _ . -)");
-		s_WantMessage = true;
+		ReportMissingId("Build Failed");
 		return;
 	}
 
@@ -3066,496 +4140,175 @@ static void RunBuildIntoGame()
 	int files = 0;
 	xr_string path, err, warn;
 	xr_vector<xr_string> left_out;
-	bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, false, &warn, &left_out);
-	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
+	const bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, clean, &warn, &left_out);
+	if (!ok && IsCleanRefusal(err))
 	{
-		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
-			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
-			ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, true, &warn, &left_out);
-		else
-		{
-			sprintf_s(s_Message, "Build cancelled.");
-			s_WantMessage = true;
-			return;
-		}
+		AskClean(true, path);
+		return;
 	}
 	if (ok)
 	{
 		char ini[MAX_PATH];
 		ProjectIni(ini, sizeof(ini));
 		::WritePrivateProfileStringA("xms", "export_target", target, ini);
-		sprintf_s(s_Message,
-			"%s%sBuild complete: %d file(s) written to\n%s\n\n"
-			"Added objects reach new games AND loaded saves (each applied once,\n"
-			"destroyed ones stay destroyed). Edits/removals of existing objects\n"
-			"need a new game. Mind the mode gate when testing.\n"
-			"Toggle the module from the console:  xms_enable %s  /  xms_disable %s",
-			bake_note.c_str(), bake_note.empty() ? "" : "\n",
-			files, path.c_str(), m.id.c_str(), m.id.c_str());
-		AppendLeftOut(s_Message, sizeof(s_Message), left_out);
-		// what shipped but is probably wrong: a restrictor nobody placed, a section the
-		// game does not have. The build does not stop for these, so this is the only
-		// place the author can learn of them
-		if (!warn.empty())
-		{
-			xr_strcat(s_Message, sizeof(s_Message), "\n\n");
-			xr_strcat(s_Message, sizeof(s_Message), warn.c_str());
-		}
 	}
-	else
-		sprintf_s(s_Message, "Build failed: %s", err.c_str());
-	s_WantMessage = true;
+	ReportBuild(true, false, ok, files, path, err, warn, left_out, bake_note, m.id);
 }
 
-static void DrawManifestModal()
+static void PrepareExport(bool flat)
 {
-	// Closed - by Save, Cancel or the caption cross: the picture nobody saved and the preview
-	// go now, a frame after the preview was last drawn.
-	if (!s_WantManifest)
+	if (!EditorProject::Active()) return;
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
 	{
-		if (s_ThumbTexture || !s_ThumbPending.empty() || s_ThumbRemove) ThumbnailCleanup();
+		ReportMissingId(flat ? "Export Flat Gamedata" : "Build to Folder");
 		return;
 	}
-	ImGui::SetNextWindowSize(ImVec2(620, 860), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal(kTitleManifest, &s_WantManifest, 0, true))
-		return;
-
-	ImGui::InputText("id", s_EdId, sizeof(s_EdId));
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Technical, never shown to the player: the folder the module installs into\n"
-						  "(<game>\\modules\\<id>) and the name other modules require it by.\n"
-						  "Seeded from the project folder - change it before the first release.");
-	const bool id_ok = EditorMod::ValidateId(s_EdId);
-	if (!id_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid id: non-empty, a-z 0-9 _ . - only");
-	ImGui::InputText("name", s_EdName, sizeof(s_EdName));
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("The mod's title, as the game's Mods menu prints it. Free text - it owes\n"
-						  "nothing to the id or to the project folder, which only seed it, so a\n"
-						  "project folder and the name on screen may differ as much as you like.");
-	ImGui::InputText("version", s_EdVersion, sizeof(s_EdVersion));
-	const bool version_ok = EditorMod::ValidateVersion(s_EdVersion);
-	if (!version_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid version: 1-4 numbers separated by dots, e.g. 1.2.0");
-
-	// ---- what the game's Mods menu shows, and where it looks for updates -----
-	ImGui::InputText("author", s_EdAuthor, sizeof(s_EdAuthor));
-	ImGui::TextUnformatted("description:");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Shown in the game's Mods menu. Plain text or a string table id.");
-	ImGui::InputTextMultiline("##description", s_EdDescription, sizeof(s_EdDescription),
-		ImVec2(-1, ImGui::GetTextLineHeight() * 4.f + ImGui::GetStyle().FramePadding.y * 2.f));
-	ImGui::InputText("website", s_EdWebsite, sizeof(s_EdWebsite));
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("The mod's page on AP-PRO or ModDB. The game opens it from the Mods menu.");
-	xr_string website = s_EdWebsite;
-	Trim(website);	// a pasted link often drags a space or a line break along
-	const bool website_ok = EditorMod::ValidateWebsite(website.c_str());
-	if (!website_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "only https://ap-pro.ru or https://moddb.com links are allowed");
-	ImGui::InputText("GitHub repository", s_EdGithub, sizeof(s_EdGithub));
-	const bool github_left = ImGui::IsItemDeactivatedAfterEdit();
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("owner/repo. The game checks its latest release for updates.");
-	// a pasted repository URL is fine: it is judged, and stored, as owner/repo
-	xr_string github;
-	EditorMod::NormalizeGithubRepo(s_EdGithub, github);
-	if (github_left)
-		strncpy_s(s_EdGithub, sizeof(s_EdGithub), github.c_str(), _TRUNCATE);
-	const bool github_ok = EditorMod::ValidateGithubRepo(github.c_str());
-	if (!github_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid repository: owner/repo, e.g. Madmer/agroprom-story");
-
-	// ---- the Mod Browser: the picture and the tags ------------------------------
-	ImGui::SeparatorText("Mod Browser");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Shown next to the module in the game's Mods window and Mod Browser.\n"
-						  "Listing it in the Mod Browser: Mod > Submit to Mod Browser.");
-	// the listing wants the module's own page, which the game's own check does not ask for
-	if (website_ok && !website.empty() && !EditorCatalog::WebsiteIsModulePage(website.c_str()))
-		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "The Mod Browser lists a module with its own page as the website,\n"
-			"e.g. https://ap-pro.ru/stuff/<section>/<name>-r<number>/");
-	DrawThumbnailRow();
-	ImGui::TextUnformatted("Tags:");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Players filter the Mod Browser by these.");
-	DrawTagRow();
-	ImGui::Separator();
-
-	// ---- what game mode is this module for ---------------------------------
-	// A module is built for exactly one of three things: the ordinary game, a
-	// campaign that already exists in THIS install, or a campaign it brings
-	// itself. The list is scanned from the linked game (a global mod like
-	// Revolution II replaces the stock one), and is shown by the names the
-	// player sees - nobody should have to know that "Dead Air Metro" is
-	// new_game_metro_mode.
-	ImGui::TextUnformatted("This module is for:");
-	{
-		xr_string scan_err;
-		EditorGameModes::Scan(scan_err);
-		const xr_vector<EditorGameModes::SMode>& modes = EditorGameModes::All();
-
-		// which of the three the manifest currently describes.
-		// s_EdTarget records the choice itself and the radios read ONLY it -
-		// deriving the choice from the mode fields un-picks "new mode" the
-		// frame after clicking it, while its id box is still empty.
-		int kind = -1;
-		if      (0 == _stricmp(s_EdTarget, "default"))	kind = 0;
-		else if (0 == _stricmp(s_EdTarget, "existing"))	kind = 1;
-		else if (0 == _stricmp(s_EdTarget, "new"))		kind = 2;
-		else if (0 == _stricmp(s_EdTarget, "any"))		kind = 3;
-		// legacy manifests carry no target key - infer it from the fields once
-		else if (0 == strcmp(s_EdMode, "*"))			kind = 3;
-		else if (s_EdPModeId[0])						kind = 2;
-		else if (s_EdMode[0])							kind = 1;
-		if (ImGui::RadioButton("the ordinary game (no mode)", 0 == kind))
-		{
-			kind = 0; s_EdMode[0] = 0; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
-			strcpy_s(s_EdTarget, "default");
-		}
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Applies ONLY when no campaign mode is active.\nRevolution II and the like will not see this module's level work.");
-		if (ImGui::RadioButton("a mode already in the linked game", 1 == kind))
-		{
-			kind = 1; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
-			strcpy_s(s_EdTarget, "existing");
-			if (!s_EdMode[0] && !modes.empty())
-				strncpy_s(s_EdMode, sizeof(s_EdMode), modes[0].id.c_str(), _TRUNCATE);
-		}
-		if (ImGui::RadioButton("a NEW mode this module adds", 2 == kind))
-		{
-			kind = 2; s_EdMode[0] = 0;
-			strcpy_s(s_EdTarget, "new");
-		}
-		if (ImGui::RadioButton("every game and every mode", 3 == kind))
-		{
-			kind = 3; s_EdPModeId[0] = 0; s_EdPModeTitle[0] = 0;
-			strcpy_s(s_EdMode, "*");
-			strcpy_s(s_EdTarget, "any");
-		}
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("No gate at all - the module's level work lands in the ordinary game\nAND in every campaign. Use only for things that belong everywhere.");
-		if (kind < 0)
-			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "not chosen yet - the module cannot be built");
-		// the choice sticks even while its details are still blank, so say
-		// exactly what is missing instead of un-picking the radio
-		else if (1 == kind && !s_EdMode[0])
-			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "pick which mode - the module cannot be built until then");
-		else if (2 == kind && !s_EdPModeId[0])
-			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "enter the new mode's id - the module cannot be built until then");
-
-		if (1 == kind)
-		{
-			// caption of whatever is selected, so the combo reads like the game
-			LPCSTR current = s_EdMode;
-			for (u32 i = 0; i < modes.size(); ++i)
-				if (0 == _stricmp(modes[i].id.c_str(), s_EdMode)) { current = modes[i].caption.c_str(); break; }
-
-			ImGui::SetNextItemWidth(360);
-			if (ImGui::BeginCombo("##target_mode", current))
-			{
-				for (u32 i = 0; i < modes.size(); ++i)
-				{
-					const bool sel = (0 == _stricmp(modes[i].id.c_str(), s_EdMode));
-					if (ImGui::Selectable(modes[i].caption.c_str(), sel))
-						strncpy_s(s_EdMode, sizeof(s_EdMode), modes[i].id.c_str(), _TRUNCATE);
-					if (ImGui::IsItemHovered())
-						ImGui::SetTooltip("%s  (%s)", modes[i].id.c_str(),
-							modes[i].source == "game" ? "in the game" : modes[i].source.c_str());
-				}
-				ImGui::EndCombo();
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Rescan")) { EditorGameModes::Invalidate(); s_SlotChecked = false; }
-
-			if (modes.empty())
-				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s",
-					scan_err.empty() ? "the linked game declares no modes - only options"
-									 : scan_err.c_str());
-		}
-		else if (2 == kind)
-		{
-			ImGui::InputText("mode id", s_EdPModeId, sizeof(s_EdPModeId));
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Technical id of the MODE, not of the mod: the module's level work is\n"
-								  "gated on it, and the new-game checkbox is built from it. It may\n"
-								  "match the module id or not - nothing here requires either.");
-			ImGui::InputText("mode title", s_EdPModeTitle, sizeof(s_EdPModeTitle));
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("The caption of that checkbox on the new-game screen. This is the mode's\n"
-								  "name, not the mod's - the Mods menu shows `name` above instead.");
-			ImGui::TextDisabled("A mode is a way to start a new game, not the mod itself: the player ticks");
-			ImGui::TextDisabled("its box next to Campaign. The title is that box's caption.");
-
-			// The caption ships in a cp1251 string table. Anything outside that
-			// page is either swapped for a look-alike or dropped to '?' on the
-			// way out, while this field keeps showing the original - so the
-			// author would only find out from the new-game screen.
-			{
-				xr_string bad;
-				if (!NqUtil::Cp1251Covers(s_EdPModeTitle, bad))
-				{
-					ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f),
-						"title has characters outside cp1251 (%s)", bad.c_str());
-					if (ImGui::IsItemHovered())
-						ImGui::SetTooltip(
-							"The new-game screen reads a cp1251 string table, so these characters cannot\n"
-							"survive the export: the player sees a look-alike letter or '?'. Keep the title\n"
-							"to characters that codepage has.");
-				}
-			}
-
-			// A mode nobody can tick does not exist. Export generates the three
-			// files that put it on the new-game screen; measuring where the row
-			// lands takes reading the game's layout, so it is done once and
-			// refreshed by Rescan rather than every frame.
-			if (!s_SlotChecked)
-			{
-				s_SlotChecked = true;
-				EditorGameModes::SSlot slot;
-				xr_string slot_err;
-				if (EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select_16.xml", 1, s_EdId, slot, slot_err) ||
-					EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select.xml", 1, s_EdId, slot, slot_err))
-					sprintf_s(s_SlotText, "export adds the checkbox at %d,%d of the new-game screen",
-							  slot.check_x, slot.check_y);
-				else
-					sprintf_s(s_SlotText, "no new-game screen in the linked game: %s", slot_err.c_str());
-			}
-			ImGui::TextDisabled("%s", s_SlotText);
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip(
-					"Export writes these into the project and keeps them in sync:\n"
-					"  gamedata\\configs\\ui\\<id>_modes.xml, <id>_modes_16.xml\n"
-					"      the checkbox and its caption, one layout per screen aspect\n"
-					"  gamedata\\configs\\text\\rus\\<id>_modes.xml   the caption text\n"
-					"  scripts\\mode_register.script   hooks the screen at startup\n"
-					"Edit the manifest, not those files - they are rewritten every export.\n"
-					"scripts\\register.script is yours and is never touched.");
-		}
-
-		// What the mode gate actually covers. Level work is gated - spawn ops,
-		// collision, ai-map, visuals and the game graph all ask ModuleApplies -
-		// but files, configs and scripts mount at engine start, before any mode
-		// is picked, so they apply in every game. Saying so here beats a player
-		// wondering why a weapon rebalance leaked into another campaign.
-		if (kind > 0)
-		{
-			string_path probe;
-			sprintf_s(probe, "%s\\gamedata", EditorProject::Root());
-			const int n_gamedata = CountFilesRec(probe, 0);
-			sprintf_s(probe, "%s\\patch", EditorProject::Root());
-			const int n_patch = CountFilesRec(probe, "_readme.txt");
-			if (n_gamedata || n_patch)
-			{
-				ImGui::Spacing();
-				ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f),
-					"note: %d file(s) and %d config patch(es) are NOT mode-gated",
-					n_gamedata, n_patch);
-				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip(
-						"Level work (spawns, collision, ai-map, visuals, the game graph) applies only in\n"
-						"the chosen mode. Files under gamedata\\ and patches under patch\\ mount when the\n"
-						"engine starts, before a mode is picked, so they apply in every game.");
-			}
-		}
-	}
-	// "*" is the engine's no-gate wildcard - legal for mode=, never for a
-	// provided mode id (files are generated from the latter)
-	const bool mode_ok = (0 == strcmp(s_EdMode, "*")) || EditorMod::ValidateModeId(s_EdMode);
-	if (!mode_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid mode id: a-z 0-9 _ . - only (or empty)");
-	const bool pmode_ok = EditorMod::ValidateModeId(s_EdPModeId);
-	if (!pmode_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid mode id: a-z 0-9 _ . - only (or empty)");
-	ImGui::Separator();
-	// full-width boxes leave no room for ImGui's right-side labels, so each
-	// field is titled above instead - four anonymous boxes explain nothing
-	ImGui::TextUnformatted("Relations to other modules (optional, module ids, one per line):");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip(
-			"Only matters when the player runs several modules at once.\n"
-			"A standalone mod leaves all four empty.");
-	ImGui::TextUnformatted("Requires - refuses to load without these:");
-	ImGui::InputTextMultiline("##requires", s_EdRequires, sizeof(s_EdRequires), ImVec2(-1, 48));
-	ImGui::TextUnformatted("Load after these (their changes first, yours on top):");
-	ImGui::InputTextMultiline("##after", s_EdAfter, sizeof(s_EdAfter), ImVec2(-1, 48));
-	ImGui::TextUnformatted("Load before these (yours first, theirs on top):");
-	ImGui::InputTextMultiline("##before", s_EdBefore, sizeof(s_EdBefore), ImVec2(-1, 48));
-	ImGui::TextUnformatted("Conflicts - refuses to load together with these:");
-	ImGui::InputTextMultiline("##conflicts", s_EdConflicts, sizeof(s_EdConflicts), ImVec2(-1, 48));
-	ImGui::Separator();
-
-	// The project folder is also the author's working place - design notes, a git
-	// repository, reference pictures - and the build ships everything in it but this.
-	ImGui::TextUnformatted("Not shipped - project paths or patterns, one per line:");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip(
-			"docs              a folder, with everything in it\n"
-			"design/story.md   one file\n"
-			"*.psd             every file with that name, at any depth\n"
-			"docs/*.md         a pattern below one folder\n\n"
-			"Also set from the Content Browser: right-click > Exclude from Build.\n"
-			"Never shipped anyway: version control and tool files (.git, .gitignore,\n"
-			"Thumbs.db, ...), the editor's own folders (releases, temp, backup, ...)\n"
-			"and the sources under rawdata.");
-	ImGui::InputTextMultiline("##exclude", s_EdExclude, sizeof(s_EdExclude), ImVec2(-1, 64));
-	ImGui::Separator();
-
-	ImGui::BeginDisabled(!id_ok || !version_ok || !website_ok || !github_ok || !mode_ok || !pmode_ok);
-	if (ImGui::Button("Save", ImVec2(120, 0)))
-	{
-		EditorMod::SManifest m = s_Keep;
-		m.id = s_EdId;
-		m.name = s_EdName;
-		m.version = s_EdVersion;
-		m.author = s_EdAuthor;
-		m.description = s_EdDescription;
-		Trim(m.description);
-		m.website = website;
-		m.update_github = github;	// normalized above, whether or not the field lost focus
-		m.mode = s_EdMode;
-		m.target = s_EdTarget;
-		// only the first declared mode is edited here; empty id drops it
-		if (s_EdPModeId[0])
-		{
-			if (m.provides_modes.empty()) m.provides_modes.push_back(EditorMod::SProvidesMode());
-			m.provides_modes[0].id = s_EdPModeId;
-			m.provides_modes[0].title = s_EdPModeTitle;
-		}
-		else if (!m.provides_modes.empty())
-			m.provides_modes.erase(m.provides_modes.begin());
-		SplitList(m.requires_list, s_EdRequires, '\n');
-		SplitList(m.after, s_EdAfter, '\n');
-		SplitList(m.before, s_EdBefore, '\n');
-		SplitList(m.conflicts, s_EdConflicts, '\n');
-		SplitList(m.exclude, s_EdExclude, '\n');
-		// the picture: the one waiting in temp\ takes its place, or the removal is carried out
-		xr_string thumb_err;
-		if (!s_ThumbPending.empty())
-		{
-			if (PlaceThumbnail(EditorProject::Root(), s_ThumbPending, thumb_err))
-			{
-				m.thumbnail = kThumbnailName;
-				s_ThumbPending.clear();
-			}
-		}
-		else if (s_ThumbRemove)
-			EditorMod::ApplyThumbnail(EditorProject::Root(), "", m, thumb_err);
-		if (!thumb_err.empty())
-			ELog.DlgMsg(mtError, "The picture was not saved: %s", thumb_err.c_str());
-		if (!EditorMod::Save(EditorProject::Root(), m))
-			ELog.DlgMsg(mtError, "Can't write mod.ltx.");
-		// the preview is drawn in this frame: the next one lets it go (see the top)
-		s_ThumbRemove = false;
-		s_WantManifest = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	if (ImGui::Button("Cancel", ImVec2(120, 0)))
-	{
-		s_WantManifest = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
+	s_ExportId = m.id;
+	char ini[MAX_PATH];
+	ProjectIni(ini, sizeof(ini));
+	::GetPrivateProfileStringA("xms", "export_target", "", s_Target, sizeof(s_Target), ini);
+	// first export of a linked project: the game root IS the deploy target -
+	// the module lands in <game>\modules\<id>, which is where the game reads it
+	if (!s_Target[0] && EditorProject::GameRoot()[0])
+		strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
+	if (flat)	s_WantFlat = true;
+	else		s_WantExport = true;
 }
+
+void EditorMod::RequestExportModule()	{ PrepareExport(false); }
+void EditorMod::RequestExportFlat()		{ PrepareExport(true); }
 
 static void RunDeferredExport()
 {
 	s_ExportQueued = false;
+	const bool clean = s_DeferredClean;
+	s_DeferredClean = false;
 	SProgressOperation progress(*UI, false);
 	xr_string bake_note;
 	EditorMod::RunPreBuildBake(bake_note);
 	int files = 0;
 	xr_string path, err, warn;
 	xr_vector<xr_string> left_out;
-	bool ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-		s_DeferredExportFlat, files, path, err, false, &warn, &left_out);
-	if (!ok && 0 == strncmp(err.c_str(), "target already holds a module", 29))
+	const bool ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
+		s_DeferredExportFlat, files, path, err, clean, &warn, &left_out);
+	if (!ok && IsCleanRefusal(err))
 	{
-		if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
-			"%s\n\n%s\n\nThose files will be DELETED. Continue?", err.c_str(), path.c_str()))
-		{
-			ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-				s_DeferredExportFlat, files, path, err, true, &warn, &left_out);
-		}
-		else
-		{
-			sprintf_s(s_Message, "Export cancelled.");
-			s_WantMessage = true;
-			return;
-		}
+		AskClean(false, path);
+		return;
 	}
 	if (ok)
 	{
 		char ini[MAX_PATH];
 		ProjectIni(ini, sizeof(ini));
 		::WritePrivateProfileStringA("xms", "export_target", s_DeferredExportTarget, ini);
-		sprintf_s(s_Message, "%s%sExport complete: %d file(s) copied to\n%s",
-			bake_note.c_str(), bake_note.empty() ? "" : "\n", files, path.c_str());
-		AppendLeftOut(s_Message, sizeof(s_Message), left_out);
-		if (!warn.empty())
-		{
-			xr_strcat(s_Message, sizeof(s_Message), "\n\n");
-			xr_strcat(s_Message, sizeof(s_Message), warn.c_str());
-		}
 	}
-	else
-		sprintf_s(s_Message, "Export failed: %s", err.c_str());
-	s_WantMessage = true;
+	ReportBuild(false, s_DeferredExportFlat, ok, files, path, err, warn, left_out, bake_note, s_ExportId);
 }
 
-static void DrawExportModal(bool flat)
+// A read-only path as a grid row's value. PropertyText cuts at the end, and the end of a destination (<folder>\modules\<id>)
+// is what such a row is for: this keeps it and drops the start, the whole path in the tooltip. Selectable like
+// PropertyText - at once when it fits, after a click when it is cut.
+static void PropertyPath(const char* path)
+{
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float width = ImGui::CalcItemWidth();
+	const float room = width - style.FramePadding.x * 2.f;
+	if (XUI::TextWidth(XUI::Font::Body, path) <= room)
+	{
+		XUI::PropertyText(path);
+		return;
+	}
+	ImGuiStorage* storage = ImGui::GetStateStorage();
+	const ImGuiID key = ImGui::GetID("##property_path");
+	// 0: shown cut, 1: a read-only field to select from, 2: the same, taking the focus this frame
+	const int state = storage->GetInt(key, 0);
+	if (state)
+	{
+		xr_string copy = path;
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(ModToken::TextSecondary));
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
+		ImGui::SetNextItemWidth(width);
+		if (state == 2)
+		{
+			storage->SetInt(key, 1);
+			ImGui::SetKeyboardFocusHere();
+		}
+		ImGui::InputText("##property_path", &copy[0], copy.size() + 1, ImGuiInputTextFlags_ReadOnly);
+		if (ImGui::IsItemDeactivated())
+			storage->SetInt(key, 0);
+		ImGui::PopStyleVar();
+		ImGui::PopStyleColor(2);
+		return;
+	}
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	ImGui::SetCursorScreenPos(ImVec2(at.x + style.FramePadding.x, at.y));
+	ImGui::AlignTextToFramePadding();
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(ModToken::TextSecondary));
+	XUI::TextEllipsis(path, room, XUI::Clip::Start);
+	ImGui::PopStyleColor();
+	if (ImGui::IsItemClicked())
+		storage->SetInt(key, 2);
+}
+
+static void DrawExportDialog(bool flat)
 {
 	bool& want = flat ? s_WantFlat : s_WantExport;
 	if (!want) return;
-	ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal(flat ? kTitleFlat : kTitleExport, &want, ImGuiWindowFlags_AlwaysAutoResize, true))
+	if (!XUI::BeginDialog(flat ? kTitleFlat : kTitleExport, &want, XUI::DialogSize::M))
 		return;
-
-	ImGui::TextUnformatted(flat
-		? "Target folder; a gamedata_<id> folder is created inside:"
-		: "Target game folder; the module goes to <target>\\modules\\<id>:");
-	ImGui::SetNextItemWidth(480);
-	ImGui::InputText("##target", s_Target, sizeof(s_Target));
-	if (EditorProject::GameRoot()[0])
+	XUI::BeginDialogBody();
+	XUI::Prose(flat
+		? "A gamedata_<id> folder is made inside the folder: a JSGME mod, for installs without the module system. "
+		  "Quests, spawns and the game mode need the module build."
+		: "The module goes to <folder>\\modules\\<id>, where the game reads modules from. The build is clean: "
+		  "that folder then holds exactly this build.");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+	if (XUI::BeginPropertyGrid("build_dialog", .30f))
 	{
-		if (ImGui::Button(flat ? "Use linked game root" : "Deploy to linked game"))
-			strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("%s", EditorProject::GameRoot());
+		if (XUI::PropertyRow(flat ? "Folder" : "Game Folder", flat ? "The folder the gamedata_<id> folder is made in." :
+			"The game folder, or any folder that stands in for one.", XUI::PropRequired))
+		{
+			XUI::PathField("##target", s_Target, sizeof(s_Target), true);
+			if (EditorProject::GameRoot()[0] &&
+				XUI::PropertyTrailing("##linked", XUI::Icon::GameFolder, (xr_string("Use the linked game: ") + EditorProject::GameRoot()).c_str()))
+				strncpy_s(s_Target, sizeof(s_Target), EditorProject::GameRoot(), _TRUNCATE);
+		}
+		if (s_Target[0] && XUI::PropertyRow("Writes To", "The folder this build fills.", XUI::PropReadOnly))
+		{
+			xr_string dest = s_Target;
+			while (!dest.empty() && (dest.back() == '\\' || dest.back() == '/')) dest.pop_back();
+			dest += flat ? "\\gamedata_" + s_ExportId : "\\modules\\" + s_ExportId;
+			PropertyPath(dest.c_str());
+		}
+		XUI::EndPropertyGrid();
 	}
-	ImGui::Separator();
-
-	ImGui::BeginDisabled(!s_Target[0] || s_ExportQueued);
-	if (ImGui::Button("Export", ImVec2(120, 0)))
+	if (XUI::BeginDialogFooter())
 	{
-		strncpy_s(s_DeferredExportTarget, sizeof(s_DeferredExportTarget), s_Target, _TRUNCATE);
-		s_DeferredExportFlat = flat;
-		s_ExportQueued = UI->DeferUIWork(&RunDeferredExport);
-		want = false;
-		ImGui::CloseCurrentPopup();
+		if (XUI::DialogButton(flat ? "Export" : "Build", XUI::Kind::Primary, true, s_Target[0] && !s_ExportQueued,
+			s_ExportQueued ? "A build is running" : "Pick a folder first"))
+		{
+			strncpy_s(s_DeferredExportTarget, sizeof(s_DeferredExportTarget), s_Target, _TRUNCATE);
+			s_DeferredExportFlat = flat;
+			s_DeferredClean = false;
+			s_ExportQueued = UI->DeferUIWork(&RunDeferredExport);
+			want = false;
+		}
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+			want = false;
 	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	if (ImGui::Button("Cancel", ImVec2(120, 0)))
-	{
-		want = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
+	XUI::EndDialog();
 }
 
 //------------------------------------------------------------------------------
 // Mod > Package Release...
 //------------------------------------------------------------------------------
 static bool					s_WantPackage		= false;
-static bool					s_WantReplace		= false;
 static bool					s_PackageQueued		= false;
-static EditorMod::SManifest	s_PkgManifest;		// what the modal names: id, version, update source
-static char					s_PkgOutDir[MAX_PATH]	= {};
-static char					s_PkgRequires[32]		= {};
-static xr_string			s_ReplaceText;		// the files the confirmation names
+static EditorMod::SManifest	s_PkgManifest;		// what the dialog names: id, version, update source
+static string_path			s_PkgOutDir			= {};
+static char					s_PkgRequires[32]	= {};
 
 void EditorMod::RequestPackageRelease()
 {
@@ -3568,9 +4321,9 @@ void EditorMod::RequestPackageRelease()
 		ReleaseGate(s_PkgManifest, err);
 	if (!err.empty())
 	{
-		_snprintf_s(s_Message, sizeof(s_Message), _TRUNCATE,
-			"Cannot package a release: %s.\nFix it via Mod > Edit Manifest...", err.c_str());
-		s_WantMessage = true;
+		XUI::Result("package_result", "Cannot Package", XUI::Tone::Error, (err + ".").c_str(),
+			xr_vector<std::pair<xr_string, xr_string>>(), XUI::Strings(), XUI::Strings(),
+			"Mod Settings", [] { EditorMod::RequestEditManifest(); });
 		return;
 	}
 	sprintf_s(s_PkgOutDir, "%s\\releases\\%s", EditorProject::Root(), s_PkgManifest.version.c_str());
@@ -3588,153 +4341,107 @@ static void RunDeferredPackage()
 	EditorMod::RunPreBuildBake(bake_note);
 	EditorMod::SPackageResult res;
 	xr_string err, warn;
+	const EditorMod::SManifest& m = s_PkgManifest;
+	xr_vector<std::pair<xr_string, xr_string>> rows;
+	XUI::Strings warnings;
 	if (!EditorMod::PackageRelease(EditorProject::Root(), s_PkgOutDir, s_PkgRequires, res, err, &warn))
 	{
-		if (err == "cancelled")	strcpy_s(s_Message, "Packaging cancelled.");
-		else					_snprintf_s(s_Message, sizeof(s_Message), _TRUNCATE, "Packaging failed: %s", err.c_str());
-		s_WantMessage = true;
+		if (err == "cancelled")
+		{
+			XUI::Toast(XUI::Tone::Info, "Packaging cancelled.");
+			return;
+		}
+		AddBakeNote(bake_note, rows, warnings);
+		XUI::Result("package_result", "Packaging Failed", XUI::Tone::Error, err.c_str(), rows, XUI::Strings(), warnings);
 		return;
 	}
 
-	xr_string text = bake_note;
-	if (!text.empty()) text += "\n";
-	text += NqUtil::Format("Release %s %s: %d file(s) packaged into\n%s\n\n  %s.update.ltx\n  %s\n",
-		s_PkgManifest.id.c_str(), s_PkgManifest.version.c_str(), res.files, res.out_dir.c_str(),
-		s_PkgManifest.id.c_str(), res.index.name.c_str());
-	for (u32 i = 0; i < res.packages.size(); ++i)
-		text += NqUtil::Format("  %s  (%.1f MB)\n", res.packages[i].name.c_str(), double(res.packages[i].size) / 1048576.0);
-	if (s_PkgManifest.update_github.empty())
-		text += "\nUpload these files to a GitHub release and mark it as the latest release.\n"
-				"Set the repository in Mod > Edit Manifest - without it the game does not look for updates.";
-	else
-		text += NqUtil::Format("\nUpload these files to a GitHub release of %s\nand mark it as the latest release.",
-			s_PkgManifest.update_github.c_str());
-	// the index addresses the zip by byte offset; a re-zipped copy is another file
-	text += "\nUpload the zip exactly as written - repacking it breaks the file index.";
-	text += res.signed_ ? NqUtil::Format("\nSigned with the author key %s: the Mod Browser can list it.", res.key_id.c_str()) :
-		xr_string("\nNot signed: the Mod Browser does not list unsigned releases.");
-	if (!res.catalog_block.empty())
-		text += NqUtil::Format("\nThe Mod Browser refuses %u file(s) of it - see below.", (u32)res.catalog_block.size());
-	if (!res.left_out.empty())
-	{
-		// what the players will not get, said where the release is made
-		text += "\n\nNot shipped: ";
-		for (u32 i = 0; i < res.left_out.size() && i < 10; ++i)
-		{
-			if (i) text += ", ";
-			text += res.left_out[i];
-		}
-		if (res.left_out.size() > 10) text += NqUtil::Format(" and %u more", u32(res.left_out.size() - 10));
-	}
-	text += "\nMod > Publish Release packages and uploads in one step.";
-	if (!warn.empty())
-	{
-		text += "\n\n";
-		text += warn;
-	}
-	strncpy_s(s_Message, sizeof(s_Message), text.c_str(), _TRUNCATE);
-	s_WantMessage = true;
+	rows.emplace_back("Folder", res.out_dir);
+	rows.emplace_back("Descriptor", m.id + ".update.ltx");
+	rows.emplace_back("File index", res.index.name);
+	for (const EditorMod::SPackageFile& p : res.packages)
+		rows.emplace_back("Package", NqUtil::Format("%s  (%.1f MB)", p.name.c_str(), double(p.size) / 1048576.0));
+	rows.emplace_back("Signed", res.signed_ ? "With the author key " + res.key_id : xr_string("No - the Mod Browser lists signed releases only"));
+	AddBakeNote(bake_note, rows, warnings);
+	if (m.update_github.empty())
+		warnings.push_back("No GitHub repository in Mod Settings: the game does not look for updates of this module.");
+	SplitLines(warn, warnings);
+	// the index addresses the zip by byte offset: a repacked copy is another file
+	const xr_string headline = NqUtil::Format("Release %s %s: %s packaged. Upload the files exactly as written to a GitHub release%s "
+		"and mark it as the latest - Publish Release does both in one step.", m.id.c_str(), m.version.c_str(),
+		CountText(res.files, "file", "files").c_str(), m.update_github.empty() ? "" : (" of " + m.update_github).c_str());
+	XUI::Result("package_result", "Release Packaged", warnings.empty() ? XUI::Tone::Success : XUI::Tone::Warning, headline.c_str(),
+		rows, res.left_out, warnings, "Open Folder", [dir = res.out_dir] { OpenFolder(dir); });
 }
 
-static void DrawPackageModal()
+static void QueuePackage()
+{
+	s_PackageQueued = UI->DeferUIWork(&RunDeferredPackage);
+	s_WantPackage = false;
+}
+
+static void DrawPackageDialog()
 {
 	if (!s_WantPackage) return;
-	ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal(kTitlePackage, &s_WantPackage, ImGuiWindowFlags_AlwaysAutoResize, true))
+	if (!XUI::BeginDialog(kTitlePackage, &s_WantPackage, XUI::DialogSize::M))
 		return;
-
-	ImGui::Text("Module: %s  %s", s_PkgManifest.id.c_str(), s_PkgManifest.version.c_str());
-	ImGui::TextUnformatted("Output folder:");
-	ImGui::SetNextItemWidth(480);
-	ImGui::InputText("##out_dir", s_PkgOutDir, sizeof(s_PkgOutDir));
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Receives <id>.update.ltx, the file index and the package zip(s).");
-	ImGui::SetNextItemWidth(160);
-	ImGui::InputText("Requires game", s_PkgRequires, sizeof(s_PkgRequires));
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Lowest Dead Air: Refined version this release runs on. Empty = any.");
+	XUI::BeginDialogBody();
 	const bool requires_ok = !s_PkgRequires[0] || DottedNumber(s_PkgRequires, 3, 3);
-	if (!requires_ok)
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid game version: MAJOR.MINOR.PATCH, e.g. 1.4.1");
-	if (s_PkgManifest.update_github.empty())
-		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "No GitHub repository in the manifest - the game will not find this release.");
-	EditorCatalog::DrawKeyLine("package");
-	ImGui::Separator();
-
-	ImGui::BeginDisabled(!s_PkgOutDir[0] || !requires_ok || s_PackageQueued);
-	if (ImGui::Button("Package", ImVec2(120, 0)))
+	if (XUI::BeginPropertyGrid("package_dialog", .32f))
 	{
-		// An earlier packaging of this version is replaced - but only once the
-		// author has seen which files that is.
-		string_path dir;
-		xr_string ignored;
-		xr_vector<xr_string> old_files;
-		if (ResolveReleaseDir(EditorProject::Root(), s_PkgOutDir, s_PkgManifest.version, dir, ignored))
-			ListReleaseFiles(dir, s_PkgManifest.id, s_PkgManifest.version, old_files);
-		if (old_files.empty())
-			s_PackageQueued = UI->DeferUIWork(&RunDeferredPackage);
-		else
+		if (XUI::PropertyRow("Release", "The module id and the version from Mod Settings.", XUI::PropReadOnly))
+			XUI::PropertyText((s_PkgManifest.id + "  " + s_PkgManifest.version).c_str());
+		if (XUI::PropertyRow("Output Folder", "Receives <id>.update.ltx, the file index and the package zip(s). Inside the project "
+			"only releases\\ is allowed: anywhere else the packages would ship with the next build.", XUI::PropRequired))
+			XUI::PathField("##out_dir", s_PkgOutDir, sizeof(s_PkgOutDir), true);
+		if (XUI::PropertyRow("Requires Game", "The lowest Dead Air: Refined version this release runs on. Empty: any.",
+			requires_ok ? 0 : XUI::PropInvalid))
 		{
-			s_ReplaceText = NqUtil::Format("%u file(s) in\n%s\nwill be replaced:\n", (u32)old_files.size(), dir);
-			for (u32 i = 0; i < old_files.size(); ++i)
-				s_ReplaceText += "\n  " + old_files[i];
-			s_WantReplace = true;
+			ImGui::SetNextItemWidth(_min(ImGui::CalcItemWidth(), XUI::Em(8.f)));
+			ImGui::InputTextWithHint("##requires", "Any", s_PkgRequires, sizeof(s_PkgRequires));
+			if (!requires_ok)
+				XUI::PropertyMessage(XUI::Tone::Error, "MAJOR.MINOR.PATCH, e.g. 1.4.1.");
 		}
-		s_WantPackage = false;
-		ImGui::CloseCurrentPopup();
+		// read-only unless the key asks for its password: a locked key only leaves the release unsigned here
+		if (XUI::PropertyRow("Author Key", "The key file that signs the release: the Mod Browser lists signed releases only. Submit to "
+				"Mod Browser creates one.", EditorCatalog::KeyWantsPassword() ? 0 : XUI::PropReadOnly))
+			EditorCatalog::DrawKeyLine("package");
+		XUI::EndPropertyGrid();
 	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	if (ImGui::Button("Cancel", ImVec2(120, 0)))
+	if (s_PkgManifest.update_github.empty())
+		XUI::StatusText(XUI::Tone::Warning, "No GitHub repository in Mod Settings: the game will not find this release.");
+
+	if (XUI::BeginDialogFooter())
 	{
-		s_WantPackage = false;
-		ImGui::CloseCurrentPopup();
+		const char* why = s_PackageQueued ? "A packaging is running" : !s_PkgOutDir[0] ? "Pick the output folder first" : "Fix the game version first";
+		if (XUI::DialogButton("Package", XUI::Kind::Primary, true, s_PkgOutDir[0] && requires_ok && !s_PackageQueued, why))
+		{
+			// An earlier packaging of this version is replaced - but only once the author has seen which files that is.
+			string_path dir;
+			xr_string ignored;
+			xr_vector<xr_string> old_files;
+			if (ResolveReleaseDir(EditorProject::Root(), s_PkgOutDir, s_PkgManifest.version, dir, ignored))
+				ListReleaseFiles(dir, s_PkgManifest.id, s_PkgManifest.version, old_files);
+			if (old_files.empty())
+				QueuePackage();
+			else
+			{
+				const xr_string headline = NqUtil::Format("An earlier packaging of %s is in %s.", s_PkgManifest.version.c_str(), dir);
+				XUI::ConfirmSpec spec;
+				spec.id = "replace_release";
+				spec.title = "Replace Release Files";
+				spec.headline = headline.c_str();
+				spec.items = old_files;
+				spec.consequence = "Deleted for good - this cannot be undone. The new packaging takes their place.";
+				spec.action = "Replace";
+				spec.destructive = true;
+				XUI::Confirm(spec, [](XUI::Answer answer) { if (answer == XUI::Answer::Yes) QueuePackage(); });
+			}
+		}
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+			s_WantPackage = false;
 	}
-	ImGui::EndPopup();
-}
-
-static void DrawReplaceModal()
-{
-	if (!s_WantReplace) return;
-	if (!ImGui::BeginPopupModal(kTitleReplace, &s_WantReplace, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-
-	ImGui::TextUnformatted(s_ReplaceText.c_str());
-	ImGui::Separator();
-	ImGui::TextDisabled("The old files are deleted.");
-	ImGui::Spacing();
-
-	// Cancel is the default: Enter and Escape both back out
-	const bool replace = ImGui::Button("Replace", ImVec2(120, 0));
-	ImGui::SameLine();
-	const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0)) ||
-						ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-						ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-	ImGui::SetItemDefaultFocus();
-
-	if (replace)
-		s_PackageQueued = UI->DeferUIWork(&RunDeferredPackage);
-	if (replace || cancel)
-	{
-		s_WantReplace = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
-}
-
-static void DrawMessageModal()
-{
-	if (!s_WantMessage) return;
-	if (!ImGui::BeginPopupModal(kTitleMessage, &s_WantMessage, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-	ImGui::TextUnformatted(s_Message);
-	ImGui::Separator();
-	if (ImGui::Button("OK", ImVec2(120, 0)))
-	{
-		s_WantMessage = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
+	XUI::EndDialog();
 }
 
 void EditorMod::DrawUI()
@@ -3742,12 +4449,11 @@ void EditorMod::DrawUI()
 	if (!EditorProject::Active()) return;
 	if (s_WantBuild && !s_BuildQueued)
 		s_BuildQueued = UI->DeferUIWork(&RunBuildIntoGame);
-	DrawManifestModal();
-	DrawExportModal(false);
-	DrawExportModal(true);
-	DrawPackageModal();
-	DrawReplaceModal();
-	DrawMessageModal();
+	if (s_SettingsOpen)
+		ShowSettingsTab(false);
+	DrawExportDialog(false);
+	DrawExportDialog(true);
+	DrawPackageDialog();
 }
 
 //------------------------------------------------------------------------------
@@ -3858,7 +4564,7 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 		m.description = v;
 		Trim(m.description);
 		// the same room the manifest window gives it
-		if (m.description.size() >= sizeof(s_EdDescription))
+		if (m.description.size() >= sizeof(SSettingsForm::description))
 			{ out = "{\"ok\":false,\"error\":\"description is too long (4095 bytes at most)\"}"; return; }
 	}
 	if (XFinedMCP::GetArg(raw, "website", v, v_size))
@@ -4099,6 +4805,89 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 		out += block ? "block\",\"text\":\"" : "review\",\"text\":\"";
 		JsonAppend(out, (block ? res.catalog_block[i] : res.catalog_review[i - res.catalog_block.size()]).c_str());
 		out += "\"}";
+	}
+	out += "]}";
+}
+
+static LPCSTR ToneName(XUI::Tone tone)
+{
+	switch (tone)
+	{
+	case XUI::Tone::Error:		return "error";
+	case XUI::Tone::Required:	return "required";
+	case XUI::Tone::Warning:	return "warning";
+	default:					return "note";
+	}
+}
+
+void EditorMod::McpSettingsView(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())
+		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
+	// a page opens the tab on it; without one this only looks
+	xr_string page;
+	if (NqUtil::ArgString(raw, "page", page) && !page.empty())
+	{
+		int index = -1;
+		for (int i = 0; i < pgCount; ++i)
+			if (page == kSettingsPages[i].id)
+				index = i;
+		if (index < 0)
+		{
+			xr_string err = "page must be one of:";
+			for (int i = 0; i < pgCount; ++i)
+				err += xr_string(i ? ", " : " ") + kSettingsPages[i].id;
+			NqUtil::JsonError(out, err);
+			return;
+		}
+		RequestEditManifest();
+		s_SettingsPage = index;
+		if (index == pgPda) RefreshPdaFiles();
+		if (index == pgRelations) s_InstalledScanned = false;
+	}
+	if (s_SettingsOpen)
+	{
+		SyncSettingsForm();
+		CheckSettings();
+	}
+	else
+		s_SettingsProblems.clear();
+
+	out = "{\"ok\":true,\"tab\":\"mod_settings\",\"open\":";
+	NqUtil::JsonBool(out, s_SettingsOpen);
+	out += ",\"active\":";
+	NqUtil::JsonBool(out, XUI::Shell::IsActive("mod_settings"));
+	out += ",\"page\":";
+	NqUtil::JsonString(out, kSettingsPages[s_SettingsPage].id);
+	out += ",\"dirty\":";
+	NqUtil::JsonBool(out, s_SettingsOpen && SettingsDirty());
+	out += ",\"pages\":[";
+	for (int i = 0; i < pgCount; ++i)
+	{
+		XUI::Tone tone = XUI::Tone::Muted;
+		out += i ? ",{\"id\":" : "{\"id\":";
+		NqUtil::JsonString(out, kSettingsPages[i].id);
+		out += ",\"label\":";
+		NqUtil::JsonString(out, kSettingsPages[i].label);
+		out += ",\"state\":";
+		NqUtil::JsonString(out, PageTone(i, tone) ? ToneName(tone) : "ok");
+		out += "}";
+	}
+	out += "],\"problems\":[";
+	for (u32 i = 0; i < s_SettingsProblems.size(); ++i)
+	{
+		const SSettingsProblem& p = s_SettingsProblems[i];
+		out += i ? ",{\"page\":" : "{\"page\":";
+		NqUtil::JsonString(out, kSettingsPages[p.page].id);
+		out += ",\"field\":";
+		NqUtil::JsonString(out, p.field);
+		out += ",\"tone\":";
+		NqUtil::JsonString(out, ToneName(p.tone));
+		out += ",\"blocks_save\":";
+		NqUtil::JsonBool(out, p.blocks);
+		out += ",\"text\":";
+		NqUtil::JsonString(out, p.text);
+		out += "}";
 	}
 	out += "]}";
 }

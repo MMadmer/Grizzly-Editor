@@ -9,6 +9,7 @@
 #include "NqValidate.h"
 #include "NqProjectIndex.h"
 #include "NqReferences.h"
+#include "NqLayout.h"
 #include "../EditorProject.h"
 
 namespace
@@ -359,6 +360,10 @@ namespace
 			out += "{\"id\":"; NqUtil::JsonString(out, n.id);
 			out += ",\"x\":"; NqUtil::JsonNumber(out, n.pos.x);
 			out += ",\"y\":"; NqUtil::JsonNumber(out, n.pos.y);
+			// the box the canvas draws: content-sized, the same one the layout made room for
+			const Fvector2 size = NqLayout::NodeSize(n);
+			out += ",\"w\":"; NqUtil::JsonNumber(out, size.x);
+			out += ",\"h\":"; NqUtil::JsonNumber(out, size.y);
 			out += "}";
 		}
 		out += "]";

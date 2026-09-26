@@ -1,9 +1,29 @@
 #include "stdafx.h"
 UITextForm* UITextForm::Form = nullptr;
-UITextForm::UITextForm(const char* text) :m_Text(text)
+bool UITextForm::s_Closing = false;
+
+namespace
+{
+constexpr const char* kTitle = "Edit Text###dlg.text_editor";
+
+int TextResize(ImGuiInputTextCallbackData* data)
+{
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+    {
+        xr_vector<char>* text = static_cast<xr_vector<char>*>(data->UserData);
+        text->resize(size_t(data->BufSize), 0);
+        data->Buf = text->data();
+    }
+    return 0;
+}
+}
+
+UITextForm::UITextForm(const char* text) :m_Text(text ? text : "")
 {
     m_Ok = false;
-    xr_strcpy(m_EditText, m_Text.c_str());
+    m_Shown = false;
+    m_EditText.assign(m_Text.begin(), m_Text.end());
+    m_EditText.resize(_max(m_Text.size() + 1, size_t(1024)), 0);
 }
 
 UITextForm::~UITextForm()
@@ -12,17 +32,25 @@ UITextForm::~UITextForm()
 
 void UITextForm::Draw()
 {
-     ImGui::BeginGroup();
-    if (ImGui::Button("Ok"))CLBOk(); ImGui::SameLine(0);
-    if (ImGui::Button("Cancel"))CLBCancel();
-    ImGui::SameLine(150);
-
-    if (ImGui::Button("Load"))CLBLoad(); ImGui::SameLine(0);
-    if (ImGui::Button("Save"))CLBSave(); ImGui::SameLine(0);
-    if (ImGui::Button("Clear"))CLBClear(); 
-
-    ImGui::EndGroup();
-    ImGui::InputTextMultiline("", m_EditText, sizeof(m_EditText), ImVec2(500, 200));
+    if (!XUI::BeginDialog(kTitle, &bOpen, XUI::DialogSize::M, true))
+        return;
+    m_Shown = true;
+    XUI::BeginDialogBody();
+    {
+        XUI::FontScope mono(XUI::Font::Mono);
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        ImGui::InputTextMultiline("##text", m_EditText.data(), m_EditText.size(), ImVec2(ImGui::GetContentRegionAvail().x, XUI::Pt(260.f)),
+            ImGuiInputTextFlags_CallbackResize, TextResize, &m_EditText);
+    }
+    if (XUI::BeginDialogFooter())
+    {
+        if (XUI::DialogButton("OK", XUI::Kind::Primary, true))
+            CLBOk();
+        if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+            CLBCancel();
+    }
+    XUI::EndDialog();
 }
 
 void UITextForm::RunEditor(const char* str)
@@ -33,22 +61,29 @@ void UITextForm::RunEditor(const char* str)
 
 void UITextForm::Update()
 {
-    if (Form && !Form->IsClosed())
+    if (!Form)
     {
-        if (ImGui::BeginPopupModal("TextEditor", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize))
+        // the form went away while its dialog was up: the popup goes with it
+        if (s_Closing)
         {
-            Form->Draw();
-            ImGui::EndPopup();
+            s_Closing = false;
+            bool open = false;
+            if (XUI::BeginDialog(kTitle, &open, XUI::DialogSize::M))
+                XUI::EndDialog();
         }
+        return;
     }
+    if (!Form->IsClosed())
+        Form->Draw();
 }
 
 bool UITextForm::GetResult(bool& change, xr_string& result)
 {
-    if (Form->IsClosed())
+    if (Form && Form->IsClosed())
     {
         change = Form->m_Ok;
         result = Form->m_Text;
+        s_Closing = Form->m_Shown;
         xr_delete(Form);
         return true;
     }
@@ -58,28 +93,15 @@ bool UITextForm::GetResult(bool& change, xr_string& result)
 
 void UITextForm::CLBOk()
 {
-    m_Text = m_EditText;
+    m_Text = m_EditText.data();
     bOpen = false;
     m_Ok = true;
+    ImGui::CloseCurrentPopup();
 }
 
 
 void UITextForm::CLBCancel()
 {
     bOpen = false;
-}
-
-void UITextForm::CLBLoad()
-{
-    R_ASSERT(0);
-}
-
-void UITextForm::CLBSave()
-{
-    R_ASSERT(0);
-}
-
-void UITextForm::CLBClear()
-{
-    m_EditText[0] = 0;
+    ImGui::CloseCurrentPopup();
 }

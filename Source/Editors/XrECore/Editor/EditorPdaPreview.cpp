@@ -478,6 +478,25 @@ namespace
 		return IM_COL32((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, a > 255 ? 255 : a);
 	}
 
+	using XFinedTheme::ColorToken;
+	ImU32 Tok(ColorToken token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+
+	// what the game itself draws, as the layout's own colours are given (ARGB): a texture it cannot find, the
+	// player's arrow on the map
+	constexpr u32 kGameMissingTexture	= 0x5AFF00FF;
+	constexpr u32 kGamePlayerRing		= 0xFFFFFFFF;
+	constexpr u32 kGamePlayerDot		= 0xFF28A0FF;
+
+	// an editor's note inside the device - not game text: the editor's font, centred, wrapped to the rect
+	void Note(ImDrawList* dl, const ImVec2& a, const ImVec2& b, const char* text, ImU32 col)
+	{
+		ImFont* font = ImGui::GetFont();
+		const float size = ImGui::GetFontSize();
+		const float wrap = _max(size, b.x - a.x - XUI::Pt(24.f));
+		const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, wrap, text);
+		dl->AddText(font, size, ImVec2(floorf((a.x + b.x - ts.x) * .5f), floorf((a.y + b.y - ts.y) * .5f)), col, text, nullptr, wrap);
+	}
+
 	struct SLine
 	{
 		xr_string	cp;		// cp1251 bytes
@@ -588,7 +607,16 @@ namespace
 		bool		wide;
 		xr_string	lang;
 		bool		show_source, show_side;
-		float		zoom;		// 0 = fit
+		float		zoom;		// 0 = fit, else x the 768 lines of the game's PDA
+		ImVec2		pan;		// px: where a zoomed device sits off its centred place
+		int			tab;		// the Details tab on show: 0 problems, 1 pages, 2 vars, 3 log
+		int			want_tab;	// a tab asked for over MCP, selected when Details draws next
+		int			goto_line;	// the Source pane scrolls to this line when it draws next
+		int			cursor_line, cursor_seen;	// the caret's line, for the Source pane to follow it
+		float		details_w, source_h;		// pt, as the last frame laid them out
+		float		device_gap;					// pt: the device's nearest distance to a canvas edge, below 0 when cut
+		u32			screen_edges;				// the device's sides that lie on the game's screen edge: 1 top 2 bottom 4 left 8 right
+		int			drawn_frame;				// the ImGui frame that drew the tab last
 
 		// geometry of the last frame, for hit tests and MCP
 		ImVec2		origin;
@@ -598,7 +626,9 @@ namespace
 
 		SPreview() : open(false), focus(0), text_dirty(false), file_time(0), next_poll(0), read_ok(false),
 			read_line(0), closed(false), map_zoom(1.f), map_center_set(false), toast_until(0), hovered(-1),
-			pressed(-1), wide(false), lang("rus"), show_source(false), show_side(true), zoom(0), kx(1), ky(1)
+			pressed(-1), wide(false), lang("rus"), show_source(false), show_side(true), zoom(0), pan(0, 0), tab(0), want_tab(-1),
+			goto_line(0), cursor_line(0), cursor_seen(-1), details_w(0), source_h(0), device_gap(0), screen_edges(0), drawn_frame(-2),
+			kx(1), ky(1)
 		{ map_center.set(0, 0); }
 	};
 	SPreview	s_P;
@@ -921,6 +951,8 @@ namespace
 
 	// ============================================================== drawing
 	ImDrawList*	s_DL = 0;
+	// what the canvas says on hover this frame: a marker's hint, else the item's
+	xr_string	s_HoverHint;
 
 	void DrawTex(const xr_string& id, const ImVec2& a, const ImVec2& b, u32 tint, float rounding = 0.f)
 	{
@@ -929,7 +961,7 @@ namespace
 		if (!Tex(id, tex, uv0, uv1))
 		{
 			// a texture the game would not find: the magenta X-Ray shows for one
-			s_DL->AddRectFilled(a, b, IM_COL32(255, 0, 255, 90));
+			s_DL->AddRectFilled(a, b, Col(kGameMissingTexture));
 			return;
 		}
 		if (rounding > 0.f) s_DL->AddImageRounded(tex, a, b, uv0, uv1, Col(tint), rounding);
@@ -1037,21 +1069,21 @@ namespace
 				const float s = 11.f * s_P.ky;
 				DrawTex(l.markers[k].icon, ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y), l.markers[k].color);
 				if (!l.markers[k].hint.empty() && ImGui::IsMouseHoveringRect(ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y)))
-					ImGui::SetTooltip("%s", l.markers[k].hint.c_str());
+					s_HoverHint = l.markers[k].hint;
 			}
 			const ImVec2 ap = l.has_actor ? v.W2P(l.actor_x, l.actor_z) : v.mid;
-			s_DL->AddCircleFilled(ap, 6.f * s_P.ky, IM_COL32(255, 255, 255, 255));
-			s_DL->AddCircleFilled(ap, 4.f * s_P.ky, IM_COL32(40, 160, 255, 255));
+			s_DL->AddCircleFilled(ap, 6.f * s_P.ky, Col(kGamePlayerRing));
+			s_DL->AddCircleFilled(ap, 4.f * s_P.ky, Col(kGamePlayerDot));
 		}
 		else
 		{
-			s_DL->AddRectFilled(a.a, a.b, IM_COL32(24, 28, 22, 255));
-			for (float x = a.a.x; x < a.b.x; x += 40.f * s_P.ky) s_DL->AddLine(ImVec2(x, a.a.y), ImVec2(x, a.b.y), IM_COL32(60, 70, 55, 120));
-			for (float y = a.a.y; y < a.b.y; y += 40.f * s_P.ky) s_DL->AddLine(ImVec2(a.a.x, y), ImVec2(a.b.x, y), IM_COL32(60, 70, 55, 120));
-			const char* msg = l.preview_level.empty() ? "The live map: set preview.level to see a level here"
-				: "The live map: the level map was not found in the linked game";
-			const ImVec2 ts = ImGui::CalcTextSize(msg);
-			s_DL->AddText(ImVec2((a.a.x + a.b.x - ts.x) * 0.5f, (a.a.y + a.b.y - ts.y) * 0.5f), IM_COL32(200, 210, 190, 220), msg);
+			// the editor's placeholder, not the game's look: a grid in the theme and a note on what is missing
+			s_DL->AddRectFilled(a.a, a.b, Tok(ColorToken::Canvas));
+			const float cell = 40.f * s_P.ky;
+			for (float x = a.a.x; x < a.b.x; x += cell) s_DL->AddLine(ImVec2(x, a.a.y), ImVec2(x, a.b.y), Tok(ColorToken::BorderSubtle));
+			for (float y = a.a.y; y < a.b.y; y += cell) s_DL->AddLine(ImVec2(a.a.x, y), ImVec2(a.b.x, y), Tok(ColorToken::BorderSubtle));
+			Note(s_DL, a.a, a.b, l.preview_level.empty() ? "The live map. Set preview.level to see a level here."
+				: "The live map. The linked game has no map of this level.", Tok(ColorToken::TextSecondary));
 		}
 		s_DL->PopClipRect();
 		(void)i;
@@ -1122,44 +1154,202 @@ namespace
 
 	void DrawStockPanel(const ImVec2& a, const ImVec2& b)
 	{
-		s_DL->AddRectFilled(a, b, IM_COL32(22, 24, 20, 245));
+		s_DL->AddRectFilled(a, b, Tok(ColorToken::Raised));
 		const char* names[][2] = { { "eptTasks", "Tasks and map" }, { "eptRanking", "Ranking" }, { "eptRelations", "Relations" },
 			{ "eptContacts", "Contacts" }, { "eptLogs", "Logs" }, { "eptEncyclopedia", "Encyclopedia" }, { "eptMap", "Map" },
 			{ "eptStatistics", "Statistics" }, { "eptFractionWar", "Faction war" } };
 		const char* title = s_P.stock.c_str();
 		for (u32 k = 0; k < sizeof(names) / sizeof(names[0]); ++k)
 			if (s_P.stock == names[k][0]) title = names[k][1];
-		const xr_string l1 = NqUtil::Format("Stock PDA section: %s (%s)", title, s_P.stock.c_str());
-		const char* l2 = "The game shows its own screen here; the overlay stays on top.";
-		const ImVec2 t1 = ImGui::CalcTextSize(l1.c_str()), t2 = ImGui::CalcTextSize(l2);
-		const float mx = (a.x + b.x) * 0.5f, my = (a.y + b.y) * 0.5f;
-		s_DL->AddText(ImVec2(mx - t1.x * 0.5f, my - t1.y - 2), IM_COL32(230, 230, 220, 255), l1.c_str());
-		s_DL->AddText(ImVec2(mx - t2.x * 0.5f, my + 2), IM_COL32(170, 170, 160, 255), l2);
+		const xr_string note = NqUtil::Format("Stock PDA section: %s (%s)\nThe game shows its own screen here; the overlay stays on top.",
+			title, s_P.stock.c_str());
+		Note(s_DL, a, b, note.c_str(), Tok(ColorToken::TextSecondary));
 	}
 
-	// Draws the device and the layout into [p0, p0 + size) and handles the mouse there.
-	void DrawDevice(const ImVec2& p0, const ImVec2& avail)
+	// ============================================================== the canvas
+	constexpr float kZoomMin = .25f;
+	constexpr float kZoomMax = 4.f;
+	// pt: the canvas Fit keeps round the device, so its frame never meets the toolbar, the status bar or a pane
+	constexpr float kFitMargin = 16.f;
+
+	// The device itself in the game's 1024 x 768 units: its texture, the screen and the close button. Fit fits
+	// this, not the game's whole screen - on 16:9 the texture covers only the middle of it.
+	Frect DeviceRect()
 	{
 		const SDevice& d = Device();
 		const int k = s_P.wide ? 1 : 0;
-		// the virtual 1024x768 space shown at 4:3 or 16:9
-		const float aspect = s_P.wide ? 16.f / 9.f : 4.f / 3.f;
-		float w = avail.x, h = avail.x / aspect;
-		if (h > avail.y) { h = avail.y; w = h * aspect; }
-		if (s_P.zoom > 0) { h = 768.f * s_P.zoom; w = h * aspect; }
-		s_P.origin = ImVec2(p0.x + _max(0.f, (avail.x - w) * 0.5f), p0.y + _max(0.f, (avail.y - h) * 0.5f));
-		s_P.kx = w / 1024.f;
-		s_P.ky = h / 768.f;
-		s_P.screen = d.noise[k];
+		Frect r = d.bg[k];
+		for (const Frect* p : { &d.noise[k], &d.close[k] })
+			r.set(_min(r.x1, p->x1), _min(r.y1, p->y1), _max(r.x2, p->x2), _max(r.y2, p->y2));
+		if (r.width() < 1.f || r.height() < 1.f)
+			r.set(0.f, 0.f, 1024.f, 768.f);
+		return r;
+	}
 
+	// The game's screen in pixels: `zoom` x its 768 lines, or - at 0 - as big as lets the device fit the canvas on
+	// both axes with kFitMargin round it.
+	ImVec2 DeviceSize(const ImVec2& avail, float zoom)
+	{
+		const float aspect = s_P.wide ? 16.f / 9.f : 4.f / 3.f;
+		float h = 768.f * zoom;
+		if (zoom <= 0.f)
+		{
+			const Frect r = DeviceRect();
+			const float margin = 2.f * XUI::Pt(kFitMargin);
+			// the device's pixels per pixel of screen height, across and down
+			const float per_x = r.width() / 1024.f * aspect, per_y = r.height() / 768.f;
+			h = _min(_max(1.f, avail.x - margin) / per_x, _max(1.f, avail.y - margin) / per_y);
+			h = clampr(h, 1.f, 768.f * kZoomMax);
+		}
+		return ImVec2(h * aspect, h);
+	}
+
+	// where the screen's corner goes for the device to sit in the middle of the canvas
+	ImVec2 Centred(const ImVec2& p0, const ImVec2& avail, const ImVec2& size)
+	{
+		const Frect r = DeviceRect();
+		return ImVec2(p0.x + avail.x * .5f - (r.x1 + r.x2) * .5f * size.x / 1024.f, p0.y + avail.y * .5f - (r.y1 + r.y2) * .5f * size.y / 768.f);
+	}
+
+	// a zoomed device can be dragged around, but some of it always stays in view
+	void ClampPan(const ImVec2& avail, const ImVec2& size)
+	{
+		const Frect r = DeviceRect();
+		const ImVec2 device(r.width() * size.x / 1024.f, r.height() * size.y / 768.f);
+		const float keep = XUI::Pt(64.f);
+		const float mx = _max(0.f, (avail.x + device.x) * .5f - keep), my = _max(0.f, (avail.y + device.y) * .5f - keep);
+		s_P.pan.x = clampr(s_P.pan.x, -mx, mx);
+		s_P.pan.y = clampr(s_P.pan.y, -my, my);
+	}
+
+	void PlaceDevice(const ImVec2& p0, const ImVec2& avail)
+	{
+		const ImVec2 size = DeviceSize(avail, s_P.zoom);
+		if (s_P.zoom > 0.f)
+			ClampPan(avail, size);
+		else
+			s_P.pan = ImVec2(0.f, 0.f);
+		const ImVec2 c = Centred(p0, avail, size);
+		s_P.origin = ImVec2(floorf(c.x + s_P.pan.x), floorf(c.y + s_P.pan.y));
+		s_P.kx = size.x / 1024.f;
+		s_P.ky = size.y / 768.f;
+		s_P.screen = Device().noise[s_P.wide ? 1 : 0];
+	}
+
+	// the wheel zooms about the point under the mouse: that point of the device stays where it is
+	void ZoomAt(const ImVec2& p0, const ImVec2& avail, const ImVec2& m, float factor)
+	{
+		const float next = clampr(s_P.ky * factor, kZoomMin, kZoomMax);
+		const float ux = (m.x - s_P.origin.x) / s_P.kx, uy = (m.y - s_P.origin.y) / s_P.ky;
+		const ImVec2 size = DeviceSize(avail, next);
+		const ImVec2 c = Centred(p0, avail, size);
+		s_P.zoom = next;
+		s_P.pan = ImVec2(m.x - ux * size.x / 1024.f - c.x, m.y - uy * size.y / 768.f - c.y);
+		PlaceDevice(p0, avail);
+	}
+
+	// The device's art runs on past the game's screen - on every aspect its bottom grilles are cut where the monitor
+	// ends - so a device floating on the canvas looked sliced off. Each side of the device that lies on the screen's
+	// edge gets that edge drawn, a little longer than the device: the screen ends there, not the art. True when the
+	// mouse is on one of the lines.
+	bool DrawScreenEdge(const Frect& dr, const ImVec2& m)
+	{
+		const float ext = XUI::Pt(12.f), reach = XUI::Pt(4.f);
+		const ImU32 col = Tok(ColorToken::BorderStrong);
+		const ImVec2 a = VPx(dr.x1, dr.y1), b = VPx(dr.x2, dr.y2);
+		bool hover = false;
+		s_P.screen_edges = (dr.y1 <= 0.f ? 1u : 0u) | (dr.y2 >= 768.f ? 2u : 0u) | (dr.x1 <= 0.f ? 4u : 0u) | (dr.x2 >= 1024.f ? 8u : 0u);
+		// on the device's outermost pixel row or column, at the pixel's centre
+		const auto across = [&](float y)
+		{
+			s_DL->AddLine(ImVec2(a.x - ext, y), ImVec2(b.x + ext, y), col, XUI::Pt(1.f));
+			hover |= fabsf(m.y - y) <= reach && m.x >= a.x - ext && m.x <= b.x + ext;
+		};
+		const auto down = [&](float x)
+		{
+			s_DL->AddLine(ImVec2(x, a.y - ext), ImVec2(x, b.y + ext), col, XUI::Pt(1.f));
+			hover |= fabsf(m.x - x) <= reach && m.y >= a.y - ext && m.y <= b.y + ext;
+		};
+		// the game's screen is 1024 x 768 units whatever its aspect
+		if (s_P.screen_edges & 1u)	across(floorf(a.y) + .5f);
+		if (s_P.screen_edges & 2u)	across(floorf(b.y) - .5f);
+		if (s_P.screen_edges & 4u)	down(floorf(a.x) + .5f);
+		if (s_P.screen_edges & 8u)	down(floorf(b.x) - .5f);
+		return hover;
+	}
+
+	int RowsOf(int list)
+	{
+		int rows = 0;
+		for (u32 c = 0; c < s_P.layout.items.size(); ++c)
+			rows += It(c).parent == list + 1 && It(c).kind == "row";
+		return rows;
+	}
+
+	// Draws the device and the layout into [p0, p0 + avail) and handles the mouse there: the left button plays the
+	// layout, the right or middle one drags the device, the wheel scrolls what the game would scroll or zooms.
+	void DrawCanvas(const ImVec2& p0, const ImVec2& avail)
+	{
+		const SDevice& d = Device();
+		const int k = s_P.wide ? 1 : 0;
+		const ImGuiIO& io = ImGui::GetIO();
+		const ImVec2 m = io.MousePos;
+
+		ImGui::SetCursorScreenPos(p0);
+		ImGui::InvisibleButton("##pda_canvas", ImVec2(_max(avail.x, 1.f), _max(avail.y, 1.f)),
+			ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+		const bool over = ImGui::IsItemHovered();
+		const bool dragging = ImGui::IsItemActive() &&
+			(ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.f) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.f));
+		PlaceDevice(p0, avail);
+		if (dragging)
+		{
+			// a fitted device starts panning from where it is
+			if (s_P.zoom <= 0.f)
+				s_P.zoom = s_P.ky;
+			s_P.pan.x += io.MouseDelta.x;
+			s_P.pan.y += io.MouseDelta.y;
+			PlaceDevice(p0, avail);
+		}
+		ComputeLayout();
+		if (over && io.MouseWheel != 0.f)
+		{
+			bool taken = false;
+			if (!io.KeyCtrl && !s_P.closed)
+				for (int i = (int)s_P.abs.size() - 1; i >= 0 && !taken; --i)
+				{
+					if (!s_P.abs[i].shown || !Inside(m, s_P.abs[i])) continue;
+					if (It(i).kind == "list")
+					{
+						const float content = RowsOf(i) * (It(i).row_h + It(i).gap);
+						float& sc = s_P.scroll[i];
+						sc = clampr(sc - io.MouseWheel * 60.f, 0.f, _max(0.f, content - It(i).h));
+						taken = true;
+					}
+					else if (It(i).kind == "map")
+					{
+						s_P.map_zoom = clampr(s_P.map_zoom * (io.MouseWheel > 0 ? 1.25f : 0.8f), 1.f, 12.f);
+						taken = true;
+					}
+				}
+			if (!taken)
+				ZoomAt(p0, avail, m, io.MouseWheel > 0.f ? 1.15f : 1.f / 1.15f);
+			ComputeLayout();
+		}
+
+		// the backdrop covers the device only: on 16:9 the rest of the game's screen would be cut by the canvas
+		const Frect dr = DeviceRect();
+		const ImVec2 da = VPx(dr.x1, dr.y1), db = VPx(dr.x2, dr.y2);
+		s_P.device_gap = _min(_min(da.x - p0.x, da.y - p0.y), _min(p0.x + avail.x - db.x, p0.y + avail.y - db.y)) / XUI::Dpi();
+		s_HoverHint.clear();
 		s_DL = ImGui::GetWindowDrawList();
 		s_DL->PushClipRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), true);
-		s_DL->AddRectFilled(s_P.origin, ImVec2(s_P.origin.x + w, s_P.origin.y + h), IM_COL32(12, 12, 12, 255));
+		s_DL->AddRectFilled(da, db, Tok(ColorToken::Dim));
 		DrawTex(d.bg_tex[k], VPx(d.bg[k].x1, d.bg[k].y1), VPx(d.bg[k].x2, d.bg[k].y2), 0xFFFFFFFF);
+		const bool on_edge = DrawScreenEdge(dr, m);
 
 		const EditorPda::SLayout& l = s_P.layout;
 		const u32 n = (u32)l.items.size();
-		ComputeLayout();
 		xr_vector<xr_vector<int> > kids(n);
 		xr_vector<int> roots;
 		for (u32 i = 0; i < n; ++i)
@@ -1170,7 +1360,7 @@ namespace
 		const ImVec2 sa = VPx(s_P.screen.x1, s_P.screen.y1), sb = VPx(s_P.screen.x2, s_P.screen.y2);
 		s_DL->PushClipRect(sa, sb, true);
 		if (s_P.closed)
-			s_DL->AddRectFilled(sa, sb, IM_COL32(8, 8, 8, 255));
+			s_DL->AddRectFilled(sa, sb, Tok(ColorToken::Dim));
 		else
 		{
 			for (u32 r = 0; r < roots.size(); ++r)
@@ -1183,53 +1373,26 @@ namespace
 		if (l.noise) DrawTex(d.noise_tex[k], sa, sb, (d.noise_alpha[k] << 24) | 0xFFFFFF);
 		if (l.close) DrawTex(d.close_tex[k], VPx(d.close[k].x1, d.close[k].y1), VPx(d.close[k].x2, d.close[k].y2), 0xFFFFFFFF);
 		if (s_P.closed)
-		{
-			const char* msg = "Closed - click to open the PDA again";
-			const ImVec2 ts = ImGui::CalcTextSize(msg);
-			s_DL->AddText(ImVec2((sa.x + sb.x - ts.x) * 0.5f, (sa.y + sb.y - ts.y) * 0.5f), IM_COL32(200, 200, 200, 255), msg);
-		}
+			Note(s_DL, sa, sb, "The PDA is closed. Click to open it again.", Tok(ColorToken::TextSecondary));
 
-		// the mouse
-		ImGui::SetCursorScreenPos(p0);
-		ImGui::InvisibleButton("##pda_canvas", ImVec2(_max(avail.x, 1.f), _max(avail.y, 1.f)));
-		const bool over = ImGui::IsItemHovered();
-		const ImVec2 m = ImGui::GetIO().MousePos;
+		// the left button plays the layout
 		s_P.hovered = -1;
-		if (over && !s_P.closed)
+		if (over && !s_P.closed && !dragging)
 		{
 			const int hit = HitTest(m);
 			s_P.hovered = hit >= 0 ? hit : -1;
-			if (hit >= 0 && !It(hit).hint.empty()) ImGui::SetTooltip("%s", Format(It(hit).hint).c_str());
+			if (s_HoverHint.empty() && hit >= 0 && !It(hit).hint.empty()) s_HoverHint = Format(It(hit).hint);
+			if (s_HoverHint.empty() && hit < 0 && on_edge)
+				s_HoverHint = "The game's screen ends here. The PDA runs on past it, so the game shows it cut like this.";
+			// the canvas is still the last item: its tooltip waits like every other one
+			if (!s_HoverHint.empty()) XUI::Tip(s_HoverHint.c_str());
 			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) s_P.pressed = hit >= 0 ? hit : -1;
 			if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
 			{
 				if (s_P.pressed >= 0 && s_P.pressed == hit) Click(hit);
 				s_P.pressed = -1;
 			}
-			// the wheel scrolls the list under the mouse, or zooms the map
-			const float wheel = ImGui::GetIO().MouseWheel;
-			if (wheel != 0.f)
-			{
-				for (int i = (int)s_P.abs.size() - 1; i >= 0; --i)
-				{
-					if (!s_P.abs[i].shown || !Inside(m, s_P.abs[i])) continue;
-					if (It(i).kind == "list")
-					{
-						int rows = 0;
-						for (u32 c = 0; c < kids[i].size(); ++c) if (It(kids[i][c]).kind == "row") ++rows;
-						const float content = rows * (It(i).row_h + It(i).gap);
-						float& sc = s_P.scroll[i];
-						sc = clampr(sc - wheel * 60.f, 0.f, _max(0.f, content - It(i).h));
-						break;
-					}
-					if (It(i).kind == "map")
-					{
-						s_P.map_zoom = clampr(s_P.map_zoom * (wheel > 0 ? 1.25f : 0.8f), 1.f, 12.f);
-						break;
-					}
-				}
-			}
-			// dragging the map pans it
+			// dragging the map with the left button pans it, the way the game's map does
 			if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && s_P.pressed < 0)
 				for (int i = (int)s_P.abs.size() - 1; i >= 0; --i)
 				{
@@ -1239,9 +1402,8 @@ namespace
 					{
 						const float bw = lm->bound.z - lm->bound.x, bh = lm->bound.w - lm->bound.y;
 						const float fit = _min((s_P.abs[i].b.x - s_P.abs[i].a.x) / bw, (s_P.abs[i].b.y - s_P.abs[i].a.y) / bh) * s_P.map_zoom;
-						const ImVec2 dd = ImGui::GetIO().MouseDelta;
-						s_P.map_center.x -= dd.x / fit;
-						s_P.map_center.y += dd.y / fit;
+						s_P.map_center.x -= io.MouseDelta.x / fit;
+						s_P.map_center.y += io.MouseDelta.y / fit;
 					}
 					break;
 				}
@@ -1249,28 +1411,51 @@ namespace
 		else if (over && s_P.closed && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			s_P.closed = false;
 		if (!over && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) s_P.pressed = -1;
+		if (dragging)
+			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
 
 		// a script action or a signal leaves a note on the screen for a moment
 		if (!s_P.toast.empty() && GetTickCount() < s_P.toast_until)
 		{
-			const ImVec2 ts = ImGui::CalcTextSize(s_P.toast.c_str());
+			const float wrap = _max(ImGui::GetFontSize(), (sb.x - sa.x) - XUI::Pt(48.f));
+			const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, wrap, s_P.toast.c_str());
 			const ImVec2 c((sa.x + sb.x) * 0.5f, sb.y - 40.f * s_P.ky);
-			s_DL->AddRectFilled(ImVec2(c.x - ts.x * 0.5f - 12, c.y - ts.y * 0.5f - 7), ImVec2(c.x + ts.x * 0.5f + 12, c.y + ts.y * 0.5f + 7),
-				IM_COL32(0, 0, 0, 200), 8.f);
-			s_DL->AddText(ImVec2(c.x - ts.x * 0.5f, c.y - ts.y * 0.5f), IM_COL32(255, 255, 255, 255), s_P.toast.c_str());
+			const ImVec2 pad(XUI::Pt(12.f), XUI::Pt(7.f));
+			s_DL->AddRectFilled(ImVec2(c.x - ts.x * 0.5f - pad.x, c.y - ts.y * 0.5f - pad.y), ImVec2(c.x + ts.x * 0.5f + pad.x, c.y + ts.y * 0.5f + pad.y),
+				Tok(ColorToken::Overlay, .92f), XUI::Pt(6.f));
+			s_DL->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(floorf(c.x - ts.x * 0.5f), floorf(c.y - ts.y * 0.5f)), Tok(ColorToken::Text),
+				s_P.toast.c_str(), nullptr, wrap);
 		}
 		s_DL->PopClipRect();
 		s_DL = 0;
 	}
 
-	// ============================================================== the window
-	int GrowText(ImGuiInputTextCallbackData* data)
+	// ============================================================== the tab
+	// pt (docs/UI_DESIGN.md, sections 2 and 6): the Details pane, the Source pane and what the canvas keeps
+	constexpr float kDetailsW	= 320.f;
+	constexpr float kSideMin	= 220.f;
+	constexpr float kCanvasMinW	= 400.f;
+	constexpr float kCanvasMinH	= 260.f;
+	constexpr float kSourceH	= 240.f;
+	constexpr float kSourceMin	= 120.f;
+
+	const char* const kTabIds[] = { "problems", "pages", "vars", "log" };
+
+	int CodeCallback(ImGuiInputTextCallbackData* data)
 	{
 		if (ImGuiInputTextFlags_CallbackResize == data->EventFlag)
 		{
 			xr_string* text = (xr_string*)data->UserData;
 			text->resize((size_t)data->BufTextLen);
 			data->Buf = &(*text)[0];
+		}
+		else if (ImGuiInputTextFlags_CallbackAlways == data->EventFlag)
+		{
+			// the caret's line: the pane follows it while it is typed into
+			int line = 0;
+			for (int i = 0; i < data->CursorPos && i < data->BufTextLen; ++i)
+				line += data->Buf[i] == '\n';
+			s_P.cursor_line = line;
 		}
 		return 0;
 	}
@@ -1283,124 +1468,394 @@ namespace
 		return true;
 	}
 
-	void DrawToolbar()
+	xr_string ShownName()
 	{
-		const float em = ImGui::GetFontSize();
-		ImGui::TextUnformatted(s_P.rel.c_str());
-		ImGui::SameLine();
-		const xr_string used = EditorPda::UsedLayout();
-		const bool is_used = EditorPda::SamePath(used.c_str(), s_P.rel.c_str());
-		if (is_used) ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.f), "used by the module");
-		else
-		{
-			if (ImGui::SmallButton("Use in Module"))
-			{
-				xr_string err;
-				if (!EditorPda::Use(s_P.rel.c_str(), err)) Toast(err);
-				else Toast("mod.ltx: [pda] layout = " + s_P.rel);
-			}
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("Writes [pda] layout = %s into mod.ltx: the game shows this interface in the PDA.", s_P.rel.c_str());
-		}
-		ImGui::SameLine(0, em);
-		if (ImGui::SmallButton(s_P.wide ? "16:9" : "4:3")) s_P.wide = !s_P.wide;
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Screen shape: 4:3 draws pda.xml, 16:9 draws pda_16.xml");
-		ImGui::SameLine();
-		if (ImGui::SmallButton(s_P.lang == "eng" ? "eng" : "rus"))
-		{
-			s_P.lang = s_P.lang == "eng" ? "rus" : "eng";
-			Reload(true);
-		}
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("The language of the texts: { rus = ..., eng = ... }");
-		ImGui::SameLine();
-		if (ImGui::SmallButton(s_P.zoom > 0 ? "100%" : "Fit")) s_P.zoom = s_P.zoom > 0 ? 0.f : 1.f;
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fit the window, or show the 1024x768 PDA pixel for pixel");
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Restart")) ResetState();
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Back to the start page, every var and panel as the file declares them");
-		ImGui::SameLine(0, em);
-		if (ImGui::SmallButton("Map Key")) OpenKey("map");
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("What the map key opens: %s", s_P.layout.key_map.c_str());
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Contacts Key")) OpenKey("contacts");
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("What the contacts key opens: %s", s_P.layout.key_contacts.c_str());
-		ImGui::SameLine(0, em);
-		ImGui::Checkbox("Source", &s_P.show_source);
-		ImGui::SameLine();
-		ImGui::Checkbox("Details", &s_P.show_side);
+		return s_P.rel.empty() ? NqUtil::BaseName(s_P.path.c_str()) : s_P.rel;
 	}
 
-	void DrawSide(float height)
+	// the game's textures, fonts and reader are read again; the file too, unless the Source pane holds edits
+	void ReloadAll()
+	{
+		EditorPda::Invalidate();
+		EditorPdaInternal::DropReader();
+		if (s_P.text_dirty) Reload(true);
+		else LoadFile(s_P.path.c_str());
+	}
+
+	// the Source pane's edits go only after a question that names the file
+	void RevertText()
+	{
+		if (!s_P.text_dirty)
+		{
+			LoadFile(s_P.path.c_str());
+			return;
+		}
+		const xr_string headline = "Drop the unsaved edits of " + ShownName() + "?";
+		XUI::ConfirmSpec spec;
+		spec.id = "pda_revert";
+		spec.title = "Revert PDA Interface";
+		spec.headline = headline.c_str();
+		spec.items.push_back("The Source pane's edits since the last save");
+		spec.consequence = "The file stays as it is on disk; the edits are lost.";
+		spec.action = "Revert";
+		spec.destructive = true;
+		const xr_string path = s_P.path;
+		XUI::Confirm(spec, [path](XUI::Answer answer)
+		{
+			if (answer == XUI::Answer::Yes && s_P.path == path) LoadFile(path.c_str());
+		});
+	}
+
+	void DrawToolbar(XUI::Toolbar& tb)
+	{
+		const char* clean = "No unsaved edits";
+		tb.Group(3);
+		if (tb.Action("save", XUI::Icon::Save, "Save", s_P.text_dirty ? "Write the Source pane's text to the file (Ctrl+S)" : clean, s_P.text_dirty))
+		{
+			xr_string err;
+			if (SaveText(err)) Reload(true);
+			else XUI::Notice(XUI::Tone::Error, "Save failed", err.c_str());
+		}
+		if (tb.Action("revert", XUI::Icon::Undo, "Revert", s_P.text_dirty ? "Drop the unsaved edits and read the file again" : clean, s_P.text_dirty))
+			RevertText();
+		if (tb.Action("reload", XUI::Icon::Reload, "Reload", "Read the game's textures, fonts and layout reader again, and the file when the Source pane holds no edits"))
+			ReloadAll();
+
+		// in the overflow each of these is a set of radio items
+		tb.Group(5);
+		static const char* const kAspects[] = { "4:3", "16:9" };
+		static const char* const kLangs[] = { "rus", "eng" };
+		static const char* const kZooms[] = { "Fit", "100%" };
+		int aspect = s_P.wide ? 1 : 0;
+		if (tb.Segmented("aspect", "Aspect", &aspect, kAspects, 2, "The device's shape: 4:3 draws the game's pda.xml, 16:9 its pda_16.xml"))
+			s_P.wide = aspect == 1;
+		int lang = s_P.lang == "eng" ? 1 : 0;
+		if (tb.Segmented("lang", "Language", &lang, kLangs, 2, "The language the texts show in: { rus = ..., eng = ... }"))
+		{
+			s_P.lang = kLangs[lang];
+			Reload(true);
+		}
+		int zoom = s_P.zoom <= 0.f ? 0 : s_P.zoom == 1.f ? 1 : -1;
+		if (tb.Segmented("zoom", "Zoom", &zoom, kZooms, 2,
+				"Fit the device into the canvas (F), or show the game's 1024 x 768 PDA pixel for pixel. The wheel zooms at the mouse; the right button drags."))
+		{
+			s_P.zoom = zoom == 1 ? 1.f : 0.f;
+			s_P.pan = ImVec2(0.f, 0.f);
+		}
+
+		tb.Group(0);
+		if (tb.Action("reset_state", XUI::Icon::Refresh, "Reset State", "Back to the start page, with every var and panel as the file declares them"))
+			ResetState();
+
+		tb.Group(4);
+		if (tb.Action("source", XUI::Icon::FileScript, "Source", "Show the layout's text under the preview", true, s_P.show_source))
+			s_P.show_source = !s_P.show_source;
+		if (tb.Action("details", XUI::Icon::SidebarRight, "Details", "Show the problems, pages, vars and the action log beside the preview", true, s_P.show_side))
+			s_P.show_side = !s_P.show_side;
+	}
+
+	void DrawStatus()
+	{
+		const EditorPda::SPage* page = s_P.layout.FindPage(s_P.page.c_str());
+		const xr_string where = !s_P.stock.empty() ? "Stock " + s_P.stock : page && !page->title.empty() ? page->title : s_P.page;
+		const xr_string text = NqUtil::Format("Page: %s \xC2\xB7 %s \xC2\xB7 %s \xC2\xB7 %.0f%%", where.c_str(), s_P.wide ? "16:9" : "4:3",
+			s_P.lang.c_str(), s_P.ky * 100.f);
+		ImGui::TextUnformatted(text.c_str());
+	}
+
+	void MutedLine(const char* text, XUI::Clip clip = XUI::Clip::End)
+	{
+		XUI::FontScope small_font(XUI::Font::Small);
+		ImGui::PushStyleColor(ImGuiCol_Text, Tok(ColorToken::TextMuted));
+		XUI::TextEllipsis(text, -1.f, clip);
+		ImGui::PopStyleColor();
+	}
+
+	// what the tab shows and whether the module uses it
+	void DrawDetailsHeader()
+	{
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+		const ImVec2 p = ImGui::GetCursorScreenPos();
+		const float line = ImGui::GetTextLineHeight();
+		XUI::DrawIcon(dl, XUI::Icon::PdaInterface, ImVec2(p.x, floorf(p.y + (line - XUI::Pt(16.f)) * .5f)), 16.f, Tok(ColorToken::TextSecondary));
+		ImGui::Dummy(ImVec2(XUI::Pt(16.f), line));
+		ImGui::SameLine(0.f, XUI::Pt(6.f));
+		XUI::TextEllipsis(ShownName().c_str(), -1.f, XUI::Clip::Start);
+		const xr_string used = EditorPda::UsedLayout();
+		if (EditorPda::SamePath(used.c_str(), s_P.rel.c_str()))
+		{
+			XUI::Badge("Used by the module", XUI::Tone::Success);
+			XUI::Tip("mod.ltx [pda] layout names this file: the game shows it in the PDA.");
+		}
+		else
+		{
+			if (XUI::Button("Use in Module"))
+			{
+				xr_string err;
+				if (!EditorPda::Use(s_P.rel.c_str(), err)) XUI::Notice(XUI::Tone::Error, "Use in Module", err.c_str());
+				else Toast("mod.ltx: [pda] layout = " + s_P.rel);
+			}
+			const xr_string tip = "Write [pda] layout = " + s_P.rel + " into mod.ltx: the game shows this interface in the PDA.";
+			XUI::Tip(tip.c_str());
+		}
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	}
+
+	void DrawProblems()
 	{
 		const EditorPda::SLayout& l = s_P.layout;
-		ImGui::BeginChild("pda_side", ImVec2(0, height), true);
-		ImGui::TextDisabled("Pages");
-		for (u32 i = 0; i < l.pages.size(); ++i)
-		{
-			const EditorPda::SPage& p = l.pages[i];
-			const xr_string label = p.stock.empty() ? NqUtil::Format("%s  (%s)", p.title.c_str(), p.id.c_str())
-				: NqUtil::Format("%s  (%s, stock %s)", p.title.c_str(), p.id.c_str(), p.stock.c_str());
-			if (ImGui::Selectable(label.c_str(), s_P.page == p.id)) SetPage(p.id);
-		}
-		ImGui::Separator();
-		ImGui::TextDisabled("Vars");
-		xr_vector<xr_string> names;
-		for (u32 i = 0; i < l.vars.size(); ++i) names.push_back(l.vars[i].first);
-		for (xr_map<xr_string, xr_string>::const_iterator it = s_P.vars.begin(); it != s_P.vars.end(); ++it)
-			if (std::find(names.begin(), names.end(), it->first) == names.end()) names.push_back(it->first);
-		for (u32 i = 0; i < names.size(); ++i)
-		{
-			xr_string v;
-			VarOf(names[i], v);
-			ImGui::Text("{%s} = %s", names[i].c_str(), v.c_str());
-		}
-		ImGui::Separator();
-		ImGui::TextDisabled("Actions");
-		for (int i = (int)s_P.log.size() - 1; i >= 0 && i >= (int)s_P.log.size() - 14; --i)
-			ImGui::TextUnformatted(s_P.log[i].c_str());
-		ImGui::Separator();
-		const int missing_errors = l.errors;
-		ImGui::TextDisabled("Problems (%d error(s), %d warning(s))", missing_errors, l.warnings);
 		if (!s_P.read_ok)
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s%s", s_P.read_line ? NqUtil::Format("line %d: ", s_P.read_line).c_str() : "",
-				s_P.read_err.c_str());
+		{
+			const xr_string text = s_P.read_line ? NqUtil::Format("Line %d: %s", s_P.read_line, s_P.read_err.c_str()) : s_P.read_err;
+			XUI::StatusText(XUI::Tone::Error, text.c_str());
+			if (s_P.read_line > 0 && XUI::Button("Go to Line"))
+			{
+				s_P.show_source = true;
+				s_P.goto_line = s_P.read_line;
+			}
+			ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		}
+		else if (l.problems.empty())
+			XUI::EmptyState(XUI::Icon::Success, "No problems", "The game's reader accepts this layout.");
 		for (u32 i = 0; i < l.problems.size(); ++i)
 		{
 			const EditorPda::SProblem& p = l.problems[i];
-			const ImVec4 c = p.code.size() && p.code[0] == 'E' ? ImVec4(1.f, 0.45f, 0.45f, 1.f) : ImVec4(1.f, 0.8f, 0.35f, 1.f);
-			ImGui::TextColored(c, "%s", p.code.c_str());
-			ImGui::SameLine();
-			ImGui::TextWrapped("%s: %s", p.path.empty() ? "layout" : p.path.c_str(), p.message.c_str());
+			ImGui::PushID(int(i));
+			const bool error = !p.code.empty() && p.code[0] == 'E';
+			XUI::Badge(p.code.c_str(), error ? XUI::Tone::Error : XUI::Tone::Warning);
+			ImGui::SameLine(0.f, XUI::Pt(8.f));
+			MutedLine(p.path.empty() ? "layout" : p.path.c_str());
+			ImGui::PushTextWrapPos(0.f);
+			ImGui::TextUnformatted(p.message.c_str());
+			ImGui::PopTextWrapPos();
+			ImGui::Dummy(ImVec2(0.f, XUI::Pt(6.f)));
+			ImGui::PopID();
 		}
-		ImGui::Separator();
-		ImGui::TextDisabled("Reader: %s", EditorPda::ReaderSource());
+		MutedLine((xr_string("Checked by ") + EditorPda::ReaderSource()).c_str(), XUI::Clip::Start);
+	}
+
+	void DrawPages()
+	{
+		const EditorPda::SLayout& l = s_P.layout;
+		if (l.pages.empty())
+			XUI::EmptyState(XUI::Icon::PdaInterface, "No pages", "The layout declares no page.");
+		else
+		{
+			if (XUI::BeginList("##pages", ImVec2(0.f, 22.f * l.pages.size() + 10.f)))
+				for (u32 i = 0; i < l.pages.size(); ++i)
+				{
+					const EditorPda::SPage& p = l.pages[i];
+					if (XUI::ListRow(p.id.c_str(), s_P.page == p.id))
+					{
+						s_P.closed = false;
+						SetPage(p.id);
+					}
+					const float room = ImGui::GetContentRegionAvail().x;
+					const char* title = p.title.empty() ? p.id.c_str() : p.title.c_str();
+					XUI::TextEllipsis(title, room * .6f);
+					ImGui::SameLine(0.f, XUI::Pt(8.f));
+					const xr_string id = p.stock.empty() ? p.id : p.id + " \xC2\xB7 stock " + p.stock;
+					ImGui::PushStyleColor(ImGuiCol_Text, Tok(ColorToken::TextMuted));
+					XUI::TextEllipsis(id.c_str());
+					ImGui::PopStyleColor();
+				}
+			XUI::EndList();
+		}
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		if (XUI::Section("Keys", true))
+		{
+			struct SKey { const char* key; const char* label; const xr_string* action; };
+			const SKey keys[] = { { "map", "Map key", &l.key_map }, { "contacts", "Contacts key", &l.key_contacts }, { "tasks", "Tasks key", &l.key_tasks } };
+			if (XUI::BeginList("##keys", ImVec2(0.f, 22.f * 3.f + 10.f)))
+				for (const SKey& k : keys)
+				{
+					if (XUI::ListRow(k.key, false))
+						OpenKey(k.key);
+					const float room = ImGui::GetContentRegionAvail().x;
+					XUI::TextEllipsis(k.label, room * .45f);
+					ImGui::SameLine(0.f, XUI::Pt(8.f));
+					ImGui::PushStyleColor(ImGuiCol_Text, Tok(ColorToken::TextMuted));
+					XUI::TextEllipsis(k.action->empty() ? "the stock section" : k.action->c_str());
+					ImGui::PopStyleColor();
+				}
+			XUI::EndList();
+			MutedLine("Click a key to press it in the preview.");
+			XUI::EndSection();
+		}
+	}
+
+	void DrawVars()
+	{
+		const EditorPda::SLayout& l = s_P.layout;
+		xr_vector<xr_string> names;
+		for (u32 i = 0; i < l.vars.size(); ++i) names.push_back(l.vars[i].first);
+		const size_t declared = names.size();
+		for (xr_map<xr_string, xr_string>::const_iterator it = s_P.vars.begin(); it != s_P.vars.end(); ++it)
+			if (std::find(names.begin(), names.end(), it->first) == names.end()) names.push_back(it->first);
+		if (names.empty())
+		{
+			XUI::EmptyState(XUI::Icon::Variable, "No vars", "The layout declares none, and no action has set one yet.");
+			return;
+		}
+		if (XUI::BeginPropertyGrid("pda_vars"))
+		{
+			for (u32 i = 0; i < names.size(); ++i)
+			{
+				xr_string v;
+				VarOf(names[i], v);
+				const xr_string label = "{" + names[i] + "}";
+				if (XUI::PropertyRow(label.c_str(), i < declared ? "Declared by the layout" : "Set by an action in the preview", XUI::PropReadOnly))
+					XUI::PropertyText(v.c_str());
+			}
+			XUI::EndPropertyGrid();
+		}
+	}
+
+	void DrawLog()
+	{
+		if (s_P.log.empty())
+		{
+			XUI::EmptyState(XUI::Icon::Log, "No actions yet", "Click a button in the preview: every action it runs is listed here, the newest first.");
+			return;
+		}
+		if (XUI::Button("Clear", XUI::Kind::Ghost))
+			s_P.log.clear();
+		if (XUI::BeginList("##log", ImVec2(0.f, 0.f)))
+			for (int i = (int)s_P.log.size() - 1; i >= 0; --i)
+			{
+				char id[16];
+				sprintf_s(id, "%d", i);
+				XUI::ListRow(id, false);
+				XUI::TextEllipsis(s_P.log[i].c_str());
+			}
+		XUI::EndList();
+	}
+
+	void DrawDetails()
+	{
+		DrawDetailsHeader();
+		const EditorPda::SLayout& l = s_P.layout;
+		const int problems = (int)l.problems.size() + (s_P.read_ok ? 0 : 1);
+		const xr_string problems_label = problems ? NqUtil::Format("Problems (%d)###problems", problems) : xr_string("Problems###problems");
+		const char* labels[] = { problems_label.c_str(), "Pages###pages", "Vars###vars", "Log###log" };
+		// the selected tab carries the accent overline (docs/UI_DESIGN.md): its fill alone is a shade off the pane's
+		if (ImGui::BeginTabBar("##pda_details", ImGuiTabBarFlags_FittingPolicyShrink | ImGuiTabBarFlags_DrawSelectedOverline))
+		{
+			for (int t = 0; t < 4; ++t)
+			{
+				if (!ImGui::BeginTabItem(labels[t], nullptr, s_P.want_tab == t ? ImGuiTabItemFlags_SetSelected : 0))
+					continue;
+				s_P.tab = t;
+				if (ImGui::BeginChild("##tab", ImVec2(0.f, 0.f)))
+				{
+					if (t == 0) DrawProblems();
+					else if (t == 1) DrawPages();
+					else if (t == 2) DrawVars();
+					else DrawLog();
+				}
+				ImGui::EndChild();
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
+		}
+		s_P.want_tab = -1;
+	}
+
+	// The layout's text: Mono, line numbers, the reader's error line marked. The text field is as tall as the
+	// text, so this pane is what scrolls - the gutter scrolls with it - and it follows the caret.
+	void DrawCode()
+	{
+		XUI::FontScope mono(XUI::Font::Mono);
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const float line_h = ImGui::GetTextLineHeight();
+		int lines = 1;
+		for (size_t i = 0; i < s_P.text.size(); ++i) lines += s_P.text[i] == '\n';
+		const float gutter = ImGui::CalcTextSize("00000").x + XUI::Pt(12.f);
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, Tok(ColorToken::Inset));
+		const bool open = ImGui::BeginChild("##pda_code", ImVec2(0.f, 0.f));
+		ImGui::PopStyleColor();
+		if (open)
+		{
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+			const ImVec2 origin = ImGui::GetCursorScreenPos();
+			const ImVec2 win = ImGui::GetWindowPos();
+			const float text_y = origin.y + style.FramePadding.y;
+			const float view_h = ImGui::GetWindowHeight();
+			const float scroll = ImGui::GetScrollY();
+			const float right = origin.x + ImGui::GetContentRegionAvail().x;
+			const int error = s_P.read_ok ? 0 : s_P.read_line;
+			if (error > 0)
+				dl->AddRectFilled(ImVec2(origin.x, text_y + (error - 1) * line_h), ImVec2(right, text_y + error * line_h), XUI::ToneColor(XUI::Tone::Error, .16f));
+			const int first = _max(0, int(scroll / line_h) - 1), last = _min(lines, first + int(view_h / line_h) + 3);
+			for (int i = first; i < last; ++i)
+			{
+				char num[16];
+				sprintf_s(num, "%d", i + 1);
+				const ImU32 col = i + 1 == error ? XUI::ToneColor(XUI::Tone::Error) : i == s_P.cursor_line ? Tok(ColorToken::TextSecondary) : Tok(ColorToken::TextDisabled);
+				dl->AddText(ImVec2(origin.x + gutter - XUI::Pt(8.f) - ImGui::CalcTextSize(num).x, text_y + i * line_h), col, num);
+			}
+			dl->AddLine(ImVec2(origin.x + gutter - XUI::Pt(3.f), win.y), ImVec2(origin.x + gutter - XUI::Pt(3.f), win.y + view_h), Tok(ColorToken::BorderSubtle));
+
+			ImGui::SetCursorScreenPos(ImVec2(origin.x + gutter, origin.y));
+			if (s_P.text.capacity() < s_P.text.size() + 4096) s_P.text.reserve(s_P.text.size() + 16384);
+			const float input_h = _max(lines * line_h + style.FramePadding.y * 2.f + line_h * 2.f, view_h);
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, Tok(ColorToken::Inset, 0.f));
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.f);
+			const bool enter = ImGui::InputTextMultiline("##pda_text", &s_P.text[0], s_P.text.capacity() + 1,
+				ImVec2(_max(1.f, ImGui::GetContentRegionAvail().x), input_h),
+				ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_CallbackAlways | ImGuiInputTextFlags_AllowTabInput |
+				ImGuiInputTextFlags_EnterReturnsTrue, &CodeCallback, &s_P.text);
+			ImGui::PopStyleVar(2);
+			ImGui::PopStyleColor();
+			if (ImGui::IsItemEdited())
+				s_P.text_dirty = true;
+			// Ctrl+Enter applies; Ctrl+S saves - the shell leaves the keys to a text field that has them
+			if (enter)
+				Reload(true);
+			if (ImGui::IsItemActive() && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && s_P.text_dirty)
+			{
+				xr_string err;
+				if (SaveText(err)) Reload(true);
+				else XUI::Notice(XUI::Tone::Error, "Save failed", err.c_str());
+			}
+			if (ImGui::IsItemActive() && s_P.cursor_line != s_P.cursor_seen)
+			{
+				s_P.cursor_seen = s_P.cursor_line;
+				const float y = style.FramePadding.y + s_P.cursor_line * line_h;
+				const float room = view_h - style.ScrollbarSize;
+				if (y < scroll) ImGui::SetScrollY(y);
+				else if (y + line_h > scroll + room) ImGui::SetScrollY(y + line_h - room);
+			}
+			if (s_P.goto_line > 0)
+			{
+				ImGui::SetScrollY(_max(0.f, style.FramePadding.y + (s_P.goto_line - 1) * line_h - view_h / 3.f));
+				s_P.goto_line = 0;
+			}
+		}
 		ImGui::EndChild();
 	}
 
-	void DrawSource(float height)
+	void DrawSource()
 	{
-		const float em = ImGui::GetFontSize();
-		ImGui::BeginChild("pda_source", ImVec2(0, height), true);
-		if (ImGui::SmallButton("Apply"))
-			Reload(true);
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the text in the preview without saving it");
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Save"))
 		{
-			xr_string err;
-			if (SaveText(err)) { Reload(true); Toast("Saved " + s_P.rel); }
-			else Toast(err);
+			XUI::Toolbar tb("pda_source", XUI::ToolbarPanel);
+			tb.Group(2);
+			if (tb.Action("apply", XUI::Icon::Check, "Apply", "Show the text in the preview without saving it (Ctrl+Enter)"))
+				Reload(true);
+			if (!s_P.read_ok && s_P.read_line > 0)
+			{
+				const xr_string label = NqUtil::Format("Line %d", s_P.read_line);
+				if (tb.Action("goto_error", XUI::Icon::Error, label.c_str(), "Scroll to the line the reader stopped at"))
+					s_P.goto_line = s_P.read_line;
+			}
+			tb.Spring();
+			tb.Group(1);
+			if (!s_P.read_ok) tb.Status(s_P.read_err.c_str(), XUI::Tone::Error);
+			else if (s_P.text_dirty) tb.Status("Unsaved edits", XUI::Tone::Warning);
+			else tb.Status("Saved", XUI::Tone::Muted);
 		}
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Revert")) LoadFile(s_P.path.c_str());
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reads the file again; unsaved edits of the text are dropped");
-		if (s_P.text_dirty) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "unsaved"); }
-		if (s_P.text.capacity() < s_P.text.size() + 4096) s_P.text.reserve(s_P.text.size() + 16384);
-		if (ImGui::InputTextMultiline("##pda_text", &s_P.text[0], s_P.text.capacity() + 1, ImVec2(-1.f, -1.f),
-			ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, &GrowText, &s_P.text))
-			s_P.text_dirty = true;
-		(void)em;
-		ImGui::EndChild();
+		DrawCode();
 	}
 
 	void Poll()
@@ -1564,14 +2019,79 @@ void EditorPda::Invalidate()
 	s_Maps.clear();
 }
 
+namespace
+{
+	void DrawPreviewBody();
+
+	// The preview is the editor's "pda" tab: one of them, and it switches to the next layout it is given.
+	// `update` hands the open tab its new file (the path its menu reveals).
+	void ShowTab(bool activate, bool update = false)
+	{
+		if (XUI::Shell::IsOpen("pda") && !update)
+		{
+			if (activate) XUI::Shell::Activate("pda");
+			return;
+		}
+		XUI::Shell::DocDesc d;
+		d.id = "pda";
+		d.kind = "pda";
+		d.path = s_P.path;
+		d.icon = XUI::Icon::PdaInterface;
+		d.padded = false;
+		d.label = [] { xr_string name = NqUtil::BaseName(s_P.path.c_str()); const size_t dot = name.rfind('.'); if (dot != xr_string::npos && dot) name.resize(dot); return name.empty() ? xr_string("PDA") : name; };
+		d.tooltip = [] { return s_P.rel.empty() ? xr_string("The module's PDA interface") : s_P.rel; };
+		d.alive = [] { return s_P.open && EditorProject::Active(); };
+		d.dirty = [] { return s_P.text_dirty; };
+		d.toolbar = [](XUI::Toolbar& tb) { DrawToolbar(tb); };
+		d.body = [] { DrawPreviewBody(); };
+		d.status = [] { DrawStatus(); };
+		d.save = [](xr_string& err) { if (!SaveText(err)) return false; Reload(true); return true; };
+		d.discard = [] { LoadFile(s_P.path.c_str()); };
+		// F fits the device into the canvas
+		d.shortcut = [](int key, int mods)
+		{
+			if (key != ImGuiKey_F || mods) return false;
+			s_P.zoom = 0.f;
+			s_P.pan = ImVec2(0.f, 0.f);
+			return true;
+		};
+		d.on_close = [] { s_P.open = false; };
+		d.restore = [] { return s_P.rel; };
+		XUI::Shell::Open(d, activate);
+	}
+
+	void OpenPath(const xr_string& path)
+	{
+		if (LoadFile(path.c_str()))
+		{
+			s_P.open = true;
+			ShowTab(true, true);
+		}
+	}
+}
+
 void EditorPda::Open(LPCSTR path)
 {
 	if (!path || !path[0]) return;
-	if (LoadFile(path))
+	// another layout while the text pane holds edits: they are not dropped without a question
+	if (s_P.open && s_P.text_dirty && 0 != _stricmp(path, s_P.path.c_str()))
 	{
-		s_P.open = true;
-		s_P.focus = 3;
+		XUI::Strings what;
+		what.push_back(ShownName());
+		const xr_string next = path;
+		XUI::UnsavedPrompt("pda_retarget", what, [next](XUI::Answer answer)
+		{
+			if (answer == XUI::Answer::Cancel) return;
+			if (answer == XUI::Answer::Yes)
+			{
+				xr_string err;
+				if (!SaveText(err)) { XUI::Notice(XUI::Tone::Error, "Save failed", err.c_str()); return; }
+			}
+			OpenPath(next);
+		});
+		return;
 	}
+	OpenPath(path);
 }
 
 bool EditorPda::IsOpen() { return s_P.open; }
@@ -1580,49 +2100,94 @@ void EditorPda::DrawUI()
 {
 	if (!s_P.open) return;
 	if (!EditorProject::Active()) { s_P.open = false; return; }
+	// the file follows the disk whether or not the tab is up
 	Poll();
-	if (s_P.focus > 0) { ImGui::SetNextWindowFocus(); --s_P.focus; }
-	// a tab beside the viewport, like a quest graph
-	UI->DockNextWindowWith("Render");
-	ImGui::SetNextWindowSize(ImVec2(1100.f, 760.f), ImGuiCond_FirstUseEver);
-	const xr_string title = NqUtil::Format("PDA: %s%s###pda_preview", NqUtil::BaseName(s_P.path.c_str()).c_str(),
-		s_P.text_dirty ? " *" : "");
-	bool open = true;
-	if (!ImGui::Begin(title.c_str(), &open))
+	ShowTab(false);
+}
+
+namespace
+{
+// canvas | Details, over the Source pane; Details and Source keep their pt size, the canvas takes every resize
+void DrawPreviewBody()
+{
+	s_P.drawn_frame = ImGui::GetFrameCount();
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const ImGuiWindowFlags still = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+	float source_h = kSourceH;
+	if (s_P.show_source)
+		XUI::SplitterTail("pda.source", false, &source_h, kCanvasMinH, kSourceMin, kSourceH);
+	s_P.source_h = s_P.show_source ? source_h : 0.f;
+	const float top_h = s_P.show_source ? _max(1.f, ImGui::GetContentRegionAvail().y - XUI::Pt(source_h) - style.ItemSpacing.y) : 0.f;
+	if (ImGui::BeginChild("##pda_top", ImVec2(0.f, top_h), ImGuiChildFlags_None, still))
 	{
-		ImGui::End();
-		if (!open) s_P.open = false;
-		return;
+		float details_w = kDetailsW;
+		if (s_P.show_side)
+			XUI::SplitterTail("pda.details", true, &details_w, kCanvasMinW, kSideMin, kDetailsW);
+		s_P.details_w = s_P.show_side ? details_w : 0.f;
+		const float canvas_w = s_P.show_side ? _max(1.f, ImGui::GetContentRegionAvail().x - XUI::Pt(details_w) - style.ItemSpacing.x) : 0.f;
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, Tok(ColorToken::Canvas));
+		const bool canvas = ImGui::BeginChild("##pda_canvas", ImVec2(canvas_w, 0.f), ImGuiChildFlags_None, still);
+		ImGui::PopStyleColor();
+		if (canvas)
+			DrawCanvas(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail());
+		ImGui::EndChild();
+		if (s_P.show_side)
+		{
+			ImGui::SameLine();
+			if (ImGui::BeginChild("##pda_details", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding))
+				DrawDetails();
+			ImGui::EndChild();
+		}
 	}
-	if (!open) s_P.open = false;
-	DrawToolbar();
-	ImGui::Separator();
-	const ImVec2 avail = ImGui::GetContentRegionAvail();
-	const float em = ImGui::GetFontSize();
-	const float side_w = s_P.show_side ? _min(em * 22.f, avail.x * 0.35f) : 0.f;
-	const float source_h = s_P.show_source ? _max(avail.y * 0.38f, em * 8.f) : 0.f;
-	const ImVec2 canvas(_max(avail.x - side_w - (side_w > 0 ? 8.f : 0.f), 64.f), _max(avail.y - source_h, 64.f));
-	ImGui::BeginChild("pda_canvas", canvas, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-	DrawDevice(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail());
 	ImGui::EndChild();
-	if (s_P.show_side)
+	if (s_P.show_source)
 	{
-		ImGui::SameLine();
-		DrawSide(canvas.y);
+		if (ImGui::BeginChild("##pda_source", ImVec2(0.f, 0.f), ImGuiChildFlags_None, still))
+			DrawSource();
+		ImGui::EndChild();
 	}
-	if (s_P.show_source) DrawSource(0.f);
-	ImGui::End();
+}
 }
 
 //==============================================================================
 // MCP pda_preview
 //==============================================================================
+namespace
+{
+	void AnswerPreview(xr_string& out, bool owed);
+}
+
 void EditorPda::McpPreview(LPCSTR raw, xr_string& out)
 {
 	if (!EditorProject::Active()) { NqUtil::JsonError(out, "no active project"); return; }
-	xr_string action = "state", path;
-	NqUtil::ArgString(raw, "action", action);
+	// the pump's second read of a pending answer, once its frames are drawn: it applies nothing
+	if (NqUtil::ArgBool(raw, "answer_only", false)) { AnswerPreview(out, false); return; }
+	xr_string action, path;
+	// ArgString empties what it does not find: the default goes in after it
+	if (!NqUtil::ArgString(raw, "action", action) || action.empty())
+		action = "state";
 	NqUtil::ArgString(raw, "path", path);
+	const bool save = NqUtil::ArgBool(raw, "save", false), discard = NqUtil::ArgBool(raw, "discard", false);
+	// the Source pane's unsaved edits go only with save= or discard= (docs/UI_DESIGN.md, section 4, precedence)
+	const auto settle = [&]() -> bool
+	{
+		if (!s_P.text_dirty) return true;
+		if (save)
+		{
+			xr_string err;
+			if (!SaveText(err)) { NqUtil::JsonError(out, err); return false; }
+			return true;
+		}
+		if (discard)
+		{
+			LoadFile(s_P.path.c_str());
+			return true;
+		}
+		out = "{\"ok\":false,\"error\":\"unsaved\",\"dirty\":[";
+		NqUtil::JsonPath(out, s_P.rel.c_str());
+		out += "]}";
+		return false;
+	};
 	if (!path.empty() || s_P.path.empty() || action == "open")
 	{
 		if (path.empty()) path = s_P.path.empty() ? UsedLayout() : s_P.path;
@@ -1632,15 +2197,46 @@ void EditorPda::McpPreview(LPCSTR raw, xr_string& out)
 		if (!EditorFileOps::ResolveInProject(path.c_str(), abs, err)) { NqUtil::JsonError(out, err); return; }
 		for (char* c = abs; *c; ++c)
 			if (*c == '/') *c = '\\';
-		if (0 != _stricmp(abs, s_P.path.c_str()) || action == "open")
+		const bool other = 0 != _stricmp(abs, s_P.path.c_str());
+		// another file is read after the unsaved edits are settled; the same one opened again keeps them
+		if (other && !settle()) return;
+		if (other || (action == "open" && !s_P.text_dirty))
 		{
 			if (!LoadFile(abs)) { NqUtil::JsonError(out, NqUtil::Format("%s cannot be read", path.c_str())); return; }
 		}
 	}
-	if (action == "open") { s_P.open = true; s_P.focus = 3; }
-	else if (action == "close") s_P.open = false;
+	// open brings the pda tab up at once; state and the rest never switch tabs
+	if (action == "open") { s_P.open = true; ShowTab(true, true); }
+	else if (action == "close")
+	{
+		if (!settle()) return;
+		s_P.open = false;
+		XUI::Shell::Close("pda", XUI::Shell::Discard, nullptr);
+	}
 	else if (action == "reset") ResetState();
-	else if (action == "reload") LoadFile(s_P.path.c_str());
+	// reload keeps the Source pane's edits: it reads the game's side again
+	else if (action == "reload") ReloadAll();
+	else if (action == "apply")
+	{
+		// text= puts a text into the Source pane, unsaved, the way typing does; then it shows
+		xr_string text;
+		if (NqUtil::ArgString(raw, "text", text) && !text.empty())
+		{
+			xr_string disk, err;
+			NqLua::ReadFile(s_P.path.c_str(), disk, err);
+			s_P.text = text;
+			s_P.text_dirty = text != disk;
+		}
+		Reload(true);
+	}
+	else if (action == "save")
+	{
+		xr_string err;
+		if (s_P.text_dirty && !SaveText(err)) { NqUtil::JsonError(out, err); return; }
+		Reload(true);
+	}
+	// the caller has decided: the edits go without a question
+	else if (action == "revert") LoadFile(s_P.path.c_str());
 	else if (action == "page")
 	{
 		xr_string id;
@@ -1707,9 +2303,67 @@ void EditorPda::McpPreview(LPCSTR raw, xr_string& out)
 		Click(target);
 	}
 	else if (action != "state") { NqUtil::JsonError(out, NqUtil::Format("unknown action '%s'", action.c_str())); return; }
+	// the tab's panes, its Details tab and its zoom go with any action: source | details | both | none,
+	// problems | pages | vars | log, fit | 100 | <factor>
+	xr_string pane, tab, zoom;
+	if (NqUtil::ArgString(raw, "pane", pane) && !pane.empty())
+	{
+		if (pane != "source" && pane != "details" && pane != "both" && pane != "none")
+			{ NqUtil::JsonError(out, "pane must be source, details, both or none"); return; }
+		s_P.show_source = pane == "source" || pane == "both";
+		s_P.show_side = pane == "details" || pane == "both";
+	}
+	if (NqUtil::ArgString(raw, "tab", tab) && !tab.empty())
+	{
+		int t = -1;
+		for (int i = 0; i < 4; ++i)
+			if (tab == kTabIds[i]) t = i;
+		if (t < 0) { NqUtil::JsonError(out, "tab must be problems, pages, vars or log"); return; }
+		s_P.tab = s_P.want_tab = t;
+		s_P.show_side = true;
+	}
+	if (NqUtil::ArgString(raw, "zoom", zoom) && !zoom.empty())
+	{
+		const float factor = zoom == "fit" ? 0.f : zoom == "100" ? 1.f : float(atof(zoom.c_str()));
+		if (zoom != "fit" && (factor < kZoomMin || factor > kZoomMax)) { NqUtil::JsonError(out, "zoom must be fit, 100 or a factor 0.25..4"); return; }
+		s_P.zoom = factor;
+		s_P.pan = ImVec2(0.f, 0.f);
+	}
+	// a change to what the tab draws, or a tab not drawn lately, owes the frames after this call
+	const bool owed = XUI::Shell::IsActive("pda") && (action != "state" || !path.empty() || !pane.empty() || !tab.empty() ||
+		!zoom.empty() || s_P.drawn_frame < ImGui::GetFrameCount() - 1);
+	AnswerPreview(out, owed);
+}
+
+namespace
+{
+// pda_preview's answer: the panes, the zoom and what the last frame drew. `owed`: the frames after this call change it,
+// so the answer is "pending" - the MCP pump holds it for them and asks again with answer_only (docs/UI_DESIGN.md,
+// section 7: an opener's answer is current).
+void AnswerPreview(xr_string& out, bool owed)
+{
 	out = "{\"ok\":true,\"open\":";
 	out += s_P.open ? "true" : "false";
+	out += ",\"active\":";
+	out += XUI::Shell::IsActive("pda") ? "true" : "false";
+	out += ",\"text_dirty\":";
+	out += s_P.text_dirty ? "true" : "false";
+	out += NqUtil::Format(",\"panes\":{\"source\":%s,\"details\":%s,\"tab\":\"%s\",\"details_width\":%.0f,\"source_height\":%.0f},\"zoom\":",
+		s_P.show_source ? "true" : "false", s_P.show_side ? "true" : "false", kTabIds[clampr(s_P.tab, 0, 3)], s_P.details_w, s_P.source_h);
+	out += s_P.zoom > 0.f ? NqUtil::Format("%g", s_P.zoom) : xr_string("\"fit\"");
+	// what the last frame drew at: the device's lines per game line, how near it came to the canvas' edge (pt), and
+	// the reader's error line
+	out += NqUtil::Format(",\"scale\":%.3f,\"device_gap\":%.1f,\"read_line\":%d", s_P.ky, s_P.device_gap, s_P.read_ok ? 0 : s_P.read_line);
+	// where the game's screen crops the device, drawn as that edge
+	static const char* const kEdges[] = { "top", "bottom", "left", "right" };
+	out += ",\"screen_edges\":[";
+	for (u32 i = 0, n = 0; i < 4; ++i)
+		if (s_P.screen_edges & (1u << i))
+			out += NqUtil::Format("%s\"%s\"", n++ ? "," : "", kEdges[i]);
+	out += "],\"pending\":";
+	out += owed ? "true" : "false";
 	out += ",\"state\":";
 	JsonState(out);
 	out += "}";
+}
 }

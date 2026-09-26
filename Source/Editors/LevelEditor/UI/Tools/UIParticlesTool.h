@@ -10,5 +10,7 @@ private:
 	void SelByRef(bool flag);
 	void OnItemFocused(ListItem* item);
 	UIItemListForm* m_ParticlesList;
+	ListItemsVec m_Items;
+	char m_Search[64];
 	const char* m_Current;
 };

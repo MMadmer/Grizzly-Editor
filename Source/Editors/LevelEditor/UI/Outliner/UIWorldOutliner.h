@@ -1,9 +1,10 @@
 #pragma once
 
 // Unreal-style World Outliner: the whole scene grouped by object tool class or
-// shown as a view-only owner hierarchy. Unlike UIObjectList (flat, current tool
-// only) this panel shows every class at once and keeps its selection in sync
-// with the viewport both ways - rows read Selected() live, clicks drive it.
+// shown as a view-only owner hierarchy. It shows every class at once and keeps
+// its selection in sync with the viewport both ways - rows read Selected()
+// live, clicks drive it. A class row's eye is the class's own visibility, the
+// flag the Tools panel's tiles show too.
 //
 // The scene stores objects in xr_list, so rows cannot be indexed directly.
 // Per-group pointer vectors are cached and rebuilt only when the scene really
@@ -22,20 +23,27 @@ public:
 	static void		Show				();
 	static void		Close				();
 	static IC bool	IsOpen				() { return !!Form; }
+	// The Level tab, the panel open and in front; `search` also puts the keyboard into its search field
+	// (what Scene > Show Object List does since the Object List is retired)
+	static void		Focus				(bool search);
 
 	// invalidates the cache; the next frame rebuilds it
 	static void		Refresh				();
+	// Shows or hides every object of the scene (and every class) or only the selected ones; the count changed
+	static int		ShowObjects			(bool selected_only, bool visible);
 
-	// MCP: drive the search box and the type funnel from outside. `text` null
+	// MCP: drive the search box and the Filters menu from outside. `text` null
 	// keeps the current search, `selected_only` < 0 keeps the toggle, `types`
 	// null keeps the funnel - an empty string shows every type, otherwise it is
-	// a ';'-separated list of the tool class names to SHOW. Unknown names are
+	// a ';'-separated list of the tool class names to SHOW. `layout` is type or
+	// hierarchy, `sort` scene, az or za; null keeps either. Unknown names are
 	// reported rather than silently dropped.
 	static bool		McpSetFilter		(LPCSTR text, int selected_only, LPCSTR types,
-										 LPCSTR visibility, xr_string& err);
+										 LPCSTR visibility, LPCSTR layout, LPCSTR sort, xr_string& err);
 	// MCP: what the panel is filtering by right now, and how much survives it
 	static void		McpGetFilter		(xr_string& text, bool& selected_only,
 										 xr_string& hidden, xr_string& visibility,
+										 xr_string& layout, xr_string& sort,
 										 int& shown, int& total);
 
 private:
@@ -94,6 +102,8 @@ private:
 	int								m_SortApplied;
 
 	char							m_Filter[128];
+	bool							m_FocusWindow = false;
+	bool							m_FocusSearch = false;
 	bool							m_SelectedOnly;
 	// Visibility is a view-only IXRay filter: 0 = all, 1 = visible, 2 = hidden.
 	int								m_Visibility;
@@ -110,8 +120,13 @@ private:
 		bool						exclude;
 	};
 	xr_vector<STerm>				m_Terms;
-	// the funnel next to the search box: object types switched off by hand
+	// the Filters menu: object types switched off by hand
 	xr_vector<ObjClassID>			m_HiddenClasses;
+	// By Type: the class rows folded by hand
+	xr_vector<ObjClassID>			m_CollapsedClasses;
+	// where the toolbar's menus open: under their buttons as last drawn
+	ImVec2							m_FiltersAnchor;
+	ImVec2							m_MoreAnchor;
 
 	// Flat and hierarchy ranges keep independent stable identities.
 	ObjClassID						m_AnchorClass;
@@ -128,11 +143,10 @@ private:
 	bool							m_SkipNextScroll;
 
 	// scene edits are deferred: the tree must not mutate while it iterates
-	shared_str						m_DeleteName;
 	shared_str						m_PendingDeleteName;
 	shared_str						m_RenameOriginal;
-	bool							m_OpenDeletePopup;
-	bool							m_OpenRenamePopup;
+	bool							m_RenameOpen;
+	bool							m_RenameFocus;
 	char							m_RenameBuf[256];
 	char							m_RenameError[128];
 
@@ -144,14 +158,30 @@ private:
 	bool			NameMatches			(LPCSTR name) const;
 	bool			ClassHidden			(ObjClassID cls) const;
 	bool			AnyTypeHidden		() const;
-	// the funnel popup: which object types the tree shows
-	void			DrawFilterMenu		();
 	bool			Filtering			() const { return !m_Terms.empty() || m_SelectedOnly || m_Visibility; }
 	bool			HierarchyFiltering	() const { return Filtering() || AnyTypeHidden(); }
+	// how many of the Filters menu's filters are on: the badge on its button
+	int				ActiveFilters		() const;
+	void			ClearFilters		();
+	void			SetHierarchyView	(bool hierarchy);
+	bool			GroupCollapsed		(ObjClassID cls) const;
+	void			SetGroupCollapsed	(ObjClassID cls, bool collapsed);
+	void			DrawToolbar			();
+	// the Filters menu: selected only, visibility, sort and which object types the tree shows
+	void			DrawFiltersMenu		();
+	// the More menu: the layout, and showing or hiding objects
+	void			DrawMoreMenu		();
+	void			DrawFooter			(int shown, int selected);
 	void			DrawGroup			(SGroup& g);
+	// the row of an object class: its eye, its name and count; true when clicked
+	bool			DrawGroupRow		(SGroup& g, bool open, float& row_top);
 	void			DrawFlatRow			(SGroup& g, int row, CCustomObject* obj);
 	void			DrawHierarchy		();
 	void			DrawHierarchyRow	(int row, const SHierarchyRow& item);
+	// the eye of an object, in the first column
+	void			DrawObjectEye		(CCustomObject* obj);
+	// the icon and the name from `x` in the current cell, and the Type and Owner cells
+	void			DrawObjectCells		(CCustomObject* obj, float x, float top, float cell_right, bool dim);
 	void			DrawObjectContext	(SGroup& g, CCustomObject* obj);
 	void			HandleRowSelection	(SGroup& g, int row, CCustomObject* obj);
 	void			HandleHierarchySelection(int row, CCustomObject* obj);
@@ -168,8 +198,8 @@ private:
 	// that is what makes clicking a visible row feel like the list ran away.
 	// Takes the row's content-space top, so a clipped row needs no drawing.
 	static void		ScrollRowIntoView	(float row_top, float row_h);
-	void			DrawRenamePopup		();
-	void			DrawDeletePopup		();
+	void			DrawRenameDialog	();
+	void			AskDelete			(CCustomObject* obj);
 	bool			ApplyRename			();
 	void			RunPending			();
 	// one scene walk per frame: count, change signature, last selected object

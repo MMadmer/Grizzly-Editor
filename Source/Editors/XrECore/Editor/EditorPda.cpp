@@ -247,6 +247,12 @@ EditorPda::SLayout::SLayout()
 {
 }
 
+void EditorPdaInternal::DropReader()
+{
+	s_Reader.clear();
+	s_ReaderKey.clear();
+}
+
 const EditorPda::SPage* EditorPda::SLayout::FindPage(LPCSTR id) const
 {
 	for (u32 i = 0; i < pages.size(); ++i)

@@ -1,9 +1,28 @@
 ﻿#include "stdafx.h"
+#include "..\..\..\XrECore\Editor\EditorUiContract.h"
 
 UIWorldOutliner* UIWorldOutliner::Form = nullptr;
 
-// width of the per-row visibility toggle
-static const float kEyeWidth = 22.f;
+namespace
+{
+using Token = XFinedTheme::ColorToken;
+
+// pt: rows, the indent of a level and the glyph of a row
+constexpr float kRowH = 22.f;
+constexpr float kIndent = 14.f;
+constexpr float kRowIcon = 14.f;
+
+float Round(float v)
+{
+	return floorf(v + .5f);
+}
+
+// the y at which a line of the current font sits centred in a row that starts at `top`
+float TextY(float top)
+{
+	return Round(top + (XUI::Pt(kRowH) - ImGui::GetTextLineHeight()) * .5f);
+}
+}
 
 UIWorldOutliner::UIWorldOutliner()
 {
@@ -26,8 +45,10 @@ UIWorldOutliner::UIWorldOutliner()
 	m_SelSignature			= 0;
 	m_ScrollTarget			= nullptr;
 	m_SkipNextScroll		= false;
-	m_OpenDeletePopup		= false;
-	m_OpenRenamePopup		= false;
+	m_RenameOpen			= false;
+	m_RenameFocus			= false;
+	m_FiltersAnchor			= ImVec2(0.f, 0.f);
+	m_MoreAnchor			= ImVec2(0.f, 0.f);
 	m_Filter[0]				= 0;
 	m_RenameBuf[0]			= 0;
 	m_RenameError[0]		= 0;
@@ -47,6 +68,14 @@ void UIWorldOutliner::Show()
 void UIWorldOutliner::Close()
 {
 	xr_delete(Form);
+}
+
+void UIWorldOutliner::Focus(bool search)
+{
+	Show();
+	XUI::Shell::Activate("level");
+	Form->m_FocusWindow = true;
+	Form->m_FocusSearch |= search;
 }
 
 void UIWorldOutliner::Update()
@@ -552,10 +581,75 @@ int UIWorldOutliner::ScanSelection(u32& sig, CCustomObject*& last) const
 }
 
 //------------------------------------------------------------------------------
+// filters
+//------------------------------------------------------------------------------
+int UIWorldOutliner::ActiveFilters() const
+{
+	return (m_SelectedOnly ? 1 : 0) + (m_Visibility ? 1 : 0) + (AnyTypeHidden() ? 1 : 0);
+}
+
+void UIWorldOutliner::ClearFilters()
+{
+	m_Filter[0]		= 0;
+	m_SelectedOnly	= false;
+	m_Visibility	= 0;
+	m_HiddenClasses.clear();
+	ParseFilter();
+	ApplyFilter();
+}
+
+void UIWorldOutliner::SetHierarchyView(bool hierarchy)
+{
+	if (m_HierarchyView == hierarchy) return;
+	m_HierarchyView = hierarchy;
+	if (hierarchy)
+		ApplyHierarchyFilter();
+	else
+		m_HierarchyRowsDirty = true;
+}
+
+bool UIWorldOutliner::GroupCollapsed(ObjClassID cls) const
+{
+	return std::find(m_CollapsedClasses.begin(), m_CollapsedClasses.end(), cls) != m_CollapsedClasses.end();
+}
+
+void UIWorldOutliner::SetGroupCollapsed(ObjClassID cls, bool collapsed)
+{
+	const auto it = std::find(m_CollapsedClasses.begin(), m_CollapsedClasses.end(), cls);
+	if (collapsed && it == m_CollapsedClasses.end())
+		m_CollapsedClasses.push_back(cls);
+	else if (!collapsed && it != m_CollapsedClasses.end())
+		m_CollapsedClasses.erase(it);
+}
+
+int UIWorldOutliner::ShowObjects(bool selected_only, bool visible)
+{
+	if (!Scene) return 0;
+	int changed = 0;
+	for (SceneToolsMapPairIt it = Scene->FirstTool(); it != Scene->LastTool(); ++it)
+	{
+		if (!it->second || it->first == OBJCLASS_DUMMY || !Scene->GetOTool(it->first)) continue;
+		// every object shown is shown in every class too
+		if (!selected_only && visible && !it->second->IsVisible())
+			it->second->m_EditFlags.set(ESceneToolBase::flVisible, TRUE);
+		ObjectList& lst = Scene->ListObj(it->first);
+		for (ObjectIt o = lst.begin(); o != lst.end(); ++o)
+		{
+			CCustomObject* obj = *o;
+			if ((selected_only && !obj->Selected()) || !!obj->Visible() == visible) continue;
+			obj->Show(visible ? TRUE : FALSE);
+			++changed;
+		}
+	}
+	UI->RedrawScene(true);
+	return changed;
+}
+
+//------------------------------------------------------------------------------
 // MCP surface
 //------------------------------------------------------------------------------
 bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types,
-	LPCSTR visibility, xr_string& err)
+	LPCSTR visibility, LPCSTR layout, LPCSTR sort, xr_string& err)
 {
 	Show();									// filtering a closed panel helps nobody
 	if (!Form)	{ err = "outliner unavailable"; return false; }
@@ -571,6 +665,31 @@ bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types,
 		else
 		{
 			err = "visibility must be all, visible, or hidden";
+			return false;
+		}
+	}
+
+	bool next_hierarchy = Form->m_HierarchyView;
+	if (layout)
+	{
+		if (0 == _stricmp(layout, "type"))				next_hierarchy = false;
+		else if (0 == _stricmp(layout, "hierarchy"))	next_hierarchy = true;
+		else
+		{
+			err = "layout must be type or hierarchy";
+			return false;
+		}
+	}
+
+	int next_sort = Form->m_Sort;
+	if (sort)
+	{
+		if (0 == _stricmp(sort, "scene"))		next_sort = 0;
+		else if (0 == _stricmp(sort, "az"))		next_sort = 1;
+		else if (0 == _stricmp(sort, "za"))		next_sort = 2;
+		else
+		{
+			err = "sort must be scene, az or za";
 			return false;
 		}
 	}
@@ -636,16 +755,19 @@ bool UIWorldOutliner::McpSetFilter(LPCSTR text, int selected_only, LPCSTR types,
 	if (selected_only >= 0)		Form->m_SelectedOnly = !!selected_only;
 	if (types)					Form->m_HiddenClasses = hide;
 	Form->m_Visibility = next_visibility;
+	Form->m_Sort = next_sort;
 	Form->ParseFilter();
 	Form->ApplyFilter();
+	Form->SetHierarchyView(next_hierarchy);
 	return true;
 }
 
 void UIWorldOutliner::McpGetFilter(xr_string& text, bool& selected_only,
 								   xr_string& hidden, xr_string& visibility,
+								   xr_string& layout, xr_string& sort,
 								   int& shown, int& total)
 {
-	text.clear(); hidden.clear(); visibility = "all";
+	text.clear(); hidden.clear(); visibility = "all"; layout = "type"; sort = "scene";
 	selected_only	= false;
 	shown = total	= 0;
 	if (!Form) return;
@@ -653,6 +775,8 @@ void UIWorldOutliner::McpGetFilter(xr_string& text, bool& selected_only,
 	text			= Form->m_Filter;
 	selected_only	= Form->m_SelectedOnly;
 	visibility		= 1 == Form->m_Visibility ? "visible" : (2 == Form->m_Visibility ? "hidden" : "all");
+	layout			= Form->m_HierarchyView ? "hierarchy" : "type";
+	sort			= 1 == Form->m_Sort ? "az" : (2 == Form->m_Sort ? "za" : "scene");
 	total			= Form->m_TotalObjects;
 	for (u32 i = 0; i < Form->m_Groups.size(); ++i)
 	{
@@ -707,7 +831,7 @@ void UIWorldOutliner::RunPending()
 
 	if (Scene->locked() || !obj->FParentTools || !obj->FParentTools->IsEditable() || !obj->Editable())
 	{
-		ELog.DlgMsg(mtError, "Object '%s' is read only", obj->GetName());
+		ELog.DlgMsg(mtError, "The object '%s' is read only.", obj->GetName());
 		return;
 	}
 
@@ -742,12 +866,12 @@ bool UIWorldOutliner::ApplyRename()
 		? Scene->FindObjectByName(m_RenameOriginal.c_str(), static_cast<CCustomObject*>(nullptr)) : nullptr;
 	if (!obj)
 	{
-		strcpy_s(m_RenameError, "object no longer exists");
+		strcpy_s(m_RenameError, "The object no longer exists.");
 		return false;
 	}
 	if (Scene->locked() || !obj->FParentTools || !obj->FParentTools->IsEditable() || !obj->Editable())
 	{
-		strcpy_s(m_RenameError, "object is read only");
+		strcpy_s(m_RenameError, "The object is read only.");
 		return false;
 	}
 
@@ -756,13 +880,13 @@ bool UIWorldOutliner::ApplyRename()
 	strlwr(low);
 	if (!low[0])
 	{
-		strcpy_s(m_RenameError, "name can not be empty");
+		strcpy_s(m_RenameError, "Enter a name.");
 		return false;
 	}
 	// the pass_object overload ignores the object being renamed
 	if (Scene->FindObjectByName(low, obj))
 	{
-		strcpy_s(m_RenameError, "name already used");
+		strcpy_s(m_RenameError, "Another object has this name.");
 		return false;
 	}
 
@@ -773,6 +897,25 @@ bool UIWorldOutliner::ApplyRename()
 	ExecCommand(COMMAND_UPDATE_PROPERTIES);
 	m_Dirty = true;
 	return true;
+}
+
+void UIWorldOutliner::AskDelete(CCustomObject* obj)
+{
+	const shared_str name = obj->GetName();
+	XUI::ConfirmSpec spec;
+	spec.id = "delete_object";
+	spec.title = "Delete Object";
+	spec.headline = "Delete this object from the scene?";
+	spec.items.push_back(obj->GetName());
+	spec.consequence = "Edit > Undo brings it back.";
+	spec.action = "Delete";
+	spec.destructive = true;
+	XUI::Confirm(spec, [name](XUI::Answer answer)
+	{
+		// the panel may have closed while the question was up
+		if (answer == XUI::Answer::Yes && Form)
+			Form->m_PendingDeleteName = name;
+	});
 }
 
 //------------------------------------------------------------------------------
@@ -888,85 +1031,109 @@ void UIWorldOutliner::HandleHierarchySelection(int row, CCustomObject* obj)
 
 void UIWorldOutliner::DrawObjectContext(SGroup& g, CCustomObject* obj)
 {
-	if (ImGui::BeginPopupContextItem("ctx"))
+	if (!ImGui::BeginPopupContextItem("ctx")) return;
+	const bool cur_vis = !!obj->Visible();
+	if (XUI::MenuItem("Focus"))
 	{
-		const bool cur_vis = !!obj->Visible();
-		if (ImGui::MenuItem("Focus"))
-		{
-			PickObject(obj);
-			FocusObject(obj);
-		}
-		if (ImGui::MenuItem("Select All Of This Class"))
-		{
-			Scene->SelectObjects(false, OBJCLASS_DUMMY);
-			Scene->SelectObjects(true, g.cls);
-			if (LTools->CurrentClassID() != g.cls)
-				LTools->SetTarget(g.cls, 0);
-			m_SkipNextScroll = true;
-			UI->RedrawScene(true);
-		}
-		if (ImGui::MenuItem(cur_vis ? "Hide" : "Show"))
-		{
-			obj->Show(cur_vis ? FALSE : TRUE);
-			UI->RedrawScene(true);
-		}
-		ImGui::Separator();
-		const bool can_edit = !Scene->locked() && obj->Editable() && obj->FParentTools &&
-			!!obj->FParentTools->IsEditable();
-		ImGui::BeginDisabled(!can_edit);
-		if (ImGui::MenuItem("Rename..."))
-		{
-			m_RenameOriginal = obj->GetName();
-			strncpy_s(m_RenameBuf, sizeof(m_RenameBuf), obj->GetName(), _TRUNCATE);
-			m_RenameError[0]	= 0;
-			m_OpenRenamePopup	= true;
-		}
-		if (ImGui::MenuItem("Delete"))
-		{
-			m_DeleteName = obj->GetName();
-			m_OpenDeletePopup = true;
-		}
-		ImGui::EndDisabled();
-		ImGui::EndPopup();
+		PickObject(obj);
+		FocusObject(obj);
 	}
+	if (XUI::MenuItem("Select All of This Class"))
+	{
+		Scene->SelectObjects(false, OBJCLASS_DUMMY);
+		Scene->SelectObjects(true, g.cls);
+		if (LTools->CurrentClassID() != g.cls)
+			LTools->SetTarget(g.cls, 0);
+		m_SkipNextScroll = true;
+		UI->RedrawScene(true);
+	}
+	if (XUI::MenuItem(cur_vis ? "Hide" : "Show"))
+	{
+		obj->Show(cur_vis ? FALSE : TRUE);
+		UI->RedrawScene(true);
+	}
+	ImGui::Separator();
+	const bool can_edit = !Scene->locked() && obj->Editable() && obj->FParentTools &&
+		!!obj->FParentTools->IsEditable();
+	if (XUI::MenuItem("Rename...", nullptr, false, can_edit))
+	{
+		m_RenameOriginal = obj->GetName();
+		strncpy_s(m_RenameBuf, sizeof(m_RenameBuf), obj->GetName(), _TRUNCATE);
+		m_RenameError[0]	= 0;
+		m_RenameOpen		= true;
+		m_RenameFocus		= true;
+	}
+	if (XUI::MenuItem("Delete...", XUI::Icon::None, nullptr, can_edit, true))
+		AskDelete(obj);
+	ImGui::EndPopup();
 }
 
-void UIWorldOutliner::DrawFlatRow(SGroup& g, int row, CCustomObject* obj)
+void UIWorldOutliner::DrawObjectEye(CCustomObject* obj)
 {
-	ImGui::TableNextRow();
-	ImGui::PushID(obj);
-
-	ImGui::TableSetColumnIndex(0);
 	const bool visible = !!obj->Visible();
-	if (ImGui::Button(visible ? "O##vis" : "-##vis", ImVec2(kEyeWidth, 0.f)))
+	if (XUI_LocalEyeToggle("##vis", visible, visible ? "Hide in the viewport" : "Show in the viewport", kRowH))
 	{
 		obj->Show(visible ? FALSE : TRUE);
 		UI->RedrawScene(true);
 	}
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Visible" : "Hidden");
+}
+
+void UIWorldOutliner::DrawObjectCells(CCustomObject* obj, float x, float top, float cell_right, bool dim)
+{
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	XUI::DrawIcon(dl, ToolClassIcon(obj->FClassID), ImVec2(Round(x), Round(top + XUI::Pt(kRowH - kRowIcon) * .5f)), kRowIcon,
+		XFinedTheme::U32(dim ? Token::TextDisabled : Token::TextSecondary));
+	x += XUI::Pt(kRowIcon + 6.f);
+	ImGui::SetCursorScreenPos(ImVec2(x, TextY(top)));
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(dim ? Token::TextSecondary : Token::Text));
+	XUI::TextEllipsis(obj->GetName(), _max(0.f, cell_right - x));
+	ImGui::PopStyleColor();
+
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextSecondary));
+	if (ImGui::TableSetColumnIndex(2))
+	{
+		ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, TextY(top)));
+		XUI::TextEllipsis(ToolClassTitle(obj->FClassID));
+	}
+	if (ImGui::TableSetColumnIndex(3))
+		if (CCustomObject* owner = obj->GetOwner())
+		{
+			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, TextY(top)));
+			XUI::TextEllipsis(owner->GetName());
+		}
+	ImGui::PopStyleColor();
+}
+
+void UIWorldOutliner::DrawFlatRow(SGroup& g, int row, CCustomObject* obj)
+{
+	const float row_h = XUI::Pt(kRowH);
+	ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
+	ImGui::PushID(obj);
+
+	ImGui::TableSetColumnIndex(0);
+	DrawObjectEye(obj);
 
 	ImGui::TableSetColumnIndex(1);
-	string512 row_label;
-	xr_sprintf(row_label, "%s###row", obj->GetName());
-	if (ImGui::Selectable(row_label, !!obj->Selected(),
-		ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns,
-		ImVec2(0.f, ImGui::GetFrameHeight())))
+	const ImVec2 cell = ImGui::GetCursorScreenPos();
+	const float right = cell.x + ImGui::GetContentRegionAvail().x;
+	// the name drawn over the row keeps its own tooltip when it is cut
+	ImGui::SetNextItemAllowOverlap();
+	if (ImGui::Selectable("##row", !!obj->Selected(),
+		ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns, ImVec2(0.f, row_h)))
 		HandleRowSelection(g, row, obj);
 	DrawObjectContext(g, obj);
 
-	ImGui::TableSetColumnIndex(2);
-	ImGui::TextUnformatted(g.name.c_str());
-	ImGui::TableSetColumnIndex(3);
-	CCustomObject* owner = obj->GetOwner();
-	if (owner) ImGui::TextUnformatted(owner->GetName());
-
+	ESceneToolBase* tool = Scene->GetTool(g.cls);
+	// under the class's icon: the chevron's width in
+	DrawObjectCells(obj, cell.x + XUI::Pt(16.f), cell.y, right, tool && !tool->IsVisible());
 	ImGui::PopID();
 }
 
 void UIWorldOutliner::ScrollRowIntoView(float row_top, float row_h)
 {
-	const float view_top	= ImGui::GetScrollY();
-	const float view_h		= ImGui::GetWindowHeight();
+	// the frozen header row covers the top of the view
+	const float view_top	= ImGui::GetScrollY() + row_h;
+	const float view_h		= ImGui::GetWindowHeight() - row_h;
 
 	// Already fully on screen: leave it EXACTLY where it is. Unreal checks the
 	// same thing before scrolling (SListView::ScrollIntoView, "Only scroll the
@@ -978,40 +1145,88 @@ void UIWorldOutliner::ScrollRowIntoView(float row_top, float row_h)
 	// Off screen: centre it, which is what STreeView does - its default
 	// alignment is CenterAligned, offset = index - NumVisible/2. ImGui clamps
 	// the target to the scroll range for us.
-	ImGui::SetScrollY(row_top + row_h * 0.5f - view_h * 0.5f);
+	ImGui::SetScrollY(row_top + row_h * 0.5f - row_h - view_h * 0.5f);
+}
+
+bool UIWorldOutliner::DrawGroupRow(SGroup& g, bool open, float& row_top)
+{
+	const float row_h = XUI::Pt(kRowH);
+	ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
+
+	// the class's own flag: the one the Tools panel's tile shows too
+	ImGui::TableSetColumnIndex(0);
+	row_top = ImGui::GetCursorPosY();
+	ESceneToolBase* tool = Scene->GetTool(g.cls);
+	const bool class_visible = !tool || !!tool->IsVisible();
+	if (tool && XUI_LocalEyeToggle("##class_eye", class_visible,
+		class_visible ? "Hide this class in the viewport" : "Show this class in the viewport", kRowH))
+	{
+		tool->m_EditFlags.set(ESceneToolBase::flVisible, !class_visible);
+		UI->RedrawScene(true);
+	}
+
+	ImGui::TableSetColumnIndex(1);
+	const ImVec2 cell = ImGui::GetCursorScreenPos();
+	const float right = cell.x + ImGui::GetContentRegionAvail().x;
+	ImGui::SetNextItemAllowOverlap();
+	const bool clicked = ImGui::Selectable("##group", false, ImGuiSelectableFlags_SpanAllColumns, ImVec2(0.f, row_h));
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	const float cy = cell.y + row_h * .5f;
+	XUI::DrawIcon(dl, open ? XUI::Icon::ChevronDown : XUI::Icon::ChevronRight, ImVec2(Round(cell.x), Round(cy - XUI::Pt(6.f))), 12.f,
+		XFinedTheme::U32(Token::TextSecondary));
+	float x = cell.x + XUI::Pt(16.f);
+	XUI::DrawIcon(dl, ToolClassIcon(g.cls), ImVec2(Round(x), Round(cy - XUI::Pt(kRowIcon) * .5f)), kRowIcon,
+		XFinedTheme::U32(class_visible ? Token::TextSecondary : Token::TextDisabled));
+	x += XUI::Pt(kRowIcon + 6.f);
+
+	char count[48];
+	if (Filtering())
+		sprintf_s(count, "%d of %d", int(g.shown.size()), int(g.objects.size()));
+	else
+		sprintf_s(count, "%d", int(g.objects.size()));
+	const float count_w = ImGui::CalcTextSize(count).x;
+	{
+		XUI::FontScope strong(XUI::Font::Strong);
+		ImGui::SetCursorScreenPos(ImVec2(x, TextY(cell.y)));
+		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(class_visible ? Token::Text : Token::TextSecondary));
+		XUI::TextEllipsis(ToolClassTitle(g.cls), _max(0.f, right - x - count_w - XUI::Pt(6.f)));
+		ImGui::PopStyleColor();
+	}
+	ImGui::SameLine(0.f, XUI::Pt(6.f));
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+	ImGui::TextUnformatted(count);
+	ImGui::PopStyleColor();
+	return clicked;
 }
 
 void UIWorldOutliner::DrawGroup(SGroup& g)
 {
-	if (ClassHidden(g.cls)) return;				// switched off in the funnel
+	if (ClassHidden(g.cls)) return;				// switched off in the Filters menu
 
 	const bool filtering = Filtering();
 	if (filtering && g.shown.empty()) return;	// empty groups vanish while filtering
 
-	// a scroll target in a collapsed group would never come into view
+	// a scroll target in a folded group would never come into view
 	int target_row = -1;
 	if (m_ScrollTarget)
 		for (int i = 0; i < int(g.shown.size()); ++i)
 			if (g.objects[g.shown[i]] == m_ScrollTarget) { target_row = i; break; }
 
+	const bool open = filtering || target_row >= 0 || !GroupCollapsed(g.cls);
 	ImGui::PushID(int(g.cls));
-	if (filtering || target_row >= 0) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-
-	ImGui::TableNextRow();
-	ImGui::TableSetColumnIndex(1);
-	int flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_SpanAllColumns |
-		ImGuiTreeNodeFlags_DefaultOpen;
-	const bool open = filtering
-		? ImGui::TreeNodeEx("##group", flags, "%s (%d/%d)", g.name.c_str(), int(g.shown.size()), int(g.objects.size()))
-		: ImGui::TreeNodeEx("##group", flags, "%s (%d)", g.name.c_str(), int(g.objects.size()));
+	float row_top = 0.f;
+	// while a filter is on every class is open: a click would fold it only once the filter goes
+	if (DrawGroupRow(g, open, row_top) && !filtering)
+		SetGroupCollapsed(g.cls, open);
 
 	if (open)
 	{
 		// Rows are a fixed height, so the target's position is arithmetic - it
 		// never has to be drawn to be scrolled to. GetCursorPosY is content
 		// space, the same space GetScrollY/SetScrollY speak.
-		const float rows_top	= ImGui::GetCursorPosY();
-		const float row_h		= ImGui::GetFrameHeightWithSpacing();
+		const float row_h		= XUI::Pt(kRowH);
+		const float rows_top	= row_top + row_h;
 
 		// thousands of rows per group - only the visible slice is submitted
 		ImGuiListClipper clipper;
@@ -1019,7 +1234,6 @@ void UIWorldOutliner::DrawGroup(SGroup& g)
 		while (clipper.Step())
 			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
 				DrawFlatRow(g, row, g.objects[g.shown[row]]);
-		ImGui::TreePop();
 
 		if (target_row >= 0) ScrollRowIntoView(rows_top + target_row * row_h, row_h);
 	}
@@ -1035,55 +1249,45 @@ void UIWorldOutliner::DrawHierarchyRow(int row, const SHierarchyRow& item)
 	for (int child : node.children)
 		if (m_Hierarchy[child].included) { has_included_children = true; break; }
 
-	ImGui::TableNextRow();
+	const float row_h = XUI::Pt(kRowH);
+	ImGui::TableNextRow(ImGuiTableRowFlags_None, row_h);
 	ImGui::PushID(obj);
 	ImGui::TableSetColumnIndex(0);
+	DrawObjectEye(obj);
 	const bool visible = !!obj->Visible();
-	if (ImGui::Button(visible ? "O##vis" : "-##vis", ImVec2(kEyeWidth, 0.f)))
-	{
-		obj->Show(visible ? FALSE : TRUE);
-		UI->RedrawScene(true);
-	}
-	if (ImGui::IsItemHovered()) ImGui::SetTooltip(visible ? "Visible" : "Hidden");
 
 	ImGui::TableSetColumnIndex(1);
-	const int visible_depth = _min(item.depth, 12);
-	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + visible_depth * ImGui::GetTreeNodeToLabelSpacing());
+	const ImVec2 cell = ImGui::GetCursorScreenPos();
+	const float right = cell.x + ImGui::GetContentRegionAvail().x;
+	const float x = cell.x + _min(item.depth, 12) * XUI::Pt(kIndent);
+	// the expander goes in before the row it sits on, so it wins the mouse
 	if (has_included_children)
 	{
 		const bool filtering = HierarchyFiltering();
 		const bool expanded = filtering || node.expanded;
+		ImGui::SetCursorScreenPos(ImVec2(x, cell.y));
 		ImGui::BeginDisabled(filtering);
-		if (ImGui::ArrowButton("##expand", expanded ? ImGuiDir_Down : ImGuiDir_Right))
+		if (ImGui::InvisibleButton("##expand", ImVec2(XUI::Pt(16.f), row_h)))
 			SetHierarchyExpanded(item.node, !expanded);
 		ImGui::EndDisabled();
+		XUI::DrawIcon(ImGui::GetWindowDrawList(), expanded ? XUI::Icon::ChevronDown : XUI::Icon::ChevronRight,
+			ImVec2(Round(x + XUI::Pt(2.f)), Round(cell.y + (row_h - XUI::Pt(12.f)) * .5f)), 12.f,
+			XFinedTheme::U32(filtering ? Token::TextDisabled : Token::TextSecondary));
+		ImGui::SetCursorScreenPos(cell);
 	}
-	else
-	{
-		ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
-	}
-	ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
 
-	if (!node.direct) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-	string512 row_label;
-	xr_sprintf(row_label, "%s###row", obj->GetName());
-	ImGuiSelectableFlags row_flags = ImGuiSelectableFlags_AllowDoubleClick |
-		ImGuiSelectableFlags_SpanAllColumns;
+	ImGuiSelectableFlags row_flags = ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_SpanAllColumns;
 	if (!visible) row_flags |= ImGuiSelectableFlags_Disabled;
-	const bool clicked = ImGui::Selectable(row_label, !!obj->Selected(),
-		row_flags, ImVec2(0.f, ImGui::GetFrameHeight()));
-	if (!node.direct) ImGui::PopStyleColor();
+	ImGui::SetNextItemAllowOverlap();
+	const bool clicked = ImGui::Selectable("##row", !!obj->Selected(), row_flags, ImVec2(0.f, row_h));
 	if (clicked) HandleHierarchySelection(row, obj);
-	if (!visible && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("Hidden objects cannot be selected until shown.");
-	else if (!node.direct && ImGui::IsItemHovered())
-		ImGui::SetTooltip("ancestor of a filtered object");
+	if (!visible)
+		XUI::Tip("Hidden objects cannot be selected until shown.");
+	else if (!node.direct)
+		XUI::Tip("Shown because an object under it matches.");
 	if (visible) DrawObjectContext(group, obj);
 
-	ImGui::TableSetColumnIndex(2);
-	ImGui::TextUnformatted(group.name.c_str());
-	ImGui::TableSetColumnIndex(3);
-	if (CCustomObject* owner = obj->GetOwner()) ImGui::TextUnformatted(owner->GetName());
+	DrawObjectCells(obj, x + XUI::Pt(16.f), cell.y, right, !node.direct);
 	ImGui::PopID();
 }
 
@@ -1091,21 +1295,14 @@ void UIWorldOutliner::DrawHierarchy()
 {
 	if (m_HierarchyDirty) ApplyHierarchyFilter();
 	if (m_HierarchyRowsDirty) BuildHierarchyRows();
-	if (m_HierarchyRows.empty())
-	{
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(1);
-		ImGui::TextDisabled(m_Hierarchy.empty() ? "scene is empty" : "no matching objects");
-		return;
-	}
 
 	int target_row = -1;
 	if (m_ScrollTarget)
 		for (int row = 0; row < int(m_HierarchyRows.size()); ++row)
 			if (m_Hierarchy[m_HierarchyRows[row].node].object == m_ScrollTarget) { target_row = row; break; }
 
+	const float row_h = XUI::Pt(kRowH);
 	const float rows_top = ImGui::GetCursorPosY();
-	const float row_h = ImGui::GetFrameHeightWithSpacing();
 	ImGuiListClipper clipper;
 	clipper.Begin(int(m_HierarchyRows.size()), row_h);
 	while (clipper.Step())
@@ -1115,59 +1312,54 @@ void UIWorldOutliner::DrawHierarchy()
 	if (target_row >= 0) ScrollRowIntoView(rows_top + target_row * row_h, row_h);
 }
 
-// The funnel beside the search box, Unreal's "Filters" menu in miniature: the
-// object types the tree is allowed to show. Types are hidden rather than shown
-// so a scene growing a new one does not silently stay invisible.
-void UIWorldOutliner::DrawFilterMenu()
+// The Filters menu, Unreal's in miniature: what of the scene the tree shows. Types are hidden rather than shown so a
+// scene growing a new one does not silently stay invisible.
+void UIWorldOutliner::DrawFiltersMenu()
 {
-	if (!ImGui::BeginPopup("outliner_filters")) return;
-
-	ImGui::TextDisabled("Layout");
-	if (ImGui::RadioButton("By Type", !m_HierarchyView))
+	ImGui::Checkbox("Selected Only", &m_SelectedOnly);
+	XUI::Tip("Show only the objects selected in the viewport");
+	if (XUI::BeginPropertyGrid("outliner_filters", .3f))
 	{
-		m_HierarchyView = false;
-		m_HierarchyRowsDirty = true;
+		if (XUI::PropertyRow("Visibility", "Every object, only the visible ones or only the hidden ones"))
+		{
+			const char* modes[] = { "All", "Visible", "Hidden" };
+			XUI::Segmented("##visibility", &m_Visibility, modes, 3);
+		}
+		if (XUI::PropertyRow("Sort", "The order of the objects in each class: as in the scene, or by name"))
+		{
+			const char* sorts[] = { "Scene", "A-Z", "Z-A" };
+			XUI::Segmented("##sort", &m_Sort, sorts, 3);
+		}
+		XUI::EndPropertyGrid();
 	}
-	ImGui::SameLine();
-	if (ImGui::RadioButton("Hierarchy", m_HierarchyView))
-	{
-		m_HierarchyView = true;
-		ApplyHierarchyFilter();
-	}
-	ImGui::TextDisabled("View only: ownership is never changed here.");
-	ImGui::Separator();
-
-	ImGui::TextDisabled("Visibility");
-	const char* visibility[] = { "All", "Visible", "Hidden" };
-	ImGui::SetNextItemWidth(150.f);
-	ImGui::Combo("##visibility", &m_Visibility, visibility, IM_ARRAYSIZE(visibility));
-	ImGui::Separator();
-
-	ImGui::TextDisabled("Object types");
 	ImGui::Separator();
 
 	bool hierarchy_filter_changed = false;
-	if (ImGui::SmallButton("All"))
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextSecondary));
+	ImGui::AlignTextToFramePadding();
+	ImGui::TextUnformatted("Object Types");
+	ImGui::PopStyleColor();
+	ImGui::SameLine();
+	if (XUI::Button("All##types"))
 	{
 		hierarchy_filter_changed = !m_HiddenClasses.empty();
 		m_HiddenClasses.clear();
 	}
-	ImGui::SameLine();
-	if (ImGui::SmallButton("None"))
+	ImGui::SameLine(0.f, XUI::Pt(4.f));
+	if (XUI::Button("None##types"))
 	{
 		m_HiddenClasses.clear();
 		for (u32 i = 0; i < m_Groups.size(); ++i)
 			m_HiddenClasses.push_back(m_Groups[i].cls);
 		hierarchy_filter_changed = true;
 	}
-	ImGui::Separator();
 
 	for (u32 i = 0; i < m_Groups.size(); ++i)
 	{
 		SGroup& g	= m_Groups[i];
 		bool shown	= !ClassHidden(g.cls);
 		ImGui::PushID(int(g.cls));
-		if (ImGui::Checkbox(g.name.c_str(), &shown))
+		if (ImGui::Checkbox(ToolClassTitle(g.cls), &shown))
 		{
 			if (shown)
 			{
@@ -1177,8 +1369,12 @@ void UIWorldOutliner::DrawFilterMenu()
 			else m_HiddenClasses.push_back(g.cls);
 			hierarchy_filter_changed = true;
 		}
+		char count[16];
+		sprintf_s(count, "%d", int(g.objects.size()));
 		ImGui::SameLine();
-		ImGui::TextDisabled("(%d)", int(g.objects.size()));
+		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+		ImGui::TextUnformatted(count);
+		ImGui::PopStyleColor();
 		ImGui::PopID();
 	}
 	if (hierarchy_filter_changed)
@@ -1189,85 +1385,149 @@ void UIWorldOutliner::DrawFilterMenu()
 			m_HierarchyRowsDirty = true;
 	}
 
-	ImGui::EndPopup();
+	ImGui::Separator();
+	XUI::StatusText(XUI::Tone::Muted, "Search: every word has to match, -word leaves those out, \"two words\" match together.");
 }
 
-void UIWorldOutliner::DrawRenamePopup()
+void UIWorldOutliner::DrawMoreMenu()
 {
-	if (!ImGui::BeginPopupModal("Rename Object", 0, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	if (XUI::MenuItem("By Type", nullptr, !m_HierarchyView))
+		SetHierarchyView(false);
+	if (XUI::MenuItem("By Hierarchy", nullptr, m_HierarchyView))
+		SetHierarchyView(true);
+	XUI::Tip("Objects under the group that owns them. View only: ownership is never changed here.");
+	ImGui::Separator();
+	if (XUI::MenuItem("Show All"))
+		ShowObjects(false, true);
+	if (XUI::MenuItem("Show Selected"))
+		ShowObjects(true, true);
+	if (XUI::MenuItem("Hide Selected"))
+		ShowObjects(true, false);
+}
 
-	ImGui::SetNextItemWidth(280.f);
-	const bool enter = ImGui::InputText("##newname", m_RenameBuf, sizeof(m_RenameBuf),
-		ImGuiInputTextFlags_EnterReturnsTrue);
-	if (m_RenameError[0])
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", m_RenameError);
-
-	const bool ok		= ImGui::Button("OK", ImVec2(90.f, 0.f)) || enter;
-	ImGui::SameLine();
-	const bool cancel	= ImGui::Button("Cancel", ImVec2(90.f, 0.f));
-
-	if (ok)
+void UIWorldOutliner::DrawToolbar()
+{
+	XUI::Toolbar tb("outliner", XUI::ToolbarPanel);
+	tb.Group(2);
+	if (m_FocusSearch)
 	{
-		if (ApplyRename())
+		ImGui::SetKeyboardFocusHere();
+		m_FocusSearch = false;
+	}
+	tb.Search(m_Filter, sizeof(m_Filter), "Search", 8.f);
+
+	tb.Group(1);
+	const int active = ActiveFilters();
+	const bool filters = tb.Action("filters", XUI::Icon::Filter, "Filters", "Selected only, visibility, sort and object types",
+		true, active > 0);
+	// drawn in the row, not in the overflow menu: its menu opens under it, and the badge counts what is on
+	if (ImGui::GetItemID() == ImGui::GetID("filters"))
+	{
+		const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+		m_FiltersAnchor = ImVec2(min.x, max.y + XUI::Pt(2.f));
+		if (active)
 		{
-			m_RenameOriginal = "";
-			ImGui::CloseCurrentPopup();
+			char text[8];
+			sprintf_s(text, "%d", active);
+			ImFont* font = XUI::GetFont(XUI::Font::Small);
+			if (!font) font = ImGui::GetFont();
+			const float size = XUI::FontSize(XUI::Font::Small) * XUI::Dpi();
+			const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, text);
+			const ImVec2 c(max.x - XUI::Pt(3.f), min.y + XUI::Pt(3.f));
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+			dl->AddCircleFilled(c, _max(XUI::Pt(7.f), ts.x * .5f + XUI::Pt(3.f)), XFinedTheme::U32(Token::Accent));
+			dl->AddText(font, size, ImVec2(Round(c.x - ts.x * .5f), Round(c.y - ts.y * .5f)), XFinedTheme::U32(Token::Text), text);
 		}
 	}
-	else if (cancel)
+	if (filters || XUI::Shell::TakePopup("outliner_filters"))
+		XUI::Shell::OpenPopupAt("##filters_menu", m_FiltersAnchor);
+	ImGui::SetNextWindowSize(ImVec2(XUI::Em(24.f), 0.f));
+	if (ImGui::BeginPopup("##filters_menu"))
 	{
-		m_RenameOriginal = "";
-		ImGui::CloseCurrentPopup();
+		DrawFiltersMenu();
+		ImGui::EndPopup();
 	}
-	ImGui::EndPopup();
+
+	const bool more = tb.Action("more", XUI::Icon::More, "", "Layout, and showing or hiding objects");
+	if (ImGui::GetItemID() == ImGui::GetID("more"))
+		m_MoreAnchor = ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f));
+	if (more || XUI::Shell::TakePopup("outliner_more"))
+		XUI::Shell::OpenPopupAt("##more_menu", m_MoreAnchor);
+	if (ImGui::BeginPopup("##more_menu"))
+	{
+		DrawMoreMenu();
+		ImGui::EndPopup();
+	}
 }
 
-void UIWorldOutliner::DrawDeletePopup()
+void UIWorldOutliner::DrawFooter(int shown, int selected)
 {
-	if (!ImGui::BeginPopupModal("Delete Object", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
+	char text[96];
+	if (shown != m_TotalObjects)
+		sprintf_s(text, "%d of %d objects \xC2\xB7 %d selected", shown, m_TotalObjects, selected);
+	else
+		sprintf_s(text, "%d object%s \xC2\xB7 %d selected", m_TotalObjects, m_TotalObjects == 1 ? "" : "s", selected);
+	XUI::FontScope small_font(XUI::Font::Small);
+	// at the bottom of the panel whatever is above it
+	const float bottom = ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y - ImGui::GetTextLineHeight();
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	ImGui::SetCursorScreenPos(ImVec2(at.x, _max(at.y, bottom)));
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+	XUI::TextEllipsis(text);
+	ImGui::PopStyleColor();
+}
 
-	ImGui::Text("Delete '%s'?", m_DeleteName.size() ? m_DeleteName.c_str() : "missing object");
-	ImGui::TextDisabled("The operation can be undone from the editor.");
-	ImGui::Separator();
-
-	const bool cancel = ImGui::Button("Cancel", ImVec2(100.f, 0.f)) ||
-		ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-	ImGui::SetItemDefaultFocus();
-	ImGui::SameLine();
-	const bool remove = ImGui::Button("Delete", ImVec2(100.f, 0.f));
-
-	if (cancel)
+void UIWorldOutliner::DrawRenameDialog()
+{
+	if (!m_RenameOpen && !m_RenameOriginal.size())
+		return;
+	if (!XUI::BeginDialog("Rename Object###dlg.rename_object", &m_RenameOpen, XUI::DialogSize::S))
 	{
-		m_DeleteName = "";
-		ImGui::CloseCurrentPopup();
+		if (!m_RenameOpen)
+			m_RenameOriginal = "";
+		return;
 	}
-	else if (remove)
+	XUI::BeginDialogBody();
+	if (m_RenameFocus)
 	{
-		m_PendingDeleteName = m_DeleteName;
-		m_DeleteName = "";
-		ImGui::CloseCurrentPopup();
+		ImGui::SetKeyboardFocusHere();
+		m_RenameFocus = false;
 	}
-	ImGui::EndPopup();
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+	bool apply = ImGui::InputText("##new_name", m_RenameBuf, sizeof(m_RenameBuf),
+		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+	if (m_RenameError[0])
+		XUI::StatusText(XUI::Tone::Error, m_RenameError);
+	else
+		XUI::StatusText(XUI::Tone::Muted, "Names are lower case and unique in the scene.");
+	if (XUI::BeginDialogFooter())
+	{
+		apply |= XUI::DialogButton("Rename", XUI::Kind::Primary, true);
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+			m_RenameOpen = false;
+	}
+	XUI::EndDialog();
+	if (apply && m_RenameOpen && ApplyRename())
+		m_RenameOpen = false;
 }
 
 void UIWorldOutliner::Draw()
 {
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(280, 240));
-	// a fresh panel opens usable instead of a 200px stub; the user's own size
-	// wins afterwards because ImGui remembers it in imgui.ini
-	ImGui::SetNextWindowSize(ImVec2(360, 560), ImGuiCond_FirstUseEver);
-	if (!ImGui::Begin("World Outliner", &bOpen))
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(XUI::Pt(220.f), XUI::Pt(160.f)));
+	// a fresh panel opens usable instead of a stub; the user's own size wins afterwards
+	ImGui::SetNextWindowSize(ImVec2(XUI::Pt(340.f), XUI::Pt(480.f)), ImGuiCond_FirstUseEver);
+	if (m_FocusWindow)
 	{
-		ImGui::PopStyleVar(1);
-		ImGui::End();
-		return;
+		ImGui::SetNextWindowFocus();
+		m_FocusWindow = false;
 	}
-
-	if (!Scene)
+	const bool visible = XUI::BeginPanel(EditorUiContract::kWindowOutliner, &bOpen);
+	ImGui::PopStyleVar();
+	if (!visible || !Scene)
 	{
-		ImGui::TextDisabled("no scene");
-		ImGui::PopStyleVar(1);
-		ImGui::End();
+		if (visible)
+			XUI::EmptyState(XUI::Icon::Level, "No scene", "Open or create a scene to see its objects here.");
+		XUI::EndPanel();
 		return;
 	}
 
@@ -1301,102 +1561,85 @@ void UIWorldOutliner::Draw()
 		m_SkipNextScroll = false;
 	}
 
-	// funnel first, search box next: the Unreal arrangement
-	if (ImGui::Button("Filters")) ImGui::OpenPopup("outliner_filters");
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("layout, visibility, and object types%s",
-			m_HiddenClasses.empty() ? "" : "  (some are hidden)");
 	const bool hierarchy_before = m_HierarchyView;
-	DrawFilterMenu();
+	DrawToolbar();
 	if (m_HierarchyView && !hierarchy_before && sel_last)
 	{
 		RevealHierarchyPath(sel_last);
 		m_ScrollTarget = sel_last;
 	}
-	ImGui::SameLine();
 
-	ImGui::SetNextItemWidth(-220.f);
-	ImGui::InputTextWithHint("##filter", "search", m_Filter, sizeof(m_Filter));
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("every word has to match\n-word excludes it\n\"two words\" match together");
-	ImGui::SameLine();
-	ImGui::Checkbox("Selected only", &m_SelectedOnly);
-	ImGui::SameLine();
-	if (ImGui::Button("Refresh")) m_Dirty = true;
+	// with a filter or a hidden type on, the footer says how much of the scene is showing
+	int shown = 0;
+	for (u32 i = 0; i < m_Groups.size(); ++i)
+		if (!ClassHidden(m_Groups[i].cls)) shown += int(m_Groups[i].shown.size());
 
-	ImGui::Separator();
-
-	const ImGuiTableFlags table_flags = ImGuiTableFlags_BordersV | ImGuiTableFlags_RowBg |
-		ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
-		ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate | ImGuiTableFlags_ScrollY;
-	if (ImGui::BeginTable("tree", 4, table_flags,
-		ImVec2(0.f, -ImGui::GetFrameHeightWithSpacing())))
+	// the footer's row is kept whatever sits above it, the way the table keeps it
+	const float row_h = XUI::Pt(kRowH);
+	if (!m_TotalObjects || !shown)
 	{
-		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("Visible", ImGuiTableColumnFlags_WidthFixed |
-			ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_NoHide, 48.f);
-		ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.6f, 1);
-		ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed |
-			ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_DefaultHide, 90.f);
-		ImGui::TableSetupColumn("Owner", ImGuiTableColumnFlags_WidthStretch |
-			ImGuiTableColumnFlags_NoSort, 0.4f);
-		ImGui::TableHeadersRow();
-
-		int sort = 0;
-		const ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
-		if (specs && specs->SpecsCount)
+		// the empty state centres in what is left above the footer, and scrolls where that is shorter than it
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+		const bool open = ImGui::BeginChild("##empty", ImVec2(0.f, -row_h));
+		ImGui::PopStyleColor();
+		if (open)
 		{
-			const ImGuiSortDirection direction = specs->Specs[0].SortDirection;
-			if (ImGuiSortDirection_Ascending == direction) sort = 1;
-			else if (ImGuiSortDirection_Descending == direction) sort = 2;
+			if (!m_TotalObjects)
+				XUI::EmptyState(XUI::Icon::SceneObject, "The scene is empty",
+					"Pick a tool in Tools and click in the viewport, or drag an asset in from the Content Browser.");
+			else if (XUI::EmptyState(XUI::Icon::Search, "Nothing matches", "No object passes the search and the filters.", "Clear Filters"))
+				ClearFilters();
 		}
-		if (sort != m_Sort)
+		ImGui::EndChild();
+	}
+	else
+	{
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(XUI::Pt(4.f), 0.f));
+		const ImGuiTableFlags table_flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+			ImGuiTableFlags_Hideable | ImGuiTableFlags_ScrollY;
+		if (ImGui::BeginTable("objects", 4, table_flags, ImVec2(0.f, -row_h)))
 		{
-			m_Sort = sort;
-			ApplyFilter();
-		}
-
-		if (m_HierarchyView)
-			DrawHierarchy();
-		else
-		{
-			if (m_Groups.empty())
+			ImGui::TableSetupScrollFreeze(0, 1);
+			ImGui::TableSetupColumn("Visibility", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoHide |
+				ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoReorder | ImGuiTableColumnFlags_NoHeaderLabel, row_h);
+			ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide, 1.f);
+			ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultHide, XUI::Em(7.f));
+			ImGui::TableSetupColumn("Owner", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultHide, .5f);
 			{
-				ImGui::TableNextRow();
-				ImGui::TableSetColumnIndex(1);
-				ImGui::TextDisabled("scene is empty");
+				// the header's right-click menu shows Type and Owner
+				XUI::FontScope small_font(XUI::Font::Small);
+				ImGui::TableNextRow(ImGuiTableRowFlags_Headers, row_h);
+				for (int column = 0; column < 4; ++column)
+				{
+					if (!ImGui::TableSetColumnIndex(column)) continue;
+					ImGui::PushID(column);
+					ImGui::TableHeader(column ? ImGui::TableGetColumnName(column) : "##visibility");
+					if (!column)
+					{
+						const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+						const float s = XUI::Pt(kRowIcon);
+						XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Eye,
+							ImVec2(Round((min.x + max.x - s) * .5f), Round((min.y + max.y - s) * .5f)), kRowIcon,
+							XFinedTheme::U32(Token::TextMuted));
+						XUI::Tip("Visibility in the viewport");
+					}
+					ImGui::PopID();
+				}
 			}
-			for (u32 i = 0; i < m_Groups.size(); ++i)
-				DrawGroup(m_Groups[i]);
+
+			if (m_HierarchyView)
+				DrawHierarchy();
+			else
+				for (u32 i = 0; i < m_Groups.size(); ++i)
+					DrawGroup(m_Groups[i]);
+			ImGui::EndTable();
 		}
-		ImGui::EndTable();
+		ImGui::PopStyleVar();
 	}
 	// A target the filter hid never reaches a row; one frame is its lifetime.
 	m_ScrollTarget = nullptr;
 
-	ImGui::Separator();
-	// with a filter or a hidden type on, say how much of the scene is showing
-	int shown = 0;
-	for (u32 i = 0; i < m_Groups.size(); ++i)
-		if (!ClassHidden(m_Groups[i].cls)) shown += int(m_Groups[i].shown.size());
-	if (shown != m_TotalObjects)
-		ImGui::Text("%d of %d objects, %d selected", shown, m_TotalObjects, sel_count);
-	else
-		ImGui::Text("%d objects, %d selected", m_TotalObjects, sel_count);
-
-	if (m_OpenRenamePopup)
-	{
-		ImGui::OpenPopup("Rename Object");
-		m_OpenRenamePopup = false;
-	}
-	DrawRenamePopup();
-	if (m_OpenDeletePopup)
-	{
-		ImGui::OpenPopup("Delete Object");
-		m_OpenDeletePopup = false;
-	}
-	DrawDeletePopup();
-
-	ImGui::PopStyleVar(1);
-	ImGui::End();
+	DrawFooter(shown, sel_count);
+	DrawRenameDialog();
+	XUI::EndPanel();
 }

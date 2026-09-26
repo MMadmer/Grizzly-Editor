@@ -3,6 +3,7 @@
 #include "EditorCatalog.h"
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
+#include "EditorUiContract.h"
 #include "EditorProject.h"
 #include "EditorVirusTotal.h"
 #include "XFinedMCP.h"
@@ -260,22 +261,22 @@ LPCSTR StateText(EJobState state)
 //------------------------------------------------------------------------------
 // UI state
 //------------------------------------------------------------------------------
-const char* kTitlePublish	= "XFined Editor - Publish Release";
-const char* kTitleProgress	= "XFined Editor - Publishing Release";
-const char* kTitleResult	= "XFined Editor - Publish Result";
+const char* kTitlePublish	= EditorUiContract::kDialogPublishRelease;
+const char* kTitleProgress	= EditorUiContract::kDialogPublishProgress;
+const char* kTitleEdit		= EditorUiContract::kDialogEditRelease;
+const char* kReleasesTab	= "releases";
 
 bool		s_WantDialog	= false;
 bool		s_WantProgress	= false;
-bool		s_WantResult	= false;
 bool		s_PublishQueued	= false;
-xr_string	s_ResultText;
-xr_string	s_ResultUrl;
 
 xr_string	s_ModuleId;
 xr_string	s_ModuleName;
-char		s_Repo[256]		= {};
-char		s_Version[64]	= {};
-char		s_Requires[32]	= {};
+// what the dialog shows of mod.ltx: read-only here, Mod Settings edits them
+xr_string	s_Repo;
+xr_string	s_Version;
+xr_string	s_Requires;					// the linked game's version: what the release requires
+u32			s_ManifestGen	= 0;
 char		s_Tag[128]		= {};
 char		s_Title[256]	= {};
 char		s_Notes[16384]	= {};
@@ -289,6 +290,23 @@ xr_vector<xr_string> s_Replaced;		// an earlier packaging of this version, by fi
 xr_string	s_ReplacedFor;				// the version that list was made for
 EditorGithub::SAccount s_Account;
 xr_string	s_AccountError;
+xr_string	s_ListAskedFor;				// the repository and account the open dialog read the releases of
+
+bool		s_ReleasesOpen	= false;	// the Releases tab is there
+bool		s_RefreshWanted	= false;	// a release went out from the window: the tab reads the list again
+u64			s_SelectedId	= 0;		// the release the Releases tab's details show
+
+// What a job started from the UI ends with. It is put up from the frame: a job that an MCP status call
+// happens to reap still ends in the window its author waits for.
+struct SPendingResult
+{
+	bool										want = false;
+	XUI::Tone									tone = XUI::Tone::Info;
+	xr_string									headline, url;
+	xr_vector<std::pair<xr_string, xr_string>>	rows;
+	XUI::Strings								warnings;
+};
+SPendingResult s_Result;
 
 // the dialog shows where the account comes from; the token itself is read again
 // when a job starts and is not kept around in between
@@ -298,11 +316,15 @@ void RefreshAccount()
 	EditorGithub::WipeString(s_Account.token);
 }
 
-void ShowResult(const xr_string& text, LPCSTR url = "")
+void SplitLines(const xr_string& text, XUI::Strings& out)
 {
-	s_ResultText = text;
-	s_ResultUrl = url;
-	s_WantResult = true;
+	for (size_t from = 0; from < text.size();)
+	{
+		size_t to = text.find('\n', from);
+		if (to == xr_string::npos) to = text.size();
+		if (to > from) out.push_back(text.substr(from, to - from));
+		from = to + 1;
+	}
 }
 
 // The end of a job, seen from the main thread: the log line, and the result
@@ -315,37 +337,47 @@ void Reap()
 	if (s_JobReported) return;
 	s_JobReported = true;
 
-	xr_string text;
+	SPendingResult r;
+	r.want = s_JobFromUI;
 	if (jsDone == job.state)
 	{
 		Msg("* [XMS] release %s %s published: %s", job.id.c_str(), job.version.c_str(), job.url.c_str());
-		text = NqUtil::Format("Release %s %s is published in %s.\n%s", job.id.c_str(), job.version.c_str(),
-			job.repo.c_str(), job.url.c_str());
-		if (job.served) text += "\n\nThe game already offers it: players see the update in the Mods menu.";
+		r.tone = XUI::Tone::Success;
+		r.headline = NqUtil::Format("Release %s %s is published.", job.id.c_str(), job.version.c_str());
+		if (job.served) r.headline += " The game already offers it: players see the update in the Mods menu.";
+		r.url = job.url;
+		r.rows.push_back(std::make_pair(xr_string("Repository"), job.repo));
+		r.rows.push_back(std::make_pair(xr_string("Tag"), job.tag));
+		r.rows.push_back(std::make_pair(xr_string("Release page"), job.url));
 	}
 	else if (jsCancelled == job.state)
 	{
 		Msg("* [XMS] publishing %s %s cancelled", job.id.c_str(), job.version.c_str());
-		text = job.github ? "Publishing cancelled. Nothing was published; the draft stays on GitHub and the next attempt reuses it." :
+		r.tone = XUI::Tone::Warning;
+		r.headline = job.github ? "Publishing cancelled. Nothing was published; the draft stays on GitHub and the next attempt reuses it." :
 			"Publishing cancelled before anything reached GitHub. Nothing was published.";
 	}
 	else if (job.refused)
 	{
 		Msg("! [XMS] release %s %s not published: %s", job.id.c_str(), job.version.c_str(), job.error.c_str());
-		text = "The release was not published: " + job.error;
+		r.tone = XUI::Tone::Error;
+		r.headline = "The release was not published: " + job.error;
 	}
 	else
 	{
 		Msg("! [XMS] publishing %s %s failed: %s", job.id.c_str(), job.version.c_str(), job.error.c_str());
-		text = "Publishing failed: " + job.error;
+		r.tone = XUI::Tone::Error;
+		r.headline = "Publishing failed: " + job.error;
 	}
 	if (!job.warnings.empty())
 	{
 		Msg("! [XMS] %s", job.warnings.c_str());
-		text += "\n\n" + job.warnings;
+		SplitLines(job.warnings, r.warnings);
 	}
 	s_WantProgress = false;
-	if (s_JobFromUI) ShowResult(text, jsDone == job.state ? job.url.c_str() : "");
+	if (r.want) s_Result = r;
+	// a release that went out from the window shows up in the Releases tab
+	if (s_JobFromUI && s_ReleasesOpen) s_RefreshWanted = true;
 }
 
 //------------------------------------------------------------------------------
@@ -455,8 +487,7 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	if (!EditorMod::Load(EditorProject::Root(), m)) { err = "mod.ltx not found in the project"; return false; }
 	if (m.update_github.empty())
 	{
-		err = "no GitHub repository in the manifest: set it in Mod > Publish Release or Mod > Edit Manifest "
-			  "(MCP: mod_set_manifest github=owner/repo)";
+		err = "no GitHub repository in the manifest: set it in Mod Settings (MCP: mod_set_manifest github=owner/repo)";
 		return false;
 	}
 	if (!EditorMod::ValidateGithubRepo(m.update_github.c_str()))
@@ -640,335 +671,7 @@ void SignStart()
 }
 
 //------------------------------------------------------------------------------
-// the dialog
-//------------------------------------------------------------------------------
-void Hint(LPCSTR text)
-{
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("%s", text);
-}
-
-void RefreshReplaced()
-{
-	if (s_ReplacedFor == s_Version) return;
-	s_ReplacedFor = s_Version;
-	EditorMod::ListPackagedFiles(EditorProject::Root(), "", s_ModuleId.c_str(), s_Version, s_Replaced);
-}
-
-void RunDeferredPublish()
-{
-	s_PublishQueued = false;
-	SOptions options;
-	options.tag				= s_Tag;
-	options.title			= s_Title;
-	options.notes			= s_Notes;
-	options.requires_game	= s_Requires;
-	options.requires_given	= true;
-	options.prerelease		= s_Prerelease;
-	options.latest			= s_Latest;
-
-	SStarted started;
-	xr_string err;
-	if (Start(options, true, started, err))
-	{
-		s_WantProgress = true;
-		return;
-	}
-	ShowResult(err == "cancelled" ? xr_string("Packaging cancelled. Nothing was published.")
-								  : "Cannot publish the release: " + err);
-}
-
-// the repository and the version are manifest fields; the dialog edits them in place
-bool SaveManifestFields(xr_string& err)
-{
-	xr_string repo;
-	EditorMod::NormalizeGithubRepo(s_Repo, repo);
-	EditorMod::SManifest m;
-	if (!EditorMod::Load(EditorProject::Root(), m)) { err = "mod.ltx not found in the project"; return false; }
-	if (m.update_github == repo && m.version == s_Version) return true;
-	m.update_github = repo;
-	m.version = s_Version;
-	if (EditorMod::Save(EditorProject::Root(), m)) return true;
-	err = "cannot write mod.ltx";
-	return false;
-}
-
-void DrawAccount()
-{
-	ImGui::SeparatorText("GitHub account");
-	const SSignView sign = SignSnapshot();
-	if (ssDone == sign.state)
-	{
-		if (s_SignThread.joinable()) s_SignThread.join();
-		SignSet(ssIdle);
-		RefreshAccount();
-	}
-	if (ssStarting == sign.state || ssWaiting == sign.state)
-	{
-		if (ssStarting == sign.state)
-			ImGui::TextUnformatted("Contacting GitHub...");
-		else
-		{
-			// GitHub's own page, and only that: the address came over the network
-			const bool trusted = 0 == strncmp(sign.uri.c_str(), "https://github.com/", 19);
-			if (!s_SignShown)
-			{
-				s_SignShown = true;
-				ImGui::SetClipboardText(sign.user_code.c_str());
-				if (trusted) ::ShellExecuteA(0, "open", sign.uri.c_str(), 0, 0, SW_SHOWNORMAL);
-			}
-			ImGui::Text("Enter this code on GitHub:  %s", sign.user_code.c_str());
-			ImGui::TextDisabled("The code is in the clipboard. Waiting for the confirmation...");
-			ImGui::BeginDisabled(!trusted);
-			if (ImGui::Button("Open GitHub"))
-				::ShellExecuteA(0, "open", sign.uri.c_str(), 0, 0, SW_SHOWNORMAL);
-			ImGui::EndDisabled();
-			ImGui::SameLine();
-		}
-		if (ImGui::Button("Cancel Sign-in")) SignStop();
-		return;
-	}
-
-	ImGui::Text("Account: %s", EditorGithub::SourceText(s_Account.source));
-	if (!s_Account.detail.empty())
-	{
-		ImGui::SameLine();
-		ImGui::TextDisabled("(%s)", s_Account.detail.c_str());
-	}
-	if (ssFailed == sign.state && !sign.error.empty())
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", sign.error.c_str());
-
-	if (EditorGithub::DeviceSignInAvailable())
-	{
-		if (ImGui::Button("Sign in with GitHub")) SignStart();
-		Hint("Opens GitHub in the browser and asks for a one-time code.\nThe resulting token is kept in the Windows Credential Manager.");
-	}
-	if (EditorGithub::asSaved == s_Account.source)
-	{
-		if (EditorGithub::DeviceSignInAvailable()) ImGui::SameLine();
-		if (ImGui::Button("Forget Token"))
-		{
-			EditorGithub::ForgetToken();
-			RefreshAccount();
-		}
-		Hint("Removes the token the editor saved.");
-	}
-
-	// with an account in effect a pasted token is the exception, so it folds away
-	const bool signed_in = EditorGithub::asNone != s_Account.source;
-	if (signed_in && !ImGui::TreeNode("Use a personal access token")) return;
-	ImGui::SetNextItemWidth(ImGui::GetFontSize() * 22.f);
-	ImGui::InputTextWithHint("##token", "personal access token", s_TokenInput, sizeof(s_TokenInput), ImGuiInputTextFlags_Password);
-	Hint("GitHub > Settings > Developer settings > Fine-grained tokens:\nthis repository, Contents = Read and write.\n"
-		 "Kept in the Windows Credential Manager - never in the project.");
-	ImGui::SameLine();
-	ImGui::BeginDisabled(!s_TokenInput[0]);
-	if (ImGui::Button("Save Token"))
-	{
-		if (EditorGithub::SaveToken(s_TokenInput, s_AccountError))
-			RefreshAccount();
-		SecureZeroMemory(s_TokenInput, sizeof(s_TokenInput));
-	}
-	ImGui::EndDisabled();
-	if (!s_AccountError.empty())
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_AccountError.c_str());
-	if (signed_in) ImGui::TreePop();
-}
-
-// a sign-in nobody is watching and a token nobody is going to save
-void DialogCleanup()
-{
-	SignStop();
-	SecureZeroMemory(s_TokenInput, sizeof(s_TokenInput));
-}
-
-void CloseDialog()
-{
-	DialogCleanup();
-	s_WantDialog = false;
-	ImGui::CloseCurrentPopup();
-}
-
-// the author key is there and wants its password before anything can be signed
-bool KeyLocked()
-{
-	const EditorCatalog::SKeyState key = EditorCatalog::KeyStateForUI();
-	return key.exists && key.error.empty() && key.locked;
-}
-
-// MAJOR.MINOR.PATCH, what PackageRelease accepts for requires_game
-bool GameVersionOk(LPCSTR v)
-{
-	int dots = 0;
-	for (const char* p = v; *p; ++p) dots += ('.' == *p);
-	return 2 == dots && EditorMod::ValidateVersion(v);
-}
-
-void DrawDialog()
-{
-	// the caption cross clears the flag without passing through CloseDialog
-	static bool was_open = false;
-	if (!s_WantDialog)
-	{
-		if (was_open) DialogCleanup();
-		was_open = false;
-		return;
-	}
-	was_open = true;
-	ImGui::SetNextWindowSize(ImVec2(620, 0), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal(kTitlePublish, &s_WantDialog, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-
-	// measured, not guessed: the editor's font scale follows the display
-	const float em = ImGui::GetFontSize();
-	const float label = ImGui::CalcTextSize("Requires game").x + em, field = em * 26.f, narrow = em * 9.f;
-	ImGui::Text("Module: %s", s_ModuleId.c_str());
-
-	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Repository"); ImGui::SameLine(label);
-	ImGui::SetNextItemWidth(field);
-	ImGui::InputTextWithHint("##repo", "owner/repo or the repository address", s_Repo, sizeof(s_Repo));
-	Hint("The GitHub repository whose latest release updates this module.\nSet once - it is stored in mod.ltx as [update] github.");
-
-	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Version"); ImGui::SameLine(label);
-	ImGui::SetNextItemWidth(narrow);
-	ImGui::InputText("##version", s_Version, sizeof(s_Version));
-	Hint("Version of this release, stored in mod.ltx.\nA player is offered the update when it is higher than the installed one.");
-
-	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Requires game"); ImGui::SameLine(label);
-	ImGui::SetNextItemWidth(narrow);
-	ImGui::InputText("##requires", s_Requires, sizeof(s_Requires));
-	Hint("Lowest Dead Air: Refined version this release runs on. Empty = any.");
-
-	// the used-tag list is a file: read it when the version changes, not every frame
-	if (s_TagAuto && s_TagFor != s_Version)
-	{
-		s_TagFor = s_Version;
-		strncpy_s(s_Tag, sizeof(s_Tag), FreshTag(s_Version).c_str(), _TRUNCATE);
-	}
-	if (s_TitleAuto)	strncpy_s(s_Title, sizeof(s_Title), DefaultTitle(s_ModuleId, s_ModuleName, s_Version).c_str(), _TRUNCATE);
-
-	ImGui::SeparatorText("Release");
-	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Tag"); ImGui::SameLine(label);
-	ImGui::SetNextItemWidth(narrow);
-	if (ImGui::InputText("##tag", s_Tag, sizeof(s_Tag))) s_TagAuto = false;
-	Hint("Git tag GitHub creates for the release. The game does not read it.\n"
-		 "A tag deleted within the last hour is not offered again: GitHub keeps\n"
-		 "serving a deleted release's files under a reused tag for minutes.");
-
-	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Title"); ImGui::SameLine(label);
-	ImGui::SetNextItemWidth(field);
-	if (ImGui::InputText("##title", s_Title, sizeof(s_Title))) s_TitleAuto = false;
-
-	ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Notes"); ImGui::SameLine(label);
-	ImGui::InputTextMultiline("##notes", s_Notes, sizeof(s_Notes), ImVec2(field, em * 6.f));
-	Hint("What changed - shown on the release page. Markdown.");
-
-	ImGui::Dummy(ImVec2(label - ImGui::GetStyle().ItemSpacing.x, 0)); ImGui::SameLine(label);
-	ImGui::Checkbox("Pre-release", &s_Prerelease);
-	Hint("Players do not receive pre-releases: the game reads the latest release alone.");
-	ImGui::SameLine();
-	ImGui::BeginDisabled(s_Prerelease);
-	bool latest = s_Latest && !s_Prerelease;
-	if (ImGui::Checkbox("Set as latest", &latest)) s_Latest = latest;
-	ImGui::EndDisabled();
-	Hint("The latest release is the one players update to.");
-
-	DrawAccount();
-	ImGui::SeparatorText("Author key");
-	EditorCatalog::DrawKeyLine("publish");
-	ImGui::Separator();
-
-	xr_string repo;
-	EditorMod::NormalizeGithubRepo(s_Repo, repo);
-	LPCSTR problem = 0;
-	if (repo.empty())											problem = "Set the GitHub repository.";
-	else if (!EditorMod::ValidateGithubRepo(repo.c_str()))		problem = "Invalid repository: owner/repo expected.";
-	else if (!EditorMod::ValidateVersion(s_Version))			problem = "Invalid version: 1-4 numbers separated by dots, e.g. 1.2.0.";
-	else if (s_Requires[0] && !GameVersionOk(s_Requires))		problem = "Invalid game version: MAJOR.MINOR.PATCH, e.g. 1.4.2.";
-	else if (!ValidTag(s_Tag))									problem = "Invalid tag: letters, digits, '.', '_' and '-'.";
-	else if (EditorGithub::asNone == s_Account.source)			problem = "Sign in to GitHub first.";
-	else if (KeyLocked())										problem = "Unlock the author key first: the release is signed with it.";
-	if (problem)
-		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "%s", problem);
-
-	RefreshReplaced();
-	if (!s_Replaced.empty())
-	{
-		ImGui::TextDisabled("%u file(s) of an earlier packaging in releases\\%s are deleted:",
-			(u32)s_Replaced.size(), s_Version);
-		for (u32 i = 0; i < s_Replaced.size(); ++i)
-			ImGui::TextDisabled("  %s", s_Replaced[i].c_str());
-	}
-
-	ImGui::BeginDisabled(0 != problem || s_PublishQueued);
-	if (ImGui::Button("Publish", ImVec2(120, 0)))
-	{
-		xr_string err;
-		if (SaveManifestFields(err))	s_PublishQueued = UI->DeferUIWork(&RunDeferredPublish);
-		else							ShowResult("Cannot publish the release: " + err);
-		CloseDialog();
-	}
-	ImGui::EndDisabled();
-	Hint("Packages the module, uploads it as a draft, checks every file and only then publishes it.\n"
-		 "A module the Mod Browser lists is scanned on VirusTotal with your own key first.");
-	ImGui::SameLine();
-	if (ImGui::Button("Cancel", ImVec2(120, 0))) CloseDialog();
-	ImGui::EndPopup();
-}
-
-void DrawProgress()
-{
-	if (!s_WantProgress) return;
-	const SJobView job = JobSnapshot();
-	if (!Running(job.state)) { s_WantProgress = false; return; }
-	ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal(kTitleProgress, &s_WantProgress, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-
-	ImGui::Text("%s %s  ->  %s", job.id.c_str(), job.version.c_str(), job.repo.c_str());
-	ImGui::TextUnformatted(job.stage.c_str());
-	const float fraction = job.total ? float(double(job.sent) / double(job.total)) : 0.f;
-	const xr_string overlay = NqUtil::Format("%.1f / %.1f MB", double(job.sent) / 1048576.0, double(job.total) / 1048576.0);
-	ImGui::ProgressBar(fraction, ImVec2(ImGui::GetFontSize() * 28.f, 0), overlay.c_str());
-	ImGui::Spacing();
-	if (ImGui::Button("Cancel", ImVec2(120, 0))) s_JobCancel.Cancel();
-	Hint(jsScanning == job.state ? "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub." :
-		"Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
-	ImGui::SameLine();
-	if (ImGui::Button("Hide", ImVec2(120, 0)))
-	{
-		s_WantProgress = false;
-		ImGui::CloseCurrentPopup();
-	}
-	Hint("The upload goes on; the toolbar button shows it and brings this window back.");
-	ImGui::EndPopup();
-}
-
-void DrawResult()
-{
-	if (!s_WantResult) return;
-	if (!ImGui::BeginPopupModal(kTitleResult, &s_WantResult, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.f);
-	ImGui::TextUnformatted(s_ResultText.c_str());
-	ImGui::PopTextWrapPos();
-	ImGui::Separator();
-	if (!s_ResultUrl.empty())
-	{
-		if (ImGui::Button("Open Release Page"))
-			::ShellExecuteA(0, "open", s_ResultUrl.c_str(), 0, 0, SW_SHOWNORMAL);
-		ImGui::SameLine();
-	}
-	if (ImGui::Button("OK", ImVec2(120, 0)))
-	{
-		s_WantResult = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
-}
-
-//------------------------------------------------------------------------------
-// the releases that are already out: the list, and deleting one
+// the releases that are already out: the list, editing and deleting one
 //------------------------------------------------------------------------------
 enum EManageState { msIdle, msRunning, msDone, msFailed };
 enum EManageOp { moList, moDelete, moEdit };
@@ -994,13 +697,18 @@ struct SManageView
 	xr_string								repo;
 	EManageOp								op;			// what the job in flight does before it lists
 	xr_string								error;		// why the last job failed
+	xr_string								error_text;	// ...as the tab says it: a sentence naming what failed
 	xr_string								note;		// what a deletion did
 	bool									tag_kept;	// ...and whether it left the tag behind
 	bool									listed;		// `releases` is GitHub's answer, not an empty start
 	xr_vector<EditorGithub::SReleaseInfo>	releases;
+	u32										generation;	// every change bumps it: the tab copies the view only then
 
-	SManageView() : state(msIdle), op(moList), tag_kept(false), listed(false) {}
+	SManageView() : state(msIdle), op(moList), tag_kept(false), listed(false), generation(0) {}
 };
+
+// why the Releases tab has nothing to list
+enum EReleasesSetup { rsOk, rsNoProject, rsNoRepo, rsNoAccount };
 
 std::mutex				s_ManageLock;
 SManageView				s_Manage;			// guarded by s_ManageLock
@@ -1013,11 +721,37 @@ SManageView ManageSnapshot()
 	return s_Manage;
 }
 
-bool ManageRunning() { return msRunning == ManageSnapshot().state; }
+bool ManageRunning()
+{
+	std::lock_guard<std::mutex> guard(s_ManageLock);
+	return msRunning == s_Manage.state;
+}
 
 void ManageReap()
 {
 	if (!ManageRunning() && s_ManageThread.joinable()) s_ManageThread.join();
+}
+
+// A reason GitHub, the network or a job gave is a clause; these make it the end of a sentence, or one of its own.
+xr_string Reason(xr_string text)
+{
+	while (!text.empty() && (text.back() == '.' || text.back() == ' ')) text.pop_back();
+	return text;
+}
+
+xr_string Sentence(const xr_string& text)
+{
+	xr_string out = Reason(text);
+	if (!out.empty()) out[0] = (char)toupper((unsigned char)out[0]);
+	return out.empty() ? out : out + ".";
+}
+
+void SetManageError(const xr_string& err)
+{
+	std::lock_guard<std::mutex> guard(s_ManageLock);
+	s_Manage.error = err;
+	s_Manage.error_text = Sentence(err);
+	++s_Manage.generation;
 }
 
 void ManageWorker(xr_string repo, xr_string token, SManageRequest rq)
@@ -1065,15 +799,24 @@ void ManageWorker(xr_string repo, xr_string token, SManageRequest rq)
 			note = NqUtil::Format("Release %s is updated.", tag.c_str());
 	}
 
-	// whatever happened above, the window shows what GitHub has now
+	xr_string error_text;
+	if (!error.empty())
+		error_text = (moDelete == rq.op ? "The release could not be deleted: " : "The release could not be saved: ") + Reason(error) + ".";
+
+	// whatever happened above, the tab shows what GitHub has now
 	xr_string list_error;
 	const bool listed = EditorGithub::ListReleases(repo, token, s_ManageCancel, releases, list_error);
-	if (error.empty()) error = list_error;
+	if (error.empty() && !list_error.empty())
+	{
+		error = list_error;
+		error_text = "The releases could not be read: " + Reason(list_error) + ".";
+	}
 	EditorGithub::WipeString(token);
 
 	std::lock_guard<std::mutex> guard(s_ManageLock);
 	s_Manage.state		= error.empty() ? msDone : msFailed;
 	s_Manage.error		= error;
+	s_Manage.error_text	= error_text;
 	s_Manage.note		= note;
 	s_Manage.tag_kept	= tag_kept;
 	if (listed)
@@ -1081,23 +824,36 @@ void ManageWorker(xr_string repo, xr_string token, SManageRequest rq)
 		s_Manage.listed		= true;
 		s_Manage.releases	= releases;
 	}
+	++s_Manage.generation;
 }
 
-bool ManageStart(const SManageRequest& rq, xr_string& err)
+// `setup` says why nothing can be listed at all: no project, no repository, no account
+bool ManageStart(const SManageRequest& rq, xr_string& err, EReleasesSetup* setup = 0)
 {
 	err.clear();
-	if (!EditorProject::Active())	{ err = "no active project"; return false; }
+	if (setup) *setup = rsOk;
+	if (!EditorProject::Active())
+	{
+		err = "no active project";
+		if (setup) *setup = rsNoProject;
+		return false;
+	}
 	Reap();
 	ManageReap();
 	if (JobRunning())				{ err = "a release is being published - wait for it to finish"; return false; }
 	if (ManageRunning())			{ err = "the release list is busy - try again in a moment"; return false; }
 
 	EditorMod::SManifest m;
-	if (!EditorMod::Load(EditorProject::Root(), m)) { err = "mod.ltx not found in the project"; return false; }
+	if (!EditorMod::Load(EditorProject::Root(), m))
+	{
+		err = "mod.ltx not found in the project";
+		if (setup) *setup = rsNoRepo;
+		return false;
+	}
 	if (m.update_github.empty() || !EditorMod::ValidateGithubRepo(m.update_github.c_str()))
 	{
-		err = "no GitHub repository in the manifest: set it in Mod > Publish Release or Mod > Edit Manifest "
-			  "(MCP: mod_set_manifest github=owner/repo)";
+		err = "no GitHub repository in the manifest: set it in Mod Settings (MCP: mod_set_manifest github=owner/repo)";
+		if (setup) *setup = rsNoRepo;
 		return false;
 	}
 	EditorGithub::SAccount account;
@@ -1106,6 +862,7 @@ bool ManageStart(const SManageRequest& rq, xr_string& err)
 	{
 		err = "not signed in to GitHub: sign in from Mod > Publish Release, sign in to the GitHub CLI (gh auth login) "
 			  "or set GH_TOKEN";
+		if (setup) *setup = rsNoAccount;
 		return false;
 	}
 
@@ -1121,8 +878,10 @@ bool ManageStart(const SManageRequest& rq, xr_string& err)
 		s_Manage.repo		= m.update_github;
 		s_Manage.op			= rq.op;
 		s_Manage.error.clear();
+		s_Manage.error_text.clear();
 		s_Manage.note.clear();
 		s_Manage.tag_kept	= false;
+		++s_Manage.generation;
 	}
 	if (moList != rq.op)
 		Msg("* [XMS] %s release %s in %s", moDelete == rq.op ? "deleting" : "editing",
@@ -1134,216 +893,964 @@ bool ManageStart(const SManageRequest& rq, xr_string& err)
 	return true;
 }
 
+SManageView		s_Shown;					// the view the windows draw, copied when the worker changed it
+
+const SManageView& ShownView()
+{
+	std::lock_guard<std::mutex> guard(s_ManageLock);
+	if (s_Shown.generation != s_Manage.generation) s_Shown = s_Manage;
+	return s_Shown;
+}
+
+//------------------------------------------------------------------------------
+// shared by the windows
+//------------------------------------------------------------------------------
+ImU32 Token(XFinedTheme::ColorToken token, float alpha = 1.f)
+{
+	return XFinedTheme::U32(token, alpha);
+}
+
+// GitHub's own pages only: the address of a release comes over the network
+bool IsGithubPage(const xr_string& url)
+{
+	return 0 == strncmp(url.c_str(), "https://github.com/", 19);
+}
+
+void OpenGithubPage(const xr_string& url)
+{
+	if (IsGithubPage(url))
+		::ShellExecuteA(0, "open", url.c_str(), 0, 0, SW_SHOWNORMAL);
+}
+
+// a label over the field it names, in a dialog without a property grid
+void FieldLabel(LPCSTR text)
+{
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::TextUnformatted(text);
+	ImGui::PopStyleColor();
+}
+
+//------------------------------------------------------------------------------
+// the Publish Release dialog
+//------------------------------------------------------------------------------
+// what the dialog shows of mod.ltx, read again whenever the manifest changes under it
+void ReadManifestFields()
+{
+	s_ManifestGen = EditorMod::ManifestGeneration();
+	EditorMod::SManifest m;
+	EditorMod::Load(EditorProject::Root(), m);
+	s_ModuleId		= m.id;
+	s_ModuleName	= m.name;
+	s_Repo			= m.update_github;
+	s_Version		= m.version;
+}
+
+void RefreshReplaced()
+{
+	if (s_ReplacedFor == s_Version) return;
+	s_ReplacedFor = s_Version;
+	EditorMod::ListPackagedFiles(EditorProject::Root(), "", s_ModuleId.c_str(), s_Version.c_str(), s_Replaced);
+}
+
+void RunDeferredPublish()
+{
+	s_PublishQueued = false;
+	SOptions options;
+	options.tag				= s_Tag;
+	options.title			= s_Title;
+	options.notes			= s_Notes;
+	options.requires_game	= s_Requires;
+	options.requires_given	= true;
+	options.prerelease		= s_Prerelease;
+	options.latest			= s_Latest;
+
+	SStarted started;
+	xr_string err;
+	if (Start(options, true, started, err))
+	{
+		s_WantProgress = true;
+		return;
+	}
+	if (err == "cancelled")
+		XUI::Notice(XUI::Tone::Warning, "Publish Release", "Packaging cancelled. Nothing was published.");
+	else
+		XUI::Notice(XUI::Tone::Error, "Publish Release", ("Cannot publish the release: " + err + ".").c_str());
+}
+
+// a sign-in nobody is watching and a token nobody is going to save
+void DialogCleanup()
+{
+	SignStop();
+	SecureZeroMemory(s_TokenInput, sizeof(s_TokenInput));
+}
+
+// the author key is there and wants its password before anything can be signed
+bool KeyLocked()
+{
+	return EditorCatalog::KeyWantsPassword();
+}
+
+// MAJOR.MINOR.PATCH, what PackageRelease accepts for requires_game
+bool GameVersionOk(LPCSTR v)
+{
+	int dots = 0;
+	for (const char* p = v; *p; ++p) dots += ('.' == *p);
+	return 2 == dots && EditorMod::ValidateVersion(v);
+}
+
+// v1.2.0 and the fresh tags of the same version (v1.2.0-r2, ...): EditorGithub::Publish refuses a version that is
+// out under any of them
+bool IsVersionTag(const xr_string& tag, const xr_string& version_tag)
+{
+	if (0 != tag.compare(0, version_tag.size(), version_tag)) return false;
+	LPCSTR rest = tag.c_str() + version_tag.size();
+	if (!rest[0]) return true;
+	if ('-' != rest[0] || 'r' != rest[1] || !rest[2]) return false;
+	for (LPCSTR c = rest + 2; *c; ++c)
+		if (*c < '0' || *c > '9') return false;
+	return true;
+}
+
+// What GitHub would refuse after the packaging, known before the click: a published release of this version, or one
+// that carries the tag. Nothing while the dialog has no list of the repository's releases.
+struct SPublishedClash
+{
+	bool		found = false;
+	bool		version = false;	// the version is out; otherwise only the tag is taken
+	u64			id = 0;
+	xr_string	tag;
+};
+
+SPublishedClash PublishedClash(const SManageView& view)
+{
+	SPublishedClash clash;
+	if (!view.listed || view.repo != s_Repo) return clash;
+	const bool version_ok = EditorMod::ValidateVersion(s_Version.c_str());
+	const xr_string version_tag = "v" + s_Version;
+	for (const EditorGithub::SReleaseInfo& r : view.releases)
+	{
+		if (r.draft) continue;
+		const bool version = version_ok && IsVersionTag(r.tag, version_tag);
+		if (!version && (clash.found || r.tag != s_Tag)) continue;
+		clash.found		= true;
+		clash.version	= version;
+		clash.id		= r.id;
+		clash.tag		= r.tag;
+		if (version) break;
+	}
+	return clash;
+}
+
+// The dialog reads the releases once it is up, and again for another repository or account: a version that is out
+// is listed as a problem before the click instead of refused after the packaging.
+void EnsureReleaseList()
+{
+	if (EditorGithub::asNone == s_Account.source || !EditorMod::ValidateGithubRepo(s_Repo.c_str())) return;
+	const xr_string key = s_Repo + "|" + EditorGithub::SourceText(s_Account.source);
+	if (key == s_ListAskedFor || JobRunning()) return;
+	if (ManageRunning())
+	{
+		// a list of this repository is on its way already
+		const SManageView& view = ShownView();
+		if (moList == view.op && view.repo == s_Repo) s_ListAskedFor = key;
+		return;
+	}
+	s_ListAskedFor = key;
+	xr_string err;
+	if (!ManageStart(SManageRequest(), err)) SetManageError(err);
+}
+
+// what a problem sends the author to
+enum EPublishFix { fxSettings = 1, fxReleases = 2 };
+
+// every reason the Publish button is off, in the order the dialog shows the fields
+void PublishProblems(const SPublishedClash& clash, XUI::Strings& out, u32& fixes)
+{
+	fixes = 0;
+	if (s_Repo.empty())
+		out.push_back("No GitHub repository: set one in Mod Settings ([update] github).");
+	else if (!EditorMod::ValidateGithubRepo(s_Repo.c_str()))
+		out.push_back("The GitHub repository in Mod Settings is not owner/repo: " + s_Repo + ".");
+	if (!EditorMod::ValidateVersion(s_Version.c_str()))
+		out.push_back("The version in Mod Settings is not valid: 1-4 numbers separated by dots, e.g. 1.2.0.");
+	if (!out.empty()) fixes |= fxSettings;
+	if (clash.version)
+	{
+		out.push_back(NqUtil::Format("Version %s is already published as %s, and a published release is never overwritten: raise the "
+			"version in Mod Settings, or delete that release in Releases first.", s_Version.c_str(), clash.tag.c_str()));
+		fixes |= fxSettings | fxReleases;
+	}
+	if (!s_Requires.empty() && !GameVersionOk(s_Requires.c_str()))
+		out.push_back("The linked game's version " + s_Requires + " is not MAJOR.MINOR.PATCH.");
+	if (KeyLocked())
+		out.push_back("The author key is locked: give its password below - the release is signed with it.");
+	if (!ValidTag(s_Tag))
+		out.push_back("The tag takes 1-100 letters, digits, '.', '_' and '-', and starts with neither '-' nor '.'.");
+	else if (clash.found && !clash.version)
+		out.push_back(NqUtil::Format("Tag %s is already published, and a published release is never overwritten: pick another tag.", s_Tag));
+	if (xr_strlen(s_Title) > 200)
+		out.push_back("The title is longer than 200 characters.");
+	if (EditorGithub::asNone == s_Account.source)
+		out.push_back("Not signed in to GitHub: sign in or save a token below.");
+	// reading the list is not a problem, a deletion or an edit in flight is
+	const SManageView& view = ShownView();
+	if (msRunning == view.state && moList != view.op)
+		out.push_back("A release is being deleted or edited: wait for it to finish.");
+}
+
+// a sign-in that went through while the dialog is up: the account it shows is read again
+void ReapSignIn()
+{
+	if (ssDone != SignSnapshot().state) return;
+	if (s_SignThread.joinable()) s_SignThread.join();
+	SignSet(ssIdle);
+	RefreshAccount();
+}
+
+// The account rows of the dialog's grid: where the token comes from, the device sign-in, a pasted token.
+void DrawAccountRows()
+{
+	const SSignView sign = SignSnapshot();
+	const bool signed_in = EditorGithub::asNone != s_Account.source;
+	const bool signing = ssStarting == sign.state || ssWaiting == sign.state;
+
+	if (XUI::PropertyRow("Account", "Where the GitHub token comes from: an environment variable, the token the editor saved in the "
+			"Windows Credential Manager, or the GitHub CLI (gh auth login) - in that order.", signed_in ? XUI::PropReadOnly : XUI::PropRequired))
+	{
+		xr_string text = signed_in ? xr_string(EditorGithub::SourceText(s_Account.source)) : xr_string("Not signed in");
+		if (signed_in && !s_Account.detail.empty()) text += " (" + s_Account.detail + ")";
+		XUI::PropertyText(text.c_str());
+		if (EditorGithub::DeviceSignInAvailable() && !signing &&
+			XUI::PropertyTrailing("##sign_in", XUI::Icon::Link, "Sign in with GitHub: opens GitHub in the browser and asks for a one-time code"))
+			SignStart();
+		if (EditorGithub::asSaved == s_Account.source && XUI::PropertyTrailing("##forget_token", XUI::Icon::Unlink, "Forget the token the editor saved"))
+		{
+			EditorGithub::ForgetToken();
+			RefreshAccount();
+		}
+		if (ssFailed == sign.state && !sign.error.empty())
+			XUI::PropertyMessage(XUI::Tone::Error, sign.error.c_str());
+	}
+
+	if (ssStarting == sign.state && XUI::PropertyRow("Sign-in", "GitHub hands out a one-time code that is entered on its own page."))
+	{
+		XUI::BusyLine("Contacting GitHub...");
+		if (XUI::PropertyTrailing("##cancel_sign_in", XUI::Icon::Close, "Cancel the sign-in")) SignStop();
+	}
+	if (ssWaiting == sign.state)
+	{
+		// GitHub's own page, and only that: the address came over the network
+		const bool trusted = IsGithubPage(sign.uri);
+		if (!s_SignShown)
+		{
+			s_SignShown = true;
+			ImGui::SetClipboardText(sign.user_code.c_str());
+			OpenGithubPage(sign.uri);
+		}
+		if (XUI::PropertyRow("Code", "Enter this code on GitHub. The token GitHub then hands out goes into the Windows Credential Manager.",
+				XUI::PropReadOnly))
+		{
+			ImGui::PushFont(XUI::GetFont(XUI::Font::Mono), XUI::FontSize(XUI::Font::Title));
+			ImGui::TextUnformatted(sign.user_code.c_str());
+			ImGui::PopFont();
+			if (XUI::PropertyTrailing("##cancel_sign_in", XUI::Icon::Close, "Cancel the sign-in")) SignStop();
+			if (trusted && XUI::PropertyTrailing("##open_github", XUI::Icon::External, "Open GitHub to enter the code")) OpenGithubPage(sign.uri);
+			if (XUI::PropertyTrailing("##copy_code", XUI::Icon::Copy, "Copy the code")) ImGui::SetClipboardText(sign.user_code.c_str());
+			XUI::PropertyMessage(XUI::Tone::Muted, "The code is in the clipboard. Waiting for the confirmation on GitHub...");
+		}
+	}
+
+	if (XUI::PropertyRow("Token", "A personal access token: GitHub > Settings > Developer settings > Fine-grained tokens, this repository, "
+			"Contents = Read and write. Kept in the Windows Credential Manager - never in the project."))
+	{
+		const float button = ImGui::CalcTextSize("Save").x + XUI::Pt(20.f);
+		ImGui::SetNextItemWidth(_max(XUI::Em(6.f), ImGui::GetContentRegionAvail().x - button - ImGui::GetStyle().ItemSpacing.x));
+		ImGui::InputTextWithHint("##token", signed_in ? "Replace with a personal access token" : "Personal access token", s_TokenInput,
+			sizeof(s_TokenInput), ImGuiInputTextFlags_Password);
+		ImGui::SameLine();
+		if (XUI::Button("Save##token", XUI::Kind::Secondary, s_TokenInput[0] != 0, "Paste a token first."))
+		{
+			if (EditorGithub::SaveToken(s_TokenInput, s_AccountError))
+			{
+				s_AccountError.clear();
+				RefreshAccount();
+			}
+			SecureZeroMemory(s_TokenInput, sizeof(s_TokenInput));
+		}
+		if (!s_AccountError.empty())
+			XUI::PropertyMessage(XUI::Tone::Error, s_AccountError.c_str());
+	}
+}
+
+void DrawDialog()
+{
+	// the cross, Esc and ui_dialog close clear the flag without passing through here
+	static bool was_open = false;
+	if (was_open && !s_WantDialog) DialogCleanup();
+	was_open = s_WantDialog;
+	if (!XUI::BeginDialog(kTitlePublish, &s_WantDialog, XUI::DialogSize::L))
+		return;
+
+	if (s_ManifestGen != EditorMod::ManifestGeneration()) ReadManifestFields();
+	// the used-tag list is a file: read it when the version changes, not every frame
+	if (s_TagAuto && s_TagFor != s_Version)
+	{
+		s_TagFor = s_Version;
+		strncpy_s(s_Tag, sizeof(s_Tag), FreshTag(s_Version.c_str()).c_str(), _TRUNCATE);
+	}
+	if (s_TitleAuto) strncpy_s(s_Title, sizeof(s_Title), DefaultTitle(s_ModuleId, s_ModuleName, s_Version.c_str()).c_str(), _TRUNCATE);
+	RefreshReplaced();
+	ReapSignIn();
+	EnsureReleaseList();
+	const SManageView& view = ShownView();
+	const bool reading = msRunning == view.state && moList == view.op;
+	const bool list_failed = msFailed == view.state && moList == view.op && view.repo == s_Repo && !view.error.empty();
+	const SPublishedClash clash = PublishedClash(view);
+	XUI::Strings problems;
+	u32 fixes = 0;
+	PublishProblems(clash, problems, fixes);
+	bool settings = false, releases = false;
+
+	XUI::BeginDialogBody();
+	for (const xr_string& problem : problems)
+		XUI::StatusText(XUI::Tone::Warning, problem.c_str());
+	// where each problem is fixed, by name: Repository and Version are read-only here
+	if (fixes & fxSettings)
+	{
+		settings = XUI::Button("Open Mod Settings", XUI::Kind::Secondary);
+		XUI::Tip("Closes this dialog and opens Mod Settings, where the repository and the version are set.");
+		if (fixes & fxReleases) ImGui::SameLine();
+	}
+	if (fixes & fxReleases)
+	{
+		releases = XUI::Button("Open Releases", XUI::Kind::Secondary);
+		XUI::Tip("Closes this dialog and opens the Releases tab on the release of this version.");
+	}
+	if (list_failed)
+		XUI::StatusText(XUI::Tone::Muted, ("The releases of " + s_Repo + " could not be read: " + Reason(view.error) + ". Publishing "
+			"checks the version on GitHub again.").c_str());
+	if (!problems.empty() || list_failed)
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+
+	if (XUI::BeginPropertyGrid("publish"))
+	{
+		const bool repo_ok = !s_Repo.empty() && EditorMod::ValidateGithubRepo(s_Repo.c_str());
+		const bool version_ok = EditorMod::ValidateVersion(s_Version.c_str()) && !clash.version;
+		// what goes out, as Mod Settings and the linked game have it: read-only here
+		if (XUI::PropertySection("Module"))
+		{
+			if (XUI::PropertyRow("Name", "The module this release carries: its name and id in Mod Settings.", XUI::PropReadOnly))
+			{
+				const xr_string name = s_ModuleName.empty() || s_ModuleName == s_ModuleId ? s_ModuleId : s_ModuleName + " (" + s_ModuleId + ")";
+				XUI::PropertyText(name.c_str());
+			}
+			if (XUI::PropertyRow("Repository", "The GitHub repository whose latest release updates this module ([update] github). Mod "
+					"Settings sets it.", XUI::PropReadOnly | (repo_ok ? 0 : XUI::PropInvalid)))
+			{
+				XUI::PropertyText(s_Repo.empty() ? "Not set" : s_Repo.c_str());
+				if (repo_ok && XUI::PropertyTrailing("##repo_page", XUI::Icon::External, "Open the repository on GitHub"))
+					OpenGithubPage(EditorGithub::RepoPage(s_Repo));
+			}
+			if (XUI::PropertyRow("Version", "The version of this release ([module] version). Mod Settings sets it. A player is offered the "
+					"update when it is higher than the installed one; a version that is published already is never published again.",
+					XUI::PropReadOnly | (version_ok ? 0 : XUI::PropInvalid)))
+				XUI::PropertyText(s_Version.empty() ? "Not set" : s_Version.c_str());
+			if (XUI::PropertyRow("Requires Game", "The lowest Dead Air: Refined version this release runs on: the version of the linked "
+					"game. Over MCP, mod_publish requires_game= names another one.", XUI::PropReadOnly))
+				XUI::PropertyText(s_Requires.empty() ? "Any version" : s_Requires.c_str());
+			// a status line like the rows above, until a locked key asks for its password here
+			if (XUI::PropertyRow("Author Key", "The key file that signs the release: the Mod Browser lists signed releases only. Submit to "
+					"Mod Browser creates one.", KeyLocked() ? XUI::PropRequired : XUI::PropReadOnly))
+				EditorCatalog::DrawKeyLine("publish");
+			XUI::EndPropertySection();
+		}
+
+		if (XUI::PropertySection("Release"))
+		{
+			if (XUI::PropertyRow("Tag", "The git tag GitHub creates for the release; the game does not read it. A tag deleted within the "
+					"last hour is not offered again: GitHub keeps serving a deleted release's files under a reused tag for minutes.",
+					ValidTag(s_Tag) && !(clash.found && !clash.version) ? 0 : XUI::PropInvalid))
+				if (ImGui::InputText("##tag", s_Tag, sizeof(s_Tag))) s_TagAuto = false;
+			if (XUI::PropertyRow("Title", "The release's title on its GitHub page.", xr_strlen(s_Title) > 200 ? XUI::PropInvalid : 0))
+				if (ImGui::InputText("##title", s_Title, sizeof(s_Title))) s_TitleAuto = false;
+			if (XUI::PropertyRow("Notes", "What changed, shown on the release page. Markdown."))
+				ImGui::InputTextMultiline("##notes", s_Notes, sizeof(s_Notes), ImVec2(0.f, XUI::Em(5.f)));
+			if (XUI::PropertyRow("Options", "Players receive only the latest release: the game reads that one alone."))
+			{
+				ImGui::Checkbox("Pre-release", &s_Prerelease);
+				XUI::Tip("Players do not receive pre-releases: the game reads the latest release alone.");
+				ImGui::SameLine(0.f, XUI::Pt(16.f));
+				ImGui::BeginDisabled(s_Prerelease);
+				bool latest = s_Latest && !s_Prerelease;
+				if (ImGui::Checkbox("Set as latest", &latest)) s_Latest = latest;
+				ImGui::EndDisabled();
+				XUI::Tip("The latest release is the one players update to.");
+			}
+			XUI::EndPropertySection();
+		}
+		if (XUI::PropertySection("GitHub Account"))
+		{
+			DrawAccountRows();
+			XUI::EndPropertySection();
+		}
+		XUI::EndPropertyGrid();
+	}
+
+	// what goes: an earlier packaging of this version is replaced, file by file
+	if (!s_Replaced.empty())
+	{
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+		XUI::StatusText(XUI::Tone::Warning, NqUtil::Format("Publishing replaces %u %s of an earlier packaging in releases\\%s:",
+			(u32)s_Replaced.size(), s_Replaced.size() == 1 ? "file" : "files", s_Version.c_str()).c_str());
+		ImGui::Indent(XUI::Pt(20.f));
+		ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+		const u32 shown = _min((u32)s_Replaced.size(), 10u);
+		for (u32 i = 0; i < shown; ++i)
+			XUI::TextEllipsis(s_Replaced[i].c_str(), -1.f, XUI::Clip::Middle);
+		if (s_Replaced.size() > shown)
+			ImGui::TextUnformatted(NqUtil::Format("and %u more", u32(s_Replaced.size() - shown)).c_str());
+		ImGui::PopStyleColor();
+		ImGui::Unindent(XUI::Pt(20.f));
+	}
+
+	const xr_string status = reading ? xr_string() : problems.empty() ? xr_string("Packages, uploads a draft, checks every file, then publishes.") :
+		NqUtil::Format("%u %s to fix", (u32)problems.size(), problems.size() == 1 ? "problem" : "problems");
+	if (XUI::BeginDialogFooter(status.c_str(), problems.empty() ? XUI::Tone::Muted : XUI::Tone::Warning))
+	{
+		// the releases that are out decide whether this version may go: nothing is offered before they are known
+		if (reading) XUI::FooterBusy("Reading the releases on GitHub...");
+		const bool can = problems.empty() && !reading && !s_PublishQueued;
+		LPCSTR why = !problems.empty() ? problems.front().c_str() : reading ? "Reading the releases on GitHub first." : "Publishing is starting.";
+		if (XUI::DialogButton("Publish", XUI::Kind::Primary, false, can, why))
+		{
+			s_PublishQueued = UI->DeferUIWork(&RunDeferredPublish);
+			s_WantDialog = false;
+		}
+		if (can)
+			XUI::Tip("Packages the module, uploads it to a draft release, checks every file and only then publishes it. A module the "
+				"Mod Browser lists is scanned on VirusTotal with your own key first.");
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+			s_WantDialog = false;
+	}
+	XUI::EndDialog();
+	if (settings)
+	{
+		s_WantDialog = false;
+		EditorMod::RequestEditManifest();
+	}
+	else if (releases)
+	{
+		s_WantDialog = false;
+		if (clash.found) s_SelectedId = clash.id;
+		EditorPublish::RequestReleases();
+	}
+}
+
+// the upload goes on in the background; this window follows it until it is hidden
+void DrawProgress()
+{
+	const SJobView job = JobSnapshot();
+	if (s_WantProgress && !Running(job.state)) s_WantProgress = false;
+	if (!XUI::BeginDialog(kTitleProgress, &s_WantProgress, XUI::DialogSize::M))
+		return;
+	XUI::BeginDialogBody();
+	{
+		XUI::FontScope strong(XUI::Font::Strong);
+		XUI::TextEllipsis(NqUtil::Format("%s %s to %s", job.id.c_str(), job.version.c_str(), job.repo.c_str()).c_str());
+	}
+	XUI::BusyLine(job.stage.empty() ? "Starting..." : job.stage.c_str());
+	const bool scanning = jsScanning == job.state;
+	const float fraction = job.total && !scanning ? float(double(job.sent) / double(job.total)) : 0.f;
+	ImGui::PushStyleColor(ImGuiCol_PlotHistogram, Token(XFinedTheme::ColorToken::Accent));
+	ImGui::ProgressBar(fraction, ImVec2(ImGui::GetContentRegionAvail().x, XUI::Pt(6.f)), "");
+	ImGui::PopStyleColor();
+	{
+		XUI::FontScope small_font(XUI::Font::Small);
+		ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextMuted));
+		const xr_string line = scanning ? xr_string("The Mod Browser lists this module: VirusTotal scans the packages first.") :
+			NqUtil::Format("%.1f of %.1f MB \xC2\xB7 %u%%", double(job.sent) / 1048576.0, double(job.total) / 1048576.0,
+				job.total ? (u32)(job.sent * 100 / job.total) : 0u);
+		ImGui::TextUnformatted(line.c_str());
+		ImGui::PopStyleColor();
+	}
+	if (XUI::BeginDialogFooter())
+	{
+		const bool stopping = s_JobCancel.Cancelled();
+		if (XUI::DialogButton("Stop Publishing", XUI::Kind::Secondary, false, !stopping, "Stopping at the next step."))
+			s_JobCancel.Cancel();
+		if (!stopping)
+			XUI::Tip(scanning ? "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub." :
+				"Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
+		if (XUI::DialogButton("Hide", XUI::Kind::Secondary, true))
+			s_WantProgress = false;
+		XUI::Tip("The upload goes on: the toolbar's Publish button shows its progress and brings this window back.");
+	}
+	XUI::EndDialog();
+}
+
+//------------------------------------------------------------------------------
+// the Releases tab: a sortable table of what the repository holds, and the details of one
+//------------------------------------------------------------------------------
+const u32		kRelistMs		= 60000;	// a tab that comes back after this long reads the list again
+EReleasesSetup	s_ReleasesSetup	= rsOk;
+u32				s_SetupGen		= 0;		// the manifest the setup was read from
+u32				s_ListedAt		= 0;		// when the tab last asked for the list (GetTickCount)
+bool			s_WantEdit		= false;
+EditorGithub::SReleaseInfo s_EditTarget;	// the release the edit dialog is about
+char			s_EditTitle[256] = {};
+xr_string		s_EditNotes;				// grows with the text: a release body runs to 125 000 characters
+
+bool ReleasesBusy(const SManageView& view)
+{
+	return msRunning == view.state || JobRunning();
+}
+
+const EditorGithub::SReleaseInfo* Selected(const SManageView& view)
+{
+	for (const EditorGithub::SReleaseInfo& r : view.releases)
+		if (r.id == s_SelectedId) return &r;
+	return nullptr;
+}
+
 xr_string SizeText(u64 bytes)
 {
+	if (bytes < 1024) return NqUtil::Format("%llu B", bytes);
 	return bytes >= (1u << 20)	? NqUtil::Format("%.1f MB", double(bytes) / 1048576.0)
 								: NqUtil::Format("%.0f KB", double(bytes) / 1024.0);
 }
 
-LPCSTR ReleaseStateText(const EditorGithub::SReleaseInfo& r)
+// "3 files \xC2\xB7 15 KB"
+xr_string FilesText(const EditorGithub::SReleaseInfo& r)
 {
-	return r.draft ? "Draft" : r.prerelease ? "Pre-release" : r.latest ? "Latest" : "";
+	const u32 n = (u32)r.assets.size();
+	return NqUtil::Format("%u %s \xC2\xB7 %s", n, n == 1 ? "file" : "files", SizeText(r.bytes).c_str());
 }
 
-const char* kTitleReleases	= "XFined Editor - Releases";
-const char* kTitleDelete	= "XFined Editor - Delete Release";
-const char* kTitleEdit		= "XFined Editor - Edit Release";
-
-bool							s_WantReleases	= false;
-bool							s_WantDelete	= false;
-bool							s_WantEdit		= false;
-EditorGithub::SReleaseInfo		s_EditTarget;		// the release the edit window is about
-char							s_EditTitle[256] = {};
-xr_string						s_EditNotes;		// grows with the text: a release body runs to 125 000 characters
-u64								s_SelectedId	= 0;
-EditorGithub::SReleaseInfo		s_DeleteTarget;		// what the confirmation names
-xr_string						s_DeleteNext;		// the release players fall back to, when the target is the latest
-
-// the confirmation names this release; when it is the latest one, also what players get next
-void PrepareDelete(const SManageView& view, const EditorGithub::SReleaseInfo& target)
+// GitHub gives the time in UTC; the author reads it in their own
+xr_string LocalTime(const xr_string& utc)
 {
-	s_DeleteTarget = target;
-	s_DeleteNext.clear();
+	SYSTEMTIME st = {}, local = {};
+	if (5 != sscanf_s(utc.c_str(), "%hu-%hu-%hu %hu:%hu", &st.wYear, &st.wMonth, &st.wDay, &st.wHour, &st.wMinute) ||
+		!::SystemTimeToTzSpecificLocalTime(nullptr, &st, &local))
+		return utc;
+	return NqUtil::Format("%04u-%02u-%02u %02u:%02u", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute);
+}
+
+// the order of the State column: what players get first
+int StateRank(const EditorGithub::SReleaseInfo& r)
+{
+	return r.latest ? 0 : r.draft ? 3 : r.prerelease ? 2 : 1;
+}
+
+void StateBadge(const EditorGithub::SReleaseInfo& r)
+{
+	if (r.latest)			XUI::Badge("Latest", XUI::Tone::Success);
+	else if (r.draft)		XUI::Badge("Draft", XUI::Tone::Muted);
+	else if (r.prerelease)	XUI::Badge("Pre-release", XUI::Tone::Info);
+}
+
+// the State cell: a badge for what stands out, plain text for a release that is simply out
+void StateCell(const EditorGithub::SReleaseInfo& r)
+{
+	if (r.latest || r.draft || r.prerelease)
+	{
+		StateBadge(r);
+		return;
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	XUI::TextEllipsis("Published");
+	ImGui::PopStyleColor();
+}
+
+// reads the list again. A failure is what the tab shows - never a window of its own
+void RefreshReleases()
+{
+	ManageReap();
+	s_ListedAt = ::GetTickCount();
+	s_SetupGen = EditorMod::ManifestGeneration();
+	if (ManageRunning() || JobRunning()) return;
+	xr_string err;
+	EReleasesSetup setup = rsOk;
+	const bool started = ManageStart(SManageRequest(), err, &setup);
+	s_ReleasesSetup = setup;
+	if (!started) SetManageError(err);
+}
+
+void OpenEdit(const EditorGithub::SReleaseInfo& target)
+{
+	// one modal at a time: two dialogs that open themselves close each other every frame
+	if (s_WantDialog || s_WantProgress) return;
+	s_EditTarget = target;
+	strncpy_s(s_EditTitle, sizeof(s_EditTitle), target.title.c_str(), _TRUNCATE);
+	s_EditNotes = target.notes;
+	s_WantEdit = true;
+}
+
+// The one question before a release goes: the release, its files and its tag by name, and what players get
+// instead when it is the latest one. GitHub keeps no copy.
+void AskDelete(const SManageView& view, const EditorGithub::SReleaseInfo& target)
+{
 	// the list is newest first: the first other release players may receive is the fallback
-	for (u32 i = 0; i < view.releases.size() && s_DeleteNext.empty(); ++i)
+	xr_string next;
+	for (u32 i = 0; i < view.releases.size() && next.empty(); ++i)
 	{
 		const EditorGithub::SReleaseInfo& r = view.releases[i];
-		if (r.id != target.id && !r.draft && !r.prerelease) s_DeleteNext = r.tag;
+		if (r.id != target.id && !r.draft && !r.prerelease) next = r.tag;
 	}
-	s_WantReleases = false;
-	s_WantDelete = true;
-}
+	const xr_string tag = target.tag.empty() ? xr_string("(no tag)") : target.tag;
+	const xr_string headline = NqUtil::Format("Delete %s %s \"%s\" from %s?", target.draft ? "draft release" : "release", tag.c_str(),
+		target.title.c_str(), view.repo.c_str());
+	xr_string consequence;
+	if (target.latest)
+		consequence = next.empty() ? xr_string("It is the latest release: players are offered no update until another one is published. ") :
+			"It is the latest release: GitHub then serves " + next + " to players. ";
+	if (!target.draft && !target.prerelease)
+		consequence += "Players who have this version keep it; published again, the game offers it to them as a fix. ";
+	consequence += "Deleted from GitHub for good - this cannot be undone.";
 
-void DrawReleases()
-{
-	if (!s_WantReleases) return;
-	ManageReap();
-	const SManageView view = ManageSnapshot();
-	const float em = ImGui::GetFontSize();
-	if (!ImGui::BeginPopupModal(kTitleReleases, &s_WantReleases, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-
-	const bool busy = msRunning == view.state;
-	ImGui::Text("Repository: %s", view.repo.c_str());
-	if (busy)
+	XUI::ConfirmSpec spec;
+	spec.id				= "delete_release";
+	spec.title			= "Delete Release";
+	spec.headline		= headline.c_str();
+	spec.items			= target.assets;
+	if (!target.draft && !target.tag.empty()) spec.items.push_back("the git tag " + target.tag);
+	spec.consequence	= consequence.c_str();
+	spec.action			= "Delete Release";
+	spec.destructive	= true;
+	const u64 id = target.id;
+	XUI::Confirm(spec, [id](XUI::Answer answer)
 	{
-		ImGui::SameLine();
-		ImGui::TextDisabled(moDelete == view.op ? "- deleting..." : moEdit == view.op ? "- saving..." : "- loading...");
-	}
-	if (!view.note.empty())
-		ImGui::TextColored(view.tag_kept ? ImVec4(1.f, 0.8f, 0.3f, 1.f) : ImVec4(0.6f, 0.9f, 0.6f, 1.f), "%s", view.note.c_str());
-	if (!view.error.empty())
-	{
-		ImGui::PushTextWrapPos(em * 46.f);
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", view.error.c_str());
-		ImGui::PopTextWrapPos();
-	}
-
-	const EditorGithub::SReleaseInfo* selected = 0;
-	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV |
-								  ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-	if (ImGui::BeginTable("##releases", 5, flags, ImVec2(em * 46.f, em * 14.f)))
-	{
-		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("Tag", 0, 2.f);
-		ImGui::TableSetupColumn("Title", 0, 4.f);
-		ImGui::TableSetupColumn("State", 0, 1.6f);
-		ImGui::TableSetupColumn("Published (UTC)", 0, 2.6f);
-		ImGui::TableSetupColumn("Files", 0, 2.2f);
-		ImGui::TableHeadersRow();
-		for (u32 i = 0; i < view.releases.size(); ++i)
-		{
-			const EditorGithub::SReleaseInfo& r = view.releases[i];
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::PushID((int)i);
-			const bool is_selected = r.id == s_SelectedId;
-			if (ImGui::Selectable(r.tag.empty() ? "(no tag)" : r.tag.c_str(), is_selected, ImGuiSelectableFlags_SpanAllColumns))
-				s_SelectedId = r.id;
-			ImGui::PopID();
-			if (is_selected) selected = &r;
-			ImGui::TableNextColumn(); ImGui::TextUnformatted(r.title.c_str());
-			ImGui::TableNextColumn(); ImGui::TextUnformatted(ReleaseStateText(r));
-			ImGui::TableNextColumn(); ImGui::TextUnformatted(r.published.empty() ? "-" : r.published.c_str());
-			ImGui::TableNextColumn(); ImGui::Text("%u, %s", (u32)r.assets.size(), SizeText(r.bytes).c_str());
-		}
-		ImGui::EndTable();
-	}
-	if (view.listed && view.releases.empty() && !busy)
-		ImGui::TextDisabled("This repository has no releases yet.");
-
-	ImGui::BeginDisabled(busy || !selected);
-	if (ImGui::Button("Edit..."))
-	{
-		s_EditTarget = *selected;
-		strncpy_s(s_EditTitle, sizeof(s_EditTitle), selected->title.c_str(), _TRUNCATE);
-		s_EditNotes = selected->notes;
-		s_WantReleases = false;
-		s_WantEdit = true;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndDisabled();
-	Hint("Title and notes of the selected release. Its files, its tag and the latest mark stay as they are.");
-	ImGui::SameLine();
-	ImGui::BeginDisabled(busy || !selected);
-	if (ImGui::Button("Delete..."))
-	{
-		PrepareDelete(view, *selected);
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndDisabled();
-	Hint("Deletes the selected release and its git tag from GitHub. Asks first.");
-	ImGui::SameLine();
-	ImGui::BeginDisabled(busy);
-	if (ImGui::Button("Refresh"))
-	{
-		xr_string err;
-		if (!ManageStart(SManageRequest(), err))
-		{
-			std::lock_guard<std::mutex> guard(s_ManageLock);
-			s_Manage.error = err;
-		}
-	}
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	if (ImGui::Button(selected ? "Open Release Page" : "Open on GitHub"))
-	{
-		const xr_string url = selected ? selected->url : EditorGithub::ReleasesPage(view.repo.c_str());
-		// GitHub's own pages only: the address of a release comes over the network
-		if (0 == strncmp(url.c_str(), "https://github.com/", 19))
-			::ShellExecuteA(0, "open", url.c_str(), 0, 0, SW_SHOWNORMAL);
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("Close"))
-	{
-		s_WantReleases = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
-}
-
-void DrawDeleteConfirm()
-{
-	if (!s_WantDelete) return;
-	const bool was_wanted = s_WantDelete;
-	if (!ImGui::BeginPopupModal(kTitleDelete, &s_WantDelete, ImGuiWindowFlags_AlwaysAutoResize, true))
-	{
-		// the caption cross: back to the list, nothing deleted
-		if (was_wanted && !s_WantDelete) s_WantReleases = true;
-		return;
-	}
-
-	const EditorGithub::SReleaseInfo& r = s_DeleteTarget;
-	const SManageView view = ManageSnapshot();
-	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.f);
-	ImGui::Text("Delete %s %s \"%s\" from %s?", r.draft ? "draft release" : "release", r.tag.c_str(), r.title.c_str(),
-		view.repo.c_str());
-	ImGui::Spacing();
-	ImGui::TextUnformatted("Removed from GitHub for good:");
-	ImGui::BulletText("the release with its %u file(s), %s", (u32)r.assets.size(), SizeText(r.bytes).c_str());
-	if (!r.draft) ImGui::BulletText("the git tag %s", r.tag.c_str());
-	ImGui::Spacing();
-	if (r.latest)
-	{
-		if (s_DeleteNext.empty())
-			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "It is the latest release. Players are offered no update until another release is published.");
-		else
-			ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "It is the latest release. GitHub then serves %s to players.", s_DeleteNext.c_str());
-	}
-	if (!r.draft && !r.prerelease)
-		ImGui::TextUnformatted("Players who already have this version keep it. Publish the version again and the game offers it to them as a fix.");
-	ImGui::TextUnformatted("GitHub keeps no copy: this cannot be undone.");
-	ImGui::PopTextWrapPos();
-	ImGui::Separator();
-
-	// Cancel is the default: Enter and Escape both back out
-	const bool confirm = ImGui::Button("Delete", ImVec2(120, 0));
-	ImGui::SameLine();
-	const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0)) ||
-						ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-						ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-	ImGui::SetItemDefaultFocus();
-
-	if (confirm)
-	{
-		xr_string err;
+		if (XUI::Answer::Yes != answer) return;
 		SManageRequest rq;
 		rq.op = moDelete;
-		rq.id = r.id;
-		if (!ManageStart(rq, err))
-		{
-			std::lock_guard<std::mutex> guard(s_ManageLock);
-			s_Manage.error = err;
-		}
-		s_SelectedId = 0;
-	}
-	if (confirm || cancel)
+		rq.id = id;
+		xr_string err;
+		if (!ManageStart(rq, err)) SetManageError(err);
+		if (s_SelectedId == id) s_SelectedId = 0;
+	});
+}
+
+// the order the table's header asks for; GitHub's own (newest first, drafts on top) is the published time falling
+void SortedOrder(const SManageView& view, xr_vector<u32>& order)
+{
+	order.resize(view.releases.size());
+	for (u32 i = 0; i < order.size(); ++i) order[i] = i;
+	const ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs();
+	if (!specs || !specs->SpecsCount) return;
+	const int column = specs->Specs[0].ColumnIndex;
+	const bool descending = ImGuiSortDirection_Descending == specs->Specs[0].SortDirection;
+	std::stable_sort(order.begin(), order.end(), [&](u32 a, u32 b)
 	{
-		s_WantDelete = false;
-		s_WantReleases = true;
-		ImGui::CloseCurrentPopup();
+		const EditorGithub::SReleaseInfo& x = view.releases[a];
+		const EditorGithub::SReleaseInfo& y = view.releases[b];
+		int c = 0;
+		switch (column)
+		{
+		case 0:	c = _stricmp(x.tag.c_str(), y.tag.c_str()); break;
+		case 1:	c = _stricmp(x.title.c_str(), y.title.c_str()); break;
+		case 2:	c = StateRank(x) - StateRank(y); break;
+		// a draft is not published yet: it is the newest
+		case 3:	c = strcmp(x.published.empty() ? "~" : x.published.c_str(), y.published.empty() ? "~" : y.published.c_str()); break;
+		default: c = x.bytes < y.bytes ? -1 : x.bytes > y.bytes ? 1 : 0; break;
+		}
+		return descending ? c > 0 : c < 0;
+	});
+}
+
+void RowMenu(const SManageView& view, const EditorGithub::SReleaseInfo& r, bool busy)
+{
+	if (ImGui::MenuItem("Edit Title and Notes...", nullptr, false, !busy))	OpenEdit(r);
+	if (ImGui::MenuItem("Open Release Page", nullptr, false, IsGithubPage(r.url)))	OpenGithubPage(r.url);
+	if (ImGui::MenuItem("Copy Tag", nullptr, false, !r.tag.empty()))	ImGui::SetClipboardText(r.tag.c_str());
+	ImGui::Separator();
+	const bool drop = XUI::MenuItem("Delete Release...", XUI::Icon::None, nullptr, !busy, true);
+	if (drop) AskDelete(view, r);
+}
+
+void DrawReleasesTable(const SManageView& view, float width, float height, bool busy)
+{
+	// the column lines stay in the header - under the last row is empty table, not columns (#33) - and show in full while
+	// a column is resized
+	const ImGuiTableFlags flags = ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter |
+		ImGuiTableFlags_Resizable | ImGuiTableFlags_NoBordersInBodyUntilResize | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX;
+	// Tag is as wide as the widest tag (a long one ellipsizes), Title takes every change of the width
+	float tag_w = XUI::TextWidth(XUI::Font::Small, "Tag") + XUI::Em(1.25f);
+	for (const EditorGithub::SReleaseInfo& r : view.releases)
+		tag_w = _max(tag_w, XUI::TextWidth(XUI::Font::Body, r.tag.empty() ? "(no tag)" : r.tag.c_str()) + XUI::Pt(2.f));
+	tag_w = _min(tag_w, XUI::Em(14.f));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, Token(XFinedTheme::ColorToken::Inset));
+	const bool open = ImGui::BeginTable("##releases", 5, flags, ImVec2(width, height));
+	ImGui::PopStyleColor();
+	if (!open) return;
+	ImGui::TableSetupScrollFreeze(0, 1);
+	ImGui::TableSetupColumn("Tag", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, tag_w);
+	ImGui::TableSetupColumn("Title", ImGuiTableColumnFlags_WidthStretch, 1.f);
+	ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, XUI::Em(6.f));
+	ImGui::TableSetupColumn("Published (local)", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort |
+		ImGuiTableColumnFlags_PreferSortDescending, XUI::Em(9.f));
+	ImGui::TableSetupColumn("Files", ImGuiTableColumnFlags_WidthFixed, XUI::Em(8.5f));
+	XUI::TableHeaders();
+	xr_vector<u32> order;
+	SortedOrder(view, order);
+	for (u32 k : order)
+	{
+		const EditorGithub::SReleaseInfo& r = view.releases[k];
+		ImGui::TableNextRow();
+		ImGui::PushID(NqUtil::Format("%llu", r.id).c_str());
+		ImGui::TableNextColumn();
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		if (ImGui::Selectable("##row", r.id == s_SelectedId, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+			s_SelectedId = r.id;
+		if (ImGui::BeginPopupContextItem("##row_menu"))
+		{
+			s_SelectedId = r.id;
+			RowMenu(view, r, busy);
+			ImGui::EndPopup();
+		}
+		ImGui::SetCursorScreenPos(at);
+		XUI::TextEllipsis(r.tag.empty() ? "(no tag)" : r.tag.c_str());
+		ImGui::TableNextColumn();
+		XUI::TextEllipsis(r.title.c_str());
+		ImGui::TableNextColumn();
+		StateCell(r);
+		ImGui::TableNextColumn();
+		XUI::TextEllipsis(r.published.empty() ? "Not published" : LocalTime(r.published).c_str());
+		ImGui::TableNextColumn();
+		XUI::TextEllipsis(FilesText(r).c_str());
+		ImGui::PopID();
 	}
-	ImGui::EndPopup();
+	ImGui::EndTable();
+}
+
+void DrawReleaseDetails(const SManageView& view, bool busy)
+{
+	const EditorGithub::SReleaseInfo* r = Selected(view);
+	if (!r)
+	{
+		XUI::EmptyState(XUI::Icon::Releases, "No release selected", "Select a release to see its files and notes.");
+		return;
+	}
+	{
+		XUI::Toolbar tb("release_actions", XUI::ToolbarPanel);
+		tb.Group(2);
+		if (tb.Action("edit", XUI::Icon::Rename, "Edit...", busy ? "A release job is running: wait for it to finish." :
+				"Edit the title and the notes. The files, the tag and the latest mark stay as they are.", !busy))
+			OpenEdit(*r);
+		tb.Group(1);
+		if (tb.Action("page", XUI::Icon::External, "Open Page", "The release's page on GitHub.", IsGithubPage(r->url)))
+			OpenGithubPage(r->url);
+		tb.Spring();
+		tb.Group(3);
+		const bool drop = tb.Action("delete", XUI::Icon::Delete, "Delete...", busy ? "A release job is running: wait for it to finish." :
+			"Delete the release and its git tag from GitHub. Asks first, naming what goes.", !busy, false, XUI::Kind::GhostDanger);
+		if (drop) AskDelete(view, *r);
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	{
+		XUI::FontScope title(XUI::Font::Title);
+		XUI::TextEllipsis(r->tag.empty() ? "(no tag)" : r->tag.c_str(), _max(XUI::Em(4.f), ImGui::GetContentRegionAvail().x - XUI::Em(6.f)));
+	}
+	if (r->latest || r->draft || r->prerelease)
+	{
+		ImGui::SameLine();
+		StateBadge(*r);
+	}
+	if (!r->title.empty())
+	{
+		ImGui::PushTextWrapPos(0.f);
+		ImGui::TextUnformatted(r->title.c_str());
+		ImGui::PopTextWrapPos();
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	if (XUI::BeginPropertyGrid("release", .35f))
+	{
+		if (XUI::PropertyRow("Published", "In your local time. A draft is not published: players never see it.", XUI::PropReadOnly))
+			XUI::PropertyText(r->published.empty() ? "Not published (draft)" : LocalTime(r->published).c_str());
+		if (XUI::PropertyRow("Files", "What the release holds: the packages, the file index and the descriptor.", XUI::PropReadOnly))
+			XUI::PropertyText(FilesText(*r).c_str());
+		XUI::EndPropertyGrid();
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::Indent(XUI::Pt(6.f));
+	for (const xr_string& name : r->assets)
+		XUI::TextEllipsis(name.c_str(), -1.f, XUI::Clip::Middle);
+	ImGui::Unindent(XUI::Pt(6.f));
+	ImGui::PopStyleColor();
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	if (XUI::Section("Notes", true))
+	{
+		if (r->notes.empty())
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextMuted));
+			ImGui::TextUnformatted("No notes.");
+			ImGui::PopStyleColor();
+		}
+		else
+		{
+			ImGui::PushTextWrapPos(0.f);
+			ImGui::TextUnformatted(r->notes.c_str());
+			ImGui::PopTextWrapPos();
+		}
+		XUI::EndSection();
+	}
+}
+
+void DrawReleasesBody()
+{
+	ManageReap();
+	const SManageView& view = ShownView();
+	const bool busy = ReleasesBusy(view);
+	if (!EditorProject::Active() || rsNoProject == s_ReleasesSetup)
+	{
+		XUI::EmptyState(XUI::Icon::Releases, "No project", "Open a project to see the releases of its module.");
+		return;
+	}
+	// Mod Settings set the repository meanwhile: the list follows
+	if (rsNoRepo == s_ReleasesSetup && s_SetupGen != EditorMod::ManifestGeneration())
+		RefreshReleases();
+	if (rsNoRepo == s_ReleasesSetup)
+	{
+		if (XUI::EmptyState(XUI::Icon::Releases, "No GitHub repository", "The game updates this module from the latest release of the "
+				"GitHub repository Mod Settings names.", "Open Mod Settings"))
+			EditorMod::RequestEditManifest();
+		return;
+	}
+	if (rsNoAccount == s_ReleasesSetup)
+	{
+		if (XUI::EmptyState(XUI::Icon::Link, "Not signed in to GitHub", "Sign in from Publish Release, sign in to the GitHub CLI "
+				"(gh auth login) or set GH_TOKEN, then refresh.", "Sign In..."))
+			EditorPublish::RequestPublish();
+		return;
+	}
+
+	if (JobRunning())
+		XUI::Banner(XUI::Tone::Info, "A release is being published: the list is read again when it is out.");
+	if (msRunning == view.state)
+		XUI::BusyLine(moDelete == view.op ? "Deleting the release..." : moEdit == view.op ? "Saving the release..." : "Reading the releases...");
+	else if (!view.error.empty() && 1 == XUI::Banner(XUI::Tone::Error, view.error_text.c_str(), "Retry"))
+		RefreshReleases();
+	if (!view.note.empty())
+		XUI::Banner(view.tag_kept ? XUI::Tone::Warning : XUI::Tone::Success, view.note.c_str());
+	if (!view.listed)
+		return;
+	if (view.releases.empty())
+	{
+		if (XUI::EmptyState(XUI::Icon::Releases, "No releases yet", "Publish Release packages the module and publishes it here.",
+				"Publish Release..."))
+			EditorPublish::RequestPublish();
+		return;
+	}
+
+	// the table takes what the details leave; too narrow for both, the table alone
+	const ImVec2 avail = ImGui::GetContentRegionAvail();
+	const float gap = ImGui::GetStyle().ItemSpacing.x;
+	if (avail.x < XUI::Pt(400.f + 260.f) + gap)
+	{
+		DrawReleasesTable(view, avail.x, avail.y, busy);
+		return;
+	}
+	float side_pt = 340.f;
+	XUI::SplitterTail("releases.details", true, &side_pt, 400.f, 260.f, 340.f);
+	const float side = XUI::Pt(side_pt);
+	DrawReleasesTable(view, avail.x - side - gap, avail.y, busy);
+	ImGui::SameLine(0.f, gap);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(12.f), XUI::Pt(8.f)));
+	ImGui::PushStyleColor(ImGuiCol_Border, Token(XFinedTheme::ColorToken::BorderSubtle));
+	const bool shown = ImGui::BeginChild("##release_details", ImVec2(side, avail.y), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar();
+	if (shown)
+		DrawReleaseDetails(view, busy);
+	ImGui::EndChild();
+}
+
+void ReleasesToolbar(XUI::Toolbar& tb)
+{
+	const SManageView& view = ShownView();
+	const bool busy = ReleasesBusy(view);
+	tb.Group(2);
+	if (tb.Action("refresh", XUI::Icon::Refresh, "Refresh", busy ? "A release job is running: wait for it to finish." :
+			"Read the releases from GitHub again (F5).", !busy))
+		RefreshReleases();
+	tb.Group(1);
+	const xr_string page = view.repo.empty() ? xr_string() : EditorGithub::ReleasesPage(view.repo.c_str());
+	if (tb.Action("github", XUI::Icon::External, "Open on GitHub", "The repository's releases page in the browser.", IsGithubPage(page)))
+		OpenGithubPage(page);
+}
+
+// the centre of the status bar: the repository and what it holds
+void ReleasesStatus()
+{
+	const SManageView& view = ShownView();
+	if (view.repo.empty()) return;
+	xr_string text = view.repo;
+	if (view.listed)
+	{
+		u32 drafts = 0;
+		for (const EditorGithub::SReleaseInfo& r : view.releases)
+			drafts += r.draft ? 1 : 0;
+		const u32 out = (u32)view.releases.size() - drafts;
+		text += NqUtil::Format(" \xC2\xB7 %u published", out);
+		if (drafts) text += NqUtil::Format(" \xC2\xB7 %u %s", drafts, drafts == 1 ? "draft" : "drafts");
+	}
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::TextUnformatted(text.c_str());
+	ImGui::PopStyleColor();
+}
+
+// Releases is one of the editor's major tabs (XUI::Shell): a singleton without a file of its own
+void ShowReleasesTab()
+{
+	s_ReleasesOpen = true;
+	if (XUI::Shell::IsOpen(kReleasesTab))
+	{
+		XUI::Shell::Activate(kReleasesTab);
+		return;
+	}
+	XUI::Shell::DocDesc d;
+	d.id		= kReleasesTab;
+	d.kind		= kReleasesTab;
+	d.icon		= XUI::Icon::Releases;
+	d.label		= [] { return xr_string("Releases"); };
+	d.tooltip	= []
+	{
+		const SManageView& view = ShownView();
+		return view.repo.empty() ? xr_string("The module's releases on GitHub") : "The releases of " + view.repo + " on GitHub";
+	};
+	d.alive		= [] { return s_ReleasesOpen; };
+	d.toolbar	= [](XUI::Toolbar& tb) { ReleasesToolbar(tb); };
+	d.body		= [] { DrawReleasesBody(); };
+	d.status	= [] { ReleasesStatus(); };
+	d.shortcut	= [](int key, int mods)
+	{
+		if (mods) return false;
+		if (ImGuiKey_F5 == key)
+		{
+			RefreshReleases();
+			return true;
+		}
+		const SManageView& view = ShownView();
+		const EditorGithub::SReleaseInfo* r = Selected(view);
+		if (ImGuiKey_Delete != key || !r || ReleasesBusy(view)) return false;
+		AskDelete(view, *r);
+		return true;
+	};
+	d.edit		= [](LPCSTR action, bool run)
+	{
+		if (0 != xr_strcmp(action, "delete")) return false;
+		const SManageView& view = ShownView();
+		const EditorGithub::SReleaseInfo* r = Selected(view);
+		const bool can = r && !ReleasesBusy(view);
+		if (run && can) AskDelete(view, *r);
+		return can;
+	};
+	d.on_activate = []
+	{
+		if (!ManageRunning() && ::GetTickCount() - s_ListedAt > kRelistMs) RefreshReleases();
+	};
+	d.on_close	= [] { s_ReleasesOpen = false; };
+	d.restore	= [] { return xr_string(); };
+	XUI::Shell::Open(d, true);
 }
 
 // ImGui writes into the string's own buffer and asks here when it runs out of room
@@ -1360,58 +1867,49 @@ int GrowNotes(ImGuiInputTextCallbackData* data)
 
 void DrawEditRelease()
 {
-	if (!s_WantEdit) return;
-	const bool was_wanted = s_WantEdit;
-	if (!ImGui::BeginPopupModal(kTitleEdit, &s_WantEdit, ImGuiWindowFlags_AlwaysAutoResize, true))
-	{
-		// the caption cross: back to the list, nothing saved
-		if (was_wanted && !s_WantEdit) s_WantReleases = true;
+	if (!XUI::BeginDialog(kTitleEdit, &s_WantEdit, XUI::DialogSize::M))
 		return;
-	}
-
-	const float em = ImGui::GetFontSize();
 	const EditorGithub::SReleaseInfo& r = s_EditTarget;
-	ImGui::Text("%s %s", r.draft ? "Draft release" : "Release", r.tag.c_str());
-	ImGui::TextUnformatted("Title");
-	ImGui::SetNextItemWidth(em * 34.f);
+	const bool too_long = s_EditNotes.size() > kMaxNotes, title_long = xr_strlen(s_EditTitle) > 200;
+	const bool busy = ManageRunning() || JobRunning();
+	XUI::BeginDialogBody();
+	{
+		XUI::FontScope strong(XUI::Font::Strong);
+		XUI::TextEllipsis(NqUtil::Format("%s %s", r.draft ? "Draft release" : "Release", r.tag.empty() ? "(no tag)" : r.tag.c_str()).c_str());
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	FieldLabel("Title");
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 	ImGui::InputText("##title", s_EditTitle, sizeof(s_EditTitle));
-	ImGui::TextUnformatted("Notes");
-	ImGui::InputTextMultiline("##notes", &s_EditNotes[0], s_EditNotes.capacity() + 1, ImVec2(em * 34.f, em * 14.f),
+	FieldLabel("Notes");
+	ImGui::InputTextMultiline("##notes", &s_EditNotes[0], s_EditNotes.capacity() + 1, ImVec2(ImGui::GetContentRegionAvail().x, XUI::Em(12.f)),
 		ImGuiInputTextFlags_CallbackResize, &GrowNotes, &s_EditNotes);
-	Hint("What changed - shown on the release page. Markdown.");
-	ImGui::TextDisabled("The files, the tag and the latest mark of the release stay as they are.");
-	const bool too_long = s_EditNotes.size() > kMaxNotes;
+	XUI::Tip("What changed, shown on the release page. Markdown.");
+	XUI::StatusText(XUI::Tone::Muted, "The files, the tag and the latest mark of the release stay as they are.");
 	if (too_long)
-		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "GitHub takes notes of 120 000 characters at most.");
-	ImGui::Separator();
-
-	ImGui::BeginDisabled(too_long);
-	const bool save = ImGui::Button("Save", ImVec2(120, 0));
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	const bool cancel = ImGui::Button("Cancel", ImVec2(120, 0));
-	if (save)
+		XUI::StatusText(XUI::Tone::Warning, "GitHub takes notes of 120 000 characters at most.");
+	if (title_long)
+		XUI::StatusText(XUI::Tone::Warning, "GitHub takes a title of 200 characters at most.");
+	if (XUI::BeginDialogFooter())
 	{
-		SManageRequest rq;
-		rq.op = moEdit;
-		rq.id = r.id;
-		rq.has_title = rq.has_notes = true;
-		rq.title = s_EditTitle;
-		rq.notes = s_EditNotes.c_str();	// up to the terminator: the buffer may run past the text
-		xr_string err;
-		if (!ManageStart(rq, err))
+		LPCSTR why = too_long ? "The notes are longer than GitHub takes." : title_long ? "The title is longer than GitHub takes." :
+			"A release job is running: wait for it to finish.";
+		if (XUI::DialogButton("Save", XUI::Kind::Primary, true, !too_long && !title_long && !busy, why))
 		{
-			std::lock_guard<std::mutex> guard(s_ManageLock);
-			s_Manage.error = err;
+			SManageRequest rq;
+			rq.op = moEdit;
+			rq.id = r.id;
+			rq.has_title = rq.has_notes = true;
+			rq.title = s_EditTitle;
+			rq.notes = s_EditNotes.c_str();	// up to the terminator: the buffer may run past the text
+			xr_string err;
+			if (!ManageStart(rq, err)) SetManageError(err);
+			s_WantEdit = false;
 		}
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+			s_WantEdit = false;
 	}
-	if (save || cancel)
-	{
-		s_WantEdit = false;
-		s_WantReleases = true;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
+	XUI::EndDialog();
 }
 
 void ReleasesJson(xr_string& out)
@@ -1426,6 +1924,8 @@ void ReleasesJson(xr_string& out)
 	JsonField(out, "note", view.note.c_str());
 	out += view.tag_kept ? ",\"tag_kept\":true" : ",\"tag_kept\":false";
 	JsonField(out, "error", view.error.c_str());
+	// what the Releases tab shows: whether it is there, and the release its details are about
+	out += NqUtil::Format(",\"tab\":%s,\"selected\":%llu", s_ReleasesOpen ? "true" : "false", s_SelectedId);
 	out += view.listed ? ",\"listed\":true,\"releases\":[" : ",\"listed\":false,\"releases\":[";
 	for (u32 i = 0; i < view.releases.size(); ++i)
 	{
@@ -1541,24 +2041,21 @@ void EditorPublish::ButtonText(char* dst, u32 size)
 
 void EditorPublish::RequestPublish()
 {
-	// one modal at a time: two self-opening popups close each other every frame
-	if (!CanPublish() || s_WantReleases || s_WantDelete || s_WantEdit) return;
+	// one modal at a time: two dialogs that open themselves close each other every frame
+	if (!CanPublish() || s_WantEdit) return;
 	Reap();
 	if (JobRunning()) { s_WantProgress = true; return; }
 
 	EditorMod::SManifest m;
 	if (!EditorMod::Load(EditorProject::Root(), m))
 	{
-		ShowResult("Cannot publish the release: mod.ltx not found in the project.");
+		XUI::Notice(XUI::Tone::Error, "Publish Release", "Cannot publish the release: mod.ltx is not in the project.");
 		return;
 	}
-	s_ModuleId		= m.id;
-	s_ModuleName	= m.name;
-	strncpy_s(s_Repo, sizeof(s_Repo), m.update_github.c_str(), _TRUNCATE);
-	strncpy_s(s_Version, sizeof(s_Version), m.version.c_str(), _TRUNCATE);
+	ReadManifestFields();
 	xr_string game_version;
 	EditorMod::LinkedGameVersion(game_version);
-	strncpy_s(s_Requires, sizeof(s_Requires), game_version.c_str(), _TRUNCATE);
+	s_Requires = game_version;
 	s_Notes[0]		= 0;
 	s_TagAuto		= true;
 	s_TagFor.clear();
@@ -1568,37 +2065,56 @@ void EditorPublish::RequestPublish()
 	s_ReplacedFor.clear();
 	s_AccountError.clear();
 	RefreshAccount();
+	// the releases are read again for every open - one may have gone out from elsewhere meanwhile - and from here, so
+	// that an MCP caller that opened the dialog can follow the read with mod_releases status
+	s_ListAskedFor.clear();
+	EnsureReleaseList();
 	s_WantDialog	= true;
+}
+
+void EditorPublish::RegisterDocuments()
+{
+	// once: a factory replaced while the shell runs it would pull the ground from under it
+	static bool s_Registered = false;
+	if (s_Registered) return;
+	s_Registered = true;
+	XUI::Shell::RegisterFactory(kReleasesTab, [](LPCSTR)
+	{
+		EditorPublish::RequestReleases();
+		return XUI::Shell::IsOpen(kReleasesTab);
+	});
 }
 
 void EditorPublish::RequestReleases()
 {
-	if (!CanPublish() || s_WantDialog || s_WantResult || s_WantDelete || s_WantEdit) return;
+	if (!EditorProject::Active()) return;
+	RegisterDocuments();
 	Reap();
-	if (JobRunning()) { s_WantProgress = true; return; }
-	if (s_WantProgress) return;
-
-	xr_string err;
-	if (!ManageStart(SManageRequest(), err))
-	{
-		ShowResult("Cannot list the releases: " + err);
-		return;
-	}
-	s_SelectedId	= 0;
-	s_WantReleases	= true;
+	ShowReleasesTab();
+	RefreshReleases();
 }
 
 void EditorPublish::DrawUI()
 {
 	Reap();
+	ManageReap();
 	if (!EditorProject::Active()) return;
+	if (s_RefreshWanted && !JobRunning() && !ManageRunning())
+	{
+		s_RefreshWanted = false;
+		if (s_ReleasesOpen) RefreshReleases();
+	}
 	DrawDialog();
 	DrawProgress();
-	DrawReleases();
-	DrawDeleteConfirm();
 	DrawEditRelease();
-	// a job that ends while the release list is up waits its turn
-	if (!s_WantReleases && !s_WantDelete && !s_WantEdit) DrawResult();
+	if (s_Result.want)
+	{
+		const SPendingResult r = s_Result;
+		s_Result = SPendingResult();
+		const xr_string url = r.url;
+		XUI::Result("publish_result", "Publish Release", r.tone, r.headline.c_str(), r.rows, XUI::Strings(), r.warnings,
+			IsGithubPage(url) ? "Open Release Page" : nullptr, [url] { OpenGithubPage(url); });
+	}
 }
 
 void EditorPublish::Shutdown()
@@ -1624,13 +2140,14 @@ void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 		ReleasesJson(out);
 		return;
 	}
+	const bool select = 0 == xr_strcmp(action, "select");
 	SManageRequest rq;
 	rq.op = 0 == xr_strcmp(action, "delete") ? moDelete : 0 == xr_strcmp(action, "edit") ? moEdit : moList;
-	if (moList == rq.op && 0 != xr_strcmp(action, "list"))
-		{ out = "{\"ok\":false,\"error\":\"unknown action: list, edit, delete, status or cancel expected\"}"; return; }
+	if (moList == rq.op && !select && 0 != xr_strcmp(action, "list"))
+		{ out = "{\"ok\":false,\"error\":\"unknown action: list, edit, delete, select, status or cancel expected\"}"; return; }
 
 	// MCP is the programmatic path: the caller has decided, nothing is asked
-	if (moList != rq.op)
+	if (moList != rq.op || select)
 	{
 		xr_vector<char> arg(xr_strlen(raw) + 1);
 		if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size())) rq.tag = arg.data();
@@ -1647,6 +2164,35 @@ void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 			if (rq.title.size() > 200 || rq.notes.size() > kMaxNotes)
 				{ out = "{\"ok\":false,\"error\":\"the title takes 200 characters, the notes 120 000\"}"; return; }
 		}
+	}
+	// the release the tab's details are about, from the list as it was last read: nothing goes to GitHub
+	if (select)
+	{
+		const SManageView view = ManageSnapshot();
+		const EditorGithub::SReleaseInfo* found = nullptr;
+		u32 matches = 0;
+		for (const EditorGithub::SReleaseInfo& r : view.releases)
+			if (rq.id ? r.id == rq.id : r.tag == rq.tag) { found = &r; ++matches; }
+		// show=edit puts the edit dialog up for that release, to be looked at: only a click in it saves anything
+		char show[16] = {};
+		XFinedMCP::GetArg(raw, "show", show, sizeof(show));
+		xr_string err;
+		if (show[0] && 0 != xr_strcmp(show, "edit"))	err = "show: edit expected";
+		else if (!view.listed)							err = "the list is not read yet: mod_releases action=list first";
+		else if (!matches)								err = rq.id ? NqUtil::Format("no release has the id %llu", rq.id) : "no release carries the tag " + rq.tag;
+		else if (matches > 1)							err = NqUtil::Format("%u releases carry the tag %s - name one by its id", matches, rq.tag.c_str());
+		else if (show[0] && (s_WantDialog || s_WantProgress))	err = "the Publish Release dialog is up: one release dialog at a time";
+		if (!err.empty())
+		{
+			out = "{\"ok\":false,\"error\":\"";
+			JsonAppend(out, err.c_str());
+			out += "\"}";
+			return;
+		}
+		s_SelectedId = found->id;
+		if (show[0]) OpenEdit(*found);
+		ReleasesJson(out);
+		return;
 	}
 	xr_string err;
 	if (!ManageStart(rq, err))

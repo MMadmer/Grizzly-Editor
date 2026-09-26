@@ -370,6 +370,27 @@ DXGI_FORMAT Convert(RedImage&Image)
 		break;
 	}
 }
+#ifdef REDITOR
+// defined in Editors\XrECore\Editor\EGameTexture.cpp
+bool EditorGameContent_ReadTexture(LPCSTR name, xr_vector<u8>& file);
+#endif
+
+// A model browsed out of the linked game names textures only the game's archives hold, and those are mounted where
+// the editor FS cannot see them (EditorGameContent). Their file is read from there before the lookup settles for the
+// placeholder, which drew every such model as a dark navy silhouette. `fn` becomes a name for the log.
+static bool ReadGameTexture(LPCSTR fname, string_path& fn, xr_vector<u8>& file)
+{
+#ifdef REDITOR
+	if (!EditorGameContent_ReadTexture(fname, file))
+		return false;
+	xr_sprintf(fn, sizeof(fn), "<linked game>\\textures\\%s.dds", fname);
+	return true;
+#else
+	(void)fname; (void)fn; (void)file;
+	return false;
+#endif
+}
+
 ID3DBaseTexture* CRender::texture_load(LPCSTR fRName, u32& ret_msize, bool bStaging)
 {
 	static bool bAllowStaging = !strstr(Core.Params, "-no_staging");
@@ -384,12 +405,14 @@ ID3DBaseTexture* CRender::texture_load(LPCSTR fRName, u32& ret_msize, bool bStag
 	xr_strcpy(fname, fRName); //. andy if (strext(fname)) *strext(fname)=0;
 	fix_texture_name(fname);
 	IReader* S = NULL;
+	// the file of a texture only the linked game holds, see ReadGameTexture
+	xr_vector<u8> game_file;
 	//if (FS.exist(fn,"$game_textures$",fname,	".dds")	&& strstr(fname,"_bump"))	goto _BUMP;
 	bool IsBump = false;
 	DXGI_FORMAT Format;
 	if (strstr(fname, "_bump"))
 	{
-		if (!FS.exist(fn, "$game_textures$", fname, ".dds"))
+		if (!FS.exist(fn, "$game_textures$", fname, ".dds") && !ReadGameTexture(fname, fn, game_file))
 		{
 			Msg("! Fallback to default bump map: %s", fname);
 			//////////////////
@@ -409,24 +432,34 @@ ID3DBaseTexture* CRender::texture_load(LPCSTR fRName, u32& ret_msize, bool bStag
 		if (!FS.exist(fn, "$level$", fname, ".dds"))
 			if (!FS.exist(fn, "$game_saves$", fname, ".dds"))
 				if (!FS.exist(fn, "$game_textures$", fname, ".dds"))
-				{
-					string_path			temp;
-					R_ASSERT(FS.exist(temp, "$game_textures$", "ed\\ed_not_existing_texture", ".dds"));
-					R_ASSERT(xr_strcmp(temp, fn));
-					xr_strcpy(fn, temp);
-				}
+					if (!ReadGameTexture(fname, fn, game_file))
+					{
+						Msg("! Can't find texture '%s'", fname);
+						string_path			temp;
+						R_ASSERT(FS.exist(temp, "$game_textures$", "ed\\ed_not_existing_texture", ".dds"));
+						R_ASSERT(xr_strcmp(temp, fn));
+						xr_strcpy(fn, temp);
+					}
 	}
 Load:
 	{
 		Breadcrumb(fn);
 		Breadcrumb("texture_load: open");
-		S = FS.r_open(fn);
-		R_ASSERT2(S, fn);
 		RedImage Image;
-		if (!Image.LoadFromMemory(S->pointer(), S->length()))
+		bool decoded;
+		if (!game_file.empty())
+			decoded = Image.LoadFromMemory(game_file.data(), game_file.size());
+		else
+		{
+			S = FS.r_open(fn);
+			R_ASSERT2(S, fn);
+			decoded = Image.LoadFromMemory(S->pointer(), S->length());
+			FS.r_close(S);
+		}
+		if (!decoded)
 		{
 			Msg("! Can't get image info for texture '%s'", fn);
-			FS.r_close(S);
+			game_file.clear();
 			string_path			temp;
 			R_ASSERT(FS.exist(temp, "$game_textures$", "ed\\ed_not_existing_texture", ".dds"));
 			R_ASSERT(xr_strcmp(temp, fn));
@@ -437,7 +470,6 @@ Load:
 		{
 			Image.SaveToPng("test.png");
 		}*/
-		FS.r_close(S);
 
 		Format = Convert(Image);
 

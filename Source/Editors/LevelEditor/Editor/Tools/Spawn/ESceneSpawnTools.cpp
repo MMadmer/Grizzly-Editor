@@ -131,7 +131,8 @@ void ESceneSpawnTool::RefreshClasses()
             if (!pSettings->line_exist((*it)->Name,"class"))	continue;
         	CLASS_ID cls_id	= pSettings->r_clsid((*it)->Name,"class");
         	shared_str v	= pSettings->r_string_wb((*it)->Name,"$spawn");
-        	m_Classes[cls_id].push_back(SChooseItem(*v,*(*it)->Name));
+        	const xr_string path = UISpawnTool::ListPath(*v);
+        	m_Classes[cls_id].push_back(SChooseItem(path.c_str(),*(*it)->Name));
         }
     }
     // the LeftBar panel builds its own roster from the same pSettings, so it

@@ -2,12 +2,14 @@
 
 UISpawnTool::UISpawnTool()
 {
-    m_selPercent = 100;
+    m_selPercent = 50.f;
+    m_AddPercent = false;
     m_Current = nullptr;
+    m_Search[0] = 0;
+    m_AttachObject = false;
     m_SpawnList = xr_new<UIItemListForm>();
     m_SpawnList->SetOnItemFocusedEvent(TOnILItemFocused(this, &UISpawnTool::OnItemFocused));
     RefreshList();
-    m_AttachObject = false;
 }
 
 UISpawnTool::~UISpawnTool()
@@ -17,65 +19,86 @@ UISpawnTool::~UISpawnTool()
 
 void UISpawnTool::Draw()
 {
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Reference Select"))
+    // the list is what the tool is for: first, under the tool's header, and it takes the room the closed sections
+    // leave
+    XUI_LocalFilteredList("spawns", m_Search, sizeof(m_Search), m_SpawnList);
+    // only zone entities use it, but a restrictor placed without a zone is worse than one more row
+    if (XUI::BeginPropertyGrid("tools"))
     {
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+        if (XUI::PropertyRow("Zone Shape", "The shape a restrictor or another zone entity is placed with"))
         {
-            ImGui::Text("Select by Current: "); ImGui::SameLine(); if (ImGui::Button(" +")) { SelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button(" -")) { SelByRefObject(false); }
-            ImGui::Text("Select by Selected:"); ImGui::SameLine(); if (ImGui::Button("=%")) { MultiSelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button("+%")) { MultiSelByRefObject(false); } ImGui::SameLine(); ImGui::SetNextItemWidth(-ImGui::GetTextLineHeight() - 8); ImGui::DragFloat("%", &m_selPercent, 1, 0, 100, "%.1f");
+            const char* shapes[] = { "Sphere", "Box" };
+            int shape = m_ShapeSphere ? 0 : 1;
+            if (XUI::Segmented("##zone_shape", &shape, shapes, 2))
+                m_ShapeSphere = shape == 0;
         }
-        ImGui::Separator();
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-    } 
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Commands"))
+        XUI::EndPropertyGrid();
+    }
+
+    if (XUI::Section("Select by Reference", false))
     {
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+        const bool picked = !!m_Current;
+        const XUI_LocalButton same[] =
         {
-            float size = float(ImGui::CalcItemWidth());
+            { "Select Same",	"Select every visible spawn point made from the entry picked in the list", picked, "Pick an entry in the list first" },
+            { "Deselect Same",	"Deselect every spawn point made from the entry picked in the list", picked, "Pick an entry in the list first" },
+        };
+        switch (XUI_LocalButtonFlow(same, _countof(same)))
+        {
+        case 0: SelByRefObject(true); break;
+        case 1: SelByRefObject(false); break;
+        default: break;
+        }
+        if (XUI_LocalPercentSelect(&m_selPercent, &m_AddPercent))
+            MultiSelByRefObject(!m_AddPercent);
+        XUI::EndSection();
+    }
+
+    // closed, the header still says that a click in the viewport attaches
+    if (XUI::Section("Attached Objects", false, m_AttachObject ? "Attaching" : nullptr))
+    {
+        if (ImGui::Checkbox("Attach on Click", &m_AttachObject) && m_AttachObject)
+            ExecCommand(COMMAND_CHANGE_ACTION, etaAdd);
+        XUI::Tip("A click on an object in the viewport attaches it to the selected spawn point");
+
+        // the selected spawn points that hold an object: what Detach takes it from
+        ObjectList selected;
+        Scene->GetQueryObjects(selected, OBJCLASS_SPAWNPOINT, 1, 1, 0);
+        XUI::Strings holders;
+        for (CCustomObject* obj : selected)
+        {
+            CSpawnPoint* point = dynamic_cast<CSpawnPoint*>(obj);
+            if (point && point->m_AttachedObject)
+                holders.push_back(point->GetName());
+        }
+        const XUI_LocalButton buttons[] =
+        {
+            { "Detach From Selected...", "Take the attached object off the selected spawn points", !holders.empty(),
+              "No selected spawn point holds an attached object" },
+        };
+        if (XUI_LocalButtonFlow(buttons, _countof(buttons)) == 0)
+        {
+            XUI::ConfirmSpec spec;
+            spec.id = "detach_spawn_objects";
+            spec.title = "Detach Objects";
+            spec.headline = "Detach the attached objects from these spawn points?";
+            spec.items = holders;
+            spec.consequence = "This cannot be undone.";
+            spec.action = "Detach";
+            spec.destructive = true;
+            XUI::Confirm(spec, [](XUI::Answer answer)
             {
-                if (ImGui::Checkbox("Attach Object...", &m_AttachObject))
-                {
-                    if (m_AttachObject) ExecCommand(COMMAND_CHANGE_ACTION, etaAdd);
-                }
-                ImGui::SameLine(0, 10);
-                if (ImGui::Button("Detach Object", ImVec2(-1, 0)))
-                {
-                    ObjectList lst;
-                    // every spawn point in the level, with no undo step written
-                    if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
-                            "Detach the object from ALL spawn points? This cannot be undone.") &&
-                        Scene->GetQueryObjects(lst, OBJCLASS_SPAWNPOINT, 1, 1, 0)) {
-                        for (ObjectIt it = lst.begin(); it != lst.end(); it++) {
-                            CSpawnPoint* O = dynamic_cast<CSpawnPoint*>(*it); R_ASSERT(O);
-                            O->DetachObject();
-                        }
-                    }
-                }
-
-            }
+                if (answer != XUI::Answer::Yes || !Scene)
+                    return;
+                ObjectList lst;
+                if (Scene->GetQueryObjects(lst, OBJCLASS_SPAWNPOINT, 1, 1, 0))
+                    for (CCustomObject* obj : lst)
+                        if (CSpawnPoint* point = dynamic_cast<CSpawnPoint*>(obj))
+                            point->DetachObject();
+                UI->RedrawScene();
+            });
         }
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-	}
-	// Only shape entities use it, but saying so costs a line and hunting for it costs
-	// a restrictor that turns out to have no zone at all.
-	ImGui::Separator();
-	ImGui::TextDisabled("shape for restrictors and other zones");
-	if (ImGui::RadioButton("Sphere##spawn_shape", m_ShapeSphere)) m_ShapeSphere = true;
-	ImGui::SameLine();
-	if (ImGui::RadioButton("Box##spawn_shape", !m_ShapeSphere)) m_ShapeSphere = false;
-
-	ImGui::Separator();
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Object List"))
-	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-		m_SpawnList->Draw();
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
+        XUI::EndSection();
     }
 }
 
@@ -145,23 +168,54 @@ static LPCSTR SpawnClassMeaning(LPCSTR cls)
 	return 0;
 }
 
+// Dead Air's quest_items.ltx quotes "<tab><39 blanks>;quest_items\..." - an indent and a comment mark that ended up
+// inside the value - which made a folder named ";quest_items" at the right edge of the list, cut off by it.
+xr_string UISpawnTool::ListPath(LPCSTR spawn)
+{
+    xr_string path;
+    for (LPCSTR p = spawn; p && *p;)
+    {
+        LPCSTR end = strchr(p, '\\');
+        if (!end)
+            end = p + xr_strlen(p);
+        LPCSTR a = p, b = end;
+        while (a < b && (*a == ' ' || *a == '\t' || *a == ';'))
+            ++a;
+        while (b > a && (b[-1] == ' ' || b[-1] == '\t'))
+            --b;
+        if (a < b)
+        {
+            if (!path.empty())
+                path += '\\';
+            path.append(a, b);
+        }
+        p = *end ? end + 1 : end;
+    }
+    return path;
+}
+
 void UISpawnTool::RefreshList()
 {
     ListItemsVec items;
-    LHelper().CreateItem(items, RPOINT_CHOOSE_NAME, 0, 0, 0);
-    LHelper().CreateItem(items, ENVMOD_CHOOSE_NAME, 0, 0, 0);
-    // the item carries its factory name, which is what placing it hands the tool
+    // The points the editor makes itself are listed by what they are; the item carries the factory name ("$rpoint"),
+    // which is what placing it hands the tool
     if (ListItem* start = LHelper().CreateItem(items, "Player Start", 0, 0, (LPVOID)PLAYERSTART_CHOOSE_NAME))
         start->hint = "Where a new game of the module's mode begins: position and facing.\n"
-                      "One per module. The module's world (Mod > World) says what else the game keeps.";
+                      "One per module. The module's world (Mod > World Rules) says what else the game keeps.";
+    if (ListItem* env = LHelper().CreateItem(items, "Environment Modifier", 0, 0, (LPVOID)ENVMOD_CHOOSE_NAME))
+        env->hint = "A sphere that changes the weather while the camera is inside it: fog colour and density, view distance,\n"
+                    "ambient, sky and hemisphere colours, strongest at its centre. For a cave, a cellar or a foggy hollow.";
+    if (ListItem* rpoint = LHelper().CreateItem(items, "Respawn Point", 0, 0, (LPVOID)RPOINT_CHOOSE_NAME))
+        rpoint->hint = "Where a player, an artefact or an item appears in a multiplayer game, by team and game type.\n"
+                       "A single-player game does not read it: a new game begins at the Player Start.";
     CInifile::Root& data = ((CInifile*)pSettings)->sections();
     for (CInifile::RootIt it = data.begin(); it != data.end(); it++) {
         LPCSTR val;
         if ((*it)->line_exist("$spawn", &val))
         {
-            shared_str caption = pSettings->r_string_wb((*it)->Name, "$spawn");
+            const xr_string caption = ListPath(pSettings->r_string_wb((*it)->Name, "$spawn").c_str());
             shared_str sect = (*it)->Name;
-            if (caption.size())
+            if (!caption.empty())
             {
                 ListItem* I = LHelper().CreateItem(items, caption.c_str(), 0, ListItem::flDrawThumbnail, (LPVOID) * (*it)->Name);
                 if (I)
@@ -185,7 +239,11 @@ void UISpawnTool::RefreshList()
             }
         }
     }
+    m_Items = items;
     m_SpawnList->AssignItems(items);
+    // the entries were read anew: nothing of the old list stays picked
+    m_SpawnList->ClearSelected();
+    m_Current = nullptr;
 }
 
 void UISpawnTool::OnItemFocused(ListItem* item)

@@ -1,17 +1,23 @@
 #include "stdafx.h"
 #include "EditorProject.h"
 #include "EditorModManifest.h"
+#include "EditorUiContract.h"
 #include "EditorGameContent.h"
 #include "XFinedMCP.h"
 #include "UI_ToolsCustom.h"
 #include "ui_main.h"
 #include "UI_MainCommand.h"
+#include "Nq/NqUtil.h"
 #include "../XrEngine/XR_IOConsole.h"
 #if defined(USE_DX11)
 #include "EDX11Utils.h"
+// the preview pass flushes the captions the scene queued
+#include "d3dutils.h"
 // the png encoder itself is compiled into RedImageTool, which XrECore links -
 // this only pulls the declarations
 #include "StbImage\stb_image_write.h"
+// the decoder likewise: a card's preview is looked at before it becomes a texture
+#include "StbImage\stb_image.h"
 #endif
 #include <shobjidl.h>
 #include <shellapi.h>
@@ -47,7 +53,18 @@ struct SRecentProject
 {
 	string_path				path;
 	string_path				name;
+	// What the card draws, worked out when the list loads and never per frame: the name and the path as UTF-8,
+	// and for a name another card shares, the nearest parent folder that tells the two apart - with where it
+	// and the leaf stand in shown_path (bytes), for the path line that keeps it whole
+	xr_string				shown_name;
+	xr_string				shown_path;
+	xr_string				shown_parent;
+	size_t					parent_begin;
+	size_t					parent_end;
+	size_t					leaf_begin;
 	TPreview*				preview;
+	u32						preview_w;
+	u32						preview_h;
 	bool					preview_tried;
 	ERecentState			state;
 };
@@ -68,9 +85,10 @@ static char				s_PendingScene[MAX_PATH] = {};
 // succeeded since the project opened - see Close()
 static char				s_PoppedScene[MAX_PATH] = {};
 static bool				s_SceneLoaded		= false;
-// tile previews outlive Open() by one frame - the click happens mid-draw
-static bool				s_ReleasePreviewsPending = false;
+// the scene file open as of the last frame (FollowScene): a close that clears the scene first still knows it
+static char				s_Scene[MAX_PATH]	= {};
 static EditorProject::TLiveSceneQuery s_LiveSceneQuery = 0;
+static EditorProject::TPreviewScope s_PreviewScope = 0;
 static char				s_OpenError[256]		= {};
 // ---- linked game install ----------------------------------------------------
 static char				s_GameRoot[MAX_PATH]	= {};	// [project] game_root
@@ -86,19 +104,33 @@ static char				s_LinkPath[MAX_PATH]	= {};
 static char				s_LinkChecked[MAX_PATH]	= {};
 static char				s_LinkHint[256]			= {};
 static bool				s_LinkHintOk			= false;
-// ---- the tile menu and the Delete Project confirmation ------------------------
-static string_path		s_MenuFor				= {};	// MCP: put up this tile's menu on the next frame
-static bool				s_MenuClose				= false;	// MCP: take any tile menu down on the next frame
-static string_path		s_MenuShown				= {};	// the tile whose menu the last frame drew
-static string_path		s_ForgetPending			= {};	// Remove from List, applied once the tiles are drawn
-static bool				s_DeleteWant			= false;
-static bool				s_DeleteClosing			= false;	// MCP took it down: one more Begin closes it in ImGui too
+// ---- the Start page ---------------------------------------------------------
+static char				s_Search[128]			= {};	// UTF-8, as typed
+static int				s_Sort					= 0;	// 0 last opened, 1 name; _projects.ini [browser] sort
+static xr_string		s_PageError;					// the last Open / Open Folder failure, UTF-8
+static char				s_CreateError[MAX_PATH * 2] = {};
+// the create form's look at its target folder, taken again only when a field changes
+static char				s_NewChecked[MAX_PATH * 2] = {};
+enum ENewState { nsNew, nsProjectThere, nsFolderThere, nsNotFullPath };
+static ENewState		s_NewState				= nsNew;
+// ---- the card menu and the Delete Project confirmation ------------------------
+static string_path		s_MenuFor				= {};	// MCP: put up this card's menu on the next frame
+static bool				s_MenuClose				= false;	// MCP: take any card menu down on the next frame
+static string_path		s_MenuShown				= {};	// the card whose menu the last frame drew
+static string_path		s_ForgetPending			= {};	// Remove from List, applied once the cards are drawn
+static bool				s_DeleteWant			= false;	// the confirmation is up; false takes it down
 static bool				s_DeleteShown			= false;	// the last frame drew the confirmation
 static bool				s_DeleteDone			= false;	// a deletion ran and left something: its result is up
 static EditorProject::SDeleteInfo	s_DeletePlan;
 static EditorProject::SDeleteInfo	s_DeleteResult;
-// previews of tiles that left the list: the frame that drew them may still hold them
+// previews of cards that left the list or the screen: the frame that drew them may still hold them
 static xr_vector<TPreview*>	s_DeadPreviews;
+// ---- Import Base Scene: the library is read once, when the dialog opens -------
+static bool				s_ImportListed			= false;
+static xr_vector<xr_string>	s_ImportScenes;
+static xr_vector<u8>	s_ImportInProject;
+static char				s_ImportSearch[128]		= {};
+static xr_string		s_ImportPick;
 
 // aliases whose writes must land inside the project; second column is the
 // project-relative directory they get remounted to
@@ -222,18 +254,22 @@ static bool Utf8ToAcp(LPCSTR src, char* dst, u32 dst_size)
 	return ::WideCharToMultiByte(CP_ACP, 0, w, -1, dst, (int)dst_size, 0, 0) > 0;
 }
 
-// An editable path field: shows the stored ANSI path as UTF-8 and writes back
-// only when the text actually changed.
-static void PathInput(LPCSTR id, char* stored, u32 stored_size)
+// The kit's path field over a stored ANSI path: the field edits UTF-8, and the
+// store takes the text back only when it changed and converts in full.
+static bool PathFieldAcp(LPCSTR id, char* stored, u32 stored_size)
 {
 	char shown[MAX_PATH * 3];
 	AcpToUtf8(stored, shown, sizeof(shown));
-	if (ImGui::InputText(id, shown, sizeof(shown)))
-		Utf8ToAcp(shown, stored, stored_size);
+	return XUI::PathField(id, shown, sizeof(shown), true) && Utf8ToAcp(shown, stored, stored_size);
 }
 
-bool EditorProject::PickFolder(char* dest, u32 dest_size, const wchar_t* title)
+static bool IsAbsolutePath(LPCSTR p);
+static bool SceneInProject(LPCSTR file, xr_string& rel);
+
+static bool PickFolder(char* dest, u32 dest_size, const wchar_t* title)
 {
+	// nobody is there to answer a native dialog
+	if (XUI::Unattended() || XUI::FromMcp()) return false;
 	bool ok = false;
 	const HRESULT co = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	IFileDialog* dlg = 0;
@@ -243,7 +279,7 @@ bool EditorProject::PickFolder(char* dest, u32 dest_size, const wchar_t* title)
 		dlg->GetOptions(&opts);
 		dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
 		dlg->SetTitle(title);
-		if (SUCCEEDED(dlg->Show(NULL)))
+		if (SUCCEEDED(dlg->Show((HWND)ImGui::GetMainViewport()->PlatformHandleRaw)))
 		{
 			IShellItem* item = 0;
 			if (SUCCEEDED(dlg->GetResult(&item)))
@@ -280,10 +316,93 @@ bool EditorProject::ValidateName(LPCSTR name)
 //------------------------------------------------------------------------------
 // recents / manifest
 //------------------------------------------------------------------------------
+// The folder `up` levels above the leaf of `path` ("D:\a\b\Name", 1 -> "b")
+static bool AncestorOf(LPCSTR path, int up, xr_string& out)
+{
+	xr_vector<xr_string> parts;
+	xr_string part;
+	for (const char* p = path; ; ++p)
+	{
+		if (!*p || '\\' == *p || '/' == *p)
+		{
+			if (!part.empty()) parts.push_back(part);
+			part.clear();
+			if (!*p) break;
+			continue;
+		}
+		part += *p;
+	}
+	const int at = int(parts.size()) - 1 - up;
+	if (at < 0) return false;
+	out = parts[at];
+	return true;
+}
+
+// Where the folder `up` levels above the leaf of a path, and the leaf itself, stand in it (bytes: the
+// separators are ASCII in UTF-8 as well)
+static bool SegmentRanges(const xr_string& path, int up, size_t& begin, size_t& end, size_t& leaf)
+{
+	xr_vector<std::pair<size_t, size_t>> parts;
+	size_t from = 0;
+	for (size_t i = 0; i <= path.size(); ++i)
+		if (i == path.size() || '\\' == path[i] || '/' == path[i])
+		{
+			if (i > from) parts.push_back(std::make_pair(from, i));
+			from = i + 1;
+		}
+	const int at = int(parts.size()) - 1 - up;
+	if (at < 0) return false;
+	begin = parts[at].first;
+	end = parts[at].second;
+	leaf = parts.back().first;
+	return true;
+}
+
+// The card's text: UTF-8 for ImGui, and for a name two cards share, the nearest
+// parent folder that differs between them - two DARF-Overnight-Delivery cards
+// read "XFinedProjects" and "Temp" instead of the same word twice
+static void RefreshCardText()
+{
+	char buf[MAX_PATH * 3];
+	for (int i = 0; i < s_RecentCount; ++i)
+	{
+		SRecentProject& r = s_Recent[i];
+		AcpToUtf8(r.name, buf, sizeof(buf));
+		r.shown_name = buf;
+		AcpToUtf8(r.path, buf, sizeof(buf));
+		r.shown_path = buf;
+		r.shown_parent.clear();
+		r.parent_begin = r.parent_end = r.leaf_begin = 0;
+	}
+	for (int i = 0; i < s_RecentCount; ++i)
+	{
+		SRecentProject& r = s_Recent[i];
+		xr_string mine, theirs;
+		for (int up = 1; r.shown_parent.empty() && AncestorOf(r.path, up, mine); ++up)
+		{
+			bool twin = false, differs = true;
+			for (int j = 0; j < s_RecentCount; ++j)
+			{
+				if (j == i || 0 != _stricmp(s_Recent[j].name, r.name)) continue;
+				twin = true;
+				if (AncestorOf(s_Recent[j].path, up, theirs) && 0 == _stricmp(theirs.c_str(), mine.c_str())) differs = false;
+			}
+			if (!twin) break;
+			if (!differs) continue;
+			AcpToUtf8(mine.c_str(), buf, sizeof(buf));
+			r.shown_parent = buf;
+			if (!SegmentRanges(r.shown_path, up, r.parent_begin, r.parent_end, r.leaf_begin))
+				r.parent_begin = r.parent_end = r.leaf_begin = 0;
+		}
+	}
+}
+
 void EditorProject::LoadRecent()
 {
 	char ini[MAX_PATH];
 	RecentIni(ini, sizeof(ini));
+	// the old list's previews: the frame being drawn may still hold them
+	ReleasePreviews();
 	s_RecentCount = 0;
 	for (int i = 0; i < kMaxRecent; ++i)
 	{
@@ -298,6 +417,7 @@ void EditorProject::LoadRecent()
 			const char* leaf = strrchr(v, '\\');
 			xr_strcpy(r.name, leaf ? leaf + 1 : v);
 			r.preview = 0;
+			r.preview_w = r.preview_h = 0;
 			r.preview_tried = false;
 			r.state = RecentState(v);
 		}
@@ -305,6 +425,10 @@ void EditorProject::LoadRecent()
 	::GetPrivateProfileStringA("recent", "create_parent", "", s_NewParent, sizeof(s_NewParent), ini);
 	if (!s_NewParent[0])
 		::ExpandEnvironmentStringsA("%USERPROFILE%\\Documents\\XFinedProjects", s_NewParent, sizeof(s_NewParent));
+	char sort[16] = {};
+	::GetPrivateProfileStringA("browser", "sort", "", sort, sizeof(sort), ini);
+	s_Sort = 0 == _stricmp(sort, "name") ? 1 : 0;
+	RefreshCardText();
 }
 
 void EditorProject::SaveRecent()
@@ -350,8 +474,7 @@ void EditorProject::SaveManifest()
 	::WritePrivateProfileStringA("project", "name", s_Name, p);
 	::WritePrivateProfileStringA("project", "sdk_root", s_AppRoot, p);
 	::WritePrivateProfileStringA("project", "game_root", s_GameRoot, p);
-	if (Tools && Tools->m_LastFileName.size())
-		::WritePrivateProfileStringA("project", "last_scene", Tools->m_LastFileName.c_str(), p);
+	// last_scene is written by Close() alone, from the scene the session had open
 }
 
 //------------------------------------------------------------------------------
@@ -613,6 +736,7 @@ bool EditorProject::Open(LPCSTR folder)
 	xr_strcpy(s_Name, leaf ? leaf + 1 : s_Project);
 	s_PoppedScene[0] = 0;
 	s_SceneLoaded = false;
+	s_Scene[0] = 0;
 
 	CreateLayout();		// deliberately a no-op: a project's layout is the author's
 	// XMS: silently add mod.ltx + module dirs to projects that predate them
@@ -624,17 +748,35 @@ bool EditorProject::Open(LPCSTR folder)
 	if (Console) Console->Hide();
 	SaveManifest();
 	SaveRecent();
-	// deferred: this can run inside the browser draw, see PopPendingScene()
-	s_ReleasePreviewsPending = true;
+	// the cards go off screen; their previews are released a frame later, because
+	// a click on a card runs this inside the draw that still holds them
+	ReleasePreviews();
+	s_Search[0] = 0;
+	s_PageError.clear();
 	s_Active = true;
 
 	// remember the last scene for a DEFERRED load — running COMMAND_LOAD here
 	// would execute a heavy scene load inside the browser's popup stack
-	char manifest[MAX_PATH];
+	char manifest[MAX_PATH], stored[MAX_PATH] = {};
 	sprintf_s(manifest, "%s\\project.ltx", s_Project);
-	::GetPrivateProfileStringA("project", "last_scene", "", s_PendingScene, sizeof(s_PendingScene), manifest);
-	if (s_PendingScene[0] && ::GetFileAttributesA(s_PendingScene) == INVALID_FILE_ATTRIBUTES)
-		s_PendingScene[0] = 0;	// stale path — skip silently
+	::GetPrivateProfileStringA("project", "last_scene", "", stored, sizeof(stored), manifest);
+	s_PendingScene[0] = 0;
+	if (stored[0])
+	{
+		// project-relative; an absolute path counts only inside this folder - a copy of a project must never open,
+		// and then save into, the scene of the project it was copied from
+		const xr_string file = IsAbsolutePath(stored) ? xr_string(stored) : xr_string(s_Project) + "\\" + stored;
+		xr_string rel;
+		if (!SceneInProject(file.c_str(), rel))
+			Msg("~ project: the last scene '%s' lies outside the project and is not opened", stored);
+		else
+		{
+			const xr_string inside = xr_string(s_Project) + "\\" + rel;
+			// a stale path is skipped silently
+			if (inside.size() < sizeof(s_PendingScene) && ::GetFileAttributesA(inside.c_str()) != INVALID_FILE_ATTRIBUTES)
+				strcpy_s(s_PendingScene, inside.c_str());
+		}
+	}
 
 	Msg("* Project opened: %s", s_Project);
 	return true;
@@ -671,16 +813,6 @@ void EditorProject::ListRecentJson(xr_string& out)
 
 LPCSTR EditorProject::PopPendingScene()
 {
-	// Tile previews are freed here, one frame after Open(): clicking a tile
-	// happens INSIDE the browser's draw, and that frame's ImGui draw list still
-	// holds the texture pointer. Releasing it during Open() left the renderer
-	// with a dangling ImTextureID and killed the editor on the spot.
-	if (s_ReleasePreviewsPending)
-	{
-		ReleasePreviews();
-		s_ReleasePreviewsPending = false;
-	}
-
 	if (!s_Active || !s_PendingScene[0]) return 0;
 	// a window that started minimized gets here late: a scripted caller may have
 	// loaded a scene meanwhile, and the autoload must not replace it
@@ -703,50 +835,111 @@ LPCSTR EditorProject::PopPendingScene()
 
 bool EditorProject::Create(LPCSTR parent, LPCSTR name)
 {
-	if (!ValidateName(name) || !parent || !parent[0]) return false;
+	s_CreateError[0] = 0;
+	if (!ValidateName(name))
+	{
+		strcpy_s(s_CreateError, "The name may hold Latin letters, digits, _ and - only.");
+		return false;
+	}
+	// a relative location would land in the editor's working folder
+	if (!IsAbsolutePath(parent))
+	{
+		strcpy_s(s_CreateError, "The location must be a full path.");
+		return false;
+	}
+	if (xr_strlen(parent) + xr_strlen(name) + 2 > MAX_PATH)
+	{
+		strcpy_s(s_CreateError, "The path is too long.");
+		return false;
+	}
 
 	char folder[MAX_PATH];
 	sprintf_s(folder, "%s\\%s", parent, name);
-	if (DirExists(folder) && HasManifest(folder))
-		return Open(folder);	// already a project — just open it
-
-	// create the whole chain (parent may not exist yet)
-	char acc[MAX_PATH] = {};
-	for (const char* p = folder;; ++p)
+	if (!(DirExists(folder) && HasManifest(folder)))
 	{
-		if (*p == '\\' || *p == 0)
+		// create the whole chain (parent may not exist yet)
+		char acc[MAX_PATH] = {};
+		for (const char* p = folder;; ++p)
 		{
-			if (acc[0] && acc[xr_strlen(acc)-1] != ':') ::CreateDirectoryA(acc, NULL);
-			if (*p == 0) break;
+			if (*p == '\\' || *p == 0)
+			{
+				if (acc[0] && acc[xr_strlen(acc)-1] != ':') ::CreateDirectoryA(acc, NULL);
+				if (*p == 0) break;
+			}
+			acc[p - folder] = *p;
+			acc[p - folder + 1] = 0;
 		}
-		acc[p - folder] = *p;
-		acc[p - folder + 1] = 0;
+		if (!DirExists(folder))
+		{
+			sprintf_s(s_CreateError, "The folder cannot be created: %s (win32 %lu).", folder, ::GetLastError());
+			return false;
+		}
+		EditorMod::EnsureScaffold(folder, name);	// XMS module skeleton
 	}
-	if (!DirExists(folder)) return false;
-	EditorMod::EnsureScaffold(folder, name);	// XMS module skeleton
-	return Open(folder);
+	// a project there already is simply opened
+	if (Open(folder)) return true;
+	strcpy_s(s_CreateError, s_OpenError);
+	return false;
 }
 
-void EditorProject::NoteSceneLoaded() { s_SceneLoaded = true; }
+void EditorProject::NoteSceneLoaded()
+{
+	s_SceneLoaded = true;
+	if (Tools) strncpy_s(s_Scene, Tools->m_LastFileName.c_str(), _TRUNCATE);
+}
+
+// Once a frame, after the frame's work. A close that clears the scene before it closes the project
+// (project_close, Switch Project) does both within one frame, so what this saw last is the scene
+// that was open; a scene the author closed on a frame of its own is gone from here too.
+void EditorProject::FollowScene()
+{
+	if (!s_Active || !Tools) return;
+	if (0 != xr_strcmp(Tools->m_LastFileName.c_str(), s_Scene))
+		strncpy_s(s_Scene, Tools->m_LastFileName.c_str(), _TRUNCATE);
+}
+
+// What the next Open loads, stored below the project root: a copy of the folder opens its own copy.
+// In order: the scene open as the project closes; the autoload's, when it never came to anything
+// (last_scene is cleared before it runs so that a crash in it cannot lock the project out, and a
+// pending recovery refusing it or a broken file failing it is no such crash); the one the autoload
+// never reached (closed on the Link Game card). A scene the author closed stays forgotten: that was
+// a choice. A scene from outside the project is not reopened.
+static void WriteLastScene()
+{
+	xr_string rel;
+	if (s_Scene[0] && !SceneInProject(s_Scene, rel))
+		Msg("~ project: the scene '%s' lies outside the project and is not reopened", s_Scene);
+	if (rel.empty())
+	{
+		LPCSTR earlier = (!s_SceneLoaded && s_PoppedScene[0]) ? s_PoppedScene : s_PendingScene;
+		if (earlier[0]) SceneInProject(earlier, rel);
+	}
+	char manifest[MAX_PATH];
+	sprintf_s(manifest, "%s\\project.ltx", s_Project);
+	// nothing to reopen in a project that never named a scene: its file stays as it was, no empty key added
+	if (rel.empty())
+	{
+		char stored[4] = {};
+		::GetPrivateProfileStringA("project", "last_scene", "\x7f", stored, sizeof(stored), manifest);
+		if (!strcmp(stored, "\x7f"))
+			return;
+	}
+	::WritePrivateProfileStringA("project", "last_scene", rel.c_str(), manifest);
+}
 
 void EditorProject::Close()
 {
 	if (!s_Active) return;
-	SavePreview();
+	// a scene still up (the editor quitting) is the truth; one a close cleared first is what the last frame saw
+	if (Tools && Tools->m_LastFileName.size())
+		strncpy_s(s_Scene, Tools->m_LastFileName.c_str(), _TRUNCATE);
+	// a scene cleared first had its picture taken by whoever cleared it
+	if (HasLiveScene()) CapturePreview();
 	SaveManifest();
-	// last_scene is cleared before the autoload so that a crash in it cannot lock the
-	// project out. This is not that crash: the editor is closing in good order, and
-	// the autoload simply never came to anything - a pending crash recovery refuses
-	// it, a broken file fails it. Without this the author's last scene was forgotten
-	// for good by a session that never touched it. A scene the author loaded and then
-	// closed stays forgotten: that was a choice.
-	if (s_PoppedScene[0] && !s_SceneLoaded && !(Tools && Tools->m_LastFileName.size()))
-	{
-		char manifest[MAX_PATH];
-		sprintf_s(manifest, "%s\\project.ltx", s_Project);
-		::WritePrivateProfileStringA("project", "last_scene", s_PoppedScene, manifest);
-	}
+	WriteLastScene();
 	s_PoppedScene[0] = 0;
+	s_PendingScene[0] = 0;
+	s_Scene[0] = 0;
 	SaveRecent();
 	Unmount();
 	EditorGameContent::Unmount();	// closes the archive handles of the old link
@@ -847,50 +1040,184 @@ void EditorProject::OpenProjectFolder()
 //------------------------------------------------------------------------------
 // previews
 //------------------------------------------------------------------------------
-void EditorProject::SavePreview()
+extern ENGINE_API BOOL g_bRendering;
+
+// No picture of a scene: the share of the most common colour (4 bits a channel) over a sample grid.
+// A target nothing was rendered into is one flat colour, an empty scene one grey (an older editor wrote
+// it with the stats text over it: 99.5% measured), a scene some 6%. The channel order does not matter,
+// alpha is left out.
+static bool ShowsNoScene(const u32* px, u32 w, u32 h, u32 pitch)
 {
-	if (!s_Active || !HW.pDevice) return;
-	// viewport render target only — the full backbuffer drags the tool panels
-	// into the tile and looks like a screenshot of a spreadsheet
-	if (!UI || !UI->RT->pSurface) return;
+	if (!px || !w || !h) return true;
+	const u32 step = _max(1u, u32(sqrtf(float(w) * float(h) / 65536.f)));
+	u32 bins[4096] = {};
+	u32 samples = 0, top = 0;
+	for (u32 y = 0; y < h; y += step)
+		for (u32 x = 0; x < w; x += step)
+		{
+			const u32 c = px[size_t(y) * pitch + x];
+			top = _max(top, ++bins[((c >> 12) & 0xf00) | ((c >> 8) & 0xf0) | ((c >> 4) & 0xf)]);
+			++samples;
+		}
+	return u64(top) * 50 >= u64(samples) * 49;
+}
+
+void EditorProject::SetPreviewScope(TPreviewScope scope) { s_PreviewScope = scope; }
+
 #if defined(USE_DX11)
-	// staging copy instead of GetRenderTargetData; rows come back top-down, which
-	// is the order the encoder wants
+// The scene once more from the viewport's camera and at its size, into a target of its own. The viewport's
+// frame is no picture of the project: it carries the author's tools. So this is the scene pass of TUI::Redraw
+// less the grid and pivot, the selection rectangle, the axis triad, the stats and the captions, drawn solid;
+// the host editor takes the selection and the gizmo away for it (SetPreviewScope). Rows come back top-down,
+// B8G8R8A8. Outside a frame and outside the UI pass, like the thumbnail queue: the next frame binds its own.
+static bool RenderPreview(U32Vec& px, u32& w, u32& h)
+{
+	const u32 want_w = UI->GetRenderWidth(), want_h = UI->GetRenderHeight();
+	// a viewport folded down to a sliver pictures nothing
+	if (want_w < 64 || want_h < 64) return false;
+	SDX11Target target;
+	if (!target.create(want_w, want_h)) return false;
+
+	// what the pass changes goes back after it: the device's targets and viewport last, so declared first
+	SDX11TargetGuard	targets;
+	const SEditorFixedFunc ff = EDevice->ff;
+	const Fmatrix		world = RCache.get_xform_world(), view = RCache.get_xform_view(), project = RCache.get_xform_project();
+	const Fmatrix		device_view = EDevice->mView, device_project = EDevice->mProject, device_full = EDevice->mFullTransform;
+	const BOOL			rendering = g_bRendering;
+
+	bool drawn = false;
+	if (s_PreviewScope) s_PreviewScope(true);
+	try
+	{
+		// the cache forgets what it thinks is bound; the device is told the truth right after
+		RCache.Invalidate();
+		target.bind();
+		target.clear(EPrefs ? EPrefs->scene_clear_color : 0x0);
+		RCache.set_RT(target.rtv);
+		RCache.set_ZB(target.dsv);
+		g_bRendering = TRUE;
+
+		EDevice->mProject.build_projection(deg2rad(EDevice->fFOV), EDevice->fASPECT, EDevice->m_Camera._Znear(),
+			EDevice->m_Camera._Zfar());
+		RCache.set_xform_project(EDevice->mProject);
+		EDevice->UpdateView();
+		EDevice->ResetMaterial();
+		// wireframe is a way of looking at the scene, not the scene
+		EDevice->SetRS(D3DRS_FILLMODE, D3DFILL_SOLID);
+		Tools->RenderEnvironment();
+		const u32 filter = psDeviceFlags.is(rsFilterLinear) ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+		for (u32 k = 0; k < HW.Caps.raster.dwStages; k++)
+		{
+			EDevice->SetSS(k, D3DSAMP_MAGFILTER, filter);
+			EDevice->SetSS(k, D3DSAMP_MINFILTER, filter);
+			EDevice->SetSS(k, D3DSAMP_MIPFILTER, filter);
+		}
+		Tools->Render();
+		drawn = DX11ReadbackBGRA(target.rt, px, w, h);
+		// the captions the scene queued (spawn names, way points) go into this target and away with it,
+		// not onto the next frame
+		DU_impl.OnRender();
+	}
+	catch (...)
+	{
+		Msg("! project: the preview pass failed, preview.png is kept as it was");
+		drawn = false;
+	}
+	if (s_PreviewScope) s_PreviewScope(false);
+
+	g_bRendering = rendering;
+	EDevice->ff = ff;
+	EDevice->SetRS(D3DRS_FILLMODE, EDevice->dwFillMode);
+	RCache.set_xform_world(world);
+	RCache.set_xform_view(view);
+	RCache.set_xform_project(project);
+	EDevice->mView = device_view;
+	EDevice->mProject = device_project;
+	EDevice->mFullTransform = device_full;
+	// the pass set state behind the cache's back: drop it all, the next draw applies its own
+	RCache.OnFrameEnd();
+	return drawn && w && h;
+}
+#endif
+
+bool EditorProject::CapturePreview()
+{
+	if (!s_Active || !HW.pDevice || !UI || !Tools || !HasLiveScene()) return false;
+	// the viewport shows the game then, not the scene
+	if (UI->IsPlayInEditor()) return false;
+	if (UI->InUIPass())
+	{
+		Msg("! project: the preview is never rendered inside the UI pass, preview.png is kept as it was");
+		return false;
+	}
+#if defined(USE_DX11)
 	U32Vec	px;
 	u32		w = 0, h = 0;
-	if (DX11ReadbackBGRA(UI->RT->pSurface, px, w, h))
+	if (!RenderPreview(px, w, h)) return false;
+	// a camera looking at nothing is no picture of the project: the card keeps its last good one
+	if (ShowsNoScene(px.data(), w, h, w))
 	{
-		// stb writes bytes in memory order: swap R and B, force the tile opaque
-		for (u32& c : px)
-			c = 0xff000000 | (c & 0x0000ff00) | ((c & 0x00ff0000) >> 16) | ((c & 0x000000ff) << 16);
-
-		char p[MAX_PATH];
-		sprintf_s(p, "%s\\preview.png", s_Project);
-		stbi_write_png(p, int(w), int(h), 4, px.data(), int(w * sizeof(u32)));
+		Msg("* project: the scene shows nothing from the viewport's camera, preview.png is kept as it was");
+		return false;
 	}
+	// stb writes bytes in memory order: swap R and B, force the picture opaque
+	for (u32& c : px)
+		c = 0xff000000 | (c & 0x0000ff00) | ((c & 0x00ff0000) >> 16) | ((c & 0x000000ff) << 16);
+	char p[MAX_PATH];
+	sprintf_s(p, "%s\\preview.png", s_Project);
+	if (!stbi_write_png(p, int(w), int(h), 4, px.data(), int(w * sizeof(u32))))
+	{
+		Msg("! project: preview.png cannot be written: %s", p);
+		return false;
+	}
+	return true;
 #else
-	IDirect3DSurface9* surf = 0;
-	if (SUCCEEDED(((IDirect3DTexture9*)UI->RT->pSurface)->GetSurfaceLevel(0, &surf)) && surf)
-	{
-		char p[MAX_PATH];
-		sprintf_s(p, "%s\\preview.png", s_Project);
-		D3DXSaveSurfaceToFileA(p, D3DXIFF_PNG, surf, NULL, NULL);
-		surf->Release();
-	}
+	return false;
 #endif
 }
 
+// the size comes along: the card crops the picture to its own shape
 #if defined(USE_DX11)
-static ID3D11ShaderResourceView* LoadPreview(const char* project)
+// a card's picture is some 650 px wide at 3x: a whole viewport's worth of texture per card only costs memory
+static const u32 kPreviewMaxW = 640;
+
+// Averaged down to kPreviewMaxW. A picture of no scene (a black or empty grey frame an older editor
+// kept) gives the card its placeholder; the file itself is the project's and stays.
+static ID3D11ShaderResourceView* LoadPreview(const char* project, u32& w, u32& h)
 {
+	w = h = 0;
 	char p[MAX_PATH];
 	sprintf_s(p, "%s\\preview.png", project);
-	if (::GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) return 0;
-	return DX11TextureFromFile(p);
+	int iw = 0, ih = 0, channels = 0;
+	stbi_uc* rgba = stbi_load(p, &iw, &ih, &channels, 4);
+	if (!rgba) return 0;
+	const u32 f = _max(1u, u32(iw) / kPreviewMaxW), ow = u32(iw) / f, oh = u32(ih) / f, n = f * f;
+	U32Vec px(size_t(ow) * oh);
+	for (u32 y = 0; y < oh; ++y)
+		for (u32 x = 0; x < ow; ++x)
+		{
+			u32 sum[3] = {};
+			for (u32 sy = 0; sy < f; ++sy)
+			{
+				const stbi_uc* src = rgba + ((size_t(y) * f + sy) * u32(iw) + size_t(x) * f) * 4;
+				for (u32 sx = 0; sx < f; ++sx, src += 4)
+					for (int c = 0; c < 3; ++c) sum[c] += src[c];
+			}
+			// B8G8R8A8, opaque
+			px[size_t(y) * ow + x] = 0xff000000 | ((sum[0] / n) << 16) | ((sum[1] / n) << 8) | (sum[2] / n);
+		}
+	stbi_image_free(rgba);
+	if (!ow || !oh || ShowsNoScene(px.data(), ow, oh, ow)) return 0;
+	ID3D11ShaderResourceView* view = DX11TextureFromPixels(px.data(), ow, oh);
+	if (!view) return 0;
+	w = ow;
+	h = oh;
+	return view;
 }
 #else
-static IDirect3DTexture9* LoadPreview(const char* project)
+static IDirect3DTexture9* LoadPreview(const char* project, u32& w, u32& h)
 {
+	w = h = 0;
 	char p[MAX_PATH];
 	sprintf_s(p, "%s\\preview.png", project);
 	if (::GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) return 0;
@@ -898,15 +1225,37 @@ static IDirect3DTexture9* LoadPreview(const char* project)
 	if (FAILED(D3DXCreateTextureFromFileExA(HW.pDevice, p, D3DX_DEFAULT, D3DX_DEFAULT, 1, 0,
 		D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &tex)))
 		return 0;
+	D3DSURFACE_DESC desc;
+	if (SUCCEEDED(tex->GetLevelDesc(0, &desc)))
+	{
+		w = desc.Width;
+		h = desc.Height;
+	}
+	// a picture of no scene gives the card its placeholder
+	D3DLOCKED_RECT locked;
+	if (w && h && SUCCEEDED(tex->LockRect(0, &locked, NULL, D3DLOCK_READONLY)))
+	{
+		const bool none = ShowsNoScene((const u32*)locked.pBits, w, h, u32(locked.Pitch) / sizeof(u32));
+		tex->UnlockRect(0);
+		if (none)
+		{
+			tex->Release();
+			w = h = 0;
+			return 0;
+		}
+	}
 	return tex;
 }
 #endif
 
+// Hands the cards' previews to s_DeadPreviews, released at the start of the next
+// frame: the frame being drawn may still hold them, and a renderer left with a
+// dangling texture killed the editor on the spot once
 void EditorProject::ReleasePreviews()
 {
 	for (int i = 0; i < s_RecentCount; ++i)
 	{
-		if (s_Recent[i].preview) s_Recent[i].preview->Release();
+		if (s_Recent[i].preview) s_DeadPreviews.push_back(s_Recent[i].preview);
 		s_Recent[i].preview = 0;
 		s_Recent[i].preview_tried = false;
 	}
@@ -978,6 +1327,23 @@ static bool SameOrBelow(const xr_string& path, const xr_string& folder)
 	return path.size() == folder.size() || '\\' == path[folder.size()] || '\\' == folder.back();
 }
 
+// `file` lies inside the open project: `rel` is its path below the root ("rawdata\levels\x.level").
+// As spelled first, then where both really are (a junction, an 8.3 name).
+static bool SceneInProject(LPCSTR file, xr_string& rel)
+{
+	rel.clear();
+	if (!file || !file[0] || !s_Project[0]) return false;
+	for (int real = 0; real < 2; ++real)
+	{
+		const xr_string path = real ? RealPath(file) : FullPath(file);
+		const xr_string root = real ? RealPath(s_Project) : FullPath(s_Project);
+		if (path.size() <= root.size() || !SameOrBelow(path, root)) continue;
+		rel = path.substr(root.size() + ('\\' == root.back() ? 0 : 1));
+		return !rel.empty();
+	}
+	return false;
+}
+
 static LPCSTR LeafOf(LPCSTR path)
 {
 	LPCSTR cut = strrchr(path, '\\');
@@ -1041,6 +1407,8 @@ static void ForgetRecent(LPCSTR path)
 		++kept;
 	}
 	s_RecentCount = kept;
+	// a twin that left takes the need for a parent on the other card with it
+	RefreshCardText();
 }
 
 // A place no deletion may take with it: the folder itself and anything holding
@@ -1583,15 +1951,50 @@ bool EditorProject::RevealProject(LPCSTR path, xr_string& err)
 	return false;
 }
 
-static void Hint(LPCSTR text)
+//------------------------------------------------------------------------------
+// the Start page's pieces: text, the page and its cards, a menu row
+//------------------------------------------------------------------------------
+using CT = XFinedTheme::ColorToken;
+
+// pt, docs/UI_DESIGN.md section 6 (Start page)
+static const float kFormW		= 320.f;
+static const float kCardW		= 232.f;
+static const float kCardH		= 184.f;
+static const float kCardGap		= 16.f;
+static const float kPreviewH	= 120.f;
+static const char* kSortLabels[] = { "Last Opened", "Name" };
+static const char* kSortKeys[]	= { "recent", "name" };
+
+static float Snap(float v) { return floorf(v + .5f); }
+
+static void SecondaryText(LPCSTR text)
 {
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("%s", text);
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextSecondary));
+	ImGui::TextUnformatted(text);
+	ImGui::PopStyleColor();
 }
 
-static LPCSTR StateText(ERecentState state)
+static void HeadlineText(LPCSTR text)
 {
-	return rsMissing == state ? "Folder not found" : rsNoProject == state ? "No project in this folder" : "";
+	XUI::FontScope strong(XUI::Font::Strong);
+	ImGui::PushTextWrapPos(0.f);
+	ImGui::TextUnformatted(text);
+	ImGui::PopTextWrapPos();
+}
+
+// one line of a list of what goes
+static void WhatGoes(LPCSTR text)
+{
+	ImGui::Indent(XUI::Pt(8.f));
+	XUI::TextEllipsis(text, -1.f, XUI::Clip::Middle);
+	ImGui::Unindent(XUI::Pt(8.f));
+}
+
+static LPCSTR StateHelp(ERecentState state)
+{
+	return rsMissing == state
+		? "The folder is not there: moved, deleted, or on a drive that is not plugged in. Its menu takes it off the list."
+		: "The folder holds no project.ltx or mod.ltx any more. Its menu takes it off the list.";
 }
 
 static xr_string SizeText(u64 bytes)
@@ -1611,25 +2014,42 @@ static xr_string CountText(u32 n, LPCSTR one, LPCSTR many)
 	return tmp;
 }
 
+// "Title###dlg.name" -> "dlg.name", the name XUI::CloseDialog takes
+static LPCSTR DialogName(LPCSTR title_id)
+{
+	LPCSTR hash = strstr(title_id, "###");
+	return hash ? hash + 3 : title_id;
+}
+
+//------------------------------------------------------------------------------
+// the card menu and the Delete Project confirmation
+//------------------------------------------------------------------------------
+// The cards in the order the page shows them: the search filters, the sort orders
+static void CardOrder(xr_vector<int>& out)
+{
+	out.clear();
+	xr_string text;
+	for (int i = 0; i < s_RecentCount; ++i)
+	{
+		text = s_Recent[i].shown_name + " " + s_Recent[i].shown_path;
+		if (XUI::Match(s_Search, text.c_str())) out.push_back(i);
+	}
+	if (1 == s_Sort)
+		std::stable_sort(out.begin(), out.end(), [](int a, int b) { return _stricmp(s_Recent[a].name, s_Recent[b].name) < 0; });
+}
+
 static void OpenDeleteConfirm(LPCSTR path)
 {
+	// counted once, when it opens
 	EditorProject::CheckDelete(path, s_DeletePlan);
 	s_DeleteResult	= EditorProject::SDeleteInfo();
 	s_DeleteDone	= false;
-	s_DeleteClosing	= false;
 	s_DeleteWant	= true;
 }
 
-static void DrawTileMenu(SRecentProject& r, const ImVec2& at)
+static void DrawCardMenu(SRecentProject& r)
 {
-	// MCP puts the menu up the way a right click does - see McpBrowserMenu
-	if (s_MenuFor[0] && 0 == _stricmp(s_MenuFor, r.path))
-	{
-		s_MenuFor[0] = 0;
-		ImGui::OpenPopup("##menu");
-		ImGui::SetNextWindowPos(at);
-	}
-	if (!ImGui::BeginPopupContextItem("##menu"))
+	if (!ImGui::BeginPopup("##card_menu"))
 		return;
 	if (s_MenuClose)
 	{
@@ -1641,122 +2061,126 @@ static void DrawTileMenu(SRecentProject& r, const ImVec2& at)
 	if (ImGui::IsWindowAppearing()) r.state = RecentState(r.path);
 	strncpy_s(s_MenuShown, sizeof(s_MenuShown), r.path, _TRUNCATE);
 
-	ImGui::BeginDisabled(rsMissing == r.state);
-	if (ImGui::MenuItem("Show in Explorer"))
+	const bool missing = rsMissing == r.state;
+	const bool reveal = XUI::MenuItem(EditorUiContract::kCardShowInExplorer, XUI::Icon::Reveal, nullptr, !missing);
+	XUI::Tip(missing ? "The folder does not exist any more." : "Opens the project folder in Windows Explorer.");
+	if (reveal)
 	{
 		xr_string err;
-		if (!EditorProject::RevealProject(r.path, err)) Msg("! Show in Explorer: %s", err.c_str());
+		if (!EditorProject::RevealProject(r.path, err)) s_PageError = "Show in Explorer: " + err;
 	}
-	ImGui::EndDisabled();
-	Hint(rsMissing == r.state ? "The folder does not exist any more." : "Opens the project folder in Windows Explorer.");
 	ImGui::Separator();
 	if (rsProject == r.state)
 	{
-		if (ImGui::MenuItem("Delete...")) OpenDeleteConfirm(r.path);
-		Hint("Deletes the project folder from disk for good. Asks first, naming what goes.");
+		const bool remove = XUI::MenuItem(EditorUiContract::kCardDelete, XUI::Icon::Delete, nullptr, true, true);
+		XUI::Tip("Deletes the project folder from disk for good. Asks first, naming what goes.");
+		if (remove)
+			OpenDeleteConfirm(r.path);
 	}
 	else
 	{
-		if (ImGui::MenuItem("Remove from List")) strncpy_s(s_ForgetPending, sizeof(s_ForgetPending), r.path, _TRUNCATE);
-		Hint(rsMissing == r.state ? "Takes the project off this list. Its folder is gone already."
-								  : "Takes the folder off this list. It holds no project.ltx or mod.ltx any more; nothing on disk changes.");
+		const bool forget = XUI::MenuItem(EditorUiContract::kCardRemoveFromList, XUI::Icon::Clear, nullptr, true);
+		XUI::Tip(missing
+			? "Takes the project off this list. Its folder is gone already."
+			: "Takes the folder off this list. It holds no project.ltx or mod.ltx any more; nothing on disk changes.");
+		if (forget)
+			strncpy_s(s_ForgetPending, sizeof(s_ForgetPending), r.path, _TRUNCATE);
 	}
 	ImGui::EndPopup();
 }
 
-static const char* kTitleDelete = "XFined Editor - Delete Project";
-
-// Drawn inside the browser's own modal: a modal opened next to it would close it
+// A dialog of its own: the page under it is no modal any more, so nothing closes it
+// by opening next to it. *open false (Cancel, Esc, MCP show=none) takes it down.
 static void DrawDeleteConfirm()
 {
-	// Taken down from outside, the modal still sits in ImGui's popup stack and would
-	// keep the browser under it blocked: a Begin with p_open false closes it there
-	if (!s_DeleteWant && !s_DeleteClosing) return;
-	if (!ImGui::BeginPopupModal(kTitleDelete, &s_DeleteWant, ImGuiWindowFlags_AlwaysAutoResize, s_DeleteWant))
-	{
-		s_DeleteClosing = false;
+	if (!XUI::BeginDialog(EditorUiContract::kDeleteProjectDialog, &s_DeleteWant, XUI::DialogSize::M))
 		return;
-	}
 	s_DeleteShown = true;
 
 	const EditorProject::SDeleteInfo& d = s_DeleteDone ? s_DeleteResult : s_DeletePlan;
-	char name[MAX_PATH * 3], path[MAX_PATH * 3], line[MAX_PATH * 3];
+	char name[MAX_PATH * 3], path[MAX_PATH * 3], where[MAX_PATH * 3], line[MAX_PATH * 4];
 	AcpToUtf8(d.name.c_str(), name, sizeof(name));
 	AcpToUtf8(d.path.c_str(), path, sizeof(path));
-	const ImVec4 warn(1.f, 0.8f, 0.3f, 1.f);
 	const xr_string held = CountText(d.files, "file", "files") + " in " + CountText(d.folders, "folder", "folders") + ", " + SizeText(d.bytes);
-	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.f);
-
-	bool confirm = false;
 	const bool question = !s_DeleteDone && d.refused.empty() && !d.missing;
+	const bool partial = s_DeleteDone && d.refused.empty();
+
+	XUI::BeginDialogBody();
+	if (question)		sprintf_s(line, "Delete the project \"%s\" from disk?", name);
+	else if (partial)	sprintf_s(line, "The project \"%s\" was not deleted completely.", name);
+	else if (d.missing)	sprintf_s(line, "The folder of the project \"%s\" does not exist any more.", name);
+	else				sprintf_s(line, "The project \"%s\" cannot be deleted from here.", name);
+	HeadlineText(line);
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextSecondary));
+	XUI::TextEllipsis(path, -1.f, XUI::Clip::Start);
+	ImGui::PopStyleColor();
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
 	if (question)
 	{
-		ImGui::Text("Delete the project \"%s\" from disk?", name);
-		ImGui::TextDisabled("%s", path);
-		ImGui::Spacing();
-		ImGui::TextUnformatted("What goes:");
-		ImGui::BulletText("%s", held.c_str());
-		if (d.git)		ImGui::BulletText(".git - the git repository, with the project's whole history");
-		if (d.releases)	ImGui::BulletText("releases\\ - the files of published releases: %s, %s",
-							CountText(d.release_files, "file", "files").c_str(), SizeText(d.release_bytes).c_str());
-		if (d.links)	ImGui::BulletText("%s - removed as links; what they point at stays", CountText(d.links, "link", "links").c_str());
-		ImGui::Spacing();
-		ImGui::TextColored(warn, "Deleted for good - this cannot be undone.");
-	}
-	else if (s_DeleteDone && d.refused.empty())
-	{
-		ImGui::Text("The project \"%s\" was not deleted completely.", name);
-		ImGui::TextDisabled("%s", path);
-		ImGui::Spacing();
-		ImGui::Text("Deleted: %s. What stayed:", held.c_str());
-		for (u32 i = 0; i < d.failed.size(); ++i)
+		SecondaryText("What goes:");
+		WhatGoes(held.c_str());
+		if (d.git) WhatGoes(".git - the git repository, with the project's whole history");
+		if (d.releases)
 		{
-			AcpToUtf8(d.failed[i].path.c_str(), line, sizeof(line));
-			ImGui::BulletText("%s - %s", line, d.failed[i].reason.c_str());
+			sprintf_s(line, "releases\\ - the files of published releases: %s, %s",
+				CountText(d.release_files, "file", "files").c_str(), SizeText(d.release_bytes).c_str());
+			WhatGoes(line);
 		}
-		if (d.failed_total > d.failed.size())
-			ImGui::BulletText("and %u more", d.failed_total - u32(d.failed.size()));
-		ImGui::Spacing();
-		ImGui::TextUnformatted("The project stays in the list. Close whatever holds these files, then delete it again.");
+		if (d.links)
+		{
+			sprintf_s(line, "%s - removed as links; what they point at stays", CountText(d.links, "link", "links").c_str());
+			WhatGoes(line);
+		}
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		XUI::StatusText(XUI::Tone::Warning, "Deleted for good - this cannot be undone.");
+	}
+	else if (partial)
+	{
+		sprintf_s(line, "Deleted: %s. What stayed:", held.c_str());
+		SecondaryText(line);
+		const u32 listed = _min(u32(d.failed.size()), 10u);
+		for (u32 i = 0; i < listed; ++i)
+		{
+			AcpToUtf8(d.failed[i].path.c_str(), where, sizeof(where));
+			sprintf_s(line, "%s - %s", where, d.failed[i].reason.c_str());
+			WhatGoes(line);
+		}
+		if (d.failed_total > listed)
+		{
+			sprintf_s(line, "and %u more", d.failed_total - listed);
+			WhatGoes(line);
+		}
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		XUI::StatusText(XUI::Tone::Info, "The project stays in the list. Close whatever holds these files, then delete it again.");
 	}
 	else if (d.missing)
-	{
-		ImGui::Text("The folder of the project \"%s\" does not exist any more.", name);
-		ImGui::TextDisabled("%s", path);
-		ImGui::TextUnformatted("Nothing was deleted. Remove from List in its menu takes it off the list.");
-	}
+		XUI::StatusText(XUI::Tone::Muted, "Nothing was deleted. Remove from List in its menu takes it off the list.");
 	else
 	{
-		ImGui::Text("The project \"%s\" cannot be deleted from here.", name);
-		ImGui::TextDisabled("%s", path);
-		ImGui::Spacing();
 		AcpToUtf8(d.refused.c_str(), line, sizeof(line));
-		ImGui::TextColored(warn, "%s", line);
+		XUI::StatusText(XUI::Tone::Error, line);
 		for (u32 i = 1; i < d.nested.size(); ++i)
 		{
-			AcpToUtf8(d.nested[i].c_str(), line, sizeof(line));
-			ImGui::BulletText("%s", line);
+			AcpToUtf8(d.nested[i].c_str(), where, sizeof(where));
+			WhatGoes(where);
 		}
-		ImGui::Spacing();
-		ImGui::TextUnformatted("Nothing was deleted.");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		XUI::StatusText(XUI::Tone::Muted, "Nothing was deleted.");
 	}
-	ImGui::PopTextWrapPos();
-	ImGui::Separator();
 
-	// Cancel is the default: Enter and Escape both back out. Not on the frame the
-	// window appears - the key that chose Delete... from the menu is still down.
-	const bool keys = !ImGui::IsWindowAppearing() &&
-					  (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
-					   ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
-	if (question)
+	// Cancel is the default; with Delete on the footer Enter and Esc both back out
+	bool confirm = false, close = false;
+	if (XUI::BeginDialogFooter())
 	{
-		confirm = ImGui::Button("Delete", ImVec2(120, 0));
-		ImGui::SameLine();
+		if (question)
+		{
+			confirm = XUI::DialogButton("Delete", XUI::Kind::Danger);
+			close = XUI::DialogButton("Cancel", XUI::Kind::Secondary, true);
+		}
+		else
+			close = XUI::DialogButton("Close", XUI::Kind::Secondary, true);
 	}
-	const bool cancel = ImGui::Button(question ? "Cancel" : "Close", ImVec2(120, 0)) || keys;
-	ImGui::SetItemDefaultFocus();
-
-	if (cancel)
+	if (close)
 	{
 		s_DeleteWant = false;
 		ImGui::CloseCurrentPopup();
@@ -1768,10 +2192,16 @@ static void DrawDeleteConfirm()
 		{
 			s_DeleteWant = false;
 			ImGui::CloseCurrentPopup();
+			if (s_DeleteResult.missing)
+				sprintf_s(line, "Project \"%s\" removed from the list: its folder was gone already.", name);
+			else
+				sprintf_s(line, "Project \"%s\" deleted: %s, %s.", name, CountText(s_DeleteResult.files, "file", "files").c_str(),
+					CountText(s_DeleteResult.folders, "folder", "folders").c_str());
+			XUI::Toast(XUI::Tone::Success, line);
 		}
 		else s_DeleteDone = true;
 	}
-	ImGui::EndPopup();
+	XUI::EndDialog();
 }
 
 //------------------------------------------------------------------------------
@@ -1923,74 +2353,99 @@ static SRecentProject* FindTile(LPCSTR path)
 	return 0;
 }
 
-// the menu a tile offers in its state, as the window draws it
+// the menu a card offers in its state, as the page draws it
 static void AppendMenuItems(xr_string& out, ERecentState state)
 {
-	out += ",\"items\":[{\"label\":\"Show in Explorer\",\"enabled\":";
-	out += rsMissing == state ? "false}" : "true}";
-	out += rsProject == state ? ",{\"label\":\"Delete...\",\"enabled\":true}]" : ",{\"label\":\"Remove from List\",\"enabled\":true}]";
+	out += ",\"items\":[{\"label\":\"";
+	out += EditorUiContract::kCardShowInExplorer;
+	out += rsMissing == state ? "\",\"enabled\":false}" : "\",\"enabled\":true}";
+	out += ",{\"label\":\"";
+	out += rsProject == state ? EditorUiContract::kCardDelete : EditorUiContract::kCardRemoveFromList;
+	out += "\",\"enabled\":true}]";
 }
 
 void EditorProject::McpBrowserMenu(LPCSTR raw, xr_string& out)
 {
-	char show[16] = {}, path[MAX_PATH * 2] = {};
+	char show[16] = {}, path[MAX_PATH * 2] = {}, search[sizeof(s_Search)] = {}, sort[16] = {};
 	XFinedMCP::GetArg(raw, "show", show, sizeof(show));
 	ArgPath(raw, path, sizeof(path));
-	if (show[0])
+	const bool set_search = XFinedMCP::GetArg(raw, "search", search, sizeof(search));
+	const bool set_sort = XFinedMCP::GetArg(raw, "sort", sort, sizeof(sort)) && sort[0];
+	if ((show[0] || set_search || set_sort) && s_Active)
 	{
-		if (s_Active)
+		JsonError(out, "the project browser is not on screen: a project is open");
+		return;
+	}
+
+	// everything is checked before anything changes
+	int sort_index = s_Sort;
+	if (set_sort)
+	{
+		sort_index = -1;
+		for (int i = 0; i < 2; ++i)
+			if (0 == xr_strcmp(sort, kSortKeys[i])) sort_index = i;
+		if (sort_index < 0)
 		{
-			JsonError(out, "the project browser is not on screen: a project is open");
+			JsonError(out, "sort: recent or name");
 			return;
 		}
-		if (0 == xr_strcmp(show, "none"))
-		{
-			// both go down, and nothing is deleted
-			s_MenuFor[0]	= 0;
-			s_MenuClose		= true;
-			s_DeleteClosing	= s_DeleteWant;
-			s_DeleteWant	= false;
-		}
-		else if (0 == xr_strcmp(show, "menu") || 0 == xr_strcmp(show, "confirm"))
-		{
-			SRecentProject* r = path[0] ? FindTile(path) : 0;
-			if (!r)
-			{
-				JsonError(out, xr_string("no tile of the project browser shows '") + path + "'");
-				return;
-			}
-			r->state = RecentState(r->path);
-			if (0 == xr_strcmp(show, "menu"))
-			{
-				s_DeleteClosing	= s_DeleteWant;
-				s_DeleteWant	= false;
-				s_MenuClose		= false;
-				strncpy_s(s_MenuFor, sizeof(s_MenuFor), r->path, _TRUNCATE);
-			}
-			else
-			{
-				if (rsProject != r->state)
-				{
-					JsonError(out, "that folder holds no project: its menu offers Remove from List, which asks nothing");
-					return;
-				}
-				s_MenuFor[0] = 0;
-				s_MenuClose = true;
-				// the window's own opening: the check and the count, then the question
-				OpenDeleteConfirm(r->path);
-			}
-		}
-		else
+	}
+	const bool none = 0 == xr_strcmp(show, "none"), menu = 0 == xr_strcmp(show, "menu"), confirm = 0 == xr_strcmp(show, "confirm");
+	SRecentProject* target = 0;
+	if (show[0] && !none)
+	{
+		if (!menu && !confirm)
 		{
 			JsonError(out, "show: menu, confirm or none");
 			return;
+		}
+		target = path[0] ? FindTile(path) : 0;
+		if (!target)
+		{
+			JsonError(out, xr_string("no card of the project browser shows '") + path + "'");
+			return;
+		}
+		target->state = RecentState(target->path);
+		if (confirm && rsProject != target->state)
+		{
+			JsonError(out, "that folder holds no project: its menu offers Remove from List, which asks nothing");
+			return;
+		}
+	}
+
+	// what the page shows changes; nothing is saved and nothing is acted on
+	s_Sort = sort_index;
+	if (set_search) strncpy_s(s_Search, sizeof(s_Search), search, _TRUNCATE);
+	if (none)
+	{
+		// both go down, and nothing is deleted
+		s_MenuFor[0]	= 0;
+		s_MenuClose		= true;
+		s_DeleteWant	= false;
+	}
+	else if (target)
+	{
+		// a card the search hides has no menu to show: the search goes
+		if (!XUI::Match(s_Search, (target->shown_name + " " + target->shown_path).c_str())) s_Search[0] = 0;
+		if (menu)
+		{
+			s_DeleteWant	= false;
+			s_MenuClose		= false;
+			strncpy_s(s_MenuFor, sizeof(s_MenuFor), target->path, _TRUNCATE);
+		}
+		else
+		{
+			s_MenuFor[0]	= 0;
+			s_MenuClose		= true;
+			// the window's own opening: the check and the count, then the question
+			OpenDeleteConfirm(target->path);
 		}
 	}
 
 	out = s_Active ? "{\"ok\":true,\"browser\":false" : "{\"ok\":true,\"browser\":true";
 	// the menu: asked for and not drawn yet, or what the last frame drew
-	LPCSTR menu = s_MenuFor[0] ? s_MenuFor : (!s_MenuClose && s_MenuShown[0]) ? s_MenuShown : 0;
-	SRecentProject* tile = menu ? FindTile(menu) : 0;
+	LPCSTR shown_menu = s_MenuFor[0] ? s_MenuFor : (!s_MenuClose && s_MenuShown[0]) ? s_MenuShown : 0;
+	SRecentProject* tile = shown_menu ? FindTile(shown_menu) : 0;
 	if (tile)
 	{
 		out += ",\"menu\":{\"path\":\"";
@@ -2007,7 +2462,10 @@ void EditorProject::McpBrowserMenu(LPCSTR raw, xr_string& out)
 	if (s_DeleteWant)
 	{
 		const SDeleteInfo& d = s_DeleteDone ? s_DeleteResult : s_DeletePlan;
-		out += ",\"confirm\":{\"shown\":";
+		// the dialog's id, what screenshot_editor names as modal.id while it is up
+		out += ",\"confirm\":{\"id\":\"";
+		out += DialogName(EditorUiContract::kDeleteProjectDialog);
+		out += "\",\"shown\":";
 		out += s_DeleteShown ? "true" : "false";
 		out += ",\"view\":\"";
 		out += s_DeleteDone ? "result" : (!d.refused.empty() || d.missing) ? "refused" : "question";
@@ -2018,11 +2476,70 @@ void EditorProject::McpBrowserMenu(LPCSTR raw, xr_string& out)
 		out += "}";
 	}
 	else out += ",\"confirm\":null";
-	out += "}";
+
+	// the cards in the order the page draws them
+	out += ",\"search\":";
+	NqUtil::JsonString(out, s_Search);
+	out += ",\"sort\":\"";
+	out += kSortKeys[s_Sort];
+	out += "\",\"cards\":[";
+	xr_vector<int> order;
+	if (!s_Active) CardOrder(order);
+	for (u32 i = 0; i < order.size(); ++i)
+	{
+		const SRecentProject& r = s_Recent[order[i]];
+		out += i ? ",{\"path\":\"" : "{\"path\":\"";
+		EditorGameContent::JsonAppendPath(out, r.path);
+		out += "\",\"name\":";
+		NqUtil::JsonString(out, r.shown_name);
+		out += ",\"state\":\"";
+		out += kRecentStateNames[r.state];
+		out += "\",\"parent\":";
+		NqUtil::JsonString(out, r.shown_parent);
+		// what the card's picture area holds: preview.png, or the placeholder for none or one of no scene
+		out += ",\"preview\":\"";
+		out += rsProject != r.state ? "placeholder" : !r.preview_tried ? "not_drawn" : r.preview ? "picture" : "placeholder";
+		out += "\"}";
+	}
+	out += "]}";
+}
+
+void EditorProject::McpCreate(LPCSTR raw, xr_string& out)
+{
+	char parent[MAX_PATH * 2] = {}, name[64] = {};
+	XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+	// no parent: the location the Start page's form shows
+	if (!XFinedMCP::GetArg(raw, "parent", parent, sizeof(parent)) || !parent[0])
+		strcpy_s(parent, s_NewParent);
+	for (char* p = parent; *p; ++p) if ('/' == *p) *p = '\\';
+	while (xr_strlen(parent) > 3 && '\\' == parent[xr_strlen(parent) - 1]) parent[xr_strlen(parent) - 1] = 0;
+	if (s_Active)
+	{
+		JsonError(out, "a project is open: project_close first, then create");
+		return;
+	}
+	if (xr_strlen(parent) + xr_strlen(name) + 2 > MAX_PATH)
+	{
+		JsonError(out, "the path is too long");
+		return;
+	}
+	char folder[MAX_PATH];
+	sprintf_s(folder, "%s\\%s", parent, name);
+	const bool existed = DirExists(folder) && HasManifest(folder);
+	if (!Create(parent, name))
+	{
+		JsonError(out, s_CreateError[0] ? s_CreateError : "the project could not be created");
+		return;
+	}
+	out = "{\"ok\":true,\"path\":\"";
+	EditorGameContent::JsonAppendPath(out, s_Project);
+	out += "\",\"name\":";
+	NqUtil::JsonString(out, name);
+	out += existed ? ",\"existed\":true,\"opened\":true}" : ",\"existed\":false,\"opened\":true}";
 }
 
 //------------------------------------------------------------------------------
-// the browser page (fullscreen, drawn instead of the editor UI)
+// the Start page (the whole work area, drawn instead of the editor UI)
 //------------------------------------------------------------------------------
 // -project <folder|name>: opens that project at startup and skips the picker
 // entirely, so a scripted run - a smoke test, an agent driving the MCP port -
@@ -2090,225 +2607,463 @@ void EditorProject::Startup()
 	OpenProjectFromCommandLine();
 }
 
+// The create form's look at its target, taken again only when a field changes:
+// every keystroke would otherwise be a round of file operations
+static void CheckNewFolder()
+{
+	char key[sizeof(s_NewChecked)];
+	_snprintf_s(key, _TRUNCATE, "%s|%s", s_NewParent, s_NewName);
+	if (0 == strcmp(key, s_NewChecked)) return;
+	strcpy_s(s_NewChecked, key);
+	// the fields changed: the last failure spoke of something else
+	s_CreateError[0] = 0;
+	s_NewState = nsNew;
+	if (s_NewParent[0] && !IsAbsolutePath(s_NewParent))
+	{
+		s_NewState = nsNotFullPath;
+		return;
+	}
+	if (!s_NewParent[0] || !EditorProject::ValidateName(s_NewName) || xr_strlen(s_NewParent) + xr_strlen(s_NewName) + 2 > MAX_PATH)
+		return;
+	char folder[MAX_PATH];
+	sprintf_s(folder, "%s\\%s", s_NewParent, s_NewName);
+	if (DirExists(folder)) s_NewState = HasManifest(folder) ? nsProjectThere : nsFolderThere;
+}
+
+static void FormMessage(XUI::Tone tone, LPCSTR text)
+{
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+	XUI::StatusText(tone, text);
+}
+
+// Left of the cards: New Project (Location, Name, Create) and Open Folder...
+static void DrawNewProject(bool& create, bool& open_folder)
+{
+	const float width = _min(ImGui::GetContentRegionAvail().x, XUI::Pt(kFormW));
+	{
+		XUI::FontScope title(XUI::Font::Title);
+		ImGui::TextUnformatted("New Project");
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	SecondaryText("Location");
+	ImGui::SetNextItemWidth(width);
+	PathFieldAcp("##location", s_NewParent, sizeof(s_NewParent));
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	SecondaryText("Name");
+	ImGui::SetNextItemWidth(width);
+	const bool enter = ImGui::InputTextWithHint("##name", "Latin letters, digits, _ and -", s_NewName, sizeof(s_NewName),
+		ImGuiInputTextFlags_EnterReturnsTrue);
+	CheckNewFolder();
+
+	// the worst first
+	const bool name_ok = EditorProject::ValidateName(s_NewName);
+	if (s_NewName[0] && !name_ok)				FormMessage(XUI::Tone::Error, "Use Latin letters, digits, _ and - only.");
+	else if (nsNotFullPath == s_NewState)		FormMessage(XUI::Tone::Error, "The location must be a full path.");
+	else if (nsProjectThere == s_NewState)		FormMessage(XUI::Tone::Info, "A project with this name is there already: Create opens it.");
+	else if (nsFolderThere == s_NewState)		FormMessage(XUI::Tone::Warning, "The folder exists: the project is made inside it.");
+	if (s_CreateError[0])
+	{
+		char text[sizeof(s_CreateError) * 2];
+		AcpToUtf8(s_CreateError, text, sizeof(text));
+		FormMessage(XUI::Tone::Error, text);
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+
+	LPCSTR why = !s_NewParent[0] ? "Pick a location first." : nsNotFullPath == s_NewState ? "The location must be a full path."
+		: !s_NewName[0] ? "Enter a name first." : !name_ok ? "The name may hold Latin letters, digits, _ and - only." : 0;
+	if (XUI::Button("Create", XUI::Kind::Primary, !why, why) || (enter && !why))
+		create = true;
+
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(16.f)));
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	ImGui::GetWindowDrawList()->AddLine(ImVec2(at.x, Snap(at.y)), ImVec2(at.x + width, Snap(at.y)), XFinedTheme::U32(CT::BorderSubtle),
+		_max(1.f, XUI::Pt(1.f)));
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(16.f)));
+	if (XUI::Button("Open Folder..."))
+		open_folder = true;
+	XUI::Tip("Opens a folder that holds mod.ltx or project.ltx, such as a fresh clone of a mod's repository.");
+}
+
+static void OpenFolder()
+{
+	char picked[MAX_PATH] = {};
+	if (!PickFolder(picked, sizeof(picked), L"Open Project Folder")) return;
+	char shown[MAX_PATH * 3];
+	AcpToUtf8(picked, shown, sizeof(shown));
+	if (!HasManifest(picked))
+		s_PageError = xr_string("Not a project folder - it holds no mod.ltx or project.ltx: ") + shown;
+	else if (!EditorProject::Open(picked))
+		s_PageError = xr_string("The project cannot be opened: ") + EditorProject::OpenError();
+}
+
+// The card's path in the font the caller pushed, cut at the start. For a twin the folder that tells it apart
+// stays whole and reads in the text colour: when the path from it on is too long, the cut moves between it
+// and the leaf too ("...\tour3a\...\Name"); only a folder wider than the card is cut itself. A cut path is
+// the tooltip.
+static void DrawCardPath(const SRecentProject& r, float room)
+{
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextSecondary));
+	if (r.parent_end <= r.parent_begin)
+	{
+		XUI::TextEllipsis(r.shown_path.c_str(), room, XUI::Clip::Start);
+		ImGui::PopStyleColor();
+		return;
+	}
+	LPCSTR path = r.shown_path.c_str(), seg = path + r.parent_begin, seg_end = path + r.parent_end;
+	// a cut before the folder only where something stands before it, after it only where folders stand
+	// between it and the leaf
+	static const char kCut[] = "...\\";
+	LPCSTR lead = r.parent_begin ? kCut : path, lead_end = r.parent_begin ? kCut + sizeof(kCut) - 1 : path;
+	const xr_string past = r.leaf_begin > r.parent_end + 1 ? xr_string("\\...\\") + (path + r.leaf_begin) : xr_string(seg_end);
+	// what stands before and after the folder, tried in this order: the whole path, cut before the folder,
+	// cut before and after it
+	struct STry { LPCSTR pre, pre_end, post; };
+	const STry tries[] =
+	{
+		{ path, seg, seg_end },
+		{ lead, lead_end, seg_end },
+		{ lead, lead_end, past.c_str() },
+	};
+	const float seg_w = ImGui::CalcTextSize(seg, seg_end).x;
+	const STry* pick = 0;
+	for (const STry& t : tries)
+		if (ImGui::CalcTextSize(t.pre, t.pre_end).x + seg_w + ImGui::CalcTextSize(t.post).x <= room)
+		{
+			pick = &t;
+			break;
+		}
+	ImGui::BeginGroup();
+	if (pick)
+	{
+		ImGui::TextUnformatted(pick->pre, pick->pre_end);
+		ImGui::SameLine(0.f, 0.f);
+		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::Text));
+		ImGui::TextUnformatted(seg, seg_end);
+		ImGui::PopStyleColor();
+		ImGui::SameLine(0.f, 0.f);
+		ImGui::TextUnformatted(pick->post);
+	}
+	else
+	{
+		// plain text: the one tooltip is the whole path's, below
+		xr_string shown;
+		const bool cut = XUI::EllipsizeText(r.shown_parent.c_str(), room, XUI::Clip::End, shown);
+		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::Text));
+		ImGui::TextUnformatted(cut ? shown.c_str() : r.shown_parent.c_str());
+		ImGui::PopStyleColor();
+	}
+	ImGui::EndGroup();
+	if (pick != tries) XUI::Tip(r.shown_path.c_str());
+	ImGui::PopStyleColor();
+}
+
+// One card, 232 x 184 pt: the preview, the name and the ... menu, the path with a start
+// ellipsis (a twin's differing parent kept whole in it). True on a click that opens it.
+static bool DrawCard(SRecentProject& r, const ImVec2& at)
+{
+	const float w = XUI::Pt(kCardW), h = XUI::Pt(kCardH), pad = XUI::Pt(8.f);
+	const bool here = rsProject == r.state;
+	if (here && !r.preview_tried)
+	{
+		r.preview = LoadPreview(r.path, r.preview_w, r.preview_h);
+		r.preview_tried = true;
+	}
+	// by folder, not by slot: a card leaving the list must not hand its menu on
+	ImGui::PushID(r.path);
+	ImGui::SetCursorScreenPos(at);
+	ImGui::SetNextItemAllowOverlap();
+	const bool clicked = ImGui::InvisibleButton("##card", ImVec2(w, h));
+	const bool right_click = ImGui::IsMouseReleased(ImGuiMouseButton_Right) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+	if (!here) XUI::Tip(StateHelp(r.state));
+	const ImVec2 min = at, max(at.x + w, at.y + h);
+	const bool hovered = ImGui::IsMouseHoveringRect(min, max) && ImGui::IsWindowHovered();
+	// a folder that holds no project any more is veiled and opens nothing
+	const float veil = here ? 1.f : .5f;
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	const float radius = XUI::Pt(6.f);
+	dl->AddRectFilled(min, max, XFinedTheme::U32(hovered ? CT::Hover : CT::Raised), radius);
+	dl->AddRect(min, max, XFinedTheme::U32(hovered ? CT::Border : CT::BorderSubtle), radius, 0, _max(1.f, XUI::Pt(1.f)));
+
+	// the preview is cut to the card's shape, never stretched
+	const ImVec2 pmin(min.x + pad, min.y + pad), pmax(max.x - pad, min.y + pad + XUI::Pt(kPreviewH));
+	if (r.preview && r.preview_w && r.preview_h)
+	{
+		const float want = (pmax.x - pmin.x) / (pmax.y - pmin.y), have = float(r.preview_w) / float(r.preview_h);
+		ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+		if (have > want)	{ uv0.x = (1.f - want / have) * .5f; uv1.x = 1.f - uv0.x; }
+		else				{ uv0.y = (1.f - have / want) * .5f; uv1.y = 1.f - uv0.y; }
+		dl->AddImageRounded(r.preview, pmin, pmax, uv0, uv1, ImGui::GetColorU32(IM_COL32_WHITE, veil), XUI::Pt(4.f));
+	}
+	else
+	{
+		dl->AddRectFilled(pmin, pmax, XFinedTheme::U32(CT::Canvas, veil), XUI::Pt(4.f));
+		const float icon = XUI::Pt(32.f);
+		XUI::DrawIcon(dl, here ? XUI::Icon::Level : XUI::Icon::Folder, ImVec2(Snap((pmin.x + pmax.x - icon) * .5f),
+			Snap((pmin.y + pmax.y - icon) * .5f)), 32.f, XFinedTheme::U32(CT::TextMuted, veil));
+	}
+	if (!here)
+	{
+		ImGui::SetCursorScreenPos(ImVec2(pmin.x + XUI::Pt(6.f), pmin.y + XUI::Pt(6.f)));
+		XUI::Badge(rsMissing == r.state ? "Missing" : "Not a project", XUI::Tone::Warning);
+	}
+
+	// the name has its row to itself, the ... menu at its end; the path under it, holding a twin's parent
+	const float row_y = pmax.y + XUI::Pt(6.f), row_h = XUI::Pt(24.f), more = XUI::Pt(24.f);
+	const float name_room = w - pad * 2.f - more - XUI::Pt(4.f);
+	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * veil);
+	{
+		XUI::FontScope strong(XUI::Font::Strong);
+		ImGui::SetCursorScreenPos(ImVec2(pmin.x, Snap(row_y + (row_h - ImGui::GetTextLineHeight()) * .5f)));
+		XUI::TextEllipsis(r.shown_name.c_str(), name_room);
+	}
+	{
+		XUI::FontScope small_font(XUI::Font::Small);
+		ImGui::SetCursorScreenPos(ImVec2(pmin.x, row_y + row_h + XUI::Pt(2.f)));
+		DrawCardPath(r, w - pad * 2.f);
+	}
+	ImGui::PopStyleVar();
+
+	ImGui::SetCursorScreenPos(ImVec2(max.x - pad - more, row_y));
+	const bool more_clicked = XUI::IconButton("##more", XUI::Icon::More, "Actions");
+	const ImVec2 below(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f));
+	if (more_clicked)
+		XUI::Shell::OpenPopupAt("##card_menu", below);
+	else if (right_click)
+		XUI::Shell::OpenPopupAt("##card_menu", ImGui::GetMousePos());
+	// MCP asks the way the ... button does; a card scrolled away comes into view first
+	if (s_MenuFor[0] && 0 == _stricmp(s_MenuFor, r.path))
+	{
+		if (ImGui::IsRectVisible(min, max))
+		{
+			s_MenuFor[0] = 0;
+			XUI::Shell::OpenPopupAt("##card_menu", below);
+		}
+		else
+			ImGui::SetScrollFromPosY(min.y - ImGui::GetWindowPos().y, .3f);
+	}
+	DrawCardMenu(r);
+	ImGui::PopID();
+	return clicked && here;
+}
+
+// The cards in rows as wide as the room allows; the index of the one clicked, or -1
+static int DrawCardGrid(const xr_vector<int>& order)
+{
+	const float w = XUI::Pt(kCardW), h = XUI::Pt(kCardH), gap = XUI::Pt(kCardGap);
+	const float avail = ImGui::GetContentRegionAvail().x;
+	const int per_row = _max(1, int((avail + gap) / (w + gap)));
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	int open = -1;
+	for (u32 n = 0; n < order.size(); ++n)
+	{
+		const ImVec2 at(origin.x + float(n % per_row) * (w + gap), origin.y + float(n / per_row) * (h + gap));
+		if (DrawCard(s_Recent[order[n]], at)) open = order[n];
+	}
+	// the grid as one block, so the window knows how far it reaches
+	const int rows = (int(order.size()) + per_row - 1) / per_row;
+	ImGui::SetCursorScreenPos(origin);
+	ImGui::Dummy(ImVec2(_min(avail, float(per_row) * (w + gap) - gap), rows ? float(rows) * (h + gap) - gap : 0.f));
+	return open;
+}
+
+// Right of the form: search and sort, then the cards on an inset panel of their own
+static int DrawProjects(bool own_scroll)
+{
+	// the sort as wide as its segments and a point more (one pixel short, and it turns into a combo); the search
+	// takes the rest of the row
+	float segment = 0.f;
+	for (LPCSTR label : kSortLabels) segment = _max(segment, XUI::TextWidth(XUI::Font::Body, label) + XUI::Pt(20.f));
+	const float sort_w = segment * 2.f + XUI::Pt(5.f);
+	ImGui::SetNextItemWidth(_max(XUI::Em(8.f), ImGui::GetContentRegionAvail().x - sort_w - XUI::Pt(8.f)));
+	XUI::SearchField("##search", s_Search, sizeof(s_Search), "Search projects");
+	ImGui::SameLine(0.f, XUI::Pt(8.f));
+	int sort = s_Sort;
+	if (XUI::Segmented("##sort", &sort, kSortLabels, 2))
+	{
+		s_Sort = sort;
+		char ini[MAX_PATH];
+		RecentIni(ini, sizeof(ini));
+		::WritePrivateProfileStringA("browser", "sort", kSortKeys[s_Sort], ini);
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+
+	xr_vector<int> order;
+	CardOrder(order);
+	if (own_scroll)
+	{
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(CT::Inset));
+		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, XUI::Pt(6.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(16.f), XUI::Pt(16.f)));
+		ImGui::BeginChild("##cards", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding);
+		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor();
+	}
+	int open = -1;
+	if (!s_RecentCount)
+		XUI::EmptyState(XUI::Icon::Folder, "No projects yet", "Create one with New Project, or open a folder that holds one.");
+	else if (order.empty())
+		XUI::EmptyState(XUI::Icon::Search, "No matching projects", "No project name or folder holds every word of the search.");
+	else
+		open = DrawCardGrid(order);
+	if (own_scroll) ImGui::EndChild();
+	return open;
+}
+
 bool EditorProject::DrawBrowser()
 {
 	// the frame that drew them is out by now
 	ReleaseDeadPreviews();
 	Startup();
-	if (s_Active) return false;
-
-	// the editor's proven self-opening modal (imgui_user overload) — the same
-	// path UIChooseForm uses, so it is guaranteed to be visible and focused
-	ImGui::SetNextWindowSize(ImVec2(980, 640), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal("XFined Editor - Projects", nullptr, 0, true))
-		return true;
+	if (s_Active)
+	{
+		// a project opened under the confirmation (over MCP): the confirmation goes with the page
+		if (s_DeleteWant || s_DeleteShown) XUI::CloseDialog(DialogName(EditorUiContract::kDeleteProjectDialog));
+		s_DeleteWant = s_DeleteShown = false;
+		s_MenuFor[0] = s_MenuShown[0] = 0;
+		return false;
+	}
 	// what this frame draws of the menu and the confirmation, for McpBrowserMenu
 	s_MenuShown[0]	= 0;
 	s_DeleteShown	= false;
 
-	ImGui::TextDisabled("Select a project or create a new one");
-	ImGui::Separator();
-
-	// ---- recent tiles ----------------------------------------------------
-	const float tile_w = 220.f, tile_h = 150.f;
-	if (ImGui::BeginChild("tiles", ImVec2(0, -170), false))
+	int open = -1;
+	bool create = false, open_folder = false;
+	if (XUI::BeginPage(EditorUiContract::kWindowStartPage))
 	{
-		if (!s_RecentCount)
-			ImGui::TextDisabled("no recent projects — create one below");
-
-		const float avail = ImGui::GetContentRegionAvail().x;
-		int per_row = (int)(avail / (tile_w + 12.f));
-		if (per_row < 1) per_row = 1;
-
-		for (int i = 0; i < s_RecentCount; ++i)
 		{
-			SRecentProject& r = s_Recent[i];
-			const bool here = rsProject == r.state;
-			if (here && !r.preview_tried) { r.preview = LoadPreview(r.path); r.preview_tried = true; }
-
-			if (i % per_row) ImGui::SameLine();
-			// by folder, not by slot: a tile leaving the list must not hand its menu on
-			ImGui::PushID(r.path);
-			ImGui::BeginGroup();
-
-			// both are ANSI - the name is the path's last segment, so a folder
-			// outside ASCII makes them a row of '?' when drawn raw
-			char shown_path[MAX_PATH * 3], shown_name[MAX_PATH * 3];
-			AcpToUtf8(r.path, shown_path, sizeof(shown_path));
-			AcpToUtf8(r.name, shown_name, sizeof(shown_name));
-
-			// a folder that holds no project any more is veiled and opens nothing;
-			// its menu takes it off the list
-			if (!here) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
-			bool clicked;
-			if (r.preview)
-				clicked = ImGui::ImageButton("##Preview", r.preview, ImVec2(tile_w, tile_h - 30));
-			else
-				clicked = ImGui::Button(shown_name, ImVec2(tile_w + 8, tile_h - 22));
-			const ImVec2 corner = ImGui::GetItemRectMin();
-
-			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + tile_w);
-			ImGui::TextUnformatted(shown_name);
-			ImGui::TextDisabled("%s", here ? shown_path : StateText(r.state));
-			ImGui::PopTextWrapPos();
-			if (!here) ImGui::PopStyleVar();
-			ImGui::EndGroup();
-
-			if (ImGui::IsItemHovered())
-			{
-				if (here)	ImGui::SetTooltip("%s", shown_path);
-				else		ImGui::SetTooltip("%s\n%s. Right-click to take it off the list.", shown_path, StateText(r.state));
-			}
-			DrawTileMenu(r, ImVec2(corner.x + tile_w * 0.5f, corner.y + 24.f));
-			ImGui::PopID();
-
-			// Open() mutates the recent list — leave the loop immediately
-			if (clicked && here)
-			{
-				if (Open(r.path))	ImGui::CloseCurrentPopup();
-				else				r.state = RecentState(r.path);	// gone since the list was read
-				break;
-			}
+			XUI::FontScope page(XUI::Font::Page);
+			ImGui::TextUnformatted("Projects");
 		}
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		if (!s_PageError.empty())
+		{
+			if (XUI::Banner(XUI::Tone::Error, s_PageError.c_str(), "Dismiss")) s_PageError.clear();
+			ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+		}
+		const ImVec2 avail = ImGui::GetContentRegionAvail();
+		// narrower than the form beside one card: one column, and the page scrolls as a whole
+		if (avail.x < XUI::Pt(kFormW + 24.f + kCardW + 32.f))
+		{
+			DrawNewProject(create, open_folder);
+			ImGui::Dummy(ImVec2(0.f, XUI::Pt(24.f)));
+			open = DrawProjects(false);
+		}
+		else
+		{
+			ImGui::BeginChild("##new", ImVec2(XUI::Pt(kFormW), avail.y));
+			DrawNewProject(create, open_folder);
+			ImGui::EndChild();
+			ImGui::SameLine(0.f, XUI::Pt(24.f));
+			ImGui::BeginChild("##projects", ImVec2(0.f, avail.y));
+			open = DrawProjects(true);
+			ImGui::EndChild();
+		}
+		DrawDeleteConfirm();
 	}
-	ImGui::EndChild();
-	// Remove from List, once the tiles are drawn: the list is what they walk
+	XUI::EndPage();
+
+	// what the page asked for, now that it is drawn: the list is what the cards walk
+	string_path open_path = {};
+	if (open >= 0) xr_strcpy(open_path, s_Recent[open].path);
 	if (s_ForgetPending[0])
 	{
-		ForgetRecent(s_ForgetPending);
+		if (SRecentProject* gone = FindTile(s_ForgetPending))
+		{
+			const xr_string toast = gone->shown_name + " was taken off the list.";
+			ForgetRecent(s_ForgetPending);
+			XUI::Toast(XUI::Tone::Info, toast.c_str());
+		}
 		s_ForgetPending[0] = 0;
 	}
 	s_MenuClose = false;
-
-	// ---- create / open ---------------------------------------------------
-	ImGui::Separator();
-	ImGui::TextUnformatted("New project");
-	ImGui::SetNextItemWidth(420);
-	PathInput("##parent", s_NewParent, sizeof(s_NewParent));
-	ImGui::SameLine();
-	if (ImGui::Button("Browse..."))
+	if (create)
 	{
-		char picked[MAX_PATH] = {};
-		if (PickFolder(picked, sizeof(picked), L"Select the folder that will contain the project"))
-			strcpy_s(s_NewParent, picked);
-	}
-	ImGui::SameLine(); ImGui::TextDisabled("parent folder");
-
-	ImGui::SetNextItemWidth(240);
-	ImGui::InputText("##name", s_NewName, sizeof(s_NewName));
-	ImGui::SameLine(); ImGui::TextDisabled("name: latin letters, digits, _ and -");
-
-	const bool name_ok = ValidateName(s_NewName);
-	if (!name_ok && s_NewName[0])
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "invalid name");
-
-	ImGui::BeginDisabled(!name_ok || !s_NewParent[0]);
-	if (ImGui::Button("Create", ImVec2(140, 0)))
-	{
-		if (Create(s_NewParent, s_NewName)) ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndDisabled();
-
-	ImGui::SameLine(0, 24);
-	if (ImGui::Button("Open Existing...", ImVec2(140, 0)))
-	{
-		char picked[MAX_PATH] = {};
-		if (PickFolder(picked, sizeof(picked), L"Select a project folder (it holds mod.ltx or project.ltx)"))
+		if (Create(s_NewParent, s_NewName))
 		{
-			if (HasManifest(picked))	{ if (Open(picked)) ImGui::CloseCurrentPopup(); }
-			else						ELog.DlgMsg(mtError, "Not a project folder: no mod.ltx or project.ltx inside.");
+			s_NewName[0] = 0;
+			s_NewChecked[0] = 0;
 		}
 	}
-	ImGui::SameLine(0, 24);
-	if (ImGui::Button("Exit", ImVec2(100, 0)))
+	else if (open_folder)
+		OpenFolder();
+	else if (open_path[0] && !Open(open_path))
 	{
-		if (ExecCommand(COMMAND_EXIT))
-			ExecCommand(COMMAND_QUIT);
+		// gone since the list was read, or refused
+		if (SRecentProject* card = FindTile(open_path)) card->state = RecentState(card->path);
+		s_PageError = xr_string("The project cannot be opened: ") + OpenError();
 	}
-
-	DrawDeleteConfirm();
-	ImGui::EndPopup();
 	return true;
 }
 
 //------------------------------------------------------------------------------
-// the Link Game page (blocking, drawn instead of the whole editor UI)
-//
-// Same mechanism as DrawBrowser: the self-opening imgui_user overload re-opens
-// the popup on every frame it is still needed, so Escape (which pops the modal
-// inside ImGui) cannot actually dismiss it - it is back before anything is
-// drawn. p_open is nullptr, so there is no close button either. The only ways
-// out are a valid link or Exit Editor.
+// Link Game: a card on the Start page, drawn instead of the editor UI while the
+// open project has no valid game. The only ways on are a valid link and Close
+// Project, which goes back to the project list.
 //------------------------------------------------------------------------------
 bool EditorProject::DrawGameLink()
 {
 	if (!s_Active)		return false;
 	if (GameLinked())	return false;
 
-	ImGui::SetNextWindowSize(ImVec2(760, 320), ImGuiCond_FirstUseEver);
-	if (!ImGui::BeginPopupModal("XFined Editor - Link Game", nullptr, 0, true))
-		return true;
-
-	ImGui::TextUnformatted("This project is not linked to a game install yet.");
-	ImGui::TextDisabled("Pick the folder that holds fsgame.ltx and database\\ (or gamedata\\).");
-	ImGui::TextDisabled("The editor reads that folder only - it never writes anything into it.");
-	ImGui::Separator();
-
-	ImGui::SetNextItemWidth(560);
-	PathInput("##gameroot", s_LinkPath, sizeof(s_LinkPath));
-	ImGui::SameLine();
-	if (ImGui::Button("Browse..."))
-	{
-		char picked[MAX_PATH] = {};
-		if (PickFolder(picked, sizeof(picked), L"Select the game folder (must contain fsgame.ltx)"))
-			strcpy_s(s_LinkPath, picked);
-	}
-	ImGui::SameLine(); ImGui::TextDisabled("game folder");
-
-	// live hint, re-evaluated only when the text actually changed
+	// the hint follows the text, looked at again only when the text changed
 	if (0 != strcmp(s_LinkPath, s_LinkChecked))
 	{
 		strcpy_s(s_LinkChecked, s_LinkPath);
 		xr_string reason;
 		s_LinkHintOk = EditorGameContent::LooksLikeGame(s_LinkPath, reason);
-		if (s_LinkHintOk)	strcpy_s(s_LinkHint, "valid Dead Air install");
+		if (s_LinkHintOk)	strcpy_s(s_LinkHint, "A Dead Air install: fsgame.ltx and its data are there.");
 		else				strncpy_s(s_LinkHint, sizeof(s_LinkHint), reason.c_str(), _TRUNCATE);
 	}
-	if (s_LinkHintOk)
-		ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "%s", s_LinkHint);
-	else
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_LinkHint[0] ? s_LinkHint : "no folder selected");
+	char hint[sizeof(s_LinkHint) * 2], project[MAX_PATH * 3 + 16], text[MAX_PATH * 3];
+	AcpToUtf8(s_LinkHint, hint, sizeof(hint));
+	AcpToUtf8(s_Name, text, sizeof(text));
+	sprintf_s(project, "Project: %s", text);
 
-	if (s_LinkError[0])
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "link failed: %s", s_LinkError);
-
-	ImGui::Separator();
-	ImGui::BeginDisabled(!s_LinkHintOk);
-	if (ImGui::Button("Link", ImVec2(140, 0)))
+	int clicked = -1;
+	if (XUI::BeginPage(EditorUiContract::kWindowStartPage))
 	{
-		if (LinkGame(s_LinkPath))
+		XUI::BeginPageCard("##link_game", "Link Game", 560.f);
+		XUI::Prose("Pick the Dead Air Refined install this project builds for: the folder that holds fsgame.ltx and database\\ "
+			"or gamedata\\. The editor only reads it and never writes into it.");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(12.f)));
+		SecondaryText("Game folder");
+		PathFieldAcp("##game_root", s_LinkPath, sizeof(s_LinkPath));
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+		if (!s_LinkPath[0])	XUI::StatusText(XUI::Tone::Muted, "No folder selected.");
+		else				XUI::StatusText(s_LinkHintOk ? XUI::Tone::Success : XUI::Tone::Error, hint);
+		if (s_LinkError[0])
 		{
-			s_LinkChecked[0] = 0;
-			ImGui::CloseCurrentPopup();
+			AcpToUtf8(s_LinkError, text, sizeof(text));
+			XUI::StatusText(XUI::Tone::Error, (xr_string("Link failed: ") + text).c_str());
 		}
+		// a link that went away mid-session leaves a scene open behind this card: it is not closed from here,
+		// where nothing could ask about its unsaved changes
+		const bool scene = HasLiveScene();
+		const XUI::CardAction actions[] =
+		{
+			{ "Close Project",	XUI::Kind::Secondary,	false,	!scene,
+				"A scene is open. Link the game to get back to it; File > Project > Switch Project... closes the project." },
+			{ "Link",			XUI::Kind::Primary,		true,	s_LinkHintOk,	s_LinkPath[0] ? hint : "Pick the game folder first." },
+		};
+		clicked = XUI::CardFooter(project, XUI::Tone::Muted, actions, 2);
+		XUI::EndPageCard();
 	}
-	ImGui::EndDisabled();
+	XUI::EndPage();
 
-	ImGui::SameLine(0, 24);
-	if (ImGui::Button("Exit Editor", ImVec2(140, 0)))
+	if (1 == clicked && LinkGame(s_LinkPath))
+		s_LinkChecked[0] = 0;
+	else if (0 == clicked)
 	{
-		if (ExecCommand(COMMAND_EXIT))
-			ExecCommand(COMMAND_QUIT);
+		// the project's tabs come back from its session when it opens again
+		XUI::Shell::CloseProjectTabs();
+		Close();
 	}
-	ImGui::SameLine(0, 24);
-	ImGui::TextDisabled("project: %s", s_Project);
-
-	ImGui::EndPopup();
 	return true;
 }
 
 //------------------------------------------------------------------------------
-// Import Base Scene modal (unchanged behaviour)
+// Import Base Scene: a dialog with a search; the library is read once, when it opens
 //------------------------------------------------------------------------------
 static bool CopyTree(const char* src, const char* dst)
 {
@@ -2333,46 +3088,115 @@ static bool CopyTree(const char* src, const char* dst)
 
 void EditorProject::DrawUI()
 {
-	if (!s_WantImport || !s_Active) return;
-
-	ImGui::OpenPopup("Import Base Scene");
-	ImGui::SetNextWindowSize(ImVec2(420, 460), ImGuiCond_FirstUseEver);
-	if (ImGui::BeginPopupModal("Import Base Scene", &s_WantImport))
+	if (!s_WantImport && !s_ImportListed) return;
+	// the library and what the project holds of it, read once as the dialog opens
+	if (s_WantImport && !s_ImportListed)
 	{
-		ImGui::TextDisabled("SDK scenes: %s", s_BaseMaps);
-		ImGui::Separator();
-		if (ImGui::BeginChild("scenes", ImVec2(0, -32)))
+		s_ImportScenes.clear();
+		s_ImportInProject.clear();
+		if (s_Active)
 		{
-			char mask[MAX_PATH];
-			sprintf_s(mask, "%s*.level", s_BaseMaps);
-			WIN32_FIND_DATAA fd;
-			HANDLE h = ::FindFirstFileA(mask, &fd);
-			if (h != INVALID_HANDLE_VALUE)
+			ListBaseScenes(s_ImportScenes);
+			for (const xr_string& scene : s_ImportScenes)
 			{
-				do
-				{
-					if (ImGui::Selectable(fd.cFileName))
-					{
-						char name[MAX_PATH];
-						strcpy_s(name, fd.cFileName);
-						if (char* dot = strrchr(name, '.')) *dot = 0;
-
-						string_path dst;
-						xr_string err;
-						if (ImportBaseScene(name, dst, err))
-							ELog.Msg(mtInformation, "Scene '%s' imported into the project.", name);
-						else
-							ELog.DlgMsg(mtError, "%s", err.c_str());
-						s_WantImport = false;
-					}
-				} while (::FindNextFileA(h, &fd));
-				::FindClose(h);
+				string_path file;
+				sprintf_s(file, "%s\\rawdata\\levels\\%s.level", s_Project, scene.c_str());
+				s_ImportInProject.push_back(INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(file) ? 1 : 0);
 			}
-			else ImGui::TextDisabled("no scenes found");
 		}
-		ImGui::EndChild();
-		ImGui::Separator();
-		if (ImGui::Button("Close", ImVec2(-1, 0))) s_WantImport = false;
-		ImGui::EndPopup();
+		s_ImportSearch[0] = 0;
+		s_ImportPick.clear();
+		s_ImportListed = true;
 	}
+	if (!XUI::BeginDialog(EditorUiContract::kDialogImportBaseScene, &s_WantImport, XUI::DialogSize::M))
+	{
+		// closed: the next opening reads the library again
+		if (!s_WantImport) s_ImportListed = false;
+		return;
+	}
+
+	XUI::BeginDialogBody();
+	XUI::SearchField("##search", s_ImportSearch, sizeof(s_ImportSearch), "Search scenes");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	bool import = false;
+	u32 shown = 0;
+	const float badge = XUI::TextWidth(XUI::Font::Small, "In project") + XUI::Pt(12.f);
+	if (XUI::BeginList("##scenes", ImVec2(0.f, 320.f)))
+	{
+		char name[MAX_PATH * 3];
+		for (u32 i = 0; i < s_ImportScenes.size(); ++i)
+		{
+			const xr_string& scene = s_ImportScenes[i];
+			AcpToUtf8(scene.c_str(), name, sizeof(name));
+			if (!XUI::Match(s_ImportSearch, name)) continue;
+			++shown;
+			if (XUI::ListRow(scene.c_str(), scene == s_ImportPick)) s_ImportPick = scene;
+			const ImVec2 row_min = ImGui::GetItemRectMin(), row_max = ImGui::GetItemRectMax();
+			// a double click imports at once
+			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+			{
+				s_ImportPick = scene;
+				import = true;
+			}
+			const float icon = XUI::Pt(14.f);
+			XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Level, ImVec2(ImGui::GetCursorScreenPos().x, Snap((row_min.y + row_max.y - icon) * .5f)),
+				14.f, XFinedTheme::U32(CT::TextSecondary));
+			ImGui::Dummy(ImVec2(icon, ImGui::GetTextLineHeight()));
+			ImGui::SameLine(0.f, XUI::Pt(6.f));
+			const bool there = i < s_ImportInProject.size() && s_ImportInProject[i];
+			XUI::TextEllipsis(name, _max(0.f, row_max.x - ImGui::GetCursorScreenPos().x - XUI::Pt(6.f) - (there ? badge + XUI::Pt(8.f) : 0.f)));
+			if (there)
+			{
+				ImGui::SameLine(0.f, 0.f);
+				ImGui::SetCursorScreenPos(ImVec2(row_max.x - XUI::Pt(6.f) - badge, ImGui::GetCursorScreenPos().y));
+				XUI::Badge("In project");
+			}
+		}
+		if (!shown)
+			SecondaryText(s_ImportScenes.empty() ? "The editor library holds no scenes." : "No scene matches the search.");
+	}
+	XUI::EndList();
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+	char library[MAX_PATH * 3];
+	AcpToUtf8(s_BaseMaps, library, sizeof(library));
+	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextMuted));
+	XUI::TextEllipsis(library, -1.f, XUI::Clip::Start);
+	ImGui::PopStyleColor();
+	XUI::Tip("The editor's library of the game's source scenes. Importing copies one into the project; the library stays as it is.");
+
+	char status[64];
+	sprintf_s(status, "%u %s", u32(s_ImportScenes.size()), 1 == s_ImportScenes.size() ? "scene" : "scenes");
+	if (XUI::BeginDialogFooter(status))
+	{
+		if (XUI::DialogButton("Import", XUI::Kind::Primary, true, !s_ImportPick.empty(), "Pick a scene first."))
+			import = true;
+		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+		{
+			s_WantImport = false;
+			ImGui::CloseCurrentPopup();
+		}
+	}
+	if (import && !s_ImportPick.empty())
+	{
+		bool there = false;
+		for (u32 i = 0; i < s_ImportScenes.size() && i < s_ImportInProject.size(); ++i)
+			if (s_ImportScenes[i] == s_ImportPick) there = !!s_ImportInProject[i];
+		string_path dst;
+		xr_string err;
+		char name[MAX_PATH * 3], text[MAX_PATH * 4];
+		AcpToUtf8(s_ImportPick.c_str(), name, sizeof(name));
+		if (ImportBaseScene(s_ImportPick.c_str(), dst, err))
+		{
+			sprintf_s(text, there ? "Scene '%s' is in the project already." : "Scene '%s' imported into the project.", name);
+			XUI::Toast(XUI::Tone::Success, text);
+			s_WantImport = false;
+			ImGui::CloseCurrentPopup();
+		}
+		else
+		{
+			AcpToUtf8(err.c_str(), text, sizeof(text));
+			XUI::Notice(XUI::Tone::Error, "Import Base Scene", text);
+		}
+	}
+	XUI::EndDialog();
 }

@@ -5,6 +5,8 @@ UIChooseFormItem::UIChooseFormItem(shared_str Name):Object(nullptr),UITreeItem(N
 	bIsFavorite = false;
 	m_bIsMixed = false;
 	bSelected = false;
+	Visible = true;
+	Reveal = false;
 	Index = -1;
 }
 
@@ -14,23 +16,14 @@ UIChooseFormItem::~UIChooseFormItem()
 
 void UIChooseFormItem::Draw()
 {
-	if (!CheckFilter())
+	if (!Visible)
 		return;
 	ImGui::PushID(this);
-	ImGui::TableNextRow();
-	ImGui::TableNextColumn();
+	const bool multi = Form->m_Flags.test(cfMultiSelect);
+	const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
 	if (Object)
 	{
-		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-		if (bSelected)
-		{
-			Flags |= ImGuiTreeNodeFlags_Bullet;
-		}
-		if (Form->m_SelectedItem==this)
-		{
-			Flags |= ImGuiTreeNodeFlags_Selected;
-		}
-		if (Form->m_Flags.test(cfMultiSelect))
+		if (multi)
 		{
 			if (ImGui::Checkbox("##checkbox", &bIsFavorite))
 			{
@@ -46,12 +39,29 @@ void UIChooseFormItem::Draw()
 				}
 				Form->CheckFavorite();
 			}
-			ImGui::SameLine(0, 0);
+			XUI::Tip(bIsFavorite ? "Take it out of the selection" : "Add it to the selection");
+			ImGui::SameLine(0, gap);
 		}
-		ImGui::TreeNodeEx(Text.c_str(), Flags);
+		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
+		if (Form->m_SelectedItem == this || (multi && bSelected))
+			Flags |= ImGuiTreeNodeFlags_Selected;
+		ImGui::TreeNodeEx("##item", Flags, "%s", Text.c_str());
+		if (Reveal)
+		{
+			ImGui::SetScrollHereY(.5f);
+			Reveal = false;
+		}
+		// the whole name (a leaf of a long path) and what the item is
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+		{
+			xr_string tip = Object->name.c_str() ? Object->name.c_str() : "";
+			if (Object->hint.size())
+				tip = tip + "\n" + Object->hint.c_str();
+			XUI::Tip(tip.c_str());
+		}
 		if (ImGui::IsItemClicked())
 		{
-			if (Form->m_Flags.test(cfMultiSelect))
+			if (multi)
 			{
 				if (ImGui::GetIO().KeyShift)
 				{
@@ -82,15 +92,18 @@ void UIChooseFormItem::Draw()
 				Form->UpdateSelected(this);
 			}
 		}
+		// a double click picks it, as OK would
+		if (!multi && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+			Form->Confirm();
 	}
 	else
 	{
-		ImGuiTreeNodeFlags Flags = ImGuiTreeNodeFlags_OpenOnArrow; 
-		if (Form->m_Flags.test(cfMultiSelect))
+		if (multi)
 		{
 			ImGui::PushMixedValue(m_bIsMixed);
 			bool CheckChange = ImGui::Checkbox("##checkbox", &bIsFavorite);
 			ImGui::PopItemFlag();
+			XUI::Tip("Everything in this folder");
 			if (CheckChange)
 			{
 				Form->m_RootItem.ClearSelection();
@@ -99,9 +112,15 @@ void UIChooseFormItem::Draw()
 				SetFavorite(bIsFavorite);
 				Form->CheckFavorite();
 			}
-			ImGui::SameLine(0, 0);
+			ImGui::SameLine(0, gap);
 		}
-		if (ImGui::TreeNodeEx(Name.c_str(), Flags))
+		// a search opens every folder that holds a match
+		if (Form->m_Search[0] || Reveal)
+			ImGui::SetNextItemOpen(true);
+		else if (Form->m_Flags.test(cfFullExpand))
+			ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+		Reveal = false;
+		if (ImGui::TreeNodeEx("##folder", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", Name.c_str()))
 		{
 			for (UITreeItem* Item : Items)
 			{
@@ -110,11 +129,7 @@ void UIChooseFormItem::Draw()
 			ImGui::TreePop();
 		}
 	}
-
 	ImGui::PopID();
-
-
-	
 }
 
 void UIChooseFormItem::DrawRoot()
@@ -125,26 +140,35 @@ void UIChooseFormItem::DrawRoot()
 	}
 }
 
+bool UIChooseFormItem::UpdateFilter(LPCSTR query)
+{
+	if (Object)
+		Visible = XUI::Match(query, Object->name.c_str());
+	else
+	{
+		Visible = false;
+		for (UITreeItem* Item : Items)
+			Visible |= ((UIChooseFormItem*)Item)->UpdateFilter(query);
+	}
+	return Visible;
+}
+
 void UIChooseFormItem::Sort()
 {
-	for (UITreeItem* Item : Items)
-	{
-		std::sort(Items.begin(), Items.end(), [](UITreeItem* Right, UITreeItem* Left)->bool
-			{ 
-				UIChooseFormItem* pRight = ((UIChooseFormItem*)Right);
-				UIChooseFormItem* pLeft = ((UIChooseFormItem*)Left);
-				if(pRight->Object&& !pLeft->Object)
-				{
-					return false;
-				}
-				if (!pRight->Object && pLeft->Object)
-				{
-					return true;
-				}
-				return xr_strcmp(pRight->Name.c_str(), pLeft->Name.c_str()) < 0;
-			});
-	}
-
+	std::sort(Items.begin(), Items.end(), [](UITreeItem* Right, UITreeItem* Left)->bool
+		{
+			UIChooseFormItem* pRight = ((UIChooseFormItem*)Right);
+			UIChooseFormItem* pLeft = ((UIChooseFormItem*)Left);
+			if(pRight->Object&& !pLeft->Object)
+			{
+				return false;
+			}
+			if (!pRight->Object && pLeft->Object)
+			{
+				return true;
+			}
+			return xr_strcmp(pRight->Name.c_str(), pLeft->Name.c_str()) < 0;
+		});
 
 	for (UITreeItem* Item : Items)
 	{
@@ -167,7 +191,7 @@ void UIChooseFormItem::CheckFavorited()
 		m_bIsMixed |= ((UIChooseFormItem*)Item)->m_bIsMixed;
 		if (bIsLastFavorited != ((UIChooseFormItem*)Item)->bIsFavorite)
 		{
-		
+
 			bIsLastFavorited = false;
 			m_bIsMixed = true;
 		}
@@ -232,16 +256,12 @@ void UIChooseFormItem::ClearSelection()
 
 void UIChooseFormItem::Selected(int Start, int End)
 {
-	
+
 	for (UITreeItem* Item : Items)
 	{
 		((UIChooseFormItem*)Item)->Selected(Start,End);
 	}
-	if (!Object)
-	{
-		return;
-	}
-	if (!CheckFilter())
+	if (!Object || !Visible)
 	{
 		return;
 	}
@@ -268,34 +288,6 @@ void UIChooseFormItem::SelectedToFavorite(bool Favorite)
 	{
 		SetFavorite(Favorite);
 	}
-}
-
-bool UIChooseFormItem::CheckFilter()
-{
-	if (!Form->m_Filter.InputBuf[0])
-	{
-		return true;
-	}
-	if (Object)
-	{
-		if (Form->m_Filter.PassFilter(Object->name.c_str()))
-		{
-			return true;
-		}
-	
-	}
-	else
-	{
-		bool bTest = false;
-		for (UITreeItem* Item : Items)
-		{
-			bTest |= ((UIChooseFormItem*)Item)->CheckFilter();
-		}
-		return bTest;
-	}
-	
-
-	return false;
 }
 
 UITreeItem* UIChooseFormItem::CreateItem(shared_str Name)

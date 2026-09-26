@@ -12,6 +12,7 @@ private:
 	void MultiSelByRefObject(bool clear_prev);
 	void SelByRefObject(bool flag);
 	float m_selPercent;
+	bool m_AddPercent;
 	xr_string m_Current;
 	bool m_ChooseGroup;
 };

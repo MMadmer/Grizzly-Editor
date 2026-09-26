@@ -7,6 +7,8 @@ What it proves:
      one-click empty world, and the three-choice limit (refused, nothing saved)
   B  the linked game's levels and transitions come out of its all.spawn, and the
      area / locks close them the way the engine will (changer > level > area)
+  U  the World Rules tab opens, points its transitions at a level and its problems
+     drawer over MCP (world_view), draws every section and lets nothing escape it
   C  the scene: a Player Start, a way path and a stalker with an order bake into the
      spawn layer as op = start, [path:<name>] and [xms_order]; a path named like one
      of the game's is left out with a warning
@@ -76,6 +78,7 @@ class Editor:
         while time.monotonic() < deadline:
             try:
                 if mcp("mod_manifest", timeout=30).get("ok"):
+                    self.settle()
                     return
             except OSError:
                 pass
@@ -83,6 +86,15 @@ class Editor:
                 raise RuntimeError("the editor exited during startup")
             time.sleep(1)
         raise RuntimeError("the editor never opened the project")
+
+    @staticmethod
+    def settle() -> None:
+        # A minimized editor draws only when asked, and its first frame reopens the project's last scene - a blocking
+        # load. That frame is drawn here and the load runs out: the checks read the editor, not a load's busy frames.
+        mcp("ui_list")
+        deadline = time.monotonic() + 600
+        while mcp("progress").get("active") and time.monotonic() < deadline:
+            time.sleep(1)
 
     def close(self) -> None:
         try:
@@ -140,6 +152,45 @@ QUEST_E024 = """return {
   },
 }
 """
+
+
+def run_ui_checks() -> None:
+    """The World Rules tab: opened, pointed and looked at over MCP, and nothing of it leaves its window."""
+    v = mcp("world_view")
+    check(v.get("ok") and v.get("tab") == "world_rules", "U world_view answers", json.dumps(v)[:300])
+    check(v.get("status") == "Saved to mod.ltx as you edit", "U the tab says it saves as you edit", json.dumps(v)[:300])
+    opened = mcp("ui_tab", action="open", kind="world_rules")
+    check(opened.get("ok") and opened.get("tab", {}).get("id") == "world_rules", "U ui_tab opens World Rules",
+          json.dumps(opened)[:300])
+    v = mcp("world_view", drawer="open", level="l03_agroprom", filter="underground")
+    check(v.get("ok") and v.get("active") and v.get("drawer") == "open", "U world_view opens the problems drawer",
+          json.dumps(v)[:300])
+    check(v.get("level") == "l03_agroprom" and v.get("filter") == "underground", "U and points the transitions at a level",
+          json.dumps(v)[:300])
+    bad = mcp("world_view", level="qa_no_level")
+    check(not bad.get("ok") and "qa_no_level" in bad.get("error", ""), "U a level the game lacks is refused by name",
+          json.dumps(bad))
+    bad = mcp("world_view", drawer="sideways")
+    check(not bad.get("ok"), "U and so is a drawer state that is not open or close", json.dumps(bad))
+    audit = mcp("ui_audit", id="world_rules")
+    check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the World Rules tab",
+          json.dumps(audit.get("escaped"))[:400])
+    labels = {c.get("label") for c in audit.get("controls", [])}
+    for section in ("Original Game", "Applies On"):
+        check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
+    # the rest is drawn once the page scrolls to it
+    scrolled = mcp("ui_scroll", id="world_rules", to="bottom")
+    check(scrolled.get("ok"), "U the page scrolls", json.dumps(scrolled)[:300])
+    labels = {c.get("label") for c in mcp("ui_audit", id="world_rules").get("controls", [])}
+    for section in ("Transitions", "Player Start", "Place in Scene"):
+        check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
+    toolbar = {c.get("label") for c in mcp("ui_audit", id="##toolbar").get("controls", [])}
+    check("Reload Game Data" in toolbar and "Empty World..." in toolbar, "U its toolbar offers Reload Game Data and Empty World...",
+          json.dumps(sorted(x for x in toolbar if x))[:400])
+    mcp("world_view", drawer="close", filter="")
+    closed = mcp("ui_tab", action="close", id="world_rules")
+    check(closed.get("ok"), "U the tab closes: it saves as it goes, so nothing is unsaved", json.dumps(closed)[:300])
+    check(mcp("world_view").get("open") is False, "U and world_view says it is closed")
 
 
 def run(project: str) -> None:
@@ -235,6 +286,9 @@ def run(project: str) -> None:
         agr_patrols = patrols.get("patrols", [])
         check(len(agr_patrols) > 0 and patrols.get("patrols_total", 0) > len(agr_patrols),
               "B the game's own patrol paths are listed", json.dumps(patrols)[:300])
+
+        # ------------------------------------------------------------ U: the World Rules tab
+        run_ui_checks()
 
         # ------------------------------------------------------------ C: the scene
         # the editor does not reopen the last scene by itself on every start: ask for it

@@ -10,7 +10,7 @@ enum
 	COMMAND_CHANGE_ACTION,
     COMMAND_IMAGE_EDITOR,
     COMMAND_LIGHTANIM_EDITOR,
-    COMMAND_MINIMAP_EDITOR,
+    COMMAND_MINIMAP_EDITOR,			// retired with the Minimap Editor stub; the slot keeps the ids after it
 	COMMAND_CHECK_TEXTURES,
 	COMMAND_REFRESH_TEXTURES,
 	COMMAND_RELOAD_TEXTURES,
@@ -137,6 +137,12 @@ DEFINE_VECTOR(SECommand*,ECommandVec,ECommandVecIt);
 
 ECORE_API CCommandVar	    ExecCommand				(u32 cmd, CCommandVar p1=u32(0), CCommandVar p2=u32(0));
 ECORE_API CCommandVar	    ExecCommand				(const xr_shortcut& val);
+// A command that asks first (docs/UI_DESIGN.md, section 4): the question is the kit's Confirm, and its Yes runs the
+// command again with kCommandConfirmed in p2 - only that run acts. ConfirmCommand is true when this call may act now:
+// the second run, or an answer given at once (MCP: Yes; -nodlg: No, logged). A dialog answers on a later frame.
+constexpr u32 kCommandConfirmed = 0x434E4652;
+ECORE_API bool			    CommandConfirmed		(CCommandVar p2);
+ECORE_API bool			    ConfirmCommand			(u32 cmd, CCommandVar p1, CCommandVar p2, const XUI::ConfirmSpec& spec);
 ECORE_API void			    RegisterCommand 		(u32 cmd, SECommand* cmd_impl);
 ECORE_API void			    RegisterSubCommand 		(SECommand* cmd_impl, LPCSTR desc, CCommandVar p0, CCommandVar p1);
 ECORE_API void			    EnableReceiveCommands	();

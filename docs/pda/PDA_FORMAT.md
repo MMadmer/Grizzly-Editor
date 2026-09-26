@@ -188,6 +188,34 @@ The editor's alone; the game never reads it.
 - `markers = { { x, z, icon, hint } }` - spots on it;
 - `vars` - values for the preview only, `{time}`, `{money}` and the like included.
 
+## The preview tab (the editor)
+
+**Mod > PDA Interface**, a double click on a `.pdaasset` and MCP `pda_preview action=open`
+bring up the editor's `pda` tab: one of them, switching to the next layout it is given.
+
+- **Toolbar:** Save, Revert, Reload | Aspect (4:3 / 16:9), Language (rus / eng), Zoom
+  (Fit / 100%) | Reset State | Source, Details. Reload reads the game's textures, fonts and
+  layout reader again, and the file when the Source pane holds no edits.
+- **Canvas:** the device centred; Fit fits the device itself (its texture, the screen and the
+  close button - on 16:9 the texture covers only the middle of the game's screen) on both
+  axes with 16 pt round it, 100% is the game's 1024 x 768 PDA pixel for pixel. The wheel
+  zooms at the mouse (over a list or the map it scrolls or zooms
+  them, the way the game does; Ctrl+wheel always zooms), the right or middle button drags,
+  F fits. The left button plays the layout. The device's art runs on past the game's
+  screen - its bottom grilles are cut where the monitor ends, on both aspects - so every
+  side of the device that lies on the screen's edge gets that edge drawn, a little longer
+  than the device.
+- **Details** (320 pt, beside the canvas): the file and whether the module uses it (**Use in
+  Module** writes `[pda] layout`), then the tabs **Problems** (first: the reader's error with
+  its line, and every coded problem), **Pages** (click one to go there; the map, contacts and
+  tasks keys below), **Vars** and **Log** (the actions run, newest first).
+- **Source** (under the canvas): the text in Cascadia Mono with line numbers and the reader's
+  error line marked. **Apply** (Ctrl+Enter) shows the text without saving it.
+- Unsaved text is never lost without a question: Revert names the file first, and closing
+  the tab or opening another layout asks Save / Don't Save / Cancel. Over MCP nothing asks:
+  a call that would drop the edits answers `{"ok":false,"error":"unsaved","dirty":[...]}`
+  unless it carries `save=true` or `discard=true`.
+
 ## At run time (the game)
 
 Scripts change a live layout through `xms.pda` (feature-test `xms.pda_api == 1`):
@@ -254,7 +282,8 @@ stock PDA stays (the log says why).
 | `pda_delete` | delete (final); clears `[pda]` when it was the used one |
 | `pda_use` | set or clear `[pda] layout` |
 | `pda_validate` | check a text or a file |
-| `pda_preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; the state gives `map.bound`, the preview level's world rect, and `map.spots`: the player and the `preview.markers` the slot shows, in canvas units |
+| `pda_preview` | open / state / click (`id`, `id` + `row`, `n`, or a canvas `x`,`y`) / page / key / aspect / lang / reset / reload / close; apply (`text=` into the Source pane, unsaved) / save / revert. With any action: `pane=source\|details\|both\|none`, `tab=problems\|pages\|vars\|log`, `zoom=fit\|100\|<0.25..4>`, and `save=` / `discard=` for unsaved edits. The answer gives `active`, `text_dirty`, `panes` (`source`, `details`, `tab`, `details_width`, `source_height` in pt), `zoom`, `scale` (what the frame drew at), `device_gap` (pt between the device and the canvas' nearest edge, below 0 when cut), `screen_edges` (the device's sides that lie on the game's screen edge: `top`, `bottom`, `left`, `right`), `read_line`; the state gives `map.bound`, the preview level's world rect, and `map.spots`: the player and the `preview.markers` the slot shows, in canvas units. The answer is the frame the call asked for - the editor holds it until the tab was drawn, so an opener's panes, `scale`, `device_gap` and `screen_edges` need no second call (`pending` is false) |
 
-The preview follows the file: a write shows at once. `screenshot_editor` after
-`pda_preview action=open` is what the author sees.
+The preview follows the file: a write shows at once, unless the Source pane holds edits.
+`open` activates the tab; every other action leaves the active tab alone.
+`screenshot_editor` after `pda_preview action=open` is what the author sees.

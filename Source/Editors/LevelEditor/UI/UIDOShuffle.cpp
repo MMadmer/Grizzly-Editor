@@ -6,185 +6,273 @@ UIDOShuffle::UIDOShuffle()
 	bModif = false;
 	m_ChooseObject = false;
 	m_Texture = nullptr;
-	m_TextureNull.create("ed\\ed_nodata");
-	m_TextureNull->Load();
-	m_Props = xr_new< UIPropertiesForm>();
 	m_RealTexture = nullptr;
+	m_list_selected = -1;
 }
 
 UIDOShuffle::~UIDOShuffle()
 {
-	m_TextureNull.destroy();
 	ApplyChanges();
-	xr_delete(m_Props);
 	if (m_Texture) m_Texture->Release();
 	ClearIndexForms();
 	if (m_RealTexture)m_RealTexture->Release();
 }
 
+void UIDOShuffle::DrawObjects()
+{
+	// the two halves share button labels (Clear All...): each has an id scope of its own
+	ImGui::PushID("objects");
+	DrawObjectList();
+	ImGui::PopID();
+}
+
+void UIDOShuffle::DrawObjectList()
+{
+	{
+		XUI::FontScope strong(XUI::Font::Strong);
+		XUI::TextEllipsis("Objects");
+	}
+	const bool picked = m_list_selected >= 0 && m_list_selected < int(m_list.size());
+	const XUI_LocalButton buttons[] =
+	{
+		{ "Add...",			"Pick library objects to grow as details", m_list.size() < dm_max_objects, "A level holds 64 detail objects at most" },
+		{ "Remove",			"Take the object picked in the list out", picked, "Pick an object in the list first" },
+		{ "Clear All...",	"Take every object and every colour index out", !m_list.empty(), "The list is empty" },
+		{ "Import...",		"Read the objects and colour indices from a file" },
+		{ "Export...",		"Write the objects and colour indices to a file" },
+	};
+	switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+	{
+	case 0:
+		UIChooseForm::SelectItem(smObject, 8);
+		m_ChooseObject = true;
+		break;
+	case 1:
+		DM->RemoveDO(m_list[m_list_selected].c_str());
+		for (UIDOOneColor* one_color : m_color_indices)
+			one_color->RemoveObject(m_list[m_list_selected]);
+		m_list.erase(m_list.begin() + m_list_selected);
+		OnItemFocused(nullptr);
+		bModif = true;
+		break;
+	case 2:
+	{
+		XUI::ConfirmSpec spec;
+		spec.id = "clear_detail_objects";
+		spec.title = "Clear Detail Objects";
+		spec.headline = "Take every detail object and every colour index out?";
+		for (const xr_string& name : m_list)
+			spec.items.push_back(name);
+		spec.consequence = "The slots are cleared too. This cannot be undone.";
+		spec.action = "Clear All";
+		spec.destructive = true;
+		XUI::Confirm(spec, [](XUI::Answer answer)
+		{
+			// the dialog may have closed while the question was up
+			if (answer != XUI::Answer::Yes || !Form)
+				return;
+			Form->m_list.clear();
+			// the indices point at the objects: they go first
+			Form->DM->ClearColorIndices();
+			Form->DM->RemoveDOs();
+			Form->DM->InvalidateSlots();
+			Form->ClearIndexForms();
+			Form->OnItemFocused(nullptr);
+			Form->bModif = true;
+			UI->RedrawScene();
+		});
+		break;
+	}
+	case 3:
+	{
+		xr_string fname;
+		if (EFS.GetOpenName(EDevice->m_hWnd, _detail_objects_, fname) && DM->ImportColorIndices(fname.c_str()))
+		{
+			DM->InvalidateSlots();
+			FillData();
+			bModif = true;
+		}
+		break;
+	}
+	case 4:
+	{
+		xr_string fname;
+		if (EFS.GetSaveName(_detail_objects_, fname))
+		{
+			ApplyChanges(false);
+			DM->ExportColorIndices(fname.c_str());
+		}
+		break;
+	}
+	default: break;
+	}
+
+	if (m_list.empty())
+	{
+		XUI::StatusText(XUI::Tone::Muted, "No detail objects yet. Add library objects to grow them over the level.");
+		return;
+	}
+	const int rows = _max(1, _min(int(m_list.size()), 10));
+	if (XUI::BeginList("##objects", ImVec2(0.f, rows * 22.f + 8.f)))
+	{
+		for (int i = 0; i < int(m_list.size()); ++i)
+		{
+			ImGui::PushID(i);
+			if (XUI::ListRow("##row", i == m_list_selected) && i != m_list_selected)
+			{
+				m_list_selected = i;
+				OnItemFocused(m_list[i].c_str());
+			}
+			XUI::TextEllipsis(m_list[i].c_str(), -1.f, XUI::Clip::Start);
+			ImGui::PopID();
+		}
+	}
+	XUI::EndList();
+	DrawObjectSettings();
+}
+
+void UIDOShuffle::DrawObjectSettings()
+{
+	EDetail* dd = m_list_selected >= 0 && m_list_selected < int(m_list.size()) ? DM->FindDOByName(m_list[m_list_selected].c_str()) : nullptr;
+	if (!dd)
+		return;
+	ImGui::Spacing();
+	XUI_LocalThumbnail(m_RealTexture, _min(ImGui::GetContentRegionAvail().x, XUI::Pt(96.f)), XUI::Icon::DetailObjects,
+		"This object has no thumbnail");
+	if (!XUI::BeginPropertyGrid("detail_object"))
+		return;
+	if (XUI::PropertyRow("Density", "How densely the object grows: 0.1 to 1"))
+		bModif |= ImGui::DragFloat("##density", &dd->m_fDensityFactor, .01f, .1f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+	if (XUI::PropertyRow("Min Scale", "The smallest size a detail of this object gets"))
+		bModif |= ImGui::DragFloat("##min_scale", &dd->m_fMinScale, .01f, .1f, 100.f, "%g", ImGuiSliderFlags_AlwaysClamp);
+	if (XUI::PropertyRow("Max Scale", "The largest size a detail of this object gets"))
+		bModif |= ImGui::DragFloat("##max_scale", &dd->m_fMaxScale, .01f, .1f, 100.f, "%g", ImGuiSliderFlags_AlwaysClamp);
+	if (XUI::PropertyRow("No Waving", "The object does not sway in the wind"))
+	{
+		bool still = !!dd->m_Flags.is(DO_NO_WAVING);
+		if (ImGui::Checkbox("##no_waving", &still))
+		{
+			dd->m_Flags.set(DO_NO_WAVING, still);
+			bModif = true;
+		}
+	}
+	XUI::EndPropertyGrid();
+}
+
+void UIDOShuffle::DrawColorIndices()
+{
+	ImGui::PushID("colours");
+	DrawColorIndexList();
+	ImGui::PopID();
+}
+
+void UIDOShuffle::DrawColorIndexList()
+{
+	{
+		XUI::FontScope strong(XUI::Font::Strong);
+		XUI::TextEllipsis("Colour Indices");
+	}
+	const XUI_LocalButton buttons[] =
+	{
+		{ "Add Index",		"A new colour of the detail mask, with the objects that grow on it" },
+		{ "Clear All...",	"Remove every colour index", !m_color_indices.empty(), "There are no colour indices" },
+	};
+	switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+	{
+	case 0:
+		m_color_indices.push_back(xr_new<UIDOOneColor>());
+		m_color_indices.back()->DOShuffle = this;
+		bModif = true;
+		break;
+	case 1:
+	{
+		char item[48];
+		sprintf_s(item, "%u colour ind%s", u32(m_color_indices.size()), m_color_indices.size() == 1 ? "ex" : "ices");
+		XUI::ConfirmSpec spec;
+		spec.id = "clear_colour_indices";
+		spec.title = "Clear Colour Indices";
+		spec.headline = "Remove every colour index?";
+		spec.items.push_back(item);
+		spec.consequence = "The objects stay in the list.";
+		spec.action = "Clear All";
+		spec.destructive = true;
+		XUI::Confirm(spec, [](XUI::Answer answer)
+		{
+			if (answer != XUI::Answer::Yes || !Form)
+				return;
+			Form->ClearIndexForms();
+			Form->bModif = true;
+		});
+		break;
+	}
+	default: break;
+	}
+
+	if (m_color_indices.empty())
+		XUI::StatusText(XUI::Tone::Muted, "No colour indices. Add one, then assign the objects that grow on its colour.");
+	int index = 0;
+	for (UIDOOneColor* one_color : m_color_indices)
+	{
+		ImGui::PushID(index++);
+		one_color->Draw();
+		ImGui::PopID();
+	}
+	for (auto b = m_color_indices.begin(); b != m_color_indices.end();)
+	{
+		if ((*b)->IsClosed())
+		{
+			xr_delete(*b);
+			b = m_color_indices.erase(b);
+		}
+		else
+			++b;
+	}
+}
+
 void UIDOShuffle::Draw()
 {
-	ImGui::Columns(2);
-	ImGui::BeginChild("Left");
+	if (m_RealTexture != m_Texture)
 	{
-#if defined(USE_DX11)
-		VERIFY(m_TextureNull->get_SRView());
-#else
-		VERIFY(m_TextureNull->surface_get());
-#endif
-		if (m_RealTexture != m_Texture)
-		{
-			if (m_RealTexture)m_RealTexture->Release();
-			m_RealTexture = m_Texture;
-			if(m_RealTexture) m_RealTexture->AddRef();
-
-
-		}
-#if defined(USE_DX11)
-		// ImGui binds a shader resource view, not the texture object behind it
-		ImGui::Image(m_RealTexture ? m_RealTexture : m_TextureNull->get_SRView(), ImVec2(128, 128));
-#else
-		ImGui::Image(m_RealTexture ? m_RealTexture :m_TextureNull->surface_get(), ImVec2(128, 128));
-#endif
-
-		{
-			int selected = m_list_selected;
-			ImGui::SetNextItemWidth(-1);
-			if (ImGui::ListBox("##list", &selected,
-				[](void* data, int index) -> const char*
-				{
-					return static_cast<xr_vector<xr_string>*>(data)->at(index).c_str();
-				},
-				&m_list, m_list.size(), 15))
-			{
-				if (m_list_selected != selected)
-				{
-					m_list_selected = selected;
-					OnItemFocused(m_list[selected].c_str());
-				}
-			}
-		}
-		{
-			if (ImGui::Button("+", ImVec2(0, ImGui::GetFrameHeight()))) { UIChooseForm::SelectItem(smObject, 8); m_ChooseObject = true; }; ImGui::SameLine();
-			if (ImGui::Button("-", ImVec2(0, ImGui::GetFrameHeight()))) 
-			{
-				if (m_list_selected >= 0 && m_list.size() > m_list_selected)
-				{
-					DM->RemoveDO(m_list[m_list_selected].c_str());
-					for (UIDOOneColor* one_color : m_color_indices) { one_color->RemoveObject(m_list[m_list_selected]); }
-					m_list.erase(m_list.begin() + m_list_selected);
-					OnItemFocused(nullptr);
-					bModif = true;
-				}
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("X", ImVec2(0, ImGui::GetFrameHeight())))
-			{
-				// wipes the whole list and every slot behind it, with no undo
-				if (mrYes == ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
-					"Clear all %d detail object(s) and their slots? This cannot be undone.", int(m_list.size())))
-				{
-					m_list.clear();
-					DM->InvalidateSlots();
-					DM->ClearColorIndices();
-					ClearIndexForms();
-					UI->RedrawScene();
-					OnItemFocused(nullptr);
-					bModif = true;
-				}
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Load..", ImVec2(0, ImGui::GetFrameHeight())))
-			{
-				xr_string fname;
-				if (EFS.GetOpenName(EDevice->m_hWnd,_detail_objects_, fname)) {
-					if (DM->ImportColorIndices(fname.c_str())) {
-						DM->InvalidateSlots();
-						FillData();
-						bModif = true;
-					}
-				}
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Save..", ImVec2(-1, ImGui::GetFrameHeight())))
-			{
-				xr_string fname;
-				if (EFS.GetSaveName(_detail_objects_, fname)) 
-				{
-					ApplyChanges(false);
-					DM->ExportColorIndices(fname.c_str());
-				}
-				
-			}
-		}
-		{
-			ImGui::BeginChild("Props",  ImVec2(0, 0), false);
-			m_Props->Draw();
-			ImGui::EndChild();
-		}
-		
+		if (m_RealTexture)m_RealTexture->Release();
+		m_RealTexture = m_Texture;
+		if (m_RealTexture) m_RealTexture->AddRef();
 	}
-	ImGui::EndChild();
-	ImGui::NextColumn();
-	ImGui::BeginChild("Right");
+
+	if (ImGui::BeginTable("##detail_objects", 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV))
 	{
-		if (ImGui::Button("X")) { ClearIndexForms(); }
-		ImGui::SameLine();
-		if (ImGui::Button("Append Color Index", ImVec2(-1,0))) 
-		{
-			m_color_indices.push_back(xr_new<UIDOOneColor>());
-			m_color_indices.back()->DOShuffle = this;
-		}
-
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-		{
-			int index = 0;
-			
-			for (UIDOOneColor* one_color : m_color_indices)
-			{
-				ImGui::PushID(index);
-				one_color->Draw();
-				ImGui::PopID();
-				index++;
-			}
-			for (auto b = m_color_indices.begin(), e = m_color_indices.end(); b != e; b++)
-			{
-				if ((*b)->IsClosed())
-				{
-					auto ptr = *b;
-					xr_delete(ptr);
-					m_color_indices.erase(b);
-					b = m_color_indices.begin();
-				}
-			}
-		}
-		ImGui::PopStyleVar(2);
+		ImGui::TableSetupColumn("objects", ImGuiTableColumnFlags_WidthStretch, .55f);
+		ImGui::TableSetupColumn("colours", ImGuiTableColumnFlags_WidthStretch, .45f);
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		DrawObjects();
+		ImGui::TableNextColumn();
+		DrawColorIndices();
+		ImGui::EndTable();
 	}
-	ImGui::EndChild();
-	ImGui::Columns();
+
 	if (m_ChooseObject)
 	{
 		bool ok = false;
 		xr_vector<xr_string> list;
 		if (UIChooseForm::GetResult(ok,list))
 		{
-			if (ok)
+			if (ok && !list.empty())
 			{
 				for (xr_string& l : list)
 				{
-					if (!FindItem(l.c_str())) 
+					if (FindItem(l.c_str()))
+						continue;
+					if (m_list.size() >= dm_max_objects)
 					{
-						if (m_list.size() >= dm_max_objects) {
-							ELog.DlgMsg(mtInformation, "Maximum detail objects in scene '%d'", dm_max_objects);
-							return;
-						}
-						DM->AppendDO(l.c_str());
-						m_list_selected = m_list.size();
-						m_list.push_back(l);
+						XUI::Toast(XUI::Tone::Warning, "A level holds 64 detail objects at most; the rest were not added");
+						break;
 					}
+					DM->AppendDO(l.c_str());
+					m_list_selected = m_list.size();
+					m_list.push_back(l);
 				}
-				OnItemFocused(list.back().c_str());
+				if (m_list_selected >= 0 && m_list_selected < int(m_list.size()))
+					OnItemFocused(m_list[m_list_selected].c_str());
 				bModif = true;
 			}
 			m_ChooseObject = false;
@@ -195,16 +283,23 @@ void UIDOShuffle::Draw()
 
 void UIDOShuffle::Update()
 {
-	if (Form && !Form->IsClosed())
+	if (!Form || Form->IsClosed())
+		return;
+	if (XUI::BeginDialog("Detail Objects###dlg.detail_objects", &Form->bOpen, XUI::DialogSize::L))
 	{
-		ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_::ImGuiCond_FirstUseEver);
-		if (ImGui::BeginPopupModal("Detail Object List", &Form->bOpen,0,true))
+		XUI::BeginDialogBody();
+		Form->Draw();
+		char status[96];
+		sprintf_s(status, "%u object%s \xC2\xB7 %u colour ind%s", u32(Form->m_list.size()), Form->m_list.size() == 1 ? "" : "s",
+			u32(Form->m_color_indices.size()), Form->m_color_indices.size() == 1 ? "ex" : "ices");
+		if (XUI::BeginDialogFooter(Form->bModif ? "Changed: reinitialize the details after closing" : status,
+			Form->bModif ? XUI::Tone::Warning : XUI::Tone::Muted))
 		{
-			Form->Draw();
-			ImGui::EndPopup();
+			if (XUI::DialogButton("Close", XUI::Kind::Primary, true))
+				Form->bOpen = false;
 		}
+		XUI::EndDialog();
 	}
-
 }
 
 bool UIDOShuffle::GetResult()
@@ -242,7 +337,7 @@ void UIDOShuffle::FillData()
 		OneColor->Color[0] = color_get_R(it->first)/255.f;
 		OneColor->Color[1] = color_get_G(it->first) / 255.f;
 		OneColor->Color[2] = color_get_B(it->first) / 255.f;
-		for (DOIt do_it = it->second.begin(); do_it != it->second.end(); do_it++) 
+		for (DOIt do_it = it->second.begin(); do_it != it->second.end(); do_it++)
 		{
 			EDetail* dd = 0;
 			for (CDetailManager::DetailIt d_it = DM->objects.begin(); d_it != DM->objects.end(); d_it++)
@@ -255,29 +350,18 @@ void UIDOShuffle::FillData()
 
 void UIDOShuffle::OnItemFocused(const char* name)
 {
-
+	if (m_Texture) m_Texture->Release();
+	m_Texture = nullptr;
 	if (!name)
 	{
-		if (m_Texture) m_Texture->Release(); m_Texture = nullptr;
-		m_Props->ClearProperties();
 		m_list_selected = -1;
 		return;
 	}
-	m_Thm = ImageLib.CreateThumbnail(name, EImageThumbnail::ETObject);
-	if (m_Texture) m_Texture->Release(); m_Texture = nullptr;
-	if (m_Thm)m_Thm->Update(m_Texture);
-	if (m_Thm)xr_delete(m_Thm);
-	EDetail *dd= DM->FindDOByName(name);
-	VERIFY(dd);
-	PropItemVec items;
-
-	//PHelper().CreateCaption(items, "Ref Name", dd->GetName());
-	PHelper().CreateFloat(items, "Density", &dd->m_fDensityFactor, 0.1f, 1.0f);
-	PHelper().CreateFloat(items, "Min Scale", &dd->m_fMinScale, 0.1f, 100.0f);
-	PHelper().CreateFloat(items, "Max Scale", &dd->m_fMaxScale, 0.1f, 100.f);
-	PHelper().CreateFlag32(items, "No Waving", &dd->m_Flags, DO_NO_WAVING);
-
-	m_Props->AssignItems(items);
+	if (EImageThumbnail* thm = ImageLib.CreateThumbnail(name, EImageThumbnail::ETObject))
+	{
+		thm->Update(m_Texture);
+		xr_delete(thm);
+	}
 }
 
 bool UIDOShuffle::FindItem(const char* name)
@@ -307,12 +391,11 @@ bool UIDOShuffle::ApplyChanges(bool msg )
 				DM->AppendIndexObject(clr, i.c_str(), false);
 		}
 	}
-	if (/*bNeedUpdate||*/bModif&& msg)
+	if (bModif && msg)
 	{
-		ELog.DlgMsg(mtInformation, "Object or object list changed. Reinitialize needed!");
+		ELog.DlgMsg(mtInformation, "The detail objects changed. Reinitialize the details to see it in the level.");
 		DM->InvalidateSlots();
 		return true;
 	}
 	return false;
 }
-

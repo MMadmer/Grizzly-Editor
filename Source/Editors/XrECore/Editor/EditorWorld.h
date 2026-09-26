@@ -105,12 +105,15 @@ namespace EditorWorld
 	typedef bool (*TFocusObject)(LPCSTR name);
 	ECORE_API void		SetFocusObject	(TFocusObject fn);
 
-	// -- UI (Mod > World...) ---------------------------------------------------
+	// -- UI (Mod > World Rules: a tab of its own) ---------------------------------
 	ECORE_API void		DrawUI			();
 	ECORE_API void		Show			();
 	ECORE_API bool		IsOpen			();
 
 	// -- MCP ----------------------------------------------------------------------
+	// world_view: {"drawer":"open|close","level":"<name>","filter":"<text>","open":true} sets what the
+	// World Rules tab shows and opens it; without an argument it only reports
+	ECORE_API void		McpView			(LPCSTR raw, xr_string& out);
 	ECORE_API void		McpGet			(LPCSTR raw, xr_string& out);		// world_get
 	ECORE_API void		McpSet			(LPCSTR raw, xr_string& out);		// world_set
 	ECORE_API void		McpTransitions	(LPCSTR raw, xr_string& out);		// world_transitions

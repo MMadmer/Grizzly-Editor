@@ -112,4 +112,30 @@ ECORE_API void FlushVisualThumbnailQueue(u32 max_requests);
 // Drops everything still queued (source switch, project close).
 ECORE_API void ClearVisualThumbnailQueue();
 
+//------------------------------------------------------------------------------
+// The picture of an image file for a content browser tile (EThumbnailTexture.cpp).
+//
+// At most `side` px on its long edge: the smallest level of the file's own mip
+// chain that still covers it (filtered already, and a 2048 px texture is not
+// decoded whole for a 96 pt tile), averaged down from there with the alpha as the
+// weight, so the colour under a clear texel does not bleed into the picture.
+// ImGui samples one level only: a picture made for the size it is drawn at is
+// what keeps the thin lines of a UI atlas.
+//
+// `pixels` are B8G8R8A8 rows top-down, what DX11TextureFromPixels uploads as is;
+// `src_w` x `src_h` is the file's own size; `alpha` is 0 for an opaque picture,
+// 1 for one that is partly transparent, 2 for one that is transparent throughout.
+//------------------------------------------------------------------------------
+struct STextureTile
+{
+	U32Vec	pixels;
+	u32		w		= 0;
+	u32		h		= 0;
+	u32		src_w	= 0;
+	u32		src_h	= 0;
+	u8		alpha	= 0;
+};
+ECORE_API bool TextureTileFromFile(LPCSTR path, u32 side, STextureTile& out);
+ECORE_API bool TextureTileFromMemory(const void* data, u32 size, u32 side, STextureTile& out);
+
 #endif

@@ -1,98 +1,107 @@
 #include "stdafx.h"
+#include "imgui_internal.h"
+#include "XrUIKitHooks.h"
 
 namespace
 {
-float g_DpiScale = 1.f;
+using XFinedTheme::ColorToken;
+
 bool g_MultiViewport = false;
 XFinedTheme::Preset g_Current = XFinedTheme::Preset::XFinedPurple;
 
-ImVec4 Hex(u32 rgb, float alpha = 1.f)
-{
-	return ImVec4(
-		float((rgb >> 16) & 0xff) / 255.f,
-		float((rgb >> 8) & 0xff) / 255.f,
-		float(rgb & 0xff) / 255.f,
-		alpha);
-}
+// rgb plus an 8-bit alpha in the top byte; 0 there means opaque, so the table stays readable
+using Palette = u32[u32(ColorToken::Count)];
 
-struct ThemePalette
+// docs/UI_DESIGN.md section 2. The bold values of the document are the ones the editor had.
+const Palette kPurple =
 {
-	u32 background;
-	u32 panel;
-	u32 input;
-	u32 border;
-	u32 accent;
-	u32 accent_hovered;
-	u32 accent_active;
-	u32 selection;
-	u32 text;
-	u32 muted;
-	u32 error;
-	u32 warning;
-	u32 success;
+	0x202025, 0x1c1b20, 0x2a2931, 0x3d3947,
+	0x7971bd, 0x554f72, 0xa79fed, 0x464150,
+	0xf2effb, 0x8e8a99, 0xe06c75, 0xe5c07b, 0x98c379,
+
+	0x17161b, 0x151419, 0x26252c, 0x28272e,
+	0x302e38, 0x2e2c35, 0x36343f, 0x34323d, 0x3d3a47,
+	0x2c2a33, 0x524d5f,
+	0xbdb8c9, 0x5f5b69,
+	0x6a62ae, 0x7971bd, 0x5c5599,
+	0x8a3b43, 0xa3464f, 0x74323a,
+	0xd19a66,
+	0xe06c75, 0x98c379, 0x61afef,
+	0x990c0b0e,
 };
 
-u32 Semantic(const ThemePalette& palette, XFinedTheme::ColorToken token)
+// Graphite changes the accent family only
+Palette kGraphite;
+
+const u32* PaletteFor(XFinedTheme::Preset preset)
 {
-	switch (token)
+	if (preset != XFinedTheme::Preset::Graphite)
+		return kPurple;
+	if (!kGraphite[0])
 	{
-	case XFinedTheme::ColorToken::Background:		return palette.background;
-	case XFinedTheme::ColorToken::Panel:			return palette.panel;
-	case XFinedTheme::ColorToken::Input:			return palette.input;
-	case XFinedTheme::ColorToken::Border:			return palette.border;
-	case XFinedTheme::ColorToken::Accent:			return palette.accent;
-	case XFinedTheme::ColorToken::AccentHovered:	return palette.accent_hovered;
-	case XFinedTheme::ColorToken::AccentActive:	return palette.accent_active;
-	case XFinedTheme::ColorToken::Selection:		return palette.selection;
-	case XFinedTheme::ColorToken::Text:			return palette.text;
-	case XFinedTheme::ColorToken::Muted:			return palette.muted;
-	case XFinedTheme::ColorToken::Error:			return palette.error;
-	case XFinedTheme::ColorToken::Warning:			return palette.warning;
-	case XFinedTheme::ColorToken::Success:			return palette.success;
-	default:									return palette.text;
+		memcpy(kGraphite, kPurple, sizeof(kGraphite));
+		kGraphite[u32(ColorToken::Accent)] = 0x727782;
+		kGraphite[u32(ColorToken::AccentActive)] = 0x9399a5;
+		kGraphite[u32(ColorToken::Selection)] = 0x454951;
+		kGraphite[u32(ColorToken::AccentHovered)] = 0x50545d;
+		kGraphite[u32(ColorToken::Primary)] = 0x60656f;
+		kGraphite[u32(ColorToken::PrimaryHovered)] = 0x727782;
+		kGraphite[u32(ColorToken::PrimaryPressed)] = 0x53575f;
 	}
+	return kGraphite;
 }
 
+ImVec4 Col(const u32* palette, ColorToken token, float alpha = 1.f)
+{
+	const u32 v = palette[u32(token)];
+	const float own = (v >> 24) ? float(v >> 24) / 255.f : 1.f;
+	return ImVec4(float((v >> 16) & 0xff) / 255.f, float((v >> 8) & 0xff) / 255.f, float(v & 0xff) / 255.f, own * alpha);
+}
+
+// Every size in pt; ScaleAllSizes turns them into px once, in one place (XUI::SetDpi).
 void ApplyMetrics(ImGuiStyle& style)
 {
 	style.Alpha = 1.f;
-	style.DisabledAlpha = .55f;
-	style.WindowPadding = ImVec2(8.f, 6.f);
-	style.WindowRounding = 4.f;
+	style.DisabledAlpha = .4f;
+	style.WindowPadding = ImVec2(8.f, 8.f);
+	style.WindowRounding = 6.f;
 	style.WindowBorderSize = 1.f;
 	style.WindowMinSize = ImVec2(32.f, 32.f);
-	style.WindowTitleAlign = ImVec2(.5f, .5f);
-	style.WindowMenuButtonPosition = ImGuiDir_Left;
-	style.ChildRounding = 3.f;
+	style.WindowTitleAlign = ImVec2(0.f, .5f);
+	style.WindowMenuButtonPosition = ImGuiDir_None;
+	style.ChildRounding = 4.f;
 	style.ChildBorderSize = 1.f;
-	style.PopupRounding = 4.f;
+	style.PopupRounding = 6.f;
 	style.PopupBorderSize = 1.f;
-	style.FramePadding = ImVec2(6.f, 3.f);
-	style.FrameRounding = 3.f;
-	style.FrameBorderSize = 0.f;
-	style.ItemSpacing = ImVec2(6.f, 4.f);
-	style.ItemInnerSpacing = ImVec2(5.f, 4.f);
+	style.FramePadding = ImVec2(8.f, 4.f);
+	style.FrameRounding = 4.f;
+	style.FrameBorderSize = 1.f;
+	style.ItemSpacing = ImVec2(8.f, 4.f);
+	style.ItemInnerSpacing = ImVec2(6.f, 4.f);
 	style.CellPadding = ImVec2(6.f, 3.f);
 	style.TouchExtraPadding = ImVec2(0.f, 0.f);
-	style.IndentSpacing = 18.f;
+	style.IndentSpacing = 14.f;
 	style.ColumnsMinSpacing = 6.f;
-	style.ScrollbarSize = 14.f;
-	style.ScrollbarRounding = 3.f;
+	style.ScrollbarSize = 10.f;
+	style.ScrollbarRounding = 5.f;
 	style.ScrollbarPadding = 1.f;
-	style.GrabMinSize = 10.f;
-	style.GrabRounding = 3.f;
+	style.GrabMinSize = 12.f;
+	style.GrabRounding = 4.f;
 	style.LogSliderDeadzone = 4.f;
-	style.ImageRounding = 3.f;
+	style.ImageRounding = 4.f;
 	style.ImageBorderSize = 0.f;
-	style.TabRounding = 3.f;
+	style.TabRounding = 4.f;
 	style.TabBorderSize = 0.f;
+	// close crosses on hover only, selected or not
 	style.TabCloseButtonMinWidthSelected = 0.f;
 	style.TabCloseButtonMinWidthUnselected = 0.f;
 	style.TabBarBorderSize = 1.f;
 	style.TabBarOverlineSize = 2.f;
 	style.TreeLinesSize = 1.f;
 	style.TreeLinesRounding = 2.f;
-	style.DragDropTargetRounding = 3.f;
+	style.MenuItemRounding = 4.f;
+	style.SelectableRounding = 4.f;
+	style.DragDropTargetRounding = 4.f;
 	style.DragDropTargetBorderSize = 2.f;
 	style.DragDropTargetPadding = 3.f;
 	style.ColorButtonPosition = ImGuiDir_Right;
@@ -100,6 +109,8 @@ void ApplyMetrics(ImGuiStyle& style)
 	style.SelectableTextAlign = ImVec2(0.f, .5f);
 	style.InputTextCursorSize = 1.f;
 	style.SeparatorSize = 1.f;
+	style.SeparatorTextBorderSize = 1.f;
+	style.SeparatorTextPadding = ImVec2(12.f, 3.f);
 	style.DisplayWindowPadding = ImVec2(19.f, 19.f);
 	style.DisplaySafeAreaPadding = ImVec2(3.f, 3.f);
 	style.DockingSeparatorSize = 2.f;
@@ -109,95 +120,130 @@ void ApplyMetrics(ImGuiStyle& style)
 	style.AntiAliasedFill = true;
 	style.CurveTessellationTol = 1.25f;
 	style.CircleTessellationMaxError = .3f;
+
+	// tooltips after 0.45 s of a resting mouse, disabled items included (their reason is the tip)
+	style.HoverStationaryDelay = .15f;
+	style.HoverDelayShort = .15f;
+	style.HoverDelayNormal = .45f;
+	style.HoverFlagsForTooltipMouse = ImGuiHoveredFlags_Stationary | ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
+	style.HoverFlagsForTooltipNav = ImGuiHoveredFlags_NoSharedDelay | ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
 }
 
-void ApplyDarkPalette(ImGuiStyle& style, const ThemePalette& palette)
+void ApplyPalette(ImGuiStyle& style, const u32* p)
 {
-	ImVec4* colors = style.Colors;
-	colors[ImGuiCol_Text] = Hex(Semantic(palette, XFinedTheme::ColorToken::Text));
-	colors[ImGuiCol_TextDisabled] = Hex(Semantic(palette, XFinedTheme::ColorToken::Muted));
-	colors[ImGuiCol_WindowBg] = Hex(Semantic(palette, XFinedTheme::ColorToken::Background));
-	colors[ImGuiCol_ChildBg] = Hex(Semantic(palette, XFinedTheme::ColorToken::Panel));
-	colors[ImGuiCol_PopupBg] = Hex(0x24232a, .98f);
-	colors[ImGuiCol_Border] = Hex(Semantic(palette, XFinedTheme::ColorToken::Border), .9f);
-	colors[ImGuiCol_BorderShadow] = Hex(0x09090b, 0.f);
-	colors[ImGuiCol_FrameBg] = Hex(Semantic(palette, XFinedTheme::ColorToken::Input));
-	colors[ImGuiCol_FrameBgHovered] = Hex(palette.selection);
-	colors[ImGuiCol_FrameBgActive] = Hex(palette.accent_hovered);
-	colors[ImGuiCol_TitleBg] = Hex(0x18171d);
-	colors[ImGuiCol_TitleBgActive] = Hex(0x282531);
-	colors[ImGuiCol_TitleBgCollapsed] = Hex(0x18171d, .8f);
-	colors[ImGuiCol_MenuBarBg] = Hex(0x222126);
-	colors[ImGuiCol_ScrollbarBg] = Hex(0x17161a, .75f);
-	colors[ImGuiCol_ScrollbarGrab] = Hex(0x3d3945);
-	colors[ImGuiCol_ScrollbarGrabHovered] = Hex(palette.selection);
-	colors[ImGuiCol_ScrollbarGrabActive] = Hex(palette.accent);
-	colors[ImGuiCol_CheckMark] = Hex(palette.accent_active);
-	colors[ImGuiCol_CheckboxSelectedBg] = Hex(palette.accent, .55f);
-	colors[ImGuiCol_SliderGrab] = Hex(palette.accent);
-	colors[ImGuiCol_SliderGrabActive] = Hex(palette.accent_active);
-	colors[ImGuiCol_Button] = Hex(0x3a3742);
-	colors[ImGuiCol_ButtonHovered] = Hex(palette.accent_hovered);
-	colors[ImGuiCol_ButtonActive] = Hex(palette.accent);
-	colors[ImGuiCol_Header] = Hex(0x3b3747);
-	colors[ImGuiCol_HeaderHovered] = Hex(palette.accent_hovered);
-	colors[ImGuiCol_HeaderActive] = Hex(palette.accent);
-	colors[ImGuiCol_Separator] = Hex(0x403c49);
-	colors[ImGuiCol_SeparatorHovered] = Hex(palette.accent_hovered);
-	colors[ImGuiCol_SeparatorActive] = Hex(palette.accent_active);
-	colors[ImGuiCol_ResizeGrip] = Hex(palette.accent, .25f);
-	colors[ImGuiCol_ResizeGripHovered] = Hex(palette.accent, .67f);
-	colors[ImGuiCol_ResizeGripActive] = Hex(palette.accent_active, .95f);
-	colors[ImGuiCol_InputTextCursor] = Hex(palette.accent_active);
-	colors[ImGuiCol_TabHovered] = Hex(palette.accent_hovered);
-	colors[ImGuiCol_Tab] = Hex(0x24232a);
-	colors[ImGuiCol_TabSelected] = Hex(0x403b56);
-	colors[ImGuiCol_TabSelectedOverline] = Hex(palette.accent_active);
-	colors[ImGuiCol_TabDimmed] = Hex(0x1d1c22);
-	colors[ImGuiCol_TabDimmedSelected] = Hex(0x302d3b);
-	colors[ImGuiCol_TabDimmedSelectedOverline] = Hex(palette.accent, .75f);
-	colors[ImGuiCol_DockingPreview] = Hex(palette.accent, .7f);
-	colors[ImGuiCol_DockingEmptyBg] = Hex(0x17161a);
-	colors[ImGuiCol_PlotLines] = Hex(0xb8b3c4);
-	colors[ImGuiCol_PlotLinesHovered] = Hex(Semantic(palette, XFinedTheme::ColorToken::Warning));
-	colors[ImGuiCol_PlotHistogram] = Hex(palette.accent_active);
-	colors[ImGuiCol_PlotHistogramHovered] = Hex(0xc5bfff);
-	colors[ImGuiCol_TableHeaderBg] = Hex(0x302d38);
-	colors[ImGuiCol_TableBorderStrong] = Hex(0x494451);
-	colors[ImGuiCol_TableBorderLight] = Hex(0x35323c);
-	colors[ImGuiCol_TableRowBg] = Hex(0x202025, 0.f);
-	colors[ImGuiCol_TableRowBgAlt] = Hex(0xffffff, .025f);
-	colors[ImGuiCol_TextLink] = Hex(palette.accent_active);
-	colors[ImGuiCol_TextSelectedBg] = Hex(Semantic(palette, XFinedTheme::ColorToken::Selection), .55f);
-	colors[ImGuiCol_TreeLines] = Hex(palette.border);
-	colors[ImGuiCol_DragDropTarget] = Hex(Semantic(palette, XFinedTheme::ColorToken::Warning), .9f);
-	colors[ImGuiCol_DragDropTargetBg] = Hex(Semantic(palette, XFinedTheme::ColorToken::Warning), .16f);
-	colors[ImGuiCol_UnsavedMarker] = Hex(Semantic(palette, XFinedTheme::ColorToken::Warning));
-	colors[ImGuiCol_NavCursor] = Hex(palette.accent_active);
-	colors[ImGuiCol_NavWindowingHighlight] = Hex(0xf2effb, .7f);
-	colors[ImGuiCol_NavWindowingDimBg] = Hex(0x0c0b0e, .45f);
-	colors[ImGuiCol_ModalWindowDimBg] = Hex(0x0c0b0e, .68f);
+	ImVec4* c = style.Colors;
+	c[ImGuiCol_Text] = Col(p, ColorToken::Text);
+	c[ImGuiCol_TextDisabled] = Col(p, ColorToken::Muted);
+	c[ImGuiCol_WindowBg] = Col(p, ColorToken::Base);
+	c[ImGuiCol_ChildBg] = Col(p, ColorToken::Inset);
+	c[ImGuiCol_PopupBg] = Col(p, ColorToken::Overlay);
+	c[ImGuiCol_Border] = Col(p, ColorToken::Border);
+	c[ImGuiCol_BorderShadow] = ImVec4(0.f, 0.f, 0.f, 0.f);
+	c[ImGuiCol_FrameBg] = Col(p, ColorToken::Input);
+	c[ImGuiCol_FrameBgHovered] = Col(p, ColorToken::InputHovered);
+	c[ImGuiCol_FrameBgActive] = Col(p, ColorToken::Pressed);
+	c[ImGuiCol_TitleBg] = Col(p, ColorToken::Chrome);
+	c[ImGuiCol_TitleBgActive] = Col(p, ColorToken::Raised);
+	c[ImGuiCol_TitleBgCollapsed] = Col(p, ColorToken::Chrome);
+	c[ImGuiCol_MenuBarBg] = Col(p, ColorToken::Chrome);
+	c[ImGuiCol_ScrollbarBg] = ImVec4(0.f, 0.f, 0.f, 0.f);
+	c[ImGuiCol_ScrollbarGrab] = Col(p, ColorToken::Border);
+	c[ImGuiCol_ScrollbarGrabHovered] = Col(p, ColorToken::BorderStrong);
+	c[ImGuiCol_ScrollbarGrabActive] = Col(p, ColorToken::Muted);
+	c[ImGuiCol_CheckMark] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_CheckboxSelectedBg] = Col(p, ColorToken::Accent, .4f);
+	c[ImGuiCol_SliderGrab] = Col(p, ColorToken::Accent);
+	c[ImGuiCol_SliderGrabActive] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_Button] = Col(p, ColorToken::Button);
+	c[ImGuiCol_ButtonHovered] = Col(p, ColorToken::ButtonHovered);
+	c[ImGuiCol_ButtonActive] = Col(p, ColorToken::Pressed);
+	c[ImGuiCol_Header] = Col(p, ColorToken::Selection);
+	c[ImGuiCol_HeaderHovered] = Col(p, ColorToken::ButtonHovered);
+	c[ImGuiCol_HeaderActive] = Col(p, ColorToken::SelectionFocused);
+	c[ImGuiCol_Separator] = Col(p, ColorToken::Border);
+	c[ImGuiCol_SeparatorHovered] = Col(p, ColorToken::AccentBright, .6f);
+	c[ImGuiCol_SeparatorActive] = Col(p, ColorToken::Accent);
+	c[ImGuiCol_ResizeGrip] = ImVec4(0.f, 0.f, 0.f, 0.f);
+	c[ImGuiCol_ResizeGripHovered] = Col(p, ColorToken::Accent, .5f);
+	c[ImGuiCol_ResizeGripActive] = Col(p, ColorToken::Accent);
+	c[ImGuiCol_InputTextCursor] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_TabHovered] = Col(p, ColorToken::Hover);
+	c[ImGuiCol_Tab] = Col(p, ColorToken::Chrome);
+	c[ImGuiCol_TabSelected] = Col(p, ColorToken::Base);
+	c[ImGuiCol_TabSelectedOverline] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_TabDimmed] = Col(p, ColorToken::Chrome);
+	c[ImGuiCol_TabDimmedSelected] = Col(p, ColorToken::Base);
+	// only the focused panel's tab carries the overline
+	c[ImGuiCol_TabDimmedSelectedOverline] = ImVec4(0.f, 0.f, 0.f, 0.f);
+	c[ImGuiCol_DockingPreview] = Col(p, ColorToken::Accent, .6f);
+	c[ImGuiCol_DockingEmptyBg] = Col(p, ColorToken::Canvas);
+	c[ImGuiCol_PlotLines] = Col(p, ColorToken::TextSecondary);
+	c[ImGuiCol_PlotLinesHovered] = Col(p, ColorToken::Warning);
+	c[ImGuiCol_PlotHistogram] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_PlotHistogramHovered] = Col(p, ColorToken::Text);
+	c[ImGuiCol_TableHeaderBg] = Col(p, ColorToken::Raised);
+	c[ImGuiCol_TableBorderStrong] = Col(p, ColorToken::Border);
+	c[ImGuiCol_TableBorderLight] = Col(p, ColorToken::BorderSubtle);
+	c[ImGuiCol_TableRowBg] = ImVec4(0.f, 0.f, 0.f, 0.f);
+	c[ImGuiCol_TableRowBgAlt] = ImVec4(1.f, 1.f, 1.f, .02f);
+	c[ImGuiCol_TextLink] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_TextSelectedBg] = Col(p, ColorToken::SelectionFocused);
+	c[ImGuiCol_TreeLines] = Col(p, ColorToken::BorderSubtle);
+	c[ImGuiCol_DragDropTarget] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_DragDropTargetBg] = Col(p, ColorToken::Accent, .16f);
+	c[ImGuiCol_UnsavedMarker] = Col(p, ColorToken::Warning);
+	c[ImGuiCol_NavCursor] = Col(p, ColorToken::AccentBright);
+	c[ImGuiCol_NavWindowingHighlight] = Col(p, ColorToken::Text, .7f);
+	c[ImGuiCol_NavWindowingDimBg] = Col(p, ColorToken::Dim, .75f);
+	c[ImGuiCol_ModalWindowDimBg] = Col(p, ColorToken::Dim);
 }
 
-ThemePalette PaletteFor(XFinedTheme::Preset preset)
+// ImGui's arrows as the kit's chevrons (GImGuiRenderArrow): the same glyph the toolbar and the sections use, on a
+// whole-pixel square so its stroke stays crisp
+void KitArrow(ImDrawList* dl, ImVec2 center, float side, ImU32 col, ImGuiDir dir)
 {
-	if (preset == XFinedTheme::Preset::Graphite)
-		return {
-			0x202025, 0x1c1b20, 0x333333, 0x3d3947,
-			0x727782, 0x50545d, 0x9399a5, 0x454951,
-			0xf2effb, 0x8e8a99, 0xe06c75, 0xe5c07b, 0x98c379,
-		};
-	return {
-		0x202025, 0x1c1b20, 0x333333, 0x3d3947,
-		0x7971bd, 0x554f72, 0xa79fed, 0x464150,
-		0xf2effb, 0x8e8a99, 0xe06c75, 0xe5c07b, 0x98c379,
-	};
+	const XUI::Icon icon = dir == ImGuiDir_Up ? XUI::Icon::ChevronUp : dir == ImGuiDir_Down ? XUI::Icon::ChevronDown
+		: dir == ImGuiDir_Left ? XUI::Icon::ChevronLeft : XUI::Icon::ChevronRight;
+	const float px = IM_ROUND(side);
+	const ImVec2 min(IM_ROUND(center.x - px * .5f), IM_ROUND(center.y - px * .5f));
+	XUI::DrawIconRect(dl, icon, min, ImVec2(min.x + px, min.y + px), col);
+}
+
+void Build()
+{
+	ImGuiStyle style;
+	ApplyMetrics(style);
+	ApplyPalette(style, PaletteFor(g_Current));
+	// a platform window cannot be rounded, and a translucent one shows the desktop through
+	if (g_MultiViewport)
+	{
+		style.WindowRounding = 0.f;
+		style.Colors[ImGuiCol_WindowBg].w = 1.f;
+	}
+	const float dpi = XUI::Dpi();
+	if (dpi != 1.f)
+		style.ScaleAllSizes(dpi);
+	// the size of a font is its line box: Body 16, and the monitor's scale on top of it
+	style.FontSizeBase = XUI::FontBaseSize;
+	style.FontScaleMain = 1.f;
+	style.FontScaleDpi = dpi;
+	// the panel tab strip is 26 pt: the dockspace pads its tab bars by what a frame is short of that
+	GImGuiDockTabBarExtra = ImMax(0.f, floorf(26.f * dpi - (XUI::FontBaseSize * dpi + style.FramePadding.y * 2.f) + .5f));
+	GImGuiRenderArrow = &KitArrow;
+	// a number starts at the left of its field, like a text
+	GImGuiDragTextAlignX = 0.f;
+	ImGui::GetStyle() = style;
 }
 }
 
-void XFinedTheme::Initialize(float dpi_scale, bool multi_viewport)
+void XUI::Hooks::RebuildStyle()
 {
-	g_DpiScale = dpi_scale > 0.f ? dpi_scale : 1.f;
+	if (ImGui::GetCurrentContext())
+		Build();
+}
+
+void XFinedTheme::Initialize(bool multi_viewport)
+{
 	g_MultiViewport = multi_viewport;
 	Apply(g_Current);
 }
@@ -207,20 +253,14 @@ void XFinedTheme::Apply(Preset preset)
 	if (!IsValid(u32(preset)))
 		preset = Default();
 	g_Current = preset;
-	if (!ImGui::GetCurrentContext())
+	ImGuiContext* ctx = ImGui::GetCurrentContext();
+	if (!ctx)
 		return;
-
-	ImGuiStyle style;
-	ApplyMetrics(style);
-	ApplyDarkPalette(style, PaletteFor(preset));
-	if (g_MultiViewport)
-	{
-		style.WindowRounding = 0.f;
-		style.Colors[ImGuiCol_WindowBg].w = 1.f;
-	}
-	if (g_DpiScale != 1.f)
-		style.ScaleAllSizes(g_DpiScale);
-	ImGui::GetStyle() = style;
+	// a style swapped under a running frame would unbalance its pushed vars: wait for the next one
+	if (ctx->WithinFrameScope)
+		XUI::Hooks::RequestStyle();
+	else
+		Build();
 }
 
 XFinedTheme::Preset XFinedTheme::Current()
@@ -276,5 +316,15 @@ LPCSTR XFinedTheme::Name(Preset preset)
 
 u32 XFinedTheme::Rgb(ColorToken token)
 {
-	return Semantic(PaletteFor(g_Current), token);
+	return token < ColorToken::Count ? PaletteFor(g_Current)[u32(token)] & 0xffffff : PaletteFor(g_Current)[u32(ColorToken::Text)] & 0xffffff;
+}
+
+ImVec4 XFinedTheme::Vec4(ColorToken token, float alpha)
+{
+	return Col(PaletteFor(g_Current), token < ColorToken::Count ? token : ColorToken::Text, alpha);
+}
+
+ImU32 XFinedTheme::U32(ColorToken token, float alpha)
+{
+	return ImGui::ColorConvertFloat4ToU32(Vec4(token, alpha));
 }

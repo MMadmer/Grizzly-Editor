@@ -8219,6 +8219,10 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
         window->DC.MenuBarOffset.x = ImMax(ImMax(window->WindowPadding.x, style.ItemSpacing.x), g.NextWindowData.MenuBarOffsetMinVal.x);
         window->DC.MenuBarOffset.y = g.NextWindowData.MenuBarOffsetMinVal.y;
         window->TitleBarHeight = (flags & ImGuiWindowFlags_NoTitleBar) ? 0.0f : g.FontSize + g.Style.FramePadding.y * 2.0f;
+        // XFined Editor: a docked window's title bar is its node's tab bar, which the editor makes taller than a frame
+        // (GImGuiDockTabBarExtra, imgui_user.h): the content starts under the tab bar, not across its lower edge
+        if (window->DockIsActive && window->TitleBarHeight > 0.0f)
+            window->TitleBarHeight += GImGuiDockTabBarExtra;
         window->MenuBarHeight = (flags & ImGuiWindowFlags_MenuBar) ? window->DC.MenuBarOffset.y + g.FontSize + g.Style.FramePadding.y * 2.0f : 0.0f;
         window->FontRefSize = g.FontSize; // Lock this to discourage calling window->CalcFontSize() outside of current window.
 
@@ -13407,18 +13411,33 @@ bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags fla
         const ImGuiViewport* viewport = window->WasActive ? window->Viewport : GetMainViewport(); // FIXME-VIEWPORT: What may be our reference viewport?
         SetNextWindowPos(viewport->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 
-        // XFined Editor: inside the main viewport's work area, by the size the last frame gave it
+        // XFined Editor: inside the main viewport's work area, by the size the last frame gave it. The work
+        // area it was placed in is remembered: when that changes (the editor resized, a DPI change) the modal is
+        // centred in the new one again instead of keeping a place that now sits off to one side.
         ImGuiWindow* modal = pin_to_main ? FindWindowByName(name) : NULL;
         if (modal && modal->WasActive)
         {
+            static ImGuiStorage s_ModalArea;
             const ImVec2 area_min = main_viewport->WorkPos;
             const ImVec2 area_max = main_viewport->WorkPos + main_viewport->WorkSize;
-            const ImVec2 inside(ImMax(area_min.x, ImMin(modal->Pos.x, area_max.x - modal->Size.x)),
-                                ImMax(area_min.y, ImMin(modal->Pos.y, area_max.y - modal->Size.y)));
-            if (inside.x != modal->Pos.x || inside.y != modal->Pos.y)
-                SetNextWindowPos(inside);
+            const int area = (int(main_viewport->WorkSize.x) << 16) ^ int(main_viewport->WorkSize.y) ^ (int(main_viewport->WorkPos.y) << 8);
+            const int placed = s_ModalArea.GetInt(modal->ID, area);
+            s_ModalArea.SetInt(modal->ID, area);
+            if (placed != area)
+                SetNextWindowPos(main_viewport->WorkPos + main_viewport->WorkSize * 0.5f, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            else
+            {
+                const ImVec2 inside(ImMax(area_min.x, ImMin(modal->Pos.x, area_max.x - modal->Size.x)),
+                                    ImMax(area_min.y, ImMin(modal->Pos.y, area_max.y - modal->Size.y)));
+                if (inside.x != modal->Pos.x || inside.y != modal->Pos.y)
+                    SetNextWindowPos(inside);
+            }
         }
     }
+    // XFined Editor: never larger than the work area it sits in (a taller one scrolls), unless the caller
+    // constrains the size itself
+    if (pin_to_main && (g.NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint) == 0)
+        SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), main_viewport->WorkSize);
 
     flags |= ImGuiWindowFlags_Popup | ImGuiWindowFlags_Modal | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking;
     const bool is_open = Begin(name, p_open, flags);

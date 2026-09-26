@@ -24,6 +24,7 @@ ECORE_API LPCSTR TargetName(Target target);
 ECORE_API bool FrameAll();
 ECORE_API bool FrameSelection();
 
-// Draws the overlay and reports whether its panel owns the mouse position.
+// Draws the 64 pt axis gizmo at the top right of the view (none under 480 pt) and reports whether it owns the mouse:
+// a click on an axis end looks from there, anywhere else on it goes back to the free view.
 ECORE_API bool Draw(const ImVec2& canvas_position, const ImVec2& canvas_size);
 }

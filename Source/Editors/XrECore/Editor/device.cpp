@@ -37,7 +37,8 @@ ENGINE_API BOOL g_bRendering;
 CEditorRenderDevice::CEditorRenderDevice()
 {
 	RadiusRender = 400;
-	psDeviceFlags.assign(rsStatistic|rsFilterLinear|rsFog|rsDrawGrid);
+	// stats are off until asked for (Show > Stats): a fresh start shows the scene, not a block of numbers (#30)
+	psDeviceFlags.assign(rsFilterLinear|rsFog|rsDrawGrid);
 // dynamic buffer size
 	rsDVB_Size		= 2048;
 	rsDIB_Size		= 2048;
@@ -230,7 +231,6 @@ bool CEditorRenderDevice::Create()
 		xr_strcpy			(ini_name, UI->EditorName());
 		xr_strcat			(ini_name, "_imgui.ini");
 		FS.update_path(ini_path, "$local_root$", ini_name);
-		if (!FS.exist(ini_path))UI->ResetUI();
 #if defined(USE_DX11)
 		UI->Initialize(m_hWnd, HW.pDevice, HW.pContext, ini_path);
 #else
@@ -799,7 +799,7 @@ void CEditorRenderDevice::CreateWindow()
 	// scripts and the project still have to load. Without a background brush
 	// Windows paints that gap white, which reads as a hung application; the
 	// editor's own backdrop reads as one that is still coming up.
-	m_WC.hbrBackground = ::CreateSolidBrush(RGB(24, 24, 27));
+	m_WC.hbrBackground = ::CreateSolidBrush(RGB(0x17, 0x16, 0x1b));
 	// The class icon is what the title bar, the taskbar button and Alt+Tab show.
 	// Both sizes are loaded from the executable's own resources so an editor tool
 	// without the icon resource simply keeps the system default instead of failing.
@@ -889,10 +889,10 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 	}
 	break;
 	}
+	// the exit prompt names the scene and every document with unsaved changes; the shell quits after it
 	if (msg == WM_CLOSE && UI)
 	{
-		if (ExecCommand(COMMAND_EXIT))
-			ExecCommand(COMMAND_QUIT);
+		XUI::Shell::RequestExit();
 		return 0;
 	}
 	if (UI &&UI->WndProcHandler(hWnd, msg, wParam, lParam))
@@ -923,6 +923,15 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		}*/
 		return 0;
 	
+	case WM_DPICHANGED:
+		// moved to a monitor of another scale: Windows' suggested rect first, then the UI's scale
+		if (UI)
+		{
+			UI->DpiChanged(hWnd, HIWORD(wParam), *reinterpret_cast<const RECT*>(lParam));
+			return 0;
+		}
+		break;
+
 	case WM_SYSCOMMAND:
 
 		if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu

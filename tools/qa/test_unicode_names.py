@@ -10,7 +10,8 @@ and checks every way a name travels: the content browser, the rename box, a rena
 disk, the quest list, the build, the release package and its file index.
 
 A name outside cp1251 tells the two code pages apart: under cp1251 the file APIs hand
-it back as question marks and nothing can open it.
+it back as question marks and nothing can open it. A long Cyrillic name (more bytes than
+the rename box once held) and the browser's search (case folded, Cyrillic too) ride along.
 
     python tools/qa/test_unicode_names.py --project D:\\XFinedProjects\\Test [--shot out.png]
 """
@@ -39,6 +40,8 @@ CYRILLIC = "Ночная доставка.txt"
 RENAMED = "Сюжет ✓.txt"          # the check mark is outside cp1251
 BEYOND = "日本の地図.txt"          # nothing of it is in cp1251
 QUEST_FILE = "Доставка.nqasset"
+# over 127 bytes in UTF-8: the rename box used to cut it short
+LONG = "Очень длинное название файла, которое не помещалось в прежнее поле переименования.txt"
 
 QUEST = """return {
     nq = 1, id = "qa_unicode_quest", title = "Unicode",
@@ -126,6 +129,7 @@ def same(entry: str, listed: list) -> bool:
 def run(project: str, shot: str | None) -> None:
     write(project, f"gamedata/{FOLDER}/{CYRILLIC}", "night\n")
     write(project, f"gamedata/{FOLDER}/{BEYOND}", "map\n")
+    write(project, f"gamedata/{FOLDER}/{LONG}", "long\n")
     write(project, f"quests/{QUEST_FILE}", QUEST)
     folder = os.path.join(project, "gamedata", FOLDER)
 
@@ -151,6 +155,25 @@ def run(project: str, shot: str | None) -> None:
         r = mcp("content_browser_selection", action="rename", name=entry)
         box = (r.get("rename") or {}).get("text", "")
         check(r.get("ok") and box == CYRILLIC, "B the rename box holds the name as it is", repr(box))
+        mcp("content_browser_selection", action="clear")
+        long_entry = f"gamedata\\{FOLDER}\\{LONG}"
+        r = mcp("content_browser_selection", action="rename", name=long_entry)
+        box = (r.get("rename") or {}).get("text", "")
+        check(r.get("ok") and box == LONG and len(LONG.encode("utf-8")) > 127,
+              "B the rename box holds a long Cyrillic name whole (%d bytes)" % len(LONG.encode("utf-8")), repr(box))
+        mcp("content_browser_selection", action="clear")
+
+        # the search folds case, Cyrillic included, and lists only what matches
+        r = mcp("content_browser_navigation", search="ночная")
+        check(r.get("ok") and r.get("search") == "ночная", "B the search takes a Cyrillic query",
+              json.dumps(r, ensure_ascii=False)[:240])
+        hit = mcp("content_browser_selection", action="select", name=entry)
+        miss = mcp("content_browser_selection", action="select", name=beyond)
+        check(hit.get("ok") and not miss.get("ok"),
+              "B a lower-case Cyrillic query finds the capitalised name, and only what matches",
+              json.dumps(hit, ensure_ascii=False)[:160] + " | " + json.dumps(miss, ensure_ascii=False)[:160])
+        r = mcp("content_browser_navigation", search="")
+        check(r.get("ok") and r.get("search") == "", "B an empty search lists the folder again", json.dumps(r)[:200])
         mcp("content_browser_selection", action="clear")
         if shot:
             mcp("content_browser_selection", action="select", name=entry)

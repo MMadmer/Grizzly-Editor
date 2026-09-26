@@ -1,4 +1,5 @@
 #pragma once
+// Edit Text (###dlg.text_editor): a text in a dialog of its own, OK takes it
 class XREPROPS_API UITextForm :public XrUI
 {
 public:
@@ -11,15 +12,14 @@ public:
 private:
 	void CLBOk();
 	void CLBCancel();
-
-	void CLBLoad();
-	void CLBSave();
-	void CLBClear();
 private:
 	bool m_Ok;
+	bool m_Shown;
 	xr_string m_Text;
-	string4096 m_EditText;
+	xr_vector<char> m_EditText;
 
 	static UITextForm* Form;
+	// the dialog of a form that is gone still has to be taken down
+	static bool s_Closing;
 };
 

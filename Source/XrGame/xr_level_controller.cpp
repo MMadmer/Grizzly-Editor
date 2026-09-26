@@ -240,7 +240,15 @@ _action* action_name_to_ptr(LPCSTR _name)
 			return &actions[idx];
 		++idx;
 	}
-	Msg				("! cant find corresponding [id] for action_name", _name);
+	// each unknown name once: the UI configs (game_tutorials.xml) ask for the same ones on every load
+	static string64	s_reported[16];
+	static int		s_reported_count = 0;
+	for (int i = 0; i < s_reported_count; ++i)
+		if (!stricmp(s_reported[i], _name))
+			return	NULL;
+	if (s_reported_count < 16)
+		strncpy_s	(s_reported[s_reported_count++], _name, _TRUNCATE);
+	Msg				("! cant find corresponding [id] for action_name %s", _name);
 	return			NULL;
 }
 

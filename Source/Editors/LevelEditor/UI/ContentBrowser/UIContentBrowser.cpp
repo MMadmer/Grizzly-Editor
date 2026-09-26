@@ -10,7 +10,12 @@
 #include "..\..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\..\XrECore\Editor\EditorAssetIcons.h"
+#include "..\..\..\XrECore\Editor\EditorUiContract.h"
 #include "..\QuestGraph\UIQuestGraph.h"
+#include <shobjidl.h>
+#include <shellapi.h>
+
+using Token = XFinedTheme::ColorToken;
 
 // image formats the thumbnail path can decode directly
 static bool IsImageExt(LPCSTR name)
@@ -83,7 +88,7 @@ static EditorAssetIcons::EKind IconOf(LPCSTR entry, int source)
 // Nothing under the project root is registered in the editor FS: a project may
 // live anywhere (My Documents by default) and only $maps$ is remounted into it,
 // so FS.r_open on a project file always fails. Project bytes come off the disk
-// directly - the same reason images already load through DX11TextureFromFile.
+// directly - the same reason images already load through TextureTileFromFile.
 static bool ReadProjectFile(LPCSTR rel, xr_vector<u8>& out)
 {
 	out.clear();
@@ -222,9 +227,18 @@ static const SLibFile* LibFilesFor(u32 category, int& count)
 
 // keep at most this many live thumbnail textures
 static const u32 kThumbBudget = 512;
-// DARF only: a game install holds six figures of files, so one frame may
-// decode only this many new thumbnails. Tile submission is virtualized below.
-static const u32 kDarfThumbsPerFrame	= 16;
+// The milliseconds one frame may spend decoding pictures, one always goes: a game folder of 2048 px UI atlases fills
+// over a few frames instead of stopping one. Tile submission is virtualized below.
+static const u32 kThumbDecodeMs = 12;
+// a list row (pt), the picture at its start (pt) and the narrowest column the rows are laid out in (em)
+static const float kListRow			= 22.f;
+static const float kListPicture		= 18.f;
+static const float kListColumnEm	= 12.f;
+// between two tiles, and around a tile's square inside it (pt)
+static const float kTileGap			= 8.f;
+static const float kTilePad			= 4.f;
+// the grid's own padding above and below the tiles (pt)
+static const float kGridPadY		= 4.f;
 static const u32 kNavigationHistoryLimit = 64;
 
 static bool SameLocation(const UIContentBrowser::SLocation& lhs,
@@ -291,13 +305,142 @@ static bool NormalizeFolderPath(LPCSTR input, xr_string& out, xr_string& err)
 	return true;
 }
 
-static ImVec4 ThemeColor(XFinedTheme::ColorToken token, float alpha = 1.0f)
+static ImU32 ThemeCol(Token token, float alpha = 1.f)
 {
-	const u32 rgb = XFinedTheme::Rgb(token);
-	return ImVec4(float((rgb >> 16) & 0xff) / 255.0f,
-		float((rgb >> 8) & 0xff) / 255.0f,
-		float(rgb & 0xff) / 255.0f, alpha);
+	return XFinedTheme::U32(token, alpha);
 }
+
+// a coordinate on the pixel grid (imgui_internal's IM_ROUND stays inside XrEUI)
+static float PxRound(float v)
+{
+	return floorf(v + .5f);
+}
+
+static xr_string Span(LPCSTR begin, LPCSTR end)
+{
+	xr_string out;
+	out.assign(begin, end);
+	return out;
+}
+
+// The glyph a tile draws while it has no picture: the editor's own kinds first, then the file type. An
+// Editor Content entry is a library reference without an extension, so its category says what it is.
+static XUI::Icon TileIcon(LPCSTR entry, bool folder, int source, u32 category)
+{
+	if (folder)
+		return XUI::Icon::Folder;
+	if (const EditorAssetIcons::EKind kind = IconOf(entry, source))
+		return EditorAssetIcons::IconFor(kind);
+	LPCSTR leaf = strrchr(entry, '\\');
+	LPCSTR ext = strrchr(leaf ? leaf : entry, '.');
+	if (!ext && 1 == source)
+	{
+		if (kLevelsCategoryId == category)
+			return XUI::Icon::Level;
+		switch (category)
+		{
+		case smObject:		return XUI::Icon::SceneObject;
+		case smGroup:		return XUI::Icon::Group;
+		case smVisual:		return XUI::Icon::FileModel;
+		case smTexture:
+		case smTextureRaw:	return XUI::Icon::FileTexture;
+		case smPE:			return XUI::Icon::Particles;
+		case smSoundSource:	return XUI::Icon::FileSound;
+		case smEntityType:	return XUI::Icon::Spawn;
+		case smLAnim:		return XUI::Icon::Light;
+		}
+		return XUI::Icon::File;
+	}
+	if (!ext)
+		return XUI::Icon::File;
+	struct SType { LPCSTR ext; XUI::Icon icon; };
+	static const SType kTypes[] =
+	{
+		{ ".dds", XUI::Icon::FileTexture }, { ".tga", XUI::Icon::FileTexture }, { ".png", XUI::Icon::FileTexture },
+		{ ".jpg", XUI::Icon::FileTexture }, { ".jpeg", XUI::Icon::FileTexture }, { ".bmp", XUI::Icon::FileTexture },
+		{ ".ogf", XUI::Icon::FileModel }, { ".object", XUI::Icon::FileModel }, { ".omf", XUI::Icon::FileModel },
+		{ ".ogg", XUI::Icon::FileSound }, { ".wav", XUI::Icon::FileSound },
+		{ ".script", XUI::Icon::FileScript }, { ".lua", XUI::Icon::FileScript },
+		{ ".ltx", XUI::Icon::FileConfig }, { ".ltxp", XUI::Icon::FileConfig }, { ".ini", XUI::Icon::FileConfig },
+		{ ".xml", XUI::Icon::FileXml }, { ".xmlp", XUI::Icon::FileXml },
+		{ ".txt", XUI::Icon::FileText }, { ".md", XUI::Icon::FileText }, { ".log", XUI::Icon::FileText },
+		{ ".seq", XUI::Icon::FileText },
+		{ ".zip", XUI::Icon::FileArchive }, { ".7z", XUI::Icon::FileArchive }, { ".rar", XUI::Icon::FileArchive },
+		{ ".level", XUI::Icon::Level }, { ".group", XUI::Icon::Group },
+	};
+	for (const SType& type : kTypes)
+		if (!_stricmp(ext, type.ext))
+			return type.icon;
+	// the game's archives: .db0 ... .db9, .xdb0 ..., gamedata.dbN
+	if (!_strnicmp(ext, ".db", 3) || !_strnicmp(ext, ".xdb", 4))
+		return XUI::Icon::FileArchive;
+	return XUI::Icon::File;
+}
+
+// A glyph the way the editor's own asset icons sit in a tile (EditorAssetIcons::Draw): 58% of the square,
+// stopping at 48 pt, where the stroke only gets heavier.
+static void DrawTileGlyph(ImDrawList* dl, XUI::Icon icon, const ImVec2& a, const ImVec2& b, ImU32 col)
+{
+	const float side = _min(_min(b.x - a.x, b.y - a.y) * .58f * 16.f / 14.f, XUI::Pt(48.f));
+	if (side < 4.f)
+		return;
+	const ImVec2 at(PxRound((a.x + b.x - side) * .5f), PxRound((a.y + b.y - side) * .5f));
+	XUI::DrawIconRect(dl, icon, at, ImVec2(at.x + side, at.y + side), col);
+}
+
+// The checkerboard every image editor puts under transparency. Without it a texture that is mostly clear - a UI atlas,
+// a cursor - is a dark square nobody tells from a tile with no picture. Cells of 8 pt, down to 4 in a small picture.
+static void DrawChecker(ImDrawList* dl, const ImVec2& a, const ImVec2& b)
+{
+	const float w = b.x - a.x, h = b.y - a.y;
+	if (w < 1.f || h < 1.f)
+		return;
+	const float cell = _max(2.f, PxRound(clampr(_max(w, h) / 8.f, XUI::Pt(4.f), XUI::Pt(8.f))));
+	dl->AddRectFilled(a, b, ThemeCol(Token::Border));
+	const ImU32 light = ThemeCol(Token::BorderStrong);
+	int row = 0;
+	for (float y = a.y; y < b.y; y += cell, ++row)
+		for (float x = a.x + ((row & 1) ? cell : 0.f); x < b.x; x += cell * 2.f)
+			dl->AddRectFilled(ImVec2(x, y), ImVec2(_min(x + cell, b.x), _min(y + cell, b.y)), light);
+}
+
+// A picture fitted into a..b, never stretched, transparency on the checkerboard
+static void DrawPicture(ImDrawList* dl, ImTextureID tex, float aspect, bool alpha, const ImVec2& a, const ImVec2& b)
+{
+	const float w = b.x - a.x, h = b.y - a.y;
+	if (w < 1.f || h < 1.f || aspect <= 0.f)
+		return;
+	// the box is wider than the picture: its height sets the size
+	const bool by_height = w / h > aspect;
+	const float fw = by_height ? h * aspect : w;
+	const float fh = by_height ? h : w / aspect;
+	const ImVec2 fa(PxRound(a.x + (w - fw) * .5f), PxRound(a.y + (h - fh) * .5f));
+	const ImVec2 fb(fa.x + _max(1.f, PxRound(fw)), fa.y + _max(1.f, PxRound(fh)));
+	if (alpha)
+		DrawChecker(dl, fa, fb);
+	dl->AddImage(tex, fa, fb);
+}
+
+static void ReleaseThumbTexture(ImTextureID tex)
+{
+	if (!tex)
+		return;
+#if defined(USE_DX11)
+	// ImTextureID is already the view type here - no cast needed
+	tex->Release();
+#else
+	((IDirect3DBaseTexture9*)tex)->Release();
+#endif
+}
+
+// One UTF-8 character's length from its lead byte
+static int Utf8Len(char lead)
+{
+	const u8 c = u8(lead);
+	return c < 0xC0 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+}
+
+static const char* const kEllipsis = "\xE2\x80\xA6";
 
 UIContentBrowser::UIContentBrowser()
 {
@@ -307,7 +450,16 @@ UIContentBrowser::UIContentBrowser()
 	// on; the shared library is a place you go to fetch from
 	m_Source		= 0;
 	m_NeedRefresh	= true;
-	m_TileSize		= 96.f;
+	m_TileSize[kHostDrawer]		= 0.f;
+	m_TileSize[kHostPanel]		= 0.f;
+	m_GridHeight[kHostDrawer]	= 0.f;
+	m_GridHeight[kHostPanel]	= 0.f;
+	m_ListView[kHostDrawer]	= false;
+	m_ListView[kHostPanel]	= true;
+	m_Host			= kHostDrawer;
+	m_PanelFrame	= -1;
+	m_PanelLive		= false;
+	m_RaiseFrames	= 0;
 	m_Tick			= 0;
 	m_ClipSource		= -1;
 	m_ClipCategory		= u32(-1);
@@ -316,18 +468,19 @@ UIContentBrowser::UIContentBrowser()
 	m_HasPendingRange	= false;
 	m_ViewDirty			= true;
 	m_ScrollToSelection	= false;
-	m_ConfirmDelete		= false;
 	m_RenameBuf[0]		= 0;
 	m_RenameFocus		= false;
 	m_RenameSelect		= -1;
 	m_RenameStem		= 0;
 	m_Marquee		= false;
 	m_MarqueeStart	= ImVec2(0, 0);
-	// preferences may not exist yet when the browser is constructed at startup
-	if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
-		m_TreeWidth	= float(prefs->ContentBrowserTreeWidth);
-	else
-		m_TreeWidth	= 220.f;
+	m_ViewLoaded	= false;
+	m_SourcesPane	= true;
+	m_SourcesFit	= true;
+	m_SourcesShown	= false;
+	m_Search[0]		= 0;
+	m_ViewFolders	= 0;
+	m_ViewFiles		= 0;
 	m_Root.name		= "Content";
 	m_Root.path		= "";
 	m_DarfReady		= false;
@@ -352,12 +505,72 @@ void UIContentBrowser::Close()
 	xr_delete(Form);
 }
 
-void UIContentBrowser::Update()
+void UIContentBrowser::Tick()
 {
-	if (!Form) return;
+	if (!Form)
+		return;
 	Form->UpdateWatcher();
-	Form->Draw();
-	if (Form->IsClosed()) Close();
+	// Runs after the frame's panels. Taken while Level is up and kept while a document is: activating Level and
+	// asking for the browser before a frame has passed still finds the panel it will draw. A frame of slack
+	// covers a panel drawn after this.
+	if (XUI::Shell::IsActive("level"))
+		Form->m_PanelLive = Form->bOpen && Form->m_PanelFrame + 1 >= ImGui::GetFrameCount();
+}
+
+void UIContentBrowser::DrawPanel()
+{
+	// a closed panel keeps the browser: the drawer shows the same one
+	if (Form && Form->bOpen)
+		Form->Draw();
+}
+
+void UIContentBrowser::DrawDrawer()
+{
+	if (!Form)
+	{
+		Form = xr_new<UIContentBrowser>();
+		Form->bOpen = false;
+	}
+	Form->m_Host = kHostDrawer;
+	Form->DrawBody();
+}
+
+bool UIContentBrowser::PanelLive()
+{
+	return Form && Form->bOpen && Form->m_PanelLive && XUI::Shell::IsActive("level");
+}
+
+int UIContentBrowser::TargetHost()
+{
+	return PanelLive() ? kHostPanel : kHostDrawer;
+}
+
+void UIContentBrowser::MakeVisible()
+{
+	if (!Form)
+	{
+		Form = xr_new<UIContentBrowser>();
+		Form->bOpen = false;
+	}
+	// Level draws the panel - docked in the strip, possibly behind the Output Log's tab, or floating: that
+	// is where it comes up, never a drawer over it
+	if (PanelLive())
+	{
+		XUI::Shell::CloseDrawer();
+		XUI::Shell::FocusWindow(PanelName());
+		Form->m_RaiseFrames = 2;
+		return;
+	}
+	XUI::Shell::OpenDrawer(XUI::Shell::DrawerContent);
+}
+
+LPCSTR UIContentBrowser::VisibleHost()
+{
+	if (XUI::Shell::OpenedDrawer() == XUI::Shell::DrawerContent)
+		return "drawer";
+	if (PanelLive() && (Form->m_RaiseFrames > 0 || XUI::Shell::WindowShown(PanelName())))
+		return "panel";
+	return "none";
 }
 
 LPCSTR UIContentBrowser::DraggedAsset()
@@ -450,7 +663,7 @@ bool UIContentBrowser::ApplyLocation(SLocation location, bool record, xr_string&
 		if (m_Source == 2)
 		{
 			m_DarfReady = false;
-			m_DarfStatus = "mounting the linked game install...";
+			m_DarfStatus = "Reading the linked game.";
 		}
 		EnsureListing();
 	}
@@ -540,11 +753,10 @@ bool UIContentBrowser::GoForward(xr_string& err)
 
 bool UIContentBrowser::GoUp(xr_string& err)
 {
+	// the root has no parent: already where Up leads, which is no failure
+	err.clear();
 	if (m_CurFolder.empty())
-	{
-		err = "already at the source root";
-		return false;
-	}
+		return true;
 
 	xr_string parent = m_CurFolder;
 	if (LPCSTR cut = strrchr(parent.c_str(), '\\'))
@@ -556,11 +768,7 @@ bool UIContentBrowser::GoUp(xr_string& err)
 
 bool UIContentBrowser::GoHome(xr_string& err)
 {
-	if (m_CurFolder.empty())
-	{
-		err = "already at the source root";
-		return false;
-	}
+	// at the root already this changes nothing and succeeds
 	return ApplyLocation(SLocation(m_Source, int(m_Category), ""), true, err);
 }
 
@@ -632,6 +840,14 @@ bool UIContentBrowser::NavigateHome(xr_string& err)
 	Show();
 	if (!Form) { err = "content browser unavailable"; return false; }
 	return Form->GoHome(err);
+}
+
+void UIContentBrowser::RefreshNow()
+{
+	Show();
+	if (!Form) return;
+	Form->m_NeedRefresh = true;
+	Form->EnsureListing();
 }
 
 int UIContentBrowser::FindFavorite(const SLocation& location) const
@@ -811,13 +1027,7 @@ bool UIContentBrowser::NavigateFavorite(int index, xr_string& err)
 void UIContentBrowser::DropCache()
 {
 	for (ThumbMapIt it = m_Thumbs.begin(); it != m_Thumbs.end(); ++it)
-		if (it->second.tex)
-#if defined(USE_DX11)
-			// ImTextureID is already the view type here - no cast needed
-			it->second.tex->Release();
-#else
-			((IDirect3DBaseTexture9*)it->second.tex)->Release();
-#endif
+		ReleaseThumbTexture(it->second.tex);
 	m_Thumbs.clear();
 	ClearVisualThumbnailQueue();
 }
@@ -832,60 +1042,94 @@ static bool ContentAbsolutePathFits(LPCSTR base, size_t relative_length)
 	return xr_strlen(base) + 1 + relative_length < sizeof(string_path);
 }
 
-// A tile caption over `max_lines` lines. It breaks where a name breaks for a reader:
-// after a space, '_', '-', '.' or ',', and between the words of a CamelCase name
-// (NewBehaviour -> New / Behaviour). Mid-word only when one word is wider than the
-// tile. What still does not fit ends in "..." - the tooltip has the full name.
-static void DrawTileCaption(ImDrawList* dl, const ImVec2& p, float width, int max_lines, ImU32 col,
-							LPCSTR text, LPCSTR end)
+// A tile caption over up to `max_lines` lines, each centred on the tile (`centre`; a list row's name starts at the
+// left). It breaks where a name breaks for a reader: after a space, '_', '-', '.' or ',', and between the words of a
+// CamelCase name (NewBehaviour -> New / Behaviour); mid-word only when one word is wider than the tile. Never right
+// before the extension: "bytil_wnd.dds" goes as "bytil_" / "wnd.dds". A last line that does not fit
+// keeps the extension and loses the middle of the name - the tooltip has all of it.
+static void DrawTileCaption(ImDrawList* dl, ImFont* font, float size, const ImVec2& p, float width, int max_lines,
+							ImU32 col, LPCSTR text, LPCSTR end, bool has_ext, bool centre)
 {
 	if (!end) end = text + xr_strlen(text);
-	ImFont* font = ImGui::GetFont();
-	const float size = ImGui::GetFontSize();
-	const float line_h = ImGui::GetTextLineHeight();
-	const float dots_w = ImGui::CalcTextSize("...").x;
+	auto width_of = [&](LPCSTR a, LPCSTR b) { return font->CalcTextSizeA(size, FLT_MAX, 0.f, a, b).x; };
+	auto put = [&](int line, LPCSTR a, LPCSTR b)
+	{
+		const float x = centre ? p.x + _max(0.f, (width - width_of(a, b)) * .5f) : p.x;
+		dl->AddText(font, size, ImVec2(PxRound(x), PxRound(p.y + line * size)), col, a, b);
+	};
+	// where the extension starts: no line may begin at it or inside it
+	LPCSTR ext = nullptr;
+	if (has_ext)
+		for (LPCSTR q = end - 1; q > text; --q)
+			if ('.' == *q)
+			{
+				ext = q;
+				break;
+			}
 	auto lower = [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); };
 	auto upper = [](char c) { return c >= 'A' && c <= 'Z'; };
+
 	LPCSTR start = text;
 	for (int line = 0; line < max_lines && start < end; ++line)
 	{
-		while (start < end && *start == ' ') ++start;
+		while (start < end && ' ' == *start) ++start;
 		if (start >= end) break;
-		const bool last = (line == max_lines - 1);
-		float w = 0.f;
-		LPCSTR at = start, brk = 0;
-		while (at < end)
+		if (width_of(start, end) <= width)
 		{
-			// one UTF-8 character: its lead byte says how many bytes it takes
-			const u8 lead = (u8)*at;
-			const int n = lead < 0xC0 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
-			LPCSTR next = (at + n <= end) ? at + n : end;
-			const float cw = ImGui::CalcTextSize(at, next).x;
-			// one character always goes, however narrow the tile
-			if (w + cw > width && at > start) break;
-			w += cw;
-			if (next < end && (strchr(" _-.,", *at) || (lower(*at) && upper(*next)))) brk = next;
+			put(line, start, end);
+			break;
+		}
+		if (line == max_lines - 1)
+		{
+			// the rest does not fit: the extension stays whole, the name gives up its middle
+			const bool keep_ext = ext && ext > start;
+			const float tail_w = keep_ext ? width_of(ext, end) : 0.f;
+			const float room = width - width_of(kEllipsis, nullptr) - tail_w;
+			LPCSTR head_end = keep_ext ? ext : end;
+			LPCSTR fit = start;
+			if (room > 0.f)
+				font->CalcTextSizeA(size, room, 0.f, start, head_end, &fit);
+			xr_string shown = Span(start, fit);
+			shown += kEllipsis;
+			if (keep_ext && room > 0.f)
+				shown.append(ext, end);
+			else if (keep_ext)
+			{
+				// not even the extension fits: the end goes instead
+				shown.clear();
+				font->CalcTextSizeA(size, _max(0.f, width - width_of(kEllipsis, nullptr)), 0.f, start, end, &fit);
+				shown.assign(start, fit);
+				shown += kEllipsis;
+			}
+			put(line, shown.c_str(), shown.c_str() + shown.size());
+			XUI::AuditTruncated(Span(text, end).c_str(), shown.c_str(), ImVec2(p.x, p.y + line * size),
+				ImVec2(p.x + width, p.y + (line + 1) * size));
+			break;
+		}
+		// what fits, then the last place a reader would break it
+		LPCSTR fit = start;
+		font->CalcTextSizeA(size, width, 0.f, start, end, &fit);
+		if (fit <= start)
+			fit = _min(end, start + Utf8Len(*start));
+		LPCSTR brk = nullptr;
+		for (LPCSTR at = start; at < fit;)
+		{
+			LPCSTR next = _min(end, at + Utf8Len(*at));
+			if (next <= fit && next < end && (!ext || next < ext) &&
+				(strchr(" _-.,", *at) || (lower(*at) && upper(*next))))
+				brk = next;
 			at = next;
 		}
-		LPCSTR cut = at;
-		bool dots = false;
-		if (at < end)
+		LPCSTR cut = brk ? brk : fit;
+		// a word wider than the tile is cut where it stops fitting - still short of its extension
+		if (ext && cut >= ext && !brk)
 		{
-			if (last)
-			{
-				// the rest does not fit: room for the dots, taken off the end
-				dots = true;
-				while (cut > start && ImGui::CalcTextSize(start, cut).x + dots_w > width)
-				{
-					--cut;
-					while (cut > start && (*(const u8*)cut & 0xC0) == 0x80) --cut;
-				}
-			}
-			else if (brk) cut = brk;
+			LPCSTR back = ext - 1;
+			while (back > start && (u8(*back) & 0xC0) == 0x80) --back;
+			if (back > start)
+				cut = back;
 		}
-		const ImVec2 at_line(p.x, p.y + line * line_h);
-		dl->AddText(font, size, at_line, col, start, cut);
-		if (dots) dl->AddText(font, size, ImVec2(at_line.x + ImGui::CalcTextSize(start, cut).x, at_line.y), col, "...");
+		put(line, start, cut);
 		start = cut;
 	}
 }
@@ -1153,7 +1397,7 @@ void UIContentBrowser::EnsureListing()
 		if (invalidate_darf)
 		{
 			m_DarfReady = false;
-			m_DarfStatus = "mounting the linked game install...";
+			m_DarfStatus = "Reading the linked game.";
 		}
 
 		if ((m_Source == 0 && invalidate_project) || (m_Source == 2 && invalidate_darf))
@@ -1226,7 +1470,7 @@ void UIContentBrowser::Refresh()
 
 			// The module's own machinery - the manifest and what export
 			// generates - is not content and must not be deletable by a stray
-			// Ctrl+A + Del. It is edited through Mod > Edit Manifest, and the
+			// Ctrl+A + Del. It is edited through Mod Settings, and the
 			// generated files follow the manifest on their own.
 			xr_vector<xr_string> owned;
 			EditorMod::GetOwnedFiles(EditorProject::Root(), owned);
@@ -1239,12 +1483,12 @@ void UIContentBrowser::Refresh()
 				else		++k;
 			}
 		}
-		m_Root.name = "Content";
+		m_Root.name = "Project";
 	}
 	else if (m_Source == 2)
 	{
 		// linked game install: archives + loose gamedata as one virtual tree
-		m_Root.name = "DARF Content";
+		m_Root.name = "Game";
 		xr_string err;
 		m_DarfReady = EditorGameContent::EnsureMounted(err);
 		if (m_DarfReady)
@@ -1257,9 +1501,8 @@ void UIContentBrowser::Refresh()
 		}
 		else
 		{
-			m_DarfStatus  = "DARF Content is unavailable: ";
+			m_DarfStatus  = "The linked game could not be read: ";
 			m_DarfStatus += err;
-			m_DarfStatus += ".";
 		}
 	}
 	else if (kCategories[m_Category].id == kLevelsCategoryId)
@@ -1484,17 +1727,156 @@ void UIContentBrowser::RequestModelThumbnail(LPCSTR name)
 	}
 }
 
-ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
+// width / height of a thumbnail: a picture that is not square keeps its shape in the tile
+static float TextureAspect(ImTextureID tex)
+{
+	float aspect = 1.f;
+#if defined(USE_DX11)
+	ID3D11Resource* resource = nullptr;
+	if (tex)
+		tex->GetResource(&resource);
+	if (resource)
+	{
+		ID3D11Texture2D* texture = nullptr;
+		if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&texture)) && texture)
+		{
+			D3D11_TEXTURE2D_DESC desc;
+			texture->GetDesc(&desc);
+			if (desc.Width && desc.Height)
+				aspect = float(desc.Width) / float(desc.Height);
+			texture->Release();
+		}
+		resource->Release();
+	}
+#endif
+	return aspect;
+}
+
+// Pictures are decoded inline - one is quick, and a model render goes through its queue anyway - but never more than
+// the frame's budget: a folder of large textures fills over a few frames.
+bool UIContentBrowser::TakeDecodeTurn()
+{
+	if (!m_ThumbsThisFrame)
+		m_ThumbClock.Start();
+	else if (m_ThumbClock.GetElapsed_ms() >= kThumbDecodeMs)
+		return false;
+	++m_ThumbsThisFrame;
+	return true;
+}
+
+bool UIContentBrowser::MakeImageThumb(LPCSTR name, u32 side, SThumb& t)
+{
+	t = SThumb();
+	t.last_used = m_Tick;
+#if defined(USE_DX11)
+	STextureTile tile;
+	bool made = false;
+	if (IsGameSource())
+	{
+		// archive-backed files have no disk path: the bytes come through the private VFS
+		const int idx = EditorGameContent::Find(name);
+		u32 sz = 0;
+		u8* bytes = (idx >= 0) ? EditorGameContent::ReadBytes(idx, sz) : 0;
+		made = bytes && sz && TextureTileFromMemory(bytes, sz, side, tile);
+		EditorGameContent::FreeBytes(bytes);
+	}
+	else if (EditorProject::Active())
+	{
+		const xr_string abs = xr_string(EditorProject::Root()) + "\\" + name;
+		made = TextureTileFromFile(abs.c_str(), side, tile);
+	}
+	if (made)
+		t.tex = DX11TextureFromPixels(tile.pixels.data(), tile.w, tile.h);
+	if (!t.tex)
+		return false;
+	t.aspect	= float(tile.w) / float(tile.h);
+	t.side		= side;
+	t.edge		= _max(tile.w, tile.h);
+	t.full		= t.edge >= _max(tile.src_w, tile.src_h);
+	t.alpha		= tile.alpha;
+	t.src_w		= tile.src_w;
+	t.src_h		= tile.src_h;
+	return true;
+#else
+	IDirect3DTexture9* tex = 0;
+	if (IsGameSource())
+	{
+		const int idx = EditorGameContent::Find(name);
+		u32 sz = 0;
+		u8* bytes = (idx >= 0) ? EditorGameContent::ReadBytes(idx, sz) : 0;
+		if (bytes && sz)
+			D3DXCreateTextureFromFileInMemoryEx(HW.pDevice, bytes, sz, D3DX_DEFAULT, D3DX_DEFAULT, 1, 0, D3DFMT_X8R8G8B8,
+				D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &tex);
+		EditorGameContent::FreeBytes(bytes);
+	}
+	else if (EditorProject::Active())
+	{
+		const xr_string abs = xr_string(EditorProject::Root()) + "\\" + name;
+		D3DXCreateTextureFromFileExA(HW.pDevice, abs.c_str(), D3DX_DEFAULT, D3DX_DEFAULT, 1, 0, D3DFMT_X8R8G8B8,
+			D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &tex);
+	}
+	t.tex = tex;
+	t.aspect = TextureAspect(t.tex);
+	return !!t.tex;
+#endif
+}
+
+// Evict the coldest entry once the budget is blown - but NEVER one touched this frame. A tile drawn this frame has its
+// view recorded in an ImGui draw list that has not been rendered yet; releasing it here hands the driver a freed
+// pointer at render time, which is exactly the flaky igd10um64xe crash a folder bigger than the budget (prop: 759
+// textures vs 512) produced. Strict '<' against m_Tick is the whole fix: a folder that outgrows the budget simply
+// keeps its tiles cached while it is on screen.
+const UIContentBrowser::SThumb* UIContentBrowser::StoreThumb(const shared_str& key, const SThumb& t)
+{
+	if (m_Thumbs.size() >= kThumbBudget)
+	{
+		u32 oldest = m_Tick;
+		ThumbMapIt victim = m_Thumbs.end();
+		for (ThumbMapIt i = m_Thumbs.begin(); i != m_Thumbs.end(); ++i)
+			if (i->second.last_used < oldest) { oldest = i->second.last_used; victim = i; }
+		if (victim != m_Thumbs.end())
+		{
+			ReleaseThumbTexture(victim->second.tex);
+			m_Thumbs.erase(victim);
+		}
+	}
+	return &m_Thumbs.insert(mk_pair(key, t)).first->second;
+}
+
+const UIContentBrowser::SThumb* UIContentBrowser::GetThumb(LPCSTR name, float px)
 {
 	shared_str key(name);
+	// What an image's picture is made for: the power of two at or over the px it is drawn at, so it is never shrunk
+	// to half or less - ImGui samples one level, and at 1:20 a 2048 px atlas loses its thin lines.
+	u32 want = 32;
+	while (want < 512 && float(want) < px)
+		want <<= 1;
+
 	ThumbMapIt it = m_Thumbs.find(key);
 	if (it != m_Thumbs.end())
 	{
-		it->second.last_used = m_Tick;
-		return it->second.tex;
+		SThumb& cached = it->second;
+		// Drawn at another size, an image gets a picture made for it once the frame has the time; the old one shows
+		// meanwhile. Never one drawn this frame already: its view waits in a draw list not rendered yet.
+		const bool remake = cached.side && cached.last_used != m_Tick &&
+			((want > cached.side && !cached.full) || (want < cached.side && cached.edge > want));
+		cached.last_used = m_Tick;
+		if (remake && TakeDecodeTurn())
+		{
+			SThumb made;
+			if (MakeImageThumb(name, want, made))
+			{
+				ReleaseThumbTexture(cached.tex);
+				cached = made;
+			}
+			else
+				cached.side = 0;	// the file went meanwhile: the picture there is stays, and nobody asks again
+		}
+		return &cached;
 	}
 
-	ImTextureID tex = 0;
+	SThumb t;
+	t.last_used = m_Tick;
 
 	// Models are never rendered here: the request goes into a queue that the
 	// frame loop drains outside the scene (see EThumbnailVisual.h). Rendering
@@ -1509,122 +1891,62 @@ ImTextureID UIContentBrowser::GetThumb(LPCSTR name)
 	{
 		U32Vec	pixels;
 		bool	failed = false;
-		if (TakeVisualThumbnail(name, pixels, failed))
+		if (!TakeVisualThumbnail(name, pixels, failed))
 		{
-			// a failed render caches a null texture, so it is not asked for again
-			tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
-			SThumb t; t.tex = tex; t.last_used = m_Tick;
-			m_Thumbs.insert(mk_pair(key, t));
-			return tex;
+			RequestModelThumbnail(name);
+			return nullptr;	// not cached: the tile retries until the queue answers
 		}
-		RequestModelThumbnail(name);
-		return 0;	// not cached: the tile retries until the queue answers
+		// a failed render caches a null texture, so it is not asked for again
+		t.tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+		t.aspect = TextureAspect(t.tex);
+		return StoreThumb(key, t);
 	}
 
-	// image decoding stays inline - it is cheap - but the DARF tree is huge, so
-	// it keeps its per-frame budget
-	if (m_Source == 2 && m_ThumbsThisFrame >= kDarfThumbsPerFrame)
-		return 0;
-
-	if (m_Source == 2)
-	{
-		// archive-backed files have no disk path: pull the bytes through the
-		// private VFS and let D3DX decode them. Unknown types cache a null
-		// texture, so the tile falls back to a plain name button.
-		const int idx = IsImageExt(name) ? EditorGameContent::Find(name) : -1;
-		u32 sz = 0;
-		u8* bytes = (idx >= 0) ? EditorGameContent::ReadBytes(idx, sz) : 0;
-		if (bytes && sz)
-		{
-#if defined(USE_DX11)
-			tex = DX11TextureFromMemory(bytes, sz);
-#else
-			IDirect3DTexture9* t = 0;
-			if (SUCCEEDED(D3DXCreateTextureFromFileInMemoryEx(HW.pDevice, bytes, sz,
-				D3DX_DEFAULT, D3DX_DEFAULT, 1, 0, D3DFMT_X8R8G8B8, D3DPOOL_MANAGED,
-				D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &t)))
-				tex = t;
-#endif
-		}
-		EditorGameContent::FreeBytes(bytes);
-		m_ThumbsThisFrame++;
-	}
-	else if (m_Source == 0)
+	// An image of the project or the game gets its picture; any other file caches a null one and the tile draws its
+	// glyph. The game tree dwarfs the SDK one and a UI atlas is 2048 px: the frame's budget spreads the decoding.
+	if (1 != m_Source)
 	{
 		if (IsImageExt(name))
 		{
-			// project files: direct image load for the formats the decoder knows
-			char abs[MAX_PATH];
-			sprintf_s(abs, "%s\\%s", EditorProject::Root(), name);
-#if defined(USE_DX11)
-			tex = DX11TextureFromFile(abs);
-#else
-			IDirect3DTexture9* t = 0;
-			if (SUCCEEDED(D3DXCreateTextureFromFileExA(HW.pDevice, abs, D3DX_DEFAULT, D3DX_DEFAULT, 1, 0,
-				D3DFMT_X8R8G8B8, D3DPOOL_MANAGED, D3DX_FILTER_LINEAR, D3DX_FILTER_NONE, 0, NULL, NULL, &t)))
-				tex = t;
-#endif
+			if (!TakeDecodeTurn())
+				return nullptr;
+			MakeImageThumb(name, want, t);
 		}
+		return StoreThumb(key, t);
 	}
-	else
+
+	const bool object = kCategories[m_Category].id == smObject;
+	bool object_result = false;
+	ImTextureID tex = 0;
+	if (object)
 	{
-		const bool object = kCategories[m_Category].id == smObject;
-		bool object_result = false;
-		if (object)
+		U32Vec pixels;
+		bool failed = false;
+		if (TakeVisualThumbnail(name, pixels, failed))
 		{
-			U32Vec pixels;
-			bool failed = false;
-			if (TakeVisualThumbnail(name, pixels, failed))
-			{
-				tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
-				object_result = true;
-			}
-			else if (HasVisualThumbnailRequest(name))
-				return 0;
+			tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+			object_result = true;
 		}
-
-		if (!object_result)
-		{
-			SChooseEvents* E = UIChooseForm::GetEvents(kCategories[m_Category].id);
-			if (E && E->on_get_texture) E->on_get_texture(name, tex);
-
-			// Roughly half of the shipped .object files have no baked .thm, so their
-			// tiles stayed blank. Render those instead of giving up.
-			if (!tex && object)
-			{
-				QueueObjectThumbnail(name, name);
-				return 0;	// retry next frame, do not cache a miss
-			}
-		}
+		else if (HasVisualThumbnailRequest(name))
+			return nullptr;
 	}
 
-	// Evict the coldest entry once the budget is blown - but NEVER one touched
-	// this frame. A tile drawn this frame has its view recorded in an ImGui
-	// draw list that has not been rendered yet; releasing it here hands the
-	// driver a freed pointer at render time, which is exactly the flaky
-	// igd10um64xe crash a folder bigger than the budget (prop: 759 textures vs
-	// 512) produced. Strict '<' against m_Tick is the whole fix: a folder that
-	// outgrows the budget simply keeps its tiles cached while it is on screen.
-	if (m_Thumbs.size() >= kThumbBudget)
+	if (!object_result)
 	{
-		u32 oldest = m_Tick;
-		ThumbMapIt victim = m_Thumbs.end();
-		for (ThumbMapIt i = m_Thumbs.begin(); i != m_Thumbs.end(); ++i)
-			if (i->second.last_used < oldest) { oldest = i->second.last_used; victim = i; }
-		if (victim != m_Thumbs.end())
+		SChooseEvents* E = UIChooseForm::GetEvents(kCategories[m_Category].id);
+		if (E && E->on_get_texture) E->on_get_texture(name, tex);
+
+		// Roughly half of the shipped .object files have no baked .thm, so their
+		// tiles stayed blank. Render those instead of giving up.
+		if (!tex && object)
 		{
-#if defined(USE_DX11)
-			if (victim->second.tex) victim->second.tex->Release();
-#else
-			if (victim->second.tex) ((IDirect3DBaseTexture9*)victim->second.tex)->Release();
-#endif
-			m_Thumbs.erase(victim);
+			QueueObjectThumbnail(name, name);
+			return nullptr;	// retry next frame, do not cache a miss
 		}
 	}
-
-	SThumb t; t.tex = tex; t.last_used = m_Tick;
-	m_Thumbs.insert(mk_pair(key, t));
-	return tex;
+	t.tex = tex;
+	t.aspect = TextureAspect(tex);
+	return StoreThumb(key, t);
 }
 
 //------------------------------------------------------------------------------
@@ -1670,11 +1992,13 @@ static bool PathIsAncestor(const xr_string& parent, const xr_string& path)
 
 void UIContentBrowser::DrawFolder(SFolder& f)
 {
+	const bool root	= &f == &m_Root;
 	const bool leaf	= f.children.empty();
-	int flags		= ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+	int flags		= ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+					  ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
 	if (leaf)					flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 	if (m_CurFolder == f.path)	flags |= ImGuiTreeNodeFlags_Selected;
-	if (&f == &m_Root)			flags |= ImGuiTreeNodeFlags_DefaultOpen;
+	if (root)					flags |= ImGuiTreeNodeFlags_DefaultOpen;
 
 	// a reveal drops the browser into a folder this tree may have collapsed -
 	// open the chain down to it, so the pane agrees with the grid beside it
@@ -1685,24 +2009,45 @@ void UIContentBrowser::DrawFolder(SFolder& f)
 	const EditorMod::EShipState ship = (m_Source == 0 && EditorProject::Active() && !f.path.empty())
 		? EditorMod::ShipState(EditorProject::Root(), f.path.c_str()) : EditorMod::shipShipped;
 	const bool veiled = ship == EditorMod::shipExcluded || ship == EditorMod::shipExcludedByRule;
-	if (veiled)	ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-	const bool open = ImGui::TreeNodeEx(f.name.c_str(), flags);
-	if (veiled)	ImGui::PopStyleColor();
-	if (ImGui::IsItemClicked())
+
+	// the node carries no label: the icon and a name cut to the pane follow it on its line
+	const xr_string id = "##" + f.path;
+	const bool open = ImGui::TreeNodeEx(root ? "##root" : id.c_str(), flags);
+	const ImVec2 row_min = ImGui::GetItemRectMin(), row_max = ImGui::GetItemRectMax();
+	if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
 	{
 		xr_string err;
 		ApplyLocation(SLocation(m_Source, int(m_Category), f.path.c_str()), true, err);
 		// A folder is an entry like any other: clicking it in the tree selects
 		// it, so Delete / Copy / Rename act on it exactly as they do on a tile.
 		// The root has no path of its own and cannot be one of them.
-		if (!f.path.empty())	SelectEntry(f.path.c_str(), true, false, false);
-		else					ClearSelection();
+		if (!root)	SelectEntry(f.path.c_str(), true, false, false);
+		else		ClearSelection();
 	}
 	// the SAME menu the tiles get - a folder does not become a different thing
-	// because it is drawn on the left
-	if (!f.path.empty())	DrawEntryContextMenu(f.path.c_str(), true);
+	// because it is drawn on the left; its id is the folder's, not the tree level's
+	if (!root)
+	{
+		ImGui::PushID(f.path.c_str());
+		DrawEntryContextMenu(f.path.c_str(), true);
+		ImGui::PopID();
+	}
+	if (ImGui::IsItemHovered() && veiled)
+		XUI::Tip("Not shipped: mod.ltx [exclude] leaves it out of the build.");
+
+	ImGui::SameLine(0.f, 0.f);
+	const ImVec2 at = ImGui::GetCursorScreenPos();
+	const float icon = XUI::Pt(14.f);
+	XUI::DrawIcon(ImGui::GetWindowDrawList(), open && !leaf ? XUI::Icon::FolderOpen : XUI::Icon::Folder,
+		ImVec2(PxRound(at.x), PxRound((row_min.y + row_max.y - icon) * .5f)), 14.f,
+		ThemeCol(veiled ? Token::TextDisabled : Token::TextSecondary));
+	ImGui::SetCursorScreenPos(ImVec2(at.x + icon + XUI::Pt(6.f), at.y));
+	if (veiled)	ImGui::PushStyleColor(ImGuiCol_Text, ThemeCol(Token::TextMuted));
+	XUI::TextEllipsis(root ? RootLabel() : f.name.c_str());
+	if (veiled)	ImGui::PopStyleColor();
+
 	if (m_ScrollToSelection && f.path == m_CurFolder)
-		ScrollRectIntoView(ImGui::GetItemRectMin().y, ImGui::GetItemRectMax().y);
+		ScrollRectIntoView(row_min.y, row_max.y);
 
 	if (open && !leaf)
 	{
@@ -1962,14 +2307,18 @@ UIContentBrowser::SFolder* UIContentBrowser::FindFolder(LPCSTR path)
 	return 0;
 }
 
-float UIContentBrowser::TileWidth() const
-{
-	return m_TileSize + ImGui::GetStyle().FramePadding.x * 2.f;
-}
-
 void UIContentBrowser::InvalidateView()
 {
 	m_ViewDirty = true;
+}
+
+// the search has something to look for: spaces alone do not count
+static bool SearchActive(LPCSTR query)
+{
+	for (; query && *query; ++query)
+		if (' ' != *query && '\t' != *query)
+			return true;
+	return false;
 }
 
 void UIContentBrowser::RebuildView()
@@ -1977,27 +2326,77 @@ void UIContentBrowser::RebuildView()
 	if (!m_ViewDirty) return;
 	m_ViewDirty = false;
 	m_ViewOrder.clear();
+	m_ViewFolders = m_ViewFiles = 0;
 
 	SFolder* cur = FindFolder(m_CurFolder.c_str());
 	if (!cur) cur = &m_Root;
 
-	if (!m_Filter.IsActive())
+	// A search lists the folder shown and everything below it, matched on the path under that folder:
+	// "ui cursor" finds textures\ui\cursor.dds from textures.
+	const bool searching = SearchActive(m_Search);
+	const size_t below = cur->path.empty() ? 0 : cur->path.size() + 1;
+	auto passes = [&](LPCSTR path)
+	{
+		return !searching || XUI::Match(m_Search, xr_strlen(path) > below ? path + below : path);
+	};
+
+	if (!searching)
 	{
 		m_ViewOrder.reserve(cur->children.size() + cur->items.size());
 		for (u32 i = 0; i < cur->children.size(); ++i)
 			m_ViewOrder.push_back(SEntry(cur->children[i].path.c_str(), true));
 	}
+	else
+	{
+		xr_vector<SFolder*> stack;
+		for (u32 i = cur->children.size(); i-- > 0;)
+			stack.push_back(&cur->children[i]);
+		while (!stack.empty())
+		{
+			SFolder* f = stack.back();
+			stack.pop_back();
+			if (passes(f->path.c_str()))
+				m_ViewOrder.push_back(SEntry(f->path.c_str(), true));
+			for (u32 i = f->children.size(); i-- > 0;)
+				stack.push_back(&f->children[i]);
+		}
+	}
+	m_ViewFolders = int(m_ViewOrder.size());
 
 	xr_vector<int> ids;
-	CollectItems(*cur, ids, m_Filter.IsActive());
-	if (m_ViewOrder.capacity() < m_ViewOrder.size() + ids.size())
-		m_ViewOrder.reserve(m_ViewOrder.size() + ids.size());
+	CollectItems(*cur, ids, searching);
+	m_ViewOrder.reserve(m_ViewOrder.size() + ids.size());
 	for (u32 i = 0; i < ids.size(); ++i)
 	{
 		LPCSTR full = m_Items[ids[i]].name.c_str();
-		if (!m_Filter.PassFilter(full)) continue;
-		m_ViewOrder.push_back(SEntry(full, false));
+		if (passes(full))
+			m_ViewOrder.push_back(SEntry(full, false));
 	}
+	m_ViewFiles = int(m_ViewOrder.size()) - m_ViewFolders;
+}
+
+void UIContentBrowser::OpenEntry(const SEntry& entry)
+{
+	// a copy: the navigation below clears the selection this may point into
+	const SEntry target = entry;
+	if (!target.folder)
+	{
+		SelectEntry(target.path.c_str(), false, false, false);
+		OpenAsset(target.path.c_str());
+		return;
+	}
+	// a game level is a folder on disk and a scene to the author
+	string_path level_scene;
+	if (IsGameLevelEntry(target.path.c_str()) && !strchr(target.path.c_str() + 7, '\\') &&
+		ResolveLevelFile(target.path.c_str(), m_Source, level_scene))
+	{
+		OpenAsset(target.path.c_str());
+		return;
+	}
+	// into the folder a search found: the search has done its job
+	m_Search[0] = 0;
+	xr_string err;
+	ApplyLocation(SLocation(m_Source, int(m_Category), target.path.c_str()), true, err);
 }
 
 void UIContentBrowser::DrawTiles()
@@ -2009,33 +2408,91 @@ void UIContentBrowser::DrawTiles()
 	m_DrawnOrder.clear();
 	m_DrawnRects.clear();
 
-	// How many tiles fit on a row. A tile is WIDER than m_TileSize: a button
-	// adds its frame padding on both sides, and the image tiles do the same, so
-	// wrapping on the bare tile size put one column past the right edge every
-	// time - clipped, unreachable, and it hid whatever was under it. N tiles
-	// span N*(tile+spacing) - spacing, which is the row that has to fit.
-	const ImGuiStyle&	st		= ImGui::GetStyle();
-	const float			tile_w	= TileWidth();
-	const float			space	= st.ItemSpacing.x;
-	const float			avail	= ImGui::GetContentRegionAvail().x;
-	int per_row					= (int)((avail + space) / (tile_w + space));
-	if (per_row < 1) per_row = 1;
-	const float caption_h = _max(ImGui::GetFrameHeight(), ImGui::GetTextLineHeightWithSpacing() * 2.f);
-	const float row_h = tile_w + st.ItemSpacing.y + caption_h + st.ItemSpacing.y;
+	const ImGuiIO& io = ImGui::GetIO();
+	// Ctrl+wheel sizes the tiles, and the list is the step under the smallest one (Explorer's zoom); the grid does not
+	// scroll meanwhile (NoScrollWithMouse under Ctrl)
+	if (io.KeyCtrl && io.MouseWheel != 0.f && ImGui::IsWindowHovered())
+	{
+		// a step from the size shown picks a size: a fitted host stops fitting
+		const float size = ShownTile(m_Host);
+		if (m_ListView[m_Host])
+		{
+			if (io.MouseWheel > 0.f)
+			{
+				m_ListView[m_Host]	= false;
+				m_TileSize[m_Host]	= EditorUiContract::kTileMin;
+			}
+		}
+		else if (io.MouseWheel < 0.f && size <= EditorUiContract::kTileMin)
+			m_ListView[m_Host] = true;
+		else
+			m_TileSize[m_Host] = clampr(size + io.MouseWheel * 8.f, EditorUiContract::kTileMin, EditorUiContract::kTileMax);
+		StoreView();
+	}
+
+	const int total = int(m_ViewOrder.size());
+	if (!total)
+	{
+		if (SearchActive(m_Search))
+			XUI::EmptyState(XUI::Icon::Search, "No matches", "Nothing in this folder or below matches the search.");
+		else if (0 == m_Source && !EditorProject::Active())
+			XUI::EmptyState(XUI::Icon::Folder, "No project open");
+		else
+			XUI::EmptyState(XUI::Icon::FolderOpen, "Empty folder",
+				0 == m_Source ? "Use Add to create a folder or an asset here." : nullptr);
+		DrawGridContextMenu();
+		return;
+	}
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	const ImGuiStyle& st = ImGui::GetStyle();
+	const float grid_x = ImGui::GetCursorScreenPos().x;
+	const float avail = _max(1.f, ImGui::GetContentRegionAvail().x);
+	const bool list = m_ListView[m_Host];
+	const float gap = XUI::Pt(kTileGap);
+	const float pad = XUI::Pt(kTilePad);
+	// Tiles: a square with a two-line caption under it; a tile never outgrows the grid, a narrow browser shows one
+	// smaller column, not a clipped one, and a host with no size picked fits two rows (ShownTile). The list: rows of
+	// one line in columns of 12 em at least, stretched to the width - six rows where the Wide layout's strip holds
+	// under two rows of the smallest tiles.
+	const float tile_w = _max(XUI::Pt(24.f), _min(XUI::Pt(ShownTile(m_Host)), avail));
+	ImFont* caption_font = list ? ImGui::GetFont() : XUI::GetFont(XUI::Font::Small);
+	if (!caption_font) caption_font = ImGui::GetFont();
+	const float caption_px = list ? ImGui::GetFontSize() : XUI::Pt(XUI::FontSize(XUI::Font::Small));
+	const float picture = XUI::Pt(kListPicture);
+	int per_row;
+	float cell_w, cell_h, row_h;
+	if (list)
+	{
+		per_row	= _max(1, int((avail + gap) / (XUI::Em(kListColumnEm) + gap)));
+		cell_w	= _max(1.f, floorf((avail - gap * float(per_row - 1)) / float(per_row)));
+		cell_h	= XUI::Pt(kListRow);
+		row_h	= cell_h;
+	}
+	else
+	{
+		per_row	= _max(1, int((avail + gap) / (tile_w + gap)));
+		cell_w	= tile_w;
+		cell_h	= tile_w + caption_px * 2.f + pad;
+		row_h	= cell_h + gap;
+	}
+	const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+	const bool project = 0 == m_Source && EditorProject::Active();
+	const u32 category = kCategories[m_Category].id;
 
 	int reveal_index = -1;
 	if (m_ScrollToSelection)
-		for (int i = int(m_ViewOrder.size()) - 1; i >= 0; --i)
+		for (int i = total - 1; i >= 0; --i)
 			if (IsSelected(m_ViewOrder[i].path.c_str(), m_ViewOrder[i].folder))
 			{
 				reveal_index = i;
 				break;
 			}
 	if (reveal_index < 0 && !m_Rename.empty())
-		for (u32 i = 0; i < m_ViewOrder.size(); ++i)
+		for (int i = 0; i < total; ++i)
 			if (m_ViewOrder[i].path == m_Rename)
 			{
-				reveal_index = int(i);
+				reveal_index = i;
 				break;
 			}
 
@@ -2049,217 +2506,212 @@ void UIContentBrowser::DrawTiles()
 		if (reveal_index < 0) ImGui::SetScrollY(0.f);
 	}
 
-	// `label_end` cuts the caption short without a copy: one of the editor's own assets
-	// goes by its name alone (EditorAssetIcons::OwnExtension)
-	auto draw_caption = [&](LPCSTR label, LPCSTR label_end, bool renaming, bool dim)
-	{
-		if (renaming)
-		{
-			ImGui::SetNextItemWidth(tile_w);
-			if (m_RenameFocus)
-			{
-				ImGui::SetKeyboardFocusHere();
-				m_RenameFocus = false;
-			}
-			// The NAME is selected, not the extension - what every file browser does, so
-			// typing replaces the name and leaves the kind of the file alone. ImGui selects
-			// everything when a box is focused from code; the callback has the last word.
-			struct Select
-			{
-				static int Stem(ImGuiInputTextCallbackData* data)
-				{
-					int& want = *(int*)data->UserData;
-					if (want >= 0)
-					{
-						data->SelectionStart	= 0;
-						data->SelectionEnd		= data->CursorPos = _min(want, data->BufTextLen);
-						want = -1;
-					}
-					return 0;
-				}
-			};
-			const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
-				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
-				&Select::Stem, &m_RenameSelect);
-			if (done || ImGui::IsItemDeactivated()) CommitRename();
-			const float remainder = caption_h - ImGui::GetFrameHeight() - st.ItemSpacing.y;
-			if (remainder > 0.f) ImGui::Dummy(ImVec2(tile_w, remainder));
-			return;
-		}
-
-		const ImVec2 p = ImGui::GetCursorScreenPos();
-		ImGui::Dummy(ImVec2(tile_w, caption_h));
-		const int lines = _max(1, int((caption_h + 0.5f) / ImGui::GetTextLineHeight()));
-		DrawTileCaption(ImGui::GetWindowDrawList(), p, tile_w, lines,
-			ImGui::GetColorU32(dim ? ImGuiCol_TextDisabled : ImGuiCol_Text), label, label_end);
-	};
-
-	const int up_slots = (!m_Filter.IsActive() && !m_CurFolder.empty()) ? 1 : 0;
-	const int total_slots = up_slots + int(m_ViewOrder.size());
-	const int row_count = (total_slots + per_row - 1) / per_row;
+	// what a double click asks for runs once the grid is drawn: it may change what the grid lists
+	int open_index = -1;
+	bool rename_drawn = false;
+	// where the rename box goes: over a tile's caption, or over a list row's name
+	ImVec2 rename_at(0.f, 0.f);
+	float rename_w = 0.f;
 
 	ImGuiListClipper clipper;
-	clipper.Begin(row_count, row_h);
+	clipper.Begin((total + per_row - 1) / per_row, row_h);
 	if (reveal_index >= 0)
-	{
-		const int reveal_row = (up_slots + reveal_index) / per_row;
-		clipper.IncludeItemsByIndex(reveal_row, reveal_row + 1);
-	}
+		clipper.IncludeItemsByIndex(reveal_index / per_row, reveal_index / per_row + 1);
 	while (clipper.Step())
 		for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
 		{
-			const float row_x = ImGui::GetCursorPosX();
-			const float row_y = ImGui::GetCursorPosY();
-			const int first_slot = row * per_row;
-			const int last_slot = _min(first_slot + per_row, total_slots);
-			for (int slot = first_slot; slot < last_slot; ++slot)
+			const ImVec2 origin = ImGui::GetCursorScreenPos();
+			const int first = row * per_row;
+			const int last = _min(first + per_row, total);
+			for (int index = first; index < last; ++index)
 			{
-				if (slot > first_slot) ImGui::SameLine(0.f, space);
-				if (up_slots && slot == 0)
-				{
-					ImGui::PushID("##cb_up");
-					ImGui::BeginGroup();
-					ImGui::Button("..", ImVec2(tile_w, tile_w));
-					if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-					{
-						xr_string err;
-						GoUp(err);
-					}
-					if (ImGui::IsItemHovered()) ImGui::SetTooltip("up one folder (double click)");
-					draw_caption("Parent folder", 0, false, false);
-					ImGui::EndGroup();
-					ImGui::PopID();
-					continue;
-				}
-
-				const int view_index = slot - up_slots;
-				const SEntry& entry = m_ViewOrder[view_index];
+				const SEntry& entry = m_ViewOrder[index];
 				LPCSTR full = entry.path.c_str();
 				LPCSTR leaf = strrchr(full, '\\');
 				leaf = leaf ? leaf + 1 : full;
+				// the editor's own assets go by their name alone: the icon already says the kind
+				LPCSTR leaf_end = entry.folder ? nullptr : EditorAssetIcons::OwnExtension(leaf);
 				const bool sel = IsSelected(full, entry.folder);
 				const bool renaming = !m_Rename.empty() && m_Rename == full;
 				// what the build does with it: a veiled tile does not ship
 				xr_string ship_rule;
-				const EditorMod::EShipState ship = (m_Source == 0 && EditorProject::Active())
+				const EditorMod::EShipState ship = project
 					? EditorMod::ShipState(EditorProject::Root(), full, &ship_rule) : EditorMod::shipShipped;
 				const bool veiled = ship == EditorMod::shipExcluded || ship == EditorMod::shipExcludedByRule;
-				xr_string ship_note;
-				if (veiled)						ship_note = "\nnot shipped - mod.ltx [exclude]: " + ship_rule;
-				else if (ship == EditorMod::shipNever)	ship_note = "\nsources - never shipped";
 
-				ImGui::PushID(view_index);
-				ImGui::BeginGroup();
+				const ImVec2 a(origin.x + float(index - first) * (cell_w + gap), origin.y);
+				const ImVec2 b(a.x + cell_w, a.y + cell_h);
+				// the path is the id: a double click that walks into a folder must not land as a click
+				// on the tile the new folder happens to put under the cursor
+				ImGui::PushID(full);
+				ImGui::SetCursorScreenPos(a);
+				// the rename box drawn over this tile later takes the clicks inside it
+				if (renaming)
+					ImGui::SetNextItemAllowOverlap();
+				const bool clicked = ImGui::InvisibleButton("##tile", ImVec2(cell_w, cell_h));
+				const bool hovered = ImGui::IsItemHovered();
 				m_DrawnOrder.push_back(entry);
-				const u32 rect_slot = u32(m_DrawnRects.size());
-				m_DrawnRects.push_back(ImVec4(0, 0, 0, 0));
+				m_DrawnRects.push_back(ImVec4(a.x, a.y, b.x, b.y));
 
-				if (entry.folder)
+				// the picture's square: a tile's own, or the one a list row starts with
+				ImVec2 sa, sb;
+				if (list)
 				{
-					ImGui::PushStyleColor(ImGuiCol_Button,
-						ThemeColor((sel || renaming) ? XFinedTheme::ColorToken::Accent
-							: XFinedTheme::ColorToken::Input));
-					ImGui::Button("[ ]", ImVec2(tile_w, tile_w));
-					ImGui::PopStyleColor();
-					m_DrawnRects[rect_slot] = ImVec4(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
-						ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y);
-					if (veiled)	VeilTile(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-
-					string_path level_scene;
-					const bool as_level = IsGameLevelEntry(full) && 0 == strchr(full + 7, '\\') &&
-						ResolveLevelFile(full, m_Source, level_scene);
-					if (ImGui::IsItemHovered())
-					{
-						const ImGuiIO& io = ImGui::GetIO();
-						if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-							!ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-							SelectEntry(full, true, io.KeyCtrl, io.KeyShift);
-						if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-						{
-							if (as_level) OpenAsset(full);
-							else
-							{
-								xr_string err;
-								ApplyLocation(SLocation(m_Source, int(m_Category), full), true, err);
-							}
-						}
-						if (!renaming)
-							ImGui::SetTooltip(as_level ? "%s\nlevel - double click to open the scene it was built from%s"
-								: "%s%s", full, ship_note.c_str());
-					}
-					DrawEntryContextMenu(full, true);
-					draw_caption(leaf, 0, renaming, veiled);
+					sa = ImVec2(PxRound(a.x + XUI::Pt(3.f)), PxRound(a.y + (cell_h - picture) * .5f));
+					sb = ImVec2(sa.x + picture, sa.y + picture);
 				}
 				else
 				{
-					// the drawn icon says what it is, the caption only what it is called
-					LPCSTR leaf_end = EditorAssetIcons::OwnExtension(leaf);
-					ImTextureID tex = GetThumb(full);
-					// An asset the editor invented has no picture anywhere, so it gets a
-					// drawn one - exact at any tile size, unlike a bitmap would be.
-					const EditorAssetIcons::EKind icon =
-						tex ? EditorAssetIcons::kNone : IconOf(full, m_Source);
-					const bool clicked = tex
-						? ImGui::ImageButton("##Thumbnail", tex, ImVec2(m_TileSize, m_TileSize))
-						: ImGui::Button(icon ? "##icon" : leaf, ImVec2(tile_w, tile_w));
-					const ImVec2 ra = ImGui::GetItemRectMin();
-					const ImVec2 rb = ImGui::GetItemRectMax();
-					// with the picture, under the selection wash: an icon stands
-					// in for a thumbnail and has to take the same highlight
-					if (icon) EditorAssetIcons::Draw(icon, ra.x, ra.y, rb.x, rb.y);
-					// over the picture, under the selection: selected still reads as selected
-					if (veiled)	VeilTile(ra, rb);
-					m_DrawnRects[rect_slot] = ImVec4(ra.x, ra.y, rb.x, rb.y);
-
-					if (sel)
-					{
-						ImDrawList* dl = ImGui::GetWindowDrawList();
-						const ImVec4 hl = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
-						dl->AddRectFilled(ra, rb, ImGui::GetColorU32(ImVec4(hl.x, hl.y, hl.z, 0.35f)), 3.f);
-						dl->AddRect(ra, rb, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 1.f)), 3.f, 0, 2.5f);
-					}
-					if (clicked)
-					{
-						const ImGuiIO& io = ImGui::GetIO();
-						SelectEntry(full, false, io.KeyCtrl, io.KeyShift);
-					}
-					if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
-					{
-						if (!IsSelected(full, false)) SelectEntry(full, false, false, false);
-						m_Dragged = full;
-						ImGui::SetDragDropPayload(CB_DND_PAYLOAD, full, xr_strlen(full) + 1);
-						if (tex) ImGui::Image(tex, ImVec2(48, 48));
-						else if (icon)
-						{
-							const ImVec2 at = ImGui::GetCursorScreenPos();
-							ImGui::Dummy(ImVec2(48, 48));
-							EditorAssetIcons::Draw(icon, at.x, at.y, at.x + 48.f, at.y + 48.f);
-						}
-						ImGui::TextUnformatted(leaf, leaf_end);
-						if (m_Selection.size() > 1)
-							ImGui::Text("and %d more", int(m_Selection.size()) - 1);
-						ImGui::EndDragDropSource();
-					}
-					if (ImGui::IsItemHovered())
-					{
-						if (icon)	ImGui::SetTooltip("%s\n%s%s", full, EditorAssetIcons::Name(icon), ship_note.c_str());
-						else		ImGui::SetTooltip("%s%s", full, ship_note.c_str());
-						if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-						{
-							SelectEntry(full, false, false, false);
-							OpenAsset(full);
-						}
-					}
-					DrawEntryContextMenu(full, false);
-					draw_caption(leaf, leaf_end, renaming, veiled);
+					sa = ImVec2(a.x + pad, a.y + pad);
+					sb = ImVec2(b.x - pad, a.y + tile_w - pad);
 				}
+				// the picture, or the glyph of what it is
+				SThumb thumb;
+				if (!entry.folder)
+					if (const SThumb* cached = GetThumb(full, sb.x - sa.x))
+						thumb = *cached;
+				ImTextureID tex = thumb.tex;
+				const EditorAssetIcons::EKind own = (entry.folder || tex) ? EditorAssetIcons::kNone : IconOf(full, m_Source);
 
-				ImGui::EndGroup();
+				const float r = XUI::Pt(4.f);
+				if (sel)
+					dl->AddRectFilled(a, b, ThemeCol(focused ? Token::SelectionFocused : Token::Selection), r);
+				else if (hovered)
+					dl->AddRectFilled(a, b, ThemeCol(Token::Hover), r);
+				if (!sel && !list)
+					dl->AddRectFilled(sa, sb, ThemeCol(Token::Raised), XUI::Pt(3.f));
+				if (tex)
+					DrawPicture(dl, tex, thumb.aspect, thumb.alpha != 0, sa, sb);
+				else if (own)
+					EditorAssetIcons::Draw(dl, own, sa.x, sa.y, sb.x, sb.y);
+				else if (list)
+				{
+					// a list row's glyph at the 16 pt of every other list's icons
+					const float g = XUI::Pt(16.f);
+					const ImVec2 ga(PxRound((sa.x + sb.x - g) * .5f), PxRound((sa.y + sb.y - g) * .5f));
+					XUI::DrawIconRect(dl, TileIcon(full, entry.folder, m_Source, category), ga, ImVec2(ga.x + g, ga.y + g),
+						ThemeCol(Token::TextSecondary));
+				}
+				else
+					DrawTileGlyph(dl, TileIcon(full, entry.folder, m_Source, category), sa, sb, ThemeCol(Token::TextSecondary));
+				// over the picture, under the outline: a left-out tile still reads as selected
+				if (veiled)
+					dl->AddRectFilled(sa, sb, ThemeCol(Token::Inset, .6f), XUI::Pt(3.f));
+				if (sel && focused)
+					dl->AddRect(a, b, ThemeCol(Token::AccentBright), r, 0, _max(1.f, XUI::Pt(1.5f)));
+				const float text_x = list ? sb.x + XUI::Pt(6.f) : a.x + pad;
+				if (renaming)
+				{
+					rename_drawn	= true;
+					rename_at		= list ? ImVec2(text_x, PxRound(a.y + (cell_h - ImGui::GetFrameHeight()) * .5f))
+										   : ImVec2(a.x, a.y + tile_w);
+					rename_w		= list ? b.x - text_x : tile_w;
+				}
+				else
+					DrawTileCaption(dl, caption_font, caption_px,
+						ImVec2(text_x, list ? PxRound(a.y + (cell_h - caption_px) * .5f) : a.y + tile_w),
+						list ? _max(1.f, b.x - XUI::Pt(4.f) - text_x) : tile_w - pad * 2.f, list ? 1 : 2,
+						ThemeCol(veiled ? Token::TextMuted : Token::Text), leaf, leaf_end, !entry.folder && !leaf_end, !list);
+
+				if (clicked)
+					SelectEntry(full, entry.folder, io.KeyCtrl, io.KeyShift);
+				if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					open_index = index;
+				DrawEntryContextMenu(full, entry.folder);
+				if (hovered && !renaming)
+				{
+					xr_string tip = full;
+					if (thumb.src_w)
+					{
+						char size[64];
+						sprintf_s(size, "\n%u x %u%s", thumb.src_w, thumb.src_h,
+							2 == thumb.alpha ? ", fully transparent" : 1 == thumb.alpha ? ", partly transparent" : "");
+						tip += size;
+					}
+					if (entry.folder && IsGameLevelEntry(full) && !strchr(full + 7, '\\'))
+						tip += "\nA game level: a double click opens the scene it was built from.";
+					if (own)
+					{
+						tip += "\n";
+						tip += EditorAssetIcons::Name(own);
+					}
+					if (veiled)
+						tip += "\nNot shipped: excluded by '" + ship_rule + "' in mod.ltx [exclude].";
+					else if (ship == EditorMod::shipNever)
+						tip += "\nA source: never shipped.";
+					XUI::Tip(tip.c_str());
+				}
+				if (!entry.folder && ImGui::BeginDragDropSource())
+				{
+					if (!IsSelected(full, false)) SelectEntry(full, false, false, false);
+					m_Dragged = full;
+					ImGui::SetDragDropPayload(CB_DND_PAYLOAD, full, xr_strlen(full) + 1);
+					const float side = XUI::Pt(48.f);
+					const ImVec2 at = ImGui::GetCursorScreenPos();
+					ImGui::Dummy(ImVec2(side, side));
+					ImDrawList* tip_dl = ImGui::GetWindowDrawList();
+					if (tex)
+						DrawPicture(tip_dl, tex, thumb.aspect, thumb.alpha != 0, at, ImVec2(at.x + side, at.y + side));
+					else if (own)
+						EditorAssetIcons::Draw(tip_dl, own, at.x, at.y, at.x + side, at.y + side);
+					else
+						DrawTileGlyph(tip_dl, TileIcon(full, false, m_Source, category), at, ImVec2(at.x + side, at.y + side),
+							ThemeCol(Token::TextSecondary));
+					ImGui::TextUnformatted(leaf, leaf_end);
+					if (m_Selection.size() > 1)
+					{
+						char more[48];
+						sprintf_s(more, "and %d more", int(m_Selection.size()) - 1);
+						ImGui::TextUnformatted(more);
+					}
+					ImGui::EndDragDropSource();
+				}
 				ImGui::PopID();
 			}
-			ImGui::SetCursorPos(ImVec2(row_x, row_y + row_h - st.ItemSpacing.y));
-			ImGui::Dummy(ImVec2(0.f, 0.f));
+			ImGui::SetCursorScreenPos(origin);
+			ImGui::Dummy(ImVec2(avail, row_h - st.ItemSpacing.y));
 		}
+
+	// The inline rename box goes over the grid, up to 24 em wide, so a long name is seen as it is typed; it
+	// is drawn last to sit above the neighbouring tiles. Centred under a tile, from the name in a list row.
+	if (rename_drawn)
+	{
+		const float want = ImGui::CalcTextSize(m_RenameBuf).x + st.FramePadding.x * 2.f + XUI::Pt(12.f);
+		const float w = _min(avail, clampr(want, rename_w, _max(rename_w, XUI::Em(24.f))));
+		const float x = clampr(list ? rename_at.x : rename_at.x + (rename_w - w) * .5f, grid_x,
+			_max(grid_x, grid_x + avail - w));
+		ImGui::SetCursorScreenPos(ImVec2(PxRound(x), rename_at.y));
+		ImGui::SetNextItemWidth(w);
+		if (m_RenameFocus)
+		{
+			ImGui::SetKeyboardFocusHere();
+			m_RenameFocus = false;
+		}
+		// The NAME is selected, not the extension - what every file browser does, so
+		// typing replaces the name and leaves the kind of the file alone. ImGui selects
+		// everything when a box is focused from code; the callback has the last word.
+		struct Select
+		{
+			static int Stem(ImGuiInputTextCallbackData* data)
+			{
+				int& want = *(int*)data->UserData;
+				if (want >= 0)
+				{
+					data->SelectionStart	= 0;
+					data->SelectionEnd		= data->CursorPos = _min(want, data->BufTextLen);
+					want = -1;
+				}
+				return 0;
+			}
+		};
+		const bool done = ImGui::InputText("##cb_rename", m_RenameBuf, sizeof(m_RenameBuf),
+			ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
+			&Select::Stem, &m_RenameSelect);
+		if (done || ImGui::IsItemDeactivated()) CommitRename();
+	}
+
+	if (open_index >= 0)
+		OpenEntry(m_ViewOrder[open_index]);
 
 	// Shift-click needed the complete cached grid order, so it is resolved here.
 	ApplyPendingRange();
@@ -2276,7 +2728,7 @@ void UIContentBrowser::DrawTiles()
 				break;
 			}
 
-	// empty-space right-click; the shortcuts run from Draw() instead, so Del
+	// empty-space right-click; the shortcuts run from DrawBody() instead, so Del
 	// and Ctrl+C reach the folder tree as well as the grid
 	DrawGridContextMenu();
 
@@ -2286,13 +2738,10 @@ void UIContentBrowser::DrawTiles()
 		ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
 		!ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() &&
 		ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-		!ImGui::GetIO().KeyCtrl)
+		!io.KeyCtrl)
 		ClearSelection();
 
 	UpdateMarquee();
-
-	if (!total_slots)
-		ImGui::TextDisabled(m_Filter.IsActive() ? "nothing matches the search" : "empty folder");
 }
 
 //------------------------------------------------------------------------------
@@ -2306,6 +2755,9 @@ void UIContentBrowser::DrawTiles()
 //------------------------------------------------------------------------------
 void UIContentBrowser::DrawEntryContextMenu(LPCSTR path, bool folder)
 {
+	// MCP ui_popup cb_context:<path> puts it up the way a right click does, at the entry
+	if (XUI::Shell::TakePopup((xr_string("cb_context:") + path).c_str()))
+		XUI::Shell::OpenPopupAt("cb_entry_ctx", ImGui::GetItemRectMax());
 	if (!ImGui::BeginPopupContextItem("cb_entry_ctx")) return;
 
 	// right-clicking outside the selection moves it here, as Unreal does;
@@ -2313,79 +2765,81 @@ void UIContentBrowser::DrawEntryContextMenu(LPCSTR path, bool folder)
 	if (!IsSelected(path, folder)) SelectEntry(path, folder, false, false);
 
 	const int count = int(m_Selection.size());
-	if (count > 1)	ImGui::TextDisabled("%d selected", count);
-	else			ImGui::TextDisabled("%s", path);
-	ImGui::Separator();
+	const bool writable = 0 == m_Source;
+	LPCSTR read_only = "This source is read-only: copy out of it into the project.";
 
-	if (ImGui::MenuItem("Open"))
+	// what the menu acts on
 	{
-		if (folder)
-		{
-			xr_string err;
-			ApplyLocation(SLocation(m_Source, int(m_Category), path), true, err);
-		}
-		else		OpenAsset(path);
+		LPCSTR leaf = strrchr(path, '\\');
+		char head[64];
+		sprintf_s(head, "%d selected", count);
+		xr_string shown;
+		if (!XUI::EllipsizeText(count > 1 ? head : (leaf ? leaf + 1 : path), XUI::Em(20.f), XUI::Clip::End, shown))
+			shown = count > 1 ? head : (leaf ? leaf + 1 : path);
+		ImGui::PushStyleColor(ImGuiCol_Text, ThemeCol(Token::TextMuted));
+		ImGui::TextUnformatted(shown.c_str());
+		ImGui::PopStyleColor();
+		ImGui::Separator();
 	}
 
+	if (XUI::MenuItem("Open", "Enter"))
+		OpenEntry(SEntry(path, folder));
 	if (!folder)
 	{
 		string_path ref;
-		const bool placeable = IsGameSource()
-			? EditorGameContent::ResolvePlaceable(path, ref)
-			: true;
-		if (ImGui::MenuItem("Place in scene", "", false, placeable) && placeable)
-			ExecCommand(COMMAND_CB_PLACE_ASSET,
-						xr_string(IsGameSource() ? ref : path), u32(0));
-		if (IsGameSource() && !placeable)
-			ImGui::TextDisabled("  not a library object reference");
+		const bool placeable = IsGameSource() ? EditorGameContent::ResolvePlaceable(path, ref) : true;
+		if (ImGui::MenuItem("Place in Scene", nullptr, false, placeable))
+			ExecCommand(COMMAND_CB_PLACE_ASSET, xr_string(IsGameSource() ? ref : path), u32(0));
+		if (!placeable)
+			XUI::Tip("Only a library object reference is placed from the game's content.");
 	}
-
 	ImGui::Separator();
 
 	// ---- the common commands ---------------------------------------------
-	{
-		int n = 0;
-		// a library category with no file of its own (particles, light anims)
-		// has nothing to hand over; everything else is copyable
-		const bool copyable = (m_Source != 1) || !!LibFilesFor(kCategories[m_Category].id, n);
-		if (ImGui::MenuItem("Copy", "Ctrl+C", false, copyable) && copyable)
-			ClipboardCopy(false);
-		if (!copyable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("this category lives inside one shared library file - there is no per-item file to copy");
+	int n = 0;
+	// a library category with no file of its own (particles, light anims)
+	// has nothing to hand over; everything else is copyable
+	const bool copyable = (m_Source != 1) || !!LibFilesFor(kCategories[m_Category].id, n);
+	if (XUI::MenuItem("Copy", "Ctrl+C", false, copyable))
+		ClipboardCopy(false);
+	if (!copyable)
+		XUI::Tip("This category lives inside one shared library file: there is no file of its own to copy.");
+	if (XUI::MenuItem("Cut", "Ctrl+X", false, writable))
+		ClipboardCopy(true);
+	if (!writable)
+		XUI::Tip(read_only);
+	const bool can = CanPaste();
+	if (XUI::MenuItem("Paste", "Ctrl+V", false, can))
+		ClipboardPaste();
+	if (!can)
+		XUI::Tip(PasteBlockedReason());
+	if (XUI::MenuItem("Rename", "F2", false, writable && 1 == count))
+		BeginRename(path);
+	if (!writable)
+		XUI::Tip(read_only);
+	else if (1 != count)
+		XUI::Tip("One entry is renamed at a time.");
+	// the item that asks is quiet, in the error colour; the loud button is the confirmation's
+	const bool erase = XUI::MenuItem("Delete...", XUI::Icon::None, "Del", writable, true);
+	if (erase)
+		DeleteSelection();
+	if (!writable)
+		XUI::Tip(read_only);
 
-		const bool writable = (m_Source == 0);
-		if (ImGui::MenuItem("Cut", "Ctrl+X", false, writable) && writable)
-			ClipboardCopy(true);
-		if (!writable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("cut moves things, and this source is read-only");
-
-		const bool can = CanPaste();
-		if (ImGui::MenuItem("Paste", "Ctrl+V", false, can) && can) ClipboardPaste();
-		if (!can && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", PasteBlockedReason());
-
-		if (ImGui::MenuItem("Delete", "Del", false, writable) && writable)
-			DeleteSelection();
-		if (!writable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("this source is read-only");
-
-		if (ImGui::MenuItem("Rename", "F2", false, writable && 1 == count) && writable)
-			BeginRename(path);
-	}
-
-	if (m_Source == 0 && EditorProject::Active())
+	if (writable && EditorProject::Active())
 	{
 		ImGui::Separator();
 		DrawBuildToggle();
 	}
 
 	ImGui::Separator();
-	if (ImGui::MenuItem("Copy path")) ImGui::SetClipboardText(path);
-
-	if (IsReadOnlySource())
+	if (ImGui::MenuItem("Copy Path"))
+		ImGui::SetClipboardText(path);
+	if (writable && ImGui::MenuItem("Show in Explorer"))
 	{
-		ImGui::Separator();
-		ImGui::TextDisabled("read-only source");
+		xr_string where, err;
+		if (!RevealInExplorer(path, false, where, err))
+			XUI::Toast(XUI::Tone::Warning, err.c_str());
 	}
 	ImGui::EndPopup();
 }
@@ -2411,9 +2865,8 @@ void UIContentBrowser::DrawBuildToggle()
 	}
 	if (never && !shipped && !own && by.empty())
 	{
-		ImGui::MenuItem("Exclude from Build", "", false, false);
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("the editor's own files and the sources under rawdata are never shipped");
+		ImGui::MenuItem("Exclude from Build", nullptr, false, false);
+		XUI::Tip("The editor's own files and the sources under rawdata are never shipped.");
 		return;
 	}
 	xr_string err;
@@ -2423,9 +2876,8 @@ void UIContentBrowser::DrawBuildToggle()
 			for (u32 i = 0; i < m_Selection.size() && err.empty(); ++i)
 				if (EditorMod::shipShipped == EditorMod::ShipState(root, m_Selection[i].path.c_str()))
 					EditorMod::SetExcluded(root, m_Selection[i].path.c_str(), true, err);
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("Left out of the module and its releases, kept in the project.\n"
-							  "Stored in mod.ltx [exclude] - the Manifest window lists them.");
+		XUI::Tip("Left out of the module and its releases, kept in the project. Stored in mod.ltx [exclude]; "
+				 "Mod Settings lists them.");
 	}
 	else if (own && by.empty())
 	{
@@ -2435,18 +2887,12 @@ void UIContentBrowser::DrawBuildToggle()
 	}
 	else
 	{
-		ImGui::MenuItem("Include in Build", "", false, false);
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("excluded by '%s' in mod.ltx [exclude] - include that one instead", by.c_str());
+		ImGui::MenuItem("Include in Build", nullptr, false, false);
+		const xr_string why = "Excluded by '" + by + "' in mod.ltx [exclude]: include that one instead.";
+		XUI::Tip(why.c_str());
 	}
-	if (!err.empty())	ELog.DlgMsg(mtError, "%s", err.c_str());
-}
-
-// The tile of an entry the build leaves out: a veil of the panel's own colour over
-// whatever the tile shows, so a picture and a drawn icon fade alike.
-void UIContentBrowser::VeilTile(const ImVec2& a, const ImVec2& b)
-{
-	ImGui::GetWindowDrawList()->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_WindowBg, 0.6f), 3.f);
+	if (!err.empty())
+		XUI::Notice(XUI::Tone::Error, "Build Contents", err.c_str());
 }
 
 bool UIContentBrowser::ResolveDropRef(LPCSTR name, string_path& ref)
@@ -2553,7 +2999,7 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 					return false;
 				}
 				Form->RememberNavigation(origin);
-				Form->m_Filter.Clear();
+				Form->m_Search[0] = 0;
 				Form->InvalidateView();
 				Form->ClearSelection();
 				Form->AddToSelection(SEntry(Form->m_CurFolder.c_str(), true));
@@ -2626,7 +3072,7 @@ bool UIContentBrowser::RevealAsset(LPCSTR name, int source, bool open_viewer, xr
 		return false;
 	}
 	Form->RememberNavigation(origin);
-	Form->m_Filter.Clear();
+	Form->m_Search[0] = 0;
 	Form->InvalidateView();
 
 	Form->ClearSelection();
@@ -2663,16 +3109,156 @@ LPCSTR UIContentBrowser::IconName(LPCSTR entry)
 	return EditorAssetIcons::Name(IconOf(entry, Form ? Form->m_Source : 0));
 }
 
+// The side a host's tiles are drawn at (pt). With no size picked they fit the host: the largest side up to its default
+// at which the grid shows two whole rows, never under the smallest - the Wide layout's strip holds under two rows of
+// even those, and at 48 pt it shows two rows of pictures with their first caption line, 4x what one row of 96 did.
+float UIContentBrowser::ShownTile(int host) const
+{
+	if (m_TileSize[host] > 0.f)
+		return m_TileSize[host];
+	const float most = kHostPanel == host ? EditorUiContract::kTileDefaultPanel : EditorUiContract::kTileDefault;
+	if (m_GridHeight[host] <= 0.f)
+		return most;
+	// two rows: 2 x (square + two caption lines + pad) and the gap between them; in the 8 pt steps of Ctrl+wheel, so
+	// resizing the host remakes the pictures at a step, not at every pixel
+	const float fit = (m_GridHeight[host] - kTileGap) * .5f - XUI::FontSize(XUI::Font::Small) * 2.f - kTilePad;
+	return clampr(floorf(fit / 8.f) * 8.f, EditorUiContract::kTileMin, most);
+}
+
 float UIContentBrowser::TileSize()
 {
-	return Form ? Form->m_TileSize : 0.f;
+	if (Form) Form->LoadView();
+	return Form ? Form->ShownTile(TargetHost()) : 0.f;
 }
 
 bool UIContentBrowser::SetTileSize(float size, xr_string& err)
 {
 	if (!Form)						{ err = "content browser unavailable"; return false; }
-	if (size < 48.f || size > 192.f)	{ err = "tile must be 48..192"; return false; }
-	Form->m_TileSize = size;
+	if (size < EditorUiContract::kTileMin || size > EditorUiContract::kTileMax)	{ err = EditorUiContract::kTileRangeError; return false; }
+	Form->LoadView();
+	Form->m_TileSize[TargetHost()] = size;
+	Form->m_ListView[TargetHost()] = false;
+	Form->StoreView();
+	return true;
+}
+
+bool UIContentBrowser::TileFit()
+{
+	if (Form) Form->LoadView();
+	return Form && Form->m_TileSize[TargetHost()] <= 0.f;
+}
+
+void UIContentBrowser::SetTileFit(bool on)
+{
+	if (!Form)
+		return;
+	Form->LoadView();
+	const int host = TargetHost();
+	// a tile size either way, and a size asks for tiles
+	Form->m_TileSize[host] = on ? 0.f : Form->ShownTile(host);
+	Form->m_ListView[host] = false;
+	Form->StoreView();
+}
+
+bool UIContentBrowser::CanAdd()
+{
+	return Form && !Form->AddBlocked();
+}
+
+LPCSTR UIContentBrowser::ViewMode()
+{
+	if (Form) Form->LoadView();
+	return Form && Form->m_ListView[TargetHost()] ? "list" : "tiles";
+}
+
+bool UIContentBrowser::SetViewMode(LPCSTR mode, xr_string& err)
+{
+	if (!Form)						{ err = "content browser unavailable"; return false; }
+	const bool list = mode && 0 == _stricmp(mode, "list");
+	if (!list && (!mode || 0 != _stricmp(mode, "tiles")))	{ err = "view must be tiles or list"; return false; }
+	Form->LoadView();
+	Form->m_ListView[TargetHost()] = list;
+	Form->StoreView();
+	return true;
+}
+
+LPCSTR UIContentBrowser::Glyph(LPCSTR entry)
+{
+	if (!entry || !entry[0])	return "";
+	xr_string path = entry;
+	const bool folder = '\\' == path.back() || '/' == path.back();
+	if (folder)	path.pop_back();
+	const int source = Form ? Form->m_Source : 0;
+	const u32 category = Form ? kCategories[Form->m_Category].id : 0;
+	return XUI::IconName(TileIcon(path.c_str(), folder, source, category));
+}
+
+void UIContentBrowser::SetSearch(LPCSTR text)
+{
+	Show();
+	if (!Form)	return;
+	xr_strcpy(Form->m_Search, sizeof(Form->m_Search), text ? text : "");
+	Form->InvalidateView();
+}
+
+LPCSTR UIContentBrowser::Search()
+{
+	return Form ? Form->m_Search : "";
+}
+
+void UIContentBrowser::SetSourcesPane(bool on)
+{
+	Show();
+	if (!Form)	return;
+	Form->LoadView();
+	Form->m_SourcesPane = on;
+	Form->StoreView();
+}
+
+void UIContentBrowser::GetSourcesPane(bool& on, bool& shown)
+{
+	on = Form ? Form->m_SourcesPane : true;
+	shown = Form && Form->m_SourcesShown;
+}
+
+bool UIContentBrowser::RevealInExplorer(LPCSTR entry, bool dry_run, xr_string& path, xr_string& err)
+{
+	path.clear();
+	if (!EditorProject::Active())	{ err = "no project is open"; return false; }
+	if (!entry || !entry[0])		{ err = "missing 'name'"; return false; }
+	string_path rel;
+	xr_strcpy(rel, sizeof(rel), entry);
+	for (char* p = rel; *p; ++p) if ('/' == *p) *p = '\\';
+	if (const size_t n = xr_strlen(rel); n && '\\' == rel[n - 1]) rel[n - 1] = 0;
+	xr_string normalized;
+	if (!NormalizeFolderPath(rel, normalized, err))	return false;
+	if (normalized.empty())		{ err = "name the entry to select, not the project root"; return false; }
+	if (!ContentAbsolutePathFits(EditorProject::Root(), normalized.size())) { err = "the path is too long"; return false; }
+	path = EditorProject::Root();
+	path += "\\";
+	path += normalized;
+	if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(path.c_str()))
+	{
+		err = "no such file or folder in the project";
+		return false;
+	}
+	if (dry_run)	return true;
+
+	// Explorer opens the folder that holds it, with it selected
+	wchar_t wide[MAX_PATH * 2];
+	if (!::MultiByteToWideChar(CP_ACP, 0, path.c_str(), -1, wide, int(_countof(wide))))
+	{
+		err = "the path cannot be handed to Explorer";
+		return false;
+	}
+	std::wstring args = L"/select,\"";
+	args += wide;
+	args += L"\"";
+	if (INT_PTR(::ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL)) <= 32)
+	{
+		err = "Explorer did not start";
+		return false;
+	}
 	return true;
 }
 
@@ -3002,9 +3588,10 @@ void UIContentBrowser::UpdateMarquee()
 		m_HasAnchor = !m_Selection.empty();
 		if (m_HasAnchor) m_Anchor = m_Selection.back();
 
+		// the look of a selected tile: the focused selection's fill, the accent's outline
 		ImDrawList* dl = ImGui::GetWindowDrawList();
-		dl->AddRectFilled(a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 0.20f)));
-		dl->AddRect      (a, b, ImGui::GetColorU32(ImVec4(0.30f, 0.65f, 1.00f, 0.90f)));
+		dl->AddRectFilled(a, b, ThemeCol(Token::SelectionFocused, .35f));
+		dl->AddRect      (a, b, ThemeCol(Token::AccentBright), 0.f, 0, _max(1.f, XUI::Pt(1.f)));
 	}
 
 	if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
@@ -3074,7 +3661,7 @@ void UIContentBrowser::ClipboardCopy(bool cut)
 	if (m_Selection.empty()) return;
 	if (cut && m_Source != 0)
 	{
-		ELog.DlgMsg(mtInformation, "Cut moves things, and this source is read-only - use Copy.");
+		XUI::Toast(XUI::Tone::Info, "This source is read-only: Cut moves things, use Copy.");
 		return;
 	}
 
@@ -3105,98 +3692,94 @@ void UIContentBrowser::ClipboardCopy(bool cut)
 			 int(m_Selection.size()), 1 == m_Selection.size() ? "y" : "ies");
 }
 
-// Arms the confirmation. Nothing is touched until DeleteConfirmed runs - a
-// folder full of work used to go the moment Del was pressed, with no question
-// asked and nothing to undo.
+// Raises the confirmation, which names what goes. Nothing is touched until it
+// is answered - a folder full of work used to go the moment Del was pressed,
+// with no question asked and nothing to undo.
 void UIContentBrowser::DeleteSelection()
 {
 	if (m_Selection.empty())	return;
-	if (m_Source != 0)
+	if (m_Source != 0 || !EditorProject::Active())
 	{
-		ELog.DlgMsg(mtInformation, "This source is read-only - nothing here can be deleted.");
+		XUI::Toast(XUI::Tone::Info, "This source is read-only: nothing here is deleted.");
 		return;
 	}
 
 	// name what is going, not just how much: "3 items" tells the user nothing
 	// about whether the one they meant is among them
-	int folders = 0, files = 0;
-	for (u32 i = 0; i < m_Selection.size(); ++i)
-		if (m_Selection[i].folder) ++folders; else ++files;
-
-	char head[256];
+	int folders = 0, files = 0, inside = 0;
+	XUI::Strings items;
+	for (const SEntry& e : m_Selection)
+	{
+		items.push_back(e.folder ? e.path + "\\" : e.path);
+		if (!e.folder)
+		{
+			++files;
+			continue;
+		}
+		++folders;
+		if (SFolder* f = FindFolder(e.path.c_str()))
+		{
+			xr_vector<int> ids;
+			CollectItems(*f, ids, true);
+			inside += int(ids.size());
+		}
+	}
+	auto counted = [](int n, LPCSTR one, LPCSTR many) { return NqUtil::Format("%d %s", n, 1 == n ? one : many); };
+	xr_string headline;
 	if (1 == m_Selection.size())
-		sprintf_s(head, "Delete this %s?", m_Selection[0].folder ? "folder and everything in it" : "file");
+	{
+		LPCSTR leaf = strrchr(m_Selection[0].path.c_str(), '\\');
+		leaf = leaf ? leaf + 1 : m_Selection[0].path.c_str();
+		headline = folders ? "Delete the folder " + xr_string(leaf) + " and everything in it?" : "Delete " + xr_string(leaf) + "?";
+	}
 	else if (folders && files)
-		sprintf_s(head, "Delete %d folder(s) (with everything in them) and %d file(s)?", folders, files);
-	else if (folders)
-		sprintf_s(head, "Delete %d folder(s) and everything in them?", folders);
+		headline = "Delete " + counted(folders, "folder", "folders") + " and " + counted(files, "file", "files") + "?";
 	else
-		sprintf_s(head, "Delete %d file(s)?", files);
+		headline = "Delete " + (folders ? counted(folders, "folder", "folders") : counted(files, "file", "files")) + "?";
+	xr_string consequence;
+	if (inside)
+		consequence = (1 == folders ? "It holds " : "The folders hold ") + counted(inside, "file", "files") +
+			". Deleted for good - this cannot be undone.";
 
-	m_ConfirmText = head;
-	m_ConfirmText += "\n\n";
-	const u32 shown = _min(u32(8), u32(m_Selection.size()));
-	for (u32 i = 0; i < shown; ++i)
+	XUI::ConfirmSpec spec;
+	spec.id				= "cb_delete";
+	spec.title			= "Delete";
+	spec.headline		= headline.c_str();
+	spec.items			= items;
+	spec.total			= u32(items.size());
+	spec.consequence	= consequence.empty() ? nullptr : consequence.c_str();
+	spec.action			= "Delete";
+	spec.destructive	= true;
+	const xr_vector<SEntry> doomed = m_Selection;
+	const xr_string project = EditorProject::Root();
+	XUI::Confirm(spec, [doomed, project](XUI::Answer answer)
 	{
-		m_ConfirmText += "    ";
-		m_ConfirmText += m_Selection[i].path;
-		if (m_Selection[i].folder) m_ConfirmText += "\\";
-		m_ConfirmText += "\n";
-	}
-	if (m_Selection.size() > shown)
-	{
-		char more[64];
-		sprintf_s(more, "    ... and %d more\n", int(m_Selection.size() - shown));
-		m_ConfirmText += more;
-	}
-	m_ConfirmDelete = true;
+		// the answer comes a frame later: the project it was asked about must still be the open one
+		if (XUI::Answer::Yes == answer && Form && EditorProject::Active() && 0 == _stricmp(project.c_str(), EditorProject::Root()))
+			Form->DeleteEntries(doomed);
+	});
 }
 
-void UIContentBrowser::DeleteConfirmed()
+void UIContentBrowser::DeleteEntries(const xr_vector<SEntry>& entries)
 {
-	if (m_Selection.empty() || m_Source != 0)	return;
+	if (entries.empty() || !EditorProject::Active())	return;
 
 	EditorFileOps::SReport rep;
-	for (u32 i = 0; i < m_Selection.size(); ++i)
+	for (const SEntry& e : entries)
 	{
 		string_path abs;
-		xr_sprintf	(abs, sizeof(abs), "%s\\%s", EditorProject::Root(), m_Selection[i].path.c_str());
+		xr_sprintf	(abs, sizeof(abs), "%s\\%s", EditorProject::Root(), e.path.c_str());
 		// recursive: the selection said "this", not "this if it happens to be empty"
 		EditorFileOps::Delete(abs, true, rep);
 	}
 
 	ClearSelection();
 	m_NeedRefresh = true;
-	if (rep.ok())	ELog.Msg(mtInformation, "Deleted %d file(s), %d folder(s) - permanently.",
-							 rep.files, rep.dirs);
-	else			ELog.DlgMsg(mtError, "Deleted %d file(s); %d failed - %s", rep.files, rep.failed,
-								rep.failures.empty() ? "" : rep.failures[0].reason.c_str());
-}
-
-void UIContentBrowser::DrawConfirmDelete()
-{
-	if (!ImGui::BeginPopupModal("Delete", 0, ImGuiWindowFlags_AlwaysAutoResize)) return;
-
-	ImGui::TextUnformatted(m_ConfirmText.c_str());
-	ImGui::Separator();
-	ImGui::TextDisabled("Deleted for good - this cannot be undone.");
-	ImGui::Spacing();
-
-	// Cancel is the default: Enter and Escape both back out, so a stray keypress
-	// on a just-opened dialog can never delete anything
-	const bool del = ImGui::Button("Delete", ImVec2(110, 0));
-	ImGui::SameLine();
-	const bool cancel = ImGui::Button("Cancel", ImVec2(110, 0)) ||
-						ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-						ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-
-	if (del)		DeleteConfirmed();
-	if (del || cancel)
-	{
-		m_ConfirmDelete = false;
-		ImGui::CloseCurrentPopup();
-	}
-	ImGui::EndPopup();
+	if (rep.ok())
+		ELog.Msg(mtInformation, "Deleted %d file(s), %d folder(s) for good.", rep.files, rep.dirs);
+	else
+		XUI::Notice(XUI::Tone::Error, "Delete", NqUtil::Format("Deleted %d file(s); %d could not be deleted: %s", rep.files, rep.failed,
+			rep.failures.empty() ? "" : rep.failures[0].reason.c_str()).c_str());
 }
 
 bool UIContentBrowser::CanPaste() const
@@ -3213,13 +3796,13 @@ bool UIContentBrowser::CanPaste() const
 
 LPCSTR UIContentBrowser::PasteBlockedReason() const
 {
-	if (m_Clipboard.empty())	return "clipboard is empty";
-	if (m_Source != 0)			return "paste into the project's Content - this source is read-only";
+	if (m_Clipboard.empty())	return "The clipboard is empty.";
+	if (m_Source != 0)			return "This source is read-only: paste into the project.";
 	if (m_ClipSource == 1)
 	{
 		int n = 0;
 		if (!LibFilesFor(m_ClipCategory, n))
-			return "that category lives inside one shared library file - there is no per-item file to copy";
+			return "That category lives inside one shared library file: there is no file of its own to copy.";
 	}
 	return "";
 }
@@ -3315,40 +3898,60 @@ void UIContentBrowser::ClipboardPaste()
 	// A paste has always overwritten whatever was in the way, without a word.
 	// The clipboard entries carry the path they will take below dst_root, so
 	// the collisions are known BEFORE anything is written - ask about those.
-	int clashes = 0;
-	xr_string first_clash;
+	XUI::Strings clashes;
 	for (u32 i = 0; i < m_Clipboard.size(); ++i)
 	{
 		string_path t;
 		xr_sprintf(t, sizeof(t), "%s\\%s", dst_root, m_Clipboard[i].rel.c_str());
-		if (INVALID_FILE_ATTRIBUTES == ::GetFileAttributesA(t)) continue;
-		if (!clashes) first_clash = m_Clipboard[i].rel;
-		++clashes;
-	}
-	if (clashes)
-	{
-		// -nodlg answers No, so an unattended run never silently replaces files
-		if (mrYes != ELog.DlgMsg(mtConfirmation, mbYes | mbNo,
-			"%d item(s) already exist in '%s' and will be REPLACED (first: %s).\n\nOverwrite?",
-			clashes, m_CurFolder.empty() ? "this folder" : m_CurFolder.c_str(), first_clash.c_str()))
-			return;
+		if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(t))
+			clashes.push_back(m_Clipboard[i].rel);
 	}
 
-	xr_string err;
-	const int files = PasteClipboardInto(dst_root, true, err);
-	if (err.empty())	ELog.Msg(mtInformation, "Pasted %d file(s).", files);
-	else				ELog.DlgMsg(mtError, "Pasted %d file(s); %s", files, err.c_str());
+	const xr_string target = dst_root;
+	auto paste = [target]
+	{
+		if (!Form || !Form->CanPaste())	return;
+		xr_string err;
+		const int files = Form->PasteClipboardInto(target.c_str(), true, err);
+		if (err.empty())	ELog.Msg(mtInformation, "Pasted %d file(s).", files);
+		else				XUI::Notice(XUI::Tone::Error, "Paste", NqUtil::Format("Pasted %d file(s); %s", files, err.c_str()).c_str());
+	};
+	if (clashes.empty())
+	{
+		paste();
+		return;
+	}
+
+	// -nodlg answers No, so an unattended run never silently replaces files
+	const xr_string where = m_CurFolder.empty() ? xr_string("the project's root") : m_CurFolder;
+	const xr_string headline = NqUtil::Format("%u item(s) already exist in %s and will be replaced:", u32(clashes.size()), where.c_str());
+	XUI::ConfirmSpec spec;
+	spec.id				= "cb_replace";
+	spec.title			= "Replace";
+	spec.headline		= headline.c_str();
+	spec.items			= clashes;
+	spec.total			= u32(clashes.size());
+	spec.consequence	= "What they replace is gone for good - this cannot be undone.";
+	spec.action			= "Replace";
+	spec.destructive	= true;
+	XUI::Confirm(spec, [paste](XUI::Answer answer)
+	{
+		if (XUI::Answer::Yes == answer)
+			paste();
+	});
 }
 
 void UIContentBrowser::HandleShortcuts()
 {
 	// only when this panel owns the keyboard, or Ctrl+C in the viewport would
 	// end up copying assets
+	// the scene's own bindings stay away from a focused browser (XUI::Shell::RegisterKeyOwner)
 	if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
-	if (UI) UI->BlockShortCuts();
 	if (ImGui::IsAnyItemActive()) return;
-
+	// a text box had the keys up to this frame: the Enter that closed the rename box opens nothing
 	const ImGuiIO& io = ImGui::GetIO();
+	if (io.WantTextInput) return;
+
 	if (io.KeyAlt)
 	{
 		xr_string err;
@@ -3363,6 +3966,10 @@ void UIContentBrowser::HandleShortcuts()
 	if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))	DeleteSelection();
 	if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && 1 == m_Selection.size())
 		BeginRename(m_Selection[0].path.c_str());
+	if ((ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) &&
+		1 == m_Selection.size() && !io.KeyCtrl && !io.KeyAlt)
+		OpenEntry(m_Selection[0]);
+	if (ImGui::IsKeyPressed(ImGuiKey_F5, false))		m_NeedRefresh = true;
 
 	if (!io.KeyCtrl) return;
 
@@ -3375,46 +3982,69 @@ void UIContentBrowser::HandleShortcuts()
 
 void UIContentBrowser::DrawGridContextMenu()
 {
+	// MCP ui_popup cb_grid: the menu a right click on empty space puts up
+	if (XUI::Shell::TakePopup("cb_grid"))
+		XUI::Shell::OpenPopupAt("cb_grid_ctx", ImVec2(ImGui::GetWindowPos().x + XUI::Pt(16.f), ImGui::GetWindowPos().y + XUI::Pt(16.f)));
 	// "Window" variant: fires on empty space, not over a tile
 	if (!ImGui::BeginPopupContextWindow("cb_grid_ctx", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 		return;
 
-	// Authoring lives here, on the empty space of the writable source - the same
-	// place a file manager puts it.
+	// Authoring lives here too, on the empty space of the writable source - the
+	// same place a file manager puts it - with the Add menu's items.
 	if (m_Source == 0)
 	{
-		// the root included: a module's layout is its author's business
-		if (ImGui::MenuItem("New folder"))	CreateFolder();
-		if (ImGui::BeginMenu("Create"))
-		{
-			if (ImGui::MenuItem("Quest Graph"))	CreateQuest();
-			if (ImGui::MenuItem("Character"))	CreateCharacter();
-			if (ImGui::MenuItem("NPC Behaviour"))	CreateBehaviour();
-			if (ImGui::MenuItem("PDA Interface"))	CreatePda();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("The module's own PDA screens (.pdaasset): pages, buttons, menus, the live map.");
-			ImGui::EndMenu();
-		}
+		DrawAddMenu();
 		ImGui::Separator();
 	}
 
 	const bool can = CanPaste();
-	if (ImGui::MenuItem("Paste", "Ctrl+V", false, can) && can)
+	if (XUI::MenuItem("Paste", "Ctrl+V", false, can))
 		ClipboardPaste();
-	if (!can && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("%s", PasteBlockedReason());
-
-	if (!m_Clipboard.empty())
-		ImGui::TextDisabled("%d item(s) on the clipboard", int(m_Clipboard.size()));
+	if (!can)
+		XUI::Tip(PasteBlockedReason());
 
 	ImGui::Separator();
-	if (ImGui::MenuItem("Select all", "Ctrl+A"))
+	if (XUI::MenuItem("Select All", "Ctrl+A"))
 		SelectAllViewEntries();
-	if (ImGui::MenuItem("Clear selection", "", false, !m_Selection.empty()))
+	if (ImGui::MenuItem("Clear Selection", nullptr, false, !m_Selection.empty()))
 		ClearSelection();
-	if (ImGui::MenuItem("Refresh")) m_NeedRefresh = true;
+	if (XUI::MenuItem("Refresh", "F5"))
+		m_NeedRefresh = true;
 
 	ImGui::EndPopup();
+}
+
+LPCSTR UIContentBrowser::AddBlocked() const
+{
+	if (IsReadOnlySource())
+		return "Content is added to the project: switch the source to Project.";
+	if (!EditorProject::Active())
+		return "Open a project to add content to it.";
+	return nullptr;
+}
+
+// The Add menu: a folder or one of the editor's own assets, in the folder shown - the project only
+void UIContentBrowser::DrawAddMenu()
+{
+	LPCSTR blocked = AddBlocked();
+	const bool writable = !blocked;
+	struct SItem { LPCSTR label; LPCSTR tip; void (UIContentBrowser::*create)(); };
+	static const SItem kItems[] =
+	{
+		{ "New Folder",			"A folder in the folder shown.",											&UIContentBrowser::CreateFolder },
+		{ "Quest",				"A quest graph (.nqasset).",												&UIContentBrowser::CreateQuest },
+		{ "Behaviour Graph",	"What an NPC does, step by step (.behasset).",							&UIContentBrowser::CreateBehaviour },
+		{ "Character",			"One of the module's own NPCs (.npcasset).",								&UIContentBrowser::CreateCharacter },
+		{ "PDA Interface",		"The module's own PDA screens: pages, buttons, menus, the live map (.pdaasset).", &UIContentBrowser::CreatePda },
+	};
+	for (u32 i = 0; i < _countof(kItems); ++i)
+	{
+		if (1 == i)
+			ImGui::Separator();
+		if (ImGui::MenuItem(kItems[i].label, nullptr, false, writable))
+			(this->*kItems[i].create)();
+		XUI::Tip(writable ? kItems[i].tip : blocked);
+	}
 }
 
 // `dst_dir` empty means "wherever fs.ltx implies", which is what MCP wants when
@@ -3688,6 +4318,8 @@ bool UIContentBrowser::CreateAsset(LPCSTR kind, xr_string& made, xr_string& err)
 	Show();
 	if (!Form)					{ err = "content browser unavailable"; return false; }
 	if (Form->m_Source != 0)	{ err = "only the project source can be written to"; return false; }
+	// the listing is current whether or not a panel or the drawer drew it this frame
+	Form->EnsureListing();
 
 	// the menu items are the same three calls; they pick the first free name in
 	// the open folder and refresh, so the answer is whatever appeared
@@ -3799,303 +4431,686 @@ void UIContentBrowser::CommitRename()
 }
 
 //------------------------------------------------------------------------------
-// splitter between the folder tree and the tile grid
-//
-// An InvisibleButton is the whole handle: it takes the mouse capture, so the
-// drag keeps working while the cursor runs ahead of the pane, and it swallows
-// the click so neither child sees it. The grab area is wider than the drawn
-// line - a 1px target is unusable.
+// the panel: the toolbar, the Sources pane beside the tiles, the status strip
 //------------------------------------------------------------------------------
-void UIContentBrowser::DrawSplitter(float height)
+// The view settings live in the layout (the .ini), read with it at the first frame: the tiles keep
+// their size and the pane its place across sessions.
+void UIContentBrowser::LoadView()
 {
-	const float grab	= 6.f;
-	const float spacing	= ImGui::GetStyle().ItemSpacing.x;
-
-	ImGui::SameLine(0.f, 0.f);
-	const ImVec2 top = ImGui::GetCursorScreenPos();
-
-	ImGui::InvisibleButton("##cb_split", ImVec2(grab + spacing, height > 0.f ? height : 1.f));
-	const bool active	= ImGui::IsItemActive();
-	const bool hovered	= ImGui::IsItemHovered();
-
-	if (active)
+	if (m_ViewLoaded) return;
+	m_ViewLoaded	= true;
+	// 0 (or nothing stored) = no size picked: the tiles fit the host
+	const auto picked = [](LPCSTR key)
 	{
-		m_TreeWidth += ImGui::GetIO().MouseDelta.x;
-
-		// Recover the stable right boundary from cursor + remaining space, then
-		// measure it from the window's inner left edge.
-		const float content_right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-		const float inner = content_right - ImGui::GetWindowPos().x - ImGui::GetStyle().WindowPadding.x;
-		const float tiles	= 160.f + grab + spacing;	// one tile column + the handle
-		const float max_w	= (inner > tiles) ? (inner - tiles) : 120.f;
-		if (m_TreeWidth > max_w)	m_TreeWidth = max_w;
-		if (m_TreeWidth < 120.f)	m_TreeWidth = 120.f;
-
-		if (CLevelPreferences* prefs = dynamic_cast<CLevelPreferences*>(EPrefs))
-			prefs->ContentBrowserTreeWidth = u32(m_TreeWidth);
-	}
-	if (active || hovered)
-		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-	// visible grip: separator tint at rest, the usual accent while dragged
-	const ImU32 col = ImGui::GetColorU32(active	 ? ImGuiCol_SeparatorActive
-									   : hovered ? ImGuiCol_SeparatorHovered
-												 : ImGuiCol_Separator);
-	const float x = top.x + (grab + spacing) * 0.5f;
-	ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x - 1.f, top.y),
-											  ImVec2(x + 1.f, top.y + ImGui::GetItemRectSize().y), col);
-
-	ImGui::SameLine(0.f, 0.f);
+		const float size = XUI::Layout::Get(key, 0.f);
+		return size > 0.f ? clampr(size, EditorUiContract::kTileMin, EditorUiContract::kTileMax) : 0.f;
+	};
+	m_TileSize[kHostDrawer]	= picked("content_browser.tile_size");
+	m_TileSize[kHostPanel]	= picked("content_browser.tile_size_panel");
+	// the docked panel lists: the Wide layout's strip holds a row of tiles and a half
+	m_ListView[kHostDrawer]	= XUI::Layout::Get("content_browser.list", 0.f) != 0.f;
+	m_ListView[kHostPanel]	= XUI::Layout::Get("content_browser.list_panel", 1.f) != 0.f;
+	m_SourcesPane	= XUI::Layout::Get("content_browser.sources_pane", 1.f) != 0.f;
 }
 
-static LPCSTR BrowserSourceName(int source)
+void UIContentBrowser::StoreView()
 {
-	switch (source)
+	m_ViewLoaded = true;
+	XUI::Layout::Set("content_browser.tile_size", m_TileSize[kHostDrawer]);
+	XUI::Layout::Set("content_browser.tile_size_panel", m_TileSize[kHostPanel]);
+	XUI::Layout::Set("content_browser.list", m_ListView[kHostDrawer] ? 1.f : 0.f);
+	XUI::Layout::Set("content_browser.list_panel", m_ListView[kHostPanel] ? 1.f : 0.f);
+	XUI::Layout::Set("content_browser.sources_pane", m_SourcesPane ? 1.f : 0.f);
+}
+
+LPCSTR UIContentBrowser::RootLabel() const
+{
+	switch (m_Source)
 	{
-	case 0: return "Content";
-	case 1: return "Editor Content";
-	case 2: return "DARF Content";
-	default: return "Unknown";
+	case 0:		return "Project";
+	case 2:		return "Game";
+	default:	return kCategories[m_Category].caption;
 	}
 }
 
-void UIContentBrowser::DrawBreadcrumbs()
+// "Game / textures / ui": where a favorite points, the way a tooltip names it
+static xr_string FavoriteLabel(const UIContentBrowser::SLocation& location)
 {
-	xr_string err;
-	xr_string requested;
-	bool navigate = false;
-	const bool at_root = m_CurFolder.empty();
-	if (at_root) ImGui::PushStyleColor(ImGuiCol_Button, ThemeColor(XFinedTheme::ColorToken::Accent));
-	if (ImGui::SmallButton(BrowserSourceName(m_Source))) navigate = true;
-	if (at_root) ImGui::PopStyleColor();
+	xr_string label = 0 == location.source ? "Project" : 2 == location.source ? "Game" : "Editor";
+	if (1 == location.source)
+	{
+		label += " / ";
+		label += UIContentBrowser::CategoryName(location.category);
+	}
+	for (LPCSTR p = location.folder.c_str(); *p;)
+	{
+		LPCSTR cut = strchr(p, '\\');
+		LPCSTR end = cut ? cut : p + xr_strlen(p);
+		label += " / ";
+		label.append(p, end);
+		p = cut ? cut + 1 : end;
+	}
+	return label;
+}
 
+// 59155 -> "59,155": counts in the status strip are read, not deciphered
+static xr_string Thousands(int n)
+{
+	char digits[16];
+	sprintf_s(digits, "%d", n);
+	xr_string out;
+	const int length = int(xr_strlen(digits));
+	for (int i = 0; i < length; ++i)
+	{
+		if (i && '-' != digits[i - 1] && 0 == (length - i) % 3)
+			out += ',';
+		out += digits[i];
+	}
+	return out;
+}
+
+float UIContentBrowser::BreadcrumbWidth() const
+{
+	const float pad = XUI::Pt(12.f), sep = XUI::Pt(16.f);
+	float w = ImGui::CalcTextSize(RootLabel()).x + pad;
+	for (LPCSTR p = m_CurFolder.c_str(); *p;)
+	{
+		LPCSTR cut = strchr(p, '\\');
+		LPCSTR end = cut ? cut : p + xr_strlen(p);
+		w += sep + ImGui::CalcTextSize(p, end).x + pad;
+		p = cut ? cut + 1 : end;
+	}
+	return w;
+}
+
+void UIContentBrowser::DrawBreadcrumbs(float width)
+{
+	struct SCrumb
+	{
+		xr_string label, path;
+		float w;
+	};
+	const float pad = XUI::Pt(12.f), sep = XUI::Pt(16.f), fold_w = XUI::Pt(28.f);
+	xr_vector<SCrumb> crumbs;
+	crumbs.push_back({ RootLabel(), "", ImGui::CalcTextSize(RootLabel()).x + pad });
 	xr_string path;
-	LPCSTR begin = m_CurFolder.c_str();
-	while (begin && begin[0])
+	for (LPCSTR p = m_CurFolder.c_str(); *p;)
 	{
-		LPCSTR cut = strchr(begin, '\\');
-		const size_t length = cut ? size_t(cut - begin) : xr_strlen(begin);
-		xr_string part;
-		part.assign(begin, length);
+		LPCSTR cut = strchr(p, '\\');
+		LPCSTR end = cut ? cut : p + xr_strlen(p);
+		const xr_string part = Span(p, end);
 		if (!path.empty()) path += "\\";
 		path += part;
-
-		ImGui::SameLine(0.0f, 5.0f);
-		ImGui::TextDisabled(">");
-		ImGui::SameLine(0.0f, 5.0f);
-		ImGui::PushID(path.c_str());
-		const bool current = 0 == _stricmp(path.c_str(), m_CurFolder.c_str());
-		if (current) ImGui::PushStyleColor(ImGuiCol_Button, ThemeColor(XFinedTheme::ColorToken::Accent));
-		if (ImGui::SmallButton(part.c_str()))
-		{
-			requested = path;
-			navigate = true;
-		}
-		if (current) ImGui::PopStyleColor();
-		ImGui::PopID();
-		if (!cut) break;
-		begin = cut + 1;
+		crumbs.push_back({ part, path, ImGui::CalcTextSize(part.c_str()).x + pad });
+		p = cut ? cut + 1 : end;
 	}
-	if (navigate)
-		ApplyLocation(SLocation(m_Source, int(m_Category), requested.c_str()), true, err);
+
+	// the leading crumbs fold into a menu until the rest fits; the folder shown always stays
+	const int n = int(crumbs.size());
+	float total = 0.f;
+	for (int i = 0; i < n; ++i)
+		total += crumbs[i].w + (i ? sep : 0.f);
+	int first = 0;
+	while (total > width && first < n - 1)
+	{
+		total -= crumbs[first].w + sep;
+		if (!first) total += fold_w + sep;
+		++first;
+	}
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	const ImVec2 origin = ImGui::GetCursorScreenPos();
+	const float h = ImGui::GetFrameHeight();
+	const float right = origin.x + width;
+	const float r = XUI::Pt(4.f);
+	float x = origin.x;
+	auto chevron = [&]
+	{
+		XUI::DrawIcon(dl, XUI::Icon::ChevronRight, ImVec2(PxRound(x + XUI::Pt(2.f)), PxRound(origin.y + (h - XUI::Pt(12.f)) * .5f)), 12.f,
+			ThemeCol(Token::TextMuted));
+		x += sep;
+	};
+	auto paint = [&](const ImVec2& a, float w, LPCSTR text, ImU32 col)
+	{
+		dl->AddText(ImVec2(PxRound(a.x + (w - ImGui::CalcTextSize(text).x) * .5f), PxRound(a.y + (h - ImGui::GetFontSize()) * .5f)), col, text);
+	};
+
+	ImGui::PushID("cb_crumbs");
+	int go = -1;
+	if (first > 0)
+	{
+		const ImVec2 a(x, origin.y);
+		ImGui::SetCursorScreenPos(a);
+		if (ImGui::InvisibleButton("##fold", ImVec2(fold_w, h)))
+			XUI::Shell::OpenPopupAt("##folded", ImVec2(a.x, a.y + h + XUI::Pt(2.f)));
+		const bool hovered = ImGui::IsItemHovered();
+		if (hovered)
+			dl->AddRectFilled(a, ImVec2(a.x + fold_w, a.y + h), ThemeCol(ImGui::IsItemActive() ? Token::Pressed : Token::Hover), r);
+		paint(a, fold_w, kEllipsis, ThemeCol(hovered ? Token::Text : Token::TextSecondary));
+		XUI::Tip("The folders above");
+		x += fold_w;
+		chevron();
+	}
+	for (int i = first; i < n; ++i)
+	{
+		if (i > first)
+			chevron();
+		const bool last = i == n - 1;
+		// the folder shown gives up its middle before the row gives up anything else
+		const float w = last ? _max(XUI::Pt(24.f), _min(crumbs[i].w, right - x)) : crumbs[i].w;
+		const ImVec2 a(x, origin.y);
+		ImGui::PushID(i);
+		ImGui::SetCursorScreenPos(a);
+		const bool pressed = ImGui::InvisibleButton("##crumb", ImVec2(w, h));
+		const bool hovered = ImGui::IsItemHovered();
+		if (hovered && !last)
+			dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), ThemeCol(ImGui::IsItemActive() ? Token::Pressed : Token::Hover), r);
+		xr_string shown;
+		const bool cut = XUI::EllipsizeText(crumbs[i].label.c_str(), w - pad, XUI::Clip::End, shown);
+		paint(a, w, cut ? shown.c_str() : crumbs[i].label.c_str(), ThemeCol(last || hovered ? Token::Text : Token::TextSecondary));
+		if (cut)
+		{
+			XUI::Tip(crumbs[i].label.c_str());
+			XUI::AuditTruncated(crumbs[i].label.c_str(), shown.c_str(), a, ImVec2(a.x + w, a.y + h));
+		}
+		if (pressed && !last)
+			go = i;
+		ImGui::PopID();
+		x += w;
+	}
+	if (ImGui::BeginPopup("##folded"))
+	{
+		for (int i = 0; i < first; ++i)
+		{
+			ImGui::PushID(i);
+			if (ImGui::MenuItem(crumbs[i].label.c_str()))
+				go = i;
+			ImGui::PopID();
+		}
+		ImGui::EndPopup();
+	}
+	ImGui::PopID();
+
+	if (go >= 0)
+	{
+		xr_string err;
+		ApplyLocation(SLocation(m_Source, int(m_Category), crumbs[go].path.c_str()), true, err);
+	}
 }
 
-void UIContentBrowser::DrawFavoritesPopup()
+void UIContentBrowser::DrawViewMenu()
 {
-	if (!ImGui::BeginPopup("cb_favorites")) return;
+	ImGui::SeparatorText("View As");
+	if (ImGui::MenuItem("Tiles", nullptr, !m_ListView[m_Host]))
+	{
+		m_ListView[m_Host] = false;
+		StoreView();
+	}
+	XUI::Tip("A picture and a two-line name for each entry.");
+	if (ImGui::MenuItem("List", nullptr, m_ListView[m_Host]))
+	{
+		m_ListView[m_Host] = true;
+		StoreView();
+	}
+	XUI::Tip("One line for each entry, in columns: the most entries in a short panel.");
 
-	ImGui::TextColored(ThemeColor(XFinedTheme::ColorToken::Accent), "Favorite folders");
+	ImGui::SeparatorText("Tile Size");
+	const bool fit = m_TileSize[m_Host] <= 0.f;
+	if (ImGui::MenuItem("Fit to Height", nullptr, fit))
+	{
+		// off keeps the size shown, now as the one picked
+		m_TileSize[m_Host] = fit ? ShownTile(m_Host) : 0.f;
+		m_ListView[m_Host] = false;
+		StoreView();
+	}
+	{
+		char tip[160];
+		sprintf_s(tip, "The largest tiles, up to %.0f pt, that let the grid show two rows. Picking a size turns it off.",
+			kHostPanel == m_Host ? EditorUiContract::kTileDefaultPanel : EditorUiContract::kTileDefault);
+		XUI::Tip(tip);
+	}
+	float size = ShownTile(m_Host);
+	ImGui::SetNextItemWidth(XUI::Em(12.f));
+	if (ImGui::SliderFloat("##cb_tile", &size, EditorUiContract::kTileMin, EditorUiContract::kTileMax, "%.0f pt"))
+	{
+		m_TileSize[m_Host] = size;
+		m_ListView[m_Host] = false;
+		StoreView();
+	}
+	XUI::Tip("The side of a tile; the panel and the Content Drawer keep one each. Ctrl+wheel over the tiles changes it "
+		"too, and goes to the list under the smallest.");
+
+	ImGui::SeparatorText("Source");
+	static const LPCSTR kSources[] = { "Project", "Editor", "Game" };
+	for (int i = 0; i < 3; ++i)
+		if (ImGui::MenuItem(kSources[i], nullptr, m_Source == i))
+			SwitchSource(i);
+	if (1 == m_Source && ImGui::BeginMenu("Category"))
+	{
+		for (int i = 0; i < kCategoryCount; ++i)
+			if (ImGui::MenuItem(kCategories[i].caption, nullptr, m_Category == u32(i)))
+			{
+				xr_string err;
+				ApplyLocation(SLocation(1, i, ""), true, err);
+			}
+		ImGui::EndMenu();
+	}
+
 	ImGui::Separator();
-	if (s_Favorites.empty())
-		ImGui::TextDisabled("No favorites in this session");
+	if (ImGui::MenuItem("Sources Pane", nullptr, m_SourcesPane))
+	{
+		m_SourcesPane = !m_SourcesPane;
+		StoreView();
+	}
+	XUI::Tip(m_SourcesFit ? "The source, the favorites and the folder tree beside the tiles."
+		: "Shown while the browser is at least 480 pt wide.");
+	if (XUI::MenuItem("Refresh", "F5"))
+		m_NeedRefresh = true;
+}
 
+void UIContentBrowser::DrawFavoritesMenu()
+{
+	SyncFavoriteScopes();
+	if (s_Favorites.empty())
+	{
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + XUI::Em(18.f));
+		XUI::StatusText(XUI::Tone::Muted, "No favorites yet. The star beside this menu keeps the folder shown.");
+		ImGui::PopTextWrapPos();
+		return;
+	}
+	const SLocation here = CurrentLocation();
+	const float row_w = XUI::Em(22.f);
+	const float h = XUI::Pt(24.f);
 	for (u32 i = 0; i < s_Favorites.size(); ++i)
 	{
 		const SLocation favorite = s_Favorites[i];
-		xr_string label = BrowserSourceName(favorite.source);
-		if (favorite.source == 1)
-		{
-			label += " / ";
-			label += CategoryName(favorite.category);
-		}
-		if (!favorite.folder.empty())
-		{
-			label += " / ";
-			label += favorite.folder;
-		}
-
+		const xr_string label = FavoriteLabel(favorite);
 		ImGui::PushID(int(i));
-		const float remove_width = ImGui::GetFrameHeight();
-		const float row_width = ImGui::GetContentRegionAvail().x - remove_width - ImGui::GetStyle().ItemSpacing.x;
-		if (ImGui::Selectable(label.c_str(), SameLocation(favorite, CurrentLocation()),
-			ImGuiSelectableFlags_None, ImVec2(row_width > 80.0f ? row_width : 80.0f, 0.0f)))
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		const bool open = ImGui::Selectable("##favorite", SameLocation(favorite, here), ImGuiSelectableFlags_None, ImVec2(row_w, h));
+		// a path: the start gives way, the folder's own name stays
+		xr_string shown;
+		const bool cut = XUI::EllipsizeText(label.c_str(), row_w - XUI::Pt(8.f), XUI::Clip::Start, shown);
+		ImGui::GetWindowDrawList()->AddText(ImVec2(PxRound(at.x + XUI::Pt(4.f)), PxRound(at.y + (h - ImGui::GetFontSize()) * .5f)),
+			ThemeCol(Token::Text), cut ? shown.c_str() : label.c_str());
+		if (cut)
+		{
+			XUI::Tip(label.c_str());
+			XUI::AuditTruncated(label.c_str(), shown.c_str(), at, ImVec2(at.x + row_w, at.y + h));
+		}
+		ImGui::SameLine(0.f, XUI::Pt(2.f));
+		const bool remove = XUI::IconButton("##remove", XUI::Icon::Close, "Remove from Favorites");
+		ImGui::PopID();
+		if (open)
 		{
 			xr_string err;
 			if (!ApplyLocation(favorite, true, err))
-				ELog.Msg(mtError, "Cannot open favorite: %s", err.c_str());
-			else
-				ImGui::CloseCurrentPopup();
-			ImGui::PopID();
+				XUI::Toast(XUI::Tone::Warning, ("The favorite cannot be opened: " + err).c_str());
 			break;
 		}
-		ImGui::SameLine();
-		if (ImGui::SmallButton("x"))
+		if (remove)
 		{
 			s_Favorites.erase(s_Favorites.begin() + i);
-			ImGui::PopID();
 			break;
 		}
-		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove favorite");
-		ImGui::PopID();
 	}
-
-	ImGui::EndPopup();
 }
 
-void UIContentBrowser::DrawNavigationBar()
+void UIContentBrowser::DrawSources()
 {
-	ImGui::PushID("cb_navigation");
-	xr_string err;
-	ImGui::BeginDisabled(m_BackHistory.empty());
-	if (ImGui::SmallButton("<")) GoBack(err);
-	ImGui::EndDisabled();
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Back (Alt+Left)");
-
-	ImGui::SameLine();
-	ImGui::BeginDisabled(m_ForwardHistory.empty());
-	if (ImGui::SmallButton(">")) GoForward(err);
-	ImGui::EndDisabled();
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Forward (Alt+Right)");
-
-	ImGui::SameLine();
-	ImGui::BeginDisabled(m_CurFolder.empty());
-	if (ImGui::SmallButton("Up")) GoUp(err);
-	ImGui::EndDisabled();
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Parent folder (Alt+Up)");
-
-	ImGui::SameLine();
-	ImGui::BeginDisabled(m_CurFolder.empty());
-	if (ImGui::SmallButton("Home")) GoHome(err);
-	ImGui::EndDisabled();
-	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Source root (Alt+Home)");
-
-	const int favorite = FindFavorite(CurrentLocation());
-	const bool can_favorite = favorite >= 0 || m_Source != 0 || EditorProject::Active();
-	ImGui::SameLine(0.0f, 10.0f);
-	ImGui::BeginDisabled(!can_favorite);
-	if (ImGui::SmallButton(favorite >= 0 ? "Unfavorite" : "Favorite"))
+	static const LPCSTR kSources[] = { "Project", "Editor", "Game" };
+	int source = m_Source;
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+	if (XUI::Segmented("##cb_source", &source, kSources, 3))
+		SwitchSource(source);
+	// the Editor source is the shared library, one category at a time
+	if (1 == m_Source)
 	{
-		if (favorite >= 0)
-			s_Favorites.erase(s_Favorites.begin() + favorite);
-		else if (!AddFavorite(CurrentLocation(), err))
-			ELog.Msg(mtError, "Cannot add favorite: %s", err.c_str());
-	}
-	ImGui::EndDisabled();
-	if (!can_favorite && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("Open a project first");
-
-	ImGui::SameLine();
-	if (ImGui::SmallButton("Favorites...")) ImGui::OpenPopup("cb_favorites");
-	DrawFavoritesPopup();
-
-	ImGui::SameLine(0.0f, 14.0f);
-	DrawBreadcrumbs();
-	ImGui::PopID();
-}
-
-void UIContentBrowser::Draw()
-{
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(420, 260));
-	if (!ImGui::Begin("Content Browser", &bOpen))
-	{
-		ImGui::PopStyleVar(1);
-		ImGui::End();
-		return;
-	}
-
-	m_Tick++;
-	m_ThumbsThisFrame = 0;
-	if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left)) m_Dragged.clear();
-	EnsureListing();
-
-	// toolbar: UE-style source switch, then the category combo for the shared library
-	{
-		if (ImGui::RadioButton("Content", m_Source == 0))			SwitchSource(0);
-		ImGui::SameLine();
-		if (ImGui::RadioButton("Editor Content", m_Source == 1))	SwitchSource(1);
-		ImGui::SameLine();
-		if (ImGui::RadioButton("DARF Content", m_Source == 2))		SwitchSource(2);
-	}
-	ImGui::SameLine(0, 16);
-	if (m_Source == 1)
-	{
-		ImGui::SetNextItemWidth(160);
-		if (ImGui::BeginCombo("##cat", kCategories[m_Category].caption))
+		ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+		if (ImGui::BeginCombo("##cb_category", kCategories[m_Category].caption))
 		{
 			for (int i = 0; i < kCategoryCount; ++i)
-				if (ImGui::Selectable(kCategories[i].caption, m_Category == (u32)i))
+				if (ImGui::Selectable(kCategories[i].caption, m_Category == u32(i)))
 				{
 					xr_string err;
 					ApplyLocation(SLocation(1, i, ""), true, err);
 				}
 			ImGui::EndCombo();
 		}
-		ImGui::SameLine();
+		XUI::Tip("The category of the editor's library listed here.");
 	}
-	if (ImGui::Button("Refresh")) m_NeedRefresh = true;
-	ImGui::SameLine();
-	if (m_Filter.Draw("##filter", 180)) InvalidateView();
-	ImGui::SameLine();
-	ImGui::SetNextItemWidth(120);
-	ImGui::SliderFloat("##tile", &m_TileSize, 48.f, 192.f, "%.0f");
-	ImGui::SameLine();
-	ImGui::TextDisabled("%d items", (int)m_Items.size());
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
 
-	if (IsReadOnlySource())
+	// The two section headers cost 56 pt. A pane that cannot hold six tree rows beside them - the Wide layout's strip -
+	// keeps that room for the tree: its favorites, when there are any, go straight above it with a rule between.
+	// Measured here, outside the scrolling child, whose own measure grows as it scrolls.
+	const bool sections = ImGui::GetContentRegionAvail().y >= XUI::Pt(28.f * 2.f + 22.f * 6.f);
+
+	if (ImGui::BeginChild("##cb_sources_scroll", ImVec2(0.f, 0.f)))
 	{
-		ImGui::SameLine(0, 16);
-		ImGui::TextColored(ThemeColor(XFinedTheme::ColorToken::Warning), "READ ONLY");
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("nothing here is ever modified: browse, preview, and Copy out of it");
+		// rows touch: their 22 pt is the rhythm, tree nodes included
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(XUI::Pt(4.f), XUI::Pt(3.f)));
+		SyncFavoriteScopes();
+		const auto favorite_rows = [this]
+		{
+			const SLocation here = CurrentLocation();
+			for (u32 i = 0; i < s_Favorites.size(); ++i)
+			{
+				const SLocation favorite = s_Favorites[i];
+				LPCSTR leaf = strrchr(favorite.folder.c_str(), '\\');
+				xr_string name = leaf ? leaf + 1 : favorite.folder.c_str();
+				if (name.empty())
+					name = 0 == favorite.source ? "Project" : 2 == favorite.source ? "Game" : CategoryName(favorite.category);
+				const xr_string where = FavoriteLabel(favorite);
+				char id[16];
+				sprintf_s(id, "fav%u", i);
+				bool remove = false;
+				XUI::NavRowSpec row;
+				row.icon = XUI::Icon::StarFilled;
+				row.tip = where.c_str();
+				row.action = XUI::Icon::Close;
+				row.action_tip = "Remove from Favorites";
+				if (XUI::NavRow(id, name.c_str(), SameLocation(favorite, here), row, &remove))
+				{
+					xr_string err;
+					if (!ApplyLocation(favorite, true, err))
+						XUI::Toast(XUI::Tone::Warning, ("The favorite cannot be opened: " + err).c_str());
+				}
+				if (remove)
+				{
+					s_Favorites.erase(s_Favorites.begin() + i);
+					return;
+				}
+			}
+		};
+		if (sections)
+		{
+			char count[16];
+			sprintf_s(count, "%u", u32(s_Favorites.size()));
+			// closed while there is nothing in it, until the author opens it: the tree needs the room more
+			if (XUI::Section("Favorites", !s_Favorites.empty(), s_Favorites.empty() ? nullptr : count))
+			{
+				if (s_Favorites.empty())
+					XUI::StatusText(XUI::Tone::Muted, "The star on the toolbar keeps the folder shown here.");
+				favorite_rows();
+				XUI::EndSection();
+			}
+			if (XUI::Section("Folders", true))
+			{
+				DrawFolder(m_Root);
+				XUI::EndSection();
+			}
+		}
+		else
+		{
+			if (!s_Favorites.empty())
+			{
+				favorite_rows();
+				ImGui::Dummy(ImVec2(0.f, XUI::Pt(3.f)));
+				ImGui::Separator();
+				ImGui::Dummy(ImVec2(0.f, XUI::Pt(3.f)));
+			}
+			DrawFolder(m_Root);
+		}
+		ImGui::PopStyleVar(2);
 	}
-	if (!m_Selection.empty())
+	ImGui::EndChild();
+}
+
+// The view's own test, per selected entry rather than per tile: a selection is rarely the size of a folder.
+int UIContentBrowser::SelectedTiles() const
+{
+	if (m_Selection.empty())
+		return 0;
+	const bool searching = SearchActive(m_Search);
+	const size_t below = m_CurFolder.empty() ? 0 : m_CurFolder.size() + 1;
+	int count = 0;
+	for (const SEntry& e : m_Selection)
 	{
-		ImGui::SameLine(0, 16);
-		ImGui::TextDisabled("%d selected", int(m_Selection.size()));
+		LPCSTR path = e.path.c_str();
+		// strictly under the folder shown: the folder itself (picked in the tree) is no tile of it
+		if (e.path.size() <= below ||
+			(below && (0 != _strnicmp(path, m_CurFolder.c_str(), below - 1) || path[below - 1] != '\\')))
+			continue;
+		// a search lists everything below that matches, a folder only what it holds itself
+		if (searching ? XUI::Match(m_Search, path + below) : !strchr(path + below, '\\'))
+			++count;
+	}
+	return count;
+}
+
+void UIContentBrowser::DrawStatusStrip()
+{
+	const float h = XUI::Pt(24.f);
+	const ImVec2 p = ImGui::GetCursorScreenPos();
+	const float w = _max(1.f, ImGui::GetContentRegionAvail().x);
+	ImGui::GetWindowDrawList()->AddLine(p, ImVec2(p.x + w, p.y), ThemeCol(Token::BorderSubtle), _max(1.f, XUI::Pt(1.f)));
+
+	XUI::FontScope font(XUI::Font::Small);
+	// the folder shown - or what the search found in it - never the whole source
+	const int shown = m_ViewFolders + m_ViewFiles;
+	xr_string text = Thousands(shown);
+	text += SearchActive(m_Search) ? (1 == shown ? " result" : " results") : (1 == shown ? " item" : " items");
+	LPCSTR dot = "  \xC2\xB7  ";
+	if (const int selected = SelectedTiles())
+	{
+		text += dot;
+		text += Thousands(selected);
+		text += " selected";
 	}
 	if (!m_Clipboard.empty())
 	{
-		ImGui::SameLine(0, 12);
-		ImGui::TextDisabled("| %d on the clipboard%s", int(m_Clipboard.size()), m_ClipCut ? " (cut)" : "");
+		text += dot;
+		text += Thousands(int(m_Clipboard.size()));
+		text += m_ClipCut ? " cut" : " on the clipboard";
 	}
-
-	ImGui::Separator();
-	DrawNavigationBar();
-	ImGui::Separator();
-
-	// no project / no game link: one explaining line instead of an empty tree.
-	// IsGameSource, not IsReadOnlySource: the SDK library is read-only too but
-	// has nothing to do with the game install being linked.
-	if (IsGameSource() && !m_DarfReady)
+	const bool read_only = IsReadOnlySource();
+	const float badge_w = read_only ? ImGui::CalcTextSize("Read only").x + XUI::Pt(12.f) : 0.f;
+	const float line_y = PxRound(p.y + (h - ImGui::GetTextLineHeight()) * .5f);
+	ImGui::SetCursorScreenPos(ImVec2(p.x + XUI::Pt(2.f), line_y));
+	ImGui::PushStyleColor(ImGuiCol_Text, ThemeCol(Token::TextSecondary));
+	XUI::TextEllipsis(text.c_str(), _max(0.f, w - badge_w - XUI::Pt(14.f)));
+	ImGui::PopStyleColor();
+	if (read_only)
 	{
-		ImGui::TextWrapped("%s", m_DarfStatus.c_str());
-		ImGui::TextDisabled("Open a project and link a game install (fsgame.ltx + database\\) to browse it here.");
-		ImGui::PopStyleVar(1);
-		ImGui::End();
+		ImGui::SetCursorScreenPos(ImVec2(p.x + w - badge_w, line_y));
+		XUI::Badge("Read only");
+		XUI::Tip("Browse, preview and copy out into the project: nothing in this source is changed.");
+	}
+	ImGui::SetCursorScreenPos(p);
+	ImGui::Dummy(ImVec2(w, h));
+}
+
+// [Link Game...] of the Game source's empty state: the same check and link as the project's own page
+void UIContentBrowser::LinkGameFolder()
+{
+	char picked[MAX_PATH * 3] = {};
+	// the native folder picker; the Status line under Link Game says what the folder must hold
+	if (!XUI::BrowsePath(picked, sizeof(picked), true))
+		return;
+	if (!EditorProject::LinkGame(picked))
+	{
+		XUI::Notice(XUI::Tone::Error, "Link Game", EditorProject::LinkError());
 		return;
 	}
+	m_DarfReady		= false;
+	m_DarfStatus	= "Reading the linked game.";
+	m_NeedRefresh	= true;
+}
 
-	const float pane_h = ImGui::GetContentRegionAvail().y;
+void UIContentBrowser::DrawToolbar()
+{
+	xr_string err;
+	// The breadcrumb takes what the rest of the row leaves, measured the way the toolbar lays it out at full
+	// labels; the toolbar folds labels and items away first when even its minimum does not fit.
+	const float row_w = ImGui::GetContentRegionAvail().x;
+	auto menu_w = [](LPCSTR label) { return XUI::Pt(8.f + 16.f + 6.f + 10.f + 4.f + 12.f) + ImGui::CalcTextSize(label).x; };
+	const float button = XUI::Pt(24.f), in_group = XUI::Pt(2.f), between = XUI::Pt(12.f);
+	const float separator = XUI::Pt(12.f) + _max(1.f, XUI::Pt(1.f));
+	const float others = menu_w("Add") + separator + button * 3.f + in_group * 2.f + separator + in_group + between +
+		XUI::Em(10.f) + between + menu_w("View") + between + button + in_group + menu_w("Favorites") + XUI::Pt(8.f);
+	const float crumbs_w = _max(XUI::Em(6.f), _min(BreadcrumbWidth(), row_w - others));
 
-	if (ImGui::BeginChild("tree", ImVec2(m_TreeWidth, 0), true))
-		DrawFolder(m_Root);
+	XUI::Toolbar tb("cb_toolbar", XUI::ToolbarPanel);
+	tb.Group(3);
+	// Add works in the open project's own source only: elsewhere it is off and says why, instead of a menu of
+	// items that are all off
+	LPCSTR add_off = AddBlocked();
+	if (tb.Menu("cb_add", XUI::Icon::Plus, "Add", add_off ? add_off : "A folder or an asset in the folder shown", nullptr,
+		!add_off))
+	{
+		DrawAddMenu();
+		ImGui::EndPopup();
+	}
+	// an MCP request is taken either way; off, there is nothing to put up
+	else if (XUI::Shell::TakePopup("cb_add") && !add_off)
+	{
+		// MCP ui_popup cb_add: the menu comes up under its button, where a click puts it
+		ImGui::PushID("cb_add");
+		XUI::Shell::OpenPopupAt("##menu", ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f)));
+		ImGui::PopID();
+	}
+	tb.Separator();
+	tb.Group(4);
+	if (tb.Action("cb_back", XUI::Icon::Back, "", "Back (Alt+Left)", !m_BackHistory.empty()))
+		GoBack(err);
+	if (tb.Action("cb_forward", XUI::Icon::Forward, "", "Forward (Alt+Right)", !m_ForwardHistory.empty()))
+		GoForward(err);
+	if (tb.Action("cb_up", XUI::Icon::Up, "", "Parent Folder (Alt+Up)", !m_CurFolder.empty()))
+		GoUp(err);
+	tb.Separator();
+	tb.Group(5);
+	if (tb.Widget("cb_breadcrumb", crumbs_w / XUI::Dpi()))
+		DrawBreadcrumbs(crumbs_w);
+	tb.Spring();
+	tb.Group(2);
+	if (tb.Search(m_Search, sizeof(m_Search), "Search", 10.f))
+		InvalidateView();
+	tb.Group(1);
+	if (tb.Menu("cb_view", XUI::Icon::ViewOptions, "View", "Tiles or list, tile size, source and the Sources pane"))
+	{
+		DrawViewMenu();
+		ImGui::EndPopup();
+	}
+	else if (XUI::Shell::TakePopup("cb_view"))
+	{
+		ImGui::PushID("cb_view");
+		XUI::Shell::OpenPopupAt("##menu", ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f)));
+		ImGui::PopID();
+	}
+	tb.Group(0);
+	const int favorite = FindFavorite(CurrentLocation());
+	const bool can_favorite = favorite >= 0 || m_Source != 0 || EditorProject::Active();
+	if (tb.Action("cb_star", favorite >= 0 ? XUI::Icon::StarFilled : XUI::Icon::Star, "",
+		favorite >= 0 ? "Remove from Favorites" : "Add to Favorites", can_favorite, favorite >= 0))
+	{
+		if (favorite >= 0)
+			s_Favorites.erase(s_Favorites.begin() + favorite);
+		else if (!AddFavorite(CurrentLocation(), err))
+			XUI::Toast(XUI::Tone::Warning, ("The folder cannot be a favorite: " + err).c_str());
+	}
+	if (tb.Menu("cb_favorites", XUI::Icon::Bookmark, "Favorites", "Favorite folders"))
+	{
+		DrawFavoritesMenu();
+		ImGui::EndPopup();
+	}
+	else if (XUI::Shell::TakePopup("cb_favorites"))
+	{
+		ImGui::PushID("cb_favorites");
+		XUI::Shell::OpenPopupAt("##menu", ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f)));
+		ImGui::PopID();
+	}
+}
+
+void UIContentBrowser::Draw()
+{
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(XUI::Pt(360.f), XUI::Pt(150.f)));
+	// The toolbar and the status strip are bands of their own, flush with the edges as in the drawer: the
+	// strip's height goes to the tiles
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetStyle().WindowPadding.x, 0.f));
+	const bool visible = XUI::BeginPanel(PanelName(), &bOpen);
+	ImGui::PopStyleVar(2);
+	m_PanelFrame = ImGui::GetFrameCount();
+	m_RaiseFrames = visible ? 0 : _max(0, m_RaiseFrames - 1);
+	m_Host = kHostPanel;
+	if (visible)
+	{
+		if (XUI::Shell::OpenedDrawer() == XUI::Shell::DrawerContent)
+			XUI::EmptyState(XUI::Icon::Drawer, "In the Content Drawer", "Close the drawer to browse here.");
+		else
+			DrawBody();
+	}
+	XUI::EndPanel();
+}
+
+void UIContentBrowser::DrawBody()
+{
+	m_Tick++;
+	m_ThumbsThisFrame = 0;
+	if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left)) m_Dragged.clear();
+	LoadView();
+	EnsureListing();
+
+	DrawToolbar();
+
+	// the Sources pane beside the tiles, the status strip under both
+	const ImGuiStyle& st = ImGui::GetStyle();
+	const float status_h = XUI::Pt(24.f);
+	const float width = ImGui::GetContentRegionAvail().x;
+	// whole pixels: the panel has no padding under the status strip, and a fraction over would scroll it
+	const float body_h = _max(XUI::Pt(48.f), floorf(ImGui::GetContentRegionAvail().y - status_h - st.ItemSpacing.y));
+	m_SourcesFit	= width >= XUI::Pt(480.f);
+	m_SourcesShown	= m_SourcesPane && m_SourcesFit;
+
+	if (ImGui::BeginChild("##cb_panes", ImVec2(0.f, body_h), ImGuiChildFlags_None,
+		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
+	{
+		if (m_SourcesShown)
+		{
+			float side = 220.f;
+			XUI::Splitter("content_browser.sources", true, &side, 160.f, 200.f, 220.f);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, XUI::Pt(4.f)));
+			const bool pane = ImGui::BeginChild("##cb_sources", ImVec2(XUI::Pt(side), 0.f), ImGuiChildFlags_AlwaysUseWindowPadding,
+				ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+			ImGui::PopStyleVar();
+			if (pane)
+				DrawSources();
+			ImGui::EndChild();
+			ImGui::SameLine();
+		}
+
+		// what the tiles of a host with no size picked fit (ShownTile): measured here, outside the scrolling grid
+		m_GridHeight[m_Host] = _max(0.f, ImGui::GetContentRegionAvail().y - XUI::Pt(kGridPadY) * 2.f) / XUI::Dpi();
+
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ThemeCol(Token::Inset));
+		// a tile keeps 4 pt of its own around the square: 4 more above and below is the grid's 8
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(8.f), XUI::Pt(kGridPadY)));
+		// under Ctrl the wheel sizes the tiles instead of scrolling them
+		const bool tiles = ImGui::BeginChild("##cb_tiles", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding,
+			ImGui::GetIO().KeyCtrl ? ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None);
+		ImGui::PopStyleVar();
+		ImGui::PopStyleColor();
+		if (tiles)
+		{
+			// IsGameSource, not IsReadOnlySource: the SDK library is read-only too but
+			// has nothing to do with the game install being linked
+			if (IsGameSource() && !m_DarfReady)
+			{
+				if (XUI::EmptyState(XUI::Icon::GameFolder,
+					EditorProject::GameLinked() ? "Game content unavailable" : "No game linked",
+					m_DarfStatus.empty() ? "Link the game install to browse its content." : m_DarfStatus.c_str(),
+					"Link Game..."))
+					LinkGameFolder();
+			}
+			else
+				DrawTiles();
+		}
+		ImGui::EndChild();
+	}
 	ImGui::EndChild();
 
-	DrawSplitter(pane_h);
-
-	if (ImGui::BeginChild("tiles", ImVec2(0, 0), true))
-		DrawTiles();
-	ImGui::EndChild();
+	DrawStatusStrip();
 
 	// both panes have had their frame at it
 	m_ScrollToSelection = false;
@@ -4103,12 +5118,4 @@ void UIContentBrowser::Draw()
 	// Panel-wide, so the tree answers Del and Ctrl+C exactly like the grid.
 	// Runs after both panes: Ctrl+A needs the complete view cache from the grid.
 	HandleShortcuts();
-
-	// destructive work is always one confirmation away
-	if (m_ConfirmDelete && !ImGui::IsPopupOpen("Delete"))
-		ImGui::OpenPopup("Delete");
-	DrawConfirmDelete();
-
-	ImGui::PopStyleVar(1);
-	ImGui::End();
 }

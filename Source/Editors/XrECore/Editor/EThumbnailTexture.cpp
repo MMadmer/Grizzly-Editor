@@ -3,6 +3,8 @@
 
 #include "EThumbnail.h"
 #include "EDX11Utils.h"
+#include "EThumbnailVisual.h"
+#include "RedImageTool/RedImage.hpp"
 #ifndef XR_EPROPS_EXPORTS
 	#include "ImageManager.h"
 #endif
@@ -288,3 +290,112 @@ LPCSTR ETextureThumbnail::FormatString()
 }
 //------------------------------------------------------------------------------
 
+//------------------------------------------------------------------------------
+// Content browser tiles (EThumbnailVisual.h)
+//------------------------------------------------------------------------------
+static bool TextureTileFromImage(RedImageTool::RedImage& img, u32 side, STextureTile& out)
+{
+	using RedImageTool::RedTextureUtils;
+	using RedImageTool::RedTexturePixelFormat;
+	const size_t w0 = img.GetWidth(), h0 = img.GetHeight();
+	if (img.Empty() || !w0 || !h0 || !side)
+		return false;
+	out.src_w = u32(w0);
+	out.src_h = u32(h0);
+
+	// the smallest level that still covers `side`; one under a block (4 px) is left alone, the decoders only ever
+	// see whole blocks here
+	const size_t mips = img.GetMips();
+	size_t level = 0;
+	while (level + 1 < mips)
+	{
+		const size_t w = RedTextureUtils::GetMip(w0, level + 1), h = RedTextureUtils::GetMip(h0, level + 1);
+		if (_max(w, h) < size_t(side) || _min(w, h) < 4)
+			break;
+		++level;
+	}
+	RedImageTool::RedImage picked;
+	if (level)
+	{
+		const RedTexturePixelFormat format = img.GetFormat();
+		const size_t w = RedTextureUtils::GetMip(w0, level), h = RedTextureUtils::GetMip(h0, level);
+		picked.Create(w, h, 1, 1, format);
+		CopyMemory(*picked, RedTextureUtils::GetImage(static_cast<unsigned char*>(*img), w0, h0, mips, 0, level, format),
+			RedTextureUtils::GetSizeInMemory(w, h, 1, format));
+	}
+	else
+	{
+		img.ClearMipLevels();
+		picked.Swap(img);
+	}
+	picked.Convert(RedTexturePixelFormat::R8G8B8A8);
+
+	const u32 sw = u32(picked.GetWidth()), sh = u32(picked.GetHeight());
+	if (picked.Empty() || !sw || !sh)
+		return false;
+	const u32 longest = _max(sw, sh);
+	u32 dw = sw, dh = sh;
+	if (longest > side)
+	{
+		dw = _max(1u, u32((u64(sw) * side + longest / 2) / longest));
+		dh = _max(1u, u32((u64(sh) * side + longest / 2) / longest));
+	}
+
+	// R8G8B8A8 in, B8G8R8A8 out; every output pixel is the mean of the texels it covers, their colour weighted by
+	// their alpha
+	const unsigned char* src = static_cast<const unsigned char*>(*picked);
+	out.w = dw;
+	out.h = dh;
+	out.pixels.resize(size_t(dw) * dh);
+	u32 alpha_min = 255, alpha_max = 0;
+	for (u32 y = 0; y < dh; ++y)
+	{
+		const u32 y0 = u32(u64(y) * sh / dh), y1 = _max(y0 + 1, u32(u64(y + 1) * sh / dh));
+		for (u32 x = 0; x < dw; ++x)
+		{
+			const u32 x0 = u32(u64(x) * sw / dw), x1 = _max(x0 + 1, u32(u64(x + 1) * sw / dw));
+			u64 r = 0, g = 0, b = 0, a = 0;
+			for (u32 sy = y0; sy < y1; ++sy)
+			{
+				const unsigned char* p = src + (size_t(sy) * sw + x0) * 4;
+				for (u32 sx = x0; sx < x1; ++sx, p += 4)
+				{
+					const u32 pa = p[3];
+					r += p[0] * pa;
+					g += p[1] * pa;
+					b += p[2] * pa;
+					a += pa;
+					alpha_min = _min(alpha_min, pa);
+					alpha_max = _max(alpha_max, pa);
+				}
+			}
+			const u64 n = u64(y1 - y0) * u64(x1 - x0);
+			const u32 ca = u32((a + n / 2) / n);
+			const u32 cr = a ? u32((r + a / 2) / a) : 0;
+			const u32 cg = a ? u32((g + a / 2) / a) : 0;
+			const u32 cb = a ? u32((b + a / 2) / a) : 0;
+			out.pixels[size_t(y) * dw + x] = (ca << 24) | (cr << 16) | (cg << 8) | cb;
+		}
+	}
+	out.alpha = alpha_min == 255 ? 0 : alpha_max == 0 ? 2 : 1;
+	return true;
+}
+
+bool TextureTileFromFile(LPCSTR path, u32 side, STextureTile& out)
+{
+	out = STextureTile();
+	if (!path || !path[0])
+		return false;
+	RedImageTool::RedImage img;
+	return img.LoadFromFile(path) && TextureTileFromImage(img, side, out);
+}
+
+bool TextureTileFromMemory(const void* data, u32 size, u32 side, STextureTile& out)
+{
+	out = STextureTile();
+	if (!data || !size)
+		return false;
+	RedImageTool::RedImage img;
+	// the block is only read; the missing const on the loader is its own
+	return img.LoadFromMemory(const_cast<void*>(data), size) && TextureTileFromImage(img, side, out);
+}

@@ -54,7 +54,7 @@ BOOL SceneBuilder::Compile(bool b_selected_only, bool show_message )
 	}
 
 	xr_string error_text		= "";
-	ELog.Msg( mtInformation, "Building started..." );
+	ELog.Progress("Building started...");
 
     UI->BeginEState(esBuildLevel);
     try{
@@ -118,7 +118,7 @@ BOOL SceneBuilder::MakeGame( )
 	if(UI->ContainEState(esBuildLevel)) return false;
 	SProgressOperation progress(*UI, false);
 	xr_string error_text="";
-	ELog.Msg( mtInformation, "Making started..." );
+	ELog.Progress("Making started...");
 
     UI->BeginEState(esBuildLevel);
     try{
@@ -186,7 +186,7 @@ BOOL SceneBuilder::MakeHOM( )
 	if(UI->ContainEState(esBuildLevel)) return false;
 	SProgressOperation progress(*UI, false);
 	xr_string error_text="";
-	ELog.Msg( mtInformation, "Making started..." );
+	ELog.Progress("Making started...");
 
     UI->BeginEState(esBuildLevel);
     try{
@@ -214,7 +214,7 @@ BOOL SceneBuilder::MakeSOM( )
 	if(UI->ContainEState(esBuildLevel)) return false;
 	SProgressOperation progress(*UI, false);
 	xr_string error_text="";
-	ELog.Msg( mtInformation, "Making started..." );
+	ELog.Progress("Making started...");
 
     UI->BeginEState(esBuildLevel);
     try{

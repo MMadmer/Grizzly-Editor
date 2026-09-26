@@ -582,6 +582,15 @@ static void PngSink(void* ctx, void* data, int size)
 // one of them (BeginPopupModal pins it). "modal": the modal on top, and its rect in the picture.
 static void AppendShotWindows(xr_string& out)
 {
+	// the tab the picture shows, and whether a blocking job drew it
+	out += ",\"active_tab\":";
+	NqUtil::JsonString(out, XUI::Shell::Active());
+	out += ",\"busy\":";
+	out += UI && UI->ProgressOperationActive() ? "true" : "false";
+	// the rects below are px of the picture; dpi turns them into pt
+	char dpi[32];
+	sprintf_s(dpi, ",\"dpi\":%.3f", XUI::Dpi());
+	out += dpi;
 	xr_vector<xr_string> names;
 	const ImGuiPlatformIO& platform = ImGui::GetPlatformIO();
 	const ImGuiViewport* main = ImGui::GetMainViewport();
@@ -598,15 +607,18 @@ static void AppendShotWindows(xr_string& out)
 	out += ",\"outside\":";
 	NqUtil::JsonStringArray(out, names);
 
-	xr_string title;
+	xr_string title, id;
 	float rect[4];
-	if (!UI || !UI->TopModal(title, rect))
+	if (!UI || !UI->TopModal(title, rect, &id))
 	{
 		out += ",\"modal\":null";
 		return;
 	}
 	out += ",\"modal\":{\"title\":";
 	NqUtil::JsonString(out, title);
+	// the part after "###" names a kit dialog (dlg.<name>) whatever its title says
+	out += ",\"id\":";
+	NqUtil::JsonString(out, id);
 	char tail[96];
 	sprintf_s(tail, ",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}", iFloor(rect[0]), iFloor(rect[1]), iFloor(rect[2]), iFloor(rect[3]));
 	out += tail;
@@ -636,6 +648,20 @@ static bool PixelsToPngBase64(const u32* px, u32 w, u32 h, xr_string& out)
 	return true;
 }
 
+// The top-left w x h of a picture read back row by row (a target larger than what was drawn into it)
+static void CropPixels(U32Vec& px, u32& w, u32& h, u32 crop_w, u32 crop_h)
+{
+	crop_w = _min(crop_w, w);
+	crop_h = _min(crop_h, h);
+	if (!crop_w || !crop_h || (crop_w == w && crop_h == h))
+		return;
+	for (u32 y = 0; y < crop_h; ++y)
+		memmove(px.data() + y * crop_w, px.data() + y * w, crop_w * sizeof(u32));
+	px.resize(crop_w * crop_h);
+	w = crop_w;
+	h = crop_h;
+}
+
 // Reads a texture back and encodes it. MSAA targets cannot be copied straight
 // into a staging texture, but nothing in the editor renders previews multisampled.
 static bool TextureToPngBase64_DX11(ID3D11Texture2D* tex, xr_string& out)
@@ -646,10 +672,12 @@ static bool TextureToPngBase64_DX11(ID3D11Texture2D* tex, xr_string& out)
 	return PixelsToPngBase64(px.data(), w, h, out);
 }
 #else
-static bool SurfaceToPngBase64(IDirect3DSurface9* surf, xr_string& out)
+// `w` x `h` crops to the top-left corner; 0 takes the whole surface
+static bool SurfaceToPngBase64(IDirect3DSurface9* surf, xr_string& out, u32 w = 0, u32 h = 0)
 {
 	ID3DXBuffer* buf = 0;
-	if (FAILED(D3DXSaveSurfaceToFileInMemory(&buf, D3DXIFF_PNG, surf, NULL, NULL)) || !buf)
+	RECT corner = { 0, 0, LONG(w), LONG(h) };
+	if (FAILED(D3DXSaveSurfaceToFileInMemory(&buf, D3DXIFF_PNG, surf, NULL, w && h ? &corner : NULL)) || !buf)
 		return false;
 	Base64((const u8*)buf->GetBufferPointer(), buf->GetBufferSize(), out);
 	buf->Release();
@@ -801,10 +829,49 @@ static void Execute(SMCPRequest& r)
 			JsonEscapePath(Tools->m_LastFileName.c_str(), scene, sizeof(scene));
 		const float fps = (EDevice->fTimeDelta > EPS_S) ? 1.f / EDevice->fTimeDelta : 0.f;
 		sprintf_s(tmp,
-			"{\"ok\":true,\"project_active\":%s,\"project\":\"%s\",\"project_name\":\"%s\",\"scene\":\"%s\",\"fps\":%.0f}",
+			"{\"ok\":true,\"project_active\":%s,\"project\":\"%s\",\"project_name\":\"%s\",\"scene\":\"%s\",\"fps\":%.0f",
 			EditorProject::Active() ? "true" : "false", proj,
 			EditorProject::Active() ? EditorProject::Name() : "", scene, fps);
 		r.response = tmp;
+		// the major tabs: which is up, and what each one is
+		r.response += ",\"active_tab\":";
+		NqUtil::JsonString(r.response, XUI::Shell::Active());
+		r.response += ",\"tabs\":[";
+		xr_vector<XUI::Shell::DocInfo> tabs;
+		XUI::Shell::List(tabs);
+		for (u32 i = 0; i < tabs.size(); ++i)
+		{
+			if (i)
+				r.response += ",";
+			r.response += "{\"id\":";
+			NqUtil::JsonString(r.response, tabs[i].id);
+			r.response += ",\"kind\":";
+			NqUtil::JsonString(r.response, tabs[i].kind);
+			r.response += ",\"label\":";
+			NqUtil::JsonString(r.response, tabs[i].label);
+			r.response += ",\"path\":";
+			NqUtil::JsonString(r.response, tabs[i].path);
+			r.response += tabs[i].dirty ? ",\"dirty\":true" : ",\"dirty\":false";
+			r.response += tabs[i].active ? ",\"active\":true" : ",\"active\":false";
+			r.response += tabs[i].missing ? ",\"missing\":true}" : ",\"missing\":false}";
+		}
+		// the modal on top, and whether the Start page (no project, no linked game) is what the window shows
+		xr_string title, id;
+		float rect[4];
+		if (UI && UI->TopModal(title, rect, &id))
+		{
+			r.response += "],\"dialog\":{\"title\":";
+			NqUtil::JsonString(r.response, title);
+			r.response += ",\"id\":";
+			NqUtil::JsonString(r.response, id);
+			r.response += "}";
+		}
+		else
+			r.response += "],\"dialog\":null";
+		r.response += EditorProject::Active() && EditorProject::GameLinked() ? ",\"start_page\":false" : ",\"start_page\":true";
+		char scale[48];
+		sprintf_s(scale, ",\"ui_scale\":%.2f}", XUI::Dpi());
+		r.response += scale;
 	}
 	else if (r.cmd == "screenshot_viewport")
 	{
@@ -812,15 +879,23 @@ static void Execute(SMCPRequest& r)
 		bool ok = false;
 		if (UI && UI->RT->pSurface)
 		{
+			// the target is allocated in 64 px steps: the picture is its top-left corner, the render size
+			const u32 view_w = UI->GetRenderWidth(), view_h = UI->GetRenderHeight();
 #if defined(USE_DX11)
 			// no surface to fetch under D3D11 - the render target texture itself
 			// is what gets copied into a staging texture and mapped
-			ok = TextureToPngBase64_DX11(UI->RT->pSurface, b64);
+			U32Vec	px;
+			u32		w = 0, h = 0;
+			if (DX11ReadbackBGRA(UI->RT->pSurface, px, w, h))
+			{
+				CropPixels(px, w, h, view_w, view_h);
+				ok = PixelsToPngBase64(px.data(), w, h, b64);
+			}
 #else
 			IDirect3DSurface9* surf = 0;
 			if (SUCCEEDED(((IDirect3DTexture9*)UI->RT->pSurface)->GetSurfaceLevel(0, &surf)) && surf)
 			{
-				ok = SurfaceToPngBase64(surf, b64);
+				ok = SurfaceToPngBase64(surf, b64, view_w, view_h);
 				surf->Release();
 			}
 #endif
@@ -911,6 +986,7 @@ static void Execute(SMCPRequest& r)
 	else if (r.cmd == "project_delete")			EditorProject::McpDelete(r.raw.c_str(), r.response);
 	else if (r.cmd == "project_forget")			EditorProject::McpForget(r.raw.c_str(), r.response);
 	else if (r.cmd == "project_browser_menu")	EditorProject::McpBrowserMenu(r.raw.c_str(), r.response);
+	else if (r.cmd == "project_create")			EditorProject::McpCreate(r.raw.c_str(), r.response);
 	else if (r.cmd == "open_scene")
 	{
 		char scene[MAX_PATH];
@@ -1027,7 +1103,7 @@ static SMCPRequest* TakeQueuedRequest(bool progress_only)
 		if (progress_only)
 		{
 			for (; index < s_Queue.size(); ++index)
-				if (s_Queue[index]->cmd == "progress")
+				if (s_Queue[index]->cmd == "progress" || s_Queue[index]->cmd == "screenshot_editor")
 					break;
 		}
 		if (index < s_Queue.size())
@@ -1063,7 +1139,11 @@ static bool ClaimRequest(SMCPRequest* request)
 
 static void CompleteRequest(SMCPRequest* request)
 {
-	Execute(*request);
+	{
+		// the caller has decided: kit questions answer at once and nothing opens a dialog
+		XUI::McpScope mcp;
+		Execute(*request);
+	}
 	::InterlockedExchange(&request->state, SMCPRequest::Completed);
 	::SetEvent(request->done);
 	request->Release();
@@ -1095,9 +1175,22 @@ static const u32	kShotHoldMs		= 15000;	// the first frame of a heavy level takes
 static const u32	kShotFrames		= 3;		// a scroll lands on the second frame, a dock layout settles on the third
 static const u32	kShotGiveUp		= 30;		// that many presented and nothing mirrored: it will not come
 
+// what reads the frame is held like a picture: ui_audit, ui_list and titlebar_info answer from the frames drawn after
+// the caller's last command, not from one drawn before it
 static bool IsShot(const SMCPRequest& r)
 {
-	return r.cmd == "screenshot_editor" || r.cmd == "screenshot_viewport";
+	return r.cmd == "screenshot_editor" || r.cmd == "screenshot_viewport" || r.cmd == "ui_audit" || r.cmd == "ui_list" ||
+		r.cmd == "titlebar_info";
+}
+
+// quest_view changes what is drawn and answers with where that landed on screen: its answer is the frames after it,
+// like a picture's. It runs at once; an answer its handler marks "pending":true is held for those frames and then read
+// again - the same request with "answer_only":true in front, which applies nothing (a toggle must not flip back).
+// The preview tabs answer the same way: their panes, the zoom a fit comes to and the PDA's gap and screen edges exist
+// only once a frame drew them.
+static bool FollowsFrames(const SMCPRequest& r)
+{
+	return r.cmd == "quest_view" || r.cmd == "pda_preview" || r.cmd == "preview_model" || r.cmd == "texture_preview";
 }
 
 static bool HeldShotReady()
@@ -1111,6 +1204,65 @@ static bool HeldShotReady()
 
 bool XFinedMCP::WantsFrame() { return !!s_HeldShot; }
 
+// A held screenshot is taken with no tooltip in it: one would show wherever the mouse happens to be.
+static void HoldShot(SMCPRequest* request)
+{
+	s_HeldShot		= request;
+	s_HeldSince		= ::GetTickCount();
+	s_HeldFrames	= kShotFrames;
+	s_HeldPresented	= 0;
+	XUI::SuppressHover(true);
+#if defined(USE_DX11)
+	if (request->cmd == "screenshot_editor") DX11ArmFrameCapture();
+#endif
+	// the viewport is a render target of its own and is only redrawn when asked - also behind a document
+	if (UI)
+	{
+		if (request->cmd == "screenshot_viewport")
+			UI->ForceScenePass();
+		else
+			UI->RedrawScene();
+	}
+	if (s_QueueEvent) ::SetEvent(s_QueueEvent);
+}
+
+// Runs a FollowsFrames request: answered at once when nothing is owed, else held for its frames like a picture.
+static void ApplyThenHold(SMCPRequest* request)
+{
+	{
+		XUI::McpScope mcp;
+		Execute(*request);
+	}
+	// a JSON string holds no bare quote, so this is the answer's own key
+	if (xr_string::npos == request->response.find("\"pending\":true"))
+	{
+		::InterlockedExchange(&request->state, SMCPRequest::Completed);
+		::SetEvent(request->done);
+		request->Release();
+		return;
+	}
+	if (xr_string::npos == request->raw.find("\"answer_only\""))
+	{
+		const size_t brace = request->raw.find('{');
+		if (xr_string::npos != brace)
+			request->raw.insert(brace + 1, "\"answer_only\":true,");
+	}
+	request->response.clear();
+	HoldShot(request);
+}
+
+// true when the held shot was answered (ready, or given up)
+static bool ReleaseHeldShot()
+{
+	if (!HeldShotReady() && s_HeldPresented < kShotGiveUp && ::GetTickCount() - s_HeldSince < kShotHoldMs)
+		return false;
+	SMCPRequest* shot = s_HeldShot;
+	s_HeldShot = 0;
+	XUI::SuppressHover(false);
+	CompleteRequest(shot);
+	return true;
+}
+
 void XFinedMCP::OnFramePresented()
 {
 	if (s_HeldFrames) --s_HeldFrames;
@@ -1121,15 +1273,9 @@ void XFinedMCP::Pump()
 {
 	if (s_HeldShot)
 	{
-		if (!HeldShotReady() && s_HeldPresented < kShotGiveUp && ::GetTickCount() - s_HeldSince < kShotHoldMs)
-		{
-			// its frames should follow one another, not the background poll interval
-			if (s_QueueEvent) ::SetEvent(s_QueueEvent);
-			return;
-		}
-		SMCPRequest* shot = s_HeldShot;
-		s_HeldShot = 0;
-		CompleteRequest(shot);
+		// its frames should follow one another, not the background poll interval
+		if (!ReleaseHeldShot() && s_QueueEvent)
+			::SetEvent(s_QueueEvent);
 		return;
 	}
 
@@ -1138,24 +1284,35 @@ void XFinedMCP::Pump()
 		return;
 	if (!IsShot(*request))
 	{
-		CompleteRequest(request);
+		// an agent's command is its click: like a mouse click (ConfigNavCursorVisibleAuto) it hides the keyboard's focus
+		// ring, or a popup or drawer it opens shows the ring on its first item - a state no mouse user ever sees
+		if (ImGui::GetCurrentContext())
+			ImGui::SetNavCursorVisible(false);
+		if (FollowsFrames(*request))
+			ApplyThenHold(request);
+		else
+			CompleteRequest(request);
 		return;
 	}
-	s_HeldShot		= request;
-	s_HeldSince		= ::GetTickCount();
-	s_HeldFrames	= kShotFrames;
-	s_HeldPresented	= 0;
-#if defined(USE_DX11)
-	if (request->cmd == "screenshot_editor") DX11ArmFrameCapture();
-#endif
-	// the viewport is a render target of its own and is only redrawn when asked
-	if (UI) UI->RedrawScene();
-	if (s_QueueEvent) ::SetEvent(s_QueueEvent);
+	HoldShot(request);
 }
 
+// During a blocking job: its status, and a picture of the busy frame - held like any other shot, the job's own
+// checkpoints present the frames it waits for.
 void XFinedMCP::PumpProgressRequests()
 {
-	ExecuteQueuedRequest(TakeQueuedRequest(true));
+	if (s_HeldShot)
+	{
+		ReleaseHeldShot();
+		return;
+	}
+	SMCPRequest* request = TakeQueuedRequest(true);
+	if (!ClaimRequest(request))
+		return;
+	if (request->cmd == "screenshot_editor")
+		HoldShot(request);
+	else
+		CompleteRequest(request);
 }
 
 //------------------------------------------------------------------------------

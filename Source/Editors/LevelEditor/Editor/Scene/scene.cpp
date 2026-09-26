@@ -381,7 +381,6 @@ void EScene::Modified()
 	m_RTFlags.set(flRT_Modified|flRT_Unsaved,TRUE);
     g_scene_physics.OnSceneModified();
     ExecCommand(COMMAND_UPDATE_CAPTION);
-    UIObjectList::Refresh();
     UIWorldOutliner::Refresh();
 }
 

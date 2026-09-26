@@ -172,6 +172,10 @@ namespace EditorCharacters
 	ECORE_API void		McpGet		(LPCSTR raw, xr_string& out);
 	ECORE_API void		McpWrite	(LPCSTR raw, xr_string& out);
 	ECORE_API void		McpDelete	(LPCSTR raw, xr_string& out);
+	// characters_view: {"select":"<id>"} or {"path":"<rel>"} opens the Characters tab on that character
+	// (edits in progress need save=true or discard=true, else the answer is "unsaved"); {"open":true} just
+	// opens it; without an argument it only reports: the selected one, dirty, its problems
+	ECORE_API void		McpView		(LPCSTR raw, xr_string& out);
 
 	// -- UI ------------------------------------------------------------------
 	// The model viewer lives a layer above this dll, so the editor hands over the

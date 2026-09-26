@@ -48,11 +48,11 @@ build gate.** Until the editor's first release the format may change freely
 7. **Texts** — UTF-8 in the asset, converted to cp1251 on the game side at
    load (the engine's `translate()` returns the raw key, no string table
    needed).
-8. **The editor**: a new asset type in the content browser (RMB → Create →
-   Quest Graph), a separate document tab with an infinite canvas (RMB pan, 10
-   zoom levels, top-down flow, on_enter/on_exit strips on a node), the
-   inspector on the right, its own undo, full MCP (`quest_*`), validation =
-   the build gate.
+8. **The editor**: a new asset type in the content browser (**Add > Quest**,
+   the toolbar's [+ Add] or the grid's menu), a major document tab with an infinite canvas (RMB pan, 10
+   zoom levels, top-down flow, nodes as cards that list their actions), the
+   Graph panel on the left and the Details panel on the right, its own undo,
+   full MCP (`quest_*`), validation = the build gate.
 9. **Object references**: string story ids (CoC-style `[story_object]`),
    `ref` names for what the quest itself spawned, profiles/communities for
    "any NPC".
@@ -167,9 +167,10 @@ Source\Editors\XrECore\Editor\Nq\        ; model, IO, catalog, validator, docume
   NqAsset.h/.cpp        NqLua.h/.cpp        NqCatalog.h/.cpp
   NqValidate.h/.cpp     NqPickers.h/.cpp    NqDoc.h/.cpp
   NqExport.cpp          NqMcp.cpp
-Source\Editors\LevelEditor\UI\QuestGraph\ ; tab window, canvas, inspector
-  UIQuestGraph.h/.cpp   ; UIQuestGraph (document registry, Open/Update/Close) + UIQuestGraphWindow (per-document window)
-  NqCanvas.h/.cpp       NqInspector.h/.cpp
+Source\Editors\LevelEditor\UI\QuestGraph\ ; the document tab, canvas, Graph and Details panels
+  UIQuestGraph.h/.cpp   ; UIQuestGraph (document registry, Open/Update/Close) + UIQuestGraphWindow (per-document tab)
+  NqCanvas.h/.cpp       ; the canvas, and NqLook: a kind's icon, family colour and title as the document says it
+  NqInspector.h/.cpp    ; the Graph panel and the Details panel
 gamedata\configs\nq\catalog.ltx           ; bundled catalog fallback (copy of the game's)
 docs\NQ_ARCHITECTURE.md                   ; this document
 docs\nq\examples\*.nqasset                ; reference quests (phase 0)
@@ -955,7 +956,8 @@ on all own ids; state is kept, reconciliation as on a hash change) · `nq debug 
 `nq validate` (re-validate everything, print the problems) · `nq dump` (json to
 `$app_data_root$\nq_report.json`).
 
-The log prefix: `* [nq]` / `~ [nq]` / `! [nq]`.
+The log prefix: `* [nq]` / `~ [nq]` / `! [nq]`. The editor's graph canvas notes (framing, connected,
+removed, bookmarked, a refused link) are `* [nq]` notes: the status bar counts only `~` and `!` lines.
 
 ### 12.5 Game QA
 
@@ -1072,104 +1074,201 @@ goes dirty).
 
 ### 13.7 Content browser and window
 
-- `UIContentBrowser.cpp`: the `IsQuestExt(".nqasset")` predicate; a "Quest Graph"
-  icon/caption on the tile; `OpenAsset` (`:846-959`) → `UIQuestGraph::Open(path, err)`;
-  `DrawGridContextMenu` (`:2113-2151`) gains the **Create → Quest Graph** submenu
-  (only `m_Source == 0`), creation modeled on `CreateFolder` (`:2242-2284`): a
+- `UIContentBrowser.cpp`: the `IsQuestExt(".nqasset")` predicate; the quest's
+  vector icon on the tile; `OpenAsset` → `UIQuestGraph::Open(path, err)`; the
+  **Add** menu (`DrawAddMenu`: the toolbar's [+ Add] and the grid's empty-space
+  menu) offers **Quest** - off, saying why, outside the open project's own
+  source -, creation modeled on `CreateFolder`: a
   free name `NewQuest.nqasset`, `NewQuest2.nqasset`, the template = a minimal
   quest (`trigger.start → flow.end`), `BeginRename` — **generalized to files**
   (folder-only until now, `:2286-2359`): renaming a file = `MoveFileA`; the `id`
   inside the asset is not synchronized (the id and the file name are independent;
-  the id is edited in the inspector, W061 when they differ — a hint only).
-- The window: a `UIQuestGraphWindow : XrUI` class per document,
-  `ImGui::Begin("Quest: <name>##<path>")` with `ImGuiWindowFlags_MenuBar`, docked
-  as a tab in the center (`DockCenter`), pumped from `CLevelMain::OnDrawUI()`
-  (`UI_LevelMain.cpp:3322-3341`) through `UIQuestGraph::Update()`. Inside — the
-  toolbar, the canvas|inspector splitter (like `UIContentBrowser::DrawSplitter`),
-  the problems row.
+  the id is edited in the Graph panel, W061 when they differ — a hint only).
+- The window: a `UIQuestGraphWindow` per document, a major tab of the
+  editor's shell (`XUI::Shell::Open`, ids `quest:<rel>` / `beh:<rel>`, reopened
+  from `<project>\temp\session.ltx`) that owns the whole work area: the tab's
+  toolbar sits on the shell's toolbar row, its Graph menu in the caption, its
+  counts in the status bar. `UIQuestGraph::Update()` is pumped from
+  `CLevelMain::OnDrawUI()`. The work area: the Graph panel, the canvas, the
+  Details panel, and a drawer under them (par. 13.9).
 - Nothing that redraws the frame may be called from `Draw()` (the `CLAUDE.md`
   rule, `XrUIManager::InUIPass()`).
 
-### 13.8 Canvas (`NqCanvas`) — per the sketch
+### 13.8 Canvas (`NqCanvas`)
 
 An in-house `ImDrawList` implementation (the tree carries no node libraries,
-ImGui 1.88 docking in `Source/Editors/XrEUI/`; third-party ones
+ImGui docking in `Source/Editors/XrEUI/`; third-party ones
 (imnodes/imgui-node-editor) give no vertical flow and are version-picky).
 
 ```
-┌ Quest: wolf_debt ─────────────────────────────────────┬─ Node ─────────────────┐
-│ [Save][Validate][Layout][Frame][100%▾][rus▾]          │ id    [meet          ] │
-│                                                       │ kind  [Dialog: topic▾] │
-│        ( T · start )                                  │ npc   [Сидорович  …  ] │
-│             │                                         │ text  [Слышал, у тебя…]│
-│    ┌────────▼───────────┐                             │ once  [x]              │
-│    │ 1 │ 2 │ 3 │ +      │  ← on_enter                 │ conds [+]              │
-│    ├────────────────────┤                             │ comment [            ] │
-│    │ Dialog: topic      │  ← main action              ├─ Action (enter #2) ────┤
-│    │ Сидорович: «Слышал…│                             │ kind  [Map spot     ▾] │
-│    ├────────────────────┤                             │ target [Сидорович  … ] │
-│    │ 1 │ 2 │ +          │  ← on_exit                  │ text   [Сидорович    ] │
-│    └──┬────────────┬────┘                             │                        │
-│    next│           │done                              │                        │
-│  ┌─────▼────┐  ┌───▼─────┐                            │                        │
-│  │ …        │  │ …       │                            │                        │
-│ ▸ Problems: 0 errors, 1 warning                       │                        │
-└───────────────────────────────────────────────────────┴────────────────────────┘
+ Save Reload | Undo Redo | Validate  Auto Layout  Frame All | Back Forward | Find  Find in Project | Bookmarks ▾ ‹ ›      75% ▾ Minimap Shortcuts Graph Details
+┌ Graph ───────────┬─────────────────────────────────────────────────┬ Details ─────────────────────┐
+│ ▾ Quest          │          ╭ ▶ Quest start ·········· start ╮      │ ◆ Dialog: topic         meet │
+│ ID     wolf_debt │          ╰────────────────┬───────────────╯      │ ▾ Node                       │
+│ Title  Wolf debt │                           ▼                      │ ID        meet               │
+│ ▾ Tasks        2 │      ┌ ◆ Dialog: topic ········· meet  ⚠ ┐      │ Kind      Dialog: topic      │
+│   debt           │      │ npc:   story:esc_m_trader          │      │ NPC       story            ▾ │
+│   deliver        │      │ text:  Heard you owe the Wolf…     │      │  Story ID esc_m_trader     ⋯ │
+│                  │      │ ✉ PDA message  story:esc_m_trader  │      │ ▾ Actions                  2 │
+│──────────────────│      │ ⌖ Map spot                    exit │      │ ✉ PDA message     On enter 1 │
+│ Variables      1 │      │     next                done       │      ├──────────────────────────────┤
+│ debt · number 0  │      └───────●────────────────────●───────┘      │ ✉ PDA message   On enter 1   │
+│ Name     debt    │                                  ┌ minimap ┐     │ Kind      PDA message        │
+│ Default  0       │                                  └─────────┘     │ help footer                  │
+├──────────────────┴─────────────────────────────────────────────────┴──────────────────────────────┤
+│ Problems (1) | Find Results (0)                                                                 × │
+└───────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Infinite canvas**: world coordinates are floats; the transform is
-  `screen = (world - center) * zoom + origin`. Panning — held **RMB** (as in UE)
-  and MMB; an RMB click without movement — the context menu.
-- **10 zoom levels**: `{0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 2.0}`, the
-  wheel steps the level by ±1 anchored under the cursor; `Home` — frame
-  everything, `F` — the selection. LOD: at zoom ≤ 0.4 chips are not drawn (only
-  counter strips), texts shorten.
+- **Infinite canvas**: world coordinates are floats, in pt at zoom 1.0; the
+  transform is `screen = (world - center) * zoom * ui_scale + origin`. The scale
+  is the zoom level times the UI scale (`XUI::Dpi()`), applied once
+  (`NqCanvas::Scale`), so a graph reads the same at 100% and at 150%. Panning -
+  held **RMB** (as in UE) and MMB; an RMB click without movement - the context
+  menu.
+- **10 zoom levels**: `{0.2, 0.3, 0.4, 0.5, 0.65, 0.75, 1.0, 1.25, 1.5, 2.0}`
+  (index 6 = 1:1), the wheel steps the level by ±1 anchored under the cursor;
+  `Home` - frame everything, `F` - the selection. **Frame All never zooms below
+  0.75** (index 5, `NqCanvas::FrameMinLevel`), the level at which a title is 12
+  px at 100%. What it fits is the graph's extent - the node boxes and the channels
+  of the edges routed back up (`NqCanvas::Extent`), with 32 pt around. A graph
+  that does not fit at 0.75 is shown AT 0.75 - the most of it that stays
+  readable - from its trigger: the trigger (every root node when there is none)
+  and the two levels under it are in view with the top of the view on them, the
+  view across is the whole graph's middle as far as those allow, and it never
+  runs past an end of the graph; the status says "The quest is larger than the
+  view at 75%: framed from its start" (a behaviour graph: "The graph ..."). When
+  even those levels are too wide, the trigger is the middle. Framing the
+  selection and an explicit `zoom_level` may go lower.
+- **Type**: titles 16 pt (Segoe UI Semibold), lines 15 pt, ids and pin names
+  14 pt, each drawn at `round(pt * zoom * ui_scale)` px, so every level has one
+  glyph size. **Level of detail** follows the size a title is really drawn at:
+  10 px and up - everything; 7-10 px - the header's title only, the lines and the
+  actions as bars; below - blocks.
 - **Top-down flow**: the input is the node's top edge (one point, accepts N
-  edges), the outputs are the bottom edge, one pin per catalog name, captions
-  under the node; edges are vertical cubic béziers with an arrow.
-- **A node**: the top chip strip `on_enter` ("1 | 2 | 3 | +"), the body (the kind
-  title, a summary line of key parameters: NPC/text/section…), the bottom
-  `on_exit` strip ("1 | 2 | +"). A strip holds eight chips per row (the add
-  button counts as one) and wraps: the ninth starts a new row and the node grows
-  to hold it — `NqLayout::StripHeight` is the one source of that geometry for the
-  layout pass, the canvas and the hit test. Colors follow the kind family
-  (dialog/objective/wait/flow/end), a trigger is an oval "T · <kind>". An
-  error/warning badge; an unreachable node is dimmed; `once` nodes get a ↻̸ mark.
-- **Interaction**: LMB — select/drag (everything selected), a rubber band on
-  empty space, `Ctrl`+click — toggle; dragging from a pin into another node's
-  body/input — an edge; dropping onto empty space — the "create a node and
-  connect" menu; `Alt`+click on an edge or edge selected + `Del` — delete it;
-  `Del` — delete nodes (undo, no modal); `Ctrl+Z/Y`, `Ctrl+C/V` (the clipboard =
-  a Lua fragment `return { nodes = {…} }`, paste dedups ids and offsets),
-  `Ctrl+A`, `Ctrl+S`, `F2` — rename the id; a double click on a chip — focus the
-  lower inspector; "+" — the extra-action menu (catalog + Lua); dragging chips
-  reorders them; RMB on a chip — delete/duplicate.
-  Snap to a 16 px grid on release.
-- **Navigation**: `Ctrl+F` — search over the whole node content (id, kind,
-  parameters, conditions, actions, links, comments), `F3`/`Shift+F3` —
-  next/previous result; `Ctrl+B` — a transient bookmark on the selected nodes;
-  `Alt+Left/Right` — back/forward through the transient view history (center,
-  zoom, selection, inspector slot). The minimap shows the whole graph and the
-  viewport rectangle; clicking/dragging it pans the canvas. Search, bookmarks,
-  history and minimap visibility are not serialized and do not touch dirty/undo.
-- **Layout** — a deterministic pin-aware top-down layout: branches follow the
+  edges), the outputs are the bottom edge, one pin per catalog name. The pin
+  names are written INSIDE the node, just above its bottom edge where no wire
+  runs, each cut to the room its pin has; a single `next` pin needs no name.
+  Edges are vertical cubic béziers with an arrow. An edge whose input is not
+  below its pin (a loop back to a wait, a node beside its source) would cut
+  through every node on the way as a bézier, so it is **routed around them**:
+  straight runs with round corners - a slant down and aside out of the pin,
+  sideways to a free vertical channel, up it, over the target and a slant down
+  into its input. The channel keeps 24 pt from every node between the two heights
+  and 12 pt from the channels of the edges routed before it
+  (`NqCanvas::RouteBack`). The ends slant (24 pt aside) because every edge that
+  comes down into an input arrives on the input's own vertical: a routed edge
+  that came down it too read as one wire with them. A second routed edge through
+  the same pin to the same side slants 12 pt steeper, so no two share a leg; the
+  arrow follows the last piece of its wire.
+- **A node** is a card 240 pt wide whose height follows what it says, measured
+  by `NqLayout::Box` - the one source of that geometry for the layout pass, the
+  canvas's drawing and hit tests, the minimap and `quest_layout`:
+  - a 28 pt header: the fill tinted by the kind's family and a family line under
+    it, the kind's icon, the title, the muted node id, and badges (a problem, a
+    bookmark, `once`);
+  - up to 3 lines, 20 pt each: the node's conditions first - what a wait waits
+    for, what a trigger fires on - each as its title and what it checks
+    (`Event: signal shmyandex_accept`, `Not has money 1000`), then the catalog
+    parameters that are set as "key: value", in catalog order (the case names are
+    pins already); what does not fit ends in a "+N more" line;
+  - up to 4 action rows, 20 pt each - on_enter, then on_exit, and an on_exit row
+    says so - with the action's title and what it acts on; more than four end in
+    a "+N more" row;
+  - the pin names, 18 pt.
+  A trigger is the same card with round ends and no input. The colours are theme
+  tokens: the family of a kind (trigger green, dialog blue, tasks orange, waits
+  yellow, the end red, NPC steps lavender) tints its header, its icon and its
+  minimap block. An error/warning badge; an unreachable node is dimmed. A
+  behaviour graph never says "quest": its start and end read "Start" / "End"
+  (`NqLook::KindTitle`).
+- **Interaction**: LMB - select/drag (everything selected), a rubber band on
+  empty space, `Ctrl`+click - toggle; dragging from a pin into another node's
+  body/input - an edge; dropping onto empty space - the "create a node and
+  connect" menu; `Alt`+click on the lit edge or `D` - delete it; `Del` - delete
+  nodes (undo, no modal); `Ctrl+Z/Y`, `Ctrl+C/V` (the clipboard = a Lua fragment
+  `return { nodes = {…} }`, paste dedups ids and offsets), `Ctrl+A`, `Ctrl+S`,
+  `F2` - rename the id. An action row: a click opens the action in the Details
+  panel, a double click focuses its kind, a drag moves it - within its list,
+  between on_enter and on_exit, or onto another node (dropped on a header it is
+  that node's last on_enter action); RMB on a row - duplicate, move up/down, move
+  to the other list, remove. A new action comes from the node's context menu or
+  the Details panel's Add Action. Snap to a 16 pt grid on release.
+- **Navigation**: `Ctrl+F` - the Find Results drawer: search over the whole node
+  content (id, kind, parameters, conditions, actions, links, comments),
+  `F3`/`Shift+F3` - next/previous result; `Ctrl+Shift+F` - Find in Project;
+  `Ctrl+B` - a transient bookmark on the selected nodes; `Alt+Left/Right` -
+  back/forward through the transient view history (center, zoom, selection,
+  Details slot). The minimap - 180 x 120 pt in the bottom-right corner, shown only
+  for a graph of 12 nodes and more - shows the whole graph and the viewport
+  rectangle; clicking/dragging it pans the canvas. Under 12 nodes its toggle is
+  off and disabled, its tooltip says why, and the author's choice waits for the
+  graph to grow. Without a minimap the canvas says where the graph goes on: a
+  pill at the middle of each edge counts the nodes wholly beyond it ("2 more",
+  a chevron pointing out) and a click pans just far enough to bring the nearest
+  of them in; `quest_view` answers the counts as `beyond` either way. The zoom
+  menu's label is the zoom itself (`75%`), no icon: the toolbar folds labels to
+  icons when it runs short, and a value must not fold. It keeps one width at every
+  level - a two-digit zoom is led by a figure space (U+2007), as wide as Segoe
+  UI's tabular digits - or a zoom one digit wider would fold and unfold the
+  labels beside it. Search, bookmarks, history and
+  minimap visibility are not serialized and do not touch dirty/undo. The
+  Shortcuts card over the canvas lists every key and gesture.
+- **Layout** - a deterministic pin-aware top-down layout: branches follow the
   visual pin order; the full bounds of nested subtrees are separated by a small
-  gap, whole trigger trees — by a larger one. A descendant shared by several
+  gap, whole trigger trees - by a larger one. A descendant shared by several
   branches becomes a single merge block between them and does not shift the
-  center of the exclusive part of any branch or trigger.
+  center of the exclusive part of any branch or trigger. Rows are as tall as
+  their tallest node's content.
 - The view state (center, zoom) lives in `NqDoc`, not in the file.
 
-### 13.9 Inspector (`NqInspector`)
+### 13.9 The Graph and Details panels (`NqInspector`)
 
-The upper section is **Node** (or **Quest** when nothing is selected): `id`, the
-kind (a combo of main kinds by group; changing the kind resets the parameters,
-undo), catalog-generated parameter widgets (type → widget/picker), `once`, `cond`
-(a list of rows: `[not] [kind ▾] parameters… [×]`, `+ condition`; for
-`wait.any/flow.branch` — the `cases` editor), the comment. For the quest: `id`,
-`title`, `activation`, the `vars` table, the `tasks` table. The lower section is
-**Action**: the selected chip — the kind (extra actions by group + "Lua"), the
-parameters or a multi-line code editor with a "Check" button (§13.3). The
-problems row under the canvas expands into a list; a click focuses the node/slot.
+The tab's work area: the **Graph panel** (left, 280 pt, `graph.panel_w`), the
+canvas, the **Details panel** (right, 360 pt, `graph.details_w`), and a
+**drawer** under them (`graph.drawer_h`) with Problems (n) and Find Results. The
+panels keep their pt size and the canvas takes every resize; when the canvas
+would get less than 400 pt the Graph panel folds to a rail whose buttons open it
+over the canvas. The toolbar's Graph and Details buttons show and hide the
+panels. The sizes live in the layout (`[XFinedLayout]`, MCP `ui_split`).
+
+Every field of both panels is a row of the UI kit's property grid: the label in
+its column, the value beside it, the help in the label's tooltip and in the
+Details panel's help footer. A kind's description is the help of its Kind row -
+no paragraph of prose sits in a form. Rows nest (an objective of a task, a row of
+a list, the value a mode picks); a value that takes one of several forms (a
+place, an NPC reference) picks the form on its row and asks for what that form
+needs on rows under it; what comes from a list is picked (⋯ opens the picker).
+A text of more than one line and a Lua body show their first line and open in an
+Edit Text / Edit Lua dialog (Check Syntax).
+
+- **Graph panel**: the quest's header (ID, Title, Activation) or the behaviour
+  graph's (ID, Title); then Tasks - a section per task with its objectives,
+  Rename and References - or, in a behaviour graph, Roles - a section per role:
+  Name, Title, Binding (the Group and Optional boxes on one row), Default and
+  Delete Role; under a splitter (`graph.vars_split`) the Variables: a section
+  like the others, with the count on its header - a list, and the variable picked
+  from it as a form (Name, Type, Default). Folded, the Variables header sits at
+  the bottom and the pane above takes the room (the split is kept for when they
+  open); `scroll=variables` opens them.
+- **Details panel**: nothing selected - an empty state pointing at the Graph
+  panel; one node - its kind, id and problems, then the Node section (ID, Kind,
+  Once, the catalog parameters - generated from their types: a changed kind
+  resets the parameters, undo - and Comment), Conditions (`[not] [kind ▾]`,
+  parameters under it; `wait.any/flow.branch` get the `cases` editor), Actions
+  (a list row per action - its icon, its name, `On enter N` / `On exit N` at the
+  right, the whole row one target and highlighted when selected; a newly selected
+  action's row is scrolled into view, opening the section - then Add Action) and
+  Outputs; under a splitter
+  (`graph.action_split`) the selected action: its kind (extra actions by group +
+  "Lua"), its parameters, move up/down and remove.
+- **Drawer**: Problems (n) - a click focuses the node and slot, right-click
+  copies; it opens when Validate finds something. Find Results - the search
+  field, previous/next and the results.
+- A file changed on disk behind the document shows a banner with Reload and
+  Overwrite... (both confirm what is lost).
+- Rename Task (Cancel is the default), Task References and Find in Project are
+  dialogs of the kit.
 
 ### 13.10 Export and build
 
@@ -1184,7 +1283,7 @@ problems row under the canvas expands into a list; a click focuses the node/slot
 
 ### 13.11 MCP
 
-C++ — new branches in `XFinedInspector` (`UI_LevelMain.cpp:1356-2861`) via
+C++ — the graph commands in `LevelEditor/Editor/Mcp/LevelMcpGraph.cpp` (the tabs, `UIQuestGraph::Mcp*`) and
 `NqMcp.cpp`; Python — entries in `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`),
 the table in `tools/mcp/AI_SETUP.md`. Structured arguments travel as **a string
 holding a Lua table** (the parser already exists — `NqLua`), responses are JSON
@@ -1203,8 +1302,8 @@ built by string emitters (no JSON library).
 | `xfined_quest_validate` | `path` | the problem list |
 | `xfined_quest_save` | `path`[, `force`] | |
 | `xfined_quest_reload` | `path` | re-read from disk |
-| `xfined_quest_layout` | `path` | auto-layout |
-| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the inspector follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the inspector), `scroll:"top"\|"bottom"\|"task:<id>"\|"task:<id>/steps"\|"action:top"\|"action:bottom"` (scroll the inspector, or the action panel that scrolls on its own) | the resulting `zoom_level`/`center`/`selected`/`slot`; the raw response marks a deferred first `frame:all` as `pending:true`, the Python bridge re-reads the view after the next Draw; then `xfined_screenshot_editor` |
+| `xfined_quest_layout` | `path` | auto-layout; every position carries `w`/`h`, the node's content-sized box (`NqLayout::Box`) |
+| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the Details panel follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the Details panel), `graph_panel`/`details`/`keys`/`problems:"show"\|"hide"\|"toggle"` (the Graph panel - on a rail it opens over the canvas -, the Details panel, the Shortcuts card, the Problems drawer), `graph_width`/`details_width` (pt), `action_split` (the share of the Details column the node keeps) / `vars_split` (the share of the Graph panel the Variables get), `scroll:"top"\|"bottom"\|"action:top"\|"action:bottom"\|"tasks"\|"task:<id>"\|"task:<id>/steps"\|"variables"` (an error when that pane is not on screen) | the resulting `zoom_level`/`zoom` (the level's factor) + `ui_scale`, `title_px`, `center`/`selected`/`slot`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `beyond` (`{above, below, left, right}`: the nodes wholly past each edge of the view), `graph_width`/`details_width`, `panes` (graph, variables, canvas, details, node, action, drawer; pt of the main viewport, null when not drawn), the splits and the panes' scroll `[y, max]`; the answer describes the frames this call changed (a deferred `frame:all`, a selection, a slot, a pane, a width, a split, a tab that was not on screen; a scroll, and the node pane bringing a newly selected action's row into view, land a frame later): the handler marks it `pending:true` and the MCP pump holds the request like a screenshot until they are drawn, then answers by reading again with `answer_only:true` (applies nothing - a toggle must not flip back), so a raw socket caller gets it in one call too; then `xfined_screenshot_editor` |
 | `xfined_quest_edit` | `path`, `op`, `nodes` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays in place, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
 | `xfined_quest_find` | `path`, `action`, `query`, `select`, `limit` | full-text results in file order, the active result and the view state; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the node |
 | `xfined_quest_project_find` | `query`, `limit` | a read-only search over a direct sorted scan of all `*.nqasset`, opening no documents; dirty documents act as a memory overlay. The response: `source` on each result, `complete`/`diagnostics`, the cache `generation` and a deterministic content `fingerprint` |
@@ -1212,7 +1311,7 @@ built by string emitters (no JSON library).
 | `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | a safe task rename inside the document: a preflight of every catalog-typed area, then one `Snapshot` + one mutation of the declaration/references. Refuses before the snapshot on unknown/Lua/malformed/partial; the ack is mandatory because of runtime/save identity |
 | `xfined_quest_bookmarks` | `path`, `action`, `node` | transient bookmarks (`get/add/remove/toggle/next/previous/clear`) and the view state |
 | `xfined_quest_history` | `path`, `action` | the transient history (`get/back/forward/clear`) with all view states |
-| `xfined_quest_minimap` | `path`, `action` | visibility, graph/viewport bounds and the view state (`get/show/hide/toggle`) |
+| `xfined_quest_minimap` | `path`, `action` | `visible` (the toggle), `available` (the graph has `min_nodes`, 12, nodes or more; the toolbar's toggle is disabled while it has not), `shown` (drawn last frame: available, and a canvas with room for it), graph/viewport bounds and the view state (`get/show/hide/toggle`) |
 | `xfined_quest_lookup` | `type`, `query`, `limit` | picker data (§13.6) |
 | `xfined_quest_check_all` | — | the same as the build gate |
 
@@ -1283,7 +1382,7 @@ state; existing state does not migrate.
 | E020 | an event condition (`event.*`) in a phrase/topic `cond` or in `flow.branch` `cases` (allowed only in `trigger.when` / `wait.when` / `wait.any`) |
 | E021 | `cases` are empty / case names duplicate / `weight <= 0` |
 | E030 (objectives) | `objective` names a step the given `task` does not have, or there is no `task` parameter next to it |
-| E022 | several mutually exclusive parameter forms picked at once, or none at all (`objective.fetch`: `item` vs `section`/`count`/`from`; `objective.kill_count`: more than one filter). The forms are declared in `NqCatalog::ExclusiveForms` — one table serving both the validator and the inspector, which dims the losing fields |
+| E022 | several mutually exclusive parameter forms picked at once, or none at all (`objective.fetch`: `item` vs `section`/`count`/`from`; `objective.kill_count`: more than one filter). The forms are declared in `NqCatalog::ExclusiveForms` — one table serving both the validator and the Details panel, which dims the losing fields |
 | E030 | a `task`/`quest`/`ref`/`var`/`node` reference to a nonexistent declaration |
 | E031 | `actor.teleport` to another level |
 | E050 | a custom Lua syntax error |
@@ -1319,9 +1418,11 @@ and MCP.
 4. `quest_catalog` contains every bundle kind; with a game linked — the game's.
 5. `mod_export` with a broken quest → `ok:false`, the error text; with a valid one →
    the file in `<game>\modules\<id>\…\*.nqasset` is identical to the project's.
-6. UI smoke: `quest_open` → `screenshot_editor` (the tab, nodes, chips, edges);
-   `quest_view` at zoom 0.2 and 2.0; `quest_layout` does not change semantics
-   (`quest_get` without `pos` is equal).
+6. UI smoke: `quest_view` → `screenshot_editor` (the tab, nodes, action rows,
+   edges); `quest_view` at zoom 0.2 and 2.0; `quest_view frame=all` never leaves
+   a title under 12 px (`title_px`); `quest_layout` does not change semantics
+   (`quest_get` without `pos` is equal) and reports every node's `w`/`h`
+   (`tools/qa/test_graph_ui.py`).
 7. Undo: `quest_apply` ×3 → `quest_undo` ×3 → the original text; `quest_redo` ×3 →
    the final one.
 8. The UI-less AI cycle: `quest_write` of a file absent on disk → created;
@@ -1398,7 +1499,7 @@ Risks and how they are closed:
 | Phrases are individual nodes | a dialog editor inside a node | the user: "a node = a phrase"; the graph link of phrases to the rest of the quest (an edge from a phrase into the world) gives non-linearity for free |
 | Tokens + a deferred queue | immediate recursive transitions | reentrancy inside `SayPhrase` and engine callbacks; determinism; the engine assert when every continuation is filtered |
 | The dialog distribution hook + virtual dialogs in the engine | XML stubs from the editor / `character_dialogs.xml` | without an engine change a topic cannot be added to a specific NPC dynamically, and editor-made stubs violate the interpretation principle; the change is ~100 lines and additive |
-| An in-house canvas on ImDrawList | imnodes / imgui-node-editor | neither is in the tree, both are horizontal, imnodes has no zoom, imgui-node-editor is pinned to an ImGui version (ours is 1.88 with patches); we need vertical flow, chips, 10 fixed zooms and MCP view control |
+| An in-house canvas on ImDrawList | imnodes / imgui-node-editor | neither is in the tree, both are horizontal, imnodes has no zoom, imgui-node-editor is pinned to an ImGui version (ours is 1.88 with patches); we need vertical flow, nodes that list their actions, 10 fixed zooms and MCP view control |
 | One `xms.nq` blob in `.scov` | a blob per module / `.scoc` via `save_state` | do not fight the module author for their blob; `.scov` is the only sanctioned channel (SAVE_COMPATIBILITY); removing a mod breaks nothing |
 | Tasks via `CGameTask` directly | `task_manager` + ltx | `task_ini` is read once at script load, there is no registration |
 | Texts as raw cp1251 | generate a string table | `translate()` returns the key; a string table = one more generated file, and we generate none |
@@ -1723,7 +1824,7 @@ game repo.
 
 | decision | lives in | written by |
 |---|---|---|
-| what the mode keeps of the original game: `original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests` (true = keep) | `mod.ltx [world]` | Mod > World, `world_set` |
+| what the mode keeps of the original game: `original_npcs`, `random_stalkers`, `mutants`, `npc_quests`, `story_quests` (true = keep) | `mod.ltx [world]` | Mod > World Rules, `world_set` |
 | where those rules apply (`levels`, empty = everywhere) | `mod.ltx [world]` | same |
 | the rules the player may change on the new-game screen (`player_choice`, three at most) | `mod.ltx [world]` | same |
 | the playable area (`area`, empty = anywhere) | `mod.ltx [world]` | same |
@@ -1763,11 +1864,11 @@ section at all.
 - `EditorWorld` (XrECore): the all.spawn reader (levels, level changers with the
   level they stand on and the one they lead to, the game's patrol names), the
   project's Player Starts (the spawn layer, with the open scene standing in for
-  its own level), validation, the World window and the MCP commands
-  `world_get` / `world_set` / `world_transitions`.
-- The window saves every edit at once, like Exclude from Build: the manifest is
-  re-read first, so the Manifest window's own edits are never written over, and
-  every window showing a part of `mod.ltx` follows `EditorMod::ManifestGeneration`.
+  its own level), validation, the World Rules tab and the MCP commands
+  `world_get` / `world_set` / `world_transitions` (`world_view` looks at the tab).
+- The tab saves every edit at once, like Exclude from Build: the manifest is
+  re-read first, so the Mod Settings tab's own edits are never written over, and
+  every tab showing a part of `mod.ltx` follows `EditorMod::ManifestGeneration`.
 - **Player Start** is a point type of the Spawn tool (`ptPlayerStart`,
   `$player_start`): the actor figure, an arrow for the facing, never part of the
   level build. `place_spawn section=player_start` places it over MCP.

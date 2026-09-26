@@ -395,19 +395,24 @@ namespace
 	}
 
 	//--------------------------------------------------------------------------
-	// the window
+	// the World Rules tab
 	//--------------------------------------------------------------------------
+	using Token = XFinedTheme::ColorToken;
+
 	bool			s_Open			= false;
 	SWorld			s_World;				// what mod.ltx says, reloaded when it changes
 	SManifest		s_Manifest;
 	bool			s_HaveManifest	= false;
 	u32				s_WorldGen		= u32(-1);
 	xr_string		s_WorldRoot;
-	xr_string		s_Status;
+	xr_string		s_Status;				// the last save's failure
 	xr_string		s_TransLevel;			// the level whose transitions are listed
-	char			s_Search[64]	= {};
-	// what the window shows about the project, refreshed a second apart: the spawn
-	// layer is files, and a window must not walk them every frame
+	char			s_TransFilter[64]	= {};
+	char			s_Search[64]	= {};	// the level picker's
+	bool			s_DrawerOpen	= false;	// the problems drawer
+	u32				s_DrawerErrors	= 0;	// errors the drawer last saw: a new one opens it
+	// what the tab shows about the project, refreshed a second apart: the spawn layer
+	// is files, and a tab must not walk them every frame
 	xr_vector<EditorWorld::SStart>	s_ShownStarts;
 	xr_vector<xr_string>			s_ShownProblems;
 	xr_string						s_SceneLevel;
@@ -416,22 +421,15 @@ namespace
 	struct SRuleText { LPCSTR caption; LPCSTR hint; };
 	const SRuleText kRules[EditorMod::wrCount] =
 	{
-		{ "Original characters",	"Traders, story characters and every squad the game placed by name (a story id).\nOff: they are not in the world at all." },
+		{ "Original characters",	"Traders, story characters and every squad the game placed by name (a story id). Off: they are not in the world at all." },
 		{ "Random stalkers",		"The simulation's stalker squads: the ones placed at the start and the ones smart terrains bring back." },
 		{ "Mutants",				"The simulation's monster squads, placed at the start and respawned." },
-		{ "Jobs from NPCs",			"\"Got any work?\" - the jobs squad leaders hand out: fetch, kill, escort.\nOff: the offer is not in their dialogs." },
-		{ "Story quests",			"Tasks of the named characters and the storylines.\nOff: their offers are not in the dialogs." },
+		{ "Jobs from NPCs",			"\"Got any work?\" - the jobs squad leaders hand out: fetch, kill, escort. Off: the offer is not in their dialogs." },
+		{ "Story quests",			"Tasks of the named characters and the storylines. Off: their offers are not in the dialogs." },
 	};
 
-	bool LoadWorld(SWorld& w, SManifest& m)
-	{
-		if (!EditorProject::Active() || !EditorMod::Load(EditorProject::Root(), m)) return false;
-		w = m.world;
-		return true;
-	}
-
 	// every edit is saved at once, like Exclude from Build: the manifest is re-read
-	// first, so the Manifest window's own edits are never written over
+	// first, so the Mod Settings tab's own edits are never written over
 	bool SaveWorld(const SWorld& w, xr_string& err)
 	{
 		SManifest m;
@@ -445,77 +443,127 @@ namespace
 	void Commit()
 	{
 		xr_string err;
-		s_Status = SaveWorld(s_World, err) ? xr_string() : "Save failed: " + err;
+		s_Status = SaveWorld(s_World, err) ? xr_string() : "Not saved: " + err;
+		s_CheckedAt = 0;
 	}
 
-	// a level picker: the linked game's levels, minus the ones listed already
-	bool PickLevel(LPCSTR popup, const xr_vector<xr_string>& taken, xr_string& picked)
+	xr_string LevelLabel(const xr_string& level)
+	{
+		const xr_string caption = EditorWorld::Caption(level.c_str());
+		return caption == level ? level : caption + "  (" + level + ")";
+	}
+
+	// "W203 world: locked names 'x', ..." -> "Locked names 'x', ...". The code is for MCP and the log; the author
+	// reads the sentence.
+	xr_string ProblemLine(const xr_string& problem)
+	{
+		const size_t colon = problem.find(": ");
+		xr_string text = colon == xr_string::npos ? problem : problem.substr(colon + 2);
+		if (!text.empty() && text[0] >= 'a' && text[0] <= 'z')
+			text[0] = char(text[0] - 'a' + 'A');
+		if (!text.empty() && !strchr(".!?", text.back()))
+			text += '.';
+		return text;
+	}
+
+	// A level of the linked game, picked from a searchable list: the ones listed already are left out.
+	bool XUI_LocalLevelPicker(LPCSTR popup, const xr_vector<xr_string>& taken, xr_string& picked)
 	{
 		bool done = false;
 		if (!ImGui::BeginPopup(popup)) return false;
-		if (ImGui::IsWindowAppearing()) { s_Search[0] = 0; ImGui::SetKeyboardFocusHere(); }
-		ImGui::SetNextItemWidth(-1.f);
-		ImGui::InputTextWithHint("##search", "search", s_Search, sizeof(s_Search));
+		const float width = XUI::Em(24.f);
+		if (ImGui::IsWindowAppearing())
+		{
+			s_Search[0] = 0;
+			ImGui::SetKeyboardFocusHere();
+		}
+		ImGui::SetNextItemWidth(width);
+		XUI::SearchField("##search", s_Search, sizeof(s_Search), "Search levels");
 		const xr_vector<EditorWorld::SLevel>& levels = EditorWorld::Levels();
 		if (levels.empty())
-			ImGui::TextDisabled("link a game to pick its levels");
-		const float em = ImGui::GetFontSize();
-		ImGui::BeginChild("##levels", ImVec2(em * 24.f, em * 18.f));
-		for (const EditorWorld::SLevel& l : levels)
+			XUI::StatusText(XUI::Tone::Muted, "Link a game to pick its levels.");
+		else
 		{
-			if (Contains(taken, l.name)) continue;
-			xr_string label = l.name;
-			if (!l.caption.empty()) label += "  -  " + l.caption;
-			if (s_Search[0] && !strstr(label.c_str(), s_Search)) continue;
-			if (ImGui::Selectable(label.c_str())) { picked = l.name; done = true; ImGui::CloseCurrentPopup(); }
+			ImGui::BeginChild("##levels", ImVec2(width, XUI::Pt(280.f)));
+			int shown = 0;
+			for (const EditorWorld::SLevel& l : levels)
+			{
+				if (Contains(taken, l.name)) continue;
+				const xr_string label = l.caption.empty() ? l.name : l.name + "  -  " + l.caption;
+				if (!XUI::Match(s_Search, label.c_str())) continue;
+				++shown;
+				if (ImGui::Selectable(label.c_str()))
+				{
+					picked = l.name;
+					done = true;
+					ImGui::CloseCurrentPopup();
+				}
+			}
+			if (!shown)
+				XUI::StatusText(XUI::Tone::Muted, "No level matches.");
+			ImGui::EndChild();
 		}
-		ImGui::EndChild();
 		ImGui::EndPopup();
 		return done;
 	}
 
-	// chips with a remove button, then "+ Add"; true when the list changed
-	bool LevelList(LPCSTR id, xr_vector<xr_string>& v)
+	// the levels of a list as chips, then Add Level...; true when the list changed
+	bool LevelChips(LPCSTR id, xr_vector<xr_string>& v)
 	{
 		bool changed = false;
 		ImGui::PushID(id);
-		for (u32 i = 0; i < v.size(); ++i)
+		if (!v.empty())
 		{
-			ImGui::PushID((int)i);
-			const bool unknown = EditorWorld::Available() && !EditorWorld::LevelExists(v[i].c_str());
-			if (unknown) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.72f, 0.3f, 1.f));
-			ImGui::TextUnformatted(v[i].c_str());
-			if (unknown) ImGui::PopStyleColor();
-			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("%s", unknown ? "the linked game has no level of this name" : EditorWorld::Caption(v[i].c_str()).c_str());
-			ImGui::SameLine();
-			if (ImGui::SmallButton("x")) { v.erase(v.begin() + i); changed = true; ImGui::PopID(); break; }
-			ImGui::SameLine();
-			ImGui::PopID();
+			XUI::Strings shown;
+			for (const xr_string& level : v)
+				shown.push_back(LevelLabel(level));
+			const int removed = XUI::Chips("##chips", shown, true);
+			if (removed >= 0)
+			{
+				v.erase(v.begin() + removed);
+				changed = true;
+			}
 		}
-		if (ImGui::SmallButton("+ Add level")) ImGui::OpenPopup("pick_level");
+		// names the game does not have: kept, said
+		xr_string unknown;
+		if (EditorWorld::Available())
+			for (const xr_string& level : v)
+				if (!EditorWorld::LevelExists(level.c_str()))
+					unknown += (unknown.empty() ? "" : ", ") + level;
+		if (!unknown.empty())
+			XUI::StatusText(XUI::Tone::Warning, ("Not in the linked game: " + unknown + ".").c_str());
+		if (XUI::Button("Add Level...", XUI::Kind::Secondary, EditorWorld::Available(), "Link a game to pick its levels"))
+			XUI::Shell::OpenPopupAt("pick_level", ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f)));
 		xr_string picked;
-		if (PickLevel("pick_level", v, picked)) { v.push_back(picked); changed = true; }
+		if (XUI_LocalLevelPicker("pick_level", v, picked))
+		{
+			v.push_back(picked);
+			changed = true;
+		}
 		ImGui::PopID();
 		return changed;
 	}
 
-	// "Every level" / "Only these levels" over one list; an emptied list means everywhere
+	// Two ways, one list: the first segment empties it (everywhere), the second lets levels be picked.
 	bool Scope(LPCSTR id, LPCSTR everywhere, LPCSTR only, xr_vector<xr_string>& v, bool& limited)
 	{
 		bool changed = false;
 		ImGui::PushID(id);
-		if (ImGui::RadioButton(everywhere, !limited))
+		const char* labels[] = { everywhere, only };
+		int pick = limited ? 1 : 0;
+		if (XUI::Segmented("##scope", &pick, labels, 2))
 		{
-			if (limited) { limited = false; changed = !v.empty(); v.clear(); }
+			limited = pick == 1;
+			if (!limited && !v.empty())
+			{
+				v.clear();
+				changed = true;
+			}
 		}
-		ImGui::SameLine();
-		if (ImGui::RadioButton(only, limited)) limited = true;
 		if (limited)
 		{
-			ImGui::Indent();
-			changed |= LevelList("levels", v);
-			ImGui::Unindent();
+			ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+			changed |= LevelChips("levels", v);
 		}
 		ImGui::PopID();
 		return changed;
@@ -524,85 +572,101 @@ namespace
 	xr_string ModeText(const SManifest& m)
 	{
 		if (!m.provides_modes.empty())
-			return "its own mode '" + (m.provides_modes[0].title.empty() ? m.provides_modes[0].id : m.provides_modes[0].title) + "'";
-		if (!m.mode.empty())
+			return "These rules shape the module's own mode '" + (m.provides_modes[0].title.empty() ? m.provides_modes[0].id : m.provides_modes[0].title) + "'.";
+		if (!m.mode.empty() && m.mode != "*")
 		{
 			for (const EditorGameModes::SMode& mode : EditorGameModes::All())
-				if (mode.id == m.mode) return "the mode '" + mode.caption + "'";
-			return "the mode '" + m.mode + "'";
+				if (mode.id == m.mode) return "These rules shape the mode '" + mode.caption + "'.";
+			return "These rules shape the mode '" + m.mode + "'.";
 		}
-		if (0 == _stricmp(m.target.c_str(), "default")) return "every new game (the module targets the plain game)";
-		return "no mode yet - pick one in Mod > Edit Manifest";
+		if (0 == _stricmp(m.target.c_str(), "default")) return "These rules shape every new game: the module targets the plain game.";
+		if (m.mode == "*") return "These rules shape every new game: the module targets every mode.";
+		return "No game mode is chosen yet: pick one in Mod Settings, Game Mode.";
 	}
 
 	bool s_AreaLimited = false, s_LevelsLimited = false;
 
+	// a checkbox in the middle of its table cell
+	bool CentredCheckbox(LPCSTR id, bool* v)
+	{
+		const float box = ImGui::GetFrameHeight();
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _max(0.f, (ImGui::GetContentRegionAvail().x - box) * .5f));
+		return ImGui::Checkbox(id, v);
+	}
+
 	void DrawRules()
 	{
-		const float em = ImGui::GetFontSize();
-		if (!ImGui::CollapsingHeader("Original game", ImGuiTreeNodeFlags_DefaultOpen)) return;
-		if (ImGui::BeginTable("##rules", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
+		const u32 choices = ChoiceCount(s_World);
+		const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX;
+		if (ImGui::BeginTable("##rules", 3, flags))
 		{
-			ImGui::TableSetupColumn("The game's own", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("Keep");
-			ImGui::TableSetupColumn("Player decides");
-			ImGui::TableHeadersRow();
-			const u32 choices = ChoiceCount(s_World);
+			ImGui::TableSetupColumn("Rule", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("Keep", ImGuiTableColumnFlags_WidthFixed, XUI::Em(5.f));
+			ImGui::TableSetupColumn("Player Decides", ImGuiTableColumnFlags_WidthFixed, XUI::Em(8.f));
+			XUI::TableHeaders(0x6);
 			for (u32 i = 0; i < EditorMod::wrCount; ++i)
 			{
 				ImGui::PushID((int)i);
-				ImGui::TableNextRow();
+				ImGui::TableNextRow(0, XUI::Pt(26.f));
 				ImGui::TableNextColumn();
-				ImGui::TextUnformatted(kRules[i].caption);
-				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n\nmod.ltx: %s", kRules[i].hint, EditorMod::WorldRuleKey(i));
+				ImGui::AlignTextToFramePadding();
+				XUI::TextEllipsis(kRules[i].caption);
+				XUI::Tip((xr_string(kRules[i].hint) + "\nmod.ltx: " + EditorMod::WorldRuleKey(i)).c_str());
 				ImGui::TableNextColumn();
 				bool keep = s_World.keep[i];
-				if (ImGui::Checkbox("##keep", &keep)) { s_World.keep[i] = keep; Commit(); }
+				if (CentredCheckbox("##keep", &keep))
+				{
+					s_World.keep[i] = keep;
+					Commit();
+				}
+				XUI::Tip(keep ? "Kept in the mode" : "Taken out of the mode");
 				ImGui::TableNextColumn();
 				bool choice = s_World.player_choice[i];
 				ImGui::BeginDisabled(!choice && choices >= EditorWorld::kMaxPlayerChoices);
-				if (ImGui::Checkbox("##choice", &choice)) { s_World.player_choice[i] = choice; Commit(); }
+				if (CentredCheckbox("##choice", &choice))
+				{
+					s_World.player_choice[i] = choice;
+					Commit();
+				}
 				ImGui::EndDisabled();
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-					ImGui::SetTooltip("A checkbox on the new-game screen, set to what Keep says.\n"
-									  "The screen has room for %u.", EditorWorld::kMaxPlayerChoices);
+				XUI::Tip(!choice && choices >= EditorWorld::kMaxPlayerChoices
+					? "The new-game screen has room for three: clear another one first."
+					: "A checkbox on the new-game screen, set to what Keep says: the player may change it.");
 				ImGui::PopID();
 			}
 			ImGui::EndTable();
 		}
-		if (ImGui::Button("Keep everything"))
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+		XUI::Prose(NqUtil::Format("%u of %u rules offered on the new-game screen.", choices, EditorWorld::kMaxPlayerChoices).c_str());
+		bool all = true;
+		for (u32 i = 0; i < EditorMod::wrCount; ++i) all &= s_World.keep[i];
+		if (XUI::Button("Keep Everything", XUI::Kind::Secondary, !all, "Everything is kept already"))
 		{
 			for (u32 i = 0; i < EditorMod::wrCount; ++i) s_World.keep[i] = true;
 			Commit();
 		}
-		ImGui::SameLine();
-		if (ImGui::Button("Remove everything"))
-		{
-			for (u32 i = 0; i < EditorMod::wrCount; ++i) s_World.keep[i] = false;
-			Commit();
-		}
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("An empty world: no NPC, no monster and no task of the original game.\nYour own characters and quests stay.");
-		ImGui::Spacing();
-		ImGui::TextUnformatted("Applies on");
-		ImGui::SameLine(em * 7.f);
-		if (Scope("levels", "Every level", "These levels", s_World.levels, s_LevelsLimited)) Commit();
+	}
+
+	void DrawAppliesOn()
+	{
+		XUI::Prose("Where the five rules hold. The rest of the map keeps the original game.");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+		if (Scope("levels", "Every Level", "These Levels", s_World.levels, s_LevelsLimited)) Commit();
 	}
 
 	void DrawArea()
 	{
-		if (!ImGui::CollapsingHeader("Playable area", ImGuiTreeNodeFlags_DefaultOpen)) return;
-		if (Scope("area", "Anywhere", "Only these levels", s_World.area, s_AreaLimited)) Commit();
-		ImGui::TextDisabled("A transition out of the area stays closed. Quests open it (world.transition) or grow the area (world.area).");
+		XUI::Prose("A transition out of the area stays closed. Quests open it (world.transition) or grow the area (world.area).");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+		if (Scope("area", "Anywhere", "Only These Levels", s_World.area, s_AreaLimited)) Commit();
 	}
 
 	void DrawTransitions(const xr_string& scene_level)
 	{
-		if (!ImGui::CollapsingHeader("Transitions", ImGuiTreeNodeFlags_DefaultOpen)) return;
 		const xr_vector<EditorWorld::STransition>& all = EditorWorld::Transitions();
 		if (!EditorWorld::Available())
 		{
-			ImGui::TextDisabled("%s", EditorWorld::Error()[0] ? EditorWorld::Error() : "link a game to list its transitions");
+			XUI::StatusText(XUI::Tone::Muted, EditorWorld::Error()[0] ? EditorWorld::Error() : "Link a game to list its transitions.");
 			return;
 		}
 		// the scene's level first, then the first of the area, then the first with any
@@ -612,110 +676,213 @@ namespace
 			else if (!s_World.area.empty())		s_TransLevel = s_World.area[0];
 			else if (!all.empty())				s_TransLevel = all[0].level;
 		}
-		const float em = ImGui::GetFontSize();
-		ImGui::TextUnformatted("Level");
-		ImGui::SameLine(em * 7.f);
-		ImGui::SetNextItemWidth(em * 22.f);
-		xr_string preview = s_TransLevel + (EditorWorld::Caption(s_TransLevel.c_str()) != s_TransLevel ? "  -  " + EditorWorld::Caption(s_TransLevel.c_str()) : "");
-		if (ImGui::BeginCombo("##trans_level", preview.c_str()))
+		if (XUI::BeginPropertyGrid("world", .25f))
 		{
-			for (const EditorWorld::SLevel& l : EditorWorld::Levels())
+			if (XUI::PropertyRow("Level", "The level whose transitions are listed: the linked game's levels that have any."))
 			{
-				u32 n = 0;
-				for (const EditorWorld::STransition& t : all) if (t.level == l.name) ++n;
-				if (!n) continue;
-				xr_string label = NqUtil::Format("%s  -  %s  (%u)", l.name.c_str(), l.caption.empty() ? "" : l.caption.c_str(), n);
-				if (ImGui::Selectable(label.c_str(), l.name == s_TransLevel)) s_TransLevel = l.name;
+				ImGui::SetNextItemWidth(_min(ImGui::CalcItemWidth(), XUI::Em(24.f)));
+				if (ImGui::BeginCombo("##trans_level", LevelLabel(s_TransLevel).c_str(), ImGuiComboFlags_HeightLarge))
+				{
+					for (const EditorWorld::SLevel& l : EditorWorld::Levels())
+					{
+						u32 n = 0;
+						for (const EditorWorld::STransition& t : all) if (t.level == l.name) ++n;
+						if (!n) continue;
+						const xr_string label = NqUtil::Format("%s  (%u)", LevelLabel(l.name).c_str(), n);
+						if (ImGui::Selectable(label.c_str(), l.name == s_TransLevel)) s_TransLevel = l.name;
+					}
+					ImGui::EndCombo();
+				}
 			}
-			ImGui::EndCombo();
+			if (XUI::PropertyRow("Whole Level", "Every transition on this level starts closed; quests open them one by one."))
+			{
+				bool level_locked = Contains(s_World.locked_levels, s_TransLevel);
+				if (ImGui::Checkbox("Close every transition on this level", &level_locked))
+				{
+					Toggle(s_World.locked_levels, s_TransLevel, level_locked);
+					Commit();
+				}
+			}
+			XUI::EndPropertyGrid();
 		}
-		bool level_locked = Contains(s_World.locked_levels, s_TransLevel);
-		if (ImGui::Checkbox("Close every transition on this level", &level_locked))
+		ImGui::SetNextItemWidth(_min(ImGui::GetContentRegionAvail().x, XUI::Em(18.f)));
+		XUI::SearchField("##trans_filter", s_TransFilter, sizeof(s_TransFilter), "Filter transitions");
+
+		const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX;
+		int shown = 0;
+		if (ImGui::BeginTable("##trans", 3, flags))
 		{
-			Toggle(s_World.locked_levels, s_TransLevel, level_locked);
-			Commit();
-		}
-		if (ImGui::BeginTable("##trans", 3, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
-			ImVec2(0.f, em * 12.f)))
-		{
-			ImGui::TableSetupScrollFreeze(0, 1);
-			ImGui::TableSetupColumn("Transition", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("Leads to", ImGuiTableColumnFlags_WidthStretch);
-			ImGui::TableSetupColumn("Closed");
-			ImGui::TableHeadersRow();
+			ImGui::TableSetupColumn("Transition", ImGuiTableColumnFlags_WidthStretch, 1.f);
+			ImGui::TableSetupColumn("Leads To", ImGuiTableColumnFlags_WidthStretch, 1.f);
+			ImGui::TableSetupColumn("Closed", ImGuiTableColumnFlags_WidthFixed, XUI::Em(5.f));
+			XUI::TableHeaders(0x4);
 			for (const EditorWorld::STransition& t : all)
 			{
 				if (t.level != s_TransLevel) continue;
+				const xr_string to = EditorWorld::Caption(t.to_level.c_str());
+				if (!XUI::Match(s_TransFilter, (t.name + " " + to + " " + t.to_level).c_str())) continue;
+				++shown;
 				ImGui::PushID(t.name.c_str());
-				ImGui::TableNextRow();
+				ImGui::TableNextRow(0, XUI::Pt(26.f));
 				ImGui::TableNextColumn();
-				ImGui::TextUnformatted(t.name.c_str());
-				if (ImGui::IsItemHovered()) ImGui::SetTooltip("at %.1f, %.1f, %.1f", t.position.x, t.position.y, t.position.z);
+				ImGui::AlignTextToFramePadding();
+				XUI::TextEllipsis(t.name.c_str());
+				XUI::Tip(NqUtil::Format("%s\nat %.1f, %.1f, %.1f", t.name.c_str(), t.position.x, t.position.y, t.position.z).c_str());
 				ImGui::TableNextColumn();
-				ImGui::TextUnformatted(EditorWorld::Caption(t.to_level.c_str()).c_str());
-				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", t.to_level.c_str());
+				ImGui::AlignTextToFramePadding();
+				XUI::TextEllipsis(to.c_str());
+				XUI::Tip(t.to_level.c_str());
 				ImGui::TableNextColumn();
 				const LPCSTR by = ClosedBy(s_World, t);
 				bool closed = by[0] != 0;
 				const bool own = 0 == xr_strcmp(by, "locked") || !by[0];
 				ImGui::BeginDisabled(!own);
-				if (ImGui::Checkbox("##closed", &closed))
+				if (CentredCheckbox("##closed", &closed))
 				{
 					Toggle(s_World.locked, t.name, closed);
 					Commit();
 				}
 				ImGui::EndDisabled();
-				if (!own && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-					ImGui::SetTooltip("%s", 0 == xr_strcmp(by, "level") ? "closed with the whole level" : "closed: it leads out of the playable area");
+				XUI::Tip(0 == xr_strcmp(by, "level") ? "Closed with the whole level" :
+						 0 == xr_strcmp(by, "area") ? "Closed: it leads out of the playable area" :
+						 closed ? "Starts closed: a quest opens it (world.transition)" : "Open at the start of a game");
 				ImGui::PopID();
 			}
 			ImGui::EndTable();
 		}
+		if (!shown)
+			XUI::StatusText(XUI::Tone::Muted, s_TransFilter[0] ? "No transition matches the filter." : "This level has no transitions.");
 		// names the game does not have: kept, shown, removable
 		for (u32 i = 0; i < s_World.locked.size(); ++i)
 		{
 			if (EditorWorld::FindTransition(s_World.locked[i].c_str())) continue;
 			ImGui::PushID((int)i);
-			ImGui::TextColored(ImVec4(1.f, 0.72f, 0.3f, 1.f), "closed, but not in the linked game: %s", s_World.locked[i].c_str());
+			const bool remove = XUI::IconButton("##forget", XUI::Icon::Close, "Take it off the closed list");
 			ImGui::SameLine();
-			if (ImGui::SmallButton("remove")) { s_World.locked.erase(s_World.locked.begin() + i); Commit(); ImGui::PopID(); break; }
+			XUI::StatusText(XUI::Tone::Warning, ("Closed, but not in the linked game: " + s_World.locked[i]).c_str());
 			ImGui::PopID();
+			if (remove)
+			{
+				s_World.locked.erase(s_World.locked.begin() + i);
+				Commit();
+				break;
+			}
 		}
 	}
 
 	void DrawStart(const xr_string& scene_level)
 	{
-		if (!ImGui::CollapsingHeader("Player start", ImGuiTreeNodeFlags_DefaultOpen)) return;
 		const xr_vector<EditorWorld::SStart>& starts = s_ShownStarts;
 		if (starts.empty())
-			ImGui::TextDisabled("None: a new game starts where the faction's start puts it.");
+			XUI::Prose("None: a new game starts where the faction's start puts the player.");
 		for (u32 i = 0; i < starts.size(); ++i)
 		{
 			const EditorWorld::SStart& s = starts[i];
 			ImGui::PushID((int)i);
-			ImGui::Text("%s  (%s)  at %.1f, %.1f, %.1f", EditorWorld::Caption(s.level.c_str()).c_str(), s.level.c_str(),
-				s.position.x, s.position.y, s.position.z);
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s: %s", s.source.c_str(), s.name.c_str());
-			if (s.source == "scene" && s_FocusObject)
+			const bool in_scene = s.source == "scene" && s_FocusObject;
+			if (in_scene)
 			{
+				if (XUI::IconButton("##show", XUI::Icon::FrameSelection, "Select it in the scene and frame it"))
+					s_FocusObject(s.name.c_str());
 				ImGui::SameLine();
-				if (ImGui::SmallButton("Show")) s_FocusObject(s.name.c_str());
 			}
+			ImGui::AlignTextToFramePadding();
+			XUI::TextEllipsis(NqUtil::Format("%s  at %.1f, %.1f, %.1f", LevelLabel(s.level).c_str(), s.position.x, s.position.y, s.position.z).c_str());
+			XUI::Tip((s.source + ": " + s.name).c_str());
 			ImGui::PopID();
 		}
 		if (starts.size() > 1)
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "A module has one Player Start - the build refuses %u.", (u32)starts.size());
-		ImGui::BeginDisabled(scene_level.empty() || !s_PlaceStart);
-		if (ImGui::Button("Place in the scene"))
+			XUI::StatusText(XUI::Tone::Error, NqUtil::Format("A module has one Player Start: the build refuses %u.", (u32)starts.size()).c_str());
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+		if (XUI::Button("Place in Scene", XUI::Kind::Secondary, !scene_level.empty() && s_PlaceStart, "Open the level's scene first"))
 		{
 			xr_string err;
-			if (!s_PlaceStart(err)) s_Status = "Place failed: " + err;
+			if (!s_PlaceStart(err)) s_Status = "Not placed: " + err;
 			s_CheckedAt = 0;
 		}
-		ImGui::EndDisabled();
-		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip(scene_level.empty() ? "open the level's scene first" :
-				"in front of the camera; the arrow is where the player faces.\nThe Spawn tool has it too: Player Start.");
+		XUI::Tip("In front of the camera; the arrow is where the player faces. The Spawn tool has it too: Player Start.");
+	}
+
+	// Take everything of the original game out: reversible, but it is five decisions at once, so it asks.
+	void AskEmptyWorld()
+	{
+		XUI::Strings kept;
+		for (u32 i = 0; i < EditorMod::wrCount; ++i)
+			if (s_World.keep[i]) kept.push_back(kRules[i].caption);
+		if (kept.empty())
+		{
+			XUI::Toast(XUI::Tone::Info, "The world is empty already: the mode keeps nothing of the original game.");
+			return;
+		}
+		XUI::ConfirmSpec spec;
+		spec.id = "empty_world";
+		spec.title = "Empty World";
+		spec.headline = "Take everything of the original game out of this mode?";
+		spec.items = kept;
+		spec.consequence = "Your own characters and quests stay. It is saved to mod.ltx at once; Keep Everything brings it back.";
+		spec.action = "Empty World";
+		XUI::Confirm(spec, [](XUI::Answer answer)
+		{
+			if (answer != XUI::Answer::Yes) return;
+			for (u32 i = 0; i < EditorMod::wrCount; ++i) s_World.keep[i] = false;
+			Commit();
+		});
+	}
+
+	void CountProblems(u32& errors, u32& warnings)
+	{
+		errors = warnings = 0;
+		for (const xr_string& p : s_ShownProblems)
+			++(p[0] == 'E' ? errors : warnings);
+		if (!s_Status.empty()) ++errors;
+	}
+
+	// The problems drawer at the bottom of the tab: a header that says how many, and the list
+	// under it while open. A new error opens it.
+	float DrawerHeight(float avail)
+	{
+		const float header = XUI::Pt(28.f);
+		return s_DrawerOpen ? header + _min(XUI::Pt(180.f), avail * .4f) : header;
+	}
+
+	void XUI_LocalProblemsDrawer(float height)
+	{
+		u32 errors = 0, warnings = 0;
+		CountProblems(errors, warnings);
+		const ImVec2 at = ImGui::GetCursorScreenPos();
+		const float width = _max(1.f, ImGui::GetContentRegionAvail().x);
+		const float header = XUI::Pt(28.f);
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+		if (ImGui::InvisibleButton("##problems_header", ImVec2(width, header)))
+			s_DrawerOpen = !s_DrawerOpen;
+		const bool hovered = ImGui::IsItemHovered();
+		XUI::Tip(s_DrawerOpen ? "Hide the problems" : "Show the problems");
+		dl->AddRectFilled(at, ImVec2(at.x + width, at.y + header), XFinedTheme::U32(hovered ? Token::Hover : Token::Raised), XUI::Pt(4.f));
+		const float cy = at.y + header * .5f;
+		XUI::DrawIcon(dl, s_DrawerOpen ? XUI::Icon::ChevronDown : XUI::Icon::ChevronUp, ImVec2(at.x + XUI::Pt(6.f), cy - XUI::Pt(6.f)), 12.f,
+			XFinedTheme::U32(Token::TextSecondary));
+		XUI::DrawIcon(dl, XUI::Icon::Problems, ImVec2(at.x + XUI::Pt(24.f), cy - XUI::Pt(7.f)), 14.f,
+			errors ? XUI::ToneColor(XUI::Tone::Error) : warnings ? XUI::ToneColor(XUI::Tone::Warning) : XFinedTheme::U32(Token::TextSecondary));
+		const xr_string summary = !errors && !warnings ? xr_string("Problems: none") :
+			NqUtil::Format("Problems: %u error%s, %u warning%s", errors, errors == 1 ? "" : "s", warnings, warnings == 1 ? "" : "s");
+		{
+			XUI::FontScope strong(XUI::Font::Strong);
+			ImGui::SetCursorScreenPos(ImVec2(at.x + XUI::Pt(44.f), cy - ImGui::GetTextLineHeight() * .5f));
+			XUI::TextEllipsis(summary.c_str(), _max(0.f, width - XUI::Pt(52.f)));
+		}
+		ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + header));
+		if (!s_DrawerOpen)
+			return;
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(12.f), XUI::Pt(8.f)));
+		ImGui::BeginChild("##world_problems", ImVec2(0.f, _max(XUI::Pt(24.f), height - header)), ImGuiChildFlags_AlwaysUseWindowPadding);
+		ImGui::PopStyleVar();
+		if (!s_Status.empty())
+			XUI::StatusText(XUI::Tone::Error, s_Status.c_str());
+		for (const xr_string& p : s_ShownProblems)
+			XUI::StatusText(p[0] == 'E' ? XUI::Tone::Error : XUI::Tone::Warning, ProblemLine(p).c_str());
+		if (s_ShownProblems.empty() && s_Status.empty())
+			XUI::StatusText(XUI::Tone::Success, "No problems: the build takes these rules as they are.");
+		ImGui::EndChild();
 	}
 }
 
@@ -869,27 +1036,60 @@ void EditorWorld::JsonWorld(const SWorld& w, xr_string& out)
 //------------------------------------------------------------------------------
 // UI
 //------------------------------------------------------------------------------
-void EditorWorld::Show()	{ s_Open = true; }
-bool EditorWorld::IsOpen()	{ return s_Open; }
-
-void EditorWorld::DrawUI()
+namespace EditorWorld
 {
-	if (!s_Open) return;
-	const float em = ImGui::GetFontSize();
-	ImGui::SetNextWindowSize(ImVec2(em * 40.f, em * 46.f), ImGuiCond_FirstUseEver);
-	if (!ImGui::Begin("World", &s_Open))
-	{
-		ImGui::End();
-		return;
-	}
-	if (!EditorProject::Active())
-	{
-		ImGui::TextDisabled("Open a project first.");
-		ImGui::End();
-		return;
-	}
+static void DrawWorldBody();
+}
 
-	// mod.ltx is the one truth: re-read whenever anything saved it
+namespace
+{
+void DrawWorldToolbar(XUI::Toolbar& tb)
+{
+	tb.Group(2);
+	if (tb.Action("reload", XUI::Icon::Refresh, "Reload Game Data", "Read the linked game's levels, transitions and their names again"))
+	{
+		EditorWorld::Invalidate();
+		NqPickers::Invalidate();
+		s_CheckedAt = 0;
+	}
+	if (tb.Action("empty", XUI::Icon::Clear, "Empty World...", s_HaveManifest ? "Take everything of the original game out of this mode" :
+		"The project has no mod.ltx yet", s_HaveManifest))
+		AskEmptyWorld();
+	tb.Group(0);
+	tb.Separator();
+	tb.Status(s_Status.empty() ? "Saved to mod.ltx as you edit" : s_Status.c_str(), s_Status.empty() ? XUI::Tone::Muted : XUI::Tone::Error);
+	tb.Group(1);
+	u32 errors = 0, warnings = 0;
+	CountProblems(errors, warnings);
+	const xr_string label = errors + warnings ? NqUtil::Format("Problems (%u)", errors + warnings) : xr_string("Problems");
+	if (tb.Action("problems", XUI::Icon::Problems, label.c_str(), s_DrawerOpen ? "Hide the problems" : "Show the problems", true, s_DrawerOpen))
+		s_DrawerOpen = !s_DrawerOpen;
+}
+
+// World Rules is one of the editor's major tabs (XUI::Shell); it saves as it is edited, so it is never dirty
+void ShowTab(bool activate)
+{
+	if (XUI::Shell::IsOpen("world_rules"))
+	{
+		if (activate) XUI::Shell::Activate("world_rules");
+		return;
+	}
+	XUI::Shell::DocDesc d;
+	d.id = "world_rules";
+	d.kind = "world_rules";
+	d.icon = XUI::Icon::World;
+	d.label = [] { return xr_string("World Rules"); };
+	d.tooltip = [] { return xr_string("What the mode keeps of the original game - saved to mod.ltx as you edit"); };
+	d.alive = [] { return s_Open; };
+	d.toolbar = [](XUI::Toolbar& tb) { DrawWorldToolbar(tb); };
+	d.body = [] { EditorWorld::DrawWorldBody(); };
+	d.on_close = [] { s_Open = false; };
+	XUI::Shell::Open(d, activate);
+}
+
+// mod.ltx is the one truth: re-read whenever anything saved it; the starts and the problems a second apart
+void RefreshWorld()
+{
 	if (s_WorldGen != EditorMod::ManifestGeneration() || s_WorldRoot != EditorProject::Root())
 	{
 		const bool new_project = s_WorldRoot != EditorProject::Root();
@@ -904,60 +1104,99 @@ void EditorWorld::DrawUI()
 			s_AreaLimited = !s_World.area.empty();
 			s_LevelsLimited = !s_World.levels.empty();
 			s_TransLevel.clear();
+			s_TransFilter[0] = 0;
+			s_DrawerErrors = 0;
 		}
 		s_CheckedAt = 0;
 	}
-	if (!s_HaveManifest)
+	const u32 now = ::GetTickCount();
+	if (s_CheckedAt && now - s_CheckedAt <= 1000) return;
+	s_CheckedAt = now ? now : 1;
+	EditorWorld::Starts(EditorProject::Root(), s_ShownStarts);
+	s_ShownProblems.clear();
+	if (s_HaveManifest)
+		EditorWorld::Validate(EditorProject::Root(), s_Manifest, s_ShownProblems);
+	s_SceneLevel.clear();
+	if (s_SceneStarts)
 	{
-		ImGui::TextDisabled("This project has no mod.ltx yet: Mod > Edit Manifest.");
-		ImGui::End();
+		xr_vector<EditorWorld::SStart> unused;
+		s_SceneStarts(s_SceneLevel, unused);
+	}
+	// a new error opens the drawer: the author should not have to go looking for it
+	u32 errors = 0, warnings = 0;
+	CountProblems(errors, warnings);
+	if (errors > s_DrawerErrors) s_DrawerOpen = true;
+	s_DrawerErrors = errors;
+}
+}
+
+void EditorWorld::Show()	{ s_Open = true; ShowTab(true); }
+bool EditorWorld::IsOpen()	{ return s_Open; }
+
+void EditorWorld::DrawUI()
+{
+	if (!s_Open) return;
+	ShowTab(false);
+}
+
+void EditorWorld::DrawWorldBody()
+{
+	if (!EditorProject::Active())
+	{
+		XUI::EmptyState(XUI::Icon::World, "No project", "World rules live in the mod.ltx of the open project.");
 		return;
 	}
-	const u32 now = ::GetTickCount();
-	if (!s_CheckedAt || now - s_CheckedAt > 1000)
+	RefreshWorld();
+	if (!s_HaveManifest)
 	{
-		s_CheckedAt = now ? now : 1;
-		Starts(EditorProject::Root(), s_ShownStarts);
-		s_ShownProblems.clear();
-		Validate(EditorProject::Root(), s_Manifest, s_ShownProblems);
-		s_SceneLevel.clear();
-		if (s_SceneStarts)
-		{
-			xr_vector<SStart> unused;
-			s_SceneStarts(s_SceneLevel, unused);
-		}
+		if (XUI::EmptyState(XUI::Icon::World, "No mod.ltx yet", "World rules live in the module's mod.ltx. Mod Settings makes it.", "Open Mod Settings"))
+			EditorMod::RequestEditManifest();
+		return;
 	}
-	const SManifest& m = s_Manifest;
 	const xr_string& scene_level = s_SceneLevel;
+	const float drawer = DrawerHeight(ImGui::GetContentRegionAvail().y);
 
-	ImGui::TextWrapped("These rules shape %s.", ModeText(m).c_str());
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("A new game reads them once and keeps them in its saves.\nQuests change them while the game runs: the world.* kinds.");
-	ImGui::SameLine();
-	if (ImGui::SmallButton("Reload game data"))
+	// one column of up to 900 pt in the middle, the scrollbar at the right edge of the tab
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(Token::Base));
+	ImGui::BeginChild("##world_scroll", ImVec2(0.f, -drawer - ImGui::GetStyle().ItemSpacing.y));
 	{
-		Invalidate();
-		NqPickers::Invalidate();
+		const float avail = ImGui::GetContentRegionAvail().x;
+		const float column = _min(avail, XUI::Pt(900.f));
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _max(0.f, (avail - column) * .5f));
+		ImGui::BeginChild("##world_column", ImVec2(column, 0.f), ImGuiChildFlags_AutoResizeY);
+		ImGui::PopStyleColor();
+		XUI::Prose(ModeText(s_Manifest).c_str());
+		XUI::Tip("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs: the world.* kinds.");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(6.f)));
+		if (XUI::Section("Original Game", true))
+		{
+			DrawRules();
+			XUI::EndSection();
+		}
+		if (XUI::Section("Applies On", true, s_World.levels.empty() ? "Every level" : NqUtil::Format("%u levels", (u32)s_World.levels.size()).c_str()))
+		{
+			DrawAppliesOn();
+			XUI::EndSection();
+		}
+		if (XUI::Section("Playable Area", true, s_World.area.empty() ? "Anywhere" : NqUtil::Format("%u levels", (u32)s_World.area.size()).c_str()))
+		{
+			DrawArea();
+			XUI::EndSection();
+		}
+		if (XUI::Section("Transitions", true))
+		{
+			DrawTransitions(scene_level);
+			XUI::EndSection();
+		}
+		if (XUI::Section("Player Start", true))
+		{
+			DrawStart(scene_level);
+			XUI::EndSection();
+		}
+		ImGui::EndChild();
 	}
-	ImGui::Separator();
-
-	ImGui::BeginChild("##world", ImVec2(0.f, -em * 5.f));
-	DrawRules();
-	DrawArea();
-	DrawTransitions(scene_level);
-	DrawStart(scene_level);
 	ImGui::EndChild();
-
-	// ---- problems ------------------------------------------------------------
-	ImGui::Separator();
-	const xr_vector<xr_string>& problems = s_ShownProblems;
-	ImGui::BeginChild("##problems", ImVec2(0.f, 0.f));
-	if (!s_Status.empty()) ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", s_Status.c_str());
-	if (problems.empty() && s_Status.empty()) ImGui::TextDisabled("No problems.");
-	for (const xr_string& p : problems)
-		ImGui::TextColored(p[0] == 'E' ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(1.f, 0.72f, 0.3f, 1.f), "%s", p.c_str());
-	ImGui::EndChild();
-	ImGui::End();
+	XUI_LocalProblemsDrawer(drawer);
 }
 
 //------------------------------------------------------------------------------
@@ -1003,6 +1242,47 @@ static void WorldAnswer(const SManifest& m, xr_string& out)
 	out += ",\"error\":";
 	NqUtil::JsonString(out, EditorWorld::Error());
 	out += "}}";
+}
+
+void EditorWorld::McpView(LPCSTR raw, xr_string& out)
+{
+	if (!EditorProject::Active())	{ NqUtil::JsonError(out, "no active project"); return; }
+	xr_string drawer, level, filter;
+	const bool has_drawer = NqUtil::ArgString(raw, "drawer", drawer) && !drawer.empty();
+	const bool has_level = NqUtil::ArgString(raw, "level", level) && !level.empty();
+	const bool has_filter = NqUtil::ArgString(raw, "filter", filter);
+	if (has_drawer && drawer != "open" && drawer != "close")	{ NqUtil::JsonError(out, "drawer must be open or close"); return; }
+	if (has_level && !LevelExists(level.c_str()))
+	{
+		NqUtil::JsonError(out, "the linked game has no level '" + level + "' (world_transitions lists them)");
+		return;
+	}
+	// anything to set opens the tab on it; without one this only looks
+	if (has_drawer || has_level || has_filter || NqUtil::ArgBool(raw, "open", false))
+		Show();
+	if (has_drawer)	s_DrawerOpen = drawer == "open";
+	if (has_level)	s_TransLevel = level;
+	if (has_filter)	strncpy_s(s_TransFilter, filter.c_str(), _TRUNCATE);
+
+	SManifest m;
+	xr_vector<xr_string> problems;
+	if (EditorMod::Load(EditorProject::Root(), m))
+		Validate(EditorProject::Root(), m, problems);
+	out = "{\"ok\":true,\"tab\":\"world_rules\",\"open\":";
+	NqUtil::JsonBool(out, s_Open);
+	out += ",\"active\":";
+	NqUtil::JsonBool(out, XUI::Shell::IsActive("world_rules"));
+	out += ",\"drawer\":";
+	NqUtil::JsonString(out, s_DrawerOpen ? "open" : "close");
+	out += ",\"level\":";
+	NqUtil::JsonString(out, s_TransLevel);
+	out += ",\"filter\":";
+	NqUtil::JsonString(out, s_TransFilter);
+	out += ",\"status\":";
+	NqUtil::JsonString(out, s_Status.empty() ? xr_string("Saved to mod.ltx as you edit") : s_Status);
+	out += ",\"problems\":";
+	NqUtil::JsonStringArray(out, problems);
+	out += "}";
 }
 
 void EditorWorld::McpGet(LPCSTR raw, xr_string& out)

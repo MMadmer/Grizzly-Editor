@@ -14,17 +14,24 @@ private:
 	void OnItemFocused(ListItem*item);
 	void SelByRefObject(bool flag);
 	void MultiSelByRefObject(bool flag);
-	void ClearSurface(bool selected);
+	static void ClearSurface(bool selected);
+	// the picked object: its picture (or the class icon), its facts, Browse and Refresh List
+	void DrawPicked();
 	const char* m_Current;
 	UIItemListForm* m_ObjectList;
+	ListItemsVec m_Items;
+	char m_Search[64];
 	bool m_MultiAppend;
 	bool m_PropRandom;
 	bool m_RandomAppend;
 	float m_selPercent;
+	bool m_AddPercent;
 	bool m_Selection;
 private:
-	ref_texture m_TextureNull;
 	ImTextureID m_RealTexture;
 	ImTextureID m_RemoveTexture;
-	UIPropertiesForm* m_Props;
+	// what the picked object's thumbnail says about it
+	bool m_HasInfo;
+	int m_Faces;
+	int m_Vertices;
 };

@@ -3,6 +3,7 @@
 UIParticlesTool::UIParticlesTool()
 {
     m_Current = nullptr;
+    m_Search[0] = 0;
     m_ParticlesList = xr_new<UIItemListForm>();
     m_ParticlesList->SetOnItemFocusedEvent(TOnILItemFocused(this, &UIParticlesTool::OnItemFocused));
     ListItemsVec items;
@@ -15,6 +16,7 @@ UIParticlesTool::UIParticlesTool()
         I->SetIcon(2);
     }
 
+    m_Items = items;
     m_ParticlesList->AssignItems(items);
 }
 
@@ -23,45 +25,45 @@ UIParticlesTool::~UIParticlesTool()
     xr_delete(m_ParticlesList);
 }
 
+namespace
+{
+void PlaySelected(bool play)
+{
+    ObjectIt _F = Scene->FirstObj(OBJCLASS_PS);
+    ObjectIt _E = Scene->LastObj(OBJCLASS_PS);
+    for (; _F != _E; _F++)
+        if ((*_F)->Visible() && (*_F)->Selected())
+        {
+            if (play)	((EParticlesObject*)(*_F))->Play();
+            else		((EParticlesObject*)(*_F))->Stop();
+        }
+}
+}
+
 void UIParticlesTool::Draw()
 {
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Commands"))
+    // the effects are what the tool adds: first, and the list takes the room the closed section leaves
+    XUI_LocalFilteredList("particles", m_Search, sizeof(m_Search), m_ParticlesList);
+    if (XUI::Section("Commands", false))
     {
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+        const bool picked = !!m_Current;
+        const XUI_LocalButton same[] =
         {
-            ImGui::Text("Ref's Select:   "); ImGui::SameLine(); if (ImGui::Button("+", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) { SelByRef(true); }; ImGui::SameLine(); if (ImGui::Button("-", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) { SelByRef(false); };
-            ImGui::Text("Selected:       "); ImGui::SameLine();
-            if (ImGui::ArrowButton("play", ImGuiDir_Right))
-            {
-                ObjectIt _F = Scene->FirstObj(OBJCLASS_PS);
-                ObjectIt _E = Scene->LastObj(OBJCLASS_PS);
-                for (; _F != _E; _F++) {
-                    if ((*_F)->Visible() && (*_F)->Selected())
-                        ((EParticlesObject*)(*_F))->Play();
-                }
-            }ImGui::SameLine(); 
-            if (ImGui::Button("stop", ImVec2(0, ImGui::GetFrameHeight())))
-            {
-                ObjectIt _F = Scene->FirstObj(OBJCLASS_PS);
-                ObjectIt _E = Scene->LastObj(OBJCLASS_PS);
-                for (; _F != _E; _F++) {
-                    if ((*_F)->Visible() && (*_F)->Selected())
-                        ((EParticlesObject*)(*_F))->Stop();
-                }
-            }
+            { "Select Same",	"Select every visible particle system made from the effect picked in the list", picked, "Pick an effect in the list first" },
+            { "Deselect Same",	"Deselect every particle system made from the effect picked in the list", picked, "Pick an effect in the list first" },
+        };
+        switch (XUI_LocalButtonFlow(same, _countof(same)))
+        {
+        case 0: SelByRef(true); break;
+        case 1: SelByRef(false); break;
+        default: break;
         }
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-	}
-	ImGui::Separator();
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Particles"))
-	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-		m_ParticlesList->Draw();
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
+        if (XUI::IconButton("##play", XUI::Icon::Play, "Play the selected particle systems"))
+            PlaySelected(true);
+        ImGui::SameLine(0.f, XUI::Pt(2.f));
+        if (XUI::IconButton("##stop", XUI::Icon::Stop, "Stop the selected particle systems"))
+            PlaySelected(false);
+        XUI::EndSection();
     }
 }
 

@@ -17,10 +17,16 @@ public:
 	IC bool IsAttachObject()const { return m_AttachObject; }
 	// pSettings is swapped when a project links a game - the tool calls this
 	void RefreshList();
+	// A $spawn path as the list (and list_spawn_sections) shows it: every part trimmed of blanks and of a leading
+	// ';', empty parts dropped. "" when nothing is left.
+	static xr_string ListPath(LPCSTR spawn);
 private:
 	void OnItemFocused(ListItem* item);
 	const char* m_Current;
 	UIItemListForm* m_SpawnList;
+	ListItemsVec m_Items;
+	char m_Search[64];
 	float m_selPercent;
+	bool m_AddPercent;
 	bool m_AttachObject;
 };

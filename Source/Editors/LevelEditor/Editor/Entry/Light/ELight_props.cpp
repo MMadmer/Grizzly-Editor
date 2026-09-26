@@ -61,71 +61,46 @@ void 	CLight::OnFuzzyDataChange(PropValue* value)
 #define X_GRID 14
 #define Y_GRID 6
 
+// The brightness the light gives over its range, as the attenuation terms make it: the light at the left, its
+// range at the right, full brightness at the top
 void  CLight::OnAttenuationDraw(CanvasValue* sender)
 {
-	/*TCanvas* canvas 	= (TCanvas*)_canvas;
-    const TRect& rect	= *((TRect*)&_rect);
-//	canvas
-    int w = rect.Width();
-    int h = rect.Height();
-    int x0= rect.left;
-    int y0= rect.top;
-
-    canvas->Brush->Color = clBlack;
-    canvas->FillRect(rect);
-    canvas->Pen->Color = TColor(0x00006600);
-    canvas->MoveTo(x0,y0);
-    for (int i=0; i<X_GRID+1; i++){
-        canvas->LineTo(x0+i*w/X_GRID,y0+h);
-        canvas->MoveTo(x0+(i+1)*w/X_GRID,y0+0);
-    }
-    canvas->MoveTo(x0+0,y0+0);
-    for (int j=0; j<Y_GRID+1; j++){
-        canvas->LineTo(x0+w,y0+j*h/Y_GRID);
-        canvas->MoveTo(x0+0,y0+(j+1)*h/Y_GRID);
-    }
-    canvas->Pen->Color = clYellow;
-    canvas->MoveTo(x0+0,y0+h/2);
-    canvas->LineTo(x0+w,y0+h/2);
-
-    float d_cost = m_Range/w;
-    xr_string temp;
-//    float v = m_D3D.range;
-//    temp.sprintf("Range = %.2f",v); lbRange->Caption = temp;
-    canvas->Pen->Color = clLime;
-    if (!(fis_zero(m_Attenuation0)&&fis_zero(m_Attenuation1)&&fis_zero(m_Attenuation2))){
-        for (int d=1; d<w; d++){
-            float R = d*d_cost;
-            float b = m_Brightness/(m_Attenuation0+m_Attenuation1*R+m_Attenuation2*R*R);
-			b	-=   m_Brightness*R/(m_Range*(m_Attenuation0+m_Attenuation1*m_Range+m_Attenuation2*m_Range*m_Range));
-            float bb = h-((h/(/*br_max*//*3.f*2))*b + h/2);
-            int y = iFloor(y0+bb); clamp(y,int(rect.Top),int(rect.Bottom));
-            if (1==d)	canvas->MoveTo(x0+d,y);
-            else		canvas->LineTo(x0+d,y);
-        }
-    }*/
-#define WIETH 90
-#define HEIGHT 80.f
-    float d_cost = m_Range / WIETH;
-    static float values[WIETH] = {};
-
-    for (int i = 0; i < WIETH; i++)
+    const float w = _max(1.f, ImGui::CalcItemWidth());
+    const float h = XUI::Pt(float(sender->height));
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 end(pos.x + w, pos.y + h);
+    ImGui::Dummy(ImVec2(w, h));
+    XUI::Tip("Brightness over the range: the light at the left, the end of its range at the right");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pos, end, XFinedTheme::U32(XFinedTheme::ColorToken::Canvas), XUI::Pt(4.f));
+    const ImU32 grid = XFinedTheme::U32(XFinedTheme::ColorToken::BorderSubtle);
+    for (int i = 1; i < X_GRID; i++)
     {
-        values[i] = 0;
+        const float x = floorf(pos.x + w * float(i) / X_GRID) + .5f;
+        dl->AddLine(ImVec2(x, pos.y), ImVec2(x, end.y), grid);
     }
-
-    if (!(fis_zero(m_Attenuation0) && fis_zero(m_Attenuation1) && fis_zero(m_Attenuation2))) {
-        for (int d = 1; d < WIETH + 1; d++) {
-            float R = d * d_cost;
-            float b = m_Brightness / (m_Attenuation0 + m_Attenuation1 * R + m_Attenuation2 * R * R);
-            b -= m_Brightness * R / (m_Range * (m_Attenuation0 + m_Attenuation1 * m_Range + m_Attenuation2 * m_Range * m_Range));
-            float bb = (HEIGHT * b);
-            float y = floorf(bb); clamp(y, 0.f, HEIGHT);
-            values[d - 1] = y;
-        }
+    for (int j = 1; j < Y_GRID; j++)
+    {
+        const float y = floorf(pos.y + h * float(j) / Y_GRID) + .5f;
+        dl->AddLine(ImVec2(pos.x, y), ImVec2(end.x, y), grid);
     }
-    ImGui::PlotLines("##LinesSound", values, IM_ARRAYSIZE(values), 0, 0, 0, HEIGHT, ImVec2(0, HEIGHT), 4);
-
+    if (fis_zero(m_Attenuation0) && fis_zero(m_Attenuation1) && fis_zero(m_Attenuation2))
+        return;
+    // a sample every two points of width, however wide the column is
+    const int samples = _max(2, iFloor(w / XUI::Pt(2.f)));
+    const float d_cost = m_Range / float(samples);
+    xr_vector<ImVec2> curve;
+    curve.reserve(samples);
+    for (int d = 1; d <= samples; d++)
+    {
+        const float R = d * d_cost;
+        float b = m_Brightness / (m_Attenuation0 + m_Attenuation1 * R + m_Attenuation2 * R * R);
+        b -= m_Brightness * R / (m_Range * (m_Attenuation0 + m_Attenuation1 * m_Range + m_Attenuation2 * m_Range * m_Range));
+        clamp(b, 0.f, 1.f);
+        curve.emplace_back(pos.x + w * float(d - 1) / float(samples - 1), end.y - b * h);
+    }
+    dl->AddPolyline(curve.data(), int(curve.size()), XFinedTheme::U32(XFinedTheme::ColorToken::AccentBright), ImDrawFlags_None,
+        _max(1.f, XUI::Pt(1.5f)));
 }
 
 void 	CLight::OnPointDataChange(PropValue* value)
@@ -260,19 +235,19 @@ void 	CLight::OnTypeChange(PropValue* value)
 void CLight::OnShowHint(AStringVec& dest){
     CCustomObject::OnShowHint(dest);
     xr_string temp;
-    temp.sprintf("Type:  ");
     switch(m_Type){
-    case ELight::ltPoint:	        temp+="point"; break;
-    case ELight::ltSpot:			temp+="spot"; break;
-    default: temp+="undef";
+    case ELight::ltPoint:	temp = "Type: Point"; break;
+    case ELight::ltSpot:	temp = "Type: Spot"; break;
+    default:				temp = "Type: Unknown";
     }
     dest.push_back(temp);
-    temp = "Flags: ";
-    if (m_Flags.is(ELight::flAffectStatic))  	temp+="Stat ";
-    if (m_Flags.is(ELight::flAffectDynamic)) 	temp+="Dyn ";
-    if (m_Flags.is(ELight::flProcedural))		temp+="Proc ";
-    dest.push_back(temp);
-    temp.sprintf("Pos:   %3.2f, %3.2f, %3.2f",GetPosition().x,GetPosition().y,GetPosition().z);
+    temp = "Affects: ";
+    xr_string affects;
+    if (m_Flags.is(ELight::flAffectStatic))  	affects += "lightmap";
+    if (m_Flags.is(ELight::flAffectDynamic)) 	affects += affects.empty() ? "dynamic" : ", dynamic";
+    if (m_Flags.is(ELight::flProcedural))		affects += affects.empty() ? "animated" : ", animated";
+    dest.push_back(temp + (affects.empty() ? xr_string("nothing") : affects));
+    temp.sprintf("Position: %3.2f, %3.2f, %3.2f",GetPosition().x,GetPosition().y,GetPosition().z);
     dest.push_back(temp);
 }
 

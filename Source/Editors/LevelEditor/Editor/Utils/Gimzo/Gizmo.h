@@ -48,7 +48,6 @@ private:
 	Fvector m_ScreenPosition;
 	EStatus m_CurrentStatus;
 	EType m_Type;
-	float m_Steps[static_cast<int>(EType::Count)];
 	bool m_StepEnable[static_cast<int>(EType::Count)];
 	Fvector m_Position, m_StartPosition;
 	Fmatrix m_RotateMatrix;

@@ -410,14 +410,28 @@ void Gizmo::Fixed()
     m_bFixed = true;
 }
 
+// the steps are the editor's preferences (Tools > Snap): the viewport toolbar, the status bar, MCP and the Preferences tab
+// show and change one value, and it outlives the session. The angle is kept in radians there, in degrees here.
 void Gizmo::SetStep(EType Type, float Step)
 {
-    m_Steps[static_cast<int>(Type)] = Step;
+    switch (Type)
+    {
+    case EType::Move:   EPrefs->snap_move = Step; break;
+    case EType::Scale:  EPrefs->snap_scale = Step; break;
+    case EType::Rotate: EPrefs->snap_angle = deg2rad(Step); break;
+    default: break;
+    }
 }
 
 float Gizmo::GetStep(EType Type) const
 {
-    return m_Steps[static_cast<int>(Type)];
+    switch (Type)
+    {
+    case EType::Move:   return EPrefs->snap_move;
+    case EType::Scale:  return EPrefs->snap_scale;
+    case EType::Rotate: return rad2deg(EPrefs->snap_angle);
+    default:            return 0.f;
+    }
 }
 
 void Gizmo::SwitchStep(EType Type, bool Enable)

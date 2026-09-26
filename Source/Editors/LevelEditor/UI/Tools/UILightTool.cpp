@@ -10,24 +10,24 @@ UILightTool::~UILightTool()
 
 void UILightTool::Draw()
 {
-	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-	if (ImGui::TreeNode("Affect in D3D"))
+	if (XUI::Section("Viewport Lighting"))
 	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-		ImGui::PushItemWidth(-1);
-		float size = float(ImGui::CalcItemWidth());
+		const XUI_LocalButton buttons[] =
 		{
-			if(ImGui::Button("Enable Sel",ImVec2(size/2,0)))UseInD3D(false,true);
-			ImGui::SameLine(0, 2);
-			if (ImGui::Button("Enable All", ImVec2(size / 2, 0)))UseInD3D(true, true);
-
-			if (ImGui::Button("Disable Sel", ImVec2( size / 2,0)))UseInD3D(false, false);
-			ImGui::SameLine(0, 2);
-			if (ImGui::Button("Disable All", ImVec2(size / 2, 0)))UseInD3D(true, false);
+			{ "Enable Selected",	"The selected lights light the viewport" },
+			{ "Enable All",			"Every light lights the viewport" },
+			{ "Disable Selected",	"The selected lights stop lighting the viewport" },
+			{ "Disable All",		"No light lights the viewport" },
+		};
+		switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+		{
+		case 0: UseInD3D(false, true); break;
+		case 1: UseInD3D(true, true); break;
+		case 2: UseInD3D(false, false); break;
+		case 3: UseInD3D(true, false); break;
+		default: break;
 		}
-
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-		ImGui::TreePop();
+		XUI::EndSection();
 	}
 }
 

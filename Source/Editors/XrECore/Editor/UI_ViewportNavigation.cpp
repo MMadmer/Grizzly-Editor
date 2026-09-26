@@ -14,22 +14,6 @@ Fvector g_PerspectivePosition;
 Fvector g_PerspectiveTarget;
 bool g_HasPerspectivePose = false;
 
-ImU32 ThemeColor(XFinedTheme::ColorToken token, u8 alpha = 0xff)
-{
-	const u32 rgb = XFinedTheme::Rgb(token);
-	return IM_COL32((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff, alpha);
-}
-
-ImVec4 ThemeColorVec(XFinedTheme::ColorToken token, float alpha = 1.f)
-{
-	const u32 rgb = XFinedTheme::Rgb(token);
-	return ImVec4(
-		float((rgb >> 16) & 0xff) / 255.f,
-		float((rgb >> 8) & 0xff) / 255.f,
-		float(rgb & 0xff) / 255.f,
-		alpha);
-}
-
 bool MatchesOrientation(ViewportNavigation::Target target)
 {
 	if (!EDevice || target == ViewportNavigation::Target::Perspective)
@@ -60,87 +44,15 @@ void RefreshCurrentTarget()
 		g_CurrentTarget = ViewportNavigation::Target::Perspective;
 }
 
-void DrawAxisWidget(const ImVec2& origin, float radius)
+// One end of an axis of the gizmo: the view a click on it gives
+struct SAxisEnd
 {
-	if (!EDevice)
-		return;
-
-	struct Axis
-	{
-		Fvector direction;
-		LPCSTR label;
-		XFinedTheme::ColorToken color;
-	};
-
-	const Axis axes[] = {
-		{{1.f, 0.f, 0.f}, "X", XFinedTheme::ColorToken::Error},
-		{{0.f, 1.f, 0.f}, "Y", XFinedTheme::ColorToken::Success},
-		{{0.f, 0.f, 1.f}, "Z", XFinedTheme::ColorToken::AccentActive},
-	};
-	const Fvector& camera_right = EDevice->m_Camera.GetRight();
-	const Fvector& camera_up = EDevice->m_Camera.GetNormal();
-	ImDrawList* draw_list = ImGui::GetWindowDrawList();
-	draw_list->AddCircleFilled(origin, 3.f, ThemeColor(XFinedTheme::ColorToken::Text));
-
-	for (const Axis& axis : axes)
-	{
-		// Project each world axis onto the camera's screen basis.
-		const ImVec2 projected(
-			axis.direction.dotproduct(camera_right),
-			-axis.direction.dotproduct(camera_up));
-		const ImVec2 positive(origin.x + projected.x * radius, origin.y + projected.y * radius);
-		const ImVec2 negative(origin.x - projected.x * radius * .58f, origin.y - projected.y * radius * .58f);
-		const ImU32 color = ThemeColor(axis.color);
-
-		draw_list->AddLine(negative, origin, ThemeColor(XFinedTheme::ColorToken::Muted, 0x78), 1.f);
-		draw_list->AddLine(origin, positive, color, 2.f);
-		draw_list->AddCircleFilled(positive, 7.f, color);
-
-		const ImVec2 label_size = ImGui::CalcTextSize(axis.label);
-		draw_list->AddText(
-			ImVec2(positive.x - label_size.x * .5f, positive.y - label_size.y * .5f),
-			ThemeColor(XFinedTheme::ColorToken::Background), axis.label);
-	}
-}
-
-bool TargetButton(ViewportNavigation::Target target, float width)
-{
-	const bool selected = ViewportNavigation::CurrentTarget() == target;
-	if (selected)
-	{
-		ImGui::PushStyleColor(ImGuiCol_Button, ThemeColorVec(XFinedTheme::ColorToken::Accent));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ThemeColorVec(XFinedTheme::ColorToken::AccentHovered));
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ThemeColorVec(XFinedTheme::ColorToken::AccentActive));
-	}
-
-	const bool clicked = ImGui::Button(ViewportNavigation::TargetName(target), ImVec2(width, 0.f));
-	if (selected)
-		ImGui::PopStyleColor(3);
-	if (ImGui::IsItemHovered())
-	{
-		if (target == ViewportNavigation::Target::Perspective)
-			ImGui::SetTooltip("Return to the previous free perspective view");
-		else
-			ImGui::SetTooltip("Align the camera to the %s axis view", ViewportNavigation::TargetName(target));
-	}
-	if (clicked)
-		ViewportNavigation::SetTarget(target);
-	return clicked;
-}
-
-bool FrameButton(LPCSTR label, LPCSTR tooltip, bool selection, float width)
-{
-	if (!ImGui::Button(label, ImVec2(width, 0.f)))
-	{
-		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("%s", tooltip);
-		return false;
-	}
-
-	if (selection)
-		return ViewportNavigation::FrameSelection();
-	return ViewportNavigation::FrameAll();
-}
+	ViewportNavigation::Target	target;
+	ImVec2						pos;
+	float						depth;		// along the camera's direction: the far ends are drawn first
+	XFinedTheme::ColorToken		color;
+	LPCSTR						label;		// the positive end carries its letter
+};
 }
 
 bool ViewportNavigation::SetTarget(Target target)
@@ -259,60 +171,95 @@ bool ViewportNavigation::FrameSelection()
 
 bool ViewportNavigation::Draw(const ImVec2& canvas_position, const ImVec2& canvas_size)
 {
-	if (!EDevice || !UI || UI->IsPlayInEditor() || canvas_size.x < 190.f || canvas_size.y < 230.f)
+	// a narrow view keeps its picture: the gizmo goes under 480 pt, the Perspective menu still has every view
+	if (!EDevice || !UI || UI->IsPlayInEditor() || canvas_size.x < XUI::Pt(480.f))
 		return false;
-
+	const float size = XUI::Pt(64.f);
+	// top right, under the row of pills
+	const ImVec2 min(canvas_position.x + canvas_size.x - size - XUI::Pt(12.f), canvas_position.y + XUI::Pt(44.f));
+	if (min.y + size > canvas_position.y + canvas_size.y - XUI::Pt(8.f))
+		return false;
 	RefreshCurrentTarget();
-	const float scale = _min(2.f, _max(.85f, ImGui::GetFontSize() / 13.f));
-	const float margin = 8.f * scale;
-	const float panel_width = _min(180.f * scale, canvas_size.x - margin * 2.f);
-	const float button_height = ImGui::GetFrameHeight();
-	const float axis_height = 70.f * scale;
-	const float panel_height = axis_height + button_height * 5.f + ImGui::GetStyle().ItemSpacing.y * 6.f + margin;
-	const float top_offset = ImGui::GetFrameHeightWithSpacing() + margin;
-	if (panel_width < 170.f || panel_height + top_offset + margin > canvas_size.y)
-		return false;
-	const ImVec2 panel_position(
-		canvas_position.x + canvas_size.x - panel_width - margin,
-		canvas_position.y + top_offset);
-	const ImVec2 panel_end(panel_position.x + panel_width, panel_position.y + panel_height);
-	const ImVec2 mouse = ImGui::GetIO().MousePos;
-	const bool owns_mouse = mouse.x >= panel_position.x && mouse.x <= panel_end.x &&
-		mouse.y >= panel_position.y && mouse.y <= panel_end.y;
 
-	ImGui::SetCursorScreenPos(panel_position);
-	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(margin, margin * .75f));
-	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.f * scale);
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, ThemeColorVec(XFinedTheme::ColorToken::Panel, .94f));
-	ImGui::PushStyleColor(ImGuiCol_Border, ThemeColorVec(XFinedTheme::ColorToken::Border, .95f));
-	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNavInputs;
-	if (ImGui::BeginChild("##ViewportNavigation", ImVec2(panel_width, panel_height), true, flags))
+	// one item for the whole square, submitted before the canvas: it takes the mouse over itself
+	ImGui::SetCursorScreenPos(min);
+	const bool clicked = ImGui::InvisibleButton("##axis_gizmo", ImVec2(size, size));
+	const bool hovered = ImGui::IsItemHovered();
+	const bool owns_mouse = hovered || ImGui::IsItemActive();
+
+	using Token = XFinedTheme::ColorToken;
+	const ImVec2 centre(min.x + size * .5f, min.y + size * .5f);
+	const float reach = size * .5f - XUI::Pt(9.f);
+	const Fvector& right = EDevice->m_Camera.GetRight();
+	const Fvector& up = EDevice->m_Camera.GetNormal();
+	const Fvector& forward = EDevice->m_Camera.GetDirection();
+	struct SAxis { Fvector dir; Target positive, negative; Token color; LPCSTR label; };
+	// a view looks from the end it is named by: Right from +X, Top from +Y, Back from +Z
+	const SAxis axes[] =
 	{
-		const ImVec2 content_start = ImGui::GetCursorScreenPos();
-		DrawAxisWidget(
-			ImVec2(content_start.x + ImGui::GetContentRegionAvail().x * .5f, content_start.y + axis_height * .44f),
-			24.f * scale);
-		ImGui::Dummy(ImVec2(0.f, axis_height));
-
-		const float spacing = ImGui::GetStyle().ItemSpacing.x;
-		const float half_width = (ImGui::GetContentRegionAvail().x - spacing) * .5f;
-		TargetButton(Target::Front, half_width);
-		ImGui::SameLine();
-		TargetButton(Target::Back, half_width);
-		TargetButton(Target::Left, half_width);
-		ImGui::SameLine();
-		TargetButton(Target::Right, half_width);
-		TargetButton(Target::Top, half_width);
-		ImGui::SameLine();
-		TargetButton(Target::Bottom, half_width);
-		TargetButton(Target::Perspective, ImGui::GetContentRegionAvail().x);
-		FrameButton("Frame All", "Frame every visible object", false, half_width);
-		ImGui::SameLine();
-		FrameButton("Selection", "Frame the current selection", true, half_width);
+		{ {1.f, 0.f, 0.f}, Target::Right,	Target::Left,	Token::AxisX, "X" },
+		{ {0.f, 1.f, 0.f}, Target::Top,		Target::Bottom,	Token::AxisY, "Y" },
+		{ {0.f, 0.f, 1.f}, Target::Back,	Target::Front,	Token::AxisZ, "Z" },
+	};
+	SAxisEnd ends[6];
+	int n = 0;
+	for (const SAxis& axis : axes)
+	{
+		// the world axis on the camera's screen basis
+		const ImVec2 screen(axis.dir.dotproduct(right) * reach, -axis.dir.dotproduct(up) * reach);
+		const float depth = axis.dir.dotproduct(forward);
+		ends[n++] = { axis.positive, ImVec2(centre.x + screen.x, centre.y + screen.y), depth, axis.color, axis.label };
+		ends[n++] = { axis.negative, ImVec2(centre.x - screen.x, centre.y - screen.y), -depth, axis.color, nullptr };
 	}
-	ImGui::EndChild();
-	ImGui::PopStyleColor(2);
-	ImGui::PopStyleVar(2);
+	std::sort(ends, ends + n, [](const SAxisEnd& a, const SAxisEnd& b) { return a.depth > b.depth; });
+
+	// the end under the mouse; the nearer one wins where two overlap
+	const ImVec2 mouse = ImGui::GetIO().MousePos;
+	const float grab = XUI::Pt(8.f);
+	int hot = -1;
+	if (hovered)
+		for (int i = 0; i < n; ++i)
+		{
+			const float dx = mouse.x - ends[i].pos.x, dy = mouse.y - ends[i].pos.y;
+			if (dx * dx + dy * dy <= grab * grab)
+				hot = i;
+		}
+
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	if (owns_mouse)
+		dl->AddCircleFilled(centre, size * .5f, XFinedTheme::U32(Token::Overlay, .75f));
+	ImFont* font = XUI::GetFont(XUI::Font::Small);
+	if (!font)
+		font = ImGui::GetFont();
+	const float font_px = XUI::FontSize(XUI::Font::Small) * XUI::Dpi();
+	for (int i = 0; i < n; ++i)
+	{
+		const SAxisEnd& end = ends[i];
+		const ImU32 color = XFinedTheme::U32(end.color);
+		if (end.label)
+		{
+			dl->AddLine(centre, end.pos, color, _max(1.f, XUI::Pt(2.f)));
+			dl->AddCircleFilled(end.pos, XUI::Pt(7.f), color);
+			const ImVec2 ts = font->CalcTextSizeA(font_px, FLT_MAX, 0.f, end.label);
+			dl->AddText(font, font_px, ImVec2(floorf(end.pos.x - ts.x * .5f + .5f), floorf(end.pos.y - ts.y * .5f + .5f)),
+				XFinedTheme::U32(Token::Canvas), end.label);
+		}
+		else
+			dl->AddCircleFilled(end.pos, XUI::Pt(5.f), XFinedTheme::U32(end.color, .45f));
+		if (i == hot)
+			dl->AddCircle(end.pos, XUI::Pt(end.label ? 8.5f : 6.5f), XFinedTheme::U32(Token::Text), 0, _max(1.f, XUI::Pt(1.5f)));
+	}
+	dl->AddCircleFilled(centre, XUI::Pt(2.5f), XFinedTheme::U32(Token::TextSecondary));
+
+	// a click on an end looks from it; anywhere else on the gizmo goes back to the free view
+	const Target target = hot >= 0 ? ends[hot].target : Target::Perspective;
+	char tip[64];
+	if (target == Target::Perspective)
+		xr_strcpy(tip, "Perspective: back to the free view");
+	else
+		sprintf_s(tip, "%s view", TargetName(target));
+	XUI::Tip(tip);
+	if (clicked)
+		SetTarget(target);
 	return owns_mouse;
 }

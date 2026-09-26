@@ -121,6 +121,9 @@ protected:
 	u64 m_LastProgressMessagePumpMs;
 	u64 m_LastProgressPaintMs;
 	xr_vector<SDeferredWindowMessage> m_DeferredWindowMessages;
+	// a monitor change that came in while an operation blocked: applied when it ends
+	UINT m_DeferredDpi{0};
+	RECT m_DeferredDpiRect{};
 	void BeginProgressOperation(bool cancelable);
 	void EndProgressOperation();
 	void PumpProgressMessages();
@@ -141,7 +144,6 @@ protected:
         flUpdateScene	= (1<<1),
         flResize		= (1<<2),
         flNeedQuit		= (1<<3),
-        flResetUI       = (1<<4),
     };
 	Flags32 m_Flags;
 protected:
@@ -229,6 +231,10 @@ public:
     // plain click in the outliner took the editor down. The flag alone is
     // enough there: the next Idle tick redraws anyway.
     void 			RedrawScene			(bool bForced=false){   m_Flags.set(flRedraw,TRUE); WakeFramePacing();		if (bForced && !InUIPass()) RealRedrawScene();}
+    // The scene is drawn only while somebody can see it (the Level tab). A caller that reads the render target
+    // anyway - screenshot_viewport - asks for one pass whatever tab is up; RTSize is kept while it is hidden.
+    void			ForceScenePass		()	{ m_ForceScenePass = true; RedrawScene(); }
+    virtual bool	SceneVisible		() const { return true; }
 
     void 			SetRenderQuality	(float q)      {   EDevice->m_ScreenQuality = q;}
 // mouse action
@@ -271,6 +277,9 @@ public:
 
     void 			OnAppActivate		();
     void 			OnAppDeactivate     ();
+	// WM_DPICHANGED (Per-Monitor V2): the window takes the rect Windows suggests, then the UI the
+	// new scale. During a blocking operation both wait for its end, like the other window messages.
+	void			DpiChanged			(HWND hwnd, UINT dpi, const RECT& suggested);
 
     bool    		NeedAbort           (){ return bNeedAbort;}
     bool 			NeedBreak			(){ return RequestProgressCancel(); }
@@ -337,10 +346,10 @@ public:
 protected:
     virtual void OnDrawUI();
 	virtual void OnDrawProgressUI();
-    void RealResetUI();
     HANDLE m_HConsole;
+	bool m_ForceScenePass{false};
+	bool m_ScenePending{false};		// asked for while nobody could see it: drawn once it is visible again
 public:
-   IC  void ResetUI(bool bForced=false)  { if (!bForced){ m_Flags.set(flResetUI, TRUE); WakeFramePacing(); } if (bForced) RealResetUI(); }
    virtual Ivector2 GetRenderMousePosition()const { return Ivector2().set(0, 0); }
    virtual void	OnStats(CGameFont* font);
 };

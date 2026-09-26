@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "EditorStartup.h"
+#include "UILogForm.h"
 #include "../../Public/xfined_resource.h"
 
 //------------------------------------------------------------------------------
@@ -409,4 +410,7 @@ ECORE_API void EditorStartup::Finish()
 	const UINT acp = ::GetACP();
 	if (acp == CP_UTF8)	Msg("* file names: UTF-8 (ANSI code page %u)", acp);
 	else				Msg("! file names: ANSI code page %u, not UTF-8 - a name it cannot hold does not open", acp);
+
+	// what the start wrote (the engine's registry and key binding notes) is in the log, not in the status bar's counts
+	UILogForm::CountFromHere("The editor started - warnings and errors are counted from here");
 }

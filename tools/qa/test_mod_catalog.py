@@ -15,16 +15,19 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   D  the signed [card] of the release descriptor (4), verified with xms_catalog.py
   E  the release published to the mock
   F  the listing requirements (7) against the published release and the catalog index - a package VirusTotal does
-     not know is a 'required' finding, never a note; the window opened and closed over MCP (show / hide), and drawn
-     where a screenshot holds it although the layout file saved its place far below the editor, and while the
-     editor is minimized (every later picture is taken of a minimized editor)
+     not know is a 'required' finding, never a note; the window (the kit dialog ui_contract names, dlg.catalog_submit)
+     opened and closed over MCP (show / hide), drawn where a screenshot holds it although the layout file saved its
+     place far below the editor, and while the editor is minimized (every later picture is taken of a minimized
+     editor); its height stays put while the check runs and after it ends, its footer is inside it and nothing of it
+     leaves its window
   G  VirusTotal with the author's own key (11), required: without one the check blocks and nothing is sent;
      the scan uploads what VirusTotal does not know, waits for the report and judges it; a block stops a submission
   H  the submission, scanned first: an issue 'Submit <id>' whose ini block is mods/<id>.ltx byte for byte, edited not
      duplicated, the verdicts the catalog's workflow comments (github-actions[bot] only, the newest one, past
      the first page), accepted and listed, nothing sent once the catalog holds the file
-  W  the withdrawal: an issue 'Withdraw <id>' from the listing's owner whose ini block names the module, edited not
-     duplicated, the catalog's verdict, the index's [withdrawn], nothing sent once withdrawn, the check's note, and
+  W  the withdrawal: its question put up over the window (show confirm=withdraw, a sheet dlg.catalog_withdraw with
+     Withdraw and Cancel) sends nothing; an issue 'Withdraw <id>' from the listing's owner whose ini block names the
+     module, edited not duplicated, the catalog's verdict, the index's [withdrawn], nothing sent once withdrawn, the check's note, and
      a new submission that lists it again
   I  hygiene: no token, password or VirusTotal key where it must not go
   J  the maintainer listing a module of their own the same way; refused and closed, then a new submission; a
@@ -80,11 +83,14 @@ TRUSTED = "EngineT"
 VT_PAGE = "https://www.virustotal.com/gui/file/"
 JOB_SECONDS = 120.0
 SECRETS = (PASSWORD, PASSWORD2, VT_KEY, TOKEN)
-SUBMIT_WINDOW = "XFined Editor - Submit to Mod Browser"
-# the editor's ImGui layout ($local_root$) and the one a fresh checkout starts from, and its preferences - the
-# window's size and state among them: the editor writes both when it closes
+# the Submit window's ImGui name, "<title>###dlg.<name>": what ui_contract's dialogs.submit says, this when it says
+# nothing (the layout below is written before an editor runs)
+SUBMIT_WINDOW = "Submit to Mod Browser###dlg.catalog_submit"
+# the withdrawal's question, a sheet over the Submit window
+WITHDRAW_SHEET = "dlg.catalog_withdraw"
+# the editor's ImGui layout ($local_root$) and its preferences - the window's size and state among them: the
+# editor writes both when it closes
 LAYOUT = os.path.join(REPO, "level_imgui.ini")
-LAYOUT_DEFAULT = os.path.join(REPO, "rawdata", "level_imgui_default.ini")
 PREFS = os.path.join(REPO, "level.ini")
 
 # the game repository's reference implementation, imported in main()
@@ -320,6 +326,54 @@ def shot(folder: str | None, name: str) -> dict:
     return pic
 
 
+def editor_window(pid: int) -> int:
+    """The editor's main window (class 'XFined Editor') of the process, 0 when there is none."""
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid:
+            text = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, text, 256)
+            if text.value == "XFined Editor":
+                found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    return found[0] if found else 0
+
+
+def resize_editor(pid: int, width: int, height: int) -> bool:
+    """Restores the editor's window and gives it another size - the work area every modal sits in changes."""
+    hwnd = editor_window(pid)
+    if not hwnd:
+        return False
+    user32 = ctypes.windll.user32
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    return bool(user32.SetWindowPos(hwnd, 0, 60, 40, width, height, 0x0014))  # SWP_NOZORDER | SWP_NOACTIVATE
+
+
+def centred(pic: dict) -> str:
+    """Why the modal on top is not centred across the picture - '' when it is (the work area spans the width)."""
+    modal = pic.get("modal") or {}
+    size = png_size(base64.b64decode(pic.get("png_base64", ""))) if pic.get("png_base64") else (0, 0)
+    x, w = int(modal.get("x", -1)), int(modal.get("w", -1))
+    if not size[0] or x < 0 or w <= 0:
+        return "no modal or no picture: " + short(modal)
+    off = abs(x + w / 2 - size[0] / 2)
+    return "" if off <= max(4, size[0] * 0.01) else "its centre is %d px off the picture's (%s in %dx%d)" % (off, [x, w], *size)
+
+
+def png_size(data: bytes) -> tuple[int, int]:
+    """Width and height of a PNG from its IHDR."""
+    if len(data) < 24:
+        return (0, 0)
+    return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+
+
 def platform_windows(pid: int) -> list[str]:
     """Titles of the visible windows ImGui opened for the process on its own ('ImGui Platform' class): what they
     draw is in no screenshot of the editor, which mirrors the main window alone."""
@@ -402,6 +456,23 @@ def stale_layout(layout: bytes, title: str, y: int) -> bytes:
     # the window's own entry goes - it may name a viewport of its own as well - and a new one comes last
     text = re.sub(r"^%s\r?\n(?:[^\[\r\n].*(?:\r?\n|$))*" % re.escape(head), "", text, flags=re.M)
     return (text.rstrip("\r\n") + "\n\n%s\nPos=784,%d\nSize=971,700\nCollapsed=0\n" % (head, y)).encode("utf-8")
+
+
+def submit_names() -> tuple[str, str]:
+    """The Submit window's title and its dialog id (dlg.<name>), from the running editor's ui_contract."""
+    window = str((mcp("ui_contract").get("dialogs") or {}).get("submit") or SUBMIT_WINDOW)
+    title, _, name = window.partition("###")
+    return title, name
+
+
+def inside(rect, modal: dict) -> bool:
+    """An audit rect [x, y, w, h] lies within the modal's rect (px of the same picture)."""
+    try:
+        x, y, w, h = (float(v) for v in rect)
+        mx, my, mw, mh = (float(modal[k]) for k in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        return False
+    return x >= mx - 1 and y >= my - 1 and x + w <= mx + mw + 1 and y + h <= my + mh + 1
 
 
 def job_state(data: dict) -> str:
@@ -722,6 +793,7 @@ class Run:
         self.plain_mode = True
         self.package = ("", 0, "")  # name, size, sha256 of the published zip
         self.pid = 0  # the running editor's process
+        self.submit: tuple[str, str] = ("", "")  # the Submit window's title and dialog id, once an editor answers
 
     def next_index(self, rows: list[str], withdrawn: tuple[str, ...] = ()) -> str:
         self.serial += 1
@@ -731,15 +803,18 @@ class Run:
         """The window is in the picture: drawn into the editor's own window, which is what a screenshot mirrors - not
         into a platform window of its own (a dimmed editor with no dialog), and not into a frame the editor drew
         nothing of itself into (a minimized editor: one flat colour)."""
+        if not self.submit[0]:
+            self.submit = submit_names()
+        title, name = self.submit
         outside = pic.get("outside")
         platform = platform_windows(self.pid)
         modal = pic.get("modal") or {}
         if not (pic.get("ok") is True and pic.get("png_base64")):
             why = "no picture: " + short(pic)
-        elif not isinstance(outside, list) or SUBMIT_WINDOW in outside or SUBMIT_WINDOW in platform:
+        elif not isinstance(outside, list) or title in outside or title in platform:
             why = "in a window of its own: outside=%s, platform windows=%s" % (outside, platform)
-        elif modal.get("title") != SUBMIT_WINDOW:
-            why = "the modal on top: " + short(pic.get("modal"))
+        elif (modal.get("id") != name) if name else (modal.get("title") != title):
+            why = "the modal on top is not %s: %s" % (name or title, short(pic.get("modal")))
         else:
             why = window_drawn(base64.b64decode(pic["png_base64"]), modal)
         check(not why, text, why)
@@ -1086,24 +1161,52 @@ class Run:
         data = mcp("mod_catalog", action="show")
         check(data.get("ok") and (data.get("job") or {}).get("kind") == "check",
               "F show opens the window and starts a check", short(data.get("job")))
+        # the dialog fits itself once, when it opens: a check that ends later scrolls inside it instead of growing it
+        early = mcp("screenshot_editor").get("modal") or {}
         data = follow(data)
         check(job_done(data, "check") and not blocks(data), "F the check it started runs to the end", short(data.get("job")))
         # main() saved the window's place far below the editor, and ImGui gives a window outside the main viewport
         # a platform window of its own - one no screenshot of the editor holds
-        self.window_in_shot(mcp("screenshot_editor"), "F the window opens inside the editor, and a screenshot holds it, "
-                            "wherever the layout saved it")
+        pic = mcp("screenshot_editor")
+        self.window_in_shot(pic, "F the window opens inside the editor, and a screenshot holds it, wherever the layout "
+                            "saved it")
+        late = pic.get("modal") or {}
+        check(int(early.get("h", 0)) > 0 and abs(int(early.get("h", 0)) - int(late.get("h", -1))) <= 1,
+              "F the window keeps its height while the check runs and after it ends",
+              "%s -> %s" % (early.get("h"), late.get("h")))
+        audit = mcp("ui_audit", id="submit")
+        controls = audit.get("controls") or []
+        submit = [c for c in controls if c.get("label") in ("Scan and Submit", "Scan and Update", "Update Submission", "Submit")]
+        check(audit.get("ok") and not audit.get("escaped") and len(submit) == 1 and inside(submit[0].get("rect"), late) and
+              any(c.get("label") == "Close" and inside(c.get("rect"), late) for c in controls),
+              "F the footer holds the submit button and Close inside the window, and nothing of it leaves its window",
+              short(audit.get("escaped")) + " " + short([(c.get("label"), c.get("rect")) for c in submit]))
         shot(self.shots, "catalog_window")
         hidden = mcp("mod_catalog", action="hide")
         check(hidden.get("ok") and not (hidden.get("job") or {}).get("pending"), "F hide closes it and starts nothing",
               short(hidden.get("job")))
         shot(self.shots, "catalog_hidden")
 
+        # the editor's window resized under it: the work area moves, and the window is centred in the new one
+        follow(mcp("mod_catalog", action="show"))
+        check(resize_editor(self.pid, 1500, 1000), "F the editor's window takes another size")
+        time.sleep(0.5)
+        pic = mcp("screenshot_editor")
+        self.window_in_shot(pic, "F after the resize the window is still inside the editor")
+        why = centred(pic)
+        check(not why, "F after the resize the window is centred in the editor", why)
+        shot(self.shots, "catalog_window_resized")
+        mcp("mod_catalog", action="hide")
+
         # a minimized editor has no client area, and ImGui draws nothing of a minimized window: a screenshot of it
         # was one flat colour. It stays minimized from here on, so every later picture is taken of a minimized editor
         st = mcp("window_control", action="minimize")
         check(st.get("ok") and st.get("minimized") is True, "F the editor is minimized", short(st))
         follow(mcp("mod_catalog", action="show"))
-        self.window_in_shot(mcp("screenshot_editor"), "F a screenshot of the minimized editor holds the window as well")
+        pic = mcp("screenshot_editor")
+        self.window_in_shot(pic, "F a screenshot of the minimized editor holds the window as well")
+        why = centred(pic)
+        check(not why, "F the minimized editor's picture has the window centred", why)
         shot(self.shots, "catalog_window_minimized")
         mcp("mod_catalog", action="hide")
 
@@ -1290,6 +1393,25 @@ class Run:
         check(job_done(data, "submission") and st.get("state") == "listed" and st.get("github") == GITHUB_REPO and
               st.get("this_key") is True and (data.get("withdrawal") or {}).get("number") == 0,
               "W listed from its repository with this key, and nothing withdrawn yet", short(st))
+
+        # the question before a withdrawal, put up to be looked at: a sheet over the window - only a click in it
+        # withdraws anything
+        posted = len(api_requests(mock, "POST", "/issues"))
+        follow(mcp("mod_catalog", action="show", confirm="withdraw"))
+        pic = mcp("screenshot_editor")
+        modal = pic.get("modal") or {}
+        check(modal.get("id") == WITHDRAW_SHEET, "W show confirm=withdraw puts the withdrawal's question on top", short(modal))
+        audit = mcp("ui_audit", id=WITHDRAW_SHEET)
+        labels = [c.get("label") for c in audit.get("controls") or []]
+        check("Withdraw" in labels and "Cancel" in labels and not audit.get("escaped"),
+              "W the question offers Withdraw and Cancel, and nothing of it leaves its window",
+              short(audit.get("escaped")) + " " + short(labels))
+        shot(self.shots, "catalog_withdraw_sheet")
+        mcp("mod_catalog", action="hide")
+        pic = mcp("screenshot_editor")
+        check(not pic.get("modal") and len(api_requests(mock, "POST", "/issues")) == posted and
+              not submissions(mock.catalog(), "QaOwner", WITHDRAW_TITLE),
+              "W hide takes the window and its question down, and nothing was sent", short(pic.get("modal")))
 
         # another account's issue under the title is not the author's withdrawal
         mock.issue("QaSomeone", WITHDRAW_TITLE, "Somebody else's.")
@@ -1545,12 +1667,11 @@ def main() -> int:
     real_home = os.path.join(documents_folder(), "XFined Editor")
     real_before = snapshot(real_home)
     # F wants the Submit to Mod Browser window in the picture although the layout saved it far below the editor (a
-    # fresh checkout has no layout yet: the default one is planted). The editor rewrites its layout and preferences
+    # fresh checkout has no layout yet: the entry is all it holds). The editor rewrites its layout and preferences
     # when it closes, so both come back byte for byte after the last one has
     layout_backup = read_bytes(LAYOUT)
     prefs_backup = read_bytes(PREFS)
-    write_bytes(LAYOUT, stale_layout(layout_backup if layout_backup is not None else read_bytes(LAYOUT_DEFAULT) or b"",
-                                     SUBMIT_WINDOW, 3000))
+    write_bytes(LAYOUT, stale_layout(layout_backup or b"", SUBMIT_WINDOW, 3000))
 
     try:
         run = Run(args, work, copy)

@@ -8,7 +8,6 @@
 
 #include "UIEditLightAnim.h"
 #include "UIImageEditorForm.h"
-#include "UIMinimapEditorForm.h"
 #include "UISoundEditorForm.h"
 #include "d3dutils.h"
 
@@ -52,6 +51,30 @@ BOOL AllowLogCommands()
 ECommandVec&  GetEditorCommands()
 {
 	return 	ECommands;
+}
+
+bool CommandConfirmed(CCommandVar p2)
+{
+	return p2.IsInteger() && u32(p2) == kCommandConfirmed;
+}
+
+bool ConfirmCommand(u32 cmd, CCommandVar p1, CCommandVar p2, const XUI::ConfirmSpec& spec)
+{
+	if (CommandConfirmed(p2))
+		return true;
+	// Confirm answers at once over MCP and under -nodlg, on a later frame when it asks: the first is this call's answer,
+	// the second runs the command again - after the frame, like any command a click defers
+	struct SAsk { bool returned = false; bool yes = false; };
+	auto ask = std::make_shared<SAsk>();
+	XUI::Confirm(spec, [cmd, p1, ask](XUI::Answer answer)
+	{
+		if (!ask->returned)
+			ask->yes = answer == XUI::Answer::Yes;
+		else if (answer == XUI::Answer::Yes && UI)
+			UI->DeferCommand(cmd, p1, CCommandVar(kCommandConfirmed));
+	});
+	ask->returned = true;
+	return ask->yes;
 }
 void 	EnableReceiveCommands()
 {
@@ -220,25 +243,24 @@ CCommandVar	TUI::CommandRenderFocus(CCommandVar p1, CCommandVar p2)
 }
 CCommandVar	TUI::CommandBreakLastOperation(CCommandVar p1, CCommandVar p2)
 {
+	// No question: a blocking job holds the frame, which draws no dialog until the job ends - and a cancelled job
+	// stops at its next checkpoint, the same as the Cancel of its task card, which does not ask either
 	if (!ProgressOperationActive())
 	{
-		ELog.DlgMsg(mtInformation, "There is no active operation to cancel.");
+		ELog.Msg(mtInformation, "No job is running: nothing to cancel.");
 		return 0;
 	}
 	if (!ProgressCancelable())
 	{
-		ELog.DlgMsg(mtInformation, "The active operation cannot be cancelled safely.");
+		ELog.Msg(mtInformation, "The running job cannot be cancelled safely.");
 		return 0;
 	}
-	if (mrYes != ELog.DlgMsg(mtConfirmation, TMsgDlgButtons() << mbYes << mbNo,
-		"Are you sure to cancel the current operation?"))
-		return 0;
 	if (!NeedBreak())
 	{
-		ELog.DlgMsg(mtInformation, "The cancellation request was not accepted.");
+		ELog.Msg(mtInformation, "The job is already stopping.");
 		return 0;
 	}
-	ELog.Msg(mtInformation, "Cancellation requested.");
+	ELog.Msg(mtInformation, "Cancellation requested: the job stops at its next checkpoint.");
 	return 1;
 }
 CCommandVar 	TUI::CommandRenderResize(CCommandVar p1, CCommandVar p2)
@@ -290,6 +312,9 @@ CCommandVar CommandInitialize(CCommandVar p1, CCommandVar p2)
     EditorStartup::Stage("Starting the render device");
     if (UI->OnCreate(/*(TD3DWindow*)(u32)p1,(TPanel*)(u32)p2)*/))
     {
+        // the three faces of the UI are read once, and timed as a stage of their own
+        EditorStartup::Stage("Loading fonts");
+        XUI::LoadFonts();
         EditorStartup::Stage("Loading the editor library");
         ExecCommand		(COMMAND_CREATE_SOUND_LIB);	R_ASSERT(SndLib);
         SndLib->OnCreate();
@@ -411,15 +436,47 @@ CCommandVar 	CommandSoundEditor(CCommandVar p1, CCommandVar p2)
   //  TfrmSoundLib::EditLib(xr_string("Sound Editor"));
     return				TRUE;
 }
+// What a sound sync takes away (CSoundManager::CleanupSounds): the game sounds and the sound descriptions whose .wav
+// source is gone. They are not deleted but renamed to .~ogg / .~thm, which the question says.
+void OrphanSounds(XUI::Strings& items, u32& total)
+{
+	FS_FileSet base, thumbs, game;
+	FS.file_list(base, _sounds_, FS_ListFiles | FS_ClampExt, "*.wav");
+	FS.file_list(thumbs, _sounds_, FS_ListFiles | FS_ClampExt, "*.thm");
+	FS.file_list(game, _game_sounds_, FS_ListFiles | FS_ClampExt, "*.ogg");
+	total = 0;
+	for (FS_FileSet* set : { &game, &thumbs })
+		for (const FS_File& file : *set)
+		{
+			xr_string name = EFS.ChangeFileExt(file.name, "");
+			xr_strlwr(name);
+			if (base.find(name) != base.end())
+				continue;
+			if (items.size() < 10)
+				items.push_back(name + (set == &game ? ".ogg" : ".thm"));
+			++total;
+		}
+}
+
 CCommandVar 	CommandSyncSounds(CCommandVar p1, CCommandVar p2)
 {
-   
-    if (ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to synchronize sounds?")==mrYes) {
-		SProgressOperation progress(*UI, true);
-        SndLib->RefreshSounds(true);
-		return !UI->NeedAbort();
-	}
-    return				TRUE;
+	XUI::ConfirmSpec spec;
+	spec.id = "sync_sounds";
+	spec.title = "Synchronize Sounds";
+	spec.action = "Synchronize";
+	if (!CommandConfirmed(p2))
+		OrphanSounds(spec.items, spec.total);
+	spec.headline = spec.total
+		? "Synchronize the sound library? These sounds have no .wav source any more:"
+		: "Synchronize the sound library with the .wav sources?";
+	spec.consequence = spec.total
+		? "They are renamed to .~ogg and .~thm; the sounds whose source changed are converted again."
+		: "The sounds whose source changed are converted again and their game files replaced.";
+	if (!ConfirmCommand(COMMAND_SYNC_SOUNDS, p1, p2, spec))
+		return FALSE;
+	SProgressOperation progress(*UI, true);
+	SndLib->RefreshSounds(true);
+	return !UI->NeedAbort();
 }
 CCommandVar 	CommandImageEditor(CCommandVar p1, CCommandVar p2)
 {
@@ -432,13 +489,6 @@ CCommandVar 	CommandLightAnimEditor(CCommandVar p1, CCommandVar p2)
     return				TRUE;
 }
 
-CCommandVar 	CommandMinimapEditor(CCommandVar p1, CCommandVar p2)
-{
-    UIMinimapEditorForm::Show();
-    //TTMinimapEditor::Show   ();
-    return				    TRUE;
-}
-
 CCommandVar 	CommandCheckTextures(CCommandVar p1, CCommandVar p2)
 {
     UIImageEditorForm::ImportTextures();
@@ -446,12 +496,17 @@ CCommandVar 	CommandCheckTextures(CCommandVar p1, CCommandVar p2)
 }
 CCommandVar 	CommandRefreshTextures(CCommandVar p1, CCommandVar p2)
 {
-    if (ELog.DlgMsg(mtConfirmation,TMsgDlgButtons() << mbYes << mbNo,"Are you sure to synchronize textures?")==mrYes) {
-		SProgressOperation progress(*UI, true);
-        ImageLib.RefreshTextures(0);
-		return !UI->NeedAbort();
-	}
-    return				TRUE;
+	XUI::ConfirmSpec spec;
+	spec.id = "sync_textures";
+	spec.title = "Synchronize Textures";
+	spec.headline = "Synchronize the texture library with the texture sources?";
+	spec.consequence = "The textures whose source changed are converted again: their .dds and .thm files are replaced.";
+	spec.action = "Synchronize";
+	if (!ConfirmCommand(COMMAND_REFRESH_TEXTURES, p1, p2, spec))
+		return FALSE;
+	SProgressOperation progress(*UI, true);
+	ImageLib.RefreshTextures(0);
+	return !UI->NeedAbort();
 }
 CCommandVar 	CommandReloadTextures(CCommandVar p1, CCommandVar p2)
 {
@@ -731,7 +786,6 @@ void TUI::RegisterCommands()
 	REGISTER_CMD_S	    (COMMAND_SYNC_SOUNDS,    		CommandSyncSounds);
     REGISTER_CMD_S	    (COMMAND_IMAGE_EDITOR,   		CommandImageEditor); 
     REGISTER_CMD_S      (COMMAND_LIGHTANIM_EDITOR,      CommandLightAnimEditor);
-    REGISTER_CMD_S	    (COMMAND_MINIMAP_EDITOR,   		CommandMinimapEditor);
 	REGISTER_CMD_S	    (COMMAND_CHECK_TEXTURES,     	CommandCheckTextures);
 	REGISTER_CMD_S	    (COMMAND_REFRESH_TEXTURES,   	CommandRefreshTextures);	
 	REGISTER_CMD_S	    (COMMAND_RELOAD_TEXTURES,    	CommandReloadTextures);

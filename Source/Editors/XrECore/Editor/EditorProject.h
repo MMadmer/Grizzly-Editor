@@ -2,20 +2,25 @@
 
 // Unreal-style project system.
 //
-// On startup the editor shows a fullscreen Project Browser (recent-project
-// tiles with previews + a create form) and nothing else; the actual editor UI
+// On startup the editor shows the Start page (a New Project form and a card per
+// recent project, with its preview) and nothing else; the actual editor UI
 // appears only after a project is opened. Opening a project REMOUNTS the
 // writable FS aliases ($maps$, $game_levels$, $game_spawn$, $import$, ...)
 // onto the project folder at runtime via FS_Path::_set_root, so scene saves
 // and compiled output can never touch the shared SDK data.
 //
 // Project = folder with project.ltx. Recents live in _projects.ini next to
-// the SDK root. preview.png (captured on project close) feeds the tiles.
+// the SDK root. preview.png (the open scene rendered once more as the project
+// closes, without the author's tools) feeds the cards. project.ltx [project]
+// last_scene names the scene to reopen below the project root: a copied
+// project opens its own copy of it.
 
 class ECORE_API EditorProject
 {
 public:
 	using TLiveSceneQuery = bool (*)();
+	// begin = true before the preview pass, false after it
+	using TPreviewScope = void (*)(bool begin);
 
 	static bool		Active				();
 	static LPCSTR	Root				();		// project folder, no trailing slash
@@ -33,8 +38,8 @@ public:
 	// the author always edits their own copy and the shared library stays put.
 	static bool		ImportBaseScene		(LPCSTR name, string_path& out_level, xr_string& err);
 
-	// fullscreen browser page; drawn INSTEAD of the editor UI until a project
-	// is opened. Returns true while the browser is on screen.
+	// the Start page, the whole work area under the caption; drawn INSTEAD of the
+	// editor UI until a project is opened. Returns true while it is on screen.
 	static bool		DrawBrowser			();
 
 	// ---- linked game install ------------------------------------------------
@@ -48,8 +53,9 @@ public:
 	// false and leaves the human-readable cause in LinkError()
 	static bool		LinkGame			(LPCSTR folder);
 	static LPCSTR	LinkError			();
-	// BLOCKING modal, drawn INSTEAD of the editor UI whenever a project is open
-	// but its game link is missing or stale. Returns true while it owns the frame.
+	// the Link Game card on the Start page, drawn INSTEAD of the editor UI whenever
+	// a project is open but its game link is missing or stale. Returns true while
+	// it owns the frame.
 	static bool		DrawGameLink		();
 	// MCP: report the link, or set it when the request carries a 'path'
 	static void		McpGameLink			(LPCSTR raw, xr_string& out);
@@ -59,10 +65,22 @@ public:
 	// opens an existing project folder (must hold project.ltx unless create)
 	static bool		Open				(LPCSTR folder);
 	static LPCSTR	OpenError			();
-	// creates <parent>\<name> (latin letters, digits, _ and - only) and opens it
+	// creates <parent>\<name> (latin letters, digits, _ and - only) and opens it;
+	// a project there already is only opened
 	static bool		Create				(LPCSTR parent, LPCSTR name);
-	// captures preview, stores last scene, unmounts and re-opens the browser
+	// stores the last scene, unmounts and brings the Start page back; a scene still up
+	// (the editor quitting) gets its preview taken first
 	static void		Close				();
+
+	// The Start page's picture of the project: the open scene rendered once more from the
+	// viewport's camera and at its size, without the author's tools (selection, gizmo, grid,
+	// axis triad, stats, captions), into preview.png. A close that clears the scene takes it
+	// BEFORE the clear (Switch Project, project_close). It renders, so never from inside the
+	// UI pass. A picture of nothing keeps the last good one. True when preview.png was written.
+	static bool		CapturePreview		();
+	// The host editor owns the concrete scene: it hides what only the author sees (the
+	// selection, the gizmo) for that pass and puts it back after it
+	static void		SetPreviewScope		(TPreviewScope scope);
 
 	static bool		ValidateName		(LPCSTR name);
 
@@ -86,12 +104,16 @@ public:
 	// a scene load succeeded; Close() uses it to tell an autoload that never
 	// happened from a scene the author closed on purpose
 	static void		NoteSceneLoaded		();
+	// once a frame, after the frame's work (EditorRecovery::Tick): the scene the
+	// project has open. A close that clears the scene first (project_close,
+	// Switch Project) still remembers it
+	static void		FollowScene			();
 	// once, from the first frame tick: the recent list and the -project argument.
 	// Deliberately not tied to drawing - see the definition
 	static void		Startup				();
 
 	// in-editor helpers
-	static void		DrawUI				();		// import-scene modal
+	static void		DrawUI				();		// the Import Base Scene dialog
 	static void		RequestImportScene	();
 	static void		OpenProjectFolder	();
 	// deferred last-scene autoload: returns the path once, after the browser
@@ -100,7 +122,7 @@ public:
 	// recent projects as a JSON array — for the MCP list_projects command
 	static void		ListRecentJson		(xr_string& out);
 
-	// ---- the project browser's tile menu: Show in Explorer, Delete ----------
+	// ---- the Start page's card menu: Show in Explorer, Delete ---------------
 	// A path is "listed" when _projects.ini names it. Only a listed folder is
 	// shown or deleted from here; the confirmation, the deletion and MCP all go
 	// through the same checks.
@@ -141,10 +163,14 @@ public:
 	// Show in Explorer: a listed folder that exists
 	static bool		RevealProject		(LPCSTR path, xr_string& err);
 	// MCP: project_reveal, project_delete, project_forget, project_browser_menu
+	// (the card menu, the confirmation, and the page's search and sort - to look at)
 	static void		McpReveal			(LPCSTR raw, xr_string& out);
 	static void		McpDelete			(LPCSTR raw, xr_string& out);
 	static void		McpForget			(LPCSTR raw, xr_string& out);
 	static void		McpBrowserMenu		(LPCSTR raw, xr_string& out);
+	// MCP project_create: the New Project form's Create - parent (default: the
+	// form's location) and name; refused while a project is open
+	static void		McpCreate			(LPCSTR raw, xr_string& out);
 
 private:
 	static void		Mount				();
@@ -154,7 +180,6 @@ private:
 	static void		SaveManifest		();
 	static void		LoadRecent			();
 	static void		SaveRecent			();
-	static void		SavePreview			();
 	static void		ReleasePreviews		();
-	static bool		PickFolder			(char* dest, u32 dest_size, const wchar_t* title);
 };
+

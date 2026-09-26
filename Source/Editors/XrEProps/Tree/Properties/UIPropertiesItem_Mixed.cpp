@@ -86,12 +86,13 @@ void UIPropertiesItem::RemoveMixed()
 	}
 	break;
 	case PROP_NUMERIC:
+	case PROP_TIME:
 	{
 		if (!MixedNumeric<u32>(PItem, change))
 			if (!MixedNumeric<float>(PItem, change))
 				if (!MixedNumeric<u8>(PItem, change))
 					if (!MixedNumeric<s8>(PItem, change))
-						if (!MixedNumeric<u16>(PItem, change))
+						if (!MixedNumeric<s16>(PItem, change))
 							if (!MixedNumeric<u16>(PItem, change))
 								if (!MixedNumeric<s32>(PItem, change))
 									R_ASSERT(false);
@@ -208,52 +209,9 @@ void UIPropertiesItem::RemoveMixed()
 	case PROP_STEXT:
 	case PROP_CTEXT:
 	{
-		CTextValue* V1 = dynamic_cast<CTextValue*>(PropertiesFrom->m_EditTextValue->GetFrontValue());
-		if (V1)
-		{
-			xr_string out = PItem->GetDrawText();
-			if (PropertiesFrom->m_EditTextValue->AfterEdit<CTextValue, xr_string>(out))
-			{
-				if (PropertiesFrom->m_EditTextValue->ApplyValue<CTextValue, LPCSTR>(out.c_str()))
-				{
-					change = true;
-				}
-			}
-		}
-		else
-		{
-			RTextValue* V2 = dynamic_cast<RTextValue*>(PropertiesFrom->m_EditTextValue->GetFrontValue());
-			if (V2)
-			{
-				shared_str out = PItem->GetDrawText().c_str();
-				if (PropertiesFrom->m_EditTextValue->AfterEdit<RTextValue, shared_str>(out))
-				{
-					if (PropertiesFrom->m_EditTextValue->ApplyValue<RTextValue, shared_str>(out))
-					{
-						change = true;
-					}
-				}
-			}
-			else
-			{
-				STextValue* V3 = dynamic_cast<STextValue*>(PropertiesFrom->m_EditTextValue->GetFrontValue());
-				if (V3)
-				{
-					xr_string out = PItem->GetDrawText();;
-					if (PropertiesFrom->m_EditTextValue->AfterEdit<STextValue, xr_string>(out))
-					{
-						if (PropertiesFrom->m_EditTextValue->ApplyValue<STextValue, xr_string>(out))
-						{
-							change = true;
-						}
-					}
-				}
-				else
-				{
-					R_ASSERT(false);
-				}
-			}
-		}
+		// the first object's text for all of them, through the row's own AfterEdit
+		extern xr_string PropEditText(PropItem* item);
+		change = PropertiesFrom->ApplyText(PItem, PropEditText(PItem).c_str());
 	}
 		break;
 	case PROP_CLIST:
@@ -303,7 +261,6 @@ void UIPropertiesItem::RemoveMixed()
 	case PROP_GAMETYPE:
 	{
 		GameTypeValue* V = dynamic_cast<GameTypeValue*>(PItem->GetFrontValue()); R_ASSERT(V);
-		ImGui::Text(PItem->GetDrawText().c_str());
 		auto value = V->GetValue();
 		PItem->BeforeEdit<GameTypeValue, GameTypeChooser>(value);
 		if (PItem->AfterEdit<GameTypeValue, GameTypeChooser>(value))

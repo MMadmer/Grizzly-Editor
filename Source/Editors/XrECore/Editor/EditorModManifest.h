@@ -232,8 +232,10 @@ namespace EditorMod
 	// MAJOR.MINOR.PATCH from the version resource of <linked game>\xrEngine.exe
 	ECORE_API bool	LinkedGameVersion	(xr_string& out);
 
-	// modal windows (drawn from CLevelMain::OnDrawUI) + Mod menu triggers
+	// the Mod Settings tab and the build dialogs (drawn from CLevelMain::OnDrawUI) + Mod menu triggers;
+	// a build started here reports in the shared result dialog, MCP builds answer in JSON
 	ECORE_API void	DrawUI				();
+	// opens the Mod Settings tab on mod.ltx (made when the project has none)
 	ECORE_API void	RequestEditManifest	();
 	ECORE_API void	RequestExportModule	();
 	ECORE_API void	RequestExportFlat	();
@@ -260,4 +262,8 @@ namespace EditorMod
 	// {"path":"docs","excluded":true|false} - the browser's Exclude from Build
 	ECORE_API void	McpExclude			(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpPackage			(LPCSTR raw, xr_string& out);
+	// mod_settings_view: {"page":"general|mod_browser|game_mode|relations|build_contents|pda"} opens the
+	// Mod Settings tab on that page; without a page it only reports: the page, dirty, each page's state
+	// and the problems the form shows
+	ECORE_API void	McpSettingsView		(LPCSTR raw, xr_string& out);
 }

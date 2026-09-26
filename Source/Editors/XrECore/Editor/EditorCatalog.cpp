@@ -745,35 +745,46 @@ bool EditorCatalog::Verify(const xr_string& text, const xr_string& public_key, x
 	return true;
 }
 
+bool EditorCatalog::KeyWantsPassword()
+{
+	const SKeyState state = KeyStateForUI();
+	return state.exists && state.error.empty() && state.locked;
+}
+
 void EditorCatalog::DrawKeyLine(LPCSTR id)
 {
 	static char password[128] = {};
 	static xr_string problem;
 	const SKeyState state = KeyStateForUI();
 	ImGui::PushID(id);
+	// a line of text in a property row sits on its label's baseline, like the fields around it
+	if (!state.exists || !state.error.empty() || !state.locked)
+		ImGui::AlignTextToFramePadding();
 	if (!state.exists)
-		ImGui::TextColored(ImVec4(1.f, 0.8f, 0.3f, 1.f), "Not signed: no author key (Mod > Submit to Mod Browser sets one up).");
+		XUI::StatusText(XUI::Tone::Warning, "Not signed: no author key. Submit to Mod Browser creates one.");
 	else if (!state.error.empty())
-		ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Not signed: %s", state.error.c_str());
+		XUI::StatusText(XUI::Tone::Error, ("Not signed: the key file does not read: " + state.error + ".").c_str());
 	else if (state.locked)
 	{
-		ImGui::TextUnformatted("Author key password:");
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(200);
-		const bool enter = ImGui::InputText("##key_password", password, sizeof(password),
+		// the field takes what the row leaves the button: a property row and a plain line alike
+		const float button = ImGui::CalcTextSize("Unlock").x + XUI::Pt(20.f);
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		ImGui::SetNextItemWidth(_max(XUI::Em(6.f), ImGui::GetContentRegionAvail().x - button - spacing));
+		const bool enter = ImGui::InputTextWithHint("##key_password", "Author key password", password, sizeof(password),
 			ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+		XUI::Tip("The author key file is protected. Its password is asked once per session and never stored.");
 		ImGui::SameLine();
-		if (ImGui::Button("Unlock") || enter)
+		if (XUI::Button("Unlock", XUI::Kind::Secondary, password[0] != 0, "Type the key file's password first.") || (enter && password[0]))
 		{
 			xr_string err;
 			problem = Unlock(password, err) ? xr_string() : err;
 			Wipe(password, sizeof(password));
 		}
 		if (!problem.empty())
-			ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "%s", problem.c_str());
+			XUI::StatusText(XUI::Tone::Error, problem.c_str());
 	}
 	else
-		ImGui::TextColored(ImVec4(0.5f, 0.85f, 0.5f, 1.f), "Signed with the author key %s.", state.key_id.c_str());
+		XUI::StatusText(XUI::Tone::Success, ("Signed with the author key " + state.key_id + ".").c_str());
 	ImGui::PopID();
 }
 

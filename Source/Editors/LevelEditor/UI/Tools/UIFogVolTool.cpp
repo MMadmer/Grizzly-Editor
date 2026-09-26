@@ -9,19 +9,19 @@ UIFogVolTool::~UIFogVolTool()
 
 void UIFogVolTool::Draw()
 {
-	ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-	if (ImGui::TreeNode("Commands"))
+	if (XUI::Section("Commands"))
 	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-		ImGui::PushItemWidth(-1);
-		float size = float(ImGui::CalcItemWidth());
+		const XUI_LocalButton buttons[] =
 		{
-			if (ImGui::Button("Group Selected", ImVec2(size / 2, 0)))ParentTools->GroupSelected();
-			ImGui::SameLine(0, 2);
-			if (ImGui::Button("UnGroup Selected", ImVec2(size / 2, 0)))ParentTools->UnGroupCurrent();
+			{ "Group Selected",		"Make one fog volume group of the selected volumes" },
+			{ "Ungroup Current",	"Break the current fog volume group up" },
+		};
+		switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+		{
+		case 0: ParentTools->GroupSelected(); break;
+		case 1: ParentTools->UnGroupCurrent(); break;
+		default: break;
 		}
-
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-		ImGui::TreePop();
+		XUI::EndSection();
 	}
 }

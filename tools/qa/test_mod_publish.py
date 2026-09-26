@@ -8,7 +8,9 @@ credential, so the real account cannot leak into a test either.
 
 A module the Mod Browser lists (the mock's catalog index names its id) has every
 release scanned on VirusTotal - the mock's - before anything is created on GitHub:
-phase V. The project's mod.ltx and project.ltx are restored byte for byte, the release
+phase V. Phase U opens the Releases tab and the Publish Release dialog over MCP, looks at
+them and closes them - nothing in them is clicked. The project's mod.ltx and project.ltx are
+restored byte for byte, the release
 folders this run created are removed and the QA VirusTotal key is forgotten. The editor
 is closed the way its caption cross would.
 
@@ -180,6 +182,85 @@ def releases(wait_seconds: float = 60.0, **extra) -> dict:
         time.sleep(0.2)
         data = mcp("mod_releases", action="status")
     return data
+
+
+def ui_phase(mock: "Mock") -> None:
+    """U: the Releases tab (a document of its own) and the Publish Release dialog, opened, looked at and closed over
+    MCP. Nothing in them is clicked: a look never publishes, edits or deletes anything."""
+    window = str((mcp("ui_contract").get("dialogs") or {}).get("publish_release") or "Publish Release###dlg.publish_release")
+    dialog = window.partition("###")[2] or window
+    before = [(r["id"], r["name"], r["draft"]) for r in mock.state()["releases"]]
+
+    opened = mcp("ui_tab", action="open", kind="releases")
+    check(opened.get("ok") and (opened.get("tab") or {}).get("id") == "releases",
+          "U the Releases tab opens as a document of its own, the active one", str(opened))
+    data = releases(action="status")
+    check(data.get("ok") and data.get("listed") and data.get("tab") is True,
+          "U the tab reads the list, and mod_releases says the tab is up", str(data)[:300])
+    latest = next((r for r in data.get("releases", []) if r.get("latest")), {})
+    picked = mcp("mod_releases", action="select", tag=latest.get("tag", ""))
+    check(picked.get("ok") and picked.get("selected") == latest.get("id") and not picked.get("pending"),
+          "U select marks the release the details show, and asks GitHub nothing", str(picked)[:300])
+    refused = mcp("mod_releases", action="select", tag="v7.7.7")
+    check(not refused.get("ok") and "no release carries the tag" in str(refused.get("error")),
+          "U selecting a tag the list does not hold is refused", str(refused))
+    pic = mcp("screenshot_editor")
+    check(pic.get("active_tab") == "releases" and not pic.get("modal"), "U the picture shows the Releases tab, no dialog",
+          str({k: pic.get(k) for k in ("active_tab", "modal")}))
+    # the active tab's work area, whatever the contract's lists say of "releases"
+    audit = mcp("ui_audit", id="work_area")
+    controls = {c.get("label"): c for c in audit.get("controls") or []}
+    check(audit.get("ok") and not audit.get("escaped") and (controls.get("Edit...") or {}).get("enabled") is True and
+          (controls.get("Delete...") or {}).get("enabled") is True,
+          "U the details offer Edit... and Delete... for the selected release, and nothing leaves the tab",
+          str(audit.get("escaped")) + " " + str(sorted(controls)))
+
+    # the edit dialog, put up to be looked at: only a click in it would save anything
+    shown = mcp("mod_releases", action="select", tag=latest.get("tag", ""), show="edit")
+    pic = mcp("screenshot_editor")
+    check(shown.get("ok") and (pic.get("modal") or {}).get("id") == "dlg.edit_release",
+          "U select show=edit puts the release's edit dialog up", str(pic.get("modal")))
+    audit = mcp("ui_audit", id="dlg.edit_release")
+    labels = [c.get("label") for c in audit.get("controls") or []]
+    check("Save" in labels and "Cancel" in labels and not audit.get("escaped"),
+          "U the edit dialog offers Save and Cancel, and nothing leaves it", str(audit.get("escaped")) + " " + str(labels))
+    mcp("ui_dialog", action="close", id="dlg.edit_release")
+    check(not mcp("screenshot_editor").get("modal"), "U ui_dialog close takes the edit dialog down")
+
+    # The manifest still names 0.9.11, which is out: the dialog reads the releases as it opens and lists that before
+    # the click, where GitHub would refuse it only after the packaging.
+    opened = mcp("ui_dialog", action="open", id="publish_release")
+    listed = releases(action="status")
+    pic = mcp("screenshot_editor")
+    modal = pic.get("modal") or {}
+    check(opened.get("ok") and modal.get("id") == dialog, "U Publish Release opens as the dialog " + dialog, str(modal))
+    check(listed.get("ok") and listed.get("listed") and not listed.get("pending"), "U the dialog reads the releases as it opens",
+          str(listed)[:300])
+    audit = mcp("ui_audit", id="publish_release")
+    controls = {c.get("label"): c for c in audit.get("controls") or []}
+    publish_button = controls.get("Publish") or {}
+    check(audit.get("ok") and publish_button.get("enabled") is False and "already published" in str(publish_button.get("why")) and
+          "v0.9.11" in str(publish_button.get("why")), "U a version that is out is listed, and Publish stays off with it as the reason",
+          str(publish_button))
+    check("Open Mod Settings" in controls and "Open Releases" in controls,
+          "U the problem names where it is fixed: Open Mod Settings, Open Releases", str(sorted(controls)))
+    raised = mcp("mod_set_manifest", version="0.9.99", github=GITHUB_REPO)
+    mcp("screenshot_editor")
+    audit = mcp("ui_audit", id="publish_release")
+    controls = {c.get("label"): c for c in audit.get("controls") or []}
+    check(raised.get("ok") and audit.get("ok") and not audit.get("escaped") and (controls.get("Publish") or {}).get("enabled") is True and
+          "Cancel" in controls and "Open Releases" not in controls,
+          "U a version that is not out: its footer holds Publish, ready, and Cancel; nothing leaves the dialog",
+          str(audit.get("escaped")) + " " + str(sorted(controls)))
+    closed = mcp("ui_dialog", action="close", id="publish_release")
+    pic = mcp("screenshot_editor")
+    check(closed.get("ok") and not pic.get("modal"), "U ui_dialog close takes it down, as Esc would", str(pic.get("modal")))
+
+    closed = mcp("ui_tab", action="close", id="releases")
+    data = mcp("mod_releases", action="status")
+    check(closed.get("ok") and data.get("tab") is False, "U the tab closes; the list stays readable over MCP", str(closed))
+    after = [(r["id"], r["name"], r["draft"]) for r in mock.state()["releases"]]
+    check(after == before, "U looking changed nothing on GitHub", f"{before} -> {after}")
 
 
 def mock_api(mock: "Mock", method: str, path: str, body: dict | None = None):
@@ -468,6 +549,8 @@ def main() -> int:
         check(not refused.get("ok") and "'title' or 'notes'" in str(refused.get("error")), "R an edit that changes nothing is refused", str(refused))
         refused = releases(action="edit", tag="v7.7.7", title="x")
         check(not refused.get("ok") and "no release carries the tag" in str(refused.get("error")), "R an edit of an unknown tag is refused", str(refused))
+
+        ui_phase(mock)
 
         data = releases(action="delete", tag="v0.9.11")
         state = mock.state()

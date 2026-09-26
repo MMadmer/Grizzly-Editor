@@ -21,7 +21,6 @@
 #include "UIEditLightAnim.h"
 #include "UIImageEditorForm.h"
 #include "UISoundEditorForm.h"
-#include "UIMinimapEditorForm.h"
 #include "UI_CommandPalette.h"
 #include "UI_ProgressCenter.h"
 #include "..\XrETools\ETools.h"
@@ -468,21 +467,34 @@ void TUI::Redraw()
     try{
         UI_TRACE("enter");
 
-        if (u32(RTSize.x * EDevice->m_ScreenQuality) != RT->dwWidth || u32(RTSize.y * EDevice->m_ScreenQuality) != RT->dwHeight|| !RT->pSurface)
+        // The targets grow in 64 px steps and are drawn into from their top-left corner: a splitter drag changes the
+        // render size every frame, and recreating them for each pixel stalled it. The render size
+        // itself stays exact - it is the renderer's viewport (rmNormal reads it) and what the view's aspect follows.
+        const u32 want_w = _max(1u, u32(RTSize.x * EDevice->m_ScreenQuality));
+        const u32 want_h = _max(1u, u32(RTSize.y * EDevice->m_ScreenQuality));
+        const u32 alloc_w = (want_w + 63u) & ~63u, alloc_h = (want_h + 63u) & ~63u;
+        // recreated when the view outgrows them, or shrinks two steps below them
+        const bool recreate = !RT->pSurface || want_w > RT->dwWidth || want_h > RT->dwHeight ||
+            RT->dwWidth >= alloc_w + 128u || RT->dwHeight >= alloc_h + 128u;
+        if (recreate || want_w != GetRenderWidth() || want_h != GetRenderHeight())
         {
-            GetRenderWidth() = RTSize.x * EDevice->m_ScreenQuality;
-            GetRenderHeight() = RTSize.y * EDevice->m_ScreenQuality;
-            RT.destroy();
-            ZB.destroy();
-            RT.create("rt_color", RTSize.x * EDevice->m_ScreenQuality, RTSize.y * EDevice->m_ScreenQuality, HW.Caps.fTarget);
-            ZB.create("rt_depth", RTSize.x * EDevice->m_ScreenQuality, RTSize.y * EDevice->m_ScreenQuality, D3DFORMAT::D3DFMT_D24X8);
+            GetRenderWidth() = want_w;
+            GetRenderHeight() = want_h;
+            if (recreate)
+            {
+                RT.destroy();
+                ZB.destroy();
+                RT.create("rt_color", alloc_w, alloc_h, HW.Caps.fTarget);
+                ZB.create("rt_depth", alloc_w, alloc_h, D3DFORMAT::D3DFMT_D24X8);
+            }
             m_Flags.set(flRedraw, TRUE);
             EDevice->fASPECT = ((float)RTSize.y) / ((float)RTSize.x);
-         
+
             EDevice->m_fNearer = EDevice->mProject._43;
             EDevice->fWidth_2 = GetRenderWidth() / 2.f;
             EDevice->fHeight_2 = GetRenderHeight() / 2.f;
-            
+
+            // the game's UI (play in editor) lays itself out again on a reset: it follows the render size
             Device->seqDeviceReset.Process(rp_DeviceReset);
             Device->seqResolutionChanged.Process(rp_ScreenResolutionChanged);
             RCache.set_xform_project(EDevice->mProject);
@@ -506,7 +518,22 @@ void TUI::Redraw()
             UI_TRACE("after Begin");
             if (psDeviceFlags.is(rsRenderRealTime))
                 m_Flags.set(flRedraw, TRUE);
-            if (m_Flags.is(flRedraw)||UI->IsPlayInEditor())
+            // nobody sees the scene behind a document: its pass waits until the Level tab is up again, unless a
+            // caller reads the render target (screenshot_viewport)
+            const bool scene_wanted = m_Flags.is(flRedraw) || UI->IsPlayInEditor() || m_ScenePending;
+            const bool scene_shown = SceneVisible() || m_ForceScenePass || UI->IsPlayInEditor();
+            if (scene_wanted && !scene_shown)
+            {
+                m_ScenePending = true;
+                m_Flags.set(flRedraw, FALSE);
+            }
+            const bool scene_pass = scene_wanted && scene_shown;
+            if (scene_pass)
+            {
+                m_ScenePending = false;
+                m_ForceScenePass = false;
+            }
+            if (scene_pass)
             {
                
                 m_Flags.set(flRedraw, FALSE);
@@ -574,11 +601,8 @@ void TUI::Redraw()
                 // draw selection rect
                 if (m_SelectionRect) 	DU_impl.DrawSelectionRect(m_SelStart, m_SelEnd);
 
-                // draw axis
-                UI_TRACE("before DrawAxis");
-                DU_impl.DrawAxis(EDevice->m_Camera.GetTransform());
-                UI_TRACE("after DrawAxis");
-
+                // No axis triad here: the view's orientation widget is the axis gizmo drawn over it
+                // (ViewportNavigation::Draw), and this target is also the project's preview picture.
 
                 EDevice->Statistic->RenderDUMP_RT.End();
                 EDevice->EStatistic->Show(EDevice->pSystemFont);
@@ -787,7 +811,7 @@ void TUI::WaitForFramePacing()
 {
 	const bool app_active = IsEditorProcessForeground();
 	const bool explicit_work = m_Flags.is(flUpdateScene) || m_Flags.is(flNeedQuit) ||
-		m_Flags.is(flResetUI) || (app_active && (m_Flags.is(flRedraw) || m_Flags.is(flResize)));
+		(app_active && (m_Flags.is(flRedraw) || m_Flags.is(flResize)));
 	if (explicit_work)
 	{
 		if (m_FrameWakeEvent)
@@ -981,11 +1005,9 @@ bool TUI::Idle()
 	// interruptible wait then reacts to either the next message or an MCP request.
 	PumpEditorMessages();
 	SyncAppActivation();
-	if (m_Flags.is(flResetUI)) RealResetUI();
 	WaitForFramePacing();
 	PumpEditorMessages();
 	SyncAppActivation();
-	if (m_Flags.is(flResetUI)) RealResetUI();
 
 	LARGE_INTEGER frame_started;
 	::QueryPerformanceCounter(&frame_started);
@@ -1220,6 +1242,14 @@ void TUI::PumpProgressMessages()
 			continue;
 		}
 
+		// a monitor change posted back after the last operation waits for this one as well
+		if (WM_DPICHANGED == msg.message)
+		{
+			if (main_window && msg.lParam)
+				DpiChanged(msg.hwnd, HIWORD(msg.wParam), *reinterpret_cast<const RECT*>(msg.lParam));
+			continue;
+		}
+
 		switch (msg.message)
 		{
 		case WM_SIZING:
@@ -1229,7 +1259,6 @@ void TUI::PumpProgressMessages()
 		case WM_NCLBUTTONDBLCLK:
 		case WM_WINDOWPOSCHANGING:
 		case WM_WINDOWPOSCHANGED:
-		case WM_DPICHANGED:
 		case WM_SYSCOMMAND:
 			continue;
 		default:
@@ -1243,17 +1272,41 @@ void TUI::PumpProgressMessages()
 
 void TUI::ReplayDeferredWindowMessages()
 {
+	// the move to the new monitor's rect sizes the window anew: a size from before it is stale
+	const UINT dpi = m_DeferredDpi;
+	m_DeferredDpi = 0;
 	for (const SDeferredWindowMessage& deferred : m_DeferredWindowMessages)
 	{
+		if (dpi && WM_SIZE == deferred.message)
+			continue;
 		if (deferred.window == EDevice->m_hWnd && ::IsWindow(deferred.window))
 			::PostMessageW(deferred.window, deferred.message, deferred.wparam, deferred.lparam);
 	}
 	m_DeferredWindowMessages.clear();
+	// posted like the rest: an operation ends inside a frame as often as not, and the window must
+	// not be resized under it (the rect stays in the member until the message comes back)
+	if (dpi && EDevice && ::IsWindow(EDevice->m_hWnd))
+		::PostMessageW(EDevice->m_hWnd, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), LPARAM(&m_DeferredDpiRect));
 	if (m_ProgressDeferredQuit)
 	{
 		m_ProgressDeferredQuit = false;
 		::PostQuitMessage(0);
 	}
+}
+
+void TUI::DpiChanged(HWND hwnd, UINT dpi, const RECT& suggested)
+{
+	// a blocking operation holds the window's size still; the change waits for its end
+	if (ProgressOperationActive())
+	{
+		m_DeferredDpi = dpi;
+		m_DeferredDpiRect = suggested;
+		return;
+	}
+	::SetWindowPos(hwnd, NULL, suggested.left, suggested.top, suggested.right - suggested.left, suggested.bottom - suggested.top,
+		SWP_NOZORDER | SWP_NOACTIVATE);
+	XUI::SetDpi(XUI::ScaleForDpi(dpi));
+	RedrawScene();
 }
 
 void TUI::DrawProgressFrame()
@@ -1297,11 +1350,16 @@ void TUI::ProgressCheckpoint()
 		SyncAppActivation();
 		XFinedMCP::PumpProgressRequests();
 	}
-	if (!m_ProgressItems.empty() && m_bAppActive &&
-		(!m_LastProgressPaintMs || now - m_LastProgressPaintMs >= 100))
+	// a screenshot asked for during the job waits for busy frames of its own, a background editor or not
+	const bool shot = XFinedMCP::WantsFrame();
+	if (!m_ProgressItems.empty() && (m_bAppActive || shot) &&
+		(!m_LastProgressPaintMs || now - m_LastProgressPaintMs >= (shot ? 16u : 100u)))
 	{
 		m_LastProgressPaintMs = now;
 		DrawProgressFrame();
+		XFinedMCP::OnFramePresented();
+		if (shot)
+			XFinedMCP::PumpProgressRequests();
 	}
 }
 
@@ -1318,7 +1376,8 @@ SPBItem* TUI::ProgressStart(float max_val, LPCSTR text)
 
 	SPBItem* item = xr_new<SPBItem>(text, "", max_val);
 	m_ProgressItems.push_back(item);
-	ELog.Msg(mtInformation, "%s", item->text.c_str());
+	// the tasks chip says what runs; in the log it is a note, never the status bar's last line, which would outlive the job
+	ELog.Progress(item->text.c_str());
 	ProgressDraw();
 	return item;
 }
@@ -1336,7 +1395,9 @@ void TUI::ProgressEnd(SPBItem*& pbi)
 	{
 		xr_string elapsed;
 		UIProgressCenter::FormatElapsed(elapsed_ms, elapsed);
-		ELog.Msg(mtInformation, "%s finished in %s.", pbi->text.c_str(), elapsed.c_str());
+		xr_string line;
+		line.sprintf("%s finished in %s.", pbi->text.c_str(), elapsed.c_str());
+		ELog.Progress(line.c_str());
 	}
 	m_ProgressItems.erase(it);
 	xr_delete(pbi);
@@ -1423,30 +1484,19 @@ void TUI::CloseConsole()
 void TUI::OnDrawUI()
 {
     UIKeyPressForm::Update(EDevice->fTimeGlobal);
+    // the library editors are documents: these only drop what a closed one left
     UIEditLightAnim::Update();
     UIImageEditorForm::Update();
     UISoundEditorForm::Update();
-    UIMinimapEditorForm::Update();
-    UILogForm::Update();
     EDevice->seqDrawUI.Process(rp_DrawUI);
 	CommandPalette::Draw();
-	UIProgressCenter::Draw(*this);
 }
 
+// A blocking job: the frame without its panels - the caption, the status bar with the tasks chip, and the
+// work area dimmed under the task card (docs/UI_DESIGN.md, section 5)
 void TUI::OnDrawProgressUI()
 {
-	UIProgressCenter::Draw(*this);
-}
-
-void TUI::RealResetUI()
-{
-    m_Flags.set(flResetUI, FALSE);
-    string_path 		ini_path;
-    if (FS.exist(ini_path, "$server_data_root$", UI->EditorName(), "_imgui_default.ini"))
-    {
-        UI->Resize(1280, 800);
-        ImGui::LoadIniSettingsFromDisk(ini_path);
-    }
+	XUI::Shell::DrawBusyFrame();
 }
 
 void TUI::OnStats(CGameFont* font)
@@ -1536,7 +1586,7 @@ void SPBItem::Publish(bool force, bool warning)
 	const bool log_due = first_detail || finished || progress_due || time_due;
 	if (log_due)
 	{
-		ELog.Msg(mtInformation, "%s", message.c_str());
+		ELog.Progress(message.c_str());
 		last_log_ms = now;
 		last_log_percent = percent;
 		last_logged_info = info;

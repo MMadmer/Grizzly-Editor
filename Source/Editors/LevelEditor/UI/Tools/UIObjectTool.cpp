@@ -1,7 +1,8 @@
 ﻿#include "stdafx.h"
 UIObjectTool::UIObjectTool()
 {
-    m_selPercent = 0.f;
+    m_selPercent = 50.f;
+    m_AddPercent = false;
     m_MultiAppend = false;
     m_PropRandom = false;
     m_Current = nullptr;
@@ -9,11 +10,11 @@ UIObjectTool::UIObjectTool()
     m_Selection = false;
     m_RealTexture = nullptr;
     m_RemoveTexture = nullptr;
+    m_HasInfo = false;
+    m_Faces = m_Vertices = 0;
+    m_Search[0] = 0;
     m_ObjectList = xr_new<UIItemListForm>();
     m_ObjectList->SetOnItemFocusedEvent(TOnILItemFocused(this, &UIObjectTool::OnItemFocused));
-    m_TextureNull.create("ed\\ed_nodata");
-    m_TextureNull->Load();
-    m_Props = xr_new< UIPropertiesForm>();
     RefreshList();
 }
 
@@ -21,131 +22,146 @@ UIObjectTool::~UIObjectTool()
 {
     if (m_RemoveTexture)m_RemoveTexture->Release();
     if (m_RealTexture)m_RealTexture->Release();
-    xr_delete(m_Props);
-    m_TextureNull.destroy();
     xr_delete(m_ObjectList);
+}
+
+void UIObjectTool::DrawPicked()
+{
+    const float avail = ImGui::GetContentRegionAvail().x;
+    // the picture gives way to the list when the body is short
+    const float side = floorf(_min(avail, clampr(ImGui::GetContentRegionAvail().y * .2f, XUI::Pt(56.f), XUI::Pt(96.f))));
+    XUI_LocalThumbnail(m_RealTexture, side, XUI::Icon::SceneObject,
+        m_Current ? "This object has no thumbnail" : "Pick an object in the list, or browse the library");
+    // the facts and the buttons beside the picture, under it when the panel is too narrow for both
+    if (avail - side - XUI::Pt(8.f) >= XUI::Em(8.f))
+        ImGui::SameLine(0.f, XUI::Pt(8.f));
+    ImGui::BeginGroup();
+    LPCSTR leaf = m_Current ? strrchr(m_Current, '\\') : nullptr;
+    XUI::TextEllipsis(m_Current ? (leaf ? leaf + 1 : m_Current) : "Nothing picked");
+    if (m_HasInfo)
+    {
+        char line[64];
+        ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+        sprintf_s(line, "Faces: %d", m_Faces);
+        XUI::TextEllipsis(line);
+        sprintf_s(line, "Vertices: %d", m_Vertices);
+        XUI::TextEllipsis(line);
+        ImGui::PopStyleColor();
+    }
+    const XUI_LocalButton buttons[] =
+    {
+        { "Browse...",		"Pick the object from the library" },
+        { "Refresh List",	"Read the object library again" },
+    };
+    switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+    {
+    case 0:
+        UIChooseForm::SelectItem(smObject, 1, m_Current, 0, 0, 0, 0, 0);
+        m_Selection = true;
+        break;
+    case 1:
+        RefreshList();
+        break;
+    default: break;
+    }
+    ImGui::EndGroup();
 }
 
 void UIObjectTool::Draw()
 {
     if (m_RemoveTexture)m_RemoveTexture->Release();
     m_RemoveTexture = nullptr;
-    static bool bbool = false;
-    float a = 1;
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Commands"))
-    {
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-        {
-            if (ImGui::Button("Multiple Append", ImVec2(-1, 0)))
-            {
-                UIChooseForm::SelectItem(smObject, 512, 0);
-                m_MultiAppend = true;
-            }
-        }
-        ImGui::Separator();
-        {
-            float size = float(ImGui::CalcItemWidth());
-            {
-                if (ImGui::Checkbox("Random Append", &m_RandomAppend))
-                {
-                    ParentTools->ActivateAppendRandom(m_RandomAppend);
-                }
-                ImGui::SameLine(0,10);
-                if (ImGui::Button("Random Props...", ImVec2(-1, 0)))
-                {
-                    m_PropRandom = true;
-                    ParentTools->FillAppendRandomPropertiesBegin();
-               }
 
-            }
-        }
-        ImGui::Separator();
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-    }
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Reference Select"))
-    {
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-        {
-            ImGui::Text("Select by Current: "); ImGui::SameLine(); if (ImGui::Button(" +")) { SelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button(" -")) { SelByRefObject(false); }
-            ImGui::Text("Select by Selected:"); ImGui::SameLine(); if (ImGui::Button("=%")) { MultiSelByRefObject(true); } ImGui::SameLine(); if (ImGui::Button("+%")) { MultiSelByRefObject(false); } ImGui::SameLine(); ImGui::SetNextItemWidth(-ImGui::GetTextLineHeight() - 8); ImGui::DragFloat("%", &m_selPercent, 1, 0, 100, "%.1f");
-        }
-        ImGui::Separator();
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-    }
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Surface"))
-    {
+    // what the tool adds comes first, and its list takes the room the closed sections leave
+    DrawPicked();
+    XUI_LocalFilteredList("objects", m_Search, sizeof(m_Search), m_ObjectList);
 
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+    m_RandomAppend = !!ParentTools->IsAppendRandomActive();
+    // closed, the header still says that added objects are randomized
+    if (XUI::Section("Add Objects", false, m_RandomAppend ? "Randomized" : nullptr))
+    {
+        if (ImGui::Checkbox("Randomize Added Objects", &m_RandomAppend))
+            ParentTools->ActivateAppendRandom(m_RandomAppend);
+        XUI::Tip("Each object added gets a random scale and rotation, picked from what Random Settings holds");
+        const XUI_LocalButton buttons[] =
         {
-            if (ImGui::Button("Clear Surface in select", ImVec2(-1, 0)))
+            { "Add Several...",		"Pick several objects and add them all at the origin" },
+            { "Random Settings...",	"The scale and rotation ranges and the objects Randomize picks from" },
+        };
+        switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+        {
+        case 0:
+            UIChooseForm::SelectItem(smObject, 512, 0);
+            m_MultiAppend = true;
+            break;
+        case 1:
+            m_PropRandom = true;
+            ParentTools->FillAppendRandomPropertiesBegin();
+            break;
+        default: break;
+        }
+        XUI::EndSection();
+    }
+
+    if (XUI::Section("Select by Reference", false))
+    {
+        const bool picked = !!m_Current;
+        const XUI_LocalButton same[] =
+        {
+            { "Select Same",	"Select every visible object made from the object picked in the list", picked, "Pick an object in the list first" },
+            { "Deselect Same",	"Deselect every object made from the object picked in the list", picked, "Pick an object in the list first" },
+        };
+        switch (XUI_LocalButtonFlow(same, _countof(same)))
+        {
+        case 0: SelByRefObject(true); break;
+        case 1: SelByRefObject(false); break;
+        default: break;
+        }
+        if (XUI_LocalPercentSelect(&m_selPercent, &m_AddPercent))
+            MultiSelByRefObject(!m_AddPercent);
+        XUI::EndSection();
+    }
+
+    if (XUI::Section("Surfaces", false))
+    {
+        const XUI_LocalButton buttons[] =
+        {
+            { "Reset Selected",	"Give the selected objects the surfaces of their reference again" },
+            { "Reset All...",	"Give every object in the level the surfaces of its reference again" },
+        };
+        switch (XUI_LocalButtonFlow(buttons, _countof(buttons)))
+        {
+        case 0:
+            Scene->UndoSave();
+            ClearSurface(true);
+            break;
+        case 1:
+        {
+            u32 count = 0;
+            for (ObjectIt it = Scene->FirstObj(OBJCLASS_SCENEOBJECT); it != Scene->LastObj(OBJCLASS_SCENEOBJECT); ++it)
+                count += (*it)->Visible() ? 1 : 0;
+            char item[64];
+            sprintf_s(item, "%u visible scene object%s", count, count == 1 ? "" : "s");
+            XUI::ConfirmSpec spec;
+            spec.id = "reset_surfaces";
+            spec.title = "Reset Surfaces";
+            spec.headline = "Reset the surfaces of every object in the level?";
+            spec.items.push_back(item);
+            spec.consequence = "Surface changes made on these objects in this level are lost.";
+            spec.action = "Reset All";
+            spec.destructive = true;
+            XUI::Confirm(spec, [](XUI::Answer answer)
             {
+                if (answer != XUI::Answer::Yes || !Scene)
+                    return;
                 Scene->UndoSave();
-                ClearSurface(true);
-            }
-            if (ImGui::Button("Clear Surface in level", ImVec2(-1, 0)))
-            {
-                if (ELog.DlgMsg(mtConfirmation, mbYes | mbNo, "Are you sure to reset surface in level?") == mrYes) 
-                {
-                    Scene->UndoSave();
-                    ClearSurface(false);
-                }
-              
-            }
+                ClearSurface(false);
+            });
+            break;
         }
-        ImGui::Separator();
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-    }
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Current Object"))
-    {
-
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-        {
-            if (ImGui::Button("Select ...", ImVec2(-1, 0)))
-            {
-                UIChooseForm::SelectItem(smObject,1, m_Current,0,0,0,0,0);
-                m_Selection = true;
-            }
-            if (ImGui::Button("Refresh List", ImVec2(-1, 0)))
-            {
-                RefreshList();
-            }
+        default: break;
         }
-        ImGui::Separator();
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-    }
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Preview"))
-    {
-        ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-#if defined(USE_DX11)
-        // ImGui binds a shader resource view, not the texture object behind it
-        ImGui::Image(m_RealTexture ? m_RealTexture : m_TextureNull->get_SRView(), ImVec2(128, 128));
-#else
-        ImGui::Image(m_RealTexture? m_RealTexture:( m_TextureNull->surface_get()), ImVec2(128, 128));
-#endif
-        ImGui::SameLine();
-        ImGui::BeginChild("Props", ImVec2(0,128));
-        m_Props->Draw();
-        ImGui::EndChild();
-        ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
-	}
-	ImGui::Separator();
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-    if (ImGui::TreeNode("Object List"))
-	{
-		ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-		m_ObjectList->Draw();
-		ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-        ImGui::TreePop();
+        XUI::EndSection();
     }
 }
 
@@ -156,15 +172,21 @@ void UIObjectTool::RefreshList()
     if (Lib.GetObjects(lst)) {
         FS_FileSetIt	it = lst.begin();
         FS_FileSetIt	_E = lst.end();
-        for (; it != _E; it++) {
-            xr_string fn;
-            ListItem* I = LHelper().CreateItem(items, it->name.c_str(), 0, ListItem::flDrawThumbnail, 0);
-        }
+        for (; it != _E; it++)
+            LHelper().CreateItem(items, it->name.c_str(), 0, ListItem::flDrawThumbnail, 0);
     }
-    if (m_RealTexture)m_RemoveTexture = m_RealTexture;
-    m_RealTexture = nullptr;
-    m_Props->ClearProperties();
+    const xr_string picked = m_Current ? m_Current : "";
+    m_Items = items;
     m_ObjectList->AssignItems(items);
+    // the tree was built anew: the object picked before is picked again in it, when it is still there
+    m_ObjectList->ClearSelected();
+    ListItem* again = nullptr;
+    for (ListItem* item : m_Items)
+        if (item && !picked.empty() && !xr_strcmp(item->Key(), picked.c_str()))
+            again = item;
+    if (again)
+        m_ObjectList->SelectItem(again->Key());
+    OnItemFocused(again);
 }
 
 void UIObjectTool::OnDrawUI()
@@ -178,6 +200,9 @@ void UIObjectTool::OnDrawUI()
             if (change)
             {
                 m_ObjectList->SelectItem(lst.c_str());
+                for (ListItem* item : m_Items)
+                    if (item && !xr_strcmp(item->Key(), lst.c_str()))
+                        OnItemFocused(item);
             }
             m_Selection = false;
         }
@@ -196,7 +221,7 @@ void UIObjectTool::OnDrawUI()
                 Fvector up = { 0.f,1.f,0.f };
                 Scene->SelectObjects(false, OBJCLASS_SCENEOBJECT);
 
-                SPBItem* pb = UI->ProgressStart(lst.size(), "Append object: ");
+                SPBItem* pb = UI->ProgressStart(lst.size(), "Adding objects");
                 for (AStringIt it = lst.begin(); it != lst.end(); it++)
                 {
                     string256 namebuffer;
@@ -205,9 +230,10 @@ void UIObjectTool::OnDrawUI()
                     CEditableObject* ref = obj->SetReference(it->c_str());
                     if (!ref)
                     {
-                        ELog.DlgMsg(mtError, "TfraObject:: Can't load reference object.");
+                        // one object that does not load must not leave the rest out, nor the progress open
+                        ELog.Msg(mtError, "Cannot load the object '%s'; it was not added.", it->c_str());
                         xr_delete(obj);
-                        return;
+                        continue;
                     }
                     obj->MoveTo(pos, up);
                     Scene->AppendObject(obj);
@@ -231,18 +257,22 @@ void UIObjectTool::OnItemFocused(ListItem* item)
 {
     if (m_RealTexture)m_RemoveTexture = m_RealTexture;
     m_RealTexture = nullptr;
-    m_Props->ClearProperties();
+    m_HasInfo = false;
     m_Current = nullptr;
     if (item)
     {
         m_Current = item->Key();
-        auto * m_Thm = ImageLib.CreateThumbnail(m_Current, EImageThumbnail::ETObject);
-        if (m_Thm)
+        EImageThumbnail* thm = ImageLib.CreateThumbnail(m_Current, EImageThumbnail::ETObject);
+        if (thm)
         {
-            m_Thm->Update(m_RealTexture);
-            PropItemVec Info;
-            m_Thm->FillInfo(Info);
-            m_Props->AssignItems(Info);
+            thm->Update(m_RealTexture);
+            if (EObjectThumbnail* object = dynamic_cast<EObjectThumbnail*>(thm))
+            {
+                m_Faces = object->_FaceCount();
+                m_Vertices = object->_VertexCount();
+                m_HasInfo = true;
+            }
+            xr_delete(thm);
         }
     }
 }

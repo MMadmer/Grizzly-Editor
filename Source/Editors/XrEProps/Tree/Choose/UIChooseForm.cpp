@@ -1,8 +1,17 @@
 ﻿#include "stdafx.h"
 #include "UIChooseForm.h"
+#include "../../UIPropsLocal.h"
 UIChooseForm::EventsMap	UIChooseForm::m_Events;
 UIChooseForm* UIChooseForm::Form = 0;
 ImTextureID   UIChooseForm::NullTexture = nullptr;
+bool UIChooseForm::s_Closing = false;
+
+namespace
+{
+// the dialog's id; the title before it is the chooser's caption
+constexpr const char* kDialogId = "###dlg.choose";
+constexpr const char* kClosingTitle = "Select###dlg.choose";
+}
 
 void UIChooseForm::UpdateSelected(UIChooseFormItem*NewSelected)
 {
@@ -76,8 +85,16 @@ void UIChooseForm::CheckFavorite()
 
 UIChooseForm::UIChooseForm():m_Texture(nullptr),m_SelectedItem(nullptr), m_RootItem(""), m_SelectedList(-1)
 {
+    m_Search[0] = 0;
+    m_FocusSearch = true;
+    m_ScrollToSelected = false;
+    m_DrawnFrame = -1;
+    m_Shown = false;
+    m_ChooseID = 0;
+    m_Result = R_Cancel;
     m_Props = xr_new<UIPropertiesForm>();
-   // m_Props->AsGroup();
+    m_Props->SetChrome(UIPropertiesForm::chromeInline);
+    m_Props->SetRole("chooser");
 }
 UIChooseForm::~UIChooseForm()
 {
@@ -89,131 +106,187 @@ UIChooseForm::~UIChooseForm()
     }
     xr_delete(m_Props);
 }
+
+void UIChooseForm::Confirm()
+{
+    if (!m_Flags.is(cfMultiSelect))
+    {
+        SChooseItem* item = GetSelectedItem();
+        if (!item)
+            return;
+        m_SelectedItems.clear();
+        m_SelectedItems.push_back(item);
+    }
+    m_Result = R_Ok;
+    bOpen = false;
+    ImGui::CloseCurrentPopup();
+}
+
+// the dialog's body: the list with its search on the left, what the picked item is on the right
 void UIChooseForm::Draw()
 {
- 
-    
     if (m_SelectedItem&& E.flags.test(SChooseEvents::flAnimated))
     {
         if (!E.on_get_texture.empty())E.on_get_texture(m_SelectedItem->Object->name.c_str(), m_Texture);
     }
-    ImGui::Columns(2);
+    if (m_AppliedSearch != m_Search)
     {
+        m_AppliedSearch = m_Search;
+        m_RootItem.UpdateFilter(m_Search);
+    }
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    // tall enough to browse, never taller than the window leaves the dialog (its title, footer and margins)
+    const float body_h = _max(XUI::Pt(200.f), _min(XUI::Pt(440.f), ImGui::GetMainViewport()->WorkSize.y - XUI::Pt(48.f + 36.f + 52.f + 24.f)));
+    const float gap = XUI::Pt(12.f);
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    const float info_w = _min(XUI::Pt(240.f), avail_w * .4f);
+    const float list_w = _max(XUI::Em(10.f), avail_w - info_w - gap);
+
+    ImGui::BeginGroup();
+    string64 hint;
+    xr_sprintf(hint, "Search %u items", u32(m_Items.size()));
+    if (m_FocusSearch)
+    {
+        ImGui::SetKeyboardFocusHere();
+        m_FocusSearch = false;
+    }
+    ImGui::SetNextItemWidth(list_w);
+    XUI::SearchField("##choose_search", m_Search, sizeof(m_Search), hint);
+    const float list_h = _max(XUI::Pt(80.f), body_h - ImGui::GetFrameHeight() - style.ItemSpacing.y);
+    if (ImGui::BeginChild("##choose_list", ImVec2(list_w, list_h), ImGuiChildFlags_Borders))
+    {
+        if (m_RootItem.Items.empty())
+            XUI::EmptyState(XUI::Icon::Search, "Nothing to choose from");
+        else if (!m_RootItem.Visible)
+            XUI::EmptyState(XUI::Icon::Search, "No matches", "Nothing in the list matches the search.");
+        else
+            m_RootItem.DrawRoot();
+    }
+    ImGui::EndChild();
+    ImGui::EndGroup();
+
+    ImGui::SameLine(0.f, gap);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+    if (ImGui::BeginChild("##choose_info", ImVec2(0.f, body_h), ImGuiChildFlags_None))
+        DrawInfo();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+void UIChooseForm::DrawInfo()
+{
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float side = _min(w, XUI::Pt(192.f));
+    ImTextureID picture = m_Texture ? m_Texture : NullTexture;
+    if (picture)
+        ImGui::Image(picture, ImVec2(side, side));
+    else
+    {
+        // no picture for this kind of item: the square says so instead of staying blank
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(pos, ImVec2(pos.x + side, pos.y + side), XUI_Local::Col(XUI_Local::Token::Canvas), XUI::Pt(4.f));
+        const float icon = XUI::Pt(32.f);
+        XUI::DrawIcon(dl, XUI::Icon::Picture, ImVec2(XUI_Local::Round(pos.x + (side - icon) * .5f), XUI_Local::Round(pos.y + (side - icon) * .5f)), 32.f,
+            XUI_Local::Col(XUI_Local::Token::TextDisabled));
+        ImGui::Dummy(ImVec2(side, side));
+    }
+    ImGui::Spacing();
+    if (m_SelectedItem && m_SelectedItem->Object)
+    {
+        const SChooseItem* item = m_SelectedItem->Object;
         {
-            ImGui::Text("Find:");
-            ImGui::SameLine();
-			m_Filter.Draw("##Find", -1);
-			if (ImGui::BeginChild("Left", ImVec2(0, 0), false))
-			{
-				static ImGuiTableFlags flags = ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersH | ImGuiTableFlags_RowBg | ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX| ImGuiTableFlags_SizingFixedFit;
-
-				if (ImGui::BeginTable("objects", 1, flags))
-				{
-					ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed);
-					ImGui::TableHeadersRow();
-
-					m_RootItem.DrawRoot();
-					ImGui::EndTable();
-				}
-            }
-            
-            ImGui::EndChild();
+            XUI::FontScope strong(XUI::Font::Strong);
+            XUI::TextEllipsis(item->name.c_str() ? item->name.c_str() : "", w, XUI::Clip::Start);
         }
-        ImGui::NextColumn();
+        if (item->hint.size())
         {
-            ImGui::BeginChild("Right", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), false);
-            {
-                if (NullTexture || m_Texture)
-                {
-                    if (m_Texture)
-                    {
-                        ImGui::Image(m_Texture, ImVec2(192, 192));
-                    }
-                    else
-                    {
-                        ImGui::Image(NullTexture, ImVec2(192, 192));
-                    }
-                }
-                else
-                {
-                    ImGui::InvisibleButton("Image", ImVec2(192, 192));
-                }
-                //   ImGui::Image
-                ImGui::Separator();
-                if (!m_SelectedItem)
-                {
-                    ImGui::Text("Name:");
-                    ImGui::Text("Hint:");
-                }
-                else
-                {
-                    ImGui::Text("Name:%s", m_SelectedItem->Object->name.c_str());
-                    ImGui::Text("Hint:%s", m_SelectedItem->Object->hint.c_str());
-                }
-                ImGui::Separator();
-            }
-            if (!E.on_sel.empty() && !m_Flags.is(cfMultiSelect))
-            {
-                if (m_SelectedItem)
-                {
-                    if (ImGui::BeginChild("Props", ImVec2(0, 0)))
-                    {
-                        m_Props->Draw();
-                    }
-                    ImGui::EndChild();
-                }
-            }
-            else if (m_Flags.is(cfMultiSelect))
-            {
-                if (ImGui::Button("Up")) { if (m_SelectedList > 0) { std::swap(m_SelectedItems[m_SelectedList - 1], m_SelectedItems[m_SelectedList]); m_SelectedList = -(m_SelectedList - 1) - 2; } } ImGui::SameLine();
-                if (ImGui::Button("Down")) { if (m_SelectedItems.size() > 1 && m_SelectedList < m_SelectedItems.size() - 1) { std::swap(m_SelectedItems[m_SelectedList], m_SelectedItems[m_SelectedList + 1]); m_SelectedList = -(m_SelectedList + 1) - 2; } }  ImGui::SameLine();
-                if (ImGui::Button("Del")) { if (m_SelectedItems.size() && m_SelectedList >= 0) { m_SelectedItems.erase(m_SelectedItems.begin() + m_SelectedList); m_SelectedList = -1; }m_RootItem.CheckFavorited(m_SelectedItems); CheckFavorite(); } ImGui::SameLine();
-                if (ImGui::Button("Clear List")) { m_SelectedItems.clear(); m_RootItem.CheckFavorited(m_SelectedItems); CheckFavorite(); m_SelectedList = -1;/*  if (E.flags.test(SChooseEvents::flClearTexture) ){ if (m_Texture)m_Texture->Release(); m_Texture = 0; } */ImGui::SameLine(); }
-                if (ImGui::BeginChild("List", ImVec2(0, 0), true, ImGuiWindowFlags_AlwaysHorizontalScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar))
-                {
-                    int i = 0;
-
-                    int HereY = -m_SelectedList - 2;
-                    if (HereY >= 0)m_SelectedList = HereY;
-                    for (auto& item : m_SelectedItems)
-                    {
-                        if (HereY == i)
-                            ImGui::SetScrollHereY();
-                        if (ImGui::Selectable(item->name.c_str(), m_SelectedList == i))
-                        {
-                            m_SelectedList = i;
-                        }
-                        i++;
-                    }
-                }
-                ImGui::EndChild();
-
-            }
-
-            ImGui::EndChild();
-
-            ImGui::BeginDisabled(!m_Flags.is(cfMultiSelect) && !GetSelectedItem());
-            if (ImGui::Button("Ok", ImVec2(100, 0)))
-            {
-                if (!m_Flags.is(cfMultiSelect))
-                {
-                    VERIFY(m_SelectedItems.size() == 0);
-                    m_SelectedItems.push_back(GetSelectedItem());
-                }
-                m_Result = R_Ok;
-                bOpen = false;
-            }
-            ImGui::EndDisabled();
-
-            ImGui::SameLine(0);
-            if (ImGui::Button("Cancel", ImVec2(100, 0)))
-            {
-
-                m_Result = R_Cancel;
-                bOpen = false;
-            }
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+            ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(XUI_Local::Token::TextSecondary));
+            ImGui::TextUnformatted(item->hint.c_str());
+            ImGui::PopStyleColor();
+            ImGui::PopTextWrapPos();
         }
     }
+    else
+        XUI_Local::MutedValue("Nothing selected");
+
+    if (m_Flags.is(cfMultiSelect))
+        DrawSelectedList();
+    else if (!E.on_sel.empty() && m_SelectedItem)
+    {
+        ImGui::Spacing();
+        m_Props->DrawGrid();
+    }
+}
+
+void UIChooseForm::DrawSelectedList()
+{
+    ImGui::Spacing();
+    const int count = int(m_SelectedItems.size());
+    string64 caption;
+    xr_sprintf(caption, "Selected (%d)", count);
+    {
+        XUI::FontScope caption_font(XUI::Font::Small);
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(XUI_Local::Token::TextSecondary));
+        ImGui::TextUnformatted(caption);
+        ImGui::PopStyleColor();
+    }
+    // the row's order is the order the result lists them in
+    const float buttons = XUI::Pt(24.f) * 4.f + XUI::Pt(2.f) * 3.f;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + _max(0.f, ImGui::GetContentRegionAvail().x - buttons));
+    const bool has = m_SelectedList >= 0 && m_SelectedList < count;
+    if (XUI::IconButton("##up", XUI::Icon::MoveUp, "Move up", false, has && m_SelectedList > 0))
+    {
+        std::swap(m_SelectedItems[m_SelectedList - 1], m_SelectedItems[m_SelectedList]);
+        --m_SelectedList;
+        m_ScrollToSelected = true;
+    }
+    ImGui::SameLine(0.f, XUI::Pt(2.f));
+    if (XUI::IconButton("##down", XUI::Icon::MoveDown, "Move down", false, has && m_SelectedList < count - 1))
+    {
+        std::swap(m_SelectedItems[m_SelectedList], m_SelectedItems[m_SelectedList + 1]);
+        ++m_SelectedList;
+        m_ScrollToSelected = true;
+    }
+    ImGui::SameLine(0.f, XUI::Pt(2.f));
+    if (XUI::IconButton("##remove", XUI::Icon::Minus, "Take it out of the selection", false, has))
+    {
+        m_SelectedItems.erase(m_SelectedItems.begin() + m_SelectedList);
+        m_SelectedList = -1;
+        m_RootItem.CheckFavorited(m_SelectedItems);
+        CheckFavorite();
+    }
+    ImGui::SameLine(0.f, XUI::Pt(2.f));
+    if (XUI::IconButton("##clear", XUI::Icon::Clear, "Clear the selection", false, count > 0))
+    {
+        m_SelectedItems.clear();
+        m_RootItem.CheckFavorited(m_SelectedItems);
+        CheckFavorite();
+        m_SelectedList = -1;
+    }
+    if (XUI::BeginList("##selected", ImVec2(0.f, 0.f)))
+    {
+        if (!count)
+            XUI_Local::MutedValue("Tick items in the list");
+        for (int i = 0; i < count; ++i)
+        {
+            ImGui::PushID(i);
+            if (XUI::ListRow("##row", m_SelectedList == i))
+                m_SelectedList = i;
+            if (m_ScrollToSelected && m_SelectedList == i)
+            {
+                ImGui::SetScrollHereY();
+                m_ScrollToSelected = false;
+            }
+            XUI::TextEllipsis(m_SelectedItems[i]->name.c_str(), -1.f, XUI::Clip::Start);
+            ImGui::PopID();
+        }
+    }
+    XUI::EndList();
 }
 
 void UIChooseForm::SetNullTexture(ImTextureID Texture)
@@ -222,17 +295,53 @@ void UIChooseForm::SetNullTexture(ImTextureID Texture)
 }
 void UIChooseForm::Update()
 {
-    // ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings
-    if (Form&& !Form->IsClosed())
+    if (!Form)
     {
-        ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_::ImGuiCond_FirstUseEver);
-        if (ImGui::BeginPopupModal("ChooseForm", nullptr,0,true))
+        // the form went away while its dialog was up (MCP picked or cancelled): the popup goes with it
+        if (s_Closing)
         {
-            Form->Draw();
-            ImGui::EndPopup();
+            s_Closing = false;
+            bool open = false;
+            if (XUI::BeginDialog(kClosingTitle, &open, XUI::DialogSize::L))
+                XUI::EndDialog();
+        }
+        return;
+    }
+    if (Form->IsClosed())
+        return;
+    // several owners call Update: one dialog a frame
+    const int frame = ImGui::GetFrameCount();
+    if (Form->m_DrawnFrame == frame)
+        return;
+    Form->m_DrawnFrame = frame;
+    const xr_string title = (Form->m_Title.empty() ? xr_string("Select") : Form->m_Title) + kDialogId;
+    if (!XUI::BeginDialog(title.c_str(), &Form->bOpen, XUI::DialogSize::L))
+        return;
+    Form->m_Shown = true;
+    XUI::BeginDialogBody();
+    Form->Draw();
+    xr_string status;
+    if (Form->m_Flags.is(cfMultiSelect))
+    {
+        string64 text;
+        xr_sprintf(text, "%u selected", u32(Form->m_SelectedItems.size()));
+        status = text;
+    }
+    else if (SChooseItem* item = Form->GetSelectedItem())
+        status = item->name.c_str() ? item->name.c_str() : "";
+    if (XUI::BeginDialogFooter(status.c_str()))
+    {
+        const bool can_pick = Form->m_Flags.is(cfMultiSelect) || Form->GetSelectedItem();
+        if (XUI::DialogButton("OK", XUI::Kind::Primary, true, can_pick, "Pick an item first"))
+            Form->Confirm();
+        if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
+        {
+            Form->m_Result = R_Cancel;
+            Form->bOpen = false;
+            ImGui::CloseCurrentPopup();
         }
     }
-
+    XUI::EndDialog();
 }
 bool UIChooseForm::IsActive()
 {
@@ -245,6 +354,7 @@ bool UIChooseForm::Pick(LPCSTR name)
     if (!Form || !name || !name[0]) return false;
     UITreeItem* Item = Form->m_RootItem.FindItem(name);
     if (!Item) return false;
+    Form->m_RootItem.ClearSelection();
     ((UIChooseFormItem*)Item)->bSelected = true;
     Form->UpdateSelected((UIChooseFormItem*)Item);
     return true;
@@ -270,7 +380,10 @@ bool UIChooseForm::PickAndConfirm(LPCSTR name)
     if (name && name[0] && !Pick(name)) return false;
     if (!Form->GetSelectedItem()) return false;
     if (!Form->m_Flags.is(cfMultiSelect))
+    {
+        Form->m_SelectedItems.clear();
         Form->m_SelectedItems.push_back(Form->GetSelectedItem());
+    }
     Form->m_Result = R_Ok;
     Form->bOpen = false;
     return true;
@@ -281,6 +394,7 @@ bool UIChooseForm::GetResult(bool& change, shared_str& result)
     if (!Form)return false;
     if (!Form->bOpen)
     {
+        s_Closing = Form->m_Shown;
         if (Form->m_Result == R_Ok)
         {
             if (!Form->m_Flags.test(cfMultiSelect))
@@ -307,7 +421,7 @@ bool UIChooseForm::GetResult(bool& change, shared_str& result)
         xr_delete(Form);
         return true;
    }
-      
+
 	return false;
 }
 SChooseItem* UIChooseForm::GetSelectedItem()
@@ -318,14 +432,16 @@ SChooseItem* UIChooseForm::GetSelectedItem()
             return m_SelectedItems.back();
         return nullptr;
     }
-    if (m_SelectedItem) 
+    if (m_SelectedItem)
         return m_SelectedItem->Object;
     return nullptr;
 }
 bool UIChooseForm::GetResult(bool& change, xr_string& result)
 {
+    if (!Form) return false;
     if (!Form->bOpen)
     {
+        s_Closing = Form->m_Shown;
         if (Form->m_Result == R_Ok)
         {
             int i = 0;
@@ -351,17 +467,15 @@ bool UIChooseForm::GetResult(bool& change, xr_string& result)
 }
 bool UIChooseForm::GetResult(bool& change, xr_vector<xr_string>& result)
 {
+    if (!Form) return false;
     if (!Form->bOpen)
     {
+        s_Closing = Form->m_Shown;
         if (Form->m_Result == R_Ok)
         {
-           
-            int i = 0;
             for (auto& item : Form->m_SelectedItems)
             {
-               
                 result.push_back(item->name.c_str());
-                i++;
             }
             change = true;
             xr_delete(Form);
@@ -382,19 +496,14 @@ void UIChooseForm::SelectItem(u32 choose_ID, int sel_cnt, LPCSTR init_name, TOnC
     Form->m_Flags.assign(mask);
     Form->m_Flags.set(cfMultiSelect, sel_cnt > 1);
 
-    // init
-   
-   
-    //Form->tvItems->Selected = 0;
-
     // fill items
-    if (items) 
+    if (items)
     {
         VERIFY2(item_fill.empty(), "ChooseForm: Duplicate source.");
         Form->m_Items = *items;
         Form->E.Set("Select Item", 0, item_select, 0, 0, 0);
     }
-    else if (!item_fill.empty()) 
+    else if (!item_fill.empty())
     {
         // custom
         Form->E.Set("Select Item", item_fill, item_select, 0, 0, 0);
@@ -428,22 +537,27 @@ void UIChooseForm::SelectItem(u32 choose_ID, int sel_cnt, LPCSTR init_name, TOnC
                 }
             }
         }
+        Form->m_RootItem.CheckFavorited(Form->m_SelectedItems);
         Form->CheckFavorite();
     }
     else
     {
-		if (sel_cnt <= 1)
-		{
-            if (init_name && init_name[0])
+        if (init_name && init_name[0])
+        {
+            xr_string leaf = init_name;
+            leaf.append("*");
+            // the item the row holds now is picked, and its folders open to show it
+            auto Item = Form->m_RootItem.FindItem(leaf.c_str());
+            if (!Item)
+                Item = Form->m_RootItem.FindItem(init_name);
+            if (Item)
             {
-                auto Item = Form->m_RootItem.FindItem(init_name);
-                if (Item)
-                {
-                    ((UIChooseFormItem*)Item)->bSelected = true;
-                   Form-> UpdateSelected((UIChooseFormItem*)Item);
-                }
+                ((UIChooseFormItem*)Item)->bSelected = true;
+                Form->UpdateSelected((UIChooseFormItem*)Item);
+                for (UITreeItem* Shown = Item; Shown; Shown = Shown->Owner)
+                    ((UIChooseFormItem*)Shown)->Reveal = true;
             }
-		}
+        }
     }
 }
 
@@ -456,7 +570,9 @@ void UIChooseForm::AppendEvents(u32 choose_ID, LPCSTR caption, TOnChooseFillItem
 
 void UIChooseForm::ClearEvents()
 {
-    NullTexture->Release();
+    if (NullTexture)
+        NullTexture->Release();
+    NullTexture = nullptr;
     m_Events.clear();
 }
 

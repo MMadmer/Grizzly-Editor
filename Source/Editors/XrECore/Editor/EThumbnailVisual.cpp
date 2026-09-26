@@ -12,6 +12,7 @@
 #include "EditObject.h"
 #include "EditorProject.h"
 #include "EditorGameContent.h"
+#include "../../XrEUI/XrUITheme.h"
 
 extern BOOL ENGINE_API g_bRendering;
 
@@ -21,8 +22,12 @@ namespace
 	// a flat front view flattens most props into unreadable silhouettes.
 	static const Fvector	s_CameraOffset		= {  1.0f,  0.8f, -1.0f };
 	static const float		s_FOVDegrees		= 45.f;
-	// Neutral dark background, identical for every thumbnail.
-	static const u32		s_BackgroundColor	= 0xff2b2b2b;
+	// Every thumbnail stands on the colour of the tile it is shown in (the theme's raised role), so a
+	// rendered model and the square around it read as one picture.
+	u32 BackgroundColor()
+	{
+		return 0xff000000u | XFinedTheme::Rgb(XFinedTheme::ColorToken::Raised);
+	}
 }
 
 // A queued request keeps the source block in memory until it is drawn, and a
@@ -294,7 +299,7 @@ namespace
 		// keeps the target and viewport bind() sets right after.
 		RCache.Invalidate();
 		target.bind();
-		target.clear(s_BackgroundColor);
+		target.clear(BackgroundColor());
 		// and now tell the cache what the device is actually bound to
 		RCache.set_RT(target.rtv);
 		RCache.set_ZB(target.dsv);
@@ -330,7 +335,7 @@ namespace
 			D3DVIEWPORT9 vp;
 			vp.X = 0; vp.Y = 0; vp.Width = w; vp.Height = h; vp.MinZ = 0.f; vp.MaxZ = 1.f;
 			HW.pDevice->SetViewport	(&vp);
-			HW.pDevice->Clear		(0,0,D3DCLEAR_ZBUFFER|D3DCLEAR_TARGET|(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),s_BackgroundColor,1.f,0);
+			HW.pDevice->Clear		(0,0,D3DCLEAR_ZBUFFER|D3DCLEAR_TARGET|(HW.Caps.bStencil?D3DCLEAR_STENCIL:0),BackgroundColor(),1.f,0);
 
 			// somebody else (ImGui, the previous pass) may have written device
 #endif

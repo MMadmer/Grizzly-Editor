@@ -1,28 +1,41 @@
 ﻿#include "stdafx.h"
 #include "NqCanvas.h"
-#include "../../../XrECore/Editor/Nq/NqLayout.h"
 #include "../../../XrECore/Editor/Nq/NqLua.h"
 #include "../../../XrECore/Editor/Nq/NqUtil.h"
 
 namespace
 {
-	// ten fixed zoom levels (docs par. 13.8); index 6 = 1:1
-	const float kZoom[] = { 0.2f, 0.3f, 0.4f, 0.5f, 0.65f, 0.8f, 1.0f, 1.25f, 1.5f, 2.0f };
+	using T = XFinedTheme::ColorToken;
+	IC ImU32 C(T token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+
+	// ten fixed zoom levels (docs par. 13.8); index 6 = 1:1, index 5 the floor of Frame All
+	const float kZoom[] = { 0.2f, 0.3f, 0.4f, 0.5f, 0.65f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f };
 	const int	kZoomCount = sizeof(kZoom) / sizeof(kZoom[0]);
 	const int	kZoomDefault = 6;
+	const int	kZoomFrameMin = 5;
 
-	const float kChipW		= NqLayout::kChipW;		// one chip in world units
-	const float kChipPad	= NqLayout::kChipPad;
-	const float kPinR		= 5.f;
-	const float kFontBase	= 14.f;		// world font size at zoom 1
+	// type on the canvas, in world pt: titles, lines, ids and pin names
+	const float kTitlePt	= 16.f;
+	const float kLinePt		= 15.f;
+	const float kSmallPt	= 14.f;
+	// the level of detail follows the size a title is really drawn at
+	const float kLodFull	= 10.f;
+	const float kLodTitles	= 7.f;
+
+	const float kPinR		= 4.5f;		// world pt
 	const float kLinkTangent = 48.f;
+	// an edge that goes back up, world pt
+	const float kBackStub	= 24.f;		// the straight run out of the pin and into the input
+	const float kBackClear	= 24.f;		// how far its channel keeps from a node
+	const float kBackLane	= 12.f;		// between two edges that share a channel
+	const float kBackCorner	= 12.f;		// the radius of its corners
+	const float kInset		= 8.f;		// world pt from the node's edge to its text
 
-	// Grab zones, in screen pixels at 100% DPI. The dot a pin is drawn as follows
-	// the zoom and is three pixels wide at 20%, so the zone cannot be the dot: it
-	// is the dot plus a fixed slack, floored so that the far zoom levels stay
-	// usable and capped so that a pin never swallows its own node. Towards the
-	// body the zone is tightened back to roughly the drawn size - the bottom band
-	// of a box has to keep starting a node drag, not a link.
+	// Grab zones, in pt. The dot a pin is drawn as follows the zoom, so the zone cannot be
+	// the dot: it is the dot plus a fixed slack, floored so that the far zoom levels stay
+	// usable and capped so that a pin never swallows its own node. Towards the body the
+	// zone is tightened back to roughly the drawn size - the bottom band of a box has to
+	// keep starting a node drag, not a link.
 	const float kPinGrabPad		= 8.f;
 	const float kPinGrabMin		= 12.f;
 	const float kPinGrabMax		= 22.f;
@@ -32,29 +45,43 @@ namespace
 	const float kLinkGrab		= 12.f;
 
 	const float kPickerRows	= 12.f;		// rows a search popup shows before it scrolls
-	const float kPickerMinW	= 320.f;
-	const float kPickerMaxW	= 640.f;
+	const float kPickerMinEm = 16.f;
+	const float kPickerMaxEm = 40.f;
 	const int	kHistoryLimit	= 64;
-
-	IC ImU32 Col(u8 r, u8 g, u8 b, u8 a = 255) { return IM_COL32(r, g, b, a); }
-
-	// family colour by kind prefix
-	ImU32 FamilyColor(LPCSTR kind)
-	{
-		if (0 == strncmp(kind, "trigger.", 8))	return Col(58, 130, 72);
-		if (0 == strncmp(kind, "dialog.", 7))	return Col(52, 96, 150);
-		if (0 == strncmp(kind, "objective.", 10)) return Col(170, 105, 40);
-		if (0 == strncmp(kind, "wait.", 5))		return Col(40, 120, 125);
-		if (0 == strcmp(kind, "flow.end"))		return Col(150, 55, 55);
-		if (0 == strncmp(kind, "flow.", 5))		return Col(95, 95, 105);
-		return Col(90, 90, 90);
-	}
+	const float kMinimapW	= 180.f;	// pt
+	const float kMinimapH	= 120.f;
+	// world pt Frame All keeps around what it shows
+	const float kFrameMargin = 32.f;
+	// the edges of the view, as Beyond() numbers them
+	enum { kAbove, kBelow, kLeft, kRight };
 
 	IC ImVec2 Add(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x + b.x, a.y + b.y); }
 	IC ImVec2 Sub(const ImVec2& a, const ImVec2& b) { return ImVec2(a.x - b.x, a.y - b.y); }
 	IC bool InRect(const ImVec2& p, const ImVec2& a, const ImVec2& b) { return p.x >= a.x && p.y >= a.y && p.x <= b.x && p.y <= b.y; }
 	IC float Snap(float v) { return floorf(v / NqLayout::kGrid + 0.5f) * NqLayout::kGrid; }
 	IC float Dist2(const ImVec2& a, const ImVec2& b) { return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y); }
+	IC float Round(float v) { return floorf(v + 0.5f); }
+
+	ImFont* Face(XUI::Font font)
+	{
+		ImFont* face = XUI::GetFont(font);
+		return face ? face : ImGui::GetFont();
+	}
+
+	float TextW(ImFont* face, float px, LPCSTR text)
+	{
+		return text && *text ? face->CalcTextSizeA(px, FLT_MAX, 0.f, text).x : 0.f;
+	}
+
+	// one line of canvas text, cut to `avail` px; returns the width drawn
+	float PaintFit(ImDrawList* dl, ImFont* face, float px, const ImVec2& at, ImU32 col, LPCSTR text, float avail)
+	{
+		if (!text || !*text || avail <= px * 0.5f) return 0.f;
+		xr_string shown;
+		LPCSTR drawn = XUI::EllipsizeFace(face, px, text, avail, XUI::Clip::End, shown) ? shown.c_str() : text;
+		dl->AddText(face, px, ImVec2(Round(at.x), Round(at.y)), col, drawn);
+		return face->CalcTextSizeA(px, FLT_MAX, 0.f, drawn).x;
+	}
 
 	// `out` is pin -> targets, so a pin is free exactly when it carries none
 	bool PinFree(const SNqNode& n, LPCSTR pin)
@@ -82,20 +109,6 @@ namespace
 		return (p.x - c.x) * (p.x - c.x) + (p.y - c.y) * (p.y - c.y);
 	}
 
-	// ImGui 1.88 has no ellipse primitives
-	void AddOval(ImDrawList* dl, const ImVec2& c, float rx, float ry, ImU32 col, bool filled, float thickness)
-	{
-		const int segs = 40;
-		dl->PathClear();
-		for (int i = 0; i < segs; ++i)
-		{
-			float a = (float)i / (float)segs * 6.2831853f;
-			dl->PathLineTo(ImVec2(c.x + cosf(a) * rx, c.y + sinf(a) * ry));
-		}
-		if (filled) dl->PathFillConvex(col);
-		else		dl->PathStroke(col, ImDrawFlags_Closed, thickness);
-	}
-
 	ImVec2 Bezier(const ImVec2& p0, const ImVec2& p1, const ImVec2& p2, const ImVec2& p3, float t)
 	{
 		float u = 1.f - t;
@@ -103,35 +116,44 @@ namespace
 		return ImVec2(a * p0.x + b * p1.x + c * p2.x + d * p3.x, a * p0.y + b * p1.y + c * p2.y + d * p3.y);
 	}
 
-	// Case folding for the search popups. The editor holds UTF-8, so a byte-wise
-	// tolower() would fold Latin only and leave "Ждёт" unreachable from "ждёт" -
-	// which reads as "the search is broken". Cyrillic is folded by hand:
-	// U+0410..U+042F -> U+0430..U+044F and Ё (U+0401) -> ё (U+0451).
-	void Fold(LPCSTR s, xr_string& out)
+	// The centre of a view `len` long on one axis of the graph [a0, a1]: the middle when it all fits. Else
+	// `prefer`, moved as little as it takes to keep the part [k0, k1] in view (`fallback` when that part does
+	// not fit either), and never past an end of the graph: the view is filled with graph, not empty canvas.
+	float Along(float a0, float a1, float k0, float k1, float len, float prefer, float fallback)
 	{
-		out.clear();
-		if (!s) return;
-		for (const u8* p = (const u8*)s; *p; ++p)
-		{
-			const u8 c = *p;
-			if (c >= 'A' && c <= 'Z') { out += char(c + 0x20); continue; }
-			if (c == 0xD0 && p[1])
-			{
-				const u8 d = p[1];
-				// А..П stay in the D0 lead, Р..Я cross over into D1
-				if (d == 0x81)				{ out += char(0xD1); out += char(0x91); ++p; continue; }
-				if (d >= 0x90 && d <= 0x9F)	{ out += char(0xD0); out += char(d + 0x20); ++p; continue; }
-				if (d >= 0xA0 && d <= 0xAF)	{ out += char(0xD1); out += char(d - 0x20); ++p; continue; }
-			}
-			out += char(c);
-		}
+		if (a1 - a0 <= len) return (a0 + a1) * 0.5f;
+		const float half = len * 0.5f;
+		if (k1 - k0 > len) return _max(a0 + half, _min(fallback, a1 - half));
+		const float c = _max(a0 + half, _min(prefer, a1 - half));
+		return _max(k1 - half, _min(c, k0 + half));
 	}
 
-	// `needle` is already folded; `scratch` is the caller's buffer for the haystack
-	bool FilterHit(LPCSTR text, LPCSTR needle, xr_string& scratch)
+	struct SSpan { float a, b; };
+
+	// The x of a free vertical channel: outside every span, and as short a detour for a run
+	// from x0 to x3 as there is - between the two every x costs the same, so the middle of
+	// what is free there. A tie goes to x0's side.
+	float PickChannel(xr_vector<SSpan>& spans, float x0, float x3)
 	{
-		Fold(text, scratch);
-		return 0 != strstr(scratch.c_str(), needle);
+		std::sort(spans.begin(), spans.end(), [](const SSpan& l, const SSpan& r) { return l.a < r.a; });
+		const float lo = _min(x0, x3), hi = _max(x0, x3);
+		float best = x0, best_cost = FLT_MAX;
+		auto consider = [&](float from, float to)
+		{
+			if (from > to) return;
+			const float x = to < lo ? to : from > hi ? from : (_max(from, lo) + _min(to, hi)) * 0.5f;
+			const float cost = fabsf(x - x0) * 1.001f + fabsf(x - x3);
+			if (cost < best_cost) { best_cost = cost; best = x; }
+		};
+		// the free space runs from the left end of the world to the first span, between spans, and on
+		float free_from = -FLT_MAX;
+		for (const SSpan& s : spans)
+		{
+			consider(free_from, s.a);
+			free_from = _max(free_from, s.b);
+		}
+		consider(free_from, FLT_MAX);
+		return best;
 	}
 
 	// A search popup is auto-sized by its filter box, and its list sits in a fixed
@@ -142,25 +164,142 @@ namespace
 		if (!ImGui::IsPopupOpen(popup)) return;
 		xr_vector<const NqCatalog::SKind*> kinds;
 		NqCatalog::KindsFor(use_mask, kinds);
+		const bool behaviour = NqCatalog::DocBehaviour();
 		float w = 0.f;
 		for (u32 i = 0; i < kinds.size(); ++i)
-			w = _max(w, ImGui::CalcTextSize(kinds[i]->title.c_str()).x + ImGui::CalcTextSize(kinds[i]->id.c_str()).x);
+			w = _max(w, ImGui::CalcTextSize(NqLook::KindTitle(kinds[i]->id.c_str(), behaviour).c_str()).x + ImGui::CalcTextSize(kinds[i]->id.c_str()).x);
 		const ImGuiStyle& st = ImGui::GetStyle();
-		w += st.WindowPadding.x * 2.f + st.ItemSpacing.x * 3.f + st.ScrollbarSize + ImGui::GetFontSize();
-		w = _min(_max(w, kPickerMinW), kPickerMaxW);
-		ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.f), ImVec2(FLT_MAX, FLT_MAX));
+		w += st.WindowPadding.x * 2.f + st.ItemSpacing.x * 3.f + st.ScrollbarSize + XUI::Pt(22.f);
+		w = _min(_max(w, XUI::Em(kPickerMinEm)), XUI::Em(kPickerMaxEm));
+		ImGui::SetNextWindowSizeConstraints(ImVec2(w, 0.f), ImVec2(w, FLT_MAX));
+	}
+
+	// "quest" in a behaviour graph's words: a whole word, capitals kept
+	xr_string Regraph(const xr_string& text)
+	{
+		xr_string out;
+		const char* p = text.c_str();
+		auto word_char = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || (u8)c >= 0x80; };
+		while (*p)
+		{
+			const bool start = p == text.c_str() || !word_char(p[-1]);
+			if (start && (0 == strncmp(p, "quest", 5) || 0 == strncmp(p, "Quest", 5)))
+			{
+				const char* after = p + 5;
+				const bool plural = *after == 's';
+				if (plural) ++after;
+				if (!word_char(*after))
+				{
+					out += (*p == 'Q') ? "Graph" : "graph";
+					if (plural) out += "s";
+					p = after;
+					continue;
+				}
+			}
+			out += *p++;
+		}
+		return out;
 	}
 }
 
+//------------------------------------------------------------------------------
+// what a kind looks like
+//------------------------------------------------------------------------------
+XUI::Icon NqLook::KindIcon(LPCSTR kind)
+{
+	using I = XUI::Icon;
+	if (!kind || !kind[0]) return I::Dot;
+	if (0 == strcmp(kind, "flow.end"))		return I::End;
+	if (0 == strcmp(kind, "behaviour.run"))	return I::Behaviour;
+	if (0 == strcmp(kind, "lua"))			return I::FileScript;
+	if (NqText::IsTrigger(kind))			return I::Trigger;
+	struct SMap { LPCSTR group; I icon; };
+	static const SMap kGroups[] =
+	{
+		{ "triggers", I::Trigger }, { "flow", I::Flow }, { "wait", I::Wait }, { "dialog", I::Dialog }, { "dialog_ctl", I::Dialog },
+		{ "objective", I::Task }, { "tasks", I::Task }, { "quest", I::Quest }, { "vars", I::Variable }, { "items", I::Item },
+		{ "money", I::Money }, { "spawn", I::SpawnNpc }, { "npc", I::Role }, { "behaviour", I::Behaviour }, { "orders", I::Order },
+		{ "relation", I::Relation }, { "squad", I::Squad }, { "world", I::World }, { "actor", I::Person }, { "ui", I::PdaMsg },
+		{ "info", I::PdaMsg }, { "sound", I::FileSound }, { "logic", I::FileScript }, { "custom", I::FileScript },
+		{ "conditions", I::Condition }, { "cond_event", I::Condition }, { "cond_state", I::Condition }, { "cond_world", I::Condition },
+	};
+	if (const NqCatalog::SKind* k = NqCatalog::Find(kind))
+		for (const SMap& m : kGroups)
+			if (k->group == m.group) return m.icon;
+	// a module's own group: the kind's name still says what it is
+	static const SMap kPrefixes[] =
+	{
+		{ "flow.", I::Flow }, { "wait.", I::Wait }, { "dialog.", I::Dialog }, { "objective.", I::Task }, { "task.", I::Task },
+		{ "var.", I::Variable }, { "item.", I::Item }, { "money.", I::Money }, { "spawn.", I::SpawnNpc }, { "npc.", I::Role },
+		{ "order.", I::Order }, { "relation.", I::Relation }, { "squad.", I::Squad }, { "pda.", I::PdaMsg }, { "actor.", I::Person },
+	};
+	for (const SMap& m : kPrefixes)
+		if (0 == strncmp(kind, m.group, xr_strlen(m.group))) return m.icon;
+	return I::Dot;
+}
+
+ImU32 NqLook::FamilyColor(LPCSTR kind, float alpha)
+{
+	using I = XUI::Icon;
+	T token = T::TextMuted;
+	switch (KindIcon(kind))
+	{
+	case I::Trigger:	token = T::Success; break;
+	case I::End:		token = T::Error; break;
+	case I::Flow:		token = T::TextSecondary; break;
+	case I::Wait:		token = T::Warning; break;
+	case I::Dialog:		token = T::AxisZ; break;
+	case I::Task: case I::Quest: case I::PdaMsg:	token = T::Required; break;
+	case I::Role: case I::Behaviour: case I::Order: case I::Squad: case I::Relation: case I::Person:	token = T::AccentBright; break;
+	case I::Item: case I::Money: case I::SpawnNpc: case I::World:	token = T::Accent; break;
+	default:			break;
+	}
+	return C(token, alpha);
+}
+
+xr_string NqLook::KindTitle(LPCSTR kind, bool behaviour)
+{
+	const NqCatalog::SKind* k = kind ? NqCatalog::Find(kind) : 0;
+	xr_string title = k ? k->title : xr_string(kind ? kind : "");
+	if (!behaviour) return title;
+	// "Quest start" / "Quest end" are the graph's own start and end
+	if (0 == strncmp(title.c_str(), "Quest ", 6) && title.size() > 6)
+	{
+		title = title.substr(6);
+		if (title[0] >= 'a' && title[0] <= 'z') title[0] = char(title[0] - 0x20);
+		return title;
+	}
+	return Regraph(title);
+}
+
+xr_string NqLook::KindDesc(LPCSTR kind, bool behaviour)
+{
+	const NqCatalog::SKind* k = kind ? NqCatalog::Find(kind) : 0;
+	if (!k) return "";
+	return behaviour ? Regraph(k->desc) : k->desc;
+}
+
+LPCSTR NqLook::DocNoun(bool behaviour)
+{
+	return behaviour ? "graph" : "quest";
+}
+
+//------------------------------------------------------------------------------
+// canvas
+//------------------------------------------------------------------------------
 NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 {
 	m_Origin = m_Size = ImVec2(0, 0);
+	m_DrawnFrame = -1;
 	m_Hovered = false;
 	m_ShowMinimap = true;
+	m_MinimapShown = false;
 	m_MinimapHovered = m_MinimapPanning = false;
 	m_MinimapMin = m_MinimapMax = ImVec2(0, 0);
 	m_MinimapWorldMin = m_MinimapWorldMax = ImVec2(0, 0);
 	m_MinimapScale = 1.f;
+	for (int s = 0; s < 4; ++s) { m_Beyond[s] = 0; m_BeyondNear[s] = -1; }
+	m_BeyondHot = -1;
 	m_Panning = m_RmbMoved = false;
 	m_MiddlePanning = false;
 	m_Dragging = m_DragMoved = false;
@@ -168,9 +307,11 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_Linking = m_PendingLink = false;
 	m_StatusAt = 0.0;
 	m_HotNode = m_HotPin = m_HotLink = -1;
-	m_ChipDragIndex = -1;
-	m_ChipDragging = false;
-	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = m_OpenAddAction = false;
+	m_ActDragIndex = -1;
+	m_ActDragging = false;
+	m_OpenAddAction = m_AddActionAt = false;
+	m_AddActionPos = ImVec2(0, 0);
+	m_WantFrameAll = m_WantFrameSel = m_WantRename = m_WantFocusAction = false;
 	m_WantZoom = -1;
 	m_ReplayingHistory = false;
 	m_HistoryReady = false;
@@ -178,12 +319,13 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 	m_HistoryBatchRemembered = false;
 	m_LastWheelHistory = -DBL_MAX;
 	m_WheelZooming = false;
+	m_TipSince = 0.0;
 	m_ReachRevision = u32(-1);
 	m_GeomRevision = m_GeomCatalogGeneration = u32(-1);
 	m_LinkRevision = m_LinkCatalogGeneration = u32(-1);
 	m_LinkOrigin = m_LinkSize = ImVec2(FLT_MAX, FLT_MAX);
 	m_LinkViewX = m_LinkViewY = FLT_MAX;
-	m_LinkZoom = -1;
+	m_LinkScale = -1.f;
 	m_Filter[0] = 0;
 	m_FilterSel = 0;
 	if (m_Doc->zoom_idx < 0 || m_Doc->zoom_idx >= kZoomCount) m_Doc->zoom_idx = kZoomDefault;
@@ -193,6 +335,23 @@ NqCanvas::NqCanvas(NqDoc* doc) : m_Doc(doc)
 
 int   NqCanvas::ZoomLevels()			{ return kZoomCount; }
 float NqCanvas::ZoomOf(int idx)			{ if (idx < 0) idx = 0; if (idx >= kZoomCount) idx = kZoomCount - 1; return kZoom[idx]; }
+int   NqCanvas::FrameMinLevel()			{ return kZoomFrameMin; }
+
+float NqCanvas::Scale() const
+{
+	return Zoom() * XUI::Dpi();
+}
+
+float NqCanvas::TitlePx() const
+{
+	return Round(kTitlePt * Scale());
+}
+
+int NqCanvas::Lod() const
+{
+	const float px = TitlePx();
+	return px >= kLodFull ? 2 : px >= kLodTitles ? 1 : 0;
+}
 
 NqCanvas::SViewState NqCanvas::CurrentView() const
 {
@@ -340,11 +499,11 @@ void NqCanvas::PruneTransient()
 
 void NqCanvas::ToggleSelectedBookmarks()
 {
-	if (m_Doc->selection.empty()) { SetStatus("select nodes to bookmark"); return; }
+	if (m_Doc->selection.empty()) { SetStatus("Select nodes to bookmark them"); return; }
 	bool all = true;
 	for (u32 i = 0; i < m_Doc->selection.size(); ++i) all &= IsBookmarked(m_Doc->selection[i].c_str());
 	for (u32 i = 0; i < m_Doc->selection.size(); ++i) SetBookmark(m_Doc->selection[i].c_str(), !all);
-	SetStatus(all ? "bookmarks removed" : "bookmarked selection");
+	SetStatus(all ? "Bookmarks removed" : "Selection bookmarked");
 }
 
 bool NqCanvas::JumpBookmark(int delta)
@@ -383,11 +542,11 @@ bool NqCanvas::GraphBounds(float& min_x, float& min_y, float& max_x, float& max_
 bool NqCanvas::ViewportBounds(float& min_x, float& min_y, float& max_x, float& max_y) const
 {
 	if (!Measured()) return false;
-	const float z = Zoom();
-	min_x = m_Doc->view_cx - m_Size.x / (2.f * z);
-	min_y = m_Doc->view_cy - m_Size.y / (2.f * z);
-	max_x = m_Doc->view_cx + m_Size.x / (2.f * z);
-	max_y = m_Doc->view_cy + m_Size.y / (2.f * z);
+	const float s = Scale();
+	min_x = m_Doc->view_cx - m_Size.x / (2.f * s);
+	min_y = m_Doc->view_cy - m_Size.y / (2.f * s);
+	max_x = m_Doc->view_cx + m_Size.x / (2.f * s);
+	max_y = m_Doc->view_cy + m_Size.y / (2.f * s);
 	return true;
 }
 
@@ -405,12 +564,12 @@ void NqCanvas::SetZoom(int idx)
 
 void NqCanvas::RequestFrameAll()
 {
-	if (Measured()) FrameAll(); else m_WantFrameAll = true;
+	if (MeasuredNow()) FrameAll(); else m_WantFrameAll = true;
 }
 
 void NqCanvas::RequestFrameSel()
 {
-	if (Measured()) FrameSelection(); else m_WantFrameSel = true;
+	if (MeasuredNow()) FrameSelection(); else m_WantFrameSel = true;
 }
 
 void NqCanvas::RequestFrameNode(LPCSTR id)
@@ -420,16 +579,16 @@ void NqCanvas::RequestFrameNode(LPCSTR id)
 
 ImVec2 NqCanvas::ToScreen(const ImVec2& w) const
 {
-	float z = Zoom();
-	return ImVec2(m_Origin.x + m_Size.x * 0.5f + (w.x - m_Doc->view_cx) * z,
-				  m_Origin.y + m_Size.y * 0.5f + (w.y - m_Doc->view_cy) * z);
+	const float s = Scale();
+	return ImVec2(m_Origin.x + m_Size.x * 0.5f + (w.x - m_Doc->view_cx) * s,
+				  m_Origin.y + m_Size.y * 0.5f + (w.y - m_Doc->view_cy) * s);
 }
 
-ImVec2 NqCanvas::ToWorld(const ImVec2& s) const
+ImVec2 NqCanvas::ToWorld(const ImVec2& p) const
 {
-	float z = Zoom();
-	return ImVec2(m_Doc->view_cx + (s.x - m_Origin.x - m_Size.x * 0.5f) / z,
-				  m_Doc->view_cy + (s.y - m_Origin.y - m_Size.y * 0.5f) / z);
+	const float s = Scale();
+	return ImVec2(m_Doc->view_cx + (p.x - m_Origin.x - m_Size.x * 0.5f) / s,
+				  m_Doc->view_cy + (p.y - m_Origin.y - m_Size.y * 0.5f) / s);
 }
 
 void NqCanvas::ZoomBy(int delta, const ImVec2* anchor)
@@ -444,10 +603,10 @@ void NqCanvas::ZoomBy(int delta, const ImVec2* anchor)
 		// keep the world point under the cursor in place
 		ImVec2 w = ToWorld(*anchor);
 		m_Doc->zoom_idx = idx;
-		ImVec2 s = ToScreen(w);
-		float z = Zoom();
-		m_Doc->view_cx += (s.x - anchor->x) / z;
-		m_Doc->view_cy += (s.y - anchor->y) / z;
+		ImVec2 p = ToScreen(w);
+		const float s = Scale();
+		m_Doc->view_cx += (p.x - anchor->x) / s;
+		m_Doc->view_cy += (p.y - anchor->y) / s;
 	}
 	else
 		m_Doc->zoom_idx = idx;
@@ -467,9 +626,10 @@ void NqCanvas::FrameRect(const ImVec2& wmin, const ImVec2& wmax)
 	float w = wmax.x - wmin.x + 2 * NqLayout::kGapX, h = wmax.y - wmin.y + 2 * NqLayout::kGapY;
 	if (w < 1.f) w = 1.f;
 	if (h < 1.f) h = 1.f;
+	const float dpi = XUI::Dpi();
 	int idx = kZoomCount - 1;
 	if (m_Size.x > 0 && m_Size.y > 0)
-		while (idx > 0 && (w * kZoom[idx] > m_Size.x || h * kZoom[idx] > m_Size.y)) --idx;
+		while (idx > 0 && (w * kZoom[idx] * dpi > m_Size.x || h * kZoom[idx] * dpi > m_Size.y)) --idx;
 	if (idx > kZoomDefault) idx = kZoomDefault;		// framing never zooms in past 1:1
 	const float cx = NqLayout::Sane((wmin.x + wmax.x) * 0.5f);
 	const float cy = NqLayout::Sane((wmin.y + wmax.y) * 0.5f);
@@ -479,25 +639,133 @@ void NqCanvas::FrameRect(const ImVec2& wmin, const ImVec2& wmax)
 	m_Doc->view_cy = cy;
 }
 
+// An edge that climbs back up runs in a channel beside the nodes: a view fitted to the boxes alone cut it
+// off. So the edges are routed here the way BuildLinks routes them, in the same order - the lanes routed
+// before an edge move it - and each one counts where its route runs.
+bool NqCanvas::Extent(const xr_vector<bool>* only, ImVec2& mn, ImVec2& mx)
+{
+	BuildGeometry();
+	const SNqQuest& q = m_Doc->quest;
+	mn = ImVec2(FLT_MAX, FLT_MAX);
+	mx = ImVec2(-FLT_MAX, -FLT_MAX);
+	auto shown = [&](int i) { return !only || (*only)[i]; };
+	auto grow = [&](const ImVec2& p) { mn.x = _min(mn.x, p.x); mn.y = _min(mn.y, p.y); mx.x = _max(mx.x, p.x); mx.y = _max(mx.y, p.y); };
+	for (u32 i = 0; i < m_Geom.size(); ++i)
+	{
+		if (!shown((int)i)) continue;
+		grow(m_Geom[i].pos);
+		grow(Add(m_Geom[i].pos, m_Geom[i].size));
+	}
+	if (mn.x > mx.x) return false;
+
+	xr_vector<SLane> lanes;
+	xr_vector<ImVec2> route;
+	for (u32 i = 0; i < q.nodes.size() && i < m_Geom.size(); ++i)
+	{
+		const SNqNode& n = q.nodes[i];
+		const SNodeGeom& g = m_Geom[i];
+		for (u32 p = 0; p < n.out.size(); ++p)
+		{
+			int pin = -1;
+			for (u32 e = 0; e < g.pins.size(); ++e) if (g.pins[e] == n.out[p].first) { pin = (int)e; break; }
+			if (pin < 0) continue;
+			for (u32 t = 0; t < n.out[p].second.size(); ++t)
+			{
+				const int to = q.NodeIndex(n.out[p].second[t].c_str());
+				if (to < 0 || to >= (int)m_Geom.size()) continue;
+				const ImVec2 w0 = OutputPin(g, pin), w3 = InputPin(m_Geom[to]);
+				// an edge that runs down stays between its two pins
+				if (w3.y - w0.y >= kBackStub * 2.f) continue;
+				RouteBack(w0, w3, lanes, route);
+				if (!shown((int)i) || !shown(to)) continue;
+				for (const ImVec2& r : route) grow(r);
+			}
+		}
+	}
+	return true;
+}
+
+// The highest level, not past 1:1 and never below FrameMinLevel, that holds the whole graph, its edges
+// included. A graph framed so small that no title can be read is a picture, not an editor: one that does
+// not fit at the floor is shown AT the floor - the most of it that stays readable - from where reading
+// starts: the trigger (every root when there is none) and the two levels under it in view, the top of the
+// view on them, and the rest of the view filled with graph. The status says so, and the edges of the
+// canvas count what lies beyond them (DrawBeyond).
 void NqCanvas::FrameAll()
 {
 	const SNqQuest& q = m_Doc->quest;
-	if (q.nodes.empty())
+	ImVec2 mn, mx;
+	if (q.nodes.empty() || !Extent(0, mn, mx))
 	{
 		if (m_Doc->view_cx != 0.f || m_Doc->view_cy != 0.f || m_Doc->zoom_idx != kZoomDefault) RememberView();
 		m_Doc->view_cx = m_Doc->view_cy = 0.f;
 		m_Doc->zoom_idx = kZoomDefault;
 		return;
 	}
-	ImVec2 mn(FLT_MAX, FLT_MAX), mx(-FLT_MAX, -FLT_MAX);
-	for (u32 i = 0; i < q.nodes.size(); ++i)
+	const float dpi = XUI::Dpi();
+	auto apply = [&](int idx, float cx, float cy)
 	{
-		Fvector2 sz = NqLayout::NodeSize(q.nodes[i]);
-		const Fvector2& p = q.nodes[i].pos;
-		mn.x = _min(mn.x, p.x); mn.y = _min(mn.y, p.y);
-		mx.x = _max(mx.x, p.x + sz.x); mx.y = _max(mx.y, p.y + sz.y);
+		cx = NqLayout::Sane(cx);
+		cy = NqLayout::Sane(cy);
+		if (cx != m_Doc->view_cx || cy != m_Doc->view_cy || idx != m_Doc->zoom_idx) RememberView();
+		m_Doc->zoom_idx = idx;
+		m_Doc->view_cx = cx;
+		m_Doc->view_cy = cy;
+	};
+	mn = Sub(mn, ImVec2(kFrameMargin, kFrameMargin));
+	mx = Add(mx, ImVec2(kFrameMargin, kFrameMargin));
+	for (int idx = kZoomDefault; idx >= kZoomFrameMin; --idx)
+	{
+		const float s = kZoom[idx] * dpi;
+		if ((mx.x - mn.x) * s <= m_Size.x && (mx.y - mn.y) * s <= m_Size.y)
+		{
+			apply(idx, (mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+			return;
+		}
 	}
-	FrameRect(mn, mx);
+
+	// the trigger (every root when there is none) and two levels of what follows it
+	xr_vector<bool> keep;
+	keep.assign(q.nodes.size(), false);
+	xr_vector<int> front, next;
+	for (u32 i = 0; i < q.nodes.size(); ++i)
+		if (NqText::IsTrigger(q.nodes[i].kind.c_str())) front.push_back((int)i);
+	if (front.empty())
+		for (u32 i = 0; i < q.nodes.size(); ++i)
+			if (0 == q.InDegree(q.nodes[i].id.c_str())) front.push_back((int)i);
+	if (front.empty()) front.push_back(0);
+	const int anchor = front[0];
+	for (int depth = 0; depth <= 2 && !front.empty(); ++depth)
+	{
+		next.clear();
+		for (int i : front)
+		{
+			if (keep[i]) continue;
+			keep[i] = true;
+			const SNqNode& n = q.nodes[i];
+			for (u32 p = 0; p < n.out.size(); ++p)
+				for (u32 t = 0; t < n.out[p].second.size(); ++t)
+				{
+					const int to = q.NodeIndex(n.out[p].second[t].c_str());
+					if (to >= 0 && !keep[to]) next.push_back(to);
+				}
+		}
+		front.swap(next);
+	}
+	ImVec2 kmn, kmx;
+	Extent(&keep, kmn, kmx);
+	kmn = Sub(kmn, ImVec2(kFrameMargin, kFrameMargin));
+	kmx = Add(kmx, ImVec2(kFrameMargin, kFrameMargin));
+
+	const float s = kZoom[kZoomFrameMin] * dpi;
+	const ImVec2 view(m_Size.x / s, m_Size.y / s);
+	const SNodeGeom& a = m_Geom[anchor];
+	// across: the whole graph's middle, as far as the start allows; down: the start at the top
+	const float cx = Along(mn.x, mx.x, kmn.x, kmx.x, view.x, (mn.x + mx.x) * 0.5f, a.pos.x + a.size.x * 0.5f);
+	const float cy = Along(mn.y, mx.y, kmn.y, kmx.y, view.y, kmn.y + view.y * 0.5f, a.pos.y - kFrameMargin + view.y * 0.5f);
+	apply(kZoomFrameMin, cx, cy);
+	SetStatus(NqUtil::Format("The %s is larger than the view at %d%%: framed from its start",
+		NqLook::DocNoun(Behaviour()), int(kZoom[kZoomFrameMin] * 100.f + 0.5f)).c_str());
 }
 
 void NqCanvas::FrameSelection()
@@ -670,6 +938,7 @@ void NqCanvas::InsertNodes(xr_vector<SNqNode>& in, const ImVec2& place, bool anc
 	m_Doc->selection.clear();
 	m_Doc->Edit([&](SNqQuest& q)
 	{
+		float stack_y = place.y;
 		for (u32 i = 0; i < in.size(); ++i)
 		{
 			SNqNode n = in[i];
@@ -682,7 +951,13 @@ void NqCanvas::InsertNodes(xr_vector<SNqNode>& in, const ImVec2& place, bool anc
 				n.out[p].second = kept;
 			}
 			if (n.has_pos) { n.pos.x = Snap(n.pos.x + shift.x); n.pos.y = Snap(n.pos.y + shift.y); }
-			else { n.has_pos = true; n.pos.set(Snap(place.x), Snap(place.y + i * (NqLayout::kNodeHeight + NqLayout::kGapY))); }
+			else
+			{
+				// nodes without a place stack down, each under the one before it
+				n.has_pos = true;
+				n.pos.set(Snap(place.x), Snap(stack_y));
+				stack_y += NqLayout::NodeSize(n).y + NqLayout::kGapY;
+			}
 			q.nodes.push_back(n);
 			m_Doc->selection.push_back(n.id);
 		}
@@ -703,41 +978,15 @@ void NqCanvas::BuildGeometry()
 	{
 		const SNqNode& n = q.nodes[i];
 		SNodeGeom& g = m_Geom[i];
-		Fvector2 sz = NqLayout::NodeSize(n);
+		NqLayout::Box(n, g.box);
+		NqLayout::Lines(n, g.lines);
+		// a condition is named the way the document speaks: a behaviour graph never says "quest"
+		for (NqLayout::SLine& line : g.lines)
+			if (!line.cond.empty()) line.key = NqLayout::CondKey(NqLook::KindTitle(line.cond.c_str(), Behaviour()).c_str(), line.negate);
+		NqLayout::Pins(n, g.pins, &g.declared);
 		g.pos = ImVec2(n.pos.x, n.pos.y);
-		g.size = ImVec2(sz.x, sz.y);
+		g.size = ImVec2(g.box.w, g.box.h);
 		g.trigger = NqText::IsTrigger(n.kind.c_str());
-		g.enter_n = (int)n.on_enter.size();
-		g.exit_n = (int)n.on_exit.size();
-		g.enter_h = g.trigger ? 0.f : NqLayout::StripHeight(g.enter_n);
-		g.exit_h = g.trigger ? 0.f : NqLayout::StripHeight(g.exit_n);
-		g.pins.clear();
-		const NqCatalog::SKind* k = NqCatalog::Find(n.kind.c_str());
-		if (k)
-		{
-			if (k->pins_from_cases)
-			{
-				const SNqValue* cases = n.params.Get("cases");
-				if (cases && cases->IsTable())
-					for (u32 c = 0; c < cases->arr.size(); ++c)
-					{
-						xr_string nm = cases->arr[c].GetString("name");
-						if (!nm.empty()) g.pins.push_back(nm);
-					}
-			}
-			for (u32 p = 0; p < k->pins.size(); ++p)
-				if (k->pins[p] != "cases") g.pins.push_back(k->pins[p]);
-		}
-		// everything pushed so far is what the kind declares; what the file adds
-		// below would be an E007 pin, so automatic wiring must not aim at it
-		g.declared = (int)g.pins.size();
-		// pins present in the file but unknown to the catalog still get a handle
-		for (u32 p = 0; p < n.out.size(); ++p)
-		{
-			bool have = false;
-			for (u32 e = 0; e < g.pins.size(); ++e) if (g.pins[e] == n.out[p].first) { have = true; break; }
-			if (!have) g.pins.push_back(n.out[p].first);
-		}
 	}
 	m_GeomRevision = m_Doc->revision;
 	m_GeomCatalogGeneration = catalog_generation;
@@ -766,14 +1015,16 @@ void NqCanvas::BuildLinks()
 {
 	const SNqQuest& q = m_Doc->quest;
 	const u32 catalog_generation = NqCatalog::Generation();
+	const float s = Scale();
 	if (!m_Dragging && m_LinkRevision == m_Doc->revision && m_LinkCatalogGeneration == catalog_generation
 		&& m_LinkOrigin.x == m_Origin.x && m_LinkOrigin.y == m_Origin.y
 		&& m_LinkSize.x == m_Size.x && m_LinkSize.y == m_Size.y
 		&& m_LinkViewX == m_Doc->view_cx && m_LinkViewY == m_Doc->view_cy
-		&& m_LinkZoom == m_Doc->zoom_idx) return;
+		&& m_LinkScale == s) return;
 
 	m_Links.clear();
-	float z = Zoom();
+	xr_vector<SLane> lanes;
+	xr_vector<ImVec2> route;
 	for (u32 i = 0; i < q.nodes.size(); ++i)
 	{
 		const SNqNode& n = q.nodes[i];
@@ -789,11 +1040,34 @@ void NqCanvas::BuildLinks()
 				if (to < 0) continue;
 				SLinkGeom l;
 				l.from = (int)i; l.pin = n.out[p].first; l.to = to;
-				l.p0 = ToScreen(OutputPin(g, pin));
-				l.p3 = ToScreen(InputPin(m_Geom[to]));
-				float d = _max(kLinkTangent * z, fabsf(l.p3.y - l.p0.y) * 0.4f);
-				l.p1 = ImVec2(l.p0.x, l.p0.y + d);
-				l.p2 = ImVec2(l.p3.x, l.p3.y - d);
+				const ImVec2 w0 = OutputPin(g, pin), w3 = InputPin(m_Geom[to]);
+				l.p0 = ToScreen(w0);
+				l.p3 = ToScreen(w3);
+				// A bezier that has to climb back up cuts through every node on the way (a loop
+				// back to a wait): an edge whose input is not below its pin goes around them.
+				if (w3.y - w0.y < kBackStub * 2.f)
+				{
+					RouteBack(w0, w3, lanes, route);
+					l.path.resize(route.size());
+					l.bmin = l.bmax = l.p0;
+					for (u32 k = 0; k < route.size(); ++k)
+					{
+						l.path[k] = ToScreen(route[k]);
+						l.bmin = ImVec2(_min(l.bmin.x, l.path[k].x), _min(l.bmin.y, l.path[k].y));
+						l.bmax = ImVec2(_max(l.bmax.x, l.path[k].x), _max(l.bmax.y, l.path[k].y));
+					}
+					l.p1 = l.p0;
+					l.p2 = l.p3;
+				}
+				else
+				{
+					float d = _max(kLinkTangent * s, fabsf(l.p3.y - l.p0.y) * 0.4f);
+					l.p1 = ImVec2(l.p0.x, l.p0.y + d);
+					l.p2 = ImVec2(l.p3.x, l.p3.y - d);
+					// a bezier stays inside the hull of its control points
+					l.bmin = ImVec2(_min(_min(l.p0.x, l.p1.x), _min(l.p2.x, l.p3.x)), _min(_min(l.p0.y, l.p1.y), _min(l.p2.y, l.p3.y)));
+					l.bmax = ImVec2(_max(_max(l.p0.x, l.p1.x), _max(l.p2.x, l.p3.x)), _max(_max(l.p0.y, l.p1.y), _max(l.p2.y, l.p3.y)));
+				}
 				m_Links.push_back(l);
 			}
 		}
@@ -804,49 +1078,135 @@ void NqCanvas::BuildLinks()
 	m_LinkSize = m_Size;
 	m_LinkViewX = m_Doc->view_cx;
 	m_LinkViewY = m_Doc->view_cy;
-	m_LinkZoom = m_Doc->zoom_idx;
+	m_LinkScale = s;
 }
 
-// the editor bakes the monitor DPI into the font (XrUIManager loads it at
-// 16 * dpi), so the font size is the scale factor the raw constants live in
-float NqCanvas::UiScale() const
+// Straight runs with round corners: a slant down and aside out of the pin, sideways to a free
+// vertical channel, up it, over the target and a slant down into its input. The channel keeps
+// clear of every node between the two heights and of the channels routed before; a run under the
+// pin or over the target that would cut a node moves past it, and the channel is looked for again.
+// The two ends slant so that the edge never runs along the vertical of its pins: every edge coming
+// down into an input arrives on that vertical (a trigger straight above its wait), and the two read
+// as one wire there. A second routed edge through the same pin to the same side slants steeper.
+void NqCanvas::RouteBack(const ImVec2& p0, const ImVec2& p3, xr_vector<SLane>& lanes, xr_vector<ImVec2>& out) const
 {
-	float fs = ImGui::GetFontSize();
-	return fs > 1.f ? fs / 16.f : 1.f;
+	float below = p0.y + kBackStub, above = p3.y - kBackStub, x = p0.x;
+	float drop = kBackStub, rise = kBackStub;		// the heights of the two slants
+	float side0 = 1.f, side3 = 1.f;				// the side of its pin each slant goes to
+	xr_vector<SSpan> spans;
+	for (int pass = 0; pass < 4; ++pass)
+	{
+		spans.clear();
+		for (const SNodeGeom& g : m_Geom)
+			if (g.pos.y - kBackClear < below && g.pos.y + g.size.y + kBackClear > above)
+				spans.push_back({ g.pos.x - kBackClear, g.pos.x + g.size.x + kBackClear });
+		for (const SLane& lane : lanes)
+			if (lane.top < below && lane.bottom > above)
+				spans.push_back({ lane.x - kBackLane, lane.x + kBackLane });
+		x = PickChannel(spans, p0.x, p3.x);
+
+		bool moved = false;
+		side0 = x < p0.x ? -1.f : 1.f;
+		side3 = x < p3.x ? -1.f : 1.f;
+		int out_before = 0, in_before = 0;
+		for (const SLane& lane : lanes)
+		{
+			if (lane.from.x == p0.x && lane.from.y == p0.y && lane.side_from == side0) ++out_before;
+			if (lane.to.x == p3.x && lane.to.y == p3.y && lane.side_to == side3) ++in_before;
+		}
+		drop = kBackStub + kBackLane * float(out_before);
+		rise = kBackStub + kBackLane * float(in_before);
+		if (below < p0.y + drop)	{ below = p0.y + drop; moved = true; }
+		if (above > p3.y - rise)	{ above = p3.y - rise; moved = true; }
+
+		auto crosses = [](const SNodeGeom& g, float y, float x0, float x1)
+		{
+			const float margin = kBackStub * 0.5f;
+			return y > g.pos.y - margin && y < g.pos.y + g.size.y + margin
+				&& g.pos.x < _max(x0, x1) && g.pos.x + g.size.x > _min(x0, x1);
+		};
+		for (const SNodeGeom& g : m_Geom)
+		{
+			if (crosses(g, below, p0.x, x))		{ below = _max(below, g.pos.y + g.size.y + kBackStub); moved = true; }
+			if (crosses(g, above, x, p3.x))		{ above = _min(above, g.pos.y - kBackStub); moved = true; }
+		}
+		if (!moved) break;
+	}
+	SLane lane;
+	lane.x = x; lane.top = above; lane.bottom = below;
+	lane.from = p0; lane.to = p3;
+	lane.side_from = side0; lane.side_to = side3;
+	lanes.push_back(lane);
+
+	// a run moved past a node gets a vertical piece between its slant and its sideways run
+	const float xs = p0.x + side0 * kBackStub, xe = p3.x + side3 * kBackStub;
+	xr_vector<ImVec2> corners;
+	corners.push_back(p0);
+	corners.push_back(ImVec2(xs, p0.y + drop));
+	if (below > p0.y + drop + 0.5f) corners.push_back(ImVec2(xs, below));
+	corners.push_back(ImVec2(x, below));
+	corners.push_back(ImVec2(x, above));
+	corners.push_back(ImVec2(xe, above));
+	if (above < p3.y - rise - 0.5f) corners.push_back(ImVec2(xe, p3.y - rise));
+	corners.push_back(p3);
+
+	out.clear();
+	out.push_back(p0);
+	for (u32 k = 1; k + 1 < corners.size(); ++k)
+	{
+		const ImVec2& from = corners[k - 1];
+		const ImVec2& c = corners[k];
+		const ImVec2& to = corners[k + 1];
+		const float in = sqrtf(Dist2(from, c)), next = sqrtf(Dist2(c, to));
+		const float r = _min(kBackCorner, _min(in, next) * 0.5f);
+		if (r < 0.5f)
+		{
+			if (Dist2(out.back(), c) > 0.01f) out.push_back(c);
+			continue;
+		}
+		// a quadratic corner: from r before it, through it, to r after it
+		const ImVec2 u(c.x + (from.x - c.x) / in * r, c.y + (from.y - c.y) / in * r);
+		const ImVec2 v(c.x + (to.x - c.x) / next * r, c.y + (to.y - c.y) / next * r);
+		for (int step = 0; step <= 4; ++step)
+		{
+			const float f = step / 4.f, e = 1.f - f;
+			out.push_back(ImVec2(e * e * u.x + 2.f * e * f * c.x + f * f * v.x, e * e * u.y + 2.f * e * f * c.y + f * f * v.y));
+		}
+	}
+	out.push_back(p3);
 }
 
 float NqCanvas::PinGrab() const
 {
-	const float s = UiScale();
-	const float drawn = _max(3.f, kPinR * Zoom());		// the dot DrawNode paints
-	const float r = drawn + kPinGrabPad * s;
-	return _min(_max(r, kPinGrabMin * s), kPinGrabMax * s);
+	const float drawn = _max(2.f, kPinR * Scale());		// the dot DrawNode paints
+	const float r = drawn + XUI::Pt(kPinGrabPad);
+	return _min(_max(r, XUI::Pt(kPinGrabMin)), XUI::Pt(kPinGrabMax));
 }
 
 // `inward` points from the pin into its node (-1 for an output pin on the bottom
 // edge, +1 for the input pin on the top one): that half of the zone stays narrow
-bool NqCanvas::NearPin(const ImVec2& s, const ImVec2& c, float inward, float& d2) const
+bool NqCanvas::NearPin(const ImVec2& p, const ImVec2& c, float inward, float& d2) const
 {
-	ImVec2 d = Sub(s, c);
+	ImVec2 d = Sub(p, c);
 	if (d.y * inward > 0.f) d.y /= kPinGrabInside;
 	d2 = d.x * d.x + d.y * d.y;
 	const float r = PinGrab();
 	return d2 <= r * r;
 }
 
-int NqCanvas::HitNode(const ImVec2& s) const
+int NqCanvas::HitNode(const ImVec2& p) const
 {
 	// topmost = last drawn = highest index
 	for (int i = (int)m_Geom.size() - 1; i >= 0; --i)
 	{
 		const SNodeGeom& g = m_Geom[i];
 		ImVec2 a = ToScreen(g.pos), b = ToScreen(Add(g.pos, g.size));
-		if (InRect(s, a, b)) return i;
+		if (InRect(p, a, b)) return i;
 	}
 	return -1;
 }
 
-int NqCanvas::HitNodeNear(const ImVec2& s, int except) const
+int NqCanvas::HitNodeNear(const ImVec2& p, int except) const
 {
 	const float r = PinGrab(), lim = r * r;
 	float best = FLT_MAX;
@@ -857,41 +1217,114 @@ int NqCanvas::HitNodeNear(const ImVec2& s, int except) const
 		if (i == except) continue;
 		const SNodeGeom& g = m_Geom[i];
 		ImVec2 a = ToScreen(g.pos), b = ToScreen(Add(g.pos, g.size));
-		float dx = s.x < a.x ? a.x - s.x : (s.x > b.x ? s.x - b.x : 0.f);
-		float dy = s.y < a.y ? a.y - s.y : (s.y > b.y ? s.y - b.y : 0.f);
+		float dx = p.x < a.x ? a.x - p.x : (p.x > b.x ? p.x - b.x : 0.f);
+		float dy = p.y < a.y ? a.y - p.y : (p.y > b.y ? p.y - b.y : 0.f);
 		float d = dx * dx + dy * dy;
 		if (d <= lim && d < best) { best = d; hit = i; }
 	}
 	return hit;
 }
 
-int NqCanvas::HitPin(int node, const ImVec2& s, float* out_d2) const
+int NqCanvas::HitPin(int node, const ImVec2& p, float* out_d2) const
 {
 	if (node < 0) return -1;
 	const SNodeGeom& g = m_Geom[node];
 	float best = FLT_MAX;
 	int hit = -1;
 	// pins of one node sit close together at low zoom, so the nearest one wins
-	for (u32 p = 0; p < g.pins.size(); ++p)
+	for (u32 i = 0; i < g.pins.size(); ++i)
 	{
 		float d2;
-		if (NearPin(s, ToScreen(OutputPin(g, (int)p)), -1.f, d2) && d2 < best) { best = d2; hit = (int)p; }
+		if (NearPin(p, ToScreen(OutputPin(g, (int)i)), -1.f, d2) && d2 < best) { best = d2; hit = (int)i; }
 	}
 	if (hit >= 0 && out_d2) *out_d2 = best;
 	return hit;
 }
 
-bool NqCanvas::HitAnyPin(const ImVec2& s, int& node, int& pin) const
+bool NqCanvas::HitAnyPin(const ImVec2& p, int& node, int& pin) const
 {
 	node = pin = -1;
 	float best = FLT_MAX;
 	for (int i = (int)m_Geom.size() - 1; i >= 0; --i)
 	{
 		float d2 = FLT_MAX;
-		int p = HitPin(i, s, &d2);
-		if (p >= 0 && d2 < best) { best = d2; node = i; pin = p; }
+		int hit = HitPin(i, p, &d2);
+		if (hit >= 0 && d2 < best) { best = d2; node = i; pin = hit; }
 	}
 	return pin >= 0;
+}
+
+bool NqCanvas::ActionAtRow(const SNqNode& n, int row, xr_string& slot, int& index) const
+{
+	if (row < 0) return false;
+	if (row < (int)n.on_enter.size()) { slot = "enter"; index = row; return true; }
+	row -= (int)n.on_enter.size();
+	if (row < (int)n.on_exit.size()) { slot = "exit"; index = row; return true; }
+	return false;
+}
+
+bool NqCanvas::HitAction(int node, const ImVec2& p, SActionHit& hit) const
+{
+	hit = SActionHit();
+	if (node < 0 || node >= (int)m_Geom.size() || Lod() < 2) return false;
+	const SNodeGeom& g = m_Geom[node];
+	if (!g.box.actions) return false;
+	const float s = Scale();
+	const ImVec2 a = ToScreen(g.pos);
+	if (p.x < a.x || p.x > a.x + g.size.x * s) return false;
+	const float y0 = a.y + g.box.actions_y * s;
+	const int rows = g.box.action_rows + (g.box.more ? 1 : 0);
+	if (p.y < y0) return false;
+	const int r = (int)floorf((p.y - y0) / (NqLayout::kActionRow * s));
+	if (r < 0 || r >= rows) return false;
+	hit.node = node;
+	hit.row = r;
+	if (r >= g.box.action_rows) { hit.more = true; return true; }
+	return ActionAtRow(m_Doc->quest.nodes[node], r, hit.slot, hit.index);
+}
+
+bool NqCanvas::HitHeader(int node, const ImVec2& p) const
+{
+	if (node < 0 || node >= (int)m_Geom.size()) return false;
+	const SNodeGeom& g = m_Geom[node];
+	const ImVec2 a = ToScreen(g.pos);
+	const ImVec2 b(a.x + g.size.x * Scale(), a.y + NqLayout::kHeader * Scale());
+	return InRect(p, a, b);
+}
+
+bool NqCanvas::DropTarget(const ImVec2& p, int& node, xr_string& slot, int& index, float* line_y) const
+{
+	node = HitNode(p);
+	if (node < 0 || m_Geom[node].trigger || Lod() < 2) return false;
+	const SNqNode& n = m_Doc->quest.nodes[node];
+	const SNodeGeom& g = m_Geom[node];
+	const float s = Scale();
+	const ImVec2 a = ToScreen(g.pos);
+	// the header takes it as the node's last on_enter action
+	if (HitHeader(node, p))
+	{
+		slot = "enter";
+		index = (int)n.on_enter.size();
+		if (line_y) *line_y = a.y + NqLayout::kHeader * s;
+		return true;
+	}
+	SActionHit hit;
+	if (!HitAction(node, p, hit)) return false;
+	const float top = a.y + (g.box.actions_y + NqLayout::kActionRow * float(hit.row)) * s;
+	if (hit.more)
+	{
+		slot = n.on_exit.empty() ? "enter" : "exit";
+		index = (int)(slot == "exit" ? n.on_exit.size() : n.on_enter.size());
+		if (line_y) *line_y = top;
+		return true;
+	}
+	slot = hit.slot;
+	index = hit.index;
+	float line = top;
+	// the lower half of a row puts it after that row
+	if (p.y > top + NqLayout::kActionRow * s * 0.5f) { ++index; line = top + NqLayout::kActionRow * s; }
+	if (line_y) *line_y = line;
+	return true;
 }
 
 // pin under the cursor, for the hover highlight. While a link is in the air the
@@ -900,6 +1333,7 @@ bool NqCanvas::HitAnyPin(const ImVec2& s, int& node, int& pin) const
 void NqCanvas::UpdateHot()
 {
 	m_HotNode = m_HotPin = m_HotLink = -1;
+	m_HotAction = SActionHit();
 	// A menu is a mode: while one is open the cursor is aimed at it, and lighting up
 	// whatever happens to be under it - let alone letting D delete that - is not what
 	// the author is doing.
@@ -913,7 +1347,7 @@ void NqCanvas::UpdateHot()
 		if (node >= 0 && node != from && !m_Geom[node].trigger) m_HotNode = node;
 		return;
 	}
-	if (m_Dragging || m_Marquee || m_Panning) return;
+	if (m_Dragging || m_Marquee || m_Panning || m_ActDragging) return;
 	float best = FLT_MAX;
 	for (int i = (int)m_Geom.size() - 1; i >= 0; --i)
 	{
@@ -923,8 +1357,10 @@ void NqCanvas::UpdateHot()
 		if (p >= 0 && d2 < best) { best = d2; m_HotNode = i; m_HotPin = p; }
 		if (!g.trigger && NearPin(mouse, ToScreen(InputPin(g)), 1.f, d2) && d2 < best) { best = d2; m_HotNode = i; m_HotPin = -1; }
 	}
+	const int over = HitNode(mouse);
+	if (m_HotNode < 0 && over >= 0) HitAction(over, mouse, m_HotAction);
 	// a pin wins over a link it starts from, and a node body swallows the wires behind it
-	if (m_HotNode < 0 && HitNode(mouse) < 0) m_HotLink = HitLink(mouse);
+	if (m_HotNode < 0 && over < 0) m_HotLink = HitLink(mouse);
 }
 
 // True while any popup of this canvas is up. Every shortcut and every hover cue is
@@ -935,50 +1371,30 @@ bool NqCanvas::MenuOpen() const
 	return ImGui::IsPopupOpen(0, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
-bool NqCanvas::HitChip(int node, const ImVec2& s, xr_string& slot, int& index, bool& plus) const
-{
-	if (node < 0) return false;
-	const SNodeGeom& g = m_Geom[node];
-	if (g.trigger || Zoom() < 0.5f) return false;
-	float z = Zoom();
-	ImVec2 tl = ToScreen(g.pos);
-	float chip = kChipW * z, pad = kChipPad * z, row_h = NqLayout::kChipStrip * z;
-	const int per_row = NqLayout::ChipsPerRow();
-	for (int pass = 0; pass < 2; ++pass)
-	{
-		const float strip = (pass == 0 ? g.enter_h : g.exit_h) * z;
-		float y0 = pass == 0 ? tl.y : tl.y + g.size.y * z - strip;
-		if (s.y < y0 || s.y > y0 + strip) continue;
-		int count = pass == 0 ? g.enter_n : g.exit_n;
-		for (int i = 0; i <= count; ++i)
-		{
-			const float x = tl.x + pad + float(i % per_row) * (chip + pad);
-			const float y = y0 + float(i / per_row) * row_h;
-			if (s.x >= x && s.x <= x + chip && s.y >= y && s.y <= y + row_h)
-			{
-				slot = pass == 0 ? "enter" : "exit";
-				index = i; plus = (i == count);
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-int NqCanvas::HitLink(const ImVec2& s) const
+int NqCanvas::HitLink(const ImVec2& p) const
 {
 	// the curve is one to four pixels thick: half of it plus the same slack a pin gets
-	const float r = kLinkGrab * UiScale() + _max(1.f, 2.f * Zoom()) * 0.5f;
+	const float r = XUI::Pt(kLinkGrab) + _max(1.f, 2.f * Scale()) * 0.5f;
 	float best = r * r;		// squared pixels
 	int hit = -1;
 	for (u32 i = 0; i < m_Links.size(); ++i)
 	{
 		const SLinkGeom& l = m_Links[i];
+		if (p.x < l.bmin.x - r || p.y < l.bmin.y - r || p.x > l.bmax.x + r || p.y > l.bmax.y + r) continue;
+		if (!l.path.empty())
+		{
+			for (u32 k = 1; k < l.path.size(); ++k)
+			{
+				const float d = SegDist2(p, l.path[k - 1], l.path[k]);
+				if (d < best) { best = d; hit = (int)i; }
+			}
+			continue;
+		}
 		ImVec2 prev = l.p0;
 		for (int k = 1; k <= 16; ++k)
 		{
 			ImVec2 cur = Bezier(l.p0, l.p1, l.p2, l.p3, k / 16.f);
-			float d = SegDist2(s, prev, cur);
+			float d = SegDist2(p, prev, cur);
 			if (d < best) { best = d; hit = (int)i; }
 			prev = cur;
 		}
@@ -1002,50 +1418,40 @@ int NqCanvas::Severity(LPCSTR node_id) const
 	return sev;
 }
 
-void NqCanvas::ProblemTooltip(LPCSTR node_id) const
+xr_string NqCanvas::ProblemText(LPCSTR node_id) const
 {
-	ImGui::BeginTooltip();
+	xr_string text;
 	for (u32 i = 0; i < m_Doc->problems.size(); ++i)
 		if (m_Doc->problems[i].node_id == node_id)
-			ImGui::TextUnformatted(m_Doc->problems[i].Text().c_str());
-	ImGui::EndTooltip();
+		{
+			if (!text.empty()) text += "\n";
+			text += m_Doc->problems[i].Text();
+		}
+	return text;
 }
 
-void NqCanvas::ChipTooltip(const SNqAction& a) const
+xr_string NqCanvas::ActionText(const SNqAction& a, LPCSTR slot, int index) const
 {
-	const NqCatalog::SKind* k = NqCatalog::Find(a.kind.c_str());
-	ImGui::BeginTooltip();
-	ImGui::TextUnformatted(k ? k->title.c_str() : a.kind.c_str());
-	ImGui::TextDisabled("%s", a.kind.c_str());
-	xr_string sum = NqText::ValueSummary(a.params, 96);
-	if (!sum.empty()) ImGui::TextUnformatted(sum.c_str());
-	ImGui::EndTooltip();
+	xr_string text = NqUtil::Format("%s %d: %s", 0 == strcmp(slot, "exit") ? "On exit" : "On enter", index + 1,
+		NqLook::KindTitle(a.kind.c_str(), Behaviour()).c_str());
+	const xr_string sum = NqText::ValueSummary(a.params, 96);
+	if (!sum.empty() && sum != "{}") { text += "\n"; text += sum; }
+	text += "\nDouble-click to edit it, drag to move it";
+	return text;
 }
 
 xr_string NqCanvas::NodeTitle(const SNqNode& n) const
 {
-	const NqCatalog::SKind* k = NqCatalog::Find(n.kind.c_str());
-	return k ? k->title : n.kind;
+	return NqLook::KindTitle(n.kind.c_str(), Behaviour());
 }
 
 xr_string NqCanvas::NodeSummary(const SNqNode& n) const
 {
-	// the one thing an author wants to see on the box: the text, the NPC, the target...
-	static LPCSTR keys[] = { "text", "npc", "target", "section", "place", "duration", "quest", "task", "name", "status", 0 };
-	for (int i = 0; keys[i]; ++i)
-	{
-		const SNqValue* v = n.params.Get(keys[i]);
-		if (!v || v->IsNil()) continue;
-		xr_string s = (0 == strcmp(keys[i], "text")) ? NqText::Preview(*v) : NqText::RefSummary(*v);
-		if (s.empty()) s = NqText::ValueSummary(*v, 40);
-		return NqUtil::ClipUtf8(s, 40);
-	}
-	return "";
-}
-
-ImU32 NqCanvas::NodeColor(const SNqNode& n, bool) const
-{
-	return FamilyColor(n.kind.c_str());
+	// what the box says at a glance: its first line
+	const int index = m_Doc->quest.NodeIndex(n.id.c_str());
+	if (index < 0 || index >= (int)m_Geom.size() || m_Geom[index].lines.empty()) return xr_string();
+	const NqLayout::SLine& line = m_Geom[index].lines[0];
+	return line.key + (line.cond.empty() ? ": " : " ") + NqUtil::ClipUtf8(line.value, 64);
 }
 
 //------------------------------------------------------------------------------
@@ -1053,9 +1459,9 @@ ImU32 NqCanvas::NodeColor(const SNqNode& n, bool) const
 //------------------------------------------------------------------------------
 void NqCanvas::DrawGrid(ImDrawList* dl)
 {
-	float z = Zoom();
-	float step = NqLayout::kGrid * 4.f * z;
-	while (step < 24.f) step *= 2.f;
+	const float s = Scale();
+	float step = NqLayout::kGrid * 4.f * s;
+	while (step < XUI::Pt(24.f)) step *= 2.f;
 	// the pattern is anchored on the projection of the world origin (fmodf of a
 	// negative offset shifts it)
 	ImVec2 o = ToScreen(ImVec2(0, 0));
@@ -1067,7 +1473,7 @@ void NqCanvas::DrawGrid(ImDrawList* dl)
 	const int nx = int(m_Size.x / step) + 2, ny = int(m_Size.y / step) + 2;
 	const int kMaxLines = 4096;
 	if (nx < 1 || ny < 1 || nx > kMaxLines || ny > kMaxLines) return;
-	ImU32 col = Col(255, 255, 255, 14);
+	const ImU32 col = C(T::BorderSubtle, 0.45f);
 	const float x1 = m_Origin.x + m_Size.x, y1 = m_Origin.y + m_Size.y;
 	for (int i = 0; i < nx; ++i)
 	{
@@ -1085,77 +1491,113 @@ void NqCanvas::DrawGrid(ImDrawList* dl)
 
 void NqCanvas::DrawLinks(ImDrawList* dl)
 {
-	float z = Zoom();
-	float th = _max(1.f, 2.f * z);
+	const float s = Scale();
+	const float base = _max(1.f, 2.f * s);
 	for (u32 i = 0; i < m_Links.size(); ++i)
 	{
 		const SLinkGeom& l = m_Links[i];
-		// A Bezier curve stays inside the convex hull of its control points, so
-		// this padded control-point bound cannot cull a visible wire.
-		const float pad = _max(th, _max(4.f, 7.f * z));
-		const float min_x = _min(_min(l.p0.x, l.p1.x), _min(l.p2.x, l.p3.x)) - pad;
-		const float min_y = _min(_min(l.p0.y, l.p1.y), _min(l.p2.y, l.p3.y)) - pad;
-		const float max_x = _max(_max(l.p0.x, l.p1.x), _max(l.p2.x, l.p3.x)) + pad;
-		const float max_y = _max(_max(l.p0.y, l.p1.y), _max(l.p2.y, l.p3.y)) + pad;
-		if (max_x < m_Origin.x || max_y < m_Origin.y || min_x > m_Origin.x + m_Size.x || min_y > m_Origin.y + m_Size.y) continue;
-		bool sel = IsSelected(m_Doc->quest.nodes[l.from].id.c_str()) || IsSelected(m_Doc->quest.nodes[l.to].id.c_str());
+		// the bounds hold the whole shape (a bezier's control-point hull), padded by the
+		// line and the arrow: nothing visible is culled
+		const float pad = _max(base, _max(4.f, 7.f * s));
+		if (l.bmax.x + pad < m_Origin.x || l.bmax.y + pad < m_Origin.y || l.bmin.x - pad > m_Origin.x + m_Size.x || l.bmin.y - pad > m_Origin.y + m_Size.y) continue;
+		const bool sel = IsSelected(m_Doc->quest.nodes[l.from].id.c_str()) || IsSelected(m_Doc->quest.nodes[l.to].id.c_str());
 		const bool hot = ((int)i == m_HotLink);
-		ImU32 col = hot ? Col(255, 255, 255) : sel ? Col(255, 220, 120) : Col(200, 200, 205, 200);
+		const ImU32 col = hot ? C(T::Text) : sel ? C(T::AccentBright) : C(T::TextMuted);
+		float th = base;
 		// The wire the cursor has claimed says so before anything is clicked: Alt+LMB
 		// and D act on THIS one, and the author gets to see which that is. A halo
 		// under a fatter line reads at every zoom, where a colour change alone does not.
+		auto stroke = [&](ImU32 c, float w)
+		{
+			if (l.path.empty()) dl->AddBezierCubic(l.p0, l.p1, l.p2, l.p3, c, w, 24);
+			else dl->AddPolyline(l.path.data(), (int)l.path.size(), c, ImDrawFlags_None, w);
+		};
 		if (hot)
 		{
-			dl->AddBezierCubic(l.p0, l.p1, l.p2, l.p3, Col(120, 190, 255, 110), th * 3.5f + 2.f, 24);
+			stroke(C(T::AccentBright, 0.35f), th * 3.5f + 2.f);
 			th *= 1.8f;
 		}
-		dl->AddBezierCubic(l.p0, l.p1, l.p2, l.p3, col, th, 24);
-		// arrow head at the target
-		float a = _max(4.f, 7.f * z) * (hot ? 1.35f : 1.f);
-		dl->AddTriangleFilled(l.p3, ImVec2(l.p3.x - a * 0.6f, l.p3.y - a), ImVec2(l.p3.x + a * 0.6f, l.p3.y - a), col);
-		th = _max(1.f, 2.f * z);		// `hot` widened it for this wire only
+		stroke(col, th);
+		// arrow head at the target, along the last piece of the wire: a routed edge slants in
+		const float a = _max(4.f, 7.f * s) * (hot ? 1.35f : 1.f);
+		ImVec2 dir(0.f, 1.f);
+		if (l.path.size() >= 2)
+		{
+			const ImVec2 d = Sub(l.p3, l.path[l.path.size() - 2]);
+			const float len = sqrtf(d.x * d.x + d.y * d.y);
+			if (len > 0.001f) dir = ImVec2(d.x / len, d.y / len);
+		}
+		const ImVec2 base(l.p3.x - dir.x * a, l.p3.y - dir.y * a);
+		const ImVec2 half(-dir.y * a * 0.6f, dir.x * a * 0.6f);
+		dl->AddTriangleFilled(l.p3, Add(base, half), Sub(base, half), col);
 	}
 }
 
-void NqCanvas::DrawChipStrip(ImDrawList* dl, int index, LPCSTR slot, const ImVec2& tl, float w)
+// The actions of a node, one row each: what it does, in words - a numbered chip said
+// nothing until it was hovered. Four rows, then "+N more": the node stays a card, and the
+// full list is one click away in the Details panel.
+void NqCanvas::DrawActions(ImDrawList* dl, int index, const ImVec2& a, float alpha)
 {
 	const SNqNode& n = m_Doc->quest.nodes[index];
-	const xr_vector<SNqAction>* acts = n.SlotC(slot);
-	float z = Zoom();
-	float chip = kChipW * z, pad = kChipPad * z, row_h = NqLayout::kChipStrip * z;
-	xr_string prefix = xr_string(slot) + ":";
-	int count = acts ? (int)acts->size() : 0;
-	const int per_row = NqLayout::ChipsPerRow();
-	const float h = NqLayout::StripHeight(count) * z;
-	ImFont* font = ImGui::GetFont();
-	float fs = kFontBase * z * 0.85f;
-	// while an action is in the air this strip says whether it would land here, and
-	// exactly between which two chips - a drag across nodes is otherwise a guess
-	const ImVec2 mouse = ImGui::GetIO().MousePos;
-	const bool drop_here = m_ChipDragging
-		&& mouse.y >= tl.y && mouse.y <= tl.y + h && mouse.x >= tl.x && mouse.x <= tl.x + w;
-	if (drop_here)
-		dl->AddRect(ImVec2(tl.x, tl.y), ImVec2(tl.x + w, tl.y + h), Col(120, 200, 255, 140), 3.f * z, 0, 1.5f * z);
+	const SNodeGeom& g = m_Geom[index];
+	const float s = Scale();
+	const float w = g.size.x * s;
+	const float row_h = NqLayout::kActionRow * s;
+	const float y0 = a.y + g.box.actions_y * s;
+	const float inset = kInset * s;
+	ImFont* body = Face(XUI::Font::Body);
+	ImFont* sface = Face(XUI::Font::Small);
+	const float line_px = Round(kLinePt * s), small_px = Round(kSmallPt * s);
+	const bool node_selected = IsSelected(n.id.c_str()) && m_Doc->selection.size() == 1;
 
-	for (int i = 0; i <= count; ++i)
+	if (g.box.lines)
+		dl->AddLine(ImVec2(a.x + inset, y0 - NqLayout::kPad * 0.5f * s), ImVec2(a.x + w - inset, y0 - NqLayout::kPad * 0.5f * s),
+			C(T::BorderSubtle, alpha));
+	for (int r = 0; r < g.box.action_rows; ++r)
 	{
-		// eight to a row, the ninth starts the next one
-		const float x = tl.x + pad + float(i % per_row) * (chip + pad);
-		const float y = tl.y + float(i / per_row) * row_h;
-		ImVec2 a(x, y + pad * 0.5f), b(x + chip, y + row_h - pad * 0.5f);
-		bool plus = (i == count);
-		bool selected = !plus && m_Doc->sel_slot == prefix + NqUtil::Format("%d", i);
-		bool dragging = !plus && m_ChipDragging && m_ChipDragIndex == i && m_ChipDragSlot == slot && m_ChipDragNode == n.id;
-		if (drop_here && mouse.x >= a.x - pad && mouse.x <= b.x && mouse.y >= y && mouse.y <= y + row_h)
-			dl->AddRectFilled(ImVec2(a.x - pad * 0.5f, a.y), ImVec2(a.x - pad * 0.5f + _max(2.f, 2.f * z), b.y),
-				Col(120, 200, 255, 230));
-		ImU32 bg = plus ? Col(255, 255, 255, 28) : (selected ? Col(255, 210, 90, 220) : Col(255, 255, 255, 60));
-		if (dragging) bg = Col(120, 200, 255, 220);
-		dl->AddRectFilled(a, b, bg, 3.f * z);
-		char label[16];
-		if (plus) xr_strcpy(label, "+"); else xr_sprintf(label, "%d", i + 1);
-		ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.f, label);
-		dl->AddText(font, fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), plus ? Col(230, 230, 230, 160) : Col(20, 20, 20), label);
+		xr_string slot; int idx = 0;
+		if (!ActionAtRow(n, r, slot, idx)) break;
+		const SNqAction& act = (slot == "enter") ? n.on_enter[idx] : n.on_exit[idx];
+		const ImVec2 ra(a.x + 3.f * s, y0 + row_h * r), rb(a.x + w - 3.f * s, y0 + row_h * (r + 1));
+		const bool selected = node_selected && m_Doc->sel_slot == slot + ":" + NqUtil::Format("%d", idx);
+		const bool hot = m_HotAction.node == index && m_HotAction.row == r && !m_HotAction.more;
+		const bool dragged = m_ActDragging && m_ActDragNode == n.id && m_ActDragSlot == slot && m_ActDragIndex == idx;
+		if (selected)		dl->AddRectFilled(ra, rb, C(T::SelectionFocused, alpha), 3.f * s);
+		else if (hot)		dl->AddRectFilled(ra, rb, C(T::Hover, alpha), 3.f * s);
+		if (dragged)		dl->AddRect(ra, rb, C(T::AccentBright, alpha), 3.f * s, 0, _max(1.f, 1.5f * s));
+
+		float x = a.x + inset;
+		const float icon = 14.f * s;
+		const float cy = (ra.y + rb.y) * 0.5f;
+		XUI::DrawIconRect(dl, NqLook::KindIcon(act.kind.c_str()), ImVec2(x, cy - icon * 0.5f), ImVec2(x + icon, cy + icon * 0.5f),
+			NqLook::FamilyColor(act.kind.c_str(), alpha));
+		x += icon + 6.f * s;
+		float right = a.x + w - inset;
+		// on_exit rows say so; on_enter is what an action usually is
+		if (slot == "exit")
+		{
+			const float tw = TextW(sface, small_px, "exit");
+			dl->AddText(sface, small_px, ImVec2(Round(right - tw), Round(cy - small_px * 0.5f)), C(T::TextMuted, alpha), "exit");
+			right -= tw + 6.f * s;
+		}
+		const xr_string title = NqLook::KindTitle(act.kind.c_str(), Behaviour());
+		const float tw = PaintFit(dl, body, line_px, ImVec2(x, cy - line_px * 0.5f), C(T::Text, alpha), title.c_str(), right - x);
+		// what it acts on, when there is room for it
+		const float sx = x + tw + 6.f * s;
+		if (right - sx > line_px * 3.f)
+		{
+			xr_string sum = NqText::ValueSummary(act.params, 64);
+			if (sum == "{}") sum.clear();
+			PaintFit(dl, body, line_px, ImVec2(sx, cy - line_px * 0.5f), C(T::TextMuted, alpha), sum.c_str(), right - sx);
+		}
+	}
+	if (g.box.more)
+	{
+		const float top = y0 + row_h * g.box.action_rows;
+		const bool hot = m_HotAction.node == index && m_HotAction.more;
+		if (hot) dl->AddRectFilled(ImVec2(a.x + 3.f * s, top), ImVec2(a.x + w - 3.f * s, top + row_h), C(T::Hover, alpha), 3.f * s);
+		const xr_string more = NqUtil::Format("+%d more", g.box.actions - g.box.action_rows);
+		dl->AddText(sface, small_px, ImVec2(Round(a.x + inset), Round(top + (row_h - small_px) * 0.5f)), C(T::TextSecondary, alpha), more.c_str());
 	}
 }
 
@@ -1163,121 +1605,170 @@ void NqCanvas::DrawNode(ImDrawList* dl, int index)
 {
 	const SNqNode& n = m_Doc->quest.nodes[index];
 	const SNodeGeom& g = m_Geom[index];
-	float z = Zoom();
-	ImVec2 a = ToScreen(g.pos), b = ToScreen(Add(g.pos, g.size));
+	const float s = Scale();
+	const ImVec2 a = ToScreen(g.pos), b = ToScreen(Add(g.pos, g.size));
 	// off-screen culling
 	if (b.x < m_Origin.x || b.y < m_Origin.y || a.x > m_Origin.x + m_Size.x || a.y > m_Origin.y + m_Size.y) return;
 
-	bool selected = IsSelected(n.id.c_str());
-	bool reachable = index < (int)m_Reachable.size() ? m_Reachable[index] : true;
-	ImU32 fam = NodeColor(n, selected);
-	if (!reachable) fam = (fam & 0x00FFFFFF) | 0x60000000;
-	ImU32 body = reachable ? Col(46, 46, 50, 240) : Col(46, 46, 50, 140);
-	ImU32 outline = selected ? Col(255, 255, 255) : Col(20, 20, 20, 200);
-	float round = 6.f * z;
-	ImFont* font = ImGui::GetFont();
-	float fs = kFontBase * z;
+	const bool selected = IsSelected(n.id.c_str());
+	const bool reachable = index < (int)m_Reachable.size() ? m_Reachable[index] : true;
+	// an unreachable node is dimmed, never hidden: it is still the author's to wire
+	const float alpha = reachable ? 1.f : 0.45f;
+	const int lod = Lod();
+	const float header = NqLayout::kHeader * s;
+	const float round = (g.trigger ? NqLayout::kHeader * 0.5f : 6.f) * s;
+	const bool header_only = g.box.h <= NqLayout::kHeader + NqLayout::kPad + 0.5f;
+	const ImDrawFlags head_corners = header_only ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersTop;
+	// a node with nothing under its header is all header
+	const ImVec2 hb(b.x, header_only ? b.y : a.y + header);
 
-	if (g.trigger)
+	// the card: body, header tinted by the kind's family, and the family line under it
+	dl->AddRectFilled(a, b, C(T::Raised, alpha), round);
+	dl->AddRectFilled(a, hb, C(T::Hover, alpha), round, head_corners);
+	dl->AddRectFilled(a, hb, NqLook::FamilyColor(n.kind.c_str(), 0.20f * alpha), round, head_corners);
+	if (!header_only)
+		dl->AddLine(ImVec2(a.x + round * 0.5f, hb.y), ImVec2(b.x - round * 0.5f, hb.y), NqLook::FamilyColor(n.kind.c_str(), alpha), _max(1.f, 2.f * s));
+
+	if (lod >= 1)
 	{
-		// oval "T · <kind>"
-		ImVec2 c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
-		float rx = (b.x - a.x) * 0.5f, ry = (b.y - a.y) * 0.5f;
-		AddOval(dl, c, rx, ry, fam, true, 0.f);
-		AddOval(dl, c, rx, ry, outline, false, selected ? 2.5f : 1.5f);
-		if (z >= 0.3f)
+		const float inset = kInset * s;
+		const float title_px = TitlePx();
+		const float small_px = Round(kSmallPt * s);
+		ImFont* strong = Face(XUI::Font::Strong);
+		ImFont* sface = Face(XUI::Font::Small);
+		const float cy = a.y + header * 0.5f;
+		float x = a.x + inset;
+		float right = b.x - inset;
+		if (lod == 2)
 		{
-			xr_string label = "T  " + NodeTitle(n);
-			ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.f, label.c_str());
-			dl->AddText(font, fs, ImVec2(c.x - ts.x * 0.5f, c.y - ts.y - 1.f), Col(255, 255, 255), label.c_str());
-			ImVec2 is = font->CalcTextSizeA(fs * 0.8f, FLT_MAX, 0.f, n.id.c_str());
-			dl->AddText(font, fs * 0.8f, ImVec2(c.x - is.x * 0.5f, c.y + 1.f), Col(220, 220, 220, 200), n.id.c_str());
+			const float icon = 16.f * s;
+			XUI::DrawIconRect(dl, NqLook::KindIcon(n.kind.c_str()), ImVec2(x, cy - icon * 0.5f), ImVec2(x + icon, cy + icon * 0.5f),
+				NqLook::FamilyColor(n.kind.c_str(), alpha));
+			x += icon + 6.f * s;
+
+			// badges from the right: problems, the bookmark, "once"
+			const float badge = 14.f * s;
+			const int sev = Severity(n.id.c_str());
+			if (sev)
+			{
+				const ImVec2 bm(right - badge, cy - badge * 0.5f);
+				XUI::DrawIconRect(dl, sev == 2 ? XUI::Icon::Error : XUI::Icon::Warning, bm, Add(bm, ImVec2(badge, badge)),
+					C(sev == 2 ? T::Error : T::Warning, alpha));
+				if (m_Hovered && InRect(ImGui::GetMousePos(), bm, Add(bm, ImVec2(badge, badge)))) m_TipNext = ProblemText(n.id.c_str());
+				right -= badge + 4.f * s;
+			}
+			if (IsBookmarked(n.id.c_str()))
+			{
+				const ImVec2 bm(right - badge, cy - badge * 0.5f);
+				XUI::DrawIconRect(dl, XUI::Icon::BookmarkFilled, bm, Add(bm, ImVec2(badge, badge)), C(T::AccentBright, alpha));
+				right -= badge + 4.f * s;
+			}
+			// `once` absent from the file means the catalog default applies
+			const NqCatalog::SKind* nk = NqCatalog::Find(n.kind.c_str());
+			if (!g.trigger && (n.once_set ? n.once : (nk && nk->once_default)))
+			{
+				const float tw = TextW(sface, small_px, "once");
+				dl->AddText(sface, small_px, ImVec2(Round(right - tw), Round(cy - small_px * 0.5f)), C(T::TextMuted, alpha), "once");
+				right -= tw + 6.f * s;
+			}
+			// the id gets what the title leaves, and never more than 40% of the row
+			const xr_string title = NodeTitle(n);
+			const float room = _max(0.f, right - x);
+			const float title_w = TextW(strong, title_px, title.c_str());
+			const float id_w = _min(TextW(sface, small_px, n.id.c_str()), _max(room - title_w - 8.f * s, room * 0.4f));
+			if (id_w > small_px * 1.5f)
+				PaintFit(dl, sface, small_px, ImVec2(right - id_w, cy - small_px * 0.5f), C(T::TextMuted, alpha), n.id.c_str(), id_w);
+			PaintFit(dl, strong, title_px, ImVec2(x, cy - title_px * 0.5f), C(T::Text, alpha), title.c_str(),
+				id_w > small_px * 1.5f ? room - id_w - 8.f * s : room);
 		}
+		else
+			PaintFit(dl, strong, title_px, ImVec2(x, cy - title_px * 0.5f), C(T::Text, alpha), NodeTitle(n).c_str(), right - x);
+	}
+
+	// the body: lines and actions in words at full detail, placeholder bars below it
+	if (lod == 2)
+	{
+		ImFont* body = Face(XUI::Font::Body);
+		const float line_px = Round(kLinePt * s);
+		const float inset = kInset * s;
+		for (int i = 0; i < g.box.lines && i < (int)g.lines.size(); ++i)
+		{
+			const NqLayout::SLine& line = g.lines[i];
+			const float ly = a.y + (g.box.lines_y + NqLayout::kLine * float(i)) * s + (NqLayout::kLine * s - line_px) * 0.5f;
+			// "+N more": no key, only the count
+			const float inner = g.size.x * s - inset * 2.f;
+			if (line.key.empty())
+			{
+				const float small_px = Round(kSmallPt * s);
+				PaintFit(dl, Face(XUI::Font::Small), small_px, ImVec2(a.x + inset, ly + (line_px - small_px) * 0.5f),
+					C(T::TextSecondary, alpha), line.value.c_str(), inner);
+				continue;
+			}
+			// a parameter reads "name: value", a condition "Title what" - a title may hold a colon of its own
+			const xr_string key = line.cond.empty() ? line.key + ":" : line.key;
+			const float kw = PaintFit(dl, body, line_px, ImVec2(a.x + inset, ly), C(T::TextMuted, alpha), key.c_str(),
+				line.value.empty() ? inner : inner * (line.cond.empty() ? 0.45f : 0.6f));
+			const float vx = a.x + inset + kw + 6.f * s;
+			PaintFit(dl, body, line_px, ImVec2(vx, ly), C(T::Text, alpha), line.value.c_str(), b.x - inset - vx);
+		}
+		if (g.box.actions) DrawActions(dl, index, a, alpha);
 	}
 	else
 	{
-		const float enter_h = g.enter_h * z, exit_h = g.exit_h * z;
-		dl->AddRectFilled(a, b, body, round);
-		// coloured body band between the strips
-		dl->AddRectFilled(ImVec2(a.x, a.y + enter_h), ImVec2(b.x, b.y - exit_h), fam);
-		if (z >= 0.5f)
+		const ImU32 bar = C(T::BorderSubtle, alpha);
+		const float inset = kInset * s;
+		for (int i = 0; i < g.box.lines; ++i)
 		{
-			DrawChipStrip(dl, index, "enter", a, b.x - a.x);
-			DrawChipStrip(dl, index, "exit", ImVec2(a.x, b.y - exit_h), b.x - a.x);
+			const float ly = a.y + (g.box.lines_y + NqLayout::kLine * (float(i) + 0.3f)) * s;
+			dl->AddRectFilled(ImVec2(a.x + inset, ly), ImVec2(a.x + inset + (g.size.x * s - inset * 2.f) * 0.6f, ly + NqLayout::kLine * 0.4f * s), bar, 2.f * s);
 		}
-		else
+		for (int i = 0; i < g.box.action_rows; ++i)
 		{
-			// LOD: strips as thin bars carrying the counts
-			ImU32 bar = Col(255, 255, 255, 40);
-			dl->AddRectFilled(a, ImVec2(b.x, a.y + enter_h), bar, round, ImDrawFlags_RoundCornersTop);
-			dl->AddRectFilled(ImVec2(a.x, b.y - exit_h), b, bar, round, ImDrawFlags_RoundCornersBottom);
-		}
-		dl->AddRect(a, b, outline, round, 0, selected ? 2.5f : 1.f);
-		if (z >= 0.3f)
-		{
-			float tx = a.x + 8.f * z, ty = a.y + enter_h + 5.f * z;
-			xr_string title = NodeTitle(n);
-			dl->AddText(font, fs, ImVec2(tx, ty), Col(255, 255, 255), title.c_str());
-			ImVec2 ts = font->CalcTextSizeA(fs * 0.8f, FLT_MAX, 0.f, n.id.c_str());
-			dl->AddText(font, fs * 0.8f, ImVec2(b.x - ts.x - 8.f * z, ty + 2.f * z), Col(230, 230, 230, 170), n.id.c_str());
-			if (z >= 0.5f)
-			{
-				xr_string sum = NodeSummary(n);
-				if (!sum.empty())
-					dl->AddText(font, fs * 0.9f, ImVec2(tx, ty + fs + 4.f * z), Col(235, 235, 235, 220), sum.c_str());
-				// `once` absent from the file means the catalog default applies
-				const NqCatalog::SKind* nk = NqCatalog::Find(n.kind.c_str());
-				if (n.once_set ? n.once : (nk && nk->once_default))
-					dl->AddText(font, fs * 0.8f, ImVec2(tx, b.y - exit_h - fs), Col(255, 230, 150, 200), "once");
-			}
+			const float ly = a.y + (g.box.actions_y + NqLayout::kActionRow * (float(i) + 0.3f)) * s;
+			dl->AddRectFilled(ImVec2(a.x + inset, ly), ImVec2(a.x + inset + (g.size.x * s - inset * 2.f) * 0.8f, ly + NqLayout::kActionRow * 0.4f * s), bar, 2.f * s);
 		}
 	}
 
-	// output pins with labels. A pin the cursor can grab grows and shows the halo
-	// of its grab zone: the zone is wider than the dot, and nothing else says so.
-	float pr = _max(3.f, kPinR * z);
-	float halo = PinGrab();
+	const bool hovered_node = m_Hovered && InRect(ImGui::GetMousePos(), a, b);
+	dl->AddRect(a, b, selected ? C(T::AccentBright) : hovered_node ? C(T::BorderStrong, alpha) : C(T::Border, alpha), round, 0,
+		selected ? _max(XUI::Pt(2.f), 1.f) : 1.f);
+
+	// the pins sit on the edges; their names are inside the node, where no wire runs
+	const float pr = _max(2.f, kPinR * s);
+	const float halo = PinGrab();
+	const float small_px = Round(kSmallPt * s);
+	ImFont* sface = Face(XUI::Font::Small);
+	// the pins are spread over the edge at w / (n + 1): that is the room each name has
+	const float slot_w = g.size.x * s / float(g.pins.size() + 1);
 	for (u32 p = 0; p < g.pins.size(); ++p)
 	{
-		ImVec2 c = ToScreen(OutputPin(g, (int)p));
-		bool hot = m_Linking && m_LinkFrom == n.id && m_LinkPin == g.pins[p];
-		bool over = m_HotNode == index && m_HotPin == (int)p;
-		if (over) dl->AddCircleFilled(c, halo, Col(255, 220, 120, 38), 16);
-		float r = over ? pr * 1.4f : pr;
-		dl->AddCircleFilled(c, r, (hot || over) ? Col(255, 220, 120) : Col(230, 230, 230), 12);
-		dl->AddCircle(c, r, Col(20, 20, 20), 12, 1.f);
-		if (z >= 0.5f && (g.pins.size() > 1 || g.pins[p] != "next"))
+		const ImVec2 c = ToScreen(OutputPin(g, (int)p));
+		const bool hot = m_Linking && m_LinkFrom == n.id && m_LinkPin == g.pins[p];
+		const bool over = m_HotNode == index && m_HotPin == (int)p;
+		if (lod == 2 && g.box.pin_labels)
 		{
-			ImVec2 ts = font->CalcTextSizeA(fs * 0.75f, FLT_MAX, 0.f, g.pins[p].c_str());
-			dl->AddText(font, fs * 0.75f, ImVec2(c.x - ts.x * 0.5f, c.y + pr + 1.f), Col(220, 220, 220, 210), g.pins[p].c_str());
+			xr_string shown;
+			if (!XUI::EllipsizeFace(sface, small_px, g.pins[p].c_str(), slot_w - 4.f * s, XUI::Clip::End, shown)) shown = g.pins[p];
+			const float tw = TextW(sface, small_px, shown.c_str());
+			const float ly = a.y + g.box.pins_y * s + (NqLayout::kPinRow * s - small_px) * 0.5f;
+			dl->AddText(sface, small_px, ImVec2(Round(c.x - tw * 0.5f), Round(ly)), (hot || over) ? C(T::AccentBright, alpha) : C(T::TextSecondary, alpha),
+				shown.c_str());
 		}
+		// a pin the cursor can grab grows and shows the halo of its grab zone: the zone
+		// is wider than the dot, and nothing else says so
+		if (over) dl->AddCircleFilled(c, halo, C(T::AccentBright, 0.15f), 16);
+		const float r = over ? pr * 1.4f : pr;
+		dl->AddCircleFilled(c, r, (hot || over) ? C(T::AccentBright) : C(T::TextSecondary, alpha), 12);
+		dl->AddCircle(c, r, C(T::Canvas), 12, 1.f);
 	}
-	// input pin
 	if (!g.trigger)
 	{
-		ImVec2 c = ToScreen(InputPin(g));
-		bool over = (m_HotNode == index && m_HotPin < 0);
-		if (over) dl->AddCircleFilled(c, halo, Col(255, 220, 120, 38), 16);
-		float r = over ? pr * 1.4f : pr;
-		dl->AddCircleFilled(c, r, over ? Col(255, 220, 120) : Col(200, 200, 200), 12);
-		dl->AddCircle(c, r, Col(20, 20, 20), 12, 1.f);
-	}
-	if (IsBookmarked(n.id.c_str()))
-	{
-		const float r = _max(3.f, 5.f * z);
-		const ImVec2 c(a.x + r + 3.f, a.y + r + 3.f);
-		dl->AddQuadFilled(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), Col(188, 139, 255));
-		dl->AddQuad(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r), ImVec2(c.x - r, c.y), Col(28, 22, 34), 1.f);
-	}
-	// problem badge
-	int sev = Severity(n.id.c_str());
-	if (sev)
-	{
-		float r = _max(4.f, 6.f * z);
-		ImVec2 c(b.x - r - 2.f, a.y + r + 2.f);
-		dl->AddCircleFilled(c, r, sev == 2 ? Col(230, 60, 60) : Col(240, 190, 50), 12);
-		if (m_Hovered && InRect(ImGui::GetMousePos(), ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r)))
-			ProblemTooltip(n.id.c_str());
+		const ImVec2 c = ToScreen(InputPin(g));
+		const bool over = (m_HotNode == index && m_HotPin < 0);
+		if (over) dl->AddCircleFilled(c, halo, C(T::AccentBright, 0.15f), 16);
+		const float r = over ? pr * 1.4f : pr;
+		dl->AddCircleFilled(c, r, over ? C(T::AccentBright) : C(T::TextSecondary, alpha), 12);
+		dl->AddCircle(c, r, C(T::Canvas), 12, 1.f);
 	}
 }
 
@@ -1286,8 +1777,8 @@ void NqCanvas::DrawMarquee(ImDrawList* dl)
 	if (!m_Marquee) return;
 	ImVec2 m = ImGui::GetMousePos();
 	ImVec2 a(_min(m.x, m_MarqueeFrom.x), _min(m.y, m_MarqueeFrom.y)), b(_max(m.x, m_MarqueeFrom.x), _max(m.y, m_MarqueeFrom.y));
-	dl->AddRectFilled(a, b, Col(120, 170, 255, 40));
-	dl->AddRect(a, b, Col(120, 170, 255, 200));
+	dl->AddRectFilled(a, b, C(T::AccentBright, 0.12f));
+	dl->AddRect(a, b, C(T::AccentBright, 0.8f));
 }
 
 void NqCanvas::DrawLinking(ImDrawList* dl)
@@ -1300,8 +1791,39 @@ void NqCanvas::DrawLinking(ImDrawList* dl)
 	for (u32 p = 0; p < g->pins.size(); ++p) if (g->pins[p] == m_LinkPin) { pin = (int)p; break; }
 	if (pin < 0) { m_Linking = false; return; }
 	ImVec2 p0 = ToScreen(OutputPin(*g, pin)), p3 = ImGui::GetMousePos();
-	float d = _max(kLinkTangent * Zoom(), fabsf(p3.y - p0.y) * 0.4f);
-	dl->AddBezierCubic(p0, ImVec2(p0.x, p0.y + d), ImVec2(p3.x, p3.y - d), p3, Col(255, 220, 120), 2.f, 24);
+	float d = _max(kLinkTangent * Scale(), fabsf(p3.y - p0.y) * 0.4f);
+	dl->AddBezierCubic(p0, ImVec2(p0.x, p0.y + d), ImVec2(p3.x, p3.y - d), p3, C(T::AccentBright), _max(1.f, XUI::Pt(2.f)), 24);
+}
+
+// the action being moved rides under the cursor, and the node it would land in shows where
+void NqCanvas::DrawActionDrag(ImDrawList* dl)
+{
+	if (!m_ActDragging) return;
+	const SNqNode* src = m_Doc->quest.FindNode(m_ActDragNode.c_str());
+	const xr_vector<SNqAction>* acts = src ? src->SlotC(m_ActDragSlot.c_str()) : 0;
+	if (!acts || m_ActDragIndex < 0 || m_ActDragIndex >= (int)acts->size()) return;
+	const SNqAction& act = (*acts)[m_ActDragIndex];
+	const ImVec2 m = ImGui::GetIO().MousePos;
+	int node = -1, index = 0; xr_string slot; float line = 0.f;
+	const bool ok = DropTarget(m, node, slot, index, &line);
+	if (ok)
+	{
+		const SNodeGeom& g = m_Geom[node];
+		const ImVec2 a = ToScreen(g.pos);
+		dl->AddLine(ImVec2(a.x + 4.f * Scale(), line), ImVec2(a.x + (g.size.x - 4.f) * Scale(), line), C(T::AccentBright), _max(2.f, XUI::Pt(2.f)));
+	}
+	// red over anything that is not a place for it: releasing there cancels the move
+	ImFont* body = Face(XUI::Font::Body);
+	const float px = Round(XUI::FontSize(XUI::Font::Body) * XUI::Dpi());
+	const xr_string title = NqLook::KindTitle(act.kind.c_str(), Behaviour());
+	const float w = _min(TextW(body, px, title.c_str()), XUI::Pt(200.f)) + XUI::Pt(34.f), h = XUI::Pt(24.f);
+	const ImVec2 pa(m.x + XUI::Pt(12.f), m.y + XUI::Pt(4.f)), pb(pa.x + w, pa.y + h);
+	dl->AddRectFilled(pa, pb, C(T::Overlay, 0.95f), XUI::Pt(4.f));
+	dl->AddRect(pa, pb, ok ? C(T::AccentBright) : C(T::Error), XUI::Pt(4.f), 0, _max(1.f, XUI::Pt(1.f)));
+	const float icon = XUI::Pt(14.f);
+	XUI::DrawIconRect(dl, NqLook::KindIcon(act.kind.c_str()), ImVec2(pa.x + XUI::Pt(6.f), pa.y + (h - icon) * 0.5f),
+		ImVec2(pa.x + XUI::Pt(6.f) + icon, pa.y + (h + icon) * 0.5f), NqLook::FamilyColor(act.kind.c_str()));
+	PaintFit(dl, body, px, ImVec2(pa.x + XUI::Pt(26.f), pa.y + (h - px) * 0.5f), C(T::Text), title.c_str(), w - XUI::Pt(32.f));
 }
 
 ImVec2 NqCanvas::MinimapToWorld(const ImVec2& screen) const
@@ -1313,18 +1835,29 @@ ImVec2 NqCanvas::MinimapToWorld(const ImVec2& screen) const
 		m_MinimapWorldMin.y + (y - m_MinimapMin.y) / m_MinimapScale);
 }
 
+// 180 x 120 pt in the bottom-right corner, and only for a graph big enough to get lost in:
+// a handful of nodes is its own minimap, and the box would only hide some of them.
 void NqCanvas::DrawMinimap(ImDrawList* dl)
 {
 	m_MinimapHovered = false;
-	if (!m_ShowMinimap || m_Size.x < 260.f || m_Size.y < 180.f || m_Geom.empty()) return;
+	m_MinimapShown = false;
+	const ImVec2 box_size(XUI::Pt(kMinimapW), XUI::Pt(kMinimapH));
+	const float margin = XUI::Pt(8.f);
+	if (!m_ShowMinimap || (int)m_Geom.size() < MinimapMinNodes()) return;
+	// the canvas keeps at least twice the box in each direction
+	if (m_Size.x < box_size.x * 2.f + margin * 2.f || m_Size.y < box_size.y * 2.f + margin * 2.f) return;
 
-	float min_x, min_y, max_x, max_y;
-	if (!GraphBounds(min_x, min_y, max_x, max_y)) return;
-	const float scale = UiScale();
-	const ImVec2 box_size(_min(220.f * scale, m_Size.x * 0.35f), _min(140.f * scale, m_Size.y * 0.32f));
-	const ImVec2 box_max(m_Origin.x + m_Size.x - 10.f * scale, m_Origin.y + m_Size.y - 10.f * scale);
+	// from the geometry this frame built: GraphBounds measures every node again
+	float min_x = FLT_MAX, min_y = FLT_MAX, max_x = -FLT_MAX, max_y = -FLT_MAX;
+	for (const SNodeGeom& g : m_Geom)
+	{
+		min_x = _min(min_x, g.pos.x); min_y = _min(min_y, g.pos.y);
+		max_x = _max(max_x, g.pos.x + g.size.x); max_y = _max(max_y, g.pos.y + g.size.y);
+	}
+	m_MinimapShown = true;
+	const ImVec2 box_max(m_Origin.x + m_Size.x - margin, m_Origin.y + m_Size.y - margin);
 	const ImVec2 box_min(box_max.x - box_size.x, box_max.y - box_size.y);
-	const float pad = 7.f * scale;
+	const float pad = XUI::Pt(6.f);
 	const ImVec2 available(_max(box_size.x - pad * 2.f, 8.f), _max(box_size.y - pad * 2.f, 8.f));
 
 	const float world_pad = NqLayout::kGrid * 2.f;
@@ -1337,8 +1870,8 @@ void NqCanvas::DrawMinimap(ImDrawList* dl)
 	m_MinimapMin = ImVec2(box_min.x + (box_size.x - fitted.x) * 0.5f, box_min.y + (box_size.y - fitted.y) * 0.5f);
 	m_MinimapMax = Add(m_MinimapMin, fitted);
 
-	dl->AddRectFilled(box_min, box_max, Col(20, 20, 24, 224), 5.f * scale);
-	dl->AddRect(box_min, box_max, Col(142, 96, 196, 210), 5.f * scale, 0, 1.f * scale);
+	dl->AddRectFilled(box_min, box_max, C(T::Overlay, 0.92f), XUI::Pt(6.f));
+	dl->AddRect(box_min, box_max, C(T::Border), XUI::Pt(6.f), 0, _max(1.f, XUI::Pt(1.f)));
 	auto map_point = [&](const ImVec2& world)
 	{
 		return ImVec2(m_MinimapMin.x + (world.x - m_MinimapWorldMin.x) * m_MinimapScale,
@@ -1357,35 +1890,135 @@ void NqCanvas::DrawMinimap(ImDrawList* dl)
 				if (target < 0 || target >= (int)m_Geom.size()) continue;
 				const SNodeGeom& target_geom = m_Geom[target];
 				const ImVec2 to = map_point(Add(target_geom.pos, ImVec2(target_geom.size.x * 0.5f, target_geom.size.y * 0.5f)));
-				dl->AddLine(from, to, Col(184, 184, 192, 105), _max(1.f, scale));
+				dl->AddLine(from, to, C(T::TextMuted, 0.5f), 1.f);
 			}
 	}
 
+	const float dot = _max(2.f, XUI::Pt(2.f));
 	for (u32 i = 0; i < m_Doc->quest.nodes.size(); ++i)
 	{
 		const SNqNode& node = m_Doc->quest.nodes[i];
 		const SNodeGeom& geom = m_Geom[i];
 		const ImVec2 a = map_point(geom.pos);
 		const ImVec2 b = map_point(Add(geom.pos, geom.size));
-		const ImVec2 visible_b(_max(b.x, a.x + 2.f * scale), _max(b.y, a.y + 2.f * scale));
-		dl->AddRectFilled(a, visible_b, FamilyColor(node.kind.c_str()), 1.f * scale);
-		if (IsSelected(node.id.c_str())) dl->AddRect(a, visible_b, Col(255, 255, 255, 235), 1.f * scale, 0, 1.5f * scale);
-		else if (IsBookmarked(node.id.c_str())) dl->AddRect(a, visible_b, Col(188, 139, 255, 235), 1.f * scale, 0, 1.5f * scale);
+		const ImVec2 visible_b(_max(b.x, a.x + dot), _max(b.y, a.y + dot));
+		dl->AddRectFilled(a, visible_b, NqLook::FamilyColor(node.kind.c_str(), 0.85f), 1.f);
+		if (IsSelected(node.id.c_str()))			dl->AddRect(a, visible_b, C(T::Text), 1.f, 0, _max(1.f, XUI::Pt(1.5f)));
+		else if (IsBookmarked(node.id.c_str()))	dl->AddRect(a, visible_b, C(T::AccentBright), 1.f, 0, _max(1.f, XUI::Pt(1.5f)));
 	}
 
-	const float z = Zoom();
-	const ImVec2 view_min(m_Doc->view_cx - m_Size.x / (2.f * z), m_Doc->view_cy - m_Size.y / (2.f * z));
-	const ImVec2 view_max(m_Doc->view_cx + m_Size.x / (2.f * z), m_Doc->view_cy + m_Size.y / (2.f * z));
+	const float s = Scale();
+	const ImVec2 view_min(m_Doc->view_cx - m_Size.x / (2.f * s), m_Doc->view_cy - m_Size.y / (2.f * s));
+	const ImVec2 view_max(m_Doc->view_cx + m_Size.x / (2.f * s), m_Doc->view_cy + m_Size.y / (2.f * s));
 	ImVec2 va = map_point(view_min), vb = map_point(view_max);
 	va.x = _max(m_MinimapMin.x, _min(va.x, m_MinimapMax.x));
 	va.y = _max(m_MinimapMin.y, _min(va.y, m_MinimapMax.y));
 	vb.x = _max(m_MinimapMin.x, _min(vb.x, m_MinimapMax.x));
 	vb.y = _max(m_MinimapMin.y, _min(vb.y, m_MinimapMax.y));
-	dl->AddRect(va, vb, Col(225, 205, 255, 240), 0.f, 0, _max(1.f, 1.5f * scale));
+	dl->AddRect(va, vb, C(T::AccentBright), 0.f, 0, _max(1.f, XUI::Pt(1.5f)));
 
 	m_MinimapHovered = m_Hovered && InRect(ImGui::GetMousePos(), box_min, box_max);
 	if (m_MinimapHovered && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-		ImGui::SetTooltip("Quest minimap - click or drag to navigate");
+		m_TipNext = "Minimap: click or drag to move the view";
+}
+
+// Where the graph goes on past the view, when no minimap says it: a pill at the middle of each edge with
+// the nodes wholly beyond it. A graph larger than the view looked finished at its edges otherwise - a small
+// one draws no minimap. The counts are kept either way, for quest_view `beyond`.
+void NqCanvas::DrawBeyond(ImDrawList* dl)
+{
+	m_BeyondHot = -1;
+	for (int s = 0; s < 4; ++s) { m_Beyond[s] = 0; m_BeyondNear[s] = -1; }
+	float x0, y0, x1, y1;
+	if (m_Geom.empty() || !ViewportBounds(x0, y0, x1, y1)) return;
+	// the nearest node past each edge: the one the least pan brings in
+	float nearest[4] = { -FLT_MAX, FLT_MAX, -FLT_MAX, FLT_MAX };
+	auto count = [&](int side, int node, bool beyond, float edge, bool larger)
+	{
+		if (!beyond) return;
+		++m_Beyond[side];
+		if (larger ? edge > nearest[side] : edge < nearest[side]) { nearest[side] = edge; m_BeyondNear[side] = node; }
+	};
+	for (u32 i = 0; i < m_Geom.size(); ++i)
+	{
+		const SNodeGeom& g = m_Geom[i];
+		const float top = g.pos.y, bottom = g.pos.y + g.size.y, left = g.pos.x, right = g.pos.x + g.size.x;
+		count(kAbove, (int)i, bottom <= y0, bottom, true);
+		count(kBelow, (int)i, top >= y1, top, false);
+		count(kLeft, (int)i, right <= x0, right, true);
+		count(kRight, (int)i, left >= x1, left, false);
+	}
+	if (m_MinimapShown) return;
+
+	static const XUI::Icon kIcons[4] = { XUI::Icon::ChevronUp, XUI::Icon::ChevronDown, XUI::Icon::ChevronLeft, XUI::Icon::ChevronRight };
+	static LPCSTR const kWhere[4] = { "above", "below", "left of", "right of" };
+	ImFont* face = Face(XUI::Font::Small);
+	const float px = Round(XUI::FontSize(XUI::Font::Small) * XUI::Dpi());
+	const float icon = XUI::Pt(12.f);
+	const ImVec2 pad(XUI::Pt(8.f), XUI::Pt(4.f));
+	const float inset = XUI::Pt(8.f);
+	const ImVec2 mouse = ImGui::GetMousePos();
+	for (int s = 0; s < 4; ++s)
+	{
+		if (!m_Beyond[s]) continue;
+		const xr_string text = NqUtil::Format("%d more", m_Beyond[s]);
+		const float h = Round(_max(px, icon) + pad.y * 2.f);
+		const float w = Round(pad.x + icon + XUI::Pt(4.f) + TextW(face, px, text.c_str()) + pad.x);
+		ImVec2 a;
+		if (s == kAbove)		a = ImVec2(m_Origin.x + (m_Size.x - w) * 0.5f, m_Origin.y + inset);
+		else if (s == kBelow)	a = ImVec2(m_Origin.x + (m_Size.x - w) * 0.5f, m_Origin.y + m_Size.y - inset - h);
+		else if (s == kLeft)	a = ImVec2(m_Origin.x + inset, m_Origin.y + (m_Size.y - h) * 0.5f);
+		else					a = ImVec2(m_Origin.x + m_Size.x - inset - w, m_Origin.y + (m_Size.y - h) * 0.5f);
+		a = ImVec2(Round(a.x), Round(a.y));
+		const ImVec2 b(a.x + w, a.y + h);
+		const bool hot = m_Hovered && InRect(mouse, a, b);
+		if (hot) m_BeyondHot = s;
+		dl->AddRectFilled(a, b, C(T::Overlay, 0.92f), XUI::Pt(6.f));
+		if (hot) dl->AddRectFilled(a, b, C(T::Hover), XUI::Pt(6.f));
+		dl->AddRect(a, b, C(T::BorderSubtle), XUI::Pt(6.f));
+		XUI::DrawIconRect(dl, kIcons[s], ImVec2(a.x + pad.x, a.y + (h - icon) * 0.5f), ImVec2(a.x + pad.x + icon, a.y + (h + icon) * 0.5f), C(T::TextSecondary));
+		dl->AddText(face, px, ImVec2(Round(a.x + pad.x + icon + XUI::Pt(4.f)), Round(a.y + (h - px) * 0.5f)), C(T::TextSecondary), text.c_str());
+		if (hot)
+			m_TipNext = NqUtil::Format("%d %s %s the view. Click to bring the nearest one in",
+				m_Beyond[s], m_Beyond[s] == 1 ? "node" : "nodes", kWhere[s]);
+	}
+}
+
+void NqCanvas::RevealBeyond(int side)
+{
+	const int i = side >= 0 && side < 4 ? m_BeyondNear[side] : -1;
+	float x0, y0, x1, y1;
+	if (i < 0 || i >= (int)m_Geom.size() || !ViewportBounds(x0, y0, x1, y1)) return;
+	const SNodeGeom& g = m_Geom[i];
+	const float m = kFrameMargin;
+	float dx = 0.f, dy = 0.f;
+	// the whole node with the frame margin; a node larger than the view shows its top or left end
+	if (side == kAbove)			dy = g.pos.y - m - y0;
+	else if (side == kBelow)	dy = _min(g.pos.y + g.size.y + m - y1, g.pos.y - m - y0);
+	else if (side == kLeft)		dx = g.pos.x - m - x0;
+	else						dx = _min(g.pos.x + g.size.x + m - x1, g.pos.x - m - x0);
+	RememberView();
+	CancelFraming();
+	m_Doc->view_cx = NqLayout::Sane(m_Doc->view_cx + dx);
+	m_Doc->view_cy = NqLayout::Sane(m_Doc->view_cy + dy);
+}
+
+// what the last gesture did, or why it did nothing: a pill at the top of the canvas for a
+// moment, never a modal - and the log keeps it for a run without a screen
+void NqCanvas::DrawStatus(ImDrawList* dl)
+{
+	if (m_Status.empty()) return;
+	if (ImGui::GetTime() - m_StatusAt > 2.5) { m_Status.clear(); return; }
+	ImFont* body = Face(XUI::Font::Body);
+	const float px = Round(XUI::FontSize(XUI::Font::Body) * XUI::Dpi());
+	xr_string shown;
+	if (!XUI::EllipsizeFace(body, px, m_Status.c_str(), m_Size.x - XUI::Pt(40.f), XUI::Clip::End, shown)) shown = m_Status;
+	const ImVec2 pad(XUI::Pt(10.f), XUI::Pt(4.f));
+	const ImVec2 a(m_Origin.x + XUI::Pt(8.f), m_Origin.y + XUI::Pt(8.f));
+	const ImVec2 b(a.x + TextW(body, px, shown.c_str()) + pad.x * 2.f, a.y + px + pad.y * 2.f);
+	dl->AddRectFilled(a, b, C(T::Overlay, 0.92f), XUI::Pt(6.f));
+	dl->AddRect(a, b, C(T::BorderSubtle), XUI::Pt(6.f));
+	dl->AddText(body, px, ImVec2(Round(a.x + pad.x), Round(a.y + pad.y)), C(T::TextSecondary), shown.c_str());
 }
 
 //------------------------------------------------------------------------------
@@ -1395,8 +2028,10 @@ void NqCanvas::HandleInput()
 {
 	ImGuiIO& io = ImGui::GetIO();
 	ImVec2 mouse = ImGui::GetMousePos();
-	bool hovered = m_Hovered && !m_MinimapHovered;
+	// the minimap and the edge pills are the canvas's own controls: a click there is theirs
+	bool hovered = m_Hovered && !m_MinimapHovered && m_BeyondHot < 0;
 
+	if (m_BeyondHot >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) RevealBeyond(m_BeyondHot);
 	if (m_MinimapHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 	{
 		RememberView();
@@ -1433,12 +2068,12 @@ void NqCanvas::HandleInput()
 		ImVec2 d = io.MouseDelta;
 		if (d.x != 0.f || d.y != 0.f)
 		{
-			if (!m_RmbMoved && fabsf(mouse.x - m_RmbDown.x) + fabsf(mouse.y - m_RmbDown.y) > 3.f)
+			if (!m_RmbMoved && fabsf(mouse.x - m_RmbDown.x) + fabsf(mouse.y - m_RmbDown.y) > XUI::Pt(3.f))
 			{
 				RememberView();
 				m_RmbMoved = true;
 			}
-			if (m_RmbMoved) { float z = Zoom(); m_Doc->view_cx -= d.x / z; m_Doc->view_cy -= d.y / z; }
+			if (m_RmbMoved) { const float s = Scale(); m_Doc->view_cx -= d.x / s; m_Doc->view_cy -= d.y / s; }
 		}
 	}
 	if (m_Panning && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
@@ -1450,8 +2085,8 @@ void NqCanvas::HandleInput()
 	if (hovered && ImGui::IsMouseDown(ImGuiMouseButton_Middle))
 	{
 		if (!m_MiddlePanning && (io.MouseDelta.x != 0.f || io.MouseDelta.y != 0.f)) { RememberView(); m_MiddlePanning = true; }
-		float z = Zoom();
-		m_Doc->view_cx -= io.MouseDelta.x / z; m_Doc->view_cy -= io.MouseDelta.y / z;
+		const float s = Scale();
+		m_Doc->view_cx -= io.MouseDelta.x / s; m_Doc->view_cy -= io.MouseDelta.y / s;
 	}
 	if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) m_MiddlePanning = false;
 
@@ -1466,45 +2101,44 @@ void NqCanvas::HandleInput()
 			int pnode = -1, ppin = -1;
 			if (HitAnyPin(mouse, pnode, ppin)) { node = pnode; pin = ppin; }
 		}
+		SActionHit act;
 		if (pin >= 0)
 		{
 			m_Linking = true;
 			m_LinkFrom = m_Doc->quest.nodes[node].id;
 			m_LinkPin = m_Geom[node].pins[pin];
 		}
-		else if (node >= 0)
+		else if (node >= 0 && HitAction(node, mouse, act))
 		{
-			const xr_string& id = m_Doc->quest.nodes[node].id;
-			xr_string slot; int idx = 0; bool plus = false;
-			if (HitChip(node, mouse, slot, idx, plus))
+			const SNqNode& n = m_Doc->quest.nodes[node];
+			SelectOnly(n.id.c_str());
+			if (act.more)
 			{
-				SelectOnly(id.c_str());
-				if (plus)
-				{
-					m_CtxNode = id;
-					m_ChipDragSlot = slot;
-					m_OpenAddAction = true;
-				}
-				else
-				{
-					m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", idx);
-					m_ChipDragNode = id; m_ChipDragSlot = slot; m_ChipDragIndex = idx;
-					if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) m_WantFocusAction = true;
-				}
+				// the first action the node has no room for opens in the Details panel
+				xr_string slot; int idx = 0;
+				if (ActionAtRow(n, NqLayout::kMaxActions, slot, idx)) m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", idx);
+				m_WantFocusAction = true;
 			}
 			else
 			{
-				if (io.KeyCtrl) ToggleSelected(id.c_str());
-				else if (!IsSelected(id.c_str())) SelectOnly(id.c_str());
-				else m_Doc->sel_slot.clear();
-				// start dragging the whole selection
-				m_Dragging = true; m_DragMoved = false; m_DragStartMouse = mouse;
-				m_DragStart.clear();
-				for (u32 i = 0; i < m_Doc->selection.size(); ++i)
-				{
-					const SNqNode* n = m_Doc->quest.FindNode(m_Doc->selection[i].c_str());
-					if (n) m_DragStart.push_back(std::make_pair(n->id, ImVec2(n->pos.x, n->pos.y)));
-				}
+				m_Doc->sel_slot = act.slot + ":" + NqUtil::Format("%d", act.index);
+				m_ActDragNode = n.id; m_ActDragSlot = act.slot; m_ActDragIndex = act.index;
+				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) m_WantFocusAction = true;
+			}
+		}
+		else if (node >= 0)
+		{
+			const xr_string& id = m_Doc->quest.nodes[node].id;
+			if (io.KeyCtrl) ToggleSelected(id.c_str());
+			else if (!IsSelected(id.c_str())) SelectOnly(id.c_str());
+			else m_Doc->sel_slot.clear();
+			// start dragging the whole selection
+			m_Dragging = true; m_DragMoved = false; m_DragStartMouse = mouse;
+			m_DragStart.clear();
+			for (u32 i = 0; i < m_Doc->selection.size(); ++i)
+			{
+				const SNqNode* n = m_Doc->quest.FindNode(m_Doc->selection[i].c_str());
+				if (n) m_DragStart.push_back(std::make_pair(n->id, ImVec2(n->pos.x, n->pos.y)));
 			}
 		}
 		else
@@ -1526,89 +2160,57 @@ void NqCanvas::HandleInput()
 	if (m_Dragging && ImGui::IsMouseDown(ImGuiMouseButton_Left))
 	{
 		ImVec2 d = Sub(mouse, m_DragStartMouse);
-		if (fabsf(d.x) + fabsf(d.y) > 2.f) m_DragMoved = true;
+		if (fabsf(d.x) + fabsf(d.y) > XUI::Pt(2.f)) m_DragMoved = true;
 		if (m_DragMoved)
 		{
-			float z = Zoom();
+			const float s = Scale();
 			for (u32 i = 0; i < m_DragStart.size(); ++i)
 			{
 				SNqNode* n = m_Doc->quest.FindNode(m_DragStart[i].first.c_str());
-				if (n) { n->pos.x = m_DragStart[i].second.x + d.x / z; n->pos.y = m_DragStart[i].second.y + d.y / z; n->has_pos = true; }
+				if (n) { n->pos.x = m_DragStart[i].second.x + d.x / s; n->pos.y = m_DragStart[i].second.y + d.y / s; n->has_pos = true; }
 			}
 		}
 	}
 	if (m_Dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) EndDrag();
 
-	// chip drag: reorder inside a strip, move between on_enter and on_exit, or hand
-	// the action to another node - one drop path for all three, because the strips
-	// are the same widget wherever they are drawn
-	if (m_ChipDragIndex >= 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) m_ChipDragging = true;
-	if (m_ChipDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_ChipDragging)
+	// action drag: reorder inside a slot, move between on_enter and on_exit, or hand the
+	// action to another node - one drop path for all three
+	if (m_ActDragIndex >= 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) m_ActDragging = true;
+	if (m_ActDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_ActDragging)
 	{
-		m_ChipDragIndex = -1; m_ChipDragNode.clear();		// a plain click, already selected on press
+		m_ActDragIndex = -1; m_ActDragNode.clear();		// a plain click, already selected on press
 	}
-	else if (m_ChipDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+	else if (m_ActDragIndex >= 0 && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
 	{
-		int node = HitNode(mouse);
-		xr_string slot; int idx = 0; bool plus = false;
-		if (node >= 0 && HitChip(node, mouse, slot, idx, plus))
-		{
-			const xr_string to_id = m_Doc->quest.nodes[node].id;
-			const xr_string from_id = m_ChipDragNode, from_slot = m_ChipDragSlot;
-			const int from = m_ChipDragIndex;
-			const bool same_strip = (to_id == from_id && slot == from_slot);
-			// dropping an action on its own place is not a move
-			if (!same_strip || (!plus && idx != from))
-			{
-				int landed = 0;
-				m_Doc->Edit([&](SNqQuest& q)
-				{
-					SNqNode* src = q.FindNode(from_id.c_str());
-					SNqNode* dst = q.FindNode(to_id.c_str());
-					if (!src || !dst) return;
-					xr_vector<SNqAction>& sv = src->Slot(from_slot.c_str());
-					if (from >= (int)sv.size()) return;
-					SNqAction a = sv[from];
-					sv.erase(sv.begin() + from);
-					// the same vector when the strip did not change, so the index is
-					// clamped against what is left after the erase
-					xr_vector<SNqAction>& dv = dst->Slot(slot.c_str());
-					int at = plus ? (int)dv.size() : idx;
-					if (at > (int)dv.size()) at = (int)dv.size();
-					if (at < 0) at = 0;
-					dv.insert(dv.begin() + at, a);
-					landed = at;
-				});
-				// follow the action so the inspector keeps showing what was dragged
-				m_Doc->selection.clear();
-				m_Doc->selection.push_back(to_id);
-				m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", landed);
-			}
-		}
-		m_ChipDragIndex = -1; m_ChipDragNode.clear(); m_ChipDragging = false;
+		int node = -1, at = 0; xr_string slot;
+		if (DropTarget(mouse, node, slot, at))
+			MoveAction(m_ActDragNode, m_ActDragSlot, m_ActDragIndex, m_Doc->quest.nodes[node].id, slot, at);
+		m_ActDragIndex = -1; m_ActDragNode.clear(); m_ActDragging = false;
 	}
 
 	if (m_Linking && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) EndLink();
 	if (m_Marquee && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) EndMarquee();
 
-	// hover feedback: chips
-	if (hovered && !m_Dragging && !m_Linking && !m_Marquee)
+	// what the cursor is on, said on hover: an action in full, and a node whose text is too
+	// small to read
+	if (hovered && !m_Dragging && !m_Linking && !m_Marquee && !m_ActDragging && m_TipNext.empty())
 	{
-		int node = HitNode(mouse);
-		xr_string slot; int idx = 0; bool plus = false;
-		if (node >= 0 && HitChip(node, mouse, slot, idx, plus))
+		const int node = HitNode(mouse);
+		if (m_HotAction.node >= 0 && !m_HotAction.more)
 		{
-			if (plus) ImGui::SetTooltip("add %s action", slot.c_str());
-			else
-			{
-				const xr_vector<SNqAction>* acts = m_Doc->quest.nodes[node].SlotC(slot.c_str());
-				if (acts && idx < (int)acts->size()) ChipTooltip((*acts)[idx]);
-			}
+			const SNqNode& n = m_Doc->quest.nodes[m_HotAction.node];
+			const xr_vector<SNqAction>* acts = n.SlotC(m_HotAction.slot.c_str());
+			if (acts && m_HotAction.index < (int)acts->size())
+				m_TipNext = ActionText((*acts)[m_HotAction.index], m_HotAction.slot.c_str(), m_HotAction.index);
 		}
-		else if (node >= 0 && HitPin(node, mouse) < 0 && Zoom() < 0.5f)
+		else if (m_HotAction.node >= 0)
+			m_TipNext = "Show the rest of the actions in the Details panel";
+		else if (node >= 0 && HitPin(node, mouse) < 0 && Lod() < 2)
 		{
 			const SNqNode& n = m_Doc->quest.nodes[node];
-			ImGui::SetTooltip("%s\n%s\n%s", n.id.c_str(), NodeTitle(n).c_str(), NodeSummary(n).c_str());
+			m_TipNext = NodeTitle(n) + "\n" + n.id;
+			const xr_string sum = NodeSummary(n);
+			if (!sum.empty()) m_TipNext += "\n" + sum;
 		}
 	}
 }
@@ -1639,13 +2241,44 @@ void NqCanvas::EndDrag()
 	m_DragStart.clear();
 }
 
+// Moves one action: within its slot, to the other slot or to another node - one undo step,
+// and the Details panel follows it to where it landed.
+void NqCanvas::MoveAction(const xr_string& from_node, const xr_string& from_slot, int from,
+						  const xr_string& to_node, const xr_string& to_slot, int at)
+{
+	// dropping an action on its own place is not a move
+	if (from_node == to_node && from_slot == to_slot && (at == from || at == from + 1)) return;
+	int landed = -1;
+	m_Doc->Edit([&](SNqQuest& q)
+	{
+		SNqNode* src = q.FindNode(from_node.c_str());
+		SNqNode* dst = q.FindNode(to_node.c_str());
+		if (!src || !dst) return;
+		xr_vector<SNqAction>& sv = src->Slot(from_slot.c_str());
+		if (from < 0 || from >= (int)sv.size()) return;
+		SNqAction a = sv[from];
+		sv.erase(sv.begin() + from);
+		xr_vector<SNqAction>& dv = dst->Slot(to_slot.c_str());
+		int pos = at;
+		// the same list lost the action above the drop point
+		if (&dv == &sv && pos > from) --pos;
+		pos = _max(0, _min(pos, (int)dv.size()));
+		dv.insert(dv.begin() + pos, a);
+		landed = pos;
+	});
+	if (landed < 0) return;
+	m_Doc->selection.clear();
+	m_Doc->selection.push_back(to_node);
+	m_Doc->sel_slot = to_slot + ":" + NqUtil::Format("%d", landed);
+}
+
 // the fading line at the top of the canvas, plus the log so a headless run
-// (-nodlg) records what the gesture did
+// (-nodlg) records what the gesture did: a note, never a warning the status bar counts
 void NqCanvas::SetStatus(LPCSTR text)
 {
 	m_Status = text ? text : "";
 	m_StatusAt = ImGui::GetTime();
-	if (!m_Status.empty()) Msg("~ [nq] %s", m_Status.c_str());
+	if (!m_Status.empty()) Msg("* [nq] %s", m_Status.c_str());
 }
 
 bool NqCanvas::CanLink(LPCSTR from, LPCSTR to, xr_string& why) const
@@ -1655,7 +2288,7 @@ bool NqCanvas::CanLink(LPCSTR from, LPCSTR to, xr_string& why) const
 	if (!t)
 		why = NqUtil::Format("'%s' does not exist", to);
 	else if (0 == strcmp(from, to))
-		why = "a node cannot link to itself";
+		why = "A node cannot link to itself";
 	else if (NqText::IsTrigger(t->kind.c_str()))
 		why = NqUtil::Format("'%s' is a trigger - triggers have no input", t->id.c_str());
 	return why.empty();
@@ -1675,7 +2308,7 @@ void NqCanvas::EndLink()
 		{
 			m_Status = why;
 			m_StatusAt = ImGui::GetTime();
-			Msg("~ [nq] link: %s", m_Status.c_str());
+			Msg("* [nq] link: %s", m_Status.c_str());
 			return;
 		}
 	}
@@ -1767,9 +2400,9 @@ void NqCanvas::ConnectNearest()
 	if (!CanLink(from.c_str(), to.c_str(), why)) { SetStatus(why.c_str()); return; }
 	xr_string err;
 	if (!m_Doc->Connect(from.c_str(), pin.c_str(), to.c_str(), err))
-		SetStatus(err.empty() ? "connect refused" : err.c_str());
+		SetStatus(err.empty() ? "Connect refused" : err.c_str());
 	else
-		SetStatus(NqUtil::Format("connected %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
+		SetStatus(NqUtil::Format("Connected %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
 }
 
 // Cuts the wire the cursor is on. The single path behind Alt+LMB and D, so the two
@@ -1783,7 +2416,7 @@ void NqCanvas::DeleteHotLink()
 	const xr_string pin = l.pin;
 	xr_string err;
 	if (m_Doc->Disconnect(from.c_str(), pin.c_str(), to.c_str(), err))
-		SetStatus(NqUtil::Format("removed %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
+		SetStatus(NqUtil::Format("Removed %s.%s -> %s", from.c_str(), pin.c_str(), to.c_str()).c_str());
 	else if (!err.empty())
 		SetStatus(err.c_str());
 	// the geometry it indexed is about to be rebuilt
@@ -1801,7 +2434,7 @@ void NqCanvas::DeleteHotLink()
 // counterpart simply goes - a node wired on one side only just loses that side.
 void NqCanvas::BypassSelected()
 {
-	if (m_Doc->selection.empty()) { SetStatus("select a node first"); return; }
+	if (m_Doc->selection.empty()) { SetStatus("Select a node first"); return; }
 
 	struct SBridge { xr_string from, pin, to; };
 	xr_vector<SBridge> bridges;			// edges to create
@@ -1851,7 +2484,7 @@ void NqCanvas::BypassSelected()
 		}
 	}
 
-	if (cuts.empty()) { SetStatus("nothing was connected to the selection"); return; }
+	if (cuts.empty()) { SetStatus("Nothing was connected to the selection"); return; }
 
 	// one undo entry: Connect/Disconnect each push their own, and a rewiring the
 	// author asked for once should not take eight presses of Ctrl+Z to take back
@@ -1864,11 +2497,11 @@ void NqCanvas::BypassSelected()
 	});
 
 	if (refused)
-		SetStatus(NqUtil::Format("bypassed: %d link(s) bridged, %d could not be", (int)bridges.size(), refused).c_str());
+		SetStatus(NqUtil::Format("Bypassed: %d link(s) bridged, %d could not be", (int)bridges.size(), refused).c_str());
 	else if (bridges.empty())
-		SetStatus("bypassed: the selection was wired on one side only, those links are gone");
+		SetStatus("Bypassed: the selection was wired on one side only, those links are gone");
 	else
-		SetStatus(NqUtil::Format("bypassed: %d link(s) bridged", (int)bridges.size()).c_str());
+		SetStatus(NqUtil::Format("Bypassed: %d link(s) bridged", (int)bridges.size()).c_str());
 }
 
 void NqCanvas::HandleKeys()
@@ -1881,10 +2514,7 @@ void NqCanvas::HandleKeys()
 	// A menu is a mode. Its own items answer the keyboard while it is up, and a
 	// canvas shortcut firing underneath it acts on something the author cannot see.
 	if (MenuOpen()) return;
-	// the same keys are bound globally to the scene, and that layer runs from the
-	// window proc before this one: told nothing, it copies an empty scene selection
-	// and swallows the key-up on its way
-	if (UI) UI->BlockShortCuts();
+	// the scene's own bindings never reach a document tab (XUI::Shell::SceneKeysAllowed)
 	ImGuiIO& io = ImGui::GetIO();
 	// ImGui::IsKeyPressed defaults to repeat=true. These are one-shot commands, and
 	// on auto-repeat they run again every repeat tick - which is how holding Ctrl
@@ -1919,7 +2549,7 @@ void NqCanvas::HandleKeys()
 	{
 		m_Linking = false; m_Marquee = false;
 		// drops the action back where it came from: the move only happens on release
-		m_ChipDragIndex = -1; m_ChipDragNode.clear(); m_ChipDragging = false;
+		m_ActDragIndex = -1; m_ActDragNode.clear(); m_ActDragging = false;
 	}
 }
 
@@ -1935,12 +2565,12 @@ void NqCanvas::OpenContextMenus()
 	{
 		m_CtxNode = m_Doc->quest.nodes[node].id;
 		if (!IsSelected(m_CtxNode.c_str())) SelectOnly(m_CtxNode.c_str());
-		xr_string slot; int idx = 0; bool plus = false;
-		if (HitChip(node, mouse, slot, idx, plus) && !plus)
+		SActionHit act;
+		if (HitAction(node, mouse, act) && !act.more)
 		{
-			m_ChipDragSlot = slot; m_ChipDragIndex = -1;
-			m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", idx);
-			ImGui::OpenPopup("nq_chip_ctx");
+			m_ActDragIndex = -1;
+			m_Doc->sel_slot = act.slot + ":" + NqUtil::Format("%d", act.index);
+			ImGui::OpenPopup("nq_action_ctx");
 		}
 		else
 			ImGui::OpenPopup("nq_node_ctx");
@@ -1957,6 +2587,16 @@ void NqCanvas::OpenContextMenus()
 	m_PendingLink = false;
 	m_Filter[0] = 0;
 	ImGui::OpenPopup("nq_add_node");
+}
+
+void NqCanvas::RequestAddAction(LPCSTR node, LPCSTR slot, const ImVec2& screen)
+{
+	if (!node || !m_Doc->quest.FindNode(node)) return;
+	m_CtxNode = node;
+	m_AddSlot = (slot && 0 == strcmp(slot, "exit")) ? "exit" : "enter";
+	m_OpenAddAction = true;
+	m_AddActionAt = true;
+	m_AddActionPos = screen;
 }
 
 void NqCanvas::CreateNode(const NqCatalog::SKind& k, const ImVec2& world, bool connect_pending)
@@ -1994,24 +2634,27 @@ const NqCatalog::SKind* NqCanvas::PickKind(LPCSTR hint, u32 use_mask)
 	if (appearing) { m_FilterSel = 0; ImGui::SetKeyboardFocusHere(); }
 	ImGui::SetNextItemWidth(-1.f);
 	bool refilter = appearing;
-	if (ImGui::InputTextWithHint("##nq_filter", hint, m_Filter, sizeof(m_Filter))) { m_FilterSel = 0; refilter = true; }
+	if (XUI::SearchField("##nq_filter", m_Filter, sizeof(m_Filter), hint, 12.f)) { m_FilterSel = 0; refilter = true; }
 	ImGui::Separator();
 
+	const bool behaviour = Behaviour();
 	xr_vector<const NqCatalog::SKind*> kinds, shown;
 	NqCatalog::KindsFor(use_mask, kinds);
-	// the author types what the row shows, in any case and either alphabet
-	xr_string needle, scratch;
-	Fold(NqUtil::Trim(m_Filter).c_str(), needle);
+	xr_vector<xr_string> titles;
 	xr_string last_group;
 	int groups = 0;
+	// the author types what the row shows, in any case and either alphabet
+	const xr_string query = NqUtil::Trim(m_Filter);
 	for (u32 i = 0; i < kinds.size(); ++i)
 	{
 		const NqCatalog::SKind& k = *kinds[i];
-		if (!needle.empty() && !FilterHit(k.id.c_str(), needle.c_str(), scratch) && !FilterHit(k.title.c_str(), needle.c_str(), scratch)) continue;
+		const xr_string title = NqLook::KindTitle(k.id.c_str(), behaviour);
+		if (!query.empty() && !XUI::Match(query.c_str(), k.id.c_str()) && !XUI::Match(query.c_str(), title.c_str())) continue;
 		if (k.group != last_group || shown.empty()) { ++groups; last_group = k.group; }
 		shown.push_back(kinds[i]);
+		titles.push_back(title);
 	}
-	if (shown.empty()) { m_FilterSel = 0; ImGui::TextDisabled("no kinds match"); return 0; }
+	if (shown.empty()) { m_FilterSel = 0; ImGui::TextDisabled("No kind matches"); return 0; }
 
 	// a single-line input leaves Up/Down/Enter alone, so the list answers them
 	// while the caret stays in the filter box - no mouse in the loop
@@ -2036,19 +2679,23 @@ const NqCatalog::SKind* NqCanvas::PickKind(LPCSTR hint, u32 use_mask)
 		if (k.group != cur_group)
 		{
 			if (i) ImGui::Separator();
-			ImGui::TextDisabled("%s", k.group.c_str());
+			{
+				XUI::FontScope font(XUI::Font::Small);
+				ImGui::TextDisabled("%s", k.group.c_str());
+			}
 			cur_group = k.group;
 		}
 		// the id only disambiguates the row, ImGui hides everything after "##"
-		xr_string label = k.title + "##" + k.id;
+		xr_string label = titles[i] + "##" + k.id;
 		if (ImGui::Selectable(label.c_str(), (int)i == sel)) picked = shown[i];
-		if (ImGui::IsItemHovered() && !k.desc.empty()) ImGui::SetTooltip("%s", k.desc.c_str());
+		const xr_string desc = NqLook::KindDesc(k.id.c_str(), behaviour);
+		if (!desc.empty()) XUI::Tip(desc.c_str());
 		if (follow && (int)i == sel) ImGui::SetScrollHereY(0.5f);
-		// the technical id keeps its old place at the right edge, but only while
-		// the title leaves room for it
+		// the technical id keeps its place at the right edge, but only while the title
+		// leaves room for it
 		const float idw = ImGui::CalcTextSize(k.id.c_str()).x;
 		const float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - idw;
-		if (x > ImGui::CalcTextSize(k.title.c_str()).x + ImGui::GetStyle().ItemSpacing.x * 2.f)
+		if (x > ImGui::CalcTextSize(titles[i].c_str()).x + ImGui::GetStyle().ItemSpacing.x * 2.f)
 		{
 			ImGui::SameLine(x);
 			ImGui::TextDisabled("%s", k.id.c_str());
@@ -2063,7 +2710,7 @@ void NqCanvas::DrawAddNodeMenu(LPCSTR popup)
 	const u32 mask = NqCatalog::useTrigger | NqCatalog::useMain;
 	ConstrainPicker(popup, mask);
 	if (!ImGui::BeginPopup(popup)) { if (0 == strcmp(popup, "nq_add_node")) m_PendingLink = false; return; }
-	if (const NqCatalog::SKind* k = PickKind("search kinds", mask))
+	if (const NqCatalog::SKind* k = PickKind("Search kinds", mask))
 	{
 		CreateNode(*k, m_MenuWorld, m_PendingLink);
 		m_PendingLink = false;
@@ -2074,37 +2721,48 @@ void NqCanvas::DrawAddNodeMenu(LPCSTR popup)
 
 void NqCanvas::DrawContextMenus()
 {
-	// popups requested from inside other popups open here, at the canvas level
-	if (m_OpenAddAction) { m_OpenAddAction = false; m_Filter[0] = 0; ImGui::OpenPopup("nq_add_action"); }
+	// popups requested from inside other popups (or from the Details panel) open here, at the
+	// canvas level
+	if (m_OpenAddAction)
+	{
+		m_OpenAddAction = false;
+		m_Filter[0] = 0;
+		if (m_AddActionAt) XUI::Shell::OpenPopupAt("nq_add_action", m_AddActionPos);
+		else ImGui::OpenPopup("nq_add_action");
+		m_AddActionAt = false;
+	}
 	DrawAddNodeMenu("nq_add_node");
 
 	if (ImGui::BeginPopup("nq_node_ctx"))
 	{
-		if (ImGui::MenuItem("Rename", "F2"))			m_WantRename = true;
+		if (XUI::MenuItem("Rename", "F2"))			m_WantRename = true;
 		bool all_bookmarked = !m_Doc->selection.empty();
 		for (u32 i = 0; i < m_Doc->selection.size(); ++i) all_bookmarked &= IsBookmarked(m_Doc->selection[i].c_str());
-		if (ImGui::MenuItem(all_bookmarked ? "Remove bookmarks" : "Bookmark selection", "Ctrl+B")) ToggleSelectedBookmarks();
-		if (ImGui::MenuItem("Duplicate", "Ctrl+D"))		DuplicateSelection();
-		if (ImGui::MenuItem("Copy", "Ctrl+C"))			CopySelection();
-		if (ImGui::MenuItem("Add on_enter action..."))	{ m_ChipDragSlot = "enter"; m_OpenAddAction = true; }
-		if (ImGui::MenuItem("Add on_exit action..."))	{ m_ChipDragSlot = "exit"; m_OpenAddAction = true; }
-		if (ImGui::MenuItem("Connect to nearest free pin", "Q", false, m_Doc->selection.size() == 1)) ConnectNearest();
-		if (ImGui::MenuItem("Disconnect outputs"))
+		if (XUI::MenuItem(all_bookmarked ? "Remove Bookmarks" : "Bookmark", "Ctrl+B")) ToggleSelectedBookmarks();
+		if (XUI::MenuItem("Duplicate", "Ctrl+D"))		DuplicateSelection();
+		if (XUI::MenuItem("Copy", "Ctrl+C"))			CopySelection();
+		ImGui::Separator();
+		const bool trigger = NqText::IsTrigger(m_Doc->quest.FindNode(m_CtxNode.c_str()) ? m_Doc->quest.FindNode(m_CtxNode.c_str())->kind.c_str() : "");
+		if (ImGui::MenuItem("Add Action on Enter...", 0, false, !trigger))	{ m_AddSlot = "enter"; m_OpenAddAction = true; }
+		if (ImGui::MenuItem("Add Action on Exit...", 0, false, !trigger))	{ m_AddSlot = "exit"; m_OpenAddAction = true; }
+		if (XUI::MenuItem("Connect to Nearest Free Pin", "Q", false, m_Doc->selection.size() == 1)) ConnectNearest();
+		if (XUI::MenuItem("Bypass", "Alt+D"))			BypassSelected();
+		if (ImGui::MenuItem("Disconnect Outputs"))
 		{
 			xr_string id = m_CtxNode;
 			m_Doc->Edit([&](SNqQuest& q) { SNqNode* n = q.FindNode(id.c_str()); if (n) n->out.clear(); });
 		}
 		ImGui::Separator();
-		if (ImGui::MenuItem("Delete", "Del"))			DeleteSelection();
+		if (XUI::MenuItem("Delete", "Del"))			DeleteSelection();
 		ImGui::EndPopup();
 	}
 
 	ConstrainPicker("nq_add_action", NqCatalog::useExtra);
 	if (ImGui::BeginPopup("nq_add_action"))
 	{
-		if (const NqCatalog::SKind* k = PickKind("search actions", NqCatalog::useExtra))
+		if (const NqCatalog::SKind* k = PickKind("Search actions", NqCatalog::useExtra))
 		{
-			xr_string id = m_CtxNode, slot = m_ChipDragSlot, kind = k->id;
+			xr_string id = m_CtxNode, slot = m_AddSlot.empty() ? xr_string("enter") : m_AddSlot, kind = k->id;
 			int index = -1;
 			m_Doc->Edit([&](SNqQuest& q)
 			{
@@ -2115,38 +2773,52 @@ void NqCanvas::DrawContextMenus()
 				v.push_back(a);
 				index = (int)v.size() - 1;
 			});
-			if (index >= 0) { m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index); m_WantFocusAction = true; }
+			if (index >= 0)
+			{
+				SelectOnly(id.c_str());
+				m_Doc->sel_slot = slot + ":" + NqUtil::Format("%d", index);
+				m_WantFocusAction = true;
+			}
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndPopup();
 	}
 
-	if (ImGui::BeginPopup("nq_chip_ctx"))
+	if (ImGui::BeginPopup("nq_action_ctx"))
 	{
 		xr_string slot; int index = -1;
 		{
-			LPCSTR s = m_Doc->sel_slot.c_str();
-			LPCSTR c = strchr(s, ':');
-			if (c) { slot.assign(s, c - s); index = atoi(c + 1); }
+			LPCSTR sel = m_Doc->sel_slot.c_str();
+			LPCSTR c = strchr(sel, ':');
+			if (c) { slot.assign(sel, c - sel); index = atoi(c + 1); }
 		}
-		if (ImGui::MenuItem("Duplicate action") && index >= 0)
+		const SNqNode* n = m_Doc->quest.FindNode(m_CtxNode.c_str());
+		const xr_vector<SNqAction>* v = n ? n->SlotC(slot.c_str()) : 0;
+		const int count = v ? (int)v->size() : 0;
+		const bool valid = index >= 0 && index < count;
+		const xr_string id = m_CtxNode;
+		if (ImGui::MenuItem("Duplicate Action", 0, false, valid))
 		{
-			xr_string id = m_CtxNode;
 			m_Doc->Edit([&](SNqQuest& q)
 			{
-				SNqNode* n = q.FindNode(id.c_str()); if (!n) return;
-				xr_vector<SNqAction>& v = n->Slot(slot.c_str());
-				if (index < (int)v.size()) v.insert(v.begin() + index + 1, v[index]);
+				SNqNode* x = q.FindNode(id.c_str()); if (!x) return;
+				xr_vector<SNqAction>& list = x->Slot(slot.c_str());
+				if (index < (int)list.size()) list.insert(list.begin() + index + 1, list[index]);
 			});
 		}
-		if (ImGui::MenuItem("Remove action") && index >= 0)
+		if (ImGui::MenuItem("Move Up", 0, false, valid && index > 0))					MoveAction(id, slot, index, id, slot, index - 1);
+		if (ImGui::MenuItem("Move Down", 0, false, valid && index + 1 < count))			MoveAction(id, slot, index, id, slot, index + 2);
+		const xr_string other = slot == "exit" ? "enter" : "exit";
+		if (ImGui::MenuItem(slot == "exit" ? "Move to On Enter" : "Move to On Exit", 0, false, valid))
+			MoveAction(id, slot, index, id, other, n ? (int)n->SlotC(other.c_str())->size() : 0);
+		ImGui::Separator();
+		if (ImGui::MenuItem("Remove Action", 0, false, valid))
 		{
-			xr_string id = m_CtxNode;
 			m_Doc->Edit([&](SNqQuest& q)
 			{
-				SNqNode* n = q.FindNode(id.c_str()); if (!n) return;
-				xr_vector<SNqAction>& v = n->Slot(slot.c_str());
-				if (index < (int)v.size()) v.erase(v.begin() + index);
+				SNqNode* x = q.FindNode(id.c_str()); if (!x) return;
+				xr_vector<SNqAction>& list = x->Slot(slot.c_str());
+				if (index < (int)list.size()) list.erase(list.begin() + index);
 			});
 			m_Doc->sel_slot.clear();
 		}
@@ -2155,8 +2827,12 @@ void NqCanvas::DrawContextMenus()
 
 	if (ImGui::BeginPopup("nq_link_ctx"))
 	{
-		ImGui::TextDisabled("%s.%s -> %s", m_CtxLinkFrom.c_str(), m_CtxLinkPin.c_str(), m_CtxLinkTo.c_str());
-		if (ImGui::MenuItem("Remove link"))
+		const xr_string what = NqUtil::Format("%s.%s -> %s", m_CtxLinkFrom.c_str(), m_CtxLinkPin.c_str(), m_CtxLinkTo.c_str());
+		{
+			XUI::FontScope font(XUI::Font::Small);
+			ImGui::TextDisabled("%s", what.c_str());
+		}
+		if (ImGui::MenuItem("Remove Link"))
 		{
 			xr_string err;
 			m_Doc->Disconnect(m_CtxLinkFrom.c_str(), m_CtxLinkPin.c_str(), m_CtxLinkTo.c_str(), err);
@@ -2172,6 +2848,7 @@ void NqCanvas::Draw(const ImVec2& size)
 {
 	m_Origin = ImGui::GetCursorScreenPos();
 	m_Size = ImVec2(_max(size.x, 32.f), _max(size.y, 32.f));
+	m_DrawnFrame = ImGui::GetFrameCount();
 	// the view is not part of the file, but panning, framing and quest_view all
 	// move it: bound it before anything is projected through it
 	m_Doc->view_cx = NqLayout::Sane(m_Doc->view_cx);
@@ -2186,12 +2863,15 @@ void NqCanvas::Draw(const ImVec2& size)
 	PruneTransient();
 
 	ImDrawList* dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(m_Origin, Add(m_Origin, m_Size), Col(30, 30, 33));
+	dl->AddRectFilled(m_Origin, Add(m_Origin, m_Size), C(T::Canvas));
 	dl->PushClipRect(m_Origin, Add(m_Origin, m_Size), true);
 
 	// one invisible button owns the mouse for the whole area
 	ImGui::InvisibleButton("##nq_canvas", m_Size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
 	m_Hovered = ImGui::IsItemHovered();
+	// last frame's hover text, once the same thing has been under the cursor for a moment
+	if (m_Hovered && !m_TipText.empty() && ImGui::GetTime() - m_TipSince >= 0.45) XUI::Tip(m_TipText.c_str());
+	m_TipNext.clear();
 
 	EnsureReachable();
 	BuildGeometry();
@@ -2202,46 +2882,24 @@ void NqCanvas::Draw(const ImVec2& size)
 	DrawLinks(dl);
 	DrawLinking(dl);
 	for (u32 i = 0; i < m_Geom.size(); ++i) DrawNode(dl, (int)i);
-
-	// the action being moved rides under the cursor: the strips only say where it
-	// would land, and a drag with nothing in hand reads as nothing happening
-	if (m_ChipDragging)
-	{
-		const float z = Zoom();
-		const float cw = kChipW * z, ch = NqLayout::kChipStrip * z - kChipPad * z;
-		const ImVec2 m = ImGui::GetIO().MousePos;
-		const ImVec2 a(m.x - cw * 0.5f, m.y - ch * 0.5f), b(a.x + cw, a.y + ch);
-		// red over anything that is not a strip: releasing there cancels the move,
-		// and the author should know that before letting go
-		xr_string over_slot; int over_idx = 0; bool over_plus = false;
-		const int over_node = HitNode(m);
-		const bool ok = over_node >= 0 && HitChip(over_node, m, over_slot, over_idx, over_plus);
-		dl->AddRectFilled(a, b, ok ? Col(120, 200, 255, 200) : Col(230, 110, 90, 200), 3.f * z);
-		dl->AddRect(a, b, Col(20, 20, 20, 180), 3.f * z);
-		char label[16];
-		xr_sprintf(label, "%d", m_ChipDragIndex + 1);
-		ImFont* font = ImGui::GetFont();
-		const float fs = kFontBase * z * 0.85f;
-		const ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.f, label);
-		dl->AddText(font, fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), Col(20, 20, 20), label);
-	}
+	DrawActionDrag(dl);
 	DrawMarquee(dl);
 	DrawMinimap(dl);
-
-	// zoom label
+	DrawBeyond(dl);
+	DrawStatus(dl);
+	if (m_Geom.empty())
 	{
-		char lab[32]; xr_sprintf(lab, "%d%%", int(Zoom() * 100.f + 0.5f));
-		dl->AddText(ImVec2(m_Origin.x + 6.f, m_Origin.y + m_Size.y - 18.f), Col(200, 200, 200, 160), lab);
-	}
-	// what the last link gesture did, or why it did nothing - a fading line, never a modal
-	if (!m_Status.empty())
-	{
-		if (ImGui::GetTime() - m_StatusAt > 2.5) m_Status.clear();
-		else dl->AddText(ImVec2(m_Origin.x + 6.f, m_Origin.y + 6.f), Col(255, 190, 120, 230), m_Status.c_str());
+		ImFont* body = Face(XUI::Font::Body);
+		const float px = Round(XUI::FontSize(XUI::Font::Body) * XUI::Dpi());
+		static const char* kEmpty = "Right-click to add a node";
+		const float w = TextW(body, px, kEmpty);
+		dl->AddText(body, px, ImVec2(Round(m_Origin.x + (m_Size.x - w) * 0.5f), Round(m_Origin.y + (m_Size.y - px) * 0.5f)), C(T::TextMuted), kEmpty);
 	}
 	dl->PopClipRect();
 
 	HandleInput();
 	HandleKeys();
 	DrawContextMenus();
+
+	if (m_TipNext != m_TipText) { m_TipText = m_TipNext; m_TipSince = ImGui::GetTime(); }
 }

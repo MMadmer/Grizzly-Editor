@@ -1327,98 +1327,121 @@ static bool DoExportCut(LPCSTR level_arg, bool selected_only, bool overlap, floa
 }
 
 //------------------------------------------------------------------------------
-// UI: File\Mod menu triggers + result modal
+// UI: Mod > Bake Scene Layer - the triggers, reported in the result dialog every
+// build shares (runs started from the UI only: MCP answers in JSON)
 //------------------------------------------------------------------------------
-static const char*	kTitleResult	= "XFined Editor - Overlay Export";
-static bool			s_WantMessage	= false;
-static char			s_Message[2048]	= {};
+typedef xr_vector<std::pair<xr_string, xr_string>> TResultRows;
+
+static xr_string Num(int n)
+{
+	char text[16];
+	sprintf_s(text, "%d", n);
+	return text;
+}
+
+static void OpenFolderOf(const xr_string& path, bool is_file)
+{
+	xr_string folder = path;
+	const size_t slash = folder.find_last_of("\\/");
+	if (is_file && slash != xr_string::npos)
+		folder.resize(slash);
+	if (!folder.empty())
+		::ShellExecuteA(NULL, "open", folder.c_str(), NULL, NULL, SW_SHOWNORMAL);
+}
+
+static void BakeFailed(LPCSTR what, const xr_string& err)
+{
+	XUI::Result("bake_result", "Bake Failed", XUI::Tone::Error, (xr_string(what) + ": " + err).c_str(),
+		TResultRows(), XUI::Strings(), XUI::Strings());
+}
+
+static void BakeDone(LPCSTR headline, const TResultRows& rows, const XUI::Strings& warnings, const xr_string& path, bool is_file)
+{
+	XUI::Result("bake_result", "Scene Layer Baked", warnings.empty() ? XUI::Tone::Success : XUI::Tone::Warning, headline,
+		rows, XUI::Strings(), warnings, "Open Folder", [path, is_file] { OpenFolderOf(path, is_file); });
+}
 
 void EditorModScene::RequestExportSpawn()
 {
 	SSpawnResult res;
 	xr_string err;
-	if (DoExportSpawn(0, true, 0, 0, res, err))
+	if (!DoExportSpawn(0, true, 0, 0, res, err))
 	{
-		sprintf_s(s_Message,
-			"Spawn layer exported: %d op(s)\n%s\n\nskipped: %d\nobjects with a non-unit scale: %d "
-			"(the spawn path carries no scale)\nPlayer Starts: %d, way paths: %d, NPC orders: %d",
-			res.exported, res.path.c_str(), res.skipped, res.scaled, res.starts, res.paths, res.orders);
-		// as many as fit; the log has every one
-		for (u32 i = 0; i < res.warnings.size(); ++i)
-		{
-			if (xr_strlen(s_Message) + res.warnings[i].size() + 3 >= sizeof(s_Message)) break;
-			strcat_s(s_Message, i ? "\n" : "\n\n");
-			strcat_s(s_Message, res.warnings[i].c_str());
-		}
-		// a stash keeps its ghost model unless the author picks another one:
-		// it spawns, it can be opened, and nobody ever sees it
-		if (res.invisible)
-		{
-			char warn[220];
-			sprintf_s(warn, "\n\nWARNING: %d object(s) use a model the engine draws nothing for - "
-				"they work but stay invisible in game. Give them a real mesh in Model\\Visual (see the log).",
-				res.invisible);
-			strcat_s(s_Message, warn);
-		}
+		BakeFailed("The spawn layer was not written", err);
+		return;
 	}
-	else
-		sprintf_s(s_Message, "Spawn layer export failed:\n%s", err.c_str());
-	s_WantMessage = true;
+	TResultRows rows;
+	rows.emplace_back("File", res.path);
+	rows.emplace_back("Skipped", Num(res.skipped));
+	rows.emplace_back("Player Starts", Num(res.starts));
+	rows.emplace_back("Way paths", Num(res.paths));
+	rows.emplace_back("NPC orders", Num(res.orders));
+	XUI::Strings warnings;
+	if (res.scaled)
+		warnings.push_back(Num(res.scaled) + " object(s) have a scale other than 1: the spawn layer carries no scale.");
+	if (res.missing)
+		warnings.push_back(Num(res.missing) + " object(s) are not baked: their model exists neither in the game nor in the project.");
+	// a stash keeps its ghost model unless the author picks another one: it spawns, it can be
+	// opened, and nobody ever sees it
+	if (res.invisible)
+		warnings.push_back(Num(res.invisible) + " object(s) use a model the engine draws nothing for: they work but stay "
+			"invisible in game. Give them a real mesh in Model > Visual (the log names them).");
+	warnings.insert(warnings.end(), res.warnings.begin(), res.warnings.end());
+	BakeDone(("The spawn layer holds " + Num(res.exported) + " op(s) of the selection.").c_str(), rows, warnings, res.path, true);
 }
 
 void EditorModScene::RequestExportCut()
 {
 	xr_string path, err;
 	int cuts = 0;
-	if (DoExportCut(0, true, false, 0.f, cuts, path, err))
-		sprintf_s(s_Message,
-			"Level cut exported: %d volume(s)\n%s\n\nBase collision inside the boxes is removed and base\n"
-			"visuals fully inside them are detached. Put your own\ngeometry in with the other exports.",
-			cuts, path.c_str());
-	else
-		sprintf_s(s_Message, "Level cut export failed:\n%s", err.c_str());
-	s_WantMessage = true;
+	if (!DoExportCut(0, true, false, 0.f, cuts, path, err))
+	{
+		BakeFailed("The level cut was not written", err);
+		return;
+	}
+	TResultRows rows;
+	rows.emplace_back("File", path);
+	rows.emplace_back("Volumes", Num(cuts));
+	BakeDone("Base collision inside the boxes is removed and base visuals fully inside them are detached. "
+		"Put your own geometry in with the other layers.", rows, XUI::Strings(), path, true);
 }
 
 void EditorModScene::RequestExportXCForm()
 {
 	xr_string path, err;
 	int v = 0, t = 0, m = 0;
-	if (DoExportXCForm(0, 0, true, path, v, t, m, err))
-		sprintf_s(s_Message,
-			"Collision overlay exported:\n%s\n\nvertices: %d\ntriangles: %d\nmaterials: %d",
-			path.c_str(), v, t, m);
-	else
-		sprintf_s(s_Message, "Collision overlay export failed:\n%s", err.c_str());
-	s_WantMessage = true;
+	if (!DoExportXCForm(0, 0, true, path, v, t, m, err))
+	{
+		BakeFailed("The collision overlay was not written", err);
+		return;
+	}
+	TResultRows rows;
+	rows.emplace_back("File", path);
+	rows.emplace_back("Vertices", Num(v));
+	rows.emplace_back("Triangles", Num(t));
+	rows.emplace_back("Materials", Num(m));
+	BakeDone("The collision overlay of the selection is written.", rows, XUI::Strings(), path, true);
 }
 
 void EditorModScene::RequestExportOGF()
 {
 	SOGFResult res;
 	xr_string err;
-	if (DoExportOGF(0, true, res, err))
-		sprintf_s(s_Message,
-			"Visual overlay exported: %d ogf file(s)\n%s\n\nskipped dynamic: %d, failed: %d\nregistry: overlay_visuals.ltx",
-			res.exported, res.dir.c_str(), res.skipped_dynamic, res.skipped_failed);
-	else
-		sprintf_s(s_Message, "Visual overlay export failed:\n%s", err.c_str());
-	s_WantMessage = true;
-}
-
-void EditorModScene::DrawUI()
-{
-	if (!s_WantMessage) return;
-	if (!ImGui::BeginPopupModal(kTitleResult, &s_WantMessage, ImGuiWindowFlags_AlwaysAutoResize, true))
-		return;
-	ImGui::TextUnformatted(s_Message);
-	ImGui::Separator();
-	if (ImGui::Button("OK", ImVec2(120, 0)))
+	if (!DoExportOGF(0, true, res, err))
 	{
-		s_WantMessage = false;
-		ImGui::CloseCurrentPopup();
+		BakeFailed("The visual overlay was not written", err);
+		return;
 	}
-	ImGui::EndPopup();
+	TResultRows rows;
+	rows.emplace_back("Folder", res.dir);
+	rows.emplace_back("Models", Num(res.exported));
+	rows.emplace_back("Registry", "overlay_visuals.ltx");
+	XUI::Strings warnings;
+	if (res.skipped_dynamic)
+		warnings.push_back(Num(res.skipped_dynamic) + " dynamic object(s) skipped: an overlay holds static visuals only.");
+	if (res.skipped_failed)
+		warnings.push_back(Num(res.skipped_failed) + " object(s) failed to export (the log names them).");
+	BakeDone("The visual overlay of the selection is written.", rows, warnings, res.dir, false);
 }
 
 //------------------------------------------------------------------------------

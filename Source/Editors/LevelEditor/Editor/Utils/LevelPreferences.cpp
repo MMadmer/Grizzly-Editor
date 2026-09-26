@@ -22,12 +22,6 @@ void CLevelPreferences::Load(CInifile* I)
         OpenWorldOutliner = R_BOOL_SAFE("windows", "world_outliner", true);
     }
     {
-        ContentBrowserTreeWidth = R_U32_SAFE("windows", "content_browser_tree_width", 220);
-    }
-    {
-        QuestInspectorSplit = R_U32_SAFE("windows", "quest_inspector_split", 320);
-        QuestVarsSplit = R_U32_SAFE("windows", "quest_vars_split", 300);
-        QuestActionSplit = R_U32_SAFE("windows", "quest_action_split", 500);
     }
     {
         RecoveryEnabled = R_BOOL_SAFE("recovery", "enabled", true);
@@ -64,10 +58,6 @@ void CLevelPreferences::Save(CInifile* I)
 	I->w_bool("windows", "world_properties", OpenWorldProperties);
     I->w_bool("windows", "content_browser", OpenContentBrowser);
     I->w_bool("windows", "world_outliner", OpenWorldOutliner);
-    I->w_u32("windows", "content_browser_tree_width", ContentBrowserTreeWidth);
-    I->w_u32("windows", "quest_inspector_split", QuestInspectorSplit);
-    I->w_u32("windows", "quest_vars_split", QuestVarsSplit);
-    I->w_u32("windows", "quest_action_split", QuestActionSplit);
     I->w_bool("recovery", "enabled", RecoveryEnabled);
     I->w_u32("recovery", "interval_minutes", RecoveryIntervalMinutes);
     I->w_u32("recovery", "interaction_delay_seconds", RecoveryInteractionDelaySeconds);
@@ -102,20 +92,33 @@ void CLevelPreferences::OnReadonlyChange(PropValue* prop)
 void CLevelPreferences::FillProp(PropItemVec& items)
 {
 	inherited::FillProp	(items);
+    AddPageIcon("Recovery", XUI::Icon::History);
+    AddPageIcon("Scene", XUI::Icon::Level);
     PHelper().CreateBOOL(items, "Recovery\\Enabled", &RecoveryEnabled);
-    PHelper().CreateU32(items, "Recovery\\Interval (minutes)", &RecoveryIntervalMinutes, 1, 120);
-    PHelper().CreateU32(items, "Recovery\\Interaction delay (seconds)", &RecoveryInteractionDelaySeconds, 0, 120);
-    PHelper().CreateU32(items, "Recovery\\Snapshots retained", &RecoveryRetention, 2, 64);
+    PHelper().CreateU32(items, "Recovery\\Interval", &RecoveryIntervalMinutes, 1, 120);
+    PHelper().CreateU32(items, "Recovery\\Delay After Input", &RecoveryInteractionDelaySeconds, 0, 120);
+    PHelper().CreateU32(items, "Recovery\\Snapshots Kept", &RecoveryRetention, 2, 64);
+    AddHelp("Recovery\\Enabled", "Keeps snapshots of the open scene while it has unsaved changes, and offers the last one after "
+        "the editor did not close cleanly.");
+    AddUnit("Recovery\\Interval", "min");
+    AddUnit("Recovery\\Delay After Input", "s");
+    AddHelp("Recovery\\Interval", "Time between two snapshots of the open scene.");
+    AddHelp("Recovery\\Delay After Input", "How long a snapshot waits after the last click or key, so it never interrupts work.");
+    AddHelp("Recovery\\Snapshots Kept", "How many snapshots of a scene are kept; the oldest go first.");
     SceneToolsMapPairIt _I 	= Scene->FirstTool();
     SceneToolsMapPairIt _E 	= Scene->LastTool();
     for (; _I!=_E; _I++)
         if (_I->second&&(_I->first!=OBJCLASS_DUMMY)){
         	if (_I->second->AllowEnabling()){
-                PropValue* V 	= PHelper().CreateFlag32(items,PrepareKey("Scene\\Targets\\Enable",_I->second->ClassDesc()),	&_I->second->m_EditFlags, ESceneToolBase::flEnable);
+                const shared_str key = PrepareKey("Scene\\Targets\\Enable",_I->second->ClassDesc());
+                PropValue* V 	= PHelper().CreateFlag32(items,key,	&_I->second->m_EditFlags, ESceneToolBase::flEnable);
+                AddHelp(key.c_str(), "Loads this part of the scene; off unloads it.");
                 V->tag			= _I->second->FClassID;
                 V->OnChangeEvent.bind(this,&CLevelPreferences::OnEnabledChange);
             }
-		    PropValue* V		= PHelper().CreateFlag32(items,PrepareKey("Scene\\Targets\\Read Only",_I->second->ClassDesc()),	&_I->second->m_EditFlags, ESceneToolBase::flForceReadonly);
+		    const shared_str key = PrepareKey("Scene\\Targets\\Read Only",_I->second->ClassDesc());
+		    PropValue* V		= PHelper().CreateFlag32(items,key,	&_I->second->m_EditFlags, ESceneToolBase::flForceReadonly);
+		    AddHelp(key.c_str(), "This part of the scene can be looked at, but not changed or saved.");
             V->tag				= _I->second->FClassID;
             V->OnChangeEvent.bind(this,&CLevelPreferences::OnReadonlyChange);
         }

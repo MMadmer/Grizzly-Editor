@@ -7,7 +7,8 @@ asset rather than a quest with a flag - the extension is the kind, the header
 has to agree with it, the halves of the catalog stay apart, a destination takes
 a path, a ref, an object, a role or a place, behaviour.run has three pins, a
 graph may not run itself, and both assets survive a build and a canonical
-rewrite unchanged.
+rewrite unchanged. The graph's tab frames readable titles, draws its panes and
+never says "quest".
 
     python tools/qa/test_behaviours.py --project D:\\XFinedProjects\\Test
 """
@@ -273,6 +274,10 @@ def run(project: str) -> None:
         got = mcp("quest_get", path="npc/qa_ambush.behasset")
         text = got.get("lua", "")
         check("beh = 1" in text, "B the header survives a canonical rewrite", text[:200])
+        head = got.get("outline", "").split("\n")[0]
+        check(head.startswith("behaviour qa_ambush ") and "roles:" in head and "quest" not in head and "active:" not in head,
+              "B its outline says behaviour and names its roles", head[:160])
+        check("\n-- behaviour qa_ambush " in text and "\n-- quest " not in text, "B and so does the file's header", text[:240])
         check("roles" in text and "attackers" in text, "B and so do the roles")
         check('place = { ref = "dropped_case" }' in text.replace("  ", " ") or "dropped_case" in text,
               "B and the destination by ref")
@@ -351,6 +356,30 @@ def run(project: str) -> None:
                   or os.path.isfile(os.path.join(project, "npc", "patrol_route.behasset")),
                   "E renamed without an extension it stays a behaviour graph", json.dumps(renamed)[:200])
             mcp("content_delete", path="npc/patrol_route.behasset")
+
+        # ------------------------------------------------------------------ G: the tab
+        # a behaviour graph is its own document: its tab shows the roles where a quest keeps
+        # its tasks, frames readable and never says "quest" (docs/UI_DESIGN.md section 6)
+        v = mcp("quest_view", path="npc/qa_ambush.behasset", frame="all", graph_panel="show", details="show",
+                select="dig_in", slot="enter:0")
+        check(v.get("ok"), "G the behaviour graph opens in its tab", json.dumps(v)[:200])
+        mcp("ui_audit")
+        mcp("ui_audit")
+        v = mcp("quest_view", path="npc/qa_ambush.behasset")
+        panes = v.get("panes") or {}
+        check(v.get("title_px", 0) >= 12, "G its titles are readable after Frame All", str(v.get("title_px")))
+        check(all(panes.get(k) for k in ("graph", "canvas", "details", "node", "action")),
+              "G the Graph panel, the canvas and the node with its action are drawn", json.dumps(panes))
+        audit = mcp("ui_audit")
+        said = [str(e.get("label", "")) + " " + str(e.get("help", ""))
+                for key in ("controls", "truncated") for e in audit.get(key, [])
+                if ("doc.host" in str(e.get("window", "")) or "toolbar" in str(e.get("window", "")))
+                and "quest" in (str(e.get("label", "")) + str(e.get("help", "")) + str(e.get("why", ""))).lower()]
+        check(not said, "G and its tab never says quest", json.dumps(said[:5]))
+        labels = [str(e.get("label", "")) for e in audit.get("controls", []) if "doc.host" in str(e.get("window", ""))]
+        check("Binding" in labels and "Remove the role" not in labels,
+              "G a role's Group and Optional share one Binding row, and no bin sits beside its name", json.dumps(labels[:40]))
+        mcp("quest_view", path="npc/qa_ambush.behasset", select="none", slot="none")
 
         # ------------------------------------------------------------------ F: clean up
         for rel in ("npc/qa_ambush.behasset", "quests/qa_caller.nqasset"):

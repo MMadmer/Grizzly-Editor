@@ -1,26 +1,64 @@
 ﻿#pragma once
 
-// NQ - the details panel of a quest document (docs/NQ_ARCHITECTURE.md par. 13.9):
-// upper section = the selected node (or the quest when nothing is selected),
-// lower section = the selected on_enter/on_exit action. Widgets are generated
-// from the catalog parameter types; edits are staged on a copy while a widget
-// is active and committed to NqDoc (one undo step) when the interaction ends.
+// NQ - the two side panels of a graph document (docs/NQ_ARCHITECTURE.md par. 13.9):
+// the Graph panel (the quest's or the behaviour graph's own settings: its header, its
+// tasks or roles, and its variables under a splitter) and the Details panel (the
+// selected node, and its selected action under a splitter). Both are property grids of
+// the UI kit; the widgets are generated from the catalog parameter types. Edits are
+// staged on a copy while a widget is active and committed to NqDoc (one undo step)
+// when the interaction ends.
 
 #include "../../../XrECore/Editor/Nq/NqDoc.h"
 #include "../../../XrECore/Editor/Nq/NqCatalog.h"
 #include "../../../XrECore/Editor/Nq/NqItemCaps.h"
 #include "../../../XrECore/Editor/Nq/NqReferences.h"
 
+class NqCanvas;
+
 class NqInspector
 {
 public:
-	explicit		NqInspector		(NqDoc* doc);
+	explicit		NqInspector		(NqDoc* doc, NqCanvas* canvas);
 
-	// draws both sections into the current window (child regions)
-	void			Draw			(bool focus_rename, bool focus_action);
+	// the Graph panel, into the current window (it fills what is left of it)
+	void			DrawGraphPanel	();
+	// the Details panel, into the current window
+	void			DrawDetails		(bool focus_rename, bool focus_action);
+	// the inspector's own dialogs (Rename Task, Task References, Edit Text); called from the
+	// document's window so that they belong to it whichever panels are shown
+	void			DrawDialogs		();
+	// staged edits reach the document once no widget is being worked
+	void			CommitIdle		();
+
+	// Scroll a panel to something on the next frame: "top", "bottom" (the Details node
+	// section), "action:top", "action:bottom", "tasks", "task:<id>", "task:<id>/steps",
+	// "variables". The panels redraw on demand, so the caller lets a frame happen first.
+	static void		RequestScroll	(LPCSTR where);
+	// The two splits for a caller without a mouse, as shares of their column: `action_frac`
+	// the Details node pane, `vars_frac` the Variables pane of the Graph panel; below zero
+	// leaves that one alone. Stored in the layout like a drag (graph.action_split,
+	// graph.vars_split, pt).
+	void			SetSplit		(float action_frac, float vars_frac);
+	// the shares the last frame drew
+	float			ActionSplit		() const { return m_ActionShare; }
+	float			VarsSplit		() const { return m_VarsShare; }
+	// where the scrolling panes stood on the last frame: {y, max}. A caller that cannot see
+	// the scrollbar learns from `max` that there is more below.
+	const Fvector2&	NodeScroll		() const { return m_NodeScroll; }
+	const Fvector2&	ActionScroll	() const { return m_ActionScroll; }
+	const Fvector2&	GraphScroll		() const { return m_GraphScroll; }
+	const Fvector2&	VarsScroll		() const { return m_VarsScroll; }
+	// the panes as the last frame drew them (px of the screen, x y w h; zero when not drawn)
+	ImVec4			NodePane		() const { return m_NodePane; }
+	ImVec4			ActionPane		() const { return m_ActionPane; }
+	ImVec4			GraphPane		() const { return m_GraphPane; }
+	ImVec4			VarsPane		() const { return m_VarsPane; }
+	// an action is open under the node
+	bool			HasAction		() const;
 
 private:
 	NqDoc*			m_Doc;
+	NqCanvas*		m_Canvas;
 	// staged node copy
 	SNqNode			m_Node;
 	xr_string		m_NodeId;
@@ -33,16 +71,22 @@ private:
 	xr_string		m_LuaCheck;		// last syntax check result
 	bool			m_FocusRename, m_FocusAction;
 	char			m_Search[64];	// picker popup filter
-	// height of the variables pane as a fraction of the column, so the split
-	// survives a resized window; kept in the editor preferences between sessions
-	float			m_VarsFrac;
-	float			m_ActionFrac;	// share of the node/action column the NODE keeps
-	Fvector2		m_NodeScroll, m_ActionScroll;
+	float			m_ActionShare, m_VarsShare;
+	float			m_DetailsColumn, m_GraphColumn;		// pt of the split columns, last frame
+	float			m_PendingAction, m_PendingVars;		// SetSplit before the columns were measured
+	Fvector2		m_NodeScroll, m_ActionScroll, m_GraphScroll, m_VarsScroll;
+	ImVec4			m_NodePane, m_ActionPane, m_GraphPane, m_VarsPane;
+	int				m_VarSel;		// the variable the Graph panel edits
+	// the node and action the Details panel last showed, the frames the node pane still tries to bring
+	// the action's row into view, and whether its Actions section is still to be opened for it
+	xr_string		m_RevealKey;
+	int				m_RevealFrames;
+	bool			m_RevealOpen;
 	// the parameter table the current widget belongs to, so a `value` can ask what
 	// type the `name` beside it was declared with
 	SNqValue*		m_ParamsCtx;
-	bool			m_OpenTaskRename;
-	bool			m_OpenTaskReferences;
+	bool			m_TaskRenameOpen;
+	bool			m_TaskReferencesOpen;
 	xr_string		m_TaskRenameFrom;
 	xr_string		m_TaskRenameTo;
 	xr_string		m_TaskRenameError;
@@ -61,24 +105,28 @@ private:
 	void			SyncQuest		();
 	void			CommitQuest		();
 
-	void			DrawQuestSection();
+	bool			Behaviour		() const { return m_Doc && m_Doc->quest.IsBehaviour(); }
+	void			DrawHeaderPane	();
+	void			DrawQuestFields	(bool& changed);
+	void			DrawTasks		(bool& changed, xr_string& rename, xr_string& references);
+	void			DrawRolesSection(bool& changed);
+	// the graph's variables, in a pane of their own: they are read and written from anywhere
+	// in the graph, so they are not a property of a node
+	void			DrawVarsSection	();
 	void			DrawNodeSection	();
 	void			DrawActionSection();
-	// the quest's variables, in their own pane under the node - they are read and
-	// written from anywhere in the graph, so they are not a property of a node
-	void			DrawVarsSection	();
 	void			BeginTaskRename	(LPCSTR id);
 	void			DrawTaskRename	();
 	void			BeginTaskReferences(LPCSTR id);
 	void			DrawTaskReferences();
-	void			DrawHSplitter	(LPCSTR id, float& frac, float total, bool grows_down = false);
+	void			DrawTextEdit	();
 
 	// ---- variables -----------------------------------------------------------
 	// A variable's type is the type of its declared default, so every value tied
 	// to it is edited with the widget that type deserves instead of a free string.
 	const SNqVar*	FindVar			(LPCSTR name) const;
 	static LPCSTR	TypeName		(SNqValue::EType t);
-	bool			DrawTypedValue	(LPCSTR label, SNqValue& v, SNqValue::EType as, float reserve = 0.f);
+	bool			DrawTypedValue	(LPCSTR label, SNqValue& v, SNqValue::EType as);
 	bool			DrawVarNameCombo(LPCSTR label, xr_string& name);
 	// renames a declared variable and every var.set/var.add/var reference to it
 	bool			RenameVar		(LPCSTR from, LPCSTR to);
@@ -99,7 +147,6 @@ private:
 	bool			DrawWho			(LPCSTR label, SNqValue& v);
 	bool			DrawRoleTarget	(LPCSTR label, SNqValue& v, bool attack);
 	bool			DrawRoleBindings(LPCSTR label, SNqValue& v);
-	void			DrawRolesSection(bool& changed);
 	// spawn.npc: one row per NPC - a character of the project or a section
 	bool			DrawNpcList		(LPCSTR label, SNqValue& v);
 	bool			DrawPosition	(SNqValue& v);
@@ -111,22 +158,6 @@ private:
 	bool			DrawFetchParams	(const NqCatalog::SKind* k, SNqValue& params);
 	bool			DrawItemSpawnParams(const NqCatalog::SKind* k, SNqValue& params);
 	bool			DrawItemRowsParams(const NqCatalog::SKind* k, SNqValue& params);
-
-public:
-	// Scroll the panel to something on the next frame: "top", "bottom", or
-	// "task:<id>". The inspector redraws on demand, so the caller has to let a
-	// frame happen before the move is visible.
-	static void		RequestScroll	(LPCSTR where);
-	// The two splitters for a caller without a mouse; a fraction below zero leaves
-	// that one alone. Same clamps and the same preference a drag writes.
-	void			SetSplit		(float action_frac, float vars_frac);
-	float			ActionSplit		() const { return m_ActionFrac; }
-	float			VarsSplit		() const { return m_VarsFrac; }
-	// where the node and the action panes stood on the last frame: {y, max}. A caller
-	// that cannot see the scrollbar learns from `max` that there is more below.
-	const Fvector2&	NodeScroll		() const { return m_NodeScroll; }
-	const Fvector2&	ActionScroll	() const { return m_ActionScroll; }
-private:
 	bool			DrawLootSpawn	(LPCSTR label, SNqValue& v);
 	bool			DrawCases		(LPCSTR label, SNqValue& v, bool weights);
 	bool			DrawCondList	(xr_vector<SNqCond>& conds, LPCSTR id_prefix, int depth);

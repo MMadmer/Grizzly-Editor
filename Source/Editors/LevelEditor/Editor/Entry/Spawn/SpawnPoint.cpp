@@ -500,7 +500,7 @@ void CSpawnPoint::SSpawnData::OnAnimControlClick(ButtonValue* value, bool& bModi
 	ButtonValue* B				= dynamic_cast<ButtonValue*>(value); R_ASSERT(B);
     switch(B->btn_num)
     {
-//		"First,Play,Pause,Stop,Last",
+// First Frame, Play, Pause, Stop, Last Frame
     	case 0: //first
         {
 			m_Visual->PlayAnimationFirstFrame();
@@ -535,8 +535,8 @@ void CSpawnPoint::SSpawnData::FillProp(LPCSTR pref, PropItemVec& items)
    if(m_Visual)
    {
     ButtonValue* BV = PHelper().CreateButton	    (	items, 
-									PrepareKey(pref,m_Data->name(),"Model\\AnimationControl"),
-									"|<<,Play,Pause,Stop,>>|",
+									PrepareKey(pref,m_Data->name(),"Model\\Animation"),
+									"First Frame,Play,Pause,Stop,Last Frame",
 									0);
    BV->OnBtnClickEvent.bind			(this,&CSpawnPoint::SSpawnData::OnAnimControlClick);
 
@@ -1655,7 +1655,7 @@ void CSpawnPoint::FillProp(LPCSTR pref, PropItemVec& items)
         case ptPlayerStart:
             PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Starts"), "a new game of the module's mode");
             PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Facing"), "the arrow; rotate to turn it");
-            PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Rules"), "one per module - Mod > World");
+            PHelper().CreateCaption	(items, PrepareKey(pref, "Player Start\\Rules"), "one per module - Mod > World Rules");
         break;
         case ptRPoint:
         {

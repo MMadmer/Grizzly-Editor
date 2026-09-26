@@ -73,13 +73,13 @@ enum
     COMMAND_SHOW_WORLD_OUTLINER,
     COMMAND_DROP_TO_GROUND,		// End: settle the selection on the surface below
     COMMAND_MOD_BUILD,			// Ctrl+B: clean build of the mod into the linked game
-    COMMAND_MOD_EDIT_MANIFEST,	// opens Mod > Edit Manifest...
+    COMMAND_MOD_EDIT_MANIFEST,	// opens Mod > Mod Settings
     COMMAND_MOD_PACKAGE,		// opens Mod > Package Release...
     COMMAND_MOD_PUBLISH,		// opens Mod > Publish Release...
-    COMMAND_MOD_RELEASES,		// opens Mod > Manage Releases...
-    COMMAND_MOD_CHARACTERS,		// opens Mod > Characters...
-    COMMAND_MOD_WORLD,			// opens Mod > World...
-    COMMAND_MOD_PDA,			// opens Mod > PDA Interface...
+    COMMAND_MOD_RELEASES,		// opens Mod > Releases
+    COMMAND_MOD_CHARACTERS,		// opens Mod > Characters
+    COMMAND_MOD_WORLD,			// opens Mod > World Rules
+    COMMAND_MOD_PDA,			// opens Mod > PDA Interface
     COMMAND_MOD_CATALOG,		// opens Mod > Submit to Mod Browser...
 };
 
@@ -123,7 +123,8 @@ public:
     virtual void	LoadSettings			(CInifile*);
     virtual Ivector2 GetRenderMousePosition()const;
     virtual void OnDrawUI();
-    virtual void BuildDefaultDockLayout(unsigned int dockspace_id);
+    // the scene is drawn while the Level tab is up (screenshot_viewport forces a pass behind a document)
+    virtual bool SceneVisible() const;
     bool  KeyDown(WORD Key, TShiftState Shift);
     virtual void	OnStats(CGameFont* font);
 

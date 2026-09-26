@@ -388,14 +388,28 @@ xr_string NetworkError(DWORD code)
 {
 	switch (code)
 	{
-	case ERROR_WINHTTP_NAME_NOT_RESOLVED:	return "no connection: the host name was not resolved";
-	case ERROR_WINHTTP_CANNOT_CONNECT:		return "no connection to the server";
-	case ERROR_WINHTTP_TIMEOUT:				return "the connection timed out";
-	case ERROR_WINHTTP_CONNECTION_ERROR:	return "the connection was lost";
-	case ERROR_WINHTTP_SECURE_FAILURE:		return "the secure connection failed";
-	case ERROR_WINHTTP_OPERATION_CANCELLED:	return "cancelled";
+	case ERROR_WINHTTP_NAME_NOT_RESOLVED:			return "no connection: the server's name was not found";
+	case ERROR_WINHTTP_CANNOT_CONNECT:				return "no connection to the server";
+	case ERROR_WINHTTP_TIMEOUT:						return "the connection timed out";
+	case ERROR_WINHTTP_CONNECTION_ERROR:			return "the connection was lost";
+	case ERROR_WINHTTP_OPERATION_CANCELLED:			return "cancelled";
+	case ERROR_WINHTTP_INVALID_SERVER_RESPONSE:		return "no valid answer from the server: a proxy or a firewall may be in the way";
+	case ERROR_WINHTTP_SECURE_FAILURE:
+	case ERROR_WINHTTP_SECURE_CHANNEL_ERROR:		return "the secure connection failed";
+	case ERROR_WINHTTP_SECURE_CERT_DATE_INVALID:
+	case ERROR_WINHTTP_SECURE_CERT_CN_INVALID:
+	case ERROR_WINHTTP_SECURE_INVALID_CA:
+	case ERROR_WINHTTP_SECURE_INVALID_CERT:
+	case ERROR_WINHTTP_SECURE_CERT_REVOKED:
+	case ERROR_WINHTTP_SECURE_CERT_REV_FAILED:		return "the server's certificate was not accepted";
+	case ERROR_WINHTTP_AUTO_PROXY_SERVICE_ERROR:
+	case ERROR_WINHTTP_AUTODETECTION_FAILED:
+	case ERROR_WINHTTP_BAD_AUTO_PROXY_SCRIPT:
+	case ERROR_WINHTTP_UNABLE_TO_DOWNLOAD_SCRIPT:	return "the proxy settings could not be used";
 	}
-	return NqUtil::Format("network error %u", (u32)code);
+	// the code is for whoever reads the log, not for the sentence it ends
+	Msg("! [XMS] WinHTTP error %u", (u32)code);
+	return "the connection failed";
 }
 
 class CHttp
@@ -996,7 +1010,7 @@ bool EditorGithub::Publish(const SPublishRequest& rq, CCancel& cancel, IPublishS
 	else if (r.status == 404)
 		err = NqUtil::Format("Repository %s was not found, or this account cannot see it.", rq.repo.c_str());
 	else if (r.status >= 300 && r.status < 400)
-		err = NqUtil::Format("Repository %s has moved. Set its current name in Mod > Edit Manifest.", rq.repo.c_str());
+		err = NqUtil::Format("Repository %s has moved. Set its current name in Mod Settings.", rq.repo.c_str());
 	else if (r.status != 200 || !ParseJson(r.body, j))
 		err = Problem(r);
 	if (!err.empty()) return false;
@@ -1240,7 +1254,7 @@ xr_string AccessProblem(const SHttpResponse& r, const xr_string& repo)
 {
 	if (r.status == 401) return "GitHub rejected the sign-in. Sign in again.";
 	if (r.status >= 300 && r.status < 400)
-		return NqUtil::Format("Repository %s has moved. Set its current name in Mod > Edit Manifest.", repo.c_str());
+		return NqUtil::Format("Repository %s has moved. Set its current name in Mod Settings.", repo.c_str());
 	return Problem(r);
 }
 } // namespace

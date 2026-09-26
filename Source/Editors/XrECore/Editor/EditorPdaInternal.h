@@ -9,4 +9,6 @@ namespace EditorPdaInternal
 	bool	TextureKnown	(LPCSTR id);
 	// a layout file was written or deleted: the preview re-reads what it shows
 	void	FileWritten		(LPCSTR abs_path);
+	// the reader script is read again on its next use (the preview's Reload)
+	void	DropReader		();
 }

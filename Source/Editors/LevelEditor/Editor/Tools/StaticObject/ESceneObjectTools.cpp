@@ -115,7 +115,7 @@ void ESceneObjectTool::FillAppendRandomPropertiesBegin(bool bUpdateOnly)
     if (bUpdateOnly)
         UIPropertiesModal::GetProperties()->AssignItems(items);
     else
-        UIPropertiesModal::Show(items);
+        UIPropertiesModal::Show(items, "Random Append");
 }
 bool ESceneObjectTool::FillAppendRandomPropertiesEnd()
 {

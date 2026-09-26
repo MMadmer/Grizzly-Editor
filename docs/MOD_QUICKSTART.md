@@ -7,7 +7,9 @@ and what to do when it refuses.
 
 ## 1. Once per project
 
-**Mod → Edit Manifest…** — this is the only mandatory setup.
+**Mod → Mod Settings** — this is the only mandatory setup. It opens as a tab of its
+own (General, Mod Browser, Game Mode, Relations, Build Contents, PDA) and writes
+`mod.ltx` when you press Save.
 
 | Field | What it is |
 |---|---|
@@ -16,18 +18,19 @@ and what to do when it refuses.
 | `version` | One to four numbers separated by dots: `1`, `1.2`, `1.2.0`, `1.2.0.4`. The game offers an update only when the released version is higher than the installed one. |
 | `author`, `description` | Optional. Shown in the Mods menu; the description may span lines. Both (and `name`) may be a string table id the module ships in its own `gamedata\configs\text\<language>\*.xml`. |
 | `website` | Optional. The mod's page, opened from the Mods menu. Only `https://ap-pro.ru/...` and `https://moddb.com/...` (with or without `www.`) are accepted — the game ignores anything else, so the editor refuses to save it. |
-| `GitHub repository` | Optional, `owner/repo` (a pasted repository URL is reduced to it). Written as `[update] github`; the game checks that repository's latest release for updates — see §4. |
-| **Target mode** | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
+| `GitHub Repository` | Optional, `owner/repo` (a pasted repository URL is reduced to it). Written as `[update] github`; the game checks that repository's latest release for updates — see §4. |
+| **Target** (Game Mode page) | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
 
-If you declare a **new mode**, the export also generates the new-game-screen
-checkbox for it (the module's own screen layout, the text entry and
-`mode_register.script`).
+If you declare a **new mode**, the export also generates what puts it on the
+new-game screen: Dead Air: Refined lists it among the module modes by its title;
+the module's own layout (a checkbox, for a screen without that list), the text
+entry and `mode_register.script` come with every build.
 Those files are machinery, not content — the content browser hides them so you
 can't delete one by accident, and the export regenerates them every time.
 
 ## 2. Building
 
-**Mod → Build Mod into Game** · toolbar **Build Mod** · `Ctrl+B`
+**Mod → Build Into Game** · toolbar **Build Mod** · `Ctrl+B`
 
 Writes straight into `<linked game>\modules\<id>`. No packing step, no copying
 by hand — the game reads modules from that folder as-is.
@@ -44,7 +47,7 @@ shipping a crash.)
 the content browser, paste. Everything an imported base level brought (all the
 stock props, NPCs and logic of, say, Escape) is the game's, not the mod's, and
 never ships; baking it would double the whole level in game. The label is
-visible per object and can be flipped: **Mod → Mark Selection as Mod Content /
+visible per object and can be flipped: **Scene → Mark Selection as Mod Content /
 as Base Level**. Objects placed in scenes saved before this flag existed count
 as base — re-mark them once.
 
@@ -52,7 +55,9 @@ The build is a **mirror, not a merge**. Files the target holds and the project
 no longer has are deleted, so a stale file from an old build can never haunt
 you. If the target already holds files this project didn't put there (someone
 else's module sharing your id), the build stops and asks before deleting
-anything.
+anything: the question names up to ten of those files, and Cancel is the default.
+A build started from the editor reports in one result window - what was written,
+what was left out, the warnings; over MCP the answer says the same.
 
 **What ships.** The project folder is yours to work in: a git repository, design
 notes, reference pictures can all sit beside the mod. The build leaves out on its
@@ -62,7 +67,7 @@ at any depth, together with the editor's own folders (`releases`, `temp`,
 `backup`, ...) and the sources under `rawdata`. What else stays behind is your
 call: right-click a folder or a file in the Content Browser > **Exclude from
 Build** (the tile greys out and says why on hover), or list paths and patterns
-in **Mod → Edit Manifest… > Not shipped**:
+in **Mod → Mod Settings, Build Contents > Not Shipped**:
 
 ```
 docs              a folder, with everything in it
@@ -87,7 +92,7 @@ names the game cannot open".
 
 Other outputs, when you need them:
 
-- **Mod → Build to Another Folder…** — same module layout, arbitrary target.
+- **Mod → Build to Folder…** — same module layout, arbitrary target.
   Use it to build into a second install.
 - **Mod → Package Release…** — the zip and the update descriptor for other
   people, see §4.
@@ -167,16 +172,23 @@ Once:
 
 For every release:
 
-1. Press **Publish Release**. **Repository** takes `owner/repo` or the pasted
-   address the first time and stays in `mod.ltx`; **Version** has to be higher
-   than the last release, otherwise players are offered nothing.
+1. Set **GitHub Repository** and **Version** in **Mod Settings** (General): the
+   repository once, the version for every release - it has to be higher than the
+   last release, otherwise players are offered nothing. Then press **Publish
+   Release**. Its Module section (Name, Repository, Version, Requires Game,
+   Author Key) only shows them; the dialog reads the repository's releases as it
+   opens and lists a version that is already out as a problem at its top, with
+   **Open Mod Settings** and **Open Releases** to fix it, before you press
+   anything.
 2. Tag, title and notes are GitHub's; the game reads none of them. A
    **pre-release** never reaches players - that is what it is for.
 3. **Publish** packages the module and uploads it as a *draft*, checks every
    stored asset against what was packaged (name, size, SHA-256), and only then
    publishes the draft as the latest release. Players never see a release that
    is half there. The last step asks GitHub for the descriptor at the very
-   address the game uses and says whether the update is already on offer.
+   address the game uses and says whether the update is already on offer. The
+   dialog closes as the job starts; a small progress window (**Stop
+   Publishing**, **Hide**) follows it, and the result window says how it went.
 
 A version that is already published is refused: a player who has it never looks
 at it again, so changed files would reach nobody - raise the version. An
@@ -187,19 +199,23 @@ VirusTotal knows its packages, and it never uploads anything itself. So for a
 module the Mod Browser lists, Publish scans the packaged release on VirusTotal
 with your own free key first, before anything reaches GitHub: every package is
 looked up, one VirusTotal does not know is uploaded, and its report is awaited -
-a few minutes. Without a key, or when VirusTotal blocks a package, the release is
-not published and the result says why; add the key in **Mod → Submit to Mod
-Browser…** (a free account at virustotal.com has one). When VirusTotal is still
-analysing or does not answer, the release goes out with a warning and the Mod
-Browser offers it once VirusTotal knows it.
+a few minutes. A listed module's release leaves only with a VirusTotal report of
+every package: without a key, when VirusTotal blocks a package, is still analysing
+it after the wait or does not answer, the release is not published and the
+result says why and when to publish again. Add the key in **Mod → Submit to Mod
+Browser…** (a free account at virustotal.com has one). A module the Mod Browser
+does not list is published without a scan.
 
-**The releases that are out.** **Releases** on the toolbar (**Mod → Manage
-Releases…**, MCP: `xfined_mod_releases`, `xfined_mod_release_edit`,
-`xfined_mod_release_delete`) lists what the repository holds, newest first,
-drafts included, and marks the one release the game reads. **Edit…** changes the
-title and the notes of the selected release and nothing else: not its files, not
-its tag, not which release is the latest. **Delete…** removes the selected
-release and then its git tag, so the version number is free again. The window names what goes and asks first, because GitHub keeps no copy:
+**The releases that are out.** **Releases** on the toolbar (**Mod → Releases**, a
+tab of its own; MCP: `xfined_mod_releases`, `xfined_mod_release_edit`,
+`xfined_mod_release_delete`) lists what the repository holds in a sortable table -
+Tag, Title, State, Published (local time), Files - drafts included, and marks the
+one release the game reads; the selected release's details sit beside it.
+**Edit…** changes the title and the notes of the selected release and nothing
+else: not its files, not its tag, not which release is the latest. **Delete…**
+(also the row's right-click menu, or Del) removes the selected release and then
+its git tag, so the version number is free again. It names what goes and asks
+first, Cancel the default, because GitHub keeps no copy:
 the release, its files and the tag are gone for good. Two things to know before
 pressing it:
 
@@ -230,7 +246,7 @@ game compares the index with the files the player already has and downloads
 only what differs, so a one-file fix costs a one-file download — from the last
 version or from one ten releases back.
 
-**Requires game** in the packaging window is the lowest Dead Air: Refined
+**Requires Game** in the packaging window is the lowest Dead Air: Refined
 version the release runs on. It defaults to the version of the linked game;
 leave it empty when any version will do.
 
@@ -262,7 +278,7 @@ These write into the project. The next build ships them.
 
 ## 5a. Characters — the mod's own NPCs
 
-**Mod → Characters…** · content browser **Create → Character** ·
+**Mod → Characters** (a tab) · content browser **Add → Character** ·
 `xfined_characters_write`
 
 A story needs stalkers of its own. One `.npcasset` file per character:
@@ -332,20 +348,23 @@ is cleared, not left pointing at nobody. For a **section** it is off unless you
 switch it on: a section is a kind half the zone may share, and clearing it out
 is never assumed.
 
-The Characters window shows `name` and `bio` for BOTH languages at once, one
+The Characters tab shows `name` and `bio` for BOTH languages at once, one
 row each: fill `rus` and leave `eng` empty and an English install reads the
 Russian text; fill both and each install reads its own. A character that only
 has `rus` stays a plain string in the file.
 
 Fields: `name` and `bio` are a string or a table keyed by language; `community`
-is one of the linked game's - the window offers them as a list, under the names
+is one of the linked game's - the tab offers them as a list, under the names
 the player reads (`stalker`, `bandit`, `dolg`, `freedom`, `ecolog`, `killer`,
 `army`, `monolith`, `zombied`, `csky`, `trader`, … - a global mod may change
 the set); `base` is picked from the project's other characters; `visual` is
-meshes-relative with the extension optional - the window lists `meshes\actors` of
+meshes-relative with the extension optional - the tab lists `meshes\actors` of
 the game and the project, and **Preview** opens the model; `icon` is a portrait -
-the window shows it and opens a gallery; `rank` is a number on the linked game's
-scale (Dead Air: novice from 0 to legend from 13999, the window names the rank);
+the tab shows it and opens a gallery; `rank` is a number on the linked game's
+scale (Dead Air: novice from 0 to legend from 13999, the tab names the rank);
+`money` is two amounts, *from* and *to* (empty while the character sets none - the
+base's amount is the hint), **Never runs out** beside them and the Clear icon to
+unset;
 `start_dialog` is picked from the game's dialogs by their first line; `supplies`
 is the starting kit, every row picked by the item's name; `squad = false` leaves
 the squad section out.
@@ -357,7 +376,8 @@ game does not list: the engine refuses a character of a community it does not
 know, so this one is only safe when the module brings that community itself;
 `W115` / `W116` / `W117` - a portrait, a dialog or a kit item neither the linked
 game nor the project has; an item the game does not know stops the game when the
-NPC spawns).
+NPC spawns). The Characters tab shows each problem as a sentence under its
+field; `characters_write`, `characters_view` and the build keep the code.
 
 ### One kit, many characters
 
@@ -405,7 +425,7 @@ return {
 | a repeated section | takes the new count, keeping its place in the list |
 | `count = 0` | takes an inherited item out |
 
-The **Characters** window shows what the base already gives, greyed out above
+The **Characters** tab shows what the base already gives, greyed out above
 your own rows, so you do not add the same torch twice.
 
 **The model is fixed.** `visual` is what the NPC spawns with and keeps: in Dead
@@ -421,21 +441,25 @@ profile at all.
 ## 6. Quests (NQ)
 
 A quest is a node graph in its own file. Make one in the Content Browser —
-**RMB → Create → Quest Graph** — or over MCP with `xfined_quest_new`. Either way
-you get a working stub (`trigger.start → flow.end`) and a document tab.
+**Add → Quest** (the toolbar's [+ Add], or right-click the empty grid) — or over
+MCP with `xfined_quest_new`. Either way you get a working stub
+(`trigger.start → flow.end`) and a tab of its own.
 
-Edit it whichever way suits you. The tab is an infinite canvas: nodes flow top
-to bottom, RMB pans, the wheel zooms through ten fixed levels, the strips above
-and below a node are its `on_enter` / `on_exit` actions, and the inspector on
-the right builds its widgets from the kind catalog the linked game ships. The
+Edit it whichever way suits you. The tab is an infinite canvas between two
+panels: nodes flow top to bottom, RMB pans, the wheel zooms through ten fixed
+levels, and each node is a card listing its conditions, its key parameters and
+its `on_enter` / `on_exit` actions. The **Graph** panel on the left holds the
+quest's header, tasks and variables; the **Details** panel on the right edits the
+selected node and action, its rows built from the kind catalog the linked game
+ships. The
 file itself is plain declarative Lua (`return { … }`), so writing or patching it
 as text is a first-class path — `xfined_quest_get` hands back the canonical text
 plus a readable outline of the graph, `xfined_quest_write` replaces it whole,
 `xfined_quest_apply` does surgical edits. Node coordinates are optional; leave
-`pos` out and **Layout** (or `xfined_quest_layout`) places everything.
+`pos` out and **Auto Layout** (or `xfined_quest_layout`) places everything.
 
-Validation runs as you edit and shows up in the problems bar under the canvas —
-click a problem to jump to the node. Errors (`E…`) block, warnings (`W…`) do
+Validation runs as you edit; the toolbar's **Validate** opens the **Problems**
+drawer under the canvas — click a problem to jump to the node. Errors (`E…`) block, warnings (`W…`) do
 not. `xfined_quest_check_all` runs exactly the gate the build runs.
 
 Then press **Build** (`Ctrl+B`). If any quest in the project has an error the
@@ -499,11 +523,11 @@ a dead id.
 
 ## 6a. NPC behaviour graphs
 
-**Content browser → Create → NPC Behaviour** · `xfined_quest_new` with a
+**Content browser → Add → Behaviour Graph** · `xfined_quest_new` with a
 `.behasset` path · `xfined_quest_write`
 
 A quest tracks the player; a **behaviour graph** drives NPCs. It is its own
-asset - a `.behasset`, its own icon, its own window - on the node graph you
+asset - a `.behasset`, its own icon, its own tab - on the node graph you
 already know. It shows the player nothing (no tasks, no dialogs, no map spots)
 and never starts itself: a quest runs it.
 
@@ -533,8 +557,8 @@ There is no wait flag to remember.
 The graph itself (`valera_route.behasset`) declares **roles**, not NPCs, so the
 same file serves any cast - bind them at the call, or give a role a `default`
 and bind nothing. A role holds a group as happily as one stalker: «отряд идёт в
-область и закрепляется» is one role and one node. In the editor the roles sit
-where a quest keeps its tasks, a step's `who` is a tick per role, and the call's
+область и закрепляется» is one role and one node. In the editor the roles sit in
+the Graph panel where a quest keeps its tasks, a step's `who` is a tick per role, and the call's
 bindings are a form: pick the asset and one row per role appears.
 
 Steps: `npc.goto` (walk or run, wait for arrival), `npc.hold` (dig in and fight
@@ -570,7 +594,7 @@ Full reference: `docs/nq/NQ_FORMAT.md` §10.
 
 ## 6b. The mode's world - an empty map of your own
 
-**Mod → World…** · `xfined_world_get` / `xfined_world_set` /
+**Mod → World Rules** (a tab) · `xfined_world_get` / `xfined_world_set` /
 `xfined_world_transitions` · Spawn tool → **Player Start** · a stalker's
 **Order** properties · `xfined_spawn_order`
 
@@ -579,9 +603,10 @@ underground), the player starts at your spot, nobody of the game walks around,
 your own NPCs are placed and ordered about, and the story swaps them as it goes.
 That is four settings and no code.
 
-**1. Nothing of the original game.** Mod → World, *Original game*: untick what
-the mode does not keep, or press **Remove everything** - the one-click empty
-world. Five rules, each a row:
+**1. Nothing of the original game.** Mod → World Rules, *Original Game*: untick
+**Keep** where the mode does not keep it, or press **Empty World...** on the tab's
+toolbar - the one-click empty world, which names the rules it turns off and asks
+first. The tab saves `mod.ltx` as you edit. Five rules, each a row:
 
 | row | `mod.ltx` key | off means |
 |---|---|---|
@@ -591,11 +616,11 @@ world. Five rules, each a row:
 | Jobs from NPCs | `npc_quests` | squad leaders offer no "got any work?" |
 | Story quests | `story_quests` | named characters offer no tasks, the storylines stay shut |
 
-*Applies on* narrows them to some levels (keep Cordon alive, empty Agroprom).
-*Player decides* puts a rule on the new-game screen as a checkbox, preset to
+*Applies On* narrows them to some levels (keep Cordon alive, empty Agroprom).
+*Player Decides* puts a rule on the new-game screen as a checkbox, preset to
 your choice - three at most, the screen has three rows.
 
-**2. Where the player may go.** *Playable area → Only these levels*:
+**2. Where the player may go.** *Playable Area → Only These Levels*:
 `l03_agroprom`, `l03u_agr_underground`. A transition leading anywhere else stays
 closed - the game shows its own "the way is closed" message. *Transitions*
 lists every level changer of the linked game by level: tick one to close it,
@@ -603,7 +628,7 @@ or close the whole level. A quest opens them later (`world.transition`,
 `world.area`), when the story says so.
 
 **3. Where the player starts.** Open the level's scene, Spawn tool →
-**Player Start** (or *Place in the scene* in the World window), put it down and
+**Player Start** (or **Place in Scene** in the World Rules tab), put it down and
 turn it - the arrow is where the player faces. One per module. The new game
 begins there, whatever faction the player picked.
 
@@ -649,7 +674,7 @@ not have, and about an area the Player Start is not in (`W203`-`W206`).
 
 ## 6c. The PDA interface - your own app in the PDA
 
-**Mod → PDA Interface…** · Content browser → **Create → PDA Interface** ·
+**Mod → PDA Interface** · Content browser → **Add → PDA Interface** ·
 `xfined_pda_*`
 
 Your mod can put its own screens into the PDA: a courier app, a hacked military
@@ -658,19 +683,22 @@ terminal, a scanner - pages, buttons, lists, pop-up menus, and the live map
 stays the game's, and so do the tasks, contacts and the rest: a page of yours
 can show any stock section.
 
-1. **Mod → PDA Interface…** makes `pda\<module>.pdaasset` from a template (home,
+1. **Mod → PDA Interface** makes `pda\<module>.pdaasset` from a template (home,
    map, journal), writes `[pda] layout` into `mod.ltx` and opens the **preview
    tab**: the 2D PDA with the interface in it, in the game's own textures and
    fonts. Click through it - buttons, tabs, lists and menus work as in the game;
    a quest signal or a script call shows as a note and goes into the action log.
-2. Edit the file (Source pane → Apply / Save, any text editor, or an AI agent
-   with `xfined_pda_write`): the tab follows the file. The format is
+2. Edit the file (the toolbar's **Source** pane → Apply (`Ctrl+Enter`) / Save, any
+   text editor, or an AI agent with `xfined_pda_write`): the tab follows the file
+   unless the Source pane holds edits, and never drops those without asking. The format is
    `docs/pda/PDA_FORMAT.md` - a canvas of 960x680, `chrome` under every page,
    `pages`, an `overlay` on top, widgets `rect`, `image`, `text`, `button`,
    `list`, `group`, `map`, and actions like `page:map`, `show:menu`,
    `var:order=...`, `signal:order_taken`.
-3. **Problems** are listed beside the device (`E3xx` stops the build, the game
-   would not show it either; `W3xx` warns). **4:3 / 16:9** shows both screens.
+3. **Problems** are the first tab of the **Details** pane beside the device
+   (`E3xx` stops the build, the game would not show it either; `W3xx` warns).
+   **Aspect** 4:3 / 16:9 shows both screens; the canvas pans with the right or
+   middle button and zooms at the mouse (`Ctrl`+wheel), `F` fits.
 4. Build: the file ships as it is, and the game shows it while your module
    applies (in your mode, for a mode mod). Without `[pda]` - the stock PDA.
 
@@ -687,19 +715,20 @@ Things that bite: Dead Air's fonts draw `—` and `–` blank and have no `→` 
 
 | Message | Fix |
 |---|---|
-| `no target game mode` | Mod → Edit Manifest, pick a mode. |
-| `Module id is missing or invalid` | Mod → Edit Manifest, `id` must be `a-z 0-9 _ . -`. |
+| `no target game mode` | Mod → Mod Settings, Game Mode: pick a mode. |
+| `Module id is missing or invalid` | Mod → Mod Settings, General: **Module ID** must be `a-z 0-9 _ . -`. |
 | `No linked game` | Link a game — the build target is that install. |
-| `target already holds a module: N file(s) there are not in this project` | Something else owns that folder. Confirm only if you're sure it's yours. |
+| `target already holds a module: N file(s) there are not in this project` | Something else owns that folder. The question names up to ten of those files; confirm only if you're sure they are yours. |
 | `quest graph errors: N (see log)` | Open the log, fix the listed `E…` codes — see [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). |
 | `E201 world: N Player Starts` | A module has one Player Start - delete the others (the message names them and their levels). |
-| `E202 world: N rules offered to the player` | Mod → World: the new-game screen has room for three *Player decides* ticks. |
+| `E202 world: N rules offered to the player` | Mod → World Rules: the new-game screen has room for three *Player Decides* ticks. |
 | `a release needs an orderable version` | Package Release only: set `version` to 1-4 numbers separated by dots (`1.2.0`). |
 | `package … is N bytes - GitHub refuses a release asset of 2 GiB and more` | Package Release only: one file is too big to ship as a GitHub asset even alone. The message names it. |
 
 ## Not the same thing
 
-The **Compile** menu (Build, Make Game, Make Details, Make AI Map…) is the
-X-Ray *level* compiler — it bakes geometry, lighting and AI maps for a level
-you authored from scratch. It has nothing to do with shipping a mod. If you're
+The **Build** menu of the Level tab (Make ▸ Make All, Make Game, Make Details,
+Make AI Map…; Compile ▸ Geometry & Light, AI Map, Spawn) is the X-Ray *level*
+compiler — it bakes geometry, lighting and AI maps for a level you authored from
+scratch. It has nothing to do with shipping a mod. If you're
 adding things to existing levels, you never need it.

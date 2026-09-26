@@ -5,7 +5,9 @@ Drives the editor over MCP on a THROW-AWAY COPY of a project: writes characters,
 reads them back, builds the module into a temporary folder and verifies that the
 generated half is exactly what the game needs to load them — the character_desc
 entry, the profile, the string table, the spawn and squad sections, and the
-.ltxp patch that appends (never replaces) the two profile lists.
+.ltxp patch that appends (never replaces) the two profile lists. Phase U opens the
+Characters tab on a character over MCP (characters_view) and wants its form drawn
+whole, with nothing escaping its window.
 
     python tools/qa/test_characters.py --project D:\\XFinedProjects\\Test
 """
@@ -353,6 +355,39 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
         mcp("characters_delete", id=gone)
 
 
+def run_ui_checks(mcp, check, json):
+    """The Characters tab: opened on a character over MCP, looked at, and nothing of it leaves its window."""
+    v = mcp("characters_view")
+    check(v.get("ok") and v.get("tab") == "characters", "U characters_view answers", json.dumps(v)[:300])
+    v = mcp("characters_view", select="qa_courier")
+    check(v.get("ok") and v.get("active") and v.get("selected") == "qa_courier", "U it opens the tab on a character",
+          json.dumps(v)[:300])
+    check(v.get("dirty") is False and v.get("problems") == [], "U with nothing unsaved and no problems", json.dumps(v)[:300])
+    check(v.get("count") == 2 and v.get("file", "").endswith("qa_courier.npcasset"), "U the list has both, the form its file",
+          json.dumps(v)[:300])
+    check(mcp("ui_list").get("active_tab") == "characters", "U Characters is the active tab")
+    audit = mcp("ui_audit", id="characters")
+    check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the Characters tab",
+          json.dumps(audit.get("escaped"))[:400])
+    labels = {c.get("label") for c in audit.get("controls", [])}
+    for want in ("Identity", "Name and Bio", "Delete..."):
+        check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
+    # what is below the fold is drawn once the form scrolls to it
+    scrolled = mcp("ui_scroll", id="characters", to="bottom")
+    check(scrolled.get("ok"), "U the form scrolls", json.dumps(scrolled)[:300])
+    labels = {c.get("label") for c in mcp("ui_audit", id="characters").get("controls", [])}
+    for want in ("Starting Kit", "Add Item"):
+        check(want in labels, "U the form draws " + want, json.dumps(sorted(x for x in labels if x))[:400])
+    v = mcp("characters_view", path="characters/qa_guard.npcasset")
+    check(v.get("ok") and v.get("selected") == "qa_guard", "U a character is found by its path too", json.dumps(v)[:300])
+    gone = mcp("characters_view", select="qa_nobody")
+    check(not gone.get("ok") and "qa_nobody" in gone.get("error", ""), "U one that does not exist is refused by name",
+          json.dumps(gone))
+    closed = mcp("ui_tab", action="close", id="characters")
+    check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
+    check(mcp("characters_view").get("open") is False, "U and characters_view says it is closed")
+
+
 def read(path: str) -> str:
     with open(path, "rb") as f:
         return f.read().decode("cp1251", "replace")
@@ -433,6 +468,9 @@ def run(project: str) -> None:
             check(not any(c in " ".join(w.get("problems", [])) for c in ("W115", "W116", "W117")),
                   "B while a character made of what the game has gets none of them")
         mcp("characters_delete", id="qa_oddlooks")
+
+        # ---------------------------------------------------------------- U: the Characters tab
+        run_ui_checks(mcp, check, json)
 
         # ---------------------------------------------------------------- C: the build
         built = mcp("mod_export", target=out_dir)

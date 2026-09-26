@@ -3,6 +3,10 @@
 #endif
 #include "stdafx.h"
 #include "imgui_internal.h"
+// set by the theme (XrUITheme.cpp); 0 leaves ImGui as it is
+float GImGuiDockTabBarExtra = 0.0f;
+ImGuiRenderArrowFn GImGuiRenderArrow = nullptr;
+float GImGuiDragTextAlignX = 0.5f;
 float ImGui::GetWindowBarHeight()
 {
     ImGuiWindow* window = GImGui->CurrentWindow;
@@ -67,15 +71,55 @@ bool ImGui::InputFloat4(const char* label, float v[4], int dec, ImGuiInputTextFl
     xr_sprintf(Format, "%%.%df", dec);
     return  InputFloat4(label, v, Format, flags);
 }
+namespace
+{
+struct SModalClose
+{
+    xr_string name;
+    int frame;
+};
+xr_vector<SModalClose> s_ModalClose;
+
+// true once for a close asked for lately; older requests lapse
+bool TakeModalClose(const char* name)
+{
+    const int frame = ImGui::GetFrameCount();
+    bool hit = false;
+    for (u32 i = 0; i < s_ModalClose.size();)
+    {
+        const bool fresh = frame - s_ModalClose[i].frame <= 5;
+        const bool mine = !hit && fresh && s_ModalClose[i].name == name;
+        if (!fresh || mine)
+        {
+            hit |= mine;
+            s_ModalClose.erase(s_ModalClose.begin() + i);
+            continue;
+        }
+        ++i;
+    }
+    return hit;
+}
+}
+
+void ImGui::RequestPopupModalClose(const char* name)
+{
+    if (name && *name && GetCurrentContext())
+        s_ModalClose.push_back({ name, GetFrameCount() });
+}
+
 bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags flags, bool open_always)
 {
     ImGuiContext& g = *GImGui;
     ImGuiWindow* window = g.CurrentWindow;
 
     const ImGuiID id = window->GetID(name);
+    // the cross's way out: p_open false takes an open modal down below and keeps a closed one closed
+    const bool close = !s_ModalClose.empty() && TakeModalClose(name);
+    if (close && p_open)
+        *p_open = false;
     if (!IsPopupOpen(id, ImGuiPopupFlags_None))
     {
-        if (open_always)
+        if (open_always && !close)
         {
             OpenPopupEx(id);
         }

@@ -260,5 +260,21 @@ bool CPropHelper::CNameAfterEdit(PropValue* sender, xr_string& edit_val)
 }
 //---------------------------------------------------------------------------
 
-
-
+// An angle row: kept in radians, shown and typed in degrees (CreateAngle, CreateAngle3). The grid drags it by the
+// degree and says its range in degrees.
+bool PropIsAngle(PropValue* value)
+{
+	if (FloatValue* V = dynamic_cast<FloatValue*>(value))
+	{
+		FloatValue::TOnBeforeEditEvent angle;
+		angle.bind(&PHelper_impl, &CPropHelper::floatRDOnBeforeEdit);
+		return V->OnBeforeEditEvent == angle;
+	}
+	if (VectorValue* V = dynamic_cast<VectorValue*>(value))
+	{
+		VectorValue::TOnBeforeEditEvent angle;
+		angle.bind(&PHelper_impl, &CPropHelper::FvectorRDOnBeforeEdit);
+		return V->OnBeforeEditEvent == angle;
+	}
+	return false;
+}

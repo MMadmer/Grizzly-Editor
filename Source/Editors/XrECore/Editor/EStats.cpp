@@ -64,44 +64,18 @@ void CEStats::Show(CGameFont* font)
 		}
 	}
 
-	// Show them
-	if (psDeviceFlags.is(rsStatistic))
-	{
-	    CGameFont& 	F = *font;
-		F.SetColor	(0xFFFFFFFF	);
-		F.OutSet	(5,ImGui::GetFrameHeight()*2);
-		F.OutNext	("FPS/RFPS:     %3.1f/%3.1f",	fFPS,fRFPS);
-		F.OutNext	("TPS:          %2.2f M",		fTPS);
-		F.OutNext	("VERT:         %d",			DPS.verts);
-		F.OutNext	("POLY:         %d",			DPS.polys);
-		F.OutNext	("DIP/DP:       %d",			DPS.calls);
-		F.OutNext	("SH/T/M/C:     %d/%d/%d/%d",	dwShader_Codes,dwShader_Textures,dwShader_Matrices,dwShader_Constants);
-		F.OutNext	("LIGHT S/T:    %d/%d",			dwLightInScene,dwTotalLight);
-		F.OutNext	("Skeletons:    %2.2fms, %d",	Animation.result,Animation.count);
-		F.OutNext	("Skinning:     %2.2fms",		RenderDUMP_SKIN.result);
-		F.OutSkip	();
-		F.OutNext	("Input:        %2.2fms",		Input.result);
-		F.OutNext	("clRAY:        %2.2fms, %d",	clRAY.result,clRAY.count);
-		F.OutNext	("clBOX:        %2.2fms, %d",	clBOX.result,clBOX.count);
-        F.OutNext	("clFRUSTUM:    %2.2fms, %d",	clFRUSTUM.result,clFRUSTUM.count);
-		F.OutSkip	();
-//        F.OutNext	("Render:       %2.2fms",		RenderDUMP.result);
-		F.OutNext	(" RT:          %2.2fms, %d",	RenderDUMP_RT.result,RenderDUMP_RT.count);
-		F.OutNext	(" DT_Vis:      %2.2fms",		RenderDUMP_DT_VIS.result);
-		F.OutNext	(" DT_Render:   %2.2fms",		RenderDUMP_DT_Render.result);
-		F.OutNext	(" DT_Cache:    %2.2fms",		RenderDUMP_DT_Cache.result);
-		F.OutSkip	();
-		F.OutNext	("TEST 0:       %2.2fms, %d",	TEST0.result,TEST0.count);
-		F.OutNext	("TEST 1:       %2.2fms, %d",	TEST1.result,TEST1.count);
-		F.OutNext	("TEST 2:       %2.2fms, %d",	TEST2.result,TEST2.count);
-		F.OutNext	("TEST 3:       %2.2fms, %d",	TEST3.result,TEST3.count);
-		F.OutSkip	();
-//		F.OutNext	("GAME TIME:    %s",			FloatTimeToStrTime(g_pGamePersistent->Environment().GetGameTime()).c_str());
-//		F.OutSkip	(2.f);
-//        F.OutNext	("Level summary:");
-//        F.OutNext	(" Sel Faces:   %d",			dwLevelSelFaceCount);
-//        F.OutNext	(" Sel Verts:   %d",			dwLevelSelVertexCount);
-	}
+	// what the pass drew, before its counters start over
+	Shown.fps			= fFPS;
+	Shown.render_fps	= fRFPS;
+	Shown.tps			= fTPS;
+	Shown.verts			= DPS.verts;
+	Shown.polys			= DPS.polys;
+	Shown.calls			= DPS.calls;
+	Shown.lights_scene	= dwLightInScene;
+	Shown.lights_total	= dwTotalLight;
+	Shown.skeletons_ms	= Animation.result;
+	Shown.skeletons		= Animation.count;
+	Shown.skinning_ms	= RenderDUMP_SKIN.result;
 
 	{
 		Animation.FrameStart		();

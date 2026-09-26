@@ -23,7 +23,10 @@ namespace EditorRecovery
     };
 
     void Tick();
+    // the Recover Unsaved Scene card on the Start page, drawn instead of the editor UI; true while it is up
     bool DrawStartupRecovery();
+    // that card owns the frame: the caption shows no menus meanwhile
+    bool OfferPending();
     bool SaveNow(xr_string& error);
     bool SnapshotNow(u64& operation_id, xr_string& error);
     bool CanCreateSnapshot();

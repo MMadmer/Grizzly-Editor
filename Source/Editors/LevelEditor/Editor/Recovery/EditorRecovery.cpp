@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "EditorRecovery.h"
+#include "..\..\..\XrECore\Editor\EditorUiContract.h"
 
 namespace
 {
@@ -57,6 +58,9 @@ bool s_discard_requested = false;
 bool s_manual_snapshot_requested = false;
 bool s_internal_source_load = false;
 bool s_preserve_on_shutdown = false;
+// whether the scene file changed after the offered snapshot: asked once per snapshot, not every frame
+u64 s_newer_checked_for = 0;
+bool s_newer = false;
 EOperationState s_operation_state = EOperationState::Idle;
 HANDLE s_claim_handle = INVALID_HANDLE_VALUE;
 
@@ -559,6 +563,8 @@ void EndProjectSession()
     s_manual_snapshot_requested = false;
     s_internal_source_load = false;
     s_preserve_on_shutdown = false;
+    s_newer_checked_for = 0;
+    s_newer = false;
     s_operation_state = EOperationState::Idle;
 }
 
@@ -903,6 +909,42 @@ void FormatSavedAt(u64 value, char* result, size_t result_size)
     else
         strcpy_s(result, result_size, "unknown time");
 }
+
+// ---- the project's preview: the level editor's side ----------------------------------------------------------
+// EditorProject::CapturePreview renders the scene once more for the Start page's card. Recovery already follows
+// the project every frame for it (FollowScene), so the part only the level editor knows lives here: for the pass
+// the selection goes - the runtime flag alone, no Select() and so no property or undo traffic - and the gizmo
+// with it; its next OnFrame brings the gizmo back.
+xr_vector<CCustomObject*> s_preview_selected;
+
+void PreviewScope(bool begin)
+{
+    if (!begin)
+    {
+        for (CCustomObject* object : s_preview_selected)
+            object->m_RT_Flags.set(CCustomObject::flRT_Selected, TRUE);
+        s_preview_selected.clear();
+        return;
+    }
+    s_preview_selected.clear();
+    if (!Scene)
+        return;
+    for (SceneToolsMapPairIt it = Scene->FirstTool(); it != Scene->LastTool(); ++it)
+    {
+        ESceneCustomOTool* tool = it->second ? it->second->CastObjectTool() : nullptr;
+        if (!tool)
+            continue;
+        for (CCustomObject* object : tool->GetObjects())
+            if (object->Selected())
+            {
+                object->m_RT_Flags.set(CCustomObject::flRT_Selected, FALSE);
+                s_preview_selected.push_back(object);
+            }
+    }
+    // setting the type it has hides it until the next frame looks at the selection again
+    if (Gizmo* gizmo = LTools ? LTools->GetGimzo() : nullptr)
+        gizmo->SetType(gizmo->GetType());
+}
 }
 
 bool EditorRecovery::SaveNow(xr_string& error)
@@ -1095,12 +1137,21 @@ void EditorRecovery::GetStatus(SStatus& status)
 
 void EditorRecovery::Tick()
 {
+    // once: the first frame comes long before any project can close
+    static bool s_preview_scope_set = false;
+    if (!s_preview_scope_set)
+    {
+        EditorProject::SetPreviewScope(&PreviewScope);
+        s_preview_scope_set = true;
+    }
     if (!EditorProject::Active())
     {
         if (s_bound)
             EndProjectSession();
         return;
     }
+    // the frame's work is done: what the project has open now is what a close in the next frame remembers
+    EditorProject::FollowScene();
     if (!EditorProject::GameLinked() || !BindProject())
         return;
     if (ProcessPendingOperation())
@@ -1148,6 +1199,15 @@ void EditorRecovery::Tick()
     }
 }
 
+bool EditorRecovery::OfferPending()
+{
+    // the card is drawn once the game is linked, so that is when the session is bound
+    return EditorProject::Active() && EditorProject::GameLinked() && BindProject() && s_offer_recovery;
+}
+
+// An M card on the Start page, not a modal: nothing else of the editor is up to be blocked,
+// and the card keeps its place however the window changes. Restore is the default; Discard...
+// asks first, naming the snapshot's time.
 bool EditorRecovery::DrawStartupRecovery()
 {
     if (!BindProject())
@@ -1157,48 +1217,101 @@ bool EditorRecovery::DrawStartupRecovery()
     if (!s_offer_recovery)
         return false;
 
-    ImGui::OpenPopup("Recover Unsaved Scene");
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(680, 300), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Recover Unsaved Scene", nullptr,
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
+    char saved_at[64];
+    FormatSavedAt(s_startup_entry.saved_at, saved_at, sizeof(saved_at));
+    if (s_newer_checked_for != s_startup_entry.saved_at)
     {
-        char saved_at[64];
-        FormatSavedAt(s_startup_entry.saved_at, saved_at, sizeof(saved_at));
-        ImGui::TextUnformatted("The previous editor session did not close cleanly.");
-        ImGui::TextWrapped("A validated recovery snapshot is available. Restoring opens it as an unsaved scene; it never overwrites the original file.");
-        ImGui::Separator();
-        ImGui::Text("Snapshot: %s", saved_at);
-        ImGui::TextWrapped("Original: %s", s_startup_entry.source.empty() ? "(untitled scene)" : s_startup_entry.source.c_str());
-        if (SourceIsNewer(s_startup_entry))
-            ImGui::TextColored(ImVec4(1.f, 0.65f, 0.2f, 1.f),
-                "The original scene changed after this snapshot. Restore only if you need the older unsaved state.");
+        s_newer_checked_for = s_startup_entry.saved_at;
+        s_newer = SourceIsNewer(s_startup_entry);
+    }
+    xr_string restore_why, discard_why;
+    const bool can_restore = CanRestoreStartup(restore_why);
+    const bool can_discard = CanDiscardStartup(discard_why);
+    const char* scene = s_startup_entry.source.empty() ? "Untitled scene" : s_startup_entry.source.c_str();
+    const ImU32 secondary = XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary);
+
+    int clicked = -1;
+    if (XUI::BeginPage(EditorUiContract::kWindowStartPage))
+    {
+        XUI::BeginPageCard("##recovery", "Recover Unsaved Scene", 560.f);
+        {
+            XUI::FontScope strong(XUI::Font::Strong);
+            ImGui::TextUnformatted("The previous session did not close cleanly.");
+        }
+        XUI::Prose("A snapshot of its unsaved scene was kept. Restore opens it as an unsaved scene; the scene file stays as it is.");
+        ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+        if (ImGui::BeginTable("##snapshot", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("key", ImGuiTableColumnFlags_WidthFixed, XUI::Em(5.f));
+            ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+            const char* rows[][2] = { { "Saved", saved_at }, { "Scene", scene } };
+            for (const auto& row : rows)
+            {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushStyleColor(ImGuiCol_Text, secondary);
+                XUI::TextEllipsis(row[0]);
+                ImGui::PopStyleColor();
+                ImGui::TableNextColumn();
+                XUI::TextEllipsis(row[1], -1.f, XUI::Clip::Start);
+            }
+            ImGui::EndTable();
+        }
+        if (s_newer)
+        {
+            ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+            XUI::StatusText(XUI::Tone::Warning, "The scene file changed after this snapshot. Restore only if you need the older unsaved state.");
+        }
         if (!s_startup_error.empty())
-            ImGui::TextColored(ImVec4(1.f, 0.35f, 0.35f, 1.f), "%s", s_startup_error.c_str());
-        ImGui::Separator();
-        if (ImGui::Button("Restore Recovery", ImVec2(180, 0)))
         {
+            ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
+            XUI::StatusText(XUI::Tone::Error, s_startup_error.c_str());
+        }
+        const XUI::CardAction actions[] =
+        {
+            { "Discard...", XUI::Kind::GhostDanger, false, can_discard, discard_why.c_str() },
+            { "Restore",    XUI::Kind::Primary,     true,  can_restore, restore_why.c_str() },
+        };
+        clicked = XUI::CardFooter(nullptr, XUI::Tone::Muted, actions, 2);
+        XUI::EndPageCard();
+    }
+    XUI::EndPage();
+
+    if (1 == clicked)
+    {
+        u64 operation_id = 0;
+        xr_string error;
+        if (!EditorRecovery::RequestRestore(operation_id, error))
+            s_startup_error = error;
+    }
+    else if (0 == clicked)
+    {
+        // what goes: the snapshot on offer, and the older ones the manifest keeps
+        xr_vector<SRecoveryEntry> entries;
+        ReadManifest(entries);
+        const xr_string headline = xr_string("Discard the recovery snapshot saved at ") + saved_at + "?";
+        XUI::ConfirmSpec spec;
+        spec.id = "discard_recovery";
+        spec.title = "Discard Recovery";
+        spec.headline = headline.c_str();
+        spec.items.push_back(xr_string("The unsaved changes to ") + scene);
+        if (entries.size() > 1)
+        {
+            char older[64];
+            sprintf_s(older, "%u older %s", u32(entries.size() - 1), 2 == entries.size() ? "snapshot" : "snapshots");
+            spec.items.push_back(older);
+        }
+        spec.action = "Discard";
+        spec.destructive = true;
+        XUI::Confirm(spec, [](XUI::Answer answer)
+        {
+            if (answer != XUI::Answer::Yes)
+                return;
             u64 operation_id = 0;
             xr_string error;
-            if (EditorRecovery::RequestRestore(operation_id, error))
-                ImGui::CloseCurrentPopup();
-            else
+            if (!EditorRecovery::RequestDiscard(operation_id, error))
                 s_startup_error = error;
-        }
-        ImGui::SameLine(0, 16);
-        if (ImGui::Button("Discard Recovery", ImVec2(180, 0)))
-        {
-            u64 operation_id = 0;
-            xr_string error;
-            if (EditorRecovery::RequestDiscard(operation_id, error))
-                ImGui::CloseCurrentPopup();
-            else
-                s_startup_error = error;
-        }
-        ImGui::SameLine(0, 16);
-        ImGui::TextDisabled("The original scene is untouched");
-        ImGui::EndPopup();
+        });
     }
     return true;
 }

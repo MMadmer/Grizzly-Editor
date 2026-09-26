@@ -15,7 +15,12 @@ over MCP on a THROW-AWAY COPY of a project filled with all of that and checks:
   * the clean build does not follow a link inside the target, refuses a target that
     is a link, and refuses a target that overlaps the project;
   * a git working copy gets a .gitignore for the editor's own files, once;
-  * a folder with mod.ltx and no project.ltx still counts as a project.
+  * a folder with mod.ltx and no project.ltx still counts as a project;
+  * the Mod Settings tab opens on each of its pages (mod_settings_view), follows a
+    save made elsewhere without turning dirty, and its Relations and Mod Browser pages
+    are the same label-left grid as the rest; the build dialogs (Build to Folder,
+    Export Flat, Package Release) open, show and close over MCP by their kit ids, and
+    a Writes To path that does not fit keeps its end.
 
     python tools/qa/test_build_contents.py --project D:\\XFinedProjects\\Test
 """
@@ -158,6 +163,95 @@ SHIPS = ["LICENSE", "README.md", "art/cover.png", "gamedata/configs/qa_keep.ltx"
          "mod.ltx"]
 
 
+SETTINGS_PAGES = ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda"]
+BUILD_DIALOGS = ["build_to_folder", "export_flat", "package_release"]
+
+
+def labels_of(audit: dict) -> dict:
+    return {c.get("label"): c for c in audit.get("controls", [])}
+
+
+def run_ui_checks() -> None:
+    """Mod Settings is a tab that follows mod.ltx; the build dialogs open, show and close over MCP."""
+    v = mcp("mod_settings_view")
+    check(v.get("ok") and v.get("tab") == "mod_settings", "U mod_settings_view answers", json.dumps(v)[:300])
+    check([p.get("id") for p in v.get("pages", [])] == SETTINGS_PAGES, "U Mod Settings has its six pages",
+          json.dumps(v.get("pages"))[:300])
+    for page in SETTINGS_PAGES:
+        v = mcp("mod_settings_view", page=page)
+        check(v.get("ok") and v.get("active") and v.get("page") == page, "U the tab opens on " + page, json.dumps(v)[:300])
+        audit = mcp("ui_audit", id="mod_settings")
+        check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the " + page + " page",
+              json.dumps(audit.get("escaped"))[:400])
+    controls = labels_of(mcp("ui_audit", id="mod_settings"))
+    check("Revert" in controls and "Save" in controls, "U the footer offers Revert and Save",
+          json.dumps(sorted(x for x in controls if x))[:400])
+    save = controls.get("Save", {})
+    check(save.get("enabled") is False and save.get("why") == "No changes to save", "U Save waits for a change and says so",
+          json.dumps(save)[:300])
+    # a save made elsewhere reaches the form and leaves it clean
+    probe = mcp("mod_exclude", path="qa_ui_probe")
+    v = mcp("mod_settings_view")
+    check(probe.get("ok") and v.get("dirty") is False, "U an outside save does not make the tab dirty", json.dumps(v)[:300])
+    mcp("mod_exclude", path="qa_ui_probe", excluded=False)
+    # Relations are picked from the linked game's modules, never typed into boxes
+    mcp("mod_settings_view", page="relations")
+    audit = mcp("ui_audit", id="mod_settings")
+    controls = labels_of(audit)
+    check("Add Module..." in controls, "U Relations offers Add Module...", json.dumps(sorted(x for x in controls if x))[:400])
+    # the same label-left grid as the other pages: a row per relation, its Add Module... in the value column
+    rows = [controls.get(k) for k in ("Requires", "Load After", "Load Before", "Conflicts")]
+    adds = sorted((c for c in audit.get("controls", []) if c.get("label") == "Add Module..."), key=lambda c: c["rect"][1])
+    grid = all(rows) and len(adds) == 4 and all(a["rect"][0] >= r["rect"][0] + 60 and a["rect"][1] >= r["rect"][1]
+                                                for a, r in zip(adds, rows))
+    check(grid, "U Relations is a grid: each row's Add Module... sits in the value column",
+          json.dumps({"rows": rows, "adds": adds})[:400])
+    # Mod Browser too: Picture and Tags are rows, the picture's buttons in the value column
+    mcp("mod_settings_view", page="mod_browser")
+    audit = mcp("ui_audit", id="mod_settings")
+    controls = labels_of(audit)
+    picture, tags, choose = controls.get("Picture"), controls.get("Tags"), controls.get("Choose Picture...")
+    grid = bool(picture and tags and choose) and choose["rect"][0] >= picture["rect"][0] + 60 and \
+        choose["rect"][1] >= picture["rect"][1] and tags["rect"][1] > choose["rect"][1]
+    check(grid, "U Mod Browser is a grid: Picture and Tags are rows, Choose Picture... sits in the value column",
+          json.dumps({"picture": picture, "tags": tags, "choose": choose})[:400])
+    both = mcp("mod_set_manifest", requires="qa.other", conflicts="qa.other")
+    v = mcp("mod_settings_view")
+    rel = [p for p in v.get("problems", []) if p.get("page") == "relations"]
+    check(both.get("ok") and any("qa.other" in p.get("text", "") and p.get("tone") == "warning" for p in rel),
+          "U a module required and in conflict at once is named on Relations", json.dumps(rel)[:300])
+    mcp("mod_set_manifest", requires="", conflicts="")
+    bad = mcp("mod_settings_view", page="nowhere")
+    check(not bad.get("ok") and "general" in bad.get("error", ""), "U an unknown page is refused, naming the pages",
+          json.dumps(bad))
+    closed = mcp("ui_tab", action="close", id="mod_settings")
+    check(closed.get("ok"), "U the tab closes when nothing is unsaved", json.dumps(closed)[:300])
+
+    windows = mcp("ui_contract").get("dialogs", {})
+    module_id = mcp("mod_manifest").get("id", "")
+    for dialog in BUILD_DIALOGS:
+        window = windows.get(dialog, "")
+        check(window.endswith("###dlg." + dialog), "U the contract names " + dialog + " by its kit id", window)
+        opened = mcp("ui_dialog", action="open", id=dialog)
+        check(opened.get("ok"), "U ui_dialog opens " + dialog, json.dumps(opened)[:300])
+        audit = mcp("ui_audit", id="dlg." + dialog)
+        check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes " + dialog, json.dumps(audit.get("escaped"))[:400])
+        controls = labels_of(audit)
+        check("Cancel" in controls, "U " + dialog + " has Cancel", json.dumps(sorted(x for x in controls if x))[:300])
+        # Writes To exists to show the folder the build fills: cut, it keeps its end
+        tail = {"build_to_folder": "\\modules\\", "export_flat": "\\gamedata_"}.get(dialog)
+        if tail and module_id:
+            cut = [t for t in audit.get("truncated", []) if t.get("label", "").endswith(tail + module_id)]
+            check(all(t.get("shown", "").endswith(tail + module_id) for t in cut),
+                  "U " + dialog + " keeps the end of the path it writes to", json.dumps(cut)[:300])
+        listed = [d.get("id") for d in mcp("ui_list").get("dialogs", [])]
+        check(dialog in listed, "U ui_list names " + dialog + " as the dialog on top", json.dumps(listed))
+        shut = mcp("ui_dialog", action="close", id=dialog)
+        check(shut.get("ok"), "U ui_dialog closes " + dialog, json.dumps(shut)[:300])
+        listed = [d.get("id") for d in mcp("ui_list").get("dialogs", [])]
+        check(dialog not in listed, "U and it is gone", json.dumps(listed))
+
+
 def run(project: str) -> None:
     # the working copy is a git repository before the editor sees it
     write(project, ".git/HEAD", "ref: refs/heads/main\n")
@@ -266,6 +360,9 @@ def run(project: str) -> None:
               "E excluding a file the build generates is refused at build time", json.dumps(refused)[:300])
         back = mcp("mod_exclude", path="gamedata/configs/gameplay", excluded=False)
         check(back.get("ok"), "E and Include in Build takes it back", json.dumps(back)[:200])
+
+        # ------------------------------------------------------------------ U: Mod Settings and the build dialogs
+        run_ui_checks()
 
         # ------------------------------------------------------------------ F: the clean build and links
         keep = os.path.join(linked, "keep.txt")

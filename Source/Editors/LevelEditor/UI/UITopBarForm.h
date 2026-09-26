@@ -1,31 +1,30 @@
-#pragma once
-class UITopBarForm :public XrUI
+﻿#pragma once
+// The Level tab's toolbar and the project group every tab's toolbar ends with (docs/UI_DESIGN.md, section 5).
+// Drawn into the frame's toolbar row (XUI::Shell::DrawToolbar) with vector icons.
+class UITopBarForm
 {
 public:
 	UITopBarForm();
-	virtual ~UITopBarForm();
-	virtual void Draw();
+	~UITopBarForm();
+	// Save | Undo, Redo; the level builds; Play and the game; configs and the game folder
+	void DrawLevel(XUI::Toolbar& tb);
+	// [Build Mod (split)] [Publish Release] [Releases]
+	void DrawProject(XUI::Toolbar& tb);
 	void RefreshBar();
 	bool VerifySpaceRestrictors()const {return m_VerifySpaceRestrictors;}
 private:
-
-	void ClickUndo(); ref_texture m_tUndo; u32 m_timeUndo;
-	void ClickRedo(); ref_texture m_tRedo; u32 m_timeRedo;
-
-	void ClickNew(); ref_texture m_tNew;
-	void ClickOpen(); ref_texture m_tOpen;
-	void ClickSave(); ref_texture m_tSave;
-
-	void ClickReloadConfigs();  ref_texture m_tReloadConfigs;
-	void ClickOpenGameData();  ref_texture m_tOpenGameData;
-
-	void ClickCForm();  ref_texture m_tCForm;
-	void ClickAIMap();  ref_texture m_tAIMap;
-	void ClickGGraph();  ref_texture m_tGGraph;
-	void ClickPlayInEditor();  ref_texture m_tPlayInEditor;
-	void ClickBuildAndMake(); ref_texture m_tBuildAndMake;
-	void ClickTerminated();  ref_texture m_tTerminated;
-	void ClickPlayPC();  ref_texture m_tPlayPC;
-	void ClickPlayCleanGame();  ref_texture m_tPlayCleanGame;
+	void ClickUndo();
+	void ClickRedo();
+	void ClickSave();
+	void ClickReloadConfigs();
+	void ClickOpenGameData();
+	void ClickCForm();
+	void ClickAIMap();
+	void ClickGGraph();
+	void ClickPlayInEditor();
+	void ClickBuildAndMake();
+	void ClickTerminated();
+	void ClickPlayPC();
+	void ClickPlayCleanGame();
 	bool m_VerifySpaceRestrictors;
 };

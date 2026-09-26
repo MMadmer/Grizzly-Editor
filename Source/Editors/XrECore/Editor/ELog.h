@@ -30,6 +30,8 @@ public:
 public:
 				CLog	(){in_use=false;}
 	void 		Msg   	(TMsgDlgType mt, LPCSTR _Format, ...);
+	// a running job's stage: in the log as a note, never the status bar's last line - the job ends, its stage goes stale
+	void 		Progress(LPCSTR text);
 	int 		DlgMsg 	(TMsgDlgType mt, LPCSTR _Format, ...);
 	int 		DlgMsg 	(TMsgDlgType mt, int btn, LPCSTR _Format, ...);
 	void Close();
