@@ -1,0 +1,16 @@
+[package]
+name = "gz-chunk"
+description = "The engine's chunked binary streams: reader, writer and the two compressions they use."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+glam.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "gz-ui"
+description = "The editor's UI kit: the only way to draw UI. Theme tokens, type, icons, widgets, dialogs, the audit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+egui.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true

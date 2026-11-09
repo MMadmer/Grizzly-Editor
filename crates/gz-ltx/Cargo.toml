@@ -1,0 +1,16 @@
+[package]
+name = "gz-ltx"
+description = "LTX: lossless editing of the files an author owns, and the engine's resolved view of the game's."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+thiserror.workspace = true
+rustc-hash.workspace = true

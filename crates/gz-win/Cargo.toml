@@ -1,0 +1,30 @@
+[package]
+name = "gz-win"
+description = "The few Win32 calls the standard library lacks, behind a safe API. The one crate that may use unsafe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The allow-list of docs/RUST_MIGRATION.md section 6: this crate does not inherit the workspace's
+# `unsafe_code = "forbid"`. Every unsafe block carries a SAFETY line.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+
+[dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }

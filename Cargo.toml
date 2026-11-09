@@ -1,0 +1,157 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "LicenseRef-Grizzly"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[workspace.dependencies]
+# layer 0
+gz-base = { path = "crates/gz-base" }
+gz-task = { path = "crates/gz-task" }
+gz-store = { path = "crates/gz-store" }
+gz-query = { path = "crates/gz-query" }
+gz-log = { path = "crates/gz-log" }
+gz-crash = { path = "crates/gz-crash" }
+gz-win = { path = "crates/gz-win" }
+# layer 1
+gz-ltx = { path = "crates/gz-ltx" }
+gz-luadata = { path = "crates/gz-luadata" }
+gz-chunk = { path = "crates/gz-chunk" }
+gz-fmt-object = { path = "crates/gz-fmt-object" }
+gz-fmt-ogf = { path = "crates/gz-fmt-ogf" }
+gz-fmt-tex = { path = "crates/gz-fmt-tex" }
+gz-fmt-level = { path = "crates/gz-fmt-level" }
+gz-fmt-spawn = { path = "crates/gz-fmt-spawn" }
+gz-entities = { path = "crates/gz-entities" }
+gz-fmt-xr = { path = "crates/gz-fmt-xr" }
+gz-fmt-xml = { path = "crates/gz-fmt-xml" }
+gz-fmt-sound = { path = "crates/gz-fmt-sound" }
+gz-fmt-release = { path = "crates/gz-fmt-release" }
+# layer 2
+gz-vfs = { path = "crates/gz-vfs" }
+gz-game = { path = "crates/gz-game" }
+gz-lua = { path = "crates/gz-lua" }
+# layer 3
+gz-project = { path = "crates/gz-project" }
+gz-mod = { path = "crates/gz-mod" }
+gz-nq = { path = "crates/gz-nq" }
+gz-characters = { path = "crates/gz-characters" }
+gz-pda = { path = "crates/gz-pda" }
+gz-screens = { path = "crates/gz-screens" }
+gz-world = { path = "crates/gz-world" }
+gz-build = { path = "crates/gz-build" }
+gz-release = { path = "crates/gz-release" }
+gz-github = { path = "crates/gz-github" }
+gz-catalog = { path = "crates/gz-catalog" }
+gz-virustotal = { path = "crates/gz-virustotal" }
+gz-scene = { path = "crates/gz-scene" }
+gz-export-level = { path = "crates/gz-export-level" }
+gz-levelbuild = { path = "crates/gz-levelbuild" }
+gz-editor = { path = "crates/gz-editor" }
+# layer 4
+gz-cmd = { path = "crates/gz-cmd" }
+gz-mcp = { path = "crates/gz-mcp" }
+gz-ui = { path = "crates/gz-ui" }
+gz-render = { path = "crates/gz-render" }
+gz-app = { path = "crates/gz-app" }
+
+# concurrency
+tokio = { version = "1.54", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros", "fs", "process"] }
+tokio-util = "0.7"
+futures = "0.3"
+rayon = "1.12"
+arc-swap = "1.9"
+parking_lot = "0.13"
+crossbeam-channel = "0.5"
+imbl = "7"
+# data
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+schemars = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+smol_str = { version = "0.3", features = ["serde"] }
+smallvec = "1"
+rustc-hash = "2"
+bitflags = { version = "2", features = ["serde"] }
+bytemuck = { version = "1", features = ["derive"] }
+memchr = "2"
+encoding_rs = "0.8"
+glam = { version = "0.34", features = ["serde", "bytemuck"] }
+base64 = "0.23"
+hex = "0.4"
+time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
+# files, media
+walkdir = "2"
+jwalk = "0.9"
+notify = "8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "gif", "dds"] }
+png = "0.18"
+gif = "0.14"
+texpresso = { version = "2", features = ["rayon"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+flate2 = "1"
+quick-xml = "0.42"
+lewton = "0.10"
+cpal = "0.18"
+# crypto, network
+sha2 = "0.11"
+hmac = "0.13"
+pbkdf2 = "0.13"
+p256 = { version = "0.14", features = ["ecdsa"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "stream"] }
+keyring = "4"
+# scripting, geometry
+mlua = { version = "0.12", features = ["luajit", "vendored", "send"] }
+parry3d = "0.31"
+rapier3d = "0.36"
+# presentation
+egui = { version = "0.37", features = ["default_fonts", "rayon", "bytemuck"] }
+egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
+egui-wgpu = { version = "0.37", default-features = false, features = ["winit"] }
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "parking_lot"] }
+egui_dock = "0.21"
+# system
+windows = "0.62"
+backtrace = "0.3"
+# tests
+proptest = "1"
+loom = "0.7"
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The shipped editor: thin LTO across crates. Slow to link; built for a release only.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = "line-tables-only"
+panic = "unwind"
+
+# The everyday optimised build: every crate compiles alone and in parallel, and an edit
+# rebuilds its crate and the link, not the program.
+[profile.fast]
+inherits = "release"
+lto = "off"
+codegen-units = 256
+incremental = true

@@ -1,0 +1,27 @@
+[package]
+name = "gz-app"
+description = "The editor's window: the event loop, the frame, and the shell every tab lives in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-task.workspace = true
+gz-log.workspace = true
+gz-editor.workspace = true
+egui.workspace = true
+egui-winit.workspace = true
+egui-wgpu.workspace = true
+wgpu.workspace = true
+gz-win.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+png.workspace = true
+base64.workspace = true
+parking_lot.workspace = true

@@ -1,0 +1,7 @@
+[build]
+target-dir = "Intermediate/cargo"
+
+[target.x86_64-pc-windows-msvc]
+# x86-64-v2: every CPU the game itself runs on has SSE4.2 and POPCNT.
+linker = "rust-lld.exe"
+rustflags = ["-C", "target-cpu=x86-64-v2"]

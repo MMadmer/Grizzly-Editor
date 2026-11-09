@@ -1,0 +1,15 @@
+[package]
+name = "gz-crash"
+description = "What a crash leaves: a symbolised stack in the log, a report file, a dump, exit code 3."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-log.workspace = true
+gz-win.workspace = true
