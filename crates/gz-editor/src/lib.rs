@@ -11,18 +11,22 @@
 //! - [`FrameClock`] - what a request waits on when its answer is a drawn frame
 //! - [`Notices`] - messages for the author raised off the UI thread
 //! - [`DirtySource`] - how an area says what unsaved work it holds
+//! - [`AutoSave`] - a store's document written to disk as it is edited; [`fsx`] - file helpers
 
 mod args;
 mod editor;
 mod frames;
+pub mod fsx;
 mod notices;
 mod registry;
+mod saver;
 mod services;
 
 pub use args::{Args, ArgsExt};
 pub use editor::{AppPaths, DirtyDoc, DirtySource, Editor, EditorOptions, Flags, ProjectSession};
 pub use frames::{FrameClock, FrameStamp};
 pub use notices::{Notice, NoticeKind, Notices};
+pub use saver::AutoSave;
 pub use registry::{CommandInfo, Registry, Reply, error_reply, ok_reply};
 pub use services::Services;
 

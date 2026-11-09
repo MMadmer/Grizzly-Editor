@@ -1067,6 +1067,9 @@ dependencies = [
 [[package]]
 name = "gz-fmt-ogf"
 version = "0.1.0"
+dependencies = [
+ "gz-base",
+]
 
 [[package]]
 name = "gz-fmt-sound"

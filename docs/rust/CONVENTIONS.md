@@ -83,8 +83,49 @@ gz-base.workspace = true
 | `gz-store` | `Store<S>`, `State`, `Apply`, `Snap`, `CmdError`, `imbl` |
 | `gz-query` | `Query<K, V>`, `Derived<V>`, `Answer` |
 | `gz-log` | `Log` and the `info!` / `warn!` / `error!` macros (application layer only) |
+| `gz-editor` | `Editor` (pools, log, jobs, frames, notices, services, the open `ProjectSession`), `Registry`, `Args` / `ArgsExt`, `Reply`, `CmdError`, `DirtySource`, `AutoSave`, `fsx::{write_atomic, read_opt, read_text}` |
 | `gz-chunk` | `Reader`, `Writer`, `Chunk`, `ChunkError`, `lzhuf`, `lzo` |
 | `gz-ltx` | `LtxDoc` (lossless editing), `Ltx` (the engine's resolved view) |
+
+## An area crate
+
+An area of the editor - the project, the manifest, quests, characters, builds - is one crate of
+layer 3 that depends on `gz-editor` and is laid out the same way:
+
+- **the domain** (`model`, `parse`, `validate`, `write` ...): pure functions over data, no
+  `Editor`, no IO except where reading or writing a file is the function's stated job;
+- **`service.rs`**: what the area keeps while the editor runs - its `Store`s, `Query`s, caches -
+  as one struct stored with `editor.services.get_or_init(..)` (lives as long as the editor) or
+  `session.services.get_or_init(..)` (lives as long as the open project; get the session with
+  `editor.project()?`). Nothing is created at start: a service is made on first use;
+- **`cmd.rs`**: the area's commands, registered by `pub fn register(reg: &mut gz_editor::Registry)`
+  (the first argument of `reg.add` is the crate's name). A handler is thin: read arguments with
+  `ArgsExt`, call the domain or the service, answer JSON.
+
+Rules for commands:
+
+- **The wire is frozen by the C++ handler** named in the task: same command name, same argument
+  names and forgiving parsing, same reply fields with the same names and meaning, same error
+  texts (`missing 'path' argument`, `no active project`, ...). QA scripts read these. Put fields
+  in the order the C++ writes them (`serde_json` keeps insertion order).
+- A handler never blocks the async runtime: file work goes through
+  `editor.exec.io(move || ..).await`, CPU work through `editor.exec.cpu(..).await`, many files at
+  once through `par_io` inside it.
+- State changes go through the area's `Store` (`store.send(cmd, origin).await`); `State::apply`
+  never touches a file. A document saved as it is edited uses `gz_editor::AutoSave` and the
+  command awaits `flush(rev)` before it answers, so a caller that reads the file next sees the
+  edit. A document with an explicit Save writes through `gz_editor::fsx::write_atomic` on the IO
+  pool and then marks the store saved.
+- Long work is a job: `editor.jobs.start(kind, group, title, |ctx| async move { .. })`; it checks
+  `ctx.check()?` between steps and reports `ctx.stage(..)` / `ctx.progress(done, total)`.
+- `Origin::Mcp` never asks: a confirmation is Yes, and losing unsaved work needs the explicit
+  `discard` / `save` argument or the command answers `CmdError::unsaved(..)`.
+- Unsaved documents are reported through `gz_editor::DirtySource`, registered once when the
+  service is first made.
+- Reads of derived data (lists, problems, pickers) are `Query`s keyed by the revisions they
+  read, so nothing is recomputed per call and nothing is invalidated by hand.
+- When you create a crate, write `src/lib.rs` BEFORE `Cargo.toml`: a manifest without a target
+  stops every other build of the workspace.
 
 ## Text
 

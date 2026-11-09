@@ -1,0 +1,19 @@
+[package]
+name = "gz-fmt-spawn"
+description = "The game's spawn and graph containers: all.spawn, entity packet headers, patrol paths, the game graph and cross tables."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+glam.workspace = true
+rayon.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true

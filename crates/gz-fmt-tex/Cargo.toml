@@ -1,0 +1,22 @@
+[package]
+name = "gz-fmt-tex"
+description = "Textures of the game and the editor: DDS, TGA, the THM descriptions and the pixel work between them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+bitflags.workspace = true
+image.workspace = true
+texpresso.workspace = true
+# BC6H and BC7 decoding (pure Rust port of bcdec).
+bcdec_rs = "0.2"

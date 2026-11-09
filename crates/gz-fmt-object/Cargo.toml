@@ -1,0 +1,21 @@
+[package]
+name = "gz-fmt-object"
+description = "The editor's source model (.object) and its motions (.skl, .skls, .anm): read, write, envelopes, normals, poses."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+glam.workspace = true
+rayon.workspace = true
+smol_str.workspace = true
+smallvec.workspace = true
+bitflags.workspace = true
+thiserror.workspace = true

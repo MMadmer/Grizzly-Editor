@@ -1,0 +1,21 @@
+[package]
+name = "gz-fmt-level"
+description = "Level geometry and navigation data: collision, the module collision overlay, the AI map, details, level.game, and a triangle BVH for picking."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+glam.workspace = true
+rayon.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true
+smallvec.workspace = true
+rustc-hash.workspace = true

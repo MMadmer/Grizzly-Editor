@@ -1,0 +1,23 @@
+[package]
+name = "gz-entities"
+description = "The game's server entities without the game DLL: spawn and update packets, the class table and the property schema."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+glam.workspace = true
+smol_str.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+rustc-hash.workspace = true

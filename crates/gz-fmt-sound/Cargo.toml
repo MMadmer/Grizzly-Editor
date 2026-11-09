@@ -1,0 +1,17 @@
+[package]
+name = "gz-fmt-sound"
+description = "Game sounds: the parameters an OGG carries in its Vorbis comment, the sound THM and PCM for a preview."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+thiserror.workspace = true
+lewton.workspace = true

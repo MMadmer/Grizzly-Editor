@@ -1,0 +1,18 @@
+[package]
+name = "gz-fmt-xr"
+description = "The engine's .xr libraries: light animations, game materials, shaders, compiler shaders, particles, sound environments."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+glam.workspace = true
+thiserror.workspace = true
+bitflags.workspace = true

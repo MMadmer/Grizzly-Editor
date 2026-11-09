@@ -158,10 +158,10 @@ impl<'a> Reader<'a> {
         Ok(f32::from(v) * (max - min) / 65535.0 + min)
     }
 
-    /// A float stored as `u8` over `[min, max]`.
+    /// A float stored as `u8` over `[min, max]`. The divisor is the engine's.
     pub fn r_float_q8(&mut self, min: f32, max: f32) -> Result<f32> {
         let v = self.r_u8()?;
-        Ok(f32::from(v) / 255.0 * (max - min) + min)
+        Ok(f32::from(v) / 255.0001 * (max - min) + min)
     }
 
     /// The bytes of a zero-terminated string, without the terminator.

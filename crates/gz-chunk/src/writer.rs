@@ -97,15 +97,17 @@ impl Writer {
         }
     }
 
-    /// A float stored as `u16` over `[min, max]`, clamped as the engine clamps it.
+    /// A float stored as `u16` over `[min, max]`: the engine's `floor(q * 65535 + 0.5)`. A value
+    /// outside the range is clamped (the engine asserts instead).
     pub fn w_float_q16(&mut self, v: f32, min: f32, max: f32) {
-        let q = ((v - min) * 65535.0 / (max - min)).clamp(0.0, 65535.0);
-        self.w_u16(q as u16);
+        let q = (v - min) / (max - min);
+        self.w_u16((q * 65535.0 + 0.5).floor().clamp(0.0, 65535.0) as u16);
     }
 
+    /// A float stored as `u8` over `[min, max]`: the engine's `floor(q * 255 + 0.5)`.
     pub fn w_float_q8(&mut self, v: f32, min: f32, max: f32) {
-        let q = ((v - min) / (max - min) * 255.0).clamp(0.0, 255.0);
-        self.w_u8(q as u8);
+        let q = (v - min) / (max - min);
+        self.w_u8((q * 255.0 + 0.5).floor().clamp(0.0, 255.0) as u8);
     }
 
     /// A zero-terminated string, bytes as given.
