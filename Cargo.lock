@@ -1069,7 +1069,13 @@ dependencies = [
 name = "gz-fmt-ogf"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "gz-base",
+ "gz-chunk",
+ "gz-fmt-object",
+ "smallvec",
+ "smol_str 0.3.7",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1111,6 +1117,11 @@ dependencies = [
 [[package]]
 name = "gz-fmt-xml"
 version = "0.1.0"
+dependencies = [
+ "gz-base",
+ "rayon",
+ "rustc-hash 2.1.3",
+]
 
 [[package]]
 name = "gz-fmt-xr"
@@ -1158,6 +1169,21 @@ name = "gz-mcp"
 version = "0.1.0"
 dependencies = [
  "gz-editor",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "gz-mod"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "gz-base",
+ "gz-editor",
+ "gz-project",
+ "gz-store",
+ "gz-task",
+ "parking_lot 0.13.0",
  "serde_json",
  "tokio",
 ]

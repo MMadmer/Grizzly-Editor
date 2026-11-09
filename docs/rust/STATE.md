@@ -56,11 +56,11 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-editor`, `gz-mcp` | done | context, registry, `AutoSave`, `fsx`, the endpoint |
 | `gz-app`, `grizzly` | skeleton | window loop, `screenshot_editor`; the shell is a spike (`grizzly/src/spike.rs`) |
 | `gz-chunk` | done | reader, writer, `lzhuf` (byte-equal compress), `lzo` (LZO1X + archive index helpers) |
-| `gz-ltx` | half | `doc.rs` (lossless) done; `tree.rs` (the engine's `CInifile`) is a placeholder |
-| `gz-luadata` | half | `value.rs`, `num.rs` written, `lib.rs` does not wire them yet; parser/writer unfinished |
-| `gz-fmt-xml` | not started | |
+| `gz-ltx` | done | `doc.rs` (lossless); `tree.rs`: `parse_file` (parallel per file) + `Ltx::assemble` / `Builder` (the sequential C++ load), `Dialect::Editor` / `Dialect::Game` (`#include_optional`, `*.ltx` includes, multi-line recovery, XMS layer merge, `.ltxp` patches) |
+| `gz-luadata` | done | `parse` = LuaJIT 2.1 lexer/parser port (the editor's fork) + `DeclarativeProblem` + a run of the data subset with the interpreter's semantics; writer byte-equal to `NqLua.cpp` (`write_value`, `write_node`, `write_asset`); `syntax_check`; JSON |
+| `gz-fmt-xml` | done | tolerant tree with `CXml` navigation, `preprocess` (`#include`), `strings` (editor scan / game XML, parallel build), `sheets` (`textures_descr`) |
 | `gz-fmt-object` | done | `.object`, `.skl/.skls`, `.anm`, envelopes, normals, skinning; see findings |
-| `gz-fmt-ogf` | not started | placeholder |
+| `gz-fmt-ogf` | done | every visual type read (FVF and skinned 1-4L decoded to one vertex), bones, IK, motions and `.omf` with key sampling; static and skeleton export, the face optimiser ported; bone OBBs and VIPM are not byte-exact (see findings) |
 | `gz-fmt-level` | done | cform, xcform + overlay visuals, BVH, AI map, details, `build.prj`; see findings |
 | `gz-fmt-spawn` | done | `all.spawn` (header, spawn graph with both packets as ranges of the file, artefact points, patrols, embedded game graph, unknown and compressed chunks kept), `game.graph`, `level.gct`, `peek_packet`, `SpawnIndex`; byte-equal round trips |
 | `gz-entities` | done | every class of `xrServerEntities` in the game's layout, Dead Air's script fields, `FillProps` as typed properties with set by path; `Opaque` keeps what does not decode or does not write back to its own bytes |
@@ -89,7 +89,25 @@ From the level port:
 - Byte differences against C++ output that are padding or uninitialised memory there:
   `build.prj` struct padding, the four spare bits of an AI node's link block.
 
-From the text port (interrupted):
+From the text port:
+- `NqLua::ParseValue` is LuaJIT itself, so the port is LuaJIT's compile step (every syntax message,
+  token for token) followed by a run of what `DeclarativeProblem` lets through. A constructor's
+  constant fields go into a template and the others are stored at run time afterwards, so
+  `{ a = -"5", a = 1 }` reads `a = -5`: a computed value wins over a constant one whatever the
+  order. `-0` and `1e999 - 1e999` are never folded (LuaJIT avoids -0 and NaN constants).
+- The editor's LuaJIT is a fork with `//` and `/* */` comments; `/* */` counts no lines and a `*`
+  that does not close swallows the next character. `DeclarativeProblem` refuses `/` anyway.
+- A chunk name over 59 bytes (a long file name) is cut in LuaJIT's messages; the C++ then fails to
+  strip it, so such an error keeps the `name:line:` prefix and reports line 0. Ported as is.
+- The editor's `CInifile` skips a missing include (warning); the game's stops on it unless it is
+  `#include_optional`. The game's `*.ltx` include adds the mask's folder twice
+  (`configs\x\*.ltx` lists `configs\x\x\`) - ported as is, marked `// oracle:`.
+- The editor's string-table reader is a text scan (first definition wins, text as written);
+  the game's is the XML tree (condensed, later wins). `gz_fmt_xml::strings::Mode` offers both.
+- Not in `gz-luadata`: the typed quest model and its outline (`QuestToValue`, `Outline`, the
+  header of `Write`) - that is `gz-nq`; `write_asset(head, top)` takes the header ready made.
+
+From the text port (interrupted pass):
 - `rtc` adds no framing: a bare LZO1X block; sizes live beside it. A game archive's directory
   is chunk 1 (LZHUF when flagged), one record per file: `u16 n`, `u32 size_real`,
   `u32 size_compressed`, `u32 crc`, name, `u32 offset`; equal sizes mean stored as is.
@@ -109,6 +127,19 @@ From the project port:
   object library / game link register the `list_assets` categories other than `Levels`.
 - The shell's `state` command takes its project fields from `gz_project::project_state`.
 - `darf.rs` is a private archive reader (chunk 1 directory + LZO entries); it moves to `gz-vfs`.
+
+From the OGF port:
+- Verified: both `CalculateTB` bodies are commented out (skinned vertices carry the
+  constructor's tangent (1,0,0) and binormal (0,0,1)); neither exporter welds; the static
+  exporter's `MakeProgressive` returns at once. VIPM runs only for a skeleton flagged
+  progressive - not ported, such an export is ordered as a plain one, with a warning.
+- The skeleton's face order comes from XrETools' lookahead optimiser (`D3DX_OptimizeFaces`
+  over `_OptimiseVertexCoherencyTriList`, mode 2): ported float for float in
+  `gz-fmt-ogf/src/optimize.rs`.
+- Bone OBBs: the C++ fits them with Wild Magic's `MinBox3`; the port fits a covariance box,
+  so `OGF_S_BONE_NAMES` differs from the C++ in those 60 bytes per bone.
+- Oracle quirks kept: a two-sided static surface is walked twice (four faces per face); the
+  default bone part of `OGF_S_SMPARAMS` is written without bone names; the build time is 0.
 
 From the entity port:
 - The game's layouts differ from this repository's `Source/xrServerEntities` in: the weapon's
@@ -138,7 +169,7 @@ From the kit:
 
 ## Next packages, in dependency order
 
-1. `text` (finish `gz-luadata`, `gz-ltx` tree, `gz-fmt-xml`) - everything of phase 2 waits on it.
+1. `text` - done.
 2. `project` (`gz-project`: the list, project files, rules, file tree, content operations).
 3. `kit` (the UI kit's widgets, toolbar, dialogs) and `icons`.
 4. `game-link` (`gz-vfs`, `gz-game`, `gz-lua`) after 1.

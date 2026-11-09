@@ -11,7 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-gz-base.workspace = true
 smol_str.workspace = true
 thiserror.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+rustc-hash.workspace = true
