@@ -12,7 +12,7 @@
 // Pixel format: u32 X8R8G8B8 (alpha forced to 0xFF), same as
 // EImageThumbnail::Pixels(). Rows run TOP-DOWN - `out[0]` is the top-left
 // pixel - which is what a straight row-by-row upload
-// (XFinedMCP::PixelsToTexture, D3DX) expects, so the picture comes out upright.
+// (GrizzlyMCP::PixelsToTexture, D3DX) expects, so the picture comes out upright.
 // EImageThumbnail uses the opposite row order: it stores its pixels flipped and
 // EImageThumbnail::Update un-flips them while uploading, so handing this buffer
 // to that class needs a VFlip in between.

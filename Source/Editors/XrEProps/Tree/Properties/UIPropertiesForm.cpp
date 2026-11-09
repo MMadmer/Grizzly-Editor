@@ -363,7 +363,7 @@ void UIPropertiesForm::DrawSearchRow()
 		{
 			string64 counts;
 			xr_sprintf(counts, "%u of %u match", m_VisiblePropertyCount, m_PropertyCount);
-			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(XFinedTheme::ColorToken::TextMuted));
+			ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(GrizzlyTheme::ColorToken::TextMuted));
 			ImGui::TextUnformatted(counts);
 			ImGui::PopStyleColor();
 			ImGui::Separator();

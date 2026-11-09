@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "xfined-editor": {
+    "grizzly-editor": {
       "command": "python",
-      "args": ["tools/mcp/xfined_mcp.py"]
+      "args": ["tools/mcp/grizzly_mcp.py"]
     }
   }
 }

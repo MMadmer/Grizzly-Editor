@@ -13,7 +13,7 @@ A name outside cp1251 tells the two code pages apart: under cp1251 the file APIs
 it back as question marks and nothing can open it. A long Cyrillic name (more bytes than
 the rename box once held) and the browser's search (case folded, Cyrillic too) ride along.
 
-    python tools/qa/test_unicode_names.py --project D:\\XFinedProjects\\Test [--shot out.png]
+    python tools/qa/test_unicode_names.py --project <project> [--shot out.png]
 """
 from __future__ import annotations
 
@@ -134,8 +134,8 @@ def run(project: str, shot: str | None) -> None:
     folder = os.path.join(project, "gamedata", FOLDER)
 
     ed = Editor()
-    target = tempfile.mkdtemp(prefix="xfined_unicode_target_")
-    pkg = tempfile.mkdtemp(prefix="xfined_unicode_pkg_")
+    target = tempfile.mkdtemp(prefix="grizzly_unicode_target_")
+    pkg = tempfile.mkdtemp(prefix="grizzly_unicode_pkg_")
     started = time.time()
     try:
         ed.start(project)
@@ -255,7 +255,7 @@ def main() -> int:
         print("no such project: " + src)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_unicodeproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_unicodeproj_")
     copy = os.path.join(work, "QaUnicodeNames")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore"))
     print("running against a copy: " + copy, flush=True)

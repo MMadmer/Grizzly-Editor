@@ -142,6 +142,66 @@ float3	calc_ffp_lighting	(float3 norm_w)
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
+// Game lighting (View > Game Lighting): the scene lit the way the game lights it at the chosen hour and weather - the
+// weather's ambient, hemisphere and sun with the game's lumscales, every lamp, campfire and dynamic level light near the
+// camera, the tonemap's exposure. EGameLighting binds two small float textures for the scene pass only; with nothing
+// bound every Load returns 0, which keeps the editor's own look (and the preview rig of thumbnails).
+//   s_glit, one row: 0 = (on, light count, exposure, hemisphere share indoors), 1 = ambient, 2 = hemisphere,
+//                    3 = sun direction (from the sun), 4 = sun colour, 5 = roof map (x0, z0, 1/cell, cells),
+//                    then three texels a light from 8: (position, range), (colour, cos of a spot's half angle or 0),
+//                    (spot axis)
+//   s_groof:         the height of the topmost surface over each roof-map cell. A point below it is indoors: the game's
+//                    baked hemisphere is mostly occluded there and its sun shadowed.
+Texture2D<float4>	s_glit		: register(t15);
+Texture2D<float>	s_groof		: register(t14);
+
+bool	glit_enabled	()	{ return s_glit.Load(int3(0,0,0)).x > 0.5; }
+
+float3	glit_light		(float3 P, float3 N)
+{
+	float4	prm		= s_glit.Load(int3(0,0,0));
+	float4	roof	= s_glit.Load(int3(5,0,0));
+	float	outside	= 1;
+	if (roof.w > 0)
+	{
+		int2	cell	= int2(floor((P.xz - roof.xy) * roof.z));
+		if (all(cell >= 0) && all(cell < int(roof.w)))
+			outside	= P.y > s_groof.Load(int3(cell, 0)) - 0.3 ? 1 : 0;
+	}
+
+	float3	L	= s_glit.Load(int3(1,0,0)).rgb;
+	L	+= s_glit.Load(int3(2,0,0)).rgb * (N.y*0.5 + 0.5) * lerp(prm.w, 1, outside);
+	L	+= s_glit.Load(int3(4,0,0)).rgb * max(0, dot(N, -s_glit.Load(int3(3,0,0)).xyz)) * outside;
+
+	int		count	= int(prm.y);
+	[loop]
+	for (int i = 0; i < count; ++i)
+	{
+		int		t	= 8 + i*3;
+		float4	lp	= s_glit.Load(int3(t,0,0));
+		float3	d	= lp.xyz - P;
+		float	r2	= dot(d, d);
+		// the game's falloff: 1 - (distance / range)^2
+		float	att	= saturate(1 - r2 / (lp.w*lp.w));
+		if (att <= 0)
+			continue;
+		float4	lc	= s_glit.Load(int3(t+1,0,0));
+		float3	l	= d * rsqrt(max(r2, 1e-6));
+		if (lc.w > 0)
+			att	*= saturate((dot(-l, s_glit.Load(int3(t+2,0,0)).xyz) - lc.w) / max(1 - lc.w, 1e-3) * 4);
+		L	+= lc.rgb * max(0, dot(N, l)) * att;
+	}
+	return L * prm.z;
+}
+
+// a two-sided surface seen from its back is lit on the side the camera sees
+float3	glit_normal		(float3 P, float3 n)
+{
+	float3	N	= normalize(n);
+	return dot(N, eye_position - P) < 0 ? -N : N;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////
 // Pre-transformed (screen-space) geometry - FVF::F_TL / FVF::F_TL0uv.
 // D3D11 has no fixed-function T&L, so these now need a real vertex shader.
 uniform float4		screen_res;		// x=Width, y=Height, zw = 1/resolution

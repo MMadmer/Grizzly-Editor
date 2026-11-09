@@ -41,7 +41,7 @@ void UIObjectTool::DrawPicked()
     if (m_HasInfo)
     {
         char line[64];
-        ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+        ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary));
         sprintf_s(line, "Faces: %d", m_Faces);
         XUI::TextEllipsis(line);
         sprintf_s(line, "Vertices: %d", m_Vertices);

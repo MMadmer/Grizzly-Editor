@@ -6,6 +6,7 @@
 #include "NqLua.h"
 #include "NqUtil.h"
 #include "../EditorCharacters.h"
+#include "../EditorModManifest.h"
 
 //------------------------------------------------------------------------------
 xr_string SNqProblem::Text() const
@@ -205,17 +206,38 @@ namespace
 						 int nidx, int order, bool events_ok, const SNqValue* siblings);
 	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn);
 
+	// A character of the project by its asset id, wherever a spawn row or a reference names
+	// one: a bare id is a character of THIS project, "<module>.<id>" one another module ships
+	// and cannot be checked here. A template never becomes an NPC, so nothing can name it.
+	void CheckCharacterName(SCtx& c, const SNqValue* ch, LPCSTR node, LPCSTR slot)
+	{
+		if (!ch || !ch->IsString() || ch->s.empty())
+		{
+			ERR(c, "E006", node, slot, "character must be the id of a character of the project");
+			return;
+		}
+		if (ch->s.find('.') != xr_string::npos || !c.ctx.file_path) return;
+		const xr_vector<EditorCharacters::SBrief>& all = EditorCharacters::Briefs();
+		const EditorCharacters::SBrief* found = 0;
+		for (u32 b = 0; b < all.size(); ++b) if (all[b].id == ch->s) found = &all[b];
+		if (!found)
+			ERR(c, "E030", node, slot, "character '%s' is not a character of this project", ch->s.c_str());
+		else if (found->abstract_)
+			ERR(c, "E030", node, slot, "character '%s' is a template - it never becomes an NPC", ch->s.c_str());
+	}
+
 	bool CheckNpcRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, bool allow_smart, bool allow_spawn)
 	{
 		if (!v.IsTable())
 		{
-			ERR(c, "E006", node, slot, "expected a reference table { story = ... } / { ref = ... } / { profile = ... } / { community = ... }%s",
+			ERR(c, "E006", node, slot, "expected a reference table { story = ... } / { ref = ... } / { character = ... } / { profile = ... } / { community = ... }%s",
 				allow_smart ? " / { smart = ... }" : "");
 			return false;
 		}
 		int alts = 0;
 		if (v.Has("story"))		{ ++alts; CheckIndexed(c, NqPickers::tStory,     v.GetString("story"), node, slot); }
 		if (v.Has("ref"))		{ ++alts; NoteRefUse(c, v, nidx, order, slot); }
+		if (v.Has("character"))	{ ++alts; CheckCharacterName(c, v.Get("character"), node, slot); }
 		if (v.Has("profile"))	{ ++alts; CheckIndexed(c, NqPickers::tProfile,   v.GetString("profile"), node, slot); }
 		if (v.Has("community"))	{ ++alts; CheckIndexed(c, NqPickers::tCommunity, v.GetString("community"), node, slot);
 								  if (v.Has("level")) CheckIndexed(c, NqPickers::tLevel, v.GetString("level"), node, slot); }
@@ -244,7 +266,7 @@ namespace
 		}
 		if (alts == 0)
 		{
-			ERR(c, "E006", node, slot, "reference table needs one of story/ref/profile/community%s%s",
+			ERR(c, "E006", node, slot, "reference table needs one of story/ref/character/profile/community%s%s",
 				allow_smart ? "/smart" : "", allow_spawn ? "/spawn" : "");
 			return false;
 		}
@@ -259,24 +281,27 @@ namespace
 		return true;
 	}
 
-	// squad_ref / object_ref: one concrete world object - { story } | { ref }, nothing else.
-	// Narrower than npc_ref on purpose: a profile or a community names a kind of creature,
-	// and there is no single object behind that to loot, hold a ref on, or count deaths of.
+	// squad_ref / object_ref: one concrete world object - { story } | { ref }, and for an
+	// object a character too (one person is one object). Narrower than npc_ref on purpose: a
+	// profile or a community names a kind of creature, and there is no single object behind
+	// that to loot, hold a ref on, or count deaths of.
 	void CheckObjectRef(SCtx& c, const SNqValue& v, LPCSTR node, LPCSTR slot, int nidx, int order, LPCSTR type)
 	{
+		const bool object = 0 == strcmp(type, "object_ref");
 		if (!v.IsTable())
 		{
-			ERR(c, "E006", node, slot, "expected %s = { story = ... } or { ref = ... }", type);
+			ERR(c, "E006", node, slot, "expected %s = { story = ... } or { ref = ... }%s", type, object ? " or { character = ... }" : "");
 			return;
 		}
 		int alts = 0;
 		if (v.Has("story")) { ++alts; CheckIndexed(c, NqPickers::tStory, v.GetString("story"), node, slot); }
 		if (v.Has("ref"))	{ ++alts; NoteRefUse(c, v, nidx, order, slot); }
-		if (alts != 1) ERR(c, "E006", node, slot, "%s needs exactly one of story / ref", type);
+		if (object && v.Has("character")) { ++alts; CheckCharacterName(c, v.Get("character"), node, slot); }
+		if (alts != 1) ERR(c, "E006", node, slot, "%s needs exactly one of story / ref%s", type, object ? " / character" : "");
 		for (u32 i = 0; i < v.keys.size(); ++i)
 		{
 			const xr_string& k = v.keys[i];
-			if (k != "story" && k != "ref") ERR(c, "E006", node, slot, "%s has no field '%s'", type, k.c_str());
+			if (k != "story" && k != "ref" && !(object && k == "character")) ERR(c, "E006", node, slot, "%s has no field '%s'", type, k.c_str());
 			else if (!v.vals[i].IsString()) ERR(c, "E006", node, slot, "'%s' must be a string", k.c_str());
 		}
 	}
@@ -744,17 +769,7 @@ namespace
 				const bool has_se = se && se->IsString() && !se->s.empty();
 				if (has_ch == has_se)
 					ERR(c, "E022", node, sl.c_str(), "a row names a character OR a section - exactly one");
-				if (has_ch && ch->s.find('.') == xr_string::npos && c.ctx.file_path)
-				{
-					// a bare id is a character of THIS project; "<module>.<id>" cannot be checked here
-					const xr_vector<EditorCharacters::SBrief>& all = EditorCharacters::Briefs();
-					const EditorCharacters::SBrief* found = 0;
-					for (u32 b = 0; b < all.size(); ++b) if (all[b].id == ch->s) found = &all[b];
-					if (!found)
-						ERR(c, "E030", node, sl.c_str(), "character '%s' is not a character of this project", ch->s.c_str());
-					else if (found->abstract_)
-						ERR(c, "E030", node, sl.c_str(), "character '%s' is a template - it never becomes an NPC, spawn one that starts from it", ch->s.c_str());
-				}
+				if (has_ch) CheckCharacterName(c, ch, node, sl.c_str());
 				if (has_se) CheckIndexed(c, NqPickers::tSpawnSection, se->s, node, sl.c_str());
 				if (const SNqValue* r = row.Get("ref"))
 				{
@@ -775,7 +790,12 @@ namespace
 		{
 			if (!v.IsTable() || !v.arr.empty())
 			{
-				ERR(c, "E006", node, slot, "'%s' must be { path = } / { ref = } / { story = } / { role = } or a place", p.name.c_str());
+				ERR(c, "E006", node, slot, "'%s' must be { path = } / { ref = } / { story = } / { character = } / { role = } or a place", p.name.c_str());
+				return;
+			}
+			if (v.Has("character"))
+			{
+				CheckCharacterName(c, v.Get("character"), node, slot);
 				return;
 			}
 			if (const SNqValue* path = v.Get("path"))
@@ -829,17 +849,18 @@ namespace
 			if (t == "attack_target")
 			{
 				if (const SNqValue* cm = v.Get("community"))	{ ++forms; if (!cm->IsString()) ERR(c, "E006", node, slot, "community must be a string"); }
-				if (v.Has("story") || v.Has("ref") || v.Has("profile"))
+				if (v.Has("story") || v.Has("ref") || v.Has("character") || v.Has("profile"))
 				{
 					++forms;
 					CheckNpcRef(c, v, node, slot, nidx, order, true, false);
 				}
 			}
-			else if (v.Has("story") || v.Has("ref"))
+			else if (v.Has("story") || v.Has("ref") || v.Has("character"))
 			{
-				// something to walk after: a ref the caller spawned, or an object of the level
+				// something to walk after: a ref the caller spawned, an object of the level, a character
 				++forms;
 				if (v.Has("ref")) NoteRefUse(c, v, nidx, order, slot);
+				if (v.Has("character")) CheckCharacterName(c, v.Get("character"), node, slot);
 			}
 			if (forms == 0)
 				ERR(c, "E006", node, slot, "'%s' names nobody", p.name.c_str());
@@ -884,6 +905,19 @@ namespace
 		}
 		// everything else is a plain string: identifiers, sections, names
 		if (!v.IsString()) { ERR(c, "E006", node, slot, "'%s' must be a string", p.name.c_str()); return; }
+		// a global variable of the module: declared in mod.ltx [vars]. "<module>.<name>" is
+		// another module's, which only the game can check
+		if (t == "global_name")
+		{
+			if (v.s.empty()) { ERR(c, "E006", node, slot, "'%s' names no global variable", p.name.c_str()); return; }
+			if (v.s.find('.') != xr_string::npos || !c.ctx.file_path) return;
+			const xr_vector<EditorMod::SGlobalVar>& globals = EditorMod::ProjectGlobals();
+			bool declared = false;
+			for (u32 i = 0; i < globals.size(); ++i) if (globals[i].name == v.s) declared = true;
+			if (!declared)
+				ERR(c, "E030", node, slot, "global variable '%s' is not declared in mod.ltx [vars] - add it under Global in the Variables", v.s.c_str());
+			return;
+		}
 		if (t == "ref_name")
 		{
 			// a `ref` parameter of a spawning kind declares the name

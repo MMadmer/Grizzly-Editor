@@ -3,13 +3,12 @@
 
 Drives the editor over MCP on a THROW-AWAY COPY of a project: writes characters,
 reads them back, builds the module into a temporary folder and verifies that the
-generated half is exactly what the game needs to load them — the character_desc
-entry, the profile, the string table, the spawn and squad sections, and the
-.ltxp patch that appends (never replaces) the two profile lists. Phase U opens the
+assets ship as they are and nothing is made of them: what the game makes of a
+character is the game repo's Run-ScreensQa.ps1 -Part Descriptions. Phase U opens the
 Characters tab on a character over MCP (characters_view) and wants its form drawn
 whole, with nothing escaping its window.
 
-    python tools/qa/test_characters.py --project D:\\XFinedProjects\\Test
+    python tools/qa/test_characters.py --project <project>
 """
 from __future__ import annotations
 
@@ -284,10 +283,9 @@ def run_spawn_checks(mcp, check, module, out_dir, os, json):
     check(built.get("ok"), "F the module builds with the spawner in it", json.dumps(built)[:200])
     shipped = os.path.join(out_dir, "modules", module, "quests", "qa_spawner.nqasset")
     check(os.path.isfile(shipped), "F and the quest ships", shipped)
-    # the section the game will be asked for is the one the build generated
-    ltx = os.path.join(out_dir, "modules", module, "gamedata", "configs", "xms", module + "_npc.ltx")
-    body = open(ltx, encoding="cp1251", errors="replace").read() if os.path.isfile(ltx) else ""
-    check("[%s_qa_courier]" % module in body, "F <module>_<id> is exactly the spawn section the build wrote", ltx)
+    # the game makes <module>_<id> of the asset, and the asset ships with the quest that names it
+    asset = os.path.join(out_dir, "modules", module, "characters", "qa_courier.npcasset")
+    check(os.path.isfile(asset), "F and so does the character it names", asset)
 
     # deleting the character turns the same quest into an error - no restart, no refresh
     mcp("characters_delete", id="qa_runner")
@@ -322,31 +320,15 @@ def run_base_checks(mcp, check, read, module, out_dir, os, json):
     built = mcp("mod_export", target=out_dir)
     check(built.get("ok"), "E the module builds", json.dumps(built)[:200])
     root = os.path.join(out_dir, "modules", module)
-    desc = read(os.path.join(root, "gamedata", "configs", "gameplay",
-                             "character_desc_%s.xml" % module))
-    ltx = read(os.path.join(root, "gamedata", "configs", "xms", "%s_npc.ltx" % module))
-
-    gid = "%s_qa_kitguard" % module
-    check('<specific_character id="%s"' % gid in desc, "E the character is in the module")
-    check('<specific_character id="%s_qa_kit"' % module not in desc,
-          "E the template is NOT - it was never a character")
-    check("[%s_qa_kit]" % module not in ltx, "E and has no spawn section either")
-
-    block = desc.split('<specific_character id="%s"' % gid)[1].split("</specific_character>")[0]
-    check("device_torch \\n" in block and "wpn_knife \\n" in block,
-          "E the inherited items are in its kit")
-    check("medkit = 4 \\n" in block and "medkit = 2 \\n" not in block,
-          "E a repeated section takes the new count")
-    check("bread" not in block, "E and a count of 0 takes an inherited item away")
-    check("wpn_ak74u \\n" in block, "E its own items are there too")
-    check("<rank>250</rank>" in block, "E a field it does not set comes from the base")
-    check("<community>dolg</community>" in block, "E one it does set wins")
+    for name in ("qa_kit", "qa_kitguard"):
+        check(os.path.isfile(os.path.join(root, "characters", name + ".npcasset")),
+              "E %s ships as its asset: the game does the inheriting" % name)
 
     o = mcp("characters_write", text=NO_BASE)
     check("E111" in " ".join(o.get("problems", [])), "E a base that does not exist is reported",
           json.dumps(o.get("problems")))
     mcp("characters_write", text=LOOP_A)
-    l = mcp("characters_write", text=LOOP_B)
+    mcp("characters_write", text=LOOP_B)
     check("E112" in " ".join(mcp("characters_list").get("problems", [])),
           "E a base that comes back to itself is reported",
           json.dumps(mcp("characters_list").get("problems"))[:200])
@@ -395,7 +377,7 @@ def read(path: str) -> str:
 
 def run(project: str) -> None:
     ed = Editor()
-    out_dir = tempfile.mkdtemp(prefix="xfined_chars_")
+    out_dir = tempfile.mkdtemp(prefix="grizzly_chars_")
     try:
         ed.start(project)
 
@@ -403,7 +385,7 @@ def run(project: str) -> None:
         module = manifest.get("id", "")
         check(bool(module), "A the project has a module id", json.dumps(manifest)[:200])
 
-        # the checks count characters, and the last one deleted takes the generated half with it: an author's
+        # the checks count characters: an author's
         # project may bring characters of its own, so the copy starts without them
         own = [c["id"] for c in mcp("characters_list").get("characters", [])]
         for cid in own:
@@ -438,6 +420,8 @@ def run(project: str) -> None:
         bad = mcp("characters_write", text=BROKEN)
         problems = " ".join(bad.get("problems", []))
         check(bad.get("ok") and "E102" in problems, "B an id with spaces is reported", problems)
+        expr = mcp("characters_write", text='return { npc = 1, id = "qa_expr", name = "a" .. "b", visual = "x" }')
+        check("not data" in json.dumps(expr), "B what only Lua could work out is refused: the game runs nothing in the file", json.dumps(expr)[:300])
         check("E103" in problems, "B and so is a missing name", problems)
         check("E104" in problems, "B and a missing visual", problems)
         mcp("characters_delete", id="QA Bad Id")
@@ -469,6 +453,17 @@ def run(project: str) -> None:
                   "B while a character made of what the game has gets none of them")
         mcp("characters_delete", id="qa_oddlooks")
 
+        # a model on a skeleton of its own passes every other check and stops the game the moment
+        # the NPC comes online: Clear Sky's Forester has no eyes and no jaw for an NPC's damage
+        forester = mcp("characters_write", text=COURIER.replace('"qa_courier"', '"qa_forester"')
+                       .replace("stalker_neutral\\\\stalker_neutral_1", "stalker_lesnik\\\\stalker_lesnik_1"))
+        forester_problems = " ".join(forester.get("problems", []))
+        if mcp("quest_lookup", type="character_icon", limit=5).get("entries"):
+            check("E123" in forester_problems and "eye_left" in forester_problems and "jaw_1" in forester_problems,
+                  "B a model on a skeleton of its own is an error naming the bones it lacks", forester_problems)
+            check("E123" not in " ".join(w.get("problems", [])), "B while a stalker model has them all")
+        mcp("characters_delete", id="qa_forester")
+
         # ---------------------------------------------------------------- U: the Characters tab
         run_ui_checks(mcp, check, json)
 
@@ -477,60 +472,13 @@ def run(project: str) -> None:
         check(built.get("ok"), "C the module builds", json.dumps(built)[:300])
 
         root = os.path.join(out_dir, "modules", module)
-        desc = os.path.join(root, "gamedata", "configs", "gameplay", f"character_desc_{module}.xml")
-        prof = os.path.join(root, "gamedata", "configs", "gameplay", f"npc_profile_{module}.xml")
-        ltx = os.path.join(root, "gamedata", "configs", "xms", f"{module}_npc.ltx")
-        patch = os.path.join(root, "patch", f"{module}_characters.ltxp")
-        st_rus = os.path.join(root, "gamedata", "configs", "text", "rus", f"{module}_npc.xml")
-        st_eng = os.path.join(root, "gamedata", "configs", "text", "eng", f"{module}_npc.xml")
-
-        for path, what in ((desc, "character_desc"), (prof, "npc_profile"),
-                           (ltx, "spawn sections"), (patch, "the ltxp patch"),
-                           (st_rus, "the rus string table"), (st_eng, "the eng string table")):
-            check(os.path.isfile(path), f"C {what} is in the module", path)
-        # the asset is the source; the game reads what was generated from it
         sources = [os.path.join(b, f) for b, _, fs in os.walk(root) for f in fs if f.lower().endswith(".npcasset")]
-        check(not sources, "C the .npcasset sources stay in the project", json.dumps(sources)[:200])
-
-        gid = f"{module}_qa_courier"
-        d = read(desc)
-        check(f'<specific_character id="{gid}"' in d, "C the character is described", d[:200])
-        check("<visual>actors\\stalker_neutral\\stalker_neutral_1</visual>" in d,
-              "C with its model")
-        check(f"<name>{gid}_name</name>" in d, "C and a string-table name, not a literal")
-        check("wpn_ak74u \\n" in d and "ammo_5.45x39_fmj = 3 \\n" in d and "medkit \\n" in d,
-              "C its kit is written the way the engine reads one")
-        check('<money min="500" max="1500" infinitive="0"/>' in d, "C and its money")
-        # the engine asserts on these three (CSpecificCharacter::load_shared): a character that
-        # sets none of them must still carry all three, or the game stops loading profiles
-        blocks = d.split("<specific_character ")[1:]
-        bare = [b.split('"')[1] for b in blocks
-                if not all(tag in b.split("</specific_character>")[0] for tag in ("<community>", "<rank>", "<reputation>"))]
-        check(blocks and not bare, "C every character carries community, rank and reputation", json.dumps(bare))
-
-        p = read(prof)
-        check(f'<character id="{gid}">' in p and f"<specific_character>{gid}</specific_character>" in p,
-              "C the profile names the character outright (no random pick)")
-
-        l = read(ltx)
-        check(f"[{gid}]:stalker" in l, "C the spawn section inherits stalker", l[:200])
-        check(f"character_profile     = {gid}" in l, "C and carries the profile")
-        check("$spawn" in l, "C and is spawnable, so it shows up in the spawn roster")
-        check(f"[{gid}_squad]:online_offline_group" in l, "C a one-man squad exists for spawn.squad")
-        check(f"[{module}_qa_guard_squad]" not in l, "C and squad = false leaves none")
-
-        t = read(patch)
-        check("+files = npc_profile_" + module in t, "C the patch APPENDS the profile file")
-        check("+specific_characters_files = character_desc_" + module in t,
-              "C and appends the character file")
-        check("[profiles]" in t and "-files" not in t, "C nothing of the game is replaced")
-
-        s_rus = read(st_rus)
-        s_eng = read(st_eng)
-        check(f'<string id="{gid}_name">' in s_rus and "Kurier" in s_rus, "C rus name is in place")
-        check("Courier" in s_eng, "C eng name is in place")
-        check(f"{module}_qa_guard_name" in s_rus and "Guard" in s_rus,
-              "C a single-language name lands in rus")
+        check(len(sources) == 2, "C the assets ship, one per character", json.dumps(sources)[:200])
+        same = read(os.path.join(root, "characters", "qa_courier.npcasset")) == read(os.path.join(project, "characters", "qa_courier.npcasset"))
+        check(same, "C exactly as the project holds them")
+        made = [os.path.join(b, f) for b, _, fs in os.walk(root) for f in fs
+                if re.search(r"(character_desc_|npc_profile_|_npc\.|_characters\.ltxp|mode_register|_modes)", f)]
+        check(not made, "C and the build makes nothing of them", json.dumps(made)[:300])
 
         # ---------------------------------------------------------------- E: inheritance
         run_base_checks(mcp, check, read, module, out_dir, os, json)
@@ -546,8 +494,8 @@ def run(project: str) -> None:
 
         built2 = mcp("mod_export", target=out_dir)
         check(built2.get("ok"), "D the module builds again", json.dumps(built2)[:200])
-        gone = [os.path.isfile(x) for x in (desc, prof, ltx, patch, st_rus, st_eng)]
-        check(not any(gone), "D the generated half went with them", str(gone))
+        gone = [os.path.join(b, f) for b, _, fs in os.walk(root) for f in fs if f.lower().endswith(".npcasset")]
+        check(not gone, "D and with them what the module ships", json.dumps(gone)[:200])
 
         # the copy is left without characters, as it started
         left = mcp("characters_list").get("characters", [])
@@ -569,7 +517,7 @@ def main() -> int:
         print("no such project: " + src)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_charproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_charproj_")
     copy = os.path.join(work, "QaCharacters")
     shutil.copytree(src, copy)
     print("running against a copy: " + copy, flush=True)

@@ -2,7 +2,7 @@
 """Raw pixels and colour literals in the editor's UI code (docs/UI_DESIGN.md, section 1.4 and section 2).
 
 Every size in the UI is a logical point that goes through XUI::Pt / XUI::Em (DPI enters in one function), and every
-colour is a theme token (XFinedTheme::U32 / Vec4, XUI::ToneColor). A literal pixel size is right at one scale only and
+colour is a theme token (GrizzlyTheme::U32 / Vec4, XUI::ToneColor). A literal pixel size is right at one scale only and
 a literal colour ignores the theme; this finds both. Needs no build and no editor.
 
 What it flags, in code with its comments and strings taken out:
@@ -36,7 +36,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 EDITORS = os.path.join(REPO, "Source", "Editors")
-# the XFined Editor's own UI: the level editor, its core, the kit and the property grid (the SDK's other editors are not
+# the Grizzly Editor's own UI: the level editor, its core, the kit and the property grid (the SDK's other editors are not
 # part of the redesign)
 DEFAULT = [os.path.join(EDITORS, d) for d in ("LevelEditor", "XrECore", "XrEUI", "XrEProps")]
 MARKER = "ui-units: ok"

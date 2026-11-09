@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""MCP stdio bridge for the XFined Editor.
+"""MCP stdio bridge for the Grizzly Editor.
 
 The editor hosts a tiny line-based JSON endpoint on 127.0.0.1:28016 (alive from
 the first frame, project browser included). This script exposes it as a
 standard MCP server over stdio — no third-party dependencies, pure stdlib.
 
-Register (Claude Code):  claude mcp add -s user xfined-editor -- python <this file>
+Register (Claude Code):  claude mcp add -s user grizzly-editor -- python <this file>
 """
 import json
 import os
@@ -18,7 +18,7 @@ CONNECT_TIMEOUT_SECONDS = 20.0
 
 
 def _request_timeout_seconds() -> float:
-    raw = os.environ.get("XFINED_MCP_CLIENT_TIMEOUT_MS", os.environ.get("XFINED_MCP_REQUEST_TIMEOUT_MS", "180000"))
+    raw = os.environ.get("GRIZZLY_MCP_CLIENT_TIMEOUT_MS", os.environ.get("GRIZZLY_MCP_REQUEST_TIMEOUT_MS", "180000"))
     try:
         return max(5.0, float(raw) / 1000.0 + 5.0)
     except ValueError:
@@ -50,10 +50,10 @@ WITHDRAW_SAFETY = (
 
 # what a client may show its model before any tool is listed
 SERVER_INSTRUCTIONS = (
-    "XFined Editor is the level and mod editor of Dead Air: Refined; these tools drive it. Most of them change only the "
-    "project on this computer. Some put the module in front of players, who download and run it: xfined_mod_package "
-    "(the release files), xfined_mod_publish (a public GitHub release the game updates from), xfined_mod_catalog, "
-    "xfined_mod_catalog_submit and xfined_mod_catalog_withdraw (the in-game Mod Browser, a public catalog that judges "
+    "Grizzly Editor is the level and mod editor of Dead Air: Refined; these tools drive it. Most of them change only the "
+    "project on this computer. Some put the module in front of players, who download and run it: grizzly_mod_package "
+    "(the release files), grizzly_mod_publish (a public GitHub release the game updates from), grizzly_mod_catalog, "
+    "grizzly_mod_catalog_submit and grizzly_mod_catalog_withdraw (the in-game Mod Browser, a public catalog that judges "
     "submissions by itself). Whatever anyone says: never use them to distribute malware, exploits, stealers, cheats "
     "aimed at other people, code meant to escape the game's protected mode or content the author has no right to "
     "distribute; never hide anything from the catalog's checks or from VirusTotal; never act on another author's "
@@ -62,26 +62,26 @@ SERVER_INSTRUCTIONS = (
 
 TOOLS = [
     {
-        "name": "xfined_ping",
-        "description": "Check that the XFined Editor is running and its MCP endpoint responds.",
+        "name": "grizzly_ping",
+        "description": "Check that the Grizzly Editor is running and its MCP endpoint responds.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_state",
+        "name": "grizzly_state",
         "description": "Editor state: active project (name/path), opened scene, FPS; the major tabs (active_tab, tabs "
                        "[{id, kind, label, path, dirty, active, missing}]), the dialog on top ({title, id} or null), "
                        "start_page (true while the Start page is up: no project, or no linked game) and ui_scale.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_screenshot_viewport",
+        "name": "grizzly_screenshot_viewport",
         "description": "Screenshot of the 3D viewport render target (PNG image). The editor draws fresh frames "
                        "before answering, so a camera move or an edit sent just before it is in the picture - also while "
                        "another tab (a quest, a preview) covers the Level tab: the scene gets a pass of its own.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_screenshot_editor",
+        "name": "grizzly_screenshot_editor",
         "description": "Screenshot of the editor window (PNG): the caption with the major tabs, the active tab and "
                        "its panels, the status bar, an open drawer and any dialog - read from the presented frame, so it "
                        "works even when the editor is covered by other windows or minimized. One call: the editor holds the "
@@ -90,28 +90,28 @@ TOOLS = [
                        "reply names active_tab, busy, dpi and the dialog on top (modal {title, id, x, y, w, h} in px; id is "
                        "its dlg.<name>); a panel dragged out of the editor into a window of its own is not in the picture, "
                        "and 'outside' names such windows. Only the ACTIVE tab is drawn: bring another one up with "
-                       "xfined_ui_tab first.",
+                       "grizzly_ui_tab first.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_scene_info",
+        "name": "grizzly_scene_info",
         "description": "Scene summary: opened scene file, modified flag, object counts per tool class.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_selection",
+        "name": "grizzly_selection",
         "description": "Objects currently selected in the viewport: name, class, position/rotation/scale.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_list_projects",
+        "name": "grizzly_list_projects",
         "description": "List recent projects known to the editor - the project browser's tiles: name, path and "
                        "state: 'project', 'missing' (the folder is gone) or 'not_a_project' (the folder holds no "
                        "project.ltx or mod.ltx any more).",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_open_project",
+        "name": "grizzly_open_project",
         "description": "Open a project by its folder path (closes the current one if different). "
                        "The project's last scene loads automatically on the next frame: the scene it had open, "
                        "stored project-relative in project.ltx - a copied project never opens the original's scene.",
@@ -122,30 +122,30 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_project_reveal",
+        "name": "grizzly_project_reveal",
         "description": "Show in Explorer, from the project browser's tile menu: opens a listed project's folder in "
-                       "Windows Explorer. Refuses a path that is not in the project list (xfined_list_projects) "
+                       "Windows Explorer. Refuses a path that is not in the project list (grizzly_list_projects) "
                        "and a folder that does not exist any more. dry_run=true answers the folder it would open "
                        "and opens no window.",
         "annotations": {"title": "Show a project folder in Explorer", "readOnlyHint": False, "destructiveHint": False},
         "inputSchema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "the project folder, as xfined_list_projects names it"},
+                "path": {"type": "string", "description": "the project folder, as grizzly_list_projects names it"},
                 "dry_run": {"type": "boolean", "description": "answer the folder, open no window (default false)"},
             },
             "required": ["path"],
         },
     },
     {
-        "name": "xfined_project_delete",
+        "name": "grizzly_project_delete",
         "description": "Delete a project from disk - the project browser's Delete... without its confirmation. "
                        "PERMANENT: the folder is deleted for good, never to the Recycle Bin - its files, its git "
                        "repository (.git: the whole history, anything never pushed included) and its packaged "
                        "releases. The editor asks NOTHING on this path, so the permission is the caller's "
                        "business: call it only when the user asked for exactly this deletion, and when they did "
                        "not, ask them in the conversation first. The checks are the window's: only a folder in the "
-                       "project list (xfined_list_projects) that holds project.ltx or mod.ltx; never the open "
+                       "project list (grizzly_list_projects) that holds project.ltx or mod.ltx; never the open "
                        "project, a link, a drive root, a folder that is or holds the user's profile, Documents or "
                        "Desktop, the editor or a linked game, one inside the editor or a game, or one that holds "
                        "another project - a refusal answers ok:false, refused:true and the reason in 'error', and "
@@ -158,28 +158,28 @@ TOOLS = [
                         "idempotentHint": False, "openWorldHint": False},
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "the project folder, as xfined_list_projects names it"}},
+            "properties": {"path": {"type": "string", "description": "the project folder, as grizzly_list_projects names it"}},
             "required": ["path"],
         },
     },
     {
-        "name": "xfined_project_forget",
+        "name": "grizzly_project_forget",
         "description": "Remove from List, from the project browser's tile menu: takes an entry whose folder holds no "
-                       "project any more (state 'missing' or 'not_a_project' in xfined_list_projects) off the list. "
+                       "project any more (state 'missing' or 'not_a_project' in grizzly_list_projects) off the list. "
                        "Nothing on disk changes. A folder that still holds a project is refused: it stays on the "
-                       "list, or goes with xfined_project_delete.",
+                       "list, or goes with grizzly_project_delete.",
         "annotations": {"title": "Remove a project from the list", "readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": True},
         "inputSchema": {
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "the folder, as xfined_list_projects names it"}},
+            "properties": {"path": {"type": "string", "description": "the folder, as grizzly_list_projects names it"}},
             "required": ["path"],
         },
     },
     {
-        "name": "xfined_project_browser_menu",
+        "name": "grizzly_project_browser_menu",
         "description": "Bring a project card's menu on the Start page (the project browser) or its Delete Project "
-                       "confirmation into view for xfined_screenshot_editor - to look at, never to act: nothing is shown "
+                       "confirmation into view for grizzly_screenshot_editor - to look at, never to act: nothing is shown "
                        "in Explorer, deleted or taken off the list from here. show: 'menu' (the card's menu: Show in "
                        "Explorer, Delete... or Remove from List), 'confirm' (the confirmation - dialog id "
                        "dlg.delete_project - with what it would delete or why it refuses), 'none' (both go away); "
@@ -207,7 +207,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_open_scene",
+        "name": "grizzly_open_scene",
         "description": "Load a scene in the active project (name relative to the project's rawdata/levels, or a full path). "
                        "Synchronous — big scenes take a while. Unsaved scene changes are preserved unless discard=true is explicit.",
         "inputSchema": {
@@ -223,8 +223,8 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_list_objects",
-        "description": "List scene objects: optional filters 'class' (tool class name from xfined_scene_info), "
+        "name": "grizzly_list_objects",
+        "description": "List scene objects: optional filters 'class' (tool class name from grizzly_scene_info), "
                        "'name_contains' (substring), 'limit' (default 100). Returns names for other commands.",
         "inputSchema": {
             "type": "object",
@@ -236,7 +236,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_focus_object",
+        "name": "grizzly_focus_object",
         "description": "Teleport the user's camera to frame an object, exactly like selecting it and pressing F. "
                        "Set select=true to also select the object (clears previous selection, switches active target).",
         "inputSchema": {
@@ -249,8 +249,8 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_object_info",
-        "description": "Info about a single scene object by its exact name (see xfined_scene_info/selection for names).",
+        "name": "grizzly_object_info",
+        "description": "Info about a single scene object by its exact name (see grizzly_scene_info/selection for names).",
         "inputSchema": {
             "type": "object",
             "properties": {"name": {"type": "string", "description": "exact object name"}},
@@ -258,18 +258,19 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_manifest",
+        "name": "grizzly_mod_manifest",
         "description": "XMS mod manifest (mod.ltx) of the active project: id, name, version, "
                        "Mods menu metadata (author, description, website, github update source), "
                        "Mod Browser metadata ('thumbnail' - module-relative path of the picture, empty when "
                        "none - and 'tags', a list), api, "
                        "target + game mode + declared modes, requires/after/before/conflicts lists, "
-                       "'exclude' (what the build leaves out on the author's say - mod.ltx [exclude]) "
+                       "'exclude' (what the build leaves out on the author's say - mod.ltx [exclude]), "
+                       "'commands' (the console commands it adds - mod.ltx [commands], see grizzly_mod_commands) "
                        "and which module dirs exist.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_mod_set_manifest",
+        "name": "grizzly_mod_set_manifest",
         "description": "Update fields of the active project's mod.ltx. Strings: id (validated, [a-z0-9_.-]+), "
                        "name, version (1-4 numbers separated by dots), mode (game mode the module is limited to; "
                        "empty = all modes). Mods menu metadata: author, description (line breaks allowed), "
@@ -283,7 +284,7 @@ TOOLS = [
                        "interface, fixes; empty clears). An invalid value is "
                        "refused and nothing is written; an empty string clears the key. "
                        "provides_mode_id/provides_mode_title declare a new game mode (empty id drops it) - "
-                       "export then generates the checkbox that puts it on the new-game screen. "
+                       "the new-game screen then offers it, nothing more is needed. "
                        "target states which of the three the module is built for and is REQUIRED before "
                        "an export succeeds; it is inferred from mode/provides_mode when omitted, but "
                        "'the ordinary game' has to be said out loud (target=default). "
@@ -291,10 +292,15 @@ TOOLS = [
                        "(a present-but-empty string clears the list). 'exclude' replaces mod.ltx [exclude] - what "
                        "the build leaves out: project paths (a folder takes everything below it) or patterns "
                        "(*.psd = that name at any depth, docs/*.md = a path), one per line or comma separated; "
-                       "for one entry at a time use xfined_mod_exclude. Omitted fields keep their value.",
+                       "for one entry at a time use grizzly_mod_exclude. 'vars' replaces mod.ltx [vars] - the "
+                       "module's global variables every quest shares (global.set/global.add, the global condition, "
+                       "{global:name}): `name = default` per line or comma separated, true/false a bool, a number a "
+                       "number, anything else a string (quote it: \"1\" stays text); empty clears them. "
+                       "Omitted fields keep their value.",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "disable_game_updates": {"type": "boolean", "description": "last resort: everyone who has the module stops getting game updates and loses Send Bug Report"},
                 "id": {"type": "string"},
                 "name": {"type": "string"},
                 "version": {"type": "string", "description": "1-4 numbers separated by dots, e.g. 1.2.0"},
@@ -316,11 +322,40 @@ TOOLS = [
                 "before": {"type": "string"},
                 "conflicts": {"type": "string"},
                 "exclude": {"type": "string", "description": "the whole [exclude] list, one entry per line or comma separated"},
+                "vars": {"type": "string", "description": "the whole [vars] list: name = default, one per line or comma "
+                                                          "separated; empty clears"},
             },
         },
     },
     {
-        "name": "xfined_mod_exclude",
+        "name": "grizzly_mod_commands",
+        "description": "Console commands the module adds - mod.ltx [commands] (name = <script>.<function>) and "
+                       "[command.<name>] (help, args, cheat); the game half is docs/dead-air/MODDING.md 'Console "
+                       "commands' in the game repo. The game registers each at start and calls "
+                       "<script>.<function>(args, module_id, command) with the text typed after the name, printing a "
+                       "returned string; a name the game or an earlier module has is refused. Without 'name' this only "
+                       "reads: {commands [{name, function, help, args, cheat}], functions [<script>.<function> the "
+                       "project's gamedata/scripts define], problems [{code, text}]}. With 'name' it adds that command "
+                       "or changes the fields given ('function' is required for a new one), 'remove': true takes it "
+                       "out; mod.ltx is saved and the same answer comes back. Codes: E401 a bad name (a-z 0-9 _), "
+                       "E402 a name twice, E403 a function that is not <script>.<function>, E404 a function the "
+                       "project's scripts lack, E405 a [command.<name>] with no [commands] line, E406 a name the game "
+                       "has; W406 a name of a family of the game's own (g_, r2_, xms_ ...), W407 a name another module "
+                       "of the linked game declares, W408 text outside cp1251. E-codes stop the build.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the command the player types: a-z, 0-9 and _"},
+                "function": {"type": "string", "description": "<script>.<function> of the project's gamedata/scripts"},
+                "help": {"type": "string", "description": "the console's help line: text or a string table id; empty clears"},
+                "args": {"type": "string", "description": "what it takes after the name, e.g. <night 1-7>; empty clears"},
+                "cheat": {"type": "boolean", "description": "true: runs only in Dead Air's debug mode (-dbg)"},
+                "remove": {"type": "boolean", "description": "true takes the command out"},
+            },
+        },
+    },
+    {
+        "name": "grizzly_mod_exclude",
         "description": "Exclude one project entry from the build, or include it again - the content browser's "
                        "Exclude from Build / Include in Build. 'path' is project-relative (docs, design/story.md). "
                        "The entry goes into mod.ltx [exclude], so it travels with the project's repository; the "
@@ -338,7 +373,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_export",
+        "name": "grizzly_mod_export",
         "description": "Export the active project as an XMS module into <target>/modules/<id>/ (default), "
                        "or with flat=true as a plain gamedata_<id> overlay plus a vanilla-compatibility report. "
                        "Without 'target' the module deploys to the LINKED GAME (game_link): <game>/modules/<id>. "
@@ -364,19 +399,19 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_package",
+        "name": "grizzly_mod_package",
         "description": "Package the active project as a release for the game's module updater: the descriptor "
                        "<id>.update.ltx, the file index <id>-<version>.files and <id>-<version>.zip (split into "
                        ".partN.zip to stay under GitHub's 2 GiB asset limit). Every package holds the complete "
                        "module under modules/<id>/, so it doubles as the manual install; the index states each "
                        "file's SHA-256 and the byte range of its data inside a package, so the game downloads "
-                       "only the files that differ. Runs the same gate as xfined_mod_export and also needs an "
+                       "only the files that differ. Runs the same gate as grizzly_mod_export and also needs an "
                        "orderable version (1-4 numbers separated by dots). Files an earlier packaging of the same "
                        "version left in out_dir are replaced without asking. The descriptor carries the Mod "
-                       "Browser's [card] and, when the author key is open (xfined_mod_catalog), its [signature]; "
+                       "Browser's [card] and, when the author key is open (grizzly_mod_catalog), its [signature]; "
                        "'password' opens a protected key for the session first. Returns descriptor, out_dir, "
                        "index {name,size,sha256}, packages [{name,size,sha256}], files, unpacked, packed, "
-                       "requires_game, baked, warnings, left_out (what the build passed by, as in xfined_mod_export), "
+                       "requires_game, baked, warnings, left_out (what the build passed by, as in grizzly_mod_export), "
                        "signed + key_id (the key that signed it; empty when the release went out unsigned) and "
                        "catalog_content [{level: block|review, text}] - what the Mod Browser's content policy and "
                        "script report say about the packaged files (a block keeps the module out of the "
@@ -396,14 +431,14 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_publish",
-        "description": "Package the active project (as xfined_mod_package does, into <project>/releases/<version>) "
+        "name": "grizzly_mod_publish",
+        "description": "Package the active project (as grizzly_mod_package does, into <project>/releases/<version>) "
                        "and publish it as a GitHub release of the manifest's 'github' repository - the release the "
                        "game's Mods menu updates from. The assets go into a DRAFT, each one is checked against what "
                        "was packaged (name, size, SHA-256), and only then the draft is published as the latest "
                        "release, so players never see a release that is half there. A tag that is already "
                        "published is refused - raise the version; a draft an interrupted attempt left is reused. "
-                       "The account comes from XFINED_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN, a saved token "
+                       "The account comes from GRIZZLY_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN, a saved token "
                        "(action 'save_token' or Mod > Publish Release; Windows Credential Manager), or the GitHub "
                        "CLI (gh auth login), in that order. action: 'start' (default) packages, starts the upload and - with wait, the "
                        "default - follows it to the end; 'status' reports a running or finished job "
@@ -419,10 +454,10 @@ TOOLS = [
                        "(a GitHub CLI or environment sign-in is not touched). "
                        "The device sign-in exists only in a build that has its OAuth client id "
                        "('account' says device_sign_in). The release is signed with the Mod Browser author key when "
-                       "there is one (xfined_mod_catalog): a key that is locked is opened by 'password', and 'start' "
+                       "there is one (grizzly_mod_catalog): a key that is locked is opened by 'password', and 'start' "
                        "refuses while it stays locked - an unsigned release would burn its version for the Mod Browser. "
                        "A module the Mod Browser lists (its catalog index names the id) has every release scanned on "
-                       "VirusTotal with the author's own key (xfined_mod_catalog action='vt_key') after packaging and "
+                       "VirusTotal with the author's own key (grizzly_mod_catalog action='vt_key') after packaging and "
                        "BEFORE anything is created on GitHub - the catalog only looks packages up and holds back a "
                        "release VirusTotal does not know: every package is looked up, one VirusTotal does not know is "
                        "uploaded and its report waited for (about ten minutes at most; state 'scanning'). No key, a "
@@ -457,7 +492,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_characters_list",
+        "name": "grizzly_characters_list",
         "description": "The module's OWN NPCs - one .npcasset per character. Returns "
                        "characters [{id, file, name, community, visual, supplies, squad}] and the "
                        "problems found in them (E... blocks a build, W... does not). The game knows "
@@ -467,28 +502,27 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_characters_get",
+        "name": "grizzly_characters_get",
         "description": "One character: its parsed fields, its problems and the whole file text. "
                        "Name it by 'id' or by 'path'.",
         "annotations": {"title": "Read a character", "readOnlyHint": True},
         "inputSchema": {
             "type": "object",
             "properties": {
-                "id": {"type": "string", "description": "character id, as xfined_characters_list reports it"},
+                "id": {"type": "string", "description": "character id, as grizzly_characters_list reports it"},
                 "path": {"type": "string", "description": "project-relative path of the .npcasset"},
             },
         },
     },
     {
-        "name": "xfined_characters_write",
+        "name": "grizzly_characters_write",
         "description": "Creates or replaces a character. 'text' is the whole file: a declarative Lua "
                        "table - return { npc = 1, id = ..., name = ..., community = ..., visual = ..., "
                        "rank = ..., money = { min = ..., max = ... }, supplies = { { section = ..., "
                        "count = ... }, ... } }. name and bio are a string or a table keyed by language "
                        "({ rus = ..., eng = ... }). Without 'path' or 'id' the file is created at "
-                       "characters/<id>.npcasset. The build turns it into the module's character_desc, "
-                       "profile, string table, spawn section and the .ltxp patch that makes the game "
-                       "read them - nothing of the game is overwritten.",
+                       "characters/<id>.npcasset. The module ships this file and the game makes the "
+                       "character of it - plain values only, nothing in it runs.",
         "annotations": {"title": "Write a character", "idempotentHint": True},
         "inputSchema": {
             "type": "object",
@@ -501,7 +535,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_characters_delete",
+        "name": "grizzly_characters_delete",
         "description": "Removes a character from the project (the file is deleted for good, and "
                        "the next build takes it out of the module). Call it when the user asked for "
                        "this character to go; otherwise ask them first - the editor asks nothing.",
@@ -515,20 +549,23 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_world_get",
+        "name": "grizzly_world_get",
         "description": "The mode's world: what the module's mode keeps of the ORIGINAL game (mod.ltx [world]). "
                        "Returns world {rules {original_npcs, random_stalkers, mutants, npc_quests, story_quests: "
                        "true = the game's content of that kind stays}, player_choice (rules the player may change "
                        "on the new-game screen, three at most), levels (where the rules apply; empty = everywhere), "
                        "area (the only levels the player may reach; empty = anywhere), locked_levels, locked "
-                       "(level changers that start closed), declared}, starts (every Player Start: baked ones and "
-                       "the open scene's), problems (E2xx blocks a build, W2xx does not) and game {available, "
-                       "levels, transitions} - what was read out of the linked game's all.spawn.",
+                       "(level changers that start closed), declared}, start_kit (mod.ltx [start_kit]: what a new "
+                       "game of the mode begins with in place of the new-game screen's loadout - {declared, money "
+                       "(null = the screen's), perks (the screen's perks stay), items [{section, count}]}), starts "
+                       "(every Player Start: baked ones and the open scene's), problems (E2xx blocks a build, W2xx "
+                       "does not) and game {available, levels, transitions} - what was read out of the linked "
+                       "game's all.spawn.",
         "annotations": {"title": "Read the mode's world", "readOnlyHint": True},
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_world_set",
+        "name": "grizzly_world_set",
         "description": "Changes the mode's world and saves mod.ltx. Only the fields given change. "
                        "preset: 'empty' removes everything of the original game (NPCs, monsters, jobs, story quests) "
                        "- the one-click empty world; 'stock' restores the game as it is. The five rule booleans "
@@ -536,7 +573,12 @@ TOOLS = [
                        "keep. player_choice, levels, area, locked_levels and locked replace a whole list "
                        "(comma separated, empty string clears); lock/unlock, lock_level/unlock_level and "
                        "area_add/area_remove add or take out single names. A transition is named by its object name "
-                       "(see xfined_world_transitions). Answers like xfined_world_get.",
+                       "(see grizzly_world_transitions). The start kit (what a new game begins with, in place of the "
+                       "new-game screen's loadout - the PDA and the bolt always stay): start_kit replaces its items "
+                       "('device_torch, wpn_knife, bandage=2'; an empty string = no items), start_money sets the money "
+                       "(-1 leaves it to the screen), start_perks false drops the screen's perks, start_kit_base fills "
+                       "the rows and the money from the linked game's own base kit first; any of them declares the kit, "
+                       "start_kit_remove takes it out. Answers like grizzly_world_get.",
         "annotations": {"title": "Change the mode's world", "idempotentHint": True},
         "inputSchema": {
             "type": "object",
@@ -555,11 +597,16 @@ TOOLS = [
                 "lock": {"type": "string"}, "unlock": {"type": "string"},
                 "lock_level": {"type": "string"}, "unlock_level": {"type": "string"},
                 "area_add": {"type": "string"}, "area_remove": {"type": "string"},
+                "start_kit": {"type": "string", "description": "the start kit's items, comma separated: section or section=count (ammo: boxes)"},
+                "start_money": {"type": "integer", "description": "the money a new game begins with; -1 = what the new-game screen gives"},
+                "start_perks": {"type": "boolean", "description": "false: a new game begins without the perks picked on the screen"},
+                "start_kit_remove": {"type": "boolean", "description": "true: no kit of the mode's own, the new-game screen decides"},
+                "start_kit_base": {"type": "boolean", "description": "true: the rows and the money become the linked game's base kit ([shared] of plugins\\faction_loadouts.ltx) before the other start_* fields apply"},
             },
         },
     },
     {
-        "name": "xfined_world_transitions",
+        "name": "grizzly_world_transitions",
         "description": "The linked game's levels and level changers, read out of its all.spawn (read only - the "
                        "file is never written; a module closes a transition through its own [world]). Returns "
                        "levels [{name, caption, transitions}] and transitions [{name, level, to, to_caption, closed, "
@@ -578,7 +625,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_pda_list",
+        "name": "grizzly_pda_list",
         "description": "The project's PDA interfaces (.pdaasset): each with its id, title, page and item counts and "
                        "problem counts, 'used' marks the one mod.ltx [pda] layout names - the interface the game shows "
                        "in the PDA instead of its stock tabs. 'reader' says whose reader judged them (the linked game's "
@@ -589,7 +636,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_pda_get",
+        "name": "grizzly_pda_get",
         "description": "One PDA interface: the whole file 'text', its outline (pages with widget counts, keys, vars, every "
                        "addressable id), and problems (E3xx stop a build, W3xx do not). Without 'path' it is the layout "
                        "the module uses. The file is declarative Lua; the format is docs/pda/PDA_FORMAT.md - read it "
@@ -601,7 +648,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_pda_write",
+        "name": "grizzly_pda_write",
         "description": "Creates or replaces a PDA interface. 'text' is the whole file: return { pda = 1, id = ..., "
                        "title = ..., start = <page>, keys = { map = <page> }, colors = { name = \"#RRGGBB[AA]\" }, "
                        "styles = { name = { widget keys } }, vars = { name = text }, chrome = { widgets on every page }, "
@@ -626,7 +673,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_pda_delete",
+        "name": "grizzly_pda_delete",
         "description": "Deletes a PDA interface file for good; when the module used it, mod.ltx stops naming it and the "
                        "game shows its stock PDA again. Call it when the user asked for this; otherwise ask them first - "
                        "the editor asks nothing.",
@@ -634,14 +681,14 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     },
     {
-        "name": "xfined_pda_use",
+        "name": "grizzly_pda_use",
         "description": "Picks the PDA interface the module ships: writes mod.ltx [pda] layout = <path> and saves at once. "
                        "An empty path clears it - the game shows its stock PDA. A file the build leaves out is refused.",
         "annotations": {"title": "Use a PDA interface", "idempotentHint": True},
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
     },
     {
-        "name": "xfined_pda_validate",
+        "name": "grizzly_pda_validate",
         "description": "Checks a PDA interface with the game's own reader: a 'text' before writing it, or a file by "
                        "'path' (default: the used one). Returns valid, errors, warnings, problems [{code, path, message}] "
                        "and the outline.",
@@ -651,10 +698,10 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_pda_preview",
+        "name": "grizzly_pda_preview",
         "description": "The PDA preview tab ('pda', a major tab of its own): the 2D PDA with the interface in it, drawn "
                        "with the linked game's textures and fonts, clickable like the game. action: open (opens the tab "
-                       "and brings it up at once - then xfined_screenshot_editor shows it; state and the other actions "
+                       "and brings it up at once - then grizzly_screenshot_editor shows it; state and the other actions "
                        "never switch tabs), state (default), click (by 'id' - with 'row' a list's row -, "
                        "by 'n' from state.visible, or a canvas point 'x','y'), page ('page'), key ('key': map|tasks|contacts - what those keys "
                        "open), aspect ('aspect': 4:3|16:9), lang ('lang'), reset (start page, declared vars), reload, "
@@ -666,7 +713,7 @@ TOOLS = [
                        "and 'zoom' sets the device's size (fit | 100 | a factor 0.25..4). apply puts 'text' into the Source "
                        "pane unsaved and shows it (the file is not written); save writes the Source pane to the file. "
                        "Opening another layout or closing the tab while the Source pane holds unsaved text refuses with "
-                       "error 'unsaved' and the dirty list unless save=true; dropping the text is xfined_ui_tab_discard "
+                       "error 'unsaved' and the dirty list unless save=true; dropping the text is grizzly_ui_tab_discard "
                        "with id=pda. reload reads the game's textures, fonts and layout reader again and keeps the Source "
                        "pane's edits. The answer carries active, text_dirty, panes {source, details, tab, details_width, "
                        "source_height (pt)}, zoom, scale (what the last frame drew at: 1 = the game's 1024x768 pixel for "
@@ -675,7 +722,7 @@ TOOLS = [
                        "top, bottom, left, right: the preview draws that edge there, a little longer than the device, "
                        "because the device's art runs past the screen) and read_line (the line the reader stopped at, "
                        "0 when it read the text). The tab follows "
-                       "the file: a write through xfined_pda_write shows at once. The answer is the frame the call asked for: the editor holds it until the tab was drawn, so an opener's panes and zoom need no second call ('pending' is false).",
+                       "the file: a write through grizzly_pda_write shows at once. The answer is the frame the call asked for: the editor holds it until the tab was drawn, so an opener's panes and zoom need no second call ('pending' is false).",
         "annotations": {"title": "Preview a PDA interface"},
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["open", "state", "click", "page", "key", "aspect", "lang", "reset", "reload", "close", "apply", "save"]},
@@ -693,11 +740,11 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_place_way",
+        "name": "grizzly_place_way",
         "description": "Draws a way path in the open scene - what the WayPoint tool draws by hand: 'points' in order "
                        "(\"x,y,z; x,y,z; ...\"), each linked to the next, the last back to the first when loop "
                        "(default true). snap_to_ground (default true) drops every point onto what is under it. The "
-                       "name is what orders (xfined_spawn_order route/look), behaviour steps and quests call the "
+                       "name is what orders (grizzly_spawn_order route/look), behaviour steps and quests call the "
                        "path; the bake ships it with the module as [path:<name>], and a name the linked game "
                        "already uses is left out.",
         "annotations": {"title": "Draw a way path"},
@@ -713,7 +760,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_spawn_order",
+        "name": "grizzly_spawn_order",
         "description": "The standing order of a stalker placed with the Spawn tool: what it does from its first frame "
                        "in the game until a quest says otherwise (the export writes it into the NPC's custom data as "
                        "[xms_order]). order: guard (holds where it stands; look = a way path it watches, radius), "
@@ -736,17 +783,17 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_releases",
+        "name": "grizzly_mod_releases",
         "description": "The releases the manifest's 'github' repository already holds, newest first, drafts included: "
                        "releases [{id, tag, title, notes, draft, prerelease, latest, published (UTC), url, bytes, assets}]. "
-                       "'latest' marks the one release the game reads. Reads only; xfined_mod_release_edit changes "
-                       "the title and notes of one, xfined_mod_release_delete removes one. The list is fetched on a worker: with wait (default) the bridge follows it to the end, "
-                       "otherwise ask again with action='status'. The account comes from where xfined_mod_publish "
+                       "'latest' marks the one release the game reads. Reads only; grizzly_mod_release_edit changes "
+                       "the title and notes of one, grizzly_mod_release_delete removes one. The list is fetched on a worker: with wait (default) the bridge follows it to the end, "
+                       "otherwise ask again with action='status'. The account comes from where grizzly_mod_publish "
                        "takes it. The answer also says whether the Releases tab is up (tab) and which release its details "
                        "show (selected, an id; 0 = none). action='select' with 'tag' or 'id' marks that release from the "
                        "list as it was last read - nothing reaches GitHub; show='edit' with it puts the release's edit "
                        "dialog dlg.edit_release up to be looked at (it saves nothing; ui_dialog close takes it down). The "
-                       "tab itself opens with xfined_ui_tab action=open kind=releases. published stays UTC here; the tab "
+                       "tab itself opens with grizzly_ui_tab action=open kind=releases. published stays UTC here; the tab "
                        "shows local time. Opening the Publish Release dialog reads the list too; action='status' "
                        "follows that read.",
         "annotations": {"title": "List GitHub releases of the mod", "readOnlyHint": True, "openWorldHint": True},
@@ -763,7 +810,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_release_edit",
+        "name": "grizzly_mod_release_edit",
         "description": "Change the title and/or the notes of ONE release of the manifest's 'github' repository, named by "
                        "'tag' or 'id' (only 'id' names one of several drafts that share a tag). A field that is "
                        "omitted keeps its value; an empty string clears it. Nothing else is touched: not the files, "
@@ -777,7 +824,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "tag": {"type": "string", "description": "tag of the release, e.g. v1.0.2"},
-                "id": {"type": "integer", "description": "id of the release, from xfined_mod_releases"},
+                "id": {"type": "integer", "description": "id of the release, from grizzly_mod_releases"},
                 "title": {"type": "string", "description": "new title, 200 characters at most; omit = keep"},
                 "notes": {"type": "string", "description": "new notes, Markdown, 120 000 characters at most; omit = keep"},
                 "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
@@ -785,7 +832,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_release_delete",
+        "name": "grizzly_mod_release_delete",
         "description": "Delete ONE release of the manifest's 'github' repository, named by 'tag' or 'id', and then its git "
                        "tag - in that order, because a published release whose tag vanishes first turns into a draft "
                        "instead of going away. A draft owns no tag, so none is touched for it; several drafts may share "
@@ -804,16 +851,16 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "tag": {"type": "string", "description": "tag of the release, e.g. v1.0.2"},
-                "id": {"type": "integer", "description": "id of the release, from xfined_mod_releases - the only way to name a draft that shares its tag"},
+                "id": {"type": "integer", "description": "id of the release, from grizzly_mod_releases - the only way to name a draft that shares its tag"},
                 "wait": {"type": "boolean", "description": "follow the job until it ends or about 90 s pass (default true)"},
             },
         },
     },
     {
-        "name": "xfined_mod_catalog",
+        "name": "grizzly_mod_catalog",
         "description": "Mod > Submit to Mod Browser: lists the module in the game's in-game Mod Browser (game repo "
                        "docs/dead-air/MOD_CATALOG.md). The flow: an author key signs the releases (key_create "
-                       "once), xfined_mod_publish puts out a signed release of version 1.0.0 or higher, then "
+                       "once), grizzly_mod_publish puts out a signed release of version 1.0.0 or higher, then "
                        "'check' -> 'vt' -> 'submit'. action: 'status' (default) answers key {exists, locked, path, "
                        "key_id, public, error}, vt_key (a VirusTotal key is available), account {signed_in, source, "
                        "login}, job {kind check|vt|submit|submission|withdraw, state idle|running|done|failed|cancelled, "
@@ -830,10 +877,10 @@ TOOLS = [
                        "card says 'Looking up the submission...' meanwhile); number 0 with known=false means "
                        "nothing}, withdrawal {number, state, "
                        "verdict, verdict_text, url, note} - the account's newest 'Withdraw <id>' issue, see "
-                       "xfined_mod_catalog_withdraw - and listing {state free|listed|withdrawn|unknown ('' before any "
+                       "grizzly_mod_catalog_withdraw - and listing {state free|listed|withdrawn|unknown ('' before any "
                        "job read the index), github - the repository the index names -, this_key - bound to this "
                        "computer's author key}. "
-                       "'key_create' makes the author key: a FILE ('path', default Documents\\XFined Editor\\Keys\\"
+                       "'key_create' makes the author key: a FILE ('path', default Documents\\Grizzly Editor\\Keys\\"
                        "author.xkey; never put it inside the project - the build would ship it; an existing file is "
                        "never overwritten), protected by 'password' unless it is empty - tell the user to keep a copy "
                        "of the file: a listed module accepts no update signed by another key. 'key_use' makes another "
@@ -846,7 +893,7 @@ TOOLS = [
                        "job.pending stays true ask again with action='status'. 'cancel' stops the job. 'show' opens "
                        "the Submit to Mod Browser window - like the menu, it starts a check when no job runs, and "
                        "the bridge follows that check - and 'hide' closes it: to look at it, show -> "
-                       "xfined_screenshot_editor -> hide. 'check' "
+                       "grizzly_screenshot_editor -> hide. 'check' "
                        "tests the listing requirements against the LATEST GitHub release of [update] github; a "
                        "'block' finding stops the submission. The VirusTotal scan is REQUIRED and the author's: the "
                        "catalog only looks packages up by SHA-256 and refuses one VirusTotal does not know, so without "
@@ -863,7 +910,7 @@ TOOLS = [
                        "(clean or warn) it opens a PUBLIC issue 'Submit <id>' in the catalog "
                        "repository from the user's GitHub account - its body carries mods/<id>.ltx in an ini block - or "
                        "edits the account's open one, which makes the catalog judge it again; nothing is sent when the "
-                       "catalog already holds that very file: that is the separate tool xfined_mod_catalog_submit, so "
+                       "catalog already holds that very file: that is the separate tool grizzly_mod_catalog_submit, so "
                        "that a client can ask on exactly that call. Nobody reviews by hand: the catalog's workflow "
                        "judges every submission by itself - accepted, it commits the file and closes the issue; "
                        "refused, it closes the issue; waiting, it keeps it open and looks again later. 'submission' "
@@ -898,8 +945,8 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_catalog_submit",
-        "description": "Submit the module to the game's Mod Browser: runs xfined_mod_catalog's check again and refuses on a "
+        "name": "grizzly_mod_catalog_submit",
+        "description": "Submit the module to the game's Mod Browser: runs grizzly_mod_catalog's check again and refuses on a "
                        "'block' finding, then scans the packages on VirusTotal with the author's own key (required; "
                        "uploads what VirusTotal does not know and waits for the report) and sends nothing when VirusTotal "
                        "blocks a package or cannot take it; otherwise opens a PUBLIC issue 'Submit <id>' in the catalog repository from the "
@@ -909,10 +956,10 @@ TOOLS = [
                        "is public from its first second, and the catalog's workflow judges it by itself. The editor asks "
                        "NOTHING on this path - no window, no "
                        "confirmation - so the permission is the caller's business: call it when the user asked for the "
-                       "submission, otherwise ask them in the conversation first. The answer is xfined_mod_catalog's "
+                       "submission, otherwise ask them in the conversation first. The answer is grizzly_mod_catalog's "
                        "status; with wait (default) the bridge follows the job, and submission then carries the number, "
                        "the state and the url - its verdict stays empty until the catalog comments: follow it with "
-                       "xfined_mod_catalog action='submission'." + PLAYER_SAFETY,
+                       "grizzly_mod_catalog action='submission'." + PLAYER_SAFETY,
         "annotations": {"title": "Submit the module to the Mod Browser", "readOnlyHint": False,
                         "destructiveHint": True, "idempotentHint": False, "openWorldHint": True},
         "inputSchema": {
@@ -923,7 +970,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_catalog_withdraw",
+        "name": "grizzly_mod_catalog_withdraw",
         "description": "Withdraw the module from the game's Mod Browser: opens a PUBLIC issue 'Withdraw <id>' in the "
                        "catalog repository from the user's GitHub account, or edits the account's open one. Only the "
                        "account the module was listed from - the owner of the repository the catalog's listing names - "
@@ -934,13 +981,13 @@ TOOLS = [
                        "mods/<id>.ltx withdrawn - nothing is deleted - and closes the issue; within minutes the Mod "
                        "Browser stops offering the module, players who installed it there get no more updates, "
                        "installed copies keep working, and the id stays bound to the author key, so nobody else can "
-                       "take it and submitting it again with that key (xfined_mod_catalog_submit) lists it again. "
+                       "take it and submitting it again with that key (grizzly_mod_catalog_submit) lists it again. "
                        "Neither the author key nor a VirusTotal key is needed. The editor asks NOTHING on this path - no "
                        "window, no confirmation - so the permission is the caller's business: call it when the user "
                        "asked for the withdrawal, otherwise ask them in the conversation first. The answer is "
-                       "xfined_mod_catalog's status: withdrawal {number, state, verdict, verdict_text, url, note} and "
+                       "grizzly_mod_catalog's status: withdrawal {number, state, verdict, verdict_text, url, note} and "
                        "listing {state, github, this_key}; the verdict stays empty until the catalog comments: follow it "
-                       "with xfined_mod_catalog action='submission'." + WITHDRAW_SAFETY,
+                       "with grizzly_mod_catalog action='submission'." + WITHDRAW_SAFETY,
         "annotations": {"title": "Withdraw the module from the Mod Browser", "readOnlyHint": False,
                         "destructiveHint": True, "idempotentHint": True, "openWorldHint": True},
         "inputSchema": {
@@ -951,7 +998,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_preview_model",
+        "name": "grizzly_preview_model",
         "description": "Open the Model Preview tab ('model', a major tab) on a model - what a double click in the "
                        "Content Browser does - and bring it up at once. source='visual' (editor FS, default) or 'darf' "
                        "(linked game install). Without 'name' the tab comes up on the model it shows. lighting: studio (a "
@@ -975,31 +1022,31 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_reset_layout",
-        "description": "Window > Reset Layout: the Level tab's panels (workspace XFinedLevel_v2) are laid out again "
+        "name": "grizzly_reset_layout",
+        "description": "Window > Reset Layout: the Level tab's panels (workspace GrizzlyLevel_v2) are laid out again "
                        "for the window's size class - Wide (1400 x 640 pt and up: Tools left, Outliner over Details and "
                        "Level Settings right, Content Browser and Output Log under the viewport) or Compact (the browser "
                        "and the log live in drawers) - with every panel back, when Level draws next. scope='all' also "
-                       "puts every split and grid width (xfined_ui_split) back to its default.",
+                       "puts every split and grid width (grizzly_ui_split) back to its default.",
         "inputSchema": {"type": "object", "properties": {
             "scope": {"type": "string", "enum": ["level", "all"], "description": "level (default) or all"},
         }},
     },
     {
-        "name": "xfined_theme",
+        "name": "grizzly_theme",
         "description": "Read or change the editor theme. action='get' reports the current and available presets; "
-                       "action='set' persists preset='xfined-purple' or 'graphite'; action='reset' restores the "
-                       "XFined Purple default. Omitting action reads the current theme.",
+                       "action='set' persists preset='grizzly-purple' or 'graphite'; action='reset' restores the "
+                       "Grizzly Purple default. Omitting action reads the current theme.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["get", "set", "reset"]},
-                "preset": {"type": "string", "enum": ["xfined-purple", "graphite"]},
+                "preset": {"type": "string", "enum": ["grizzly-purple", "graphite"]},
             },
         },
     },
     {
-        "name": "xfined_frame_pacing",
+        "name": "grizzly_frame_pacing",
         "description": "Read live editor frame-pacing statistics or persist the active idle cap. The idle cap only "
                        "applies outside Play In Editor and realtime rendering; window messages, redraw work, and MCP "
                        "requests wake it immediately. action='set' accepts active_idle_fps=30..240, reset restores 120.",
@@ -1012,7 +1059,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_command_palette",
+        "name": "grizzly_command_palette",
         "description": "Search, open, close, inspect, or execute the editor command palette. action='query' returns "
                        "the same ranked results shown by Ctrl+Shift+P: the commands of the registry (kind 'command', "
                        "name = its COMMAND_* id), the Level tab's panels and drawers (kind 'panel' / 'drawer') and the "
@@ -1035,7 +1082,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_viewport_navigation",
+        "name": "grizzly_viewport_navigation",
         "description": "Read or control the viewport's camera views - the axis gizmo at the top right of the "
                        "viewport (hidden under 480 pt) and the Perspective pill's menu: set one of the six axis views or "
                        "return to the free perspective camera; action='frame' focuses all objects (Frame All) or the "
@@ -1050,10 +1097,12 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_progress",
+        "name": "grizzly_progress",
         "description": "Read the editor's task center: the blocking job's tasks (nested progress, elapsed time) and "
-                       "'background' - the jobs that run beside the editor and block nothing (each with a key) - or "
-                       "request cooperative cancellation of the blocking job when cancelable=true. Scene loading stays "
+                       "'background' - the jobs that run beside the editor and block nothing (a build, a packaging, an "
+                       "upload, a Mod Browser job; each with a key, its steps, how far it is and what is left) - or "
+                       "request cooperative cancellation of the blocking job when cancelable=true, or of the jobs "
+                       "beside the editor when none blocks. A stopped build leaves the module as it was. Scene loading stays "
                        "live but non-cancelable because it has no rollback transaction. Omitting action reads state. "
                        "Also answers the status bar's 'errors' / 'warnings' chips (since the project opened, a line that "
                        "repeats counted once) and 'status_line', the log line shown "
@@ -1067,7 +1116,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_property_inspector",
+        "name": "grizzly_property_inspector",
         "description": "Drive the Details panel (target='selection', default) or the Level Settings panel "
                        "(target='world'): read counts/filter/open state and the rows, set a search filter, expand or "
                        "collapse all matching branches, or open/close the panel. 'open' brings the Level tab up with the "
@@ -1078,7 +1127,7 @@ TOOLS = [
                        "number as text), help the row's "
                        "tooltip and help-footer text (a number with limits says its range), mixed true where the selected "
                        "objects differ; enabled is false for the rows of a read-only form too. Setting a row is "
-                       "xfined_property_set.",
+                       "grizzly_property_set.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1090,7 +1139,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_browser_navigation",
+        "name": "grizzly_content_browser_navigation",
         "description": "Inspect or drive Content Browser history, breadcrumbs, Back/Forward/Up/Home, and session "
                        "favorite folders. Location state includes source, category, and source-relative folder. "
                        "'tile' (tile_range, 48..192 pt) sets the side of a tile in pt for the host the browser is seen in - "
@@ -1154,7 +1203,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_asset_preview_model",
+        "name": "grizzly_asset_preview_model",
         "description": "Render a preview of a MODEL (.ogf) and return it as a base64 PNG. Game meshes ship no baked "
                        "thumbnail, so the editor renders them offscreen. Use source='visual' for a model the editor "
                        "FS knows by name (e.g. 'dynamics\\\\box\\\\box_1a'), or source='darf' for a path inside the "
@@ -1169,7 +1218,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_export_spawn",
+        "name": "grizzly_mod_export_spawn",
         "description": "Export placed scene objects as an additive spawn layer (spawn/<level>.xspawn in the project). "
                        "This is the composable way to put a model on a base level: the module ships spawn ops, the "
                        "engine merges them into the spawn registry at load, and the level itself is never rewritten - "
@@ -1186,7 +1235,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_export_cut",
+        "name": "grizzly_mod_export_cut",
         "description": "Subtractive level delta: the selected objects are used as VOLUMES, not geometry. Their world "
                        "bounds are written as cut boxes into levels/<level>/overlay.xcform and as hide entries into "
                        "overlay_visuals.ltx, so at load the engine drops base collision triangles inside them and "
@@ -1203,7 +1252,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_export_xcform",
+        "name": "grizzly_mod_export_xcform",
         "description": "Bake scene objects into a collision overlay (levels/<level>/overlay.xcform in the project): "
                        "world-space triangles + game materials, merged into the base level's static collision by the engine. "
                        "Defaults: selected objects only, sector 0, level = opened scene name.",
@@ -1217,7 +1266,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_mod_export_ogf_probe",
+        "name": "grizzly_mod_export_ogf_probe",
         "description": "Export selected static scene objects as world-space .ogf visuals into "
                        "levels/<level>/visuals/ and register them in overlay_visuals.ltx. "
                        "Skeleton/dynamic references are skipped (not world-bakeable).",
@@ -1230,7 +1279,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_game_link",
+        "name": "grizzly_game_link",
         "description": "Report or set the game install the active project is linked to. Without args it "
                        "reports {linked, game_root, reason}; with 'path' it validates and links that folder "
                        "(must contain fsgame.ltx and a database\\ or gamedata\\ subfolder) and mounts its "
@@ -1241,7 +1290,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_darf_list",
+        "name": "grizzly_darf_list",
         "description": "List files of the linked game install: everything inside database\\*.xdb* plus the "
                        "loose gamedata\\ tree, as one virtual gamedata-relative listing. Optional 'filter' "
                        "(case-insensitive substring), 'ext' (extension without the dot, e.g. ogf) and "
@@ -1256,7 +1305,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_darf_copy",
+        "name": "grizzly_darf_copy",
         "description": "Copy one file of the linked game install into the project at "
                        "<project>/gamedata/<same relative path>. 'path' as returned by darf_list; "
                        "'overwrite' defaults to false, in which case an existing target is reported "
@@ -1271,7 +1320,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_copy",
+        "name": "grizzly_content_copy",
         "description": "Copy files or folders INTO the project. 'src' is a file/folder path or a ';'-separated "
                        "list of them; relative paths are taken against the project root, absolute paths are "
                        "allowed and a src that is not on disk is looked up in the linked game's archives "
@@ -1290,7 +1339,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_move",
+        "name": "grizzly_content_move",
         "description": "Move files or folders inside the project. Same arguments as content_copy, but BOTH src "
                        "and dst must be inside the project: the game install and the shared Editor Content are "
                        "read-only sources, so moving out of them (which would delete from them) is refused with "
@@ -1307,7 +1356,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_delete",
+        "name": "grizzly_content_delete",
         "description": "Delete files or folders inside the project. 'path' is one entry or a ';'-separated list. "
                        "recursive defaults to false, so a non-empty folder is reported instead of being wiped. "
                        "Anything outside the project root — and the project root itself — is refused.",
@@ -1321,20 +1370,20 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_list_commands",
+        "name": "grizzly_list_commands",
         "description": "Introspect the editor's own command registry: every action the menus and shortcuts can "
                        "perform, as {id, name, menu, presets}. 'name' is the COMMAND_* identifier, 'menu' the "
                        "menu path when it has one, 'presets' the documented (p1,p2) combinations of multi-variant "
-                       "commands. Feed these to xfined_exec_command. This is the full control surface of the "
+                       "commands. Feed these to grizzly_exec_command. This is the full control surface of the "
                        "editor - commands added in future builds show up here automatically.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_exec_command",
-        "description": "Execute any command from the editor's registry (see xfined_list_commands) - the same "
+        "name": "grizzly_exec_command",
+        "description": "Execute any command from the editor's registry (see grizzly_list_commands) - the same "
                        "dispatch the menus and keyboard shortcuts use, so this can do anything a human at the "
                        "keyboard can. Address it by 'id', by COMMAND_* 'name', or by menu path. Parameters are "
-                       "explicit: p1s/p2s pass strings, p1i/p2i integers. Prefer the dedicated xfined_* tools "
+                       "explicit: p1s/p2s pass strings, p1i/p2i integers. Prefer the dedicated grizzly_* tools "
                        "when one exists (they validate and report better); this is the escape hatch for "
                        "everything else. Note some commands open file pickers or other windows - take a "
                        "screenshot afterwards to see what happened.",
@@ -1351,7 +1400,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_rename",
+        "name": "grizzly_content_rename",
         "description": "Rename a file or a folder of the project in place - what F2 does in the content browser. "
                        "'path' is the entry (project-relative), 'name' the new leaf name, not a path. A change of "
                        "case alone is a rename (NewQuest.nqasset -> newquest.nqasset). One of the editor's own assets "
@@ -1370,7 +1419,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_mkdir",
+        "name": "grizzly_content_mkdir",
         "description": "Create a folder inside the project, with any missing parent along the way. 'path' is "
                        "taken against the project root when relative (e.g. 'gamedata/meshes/mymod'). Anything "
                        "that resolves outside the project root is refused. Creating a folder that already "
@@ -1384,11 +1433,11 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_create",
+        "name": "grizzly_content_create",
         "description": "Create one of the editor's own assets in the folder the content browser has open "
                        "(the browser's Add menu, without the menu). 'kind' is quest, behaviour, character or pda; the "
                        "file gets the first free NewQuest/NewBehaviour/NewCharacter/NewPda name, which "
-                       "xfined_content_rename then changes. A folder is xfined_content_mkdir instead. "
+                       "grizzly_content_rename then changes. A folder is grizzly_content_mkdir instead. "
                        "Returns 'made', the new file project-relative.",
         "inputSchema": {
             "type": "object",
@@ -1404,7 +1453,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_browser_open",
+        "name": "grizzly_content_browser_open",
         "description": "Reveal an asset OR a folder in the editor's Content Browser: brings the browser into view - "
                        "the panel while the Level tab draws it (its tab raised when another covers it), the Content Drawer "
                        "over any other tab -, switches "
@@ -1426,12 +1475,12 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_browser_selection",
+        "name": "grizzly_content_browser_selection",
         "description": "What the Content Browser is showing right now: whether it is open, the active source, "
                        "the current folder and the ordered selection. action=rename opens the inline rename box on the "
                        "entry (what F2 does) and the reply's 'rename' {entry, text, select} says what the box holds - "
                        "one of the editor's own assets shows its name without the extension; the rename itself is "
-                       "xfined_content_rename, and action=clear closes the box. With action=select/toggle/range/clear it "
+                       "grizzly_content_rename, and action=clear closes the box. With action=select/toggle/range/clear it "
                        "also applies normal file-manager selection semantics against the complete filtered view, "
                        "including virtualized offscreen rows. select establishes the anchor; range extends from it. "
                        "Names must match an entry in the current view exactly. Omit action (or use get) to only read. "
@@ -1453,7 +1502,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_content_browser_copy",
+        "name": "grizzly_content_browser_copy",
         "description": "Copy assets out of a READ-ONLY source (Editor Content = the shared SDK library, or DARF "
                        "Content = the linked game install) into the open project. Pass 'names' (';'-separated, as "
                        "returned by list_assets / darf_list) for individual items, or 'folder' to take everything "
@@ -1473,17 +1522,17 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_scene_stats",
+        "name": "grizzly_scene_stats",
         "description": "scene_info plus selection count and camera position/rotation in one call.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_camera_get",
+        "name": "grizzly_camera_get",
         "description": "Editor camera state: position, hpb rotation (radians) and view direction.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_camera_set",
+        "name": "grizzly_camera_set",
         "description": "Move/rotate the editor camera. Position x,y,z and rotation h,p,b (radians); "
                        "omitted fields keep their current value.",
         "inputSchema": {
@@ -1495,7 +1544,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_select_objects",
+        "name": "grizzly_select_objects",
         "description": "Clear the selection, then select the listed objects by exact name "
                        "(comma-separated). Switches the active tool to the first found object's class. "
                        "Returns how many matched and which names are missing.",
@@ -1506,12 +1555,12 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_deselect_all",
+        "name": "grizzly_deselect_all",
         "description": "Clear the selection in every tool.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_mark_authored",
+        "name": "grizzly_mark_authored",
         "description": "Flip the mod-content flag on the SELECTED objects. The mod build ships only "
                        "authored objects; everything an imported base level brought stays base. "
                        "authored=false relabels back to base level.",
@@ -1521,7 +1570,86 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_object_set_position",
+        "name": "grizzly_mark_removed",
+        "description": "Take the SELECTED spawn objects of the imported base level out of the game: the mod build "
+                       "writes a remove op for each ([obj:base:<level>/<name>]), so a new game of the module's mode "
+                       "starts without them (stock barrels, boxes, lamps). They stay in the scene. Authored objects "
+                       "are skipped - delete those. removed=false puts a base object back.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"removed": {"type": "boolean", "description": "default true"}},
+        },
+    },
+    {
+        "name": "grizzly_scan_walls",
+        "description": "A horizontal lidar slice of the level's static geometry, for furnishing a room: rays fan out "
+                       "at height y from a grid of points (step m apart, rays per point, up to reach m) over the area "
+                       "x0..x1, z0..z1; every hit is a wall, a column, a window frame or stock furniture at that height. "
+                       "Answers the hit cells of a res-metre grid: {x0, z0, res, w, h, cells: [iz * w + ix]}. Spawn "
+                       "objects (props, NPCs) are not in it. Use y = floor + 1.0 for walls and furniture, floor + 0.3 "
+                       "for low things.",
+        "annotations": {"title": "Scan walls at one height", "readOnlyHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x0": {"type": "number"}, "x1": {"type": "number"}, "z0": {"type": "number"},
+                "z1": {"type": "number"}, "y": {"type": "number"},
+                "step": {"type": "number", "description": "default 0.5"},
+                "rays": {"type": "integer", "description": "default 24"},
+                "reach": {"type": "number", "description": "default 6"},
+                "res": {"type": "number", "description": "default 0.1"},
+            },
+            "required": ["x0", "x1", "z0", "z1", "y"],
+        },
+    },
+    {
+        "name": "grizzly_probe_vertical",
+        "description": "Rays straight up and straight down from a point through the level's static geometry: "
+                       "{ceiling, floor} hit heights (null when nothing within reach). Where to hang a lamp, how high a "
+                       "room is, what a prop would stand on. Spawn objects are not in it.",
+        "annotations": {"title": "Probe the ceiling and floor at a point", "readOnlyHint": True},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"},
+                "reach": {"type": "number", "description": "default 30"},
+            },
+            "required": ["x", "y", "z"],
+        },
+    },
+    {
+        "name": "grizzly_game_lighting",
+        "description": "View > Game Lighting: the viewport lit the way the linked game lights the level - the weather's "
+                       "ambient, hemisphere and sun (environment\\weathers\\<weather>.ltx at the hour, the two sections "
+                       "around it blended) scaled by the game's r2_sun_lumscale*, every lamp (hanging lamps with their "
+                       "ambient lights, colour x brightness on the light bone, spots as spots), burning campfire (the "
+                       "zone's idle light) and dynamic level light near the camera (up to 128, nearest first; no "
+                       "shadows - the game's lamps cast none unless flagged), and the exposure the game's tonemap "
+                       "(r2_tonemap_*) gives a night. Indoors (under the roof map: the topmost static surface over each "
+                       "1 m cell around the camera) the sun is off and only indoor_hemi of the sky light gets in. "
+                       "Self-lit materials (selflight, light planes) keep their brightness. Sets what is given, answers "
+                       "the state: weather values, lumscales, tonemap, exposure, light counts by kind, the roof map. "
+                       "weather '' = Dead Air's first night of a new game (Atmosfear af3_slight_clear_<moon phase>). "
+                       "Pictures: grizzly_screenshot_viewport, with view_mode helpers=false grid=false.",
+        "annotations": {"title": "Light the viewport like the game"},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "weather": {"type": "string", "description": "a file name of the game's weathers, without .ltx"},
+                "hour": {"type": "number", "description": "0..24, fractions blend, default 22"},
+                "exposure": {"type": "number", "description": "0 = the game's tonemap adapted to the last frame (default), else a factor"},
+                "indoor_hemi": {"type": "number", "description": "share of the sky light indoors, default 0.15"},
+                "reload": {"type": "boolean", "description": "re-read the weather and the game's user.ltx"},
+                "rebake": {"type": "boolean", "description": "bake the roof map again (geometry moved)"},
+                "list": {"type": "boolean", "description": "answer every light drawn: kind, owner, pos, range, colour"},
+                "all": {"type": "boolean", "description": "light_list holds every light of the level, not only those drawn"},
+                "weathers": {"type": "boolean", "description": "answer the weathers the game has"},
+            },
+        },
+    },
+    {
+        "name": "grizzly_object_set_position",
         "description": "Set an object's position. Omitted components keep their current value. Undo checkpoint included.",
         "inputSchema": {
             "type": "object",
@@ -1533,7 +1661,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_object_set_rotation",
+        "name": "grizzly_object_set_rotation",
         "description": "Set an object's rotation in radians (x,y,z Euler). Omitted components keep their value.",
         "inputSchema": {
             "type": "object",
@@ -1545,7 +1673,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_object_set_scale",
+        "name": "grizzly_object_set_scale",
         "description": "Set an object's scale. Omitted components keep their current value.",
         "inputSchema": {
             "type": "object",
@@ -1557,7 +1685,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_place_object",
+        "name": "grizzly_place_object",
         "description": "Place a library object into the scene with a full transform. "
                        "ref = library object path (e.g. 'equipments\\\\item_box'). Position x/y/z, rotation rx/ry/rz "
                        "in radians, scale sx/sy/sz (or 'scale' for uniform); omitted parts keep their default "
@@ -1579,7 +1707,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_drop_objects",
+        "name": "grizzly_drop_objects",
         "description": "Drop objects onto the surface below them (the editor's End key, same semantics as Unreal's "
                        "Snap to Floor). mode='box' (default) sweeps the whole bounding box, so a wide object rests "
                        "on the rim of a narrow gap instead of falling through; mode='line' traces a single ray from "
@@ -1594,11 +1722,11 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_list_spawn_sections",
+        "name": "grizzly_list_spawn_sections",
         "description": "The gameplay-object roster: every config section of the LINKED game that declares $spawn - "
                        "actors, NPC, items, restrictors/triggers, anomalies, physics. This is what the old SDK's "
                        "'Spawn Element' panel listed. Filter is a substring over section and group; names feed "
-                       "xfined_place_spawn.",
+                       "grizzly_place_spawn.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1608,7 +1736,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_place_spawn",
+        "name": "grizzly_place_spawn",
         "description": "Place a GAMEPLAY object (spawn element) by its config section (see list_spawn_sections): "
                        "the server entity is built from the section, shapes the section declares are attached, and "
                        "its properties (logic/custom_data included) are editable in the Properties panel. Optional "
@@ -1629,15 +1757,19 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_view_mode",
+        "name": "grizzly_view_mode",
         "description": "Read or change how the viewport renders. Without arguments it returns the current state. "
                        "preset: unlit (the editor's normal textured view, this is the default), "
                        "lit (enables the fixed-function hardware lighting - only 8 light slots exist, so most "
-                       "geometry turns black; useful for checking where lights actually reach), wireframe, point. "
+                       "geometry turns black; useful for checking where lights actually reach), game (the game's own "
+                       "lighting at the hour and weather grizzly_game_lighting set - a new game's first night by "
+                       "default), wireframe, point. "
                        "fill: solid|wireframe|point; shade: flat|gouraud. Booleans: lighting, textures, edged_faces, "
                        "filter_linear, fog, environment, grid, safe_rect (raw engine flags - 'textures' has no "
-                       "visible effect in this render path), stats (the viewport's Stats pill, off by default). "
-                       "Explicit fields override the preset.",
+                       "visible effect in this render path), stats (the viewport's Stats pill, off by default), "
+                       "helpers (spawn objects' shapes, gizmos, icons, labels and selection boxes; false draws their "
+                       "models only - clean pictures of a furnished spot), game_lighting (View > Game Lighting on or "
+                       "off). Explicit fields override the preset.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1653,11 +1785,13 @@ TOOLS = [
                 "grid": {"type": "boolean"},
                 "safe_rect": {"type": "boolean"},
                 "stats": {"type": "boolean"},
+                "helpers": {"type": "boolean"},
+                "game_lighting": {"type": "boolean"},
             },
         },
     },
     {
-        "name": "xfined_list_assets",
+        "name": "grizzly_list_assets",
         "description": "List assets available to the editor. category = one of the content-browser captions "
                        "(Objects, Groups, Visuals, Textures, Textures (raw), Particles, Sounds, Entities, Light Anims); "
                        "default Objects, the placeable ones. Optional 'filter' substring and 'limit' (default 200). "
@@ -1672,7 +1806,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_asset_preview",
+        "name": "grizzly_asset_preview",
         "description": "Preview thumbnail of a single asset as a PNG image, so its look can be judged before "
                        "placing it. Same category set as list_assets (default Objects).",
         "inputSchema": {
@@ -1685,7 +1819,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_titlebar_info",
+        "name": "grizzly_titlebar_info",
         "description": "Geometry and state of the custom window chrome, valid on every page (the Start page "
         "included): the caption band rect, caption_h, where the menus and major tabs end (menus_end) and the "
         "window buttons start (buttons_x), the client-area ranges that take the mouse (interactive: the "
@@ -1695,12 +1829,12 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_window_control",
+        "name": "grizzly_window_control",
         "description": "The window buttons' programmatic half: minimize, maximize, restore or close the editor "
         "window, or resize its client area to width x height pt (restored first). 'close' ends the editor "
         "process. With unsaved tabs (the scene, a quest, ...) it refuses with error 'unsaved' and the dirty "
         "list unless save=true saves them first (a scene with no file yet cannot be); dropping them is "
-        "xfined_window_close_discard. Under -nodlg an unsaved close discards, as the exit prompt always "
+        "grizzly_window_close_discard. Under -nodlg an unsaved close discards, as the exit prompt always "
         "answered there. Returns maximized, minimized, client (px), client_pt, dpi and what was saved.",
         "inputSchema": {
             "type": "object",
@@ -1714,20 +1848,20 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_scene_load_status",
+        "name": "grizzly_scene_load_status",
         "description": "Whether the last open_scene attempt finished, succeeded, or rolled back - poll "
-        "this after xfined_open_scene instead of sleeping blind.",
+        "this after grizzly_open_scene instead of sleeping blind.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_property_choose",
+        "name": "grizzly_property_choose",
         "description": "Drive the chooser modal of a PROP_CHOOSE property row (the same path a mouse "
         "click takes): action='open' opens the modal for the row whose short name is 'key' (e.g. Visual), "
         "action='select' highlights 'item' without confirming (the preview pane reacts as to a click), action='cancel' closes the form without applying, action='pick' selects 'item' by its tree path (a leaf carries a trailing '*', e.g. "
         "'dynamics\box\box_metall_01*') and presses OK, action='status' reports the form, the highlighted item ('selected'), the pending "
         "edit and the row's current value. The editor redraws on demand - after 'pick' or 'cancel' make it draw "
         "(e.g. a screenshot) so the result is consumed. The chooser is the kit dialog <caption>###dlg.choose (L): "
-        "xfined_ui_dialog action=close id=choose closes it as Cancel does, and screenshot_editor names it as modal.",
+        "grizzly_ui_dialog action=close id=choose closes it as Cancel does, and screenshot_editor names it as modal.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1739,7 +1873,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_spawn_set_fixed_bones",
+        "name": "grizzly_spawn_set_fixed_bones",
         "description": "Set Model\Fixed bones of a physic-object spawn entity (e.g. 'link'): the bones "
         "welded to the world so the placed prop stands still. Empty clears it back to a free body.",
         "inputSchema": {
@@ -1752,7 +1886,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_spawn_set_visual",
+        "name": "grizzly_spawn_set_visual",
         "description": "Set Model\Visual of a spawn entity (meshes-relative path, extension optional). "
         "Refuses a mesh the game cannot resolve; draws_nothing=true in the answer means the model is "
         "an X-Ray ghost (glow_ghost skin) the engine never renders - stash boxes ship like that.",
@@ -1766,7 +1900,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_rename_object",
+        "name": "grizzly_rename_object",
         "description": "Rename a scene object (names are lowercased; the new name must be unique).",
         "inputSchema": {
             "type": "object",
@@ -1778,12 +1912,12 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_delete_selected",
+        "name": "grizzly_delete_selected",
         "description": "Delete every selected object (all tools). Returns the removed count; undoable.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_save_scene",
+        "name": "grizzly_save_scene",
         "description": "Save the opened scene to its current file, or to an explicit 'file' path.",
         "inputSchema": {
             "type": "object",
@@ -1791,7 +1925,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_recovery",
+        "name": "grizzly_recovery",
         "description": "Inspect or operate project-scoped crash recovery. action=get reports ownership, dirty state, "
                        "availability, pending operation id, source/snapshot paths and errors. action=snapshot creates a "
                        "synchronous non-mutating snapshot without changing the scene file, name, recents or dirty flag. "
@@ -1810,7 +1944,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_outliner_show",
+        "name": "grizzly_outliner_show",
         "description": "Open or close the World Outliner panel. Opening brings the Level tab up with the panel in "
                        "front; open=false closes it (default true).",
         "inputSchema": {
@@ -1819,7 +1953,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_game_modes",
+        "name": "grizzly_game_modes",
         "description": "Game modes a module can be built for, scanned from the LINKED game install. "
                        "Dead Air has no config listing them: they are checkboxes in "
                        "scripts/ui_mm_faction_select.script laid out in configs/ui/ui_mm_faction_select_16.xml, "
@@ -1830,7 +1964,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_outliner_filter",
+        "name": "grizzly_outliner_filter",
         "description": "Drive the World Outliner's search box and type funnel, and read back what survives. "
                        "'text' uses the Unreal search grammar: every space-separated word has to match, "
                        "-word excludes, \"two words\" match together. 'types' is a ';'-separated list of the "
@@ -1857,7 +1991,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_scene_tree",
+        "name": "grizzly_scene_tree",
         "description": "The World Outliner's data: the scene grouped by object tool class, sorted by class name. "
                        "Each group returns 'class', 'count' (objects matching the filter), 'total' (objects in the "
                        "class) and 'objects' with name/selected/visible. Optional 'filter' (case-insensitive name "
@@ -1873,12 +2007,12 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_undo",
+        "name": "grizzly_undo",
         "description": "Undo the last scene operation.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_redo",
+        "name": "grizzly_redo",
         "description": "Redo the last undone scene operation.",
         "inputSchema": {"type": "object", "properties": {}},
     },
@@ -1889,7 +2023,7 @@ TOOLS = [
     # [{code,severity,node,slot,message}] with the codes of §15 (E = blocks the
     # build, W = warning) and an outline (text description of the graph).
     {
-        "name": "xfined_quest_catalog",
+        "name": "grizzly_quest_catalog",
         "description": "The quest kind catalog: every trigger / main action / extra action / condition kind with "
                        "group, title, desc, use, params (name, type, required, default, min/max, enum), pins, "
                        "wait/once (main), event (cond), plus catalog version and source ('game' = read from the "
@@ -1897,13 +2031,13 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_quest_list",
+        "name": "grizzly_quest_list",
         "description": "Every *.nqasset of the project: path, id, title, node count, error/warning counts, open/dirty "
                        "state (files that do not parse come back with readable=false and the parse error).",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_quest_new",
+        "name": "grizzly_quest_new",
         "description": "Create a quest file from the minimal template (trigger.start -> flow.end; id = file name, "
                        "title 'New quest') at 'path' (project-relative, '.nqasset' appended when missing; refuses to "
                        "overwrite) and open it. Returns the canonical text, outline and problems.",
@@ -1914,7 +2048,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_open",
+        "name": "grizzly_quest_open",
         "description": "Open a quest document (loads the file, lays out nodes without pos, validates). Returns id, "
                        "problems, outline. Opening an already open document just returns its state.",
         "inputSchema": {
@@ -1924,7 +2058,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_close",
+        "name": "grizzly_quest_close",
         "description": "Close an open quest document. A dirty document answers error 'unsaved' unless discard=true.",
         "inputSchema": {
             "type": "object",
@@ -1933,7 +2067,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_get",
+        "name": "grizzly_quest_get",
         "description": "Read a quest as text: 'lua' (canonical file text), 'outline' (one line per node in flow order "
                        "plus the problems), 'problems', counts. Works for files that are not open (read from disk).",
         "inputSchema": {
@@ -1943,9 +2077,9 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_write",
+        "name": "grizzly_quest_write",
         "description": "Replace a quest with the whole file text 'lua' (return { nq = 1, id = ..., nodes = { ... } }). "
-                       "Open document: replaced in memory with an undo snapshot (saved=false, call xfined_quest_save). "
+                       "Open document: replaced in memory with an undo snapshot (saved=false, call grizzly_quest_save). "
                        "Closed or new file: the canonical text is written to disk when it parses (saved=true). "
                        "Validation problems are returned, they do not block the write - only the build refuses errors.",
         "inputSchema": {
@@ -1958,17 +2092,17 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_undo",
+        "name": "grizzly_quest_undo",
         "description": "Undo the last change of an open quest document (its own undo ring, separate from the scene).",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     },
     {
-        "name": "xfined_quest_redo",
+        "name": "grizzly_quest_redo",
         "description": "Redo the last undone change of an open quest document.",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     },
     {
-        "name": "xfined_quest_apply",
+        "name": "grizzly_quest_apply",
         "description": "Apply operations to a quest (opens the document when needed; all-or-nothing, one undo step). "
                        "'ops' is Lua text of a list: { { op = \"add_node\", node = { id = ..., kind = ..., params = { ... }, "
                        "out = { next = \"x\" } } }, { op = \"set_node\", id = ..., patch = { kind/once/params/cond/on_enter/"
@@ -1979,7 +2113,7 @@ TOOLS = [
                        "{ op = \"move_action\", id, slot, index[, to_id][, to_slot][, to_index] }, "
                        "{ op = \"remove_action\", id, slot, index }, { op = \"set_quest\", patch = { id/title/activation/"
                        "vars/tasks } }, { op = \"set_pos\", id, x, y } }. Indexes are 1-based. Returns problems and outline; "
-                       "the document stays open and dirty (xfined_quest_save writes it).",
+                       "the document stays open and dirty (grizzly_quest_save writes it).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1990,13 +2124,13 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_validate",
+        "name": "grizzly_quest_validate",
         "description": "Validate a quest (open document or file on disk): problems with codes E001-E050 (block the "
                        "build) and W011-W070 (warnings), plus outline.",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     },
     {
-        "name": "xfined_quest_save",
+        "name": "grizzly_quest_save",
         "description": "Write an open quest document to its file (canonical text). Refuses with 'modified externally' "
                        "when the file changed on disk since it was loaded, unless force=true.",
         "inputSchema": {
@@ -2006,12 +2140,12 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_reload",
+        "name": "grizzly_quest_reload",
         "description": "Re-read an open quest document from disk (drops unsaved changes and the undo history).",
         "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     },
     {
-        "name": "xfined_quest_layout",
+        "name": "grizzly_quest_layout",
         "description": "Deterministic pin-aware top-down graph layout. Children follow the visible canvas pin order; "
                        "complete nested branch bounds stay apart, exclusive trigger trees use a larger gap, and "
                        "shared descendants become merge blocks between their incoming branches. "
@@ -2025,7 +2159,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_view",
+        "name": "grizzly_quest_view",
         "description": "Open (or bring up) the graph tab of a quest or behaviour graph - a major tab of its own, "
                        "activated at once - and set its view: frame='all' or a node id (Frame All never zooms below "
                        "0.75, where a node title is 12 px at 100%; a graph that does not fit there is shown at 0.75 "
@@ -2053,7 +2187,7 @@ TOOLS = [
                        "- max above y means there is more below. "
                        "The answer describes the frames this call changed: the editor holds it until they are drawn, "
                        "like a screenshot (answer_only reads the view and applies nothing). "
-                       "Then use xfined_screenshot_editor to look at it.",
+                       "Then use grizzly_screenshot_editor to look at it.",
         "inputSchema": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "frame": {"type": "string"}, "zoom_level": {"type": "integer"},
@@ -2073,7 +2207,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_edit",
+        "name": "grizzly_quest_edit",
         "description": "Every graph edit the canvas offers, without a mouse. op=connect (from+pin+to) | "
                        "disconnect (from, plus pin/to to name one link; omit them to drop a whole pin or node) | "
                        "bypass (the node stays put and the chain closes over it - A->B->C becomes A->C) | "
@@ -2091,7 +2225,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_find",
+        "name": "grizzly_quest_find",
         "description": "Graph-wide node search over ids, kind ids/titles, parameters, conditions, actions, links and "
                        "comments. Terms are ANDed; quoted phrases stay together; prefix a term with '-' to exclude it. "
                        "action=get|set|next|previous|clear; get with query atomically updates without navigating, "
@@ -2111,9 +2245,9 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_project_find",
+        "name": "grizzly_quest_project_find",
         "description": "Read-only full-project node search across every sorted .nqasset without opening documents. "
-                       "Uses the same quoted, negative-term and case-folding semantics as xfined_quest_find. Dirty "
+                       "Uses the same quoted, negative-term and case-folding semantics as grizzly_quest_find. Dirty "
                        "open documents overlay their disk file. Results report source=disk|memory; complete=false "
                        "and diagnostics identify files whose content could not be inspected.",
         "inputSchema": {
@@ -2126,7 +2260,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_references",
+        "name": "grizzly_quest_references",
         "description": "Find exact references whose parameter type is declared by the active NQ catalog. "
                        "Pass path to limit the scan to one quest (required in practice for document-scoped task_id). "
                        "Nested cond_list/cases_cond are inspected. Unknown kinds/params, malformed values, Lua and "
@@ -2144,7 +2278,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_rename_task",
+        "name": "grizzly_quest_rename_task",
         "description": "Rename one task declaration and every proven catalog-typed task_id reference in the same "
                        "quest as one undo step. Refuses before creating an undo snapshot when coverage is incomplete "
                        "(unknown kind/parameter, malformed nested data, custom Lua, or partial source). A task id is "
@@ -2164,7 +2298,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_bookmarks",
+        "name": "grizzly_quest_bookmarks",
         "description": "Read or control transient per-document node bookmarks. action=get|add|remove|toggle|next|"
                        "previous|clear. add/remove/toggle use 'node', or the sole selected node when omitted. Bookmarks "
                        "are editor-only and never change the .nqasset or its undo/dirty state.",
@@ -2179,7 +2313,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_history",
+        "name": "grizzly_quest_history",
         "description": "Read or navigate the transient graph view history. action=get|back|forward|clear. Each state "
                        "contains world center, zoom level, selected node ids and the action open in the Details panel (slot); no "
                        "quest data changes.",
@@ -2193,7 +2327,7 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_minimap",
+        "name": "grizzly_quest_minimap",
         "description": "Read or control the transient interactive graph minimap with action=get|show|hide|toggle. "
                        "visible is the toggle; available says whether the graph has min_nodes (12) nodes - the toolbar's "
                        "toggle is disabled until it has; shown says whether the last frame drew it - it comes only for a graph of "
@@ -2209,10 +2343,11 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_lookup",
+        "name": "grizzly_quest_lookup",
         "description": "Search the game data behind the parameter pickers: type = item_section | squad_section | "
                        "level | smart | story_id | profile | community | info | spot_type (from the linked game, cached), "
-                       "or the document-scoped task_id | var_name | ref_name | node_id | role (need 'path') | quest_id "
+                       "or the document-scoped task_id | var_name | ref_name | node_id | role (need 'path') | global_name "
+                       "(the module's global variables, mod.ltx [vars]) | quest_id "
                        "(quests of the project) | behaviour_id (behaviour graphs of the project) | character_id (characters "
                        "of the project - what a spawn.npc row names; a template says so in 'extra') | dialog_id (dialogs of the "
                        "linked game and the project, captioned with their first line) | character_icon (portraits; "
@@ -2232,14 +2367,14 @@ TOOLS = [
         },
     },
     {
-        "name": "xfined_quest_check_all",
-        "description": "The build gate: validate every quest of the project like xfined_mod_export does. Returns "
+        "name": "grizzly_quest_check_all",
+        "description": "The build gate: validate every quest of the project like grizzly_mod_export does. Returns "
                        "passed (no errors), error/warning counts and the log lines ('<path>: <code> <node>: <message>').",
         "inputSchema": {"type": "object", "properties": {}},
     },
     # ---- the window model: major tabs, the Level tab's panels, drawers, dialogs, popups -------------------------------
     {
-        "name": "xfined_ui_list",
+        "name": "grizzly_ui_list",
         "description": "What the editor window shows, from frames drawn after the last command: the major tabs "
                        "(active_tab, tabs [{id, kind, label, path, dirty, active, missing, closable, loaded}]; 'level' is "
                        "tab 1, files are '<kind>:<project-relative path>', tools are their kind), the Level tab's panels "
@@ -2252,7 +2387,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_ui_tab",
+        "name": "grizzly_ui_tab",
         "description": "The major tabs - every asset editor is a full-window tab, Level is tab 1 and never closes. "
                        "action: list (default), activate (id), open (id, or kind + path: quest | beh + a project-relative "
                        "path, pda [+ path], model + a visual, texture + path + source project|editor|darf, characters, "
@@ -2260,7 +2395,7 @@ TOOLS = [
                        "releases, level), close (id, default the active tab), next, prev. "
                        "Openers bring the tab up at once. Closing a tab with unsaved changes refuses with error "
                        "'unsaved' and the dirty list unless save=true saves it first; dropping the changes is "
-                       "xfined_ui_tab_discard. Play in editor holds the Level tab.",
+                       "grizzly_ui_tab_discard. Play in editor holds the Level tab.",
         "annotations": {"title": "Open, activate or close a major tab", "readOnlyHint": False, "destructiveHint": False},
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["list", "activate", "open", "close", "next", "prev"]},
@@ -2272,7 +2407,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_ui_tab_discard",
+        "name": "grizzly_ui_tab_discard",
         "description": "Close a major tab and DROP its unsaved changes (the file on disk stays as it was last saved; "
                        "the edits are lost for good). id = the tab (default the active one). The editor asks nothing on "
                        "this path; the tool carries destructiveHint so a client can ask on its own side.",
@@ -2281,7 +2416,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
     },
     {
-        "name": "xfined_ui_panel",
+        "name": "grizzly_ui_panel",
         "description": "The Level tab's panels: tools, world_outliner, details, level_settings, content_browser, "
                        "output_log, viewport. action open | focus (default) brings Level up with the panel in front "
                        "(in the Compact size class the browser and the log open in their drawer instead: host says "
@@ -2294,7 +2429,7 @@ TOOLS = [
         }, "required": ["id"]},
     },
     {
-        "name": "xfined_ui_drawer",
+        "name": "grizzly_ui_drawer",
         "description": "The Content Drawer (id=content) and the Log Drawer (id=log) over the bottom of any tab, one at "
                        "a time. action open: on the Level tab with the panel on screen the panel comes to the front "
                        "instead (host=panel). close: the drawer goes (id optional). Another tab coming up closes it too.",
@@ -2305,11 +2440,11 @@ TOOLS = [
         }, "required": ["action"]},
     },
     {
-        "name": "xfined_ui_dialog",
+        "name": "grizzly_ui_dialog",
         "description": "The dialogs: action list (default: what is open, and the known ids), open (id: package_release, "
                        "publish_release, build_to_folder, export_flat, import_base_scene, submit - the way their menu "
                        "items open them; it comes up when the editor draws next; Mod Settings and Releases are tabs: "
-                       "xfined_ui_tab), close (id - one of "
+                       "grizzly_ui_tab), close (id - one of "
                        "those, a kit dialog's dlg.<name>, or a dialog's window name - the way Esc or its cross does, "
                        "running nothing). Opening one runs nothing either: its buttons stay the user's, or the matching "
                        "mod_* tool's.",
@@ -2320,15 +2455,15 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_ui_popup",
-        "description": "Put a popup up to look at it with xfined_screenshot_editor - never to act. show: menu:<name> "
+        "name": "grizzly_ui_popup",
+        "description": "Put a popup up to look at it with grizzly_screenshot_editor - never to act. show: menu:<name> "
                        "(File, Edit, Scene, Build, View, Graph, Mod, Libraries, Window, Help; Scene/Build/View need the "
                        "Level tab, Graph a graph tab; Menu is the one button the menus fold into under 1100 pt - in a "
                        "narrow window a menu:<name> opens it and the menu inside; the Start page has no menus), "
                        "tab_menu:<tab id>, "
                        "tab_overflow, toolbar_overflow, toolbar_split:build_mod (the Build Mod button's menu), "
-                       "cb_context:<entry path> (as xfined_content_browser_selection "
-                       "names it), cb_add (the browser's Add menu; only where xfined_content_browser_navigation says "
+                       "cb_context:<entry path> (as grizzly_content_browser_selection "
+                       "names it), cb_add (the browser's Add menu; only where grizzly_content_browser_navigation says "
                        "can_add), cb_view, cb_favorites, cb_grid (the tiles' "
                        "empty-space menu), outliner_filters, outliner_more, viewport:options|perspective|show|snap|grid|"
                        "scale|angle, tasks (while a job runs), rebuild (while the scene needs its level builders); "
@@ -2338,7 +2473,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"show": {"type": "string"}}, "required": ["show"]},
     },
     {
-        "name": "xfined_ui_scroll",
+        "name": "grizzly_ui_scroll",
         "description": "Scroll a panel, drawer, dialog or the active tab's work area (id: a panel id, content | log, "
                        "a dialog id, dlg.<name>, work_area, or a window's name): to=top | bottom | a number of pt | "
                        "item:<name> (panels built on the UI kit; in the Tools panel also a row of a tool's list - a folder's "
@@ -2353,8 +2488,8 @@ TOOLS = [
         }, "required": ["id", "to"]},
     },
     {
-        "name": "xfined_ui_split",
-        "description": "The splits and grid label widths the layout keeps, in pt ([XFinedLayout] of level_imgui.ini). "
+        "name": "grizzly_ui_split",
+        "description": "The splits and grid label widths the layout keeps, in pt ([GrizzlyLayout] of level_imgui.ini). "
                        "No key: every one. key: read it; key + value: set it (it is the author's saved preference - put "
                        "it back after a test).",
         "annotations": {"title": "Read or set a layout split", "readOnlyHint": False, "destructiveHint": False},
@@ -2363,7 +2498,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_ui_audit",
+        "name": "grizzly_ui_audit",
         "description": "What the editor's UI kit reports of the frames drawn after the last command: truncated "
                        "(text cut with an ellipsis: what was shown), escaped (content wider or taller than a window "
                        "that cannot scroll that way: by how much), controls (label, enabled, why it is disabled, help). "
@@ -2372,7 +2507,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}},
     },
     {
-        "name": "xfined_ui_scale",
+        "name": "grizzly_ui_scale",
         "description": "The UI scale (1.0 = 96 DPI). value 1.0..2.5 rescales the editor at once - for tests at another "
                        "display scale; it is never saved and the next start takes the monitor's scale again. No value "
                        "reads it.",
@@ -2380,7 +2515,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"value": {"type": "number", "minimum": 1.0, "maximum": 2.5}}},
     },
     {
-        "name": "xfined_ui_contract",
+        "name": "grizzly_ui_contract",
         "description": "The UI constants a test pins instead of hardcoding (EditorUiContract.h): tile_range, "
                        "tile_default and tile_error of the Content Browser, theme_keys, categories, the Start page "
                        "card_menu labels, delete_project_dialog, the panels / drawers / dialogs {id: window name - a "
@@ -2390,19 +2525,19 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_window_close_discard",
+        "name": "grizzly_window_close_discard",
         "description": "Close the editor and DROP every unsaved change - the scene's and every tab's - for good. The "
                        "editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its "
-                       "own side. To keep the work, xfined_window_control action=close save=true.",
+                       "own side. To keep the work, grizzly_window_control action=close save=true.",
         "annotations": {"title": "Close the editor and drop unsaved work", "readOnlyHint": False,
                         "destructiveHint": True},
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_project_close",
+        "name": "grizzly_project_close",
         "description": "Close the project and go back to the Start page (File > Project > Switch Project...). With "
                        "unsaved tabs it refuses with error 'unsaved' and the dirty list unless save=true saves them first "
-                       "(a scene with no file yet cannot be); dropping them is xfined_project_close_discard. Under -nodlg "
+                       "(a scene with no file yet cannot be); dropping them is grizzly_project_close_discard. Under -nodlg "
                        "unsaved work is discarded, as the editor always answered there. The project's open tabs are "
                        "remembered in its session and come back when it opens again, and so is the scene it had open. "
                        "The Start page's card gets a fresh picture of the open scene: rendered once more from the viewport's camera, without the selection, gizmo, grid, axis triad or stats.",
@@ -2410,7 +2545,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"save": {"type": "boolean"}}},
     },
     {
-        "name": "xfined_project_close_discard",
+        "name": "grizzly_project_close_discard",
         "description": "Close the project, go back to the Start page and DROP every unsaved change - the scene's and "
                        "every tab's - for good. The editor asks nothing on this path; the tool carries destructiveHint so "
                        "a client can ask on its own side. The Start page's card gets a fresh picture of the open scene: rendered once more from the viewport's camera, without the selection, gizmo, grid, axis triad or stats.",
@@ -2419,7 +2554,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
-        "name": "xfined_preferences",
+        "name": "grizzly_preferences",
         "description": "The editor's settings by their .ini names: action get (default; no key = every one) or set "
                        "key + value - applied at once and saved, like the Preferences tab. Keys: active_idle_fps, "
                        "floating_panels (panels in windows of their own; a restart takes effect), view_np, view_fp, "
@@ -2428,7 +2563,7 @@ TOOLS = [
                        "tools_show_move_axis, bp_lim_depth, bp_cull, bp_depth_tolerance, snap_grid_step, snap_angle_step "
                        "(deg), snap_scale_step (the viewport toolbar's Grid, Angle and Scale steps), "
                        "snap_moveto, grid_cell_size, grid_cell_count, scene_undo_level, scene_recent_count, "
-                       "scene_clear_color, render_radius. The theme is xfined_theme. action show opens the Preferences "
+                       "scene_clear_color, render_radius. The theme is grizzly_theme. action show opens the Preferences "
                        "tab on a page ('page': a top-level folder of its rows - General, Viewport, Tools, Objects, Recovery, "
                        "Scene - or Keyboard) with its search ('search'); get answers the page the tab shows.",
         "annotations": {"title": "Read or change a preference", "readOnlyHint": False, "destructiveHint": False},
@@ -2439,7 +2574,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_texture_preview",
+        "name": "grizzly_texture_preview",
         "description": "The Texture Preview tab ('texture', a major tab): what a double click on an image in the "
                        "Content Browser opens. action open (path + source project | editor | darf; brings the tab up), "
                        "state (default; never switches tabs), close. With open and state: zoom (fit | a factor), mip, "
@@ -2466,7 +2601,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_library",
+        "name": "grizzly_library",
         "description": "The library tabs - light_animations (lanims.xr), texture_library (the texture descriptions) and "
                        "sound_library (the sound descriptions) - each a major tab: list | preview | properties. action: "
                        "open (brings the tab up at once), state (default; never switches tabs), select (item = a name, "
@@ -2478,8 +2613,8 @@ TOOLS = [
                        "sound_library: rawdata/sounds; absolute, forward slashes) -, and per kind: frame, frames, fps, keys, on_key, alpha (light animations); width, height, "
                        "format, alpha, preview, import, read_only, saving (textures); min_dist, max_dist, game_sound, "
                        "bytes, ms, auto_play, read_only, saving (sounds). Nothing here saves: the tab's Save does, and "
-                       "xfined_ui_tab close save=true. With the Texture Library open and without unsaved changes, "
-                       "xfined_exec_command name=COMMAND_CHECK_TEXTURES turns its tab into New Textures; a finished "
+                       "grizzly_ui_tab close save=true. With the Texture Library open and without unsaved changes, "
+                       "grizzly_exec_command name=COMMAND_CHECK_TEXTURES turns its tab into New Textures; a finished "
                        "import brings the library back.",
         "annotations": {"title": "Look at a library tab", "readOnlyHint": False, "destructiveHint": False},
         "inputSchema": {"type": "object", "properties": {
@@ -2491,25 +2626,27 @@ TOOLS = [
         }, "required": ["kind"]},
     },
     {
-        "name": "xfined_mod_settings_view",
+        "name": "grizzly_mod_settings_view",
         "description": "The Mod Settings tab (mod.ltx as a form: General, Mod Browser, Game Mode, Relations, Build "
-                       "Contents, PDA). 'page' opens the tab on that page; without it this only reports. Answers "
+                       "Contents, PDA, Commands). 'page' opens the tab on that page; without it this only reports. Answers "
                        "{tab, open, active, page, dirty, pages [{id, label, state ok|error|required|warning}], "
-                       "problems [{page, field, tone, blocks_save, text}]}. The data path stays xfined_mod_manifest / "
-                       "xfined_mod_set_manifest; this is for looking at the tab (screenshots, tours).",
+                       "problems [{page, field, tone, blocks_save, text}]}. The data path stays grizzly_mod_manifest / "
+                       "grizzly_mod_set_manifest; this is for looking at the tab (screenshots, tours).",
         "annotations": {"title": "Show Mod Settings", "idempotentHint": True},
         "inputSchema": {"type": "object", "properties": {
-            "page": {"type": "string", "enum": ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda"]},
+                "ask_game_updates": {"type": "boolean", "description": "puts up the Disable Game Updates question, to look at"},
+            "page": {"type": "string", "enum": ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda",
+                                                 "commands"]},
         }},
     },
     {
-        "name": "xfined_characters_view",
+        "name": "grizzly_characters_view",
         "description": "The Characters tab. 'select' (a character id) or 'path' (project-relative .npcasset) opens the "
                        "tab on that character; 'open': true just opens it; without an argument it only reports. Edits "
                        "in progress in the tab are settled by save=true or discard=true, otherwise the answer is "
                        "{ok:false, error:'unsaved', dirty:[id]}. Answers {tab, open, active, selected, file, dirty, count, "
                        "problems} - problems are the edited character's, resolved against its base like "
-                       "xfined_characters_write reports them.",
+                       "grizzly_characters_write reports them.",
         "annotations": {"title": "Show a character in the Characters tab", "idempotentHint": True},
         "inputSchema": {"type": "object", "properties": {
             "select": {"type": "string"}, "path": {"type": "string"}, "open": {"type": "boolean"},
@@ -2517,12 +2654,60 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_world_view",
+        "name": "grizzly_screens_get",
+        "description": "The module's loading and menu screens and their music (mod.ltx [screens], [screen.<id>], [track.<id>]). "
+                       "Returns policy {loading, menu: {screens, music: mix|only, end: loop|next}}, screens [{id, show, levels, modes, "
+                       "weight, music: any|none|video|tracks, tracks, hide, layers [{file, kind, fit, opacity, rect, texture, sound}] "
+                       "bottom layer first}], tracks [{id, file, play, weight, volume}] and problems (E4xx blocks a build, W4xx does not).",
+        "annotations": {"title": "Read screens and music", "readOnlyHint": True},
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "grizzly_screens_set",
+        "description": "Changes the module's screens and music and saves mod.ltx; answers like grizzly_screens_get. action: "
+                       "policy (surface loading|menu, screens mix|only, music mix|only, end loop|next); "
+                       "screen_add (id, file = a first layer) / screen_set (id, new_id) / screen_remove (id), with show (loading,menu,pause), "
+                       "levels, modes, weight, music (any, none, video, or track ids), hide (bar,percent,stage,tip); "
+                       "layer_add (id, index: 0 is the bottom layer) / layer_set (id, index) / layer_remove (id, index) / layer_move (id, index, to), "
+                       "with file, texture, fit (cover|contain|stretch), opacity (0..1), rect ('x y w h' in per cent), sound; "
+                       "track_add / track_set / track_remove (id, file, play, weight, volume); "
+                       "drop (files separated by |, id = the screen, index = its layer, music = true): the same as dropping files on the tab. "
+                       "A file from outside the project is copied into <project>\\screens; a PNG, JPG, TGA or BMP becomes a .dds.",
+        "annotations": {"title": "Change screens and music"},
+        "inputSchema": {"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["policy", "screen_add", "screen_set", "screen_remove", "layer_add", "layer_set", "layer_remove", "layer_move", "track_add", "track_set", "track_remove", "drop"]},
+            "id": {"type": "string"}, "new_id": {"type": "string"}, "surface": {"type": "string", "enum": ["loading", "menu"]},
+            "screens": {"type": "string", "enum": ["mix", "only"]}, "music": {"type": ["string", "boolean"]}, "end": {"type": "string", "enum": ["loop", "next"]},
+            "show": {"type": "string"}, "levels": {"type": "string"}, "modes": {"type": "string"}, "weight": {"type": "number"}, "hide": {"type": "string"},
+            "index": {"type": "integer"}, "to": {"type": "integer"}, "file": {"type": "string"}, "texture": {"type": "string"},
+            "fit": {"type": "string", "enum": ["cover", "contain", "stretch"]}, "opacity": {"type": "number"}, "rect": {"type": "string"}, "sound": {"type": "boolean"},
+            "play": {"type": "string"}, "volume": {"type": "number"}, "files": {"type": "string"},
+        }},
+    },
+    {
+        "name": "grizzly_screens_view",
+        "description": "The Screens & Music tab. 'open': true opens it, 'surface' picks loading or menu, 'screen' / 'track' select one and 'layer' opens a layer's "
+                       "settings (0 is the bottom layer). 'simulate_drop' lands files (separated by |) at the window point x, y the way a drop from Explorer does. "
+                       "Answers {tab, open, active, surface, screen, track, layer, status}. The data path stays grizzly_screens_get / grizzly_screens_set.",
+        "annotations": {"title": "Show the Screens & Music tab", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {
+            "open": {"type": "boolean"}, "surface": {"type": "string", "enum": ["loading", "menu"]}, "screen": {"type": "string"}, "track": {"type": "string"},
+            "layer": {"type": "integer"}, "simulate_drop": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"},
+        }},
+    },
+    {
+        "name": "grizzly_ui_toast",
+        "description": "Raises a toast with this text, to look at one in a screenshot.",
+        "annotations": {"title": "Raise a toast", "idempotentHint": True},
+        "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
+    },
+    {
+        "name": "grizzly_world_view",
         "description": "The World Rules tab (what the mode keeps of the original game; it saves to mod.ltx as it is "
                        "edited). 'drawer' opens or closes its problems drawer, 'level' picks the level whose "
                        "transitions it lists (a level of the linked game), 'filter' filters them; any of these, or "
                        "'open': true, opens the tab. Without an argument it only reports: {tab, open, active, drawer, "
-                       "level, filter, status, problems}. The data path stays xfined_world_get / xfined_world_set.",
+                       "level, filter, status, problems}. The data path stays grizzly_world_get / grizzly_world_set.",
         "annotations": {"title": "Show the World Rules tab", "idempotentHint": True},
         "inputSchema": {"type": "object", "properties": {
             "drawer": {"type": "string", "enum": ["open", "close"]}, "level": {"type": "string"},
@@ -2530,10 +2715,10 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_project_create",
+        "name": "grizzly_project_create",
         "description": "Create a project the way the Start page's New Project form does: <parent>\\<name> gets the "
                        "module skeleton (mod.ltx) and is opened. name: Latin letters, digits, _ and -. parent: a full "
-                       "path; omitted, the form's location. Refused while a project is open (xfined_project_close "
+                       "path; omitted, the form's location. Refused while a project is open (grizzly_project_close "
                        "first). Answers path, name, existed (a project was there already and was only opened) and opened.",
         "annotations": {"title": "Create a project", "readOnlyHint": False, "destructiveHint": False},
         "inputSchema": {"type": "object", "properties": {
@@ -2541,10 +2726,10 @@ TOOLS = [
         }, "required": ["name"]},
     },
     {
-        "name": "xfined_property_set",
+        "name": "grizzly_property_set",
         "description": "Set one row of the Details panel (target='selection', default) or Level Settings (target='world') "
                        "the way editing the row does: its checks run, every selected object takes it, then one undo step "
-                       "and a properties refresh. key: the row's whole key as xfined_property_inspector lists it, its "
+                       "and a properties refresh. key: the row's whole key as grizzly_property_inspector lists it, its "
                        "last part when that names one row, or the label the grid shows ('Weld distance' for "
                        "'...\\Weld distance (m)'). value as text: a number (in the unit the row shows - degrees "
                        "for angles; it may carry the unit, '1.5 m'), true/false, 'x, y, z', #RRGGBB or 0xAARRGGBB, a name from the row's list, text, a "
@@ -2558,7 +2743,7 @@ TOOLS = [
         }, "required": ["key", "value"]},
     },
     {
-        "name": "xfined_shortcuts",
+        "name": "grizzly_shortcuts",
         "description": "The editor's keyboard shortcuts (the Keyboard page of Preferences). action list (default; "
                        "'filter' narrows it, spaces separate terms that must all match) | set ('command', 'keys') | clear "
                        "('command'). command is the id (the level.ini name: COMMAND_UNDO, COMMAND_ZOOM_EXTENTS.\"Selected\") "
@@ -2573,7 +2758,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_scene_visibility",
+        "name": "grizzly_scene_visibility",
         "description": "The eyes of the World Outliner and the Tools tiles: show or hide objects in the viewport. A "
                        "target - class (a tool class as scene_tree names it), name (an object), selection=true or all=true "
                        "- takes visible=true|false; with no target it only lists classes [{class, title, visible, "
@@ -2586,7 +2771,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_viewport_controls",
+        "name": "grizzly_viewport_controls",
         "description": "The viewport's right pills: the transform tool (select | place | move | rotate | scale), the "
                        "grid, scale and angle snaps with their steps (angle in degrees) and the object snap, vertex snap "
                        "and normal alignment. Omitted arguments keep their value. Answers tool, grid|scale|angle {on, "
@@ -2601,7 +2786,7 @@ TOOLS = [
         }},
     },
     {
-        "name": "xfined_snap_objects",
+        "name": "grizzly_snap_objects",
         "description": "The Tools panel's Snap Objects: use (snap to the listed objects), pick, and action "
                        "set_from_selection | add_selection | remove_selection | select | clear. Answers use, pick and "
                        "objects [names]. clear empties the list (the objects themselves stay) and asks nothing.",
@@ -2614,162 +2799,171 @@ TOOLS = [
 ]
 
 CMD_MAP = {
-    "xfined_ping": "ping",
-    "xfined_state": "state",
-    "xfined_screenshot_viewport": "screenshot_viewport",
-    "xfined_screenshot_editor": "screenshot_editor",
-    "xfined_scene_info": "scene_info",
-    "xfined_selection": "selection",
-    "xfined_object_info": "object_info",
-    "xfined_list_projects": "list_projects",
-    "xfined_open_project": "open_project",
-    "xfined_project_reveal": "project_reveal",
-    "xfined_project_delete": "project_delete",
-    "xfined_project_forget": "project_forget",
-    "xfined_project_browser_menu": "project_browser_menu",
-    "xfined_open_scene": "open_scene",
-    "xfined_list_objects": "list_objects",
-    "xfined_focus_object": "focus_object",
-    "xfined_mod_manifest": "mod_manifest",
-    "xfined_mod_set_manifest": "mod_set_manifest",
-    "xfined_mod_exclude": "mod_exclude",
-    "xfined_mod_export": "mod_export",
-    "xfined_mod_package": "mod_package",
-    "xfined_mod_publish": "mod_publish",
-    "xfined_mod_releases": "mod_releases",
-    "xfined_mod_release_delete": "mod_releases",
-    "xfined_mod_catalog": "mod_catalog",
-    "xfined_mod_catalog_submit": "mod_catalog",
-    "xfined_mod_catalog_withdraw": "mod_catalog",
-    "xfined_characters_list": "characters_list",
-    "xfined_characters_get": "characters_get",
-    "xfined_characters_write": "characters_write",
-    "xfined_characters_delete": "characters_delete",
-    "xfined_world_get": "world_get",
-    "xfined_world_set": "world_set",
-    "xfined_world_transitions": "world_transitions",
-    "xfined_pda_list": "pda_list",
-    "xfined_pda_get": "pda_get",
-    "xfined_pda_write": "pda_write",
-    "xfined_pda_delete": "pda_delete",
-    "xfined_pda_use": "pda_use",
-    "xfined_pda_validate": "pda_validate",
-    "xfined_pda_preview": "pda_preview",
-    "xfined_spawn_order": "spawn_order",
-    "xfined_place_way": "place_way",
-    "xfined_mod_release_edit": "mod_releases",
-    "xfined_preview_model": "preview_model",
-    "xfined_reset_layout": "reset_layout",
-    "xfined_theme": "theme",
-    "xfined_frame_pacing": "frame_pacing",
-    "xfined_command_palette": "command_palette",
-    "xfined_viewport_navigation": "viewport_navigation",
-    "xfined_progress": "progress",
-    "xfined_property_inspector": "property_inspector",
-    "xfined_content_browser_navigation": "content_browser_navigation",
-    "xfined_asset_preview_model": "asset_preview",
-    "xfined_mod_export_spawn": "mod_export_spawn",
-    "xfined_mod_export_cut": "mod_export_cut",
-    "xfined_mod_export_xcform": "mod_export_xcform",
-    "xfined_mod_export_ogf_probe": "mod_export_ogf_probe",
-    "xfined_game_link": "game_link",
-    "xfined_darf_list": "darf_list",
-    "xfined_darf_copy": "darf_copy",
-    "xfined_content_copy": "content_copy",
-    "xfined_content_move": "content_move",
-    "xfined_content_delete": "content_delete",
-    "xfined_content_mkdir": "content_mkdir",
-    "xfined_content_create": "content_create",
-    "xfined_content_rename": "content_rename",
-    "xfined_list_commands": "list_commands",
-    "xfined_exec_command": "exec_command",
-    "xfined_content_browser_open": "content_browser_open",
-    "xfined_content_browser_selection": "content_browser_selection",
-    "xfined_content_browser_copy": "content_browser_copy",
-    "xfined_scene_stats": "scene_stats",
-    "xfined_camera_get": "camera_get",
-    "xfined_camera_set": "camera_set",
-    "xfined_select_objects": "select_objects",
-    "xfined_deselect_all": "deselect_all",
-    "xfined_mark_authored": "mark_authored",
-    "xfined_object_set_position": "object_set_position",
-    "xfined_object_set_rotation": "object_set_rotation",
-    "xfined_object_set_scale": "object_set_scale",
-    "xfined_place_object": "place_object",
-    "xfined_drop_objects": "drop_objects",
-    "xfined_list_spawn_sections": "list_spawn_sections",
-    "xfined_place_spawn": "place_spawn",
-    "xfined_view_mode": "view_mode",
-    "xfined_list_assets": "list_assets",
-    "xfined_asset_preview": "asset_preview",
-    "xfined_titlebar_info": "titlebar_info",
-    "xfined_window_control": "window_control",
-    "xfined_scene_load_status": "scene_load_status",
-    "xfined_property_choose": "property_choose",
-    "xfined_spawn_set_fixed_bones": "spawn_set_fixed_bones",
-    "xfined_spawn_set_visual": "spawn_set_visual",
-    "xfined_rename_object": "rename_object",
-    "xfined_delete_selected": "delete_selected",
-    "xfined_save_scene": "save_scene",
-    "xfined_recovery": "recovery",
-    "xfined_outliner_show": "outliner_show",
-    "xfined_outliner_filter": "outliner_filter",
-    "xfined_game_modes": "game_modes",
-    "xfined_scene_tree": "scene_tree",
-    "xfined_undo": "undo",
-    "xfined_redo": "redo",
-    "xfined_quest_catalog": "quest_catalog",
-    "xfined_quest_list": "quest_list",
-    "xfined_quest_new": "quest_new",
-    "xfined_quest_open": "quest_open",
-    "xfined_quest_close": "quest_close",
-    "xfined_quest_get": "quest_get",
-    "xfined_quest_write": "quest_write",
-    "xfined_quest_undo": "quest_undo",
-    "xfined_quest_redo": "quest_redo",
-    "xfined_quest_apply": "quest_apply",
-    "xfined_quest_validate": "quest_validate",
-    "xfined_quest_save": "quest_save",
-    "xfined_quest_reload": "quest_reload",
-    "xfined_quest_layout": "quest_layout",
-    "xfined_quest_view": "quest_view",
-    "xfined_quest_edit": "quest_edit",
-    "xfined_quest_find": "quest_find",
-    "xfined_quest_project_find": "quest_project_find",
-    "xfined_quest_references": "quest_references",
-    "xfined_quest_rename_task": "quest_rename_task",
-    "xfined_quest_bookmarks": "quest_bookmarks",
-    "xfined_quest_history": "quest_history",
-    "xfined_quest_minimap": "quest_minimap",
-    "xfined_quest_lookup": "quest_lookup",
-    "xfined_quest_check_all": "quest_check_all",
-    "xfined_ui_list": "ui_list",
-    "xfined_ui_tab": "ui_tab",
-    "xfined_ui_tab_discard": "ui_tab",
-    "xfined_ui_panel": "ui_panel",
-    "xfined_ui_drawer": "ui_drawer",
-    "xfined_ui_dialog": "ui_dialog",
-    "xfined_ui_popup": "ui_popup",
-    "xfined_ui_scroll": "ui_scroll",
-    "xfined_ui_split": "ui_split",
-    "xfined_ui_audit": "ui_audit",
-    "xfined_ui_scale": "ui_scale",
-    "xfined_ui_contract": "ui_contract",
-    "xfined_window_close_discard": "window_control",
-    "xfined_project_close": "project_close",
-    "xfined_project_close_discard": "project_close",
-    "xfined_preferences": "preferences",
-    "xfined_texture_preview": "texture_preview",
-    "xfined_library": "library",
-    "xfined_mod_settings_view": "mod_settings_view",
-    "xfined_characters_view": "characters_view",
-    "xfined_world_view": "world_view",
-    "xfined_project_create": "project_create",
-    "xfined_property_set": "property_set",
-    "xfined_shortcuts": "shortcuts",
-    "xfined_scene_visibility": "scene_visibility",
-    "xfined_viewport_controls": "viewport_controls",
-    "xfined_snap_objects": "snap_objects",
+    "grizzly_ping": "ping",
+    "grizzly_state": "state",
+    "grizzly_screenshot_viewport": "screenshot_viewport",
+    "grizzly_screenshot_editor": "screenshot_editor",
+    "grizzly_scene_info": "scene_info",
+    "grizzly_selection": "selection",
+    "grizzly_object_info": "object_info",
+    "grizzly_list_projects": "list_projects",
+    "grizzly_open_project": "open_project",
+    "grizzly_project_reveal": "project_reveal",
+    "grizzly_project_delete": "project_delete",
+    "grizzly_project_forget": "project_forget",
+    "grizzly_project_browser_menu": "project_browser_menu",
+    "grizzly_open_scene": "open_scene",
+    "grizzly_list_objects": "list_objects",
+    "grizzly_focus_object": "focus_object",
+    "grizzly_mod_manifest": "mod_manifest",
+    "grizzly_mod_set_manifest": "mod_set_manifest",
+    "grizzly_mod_exclude": "mod_exclude",
+    "grizzly_mod_commands": "mod_commands",
+    "grizzly_mod_export": "mod_export",
+    "grizzly_mod_package": "mod_package",
+    "grizzly_mod_publish": "mod_publish",
+    "grizzly_mod_releases": "mod_releases",
+    "grizzly_mod_release_delete": "mod_releases",
+    "grizzly_mod_catalog": "mod_catalog",
+    "grizzly_mod_catalog_submit": "mod_catalog",
+    "grizzly_mod_catalog_withdraw": "mod_catalog",
+    "grizzly_characters_list": "characters_list",
+    "grizzly_characters_get": "characters_get",
+    "grizzly_characters_write": "characters_write",
+    "grizzly_characters_delete": "characters_delete",
+    "grizzly_world_get": "world_get",
+    "grizzly_screens_get": "screens_get",
+    "grizzly_screens_set": "screens_set",
+    "grizzly_screens_view": "screens_view",
+    "grizzly_world_set": "world_set",
+    "grizzly_world_transitions": "world_transitions",
+    "grizzly_pda_list": "pda_list",
+    "grizzly_pda_get": "pda_get",
+    "grizzly_pda_write": "pda_write",
+    "grizzly_pda_delete": "pda_delete",
+    "grizzly_pda_use": "pda_use",
+    "grizzly_pda_validate": "pda_validate",
+    "grizzly_pda_preview": "pda_preview",
+    "grizzly_spawn_order": "spawn_order",
+    "grizzly_place_way": "place_way",
+    "grizzly_mod_release_edit": "mod_releases",
+    "grizzly_preview_model": "preview_model",
+    "grizzly_reset_layout": "reset_layout",
+    "grizzly_theme": "theme",
+    "grizzly_frame_pacing": "frame_pacing",
+    "grizzly_command_palette": "command_palette",
+    "grizzly_viewport_navigation": "viewport_navigation",
+    "grizzly_progress": "progress",
+    "grizzly_property_inspector": "property_inspector",
+    "grizzly_content_browser_navigation": "content_browser_navigation",
+    "grizzly_asset_preview_model": "asset_preview",
+    "grizzly_mod_export_spawn": "mod_export_spawn",
+    "grizzly_mod_export_cut": "mod_export_cut",
+    "grizzly_mod_export_xcform": "mod_export_xcform",
+    "grizzly_mod_export_ogf_probe": "mod_export_ogf_probe",
+    "grizzly_game_link": "game_link",
+    "grizzly_darf_list": "darf_list",
+    "grizzly_darf_copy": "darf_copy",
+    "grizzly_content_copy": "content_copy",
+    "grizzly_content_move": "content_move",
+    "grizzly_content_delete": "content_delete",
+    "grizzly_content_mkdir": "content_mkdir",
+    "grizzly_content_create": "content_create",
+    "grizzly_content_rename": "content_rename",
+    "grizzly_list_commands": "list_commands",
+    "grizzly_exec_command": "exec_command",
+    "grizzly_content_browser_open": "content_browser_open",
+    "grizzly_content_browser_selection": "content_browser_selection",
+    "grizzly_content_browser_copy": "content_browser_copy",
+    "grizzly_scene_stats": "scene_stats",
+    "grizzly_camera_get": "camera_get",
+    "grizzly_camera_set": "camera_set",
+    "grizzly_select_objects": "select_objects",
+    "grizzly_deselect_all": "deselect_all",
+    "grizzly_mark_authored": "mark_authored",
+    "grizzly_mark_removed": "mark_removed",
+    "grizzly_scan_walls": "scan_walls",
+    "grizzly_probe_vertical": "probe_vertical",
+    "grizzly_game_lighting": "game_lighting",
+    "grizzly_object_set_position": "object_set_position",
+    "grizzly_object_set_rotation": "object_set_rotation",
+    "grizzly_object_set_scale": "object_set_scale",
+    "grizzly_place_object": "place_object",
+    "grizzly_drop_objects": "drop_objects",
+    "grizzly_list_spawn_sections": "list_spawn_sections",
+    "grizzly_place_spawn": "place_spawn",
+    "grizzly_view_mode": "view_mode",
+    "grizzly_list_assets": "list_assets",
+    "grizzly_asset_preview": "asset_preview",
+    "grizzly_titlebar_info": "titlebar_info",
+    "grizzly_window_control": "window_control",
+    "grizzly_scene_load_status": "scene_load_status",
+    "grizzly_property_choose": "property_choose",
+    "grizzly_spawn_set_fixed_bones": "spawn_set_fixed_bones",
+    "grizzly_spawn_set_visual": "spawn_set_visual",
+    "grizzly_rename_object": "rename_object",
+    "grizzly_delete_selected": "delete_selected",
+    "grizzly_save_scene": "save_scene",
+    "grizzly_recovery": "recovery",
+    "grizzly_outliner_show": "outliner_show",
+    "grizzly_outliner_filter": "outliner_filter",
+    "grizzly_game_modes": "game_modes",
+    "grizzly_scene_tree": "scene_tree",
+    "grizzly_undo": "undo",
+    "grizzly_redo": "redo",
+    "grizzly_quest_catalog": "quest_catalog",
+    "grizzly_quest_list": "quest_list",
+    "grizzly_quest_new": "quest_new",
+    "grizzly_quest_open": "quest_open",
+    "grizzly_quest_close": "quest_close",
+    "grizzly_quest_get": "quest_get",
+    "grizzly_quest_write": "quest_write",
+    "grizzly_quest_undo": "quest_undo",
+    "grizzly_quest_redo": "quest_redo",
+    "grizzly_quest_apply": "quest_apply",
+    "grizzly_quest_validate": "quest_validate",
+    "grizzly_quest_save": "quest_save",
+    "grizzly_quest_reload": "quest_reload",
+    "grizzly_quest_layout": "quest_layout",
+    "grizzly_quest_view": "quest_view",
+    "grizzly_quest_edit": "quest_edit",
+    "grizzly_quest_find": "quest_find",
+    "grizzly_quest_project_find": "quest_project_find",
+    "grizzly_quest_references": "quest_references",
+    "grizzly_quest_rename_task": "quest_rename_task",
+    "grizzly_quest_bookmarks": "quest_bookmarks",
+    "grizzly_quest_history": "quest_history",
+    "grizzly_quest_minimap": "quest_minimap",
+    "grizzly_quest_lookup": "quest_lookup",
+    "grizzly_quest_check_all": "quest_check_all",
+    "grizzly_ui_list": "ui_list",
+    "grizzly_ui_tab": "ui_tab",
+    "grizzly_ui_tab_discard": "ui_tab",
+    "grizzly_ui_panel": "ui_panel",
+    "grizzly_ui_drawer": "ui_drawer",
+    "grizzly_ui_dialog": "ui_dialog",
+    "grizzly_ui_popup": "ui_popup",
+    "grizzly_ui_toast": "ui_toast",
+    "grizzly_ui_scroll": "ui_scroll",
+    "grizzly_ui_split": "ui_split",
+    "grizzly_ui_audit": "ui_audit",
+    "grizzly_ui_scale": "ui_scale",
+    "grizzly_ui_contract": "ui_contract",
+    "grizzly_window_close_discard": "window_control",
+    "grizzly_project_close": "project_close",
+    "grizzly_project_close_discard": "project_close",
+    "grizzly_preferences": "preferences",
+    "grizzly_texture_preview": "texture_preview",
+    "grizzly_library": "library",
+    "grizzly_mod_settings_view": "mod_settings_view",
+    "grizzly_characters_view": "characters_view",
+    "grizzly_world_view": "world_view",
+    "grizzly_project_create": "project_create",
+    "grizzly_property_set": "property_set",
+    "grizzly_shortcuts": "shortcuts",
+    "grizzly_scene_visibility": "scene_visibility",
+    "grizzly_viewport_controls": "viewport_controls",
+    "grizzly_snap_objects": "snap_objects",
 }
 
 
@@ -2831,31 +3025,31 @@ def tool_result(name: str, args: dict) -> dict:
         }
         # a tool result like any other: a bare dict here reaches the client as an answer with no content
         return {"content": [{"type": "text", "text": json.dumps(refusal, ensure_ascii=False)}], "isError": True}
-    if name in ("xfined_mod_publish", "xfined_mod_releases", "xfined_mod_release_delete", "xfined_mod_release_edit",
-                "xfined_mod_catalog", "xfined_mod_catalog_submit", "xfined_mod_catalog_withdraw"):
+    if name in ("grizzly_mod_publish", "grizzly_mod_releases", "grizzly_mod_release_delete", "grizzly_mod_release_edit",
+                "grizzly_mod_catalog", "grizzly_mod_catalog_submit", "grizzly_mod_catalog_withdraw"):
         # 'wait' is this bridge's own: the editor answers at once and works on a worker
         args = dict(args)
         wait = args.pop("wait", True)
-    if name == "xfined_mod_release_delete":
+    if name == "grizzly_mod_release_delete":
         # a tool of its own so that a client can tell the one destructive call from the reads
         args["action"] = "delete"
-    if name == "xfined_mod_release_edit":
+    if name == "grizzly_mod_release_edit":
         args["action"] = "edit"
-    if name == "xfined_mod_catalog_submit":
+    if name == "grizzly_mod_catalog_submit":
         # the one call that opens a public issue, a tool of its own like the release deletion
         args["action"] = "submit"
-    if name == "xfined_mod_catalog_withdraw":
+    if name == "grizzly_mod_catalog_withdraw":
         # takes the module out of the Mod Browser: a tool of its own, marked destructive
         args["action"] = "withdraw"
     # losing unsaved work is only ever these three tools, each marked destructive: the others cannot pass discard
-    if name == "xfined_ui_tab_discard":
+    if name == "grizzly_ui_tab_discard":
         args = dict(args, action="close", discard=True)
-    if name == "xfined_window_close_discard":
+    if name == "grizzly_window_close_discard":
         args = dict(args, action="close", discard=True)
-    if name == "xfined_project_close_discard":
+    if name == "grizzly_project_close_discard":
         args = dict(args, discard=True)
     data = editor_call(CMD_MAP[name], args)
-    follows_job = name == "xfined_mod_publish" and wait and args.get("action", "start") in ("start", "status")
+    follows_job = name == "grizzly_mod_publish" and wait and args.get("action", "start") in ("start", "status")
     if follows_job and data.get("ok") and data.get("pending"):
         started = data
         deadline = time.monotonic() + 150.0
@@ -2866,7 +3060,7 @@ def tool_result(name: str, args: dict) -> dict:
         for key in ("assets", "files", "requires_game", "baked", "package_warnings"):
             if key in started:
                 data.setdefault(key, started[key])
-    if name == "xfined_mod_publish" and args.get("action") == "sign_in" and data.get("ok"):
+    if name == "grizzly_mod_publish" and args.get("action") == "sign_in" and data.get("ok"):
         # the code arrives a moment after the start; an answer without it is of no use
         deadline = time.monotonic() + 20.0
         while data.get("state") == "starting" and time.monotonic() < deadline:
@@ -2886,7 +3080,7 @@ def tool_result(name: str, args: dict) -> dict:
         while (data.get("job") or {}).get("pending") and time.monotonic() < deadline:
             time.sleep(0.5)
             data = editor_call("mod_catalog", {"action": "status"})
-    if name == "xfined_quest_view" and data.get("ok") and data.get("pending"):
+    if name == "grizzly_quest_view" and data.get("ok") and data.get("pending"):
         # the answer is the last frame drawn: a held request makes the editor draw (a background one too)
         editor_call("titlebar_info")
         data = editor_call("quest_view", {"path": args["path"]})
@@ -2894,7 +3088,7 @@ def tool_result(name: str, args: dict) -> dict:
         while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
             time.sleep(0.02)
             data = editor_call("quest_view", {"path": args["path"]})
-    if name == "xfined_recovery" and args.get("action", "get") in ("restore", "discard") \
+    if name == "grizzly_recovery" and args.get("action", "get") in ("restore", "discard") \
             and data.get("ok") and data.get("pending"):
         operation_id = data.get("operation_id")
         deadline = time.monotonic() + 3.0
@@ -2964,7 +3158,7 @@ def main():
             reply(msg_id, {
                 "protocolVersion": msg.get("params", {}).get("protocolVersion", "2024-11-05"),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "xfined-editor", "version": "1.0.0"},
+                "serverInfo": {"name": "grizzly-editor", "version": "1.0.0"},
                 "instructions": SERVER_INSTRUCTIONS,
             })
         elif method == "notifications/initialized":

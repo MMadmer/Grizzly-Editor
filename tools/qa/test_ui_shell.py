@@ -19,7 +19,7 @@ What it proves:
      tasks popover while no job runs; the palette ranks the Output Log panel first for 'log' and shows no COMMAND_* id
      as a row's label; opened, it is the modal on top
 
-    python tools/qa/test_ui_shell.py --project D:\\XFinedProjects\\Test [--shots <folder>]
+    python tools/qa/test_ui_shell.py --project <project> [--shots <folder>]
 
 The ini files the editor writes when it closes (_projects.ini, level.ini, level_imgui.ini) come back byte for byte.
 """
@@ -146,7 +146,7 @@ def editor_hwnd() -> int | None:
     def each(hwnd, _):
         cls = ctypes.create_unicode_buffer(64)
         user32.GetClassNameW(hwnd, cls, 64)
-        if cls.value == "XFined Editor":
+        if cls.value == "Grizzly Editor":
             found.append(hwnd)
         return True
 
@@ -411,7 +411,7 @@ def main() -> int:
     if not os.path.isdir(src):
         print("no such project: " + src)
         return 2
-    work = tempfile.mkdtemp(prefix="xfined_shellproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_shellproj_")
     copy = os.path.join(work, "QaShell")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", "releases", "temp"))
     print("running against a copy: " + copy, flush=True)

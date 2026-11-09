@@ -49,7 +49,7 @@ static bool ParseBrowserToken(LPCSTR raw, LPCSTR field, char* parsed, u32 parsed
 		const size_t length = size_t(cursor - start);
 		if (*cursor != '"' || length >= parsed_size || !IsBrowserTokenTerminator(cursor + 1))
 			return false;
-		return XFinedMCP::GetArg(raw, field, parsed, parsed_size);
+		return GrizzlyMCP::GetArg(raw, field, parsed, parsed_size);
 	}
 
 	LPCSTR start = cursor;
@@ -221,8 +221,8 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	if (0 == xr_strcmp(cmd, "content_browser_navigation"))
 	{
 		char action[32] = {}, folder[512] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-		const bool has_folder = XFinedMCP::GetArg(raw, "folder", folder, sizeof(folder));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+		const bool has_folder = GrizzlyMCP::GetArg(raw, "folder", folder, sizeof(folder));
 		if (!action[0])
 			xr_strcpy(action, "get");
 
@@ -263,7 +263,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
 			UIContentBrowser::SetTileFit(fit);
 		// so does the view (tiles or the list), after the size: a size asks for tiles
 		char view[16] = {};
-		const bool viewed = XFinedMCP::GetArg(raw, "view", view, sizeof(view));
+		const bool viewed = GrizzlyMCP::GetArg(raw, "view", view, sizeof(view));
 		if (viewed && !UIContentBrowser::SetViewMode(view, err))
 		{
 			out = "{\"ok\":false,\"error\":\"";
@@ -273,7 +273,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
 		}
 		// so do the search field ("" clears it) and the Sources pane
 		char search[256] = {};
-		const bool searched = XFinedMCP::GetArg(raw, "search", search, sizeof(search));
+		const bool searched = GrizzlyMCP::GetArg(raw, "search", search, sizeof(search));
 		if (searched)
 			UIContentBrowser::SetSearch(search);
 		const bool paned = raw && strstr(raw, "\"sources_pane\"");
@@ -339,7 +339,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_browser_open"))
     {
         char name[512] = {};
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' argument (see list_assets / darf_list)\"}";
             return true;
@@ -396,10 +396,10 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_browser_copy"))
     {
         char names[4096] = {}, folder[512] = {}, dst[512] = {}, cat[64] = {};
-        XFinedMCP::GetArg(raw, "names",  names,  sizeof(names));
-        XFinedMCP::GetArg(raw, "folder", folder, sizeof(folder));
-        XFinedMCP::GetArg(raw, "dst",    dst,    sizeof(dst));
-        XFinedMCP::GetArg(raw, "category", cat,  sizeof(cat));
+        GrizzlyMCP::GetArg(raw, "names",  names,  sizeof(names));
+        GrizzlyMCP::GetArg(raw, "folder", folder, sizeof(folder));
+        GrizzlyMCP::GetArg(raw, "dst",    dst,    sizeof(dst));
+        GrizzlyMCP::GetArg(raw, "category", cat,  sizeof(cat));
         // GetArg hands over the raw JSON value, so an escaped "a\\b" arrives
         // with both slashes - the browser compares names exactly
         for (char* buf : { names, folder, dst })
@@ -450,7 +450,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_create"))
     {
         char kind[32] = {};
-        XFinedMCP::GetArg(raw, "kind", kind, sizeof(kind));
+        GrizzlyMCP::GetArg(raw, "kind", kind, sizeof(kind));
         xr_string made, err;
         if (!UIContentBrowser::CreateAsset(kind, made, err))
         {
@@ -470,8 +470,8 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "content_browser_selection"))
     {
 		char action[32] = {}, name[512] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-		XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "name", name, sizeof(name));
 		// Show in Explorer: the entry selected in a window of Explorer; dry_run only answers the path
 		if (0 == _stricmp(action, "reveal"))
 		{
@@ -570,7 +570,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
     {
         char category[128] = {};
         int cat = 0; // Objects by default: the only placeable category
-        if (XFinedMCP::GetArg(raw, "category", category, sizeof(category)) && category[0])
+        if (GrizzlyMCP::GetArg(raw, "category", category, sizeof(category)) && category[0])
         {
             cat = UIContentBrowser::FindCategory(category);
             if (cat < 0)
@@ -622,7 +622,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
 
         char filter[256] = {};
-        XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
+        GrizzlyMCP::GetArg(raw, "filter", filter, sizeof(filter));
         strlwr(filter);
         const int limit = GetArgInt(raw, "limit", 200);
 
@@ -657,7 +657,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "asset_preview"))
     {
         char name[512];
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)))
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' argument (see list_assets)\"}";
             return true;
@@ -678,7 +678,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
         // which is the only way to preview a game mesh: .ogf files ship no
         // thumbnail and are not part of the editor object library
         char source[64] = {};
-        XFinedMCP::GetArg(raw, "source", source, sizeof(source));
+        GrizzlyMCP::GetArg(raw, "source", source, sizeof(source));
         if (0 == _stricmp(source, "object"))
         {
             // library .object, rendered rather than read from a baked .thm
@@ -688,10 +688,10 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
                 out = "{\"ok\":false,\"error\":\"cannot render this library object\"}";
                 return true;
             }
-            void* tex = XFinedMCP::PixelsToTexture(pixels);
+            void* tex = GrizzlyMCP::PixelsToTexture(pixels);
             xr_string png;
-            const bool encoded = tex && XFinedMCP::TextureToPngBase64(tex, png);
-            XFinedMCP::ReleaseTexture(tex);
+            const bool encoded = tex && GrizzlyMCP::TextureToPngBase64(tex, png);
+            GrizzlyMCP::ReleaseTexture(tex);
             if (!encoded)
             {
                 out = "{\"ok\":false,\"error\":\"cannot encode the rendered preview\"}";
@@ -756,15 +756,15 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
                 out = "{\"ok\":false,\"error\":\"cannot render a preview for this model\"}";
                 return true;
             }
-            void* tex = XFinedMCP::PixelsToTexture(pixels);
+            void* tex = GrizzlyMCP::PixelsToTexture(pixels);
             if (!tex)
             {
                 out = "{\"ok\":false,\"error\":\"cannot upload the rendered preview\"}";
                 return true;
             }
             xr_string png;
-            const bool encoded = XFinedMCP::TextureToPngBase64(tex, png);
-            XFinedMCP::ReleaseTexture(tex);
+            const bool encoded = GrizzlyMCP::TextureToPngBase64(tex, png);
+            GrizzlyMCP::ReleaseTexture(tex);
             if (!encoded)
             {
                 out = "{\"ok\":false,\"error\":\"cannot encode the rendered preview\"}";
@@ -780,7 +780,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
 
         char category[128] = {};
         int cat = 0;
-        if (XFinedMCP::GetArg(raw, "category", category, sizeof(category)) && category[0])
+        if (GrizzlyMCP::GetArg(raw, "category", category, sizeof(category)) && category[0])
         {
             cat = UIContentBrowser::FindCategory(category);
             if (cat < 0)
@@ -805,7 +805,7 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
             // MCP call cannot wait for it, so render right here instead
             U32Vec pixels;
             if (RenderVisualThumbnail(name, pixels))
-                tex = static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+                tex = static_cast<ImTextureID>(GrizzlyMCP::PixelsToTexture(pixels));
         }
         if (!tex)
         {
@@ -813,8 +813,8 @@ bool HandleContent(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         xr_string png;
-        const bool ok = XFinedMCP::TextureToPngBase64((void*)tex, png);
-        XFinedMCP::ReleaseTexture((void*)tex);
+        const bool ok = GrizzlyMCP::TextureToPngBase64((void*)tex, png);
+        GrizzlyMCP::ReleaseTexture((void*)tex);
         if (!ok)
         {
             out = "{\"ok\":false,\"error\":\"cannot encode the thumbnail\"}";

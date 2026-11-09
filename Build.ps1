@@ -36,8 +36,14 @@ if (-not $vs) { Fail "No VS installation with C++ build tools. Add the 'Desktop 
 
 # --- enter the dev environment (cl/link/rc on PATH) -----------------------------
 if (-not (Get-Command cl -ErrorAction SilentlyContinue)) {
+    # The engine includes <hash_map>, which MSVC 14.51 removed: take the newest toolset that still has it.
+    $toolset = Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Directory |
+        Where-Object { Test-Path (Join-Path $_.FullName 'include\hash_map') } |
+        Sort-Object { [version]$_.Name } | Select-Object -Last 1
+    if (-not $toolset) { Fail "No MSVC toolset with <hash_map>. Add 'MSVC v14.50' (or older) in the Visual Studio Installer." }
+    $toolsetVersion = $toolset.Name -replace '^(\d+\.\d+).*', '$1'
     Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
-    Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64' | Out-Null
+    Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -vcvars_ver=$toolsetVersion" | Out-Null
 }
 
 # --- cmake + ninja: PATH first, VS-bundled as fallback --------------------------

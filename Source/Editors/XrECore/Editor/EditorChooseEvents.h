@@ -11,7 +11,7 @@
 #include "defines.h"
 #include "EditObject.h"
 #include "EThumbnailVisual.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #if defined(USE_DX11)
 #include "EDX11Utils.h"
 #endif
@@ -189,8 +189,8 @@ namespace ChoseEvents
     void   MakeGhostThumb(U32Vec& px, float w_over_h)
     {
         const int   S = THUMB_WIDTH;
-        const u32   accent = XFinedTheme::Rgb(XFinedTheme::ColorToken::Accent);
-        const u32   bg = 0xFF000000u | XFinedTheme::Rgb(XFinedTheme::ColorToken::Canvas), line = 0xFF000000u | accent, faint = 0x40000000u | accent;
+        const u32   accent = GrizzlyTheme::Rgb(GrizzlyTheme::ColorToken::Accent);
+        const u32   bg = 0xFF000000u | GrizzlyTheme::Rgb(GrizzlyTheme::ColorToken::Canvas), line = 0xFF000000u | accent, faint = 0x40000000u | accent;
         px.assign(size_t(S) * S, bg);
         float aspect = w_over_h;
         if (!(aspect > 0.f))    aspect = 1.f;
@@ -233,7 +233,7 @@ namespace ChoseEvents
             const float ht = cached ? s_SelSize.y : 1.f;
             U32Vec ghost;
             MakeGhostThumb(ghost, ht > 0.001f ? wd / ht : 1.f);
-            ID = static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(ghost));
+            ID = static_cast<ImTextureID>(GrizzlyMCP::PixelsToTexture(ghost));
             return;
         }
         U32Vec pixels;
@@ -243,7 +243,7 @@ namespace ChoseEvents
             s_VisualThumbKey = name;
             s_VisualThumbFailed = failed;
             if (!failed)
-                ID = static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+                ID = static_cast<ImTextureID>(GrizzlyMCP::PixelsToTexture(pixels));
             return;
         }
         if (HasVisualThumbnailRequest(name))				return;	// still queued

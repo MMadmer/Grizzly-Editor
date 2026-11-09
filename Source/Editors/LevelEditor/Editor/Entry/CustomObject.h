@@ -68,6 +68,10 @@ public:
         // only authored objects - mirroring a whole imported level into spawn
         // ops would double every stock NPC and prop in the game.
         flAuthorPlaced				= (1<<7),
+        // a spawn of the imported base level the mod takes out of the game: the
+        // build writes a remove op for it ([obj:base:<level>/<name>]), the object
+        // stays in the scene so the author sees what the level had there
+        flBaseRemoved				= (1<<8),
 
     	flAutoKey					= (1<<30),
     	flCameraView				= (1<<31),
@@ -144,6 +148,8 @@ public:
     IC BOOL			IsDeleted		()const {return m_RT_Flags.is(flRT_NeedSelfDelete);}
     IC BOOL			IsAuthorPlaced	()const {return m_CO_Flags.is(flAuthorPlaced);}
     IC void			SetAuthorPlaced	(BOOL b){m_CO_Flags.set(flAuthorPlaced, b);}
+    IC BOOL			IsBaseRemoved	()const {return m_CO_Flags.is(flBaseRemoved);}
+    IC void			SetBaseRemoved	(BOOL b){m_CO_Flags.set(flBaseRemoved, b);}
 
 	// editor integration
     virtual bool	Validate		(bool bMsg){return true;}

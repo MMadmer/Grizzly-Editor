@@ -17,7 +17,7 @@ What it proves:
      answers the path it would select (dry run); the toolbar's Add is off, saying why, on a
      read-only source and on in the project; with --shots the Add menu is captured
 
-    python tools/qa/test_asset_icons.py --project D:\\XFinedProjects\\Test [--shots <folder>]
+    python tools/qa/test_asset_icons.py --project <project> [--shots <folder>]
 """
 from __future__ import annotations
 
@@ -284,7 +284,7 @@ def main() -> int:
     if not os.path.isdir(src):
         print("no such project: " + src)
         return 2
-    work = tempfile.mkdtemp(prefix="xfined_iconsproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_iconsproj_")
     copy = os.path.join(work, "QaIcons")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git"))
     print("running against a copy: " + copy, flush=True)

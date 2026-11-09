@@ -77,6 +77,12 @@ private:
 	Fvector2		m_NodeScroll, m_ActionScroll, m_GraphScroll, m_VarsScroll;
 	ImVec4			m_NodePane, m_ActionPane, m_GraphPane, m_VarsPane;
 	int				m_VarSel;		// the variable the Graph panel edits
+	// the module's global variables (mod.ltx [vars]) as the Graph panel edits them: read again
+	// when the manifest's generation moves, written back once an edit is let go of
+	xr_vector<SNqVar>	m_Globals;
+	u32				m_GlobalsGen;
+	bool			m_GlobalsDirty;
+	int				m_GlobalSel;
 	// the node and action the Details panel last showed, the frames the node pane still tries to bring
 	// the action's row into view, and whether its Actions section is still to be opened for it
 	xr_string		m_RevealKey;
@@ -113,6 +119,10 @@ private:
 	// the graph's variables, in a pane of their own: they are read and written from anywhere
 	// in the graph, so they are not a property of a node
 	void			DrawVarsSection	();
+	// the module's global variables under the graph's own: every quest and behaviour graph of
+	// the module shares them, so they are saved into mod.ltx, not into this file
+	void			DrawGlobalsSection();
+	void			SaveGlobals		();
 	void			DrawNodeSection	();
 	void			DrawActionSection();
 	void			BeginTaskRename	(LPCSTR id);
@@ -139,7 +149,7 @@ private:
 	bool			DrawPicked		(LPCSTR label, LPCSTR type, xr_string& s);
 	bool			DrawDuration	(LPCSTR label, SNqValue& v);
 	bool			DrawNpcRef		(LPCSTR label, SNqValue& v, bool target, bool kill);
-	bool			DrawObjectRef	(LPCSTR label, SNqValue& v);
+	bool			DrawObjectRef	(LPCSTR label, SNqValue& v, bool character = false);
 	bool			DrawObjectiveId	(LPCSTR label, SNqValue& v);
 	bool			DrawPlace		(LPCSTR label, SNqValue& v);
 	// the role vocabulary of a behaviour graph (NQ_ARCHITECTURE par. 19)

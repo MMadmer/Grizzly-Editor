@@ -1,6 +1,6 @@
 param(
-    [string]$WorkRoot = (Join-Path $env:TEMP 'xfined-openssl-build-3.5.7'),
-    [string]$InstallRoot = (Join-Path $env:TEMP 'xfined-openssl-install-3.5.7')
+    [string]$WorkRoot = (Join-Path $env:TEMP 'grizzly-openssl-build-3.5.7'),
+    [string]$InstallRoot = (Join-Path $env:TEMP 'grizzly-openssl-install-3.5.7')
 )
 
 $ErrorActionPreference = 'Stop'

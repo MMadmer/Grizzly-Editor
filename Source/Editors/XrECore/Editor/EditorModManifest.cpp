@@ -6,14 +6,19 @@
 #include "EditorCatalog.h"
 #include "EditorCharacters.h"
 #include "EditorWorld.h"
+#include "EditorScreens.h"
 #include "EditorPda.h"
 #include "EditorProject.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "EDX11Utils.h"
 #include "ui_main.h"
 #include "Nq/NqExport.h"
 #include "Nq/NqDoc.h"
 #include "Nq/NqUtil.h"
+#include "UI_ProgressCenter.h"
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <bcrypt.h>		// SHA-256 of a finished package
@@ -67,37 +72,6 @@ static bool ReadTextFile(const char* path, xr_string& out)
 	return true;
 }
 
-static bool WriteTextFile(const char* path, const char* text)
-{
-	HANDLE h = ::CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (h == INVALID_HANDLE_VALUE) return false;
-	DWORD wr = 0;
-	const DWORD len = (DWORD)xr_strlen(text);
-	const bool ok = !!::WriteFile(h, text, len, &wr, NULL) && wr == len;
-	::CloseHandle(h);
-	return ok;
-}
-
-// Everything the game reads as text is cp1251; ImGui hands us UTF-8. Only
-// captions travel this way - ids and keys are ascii by construction. A caption
-// that is not valid UTF-8 was written by hand in cp1251 already and is passed
-// through: converting it would turn every Cyrillic letter into '?'.
-static xr_string Utf8ToCp1251(const char* src)
-{
-	xr_string out;
-	if (!src || !src[0]) return out;
-	const int wide_len = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, src, -1, NULL, 0);
-	if (wide_len <= 0) { out = src; return out; }
-	xr_vector<wchar_t> wide(wide_len);
-	::MultiByteToWideChar(CP_UTF8, 0, src, -1, wide.data(), wide_len);
-	const int ansi_len = ::WideCharToMultiByte(1251, 0, wide.data(), -1, NULL, 0, NULL, NULL);
-	if (ansi_len <= 0) { out = src; return out; }
-	xr_vector<char> ansi(ansi_len);
-	::WideCharToMultiByte(1251, 0, wide.data(), -1, ansi.data(), ansi_len, "?", NULL);
-	out = ansi.data();
-	return out;
-}
-
 static bool HasNonAscii(const char* s)
 {
 	for (; *s; ++s)
@@ -121,20 +95,15 @@ static xr_string AnsiToUtf8(const char* src)
 	return out;
 }
 
-static xr_string XmlEscape(const char* src)
+static bool WriteTextFile(const char* path, const char* text)
 {
-	xr_string out;
-	for (const char* c = src; c && *c; ++c)
-	{
-		switch (*c)
-		{
-		case '&':	out += "&amp;";		break;
-		case '<':	out += "&lt;";		break;
-		case '>':	out += "&gt;";		break;
-		default:	out += *c;			break;
-		}
-	}
-	return out;
+	HANDLE h = ::CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (h == INVALID_HANDLE_VALUE) return false;
+	DWORD wr = 0;
+	const DWORD len = (DWORD)xr_strlen(text);
+	const bool ok = !!::WriteFile(h, text, len, &wr, NULL) && wr == len;
+	::CloseHandle(h);
+	return ok;
 }
 
 static void Trim(xr_string& s)
@@ -456,6 +425,182 @@ static bool NeedsQuotes(const xr_string& s)
 	return s[0] == ' ' || s[0] == '\t' || s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t';
 }
 
+// ---- [screens], [screen.<id>], [track.<id>] ----------------------------------------------------
+namespace EditorMod
+{
+static u32 ScreenSurfaces(const xr_string& value)
+{
+	xr_vector<xr_string> names;
+	NqUtil::Split(value.c_str(), ',', names);
+	u32 mask = 0;
+	for (xr_string& name : names)
+	{
+		Trim(name);
+		if (name == "loading")		mask |= scrLoading;
+		else if (name == "menu")	mask |= scrMenu;
+		else if (name == "pause")	mask |= scrPause;
+	}
+	return mask;
+}
+
+static xr_string ScreenSurfaceText(u32 mask)
+{
+	xr_string out;
+	if (mask & scrLoading)	out += "loading";
+	if (mask & scrMenu)		out += out.empty() ? "menu" : ", menu";
+	if (mask & scrPause)	out += out.empty() ? "pause" : ", pause";
+	return out;
+}
+
+static void ScreenList(const xr_string& value, xr_vector<xr_string>& out)
+{
+	out.clear();
+	NqUtil::Split(value.c_str(), ',', out);
+	for (xr_string& v : out)
+		Trim(v);
+}
+
+static void ParseScreensKey(SScreens& s, const xr_string& key, const xr_string& val)
+{
+	const bool only = val == "only", next = val == "next";
+	if (key == "loading_screens")			s.only_screens[0] = only;
+	else if (key == "menu_screens")			s.only_screens[1] = only;
+	else if (key == "loading_music")		s.only_music[0] = only;
+	else if (key == "menu_music")			s.only_music[1] = only;
+	else if (key == "loading_music_end")	s.next_track[0] = next;
+	else if (key == "menu_music_end")		s.next_track[1] = next;
+}
+
+static void ParseScreenKey(SScreen& s, const xr_string& key, const xr_string& val)
+{
+	if (key == "layer")
+	{
+		SScreenLayer layer;
+		layer.file = val;
+		s.layers.push_back(layer);
+	}
+	else if (key == "show")		s.show = ScreenSurfaces(val);
+	else if (key == "levels")	ScreenList(val, s.levels);
+	else if (key == "modes")	ScreenList(val, s.modes);
+	else if (key == "weight")	s.weight = float(atof(val.c_str()));
+	else if (key == "music")
+	{
+		s.tracks.clear();
+		if (val.empty() || val == "any")			s.music = "any";
+		else if (val == "none" || val == "video")	s.music = val;
+		else
+		{
+			s.music = "tracks";
+			ScreenList(val, s.tracks);
+		}
+	}
+	else if (key == "hide")
+	{
+		xr_vector<xr_string> names;
+		ScreenList(val, names);
+		s.hide = 0;
+		for (const xr_string& name : names)
+		{
+			if (name == "bar")			s.hide |= scrHideBar;
+			else if (name == "percent")	s.hide |= scrHidePercent;
+			else if (name == "stage")	s.hide |= scrHideStage;
+			else if (name == "tip")		s.hide |= scrHideTip;
+		}
+	}
+	else if (!s.layers.empty())
+	{
+		SScreenLayer& layer = s.layers.back();
+		if (key == "fit")			layer.fit = val == "contain" ? scrContain : val == "stretch" ? scrStretch : scrCover;
+		else if (key == "opacity")	layer.opacity = float(atof(val.c_str()));
+		else if (key == "rect")		sscanf_s(val.c_str(), "%f %f %f %f", &layer.x, &layer.y, &layer.w, &layer.h);
+		else if (key == "texture")	layer.texture = val;
+		else if (key == "sound")	layer.sound = !(val == "false" || val == "0" || val == "no" || val == "off");
+	}
+}
+
+static void ParseTrackKey(STrack& t, const xr_string& key, const xr_string& val)
+{
+	if (key == "file")			t.file = val;
+	else if (key == "play")		t.play = ScreenSurfaces(val);
+	else if (key == "weight")	t.weight = float(atof(val.c_str()));
+	else if (key == "volume")	t.volume = float(atof(val.c_str()));
+}
+
+static xr_string ScreenNumber(float v)
+{
+	char num[32];
+	sprintf_s(num, "%g", v);
+	return num;
+}
+
+static void AppendScreens(xr_string& t, const SScreens& s)
+{
+	const auto row = [&t](LPCSTR key, const xr_string& value)
+	{
+		xr_string line = key;
+		if (line.size() < 17) line.append(17 - line.size(), ' ');
+		t += line + " = " + value + "\r\n";
+	};
+	const auto joined = [](const xr_vector<xr_string>& v)
+	{
+		xr_string out;
+		for (const xr_string& e : v)
+			out += (out.empty() ? "" : ", ") + e;
+		return out;
+	};
+
+	if (s.only_screens[0] || s.only_screens[1] || s.only_music[0] || s.only_music[1] || s.next_track[0] || s.next_track[1])
+	{
+		t += "\r\n[screens]\r\n";
+		if (s.only_screens[0])	row("loading_screens", "only");
+		if (s.only_music[0])	row("loading_music", "only");
+		if (s.only_screens[1])	row("menu_screens", "only");
+		if (s.only_music[1])	row("menu_music", "only");
+		if (s.next_track[0])	row("loading_music_end", "next");
+		if (s.next_track[1])	row("menu_music_end", "next");
+	}
+	for (const SScreen& d : s.screens)
+	{
+		t += "\r\n[screen." + d.id + "]\r\n";
+		row("show", ScreenSurfaceText(d.show));
+		if (!d.levels.empty())		row("levels", joined(d.levels));
+		if (!d.modes.empty())		row("modes", joined(d.modes));
+		if (d.weight != 1.f)		row("weight", ScreenNumber(d.weight));
+		if (d.music == "tracks")	row("music", joined(d.tracks));
+		else if (d.music != "any")	row("music", d.music);
+		if (d.hide)
+		{
+			xr_vector<xr_string> names;
+			if (d.hide & scrHideBar)		names.push_back("bar");
+			if (d.hide & scrHidePercent)	names.push_back("percent");
+			if (d.hide & scrHideStage)		names.push_back("stage");
+			if (d.hide & scrHideTip)		names.push_back("tip");
+			row("hide", joined(names));
+		}
+		for (const SScreenLayer& l : d.layers)
+		{
+			row("layer", l.file);
+			if (l.fit == scrContain)		row("fit", "contain");
+			else if (l.fit == scrStretch)	row("fit", "stretch");
+			if (l.opacity != 1.f)			row("opacity", ScreenNumber(l.opacity));
+			if (l.x != 0.f || l.y != 0.f || l.w != 100.f || l.h != 100.f)
+				row("rect", ScreenNumber(l.x) + " " + ScreenNumber(l.y) + " " + ScreenNumber(l.w) + " " + ScreenNumber(l.h));
+			if (!l.texture.empty())			row("texture", l.texture);
+			if (!l.sound)					row("sound", "false");
+		}
+	}
+	for (const STrack& d : s.tracks)
+	{
+		t += "\r\n[track." + d.id + "]\r\n";
+		row("file", d.file);
+		if (d.play)				row("play", ScreenSurfaceText(d.play));
+		if (d.weight != 1.f)	row("weight", ScreenNumber(d.weight));
+		if (d.volume != 1.f)	row("volume", ScreenNumber(d.volume));
+	}
+}
+
+}
+
 bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 {
 	m = SManifest();
@@ -468,8 +613,11 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 	// the same reading the game gives the file
 	text = NqUtil::GameTextToUtf8(text.data(), (u32)text.size());
 
-	enum ESec { secNone, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secWorld, secPda, secExtra };
+	enum ESec { secNone, secScreens, secScreen, secTrack, secModule, secRequires, secOrder, secConflicts, secProvides, secUpdate, secExclude, secWorld, secStartKit, secPda, secVars,
+		secCommands, secCommand, secExtra };
 	ESec sec = secNone;
+	// the command a [command.<name>] section describes: the first of that name, or one made for it
+	u32 command = 0;
 
 	size_t pos = 0;
 	while (pos <= text.size())
@@ -500,13 +648,110 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 			else if (sn == "update")		sec = secUpdate;
 			else if (sn == "exclude")		sec = secExclude;
 			else if (sn == "world")			sec = secWorld;
+			else if (sn == "start_kit")		{ sec = secStartKit; m.start_kit.declared = true; }
 			else if (sn == "pda")			sec = secPda;
+			else if (sn == "vars")			sec = secVars;
+			else if (sn == "commands")		sec = secCommands;
+			else if (sn == "screens")		sec = secScreens;
+			else if (sn.size() > 7 && 0 == sn.compare(0, 7, "screen."))
+			{
+				sec = secScreen;
+				SScreen s;
+				s.id = sn.substr(7);
+				m.screens.screens.push_back(s);
+			}
+			else if (sn.size() > 6 && 0 == sn.compare(0, 6, "track."))
+			{
+				sec = secTrack;
+				STrack s;
+				s.id = sn.substr(6);
+				m.screens.tracks.push_back(s);
+			}
+			else if (sn.size() > 8 && 0 == sn.compare(0, 8, "command."))
+			{
+				sec = secCommand;
+				const xr_string name = sn.substr(8);
+				for (command = 0; command < m.commands.size(); ++command)
+					if (0 == _stricmp(m.commands[command].name.c_str(), name.c_str())) break;
+				if (command == m.commands.size())
+				{
+					SCommand c;
+					c.name = name;
+					c.declared = false;
+					m.commands.push_back(c);
+				}
+			}
 			else { sec = secExtra; m.extra.push_back(raw); }
 			continue;
 		}
 		if (sec == secExtra) { if (!raw.empty()) m.extra.push_back(raw); continue; }
 		if (line.empty()) continue;
 
+		if (sec == secScreens || sec == secScreen || sec == secTrack)
+		{
+			xr_string key = line, val;
+			const size_t eq = line.find('=');
+			if (eq != xr_string::npos) { key = line.substr(0, eq); val = line.substr(eq + 1); }
+			Trim(key); Trim(val);
+			if (sec == secScreens)		ParseScreensKey(m.screens, key, val);
+			else if (sec == secScreen)	ParseScreenKey(m.screens.screens.back(), key, val);
+			else						ParseTrackKey(m.screens.tracks.back(), key, val);
+			continue;
+		}
+
+		if (sec == secCommands)
+		{
+			// every line is a command of its own: a name declared twice stays twice, for the check to name it
+			const size_t eq = line.find('=');
+			xr_string name = eq == xr_string::npos ? line : line.substr(0, eq);
+			xr_string value = eq == xr_string::npos ? xr_string() : line.substr(eq + 1);
+			Trim(name); Trim(value);
+			if (name.empty()) continue;
+			// a [command.<name>] section read before its line already made the entry
+			bool merged = false;
+			for (SCommand& c : m.commands)
+				if (!c.declared && 0 == _stricmp(c.name.c_str(), name.c_str()))
+				{
+					c.name = name;
+					c.function = value;
+					c.declared = true;
+					merged = true;
+					break;
+				}
+			if (!merged)
+			{
+				SCommand c;
+				c.name = name;
+				c.function = value;
+				m.commands.push_back(c);
+			}
+			continue;
+		}
+		if (sec == secCommand)
+		{
+			xr_string key = line, val;
+			const size_t eq = line.find('=');
+			if (eq != xr_string::npos) { key = line.substr(0, eq); val = line.substr(eq + 1); }
+			Trim(key); Trim(val);
+			SCommand& c = m.commands[command];
+			if      (key == "help")		{ if (!Unquote(val, c.help)) c.help = val; }
+			else if (key == "args")		{ if (!Unquote(val, c.args)) c.args = val; }
+			else if (key == "cheat")	c.cheat = !_stricmp(val.c_str(), "true") || val == "1" || !_stricmp(val.c_str(), "yes") || !_stricmp(val.c_str(), "on");
+			else						c.extra.push_back(line);
+			continue;
+		}
+
+		if (sec == secVars)
+		{
+			// the default stays as written: the quests read its type from it
+			SGlobalVar gv;
+			const size_t eq = line.find('=');
+			gv.name = eq == xr_string::npos ? line : line.substr(0, eq);
+			if (eq != xr_string::npos) gv.value = line.substr(eq + 1);
+			Trim(gv.name); Trim(gv.value);
+			if (!gv.name.empty()) m.vars.push_back(gv);
+			continue;
+		}
 		if (sec == secPda)
 		{
 			xr_string key = line, val;
@@ -532,6 +777,7 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 				else if (key == "author")		{ if (!Unquote(val, m.author)) m.author = val; }
 				else if (key == "description")	{ if (!Unquote(val, m.description)) m.description = val; }
 				else if (key == "website")		m.website = val;
+				else if (key == "disable_game_updates")	m.disable_game_updates = val == "true" || val == "1";
 				else if (key == "thumbnail")	m.thumbnail = val;
 				else if (key == "tags")			SplitList(m.tags, val.c_str(), ',');
 				else if (key == "api")			m.api = val;
@@ -593,6 +839,25 @@ bool EditorMod::Load(LPCSTR project_root, SManifest& m)
 				}
 			}
 			else w.extra.push_back(line);
+		}
+		else if (sec == secStartKit)
+		{
+			// DA's own loadout format (plugins\faction_loadouts.ltx): a bare section is one
+			// of it, `section = N` is N, money and perks are the two words that are not items
+			xr_string key = line, val;
+			const size_t eq = line.find('=');
+			if (eq != xr_string::npos) { key = line.substr(0, eq); val = line.substr(eq + 1); }
+			Trim(key); Trim(val);
+			SStartKit& k = m.start_kit;
+			if (key == "money")			k.money = _max(0, atoi(val.c_str()));
+			else if (key == "perks")	k.perks = !(val == "false" || val == "0" || val == "no" || val == "off");
+			else if (!key.empty())
+			{
+				SKitItem it;
+				it.section = key;
+				it.count = val.empty() ? 1 : atoi(val.c_str());
+				k.items.push_back(it);
+			}
 		}
 	}
 	return true;
@@ -673,6 +938,8 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		AppendText(t, "description", m.description, true);
 	if (!m.website.empty())
 		AppendKey(t, "website", m.website.c_str());
+	if (m.disable_game_updates)
+		AppendKey(t, "disable_game_updates", "true");
 	if (!m.thumbnail.empty())
 		AppendKey(t, "thumbnail", m.thumbnail.c_str());
 	if (!m.tags.empty())
@@ -750,6 +1017,36 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 		for (u32 i = 0; i < w.extra.size(); ++i)
 			{ t += w.extra[i]; t += "\r\n"; }
 	}
+	// what a new game of the mode begins with: money and perks, then the items in the
+	// author's order. An item section may be longer than AppendKey's pad buffer takes.
+	if (m.start_kit.declared)
+	{
+		const SStartKit& k = m.start_kit;
+		t += "\r\n[start_kit]\r\n";
+		auto line = [&t](const xr_string& key, int value)
+		{
+			xr_string row = key;
+			if (row.size() < (size_t)kWorldKeyWidth) row.append(kWorldKeyWidth - row.size(), ' ');
+			char num[16];
+			sprintf_s(num, "%d", value);
+			t += row + " = " + num + "\r\n";
+		};
+		if (k.money >= 0)	line("money", k.money);
+		if (!k.perks)		AppendKey(t, "perks", "false", kWorldKeyWidth);
+		for (u32 i = 0; i < k.items.size(); ++i)
+			if (!k.items[i].section.empty()) line(k.items[i].section, k.items[i].count);
+	}
+	// the global variables every quest of the module shares
+	if (!m.vars.empty())
+	{
+		t += "\r\n[vars]\r\n";
+		for (u32 i = 0; i < m.vars.size(); ++i)
+		{
+			xr_string row = m.vars[i].name;
+			if (row.size() < (size_t)kWorldKeyWidth) row.append(kWorldKeyWidth - row.size(), ' ');
+			t += row + " = " + m.vars[i].value + "\r\n";
+		}
+	}
 	// the module's own PDA interface (EditorPda)
 	if (!m.pda_layout.empty() || !m.pda_extra.empty())
 	{
@@ -758,6 +1055,38 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 			AppendKey(t, "layout", m.pda_layout.c_str());
 		for (u32 i = 0; i < m.pda_extra.size(); ++i)
 			{ t += m.pda_extra[i]; t += "\r\n"; }
+	}
+	AppendScreens(t, m.screens);
+	// the console commands: the list, then the details of each in a section of its own
+	bool any_declared = false;
+	for (const SCommand& c : m.commands)
+		if (c.declared) any_declared = true;
+	if (any_declared)
+	{
+		t += "\r\n[commands]\r\n";
+		for (const SCommand& c : m.commands)
+		{
+			if (!c.declared) continue;
+			xr_string row = c.name;
+			if (row.size() < (size_t)kWorldKeyWidth) row.append(kWorldKeyWidth - row.size(), ' ');
+			t += row + " = " + c.function + "\r\n";
+		}
+	}
+	for (u32 i = 0; i < m.commands.size(); ++i)
+	{
+		const SCommand& c = m.commands[i];
+		if (c.name.empty() || (c.help.empty() && c.args.empty() && !c.cheat && c.extra.empty())) continue;
+		// a name declared twice has one section: the first entry's
+		bool first = true;
+		for (u32 k = 0; k < i && first; ++k)
+			first = 0 != _stricmp(m.commands[k].name.c_str(), c.name.c_str());
+		if (!first) continue;
+		t += "\r\n[command." + c.name + "]\r\n";
+		if (!c.help.empty())	AppendText(t, "help", c.help, false);
+		if (!c.args.empty())	AppendText(t, "args", c.args, false);
+		if (c.cheat)			AppendKey(t, "cheat", "true");
+		for (u32 k = 0; k < c.extra.size(); ++k)
+			{ t += c.extra[k]; t += "\r\n"; }
 	}
 	if (!m.extra.empty())
 	{
@@ -777,6 +1106,246 @@ bool EditorMod::Save(LPCSTR project_root, const SManifest& m)
 u32 EditorMod::ManifestGeneration()
 {
 	return s_ManifestGeneration;
+}
+
+// The global variables as mod.ltx declares them now. A quest is validated on every edit, so
+// this reads the file once per manifest generation (a save of the manifest bumps it) and per
+// project, never per call.
+static xr_vector<EditorMod::SGlobalVar>	s_GlobalVars;
+static u32								s_GlobalsGen = u32(-1);
+static xr_string						s_GlobalsRoot;
+
+void EditorMod::InvalidateGlobals()
+{
+	s_GlobalsGen = u32(-1);
+}
+
+const xr_vector<EditorMod::SGlobalVar>& EditorMod::ProjectGlobals()
+{
+	xr_vector<SGlobalVar>& s_Vars = s_GlobalVars;
+	u32& s_Gen = s_GlobalsGen;
+	xr_string& s_Root = s_GlobalsRoot;
+	const xr_string root = EditorProject::Active() ? xr_string(EditorProject::Root()) : xr_string();
+	if (s_Gen == s_ManifestGeneration && s_Root == root) return s_Vars;
+	s_Gen = s_ManifestGeneration;
+	s_Root = root;
+	s_Vars.clear();
+	SManifest m;
+	if (!root.empty() && Load(root.c_str(), m)) s_Vars = m.vars;
+	return s_Vars;
+}
+
+bool EditorMod::ValidGlobalName(LPCSTR name)
+{
+	if (!name || !name[0]) return false;
+	for (LPCSTR p = name; *p; ++p)
+		if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') || *p == '_'))
+			return false;
+	return true;
+}
+
+//------------------------------------------------------------------------------
+// console commands ([commands]); the game half is XmsGame::RegisterModuleCommands
+//------------------------------------------------------------------------------
+static bool IdentStart(char c)	{ return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+static bool IdentChar(char c)	{ return IdentStart(c) || (c >= '0' && c <= '9'); }
+
+// the game's limits: 64 for a name, 128 for <script>.<function>
+bool EditorMod::ValidCommandName(LPCSTR name)
+{
+	if (!name || !name[0] || xr_strlen(name) > 64) return false;
+	for (LPCSTR p = name; *p; ++p)
+		if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_'))
+			return false;
+	return true;
+}
+
+bool EditorMod::ValidCommandFunction(LPCSTR spec)
+{
+	if (!spec || xr_strlen(spec) > 128) return false;
+	LPCSTR p = spec;
+	for (int part = 0; part < 2; ++part)
+	{
+		if (!IdentStart(*p)) return false;
+		while (IdentChar(*p)) ++p;
+		if (part == 0 && *p++ != '.') return false;
+	}
+	return *p == 0;
+}
+
+// `function name(` or `name = function(` at the start of a line: what the script's table keeps.
+// `local function` stays inside the script; `function a.b(` and `function a:b(` belong to a table.
+static void ScanScriptFunctions(const xr_string& text, const xr_string& script, xr_vector<xr_string>& out)
+{
+	for (size_t pos = 0; pos < text.size();)
+	{
+		size_t nl = text.find('\n', pos);
+		if (nl == xr_string::npos) nl = text.size();
+		LPCSTR p = text.c_str() + pos;
+		LPCSTR const e = text.c_str() + nl;
+		pos = nl + 1;
+		while (p < e && (*p == ' ' || *p == '\t')) ++p;
+		const bool keyword = e - p > 9 && 0 == strncmp(p, "function", 8) && (p[8] == ' ' || p[8] == '\t');
+		if (keyword) p += 9;
+		while (p < e && (*p == ' ' || *p == '\t')) ++p;
+		if (p >= e || !IdentStart(*p)) continue;
+		LPCSTR const name = p;
+		while (p < e && IdentChar(*p)) ++p;
+		xr_string fn;
+		fn.append(name, size_t(p - name));
+		while (p < e && (*p == ' ' || *p == '\t')) ++p;
+		if (!keyword)
+		{
+			if (p >= e || *p != '=' || (p + 1 < e && p[1] == '=')) continue;
+			++p;
+			while (p < e && (*p == ' ' || *p == '\t')) ++p;
+			if (e - p < 8 || 0 != strncmp(p, "function", 8)) continue;
+			p += 8;
+			while (p < e && (*p == ' ' || *p == '\t')) ++p;
+		}
+		if (p < e && *p == '(')
+			out.push_back(script + "." + fn);
+	}
+}
+
+void EditorMod::ScriptFunctions(LPCSTR project_root, xr_vector<xr_string>& out)
+{
+	out.clear();
+	if (!project_root || !project_root[0]) return;
+	// the game's script namespaces are the files right in scripts\, never a folder below it
+	string_path mask;
+	sprintf_s(mask, "%s\\gamedata\\scripts\\*.script", project_root);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA(mask, &fd);
+	if (INVALID_HANDLE_VALUE == h) return;
+	do
+	{
+		const xr_string file = fd.cFileName;
+		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || file.size() <= 7 || 0 != _stricmp(file.c_str() + file.size() - 7, ".script"))
+			continue;
+		const xr_string rel = "gamedata\\scripts\\" + file;
+		if (OutsideBuild(project_root, rel.c_str())) continue;
+		xr_string text;
+		if (ReadTextFile((xr_string(project_root) + "\\" + rel).c_str(), text))
+			ScanScriptFunctions(text, file.substr(0, file.size() - 7), out);
+	} while (::FindNextFileA(h, &fd));
+	::FindClose(h);
+	std::sort(out.begin(), out.end());
+	out.erase(std::unique(out.begin(), out.end()), out.end());
+}
+
+// The game finds the script by its file name, the function by its exact name.
+static bool HasScriptFunction(const xr_vector<xr_string>& functions, const xr_string& spec)
+{
+	const size_t dot = spec.find('.');
+	if (dot == xr_string::npos) return false;
+	for (const xr_string& f : functions)
+		if (f.find('.') == dot && 0 == _strnicmp(f.c_str(), spec.c_str(), dot) && f.compare(dot, xr_string::npos, spec, dot, xr_string::npos) == 0)
+			return true;
+	return false;
+}
+
+void EditorMod::InstalledCommands(LPCSTR self_id, xr_vector<std::pair<xr_string, xr_string> >& out)
+{
+	out.clear();
+	LPCSTR game = EditorProject::GameRoot();
+	if (!game || !game[0]) return;
+	// the two roots the game reads modules from
+	static const char* kRoots[] = { "modules", "mods" };
+	for (LPCSTR root : kRoots)
+	{
+		string_path mask;
+		sprintf_s(mask, "%s\\%s\\*", game, root);
+		WIN32_FIND_DATAA fd;
+		HANDLE h = ::FindFirstFileA(mask, &fd);
+		if (INVALID_HANDLE_VALUE == h) continue;
+		do
+		{
+			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+			string_path dir;
+			sprintf_s(dir, "%s\\%s\\%s", game, root, fd.cFileName);
+			SManifest other;
+			if (!Load(dir, other)) continue;
+			const xr_string id = other.id.empty() ? xr_string(fd.cFileName) : other.id;
+			if (self_id && 0 == _stricmp(id.c_str(), self_id)) continue;
+			for (const SCommand& c : other.commands)
+				if (c.declared) out.emplace_back(c.name, id);
+		} while (::FindNextFileA(h, &fd));
+		::FindClose(h);
+	}
+}
+
+// The game's own command families and short words a module could pick (the engine registers ~1000
+// commands; these are the ones a mod's name runs into). A family only warns, a word is refused.
+static bool StockCommandWord(LPCSTR name)
+{
+	static const char* kWords[] = { "bind", "chat", "disconnect", "flush", "fov", "help", "hide", "load", "name", "nq", "quit",
+		"renderer", "save", "screenshot", "start", "unbind", "unbindall", "cfg_save", "cfg_load", "main_menu", "run_string",
+		"time_factor", "default_controls" };
+	for (LPCSTR w : kWords)
+		if (0 == strcmp(name, w)) return true;
+	return false;
+}
+
+static LPCSTR StockCommandFamily(LPCSTR name)
+{
+	static const char* kFamilies[] = { "xms_", "r_", "r1_", "r2_", "r3_", "r4_", "r__", "rs_", "g_", "sv_", "cl_", "net_", "dbg_",
+		"debug_", "ai_", "al_", "ph_", "hud_", "snd_", "vid_", "mm_", "mt_", "dar_", "cam_", "ui_", "inv_", "lua_", "gamepad_",
+		"demo_", "stat_", "bind_", "unbind_" };
+	for (LPCSTR f : kFamilies)
+		if (0 == strncmp(name, f, xr_strlen(f))) return f;
+	return 0;
+}
+
+void EditorMod::ValidateCommands(LPCSTR project_root, const SManifest& m, xr_vector<xr_string>& problems)
+{
+	if (m.commands.empty()) return;
+	xr_vector<xr_string> functions;
+	ScriptFunctions(project_root, functions);
+	xr_vector<std::pair<xr_string, xr_string> > taken;
+	InstalledCommands(m.id.c_str(), taken);
+	for (u32 i = 0; i < m.commands.size(); ++i)
+	{
+		const SCommand& c = m.commands[i];
+		const xr_string where = "commands: '" + c.name + "'";
+		if (!c.declared)
+		{
+			problems.push_back("E405 " + where + ": [command." + c.name + "] describes a command [commands] does not declare - "
+				"add its line or remove the section");
+			continue;
+		}
+		if (!ValidCommandName(c.name.c_str()))
+			problems.push_back("E401 " + where + " is not a console command name - a-z, 0-9 and _ only, 64 at most");
+		else if (StockCommandWord(c.name.c_str()))
+			problems.push_back("E406 " + where + " is a command of the game - it keeps its own and refuses this one");
+		else if (LPCSTR family = StockCommandFamily(c.name.c_str()))
+			problems.push_back("W406 " + where + " is named like the game's own " + family + "* commands - if the game has "
+				"one of that name, it keeps it and refuses this one");
+		for (u32 k = 0; k < i; ++k)
+			if (m.commands[k].declared && 0 == _stricmp(m.commands[k].name.c_str(), c.name.c_str()))
+			{
+				problems.push_back("E402 " + where + " is declared twice - the game takes the first line and refuses this one");
+				break;
+			}
+		if (!ValidCommandFunction(c.function.c_str()))
+			problems.push_back("E403 " + where + " calls '" + c.function + "' - it takes <script>.<function>, e.g. my_mod.status");
+		else if (!HasScriptFunction(functions, c.function))
+		{
+			const xr_string script = c.function.substr(0, c.function.find('.'));
+			problems.push_back("E404 " + where + ": gamedata\\scripts\\" + script + ".script has no function " +
+				c.function.substr(script.size() + 1) + "( - the game would find nothing to call");
+		}
+		for (const std::pair<xr_string, xr_string>& t : taken)
+			if (0 == _stricmp(t.first.c_str(), c.name.c_str()))
+			{
+				problems.push_back("W407 " + where + " is a command of module '" + t.second + "' of the linked game too - "
+					"the one that loads first keeps it");
+				break;
+			}
+		xr_string bad;
+		if (!NqUtil::Cp1251Covers(c.help + c.args, bad))
+			problems.push_back("W408 " + where + ": the help or the arguments hold " + bad + ", which the console shows as '?'");
+	}
 }
 
 //------------------------------------------------------------------------------
@@ -992,6 +1561,55 @@ void EditorMod::EnsureScaffold(LPCSTR project_root, LPCSTR project_name)
 // export
 //------------------------------------------------------------------------------
 // ---- the build walk ---------------------------------------------------------
+// What a job's thread reports, and what it is told. The thread touches nothing of the editor: the log belongs to the
+// main thread as well, so its lines wait here.
+enum { kStepCheck, kStepCopy, kStepFinish };
+
+static struct SJobFeed
+{
+	std::mutex				lock;
+	std::atomic<bool>		cancel			{ false };
+	int						step			= kStepCheck;
+	xr_string				stage, file;
+	u64						done			= 0;
+	u64						total			= 0;
+	u32						files			= 0;
+	u32						files_total		= 0;
+	u32						counted_from	= 0;	// when `done` started to count: how fast it goes, how long is left
+	xr_vector<xr_string>	log;
+
+	bool Cancelled() const { return cancel; }
+
+	void Stage(int at, LPCSTR text, u64 bytes = 0, u32 count = 0)
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		step			= at;
+		stage			= text;
+		file.clear();
+		done			= 0;
+		total			= bytes;
+		files			= 0;
+		files_total		= count;
+		counted_from	= ::GetTickCount();
+	}
+	void Add(u64 bytes)
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		done += bytes;
+	}
+	void File(const xr_string& rel)
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		file = rel;
+		++files;
+	}
+	void Note(const xr_string& line)
+	{
+		std::lock_guard<std::mutex> guard(lock);
+		log.push_back(line);
+	}
+} s_Feed;
+
 // What a build ships, as ONE list made before anything is written. A clean build
 // has to know what it will write to tell what in the target it would throw away,
 // and the author is told what the walk passed by: a folder that silently did not
@@ -1000,6 +1618,9 @@ struct SBuildFile
 {
 	xr_string	src;		// absolute
 	xr_string	rel;		// project-relative, '\\'
+	u64			size	= 0;
+	FILETIME	written	= {};
+	bool		reuse	= false;	// the last build holds this very file
 };
 
 struct SBuildWalk
@@ -1021,10 +1642,6 @@ struct SBuildWalk
 			return true;
 		// authoring help beside the patches, not content
 		if (0 == _stricmp(name, "_readme.txt") && 0 == _strnicmp(rel.c_str(), "patch\\", 6))
-			return true;
-		// a character's source, like an .object in rawdata: the game reads the files the
-		// build generates from it, never the asset itself
-		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && NqUtil::Extension(name) == ".npcasset")
 			return true;
 		// an author key file is a secret: whoever has it publishes updates in the author's name
 		if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && NqUtil::Extension(name) == ".xkey")
@@ -1051,6 +1668,7 @@ struct SBuildWalk
 
 	void Walk(const xr_string& rel_dir)
 	{
+		if (s_Feed.Cancelled())	return;
 		const xr_string dir = rel_dir.empty() ? root : root + "\\" + rel_dir;
 		if (dir.size() + 3 >= sizeof(string_path))	return;
 		string_path mask;
@@ -1071,24 +1689,44 @@ struct SBuildWalk
 			SBuildFile f;
 			f.rel = rel;
 			f.src = root + "\\" + rel;
+			f.size = (u64(fd.nFileSizeHigh) << 32) | fd.nFileSizeLow;
+			f.written = fd.ftLastWriteTime;
 			files.push_back(f);
 		} while (::FindNextFileA(h, &fd));
 		::FindClose(h);
 	}
 };
 
+static DWORD CALLBACK CopyProgress(LARGE_INTEGER, LARGE_INTEGER sent, LARGE_INTEGER, LARGE_INTEGER,
+								   DWORD, DWORD, HANDLE, HANDLE, LPVOID data)
+{
+	u64& counted = *(u64*)data;
+	s_Feed.Add(u64(sent.QuadPart) - counted);
+	counted = u64(sent.QuadPart);
+	return s_Feed.Cancelled() ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
+}
+
 // Writes the walked files below `dst`; `strip` leading characters of each relative
 // path are dropped (the flat overlay copies gamedata\\ into its own root)
-static int CopyBuildFiles(const SBuildWalk& walk, LPCSTR dst, size_t strip)
+// A file that cannot be written fails the build (`err`): a module short of a file would
+// go out as a release whose index says it is complete. A file marked `reuse` is linked
+// from `reuse_from`, where the last build left it: the build then costs neither the
+// time nor the second copy on the disk.
+static int CopyBuildFiles(const SBuildWalk& walk, LPCSTR dst, size_t strip, LPCSTR reuse_from, xr_string& err)
 {
 	int copied = 0;
 	xr_string made;		// the last folder created - files come in folder order
 	for (u32 i = 0; i < walk.files.size(); ++i)
 	{
+		if (s_Feed.Cancelled()) { err = "cancelled"; break; }
 		const SBuildFile& f = walk.files[i];
 		const xr_string rel = f.rel.substr(_min(strip, f.rel.size()));
 		const xr_string to = xr_string(dst) + "\\" + rel;
-		if (to.size() >= sizeof(string_path))	continue;
+		if (to.size() >= sizeof(string_path))
+		{
+			err = "the path is too long for the target folder: " + rel;
+			break;
+		}
 		const size_t cut = to.rfind('\\');
 		const xr_string folder = to.substr(0, cut);
 		if (folder != made)
@@ -1096,8 +1734,24 @@ static int CopyBuildFiles(const SBuildWalk& walk, LPCSTR dst, size_t strip)
 			CreateDirChain(folder.c_str());
 			made = folder;
 		}
-		if (::CopyFileA(f.src.c_str(), to.c_str(), FALSE))	++copied;
-		else Msg("! [XMS] build: cannot copy %s (error %u)", f.rel.c_str(), ::GetLastError());
+		s_Feed.File(rel);
+		if (f.reuse && ::CreateHardLinkA(to.c_str(), (xr_string(reuse_from) + "\\" + rel).c_str(), NULL))
+		{
+			s_Feed.Add(f.size);
+			++copied;
+			continue;
+		}
+		u64 counted = 0;
+		if (::CopyFileExA(f.src.c_str(), to.c_str(), &CopyProgress, &counted, NULL, 0))
+		{
+			++copied;
+			continue;
+		}
+		const DWORD code = ::GetLastError();
+		if (ERROR_REQUEST_ABORTED == code) { err = "cancelled"; break; }
+		s_Feed.Note(NqUtil::Format("! [XMS] build: cannot copy %s (error %u)", f.rel.c_str(), code));
+		err = NqUtil::Format("cannot copy %s (error %u)", f.rel.c_str(), code);
+		break;
 	}
 	return copied;
 }
@@ -1181,299 +1835,6 @@ static bool InsideGameGamedata(LPCSTR path)
 	return 0 == _strnicmp(path, guard, n) && (path[n] == 0 || path[n] == '\\');
 }
 
-// A module that brings its OWN game mode has to put the checkbox on the
-// new-game screen itself - the engine cannot, that screen is built in Lua by
-// the game. Generated files do it, one set per module however many modes it
-// declares:
-//
-//   gamedata\configs\ui\<module id>_modes<aspect>.xml   the module's own layout
-//                                   with the checkboxes and their captions, one
-//                                   per aspect-ratio variant of the screen
-//   gamedata\configs\text\rus\<module id>_modes.xml   the captions
-//   scripts\mode_register.script    creates the controls at runtime and writes
-//                                   the [character_creation] keys the engine
-//                                   turns back into active XMS modes
-//
-// The names carry the module, not the mode: renaming a mode rewrites the same
-// files instead of leaving a stale checkbox behind in the project. The layouts
-// and the string table land in the game's shared namespace, which is why they
-// carry the module id - two modules must not fight over one file. The legacy
-// patch\xms_modes.xmlp is only cleaned up.
-//
-// mode_register is the name the engine reserves for generated startup code;
-// scripts\register.script stays the author's own and is never touched here.
-//
-// Written only when the manifest declares a mode; a module targeting an
-// existing mode needs none of it.
-void EditorMod::GetOwnedFiles(LPCSTR project_root, xr_vector<xr_string>& rel)
-{
-	rel.push_back("mod.ltx");
-	rel.push_back("patch\\xms_modes.xmlp");	// legacy generator output, still cleaned
-	rel.push_back("scripts\\mode_register.script");
-	// these carry the module id (they land in the game's shared namespace) -
-	// resolve it from the manifest on disk
-	SManifest m;
-	if (project_root && Load(project_root, m) && !m.id.empty())
-	{
-		rel.push_back(xr_string("gamedata\\configs\\text\\rus\\") + m.id + "_modes.xml");
-		rel.push_back(xr_string("gamedata\\configs\\ui\\") + m.id + "_modes.xml");
-		rel.push_back(xr_string("gamedata\\configs\\ui\\") + m.id + "_modes_16.xml");
-		// the generated half of every character: hidden from the browser and
-		// removed with the last .npcasset, exactly like the mode files above
-		EditorCharacters::GeneratedFiles(m.id.c_str(), rel);
-	}
-}
-
-static bool WriteModeRegistration(LPCSTR project_root, const EditorMod::SManifest& m, xr_string& err)
-{
-	// A declaration that is GONE has to take its generated files with it:
-	// they are hidden from the browser, so nothing else would ever remove
-	// them, and a stale invisible xmlp still puts a checkbox in the game.
-	if (m.provides_modes.empty())
-	{
-		string_path stale;
-		sprintf_s(stale, "%s\\patch\\xms_modes.xmlp", project_root);
-		if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
-		sprintf_s(stale, "%s\\scripts\\mode_register.script", project_root);
-		if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
-		if (!m.id.empty())
-		{
-			sprintf_s(stale, "%s\\gamedata\\configs\\text\\rus\\%s_modes.xml", project_root, m.id.c_str());
-			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
-			sprintf_s(stale, "%s\\gamedata\\configs\\ui\\%s_modes.xml", project_root, m.id.c_str());
-			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
-			sprintf_s(stale, "%s\\gamedata\\configs\\ui\\%s_modes_16.xml", project_root, m.id.c_str());
-			if (::DeleteFileA(stale)) Msg("* [XMS] mode declaration gone - removed %s", stale);
-		}
-		return true;
-	}
-
-	// Never trust the manifest here: it may have been hand-written or made by
-	// an older build, and these ids become file names, XML node names and Lua
-	// identifiers. An id like "..\..\x" or one with a quote in it would write
-	// outside the project or emit a file the game cannot parse.
-	xr_vector<EditorMod::SProvidesMode> modes;
-	for (u32 i = 0; i < m.provides_modes.size(); ++i)
-	{
-		const xr_string& id = m.provides_modes[i].id;
-		if (id.empty()) continue;
-		if (!EditorMod::ValidateModeId(id.c_str()) || id.size() > 64)
-		{
-			err  = "invalid declared mode id '" + id + "' (allowed: a-z 0-9 _ . -, up to 64 chars)";
-			return false;
-		}
-		modes.push_back(m.provides_modes[i]);
-	}
-	if (modes.empty()) return true;
-
-	string_path path;
-	xr_string body;
-	body.resize(8192);
-
-	// ---- xml: the module's OWN layout files with the fallback checkboxes ----
-	// The primary path needs no xml at all (the Refined dropdown builds its
-	// row in code); these files exist for the checkbox FALLBACK on installs
-	// without that layer. They are the module's own files - the screen's xml
-	// is never patched, so nothing here can fight the game's (or Refined's)
-	// idea of where the frame sits. Coordinates come from measuring the
-	// layout the linked game really ships, one file per aspect variant; the
-	// engine picks the _16 one on wide screens automatically.
-	static const char* kLayouts[]  = { "ui_mm_faction_select_16.xml", "ui_mm_faction_select.xml" };
-	static const char* kSuffixes[] = { "_16", "" };
-	int targets = 0;
-	for (int t = 0; t < 2; ++t)
-	{
-		string_path rel;
-		sprintf_s(rel, "configs\\ui\\%s", kLayouts[t]);
-		EditorGameModes::SSlot slot;
-		xr_string slot_err;
-		if (!EditorGameModes::SuggestSlot(rel, (int)modes.size(), m.id.c_str(), slot, slot_err))
-			continue;
-		++targets;
-
-		xr_string ui = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n<w>\r\n";
-		for (u32 i = 0; i < modes.size(); ++i)
-		{
-			const xr_string node	= "check_" + modes[i].id + "_mode";
-			const xr_string string_id = "st_cap_" + node;
-			const int dy = int(i) * slot.step;
-			sprintf_s(&body[0], body.size(),
-				"\t<cap_%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
-				"\t\t<text r=\"170\" g=\"170\" b=\"170\" font=\"letterica16\" align=\"l\" vert_align=\"c\">%s</text>\r\n"
-				"\t</cap_%s>\r\n"
-				"\t<%s x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" stretch=\"1\">\r\n"
-				"\t</%s>\r\n",
-				node.c_str(), slot.cap_x, slot.cap_y + dy, slot.cap_w, slot.cap_h,
-				string_id.c_str(), node.c_str(),
-				node.c_str(), slot.check_x, slot.check_y + dy, slot.check_w, slot.check_h,
-				node.c_str());
-			ui += body.c_str();
-		}
-		ui += "</w>\r\n";
-
-		sprintf_s(path, "%s\\gamedata\\configs\\ui", project_root);
-		CreateDirChain(path);
-		sprintf_s(path, "%s\\gamedata\\configs\\ui\\%s_modes%s.xml", project_root, m.id.c_str(), kSuffixes[t]);
-		if (!WriteTextFile(path, ui.c_str())) { err = "cannot write the mode layout xml"; return false; }
-	}
-	if (!targets)
-	{
-		err = "the linked game has no new-game screen layout - nowhere to put the mode checkbox";
-		return false;
-	}
-
-	// the old generator emitted a patch against the screen's xml; a stale one
-	// would still move the frame around, so it dies here
-	{
-		string_path stale;
-		sprintf_s(stale, "%s\\patch\\xms_modes.xmlp", project_root);
-		if (::DeleteFileA(stale)) Msg("* [XMS] legacy xms_modes.xmlp removed - the fallback uses the module's own layout now");
-	}
-
-	// ---- text: what the player reads ----------------------------------------
-	// String tables are cp1251 like the rest of the game; the manifest caption
-	// comes out of ImGui as UTF-8, so it is converted on the way out.
-	xr_string strings = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n<string_table>\r\n";
-	for (u32 i = 0; i < modes.size(); ++i)
-	{
-		const xr_string& title	= modes[i].title.empty() ? modes[i].id : modes[i].title;
-		// the conversion below is lossy by design (best-fit, then '?'); an export
-		// driven from MCP never sees the field's inline warning, so say it here
-		xr_string outside;
-		if (!NqUtil::Cp1251Covers(title, outside))
-			Msg("! [XMS] mode '%s': the caption has characters outside cp1251 (%s) - the player will "
-				"see a look-alike or '?'", modes[i].id.c_str(), outside.c_str());
-		const xr_string caption	= XmlEscape(Utf8ToCp1251(title.c_str()).c_str());
-		sprintf_s(&body[0], body.size(),
-			"\t<string id=\"st_cap_check_%s_mode\">\r\n"
-			"\t\t<text>%s</text>\r\n"
-			"\t</string>\r\n",
-			modes[i].id.c_str(), caption.c_str());
-		strings += body.c_str();
-	}
-	strings += "</string_table>\r\n";
-	sprintf_s(path, "%s\\gamedata\\configs\\text\\rus", project_root);
-	CreateDirChain(path);
-	sprintf_s(path, "%s\\gamedata\\configs\\text\\rus\\%s_modes.xml", project_root, m.id.c_str());
-	if (!WriteTextFile(path, strings.c_str())) { err = "cannot write the mode caption"; return false; }
-
-	// ---- script: create the control and store the choice --------------------
-	// Runs from the engine's registrar pass (xms.load_registrars). faction_ui is
-	// a luabind class, so its methods are wrapped by assignment - xms.hook only
-	// resolves plain _G tables. Everything is pcall-guarded: a game whose screen
-	// was replaced by another mod must still reach the menu, just without the
-	// checkbox, and the log says so.
-	//
-	// Two paths, tried in order:
-	//   1. Refined's module-mode dropdown (dead_air_x64_mode_select) - modes
-	//      go into ONE shared combo on the new-game screen; that script also
-	//      writes the keys on start.
-	//   2. plain DA without that layer - the module's own checkbox, appended
-	//      to the modes column (the xmlp+strings this export writes anyway).
-	sprintf_s(&body[0], body.size(),
-		"-- generated by XFined Editor for module '%s'\r\n"
-		"-- Puts this module's game mode(s) on the new-game screen.\r\n"
-		"-- Rewritten on every export - edit the manifest, not this file.\r\n"
-		"-- (scripts\\register.script is yours; nothing here touches it.)\r\n"
-		"local MODES = {\r\n",
-		m.id.c_str());
-	xr_string lua = body.c_str();
-	for (u32 i = 0; i < modes.size(); ++i)
-	{
-		// reg stays "main_dialog:check_<id>_mode" - it is the DISCOVERY
-		// contract other systems (the exclusivity group) build from the mode
-		// id; xml_* are the node names inside the module's own layout file
-		sprintf_s(&body[0], body.size(),
-			"    { id = \"%s\", reg = \"main_dialog:check_%s_mode\","
-			" xml_check = \"check_%s_mode\", xml_cap = \"cap_check_%s_mode\","
-			" key = \"new_game_%s_mode\" },\r\n",
-			modes[i].id.c_str(), modes[i].id.c_str(), modes[i].id.c_str(),
-			modes[i].id.c_str(), modes[i].id.c_str());
-		lua += body.c_str();
-	}
-	lua +=
-		"}\r\n"
-		"\r\n"
-		"-- Refined's screen keeps ONE dropdown for module modes - join it when the\r\n"
-		"-- layer is present (it also writes the keys on start). Otherwise fall\r\n"
-		"-- back to this module's own checkbox, so the mod still works on a plain\r\n"
-		"-- DA install.\r\n"
-		"local ok_dd, dd = pcall(function() return dead_air_x64_mode_select end)\r\n"
-		"if ok_dd and dd and dd.add_mode then\r\n"
-		"    for i = 1, #MODES do\r\n"
-		"        dd.add_mode(MODES[i].id, \"st_cap_check_\" .. MODES[i].id .. \"_mode\")\r\n"
-		"    end\r\n"
-		"    xms.log(\"game mode(s) joined the module dropdown: \" .. #MODES)\r\n"
-		"    return\r\n"
-		"end\r\n"
-		"\r\n"
-		"local ok_screen, screen = pcall(function() return ui_mm_faction_select end)\r\n"
-		"local cls = ok_screen and screen and screen.faction_ui\r\n"
-		"if not cls then\r\n"
-		"    xms.log(\"! xms modes: no new-game screen, they can only be set from the console\")\r\n"
-		"    return\r\n"
-		"end\r\n"
-		"\r\n"
-		"-- The fallback controls come from the MODULE'S OWN layout file - the\r\n"
-		"-- screen's xml is never patched, so nothing fights over its frame. The\r\n"
-		"-- engine picks the _16 variant on wide screens by itself.\r\n"
-		"local base_init = cls.InitControls\r\n"
-		"if type(base_init) == \"function\" then\r\n"
-		"    cls.InitControls = function(self, f)\r\n"
-		"        base_init(self, f)\r\n"
-		"        self.xms_checks = {}\r\n"
-		"        local xml = CScriptXmlInit()\r\n"
-		"        xml:ParseFile(\"%MODID%_modes.xml\")\r\n"
-		"        for i = 1, #MODES do\r\n"
-		"            local m = MODES[i]\r\n"
-		"            local ok, err = pcall(function()\r\n"
-		"                xml:InitStatic(m.xml_cap, self.dialog)\r\n"
-		"                self.xms_checks[m.id] = xml:InitCheck(m.xml_check, self.dialog)\r\n"
-		"                self:Register(self.xms_checks[m.id], m.reg)\r\n"
-		"            end)\r\n"
-		"            if not ok then xms.log(\"! \" .. m.id .. \" checkbox: \" .. tostring(err)) end\r\n"
-		"        end\r\n"
-		"    end\r\n"
-		"else\r\n"
-		"    xms.log(\"! xms modes: InitControls missing, checkboxes skipped\")\r\n"
-		"end\r\n"
-		"\r\n"
-		"-- The choice, written where the engine reads active modes from. Only the\r\n"
-		"-- literal true counts as ticked, on this side and in the game's own\r\n"
-		"-- is_*_mode helpers alike.\r\n"
-		"local base_start = cls.OnStartGame\r\n"
-		"if type(base_start) == \"function\" then\r\n"
-		"    cls.OnStartGame = function(self, ...)\r\n"
-		"        pcall(function()\r\n"
-		"            local cfg = axr_main and axr_main.config\r\n"
-		"            if not cfg then return end\r\n"
-		"            for i = 1, #MODES do\r\n"
-		"                local m = MODES[i]\r\n"
-		"                local ck = self.xms_checks and self.xms_checks[m.id]\r\n"
-		"                cfg:w_value(\"character_creation\", m.key, ck and ck:GetCheck() and true or nil)\r\n"
-		"            end\r\n"
-		"        end)\r\n"
-		"        return base_start(self, ...)\r\n"
-		"    end\r\n"
-		"else\r\n"
-		"    xms.log(\"! xms modes: OnStartGame missing, nothing will be stored\")\r\n"
-		"end\r\n"
-		"\r\n"
-		"xms.log(\"game mode(s) registered on the new-game screen: \" .. #MODES)\r\n";
-
-	// the fallback layout file carries the module id in its name
-	for (size_t at = lua.find("%MODID%"); at != xr_string::npos; at = lua.find("%MODID%"))
-		lua.replace(at, 7, m.id);
-
-	sprintf_s(path, "%s\\scripts", project_root);
-	CreateDirChain(path);
-	sprintf_s(path, "%s\\scripts\\mode_register.script", project_root);
-	if (!WriteTextFile(path, lua.c_str())) { err = "cannot write the mode registrar script"; return false; }
-
-	Msg("* [XMS] %d game mode(s) registered for %d layout(s)", int(modes.size()), targets);
-	return true;
-}
-
 // Empties a folder, keeping the folder itself. The module export starts from
 // this: a build is CLEAN, so whatever the previous one left - a part the author
 // has since deleted, a file they renamed, a whole folder that is no longer part
@@ -1549,291 +1910,188 @@ static int CountStaleRec(const xr_string& dir, const xr_string& rel_dir, const x
 	return n;
 }
 
-// what the last clean build refused to delete, for the UI's second question
-static xr_vector<xr_string>	s_StaleNames;
-static int					s_StaleCount	= 0;
-
-
-bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
-					   int& files, xr_string& out_path, xr_string& err, bool confirmed,
-					   xr_string* warnings, xr_vector<xr_string>* left_out)
+// What the file half of a job needs, by value: the main thread works it out and the worker only reads it.
+struct SBuildPlan
 {
-	files = 0; out_path.clear(); err.clear();
-	if (warnings) warnings->clear();
-	if (left_out) left_out->clear();
-	if (!project_root || !project_root[0])	{ err = "no active project"; return false; }
+	EditorMod::SManifest	m;
+	xr_string				project;
+	xr_string				dst;			// <target>\modules\<id>, or <target>\gamedata_<id>
+	bool					flat	= false;
+	bool					clean	= false;
+	xr_string				flat_report;	// its counts come from the editor's own lists
+	// a packaging
+	bool					package	= false;
+	xr_string				stage, out_dir, requires_game;
+};
 
-	SManifest m;
-	if (!Load(project_root, m))				{ err = "mod.ltx not found in the project"; return false; }
-	if (!ValidateId(m.id.c_str()))			{ err = "module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)"; return false; }
+struct SBuildOut
+{
+	int						files		= 0;
+	xr_string				path, err, warnings;
+	xr_vector<xr_string>	left_out, stale_names;
+	int						stale_count	= 0;
+};
 
-	// A finished module always states which game it is for. "Nothing chosen"
-	// is not a third option - it is how content ends up applied in a campaign
-	// it was never built for.
-	if (m.mode.empty() && m.provides_modes.empty() && 0 != _stricmp(m.target.c_str(), "default"))
+static xr_string BytesText(u64 bytes)
+{
+	if (bytes >= (1ull << 30)) return NqUtil::Format("%.1f GB", double(bytes) / double(1ull << 30));
+	if (bytes >= (1ull << 20)) return NqUtil::Format("%.0f MB", double(bytes) / double(1ull << 20));
+	return NqUtil::Format("%.0f KB", double(bytes) / 1024.0);
+}
+
+// an on-access scanner holds a file it has just seen for a moment, and a folder holding such a file does not move
+static bool RenameFolder(LPCSTR from, LPCSTR to)
+{
+	for (u32 tries = 0; tries < 30; ++tries)
 	{
-		err = "no target game mode: open Mod > Mod Settings, Game Mode, and pick one "
-			  "(the ordinary game, a mode of the linked game, or a new mode this module adds)";
+		if (::MoveFileExA(from, to, 0))	return true;
+		const DWORD code = ::GetLastError();
+		if (ERROR_ACCESS_DENIED != code && ERROR_SHARING_VIOLATION != code)	return false;
+		::Sleep(200);
+	}
+	return false;
+}
+
+// a file just deleted lingers while an on-access scanner holds it, and its folder with it
+static void RemoveTree(LPCSTR dir)
+{
+	for (u32 tries = 0; tries < 25 && DirExists(dir); ++tries)
+	{
+		WipeTree(dir);
+		if (::RemoveDirectoryA(dir))	return;
+		::Sleep(100);
+	}
+}
+
+static bool SameFileThere(const SBuildFile& f, const xr_string& folder)
+{
+	WIN32_FILE_ATTRIBUTE_DATA there;
+	return ::GetFileAttributesExA((folder + "\\" + f.rel).c_str(), GetFileExInfoStandard, &there) &&
+		   !(there.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+		   ((u64(there.nFileSizeHigh) << 32) | there.nFileSizeLow) == f.size &&
+		   0 == ::CompareFileTime(&there.ftLastWriteTime, &f.written);
+}
+
+// The build is CLEAN: what ends up in the target is exactly this build and nothing a previous one left. It is written
+// beside the last one, in <modules>\.new\<id> (the game reads modules one level deep, so nothing in there is a module),
+// and takes its place in one step at the very end: a build that fails or is stopped costs the module nothing, and a game
+// started meanwhile never meets half of one.
+static bool InstallBuild(const SBuildPlan& plan, SBuildWalk& walk, u64 bytes, SBuildOut& out)
+{
+	const xr_string dst = plan.dst;
+	const bool had = DirExists(dst.c_str());
+
+	// That is destructive when the target is somebody else's module that happens to share the id - so say so, and only
+	// replace it once told to.
+	if (!plan.clean && had)
+	{
+		xr_set<xr_string> will;
+		for (u32 i = 0; i < walk.files.size(); ++i)
+		{
+			xr_string key = walk.files[i].rel;
+			xr_strlwr(&key[0]);
+			will.insert(key);
+		}
+		out.stale_count = CountStaleRec(dst, xr_string(), will, out.stale_names);
+		if (out.stale_count)
+		{
+			out.err = NqUtil::Format("target already holds a module: %d file(s) there are not part of this build", out.stale_count);
+			return false;
+		}
+	}
+
+	const size_t cut = dst.rfind('\\');
+	const xr_string yard = dst.substr(0, cut) + "\\.new";
+	const xr_string staged = yard + "\\" + dst.substr(cut + 1);
+	const xr_string previous = staged + ".old";
+	CreateDirChain(staged.c_str());
+	WipeTree(staged.c_str());
+	RemoveTree(previous.c_str());
+	if (!DirExists(staged.c_str()))	{ out.err = "can't create target folder"; return false; }
+	auto clean_up = [&]
+	{
+		RemoveTree(staged.c_str());
+		::RemoveDirectoryA(yard.c_str());
+	};
+
+	s_Feed.Stage(kStepCopy, "Comparing with the last build");
+	u64 need = 0;
+	for (u32 i = 0; i < walk.files.size() && !s_Feed.Cancelled(); ++i)
+	{
+		SBuildFile& f = walk.files[i];
+		f.reuse = had && SameFileThere(f, dst);
+		if (!f.reuse) need += f.size;
+	}
+	ULARGE_INTEGER free_bytes;
+	if (::GetDiskFreeSpaceExA(yard.c_str(), &free_bytes, NULL, NULL) && u64(free_bytes.QuadPart) < need)
+	{
+		out.err = "the build needs " + BytesText(need) + " free on the target's drive and has " + BytesText(u64(free_bytes.QuadPart)) +
+			": the new build is written beside the last one before it replaces it";
+		clean_up();
 		return false;
 	}
 
-	// Quest and behaviour graphs ship as they are, so a broken one would only be
-	// found by the player: every *.nqasset and *.behasset must validate before
-	// anything is copied.
+	s_Feed.Stage(kStepCopy, "Copying files", bytes, (u32)walk.files.size());
+	out.files += CopyBuildFiles(walk, staged.c_str(), 0, dst.c_str(), out.err);
+	if (!out.err.empty())
 	{
-		xr_vector<xr_string> nq_log;
-		int nq_errors = 0, nq_warnings = 0;
-		const bool nq_ok = NqExport::ValidateProject(project_root, err, nq_log, &nq_errors, &nq_warnings);
-		if (warnings && nq_warnings)
-		{
-			// the lines the author needs to read, not a count they have to go looking for
-			*warnings = NqUtil::Format("quest warnings: %d", nq_warnings);
-			for (u32 i = 0; i < nq_log.size(); ++i)
-			{
-				if (nq_log[i].find(": E") != xr_string::npos) continue;
-				*warnings += "\n  ";
-				*warnings += nq_log[i];
-			}
-		}
-		if (!nq_ok) return false;
-	}
-
-	// The mode's world: a second Player Start or a fourth new-game choice is a
-	// decision the game would make for the author (the first start wins, the fourth
-	// row never shows) - refused; a level or transition the game lacks is a warning.
-	{
-		xr_vector<xr_string> problems;
-		EditorWorld::Validate(project_root, m, problems);
-		xr_string errors;
-		for (const xr_string& p : problems)
-		{
-			if (p[0] == 'E')
-			{
-				if (!errors.empty()) errors += "\n";
-				errors += p;
-			}
-			else if (warnings)
-			{
-				if (!warnings->empty()) *warnings += "\n";
-				*warnings += p;
-			}
-		}
-		if (!errors.empty())
-		{
-			err = errors;
-			return false;
-		}
-	}
-
-	// The module's own PDA interface: the game refuses a layout with an error and keeps
-	// its stock PDA, so the build refuses it first, where the author can still fix it.
-	{
-		xr_vector<xr_string> pda_errors, pda_warnings;
-		EditorPda::ValidateForBuild(project_root, pda_errors, pda_warnings);
-		for (const xr_string& p : pda_warnings)
-			if (warnings)
-			{
-				if (!warnings->empty()) *warnings += "\n";
-				*warnings += p;
-			}
-		if (!pda_errors.empty())
-		{
-			err = "The PDA layout has errors:";
-			for (const xr_string& p : pda_errors) { err += "\n"; err += p; }
-			return false;
-		}
-	}
-
-	// A declared mode is worthless until the player can tick it, so the files
-	// that put it on the new-game screen are generated as part of the export.
-	if (!flat && !WriteModeRegistration(project_root, m, err))
-		return false;
-
-	// The module's own characters: one .npcasset each becomes a character_desc
-	// entry, a profile, a string table, a spawn section and the .ltxp patch
-	// that makes the game read all of it. Generated here so that a build always
-	// ships what the assets currently say - and a deleted character takes its
-	// generated half with it.
-	{
-		int characters = 0;
-		if (!EditorCharacters::Generate(project_root, m.id.c_str(), characters, err))
-			return false;
-	}
-
-	char target[MAX_PATH] = {};
-	NormalizePath(target_root ? target_root : "", target, sizeof(target));
-	if (!target[0])							{ err = "target folder not set"; return false; }
-	if (xr_strlen(target) + m.id.size() + 32 >= MAX_PATH)
-											{ err = "target path too long"; return false; }
-
-	// A module goes to <game>\modules\, NOT to mods\: that one is the folder
-	// JSGME manages, and a module sitting there is a module JSGME offers to
-	// copy over the game - the merge a module exists to avoid. A flat overlay
-	// is the opposite case: that IS a JSGME mod, so it keeps its own name.
-	string_path dst;
-	if (flat)	sprintf_s(dst, "%s\\gamedata_%s", target, m.id.c_str());
-	else		sprintf_s(dst, "%s\\modules\\%s", target, m.id.c_str());
-	if (InsideGameGamedata(dst) || InsideGameGamedata(target))
-	{
-		err = "target is inside the game's gamedata - a mod must stay in its own folder "
-			  "(export to the game ROOT: the module goes to <game>\\modules\\<id>)";
+		clean_up();
 		return false;
 	}
-	// The clean build below empties the target first. A target that is a link - one
-	// made so the game runs the working copy directly - or that is, holds or sits in
-	// the project would take the author's sources with it. Judged on where the target
-	// would be, before a single folder of it is created.
+
+	s_Feed.Stage(kStepFinish, "Putting the module in place");
+	if (had && !RenameFolder(dst.c_str(), previous.c_str()))
 	{
-		xr_string real_dst, real_src;
-		const bool known = ProjectedRealPath(dst, real_dst) && RealFolder(project_root, real_src);
-		const DWORD attr = ::GetFileAttributesA(dst);
-		if (INVALID_FILE_ATTRIBUTES != attr && (attr & FILE_ATTRIBUTE_REPARSE_POINT))
-		{
-			err = "the target folder is a link";
-			if (known) { err += " to "; err += real_dst; }
-			err += " - a build empties it first, and would empty what it points at. Remove the link, or build to another folder";
-			out_path = dst;
-			return false;
-		}
-		// inside the editor's own scratch is fine - the release stage lives in temp\,
-		// and no build walks it
-		bool scratch = false;
-		if (known && real_dst.size() > real_src.size() && SameOrBelow(real_dst, real_src))
-		{
-			xr_string first = real_dst.substr(real_src.size() + 1);
-			const size_t cut = first.find('\\');
-			if (cut != xr_string::npos) first.erase(cut);
-			scratch = EditorProject::IsEditorOnlyEntry(first.c_str());
-		}
-		if (known && ((SameOrBelow(real_dst, real_src) && !scratch) || SameOrBelow(real_src, real_dst)))
-		{
-			err = "the target folder and the project overlap (" + real_dst + ") - the build would write into its own sources, or wipe them";
-			out_path = dst;
-			return false;
-		}
+		out.err = "the module in " + dst + " is in use: close the game and build again. It stays as it was";
+		clean_up();
+		return false;
 	}
-	CreateDirChain(dst);
-	if (!DirExists(dst))					{ err = "can't create target folder"; return false; }
-
-	SBuildWalk walk(project_root, m.exclude);
-	if (flat)
+	if (!RenameFolder(staged.c_str(), dst.c_str()))
 	{
-		// the overlay is gamedata alone, filtered exactly like a module build
-		if (ExcludeMatch(m.exclude, "gamedata"))
-			walk.left_out.push_back("gamedata");
-		else
-			walk.Walk("gamedata");
-		files += CopyBuildFiles(walk, dst, 9);	// "gamedata\\" off the front
-
-		// XMS-only content is not representable as a plain gamedata overlay
-		string_path d_patch, d_spawn, d_scripts, d_levels;
-		sprintf_s(d_patch, "%s\\patch", project_root);
-		sprintf_s(d_spawn, "%s\\spawn", project_root);
-		sprintf_s(d_scripts, "%s\\scripts", project_root);
-		sprintf_s(d_levels, "%s\\levels", project_root);
-		const int c_patch	= CountFilesRec(d_patch, "_readme.txt");
-		const int c_spawn	= CountFilesRec(d_spawn, 0);
-		const int c_scripts	= CountFilesRec(d_scripts, 0);
-		const int c_levels	= CountFilesRec(d_levels, 0);
-		// quests are module-only content wherever they sit: the NQ runtime finds
-		// them through xms.list_files(<module id>), i.e. under <game>\modules\<id>.
-		// A flat overlay is not a module and is never scanned, so a copy that
-		// lands in gamedata\ is inert and one outside gamedata\ is not copied.
-		xr_vector<NqDocs::SProjectQuest> nq_quests;
-		NqDocs::ProjectQuests(nq_quests, true);
-		const int c_quests	= (int)nq_quests.size();
-
-		xr_string rep = "XMS flat export report - module '";
-		rep += m.id;
-		rep += "'\r\n\r\n";
-		char line[128];
-		if (!c_patch && !c_spawn && !c_scripts && !c_levels && !c_quests && m.mode.empty() && m.provides_modes.empty())
-			rep += "fully vanilla-compatible\r\n";
-		else
-		{
-			// a flat overlay has no way to add a checkbox to the new-game screen
-			if (!m.provides_modes.empty())
-			{
-				rep += "declared mode: ";
-				rep += m.provides_modes[0].id;
-				rep += " - NOT registered: a flat overlay cannot add it to the "
-					   "new-game screen, export as a module for that\r\n";
-			}
-			if (c_patch)	{ sprintf_s(line, "patch: %d file(s) - NOT exported (XMS-only)\r\n", c_patch); rep += line; }
-			if (c_spawn)	{ sprintf_s(line, "spawn: %d file(s) - NOT exported (XMS-only)\r\n", c_spawn); rep += line; }
-			if (c_scripts)	{ sprintf_s(line, "scripts: %d file(s) - NOT exported (XMS-only)\r\n", c_scripts); rep += line; }
-			if (c_levels)	{ sprintf_s(line, "levels: %d overlay file(s) - NOT exported (XMS-only)\r\n", c_levels); rep += line; }
-			if (c_quests)	{ sprintf_s(line, "graphs: %d .nqasset/.behasset - NOT usable flat (the NQ runtime only scans <game>\\modules\\<id>)\r\n", c_quests); rep += line; }
-			if (!m.mode.empty())
-			{
-				rep += "target mode: ";
-				rep += m.mode;
-				rep += " - engine gating is XMS-only (NOT exported flat)\r\n";
-			}
-		}
-		string_path rp;
-		sprintf_s(rp, "%s\\_xms_export_report.txt", dst);
-		WriteTextFile(rp, rep.c_str());
+		const DWORD code = ::GetLastError();
+		if (had) RenameFolder(previous.c_str(), dst.c_str());
+		out.err = NqUtil::Format("can't put the build in place (error %u)", code);
+		clean_up();
+		return false;
 	}
-	else
-	{
-		// What ships is "everything the author made", not a fixed list of five
-		// folder names: a module may keep any layout it likes and publish it
-		// through mod.ltx [vfs]. What stays behind: the editor's own scratch, the
-		// sources the game cannot read (rawdata scenes, .object files), tooling
-		// (.git and its kind) and whatever the author put in [exclude].
+	RemoveTree(previous.c_str());
+	::RemoveDirectoryA(yard.c_str());
+	return true;
+}
+
+// The file half of a build, on the job's thread.
+static bool WriteBuild(const SBuildPlan& plan, SBuildOut& out)
+{
+	out.path = plan.dst;
+	s_Feed.Stage(kStepCopy, "Listing the files");
+
+	// What ships is "everything the author made", not a fixed list of five folder names: a module may keep any layout it
+	// likes and publish it through mod.ltx [vfs]. What stays behind: the editor's own scratch, the sources the game cannot
+	// read (rawdata scenes, .object files), tooling (.git and its kind) and whatever the author put in [exclude]. The flat
+	// overlay is gamedata alone, filtered exactly like a module build.
+	SBuildWalk walk(plan.project.c_str(), plan.m.exclude);
+	if (!plan.flat)
 		walk.Walk(xr_string());
+	else if (EditorMod::ExcludeMatch(plan.m.exclude, "gamedata"))
+		walk.left_out.push_back("gamedata");
+	else
+		walk.Walk("gamedata");
+	if (s_Feed.Cancelled()) { out.err = "cancelled"; return false; }
+	u64 bytes = 0;
+	for (u32 i = 0; i < walk.files.size(); ++i)
+		bytes += walk.files[i].size;
 
-		// A file the build itself generates is part of how the module works: a rule
-		// that takes one out would ship a module that silently does not.
-		{
-			xr_vector<xr_string> owned;
-			GetOwnedFiles(project_root, owned);
-			for (u32 i = 0; i < owned.size(); ++i)
-			{
-				xr_string rule;
-				string_path abs;
-				sprintf_s(abs, "%s\\%s", project_root, owned[i].c_str());
-				if (FileExists(abs) && ExcludeMatch(m.exclude, owned[i].c_str(), &rule))
-				{
-					err = "mod.ltx [exclude] '" + rule + "' takes out " + owned[i] +
-						  ", which the build generates for the module to work - exclude something narrower";
-					return false;
-				}
-			}
-		}
-
-		// The build is CLEAN: the target module folder is emptied first, so what
-		// ends up there is exactly this build and nothing a previous one left.
-		// That is destructive when the target is somebody else's module that
-		// happens to share the id - so say so, and only wipe once told to.
-		if (!confirmed && DirExists(dst))
-		{
-			xr_set<xr_string> will;
-			for (u32 i = 0; i < walk.files.size(); ++i)
-			{
-				xr_string key = walk.files[i].rel;
-				xr_strlwr(&key[0]);
-				will.insert(key);
-			}
-			xr_vector<xr_string> names;
-			if (const int stale = CountStaleRec(dst, xr_string(), will, names))
-			{
-				s_StaleNames = names;
-				s_StaleCount = stale;
-				err = "target already holds a module: ";
-				char n[64]; sprintf_s(n, "%d file(s) there are not part of this build", stale);
-				err += n;
-				out_path = dst;
-				return false;	// caller re-runs with `confirmed` once the user agrees
-			}
-		}
-
-		if (const int wiped = WipeTree(dst))
-			Msg("* [XMS] clean build: %d stale file(s) removed from %s", wiped, dst);
-
-		files += CopyBuildFiles(walk, dst, 0);
+	if (plan.flat)
+	{
+		CreateDirChain(plan.dst.c_str());
+		if (!DirExists(plan.dst.c_str())) { out.err = "can't create target folder"; return false; }
+		s_Feed.Stage(kStepCopy, "Copying files", bytes, (u32)walk.files.size());
+		out.files += CopyBuildFiles(walk, plan.dst.c_str(), 9, nullptr, out.err);	// "gamedata\\" off the front
+		if (!out.err.empty()) return false;
+		WriteTextFile((plan.dst + "\\_xms_export_report.txt").c_str(), plan.flat_report.c_str());
 	}
+	else if (!InstallBuild(plan, walk, bytes, out))
+		return false;
 
 	if (!walk.left_out.empty())
 	{
@@ -1844,39 +2102,31 @@ bool EditorMod::Export(LPCSTR project_root, LPCSTR target_root, bool flat,
 			list += walk.left_out[i];
 		}
 		if (walk.left_out.size() > 12) list += NqUtil::Format(" and %u more", u32(walk.left_out.size() - 12));
-		Msg("* [XMS] left out of the build: %s", list.c_str());
+		s_Feed.Note("* [XMS] left out of the build: " + list);
 	}
-	if (left_out) *left_out = walk.left_out;
+	out.left_out = walk.left_out;
 
 	// The editor takes any name (its file APIs speak UTF-8); the game reads a module
 	// through the ANSI APIs of a cp1251 system, where a character cp1251 lacks comes
 	// back as '?' and the file never opens. It still ships - it is the author's.
+	xr_vector<xr_string> unreadable;
+	for (u32 i = 0; i < walk.files.size(); ++i)
 	{
-		xr_vector<xr_string> unreadable;
-		for (u32 i = 0; i < walk.files.size(); ++i)
-		{
-			xr_string bad;
-			if (!NqUtil::Cp1251Covers(walk.files[i].rel, bad))
-				unreadable.push_back(walk.files[i].rel + " (" + bad + ")");
-		}
-		for (u32 i = 0; i < unreadable.size(); ++i)
-			Msg("! [XMS] build: the game cannot open %s - a character outside cp1251", unreadable[i].c_str());
-		if (warnings && !unreadable.empty())
-		{
-			if (!warnings->empty()) *warnings += "\n";
-			*warnings += NqUtil::Format("file names the game cannot open (characters outside cp1251): %u",
-										u32(unreadable.size()));
-			for (u32 i = 0; i < unreadable.size() && i < 12; ++i)
-			{
-				*warnings += "\n  ";
-				*warnings += unreadable[i];
-			}
-			if (unreadable.size() > 12) *warnings += NqUtil::Format("\n  and %u more", u32(unreadable.size() - 12));
-		}
+		xr_string bad;
+		if (!NqUtil::Cp1251Covers(walk.files[i].rel, bad))
+			unreadable.push_back(walk.files[i].rel + " (" + bad + ")");
 	}
-
-	out_path = dst;
-	Msg("* [XMS] export %s: %d file(s) -> %s", flat ? "flat" : "module", files, dst);
+	for (u32 i = 0; i < unreadable.size(); ++i)
+		s_Feed.Note("! [XMS] build: the game cannot open " + unreadable[i] + " - a character outside cp1251");
+	if (!unreadable.empty())
+	{
+		if (!out.warnings.empty()) out.warnings += "\n";
+		out.warnings += NqUtil::Format("file names the game cannot open (characters outside cp1251): %u", u32(unreadable.size()));
+		for (u32 i = 0; i < unreadable.size() && i < 12; ++i)
+			out.warnings += "\n  " + unreadable[i];
+		if (unreadable.size() > 12) out.warnings += NqUtil::Format("\n  and %u more", u32(unreadable.size() - 12));
+	}
+	s_Feed.Note(NqUtil::Format("* [XMS] export %s: %d file(s) -> %s", plan.flat ? "flat" : "module", out.files, plan.dst.c_str()));
 	return true;
 }
 
@@ -1990,14 +2240,6 @@ static uLong ZipDosTime(const FILETIME& utc)
 	return 0x00210000;	// 1980-01-01: minizip reads 0 as "no date given"
 }
 
-// keeps the window alive during the long loops; true = the user cancelled
-static bool PackagingAborted()
-{
-	if (!UI) return false;
-	UI->ProgressCheckpoint();
-	return UI->NeedAbort();
-}
-
 // One SHA-256 object for a whole packaging: Finish leaves it ready for the next
 // input. Every path that abandons an input half-way ends the packaging as well.
 struct SSha256
@@ -2041,9 +2283,8 @@ struct SSha256
 
 // files [first, last) of `files` into one zip. Every file is hashed on its way
 // in - the index wants the SHA-256 of the content, and the content is read once.
-// `done` counts input bytes across all packages, for the progress bar.
 static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, xr_vector<SStagedFile>& files,
-					   u32 first, u32 last, xr_vector<u8>& buf, SSha256& sha, SPBItem* pb, u64& done, xr_string& err)
+					   u32 first, u32 last, xr_vector<u8>& buf, SSha256& sha, xr_string& err)
 {
 	zipFile zip = zipOpen64(zip_path, APPEND_STATUS_CREATE);
 	if (!zip) { err = xr_string("can't create ") + zip_path; return false; }
@@ -2066,7 +2307,7 @@ static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, xr_vector<SStagedFile
 				kZipMadeBy, HasNonAscii(f.entry.c_str()) ? kZipUtf8Flag : 0, zip64))
 			err = "can't add " + f.rel + " to the package";
 
-		if (pb) pb->Info(f.rel.c_str());
+		s_Feed.File(f.rel);
 		u64 packed = 0;
 		while (err.empty())
 		{
@@ -2076,9 +2317,8 @@ static bool ZipPackage(LPCSTR zip_path, LPCSTR module_dir, xr_vector<SStagedFile
 			if (ZIP_OK != zipWriteInFileInZip(zip, buf.data(), rd)) { err = "can't write " + xr_string(zip_path); break; }
 			if (!sha.Add(buf.data(), rd)) { err = "can't hash " + f.rel; break; }
 			packed	+= rd;
-			done	+= rd;
-			if (pb) pb->Update(float(done >> 10));
-			if (PackagingAborted()) err = "cancelled";
+			s_Feed.Add(rd);
+			if (s_Feed.Cancelled()) err = "cancelled";
 		}
 		::CloseHandle(h);
 		if (err.empty() && packed != f.size) err = "size changed while packaging: " + f.rel;
@@ -2152,7 +2392,7 @@ static bool Sha256File(LPCSTR path, xr_vector<u8>& buf, SSha256& sha, xr_string&
 		if (!ok || !rd) break;
 		ok = sha.Add(buf.data(), rd);
 		size += rd;
-		if (PackagingAborted()) { err = "cancelled"; ok = false; }
+		if (s_Feed.Cancelled()) { err = "cancelled"; ok = false; }
 	}
 	::CloseHandle(h);
 	if (!(ok && sha.Finish(hex)))
@@ -2211,8 +2451,7 @@ static void DeleteOutright(LPCSTR path)
 static DWORD CALLBACK MoveProgress(LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER, LARGE_INTEGER,
 								   DWORD, DWORD, HANDLE, HANDLE, LPVOID)
 {
-	if (UI) UI->ProgressCheckpoint();
-	return PROGRESS_CONTINUE;
+	return s_Feed.Cancelled() ? PROGRESS_CANCEL : PROGRESS_CONTINUE;
 }
 
 // everything that decides whether this manifest can be released at all
@@ -2300,18 +2539,29 @@ static void CheckStagedContent(const xr_string& module_dir, const xr_vector<SSta
 			(u32)result.catalog_review.size(), result.catalog_review[0].c_str());
 }
 
-// stage -> packages -> file index -> descriptor. `stage` is a private scratch
-// folder the caller creates and removes, so a failure leaves `out` untouched.
-static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPCSTR stage, LPCSTR out,
-						 LPCSTR requires_game, EditorMod::SPackageResult& result, xr_string& err, xr_string* warnings)
+// What the thread leaves for the descriptor: the descriptor is signed with the session's key and its card reads the
+// project's string tables, so it is written on the main thread, as the job's last step.
+struct SReleaseDraft
 {
-	// The real module export does the staging: what the release ships is what a
-	// build ships, and whatever a build refuses (no target mode, a broken quest)
-	// is refused here by the same code.
-	int exported = 0;
-	xr_string module_dir;
-	if (!EditorMod::Export(project_root, stage, false, exported, module_dir, err, true, warnings, &result.left_out))
+	EditorCatalog::SCardFile	manifest_ref, thumbnail_ref;
+	bool						has_thumbnail = false;
+};
+
+// stage -> packages -> file index, on the job's thread. `stage` is a private scratch
+// folder the caller creates and removes, so a failure leaves `out` untouched.
+static bool BuildRelease(const SBuildPlan& plan, EditorMod::SPackageResult& result, SReleaseDraft& draft, SBuildOut& built)
+{
+	const EditorMod::SManifest& m = plan.m;
+	LPCSTR stage = plan.stage.c_str();
+	LPCSTR out = plan.out_dir.c_str();
+	xr_string& err = built.err;
+	xr_string* warnings = &built.warnings;
+
+	// The real module build does the staging: what the release ships is what a build ships.
+	if (!WriteBuild(plan, built))
 		return false;
+	result.left_out = built.left_out;
+	const xr_string module_dir = built.path;
 
 	xr_vector<SStagedFile> files;
 	ListStagedFiles(module_dir.c_str(), "", files);
@@ -2344,6 +2594,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		unpacked += f.size;
 	}
 	if (!has_manifest) { err = "the staged module has no mod.ltx"; return false; }
+	s_Feed.Stage(kStepFinish, "Reading the content the way the Mod Browser does");
 	CheckStagedContent(module_dir, files, result, warnings);
 	// the same input always yields the same package order
 	std::sort(files.begin(), files.end(), [](const SStagedFile& a, const SStagedFile& b) { return a.key < b.key; });
@@ -2375,16 +2626,9 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 	SSha256 sha;
 	if (!sha.hash) { err = "SHA-256 is not available on this system"; return false; }
 
-	// on screen until the function returns: moving gigabytes to another drive
-	// is part of the wait
-	struct SProgress
-	{
-		SPBItem* item;
-		~SProgress() { if (item) UI->ProgressEnd(item); }
-	} progress = { UI ? UI->ProgressStart(float(unpacked >> 10) + 1.f, "Packaging release...") : 0 };
-	SPBItem* const pb = progress.item;
+	s_Feed.Stage(kStepFinish, "Packing the release", unpacked, (u32)files.size());
 	xr_vector<u8> buf(1 << 20);
-	u64 done = 0, packed = 0;
+	u64 packed = 0;
 	for (u32 p = 0; p < parts.size() && err.empty(); ++p)
 	{
 		EditorMod::SPackageFile pkg;
@@ -2392,8 +2636,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		if (parts.size() > 1) pkg.name += NqUtil::Format(".part%u", p + 1);
 		pkg.name += ".zip";
 		sprintf_s(path, "%s\\%s", packages_dir, pkg.name.c_str());
-		if (!ZipPackage(path, module_dir.c_str(), files, parts[p].first, parts[p].second, buf, sha, pb, done, err)) break;
-		if (pb) pb->Info(pkg.name.c_str());
+		if (!ZipPackage(path, module_dir.c_str(), files, parts[p].first, parts[p].second, buf, sha, err)) break;
 		if (!ReadPackageLayout(path, files, parts[p].first, parts[p].second, p + 1, err)) break;
 		if (!Sha256File(path, buf, sha, pkg.sha256, pkg.size, err)) break;
 		if (pkg.size >= kAssetLimit)
@@ -2433,6 +2676,7 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 	if (!sha.Add(index_text.data(), (u32)index_text.size()) || !sha.Finish(result.index.sha256))
 		{ err = "can't hash the file index"; return false; }
 
+	s_Feed.Stage(kStepFinish, "Writing the release");
 	// Only now is the output folder touched. What an earlier packaging of this id
 	// and version left there goes first - a 3-part build followed by a 1-part one
 	// must not leave part2 and part3 beside the new release.
@@ -2450,58 +2694,65 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		string_path from;
 		sprintf_s(from, "%s\\%s", packages_dir, result.packages[p].name.c_str());
 		sprintf_s(path, "%s\\%s", out, result.packages[p].name.c_str());
-		if (pb) pb->Info(path);
 		if (!::MoveFileWithProgressA(from, path, &MoveProgress, NULL, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING))
-			{ err = xr_string("can't write ") + path; return false; }
+			{ err = s_Feed.Cancelled() ? xr_string("cancelled") : xr_string("can't write ") + path; return false; }
 	}
 	sprintf_s(path, "%s\\%s", out, result.index.name.c_str());
 	if (!WriteTextFile(path, index_text.c_str())) { err = xr_string("can't write ") + path; return false; }
 
-	// the descriptor goes last: it is the file that vouches for the other two kinds
-	xr_string text = "; XMS module release descriptor. Generated by XFined Editor.\r\n[release]\r\n";
-	AppendKey(text, "schema", "1", 13);
-	AppendKey(text, "id", m.id.c_str(), 13);
-	AppendKey(text, "version", m.version.c_str(), 13);
-	if (requires_game[0])
-		AppendKey(text, "requires_game", requires_game, 13);
-	AppendKey(text, "files", NqUtil::Format("%u", (u32)files.size()).c_str(), 13);
-	AppendKey(text, "unpacked", NqUtil::Format("%llu", unpacked).c_str(), 13);
-	AppendKey(text, "index", (result.index.name + NqUtil::Format(", %llu, ", result.index.size) + result.index.sha256).c_str(), 13);
-	text += "\r\n[packages]\r\n";
-	for (u32 p = 0; p < result.packages.size(); ++p)
-		text += result.packages[p].name + NqUtil::Format(" = %llu, ", result.packages[p].size) + result.packages[p].sha256 + "\r\n";
-
-	// The Mod Browser's card: what the browser shows before the module is installed, the
-	// manifest and the thumbnail pinned by their hashes (MOD_CATALOG 4, 6.1)
-	EditorCatalog::SCardFile manifest_ref, thumbnail_ref;
-	bool has_thumbnail = false;
+	// The Mod Browser's card pins the manifest and the thumbnail by their hashes (MOD_CATALOG 4, 6.1)
 	xr_string thumbnail_path = m.thumbnail;
 	for (size_t c = 0; c < thumbnail_path.size(); ++c)
 		if (thumbnail_path[c] == '\\') thumbnail_path[c] = '/';
 	for (u32 i = 0; i < files.size(); ++i)
 	{
-		EditorCatalog::SCardFile* ref = files[i].path == "mod.ltx" ? &manifest_ref :
-			(!thumbnail_path.empty() && 0 == _stricmp(files[i].path.c_str(), thumbnail_path.c_str())) ? &thumbnail_ref : 0;
+		EditorCatalog::SCardFile* ref = files[i].path == "mod.ltx" ? &draft.manifest_ref :
+			(!thumbnail_path.empty() && 0 == _stricmp(files[i].path.c_str(), thumbnail_path.c_str())) ? &draft.thumbnail_ref : 0;
 		if (!ref) continue;
 		ref->path = files[i].path;
 		ref->size = files[i].size;
 		ref->sha256 = files[i].sha256;
-		has_thumbnail |= ref == &thumbnail_ref;
+		draft.has_thumbnail |= ref == &draft.thumbnail_ref;
 	}
 	if (!thumbnail_path.empty() && warnings)
 	{
 		xr_string bytes;
 		string_path picture;
 		sprintf_s(picture, "%s\\%s", module_dir.c_str(), m.thumbnail.c_str());
-		if (!has_thumbnail)
+		if (!draft.has_thumbnail)
 			*warnings += "the thumbnail " + m.thumbnail + " is not in the build - the Mod Browser shows no picture\n";
 		else if (!ReadTextFile(picture, bytes) || !EditorCatalog::ValidThumbnail(bytes.data(), bytes.size()))
 		{
 			*warnings += "the thumbnail " + m.thumbnail + " is not a 256 x 256 DXT1/DXT5 DDS - the Mod Browser shows no picture\n";
-			has_thumbnail = false;
+			draft.has_thumbnail = false;
 		}
 	}
-	text += EditorCatalog::CardSection(project_root, m, manifest_ref, has_thumbnail ? &thumbnail_ref : 0);
+
+	result.out_dir			= out;
+	result.requires_game	= plan.requires_game;
+	result.files			= (int)files.size();
+	result.unpacked			= unpacked;
+	result.packed			= packed;
+	return true;
+}
+
+// The descriptor, on the main thread: it goes last, because it is the file that vouches for the other two kinds.
+static bool FinishRelease(const SBuildPlan& plan, const SReleaseDraft& draft, EditorMod::SPackageResult& result, xr_string& err, xr_string& warnings)
+{
+	const EditorMod::SManifest& m = plan.m;
+	xr_string text = "; XMS module release descriptor. Generated by Grizzly Editor.\r\n[release]\r\n";
+	AppendKey(text, "schema", "1", 13);
+	AppendKey(text, "id", m.id.c_str(), 13);
+	AppendKey(text, "version", m.version.c_str(), 13);
+	if (!plan.requires_game.empty())
+		AppendKey(text, "requires_game", plan.requires_game.c_str(), 13);
+	AppendKey(text, "files", NqUtil::Format("%d", result.files).c_str(), 13);
+	AppendKey(text, "unpacked", NqUtil::Format("%llu", result.unpacked).c_str(), 13);
+	AppendKey(text, "index", (result.index.name + NqUtil::Format(", %llu, ", result.index.size) + result.index.sha256).c_str(), 13);
+	text += "\r\n[packages]\r\n";
+	for (u32 p = 0; p < result.packages.size(); ++p)
+		text += result.packages[p].name + NqUtil::Format(" = %llu, ", result.packages[p].size) + result.packages[p].sha256 + "\r\n";
+	text += EditorCatalog::CardSection(plan.project.c_str(), m, draft.manifest_ref, draft.has_thumbnail ? &draft.thumbnail_ref : 0);
 
 	// signed with the author key when there is one to sign with: one signature covers the
 	// card, the index hash and the package hashes - every byte of the release
@@ -2515,27 +2766,23 @@ static bool BuildRelease(LPCSTR project_root, const EditorMod::SManifest& m, LPC
 		result.signed_ = true;
 		result.key_id = key.key_id;
 	}
-	else if (warnings)
-		*warnings += key.exists ? (key.locked ? "the release is not signed: the author key is locked - give its password first\n" :
+	else
+		warnings += key.exists ? (key.locked ? "the release is not signed: the author key is locked - give its password first\n" :
 											  "the release is not signed: " + key.error + "\n") :
 			xr_string("the release is not signed - the Mod Browser takes signed releases only (Mod > Submit to Mod Browser sets up the author key)\n");
 
-	sprintf_s(path, "%s\\%s.update.ltx", out, m.id.c_str());
+	string_path path;
+	sprintf_s(path, "%s\\%s.update.ltx", plan.out_dir.c_str(), m.id.c_str());
 	if (!WriteTextFile(path, text.c_str())) { err = xr_string("can't write ") + path; return false; }
 	// a publisher checks every uploaded asset against these, the descriptor included
+	SSha256 sha;
 	result.descriptor_file.name = m.id + ".update.ltx";
 	result.descriptor_file.size = text.size();
 	if (!sha.Add(text.data(), (u32)text.size()) || !sha.Finish(result.descriptor_file.sha256))
 		{ err = "can't hash the release descriptor"; return false; }
-
-	result.out_dir			= out;
-	result.descriptor		= path;
-	result.requires_game	= requires_game;
-	result.files			= (int)files.size();
-	result.unpacked			= unpacked;
-	result.packed			= packed;
+	result.descriptor = path;
 	Msg("* [XMS] release %s %s: %d file(s), %llu byte(s) in %u package(s) -> %s",
-		m.id.c_str(), m.version.c_str(), result.files, packed, (u32)result.packages.size(), out);
+		m.id.c_str(), m.version.c_str(), result.files, result.packed, (u32)result.packages.size(), plan.out_dir.c_str());
 	return true;
 }
 
@@ -2566,37 +2813,17 @@ static void RemoveDeadStages(LPCSTR temp_dir)
 	::FindClose(h);
 }
 
-bool EditorMod::PackageRelease(LPCSTR project_root, LPCSTR out_dir, LPCSTR requires_game,
-							   SPackageResult& result, xr_string& err, xr_string* warnings)
+// temp\ is editor-only scratch that no export ever reads, so the stage can sit
+// inside the project; the pid keeps two editors on one project apart
+static bool PackageFiles(const SBuildPlan& plan, EditorMod::SPackageResult& result, SReleaseDraft& draft, SBuildOut& built)
 {
-	result = SPackageResult();
-	err.clear();
-	if (warnings) warnings->clear();
-	if (!project_root || !project_root[0])	{ err = "no active project"; return false; }
-	if (!requires_game) requires_game = "";
-
-	SManifest m;
-	if (!Load(project_root, m))				{ err = "mod.ltx not found in the project"; return false; }
-	if (!ReleaseGate(m, err))				return false;
-	if (requires_game[0] && !DottedNumber(requires_game, 3, 3))
-		{ err = "invalid requires_game: MAJOR.MINOR.PATCH expected, e.g. 1.4.1"; return false; }
-
-	string_path out, stage;
-	if (!ResolveReleaseDir(project_root, out_dir, m.version, out, err)) return false;
-
-	// temp\ is editor-only scratch that no export ever reads, so the stage can sit
-	// inside the project; the pid keeps two editors on one project apart
-	sprintf_s(stage, "%s\\temp", project_root);
-	RemoveDeadStages(stage);
-	sprintf_s(stage, "%s\\temp\\release_stage_%u", project_root, (u32)::GetCurrentProcessId());
-	CreateDirChain(stage);
-	if (!DirExists(stage))					{ err = "can't create the staging folder in the project's temp"; return false; }
-	WipeTree(stage);
-
-	const bool ok = BuildRelease(project_root, m, stage, out, requires_game, result, err, warnings);
-	WipeTree(stage);
-	::RemoveDirectoryA(stage);
-	if (!ok) result = SPackageResult();
+	RemoveDeadStages((plan.project + "\\temp").c_str());
+	CreateDirChain(plan.stage.c_str());
+	if (!DirExists(plan.stage.c_str())) { built.err = "can't create the staging folder in the project's temp"; return false; }
+	WipeTree(plan.stage.c_str());
+	const bool ok = BuildRelease(plan, result, draft, built);
+	RemoveTree(plan.stage.c_str());
+	if (!ok) result = EditorMod::SPackageResult();
 	return ok;
 }
 
@@ -2729,7 +2956,7 @@ bool EditorMod::ApplyTags(LPCSTR value, SManifest& m, xr_string& err)
 //------------------------------------------------------------------------------
 // UI: the Mod Settings tab, the build dialogs and the results they report
 //------------------------------------------------------------------------------
-using ModToken = XFinedTheme::ColorToken;
+using ModToken = GrizzlyTheme::ColorToken;
 
 static const char* kTitleExport		= EditorUiContract::kDialogBuildToFolder;
 static const char* kTitleFlat		= EditorUiContract::kDialogExportFlat;
@@ -2774,7 +3001,7 @@ static void ThumbnailCleanup()
 	s_ThumbPending.clear();
 	s_ThumbRemove = false;
 	s_ThumbError.clear();
-	XFinedMCP::ReleaseTexture(s_ThumbTexture);
+	GrizzlyMCP::ReleaseTexture(s_ThumbTexture);
 	s_ThumbTexture = 0;
 	s_ThumbTextureOf.clear();
 }
@@ -2853,6 +3080,7 @@ struct SSettingsForm
 	char	exclude[4096];
 	char	tags[512];				// comma list
 	char	pda[MAX_PATH * 2];
+	char	updates_off[4];			// "1": [module] disable_game_updates
 };
 
 struct SFormField { size_t offset, size; };
@@ -2874,11 +3102,12 @@ static const SFormField kFormFields[] =
 	{ offsetof(SSettingsForm, before),		sizeof(SSettingsForm::before) },
 	{ offsetof(SSettingsForm, conflicts),	sizeof(SSettingsForm::conflicts) },
 	{ offsetof(SSettingsForm, exclude),		sizeof(SSettingsForm::exclude) },
+	{ offsetof(SSettingsForm, updates_off),	sizeof(SSettingsForm::updates_off) },
 	{ offsetof(SSettingsForm, tags),		sizeof(SSettingsForm::tags) },
 	{ offsetof(SSettingsForm, pda),			sizeof(SSettingsForm::pda) },
 };
 
-enum ESettingsPage { pgGeneral = 0, pgBrowser, pgMode, pgRelations, pgContents, pgPda, pgCount };
+enum ESettingsPage { pgGeneral = 0, pgBrowser, pgMode, pgRelations, pgContents, pgPda, pgCommands, pgCount };
 struct SSettingsPage { LPCSTR id; LPCSTR label; XUI::Icon icon; LPCSTR about; };
 static const SSettingsPage kSettingsPages[pgCount] =
 {
@@ -2888,12 +3117,13 @@ static const SSettingsPage kSettingsPages[pgCount] =
 	{ "relations",		"Relations",		XUI::Icon::Relations,		"The modules this one needs, loads around or cannot run with. Only matters when the player runs several modules at once: a standalone mod leaves all four empty." },
 	{ "build_contents",	"Build Contents",	XUI::Icon::Exclude,			"The project folder is your working place as well as the module. The build ships everything in it except what is listed here." },
 	{ "pda",			"PDA",				XUI::Icon::PdaInterface,	"A module can give the PDA screens of its own. The layout named here is the one the game shows." },
+	{ "commands",		"Commands",			XUI::Icon::Terminal,		"Console commands the module adds. The player types the name; the game calls the function of the project's scripts with what follows it and prints what it returns." },
 };
 
 struct SSettingsProblem
 {
 	int			page;
-	LPCSTR		field;		// the row it is shown under
+	xr_string	field;		// the row it is shown under ("commands.<n>.<part>" for a command's)
 	XUI::Tone	tone;
 	bool		blocks;		// Save waits until it is fixed
 	xr_string	text;
@@ -2909,9 +3139,6 @@ static xr_vector<SSettingsProblem>	s_SettingsProblems;	// this frame's, for the 
 // taken when the tab opens, never per frame: counting files and reading the game's layout is disk work
 static int							s_GatedFiles	= 0;
 static int							s_GatedPatches	= 0;
-static bool							s_SlotChecked	= false;
-static bool							s_SlotOk		= false;
-static xr_string					s_SlotError;
 static xr_vector<xr_string>			s_PdaFiles;			// project-relative .pdaasset files
 
 // the modules installed in the linked game, for the Relations pickers; read when that page is shown
@@ -2923,6 +3150,30 @@ struct SInstalledModule
 static xr_vector<SInstalledModule>	s_Installed;
 static bool							s_InstalledScanned	= false;
 static char							s_ModuleSearch[64]	= {};
+
+// the Commands page: the list as edited and as loaded (the form's fixed fields cannot hold a list),
+// and what its checks read - taken when the page is picked, never per frame
+static xr_vector<EditorMod::SCommand>	s_Commands;
+static xr_vector<EditorMod::SCommand>	s_CommandsBase;
+static xr_vector<xr_string>				s_CmdFunctions;		// <script>.<function> of the project's scripts
+static xr_vector<std::pair<xr_string, xr_string> >	s_CmdTaken;	// {command, module} of the linked game's other modules
+static char								s_FunctionSearch[64] = {};
+
+static bool SameCommands(const xr_vector<EditorMod::SCommand>& a, const xr_vector<EditorMod::SCommand>& b)
+{
+	if (a.size() != b.size()) return false;
+	for (u32 i = 0; i < a.size(); ++i)
+		if (a[i].name != b[i].name || a[i].function != b[i].function || a[i].help != b[i].help || a[i].args != b[i].args ||
+			a[i].cheat != b[i].cheat || a[i].declared != b[i].declared || a[i].extra != b[i].extra)
+			return false;
+	return true;
+}
+
+static void RefreshCommandData()
+{
+	EditorMod::ScriptFunctions(EditorProject::Root(), s_CmdFunctions);
+	EditorMod::InstalledCommands(s_Form.id, s_CmdTaken);
+}
 
 static char* FormField(SSettingsForm& f, const SFormField& field) { return (char*)&f + field.offset; }
 
@@ -2958,6 +3209,7 @@ static void FormFromManifest(const EditorMod::SManifest& m, SSettingsForm& f)
 	JoinList(m.exclude, f.exclude, sizeof(f.exclude), "\n");
 	JoinList(m.tags, f.tags, sizeof(f.tags), ",");
 	strncpy_s(f.pda, m.pda_layout.c_str(), _TRUNCATE);
+	strncpy_s(f.updates_off, m.disable_game_updates ? "1" : "", _TRUNCATE);
 }
 
 // the form over a manifest read from disk: every other key of it stays as it is
@@ -2969,6 +3221,7 @@ static void ApplyForm(const SSettingsForm& f, EditorMod::SManifest& m)
 	m.author = f.author;
 	m.description = f.description;
 	Trim(m.description);
+	m.disable_game_updates = f.updates_off[0] != 0;
 	m.website = f.website;
 	// a pasted link often drags a space or a line break along
 	Trim(m.website);
@@ -2999,7 +3252,7 @@ static bool SettingsDirty()
 	for (const SFormField& field : kFormFields)
 		if (strcmp(FormField(s_Form, field), FormField(s_FormBase, field)))
 			return true;
-	return false;
+	return !SameCommands(s_Commands, s_CommandsBase);
 }
 
 static void RefreshPdaFiles()
@@ -3023,18 +3276,20 @@ static void LoadSettingsForm()
 	}
 	FormFromManifest(m, s_FormBase);
 	s_Form = s_FormBase;
+	s_CommandsBase = m.commands;
+	s_Commands = s_CommandsBase;
 	s_SettingsThumb = m.thumbnail;
 	s_FormGen = EditorMod::ManifestGeneration();
 	s_FormRoot = EditorProject::Root();
 	s_SettingsStatus.clear();
 	ThumbnailCleanup();
+	RefreshCommandData();
 
 	string_path probe;
 	sprintf_s(probe, "%s\\gamedata", EditorProject::Root());
 	s_GatedFiles = CountFilesRec(probe, 0);
 	sprintf_s(probe, "%s\\patch", EditorProject::Root());
 	s_GatedPatches = CountFilesRec(probe, "_readme.txt");
-	s_SlotChecked = false;
 	s_InstalledScanned = false;
 	RefreshPdaFiles();
 }
@@ -3057,6 +3312,10 @@ static void SyncSettingsForm()
 		if (!strcmp(FormField(s_Form, field), FormField(s_FormBase, field)))
 			strcpy_s(FormField(s_Form, field), field.size, FormField(fresh, field));
 	s_FormBase = fresh;
+	// the list is one field: untouched, it follows the file
+	if (SameCommands(s_Commands, s_CommandsBase))
+		s_Commands = m.commands;
+	s_CommandsBase = m.commands;
 	if (s_ThumbPending.empty() && !s_ThumbRemove)
 		s_SettingsThumb = m.thumbnail;
 	RefreshPdaFiles();
@@ -3124,6 +3383,58 @@ static void CheckRelations(const SSettingsForm& f, xr_vector<SSettingsProblem>& 
 	for (const xr_string& id : ids[2])
 		if (has(ids[1], id))
 			add("before", "Loads both before and after " + id + ": the game cannot keep both.");
+}
+
+// Under each command's rows: what the game would refuse (errors, Save waits) and what the build or the linked
+// game's other modules will say (warnings) - the sentences of ValidateCommands' codes.
+static void CheckCommands(xr_vector<SSettingsProblem>& out)
+{
+	auto add = [&out](u32 i, LPCSTR part, XUI::Tone tone, bool blocks, const xr_string& text)
+	{
+		SSettingsProblem& p = out.emplace_back();
+		p.page = pgCommands;
+		p.field = NqUtil::Format("commands.%u.%s", i, part);
+		p.tone = tone;
+		p.blocks = blocks;
+		p.text = text;
+	};
+	for (u32 i = 0; i < s_Commands.size(); ++i)
+	{
+		const EditorMod::SCommand& c = s_Commands[i];
+		if (c.name.empty())
+			add(i, "name", XUI::Tone::Required, true, "Required: what the player types in the console.");
+		else if (!EditorMod::ValidCommandName(c.name.c_str()))
+			add(i, "name", XUI::Tone::Error, true, "Use a-z, 0-9 and _ only: the console finds a command by its exact name.");
+		else if (StockCommandWord(c.name.c_str()))
+			add(i, "name", XUI::Tone::Error, true, "The game has a command of this name: it keeps its own and refuses this one.");
+		else if (LPCSTR family = StockCommandFamily(c.name.c_str()))
+			add(i, "name", XUI::Tone::Warning, false,
+				xr_string("Named like the game's own ") + family + "* commands: if the game has one of this name, it keeps it.");
+		for (u32 k = 0; k < i; ++k)
+			if (!c.name.empty() && 0 == _stricmp(s_Commands[k].name.c_str(), c.name.c_str()))
+			{
+				add(i, "name", XUI::Tone::Error, true, "Declared twice: the game takes the first and refuses this one.");
+				break;
+			}
+		for (const std::pair<xr_string, xr_string>& t : s_CmdTaken)
+			if (0 == _stricmp(t.first.c_str(), c.name.c_str()))
+			{
+				add(i, "name", XUI::Tone::Warning, false, "Module " + t.second + " of the linked game has this command too: "
+					"the one that loads first keeps it.");
+				break;
+			}
+		if (c.function.empty())
+			add(i, "function", XUI::Tone::Required, true, "Required: <script>.<function> of the project's scripts.");
+		else if (!EditorMod::ValidCommandFunction(c.function.c_str()))
+			add(i, "function", XUI::Tone::Error, true, "<script>.<function>, e.g. my_mod.status.");
+		else if (!HasScriptFunction(s_CmdFunctions, c.function))
+			add(i, "function", XUI::Tone::Warning, false, "gamedata\\scripts has no such function: the build refuses the module until it does.");
+		xr_string bad;
+		if (!NqUtil::Cp1251Covers(c.help, bad))
+			add(i, "help", XUI::Tone::Warning, false, "Outside cp1251 (" + bad + "): the console shows '?' for it.");
+		if (!NqUtil::Cp1251Covers(c.args, bad))
+			add(i, "args", XUI::Tone::Warning, false, "Outside cp1251 (" + bad + "): the console shows '?' for it.");
+	}
 }
 
 static void CheckSettings()
@@ -3201,6 +3512,7 @@ static void CheckSettings()
 		add(pgPda, "pda", XUI::Tone::Warning, false, "The build leaves this file out, so the game would never see it.");
 
 	CheckRelations(f, out);
+	CheckCommands(out);
 }
 
 static int SettingsBlocking(const SSettingsProblem** first = nullptr)
@@ -3218,7 +3530,7 @@ static int SettingsBlocking(const SSettingsProblem** first = nullptr)
 static int RowFlags(LPCSTR field, int flags = 0)
 {
 	for (const SSettingsProblem& p : s_SettingsProblems)
-		if (!strcmp(p.field, field) && p.tone == XUI::Tone::Error)
+		if (p.field == field && p.tone == XUI::Tone::Error)
 			return flags | XUI::PropInvalid;
 	return flags;
 }
@@ -3226,7 +3538,7 @@ static int RowFlags(LPCSTR field, int flags = 0)
 static void RowMessages(LPCSTR field)
 {
 	for (const SSettingsProblem& p : s_SettingsProblems)
-		if (!strcmp(p.field, field))
+		if (p.field == field)
 			XUI::PropertyMessage(p.tone, p.text.c_str());
 }
 
@@ -3264,6 +3576,9 @@ static bool SaveSettings(xr_string& err)
 		EditorMod::Load(EditorProject::Root(), m);
 	}
 	ApplyForm(s_Form, m);
+	// untouched, the list stays what mod.ltx says now - a save elsewhere or an edit by hand
+	if (!SameCommands(s_Commands, s_CommandsBase))
+		m.commands = s_Commands;
 	// the picture: the one waiting in temp\ takes its place, or the removal is carried out
 	xr_string thumb_err;
 	if (!s_ThumbPending.empty())
@@ -3287,6 +3602,8 @@ static bool SaveSettings(xr_string& err)
 	// what was written, normalized (the repository as owner/repo, the description trimmed)
 	FormFromManifest(m, s_FormBase);
 	s_Form = s_FormBase;
+	s_CommandsBase = m.commands;
+	s_Commands = s_CommandsBase;
 	s_SettingsThumb = m.thumbnail;
 	s_FormGen = EditorMod::ManifestGeneration();
 	s_SettingsStatus = thumb_err.empty() ? xr_string() : "The picture was not saved: " + thumb_err;
@@ -3296,6 +3613,7 @@ static bool SaveSettings(xr_string& err)
 static void RevertSettings()
 {
 	s_Form = s_FormBase;
+	s_Commands = s_CommandsBase;
 	if (!s_ThumbPending.empty()) ::DeleteFileA(s_ThumbPending.c_str());
 	s_ThumbPending.clear();
 	s_ThumbRemove = false;
@@ -3305,18 +3623,53 @@ static void RevertSettings()
 
 // ---- the pages ------------------------------------------------------------------
 
+// A last resort, so it asks: turning it on names everything the players lose. Turning it off needs no question.
+static bool s_AskGameUpdates = false;
+
+static void AskGameUpdates()
+{
+	XUI::ConfirmSpec spec;
+	spec.id = "disable_game_updates";
+	spec.title = "Disable Game Updates";
+	spec.headline = "Everyone who installs this module stops getting updates of the game. Disable them only as a last resort.";
+	spec.items.push_back("The game no longer checks for updates, so its fixes never reach these players.");
+	spec.items.push_back("Send Bug Report disappears from the main menu.");
+	spec.items.push_back("The menu says in red that updates were disabled, and names this module.");
+	spec.items.push_back("It lasts for as long as the module is installed, and other modules cannot turn it back on.");
+	spec.consequence = "Right only for a module an update would break. If a game update merely might conflict with yours, keep updates on and release a fix instead.";
+	spec.action = "Disable Updates";
+	spec.destructive = true;
+	XUI::Confirm(spec, [](XUI::Answer answer) { if (answer == XUI::Answer::Yes) strncpy_s(s_Form.updates_off, "1", _TRUNCATE); });
+}
+
+static void DrawGameUpdatesRow()
+{
+	SSettingsForm& f = s_Form;
+	bool off = f.updates_off[0] != 0;
+	if (s_AskGameUpdates)
+	{
+		s_AskGameUpdates = false;
+		AskGameUpdates();
+	}
+	if (!XUI::PropertyRow("Disable Game Updates", "Only for a module that replaces the game's own files so deeply that an update would break it. "
+		"Saved with the module's other settings, and applied by the build.", XUI::PropInline))
+		return;
+	if (ImGui::Checkbox("##updates_off", &off))
+	{
+		if (!off)
+			f.updates_off[0] = 0;
+		else
+			AskGameUpdates();
+	}
+	if (f.updates_off[0])
+		XUI::PropertyMessage(XUI::Tone::Warning, "Players of this module get no game updates and cannot send bug reports.");
+}
+
 static void DrawGeneralPage()
 {
 	SSettingsForm& f = s_Form;
 	if (XUI::BeginPropertyGrid("mod_settings", .28f))
 	{
-		if (XUI::PropertyRow("Module ID", "Technical, never shown to the player: the folder the module installs into (<game>\\modules\\<id>) "
-			"and the name other modules require it by. Seeded from the project folder - change it before the first release.",
-			RowFlags("id", XUI::PropRequired)))
-		{
-			ImGui::InputText("##id", f.id, sizeof(f.id));
-			RowMessages("id");
-		}
 		if (XUI::PropertyRow("Name", "The mod's title, as the game's Mods menu prints it. Free text: it owes nothing to the module id "
 			"or the project folder, and it is not the title of a game mode."))
 			ImGui::InputText("##name", f.name, sizeof(f.name));
@@ -3351,6 +3704,21 @@ static void DrawGeneralPage()
 			}
 			RowMessages("github");
 		}
+		bool id_problem = false;
+		for (const SSettingsProblem& problem : s_SettingsProblems)
+			id_problem |= problem.field == "id";
+		if (XUI::PropertySection("More##general", id_problem))
+		{
+			if (XUI::PropertyRow("Module ID", "Technical, never shown to the player: the folder the module installs into (<game>\\modules\\<id>) "
+				"and the name other modules require it by. Seeded from the project folder - change it before the first release.",
+				RowFlags("id", XUI::PropRequired)))
+			{
+				ImGui::InputText("##id", f.id, sizeof(f.id));
+				RowMessages("id");
+			}
+			DrawGameUpdatesRow();
+			XUI::EndPropertySection();
+		}
 		XUI::EndPropertyGrid();
 	}
 }
@@ -3367,7 +3735,7 @@ static void PictureRow()
 	if (shown != s_ThumbTextureOf)
 	{
 		// not drawn yet this frame, and the last frame is presented: safe to let go
-		XFinedMCP::ReleaseTexture(s_ThumbTexture);
+		GrizzlyMCP::ReleaseTexture(s_ThumbTexture);
 		s_ThumbTexture = shown.empty() ? 0 : DX11TextureFromFile(shown.c_str());
 		s_ThumbTextureOf = shown;
 	}
@@ -3375,15 +3743,15 @@ static void PictureRow()
 	const ImVec2 box(XUI::Pt(96.f), XUI::Pt(96.f));
 	const ImVec2 at = ImGui::GetCursorScreenPos();
 	ImDrawList* dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(at, ImVec2(at.x + box.x, at.y + box.y), XFinedTheme::U32(ModToken::Inset), XUI::Pt(4.f));
+	dl->AddRectFilled(at, ImVec2(at.x + box.x, at.y + box.y), GrizzlyTheme::U32(ModToken::Inset), XUI::Pt(4.f));
 	if (s_ThumbTexture)
 		ImGui::Image((ImTextureID)s_ThumbTexture, box);
 	else
 	{
 		// the frame of the picture, so the row does not jump
-		dl->AddRect(at, ImVec2(at.x + box.x, at.y + box.y), XFinedTheme::U32(ModToken::BorderSubtle), XUI::Pt(4.f));
+		dl->AddRect(at, ImVec2(at.x + box.x, at.y + box.y), GrizzlyTheme::U32(ModToken::BorderSubtle), XUI::Pt(4.f));
 		XUI::DrawIcon(dl, XUI::Icon::Picture, ImVec2(at.x + box.x * .5f - XUI::Pt(16.f), at.y + box.y * .5f - XUI::Pt(16.f)), 32.f,
-			XFinedTheme::U32(ModToken::TextMuted));
+			GrizzlyTheme::U32(ModToken::TextMuted));
 		ImGui::Dummy(box);
 	}
 	ImGui::SameLine(0.f, XUI::Pt(12.f));
@@ -3547,10 +3915,7 @@ static void DrawModePage()
 				ImGui::EndCombo();
 			}
 			if (XUI::PropertyTrailing("##rescan", XUI::Icon::Refresh, "Scan the linked game's modes again"))
-			{
 				EditorGameModes::Invalidate();
-				s_SlotChecked = false;
-			}
 			if (modes.empty())
 				XUI::PropertyMessage(XUI::Tone::Warning, scan_err.empty() ? "The linked game declares no modes, only options." : scan_err.c_str());
 			RowMessages("mode");
@@ -3559,36 +3924,16 @@ static void DrawModePage()
 	else if (kind == 2)
 	{
 		if (XUI::PropertyRow("Mode ID", "Technical id of the MODE, not of the mod: the module's level work is gated on it and the "
-			"new-game checkbox is built from it. It may match the module id or not.", RowFlags("pmode_id", XUI::PropRequired)))
+			"new-game screen offers it. It may match the module id or not.", RowFlags("pmode_id", XUI::PropRequired)))
 		{
 			ImGui::InputText("##pmode_id", f.pmode_id, sizeof(f.pmode_id));
 			RowMessages("pmode_id");
 		}
-		if (XUI::PropertyRow("Mode Title", "The caption of the mode's checkbox on the new-game screen. It names the mode, not the mod: "
+		if (XUI::PropertyRow("Mode Title", "What the new-game screen lists the mode as. It names the mode, not the mod: "
 			"the Mods menu shows the Name on General instead."))
 		{
 			ImGui::InputText("##pmode_title", f.pmode_title, sizeof(f.pmode_title));
 			RowMessages("pmode_title");
-		}
-		// A mode nobody can pick does not exist. The build generates the files that put it on the new-game
-		// screen, and refuses the module when the linked game's screen cannot be read: that is measured once.
-		if (!s_SlotChecked)
-		{
-			s_SlotChecked = true;
-			EditorGameModes::SSlot slot;
-			s_SlotError.clear();
-			s_SlotOk = EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select_16.xml", 1, f.id, slot, s_SlotError) ||
-				EditorGameModes::SuggestSlot("configs\\ui\\ui_mm_faction_select.xml", 1, f.id, slot, s_SlotError);
-		}
-		if (XUI::PropertyRow("New-Game Screen", "Dead Air: Refined lists the mode among the module modes of the new-game screen; a screen "
-			"without that list gets a checkbox instead. Every build writes the files for both and keeps them in step: "
-			"gamedata\\configs\\ui\\<id>_modes.xml and <id>_modes_16.xml, gamedata\\configs\\text\\rus\\<id>_modes.xml (the caption) "
-			"and scripts\\mode_register.script. Edit these settings, not those files. scripts\\register.script is yours and is never touched.",
-			XUI::PropReadOnly))
-		{
-			XUI::PropertyText(s_SlotOk ? "Listed under the mode title" : "Not placed");
-			if (!s_SlotOk)
-				XUI::PropertyMessage(XUI::Tone::Warning, ("The build cannot read the linked game's new-game screen: " + s_SlotError + ".").c_str());
 		}
 	}
 	XUI::EndPropertyGrid();
@@ -3835,6 +4180,134 @@ static void DrawPdaPage()
 	}
 }
 
+// A function of the project's scripts, picked from a searchable list.
+static bool FunctionPicker(LPCSTR popup, xr_string& picked)
+{
+	if (!ImGui::BeginPopup(popup)) return false;
+	bool done = false;
+	const float width = XUI::Em(24.f);
+	if (ImGui::IsWindowAppearing())
+	{
+		s_FunctionSearch[0] = 0;
+		ImGui::SetKeyboardFocusHere();
+	}
+	ImGui::SetNextItemWidth(width);
+	XUI::SearchField("##search", s_FunctionSearch, sizeof(s_FunctionSearch), "Search the project's functions");
+	xr_vector<const xr_string*> rows;
+	for (const xr_string& fn : s_CmdFunctions)
+		if (XUI::Match(s_FunctionSearch, fn.c_str()))
+			rows.push_back(&fn);
+	// Enter takes the first row
+	if (!rows.empty() && ImGui::IsKeyPressed(ImGuiKey_Enter, false) && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
+	{
+		picked = *rows[0];
+		done = true;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::BeginChild("##functions", ImVec2(width, XUI::Pt(240.f)));
+	for (u32 i = 0; i < rows.size() && !done; ++i)
+		if (ImGui::Selectable(rows[i]->c_str()))
+		{
+			picked = *rows[i];
+			done = true;
+			ImGui::CloseCurrentPopup();
+		}
+	if (rows.empty())
+		XUI::StatusText(XUI::Tone::Muted, s_CmdFunctions.empty() ? "The project's gamedata\\scripts has no function yet: write one, then pick it here."
+			: "No function matches.");
+	ImGui::EndChild();
+	ImGui::EndPopup();
+	return done;
+}
+
+// One section per command, the same label-left grid as the other pages; Add Command under them.
+static void DrawCommandsPage()
+{
+	if (XUI::BeginPropertyGrid("mod_settings", .28f))
+	{
+		int remove = -1;
+		for (u32 i = 0; i < s_Commands.size(); ++i)
+		{
+			EditorMod::SCommand& c = s_Commands[i];
+			ImGui::PushID((int)i);
+			const xr_string field = NqUtil::Format("commands.%u.", i);
+			const xr_string f_name = field + "name", f_function = field + "function", f_help = field + "help", f_args = field + "args";
+			const xr_string title = c.name.empty() ? xr_string("New Command") : c.name;
+			if (XUI::PropertySection(title.c_str(), true, c.cheat ? "cheat" : nullptr))
+			{
+				if (XUI::PropertyRow("Name", "What the player types in the console: a-z, 0-9 and _. A name the game has, or that a module "
+					"loading earlier took, is refused by the game.", RowFlags(f_name.c_str(), XUI::PropRequired)))
+				{
+					char name[72];
+					strncpy_s(name, c.name.c_str(), _TRUNCATE);
+					if (ImGui::InputTextWithHint("##name", "my_mod_status", name, sizeof(name)))
+						c.name = name;
+					if (XUI::PropertyTrailing("##remove", XUI::Icon::Delete, "Take the command out"))
+						remove = (int)i;
+					RowMessages(f_name.c_str());
+				}
+				if (XUI::PropertyRow("Function", "<script>.<function> of the project's gamedata\\scripts. The game calls it with the text "
+					"typed after the name, the module id and the command's name, and prints the string it returns.",
+					RowFlags(f_function.c_str(), XUI::PropRequired)))
+				{
+					char function[192];
+					strncpy_s(function, c.function.c_str(), _TRUNCATE);
+					if (ImGui::InputTextWithHint("##function", "my_mod.status", function, sizeof(function)))
+					{
+						c.function = function;
+						c.declared = true;
+					}
+					const ImVec2 below(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + XUI::Pt(2.f));
+					if (XUI::PropertyTrailing("##pick", XUI::Icon::ChevronDown, "Pick a function of the project's scripts"))
+						XUI::Shell::OpenPopupAt("pick_function", below);
+					if (XUI::PropertyTrailing("##rescan", XUI::Icon::Refresh, "Read the project's scripts again"))
+						RefreshCommandData();
+					xr_string picked;
+					if (FunctionPicker("pick_function", picked))
+					{
+						c.function = picked;
+						c.declared = true;
+					}
+					RowMessages(f_function.c_str());
+				}
+				if (XUI::PropertyRow("Help", "The line the console's help shows for it. Plain text or a string table id.",
+					RowFlags(f_help.c_str())))
+				{
+					char help[256];
+					strncpy_s(help, c.help.c_str(), _TRUNCATE);
+					if (ImGui::InputText("##help", help, sizeof(help)))
+						c.help = help;
+					RowMessages(f_help.c_str());
+				}
+				if (XUI::PropertyRow("Arguments", "What it takes after the name, e.g. <night 1-7>: shown by help and as the hint while "
+					"typing. The function reads them from its first argument (xms.command_args splits them into words).",
+					RowFlags(f_args.c_str())))
+				{
+					char args[128];
+					strncpy_s(args, c.args.c_str(), _TRUNCATE);
+					if (ImGui::InputTextWithHint("##args", "none", args, sizeof(args)))
+						c.args = args;
+					RowMessages(f_args.c_str());
+				}
+				if (XUI::PropertyRow("Cheat", "Runs only in Dead Air's debug mode (the game started with -dbg); otherwise the console "
+					"says so and nothing runs."))
+					ImGui::Checkbox("##cheat", &c.cheat);
+				XUI::EndPropertySection();
+			}
+			ImGui::PopID();
+		}
+		XUI::EndPropertyGrid();
+		if (remove >= 0)
+			s_Commands.erase(s_Commands.begin() + remove);
+	}
+	if (s_Commands.empty())
+		XUI::Prose("No commands. A command is a line of [commands] in mod.ltx: the name the player types and the function it calls.");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + XUI::Pt(6.f));
+	if (XUI::Button("Add Command"))
+		s_Commands.push_back(EditorMod::SCommand());
+}
+
 // ---- the tab ----------------------------------------------------------------------
 
 static void DrawSettingsBody()
@@ -3864,6 +4337,8 @@ static void DrawSettingsBody()
 				if (i == pgPda) RefreshPdaFiles();
 				// a module installed while the tab was open is on the list the next time the page is picked
 				if (i == pgRelations) s_InstalledScanned = false;
+				// a function written since: the scripts are read when the page is picked
+				if (i == pgCommands) RefreshCommandData();
 			}
 		}
 	}
@@ -3873,7 +4348,7 @@ static void DrawSettingsBody()
 	// the form: one column of up to 44 em beside the nav, the scrollbar at the right edge of the tab
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(16.f), XUI::Pt(8.f)));
 	// layout children: the document's own fill, not the inset of a list
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(ModToken::Base));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::U32(ModToken::Base));
 	ImGui::BeginChild("##settings_form", ImVec2(0.f, -footer), ImGuiChildFlags_AlwaysUseWindowPadding);
 	ImGui::PopStyleVar();
 	{
@@ -3895,16 +4370,17 @@ static void DrawSettingsBody()
 		case pgRelations:	DrawRelationsPage();	break;
 		case pgContents:	DrawContentsPage();	break;
 		case pgPda:			DrawPdaPage();		break;
+		case pgCommands:	DrawCommandsPage();	break;
 		}
 		ImGui::EndChild();
 	}
 	ImGui::EndChild();
 
-	// the sticky footer: what stops the save on the left, Revert and Save on the right
+	// the sticky footer: what stops the save, if anything does
 	const ImVec2 at = ImGui::GetCursorScreenPos();
 	const float right = at.x + ImGui::GetContentRegionAvail().x;
 	ImGui::GetWindowDrawList()->AddLine(ImVec2(at.x, at.y), ImVec2(right, at.y),
-		XFinedTheme::U32(ModToken::BorderSubtle));
+		GrizzlyTheme::U32(ModToken::BorderSubtle));
 	ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + XUI::Pt(4.f)));
 	const bool dirty = SettingsDirty();
 	const SSettingsProblem* first = nullptr;
@@ -3916,21 +4392,17 @@ static void DrawSettingsBody()
 		XUI::Toolbar tb("mod_settings_footer", XUI::ToolbarRow);
 		tb.Group(1);
 		if (blocking)
-			tb.Status(blocking == 1 ? "1 problem to fix before saving" : NqUtil::Format("%d problems to fix before saving", blocking).c_str(), XUI::Tone::Error);
+			tb.Status(why.c_str(), XUI::Tone::Error);
 		else if (!s_SettingsStatus.empty())
 			tb.Status(s_SettingsStatus.c_str(), XUI::Tone::Error);
 		else
-			tb.Status(dirty ? "Unsaved changes" : "mod.ltx is up to date", XUI::Tone::Muted);
-		tb.Spring();
-		tb.Group(3);
-		if (tb.Action("revert", XUI::Icon::Undo, "Revert", dirty ? "Drop the changes: back to what mod.ltx says" : "Nothing to revert", dirty))
-			RevertSettings();
-		if (tb.Action("save", XUI::Icon::Save, "Save", !dirty ? "No changes to save" : blocking ? why.c_str() : "Write mod.ltx",
-			dirty && !blocking, false, XUI::Kind::Primary))
-		{
-			xr_string err;
-			SaveSettings(err);
-		}
+			tb.Status("Saved to mod.ltx as you edit", XUI::Tone::Muted);
+	}
+	// a field still being typed in is not an edit yet
+	if (dirty && !blocking && !ImGui::IsAnyItemActive())
+	{
+		xr_string err;
+		SaveSettings(err);
 	}
 }
 
@@ -3985,13 +4457,6 @@ static bool					s_WantExport		= false;
 static bool					s_WantFlat			= false;
 static string_path			s_Target			= {};
 static xr_string			s_ExportId;			// what the dialog names the destination by
-static bool					s_WantBuild			= false;
-static bool					s_BuildQueued		= false;
-static bool					s_BuildClean		= false;	// the author agreed to the files going
-static bool					s_ExportQueued		= false;
-static bool					s_DeferredExportFlat = false;
-static bool					s_DeferredClean		= false;
-static string_path			s_DeferredExportTarget = {};
 static EditorMod::TPreBuildBake	s_PreBuildBake	= 0;
 
 void EditorMod::SetPreBuildBake(TPreBuildBake fn)	{ s_PreBuildBake = fn; }
@@ -4011,9 +4476,559 @@ void EditorMod::BuildTargetText(char* dst, u32 size)
 	sprintf_s(dst, size, "%s\\modules\\%s", EditorProject::GameRoot(), m.id.c_str());
 }
 
-static void ProjectIni(char* dst, u32 size)
+//------------------------------------------------------------------------------
+// the job
+//------------------------------------------------------------------------------
+enum EJobPhase	{ jpIdle, jpChecks, jpFiles };
+enum ECheck		{ ckBake, ckManifest, ckQuestsBegin, ckQuests, ckQuestsEnd, ckWorld, ckCommands, ckPda, ckScreens, ckModes, ckTarget, ckDone };
+
+static const char* const kCheckStage[] =
 {
-	sprintf_s(dst, size, "%s\\project.ltx", EditorProject::Root());
+	"Baking the scene", "Reading the manifest", "Checking the quests", "Checking the quests", "Checking the quests", "Checking the world rules",
+	"Checking the console commands", "Checking the PDA", "Checking the screens and music", "Checking the characters", "Checking the target folder",
+	"Starting",
+};
+
+static const u32 kCheckSliceMs	= 12;
+static const u32 kCheckSlowMs	= 100;
+static const u32 kFramesFirst	= 2;	// the row is on the screen before the first check
+
+struct SJob
+{
+	EJobPhase					phase		= jpIdle;
+	EditorMod::SJobRequest		rq;
+	xr_string					root;
+	SBuildPlan					plan;
+	xr_string					bake_note, warnings;
+	u32							check		= ckBake;
+	u32							started		= 0;
+	u32							frames		= 0;
+	NqExport::SProjectCheck*	quests		= nullptr;
+};
+
+static SJob							s_Job;
+static std::thread					s_JobThread;
+// what the thread answers; read once s_JobDone is up
+static std::atomic<bool>			s_JobDone	{ false };
+static std::atomic<bool>			s_JobWarmed	{ false };
+static bool							s_JobOk		= false;
+static SBuildOut					s_JobOut;
+static EditorMod::SPackageResult	s_JobPackage;
+static SReleaseDraft				s_JobDraft;
+static EditorMod::SJobResult		s_JobLast;
+
+// The checks walk the project on the main thread, and a walk costs a round trip per folder while the folders are not in
+// the file cache: seconds on a big mod. Walked here first, they are.
+static void TouchTree(const xr_string& dir)
+{
+	WIN32_FIND_DATAA fd;
+	HANDLE h = ::FindFirstFileA((dir + "\\*").c_str(), &fd);
+	if (INVALID_HANDLE_VALUE == h)	return;
+	do
+	{
+		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+			!EditorProject::IsToolingEntry(fd.cFileName) && strcmp(fd.cFileName, ".") && strcmp(fd.cFileName, ".."))
+			TouchTree(dir + "\\" + fd.cFileName);
+	} while (!s_Feed.Cancelled() && ::FindNextFileA(h, &fd));
+	::FindClose(h);
+}
+
+static void WarmThread(xr_string root)
+{
+	TouchTree(root);
+	s_Feed.Stage(kStepCheck, kCheckStage[ckBake]);
+	s_JobWarmed = true;
+}
+
+static void JobThread()
+{
+	const SBuildPlan& plan = s_Job.plan;
+	s_JobOk = plan.package ? PackageFiles(plan, s_JobPackage, s_JobDraft, s_JobOut) : WriteBuild(plan, s_JobOut);
+	s_JobDone = true;
+}
+
+static void DrainJobLog()
+{
+	xr_vector<xr_string> lines;
+	{
+		std::lock_guard<std::mutex> guard(s_Feed.lock);
+		lines.swap(s_Feed.log);
+	}
+	for (const xr_string& line : lines)
+		Msg("%s", line.c_str());
+}
+
+static void AddWarning(xr_string& to, const xr_string& line)
+{
+	if (!to.empty()) to += "\n";
+	to += line;
+}
+
+// the lines of a validator: E... refuses the build, the others are warnings
+static xr_string SortProblems(const xr_vector<xr_string>& problems, xr_string& warnings)
+{
+	xr_string errors;
+	for (const xr_string& p : problems)
+		AddWarning(p[0] == 'E' ? errors : warnings, p);
+	return errors;
+}
+
+// The report a flat export leaves in its folder: XMS-only content is not representable as a plain gamedata overlay.
+static xr_string FlatReport(LPCSTR project_root, const EditorMod::SManifest& m)
+{
+	string_path d_patch, d_spawn, d_scripts, d_levels;
+	sprintf_s(d_patch, "%s\\patch", project_root);
+	sprintf_s(d_spawn, "%s\\spawn", project_root);
+	sprintf_s(d_scripts, "%s\\scripts", project_root);
+	sprintf_s(d_levels, "%s\\levels", project_root);
+	const int c_patch	= CountFilesRec(d_patch, "_readme.txt");
+	const int c_spawn	= CountFilesRec(d_spawn, 0);
+	const int c_scripts	= CountFilesRec(d_scripts, 0);
+	const int c_levels	= CountFilesRec(d_levels, 0);
+	// quests are module-only content wherever they sit: the NQ runtime finds
+	// them through xms.list_files(<module id>), i.e. under <game>\modules\<id>.
+	// A flat overlay is not a module and is never scanned, so a copy that
+	// lands in gamedata\ is inert and one outside gamedata\ is not copied.
+	xr_vector<NqDocs::SProjectQuest> nq_quests;
+	NqDocs::ProjectQuests(nq_quests, true);
+	const int c_quests	= (int)nq_quests.size();
+
+	xr_string rep = "XMS flat export report - module '";
+	rep += m.id;
+	rep += "'\r\n\r\n";
+	char line[128];
+	xr_vector<xr_string> characters;
+	EditorCharacters::List(project_root, characters);
+	if (!c_patch && !c_spawn && !c_scripts && !c_levels && !c_quests && m.mode.empty() && m.provides_modes.empty() && characters.empty())
+		return rep + "fully vanilla-compatible\r\n";
+	// the game reads a mode and a character of a module, and a flat overlay is none
+	if (!characters.empty())	{ sprintf_s(line, "characters: %d file(s) - NOT exported (XMS-only)\r\n", int(characters.size())); rep += line; }
+	if (!m.provides_modes.empty())
+	{
+		rep += "declared mode: ";
+		rep += m.provides_modes[0].id;
+		rep += " - NOT registered: a flat overlay cannot add it to the "
+			   "new-game screen, export as a module for that\r\n";
+	}
+	if (c_patch)	{ sprintf_s(line, "patch: %d file(s) - NOT exported (XMS-only)\r\n", c_patch); rep += line; }
+	if (c_spawn)	{ sprintf_s(line, "spawn: %d file(s) - NOT exported (XMS-only)\r\n", c_spawn); rep += line; }
+	if (c_scripts)	{ sprintf_s(line, "scripts: %d file(s) - NOT exported (XMS-only)\r\n", c_scripts); rep += line; }
+	if (c_levels)	{ sprintf_s(line, "levels: %d overlay file(s) - NOT exported (XMS-only)\r\n", c_levels); rep += line; }
+	if (c_quests)	{ sprintf_s(line, "graphs: %d .nqasset/.behasset - NOT usable flat (the NQ runtime only scans <game>\\modules\\<id>)\r\n", c_quests); rep += line; }
+	if (!m.mode.empty())
+	{
+		rep += "target mode: ";
+		rep += m.mode;
+		rep += " - engine gating is XMS-only (NOT exported flat)\r\n";
+	}
+	return rep;
+}
+
+// Where the build goes, and whether it may. A build replaces what is there, so a target that is a link - one made so the
+// game runs the working copy directly - or that is, holds or sits in the project would take the author's sources with it.
+// Judged on where the target would be, before a single folder of it is created.
+static bool CheckTarget(SJob& job, xr_string& err)
+{
+	SBuildPlan& plan = job.plan;
+	const EditorMod::SManifest& m = plan.m;
+	LPCSTR project_root = job.root.c_str();
+	plan.project	= job.root;
+	plan.flat		= EditorMod::jkExportFlat == job.rq.kind;
+	plan.package	= EditorMod::jkPackage == job.rq.kind;
+	plan.clean		= job.rq.clean || plan.package;
+	if (plan.package)
+		plan.stage = NqUtil::Format("%s\\temp\\release_stage_%u", project_root, (u32)::GetCurrentProcessId());
+
+	char target[MAX_PATH] = {};
+	NormalizePath(plan.package ? plan.stage.c_str() : job.rq.target.c_str(), target, sizeof(target));
+	if (!target[0])							{ err = "target folder not set"; return false; }
+	if (xr_strlen(target) + m.id.size() + 32 >= MAX_PATH)
+											{ err = "target path too long"; return false; }
+
+	// A module goes to <game>\modules\, NOT to mods\: that one is the folder
+	// JSGME manages, and a module sitting there is a module JSGME offers to
+	// copy over the game - the merge a module exists to avoid. A flat overlay
+	// is the opposite case: that IS a JSGME mod, so it keeps its own name.
+	string_path dst;
+	if (plan.flat)	sprintf_s(dst, "%s\\gamedata_%s", target, m.id.c_str());
+	else			sprintf_s(dst, "%s\\modules\\%s", target, m.id.c_str());
+	if (InsideGameGamedata(dst) || InsideGameGamedata(target))
+	{
+		err = "target is inside the game's gamedata - a mod must stay in its own folder "
+			  "(export to the game ROOT: the module goes to <game>\\modules\\<id>)";
+		return false;
+	}
+	plan.dst = dst;
+
+	xr_string real_dst, real_src;
+	const bool known = ProjectedRealPath(dst, real_dst) && RealFolder(project_root, real_src);
+	const DWORD attr = ::GetFileAttributesA(dst);
+	if (INVALID_FILE_ATTRIBUTES != attr && (attr & FILE_ATTRIBUTE_REPARSE_POINT))
+	{
+		err = "the target folder is a link";
+		if (known) { err += " to "; err += real_dst; }
+		err += " - a build replaces it, and would replace what it points at. Remove the link, or build to another folder";
+		return false;
+	}
+	// inside the editor's own scratch is fine - the release stage lives in temp\,
+	// and no build walks it
+	bool scratch = false;
+	if (known && real_dst.size() > real_src.size() && SameOrBelow(real_dst, real_src))
+	{
+		xr_string first = real_dst.substr(real_src.size() + 1);
+		const size_t cut = first.find('\\');
+		if (cut != xr_string::npos) first.erase(cut);
+		scratch = EditorProject::IsEditorOnlyEntry(first.c_str());
+	}
+	if (known && ((SameOrBelow(real_dst, real_src) && !scratch) || SameOrBelow(real_src, real_dst)))
+	{
+		err = "the target folder and the project overlap (" + real_dst + ") - the build would write into its own sources, or wipe them";
+		return false;
+	}
+	if (plan.flat) plan.flat_report = FlatReport(project_root, m);
+	return true;
+}
+
+// One check, on the main thread; false = the job ends here and `err` says why. What refuses a build is here, where the
+// author can still fix it: quest and behaviour graphs ship as they are, so a broken one would only be found by the player.
+static bool RunCheck(SJob& job, xr_string& err)
+{
+	SBuildPlan& plan = job.plan;
+	EditorMod::SManifest& m = plan.m;
+	LPCSTR root = job.root.c_str();
+	switch (job.check)
+	{
+	case ckBake:
+		EditorMod::RunPreBuildBake(job.bake_note);
+		break;
+	case ckManifest:
+		if (!EditorMod::Load(root, m))			{ err = "mod.ltx not found in the project"; return false; }
+		if (EditorMod::jkPackage == job.rq.kind)
+		{
+			if (!ReleaseGate(m, err))			return false;
+			if (!job.rq.requires_game.empty() && !DottedNumber(job.rq.requires_game.c_str(), 3, 3))
+				{ err = "invalid requires_game: MAJOR.MINOR.PATCH expected, e.g. 1.4.1"; return false; }
+			string_path out;
+			if (!ResolveReleaseDir(root, job.rq.out_dir.c_str(), m.version, out, err)) return false;
+			plan.out_dir = out;
+			plan.requires_game = job.rq.requires_game;
+		}
+		else if (!EditorMod::ValidateId(m.id.c_str()))
+			{ err = "module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)"; return false; }
+		// A finished module always states which game it is for. "Nothing chosen"
+		// is not a third option - it is how content ends up applied in a campaign
+		// it was never built for.
+		if (m.mode.empty() && m.provides_modes.empty() && 0 != _stricmp(m.target.c_str(), "default"))
+		{
+			err = "no target game mode: open Mod > Mod Settings, Game Mode, and pick one "
+				  "(the ordinary game, a mode of the linked game, or a new mode this module adds)";
+			return false;
+		}
+		break;
+	case ckQuestsBegin:
+		job.quests = NqExport::BeginProjectCheck();
+		break;
+	case ckQuests:
+		if (!NqExport::StepProjectCheck(job.quests, kCheckSliceMs))
+			return true;
+		break;
+	case ckQuestsEnd:
+	{
+		xr_vector<xr_string> nq_log;
+		int nq_errors = 0, nq_warnings = 0;
+		const bool nq_ok = NqExport::EndProjectCheck(job.quests, err, nq_log, &nq_errors, &nq_warnings);
+		job.quests = nullptr;
+		if (nq_warnings)
+		{
+			// the lines the author needs to read, not a count they have to go looking for
+			job.warnings = NqUtil::Format("quest warnings: %d", nq_warnings);
+			for (u32 i = 0; i < nq_log.size(); ++i)
+			{
+				if (nq_log[i].find(": E") != xr_string::npos) continue;
+				job.warnings += "\n  ";
+				job.warnings += nq_log[i];
+			}
+		}
+		if (!nq_ok) return false;
+		break;
+	}
+	case ckWorld:
+	{
+		// a second Player Start or a fourth new-game choice is a decision the game would make for the author
+		// (the first start wins, the fourth row never shows) - refused; a level or transition the game lacks is a warning
+		xr_vector<xr_string> problems;
+		EditorWorld::Validate(root, m, problems);
+		err = SortProblems(problems, job.warnings);
+		if (!err.empty()) return false;
+		break;
+	}
+	case ckCommands:
+	{
+		// the game refuses a bad name, a taken one or a function it cannot call with a log line the player reads
+		xr_vector<xr_string> problems;
+		EditorMod::ValidateCommands(root, m, problems);
+		err = SortProblems(problems, job.warnings);
+		if (!err.empty()) return false;
+		break;
+	}
+	case ckPda:
+	{
+		// the game refuses a layout with an error and keeps its stock PDA
+		xr_vector<xr_string> pda_errors, pda_warnings;
+		EditorPda::ValidateForBuild(root, pda_errors, pda_warnings);
+		for (const xr_string& p : pda_warnings) AddWarning(job.warnings, p);
+		if (!pda_errors.empty())
+		{
+			err = "The PDA layout has errors:";
+			for (const xr_string& p : pda_errors) { err += "\n"; err += p; }
+			return false;
+		}
+		break;
+	}
+	case ckScreens:
+	{
+		// screens and music name files of the project: one the module would not hold is a screen the game cannot show
+		xr_vector<xr_string> problems;
+		EditorScreens::Validate(root, m, problems);
+		const xr_string refused = SortProblems(problems, job.warnings);
+		if (!refused.empty())
+		{
+			err = "The screens and music have errors:\n" + refused;
+			return false;
+		}
+		break;
+	}
+	case ckModes:
+		if (m.disable_game_updates)
+			AddWarning(job.warnings, "This module turns off the game's updates and bug reports for everyone who has it.");
+		for (u32 i = 0; i < m.provides_modes.size(); ++i)
+		{
+			const EditorMod::SProvidesMode& mode = m.provides_modes[i];
+			if (mode.id.empty()) continue;
+			if (!EditorMod::ValidateModeId(mode.id.c_str()) || mode.id.size() > 64)
+			{
+				err = "invalid declared mode id '" + mode.id + "' (allowed: a-z 0-9 _ . -, up to 64 chars)";
+				return false;
+			}
+			// the game shows the title in cp1251, and an export driven from MCP never sees the field's own warning
+			xr_string outside;
+			if (!NqUtil::Cp1251Covers(mode.title, outside))
+				AddWarning(job.warnings, "Mode '" + mode.id + "': the title has characters outside cp1251 (" + outside + "), the player will see a look-alike or '?'.");
+		}
+		// the manifest and the assets are the whole description and the game makes the rest of them
+		if (!EditorCharacters::CheckForBuild(root, err)) return false;
+		break;
+	case ckTarget:
+		if (!CheckTarget(job, err)) return false;
+		break;
+	}
+	++job.check;
+	s_Feed.Stage(kStepCheck, kCheckStage[job.check]);
+	return true;
+}
+
+static void EndJob(EditorMod::SJobResult& result)
+{
+	if (s_JobThread.joinable()) s_JobThread.join();
+	DrainJobLog();
+	result.bake_note = s_Job.bake_note;
+	if (s_Job.quests) NqExport::DropProjectCheck(s_Job.quests);
+	const auto done = s_Job.rq.done;
+	s_Job = SJob();
+	s_JobLast = result;
+	if (done) done(s_JobLast);
+}
+
+// a job without a thread: refused or stopped before the files
+static void EndChecks(bool cancelled, const xr_string& err)
+{
+	EditorMod::SJobResult result;
+	result.cancelled = cancelled;
+	result.err = cancelled ? xr_string("cancelled") : err;
+	result.warnings = s_Job.warnings;
+	EndJob(result);
+}
+
+static void StepJobChecks()
+{
+	// a job of a project that has been closed meanwhile has nothing left to check
+	if (s_Feed.Cancelled() || !EditorProject::Active() || s_Job.root != EditorProject::Root())
+	{
+		EndChecks(true, xr_string());
+		return;
+	}
+	xr_string err;
+	const u32 check = s_Job.check;
+	const u32 began = ::GetTickCount();
+	const bool ok = RunCheck(s_Job, err);
+	// a check on the main thread is a frame nobody got: one that takes this long is a bug report
+	const u32 spent = ::GetTickCount() - began;
+	if (spent > kCheckSlowMs)
+		Msg("* [XMS] build: '%s' held the editor for %u ms", kCheckStage[check], spent);
+	if (!ok)
+	{
+		EndChecks(false, err);
+		return;
+	}
+	if (ckDone != s_Job.check) return;
+	s_JobThread.join();
+	s_JobDone = false;
+	s_JobOk = false;
+	s_JobOut = SBuildOut();
+	s_JobPackage = EditorMod::SPackageResult();
+	s_JobDraft = SReleaseDraft();
+	s_Job.phase = jpFiles;
+	s_JobThread = std::thread(&JobThread);
+}
+
+void EditorMod::JobTick()
+{
+	if (jpIdle == s_Job.phase) return;
+	DrainJobLog();
+	if (jpChecks == s_Job.phase)
+	{
+		if (s_Job.frames) { --s_Job.frames; return; }
+		if (!s_JobWarmed) return;
+		// as many checks as fit a slice: most take no time at all, and a tick each would only add frames to wait for
+		const u32 began = ::GetTickCount();
+		do
+		{
+			// an MCP caller decided already: nothing the checks run may put a question up
+			if (s_Job.rq.from_mcp)
+			{
+				XUI::McpScope mcp;
+				StepJobChecks();
+			}
+			else
+				StepJobChecks();
+		} while (jpChecks == s_Job.phase && ::GetTickCount() - began < kCheckSliceMs);
+		return;
+	}
+	if (!s_JobDone) return;
+	s_JobThread.join();
+
+	SJobResult result;
+	result.ok			= s_JobOk;
+	result.files		= s_JobOut.files;
+	result.path			= s_JobOut.path;
+	result.err			= s_JobOut.err;
+	result.left_out		= s_JobOut.left_out;
+	result.stale_names	= s_JobOut.stale_names;
+	result.stale_count	= s_JobOut.stale_count;
+	result.package		= s_JobPackage;
+	xr_string warnings	= s_Job.warnings;
+	if (!s_JobOut.warnings.empty()) AddWarning(warnings, s_JobOut.warnings);
+	if (result.ok && s_Job.plan.package)
+	{
+		if (s_Feed.Cancelled())
+			{ result.ok = false; result.err = "cancelled"; }
+		else if (!FinishRelease(s_Job.plan, s_JobDraft, result.package, result.err, warnings))
+			result.ok = false;
+		if (!result.ok) result.package = SPackageResult();
+	}
+	result.warnings		= warnings;
+	result.cancelled	= !result.ok && result.err == "cancelled";
+	EndJob(result);
+}
+
+static void JobRow(SProgressTaskInfoVec& out)
+{
+	if (jpIdle == s_Job.phase) return;
+	const EditorMod::SJobRequest& rq = s_Job.rq;
+	SProgressTaskInfo task;
+	task.key		= rq.key;
+	task.text		= rq.title;
+	task.subtitle	= rq.subtitle;
+	task.steps		= rq.steps;
+	task.stop_label	= rq.stop_label;
+	task.stop_tip	= rq.stop_tip;
+	task.from_mcp	= rq.from_mcp;
+	task.elapsed_ms	= ::GetTickCount() - s_Job.started;
+	task.cancelable	= true;
+	task.cancel		= [] { EditorMod::StopJob(); };
+	task.cancel_requested = s_Feed.Cancelled();
+	{
+		std::lock_guard<std::mutex> guard(s_Feed.lock);
+		task.detail	= s_Feed.stage;
+		task.file	= s_Feed.file;
+		task.step	= _min(s_Feed.step, int(rq.steps.size()) - 1);
+		if (s_Feed.total)
+		{
+			task.determinate	= true;
+			task.current		= float(s_Feed.done);
+			task.total			= float(s_Feed.total);
+			task.fraction		= clampr(float(double(s_Feed.done) / double(s_Feed.total)), 0.f, 1.f);
+			task.numbers		= BytesText(s_Feed.done) + " of " + BytesText(s_Feed.total);
+			if (s_Feed.files_total)
+				task.numbers += NqUtil::Format(" \xC2\xB7 %u of %u files", _min(s_Feed.files, s_Feed.files_total), s_Feed.files_total);
+			const u32 spent = ::GetTickCount() - s_Feed.counted_from;
+			if (spent > 2000 && s_Feed.done)
+				task.eta_ms = u64(double(spent) * double(s_Feed.total - _min(s_Feed.done, s_Feed.total)) / double(s_Feed.done));
+		}
+	}
+	out.push_back(std::move(task));
+}
+
+bool EditorMod::JobRunning()
+{
+	return jpIdle != s_Job.phase;
+}
+
+void EditorMod::StopJob()
+{
+	if (JobRunning()) s_Feed.cancel = true;
+}
+
+const EditorMod::SJobResult& EditorMod::LastJobResult()
+{
+	return s_JobLast;
+}
+
+void EditorMod::JobStatusText(char* dst, u32 size)
+{
+	dst[0] = 0;
+	if (!JobRunning()) return;
+	std::lock_guard<std::mutex> guard(s_Feed.lock);
+	if (s_Feed.total)
+		sprintf_s(dst, size, "%s, %u%%", s_Feed.stage.c_str(), (u32)(double(s_Feed.done) * 100.0 / double(s_Feed.total)));
+	else
+		strcpy_s(dst, size, s_Feed.stage.c_str());
+}
+
+void EditorMod::JobShutdown()
+{
+	StopJob();
+	if (s_JobThread.joinable()) s_JobThread.join();
+	if (s_Job.quests) NqExport::DropProjectCheck(s_Job.quests);
+	s_Job = SJob();
+}
+
+bool EditorMod::StartJob(const SJobRequest& request, xr_string& err)
+{
+	err.clear();
+	if (JobRunning())				{ err = "a build is running: wait for it to finish, or stop it"; return false; }
+	if (!EditorProject::Active())	{ err = "no active project"; return false; }
+	UIProgressCenter::RegisterSource("module_job", &JobRow);
+	s_Job = SJob();
+	s_Job.rq		= request;
+	s_Job.root		= EditorProject::Root();
+	s_Job.started	= ::GetTickCount();
+	s_Job.frames	= kFramesFirst;
+	s_Job.phase		= jpChecks;
+	s_Feed.cancel	= false;
+	s_Feed.Stage(kStepCheck, "Reading the project");
+	if (s_JobThread.joinable()) s_JobThread.join();
+	s_JobWarmed		= false;
+	s_JobThread		= std::thread(&WarmThread, s_Job.root);
+	return true;
+}
+
+//------------------------------------------------------------------------------
+// what asks for a build, and what it is told
+//------------------------------------------------------------------------------
+static void ProjectIni(const xr_string& root, char* dst, u32 size)
+{
+	sprintf_s(dst, size, "%s\\project.ltx", root.c_str());
 }
 
 static void ReportMissingId(LPCSTR title)
@@ -4038,33 +5053,32 @@ static void AddBakeNote(const xr_string& note, xr_vector<std::pair<xr_string, xr
 }
 
 // what a build or an export did, in the result dialog every build shares (UI runs only)
-static void ReportBuild(bool into_game, bool flat, bool ok, int files, const xr_string& path, const xr_string& err,
-						const xr_string& warn, const xr_vector<xr_string>& left_out, const xr_string& bake_note, const xr_string& id)
+static void ReportBuild(bool into_game, bool flat, const EditorMod::SJobResult& r, const xr_string& id)
 {
 	xr_vector<std::pair<xr_string, xr_string>> rows;
 	XUI::Strings warnings;
-	if (ok) rows.emplace_back("Folder", path);
-	AddBakeNote(bake_note, rows, warnings);
-	SplitLines(warn, warnings);
+	if (r.ok) rows.emplace_back("Folder", r.path);
+	AddBakeNote(r.bake_note, rows, warnings);
+	SplitLines(r.warnings, warnings);
 	const char* result_id = flat ? "export_result" : "build_result";
-	if (!ok)
+	if (!r.ok)
 	{
-		XUI::Result(result_id, flat ? "Export Failed" : "Build Failed", XUI::Tone::Error, err.c_str(), rows, XUI::Strings(), warnings);
+		XUI::Result(result_id, flat ? "Export Failed" : "Build Failed", XUI::Tone::Error, r.err.c_str(), rows, XUI::Strings(), warnings);
 		return;
 	}
 	xr_string headline;
 	if (into_game)
 	{
-		headline = "The module is in the game: " + CountText(files, "file", "files") + ". Added objects reach new games and loaded "
+		headline = "The module is in the game: " + CountText(r.files, "file", "files") + ". Added objects reach new games and loaded "
 			"saves; changes to existing objects need a new game.";
 		rows.emplace_back("Console", "xms_enable " + id + "  /  xms_disable " + id);
 	}
 	else if (flat)
-		headline = CountText(files, "file", "files") + " exported as a gamedata folder.";
+		headline = CountText(r.files, "file", "files") + " exported as a gamedata folder.";
 	else
-		headline = "The module is built: " + CountText(files, "file", "files") + ".";
+		headline = "The module is built: " + CountText(r.files, "file", "files") + ".";
 	XUI::Result(result_id, flat ? "Export Complete" : "Build Complete", warnings.empty() ? XUI::Tone::Success : XUI::Tone::Warning,
-		headline.c_str(), rows, left_out, warnings, "Open Folder", [path] { OpenFolder(path); });
+		headline.c_str(), rows, r.left_out, warnings, "Open Folder", [path = r.path] { OpenFolder(path); });
 }
 
 static bool IsCleanRefusal(const xr_string& err)
@@ -4072,92 +5086,115 @@ static bool IsCleanRefusal(const xr_string& err)
 	return 0 == strncmp(err.c_str(), "target already holds a module", 29);
 }
 
-static void RunDeferredExport();
-
-// The build is clean and refused to empty a folder of files it did not write: the second phase
-// names them and, on Yes, runs the build again with `clean`.
-static void AskClean(bool into_game, const xr_string& folder)
+static EditorMod::SJobRequest BuildRequest(EditorMod::EJobKind kind, const xr_string& target, bool clean)
 {
-	const xr_string headline = folder + " holds " + CountText(s_StaleCount, "file", "files") + " this build does not write.";
+	const bool flat = EditorMod::jkExportFlat == kind;
+	EditorMod::SManifest m;
+	EditorMod::Load(EditorProject::Root(), m);
+	EditorMod::SJobRequest rq;
+	rq.kind			= kind;
+	rq.target		= target;
+	rq.clean		= clean;
+	rq.key			= "build";
+	rq.title		= flat ? "Exporting Gamedata" : "Building Module";
+	rq.subtitle		= xr_string(m.name.empty() ? m.id : m.name) + " \xC2\xB7 " + target;
+	rq.stop_label	= flat ? "Stop Export" : "Stop Build";
+	rq.stop_tip		= flat ? "Stops the export. The folder keeps the files written so far." :
+		"Stops the build. The module in the target stays as it was.";
+	for (LPCSTR step : { "Check", "Copy" })
+		rq.steps.push_back(step);
+	if (!flat) rq.steps.push_back("Install");
+	return rq;
+}
+
+static void StartBuild(EditorMod::EJobKind kind, const xr_string& target, bool clean);
+
+// The build is clean and refused to replace a folder holding files it did not write: the second phase names them and,
+// on Yes, runs the build again with `clean`.
+static void AskClean(EditorMod::EJobKind kind, const xr_string& target, const EditorMod::SJobResult& r)
+{
+	const xr_string headline = r.path + " holds " + CountText(r.stale_count, "file", "files") + " this build does not write.";
 	XUI::ConfirmSpec spec;
 	spec.id = "clean_target";
 	spec.title = "Replace Module Files";
 	spec.headline = headline.c_str();
-	spec.items = s_StaleNames;
-	spec.total = (u32)s_StaleCount;
+	spec.items = r.stale_names;
+	spec.total = (u32)r.stale_count;
 	spec.consequence = "Deleted for good - this cannot be undone. The folder then holds exactly this build.";
 	spec.action = "Delete and Build";
 	spec.destructive = true;
-	XUI::Confirm(spec, [into_game](XUI::Answer answer)
+	XUI::Confirm(spec, [kind, target](XUI::Answer answer)
 	{
 		if (answer != XUI::Answer::Yes)
 		{
 			XUI::Toast(XUI::Tone::Info, "Build cancelled: nothing was deleted.");
 			return;
 		}
-		if (into_game)
-		{
-			s_WantBuild = true;
-			s_BuildClean = true;
-		}
-		else
-		{
-			s_DeferredClean = true;
-			s_ExportQueued = UI->DeferUIWork(&RunDeferredExport);
-		}
+		StartBuild(kind, target, true);
 	});
+}
+
+static void StartBuild(EditorMod::EJobKind kind, const xr_string& target, bool clean)
+{
+	const bool flat = EditorMod::jkExportFlat == kind;
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
+	{
+		ReportMissingId(flat ? "Export Flat Gamedata" : "Build Failed");
+		return;
+	}
+	EditorMod::SJobRequest rq = BuildRequest(kind, target, clean);
+	rq.done = [kind, flat, target, root = xr_string(EditorProject::Root()), id = m.id](const EditorMod::SJobResult& r)
+	{
+		if (r.cancelled)
+		{
+			XUI::Toast(XUI::Tone::Info, flat ? "Export stopped: the folder holds the files written so far." :
+				"Build stopped: the module stays as it was.");
+			return;
+		}
+		if (!r.ok && IsCleanRefusal(r.err))
+		{
+			AskClean(kind, target, r);
+			return;
+		}
+		if (r.ok)
+		{
+			char ini[MAX_PATH];
+			ProjectIni(root, ini, sizeof(ini));
+			::WritePrivateProfileStringA("xms", "export_target", target.c_str(), ini);
+		}
+		ReportBuild(EditorMod::jkBuildIntoGame == kind, flat, r, id);
+	};
+	xr_string err;
+	if (!EditorMod::StartJob(rq, err))
+		XUI::Notice(XUI::Tone::Warning, rq.title.c_str(), (err + ".").c_str());
 }
 
 void EditorMod::RequestBuildIntoGame()
 {
-	s_WantBuild = CanBuildIntoGame();
-	s_BuildClean = false;
-	if (s_WantBuild) return;
+	if (JobRunning())
+	{
+		UIProgressCenter::ShowCard();
+		return;
+	}
+	if (CanBuildIntoGame())
+	{
+		StartBuild(jkBuildIntoGame, EditorProject::GameRoot(), false);
+		return;
+	}
 	XUI::Result("build_result", "Build Failed", XUI::Tone::Error,
 		"No game is linked. The build writes the module into <game>\\modules\\<id>, where the game reads it: link a game first.",
 		xr_vector<std::pair<xr_string, xr_string>>(), XUI::Strings(), XUI::Strings());
 }
 
-static void RunBuildIntoGame()
-{
-	s_BuildQueued = false;
-	if (!s_WantBuild) return;
-	s_WantBuild = false;
-	const bool clean = s_BuildClean;
-	s_BuildClean = false;
-	SProgressOperation progress(*UI, false);
-
-	EditorMod::SManifest m;
-	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
-	{
-		ReportMissingId("Build Failed");
-		return;
-	}
-
-	LPCSTR target = EditorProject::GameRoot();
-	xr_string bake_note;
-	EditorMod::RunPreBuildBake(bake_note);
-	int files = 0;
-	xr_string path, err, warn;
-	xr_vector<xr_string> left_out;
-	const bool ok = EditorMod::Export(EditorProject::Root(), target, false, files, path, err, clean, &warn, &left_out);
-	if (!ok && IsCleanRefusal(err))
-	{
-		AskClean(true, path);
-		return;
-	}
-	if (ok)
-	{
-		char ini[MAX_PATH];
-		ProjectIni(ini, sizeof(ini));
-		::WritePrivateProfileStringA("xms", "export_target", target, ini);
-	}
-	ReportBuild(true, false, ok, files, path, err, warn, left_out, bake_note, m.id);
-}
-
 static void PrepareExport(bool flat)
 {
 	if (!EditorProject::Active()) return;
+	if (EditorMod::JobRunning())
+	{
+		UIProgressCenter::ShowCard();
+		return;
+	}
 	EditorMod::SManifest m;
 	if (!EditorMod::Load(EditorProject::Root(), m) || !EditorMod::ValidateId(m.id.c_str()))
 	{
@@ -4166,7 +5203,7 @@ static void PrepareExport(bool flat)
 	}
 	s_ExportId = m.id;
 	char ini[MAX_PATH];
-	ProjectIni(ini, sizeof(ini));
+	ProjectIni(EditorProject::Root(), ini, sizeof(ini));
 	::GetPrivateProfileStringA("xms", "export_target", "", s_Target, sizeof(s_Target), ini);
 	// first export of a linked project: the game root IS the deploy target -
 	// the module lands in <game>\modules\<id>, which is where the game reads it
@@ -4178,33 +5215,6 @@ static void PrepareExport(bool flat)
 
 void EditorMod::RequestExportModule()	{ PrepareExport(false); }
 void EditorMod::RequestExportFlat()		{ PrepareExport(true); }
-
-static void RunDeferredExport()
-{
-	s_ExportQueued = false;
-	const bool clean = s_DeferredClean;
-	s_DeferredClean = false;
-	SProgressOperation progress(*UI, false);
-	xr_string bake_note;
-	EditorMod::RunPreBuildBake(bake_note);
-	int files = 0;
-	xr_string path, err, warn;
-	xr_vector<xr_string> left_out;
-	const bool ok = EditorMod::Export(EditorProject::Root(), s_DeferredExportTarget,
-		s_DeferredExportFlat, files, path, err, clean, &warn, &left_out);
-	if (!ok && IsCleanRefusal(err))
-	{
-		AskClean(false, path);
-		return;
-	}
-	if (ok)
-	{
-		char ini[MAX_PATH];
-		ProjectIni(ini, sizeof(ini));
-		::WritePrivateProfileStringA("xms", "export_target", s_DeferredExportTarget, ini);
-	}
-	ReportBuild(false, s_DeferredExportFlat, ok, files, path, err, warn, left_out, bake_note, s_ExportId);
-}
 
 // A read-only path as a grid row's value. PropertyText cuts at the end, and the end of a destination (<folder>\modules\<id>)
 // is what such a row is for: this keeps it and drops the start, the whole path in the tooltip. Selectable like
@@ -4227,7 +5237,7 @@ static void PropertyPath(const char* path)
 	{
 		xr_string copy = path;
 		ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(ModToken::TextSecondary));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(ModToken::TextSecondary));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
 		ImGui::SetNextItemWidth(width);
 		if (state == 2)
@@ -4245,7 +5255,7 @@ static void PropertyPath(const char* path)
 	const ImVec2 at = ImGui::GetCursorScreenPos();
 	ImGui::SetCursorScreenPos(ImVec2(at.x + style.FramePadding.x, at.y));
 	ImGui::AlignTextToFramePadding();
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(ModToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(ModToken::TextSecondary));
 	XUI::TextEllipsis(path, room, XUI::Clip::Start);
 	ImGui::PopStyleColor();
 	if (ImGui::IsItemClicked())
@@ -4286,13 +5296,11 @@ static void DrawExportDialog(bool flat)
 	}
 	if (XUI::BeginDialogFooter())
 	{
-		if (XUI::DialogButton(flat ? "Export" : "Build", XUI::Kind::Primary, true, s_Target[0] && !s_ExportQueued,
-			s_ExportQueued ? "A build is running" : "Pick a folder first"))
+		const bool running = EditorMod::JobRunning();
+		if (XUI::DialogButton(flat ? "Export" : "Build", XUI::Kind::Primary, true, s_Target[0] && !running,
+			running ? "A build is running" : "Pick a folder first"))
 		{
-			strncpy_s(s_DeferredExportTarget, sizeof(s_DeferredExportTarget), s_Target, _TRUNCATE);
-			s_DeferredExportFlat = flat;
-			s_DeferredClean = false;
-			s_ExportQueued = UI->DeferUIWork(&RunDeferredExport);
+			StartBuild(flat ? EditorMod::jkExportFlat : EditorMod::jkBuildToFolder, s_Target, false);
 			want = false;
 		}
 		if (XUI::DialogButton("Cancel", XUI::Kind::Secondary))
@@ -4305,15 +5313,18 @@ static void DrawExportDialog(bool flat)
 // Mod > Package Release...
 //------------------------------------------------------------------------------
 static bool					s_WantPackage		= false;
-static bool					s_PackageQueued		= false;
 static EditorMod::SManifest	s_PkgManifest;		// what the dialog names: id, version, update source
 static string_path			s_PkgOutDir			= {};
 static char					s_PkgRequires[32]	= {};
 
 void EditorMod::RequestPackageRelease()
 {
-	// a queued packaging still reads the fields below
-	if (!EditorProject::Active() || s_PackageQueued) return;
+	if (!EditorProject::Active()) return;
+	if (JobRunning())
+	{
+		UIProgressCenter::ShowCard();
+		return;
+	}
 	xr_string err;
 	if (!Load(EditorProject::Root(), s_PkgManifest))
 		err = "mod.ltx not found in the project";
@@ -4333,39 +5344,32 @@ void EditorMod::RequestPackageRelease()
 	s_WantPackage = true;
 }
 
-static void RunDeferredPackage()
+static void ReportPackage(const EditorMod::SManifest& m, const EditorMod::SJobResult& r)
 {
-	s_PackageQueued = false;
-	SProgressOperation progress(*UI, true);
-	xr_string bake_note;
-	EditorMod::RunPreBuildBake(bake_note);
-	EditorMod::SPackageResult res;
-	xr_string err, warn;
-	const EditorMod::SManifest& m = s_PkgManifest;
-	xr_vector<std::pair<xr_string, xr_string>> rows;
-	XUI::Strings warnings;
-	if (!EditorMod::PackageRelease(EditorProject::Root(), s_PkgOutDir, s_PkgRequires, res, err, &warn))
+	if (r.cancelled)
 	{
-		if (err == "cancelled")
-		{
-			XUI::Toast(XUI::Tone::Info, "Packaging cancelled.");
-			return;
-		}
-		AddBakeNote(bake_note, rows, warnings);
-		XUI::Result("package_result", "Packaging Failed", XUI::Tone::Error, err.c_str(), rows, XUI::Strings(), warnings);
+		XUI::Toast(XUI::Tone::Info, "Packaging stopped: the release folder holds nothing new.");
 		return;
 	}
-
+	xr_vector<std::pair<xr_string, xr_string>> rows;
+	XUI::Strings warnings;
+	if (!r.ok)
+	{
+		AddBakeNote(r.bake_note, rows, warnings);
+		XUI::Result("package_result", "Packaging Failed", XUI::Tone::Error, r.err.c_str(), rows, XUI::Strings(), warnings);
+		return;
+	}
+	const EditorMod::SPackageResult& res = r.package;
 	rows.emplace_back("Folder", res.out_dir);
 	rows.emplace_back("Descriptor", m.id + ".update.ltx");
 	rows.emplace_back("File index", res.index.name);
 	for (const EditorMod::SPackageFile& p : res.packages)
 		rows.emplace_back("Package", NqUtil::Format("%s  (%.1f MB)", p.name.c_str(), double(p.size) / 1048576.0));
 	rows.emplace_back("Signed", res.signed_ ? "With the author key " + res.key_id : xr_string("No - the Mod Browser lists signed releases only"));
-	AddBakeNote(bake_note, rows, warnings);
+	AddBakeNote(r.bake_note, rows, warnings);
 	if (m.update_github.empty())
 		warnings.push_back("No GitHub repository in Mod Settings: the game does not look for updates of this module.");
-	SplitLines(warn, warnings);
+	SplitLines(r.warnings, warnings);
 	// the index addresses the zip by byte offset: a repacked copy is another file
 	const xr_string headline = NqUtil::Format("Release %s %s: %s packaged. Upload the files exactly as written to a GitHub release%s "
 		"and mark it as the latest - Publish Release does both in one step.", m.id.c_str(), m.version.c_str(),
@@ -4374,10 +5378,30 @@ static void RunDeferredPackage()
 		rows, res.left_out, warnings, "Open Folder", [dir = res.out_dir] { OpenFolder(dir); });
 }
 
+static EditorMod::SJobRequest PackageRequest(const EditorMod::SManifest& m, const xr_string& out_dir, const xr_string& requires_game)
+{
+	EditorMod::SJobRequest rq;
+	rq.kind				= EditorMod::jkPackage;
+	rq.out_dir			= out_dir;
+	rq.requires_game	= requires_game;
+	rq.key				= "package";
+	rq.title			= "Packaging Release";
+	rq.subtitle			= xr_string(m.name.empty() ? m.id : m.name) + " " + m.version;
+	rq.stop_label		= "Stop Packaging";
+	rq.stop_tip			= "Stops the packaging. Nothing is written to the release folder before the packages are done.";
+	for (LPCSTR step : { "Check", "Copy", "Pack" })
+		rq.steps.push_back(step);
+	return rq;
+}
+
 static void QueuePackage()
 {
-	s_PackageQueued = UI->DeferUIWork(&RunDeferredPackage);
 	s_WantPackage = false;
+	EditorMod::SJobRequest rq = PackageRequest(s_PkgManifest, s_PkgOutDir, s_PkgRequires);
+	rq.done = [m = s_PkgManifest](const EditorMod::SJobResult& r) { ReportPackage(m, r); };
+	xr_string err;
+	if (!EditorMod::StartJob(rq, err))
+		XUI::Notice(XUI::Tone::Warning, rq.title.c_str(), (err + ".").c_str());
 }
 
 static void DrawPackageDialog()
@@ -4391,16 +5415,20 @@ static void DrawPackageDialog()
 	{
 		if (XUI::PropertyRow("Release", "The module id and the version from Mod Settings.", XUI::PropReadOnly))
 			XUI::PropertyText((s_PkgManifest.id + "  " + s_PkgManifest.version).c_str());
-		if (XUI::PropertyRow("Output Folder", "Receives <id>.update.ltx, the file index and the package zip(s). Inside the project "
-			"only releases\\ is allowed: anywhere else the packages would ship with the next build.", XUI::PropRequired))
-			XUI::PathField("##out_dir", s_PkgOutDir, sizeof(s_PkgOutDir), true);
-		if (XUI::PropertyRow("Requires Game", "The lowest Dead Air: Refined version this release runs on. Empty: any.",
-			requires_ok ? 0 : XUI::PropInvalid))
+		if (XUI::PropertySection("More##package", !s_PkgOutDir[0] || !requires_ok))
 		{
-			ImGui::SetNextItemWidth(_min(ImGui::CalcItemWidth(), XUI::Em(8.f)));
-			ImGui::InputTextWithHint("##requires", "Any", s_PkgRequires, sizeof(s_PkgRequires));
-			if (!requires_ok)
-				XUI::PropertyMessage(XUI::Tone::Error, "MAJOR.MINOR.PATCH, e.g. 1.4.1.");
+			if (XUI::PropertyRow("Output Folder", "Receives <id>.update.ltx, the file index and the package zip(s). Inside the project "
+				"only releases\\ is allowed: anywhere else the packages would ship with the next build.", XUI::PropRequired))
+				XUI::PathField("##out_dir", s_PkgOutDir, sizeof(s_PkgOutDir), true);
+			if (XUI::PropertyRow("Requires Game", "The lowest Dead Air: Refined version this release runs on. Empty: any.",
+				requires_ok ? 0 : XUI::PropInvalid))
+			{
+				ImGui::SetNextItemWidth(_min(ImGui::CalcItemWidth(), XUI::Em(8.f)));
+				ImGui::InputTextWithHint("##requires", "Any", s_PkgRequires, sizeof(s_PkgRequires));
+				if (!requires_ok)
+					XUI::PropertyMessage(XUI::Tone::Error, "MAJOR.MINOR.PATCH, e.g. 1.4.1.");
+			}
+			XUI::EndPropertySection();
 		}
 		// read-only unless the key asks for its password: a locked key only leaves the release unsigned here
 		if (XUI::PropertyRow("Author Key", "The key file that signs the release: the Mod Browser lists signed releases only. Submit to "
@@ -4413,8 +5441,9 @@ static void DrawPackageDialog()
 
 	if (XUI::BeginDialogFooter())
 	{
-		const char* why = s_PackageQueued ? "A packaging is running" : !s_PkgOutDir[0] ? "Pick the output folder first" : "Fix the game version first";
-		if (XUI::DialogButton("Package", XUI::Kind::Primary, true, s_PkgOutDir[0] && requires_ok && !s_PackageQueued, why))
+		const bool running = EditorMod::JobRunning();
+		const char* why = running ? "A build is running" : !s_PkgOutDir[0] ? "Pick the output folder first" : "Fix the game version first";
+		if (XUI::DialogButton("Package", XUI::Kind::Primary, true, s_PkgOutDir[0] && requires_ok && !running, why))
 		{
 			// An earlier packaging of this version is replaced - but only once the author has seen which files that is.
 			string_path dir;
@@ -4447,8 +5476,6 @@ static void DrawPackageDialog()
 void EditorMod::DrawUI()
 {
 	if (!EditorProject::Active()) return;
-	if (s_WantBuild && !s_BuildQueued)
-		s_BuildQueued = UI->DeferUIWork(&RunBuildIntoGame);
 	if (s_SettingsOpen)
 		ShowSettingsTab(false);
 	DrawExportDialog(false);
@@ -4459,6 +5486,29 @@ void EditorMod::DrawUI()
 //------------------------------------------------------------------------------
 // MCP commands
 //------------------------------------------------------------------------------
+// [{"name","function","help","args","cheat"}, ...]; a [command.<name>] with no [commands] line has "declared":false
+static void JsonCommands(const xr_vector<EditorMod::SCommand>& commands, xr_string& out)
+{
+	out += "[";
+	for (u32 i = 0; i < commands.size(); ++i)
+	{
+		const EditorMod::SCommand& c = commands[i];
+		out += i ? ",{\"name\":" : "{\"name\":";
+		NqUtil::JsonString(out, c.name);
+		out += ",\"function\":";
+		NqUtil::JsonString(out, c.function);
+		out += ",\"help\":";
+		NqUtil::JsonString(out, c.help);
+		out += ",\"args\":";
+		NqUtil::JsonString(out, c.args);
+		out += ",\"cheat\":";
+		NqUtil::JsonBool(out, c.cheat);
+		if (!c.declared) out += ",\"declared\":false";
+		out += "}";
+	}
+	out += "]";
+}
+
 void EditorMod::McpManifest(xr_string& out)
 {
 	if (!EditorProject::Active())
@@ -4477,7 +5527,7 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppend(out, m.author.c_str());
 	out += "\",\"description\":\"";
 	JsonAppend(out, m.description.c_str());
-	out += "\",\"website\":\"";
+	out += m.disable_game_updates ? "\",\"disable_game_updates\":true,\"website\":\"" : "\",\"disable_game_updates\":false,\"website\":\"";
 	JsonAppend(out, m.website.c_str());
 	out += "\",\"github\":\"";
 	JsonAppend(out, m.update_github.c_str());
@@ -4513,6 +5563,17 @@ void EditorMod::McpManifest(xr_string& out)
 	JsonAppendArray(out, m.tags);
 	out += ",\"world\":";
 	EditorWorld::JsonWorld(m.world, out);
+	out += ",\"vars\":[";
+	for (u32 i = 0; i < m.vars.size(); ++i)
+	{
+		out += i ? ",{\"name\":\"" : "{\"name\":\"";
+		JsonAppend(out, m.vars[i].name.c_str());
+		out += "\",\"value\":\"";
+		JsonAppend(out, m.vars[i].value.c_str());
+		out += "\"}";
+	}
+	out += "],\"commands\":";
+	JsonCommands(m.commands, out);
 	out += ",\"pda_layout\":\"";
 	JsonAppend(out, m.pda_layout.c_str());
 	out += "\",\"has_dirs\":{";
@@ -4545,21 +5606,21 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	xr_vector<char> arg(xr_strlen(raw) + 1);
 	char* const v = arg.data();
 	const u32 v_size = (u32)arg.size();
-	if (XFinedMCP::GetArg(raw, "id", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "id", v, v_size))
 	{
 		if (!ValidateId(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid id (allowed: a-z 0-9 _ . -)\"}"; return; }
 		m.id = v;
 	}
-	if (XFinedMCP::GetArg(raw, "name", v, v_size))		m.name = v;
-	if (XFinedMCP::GetArg(raw, "version", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "name", v, v_size))		m.name = v;
+	if (GrizzlyMCP::GetArg(raw, "version", v, v_size))
 	{
 		if (!ValidateVersion(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid version (1-4 numbers separated by dots, e.g. 1.2.0)\"}"; return; }
 		m.version = v;
 	}
-	if (XFinedMCP::GetArg(raw, "author", v, v_size))		m.author = v;
-	if (XFinedMCP::GetArg(raw, "description", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "author", v, v_size))		m.author = v;
+	if (GrizzlyMCP::GetArg(raw, "description", v, v_size))
 	{
 		m.description = v;
 		Trim(m.description);
@@ -4567,27 +5628,29 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 		if (m.description.size() >= sizeof(SSettingsForm::description))
 			{ out = "{\"ok\":false,\"error\":\"description is too long (4095 bytes at most)\"}"; return; }
 	}
-	if (XFinedMCP::GetArg(raw, "website", v, v_size))
+	if (NqUtil::ArgBool(raw, "disable_game_updates", false) == NqUtil::ArgBool(raw, "disable_game_updates", true))
+		m.disable_game_updates = NqUtil::ArgBool(raw, "disable_game_updates", false);
+	if (GrizzlyMCP::GetArg(raw, "website", v, v_size))
 	{
 		m.website = v;
 		Trim(m.website);
 		if (!ValidateWebsite(m.website.c_str()))
 			{ out = "{\"ok\":false,\"error\":\"invalid website (only https://ap-pro.ru or https://moddb.com links are allowed)\"}"; return; }
 	}
-	if (XFinedMCP::GetArg(raw, "github", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "github", v, v_size))
 	{
 		NormalizeGithubRepo(v, m.update_github);
 		if (!ValidateGithubRepo(m.update_github.c_str()))
 			{ out = "{\"ok\":false,\"error\":\"invalid github (owner/repo, e.g. Madmer/agroprom-story)\"}"; return; }
 	}
-	if (XFinedMCP::GetArg(raw, "mode", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "mode", v, v_size))
 	{
 		if (!ValidateModeId(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid mode id (allowed: a-z 0-9 _ . - or empty)\"}"; return; }
 		m.mode = v;
 	}
 	// provides_mode edits touch only the first declared mode; empty id drops it
-	if (XFinedMCP::GetArg(raw, "provides_mode_id", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "provides_mode_id", v, v_size))
 	{
 		if (!ValidateModeId(v))
 			{ out = "{\"ok\":false,\"error\":\"invalid provides_mode_id (allowed: a-z 0-9 _ . - or empty)\"}"; return; }
@@ -4599,13 +5662,13 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 		else if (!m.provides_modes.empty())
 			m.provides_modes.erase(m.provides_modes.begin());
 	}
-	if (XFinedMCP::GetArg(raw, "provides_mode_title", v, v_size) && !m.provides_modes.empty())
+	if (GrizzlyMCP::GetArg(raw, "provides_mode_title", v, v_size) && !m.provides_modes.empty())
 		m.provides_modes[0].title = v;
 	// The targeting choice itself. "default" cannot be inferred - a module with
 	// no mode set either targets the ordinary game on purpose or was never
 	// decided, and only the caller knows which - so it is stated explicitly;
 	// picking a mode states it implicitly.
-	if (XFinedMCP::GetArg(raw, "target", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "target", v, v_size))
 	{
 		if (0 != _stricmp(v, "default") && 0 != _stricmp(v, "existing") && 0 != _stricmp(v, "new"))
 			{ out = "{\"ok\":false,\"error\":\"invalid target (allowed: default, existing, new)\"}"; return; }
@@ -4613,15 +5676,50 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	}
 	else if (!m.provides_modes.empty())	m.target = "new";
 	else if (!m.mode.empty())			m.target = "existing";
-	if (XFinedMCP::GetArg(raw, "requires", v, v_size))	SplitList(m.requires_list, v, ',');
-	if (XFinedMCP::GetArg(raw, "after", v, v_size))		SplitList(m.after, v, ',');
-	if (XFinedMCP::GetArg(raw, "before", v, v_size))		SplitList(m.before, v, ',');
-	if (XFinedMCP::GetArg(raw, "conflicts", v, v_size))	SplitList(m.conflicts, v, ',');
+	if (GrizzlyMCP::GetArg(raw, "requires", v, v_size))	SplitList(m.requires_list, v, ',');
+	if (GrizzlyMCP::GetArg(raw, "after", v, v_size))		SplitList(m.after, v, ',');
+	if (GrizzlyMCP::GetArg(raw, "before", v, v_size))		SplitList(m.before, v, ',');
+	if (GrizzlyMCP::GetArg(raw, "conflicts", v, v_size))	SplitList(m.conflicts, v, ',');
 	// the whole list at once: one entry per line, or comma separated when on one line
-	if (XFinedMCP::GetArg(raw, "exclude", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "exclude", v, v_size))
 		SplitList(m.exclude, v, strchr(v, '\n') ? '\n' : ',');
+	// the global variables, the whole list at once: `name = default` per line (or comma
+	// separated on one line); an empty value clears them all
+	if (GrizzlyMCP::GetArg(raw, "vars", v, v_size))
+	{
+		xr_vector<xr_string> rows;
+		SplitList(rows, v, strchr(v, '\n') ? '\n' : ',');
+		xr_vector<SGlobalVar> vars;
+		for (u32 i = 0; i < rows.size(); ++i)
+		{
+			SGlobalVar gv;
+			const size_t eq = rows[i].find('=');
+			gv.name = eq == xr_string::npos ? rows[i] : rows[i].substr(0, eq);
+			if (eq != xr_string::npos) gv.value = rows[i].substr(eq + 1);
+			Trim(gv.name); Trim(gv.value);
+			if (gv.name.empty()) continue;
+			if (!ValidGlobalName(gv.name.c_str()))
+			{
+				out = "{\"ok\":false,\"error\":\"a global variable is named by letters, digits and _: '";
+				JsonAppend(out, gv.name.c_str());
+				out += "'\"}";
+				return;
+			}
+			bool twice = false;
+			for (u32 k = 0; k < vars.size(); ++k) if (vars[k].name == gv.name) twice = true;
+			if (twice)
+			{
+				out = "{\"ok\":false,\"error\":\"the global variable '";
+				JsonAppend(out, gv.name.c_str());
+				out += "' is declared twice\"}";
+				return;
+			}
+			vars.push_back(gv);
+		}
+		m.vars = vars;
+	}
 	// the Mod Browser's picture (converted at once) and tags
-	if (XFinedMCP::GetArg(raw, "tags", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "tags", v, v_size))
 	{
 		xr_string err;
 		if (!ApplyTags(v, m, err))
@@ -4632,7 +5730,7 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 			return;
 		}
 	}
-	if (XFinedMCP::GetArg(raw, "thumbnail", v, v_size))
+	if (GrizzlyMCP::GetArg(raw, "thumbnail", v, v_size))
 	{
 		xr_string err;
 		if (!ApplyThumbnail(EditorProject::Root(), v, m, err))
@@ -4651,49 +5749,64 @@ void EditorMod::McpSetManifest(LPCSTR raw, xr_string& out)
 	McpManifest(out);	// respond with the fresh state
 }
 
+// the answer of a build that was held until it ended (GrizzlyMCP, FollowsJob)
+static void AnswerExport(xr_string& out)
+{
+	const EditorMod::SJobResult& r = EditorMod::LastJobResult();
+	if (!r.ok)
+	{
+		out = "{\"ok\":false,\"error\":\"";
+		JsonAppend(out, r.err.c_str());
+		out += "\"}";
+		return;
+	}
+	char head[64];
+	sprintf_s(head, "{\"ok\":true,\"files\":%d,\"path\":\"", r.files);
+	out = head;
+	JsonAppendPath(out, r.path.c_str());
+	out += "\",\"baked\":\"";
+	JsonAppend(out, r.bake_note.c_str());
+	// an agent gets the same warnings the dialog shows: a build that shipped a quest
+	// naming something that does not exist is not a clean build
+	out += "\",\"warnings\":\"";
+	JsonAppend(out, r.warnings.c_str());
+	// what the build passed by - tooling, [exclude], links - project-relative
+	out += "\",\"left_out\":";
+	JsonAppendArray(out, r.left_out);
+	out += "}";
+}
+
 void EditorMod::McpExport(LPCSTR raw, xr_string& out)
 {
+	if (ArgBool(raw, "answer_only", false))
+	{
+		AnswerExport(out);
+		return;
+	}
 	if (!EditorProject::Active())
 		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
 	char target[MAX_PATH];
 	// no target = deploy to the linked game: <game>\modules\<id> is where the
 	// game actually reads modules from, so it is the default, not an option
-	if (!XFinedMCP::GetArg(raw, "target", target, sizeof(target)) || !target[0])
+	if (!GrizzlyMCP::GetArg(raw, "target", target, sizeof(target)) || !target[0])
 	{
 		if (!EditorProject::GameRoot()[0])
 			{ out = "{\"ok\":false,\"error\":\"no 'target' and no linked game (see game_link)\"}"; return; }
 		strncpy_s(target, sizeof(target), EditorProject::GameRoot(), _TRUNCATE);
 	}
-	const bool flat = ArgBool(raw, "flat", false);
-	xr_string bake_note;
-	RunPreBuildBake(bake_note);
-
-	int files = 0;
-	xr_string path, err, warn;
-	xr_vector<xr_string> left_out;
 	// MCP is the programmatic path: the caller already decided, and it must
 	// never stall on a question
-	if (!Export(EditorProject::Root(), target, flat, files, path, err, true, &warn, &left_out))
+	SJobRequest rq = BuildRequest(ArgBool(raw, "flat", false) ? jkExportFlat : jkBuildToFolder, target, true);
+	rq.from_mcp = true;
+	xr_string err;
+	if (StartJob(rq, err))
 	{
-		out = "{\"ok\":false,\"error\":\"";
-		JsonAppend(out, err.c_str());
-		out += "\"}";
+		out = "{\"ok\":true,\"job_pending\":true}";
 		return;
 	}
-	char head[64];
-	sprintf_s(head, "{\"ok\":true,\"files\":%d,\"path\":\"", files);
-	out = head;
-	JsonAppendPath(out, path.c_str());
-	out += "\",\"baked\":\"";
-	JsonAppend(out, bake_note.c_str());
-	// an agent gets the same warnings the dialog shows: a build that shipped a quest
-	// naming something that does not exist is not a clean build
-	out += "\",\"warnings\":\"";
-	JsonAppend(out, warn.c_str());
-	// what the build passed by - tooling, [exclude], links - project-relative
-	out += "\",\"left_out\":";
-	JsonAppendArray(out, left_out);
-	out += "}";
+	out = "{\"ok\":false,\"error\":\"";
+	JsonAppend(out, err.c_str());
+	out += "\"}";
 }
 
 void EditorMod::McpExclude(LPCSTR raw, xr_string& out)
@@ -4701,7 +5814,7 @@ void EditorMod::McpExclude(LPCSTR raw, xr_string& out)
 	if (!EditorProject::Active())
 		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
 	char path[MAX_PATH] = {};
-	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
+	if (!GrizzlyMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
 		{ out = "{\"ok\":false,\"error\":\"missing 'path' (project-relative, e.g. docs or design/story.md)\"}"; return; }
 	// the raw json value still carries its escaped separators
 	{
@@ -4725,50 +5838,87 @@ void EditorMod::McpExclude(LPCSTR raw, xr_string& out)
 	out += "}";
 }
 
-void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
+void EditorMod::McpCommands(LPCSTR raw, xr_string& out)
 {
 	if (!EditorProject::Active())
 		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
-	// request-sized, so an over-long value reaches the checks instead of reading as absent
-	xr_vector<char> arg(xr_strlen(raw) + 1);
-	xr_string out_dir, game_version;
-	if (XFinedMCP::GetArg(raw, "out_dir", arg.data(), (u32)arg.size()))
-		out_dir = arg.data();
-	// absent = the linked game's version, present but empty = no requirement
-	if (XFinedMCP::GetArg(raw, "requires_game", arg.data(), (u32)arg.size()))
-		game_version = arg.data();
-	else
-		LinkedGameVersion(game_version);
-
-	// the author key's password, when the key file has one; never echoed or logged
-	if (XFinedMCP::GetArg(raw, "password", arg.data(), (u32)arg.size()) && arg[0])
+	SManifest m;
+	if (!Load(EditorProject::Root(), m))
 	{
-		xr_string key_err;
-		const bool opened = EditorCatalog::Unlock(arg.data(), key_err);
-		::SecureZeroMemory(arg.data(), arg.size());
-		if (!opened)
-		{
-			out = "{\"ok\":false,\"error\":\"author key: ";
-			JsonAppend(out, key_err.c_str());
-			out += "\"}";
-			return;
-		}
+		EnsureScaffold(EditorProject::Root(), EditorProject::Name());
+		Load(EditorProject::Root(), m);
 	}
+	xr_string name;
+	NqUtil::ArgString(raw, "name", name);
+	name = NqUtil::Trim(name);
+	if (!name.empty())
+	{
+		auto same = [&name](const SCommand& c) { return 0 == _stricmp(c.name.c_str(), name.c_str()); };
+		if (NqUtil::ArgBool(raw, "remove", false))
+		{
+			// every entry of that name: a second line and a section without one go with it
+			const size_t before = m.commands.size();
+			m.commands.erase(std::remove_if(m.commands.begin(), m.commands.end(), same), m.commands.end());
+			if (m.commands.size() == before)
+				{ NqUtil::JsonError(out, "there is no command '" + name + "'"); return; }
+		}
+		else
+		{
+			if (!ValidCommandName(name.c_str()))
+				{ NqUtil::JsonError(out, "a command name is a-z, 0-9 and _ only, 64 at most: '" + name + "'"); return; }
+			const auto it = std::find_if(m.commands.begin(), m.commands.end(), same);
+			SCommand c = it != m.commands.end() ? *it : SCommand();
+			c.name = name;
+			xr_string v;
+			if (NqUtil::ArgString(raw, "function", v))	c.function = NqUtil::Trim(v);
+			if (NqUtil::ArgString(raw, "help", v))		c.help = NqUtil::Trim(v);
+			if (NqUtil::ArgString(raw, "args", v))		c.args = NqUtil::Trim(v);
+			if (NqUtil::ArgString(raw, "cheat", v))		c.cheat = NqUtil::ArgBool(raw, "cheat", false);
+			if (!ValidCommandFunction(c.function.c_str()))
+			{
+				NqUtil::JsonError(out, "function: <script>.<function> of the project's gamedata\\scripts, e.g. my_mod.status - got '" +
+					c.function + "'");
+				return;
+			}
+			c.declared = true;
+			if (it != m.commands.end())	*it = c;
+			else						m.commands.push_back(c);
+		}
+		if (!Save(EditorProject::Root(), m))
+			{ out = "{\"ok\":false,\"error\":\"can't write mod.ltx\"}"; return; }
+	}
+	xr_vector<xr_string> functions, problems;
+	ScriptFunctions(EditorProject::Root(), functions);
+	ValidateCommands(EditorProject::Root(), m, problems);
+	out = "{\"ok\":true,\"commands\":";
+	JsonCommands(m.commands, out);
+	out += ",\"functions\":";
+	NqUtil::JsonStringArray(out, functions);
+	out += ",\"problems\":[";
+	for (u32 i = 0; i < problems.size(); ++i)
+	{
+		// "E404 commands: '...'" -> {code, text}
+		const xr_string& p = problems[i];
+		out += i ? ",{\"code\":" : "{\"code\":";
+		NqUtil::JsonString(out, p.substr(0, 4));
+		out += ",\"text\":";
+		NqUtil::JsonString(out, p.size() > 5 ? p.substr(5) : xr_string());
+		out += "}";
+	}
+	out += "]}";
+}
 
-	// MCP is the programmatic path: it asks nothing, an earlier packaging of the
-	// same version is simply replaced
-	SProgressOperation progress(*UI, true);
-	xr_string bake_note;
-	RunPreBuildBake(bake_note);
-	SPackageResult res;
-	xr_string err, warn;
-	if (!PackageRelease(EditorProject::Root(), out_dir.c_str(), game_version.c_str(), res, err, &warn))
+static void AnswerPackage(xr_string& out)
+{
+	const EditorMod::SJobResult& r = EditorMod::LastJobResult();
+	if (!r.ok)
 	{
 		out = "{\"ok\":false,\"error\":\"";
-		JsonAppend(out, err.c_str());
+		JsonAppend(out, r.err.c_str());
 		out += "\"}";
 		return;
 	}
+	const EditorMod::SPackageResult& res = r.package;
 	out = "{\"ok\":true,\"descriptor\":\"";
 	JsonAppendPath(out, res.descriptor.c_str());
 	out += "\",\"out_dir\":\"";
@@ -4791,9 +5941,9 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 		res.files, res.unpacked, res.packed);
 	JsonAppend(out, res.requires_game.c_str());
 	out += "\",\"baked\":\"";
-	JsonAppend(out, bake_note.c_str());
+	JsonAppend(out, r.bake_note.c_str());
 	out += "\",\"warnings\":\"";
-	JsonAppend(out, warn.c_str());
+	JsonAppend(out, r.warnings.c_str());
 	out += NqUtil::Format("\",\"signed\":%s,\"key_id\":\"%s\",\"left_out\":", res.signed_ ? "true" : "false", res.key_id.c_str());
 	JsonAppendArray(out, res.left_out);
 	// the Mod Browser's content rules: reported, the release is written either way
@@ -4807,6 +5957,58 @@ void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
 		out += "\"}";
 	}
 	out += "]}";
+}
+
+void EditorMod::McpPackage(LPCSTR raw, xr_string& out)
+{
+	if (ArgBool(raw, "answer_only", false))
+	{
+		AnswerPackage(out);
+		return;
+	}
+	if (!EditorProject::Active())
+		{ out = "{\"ok\":false,\"error\":\"no active project\"}"; return; }
+	// request-sized, so an over-long value reaches the checks instead of reading as absent
+	xr_vector<char> arg(xr_strlen(raw) + 1);
+	xr_string out_dir, game_version;
+	if (GrizzlyMCP::GetArg(raw, "out_dir", arg.data(), (u32)arg.size()))
+		out_dir = arg.data();
+	// absent = the linked game's version, present but empty = no requirement
+	if (GrizzlyMCP::GetArg(raw, "requires_game", arg.data(), (u32)arg.size()))
+		game_version = arg.data();
+	else
+		LinkedGameVersion(game_version);
+
+	// the author key's password, when the key file has one; never echoed or logged
+	if (GrizzlyMCP::GetArg(raw, "password", arg.data(), (u32)arg.size()) && arg[0])
+	{
+		xr_string key_err;
+		const bool opened = EditorCatalog::Unlock(arg.data(), key_err);
+		::SecureZeroMemory(arg.data(), arg.size());
+		if (!opened)
+		{
+			out = "{\"ok\":false,\"error\":\"author key: ";
+			JsonAppend(out, key_err.c_str());
+			out += "\"}";
+			return;
+		}
+	}
+
+	// MCP is the programmatic path: it asks nothing, an earlier packaging of the
+	// same version is simply replaced
+	SManifest manifest;
+	Load(EditorProject::Root(), manifest);
+	SJobRequest rq = PackageRequest(manifest, out_dir, game_version);
+	rq.from_mcp = true;
+	xr_string err;
+	if (StartJob(rq, err))
+	{
+		out = "{\"ok\":true,\"job_pending\":true}";
+		return;
+	}
+	out = "{\"ok\":false,\"error\":\"";
+	JsonAppend(out, err.c_str());
+	out += "\"}";
 }
 
 static LPCSTR ToneName(XUI::Tone tone)
@@ -4844,6 +6046,14 @@ void EditorMod::McpSettingsView(LPCSTR raw, xr_string& out)
 		s_SettingsPage = index;
 		if (index == pgPda) RefreshPdaFiles();
 		if (index == pgRelations) s_InstalledScanned = false;
+		if (index == pgCommands) RefreshCommandData();
+	}
+	// the question, up to be looked at: it opens on the tab's next frame, outside this request
+	if (NqUtil::ArgBool(raw, "ask_game_updates", false))
+	{
+		RequestEditManifest();
+		s_SettingsPage = pgGeneral;
+		s_AskGameUpdates = true;
 	}
 	if (s_SettingsOpen)
 	{

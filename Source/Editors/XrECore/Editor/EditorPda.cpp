@@ -5,7 +5,7 @@
 #include "EditorGameContent.h"
 #include "EditorModManifest.h"
 #include "EditorFileOps.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "Nq/NqUtil.h"
 #include "Nq/NqLua.h"
 
@@ -227,6 +227,7 @@ namespace
 				mk.z = (float)m.GetNumber("z", 0);
 				mk.icon = m.GetString("icon", "ui_xms_icon_pin");
 				mk.hint = m.GetString("hint");
+				mk.spot = m.GetString("spot");
 				out.markers.push_back(mk);
 			}
 	}
@@ -257,6 +258,13 @@ const EditorPda::SPage* EditorPda::SLayout::FindPage(LPCSTR id) const
 {
 	for (u32 i = 0; i < pages.size(); ++i)
 		if (pages[i].id == id) return &pages[i];
+	return 0;
+}
+
+const EditorPda::SMapSpot* EditorPda::SLayout::FindSpot(LPCSTR name) const
+{
+	for (u32 i = 0; i < map_spots.size(); ++i)
+		if (map_spots[i].name == name) return &map_spots[i];
 	return 0;
 }
 
@@ -401,6 +409,47 @@ bool EditorPda::Read(LPCSTR text, u32 len, LPCSTR chunk, LPCSTR lang, SLayout& o
 							SItem it;
 							ReadItem(L, lua_gettop(L), it);
 							out.items.push_back(it);
+							lua_pop(L, 1);
+						}
+						lua_pop(L, 1);
+						lua_getfield(L, r, "map_spots");
+						for (int i = 1; lua_istable(L, -1); ++i)
+						{
+							lua_rawgeti(L, -1, i);
+							if (!lua_istable(L, -1)) { lua_pop(L, 1); break; }
+							const int p = lua_gettop(L);
+							SMapSpot sp;
+							sp.name = GetStr(L, p, "name");
+							sp.icon = GetStr(L, p, "icon");
+							sp.arrows = GetStr(L, p, "arrows");
+							GetColor(L, p, "color", sp.color);
+							sp.size = (float)GetNum(L, p, "size", 24);
+							sp.heading = GetBool(L, p, "heading", false);
+							sp.level = (int)GetNum(L, p, "level", 5);
+							lua_getfield(L, p, "rect");
+							if (lua_istable(L, -1))
+							{
+								const int rc = lua_gettop(L);
+								sp.has_rect = true;
+								sp.rect_x = (float)GetNum(L, rc, "x", 0);
+								sp.rect_y = (float)GetNum(L, rc, "y", 0);
+								sp.rect_w = (float)GetNum(L, rc, "w", 0);
+								sp.rect_h = (float)GetNum(L, rc, "h", 0);
+							}
+							lua_pop(L, 1);
+							lua_getfield(L, p, "inner");
+							if (lua_istable(L, -1))
+							{
+								const int in = lua_gettop(L);
+								sp.has_inner = true;
+								sp.inner_icon = GetStr(L, in, "icon");
+								GetColor(L, in, "color", sp.inner_color);
+								sp.inner_size = (float)GetNum(L, in, "size", sp.size * 0.5);
+								sp.inner_x = (float)GetNum(L, in, "x", 0);
+								sp.inner_y = (float)GetNum(L, in, "y", 0);
+							}
+							lua_pop(L, 1);
+							out.map_spots.push_back(sp);
 							lua_pop(L, 1);
 						}
 						lua_pop(L, 1);

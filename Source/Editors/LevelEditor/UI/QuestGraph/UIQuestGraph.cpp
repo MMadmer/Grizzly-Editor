@@ -9,12 +9,12 @@
 
 namespace
 {
-	using T = XFinedTheme::ColorToken;
+	using T = GrizzlyTheme::ColorToken;
 
 	xr_vector<UIQuestGraphWindow*> s_Windows;
 	xr_string s_LastProject;
 
-	// pane sizes in pt, kept in the layout (the ini's [XFinedLayout] data) like every split
+	// pane sizes in pt, kept in the layout (the ini's [GrizzlyLayout] data) like every split
 	LPCSTR const kGraphWidth	= "graph.panel_w";
 	LPCSTR const kDetailsWidth	= "graph.details_w";
 	LPCSTR const kDrawerHeight	= "graph.drawer_h";
@@ -108,7 +108,7 @@ namespace
 	{
 		ImGui::SetCursorScreenPos(at);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(8.f), XUI::Pt(8.f)));
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::Vec4(fill));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::Vec4(fill));
 		const bool open = ImGui::BeginChild(id, size, ImGuiChildFlags_AlwaysUseWindowPadding | (border ? ImGuiChildFlags_Borders : 0) | flags);
 		ImGui::PopStyleColor();
 		ImGui::PopStyleVar();
@@ -558,45 +558,53 @@ void UIQuestGraphWindow::DrawToolbar(XUI::Toolbar& tb)
 	const bool behaviour = m_Doc->quest.IsBehaviour();
 	tb.Group(10);
 	if (tb.Action("##save", I::Save, "Save", behaviour ? "Save the graph (Ctrl+S)" : "Save the quest (Ctrl+S)")) Save();
-	if (tb.Action("##reload", I::Reload, "Reload", "Read the file again")) Reload();
 	tb.Group(8);
 	if (tb.Action("##undo", I::Undo, "Undo", "Undo (Ctrl+Z)", m_Doc->UndoDepth() > 0)) m_Doc->Undo();
 	if (tb.Action("##redo", I::Redo, "Redo", "Redo (Ctrl+Y)", m_Doc->RedoDepth() > 0)) m_Doc->Redo();
 	tb.Group(7);
-	if (tb.Action("##validate", I::Validate, "Validate", "Check the graph and list its problems")) Validate();
 	{
+		// the graph is checked as it is edited: this is here only when there is something to look at
 		const int e = m_Doc->ErrorCount(), w = m_Doc->WarningCount();
-		if (e)		tb.Status(Plural(e, "error", "errors").c_str(), XUI::Tone::Error);
-		else if (w)	tb.Status(Plural(w, "warning", "warnings").c_str(), XUI::Tone::Warning);
+		if (e || w)
+		{
+			const xr_string count = e ? Plural(e, "error", "errors") : Plural(w, "warning", "warnings");
+			if (tb.Action("##problems", e ? I::Error : I::Warning, count.c_str(), "List the problems")) Validate();
+		}
 	}
-	if (tb.Action("##layout", I::AutoLayout, "Auto Layout", "Place every node again, top to bottom")) { m_Doc->Layout(false); m_Canvas->RequestFrameAll(); }
 	if (tb.Action("##frame", I::FrameAll, "Frame All", "Show the whole graph (Home)")) m_Canvas->RequestFrameAll();
-	tb.Group(3);
-	if (tb.Action("##back", I::Back, "Back", "Back to the previous view (Alt+Left)", !m_Canvas->BackHistory().empty())) m_Canvas->HistoryBack();
-	if (tb.Action("##forward", I::Forward, "Forward", "Forward (Alt+Right)", !m_Canvas->ForwardHistory().empty())) m_Canvas->HistoryForward();
 	tb.Group(5);
 	if (tb.Action("##find", I::Search, "Find", "Find nodes in this graph (Ctrl+F, F3 next)", true, m_Drawer == DrawerFind)) OpenFind();
-	if (tb.Action("##project_find", I::FindInProject, "Find in Project", "Find nodes in every graph of the project (Ctrl+Shift+F)")) OpenProjectFind();
-	tb.Group(2);
-	if (tb.Menu("##bookmarks", I::Bookmark, "Bookmarks", "Bookmarked nodes (Ctrl+B bookmarks the selection)"))
+	tb.Group(6);
+	if (tb.Menu("##more", I::More, "More", "Everything else of this graph"))
 	{
-		const xr_vector<xr_string>& bookmarks = m_Canvas->Bookmarks();
-		for (u32 i = 0; i < bookmarks.size(); ++i)
-		{
-			const SNqNode* n = m_Doc->quest.FindNode(bookmarks[i].c_str());
-			if (!n) continue;
-			const xr_string item = bookmarks[i] + "  \xC2\xB7  " + NqLook::KindTitle(n->kind.c_str(), behaviour);
-			if (ImGui::MenuItem(item.c_str())) m_Canvas->RequestFrameNode(bookmarks[i].c_str());
-		}
-		if (bookmarks.empty()) ImGui::TextDisabled("No bookmarks: Ctrl+B bookmarks the selection");
+		if (XUI::MenuItem("Reload", I::Reload)) Reload();
+		if (XUI::MenuItem("Auto Layout", I::AutoLayout)) { m_Doc->Layout(false); m_Canvas->RequestFrameAll(); }
+		if (XUI::MenuItem("Find in Project", I::FindInProject, "Ctrl+Shift+F")) OpenProjectFind();
 		ImGui::Separator();
-		if (XUI::MenuItem("Bookmark the Selection", "Ctrl+B", false, !m_Doc->selection.empty())) m_Canvas->ToggleSelectedBookmarks();
-		if (ImGui::MenuItem("Clear Bookmarks", nullptr, false, !bookmarks.empty())) m_Canvas->ClearBookmarks();
+		if (XUI::MenuItem("Back", I::Back, "Alt+Left", !m_Canvas->BackHistory().empty())) m_Canvas->HistoryBack();
+		if (XUI::MenuItem("Forward", I::Forward, "Alt+Right", !m_Canvas->ForwardHistory().empty())) m_Canvas->HistoryForward();
+		ImGui::Separator();
+		const xr_vector<xr_string>& bookmarks = m_Canvas->Bookmarks();
+		if (ImGui::BeginMenu("Bookmarks"))
+		{
+			for (u32 i = 0; i < bookmarks.size(); ++i)
+			{
+				const SNqNode* n = m_Doc->quest.FindNode(bookmarks[i].c_str());
+				if (!n) continue;
+				const xr_string item = bookmarks[i] + "  \xC2\xB7  " + NqLook::KindTitle(n->kind.c_str(), behaviour);
+				if (ImGui::MenuItem(item.c_str())) m_Canvas->RequestFrameNode(bookmarks[i].c_str());
+			}
+			if (bookmarks.empty()) ImGui::TextDisabled("No bookmarks yet");
+			ImGui::Separator();
+			if (XUI::MenuItem("Bookmark the Selection", "Ctrl+B", false, !m_Doc->selection.empty())) m_Canvas->ToggleSelectedBookmarks();
+			if (ImGui::MenuItem("Previous Bookmark", nullptr, false, !bookmarks.empty())) m_Canvas->JumpBookmark(-1);
+			if (ImGui::MenuItem("Next Bookmark", nullptr, false, !bookmarks.empty())) m_Canvas->JumpBookmark(1);
+			if (ImGui::MenuItem("Clear Bookmarks", nullptr, false, !bookmarks.empty())) m_Canvas->ClearBookmarks();
+			ImGui::EndMenu();
+		}
+		if (XUI::MenuItem("Shortcuts", I::Keyboard)) m_ShowKeys = !m_ShowKeys;
 		ImGui::EndPopup();
 	}
-	const bool any = !m_Canvas->Bookmarks().empty();
-	if (tb.Action("##bm_prev", I::BookmarkPrev, "Previous", "The previous bookmark", any)) m_Canvas->JumpBookmark(-1);
-	if (tb.Action("##bm_next", I::BookmarkNext, "Next", "The next bookmark", any)) m_Canvas->JumpBookmark(1);
 
 	tb.Spring();
 	tb.Group(4);
@@ -627,7 +635,6 @@ void UIQuestGraphWindow::DrawToolbar(XUI::Toolbar& tb)
 	const bool minimap_on = MinimapAvailable();
 	if (tb.Action("##minimap", I::Minimap, "Minimap", MinimapTip().c_str(), minimap_on, minimap_on && m_Canvas->MinimapVisible()))
 		m_Canvas->SetMinimapVisible(!m_Canvas->MinimapVisible());
-	if (tb.Action("##keys", I::Keyboard, "Shortcuts", "What the keyboard and the mouse do here", true, m_ShowKeys)) m_ShowKeys = !m_ShowKeys;
 	if (tb.Action("##graph_panel", I::SidebarLeft, "Graph Panel", behaviour ? "The graph's settings, roles and variables" : "The quest's settings, tasks and variables",
 		true, m_ShowGraph && (!m_Rail || m_GraphOverlay)))
 		SetGraphPanel(!(m_ShowGraph && (!m_Rail || m_GraphOverlay)));
@@ -638,14 +645,14 @@ void UIQuestGraphWindow::DrawStatus()
 {
 	const int n = (int)m_Doc->quest.nodes.size(), e = m_Doc->ErrorCount(), w = m_Doc->WarningCount();
 	const xr_string text = Plural(n, "node", "nodes") + "  \xC2\xB7  " + Plural(e, "error", "errors") + "  \xC2\xB7  " + Plural(w, "warning", "warnings");
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(T::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(T::TextSecondary));
 	ImGui::TextUnformatted(text.c_str());
 	ImGui::PopStyleColor();
 	XUI::Tip(NqUtil::Format("Catalog: %s, version %d", NqCatalog::Source(), NqCatalog::Version()).c_str());
 	if (!m_Message.empty())
 	{
 		ImGui::SameLine(0.f, XUI::Pt(12.f));
-		ImGui::PushStyleColor(ImGuiCol_Text, m_MessageTone == XUI::Tone::Muted ? XFinedTheme::Vec4(T::TextMuted) : ImGui::ColorConvertU32ToFloat4(XUI::ToneColor(m_MessageTone)));
+		ImGui::PushStyleColor(ImGuiCol_Text, m_MessageTone == XUI::Tone::Muted ? GrizzlyTheme::Vec4(T::TextMuted) : ImGui::ColorConvertU32ToFloat4(XUI::ToneColor(m_MessageTone)));
 		ImGui::TextUnformatted(m_Message.c_str());
 		ImGui::PopStyleColor();
 	}
@@ -763,7 +770,7 @@ void UIQuestGraphWindow::DrawKeysCard()
 		if (XUI::IconButton("##close_keys", XUI::Icon::Close, "Close (Esc)")) m_ShowKeys = false;
 		{
 			XUI::FontScope font(XUI::Font::Small);
-			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(T::TextMuted));
+			ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(T::TextMuted));
 			ImGui::PushTextWrapPos(0.f);
 			ImGui::TextUnformatted("They work while the cursor is over the graph. Every edit is also an MCP call.");
 			ImGui::PopTextWrapPos();
@@ -786,7 +793,7 @@ void UIQuestGraphWindow::DrawKeysCard()
 				}
 				XUI::TextEllipsis(r.keys);
 				ImGui::TableSetColumnIndex(1);
-				ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(T::TextSecondary));
+				ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(T::TextSecondary));
 				ImGui::PushTextWrapPos(0.f);
 				ImGui::TextUnformatted(r.what);
 				ImGui::PopTextWrapPos();
@@ -841,7 +848,7 @@ void UIQuestGraphWindow::DrawDrawer(const ImVec2& at, float w, float h)
 {
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(8.f), XUI::Pt(6.f)));
 	ImGui::SetCursorScreenPos(at);
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::Vec4(T::Base));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::Vec4(T::Base));
 	const bool open = ImGui::BeginChild("##nq_drawer", ImVec2(w, h), ImGuiChildFlags_AlwaysUseWindowPadding);
 	ImGui::PopStyleColor();
 	ImGui::PopStyleVar();
@@ -928,7 +935,7 @@ void UIQuestGraphWindow::DrawFindTab()
 	ImGui::SameLine();
 	{
 		const xr_string count = m_FindResults.empty() ? xr_string("0") : NqUtil::Format("%d / %d", m_FindIndex >= 0 ? m_FindIndex + 1 : 0, (int)m_FindResults.size());
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(T::TextMuted));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(T::TextMuted));
 		XUI::TextEllipsis(count.c_str());
 		ImGui::PopStyleColor();
 	}
@@ -1023,7 +1030,7 @@ void UIQuestGraphWindow::DrawBody()
 		}
 		x += gw;
 		if (!m_Rail) XUI::SplitterAt(kGraphWidth, true, ImVec2(x + gap * 0.5f, top), main_h, 1.f, kGraphMin, graph_hi, kGraphDef);
-		else ImGui::GetWindowDrawList()->AddLine(ImVec2(x + gap * 0.5f, top), ImVec2(x + gap * 0.5f, top + main_h), XFinedTheme::U32(T::BorderSubtle));
+		else ImGui::GetWindowDrawList()->AddLine(ImVec2(x + gap * 0.5f, top), ImVec2(x + gap * 0.5f, top + main_h), GrizzlyTheme::U32(T::BorderSubtle));
 		x += gap;
 	}
 
@@ -1473,7 +1480,7 @@ namespace UIQuestGraph
 	static bool ArgToggle(LPCSTR raw, LPCSTR key, bool current, bool& out_value, bool& given, xr_string& err)
 	{
 		string_path v = "";
-		XFinedMCP::GetArg(raw, key, v, sizeof(v));
+		GrizzlyMCP::GetArg(raw, key, v, sizeof(v));
 		given = v[0] != 0;
 		out_value = current;
 		if (!given) return true;
@@ -1497,19 +1504,19 @@ namespace UIQuestGraph
 		// a tab that was not on screen (just opened, or behind another one) has no panes to report yet
 		bool asked = !w->DrawnLately();
 		string_path frame = "";
-		XFinedMCP::GetArg(raw, "frame", frame, sizeof(frame));
+		GrizzlyMCP::GetArg(raw, "frame", frame, sizeof(frame));
 		int zoom = NqUtil::ArgInt(raw, "zoom_level", -1);
 		float cx, cy;
 		bool has_c = NqUtil::ArgFloat(raw, "cx", cx) && NqUtil::ArgFloat(raw, "cy", cy);
 		string_path slot = "";
-		XFinedMCP::GetArg(raw, "slot", slot, sizeof(slot));
+		GrizzlyMCP::GetArg(raw, "slot", slot, sizeof(slot));
 		// The reply has always reported `selected`; this is how it gets set. Nothing
 		// else can: the Details panel follows the graph selection, so without it a caller
 		// could open a node's tab and never look at the node.
 		string_path select = "";
-		XFinedMCP::GetArg(raw, "select", select, sizeof(select));
+		GrizzlyMCP::GetArg(raw, "select", select, sizeof(select));
 		string_path scroll = "";
-		XFinedMCP::GetArg(raw, "scroll", scroll, sizeof(scroll));
+		GrizzlyMCP::GetArg(raw, "scroll", scroll, sizeof(scroll));
 
 		// the panes first: a scroll asked for in the same call is judged against them
 		xr_string err;

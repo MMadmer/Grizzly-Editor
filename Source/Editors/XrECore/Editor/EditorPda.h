@@ -84,8 +84,29 @@ namespace EditorPda
 	{
 		float		x, z;
 		xr_string	icon, hint;
+		xr_string	spot;		// a map_spots node whose look it takes
 		u32			color;
 		SMarker() : x(0), z(0), color(0xFFFFD21E) {}
+	};
+
+	// `map_spots = { ... }`: the look of one stock map spot node while the module is on.
+	// The preview draws them; in the game xms_pda.script makes them a patch of ui\map_spots.xml.
+	struct SMapSpot
+	{
+		xr_string	name, icon, arrows;
+		u32			color;
+		float		size;
+		bool		heading;
+		int			level;
+		bool		has_rect;		// icon is a texture file, rect the piece of it (its pixels)
+		float		rect_x, rect_y, rect_w, rect_h;
+		bool		has_inner;
+		xr_string	inner_icon;
+		u32			inner_color;
+		float		inner_size, inner_x, inner_y;
+		SMapSpot() : color(0xFFFFFFFF), size(24), heading(false), level(5), has_rect(false),
+			rect_x(0), rect_y(0), rect_w(0), rect_h(0), has_inner(false),
+			inner_color(0xFFFFFFFF), inner_size(0), inner_x(0), inner_y(0) {}
 	};
 
 	struct SLayout
@@ -107,6 +128,8 @@ namespace EditorPda
 		float		actor_x, actor_z;
 		xr_vector<std::pair<xr_string, xr_string> >	preview_vars;
 		xr_vector<SMarker>		markers;
+		xr_vector<SMapSpot>		map_spots;
+		const SMapSpot*	FindSpot	(LPCSTR name) const;
 
 		SLayout();
 		const SPage*	FindPage	(LPCSTR id) const;

@@ -8,7 +8,7 @@
 
 The `include/` and `src/` directories, `AUTHORS`, `ChangeLog`, `COPYING`,
 `NEWS`, and `README` are copied byte-for-byte from the verified upstream
-archive. XFined Editor compiles an explicit subset of the upstream source
+archive. Grizzly Editor compiles an explicit subset of the upstream source
 files required by its existing LZO1X-1 and LZO1X-999 APIs; no upstream source
 file is modified.
 

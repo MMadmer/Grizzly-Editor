@@ -228,7 +228,7 @@ bool NqUtil::ArgString(LPCSTR raw, LPCSTR field, xr_string& out)
 		out.assign(c, e);
 		return true;
 	}
-	// same unescaping as XFinedMCP::GetArg, without the fixed buffer
+	// same unescaping as GrizzlyMCP::GetArg, without the fixed buffer
 	for (const char* r = c + 1; *r; ++r)
 	{
 		if (*r == '"') break;

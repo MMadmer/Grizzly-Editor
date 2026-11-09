@@ -16,7 +16,7 @@ namespace
 			"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
 			"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 			"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
-			"squad_ref", "object_ref" "objective_id",
+			"squad_ref", "object_ref", "objective_id", "character_id", "global_name",
 		};
 		for (u32 i = 0; i < sizeof(types) / sizeof(types[0]); ++i)
 			if (type == types[i]) return true;
@@ -26,7 +26,8 @@ namespace
 	bool IsStringType(const xr_string& type)
 	{
 		return type == "string" || type == "enum" || type == "item_section" || type == "squad_section"
-			|| type == "level" || type == "smart" || type == "story_id" || type == "profile"
+			|| type == "level" || type == "smart" || type == "story_id" || type == "profile" || type == "character_id"
+			|| type == "global_name"
 			|| type == "community" || type == "info" || type == "var_name" || type == "task_id"
 			|| type == "quest_id" || type == "ref_name" || type == "signal_name" || type == "spot_type"
 			|| type == "relation" || type == "cases" || type == "node_id";
@@ -276,17 +277,17 @@ namespace
 		void WalkNpcRef(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,
 			SNqValue& value, LPCSTR node, LPCSTR slot, bool target, bool kill)
 		{
-			static const LPCSTR npc_allowed[] = { "story", "ref", "profile", "community", "level" };
+			static const LPCSTR npc_allowed[] = { "story", "ref", "character", "profile", "community", "level" };
 			static const LPCSTR target_allowed[] =
-				{ "story", "ref", "profile", "community", "level", "smart", "restrictor", "pos", "radius" };
-			static const LPCSTR kill_allowed[] = { "story", "ref", "profile", "community", "level", "spawn" };
+				{ "story", "ref", "character", "profile", "community", "level", "smart", "restrictor", "pos", "radius" };
+			static const LPCSTR kill_allowed[] = { "story", "ref", "character", "profile", "community", "level", "spawn" };
 			const LPCSTR* allowed = target ? target_allowed : kill ? kill_allowed : npc_allowed;
 			const u32 allowed_count = target ? sizeof(target_allowed) / sizeof(target_allowed[0])
 				: kill ? sizeof(kill_allowed) / sizeof(kill_allowed[0]) : sizeof(npc_allowed) / sizeof(npc_allowed[0]);
 			if (!WalkObject(kind, param, value, node, slot, param.type.c_str(), allowed, allowed_count)) return;
 
 			int alternatives = 0;
-			static const LPCSTR common[] = { "story", "ref", "profile", "community" };
+			static const LPCSTR common[] = { "story", "ref", "character", "profile", "community" };
 			for (u32 i = 0; i < sizeof(common) / sizeof(common[0]); ++i)
 				if (value.Has(common[i])) ++alternatives;
 			if (target)
@@ -302,6 +303,7 @@ namespace
 
 			if (value.Has("story")) WalkStringLeaf(kind, param, value, "story", "story_id", false, node, slot);
 			if (value.Has("ref")) WalkStringLeaf(kind, param, value, "ref", "ref_name", false, node, slot);
+			if (value.Has("character")) WalkStringLeaf(kind, param, value, "character", "character_id", false, node, slot);
 			if (value.Has("profile")) WalkStringLeaf(kind, param, value, "profile", "profile", false, node, slot);
 			if (value.Has("community")) WalkStringLeaf(kind, param, value, "community", "community", false, node, slot);
 			if (value.Has("level"))
@@ -329,19 +331,25 @@ namespace
 			}
 		}
 
-		// squad_ref / object_ref: one concrete world object, addressed the same two ways
+		// squad_ref / object_ref: one concrete world object, addressed the same two ways - an
+		// object also by a character, one person being one object
 		void WalkObjectRef(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,
 			SNqValue& value, LPCSTR node, LPCSTR slot)
 		{
-			static const LPCSTR allowed[] = { "story", "ref" };
-			if (!WalkObject(kind, param, value, node, slot, param.type.c_str(), allowed,
-				sizeof(allowed) / sizeof(allowed[0]))) return;
-			const int alternatives = (value.Has("story") ? 1 : 0) + (value.Has("ref") ? 1 : 0);
+			const bool object = param.type == "object_ref";
+			static const LPCSTR squad_allowed[] = { "story", "ref" };
+			static const LPCSTR object_allowed[] = { "story", "ref", "character" };
+			if (!WalkObject(kind, param, value, node, slot, param.type.c_str(), object ? object_allowed : squad_allowed,
+				object ? 3 : 2)) return;
+			const int alternatives = (value.Has("story") ? 1 : 0) + (value.Has("ref") ? 1 : 0) +
+				(object && value.Has("character") ? 1 : 0);
 			if (alternatives != 1)
-				Diagnostic("malformed", NqUtil::Format("%s must select exactly one of story / ref",
-					param.type.c_str()).c_str(), node, slot, kind.id.c_str(), param.name.c_str());
+				Diagnostic("malformed", NqUtil::Format("%s must select exactly one of story / ref%s",
+					param.type.c_str(), object ? " / character" : "").c_str(), node, slot, kind.id.c_str(), param.name.c_str());
 			if (value.Has("story")) WalkStringLeaf(kind, param, value, "story", "story_id", false, node, slot);
 			if (value.Has("ref")) WalkStringLeaf(kind, param, value, "ref", "ref_name", false, node, slot);
+			if (object && value.Has("character"))
+				WalkStringLeaf(kind, param, value, "character", "character_id", false, node, slot);
 		}
 
 		void WalkPlace(const NqCatalog::SKind& kind, const NqCatalog::SParam& param,

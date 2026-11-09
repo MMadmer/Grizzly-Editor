@@ -1,10 +1,11 @@
 #include "stdafx.h"
 #include "EditorWorld.h"
+#include "EditorCharacters.h"
 #include "EditorProject.h"
 #include "EditorGameContent.h"
 #include "EditorGameConfigs.h"
 #include "EditorGameModes.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "Nq/NqUtil.h"
 #include "Nq/NqPickers.h"
 
@@ -397,7 +398,7 @@ namespace
 	//--------------------------------------------------------------------------
 	// the World Rules tab
 	//--------------------------------------------------------------------------
-	using Token = XFinedTheme::ColorToken;
+	using Token = GrizzlyTheme::ColorToken;
 
 	bool			s_Open			= false;
 	SWorld			s_World;				// what mod.ltx says, reloaded when it changes
@@ -444,6 +445,26 @@ namespace
 	{
 		xr_string err;
 		s_Status = SaveWorld(s_World, err) ? xr_string() : "Not saved: " + err;
+		s_CheckedAt = 0;
+	}
+
+	// the mode's start kit as mod.ltx has it, saved the same way
+	EditorMod::SStartKit	s_Kit;
+
+	bool SaveKit(const EditorMod::SStartKit& k, xr_string& err)
+	{
+		SManifest m;
+		if (!EditorProject::Active())						{ err = "no active project"; return false; }
+		if (!EditorMod::Load(EditorProject::Root(), m))		{ err = "mod.ltx not found in the project"; return false; }
+		m.start_kit = k;
+		if (!EditorMod::Save(EditorProject::Root(), m))		{ err = "can't write mod.ltx"; return false; }
+		return true;
+	}
+
+	void CommitKit()
+	{
+		xr_string err;
+		s_Status = SaveKit(s_Kit, err) ? xr_string() : "Not saved: " + err;
 		s_CheckedAt = 0;
 	}
 
@@ -508,7 +529,7 @@ namespace
 	}
 
 	// the levels of a list as chips, then Add Level...; true when the list changed
-	bool LevelChips(LPCSTR id, xr_vector<xr_string>& v)
+	bool DrawLevelChips(LPCSTR id, xr_vector<xr_string>& v)
 	{
 		bool changed = false;
 		ImGui::PushID(id);
@@ -563,7 +584,7 @@ namespace
 		if (limited)
 		{
 			ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
-			changed |= LevelChips("levels", v);
+			changed |= DrawLevelChips("levels", v);
 		}
 		ImGui::PopID();
 		return changed;
@@ -584,6 +605,7 @@ namespace
 		return "No game mode is chosen yet: pick one in Mod Settings, Game Mode.";
 	}
 
+	bool s_OpenMore = false;	// over MCP: what it asks for is under More
 	bool s_AreaLimited = false, s_LevelsLimited = false;
 
 	// a checkbox in the middle of its table cell
@@ -656,7 +678,7 @@ namespace
 
 	void DrawArea()
 	{
-		XUI::Prose("A transition out of the area stays closed. Quests open it (world.transition) or grow the area (world.area).");
+		XUI::Prose("A transition out of the area stays closed. A quest can open it or grow the area.");
 		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
 		if (Scope("area", "Anywhere", "Only These Levels", s_World.area, s_AreaLimited)) Commit();
 	}
@@ -745,7 +767,7 @@ namespace
 				ImGui::EndDisabled();
 				XUI::Tip(0 == xr_strcmp(by, "level") ? "Closed with the whole level" :
 						 0 == xr_strcmp(by, "area") ? "Closed: it leads out of the playable area" :
-						 closed ? "Starts closed: a quest opens it (world.transition)" : "Open at the start of a game");
+						 closed ? "Starts closed: a quest opens it" : "Open at the start of a game");
 				ImGui::PopID();
 			}
 			ImGui::EndTable();
@@ -803,6 +825,137 @@ namespace
 		XUI::Tip("In front of the camera; the arrow is where the player faces. The Spawn tool has it too: Player Start.");
 	}
 
+	// What a new game of the mode begins with, in place of the new-game screen's loadout.
+	void DrawStartKit()
+	{
+		EditorMod::SStartKit& k = s_Kit;
+		if (!k.declared)
+		{
+			XUI::Prose("None: a new game begins with the loadout picked on the new-game screen - the faction's kit and the extra kits.");
+			ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+			if (XUI::Button("Set a Starting Kit", XUI::Kind::Secondary))
+			{
+				// the game's own base kit is where a mode's kit usually starts from
+				if (!EditorWorld::GameBaseKit(k))
+				{
+					k = EditorMod::SStartKit();
+					k.declared = true;
+					k.money = 0;
+				}
+				CommitKit();
+			}
+			XUI::Tip("It starts as the linked game's base kit, the one every faction gets, and changes from there.");
+			return;
+		}
+		XUI::Prose("A new game begins with exactly this: what the new-game screen's loadout and extra kits gave is taken away. The PDA and the bolt always stay.");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+
+		// money: empty leaves it to the new-game screen
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted("Money");
+		ImGui::SameLine(XUI::Em(6.f));
+		char money[16] = "";
+		if (k.money >= 0) sprintf_s(money, "%d", k.money);
+		ImGui::SetNextItemWidth(XUI::Em(8.f));
+		if (ImGui::InputTextWithHint("##money", "the screen's", money, sizeof(money), ImGuiInputTextFlags_CharsDecimal))
+		{
+			k.money = money[0] ? _max(0, atoi(money)) : -1;
+			CommitKit();
+		}
+		XUI::Tip("The money a new game begins with. Empty: what the new-game screen gives.\nmod.ltx: money");
+		ImGui::SameLine(0.f, XUI::Pt(16.f));
+		bool perks = k.perks;
+		if (ImGui::Checkbox("Keep the perks picked on the new-game screen", &perks))
+		{
+			k.perks = perks;
+			CommitKit();
+		}
+		XUI::Tip("Perks are not items: knife master, strong stomach and the rest. Off: a new game begins without them.\nmod.ltx: perks");
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+
+		const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX;
+		if (k.items.empty())
+			XUI::StatusText(XUI::Tone::Muted, "No items: the player begins with the PDA and nothing else.");
+		else if (ImGui::BeginTable("##kit", 3, flags))
+		{
+			ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, XUI::Em(5.f));
+			ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, XUI::Pt(24.f));
+			XUI::TableHeaders();
+			int remove = -1;
+			for (u32 i = 0; i < k.items.size(); ++i)
+			{
+				ImGui::PushID((int)i);
+				ImGui::TableNextRow(0, XUI::Pt(26.f));
+				ImGui::TableNextColumn();
+				char section[128];
+				strncpy_s(section, k.items[i].section.c_str(), _TRUNCATE);
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				if (EditorCharacters::ItemPicker("##sect", section, sizeof(section)) && section[0])
+				{
+					k.items[i].section = section;
+					CommitKit();
+				}
+				ImGui::TableNextColumn();
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+				int count = k.items[i].count;
+				if (ImGui::InputInt("##count", &count, 0, 0))
+				{
+					k.items[i].count = _max(1, count);
+					CommitKit();
+				}
+				XUI::Tip("How many of it; ammo counts in boxes.");
+				ImGui::TableNextColumn();
+				if (XUI::IconButton("##remove", XUI::Icon::Delete, "Take the row out"))	remove = (int)i;
+				ImGui::PopID();
+			}
+			ImGui::EndTable();
+			if (remove >= 0)
+			{
+				k.items.erase(k.items.begin() + remove);
+				CommitKit();
+			}
+		}
+		ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+		// a row is born with its item: the tab saves at once, and a row without one would not survive the save
+		char add[128] = "";
+		ImGui::SetNextItemWidth(XUI::Em(18.f));
+		if (EditorCharacters::ItemPicker("##add", add, sizeof(add), "Add an item...") && add[0])
+		{
+			bool merged = false;
+			for (EditorMod::SKitItem& it : k.items)
+				if (it.section == add) { ++it.count; merged = true; break; }
+			if (!merged)
+			{
+				EditorMod::SKitItem it;
+				it.section = add;
+				k.items.push_back(it);
+			}
+			CommitKit();
+		}
+		ImGui::SameLine();
+		if (XUI::Button("Game's Base Kit", XUI::Kind::Secondary, NqPickers::Available(), "Link a game to read its kit"))
+		{
+			EditorMod::SStartKit base;
+			if (EditorWorld::GameBaseKit(base))
+			{
+				base.perks = k.perks;
+				k = base;
+				CommitKit();
+			}
+			else
+				XUI::Toast(XUI::Tone::Warning, "The linked game has no plugins\\faction_loadouts.ltx to read its base kit from.");
+		}
+		XUI::Tip("In place of these rows and the money: what every faction starts with in the linked game ([shared] of plugins\\faction_loadouts.ltx).");
+		ImGui::SameLine();
+		if (XUI::Button("Remove Kit", XUI::Kind::GhostDanger))
+		{
+			k = EditorMod::SStartKit();
+			CommitKit();
+		}
+		XUI::Tip("No kit of the mode's own: the new-game screen's loadout decides again.");
+	}
+
 	// Take everything of the original game out: reversible, but it is five decisions at once, so it asks.
 	void AskEmptyWorld()
 	{
@@ -857,12 +1010,12 @@ namespace
 			s_DrawerOpen = !s_DrawerOpen;
 		const bool hovered = ImGui::IsItemHovered();
 		XUI::Tip(s_DrawerOpen ? "Hide the problems" : "Show the problems");
-		dl->AddRectFilled(at, ImVec2(at.x + width, at.y + header), XFinedTheme::U32(hovered ? Token::Hover : Token::Raised), XUI::Pt(4.f));
+		dl->AddRectFilled(at, ImVec2(at.x + width, at.y + header), GrizzlyTheme::U32(hovered ? Token::Hover : Token::Raised), XUI::Pt(4.f));
 		const float cy = at.y + header * .5f;
 		XUI::DrawIcon(dl, s_DrawerOpen ? XUI::Icon::ChevronDown : XUI::Icon::ChevronUp, ImVec2(at.x + XUI::Pt(6.f), cy - XUI::Pt(6.f)), 12.f,
-			XFinedTheme::U32(Token::TextSecondary));
+			GrizzlyTheme::U32(Token::TextSecondary));
 		XUI::DrawIcon(dl, XUI::Icon::Problems, ImVec2(at.x + XUI::Pt(24.f), cy - XUI::Pt(7.f)), 14.f,
-			errors ? XUI::ToneColor(XUI::Tone::Error) : warnings ? XUI::ToneColor(XUI::Tone::Warning) : XFinedTheme::U32(Token::TextSecondary));
+			errors ? XUI::ToneColor(XUI::Tone::Error) : warnings ? XUI::ToneColor(XUI::Tone::Warning) : GrizzlyTheme::U32(Token::TextSecondary));
 		const xr_string summary = !errors && !warnings ? xr_string("Problems: none") :
 			NqUtil::Format("Problems: %u error%s, %u warning%s", errors, errors == 1 ? "" : "s", warnings, warnings == 1 ? "" : "s");
 		{
@@ -1005,6 +1158,95 @@ void EditorWorld::Validate(LPCSTR project_root, const SManifest& m, xr_vector<xr
 			if (!Contains(w.area, s.level))
 				problems.push_back("W205 world: the Player Start stands on " + s.level + ", outside the playable area");
 	}
+
+	// the start kit: a row the game cannot use is the author's slip; an item the linked game
+	// lacks may be one the module brings, so that one only warns (the Characters' W117)
+	const EditorMod::SStartKit& k = m.start_kit;
+	if (k.declared)
+	{
+		xr_vector<xr_string> seen;
+		for (const EditorMod::SKitItem& it : k.items)
+		{
+			if (it.section.empty())
+			{
+				problems.push_back("E207 world: a start kit row names no item");
+				continue;
+			}
+			if (it.count < 1)
+				problems.push_back(NqUtil::Format("E207 world: start kit item '%s' has a count of %d - at least 1", it.section.c_str(), it.count));
+			if (Contains(seen, it.section))
+				problems.push_back("E207 world: start kit item '" + it.section + "' is listed twice - one row says how many");
+			seen.push_back(it.section);
+			if (NqPickers::Available() && !NqPickers::Known(NqPickers::tItem, it.section.c_str()))
+				problems.push_back("W208 world: start kit item '" + it.section + "' is not an item of the linked game - a new game leaves it out unless the module brings it");
+		}
+	}
+}
+
+void EditorWorld::JsonStartKit(const EditorMod::SStartKit& k, xr_string& out)
+{
+	out += "{\"declared\":";	NqUtil::JsonBool(out, k.declared);
+	out += ",\"money\":";		out += k.money >= 0 ? NqUtil::Format("%d", k.money) : xr_string("null");
+	out += ",\"perks\":";		NqUtil::JsonBool(out, k.perks);
+	out += ",\"items\":[";
+	for (u32 i = 0; i < k.items.size(); ++i)
+	{
+		if (i) out += ",";
+		out += "{\"section\":";	NqUtil::JsonString(out, k.items[i].section);
+		out += NqUtil::Format(",\"count\":%d}", k.items[i].count);
+	}
+	out += "]}";
+}
+
+bool EditorWorld::GameBaseKit(EditorMod::SStartKit& out)
+{
+	out = EditorMod::SStartKit();
+	xr_string err;
+	if (!EditorGameContent::EnsureMounted(err)) return false;
+	const int idx = EditorGameContent::Find("configs\\plugins\\faction_loadouts.ltx");
+	if (idx < 0) return false;
+	u32 size = 0;
+	u8* data = EditorGameContent::ReadBytes(idx, size);
+	if (!data) return false;
+	xr_string text;
+	text.assign((const char*)data, size);
+	EditorGameContent::FreeBytes(data);
+
+	// [shared] is what the new-game screen starts every faction's loadout from; a money list
+	// ("1000,3000", one picked at random) gives its first amount
+	bool shared = false;
+	size_t pos = 0;
+	while (pos < text.size())
+	{
+		size_t eol = text.find('\n', pos);
+		if (eol == xr_string::npos) eol = text.size();
+		xr_string line = NqUtil::Trim(text.substr(pos, eol - pos));
+		pos = eol + 1;
+		const size_t sc = line.find(';');
+		if (sc != xr_string::npos) line = NqUtil::Trim(line.substr(0, sc));
+		if (line.empty()) continue;
+		if (line[0] == '[')
+		{
+			const size_t close = line.find(']');
+			shared = 0 == _stricmp(line.substr(1, close == xr_string::npos ? xr_string::npos : close - 1).c_str(), "shared");
+			continue;
+		}
+		if (!shared) continue;
+		xr_string key = line, val;
+		const size_t eq = line.find('=');
+		if (eq != xr_string::npos) { key = NqUtil::Trim(line.substr(0, eq)); val = NqUtil::Trim(line.substr(eq + 1)); }
+		if (key == "money")
+		{
+			out.money = _max(0, atoi(val.c_str()));
+			continue;
+		}
+		EditorMod::SKitItem it;
+		it.section = key;
+		it.count = val.empty() ? 1 : _max(1, atoi(val.c_str()));
+		out.items.push_back(it);
+	}
+	out.declared = true;
+	return !out.items.empty() || out.money >= 0;
 }
 
 void EditorWorld::JsonWorld(const SWorld& w, xr_string& out)
@@ -1058,12 +1300,6 @@ void DrawWorldToolbar(XUI::Toolbar& tb)
 	tb.Group(0);
 	tb.Separator();
 	tb.Status(s_Status.empty() ? "Saved to mod.ltx as you edit" : s_Status.c_str(), s_Status.empty() ? XUI::Tone::Muted : XUI::Tone::Error);
-	tb.Group(1);
-	u32 errors = 0, warnings = 0;
-	CountProblems(errors, warnings);
-	const xr_string label = errors + warnings ? NqUtil::Format("Problems (%u)", errors + warnings) : xr_string("Problems");
-	if (tb.Action("problems", XUI::Icon::Problems, label.c_str(), s_DrawerOpen ? "Hide the problems" : "Show the problems", true, s_DrawerOpen))
-		s_DrawerOpen = !s_DrawerOpen;
 }
 
 // World Rules is one of the editor's major tabs (XUI::Shell); it saves as it is edited, so it is never dirty
@@ -1095,6 +1331,7 @@ void RefreshWorld()
 		const bool new_project = s_WorldRoot != EditorProject::Root();
 		s_HaveManifest = EditorMod::Load(EditorProject::Root(), s_Manifest);
 		s_World = s_Manifest.world;
+		s_Kit = s_Manifest.start_kit;
 		s_WorldGen = EditorMod::ManifestGeneration();
 		s_WorldRoot = EditorProject::Root();
 		s_AreaLimited |= !s_World.area.empty();
@@ -1130,6 +1367,8 @@ void RefreshWorld()
 }
 }
 
+bool EditorWorld::LevelChips(LPCSTR id, xr_vector<xr_string>& v) { return DrawLevelChips(id, v); }
+
 void EditorWorld::Show()	{ s_Open = true; ShowTab(true); }
 bool EditorWorld::IsOpen()	{ return s_Open; }
 
@@ -1154,11 +1393,15 @@ void EditorWorld::DrawWorldBody()
 		return;
 	}
 	const xr_string& scene_level = s_SceneLevel;
-	const float drawer = DrawerHeight(ImGui::GetContentRegionAvail().y);
+	// the problems have a bar of their own only when there are any
+	u32 errors = 0, warnings = 0;
+	CountProblems(errors, warnings);
+	const bool any_problem = errors + warnings > 0;
+	const float drawer = any_problem ? DrawerHeight(ImGui::GetContentRegionAvail().y) : 0.f;
 
 	// one column of up to 900 pt in the middle, the scrollbar at the right edge of the tab
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(Token::Base));
-	ImGui::BeginChild("##world_scroll", ImVec2(0.f, -drawer - ImGui::GetStyle().ItemSpacing.y));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::U32(Token::Base));
+	ImGui::BeginChild("##world_scroll", ImVec2(0.f, any_problem ? -drawer - ImGui::GetStyle().ItemSpacing.y : 0.f));
 	{
 		const float avail = ImGui::GetContentRegionAvail().x;
 		const float column = _min(avail, XUI::Pt(900.f));
@@ -1166,26 +1409,11 @@ void EditorWorld::DrawWorldBody()
 		ImGui::BeginChild("##world_column", ImVec2(column, 0.f), ImGuiChildFlags_AutoResizeY);
 		ImGui::PopStyleColor();
 		XUI::Prose(ModeText(s_Manifest).c_str());
-		XUI::Tip("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs: the world.* kinds.");
+		XUI::Tip("A new game reads these rules once and keeps them in its saves. Quests change them while the game runs.");
 		ImGui::Dummy(ImVec2(0.f, XUI::Pt(6.f)));
 		if (XUI::Section("Original Game", true))
 		{
 			DrawRules();
-			XUI::EndSection();
-		}
-		if (XUI::Section("Applies On", true, s_World.levels.empty() ? "Every level" : NqUtil::Format("%u levels", (u32)s_World.levels.size()).c_str()))
-		{
-			DrawAppliesOn();
-			XUI::EndSection();
-		}
-		if (XUI::Section("Playable Area", true, s_World.area.empty() ? "Anywhere" : NqUtil::Format("%u levels", (u32)s_World.area.size()).c_str()))
-		{
-			DrawArea();
-			XUI::EndSection();
-		}
-		if (XUI::Section("Transitions", true))
-		{
-			DrawTransitions(scene_level);
 			XUI::EndSection();
 		}
 		if (XUI::Section("Player Start", true))
@@ -1193,10 +1421,41 @@ void EditorWorld::DrawWorldBody()
 			DrawStart(scene_level);
 			XUI::EndSection();
 		}
+		if (XUI::Section("Starting Kit", true, !s_Kit.declared ? "The new-game screen's" :
+			NqUtil::Format("%u item%s", (u32)s_Kit.items.size(), s_Kit.items.size() == 1 ? "" : "s").c_str()))
+		{
+			DrawStartKit();
+			XUI::EndSection();
+		}
+		if (s_OpenMore)
+		{
+			ImGui::GetStateStorage()->SetBool(ImGui::GetID("More##world"), true);
+			s_OpenMore = false;
+		}
+		if (XUI::Section("More##world", false))
+		{
+			if (XUI::Section("Applies On", true, s_World.levels.empty() ? "Every level" : NqUtil::Format("%u levels", (u32)s_World.levels.size()).c_str()))
+			{
+				DrawAppliesOn();
+				XUI::EndSection();
+			}
+			if (XUI::Section("Playable Area", true, s_World.area.empty() ? "Anywhere" : NqUtil::Format("%u levels", (u32)s_World.area.size()).c_str()))
+			{
+				DrawArea();
+				XUI::EndSection();
+			}
+			if (XUI::Section("Transitions", true))
+			{
+				DrawTransitions(scene_level);
+				XUI::EndSection();
+			}
+			XUI::EndSection();
+		}
 		ImGui::EndChild();
 	}
 	ImGui::EndChild();
-	XUI_LocalProblemsDrawer(drawer);
+	if (any_problem)
+		XUI_LocalProblemsDrawer(drawer);
 }
 
 //------------------------------------------------------------------------------
@@ -1228,6 +1487,8 @@ static void WorldAnswer(const SManifest& m, xr_string& out)
 	NqUtil::JsonString(out, m.target);
 	out += ",\"world\":";
 	EditorWorld::JsonWorld(m.world, out);
+	out += ",\"start_kit\":";
+	EditorWorld::JsonStartKit(m.start_kit, out);
 	xr_vector<EditorWorld::SStart> starts;
 	EditorWorld::Starts(EditorProject::Root(), starts);
 	out += ",\"starts\":";
@@ -1246,6 +1507,8 @@ static void WorldAnswer(const SManifest& m, xr_string& out)
 
 void EditorWorld::McpView(LPCSTR raw, xr_string& out)
 {
+	if (NqUtil::ArgBool(raw, "more", false) || strstr(raw, "\"level\"") || strstr(raw, "\"filter\""))
+		s_OpenMore = true;
 	if (!EditorProject::Active())	{ NqUtil::JsonError(out, "no active project"); return; }
 	xr_string drawer, level, filter;
 	const bool has_drawer = NqUtil::ArgString(raw, "drawer", drawer) && !drawer.empty();
@@ -1365,6 +1628,61 @@ void EditorWorld::McpSet(LPCSTR raw, xr_string& out)
 	each("unlock_level", w.locked_levels, false);
 	each("area_add", w.area, true);
 	each("area_remove", w.area, false);
+
+	// the start kit: any of its fields declares it, start_kit_remove takes the section out
+	EditorMod::SStartKit k = m.start_kit;
+	if (NqUtil::ArgBool(raw, "start_kit_remove", false))
+		k = EditorMod::SStartKit();
+	// the tab's Game's Base Kit: the linked game's own rows and money, the fields below still apply on top
+	if (NqUtil::ArgBool(raw, "start_kit_base", false))
+	{
+		EditorMod::SStartKit base;
+		if (!GameBaseKit(base))
+		{
+			NqUtil::JsonError(out, "start_kit_base: the linked game has no plugins\\faction_loadouts.ltx [shared] kit to read");
+			return;
+		}
+		base.perks = k.perks;
+		k = base;
+	}
+	xr_string kit_text;
+	if (NqUtil::ArgString(raw, "start_kit", kit_text))
+	{
+		// "device_torch, wpn_knife, bandage=2": the whole list, like the other list fields
+		k.items.clear();
+		xr_vector<xr_string> rows;
+		NqUtil::Split(kit_text.c_str(), ',', rows);
+		for (const xr_string& raw_row : rows)
+		{
+			const xr_string row = NqUtil::Trim(raw_row);
+			if (row.empty()) continue;
+			const size_t eq = row.find('=');
+			EditorMod::SKitItem it;
+			it.section = NqUtil::Trim(eq == xr_string::npos ? row : row.substr(0, eq));
+			it.count = eq == xr_string::npos ? 1 : atoi(row.substr(eq + 1).c_str());
+			if (it.section.empty() || it.count < 1)
+			{
+				NqUtil::JsonError(out, "start_kit: '" + row + "' needs an item section and a count of at least 1 (section or section=N)");
+				return;
+			}
+			k.items.push_back(it);
+		}
+		k.declared = true;
+	}
+	// present or not: both defaults agree only when the field is there
+	const int money_lo = NqUtil::ArgInt(raw, "start_money", INT_MIN), money_hi = NqUtil::ArgInt(raw, "start_money", INT_MAX);
+	if (money_lo == money_hi)
+	{
+		k.money = money_lo < 0 ? -1 : money_lo;
+		k.declared = true;
+	}
+	const int perks = ArgTri(raw, "start_perks");
+	if (perks >= 0)
+	{
+		k.perks = perks == 1;
+		k.declared = true;
+	}
+	m.start_kit = k;
 
 	m.world = w;
 	if (!EditorMod::Save(EditorProject::Root(), m))		{ NqUtil::JsonError(out, "can't write mod.ltx"); return; }

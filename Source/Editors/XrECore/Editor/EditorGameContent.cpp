@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include "EditorGameContent.h"
 #include "EditorProject.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "../../../XrCore/LocatorAPI.h"
 
 //------------------------------------------------------------------------------
@@ -412,8 +412,8 @@ void EditorGameContent::McpList(LPCSTR raw, xr_string& out)
 	}
 
 	char filter[256] = {}, ext[64] = {};
-	XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
-	XFinedMCP::GetArg(raw, "ext", ext, sizeof(ext));
+	GrizzlyMCP::GetArg(raw, "filter", filter, sizeof(filter));
+	GrizzlyMCP::GetArg(raw, "ext", ext, sizeof(ext));
 	_strlwr_s(filter, sizeof(filter));
 	_strlwr_s(ext, sizeof(ext));
 	const int limit = ArgInt(raw, "limit", 200);
@@ -461,7 +461,7 @@ void EditorGameContent::McpCopy(LPCSTR raw, xr_string& out)
 	}
 
 	char path[MAX_PATH] = {};
-	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
+	if (!GrizzlyMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
 	{
 		out = "{\"ok\":false,\"error\":\"missing 'path' argument\"}";
 		return;

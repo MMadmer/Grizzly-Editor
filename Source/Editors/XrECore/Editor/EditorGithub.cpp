@@ -6,6 +6,9 @@
 #include <wincred.h>
 #include <bcrypt.h>
 #include <string>
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 #pragma comment(lib, "bcrypt.lib")
 
@@ -15,7 +18,7 @@
 
 namespace
 {
-// The client id of the XFined Editor OAuth app on GitHub (Settings > Developer
+// The client id of the Grizzly Editor OAuth app on GitHub (Settings > Developer
 // settings > OAuth Apps, "Enable Device Flow" ticked). It is public by design -
 // the device flow has no client secret. Empty = the sign-in button is not
 // offered and the account comes from a pasted token, the environment or gh.
@@ -43,8 +46,8 @@ const u32 kServeAttempts	= 15;
 //------------------------------------------------------------------------------
 // QA
 //------------------------------------------------------------------------------
-// -qa_github points the client at a mock through XFINED_GITHUB_API / _WEB. In
-// that mode the account comes from XFINED_GITHUB_TOKEN or the QA credential
+// -qa_github points the client at a mock through GRIZZLY_GITHUB_API / _WEB. In
+// that mode the account comes from GRIZZLY_GITHUB_TOKEN or the QA credential
 // alone: a real token never travels to a host that is not GitHub.
 bool QaMode()
 {
@@ -67,13 +70,13 @@ xr_string Base(LPCSTR variable, LPCSTR real)
 	return v;
 }
 
-xr_string ApiBase()	{ return Base("XFINED_GITHUB_API", "https://api.github.com"); }
-xr_string WebBase()	{ return Base("XFINED_GITHUB_WEB", "https://github.com"); }
-xr_string VtBase()	{ return Base("XFINED_VT_API", "https://www.virustotal.com/api/v3"); }
+xr_string ApiBase()	{ return Base("GRIZZLY_GITHUB_API", "https://api.github.com"); }
+xr_string WebBase()	{ return Base("GRIZZLY_GITHUB_WEB", "https://github.com"); }
+xr_string VtBase()	{ return Base("GRIZZLY_VT_API", "https://www.virustotal.com/api/v3"); }
 
 xr_string ClientId()
 {
-	const xr_string qa = QaMode() ? EnvText("XFINED_GITHUB_CLIENT_ID") : xr_string();
+	const xr_string qa = QaMode() ? EnvText("GRIZZLY_GITHUB_CLIENT_ID") : xr_string();
 	return qa.empty() ? xr_string(kClientId) : qa;
 }
 
@@ -91,7 +94,7 @@ xr_string Origin(const xr_string& url)
 bool UploadUrlTrusted(const xr_string& url)
 {
 	const xr_string origin = Origin(url);
-	const bool mocked = QaMode() && !EnvText("XFINED_GITHUB_API").empty();
+	const bool mocked = QaMode() && !EnvText("GRIZZLY_GITHUB_API").empty();
 	return 0 == _stricmp(origin.c_str(), mocked ? Origin(ApiBase()).c_str() : "https://uploads.github.com");
 }
 
@@ -417,10 +420,10 @@ class CHttp
 public:
 	CHttp() : m_Session(0)
 	{
-		m_Session = ::WinHttpOpen(L"XFined-Editor", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+		m_Session = ::WinHttpOpen(L"Grizzly-Editor", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
 			WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 		if (!m_Session)
-			m_Session = ::WinHttpOpen(L"XFined-Editor", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+			m_Session = ::WinHttpOpen(L"Grizzly-Editor", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
 				WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 		if (!m_Session) return;
 		::WinHttpSetTimeouts(m_Session, 15000, 15000, 60000, 60000);
@@ -667,7 +670,7 @@ void Pause(EditorGithub::CCancel& cancel, u32 ms)
 //------------------------------------------------------------------------------
 const wchar_t* CredentialTarget()
 {
-	return QaMode() ? L"XFinedEditor:GitHub:qa" : L"XFinedEditor:GitHub";
+	return QaMode() ? L"GrizzlyEditor:GitHub:qa" : L"GrizzlyEditor:GitHub";
 }
 
 bool ReadSavedToken(xr_string& token)
@@ -824,13 +827,80 @@ LPCSTR EditorGithub::SourceText(EAccountSource source)
 	return "not signed in";
 }
 
+// The GitHub CLI answers by starting a process, most of a second with an on-access scanner, and every release dialog asks
+// for the account as it opens. So its answer is read on a thread of its own and kept for a minute; an older one is still
+// given, and read anew behind it.
+namespace
+{
+const u32	kCliFreshMs	= 60000;
+std::mutex	s_CliLock;
+xr_string	s_CliToken;				// guarded by s_CliLock
+bool		s_CliHas	= false;
+bool		s_CliRead	= false;	// an answer has come at least once
+u32			s_CliAt		= 0;
+std::thread	s_CliThread;
+std::atomic<bool> s_CliBusy { false };
+
+void CliWorker()
+{
+	xr_string token;
+	const bool has = ReadGithubCliToken(token);
+	{
+		std::lock_guard<std::mutex> guard(s_CliLock);
+		EditorGithub::WipeString(s_CliToken);
+		s_CliToken	= token;
+		s_CliHas	= has;
+		s_CliRead	= true;
+		s_CliAt		= ::GetTickCount();
+	}
+	EditorGithub::WipeString(token);
+	s_CliBusy = false;
+}
+
+void StartCliRead()
+{
+	if (s_CliBusy.exchange(true)) return;
+	if (s_CliThread.joinable()) s_CliThread.join();
+	s_CliThread = std::thread(&CliWorker);
+}
+
+bool CliToken(xr_string& token)
+{
+	bool read, stale;
+	{
+		std::lock_guard<std::mutex> guard(s_CliLock);
+		read = s_CliRead;
+		stale = ::GetTickCount() - s_CliAt > kCliFreshMs;
+	}
+	if (!read || stale) StartCliRead();
+	// the very first answer has to be waited for: there is nothing to say without it
+	if (!read && s_CliThread.joinable()) s_CliThread.join();
+	std::lock_guard<std::mutex> guard(s_CliLock);
+	if (!s_CliHas) return false;
+	token = s_CliToken;
+	return true;
+}
+}
+
+void EditorGithub::WarmAccount()
+{
+	if (!QaMode()) StartCliRead();
+}
+
+void EditorGithub::StopAccountRead()
+{
+	if (s_CliThread.joinable()) s_CliThread.join();
+	std::lock_guard<std::mutex> guard(s_CliLock);
+	WipeString(s_CliToken);
+}
+
 void EditorGithub::ResolveAccount(SAccount& out)
 {
 	out.source = asNone;
 	WipeString(out.token);
 	out.detail.clear();
 
-	static const char* variables[] = { "XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN" };
+	static const char* variables[] = { "GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN" };
 	const u32 count = QaMode() ? 1 : (u32)_countof(variables);
 	for (u32 i = 0; i < count; ++i)
 	{
@@ -845,7 +915,7 @@ void EditorGithub::ResolveAccount(SAccount& out)
 		}
 	}
 	if (ReadSavedToken(out.token))							{ out.source = asSaved; return; }
-	if (!QaMode() && ReadGithubCliToken(out.token))			{ out.source = asGithubCli; return; }
+	if (!QaMode() && CliToken(out.token))					{ out.source = asGithubCli; return; }
 	WipeString(out.token);
 }
 
@@ -1457,7 +1527,7 @@ xr_string EditorGithub::RepoPage(const xr_string& repo) { return WebBase() + "/"
 //------------------------------------------------------------------------------
 xr_string EditorGithub::CatalogRepo()
 {
-	const xr_string qa = QaMode() ? EnvText("XFINED_CATALOG_REPO") : xr_string();
+	const xr_string qa = QaMode() ? EnvText("GRIZZLY_CATALOG_REPO") : xr_string();
 	return qa.empty() ? xr_string(kCatalogRepo) : qa;
 }
 
@@ -1467,7 +1537,7 @@ void EditorGithub::CatalogMirrors(xr_vector<xr_string>& out)
 	if (QaMode())
 	{
 		// loopback only, like the game's own QA override
-		const xr_string base = EnvText("XFINED_CATALOG_BASE");
+		const xr_string base = EnvText("GRIZZLY_CATALOG_BASE");
 		if ((0 == base.compare(0, 17, "http://127.0.0.1:") || 0 == base.compare(0, 17, "http://localhost:")) &&
 			!base.empty() && base.back() == '/')
 			out.push_back(base);
@@ -1675,7 +1745,7 @@ bool ReadVerdict(CApi& api, EditorGithub::CCancel& cancel, const xr_string& cata
 xr_string SubmissionBody(const EditorGithub::SCatalogRequest& rq)
 {
 	xr_string body = "<!-- xms-catalog submission -->\n"
-		"Submitted from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7).\n\n```ini\n" +
+		"Submitted from Grizzly Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7).\n\n```ini\n" +
 		rq.file_text;
 	if (rq.file_text.empty() || rq.file_text.back() != '\n') body += '\n';
 	body += "```\n";
@@ -1687,7 +1757,7 @@ xr_string SubmissionBody(const EditorGithub::SCatalogRequest& rq)
 xr_string WithdrawalBody(const EditorGithub::SCatalogWithdrawal& rq)
 {
 	xr_string body = "<!-- xms-catalog withdrawal -->\n"
-		"Withdrawn by its author from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 10.2).\n\n"
+		"Withdrawn by its author from Grizzly Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 10.2).\n\n"
 		"```ini\n[withdraw]\nid = " + rq.module_id + "\n```\n";
 	if (!rq.details.empty()) body += "\n" + rq.details;
 	return body;
@@ -1826,7 +1896,7 @@ namespace
 {
 const wchar_t* VtCredentialTarget()
 {
-	return QaMode() ? L"XFinedEditor:VirusTotal:qa" : L"XFinedEditor:VirusTotal";
+	return QaMode() ? L"GrizzlyEditor:VirusTotal:qa" : L"GrizzlyEditor:VirusTotal";
 }
 
 // VirusTotal answers {"error":{"code","message"}}
@@ -1851,7 +1921,7 @@ void VtPace(EditorGithub::CCancel& cancel)
 {
 	static const ULONGLONG gap = []()
 	{
-		const xr_string qa = QaMode() ? EnvText("XFINED_VT_PACE_MS") : xr_string();
+		const xr_string qa = QaMode() ? EnvText("GRIZZLY_VT_PACE_MS") : xr_string();
 		return qa.empty() ? 16000ull : _strtoui64(qa.c_str(), 0, 10);
 	}();
 	for (;;)
@@ -1902,7 +1972,7 @@ bool EditorGithub::PlausibleVtKey(LPCSTR key)
 bool EditorGithub::ReadVtKey(xr_string& key)
 {
 	// an explicit override first; a QA run reads its own variable and credential only
-	key = EnvText("XFINED_VT_KEY");
+	key = EnvText("GRIZZLY_VT_KEY");
 	if (key.empty() && !QaMode()) key = EnvText("VT_API_KEY");
 	if (PlausibleVtKey(key.c_str())) return true;
 	WipeString(key);
@@ -1984,7 +2054,7 @@ bool EditorGithub::VtUpload(const xr_string& path, const xr_string& key, CCancel
 
 	// up to 32 MB straight to /files; a larger file to an address VirusTotal hands out for it
 	// (a QA run lowers the line to reach that path with a small package)
-	const xr_string qa_direct = QaMode() ? EnvText("XFINED_VT_DIRECT_LIMIT") : xr_string();
+	const xr_string qa_direct = QaMode() ? EnvText("GRIZZLY_VT_DIRECT_LIMIT") : xr_string();
 	const u64 direct = qa_direct.empty() ? (32ull << 20) : _strtoui64(qa_direct.c_str(), 0, 10);
 	xr_string url = VtBase() + "/files";
 	if (size + kVtWrapping > direct)
@@ -2003,7 +2073,7 @@ bool EditorGithub::VtUpload(const xr_string& path, const xr_string& key, CCancel
 
 	u8 random[12];
 	::BCryptGenRandom(0, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-	xr_string boundary = "XFinedEditor";
+	xr_string boundary = "GrizzlyEditor";
 	for (u32 i = 0; i < sizeof(random); ++i) boundary += NqUtil::Format("%02x", (u32)random[i]);
 	xr_string name = path.substr(path.find_last_of("\\/") + 1);
 	for (size_t i = 0; i < name.size(); ++i)

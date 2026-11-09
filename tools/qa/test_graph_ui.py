@@ -26,7 +26,7 @@ Drives the editor over MCP on a THROW-AWAY COPY of a project, at 1707x912 pt wit
 
 The editor's level.ini, level_imgui.ini and _projects.ini come back byte for byte.
 
-    python tools/qa/test_graph_ui.py --project D:\\XFinedProjects\\Test [--shots <dir>]
+    python tools/qa/test_graph_ui.py --project <project> [--shots <dir>]
 """
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
 
 
 def settle() -> None:
-    """The next frames are drawn: ui_audit is held until they are (XFinedMCP::IsShot)."""
+    """The next frames are drawn: ui_audit is held until they are (GrizzlyMCP::IsShot)."""
     mcp("ui_audit")
 
 
@@ -392,7 +392,7 @@ def main() -> int:
         shots_dir = os.path.abspath(args.shots)
         os.makedirs(shots_dir, exist_ok=True)
 
-    work = tempfile.mkdtemp(prefix="xfined_graphui_")
+    work = tempfile.mkdtemp(prefix="grizzly_graphui_")
     copy = os.path.join(work, "QaGraphUi")
     shutil.copytree(src, copy)
     os.makedirs(os.path.join(copy, "quests"), exist_ok=True)

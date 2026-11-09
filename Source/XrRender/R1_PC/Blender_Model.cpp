@@ -69,8 +69,8 @@ void	CBlender_Model::Compile	(CBlender_Compile& C)
 #if defined(USE_DX10) || defined(USE_DX11)
 		// Both elements collapse onto the same programmable pass: element 0 was
 		// only a fixed-function version of what element 1 already does.
-		if (oBlend.value)	C.r_Pass("model_def_hq", "model_def_hq", FALSE, TRUE, TRUE, TRUE, D3DBLEND_SRCALPHA, D3DBLEND_INVSRCALPHA, TRUE, oAREF.value);
-		else				C.r_Pass("model_def_hq", "model_def_hq", FALSE);
+		if (oBlend.value)	C.r_Pass("model_def_hq", EditorModelPS(getName()), FALSE, TRUE, TRUE, TRUE, D3DBLEND_SRCALPHA, D3DBLEND_INVSRCALPHA, TRUE, oAREF.value);
+		else				C.r_Pass("model_def_hq", EditorModelPS(getName()), FALSE);
 		// element 1 used the compiled texture list, element 0 the property - the
 		// list is empty when the shader is compiled straight from properties
 		C.r_dx10Texture("s_base", C.L_textures.empty() ? oT_Name : C.L_textures[0]);

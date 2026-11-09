@@ -1,6 +1,6 @@
 #pragma once
 // The LevelEditor's frame (docs/UI_DESIGN.md, section 5): the caption, the active tab's toolbar and the status
-// bar around the work area of XUI::Shell, and the Level tab itself - the XFinedLevel_v2 workspace, laid out per
+// bar around the work area of XUI::Shell, and the Level tab itself - the GrizzlyLevel_v2 workspace, laid out per
 // size class, that the scene's panels dock into.
 class UIMainForm :public XrUI
 {
@@ -21,7 +21,7 @@ public:
 	// Window > Reset Layout, MCP reset_layout: the Level workspace built again for the window's size class with
 	// every panel back; `all` also forgets the splits and grids of Layout
 	static void ResetLayout(bool all);
-	static LPCSTR LevelWorkspace() { return "XFinedLevel_v2"; }
+	static LPCSTR LevelWorkspace() { return "GrizzlyLevel_v2"; }
 	// Wide: W >= 1400 and H >= 640 pt; the browser and the log docked under the viewport. Compact: drawers only.
 	enum ESizeClass { ClassCompact = 0, ClassWide = 1 };
 	static int SizeClass();

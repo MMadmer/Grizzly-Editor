@@ -44,8 +44,7 @@ bool ValidId(const xr_string& id)
 	return !(id[0] >= '0' && id[0] <= '9');
 }
 
-// A text is a plain string or a table keyed by language. The generated string
-// table needs one file per language, so both shapes are walked the same way.
+// A text is a plain string or a table keyed by language; both shapes are walked the same way.
 void TextLanguages(const SNqValue& v, xr_vector<xr_string>& langs)
 {
 	if (v.IsString())
@@ -100,35 +99,110 @@ xr_string LuaString(const xr_string& s)
 	return NqLua::WriteValue(SNqValue::String(s), 0);
 }
 
-void XmlEscape(const xr_string& in, xr_string& out)
-{
-	out.clear();
-	for (u32 i = 0; i < in.size(); ++i)
-	{
-		switch (in[i])
-		{
-		case '&':	out += "&amp;";		break;
-		case '<':	out += "&lt;";		break;
-		case '>':	out += "&gt;";		break;
-		case '"':	out += "&quot;";	break;
-		default:	out += in[i];		break;
-		}
-	}
-}
-
-xr_string Xml(const xr_string& utf8)
-{
-	xr_string escaped;
-	XmlEscape(utf8, escaped);
-	return NqUtil::Utf8ToCp1251(escaped.c_str());
-}
-
 LPCSTR ModuleId(xr_string& storage)
 {
 	EditorMod::SManifest m;
 	if (EditorProject::Root() && EditorMod::Load(EditorProject::Root(), m))
 		storage = m.id;
 	return storage.c_str();
+}
+
+// The bone names of a skeletal model (OGF_S_BONE_NAMES); false when it carries none.
+bool OgfBoneNames(const u8* data, u32 size, xr_vector<xr_string>& out)
+{
+	for (u32 pos = 0; pos + 8 <= size;)
+	{
+		const u32 id = *(const u32*)(data + pos), len = *(const u32*)(data + pos + 4);
+		const u32 at = pos + 8, end = at + len;
+		if (end > size || end < at)
+			return false;
+		// a count, then per bone its name, its parent's name and an obb of 15 floats
+		if ((id & 0x7fffffff) == 13)
+		{
+			if (len < 4)
+				return false;
+			const u32 count = *(const u32*)(data + at);
+			u32 p = at + 4;
+			for (u32 i = 0; i < count; ++i)
+			{
+				const u8* name_end = p < end ? (const u8*)memchr(data + p, 0, end - p) : 0;
+				if (!name_end)
+					return false;
+				out.push_back(xr_string((LPCSTR)(data + p)));
+				p = u32(name_end - data) + 1;
+				const u8* parent_end = p < end ? (const u8*)memchr(data + p, 0, end - p) : 0;
+				if (!parent_end)
+					return false;
+				p = u32(parent_end - data) + 1 + 60;
+				if (p > end)
+					return false;
+			}
+			return true;
+		}
+		pos = end;
+	}
+	return false;
+}
+
+// The bones the damage section of a stalker names: the engine stops on the first one a model
+// lacks (CDamageManager::load_section). Every spawn section the build writes is ":stalker".
+void StalkerDamageBones(xr_vector<xr_string>& out)
+{
+	if (!pSettings || !pSettings->line_exist("stalker", "damage"))
+		return;
+	LPCSTR sect = pSettings->r_string("stalker", "damage");
+	if (!pSettings->section_exist(sect))
+		return;
+	for (const auto& item : pSettings->r_section(sect).Data)
+		if (xr_strcmp(item.first.c_str(), "default"))
+			out.push_back(item.first.c_str());
+}
+
+// A model on a skeleton of its own - Clear Sky's Forester has no eyes and no jaw - passes every
+// other check and stops the game the moment the NPC comes online. Read once per model.
+void CheckSkeleton(const xr_string& rel, const xr_string& where, xr_vector<xr_string>& problems)
+{
+	static xr_map<xr_string, xr_vector<xr_string>> s_Bones;
+	static xr_string s_BonesOf;
+	if (s_BonesOf != EditorGameContent::MountedRoot())
+	{
+		s_Bones.clear();
+		s_BonesOf = EditorGameContent::MountedRoot();
+	}
+	xr_string key = rel;
+	xr_strlwr(&key[0]);
+	auto it = s_Bones.find(key);
+	if (it == s_Bones.end())
+	{
+		xr_vector<xr_string> bones;
+		u32 size = 0;
+		u8* data = EditorGameContent::ReadBytes(EditorGameContent::Find(rel.c_str()), size);
+		if (data && !OgfBoneNames(data, size, bones))
+			bones.clear();
+		EditorGameContent::FreeBytes(data);
+		it = s_Bones.emplace(key, bones).first;
+	}
+	// not skeletal or unreadable: nothing to tell
+	if (it->second.empty())
+		return;
+	xr_vector<xr_string> need;
+	StalkerDamageBones(need);
+	xr_string missing;
+	for (const xr_string& bone : need)
+	{
+		bool found = false;
+		for (const xr_string& have : it->second)
+			if (0 == _stricmp(have.c_str(), bone.c_str()))
+			{
+				found = true;
+				break;
+			}
+		if (!found)
+			missing += (missing.empty() ? "" : ", ") + bone;
+	}
+	if (!missing.empty())
+		problems.push_back("E123 " + where + ": the model has no bone " + missing +
+			" - an NPC's damage names them and the game stops the moment it comes online; pick a model on the stalker skeleton");
 }
 } // namespace
 
@@ -157,6 +231,7 @@ void EditorCharacters::SCharacter::Reset()
 	money_max		= 0;
 	money_infinite	= false;
 	supplies.clear();
+	trade.Reset();
 	squad			= true;
 	has_squad		= false;
 }
@@ -228,6 +303,46 @@ bool EditorCharacters::Parse(LPCSTR text, u32 len, LPCSTR chunk_name, SCharacter
 			if (!item.section.empty())	c.supplies.push_back(item);
 		}
 
+	// trade = false says "not a trader" over whatever the base sells; a table is a shop
+	if (const SNqValue* t = v.Get("trade"))
+	{
+		if (t->IsBool() && !t->b)
+		{
+			c.trade.declared	= true;
+			c.trade.off			= true;
+		}
+		else if (t->IsTable())
+		{
+			c.trade.declared = true;
+			auto names = [](const SNqValue* list, xr_vector<xr_string>& out)
+			{
+				if (!list) return;
+				if (list->IsString())	{ if (!list->s.empty()) out.push_back(list->s); return; }
+				for (u32 i = 0; i < list->arr.size(); ++i)
+					if (list->arr[i].IsString() && !list->arr[i].s.empty()) out.push_back(list->arr[i].s);
+			};
+			names(t->Get("sells"), c.trade.sells);
+			names(t->Get("buys"), c.trade.buys);
+			c.trade.markup	= float(t->GetNumber("markup", 1.0));
+			c.trade.pays	= float(t->GetNumber("pays", 0.3));
+			c.trade.restock	= int(t->GetNumber("restock", 24.0));
+			if (const SNqValue* s = t->Get("stock"))
+				for (u32 i = 0; i < s->arr.size(); ++i)
+				{
+					const SNqValue& row = s->arr[i];
+					STradeRow r;
+					if (row.IsString())			r.section = row.s;
+					else if (row.IsTable())
+					{
+						r.section	= row.GetString("section");
+						r.count		= int(row.GetNumber("count", 1.0));
+						r.chance	= float(row.GetNumber("chance", 1.0));
+					}
+					c.trade.stock.push_back(r);
+				}
+		}
+	}
+
 	return true;
 }
 
@@ -255,8 +370,7 @@ bool EditorCharacters::Load(LPCSTR path, SCharacter& c, xr_string& err)
 xr_string EditorCharacters::Write(const SCharacter& c)
 {
 	xr_string s;
-	s += "-- XFined Editor character. Built into the module's own character_desc,\n";
-	s += "-- profile and spawn section - see docs/MOD_QUICKSTART.md.\n";
+	s += "-- A character of this module. The game reads this file as it is - see docs/MOD_QUICKSTART.md.\n";
 	s += "return {\n";
 	s += "\tnpc       = 1,\n";
 	s += "\tid        = " + LuaString(c.id) + ",\n";
@@ -295,6 +409,39 @@ xr_string EditorCharacters::Write(const SCharacter& c)
 			if (c.supplies[i].count != 1)
 				s += NqUtil::Format(", count = %d", c.supplies[i].count);
 			s += " },\n";
+		}
+		s += "\t},\n";
+	}
+	if (c.trade.declared && c.trade.off)
+		s += "\ttrade     = false,\n";
+	else if (c.trade.declared)
+	{
+		auto names = [](const xr_vector<xr_string>& list)
+		{
+			xr_string out = "{";
+			for (u32 i = 0; i < list.size(); ++i)
+				out += (i ? ", " : " ") + LuaString(list[i]);
+			out += list.empty() ? "}" : " }";
+			return out;
+		};
+		s += "\ttrade     = {\n";
+		s += "\t\tsells   = " + names(c.trade.sells) + ",\n";
+		s += "\t\tbuys    = " + names(c.trade.buys) + ",\n";
+		s += NqUtil::Format("\t\tmarkup  = %g,\n", c.trade.markup);
+		s += NqUtil::Format("\t\tpays    = %g,\n", c.trade.pays);
+		s += NqUtil::Format("\t\trestock = %d,\n", c.trade.restock);
+		if (!c.trade.stock.empty())
+		{
+			s += "\t\tstock   = {\n";
+			for (u32 i = 0; i < c.trade.stock.size(); ++i)
+			{
+				const STradeRow& r = c.trade.stock[i];
+				s += "\t\t\t{ section = " + LuaString(r.section);
+				if (r.count != 1)		s += NqUtil::Format(", count = %d", r.count);
+				if (r.chance != 1.f)	s += NqUtil::Format(", chance = %g", r.chance);
+				s += " },\n";
+			}
+			s += "\t\t},\n";
 		}
 		s += "\t},\n";
 	}
@@ -401,7 +548,7 @@ void EditorCharacters::LoadAll(LPCSTR project_root, xr_vector<SCharacter>& out,
 		}
 		out.push_back(c);
 	}
-	// a stable order keeps the generated files diff-friendly
+	// a stable order: the list reads the same every time
 	for (u32 i = 0; i + 1 < out.size(); ++i)
 		for (u32 j = i + 1; j < out.size(); ++j)
 			if (out[j].id < out[i].id)
@@ -458,6 +605,8 @@ void ApplyOver(EditorCharacters::SCharacter& dst, const EditorCharacters::SChara
 		dst.money_infinite	= src.money_infinite;
 	}
 	if (src.has_squad)				{ dst.squad = src.squad; dst.has_squad = true; }
+	// a shop is one thing: a character that says anything about trade says all of it
+	if (src.trade.declared)			dst.trade = src.trade;
 
 	// the kit: the inherited rows keep their place, a repeat of a section takes
 	// over its count, a new section is appended, and zero means "not this one"
@@ -593,6 +742,8 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 		if (EditorGameContent::Find(rel.c_str()) < 0)
 			problems.push_back("W105 " + where + ": the linked game has no model at '" +
 				rel + "' - check it is staged in the project");
+		else
+			CheckSkeleton(rel, where, problems);
 	}
 
 	// The engine refuses a character of a community it has never heard of. A module
@@ -647,6 +798,55 @@ void EditorCharacters::Validate(const SCharacter& c, bool linked_game, xr_vector
 
 	if (c.has_money && c.money_max < c.money_min)
 		problems.push_back("E110 " + where + ": money max is below money min");
+
+	if (c.trade.Trader())
+	{
+		const STrade& t = c.trade;
+		for (u32 i = 0; i < t.stock.size(); ++i)
+		{
+			const STradeRow& r = t.stock[i];
+			if (r.section.empty())
+				problems.push_back("E118 " + where + ": a stock row without an item");
+			else if (r.count < 1)
+				problems.push_back("E118 " + where + ": stock '" + r.section + "' asks for less than one item");
+			else if (!(r.chance > 0.f && r.chance <= 1.f))
+				problems.push_back("E118 " + where + ": stock '" + r.section + "' has a chance outside 0..1");
+			for (u32 j = 0; j < i; ++j)
+				if (!r.section.empty() && 0 == _stricmp(t.stock[j].section.c_str(), r.section.c_str()))
+					problems.push_back("E118 " + where + ": '" + r.section + "' is in the stock twice - one row per item");
+		}
+		if (!(t.markup > 0.f))
+			problems.push_back("E119 " + where + ": the markup must be above zero - it is what the trader asks of an item's cost");
+		if (t.pays < 0.f)
+			problems.push_back("E119 " + where + ": the trader cannot pay less than nothing");
+		if (t.restock < 1)
+			problems.push_back("E119 " + where + ": the stock comes back after at least one game hour");
+		if (linked_game)
+		{
+			const xr_vector<xr_string>& cats = EditorCharacters::TradeCategories();
+			auto check = [&](const xr_vector<xr_string>& list, LPCSTR what)
+			{
+				if (cats.empty()) return;
+				for (u32 i = 0; i < list.size(); ++i)
+				{
+					bool known = false;
+					for (u32 k = 0; k < cats.size(); ++k) if (cats[k] == list[i]) known = true;
+					if (!known)
+						problems.push_back("W120 " + where + ": the linked game has no trade category '" + list[i] +
+							"' the trader " + what + " - the trade presets name weapon, drugs, food and the like");
+				}
+			};
+			check(t.sells, "sells");
+			check(t.buys, "buys");
+			if (NqPickers::Available())
+				for (u32 i = 0; i < t.stock.size(); ++i)
+					if (!t.stock[i].section.empty() && !NqPickers::Known(NqPickers::tItem, t.stock[i].section.c_str()))
+						problems.push_back("W121 " + where + ": the linked game has no item '" + t.stock[i].section +
+							"' for the stock - right only when the module brings that section");
+		}
+		if (t.stock.empty() && t.sells.empty())
+			problems.push_back("W122 " + where + ": the trader has nothing to sell - give it a stock or a category");
+	}
 }
 
 void EditorCharacters::ValidateAll(LPCSTR project_root, bool linked_game, xr_vector<xr_string>& problems)
@@ -658,242 +858,99 @@ void EditorCharacters::ValidateAll(LPCSTR project_root, bool linked_game, xr_vec
 }
 
 //------------------------------------------------------------------------------
-// the build
+// the build: nothing is made here, the game reads the assets as they are. What is left is
+// saying no to a module whose characters the game could not use.
 //------------------------------------------------------------------------------
-void EditorCharacters::GeneratedFiles(LPCSTR module_id, xr_vector<xr_string>& rel)
+bool EditorCharacters::CheckForBuild(LPCSTR project_root, xr_string& err)
 {
-	if (!module_id || !module_id[0])	return;
-	const xr_string id = module_id;
-	rel.push_back("gamedata\\configs\\gameplay\\character_desc_" + id + ".xml");
-	rel.push_back("gamedata\\configs\\gameplay\\npc_profile_" + id + ".xml");
-	rel.push_back("gamedata\\configs\\xms\\" + id + "_npc.ltx");
-	rel.push_back("patch\\" + id + "_characters.ltxp");
-	// the string tables, one per language the game ships a folder for
-	static const char* kLangs[] = { "rus", "eng" };
-	for (int i = 0; i < 2; ++i)
-		rel.push_back(xr_string("gamedata\\configs\\text\\") + kLangs[i] + "\\" + id + "_npc.xml");
-}
-
-namespace
-{
-void RemoveGenerated(LPCSTR project_root, LPCSTR module_id)
-{
-	xr_vector<xr_string> rel;
-	EditorCharacters::GeneratedFiles(module_id, rel);
-	for (u32 i = 0; i < rel.size(); ++i)
-	{
-		string_path p;
-		sprintf_s(p, "%s\\%s", project_root, rel[i].c_str());
-		if (::DeleteFileA(p))
-			Msg("* [XMS] no characters left - removed %s", p);
-	}
-}
-
-bool WriteGenerated(LPCSTR project_root, const xr_string& rel, const xr_string& body, xr_string& err)
-{
-	string_path path;
-	sprintf_s(path, "%s\\%s", project_root, rel.c_str());
-	string_path folder;
-	xr_strcpy(folder, sizeof(folder), path);
-	if (char* slash = strrchr(folder, '\\'))	*slash = 0;
-	CreateDirChain(folder);
-
-	FILE* f = 0;
-	if (fopen_s(&f, path, "wb") || !f)
-	{
-		err = xr_string("cannot write ") + path;
-		return false;
-	}
-	if (!body.empty())	fwrite(body.c_str(), 1, body.size(), f);
-	fclose(f);
-	return true;
-}
-} // namespace
-
-bool EditorCharacters::Generate(LPCSTR project_root, LPCSTR module_id, int& written, xr_string& err)
-{
-	written = 0;
 	if (!project_root || !project_root[0])	return true;
-	if (!module_id || !module_id[0])
-	{
-		err = "the module has no id - Mod > Mod Settings";
-		return false;
-	}
 
 	xr_vector<SCharacter>	all;
 	xr_vector<xr_string>	problems;
 	LoadResolved(project_root, all, problems);
 	// A character that does not parse must stop the build: shipping half a
 	// roster produces a module whose quests point at NPCs that do not exist.
+	for (u32 i = 0; i < all.size(); ++i)
+		if (!all[i].abstract_)
+			Validate(all[i], false, problems);
 	for (u32 i = 0; i < problems.size(); ++i)
-		if (0 == strncmp(problems[i].c_str(), "E", 1))
+		if ('E' == problems[i][0])
 		{
 			err = problems[i];
 			return false;
 		}
+	return true;
+}
 
-	// templates are not characters: they exist for the others to inherit from
-	for (u32 i = 0; i < all.size(); )
-		if (all[i].abstract_)	all.erase(all.begin() + i);
-		else					++i;
+//------------------------------------------------------------------------------
+// trade: the linked game's categories
+//------------------------------------------------------------------------------
+namespace
+{
+xr_vector<xr_string>	s_PresetNames;
+xr_string				s_PresetsFor;
+bool					s_PresetsRead = false;
 
-	if (all.empty())
+bool ReadGameText(LPCSTR rel, xr_string& text)
+{
+	const int idx = EditorGameContent::Find(rel);
+	if (idx < 0) return false;
+	u32 size = 0;
+	u8* data = EditorGameContent::ReadBytes(idx, size);
+	if (!data) return false;
+	text.assign((const char*)data, size);
+	EditorGameContent::FreeBytes(data);
+	return true;
+}
+
+// Every section of trade_presets.ltx that lists items is a category; a section that
+// only inherits ("[medic]:unused,trash,...") is a recipe made of them, not one itself.
+void ReadPresets()
+{
+	xr_string key = EditorProject::GameLinked() ? xr_string(EditorProject::GameRoot()) : xr_string();
+	if (s_PresetsRead && s_PresetsFor == key) return;
+	s_PresetsRead = true;
+	s_PresetsFor = key;
+	s_PresetNames.clear();
+	xr_string err, text;
+	if (key.empty() || !EditorGameContent::EnsureMounted(err)) return;
+	if (!ReadGameText("configs\\misc\\trade\\trade_presets.ltx", text)) return;
+
+	xr_string current;
+	bool listed = false;
+	auto flush = [&]()
 	{
-		RemoveGenerated(project_root, module_id);
-		return true;
-	}
-
-	for (u32 i = 0; i < all.size(); ++i)
+		if (listed && current != "unused") s_PresetNames.push_back(current);
+		listed = false;
+	};
+	size_t pos = 0;
+	while (pos < text.size())
 	{
-		xr_vector<xr_string> own;
-		Validate(all[i], false, own);
-		for (u32 j = 0; j < own.size(); ++j)
-			if (0 == strncmp(own[j].c_str(), "E", 1))
-			{
-				err = own[j];
-				return false;
-			}
-	}
-
-	const xr_string mod = module_id;
-
-	// ---- the characters ---------------------------------------------------
-	xr_string desc = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n\r\n<xml>\r\n";
-	xr_string prof = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n\r\n<xml>\r\n";
-	xr_string ltx  = "; Spawn and squad sections of this module's own characters.\r\n"
-					 "; Generated by XFined Editor - edit the .npcasset files instead.\r\n\r\n";
-
-	for (u32 i = 0; i < all.size(); ++i)
-	{
-		const SCharacter&	c	= all[i];
-		const xr_string		gid	= GameId(mod.c_str(), c.id.c_str());
-
-		desc += "\t<specific_character id=\"" + Xml(gid) + "\" no_random=\"1\">\r\n";
-		desc += "\t\t<name>" + Xml(gid + "_name") + "</name>\r\n";
-		if (!TextEmpty(c.bio))
-			desc += "\t\t<bio>" + Xml(gid + "_bio") + "</bio>\r\n";
-		if (!c.icon.empty())
-			desc += "\t\t<icon>" + Xml(c.icon) + "</icon>\r\n";
-		desc += "\t\t<class>" + Xml(gid) + "</class>\r\n";
-		// community, rank and reputation are the three the engine asserts on
-		// (CSpecificCharacter::load_shared): a character that sets none of them
-		// still gets all three, or the game stops while it loads the profiles
-		desc += "\t\t<community>" + Xml(c.community.empty() ? xr_string("stalker") : c.community) + "</community>\r\n";
-		desc += "\t\t<visual>" + Xml(c.visual) + "</visual>\r\n";
-		desc += NqUtil::Format("\t\t<rank>%d</rank>\r\n", c.has_rank ? c.rank : 0);
-		desc += NqUtil::Format("\t\t<reputation>%d</reputation>\r\n", c.has_reputation ? c.reputation : 0);
-		if (c.has_money)
-			desc += NqUtil::Format("\t\t<money min=\"%d\" max=\"%d\" infinitive=\"%d\"/>\r\n",
-				c.money_min, c.money_max, c.money_infinite ? 1 : 0);
-		// The kit. "[spawn] \n" then one line per entry is the engine's own
-		// format - a count is written only when it is more than one, exactly
-		// as the stock files do.
-		desc += "\t\t<supplies>\r\n\t\t\t[spawn] \\n\r\n";
-		for (u32 s = 0; s < c.supplies.size(); ++s)
+		size_t eol = text.find('\n', pos);
+		if (eol == xr_string::npos) eol = text.size();
+		xr_string line = NqUtil::Trim(text.substr(pos, eol - pos));
+		pos = eol + 1;
+		const size_t sc = line.find(';');
+		if (sc != xr_string::npos) line = NqUtil::Trim(line.substr(0, sc));
+		if (line.empty() || line[0] == '#') continue;
+		if (line[0] == '[')
 		{
-			desc += "\t\t\t" + Xml(c.supplies[s].section);
-			if (c.supplies[s].count != 1)
-				desc += NqUtil::Format(" = %d", c.supplies[s].count);
-			desc += " \\n\r\n";
-		}
-		desc += "\t\t</supplies>\r\n";
-		if (!c.start_dialog.empty())
-			desc += "\t\t<start_dialog>" + Xml(c.start_dialog) + "</start_dialog>\r\n";
-		desc += "\t</specific_character>\r\n";
-
-		// The profile names the specific character outright: `class` alone
-		// would let the engine pick a RANDOM character of that class, and a
-		// quest NPC has to be the one the author wrote.
-		prof += "\t<character id=\"" + Xml(gid) + "\">\r\n";
-		prof += "\t\t<class>" + Xml(gid) + "</class>\r\n";
-		prof += "\t\t<specific_character>" + Xml(gid) + "</specific_character>\r\n";
-		prof += "\t</character>\r\n";
-
-		// $spawn is what puts the character in the editor's spawn roster and
-		// lets a quest create it with spawn.object; the squad section is what
-		// spawn.squad needs.
-		ltx += "[" + gid + "]:stalker\r\n";
-		ltx += "$spawn                = \"npc\\" + mod + "\\" + c.id + "\"\r\n";
-		ltx += "character_profile     = " + gid + "\r\n";
-		ltx += "community             = " + c.community + "\r\n";
-		if (!c.spec_rank.empty())
-			ltx += "spec_rank             = " + c.spec_rank + "\r\n";
-		ltx += "\r\n";
-		if (c.squad)
-		{
-			ltx += "[" + gid + "_squad]:online_offline_group\r\n";
-			ltx += "faction               = " + c.community + "\r\n";
-			ltx += "npc                   = " + gid + "\r\n\r\n";
-		}
-	}
-	desc += "</xml>\r\n";
-	prof += "</xml>\r\n";
-
-	if (!WriteGenerated(project_root, "gamedata\\configs\\gameplay\\character_desc_" + mod + ".xml", desc, err))	return false;
-	if (!WriteGenerated(project_root, "gamedata\\configs\\gameplay\\npc_profile_" + mod + ".xml", prof, err))		return false;
-	if (!WriteGenerated(project_root, "gamedata\\configs\\xms\\" + mod + "_npc.ltx", ltx, err))					return false;
-
-	// ---- the names --------------------------------------------------------
-	// Every language any character names gets its own file; a language a
-	// character does not have falls back to rus inside TextIn, so no string is
-	// ever missing from a file that exists.
-	xr_vector<xr_string> langs;
-	for (u32 i = 0; i < all.size(); ++i)
-	{
-		TextLanguages(all[i].name, langs);
-		TextLanguages(all[i].bio, langs);
-	}
-	for (u32 i = 0; i < langs.size(); ++i)
-		for (u32 j = i + 1; j < langs.size(); )
-			if (langs[j] == langs[i])	langs.erase(langs.begin() + j);
-			else						++j;
-	if (langs.empty())	langs.push_back("rus");
-
-	static const char* kKnownLangs[] = { "rus", "eng" };
-	for (int k = 0; k < 2; ++k)
-	{
-		const xr_string lang = kKnownLangs[k];
-		bool wanted = false;
-		for (u32 i = 0; i < langs.size(); ++i)
-			if (langs[i] == lang)	wanted = true;
-		const xr_string rel = "gamedata\\configs\\text\\" + lang + "\\" + mod + "_npc.xml";
-		if (!wanted)
-		{
-			string_path stale;
-			sprintf_s(stale, "%s\\%s", project_root, rel.c_str());
-			::DeleteFileA(stale);
+			flush();
+			const size_t close = line.find(']');
+			const bool derived = close != xr_string::npos && line.find(':', close) != xr_string::npos;
+			current = derived ? xr_string() : line.substr(1, close == xr_string::npos ? xr_string::npos : close - 1);
 			continue;
 		}
-
-		xr_string st = "<?xml version=\"1.0\" encoding=\"windows-1251\"?>\r\n\r\n<string_table>\r\n";
-		for (u32 i = 0; i < all.size(); ++i)
-		{
-			const xr_string gid = GameId(mod.c_str(), all[i].id.c_str());
-			st += "\t<string id=\"" + Xml(gid + "_name") + "\">\r\n\t\t<text>" +
-				  Xml(TextIn(all[i].name, lang.c_str())) + "</text>\r\n\t</string>\r\n";
-			if (!TextEmpty(all[i].bio))
-				st += "\t<string id=\"" + Xml(gid + "_bio") + "\">\r\n\t\t<text>" +
-					  Xml(TextIn(all[i].bio, lang.c_str())) + "</text>\r\n\t</string>\r\n";
-		}
-		st += "</string_table>\r\n";
-		if (!WriteGenerated(project_root, rel, st, err))	return false;
+		if (!current.empty()) listed = true;
 	}
+	flush();
+}
+} // namespace
 
-	// ---- the three lines that make the game read all of it ----------------
-	// '+' appends to a list instead of replacing it (XMS/xms_ltx.cpp), which
-	// is the whole reason a module can have characters without overwriting
-	// system.ltx and fighting every other module that wants the same.
-	xr_string patch;
-	patch += "; Makes the game read this module's characters. Generated by XFined Editor.\r\n";
-	patch += "; '+' APPENDS to the list - nothing of the game or of another module is lost.\r\n\r\n";
-	patch += "[profiles]\r\n";
-	patch += "+files = npc_profile_" + mod + "\r\n";
-	patch += "+specific_characters_files = character_desc_" + mod + "\r\n";
-	if (!WriteGenerated(project_root, "patch\\" + mod + "_characters.ltxp", patch, err))	return false;
-
-	written = (int)all.size();
-	Msg("* [XMS] characters: %d generated into the module", written);
-	return true;
+const xr_vector<xr_string>& EditorCharacters::TradeCategories()
+{
+	ReadPresets();
+	return s_PresetNames;
 }
 
 //------------------------------------------------------------------------------
@@ -942,6 +999,8 @@ void JsonCharacter(xr_string& out, const EditorCharacters::SCharacter& c)
 	NqUtil::JsonBool(out, c.abstract_);
 	out += ",\"supplies\":";
 	NqUtil::JsonInt(out, (int)c.supplies.size());
+	out += ",\"trader\":";
+	NqUtil::JsonBool(out, c.trade.Trader());
 	out += ",\"squad\":";
 	NqUtil::JsonBool(out, c.squad);
 	out += "}";
@@ -1097,7 +1156,7 @@ void EditorCharacters::McpDelete(LPCSTR raw, xr_string& out)
 //------------------------------------------------------------------------------
 namespace
 {
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
 bool						s_Open			= false;
 bool						s_NeedReload	= true;
@@ -1114,6 +1173,7 @@ xr_vector<EditorCharacters::SSupply>	s_Inherited;	// what the base contributes
 xr_string					s_InheritedCommunity;	// and the community it would give
 struct SMoney { bool has = false; int min = 0, max = 0; bool infinite = false; };
 SMoney						s_InheritedMoney;		// and the money it would give
+EditorCharacters::STrade	s_InheritedTrade;		// and the trade
 
 // what is wrong with the edited character, worked out when it changes - never per frame
 xr_vector<xr_string>		s_Own;
@@ -1193,6 +1253,7 @@ void RecomputeInherited()
 	s_Inherited.clear();
 	s_InheritedCommunity.clear();
 	s_InheritedMoney = SMoney();
+	s_InheritedTrade.Reset();
 	if (s_Edit.base.empty() || !EditorProject::Active())	return;
 
 	xr_vector<EditorCharacters::SCharacter>	all;
@@ -1206,6 +1267,7 @@ void RecomputeInherited()
 			s_Inherited				= all[i].supplies;
 			s_InheritedCommunity	= all[i].community;
 			s_InheritedMoney		= { all[i].has_money, all[i].money_min, all[i].money_max, all[i].money_infinite };
+			s_InheritedTrade		= all[i].trade;
 			return;
 		}
 }
@@ -1241,8 +1303,9 @@ LPCSTR FieldOf(const xr_string& problem)
 	static const struct { LPCSTR code; LPCSTR field; } kMap[] =
 	{
 		{ "E101", "id" }, { "E102", "id" }, { "E111", "base" }, { "E112", "base" }, { "E103", "name" },
-		{ "W107", "text" }, { "E104", "visual" }, { "W105", "visual" }, { "W115", "icon" }, { "W114", "community" },
+		{ "W107", "text" }, { "E104", "visual" }, { "W105", "visual" }, { "E123", "visual" }, { "W115", "icon" }, { "W114", "community" },
 		{ "W116", "dialog" }, { "E110", "money" }, { "W117", "kit" }, { "E108", "kit" }, { "E109", "kit" },
+		{ "E118", "trade" }, { "E119", "trade" }, { "W120", "trade" }, { "W121", "trade" }, { "W122", "trade" },
 	};
 	for (const auto& m : kMap)
 		if (0 == problem.compare(0, 4, m.code))
@@ -1490,15 +1553,15 @@ void DrawPortrait(LPCSTR icon, float height)
 	ImVec2 uv0, uv1;
 	const ImVec2 at = ImGui::GetCursorScreenPos();
 	ImDrawList* dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(at, ImVec2(at.x + face.x, at.y + face.y), XFinedTheme::U32(Token::Inset), XUI::Pt(4.f));
+	dl->AddRectFilled(at, ImVec2(at.x + face.x, at.y + face.y), GrizzlyTheme::U32(Token::Inset), XUI::Pt(4.f));
 	if (cur && Portrait(*cur, tex, uv0, uv1))
 		ImGui::Image(tex, face, uv0, uv1);
 	else
 	{
-		dl->AddRect(at, ImVec2(at.x + face.x, at.y + face.y), XFinedTheme::U32(Token::BorderSubtle), XUI::Pt(4.f));
+		dl->AddRect(at, ImVec2(at.x + face.x, at.y + face.y), GrizzlyTheme::U32(Token::BorderSubtle), XUI::Pt(4.f));
 		const float glyph = _min(height, XUI::Pt(40.f)) * .6f;
 		XUI::DrawIcon(dl, XUI::Icon::Person, ImVec2(at.x + (face.x - glyph) * .5f, at.y + (face.y - glyph) * .5f), glyph / XUI::Dpi(),
-			XFinedTheme::U32(Token::TextMuted));
+			GrizzlyTheme::U32(Token::TextMuted));
 		ImGui::Dummy(face);
 	}
 	XUI::Tip(icon && icon[0] ? icon : "No portrait");
@@ -1549,7 +1612,7 @@ bool IconPicker(char* buf, u32 size)
 				XUI::Tip((e.id + (0 == e.extra.compare(0, 8, "project:") ? xr_string("\nThe project's") : xr_string())).c_str());
 				if (e.id == buf)
 					ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-						XFinedTheme::U32(Token::AccentBright), XUI::Pt(3.f), 0, XUI::Pt(2.f));
+						GrizzlyTheme::U32(Token::AccentBright), XUI::Pt(3.f), 0, XUI::Pt(2.f));
 				ImGui::PopID();
 			}
 	if (shown.empty())	XUI::StatusText(XUI::Tone::Muted, "Nothing matches.");
@@ -1722,6 +1785,14 @@ void ReloadAll()
 bool SaveEdited(xr_string& err)
 {
 	if (s_Edit.id.empty())	{ err = "the character needs an id"; return false; }
+	// saved as it is edited, a new character is on disk under its first id: the file follows the id the author settles on
+	if (!s_Edit.file.empty())
+	{
+		const xr_string folder = xr_string(EditorProject::Root()) + "\\characters\\", wanted = folder + s_Edit.id + ".npcasset";
+		if (0 == _strnicmp(s_Edit.file.c_str(), folder.c_str(), folder.size()) && 0 != _stricmp(s_Edit.file.c_str(), wanted.c_str()) && !NqUtil::FileExists(wanted.c_str())
+			&& ::MoveFileA(s_Edit.file.c_str(), wanted.c_str()))
+			s_Edit.file = wanted;
+	}
 	if (s_Edit.file.empty())
 	{
 		s_Edit.file = xr_string(EditorProject::Root()) + "\\characters\\" + s_Edit.id + ".npcasset";
@@ -1833,14 +1904,18 @@ void AskDelete()
 
 void XUI_LocalDirtyDot(const ImVec2& centre)
 {
-	ImGui::GetWindowDrawList()->AddCircleFilled(centre, XUI::Pt(3.5f), XFinedTheme::U32(Token::Text));
+	ImGui::GetWindowDrawList()->AddCircleFilled(centre, XUI::Pt(3.5f), GrizzlyTheme::U32(Token::Text));
 }
 
 // ---- the list -----------------------------------------------------------------------
 void DrawList()
 {
-	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+	const float plus = XUI::Pt(30.f);
+	ImGui::SetNextItemWidth(_max(XUI::Em(4.f), ImGui::GetContentRegionAvail().x - plus));
 	XUI::SearchField("##char_search", s_ListFilter, sizeof(s_ListFilter), "Search characters");
+	ImGui::SameLine(0.f, XUI::Pt(4.f));
+	if (XUI::IconButton("##new_character", XUI::Icon::Plus, "Add a character", false, EditorProject::Active()))
+		AskThen([] { NewCharacter(); });
 	const float problems = s_Problems.empty() ? 0.f : ImGui::GetTextLineHeightWithSpacing() / XUI::Dpi() + 4.f;
 	if (XUI::BeginList("##char_list", ImVec2(0.f, -problems)))
 	{
@@ -1867,7 +1942,7 @@ void DrawList()
 			const float cy = (row_min.y + row_max.y) * .5f;
 			const float x = ImGui::GetCursorScreenPos().x;
 			XUI::DrawIcon(ImGui::GetWindowDrawList(), c.abstract_ ? XUI::Icon::CharacterTemplate : XUI::Icon::Character,
-				ImVec2(floorf(x + .5f), floorf(cy - XUI::Pt(7.f) + .5f)), 14.f, XFinedTheme::U32(selected ? Token::AccentBright : Token::TextSecondary));
+				ImVec2(floorf(x + .5f), floorf(cy - XUI::Pt(7.f) + .5f)), 14.f, GrizzlyTheme::U32(selected ? Token::AccentBright : Token::TextSecondary));
 			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + XUI::Pt(20.f));
 			// what sits at the right end: the template mark, the dot of unsaved edits
 			const float right = (c.abstract_ ? XUI::Em(4.5f) : 0.f) + (selected && s_Dirty ? XUI::Pt(16.f) : 0.f) + XUI::Pt(6.f);
@@ -1878,7 +1953,7 @@ void DrawList()
 			if (!name.empty() && room - id_w > XUI::Em(3.f))
 			{
 				ImGui::SameLine(0.f, XUI::Pt(8.f));
-				ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+				ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextMuted));
 				XUI::TextEllipsis(name.c_str(), room - id_w - XUI::Pt(8.f));
 				ImGui::PopStyleColor();
 			}
@@ -1899,7 +1974,7 @@ void DrawList()
 		}
 		if (s_All.empty() && !(s_Sel < 0 && s_Dirty))
 		{
-			if (XUI::EmptyState(XUI::Icon::Character, "No characters", "A character is one .npcasset file of the project.", "New Character"))
+			if (XUI::EmptyState(XUI::Icon::Character, "No characters", "The module's own NPCs live here.", "New Character"))
 				NewCharacter();
 		}
 		else if (!shown && s_ListFilter[0])
@@ -1937,7 +2012,7 @@ bool DrawKit()
 			ImGui::TableNextRow(0, XUI::Pt(26.f));
 			ImGui::TableNextColumn();
 			ImGui::AlignTextToFramePadding();
-			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+			ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextMuted));
 			XUI::TextEllipsis(((it && !it->name.empty() ? it->name + "  (" + s_Inherited[i].section + ")" : s_Inherited[i].section) +
 				"  - from " + s_Edit.base).c_str());
 			XUI::Tip(("From " + s_Edit.base + ". A row of the same item below changes the count; a count of 0 takes it out.").c_str());
@@ -1989,6 +2064,195 @@ bool DrawKit()
 	return changed;
 }
 
+// ---- trade ----------------------------------------------------------------------------
+// A multi-pick over the names a list offers: the preview joins what is picked, the popup ticks
+// each one. A name the list does not hold stays picked, says so, and can be unticked.
+bool XUI_LocalMultiCombo(LPCSTR id, xr_vector<xr_string>& picked, const xr_vector<xr_string>& names, LPCSTR none)
+{
+	xr_string preview;
+	for (u32 i = 0; i < picked.size(); ++i) { if (i) preview += ", "; preview += picked[i]; }
+	bool changed = false;
+	if (ImGui::BeginCombo(id, preview.empty() ? none : preview.c_str()))
+	{
+		auto toggle = [&](const xr_string& name, LPCSTR caption)
+		{
+			bool on = false;
+			for (u32 k = 0; k < picked.size(); ++k) if (picked[k] == name) on = true;
+			if (ImGui::Checkbox(caption, &on))
+			{
+				if (on) picked.push_back(name);
+				else for (u32 k = 0; k < picked.size(); ++k) if (picked[k] == name) { picked.erase(picked.begin() + k); break; }
+				changed = true;
+			}
+		};
+		for (u32 i = 0; i < names.size(); ++i) toggle(names[i], names[i].c_str());
+		const xr_vector<xr_string> copy = picked;
+		for (u32 i = 0; i < copy.size(); ++i)
+		{
+			bool listed = false;
+			for (u32 k = 0; k < names.size(); ++k) if (names[k] == copy[i]) listed = true;
+			if (!listed) toggle(copy[i], (copy[i] + "  (not in the linked game)").c_str());
+		}
+		if (names.empty())
+			XUI::StatusText(XUI::Tone::Muted, "The linked game lists no trade categories.");
+		ImGui::EndCombo();
+	}
+	return changed;
+}
+
+xr_string TradeSummary(const EditorCharacters::STrade& t)
+{
+	xr_string sells;
+	for (u32 i = 0; i < t.sells.size(); ++i) { if (i) sells += ", "; sells += t.sells[i]; }
+	return NqUtil::Format("sells %s, a stock of %u item(s), asks %g and pays %g of the cost",
+		sells.empty() ? "its stock only" : sells.c_str(), (u32)t.stock.size(), t.markup, t.pays);
+}
+
+// Not a trader, or trading as the base does: a line saying which, and the way to change it.
+bool DrawTradeOff()
+{
+	bool changed = false;
+	// the kit above has buttons of the same names; each part pushes and pops inside itself,
+	// never across the property grid, which is a table with an id of its own
+	ImGui::PushID("trade");
+	const bool from_base = !s_Edit.trade.declared && s_InheritedTrade.Trader();
+	if (from_base)
+		XUI::Prose(("Trades as " + s_Edit.base + " does: " + TradeSummary(s_InheritedTrade) + ".").c_str());
+	else if (s_Edit.trade.declared && s_Edit.trade.off && s_InheritedTrade.Trader())
+		XUI::Prose(("Not a trader, although " + s_Edit.base + " is one.").c_str());
+	else
+		XUI::Prose("Not a trader: it trades like any stalker of its community, with what it carries.");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+	if (XUI::Button(from_base ? "Change Trade" : "Make a Trader", XUI::Kind::Secondary))
+	{
+		if (s_InheritedTrade.Trader())	s_Edit.trade = s_InheritedTrade;
+		else							s_Edit.trade.Reset();
+		s_Edit.trade.declared	= true;
+		s_Edit.trade.off		= false;
+		changed = true;
+	}
+	XUI::Tip("A shop of its own: what it sells and buys, its stock and its prices. The game uses it whatever the NPC is doing.");
+	if (from_base)
+	{
+		ImGui::SameLine();
+		if (XUI::Button("Not a Trader"))
+		{
+			s_Edit.trade.Reset();
+			s_Edit.trade.declared	= true;
+			s_Edit.trade.off		= true;
+			changed = true;
+		}
+		XUI::Tip("Takes the base's shop away from this character.");
+	}
+	if (s_Edit.trade.declared && s_Edit.trade.off)
+	{
+		ImGui::SameLine();
+		if (XUI::Button("Clear"))
+		{
+			s_Edit.trade.Reset();
+			changed = true;
+		}
+		XUI::Tip(s_Edit.base.empty() ? "Says nothing about trade" : "Trades as the base does");
+	}
+	ImGui::PopID();
+	return changed;
+}
+
+// The shop's rows: what it sells and buys, and its prices.
+bool DrawTradeRows()
+{
+	bool changed = false;
+	ImGui::PushID("trade");
+	EditorCharacters::STrade& t = s_Edit.trade;
+	const xr_vector<xr_string>& cats = EditorCharacters::TradeCategories();
+	if (XUI::PropertyRow("Sells", "Besides its stock, which it always sells: the categories of the linked game's trade presets "
+		"it sells when it has them. None: only the stock.", RowFlags("trade")))
+		changed |= XUI_LocalMultiCombo("##sells", t.sells, cats, "Only its stock");
+	if (XUI::PropertyRow("Buys", "The categories it buys from the player. None: it buys nothing."))
+		changed |= XUI_LocalMultiCombo("##buys", t.buys, cats, "Nothing");
+	if (XUI::PropertyRow("Markup", "What it asks, as a share of an item's cost: 1 is the cost, 1.5 half as much again."))
+		if (ImGui::InputFloat("##markup", &t.markup, 0.f, 0.f, "%.2f"))	changed = true;
+	if (XUI::PropertyRow("Pays", "What it pays for an item, as a share of its cost - over the factors the game gives single "
+		"items, the way the game's own traders do: 0.3 is about a third."))
+		if (ImGui::InputFloat("##pays", &t.pays, 0.f, 0.f, "%.2f"))	changed = true;
+	if (XUI::PropertyRow("Restock", "Game hours until the stock comes back."))
+		if (ImGui::InputInt("##restock", &t.restock, 0, 0))	changed = true;
+	ImGui::PopID();
+	return changed;
+}
+
+// The stock: what is on its shelf after every restock, each line with its chance.
+bool DrawStock()
+{
+	bool changed = false;
+	ImGui::PushID("trade");
+	EditorCharacters::STrade& t = s_Edit.trade;
+	const xr_vector<NqPickers::SEntry>& items = NqPickers::Index(NqPickers::tItem);
+	const ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX;
+	XUI::BlockLabel("Stock", "What is on the shelf after every restock: an item, how many, and the chance that it is there.");
+	if (t.stock.empty())
+		XUI::StatusText(XUI::Tone::Muted, "Nothing on the shelf: it sells only what its categories let it sell of what it carries.");
+	else if (ImGui::BeginTable("##stock", 4, flags))
+	{
+		ImGui::TableSetupColumn("Item", ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, XUI::Em(4.5f));
+		ImGui::TableSetupColumn("Chance", ImGuiTableColumnFlags_WidthFixed, XUI::Em(4.5f));
+		ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, XUI::Pt(24.f));
+		XUI::TableHeaders();
+		int remove = -1;
+		for (u32 i = 0; i < t.stock.size(); ++i)
+		{
+			ImGui::PushID((int)i);
+			ImGui::TableNextRow(0, XUI::Pt(26.f));
+			ImGui::TableNextColumn();
+			char section[128];
+			CopyTo(section, sizeof(section), t.stock[i].section);
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+			if (ListPicker("##sect", section, sizeof(section), items, 0))
+			{
+				t.stock[i].section = section;
+				changed = true;
+			}
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+			if (ImGui::InputInt("##count", &t.stock[i].count, 0, 0))	changed = true;
+			if (t.stock[i].count < 1)	t.stock[i].count = 1;
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+			if (ImGui::InputFloat("##chance", &t.stock[i].chance, 0.f, 0.f, "%.2f"))	changed = true;
+			ImGui::TableNextColumn();
+			if (XUI::IconButton("##remove", XUI::Icon::Delete, "Take the row out"))	remove = (int)i;
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+		if (remove >= 0)
+		{
+			t.stock.erase(t.stock.begin() + remove);
+			changed = true;
+		}
+	}
+	FieldStatus("trade");
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(2.f)));
+	if (XUI::Button("Add Item"))
+	{
+		t.stock.push_back(EditorCharacters::STradeRow());
+		changed = true;
+	}
+	ImGui::SameLine();
+	if (XUI::Button("Not a Trader"))
+	{
+		const bool base_trades = s_InheritedTrade.Trader();
+		t.Reset();
+		// with a base that trades, saying nothing would bring its shop back
+		t.declared = base_trades;
+		t.off = base_trades;
+		changed = true;
+	}
+	XUI::Tip("The NPC keeps no shop: it trades like any stalker of its community.");
+	ImGui::PopID();
+	return changed;
+}
+
 void DrawHeader(float width)
 {
 	const xr_string& mod = CachedModuleId();
@@ -2005,7 +2269,7 @@ void DrawHeader(float width)
 		XUI::FontScope font(XUI::Font::Title);
 		XUI::TextEllipsis(title.c_str(), text_w);
 	}
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextSecondary));
 	XUI::TextEllipsis(mod.empty() ? "The module has no id yet: Mod Settings" : ("In game: " + EditorCharacters::GameId(mod.c_str(), s_Edit.id.c_str())).c_str(), text_w);
 	XUI::Tip("The spawn section, the squad section (with _squad) and the profile a placed stalker carries.");
 	XUI::TextEllipsis(s_Edit.file.empty() ? "Not saved yet" : NqUtil::ProjectRelative(s_Edit.file.c_str()).c_str(), text_w, XUI::Clip::Start);
@@ -2207,6 +2471,21 @@ bool DrawForm(float width)
 			changed |= DrawKit();
 			XUI::BeginPropertyGrid("character", .30f);
 		}
+		if (XUI::PropertySection("Trade", true, s_Edit.trade.Trader() ? "Trader" : nullptr))
+		{
+			if (s_Edit.trade.Trader())
+			{
+				changed |= DrawTradeRows();
+				XUI::EndPropertyGrid();
+				changed |= DrawStock();
+			}
+			else
+			{
+				XUI::EndPropertyGrid();
+				changed |= DrawTradeOff();
+			}
+			XUI::BeginPropertyGrid("character", .30f);
+		}
 		XUI::EndPropertyGrid();
 	}
 	return changed;
@@ -2215,16 +2494,6 @@ bool DrawForm(float width)
 void DrawToolbar(XUI::Toolbar& tb)
 {
 	const bool project = EditorProject::Active();
-	tb.Group(3);
-	if (tb.Action("new", XUI::Icon::Plus, "New", "A new character, saved to characters\\<id>.npcasset", project))
-		AskThen([] { NewCharacter(); });
-	if (tb.Action("save", XUI::Icon::Save, "Save", s_Dirty ? "Save the character" : "No changes to save", s_Dirty))
-	{
-		xr_string err;
-		if (!SaveEdited(err))	s_Status = "Not saved: " + err;
-	}
-	if (tb.Action("revert", XUI::Icon::Undo, "Revert", s_Dirty ? "Drop the changes: back to the file" : "Nothing to revert", s_Dirty))
-		Discard();
 	tb.Group(1);
 	if (tb.Action("reload", XUI::Icon::Refresh, "Reload", "Read the characters, the linked game's lists and the project's models again", project))
 	{
@@ -2324,6 +2593,11 @@ void EditorCharacters::DrawUI()
 	ShowTab(false);
 }
 
+bool EditorCharacters::ItemPicker(LPCSTR label, char* buf, u32 size, LPCSTR none)
+{
+	return ListPicker(label, buf, size, NqPickers::Index(NqPickers::tItem), none);
+}
+
 namespace EditorCharacters
 {
 static void DrawCharactersBody()
@@ -2347,7 +2621,7 @@ static void DrawCharactersBody()
 	// the list, a splitter, the form: the list keeps its width, the form takes the rest
 	float list_pt = 260.f;
 	XUI::Splitter("characters.list", true, &list_pt, 220.f, 400.f, 260.f);
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(Token::Base));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::U32(Token::Base));
 	ImGui::BeginChild("##char_side", ImVec2(XUI::Pt(list_pt), 0.f));
 	DrawList();
 	ImGui::EndChild();
@@ -2361,7 +2635,7 @@ static void DrawCharactersBody()
 		ImGui::BeginChild("##char_column", ImVec2(column, 0.f), ImGuiChildFlags_AutoResizeY);
 		if (s_Sel < 0 && !s_Dirty)
 		{
-			if (XUI::EmptyState(XUI::Icon::Character, "No character selected", "Pick one in the list, or make a new one.", "New Character"))
+			if (XUI::EmptyState(XUI::Icon::Character, "No character selected", "Pick one in the list, or add one with +."))
 				NewCharacter();
 		}
 		else

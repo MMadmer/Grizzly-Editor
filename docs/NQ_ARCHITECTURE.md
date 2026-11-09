@@ -1,11 +1,11 @@
 # NQ — Node Quest Graph. Architecture of the node-based quest graph
 
-This document describes how the node-graph quest system lands in XFined Editor
+This document describes how the node-graph quest system lands in Grizzly Editor
 and Dead Air Refined: the `.nqasset` format, the action catalog, the execution
 model, the engine changes, the editor UI, MCP, export, tests and the phased
 rollout plan. It is a working implementation guide: every decision is made, no
 questions stay open (the decision register and its reasons are §18). All code
-anchors follow the current trees `D:\Games\XFined-Editor` (the editor) and
+anchors follow the current trees `D:\Games\Grizzly-Editor` (the editor) and
 `D:\Games\Dead Air\DeadAir-x64` (the engine); the unpacked game scripts are
 `D:\Games\Dead Air\_analysis\original\scripts` (read-only, the reference).
 
@@ -174,7 +174,7 @@ Source\Editors\LevelEditor\UI\QuestGraph\ ; the document tab, canvas, Graph and 
 gamedata\configs\nq\catalog.ltx           ; bundled catalog fallback (copy of the game's)
 docs\NQ_ARCHITECTURE.md                   ; this document
 docs\nq\examples\*.nqasset                ; reference quests (phase 0)
-tools\mcp\xfined_mcp.py, tools\mcp\AI_SETUP.md ; new quest_* tools
+tools\mcp\grizzly_mcp.py, tools\mcp\AI_SETUP.md ; new quest_* tools
 ```
 
 Layering: everything that is not UI lives in `XrECore` (so `EditorMod::Export`
@@ -259,7 +259,7 @@ additionally take `["not"] = true` to invert the result.
 | `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: section×N or a specific object; a section appears once |
 | `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick = random\|nearest\|farthest, state = any\|full\|empty, within = R, beyond = R, scatter = bool } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` (`spawn`) and `item.spawn` (`where`) put the loot they create. Radii are measured from the player; nothing within the radius → the nearest match, nothing outside → the farthest one. `state`: full — the container holds something, empty — it is empty. `scatter` — each item goes to its own random stash. `new_corpse` — the corpse is created with the loot inside and drops as soon as it goes online |
 | `spawn_section` | `"inventory_box"` | any section with `$spawn` (anything placeable in the world); the editor provides a picker |
-| `character_id` | `"valera"` | a character of the project, by the `id` of its `.npcasset`; the runtime turns it into the section `<module>_<id>` the build generated. `"<module>.<id>"` names a character of another module |
+| `character_id` | `"valera"` | a character of the project, by the `id` of its `.npcasset`; the runtime turns it into the section `<module>_<id>` the game makes of it. `"<module>.<id>"` names a character of another module |
 | `npc_list` | `{ { character = "valera", ref = "valera" }, { section = "…", unique = true } }` | rows of `spawn.npc`: exactly one of `character` \| `section`, plus `ref`, `unique` (default: on for a character, off for a section), `dead`, `yaw` |
 | `objective_id` | `"bread"` | a step of the task named by the neighboring `task` parameter. The editor provides a dropdown of that task's steps |
 | `object_ref`, `squad_ref` | `{ story = "esc_m_trader" }` \| `{ ref = "stash" }` | ONE specific world object. Narrower than `npc_ref`: `profile`/`community` name a kind of creature, not a thing you can loot, remember under a ref or count the death of |
@@ -355,16 +355,16 @@ never looking at the canvas. What guarantees this:
 2. **Coordinates are optional.** A node without `pos` gets its position from the
    auto-layout on open; an AI never has to write `pos`. Editor fields (`pos`,
    `comment`) always come last in a node so they do not get in the way of reading.
-3. **The schema is served on demand.** `xfined_quest_catalog` returns every kind
+3. **The schema is served on demand.** `grizzly_quest_catalog` returns every kind
    with its groups, purpose (`use`), parameters (type/required/default/enum), pins
    and a one-line description — enough to write a quest from scratch. The same
    catalog lives in `docs\nq\NQ_FORMAT.md` (phase 0) and in the `AI_SETUP.md`
    prompt block.
-4. **Problems come as text.** `xfined_quest_write` (write the whole file) /
-   `xfined_quest_validate` return a list of `{code, severity, node, slot, message}`
+4. **Problems come as text.** `grizzly_quest_write` (write the whole file) /
+   `grizzly_quest_validate` return a list of `{code, severity, node, slot, message}`
    (§15) — the same format the game prints. A Lua syntax error position is
    line:column.
-5. **Reading is text.** `xfined_quest_get` returns the canonical file text plus an
+5. **Reading is text.** `grizzly_quest_get` returns the canonical file text plus an
    **outline** — a linear textual description of the graph:
    ```
    quest madmer.cordon_tales.wolf_debt "Долг вежливости" (active: auto; vars: agreed; tasks: kill_boars)
@@ -379,7 +379,7 @@ never looking at the canvas. What guarantees this:
    finish (flow.end; completed)
    problems: none            -- otherwise: "W011 sid_1: not all player replies are unconditional — …"
    ```
-   The outline is available without opening a tab (`xfined_quest_list` gives a
+   The outline is available without opening a tab (`grizzly_quest_list` gives a
    summary of every quest).
 6. **Editing — whole-file or by operations.** An AI usually rewrites the whole
    file (`quest_write` or a direct file write + `quest_reload`); targeted edits go
@@ -390,8 +390,8 @@ never looking at the canvas. What guarantees this:
 8. **Names speak for themselves.** Kinds and parameters are short English
    identifiers with dotted namespaces (`dialog.topic`, `objective.kill`,
    `item.give`); texts are in the player's language.
-9. **Screenshots are unnecessary but possible.** `xfined_quest_view` +
-   `xfined_screenshot_editor` remain for visual checks, but no step of the AI
+9. **Screenshots are unnecessary but possible.** `grizzly_quest_view` +
+   `grizzly_screenshot_editor` remain for visual checks, but no step of the AI
    workflow depends on them.
 
 ---
@@ -1230,7 +1230,7 @@ canvas, the **Details panel** (right, 360 pt, `graph.details_w`), and a
 panels keep their pt size and the canvas takes every resize; when the canvas
 would get less than 400 pt the Graph panel folds to a rail whose buttons open it
 over the canvas. The toolbar's Graph and Details buttons show and hide the
-panels. The sizes live in the layout (`[XFinedLayout]`, MCP `ui_split`).
+panels. The sizes live in the layout (`[GrizzlyLayout]`, MCP `ui_split`).
 
 Every field of both panels is a row of the UI kit's property grid: the label in
 its column, the value beside it, the help in the label's tooltip and in the
@@ -1284,36 +1284,36 @@ Edit Text / Edit Lua dialog (Check Syntax).
 ### 13.11 MCP
 
 C++ — the graph commands in `LevelEditor/Editor/Mcp/LevelMcpGraph.cpp` (the tabs, `UIQuestGraph::Mcp*`) and
-`NqMcp.cpp`; Python — entries in `TOOLS` + `CMD_MAP` (`tools/mcp/xfined_mcp.py`),
+`NqMcp.cpp`; Python — entries in `TOOLS` + `CMD_MAP` (`tools/mcp/grizzly_mcp.py`),
 the table in `tools/mcp/AI_SETUP.md`. Structured arguments travel as **a string
 holding a Lua table** (the parser already exists — `NqLua`), responses are JSON
 built by string emitters (no JSON library).
 
 | Tool | Arguments | Response |
 |---|---|---|
-| `xfined_quest_catalog` | — | kinds with groups, `use`, parameters (type/required/default/enum), pins; the catalog version; the source (game/bundled) |
-| `xfined_quest_list` | — | every project `.nqasset`: path, id, title, error/warning counts |
-| `xfined_quest_new` | `path` (project-relative) | creates from the template, opens the tab |
-| `xfined_quest_open` / `xfined_quest_close` | `path`[, `discard`] | |
-| `xfined_quest_get` | `path` | `{ lua: "<canonical text>", outline: "<text outline, §4.5>", problems: [...], stats }`; works for an unopened file too (reads from disk) |
-| `xfined_quest_write` | `path`, `lua` | replace the whole document (parse → validation → undo snapshot); problems and outline in the response; the file need not be open (then it is written to disk after validation, errors do not block the write — they only block the build) |
-| `xfined_quest_undo` / `xfined_quest_redo` | `path` | document undo/redo (the scene `undo` does not touch quests) |
-| `xfined_quest_apply` | `path`, `ops` = a Lua table of operations: `add_node{node}`, `set_node{id, patch}`, `rename_node{id,new_id}`, `remove_node{id}`, `connect{from,pin,to}`, `disconnect{from,pin,to}`, `add_action{id,slot,index,action}`, `set_action{id,slot,index,patch}`, `move_action{...}`, `remove_action{...}`, `set_quest{patch}`, `set_pos{id,x,y}` | problems after applying |
-| `xfined_quest_validate` | `path` | the problem list |
-| `xfined_quest_save` | `path`[, `force`] | |
-| `xfined_quest_reload` | `path` | re-read from disk |
-| `xfined_quest_layout` | `path` | auto-layout; every position carries `w`/`h`, the node's content-sized box (`NqLayout::Box`) |
-| `xfined_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the Details panel follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the Details panel), `graph_panel`/`details`/`keys`/`problems:"show"\|"hide"\|"toggle"` (the Graph panel - on a rail it opens over the canvas -, the Details panel, the Shortcuts card, the Problems drawer), `graph_width`/`details_width` (pt), `action_split` (the share of the Details column the node keeps) / `vars_split` (the share of the Graph panel the Variables get), `scroll:"top"\|"bottom"\|"action:top"\|"action:bottom"\|"tasks"\|"task:<id>"\|"task:<id>/steps"\|"variables"` (an error when that pane is not on screen) | the resulting `zoom_level`/`zoom` (the level's factor) + `ui_scale`, `title_px`, `center`/`selected`/`slot`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `beyond` (`{above, below, left, right}`: the nodes wholly past each edge of the view), `graph_width`/`details_width`, `panes` (graph, variables, canvas, details, node, action, drawer; pt of the main viewport, null when not drawn), the splits and the panes' scroll `[y, max]`; the answer describes the frames this call changed (a deferred `frame:all`, a selection, a slot, a pane, a width, a split, a tab that was not on screen; a scroll, and the node pane bringing a newly selected action's row into view, land a frame later): the handler marks it `pending:true` and the MCP pump holds the request like a screenshot until they are drawn, then answers by reading again with `answer_only:true` (applies nothing - a toggle must not flip back), so a raw socket caller gets it in one call too; then `xfined_screenshot_editor` |
-| `xfined_quest_edit` | `path`, `op`, `nodes` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays in place, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
-| `xfined_quest_find` | `path`, `action`, `query`, `select`, `limit` | full-text results in file order, the active result and the view state; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the node |
-| `xfined_quest_project_find` | `query`, `limit` | a read-only search over a direct sorted scan of all `*.nqasset`, opening no documents; dirty documents act as a memory overlay. The response: `source` on each result, `complete`/`diagnostics`, the cache `generation` and a deterministic content `fingerprint` |
-| `xfined_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only over the current catalog's types, including nested `cond_list`/`cases_cond`; anything unknown, malformed, Lua or unreadable explicitly marks the result incomplete |
-| `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | a safe task rename inside the document: a preflight of every catalog-typed area, then one `Snapshot` + one mutation of the declaration/references. Refuses before the snapshot on unknown/Lua/malformed/partial; the ack is mandatory because of runtime/save identity |
-| `xfined_quest_bookmarks` | `path`, `action`, `node` | transient bookmarks (`get/add/remove/toggle/next/previous/clear`) and the view state |
-| `xfined_quest_history` | `path`, `action` | the transient history (`get/back/forward/clear`) with all view states |
-| `xfined_quest_minimap` | `path`, `action` | `visible` (the toggle), `available` (the graph has `min_nodes`, 12, nodes or more; the toolbar's toggle is disabled while it has not), `shown` (drawn last frame: available, and a canvas with room for it), graph/viewport bounds and the view state (`get/show/hide/toggle`) |
-| `xfined_quest_lookup` | `type`, `query`, `limit` | picker data (§13.6) |
-| `xfined_quest_check_all` | — | the same as the build gate |
+| `grizzly_quest_catalog` | — | kinds with groups, `use`, parameters (type/required/default/enum), pins; the catalog version; the source (game/bundled) |
+| `grizzly_quest_list` | — | every project `.nqasset`: path, id, title, error/warning counts |
+| `grizzly_quest_new` | `path` (project-relative) | creates from the template, opens the tab |
+| `grizzly_quest_open` / `grizzly_quest_close` | `path`[, `discard`] | |
+| `grizzly_quest_get` | `path` | `{ lua: "<canonical text>", outline: "<text outline, §4.5>", problems: [...], stats }`; works for an unopened file too (reads from disk) |
+| `grizzly_quest_write` | `path`, `lua` | replace the whole document (parse → validation → undo snapshot); problems and outline in the response; the file need not be open (then it is written to disk after validation, errors do not block the write — they only block the build) |
+| `grizzly_quest_undo` / `grizzly_quest_redo` | `path` | document undo/redo (the scene `undo` does not touch quests) |
+| `grizzly_quest_apply` | `path`, `ops` = a Lua table of operations: `add_node{node}`, `set_node{id, patch}`, `rename_node{id,new_id}`, `remove_node{id}`, `connect{from,pin,to}`, `disconnect{from,pin,to}`, `add_action{id,slot,index,action}`, `set_action{id,slot,index,patch}`, `move_action{...}`, `remove_action{...}`, `set_quest{patch}`, `set_pos{id,x,y}` | problems after applying |
+| `grizzly_quest_validate` | `path` | the problem list |
+| `grizzly_quest_save` | `path`[, `force`] | |
+| `grizzly_quest_reload` | `path` | re-read from disk |
+| `grizzly_quest_layout` | `path` | auto-layout; every position carries `w`/`h`, the node's content-sized box (`NqLayout::Box`) |
+| `grizzly_quest_view` | `path`, `frame:"all"\|<node>`, `zoom_level`, `cx`/`cy` (override `frame`), `select:"<node>"\|"a,b"\|"none"` (the Details panel follows the selection), `slot:"enter:0"\|"exit:1"\|"none"` (open the action in the Details panel), `graph_panel`/`details`/`keys`/`problems:"show"\|"hide"\|"toggle"` (the Graph panel - on a rail it opens over the canvas -, the Details panel, the Shortcuts card, the Problems drawer), `graph_width`/`details_width` (pt), `action_split` (the share of the Details column the node keeps) / `vars_split` (the share of the Graph panel the Variables get), `scroll:"top"\|"bottom"\|"action:top"\|"action:bottom"\|"tasks"\|"task:<id>"\|"task:<id>/steps"\|"variables"` (an error when that pane is not on screen) | the resulting `zoom_level`/`zoom` (the level's factor) + `ui_scale`, `title_px`, `center`/`selected`/`slot`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `beyond` (`{above, below, left, right}`: the nodes wholly past each edge of the view), `graph_width`/`details_width`, `panes` (graph, variables, canvas, details, node, action, drawer; pt of the main viewport, null when not drawn), the splits and the panes' scroll `[y, max]`; the answer describes the frames this call changed (a deferred `frame:all`, a selection, a slot, a pane, a width, a split, a tab that was not on screen; a scroll, and the node pane bringing a newly selected action's row into view, land a frame later): the handler marks it `pending:true` and the MCP pump holds the request like a screenshot until they are drawn, then answers by reading again with `answer_only:true` (applies nothing - a toggle must not flip back), so a raw socket caller gets it in one call too; then `grizzly_screenshot_editor` |
+| `grizzly_quest_edit` | `path`, `op`, `nodes` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays in place, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
+| `grizzly_quest_find` | `path`, `action`, `query`, `select`, `limit` | full-text results in file order, the active result and the view state; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the node |
+| `grizzly_quest_project_find` | `query`, `limit` | a read-only search over a direct sorted scan of all `*.nqasset`, opening no documents; dirty documents act as a memory overlay. The response: `source` on each result, `complete`/`diagnostics`, the cache `generation` and a deterministic content `fingerprint` |
+| `grizzly_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only over the current catalog's types, including nested `cond_list`/`cases_cond`; anything unknown, malformed, Lua or unreadable explicitly marks the result incomplete |
+| `grizzly_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | a safe task rename inside the document: a preflight of every catalog-typed area, then one `Snapshot` + one mutation of the declaration/references. Refuses before the snapshot on unknown/Lua/malformed/partial; the ack is mandatory because of runtime/save identity |
+| `grizzly_quest_bookmarks` | `path`, `action`, `node` | transient bookmarks (`get/add/remove/toggle/next/previous/clear`) and the view state |
+| `grizzly_quest_history` | `path`, `action` | the transient history (`get/back/forward/clear`) with all view states |
+| `grizzly_quest_minimap` | `path`, `action` | `visible` (the toggle), `available` (the graph has `min_nodes`, 12, nodes or more; the toolbar's toggle is disabled while it has not), `shown` (drawn last frame: available, and a canvas with room for it), graph/viewport bounds and the view state (`get/show/hide/toggle`) |
+| `grizzly_quest_lookup` | `type`, `query`, `limit` | picker data (§13.6) |
+| `grizzly_quest_check_all` | — | the same as the build gate |
 
 The destructiveness rule: MCP commands show no dialogs; `quest_close` without
 `discard` on a dirty document returns an `unsaved` error, `quest_write`
@@ -1409,7 +1409,7 @@ and MCP.
 
 ## 16. Test plan
 
-**Editor (headless, `LevelEditor.exe -project D:\XFinedProjects\Test -nodlg` + MCP):**
+**Editor (headless, `LevelEditor.exe -project <project> -nodlg` + MCP):**
 1. `quest_new` → the file is created, canonical, `quest_get` = the template, 0 errors.
 2. `quest_write` of the reference quest (§4.4) → 0 errors; a repeated `quest_get.lua`
    is byte-for-byte equal (canonicalization is idempotent).
@@ -1651,7 +1651,7 @@ place = { actor = true }
 
 **X-Ray walks patrol paths and nothing else**, and that used to be the end of
 it: a stalker could not be sent to "that case" or "over there" without a second
-movement system in the scripts. XFined-Ray removes the limit in the engine
+movement system in the scripts. Grizzly removes the limit in the engine
 instead of working around it. `xms.patrol_point(name, x, y, z)` registers a
 ONE-POINT RUNTIME PATROL PATH at the navmesh cell nearest to a position, so the
 very same stock walker / camper walks to any destination, with danger, cover and
@@ -1830,6 +1830,7 @@ game repo.
 | the playable area (`area`, empty = anywhere) | `mod.ltx [world]` | same |
 | transitions that start closed (`locked`, `locked_levels`) | `mod.ltx [world]` | same |
 | where a new game starts | the spawn layer, `[obj:<name>] op = start` | the scene bake of a Player Start |
+| what a new game begins with, in place of the new-game screen's loadout (items, money, whether the screen's perks stay) | `mod.ltx [start_kit]` | World Rules tab (Starting Kit), `world_set start_*` |
 | the module's own patrol paths | the spawn layer, `[path:<name>]` | the scene bake of a way path |
 | what a placed stalker does from its first frame | its custom data, `[xms_order]` | the scene bake of its Order properties |
 | what changes while the game runs | the quest graph: `world.*`, `order.*`, `transition_open` | the quest editor |
@@ -1886,6 +1887,15 @@ section at all.
 - Codes: `E201` a second Player Start, `E202` a fourth player choice - both stop
   a build; `W203` a level and `W204` a transition the linked game lacks, `W205`
   the start outside the area, `W206` an area with no Player Start.
+- **The start kit** (`SStartKit`, `mod.ltx [start_kit]`) is edited in the same tab
+  and saved the same way. A row is born with its item (the picker adds it): the tab
+  saves at once, and a row without one would not survive the save. The picker is
+  the Characters tab's kit picker (`EditorCharacters::ItemPicker`) - one widget for
+  every kit. *Game's Base Kit* reads `[shared]` of the linked game's
+  `plugins\faction_loadouts.ltx`. `E207` a row with no item, a count below 1 or a
+  repeated item stops a build; `W208` an item the linked game lacks only warns
+  (the module may bring it - the game leaves it out rather than stop). The game
+  half is `xms_world.script` (the game repo's MODDING.md, "The start kit").
 
 ### 20.4 Standing orders
 

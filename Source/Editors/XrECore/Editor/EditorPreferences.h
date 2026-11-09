@@ -11,7 +11,7 @@ struct SESubCommand;
 inline constexpr u32 kEditorIdleFpsDefault = 120;
 inline constexpr u32 kEditorIdleFpsMinimum = 30;
 inline constexpr u32 kEditorIdleFpsMaximum = 240;
-// level_imgui.ini of another version is skipped once: XFinedLevel_v2 and the renamed panels
+// level_imgui.ini of another version is skipped once: GrizzlyLevel_v2 and the renamed panels
 inline constexpr u32 kUiLayoutVersion = 2;
 
 //---------------------------------------------------------------------------

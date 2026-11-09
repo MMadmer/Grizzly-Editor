@@ -4,6 +4,7 @@
 #include "NqUtil.h"
 #include "../EditorGameContent.h"
 #include "../EditorProject.h"
+#include "../EditorModManifest.h"
 
 namespace
 {
@@ -15,11 +16,16 @@ namespace
 	int							s_Api		= 0;
 	u32							s_Generation = 0;
 	bool						s_Loaded	= false;
-	xr_string					s_LoadedFor;	// game root the load was made for (auto-reload on link change)
+	xr_string					s_LoadedFor;	// game root and project the load was made for (auto-reload on a change)
+	xr_string					s_Key;
 
+	// the linked game and the open project: the project brings kinds of its own
 	LPCSTR CurrentKey()
 	{
-		return (EditorProject::Active() && EditorProject::GameLinked()) ? EditorProject::GameRoot() : "";
+		s_Key = (EditorProject::Active() && EditorProject::GameLinked()) ? EditorProject::GameRoot() : "";
+		s_Key += "|";
+		if (EditorProject::Active()) s_Key += EditorProject::Root();
+		return s_Key.c_str();
 	}
 
 	// catalog type names - what tells a parameter definition line apart from a
@@ -29,6 +35,8 @@ namespace
 		"string", "int", "float", "bool", "enum", "text", "duration", "npc_ref", "target_ref",
 		"place", "spawn_spec", "item_list", "loot_spawn", "spawn_section", "item_section", "squad_section", "level", "smart", "story_id",
 		"profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
+		// a global variable of the module (mod.ltx [vars]), one value every quest shares
+		"global_name",
 		"signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight",
 		"kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor",
 		"squad_ref", "object_ref", "objective_id",
@@ -300,8 +308,9 @@ namespace
 		s_Files.push_back(xr_string(label));
 	}
 
-	// <root>\<sub>\*\gamedata\configs\nq\kinds\*.ltx
-	void LoadModuleKinds(LPCSTR game, LPCSTR sub)
+	// <root>\<sub>\*\gamedata\configs\nq\kinds\*.ltx; `own` is the open project's module id,
+	// whose installed copy is an older build of the kinds the project itself is read for
+	void LoadModuleKinds(LPCSTR game, LPCSTR sub, const xr_string& own)
 	{
 		string_path mask;
 		sprintf_s(mask, "%s\\%s\\*", game, sub);
@@ -312,6 +321,7 @@ namespace
 		{
 			if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
 			if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+			if (!own.empty() && 0 == _stricmp(fd.cFileName, own.c_str())) continue;
 			string_path dir;
 			sprintf_s(dir, "%s\\%s\\%s\\gamedata\\configs\\nq\\kinds", game, sub, fd.cFileName);
 			xr_vector<xr_string> files;
@@ -379,11 +389,32 @@ namespace
 				LoadDiskFile(files[i].c_str(), label);
 			}
 		}
-		// installed modules extend the catalog whichever core catalog is used
+		// installed modules extend the catalog whichever core catalog is used - all but the
+		// open project's own, which is read from the project itself, last, so what its author
+		// is writing wins over any earlier build of it
+		xr_string own;
+		if (EditorProject::Active())
+		{
+			EditorMod::SManifest m;
+			if (EditorMod::Load(EditorProject::Root(), m)) own = m.id;
+		}
 		if (EditorProject::Active() && EditorProject::GameLinked())
 		{
-			LoadModuleKinds(EditorProject::GameRoot(), "modules");
-			LoadModuleKinds(EditorProject::GameRoot(), "mods");
+			LoadModuleKinds(EditorProject::GameRoot(), "modules", own);
+			LoadModuleKinds(EditorProject::GameRoot(), "mods", own);
+		}
+		if (EditorProject::Active())
+		{
+			string_path dir;
+			sprintf_s(dir, "%s\\gamedata\\configs\\nq\\kinds", EditorProject::Root());
+			xr_vector<xr_string> files;
+			NqUtil::ListFiles(dir, ".ltx", files);
+			for (u32 i = 0; i < files.size(); ++i)
+			{
+				string_path label;
+				sprintf_s(label, "project:kinds\\%s.ltx", NqUtil::BaseName(files[i].c_str()).c_str());
+				LoadDiskFile(files[i].c_str(), label);
+			}
 		}
 		s_Source = from_game ? "game" : "bundled";
 		if (s_Kinds.empty()) s_Error = "the catalog declares no kinds";

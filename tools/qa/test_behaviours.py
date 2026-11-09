@@ -10,7 +10,7 @@ graph may not run itself, and both assets survive a build and a canonical
 rewrite unchanged. The graph's tab frames readable titles, draws its panes and
 never says "quest".
 
-    python tools/qa/test_behaviours.py --project D:\\XFinedProjects\\Test
+    python tools/qa/test_behaviours.py --project <project>
 """
 from __future__ import annotations
 
@@ -228,7 +228,7 @@ def write(path: str, text: str) -> dict:
 
 def run(project: str) -> None:
     ed = Editor()
-    out_dir = tempfile.mkdtemp(prefix="xfined_beh_")
+    out_dir = tempfile.mkdtemp(prefix="grizzly_beh_")
     try:
         ed.start(project)
 
@@ -403,7 +403,7 @@ def main() -> int:
         print("no such project: " + src)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_behproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_behproj_")
     copy = os.path.join(work, "QaBehaviours")
     shutil.copytree(src, copy)
     os.makedirs(os.path.join(copy, "quests"), exist_ok=True)

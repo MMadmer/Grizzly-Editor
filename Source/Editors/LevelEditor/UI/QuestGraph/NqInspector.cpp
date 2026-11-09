@@ -6,10 +6,12 @@
 #include "../../../XrECore/Editor/Nq/NqItemCaps.h"
 #include "../../../XrECore/Editor/Nq/NqUtil.h"
 #include "../../../XrECore/Editor/EditorCharacters.h"
+#include "../../../XrECore/Editor/EditorProject.h"
+#include "../../../XrECore/Editor/EditorModManifest.h"
 
 namespace
 {
-	using T = XFinedTheme::ColorToken;
+	using T = GrizzlyTheme::ColorToken;
 
 	//--------------------------------------------------------------------------
 	// Rows. Every field of both panels is a row of the kit's property grid: the
@@ -256,7 +258,7 @@ namespace
 			XUI::FontScope font(XUI::Font::Small);
 			ImGui::SameLine(0.f, XUI::Pt(8.f));
 			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, p.y + (h - ImGui::GetFontSize()) * 0.5f));
-			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(T::TextMuted));
+			ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(T::TextMuted));
 			XUI::TextEllipsis(sub, room);
 			ImGui::PopStyleColor();
 		}
@@ -328,6 +330,9 @@ NqInspector::NqInspector(NqDoc* doc, NqCanvas* canvas) : m_Doc(doc), m_Canvas(ca
 {
 	m_NodeRev = m_QuestRev = u32(-1);
 	m_NodeDirty = m_QuestDirty = false;
+	m_GlobalsGen = u32(-1);
+	m_GlobalsDirty = false;
+	m_GlobalSel = 0;
 	m_FocusRename = m_FocusAction = false;
 	m_Search[0] = 0;
 	m_ActionShare = 0.5f;
@@ -531,8 +536,6 @@ void NqInspector::DrawQuestFields(bool& ch)
 	if (!XUI::Section(behaviour ? "Behaviour Graph##nq_head" : "Quest##nq_head", true)) return;
 	{
 		SGrid grid("graph_header");
-		Help(behaviour ? "The graph's id: what behaviour.run names. a-z, 0-9 and _" : "The quest's id: unique in the module. a-z, 0-9 and _");
-		ch |= InputStr("ID##q", m_Quest.id);
 		// never starts itself and owns no tasks: a caller runs it, and what it has instead is a cast
 		Help(behaviour ? "For the author only - a behaviour graph shows the player nothing" : "What the player reads in the PDA");
 		ch |= DrawText("Title##q", m_Quest.title, false);
@@ -546,6 +549,12 @@ void NqInspector::DrawQuestFields(bool& ch)
 				if (XUI::Segmented("##activation", &cur, kModes, 2)) { m_Quest.activation = cur ? "manual" : "auto"; ch = true; }
 			}
 		}
+		if (XUI::PropertySection("More##q", false))
+		{
+			Help(behaviour ? "The graph's id: what behaviour.run names. a-z, 0-9 and _" : "The quest's id: unique in the module. a-z, 0-9 and _");
+			ch |= InputStr("ID##q", m_Quest.id);
+			XUI::EndPropertySection();
+		}
 	}
 	XUI::EndSection();
 }
@@ -553,8 +562,8 @@ void NqInspector::DrawQuestFields(bool& ch)
 void NqInspector::DrawTasks(bool& ch, xr_string& rename, xr_string& references)
 {
 	if (s_ScrollTo == "tasks") { ImGui::SetScrollHereY(0.f); s_ScrollTo.clear(); }
-	const xr_string count = NqUtil::Format("%d", (int)m_Quest.tasks.size());
-	if (!XUI::Section("Tasks##nq_tasks", true, count.c_str())) return;
+	if (!XUI::Section("Tasks##nq_tasks", true)) return;
+	const bool add_task = XUI::HeaderAction("##add_task", XUI::Icon::Plus, "Add a task");
 	{
 		SGrid grid("graph_tasks");
 		ImGui::PushID("tasks");
@@ -568,9 +577,10 @@ void NqInspector::DrawTasks(bool& ch, xr_string& rename, xr_string& references)
 			}
 			ImGui::PushID((int)i);
 			const xr_string head = NqUtil::Format("%s###task", t.id.empty() ? "(no id)" : t.id.c_str());
-			const xr_string badge = t.objectives.empty() ? xr_string() : NqUtil::Format("%d objectives", (int)t.objectives.size());
 			bool removed = false;
-			if (XUI::PropertySection(head.c_str(), true, badge.empty() ? nullptr : badge.c_str()))
+			const bool task_open = XUI::PropertySection(head.c_str(), true);
+			if (XUI::HeaderAction("##del_task", XUI::Icon::Close, "Remove the task. Ctrl+Z brings it back")) removed = true;
+			if (task_open)
 			{
 				Help("The task's id in the PDA and in saves. Rename changes every reference with it");
 				if (Row("ID##t"))
@@ -644,15 +654,12 @@ void NqInspector::DrawTasks(bool& ch, xr_string& rename, xr_string& references)
 					t.objectives.push_back(o);
 					ch = true;
 				}
-				ImGui::SameLine();
-				if (XUI::Button("Delete Task", XUI::Kind::GhostDanger)) removed = true;
-				XUI::Tip("Removes the task from the quest. Ctrl+Z brings it back");
 			}
 			XUI::EndPropertySection();
 			ImGui::PopID();
 			if (removed) { m_Quest.tasks.erase(m_Quest.tasks.begin() + i); ch = true; break; }
 		}
-		if (AddButton("Add Task"))
+		if (add_task)
 		{
 			SNqTask t;
 			for (u32 number = 1;; ++number)
@@ -679,8 +686,8 @@ void NqInspector::DrawTasks(bool& ch, xr_string& rename, xr_string& references)
 void NqInspector::DrawRolesSection(bool& ch)
 {
 	if (s_ScrollTo == "tasks") { ImGui::SetScrollHereY(0.f); s_ScrollTo.clear(); }
-	const xr_string count = NqUtil::Format("%d", (int)m_Quest.roles.size());
-	if (!XUI::Section("Roles##nq_roles", true, count.c_str())) return;
+	if (!XUI::Section("Roles##nq_roles", true)) return;
+	const bool add_role = XUI::HeaderAction("##add_role", XUI::Icon::Plus, "Add a role");
 	{
 		SGrid grid("graph_roles");
 		ImGui::PushID("roles");
@@ -688,12 +695,16 @@ void NqInspector::DrawRolesSection(bool& ch)
 		{
 			SNqRole& r = m_Quest.roles[i];
 			ImGui::PushID((int)i);
-			const xr_string head = NqUtil::Format("%s###role", r.name.empty() ? "(no name)" : r.name.c_str());
+			const xr_string head = NqUtil::Format("%s%s###role", r.name.empty() ? "(no name)" : r.name.c_str(), r.many ? " (group)" : "");
 			bool removed = false;
-			if (XUI::PropertySection(head.c_str(), true, r.many ? "group" : nullptr))
+			const bool role_open = XUI::PropertySection(head.c_str(), true);
+			if (XUI::HeaderAction("##del_role", XUI::Icon::Close, "Remove the role. Ctrl+Z brings it back")) removed = true;
+			if (role_open)
 			{
 				Help("What the steps call it: who = \"<name>\". a-z, 0-9 and _ only");
 				ch |= InputStr("Name##r", r.name);
+				if (XUI::PropertySection("More##r", false))
+				{
 				Help("For the author: shown where the caller binds the role. Never seen by the player");
 				ch |= DrawText("Title##r", r.title, false);
 				// Two flags of one binding share a row: in the narrow panel a row puts its label
@@ -709,15 +720,14 @@ void NqInspector::DrawRolesSection(bool& ch)
 				}
 				Help("Who fills the role when the caller names nobody. Unset: the caller has to say");
 				ch |= DrawNpcRef("Default##r", r.def, false, false);
-				// with the role's other actions, not beside its name, where it read as "clear the name"
-				if (AddButton("Delete Role", XUI::Kind::GhostDanger)) removed = true;
-				XUI::Tip("Removes the role from the graph. Ctrl+Z brings it back");
+				XUI::EndPropertySection();
+				}
 			}
 			XUI::EndPropertySection();
 			ImGui::PopID();
 			if (removed) { m_Quest.roles.erase(m_Quest.roles.begin() + i); ch = true; break; }
 		}
-		if (AddButton("Add Role"))
+		if (add_role)
 		{
 			SNqRole r;
 			for (u32 number = 1;; ++number)
@@ -956,6 +966,176 @@ void NqInspector::DrawVarsSection()
 	}
 	ImGui::PopID();
 	if (ch) m_QuestDirty = true;
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(6.f)));
+	DrawGlobalsSection();
+}
+
+namespace
+{
+	// mod.ltx keeps a default as text; the Graph panel edits it as the value it is
+	SNqValue GlobalValue(const xr_string& text)
+	{
+		if (text == "true")		return SNqValue::Bool(true);
+		if (text == "false")	return SNqValue::Bool(false);
+		char* end = 0;
+		const double d = strtod(text.c_str(), &end);
+		if (!text.empty() && end && !*end) return SNqValue::Number(d);
+		if (text.size() >= 2 && text.front() == '"' && text.back() == '"') return SNqValue::String(text.substr(1, text.size() - 2));
+		return SNqValue::String(text);
+	}
+
+	// a string is always quoted, so "1" or "true" stays text in the game
+	xr_string GlobalText(const SNqValue& v)
+	{
+		if (v.IsBool())		return v.b ? "true" : "false";
+		if (v.IsNumber())	return NqUtil::Format("%g", v.n);
+		return "\"" + v.AsString("") + "\"";
+	}
+}
+
+void NqInspector::SaveGlobals()
+{
+	m_GlobalsDirty = false;
+	if (!EditorProject::Active()) return;
+	EditorMod::SManifest m;
+	if (!EditorMod::Load(EditorProject::Root(), m)) return;
+	m.vars.clear();
+	for (u32 i = 0; i < m_Globals.size(); ++i)
+	{
+		EditorMod::SGlobalVar gv;
+		gv.name = m_Globals[i].name;
+		gv.value = GlobalText(m_Globals[i].value);
+		m.vars.push_back(gv);
+	}
+	if (!EditorMod::Save(EditorProject::Root(), m))
+	{
+		Msg("! [nq] mod.ltx could not be written - the global variables were not saved");
+		return;
+	}
+	m_GlobalsGen = EditorMod::ManifestGeneration();
+	// what names them may just have become right, or wrong
+	m_Doc->Validate();
+}
+
+void NqInspector::DrawGlobalsSection()
+{
+	if (m_GlobalsGen != EditorMod::ManifestGeneration() && !m_GlobalsDirty)
+	{
+		m_GlobalsGen = EditorMod::ManifestGeneration();
+		m_Globals.clear();
+		const xr_vector<EditorMod::SGlobalVar>& globals = EditorMod::ProjectGlobals();
+		for (u32 i = 0; i < globals.size(); ++i)
+		{
+			SNqVar v;
+			v.name = globals[i].name;
+			v.value = GlobalValue(globals[i].value);
+			m_Globals.push_back(v);
+		}
+	}
+	bool ch = false;
+	ImGui::PushID("gvars");
+	XUI::BlockLabel("Global", "Variables every quest and behaviour graph of the module shares, declared in mod.ltx [vars] and "
+		"saved there as you edit. global.set and global.add write one, the global condition reads it, {global:name} shows it in a text.");
+
+	auto find = [&](const xr_string& name) { for (u32 i = 0; i < m_Globals.size(); ++i) if (m_Globals[i].name == name) return true; return false; };
+	auto add = [&]()
+	{
+		SNqVar v;
+		for (int number = (int)m_Globals.size() + 1;; ++number)
+		{
+			v.name = NqUtil::Format("global%d", number);
+			if (!find(v.name)) break;
+		}
+		v.value = SNqValue::Bool(false);
+		m_Globals.push_back(v);
+		m_GlobalSel = (int)m_Globals.size() - 1;
+		ch = true;
+	};
+
+	if (!EditorProject::Active())
+		XUI::StatusText(XUI::Tone::Muted, "No project: nowhere to keep them.");
+	else if (m_Globals.empty())
+	{
+		if (XUI::EmptyState(XUI::Icon::Variable, "No global variables", "A value every quest of the module sees - the night, a flag, a count.", "Add Global")) add();
+	}
+	else
+	{
+		m_GlobalSel = _max(0, _min(m_GlobalSel, (int)m_Globals.size() - 1));
+		const float rows = float(_min((int)m_Globals.size(), 6));
+		int drop = -1;
+		if (XUI::BeginList("##globals", ImVec2(0.f, rows * 22.f + 10.f)))
+		{
+			for (u32 i = 0; i < m_Globals.size(); ++i)
+			{
+				const SNqVar& var = m_Globals[i];
+				const xr_string row_id = NqUtil::Format("global%u", i);
+				if (XUI::ListRow(row_id.c_str(), (int)i == m_GlobalSel)) m_GlobalSel = (int)i;
+				const xr_string text = var.name + "  \xC2\xB7  " + TypeName(var.value.type) + " " + GlobalText(var.value);
+				XUI::TextEllipsis(text.c_str(), _max(0.f, ImGui::GetContentRegionAvail().x - XUI::Pt(28.f)));
+				static const XUI::Icon kIcons[] = { XUI::Icon::Delete };
+				static const char* kTips[] = { "Remove the global variable - the quests that name it are E030 until they stop" };
+				if (XUI::RowActions(kIcons, kTips, 1) == 0) drop = (int)i;
+			}
+		}
+		XUI::EndList();
+		if (drop >= 0)
+		{
+			m_Globals.erase(m_Globals.begin() + drop);
+			m_GlobalSel = _max(0, _min(m_GlobalSel, (int)m_Globals.size() - 1));
+			ch = true;
+		}
+		if (XUI::Button("Add Global", XUI::Kind::Ghost)) add();
+
+		if (m_GlobalSel < (int)m_Globals.size())
+		{
+			SNqVar& var = m_Globals[m_GlobalSel];
+			ImGui::PushID(m_GlobalSel);
+			{
+				SGrid grid("graph_globals");
+				Help("Letters, digits and _. A rename changes the declaration only: every quest that names the old one is E030 until it names the new one");
+				if (Row("Name##global"))
+				{
+					char namebuf[64];
+					strncpy_s(namebuf, sizeof(namebuf), var.name.c_str(), _TRUNCATE);
+					if (ImGui::InputText("##name", namebuf, sizeof(namebuf), ImGuiInputTextFlags_EnterReturnsTrue) || ImGui::IsItemDeactivatedAfterEdit())
+					{
+						const xr_string want = NqUtil::Trim(namebuf);
+						if (!want.empty() && want != var.name)
+						{
+							if (!EditorMod::ValidGlobalName(want.c_str()))	Msg("! [nq] a global variable is named by letters, digits and _: '%s'", want.c_str());
+							else if (find(want))							Msg("! [nq] global variable '%s' already exists", want.c_str());
+							else { var.name = want; ch = true; }
+						}
+					}
+				}
+				Help("Bool, number or text: the type of the default, and of every value it takes");
+				if (Row("Type##global"))
+				{
+					static const char* kTypes[] = { "Bool", "Number", "Text" };
+					int cur = var.value.IsBool() ? 0 : var.value.IsNumber() ? 1 : 2;
+					const int was = cur;
+					if (XUI::Segmented("##type", &cur, kTypes, 3) && cur != was)
+					{
+						switch (cur)
+						{
+						case 0:  var.value = SNqValue::Bool(var.value.IsNumber() ? var.value.n != 0.0 : false); break;
+						case 1:  var.value = SNqValue::Number(var.value.IsBool() ? (var.value.b ? 1.0 : 0.0) : 0.0); break;
+						default: var.value = SNqValue::String(var.value.IsBool() ? (var.value.b ? "true" : "false")
+									: var.value.IsNumber() ? NqUtil::Format("%g", var.value.n).c_str() : ""); break;
+						}
+						ch = true;
+					}
+				}
+				Help("The value a new game starts with; a save keeps what the quests made of it");
+				ch |= DrawTypedValue("Default##global", var.value, var.value.type);
+			}
+			ImGui::PopID();
+		}
+	}
+	ImGui::PopID();
+	if (ch) m_GlobalsDirty = true;
+	// written once the field is let go of, not on every key
+	if (m_GlobalsDirty && !ImGui::IsAnyItemActive()) SaveGlobals();
 }
 
 //------------------------------------------------------------------------------
@@ -1424,7 +1604,7 @@ void NqInspector::DrawTextEdit()
 	XUI::BeginDialogBody();
 	{
 		XUI::FontScope font(XUI::Font::Small);
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(T::TextSecondary));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(T::TextSecondary));
 		XUI::TextEllipsis(s_TextEdit.title.c_str());
 		ImGui::PopStyleColor();
 	}
@@ -1609,7 +1789,7 @@ bool NqInspector::DrawTyped(LPCSTR type, const NqCatalog::SParam* p, LPCSTR labe
 	if (t == "duration")			return DrawDuration(label, v);
 	if (t == "npc_ref")				return DrawNpcRef(label, v, false, false);
 	if (t == "target_ref")			return DrawNpcRef(label, v, true, false);
-	if (t == "object_ref" || t == "squad_ref")	return DrawObjectRef(label, v);
+	if (t == "object_ref" || t == "squad_ref")	return DrawObjectRef(label, v, t == "object_ref");
 	if (t == "objective_id")		return DrawObjectiveId(label, v);
 	if (t == "kill_target")			return DrawNpcRef(label, v, false, true);
 	if (t == "place")				return DrawPlace(label, v);
@@ -1675,7 +1855,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 	// author never gets to read.
 	const xr_string t = type;
 	const bool doc_scoped = (t == "task_id" || t == "var_name" || t == "ref_name" || t == "node_id" || t == "quest_id" ||
-							 t == "behaviour_id" || t == "role" || t == "way_path" || t == "character_id");
+							 t == "behaviour_id" || t == "role" || t == "way_path" || t == "character_id" || t == "global_name");
 	xr_vector<xr_string> labels, values, extras;
 	LPCSTR note = 0;
 
@@ -1685,6 +1865,13 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 		const SNqQuest& q = m_Doc->quest;
 		if (t == "task_id")	for (u32 i = 0; i < q.tasks.size(); ++i) ids.push_back(q.tasks[i].id);
 		if (t == "var_name") for (u32 i = 0; i < q.vars.size(); ++i) ids.push_back(q.vars[i].name);
+		xr_vector<xr_string> global_notes;
+		if (t == "global_name")
+		{
+			// the module's, shared by every quest - the default says what type it is
+			const xr_vector<EditorMod::SGlobalVar>& globals = EditorMod::ProjectGlobals();
+			for (u32 i = 0; i < globals.size(); ++i) { ids.push_back(globals[i].name); global_notes.push_back("= " + globals[i].value); }
+		}
 		if (t == "node_id")	for (u32 i = 0; i < q.nodes.size(); ++i) ids.push_back(q.nodes[i].id);
 		xr_vector<xr_string> ref_kinds;
 		if (t == "ref_name") NqValidate::DeclaredRefsEx(q, ids, ref_kinds);
@@ -1725,6 +1912,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			// or from objective.kill{spawn}, so naming one node kind here would lie
 			xr_string extra;
 			if (i < char_notes.size()) extra = char_notes[i];
+			if (i < global_notes.size()) extra = global_notes[i];
 			if (i < ref_kinds.size())
 			{
 				if (ref_kinds[i] == "squad")		extra = "squad";
@@ -1740,6 +1928,7 @@ bool NqInspector::PickerPopup(LPCSTR popup, LPCSTR type, xr_string& out)
 			else if (t == "behaviour_id")	note = "No behaviour graphs in this project";
 			else if (t == "role")			note = "This graph declares no roles";
 			else if (t == "character_id")	note = "No characters in this project - Create > Character";
+			else if (t == "global_name")	note = "The module declares no global variables - add one under Global in the Variables";
 			else							note = Behaviour() ? "Nothing declared in this graph" : "Nothing declared in this quest";
 		}
 	}
@@ -1981,6 +2170,7 @@ namespace
 		if (mode == "ref")		return "ref_name";
 		if (mode == "path")		return "way_path";
 		if (mode == "story")	return "story_id";
+		if (mode == "character") return "character_id";
 		return mode.c_str();
 	}
 }
@@ -1991,7 +2181,7 @@ namespace
 bool NqInspector::DrawDestination(LPCSTR label, SNqValue& v)
 {
 	// a role is a behaviour graph's cast; a quest only sees one it has to correct
-	xr_vector<xr_string> modes = Items("path", "ref", "story");
+	xr_vector<xr_string> modes = Items("path", "ref", "story", "character");
 	if (Behaviour() || v.Has("role")) modes.push_back("role");
 	modes.push_back("smart"); modes.push_back("restrictor"); modes.push_back("pos"); modes.push_back("actor");
 	xr_string mode = ModeOf(v, modes);
@@ -1999,7 +2189,8 @@ bool NqInspector::DrawDestination(LPCSTR label, SNqValue& v)
 	bool ch = false;
 	ImGui::PushID(label);
 	MoreHelp("path: a way path drawn with the Way tool - the best destination. ref: something the caller spawned; "
-		"the step waits for it. story: an object of the level. role: wherever that role stands. smart / restrictor / pos / actor: a place");
+		"the step waits for it. story: an object of the level. character: wherever that character of the project stands. "
+		"role: wherever that role stands. smart / restrictor / pos / actor: a place");
 	xr_string m = mode;
 	if (ModeRow(label, m, modes))
 	{
@@ -2105,7 +2296,7 @@ bool NqInspector::DrawWho(LPCSTR label, SNqValue& v)
 // an object - and for an attack a whole community or a profile as well.
 bool NqInspector::DrawRoleTarget(LPCSTR label, SNqValue& v, bool attack)
 {
-	xr_vector<xr_string> modes = Items("actor", "ref", "story");
+	xr_vector<xr_string> modes = Items("actor", "ref", "story", "character");
 	if (Behaviour() || v.Has("role")) modes.insert(modes.begin() + 1, xr_string("role"));
 	if (attack) { modes.push_back("community"); modes.push_back("profile"); }
 	xr_string mode = ModeOf(v, modes);
@@ -2338,7 +2529,9 @@ bool NqInspector::DrawDuration(LPCSTR label, SNqValue& v)
 
 bool NqInspector::DrawNpcRef(LPCSTR label, SNqValue& v, bool target, bool kill)
 {
-	xr_vector<xr_string> modes = Items("story", "ref", "profile", "community");
+	// character: an NPC of this project by its asset, wherever it is - the way to point at
+	// your own people from any quest
+	xr_vector<xr_string> modes = Items("character", "story", "ref", "profile", "community");
 	// a target names a spot as well as a creature: the runtime resolves a zone by
 	// name and anchors a bare position with a restrictor it creates itself
 	if (target) { modes.push_back("smart"); modes.push_back("restrictor"); modes.push_back("pos"); }
@@ -2428,11 +2621,13 @@ bool NqInspector::DrawObjectiveId(LPCSTR label, SNqValue& v)
 	return ch;
 }
 
-// object_ref / squad_ref: one concrete object, so only the two ways to name one -
-// a profile or a community would describe a kind of creature, not a thing.
-bool NqInspector::DrawObjectRef(LPCSTR label, SNqValue& v)
+// object_ref / squad_ref: one concrete object, so only the ways to name one - a
+// profile or a community would describe a kind of creature, not a thing. A character
+// is one person, so an object_ref may name one too.
+bool NqInspector::DrawObjectRef(LPCSTR label, SNqValue& v, bool character)
 {
 	xr_vector<xr_string> modes = Items("story", "ref");
+	if (character) modes.push_back("character");
 	xr_string mode = ModeOf(v, modes);
 	bool ch = false;
 	ImGui::PushID(label);

@@ -8219,7 +8219,7 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
         window->DC.MenuBarOffset.x = ImMax(ImMax(window->WindowPadding.x, style.ItemSpacing.x), g.NextWindowData.MenuBarOffsetMinVal.x);
         window->DC.MenuBarOffset.y = g.NextWindowData.MenuBarOffsetMinVal.y;
         window->TitleBarHeight = (flags & ImGuiWindowFlags_NoTitleBar) ? 0.0f : g.FontSize + g.Style.FramePadding.y * 2.0f;
-        // XFined Editor: a docked window's title bar is its node's tab bar, which the editor makes taller than a frame
+        // Grizzly Editor: a docked window's title bar is its node's tab bar, which the editor makes taller than a frame
         // (GImGuiDockTabBarExtra, imgui_user.h): the content starts under the tab bar, not across its lower edge
         if (window->DockIsActive && window->TitleBarHeight > 0.0f)
             window->TitleBarHeight += GImGuiDockTabBarExtra;
@@ -13391,7 +13391,7 @@ bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags fla
         return false;
     }
 
-    // XFined Editor: a modal is part of the editor's own window. With multi-viewports on, a popup
+    // Grizzly Editor: a modal is part of the editor's own window. With multi-viewports on, a popup
     // may grow to the monitor's work area, and one whose rect left the main viewport - grown past
     // its bottom, or placed by a position saved in the .ini - got a platform window of its own:
     // outside the editor, and outside every screenshot of it (the capture mirrors the main swap
@@ -13411,7 +13411,7 @@ bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags fla
         const ImGuiViewport* viewport = window->WasActive ? window->Viewport : GetMainViewport(); // FIXME-VIEWPORT: What may be our reference viewport?
         SetNextWindowPos(viewport->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 
-        // XFined Editor: inside the main viewport's work area, by the size the last frame gave it. The work
+        // Grizzly Editor: inside the main viewport's work area, by the size the last frame gave it. The work
         // area it was placed in is remembered: when that changes (the editor resized, a DPI change) the modal is
         // centred in the new one again instead of keeping a place that now sits off to one side.
         ImGuiWindow* modal = pin_to_main ? FindWindowByName(name) : NULL;
@@ -13434,7 +13434,7 @@ bool ImGui::BeginPopupModal(const char* name, bool* p_open, ImGuiWindowFlags fla
             }
         }
     }
-    // XFined Editor: never larger than the work area it sits in (a taller one scrolls), unless the caller
+    // Grizzly Editor: never larger than the work area it sits in (a taller one scrolls), unless the caller
     // constrains the size itself
     if (pin_to_main && (g.NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint) == 0)
         SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), main_viewport->WorkSize);

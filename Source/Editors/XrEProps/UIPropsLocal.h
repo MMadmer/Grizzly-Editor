@@ -4,9 +4,9 @@
 // stays inside XrEUI.
 namespace XUI_Local
 {
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
-inline ImU32 Col(Token token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+inline ImU32 Col(Token token, float alpha = 1.f) { return GrizzlyTheme::U32(token, alpha); }
 inline float Round(float v) { return floorf(v + .5f); }
 
 // `text` cut to `avail` px with an ellipsis at its end, in the font being drawn; false when it fits as it is
@@ -94,7 +94,7 @@ inline bool MixedField()
 inline void MutedValue(const char* text)
 {
 	ImGui::AlignTextToFramePadding();
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(Token::TextMuted));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(Token::TextMuted));
 	XUI::TextEllipsis(text, ImGui::CalcItemWidth());
 	ImGui::PopStyleColor();
 }

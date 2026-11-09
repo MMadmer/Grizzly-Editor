@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!--
-  XFined Editor runs with UTF-8 as its ANSI code page: every narrow Win32 and CRT
+  Grizzly Editor runs with UTF-8 as its ANSI code page: every narrow Win32 and CRT
   call (FindFirstFileA, MoveFileA, fopen, ...) takes and returns UTF-8 - the text
   ImGui draws and MCP carries. A file name is therefore one string from the disk to
   the screen and back: a Cyrillic name no longer turns into cp1251 bytes that ImGui

@@ -17,7 +17,7 @@
 
 namespace EditorGithub
 {
-	// -qa_github: every address below points at local mocks (XFINED_* variables)
+	// -qa_github: every address below points at local mocks (GRIZZLY_* variables)
 	bool	QaRun			();
 
 	// Breaks a network call that is blocked on another thread.
@@ -44,7 +44,7 @@ namespace EditorGithub
 	enum EAccountSource
 	{
 		asNone,
-		asEnvironment,		// XFINED_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN
+		asEnvironment,		// GRIZZLY_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN
 		asSaved,			// Windows Credential Manager, written by the editor
 		asGithubCli,		// gh auth token
 	};
@@ -62,6 +62,10 @@ namespace EditorGithub
 	// Environment first (an explicit override), then the token the editor saved,
 	// then the GitHub CLI. Starts gh when it has to - a fraction of a second.
 	void	ResolveAccount	(SAccount& out);
+	// starts reading the GitHub CLI's answer, so that the first dialog that asks for the account has it
+	void	WarmAccount		();
+	// the editor closes
+	void	StopAccountRead	();
 	LPCSTR	SourceText		(EAccountSource source);
 	// what a token looks like; keeps a pasted sentence out of the credential store
 	bool	PlausibleToken	(LPCSTR token);
@@ -203,7 +207,7 @@ namespace EditorGithub
 	//--------------------------------------------------------------------------
 	// the Mod Browser catalog (game repo docs/dead-air/MOD_CATALOG.md 10)
 	//--------------------------------------------------------------------------
-	// owner/repo the editor submits to (QA: XFINED_CATALOG_REPO)
+	// owner/repo the editor submits to (QA: GRIZZLY_CATALOG_REPO)
 	xr_string CatalogRepo	();
 	// the base URLs the catalog's public files are served from, in the order to try
 	void	CatalogMirrors	(xr_vector<xr_string>& out);
@@ -272,7 +276,7 @@ namespace EditorGithub
 	// minute: every request below waits for its turn, whichever job asks. The scan built on
 	// them is EditorVirusTotal.
 	//--------------------------------------------------------------------------
-	// XFINED_VT_KEY or VT_API_KEY first, then the key the editor saved in the Windows
+	// GRIZZLY_VT_KEY or VT_API_KEY first, then the key the editor saved in the Windows
 	// Credential Manager. Like the GitHub token it never reaches a log, a file or an answer.
 	bool	ReadVtKey		(xr_string& key);
 	bool	SaveVtKey		(LPCSTR key, xr_string& err);

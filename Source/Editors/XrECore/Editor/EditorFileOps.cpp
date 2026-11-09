@@ -3,7 +3,7 @@
 #include "EditorGameContent.h"
 #include "EditorProject.h"
 #include "EditorAssetIcons.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "Nq/NqDoc.h"		// open quest documents follow a rename
 #include <shellapi.h>
 
@@ -554,8 +554,8 @@ void EditorFileOps::McpRename(LPCSTR raw, xr_string& out)
 		return;
 	}
 	char path[MAX_PATH] = {}, name[MAX_PATH] = {};
-	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0] ||
-		!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
+	if (!GrizzlyMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0] ||
+		!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
 	{
 		out = "{\"ok\":false,\"error\":\"missing 'path' (file or folder inside the project) or 'name' (the new leaf name)\"}";
 		return;
@@ -980,12 +980,12 @@ static void McpTransfer(LPCSTR raw, xr_string& out, TEntryOp fn)
 	}
 
 	char src[4096] = {}, dst[MAX_PATH] = {};
-	if (!XFinedMCP::GetArg(raw, "src", src, sizeof(src)) || !src[0])
+	if (!GrizzlyMCP::GetArg(raw, "src", src, sizeof(src)) || !src[0])
 	{
 		out = "{\"ok\":false,\"error\":\"missing 'src' argument (';'-separated list allowed)\"}";
 		return;
 	}
-	if (!XFinedMCP::GetArg(raw, "dst", dst, sizeof(dst)) || !dst[0])
+	if (!GrizzlyMCP::GetArg(raw, "dst", dst, sizeof(dst)) || !dst[0])
 	{
 		out = "{\"ok\":false,\"error\":\"missing 'dst' argument (target folder inside the project)\"}";
 		return;
@@ -1015,7 +1015,7 @@ void EditorFileOps::McpMakeDir(LPCSTR raw, xr_string& out)
 	}
 
 	char path[MAX_PATH] = {};
-	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
+	if (!GrizzlyMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
 	{
 		out = "{\"ok\":false,\"error\":\"missing 'path' argument (folder inside the project)\"}";
 		return;
@@ -1052,7 +1052,7 @@ void EditorFileOps::McpDelete(LPCSTR raw, xr_string& out)
 	}
 
 	char path[4096] = {};
-	if (!XFinedMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
+	if (!GrizzlyMCP::GetArg(raw, "path", path, sizeof(path)) || !path[0])
 	{
 		out = "{\"ok\":false,\"error\":\"missing 'path' argument (';'-separated list allowed)\"}";
 		return;

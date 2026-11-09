@@ -2,7 +2,7 @@
 
 #include "stdafx.h"
 #include "EDX11Utils.h"
-#include "../../Public/xfined_resource.h"
+#include "../../Public/grizzly_resource.h"
 #pragma hdrstop
 
 #include "xr_input.h"
@@ -11,8 +11,9 @@
 #include "UI_Main.h"
 #include "EditorPreferences.h"
 #include "EditorProject.h"
+#include "EGameLighting.h"
 #include "EditorStartup.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "EThumbnailVisual.h"
 #include "d3dutils.h"
 #include "SoundManager.h"
@@ -23,6 +24,7 @@
 #include "UISoundEditorForm.h"
 #include "UI_CommandPalette.h"
 #include "UI_ProgressCenter.h"
+#include "EditorModManifest.h"
 #include "..\XrETools\ETools.h"
 #include "UILogForm.h"
 #include "gamefont.h"
@@ -544,7 +546,9 @@ void TUI::Redraw()
                 EDevice->Statistic->RenderDUMP_RT.Begin();
                 {
                     Fcolor cc;
-                    cc.set(EPrefs ? EPrefs->scene_clear_color : 0x0);
+                    // under View > Game Lighting the background is the weather's own
+                    cc.set(GGameLighting.enabled && GGameLighting.weather_ok ? GGameLighting.ClearColor()
+                           : EPrefs ? EPrefs->scene_clear_color : 0x0);
                     UI_TRACE("before clear RT");
                     HW.pContext->ClearRenderTargetView(RT->pRT, &cc.r);
                     UI_TRACE("before clear ZB");
@@ -711,6 +715,10 @@ constexpr u32 kBackgroundPollMs = 50;
 
 bool IsEditorProcessForeground()
 {
+	// files dragged from Explorer: it is the foreground window, and the editor has to draw where they would land
+	if (XUI::FileDropActive())
+		return true;
+
 	const HWND foreground = ::GetForegroundWindow();
 	if (!foreground)
 		return false;
@@ -862,7 +870,7 @@ void TUI::WaitForFramePacing()
 	const DWORD wake_index = m_FrameWakeEvent ? handle_count : DWORD(-1);
 	if (m_FrameWakeEvent)
 		handles[handle_count++] = m_FrameWakeEvent;
-	const HANDLE mcp_event = XFinedMCP::WakeEvent();
+	const HANDLE mcp_event = GrizzlyMCP::WakeEvent();
 	const DWORD mcp_index = mcp_event ? handle_count : DWORD(-1);
 	if (mcp_event)
 		handles[handle_count++] = mcp_event;
@@ -1019,7 +1027,7 @@ bool TUI::Idle()
     OnFrame			();
     // MCP requests must be served even when the window is inactive — the
     // draw path (and the Pump call inside it) stops for background windows
-    XFinedMCP::Pump	();
+    GrizzlyMCP::Pump	();
 	SyncAppActivation();
 	// A background editor does not draw: repainting a window nobody is looking at
 	// would burn a core for nothing. An armed capture is the one exception - there
@@ -1031,11 +1039,11 @@ bool TUI::Idle()
 	if (!draw)	draw = DX11FrameCaptureWants();
 #endif
 	// a screenshot request held by the pump is waiting for exactly these frames
-	if (!draw)	draw = XFinedMCP::WantsFrame();
+	if (!draw)	draw = GrizzlyMCP::WantsFrame();
 	if (draw && !m_Flags.is(flNeedQuit) && !m_AppClosed)
 	{
 		RealRedrawScene();
-		XFinedMCP::OnFramePresented();
+		GrizzlyMCP::OnFramePresented();
 	}
 
 	// The splash comes down once there is a frame to look at - or once the
@@ -1050,6 +1058,8 @@ bool TUI::Idle()
         Device->seqFrameMT.Process(rp_Frame);
     }
 	ProcessDeferredWork();
+	// a build's checks and its end do not wait for somebody to look at the window
+	EditorMod::JobTick();
 	// Notifications produced during this iteration are represented by their
 	// flags; draining the event avoids a stale wake on the next iteration.
 	if (m_FrameWakeEvent)
@@ -1139,15 +1149,15 @@ void TUI::OnDestroy()
 
 // A console allocated by the editor is a window of this process like any other:
 // untouched it wears the stock console icon and an empty title in the taskbar.
-static void XFinedBrandConsole()
+static void GrizzlyBrandConsole()
 {
-	::SetConsoleTitleA("XFined Editor");
+	::SetConsoleTitleA("Grizzly Editor");
 	const HWND con = ::GetConsoleWindow();
 	if (!con) return;
 	const HINSTANCE self = ::GetModuleHandle(NULL);
-	HICON big = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_XFINED_EDITOR), IMAGE_ICON,
+	HICON big = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_GRIZZLY_EDITOR), IMAGE_ICON,
 		::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_SHARED);
-	HICON small_ = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_XFINED_EDITOR), IMAGE_ICON,
+	HICON small_ = (HICON)::LoadImageA(self, MAKEINTRESOURCEA(IDI_GRIZZLY_EDITOR), IMAGE_ICON,
 		::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
 	if (big)	::SendMessageA(con, WM_SETICON, ICON_BIG, (LPARAM)big);
 	if (small_)	::SendMessageA(con, WM_SETICON, ICON_SMALL, (LPARAM)small_);
@@ -1348,18 +1358,18 @@ void TUI::ProgressCheckpoint()
 		m_LastProgressMessagePumpMs = now;
 		PumpProgressMessages();
 		SyncAppActivation();
-		XFinedMCP::PumpProgressRequests();
+		GrizzlyMCP::PumpProgressRequests();
 	}
 	// a screenshot asked for during the job waits for busy frames of its own, a background editor or not
-	const bool shot = XFinedMCP::WantsFrame();
+	const bool shot = GrizzlyMCP::WantsFrame();
 	if (!m_ProgressItems.empty() && (m_bAppActive || shot) &&
 		(!m_LastProgressPaintMs || now - m_LastProgressPaintMs >= (shot ? 16u : 100u)))
 	{
 		m_LastProgressPaintMs = now;
 		DrawProgressFrame();
-		XFinedMCP::OnFramePresented();
+		GrizzlyMCP::OnFramePresented();
 		if (shot)
-			XFinedMCP::PumpProgressRequests();
+			GrizzlyMCP::PumpProgressRequests();
 	}
 }
 
@@ -1442,7 +1452,7 @@ void TUI::ShowConsole()
 		AllocConsole();
 		m_HConsole = GetStdHandle(STD_OUTPUT_HANDLE);
 		SetConsoleTextAttribute(m_HConsole, 15);
-		XFinedBrandConsole();
+		GrizzlyBrandConsole();
 	}
 }
 
@@ -1490,6 +1500,7 @@ void TUI::OnDrawUI()
     UISoundEditorForm::Update();
     EDevice->seqDrawUI.Process(rp_DrawUI);
 	CommandPalette::Draw();
+	UIProgressCenter::DrawFloating();
 }
 
 // A blocking job: the frame without its panels - the caption, the status bar with the tasks chip, and the

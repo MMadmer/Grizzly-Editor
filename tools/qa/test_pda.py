@@ -20,7 +20,7 @@ What it proves:
      unsaved (the file untouched) and is never dropped without save= or discard=; a text that
      does not parse shows its line; nothing of the tab spills out of its window (ui_audit)
 
-    python tools/qa/test_pda.py --project D:\\XFinedProjects\\Test [--shots <folder>]
+    python tools/qa/test_pda.py --project <project> [--shots <folder>]
 """
 from __future__ import annotations
 
@@ -232,7 +232,7 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
 
 def run(project: str, shots: str | None) -> None:
     ed = Editor()
-    out_dir = tempfile.mkdtemp(prefix="xfined_pda_")
+    out_dir = tempfile.mkdtemp(prefix="grizzly_pda_")
     try:
         ed.start(project)
         manifest = mcp("mod_manifest")
@@ -414,7 +414,6 @@ def run(project: str, shots: str | None) -> None:
         # ------------------------------------------------------------ G: the bundled copies
         pairs = [
             ("gamedata/configs/pda/xms_pda_layout.script", "packaging/dead-air-x64/compatibility/gamedata/scripts/xms_pda_layout.script"),
-            ("gamedata/configs/pda/ui_xms_pda.dds", "packaging/dead-air-x64/compatibility/gamedata/textures/ui/ui_xms_pda.dds"),
             ("gamedata/configs/pda/ui_xms_pda.xml", "packaging/dead-air-x64/compatibility/gamedata/configs/ui/textures_descr/ui_xms_pda.xml"),
         ]
         if os.path.isdir(GAME_REPO):
@@ -440,7 +439,7 @@ def main() -> int:
         print("no such project: " + src)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_pdaproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_pdaproj_")
     copy = os.path.join(work, "QaPda")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git"))
     print("running against a copy: " + copy, flush=True)

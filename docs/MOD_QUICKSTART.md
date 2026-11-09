@@ -21,12 +21,20 @@ own (General, Mod Browser, Game Mode, Relations, Build Contents, PDA) and writes
 | `GitHub Repository` | Optional, `owner/repo` (a pasted repository URL is reduced to it). Written as `[update] github`; the game checks that repository's latest release for updates — see §4. |
 | **Target** (Game Mode page) | **Required.** Who gets the module's level work: **the ordinary game** = only when no campaign mode is active (Revolution II won't see it); **a mode already in the game** = only that campaign; **a NEW mode** = the campaign this module itself adds; **every game and every mode** = no gate at all — use only for things that belong everywhere. Without a choice the build refuses. |
 
-If you declare a **new mode**, the export also generates what puts it on the
-new-game screen: Dead Air: Refined lists it among the module modes by its title;
-the module's own layout (a checkbox, for a screen without that list), the text
-entry and `mode_register.script` come with every build.
-Those files are machinery, not content — the content browser hides them so you
-can't delete one by accident, and the export regenerates them every time.
+If you declare a **new mode**, that declaration is all it takes: Dead Air: Refined
+lists the mode among the module modes of the new-game screen by its title.
+
+## Bringing in a classic mod
+
+A mod made to be copied over `gamedata` can become a module. The mod changes for that, the game does not.
+
+1. Create a project and copy the mod's `gamedata` folder into it.
+2. Run `python tools/classic_mod/classic_to_module.py --project <project> --game <game>`, once. It removes what must not ship (the player's options, sources, files identical to the game's)
+   and turns the mod's whole-file configs and string tables into a list of what it really changes, so the game's newer sections stay.
+3. In Mod Settings, Game Mode, pick **Every game and mode**.
+4. Build. Turn the module off in the game's Mods menu or delete its folder under `modules`, and the game is as it was.
+
+A mod that changes the class of an existing item needs a new game while it is on.
 
 ## 2. Building
 
@@ -50,6 +58,37 @@ never ships; baking it would double the whole level in game. The label is
 visible per object and can be flipped: **Scene → Mark Selection as Mod Content /
 as Base Level**. Objects placed in scenes saved before this flag existed count
 as base — re-mark them once.
+
+**Taking a stock object out:** a spawn object of the base level (a barrel, a box,
+a lamp, a stock NPC) can be removed from the game without touching the level:
+tick **Mod → Removed from the game** in its properties (MCP: `mark_removed` on the
+selection). The object stays in the scene, and the build writes a remove op for it
+(`[obj:base:<level>/<name>] op = remove`, gated by the module's mode), so a new game
+of the mode starts without it. Level geometry is not a spawn object and cannot be
+removed this way; a save already carries its own copy, so it applies to new games.
+
+**The mod's own models:** an OGF in the project's `gamedata\meshes\` (with its DDS in
+`gamedata\textures\`) is a visual like any game one - name it without `meshes\` and the
+extension (`od\sign_pvz`) in Model\Visual. The viewport reads the project first, so the prop
+shows as placed; the build ships both folders in the module, and the game mounts them over its
+own. Fixed bones are checked against the model's bones: `all` becomes every bone, a name the
+model lacks is dropped with a warning (the game would assert `wrong fixed bone` the moment the
+object comes online).
+
+**Furnishing by MCP:** `view_mode helpers=false` draws spawn objects as models only (no
+restrictor shapes, cover gizmos, icons or labels) for clean screenshots; `scan_walls` is a
+horizontal lidar slice of the level's static geometry (walls, columns, stock furniture) over an
+area at one height; `probe_vertical` answers the ceiling and the floor over a point. Both pick
+the whole level, not only what the camera sees.
+
+**Lighting a place:** View > Game Lighting (MCP `game_lighting`, `view_mode preset=game`) lights
+the viewport the way the game will at an hour and weather of the linked game - the first night of
+a new game by default: the weather's ambient, sky and moon, every hanging lamp, burning campfire
+and dynamic level light near the camera, the game's tonemap adapted to the frame. Place lamps by
+looking at it. Two things it shows that the plain viewport hides: a lamp without Cast Shadow
+lights through walls and slabs in the game too (keep its range short of the floor below), and a
+stash box (`inventory_box`) has no physics at all - put an invisible collider physic object at
+its place if people should not walk through it.
 
 The build is a **mirror, not a merge**. Files the target holds and the project
 no longer has are deleted, so a stale file from an old build can never haunt
@@ -135,7 +174,7 @@ enabling and disabling never touches the module's own files.
 
 ## 4. Shipping it to other people
 
-**Mod → Package Release…** (MCP: `xfined_mod_package`) builds the module and
+**Mod → Package Release…** (MCP: `grizzly_mod_package`) builds the module and
 writes a release into `<project>\releases\<version>\`:
 
 | File | What it is |
@@ -157,7 +196,7 @@ just deleting that folder.
 game's Mods menu offers every later version, as long as the releases are on
 GitHub. The editor publishes them itself: **Publish Release** on the toolbar,
 next to **Build Mod** (also **Mod → Publish Release…**, MCP:
-`xfined_mod_publish`).
+`grizzly_mod_publish`).
 
 Once:
 
@@ -207,8 +246,8 @@ Browser…** (a free account at virustotal.com has one). A module the Mod Browse
 does not list is published without a scan.
 
 **The releases that are out.** **Releases** on the toolbar (**Mod → Releases**, a
-tab of its own; MCP: `xfined_mod_releases`, `xfined_mod_release_edit`,
-`xfined_mod_release_delete`) lists what the repository holds in a sortable table -
+tab of its own; MCP: `grizzly_mod_releases`, `grizzly_mod_release_edit`,
+`grizzly_mod_release_delete`) lists what the repository holds in a sortable table -
 Tag, Title, State, Published (local time), Files - drafts included, and marks the
 one release the game reads; the selected release's details sit beside it.
 **Edit…** changes the title and the notes of the selected release and nothing
@@ -269,7 +308,7 @@ Scene edits don't ship by themselves; they get baked into module files first.
 
 | Layer | Output | What it carries |
 |---|---|---|
-| **Spawn Layer** | `spawn\<level>.xspawn` | Placed objects — both raw `.ogf` props and gameplay spawn elements, the latter with their config section and their logic (`custom_data`). |
+| **Spawn Layer** | `spawn\<level>.xspawn` | Placed objects — both raw `.ogf` props and gameplay spawn elements, the latter with their config section and their logic (`custom_data`), plus what the section cannot hold: the model and its fixed bones, a restrictor's shapes, a smart cover's description (the animpoint an NPC takes), a hanging lamp's light (type, colour, brightness, range, cone, light bones, glow, ambient, animator) — so a lamp shines in game the way its properties say — and a remove op for every base object ticked **Mod → Removed from the game**. |
 | **Collision Overlay** | `levels\<level>\overlay.xcform` | Extra collision geometry. |
 | **Visual Overlay** | `levels\<level>\visuals\*.ogf` + `overlay_visuals.ltx` | Extra visible geometry. |
 | **Level Cut** | cut boxes in `overlay.xcform` | The selection used as volumes that *remove* base collision and visuals — replace a chunk of a stock level without editing a single base file. |
@@ -279,7 +318,7 @@ These write into the project. The next build ships them.
 ## 5a. Characters — the mod's own NPCs
 
 **Mod → Characters** (a tab) · content browser **Add → Character** ·
-`xfined_characters_write`
+`grizzly_characters_write`
 
 A story needs stalkers of its own. One `.npcasset` file per character:
 
@@ -301,20 +340,12 @@ return {
 }
 ```
 
-The build turns every character into the five files X-Ray wants and **appends**
-them to the game's lists instead of overwriting anything:
-
-| generated | what it is |
-|---|---|
-| `gamedata\configs\gameplay\character_desc_<module>.xml` | the character itself |
-| `gamedata\configs\gameplay\npc_profile_<module>.xml` | its profile, naming it outright so the engine cannot pick someone else |
-| `gamedata\configs\text\<lang>\<module>_npc.xml` | the name and the bio |
-| `gamedata\configs\xms\<module>_npc.ltx` | the spawn section and a one-man squad |
-| `patch\<module>_characters.ltxp` | `+files` / `+specific_characters_files` — `+` APPENDS |
-
-Nothing of the game and nothing of another module is touched. Delete the
-`.npcasset` and the next build takes all of that back out. The `.npcasset` itself
-stays in the project: it is the source, and the game reads what was generated.
+The `.npcasset` is all the module ships. The game reads it and makes the rest
+itself - the character, its profile naming it outright, the name and the bio, the
+spawn section, a one-man squad - and **adds** them to its lists: nothing of the game
+and nothing of another module is touched. Delete the `.npcasset` and the character
+is gone with the next build. The file holds plain values only: the game reads it as
+data and runs nothing in it.
 
 **The game knows the character as `<module>_<id>`**, and that one name is three
 things at once:
@@ -376,7 +407,11 @@ game does not list: the engine refuses a character of a community it does not
 know, so this one is only safe when the module brings that community itself;
 `W115` / `W116` / `W117` - a portrait, a dialog or a kit item neither the linked
 game nor the project has; an item the game does not know stops the game when the
-NPC spawns). The Characters tab shows each problem as a sentence under its
+NPC spawns). `E123` is a model of the linked game on a skeleton of its own: an
+NPC's damage section names bones of the stalker skeleton - the head and the face
+among them - and the game stops the moment the NPC comes online if one is
+missing (Clear Sky's Forester, `actors\stalker_lesnik\stalker_lesnik_1`, has no
+eyes and no jaw). The Characters tab shows each problem as a sentence under its
 field; `characters_write`, `characters_view` and the build keep the code.
 
 ### One kit, many characters
@@ -434,6 +469,41 @@ applied to the player only. A character that should look different is a
 different `visual` (a `base` with everything else shared is exactly the way to
 write that).
 
+### A trader
+
+A character can keep a shop - a courier hub's cook sells food, its medic sells medicine:
+
+```lua
+return {
+  npc   = 1,
+  id    = "cook",
+  name  = "Повар",
+  -- ...
+  trade = {
+    sells   = { "food" },                -- categories of the game's trade presets
+    buys    = { "food", "mutants" },     -- what it takes from the player
+    markup  = 1.2,                       -- asks 120% of an item's cost
+    pays    = 0.3,                       -- pays about a third of it
+    restock = 24,                        -- game hours until the stock is back
+    stock   = {
+      { section = "conserva", count = 6 },
+      { section = "bread", count = 4, chance = 0.8 },
+    },
+  },
+}
+```
+
+The categories are the linked game's own (`misc\trade\trade_presets.ltx`: `weapon`, `ammo`,
+`outfit`, `drugs`, `food`, `devices`, `mutants`, ...); the Characters tab offers them as ticks in
+its **Trade** section, the stock as a table like the Starting Kit's. The stock is always for
+sale; the categories add what the trader sells of whatever else it carries. The game makes its
+trade config of this and uses it whatever the NPC is doing - standing at a post by an order, walking a behaviour
+graph, placed in a level. `trade = false` takes a base's shop away from a character that starts
+from it. Problems: `E118` a stock row without an item, with less than one, a chance outside 0..1
+or twice; `E119` a markup that is not above zero, a price below nothing, a restock under an hour;
+`W120` a category the linked game does not have; `W121` a stock item it does not have; `W122` a
+trader with nothing to sell.
+
 **Renaming at run time** is a different thing and belongs to the quest:
 `npc.set_name` gives an NPC a name when the player learns it, and needs no
 profile at all.
@@ -442,7 +512,7 @@ profile at all.
 
 A quest is a node graph in its own file. Make one in the Content Browser —
 **Add → Quest** (the toolbar's [+ Add], or right-click the empty grid) — or over
-MCP with `xfined_quest_new`. Either way you get a working stub
+MCP with `grizzly_quest_new`. Either way you get a working stub
 (`trigger.start → flow.end`) and a tab of its own.
 
 Edit it whichever way suits you. The tab is an infinite canvas between two
@@ -453,14 +523,14 @@ quest's header, tasks and variables; the **Details** panel on the right edits th
 selected node and action, its rows built from the kind catalog the linked game
 ships. The
 file itself is plain declarative Lua (`return { … }`), so writing or patching it
-as text is a first-class path — `xfined_quest_get` hands back the canonical text
-plus a readable outline of the graph, `xfined_quest_write` replaces it whole,
-`xfined_quest_apply` does surgical edits. Node coordinates are optional; leave
-`pos` out and **Auto Layout** (or `xfined_quest_layout`) places everything.
+as text is a first-class path — `grizzly_quest_get` hands back the canonical text
+plus a readable outline of the graph, `grizzly_quest_write` replaces it whole,
+`grizzly_quest_apply` does surgical edits. Node coordinates are optional; leave
+`pos` out and **Auto Layout** (or `grizzly_quest_layout`) places everything.
 
 Validation runs as you edit; the toolbar's **Validate** opens the **Problems**
 drawer under the canvas — click a problem to jump to the node. Errors (`E…`) block, warnings (`W…`) do
-not. `xfined_quest_check_all` runs exactly the gate the build runs.
+not. `grizzly_quest_check_all` runs exactly the gate the build runs.
 
 Then press **Build** (`Ctrl+B`). If any quest in the project has an error the
 build **refuses** with `quest graph errors: N (see log)` and the log lists them
@@ -481,6 +551,27 @@ Test it in the game's console:
 Format reference, kind catalog and the meaning of every problem code:
 [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). The game-side contract lives in the
 engine repo as `docs/dead-air/NQ_RUNTIME.md`.
+
+### Global variables: what every quest of the module shares
+
+A story mod is many quests - one per job, one per chain - and they have to know about each
+other: which night it is, whether the cook's chain was finished, how many clues the player holds.
+A quest's own `vars` are its alone; the module's **global variables** are everybody's:
+
+```ini
+; mod.ltx
+[vars]
+night       = 0
+cook_done   = false
+suspect     = "nobody"
+```
+
+In the graph tab they sit in the Variables pane under **Global** - add, rename, type and default,
+saved into `mod.ltx` as you edit (MCP: `grizzly_mod_set_manifest vars=`). Any quest or behaviour
+graph writes them with `global.set` / `global.add`, waits on them with the `global` condition
+(`trigger.when`, `wait.when`, a branch), and shows one with `{global:suspect}` in a text. A save
+keeps their values; a new game starts from the defaults. Naming one the manifest does not declare
+is `E030`. Keep unrelated jobs in files of their own and let them talk through these.
 
 ### Staging a scene: put it there, take it away
 
@@ -523,8 +614,8 @@ a dead id.
 
 ## 6a. NPC behaviour graphs
 
-**Content browser → Add → Behaviour Graph** · `xfined_quest_new` with a
-`.behasset` path · `xfined_quest_write`
+**Content browser → Add → Behaviour Graph** · `grizzly_quest_new` with a
+`.behasset` path · `grizzly_quest_write`
 
 A quest tracks the player; a **behaviour graph** drives NPCs. It is its own
 asset - a `.behasset`, its own icon, its own tab - on the node graph you
@@ -594,14 +685,14 @@ Full reference: `docs/nq/NQ_FORMAT.md` §10.
 
 ## 6b. The mode's world - an empty map of your own
 
-**Mod → World Rules** (a tab) · `xfined_world_get` / `xfined_world_set` /
-`xfined_world_transitions` · Spawn tool → **Player Start** · a stalker's
-**Order** properties · `xfined_spawn_order`
+**Mod → World Rules** (a tab) · `grizzly_world_get` / `grizzly_world_set` /
+`grizzly_world_transitions` · Spawn tool → **Player Start** · a stalker's
+**Order** properties · `grizzly_spawn_order`
 
 A story mod on one map wants the map to itself. Say: only НИИ Агропром (and its
-underground), the player starts at your spot, nobody of the game walks around,
-your own NPCs are placed and ordered about, and the story swaps them as it goes.
-That is four settings and no code.
+underground), the player starts at your spot with the kit you gave, nobody of the
+game walks around, your own NPCs are placed and ordered about, and the story swaps
+them as it goes. That is five settings and no code.
 
 **1. Nothing of the original game.** Mod → World Rules, *Original Game*: untick
 **Keep** where the mode does not keep it, or press **Empty World...** on the tab's
@@ -632,7 +723,15 @@ or close the whole level. A quest opens them later (`world.transition`,
 turn it - the arrow is where the player faces. One per module. The new game
 begins there, whatever faction the player picked.
 
-**4. Your NPCs.** Place stalkers of your characters with the Spawn tool. Each
+**4. What the player starts with.** World Rules, *Starting Kit* → **Set a
+Starting Kit**: it begins as the game's own base kit (the torch, the knife, the
+binoculars) and you change it from there - items with a count, the money, and
+whether the perks picked on the new-game screen stay. A new game of your mode then
+begins with exactly that: the loadout and the extra kits the screen handed out are
+taken away, while the PDA and the bolt always stay. `mod.ltx [start_kit]`,
+`grizzly_world_set` `start_kit` / `start_money` / `start_perks`.
+
+**5. Your NPCs.** Place stalkers of your characters with the Spawn tool. Each
 one's Properties have an **Order** group: *Guard* (holds the spot, optionally
 watching a way path), *Patrol* (walks a way path you drew with the WayPoint
 tool), *Wander* (roams around its spawn), *Follow* (the player or a story id),
@@ -668,14 +767,15 @@ working; two modules that both place a Player Start are reported, not silently
 merged. The rules take effect on a new game - a save keeps the world it began
 with.
 
-The build refuses a second Player Start (`E201`) and more than three player
-choices (`E202`), and warns about a level or a transition the linked game does
-not have, and about an area the Player Start is not in (`W203`-`W206`).
+The build refuses a second Player Start (`E201`), more than three player
+choices (`E202`) and a start kit row it cannot use (`E207`), and warns about a
+level or a transition the linked game does not have, about an area the Player
+Start is not in (`W203`-`W206`) and about a kit item the linked game lacks (`W208`).
 
 ## 6c. The PDA interface - your own app in the PDA
 
 **Mod → PDA Interface** · Content browser → **Add → PDA Interface** ·
-`xfined_pda_*`
+`grizzly_pda_*`
 
 Your mod can put its own screens into the PDA: a courier app, a hacked military
 terminal, a scanner - pages, buttons, lists, pop-up menus, and the live map
@@ -689,7 +789,7 @@ can show any stock section.
    fonts. Click through it - buttons, tabs, lists and menus work as in the game;
    a quest signal or a script call shows as a note and goes into the action log.
 2. Edit the file (the toolbar's **Source** pane → Apply (`Ctrl+Enter`) / Save, any
-   text editor, or an AI agent with `xfined_pda_write`): the tab follows the file
+   text editor, or an AI agent with `grizzly_pda_write`): the tab follows the file
    unless the Source pane holds edits, and never drops those without asking. The format is
    `docs/pda/PDA_FORMAT.md` - a canvas of 960x680, `chrome` under every page,
    `pages`, an `overlay` on top, widgets `rect`, `image`, `text`, `button`,
@@ -711,6 +811,53 @@ Things that bite: Dead Air's fonts draw `—` and `–` blank and have no `→` 
 `letterica25` is as small as `letterica16` in Dead Air - headers want
 `graffiti22` or `graffiti32`.
 
+## 6d. Console commands - your own commands in the game console
+
+**Mod → Mod Settings → Commands** · `grizzly_mod_commands`
+
+A mod can add console commands: a status line for the player, a switch for you
+while you test, a cheat for your testers. A command is a name the player types and
+a Lua function of your project's `gamedata\scripts` that the game calls:
+
+```ini
+; mod.ltx
+[commands]
+my_status      = my_mod.status
+
+[command.my_status]
+help        = The courier's night, money and debt
+args        = [all]
+```
+
+```lua
+-- gamedata\scripts\my_mod.script
+function status(args, module, command)   -- args: what was typed after the name ("" when nothing)
+	local words = xms.command_args(args)  -- 'a "b c"' -> { "a", "b c" }
+	if not (db.actor) then return "No game is running." end
+	return "Money: " .. db.actor:money()   -- a returned string is printed, line by line
+end
+```
+
+1. **Add Command** on the Commands page: the **Name** (`a-z`, `0-9`, `_`), the
+   **Function** (`<script>.<function>` - the chevron lists every function of your
+   scripts), the **Help** line the console's `help` shows, the **Arguments** hint and
+   **Cheat** (the command runs only when the game was started with `-dbg`).
+2. Save, build, start the game: the command is in the console (`help`, Tab completes it).
+   It exists in every game and in the main menu while the module is installed, so the
+   function checks itself whether its world is there (`db.actor`, `xms.mode_active`).
+3. A Lua error does not crash the game: the console prints it with the stack. Texts
+   may be UTF-8 or cp1251.
+
+A name the game already has, or that a module loading before yours took, is
+refused by the game with a line in its log - pick names with your mod's prefix. The
+page and the build check it: a bad name (`E401`), a name twice (`E402`), a function
+that is not `<script>.<function>` (`E403`) or that your scripts do not define
+(`E404` - the check looks for `function name(` or `name = function(`; a `local
+function` is not reachable), a `[command.<name>]` without its line (`E405`) and a
+command of the game (`E406`) stop the build; a name of one of the game's own families
+(`g_`, `r2_`, `xms_` ...: `W406`), one another module of the linked game declares
+(`W407`) and help text outside cp1251 (`W408`) are warnings.
+
 ## 7. When the build refuses
 
 | Message | Fix |
@@ -722,6 +869,8 @@ Things that bite: Dead Air's fonts draw `—` and `–` blank and have no `→` 
 | `quest graph errors: N (see log)` | Open the log, fix the listed `E…` codes — see [docs/nq/NQ_FORMAT.md](nq/NQ_FORMAT.md). |
 | `E201 world: N Player Starts` | A module has one Player Start - delete the others (the message names them and their levels). |
 | `E202 world: N rules offered to the player` | Mod → World Rules: the new-game screen has room for three *Player Decides* ticks. |
+| `E207 world: a start kit row ...` | Mod → World Rules, *Starting Kit*: every row names one item with a count of at least 1, and an item has one row. |
+| `E401`-`E406 commands: '<name>' ...` | Mod → Mod Settings, *Commands*: a name of `a-z 0-9 _` that the game does not have, declared once, calling a `<script>.<function>` your `gamedata\scripts` define. |
 | `a release needs an orderable version` | Package Release only: set `version` to 1-4 numbers separated by dots (`1.2.0`). |
 | `package … is N bytes - GitHub refuses a release asset of 2 GiB and more` | Package Release only: one file is too big to ship as a GitHub asset even alone. The message names it. |
 

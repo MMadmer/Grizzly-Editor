@@ -7,10 +7,10 @@
 // tags (6.2) and the VirusTotal verdict (11). The submission - the checks and the issue - is
 // EditorCatalogSubmit; the author's VirusTotal scan is EditorVirusTotal.
 //
-// A key is a FILE the author keeps, never a secret of this computer: Documents\XFined Editor\
+// A key is a FILE the author keeps, never a secret of this computer: Documents\Grizzly Editor\
 // Keys\author.xkey unless the author picks another place, never inside a project. The editor
 // remembers where it is and asks for its password once per session. A -qa_github run keeps
-// both in XFINED_CATALOG_HOME instead, so a test never meets the author's own key.
+// both in GRIZZLY_CATALOG_HOME instead, so a test never meets the author's own key.
 
 namespace EditorCatalog
 {
@@ -111,6 +111,8 @@ namespace EditorCatalog
 	// Any picture (PNG, JPG, TGA, BMP) to the thumbnail the game takes: the middle square,
 	// scaled to 256, DXT1 (DXT5 when the picture has transparency), every mip level.
 	ECORE_API bool		MakeThumbnail	(LPCSTR image, LPCSTR dds, xr_string& err);
+	// any picture as a .dds of its own size for a module's screen (the next multiple of four, DXT1 or DXT5)
+	ECORE_API bool		MakeScreenPicture	(LPCSTR image, LPCSTR dds, xr_string& err);
 
 	// MOD_CATALOG 11: the policy of the catalog index's [virustotal] section and the verdict
 	struct SVtPolicy

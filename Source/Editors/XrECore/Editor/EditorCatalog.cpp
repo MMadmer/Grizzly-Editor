@@ -304,14 +304,14 @@ xr_string DocumentsFolder()
 	return out;
 }
 
-// Documents\XFined Editor holds the author's key and remembers where it is: a setting of this
+// Documents\Grizzly Editor holds the author's key and remembers where it is: a setting of this
 // Windows user, never of a project. A -qa_github run is pointed elsewhere, so a test that makes
 // keys never replaces the author's remembered one.
 xr_string HomeFolder()
 {
 	static const bool qa = 0 != strstr(::GetCommandLineA(), "-qa_github");
-	const xr_string home = qa ? EnvText("XFINED_CATALOG_HOME") : xr_string();
-	return home.empty() ? DocumentsFolder() + "\\XFined Editor" : home;
+	const xr_string home = qa ? EnvText("GRIZZLY_CATALOG_HOME") : xr_string();
+	return home.empty() ? DocumentsFolder() + "\\Grizzly Editor" : home;
 }
 
 xr_string SettingsPath() { return HomeFolder() + "\\catalog.ltx"; }
@@ -330,7 +330,7 @@ void RememberKeyPath(LPCSTR path)
 {
 	const xr_string file = SettingsPath();
 	MakeFolders(file.c_str());
-	const xr_string text = xr_string("; XFined Editor: where this Windows user's Mod Browser author key file is\r\n[author]\r\nkey = ") +
+	const xr_string text = xr_string("; Grizzly Editor: where this Windows user's Mod Browser author key file is\r\n[author]\r\nkey = ") +
 		path + "\r\n";
 	::DeleteFileA(file.c_str());
 	WriteNewFile(file.c_str(), text);
@@ -373,7 +373,7 @@ xr_string Field(const xr_string& text, LPCSTR name)
 
 bool ParseKeyFile(const xr_string& text, SKeyFile& out, xr_string& err)
 {
-	if (0 != text.compare(0, 9, "xms-key 1"))		{ err = "not an XFined key file"; return false; }
+	if (0 != text.compare(0, 9, "xms-key 1"))		{ err = "not an Grizzly key file"; return false; }
 	out.public_text = Field(text, "public");
 	if (0 != out.public_text.compare(0, 5, "p256:"))	{ err = "the key file names no public key"; return false; }
 	if (!UnB64u(Field(text, "private"), out.private_raw) || out.private_raw.size() != 32)
@@ -961,7 +961,7 @@ bool EditorCatalog::PathAllowed(LPCSTR path, xr_string& why)
 	for (size_t i = 0; i < extension.size(); ++i)
 		if (extension[i] >= 'A' && extension[i] <= 'Z') extension[i] = char(extension[i] - 'A' + 'a');
 	static const char* allowed[] = { "ltx", "ltxp", "xml", "xmlp", "script", "txt", "md", "json", "csv", "ini", "cfg",
-		"seq", "nqasset", "behasset", "pdaasset", "xspawn", "xcform", "dds", "thm", "ogg", "ogm", "ogf", "omf", "skl",
+		"seq", "gif", "mp4", "webm", "wmv", "html", "htm", "css", "png", "jpg", "jpeg", "nqasset", "behasset", "npcasset", "pdaasset", "xspawn", "xcform", "dds", "thm", "ogg", "ogm", "ogf", "omf", "skl",
 		"skls", "anm", "ppe", "xr", "ps", "vs", "gs", "hs", "ds", "cs", "h", "hlsl", "s", "spawn", "graph", "ai", "gct",
 		"cform", "details", "env_mod", "fog_vol", "game", "geom", "geomx", "hom", "ps_static", "snd_env", "snd_static",
 		"som", "sectors", "wallmarks", "lanims" };
@@ -1305,6 +1305,41 @@ bool EditorCatalog::ValidThumbnail(const void* data, size_t size)
 		expected += size_t(blocks) * blocks * block;
 	}
 	return size == expected;
+}
+
+bool EditorCatalog::MakeScreenPicture(LPCSTR image, LPCSTR dds, xr_string& err)
+{
+	int w = 0, h = 0, channels = 0;
+	stbi_uc* pixels = image ? stbi_load(image, &w, &h, &channels, 4) : 0;
+	if (!pixels || w < 1 || h < 1)
+	{
+		if (pixels) stbi_image_free(pixels);
+		err = xr_string("can't read the picture ") + (image ? image : "") + " (PNG, JPG, TGA or BMP)";
+		return false;
+	}
+	// DXT works in blocks of four: a size that is no multiple of it grows to the next that is
+	const u32 target_w = (u32(w) + 3) & ~3u, target_h = (u32(h) + 3) & ~3u;
+	xr_vector<u32> data(size_t(target_w) * target_h);
+	bool alpha = false;
+	for (u32 y = 0; y < target_h; ++y)
+		for (u32 x = 0; x < target_w; ++x)
+		{
+			const stbi_uc* p = pixels + (size_t(y * u32(h) / target_h) * w + x * u32(w) / target_w) * 4;
+			alpha |= p[3] < 250;
+			data[size_t(y) * target_w + x] = (u32(p[3]) << 24) | (u32(p[0]) << 16) | (u32(p[1]) << 8) | u32(p[2]);
+		}
+	stbi_image_free(pixels);
+
+	STextureParams tp;
+	tp.fmt = alpha ? STextureParams::tfDXT5 : STextureParams::tfDXT1;
+	tp.width = target_w;
+	tp.height = target_h;
+	tp.type = STextureParams::ttImage;
+	tp.flags.set(STextureParams::flGenerateMipMaps, FALSE);
+	tp.flags.set(STextureParams::flHasAlpha, alpha);
+	::DeleteFileA(dds);
+	if (!ImageLib.MakeGameTexture(dds, data.data(), tp)) { err = "the DXT compressor failed"; return false; }
+	return true;
 }
 
 bool EditorCatalog::MakeThumbnail(LPCSTR image, LPCSTR dds, xr_string& err)

@@ -2,6 +2,7 @@
 #include "NqPickers.h"
 #include "NqUtil.h"
 #include "NqDoc.h"
+#include "../EditorModManifest.h"
 #include "NqValidate.h"
 #include "NqItemCaps.h"
 #include "../EditorGameContent.h"
@@ -1295,7 +1296,7 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 	NqUtil::ArgString(raw, "path", path);
 	int limit = NqUtil::ArgInt(raw, "limit", 50);
 	if (limit <= 0) limit = 50;
-	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, ref_name, node_id, quest_id, behaviour_id, role, way_path, character_id, level_changer)"); return; }
+	if (type.empty()) { NqUtil::JsonError(out, "missing 'type' (item_section, squad_section, level, smart, story_id, profile, community, info, spot_type, task_id, var_name, global_name, ref_name, node_id, quest_id, behaviour_id, role, way_path, character_id, level_changer)"); return; }
 
 	xr_vector<SEntry> doc_entries;
 	const EType t = TypeFromName(type.c_str());
@@ -1320,6 +1321,16 @@ void NqPickers::McpLookup(LPCSTR raw, xr_string& out)
 		else if (type == "way_path")
 		{
 			SceneWayPaths(doc_entries);
+		}
+		else if (type == "global_name")
+		{
+			// the module's global variables, the default as the caption
+			const xr_vector<EditorMod::SGlobalVar>& globals = EditorMod::ProjectGlobals();
+			for (u32 i = 0; i < globals.size(); ++i)
+			{
+				SEntry e; e.id = globals[i].name; e.name = globals[i].value; e.extra = "mod.ltx [vars]";
+				doc_entries.push_back(e);
+			}
 		}
 		else if (type == "character_id")
 		{

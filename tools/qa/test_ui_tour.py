@@ -7,7 +7,7 @@ The 35 issues of the audit (audit_live.json, #1-#35) each get one MCP assertion 
 A surface the project cannot show (no GitHub repository for Releases, no PDA layout) is SKIP, not FAIL. The ini files
 the editor writes when it closes (_projects.ini, level.ini, level_imgui.ini) come back byte for byte.
 
-    python tools/qa/test_ui_tour.py --project D:\\XFinedProjects\\Test --shots <folder>
+    python tools/qa/test_ui_tour.py --project <project> --shots <folder>
         [--sizes max,small] [--only 5,16,26] [--before]
 
 --before takes the shots and reports, and never fails: the "before" pictures of a change.
@@ -615,7 +615,7 @@ def main() -> int:
     if not os.path.isdir(src):
         print("no such project: " + src)
         return 2
-    work = tempfile.mkdtemp(prefix="xfined_tourproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_tourproj_")
     copy = os.path.join(work, "QaTour")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", "releases", "temp"))
     print("running against a copy: " + copy, flush=True)

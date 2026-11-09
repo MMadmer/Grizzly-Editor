@@ -13,7 +13,7 @@ What it proves:
   E  shortcuts: list, set (moved from the command that had it), clear - and every shortcut is back as it was
   F  the editor's preferences file and layout come back byte for byte
 
-    python tools/qa/test_properties.py --project D:\\XFinedProjects\\Test
+    python tools/qa/test_properties.py --project <project>
 
 The project must have the Escape scene (rawdata\\levels\\l01_escape.level), as test_world.py does: a project without it
 is refused at once, and a scene that does not open ends the run.
@@ -259,7 +259,7 @@ def main() -> int:
     if not os.path.isfile(os.path.join(src, "rawdata", "levels", "l01_escape.level")):
         print("the project has no rawdata\\levels\\l01_escape.level: " + src)
         return 2
-    work = tempfile.mkdtemp(prefix="xfined_propsproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_propsproj_")
     copy = os.path.join(work, "QaProperties")
     shutil.copytree(src, copy)
     print("running against a copy: " + copy, flush=True)

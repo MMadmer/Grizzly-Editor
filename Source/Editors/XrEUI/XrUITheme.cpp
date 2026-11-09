@@ -4,10 +4,10 @@
 
 namespace
 {
-using XFinedTheme::ColorToken;
+using GrizzlyTheme::ColorToken;
 
 bool g_MultiViewport = false;
-XFinedTheme::Preset g_Current = XFinedTheme::Preset::XFinedPurple;
+GrizzlyTheme::Preset g_Current = GrizzlyTheme::Preset::GrizzlyPurple;
 
 // rgb plus an 8-bit alpha in the top byte; 0 there means opaque, so the table stays readable
 using Palette = u32[u32(ColorToken::Count)];
@@ -33,9 +33,9 @@ const Palette kPurple =
 // Graphite changes the accent family only
 Palette kGraphite;
 
-const u32* PaletteFor(XFinedTheme::Preset preset)
+const u32* PaletteFor(GrizzlyTheme::Preset preset)
 {
-	if (preset != XFinedTheme::Preset::Graphite)
+	if (preset != GrizzlyTheme::Preset::Graphite)
 		return kPurple;
 	if (!kGraphite[0])
 	{
@@ -242,13 +242,13 @@ void XUI::Hooks::RebuildStyle()
 		Build();
 }
 
-void XFinedTheme::Initialize(bool multi_viewport)
+void GrizzlyTheme::Initialize(bool multi_viewport)
 {
 	g_MultiViewport = multi_viewport;
 	Apply(g_Current);
 }
 
-void XFinedTheme::Apply(Preset preset)
+void GrizzlyTheme::Apply(Preset preset)
 {
 	if (!IsValid(u32(preset)))
 		preset = Default();
@@ -263,22 +263,22 @@ void XFinedTheme::Apply(Preset preset)
 		Build();
 }
 
-XFinedTheme::Preset XFinedTheme::Current()
+GrizzlyTheme::Preset GrizzlyTheme::Current()
 {
 	return g_Current;
 }
 
-XFinedTheme::Preset XFinedTheme::Default()
+GrizzlyTheme::Preset GrizzlyTheme::Default()
 {
-	return Preset::XFinedPurple;
+	return Preset::GrizzlyPurple;
 }
 
-bool XFinedTheme::IsValid(u32 preset)
+bool GrizzlyTheme::IsValid(u32 preset)
 {
 	return preset < u32(Preset::Count);
 }
 
-bool XFinedTheme::TryParse(LPCSTR value, Preset& preset)
+bool GrizzlyTheme::TryParse(LPCSTR value, Preset& preset)
 {
 	if (!value || !value[0])
 		return false;
@@ -294,37 +294,37 @@ bool XFinedTheme::TryParse(LPCSTR value, Preset& preset)
 	return false;
 }
 
-LPCSTR XFinedTheme::Key(Preset preset)
+LPCSTR GrizzlyTheme::Key(Preset preset)
 {
 	switch (preset)
 	{
-	case Preset::XFinedPurple:	return "xfined-purple";
+	case Preset::GrizzlyPurple:	return "grizzly-purple";
 	case Preset::Graphite:		return "graphite";
-	default:					return "xfined-purple";
+	default:					return "grizzly-purple";
 	}
 }
 
-LPCSTR XFinedTheme::Name(Preset preset)
+LPCSTR GrizzlyTheme::Name(Preset preset)
 {
 	switch (preset)
 	{
-	case Preset::XFinedPurple:	return "XFined Purple";
+	case Preset::GrizzlyPurple:	return "Grizzly Purple";
 	case Preset::Graphite:		return "Graphite";
-	default:					return "XFined Purple";
+	default:					return "Grizzly Purple";
 	}
 }
 
-u32 XFinedTheme::Rgb(ColorToken token)
+u32 GrizzlyTheme::Rgb(ColorToken token)
 {
 	return token < ColorToken::Count ? PaletteFor(g_Current)[u32(token)] & 0xffffff : PaletteFor(g_Current)[u32(ColorToken::Text)] & 0xffffff;
 }
 
-ImVec4 XFinedTheme::Vec4(ColorToken token, float alpha)
+ImVec4 GrizzlyTheme::Vec4(ColorToken token, float alpha)
 {
 	return Col(PaletteFor(g_Current), token < ColorToken::Count ? token : ColorToken::Text, alpha);
 }
 
-ImU32 XFinedTheme::U32(ColorToken token, float alpha)
+ImU32 GrizzlyTheme::U32(ColorToken token, float alpha)
 {
 	return ImGui::ColorConvertFloat4ToU32(Vec4(token, alpha));
 }

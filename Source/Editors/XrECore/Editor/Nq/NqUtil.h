@@ -37,7 +37,7 @@ namespace NqUtil
 	ECORE_API void		JsonError		(xr_string& out, const xr_string& message);
 
 	// -- request arguments (raw MCP request line) --------------------------------
-	// XFinedMCP::GetArg reads quoted strings; these read bare numbers/bools
+	// GrizzlyMCP::GetArg reads quoted strings; these read bare numbers/bools
 	ECORE_API bool		ArgBool			(LPCSTR raw, LPCSTR field, bool def);
 	ECORE_API int		ArgInt			(LPCSTR raw, LPCSTR field, int def);
 	ECORE_API bool		ArgFloat		(LPCSTR raw, LPCSTR field, float& out);

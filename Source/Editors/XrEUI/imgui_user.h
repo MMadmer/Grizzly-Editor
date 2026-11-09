@@ -19,14 +19,14 @@ namespace ImGui
     IMGUI_API void RequestPopupModalClose(const char* name);
     IMGUI_API bool ArrowButton(const char* str_id, ImGuiDir dir, ImVec2 size, ImGuiButtonFlags flags);
 }
-// XFined Editor: px a dock node's tab bar is taller than a frame (the panel tab strip is 26 pt). The dockspace submits its
+// Grizzly Editor: px a dock node's tab bar is taller than a frame (the panel tab strip is 26 pt). The dockspace submits its
 // tab bars with that much more FramePadding.y; a docked window's title bar, which is that tab bar, takes it in imgui.cpp.
 extern IMGUI_API float GImGuiDockTabBarExtra;
-// XFined Editor: set by the theme (XrUITheme.cpp). ImGui's arrows - the combo button, a tree node, a submenu, a
+// Grizzly Editor: set by the theme (XrUITheme.cpp). ImGui's arrows - the combo button, a tree node, a submenu, a
 // sorted column - are drawn by it in their box (centre and side in px) instead of as a solid triangle; null keeps
 // ImGui's triangle.
 typedef void (*ImGuiRenderArrowFn)(ImDrawList* draw_list, ImVec2 center, float side, ImU32 col, ImGuiDir dir);
 extern IMGUI_API ImGuiRenderArrowFn GImGuiRenderArrow;
-// XFined Editor: set by the theme (XrUITheme.cpp). Where a drag's value sits in its frame, 0 left .. 1 right, inside the
+// Grizzly Editor: set by the theme (XrUITheme.cpp). Where a drag's value sits in its frame, 0 left .. 1 right, inside the
 // frame padding; ImGui centres it (0.5).
 extern IMGUI_API float GImGuiDragTextAlignX;

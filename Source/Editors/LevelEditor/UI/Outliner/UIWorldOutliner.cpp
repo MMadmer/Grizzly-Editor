@@ -5,7 +5,7 @@ UIWorldOutliner* UIWorldOutliner::Form = nullptr;
 
 namespace
 {
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
 // pt: rows, the indent of a level and the glyph of a row
 constexpr float kRowH = 22.f;
@@ -1082,14 +1082,14 @@ void UIWorldOutliner::DrawObjectCells(CCustomObject* obj, float x, float top, fl
 {
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	XUI::DrawIcon(dl, ToolClassIcon(obj->FClassID), ImVec2(Round(x), Round(top + XUI::Pt(kRowH - kRowIcon) * .5f)), kRowIcon,
-		XFinedTheme::U32(dim ? Token::TextDisabled : Token::TextSecondary));
+		GrizzlyTheme::U32(dim ? Token::TextDisabled : Token::TextSecondary));
 	x += XUI::Pt(kRowIcon + 6.f);
 	ImGui::SetCursorScreenPos(ImVec2(x, TextY(top)));
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(dim ? Token::TextSecondary : Token::Text));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(dim ? Token::TextSecondary : Token::Text));
 	XUI::TextEllipsis(obj->GetName(), _max(0.f, cell_right - x));
 	ImGui::PopStyleColor();
 
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextSecondary));
 	if (ImGui::TableSetColumnIndex(2))
 	{
 		ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, TextY(top)));
@@ -1174,10 +1174,10 @@ bool UIWorldOutliner::DrawGroupRow(SGroup& g, bool open, float& row_top)
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	const float cy = cell.y + row_h * .5f;
 	XUI::DrawIcon(dl, open ? XUI::Icon::ChevronDown : XUI::Icon::ChevronRight, ImVec2(Round(cell.x), Round(cy - XUI::Pt(6.f))), 12.f,
-		XFinedTheme::U32(Token::TextSecondary));
+		GrizzlyTheme::U32(Token::TextSecondary));
 	float x = cell.x + XUI::Pt(16.f);
 	XUI::DrawIcon(dl, ToolClassIcon(g.cls), ImVec2(Round(x), Round(cy - XUI::Pt(kRowIcon) * .5f)), kRowIcon,
-		XFinedTheme::U32(class_visible ? Token::TextSecondary : Token::TextDisabled));
+		GrizzlyTheme::U32(class_visible ? Token::TextSecondary : Token::TextDisabled));
 	x += XUI::Pt(kRowIcon + 6.f);
 
 	char count[48];
@@ -1189,12 +1189,12 @@ bool UIWorldOutliner::DrawGroupRow(SGroup& g, bool open, float& row_top)
 	{
 		XUI::FontScope strong(XUI::Font::Strong);
 		ImGui::SetCursorScreenPos(ImVec2(x, TextY(cell.y)));
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(class_visible ? Token::Text : Token::TextSecondary));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(class_visible ? Token::Text : Token::TextSecondary));
 		XUI::TextEllipsis(ToolClassTitle(g.cls), _max(0.f, right - x - count_w - XUI::Pt(6.f)));
 		ImGui::PopStyleColor();
 	}
 	ImGui::SameLine(0.f, XUI::Pt(6.f));
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextMuted));
 	ImGui::TextUnformatted(count);
 	ImGui::PopStyleColor();
 	return clicked;
@@ -1272,7 +1272,7 @@ void UIWorldOutliner::DrawHierarchyRow(int row, const SHierarchyRow& item)
 		ImGui::EndDisabled();
 		XUI::DrawIcon(ImGui::GetWindowDrawList(), expanded ? XUI::Icon::ChevronDown : XUI::Icon::ChevronRight,
 			ImVec2(Round(x + XUI::Pt(2.f)), Round(cell.y + (row_h - XUI::Pt(12.f)) * .5f)), 12.f,
-			XFinedTheme::U32(filtering ? Token::TextDisabled : Token::TextSecondary));
+			GrizzlyTheme::U32(filtering ? Token::TextDisabled : Token::TextSecondary));
 		ImGui::SetCursorScreenPos(cell);
 	}
 
@@ -1335,7 +1335,7 @@ void UIWorldOutliner::DrawFiltersMenu()
 	ImGui::Separator();
 
 	bool hierarchy_filter_changed = false;
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextSecondary));
 	ImGui::AlignTextToFramePadding();
 	ImGui::TextUnformatted("Object Types");
 	ImGui::PopStyleColor();
@@ -1372,7 +1372,7 @@ void UIWorldOutliner::DrawFiltersMenu()
 		char count[16];
 		sprintf_s(count, "%d", int(g.objects.size()));
 		ImGui::SameLine();
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextMuted));
 		ImGui::TextUnformatted(count);
 		ImGui::PopStyleColor();
 		ImGui::PopID();
@@ -1435,8 +1435,8 @@ void UIWorldOutliner::DrawToolbar()
 			const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, text);
 			const ImVec2 c(max.x - XUI::Pt(3.f), min.y + XUI::Pt(3.f));
 			ImDrawList* dl = ImGui::GetWindowDrawList();
-			dl->AddCircleFilled(c, _max(XUI::Pt(7.f), ts.x * .5f + XUI::Pt(3.f)), XFinedTheme::U32(Token::Accent));
-			dl->AddText(font, size, ImVec2(Round(c.x - ts.x * .5f), Round(c.y - ts.y * .5f)), XFinedTheme::U32(Token::Text), text);
+			dl->AddCircleFilled(c, _max(XUI::Pt(7.f), ts.x * .5f + XUI::Pt(3.f)), GrizzlyTheme::U32(Token::Accent));
+			dl->AddText(font, size, ImVec2(Round(c.x - ts.x * .5f), Round(c.y - ts.y * .5f)), GrizzlyTheme::U32(Token::Text), text);
 		}
 	}
 	if (filters || XUI::Shell::TakePopup("outliner_filters"))
@@ -1472,7 +1472,7 @@ void UIWorldOutliner::DrawFooter(int shown, int selected)
 	const float bottom = ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - ImGui::GetStyle().WindowPadding.y - ImGui::GetTextLineHeight();
 	const ImVec2 at = ImGui::GetCursorScreenPos();
 	ImGui::SetCursorScreenPos(ImVec2(at.x, _max(at.y, bottom)));
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(Token::TextMuted));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(Token::TextMuted));
 	XUI::TextEllipsis(text);
 	ImGui::PopStyleColor();
 }
@@ -1620,7 +1620,7 @@ void UIWorldOutliner::Draw()
 						const float s = XUI::Pt(kRowIcon);
 						XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Eye,
 							ImVec2(Round((min.x + max.x - s) * .5f), Round((min.y + max.y - s) * .5f)), kRowIcon,
-							XFinedTheme::U32(Token::TextMuted));
+							GrizzlyTheme::U32(Token::TextMuted));
 						XUI::Tip("Visibility in the viewport");
 					}
 					ImGui::PopID();

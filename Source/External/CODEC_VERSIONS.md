@@ -1,6 +1,6 @@
 # Vendored codec sources
 
-This manifest records the exact upstream material vendored for the XFined Editor Windows build. Release archives were verified before extraction, and only library sources, headers, and licenses are retained.
+This manifest records the exact upstream material vendored for the Grizzly Editor Windows build. Release archives were verified before extraction, and only library sources, headers, and licenses are retained.
 
 | Component | Version | Authoritative source | SHA-256 | License |
 | --- | --- | --- | --- | --- |

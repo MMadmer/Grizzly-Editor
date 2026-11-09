@@ -2,9 +2,9 @@
 #include "UITitleBar.h"
 #include "..\..\XrECore\Editor\EditorTitleBar.h"
 #include "..\..\XrECore\Editor\EditorProject.h"
-#include "..\..\XrECore\Editor\XFinedMCP.h"
+#include "..\..\XrECore\Editor\GrizzlyMCP.h"
 #include "..\..\XrEUI\XrUITheme.h"
-#include "..\..\Public\xfined_resource.h"
+#include "..\..\Public\grizzly_resource.h"
 #include "..\..\XrECore\Editor\EDX11Utils.h"
 #include "..\..\XrECore\Editor\Nq\NqUtil.h"
 
@@ -32,9 +32,9 @@ float Round(float v)
 	return floorf(v + .5f);
 }
 
-ImU32 Col(XFinedTheme::ColorToken token, float alpha = 1.f)
+ImU32 Col(GrizzlyTheme::ColorToken token, float alpha = 1.f)
 {
-	return XFinedTheme::U32(token, alpha);
+	return GrizzlyTheme::U32(token, alpha);
 }
 
 // The window icon as an ImGui texture: the top-down DIB is already the
@@ -42,7 +42,7 @@ ImU32 Col(XFinedTheme::ColorToken token, float alpha = 1.f)
 void LoadIconTexture()
 {
 	const int size = 32;
-	HICON icon = (HICON)::LoadImageW(::GetModuleHandleW(0), MAKEINTRESOURCEW(IDI_XFINED_EDITOR),
+	HICON icon = (HICON)::LoadImageW(::GetModuleHandleW(0), MAKEINTRESOURCEW(IDI_GRIZZLY_EDITOR),
 		IMAGE_ICON, size, size, 0);
 	if (!icon)					return;
 
@@ -92,12 +92,12 @@ bool WindowButton(EButton kind, float x, float y, bool busy)
 	const ImVec2 b = ImGui::GetItemRectMax();
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	if (hovered && !busy)
-		dl->AddRectFilled(a, b, kind == btnClose ? Col(held ? XFinedTheme::ColorToken::DangerPressed : XFinedTheme::ColorToken::DangerHovered)
-			: Col(held ? XFinedTheme::ColorToken::Pressed : XFinedTheme::ColorToken::Hover));
+		dl->AddRectFilled(a, b, kind == btnClose ? Col(held ? GrizzlyTheme::ColorToken::DangerPressed : GrizzlyTheme::ColorToken::DangerHovered)
+			: Col(held ? GrizzlyTheme::ColorToken::Pressed : GrizzlyTheme::ColorToken::Hover));
 	const XUI::Icon icon = kind == btnMin ? XUI::Icon::Minimize :
 		kind == btnClose ? XUI::Icon::Close : ::IsZoomed(EDevice->m_hWnd) ? XUI::Icon::Restore : XUI::Icon::Maximize;
-	const ImU32 col = busy ? Col(XFinedTheme::ColorToken::TextDisabled) :
-		Col(hovered ? XFinedTheme::ColorToken::Text : XFinedTheme::ColorToken::TextSecondary);
+	const ImU32 col = busy ? Col(GrizzlyTheme::ColorToken::TextDisabled) :
+		Col(hovered ? GrizzlyTheme::ColorToken::Text : GrizzlyTheme::ColorToken::TextSecondary);
 	const float glyph = XUI::Pt(12.f);
 	XUI::DrawIcon(dl, icon, ImVec2(Round((a.x + b.x - glyph) * .5f), Round((a.y + b.y - glyph) * .5f)), 12.f, col);
 	const char* tips[] = { "Minimize", "Maximize", "Close" };
@@ -117,14 +117,14 @@ int HitTest(int x, int y)
 	return HTCAPTION;
 }
 
-// "<project> - XFined Editor" on the taskbar and in Alt+Tab
+// "<project> - Grizzly Editor" on the taskbar and in Alt+Tab
 void SyncOsTitle()
 {
-	xr_string title = "XFined Editor";
+	xr_string title = "Grizzly Editor";
 	if (EditorProject::Active())
 	{
 		title = EditorProject::Name();
-		title += " - XFined Editor";
+		title += " - Grizzly Editor";
 	}
 	if (title == s_OsTitle)
 		return;
@@ -202,7 +202,7 @@ void DrawRight(bool busy)
 		const float right = s_Band.buttons_x0 - XUI::Pt(12.f);
 		if (right - size.x >= s_Band.menus_end_x + XUI::Pt(48.f))
 			ImGui::GetWindowDrawList()->AddText(ImVec2(Round(right - size.x), Round(s_Band.bar_y0 + (h - size.y) * .5f)),
-				Col(XFinedTheme::ColorToken::TextMuted), name);
+				Col(GrizzlyTheme::ColorToken::TextMuted), name);
 	}
 
 	// the window buttons, flush with the window's edge

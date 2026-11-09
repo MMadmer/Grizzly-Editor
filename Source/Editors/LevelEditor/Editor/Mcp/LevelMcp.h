@@ -1,7 +1,7 @@
 #pragma once
 
-// The editor's own MCP commands (docs/UI_DESIGN.md, section 7). XFinedMCP answers the core's (ping, state, the
-// screenshots, projects, open_scene) and hands every other command to XFinedInspector, which asks these groups in
+// The editor's own MCP commands (docs/UI_DESIGN.md, section 7). GrizzlyMCP answers the core's (ping, state, the
+// screenshots, projects, open_scene) and hands every other command to GrizzlyInspector, which asks these groups in
 // turn. A group answers true when it took the command.
 namespace LevelMcp
 {

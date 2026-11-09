@@ -66,4 +66,11 @@ public:
 };
 #pragma pack(pop)
 
+// The editor's pixel shader for a shader of this name: self-lit ones (models\selflight*, selflight, the light planes)
+// keep their own brightness under View > Game Lighting, as the game draws them.
+IC LPCSTR EditorModelPS(LPCSTR name)
+{
+	return name && (strstr(name, "selflight") || strstr(name, "lightplanes")) ? "model_def_self" : "model_def_hq";
+}
+
 #endif // !defined(AFX_BLENDER_H__A023332E_C09B_4D93_AA53_57C052CCC075__INCLUDED_)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test of github_mock.py.
+"""Self-test of the Go github_mock.
 
 Starts the mock as a subprocess, once per flag set, and drives it the way the
 editor's release publisher, its Mod Browser submission and its VirusTotal checks
@@ -22,7 +22,6 @@ import os
 import re
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 import traceback
@@ -30,12 +29,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
+from mock_server import mock_exe
 
-MOCK = Path(__file__).with_name("github_mock.py")
+
 TOKEN = "qa-token"
 REPO = "QaOwner/qa-mod"
 API = f"/repos/{REPO}"
-USER_AGENT = "XFinedEditor-QA/1.0"
+USER_AGENT = "GrizzlyEditor-QA/1.0"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 DESCRIPTOR = "qa_mod.update.ltx"
 LATEST_DESCRIPTOR = f"/{REPO}/releases/latest/download/{DESCRIPTOR}"
@@ -52,7 +52,7 @@ MOD_FILE = "mods/qa_mod.ltx"
 MOD_TEXT = b"[mod]\nid = qa_mod\ntitle = QA Mod\nversion = 1.0.0\n"
 # A submission as the editor opens it: the module's file in a fenced ini block.
 SUBMISSION_TITLE = "Submit qa_mod"
-SUBMISSION = f"Submitted with XFined Editor.\n\n```ini\n{MOD_TEXT.decode()}```\n"
+SUBMISSION = f"Submitted with Grizzly Editor.\n\n```ini\n{MOD_TEXT.decode()}```\n"
 FORBIDDEN = {"message": "Must have admin rights to Repository."}
 STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
 VT_KEY = "qa-vt-key"
@@ -73,7 +73,7 @@ def git_blob_sha(data: bytes) -> str:
 
 
 def multipart(data: bytes, filename: str = "qa_mod-1.0.0.zip",
-              boundary: str = "XFinedEditor00112233445566778899aabb") -> tuple[bytes, str]:
+              boundary: str = "GrizzlyEditor00112233445566778899aabb") -> tuple[bytes, str]:
     """The form the editor sends to VirusTotal: one part, the field "file"."""
     head = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             "Content-Type: application/octet-stream\r\n\r\n").encode("utf-8")
@@ -124,7 +124,7 @@ class Mock:
 
     def __enter__(self) -> Mock:
         self.process = subprocess.Popen(
-            [sys.executable, str(MOCK), *self.flags], stdout=subprocess.PIPE, text=True
+            [mock_exe(), *self.flags], stdout=subprocess.PIPE, text=True
         )
         self.first_line = self.process.stdout.readline()
         try:
@@ -990,7 +990,7 @@ def flow_catalog_repo(checks: Checks, options) -> None:
         )
 
         refused = [
-            subprocess.run([sys.executable, str(MOCK), *flags], capture_output=True, text=True, timeout=60)
+            subprocess.run([mock_exe(), *flags], capture_output=True, text=True, timeout=60)
             for flags in (["--catalog-push"], ["--fork-delay", "1"], ["--repo", CATALOG.lower()])
         ]
         checks.check(
@@ -1764,7 +1764,7 @@ def flow_vt_faults(checks: Checks, options) -> None:
         )
 
     with Mock() as mock:
-        boundary = "XFinedEditorBad"
+        boundary = "GrizzlyEditorBad"
         form = f"multipart/form-data; boundary={boundary}"
         part = f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.bin"\r\n\r\n'
         close = f"\r\n--{boundary}--\r\n"
@@ -1792,7 +1792,7 @@ def flow_vt_faults(checks: Checks, options) -> None:
 
         # The parser against the mock's block reads: every byte of a delimiter but its last one
         # ends the first read, and the data is full of delimiters that miss by one byte.
-        straddle = "XFinedEditorStraddle"
+        straddle = "GrizzlyEditorStraddle"
         cut = len(f"\r\n--{straddle}") - 1
         head = f'--{straddle}\r\nContent-Disposition: form-data; name="file"; filename="edge.bin"\r\n\r\n'.encode()
         near = f"\r\n--{straddle[:-1]}".encode()
@@ -1844,7 +1844,7 @@ def flow_vt_faults(checks: Checks, options) -> None:
         status = mock.vt("GET", f"{VT_API}/analyses/{analysis}", key="other-key").json()["data"]["attributes"]["status"]
         checks.equal("W --vt-queue 0: the analysis is completed at once", status, "completed")
 
-    refused = subprocess.run([sys.executable, str(MOCK), "--vt-upload-results", '{"EngineA": "evil"}'],
+    refused = subprocess.run([mock_exe(), "--vt-upload-results", '{"EngineA": "evil"}'],
                              capture_output=True, text=True, timeout=60)
     checks.check("W an unknown category in --vt-upload-results stops the mock: exit 2",
                  refused.returncode == 2 and "evil" in refused.stderr, refused.stderr[-300:])
@@ -1880,7 +1880,7 @@ FLOWS = {
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Self-test of github_mock.py.")
+    parser = argparse.ArgumentParser(description="Self-test of the Go github_mock.")
     parser.add_argument("--only", help="comma-separated flow letters (B runs with A)")
     parser.add_argument("--skip-large", action="store_true", help="skip the 120 MB upload")
     options = parser.parse_args()

@@ -9,7 +9,7 @@
 - Selected license: FreeType Project License (`docs/FTL.TXT`)
 
 All 855 files extracted from the release archive are stored byte-for-byte
-unchanged. This provenance file is the only XFined-specific file in the
+unchanged. This provenance file is the only Grizzly-specific file in the
 directory. The CMake integration uses the exact Windows source set from the
 upstream 2.14.3 CMake target and its bundled zlib implementation; optional
 bzip2, PNG, HarfBuzz, and Brotli integrations remain disabled.

@@ -1,7 +1,7 @@
 ﻿#include "stdafx.h"
 #include "..\..\XrECore\Editor\EditorUiContract.h"
 
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
 // ===================================================================================================
 // Shared by the Tools panel's forms and the World Outliner (UIToolCustom.h)
@@ -124,9 +124,9 @@ bool XUI_LocalEyeToggle(LPCSTR id, bool visible, LPCSTR tip, float size_pt)
 	const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	if (hovered || held)
-		dl->AddRectFilled(min, max, XFinedTheme::U32(held ? Token::Pressed : Token::Hover), XUI::Pt(4.f));
+		dl->AddRectFilled(min, max, GrizzlyTheme::U32(held ? Token::Pressed : Token::Hover), XUI::Pt(4.f));
 	const Token tone = visible ? (hovered ? Token::Text : Token::TextSecondary) : (hovered ? Token::TextSecondary : Token::TextDisabled);
-	DrawIconCentred(dl, visible ? XUI::Icon::Eye : XUI::Icon::EyeOff, min, max, 14.f, XFinedTheme::U32(tone));
+	DrawIconCentred(dl, visible ? XUI::Icon::Eye : XUI::Icon::EyeOff, min, max, 14.f, GrizzlyTheme::U32(tone));
 	XUI::Tip(tip);
 	return clicked;
 }
@@ -180,11 +180,11 @@ void XUI_LocalThumbnail(ImTextureID texture, float side, XUI::Icon icon, LPCSTR 
 	ImGui::Dummy(ImVec2(side, side));
 	const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
 	ImDrawList* dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(min, max, XFinedTheme::U32(Token::Inset), XUI::Pt(4.f));
-	dl->AddRect(min, max, XFinedTheme::U32(Token::BorderSubtle), XUI::Pt(4.f));
+	dl->AddRectFilled(min, max, GrizzlyTheme::U32(Token::Inset), XUI::Pt(4.f));
+	dl->AddRect(min, max, GrizzlyTheme::U32(Token::BorderSubtle), XUI::Pt(4.f));
 	// 32 pt in a roomy square, less in a small one
 	const float icon_pt = _max(16.f, _min(32.f, side / XUI::Dpi() * .4f));
-	DrawIconCentred(dl, icon, min, max, icon_pt, XFinedTheme::U32(Token::TextMuted));
+	DrawIconCentred(dl, icon, min, max, icon_pt, GrizzlyTheme::U32(Token::TextMuted));
 	XUI::Tip(tip);
 }
 
@@ -233,21 +233,21 @@ void DrawTile(ESceneToolBase* tool, u32 cls, const ImVec2& pos, const ImVec2& si
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	const ImVec2 max(pos.x + size.x, pos.y + size.y);
 	const Token fill = active ? Token::Accent : held ? Token::Pressed : hovered ? Token::Hover : Token::Raised;
-	dl->AddRectFilled(pos, max, XFinedTheme::U32(fill), XUI::Pt(4.f));
+	dl->AddRectFilled(pos, max, GrizzlyTheme::U32(fill), XUI::Pt(4.f));
 	if (eye_hovered)
-		dl->AddRectFilled(eye_min, eye_max, XFinedTheme::U32(active ? Token::SelectionFocused : Token::Hover), XUI::Pt(4.f));
+		dl->AddRectFilled(eye_min, eye_max, GrizzlyTheme::U32(active ? Token::SelectionFocused : Token::Hover), XUI::Pt(4.f));
 
 	XUI::DrawIcon(dl, ToolClassIcon(cls), ImVec2(Round(pos.x + XUI::Pt(kTilePad)), Round(pos.y + (size.y - XUI::Pt(kTileIcon)) * .5f)),
-		kTileIcon, XFinedTheme::U32(active ? Token::Text : Token::TextSecondary));
+		kTileIcon, GrizzlyTheme::U32(active ? Token::Text : Token::TextSecondary));
 
 	const float text_x = Round(pos.x + XUI::Pt(kTilePad + kTileIcon + kTilePad));
 	ImGui::SetCursorScreenPos(ImVec2(text_x, Round(pos.y + (size.y - ImGui::GetTextLineHeight()) * .5f)));
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(active || visible ? Token::Text : Token::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(active || visible ? Token::Text : Token::TextSecondary));
 	XUI::TextEllipsis(ToolClassLabel(cls), _max(0.f, eye_min.x - XUI::Pt(kTileEyeGap) - text_x));
 	ImGui::PopStyleColor();
 
 	const Token eye_tone = active ? Token::Text : visible ? (eye_hovered ? Token::Text : Token::TextMuted) : Token::TextDisabled;
-	DrawIconCentred(dl, visible ? XUI::Icon::Eye : XUI::Icon::EyeOff, eye_min, eye_max, 14.f, XFinedTheme::U32(eye_tone));
+	DrawIconCentred(dl, visible ? XUI::Icon::Eye : XUI::Icon::EyeOff, eye_min, eye_max, 14.f, GrizzlyTheme::U32(eye_tone));
 
 	if (eye_clicked)
 	{
@@ -302,9 +302,9 @@ void UILeftBarForm::DrawToolHeader(u32 cls)
 	const float w = ImGui::GetContentRegionAvail().x;
 	const float h = XUI::Pt(kHeaderH);
 	ImDrawList* dl = ImGui::GetWindowDrawList();
-	dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), XFinedTheme::U32(Token::Raised), XUI::Pt(4.f));
+	dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), GrizzlyTheme::U32(Token::Raised), XUI::Pt(4.f));
 	XUI::DrawIcon(dl, ToolClassIcon(cls), ImVec2(Round(pos.x + XUI::Pt(8.f)), Round(pos.y + (h - XUI::Pt(16.f)) * .5f)), 16.f,
-		XFinedTheme::U32(Token::AccentBright));
+		GrizzlyTheme::U32(Token::AccentBright));
 	char title[96];
 	sprintf_s(title, "%s Tool", ToolClassTitle(cls));
 	{

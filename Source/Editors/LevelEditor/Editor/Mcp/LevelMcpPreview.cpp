@@ -109,8 +109,8 @@ bool HandlePreview(LPCSTR cmd, LPCSTR raw, xr_string& out)
         if (!answer_only)
         {
             char name[512] = {}, source[64] = {};
-            XFinedMCP::GetArg(raw, "name", name, sizeof(name));
-            XFinedMCP::GetArg(raw, "source", source, sizeof(source));
+            GrizzlyMCP::GetArg(raw, "name", name, sizeof(name));
+            GrizzlyMCP::GetArg(raw, "source", source, sizeof(source));
             for (char* p = name; *p; ++p) if (*p == '/') *p = '\\';
             {
                 char* w = name;

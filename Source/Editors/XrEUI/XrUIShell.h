@@ -176,7 +176,7 @@ XREUI_API void Place(cstr window_name, unsigned node);
 }
 struct Workspace
 {
-	cstr name = nullptr;					// the dockspace's name, e.g. XFinedLevel_v2
+	cstr name = nullptr;					// the dockspace's name, e.g. GrizzlyLevel_v2
 	int size_class = 0;						// a change rebuilds the layout unless it is customized
 	std::function<void(unsigned root, int size_class)> build;
 	bool* custom = nullptr;					// the user's own arrangement; kept by the caller

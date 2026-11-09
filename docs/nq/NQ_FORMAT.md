@@ -125,7 +125,7 @@ refused (`E022`).
 
 | Type | How it is written | Notes |
 |---|---|---|
-| `text` | `"string"` or `{ rus = "…", eng = "…" }` | UTF-8; placeholders `{var:name}`, `{actor}` |
+| `text` | `"string"` or `{ rus = "…", eng = "…" }` | UTF-8; placeholders `{var:name}`, `{global:name}` (a global variable of the module, `{global:<module>.<name>}` another module's), `{actor}` |
 | `string` | `"…"` | a free string (e.g. the `section` filter of `objective.kill_count`) |
 | picker strings | `"…"` | `item_section`, `squad_section`, `spawn_section` (any section with `$spawn`), `level`, `smart`, `restrictor`, `community`, `info`, `var_name`, `task_id`, `objective_id` (a step of the task named by the neighboring `task` parameter), `quest_id` (`"<module>.<quest>"` or `"<quest>"` = own module), `character_id` (a character of this project by the `id` of its `.npcasset`; `"<module>.<id>"` reaches a character another module ships), `ref_name`, `signal_name`, `spot_type`, `node_id`, `level_changer` (a transition of the linked game by the object name the engine knows it by - `world_transitions` lists them per level) — each has its own picker (`quest_lookup`) |
 | `int` | `5` | integer; catalog `min`/`max` are checked |
@@ -133,18 +133,19 @@ refused (`E022`).
 | `bool` | `true` / `false` | strictly boolean |
 | `enum` | `"actor"` | one of the catalog's `enum=a\|b\|c` values |
 | `relation` | `"enemy"` \| `"neutral"` \| `"friend"` | |
-| `value` | bool, number or string | for `var.set` / `var` |
+| `value` | bool, number or string | for `var.set` / `var` / `global.set` / `global` |
+| `global_name` | `"night"` \| `"<module>.<name>"` | a **global variable** of the module: declared in `mod.ltx` `[vars]` (`name = default`), one value every quest and behaviour graph of the module reads and writes, kept in the save. The editor edits them in the graph tab's Variables pane, under **Global**, and saves them into `mod.ltx` at once; the picker lists them with their defaults. A name the module does not declare is `E030`; another module's (`"<module>.<name>"`) is only checked by the game |
 | `count_or_all` | an integer ≥ 1 or `"all"` | `item.take` |
 | `duration` | `{ seconds = N }` (real time), `{ game_minutes = N }`, `{ game_hours = N }`, `{ game_seconds = N }` (game time), or a plain number (real seconds) | |
-| `npc_ref` | `{ story = "esc_2_12_stalker_wolf" }` \| `{ ref = "guard" }` \| `{ profile = "…" }` \| `{ community = "stalker", level = "l01_escape" }` | resolve: `ref` → `story` → the first online NPC by `profile`/`community` |
-| `target_ref` | any `npc_ref`, or `{ ref = "boars" }` (squad/object), or `{ smart = "…" }` | |
-| `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing |
-| `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ spawn = { section, smart\|place, restrictor, spread, ref, hold } }` | only on `objective.kill`; `spawn` creates the squad on entry, `ref` saves it, `hold = true` pins it in place |
+| `npc_ref` | `{ story = "esc_2_12_stalker_wolf" }` \| `{ ref = "guard" }` \| `{ character = "valera" }` \| `{ profile = "…" }` \| `{ community = "stalker", level = "l01_escape" }` | resolve: `ref` → `story` → `character` → the first online NPC by `profile`/`community`. `character` is a character of this project by the `id` of its `.npcasset` (`"<module>.<id>"` for another module's), found online or offline, the living one before a body; it is how any quest points at the module's own people without a story id |
+| `target_ref` | any `npc_ref`, or `{ ref = "boars" }` (squad/object), or `{ smart = "…" }`, or a place: `{ restrictor = "…" }`, `{ level = "…", pos = { x, y, z } }` | a restrictor is taken by name (`map.spot`, the task markers); a point is anchored with a `space_restrictor` of the task (`task.set_target`, `task.set_objective_target`) |
+| `object_ref`, `squad_ref` | `{ story = "…" }` \| `{ ref = "…" }`; an `object_ref` also `{ character = "…" }` | ONE specific world object; narrower than `npc_ref` — `profile`/`community` name a kind of creature, not a thing, while a character is one person |
+| `kill_target` | `{ story = … }` \| `{ ref = … }` \| `{ character = … }` \| `{ spawn = { section, smart\|place, restrictor, spread, ref, hold } }` | only on `objective.kill`; `spawn` creates the squad on entry, `ref` saves it, `hold = true` pins it in place |
 | `place` | `{ level = "l01_escape", pos = {x,y,z}, radius = 5 }` \| `{ restrictor = "zone_name" }` \| `{ smart = "…" }` \| `{ ref = "anchor" }` \| `{ actor = true, distance = 2 }` | `radius` defaults to 5; `ref` is where an object this quest created stands; `actor` is that many metres in front of the player, resolved when the action runs — a spawn point, not a destination (refused on `objective.reach`, `actor_in_place`, `actor.teleport`) |
 | `item_list` | `{ { section = "bread", count = 2 }, { item = { ref = "prize" } } }` | rows of two shapes: a section×N or one specific object; a section appears once. A kind that CREATES or CONSUMES the items declares a **row schema** in the catalog (`rows` + `row.<name>`): its rows are sections only, typed by that schema — `item.give`, `item.take` (a row may say `count = "all"`), `item.spawn` (each row carries its own state) |
 | `npc_list` | `{ { character = "valera", ref = "valera" }, { section = "sim_default_stalker_1", ref = "his_friend" } }` | the rows of `spawn.npc`, one NPC each. A row names **exactly one** of `character` (`character_id` - the asset itself, no section to look up) or `section` (`spawn_section`); optional `ref` (each NPC keeps its own), `unique`, `dead`, `yaw`. `unique` first removes every NPC of that kind from the world: **on by default for a character** (one person - a second Valera is a bug), **off for a section** (a kind half the zone may share) unless the row sets it. A key the row schema does not know is an error, not a silent no-op |
-| `destination` | `{ path = "agro_patrol" }` \| `{ ref = "…" }` \| `{ story = "…" }` \| a `place` | where an order or a behaviour step sends people (§10.3). `{ role = … }` exists only in a behaviour graph - a quest casts nobody (`E024`) |
-| `role_or_actor` | `{ actor = true }` \| `{ ref = "…" }` \| `{ story = "…" }` | who to follow; a behaviour graph also takes `{ role = … }` |
+| `destination` | `{ path = "agro_patrol" }` \| `{ ref = "…" }` \| `{ story = "…" }` \| `{ character = "…" }` \| a `place` | where an order or a behaviour step sends people (§10.3). `{ role = … }` exists only in a behaviour graph - a quest casts nobody (`E024`) |
+| `role_or_actor` | `{ actor = true }` \| `{ ref = "…" }` \| `{ story = "…" }` \| `{ character = "…" }` | who to follow; a behaviour graph also takes `{ role = … }` |
 | `attack_target` | `{ actor = true }` \| `{ community = "…" }` \| any `npc_ref` form | who to turn on; a behaviour graph also takes `{ role = … }` |
 | `loot_spawn` | exactly one key: `{ place = <place> }` \| `{ into = <object_ref> }` \| `{ stash = { pick, state, within, beyond, scatter } }` \| `{ npc = <npc_ref> }` \| `{ corpse = { pick, within, beyond } }` \| `{ new_corpse = { section = <spawn_section>, place = <place> } }` | where `objective.fetch` (its `spawn`) and `item.spawn` (its `where`) put the loot they create; radii are measured from the player |
 | `cases_cond` | `{ { name = "yes", cond = { … } }, … }` | case names = pins |
@@ -166,17 +167,17 @@ canvas screenshots. What guarantees this:
    them out itself (`quest_layout` or simply opening the document). The
    canonical writer always puts the editor fields (`pos`, `comment`) last in a
    node.
-3. **The schema on demand.** `xfined_quest_catalog` returns every kind with its
+3. **The schema on demand.** `grizzly_quest_catalog` returns every kind with its
    groups, `use`, parameters (type/required/default/min/max/enum), pins, the
    `wait`/`once`/`event` flags and a one-line description. That is enough to
    write a quest from scratch.
-4. **Problems as text.** `xfined_quest_write` / `quest_apply` /
+4. **Problems as text.** `grizzly_quest_write` / `quest_apply` /
    `quest_validate` return `problems` — a list of `{code, severity, node, slot,
    message}` with the same codes the game prints. A Lua syntax error position
    is line:column.
-5. **Reading as text.** `xfined_quest_get` returns the canonical file text
+5. **Reading as text.** `grizzly_quest_get` returns the canonical file text
    (`lua`) and an **outline** — a linear description of the graph (§5). Works
-   for an unopened file too. `xfined_quest_list` gives a summary of every
+   for an unopened file too. `grizzly_quest_list` gives a summary of every
    project quest.
 6. **Editing — whole-file or by operations.** The usual loop is to rewrite the
    whole file (`quest_write`); targeted edits — `quest_apply` with an operation
@@ -184,8 +185,8 @@ canvas screenshots. What guarantees this:
 7. **The generated header.** The canonical writer puts a comment block with the
    same outline at the top of the file: opening the `.nqasset` in any editor, a
    human or an AI sees the quest structure without the graph.
-8. **Screenshots are possible but unnecessary.** `xfined_quest_view` +
-   `xfined_screenshot_editor` remain for visual checks; no step of the workflow
+8. **Screenshots are possible but unnecessary.** `grizzly_quest_view` +
+   `grizzly_screenshot_editor` remain for visual checks; no step of the workflow
    depends on them.
 
 The recommended loop: `quest_catalog` → write the text → `quest_write` → read
@@ -298,6 +299,8 @@ else is plumbing around it. When a stage without waiting is needed —
 | `info.disable` | Remove info portion | **`info: info`** | Removes an info portion from the player. |
 | `var.set` | Set variable | **`name: var_name`**, **`value: value`** | Assigns a value to a quest variable. |
 | `var.add` | Add to variable | **`name: var_name`**, **`delta: float`** | Adds a number to a numeric quest variable. |
+| `global.set` | Set global variable | **`name: global_name`**, **`value: value`** | Assigns a value to a global variable of the module - one value every quest and behaviour graph of the module reads and writes. |
+| `global.add` | Add to global variable | **`name: global_name`**, **`delta: float`** | Adds a number to a numeric global variable. |
 | `signal.send` | Send signal | **`name: signal_name`** | Emits a signal for event.signal triggers and waits, including other quests. |
 | `quest.activate` | Activate quest | **`quest: quest_id`** | Activates another quest declared with activation = manual. |
 | `task.give` | Give task | **`task: task_id`** | Creates a PDA task from the quest tasks declaration. |
@@ -319,6 +322,7 @@ else is plumbing around it. When a stage without waiting is needed —
 | `object.remove` | Remove object | **`target: object_ref`** | Removes an object created by this quest (spawn.object) or one by story id. The ref is cleared afterwards. |
 | `npc.remove` | Remove NPC | **`npc: npc_ref`** | Removes the NPC from the world. |
 | `npc.kill` | Kill NPC | **`npc: npc_ref`** | Kills the NPC. |
+| `trade.restock` | Restock trader | **`who: npc_ref`** | The trader's stock comes new the next time the player opens the trade: the NPC's resupply clock starts over. For a shop that refreshes on an event - a night that begins, a caravan that came - instead of only by its restock hours. |
 | `npc.set_name` | Set NPC name | **`npc: npc_ref`**, **`name: text`** | Renames the NPC - the name over their head, in the dialog window and in the PDA. No character profile is needed for it. An NPC that is offline is renamed the moment it comes online, so the name survives being set far from the player. |
 | `world.transition` | Open or close a way | `changer: level_changer`, `level: level`, `open: bool = true` | Opens or closes one level changer, or every changer on a level. A way the mode's world closed at the start opens this way too - the story decides when the player may leave. The game keeps it in the save. |
 | `world.area` | Grow or shrink the area | **`level: level`**, `include: bool = true` | Adds a level to the area the player may travel to, or takes one out. Only a mode that limits the area has one to change. |
@@ -326,6 +330,7 @@ else is plumbing around it. When a stage without waiting is needed —
 | `order.guard` | Order - guard | **`who: npc_ref`**, `place: destination`, `look: way_path`, `radius: float = 20` | The NPC, or every member of a squad, takes a post and fights from it - at a place, or where it stands now. With a look path it digs in and watches it. The order belongs to the NPC - it outlives the quest, survives saves and waits while a behaviour graph borrows the NPC. |
 | `order.patrol` | Order - patrol | **`who: npc_ref`**, `route: way_path`, `area: destination`, `radius: float = 15`, `move: enum(walk\|run) = walk` | The NPC walks a waypoint path over and over, or wanders the area around a place and rests at every stop - danger, cover and combat stay the game's own. Lasts until another order. |
 | `order.follow` | Order - follow | **`who: npc_ref`**, **`target: role_or_actor`**, `distance: float = 3` | The NPC follows the player or another NPC and keeps close - a companion that fights beside the one it follows. Lasts until another order. |
+| `order.animpoint` | Order - take a place | **`who: npc_ref`**, **`cover: string`**, `camp: bool = false`, `anims: string` | The NPC takes an animation point of the level - a smart cover with an `animpoint_*` description placed in the scene (`animpoint_stay_table` at a counter, `_stay_wall`, `_sit_normal`, `_sit_high`, `_sit_low`, `_sit_ass`, `_sit_knee`, `_stay_ohrana` for a sentry...) - walks there and does what it offers. A point of the module is named as in its scene. `camp = true` for the points of a campfire (the stock camps' `*_animpoint_kampN`), `anims` narrows the animations (`avail_animations`). The order belongs to the NPC like a guard order. |
 | `order.attack` | Order - attack | **`who: npc_ref`**, **`target: attack_target`** | Makes the NPC hostile to the target and lets it engage - the player, another NPC or squad, or a whole community. Hostility is a relation and stays after the fight. An NPC that is offline turns hostile the moment it spawns. |
 | `order.clear` | Order - dismiss | **`who: npc_ref`** | Takes the NPC's standing order away - it goes back to its own logic, its smart terrain or what its spawn carries. |
 | `relation.set` | Set relation | **`who: npc_ref`**, **`value: relation`** | Makes an NPC, squad, or community an enemy, neutral, or friend of the player. |
@@ -351,6 +356,7 @@ and `wait.any` cases.
 | `has_item` | Has item | **`section: item_section`**, `count: int = 1` | The player holds at least count items of the section. count is in items (ammo: boxes). |
 | `has_money` | Has money | **`amount: int`** | The player has at least amount money. |
 | `var` | Variable | **`name: var_name`**, `op: enum(eq\|ne\|lt\|le\|gt\|ge) = eq`, **`value: value`** | Compares a quest variable with a value. op: eq, ne, lt, le, gt, ge. |
+| `global` | Global variable | **`name: global_name`**, `op: enum(eq\|ne\|lt\|le\|gt\|ge) = eq`, **`value: value`** | Compares a global variable of the module with a value - how one quest waits on what another did. |
 | `node_done` | Node done | **`node: node_id`** | A once node has already run. |
 | `quest_status` | Quest status | **`quest: quest_id`**, **`is: enum(inactive\|active\|completed\|failed)`** | Another quest is in the given status. |
 | `task_status` | Task status | **`task: task_id`**, **`is: enum(none\|active\|completed\|failed)`** | A quest task is in the given status. |
@@ -411,8 +417,11 @@ A module ships `gamedata\configs\nq\kinds\<mod>.ltx` with new `[nq.*]` sections
 and registers the implementations in its own `scripts\register.script` via
 `xms.registry.get("nq.kinds"):add("<kind>", { … })`. The editor scans the same
 folder of the linked game and of installed modules (both roots — `modules\` and
-`mods\`), so such kinds show up in the dropdowns by themselves. The kind
-implementation contract — `NQ_RUNTIME.md` §4.3.
+`mods\`) and, last, of the open project itself - so a module's own kinds are in the
+dropdowns, the validator and `quest_catalog` while its author is still writing them,
+before any build; the installed copy of the project's own module is skipped (it is an
+older build of the same file). A change on disk is picked up with the content browser's
+refresh. The kind implementation contract — `NQ_RUNTIME.md` §4.3.
 
 ---
 
@@ -438,7 +447,7 @@ A problem line: `CODE node[slot]: message`, where the slot is `param:<name>`,
 | `E020` | an event condition outside `trigger.when` / `wait.when` / `wait.any` | replace it with a level condition (`has_item` instead of `event.item_taken`) or move the event into its own `trigger.when` |
 | `E021` | `cases` are empty, a case name is bad or duplicated, `weight ≤ 0` | every case needs a unique `[a-z0-9_]` `name`; weights strictly > 0 |
 | `E022` | several mutually exclusive parameter forms at once, or none at all (`objective.fetch`: `items` vs `section`, `from` vs `spawn`; `objective.kill_count`: more than one filter; a `spawn.npc` row with both `character` and `section`, or neither); or `item.spawn` state written beside an `items` list | pick exactly one form; the Details panel dims the losing fields. For `item.spawn` move the state into the row it applies to |
-| `E030` | a reference to an undeclared `var` / `task` / `objective` / `node` / `quest`, a `ref` nothing creates, or a `spawn.npc` row whose `character` is not in the project - or is a template (`abstract`), which never becomes an NPC | declare the variable in `vars`, the task (and its steps) in `tasks`, the object via `spawn.*` or `objective.kill{spawn}` before use; for a foreign quest write `"<module>.<quest>"`. The game answers with the same code, so a quest with such a reference simply will not load there |
+| `E030` | a reference to an undeclared `var` / `task` / `objective` / `node` / `quest` / global variable (not in `mod.ltx` `[vars]`), a `ref` nothing creates, or a `character` (a `spawn.npc` row or a `{ character = }` reference) that is not in the project - or is a template (`abstract`), which never becomes an NPC | declare the variable in `vars`, the task (and its steps) in `tasks`, the object via `spawn.*` or `objective.kill{spawn}` before use; for a foreign quest write `"<module>.<quest>"`. The game answers with the same code, so a quest with such a reference simply will not load there |
 | `E024` | `{ role = … }` in a quest's destination or target - a quest casts nobody | name the NPC by `{ ref = }` (something the quest spawned) or `{ story = }`; roles are a behaviour graph's cast (§10.1) |
 | `E031` | `actor.teleport` to a place on another level | Dead Air has no cross-level teleports — transitions go through a level changer |
 | `E050` | a syntax error in custom Lua | fix the `code`; Check Syntax in the Edit Lua dialog (the Details panel) verifies it separately |
@@ -474,30 +483,30 @@ document answers with an `unsaved` error unless `discard: true` is passed.
 
 | Tool | Arguments | Response |
 |---|---|---|
-| `xfined_quest_catalog` | — | `source` (`game`/`bundled`), `version`, `api`, `files`, `count`, `kinds[]` — per kind: `id`, `group`, `title`, `desc`, `use[]`, `params[]` (`name`, `type`, `required`, `default`, `min`, `max`, `enum[]`), `pins[]`, `wait`, `once`, `event`, `impl`, `since` |
-| `xfined_quest_list` | — | `count`, `quests[]`: `path`, `readable`, `id`, `title`, `nodes`, `errors`, `warnings`, `open`, `dirty`. An unreadable file — `readable:false` + `error` |
-| `xfined_quest_new` | `path` | creates the file from the template (`trigger.start → flow.end`, `id` = the file name, title "New quest"), opens the tab. Refuses when the file exists. Responds with the summary and `lua` |
-| `xfined_quest_open` | `path` | opens the document (reads the file, lays out `pos`-less nodes, validates). Re-opening just returns the state |
-| `xfined_quest_close` | `path`, `discard?` | `{ok:true}` |
-| `xfined_quest_get` | `path` | the summary + `lua` (canonical text) + `outline`. Works for an unopened file too (reads from disk) |
-| `xfined_quest_write` | `path`, `lua` | replaces the quest whole. An open document — in memory with an undo snapshot (`saved:false`, then `quest_save`); a closed or new file — the canonical text goes to disk (`saved:true`). Problems are returned but do not block the write — only the build |
-| `xfined_quest_undo` / `xfined_quest_redo` | `path` | undo/redo in the document's own ring (the scene undo is untouched). Error `nothing to undo` when empty |
-| `xfined_quest_apply` | `path`, `ops` | applies the operation list (all or nothing, one undo step). The response + `applied` — how many operations went through |
-| `xfined_quest_validate` | `path` | the summary + `outline`; an open document is re-validated |
-| `xfined_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Refuses with `modified externally` when the file changed on disk after loading — then `force: true` |
-| `xfined_quest_reload` | `path` | re-reads the open document from disk (drops unsaved edits and the undo history) |
-| `xfined_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`, and `w`/`h` - the node's box as the canvas draws it, sized by its content) |
-| `xfined_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the Details panel follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action under the node in the Details panel), `graph_panel?`/`details?`/`keys?`/`problems?` (`"show"`/`"hide"`/`"toggle"` — the Graph panel, the Details panel, the Shortcuts card, the Problems drawer), `graph_width?`/`details_width?` (pt), `action_split?`/`vars_split?` (shares of their column), `scroll?` (`"top"`/`"bottom"` — the selected node's pane, or the Graph panel with nothing selected; `"action:top"`/`"action:bottom"` — the action pane; `"tasks"`/`"task:<id>"`/`"task:<id>/steps"`/`"variables"` — the Graph panel; an error when that pane is not on screen) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom` (the level's factor) with `ui_scale` and `title_px`, `center`, `nodes`, `open_tabs`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `panes` (pt; null when not drawn), `pending`; Frame All never goes below 0.75, where a title is 12 px at 100%. The answer describes the frames the call changed (a first `frame:all`, a selection, a slot, a pane, a split, a scroll): the MCP pump holds the request until they are drawn and answers from them, in one call, raw socket included (`answer_only: true` reads the view and applies nothing - the pump's own re-read). Then — `xfined_screenshot_editor` |
-| `xfined_quest_edit` | `path`, `op`, `nodes?` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
-| `xfined_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | full-text node search over ids/kinds/parameters/conditions/actions/links/comments; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the result. Tokens are AND-joined, quotes keep a phrase, `-token` excludes |
-| `xfined_quest_project_find` | `query`, `limit?` | a read-only search over all sorted project `*.nqasset` without opening documents; the query syntax matches `quest_find`. A dirty open document overlays its disk copy. Results carry `source` (`disk`/`memory`); the response — `complete`, `diagnostics`, `generation`, a deterministic `fingerprint` |
-| `xfined_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only in parameters the current catalog typed as `type`; `path` narrows to one quest and is effectively mandatory for a local `task_id`. The walk includes nested `cond_list`/`cases_cond`; an unknown kind/parameter, a malformed value, Lua or an unreadable file give `complete:false` with precise diagnostics rather than fake completeness |
-| `xfined_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | renames the task declaration and every catalog-proven `task_id` reference inside one document as one undo step. Refuses before the `Snapshot` on an unknown/Lua/malformed/partially read area. The ack is mandatory: the task id is stored in runtime/save state, old state does not migrate |
-| `xfined_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
-| `xfined_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the Details slot |
-| `xfined_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); `visible` is the toggle, `shown` what the last frame drew (only from 12 nodes, `min_nodes`); the response carries the graph and viewport bounds |
-| `xfined_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
-| `xfined_quest_check_all` | — | the build gate: `passed`, `errors`, `warnings`, `error`, `log[]` (lines `<path>: <code> <node>: <message>`) |
+| `grizzly_quest_catalog` | — | `source` (`game`/`bundled`), `version`, `api`, `files`, `count`, `kinds[]` — per kind: `id`, `group`, `title`, `desc`, `use[]`, `params[]` (`name`, `type`, `required`, `default`, `min`, `max`, `enum[]`), `pins[]`, `wait`, `once`, `event`, `impl`, `since` |
+| `grizzly_quest_list` | — | `count`, `quests[]`: `path`, `readable`, `id`, `title`, `nodes`, `errors`, `warnings`, `open`, `dirty`. An unreadable file — `readable:false` + `error` |
+| `grizzly_quest_new` | `path` | creates the file from the template (`trigger.start → flow.end`, `id` = the file name, title "New quest"), opens the tab. Refuses when the file exists. Responds with the summary and `lua` |
+| `grizzly_quest_open` | `path` | opens the document (reads the file, lays out `pos`-less nodes, validates). Re-opening just returns the state |
+| `grizzly_quest_close` | `path`, `discard?` | `{ok:true}` |
+| `grizzly_quest_get` | `path` | the summary + `lua` (canonical text) + `outline`. Works for an unopened file too (reads from disk) |
+| `grizzly_quest_write` | `path`, `lua` | replaces the quest whole. An open document — in memory with an undo snapshot (`saved:false`, then `quest_save`); a closed or new file — the canonical text goes to disk (`saved:true`). Problems are returned but do not block the write — only the build |
+| `grizzly_quest_undo` / `grizzly_quest_redo` | `path` | undo/redo in the document's own ring (the scene undo is untouched). Error `nothing to undo` when empty |
+| `grizzly_quest_apply` | `path`, `ops` | applies the operation list (all or nothing, one undo step). The response + `applied` — how many operations went through |
+| `grizzly_quest_validate` | `path` | the summary + `outline`; an open document is re-validated |
+| `grizzly_quest_save` | `path`, `force?` | `path`, `errors`, `warnings`. Refuses with `modified externally` when the file changed on disk after loading — then `force: true` |
+| `grizzly_quest_reload` | `path` | re-reads the open document from disk (drops unsaved edits and the undo history) |
+| `grizzly_quest_layout` | `path`, `all?` | a deterministic pin-aware top-down layout: full bounds of nested branches and of exclusive trigger trees do not intersect, shared descendants take their own merge blocks between the incoming branches. `all:false` moves only `pos`-less nodes. Response: `moved`, `positions[]` (`id`, `x`, `y`, and `w`/`h` - the node's box as the canvas draws it, sized by its content) |
+| `grizzly_quest_view` | `path`, `frame?` (`"all"` or a node id), `zoom_level?` (0..9, 6 = 100%), `cx?`, `cy?`, `select?` (`"<node>"`/`"a,b"`/`"none"` — the Details panel follows), `slot?` (`"enter:0"`/`"exit:1"`/`"none"` — opens the action under the node in the Details panel), `graph_panel?`/`details?`/`keys?`/`problems?` (`"show"`/`"hide"`/`"toggle"` — the Graph panel, the Details panel, the Shortcuts card, the Problems drawer), `graph_width?`/`details_width?` (pt), `action_split?`/`vars_split?` (shares of their column), `scroll?` (`"top"`/`"bottom"` — the selected node's pane, or the Graph panel with nothing selected; `"action:top"`/`"action:bottom"` — the action pane; `"tasks"`/`"task:<id>"`/`"task:<id>/steps"`/`"variables"` — the Graph panel; an error when that pane is not on screen) | opens/focuses the graph tab and sets the view. The raw response: `path`, `zoom_level`, `zoom` (the level's factor) with `ui_scale` and `title_px`, `center`, `nodes`, `open_tabs`, `graph_panel` (`open`/`rail`/`overlay`/`hidden`), `details`, `drawer`, `minimap`, `panes` (pt; null when not drawn), `pending`; Frame All never goes below 0.75, where a title is 12 px at 100%. The answer describes the frames the call changed (a first `frame:all`, a selection, a slot, a pane, a split, a scroll): the MCP pump holds the request until they are drawn and answers from them, in one call, raw socket included (`answer_only: true` reads the view and applies nothing - the pump's own re-read). Then — `grizzly_screenshot_editor` |
+| `grizzly_quest_edit` | `path`, `op`, `nodes?` (instead of the current selection), `from`/`pin`/`to` | every graph edit the canvas can do, without a mouse: `connect`, `disconnect` (without `to` — the whole pin, without `pin` — all pins), `bypass` (the node stays, the chain closes over it: A→B→C becomes A→C), `delete`, `duplicate`, `connect_nearest`, `select_all`. The response carries the outline — the result reads without a screenshot |
+| `grizzly_quest_find` | `path`, `action?`, `query?`, `select?`, `limit?` | full-text node search over ids/kinds/parameters/conditions/actions/links/comments; `get` with `query` atomically changes the query without navigating, `next`/`previous` focus the result. Tokens are AND-joined, quotes keep a phrase, `-token` excludes |
+| `grizzly_quest_project_find` | `query`, `limit?` | a read-only search over all sorted project `*.nqasset` without opening documents; the query syntax matches `quest_find`. A dirty open document overlays its disk copy. Results carry `source` (`disk`/`memory`); the response — `complete`, `diagnostics`, `generation`, a deterministic `fingerprint` |
+| `grizzly_quest_references` | `type`, `value`, `path?`, `limit?` | exact references only in parameters the current catalog typed as `type`; `path` narrows to one quest and is effectively mandatory for a local `task_id`. The walk includes nested `cond_list`/`cases_cond`; an unknown kind/parameter, a malformed value, Lua or an unreadable file give `complete:false` with precise diagnostics rather than fake completeness |
+| `grizzly_quest_rename_task` | `path`, `from`, `to`, `ack_runtime_identity:true` | renames the task declaration and every catalog-proven `task_id` reference inside one document as one undo step. Refuses before the `Snapshot` on an unknown/Lua/malformed/partially read area. The ack is mandatory: the task id is stored in runtime/save state, old state does not migrate |
+| `grizzly_quest_bookmarks` | `path`, `action?`, `node?` | transient node bookmarks (`get/add/remove/toggle/next/previous/clear`); do not touch the asset/dirty/undo |
+| `grizzly_quest_history` | `path`, `action?` | the transient view history (`get/back/forward/clear`): center, zoom, selection and the Details slot |
+| `grizzly_quest_minimap` | `path`, `action?` | the interactive transient minimap (`get/show/hide/toggle`); `visible` is the toggle, `shown` what the last frame drew (only from 12 nodes, `min_nodes`); the response carries the graph and viewport bounds |
+| `grizzly_quest_lookup` | `type`, `query?`, `limit?` (default 50), `path?` | picker data. `type`: `item_section`, `squad_section`, `level`, `smart`, `story_id`, `profile`, `community`, `info`, `spot_type` (from the linked game, cached) or the document-side `task_id`, `var_name`, `ref_name`, `node_id` (need `path`), `quest_id` (project quests). A `ref_name` entry carries its category (`squad`/`object`/`item`) in `extra`, the same hint the picker shows a human |
+| `grizzly_quest_check_all` | — | the build gate: `passed`, `errors`, `warnings`, `error`, `log[]` (lines `<path>: <code> <node>: <message>`) |
 
 ### 8.1 `quest_apply` operations
 
@@ -821,7 +830,7 @@ way round, may not carry the role vocabulary.
 
 X-Ray walks patrol paths and nothing else. For every destination that is not a
 drawn path the ENGINE registers a one-point runtime path at the navmesh cell
-nearest to it (XFined-Ray, `xms.patrol_point`), and the same stock walker or
+nearest to it (Grizzly, `xms.patrol_point`), and the same stock walker or
 camper walks there - so danger, cover, wounded and combat keep working whatever
 the destination is, and no step contains movement code.
 

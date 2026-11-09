@@ -220,7 +220,7 @@ CCustomPreferences::CCustomPreferences()
 	m_Page = "General";
 	m_SavePending = false;
 	m_AssignFor = nullptr;
-	ui_theme_preset = u32(XFinedTheme::Default());
+	ui_theme_preset = u32(GrizzlyTheme::Default());
 	active_idle_fps = kEditorIdleFpsDefault;
 	ui_layout_version = 0;
 	level_layout_custom = false;
@@ -298,8 +298,8 @@ void CCustomPreferences::OnThemeChanged(PropValue*)
 
 void CCustomPreferences::SetThemePreset(u32 preset, bool persist)
 {
-	ui_theme_preset = XFinedTheme::IsValid(preset) ? preset : u32(XFinedTheme::Default());
-	XFinedTheme::Apply(XFinedTheme::Preset(ui_theme_preset));
+	ui_theme_preset = GrizzlyTheme::IsValid(preset) ? preset : u32(GrizzlyTheme::Default());
+	GrizzlyTheme::Apply(GrizzlyTheme::Preset(ui_theme_preset));
 	if (persist)
 		Save();
 }
@@ -466,8 +466,8 @@ void CCustomPreferences::ExportShortcuts()
 void CCustomPreferences::FillProp(PropItemVec& props)
 {
 	static xr_token theme_presets[] = {
-		{ "XFined Purple", int(XFinedTheme::Preset::XFinedPurple) },
-		{ "Graphite", int(XFinedTheme::Preset::Graphite) },
+		{ "Grizzly Purple", int(GrizzlyTheme::Preset::GrizzlyPurple) },
+		{ "Graphite", int(GrizzlyTheme::Preset::Graphite) },
 		{ nullptr, 0 },
 	};
 	Token32Value* theme = PHelper().CreateToken32(props, "General\\Theme", &ui_theme_preset, theme_presets);
@@ -571,9 +571,9 @@ void CCustomPreferences::Edit()
 extern bool bAllowLogCommands;
 void CCustomPreferences::Load(CInifile* I)
 {
-	ui_theme_preset		= R_U32_SAFE	("editor_prefs", "ui_theme_preset", u32(XFinedTheme::Default()));
-	if (!XFinedTheme::IsValid(ui_theme_preset))
-		ui_theme_preset = u32(XFinedTheme::Default());
+	ui_theme_preset		= R_U32_SAFE	("editor_prefs", "ui_theme_preset", u32(GrizzlyTheme::Default()));
+	if (!GrizzlyTheme::IsValid(ui_theme_preset))
+		ui_theme_preset = u32(GrizzlyTheme::Default());
 	active_idle_fps = R_U32_SAFE("editor_prefs", "active_idle_fps", kEditorIdleFpsDefault);
 	active_idle_fps = clampr(active_idle_fps, kEditorIdleFpsMinimum, kEditorIdleFpsMaximum);
 
@@ -657,7 +657,7 @@ void CCustomPreferences::Load(CInifile* I)
 
 void CCustomPreferences::Save(CInifile* I)
 {
-	if (ui_theme_preset == u32(XFinedTheme::Default()))
+	if (ui_theme_preset == u32(GrizzlyTheme::Default()))
 	{
 		if (I->line_exist("editor_prefs", "ui_theme_preset"))
 			I->remove_line("editor_prefs", "ui_theme_preset");

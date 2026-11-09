@@ -11,9 +11,9 @@ UIEditLightAnim* UIEditLightAnim::Form = nullptr;
 
 namespace
 {
-	using XFinedTheme::ColorToken;
+	using GrizzlyTheme::ColorToken;
 
-	ImU32 Tok(ColorToken token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+	ImU32 Tok(ColorToken token, float alpha = 1.f) { return GrizzlyTheme::U32(token, alpha); }
 
 	// pt: a library tab is list | preview | properties (docs/UI_DESIGN.md, sections 2 and 6, Libraries)
 	constexpr float kListW		= 260.f;

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Stress the XFined MCP socket lifetime and shutdown paths.
+"""Stress the Grizzly MCP socket lifetime and shutdown paths.
 
 For the timeout case, launch the editor with
-XFINED_MCP_REQUEST_TIMEOUT_MS=250 and pass --timeout-scene <scene.level>.
+GRIZZLY_MCP_REQUEST_TIMEOUT_MS=250 and pass --timeout-scene <scene.level>.
 Use --shutdown or --shutdown-via-palette only when it is safe for this script
 to close the editor.
 """
@@ -64,7 +64,7 @@ def one_wire_request(host: str, port: int, wire: bytes, timeout: float) -> dict[
 
 def require_ping(host: str, port: int, timeout: float) -> None:
     response = one_request(host, port, {"cmd": "ping"}, timeout)
-    if not response.get("ok") or response.get("name") != "XFined Editor":
+    if not response.get("ok") or response.get("name") != "Grizzly Editor":
         raise AssertionError(f"unexpected ping response: {response!r}")
 
 
@@ -177,7 +177,7 @@ def test_timeout(host: str, port: int, timeout: float, scene: str, recovery_time
         if response.get("ok") or "timeout" not in response.get("error", ""):
             raise AssertionError(
                 "open_scene did not time out; launch with "
-                f"XFINED_MCP_REQUEST_TIMEOUT_MS below the scene load time: {response!r}"
+                f"GRIZZLY_MCP_REQUEST_TIMEOUT_MS below the scene load time: {response!r}"
             )
 
         deadline = time.monotonic() + recovery_timeout
@@ -289,7 +289,7 @@ def main() -> int:
             args.pid,
             args.shutdown_via_palette,
         )
-    print("XFined MCP lifecycle stress passed")
+    print("Grizzly MCP lifecycle stress passed")
     return 0
 
 
@@ -297,5 +297,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        print(f"XFined MCP lifecycle stress failed: {error}", file=sys.stderr)
+        print(f"Grizzly MCP lifecycle stress failed: {error}", file=sys.stderr)
         raise

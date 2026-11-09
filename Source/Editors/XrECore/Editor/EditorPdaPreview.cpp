@@ -6,7 +6,7 @@
 #include "EditorModManifest.h"
 #include "EditorFileOps.h"
 #include "EDX11Utils.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "Nq/NqUtil.h"
 #include "Nq/NqLua.h"
 #include "ui_main.h"
@@ -478,8 +478,8 @@ namespace
 		return IM_COL32((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, a > 255 ? 255 : a);
 	}
 
-	using XFinedTheme::ColorToken;
-	ImU32 Tok(ColorToken token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+	using GrizzlyTheme::ColorToken;
+	ImU32 Tok(ColorToken token, float alpha = 1.f) { return GrizzlyTheme::U32(token, alpha); }
 
 	// what the game itself draws, as the layout's own colours are given (ARGB): a texture it cannot find, the
 	// player's arrow on the map
@@ -968,6 +968,25 @@ namespace
 		else s_DL->AddImage(tex, a, b, uv0, uv1, Col(tint));
 	}
 
+	// a spot of the layout's map_spots centred on c, as the game draws it: a texture id or a piece of a file
+	void DrawSpot(const EditorPda::SMapSpot& sp, const ImVec2& c)
+	{
+		const float h = sp.size * 0.5f * s_P.ky;
+		const ImVec2 a(c.x - h, c.y - h), b(c.x + h, c.y + h);
+		if (!sp.has_rect)
+			DrawTex(sp.icon, a, b, sp.color);
+		else if (SSheet* s = Sheet(sp.icon, sfProject))
+			s_DL->AddImage((ImTextureID)s->view, a, b, ImVec2(sp.rect_x / s->w, sp.rect_y / s->h),
+				ImVec2((sp.rect_x + sp.rect_w) / s->w, (sp.rect_y + sp.rect_h) / s->h), Col(sp.color));
+		else
+			s_DL->AddRectFilled(a, b, Col(kGameMissingTexture));
+		if (sp.has_inner)
+		{
+			const ImVec2 ia(a.x + sp.inner_x * s_P.ky, a.y + sp.inner_y * s_P.ky);
+			DrawTex(sp.inner_icon, ia, ImVec2(ia.x + sp.inner_size * s_P.ky, ia.y + sp.inner_size * s_P.ky), sp.inner_color);
+		}
+	}
+
 	void DrawLabel(const xr_string& utf8, const xr_string& font, u32 color, char align, char valign, bool wrap,
 				   const ImVec2& a, const ImVec2& b)
 	{
@@ -1067,13 +1086,23 @@ namespace
 			{
 				const ImVec2 p = v.W2P(l.markers[k].x, l.markers[k].z);
 				const float s = 11.f * s_P.ky;
-				DrawTex(l.markers[k].icon, ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y), l.markers[k].color);
+				// a marker naming a map_spots node looks like that spot in the game: centred on its place
+				if (const EditorPda::SMapSpot* sp = l.markers[k].spot.empty() ? 0 : l.FindSpot(l.markers[k].spot.c_str()))
+					DrawSpot(*sp, p);
+				else
+					DrawTex(l.markers[k].icon, ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y), l.markers[k].color);
 				if (!l.markers[k].hint.empty() && ImGui::IsMouseHoveringRect(ImVec2(p.x - s, p.y - 2 * s), ImVec2(p.x + s, p.y)))
 					s_HoverHint = l.markers[k].hint;
 			}
 			const ImVec2 ap = l.has_actor ? v.W2P(l.actor_x, l.actor_z) : v.mid;
-			s_DL->AddCircleFilled(ap, 6.f * s_P.ky, Col(kGamePlayerRing));
-			s_DL->AddCircleFilled(ap, 4.f * s_P.ky, Col(kGamePlayerDot));
+			// the player as the layout's map_spots draws it in the game, the stock dot otherwise
+			if (const EditorPda::SMapSpot* sp = l.FindSpot("actor_level_spot"))
+				DrawSpot(*sp, ap);
+			else
+			{
+				s_DL->AddCircleFilled(ap, 6.f * s_P.ky, Col(kGamePlayerRing));
+				s_DL->AddCircleFilled(ap, 4.f * s_P.ky, Col(kGamePlayerDot));
+			}
 		}
 		else
 		{

@@ -16,7 +16,7 @@ What it proves:
   E  the quest side: level_changer is a picker type, { role = } in a quest is E024
   F  the stock preset takes the section out of mod.ltx again
 
-    python tools/qa/test_world.py --project D:\\XFinedProjects\\Test
+    python tools/qa/test_world.py --project <project>
 
 The project must have a scene of a level open at start (its last_scene).
 """
@@ -176,13 +176,13 @@ def run_ui_checks() -> None:
     check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the World Rules tab",
           json.dumps(audit.get("escaped"))[:400])
     labels = {c.get("label") for c in audit.get("controls", [])}
-    for section in ("Original Game", "Applies On"):
+    for section in ("Original Game", "Player Start", "Place in Scene"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
     # the rest is drawn once the page scrolls to it
     scrolled = mcp("ui_scroll", id="world_rules", to="bottom")
     check(scrolled.get("ok"), "U the page scrolls", json.dumps(scrolled)[:300])
     labels = {c.get("label") for c in mcp("ui_audit", id="world_rules").get("controls", [])}
-    for section in ("Transitions", "Player Start", "Place in Scene"):
+    for section in ("Applies On", "Transitions"):
         check(section in labels, "U the tab shows " + section, json.dumps(sorted(x for x in labels if x))[:400])
     toolbar = {c.get("label") for c in mcp("ui_audit", id="##toolbar").get("controls", [])}
     check("Reload Game Data" in toolbar and "Empty World..." in toolbar, "U its toolbar offers Reload Game Data and Empty World...",
@@ -195,7 +195,7 @@ def run_ui_checks() -> None:
 
 def run(project: str) -> None:
     ed = Editor()
-    out_dir = tempfile.mkdtemp(prefix="xfined_world_")
+    out_dir = tempfile.mkdtemp(prefix="grizzly_world_")
     try:
         ed.start(project)
         manifest = mcp("mod_manifest")
@@ -409,12 +409,12 @@ def main() -> int:
     if not os.path.isdir(src):
         print("no such project: " + src)
         return 2
-    # C to F place things in the Escape scene; D:\XFinedProjects\Test has one
+    # C to F place things in the Escape scene; <project> has one
     if not os.path.isfile(os.path.join(src, "rawdata", "levels", "l01_escape.level")):
         print("the project has no rawdata\\levels\\l01_escape.level - the world checks need that scene: " + src)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_worldproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_worldproj_")
     copy = os.path.join(work, "QaWorld")
     shutil.copytree(src, copy)
     print("running against a copy: " + copy, flush=True)

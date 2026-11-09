@@ -4,11 +4,11 @@
 //
 // A tiny line-based JSON server on 127.0.0.1:28016, alive from the very first
 // frame (project browser included). AI agents talk to it through the stdio
-// bridge in tools/mcp/xfined_mcp.py. Requests are queued by socket workers
+// bridge in tools/mcp/grizzly_mcp.py. Requests are queued by socket workers
 // and executed on the main thread (device and scene are not thread-safe).
 //
 // Protocol: one JSON object per line in, one per line out.
-//   {"cmd":"ping"}                -> {"ok":true,"name":"XFined Editor",...}
+//   {"cmd":"ping"}                -> {"ok":true,"name":"Grizzly Editor",...}
 //   {"cmd":"state"}               -> project/scene/fps info
 //   {"cmd":"screenshot_viewport"} -> {"ok":true,"png_base64":"..."}
 //   {"cmd":"screenshot_editor"}   -> full editor window via PrintWindow,
@@ -18,9 +18,9 @@
 // commands the core does not know — scene/selection/object inspection etc.
 // Receives the command name and the raw request line (for arguments), fills
 // the JSON response, returns true when it handled the command.
-typedef bool (*TXFinedMCPHandler)(LPCSTR cmd, LPCSTR raw, xr_string& response);
+typedef bool (*TGrizzlyMCPHandler)(LPCSTR cmd, LPCSTR raw, xr_string& response);
 
-class ECORE_API XFinedMCP
+class ECORE_API GrizzlyMCP
 {
 public:
 	static void		Start		();		// spins up the listener thread
@@ -38,7 +38,7 @@ public:
 	// editor owns the only waiter; this keeps an idle message loop responsive
 	// without polling the request vector.
 	static HANDLE	WakeEvent	();
-	static void		SetHandler	(TXFinedMCPHandler handler);
+	static void		SetHandler	(TGrizzlyMCPHandler handler);
 
 	// Extracts one exact top-level string field. Missing, malformed, duplicate,
 	// embedded-NUL, and oversized values all return false with an empty buffer.

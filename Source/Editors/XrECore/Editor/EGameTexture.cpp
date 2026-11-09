@@ -15,14 +15,37 @@
 #pragma hdrstop
 
 #include "EditorGameContent.h"
+#include "EditorProject.h"
 
-// `name` is an engine texture name: below textures\, no extension. The file is
-// only looked up in what is mounted - the game is mounted by whatever brought
-// the model in.
+// `name` is an engine texture name: below textures\, no extension. The open
+// project's own gamedata\textures\ comes first (the mod ships it in its module,
+// over the game's), then what is mounted - the game is mounted by whatever
+// brought the model in.
 bool EditorGameContent_ReadTexture(LPCSTR name, xr_vector<u8>& file)
 {
 	file.clear();
 	if (!name || !name[0])	return false;
+
+	if (EditorProject::Active())
+	{
+		string_path	full;
+		xr_sprintf	(full, sizeof(full), "%s\\gamedata\\textures\\%s.dds", EditorProject::Root(), name);
+		for (char* c = full; *c; ++c) if (*c == '/') *c = '\\';
+		if (FILE* f = nullptr; 0 == fopen_s(&f, full, "rb") && f)
+		{
+			fseek	(f, 0, SEEK_END);
+			const long len = ftell(f);
+			fseek	(f, 0, SEEK_SET);
+			if (len > 0)
+			{
+				file.resize(size_t(len));
+				if (fread(file.data(), 1, file.size(), f) != file.size())
+					file.clear();
+			}
+			fclose	(f);
+			if (!file.empty())	return true;
+		}
+	}
 
 	// Find takes either slash and any case
 	string_path	rel;

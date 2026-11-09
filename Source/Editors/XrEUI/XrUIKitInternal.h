@@ -6,9 +6,9 @@ namespace XUI
 {
 namespace Internal
 {
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
-inline ImU32 Col(Token token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+inline ImU32 Col(Token token, float alpha = 1.f) { return GrizzlyTheme::U32(token, alpha); }
 inline ImVec2 PtV(float x, float y) { return ImVec2(Pt(x), Pt(y)); }
 // the end of the part of a label that is shown ("Name##id" -> "Name")
 inline const char* LabelEnd(const char* label) { return label ? ImGui::FindRenderedTextEnd(label) : label; }

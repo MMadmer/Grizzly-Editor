@@ -7,6 +7,8 @@ struct vf
 {
 	float2 tc0	: TEXCOORD0;		// base
 	float3 tc1	: TEXCOORD1;		// environment
+	float3 wpos	: TEXCOORD2;		// world position and normal - the game lighting
+	float3 wnorm: TEXCOORD3;
 	float4 hpos	: SV_Position;
 };
 
@@ -22,6 +24,8 @@ vf 	_main (v_model v)
 	o.hpos 		= mul			(m_WVP, pos);		// xform, input in world coords
 	o.tc0		= v.tc.xy;					// copy tc
 	o.tc1		= calc_reflection	(pos_w, norm_w);
+	o.wpos		= pos_w;
+	o.wnorm		= norm_w;
 	return o;
 }
 

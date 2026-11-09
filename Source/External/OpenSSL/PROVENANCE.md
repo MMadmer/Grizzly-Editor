@@ -1,6 +1,6 @@
 # OpenSSL 3.5.7 provenance
 
-XFined Editor uses the unmodified OpenSSL 3.5.7 `libcrypto` binary built from
+Grizzly Editor uses the unmodified OpenSSL 3.5.7 `libcrypto` binary built from
 the official upstream source release. OpenSSL 3.5 is the upstream LTS branch.
 
 ## Source authentication
@@ -60,7 +60,7 @@ symbols are not distributed.
 
 OpenSSL supplies provider-backed DSA and operating-system RNG access. The
 historical public `crypto::xr_sha256` type intentionally remains a first-party
-SHA-0 implementation because old XFined/game signatures serialize that exact
+SHA-0 implementation because old Grizzly/game signatures serialize that exact
 20-byte digest. The wrapper disables OpenSSL configuration loading and uses
 the built-in default provider, so no external provider or configuration file
 is required at runtime.

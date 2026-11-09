@@ -1,6 +1,6 @@
 ﻿//---------------------------------------------------------------------------
 #include "stdafx.h"
-#include "../../Public/xfined_resource.h"
+#include "../../Public/grizzly_resource.h"
 #include "EditorStartup.h"
 #pragma hdrstop
 #include "gamefont.h"
@@ -794,7 +794,7 @@ void CEditorRenderDevice::CreateWindow()
 	// an ANSI one gets its WM_CHAR pre-converted to the system codepage - which
 	// silently mangles every language the author's ACP cannot express. The pump
 	// in TUI::Idle() takes the W path for the same reason.
-	m_WC = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"XFined Editor", NULL };
+	m_WC = { sizeof(WNDCLASSEXW), CS_CLASSDC, WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, L"Grizzly Editor", NULL };
 	// The window is up well before the first frame - the game library, its
 	// scripts and the project still have to load. Without a background brush
 	// Windows paints that gap white, which reads as a hung application; the
@@ -805,12 +805,12 @@ void CEditorRenderDevice::CreateWindow()
 	// without the icon resource simply keeps the system default instead of failing.
 	// LR_SHARED: these live for the process and must not be destroyed by hand.
 	const HINSTANCE self = m_WC.hInstance;
-	m_WC.hIcon = (HICON)::LoadImageW(self, MAKEINTRESOURCEW(IDI_XFINED_EDITOR), IMAGE_ICON,
+	m_WC.hIcon = (HICON)::LoadImageW(self, MAKEINTRESOURCEW(IDI_GRIZZLY_EDITOR), IMAGE_ICON,
 		::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), LR_SHARED);
-	m_WC.hIconSm = (HICON)::LoadImageW(self, MAKEINTRESOURCEW(IDI_XFINED_EDITOR), IMAGE_ICON,
+	m_WC.hIconSm = (HICON)::LoadImageW(self, MAKEINTRESOURCEW(IDI_GRIZZLY_EDITOR), IMAGE_ICON,
 		::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_SHARED);
 	::RegisterClassExW(&m_WC);
-	m_hWnd= ::CreateWindowW(m_WC.lpszClassName, L"XFined Editor", WS_OVERLAPPEDWINDOW, 100, 100, int(1280 * dpi_scale), int(800 * dpi_scale), NULL, NULL, m_WC.hInstance, NULL);
+	m_hWnd= ::CreateWindowW(m_WC.lpszClassName, L"Grizzly Editor", WS_OVERLAPPEDWINDOW, 100, 100, int(1280 * dpi_scale), int(800 * dpi_scale), NULL, NULL, m_WC.hInstance, NULL);
 
 	// A window created before the class icon exists (or by a tool that has none)
 	// keeps the default one, so set it on the window as well - this is also what

@@ -4,6 +4,8 @@ struct 	v2p
 {
  	float2 	tc0: 		TEXCOORD0;	// base
 	float3	tc1:		TEXCOORD1;	// environment
+	float3	wpos:		TEXCOORD2;	// world position and normal - the game lighting
+	float3	wnorm:		TEXCOORD3;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -14,11 +16,13 @@ float4 	main	( v2p I )	: SV_Target
 	// s_env is bound with D3DTADDRESS_CLAMP + linear, which is what smp_rtlinear is
 	float4	t_env 	= s_env.Sample	(smp_rtlinear,	I.tc1);
 
-	// lighting
-
 	// final-color
 	float3 	base 	= lerp	(t_env.rgb,t_base.rgb,t_base.a);
 	float3	final 	= base;
+
+	// lighting: the game's, when the preview is on
+	if (glit_enabled())
+		final	*= glit_light(I.wpos, glit_normal(I.wpos, I.wnorm));
 
 	// out
 	return  float4	(final.r,final.g,final.b,t_base.a);

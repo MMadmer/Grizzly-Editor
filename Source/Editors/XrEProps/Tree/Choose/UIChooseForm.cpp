@@ -203,7 +203,7 @@ void UIChooseForm::DrawInfo()
         if (item->hint.size())
         {
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
-            ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(XUI_Local::Token::TextSecondary));
+            ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(XUI_Local::Token::TextSecondary));
             ImGui::TextUnformatted(item->hint.c_str());
             ImGui::PopStyleColor();
             ImGui::PopTextWrapPos();
@@ -230,7 +230,7 @@ void UIChooseForm::DrawSelectedList()
     {
         XUI::FontScope caption_font(XUI::Font::Small);
         ImGui::AlignTextToFramePadding();
-        ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(XUI_Local::Token::TextSecondary));
+        ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(XUI_Local::Token::TextSecondary));
         ImGui::TextUnformatted(caption);
         ImGui::PopStyleColor();
     }

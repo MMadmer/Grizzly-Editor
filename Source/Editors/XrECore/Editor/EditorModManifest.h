@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-// XMS (XFined Module System) mod-authoring support.
+// XMS (Grizzly Module System) mod-authoring support.
 //
 // Every project doubles as an XMS module package: a mod.ltx manifest at the
 // project root plus the module dirs (gamedata\, patch\, spawn\, scripts\).
@@ -42,8 +42,97 @@ namespace EditorMod
 		bool					Empty() const;
 	};
 
+	// one row of a start kit: an item section and how many of it (ammo: boxes)
+	struct SKitItem
+	{
+		xr_string				section;
+		int						count = 1;
+	};
+
+	// mod.ltx [start_kit] (game repo: docs/dead-air/MODDING.md, "The start kit"): what a
+	// new game of the module's mode begins with. It REPLACES the new-game screen's loadout -
+	// the faction's kit and the extra kits picked there, and the perks when `perks` is off.
+	// The section being there is what declares a kit: an empty one starts the player with
+	// nothing but the PDA.
+	struct SStartKit
+	{
+		bool					declared = false;
+		int						money = -1;		// -1 = not written: the new-game screen's money stays
+		bool					perks = true;	// the perks picked on the new-game screen stay
+		xr_vector<SKitItem>		items;			// in the order written
+	};
+
+	// mod.ltx [vars]: the module's global variables (NQ) - `name = default`, one value every
+	// quest and behaviour graph of the module reads and writes (global.set, global.add, the
+	// `global` condition, {global:name} in a text). The default is kept as written: true /
+	// false is a bool, a number a number, anything else a string (quoted when the editor
+	// writes it, so "1" stays text). Game half: xms_nq_load.parse_globals.
+	struct SGlobalVar
+	{
+		xr_string	name;		// [A-Za-z0-9_]
+		xr_string	value;		// as written, quotes included
+	};
+
+	// mod.ltx [commands] and [command.<name>] (game repo: docs/dead-air/MODDING.md, "Console
+	// commands"): a console command the module adds. `name = <script>.<function>` in [commands];
+	// the game calls the function of the project's gamedata\scripts with the text typed after the
+	// name and prints what it returns. help, args and cheat live in the command's own section.
+	struct SCommand
+	{
+		xr_string				name;			// a-z, 0-9 and _ (ValidCommandName)
+		xr_string				function;		// <script>.<function>
+		xr_string				help;			// decoded text or a string table id; Save quotes it when it has to
+		xr_string				args;			// what it takes, e.g. "<night 1-7>"
+		bool					cheat = false;	// only in Dead Air's debug mode (-dbg)
+		bool					declared = true;	// false: only a [command.<name>] section names it
+		xr_vector<xr_string>	extra;			// unknown lines of its section, kept as written
+	};
+
 	// parsed mod.ltx; unknown keys/sections ([budget], [declares], engine_min,
 	// ...) survive a load/save round-trip verbatim in the *_extra fields
+	// [screens], [screen.<id>], [track.<id>]: the module's loading and menu screens and their music
+	// (EditorScreens; game repo docs/dead-air/MODDING.md, "Screens and music")
+	enum { scrLoading = 1, scrMenu = 2, scrPause = 4, scrAll = 7 };
+	enum { scrHideBar = 1, scrHidePercent = 2, scrHideStage = 4, scrHideTip = 8 };
+	enum { scrCover = 0, scrContain = 1, scrStretch = 2 };
+	struct SScreenLayer
+	{
+		xr_string		file;			// project-relative, '\\' separators; empty: nothing put on it yet
+		xr_string		texture;		// a shader's own picture
+		int				fit = scrCover;
+		float			opacity = 1.f;
+		float			x = 0.f, y = 0.f, w = 100.f, h = 100.f;	// per cent of the screen
+		bool			sound = true;
+	};
+	struct SScreen
+	{
+		xr_string		id;
+		u32				show = scrAll;
+		xr_vector<xr_string> levels, modes;
+		float			weight = 1.f;
+		xr_string		music = "any";	// any | none | video | tracks
+		xr_vector<xr_string> tracks;	// music == "tracks"
+		u32				hide = 0;
+		xr_vector<SScreenLayer> layers;	// bottom first
+	};
+	struct STrack
+	{
+		xr_string		id;
+		xr_string		file;
+		u32				play = 0;		// the surfaces whose shuffle it joins
+		float			weight = 1.f;
+		float			volume = 1.f;
+	};
+	struct SScreens
+	{
+		// [0] the loading screen, [1] the menu
+		bool			only_screens[2] = { false, false };
+		bool			only_music[2] = { false, false };
+		bool			next_track[2] = { false, false };
+		xr_vector<SScreen> screens;
+		xr_vector<STrack> tracks;
+	};
+
 	struct SManifest
 	{
 		xr_string				id;
@@ -81,10 +170,21 @@ namespace EditorMod
 		xr_vector<xr_string>	exclude;
 		// [world]: the mode's world (EditorWorld)
 		SWorld					world;
+		// [start_kit]: what a new game of the mode begins with (EditorWorld)
+		SStartKit				start_kit;
+		// [vars]: the global variables every quest of the module shares, in the author's order
+		xr_vector<SGlobalVar>	vars;
 		// [pda] layout: the module's own PDA interface, a project-relative .pdaasset
 		// (EditorPda); empty = the module leaves the PDA alone
 		xr_string				pda_layout;
 		xr_vector<xr_string>	pda_extra;		// unknown [pda] lines
+		// [commands]: the console commands the module adds, in the author's order
+		xr_vector<SCommand>		commands;
+		// the module's screens and music (EditorScreens)
+		SScreens				screens;
+		// [module] disable_game_updates: the game stops updating itself and takes no bug reports from whoever has
+		// the module. A last resort: the author has to mean it.
+		bool					disable_game_updates = false;
 	};
 
 	// id charset per XMS spec: [a-z0-9_.\-]+
@@ -108,18 +208,35 @@ namespace EditorMod
 	// creates missing mod.ltx / module dirs / patch readme; never overwrites
 	ECORE_API void	EnsureScaffold		(LPCSTR project_root, LPCSTR project_name);
 
-	// Project-relative paths of the files the EDITOR owns inside the project:
-	// the manifest and everything export (re)generates. The content browser
-	// hides them - they are required machinery, not content, and deleting one
-	// by accident must not be possible - and the export's mode step deletes
-	// the generated ones when the declaration they came from is gone.
-	ECORE_API void	GetOwnedFiles		(LPCSTR project_root, xr_vector<xr_string>& rel);
-
 	ECORE_API bool	Load				(LPCSTR project_root, SManifest& m);
 	ECORE_API bool	Save				(LPCSTR project_root, const SManifest& m);
 	// bumped by every Save: a window showing part of the manifest re-reads it when
 	// this moves instead of asking the disk every frame
 	ECORE_API u32	ManifestGeneration	();
+	// the active project's [vars], re-read only when the generation moves - or after
+	// InvalidateGlobals, for a mod.ltx that changed on disk behind the editor's back
+	ECORE_API const xr_vector<SGlobalVar>& ProjectGlobals();
+	ECORE_API void	InvalidateGlobals	();
+	// letters, digits and _: what the runtime reads as a name
+	ECORE_API bool	ValidGlobalName		(LPCSTR name);
+
+	// ---- console commands ([commands]) ---------------------------------------------
+	// a-z, 0-9 and _: the console finds a command by its exact name and ends it at a space
+	ECORE_API bool	ValidCommandName	(LPCSTR name);
+	// <script>.<function>: two Lua names
+	ECORE_API bool	ValidCommandFunction(LPCSTR spec);
+	// What a command may call: `function name(` and `name = function(` of the project's
+	// gamedata\scripts\*.script as <script>.<function>, sorted. A script the build leaves out
+	// has none; `local function` stays inside its script.
+	ECORE_API void	ScriptFunctions		(LPCSTR project_root, xr_vector<xr_string>& out);
+	// [commands] the modules of the linked game declare, as {command, module id}, the module
+	// `self_id` left out
+	ECORE_API void	InstalledCommands	(LPCSTR self_id, xr_vector<std::pair<xr_string, xr_string> >& out);
+	// The build's check of [commands]: E401 a bad name, E402 a name twice, E403 a function that is
+	// not <script>.<function>, E404 one the project's scripts lack, E405 a [command.<name>] with no
+	// [commands] line, E406 a name the game has; W406 a name of a family of the game's own,
+	// W407 a name another module of the linked game declares, W408 text outside cp1251.
+	ECORE_API void	ValidateCommands	(LPCSTR project_root, const SManifest& m, xr_vector<xr_string>& problems);
 
 	// ---- the Mod Browser's picture and tags (game repo MOD_CATALOG 6) ------------
 	// `value` names what [module] thumbnail becomes: "" = none (the editor's own
@@ -156,24 +273,6 @@ namespace EditorMod
 	// it); or it never ships at all (the editor's scratch, the sources).
 	enum EShipState { shipShipped = 0, shipExcluded, shipExcludedByRule, shipNever };
 	ECORE_API EShipState ShipState		(LPCSTR project_root, LPCSTR rel, xr_string* rule = 0);
-
-	// flat=false: mod.ltx + module dirs -> <target>\modules\<id>\
-	// flat=true : gamedata content -> <target>\gamedata_<id>\ + compat report
-	// The module export MIRRORS the project: files the target holds and the
-	// project does not are deleted. When those exist and `confirmed` is false
-	// it refuses instead, so the caller can ask first - the target may be
-	// someone else's module that shares the id.
-	// `warnings` (optional) comes back with the quest problems that did not stop the
-	// build: a warning nobody is shown is a warning that does not exist, and the one
-	// that matters most - a quest naming a restrictor that was never placed - reads as
-	// a clean build otherwise.
-	// `left_out` (optional) comes back with what the build passed by and why it
-	// matters to know: every tooling entry, every [exclude]d one and every link,
-	// project-relative, at the level the walk stopped.
-	ECORE_API bool	Export				(LPCSTR project_root, LPCSTR target_root, bool flat,
-										 int& files, xr_string& out_path, xr_string& err,
-										 bool confirmed = false, xr_string* warnings = 0,
-										 xr_vector<xr_string>* left_out = 0);
 
 	// one asset of a release, as the descriptor lists it
 	struct SPackageFile
@@ -212,19 +311,65 @@ namespace EditorMod
 								SPackageResult	() : files(0), unpacked(0), packed(0), signed_(false) {}
 	};
 
-	// A release for the game's module updater: <id>.update.ltx, the file index
-	// <id>-<version>.files and package zip(s) holding the COMPLETE module under
-	// modules/<id>/. The index says where inside a package every file's data
-	// sits, so the game downloads only the files that differ. Names, descriptor
-	// and index format and package layout are a frozen contract with the game -
-	// the normative text is docs/dead-air/MOD_UPDATES.md (section 2) in the game repo.
-	// The module is staged through Export, so everything a module build refuses
-	// is refused here too. `out_dir` empty = <project>\releases\<version>;
-	// `requires_game` empty = the key is left out. Files an earlier packaging of
-	// the same id+version left in `out_dir` are replaced (deleted) without
-	// asking - the UI asks first. Callers run RunPreBuildBake, like every build.
-	ECORE_API bool	PackageRelease		(LPCSTR project_root, LPCSTR out_dir, LPCSTR requires_game,
-										 SPackageResult& result, xr_string& err, xr_string* warnings = 0);
+	// A build, an export and a packaging run beside the editor, one at a time: the checks in slices between frames (they
+	// read what the open tabs read), the files on a thread of their own. The Task Center shows it, Stop stops it.
+	//
+	// jkBuildIntoGame / jkBuildToFolder: mod.ltx + module dirs -> <target>\modules\<id>. The build is written beside the
+	// last one and takes its place in one step, so a build that fails or is stopped leaves the last one as it was. Files
+	// the target holds and the project does not go with it: when those exist and `clean` is false the job ends with the
+	// list of them in `stale_names`, so the caller can ask first - the target may be someone else's module that shares
+	// the id.
+	// jkExportFlat: gamedata content -> <target>\gamedata_<id> + compat report.
+	// jkPackage: a release for the game's module updater: <id>.update.ltx, the file index <id>-<version>.files and package
+	// zip(s) holding the COMPLETE module under modules/<id>/. The index says where inside a package every file's data
+	// sits, so the game downloads only the files that differ. Names, descriptor and index format and package layout are a
+	// frozen contract with the game - the normative text is docs/dead-air/MOD_UPDATES.md (section 2) in the game repo. The
+	// module is staged by the build above, so everything a module build refuses is refused here too. `out_dir` empty =
+	// <project>\releases\<version>; `requires_game` empty = the key is left out. Files an earlier packaging of the same
+	// id+version left in `out_dir` are replaced (deleted) without asking - the UI asks first.
+	enum EJobKind { jkBuildIntoGame, jkBuildToFolder, jkExportFlat, jkPackage };
+
+	struct SJobResult
+	{
+		bool					ok			= false;
+		bool					cancelled	= false;
+		int						files		= 0;
+		xr_string				path;				// the folder written, or the one that refused
+		xr_string				err;
+		xr_string				warnings;			// the problems that did not stop the build
+		xr_string				bake_note;			// what the scene's bake did
+		xr_vector<xr_string>	left_out;			// what the build passed by: tooling, [exclude], links, project-relative
+		xr_vector<xr_string>	stale_names;		// the clean build's refusal: the first ten of the files it would delete
+		int						stale_count	= 0;
+		SPackageResult			package;			// jkPackage
+	};
+
+	struct SJobRequest
+	{
+		EJobKind				kind		= jkBuildIntoGame;
+		xr_string				target;				// the folder a build goes to
+		bool					clean		= false;	// the author agreed to the files going
+		xr_string				out_dir, requires_game;	// jkPackage
+		bool					from_mcp	= false;	// a Task Center row that opens nothing, and nothing asked in the checks
+		// the Task Center's row
+		xr_string				key, title, subtitle, stop_label, stop_tip;
+		xr_vector<xr_string>	steps;				// the first three are Check, Copy and Install or Pack
+		// on the main thread, when the job has ended, whichever way
+		std::function<void(const SJobResult&)>	done;
+	};
+
+	ECORE_API bool	StartJob			(const SJobRequest& request, xr_string& err);
+	ECORE_API bool	JobRunning			();
+	ECORE_API void	StopJob				();
+	// from the editor's loop, drawn or not
+	ECORE_API void	JobTick				();
+	// the editor closes: stops the job and waits for its thread
+	ECORE_API void	JobShutdown			();
+	// "Copying files, 38%": what the toolbar's tip says; empty when no job runs
+	ECORE_API void	JobStatusText		(char* dst, u32 size);
+	// the last job's answer, for an MCP caller held until the job ended
+	ECORE_API const SJobResult& LastJobResult();
+
 	// What an earlier packaging of this id + version left in the release folder -
 	// the files the next one deletes. A dialog names them first.
 	ECORE_API void	ListPackagedFiles	(LPCSTR project_root, LPCSTR out_dir, LPCSTR id, LPCSTR version,
@@ -242,7 +387,7 @@ namespace EditorMod
 	ECORE_API void	RequestPackageRelease();
 
 	// the everyday build: no target picker, no options - the linked game IS
-	// the target, so this is Export(flat=false) straight to <game>\modules\<id>
+	// the target, so this is a module build straight to <game>\modules\<id>
 	ECORE_API void	RequestBuildIntoGame();
 	ECORE_API bool	CanBuildIntoGame	();
 	// "<game>\modules\<id>" for a menu tooltip; empty when it can't be built
@@ -250,7 +395,7 @@ namespace EditorMod
 
 	// Scene work lives a layer above this dll, but a build must ship what the
 	// author sees - so the editor registers a bake here and every build path
-	// (menu, modal, MCP) runs it before Export. The note goes into the result.
+	// (menu, modal, MCP) runs it first, on the main thread. The note goes into the result.
 	typedef void (*TPreBuildBake)(xr_string& note);
 	ECORE_API void	SetPreBuildBake		(TPreBuildBake fn);
 	ECORE_API void	RunPreBuildBake		(xr_string& note);
@@ -261,8 +406,11 @@ namespace EditorMod
 	ECORE_API void	McpExport			(LPCSTR raw, xr_string& out);
 	// {"path":"docs","excluded":true|false} - the browser's Exclude from Build
 	ECORE_API void	McpExclude			(LPCSTR raw, xr_string& out);
+	// mod_commands: without "name" the commands, the functions they may call and the problems;
+	// {"name","function","help","args","cheat"} adds or changes one, "remove":true takes it out
+	ECORE_API void	McpCommands			(LPCSTR raw, xr_string& out);
 	ECORE_API void	McpPackage			(LPCSTR raw, xr_string& out);
-	// mod_settings_view: {"page":"general|mod_browser|game_mode|relations|build_contents|pda"} opens the
+	// mod_settings_view: {"page":"general|mod_browser|game_mode|relations|build_contents|pda|commands"} opens the
 	// Mod Settings tab on that page; without a page it only reports: the page, dirty, each page's state
 	// and the problems the form shows
 	ECORE_API void	McpSettingsView		(LPCSTR raw, xr_string& out);

@@ -132,7 +132,8 @@ bool EditorGameConfigs::Activate(xr_string& err)
 
 			u32 sz = 0;
 			u8* data = EditorGameContent::ReadBytes(i, sz);
-			if (!data) { Msg("! game configs: can't read '%s', skipped", it->path.c_str()); continue; }
+			// the game ships empty configs its includes name: no bytes is an answer, not a failure
+			if (!data && it->size) { Msg("! game configs: can't read '%s', skipped", it->path.c_str()); continue; }
 
 			string_path dst;
 			// the path already starts with configs\ - the cache root replaces
@@ -143,7 +144,7 @@ bool EditorGameConfigs::Activate(xr_string& err)
 				INVALID_HANDLE_VALUE != f)
 			{
 				DWORD wr = 0;
-				::WriteFile(f, data, sz, &wr, NULL);
+				if (sz) ::WriteFile(f, data, sz, &wr, NULL);
 				::CloseHandle(f);
 				if (wr == sz) ++written;
 			}

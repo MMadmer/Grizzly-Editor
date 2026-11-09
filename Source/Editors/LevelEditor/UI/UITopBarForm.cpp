@@ -77,12 +77,17 @@ void UITopBarForm::DrawLevel(XUI::Toolbar& tb)
 // on every tab: the level builds next to it are a different kind of thing.
 void UITopBarForm::DrawProject(XUI::Toolbar& tb)
 {
-	if (!EditorProject::Active())
+	// nothing of a project is edited in the Preferences: they have nothing to build
+	if (!EditorProject::Active() || XUI::Shell::IsActive("preferences"))
 		return;
 	char build_target[MAX_PATH] = {};
 	EditorMod::BuildTargetText(build_target, sizeof(build_target));
 	const xr_string keys = BoundKeys(COMMAND_MOD_BUILD);
-	const xr_string build_tip = build_target[0]
+	// the label keeps its width: what a running job does is in the tip, and a click brings its card up
+	char job[160] = {};
+	EditorMod::JobStatusText(job, sizeof(job));
+	const bool busy = !!job[0];
+	const xr_string build_tip = busy ? xr_string(job) + ".\nClick to see the job." : build_target[0]
 		? xr_string("A clean build into the linked game") + (keys.empty() ? xr_string() : " (" + keys + ")") + ":\n" + build_target
 		: xr_string("Link a game and set a valid module id first.");
 	bool more = false;
@@ -90,11 +95,11 @@ void UITopBarForm::DrawProject(XUI::Toolbar& tb)
 		ExecCommand(COMMAND_MOD_BUILD);
 	if (more)
 	{
-		if (XUI::MenuItem("Build Into Game", keys.empty() ? nullptr : keys.c_str(), false, EditorMod::CanBuildIntoGame()))	ExecCommand(COMMAND_MOD_BUILD);
-		if (XUI::MenuItem("Build to Folder..."))		EditorMod::RequestExportModule();
-		if (XUI::MenuItem("Export Flat Gamedata..."))	EditorMod::RequestExportFlat();
+		if (XUI::MenuItem("Build Into Game", keys.empty() ? nullptr : keys.c_str(), false, !busy && EditorMod::CanBuildIntoGame()))	ExecCommand(COMMAND_MOD_BUILD);
+		if (XUI::MenuItem("Build to Folder...", nullptr, false, !busy))		EditorMod::RequestExportModule();
+		if (XUI::MenuItem("Export Flat Gamedata...", nullptr, false, !busy))	EditorMod::RequestExportFlat();
 		ImGui::Separator();
-		if (XUI::MenuItem("Package Release..."))		EditorMod::RequestPackageRelease();
+		if (XUI::MenuItem("Package Release...", nullptr, false, !busy))		EditorMod::RequestPackageRelease();
 		ImGui::EndPopup();
 	}
 	// the other half of shipping: the same module, out to the players. The label keeps its width (a label that follows
@@ -106,7 +111,7 @@ void UITopBarForm::DrawProject(XUI::Toolbar& tb)
 	publish_tip += "Package the module and publish it as a GitHub release.\nPlayers receive it through the game's Mods menu.";
 	if (tb.Action("publish_release", XUI::Icon::Publish, "Publish Release", publish_tip.c_str(), EditorPublish::CanPublish(), running))
 		ExecCommand(COMMAND_MOD_PUBLISH);
-	if (tb.Action("releases", XUI::Icon::Releases, "Releases", "The releases already on GitHub.\nDeletes one together with its git tag.",
+	if (!XUI::Shell::IsActive("releases") && tb.Action("releases", XUI::Icon::Releases, "Releases", "The releases already on GitHub.\nDeletes one together with its git tag.",
 		EditorPublish::CanPublish()))
 		ExecCommand(COMMAND_MOD_RELEASES);
 }

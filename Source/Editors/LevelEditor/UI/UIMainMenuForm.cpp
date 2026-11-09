@@ -1,9 +1,11 @@
 ﻿#include "stdafx.h"
+#include "../Editor/GameLightingScene.h"
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorModPublish.h"
 #include "..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
+#include "..\..\XrECore\Editor\EditorScreens.h"
 #include "..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\XrECore\Editor\UILogForm.h"
 #include "..\Editor\EditorModScene.h"
@@ -280,6 +282,8 @@ void MenuMod()
 	XUI::Tip("The module's own NPCs: name, model, community and starting kit.");
 	if (XUI::MenuItem("World Rules", Keys(COMMAND_MOD_WORLD)))			EditorWorld::Show();
 	XUI::Tip("What the mode keeps of the original game, the levels the player reaches and the Player Start.");
+	if (XUI::MenuItem("Screens & Music"))									EditorScreens::Show();
+	XUI::Tip("The module's loading and menu screens and the music that goes with them.");
 	if (XUI::MenuItem("PDA Interface", Keys(COMMAND_MOD_PDA)))			EditorPda::ShowModuleLayout();
 	XUI::Tip("The module's own PDA screens, in a preview that plays them.");
 	ImGui::Separator();
@@ -451,9 +455,9 @@ void MenuHelp()
 		EPrefs->ShowPage("Keyboard");
 	}
 	XUI::Tip("Every shortcut, listed and rebound: the Keyboard page of Preferences.");
-	if (XUI::MenuItem("About XFined Editor"))
-		XUI::Notice(XUI::Tone::Info, "About XFined Editor",
-			"XFined Editor - the level and mod editor of Dead Air Refined.\nAgents drive it over MCP on 127.0.0.1:28016.");
+	if (XUI::MenuItem("About Grizzly Editor"))
+		XUI::Notice(XUI::Tone::Info, "About Grizzly Editor",
+			"Grizzly Editor - the level and mod editor of Dead Air Refined.\nAgents drive it over MCP on 127.0.0.1:28016.");
 	ImGui::EndMenu();
 }
 
@@ -526,7 +530,7 @@ void UIMainMenuForm::DrawViewportOptions()
 			{
 				xr_string active = "Active: ";
 				active += GetActiveGpuName();
-				ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+				ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary));
 				ImGui::TextUnformatted(active.c_str());
 				ImGui::PopStyleColor();
 			}
@@ -654,6 +658,12 @@ void UIMainMenuForm::DrawViewportOptions()
 	{
 		bool selected = psDeviceFlags.test(rsLighting);
 		if (XUI::MenuItem("Lighting", nullptr, &selected))		{ psDeviceFlags.set(rsLighting, selected); UI->RedrawScene(); }
+	}
+	// the scene lit the way the game lights it at an hour and weather of the linked game
+	if (ImGui::BeginMenu("Game Lighting"))
+	{
+		GameLighting_Menu();
+		ImGui::EndMenu();
 	}
 	{
 		bool selected = psDeviceFlags.test(rsMuteSounds);

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""End-to-end check of Mod > Publish Release against tools/qa/github_mock.py.
+"""End-to-end check of Mod > Publish Release against tools/qa/github_mock (Go).
 
 Starts the editor with -qa_github on a project, drives mod_publish over the MCP
 socket and takes every verdict from the mock's own state. Never talks to GitHub:
-in QA mode the editor reads only XFINED_GITHUB_TOKEN and a separate QA
+in QA mode the editor reads only GRIZZLY_GITHUB_TOKEN and a separate QA
 credential, so the real account cannot leak into a test either.
 
 A module the Mod Browser lists (the mock's catalog index names its id) has every
@@ -14,7 +14,7 @@ restored byte for byte, the release
 folders this run created are removed and the QA VirusTotal key is forgotten. The editor
 is closed the way its caption cross would.
 
-    python tools/qa/test_mod_publish.py --project D:\\XFinedProjects\\Test
+    python tools/qa/test_mod_publish.py --project <project>
 """
 from __future__ import annotations
 
@@ -29,6 +29,8 @@ import sys
 import tempfile
 import time
 import urllib.request
+
+from mock_server import mock_exe
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -85,7 +87,7 @@ class Mock:
         self.port = port
         self.base = f"http://127.0.0.1:{port}"
         self.proc = subprocess.Popen(
-            [sys.executable, os.path.join(HERE, "github_mock.py"), "--port", str(port), "--token", token,
+            [mock_exe(), "--port", str(port), "--token", token,
              "--repo", GITHUB_REPO, "--vt-key", VT_KEY, "--catalog-seed", SEEDS[catalog], *flags],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         line = self.proc.stdout.readline()
@@ -116,22 +118,22 @@ class Editor:
         if mcp_up():
             raise RuntimeError("an editor already answers on 127.0.0.1:28016 - close it first")
         env = dict(os.environ)
-        for name in ("XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "XFINED_VT_KEY", "VT_API_KEY"):
+        for name in ("GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GRIZZLY_VT_KEY", "VT_API_KEY"):
             env.pop(name, None)
-        env["XFINED_GITHUB_API"] = f"http://127.0.0.1:{port}"
-        env["XFINED_GITHUB_WEB"] = f"http://127.0.0.1:{port}"
-        env["XFINED_GITHUB_CLIENT_ID"] = "qa-client"
+        env["GRIZZLY_GITHUB_API"] = f"http://127.0.0.1:{port}"
+        env["GRIZZLY_GITHUB_WEB"] = f"http://127.0.0.1:{port}"
+        env["GRIZZLY_GITHUB_CLIENT_ID"] = "qa-client"
         # the Mod Browser's index and VirusTotal are the mock's too; the key is the QA credential (vt_key)
-        env["XFINED_CATALOG_BASE"] = f"http://127.0.0.1:{port}/catalog/public/"
-        env["XFINED_VT_API"] = f"http://127.0.0.1:{port}/vt/api/v3"
-        env["XFINED_VT_PACE_MS"] = "100"
-        env["XFINED_VT_SCAN_WAIT_MS"] = "4000"
-        env["XFINED_VT_RATE_WAIT_MS"] = "200"
+        env["GRIZZLY_CATALOG_BASE"] = f"http://127.0.0.1:{port}/catalog/public/"
+        env["GRIZZLY_VT_API"] = f"http://127.0.0.1:{port}/vt/api/v3"
+        env["GRIZZLY_VT_PACE_MS"] = "100"
+        env["GRIZZLY_VT_SCAN_WAIT_MS"] = "4000"
+        env["GRIZZLY_VT_RATE_WAIT_MS"] = "200"
         # the author key the releases are signed with: a throw-away home, never the user's own - gone with the editor
-        self.home = tempfile.mkdtemp(prefix="xfined_publish_home_")
-        env["XFINED_CATALOG_HOME"] = self.home
+        self.home = tempfile.mkdtemp(prefix="grizzly_publish_home_")
+        env["GRIZZLY_CATALOG_HOME"] = self.home
         if with_token:
-            env["XFINED_GITHUB_TOKEN"] = TOKEN
+            env["GRIZZLY_GITHUB_TOKEN"] = TOKEN
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
@@ -347,7 +349,7 @@ def main() -> int:
     port = free_port()
     mock = None
     editor = None
-    work = tempfile.mkdtemp(prefix="xfined_publish_qa_")
+    work = tempfile.mkdtemp(prefix="grizzly_publish_qa_")
     SEEDS["unlisted"] = write_seed(os.path.join(work, "unlisted"), "")
     SEEDS["none"] = write_seed(os.path.join(work, "none"), None)
     try:
@@ -449,7 +451,7 @@ def main() -> int:
         mcp("mod_set_manifest", version="0.9.6", github=GITHUB_REPO)
         packaged = mcp("mod_package")
         weight = sum(p.get("size", 0) for p in packaged.get("packages", [])) + (packaged.get("index") or {}).get("size", 0)
-        kbps = max(2, min(96, weight * 8 // 1000 // 8))
+        kbps = max(2, weight * 8 // 1000 // 8)
         mock.stop()
         mock = Mock(port, "--throttle-kbps", str(kbps))
         data = mcp("mod_publish")

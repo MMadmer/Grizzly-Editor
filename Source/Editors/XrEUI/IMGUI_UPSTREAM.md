@@ -1,6 +1,6 @@
 # Dear ImGui provenance
 
-XFined vendors Dear ImGui 1.92.9 docking from the audited DARF checkout at
+Grizzly vendors Dear ImGui 1.92.9 docking from the audited DARF checkout at
 `D:\Games\Dead Air\DeadAir-x64\Externals\imgui`.
 
 - Commit: `b334d19b667958ed970000073644d911fae17e57`
@@ -8,12 +8,12 @@ XFined vendors Dear ImGui 1.92.9 docking from the audited DARF checkout at
 - License: MIT, preserved in `LICENSE.txt`
 
 The following SHA-256 values were checked immediately after the byte-preserving
-copy. `imgui_user.*` and `XrUI*` (the UI kit, its fonts, icons and theme) are XFined
+copy. `imgui_user.*` and `XrUI*` (the UI kit, its fonts, icons and theme) are Grizzly
 integration files and are not upstream copies.
 
-Expected local deviations after the verified copy are limited to XFined's
+Expected local deviations after the verified copy are limited to Grizzly's
 configuration, whitespace hygiene and the few behaviour changes the editor's UI
-needs (docs/UI_DESIGN.md). Each of those is a block marked `XFined Editor:` in
+needs (docs/UI_DESIGN.md). Each of those is a block marked `Grizzly Editor:` in
 the source that calls out to a hook in `imgui_user.h` where it can; whoever
 touches one recomputes its hash here:
 
@@ -21,9 +21,9 @@ touches one recomputes its hash here:
 | --- | --- | --- |
 | `imconfig.h` | DLL ABI, user-extension include, and native DX9/DX11 texture types | `489A2129B0B0210B90732BFFE0B9918722416AE18A09C239F23D9008EEF0903A` |
 | `imgui.h` | Removed four trailing spaces | `A33327A8609AFD9F602519B809AADFFB53C0297381BDCEFA114D1E85B2EBB7D6` |
-| `imgui.cpp` | `XFined Editor:` blocks in `BeginPopupModal`: a modal is pinned to the main viewport, kept inside its work area, centred again when that area changes and never sized past it; in `Begin`: a docked window's title bar takes `GImGuiDockTabBarExtra` (`imgui_user.h`), the extra height of the editor's dock tab bars | `CA9E9B4FC7A737C50FB537AB562A0DF07128E4429E3D78820FFEC7183F3210B5` |
-| `imgui_draw.cpp` | Removed one trailing space; one `XFined Editor:` block in `RenderArrow`: the theme's `GImGuiRenderArrow` (`imgui_user.h`) draws the kit's thin chevron in the triangle's box | `413FC4DBB6ACA7BF10C34553A09A79ABA924593ACF8ABA6246A5B48F9C456AB6` |
-| `imgui_widgets.cpp` | One `XFined Editor:` block in `DragScalar`: the value's alignment is `GImGuiDragTextAlignX` (`imgui_user.h`), inside the frame padding | `08C1F1ADE70C8A137A8AD16DF9345E9DD3CB8252913DADD6D8730A448AEB7F8A` |
+| `imgui.cpp` | `Grizzly Editor:` blocks in `BeginPopupModal`: a modal is pinned to the main viewport, kept inside its work area, centred again when that area changes and never sized past it; in `Begin`: a docked window's title bar takes `GImGuiDockTabBarExtra` (`imgui_user.h`), the extra height of the editor's dock tab bars | `CA9E9B4FC7A737C50FB537AB562A0DF07128E4429E3D78820FFEC7183F3210B5` |
+| `imgui_draw.cpp` | Removed one trailing space; one `Grizzly Editor:` block in `RenderArrow`: the theme's `GImGuiRenderArrow` (`imgui_user.h`) draws the kit's thin chevron in the triangle's box | `413FC4DBB6ACA7BF10C34553A09A79ABA924593ACF8ABA6246A5B48F9C456AB6` |
+| `imgui_widgets.cpp` | One `Grizzly Editor:` block in `DragScalar`: the value's alignment is `GImGuiDragTextAlignX` (`imgui_user.h`), inside the frame padding | `08C1F1ADE70C8A137A8AD16DF9345E9DD3CB8252913DADD6D8730A448AEB7F8A` |
 | `imgui_impl_win32.cpp` | Removed one trailing space | `A04F7FFD0FC591C7FC98B6E1E1D580E41D1A5B03091943591E999931253A76C8` |
 | `imgui_internal.h` | Removed two trailing spaces | `5EC208B1E243A2B2832F5E2D590ABD04D4E4569D2D25A74B0BFD78AFAFACE20B` |
 | `imgui_tables.cpp` | Removed whitespace from one blank line | `0F2E7F13D550B41FE7E59DA1FB6D6BBF11FCFCA2F9655D49A12F754F29899094` |

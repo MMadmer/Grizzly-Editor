@@ -50,7 +50,7 @@ struct SAxisEnd
 	ViewportNavigation::Target	target;
 	ImVec2						pos;
 	float						depth;		// along the camera's direction: the far ends are drawn first
-	XFinedTheme::ColorToken		color;
+	GrizzlyTheme::ColorToken		color;
 	LPCSTR						label;		// the positive end carries its letter
 };
 }
@@ -187,7 +187,7 @@ bool ViewportNavigation::Draw(const ImVec2& canvas_position, const ImVec2& canva
 	const bool hovered = ImGui::IsItemHovered();
 	const bool owns_mouse = hovered || ImGui::IsItemActive();
 
-	using Token = XFinedTheme::ColorToken;
+	using Token = GrizzlyTheme::ColorToken;
 	const ImVec2 centre(min.x + size * .5f, min.y + size * .5f);
 	const float reach = size * .5f - XUI::Pt(9.f);
 	const Fvector& right = EDevice->m_Camera.GetRight();
@@ -227,7 +227,7 @@ bool ViewportNavigation::Draw(const ImVec2& canvas_position, const ImVec2& canva
 
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	if (owns_mouse)
-		dl->AddCircleFilled(centre, size * .5f, XFinedTheme::U32(Token::Overlay, .75f));
+		dl->AddCircleFilled(centre, size * .5f, GrizzlyTheme::U32(Token::Overlay, .75f));
 	ImFont* font = XUI::GetFont(XUI::Font::Small);
 	if (!font)
 		font = ImGui::GetFont();
@@ -235,21 +235,21 @@ bool ViewportNavigation::Draw(const ImVec2& canvas_position, const ImVec2& canva
 	for (int i = 0; i < n; ++i)
 	{
 		const SAxisEnd& end = ends[i];
-		const ImU32 color = XFinedTheme::U32(end.color);
+		const ImU32 color = GrizzlyTheme::U32(end.color);
 		if (end.label)
 		{
 			dl->AddLine(centre, end.pos, color, _max(1.f, XUI::Pt(2.f)));
 			dl->AddCircleFilled(end.pos, XUI::Pt(7.f), color);
 			const ImVec2 ts = font->CalcTextSizeA(font_px, FLT_MAX, 0.f, end.label);
 			dl->AddText(font, font_px, ImVec2(floorf(end.pos.x - ts.x * .5f + .5f), floorf(end.pos.y - ts.y * .5f + .5f)),
-				XFinedTheme::U32(Token::Canvas), end.label);
+				GrizzlyTheme::U32(Token::Canvas), end.label);
 		}
 		else
-			dl->AddCircleFilled(end.pos, XUI::Pt(5.f), XFinedTheme::U32(end.color, .45f));
+			dl->AddCircleFilled(end.pos, XUI::Pt(5.f), GrizzlyTheme::U32(end.color, .45f));
 		if (i == hot)
-			dl->AddCircle(end.pos, XUI::Pt(end.label ? 8.5f : 6.5f), XFinedTheme::U32(Token::Text), 0, _max(1.f, XUI::Pt(1.5f)));
+			dl->AddCircle(end.pos, XUI::Pt(end.label ? 8.5f : 6.5f), GrizzlyTheme::U32(Token::Text), 0, _max(1.f, XUI::Pt(1.5f)));
 	}
-	dl->AddCircleFilled(centre, XUI::Pt(2.5f), XFinedTheme::U32(Token::TextSecondary));
+	dl->AddCircleFilled(centre, XUI::Pt(2.5f), GrizzlyTheme::U32(Token::TextSecondary));
 
 	// a click on an end looks from it; anywhere else on the gizmo goes back to the free view
 	const Target target = hot >= 0 ? ends[hot].target : Target::Perspective;

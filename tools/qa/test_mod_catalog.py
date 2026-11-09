@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""End-to-end check of Mod > Submit to Mod Browser (mod_catalog) against tools/qa/github_mock.py.
+"""End-to-end check of Mod > Submit to Mod Browser (mod_catalog) against tools/qa/github_mock (Go).
 
 Drives the editor over MCP on a THROW-AWAY COPY of a project. The editor runs with -qa_github:
 GitHub, the catalog repository, the catalog's public files and VirusTotal are all the mock, and the
-author key file and catalog.ltx live in a temporary XFINED_CATALOG_HOME instead of
-Documents\\XFined Editor - the real author key and the real Windows credentials are never touched.
+author key file and catalog.ltx live in a temporary GRIZZLY_CATALOG_HOME instead of
+Documents\\Grizzly Editor - the real author key and the real Windows credentials are never touched.
 Every verdict about keys and signatures is taken from the game repository's own reference
 implementation (tools/catalog/xms_catalog.py and catalog.py), never from the editor's word.
 
@@ -33,7 +33,7 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   J  the maintainer listing a module of their own the same way; refused and closed, then a new submission; a
      withdrawal of a module the catalog does not hold, or one listed from another account, sends nothing
 
-    python tools/qa/test_mod_catalog.py --project D:\\XFinedProjects\\Test [--shots <folder>]
+    python tools/qa/test_mod_catalog.py --project <project> [--shots <folder>]
 """
 from __future__ import annotations
 
@@ -57,6 +57,8 @@ import urllib.parse
 import urllib.request
 import zlib
 
+from mock_server import mock_exe
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = ("127.0.0.1", 28016)
@@ -73,9 +75,9 @@ DESCRIPTION = 'Mod Browser QA module.\nA "quoted" word.'
 VERSION = "1.0.0"
 WEBSITE = "https://ap-pro.ru/stuff/qa/qa-mod-r1/"
 SUBMIT_TITLE = "Submit " + MODULE_ID
-SUBMITTED_LINE = "Submitted from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7)."
+SUBMITTED_LINE = "Submitted from Grizzly Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 7)."
 WITHDRAW_TITLE = "Withdraw " + MODULE_ID
-WITHDRAWN_LINE = "Withdrawn by its author from XFined Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 10.2)."
+WITHDRAWN_LINE = "Withdrawn by its author from Grizzly Editor. The catalog's own checks judge it (MOD_CATALOG.md, section 10.2)."
 # Cyrillic, quotes and a backslash: the password crosses JSON, UTF-8 and PBKDF2 on both sides
 PASSWORD = 'Qa-пароль "7" \\ ok'
 PASSWORD2 = "second-key-pass-9"
@@ -166,7 +168,7 @@ class Mock:
         # a failing handler prints its traceback there; the operator reads it after a FAIL
         self.errors = open(os.path.join(work, name + ".stderr.txt"), "w", encoding="utf-8")
         self.proc = subprocess.Popen(
-            [sys.executable, os.path.join(HERE, "github_mock.py"), "--port", str(port), "--token", TOKEN,
+            [mock_exe(), "--port", str(port), "--token", TOKEN,
              "--repo", repo, "--catalog-repo", CATALOG_REPO, "--vt-key", VT_KEY, "--log", self.log, *flags],
             stdout=subprocess.PIPE, stderr=self.errors, text=True)
         line = self.proc.stdout.readline()
@@ -251,24 +253,24 @@ class Editor:
         if not os.path.isfile(exe):
             raise RuntimeError("build the editor first: " + exe)
         env = dict(os.environ)
-        for name in ("XFINED_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "XFINED_VT_KEY", "VT_API_KEY"):
+        for name in ("GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GRIZZLY_VT_KEY", "VT_API_KEY"):
             env.pop(name, None)
         origin = f"http://127.0.0.1:{port}"
         env.update({
-            "XFINED_GITHUB_API": origin,
-            "XFINED_GITHUB_WEB": origin,
-            "XFINED_GITHUB_CLIENT_ID": "qa-client",
-            "XFINED_GITHUB_TOKEN": TOKEN,
-            "XFINED_CATALOG_REPO": CATALOG_REPO,
-            "XFINED_CATALOG_BASE": origin + "/catalog/public/",
-            "XFINED_VT_API": origin + "/vt/api/v3",
-            "XFINED_CATALOG_HOME": home,
+            "GRIZZLY_GITHUB_API": origin,
+            "GRIZZLY_GITHUB_WEB": origin,
+            "GRIZZLY_GITHUB_CLIENT_ID": "qa-client",
+            "GRIZZLY_GITHUB_TOKEN": TOKEN,
+            "GRIZZLY_CATALOG_REPO": CATALOG_REPO,
+            "GRIZZLY_CATALOG_BASE": origin + "/catalog/public/",
+            "GRIZZLY_VT_API": origin + "/vt/api/v3",
+            "GRIZZLY_CATALOG_HOME": home,
             # the free API's pace and the wait for a report, in QA terms
-            "XFINED_VT_PACE_MS": "100",
-            "XFINED_VT_SCAN_WAIT_MS": "15000",
+            "GRIZZLY_VT_PACE_MS": "100",
+            "GRIZZLY_VT_SCAN_WAIT_MS": "15000",
         })
         if vt_variable:
-            env["XFINED_VT_KEY"] = VT_KEY
+            env["GRIZZLY_VT_KEY"] = VT_KEY
         env.update(extra_env or {})
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
@@ -327,7 +329,7 @@ def shot(folder: str | None, name: str) -> dict:
 
 
 def editor_window(pid: int) -> int:
-    """The editor's main window (class 'XFined Editor') of the process, 0 when there is none."""
+    """The editor's main window (class 'Grizzly Editor') of the process, 0 when there is none."""
     user32 = ctypes.windll.user32
     found = []
 
@@ -338,7 +340,7 @@ def editor_window(pid: int) -> int:
         if owner.value == pid:
             text = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, text, 256)
-            if text.value == "XFined Editor":
+            if text.value == "Grizzly Editor":
                 found.append(hwnd)
         return True
 
@@ -656,7 +658,7 @@ def documents_folder() -> str:
 
 
 def snapshot(folder: str) -> dict:
-    """What the real Documents\\XFined Editor holds of the catalog - a QA run must leave it as it was."""
+    """What the real Documents\\Grizzly Editor holds of the catalog - a QA run must leave it as it was."""
     out = {}
     for rel in ("catalog.ltx", os.path.join("Keys", "author.xkey")):
         out[rel] = read_bytes(os.path.join(folder, rel))
@@ -836,7 +838,7 @@ class Run:
         try:
             # a lowered line sends even this small package the way a module over 32 MB goes
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=False,
-                            extra_env={"XFINED_VT_DIRECT_LIMIT": "1000"})
+                            extra_env={"GRIZZLY_VT_DIRECT_LIMIT": "1000"})
             self.pid = editor.proc.pid
             phase("A", self.keys)
             phase("B", self.manifest)
@@ -865,10 +867,10 @@ class Run:
         if not check(st.get("ok"), "A mod_catalog answers with the status", short(st)):
             raise Abort("mod_catalog does not answer - this editor build has no Submit to Mod Browser")
         if not check(same_path(key.get("path", ""), self.key_path),
-                     "A the key would go to <XFINED_CATALOG_HOME>\\Keys\\author.xkey", short(st)):
-            raise Abort("the editor does not keep its key in XFINED_CATALOG_HOME - stopped before it writes one elsewhere")
+                     "A the key would go to <GRIZZLY_CATALOG_HOME>\\Keys\\author.xkey", short(st)):
+            raise Abort("the editor does not keep its key in GRIZZLY_CATALOG_HOME - stopped before it writes one elsewhere")
         check(st.get("ok") and key.get("exists") is False, "A a fresh catalog home has no author key", short(st))
-        check(st.get("catalog") == CATALOG_REPO, "A the catalog is the one XFINED_CATALOG_REPO names", str(st.get("catalog")))
+        check(st.get("catalog") == CATALOG_REPO, "A the catalog is the one GRIZZLY_CATALOG_REPO names", str(st.get("catalog")))
         check((st.get("account") or {}).get("signed_in") is True, "A the GitHub account of the environment is in effect",
               short(st.get("account")))
         check(job_state(st) == "idle" and not (st.get("job") or {}).get("pending") and
@@ -1308,7 +1310,7 @@ class Run:
         check(submission_fields(ini_block(body) or "") == {"id": MODULE_ID, "github": GITHUB_REPO, "key": self.key_public,
                                                            "version": VERSION, "website": WEBSITE},
               "H and the catalog's own parser reads exactly the [mod] fields from it", repr(ini_block(body)))
-        check(VT_PAGE + sha in after_block(body) and "Checked by XFined Editor" in after_block(body) and
+        check(VT_PAGE + sha in after_block(body) and "Checked by Grizzly Editor" in after_block(body) and
               ("`%s`: clean, " % name) in after_block(body),
               "H after the block: the scan's verdict with the VirusTotal report, and the editor's check",
               repr(after_block(body)[:400]))
@@ -1524,7 +1526,7 @@ class Run:
         editor = None
         try:
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
-                            extra_env={"XFINED_VT_RATE_WAIT_MS": "200"})
+                            extra_env={"GRIZZLY_VT_RATE_WAIT_MS": "200"})
             self.pid = editor.proc.pid
             phase("J", self.own_listing, mock)
             phase("J", self.foreign_withdrawal, mock)
@@ -1539,7 +1541,7 @@ class Run:
         key = st.get("key") or {}
         check(st.get("ok") and key.get("exists") is True and key.get("locked") is True and key.get("key_id") == self.key_id,
               "J a new session finds the remembered key, locked", short(key))
-        check(st.get("vt_key") is True, "J XFINED_VT_KEY is a VirusTotal key too", short(st))
+        check(st.get("vt_key") is True, "J GRIZZLY_VT_KEY is a VirusTotal key too", short(st))
         r = mcp("mod_set_manifest", github=MAINTAINER_REPO)
         check(r.get("ok"), "J the module moves to the maintainer's repository", short(r))
         st = mcp("mod_catalog", action="key_unlock", password=PASSWORD)
@@ -1657,14 +1659,14 @@ def main() -> int:
     import catalog  # noqa: E402
     xc, cat = xms_catalog, catalog
 
-    work = tempfile.mkdtemp(prefix="xfined_catalogproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_catalogproj_")
     copy = os.path.join(work, "QaModCatalog")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore", "releases"))
     print("running against a copy: " + copy, flush=True)
 
     ini = os.path.join(REPO, "_projects.ini")
     ini_backup = read_bytes(ini)
-    real_home = os.path.join(documents_folder(), "XFined Editor")
+    real_home = os.path.join(documents_folder(), "Grizzly Editor")
     real_before = snapshot(real_home)
     # F wants the Submit to Mod Browser window in the picture although the layout saved it far below the editor (a
     # fresh checkout has no layout yet: the entry is all it holds). The editor rewrites its layout and preferences
@@ -1689,7 +1691,7 @@ def main() -> int:
                 os.remove(path)
         check(read_bytes(LAYOUT) == layout_backup and read_bytes(PREFS) == prefs_backup,
               "Z the editor's layout and preferences files are back as they were")
-        check(snapshot(real_home) == real_before, "Z the real Documents\\XFined Editor was not touched")
+        check(snapshot(real_home) == real_before, "Z the real Documents\\Grizzly Editor was not touched")
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
         else:

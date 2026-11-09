@@ -942,6 +942,22 @@ struct ToastItem
 };
 xr_vector<ToastItem> s_Toasts;
 u32 s_ToastSerial = 0;
+float s_ToastInset = 0.f;
+}
+
+void XUI::SetToastInset(float px)
+{
+	s_ToastInset = px;
+}
+
+bool XUI::ModalUp()
+{
+	return !!ImGui::GetTopMostPopupModal();
+}
+
+void XUI::KeepOnTop()
+{
+	ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 }
 
 void XUI::Toast(Tone tone, cstr text)
@@ -973,7 +989,7 @@ void XUI::Internal::DrawToasts()
 		return;
 
 	const ImGuiViewport* vp = ImGui::GetMainViewport();
-	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - Pt(16.f), vp->WorkPos.y + vp->WorkSize.y - Pt(16.f)), ImGuiCond_Always, ImVec2(1.f, 1.f));
+	ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - Pt(16.f), vp->WorkPos.y + vp->WorkSize.y - Pt(16.f) - s_ToastInset), ImGuiCond_Always, ImVec2(1.f, 1.f));
 	ImGui::SetNextWindowViewport(vp->ID);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
@@ -1021,6 +1037,7 @@ void XUI::Internal::DrawToasts()
 				if (ButtonEx(s))
 					remove = i;
 				window->DC.CursorPos = backup;
+				window->DC.IsSetPos = false;
 			}
 			ImGui::EndChild();
 			ImGui::PopStyleVar(2);

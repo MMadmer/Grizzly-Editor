@@ -62,7 +62,6 @@ inline constexpr const char* kDialogExportFlat		= "Export Flat Gamedata###dlg.ex
 inline constexpr const char* kDialogImportBaseScene	= "Import Base Scene###dlg.import_base_scene";
 inline constexpr const char* kDialogSubmit			= "Submit to Mod Browser###dlg.catalog_submit";
 // raised by a job or a row, never opened over ui_dialog (kKitDialogs lists their names)
-inline constexpr const char* kDialogPublishProgress	= "Publishing Release###dlg.publish_progress";
 inline constexpr const char* kDialogEditRelease		= "Edit Release###dlg.edit_release";
 inline constexpr const char* kDialogCatalogWithdraw	= "Withdraw from Mod Browser###dlg.catalog_withdraw";
 
@@ -80,7 +79,7 @@ inline constexpr SDialog kDialogs[] =
 // ---- documents: the kinds of major tab (their ids: "level", "<kind>:<rel>" for files, "<kind>" for singletons) --
 inline constexpr const char* kDocumentKinds[] =
 {
-	"level", "quest", "beh", "pda", "model", "texture", "characters", "mod_settings", "world_rules", "releases",
+	"level", "quest", "beh", "pda", "model", "texture", "characters", "mod_settings", "world_rules", "screens", "releases",
 	"preferences", "light_animations", "texture_library", "sound_library",
 };
 
@@ -88,7 +87,7 @@ inline constexpr const char* kDocumentKinds[] =
 inline constexpr const char* kKitDialogs[] =
 {
 	// Details and Preferences (B)
-	"dlg.choose", "dlg.edit_text", "dlg.game_type", "dlg.assign_shortcut", "dlg.text_editor", "dlg.properties",
+	"dlg.disable_game_updates", "dlg.choose", "dlg.edit_text", "dlg.game_type", "dlg.assign_shortcut", "dlg.text_editor", "dlg.properties",
 	"dlg.numeric_vector",
 	// the scene (C)
 	"dlg.rename_object", "dlg.delete_object", "dlg.detail_objects",
@@ -98,13 +97,16 @@ inline constexpr const char* kKitDialogs[] =
 	"dlg.build_result", "dlg.export_result", "dlg.package_result", "dlg.bake_result", "dlg.clean_target", "dlg.replace_release",
 	"dlg.delete_character", "dlg.empty_world",
 	// releases and the Mod Browser (H)
-	"dlg.publish_progress", "dlg.edit_release", "dlg.catalog_withdraw",
+	"dlg.edit_release", "dlg.catalog_withdraw",
 	// the Start page (I)
 	"dlg.delete_project",
 };
 
+// ---- the Task Center's card: the window of the jobs that run beside the editor (ui_popup show=tasks) ----------------
+inline constexpr const char* kTaskCard			= "Tasks###tasks_card";
+
 // ---- the Command Palette: the modal's id (screenshot_editor modal.id) ---------------------------------------------
-inline constexpr const char* kPaletteId			= "xfined_command_palette";
+inline constexpr const char* kPaletteId			= "grizzly_command_palette";
 
 // ---- popups ui_popup puts up to be looked at ---------------------------------------------------------------------
 inline constexpr const char* kPopups[] =

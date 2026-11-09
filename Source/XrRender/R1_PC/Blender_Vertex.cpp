@@ -53,7 +53,7 @@ void CBlender_Vertex::Compile	(CBlender_Compile& C)
 #if defined(USE_DX10) || defined(USE_DX11)
 		// see BlenderDefault: the editor viewport needs the base texture, not
 		// the fixed-function stage chain that D3D11 dropped
-		C.r_Pass		("model_def_hq","model_def_hq",TRUE,TRUE,TRUE);
+		C.r_Pass		("model_def_hq",EditorModelPS(getName()),TRUE,TRUE,TRUE);
 		C.r_dx10Texture	("s_base",	oT_Name);
 		C.r_dx10Sampler	("smp_base");
 		C.r_End			();

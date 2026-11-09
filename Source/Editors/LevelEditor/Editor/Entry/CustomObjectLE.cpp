@@ -198,6 +198,10 @@ void CCustomObject::FillProp(LPCSTR pref, PropItemVec& items)
     V = PHelper().CreateVector	(items, PrepareKey(pref,"Transform\\Scale"),	&EScale, 	0.01,	10000,0.01,2);
     V->OnChangeEvent.bind		(this,&CCustomObject::OnNumChangeScale);
 
+    // a base level's spawn the mod takes out of the game: the build writes a remove op
+    if (!IsAuthorPlaced() && FClassID == OBJCLASS_SPAWNPOINT)
+		PHelper().CreateFlag32	(items, PrepareKey(pref,"Mod\\Removed from the game"), &m_CO_Flags, flBaseRemoved);
+
     if(m_CO_Flags.test(flObjectInGroup))
     {
 		V = PHelper().CreateFlag32	(items, PrepareKey(pref,"In group editable"),	&m_CO_Flags, flObjectInGroupUnique);

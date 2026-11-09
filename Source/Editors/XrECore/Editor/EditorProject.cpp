@@ -3,7 +3,7 @@
 #include "EditorModManifest.h"
 #include "EditorUiContract.h"
 #include "EditorGameContent.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "UI_ToolsCustom.h"
 #include "ui_main.h"
 #include "UI_MainCommand.h"
@@ -79,6 +79,8 @@ static SRecentProject	s_Recent[kMaxRecent];
 static int				s_RecentCount		= 0;
 // create-form fields
 static char				s_NewParent[MAX_PATH]= {};
+static bool				s_NewOpen = false;			// the New Project form is up; with no project at all it always is
+static bool				s_WantOpenFolder = false;
 static char				s_NewName[64]		= {};
 static char				s_PendingScene[MAX_PATH] = {};
 // the autoload PopPendingScene handed out, and whether any scene load has
@@ -360,7 +362,7 @@ static bool SegmentRanges(const xr_string& path, int up, size_t& begin, size_t& 
 
 // The card's text: UTF-8 for ImGui, and for a name two cards share, the nearest
 // parent folder that differs between them - two DARF-Overnight-Delivery cards
-// read "XFinedProjects" and "Temp" instead of the same word twice
+// read "GrizzlyProjects" and "Temp" instead of the same word twice
 static void RefreshCardText()
 {
 	char buf[MAX_PATH * 3];
@@ -424,7 +426,7 @@ void EditorProject::LoadRecent()
 	}
 	::GetPrivateProfileStringA("recent", "create_parent", "", s_NewParent, sizeof(s_NewParent), ini);
 	if (!s_NewParent[0])
-		::ExpandEnvironmentStringsA("%USERPROFILE%\\Documents\\XFinedProjects", s_NewParent, sizeof(s_NewParent));
+		::ExpandEnvironmentStringsA("%USERPROFILE%\\Documents\\GrizzlyProjects", s_NewParent, sizeof(s_NewParent));
 	char sort[16] = {};
 	::GetPrivateProfileStringA("browser", "sort", "", sort, sizeof(sort), ini);
 	s_Sort = 0 == _stricmp(sort, "name") ? 1 : 0;
@@ -550,7 +552,7 @@ bool EditorProject::LinkGame(LPCSTR folder)
 void EditorProject::McpGameLink(LPCSTR raw, xr_string& out)
 {
 	char path[MAX_PATH] = {};
-	const bool want_link = XFinedMCP::GetArg(raw, "path", path, sizeof(path)) && path[0];
+	const bool want_link = GrizzlyMCP::GetArg(raw, "path", path, sizeof(path)) && path[0];
 
 	bool ok = true;
 	xr_string reason;
@@ -652,7 +654,7 @@ static void EnsureGitIgnore(LPCSTR root)
 	if (INVALID_FILE_ATTRIBUTES != ::GetFileAttributesA(ignore))	return;
 
 	static const char* text =
-		"# XFined Editor: its own files, never part of the mod. Written once because\n"
+		"# Grizzly Editor: its own files, never part of the mod. Written once because\n"
 		"# this project is a git repository - edit it freely, the editor will not again.\n"
 		"\n"
 		"# this machine's paths and last scene; the editor recreates it on open\n"
@@ -1954,7 +1956,7 @@ bool EditorProject::RevealProject(LPCSTR path, xr_string& err)
 //------------------------------------------------------------------------------
 // the Start page's pieces: text, the page and its cards, a menu row
 //------------------------------------------------------------------------------
-using CT = XFinedTheme::ColorToken;
+using CT = GrizzlyTheme::ColorToken;
 
 // pt, docs/UI_DESIGN.md section 6 (Start page)
 static const float kFormW		= 320.f;
@@ -1969,7 +1971,7 @@ static float Snap(float v) { return floorf(v + .5f); }
 
 static void SecondaryText(LPCSTR text)
 {
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(CT::TextSecondary));
 	ImGui::TextUnformatted(text);
 	ImGui::PopStyleColor();
 }
@@ -2111,7 +2113,7 @@ static void DrawDeleteConfirm()
 	else if (d.missing)	sprintf_s(line, "The folder of the project \"%s\" does not exist any more.", name);
 	else				sprintf_s(line, "The project \"%s\" cannot be deleted from here.", name);
 	HeadlineText(line);
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(CT::TextSecondary));
 	XUI::TextEllipsis(path, -1.f, XUI::Clip::Start);
 	ImGui::PopStyleColor();
 	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
@@ -2209,7 +2211,7 @@ static void DrawDeleteConfirm()
 //------------------------------------------------------------------------------
 static bool ArgPath(LPCSTR raw, char* path, u32 size)
 {
-	if (!XFinedMCP::GetArg(raw, "path", path, size) || !path[0]) return false;
+	if (!GrizzlyMCP::GetArg(raw, "path", path, size) || !path[0]) return false;
 	for (char* p = path; *p; ++p) if ('/' == *p) *p = '\\';
 	return true;
 }
@@ -2367,10 +2369,12 @@ static void AppendMenuItems(xr_string& out, ERecentState state)
 void EditorProject::McpBrowserMenu(LPCSTR raw, xr_string& out)
 {
 	char show[16] = {}, path[MAX_PATH * 2] = {}, search[sizeof(s_Search)] = {}, sort[16] = {};
-	XFinedMCP::GetArg(raw, "show", show, sizeof(show));
+	GrizzlyMCP::GetArg(raw, "show", show, sizeof(show));
 	ArgPath(raw, path, sizeof(path));
-	const bool set_search = XFinedMCP::GetArg(raw, "search", search, sizeof(search));
-	const bool set_sort = XFinedMCP::GetArg(raw, "sort", sort, sizeof(sort)) && sort[0];
+	const bool set_search = GrizzlyMCP::GetArg(raw, "search", search, sizeof(search));
+	const bool set_sort = GrizzlyMCP::GetArg(raw, "sort", sort, sizeof(sort)) && sort[0];
+	if (NqUtil::ArgBool(raw, "new_project", false) == NqUtil::ArgBool(raw, "new_project", true))
+		s_NewOpen = NqUtil::ArgBool(raw, "new_project", false);
 	if ((show[0] || set_search || set_sort) && s_Active)
 	{
 		JsonError(out, "the project browser is not on screen: a project is open");
@@ -2507,9 +2511,9 @@ void EditorProject::McpBrowserMenu(LPCSTR raw, xr_string& out)
 void EditorProject::McpCreate(LPCSTR raw, xr_string& out)
 {
 	char parent[MAX_PATH * 2] = {}, name[64] = {};
-	XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+	GrizzlyMCP::GetArg(raw, "name", name, sizeof(name));
 	// no parent: the location the Start page's form shows
-	if (!XFinedMCP::GetArg(raw, "parent", parent, sizeof(parent)) || !parent[0])
+	if (!GrizzlyMCP::GetArg(raw, "parent", parent, sizeof(parent)) || !parent[0])
 		strcpy_s(parent, s_NewParent);
 	for (char* p = parent; *p; ++p) if ('/' == *p) *p = '\\';
 	while (xr_strlen(parent) > 3 && '\\' == parent[xr_strlen(parent) - 1]) parent[xr_strlen(parent) - 1] = 0;
@@ -2637,17 +2641,13 @@ static void FormMessage(XUI::Tone tone, LPCSTR text)
 }
 
 // Left of the cards: New Project (Location, Name, Create) and Open Folder...
-static void DrawNewProject(bool& create, bool& open_folder)
+static void DrawNewProject(bool& create)
 {
 	const float width = _min(ImGui::GetContentRegionAvail().x, XUI::Pt(kFormW));
 	{
 		XUI::FontScope title(XUI::Font::Title);
 		ImGui::TextUnformatted("New Project");
 	}
-	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
-	SecondaryText("Location");
-	ImGui::SetNextItemWidth(width);
-	PathFieldAcp("##location", s_NewParent, sizeof(s_NewParent));
 	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
 	SecondaryText("Name");
 	ImGui::SetNextItemWidth(width);
@@ -2668,20 +2668,20 @@ static void DrawNewProject(bool& create, bool& open_folder)
 		FormMessage(XUI::Tone::Error, text);
 	}
 	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
+	if (XUI::Section("More##new_project", !s_NewParent[0] || nsNotFullPath == s_NewState))
+	{
+		SecondaryText("Location");
+		ImGui::SetNextItemWidth(width);
+		PathFieldAcp("##location", s_NewParent, sizeof(s_NewParent));
+		XUI::EndSection();
+	}
+	ImGui::Dummy(ImVec2(0.f, XUI::Pt(8.f)));
 
 	LPCSTR why = !s_NewParent[0] ? "Pick a location first." : nsNotFullPath == s_NewState ? "The location must be a full path."
 		: !s_NewName[0] ? "Enter a name first." : !name_ok ? "The name may hold Latin letters, digits, _ and - only." : 0;
 	if (XUI::Button("Create", XUI::Kind::Primary, !why, why) || (enter && !why))
 		create = true;
 
-	ImGui::Dummy(ImVec2(0.f, XUI::Pt(16.f)));
-	const ImVec2 at = ImGui::GetCursorScreenPos();
-	ImGui::GetWindowDrawList()->AddLine(ImVec2(at.x, Snap(at.y)), ImVec2(at.x + width, Snap(at.y)), XFinedTheme::U32(CT::BorderSubtle),
-		_max(1.f, XUI::Pt(1.f)));
-	ImGui::Dummy(ImVec2(0.f, XUI::Pt(16.f)));
-	if (XUI::Button("Open Folder..."))
-		open_folder = true;
-	XUI::Tip("Opens a folder that holds mod.ltx or project.ltx, such as a fresh clone of a mod's repository.");
 }
 
 static void OpenFolder()
@@ -2702,7 +2702,7 @@ static void OpenFolder()
 // the tooltip.
 static void DrawCardPath(const SRecentProject& r, float room)
 {
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(CT::TextSecondary));
 	if (r.parent_end <= r.parent_begin)
 	{
 		XUI::TextEllipsis(r.shown_path.c_str(), room, XUI::Clip::Start);
@@ -2737,7 +2737,7 @@ static void DrawCardPath(const SRecentProject& r, float room)
 	{
 		ImGui::TextUnformatted(pick->pre, pick->pre_end);
 		ImGui::SameLine(0.f, 0.f);
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::Text));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(CT::Text));
 		ImGui::TextUnformatted(seg, seg_end);
 		ImGui::PopStyleColor();
 		ImGui::SameLine(0.f, 0.f);
@@ -2748,7 +2748,7 @@ static void DrawCardPath(const SRecentProject& r, float room)
 		// plain text: the one tooltip is the whole path's, below
 		xr_string shown;
 		const bool cut = XUI::EllipsizeText(r.shown_parent.c_str(), room, XUI::Clip::End, shown);
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::Text));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(CT::Text));
 		ImGui::TextUnformatted(cut ? shown.c_str() : r.shown_parent.c_str());
 		ImGui::PopStyleColor();
 	}
@@ -2782,8 +2782,8 @@ static bool DrawCard(SRecentProject& r, const ImVec2& at)
 
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	const float radius = XUI::Pt(6.f);
-	dl->AddRectFilled(min, max, XFinedTheme::U32(hovered ? CT::Hover : CT::Raised), radius);
-	dl->AddRect(min, max, XFinedTheme::U32(hovered ? CT::Border : CT::BorderSubtle), radius, 0, _max(1.f, XUI::Pt(1.f)));
+	dl->AddRectFilled(min, max, GrizzlyTheme::U32(hovered ? CT::Hover : CT::Raised), radius);
+	dl->AddRect(min, max, GrizzlyTheme::U32(hovered ? CT::Border : CT::BorderSubtle), radius, 0, _max(1.f, XUI::Pt(1.f)));
 
 	// the preview is cut to the card's shape, never stretched
 	const ImVec2 pmin(min.x + pad, min.y + pad), pmax(max.x - pad, min.y + pad + XUI::Pt(kPreviewH));
@@ -2797,10 +2797,10 @@ static bool DrawCard(SRecentProject& r, const ImVec2& at)
 	}
 	else
 	{
-		dl->AddRectFilled(pmin, pmax, XFinedTheme::U32(CT::Canvas, veil), XUI::Pt(4.f));
+		dl->AddRectFilled(pmin, pmax, GrizzlyTheme::U32(CT::Canvas, veil), XUI::Pt(4.f));
 		const float icon = XUI::Pt(32.f);
 		XUI::DrawIcon(dl, here ? XUI::Icon::Level : XUI::Icon::Folder, ImVec2(Snap((pmin.x + pmax.x - icon) * .5f),
-			Snap((pmin.y + pmax.y - icon) * .5f)), 32.f, XFinedTheme::U32(CT::TextMuted, veil));
+			Snap((pmin.y + pmax.y - icon) * .5f)), 32.f, GrizzlyTheme::U32(CT::TextMuted, veil));
 	}
 	if (!here)
 	{
@@ -2875,6 +2875,13 @@ static int DrawProjects(bool own_scroll)
 	float segment = 0.f;
 	for (LPCSTR label : kSortLabels) segment = _max(segment, XUI::TextWidth(XUI::Font::Body, label) + XUI::Pt(20.f));
 	const float sort_w = segment * 2.f + XUI::Pt(5.f);
+	if (XUI::Button("New Project", XUI::Kind::Primary))
+		s_NewOpen = !s_NewOpen;
+	ImGui::SameLine(0.f, XUI::Pt(8.f));
+	if (XUI::Button("Open Folder..."))
+		s_WantOpenFolder = true;
+	XUI::Tip("Opens a folder that holds mod.ltx or project.ltx, such as a fresh clone of a mod's repository.");
+	ImGui::SameLine(0.f, XUI::Pt(8.f));
 	ImGui::SetNextItemWidth(_max(XUI::Em(8.f), ImGui::GetContentRegionAvail().x - sort_w - XUI::Pt(8.f)));
 	XUI::SearchField("##search", s_Search, sizeof(s_Search), "Search projects");
 	ImGui::SameLine(0.f, XUI::Pt(8.f));
@@ -2892,7 +2899,7 @@ static int DrawProjects(bool own_scroll)
 	CardOrder(order);
 	if (own_scroll)
 	{
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(CT::Inset));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::U32(CT::Inset));
 		ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, XUI::Pt(6.f));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(16.f), XUI::Pt(16.f)));
 		ImGui::BeginChild("##cards", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding);
@@ -2943,23 +2950,32 @@ bool EditorProject::DrawBrowser()
 		}
 		const ImVec2 avail = ImGui::GetContentRegionAvail();
 		// narrower than the form beside one card: one column, and the page scrolls as a whole
+		const bool form = s_NewOpen || !s_RecentCount;
 		if (avail.x < XUI::Pt(kFormW + 24.f + kCardW + 32.f))
 		{
-			DrawNewProject(create, open_folder);
-			ImGui::Dummy(ImVec2(0.f, XUI::Pt(24.f)));
+			if (form)
+			{
+				DrawNewProject(create);
+				ImGui::Dummy(ImVec2(0.f, XUI::Pt(24.f)));
+			}
 			open = DrawProjects(false);
 		}
 		else
 		{
-			ImGui::BeginChild("##new", ImVec2(XUI::Pt(kFormW), avail.y));
-			DrawNewProject(create, open_folder);
-			ImGui::EndChild();
-			ImGui::SameLine(0.f, XUI::Pt(24.f));
+			if (form)
+			{
+				ImGui::BeginChild("##new", ImVec2(XUI::Pt(kFormW), avail.y));
+				DrawNewProject(create);
+				ImGui::EndChild();
+				ImGui::SameLine(0.f, XUI::Pt(24.f));
+			}
 			ImGui::BeginChild("##projects", ImVec2(0.f, avail.y));
 			open = DrawProjects(true);
 			ImGui::EndChild();
 		}
 		DrawDeleteConfirm();
+		open_folder = s_WantOpenFolder;
+		s_WantOpenFolder = false;
 	}
 	XUI::EndPage();
 
@@ -3140,7 +3156,7 @@ void EditorProject::DrawUI()
 			}
 			const float icon = XUI::Pt(14.f);
 			XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Level, ImVec2(ImGui::GetCursorScreenPos().x, Snap((row_min.y + row_max.y - icon) * .5f)),
-				14.f, XFinedTheme::U32(CT::TextSecondary));
+				14.f, GrizzlyTheme::U32(CT::TextSecondary));
 			ImGui::Dummy(ImVec2(icon, ImGui::GetTextLineHeight()));
 			ImGui::SameLine(0.f, XUI::Pt(6.f));
 			const bool there = i < s_ImportInProject.size() && s_ImportInProject[i];
@@ -3159,7 +3175,7 @@ void EditorProject::DrawUI()
 	ImGui::Dummy(ImVec2(0.f, XUI::Pt(4.f)));
 	char library[MAX_PATH * 3];
 	AcpToUtf8(s_BaseMaps, library, sizeof(library));
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(CT::TextMuted));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(CT::TextMuted));
 	XUI::TextEllipsis(library, -1.f, XUI::Clip::Start);
 	ImGui::PopStyleColor();
 	XUI::Tip("The editor's library of the game's source scenes. Importing copies one into the project; the library stays as it is.");

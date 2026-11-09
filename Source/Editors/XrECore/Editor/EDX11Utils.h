@@ -87,7 +87,7 @@ ECORE_API bool	DX11TextureSize			(ID3D11ShaderResourceView* view, u32& w, u32& h
 //
 // Mirroring costs a full-frame readback, so it only runs while armed. A capture
 // request arms it and is then HELD by the MCP pump until the frames it asked for
-// have been presented (XFinedMCP::Pump), so the picture is of the editor as it is
+// have been presented (GrizzlyMCP::Pump), so the picture is of the editor as it is
 // after the request - never the frame that happened to be mirrored before it.
 //------------------------------------------------------------------------------
 ECORE_API void	DX11ArmFrameCapture		();

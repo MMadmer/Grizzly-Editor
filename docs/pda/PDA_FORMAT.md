@@ -185,8 +185,33 @@ The editor's alone; the game never reads it.
 
 - `level` - the level whose map the preview's map shows;
 - `actor = { x, z }` - where the player stands on it;
-- `markers = { { x, z, icon, hint } }` - spots on it;
+- `markers = { { x, z, icon, hint, spot } }` - spots on it; `spot` names a `map_spots` node whose look the marker takes;
 - `vars` - values for the preview only, `{time}`, `{money}` and the like included.
+
+### map_spots
+
+The look of the game's own map spots while the module is on - the PDA map, the
+minimap, the stock task markers:
+
+```lua
+map_spots = {
+  actor_level_spot = { icon = "ui_xms_icon_circle", color = "#FFFFFF", size = 22, level = -1,
+                       inner = { icon = "ui_xms_icon_circle", color = "accent", size = 14 } },
+  secondary_task_spot = { icon = "ui_xms_icon_pin", color = "accent", size = 30 },
+  secondary_task_spot_mini = { icon = "ui_xms_icon_pin", color = "accent", size = 16, arrows = "secondary_task_spot" },
+},
+```
+
+A key is a stock spot NODE of `ui\map_spots.xml` (`actor_level_spot`, `actor_level_spot_p`,
+`green_spot`, `secondary_task_spot`, `storyline_task_spot`, their `_mini` twins, ...); the
+module only restyles, never adds a spot type - a script that names a type the game does not
+know stops it. `icon` is a texture id, or a texture file (the project's own `gamedata	extures\...` too) with `rect = { x, y, w, h }` - the piece of it in its pixels; `color` a colour (tints the icon), `size` 4..128 (24), `level` the
+`location_level` (5), `heading = true` turns it with the player, `inner` an icon drawn on top
+(`icon`, `color`, `size`, `x`, `y` inside the spot; centred by default), `arrows` the name
+the minimap's `_below` / `_above` textures start with. While the layout is on the game
+applies the table to the spots it reads from `ui\map_spots.xml` (`ui\map_spots_16.xml` on a wide
+screen). The preview draws the player with `actor_level_spot`. A bad entry is
+`E323`, an unknown key in one `W324`.
 
 ## The preview tab (the editor)
 
@@ -268,6 +293,8 @@ flag, target, battery, signal, eye, camera, skull.
 | `W320` | a texture neither the linked game nor the project has (editor check) |
 | `W321` | a button without an action |
 | `W322` | more than 200 rows |
+| `E323` | a `map_spots` entry that is not a stock spot node name = { icon, ... } |
+| `W324` | a key a map spot does not know |
 
 An error stops the build; in the game, a layout with an error is not shown and the
 stock PDA stays (the log says why).

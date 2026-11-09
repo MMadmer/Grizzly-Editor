@@ -46,7 +46,7 @@ def summarize(samples: list[float]) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scene", help="scene path accepted by xfined_open_scene")
+    parser.add_argument("scene", help="scene path accepted by grizzly_open_scene")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--expected-total", type=int)

@@ -17,9 +17,9 @@
 //
 // Icon
 //
-// XFined: the lowest ICON id is what the shell shows for the executable.
-#include "../Public/xfined_resource.h"
-IDI_XFINED_EDITOR       ICON                    "../../../assets/xfined-editor-xf-logo-icon.ico"
+// Grizzly: the lowest ICON id is what the shell shows for the executable.
+#include "../Public/grizzly_resource.h"
+IDI_GRIZZLY_EDITOR       ICON                    "../../../assets/grizzly-editor-icon.ico"
 
 
 /////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-# XFined Editor
+# Grizzly Editor
 
 Level/SDK editor for **Dead Air: Refined** (S.T.A.L.K.E.R. X-Ray 1.6 family),
 built on the [RedPanda XRayEngine](https://github.com/RedPandaProjects/XRayEngine)
@@ -56,7 +56,7 @@ Binaries land in `Bin\x64\Release`. Useful variants: `-Target XrGame`,
 ### Command line
 
 ```powershell
-LevelEditor.exe -project "D:\XFinedProjects\Test"
+LevelEditor.exe -project "<project>"
 ```
 
 `-project <folder|name>` opens that project at startup and **skips the project
@@ -97,10 +97,10 @@ Vendored dependencies, deliberately pinned:
 
 The editor hosts a local automation endpoint on `127.0.0.1:28016` from the
 first frame (project browser included). A dependency-free MCP stdio bridge
-lives at `tools/mcp/xfined_mcp.py`; tools include editor/viewport screenshots
+lives at `tools/mcp/grizzly_mcp.py`; tools include editor/viewport screenshots
 (working even when the window is covered), content-browser navigation, asset
 copying out of the read-only sources, project/file management and editor state
-queries — plus `xfined_list_commands`/`xfined_exec_command`, a generic bridge
+queries — plus `grizzly_list_commands`/`grizzly_exec_command`, a generic bridge
 to the editor's own command registry: everything the menus and shortcuts can
 do, addressable by name, including commands added later. Combine `-project`
 and `-nodlg` with the bridge to get a fully unattended session.
@@ -109,7 +109,7 @@ Setup instructions for any AI agent — including a ready-to-paste prompt block 
 are in [`tools/mcp/AI_SETUP.md`](tools/mcp/AI_SETUP.md). Claude Code one-liner:
 
 ```bash
-claude mcp add -s user xfined-editor -- python "<repo>/tools/mcp/xfined_mcp.py"
+claude mcp add -s user grizzly-editor -- python "<repo>/tools/mcp/grizzly_mcp.py"
 ```
 
 ### Credits

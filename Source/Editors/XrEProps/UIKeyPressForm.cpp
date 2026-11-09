@@ -113,13 +113,13 @@ void UIKeyPressForm::Draw()
 	XUI::BeginDialogBody();
 	if (!m_What.empty())
 	{
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(XFinedTheme::ColorToken::TextSecondary));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(GrizzlyTheme::ColorToken::TextSecondary));
 		XUI::TextEllipsis(m_What.c_str());
 		ImGui::PopStyleColor();
 	}
 	{
 		XUI::FontScope title(XUI::Font::Title);
-		ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::Vec4(m_Captured ? XFinedTheme::ColorToken::Text : XFinedTheme::ColorToken::TextMuted));
+		ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::Vec4(m_Captured ? GrizzlyTheme::ColorToken::Text : GrizzlyTheme::ColorToken::TextMuted));
 		const xr_string shown = m_Captured ? ShortcutText(m_Resutl) : xr_string("Press a key or a combination");
 		XUI::TextEllipsis(shown.c_str());
 		ImGui::PopStyleColor();

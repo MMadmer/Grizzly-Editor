@@ -11,6 +11,14 @@ namespace NqExport
 	// problem goes to `log` (one line each) and to the editor log.
 	ECORE_API bool	ValidateProject	(LPCSTR project_root, xr_string& err, xr_vector<xr_string>& log,
 									 int* errors_out = 0, int* warnings_out = 0);
+	// The same check in slices, so that a project of many quests does not stop the editor: Begin, Step until it
+	// answers true, then End (what ValidateProject answers). Drop leaves it unfinished. Main thread only.
+	struct SProjectCheck;
+	ECORE_API SProjectCheck*	BeginProjectCheck	();
+	ECORE_API bool				StepProjectCheck	(SProjectCheck* check, u32 budget_ms);
+	ECORE_API bool				EndProjectCheck		(SProjectCheck* check, xr_string& err, xr_vector<xr_string>& log,
+													 int* errors_out = 0, int* warnings_out = 0);
+	ECORE_API void				DropProjectCheck	(SProjectCheck* check);
 	// writes the minimal quest (trigger.start -> flow.end) at `path`; the id is
 	// the file name, the title is the Russian "New quest". Refuses to overwrite.
 	ECORE_API bool	NewQuestTemplate(LPCSTR path, xr_string& err);

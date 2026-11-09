@@ -8,6 +8,7 @@
 #include "..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
+#include "..\..\XrECore\Editor\EditorScreens.h"
 #include "..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 #include "..\..\XrECore\Editor\EditorGameContent.h"
@@ -1570,8 +1571,7 @@ CCommandVar CommandDropToGround(CCommandVar p1, CCommandVar p2)
 }
 
 // A command rather than a plain menu handler so the shortcut editor, macros
-// and MCP all reach it. The build itself runs from EditorMod::DrawUI - it may
-// pop a confirmation, which belongs in the frame, not in a hotkey callback.
+// and MCP all reach it. The build itself runs beside the editor (EditorMod::StartJob).
 CCommandVar CommandModBuild(CCommandVar p1, CCommandVar p2)
 {
     EditorMod::RequestBuildIntoGame();
@@ -2166,6 +2166,7 @@ void CLevelMain::OnDrawUI()
         EditorCatalogSubmit::DrawUI();
         EditorCharacters::DrawUI();
         EditorWorld::DrawUI();
+        EditorScreens::DrawUI();
         EditorPda::DrawUI();
     }
     // a tool's own windows belong to the Level tab

@@ -1,12 +1,13 @@
 #include "stdafx.h"
 #include "EditorModPublish.h"
+#include "UI_ProgressCenter.h"
 #include "EditorCatalog.h"
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
 #include "EditorUiContract.h"
 #include "EditorProject.h"
 #include "EditorVirusTotal.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "ui_main.h"
 #include "Nq/NqUtil.h"
 #include <shellapi.h>
@@ -63,7 +64,7 @@ bool ArgBool(LPCSTR raw, LPCSTR field, bool def)
 //------------------------------------------------------------------------------
 // the upload job
 //------------------------------------------------------------------------------
-enum EJobState { jsIdle, jsScanning, jsUploading, jsDone, jsFailed, jsCancelled };
+enum EJobState { jsIdle, jsPackaging, jsScanning, jsUploading, jsDone, jsFailed, jsCancelled };
 
 struct SJobView
 {
@@ -241,7 +242,7 @@ SJobView JobSnapshot()
 	return s_Job;
 }
 
-bool Running(EJobState state) { return jsScanning == state || jsUploading == state; }
+bool Running(EJobState state) { return jsPackaging == state || jsScanning == state || jsUploading == state; }
 
 bool JobRunning() { return Running(JobSnapshot().state); }
 
@@ -249,6 +250,7 @@ LPCSTR StateText(EJobState state)
 {
 	switch (state)
 	{
+	case jsPackaging:	return "packaging";
 	case jsScanning:	return "scanning";
 	case jsUploading:	return "uploading";
 	case jsDone:		return "done";
@@ -262,12 +264,10 @@ LPCSTR StateText(EJobState state)
 // UI state
 //------------------------------------------------------------------------------
 const char* kTitlePublish	= EditorUiContract::kDialogPublishRelease;
-const char* kTitleProgress	= EditorUiContract::kDialogPublishProgress;
 const char* kTitleEdit		= EditorUiContract::kDialogEditRelease;
 const char* kReleasesTab	= "releases";
 
 bool		s_WantDialog	= false;
-bool		s_WantProgress	= false;
 bool		s_PublishQueued	= false;
 
 xr_string	s_ModuleId;
@@ -374,7 +374,6 @@ void Reap()
 		Msg("! [XMS] %s", job.warnings.c_str());
 		SplitLines(job.warnings, r.warnings);
 	}
-	s_WantProgress = false;
 	if (r.want) s_Result = r;
 	// a release that went out from the window shows up in the Releases tab
 	if (s_JobFromUI && s_ReleasesOpen) s_RefreshWanted = true;
@@ -475,7 +474,144 @@ struct SStarted
 	xr_string					warnings;
 };
 
-bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& err)
+SStarted s_Started;		// what the packaging of the last start came to
+
+// what the upload needs once the packaging, which runs beside the editor, has ended
+struct SPendingPublish
+{
+	EditorMod::SManifest	m;
+	SOptions				options;
+	xr_string				tag, title, token;
+
+	~SPendingPublish() { EditorGithub::WipeString(token); }
+};
+SPendingPublish	s_Pending;
+u32				s_JobStarted	= 0;	// GetTickCount
+u32				s_UploadStarted	= 0;
+
+const char* const kPublishKey	= "publish";
+const char* const kPublishTitle	= "Publishing Release";
+const char* const kPublishStop	= "Stop Publishing";
+
+xr_string PublishSubtitle(const SJobView& job)
+{
+	return job.id + " " + job.version + " to " + job.repo;
+}
+
+void PublishSteps(xr_vector<xr_string>& steps)
+{
+	for (LPCSTR step : { "Check", "Copy", "Pack", "Upload" })
+		steps.push_back(step);
+}
+
+// the packaging is the module job's row, under this one's key: the card goes on from it to here
+void PublishRow(SProgressTaskInfoVec& out)
+{
+	const SJobView job = JobSnapshot();
+	if (jsScanning != job.state && jsUploading != job.state) return;
+	SProgressTaskInfo task;
+	task.key		= kPublishKey;
+	task.text		= kPublishTitle;
+	task.subtitle	= PublishSubtitle(job);
+	task.detail		= job.stage.empty() ? xr_string("Starting") : job.stage;
+	PublishSteps(task.steps);
+	task.step		= 3;
+	task.stop_label	= kPublishStop;
+	task.stop_tip	= jsScanning == job.state ? "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub." :
+		"Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.";
+	task.from_mcp	= !s_JobFromUI;
+	task.elapsed_ms	= ::GetTickCount() - s_JobStarted;
+	task.cancelable	= true;
+	task.cancel		= [] { s_JobCancel.Cancel(); };
+	task.cancel_requested = s_JobCancel.Cancelled();
+	if (jsUploading == job.state && job.total)
+	{
+		task.determinate	= true;
+		task.current		= float(job.sent);
+		task.total			= float(job.total);
+		task.fraction		= clampr(float(double(job.sent) / double(job.total)), 0.f, 1.f);
+		task.numbers		= NqUtil::Format("%.1f of %.1f MB", double(job.sent) / 1048576.0, double(job.total) / 1048576.0);
+		const u32 spent = ::GetTickCount() - s_UploadStarted;
+		if (spent > 2000 && job.sent)
+			task.eta_ms = u64(double(spent) * double(job.total - _min(job.sent, job.total)) / double(job.sent));
+	}
+	out.push_back(std::move(task));
+}
+
+// the main thread, when the packaging has ended: the upload starts here
+void PackagingDone(const EditorMod::SJobResult& r)
+{
+	s_Started.package	= r.package;
+	s_Started.bake_note	= r.bake_note;
+	s_Started.warnings	= r.warnings;
+	if (!r.ok)
+	{
+		EditorGithub::WipeString(s_Pending.token);
+		std::lock_guard<std::mutex> guard(s_JobLock);
+		s_Job.state		= r.cancelled ? jsCancelled : jsFailed;
+		s_Job.error		= r.err;
+		s_Job.refused	= !r.cancelled;
+		s_JobReported	= false;
+		return;
+	}
+
+	const EditorMod::SManifest& m = s_Pending.m;
+	const EditorMod::SPackageResult& res = s_Started.package;
+	SScanPlan plan;
+	plan.module_id = m.id;
+	for (u32 i = 0; i < res.packages.size(); ++i)
+	{
+		EditorVirusTotal::SPackage package;
+		package.name	= res.packages[i].name;
+		package.path	= res.out_dir + "\\" + res.packages[i].name;
+		package.size	= res.packages[i].size;
+		package.sha256	= res.packages[i].sha256;
+		plan.packages.push_back(package);
+	}
+	EditorGithub::ReadVtKey(plan.vt_key);
+
+	EditorGithub::SPublishRequest request;
+	request.repo		= m.update_github;
+	request.module_id	= m.id;
+	request.version		= m.version;
+	request.tag			= s_Pending.tag;
+	request.title		= s_Pending.title;
+	request.notes		= s_Pending.options.notes;
+	request.prerelease	= s_Pending.options.prerelease;
+	request.latest		= s_Pending.options.latest && !s_Pending.options.prerelease;
+	request.token		= s_Pending.token;
+	request.descriptor	= res.descriptor;
+	EditorGithub::WipeString(s_Pending.token);
+
+	// the descriptor goes last, as it does on disk: it vouches for the rest
+	xr_vector<EditorMod::SPackageFile> files = res.packages;
+	files.push_back(res.index);
+	files.push_back(res.descriptor_file);
+	u64 total = 0;
+	for (u32 i = 0; i < files.size(); ++i)
+	{
+		EditorGithub::SAsset asset;
+		asset.name		= files[i].name;
+		asset.path		= res.out_dir + "\\" + files[i].name;
+		asset.size		= files[i].size;
+		asset.sha256	= files[i].sha256;
+		request.assets.push_back(asset);
+		total += asset.size;
+	}
+
+	{
+		std::lock_guard<std::mutex> guard(s_JobLock);
+		s_Job.state		= jsUploading;
+		s_Job.stage		= "Starting";
+		s_Job.total		= total;
+	}
+	s_JobReported	= false;
+	s_UploadStarted	= ::GetTickCount();
+	Msg("* [XMS] publishing %s %s to %s as %s", m.id.c_str(), m.version.c_str(), m.update_github.c_str(), s_Pending.tag.c_str());
+	s_JobThread = std::thread(&JobWorker, std::move(request), plan);
+}
+
+bool Start(const SOptions& options, bool from_ui, xr_string& err)
 {
 	err.clear();
 	if (!EditorProject::Active())	{ err = "no active project"; return false; }
@@ -523,72 +659,43 @@ bool Start(const SOptions& options, bool from_ui, SStarted& started, xr_string& 
 	xr_string game_version = options.requires_game;
 	if (!options.requires_given) EditorMod::LinkedGameVersion(game_version);
 	{
-		SProgressOperation progress(*UI, true);
-		EditorMod::RunPreBuildBake(started.bake_note);
-		if (!EditorMod::PackageRelease(EditorProject::Root(), "", game_version.c_str(), started.package, err, &started.warnings))
-			return false;
-	}
-
-	const EditorMod::SPackageResult& res = started.package;
-	SScanPlan plan;
-	plan.module_id = m.id;
-	for (u32 i = 0; i < res.packages.size(); ++i)
-	{
-		EditorVirusTotal::SPackage package;
-		package.name	= res.packages[i].name;
-		package.path	= res.out_dir + "\\" + res.packages[i].name;
-		package.size	= res.packages[i].size;
-		package.sha256	= res.packages[i].sha256;
-		plan.packages.push_back(package);
-	}
-	EditorGithub::ReadVtKey(plan.vt_key);
-
-	EditorGithub::SPublishRequest request;
-	request.repo		= m.update_github;
-	request.module_id	= m.id;
-	request.version		= m.version;
-	request.tag			= tag;
-	request.title		= title;
-	request.notes		= options.notes;
-	request.prerelease	= options.prerelease;
-	request.latest		= options.latest && !options.prerelease;
-	request.token		= account.token;
-	request.descriptor	= res.descriptor;
-
-	// the descriptor goes last, as it does on disk: it vouches for the rest
-	xr_vector<EditorMod::SPackageFile> files = res.packages;
-	files.push_back(res.index);
-	files.push_back(res.descriptor_file);
-	u64 total = 0;
-	for (u32 i = 0; i < files.size(); ++i)
-	{
-		EditorGithub::SAsset asset;
-		asset.name		= files[i].name;
-		asset.path		= res.out_dir + "\\" + files[i].name;
-		asset.size		= files[i].size;
-		asset.sha256	= files[i].sha256;
-		request.assets.push_back(asset);
-		total += asset.size;
-	}
-
-	{
 		std::lock_guard<std::mutex> guard(s_JobLock);
 		s_Job			= SJobView();
-		s_Job.state		= jsUploading;
+		s_Job.state		= jsPackaging;
 		s_Job.id		= m.id;
 		s_Job.version	= m.version;
 		s_Job.repo		= m.update_github;
 		s_Job.tag		= tag;
-		s_Job.stage		= "Starting";
-		s_Job.total		= total;
+		s_Job.stage		= "Packaging";
 	}
 	s_JobFromUI		= from_ui;
-	s_JobReported	= false;
+	s_JobReported	= true;
 	s_JobCancel.Reset();
-	Msg("* [XMS] publishing %s %s to %s as %s (%s)", m.id.c_str(), m.version.c_str(), m.update_github.c_str(),
-		tag.c_str(), EditorGithub::SourceText(account.source));
-	s_JobThread = std::thread(&JobWorker, std::move(request), plan);
-	return true;
+	s_JobStarted	= ::GetTickCount();
+	s_Started		= SStarted();
+	s_Pending.m		= m;
+	s_Pending.options = options;
+	s_Pending.tag	= tag;
+	s_Pending.title	= title;
+	s_Pending.token	= account.token;
+
+	EditorMod::SJobRequest rq;
+	rq.kind				= EditorMod::jkPackage;
+	rq.requires_game	= game_version;
+	rq.from_mcp			= !from_ui;
+	rq.key				= kPublishKey;
+	rq.title			= kPublishTitle;
+	rq.subtitle			= PublishSubtitle(JobSnapshot());
+	rq.stop_label		= kPublishStop;
+	rq.stop_tip			= "Stops the packaging. Nothing has reached GitHub yet.";
+	PublishSteps(rq.steps);
+	rq.done				= &PackagingDone;
+	UIProgressCenter::RegisterSource("publish_job", &PublishRow);
+	if (EditorMod::StartJob(rq, err)) return true;
+	EditorGithub::WipeString(s_Pending.token);
+	std::lock_guard<std::mutex> guard(s_JobLock);
+	s_Job = SJobView();
+	return false;
 }
 
 //------------------------------------------------------------------------------
@@ -905,9 +1012,9 @@ const SManageView& ShownView()
 //------------------------------------------------------------------------------
 // shared by the windows
 //------------------------------------------------------------------------------
-ImU32 Token(XFinedTheme::ColorToken token, float alpha = 1.f)
+ImU32 Token(GrizzlyTheme::ColorToken token, float alpha = 1.f)
 {
-	return XFinedTheme::U32(token, alpha);
+	return GrizzlyTheme::U32(token, alpha);
 }
 
 // GitHub's own pages only: the address of a release comes over the network
@@ -925,7 +1032,7 @@ void OpenGithubPage(const xr_string& url)
 // a label over the field it names, in a dialog without a property grid
 void FieldLabel(LPCSTR text)
 {
-	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextSecondary));
 	ImGui::TextUnformatted(text);
 	ImGui::PopStyleColor();
 }
@@ -964,16 +1071,8 @@ void RunDeferredPublish()
 	options.prerelease		= s_Prerelease;
 	options.latest			= s_Latest;
 
-	SStarted started;
 	xr_string err;
-	if (Start(options, true, started, err))
-	{
-		s_WantProgress = true;
-		return;
-	}
-	if (err == "cancelled")
-		XUI::Notice(XUI::Tone::Warning, "Publish Release", "Packaging cancelled. Nothing was published.");
-	else
+	if (!Start(options, true, err))
 		XUI::Notice(XUI::Tone::Error, "Publish Release", ("Cannot publish the release: " + err + ".").c_str());
 }
 
@@ -1068,7 +1167,7 @@ void PublishProblems(const SPublishedClash& clash, XUI::Strings& out, u32& fixes
 {
 	fixes = 0;
 	if (s_Repo.empty())
-		out.push_back("No GitHub repository: set one in Mod Settings ([update] github).");
+		out.push_back("No GitHub repository: set one in Mod Settings.");
 	else if (!EditorMod::ValidateGithubRepo(s_Repo.c_str()))
 		out.push_back("The GitHub repository in Mod Settings is not owner/repo: " + s_Repo + ".");
 	if (!EditorMod::ValidateVersion(s_Version.c_str()))
@@ -1236,36 +1335,32 @@ void DrawDialog()
 	{
 		const bool repo_ok = !s_Repo.empty() && EditorMod::ValidateGithubRepo(s_Repo.c_str());
 		const bool version_ok = EditorMod::ValidateVersion(s_Version.c_str()) && !clash.version;
-		// what goes out, as Mod Settings and the linked game have it: read-only here
-		if (XUI::PropertySection("Module"))
+		// what goes out in one line, what to say about it, and everything with a good default under More
+		if (XUI::PropertyRow("Release", "What goes out and where players update from. Mod Settings sets them.",
+				XUI::PropReadOnly | (repo_ok && version_ok ? 0 : XUI::PropInvalid)))
 		{
-			if (XUI::PropertyRow("Name", "The module this release carries: its name and id in Mod Settings.", XUI::PropReadOnly))
-			{
-				const xr_string name = s_ModuleName.empty() || s_ModuleName == s_ModuleId ? s_ModuleId : s_ModuleName + " (" + s_ModuleId + ")";
-				XUI::PropertyText(name.c_str());
-			}
-			if (XUI::PropertyRow("Repository", "The GitHub repository whose latest release updates this module ([update] github). Mod "
-					"Settings sets it.", XUI::PropReadOnly | (repo_ok ? 0 : XUI::PropInvalid)))
-			{
-				XUI::PropertyText(s_Repo.empty() ? "Not set" : s_Repo.c_str());
-				if (repo_ok && XUI::PropertyTrailing("##repo_page", XUI::Icon::External, "Open the repository on GitHub"))
-					OpenGithubPage(EditorGithub::RepoPage(s_Repo));
-			}
-			if (XUI::PropertyRow("Version", "The version of this release ([module] version). Mod Settings sets it. A player is offered the "
-					"update when it is higher than the installed one; a version that is published already is never published again.",
-					XUI::PropReadOnly | (version_ok ? 0 : XUI::PropInvalid)))
-				XUI::PropertyText(s_Version.empty() ? "Not set" : s_Version.c_str());
-			if (XUI::PropertyRow("Requires Game", "The lowest Dead Air: Refined version this release runs on: the version of the linked "
-					"game. Over MCP, mod_publish requires_game= names another one.", XUI::PropReadOnly))
-				XUI::PropertyText(s_Requires.empty() ? "Any version" : s_Requires.c_str());
-			// a status line like the rows above, until a locked key asks for its password here
+			const xr_string line = (s_ModuleName.empty() ? s_ModuleId : s_ModuleName) + "  \xC2\xB7  " + (s_Version.empty() ? xr_string("no version") : s_Version) +
+				"  \xC2\xB7  " + (s_Repo.empty() ? xr_string("no repository") : s_Repo);
+			XUI::PropertyText(line.c_str());
+			if (repo_ok && XUI::PropertyTrailing("##repo_page", XUI::Icon::External, "Open the repository on GitHub"))
+				OpenGithubPage(EditorGithub::RepoPage(s_Repo));
+		}
+		if (XUI::PropertyRow("Notes", "What changed, shown on the release page. Markdown."))
+			ImGui::InputTextMultiline("##notes", s_Notes, sizeof(s_Notes), ImVec2(0.f, XUI::Em(5.f)));
+
+		const auto key_row = []
+		{
 			if (XUI::PropertyRow("Author Key", "The key file that signs the release: the Mod Browser lists signed releases only. Submit to "
 					"Mod Browser creates one.", KeyLocked() ? XUI::PropRequired : XUI::PropReadOnly))
 				EditorCatalog::DrawKeyLine("publish");
-			XUI::EndPropertySection();
-		}
+		};
+		const bool signed_in = EditorGithub::asNone != s_Account.source;
+		// what has to be dealt with before this can go is never folded away
+		if (KeyLocked()) key_row();
+		if (!signed_in) DrawAccountRows();
 
-		if (XUI::PropertySection("Release"))
+		const bool tag_wrong = !ValidTag(s_Tag) || (clash.found && !clash.version) || xr_strlen(s_Title) > 200;
+		if (XUI::PropertySection("More##publish", tag_wrong))
 		{
 			if (XUI::PropertyRow("Tag", "The git tag GitHub creates for the release; the game does not read it. A tag deleted within the "
 					"last hour is not offered again: GitHub keeps serving a deleted release's files under a reused tag for minutes.",
@@ -1273,8 +1368,6 @@ void DrawDialog()
 				if (ImGui::InputText("##tag", s_Tag, sizeof(s_Tag))) s_TagAuto = false;
 			if (XUI::PropertyRow("Title", "The release's title on its GitHub page.", xr_strlen(s_Title) > 200 ? XUI::PropInvalid : 0))
 				if (ImGui::InputText("##title", s_Title, sizeof(s_Title))) s_TitleAuto = false;
-			if (XUI::PropertyRow("Notes", "What changed, shown on the release page. Markdown."))
-				ImGui::InputTextMultiline("##notes", s_Notes, sizeof(s_Notes), ImVec2(0.f, XUI::Em(5.f)));
 			if (XUI::PropertyRow("Options", "Players receive only the latest release: the game reads that one alone."))
 			{
 				ImGui::Checkbox("Pre-release", &s_Prerelease);
@@ -1286,11 +1379,11 @@ void DrawDialog()
 				ImGui::EndDisabled();
 				XUI::Tip("The latest release is the one players update to.");
 			}
-			XUI::EndPropertySection();
-		}
-		if (XUI::PropertySection("GitHub Account"))
-		{
-			DrawAccountRows();
+			if (XUI::PropertyRow("Requires Game", "The lowest Dead Air: Refined version this release runs on: the version of the linked "
+					"game. Over MCP, mod_publish requires_game= names another one.", XUI::PropReadOnly))
+				XUI::PropertyText(s_Requires.empty() ? "Any version" : s_Requires.c_str());
+			if (!KeyLocked()) key_row();
+			if (signed_in) DrawAccountRows();
 			XUI::EndPropertySection();
 		}
 		XUI::EndPropertyGrid();
@@ -1303,7 +1396,7 @@ void DrawDialog()
 		XUI::StatusText(XUI::Tone::Warning, NqUtil::Format("Publishing replaces %u %s of an earlier packaging in releases\\%s:",
 			(u32)s_Replaced.size(), s_Replaced.size() == 1 ? "file" : "files", s_Version.c_str()).c_str());
 		ImGui::Indent(XUI::Pt(20.f));
-		ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+		ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextSecondary));
 		const u32 shown = _min((u32)s_Replaced.size(), 10u);
 		for (u32 i = 0; i < shown; ++i)
 			XUI::TextEllipsis(s_Replaced[i].c_str(), -1.f, XUI::Clip::Middle);
@@ -1313,9 +1406,8 @@ void DrawDialog()
 		ImGui::Unindent(XUI::Pt(20.f));
 	}
 
-	const xr_string status = reading ? xr_string() : problems.empty() ? xr_string("Packages, uploads a draft, checks every file, then publishes.") :
-		NqUtil::Format("%u %s to fix", (u32)problems.size(), problems.size() == 1 ? "problem" : "problems");
-	if (XUI::BeginDialogFooter(status.c_str(), problems.empty() ? XUI::Tone::Muted : XUI::Tone::Warning))
+	const xr_string status = reading || !problems.empty() ? xr_string() : xr_string("Packages, uploads a draft, checks every file, then publishes.");
+	if (XUI::BeginDialogFooter(status.c_str(), XUI::Tone::Muted))
 	{
 		// the releases that are out decide whether this version may go: nothing is offered before they are known
 		if (reading) XUI::FooterBusy("Reading the releases on GitHub...");
@@ -1344,48 +1436,6 @@ void DrawDialog()
 		if (clash.found) s_SelectedId = clash.id;
 		EditorPublish::RequestReleases();
 	}
-}
-
-// the upload goes on in the background; this window follows it until it is hidden
-void DrawProgress()
-{
-	const SJobView job = JobSnapshot();
-	if (s_WantProgress && !Running(job.state)) s_WantProgress = false;
-	if (!XUI::BeginDialog(kTitleProgress, &s_WantProgress, XUI::DialogSize::M))
-		return;
-	XUI::BeginDialogBody();
-	{
-		XUI::FontScope strong(XUI::Font::Strong);
-		XUI::TextEllipsis(NqUtil::Format("%s %s to %s", job.id.c_str(), job.version.c_str(), job.repo.c_str()).c_str());
-	}
-	XUI::BusyLine(job.stage.empty() ? "Starting..." : job.stage.c_str());
-	const bool scanning = jsScanning == job.state;
-	const float fraction = job.total && !scanning ? float(double(job.sent) / double(job.total)) : 0.f;
-	ImGui::PushStyleColor(ImGuiCol_PlotHistogram, Token(XFinedTheme::ColorToken::Accent));
-	ImGui::ProgressBar(fraction, ImVec2(ImGui::GetContentRegionAvail().x, XUI::Pt(6.f)), "");
-	ImGui::PopStyleColor();
-	{
-		XUI::FontScope small_font(XUI::Font::Small);
-		ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextMuted));
-		const xr_string line = scanning ? xr_string("The Mod Browser lists this module: VirusTotal scans the packages first.") :
-			NqUtil::Format("%.1f of %.1f MB \xC2\xB7 %u%%", double(job.sent) / 1048576.0, double(job.total) / 1048576.0,
-				job.total ? (u32)(job.sent * 100 / job.total) : 0u);
-		ImGui::TextUnformatted(line.c_str());
-		ImGui::PopStyleColor();
-	}
-	if (XUI::BeginDialogFooter())
-	{
-		const bool stopping = s_JobCancel.Cancelled();
-		if (XUI::DialogButton("Stop Publishing", XUI::Kind::Secondary, false, !stopping, "Stopping at the next step."))
-			s_JobCancel.Cancel();
-		if (!stopping)
-			XUI::Tip(scanning ? "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub." :
-				"Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
-		if (XUI::DialogButton("Hide", XUI::Kind::Secondary, true))
-			s_WantProgress = false;
-		XUI::Tip("The upload goes on: the toolbar's Publish button shows its progress and brings this window back.");
-	}
-	XUI::EndDialog();
 }
 
 //------------------------------------------------------------------------------
@@ -1457,7 +1507,7 @@ void StateCell(const EditorGithub::SReleaseInfo& r)
 		StateBadge(r);
 		return;
 	}
-	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextSecondary));
 	XUI::TextEllipsis("Published");
 	ImGui::PopStyleColor();
 }
@@ -1479,7 +1529,7 @@ void RefreshReleases()
 void OpenEdit(const EditorGithub::SReleaseInfo& target)
 {
 	// one modal at a time: two dialogs that open themselves close each other every frame
-	if (s_WantDialog || s_WantProgress) return;
+	if (s_WantDialog) return;
 	s_EditTarget = target;
 	strncpy_s(s_EditTitle, sizeof(s_EditTitle), target.title.c_str(), _TRUNCATE);
 	s_EditNotes = target.notes;
@@ -1578,7 +1628,7 @@ void DrawReleasesTable(const SManageView& view, float width, float height, bool 
 	for (const EditorGithub::SReleaseInfo& r : view.releases)
 		tag_w = _max(tag_w, XUI::TextWidth(XUI::Font::Body, r.tag.empty() ? "(no tag)" : r.tag.c_str()) + XUI::Pt(2.f));
 	tag_w = _min(tag_w, XUI::Em(14.f));
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, Token(XFinedTheme::ColorToken::Inset));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, Token(GrizzlyTheme::ColorToken::Inset));
 	const bool open = ImGui::BeginTable("##releases", 5, flags, ImVec2(width, height));
 	ImGui::PopStyleColor();
 	if (!open) return;
@@ -1670,7 +1720,7 @@ void DrawReleaseDetails(const SManageView& view, bool busy)
 			XUI::PropertyText(FilesText(*r).c_str());
 		XUI::EndPropertyGrid();
 	}
-	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextSecondary));
 	ImGui::Indent(XUI::Pt(6.f));
 	for (const xr_string& name : r->assets)
 		XUI::TextEllipsis(name.c_str(), -1.f, XUI::Clip::Middle);
@@ -1681,7 +1731,7 @@ void DrawReleaseDetails(const SManageView& view, bool busy)
 	{
 		if (r->notes.empty())
 		{
-			ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextMuted));
+			ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextMuted));
 			ImGui::TextUnformatted("No notes.");
 			ImGui::PopStyleColor();
 		}
@@ -1755,7 +1805,7 @@ void DrawReleasesBody()
 	DrawReleasesTable(view, avail.x - side - gap, avail.y, busy);
 	ImGui::SameLine(0.f, gap);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(12.f), XUI::Pt(8.f)));
-	ImGui::PushStyleColor(ImGuiCol_Border, Token(XFinedTheme::ColorToken::BorderSubtle));
+	ImGui::PushStyleColor(ImGuiCol_Border, Token(GrizzlyTheme::ColorToken::BorderSubtle));
 	const bool shown = ImGui::BeginChild("##release_details", ImVec2(side, avail.y), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
 	ImGui::PopStyleColor();
 	ImGui::PopStyleVar();
@@ -1793,7 +1843,7 @@ void ReleasesStatus()
 		text += NqUtil::Format(" \xC2\xB7 %u published", out);
 		if (drafts) text += NqUtil::Format(" \xC2\xB7 %u %s", drafts, drafts == 1 ? "draft" : "drafts");
 	}
-	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextSecondary));
 	ImGui::TextUnformatted(text.c_str());
 	ImGui::PopStyleColor();
 }
@@ -2031,7 +2081,9 @@ bool EditorPublish::CanPublish()
 void EditorPublish::ButtonText(char* dst, u32 size)
 {
 	const SJobView job = JobSnapshot();
-	if (jsScanning == job.state)
+	if (jsPackaging == job.state)
+		strcpy_s(dst, size, "Packaging Release");
+	else if (jsScanning == job.state)
 		strcpy_s(dst, size, "Scanning Release");
 	else if (jsUploading == job.state)
 		sprintf_s(dst, size, "Publishing %u%%", job.total ? (u32)(job.sent * 100 / job.total) : 0u);
@@ -2044,7 +2096,7 @@ void EditorPublish::RequestPublish()
 	// one modal at a time: two dialogs that open themselves close each other every frame
 	if (!CanPublish() || s_WantEdit) return;
 	Reap();
-	if (JobRunning()) { s_WantProgress = true; return; }
+	if (JobRunning()) { UIProgressCenter::ShowCard(); return; }
 
 	EditorMod::SManifest m;
 	if (!EditorMod::Load(EditorProject::Root(), m))
@@ -2104,8 +2156,14 @@ void EditorPublish::DrawUI()
 		s_RefreshWanted = false;
 		if (s_ReleasesOpen) RefreshReleases();
 	}
+	// the GitHub CLI is slow to answer: the first dialog that asks should find its answer here
+	static bool s_Warmed = false;
+	if (!s_Warmed)
+	{
+		s_Warmed = true;
+		EditorGithub::WarmAccount();
+	}
 	DrawDialog();
-	DrawProgress();
 	DrawEditRelease();
 	if (s_Result.want)
 	{
@@ -2125,13 +2183,15 @@ void EditorPublish::Shutdown()
 	if (s_SignThread.joinable()) s_SignThread.join();
 	s_ManageCancel.Cancel();
 	if (s_ManageThread.joinable()) s_ManageThread.join();
+	EditorGithub::StopAccountRead();
 	EditorGithub::WipeString(s_Account.token);
+	EditorGithub::WipeString(s_Pending.token);
 }
 
 void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 {
 	char action[32] = {};
-	if (!XFinedMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "list");
+	if (!GrizzlyMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "list");
 
 	if (0 == xr_strcmp(action, "status"))	{ ReleasesJson(out); return; }
 	if (0 == xr_strcmp(action, "cancel"))
@@ -2150,15 +2210,15 @@ void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 	if (moList != rq.op || select)
 	{
 		xr_vector<char> arg(xr_strlen(raw) + 1);
-		if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size())) rq.tag = arg.data();
+		if (GrizzlyMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size())) rq.tag = arg.data();
 		rq.id = ArgU64(raw, "id");
 		if (!rq.id && rq.tag.empty())
 			{ out = "{\"ok\":false,\"error\":\"name the release: 'id' or 'tag'\"}"; return; }
 		if (moEdit == rq.op)
 		{
 			// a field that is absent keeps its value; an empty one clears it
-			if ((rq.has_title = XFinedMCP::GetArg(raw, "title", arg.data(), (u32)arg.size())))	rq.title = arg.data();
-			if ((rq.has_notes = XFinedMCP::GetArg(raw, "notes", arg.data(), (u32)arg.size())))	rq.notes = arg.data();
+			if ((rq.has_title = GrizzlyMCP::GetArg(raw, "title", arg.data(), (u32)arg.size())))	rq.title = arg.data();
+			if ((rq.has_notes = GrizzlyMCP::GetArg(raw, "notes", arg.data(), (u32)arg.size())))	rq.notes = arg.data();
 			if (!rq.has_title && !rq.has_notes)
 				{ out = "{\"ok\":false,\"error\":\"edit needs 'title' or 'notes'\"}"; return; }
 			if (rq.title.size() > 200 || rq.notes.size() > kMaxNotes)
@@ -2175,13 +2235,13 @@ void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 			if (rq.id ? r.id == rq.id : r.tag == rq.tag) { found = &r; ++matches; }
 		// show=edit puts the edit dialog up for that release, to be looked at: only a click in it saves anything
 		char show[16] = {};
-		XFinedMCP::GetArg(raw, "show", show, sizeof(show));
+		GrizzlyMCP::GetArg(raw, "show", show, sizeof(show));
 		xr_string err;
 		if (show[0] && 0 != xr_strcmp(show, "edit"))	err = "show: edit expected";
 		else if (!view.listed)							err = "the list is not read yet: mod_releases action=list first";
 		else if (!matches)								err = rq.id ? NqUtil::Format("no release has the id %llu", rq.id) : "no release carries the tag " + rq.tag;
 		else if (matches > 1)							err = NqUtil::Format("%u releases carry the tag %s - name one by its id", matches, rq.tag.c_str());
-		else if (show[0] && (s_WantDialog || s_WantProgress))	err = "the Publish Release dialog is up: one release dialog at a time";
+		else if (show[0] && s_WantDialog)	err = "the Publish Release dialog is up: one release dialog at a time";
 		if (!err.empty())
 		{
 			out = "{\"ok\":false,\"error\":\"";
@@ -2208,12 +2268,16 @@ void EditorPublish::McpReleases(LPCSTR raw, xr_string& out)
 void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 {
 	char action[32] = {};
-	if (!XFinedMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "start");
+	if (!GrizzlyMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "start");
 
 	if (0 == xr_strcmp(action, "status"))	{ StatusJson(out); return; }
 	if (0 == xr_strcmp(action, "cancel"))
 	{
-		if (JobRunning()) s_JobCancel.Cancel();
+		if (JobRunning())
+		{
+			s_JobCancel.Cancel();
+			if (jsPackaging == JobSnapshot().state) EditorMod::StopJob();
+		}
 		StatusJson(out);
 		return;
 	}
@@ -2242,7 +2306,7 @@ void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 		// and nowhere else: not into the answer, not into the log.
 		xr_vector<char> arg(xr_strlen(raw) + 1);
 		xr_string err;
-		const bool given = XFinedMCP::GetArg(raw, "token", arg.data(), (u32)arg.size());
+		const bool given = GrizzlyMCP::GetArg(raw, "token", arg.data(), (u32)arg.size());
 		const bool saved = given && EditorGithub::SaveToken(arg.data(), err);
 		SecureZeroMemory(arg.data(), arg.size());
 		if (!saved)
@@ -2267,11 +2331,38 @@ void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 		out = "{\"ok\":false,\"error\":\"unknown action: start, status, cancel, account, save_token, sign_in, sign_in_status or sign_out expected\"}";
 		return;
 	}
+	// held until the packaging ended (GrizzlyMCP, FollowsJob): the upload is on its way or the release was refused
+	if (ArgBool(raw, "answer_only", false))
+	{
+		StatusJson(out);
+		const SJobView job = JobSnapshot();
+		if (jsFailed == job.state || jsCancelled == job.state) return;
+		// the packaging half of the answer, as mod_package gives it
+		out.erase(out.size() - 1);
+		out += ",\"assets\":[";
+		const EditorMod::SPackageResult& res = s_Started.package;
+		xr_vector<EditorMod::SPackageFile> files = res.packages;
+		files.push_back(res.index);
+		files.push_back(res.descriptor_file);
+		for (u32 i = 0; i < files.size(); ++i)
+		{
+			if (i) out += ",";
+			out += "{\"name\":\"";
+			JsonAppend(out, files[i].name.c_str());
+			out += NqUtil::Format("\",\"size\":%llu,\"sha256\":\"%s\"}", files[i].size, files[i].sha256.c_str());
+		}
+		out += NqUtil::Format("],\"files\":%d", res.files);
+		JsonField(out, "requires_game", res.requires_game.c_str());
+		JsonField(out, "baked", s_Started.bake_note.c_str());
+		JsonField(out, "package_warnings", s_Started.warnings.c_str());
+		out += "}";
+		return;
+	}
 
 	// request-sized, so over-long notes reach the check instead of reading as absent
 	xr_vector<char> arg(xr_strlen(raw) + 1);
 	// the author key's password, when the key file has one; never echoed or logged
-	if (XFinedMCP::GetArg(raw, "password", arg.data(), (u32)arg.size()) && arg[0])
+	if (GrizzlyMCP::GetArg(raw, "password", arg.data(), (u32)arg.size()) && arg[0])
 	{
 		xr_string key_err;
 		const bool opened = EditorCatalog::Unlock(arg.data(), key_err);
@@ -2285,42 +2376,22 @@ void EditorPublish::McpPublish(LPCSTR raw, xr_string& out)
 		}
 	}
 	SOptions options;
-	if (XFinedMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size()))		options.tag = arg.data();
-	if (XFinedMCP::GetArg(raw, "title", arg.data(), (u32)arg.size()))	options.title = arg.data();
-	if (XFinedMCP::GetArg(raw, "notes", arg.data(), (u32)arg.size()))	options.notes = arg.data();
+	if (GrizzlyMCP::GetArg(raw, "tag", arg.data(), (u32)arg.size()))		options.tag = arg.data();
+	if (GrizzlyMCP::GetArg(raw, "title", arg.data(), (u32)arg.size()))	options.title = arg.data();
+	if (GrizzlyMCP::GetArg(raw, "notes", arg.data(), (u32)arg.size()))	options.notes = arg.data();
 	// absent = the linked game's version, present but empty = no requirement
-	options.requires_given	= XFinedMCP::GetArg(raw, "requires_game", arg.data(), (u32)arg.size());
+	options.requires_given	= GrizzlyMCP::GetArg(raw, "requires_game", arg.data(), (u32)arg.size());
 	if (options.requires_given) options.requires_game = arg.data();
 	options.prerelease		= ArgBool(raw, "prerelease", false);
 	options.latest			= ArgBool(raw, "latest", true);
 
-	SStarted started;
 	xr_string err;
-	if (!Start(options, false, started, err))
+	if (Start(options, false, err))
 	{
-		out = "{\"ok\":false,\"error\":\"";
-		JsonAppend(out, err.c_str());
-		out += "\"}";
+		out = "{\"ok\":true,\"job_pending\":true}";
 		return;
 	}
-	StatusJson(out);
-	// the packaging half of the answer, as mod_package gives it
-	out.erase(out.size() - 1);
-	out += ",\"assets\":[";
-	const EditorMod::SPackageResult& res = started.package;
-	xr_vector<EditorMod::SPackageFile> files = res.packages;
-	files.push_back(res.index);
-	files.push_back(res.descriptor_file);
-	for (u32 i = 0; i < files.size(); ++i)
-	{
-		if (i) out += ",";
-		out += "{\"name\":\"";
-		JsonAppend(out, files[i].name.c_str());
-		out += NqUtil::Format("\",\"size\":%llu,\"sha256\":\"%s\"}", files[i].size, files[i].sha256.c_str());
-	}
-	out += NqUtil::Format("],\"files\":%d", res.files);
-	JsonField(out, "requires_game", res.requires_game.c_str());
-	JsonField(out, "baked", started.bake_note.c_str());
-	JsonField(out, "package_warnings", started.warnings.c_str());
-	out += "}";
+	out = "{\"ok\":false,\"error\":\"";
+	JsonAppend(out, err.c_str());
+	out += "\"}";
 }

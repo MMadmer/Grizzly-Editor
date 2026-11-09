@@ -689,8 +689,8 @@ xr_string NqText::RefSummary(const SNqValue& v)
 		if (sp->Has("ref"))		{ out += " ref="; out += sp->GetString("ref"); }
 		return out;
 	}
-	static const char* kAlt[] = { "story", "ref", "profile", "smart", "restrictor", "community" };
-	for (int i = 0; i < 6; ++i)
+	static const char* kAlt[] = { "story", "ref", "character", "profile", "smart", "restrictor", "community" };
+	for (int i = 0; i < 7; ++i)
 		if (v.Has(kAlt[i]))
 		{
 			out = kAlt[i]; out += ":"; out += v.GetString(kAlt[i]);
@@ -732,7 +732,9 @@ xr_string NqText::ValueSummary(const SNqValue& v, u32 max_len)
 	case SNqValue::tTable:
 		// text tables and refs read better through their dedicated summaries
 		if (v.Has("rus") || v.Has("eng")) return ValueSummary(SNqValue::String(Preview(v)), max_len);
-		// a row that CREATES something reads as what it creates, not as the ref it keeps
+		// a row that CREATES something reads as what it creates, not as the ref it keeps; a
+		// reference that is nothing but a character reads as one
+		if (v.Has("character") && v.keys.size() == 1) return RefSummary(v);
 		if (v.Has("character"))	return v.GetString("character");
 		if (v.Has("section") && v.Has("ref") && !v.Has("smart") && !v.Has("place")) return v.GetString("section");
 		if (v.Has("story") || v.Has("ref") || v.Has("profile") || v.Has("smart") || v.Has("spawn") ||

@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include "EditorStartup.h"
 #include "UILogForm.h"
-#include "../../Public/xfined_resource.h"
+#include "../../Public/grizzly_resource.h"
 
 //------------------------------------------------------------------------------
 // DPI
@@ -41,7 +41,7 @@ ECORE_API float EditorStartup::DpiScale()
 //------------------------------------------------------------------------------
 namespace
 {
-const wchar_t	kSplashClass[]	= L"XFinedEditorSplash";
+const wchar_t	kSplashClass[]	= L"GrizzlyEditorSplash";
 const UINT_PTR	kSweepTimer		= 1;
 const int		kSweepPeriod	= 80;		// ticks per pass, 33 ms each
 
@@ -118,7 +118,7 @@ void PaintSplash(HWND wnd, SSplashState& st)
 	::SetRect(&tr, text_x, int(30 * st.scale), rc.right - pad, int(62 * st.scale));
 	::SelectObject(mem, st.title);
 	::SetTextColor(mem, RGB(236, 236, 240));
-	::DrawTextW(mem, L"XFined Editor", -1, &tr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+	::DrawTextW(mem, L"Grizzly Editor", -1, &tr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
 
 	wchar_t status[160];	TextGet(status, _countof(status));
 	::SetRect(&tr, text_x, int(68 * st.scale), rc.right - pad, int(92 * st.scale));
@@ -201,7 +201,7 @@ DWORD WINAPI SplashThread(LPVOID)
 	const int x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - w) / 2;
 	const int y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - h) / 2;
 
-	HWND wnd = ::CreateWindowExW(WS_EX_TOPMOST, kSplashClass, L"XFined Editor",
+	HWND wnd = ::CreateWindowExW(WS_EX_TOPMOST, kSplashClass, L"Grizzly Editor",
 		WS_POPUP, x, y, w, h, NULL, NULL, self, NULL);
 	if (!wnd)	return 0;
 
@@ -214,7 +214,7 @@ DWORD WINAPI SplashThread(LPVOID)
 	st.status	= ::CreateFontW(-int(13 * scale), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
 					DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
 					CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Segoe UI");
-	st.icon		= (HICON)::LoadImageW(self, MAKEINTRESOURCEW(IDI_XFINED_EDITOR), IMAGE_ICON,
+	st.icon		= (HICON)::LoadImageW(self, MAKEINTRESOURCEW(IDI_GRIZZLY_EDITOR), IMAGE_ICON,
 					int(kIcon * scale), int(kIcon * scale), LR_SHARED);
 	::SetWindowLongPtrW(wnd, GWLP_USERDATA, (LONG_PTR)&st);
 

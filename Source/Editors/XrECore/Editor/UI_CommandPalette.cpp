@@ -20,7 +20,7 @@ constexpr int kNoMatch = 0x3fffffff;
 constexpr int kLetters = 160;
 
 using Icon = XUI::Icon;
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
 struct SEntry
 {
@@ -47,7 +47,7 @@ SPaletteState g_State;
 
 ImU32 Col(Token token, float alpha = 1.f)
 {
-	return XFinedTheme::U32(token, alpha);
+	return GrizzlyTheme::U32(token, alpha);
 }
 
 xr_string Lower(LPCSTR value)

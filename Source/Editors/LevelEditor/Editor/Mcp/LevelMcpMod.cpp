@@ -5,6 +5,7 @@
 #include "..\..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\..\XrECore\Editor\EditorWorld.h"
+#include "..\..\..\XrECore\Editor\EditorScreens.h"
 #include "..\..\..\XrECore\Editor\EditorGameModes.h"
 #include "..\EditorModScene.h"
 
@@ -17,6 +18,8 @@ bool HandleMod(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "mod_manifest"))		{ EditorMod::McpManifest(out);			return true; }
     if (0 == xr_strcmp(cmd, "mod_set_manifest"))	{ EditorMod::McpSetManifest(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "mod_exclude"))		{ EditorMod::McpExclude(raw, out);		return true; }
+    // the console commands the module adds: [commands] of mod.ltx
+    if (0 == xr_strcmp(cmd, "mod_commands"))		{ EditorMod::McpCommands(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_export"))			{ EditorMod::McpExport(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "mod_package"))			{ EditorMod::McpPackage(raw, out);		return true; }
     // the Mod Settings tab: which page it shows, what stops its Save
@@ -35,6 +38,9 @@ bool HandleMod(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "game_modes"))			{ EditorGameModes::McpList(out);		return true; }
     // the mode's world: what of the original game it keeps, the area, the transitions
     if (0 == xr_strcmp(cmd, "world_get"))			{ EditorWorld::McpGet(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "screens_get"))			{ EditorScreens::McpGet(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "screens_set"))			{ EditorScreens::McpSet(raw, out);		return true; }
+    if (0 == xr_strcmp(cmd, "screens_view"))			{ EditorScreens::McpView(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "world_set"))			{ EditorWorld::McpSet(raw, out);		return true; }
     if (0 == xr_strcmp(cmd, "world_transitions"))	{ EditorWorld::McpTransitions(raw, out);	return true; }
     if (0 == xr_strcmp(cmd, "world_view"))			{ EditorWorld::McpView(raw, out);		return true; }

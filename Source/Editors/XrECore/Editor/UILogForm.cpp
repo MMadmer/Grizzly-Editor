@@ -88,8 +88,8 @@ ImU32 ColorOf(ELevel level)
 	{
 	case lvError:	return XUI::ToneColor(XUI::Tone::Error);
 	case lvWarning:	return XUI::ToneColor(XUI::Tone::Warning);
-	case lvInfo:	return XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary);
-	default:		return XFinedTheme::U32(XFinedTheme::ColorToken::Text);
+	case lvInfo:	return GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary);
+	default:		return GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Text);
 	}
 }
 
@@ -208,7 +208,7 @@ void DrawToolbar()
 void DrawLines()
 {
 	const float console_h = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(XFinedTheme::ColorToken::Inset));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Inset));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(XUI::Pt(8.f), XUI::Pt(4.f)));
 	const bool shown = ImGui::BeginChild("##lines", ImVec2(0.f, -console_h), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
 	ImGui::PopStyleVar();
@@ -242,13 +242,13 @@ void DrawLines()
 					if (line.mark)
 					{
 						// where the counts start: its reason, then a rule to the edge, in a line's height
-						ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextMuted));
+						ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextMuted));
 						ImGui::TextUnformatted(line.text.c_str(), line.text.c_str() + line.text.size());
 						ImGui::PopStyleColor();
 						const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
 						const float y = floorf((min.y + max.y) * .5f + .5f);
 						ImGui::GetWindowDrawList()->AddLine(ImVec2(max.x + XUI::Pt(8.f), y),
-							ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), y), XFinedTheme::U32(XFinedTheme::ColorToken::BorderSubtle));
+							ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowWidth(), y), GrizzlyTheme::U32(GrizzlyTheme::ColorToken::BorderSubtle));
 						continue;
 					}
 					ImGui::PushStyleColor(ImGuiCol_Text, ColorOf(line.level));
@@ -312,7 +312,7 @@ void DrawConsole()
 	}
 	const float h = ImGui::GetItemRectSize().y;
 	XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Terminal, ImVec2(floorf(at.x + XUI::Pt(8.f) + .5f), floorf(at.y + (h - icon) * .5f + .5f)), 14.f,
-		XFinedTheme::U32(ImGui::IsItemActive() ? XFinedTheme::ColorToken::Text : XFinedTheme::ColorToken::TextMuted));
+		GrizzlyTheme::U32(ImGui::IsItemActive() ? GrizzlyTheme::ColorToken::Text : GrizzlyTheme::ColorToken::TextMuted));
 	XUI::Tip("A command of the engine's console, as the game's console takes it.", "Up / Down");
 	if (run && s_Command[0])
 	{

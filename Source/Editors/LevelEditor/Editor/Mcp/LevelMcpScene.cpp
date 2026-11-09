@@ -5,7 +5,14 @@
 #include "..\..\..\XrECore\Editor\UI_ViewportNavigation.h"
 #include "..\..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
 #include "..\EditorModScene.h"
+#include "..\GameLightingScene.h"
+#include "..\..\..\XrECore\Editor\EGameLighting.h"
 #include "..\Utils\Cursor3D.h"
+
+// SpawnPoint.cpp: whether spawn objects draw their shapes, gizmos, icons and labels
+extern bool g_SpawnHelpers;
+// SceneObject.cpp: ray picks test every static object, seen by the camera or not
+extern bool g_RayPickAll;
 
 // The scene over MCP: objects, selection, placement, the camera and the viewport's view, the World Outliner.
 namespace LevelMcp
@@ -62,9 +69,9 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	if (0 == xr_strcmp(cmd, "viewport_navigation"))
 	{
 		char action[32] = {}, view[32] = {}, scope[32] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-		XFinedMCP::GetArg(raw, "view", view, sizeof(view));
-		XFinedMCP::GetArg(raw, "scope", scope, sizeof(scope));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "view", view, sizeof(view));
+		GrizzlyMCP::GetArg(raw, "scope", scope, sizeof(scope));
 		if (!action[0])
 			xr_strcpy(action, view[0] ? "set" : "get");
 
@@ -150,11 +157,11 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "outliner_filter"))
     {
         char text[128] = {}, types[512] = {}, visibility[16] = {}, layout[16] = {}, sort[16] = {};
-        const bool has_text  = XFinedMCP::GetArg(raw, "text",  text,  sizeof(text));
-        const bool has_types = XFinedMCP::GetArg(raw, "types", types, sizeof(types));
-        const bool has_visibility = XFinedMCP::GetArg(raw, "visibility", visibility, sizeof(visibility));
-        const bool has_layout = XFinedMCP::GetArg(raw, "layout", layout, sizeof(layout)) && layout[0];
-        const bool has_sort = XFinedMCP::GetArg(raw, "sort", sort, sizeof(sort)) && sort[0];
+        const bool has_text  = GrizzlyMCP::GetArg(raw, "text",  text,  sizeof(text));
+        const bool has_types = GrizzlyMCP::GetArg(raw, "types", types, sizeof(types));
+        const bool has_visibility = GrizzlyMCP::GetArg(raw, "visibility", visibility, sizeof(visibility));
+        const bool has_layout = GrizzlyMCP::GetArg(raw, "layout", layout, sizeof(layout)) && layout[0];
+        const bool has_sort = GrizzlyMCP::GetArg(raw, "sort", sort, sizeof(sort)) && sort[0];
         int sel_only = -1;
         if (GetArgBool(raw, "selected_only", false))     sel_only = 1;
         else if (!GetArgBool(raw, "selected_only", true)) sel_only = 0;
@@ -196,13 +203,13 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "scene_visibility"))
     {
         char cls_name[64] = {}, name[256] = {};
-        const bool has_class = XFinedMCP::GetArg(raw, "class", cls_name, sizeof(cls_name)) && cls_name[0];
-        const bool has_name = XFinedMCP::GetArg(raw, "name", name, sizeof(name)) && name[0];
+        const bool has_class = GrizzlyMCP::GetArg(raw, "class", cls_name, sizeof(cls_name)) && cls_name[0];
+        const bool has_name = GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)) && name[0];
         const bool selection = GetArgBool(raw, "selection", false);
         const bool all = GetArgBool(raw, "all", false);
         const int targets = int(has_class) + int(has_name) + int(selection) + int(all);
         char visible_arg[16] = {};
-        const bool has_visible = XFinedMCP::GetArg(raw, "visible", visible_arg, sizeof(visible_arg)) && visible_arg[0];
+        const bool has_visible = GrizzlyMCP::GetArg(raw, "visible", visible_arg, sizeof(visible_arg)) && visible_arg[0];
         const bool visible = GetArgBool(raw, "visible", true);
         if (targets > 1)
         {
@@ -290,8 +297,8 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "scene_tree"))
     {
         char cls_filter[128] = {}, contains[128] = {};
-        XFinedMCP::GetArg(raw, "class", cls_filter, sizeof(cls_filter));
-        XFinedMCP::GetArg(raw, "filter", contains, sizeof(contains));
+        GrizzlyMCP::GetArg(raw, "class", cls_filter, sizeof(cls_filter));
+        GrizzlyMCP::GetArg(raw, "filter", contains, sizeof(contains));
         const int limit = GetArgInt(raw, "limit", 200);
         strlwr(contains);
 
@@ -350,8 +357,8 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "list_objects"))
     {
         char cls_filter[128] = {}, contains[128] = {};
-        XFinedMCP::GetArg(raw, "class", cls_filter, sizeof(cls_filter));
-        XFinedMCP::GetArg(raw, "name_contains", contains, sizeof(contains));
+        GrizzlyMCP::GetArg(raw, "class", cls_filter, sizeof(cls_filter));
+        GrizzlyMCP::GetArg(raw, "name_contains", contains, sizeof(contains));
         const int limit = GetArgInt(raw, "limit", 100);
 
         out = "{\"ok\":true,\"objects\":[";
@@ -385,7 +392,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "focus_object"))
     {
         char name[256];
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)))
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' argument\"}";
             return true;
@@ -473,7 +480,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "object_info"))
     {
         char name[256];
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)))
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' argument\"}";
             return true;
@@ -542,10 +549,32 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // a base level's spawn the mod takes out of the game (the build writes a remove op);
+    // authored objects are the mod's own and are simply deleted instead
+    if (0 == xr_strcmp(cmd, "mark_removed"))
+    {
+        if (!Scene) { out = "{\"ok\":false,\"error\":\"no scene\"}"; return true; }
+        const bool removed = GetArgBool(raw, "removed", true);
+        int n = 0, own = 0;
+        ObjectList sel;
+        if (Scene->GetQueryObjects(sel, OBJCLASS_SPAWNPOINT, 1, -1, -1))
+            for (ObjectIt it = sel.begin(); it != sel.end(); ++it)
+            {
+                if ((*it)->IsAuthorPlaced()) { ++own; continue; }
+                if (!!(*it)->IsBaseRemoved() != removed)
+                    { (*it)->SetBaseRemoved(removed ? TRUE : FALSE); ++n; }
+            }
+        if (n) Scene->UndoSave();
+        char buf[128];
+        sprintf_s(buf, "{\"ok\":true,\"changed\":%d,\"skipped_authored\":%d,\"removed\":%s}", n, own, removed ? "true" : "false");
+        out = buf;
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "select_objects"))
     {
         char names[2048];
-        if (!XFinedMCP::GetArg(raw, "names", names, sizeof(names)))
+        if (!GrizzlyMCP::GetArg(raw, "names", names, sizeof(names)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'names' argument (comma-separated list)\"}";
             return true;
@@ -601,7 +630,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         0 == xr_strcmp(cmd, "object_set_scale"))
     {
         char name[256];
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)))
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' argument\"}";
             return true;
@@ -653,7 +682,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         char ref[256];
-        if (!XFinedMCP::GetArg(raw, "ref", ref, sizeof(ref)))
+        if (!GrizzlyMCP::GetArg(raw, "ref", ref, sizeof(ref)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'ref' argument (library object, e.g. props\\\\box_1)\"}";
             return true;
@@ -702,7 +731,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
 
         string256 namebuffer;
         char custom[256] = {};
-        if (XFinedMCP::GetArg(raw, "name", custom, sizeof(custom)) && custom[0])
+        if (GrizzlyMCP::GetArg(raw, "name", custom, sizeof(custom)) && custom[0])
         {
             strlwr(custom);
             if (Scene->FindObjectByName(custom, (CCustomObject*)0))
@@ -759,7 +788,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "list_spawn_sections"))
     {
         char filter[256] = {};
-        XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
+        GrizzlyMCP::GetArg(raw, "filter", filter, sizeof(filter));
         strlwr(filter);
         const int limit = GetArgInt(raw, "limit", 200);
 
@@ -809,7 +838,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         char section[256];
-        if (!XFinedMCP::GetArg(raw, "section", section, sizeof(section)))
+        if (!GrizzlyMCP::GetArg(raw, "section", section, sizeof(section)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'section' argument (see list_spawn_sections)\"}";
             return true;
@@ -895,7 +924,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
         char name[256];
         xr_string text;
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)) || !name[0])
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' - the path's name, what orders and quests call it\"}";
             return true;
@@ -973,7 +1002,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "spawn_order"))
     {
         char name[256];
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)))
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)))
         {
             out = "{\"ok\":false,\"error\":\"missing 'name' (a stalker placed with the Spawn tool)\"}";
             return true;
@@ -992,7 +1021,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         SXmsOrder o = sp->m_Order;
         bool changed = false;
         char text[256];
-        if (XFinedMCP::GetArg(raw, "order", text, sizeof(text)))
+        if (GrizzlyMCP::GetArg(raw, "order", text, sizeof(text)))
         {
             const u8 kind = SXmsOrder::KindFromKey(text);
             if (kind == SXmsOrder::okNone && 0 != _stricmp(text, "none"))
@@ -1003,9 +1032,9 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             o.kind = kind;
             changed = true;
         }
-        if (XFinedMCP::GetArg(raw, "route", text, sizeof(text)))	{ o.route = text; changed = true; }
-        if (XFinedMCP::GetArg(raw, "look", text, sizeof(text)))		{ o.look = text; changed = true; }
-        if (XFinedMCP::GetArg(raw, "target", text, sizeof(text)))	{ o.target = text; changed = true; }
+        if (GrizzlyMCP::GetArg(raw, "route", text, sizeof(text)))	{ o.route = text; changed = true; }
+        if (GrizzlyMCP::GetArg(raw, "look", text, sizeof(text)))		{ o.look = text; changed = true; }
+        if (GrizzlyMCP::GetArg(raw, "target", text, sizeof(text)))	{ o.target = text; changed = true; }
         float number = 0.f;
         if (GetArgFloat(raw, "radius", number))		{ o.radius = number; changed = true; }
         if (GetArgFloat(raw, "distance", number))	{ o.distance = number; changed = true; }
@@ -1066,7 +1095,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             }
 
         char tool_arg[16] = {};
-        const bool has_tool = XFinedMCP::GetArg(raw, "tool", tool_arg, sizeof(tool_arg)) && tool_arg[0];
+        const bool has_tool = GrizzlyMCP::GetArg(raw, "tool", tool_arg, sizeof(tool_arg)) && tool_arg[0];
         ETAction action = LTools->GetAction();
         Gizmo::EType type = gizmo->GetType();
         if (has_tool)
@@ -1175,7 +1204,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
         char action[32] = {};
         u32 command = 0;
-        if (XFinedMCP::GetArg(raw, "action", action, sizeof(action)) && action[0])
+        if (GrizzlyMCP::GetArg(raw, "action", action, sizeof(action)) && action[0])
         {
             if (0 == _stricmp(action, "set_from_selection"))	command = COMMAND_SET_SNAP_OBJECTS;
             else if (0 == _stricmp(action, "add_selection"))	command = COMMAND_ADD_SEL_SNAP_OBJECTS;
@@ -1213,11 +1242,18 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         return true;
     }
 
+    // View > Game Lighting: the hour and weather of the linked game, the lights it would draw (GameLightingScene.cpp)
+    if (0 == xr_strcmp(cmd, "game_lighting"))
+    {
+        GameLighting_Mcp(raw, out);
+        return true;
+    }
+
     if (0 == xr_strcmp(cmd, "view_mode"))
     {
         // presets first, so explicit fields can still override them
         char preset[64] = {};
-        if (XFinedMCP::GetArg(raw, "preset", preset, sizeof(preset)) && preset[0])
+        if (GrizzlyMCP::GetArg(raw, "preset", preset, sizeof(preset)) && preset[0])
         {
             if (0 == _stricmp(preset, "lit"))
             {
@@ -1231,6 +1267,13 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
                 psDeviceFlags.set(rsLighting, FALSE);
                 psDeviceFlags.set(rsRenderTextures, TRUE);
             }
+            else if (0 == _stricmp(preset, "game"))
+            {
+                // the game's lighting at the hour and weather game_lighting set (a new game's first night by default)
+                EDevice->dwFillMode = D3DFILL_SOLID;
+                psDeviceFlags.set(rsRenderTextures, TRUE);
+                GGameLighting.Enable();
+            }
             else if (0 == _stricmp(preset, "wireframe"))
             {
                 EDevice->dwFillMode = D3DFILL_WIREFRAME;
@@ -1242,13 +1285,13 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             else
             {
                 out = "{\"ok\":false,\"error\":\"unknown preset\",\"presets\":"
-                      "[\"unlit\",\"lit\",\"wireframe\",\"point\"]}";
+                      "[\"unlit\",\"lit\",\"game\",\"wireframe\",\"point\"]}";
                 return true;
             }
         }
 
         char fill[64] = {};
-        if (XFinedMCP::GetArg(raw, "fill", fill, sizeof(fill)) && fill[0])
+        if (GrizzlyMCP::GetArg(raw, "fill", fill, sizeof(fill)) && fill[0])
         {
             if      (0 == _stricmp(fill, "solid"))     EDevice->dwFillMode = D3DFILL_SOLID;
             else if (0 == _stricmp(fill, "wireframe")) EDevice->dwFillMode = D3DFILL_WIREFRAME;
@@ -1261,7 +1304,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
 
         char shade[64] = {};
-        if (XFinedMCP::GetArg(raw, "shade", shade, sizeof(shade)) && shade[0])
+        if (GrizzlyMCP::GetArg(raw, "shade", shade, sizeof(shade)) && shade[0])
         {
             if      (0 == _stricmp(shade, "flat"))    EDevice->dwShadeMode = D3DSHADE_FLAT;
             else if (0 == _stricmp(shade, "gouraud")) EDevice->dwShadeMode = D3DSHADE_GOURAUD;
@@ -1293,6 +1336,17 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             if (wanted != current)
                 psDeviceFlags.set(f.mask, wanted ? TRUE : FALSE);
         }
+        g_SpawnHelpers = GetArgBool(raw, "helpers", g_SpawnHelpers);
+        {
+            const bool game = GetArgBool(raw, "game_lighting", GGameLighting.enabled);
+            if (game != GGameLighting.enabled)
+            {
+                if (game)
+                    GGameLighting.Enable();
+                else
+                    GGameLighting.Disable();
+            }
+        }
 
         UI->RedrawScene(true);
 
@@ -1303,8 +1357,8 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         sprintf_s(tmp, sizeof(tmp),
             "{\"ok\":true,\"fill\":\"%s\",\"shade\":\"%s\","
             "\"lighting\":%s,\"textures\":%s,\"edged_faces\":%s,\"filter_linear\":%s,"
-            "\"fog\":%s,\"environment\":%s,\"grid\":%s,\"safe_rect\":%s,\"stats\":%s,"
-            "\"presets\":[\"unlit\",\"lit\",\"wireframe\",\"point\"]}",
+            "\"fog\":%s,\"environment\":%s,\"grid\":%s,\"safe_rect\":%s,\"stats\":%s,\"helpers\":%s,"
+            "\"game_lighting\":%s,\"presets\":[\"unlit\",\"lit\",\"game\",\"wireframe\",\"point\"]}",
             fill_name, shade_name,
             psDeviceFlags.test(rsLighting) ? "true" : "false",
             psDeviceFlags.test(rsRenderTextures) ? "true" : "false",
@@ -1314,7 +1368,112 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             psDeviceFlags.test(rsEnvironment) ? "true" : "false",
             psDeviceFlags.test(rsDrawGrid) ? "true" : "false",
             psDeviceFlags.test(rsDrawSafeRect) ? "true" : "false",
-            psDeviceFlags.test(rsStatistic) ? "true" : "false");
+            psDeviceFlags.test(rsStatistic) ? "true" : "false",
+            g_SpawnHelpers ? "true" : "false",
+            GGameLighting.enabled ? "true" : "false");
+        out = tmp;
+        return true;
+    }
+
+    if (0 == xr_strcmp(cmd, "scan_walls"))
+    {
+        // A horizontal lidar slice of the static geometry: rays fan out at one height from a grid of points, every
+        // hit is a wall, a column or stock furniture there. Answers the hit cells of a res-metre grid over the area.
+        float x0 = 0.f, x1 = 0.f, z0 = 0.f, z1 = 0.f, y = 0.f, step = 0.5f, reach = 6.f, res = 0.1f;
+        if (!GetArgFloat(raw, "x0", x0) || !GetArgFloat(raw, "x1", x1) || !GetArgFloat(raw, "z0", z0) ||
+            !GetArgFloat(raw, "z1", z1) || !GetArgFloat(raw, "y", y))
+        {
+            out = "{\"ok\":false,\"error\":\"x0, x1, z0, z1 and y are required\"}";
+            return true;
+        }
+        GetArgFloat(raw, "step", step);
+        GetArgFloat(raw, "reach", reach);
+        GetArgFloat(raw, "res", res);
+        step = _max(step, 0.1f);
+        res = _max(res, 0.02f);
+        reach = _max(reach, 0.5f);
+        const int rays = _max(4, GetArgInt(raw, "rays", 24));
+        if (x1 <= x0 || z1 <= z0 || (x1 - x0) > 80.f || (z1 - z0) > 80.f)
+        {
+            out = "{\"ok\":false,\"error\":\"the area must be non-empty and at most 80 x 80 m\"}";
+            return true;
+        }
+        const u32 w = iCeil((x1 - x0) / res), h = iCeil((z1 - z0) / res);
+        xr_vector<u32> cells;
+        u32 cast = 0;
+        g_RayPickAll = true;
+        for (float ox = x0; ox <= x1; ox += step)
+            for (float oz = z0; oz <= z1; oz += step)
+                for (int i = 0; i < rays; ++i)
+                {
+                    const float a = PI_MUL_2 * float(i) / float(rays);
+                    Fvector start, dir;
+                    start.set(ox, y, oz);
+                    dir.set(_sin(a), 0.f, _cos(a));
+                    SRayPickInfo pinf;
+                    pinf.inf.range = reach;
+                    ++cast;
+                    if (!Scene->RayPickObject(pinf.inf.range, start, dir, OBJCLASS_SCENEOBJECT, &pinf, 0))
+                        continue;
+                    Fvector hit;
+                    RetrieveSceneObjPointAndNormal(hit, 0, pinf, 0);
+                    if (!_valid(hit) || hit.x < x0 || hit.x >= x1 || hit.z < z0 || hit.z >= z1)
+                        continue;
+                    const u32 ix = _min(u32((hit.x - x0) / res), w - 1), iz = _min(u32((hit.z - z0) / res), h - 1);
+                    cells.push_back(iz * w + ix);
+                }
+        g_RayPickAll = false;
+        std::sort(cells.begin(), cells.end());
+        cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
+        char head[256];
+        sprintf_s(head, "{\"ok\":true,\"x0\":%.3f,\"z0\":%.3f,\"res\":%.3f,\"w\":%u,\"h\":%u,\"rays\":%u,\"cells\":[",
+            x0, z0, res, w, h, cast);
+        out = head;
+        char num[16];
+        for (size_t i = 0; i < cells.size(); ++i)
+        {
+            sprintf_s(num, i ? ",%u" : "%u", cells[i]);
+            out += num;
+        }
+        out += "]}";
+        return true;
+    }
+
+    if (0 == xr_strcmp(cmd, "probe_vertical"))
+    {
+        // Straight up and straight down from a point through the static geometry: the ceiling over it and the
+        // floor under it (where to hang a lamp, what a prop stands on). Answers the hit heights or null.
+        float x = 0.f, y = 0.f, z = 0.f, reach = 30.f;
+        if (!GetArgFloat(raw, "x", x) || !GetArgFloat(raw, "y", y) || !GetArgFloat(raw, "z", z))
+        {
+            out = "{\"ok\":false,\"error\":\"x, y and z are required\"}";
+            return true;
+        }
+        GetArgFloat(raw, "reach", reach);
+        auto cast = [&](float dir_y, float& hit_y) -> bool
+        {
+            Fvector start, dir;
+            start.set(x, y, z);
+            dir.set(0.f, dir_y, 0.f);
+            SRayPickInfo pinf;
+            pinf.inf.range = reach;
+            if (!Scene->RayPickObject(pinf.inf.range, start, dir, OBJCLASS_SCENEOBJECT, &pinf, 0))
+                return false;
+            Fvector hit;
+            RetrieveSceneObjPointAndNormal(hit, 0, pinf, 0);
+            if (!_valid(hit))
+                return false;
+            hit_y = hit.y;
+            return true;
+        };
+        g_RayPickAll = true;
+        float up = 0.f, down = 0.f;
+        const bool has_up = cast(1.f, up), has_down = cast(-1.f, down);
+        g_RayPickAll = false;
+        char tmp[192], a[32], b[32];
+        sprintf_s(a, has_up ? "%.3f" : "null", up);
+        sprintf_s(b, has_down ? "%.3f" : "null", down);
+        sprintf_s(tmp, "{\"ok\":true,\"ceiling\":%s,\"floor\":%s}", a, b);
         out = tmp;
         return true;
     }
@@ -1329,7 +1488,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         ObjectList batch;
         char names[4096] = {};
         xr_string missing;
-        if (XFinedMCP::GetArg(raw, "names", names, sizeof(names)) && names[0])
+        if (GrizzlyMCP::GetArg(raw, "names", names, sizeof(names)) && names[0])
         {
             for (char* cursor = names; cursor && *cursor;)
             {
@@ -1361,7 +1520,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
 
         char mode[32] = {};
-        XFinedMCP::GetArg(raw, "mode", mode, sizeof(mode));
+        GrizzlyMCP::GetArg(raw, "mode", mode, sizeof(mode));
         const bool line_trace = (0 == _stricmp(mode, "line"));
 
 		Scene->UndoTransformBegin(batch);
@@ -1384,8 +1543,8 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "rename_object"))
     {
         char name[256], new_name[256];
-        if (!XFinedMCP::GetArg(raw, "name", name, sizeof(name)) ||
-            !XFinedMCP::GetArg(raw, "new_name", new_name, sizeof(new_name)) || !new_name[0])
+        if (!GrizzlyMCP::GetArg(raw, "name", name, sizeof(name)) ||
+            !GrizzlyMCP::GetArg(raw, "new_name", new_name, sizeof(new_name)) || !new_name[0])
         {
             out = "{\"ok\":false,\"error\":\"need 'name' and non-empty 'new_name'\"}";
             return true;
@@ -1426,6 +1585,9 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
         }
         Scene->RemoveSelection(OBJCLASS_DUMMY);
         Scene->UndoSave();
+        // the Properties panel still holds the removed objects' fields: rebuild it now, or its
+        // next draw reads freed memory (a token field of a deleted lamp took the editor down)
+        LTools->UpdateProperties(TRUE);
         UI->RedrawScene(true);
         char tmp[64];
         sprintf_s(tmp, "{\"ok\":true,\"removed\":%d}", removed);
@@ -1441,7 +1603,7 @@ bool HandleScene(LPCSTR cmd, LPCSTR raw, xr_string& out)
             return true;
         }
         char file[MAX_PATH] = {};
-        XFinedMCP::GetArg(raw, "file", file, sizeof(file));
+        GrizzlyMCP::GetArg(raw, "file", file, sizeof(file));
         xr_string fn = file[0] ? file : LTools->m_LastFileName.c_str();
         if (fn.empty())
         {

@@ -1390,7 +1390,7 @@ void XUI::Internal::SetRowMixed(bool mixed)
 }
 
 // ===================================================================================================
-// Layout store: [XFinedLayout][Data] in the .ini, sizes in pt; [XFinedLayout][Dpi] the scale they
+// Layout store: [GrizzlyLayout][Data] in the .ini, sizes in pt; [GrizzlyLayout][Dpi] the scale they
 // were saved at, so a layout moved to another monitor keeps its panels' pt size.
 // ===================================================================================================
 namespace
@@ -1454,8 +1454,8 @@ bool FloatingWindow(const ImGuiWindow* window)
 void XUI::Internal::RegisterLayoutHandler()
 {
 	ImGuiSettingsHandler handler;
-	handler.TypeName = "XFinedLayout";
-	handler.TypeHash = ImHashStr("XFinedLayout");
+	handler.TypeName = "GrizzlyLayout";
+	handler.TypeHash = ImHashStr("GrizzlyLayout");
 	handler.ClearAllFn = LayoutClearAll;
 	handler.ReadOpenFn = LayoutReadOpen;
 	handler.ReadLineFn = LayoutReadLine;
@@ -1950,6 +1950,7 @@ void XUI::AuditJson(xr_string& out, cstr window)
 // ===================================================================================================
 void XUI::DrawOverlays()
 {
+	Hooks::FileDropFrameEnd();
 	if (!ImGui::GetCurrentContext() || !GImGui->WithinFrameScope)
 		return;
 	// a progress frame draws no panels, so a dialog opened now could close a modal nobody drew

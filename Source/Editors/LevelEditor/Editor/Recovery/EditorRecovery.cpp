@@ -1228,7 +1228,7 @@ bool EditorRecovery::DrawStartupRecovery()
     const bool can_restore = CanRestoreStartup(restore_why);
     const bool can_discard = CanDiscardStartup(discard_why);
     const char* scene = s_startup_entry.source.empty() ? "Untitled scene" : s_startup_entry.source.c_str();
-    const ImU32 secondary = XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary);
+    const ImU32 secondary = GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary);
 
     int clicked = -1;
     if (XUI::BeginPage(EditorUiContract::kWindowStartPage))

@@ -33,22 +33,11 @@
 //                   { section = "ammo_5.45x39_fmj", count = 3 } },
 //   }
 //
-// and the build turns every `.npcasset` of the project into:
-//
-//   gamedata\configs\gameplay\character_desc_<module>.xml   the characters
-//   gamedata\configs\gameplay\npc_profile_<module>.xml      their profiles
-//   gamedata\configs\text\<lang>\<module>_npc.xml           names and bios
-//   gamedata\configs\xms\<module>_npc.ltx                   spawn + squad sections
-//   patch\<module>_characters.ltxp                          the three list lines
-//
-// The spawn section is why a character is usable everywhere at once: it carries
-// `$spawn`, so the character appears in the editor's spawn roster and can be
-// placed in a level by hand, AND a quest can spawn it with `spawn.object`.
-// The one-man squad section makes `spawn.squad` work on it too.
-//
-// Generated files are owned by the editor (EditorMod::GetOwnedFiles): the
-// content browser hides them, and a character that is deleted takes its
-// generated half with it instead of haunting the module.
+// and that file is all the module ships: the game reads it and makes the rest itself - the
+// specific character, its profile, the strings, a trader's config and two sections:
+// `<module>_<id>` with `$spawn`, so a quest can create the character with `spawn.object`, and
+// the one-man squad `<module>_<id>_squad` for `spawn.squad`. What the game does with a
+// character is its own business: the game repo's xms_characters.cpp and MODDING.md.
 //------------------------------------------------------------------------------
 
 namespace EditorCharacters
@@ -61,6 +50,43 @@ namespace EditorCharacters
 		int			count;
 
 					SSupply	() : count(1) {}
+	};
+
+	// One line of a trader's stock: what it has on the shelf after every restock, each
+	// item there with its chance.
+	struct STradeRow
+	{
+		xr_string	section;
+		int			count;
+		float		chance;			// (0, 1]
+
+					STradeRow	() : count(1), chance(1.f) {}
+	};
+
+	// What a trader sells, buys and keeps in stock - the specialisation a shop has. The
+	// categories are the linked game's trade presets (the sections of
+	// misc\trade\trade_presets.ltx that list items: weapon, drugs, food, ...), the prices
+	// fractions of an item's cost on top of the factors the game gives single items there.
+	// The game makes the trader's config of it and uses it whatever logic the NPC runs.
+	struct STrade
+	{
+		bool					declared;	// the character says something about trade
+		bool					off;		// trade = false: not a trader, whatever the base is
+		xr_vector<xr_string>	sells;		// categories it sells, besides its stock
+		xr_vector<xr_string>	buys;		// categories it buys from the player
+		xr_vector<STradeRow>	stock;
+		float					markup;		// asks this much of an item's cost
+		float					pays;		// pays this much of it
+		int						restock;	// game hours between restocks
+
+					STrade		() { Reset(); }
+		void		Reset		()
+		{
+			declared = false; off = false;
+			sells.clear(); buys.clear(); stock.clear();
+			markup = 1.f; pays = 0.3f; restock = 24;
+		}
+		bool		Trader		() const { return declared && !off; }
 	};
 
 	struct SCharacter
@@ -97,6 +123,7 @@ namespace EditorCharacters
 		bool		money_infinite;
 
 		xr_vector<SSupply>	supplies;
+		STrade				trade;	// set here as a whole, or the base's
 
 		bool		squad;			// emit the one-man squad section (default true)
 		bool		has_squad;		// set here, or inherited from the base
@@ -161,11 +188,15 @@ namespace EditorCharacters
 									 xr_vector<xr_string>& problems);
 
 	// -- the build -----------------------------------------------------------
-	// Writes (or removes, when the project has no characters) the generated
-	// half into the project. Called by the export before anything is copied.
-	ECORE_API bool		Generate	(LPCSTR project_root, LPCSTR module_id,
-									 int& written, xr_string& err);
-	ECORE_API void		GeneratedFiles(LPCSTR module_id, xr_vector<xr_string>& rel);
+	// False + the first error when a character would not work in the game.
+	ECORE_API bool		CheckForBuild(LPCSTR project_root, xr_string& err);
+
+	// -- trade ---------------------------------------------------------------
+	// The linked game's trade categories: the sections of misc\trade\trade_presets.ltx that
+	// list items, `unused` left out (nobody trades in those). Read once per linked game;
+	// empty without one.
+	ECORE_API const xr_vector<xr_string>&	TradeCategories	();
+	// "misc\trade\<module>\<id>.ltx" - the config path the game reads a trader's trade from
 
 	// -- MCP -----------------------------------------------------------------
 	ECORE_API void		McpList		(LPCSTR raw, xr_string& out);
@@ -187,4 +218,9 @@ namespace EditorCharacters
 	ECORE_API void		Show		();
 	ECORE_API void		Open		(LPCSTR path);		// from the content browser
 	ECORE_API bool		IsOpen		();
+	// The kit row's item picker, one widget for every kit the editor edits (a
+	// character's, the mode's start kit in World Rules): a filtered combo over the
+	// linked game's items, "caption (section)"; a section the list lacks is kept.
+	// `none` is the first row and the field's text while buf is empty.
+	ECORE_API bool		ItemPicker	(LPCSTR label, char* buf, u32 size, LPCSTR none = 0);
 }

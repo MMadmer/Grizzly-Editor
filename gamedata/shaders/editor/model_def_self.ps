@@ -1,0 +1,19 @@
+#include "common.h"
+
+// Self-lit surfaces (models\selflight*, selflight, the light planes): the game draws them at their own brightness, so
+// the game lighting leaves them as they are. Paired with model_def_hq.vs, whose trailing outputs it does not read.
+struct 	v2p
+{
+ 	float2 	tc0: 		TEXCOORD0;	// base
+	float4	c:		COLOR0;		// ffp lighting
+};
+
+//////////////////////////////////////////////////////////////////////////////////////////
+// Pixel
+float4 	main	( v2p I )	: SV_Target
+{
+	float4	t	= s_base.Sample	(smp_base, I.tc0);
+	if (!glit_enabled())
+		t.rgb	*= saturate(I.c.rgb);
+	return	t;
+}

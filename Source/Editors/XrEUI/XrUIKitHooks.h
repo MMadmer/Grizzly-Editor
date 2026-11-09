@@ -15,6 +15,8 @@ void SetProgressFrame(bool progress);
 // the theme asks for a rebuild at the next frame / does it now
 void RequestStyle();
 void RebuildStyle();
+// files that landed where nothing listens are forgotten (XrUIFileDrop.cpp)
+void FileDropFrameEnd();
 // the fonts of the kit (XrUIFonts.cpp)
 bool FontsLoaded();
 }

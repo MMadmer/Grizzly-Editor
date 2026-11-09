@@ -1,4 +1,4 @@
-// XFined Editor - application resources.
+// Grizzly Editor - application resources.
 //
 // The icon is the product logo the author drew; it lives once, in assets\, and
 // every editor executable points at that same file so there is no second copy
@@ -6,11 +6,11 @@
 // tooltip and the taskbar read, so it is filled in rather than left blank.
 
 #include <winres.h>
-#include "../Public/xfined_resource.h"
+#include "../Public/grizzly_resource.h"
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
-IDI_XFINED_EDITOR	ICON	"../../../assets/xfined-editor-xf-logo-icon.ico"
+IDI_GRIZZLY_EDITOR	ICON	"../../../assets/grizzly-editor-icon.ico"
 
 VS_VERSION_INFO VERSIONINFO
 	FILEVERSION		1,0,0,0
@@ -30,12 +30,12 @@ BEGIN
 		BLOCK "040904b0"
 		BEGIN
 			VALUE "CompanyName",		"Madmer"
-			VALUE "FileDescription",	"XFined Editor"
+			VALUE "FileDescription",	"Grizzly Editor"
 			VALUE "FileVersion",		"1.0.0.0"
 			VALUE "InternalName",		"LevelEditor"
 			VALUE "LegalCopyright",		"Madmer"
 			VALUE "OriginalFilename",	"LevelEditor.exe"
-			VALUE "ProductName",		"XFined Editor"
+			VALUE "ProductName",		"Grizzly Editor"
 			VALUE "ProductVersion",		"1.0.0.0"
 		END
 	END

@@ -33,14 +33,14 @@ namespace
 	constexpr u32			kTargetStep			= 64;
 
 	// a theme colour as the device wants it (0xAARRGGBB): the clear, the floor's lines
-	u32 DeviceColor(XFinedTheme::ColorToken token)
+	u32 DeviceColor(GrizzlyTheme::ColorToken token)
 	{
-		return 0xFF000000 | XFinedTheme::Rgb(token);
+		return 0xFF000000 | GrizzlyTheme::Rgb(token);
 	}
 
 	u32 BackgroundColor()
 	{
-		return DeviceColor(XFinedTheme::ColorToken::Canvas);
+		return DeviceColor(GrizzlyTheme::ColorToken::Canvas);
 	}
 
 	// the floor: at most this many lines each way, and the margin round the model's box in radii
@@ -437,8 +437,8 @@ namespace
 			l.push_back(Fvector().set(i1*step,y,k*step));
 		}
 
-		static const XFinedTheme::ColorToken kTier[3] = { XFinedTheme::ColorToken::BorderSubtle, XFinedTheme::ColorToken::Border,
-			XFinedTheme::ColorToken::BorderStrong };
+		static const GrizzlyTheme::ColorToken kTier[3] = { GrizzlyTheme::ColorToken::BorderSubtle, GrizzlyTheme::ColorToken::Border,
+			GrizzlyTheme::ColorToken::BorderStrong };
 		EDevice->SetShader		(EDevice->m_WireShader);
 		RCache.set_xform_world	(Fidentity);
 		for (int t=0; t<3; ++t)
@@ -988,6 +988,8 @@ void UIVisualPreview::DrawToolBar(XUI::Toolbar& tb)
 {
 	const bool model = m_Visual || m_Editable;
 	const char* none = "No model is open";
+	if (!model)
+		return;
 	tb.Group(3);
 	if (tb.Action("frame", XUI::Icon::FrameAll, "Frame", model ? "Frame the model, keeping the angle (F)" : none, model))
 		FrameModel();
@@ -1124,7 +1126,7 @@ void UIVisualPreview::DrawDetails()
 		{
 			const float w = ImGui::CalcItemWidth();
 			ImGui::AlignTextToFramePadding();
-			ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+			ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary));
 			XUI::TextEllipsis(m_Name.c_str(), w, XUI::Clip::Start);
 			ImGui::PopStyleColor();
 		}
@@ -1189,7 +1191,7 @@ void UIVisualPreview::DrawDetails()
 					if (tfMissing == t.from)
 					{
 						ImGui::AlignTextToFramePadding();
-						ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::Warning));
+						ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Warning));
 						XUI::TextEllipsis(kFrom[t.from], ImGui::CalcItemWidth());
 						ImGui::PopStyleColor();
 					}
@@ -1220,7 +1222,7 @@ void UIVisualPreview::DrawDetails()
 				{
 					const float w = ImGui::CalcItemWidth();
 					ImGui::AlignTextToFramePadding();
-					ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+					ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary));
 					XUI::TextEllipsis(tex && tex[0] ? tex : "-", w, XUI::Clip::Start);
 					ImGui::PopStyleColor();
 				}
@@ -1244,9 +1246,9 @@ void UIVisualPreview::Draw()
 	float details_w = kDetailsW;
 	if (m_ShowDetails)
 		XUI::SplitterTail("model.details", true, &details_w, kCanvasMin, kSideMin, kDetailsW);
-	m_DetailsW = m_ShowDetails ? details_w : 0.f;
-	const float canvas_w = m_ShowDetails ? _max(1.f, ImGui::GetContentRegionAvail().x - XUI::Pt(details_w) - ImGui::GetStyle().ItemSpacing.x) : 0.f;
-	ImGui::PushStyleColor(ImGuiCol_ChildBg, XFinedTheme::U32(XFinedTheme::ColorToken::Canvas));
+	m_DetailsW = (m_ShowDetails && (m_Visual || m_Editable)) ? details_w : 0.f;
+	const float canvas_w = (m_ShowDetails && (m_Visual || m_Editable)) ? _max(1.f, ImGui::GetContentRegionAvail().x - XUI::Pt(details_w) - ImGui::GetStyle().ItemSpacing.x) : 0.f;
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Canvas));
 	const bool canvas = ImGui::BeginChild("##model_viewport", ImVec2(canvas_w, 0.f), ImGuiChildFlags_None, still);
 	ImGui::PopStyleColor();
 	if (canvas)
@@ -1260,13 +1262,19 @@ void UIVisualPreview::Draw()
 		else if (!m_Visual && !m_Editable)
 		{
 			ReleaseTarget();
-			XUI::EmptyState(XUI::Icon::FileModel, "No model", "Double-click a model in the Content Browser to see it here.");
+		{
+			const ImVec2 from = ImGui::GetCursorScreenPos(), room = ImGui::GetContentRegionAvail();
+			XUI::EmptyState(XUI::Icon::FileModel, "No model", "Drop a model here, or double-click one in the Content Browser.");
+			XUI::Strings dropped;
+			if (XUI::FileDropZone("##drop_model", from, ImVec2(from.x + room.x, from.y + room.y), dropped))
+				Show(dropped[0].c_str());
+		}
 		}
 		else
 			DrawViewport(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail());
 	}
 	ImGui::EndChild();
-	if (m_ShowDetails)
+	if (m_ShowDetails && (m_Visual || m_Editable))
 	{
 		ImGui::SameLine();
 		if (ImGui::BeginChild("##model_details", ImVec2(0.f, 0.f), ImGuiChildFlags_AlwaysUseWindowPadding))
@@ -1290,7 +1298,7 @@ void UIVisualPreview::McpState(xr_string& out)
 	NqUtil::JsonString(out, f->m_Editable ? "library object" : (f->m_Visual ? VisualTypeName(f->m_Type) : ""));
 	out += NqUtil::Format(",\"verts\":%u,\"tris\":%u,\"bones\":%u,\"lighting\":\"%s\",\"wireframe\":%s,\"bones_shown\":%s,"
 		"\"panes\":{\"details\":%s,\"details_width\":%.0f}", f->m_Verts, f->m_Tris, u32(f->m_Bones), f->m_Lighting ? "unlit" : "studio",
-		f->m_Wireframe ? "true" : "false", f->m_ShowBones && f->m_Bones && f->m_Visual ? "true" : "false", f->m_ShowDetails ? "true" : "false",
+		f->m_Wireframe ? "true" : "false", f->m_ShowBones && f->m_Bones && f->m_Visual ? "true" : "false", f->m_ShowDetails && (f->m_Visual || f->m_Editable) ? "true" : "false",
 		f->m_ShowDetails ? f->m_DetailsW : 0.f);
 	// where the texture loader finds each texture: project | editor | game | missing (drawn as its placeholder)
 	static const char* const kFrom[] = { "missing", "project", "editor", "game" };

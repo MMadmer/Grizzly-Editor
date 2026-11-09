@@ -7,6 +7,7 @@
 #include "..\..\XrECore\Editor\EditorCatalogSubmit.h"
 #include "..\..\XrECore\Editor\EditorCharacters.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
+#include "..\..\XrECore\Editor\EditorScreens.h"
 #include "..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\XrECore\Editor\EditorFileOps.h"
 #include "..\..\XrECore\Editor\UILogForm.h"
@@ -132,6 +133,7 @@ void RegisterFactories()
 	});
 	XUI::Shell::RegisterFactory("characters", [](LPCSTR) { EditorCharacters::Show(); return true; });
 	XUI::Shell::RegisterFactory("world_rules", [](LPCSTR) { EditorWorld::Show(); return true; });
+	XUI::Shell::RegisterFactory("screens", [](LPCSTR) { EditorScreens::Show(); return true; });
 	XUI::Shell::RegisterFactory("mod_settings", [](LPCSTR) { EditorMod::RequestEditManifest(); return true; });
 	EditorPublish::RegisterDocuments();
 }
@@ -231,11 +233,11 @@ UIMainForm::UIMainForm()
     }
     RegisterLevel();
 
-    extern bool XFinedInspector(LPCSTR, LPCSTR, xr_string&);
+    extern bool GrizzlyInspector(LPCSTR, LPCSTR, xr_string&);
     extern void LevelMcpRegisterSurfaces();
     LevelMcpRegisterSurfaces();
-    XFinedMCP::SetHandler(XFinedInspector);
-    XFinedMCP::Start();
+    GrizzlyMCP::SetHandler(GrizzlyInspector);
+    GrizzlyMCP::Start();
 
     LTools->GetGimzo()->SwitchStep(Gizmo::EType::Move, true);
     LTools->GetGimzo()->SwitchStep(Gizmo::EType::Scale, true);
@@ -251,7 +253,9 @@ UIMainForm::~UIMainForm()
     dynamic_cast<CLevelPreferences*>(EPrefs)->OpenWorldOutliner = UIWorldOutliner::IsOpen();
     // the project's open tabs, for the next start
     XUI::Shell::FlushSession();
-    XFinedMCP::Stop();
+    GrizzlyMCP::Stop();
+    // a build in flight is stopped: the module it was replacing stays as it was
+    EditorMod::JobShutdown();
     // an upload in flight is cut here; its draft stays on GitHub for the next attempt
     EditorPublish::Shutdown();
     // a Mod Browser job is cut the same way; the open author key is wiped
@@ -445,7 +449,7 @@ void UIMainForm::DrawLevelStatus()
 	text += part;
 	sprintf_s(part, "  \xC2\xB7  Angle %g\xC2\xB0%s", gizmo->GetStep(Gizmo::EType::Rotate), gizmo->IsStepEnable(Gizmo::EType::Rotate) ? "" : " (off)");
 	text += part;
-	ImGui::PushStyleColor(ImGuiCol_Text, XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary));
 	ImGui::TextUnformatted(text.c_str());
 	ImGui::PopStyleColor();
 }
@@ -488,7 +492,7 @@ void UIMainForm::DrawStatusRight(bool busy)
 			{
 				XUI::FontScope small_font(XUI::Font::Small);
 				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(XUI::Pt(6.f), (h - ImGui::GetFontSize()) * .5f));
-				ImGui::PushStyleColor(ImGuiCol_Button, XFinedTheme::U32(XFinedTheme::ColorToken::Chrome, 0.f));
+				ImGui::PushStyleColor(ImGuiCol_Button, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Chrome, 0.f));
 				ImGui::PushStyleColor(ImGuiCol_Text, XUI::ToneColor(XUI::Tone::Warning));
 				ImGui::BeginDisabled(busy);
 				ImGui::SetCursorScreenPos(ImVec2(x, row.y));
@@ -556,11 +560,11 @@ void UIMainForm::DrawStatusRight(bool busy)
 		const ImVec2 at = ImGui::GetCursorScreenPos();
 		const float icon = XUI::Pt(12.f);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(XUI::Pt(6.f) + icon + XUI::Pt(4.f), (h - ImGui::GetFontSize()) * .5f));
-		ImGui::PushStyleColor(ImGuiCol_Button, XFinedTheme::U32(XFinedTheme::ColorToken::Chrome, 0.f));
+		ImGui::PushStyleColor(ImGuiCol_Button, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Chrome, 0.f));
 		ImGui::BeginDisabled(busy);
 		const bool err_clicked = ImGui::Button(text);
 		XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Error, ImVec2(at.x + XUI::Pt(6.f), at.y + (h - icon) * .5f), 12.f,
-			errors ? XUI::ToneColor(XUI::Tone::Error) : XFinedTheme::U32(XFinedTheme::ColorToken::TextMuted));
+			errors ? XUI::ToneColor(XUI::Tone::Error) : GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextMuted));
 		XUI::Tip("Errors since the project opened, a repeated one once. A click lists them in the Output Log.");
 		ImGui::SetCursorScreenPos(ImVec2(ImGui::GetItemRectMax().x + XUI::Pt(2.f), row.y));
 		sprintf_s(text, "%d###log_warnings", warnings);
@@ -568,7 +572,7 @@ void UIMainForm::DrawStatusRight(bool busy)
 		const bool warn_clicked = ImGui::Button(text);
 		x = ImGui::GetItemRectMax().x + XUI::Pt(8.f);
 		XUI::DrawIcon(ImGui::GetWindowDrawList(), XUI::Icon::Warning, ImVec2(at2.x + XUI::Pt(6.f), at2.y + (h - icon) * .5f), 12.f,
-			warnings ? XUI::ToneColor(XUI::Tone::Warning) : XFinedTheme::U32(XFinedTheme::ColorToken::TextMuted));
+			warnings ? XUI::ToneColor(XUI::Tone::Warning) : GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextMuted));
 		XUI::Tip("Warnings since the project opened, a repeated one once. A click lists them in the Output Log.");
 		ImGui::EndDisabled();
 		ImGui::PopStyleColor();
@@ -592,7 +596,7 @@ void UIMainForm::DrawStatusRight(bool busy)
 
 	// the MCP endpoint agents drive the editor through
 	ImGui::SetCursorScreenPos(ImVec2(x, row.y + (h - XUI::Pt(12.f)) * .5f));
-	const bool mcp = !!XFinedMCP::WakeEvent();
+	const bool mcp = !!GrizzlyMCP::WakeEvent();
 	XUI::StatusDot(mcp ? XUI::Tone::Success : XUI::Tone::Muted,
 		mcp ? "MCP: agents drive the editor on 127.0.0.1:28016" : "MCP is not running");
 }

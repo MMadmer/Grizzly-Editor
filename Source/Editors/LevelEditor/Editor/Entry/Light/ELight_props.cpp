@@ -72,8 +72,8 @@ void  CLight::OnAttenuationDraw(CanvasValue* sender)
     ImGui::Dummy(ImVec2(w, h));
     XUI::Tip("Brightness over the range: the light at the left, the end of its range at the right");
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(pos, end, XFinedTheme::U32(XFinedTheme::ColorToken::Canvas), XUI::Pt(4.f));
-    const ImU32 grid = XFinedTheme::U32(XFinedTheme::ColorToken::BorderSubtle);
+    dl->AddRectFilled(pos, end, GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Canvas), XUI::Pt(4.f));
+    const ImU32 grid = GrizzlyTheme::U32(GrizzlyTheme::ColorToken::BorderSubtle);
     for (int i = 1; i < X_GRID; i++)
     {
         const float x = floorf(pos.x + w * float(i) / X_GRID) + .5f;
@@ -99,7 +99,7 @@ void  CLight::OnAttenuationDraw(CanvasValue* sender)
         clamp(b, 0.f, 1.f);
         curve.emplace_back(pos.x + w * float(d - 1) / float(samples - 1), end.y - b * h);
     }
-    dl->AddPolyline(curve.data(), int(curve.size()), XFinedTheme::U32(XFinedTheme::ColorToken::AccentBright), ImDrawFlags_None,
+    dl->AddPolyline(curve.data(), int(curve.size()), GrizzlyTheme::U32(GrizzlyTheme::ColorToken::AccentBright), ImDrawFlags_None,
         _max(1.f, XUI::Pt(1.5f)));
 }
 

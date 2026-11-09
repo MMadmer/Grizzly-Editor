@@ -26,7 +26,7 @@ namespace
 	// rendered model and the square around it read as one picture.
 	u32 BackgroundColor()
 	{
-		return 0xff000000u | XFinedTheme::Rgb(XFinedTheme::ColorToken::Raised);
+		return 0xff000000u | GrizzlyTheme::Rgb(GrizzlyTheme::ColorToken::Raised);
 	}
 }
 
@@ -868,14 +868,15 @@ ECORE_API IRenderVisual* CreateSceneVisual(LPCSTR path)
 	xr_vector<u8> bytes;
 
 	// 1. the project (the browser hands out project-relative paths, and the
-	//    project root is not registered in the editor FS at all)
+	//    project root is not registered in the editor FS at all); a game visual
+	//    name may also be one of the project's own models in gamedata\meshes\,
+	//    which the mod ships in its module
 	if (EditorProject::Active())
 	{
-		string_path full;
-		sprintf_s(full,"%s\\%s",EditorProject::Root(),path);
-		if (HANDLE h = ::CreateFileA(full,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
-			INVALID_HANDLE_VALUE != h)
+		auto read_file = [&bytes](LPCSTR full)
 		{
+			HANDLE h = ::CreateFileA(full,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+			if (INVALID_HANDLE_VALUE == h)	return;
 			LARGE_INTEGER sz;
 			if (::GetFileSizeEx(h,&sz) && sz.QuadPart > 0 && sz.QuadPart < LONGLONG(kMaxThumbSourceBytes))
 			{
@@ -885,6 +886,18 @@ ECORE_API IRenderVisual* CreateSceneVisual(LPCSTR path)
 					bytes.clear();
 			}
 			::CloseHandle(h);
+		};
+		string_path full;
+		sprintf_s(full,"%s\\%s",EditorProject::Root(),path);
+		read_file(full);
+		if (bytes.empty())
+		{
+			// the name comes as "od\x" or as "meshes\od\x.ogf"
+			LPCSTR rel = path;
+			if (0 == _strnicmp(rel,"meshes\\",7) || 0 == _strnicmp(rel,"meshes/",7))
+				rel += 7;
+			sprintf_s(full,"%s\\gamedata\\meshes\\%s%s",EditorProject::Root(),rel,strext(rel) ? "" : ".ogf");
+			read_file(full);
 		}
 	}
 

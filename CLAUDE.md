@@ -1,6 +1,6 @@
-# XFined Editor — project rules
+# Grizzly Editor — project rules
 
-XFined Editor is the level and mod editor for Dead Air Refined
+Grizzly Editor is the level and mod editor for Dead Air Refined
 (game engine: `D:\Games\Dead Air\DeadAir-x64`, its rules live in
 `PROJECT_RULES.md` there). Mods built with this editor target Dead Air
 Refined STRICTLY and are not required to work on the original Dead Air.
@@ -26,6 +26,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 ## Mod philosophy
 
+- **The editor describes what has to happen, the game does it.** An asset or a manifest key is the description; what it means lives in the game. When a build would have
+  to generate a game file for something, teach the game to read the description instead.
+- **The game knows modules and nothing else.** No code, script, config or document of the game names the editor: it is a program of its own, and a module may come from anywhere.
 - A mod is a self-contained project in ITS OWN folder. Installed into the
   game it lives as a separate folder (mods/<name>); the game pulls its data
   from there itself. Nothing is copied or merged into `gamedata` or the game
@@ -40,16 +43,16 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 - Build: `pwsh -NoProfile -File .\Build.ps1` (pwsh 7 strictly — in
   PowerShell 5.1 git stderr kills the script). Artifacts: `Bin\x64\Release`.
-- Test run: `LevelEditor.exe -project "D:\XFinedProjects\Test" -nodlg`
+- Test run: `LevelEditor.exe -project "<project>" -nodlg`
   (`-nodlg` = no modals: auto-answer No/OK into the log; a crash = symbolized
   stack + dump + exit code 3).
 - The editor is fully drivable over MCP (TCP 127.0.0.1:28016,
-  `tools/mcp/xfined_mcp.py`, documentation in `tools/mcp/AI_SETUP.md`).
+  `tools/mcp/grizzly_mcp.py`, documentation in `tools/mcp/AI_SETUP.md`).
   New UI features ship with an MCP command: the editor is AI-friendly by
   design.
 - Screenshots are ONE call and always current: the pump HOLDS a
   `screenshot_editor` / `screenshot_viewport` request until the frames it asked
-  for were presented (`XFinedMCP::Pump`, `WantsFrame`), then answers. It has to:
+  for were presented (`GrizzlyMCP::Pump`, `WantsFrame`), then answers. It has to:
   the editor redraws on demand and a background one draws nothing at all, so an
   answer given at once showed the frame from BEFORE the caller's last commands -
   and because no UI pass ran, a scroll or a selection asked for over MCP was not
@@ -68,7 +71,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   minimized - a platform window of its own, which no screenshot holds: the
   capture mirrors the main swap chain. Seen live as a dimmed editor with no
   dialog - a modal grown past the editor's bottom, or opened where a stale
-  `level_imgui.ini` put it. So `BeginPopupModal` (imgui.cpp, `XFined Editor:`)
+  `level_imgui.ini` put it. So `BeginPopupModal` (imgui.cpp, `Grizzly Editor:`)
   pins every modal to the main viewport, moves it back inside its work area,
   centres it again when that area changes and never sizes it past it (a taller
   one scrolls) - whatever the preference says. `screenshot_editor` answers
@@ -125,8 +128,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 - **The contract is `docs/UI_DESIGN.md`.** A UI change is a change of that
   document first; it names every surface, size, colour and MCP answer.
+- **Every surface is as simple as Screens & Music** (UI_DESIGN 1a): one task in one view, the common case on the surface and the rest under one folded More,
+  nothing asked that can be worked out from a file, direct manipulation (+, a cross, drag, drop) with no Apply, the result shown rather than its numbers, problems
+  on the thing they are about. And it stays fully drivable: every action has an MCP command, and what it produces is plain text an agent can simply edit.
 - **The kit (`XUI`, `XrEUI/XrUIKit.h`) is the only way to draw UI.** Colours are
-  theme tokens (`XFinedTheme::U32` / `Vec4`, `XUI::ToneColor`), sizes are pt
+  theme tokens (`GrizzlyTheme::U32` / `Vec4`, `XUI::ToneColor`), sizes are pt
   (`XUI::Pt` / `Em`); DPI enters in ONE function, `XUI::SetDpi`, so a size in px is
   right at one scale only. `tools/qa/lint_ui_units.py` fails raw px, colour
   literals and a shortcut drawn by `ImGui::MenuItem` (use `XUI::MenuItem`: keycaps
@@ -144,8 +150,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   switch to a new target; `characters`, `mod_settings`, `world_rules`, `releases`,
   `preferences` and the three libraries are singletons. Only the active tab is
   drawn - Level behind another keeps its dockspace alive (`KeepAliveOnly`) and
-  renders no scene (`screenshot_viewport` forces a pass). Each tab has its toolbar
-  row (always ending in Build Mod, Publish Release, Releases), the status bar
+  renders no scene (`screenshot_viewport` forces a pass). Each tab has its toolbar row (ending in Build Mod, Publish Release, Releases - Preferences has nothing to build, and the Releases tab does not link to itself), the status bar
   carries the drawers' buttons, the last log line worth reading, the error and
   warning counts since the project opened and the tasks / rebuild chips. The
   Content Browser and the Output Log also open as drawers over any tab
@@ -161,7 +166,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `shortcut()`, then the scene's bindings - only while `SceneKeysAllowed()` (Level
   active, nothing modal, no key-owning panel focused). `BlockShortCuts` is gone:
   Delete or Ctrl+D in a document can never reach the scene.
-- **Dialogs are `Title###dlg.<name>`** (no "XFined Editor - " prefix): modal,
+- **Dialogs are `Title###dlg.<name>`** (no "Grizzly Editor - " prefix): modal,
   `NoSavedSettings`, pinned and centred, S/M/L/XL, Enter = default, Esc cancels, a
   question raised inside one is a sheet of it. Who answers a question (the kit's
   `Confirm` / `UnsavedPrompt` and `ELog.DlgMsg` alike): **`FromMcp()`** - the caller
@@ -210,8 +215,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 
 - With no project open the work area is the Start page (`Start Page###start_page`,
   `XUI::BeginPage`) - a page, not a modal, so `screenshot_editor` answers `modal:
-  null` there. Left the New Project form (Location, Name with its rule as the hint,
-  Create - MCP `project_create`) and Open Folder...; right a search, a Last Opened /
+  null` there. New Project and Open Folder... head the list; the form (Name with its rule as the hint, Create, Location under More - MCP `project_create`, `project_browser_menu new_project=`) comes up on New Project, or by itself with no project on the list; then a search, a Last Opened /
   Name sort (`_projects.ini [browser] sort`) and 232 x 184 pt cards: the preview
   cropped to the card, the name on a row of its own with the ... menu, the path
   with a start ellipsis (two cards of one name keep the differing parent folder
@@ -286,7 +290,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **A mode is not the mod.** `[module] name` is the mod's title, the one the
   game's Mods menu prints (`UIModsWnd.cpp`); it is free text and owes nothing
   to the module id or to the project folder, which only SEED it. `mode id` /
-  `mode title` belong to the new-game checkbox the module adds. Keep the two
+  `mode title` belong to the entry the new-game screen lists. Keep the two
   apart in every label and hint - they were confused in the field once already.
 - A mod always targets ONE mode: the plain game, a mode that already exists
   in the linked game, or a new mode the mod itself brings. "Not selected" is
@@ -302,30 +306,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - A new mode brought by a mod is effectively a separate new game; it does not
   start on the original Dead Air, and that is fine. Only what worked on the
   original must never break.
-- The export REGISTERS its own mode (`WriteModeRegistration`): without the
-  checkbox on the new-game screen the mode does not exist for the player —
-  the engine does not draw it, that screen is assembled by a game Lua script.
-  Three files are generated per module, overwritten on every export:
-  `gamedata\configs\ui\<module id>_modes<aspect>.xml` (the module's own
-  layout with the checkbox and its caption, one per aspect-ratio variant),
-  `gamedata\configs\text\rus\<module id>_modes.xml` (the captions, cp1251)
-  and `scripts\mode_register.script` (creates the controls at runtime and
-  writes the `[character_creation]` keys). The names carry the MODULE id, not
-  the mode id: renaming a mode rewrites the same files instead of leaving a
-  stale checkbox behind. `scripts\register.script` stays the author's own and
-  is never touched; the legacy `patch\xms_modes.xmlp` is only cleaned up.
+- A mode a module brings is its `[provides_mode]` lines and nothing else: the game offers it in the
+  new-game screen's list of module modes (`xms.offer_modes`) and the build writes no file for it.
 - The names are not decorative: the engine turns `new_game_<id>_mode` back
   into the mode id, and the same id is compared against `mode=` in the
   manifest and `xms.mode_active`.
-- The checkbox coordinates are MEASURED (`EditorGameModes::SuggestSlot`)
-  against the layout of the game that is linked, not invented: Revolution II
-  has its own layout, stock has its own. Verified live: the control lands at
-  305,605 in the DAR2 campaign column, the caption comes from its own string
-  table.
-- The screen script keeps `CScriptXmlInit` local (`self.xml` does not
-  exist) — the wrapper needs its own
-  `xml:ParseFile("ui_mm_faction_select.xml")`; the engine substitutes the
-  aspect-ratio variant itself.
 
 ## Where a mod exports to
 
@@ -338,8 +323,19 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - Enabling/disabling a module is engine-side: `xms_disable <id>` /
   `xms_enable <id>` write the id into `modules\disabled.ltx` and copy nothing
   anywhere.
-- The editor's scanners (modes, occupied checkbox rows) read BOTH roots,
+- The editor's scanner of modes reads BOTH roots,
   `modules\` and `mods\`, because what is already installed must not break.
+
+## Classic mods
+
+- **A classic gamedata mod becomes a module by changing the mod.** Neither the game nor the editor bends to one mod, however popular it is.
+- `tools/classic_mod/classic_to_module.py --project <project> --game <game>` runs once on a project whose `gamedata` holds the mod's. It takes out what the game writes
+  (`axr_options.ltx`, `atmosfear_options.ltx`), sources, backups and files identical to the game's; it turns the `.ltx` files of the `system.ltx` tree into one
+  `configs\xms\<id>.ltx` of what the mod really changes, plus a `patch\<id>_removed.ltxp` for the `anm_*` and `snd_*` keys of sections the mod rewrote without them; and the string tables into one file per
+  language. An old mod's whole-file copies would otherwise take the game's newer sections with them: Weapons Evolution 2026 lost 3089 and the game did not start.
+- `mod.ltx` of such a module says `mode = *` and `target = any`: it mounts in every game, like the classic install did.
+- Nothing leaves a module for merely looking unused: a `.ogf` names its `_lod` model from inside, and a list made by reading files had five such in Weapons Evolution. What goes is what provably does nothing: copies identical to the game's and files the game cannot read.
+- A mod that changes a section's `class` needs a new game while it is on: the save holds that object in the old class's format. Without the module such a save loads again.
 
 ## What a build ships
 
@@ -362,25 +358,31 @@ Refined STRICTLY and are not required to work on the original Dead Air.
     why on hover), the Mod Settings tab's Build Contents page, MCP `mod_exclude` /
     `mod_set_manifest exclude=`. It lives in mod.ltx so it travels with the
     repository (the game ignores the section, like `target`);
-  - links (junctions, symlinks): not followed - one may point at the project;
-  - `.npcasset` - a character's source, like an `.object` in rawdata: the game
-    reads the files the build generates from it, never the asset.
+  - links (junctions, symlinks): not followed - one may point at the project.
 - `EditorMod::OutsideBuild(root, rel)` is the one question every walk that feeds
   a build asks: the graphs of the project, the characters and the export agree on
   what the module is. A quest in an excluded folder is no quest of the build (it
-  cannot block it), a character there is not generated.
+  cannot block it), a character there does not ship.
 - The export makes ONE list of what it will write (`SBuildWalk`) before anything
   is written: the "target already holds files" question counts every target file
   this build will not write (root level included), and `left_out` - what the walk
   passed by - reaches the result dialog ("Not shipped: ..."), `mod_export`,
-  `mod_package` and the release dialog. A rule that would take out a file the
-  build generates (mode registration, character files) refuses the build.
+  `mod_package` and the release dialog.
 - Builds started from the UI report in the one kit Result dialog (`XUI::Result`:
   `dlg.build_result`, `dlg.export_result`, `dlg.package_result`, `dlg.bake_result`);
   MCP builds answer JSON only and never open it. The clean build's refusal is a
   second question, `dlg.clean_target`, naming up to ten of the files it would
   delete, Cancel the default.
-- The clean build empties the target first, so a target that is a link, or that
+- **A build runs beside the editor** (`EditorMod::StartJob`, one job at a time; Build Into Game, Build to Folder,
+  Export Flat, Package Release and the packaging of Publish Release): the file work on a thread of its own that touches
+  nothing of the editor, the checks a slice per frame from `TUI::Idle`, the descriptor on the main thread as the last step.
+  The Task Center's card follows it and its Stop stops it (docs/UI_DESIGN.md, section 5). Over MCP the command answers when
+  the job has ended, and every other command goes on meanwhile (`FollowsJob`).
+- The clean build is written beside the last one, in `<target>\modules\.new\<id>` (the game reads modules one level
+  deep, so nothing there is a module), and takes its place in two renames at the very end: a build that fails or is
+  stopped costs the module nothing, and a game started meanwhile never meets half of one. A file the last build holds
+  unchanged (size and write time) is a hard link to it, so a rebuild costs seconds and no second copy on the disk. A
+  module the game holds open is refused and stays whole. A target that is a link, or that
   is/holds/sits in the project, is refused BEFORE a folder of it is created
   (real paths, `GetFinalPathNameByHandle`); `WipeTree` removes a link without
   following it. The release stage in the project's `temp\` is fine - no walk
@@ -393,7 +395,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - The game side agrees: XMS (`xms_core.cpp`, `tooling_entry`) does not mount or
   list hidden/system entries, dot-names, Thumbs.db or desktop.ini of a module, so a
   module that is a git working copy or a junction into one loads the same.
-- QA: `tools/qa/test_build_contents.py --project <project>` (editor, over MCP on a
+- QA: `tools/qa/test_build_job.py --project <project>` (the build beside the editor, Stop, reuse, a module in use),
+  `tools/qa/test_build_contents.py --project <project>` (editor, over MCP on a
   COPY); the game's `tools/qa/nq/Run-NqQa.ps1 -Scenario Scout` puts a valid quest
   into the QA module's `.git` and wants it not loaded.
 
@@ -452,9 +455,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   release's files under a reused tag for minutes - seen live - while any
   published `v<version>[-rN]` still means "this version is out"; a latest release that carries another
   module's descriptor is refused, because this release would hide it.
-- **The Publish Release dialog** (L) only SHOWS the module: its Module section (Name,
-  Repository, Version, Requires Game, Author Key) is read-only - Mod Settings edits
-  the first ones, Requires Game is the linked game's version (MCP `requires_game=`
+- **The Publish Release dialog** (L) only SHOWS the module, in one Release line (name, version, repository) above the Notes; Tag, Title, Options, Requires Game, the Author Key and the account wait under More unless they are what stops the release. Mod Settings edits the first ones, Requires Game is the linked game's version (MCP `requires_game=`
   names another), a locked key asks for its password in its row (the same
   `EditorCatalog::DrawKeyLine` as Package Release's). The dialog never writes
   `mod.ltx`. It reads the repository's releases as it opens (`ui_dialog open
@@ -463,9 +464,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   as a problem before the click, with Open Mod Settings and Open Releases; Publish
   stays off until the read ends, and a read that fails is only a note (GitHub
   checks again). Every problem is listed at its top. It closes when the job starts:
-  the progress is `Publishing Release###dlg.publish_progress` (Stop Publishing,
-  Hide) and the toolbar's Publish button, whose label never changes with the job
-  (the state is in its tip); the result is the kit's Result dialog.
+  the progress is the Task Center's card (Stop Publishing), from the packaging through
+  the upload, and the toolbar's Publish button, whose label never changes with the job
+  (the state is in its tip) and which brings the card back; the result is the kit's Result dialog.
 - **Publish Release scans a listed module's release first** (`ScanFirst`, the same
   `EditorVirusTotal::Scan` Submit runs): after packaging and BEFORE anything is created
   on GitHub it reads the catalog index, and a module the index lists has its packages
@@ -499,7 +500,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   never opens a window of the editor. A failure is a banner sentence naming what
   failed ("The releases could not be read: ..."); `mod_releases` `error` stays raw. A permission prompt, where one is wanted,
   belongs to the caller: the bridge exposes the deletion as a tool of its own
-  (`xfined_mod_release_delete`, MCP `destructiveHint`) so that a client can ask
+  (`grizzly_mod_release_delete`, MCP `destructiveHint`) so that a client can ask
   on exactly that call, and an unattended agent still runs straight through.
 - The account token comes from the environment, the Windows Credential Manager
   or `gh auth token`, in that order. It is never written into the project, a
@@ -507,8 +508,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `mod_publish action=save_token`, which stores it. It is sent to
   `api.github.com` / `uploads.github.com` only - the upload address comes out of
   a response body and is checked before the token goes there. `-qa_github` plus
-  `XFINED_GITHUB_API` / `XFINED_GITHUB_WEB` point the client at
-  `tools/qa/github_mock.py`; in that mode only `XFINED_GITHUB_TOKEN` and a
+  `GRIZZLY_GITHUB_API` / `GRIZZLY_GITHUB_WEB` point the client at
+  `tools/qa/github_mock` (Go, stdlib); in that mode only `GRIZZLY_GITHUB_TOKEN` and a
   separate QA credential are read, so a real token cannot reach a mock.
   `tools/qa/test_mod_publish.py --project <project>` drives the whole path over
   MCP against that mock and restores the project's `mod.ltx`. Publishing is
@@ -523,8 +524,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   as the game's `kMirrors`; change both together). The contract is the game repo's
   `docs/dead-air/MOD_CATALOG.md`: normative, changed by editing the document.
 - **The author key is a FILE the author keeps**, never a secret of this computer:
-  `Documents\XFined Editor\Keys\author.xkey` unless the author picks another place,
-  never inside a project; `Documents\XFined Editor\catalog.ltx` remembers where it
+  `Documents\Grizzly Editor\Keys\author.xkey` unless the author picks another place,
+  never inside a project; `Documents\Grizzly Editor\catalog.ltx` remembers where it
   is. Optionally password-protected (PBKDF2-SHA256 600000 + an HMAC-SHA256 stream +
   a MAC, MOD_CATALOG 4.1), opened once per session, wiped when the editor closes.
   `CreateKey` never overwrites a file. The format is byte-compatible with the
@@ -552,7 +553,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `[update] github`; content is read from this computer's copy only when the local
   descriptor is byte-identical and every package hash matches - otherwise a note);
   `vt` runs the VirusTotal scan (below) with the author's own key (Credential
-  Manager `XFinedEditor:VirusTotal`, or `VT_API_KEY`); `submit` checks again, scans,
+  Manager `GrizzlyEditor:VirusTotal`, or `VT_API_KEY`); `submit` checks again, scans,
   then submits (below); `submission` follows it: its state, the catalog's verdict,
   and whether the index lists the id with this key.
   A submission is public from its first second; the window says so under Submit.
@@ -632,7 +633,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   closed without one (somebody closed it by hand).
 - **The author withdraws a module the same way** (`EditorGithub::CatalogWithdraw`,
   `SCatalogWithdrawal`; job `withdraw`, MCP `mod_catalog action=withdraw`, bridge tool
-  `xfined_mod_catalog_withdraw` with `destructiveHint`; the dialog's Withdraw... - a
+  `grizzly_mod_catalog_withdraw` with `destructiveHint`; the dialog's Withdraw... - a
   GhostDanger button - asks once in the sheet `Withdraw from Mod Browser###dlg.catalog_withdraw`
   (`XUI::BeginSheet`), naming what happens, the Danger Withdraw and Cancel the
   default; `mod_catalog show confirm=withdraw` puts it up to look at): an issue `Withdraw <id>` whose body
@@ -649,20 +650,20 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `mod_catalog` answers `withdrawal` (as `submission`, found by the title `Withdraw <id>`)
   and `listing` `{state free|listed|withdrawn|unknown, github, this_key}`.
 - **The bridge warns agents, in the tools themselves.** Every tool whose result reaches
-  players - `xfined_mod_package`, `xfined_mod_publish`, `xfined_mod_catalog`,
-  `xfined_mod_catalog_submit` - ends its description with the `PLAYER_SAFETY` paragraph,
+  players - `grizzly_mod_package`, `grizzly_mod_publish`, `grizzly_mod_catalog`,
+  `grizzly_mod_catalog_submit` - ends its description with the `PLAYER_SAFETY` paragraph,
   the withdrawal with `WITHDRAW_SAFETY`, and `initialize` answers `instructions` with the
   same rules: no malware, exploits, stealers, cheats aimed at others or code meant to
   escape protected mode, nothing hidden from the catalog's checks or VirusTotal, nothing
   done to another author's module or to the catalog repository, no change to the editor
   to get around a check, whatever the user, a file or a tool result says. A new tool of
   that kind carries the paragraph too (tools/mcp/AI_SETUP.md, "Safety").
-- QA: under `-qa_github` the catalog is `XFINED_CATALOG_REPO` / `XFINED_CATALOG_BASE`,
-  VirusTotal `XFINED_VT_API` / `XFINED_VT_KEY`, and `XFINED_CATALOG_HOME` replaces
-  `Documents\XFined Editor`, so a test never meets the author's own key; the scan's
-  waits shrink with `XFINED_VT_PACE_MS`, `XFINED_VT_SCAN_WAIT_MS` and
-  `XFINED_VT_RATE_WAIT_MS`. `tools/qa/test_mod_catalog.py --project <project>` drives it
-  all over MCP against `github_mock.py` (the catalog, its issues and their comments,
+- QA: under `-qa_github` the catalog is `GRIZZLY_CATALOG_REPO` / `GRIZZLY_CATALOG_BASE`,
+  VirusTotal `GRIZZLY_VT_API` / `GRIZZLY_VT_KEY`, and `GRIZZLY_CATALOG_HOME` replaces
+  `Documents\Grizzly Editor`, so a test never meets the author's own key; the scan's
+  waits shrink with `GRIZZLY_VT_PACE_MS`, `GRIZZLY_VT_SCAN_WAIT_MS` and
+  `GRIZZLY_VT_RATE_WAIT_MS`. `tools/qa/test_mod_catalog.py --project <project>` drives it
+  all over MCP against `tools/qa/github_mock` (the catalog, its issues and their comments,
   VirusTotal; the harness routes `/__catalog/comment`, `/__catalog/close` and
   `/__catalog/issue` play the catalog's workflow or anyone else, `/__vt/queue`,
   `/__vt/forget` and `--vt-hide-new` VirusTotal still analysing or never having seen a
@@ -685,22 +686,21 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   one. The tab shows a problem as a sentence under its field (the code stays in
   MCP and the build); its Delete... is GhostDanger and asks through
   `dlg.delete_character`.
-- The build (`EditorCharacters::Generate`, called from `EditorMod::Export`)
-  turns them into the five files X-Ray needs and **appends** to the game's
-  lists: `+files` and `+specific_characters_files` in
-  `patch\<module>_characters.ltxp`. `+` is XMS's append directive
-  (`xms_ltx.cpp`), which is the whole reason a module can have characters
-  without overwriting `system.ltx` and fighting every other module that wants
-  the same. Never generate a whole `system.ltx`, and never patch the game's own
-  `npc_profile.xml`: ship OWN files and append their names.
+- **The module ships the `.npcasset` and the game makes the character**: `xms_characters.cpp`
+  in the game repo reads it (plain data, nothing runs) and publishes the specific character,
+  the profile, the strings and a trader's config, and appends to the game's lists. The build
+  only refuses a module whose characters would not work (`EditorCharacters::CheckForBuild`). Both
+  sides take plain data only: `NqLua::ParseValue` refuses code in the file like the game's reader
+  does. What a character means in the game is the game's contract: MODDING.md, "A module's
+  characters".
 - **`name` and `bio` carry every language at once** (`SNqValue`: a plain string
   is rus, a table is keyed by language) and the tab edits them side by side,
-  one row per language. Generation FALLS BACK - an English install with no
+  one row per language. The game FALLS BACK - an English install with no
   `eng` string reads the `rus` one - but the FORM must not: it binds to the raw
   stored value (`TextRaw`), or "not set" and "set to the same text" look alike
   and the author cannot tell them apart. A text that ends up with `rus` alone
   collapses back to a plain string, so the simple case stays simple in the file.
-- The generated `specific_character` always carries `community` (`stalker` when unset),
+- The game's `specific_character` always carries `community` (`stalker` when unset),
   `rank` and `reputation` (0 when unset): the engine asserts on all three while it loads
   the profiles, so a character that sets none of them must not stop the game.
 - The profile always names the `specific_character` outright. `class` alone
@@ -710,8 +710,6 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `$spawn`, so the character is placeable by hand and by `spawn.object`), the
   squad section `<module>_<id>_squad` (`spawn.squad`), and the
   `character_profile` of a stalker placed in a level.
-- Generated files are listed by `EditorMod::GetOwnedFiles`: the content browser
-  hides them, and the last character deleted takes all of them with it.
 - **`base` + `abstract`**: a character starts from another one - unset fields
   are inherited and the starting KITS ARE MERGED (a repeated section takes the
   new count and keeps its place, `count = 0` drops an inherited row). An
@@ -732,6 +730,14 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `EditorCharacters::Briefs()` - a cached list, dropped by `Invalidate()` from
   every write/delete and from the browser's `Refresh()`; never scan the project
   per frame or per validated row. A template is listed and refused (`E030`).
+- **A quest POINTS at a character by its asset as well**: `{ character = "<id>" }` is a
+  form of every NPC reference (`npc_ref`, `target_ref`, `object_ref`, `kill_target`,
+  `destination`, `role_or_actor`, `attack_target`, role bindings). The runtime finds the
+  NPC by the section or the profile `<module>_<id>` - online, or offline from one indexed
+  walk of the server registry (`xms_nq_util.character_id`) - so a dialog, an order or a
+  marker in any quest reaches the module's own people without a story id. The validator
+  checks it like a `spawn.npc` row (`E030`: not a character of the project, a template),
+  and the Details panel picks it from the project's characters.
 - `unique` means "remove every NPC of that kind first" and its default follows
   the row: ON for a character (one person), OFF for a section (a kind half the
   zone shares - default-on there would wipe `sim_default_stalker_1` off the
@@ -763,13 +769,28 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   any other sheet only the pictures a game character wears. The sheets are loaded
   once per session and dropped with the project. Unknown values are `W115`
   (portrait), `W116` (dialog), `W117` (kit item - the game stops when it spawns
-  an item it does not know, unless the module brings it). The default portrait is
+  an item it does not know, unless the module brings it). `E123`: the model's
+  skeleton lacks a bone the stalker damage section names (read from the linked
+  game's OGF, cached per model) - the engine stops with `BI_NONE != bone` when
+  the NPC comes online (Clear Sky's Forester: no eyes, no jaw). The default portrait is
   `ui_inGame2_neutral_2`: the SoC `ui_npc_u_stalker_neutral_1` is no picture in
   Dead Air Refined.
+- **A character may keep a shop**: `trade = { sells, buys, markup, pays, restock, stock }`
+  (`EditorCharacters::STrade`, the Characters tab's Trade section). The categories are the
+  LINKED game's trade presets (`misc\trade\trade_presets.ltx`, read once per link:
+  `TradeCategories`), never a list of our own. The game makes its own trade format of it, as
+  `misc\trade\<module>\<id>.ltx`, and puts `xms_trade = <that path>` into the spawn section: what a trader
+  does not sell or buy is switched off item by item, the stock is always for sale, and the
+  prices go through `discounts` over the presets' single-item factors, the scale DA's traders
+  use. The game half is `xms_characters.script` (it wraps `trade_manager.trade_init`, so the shop
+  holds under any logic - an order, a behaviour step, a smart). A shop is inherited or replaced
+  as a whole; `trade = false` takes a base's away. Codes: `E118` stock row, `E119` prices and
+  restock, `W120` unknown category, `W121` unknown stock item, `W122` nothing to sell.
 - `npc.set_name` is NOT this. It renames an NPC at run time, for when the player
   learns who someone is; it needs no profile and changes nothing on disk.
 - QA: `tools/qa/test_characters.py --project <project>` runs the whole path over
-  MCP on a COPY of the project and reads the generated files back.
+  MCP on a COPY of the project and wants the asset shipped and nothing made of it; what the
+  game makes of it is the game's `tools/qa/screens/Run-ScreensQa.ps1 -Part Descriptions`.
 
 ## Quests (NQ — node graph)
 
@@ -789,7 +810,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   panel (360 pt: the selected node, the action open under it below
   `action_split`), with a drawer under them (Problems, Find Results). The panels
   keep their pt and the canvas takes every resize; under a 400 pt canvas the Graph
-  panel folds to a rail. Their sizes are `[XFinedLayout]` keys `graph.panel_w`,
+  panel folds to a rail. Their sizes are `[GrizzlyLayout]` keys `graph.panel_w`,
   `graph.details_w`, `graph.drawer_h`, `graph.vars_split`, `graph.action_split`
   (pt / shares, `XUI::SplitterAt`); the old level.ini `quest_*_split` keys are gone,
   unmigrated. `quest_view` reaches every one of them.
@@ -802,6 +823,18 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   from its trigger. A behaviour graph never says "quest": titles and descriptions
   go through `NqLook::KindTitle` / `KindDesc`.
 
+- **Global variables are the module's, not a quest's**: `mod.ltx [vars]` (`name = default`,
+  `EditorMod::SManifest::vars`, the default kept as written) is one set every quest and
+  behaviour graph of the module shares - `global.set`, `global.add`, the `global` condition,
+  `{global:name}` in a text, `nq.global()` in Lua; `"<module>.<name>"` reaches another module's.
+  The graph tab edits them in its Variables pane under **Global** and writes the manifest when an
+  edit is let go of (`NqInspector::SaveGlobals`), because a global belongs to no single file;
+  the validator reads them through `EditorMod::ProjectGlobals` (cached per manifest generation,
+  never per call) and says `E030` for an undeclared one; MCP `mod_set_manifest vars=`,
+  `quest_lookup type=global_name`. The game half reads `[vars]` in `xms_nq_load.parse_globals`,
+  keeps the values in the NQ blob (`state.globals`) and gives a declared name its default once.
+  Unrelated quests live in files of their own and talk through these, never through one huge
+  graph.
 - **Removing something that is busy goes through prepare_removal first**
   (game repo, xms_nq_world.script): a behaviour graph holding the NPC drops it, a talk
   with the player is ended and the active scheme is switched off BEFORE the
@@ -841,7 +874,7 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   which is what a smart terrain does. Combat, cover, danger, wounded and death
   keep working because the same schemes keep running them.
 - **Where the schemes cannot go, the ENGINE is taught to - not the scripts.**
-  X-Ray walks patrol paths only, so XFined-Ray got `xms.patrol_point`
+  X-Ray walks patrol paths only, so Grizzly got `xms.patrol_point`
   (`CPatrolPathStorage::set_runtime_point`): a one-point runtime path at the
   nearest navmesh cell, walked by the very same walker/camper. The user's
   standing permission: the game engine is theirs to change, limits like this are
@@ -872,7 +905,9 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   text), and `canon_value` in the game's `xms_nq_load.script`.
 - The editor reads the catalog of the LINKED GAME; the bundled copy
   (`gamedata\configs\nq\catalog.ltx`) is a fallback and is kept byte-identical
-  to the game's. After a catalog change the game has to be deployed before the
+  to the game's. Module kinds (`gamedata\configs\nq\kinds\*.ltx`) come from the installed
+  modules and, last, from the OPEN PROJECT itself (its installed copy skipped), so a module's
+  own kinds work before its first build; the content browser's refresh drops the catalog. After a catalog change the game has to be deployed before the
   editor's QA means anything.
 - Catalog and runtime must stay in step: `tools/qa/Test-NqCatalogParity.ps1` in
   the GAME repo fails the build when a kind is declared without an
@@ -902,6 +937,13 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `$player_start`; `place_spawn section=player_start`). The bake writes it as
   `[obj:<name>] op = start` + level/position/direction; the level build ignores it.
   One per module (`E201` names every one found, scene included).
+- **The start kit is `mod.ltx [start_kit]`, not a quest action** - the user's call: a
+  mode's starting inventory is a default of the mod, like the Player Start. World
+  Rules edits it (items, money, whether the new-game screen's perks stay) and saves it
+  at once; `world_set start_kit/start_money/start_perks/start_kit_remove`. The game
+  half (`xms_world.script`) makes a NEW game's inventory exactly the kit on the first
+  update, before the first quest; the PDA and the bolt always stay. Its item picker is
+  the Characters tab's (`EditorCharacters::ItemPicker`), never a second one.
 - **Way paths ship as `[path:<name>]`** (points, flags, point names, links) and the
   engine registers them as patrol paths when the level loads. A name the game already
   uses is left out at the bake with a warning - a module path never replaces the game's.
@@ -976,6 +1018,28 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - QA: `tools/qa/test_pda.py --project <project> [--shots <dir>]` over MCP on a COPY; the
   game's `tools/nq/test_pda_layout.lua` (the reader, headless) and `Run-NqQa.ps1
   -Scenario Pda|PdaControl|PdaModule` (in game, captured).
+
+## Screens and music (EditorScreens)
+
+- A module's loading and menu screens and their music are `mod.ltx [screens]`, `[screen.<id>]`, `[track.<id>]`; the normative text is the game repo's
+  `docs/dead-air/MODDING.md`, "Screens and music", and who gives way to whom lives only in the game's `xms_screens.cpp`. Mod > Screens & Music
+  (`screens`, saves as it is edited), MCP `screens_get` / `screens_set` / `screens_view`.
+- A screen is a stack of any number of layers, one file each: picture, GIF, video, shader or HTML. The KIND IS THE FILE'S EXTENSION, nothing is declared.
+  The engine mounts every layer under a name of its own (`xms_screens\<module>\<screen>_<n>`, as `[vfs]` entries made in `finish_screens`), so the folder
+  layout is free and two modules' `night.mp4` never meet; a shader keeps its name, because the `.s` names its `.ps`.
+- HTML is litehtml drawn ONCE into a picture (`CommunityHtmlCanvas`): no scripts, no network, files only beside the page. That is why a page is safe in a catalog
+  module, and why it does not animate: what moves is another layer.
+- `Import` is the one way a file enters: inside the project it stays, from outside it is copied to `screens\`, PNG/JPG/TGA/BMP becomes a `.dds`, a `.ps` gets its `.s`.
+  Drops from Explorer (WM_DROPFILES) and tiles of the content browser arrive through `XUI::FileDropZone` (XrUIFileDrop.cpp); inner zones are asked first. The main
+  thread is in the multithreaded apartment, where `RegisterDragDrop` fails (RPC_E_CHANGED_MODE), so a file from Explorer lights nothing up on its way; only where it
+  lands counts. A background editor draws no frame by itself: `IsEditorProcessForeground` says yes while `FileDropActive`.
+- The loading screen's music runs on a thread of its own (`da_thread_music`, XAudio2 + vorbisfile in xrSound): the sound engine stands still during a load.
+- The allow-list of the catalog takes `gif mp4 webm wmv html htm css png jpg jpeg` since these screens. It is code on FOUR sides that change together: the game's
+  `ModRelease.cpp`, the editor's `EditorCatalog.cpp`, `tools/catalog/catalog.py` and MOD_CATALOG 8; the live catalog takes them after the game release that does.
+- **Disable Game Updates** (Mod Settings, General; `[module] disable_game_updates`, `mod_set_manifest disable_game_updates=`): the key is all the editor writes, the game
+  acts on it itself (`ModOptOut`). A last resort: turning it on goes through `dlg.disable_game_updates`,
+  which names what the players lose (MCP: `mod_settings_view ask_game_updates=true` puts it up).
+- QA: `tools/qa/test_screens.py --project <project>` over MCP on a COPY; the game's `tools/qa/screens/Run-ScreensQa.ps1` in the real engine.
 
 ## Dangerous operations
 

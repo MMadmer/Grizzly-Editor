@@ -16,7 +16,7 @@ What it proves:
      select one, answer state without switching tabs, and stay clean; each names where it reads from
   S  with --sizes: every tab again at 1707x912 / ui scale 1.5 and 1280x720 / 1.0, nothing escaping its window
 
-    python tools/qa/test_previews.py --project D:\\XFinedProjects\\Test [--shots <folder>] [--sizes]
+    python tools/qa/test_previews.py --project <project> [--shots <folder>] [--sizes]
 """
 from __future__ import annotations
 
@@ -381,7 +381,7 @@ def main() -> int:
         print("the bundled PDA sheet is missing: " + SHEET)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_previews_")
+    work = tempfile.mkdtemp(prefix="grizzly_previews_")
     copy = os.path.join(work, "QaPreviews")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git"))
     print("running against a copy: " + copy, flush=True)

@@ -1,4 +1,4 @@
-# XFined Editor — the single build pipeline (CMake + Ninja).
+# Grizzly Editor — the single build pipeline (CMake + Ninja).
 # Clean clone -> .\Build.ps1 -> Bin\x64\Release with the full working set:
 # LevelEditor + engine DLLs + XrGame/SOC/CS + SE factories.
 #
@@ -7,7 +7,7 @@
 # cmake/*.cmake; the vcxproj files are no longer used by this pipeline.
 
 cmake_minimum_required(VERSION 3.25)
-project(XFinedEditor LANGUAGES C CXX RC)
+project(GrizzlyEditor LANGUAGES C CXX RC)
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)

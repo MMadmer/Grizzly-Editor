@@ -37,9 +37,9 @@ bool HandleProps(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	if (0 == xr_strcmp(cmd, "property_inspector"))
 	{
 		char action[32] = {}, target[32] = {}, filter[256] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-		XFinedMCP::GetArg(raw, "target", target, sizeof(target));
-		XFinedMCP::GetArg(raw, "filter", filter, sizeof(filter));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "target", target, sizeof(target));
+		GrizzlyMCP::GetArg(raw, "filter", filter, sizeof(filter));
 		if (!action[0])
 			xr_strcpy(action, filter[0] ? "filter" : "get");
 		if (!target[0])
@@ -294,9 +294,9 @@ bool HandleProps(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "property_choose"))
     {
         char action[32] = {}, key[256] = {}, item[256] = {};
-        XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-        XFinedMCP::GetArg(raw, "key", key, sizeof(key));
-        XFinedMCP::GetArg(raw, "item", item, sizeof(item));
+        GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+        GrizzlyMCP::GetArg(raw, "key", key, sizeof(key));
+        GrizzlyMCP::GetArg(raw, "item", item, sizeof(item));
         UIPropertiesForm* props = LTools->GetProperties();
         if (0 == _stricmp(action, "open"))
         {
@@ -350,8 +350,8 @@ bool HandleProps(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "spawn_set_visual"))
     {
         char name[256] = {}, visual[256] = {};
-        XFinedMCP::GetArg(raw, "name", name, sizeof(name));
-        XFinedMCP::GetArg(raw, "visual", visual, sizeof(visual));
+        GrizzlyMCP::GetArg(raw, "name", name, sizeof(name));
+        GrizzlyMCP::GetArg(raw, "visual", visual, sizeof(visual));
         if (!name[0] || !visual[0])
         {
             out = "{\"ok\":false,\"error\":\"need 'name' and non-empty 'visual'\"}";
@@ -409,8 +409,8 @@ bool HandleProps(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "spawn_set_fixed_bones"))
     {
         char name[256] = {}, bones[256] = {};
-        XFinedMCP::GetArg(raw, "name", name, sizeof(name));
-        XFinedMCP::GetArg(raw, "bones", bones, sizeof(bones));
+        GrizzlyMCP::GetArg(raw, "name", name, sizeof(name));
+        GrizzlyMCP::GetArg(raw, "bones", bones, sizeof(bones));
         if (!name[0])
         {
             out = "{\"ok\":false,\"error\":\"need 'name'\"}";

@@ -233,6 +233,9 @@ bool CSceneObject::SpherePick(const Fvector& center, float radius)
     return false;
 }
 
+// MCP scan_walls: pick every object, not only the ones the viewport's camera sees
+bool g_RayPickAll = false;
+
 bool CSceneObject::RayPick(float& dist, const Fvector& S, const Fvector& D, SRayPickInfo* pinf)
 {
 	if (!m_pReference)
@@ -251,7 +254,7 @@ bool CSceneObject::RayPick(float& dist, const Fvector& S, const Fvector& D, SRay
 		}
 		return true;
 	}
-    if (::Render->occ_visible(m_TBBox))
+    if (g_RayPickAll || ::Render->occ_visible(m_TBBox))
 		if (m_pReference->RayPick(dist, S, D, _ITransform(), pinf)){
         	if (pinf) pinf->s_obj = this;
             return true;

@@ -258,7 +258,7 @@ class Work:
     """The throw-away projects, all inside one temp folder."""
 
     def __init__(self) -> None:
-        self.root = os.path.realpath(tempfile.mkdtemp(prefix="xfined_projbrowser_"))
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="grizzly_projbrowser_"))
         self.p = {}
         self.expect = {}
 
@@ -439,6 +439,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                            "open": "placeholder", "gone": "placeholder"},
               "P a card shows its preview; a black or empty grey one, none, or a gone folder gets the placeholder",
               json.dumps(pictures))
+        mcp("project_browser_menu", new_project=True)
         audit = mcp("ui_audit", id="start_page")
         create = [c for c in audit.get("controls", []) if c.get("label") == "Create"]
         check(audit.get("ok") and create and not create[0].get("enabled") and create[0].get("why"),

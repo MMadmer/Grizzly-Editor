@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "..\..\GameLightingScene.h"
 
 ESceneLightTool::ESceneLightTool():ESceneCustomOTool(OBJCLASS_LIGHT)
 {
@@ -60,6 +61,8 @@ void ESceneLightTool::AppendFrameLight(CLight* src)
 
 void ESceneLightTool::BeforeRender()
 {
+    // View > Game Lighting replaces the editor's own light rig for the scene pass
+    GameLighting_BeforeRender();
     if (psDeviceFlags.is(rsLighting)){
         int l_cnt		= 0;
         // set scene lights
@@ -103,6 +106,7 @@ void ESceneLightTool::BeforeRender()
 
 void ESceneLightTool::AfterRender()
 {
+    GameLighting_AfterRender();
     if (m_Flags.is(flShowSun))
         EDevice->LightEnable(frame_light.size(),FALSE); // sun - last light!
     for (u32 i=0; i<frame_light.size(); i++)

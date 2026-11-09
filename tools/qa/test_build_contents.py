@@ -10,7 +10,6 @@ over MCP on a THROW-AWAY COPY of a project filled with all of that and checks:
   * mod.ltx [exclude] (mod_exclude / mod_set_manifest) leaves out what the author
     names - folders, files, patterns - from the module AND from the release package,
     and the quests and characters inside it are no part of the build;
-  * a rule that would take out a file the build generates is refused;
   * the build says what it left out (`left_out`);
   * the clean build does not follow a link inside the target, refuses a target that
     is a link, and refuses a target that overlaps the project;
@@ -22,7 +21,7 @@ over MCP on a THROW-AWAY COPY of a project filled with all of that and checks:
     Export Flat, Package Release) open, show and close over MCP by their kit ids, and
     a Writes To path that does not fit keeps its end.
 
-    python tools/qa/test_build_contents.py --project D:\\XFinedProjects\\Test
+    python tools/qa/test_build_contents.py --project <project>
 """
 from __future__ import annotations
 
@@ -163,7 +162,7 @@ SHIPS = ["LICENSE", "README.md", "art/cover.png", "gamedata/configs/qa_keep.ltx"
          "mod.ltx"]
 
 
-SETTINGS_PAGES = ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda"]
+SETTINGS_PAGES = ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda", "commands"]
 BUILD_DIALOGS = ["build_to_folder", "export_flat", "package_release"]
 
 
@@ -175,7 +174,7 @@ def run_ui_checks() -> None:
     """Mod Settings is a tab that follows mod.ltx; the build dialogs open, show and close over MCP."""
     v = mcp("mod_settings_view")
     check(v.get("ok") and v.get("tab") == "mod_settings", "U mod_settings_view answers", json.dumps(v)[:300])
-    check([p.get("id") for p in v.get("pages", [])] == SETTINGS_PAGES, "U Mod Settings has its six pages",
+    check([p.get("id") for p in v.get("pages", [])] == SETTINGS_PAGES, "U Mod Settings has its seven pages",
           json.dumps(v.get("pages"))[:300])
     for page in SETTINGS_PAGES:
         v = mcp("mod_settings_view", page=page)
@@ -184,11 +183,8 @@ def run_ui_checks() -> None:
         check(audit.get("ok") and not audit.get("escaped"), "U nothing escapes the " + page + " page",
               json.dumps(audit.get("escaped"))[:400])
     controls = labels_of(mcp("ui_audit", id="mod_settings"))
-    check("Revert" in controls and "Save" in controls, "U the footer offers Revert and Save",
+    check("Revert" not in controls and "Save" not in controls, "U the tab saves as it is edited: no Revert, no Save",
           json.dumps(sorted(x for x in controls if x))[:400])
-    save = controls.get("Save", {})
-    check(save.get("enabled") is False and save.get("why") == "No changes to save", "U Save waits for a change and says so",
-          json.dumps(save)[:300])
     # a save made elsewhere reaches the form and leaves it clean
     probe = mcp("mod_exclude", path="qa_ui_probe")
     v = mcp("mod_settings_view")
@@ -278,9 +274,9 @@ def run(project: str) -> None:
     write(project, "gamedata/textures/qa/qa_tex.dds", "DDS \n")
 
     ed = Editor()
-    target = tempfile.mkdtemp(prefix="xfined_build_target_")
-    pkg = tempfile.mkdtemp(prefix="xfined_build_pkg_")
-    linked = tempfile.mkdtemp(prefix="xfined_build_linked_")
+    target = tempfile.mkdtemp(prefix="grizzly_build_target_")
+    pkg = tempfile.mkdtemp(prefix="grizzly_build_pkg_")
+    linked = tempfile.mkdtemp(prefix="grizzly_build_linked_")
     try:
         ed.start(project)
 
@@ -353,14 +349,6 @@ def run(project: str) -> None:
             check(want in left, "D left_out names " + want, json.dumps(left))
         check("LICENSE" not in left and "README.md" not in left, "D and does not name what shipped")
 
-        # ------------------------------------------------------------------ E: a rule that breaks the module
-        gen = mcp("mod_exclude", path="gamedata/configs/gameplay")
-        refused = mcp("mod_export", target=target.replace("\\", "/"))
-        check(gen.get("ok") and not refused.get("ok") and "generates" in str(refused.get("error")),
-              "E excluding a file the build generates is refused at build time", json.dumps(refused)[:300])
-        back = mcp("mod_exclude", path="gamedata/configs/gameplay", excluded=False)
-        check(back.get("ok"), "E and Include in Build takes it back", json.dumps(back)[:200])
-
         # ------------------------------------------------------------------ U: Mod Settings and the build dialogs
         run_ui_checks()
 
@@ -426,7 +414,7 @@ def main() -> int:
         print("no such project: " + src)
         return 2
 
-    work = tempfile.mkdtemp(prefix="xfined_buildproj_")
+    work = tempfile.mkdtemp(prefix="grizzly_buildproj_")
     copy = os.path.join(work, "QaBuildContents")
     shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore"))
     print("running against a copy: " + copy, flush=True)

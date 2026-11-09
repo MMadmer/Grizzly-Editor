@@ -5,6 +5,7 @@
 #include "..\..\XrECore\Editor\EditorModManifest.h"
 #include "..\..\XrECore\Editor\EditorWorld.h"
 #include "..\..\..\xrServerEntities\xrServer_Objects_ALife_All.h"
+#include "..\..\..\xrServerEntities\xrServer_Objects_Alife_Smartcovers.h"
 
 //------------------------------------------------------------------------------
 // small file/string helpers (WinAPI only, like EditorModManifest)
@@ -84,6 +85,67 @@ bool EditorModScene::VisualDrawsNothing(LPCSTR visual)
 	xr_vector<u8> buf;
 	if (!VisualBytes(visual, buf) || buf.size() < 16) return false;
 	return OgfIsGhost(&buf[0], u32(buf.size()));
+}
+
+// The bone names of an OGF (OGF_S_BONE_NAMES): what a physics object's fixed bones may name.
+static void OgfBoneNames(const u8* data, u32 size, xr_vector<xr_string>& out)
+{
+	out.clear();
+	for (u32 off = 0; off + 8 <= size;)
+	{
+		const u32 id = *(const u32*)(data + off) & 0x7fffffff, len = *(const u32*)(data + off + 4), body = off + 8;
+		if (body + len > size) return;
+		if (13 == id && len >= 4)
+		{
+			const u32 count = *(const u32*)(data + body), end = body + len;
+			u32 p = body + 4;
+			for (u32 i = 0; i < count && p < end; ++i)
+			{
+				const u32 n = u32(strnlen((const char*)(data + p), end - p));
+				out.push_back(xr_string());
+				out.back().append((const char*)(data + p), n);
+				p += n + 1;
+				// the parent's name, then the bone's box (Fobb, 15 floats)
+				p += u32(strnlen((const char*)(data + p), end - p)) + 1 + 60;
+			}
+			return;
+		}
+		off = body + len;
+	}
+}
+
+// A physics object's fixed bones as the game will take them. The engine asserts "wrong fixed bone" on the first
+// name the visual lacks, the moment the object comes online - so "all" becomes every bone of the model, and an
+// unknown name is dropped (the root bone stays, the body never falls free).
+static xr_string CheckedFixedBones(LPCSTR visual, LPCSTR fixed, xr_string& bad)
+{
+	bad.clear();
+	xr_vector<u8> buf;
+	xr_vector<xr_string> bones;
+	if (VisualBytes(visual, buf) && buf.size() > 8)
+		OgfBoneNames(&buf[0], u32(buf.size()), bones);
+	if (bones.empty())
+		return fixed;
+	xr_string out;
+	if (0 == _stricmp(fixed, "all"))
+	{
+		for (const xr_string& b : bones)
+			out += (out.empty() ? "" : ",") + b;
+		return out;
+	}
+	const int n = _GetItemCount(fixed);
+	for (int i = 0; i < n; ++i)
+	{
+		string256 name;
+		_GetItem(fixed, i, name);
+		_Trim(name);
+		bool found = false;
+		for (const xr_string& b : bones)
+			found = found || 0 == _stricmp(b.c_str(), name);
+		xr_string& to = found ? out : bad;
+		to += (to.empty() ? "" : ",") + xr_string(name);
+	}
+	return out.empty() ? bones.front() : out;
 }
 
 static bool WriteBinFile(const char* path, const void* data, u32 size)
@@ -556,11 +618,12 @@ struct SSpawnResult
 	int			starts;			// Player Starts (op = start)
 	int			paths;			// way paths ([path:<name>])
 	int			orders;			// placed stalkers that carry a standing order
+	int			removed;		// base spawns the mod takes out (op = remove)
 	xr_string	path;
 	xr_string	names_json;
 	// what was left out or changed on the way, one line each - shown with the result
 	xr_vector<xr_string> warnings;
-	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0), invisible(0), starts(0), paths(0), orders(0) {}
+	SSpawnResult() : exported(0), skipped(0), scaled(0), missing(0), invisible(0), starts(0), paths(0), orders(0), removed(0) {}
 	void		Warn			(LPCSTR fmt, ...)
 	{
 		char buf[512];
@@ -859,8 +922,24 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 		for (ObjectIt it = sp.begin(); it != sp.end(); ++it)
 		{
 			if (selected_only && !(*it)->Selected()) continue;
-			// an imported base level's spawns are the game's, not the mod's
-			if (!(*it)->IsAuthorPlaced())	continue;
+			// an imported base level's spawns are the game's, not the mod's - unless the
+			// author took one out: the engine drops it from new games of the module's mode
+			if (!(*it)->IsAuthorPlaced())
+			{
+				if ((*it)->IsBaseRemoved())
+				{
+					char entry[512];
+					sprintf_s(entry, "[obj:base:%s/%s]\r\nop        = remove\r\n", level, (*it)->GetName());
+					fresh += entry;
+					mode_line();
+					fresh += "\r\n";
+					char header[320];
+					sprintf_s(header, "obj:base:%s/%s", level, (*it)->GetName());
+					replaced.push_back(xr_string(header));
+					++res.removed;
+				}
+				continue;
+			}
 			CSpawnPoint* pt = dynamic_cast<CSpawnPoint*>(*it);
 			if (!pt)								{ ++res.skipped; continue; }
 
@@ -983,7 +1062,8 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 				char vline[300];
 				sprintf_s(vline, "visual    = %s\r\n", vname);
 				fresh += vline;
-				if (EditorModScene::VisualDrawsNothing(vname))
+				// a collision-only model (named *collider*, e.g. the shell an inventory box lacks) is invisible by design
+				if (!strstr(vname, "collider") && EditorModScene::VisualDrawsNothing(vname))
 				{
 					++res.invisible;
 					Msg("! [XMS] spawn export: '%s' keeps '%s', a model the engine draws nothing for - "
@@ -999,9 +1079,72 @@ static bool DoExportSpawn(LPCSTR level_arg, bool selected_only, LPCSTR section_a
 			{
 				if (po->fixed_bones.size())
 				{
-					char fline[300];
-					sprintf_s(fline, "fixed_bones = %s\r\n", po->fixed_bones.c_str());
-					fresh += fline;
+					xr_string bad;
+					const xr_string bones = vname[0] ? CheckedFixedBones(vname, po->fixed_bones.c_str(), bad) : xr_string(po->fixed_bones.c_str());
+					if (bad.size())
+						res.Warn("'%s': fixed bone(s) '%s' are not bones of '%s' - dropped, the game would assert on them",
+							op_name, bad.c_str(), vname);
+					fresh += "fixed_bones = " + bones + "\r\n";
+				}
+			}
+
+			// The description picked in the smart cover's properties is what makes it an
+			// animpoint; the section alone composes an empty one nobody can use.
+			if (CSE_SmartCover* sc = dynamic_cast<CSE_SmartCover*>(pt->m_SpawnData.m_Data))
+			{
+				if (sc->m_description.size())
+				{
+					char sline[300];
+					sprintf_s(sline, "smart_cover = %s\r\n", sc->m_description.c_str());
+					fresh += sline;
+				}
+				else
+					res.Warn("'%s' is a smart cover without a description - nobody can use it; pick one in its properties",
+						op_name);
+			}
+
+			// A hanging lamp's light is its own fields, not its section: without them the game
+			// lights every lamp white, 10 m, as a spot along its local +Z, whatever was set here.
+			if (CSE_ALifeObjectHangingLamp* lamp = dynamic_cast<CSE_ALifeObjectHangingLamp*>(pt->m_SpawnData.m_Data))
+			{
+				char l[768];
+				sprintf_s(l,
+					"lamp_flags = %u\r\n"
+					"lamp_color = %08x\r\n"
+					"lamp_light = %f,%f,%f,%f\r\n"
+					"lamp_bones = %s,%s\r\n"
+					"lamp_ambient = %f,%f,%s\r\n"
+					"lamp_volumetric = %f,%f,%f\r\n"
+					"lamp_glow = %f,%s\r\n"
+					"lamp_health = %f\r\n",
+					(u32)lamp->flags.get(), lamp->color,
+					lamp->brightness, lamp->range, lamp->spot_cone_angle, lamp->m_virtual_size,
+					lamp->light_main_bone.size() ? lamp->light_main_bone.c_str() : "",
+					lamp->light_ambient_bone.size() ? lamp->light_ambient_bone.c_str() : "",
+					lamp->m_ambient_radius, lamp->m_ambient_power,
+					lamp->m_ambient_texture.size() ? lamp->m_ambient_texture.c_str() : "",
+					lamp->m_volumetric_quality, lamp->m_volumetric_intensity, lamp->m_volumetric_distance,
+					lamp->glow_radius, lamp->glow_texture.size() ? lamp->glow_texture.c_str() : "",
+					lamp->m_health);
+				fresh += l;
+				if (lamp->color_animator.size())
+				{
+					sprintf_s(l, "lamp_animator = %s\r\n", lamp->color_animator.c_str());
+					fresh += l;
+				}
+				if (lamp->light_texture.size())
+				{
+					sprintf_s(l, "lamp_texture = %s\r\n", lamp->light_texture.c_str());
+					fresh += l;
+				}
+				if (lamp->fixed_bones.size())
+				{
+					xr_string bad;
+					const xr_string bones = vname[0] ? CheckedFixedBones(vname, lamp->fixed_bones.c_str(), bad) : xr_string(lamp->fixed_bones.c_str());
+					if (bad.size())
+						res.Warn("'%s': fixed bone(s) '%s' are not bones of '%s' - dropped, the game would assert on them",
+							op_name, bad.c_str(), vname);
+					fresh += "fixed_bones = " + bones + "\r\n";
 				}
 			}
 
@@ -1376,6 +1519,7 @@ void EditorModScene::RequestExportSpawn()
 	rows.emplace_back("Player Starts", Num(res.starts));
 	rows.emplace_back("Way paths", Num(res.paths));
 	rows.emplace_back("NPC orders", Num(res.orders));
+	rows.emplace_back("Base objects removed", Num(res.removed));
 	XUI::Strings warnings;
 	if (res.scaled)
 		warnings.push_back(Num(res.scaled) + " object(s) have a scale other than 1: the spawn layer carries no scale.");
@@ -1500,9 +1644,9 @@ bool EditorModScene::SceneLevelName(xr_string& level)
 void EditorModScene::McpExportSpawn(LPCSTR raw, xr_string& out)
 {
 	char level[128] = {}, section[128] = {}, mode[128] = {};
-	XFinedMCP::GetArg(raw, "level", level, sizeof(level));
-	XFinedMCP::GetArg(raw, "section", section, sizeof(section));
-	XFinedMCP::GetArg(raw, "mode", mode, sizeof(mode));
+	GrizzlyMCP::GetArg(raw, "level", level, sizeof(level));
+	GrizzlyMCP::GetArg(raw, "section", section, sizeof(section));
+	GrizzlyMCP::GetArg(raw, "mode", mode, sizeof(mode));
 	const bool selected_only = ArgBool(raw, "selected_only", true);
 
 	SSpawnResult res;
@@ -1536,7 +1680,7 @@ void EditorModScene::McpExportSpawn(LPCSTR raw, xr_string& out)
 void EditorModScene::McpExportCut(LPCSTR raw, xr_string& out)
 {
 	char level[128] = {};
-	XFinedMCP::GetArg(raw, "level", level, sizeof(level));
+	GrizzlyMCP::GetArg(raw, "level", level, sizeof(level));
 	const bool selected_only	= ArgBool(raw, "selected_only", true);
 	const bool overlap			= ArgBool(raw, "overlap", false);
 	const float grow			= (float)ArgInt(raw, "grow", 0) / 100.f;	// centimetres
@@ -1560,7 +1704,7 @@ void EditorModScene::McpExportCut(LPCSTR raw, xr_string& out)
 void EditorModScene::McpExportXCForm(LPCSTR raw, xr_string& out)
 {
 	char level[128] = {};
-	XFinedMCP::GetArg(raw, "level", level, sizeof(level));
+	GrizzlyMCP::GetArg(raw, "level", level, sizeof(level));
 	const int sector = ArgInt(raw, "sector", 0);
 	const bool selected_only = ArgBool(raw, "selected_only", true);
 
@@ -1583,7 +1727,7 @@ void EditorModScene::McpExportXCForm(LPCSTR raw, xr_string& out)
 void EditorModScene::McpExportOGF(LPCSTR raw, xr_string& out)
 {
 	char level[128] = {};
-	XFinedMCP::GetArg(raw, "level", level, sizeof(level));
+	GrizzlyMCP::GetArg(raw, "level", level, sizeof(level));
 	const bool selected_only = ArgBool(raw, "selected_only", true);
 
 	SOGFResult res;

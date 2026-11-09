@@ -145,6 +145,7 @@ bool XUI::PropertySection(cstr title, bool open, cstr badge)
 	bool is_open = storage->GetBool(id, open);
 	ImGui::ItemSize(bb.GetSize());
 	ScrollToItem(title, bb);
+	ImGui::SetNextItemAllowOverlap();
 	if (!ImGui::ItemAdd(bb, id))
 		return is_open;
 	bool hovered = false, held = false;
@@ -279,6 +280,13 @@ void XUI::PropertyText(cstr text)
 		return;
 	if (!text)
 		text = "";
+	// the rows of a grid share one id stack: a value takes its row's id, or every value of the grid is one widget
+	struct SRowScope
+	{
+		const bool on;
+		SRowScope(bool row, ImGuiID row_id) : on(row) { if (on) ImGui::PushOverrideID(row_id); }
+		~SRowScope() { if (on) ImGui::PopID(); }
+	} row_scope(s_Grid.row_open, s_Grid.row_id);
 	// the first line only; a longer value is in the tooltip
 	const char* eol = strchr(text, '\n');
 	const xr_string line = Str(text, eol);
@@ -415,6 +423,30 @@ struct List
 List s_List;
 }
 
+bool XUI::HeaderAction(cstr id, Icon icon, cstr tip)
+{
+	ImGuiWindow* window = ImGui::GetCurrentWindow();
+	if (window->SkipItems)
+		return false;
+	const ImVec2 max = ImGui::GetItemRectMax(), min = ImGui::GetItemRectMin();
+	const ImVec2 backup = window->DC.CursorPos;
+	const float side = Pt(22.f);
+	ImGui::SetCursorScreenPos(ImVec2(max.x - Pt(4.f) - side, (min.y + max.y - side) * .5f));
+	BtnSpec s;
+	s.id = id;
+	s.text = "";
+	s.icon = icon;
+	s.icon_pt = 14.f;
+	s.kind = Kind::Ghost;
+	s.tip = tip;
+	s.size = ImVec2(side, side);
+	s.layout = false;
+	const bool pressed = ButtonEx(s);
+	window->DC.CursorPos = backup;
+	window->DC.IsSetPos = false;
+	return pressed;
+}
+
 bool XUI::Section(cstr title, bool open, cstr right)
 {
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -428,6 +460,7 @@ bool XUI::Section(cstr title, bool open, cstr right)
 	bool is_open = storage->GetBool(id, open);
 	ImGui::ItemSize(bb.GetSize());
 	ScrollToItem(title, bb);
+	ImGui::SetNextItemAllowOverlap();
 	if (!ImGui::ItemAdd(bb, id))
 		return is_open;
 	bool hovered = false, held = false;

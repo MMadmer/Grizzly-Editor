@@ -6041,7 +6041,7 @@ begin:
 // Render an arrow aimed to be aligned with text (p_min is a position in the same space text would be positioned). To e.g. denote expanded/collapsed state
 void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir dir, float scale)
 {
-    // XFined Editor: the editor's kit draws its own thin chevron in the box of the triangle (GImGuiRenderArrow,
+    // Grizzly Editor: the editor's kit draws its own thin chevron in the box of the triangle (GImGuiRenderArrow,
     // imgui_user.h), so combos, tree nodes, submenus and sort arrows look like the rest of the editor
     if (GImGuiRenderArrow)
     {

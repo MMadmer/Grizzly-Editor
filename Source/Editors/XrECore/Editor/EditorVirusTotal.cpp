@@ -37,7 +37,7 @@ void Say(const TStage& stage, const xr_string& text)
 template <class TCall>
 bool WithinRate(TCall call, u32& status, EditorGithub::CCancel& cancel, const TStage& stage)
 {
-	const u32 pause = QaMs("XFINED_VT_RATE_WAIT_MS", 20000);
+	const u32 pause = QaMs("GRIZZLY_VT_RATE_WAIT_MS", 20000);
 	for (u32 attempt = 0;; ++attempt)
 	{
 		const bool ok = call();
@@ -179,7 +179,7 @@ void EditorVirusTotal::Scan(const xr_vector<SPackage>& packages, const xr_string
 	// 2. The reports, usually out within minutes. A file VirusTotal has never seen answers "not
 	// found" until its first analysis ends, so that is waited out like a report without results.
 	const ULONGLONG start = ::GetTickCount64();
-	const ULONGLONG wait = QaMs("XFINED_VT_SCAN_WAIT_MS", 10 * 60 * 1000);
+	const ULONGLONG wait = QaMs("GRIZZLY_VT_SCAN_WAIT_MS", 10 * 60 * 1000);
 	while (!waiting.empty() && !cancel.Cancelled() && ::GetTickCount64() - start < wait)
 	{
 		for (u32 w = 0; w < waiting.size() && !cancel.Cancelled();)

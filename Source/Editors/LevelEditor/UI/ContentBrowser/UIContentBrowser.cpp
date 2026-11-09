@@ -8,6 +8,7 @@
 #include "..\..\..\XrECore\Editor\Nq\NqLua.h"
 #include "..\..\..\XrECore\Editor\Nq\NqUtil.h"
 #include "..\..\..\XrECore\Editor\EditorCharacters.h"
+#include "..\..\..\XrECore\Editor\Nq\NqCatalog.h"
 #include "..\..\..\XrECore\Editor\EditorPda.h"
 #include "..\..\..\XrECore\Editor\EditorAssetIcons.h"
 #include "..\..\..\XrECore\Editor\EditorUiContract.h"
@@ -15,7 +16,7 @@
 #include <shobjidl.h>
 #include <shellapi.h>
 
-using Token = XFinedTheme::ColorToken;
+using Token = GrizzlyTheme::ColorToken;
 
 // image formats the thumbnail path can decode directly
 static bool IsImageExt(LPCSTR name)
@@ -307,7 +308,7 @@ static bool NormalizeFolderPath(LPCSTR input, xr_string& out, xr_string& err)
 
 static ImU32 ThemeCol(Token token, float alpha = 1.f)
 {
-	return XFinedTheme::U32(token, alpha);
+	return GrizzlyTheme::U32(token, alpha);
 }
 
 // a coordinate on the pixel grid (imgui_internal's IM_ROUND stays inside XrEUI)
@@ -1423,6 +1424,9 @@ void UIContentBrowser::Refresh()
 	// and what the build leaves out for the tiles (mod.ltx may have changed on disk)
 	EditorCharacters::Invalidate();
 	EditorMod::InvalidateExclusions();
+	// the module's global variables and its own quest kinds may have changed on disk too
+	EditorMod::InvalidateGlobals();
+	NqCatalog::Invalidate();
 	// the preview's textures: the project's own sheets may have changed
 	EditorPda::Invalidate();
 	m_Items.clear	();
@@ -1468,20 +1472,11 @@ void UIContentBrowser::Refresh()
 				::FindClose(h);
 			}
 
-			// The module's own machinery - the manifest and what export
-			// generates - is not content and must not be deletable by a stray
-			// Ctrl+A + Del. It is edited through Mod Settings, and the
-			// generated files follow the manifest on their own.
-			xr_vector<xr_string> owned;
-			EditorMod::GetOwnedFiles(EditorProject::Root(), owned);
+			// The manifest is the module's own machinery, not content, and must not be
+			// deletable by a stray Ctrl+A + Del: Mod Settings edits it.
 			for (u32 k = 0; k < m_Items.size();)
-			{
-				bool hide = false;
-				for (u32 o = 0; o < owned.size() && !hide; ++o)
-					hide = (0 == _stricmp(m_Items[k].name.c_str(), owned[o].c_str()));
-				if (hide)	m_Items.erase(m_Items.begin() + k);
-				else		++k;
-			}
+				if (0 == _stricmp(m_Items[k].name.c_str(), "mod.ltx"))	m_Items.erase(m_Items.begin() + k);
+				else													++k;
 		}
 		m_Root.name = "Project";
 	}
@@ -1897,7 +1892,7 @@ const UIContentBrowser::SThumb* UIContentBrowser::GetThumb(LPCSTR name, float px
 			return nullptr;	// not cached: the tile retries until the queue answers
 		}
 		// a failed render caches a null texture, so it is not asked for again
-		t.tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+		t.tex = failed ? 0 : static_cast<ImTextureID>(GrizzlyMCP::PixelsToTexture(pixels));
 		t.aspect = TextureAspect(t.tex);
 		return StoreThumb(key, t);
 	}
@@ -1924,7 +1919,7 @@ const UIContentBrowser::SThumb* UIContentBrowser::GetThumb(LPCSTR name, float px
 		bool failed = false;
 		if (TakeVisualThumbnail(name, pixels, failed))
 		{
-			tex = failed ? 0 : static_cast<ImTextureID>(XFinedMCP::PixelsToTexture(pixels));
+			tex = failed ? 0 : static_cast<ImTextureID>(GrizzlyMCP::PixelsToTexture(pixels));
 			object_result = true;
 		}
 		else if (HasVisualThumbnailRequest(name))
@@ -2288,7 +2283,10 @@ bool UIContentBrowser::OpenAsset(LPCSTR name, xr_string* err)
 		OPEN_FAILED("%s: %s", name, img_err.c_str());
 	}
 
-	OPEN_FAILED("no viewer for this asset kind yet: '%s'", name);
+	// a kind the editor does not show is a fact about the editor, not an error of the project
+	if (err)	*err = xr_string("no viewer for this asset kind yet: '") + name + "'";
+	else		ELog.DlgMsg(mtInformation, "No viewer for this kind of file yet: '%s'", name);
+	return false;
 #undef OPEN_FAILED
 }
 

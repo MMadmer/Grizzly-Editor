@@ -2804,7 +2804,7 @@ bool ImGui::DragScalar(const char* label, ImGuiDataType data_type, void* p_data,
     const char* value_buf_end = value_buf + DataTypeFormatString(value_buf, IM_COUNTOF(value_buf), data_type, p_data, format);
     if (g.LogEnabled)
         LogSetNextTextDecoration("{", "}");
-    // XFined Editor: the value sits where the text of a text field sits (GImGuiDragTextAlignX, imgui_user.h), inside the
+    // Grizzly Editor: the value sits where the text of a text field sits (GImGuiDragTextAlignX, imgui_user.h), inside the
     // frame padding; upstream centres it across the whole frame
     const ImVec2 value_pad(style.FramePadding.x, 0.0f);
     RenderTextClipped(frame_bb.Min + value_pad, frame_bb.Max - value_pad, value_buf, value_buf_end, NULL, ImVec2(GImGuiDragTextAlignX, 0.5f));

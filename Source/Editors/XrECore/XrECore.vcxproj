@@ -133,7 +133,7 @@
     <ClCompile Include="Editor\EditObjectProps.cpp" />
     <ClCompile Include="Editor\EditObjectSkin.cpp" />
     <ClCompile Include="Editor\EditorPreferences.cpp" />
-    <ClCompile Include="Editor\XFinedMCP.cpp" />
+    <ClCompile Include="Editor\GrizzlyMCP.cpp" />
     <ClCompile Include="Editor\EditorProject.cpp" />
     <ClCompile Include="Editor\ELog.cpp" />
     <ClCompile Include="Editor\EStats.cpp" />

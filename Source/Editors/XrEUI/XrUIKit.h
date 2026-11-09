@@ -144,6 +144,18 @@ XREUI_API bool PathField(cstr id, char* buf, size_t n, bool folder);
 // The native file or folder picker PathField's Browse opens, starting where `buf` points; true when one was picked. Never
 // over MCP or under -nodlg.
 XREUI_API bool BrowsePath(char* buf, size_t n, bool folder);
+// Files brought in by a drag: from Explorer (the window is registered once) or as tiles of the content browser, whose
+// payload carries a project-relative path. FileDropZone is true on the frame they land in [min, max], with their paths;
+// of zones that overlap the one asked first has them, so ask the inner ones first.
+inline constexpr const char* kAssetPayload = "XRAY_ASSET";
+XREUI_API void FileDropInstall(void* hwnd);
+XREUI_API void FileDropMessage(void* hdrop);	// WM_DROPFILES
+XREUI_API void FileDropRemove();
+XREUI_API bool FileDropActive();
+XREUI_API bool FileDragging();
+XREUI_API bool FileDropZone(cstr id, const ImVec2& min, const ImVec2& max, Strings& out);
+// A drop at a point of the window, as Explorer would make it (MCP).
+XREUI_API void FileDropSimulate(const Strings& files, float x, float y);
 enum PickResult { PickNone = 0, PickBrowse = 1, PickClear = 2 };
 // The leaf of `value` with a start ellipsis; a click or the chevron is PickBrowse, the cross PickClear.
 XREUI_API int PickField(cstr id, cstr value, bool clearable);
@@ -223,6 +235,8 @@ XREUI_API void HelpFooter();
 // ---------------------------------------------------------------------------------------------------
 // a full-row header that toggles on click; true when open, then EndSection()
 XREUI_API bool Section(cstr title, bool open = true, cstr right = nullptr);
+// An icon button at the right end of the Section or PropertySection header just drawn; true when pressed.
+XREUI_API bool HeaderAction(cstr id, Icon icon, cstr tip);
 XREUI_API void EndSection();
 // size in pt: 0 takes the rest, negative leaves that much. EndList() always follows.
 XREUI_API bool BeginList(cstr id, ImVec2 size_pt);
@@ -264,7 +278,7 @@ XREUI_API bool SplitterTail(cstr key, bool vertical, float* tail_pt, float min_h
 // is +1 (the pane before it) and shrinks when -1 (the pane after it: a side panel, a drawer). True while it changes.
 XREUI_API bool SplitterAt(cstr key, bool vertical, const ImVec2& line, float length, float sign, float lo, float hi, float def);
 
-// Sizes of splits and grids, in pt, kept in the .ini ([XFinedLayout][Data]).
+// Sizes of splits and grids, in pt, kept in the .ini ([GrizzlyLayout][Data]).
 namespace Layout
 {
 XREUI_API float Get(cstr key, float def);
@@ -421,4 +435,10 @@ XREUI_API void AuditJson(xr_string& out, cstr window = nullptr);
 
 // Draws the kit's own queued dialogs and toasts; XrUIManager calls it once at the end of a frame.
 XREUI_API void DrawOverlays();
+// how far above the corner the toasts stand (px): something else lives there for now
+XREUI_API void SetToastInset(float px);
+// a modal is up: what floats beside the work waits behind it
+XREUI_API bool ModalUp();
+// the window being drawn stays above the others
+XREUI_API void KeepOnTop();
 }

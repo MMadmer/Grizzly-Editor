@@ -79,8 +79,9 @@ void XrUIManager::Initialize(HWND hWnd, IDirect3DDevice9* device, const char* in
     // the monitor's scale, or -uiscale, goes through XUI::SetDpi like every later change; the
     // fonts load as a startup stage of their own (XUI::LoadFonts), or with the first frame
     XUI::Hooks::ContextCreated(hWnd);
-    XFinedTheme::Initialize((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0);
+    GrizzlyTheme::Initialize((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0);
     ImGui_ImplWin32_Init(hWnd);
+    XUI::FileDropInstall(hWnd);
     #if defined(USE_DX11)
     ImGui_ImplDX11_Init(device, context);
 #else
@@ -145,6 +146,7 @@ bool XrUIManager::TopModal(xr_string& title, float rect[4], xr_string* id) const
 
 void XrUIManager::Destroy()
 {
+    XUI::FileDropRemove();
     #if defined(USE_DX11)
     ImGui_ImplDX11_Shutdown();
 #else
@@ -450,6 +452,11 @@ static bool ImGui_ImplWin32_UpdateMouseCursor()
 IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT XrUIManager::WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    if (msg == WM_DROPFILES)
+    {
+        XUI::FileDropMessage((void*)wParam);
+        return 0;
+    }
 	if (m_ProgressOnlyInput)
 	{
 		switch (msg)

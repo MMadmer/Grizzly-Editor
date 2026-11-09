@@ -33,9 +33,9 @@ void DrawStatsPill(const ImVec2& canvas_pos, const ImVec2& canvas_size)
 		return;
 	ImDrawList* dl = ImGui::GetWindowDrawList();
 	dl->AddRectFilled(at, ImVec2(at.x + w + pad * 2.f, at.y + n * line + pad * 1.5f),
-		XFinedTheme::U32(XFinedTheme::ColorToken::Overlay, .92f), XUI::Pt(6.f));
+		GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Overlay, .92f), XUI::Pt(6.f));
 	for (int i = 0; i < n; ++i)
-		dl->AddText(ImVec2(at.x + pad, at.y + pad * .75f + i * line), XFinedTheme::U32(XFinedTheme::ColorToken::TextSecondary), lines[i]);
+		dl->AddText(ImVec2(at.x + pad, at.y + pad * .75f + i * line), GrizzlyTheme::U32(GrizzlyTheme::ColorToken::TextSecondary), lines[i]);
 }
 }
 

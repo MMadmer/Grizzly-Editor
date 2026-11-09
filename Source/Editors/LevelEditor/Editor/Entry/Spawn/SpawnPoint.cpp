@@ -4,6 +4,8 @@
 // story ids a follow order can name
 #include "..\..\..\..\XrECore\Editor\Nq\NqPickers.h"
 
+// MCP view_mode helpers=false: spawn models only - no shapes, gizmos, icons, labels or selection boxes
+bool g_SpawnHelpers = true;
 
 #define SPAWNPOINT_CHUNK_VERSION		0xE411
 #define SPAWNPOINT_CHUNK_POSITION		0xE412
@@ -23,7 +25,7 @@
 #define SPAWNPOINT_CHUNK_ENVMOD2		0xE423
 #define SPAWNPOINT_CHUNK_ENVMOD3		0xE424
 #define SPAWNPOINT_CHUNK_FLAGS			0xE425
-// XFined: a placed stalker's standing order (SXmsOrder)
+// Grizzly: a placed stalker's standing order (SXmsOrder)
 #define SPAWNPOINT_CHUNK_XMS_ORDER		0xE430
 #define XMS_ORDER_VERSION				1
 
@@ -551,6 +553,9 @@ void CSpawnPoint::SSpawnData::Render(bool bSelected, const Fmatrix& parent,int p
     if (m_Motion&&m_Motion->animator&&bSelected&&(1==priority)&&(false==strictB2F))
         m_Motion->animator->DrawPath();
 
+    if (!g_SpawnHelpers)
+        return;
+
     RCache.set_xform_world		(Fidentity);
 	EDevice->SetShader			(EDevice->m_WireShader);
     m_Data->on_render			(&DU_impl,this,bSelected,parent,priority,strictB2F);
@@ -910,13 +915,13 @@ void CSpawnPoint::Render( int priority, bool strictB2F )
 	Scene->SelectLightsForObject(this);
 
     
-    // render attached object
-    if (m_AttachedObject)
+    // render attached object (a restrictor's or a zone's shape)
+    if (m_AttachedObject && g_SpawnHelpers)
     		m_AttachedObject->Render(priority, strictB2F);
 	if (m_SpawnData.Valid())
     		m_SpawnData.Render(Selected(),FTransformRP,priority, strictB2F);
 	// render spawn point
-    if (1==priority){
+    if (1==priority && g_SpawnHelpers){
         if (strictB2F){
             RCache.set_xform_world(FTransformRP);
             if (m_SpawnData.Valid()){

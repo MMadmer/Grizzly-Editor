@@ -5,6 +5,8 @@ struct 	v2p
  	float2 	tc0: 		TEXCOORD0;	// base
  	float2 	tc1: 		TEXCOORD1;	// lmap
  	float2 	tc2: 		TEXCOORD2;	// detail
+	float3	wpos:		TEXCOORD3;	// world position and normal - the game lighting
+	float3	wnorm:		TEXCOORD4;
 };
 Texture2D       s_mask;                	//
 
@@ -36,6 +38,10 @@ float4 	main	( v2p I )	: SV_Target
 
 	// final-color
 	float3	final 	= (t_base.rgb)*detail*2	;
+
+	// lighting: the game's, when the preview is on
+	if (glit_enabled())
+		final	*= glit_light(I.wpos, glit_normal(I.wpos, I.wnorm));
 
 	// out
 	return  float4	(final.rgb,1);

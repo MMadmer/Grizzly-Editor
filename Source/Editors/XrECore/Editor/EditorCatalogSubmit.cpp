@@ -1,12 +1,13 @@
 #include "stdafx.h"
 #include "EditorCatalogSubmit.h"
+#include "UI_ProgressCenter.h"
 #include "EditorCatalog.h"
 #include "EditorGithub.h"
 #include "EditorModManifest.h"
 #include "EditorUiContract.h"
 #include "EditorProject.h"
 #include "EditorVirusTotal.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "ui_main.h"
 #include "Nq/NqUtil.h"
 #include "Zlib/unzip.h"
@@ -124,6 +125,7 @@ struct SView
 	xr_string					submission_error;	// why the last look-up failed
 	EditorGithub::SCatalogIssue	withdrawal;
 	SListing					listing;
+	int							step	= 0;	// of a submission: check, scan, send
 
 								SView	() : job(jbNone), state(stIdle), vt_scanned(false), submission_read(false) {}
 	bool						Listed	() const { return listing.state == "listed" && listing.this_key; }
@@ -134,6 +136,8 @@ SView					s_View;			// guarded by s_Lock
 bool					s_Want			= false;	// the window is open
 std::thread				s_Thread;
 EditorGithub::CCancel	s_Cancel;
+bool					s_FromUI		= false;	// the Task Center's row of a job an MCP caller started opens nothing
+u32						s_JobStarted	= 0;		// GetTickCount
 
 SView Snapshot()
 {
@@ -147,6 +151,12 @@ void Stage(LPCSTR text)
 {
 	std::lock_guard<std::mutex> guard(s_Lock);
 	s_View.stage = text;
+}
+
+void Step(int step)
+{
+	std::lock_guard<std::mutex> guard(s_Lock);
+	s_View.step = step;
 }
 
 LPCSTR JobName(EJob job)
@@ -612,7 +622,7 @@ xr_string SubmissionDetails(const SInput& in, const SChecked& seen, const SCheck
 			NqUtil::Format("%s, %u engines", r.state.c_str(), r.verdict.engines) : EditorVirusTotal::Describe(r);
 		body += "- `" + r.package.name + "`: " + verdict + " - " + EditorGithub::VtReportPage(r.package.sha256) + "\n";
 	}
-	body += "\nChecked by XFined Editor:\n";
+	body += "\nChecked by Grizzly Editor:\n";
 	for (u32 i = 0; i < check.findings.size(); ++i)
 		body += xr_string("- ") + EditorCatalog::LevelName(check.findings[i].level) + ": " + check.findings[i].text + "\n";
 	return body;
@@ -634,10 +644,12 @@ xr_string VtRefusal(const EditorVirusTotal::SResult& r, const SChecked& seen)
 
 bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, SStanding& standing, xr_string& err)
 {
+	Step(0);
 	RunCheck(in, false, check, seen, standing);
 	if (s_Cancel.Cancelled()) { err = "cancelled"; return false; }
 	for (u32 i = 0; i < check.findings.size(); ++i)
 		if (lvBlock == check.findings[i].level) { err = "not submitted: " + check.findings[i].text; return false; }
+	Step(1);
 
 	// The catalog only looks the packages up: what VirusTotal does not know goes up now, with the
 	// author's key, and its report is waited for. Only a package with a report is sent - VirusTotal
@@ -654,6 +666,7 @@ bool RunSubmit(const SInput& in, SCheck& check, SChecked& seen, SStanding& stand
 		return false;
 	}
 
+	Step(2);
 	const SRelease& rel = seen.rel;
 	const xr_string website = (rel.card && !rel.website.empty()) ? rel.website : in.manifest.website;
 	EditorGithub::SCatalogRequest rq;
@@ -804,7 +817,46 @@ EditorGithub::EAccountSource AccountSource(bool refresh)
 	return s_AccountSource;
 }
 
-bool Start(EJob job, xr_string& err)
+// a row of the Task Center while a job runs: the window's own footer says the same while the window is up
+void JobRow(SProgressTaskInfoVec& out)
+{
+	EJob job;
+	int step;
+	xr_string stage, module_id;
+	{
+		std::lock_guard<std::mutex> guard(s_Lock);
+		if (stRunning != s_View.state) return;
+		job			= s_View.job;
+		step		= s_View.step;
+		stage		= s_View.stage;
+		module_id	= s_View.module_id;
+	}
+	static const LPCSTR kTitles[] = { "Checking the Mod Browser Requirements", "Scanning on VirusTotal", "Submitting to the Mod Browser",
+		"Reading the Submission", "Withdrawing from the Mod Browser" };
+	static const LPCSTR kStops[] = { "Stop Checking", "Stop Scanning", "Stop Submitting", "Stop Refreshing", "Stop Withdrawing" };
+	const u32 which = jbVt == job ? 1 : jbSubmit == job ? 2 : jbSubmission == job ? 3 : jbWithdraw == job ? 4 : 0;
+	SProgressTaskInfo task;
+	task.key		= "catalog";
+	task.text		= kTitles[which];
+	task.subtitle	= module_id;
+	task.detail		= stage.empty() ? xr_string("Working") : stage;
+	if (jbSubmit == job)
+	{
+		for (LPCSTR name : { "Check", "Scan", "Send" })
+			task.steps.push_back(name);
+		task.step = step;
+	}
+	task.stop_label	= kStops[which];
+	task.stop_tip	= "Stops the job at its next step: nothing more is sent. What already reached GitHub or VirusTotal stays there.";
+	task.from_mcp	= !s_FromUI;
+	task.elapsed_ms	= ::GetTickCount() - s_JobStarted;
+	task.cancelable	= true;
+	task.cancel		= [] { s_Cancel.Cancel(); };
+	task.cancel_requested = s_Cancel.Cancelled();
+	out.push_back(std::move(task));
+}
+
+bool Start(EJob job, xr_string& err, bool from_ui = false)
 {
 	err.clear();
 	Reap();
@@ -837,9 +889,13 @@ bool Start(EJob job, xr_string& err)
 		s_View.job		= job;
 		s_View.state	= stRunning;
 		s_View.stage	= "Starting";
+		s_View.step		= 0;
 		s_View.error.clear();
 	}
 	s_Cancel.Reset();
+	s_FromUI		= from_ui;
+	s_JobStarted	= ::GetTickCount();
+	UIProgressCenter::RegisterSource("catalog_job", &JobRow);
 	s_Thread = std::thread(&Worker, job, in);
 	return true;
 }
@@ -978,12 +1034,12 @@ bool						s_WantWithdraw	= false;	// the withdrawal's question is up
 void StartFromUI(EJob job)
 {
 	xr_string err;
-	s_StartError = Start(job, err) ? xr_string() : err;
+	s_StartError = Start(job, err, true) ? xr_string() : err;
 }
 
-ImU32 Token(XFinedTheme::ColorToken token, float alpha = 1.f)
+ImU32 Token(GrizzlyTheme::ColorToken token, float alpha = 1.f)
 {
-	return XFinedTheme::U32(token, alpha);
+	return GrizzlyTheme::U32(token, alpha);
 }
 
 void WipeInputs()
@@ -1015,7 +1071,7 @@ bool PickFile(bool save, LPCWSTR title, const xr_string& start, xr_string& picke
 	IFileDialog* dlg = 0;
 	if (SUCCEEDED(::CoCreateInstance(save ? CLSID_FileSaveDialog : CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
 	{
-		const COMDLG_FILTERSPEC types[] = { { L"XFined author key (*.xkey)", L"*.xkey" }, { L"All files", L"*.*" } };
+		const COMDLG_FILTERSPEC types[] = { { L"Grizzly author key (*.xkey)", L"*.xkey" }, { L"All files", L"*.*" } };
 		dlg->SetFileTypes(2, types);
 		dlg->SetDefaultExtension(L"xkey");
 		dlg->SetTitle(title);
@@ -1112,7 +1168,7 @@ void PathValue(const xr_string& path)
 	const float width = ImGui::CalcItemWidth();
 	ImGui::SetCursorPosX(ImGui::GetCursorPosX() + style.FramePadding.x);
 	ImGui::AlignTextToFramePadding();
-	ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextSecondary));
+	ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextSecondary));
 	XUI::TextEllipsis(path.c_str(), _max(XUI::Em(2.f), width - style.FramePadding.x * 2.f), XUI::Clip::Start);
 	ImGui::PopStyleColor();
 }
@@ -1186,7 +1242,7 @@ void DrawKeyCard()
 		if (XUI::Button("Use Another Key File...", XUI::Kind::Secondary, !s_PickQueued, "A file dialog is open."))
 			s_PickQueued = UI->DeferUIWork(&PickKeyFile);
 	}
-	else
+	else if (s_Key.locked || s_KeyCreated || XUI::Section("More##key", false))
 	{
 		if (XUI::BeginPropertyGrid("catalog_key"))
 		{
@@ -1218,6 +1274,7 @@ void DrawKeyCard()
 		if (XUI::Button("Show in Folder", XUI::Kind::Secondary))
 			::ShellExecuteA(0, "open", "explorer.exe", ("/select,\"" + s_Key.path + "\"").c_str(), 0, SW_SHOWNORMAL);
 		XUI::Tip("Opens the key file's folder in Explorer, the file selected - to copy it somewhere safe.");
+		if (!s_Key.locked && !s_KeyCreated) XUI::EndSection();
 	}
 	if (!s_KeyError.empty())
 		XUI::StatusText(XUI::Tone::Error, s_KeyError.c_str());
@@ -1257,7 +1314,7 @@ void DrawRequirementsCard(const SView& view)
 		XUI::Tip("Reads the latest release the way the game does and checks what the Mod Browser requires.");
 
 	if (checking)
-		XUI::BusyLine(view.stage.empty() ? "Checking..." : ("Checking: " + view.stage).c_str());
+		XUI::StatusText(XUI::Tone::Muted, "Checking...");
 	else if (!view.check.done)
 		XUI::StatusText(XUI::Tone::Muted, "Not checked yet.");
 	for (const SFinding* f : open)
@@ -1307,9 +1364,9 @@ void DrawVirusTotalCard(const SView& view)
 	// a check looks the packages up: until it has, "not scanned" would be a guess
 	const bool looking = running && jbCheck == view.job && view.virustotal.packages.empty();
 	if (scanning)
-		XUI::BusyLine(view.stage.empty() ? "Scanning..." : ("Scanning: " + view.stage).c_str());
+		XUI::StatusText(XUI::Tone::Muted, "Scanning...");
 	else if (looking)
-		XUI::BusyLine("Looking the packages up on VirusTotal...");
+		XUI::StatusText(XUI::Tone::Muted, "Looking the packages up...");
 	// the requirement stays in sight until every package has a report
 	if (view.virustotal.packages.empty() && !looking)
 		XUI::StatusText(XUI::Tone::Required, "Not scanned yet. Every package needs a VirusTotal report before the module is listed: Scan "
@@ -1326,7 +1383,7 @@ void DrawVirusTotalCard(const SView& view)
 	if (XUI::Button("Scan", XUI::Kind::Secondary, !running, "A Mod Browser job is running."))
 	{
 		xr_string err;
-		s_VtError = Start(jbVt, err) ? xr_string() : err;
+		s_VtError = Start(jbVt, err, true) ? xr_string() : err;
 	}
 	if (!running)
 		XUI::Tip("Looks every package of the latest release up on VirusTotal, uploads one it does not know and waits for its report - a "
@@ -1404,22 +1461,16 @@ void DrawSubmissionCard(const SView& view)
 	const bool signed_in = EditorGithub::asNone != s_AccountSource;
 	const XUI::Tone tone = IssueTone(submission);
 	XUI::BeginCard("##card_submission", "Submission", tone, XUI::Tone::Error == tone);
-	SameLineRight(KitButtonWidth("Refresh"));
-	if (XUI::Button("Refresh", XUI::Kind::Secondary, stRunning != view.state && signed_in,
-			signed_in ? "A Mod Browser job is running." : "Sign in to GitHub first: Publish Release."))
-		StartFromUI(jbSubmission);
-	if (stRunning != view.state && signed_in)
-		XUI::Tip("Reads where the submission and a withdrawal stand, and what the published catalog lists.");
 	// "not submitted" only once GitHub said so: every job but the scan looks the submission up; signed out, the
 	// line below says what is missing
 	if (!view.submission_read)
 	{
 		if (signed_in && stRunning == view.state && jbVt != view.job)
-			XUI::BusyLine("Looking up the submission...");
+			XUI::StatusText(XUI::Tone::Muted, "Looking up the submission...");
 		else if (signed_in && !view.submission_error.empty())
 			XUI::StatusText(XUI::Tone::Warning, ("The submission could not be looked up: " + Reason(view.submission_error) + ".").c_str());
 		else if (signed_in)
-			XUI::StatusText(XUI::Tone::Muted, "Not looked up yet: Refresh reads where it stands.");
+			XUI::StatusText(XUI::Tone::Muted, "Not looked up yet: Check Again reads where it stands.");
 	}
 	else if (!submission.number)
 		XUI::StatusText(XUI::Tone::Muted, "Not submitted yet.");
@@ -1450,7 +1501,7 @@ void DrawWithdrawalCard(const SView& view)
 	if (!listed && !withdrawn && !w.number && w.note.empty() && !failed) return;
 	XUI::BeginCard("##card_withdrawal", "Withdrawal", failed ? XUI::Tone::Error : IssueTone(w), failed);
 	if (stRunning == view.state && jbWithdraw == view.job)
-		XUI::BusyLine(view.stage.empty() ? "Withdrawing..." : ("Withdrawing: " + view.stage).c_str());
+		XUI::StatusText(XUI::Tone::Muted, "Withdrawing...");
 	if (w.number)
 		IssueLines(w, withdrawn, "#%llu was accepted: the module is withdrawn from the Mod Browser.",
 			"#%llu was accepted: the module leaves the Mod Browser within minutes.");
@@ -1552,7 +1603,7 @@ void DrawWindow()
 	if (!s_Manifest.name.empty() && s_Manifest.name != s_Manifest.id)
 	{
 		ImGui::SameLine();
-		ImGui::PushStyleColor(ImGuiCol_Text, Token(XFinedTheme::ColorToken::TextMuted));
+		ImGui::PushStyleColor(ImGuiCol_Text, Token(GrizzlyTheme::ColorToken::TextMuted));
 		XUI::TextEllipsis(s_Manifest.id.c_str());
 		ImGui::PopStyleColor();
 	}
@@ -1673,7 +1724,7 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 {
 	if (!EditorProject::Active()) { ErrorJson(out, "no active project"); return; }
 	char action[32] = {};
-	if (!XFinedMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "status");
+	if (!GrizzlyMCP::GetArg(raw, "action", action, sizeof(action))) strcpy_s(action, "status");
 	// request-sized, so no value is cut; wiped before the answer is built
 	xr_vector<char> arg(xr_strlen(raw) + 1);
 	xr_string err;
@@ -1682,8 +1733,8 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	else if (0 == xr_strcmp(action, "key_create"))
 	{
 		xr_string path, password;
-		if (XFinedMCP::GetArg(raw, "path", arg.data(), (u32)arg.size())) path = arg.data();
-		if (XFinedMCP::GetArg(raw, "password", arg.data(), (u32)arg.size())) password = arg.data();
+		if (GrizzlyMCP::GetArg(raw, "path", arg.data(), (u32)arg.size())) path = arg.data();
+		if (GrizzlyMCP::GetArg(raw, "password", arg.data(), (u32)arg.size())) password = arg.data();
 		::SecureZeroMemory(arg.data(), arg.size());
 		const bool made = EditorCatalog::CreateKey(path.empty() ? EditorCatalog::DefaultKeyPath().c_str() : path.c_str(), password.c_str(), err);
 		EditorGithub::WipeString(password);
@@ -1691,12 +1742,12 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	}
 	else if (0 == xr_strcmp(action, "key_use"))
 	{
-		if (!XFinedMCP::GetArg(raw, "path", arg.data(), (u32)arg.size()) || !arg[0]) { ErrorJson(out, "key_use needs 'path'"); return; }
+		if (!GrizzlyMCP::GetArg(raw, "path", arg.data(), (u32)arg.size()) || !arg[0]) { ErrorJson(out, "key_use needs 'path'"); return; }
 		if (!EditorCatalog::UseKeyFile(arg.data(), err)) { ErrorJson(out, err); return; }
 	}
 	else if (0 == xr_strcmp(action, "key_unlock"))
 	{
-		const bool given = XFinedMCP::GetArg(raw, "password", arg.data(), (u32)arg.size());
+		const bool given = GrizzlyMCP::GetArg(raw, "password", arg.data(), (u32)arg.size());
 		const bool opened = given && EditorCatalog::Unlock(arg.data(), err);
 		::SecureZeroMemory(arg.data(), arg.size());
 		if (!opened) { ErrorJson(out, given ? err : xr_string("key_unlock needs 'password'")); return; }
@@ -1704,7 +1755,7 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	else if (0 == xr_strcmp(action, "vt_key"))
 	{
 		// the one request that carries a VirusTotal key: it goes into the Credential Manager
-		const bool given = XFinedMCP::GetArg(raw, "key", arg.data(), (u32)arg.size());
+		const bool given = GrizzlyMCP::GetArg(raw, "key", arg.data(), (u32)arg.size());
 		const bool saved = given && EditorGithub::SaveVtKey(arg.data(), err);
 		::SecureZeroMemory(arg.data(), arg.size());
 		if (!saved) { ErrorJson(out, given ? err : xr_string("vt_key needs 'key'")); return; }
@@ -1717,7 +1768,7 @@ void EditorCatalogSubmit::McpCatalog(LPCSTR raw, xr_string& out)
 	{
 		if (!s_Want) Request();
 		char confirm[16] = {};
-		XFinedMCP::GetArg(raw, "confirm", confirm, sizeof(confirm));
+		GrizzlyMCP::GetArg(raw, "confirm", confirm, sizeof(confirm));
 		if (confirm[0] && 0 != xr_strcmp(confirm, "withdraw")) { ErrorJson(out, "confirm: withdraw expected"); return; }
 		s_WantWithdraw = 0 == xr_strcmp(confirm, "withdraw");
 	}

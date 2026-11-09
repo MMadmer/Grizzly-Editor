@@ -5,8 +5,8 @@
 
 namespace
 {
-	using T = XFinedTheme::ColorToken;
-	IC ImU32 C(T token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+	using T = GrizzlyTheme::ColorToken;
+	IC ImU32 C(T token, float alpha = 1.f) { return GrizzlyTheme::U32(token, alpha); }
 
 	// ten fixed zoom levels (docs par. 13.8); index 6 = 1:1, index 5 the floor of Frame All
 	const float kZoom[] = { 0.2f, 0.3f, 0.4f, 0.5f, 0.65f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f };

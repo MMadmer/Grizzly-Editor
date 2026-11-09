@@ -15,6 +15,9 @@
 //                        it applies, the playable area, the transitions that start
 //                        closed, and the rules the player may change on the new-game
 //                        screen                                  - this unit edits it
+//   mod.ltx [start_kit]  what a new game begins with: the items, the money and whether
+//                        the perks of the new-game screen stay; it replaces the screen's
+//                        loadout                                 - this unit edits it
 //   Player Start         a point of the spawn tool; the scene bake writes it into the
 //                        spawn layer as `op = start`             - EditorModScene
 //   way paths            the WayPoint tool's paths, shipped as [path:<name>] and
@@ -86,6 +89,8 @@ namespace EditorWorld
 	//   E201 more than one Player Start          E202 more than three player choices
 	//   W203 a level the linked game lacks       W204 a transition the linked game lacks
 	//   W205 the player starts outside the area  W206 an area without a Player Start
+	//   E207 a start kit row with no item or a count below 1, or an item listed twice
+	//   W208 a start kit item the linked game lacks
 	ECORE_API void		Validate		(LPCSTR project_root, const EditorMod::SManifest& m,
 										 xr_vector<xr_string>& problems);
 	// the rows of the new-game screen a mode can offer
@@ -93,6 +98,13 @@ namespace EditorWorld
 
 	// {"rules":{...},"player_choice":[...],"levels":[...],"area":[...],...}
 	ECORE_API void		JsonWorld		(const EditorMod::SWorld& w, xr_string& out);
+	// {"declared":true,"money":1,"perks":true,"items":[{"section":"wpn_knife","count":1},...]};
+	// money is null while the kit leaves it to the new-game screen
+	ECORE_API void		JsonStartKit	(const EditorMod::SStartKit& k, xr_string& out);
+	// The game's own base kit - [shared] of the linked game's plugins\faction_loadouts.ltx,
+	// what every faction gets before the extra kits: the rows and the money. False when
+	// the game has no such file.
+	ECORE_API bool		GameBaseKit		(EditorMod::SStartKit& out);
 
 	// -- the open scene (the level editor lives a layer above) ----------------
 	// Its level and the Player Starts placed in it.
@@ -104,6 +116,9 @@ namespace EditorWorld
 	// Selects a scene object by name and frames it.
 	typedef bool (*TFocusObject)(LPCSTR name);
 	ECORE_API void		SetFocusObject	(TFocusObject fn);
+
+	// The levels of a list as chips, then Add Level...; true when the list changed.
+	ECORE_API bool		LevelChips		(LPCSTR id, xr_vector<xr_string>& v);
 
 	// -- UI (Mod > World Rules: a tab of its own) ---------------------------------
 	ECORE_API void		DrawUI			();

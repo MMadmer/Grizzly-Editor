@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
-#include "XFinedMCP.h"
+#include "GrizzlyMCP.h"
 #include "EditorProject.h"
+#include "EditorModManifest.h"
 #include "Nq/NqUtil.h"
 #include "UI_ToolsCustom.h"
 #include "ui_main.h"
@@ -63,8 +64,8 @@ struct SMCPRequest
 	}
 };
 
-static TXFinedMCPHandler	s_Handler = 0;
-void XFinedMCP::SetHandler(TXFinedMCPHandler handler) { s_Handler = handler; }
+static TGrizzlyMCPHandler	s_Handler = 0;
+void GrizzlyMCP::SetHandler(TGrizzlyMCPHandler handler) { s_Handler = handler; }
 
 namespace
 {
@@ -451,7 +452,7 @@ static bool ReadOptionalJsonBool(LPCSTR raw, LPCSTR field, bool& value)
 }
 }
 
-bool XFinedMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
+bool GrizzlyMCP::GetArg(LPCSTR raw, LPCSTR field, char* dst, u32 dst_size)
 {
 	if (!dst || !dst_size)
 		return false;
@@ -685,7 +686,7 @@ static bool SurfaceToPngBase64(IDirect3DSurface9* surf, xr_string& out, u32 w = 
 }
 #endif
 
-bool XFinedMCP::TextureToPngBase64(void* texture, xr_string& out)
+bool GrizzlyMCP::TextureToPngBase64(void* texture, xr_string& out)
 {
 #if defined(USE_DX11)
 	// callers hand over what ImGui draws, i.e. a shader resource view - walk back
@@ -718,7 +719,7 @@ bool XFinedMCP::TextureToPngBase64(void* texture, xr_string& out)
 #endif
 }
 
-void* XFinedMCP::PixelsToTexture(const U32Vec& pixels)
+void* GrizzlyMCP::PixelsToTexture(const U32Vec& pixels)
 {
 	if (pixels.size() != u32(THUMB_WIDTH) * u32(THUMB_HEIGHT))
 		return 0;
@@ -747,7 +748,7 @@ void* XFinedMCP::PixelsToTexture(const U32Vec& pixels)
 #endif
 }
 
-void XFinedMCP::ReleaseTexture(void* texture)
+void GrizzlyMCP::ReleaseTexture(void* texture)
 {
 	if (!texture) return;
 #if defined(USE_DX11)
@@ -819,7 +820,7 @@ static void Execute(SMCPRequest& r)
 	char tmp[1024];
 	if (r.cmd == "ping")
 	{
-		r.response = "{\"ok\":true,\"name\":\"XFined Editor\",\"version\":\"1.0\"}";
+		r.response = "{\"ok\":true,\"name\":\"Grizzly Editor\",\"version\":\"1.0\"}";
 	}
 	else if (r.cmd == "state")
 	{
@@ -938,7 +939,7 @@ static void Execute(SMCPRequest& r)
 		}
 #else
 		// resolved by window class — m_hWnd visibility varies across the tree
-		HWND wnd = ::FindWindowA("XFined Editor", NULL);
+		HWND wnd = ::FindWindowA("Grizzly Editor", NULL);
 		if (wnd && WindowToPngBase64(wnd, b64))
 		{
 			r.response = "{\"ok\":true,\"png_base64\":\"";
@@ -959,7 +960,7 @@ static void Execute(SMCPRequest& r)
 	else if (r.cmd == "open_project")
 	{
 		char path[MAX_PATH];
-		if (!XFinedMCP::GetArg(r.raw.c_str(), "path", path, sizeof(path)))
+		if (!GrizzlyMCP::GetArg(r.raw.c_str(), "path", path, sizeof(path)))
 			r.response = "{\"ok\":false,\"error\":\"missing 'path' argument\"}";
 		else
 		{
@@ -992,7 +993,7 @@ static void Execute(SMCPRequest& r)
 		char scene[MAX_PATH];
 		if (!EditorProject::Active())
 			r.response = "{\"ok\":false,\"error\":\"no active project\"}";
-		else if (!XFinedMCP::GetArg(r.raw.c_str(), "scene", scene, sizeof(scene)))
+		else if (!GrizzlyMCP::GetArg(r.raw.c_str(), "scene", scene, sizeof(scene)))
 			r.response = "{\"ok\":false,\"error\":\"missing 'scene' argument\"}";
 		else
 		{
@@ -1202,7 +1203,7 @@ static bool HeldShotReady()
 	return !s_HeldFrames;
 }
 
-bool XFinedMCP::WantsFrame() { return !!s_HeldShot; }
+bool GrizzlyMCP::WantsFrame() { return !!s_HeldShot; }
 
 // A held screenshot is taken with no tooltip in it: one would show wherever the mouse happens to be.
 static void HoldShot(SMCPRequest* request)
@@ -1263,14 +1264,50 @@ static bool ReleaseHeldShot()
 	return true;
 }
 
-void XFinedMCP::OnFramePresented()
+void GrizzlyMCP::OnFramePresented()
 {
 	if (s_HeldFrames) --s_HeldFrames;
 	++s_HeldPresented;
 }
 
-void XFinedMCP::Pump()
+// A build answers when it has ended, in one call as ever - but the editor goes on meanwhile and so do the other commands:
+// `progress` and a picture of the card among them. The handler says "job_pending":true when it has started the job and
+// is asked again with "answer_only":true once the job is over.
+static SMCPRequest* s_HeldJob = 0;
+
+static bool FollowsJob(const SMCPRequest& r)
 {
+	return r.cmd == "mod_export" || r.cmd == "mod_package" || r.cmd == "mod_publish";
+}
+
+static void ApplyThenFollowJob(SMCPRequest* request)
+{
+	{
+		XUI::McpScope mcp;
+		Execute(*request);
+	}
+	if (xr_string::npos == request->response.find("\"job_pending\":true"))
+	{
+		::InterlockedExchange(&request->state, SMCPRequest::Completed);
+		::SetEvent(request->done);
+		request->Release();
+		return;
+	}
+	const size_t brace = request->raw.find('{');
+	if (xr_string::npos != brace)
+		request->raw.insert(brace + 1, "\"answer_only\":true,");
+	request->response.clear();
+	s_HeldJob = request;
+}
+
+void GrizzlyMCP::Pump()
+{
+	if (s_HeldJob && !EditorMod::JobRunning())
+	{
+		SMCPRequest* job = s_HeldJob;
+		s_HeldJob = 0;
+		CompleteRequest(job);
+	}
 	if (s_HeldShot)
 	{
 		// its frames should follow one another, not the background poll interval
@@ -1290,6 +1327,8 @@ void XFinedMCP::Pump()
 			ImGui::SetNavCursorVisible(false);
 		if (FollowsFrames(*request))
 			ApplyThenHold(request);
+		else if (FollowsJob(*request) && !s_HeldJob)
+			ApplyThenFollowJob(request);
 		else
 			CompleteRequest(request);
 		return;
@@ -1299,7 +1338,7 @@ void XFinedMCP::Pump()
 
 // During a blocking job: its status, and a picture of the busy frame - held like any other shot, the job's own
 // checkpoints present the frames it waits for.
-void XFinedMCP::PumpProgressRequests()
+void GrizzlyMCP::PumpProgressRequests()
 {
 	if (s_HeldShot)
 	{
@@ -1446,7 +1485,7 @@ static ERequestWaitResult WaitForRequest(SOCKET client, SMCPRequest* request, xr
 static bool ProcessLine(SOCKET client, const xr_string& line, xr_string& accumulator)
 {
 	char command[128];
-	if (!XFinedMCP::GetArg(line.c_str(), "cmd", command, sizeof(command)) || !command[0])
+	if (!GrizzlyMCP::GetArg(line.c_str(), "cmd", command, sizeof(command)) || !command[0])
 	{
 		const xr_string out = "{\"ok\":false,\"error\":\"invalid JSON request or missing string 'cmd'\"}\n";
 		return SendAll(client, out.c_str(), out.size());
@@ -1645,7 +1684,7 @@ static void CleanupStartupFailure()
 	}
 }
 
-void XFinedMCP::Start()
+void GrizzlyMCP::Start()
 {
 	if (s_LockReady)
 		return;
@@ -1654,7 +1693,7 @@ void XFinedMCP::Start()
 	s_LockReady = true;
 	s_RequestTimeoutMs = kDefaultRequestTimeoutMs;
 	char timeout[32] = {};
-	const DWORD timeout_size = ::GetEnvironmentVariableA("XFINED_MCP_REQUEST_TIMEOUT_MS", timeout, sizeof(timeout));
+	const DWORD timeout_size = ::GetEnvironmentVariableA("GRIZZLY_MCP_REQUEST_TIMEOUT_MS", timeout, sizeof(timeout));
 	if (timeout_size && timeout_size < sizeof(timeout))
 	{
 		char* end = 0;
@@ -1718,7 +1757,7 @@ void XFinedMCP::Start()
 	Msg("* [MCP] listening on 127.0.0.1:%d", kPort);
 }
 
-void XFinedMCP::Stop()
+void GrizzlyMCP::Stop()
 {
 	if (!s_LockReady)
 		return;
@@ -1771,6 +1810,11 @@ void XFinedMCP::Stop()
 		s_HeldShot->Release();
 		s_HeldShot = 0;
 	}
+	if (s_HeldJob)
+	{
+		s_HeldJob->Release();
+		s_HeldJob = 0;
+	}
 
 	if (s_StopEvent)
 	{
@@ -1791,7 +1835,7 @@ void XFinedMCP::Stop()
 	s_LockReady = false;
 }
 
-HANDLE XFinedMCP::WakeEvent()
+HANDLE GrizzlyMCP::WakeEvent()
 {
 	return s_QueueEvent;
 }

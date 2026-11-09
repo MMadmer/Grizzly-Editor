@@ -9,9 +9,9 @@ UIImageEditorForm* UIImageEditorForm::Form = nullptr;
 
 namespace
 {
-	using XFinedTheme::ColorToken;
+	using GrizzlyTheme::ColorToken;
 
-	ImU32 Tok(ColorToken token, float alpha = 1.f) { return XFinedTheme::U32(token, alpha); }
+	ImU32 Tok(ColorToken token, float alpha = 1.f) { return GrizzlyTheme::U32(token, alpha); }
 
 	// pt: list | preview | properties (docs/UI_DESIGN.md, section 6, Libraries)
 	constexpr float kListW		= 260.f;

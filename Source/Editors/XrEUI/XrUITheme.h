@@ -1,10 +1,10 @@
 #pragma once
 
-namespace XFinedTheme
+namespace GrizzlyTheme
 {
 enum class Preset : u32
 {
-	XFinedPurple = 0,
+	GrizzlyPurple = 0,
 	Graphite,
 	Count,
 };

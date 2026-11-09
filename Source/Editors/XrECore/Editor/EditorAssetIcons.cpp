@@ -161,7 +161,7 @@ void EditorAssetIcons::Draw(ImDrawList* draw_list, EKind kind, float x0, float y
 	const float	ox		= x0 + (w - side) * 0.5f;
 	const float	oy		= y0 + (h - side) * 0.5f;
 	XUI::DrawIconRect(draw_list, icon, ImVec2(ox, oy), ImVec2(ox + side, oy + side),
-		color ? color : XFinedTheme::U32(XFinedTheme::ColorToken::Text));
+		color ? color : GrizzlyTheme::U32(GrizzlyTheme::ColorToken::Text));
 }
 
 void EditorAssetIcons::DrawFor(LPCSTR path, float x0, float y0, float x1, float y1)

@@ -17,7 +17,7 @@
 
 // The frame over MCP (docs/UI_DESIGN.md, section 7): tabs, panels, drawers, dialogs, popups, scroll, splits, the
 // audit, the scale and the window - and what was always the editor's own here: theme, frame pacing, the palette,
-// progress, recovery and the command registry. XFinedInspector at the end asks every group in turn.
+// progress, recovery and the command registry. GrizzlyInspector at the end asks every group in turn.
 namespace LevelMcp
 {
 // JSON string body. Object names on real levels are library paths
@@ -105,23 +105,23 @@ CCustomObject* FindObjectRelaxed(LPCSTR name)
 
 static void RespondThemeJson(xr_string& out)
 {
-	const XFinedTheme::Preset current = XFinedTheme::Current();
+	const GrizzlyTheme::Preset current = GrizzlyTheme::Current();
 	out = "{\"ok\":true,\"preset\":\"";
-	out += XFinedTheme::Key(current);
+	out += GrizzlyTheme::Key(current);
 	out += "\",\"name\":\"";
-	out += XFinedTheme::Name(current);
+	out += GrizzlyTheme::Name(current);
 	out += "\",\"default\":";
-	out += current == XFinedTheme::Default() ? "true" : "false";
+	out += current == GrizzlyTheme::Default() ? "true" : "false";
 	out += ",\"presets\":[";
-	for (u32 i = 0; i < u32(XFinedTheme::Preset::Count); ++i)
+	for (u32 i = 0; i < u32(GrizzlyTheme::Preset::Count); ++i)
 	{
 		if (i)
 			out += ",";
-		const XFinedTheme::Preset preset = XFinedTheme::Preset(i);
+		const GrizzlyTheme::Preset preset = GrizzlyTheme::Preset(i);
 		out += "{\"key\":\"";
-		out += XFinedTheme::Key(preset);
+		out += GrizzlyTheme::Key(preset);
 		out += "\",\"name\":\"";
-		out += XFinedTheme::Name(preset);
+		out += GrizzlyTheme::Name(preset);
 		out += "\"}";
 	}
 	out += "]}";
@@ -212,6 +212,22 @@ static void AppendTasksJson(xr_string& out, const SProgressTaskInfoVec& tasks)
 		{
 			out += "\",\"key\":\"";
 			out += JsonStr(task.key.c_str());
+			out += "\",\"subtitle\":\"";
+			out += JsonStr(task.subtitle.c_str());
+			out += "\",\"numbers\":\"";
+			out += JsonStr(task.numbers.c_str());
+			out += "\",\"file\":\"";
+			out += JsonStr(task.file.c_str());
+			out += "\",\"steps\":\"";
+			for (u32 s = 0; s < task.steps.size(); ++s)
+			{
+				if (s) out += ", ";
+				out += JsonStr(task.steps[s].c_str());
+			}
+			char where[64];
+			sprintf_s(where, "\",\"step\":%d,\"eta_ms\":%llu,\"note\":\"", task.step, task.eta_ms);
+			out += where;
+			out += JsonStr(task.from_mcp ? "started over MCP" : "started from the UI");
 		}
 		out += values;
 	}
@@ -759,7 +775,7 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 		}
 
 		char action[32] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
 		const int requested = GetArgInt(raw, "active_idle_fps", -1);
 		if (!action[0])
 			xr_strcpy(action, requested >= 0 ? "set" : "get");
@@ -798,24 +814,24 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 		}
 
 		char action[32] = {}, requested[64] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-		XFinedMCP::GetArg(raw, "preset", requested, sizeof(requested));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "preset", requested, sizeof(requested));
 		if (!action[0])
 			xr_strcpy(action, requested[0] ? "set" : "get");
 
 		if (0 == _stricmp(action, "set"))
 		{
-			XFinedTheme::Preset preset;
-			if (!XFinedTheme::TryParse(requested, preset))
+			GrizzlyTheme::Preset preset;
+			if (!GrizzlyTheme::TryParse(requested, preset))
 			{
-				out = "{\"ok\":false,\"error\":\"unknown theme preset\",\"accepted\":[\"xfined-purple\",\"graphite\"]}";
+				out = "{\"ok\":false,\"error\":\"unknown theme preset\",\"accepted\":[\"grizzly-purple\",\"graphite\"]}";
 				return true;
 			}
 			EPrefs->SetThemePreset(u32(preset));
 		}
 		else if (0 == _stricmp(action, "reset"))
 		{
-			EPrefs->SetThemePreset(u32(XFinedTheme::Default()));
+			EPrefs->SetThemePreset(u32(GrizzlyTheme::Default()));
 		}
 		else if (0 != _stricmp(action, "get"))
 		{
@@ -830,9 +846,9 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	if (0 == xr_strcmp(cmd, "command_palette"))
 	{
 		char action[32] = {}, query[256] = {}, id[512] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
-		XFinedMCP::GetArg(raw, "query", query, sizeof(query));
-		XFinedMCP::GetArg(raw, "id", id, sizeof(id));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "query", query, sizeof(query));
+		GrizzlyMCP::GetArg(raw, "id", id, sizeof(id));
 		if (!action[0])
 			xr_strcpy(action, query[0] ? "query" : "state");
 
@@ -868,22 +884,26 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	if (0 == xr_strcmp(cmd, "progress"))
 	{
 		char action[32] = {};
-		XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+		GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
 		if (!action[0])
 			xr_strcpy(action, "get");
 		if (0 == _stricmp(action, "cancel"))
 		{
 			if (!UI->ProgressOperationActive())
 			{
-				out = "{\"ok\":false,\"error\":\"no active operation\"}";
-				return true;
+				// a job that runs beside the editor
+				if (!UIProgressCenter::CancelBackground())
+				{
+					out = "{\"ok\":false,\"error\":\"no active operation\"}";
+					return true;
+				}
 			}
-			if (!UI->ProgressCancelable())
+			else if (!UI->ProgressCancelable())
 			{
 				out = "{\"ok\":false,\"error\":\"active operation cannot be cancelled safely\"}";
 				return true;
 			}
-			if (UI->NeedBreak())
+			else if (UI->NeedBreak())
 				ELog.Progress("Cancellation requested through MCP.");
 		}
 		else if (0 != _stricmp(action, "get"))
@@ -958,7 +978,7 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
         ECommandVec& cmds = GetEditorCommands();
 
         char name[160] = {};
-        XFinedMCP::GetArg(raw, "name", name, sizeof(name));
+        GrizzlyMCP::GetArg(raw, "name", name, sizeof(name));
         // raw json: an escaped "Edit\\Undo" arrives with both slashes
         {
             char* w = name;
@@ -988,9 +1008,9 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
         // integer parameter silently became garbage. GetArgInt reads numbers.
         char p1s[1024] = {}, p2s[1024] = {};
         CCommandVar P1, P2;
-        if (XFinedMCP::GetArg(raw, "p1s", p1s, sizeof(p1s)))		P1 = CCommandVar(xr_string(p1s));
+        if (GrizzlyMCP::GetArg(raw, "p1s", p1s, sizeof(p1s)))		P1 = CCommandVar(xr_string(p1s));
         else if (int v = GetArgInt(raw, "p1i", -1); v >= 0)			P1 = CCommandVar(u32(v));
-        if (XFinedMCP::GetArg(raw, "p2s", p2s, sizeof(p2s)))		P2 = CCommandVar(xr_string(p2s));
+        if (GrizzlyMCP::GetArg(raw, "p2s", p2s, sizeof(p2s)))		P2 = CCommandVar(xr_string(p2s));
         else if (int v = GetArgInt(raw, "p2i", -1); v >= 0)			P2 = CCommandVar(u32(v));
 
         CCommandVar res = ExecCommand(u32(id), P1, P2);
@@ -1010,10 +1030,10 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
     // always recoverable by hand once it is lost
     if (0 == xr_strcmp(cmd, "reset_layout"))
     {
-        // scope=level (the default) rebuilds XFinedLevel_v2 for the window's size class and reopens its panels;
+        // scope=level (the default) rebuilds GrizzlyLevel_v2 for the window's size class and reopens its panels;
         // scope=all also forgets every split and grid width of Layout
         char scope[16] = {};
-        XFinedMCP::GetArg(raw, "scope", scope, sizeof(scope));
+        GrizzlyMCP::GetArg(raw, "scope", scope, sizeof(scope));
         const bool all = 0 == _stricmp(scope, "all");
         if (scope[0] && !all && 0 != _stricmp(scope, "level"))
         {
@@ -1030,7 +1050,7 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
     if (0 == xr_strcmp(cmd, "recovery"))
     {
         char action[32] = {};
-        XFinedMCP::GetArg(raw, "action", action, sizeof(action));
+        GrizzlyMCP::GetArg(raw, "action", action, sizeof(action));
         if (!action[0])
             xr_strcpy(action, "get");
 
@@ -1113,7 +1133,7 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	}
 
 	// ---- ui_*: every surface can be opened, closed, focused, scrolled and looked at ------------------------------
-	// what the window shows: tabs, the Level panels, drawers, dialogs, popups; held for fresh frames (XFinedMCP)
+	// what the window shows: tabs, the Level panels, drawers, dialogs, popups; held for fresh frames (GrizzlyMCP)
 	if (0 == xr_strcmp(cmd, "ui_list"))
 	{
 		out = "{\"ok\":true";
@@ -1499,6 +1519,15 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 	}
 
 	// a popup put up to be looked at (screenshot_editor); none takes them down
+	if (0 == xr_strcmp(cmd, "ui_toast"))
+	{
+		// to look at one: the notes the editor raises by itself come at moments an agent cannot order
+		xr_string text;
+		NqUtil::ArgString(raw, "text", text);
+		XUI::Toast(XUI::Tone::Info, text.empty() ? "A note." : text.c_str());
+		out = "{\"ok\":true}";
+		return true;
+	}
 	if (0 == xr_strcmp(cmd, "ui_popup"))
 	{
 		const xr_string show = Arg(raw, "show");
@@ -1575,7 +1604,7 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 			SProgressTaskInfoVec tasks;
 			UIProgressCenter::Snapshot(*UI, tasks);
 			if (tasks.empty())
-				err = "no job runs now: the tasks chip and its popover are up only while one does (progress lists them)";
+				err = "no job runs now: the tasks chip and its card are up only while one does (progress lists them)";
 		}
 		else if (kind == "rebuild" && !UIMainForm::RebuildPending())
 			err = "nothing needs rebuilding: the Rebuild chip is up only while the scene has changes the level builders have not seen";
@@ -1668,7 +1697,7 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 		return true;
 	}
 
-	// what the last frames truncated, let escape and offered; held for fresh frames (XFinedMCP)
+	// what the last frames truncated, let escape and offered; held for fresh frames (GrizzlyMCP)
 	if (0 == xr_strcmp(cmd, "ui_audit"))
 	{
 		const xr_string id = Arg(raw, "id");
@@ -1704,11 +1733,11 @@ bool HandleShell(LPCSTR cmd, LPCSTR raw, xr_string& out)
 			kTileMin, kTileMax, kTileDefault, kTileDefaultPanel);
 		NqUtil::JsonString(out, kTileRangeError);
 		out += ",\"theme_keys\":[";
-		for (u32 i = 0; i < u32(XFinedTheme::Preset::Count); ++i)
+		for (u32 i = 0; i < u32(GrizzlyTheme::Preset::Count); ++i)
 		{
 			if (i)
 				out += ",";
-			NqUtil::JsonString(out, XFinedTheme::Key(XFinedTheme::Preset(i)));
+			NqUtil::JsonString(out, GrizzlyTheme::Key(GrizzlyTheme::Preset(i)));
 		}
 		out += "],\"categories\":[";
 		for (int i = 0; i < UIContentBrowser::CategoryCount(); ++i)
@@ -1961,8 +1990,8 @@ void LevelMcpRegisterSurfaces()
 	}
 }
 
-// what XFinedMCP hands the editor: every group in turn, the ones that need the scene checking it themselves
-bool XFinedInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
+// what GrizzlyMCP hands the editor: every group in turn, the ones that need the scene checking it themselves
+bool GrizzlyInspector(LPCSTR cmd, LPCSTR raw, xr_string& out)
 {
 	using namespace LevelMcp;
 	return HandleShell(cmd, raw, out) || HandleProps(cmd, raw, out) || HandleMod(cmd, raw, out) ||
