@@ -1146,8 +1146,9 @@ dependencies = [
 name = "gz-luadata"
 version = "0.1.0"
 dependencies = [
- "gz-base",
+ "rustc-hash 2.1.3",
  "serde",
+ "serde_json",
  "smol_str 0.3.7",
  "thiserror 2.0.21",
 ]

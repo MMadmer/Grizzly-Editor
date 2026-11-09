@@ -62,12 +62,12 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-fmt-object` | done | `.object`, `.skl/.skls`, `.anm`, envelopes, normals, skinning; see findings |
 | `gz-fmt-ogf` | not started | placeholder |
 | `gz-fmt-level` | done | cform, xcform + overlay visuals, BVH, AI map, details, `build.prj`; see findings |
-| `gz-fmt-spawn` | not started | placeholder |
-| `gz-entities` | half | 6k lines in modules, `lib.rs` does not wire them; class coverage unknown until wired |
+| `gz-fmt-spawn` | done | `all.spawn` (header, spawn graph with both packets as ranges of the file, artefact points, patrols, embedded game graph, unknown and compressed chunks kept), `game.graph`, `level.gct`, `peek_packet`, `SpawnIndex`; byte-equal round trips |
+| `gz-entities` | done | every class of `xrServerEntities` in the game's layout, Dead Air's script fields, `FillProps` as typed properties with set by path; `Opaque` keeps what does not decode or does not write back to its own bytes |
 | `gz-fmt-tex` | nearly | 4 errors: a `tile` module that was never written, and it uses `gz-fmt-sound` without depending on it |
 | `gz-fmt-sound` | nearly | compiles; not reviewed |
 | `gz-fmt-xr` | not started | placeholder |
-| `gz-ui` | core | theme, fonts, text, audit, layout, buttons; `icons.rs` is a placeholder (enum + names final, no glyphs); widgets, dialogs, toolbar not started |
+| `gz-ui` | done | theme, fonts, text, audit, layout, buttons; icons (all 189 glyphs, `icons/geometry.rs` + `icons/paint.rs`, `sheet`); widgets: `search`, `menu`, `toolbar`, `grid`, `list`, `splitter`, `state`, `card`, `dialog`, `units`. Not yet driven by a shell; tests written, not run |
 | `gz-project` | done | the list, `project.ltx`, path rules, asset kinds, delete checks, file ops, DARF listing, the file tree + watcher; 17 commands; hooks for other areas (open/close/scaffold/rename, templates, asset lists) |
 
 ## Findings worth keeping
@@ -109,6 +109,32 @@ From the project port:
   object library / game link register the `list_assets` categories other than `Levels`.
 - The shell's `state` command takes its project fields from `gz_project::project_state`.
 - `darf.rs` is a private archive reader (chunk 1 directory + LZO entries); it moves to `gz-vfs`.
+
+From the entity port:
+- The game's layouts differ from this repository's `Source/xrServerEntities` in: the weapon's
+  `m_condition_type` (state and update), `CSE_ALifeCustomZone` keeping `m_maxPower`, one 64-bit
+  bone mask in `SPHBonesData`, the quantised item update below version 122, the smart cover's
+  `can_fire` default, the squad roster limit, the shotgun's cartridge cap.
+- Dead Air's scripts are packed; an unpacked copy is in `D:\Games\Dead Air\_work\da_unpack`
+  (`xtra` overrides `configs`). The repository's `gamedata\scripts` are Call of Pripyat's and
+  differ (smart terrain, squads, zones): never take entity layouts from them.
+- A decoded entity keeps its packets and writes them back unchanged until edited; a packet of
+  today's version that does not re-encode to its own bytes is `Opaque` (`Lossy`).
+
+From the kit:
+- `units::em(n)` is n x 16 pt (the C++ `Em`, the Body line), not the egui em of 12: widths in the
+  design (18 em stacking, 36 em prose) are in it. `text::prose` still wraps at 36 x 12.
+- egui strokes mitred with butt caps: icons above 2 px of an opaque stroke are cut at their
+  corners with a disc on each (round joins and caps); at 20 px and below points snap to pixel
+  centres (odd widths) or edges (even) and a backtrack pass drops the spikes. egui fills only
+  convex paths, so the two concave fills (`star_filled`, `bookmark_filled`) are ear-clipped meshes
+  at build time; rounded rects are paths built from the snapped corners (egui's corner radius is
+  a `u8`).
+- Dialogs are `egui::Modal`s positioned by hand; egui hides an area on its first frame, which
+  stands in for the C++ "a measuring frame is not shown". `dialog::draw_overlays` must run last
+  every frame: it draws the queued questions, runs the answers and rotates what `open_dialogs`
+  reports.
+- MCP's unsaved prompt answers Cancel (the command decides with `save` / `discard` first).
 
 ## Next packages, in dependency order
 

@@ -1,8 +1,16 @@
-//! The editor's vector icon set (docs/UI_DESIGN.md, section 3).
+//! The editor's vector icon set (docs/UI_DESIGN.md, section 3; XrUIIcons.cpp is the spec).
 //!
-//! Placeholder drawing until the glyph geometry is ported: the enum and the names are final.
+//! Every glyph is geometry on a 16-unit grid, built once and only scaled when drawn, so it is
+//! exact at any size and DPI. [`draw`] takes a square, [`draw_in`] centres one in a rectangle;
+//! the colour is the caller's (the state tones live in the kit). [`Icon::name`] is the stable
+//! name MCP answers and QA read. [`sheet`] is the developer's view of the whole set.
 
-use egui::{Color32, Painter, Rect};
+mod geometry;
+mod paint;
+
+use egui::{Color32, Painter, Rect, Ui};
+
+use crate::theme::palette;
 
 /// Every icon of the kit. The order and the names are the C++ `XUI::Icon`'s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -200,7 +208,7 @@ pub enum Icon {
 }
 
 impl Icon {
-    /// Every icon that draws something, in declaration order.
+    /// Every icon but `None`, in enum order.
     pub const ALL: &'static [Icon] = &[
         Icon::Minimize,
         Icon::Maximize,
@@ -393,7 +401,7 @@ impl Icon {
         Icon::Drawer,
     ];
 
-    /// The stable snake_case name MCP answers and tests read.
+    /// The stable lower-case name ("chevron_down") MCP answers and QA read: the C++ `IconName`.
     #[must_use]
     pub fn name(self) -> &'static str {
         match self {
@@ -568,7 +576,7 @@ impl Icon {
             Icon::ZoomIn => "zoom_in",
             Icon::ZoomOut => "zoom_out",
             Icon::ZoomFit => "zoom_fit",
-            Icon::Zoom100 => "zoom100",
+            Icon::Zoom100 => "zoom_100",
             Icon::Person => "person",
             Icon::Community => "community",
             Icon::Rank => "rank",
@@ -590,23 +598,164 @@ impl Icon {
         }
     }
 
+    /// The icon an MCP name or a test asks for.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Icon> {
         Icon::ALL.iter().copied().find(|i| i.name() == name)
     }
 }
 
-/// Draws an icon into a square. The colour is the caller's.
+/// Draws an icon into a square: `rect`'s top-left corner and its width. The colour is the
+/// caller's; a secondary stroke of a glyph is drawn at 55% of it.
 pub fn draw(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
     if icon == Icon::None {
         return;
     }
-    let r = rect.shrink(rect.width() * 0.2);
-    painter.rect_stroke(r, 1.0, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+    if let Some(g) = geometry::glyphs().get(icon as usize) {
+        paint::draw_glyph(painter, g, rect.min, rect.width(), color);
+    }
 }
 
 /// Draws an icon centred in the largest square that fits `rect`.
 pub fn draw_in(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
-    let side = rect.width().min(rect.height());
-    draw(painter, icon, Rect::from_center_size(rect.center(), egui::vec2(side, side)), color);
+    draw(painter, icon, paint::square_in(rect), color);
+}
+
+/// The developer's sheet of the icon set: every glyph from `first` on (an index into
+/// [`Icon::ALL`]) at 16, 24 and 48 pt with its name, the 48 pt one in its grid frame and margin,
+/// in the colour a state gives it (Text, Secondary, Checked, Disabled). Draw it in a scroll area.
+pub fn sheet(ui: &mut Ui, first: usize) {
+    let ctx = ui.ctx().clone();
+    let p = palette(&ctx);
+    let colour_id = egui::Id::unique("gz-ui.icons.sheet.colour");
+    let mut colour = ctx.data(|d| d.get_temp::<usize>(colour_id)).unwrap_or(0);
+    if crate::button::segmented(ui, &mut colour, &["Text", "Secondary", "Checked", "Disabled"], None) {
+        ctx.data_mut(|d| d.insert_temp(colour_id, colour));
+    }
+    let ink = match colour {
+        1 => p.text_secondary,
+        2 => p.accent_bright,
+        3 => p.text_disabled,
+        _ => p.text,
+    };
+    let icons = Icon::ALL.get(first.min(Icon::ALL.len())..).unwrap_or(&[]);
+    let font = crate::font::Font::Small.id();
+    let sizes = [16.0f32, 24.0, 48.0];
+    let gap = 8.0;
+    let big = 48.0;
+    let name_w = Icon::ALL.iter().map(|i| crate::text::width(&ctx, &font, i.name())).fold(0.0, f32::max);
+    let glyphs_w = sizes.iter().sum::<f32>() + gap * 2.0;
+    let cell_w = glyphs_w.max(name_w) + gap * 2.0;
+    let cell_h = big + gap * 2.0 + crate::font::Font::Small.line();
+    let cols = ((ui.available_width() / cell_w) as usize).max(1);
+    for row in icons.chunks(cols) {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(cols as f32 * cell_w, cell_h), egui::Sense::hover());
+        if !ui.is_rect_visible(rect) {
+            continue;
+        }
+        let painter = ui.painter();
+        // a checked icon sits on selection.focused
+        if colour == 2 {
+            painter.rect_filled(rect, 0.0, p.selection_focused);
+        }
+        for (col, icon) in row.iter().enumerate() {
+            let x0 = rect.min.x + col as f32 * cell_w + gap;
+            let base = rect.min.y + gap + big;
+            let mut x = x0;
+            for side in sizes {
+                let min = egui::pos2(x.round(), (base - side).round());
+                let square = Rect::from_min_size(min, egui::vec2(side, side));
+                if side == big {
+                    let unit = side / geometry::GRID;
+                    painter.rect_stroke(square, 0.0, egui::Stroke::new(1.0, p.border.gamma_multiply(0.8)), egui::StrokeKind::Inside);
+                    painter.rect_stroke(square.shrink(unit), 0.0, egui::Stroke::new(1.0, p.border.gamma_multiply(0.35)), egui::StrokeKind::Inside);
+                }
+                draw(painter, *icon, square, ink);
+                x += side + gap;
+            }
+            painter.text(egui::pos2(x0, base + gap * 0.5), egui::Align2::LEFT_TOP, icon.name(), font.clone(), p.text_muted);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Icon;
+    use super::geometry::{PrimKind, ear_clip, glyphs, signed_area};
+    use egui::pos2;
+
+    #[test]
+    fn every_icon_has_geometry() {
+        let all = glyphs();
+        for &icon in Icon::ALL {
+            let g = all.get(icon as usize);
+            assert!(g.is_some_and(|g| !g.prims.is_empty()), "{} has no geometry", icon.name());
+        }
+        assert!(all.first().is_some_and(|g| g.prims.is_empty()));
+    }
+
+    #[test]
+    fn names_are_unique_and_round_trip() {
+        let mut seen = std::collections::HashSet::new();
+        for &icon in Icon::ALL {
+            assert!(seen.insert(icon.name()), "{} twice", icon.name());
+            assert_eq!(Icon::from_name(icon.name()), Some(icon));
+        }
+        assert_eq!(Icon::ALL.len(), 189);
+        assert!(!Icon::ALL.contains(&Icon::None));
+        assert_eq!(Icon::from_name("no_such_icon"), None);
+    }
+
+    #[test]
+    fn names_are_the_cpp_tables() {
+        let pairs = [
+            (Icon::ChevronDown, "chevron_down"),
+            (Icon::SaveAll, "save_all"),
+            (Icon::EyeOff, "eye_off"),
+            (Icon::BuildAIMap, "build_ai_map"),
+            (Icon::BuildGameGraph, "build_game_graph"),
+            (Icon::AIMap, "ai_map"),
+            (Icon::FogVolume, "fog_volume"),
+            (Icon::CharacterTemplate, "character_template"),
+            (Icon::PdaInterface, "pda_interface"),
+            (Icon::SpawnNpc, "spawn_npc"),
+            (Icon::PdaMsg, "pda_msg"),
+            (Icon::FindInProject, "find_in_project"),
+            (Icon::Zoom100, "zoom_100"),
+            (Icon::PlayerStart, "player_start"),
+            (Icon::Mcp, "mcp"),
+            (Icon::Drawer, "drawer"),
+            (Icon::None, "none"),
+        ];
+        for (icon, name) in pairs {
+            assert_eq!(icon.name(), name);
+        }
+    }
+
+    #[test]
+    fn concave_fills_are_triangulated() {
+        let all = glyphs();
+        for icon in [Icon::StarFilled, Icon::BookmarkFilled] {
+            let g = all.get(icon as usize);
+            let fill = g.and_then(|g| g.prims.iter().find(|p| p.kind == PrimKind::Fill).map(|p| (g, *p)));
+            assert!(fill.is_some_and(|(g, p)| g.triangles(&p).len() == (p.count as usize - 2) * 3), "{}", icon.name());
+        }
+    }
+
+    #[test]
+    fn ear_clipping_covers_the_polygon() {
+        // a notched square, clockwise on screen
+        let pts = [pos2(0.0, 0.0), pos2(4.0, 0.0), pos2(4.0, 4.0), pos2(2.0, 2.0), pos2(0.0, 4.0)];
+        assert!(signed_area(&pts) > 0.0);
+        let tris = ear_clip(&pts);
+        assert_eq!(tris.len(), 9);
+        let area: f32 = tris
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| pts[i as usize]);
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum();
+        assert!((area - 12.0).abs() < 1e-4);
+    }
 }
