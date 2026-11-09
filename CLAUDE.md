@@ -24,6 +24,16 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   PROJECT_RULES.md). Do not delete this reminder — rewrite this section at
   release.
 
+## The move to Rust (branch `grizzly-rust`)
+
+- **The contract is `docs/RUST_MIGRATION.md`**: the architecture, the contract with the game, the phases and their gates. A change of plan is a change of that
+  document first.
+- **`Source/` is the oracle and is not edited on this branch.** The Rust editor lives in `crates/`; the C++ editor at the branch point is what it is compared with.
+- **No game change.** No phase needs a commit in the game repository; what crosses to the game is files, held to the proofs of the document's section 9.
+- **`unsafe` is forbidden** in every crate but the allow-list of section 6, and no `unsafe impl Send` / `Sync` at all. No `static` holding state, no singleton.
+- **State changes through a store's commands only**, every command is reachable over MCP, and the UI thread never waits on a file, the network or a lock.
+- The domain crates know no window: everything except the picture runs under `grizzly --headless`.
+
 ## Mod philosophy
 
 - **The editor describes what has to happen, the game does it.** An asset or a manifest key is the description; what it means lives in the game. When a build would have
