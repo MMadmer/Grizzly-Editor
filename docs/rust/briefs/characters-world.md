@@ -64,6 +64,12 @@ and the registration lines in `crates/grizzly`.
   through a slot the scene area fills later; count what the module's baked files hold now),
   `E202` (more than three player choices). Register a `BuildCheck`.
 
+## Plugging into `gz-project`
+
+`gz-project` (read the rustdoc at the top of its `lib.rs`) offers `ProjectHooks`, `AssetTemplates`
+and `AssetLists`; an area registers there what only it knows:
+- `AssetTemplates` for `character` (`content_create`), `AssetLists` for the character categories.
+
 ## Done means
 
 - `bash tools/rust/cg.sh check -p gz-characters -p gz-world --tests` clean, zero warnings. Tests

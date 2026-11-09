@@ -68,6 +68,7 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-fmt-sound` | nearly | compiles; not reviewed |
 | `gz-fmt-xr` | not started | placeholder |
 | `gz-ui` | core | theme, fonts, text, audit, layout, buttons; `icons.rs` is a placeholder (enum + names final, no glyphs); widgets, dialogs, toolbar not started |
+| `gz-project` | done | the list, `project.ltx`, path rules, asset kinds, delete checks, file ops, DARF listing, the file tree + watcher; 17 commands; hooks for other areas (open/close/scaffold/rename, templates, asset lists) |
 
 ## Findings worth keeping
 
@@ -97,6 +98,17 @@ From the text port (interrupted):
 From the engine's own headers (applied to `gz-chunk`):
 - `w_float_q16` / `w_float_q8` round (`floor(q * max + 0.5)`); `r_float_q8` divides by
   `255.0001`.
+
+From the project port:
+- `_projects.ini` and `project.ltx` are not `AutoSave` documents: the C++ edited them in place
+  (`WritePrivateProfileString`) and QA restores them behind the editor's back, so every edit
+  re-reads the file, applies itself to it and writes only a changed text (under a lock).
+- Areas plug in through `gz_project::{ProjectHooks, AssetTemplates, AssetLists}`: the module
+  area must register the `mod.ltx` scaffold (`on_scaffold`) - until it does, a created project
+  has only `project.ltx`; quests/characters/PDA register their `content_create` templates; the
+  object library / game link register the `list_assets` categories other than `Levels`.
+- The shell's `state` command takes its project fields from `gz_project::project_state`.
+- `darf.rs` is a private archive reader (chunk 1 directory + LZO entries); it moves to `gz-vfs`.
 
 ## Next packages, in dependency order
 

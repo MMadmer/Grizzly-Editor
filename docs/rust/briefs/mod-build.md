@@ -78,6 +78,14 @@ delegate). Tool schemas: `crates/gz-mcp/tools.json`. QA that pins behaviour:
 - `mod_export` answers when the job has ended (await `editor.jobs.wait(id)`); every other
   command goes on meanwhile.
 
+## Plugging into `gz-project`
+
+`gz-project` (read the rustdoc at the top of its `lib.rs`) offers `ProjectHooks`, `AssetTemplates`
+and `AssetLists`; an area registers there what only it knows:
+- the **scaffold** hook: a new project gets its `mod.ltx` (seed `[module]` as the C++
+  `project_create` does: the id and the name from the folder, the mode target) - until this
+  crate registers it, a created project has `project.ltx` alone.
+
 ## Why
 
 - "The editor describes, the game does": a build generates nothing - it ships the author's

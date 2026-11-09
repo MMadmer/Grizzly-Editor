@@ -21,6 +21,7 @@ gz-log.workspace = true
 gz-crash.workspace = true
 gz-win.workspace = true
 gz-editor.workspace = true
+gz-project.workspace = true
 gz-mcp.workspace = true
 gz-app.workspace = true
 egui.workspace = true

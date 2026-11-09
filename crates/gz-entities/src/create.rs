@@ -7,7 +7,7 @@
 use smol_str::SmolStr;
 
 use crate::class::{Class, ClassInfo};
-use crate::entity::{Header, SPAWN_VERSION};
+use crate::entity::Header;
 use crate::model::{Object, TRADER_INFINITE_AMMO, alife_flags, visual_name};
 use crate::packet::TextEncoding;
 use crate::script::Script;
@@ -270,6 +270,7 @@ pub(crate) fn construct(info: &ClassInfo, section: &str, s: &dyn Settings) -> Re
     let mut h = Header {
         section: SmolStr::new(section),
         name: SmolStr::default(),
+        game_id: 0,
         rp: 0xFE,
         position: glam::Vec3::ZERO,
         angle: glam::Vec3::ZERO,
@@ -287,7 +288,6 @@ pub(crate) fn construct(info: &ClassInfo, section: &str, s: &dyn Settings) -> Re
         spawn_id: if class.is_alife() { u16::MAX } else { 0 },
         text: TextEncoding::Cp1251,
     };
-    debug_assert!(SPAWN_VERSION > 0);
     let mut o = Object::default();
 
     // CSE_Abstract: the custom data file the section names

@@ -63,6 +63,13 @@ before `Cargo.toml`) and the registration lines in `crates/grizzly`.
   `.s`. Runs on the IO pool; several files import in parallel.
 - Validation and a `BuildCheck` with the C++ messages; `screens_get`, `screens_set`.
 
+## Plugging into `gz-project`
+
+`gz-project` (read the rustdoc at the top of its `lib.rs`) offers `ProjectHooks`, `AssetTemplates`
+and `AssetLists`; an area registers there what only it knows:
+- `AssetTemplates` for `pda` (`content_create kind=pda`), `AssetLists` for what `list_assets`
+  answers about PDA interfaces and screens.
+
 ## Done means
 
 - `bash tools/rust/cg.sh check -p gz-lua -p gz-pda -p gz-screens --tests` clean, zero warnings

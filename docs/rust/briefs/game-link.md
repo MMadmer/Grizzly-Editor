@@ -68,6 +68,13 @@ unlinked project gives a `GameLink` that answers "no game linked" - nothing may 
 - Commands: `game_link` (get / set the link: setting writes the project file through
   `gz-project`'s store), `game_modes`, `list_spawn_sections`.
 
+## Taking over from `gz-project`
+
+`crates/gz-project/src/darf.rs` holds a reader of the game's archives written for `darf_list` /
+`darf_copy`. Archives are this package's: move that reader's logic into `gz-vfs`, make
+`gz-project`'s two commands use `gz-vfs` (you may edit `gz-project` for exactly that), and delete
+the duplicate.
+
 ## Why it is shaped this way
 
 - The C++ unpacked the game's configs into `_appdata_\game_configs` and read them with the

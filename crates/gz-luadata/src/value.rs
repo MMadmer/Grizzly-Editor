@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use smol_str::SmolStr;
 
-use crate::write::format_number_lld_g15;
+use crate::write::number_to_text;
 
 /// The well-known keys, in the order every generic table is written in; any other key follows
 /// them in byte order (`kKeyOrder`).
@@ -26,13 +26,26 @@ const KEY_ORDER: &[&str] = &[
 /// (`NqKeyRank`).
 #[must_use]
 pub fn key_rank(key: &str) -> u32 {
-    KEY_ORDER.iter().position(|k| *k == key).map_or(100_000, |i| i as u32)
+    key_rank_bytes(key.as_bytes())
+}
+
+/// [`key_rank`] over bytes. Like `strcmp` in the C++, it looks at the key up to its first NUL.
+#[must_use]
+pub fn key_rank_bytes(key: &[u8]) -> u32 {
+    let key = key.split(|&b| b == 0).next().unwrap_or(&[]);
+    KEY_ORDER.iter().position(|k| k.as_bytes() == key).map_or(100_000, |i| i as u32)
 }
 
 /// The canonical order of two keys: by rank, then by bytes (`NqKeyLess`).
 #[must_use]
 pub fn key_cmp(a: &str, b: &str) -> Ordering {
-    key_rank(a).cmp(&key_rank(b)).then_with(|| a.as_bytes().cmp(b.as_bytes()))
+    key_cmp_bytes(a.as_bytes(), b.as_bytes())
+}
+
+/// [`key_cmp`] over bytes.
+#[must_use]
+pub fn key_cmp_bytes(a: &[u8], b: &[u8]) -> Ordering {
+    key_rank_bytes(a).cmp(&key_rank_bytes(b)).then_with(|| a.cmp(b))
 }
 
 /// A Lua table as data: the array part in order, then the string keys in the order they were
@@ -320,7 +333,7 @@ impl Value {
     pub fn to_text(&self, default: &str) -> String {
         match self {
             Value::String(s) => s.to_string(),
-            Value::Number(n) => format_number_lld_g15(*n),
+            Value::Number(n) => number_to_text(*n),
             Value::Bool(b) => (if *b { "true" } else { "false" }).to_owned(),
             _ => default.to_owned(),
         }

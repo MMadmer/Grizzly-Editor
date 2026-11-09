@@ -71,6 +71,7 @@ fn main() -> ExitCode {
     startup.stage("Registering commands");
     let mut registry = Registry::new();
     core_cmds::register(&mut registry);
+    gz_project::register(&mut registry);
     if !cli.headless {
         gz_app::register(&mut registry);
     }

@@ -73,13 +73,15 @@ pub struct TerrainRespawn {
 pub struct TerrainExt {
     pub arriving_npc: Vec<u16>,
     pub jobs: Vec<TerrainJob>,
+    /// When the NPC of each job section died (`utils.w_CTime`: `None` is no time).
+    pub dead_time: Vec<(SmolStr, Option<ScriptTime>)>,
     pub respawn: Option<TerrainRespawn>,
     pub faction: SmolStr,
 }
 
 impl Default for TerrainExt {
     fn default() -> Self {
-        Self { arriving_npc: Vec::new(), jobs: Vec::new(), respawn: None, faction: NIL }
+        Self { arriving_npc: Vec::new(), jobs: Vec::new(), dead_time: Vec::new(), respawn: None, faction: NIL }
     }
 }
 
@@ -270,26 +272,23 @@ impl Script {
                         need_job: r.r_stringz()?,
                     });
                 }
+                let n = usize::from(r.r_u8()?);
+                let mut dead_time = Vec::with_capacity(r.checked_count(n, 2)?);
+                for _ in 0..n {
+                    dead_time.push((r.r_stringz()?, r_ctime(r)?));
+                }
                 let respawn = if r.r_u8()? != 0 {
                     let n = usize::from(r.r_u8()?);
                     let mut spawned = Vec::with_capacity(r.checked_count(n, 2)?);
                     for _ in 0..n {
                         spawned.push((r.r_stringz()?, r.r_u8()?));
                     }
-                    let last_update = if r.r_u8()? != 0 {
-                        let mut date = [0u8; 6];
-                        for d in &mut date {
-                            *d = r.r_u8()?;
-                        }
-                        Some(ScriptTime { date, ms: r.r_u16()? })
-                    } else {
-                        None
-                    };
+                    let last_update = r_ctime(r)?;
                     Some(TerrainRespawn { spawned, last_update })
                 } else {
                     None
                 };
-                Self::SmartTerrain(Box::new(TerrainExt { arriving_npc, jobs, respawn, faction: r.r_stringz()? }))
+                Self::SmartTerrain(Box::new(TerrainExt { arriving_npc, jobs, dead_time, respawn, faction: r.r_stringz()? }))
             }
             ScriptKind::Squad => {
                 if empty {
@@ -371,6 +370,11 @@ impl Script {
                     w.w_u8(u8::from(job.begin_job));
                     w.w_stringz(&job.need_job);
                 }
+                w.w_u8(t.dead_time.len() as u8);
+                for (section, time) in &t.dead_time {
+                    w.w_stringz(section);
+                    w_ctime(w, *time);
+                }
                 match &t.respawn {
                     Some(respawn) => {
                         w.w_u8(1);
@@ -379,16 +383,7 @@ impl Script {
                             w.w_stringz(section);
                             w.w_u8(*num);
                         }
-                        match respawn.last_update {
-                            Some(time) => {
-                                w.w_u8(1);
-                                for d in time.date {
-                                    w.w_u8(d);
-                                }
-                                w.w_u16(time.ms);
-                            }
-                            None => w.w_u8(0),
-                        }
+                        w_ctime(w, respawn.last_update);
                     }
                     None => w.w_u8(0),
                 }
@@ -420,6 +415,32 @@ impl Script {
                 loopholes.push((SmolStr::new(id), true));
             }
         }
+    }
+}
+
+/// `utils.r_CTime`: a flag, then year - 2000, month, day, hour, minute, second, milliseconds.
+fn r_ctime(r: &mut NetReader<'_>) -> PacketResult<Option<ScriptTime>> {
+    if r.r_u8()? == 0 {
+        return Ok(None);
+    }
+    let mut date = [0u8; 6];
+    for d in &mut date {
+        *d = r.r_u8()?;
+    }
+    Ok(Some(ScriptTime { date, ms: r.r_u16()? }))
+}
+
+/// `utils.w_CTime`.
+fn w_ctime(w: &mut NetWriter, time: Option<ScriptTime>) {
+    match time {
+        Some(t) => {
+            w.w_u8(1);
+            for d in t.date {
+                w.w_u8(d);
+            }
+            w.w_u16(t.ms);
+        }
+        None => w.w_u8(0),
     }
 }
 
@@ -471,6 +492,7 @@ mod tests {
         let terrain = Script::SmartTerrain(Box::new(TerrainExt {
             arriving_npc: vec![5, 9],
             jobs: vec![TerrainJob { npc_id: 7, job_section: "walker".into(), begin_job: true, need_job: "nil".into() }],
+            dead_time: vec![("guard".into(), Some(ScriptTime { date: [12, 5, 1, 9, 0, 0], ms: 0 })), ("camper".into(), None)],
             respawn: Some(TerrainRespawn {
                 spawned: vec![("stalker_sim".into(), 2)],
                 last_update: Some(ScriptTime { date: [12, 5, 1, 8, 30, 0], ms: 250 }),
@@ -504,7 +526,7 @@ mod tests {
             assert_eq!(back(kind, &bytes(&s), 12), s, "{kind:?}");
         }
         assert_eq!(bytes(&Script::new(ScriptKind::Artefact)).len(), 17 * 4 + 1);
-        assert_eq!(bytes(&Script::new(ScriptKind::SmartTerrain)), b"\0\0\0nil\0");
+        assert_eq!(bytes(&Script::new(ScriptKind::SmartTerrain)), b"\0\0\0\0nil\0");
     }
 
     #[test]

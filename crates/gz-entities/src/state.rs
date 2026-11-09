@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 use crate::class::{Class, ClassInfo};
 use crate::entity::Header;
 use crate::model::{Object, SavedBone, SavedBones, Shape, skeleton_flags};
-use crate::packet::{NetReader, NetWriter, PacketError, PacketResult};
+use crate::packet::{NetReader, NetWriter, PacketResult};
 use crate::script::Script;
 use crate::{EntityError, Result};
 
@@ -1541,10 +1541,4 @@ pub(crate) fn state_write(o: &Object, h: &Header, class: Class, w: &mut NetWrite
         Class::SmartCover => w_smart_cover(o, w),
     }
     o.script.write(w);
-}
-
-impl From<PacketError> for EntityError {
-    fn from(e: PacketError) -> Self {
-        Self::Packet(e)
-    }
 }

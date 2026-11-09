@@ -66,6 +66,14 @@ Tool schemas: `crates/gz-mcp/tools.json` (every `quest_*`).
   graph tab's UI state; the UI package registers it). `quest_minimap` and `quest_layout` answer
   from `layout.rs`.
 
+## Plugging into `gz-project`
+
+`gz-project` (read the rustdoc at the top of its `lib.rs`) offers `ProjectHooks`, `AssetTemplates`
+and `AssetLists`; an area registers there what only it knows:
+- `AssetTemplates` for `quest` and `behaviour` (`content_create` writes the C++ template text);
+- `AssetLists` for the categories `list_assets` answers about graphs;
+- the `renamed` hook when a rename has to follow references.
+
 ## Why
 
 - An AI edits these assets as text and over MCP; problems are coded; `quest_get` returns an

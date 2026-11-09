@@ -92,6 +92,8 @@ pub enum IniValue {
     Vec3(Vec3),
     Vec4([f32; 4]),
     Str(String),
+    /// A value kept as the scene section had it.
+    Raw(String),
 }
 
 impl IniValue {
@@ -118,6 +120,7 @@ impl IniValue {
             Self::Vec3(v) => format!("{},{},{}", fmt_f(v.x), fmt_f(v.y), fmt_f(v.z)),
             Self::Vec4(v) => format!("{},{},{},{}", fmt_f(v[0]), fmt_f(v[1]), fmt_f(v[2]), fmt_f(v[3])),
             Self::Str(s) => format!("\"{s}\""),
+            Self::Raw(s) => s.clone(),
         }
     }
 }
@@ -298,11 +301,6 @@ impl<'a> NetReader<'a> {
         self.text
     }
 
-    pub(crate) fn merge_text_stats(&mut self, other: TextStats) {
-        self.text.utf8 |= other.utf8;
-        self.text.cp1251 |= other.cp1251;
-    }
-
     /// The read position: a byte offset, or the number of values taken.
     #[must_use]
     pub fn r_tell(&self) -> usize {
@@ -352,24 +350,6 @@ impl<'a> NetReader<'a> {
         match &self.src {
             Src::Bin { data, pos } => data.get(*pos..).unwrap_or(&[]),
             Src::Ini { .. } => &[],
-        }
-    }
-
-    /// Splits off a reader over the next `n` bytes (fewer when the packet is shorter) and
-    /// moves past them. A scene section has no block sizes: the reader is handed on whole.
-    pub(crate) fn sub(&mut self, n: usize) -> NetReader<'a> {
-        match &mut self.src {
-            Src::Bin { data, pos } => {
-                let end = pos.saturating_add(n).min(data.len());
-                let block = data.get(*pos..end).unwrap_or(&[]);
-                *pos = end;
-                NetReader { src: Src::Bin { data: block, pos: 0 }, text: TextStats::default() }
-            }
-            Src::Ini { values, counter } => {
-                let out = NetReader { src: Src::Ini { values: *values, counter: *counter }, text: TextStats::default() };
-                *counter = u32::MAX;
-                out
-            }
         }
     }
 
