@@ -35,8 +35,17 @@ kept current: a finished package updates its row and adds what it learned.
   everyday optimised build (no LTO, incremental), `--release` (thin LTO) is for shipping.
   `tools/rust/cg.sh <cargo args>` runs cargo with a summary of errors and heals a crate folder
   that is still being written.
-- **Models:** implementation agents run on Opus 5.5 at high effort, from brief files under
-  `docs/rust/briefs/`; never below Opus 5.5.
+- **Who does what:** the architecture and every decision are the lead's; implementation is done
+  by agents on Opus 5.5 at high effort (never below), each from a brief file under
+  `docs/rust/briefs/`. One agent per main task - related crates go to one agent, a task is not
+  cut into small agents - and an agent never starts agents of its own. Briefs carry decisions
+  and pointers to the C++; a stopped agent's raw reasoning is not handed on, its code is.
+- **The end of the task:** when everything is implemented, ONE critic on Fable 5.2 reviews the
+  whole work (architecture rules kept, the wire and the formats against the C++, what the fast
+  tests show), before anything is called done. Tests run then and only then, and fast.
+- **Briefs written:** `text`, `project`, `kit`, `icons`, `spawn-entities`, `ogf`, `tex-xr`,
+  `game-link`, `mod-build`, `nq`, `characters-world`, `pda-screens`, `release`, `publish`,
+  `shell`, `scene-core`, `render`.
 
 ## Crates
 
