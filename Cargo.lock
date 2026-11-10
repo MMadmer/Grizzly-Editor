@@ -1246,6 +1246,7 @@ dependencies = [
  "gz-ui-content",
  "gz-ui-mod",
  "gz-ui-previews",
+ "gz-ui-release",
  "gz-win",
  "serde_json",
 ]

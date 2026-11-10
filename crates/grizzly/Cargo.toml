@@ -39,4 +39,5 @@ gz-ui-app = { path = "../gz-ui-app" }
 gz-ui-mod = { path = "../gz-ui-mod" }
 gz-ui-content = { path = "../gz-ui-content" }
 gz-ui-previews = { path = "../gz-ui-previews" }
+gz-ui-release = { path = "../gz-ui-release" }
 serde_json.workspace = true

@@ -140,6 +140,7 @@ fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_mod::install(shell);
     gz_ui_content::install(shell);
     gz_ui_previews::install(shell);
+    gz_ui_release::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.
