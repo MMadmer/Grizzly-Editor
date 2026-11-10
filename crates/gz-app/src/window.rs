@@ -16,7 +16,8 @@ use egui_winit::winit;
 use gz_editor::{Editor, FrameStamp, SmolStr};
 use parking_lot::Mutex;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::platform::windows::WindowAttributesExtWindows;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
@@ -45,6 +46,9 @@ pub trait Shell: 'static {
     /// The window was asked to close. `true` closes it now; `false` means the shell took the
     /// request (a question about unsaved work is up) and will ask the editor to quit itself.
     fn close_requested(&mut self) -> bool;
+
+    /// The window is going away: what must be written is written now.
+    fn exiting(&mut self) {}
 }
 
 #[derive(Clone, Debug)]
@@ -56,11 +60,23 @@ pub struct WindowOptions {
     pub maximized: bool,
     /// The system's title bar and border. Off when the shell draws its own caption.
     pub decorations: bool,
+    /// Where the window's outer top-left corner goes, in points; `None` lets the system pick.
+    pub position: Option<[f32; 2]>,
+    /// The window's icon: square straight RGBA and its side.
+    pub icon: Option<(Vec<u8>, u32)>,
 }
 
 impl Default for WindowOptions {
     fn default() -> Self {
-        Self { title: "Grizzly Editor".to_owned(), size: [1440.0, 900.0], min_size: [960.0, 600.0], maximized: false, decorations: true }
+        Self {
+            title: "Grizzly Editor".to_owned(),
+            size: [1440.0, 900.0],
+            min_size: [960.0, 600.0],
+            maximized: false,
+            decorations: true,
+            position: None,
+            icon: None,
+        }
     }
 }
 
@@ -113,14 +129,24 @@ struct App {
 impl App {
     fn create(&mut self, event_loop: &ActiveEventLoop) -> Result<Live, String> {
         let start_minimized = gz_win::started_minimized();
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(&self.opts.title)
             .with_inner_size(LogicalSize::new(self.opts.size[0], self.opts.size[1]))
             .with_min_inner_size(LogicalSize::new(self.opts.min_size[0], self.opts.min_size[1]))
             .with_decorations(self.opts.decorations)
             .with_maximized(self.opts.maximized && !start_minimized)
             // shown after the first frame is painted: no white flash
-            .with_visible(false);
+            .with_visible(false)
+            // QA finds the window by its class
+            .with_class_name("Grizzly Editor");
+        if let Some([x, y]) = self.opts.position {
+            attrs = attrs.with_position(LogicalPosition::new(x, y));
+        }
+        if let Some((rgba, side)) = self.opts.icon.clone()
+            && let Ok(icon) = winit::window::Icon::from_rgba(rgba, side, side)
+        {
+            attrs = attrs.with_window_icon(Some(icon));
+        }
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| format!("the window could not be created: {e}"))?);
 
         let ctx = egui::Context::default();
@@ -174,6 +200,12 @@ impl App {
         *self.repaint_at.lock() = None;
 
         let mut raw = live.input.take_egui_input(&live.window);
+        // A minimized editor is drawn the way it looks restored: an undecorated window reports the
+        // size of its taskbar button while it is iconic
+        if live.window.is_minimized() == Some(true) {
+            let ppp = live.window.scale_factor() as f32 * live.ctx.zoom_factor();
+            raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(live.size_px[0] as f32, live.size_px[1] as f32) / ppp.max(0.01)));
+        }
         egui_winit::update_viewport_info(&mut live.info, &live.ctx, &live.window, self.frame == 0);
         raw.viewports.insert(ViewportId::ROOT, live.info.clone());
 
@@ -271,6 +303,11 @@ impl ApplicationHandler<UserEvent> for App {
         }
         match event {
             WindowEvent::Resized(size) => {
+                // iconic, the window keeps the size it is pictured at
+                if live.window.is_minimized() == Some(true) {
+                    self.dirty = true;
+                    return;
+                }
                 if let (Some(w), Some(h)) = (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height)) {
                     live.size_px = [size.width, size.height];
                     live.painter.on_window_resized(ViewportId::ROOT, w, h);
@@ -310,6 +347,7 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.shell.exiting();
         *self.link.gpu.lock() = None;
         self.live = None;
     }

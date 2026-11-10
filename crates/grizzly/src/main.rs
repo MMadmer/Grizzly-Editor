@@ -2,7 +2,6 @@
 
 mod cli;
 mod core_cmds;
-mod spike;
 mod startup;
 
 use std::path::{Path, PathBuf};
@@ -71,15 +70,17 @@ fn main() -> ExitCode {
     startup.stage("Registering commands");
     let mut registry = Registry::new();
     core_cmds::register(&mut registry);
+    // the frame's commands, also headless (they answer "no window" there); an area that owns one
+    // of them (ui_panel) registers after this and keeps its own
+    gz_app::register(&mut registry);
     gz_project::register(&mut registry);
+    gz_game::register(&mut registry);
     gz_mod::register(&mut registry);
     gz_build::register(&mut registry);
-    if !cli.headless {
-        gz_app::register(&mut registry);
-    }
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
+    gz_app::project::set_project_probe(&editor, project_probe);
     gz_mod::install(&editor);
 
     startup.stage("Opening the control endpoint");
@@ -94,17 +95,41 @@ fn main() -> ExitCode {
         open_project_at_start(&runtime, &editor, project);
     }
 
-    startup.finish(&log);
-
     if cli.headless {
+        startup.finish(&log);
         // Without a window the editor lives until it is told to quit.
         runtime.block_on(editor.quit_token().cancelled());
-    } else if let Err(e) = gz_app::run(editor.clone(), gz_app::WindowOptions::default(), Box::new(spike::SpikeShell::new())) {
-        log.error(&e);
-        return ExitCode::from(2);
+    } else {
+        startup.stage("Loading fonts");
+        let fonts = gz_ui::font::FontFiles::read(&gz_ui::font::system_font_dir());
+        startup.stage("Building the shell");
+        let mut shell = gz_app::ShellBuilder::new();
+        install_ui(&mut shell);
+        let opts = gz_app::window_options(&editor);
+        let shell = gz_app::GrizzlyShell::new(editor.clone(), shell, gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet });
+        startup.finish(&log);
+        if let Err(e) = gz_app::run(editor.clone(), opts, Box::new(shell)) {
+            log.error(&e);
+            return ExitCode::from(2);
+        }
     }
     log.info("Grizzly Editor closed");
     ExitCode::SUCCESS
+}
+
+/// What the UI crates plug into the shell: each one's `install`, one line per crate.
+fn install_ui(_shell: &mut gz_app::ShellBuilder) {}
+
+/// How the shell reads the open project: the project area's own answer.
+fn project_probe(editor: &Editor) -> gz_app::project::ProjectInfo {
+    let state = gz_project::project_state(editor);
+    let text = |k: &str| state.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_owned();
+    gz_app::project::ProjectInfo {
+        active: state.get("project_active").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        folder: text("project"),
+        name: text("project_name"),
+        game_linked: gz_project::Project::of(editor).is_ok_and(|(_, p)| p.game_linked()),
+    }
 }
 
 fn open_project_at_start(runtime: &Runtime, editor: &std::sync::Arc<Editor>, project: &Path) {

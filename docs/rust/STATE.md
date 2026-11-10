@@ -54,7 +54,7 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-base`, `gz-task`, `gz-store`, `gz-query`, `gz-log` | done | layer 0 |
 | `gz-win`, `gz-crash` | done | `gz-win` is the only crate with `unsafe` |
 | `gz-editor`, `gz-mcp` | done | context, registry, `AutoSave`, `fsx`, the endpoint |
-| `gz-app`, `grizzly` | skeleton | window loop, `screenshot_editor`; the shell is a spike (`grizzly/src/spike.rs`) |
+| `gz-app`, `grizzly` | done | the shell: caption (menus, fold under 1100 pt, tab strip, drag band, window buttons, 6 pt resize edges), toolbar, status bar, work area, drawers, Task Center card, palette, keys, session, settings file `grizzly_editor.ltx`; `ShellBuilder` + `Document` for areas (`install(b)` lines go into `grizzly/src/main.rs` `install_ui`); `UiQueue`/`on_ui`; 22 commands (`state`, `ui_*`, `window_control`, `titlebar_info`, `reset_layout`, `theme`, `preferences`, `shortcuts`, `command_palette`, `progress`, `screenshot_editor`). Not matched: WM_NCHITTEST (no subclassing without `gz-win`), busy frame (no blocking jobs). Tests written, not run |
 | `gz-chunk` | done | reader, writer, `lzhuf` (byte-equal compress), `lzo` (LZO1X + archive index helpers) |
 | `gz-ltx` | done | `doc.rs` (lossless); `tree.rs`: `parse_file` (parallel per file) + `Ltx::assemble` / `Builder` (the sequential C++ load), `Dialect::Editor` / `Dialect::Game` (`#include_optional`, `*.ltx` includes, multi-line recovery, XMS layer merge, `.ltxp` patches) |
 | `gz-luadata` | done | `parse` = LuaJIT 2.1 lexer/parser port (the editor's fork) + `DeclarativeProblem` + a run of the data subset with the interpreter's semantics; writer byte-equal to `NqLua.cpp` (`write_value`, `write_node`, `write_asset`); `syntax_check`; JSON |
@@ -188,6 +188,17 @@ From the kit:
   every frame: it draws the queued questions, runs the answers and rotates what `open_dialogs`
   reports.
 - MCP's unsaved prompt answers Cancel (the command decides with `save` / `discard` first).
+
+From the shell:
+- An undecorated window reports its taskbar button's size while iconic: `window.rs` ignores
+  `Resized` then and feeds egui the last restored size, so a minimised editor is pictured whole.
+- `gz-crash` makes every main-thread panic fatal; the shell wraps that hook so a panic inside a
+  document's `body` only logs (unless `-nodlg`) and the tab shows its error page.
+- The shell knows the project only through `gz_app::project::set_project_probe` (main installs
+  `gz-project`'s answer); jobs publish their card JSON into `gz_app::TaskCardTable`, an `Editor`
+  service keyed by a std type so area crates below the UI need no `gz-app` dependency.
+- A kit question's `then` is `Send` and cannot touch the shell: it posts to `UiQueue::post`.
+- egui 0.37 deprecates `Id::new` and `Ui::id`: use `Id::unique` / `Ui::scope_id`.
 
 From the manifest and build port:
 - `mod.ltx` is not read with `gz_ltx::LtxDoc`: the manifest reader (C++ `Load`, the game's XMS)

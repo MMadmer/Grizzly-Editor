@@ -4,8 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply, json};
+use gz_editor::{Args, ArgsExt, CmdError, Editor, Registry, Reply, Value, json};
+use gz_ui::dialog;
 
+use crate::contract;
+use crate::queue::UiQueue;
 use crate::window::WindowLink;
 
 const AREA: &str = "window";
@@ -41,6 +44,26 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
         .map_err(|_| CmdError::new("no_frame", "the editor did not draw a frame in time"))?
         .map_err(|_| CmdError::internal("the picture was lost"))?;
 
+    // the modal on top of the frame just pictured: a kit dialog (its `dlg.<name>`), else the palette
+    let modal = match UiQueue::of(&editor) {
+        Ok(q) => q
+            .run(|shell, ctx| {
+                if let Some(d) = dialog::modal_on_top(ctx) {
+                    let [x0, y0, x1, y1] = d.rect_px;
+                    return Ok(json!({ "title": d.title, "id": d.id, "x": x0.floor() as i64, "y": y0.floor() as i64, "w": (x1 - x0).floor() as i64, "h": (y1 - y0).floor() as i64 }));
+                }
+                if shell.palette_open() {
+                    let ppp = ctx.pixels_per_point();
+                    let r = shell.palette_rect();
+                    return Ok(json!({ "title": "Command Palette", "id": contract::PALETTE_ID, "x": (r.min.x * ppp).floor() as i64, "y": (r.min.y * ppp).floor() as i64, "w": (r.width() * ppp).floor() as i64, "h": (r.height() * ppp).floor() as i64 }));
+                }
+                Ok(Value::Null)
+            })
+            .await
+            .unwrap_or(Value::Null),
+        Err(_) => Value::Null,
+    };
+
     let stamp = editor.frames.current();
     let [w, h] = image.size;
     let png = editor
@@ -59,8 +82,13 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
         "png_base64": encoded,
         "width": w,
         "height": h,
-        "dpi": stamp.scale,
         "active_tab": stamp.active_tab,
+        // jobs run beside the editor: no frame is ever a busy one
+        "busy": false,
+        "dpi": (f64::from(stamp.scale) * 1000.0).round() / 1000.0,
+        // panels never leave the window: there is nothing outside the picture
+        "outside": [],
+        "modal": modal,
         "frame": stamp.frame,
     }))
 }
