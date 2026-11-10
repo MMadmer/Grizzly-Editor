@@ -139,5 +139,8 @@ Rules for commands:
   wait and retry; do not fix it.
 - Compile with `cargo check -p <crate>` (and `--tests` once). The target directory is shared:
   "Blocking waiting for file lock" is normal, wait for it.
+- **Running the editor for a look** goes through `tools/rust/run-editor.ps1` only: one run at
+  a time on the machine (a lock), the project list and the settings file restored byte for
+  byte, the window minimised. Never start `Grizzly.exe` by hand.
 - **Tests are written, not run.** Unit tests with small inline fixtures go into the crate;
   running them is the last phase of the migration.

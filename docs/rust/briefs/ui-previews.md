@@ -75,6 +75,13 @@ its `Cargo.toml`, and - only for the two device notes below - `crates/gz-app/src
   action=close`. If `grizzly` does not build because of someone else's crate, wait and retry a
   few times, then say so. Do not run the QA suites.
 
+- **Running the editor:** only through `pwsh -NoProfile -File tools\rust\run-editor.ps1 -Driver
+  <your script.py> [-EditorArgs '...']`. It takes a machine-wide lock (other authors run the
+  editor too), backs up and restores `_projects.ini` and the settings file byte for byte,
+  starts the editor minimised, hands your driver the port as its first argument and closes
+  the editor afterwards. Never start `Grizzly.exe` by hand and never back those files up
+  yourself.
+
 ## Report
 
 Under 300 words: what is built, `local_*` widgets, what the pictures showed, deviations from

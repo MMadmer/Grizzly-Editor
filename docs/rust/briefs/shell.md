@@ -146,6 +146,13 @@ C++ error for an unknown panel until it registers them. Reads never switch the t
   socket, LOOK at the PNG, close with `window_control action=close`). This one look is part of
   the task: a shell nobody looked at is not done. Do not run the QA suites.
 
+- **Running the editor:** only through `pwsh -NoProfile -File tools\rust\run-editor.ps1 -Driver
+  <your script.py> [-EditorArgs '...']`. It takes a machine-wide lock (other authors run the
+  editor too), backs up and restores `_projects.ini` and the settings file byte for byte,
+  starts the editor minimised, hands your driver the port as its first argument and closes
+  the editor afterwards. Never start `Grizzly.exe` by hand and never back those files up
+  yourself.
+
 ## Report
 
 Under 400 words: what is built, the `ShellBuilder` API (later packages plug into it), the
