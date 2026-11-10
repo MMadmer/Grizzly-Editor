@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
-use crate::darf::DarfIndex;
+use gz_vfs::GameFiles;
 use crate::fsys;
 use crate::{asset_kind, paths};
 
@@ -126,11 +126,11 @@ fn ensure_dir_reason(dir: &str) -> Result<(), String> {
     }
 }
 
-/// The file operations on one project. `darf` gives the linked game's listing, mounted on first
+/// The file operations on one project. `game` gives the linked game's index, mounted on first
 /// need, for a copy whose source is not on disk.
 pub struct FileOps<'a> {
     root: &'a str,
-    darf: &'a (dyn Fn() -> Option<Arc<DarfIndex>> + 'a),
+    game: &'a (dyn Fn() -> Option<Arc<GameFiles>> + 'a),
     /// Every folder an operation wrote into or removed from, absolute: what the file tree
     /// re-lists.
     pub touched: Vec<String>,
@@ -138,8 +138,8 @@ pub struct FileOps<'a> {
 
 impl<'a> FileOps<'a> {
     #[must_use]
-    pub fn new(root: &'a str, darf: &'a (dyn Fn() -> Option<Arc<DarfIndex>> + 'a)) -> Self {
-        Self { root, darf, touched: Vec::new() }
+    pub fn new(root: &'a str, game: &'a (dyn Fn() -> Option<Arc<GameFiles>> + 'a)) -> Self {
+        Self { root, game, touched: Vec::new() }
     }
 
     fn touch(&mut self, dir: &str) {
@@ -240,9 +240,9 @@ impl<'a> FileOps<'a> {
     /// The last resort for a source that is not on disk: a file inside the linked game's
     /// archives. `false` when there is no such file.
     fn copy_from_game(&mut self, src: &str, dst_dir: &str, overwrite: bool, rep: &mut Report) -> bool {
-        let Some(darf) = (self.darf)() else { return false };
-        let Some(item) = darf.find(src) else { return false };
-        let dst = paths::join(dst_dir, paths::leaf_of(&item.path));
+        let Some(game) = (self.game)() else { return false };
+        let Some(item) = game.get(src) else { return false };
+        let dst = paths::join(dst_dir, item.name());
         if fsys::file_exists(Path::new(&dst)) && !overwrite {
             rep.skip(&dst, "already exists (pass overwrite=1)");
             return true;
@@ -252,7 +252,7 @@ impl<'a> FileOps<'a> {
             return true;
         }
         self.touch(dst_dir);
-        let Ok(data) = darf.read(item) else {
+        let Ok(data) = game.read_ref(item) else {
             rep.fail(src, "cannot read the archived file");
             return true;
         };
@@ -532,7 +532,7 @@ mod tests {
         }
     }
 
-    fn no_game() -> Option<Arc<DarfIndex>> {
+    fn no_game() -> Option<Arc<GameFiles>> {
         None
     }
 

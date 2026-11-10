@@ -4,20 +4,21 @@
 //!   read again before every use, as the C++ did: QA restores it behind the editor's back, and
 //!   a list that only lived in memory would write the old one over it.
 //! - [`Project`] (project scope, in `session.services`): `project.ltx` in a store, saved as it
-//!   is edited, the file tree, the scene to reopen and the linked game's listing.
+//!   is edited, the file tree, the scene to reopen and the linked game's index (`gz-vfs`), with
+//!   the revision that moves whenever another index takes its place.
 //!
 //! Neither holds unsaved work, so no `DirtySource` is registered.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gz_base::{Origin, RelPath};
-use gz_editor::{CmdError, Editor, Executors, ProjectSession, Store};
+use gz_base::{Origin, RelPath, Rev, RevCounter};
+use gz_editor::{CmdError, Editor, Executors, Log, ProjectSession, Store};
 use gz_store::{Apply, State, StoreOptions};
+use gz_vfs::{GameFiles, MountOptions, looks_like_game};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
-use crate::darf::DarfIndex;
 use crate::list::{self, ProjectList, Sort};
 use crate::paths;
 use crate::project::ProjectFile;
@@ -210,8 +211,25 @@ pub struct Project {
     /// The project's files, kept current.
     pub tree: TreeWatch,
     scene: Mutex<SceneSlots>,
-    darf: Mutex<Option<Arc<DarfIndex>>>,
+    game: Mutex<Option<GameMount>>,
+    /// Moves whenever another game index takes the place of the last one.
+    game_rev: RevCounter,
+    /// One mount at a time: two first readers must not read the game twice.
+    mount_lock: Mutex<()>,
+    /// `appdata\game_index`: where the game indexes are saved between starts.
+    index_dir: PathBuf,
+    log: Log,
 }
+
+/// The linked game's index and the revision it was put in place at.
+struct GameMount {
+    root: String,
+    files: Arc<GameFiles>,
+    rev: Rev,
+}
+
+/// Why the open project has no game to read.
+pub const NOT_LINKED: &str = "the project is not linked to a game install";
 
 impl Project {
     pub(crate) fn new(editor: &Editor, root: &str, name: &str, file: ProjectFile) -> Project {
@@ -229,7 +247,11 @@ impl Project {
             lock: tokio::sync::Mutex::new(()),
             tree,
             scene: Mutex::new(SceneSlots::default()),
-            darf: Mutex::new(None),
+            game: Mutex::new(None),
+            game_rev: RevCounter::new(),
+            mount_lock: Mutex::new(()),
+            index_dir: editor.paths.appdata.join("game_index"),
+            log: editor.log.clone(),
         }
     }
 
@@ -267,7 +289,7 @@ impl Project {
     #[must_use]
     pub fn game_linked(&self) -> bool {
         let root = self.game_root();
-        !root.is_empty() && crate::darf::looks_like_game(&root).is_ok()
+        !root.is_empty() && looks_like_game(&root).is_ok()
     }
 
     /// Applies an edit to `project.ltx` as the disk has it now and writes it.
@@ -326,25 +348,103 @@ impl Project {
         s.scene.as_ref().or(earlier).map(RelPath::to_backslash)
     }
 
-    /// The linked game's listing, mounted on first need and again when the link changes.
-    /// Blocking: call it on the IO pool.
-    pub fn darf_index(&self) -> Result<Arc<DarfIndex>, String> {
-        let root = self.game_root();
-        if root.is_empty() || crate::darf::looks_like_game(&root).is_err() {
-            return Err("the project is not linked to a game install".into());
+    /// Mounts the game at `root` (over `prev`, the saved index then being that one) and logs what
+    /// the C++ logged. Blocking.
+    fn mount(&self, root: &str, prev: Option<&GameFiles>) -> Result<GameFiles, String> {
+        let opts = MountOptions { cache_dir: Some(self.index_dir.clone()) };
+        let files = match prev {
+            Some(p) => p.refresh(&opts),
+            None => GameFiles::mount(Path::new(root), &opts),
         }
-        if let Some(index) = self.darf.lock().as_ref()
-            && index.root.eq_ignore_ascii_case(&root)
-        {
-            return Ok(index.clone());
+        .map_err(|e| e.to_string())?;
+        for (path, why) in files.skipped() {
+            self.log.warn(format!("DARF: '{}' is not a readable archive, skipped ({why})", path.display()));
         }
-        let index = Arc::new(DarfIndex::mount(&root)?);
-        *self.darf.lock() = Some(index.clone());
-        Ok(index)
+        if let Some(problem) = &files.stats().cache_problem {
+            self.log.warn(problem.clone());
+        }
+        self.log.info(format!("DARF content mounted: {} archives, {} files ({root})", files.archives().len(), files.len()));
+        Ok(files)
     }
 
-    pub(crate) fn put_darf(&self, index: Arc<DarfIndex>) {
-        *self.darf.lock() = Some(index);
+    fn put_game(&self, root: &str, files: Arc<GameFiles>) -> Rev {
+        let rev = self.game_rev.bump();
+        *self.game.lock() = Some(GameMount { root: root.to_owned(), files, rev });
+        rev
+    }
+
+    /// The linked game root when it still looks like a game, or [`NOT_LINKED`].
+    fn linked_root(&self) -> Result<String, String> {
+        let root = self.game_root();
+        if root.is_empty() || looks_like_game(&root).is_err() {
+            return Err(NOT_LINKED.into());
+        }
+        Ok(root)
+    }
+
+    fn current_game(&self, root: &str) -> Option<(Arc<GameFiles>, Rev)> {
+        self.game.lock().as_ref().filter(|m| m.root.eq_ignore_ascii_case(root)).map(|m| (m.files.clone(), m.rev))
+    }
+
+    /// The linked game's index and its revision, mounted on first need and again when the link
+    /// changes. Blocking: call it on the IO pool (the mount runs its parallel work there).
+    pub fn game_snapshot(&self) -> Result<(Arc<GameFiles>, Rev), String> {
+        let root = self.linked_root()?;
+        if let Some(hit) = self.current_game(&root) {
+            return Ok(hit);
+        }
+        let _one = self.mount_lock.lock();
+        if let Some(hit) = self.current_game(&root) {
+            return Ok(hit);
+        }
+        let files = Arc::new(self.mount(&root, None)?);
+        let rev = self.put_game(&root, files.clone());
+        Ok((files, rev))
+    }
+
+    /// The linked game's index. Blocking, like [`Project::game_snapshot`].
+    pub fn game_files(&self) -> Result<Arc<GameFiles>, String> {
+        self.game_snapshot().map(|(files, _)| files)
+    }
+
+    /// The revision of the game index in place: what everything derived from the game is keyed by.
+    #[must_use]
+    pub fn game_rev(&self) -> Rev {
+        self.game_rev.get()
+    }
+
+    /// Checks the linked game against the disk again (only what changed is read) and puts the
+    /// new index in place. Blocking.
+    pub fn refresh_game(&self) -> Result<(Arc<GameFiles>, Rev), String> {
+        let root = self.linked_root()?;
+        let _one = self.mount_lock.lock();
+        let prev = self.current_game(&root).map(|(files, _)| files);
+        let files = Arc::new(self.mount(&root, prev.as_deref())?);
+        let rev = self.put_game(&root, files.clone());
+        Ok((files, rev))
+    }
+
+    /// Links the project to the game in `folder`: checks it, mounts its content and writes
+    /// `[project] game_root` (`EditorProject::LinkGame`). The reason on failure.
+    pub async fn link_game(self: &Arc<Self>, folder: &str) -> Result<(), String> {
+        let clean = paths::trim_trailing(paths::to_backslash(folder)).trim_end_matches('\\').to_owned();
+        let current = self.game_root();
+        if !current.is_empty() && paths::same_path(&current, &clean) {
+            let probe = clean.clone();
+            return self.exec.io(move || looks_like_game(&probe)).await.map_err(str::to_owned);
+        }
+        let (p, probe) = (self.clone(), clean.clone());
+        let files = self
+            .exec
+            .io(move || {
+                let _one = p.mount_lock.lock();
+                p.mount(&probe, None)
+            })
+            .await?;
+        self.edit(FileCmd::GameRoot(clean.clone())).await.map_err(|e| e.message)?;
+        self.put_game(&clean, Arc::new(files));
+        self.log.info(format!("Game linked: {clean}"));
+        Ok(())
     }
 }
 

@@ -68,7 +68,9 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-fmt-sound` | done | OGG comment params (versions 1-3) rewritten without re-encoding, sound THM, PCM via lewton, peaks; spot-checked against `SoundRender_Source_loader.cpp` |
 | `gz-fmt-xr` | done | `lanims.xr` read/write + colour at a frame, `gamemtl.xr` read, `shaders.xr` read (constants, matrices, blender descriptions + raw property streams), `shaders_xrlc.xr` read/write, `particles.xr` read with the action stream typed, `senvironment.xr` read/write |
 | `gz-ui` | done | theme, fonts, text, audit, layout, buttons; icons (all 189 glyphs, `icons/geometry.rs` + `icons/paint.rs`, `sheet`); widgets: `search`, `menu`, `toolbar`, `grid`, `list`, `splitter`, `state`, `card`, `dialog`, `units`. Not yet driven by a shell; tests written, not run |
-| `gz-project` | done | the list, `project.ltx`, path rules, asset kinds, delete checks, file ops, DARF listing, the file tree + watcher; 17 commands; hooks for other areas (open/close/scaffold/rename, templates, asset lists) |
+| `gz-project` | done | the list, `project.ltx`, path rules, asset kinds, delete checks, file ops, DARF listing, the file tree + watcher; 16 commands; hooks for other areas (open/close/scaffold/rename, templates, asset lists); holds the linked game's `GameFiles` (`game_snapshot`, `refresh_game`, `link_game`, `game_rev`) |
+| `gz-vfs` | done | `GameFiles`: loose `gamedata` over `fsgame.ltx`'s `$arch_dir...$` archives (later over earlier), modules of `modules\` / `mods\` as roots of their own; `get` / `list` / `find` / `read` / `read_many` from the index; the saved index (`appdata\game_index\<hash>.bin`) checked by folder / archive stamps; tests written, not run |
+| `gz-game` | done | `GameLink` (project scope): `files`, `rev`, `refresh`, and as queries keyed by `rev`: `configs` (BFS include discovery, parallel parse, editor `CInifile` rules), `language`, `strings`, `texture_sheets`, `modes`, `spawn_sections`, `game_version`; `Bundled` + `read_game_or_bundled` / `spawn_roster`; commands `game_link`, `game_modes`, `list_spawn_sections`; tests written, not run |
 | `gz-mod` | done | `mod.ltx`: its own lossless `ManifestDoc` (the C++ comment rules, see findings), the typed `Manifest`, `Edit`s, metadata rules, `[commands]` (`E401`..`W408`), `[exclude]` / `outside_build`, `ManifestService` (store + `AutoSave`, outside changes reloaded); `mod_manifest`, `mod_set_manifest`, `mod_exclude`, `mod_commands`; the scaffold hook (`gz_mod::install`); slots `ManifestFields` (`world`) and `ManifestArgs` (`tags`, `thumbnail`) |
 | `gz-build` | done | `BuildWalk` from the file tree, `BuildCheck` / `BuildChecks` (+ the bake slot), target refusals, the clean build in `modules\.new\<id>` with hard links and two renames, the flat export + report, `run_build` (for `gz-release`), `Builds` (job `build`, results, Task Center `BuildStatus`, `CleanQuestion`); `mod_export` |
 
@@ -128,7 +130,25 @@ From the project port:
   has only `project.ltx`; quests/characters/PDA register their `content_create` templates; the
   object library / game link register the `list_assets` categories other than `Levels`.
 - The shell's `state` command takes its project fields from `gz_project::project_state`.
-- `darf.rs` is a private archive reader (chunk 1 directory + LZO entries); it moves to `gz-vfs`.
+- `darf.rs` was a private archive reader; it is gone - `darf_list`, `darf_copy` and the file
+  ops read `gz-vfs`'s `GameFiles`, which `Project` mounts on first need. `game_link` moved to
+  `gz-game` (the setter is `Project::link_game`).
+
+From the game link:
+- The index keeps the C++ editor's order: keys have `/`, but they sort as their backslash
+  spellings did (`a1.ogg` before `a/x.ogg`), so `darf_list` and the mode captions' "first file
+  wins" come out as before.
+- Archives are those of `fsgame.ltx`'s `$arch_dir...$` aliases in its order (`database\` without
+  one); the engine meets them while scanning any alias. An archive's `entry_point` and its
+  `auto_load = false` are ignored, as DARF ignored them. Marked `// oracle:` in `gz-vfs`.
+- The configs are read with the C++ editor's `CInifile` rules (`Dialect::Editor`: a missing
+  include is skipped), as `EditorGameConfigs` handed them to it; cp1251. Without a link (or when
+  the linked configs fail) `list_spawn_sections` reads the editor's own `gamedata\configs`.
+- Whatever writes into the game (Build Into Game) must call `GameLink::refresh()` afterwards:
+  the C++ called `EditorGameModes::Invalidate`; here the modes, configs and strings follow the
+  new index revision by themselves.
+- `game_link` / `game_modes` refusals carry `error` before their fields (the shared error
+  reply); the C++ `game_link` refusal had no `error` key at all.
 
 From the OGF port:
 - Verified: both `CalculateTB` bodies are commented out (skinned vertices carry the

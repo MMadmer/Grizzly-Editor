@@ -1,5 +1,5 @@
 //! The project area's commands. The wire is the C++ handlers': `GrizzlyMCP.cpp` (list_projects,
-//! open_project), `EditorProject.cpp` (project_*, game_link), `EditorFileOps.cpp` (content_*),
+//! open_project), `EditorProject.cpp` (project_*), `EditorFileOps.cpp` (content_*),
 //! `EditorGameContent.cpp` (darf_*), `LevelMcpContent.cpp` (content_create, list_assets).
 
 use std::path::{Path, PathBuf};
@@ -15,7 +15,8 @@ use crate::list::{self, EntryState};
 use crate::ops::{FileOps, Report};
 use crate::project::{self, ProjectFile};
 use crate::service::{FileCmd, ListCmd, Project, Projects};
-use crate::{darf, fsys, paths, rules};
+use crate::{fsys, paths, rules};
+use gz_vfs::GameFiles;
 
 const AREA: &str = "gz-project";
 
@@ -30,7 +31,6 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "project_delete", project_delete);
     reg.add(AREA, "project_forget", project_forget);
     reg.add(AREA, "project_reveal", project_reveal);
-    reg.add(AREA, "game_link", game_link);
     reg.add(AREA, "darf_list", darf_list);
     reg.add(AREA, "darf_copy", darf_copy);
     reg.add(AREA, "content_copy", content_copy);
@@ -413,70 +413,36 @@ async fn project_reveal(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     Ok(json!({ "path": paths::wire(&folder), "opened": !dry, "dry_run": dry }))
 }
 
-// ---- the linked game ----------------------------------------------------------------------------
+// ---- the linked game's files (DARF) ---------------------------------------------------------
 
-/// Links the open project to `folder` and mounts its content. The reason on failure.
-async fn link_game(ed: &Arc<Editor>, project: &Arc<Project>, folder: &str) -> Result<(), String> {
-    let clean = paths::trim_trailing(paths::to_backslash(folder)).trim_end_matches('\\').to_owned();
-    let current = project.game_root();
-    if !current.is_empty() && paths::same_path(&current, &clean) {
-        let probe = clean.clone();
-        return ed.exec.io(move || darf::looks_like_game(&probe)).await.map_err(str::to_owned);
-    }
-    let probe = clean.clone();
-    let index = ed.exec.io(move || darf::DarfIndex::mount(&probe)).await?;
-    for skipped in &index.skipped {
-        ed.log.warn(format!("DARF: '{skipped}' is not a readable archive, skipped"));
-    }
-    ed.log.info(format!("DARF content mounted: {} archives, {} files ({})", index.archives.len(), index.items.len(), index.root));
-    project.put_darf(Arc::new(index));
-    project.edit(FileCmd::GameRoot(clean.clone())).await.map_err(|e| e.message)?;
-    ed.log.info(format!("Game linked: {clean}"));
-    Ok(())
-}
-
-/// `{linked, game_root, reason}` of the open project.
-async fn link_fields(ed: &Arc<Editor>, project: &Arc<Project>, reason: &str) -> Map<String, Value> {
-    let p = project.clone();
-    let linked = ed.exec.io(move || p.game_linked()).await;
-    let mut m = Map::new();
-    m.insert("linked".into(), json!(linked));
-    m.insert("game_root".into(), json!(paths::wire(&project.game_root())));
-    m.insert("reason".into(), json!(reason));
-    m
-}
-
-async fn game_link(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Ok((_, project)) = Project::of(&ed) else {
-        let reason = "no project is open";
-        let fields = Map::from_iter([("linked".to_owned(), json!(false)), ("game_root".to_owned(), json!("")), ("reason".to_owned(), json!(reason))]);
-        return Err(refuse_with(reason, fields));
-    };
-    if let Some(path) = arg_path(&args, "path") {
-        return match link_game(&ed, &project, &path).await {
-            Ok(()) => Ok(Value::Object(link_fields(&ed, &project, "").await)),
-            Err(reason) => {
-                let fields = link_fields(&ed, &project, &reason).await;
-                Err(refuse_with(reason, fields))
-            }
-        };
-    }
-    // a report: what is wrong with the link is a reason, not a failure
-    let root = project.game_root();
-    let reason = if root.is_empty() {
-        "no game linked".to_owned()
-    } else {
-        ed.exec.io(move || darf::looks_like_game(&root).err().unwrap_or_default().to_owned()).await
-    };
-    Ok(Value::Object(link_fields(&ed, &project, &reason).await))
-}
-
-/// The linked game's listing of the open project, mounted on first need.
-async fn mounted(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<darf::DarfIndex>), CmdError> {
+/// The linked game's index of the open project, mounted on first need.
+async fn mounted(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<GameFiles>), CmdError> {
     let Ok((_, project)) = Project::of(ed) else { return Err(refuse("no project is open")) };
     let p = project.clone();
-    let index = ed.exec.io(move || p.darf_index()).await.map_err(refuse)?;
-    Ok((project, index))
+    let files = ed.exec.io(move || p.game_files()).await.map_err(refuse)?;
+    Ok((project, files))
+}
+
+/// Copies a file of the game to `<project>\gamedata\<its path>`, the one write path of the DARF
+/// browser (`EditorGameContent::CopyToProject`). `Ok((target, existed))`, or the target, whether
+/// it existed and the C++ reason.
+fn copy_to_project(files: &GameFiles, project_root: &str, rel: &str, overwrite: bool) -> Result<(String, bool), (String, bool, &'static str)> {
+    let Some(item) = files.get(rel) else { return Err((String::new(), false, "unknown file")) };
+    let target = format!("{project_root}\\gamedata\\{}", paths::to_backslash(item.path));
+    let existed = fsys::file_exists(Path::new(&target));
+    if existed && !overwrite {
+        return Err((target, true, "already exists"));
+    }
+    let Ok(data) = files.read_ref(item) else { return Err((target, existed, "can't read the source file")) };
+    if let Some(parent) = Path::new(&target).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    fsys::clear_readonly(Path::new(&target));
+    let Ok(mut file) = std::fs::File::create(&target) else { return Err((target, existed, "can't create the target file")) };
+    if std::io::Write::write_all(&mut file, &data).is_err() {
+        return Err((target, existed, "write failed"));
+    }
+    Ok((target, existed))
 }
 
 async fn darf_list(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
@@ -487,7 +453,7 @@ async fn darf_list(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let limit = args.i64("limit").filter(|&v| v > 0).unwrap_or(200);
     let (mut total, mut shown) = (0i64, 0i64);
     let mut files = Vec::new();
-    for it in &index.items {
+    for it in index.iter() {
         if !filter.is_empty() && !it.path.contains(&filter) {
             continue;
         }
@@ -501,7 +467,7 @@ async fn darf_list(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         if shown >= limit {
             continue;
         }
-        files.push(json!({ "path": paths::wire(&it.path), "size": it.size, "source": it.source_name() }));
+        files.push(json!({ "path": paths::wire(it.path), "size": it.size, "source": it.source_name() }));
         shown += 1;
     }
     Ok(json!({ "shown": shown, "total": total, "files": files }))
@@ -512,7 +478,7 @@ async fn darf_copy(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let Some(path) = args.text("path").map(str::to_owned) else { return Err(refuse("missing 'path' argument")) };
     let overwrite = args.flag("overwrite");
     let root = project.root().to_owned();
-    let outcome = ed.exec.io(move || index.copy_to_project(&root, &path, overwrite)).await;
+    let outcome = ed.exec.io(move || copy_to_project(&index, &root, &path, overwrite)).await;
     match outcome {
         Ok((target, existed)) => {
             if let Some(dir) = Path::new(&target).parent() {
@@ -569,8 +535,8 @@ async fn transfer(ed: Arc<Editor>, args: Args, op: Transfer) -> Reply {
     let (rep, touched) = ed
         .exec
         .io(move || {
-            let darf = || p.darf_index().ok();
-            let mut ops = FileOps::new(p.root(), &darf);
+            let game = || p.game_files().ok();
+            let mut ops = FileOps::new(p.root(), &game);
             let mut rep = Report::default();
             for entry in entry_list(&src) {
                 match op {
@@ -595,7 +561,7 @@ async fn content_move(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     transfer(ed, args, Transfer::Move).await
 }
 
-fn no_game() -> Option<Arc<darf::DarfIndex>> {
+fn no_game() -> Option<Arc<GameFiles>> {
     None
 }
 
