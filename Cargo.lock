@@ -1245,6 +1245,7 @@ dependencies = [
  "gz-ui",
  "gz-ui-app",
  "gz-ui-content",
+ "gz-ui-level",
  "gz-ui-mod",
  "gz-ui-pda",
  "gz-ui-previews",
@@ -1576,6 +1577,29 @@ dependencies = [
 [[package]]
 name = "gz-levelbuild"
 version = "0.1.0"
+dependencies = [
+ "glam",
+ "gz-base",
+ "gz-build",
+ "gz-chunk",
+ "gz-editor",
+ "gz-entities",
+ "gz-export-level",
+ "gz-fmt-level",
+ "gz-fmt-object",
+ "gz-fmt-spawn",
+ "gz-fmt-tex",
+ "gz-fmt-xr",
+ "gz-game",
+ "gz-scene",
+ "gz-store",
+ "gz-task",
+ "parking_lot 0.13.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
 
 [[package]]
 name = "gz-log"
@@ -1941,7 +1965,7 @@ dependencies = [
  "gz-ui",
  "gz-ui-app",
  "gz-ui-content",
- "gz-ui-viewport",
+ "gz-ui-viewport-stub",
  "gz-vfs",
  "parking_lot 0.13.0",
  "rfd",
@@ -1990,6 +2014,7 @@ dependencies = [
  "gz-project",
  "gz-screens",
  "gz-ui",
+ "gz-ui-content",
  "gz-ui-mod",
  "gz-vfs",
  "parking_lot 0.13.0",
@@ -2091,6 +2116,19 @@ dependencies = [
  "smol_str 0.3.7",
  "tokio",
  "wgpu",
+]
+
+[[package]]
+name = "gz-ui-viewport-stub"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "gz-app",
+ "gz-editor",
+ "gz-fmt-tex",
+ "gz-scene",
+ "serde_json",
 ]
 
 [[package]]

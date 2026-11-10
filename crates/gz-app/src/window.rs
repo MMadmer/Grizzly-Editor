@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use egui::{ViewportId, ViewportInfo};
 use egui_wgpu::winit::Painter;
-use egui_wgpu::{RenderState, RendererOptions, SurfaceConfig, WgpuConfiguration, WgpuSetup};
+use egui_wgpu::{RenderState, RendererOptions, SurfaceConfig, WgpuConfiguration, WgpuSetupCreateNew};
 use egui_winit::winit;
 use gz_editor::{Editor, FrameStamp, SmolStr};
 use parking_lot::Mutex;
@@ -157,16 +157,23 @@ impl App {
             wake.ping();
         });
 
-        let config = WgpuConfiguration {
-            surface: SurfaceConfig::LOW_LATENCY,
-            wgpu_setup: WgpuSetup::from_display_handle(event_loop.owned_display_handle()),
-            ..Default::default()
-        };
+        // BC textures go to the GPU as the files hold them when the adapter samples them
+        let mut setup = WgpuSetupCreateNew::from_display_handle(event_loop.owned_display_handle());
+        let base = setup.device_descriptor.clone();
+        setup.device_descriptor = Arc::new(move |adapter| {
+            let mut desc = base(adapter);
+            desc.required_features |= adapter.features() & egui_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC;
+            desc
+        });
+        let config = WgpuConfiguration { surface: SurfaceConfig::LOW_LATENCY, wgpu_setup: setup.into(), ..Default::default() };
         let rt = self.editor.exec.handle().clone();
         let mut painter = rt.block_on(Painter::new(ctx.clone(), config, false, RendererOptions::default()));
         rt.block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
             .map_err(|e| format!("the graphics device could not be created: {e}"))?;
         let gpu = painter.render_state().ok_or_else(|| "the graphics device could not be created".to_owned())?;
+        // wgpu's default handler panics: a device error is the log's, not the process's end
+        let log = self.editor.log.clone();
+        gpu.device.on_uncaptured_error(Arc::new(move |e: egui_wgpu::wgpu::Error| log.error(format!("the graphics device reported an error: {e}"))));
 
         let input = egui_winit::State::new(
             ctx.clone(),
