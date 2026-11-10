@@ -44,4 +44,5 @@ gz-ui-previews = { path = "../gz-ui-previews" }
 gz-ui-release = { path = "../gz-ui-release" }
 gz-ui-pda = { path = "../gz-ui-pda" }
 gz-ui-level = { path = "../gz-ui-level" }
+gz-ui-viewport = { path = "../gz-ui-viewport" }
 serde_json.workspace = true

@@ -1,0 +1,39 @@
+[package]
+name = "gz-ui-pda"
+description = "The PDA preview and the Screens & Music tab: the 2D PDA drawn with the game's textures and bitmap fonts, and a module's screens and music."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-vfs.workspace = true
+gz-game.workspace = true
+gz-mod.workspace = true
+gz-pda.workspace = true
+gz-screens.workspace = true
+gz-luadata.workspace = true
+gz-fmt-tex.workspace = true
+gz-fmt-xml.workspace = true
+gz-ui.workspace = true
+gz-app.workspace = true
+# the Mod menu's slots
+gz-ui-mod = { path = "../gz-ui-mod" }
+# the Content Browser's drag payload
+gz-ui-content = { path = "../gz-ui-content" }
+egui.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio.workspace = true
+# the system's file dialog (a layer's file, a track)
+rfd = { version = "0.15", default-features = false }

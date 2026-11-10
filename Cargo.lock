@@ -1250,6 +1250,7 @@ dependencies = [
  "gz-ui-pda",
  "gz-ui-previews",
  "gz-ui-release",
+ "gz-ui-viewport",
  "gz-win",
  "gz-world",
  "serde_json",
