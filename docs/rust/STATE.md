@@ -64,11 +64,13 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-fmt-level` | done | cform, xcform + overlay visuals, BVH, AI map, details, `build.prj`; see findings |
 | `gz-fmt-spawn` | done | `all.spawn` (header, spawn graph with both packets as ranges of the file, artefact points, patrols, embedded game graph, unknown and compressed chunks kept), `game.graph`, `level.gct`, `peek_packet`, `SpawnIndex`; byte-equal round trips |
 | `gz-entities` | done | every class of `xrServerEntities` in the game's layout, Dead Air's script fields, `FillProps` as typed properties with set by path; `Opaque` keeps what does not decode or does not write back to its own bytes |
-| `gz-fmt-tex` | nearly | 4 errors: a `tile` module that was never written, and it uses `gz-fmt-sound` without depending on it |
-| `gz-fmt-sound` | nearly | compiles; not reviewed |
-| `gz-fmt-xr` | not started | placeholder |
+| `gz-fmt-tex` | done | DDS read/write, TGA, THM (texture/object/group; the sound one is `gz-fmt-sound`'s, which tex depends on and re-exports), params, game texture, bump, thumbnail, `texture_tile`; reviewed by spot checks against `ETextureParams.cpp` |
+| `gz-fmt-sound` | done | OGG comment params (versions 1-3) rewritten without re-encoding, sound THM, PCM via lewton, peaks; spot-checked against `SoundRender_Source_loader.cpp` |
+| `gz-fmt-xr` | done | `lanims.xr` read/write + colour at a frame, `gamemtl.xr` read, `shaders.xr` read (constants, matrices, blender descriptions + raw property streams), `shaders_xrlc.xr` read/write, `particles.xr` read with the action stream typed, `senvironment.xr` read/write |
 | `gz-ui` | done | theme, fonts, text, audit, layout, buttons; icons (all 189 glyphs, `icons/geometry.rs` + `icons/paint.rs`, `sheet`); widgets: `search`, `menu`, `toolbar`, `grid`, `list`, `splitter`, `state`, `card`, `dialog`, `units`. Not yet driven by a shell; tests written, not run |
 | `gz-project` | done | the list, `project.ltx`, path rules, asset kinds, delete checks, file ops, DARF listing, the file tree + watcher; 17 commands; hooks for other areas (open/close/scaffold/rename, templates, asset lists) |
+| `gz-mod` | done | `mod.ltx`: its own lossless `ManifestDoc` (the C++ comment rules, see findings), the typed `Manifest`, `Edit`s, metadata rules, `[commands]` (`E401`..`W408`), `[exclude]` / `outside_build`, `ManifestService` (store + `AutoSave`, outside changes reloaded); `mod_manifest`, `mod_set_manifest`, `mod_exclude`, `mod_commands`; the scaffold hook (`gz_mod::install`); slots `ManifestFields` (`world`) and `ManifestArgs` (`tags`, `thumbnail`) |
+| `gz-build` | done | `BuildWalk` from the file tree, `BuildCheck` / `BuildChecks` (+ the bake slot), target refusals, the clean build in `modules\.new\<id>` with hard links and two renames, the flat export + report, `run_build` (for `gz-release`), `Builds` (job `build`, results, Task Center `BuildStatus`, `CleanQuestion`); `mod_export` |
 
 ## Findings worth keeping
 
@@ -166,6 +168,21 @@ From the kit:
   every frame: it draws the queued questions, runs the answers and rotates what `open_dialogs`
   reports.
 - MCP's unsaved prompt answers Cancel (the command decides with `save` / `discard` first).
+
+From the manifest and build port:
+- `mod.ltx` is not read with `gz_ltx::LtxDoc`: the manifest reader (C++ `Load`, the game's XMS)
+  takes only `;` as a comment, outside quotes with `\"` escapes. `LtxDoc` cuts `//`, so
+  `website = https://...` would read `https:`. `gz_mod::ManifestDoc` is the lossless document
+  with the manifest's rules.
+- The file tree never holds tooling entries, but `left_out` must name them (QA asserts `.git`,
+  `Thumbs.db`, `gamedata/.git`): the walk lists each folder it enters once more for tooling
+  names only. A field of skipped names in `gz_project::Dir` would remove that listing.
+- Not ported: the C++ free-space check before a build (`GetDiskFreeSpaceEx` needs a `gz-win`
+  function).
+- Areas plug in: `gz_build::BuildChecks::of(editor).add(..)` (quests, characters, world, PDA,
+  screens), `.set_bake(..)` (the scene), `gz_mod::ManifestFields::of(editor).provide("world", ..)`
+  (the `world` field of `mod_manifest`, `null` until then), `gz_mod::ManifestArgs::of(editor)
+  .provide("tags" | "thumbnail", ..)` (the catalog area; until then those arguments are refused).
 
 ## Next packages, in dependency order
 

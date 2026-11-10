@@ -72,12 +72,15 @@ fn main() -> ExitCode {
     let mut registry = Registry::new();
     core_cmds::register(&mut registry);
     gz_project::register(&mut registry);
+    gz_mod::register(&mut registry);
+    gz_build::register(&mut registry);
     if !cli.headless {
         gz_app::register(&mut registry);
     }
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
+    gz_mod::install(&editor);
 
     startup.stage("Opening the control endpoint");
     let port = cli.mcp_port.unwrap_or(SIDE_BY_SIDE_PORT);
