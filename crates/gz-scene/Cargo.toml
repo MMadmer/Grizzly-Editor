@@ -1,0 +1,36 @@
+[package]
+name = "gz-scene"
+description = "The level scene: the model of the sixteen object classes, the scene files, undo, selection, the object library, picking and the scene's commands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-task.workspace = true
+gz-store.workspace = true
+gz-query.workspace = true
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-game.workspace = true
+gz-vfs.workspace = true
+gz-chunk.workspace = true
+gz-ltx.workspace = true
+gz-fmt-object.workspace = true
+gz-fmt-level.workspace = true
+gz-entities.workspace = true
+glam.workspace = true
+imbl.workspace = true
+rayon.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

@@ -80,6 +80,7 @@ fn main() -> ExitCode {
     gz_release::register(&mut registry);
     gz_pda::register(&mut registry);
     gz_screens::register(&mut registry);
+    gz_scene::register(&mut registry);
     gz_ui_app::register(&mut registry);
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
@@ -89,6 +90,7 @@ fn main() -> ExitCode {
     gz_release::install(&editor);
     gz_pda::install(&editor);
     gz_screens::install(&editor);
+    gz_scene::install(&editor);
 
     startup.stage("Opening the control endpoint");
     let port = cli.mcp_port.unwrap_or(SIDE_BY_SIDE_PORT);

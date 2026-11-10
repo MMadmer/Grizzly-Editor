@@ -28,6 +28,7 @@ gz-build.workspace = true
 gz-release.workspace = true
 gz-pda.workspace = true
 gz-screens.workspace = true
+gz-scene.workspace = true
 gz-mcp.workspace = true
 gz-app.workspace = true
 gz-ui.workspace = true

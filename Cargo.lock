@@ -1163,6 +1163,7 @@ dependencies = [
  "gz-pda",
  "gz-project",
  "gz-release",
+ "gz-scene",
  "gz-screens",
  "gz-task",
  "gz-ui",
@@ -1241,6 +1242,10 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "gz-catalog"
+version = "0.1.0"
 
 [[package]]
 name = "gz-chunk"
@@ -1557,6 +1562,22 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "gz-publish"
+version = "0.1.0"
+dependencies = [
+ "gz-base",
+ "gz-editor",
+ "gz-github",
+ "gz-mod",
+ "gz-release",
+ "gz-task",
+ "parking_lot 0.13.0",
+ "serde_json",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]
