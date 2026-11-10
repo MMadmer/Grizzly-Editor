@@ -87,6 +87,8 @@ fn main() -> ExitCode {
     gz_characters::register(&mut registry);
     gz_world::register(&mut registry);
     gz_scene::register(&mut registry);
+    gz_export_level::register(&mut registry);
+    gz_levelbuild::register(&mut registry);
     gz_ui_app::register(&mut registry);
     gz_ui_mod::register(&mut registry);
     gz_ui_content::register(&mut registry);
@@ -107,6 +109,7 @@ fn main() -> ExitCode {
     gz_characters::install(&editor);
     gz_world::install(&editor);
     gz_scene::install(&editor);
+    gz_export_level::install(&editor);
 
     startup.stage("Opening the control endpoint");
     let port = cli.mcp_port.unwrap_or(SIDE_BY_SIDE_PORT);
@@ -151,7 +154,6 @@ fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_release::install(shell);
     gz_ui_pda::install(shell);
     gz_ui_level::install(shell);
-    gz_ui_viewport::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.

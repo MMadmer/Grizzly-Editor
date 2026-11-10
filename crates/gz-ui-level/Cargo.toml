@@ -1,0 +1,36 @@
+[package]
+name = "gz-ui-level"
+description = "The Level tab: the dock around the viewport, the World Outliner, Tools, Details, Level Settings, the scene menus, Recovery and Import Base Scene."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-store.workspace = true
+gz-query.workspace = true
+gz-editor.workspace = true
+gz-scene.workspace = true
+gz-game.workspace = true
+gz-vfs.workspace = true
+gz-project.workspace = true
+gz-entities.workspace = true
+gz-fmt-level.workspace = true
+gz-fmt-xr.workspace = true
+gz-ui.workspace = true
+gz-app.workspace = true
+gz-ui-app = { path = "../gz-ui-app" }
+gz-ui-content = { path = "../gz-ui-content" }
+gz-ui-viewport = { path = "../gz-ui-viewport" }
+egui.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde_json.workspace = true
+time.workspace = true
+# the system's file dialogs (Save As, the detail objects' .dti files)
+rfd = { version = "0.15", default-features = false }
