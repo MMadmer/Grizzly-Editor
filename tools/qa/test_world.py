@@ -32,9 +32,11 @@ import sys
 import tempfile
 import time
 
+import qa_target
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = ("127.0.0.1", 28016)
+MCP = qa_target.MCP
 RULES = ["original_npcs", "random_stalkers", "mutants", "npc_quests", "story_quests"]
 
 results: list[tuple[bool, str]] = []
@@ -66,13 +68,13 @@ class Editor:
         self.proc: subprocess.Popen | None = None
 
     def start(self, project: str) -> None:
-        exe = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+        exe = qa_target.exe()
         if not os.path.isfile(exe):
             raise RuntimeError("build the editor first: " + exe)
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        self.proc = subprocess.Popen([exe, "-nodlg", "-project", project],
+        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:

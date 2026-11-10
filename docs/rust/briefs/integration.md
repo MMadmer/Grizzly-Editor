@@ -96,6 +96,22 @@ Read each owner crate's rustdoc for the exact names.
   `gz-project` and `gz-github` drop their private ini code without changing a byte they write;
   if it does not come out clean, leave them and say so.
 
+- **Which graph commands bring the tab up.** `quest_edit`, `quest_find`, `quest_bookmarks`,
+  `quest_history` and `quest_minimap` work without a window in the Rust editor and never
+  activate the graph's tab. Read their C++ handlers (`LevelMcpGraph.cpp`): the ones that open or
+  activate the tab there do it here too, in the same call (through `gz-ui-graph`'s opener, when
+  a window exists; headless they keep working as now). `tools/qa/test_graph_ui.py` is what
+  relies on it.
+- **Additions reach the catalogue.** The bridge refuses an argument `tools.json` does not name,
+  and every command must be reachable over MCP. Add to `crates/gz-mcp/tools.json`, in the
+  catalogue's own style: the commands the Rust editor grew (`jobs`, `level_build` - tools
+  `grizzly_jobs`, `grizzly_level_build`) and the arguments it grew (`characters_view show=`,
+  and any other a crate's rustdoc or STATE.md names as an addition). Nothing existing changes.
+- **Characters save on request.** The C++ tab saves on Ctrl+S with a dirty dot and an unsaved
+  prompt, and so does the Rust tab; `docs/UI_DESIGN.md` section 1 ("Applied (section 1a)") says
+  Characters save as they are edited, against its own section 6 and the code. Correct that one
+  sentence to what is true (check what Mod Settings really does before touching its half).
+
 ## 5. Sound encoding
 
 The Sound Library cannot make a game sound from a WAV: there is no Vorbis encoder. Add WAV ->

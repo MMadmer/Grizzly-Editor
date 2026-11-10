@@ -41,9 +41,11 @@ import sys
 import tempfile
 import time
 
+import qa_target
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = ("127.0.0.1", 28016)
+MCP = qa_target.MCP
 KEPT = [os.path.join(REPO, name) for name in ("level.ini", "level_imgui.ini", "_projects.ini")]
 
 BIG = "quests/qa_ui_big.nqasset"
@@ -120,11 +122,11 @@ class Editor:
         self.proc: subprocess.Popen | None = None
 
     def start(self, project: str) -> None:
-        exe = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+        exe = qa_target.exe()
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7
-        self.proc = subprocess.Popen([exe, "-nodlg", "-project", project],
+        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:

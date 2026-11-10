@@ -29,9 +29,11 @@ import tempfile
 import threading
 import time
 
+import qa_target
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = ("127.0.0.1", 28016)
+MCP = qa_target.MCP
 PAYLOAD_FILES = 24
 PAYLOAD_MB = 48
 
@@ -60,11 +62,11 @@ def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
 
 
 def start_editor(project: str) -> subprocess.Popen:
-    exe = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+    exe = qa_target.exe()
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 7
-    proc = subprocess.Popen([exe, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
+    proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         try:

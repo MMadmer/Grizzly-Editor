@@ -59,9 +59,11 @@ import zlib
 
 from mock_server import mock_exe
 
+import qa_target
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = ("127.0.0.1", 28016)
+MCP = qa_target.MCP
 TOKEN = "qa_token_catalog_0123456789abcdef"
 VT_KEY = "qa-vt-key-5b9e2c71d4"
 GITHUB_REPO = "QaOwner/qa-mod"
@@ -249,7 +251,7 @@ class Mock:
 class Editor:
     def __init__(self, exe: str, project: str, port: int, home: str, vt_variable: bool, extra_env: dict | None = None):
         if mcp_up():
-            raise RuntimeError("an editor already answers on 127.0.0.1:28016 - close it first")
+            raise RuntimeError(qa_target.busy_text())
         if not os.path.isfile(exe):
             raise RuntimeError("build the editor first: " + exe)
         env = dict(os.environ)
@@ -275,7 +277,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        self.proc = subprocess.Popen([exe, "-qa_github", "-nodlg", "-project", project],
+        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-qa_github", "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), env=env, startupinfo=startup)
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
@@ -1635,7 +1637,7 @@ class Run:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", required=True, help="a project to COPY and run against")
-    parser.add_argument("--editor", default=os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe"))
+    parser.add_argument("--editor", default=qa_target.exe())
     parser.add_argument("--game-repo", default=r"D:\Games\Dead Air\DeadAir-x64",
                         help="the game repository: its tools/catalog holds the reference implementation")
     parser.add_argument("--shots", help="a folder for screenshots of the Submit to Mod Browser window")

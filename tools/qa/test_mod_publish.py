@@ -32,9 +32,11 @@ import urllib.request
 
 from mock_server import mock_exe
 
+import qa_target
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
-MCP = ("127.0.0.1", 28016)
+MCP = qa_target.MCP
 TOKEN = "qa_token_0123456789abcdefghij"
 GITHUB_REPO = "QaOwner/qa-mod"
 VT_KEY = "qa-vt-key-publish-7c1d"
@@ -116,7 +118,7 @@ class Mock:
 class Editor:
     def __init__(self, exe: str, project: str, port: int, with_token: bool):
         if mcp_up():
-            raise RuntimeError("an editor already answers on 127.0.0.1:28016 - close it first")
+            raise RuntimeError(qa_target.busy_text())
         env = dict(os.environ)
         for name in ("GRIZZLY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GRIZZLY_VT_KEY", "VT_API_KEY"):
             env.pop(name, None)
@@ -137,7 +139,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-        self.proc = subprocess.Popen([exe, "-qa_github", "-nodlg", "-project", project],
+        self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-qa_github", "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), env=env, startupinfo=startup)
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
@@ -333,7 +335,7 @@ def vt_forget_key() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", required=True, help="project folder the editor opens")
-    parser.add_argument("--editor", default=os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe"))
+    parser.add_argument("--editor", default=qa_target.exe())
     args = parser.parse_args()
 
     project = os.path.abspath(args.project)
