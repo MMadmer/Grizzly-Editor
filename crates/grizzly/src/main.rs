@@ -97,6 +97,7 @@ fn main() -> ExitCode {
     // after gz-scene: it wraps property_inspector with the panels' side
     gz_ui_level::register(&mut registry);
     gz_ui_viewport::register(&mut registry);
+    gz_ui_graph::register(&mut registry);
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
@@ -154,6 +155,7 @@ fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_release::install(shell);
     gz_ui_pda::install(shell);
     gz_ui_level::install(shell);
+    gz_ui_graph::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.
