@@ -1227,6 +1227,7 @@ dependencies = [
  "gz-base",
  "gz-build",
  "gz-catalog",
+ "gz-characters",
  "gz-crash",
  "gz-editor",
  "gz-game",
@@ -1245,9 +1246,11 @@ dependencies = [
  "gz-ui-app",
  "gz-ui-content",
  "gz-ui-mod",
+ "gz-ui-pda",
  "gz-ui-previews",
  "gz-ui-release",
  "gz-win",
+ "gz-world",
  "serde_json",
 ]
 
@@ -1963,6 +1966,7 @@ dependencies = [
  "gz-project",
  "gz-screens",
  "gz-ui",
+ "gz-ui-mod",
  "gz-vfs",
  "parking_lot 0.13.0",
  "rfd",

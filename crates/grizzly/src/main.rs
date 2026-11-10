@@ -84,11 +84,14 @@ fn main() -> ExitCode {
     gz_catalog::register(&mut registry);
     gz_pda::register(&mut registry);
     gz_screens::register(&mut registry);
+    gz_characters::register(&mut registry);
+    gz_world::register(&mut registry);
     gz_scene::register(&mut registry);
     gz_ui_app::register(&mut registry);
     gz_ui_mod::register(&mut registry);
     gz_ui_content::register(&mut registry);
     gz_ui_previews::register(&mut registry);
+    gz_ui_pda::register(&mut registry);
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
@@ -98,6 +101,8 @@ fn main() -> ExitCode {
     gz_release::install(&editor);
     gz_pda::install(&editor);
     gz_screens::install(&editor);
+    gz_characters::install(&editor);
+    gz_world::install(&editor);
     gz_scene::install(&editor);
 
     startup.stage("Opening the control endpoint");
@@ -141,6 +146,7 @@ fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_content::install(shell);
     gz_ui_previews::install(shell);
     gz_ui_release::install(shell);
+    gz_ui_pda::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.
