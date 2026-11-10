@@ -1154,14 +1154,17 @@ dependencies = [
  "gz-app",
  "gz-base",
  "gz-build",
+ "gz-catalog",
  "gz-crash",
  "gz-editor",
  "gz-game",
  "gz-log",
  "gz-mcp",
  "gz-mod",
+ "gz-nq",
  "gz-pda",
  "gz-project",
+ "gz-publish",
  "gz-release",
  "gz-scene",
  "gz-screens",
@@ -1246,6 +1249,18 @@ dependencies = [
 [[package]]
 name = "gz-catalog"
 version = "0.1.0"
+dependencies = [
+ "flate2",
+ "gz-base",
+ "gz-editor",
+ "gz-github",
+ "gz-mod",
+ "gz-release",
+ "gz-task",
+ "parking_lot 0.13.0",
+ "serde_json",
+ "zeroize",
+]
 
 [[package]]
 name = "gz-chunk"

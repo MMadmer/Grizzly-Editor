@@ -75,10 +75,15 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-release` | done | Package Release as the job `package` (group `build`) staged through `gz_build::run_build`; own ZIP writer (parallel level-9 deflate, ZIP64) and reader (index read back from the archive); index, descriptor, `[card]` as the C++ text; author key file (`xms-key 1`, PBKDF2 600000 + HMAC stream + MAC) and ECDSA P-256 signing/verify in pure Rust; MOD_CATALOG 8 / 10.3 content rules; tags and thumbnail hooks of `mod_set_manifest`; `mod_package`, interim `mod_catalog` (key actions only, `key_action` / `key_state` for `gz-catalog`). See findings |
 | `gz-render` | done | wgpu 30 forward renderer, no window, no scene: `DrawList` -> `build_packet` (parallel cull or the caller's `Visibility`, instanced groups by mesh + material, blended back to front, helpers, labels, nearest 128 lights) -> the render thread (newest packet wins, passes in parallel chunks, frame clock `wait_frame`, `capture`, `Wake`), `render_offscreen`, `ThumbnailCache`; `Assets` (caller's `AssetLoader`, IO + CPU jobs, LRU by bytes, BC1-3 as they are), `MaterialTable` (data, 31 rules) -> 13 editor materials in WGSL; Lit (studio) / Unlit / Wireframe / Game Lighting (`glit_light` ported); id-target outline; label occlusion queries; GPU skinning; `examples/offscreen.rs` rendered and looked at. Tests written, not run |
 | `gz-build` | done | `BuildWalk` from the file tree, `BuildCheck` / `BuildChecks` (+ the bake slot), target refusals, the clean build in `modules\.new\<id>` with hard links and two renames, the flat export + report, `run_build` (for `gz-release`), `Builds` (job `build`, results, Task Center `BuildStatus`, `CleanQuestion`); `mod_export` |
-| `gz-scene` | done | `SceneState` in one store (objects `OrdMap`, per-class order, names, selection, `ToolSettings`, `BulkData` with the AI map in 4096-node tiles), `SceneCmd` (place, delete, rename, transform batches with the group rules, select, show, tool eyes / read-only, group / ungroup, property replaces checked by `serial`, mod marks, order, snap list, bulk, saved, touch); all 16 classes read / written in LTX and stream (`objects`), the main file + parts (`io`: LTX, binary `.level`, undo / recovery stream, unknown sections / chunks / refused versions kept); `props` (rows, merge, text set, labels / units / help); library, pick tree (`Derived` by scene + library rev), drop / snap, recovery (`backupecovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
+| `gz-github` | done | the network side: `reqwest` on native-tls (Windows certificate store) + system proxy, three clients (API and uploads never follow a redirect, public files do), every request raced against the job's `Cancel`; `Secret` (zeroed, `Debug` redacted); `Endpoints` (real or `-qa_github` mock, `upload_url_trusted`, `vt_url_trusted`, the catalog's repo and mirrors); account (env -> Credential Manager -> `gh auth token`, a minute's cache), device flow; `publish` (repo, foreign latest, published tag / version, draft reuse, leftovers, uploads 3 at a time with the descriptor last, stored assets checked, latest, the served check); list / edit (`make_latest` where the mark is) / delete (release, then tag); `fetch_public`; catalog issues (`find_issue`, bot-only newest verdict, submit / withdraw / issue); VirusTotal (pace slots, policy, verdict, lookup, upload with the upload address check) and the scan (`lookup`, `scan`, `ORDER`, `describe`, `json`); ini helpers of the catalog files. Tests written, not run |
+| `gz-publish` | done | `Publisher` (job `publish`: packaging through `gz_release::run_package` in group `build`, then the scan of a listed module + the upload in group `publish`; `ScanFirst` word for word; Task Center cards `key` `publish`), `FreshTag` / `deleted.tags`, device sign-in, `ReleaseList` (list, edit, delete, select, `show=edit` as a request the UI takes); `mod_publish` (answers when the packaging ended, as the C++ `FollowsJob`), `mod_releases`. Tests written, not run |
+| `gz-catalog` | done | `Catalog` (one job at a time, group `catalog`: `check` = section 7 with the content rules over the local copy's zips, `vt`, `submit`, `submission`, `withdraw`), `Release` read as the game reads it + signature, `read_listing`, `vt_level` (never optional), the submission text / details, `website_is_module_page`; the real `mod_catalog` (key actions through `gz_release::key_action`). Tests written, not run |
+| `gz-scene` | done | `SceneState` in one store (objects `OrdMap`, per-class order, names, selection, `ToolSettings`, `BulkData` with the AI map in 4096-node tiles), `SceneCmd` (place, delete, rename, transform batches with the group rules, select, show, tool eyes / read-only, group / ungroup, property replaces checked by `serial`, mod marks, order, snap list, bulk, saved, touch); all 16 classes read / written in LTX and stream (`objects`), the main file + parts (`io`: LTX, binary `.level`, undo / recovery stream, unknown sections / chunks / refused versions kept); `props` (rows, merge, text set, labels / units / help); library, pick tree (`Derived` by scene + library rev), drop / snap, recovery (`backup
+ecovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
 | `gz-lua` | done | LuaJIT 2.1 vendored (`mlua` 0.12, JIT off, count hook = instruction budget); `LuaHost` pool of states (one per caller, scripts kept per revision), `Script`, `Arg::{Value, Chunk}` (a text run in an empty env: the asset is the table LuaJIT builds), `call_omitting`; sandbox = base + string/table/math, the C++ reader's 18 globals; `vanilla_source` rewrites the fork's `//` `/* */` comments; tests written, not run |
 | `gz-pda` | done | `evaluate` (gz-luadata check, then the game's `normalize`), `Layout`/`Item`/... read as the C++ read the stack, `preview` block, `template`; `Preview` state machine (pages, vars, log, toasts, rows, scroll, keys, map zoom, boxes / hit test / `visible` in canvas units); `PdaService` (reader and layout `Query`s, W320 textures, list, `[pda] layout`); the build check; `content_create kind=pda` template; `pda_list`, `pda_get`, `pda_write`, `pda_delete`, `pda_use`, `pda_validate`; tests written, not run |
 | `gz-ui-app` | done | the Start page (`ShellBuilder::start_page`: New Project form, Open Folder via `rfd` on a thread of its own, search, Last Opened / Name sort, 232x184 cards with twin parents, previews decoded on the pools through a `Query` keyed by path + write time, `ShowsNoScene`, card menu, `dlg.delete_project` counted off the UI thread), Link Game page card, the Output Log (one body for the drawer and the Level panel `output_log`, cursor over `gz_log::Log`, distinct counting per window from "Project opened:", the `log_state` hook), Preferences (`preferences` tab: 44 rows of `EditorPreferences`/`LevelPreferences`, nav, search, Keyboard page over `shortcuts` with an Assign dialog `dlg.assign_shortcut`); command `project_browser_menu`. Rows whose key `gz-app`'s `PREFS` lacks (`object_flags`, `recovery_*`) show their default read-only until those keys are added there. Tests written, not run |
+| `gz-nq` | done | quests and behaviour graphs: `asset` (typed `Graph` with `imbl` node/task vectors, read with the C++ shape messages, `write` byte-equal to `NqLua::Write`, outline, topo order, templates), `catalog` (hand-rolled reader, fold order game|bundled -> modules -> project, `Catalog::is_trigger`, exclusive forms, JSON), `layout` (`node_box`, the one rectangle; the dominator-tree auto layout on bitsets), `validate` (every code and message of `NqValidate`), `references` (typed walker, `find`, `rename_task`), `index` (snapshot, fingerprint, search), `pickers` (15 types from the game's ltx tree / strings / XML / `all.spawn`, the project's custom data, `spawn.part`, looks; `compose` with the scene), `caps` (`class_registrator.script` families), `doc` (`Store<GraphDoc>`: every `quest_apply` op, canvas ops, view state with bookmarks / history / find), `NqService` (queries keyed by game rev, file stamps, manifest, docs' edit serials; slots `CharacterLookup` / `SceneLookup` / `WorldLookup`), the build check (`E113` across graphs); 24 `quest_*` commands (all but `quest_view`), templates, rename hook, `DirtySource`. Tests written, not run |
 | `gz-screens` | done | `Screens` model parsed off `ManifestDoc`, written back with `AppendScreens`' rows (sections in place while their order holds), `import` (+ `plan`: the decision by place and extension; parallel-safe copies), `validate` (E401..W411), the build check, `GameLevels` slot for W407; `screens_get`, `screens_set`; tests written, not run |
 
 ## Findings worth keeping
@@ -235,6 +240,23 @@ From the release port:
 - While the module stages, `gz_build::Builds::status` shows "Building Module"; the Task Center
   should show `gz_release::Releases::status`, which overlays the build's row.
 
+From the publish / catalog port:
+- The Credential Manager is used through `windows-native-keyring-store` (+ `keyring-core`) with
+  an explicit `target`, not the `keyring` facade: the targets stay the C++ editor's own
+  (`GrizzlyEditor:GitHub`, `GrizzlyEditor:VirusTotal`, `...:qa`) and the secret its raw bytes,
+  so a token either editor saved is the other's too.
+- `mod_publish start` answers in one call once the packaging job has ended (the C++ answered
+  `job_pending` and the pump asked again with `answer_only`; `answer_only` still answers the same).
+  The upload is a second job of the same card (group `publish`), so builds are free meanwhile.
+- Uploads go 3 at a time (the C++ uploaded one after another); the descriptor still goes last.
+  The card and `sent` add up the assets in flight.
+- The UI half is not here: the Releases tab and the Publish / Submit windows set
+  `ReleaseList::set_tab_open`, `set_publish_dialog_open`, `Catalog::set_window` and read
+  `take_edit_request` / `wants_withdraw_question`; until they exist `tab` and `window` answer false
+  unless MCP `show` set them.
+- `reqwest` copies the bearer and the `x-apikey` header into its own buffers (marked sensitive,
+  but not zeroed when freed); every copy of ours is zeroed.
+
 From the renderer:
 - glam 0.34 has no `Mat4::look_*` / `perspective_*` (they moved to `glam::camera`); `gz-render`'s
   camera builds its own left-handed, reverse-Z matrices. Clockwise faces are front faces.
@@ -278,6 +300,24 @@ From the scene port:
   whole load - they are kept (`KeptObject`) or loaded as they are and written back.
 - Spawn entities decode with the linked game's configs (`gz_scene::game::GameSettings` over
   `gz-game`); without them a spawn keeps its numbered values / packet raw and writes them back.
+
+From the graphs port (`gz-nq`):
+- What a node IS depends on the catalog: the reader orders pins by it, the writer's topological
+  order and the outline's `[T]` ask it which kinds are triggers, the box counts its lines. Every
+  pure function takes the `Catalog`, and a store command carries the `Arc<Catalog>` it applies with.
+  `Catalog::empty()` behaves like the C++ with no catalog loaded (a trigger is `trigger.*`).
+- The node box is sized by counts (lines, actions, pins), not by measured text: no text callback
+  is needed, the C++ never measured either.
+- The catalog reader keeps `rows` names across sections (the C++ never cleared them) - marked
+  `// oracle:`.
+- The catalog is keyed by the stamps of the project's `configs\nq\kinds` files and the module id,
+  not by the tree revision: a new catalog bumps its generation, which re-parses every graph.
+- `quest_edit` answers `path` as the absolute file (forward slashes), as the C++ did; the other
+  tab commands answer project-relative. Positions and bounds are JSON floats (`-112.0`).
+- `quest_history` keeps the C++ view history and adds `undo_steps` / `redo_steps`, the store's
+  labels. Undo back to the saved state is clean again (the C++ stayed dirty).
+- Not ported: the on-disk picker cache (`nq_index_*.txt`) - the pickers are in-memory `Query`s; the
+  rescue save of dirty graphs on project close (`NqDocs::SaveDirty`).
 
 ## Next packages, in dependency order
 

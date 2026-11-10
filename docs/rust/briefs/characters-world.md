@@ -70,6 +70,15 @@ and the registration lines in `crates/grizzly`.
 and `AssetLists`; an area registers there what only it knows:
 - `AssetTemplates` for `character` (`content_create`), `AssetLists` for the character categories.
 
+## Slots other crates left for you
+
+- `gz-nq`'s `NqService` has `CharacterLookup` and `WorldLookup` slots (read the rustdoc at the
+  top of `crates/gz-nq/src/lib.rs`): fill the first from the characters, the second from the
+  linked game's world (level changers, patrol names), so the pickers and `E031` work.
+- `gz-screens` checks `W407` (a level the game lacks) through a `GameLevels` slot: fill it from
+  the world.
+- `gz-mod`'s `mod_manifest` answers `world: null` until the world area fills its slot: fill it.
+
 ## Done means
 
 - `bash tools/rust/cg.sh check -p gz-characters -p gz-world --tests` clean, zero warnings. Tests
