@@ -15,4 +15,4 @@ gz-base.workspace = true
 gz-chunk.workspace = true
 glam.workspace = true
 thiserror.workspace = true
-bitflags.workspace = true
+smol_str.workspace = true

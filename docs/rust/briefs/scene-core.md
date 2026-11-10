@@ -10,6 +10,21 @@ world" (Player Start, way paths, a stalker's Order), "Dangerous operations".
 You own: `crates/gz-scene/**` (new; `src/lib.rs` before `Cargo.toml`) and the registration
 lines in `crates/grizzly`.
 
+## What is ready and what is still moving
+
+- Finished and yours to build on: `gz-fmt-object`, `gz-fmt-level`, `gz-fmt-spawn`, `gz-entities`,
+  `gz-fmt-ogf`, `gz-fmt-tex`, `gz-project`, `gz-mod`, `gz-build` (its slot for the scene's bake).
+- `gz-game` (the linked game: configs, files) is being finished by another agent. You need it
+  for spawn points only (`gz_entities::Settings` over the game's configs, the list of sections).
+  Do that part LAST; until `gz-game` compiles, keep the dependency out of your `Cargo.toml` so
+  your own check stays clean, and put the adapter behind one small module.
+- `gz-app` is being rewritten by another agent: `cargo check -p grizzly` may fail on it. Your
+  acceptance is your own crate's check; add your registration lines to
+  `crates/grizzly/src/main.rs` and `Cargo.toml` with small edits, keeping others' lines.
+- The renderer is a separate crate that does not know the scene; a later adapter will turn a
+  scene snapshot into its draw list. Keep what a renderer needs easy to read from a snapshot:
+  per object its class, world transform, bounds, visibility, selection, and the class data.
+
 ## The C++ that is the spec
 
 Under `Source/Editors/LevelEditor/Editor/`:

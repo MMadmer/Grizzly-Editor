@@ -16,6 +16,7 @@ gz-chunk.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
 bitflags.workspace = true
+gz-fmt-sound.workspace = true
 image.workspace = true
 texpresso.workspace = true
 # BC6H and BC7 decoding (pure Rust port of bcdec).

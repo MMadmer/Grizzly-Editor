@@ -12,3 +12,9 @@ workspace = true
 
 [dependencies]
 gz-base.workspace = true
+gz-chunk.workspace = true
+gz-fmt-object.workspace = true
+glam.workspace = true
+smol_str.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true

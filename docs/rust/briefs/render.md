@@ -3,7 +3,7 @@
 The editor's own renderer: what the viewport, the previews and the thumbnails are drawn with.
 Read `docs/rust/CONVENTIONS.md` and `docs/rust/STATE.md` first; then `docs/RUST_MIGRATION.md`
 sections 5.8 and 12 (D2), `docs/UI_DESIGN.md` section 6 "Viewport" and "Model Preview / Texture
-Preview"; the rustdoc at the top of `gz-scene` (the snapshot it draws), `gz-fmt-object`,
+Preview"; the rustdoc at the top of `gz-fmt-object`,
 `gz-fmt-ogf`, `gz-fmt-tex`, `gz-fmt-level`, `gz-game`; and `crates/gz-app/src/window.rs` (where
 the device comes from).
 
@@ -28,12 +28,18 @@ helper shapes: grid, boxes, spheres, cones, arrows, the selection marks),
 window; both are `Send + Sync`) and renders into textures it owns. The UI shows a texture; a
 thumbnail job reads one back. Layers 0-3 do not depend on this crate.
 
-**2. A frame is a packet.** `extract(scene: &SceneSnapshot, view: &View, assets: &Assets) ->
-FramePacket` is a pure function that runs on the CPU pool: cull against the frustum through
-the scene's BVH, group what is visible by (mesh, material) into instanced draws, sort the
-blended ones, collect helper shapes (lights, sound ranges, shapes, way paths, spawn marks, the
-selection). The packet is immutable and self-contained (handles and instance data, no
-references into the scene). The scene is never locked to be drawn.
+**2. A frame is a packet, and this crate does not know the scene.** `gz-scene` is being written
+at the same time and this crate must not depend on it. Its input is a plain description it
+defines itself, `DrawList`: instances (mesh handle, material override, world transform, flags:
+selected, hidden-in-preview, two-sided ..., an id for the selection mask), lights, and helper
+shapes (lines, boxes, spheres, cones, arrows, text marks with a colour and a "depth-tested"
+flag). A later, thin adapter turns a scene snapshot into a `DrawList`; the previews build one
+by hand. `build_packet(list: &DrawList, view: &View, assets: &Assets) -> FramePacket` is a pure
+function that runs on the CPU pool: frustum-cull the instances by their world bounds (in
+parallel for large lists; offer an optional caller-supplied visibility set for a caller that
+has a BVH), group what is visible by (mesh, material) into instanced draws, sort the blended
+ones back to front. The packet is immutable and self-contained (handles and instance data).
+Nothing is ever locked to be drawn.
 
 **3. The render thread.** One thread owns the targets and the frame loop: it takes the newest
 packet from a channel (older ones are dropped), records passes - in parallel where a pass is
@@ -88,7 +94,7 @@ frame-selection fit) as pure functions.
   (reuse buffers; instance data goes into one growing buffer per frame).
 - Shaders live as `.wgsl` files in the crate, included with `include_str!`.
 - Compile: `bash tools/rust/cg.sh check -p gz-render --tests`, zero warnings. Tests written
-  (not run): extraction of a seeded scene (counts, grouping, sort order), camera maths, the
+  (not run): packet building from a seeded draw list (counts, grouping, sort order), camera maths, the
   material table, bucket sizing. Then render ONE offscreen frame of a hand-made scene (a
   textured box, an alpha-tested quad, the grid) in a small example binary under
   `crates/gz-render/examples/`, write it as a PNG and LOOK at it: a renderer nobody looked at

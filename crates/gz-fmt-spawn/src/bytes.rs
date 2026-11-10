@@ -43,6 +43,12 @@ impl Bytes {
         }
     }
 
+    /// The buffer the range is of.
+    #[must_use]
+    pub(crate) fn buf(&self) -> &Arc<[u8]> {
+        &self.buf
+    }
+
     #[must_use]
     pub fn as_slice(&self) -> &[u8] {
         self.buf.get(self.start..self.end).unwrap_or(&[])
