@@ -1254,6 +1254,7 @@ dependencies = [
  "gz-ui-previews",
  "gz-ui-release",
  "gz-ui-viewport",
+ "gz-ui-world",
  "gz-win",
  "gz-world",
  "serde_json",
@@ -2142,6 +2143,26 @@ dependencies = [
 [[package]]
 name = "gz-ui-world"
 version = "0.1.0"
+dependencies = [
+ "egui",
+ "gz-app",
+ "gz-base",
+ "gz-characters",
+ "gz-editor",
+ "gz-fmt-tex",
+ "gz-game",
+ "gz-luadata",
+ "gz-mod",
+ "gz-nq",
+ "gz-project",
+ "gz-ui",
+ "gz-ui-mod",
+ "gz-vfs",
+ "gz-world",
+ "parking_lot 0.13.0",
+ "rustc-hash 2.1.3",
+ "serde_json",
+]
 
 [[package]]
 name = "gz-vfs"

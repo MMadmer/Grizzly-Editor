@@ -48,4 +48,5 @@ gz-ui-pda = { path = "../gz-ui-pda" }
 gz-ui-level = { path = "../gz-ui-level" }
 gz-ui-viewport = { path = "../gz-ui-viewport" }
 gz-ui-graph = { path = "../gz-ui-graph" }
+gz-ui-world = { path = "../gz-ui-world" }
 serde_json.workspace = true

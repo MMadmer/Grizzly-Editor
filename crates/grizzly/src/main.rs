@@ -98,6 +98,7 @@ fn main() -> ExitCode {
     gz_ui_level::register(&mut registry);
     gz_ui_viewport::register(&mut registry);
     gz_ui_graph::register(&mut registry);
+    gz_ui_world::register(&mut registry);
 
     if cli.dump_commands {
         for c in registry.commands() {
@@ -163,6 +164,7 @@ fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_pda::install(shell);
     gz_ui_level::install(shell);
     gz_ui_graph::install(shell);
+    gz_ui_world::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.

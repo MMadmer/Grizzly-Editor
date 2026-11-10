@@ -1,0 +1,880 @@
+//! Characters: the `characters` singleton tab (docs/UI_DESIGN.md, section 6, "Characters").
+//!
+//! A list of the project's characters (as their files say, sorted by id) and the form of the one
+//! selected. The tab keeps VIEW state and the character being edited: the roster comes from
+//! `gz_characters::Characters` on the pools, a save is `characters_write` with the canonical
+//! text (`gz_characters::write`), a deletion `characters_delete`. The form binds to what is
+//! STORED (`text_raw`), never to the resolved character: the game falls back, the form must not.
+//! The problems of the edited character are worked out on the pools when it changes, resolved
+//! against the others the way `characters_write` reports them. The C++ specification is the
+//! Characters tab of `EditorCharacters.cpp` from `RecomputeInherited` to `McpView`.
+
+use std::sync::Arc;
+
+use egui::{Align, Layout, Rect, ScrollArea, Ui, UiBuilder, pos2};
+use gz_app::{DocCx, Document, ShellBuilder};
+use gz_base::{RelPath, Rev};
+use gz_characters::resolve::resolve;
+use gz_characters::{Character, Characters, Checker, Roster, text_collapse, text_raw, text_set};
+use gz_editor::{Editor, Value, json};
+use gz_luadata::Value as LuaValue;
+use gz_mod::ManifestService;
+use gz_project::Project;
+use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
+use gz_ui::{Icon, Kind, Toolbar, Tone};
+use parking_lot::Mutex;
+
+use crate::call::{self, args, s};
+use crate::lists::{Lists, ListsView};
+use crate::portraits::Sheets;
+
+/// The tab's id and kind.
+pub const TAB: &str = "characters";
+/// The scroll `ui_scroll id=characters` moves: the work area of the tab that is up.
+pub(crate) const HOST: &str = "###doc.host";
+
+/// What replaces the edited character once the unsaved question is answered.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Then {
+    Nothing,
+    /// The character of this file.
+    Select(String),
+    New,
+}
+
+/// What tasks leave for the tab; taken at the start of its next frame.
+#[derive(Default)]
+struct Inbox {
+    roster: Option<(Arc<Roster>, String)>,
+    problems: Option<(u64, Vec<String>)>,
+    saved: Option<(Result<String, String>, Then)>,
+    deleted: Option<Result<(), String>>,
+    answered: Option<(Answer, Then)>,
+    delete_yes: bool,
+}
+
+/// What the drawing asked for, done once it is drawn.
+pub(crate) enum Action {
+    New,
+    Select(String),
+    Delete,
+    Preview,
+    BaseChanged,
+}
+
+/// A save as the commands carry it out (`SaveEdited`).
+#[derive(Clone, Debug)]
+pub(crate) struct SavePlan {
+    /// The file the character was read from, empty for a new one.
+    old: String,
+    /// The file it goes to: the old one, or `characters/<id>.npcasset` when the file follows the
+    /// id the author settled on.
+    target: String,
+    rename: bool,
+    text: String,
+}
+
+/// Carries a save out: the rename first when the file follows the id, then the text. The file
+/// written, project-relative.
+pub(crate) async fn run_save(ed: &Arc<Editor>, plan: SavePlan) -> Result<String, String> {
+    let origin = ed.ui_origin();
+    let mut target = plan.target;
+    if plan.rename {
+        let leaf = target.rsplit('/').next().unwrap_or(&target).to_owned();
+        let reply = ed.call("content_rename", args([("path", s(&plan.old)), ("name", s(&leaf))]), origin).await;
+        // a rename refused leaves the file where it is: the text goes there
+        if !call::ok(&reply) {
+            target = plan.old;
+        }
+    }
+    let reply = ed.call("characters_write", args([("text", s(&plan.text)), ("path", s(&target))]), origin).await;
+    if call::ok(&reply) { Ok(reply.get("file").and_then(Value::as_str).map_or(target, str::to_owned)) } else { Err(call::error_text(&reply)) }
+}
+
+/// The problems of the edited character as the build will see it: resolved against the others
+/// (its base, the ids they take), then validated - the answer `characters_write` gives
+/// (`Revalidate`). Blocking: run it on the IO pool (a model's bones may be read).
+pub(crate) fn own_problems(roster: &Roster, sel: Option<usize>, edit: &Character, checker: &Checker) -> Vec<String> {
+    let mut all = roster.raw.clone();
+    let at = match sel.filter(|i| *i < all.len()) {
+        Some(i) => {
+            if let Some(slot) = all.get_mut(i) {
+                *slot = edit.clone();
+            }
+            i
+        }
+        None => {
+            all.push(edit.clone());
+            all.len() - 1
+        }
+    };
+    let place = if edit.file.is_empty() { edit.id.clone() } else { edit.file.clone() };
+    let mut chain = Vec::new();
+    resolve(&mut all, &mut chain);
+    let needle = format!(" {place}: ");
+    let mut own: Vec<String> = chain.into_iter().filter(|p| p.contains(&needle)).collect();
+    for (i, c) in all.iter().enumerate() {
+        if i != at && c.id == edit.id {
+            own.push(format!("E101 {place}: another character has the id '{}' - {}", edit.id, c.file));
+        }
+    }
+    if let Some(c) = all.get(at) {
+        checker.validate(c, &mut own);
+    }
+    own
+}
+
+/// The problems of the edited character, worked out on the pools.
+pub(crate) async fn problems_of(ed: &Arc<Editor>, roster: Arc<Roster>, sel: Option<usize>, edit: Character) -> Vec<String> {
+    let checker = match Characters::of(ed).await {
+        Ok(svc) => svc.checker(ed).await,
+        Err(_) => Checker::unlinked(),
+    };
+    ed.exec.io(move || own_problems(&roster, sel, &edit, &checker)).await
+}
+
+/// The row a coded problem belongs under (`FieldOf`); empty: the header's.
+#[must_use]
+pub fn field_of(problem: &str) -> &'static str {
+    const MAP: [(&str, &str); 21] = [
+        ("E101", "id"),
+        ("E102", "id"),
+        ("E111", "base"),
+        ("E112", "base"),
+        ("E103", "name"),
+        ("W107", "text"),
+        ("E104", "visual"),
+        ("W105", "visual"),
+        ("E123", "visual"),
+        ("W115", "icon"),
+        ("W114", "community"),
+        ("W116", "dialog"),
+        ("E110", "money"),
+        ("W117", "kit"),
+        ("E108", "kit"),
+        ("E109", "kit"),
+        ("E118", "trade"),
+        ("E119", "trade"),
+        ("W120", "trade"),
+        ("W121", "trade"),
+        ("W122", "trade"),
+    ];
+    MAP.iter().find(|(code, _)| problem.starts_with(code)).map_or("", |(_, f)| *f)
+}
+
+/// "E103 characters/x.npcasset: no name - ..." as the sentence the author reads: "No name -
+/// ...". The code and the file are for MCP and the log (`ProblemText`).
+#[must_use]
+pub fn problem_text(problem: &str) -> String {
+    let mut text_ = match problem.find(": ") {
+        Some(at) => problem.get(at + 2..).unwrap_or("").to_owned(),
+        None => problem.get(problem.len().min(5)..).unwrap_or("").to_owned(),
+    };
+    if let Some(first) = text_.chars().next()
+        && first.is_ascii_lowercase()
+    {
+        text_.replace_range(..1, &first.to_ascii_uppercase().to_string());
+    }
+    if !text_.is_empty() && !text_.ends_with(['.', '!', '?']) {
+        text_.push('.');
+    }
+    text_
+}
+
+/// The tone of a coded problem.
+#[must_use]
+pub fn problem_tone(problem: &str) -> Tone {
+    if problem.starts_with('E') { Tone::Error } else { Tone::Warning }
+}
+
+/// The Characters tab.
+pub struct CharactersDoc {
+    pub(crate) editor: Arc<Editor>,
+    root: String,
+    pub(crate) roster: Option<Arc<Roster>>,
+    /// The revisions of the file tree and the manifest the roster was last asked for.
+    roster_key: Option<Rev>,
+    loading: bool,
+    /// The next read waits for the file tree to hold every change (after a write).
+    fresh_wanted: bool,
+    pub(crate) module_id: String,
+    pub(crate) sel: Option<usize>,
+    pub(crate) edit: Character,
+    pub(crate) dirty: bool,
+    pub(crate) name_rus: String,
+    pub(crate) name_eng: String,
+    pub(crate) bio_rus: String,
+    pub(crate) bio_eng: String,
+    /// The base resolved: what this character starts from.
+    pub(crate) inherited: Option<Character>,
+    pub(crate) own: Vec<String>,
+    edit_gen: u64,
+    own_gen: u64,
+    asked_gen: u64,
+    lists_gen: u64,
+    pub(crate) status: String,
+    pub(crate) list_filter: String,
+    /// The rows the list filter shows: (filter, roster stamp, rows).
+    pub(crate) shown: (String, Rev, Vec<usize>),
+    inbox: Arc<Mutex<Inbox>>,
+    /// A file asked for (the content browser, MCP): selected once the roster holds it.
+    pending_open: Option<String>,
+    saving: bool,
+    pub(crate) lists: ListsView,
+    pub(crate) sheets: Option<Arc<Sheets>>,
+    pub(crate) actions: Vec<Action>,
+    /// How far the form scrolled at most, the last frame: where `ui_scroll to=bottom` goes.
+    scroll_max: f32,
+}
+
+impl CharactersDoc {
+    #[must_use]
+    pub fn new(editor: &Arc<Editor>, open: Option<String>) -> Self {
+        Self {
+            editor: editor.clone(),
+            root: String::new(),
+            roster: None,
+            roster_key: None,
+            loading: false,
+            fresh_wanted: true,
+            module_id: String::new(),
+            sel: None,
+            edit: Character::default(),
+            dirty: false,
+            name_rus: String::new(),
+            name_eng: String::new(),
+            bio_rus: String::new(),
+            bio_eng: String::new(),
+            inherited: None,
+            own: Vec::new(),
+            edit_gen: 1,
+            own_gen: 0,
+            asked_gen: 0,
+            lists_gen: 0,
+            status: String::new(),
+            list_filter: String::new(),
+            shown: (String::new(), Rev::ZERO, Vec::new()),
+            inbox: Arc::new(Mutex::new(Inbox::default())),
+            pending_open: open,
+            saving: false,
+            lists: ListsView::default(),
+            sheets: None,
+            actions: Vec::new(),
+            scroll_max: 0.0,
+        }
+    }
+
+    // ---- the roster -----------------------------------------------------------------------------
+
+    /// Follows the project's files: a frame only compares revisions; a change reads the roster
+    /// again on the pools.
+    fn sync(&mut self) {
+        let Ok((session, project)) = Project::of(&self.editor) else { return };
+        let root = session.root.to_string_lossy().into_owned();
+        if root != self.root {
+            self.root = root;
+            self.roster = None;
+            self.roster_key = None;
+            self.sel = None;
+            self.edit = Character::default();
+            self.dirty = false;
+            self.pull();
+        }
+        let manifest = ManifestService::get(&session).map_or(Rev::ZERO, |m| m.rev());
+        let key = project.tree.rev().mix(manifest);
+        if self.loading || self.roster_key == Some(key) {
+            return;
+        }
+        self.roster_key = Some(key);
+        self.load_roster();
+    }
+
+    /// Reads the roster on the pools; `fresh` waits for the file tree to hold every change first.
+    fn load_roster(&mut self) {
+        self.loading = true;
+        let fresh = std::mem::take(&mut self.fresh_wanted);
+        let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
+        let _task = self.editor.exec.spawn(async move {
+            if let Ok(svc) = Characters::of(&ed).await {
+                let roster = if fresh { svc.fresh_roster().await } else { svc.roster().await };
+                let module = svc.manifest().snapshot().manifest().map(|m| m.id.clone()).unwrap_or_default();
+                inbox.lock().roster = Some((roster, module));
+            } else {
+                inbox.lock().roster = Some((Arc::new(Roster::default()), String::new()));
+            }
+            call::wake_ui(&ed);
+        });
+    }
+
+    /// Reads the roster again once the file tree holds what was just written.
+    fn reload_fresh(&mut self) {
+        self.fresh_wanted = true;
+        self.roster_key = None;
+    }
+
+    /// A roster arrived: the list as the disk has it, edits in progress kept - the edited
+    /// character is found again by its file (`ReloadAll`); a file asked for is selected.
+    pub(crate) fn take_roster(&mut self, roster: Arc<Roster>, module: String) {
+        let file = self.edit.file.clone();
+        self.module_id = module;
+        self.roster = Some(roster.clone());
+        let found = if file.is_empty() { None } else { roster.raw.iter().position(|c| c.file.eq_ignore_ascii_case(&file)) };
+        if self.dirty {
+            self.sel = found;
+            self.recompute_inherited();
+        } else {
+            self.select(found.or(if roster.raw.is_empty() { None } else { Some(0) }));
+        }
+        self.edit_gen += 1;
+        if let Some(path) = self.pending_open.take() {
+            let index = self.find(None, Some(&path));
+            if let Some(i) = index
+                && Some(i) != self.sel
+                && let Some(file) = roster.raw.get(i).map(|c| c.file.clone())
+            {
+                self.ask_then(Then::Select(file));
+            }
+        }
+    }
+
+    /// The character of an id or a project path, any slash, any case.
+    #[must_use]
+    pub(crate) fn find(&self, id: Option<&str>, path: Option<&str>) -> Option<usize> {
+        let roster = self.roster.as_ref()?;
+        let norm = |p: &str| p.replace('\\', "/").to_lowercase();
+        roster.raw.iter().position(|c| id.is_some_and(|i| c.id == i) || path.is_some_and(|p| norm(&c.file) == norm(p)))
+    }
+
+    /// Selects a character of the roster (`None`: nothing), its edits gone (`SelectIndex`).
+    pub(crate) fn select(&mut self, index: Option<usize>) {
+        let roster = self.roster.clone();
+        let picked = index.and_then(|i| roster.as_ref().and_then(|r| r.raw.get(i)).map(|c| (i, c.clone())));
+        match picked {
+            Some((i, c)) => {
+                self.sel = Some(i);
+                self.edit = c;
+            }
+            None => {
+                self.sel = None;
+                self.edit = Character::default();
+            }
+        }
+        self.dirty = false;
+        self.pull();
+        self.recompute_inherited();
+        self.edit_gen += 1;
+    }
+
+    /// The text fields take what is stored (`PullToBuffers`).
+    fn pull(&mut self) {
+        self.name_rus = text_raw(&self.edit.name, "rus");
+        self.name_eng = text_raw(&self.edit.name, "eng");
+        self.bio_rus = text_raw(&self.edit.bio, "rus");
+        self.bio_eng = text_raw(&self.edit.bio, "eng");
+    }
+
+    /// The text fields go back into the character, every language kept, a `rus` alone a plain
+    /// string again.
+    pub(crate) fn push_texts(&mut self) {
+        text_set(&mut self.edit.name, "rus", &self.name_rus);
+        text_set(&mut self.edit.name, "eng", &self.name_eng);
+        text_set(&mut self.edit.bio, "rus", &self.bio_rus);
+        text_set(&mut self.edit.bio, "eng", &self.bio_eng);
+        text_collapse(&mut self.edit.name);
+        text_collapse(&mut self.edit.bio);
+    }
+
+    /// What the base chain gives this character (`RecomputeInherited`): the base resolved.
+    pub(crate) fn recompute_inherited(&mut self) {
+        self.inherited = if self.edit.base.is_empty() { None } else { self.roster.as_ref().and_then(|r| r.get(&self.edit.base)).cloned() };
+    }
+
+    /// The form changed the character.
+    pub(crate) fn changed(&mut self) {
+        self.push_texts();
+        if self.edit.money_max < self.edit.money_min {
+            self.edit.money_max = self.edit.money_min;
+        }
+        self.dirty = true;
+        self.edit_gen += 1;
+    }
+
+    /// The problems are worked out again when the character or the lists changed.
+    fn revalidate(&mut self) {
+        if self.lists.serial != self.lists_gen {
+            self.lists_gen = self.lists.serial;
+            self.edit_gen += 1;
+        }
+        if self.sel.is_none() && !self.dirty {
+            self.own.clear();
+            self.own_gen = self.edit_gen;
+            return;
+        }
+        if self.own_gen == self.edit_gen || self.asked_gen == self.edit_gen {
+            return;
+        }
+        let Some(roster) = self.roster.clone() else { return };
+        self.asked_gen = self.edit_gen;
+        let (ed, inbox, serial, sel, edit) = (self.editor.clone(), self.inbox.clone(), self.edit_gen, self.sel, self.edit.clone());
+        let _task = self.editor.exec.spawn(async move {
+            let problems = problems_of(&ed, roster, sel, edit).await;
+            inbox.lock().problems = Some((serial, problems));
+            call::wake_ui(&ed);
+        });
+    }
+
+    /// Problems worked out elsewhere (MCP) for the character as it is now.
+    pub(crate) fn set_problems(&mut self, problems: Vec<String>) {
+        self.own = problems;
+        self.own_gen = self.edit_gen;
+    }
+
+    /// What `characters_view` validates: the roster, the selection, the character.
+    pub(crate) fn validation_input(&self) -> Option<(Arc<Roster>, Option<usize>, Character)> {
+        Some((self.roster.clone()?, self.sel, self.edit.clone()))
+    }
+
+    // ---- the inbox ------------------------------------------------------------------------------
+
+    fn take_inbox(&mut self, ctx: Option<&egui::Context>) {
+        let mut inbox = self.inbox.lock();
+        let roster = inbox.roster.take();
+        let problems = inbox.problems.take();
+        let saved = inbox.saved.take();
+        let deleted = inbox.deleted.take();
+        let answered = inbox.answered.take();
+        let delete_yes = std::mem::take(&mut inbox.delete_yes);
+        drop(inbox);
+        if let Some((roster, module)) = roster {
+            self.loading = false;
+            self.take_roster(roster, module);
+        }
+        if let Some((serial, problems)) = problems
+            && serial == self.edit_gen
+        {
+            self.own = problems;
+            self.own_gen = serial;
+        }
+        if let Some((result, then)) = saved {
+            self.saved(result, then, ctx);
+        }
+        if let Some(result) = deleted {
+            match result {
+                Ok(()) => {
+                    self.status.clear();
+                    self.dirty = false;
+                    self.sel = None;
+                    self.edit = Character::default();
+                    self.pull();
+                    self.inherited = None;
+                    self.edit_gen += 1;
+                }
+                Err(e) => self.status = format!("Not deleted: {e}"),
+            }
+            self.reload_fresh();
+        }
+        if let Some((answer, then)) = answered {
+            match answer {
+                Answer::Cancel => {}
+                Answer::Yes => {
+                    if let Err(e) = self.start_save(then) {
+                        self.status = format!("Not saved: {e}");
+                    }
+                }
+                Answer::No => {
+                    self.discard_edits();
+                    self.run_then(then);
+                }
+            }
+        }
+        if delete_yes {
+            self.delete_now();
+        }
+    }
+
+    // ---- saving ---------------------------------------------------------------------------------
+
+    /// How the edited character is saved (`SaveEdited`): a new one goes to
+    /// `characters/<id>.npcasset`, and a file of `characters/` follows the id the author settles
+    /// on while nothing has that name yet.
+    pub(crate) fn save_plan(&mut self) -> Result<SavePlan, String> {
+        if self.edit.id.is_empty() {
+            return Err("the character needs an id".into());
+        }
+        self.push_texts();
+        let text = gz_characters::write(&self.edit);
+        let old = self.edit.file.clone();
+        let wanted = format!("characters/{}.npcasset", self.edit.id);
+        let taken = |rel: &str| {
+            Project::of(&self.editor).ok().is_some_and(|(_, p)| RelPath::new(rel).ok().is_some_and(|r| p.tree.snapshot().entry(&r).is_some()))
+        };
+        let rename = !old.is_empty() && old.to_ascii_lowercase().starts_with("characters/") && !old.eq_ignore_ascii_case(&wanted) && !taken(&wanted);
+        let target = if old.is_empty() || rename { wanted } else { old.clone() };
+        Ok(SavePlan { old, target, rename, text })
+    }
+
+    /// Starts a save on the pools; `then` runs once it is written.
+    fn start_save(&mut self, then: Then) -> Result<(), String> {
+        if self.saving {
+            return Ok(());
+        }
+        let plan = self.save_plan()?;
+        self.saving = true;
+        // the shell may close the tab right after it asked to save
+        self.dirty = false;
+        let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
+        let _task = self.editor.exec.spawn(async move {
+            let result = run_save(&ed, plan).await;
+            inbox.lock().saved = Some((result, then));
+            call::wake_ui(&ed);
+        });
+        Ok(())
+    }
+
+    /// A save answered: the character keeps its file, the list is read again.
+    pub(crate) fn saved(&mut self, result: Result<String, String>, then: Then, _ctx: Option<&egui::Context>) {
+        self.saving = false;
+        match result {
+            Ok(file) => {
+                self.status.clear();
+                self.dirty = false;
+                self.edit.file = file;
+                self.reload_fresh();
+                self.run_then(then);
+            }
+            Err(e) => {
+                self.dirty = true;
+                self.status = format!("Not saved: {e}");
+            }
+        }
+    }
+
+    /// The unsaved edits go: the character as its file says (`Discard`).
+    pub(crate) fn discard_edits(&mut self) {
+        let sel = self.sel;
+        self.select(sel);
+        self.status.clear();
+    }
+
+    fn run_then(&mut self, then: Then) {
+        match then {
+            Then::Nothing => {}
+            Then::New => self.new_character(),
+            Then::Select(file) => {
+                let index = self.find(None, Some(&file));
+                self.select(index);
+            }
+        }
+    }
+
+    /// Unsaved edits ask before anything replaces them: Save, Don't Save, or stay (`AskThen`).
+    pub(crate) fn ask_then(&mut self, then: Then) {
+        if !self.dirty {
+            self.run_then(then);
+            return;
+        }
+        let what = vec![if self.edit.id.is_empty() { "the new character".to_owned() } else { self.edit.id.clone() }];
+        let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
+        let Ok(queue) = gz_app::UiQueue::of(&self.editor) else { return };
+        // the kit question needs the context: it is asked at the start of the next frame
+        queue.post(move |_, ctx| {
+            let inbox2 = inbox.clone();
+            let ed2 = ed.clone();
+            let line = unsaved_prompt(ctx, call::asker(&ed), "character", &what, move |answer| {
+                inbox2.lock().answered = Some((answer, then));
+                call::wake_ui(&ed2);
+            });
+            call::log_line(&ed, line);
+            ctx.request_repaint();
+        });
+    }
+
+    /// A new character, unsaved, heading the list (`NewCharacter`).
+    pub(crate) fn new_character(&mut self) {
+        let taken = |id: &str| self.roster.as_ref().is_some_and(|r| r.raw.iter().any(|c| c.id == id));
+        let mut id = "new_character".to_owned();
+        for n in 2..1000 {
+            if !taken(&id) {
+                break;
+            }
+            id = format!("new_character_{n}");
+        }
+        self.edit = Character {
+            id,
+            community: "stalker".into(),
+            name: LuaValue::from("New character"),
+            visual: "actors\\stalker_neutral\\stalker_neutral_1".into(),
+            icon: "ui_inGame2_neutral_2".into(),
+            has_rank: true,
+            rank: 300,
+            ..Character::default()
+        };
+        self.sel = None;
+        self.dirty = true;
+        self.pull();
+        self.recompute_inherited();
+        self.edit_gen += 1;
+    }
+
+    /// Names what disappears and asks (`AskDelete`): the file goes for good.
+    fn ask_delete(&mut self, ctx: &egui::Context) {
+        if self.edit.file.is_empty() {
+            return;
+        }
+        let spec = ConfirmSpec {
+            id: "delete_character".to_owned(),
+            title: "Delete Character".to_owned(),
+            headline: format!("Delete the character \"{}\"?", self.edit.id),
+            items: vec![self.edit.file.clone()],
+            total: 0,
+            consequence: "Deleted for good - this cannot be undone. The next build takes the character out of the module, and a quest that spawns it has nothing to spawn."
+                .to_owned(),
+            action: "Delete".to_owned(),
+            destructive: true,
+        };
+        let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
+        let line = confirm(ctx, call::asker(&self.editor), spec, move |answer| {
+            if answer == Answer::Yes {
+                inbox.lock().delete_yes = true;
+                call::wake_ui(&ed);
+            }
+        });
+        call::log_line(&self.editor, line);
+    }
+
+    fn delete_now(&mut self) {
+        let file = self.edit.file.clone();
+        if file.is_empty() {
+            return;
+        }
+        let inbox = self.inbox.clone();
+        call::call_then(&self.editor, "characters_delete", args([("path", s(&file))]), move |reply, _| {
+            inbox.lock().deleted = Some(if call::ok(reply) { Ok(()) } else { Err(call::error_text(reply)) });
+        });
+    }
+
+    /// Opens the model viewer on the model of the form: the project's own, else the game's.
+    fn preview(&self) {
+        let visual = self.edit.visual.clone();
+        if visual.is_empty() {
+            return;
+        }
+        let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") { "visual" } else { "darf" };
+        let ed = self.editor.clone();
+        call::call_then(&self.editor, "preview_model", args([("name", s(&visual)), ("source", s(source))]), move |reply, ctx| {
+            if !call::ok(reply) {
+                gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                ed.log.warn(format!("the model preview did not open: {}", call::error_text(reply)));
+            }
+        });
+    }
+
+    fn run_actions(&mut self, ctx: &egui::Context) {
+        for action in std::mem::take(&mut self.actions) {
+            match action {
+                Action::New => self.ask_then(Then::New),
+                Action::Select(file) => self.ask_then(Then::Select(file)),
+                Action::Delete => self.ask_delete(ctx),
+                Action::Preview => self.preview(),
+                Action::BaseChanged => self.recompute_inherited(),
+            }
+        }
+    }
+
+    // ---- MCP ------------------------------------------------------------------------------------
+
+    /// The `characters_view` answer of the open tab.
+    #[must_use]
+    pub fn view_json(&self, active: bool) -> Value {
+        let selected = if self.sel.is_some() || self.dirty { self.edit.id.clone() } else { String::new() };
+        json!({
+            "tab": TAB,
+            "open": true,
+            "active": active,
+            "selected": selected,
+            "file": self.edit.file.replace('\\', "/"),
+            "dirty": self.dirty,
+            "count": self.roster.as_ref().map_or(0, |r| r.raw.len()),
+            "problems": self.own,
+        })
+    }
+
+    /// The edits in progress, as the unsaved answer names them.
+    #[must_use]
+    pub(crate) fn dirty_names(&self) -> Vec<String> {
+        vec![self.edit.id.clone()]
+    }
+
+    #[must_use]
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    // ---- drawing --------------------------------------------------------------------------------
+
+    fn draw_body(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let full = ui.max_rect();
+        let mut head = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.characters.split").max_rect(full).layout(Layout::left_to_right(Align::Min)));
+        let split = gz_ui::splitter::splitter(&mut head, "characters.list", true, 220.0, 400.0, 260.0);
+        let gap = head.spacing().item_spacing.x;
+        let list_rect = Rect::from_min_max(full.min, pos2((full.min.x + split.size).min(full.max.x), full.max.y));
+        let form_rect = Rect::from_min_max(pos2((list_rect.max.x + gap).min(full.max.x), full.min.y), full.max);
+
+        let mut left = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.characters.side").max_rect(list_rect).layout(Layout::top_down(Align::Min)));
+        self.draw_list(&mut left);
+
+        let mut right = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.characters.form").max_rect(form_rect).layout(Layout::top_down(Align::Min)));
+        let mut scroll = ScrollArea::vertical().id_salt("gz-ui-world.characters.scroll").auto_shrink([false, false]);
+        match gz_app::take_scroll(&ctx, HOST) {
+            Some(gz_app::ScrollTo::Top) => scroll = scroll.vertical_scroll_offset(0.0),
+            Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(self.scroll_max),
+            Some(gz_app::ScrollTo::Offset(y)) => scroll = scroll.vertical_scroll_offset(y),
+            _ => {}
+        }
+        let out = scroll.show(&mut right, |ui| {
+            egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 0)).show(ui, |ui| {
+                let column = ui.available_width().min(gz_ui::metrics::FORM_W).max(1.0);
+                ui.set_max_width(column);
+                ui.set_min_width(column);
+                if self.sel.is_none() && !self.dirty {
+                    if gz_ui::state::empty_state(ui, Icon::Character, "No character selected", "Pick one in the list, or add one with +.", Some("New Character")) {
+                        self.actions.push(Action::New);
+                    }
+                } else {
+                    self.draw_form(ui, column);
+                }
+            });
+        });
+        let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
+        self.scroll_max = max;
+        gz_app::report_scroll(&ctx, HOST, out.state.clamped_offset().y.min(max), max);
+        ui.allocate_rect(full, egui::Sense::hover());
+    }
+}
+
+impl Document for CharactersDoc {
+    fn id(&self) -> &str {
+        TAB
+    }
+    fn kind(&self) -> &'static str {
+        TAB
+    }
+    fn label(&self) -> String {
+        "Characters".to_owned()
+    }
+    fn icon(&self) -> Icon {
+        Icon::Character
+    }
+    fn tooltip(&self) -> Option<String> {
+        Some("The module's own NPCs".to_owned())
+    }
+    fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
+        let project = cx.editor.project_opt().is_some();
+        tb.group(1);
+        if tb.action("reload", Icon::Refresh, "Reload", "Read the characters, the linked game's lists and the project's models again", project, false, Kind::Ghost) {
+            self.reload_fresh();
+            if let Some(lists) = Lists::of(cx.editor) {
+                lists.force(cx.editor);
+            }
+        }
+    }
+
+    fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
+        let ctx = ui.ctx().clone();
+        self.take_inbox(Some(&ctx));
+        if cx.editor.project_opt().is_none() {
+            gz_ui::state::empty_state(ui, Icon::Character, "No project", "Characters are .npcasset files of the open project.", None);
+            return;
+        }
+        self.sync();
+        if let Some(lists) = Lists::of(cx.editor) {
+            lists.want(cx.editor);
+            self.lists = lists.view();
+        }
+        if self.sheets.is_none() {
+            self.sheets = Sheets::of(cx.editor);
+        }
+        self.revalidate();
+        self.draw_body(ui);
+        self.run_actions(&ctx);
+    }
+
+    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.start_save(Then::Nothing)
+    }
+
+    fn discard(&mut self, _cx: &mut DocCx<'_>) {
+        self.discard_edits();
+    }
+
+    fn on_activate(&mut self, _cx: &mut DocCx<'_>) {
+        // the files as they are now: a write over MCP may have come after the tab last looked
+        self.reload_fresh();
+    }
+
+    fn mcp_state(&self) -> Value {
+        self.view_json(false)
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// The `characters_view` answer of a tab that is not open.
+#[must_use]
+pub fn closed_json() -> Value {
+    json!({ "tab": TAB, "open": false, "active": false, "selected": "", "file": "", "dirty": false, "count": 0, "problems": [] })
+}
+
+pub(crate) fn install(b: &mut ShellBuilder) {
+    b.document(TAB, |editor, req| {
+        if editor.project_opt().is_none() {
+            return Err("no project is open".to_owned());
+        }
+        Ok(Box::new(CharactersDoc::new(editor, req.path.clone())))
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_problem_reads_as_a_sentence_under_its_field() {
+        let p = "E103 characters/x.npcasset: no name - it is what the player reads";
+        assert_eq!(field_of(p), "name");
+        assert_eq!(problem_text(p), "No name - it is what the player reads.");
+        assert_eq!(problem_tone(p), Tone::Error);
+        assert_eq!(field_of("W120 a: x"), "trade");
+        assert_eq!(field_of("E999 a: x"), "");
+        assert_eq!(problem_text("W105 a: done!"), "Done!");
+    }
+
+    #[test]
+    fn the_edited_character_is_checked_against_the_others() {
+        let mut roster = Roster::default();
+        let a = Character { id: "a".into(), file: "characters/a.npcasset".into(), ..Character::default() };
+        let b = Character { id: "b".into(), file: "characters/b.npcasset".into(), base: "nobody".into(), ..Character::default() };
+        roster.raw = vec![a, b.clone()];
+        let problems = own_problems(&roster, Some(1), &b, &Checker::unlinked());
+        assert!(problems.iter().any(|p| p.starts_with("E111 characters/b.npcasset: ")), "{problems:?}");
+        assert!(!problems.iter().any(|p| p.starts_with("E101")));
+        let twin = Character { id: "a".into(), ..Character::default() };
+        let problems = own_problems(&roster, None, &twin, &Checker::unlinked());
+        assert!(problems.iter().any(|p| p.starts_with("E101 a: another character has the id 'a'")), "{problems:?}");
+    }
+
+    #[test]
+    fn a_closed_tab_reports_nothing_selected() {
+        let v = closed_json();
+        assert_eq!(v["tab"], "characters");
+        assert_eq!(v["open"], false);
+        assert_eq!(v["selected"], "");
+    }
+}
