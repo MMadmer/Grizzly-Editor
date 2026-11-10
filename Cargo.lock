@@ -1925,6 +1925,30 @@ version = "0.1.0"
 [[package]]
 name = "gz-ui-level"
 version = "0.1.0"
+dependencies = [
+ "egui",
+ "gz-app",
+ "gz-base",
+ "gz-editor",
+ "gz-entities",
+ "gz-fmt-level",
+ "gz-fmt-xr",
+ "gz-game",
+ "gz-project",
+ "gz-query",
+ "gz-scene",
+ "gz-store",
+ "gz-ui",
+ "gz-ui-app",
+ "gz-ui-content",
+ "gz-ui-viewport",
+ "gz-vfs",
+ "parking_lot 0.13.0",
+ "rfd",
+ "rustc-hash 2.1.3",
+ "serde_json",
+ "time",
+]
 
 [[package]]
 name = "gz-ui-mod"

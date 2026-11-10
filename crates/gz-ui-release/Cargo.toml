@@ -1,0 +1,30 @@
+[package]
+name = "gz-ui-release"
+description = "The windows that put a module in front of players: Publish Release, the Releases tab, Submit to Mod Browser, and the author key row."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-mod.workspace = true
+gz-release.workspace = true
+gz-github.workspace = true
+gz-publish = { path = "../gz-publish" }
+gz-catalog.workspace = true
+gz-ui-mod = { path = "../gz-ui-mod" }
+gz-ui.workspace = true
+gz-app.workspace = true
+egui.workspace = true
+parking_lot.workspace = true
+serde_json.workspace = true
+time.workspace = true
+zeroize = "1"
+# the system's file dialog (where a new author key goes, another key file)
+rfd = { version = "0.15", default-features = false }
