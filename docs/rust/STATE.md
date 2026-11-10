@@ -73,6 +73,7 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-game` | done | `GameLink` (project scope): `files`, `rev`, `refresh`, and as queries keyed by `rev`: `configs` (BFS include discovery, parallel parse, editor `CInifile` rules), `language`, `strings`, `texture_sheets`, `modes`, `spawn_sections`, `game_version`; `Bundled` + `read_game_or_bundled` / `spawn_roster`; commands `game_link`, `game_modes`, `list_spawn_sections`; tests written, not run |
 | `gz-mod` | done | `mod.ltx`: its own lossless `ManifestDoc` (the C++ comment rules, see findings), the typed `Manifest`, `Edit`s, metadata rules, `[commands]` (`E401`..`W408`), `[exclude]` / `outside_build`, `ManifestService` (store + `AutoSave`, outside changes reloaded); `mod_manifest`, `mod_set_manifest`, `mod_exclude`, `mod_commands`; the scaffold hook (`gz_mod::install`); slots `ManifestFields` (`world`) and `ManifestArgs` (`tags`, `thumbnail`) |
 | `gz-release` | done | Package Release as the job `package` (group `build`) staged through `gz_build::run_build`; own ZIP writer (parallel level-9 deflate, ZIP64) and reader (index read back from the archive); index, descriptor, `[card]` as the C++ text; author key file (`xms-key 1`, PBKDF2 600000 + HMAC stream + MAC) and ECDSA P-256 signing/verify in pure Rust; MOD_CATALOG 8 / 10.3 content rules; tags and thumbnail hooks of `mod_set_manifest`; `mod_package`, interim `mod_catalog` (key actions only, `key_action` / `key_state` for `gz-catalog`). See findings |
+| `gz-render` | done | wgpu 30 forward renderer, no window, no scene: `DrawList` -> `build_packet` (parallel cull or the caller's `Visibility`, instanced groups by mesh + material, blended back to front, helpers, labels, nearest 128 lights) -> the render thread (newest packet wins, passes in parallel chunks, frame clock `wait_frame`, `capture`, `Wake`), `render_offscreen`, `ThumbnailCache`; `Assets` (caller's `AssetLoader`, IO + CPU jobs, LRU by bytes, BC1-3 as they are), `MaterialTable` (data, 31 rules) -> 13 editor materials in WGSL; Lit (studio) / Unlit / Wireframe / Game Lighting (`glit_light` ported); id-target outline; label occlusion queries; GPU skinning; `examples/offscreen.rs` rendered and looked at. Tests written, not run |
 | `gz-build` | done | `BuildWalk` from the file tree, `BuildCheck` / `BuildChecks` (+ the bake slot), target refusals, the clean build in `modules\.new\<id>` with hard links and two renames, the flat export + report, `run_build` (for `gz-release`), `Builds` (job `build`, results, Task Center `BuildStatus`, `CleanQuestion`); `mod_export` |
 
 ## Findings worth keeping
@@ -228,6 +229,21 @@ From the release port:
   no `unsafe`), `%USERPROFILE%\Documents` as the fallback.
 - While the module stages, `gz_build::Builds::status` shows "Building Module"; the Task Center
   should show `gz_release::Releases::status`, which overlays the build's row.
+
+From the renderer:
+- glam 0.34 has no `Mat4::look_*` / `perspective_*` (they moved to `glam::camera`); `gz-render`'s
+  camera builds its own left-handed, reverse-Z matrices. Clockwise faces are front faces.
+- The window's device is egui-wgpu's default and asks for no features: `gz-app` must request
+  `TEXTURE_COMPRESSION_BC` when the adapter has it, or every DDS is decoded on the CPU. wgpu's
+  default uncaptured-error handler panics; the owner of the device should install its own.
+- `R32Uint` has no MSAA: the id target and its depth are 1x, a pass of their own before the scene;
+  a see-through surface writes it only when selected, so glass never cuts an outline.
+- The UI shows `TargetHandle::view` with `TargetHandle::uv()` (the texture is bucketed) and
+  registers the view again when `serial` changes.
+- A packet that drew a placeholder says `waiting_on_assets()`; the adapter rebuilds it when
+  `is_stale(assets)`. Textures that arrive later are picked up by the render thread itself.
+- Not drawn yet (materials exist): particle systems, detail objects, glows, wallmarks, level
+  geometry from `gcontainer` OGFs, cube-map skies (a sky texture is sampled as 2D).
 
 ## Next packages, in dependency order
 

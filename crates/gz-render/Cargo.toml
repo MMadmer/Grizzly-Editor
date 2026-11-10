@@ -1,0 +1,30 @@
+[package]
+name = "gz-render"
+description = "The editor's renderer: frame packets, the render thread, assets, editor materials and the camera maths, on wgpu."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-task.workspace = true
+gz-fmt-object.workspace = true
+gz-fmt-ogf.workspace = true
+gz-fmt-tex.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+bitflags.workspace = true
+rayon.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+futures.workspace = true
