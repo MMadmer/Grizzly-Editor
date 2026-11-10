@@ -25,6 +25,7 @@ gz-project.workspace = true
 gz-game.workspace = true
 gz-mod.workspace = true
 gz-build.workspace = true
+gz-release.workspace = true
 gz-mcp.workspace = true
 gz-app.workspace = true
 gz-ui.workspace = true

@@ -72,6 +72,7 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-vfs` | done | `GameFiles`: loose `gamedata` over `fsgame.ltx`'s `$arch_dir...$` archives (later over earlier), modules of `modules\` / `mods\` as roots of their own; `get` / `list` / `find` / `read` / `read_many` from the index; the saved index (`appdata\game_index\<hash>.bin`) checked by folder / archive stamps; tests written, not run |
 | `gz-game` | done | `GameLink` (project scope): `files`, `rev`, `refresh`, and as queries keyed by `rev`: `configs` (BFS include discovery, parallel parse, editor `CInifile` rules), `language`, `strings`, `texture_sheets`, `modes`, `spawn_sections`, `game_version`; `Bundled` + `read_game_or_bundled` / `spawn_roster`; commands `game_link`, `game_modes`, `list_spawn_sections`; tests written, not run |
 | `gz-mod` | done | `mod.ltx`: its own lossless `ManifestDoc` (the C++ comment rules, see findings), the typed `Manifest`, `Edit`s, metadata rules, `[commands]` (`E401`..`W408`), `[exclude]` / `outside_build`, `ManifestService` (store + `AutoSave`, outside changes reloaded); `mod_manifest`, `mod_set_manifest`, `mod_exclude`, `mod_commands`; the scaffold hook (`gz_mod::install`); slots `ManifestFields` (`world`) and `ManifestArgs` (`tags`, `thumbnail`) |
+| `gz-release` | done | Package Release as the job `package` (group `build`) staged through `gz_build::run_build`; own ZIP writer (parallel level-9 deflate, ZIP64) and reader (index read back from the archive); index, descriptor, `[card]` as the C++ text; author key file (`xms-key 1`, PBKDF2 600000 + HMAC stream + MAC) and ECDSA P-256 signing/verify in pure Rust; MOD_CATALOG 8 / 10.3 content rules; tags and thumbnail hooks of `mod_set_manifest`; `mod_package`, interim `mod_catalog` (key actions only, `key_action` / `key_state` for `gz-catalog`). See findings |
 | `gz-build` | done | `BuildWalk` from the file tree, `BuildCheck` / `BuildChecks` (+ the bake slot), target refusals, the clean build in `modules\.new\<id>` with hard links and two renames, the flat export + report, `run_build` (for `gz-release`), `Builds` (job `build`, results, Task Center `BuildStatus`, `CleanQuestion`); `mod_export` |
 
 ## Findings worth keeping
@@ -214,6 +215,19 @@ From the manifest and build port:
   screens), `.set_bake(..)` (the scene), `gz_mod::ManifestFields::of(editor).provide("world", ..)`
   (the `world` field of `mod_manifest`, `null` until then), `gz_mod::ManifestArgs::of(editor)
   .provide("tags" | "thumbnail", ..)` (the catalog area; until then those arguments are refused).
+
+From the release port:
+- Byte-equal to the C++ by construction: the file index, the descriptor head, `[card]`, the key
+  file, the signed text framing. NOT byte-equal: the packages (zlib-rs deflate and our own
+  headers instead of minizip/zlib - the index is read back, so the contract holds) and the
+  signatures (RFC 6979 instead of CNG's random nonce - they verify the same, and match the
+  catalog's `xms_catalog.py`, which is RFC 6979 too).
+- Dead stages are found by a lock file (`owner.lock`, held unshared) instead of the C++ pid
+  check; a C++ editor's stage (no lock file) is left to it.
+- Documents is read from `HKCU\...\User Shell Folders\Personal` through `reg export` (UTF-16,
+  no `unsafe`), `%USERPROFILE%\Documents` as the fallback.
+- While the module stages, `gz_build::Builds::status` shows "Building Module"; the Task Center
+  should show `gz_release::Releases::status`, which overlays the build's row.
 
 ## Next packages, in dependency order
 
