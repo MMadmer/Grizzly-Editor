@@ -1,0 +1,28 @@
+[package]
+name = "gz-ui-graph"
+description = "The graph tab: the canvas, the Graph and Details panels and quest_view of quests and behaviour graphs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-editor.workspace = true
+gz-query.workspace = true
+gz-luadata.workspace = true
+gz-mod.workspace = true
+gz-nq.workspace = true
+gz-ui.workspace = true
+gz-app.workspace = true
+egui.workspace = true
+parking_lot.workspace = true
+serde_json.workspace = true
+rustc-hash.workspace = true
+smol_str.workspace = true
+# the Edit menu's Paste reads the clipboard itself: egui hands text over only with Ctrl+V
+arboard = { version = "3.7", default-features = false }
