@@ -36,4 +36,7 @@ gz-mcp.workspace = true
 gz-app.workspace = true
 gz-ui.workspace = true
 gz-ui-app = { path = "../gz-ui-app" }
+gz-ui-mod = { path = "../gz-ui-mod" }
+gz-ui-content = { path = "../gz-ui-content" }
+gz-ui-previews = { path = "../gz-ui-previews" }
 serde_json.workspace = true

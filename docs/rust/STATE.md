@@ -85,6 +85,7 @@ ecovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
 | `gz-ui-app` | done | the Start page (`ShellBuilder::start_page`: New Project form, Open Folder via `rfd` on a thread of its own, search, Last Opened / Name sort, 232x184 cards with twin parents, previews decoded on the pools through a `Query` keyed by path + write time, `ShowsNoScene`, card menu, `dlg.delete_project` counted off the UI thread), Link Game page card, the Output Log (one body for the drawer and the Level panel `output_log`, cursor over `gz_log::Log`, distinct counting per window from "Project opened:", the `log_state` hook), Preferences (`preferences` tab: 44 rows of `EditorPreferences`/`LevelPreferences`, nav, search, Keyboard page over `shortcuts` with an Assign dialog `dlg.assign_shortcut`); command `project_browser_menu`. Rows whose key `gz-app`'s `PREFS` lacks (`object_flags`, `recovery_*`) show their default read-only until those keys are added there. Tests written, not run |
 | `gz-nq` | done | quests and behaviour graphs: `asset` (typed `Graph` with `imbl` node/task vectors, read with the C++ shape messages, `write` byte-equal to `NqLua::Write`, outline, topo order, templates), `catalog` (hand-rolled reader, fold order game|bundled -> modules -> project, `Catalog::is_trigger`, exclusive forms, JSON), `layout` (`node_box`, the one rectangle; the dominator-tree auto layout on bitsets), `validate` (every code and message of `NqValidate`), `references` (typed walker, `find`, `rename_task`), `index` (snapshot, fingerprint, search), `pickers` (15 types from the game's ltx tree / strings / XML / `all.spawn`, the project's custom data, `spawn.part`, looks; `compose` with the scene), `caps` (`class_registrator.script` families), `doc` (`Store<GraphDoc>`: every `quest_apply` op, canvas ops, view state with bookmarks / history / find), `NqService` (queries keyed by game rev, file stamps, manifest, docs' edit serials; slots `CharacterLookup` / `SceneLookup` / `WorldLookup`), the build check (`E113` across graphs); 24 `quest_*` commands (all but `quest_view`), templates, rename hook, `DirtySource`. Tests written, not run |
 | `gz-screens` | done | `Screens` model parsed off `ManifestDoc`, written back with `AppendScreens`' rows (sections in place while their order holds), `import` (+ `plan`: the decision by place and extension; parallel-safe copies), `validate` (E401..W411), the build check, `GameLevels` slot for W407; `screens_get`, `screens_set`; tests written, not run |
+| `gz-ui-content` | done | the Content Browser: one `ContentBrowser` service, two hosts (`content_browser(ui, cx, Host)`: the Content Drawer via `install`, the Level panel `content_browser` - the Level document calls it with `Host::Panel`); sources Project (`FileTree` snapshot), Editor (each category a folder of the data root, walked with `FileTree::scan`), Game (`GameFiles`) as `Catalog`s built on the pools, folder views as a `Query` keyed by (source, folder, search) + revisions; pictures: `texture_tile` on the pools for the size drawn, models through a renderer of the crate's own + `ThumbnailCache`, textures released 3 frames late; `caption` (pure `DrawTileCaption`); every action an editor command; `DragPayload`; `content_browser_navigation` / `_open` / `_selection` / `_copy`. Looked at: tiles 48/96/160/192, list, textures, models, rename box, menus. Tests written, not run |
 
 ## Findings worth keeping
 
@@ -285,6 +286,17 @@ From the PDA and screens port:
   (editor).provide(..)`; unchecked until then, as the C++ while `EditorWorld::Available()` was false.
 - `screens_set action=drop` makes screens and tracks for the loading surface; the C++ used the
   tab's selected surface (loading unless the author switched it).
+
+From the Content Browser:
+- `content_create` lands in the browser's folder only when `folder=` is passed (`gz-project`'s
+  handler; its templates are `pub(crate)`, so the browser cannot take the command over). The C++
+  made it in the folder the browser showed: QA's `test_asset_icons.py` A needs a hook in
+  `gz-project` (a default-folder provider) to pass again.
+- The Editor source is files, not the C++ library references: each category is a folder of the
+  data root (Objects = `rawdata\objects`, Visuals = `gamedata\meshes`, ...); Particles,
+  Entities and Light Anims live in one shared file each and list nothing. `content_browser_open`
+  and `_copy` still find a reference without its extension.
+- Bash heredocs eat `\` (MSYS): MCP drivers with Windows paths are written with the Write tool.
 
 From the scene port:
 - The C++ `CInifile` writer sorts sections and keys (`strcmp`), lower-cases section names and

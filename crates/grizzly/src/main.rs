@@ -86,6 +86,9 @@ fn main() -> ExitCode {
     gz_screens::register(&mut registry);
     gz_scene::register(&mut registry);
     gz_ui_app::register(&mut registry);
+    gz_ui_mod::register(&mut registry);
+    gz_ui_content::register(&mut registry);
+    gz_ui_previews::register(&mut registry);
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
@@ -134,6 +137,9 @@ fn main() -> ExitCode {
 /// What the UI crates plug into the shell: each one's `install`, one line per crate.
 fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_app::install(shell);
+    gz_ui_mod::install(shell);
+    gz_ui_content::install(shell);
+    gz_ui_previews::install(shell);
 }
 
 /// How the shell reads the open project: the project area's own answer.

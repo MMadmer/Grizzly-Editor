@@ -1,0 +1,34 @@
+[package]
+name = "gz-ui-content"
+description = "The Content Browser: the project's files, the editor's library and the linked game's content as folders and tiles."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-task.workspace = true
+gz-editor.workspace = true
+gz-query.workspace = true
+gz-project.workspace = true
+gz-vfs.workspace = true
+gz-mod.workspace = true
+gz-fmt-tex.workspace = true
+gz-fmt-ogf.workspace = true
+gz-fmt-object.workspace = true
+gz-render.workspace = true
+gz-ui.workspace = true
+gz-app.workspace = true
+egui.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde_json.workspace = true
+# the system's folder dialog (Link Game...)
+rfd = { version = "0.15", default-features = false }
