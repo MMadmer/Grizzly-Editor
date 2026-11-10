@@ -99,6 +99,13 @@ fn main() -> ExitCode {
     gz_ui_viewport::register(&mut registry);
     gz_ui_graph::register(&mut registry);
 
+    if cli.dump_commands {
+        for c in registry.commands() {
+            println!("{} {}", c.name, c.area);
+        }
+        return ExitCode::SUCCESS;
+    }
+
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
     gz_app::project::set_project_probe(&editor, project_probe);

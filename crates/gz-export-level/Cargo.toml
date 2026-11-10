@@ -1,0 +1,33 @@
+[package]
+name = "gz-export-level"
+description = "The module's level layer: spawn ops, way paths, the collision overlay, cuts and world-space visuals of a scene."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-editor.workspace = true
+gz-store.workspace = true
+gz-scene.workspace = true
+gz-entities.workspace = true
+gz-fmt-level.workspace = true
+gz-fmt-object.workspace = true
+gz-fmt-ogf.workspace = true
+gz-world.workspace = true
+gz-nq.workspace = true
+gz-project.workspace = true
+gz-game.workspace = true
+gz-vfs.workspace = true
+gz-build.workspace = true
+glam.workspace = true
+smol_str.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+rayon.workspace = true
+thiserror.workspace = true

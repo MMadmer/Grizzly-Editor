@@ -20,6 +20,8 @@ pub struct Cli {
     pub echo: bool,
     /// `-iconsheet`: show every icon of the kit and nothing else.
     pub iconsheet: bool,
+    /// `-dump_commands`: print every registered command with its area and exit.
+    pub dump_commands: bool,
     /// Options nobody knows: named in the log, never fatal.
     pub unknown: Vec<String>,
 }
@@ -43,6 +45,7 @@ impl Cli {
                 "root" => cli.root = it.next().map(PathBuf::from),
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
+                "dump_commands" => cli.dump_commands = true,
                 _ => cli.unknown.push(arg),
             }
         }
