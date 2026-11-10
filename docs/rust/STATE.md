@@ -75,6 +75,9 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-release` | done | Package Release as the job `package` (group `build`) staged through `gz_build::run_build`; own ZIP writer (parallel level-9 deflate, ZIP64) and reader (index read back from the archive); index, descriptor, `[card]` as the C++ text; author key file (`xms-key 1`, PBKDF2 600000 + HMAC stream + MAC) and ECDSA P-256 signing/verify in pure Rust; MOD_CATALOG 8 / 10.3 content rules; tags and thumbnail hooks of `mod_set_manifest`; `mod_package`, interim `mod_catalog` (key actions only, `key_action` / `key_state` for `gz-catalog`). See findings |
 | `gz-render` | done | wgpu 30 forward renderer, no window, no scene: `DrawList` -> `build_packet` (parallel cull or the caller's `Visibility`, instanced groups by mesh + material, blended back to front, helpers, labels, nearest 128 lights) -> the render thread (newest packet wins, passes in parallel chunks, frame clock `wait_frame`, `capture`, `Wake`), `render_offscreen`, `ThumbnailCache`; `Assets` (caller's `AssetLoader`, IO + CPU jobs, LRU by bytes, BC1-3 as they are), `MaterialTable` (data, 31 rules) -> 13 editor materials in WGSL; Lit (studio) / Unlit / Wireframe / Game Lighting (`glit_light` ported); id-target outline; label occlusion queries; GPU skinning; `examples/offscreen.rs` rendered and looked at. Tests written, not run |
 | `gz-build` | done | `BuildWalk` from the file tree, `BuildCheck` / `BuildChecks` (+ the bake slot), target refusals, the clean build in `modules\.new\<id>` with hard links and two renames, the flat export + report, `run_build` (for `gz-release`), `Builds` (job `build`, results, Task Center `BuildStatus`, `CleanQuestion`); `mod_export` |
+| `gz-lua` | done | LuaJIT 2.1 vendored (`mlua` 0.12, JIT off, count hook = instruction budget); `LuaHost` pool of states (one per caller, scripts kept per revision), `Script`, `Arg::{Value, Chunk}` (a text run in an empty env: the asset is the table LuaJIT builds), `call_omitting`; sandbox = base + string/table/math, the C++ reader's 18 globals; `vanilla_source` rewrites the fork's `//` `/* */` comments; tests written, not run |
+| `gz-pda` | done | `evaluate` (gz-luadata check, then the game's `normalize`), `Layout`/`Item`/... read as the C++ read the stack, `preview` block, `template`; `Preview` state machine (pages, vars, log, toasts, rows, scroll, keys, map zoom, boxes / hit test / `visible` in canvas units); `PdaService` (reader and layout `Query`s, W320 textures, list, `[pda] layout`); the build check; `content_create kind=pda` template; `pda_list`, `pda_get`, `pda_write`, `pda_delete`, `pda_use`, `pda_validate`; tests written, not run |
+| `gz-screens` | done | `Screens` model parsed off `ManifestDoc`, written back with `AppendScreens`' rows (sections in place while their order holds), `import` (+ `plan`: the decision by place and extension; parallel-safe copies), `validate` (E401..W411), the build check, `GameLevels` slot for W407; `screens_get`, `screens_set`; tests written, not run |
 
 ## Findings worth keeping
 
@@ -244,6 +247,20 @@ From the renderer:
   `is_stale(assets)`. Textures that arrive later are picked up by the render thread itself.
 - Not drawn yet (materials exist): particle systems, detail objects, glows, wallmarks, level
   geometry from `gcontainer` OGFs, cube-map skies (a sky texture is sampled as 2D).
+
+From the PDA and screens port:
+- LuaJIT's vendored build (`msvcbuild.bat`) runs `minilua` from its own folder; a shell with
+  `NoDefaultCurrentDirectoryInExePath=1` (Claude Code's) breaks it ("minilua is not recognized").
+  Build with the variable unset: `env -u NoDefaultCurrentDirectoryInExePath bash tools/rust/cg.sh ...`.
+  The first `cargo check` of `mlua-sys` took about 17 s.
+- The asset is compiled by LuaJIT itself (after `gz_luadata` accepted it), so `pairs` walks the
+  game's order; the reader's answer crosses as `Value` with `state` and `lists` left out (the
+  run-time rows bookkeeping; the preview never called `list_rows`).
+- `list_assets` has no PDA or screens category (C++ `CATEGORIES` is closed): nothing registered.
+- W407 (a screen's level the game lacks) waits for the world area: `gz_screens::GameLevels::of
+  (editor).provide(..)`; unchecked until then, as the C++ while `EditorWorld::Available()` was false.
+- `screens_set action=drop` makes screens and tracks for the loading surface; the C++ used the
+  tab's selected surface (loading unless the author switched it).
 
 ## Next packages, in dependency order
 

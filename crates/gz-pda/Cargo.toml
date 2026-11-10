@@ -1,0 +1,28 @@
+[package]
+name = "gz-pda"
+description = "PDA interfaces: the .pdaasset read by the game's own reader, [pda] layout, the build's check, the preview's state."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-query.workspace = true
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-vfs.workspace = true
+gz-game.workspace = true
+gz-mod.workspace = true
+gz-build.workspace = true
+gz-lua.workspace = true
+gz-luadata.workspace = true
+gz-fmt-xml.workspace = true
+futures.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

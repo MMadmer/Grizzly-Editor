@@ -78,12 +78,17 @@ fn main() -> ExitCode {
     gz_mod::register(&mut registry);
     gz_build::register(&mut registry);
     gz_release::register(&mut registry);
+    gz_pda::register(&mut registry);
+    gz_screens::register(&mut registry);
+    gz_ui_app::register(&mut registry);
 
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
     gz_app::project::set_project_probe(&editor, project_probe);
     gz_mod::install(&editor);
     gz_release::install(&editor);
+    gz_pda::install(&editor);
+    gz_screens::install(&editor);
 
     startup.stage("Opening the control endpoint");
     let port = cli.mcp_port.unwrap_or(SIDE_BY_SIDE_PORT);
@@ -120,7 +125,9 @@ fn main() -> ExitCode {
 }
 
 /// What the UI crates plug into the shell: each one's `install`, one line per crate.
-fn install_ui(_shell: &mut gz_app::ShellBuilder) {}
+fn install_ui(shell: &mut gz_app::ShellBuilder) {
+    gz_ui_app::install(shell);
+}
 
 /// How the shell reads the open project: the project area's own answer.
 fn project_probe(editor: &Editor) -> gz_app::project::ProjectInfo {

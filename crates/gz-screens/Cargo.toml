@@ -1,0 +1,23 @@
+[package]
+name = "gz-screens"
+description = "A module's loading and menu screens and their music: the [screens] model in mod.ltx, the import of their files, the build's check."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-editor.workspace = true
+gz-project.workspace = true
+gz-mod.workspace = true
+gz-build.workspace = true
+gz-luadata.workspace = true
+gz-fmt-tex.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+serde_json.workspace = true
