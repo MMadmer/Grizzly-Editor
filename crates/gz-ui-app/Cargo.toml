@@ -1,0 +1,27 @@
+[package]
+name = "gz-ui-app"
+description = "The application's own surfaces: the Start page, the Link Game card, the Output Log and Preferences."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-log.workspace = true
+gz-editor.workspace = true
+gz-query.workspace = true
+gz-project.workspace = true
+gz-ui.workspace = true
+gz-app.workspace = true
+egui.workspace = true
+parking_lot.workspace = true
+serde_json.workspace = true
+rustc-hash.workspace = true
+png.workspace = true
+# the system's folder dialog (Open Folder..., a location, the game folder)
+rfd = { version = "0.15", default-features = false }

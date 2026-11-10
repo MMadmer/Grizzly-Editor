@@ -297,6 +297,9 @@ pub fn install(ctx: &Context, accent: Accent) {
     style.spacing.scroll.floating = false;
     style.interaction.tooltip_delay = metrics::TOOLTIP_DELAY;
     style.interaction.selectable_labels = false;
+    // Activation is synchronous: a menu, a dialog or a tooltip is whole on the frame it appears,
+    // so a picture never catches it half way. Only the spinner animates, and it draws itself.
+    style.animation_time = 0.0;
     style.text_styles = [
         (TextStyle::Body, FontId::new(crate::font::Font::Body.size(), FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(crate::font::Font::Body.size(), FontFamily::Proportional)),
