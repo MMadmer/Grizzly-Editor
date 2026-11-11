@@ -88,8 +88,8 @@ Each under 2 s.
 ## 2b. No test needs a window or a graphics device
 
 A test that creates a wgpu device (in `gz-render`, `gz-ui-*`) must not hang or fail on a
-machine without one - as of this writing no device can be created on this machine at all (a
-dead process is stuck in the GPU driver until a restart). Such a test asks for its device
+machine without one (it happened here: a dead process stuck in the GPU driver made device
+creation hang for every program until a restart). Such a test asks for its device
 through one helper with a 5 s limit and prints `skipped: no graphics device` when there is
 none; everything that can be tested without a device (packets, culling, the particle steps,
 layout, models of panels) is tested without one.
