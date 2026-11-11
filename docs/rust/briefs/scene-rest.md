@@ -113,6 +113,30 @@ You own: `crates/gz-scene/**`, `crates/gz-ui-level/**`, `crates/gz-ui-viewport/*
   (`CommandShowProperties`, `CommandOptions`, ...), the grid slot count command
   (`CommandGridNumberOfSlots`).
 
+**What the shell package left for you** (STATE.md, "The shell's rest")
+- The View switches are stored and reported but the picture ignores them: Shade Mode, Edged
+  Faces, Linear Filtering, Textures, Fog, Environment (`UIMainMenuForm::DrawViewportOptions`
+  and what each `rs*` flag does in the C++ device and tools). Make `gz-render` and the
+  viewport's extraction honour each one (you may edit `crates/gz-render` for this).
+- Reload Textures also refreshes the Content Browser's tiles (one call into `gz-ui-content`;
+  you may edit that one place).
+- `mod_export_spawn` answers `missing` and `removed` as the C++ does (`EditorModScene.cpp`),
+  and the Bake Scene Layer result shows those two rows (`gz-ui-mod`, that dialog only).
+- Safe Rect and Find in World Outliner both default to Ctrl+F: give each the C++ default
+  (the repository's `level.ini [shortcuts]` and the C++ bindings table) so no two commands
+  share a default key; add a written test that the default table has no duplicate chord.
+- **Leaving cleanly.** A test run left an editor process stuck inside the GPU driver: a wgpu
+  renderer owned by a thread-local was dropped while the process was ending, the driver hung,
+  the run script killed the process, and the dead process kept a kernel thread spinning - no
+  program on the machine could create a graphics device until a restart. `App::exiting` in
+  `crates/gz-app/src/window.rs` now releases that renderer first; make the whole exit path
+  safe by construction (you may edit `gz-app/src/window.rs` and the viewport's render thread
+  for this): on exit the render thread is stopped and joined, every surface, painter, renderer
+  and device is dropped explicitly on the thread that owns it WHILE the event loop is still
+  alive, in that order, and only then does the loop end; nothing that owns a GPU object lives
+  in a thread-local, a `static` or a detached thread; a panic on the way out still takes this
+  path. Say in the rustdoc of `window.rs` what the order is and why.
+
 **The command table**: register every scene command of the C++ registry in the shell's slot
 under its C++ id and name (STATE.md, "The shell's rest", lists the names left out for you), so
 `list_commands` covers the registry and `exec_command` runs them.
@@ -132,6 +156,11 @@ fills (the camera for a quest position, Reload Objects), fill.
   the common case on the surface, the rest under one folded More; a destructive action
   confirms through the kit naming what goes.
 - Tests are written, not run.
+- **The look may be impossible.** If the lead's prompt says no graphics device can be created
+  on the machine, do not start the editor with a window at all: drive your commands through a
+  headless editor instead (`Intermediate\cargo\debug\Grizzly.exe -headless -nodlg -mcp_port
+  28931 -project <temp copy>`, closed with `window_control action=close`), and list in the
+  report what still has to be looked at.
 - Compile: `bash tools/rust/cg.sh check -p gz-scene -p gz-ui-level -p gz-ui-viewport -p
   gz-levelbuild -p grizzly`, zero warnings; clippy clean for your crates. Then build and LOOK,
   on a temp COPY of `D:\XFinedProjects\Test` (the Escape scene): copy / paste over MCP, a
