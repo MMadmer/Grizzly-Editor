@@ -435,16 +435,16 @@ impl Viewport {
                 apply_tool_flags(&mut state.settings, &mut state.tool, f);
             }
             Viewport {
-            state: Mutex::new(state),
-            rev: AtomicU64::new(1),
-            renderer: Mutex::new(None),
-            renderer_failed: Mutex::new(false),
-            build: Mutex::new(BuildCtl::default()),
-            loader_key: Mutex::new(None),
-            game_data: Mutex::new(GameData::default()),
-            rates: Mutex::new(Rates::default()),
-            animating: AtomicBool::new(false),
-            anim_tick: AtomicU64::new(0),
+                state: Mutex::new(state),
+                rev: AtomicU64::new(1),
+                renderer: Mutex::new(None),
+                renderer_failed: Mutex::new(false),
+                build: Mutex::new(BuildCtl::default()),
+                loader_key: Mutex::new(None),
+                game_data: Mutex::new(GameData::default()),
+                rates: Mutex::new(Rates::default()),
+                animating: AtomicBool::new(false),
+                anim_tick: AtomicU64::new(0),
             }
         })
     }
@@ -701,7 +701,11 @@ impl Viewport {
         };
         let stale = self.build.lock().packet.as_ref().is_some_and(|p| p.waiting_on_assets());
         // View > Real Time draws every frame too
-        let anim = if self.animating.load(Ordering::Acquire) || real_time(editor) { self.anim_tick.fetch_add(1, Ordering::AcqRel) + 1 } else { 0 };
+        let anim = if self.animating.load(Ordering::Acquire) || real_time(editor) {
+            self.anim_tick.fetch_add(1, Ordering::AcqRel) + 1
+        } else {
+            0
+        };
         BuildKey {
             scene,
             library,
@@ -1215,7 +1219,9 @@ impl Viewport {
         let mut last = kept.0.load(Ordering::Acquire);
         if last == u64::MAX {
             // what `of` started from, so a switch changed before the first frame is written
-            let f = prefs.tools_settings().unwrap_or_else(|| tool_flags(&Settings::default(), &Tool::default(), 0));
+            let f = prefs
+                .tools_settings()
+                .unwrap_or_else(|| tool_flags(&Settings::default(), &Tool::default(), 0));
             kept.0.store(u64::from(f), Ordering::Release);
             last = u64::from(f);
         }
@@ -1233,7 +1239,10 @@ impl Viewport {
         if real_time(editor)
             && let Ok(q) = gz_app::UiQueue::of(editor)
         {
-            let fps = gz_app::EditorSettings::of(editor).pref("active_idle_fps").unwrap_or(120.0).clamp(30.0, 240.0);
+            let fps = gz_app::EditorSettings::of(editor)
+                .pref("active_idle_fps")
+                .unwrap_or(120.0)
+                .clamp(30.0, 240.0);
             q.post(move |_, ctx| ctx.request_repaint_after(Duration::from_secs_f64(1.0 / fps)));
         }
     }
@@ -1342,10 +1351,12 @@ pub(crate) fn render_json(editor: &Arc<Editor>) -> gz_editor::Value {
     })
 }
 
-
 /// The scene with a playing motion's object posed where its motion has it now, and the camera
 /// it gives when Camera View is on: `(-r.y, -r.x, -r.z)` from its position.
-fn motion_pose(editor: &Editor, state: &gz_scene::SceneState) -> Option<(gz_scene::SceneState, Option<(Vec3, Vec3)>)> {
+fn motion_pose(
+    editor: &Editor,
+    state: &gz_scene::SceneState,
+) -> Option<(gz_scene::SceneState, Option<(Vec3, Vec3)>)> {
     let session = editor.project_opt()?;
     let play = (*gz_scene::cmd_edit::MotionPlayback::of(&session).playing.lock())?;
     let o = state.get(play.id)?;
@@ -1357,7 +1368,8 @@ fn motion_pose(editor: &Editor, state: &gz_scene::SceneState) -> Option<(gz_scen
     let mut moved = (**o).clone();
     moved.xform.position = pos;
     moved.xform.rotation = rot;
-    let cam = (o.co_flags() & gz_scene::objmotion::CAMERA_VIEW != 0).then(|| (Vec3::new(rot.y, rot.x, rot.z), pos));
+    let cam =
+        (o.co_flags() & gz_scene::objmotion::CAMERA_VIEW != 0).then(|| (Vec3::new(rot.y, rot.x, rot.z), pos));
     let mut st = state.clone();
     st.replace(moved);
     Some((st, cam))

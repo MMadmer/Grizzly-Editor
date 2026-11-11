@@ -1194,6 +1194,8 @@ enum Step {
 /// its sub-command (named, or picked by the parameters) and the parameters given over the
 /// sub-command's own. Off the UI thread; what the row does there runs there. `origin` is who
 /// asked: a caller over MCP has decided, so a question the row raises is answered, never shown.
+// the row, its sub-command, both parameters and the caller: what `exec_command` carries
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn exec(
     editor: &Arc<Editor>,
     id: Option<i64>,
@@ -1262,7 +1264,8 @@ pub(crate) async fn exec(
             if reply.get("ok").and_then(Value::as_bool) == Some(true) {
                 Ran { id, name, result: CommandVar::Int(1), refused: None }
             } else {
-                let why = reply.get("error").and_then(Value::as_str).unwrap_or("the command failed").to_owned();
+                let why =
+                    reply.get("error").and_then(Value::as_str).unwrap_or("the command failed").to_owned();
                 Ran { id, name, result: CommandVar::Int(0), refused: Some(why) }
             }
         }

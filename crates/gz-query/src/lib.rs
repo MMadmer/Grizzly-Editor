@@ -11,12 +11,14 @@
 //! [`Query::fresh`] and awaits the real thing.
 
 use std::hash::Hash;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 
 use gz_base::Rev;
 use gz_task::Executors;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
+use tokio::sync::Notify;
 
 /// What a non-blocking read gets.
 #[derive(Debug)]
@@ -67,6 +69,14 @@ struct Slot<V> {
     value: Option<Arc<V>>,
     /// A computation is running (for whatever revision was current when it started).
     running: bool,
+    /// Told when a computation ends: the readers that wait for one instead of starting their own.
+    done: Arc<Notify>,
+}
+
+impl<V> Slot<V> {
+    fn new() -> Self {
+        Self { rev: Rev::ZERO, value: None, running: false, done: Arc::new(Notify::new()) }
+    }
 }
 
 struct Inner<K, V> {
@@ -82,6 +92,26 @@ pub struct Query<K, V> {
 impl<K, V> Clone for Query<K, V> {
     fn clone(&self) -> Self {
         Self { inner: self.inner.clone() }
+    }
+}
+
+/// What a waiting read does next.
+enum Step<V> {
+    Done(Arc<V>),
+    Wait(Arc<Notify>),
+    Compute,
+}
+
+/// Ends a computation: its value for `rev` (none after a panic), and the waiters told.
+fn finish<K: Eq + Hash, V>(inner: &Inner<K, V>, key: &K, rev: Rev, value: Option<Arc<V>>) {
+    let mut slots = inner.slots.lock();
+    if let Some(slot) = slots.get_mut(key) {
+        slot.running = false;
+        if let Some(value) = value {
+            slot.value = Some(value);
+            slot.rev = rev;
+        }
+        slot.done.notify_waiters();
     }
 }
 
@@ -101,8 +131,7 @@ where
     /// moves while one runs is picked up by the next read.
     pub fn get(&self, key: &K, rev: Rev, compute: impl FnOnce() -> V + Send + 'static) -> Answer<V> {
         let mut slots = self.inner.slots.lock();
-        let slot =
-            slots.entry(key.clone()).or_insert_with(|| Slot { rev: Rev::ZERO, value: None, running: false });
+        let slot = slots.entry(key.clone()).or_insert_with(Slot::new);
         if slot.rev == rev
             && let Some(v) = &slot.value
         {
@@ -115,34 +144,74 @@ where
             let key = key.clone();
             self.inner.exec.spawn_cpu(move || {
                 // a panic in `compute` must not leave the slot marked running for ever
-                let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(compute)).ok();
-                {
-                    let mut slots = inner.slots.lock();
-                    if let Some(slot) = slots.get_mut(&key) {
-                        slot.running = false;
-                        if let Some(value) = value {
-                            slot.value = Some(Arc::new(value));
-                            slot.rev = rev;
-                        }
-                    }
-                }
+                let value = catch_unwind(AssertUnwindSafe(compute)).ok().map(Arc::new);
+                finish(&inner, &key, rev, value);
                 inner.exec.wake().ping();
             });
         }
         answer
     }
 
-    /// Awaits the value for `rev`, computing it on the CPU pool when it is missing.
+    /// Awaits the value for `rev`, computing it on the CPU pool when it is missing. Callers that
+    /// ask while a computation of the key runs wait for it, so one revision is computed once
+    /// however many ask at the same time. A panic in `compute` continues in the caller that
+    /// started it; the others compute again.
     pub async fn fresh(&self, key: &K, rev: Rev, compute: impl FnOnce() -> V + Send + 'static) -> Arc<V> {
-        if let Some(v) = self.peek_at(key, rev) {
-            return v;
+        let mut compute = Some(compute);
+        loop {
+            // decided under the lock, acted on after it: no guard lives across an await
+            let step = {
+                let mut slots = self.inner.slots.lock();
+                let slot = slots.entry(key.clone()).or_insert_with(Slot::new);
+                if slot.rev == rev
+                    && let Some(v) = &slot.value
+                {
+                    Step::Done(v.clone())
+                } else if slot.running {
+                    Step::Wait(slot.done.clone())
+                } else {
+                    slot.running = true;
+                    Step::Compute
+                }
+            };
+            match step {
+                Step::Done(v) => return v,
+                Step::Wait(done) => {
+                    let wait = done.notified();
+                    tokio::pin!(wait);
+                    // registered before the lock is taken again: an end between here and the
+                    // check is not missed
+                    wait.as_mut().enable();
+                    let running = self.inner.slots.lock().get(key).is_some_and(|s| s.running);
+                    if running {
+                        wait.await;
+                    }
+                }
+                Step::Compute => {
+                    let Some(compute) = compute.take() else { continue };
+                    let inner = self.inner.clone();
+                    let key = key.clone();
+                    // the slot is settled on the pool, so a caller that stops waiting leaves no
+                    // computation marked running
+                    let out = self
+                        .inner
+                        .exec
+                        .cpu(move || match catch_unwind(AssertUnwindSafe(compute)) {
+                            Ok(v) => {
+                                let v = Arc::new(v);
+                                finish(&inner, &key, rev, Some(v.clone()));
+                                Ok(v)
+                            }
+                            Err(payload) => {
+                                finish(&inner, &key, rev, None);
+                                Err(payload)
+                            }
+                        })
+                        .await;
+                    return out.unwrap_or_else(|payload| resume_unwind(payload));
+                }
+            }
         }
-        let value = Arc::new(self.inner.exec.cpu(compute).await);
-        let mut slots = self.inner.slots.lock();
-        let slot = slots.entry(key.clone()).or_insert_with(|| Slot { rev, value: None, running: false });
-        slot.value = Some(value.clone());
-        slot.rev = rev;
-        value
     }
 
     /// The value for exactly `rev`, when it is there.
@@ -196,3 +265,6 @@ impl<V: Send + Sync + 'static> Derived<V> {
         self.0.peek(&())
     }
 }
+
+#[cfg(test)]
+mod tests;

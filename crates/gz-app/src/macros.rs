@@ -89,7 +89,9 @@ fn slot_name(editor: &Editor, file: &str) -> String {
     let dir = import_dir(editor);
     let dir_text = format!("{}\\", dir.display());
     match file.get(..dir_text.len()) {
-        Some(head) if head.eq_ignore_ascii_case(&dir_text) => file.get(dir_text.len()..).unwrap_or("").to_owned(),
+        Some(head) if head.eq_ignore_ascii_case(&dir_text) => {
+            file.get(dir_text.len()..).unwrap_or("").to_owned()
+        }
         _ => file.to_owned(),
     }
 }
@@ -200,18 +202,19 @@ pub(crate) fn rows() -> Vec<CppCommand> {
         };
         run_file(&ed, &name, origin).await.map(|()| CommandVar::Int(1))
     });
-    let assign_task = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, p2: CommandVar, _origin| async move {
-        let slot = slot_of(&p1)?;
-        let file = match p2 {
-            CommandVar::Str(s) => s,
-            CommandVar::Int(_) => match pick_file(&ed).await {
-                Some(f) => f,
-                None => return Ok(CommandVar::Int(0)),
-            },
-        };
-        assign(&ed, slot, &file);
-        Ok(CommandVar::Int(1))
-    });
+    let assign_task =
+        CppAction::task(|ed: Arc<Editor>, p1: CommandVar, p2: CommandVar, _origin| async move {
+            let slot = slot_of(&p1)?;
+            let file = match p2 {
+                CommandVar::Str(s) => s,
+                CommandVar::Int(_) => match pick_file(&ed).await {
+                    Some(f) => f,
+                    None => return Ok(CommandVar::Int(0)),
+                },
+            };
+            assign(&ed, slot, &file);
+            Ok(CommandVar::Int(1))
+        });
     let slots = (0..SLOTS)
         .map(|i| {
             CppSub::new(&format!("Slot #{}", i + 1), CommandVar::Int(i as u32), CommandVar::Int(0))
@@ -220,18 +223,26 @@ pub(crate) fn rows() -> Vec<CppCommand> {
         })
         .collect();
     vec![
-        CppCommand::new(50, "COMMAND_EXECUTE_COMMAND_LIST", "", execute)
-            .editable(false)
-            .face("Macros", "Execute Command List", Icon::Terminal),
-        CppCommand::new(51, "COMMAND_LOG_COMMANDS", "", log)
-            .editable(false)
-            .face("Macros", "Log Commands", Icon::Log),
-        CppCommand::new(52, "COMMAND_RUN_MACRO", "Run Macro", run)
-            .subs(slots)
-            .face("Macros", "Run Macro", Icon::Play),
-        CppCommand::new(53, "COMMAND_ASSIGN_MACRO", "", assign_task)
-            .editable(false)
-            .face("Macros", "Assign Macro", Icon::Terminal),
+        CppCommand::new(50, "COMMAND_EXECUTE_COMMAND_LIST", "", execute).editable(false).face(
+            "Macros",
+            "Execute Command List",
+            Icon::Terminal,
+        ),
+        CppCommand::new(51, "COMMAND_LOG_COMMANDS", "", log).editable(false).face(
+            "Macros",
+            "Log Commands",
+            Icon::Log,
+        ),
+        CppCommand::new(52, "COMMAND_RUN_MACRO", "Run Macro", run).subs(slots).face(
+            "Macros",
+            "Run Macro",
+            Icon::Play,
+        ),
+        CppCommand::new(53, "COMMAND_ASSIGN_MACRO", "", assign_task).editable(false).face(
+            "Macros",
+            "Assign Macro",
+            Icon::Terminal,
+        ),
     ]
 }
 

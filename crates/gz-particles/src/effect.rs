@@ -396,7 +396,14 @@ impl Effect {
             } else {
                 Align::Camera
             };
-            sprites.push(Sprite { pos, half, angle: m.rot.x, color: m.color, uv: [lt.x, lt.y, rb.x, rb.y], align });
+            sprites.push(Sprite {
+                pos,
+                half,
+                angle: m.rot.x,
+                color: m.color,
+                uv: [lt.x, lt.y, rb.x, rb.y],
+                align,
+            });
         }
         let cull = if def.flags & flags::CULLING == 0 {
             Cull::None
@@ -463,7 +470,8 @@ mod tests {
 
     #[test]
     fn colors_quantise_like_the_engine() {
-        assert_eq!(argb_f(1.0, 1.0, 0.5, 0.0), 0xff7f_0000);
+        // alpha first, then red, green (floor(127.5) = 127), blue
+        assert_eq!(argb_f(1.0, 1.0, 0.5, 0.0), 0xffff_7f00);
         assert_eq!(argb_f(2.0, -1.0, 0.999, 1.0), 0xff00_feff);
     }
 

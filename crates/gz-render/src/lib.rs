@@ -77,6 +77,8 @@ mod texture;
 mod thumbs;
 mod view;
 
+pub mod testing;
+
 pub use assets::{
     AssetBytes, AssetLoader, AssetRef, AssetState, AssetStats, Assets, Budgets, MaterialHandle, MeshHandle,
     MeshKey, TextureHandle,
@@ -84,8 +86,9 @@ pub use assets::{
 pub use camera::{Camera, Projection, aspect, frame_fit, pick_ray, project};
 pub use color::Color;
 pub use draw_list::{
-    Batch, BatchInstance, DrawList, Environment, Helpers, Instance, InstanceFlags, Label, Light, LightKind, Line,
-    RoofMap, Shape, ShapeKind, Sky, Sprite, SpriteAlign, SpriteBatch, SpriteCull, SpriteSize, Visibility,
+    Batch, BatchInstance, DrawList, Environment, Helpers, Instance, InstanceFlags, Label, Light, LightKind,
+    Line, RoofMap, Shape, ShapeKind, Sky, Sprite, SpriteAlign, SpriteBatch, SpriteCull, SpriteSize,
+    Visibility,
 };
 pub use helpers::LineVertex;
 pub use material::{EditorMaterial, MaterialDesc, MaterialTable, Pass};

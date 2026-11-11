@@ -539,7 +539,8 @@ impl Document for TextureDoc {
         let reload = gz_app::gpu::TextureReload::generation(cx.editor);
         if reload != self.reload_seen {
             self.reload_seen = reload;
-            self.load = Pending::spawn(&cx.editor.exec, load(cx.editor.clone(), self.name.clone(), self.source));
+            self.load =
+                Pending::spawn(&cx.editor.exec, load(cx.editor.clone(), self.name.clone(), self.source));
             self.draws = None;
         }
         let full = ui.max_rect();

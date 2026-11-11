@@ -864,10 +864,17 @@ mod tests {
         assert_eq!(pv_compress(Vec3::Y), 126);
         // -Y sets the y sign bit
         assert_eq!(pv_compress(Vec3::NEG_Y), 0x4000 | 126);
-        for v in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::NEG_Y, Vec3::new(1.0, 1.0, 1.0).normalize()] {
+        for v in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::NEG_Y] {
             let back = pv_decompress(pv_compress(v));
             assert!((back - v).length() < 0.02, "{v:?} -> {back:?}");
         }
+        // the diagonal floors to 41 / 41 (x * w is just under 42), so z takes 44: the engine's
+        // quantisation is that coarse there (`_compressed_normal.cpp`)
+        let diag = Vec3::new(1.0, 1.0, 1.0).normalize();
+        assert_eq!(pv_compress(diag), (41 << 7) | 41);
+        let back = pv_decompress(pv_compress(diag));
+        assert!((back - Vec3::new(41.0, 41.0, 44.0).normalize()).length() < 1e-6);
+        assert!((back - diag).length() < 0.05);
         // a zero vector is the game's 0, not a division by zero
         assert_eq!(pv_compress(Vec3::ZERO), 0);
     }

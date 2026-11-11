@@ -1044,7 +1044,8 @@ pub fn export_obj(
         let tm = Mat4::mul(&cv, &Mat4::mul(&Mat4::mul(&cv, &world), &cv));
         let fail = |e: BuildError| BuildError::new(format!("{}\nFailed to build object: '{}'", e.0, o.name));
         if is_static(&lo.object) {
-            let mut out = (std::mem::take(&mut b.verts), std::mem::take(&mut b.faces), std::mem::take(&mut b.smgroups));
+            let mut out =
+                (std::mem::take(&mut b.verts), std::mem::take(&mut b.faces), std::mem::take(&mut b.smgroups));
             for m in &lo.object.meshes {
                 let sector = sectors.of_mesh(&o.name, &m.name);
                 b.mesh(&cx, &tm, &world, o, &lo, &surfaces, m, sector, &mut out).map_err(fail)?;

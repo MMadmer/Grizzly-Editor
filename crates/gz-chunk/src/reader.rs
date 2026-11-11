@@ -16,6 +16,12 @@ pub struct Reader<'a> {
 pub struct Chunk<'a>(Cow<'a, [u8]>);
 
 impl<'a> Chunk<'a> {
+    /// A chunk over bytes as they are stored.
+    #[must_use]
+    pub fn borrowed(bytes: &'a [u8]) -> Self {
+        Self(Cow::Borrowed(bytes))
+    }
+
     #[must_use]
     pub fn reader(&self) -> Reader<'_> {
         Reader::new(&self.0)

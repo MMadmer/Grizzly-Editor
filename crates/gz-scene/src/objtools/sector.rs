@@ -125,8 +125,16 @@ impl Volume {
 
 /// What `AddMesh` checks: a static object, a mesh no sector holds, not this sector's already.
 #[must_use]
-pub fn can_add(state: &SceneState, lo: &LibraryObject, items: &[(SmolStr, SmolStr)], object: &str, mesh: &str) -> bool {
-    is_static_any(lo) && find_sector(state, object, mesh).is_none() && !items.iter().any(|i| is_item(i, object, mesh))
+pub fn can_add(
+    state: &SceneState,
+    lo: &LibraryObject,
+    items: &[(SmolStr, SmolStr)],
+    object: &str,
+    mesh: &str,
+) -> bool {
+    is_static_any(lo)
+        && find_sector(state, object, mesh).is_none()
+        && !items.iter().any(|i| is_item(i, object, mesh))
 }
 
 /// The portals that name a sector (`RemoveSectorPortal`).
@@ -432,13 +440,24 @@ pub fn edit_meshes(
 }
 
 /// `TUI_ControlSectorAdd::AddSector`: a new sector of one mesh, selected.
-pub fn new_from_mesh(state: &SceneState, lib: &Library, oid: ObjId, mesh: usize) -> Result<Outcome, CmdError> {
+pub fn new_from_mesh(
+    state: &SceneState,
+    lib: &Library,
+    oid: ObjId,
+    mesh: usize,
+) -> Result<Outcome, CmdError> {
     let o = state.get(oid).ok_or_else(|| CmdError::not_found("object not found"))?;
-    let ObjData::SceneObject(sd) = &o.data else { return Err(CmdError::invalid("the object is not a scene object")) };
-    let lo = lib.cached(&sd.reference).ok_or_else(|| CmdError::invalid("the object's library object is not loaded"))?;
+    let ObjData::SceneObject(sd) = &o.data else {
+        return Err(CmdError::invalid("the object is not a scene object"));
+    };
+    let lo = lib
+        .cached(&sd.reference)
+        .ok_or_else(|| CmdError::invalid("the object's library object is not loaded"))?;
     let m = lo.object.meshes.get(mesh).ok_or_else(|| CmdError::not_found("the object has no such mesh"))?;
     if !can_add(state, &lo, &[], &o.name, &m.name) {
-        return Err(CmdError::invalid("The mesh cannot make a sector: it is dynamic or in a sector already."));
+        return Err(CmdError::invalid(
+            "The mesh cannot make a sector: it is dynamic or in a sector already.",
+        ));
     }
     let mut b = Batch::new("New Sector From Mesh", state.serial);
     b.add.push((new_sector(vec![(o.name.clone(), m.name.clone())]), NameRule::Gen(None)));
@@ -454,10 +473,19 @@ pub fn valid_color(r: u32, g: u32, b: u32) -> bool {
 
 /// `TUI_ControlSectorAdd::AddSectors`: a sector of each mesh of the object, each in a colour of
 /// its own; the last one stays selected.
-pub fn new_from_object(state: &SceneState, lib: &Library, oid: ObjId, seed: i32) -> Result<Outcome, CmdError> {
+pub fn new_from_object(
+    state: &SceneState,
+    lib: &Library,
+    oid: ObjId,
+    seed: i32,
+) -> Result<Outcome, CmdError> {
     let o = state.get(oid).ok_or_else(|| CmdError::not_found("object not found"))?;
-    let ObjData::SceneObject(sd) = &o.data else { return Err(CmdError::invalid("the object is not a scene object")) };
-    let lo = lib.cached(&sd.reference).ok_or_else(|| CmdError::invalid("the object's library object is not loaded"))?;
+    let ObjData::SceneObject(sd) = &o.data else {
+        return Err(CmdError::invalid("the object is not a scene object"));
+    };
+    let lo = lib
+        .cached(&sd.reference)
+        .ok_or_else(|| CmdError::invalid("the object's library object is not loaded"))?;
     let mut rng = geom::CRandom::new(seed);
     let mut b = Batch::new("New Sectors From Object", state.serial);
     b.select_added = true;
@@ -481,7 +509,9 @@ pub fn new_from_object(state: &SceneState, lib: &Library, oid: ObjId, seed: i32)
         names.push(m.name.to_string());
     }
     if b.add.is_empty() {
-        return Err(CmdError::invalid("No mesh of the object can make a sector: it is dynamic or in sectors already."));
+        return Err(CmdError::invalid(
+            "No mesh of the object can make a sector: it is dynamic or in sectors already.",
+        ));
     }
     Ok((b, json!({ "object": o.name.as_str(), "meshes": names })))
 }

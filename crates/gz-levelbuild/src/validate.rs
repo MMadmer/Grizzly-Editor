@@ -47,7 +47,8 @@ impl Tests {
     /// has sectors or portals, which `validate` looks at itself).
     pub const BUILD: Tests = Tests { portal: true, hom: true, glow: true, shaders: true, full: true };
     /// What making the game files tests (`SceneBuilder::MakeGame`).
-    pub const MAKE_GAME: Tests = Tests { portal: false, hom: false, glow: false, shaders: false, full: false };
+    pub const MAKE_GAME: Tests =
+        Tests { portal: false, hom: false, glow: false, shaders: false, full: false };
 }
 
 /// A texture of the game by its path under `textures\` (`lod\lod_props_box.dds`): the path a
@@ -185,7 +186,10 @@ fn sounds(snap: &SceneState, log: &mut Vec<String>) -> bool {
         if let ObjData::SoundEnv(e) = &o.data
             && e.inner == e.outer
         {
-            log.push(format!("SoundEnvironment: '{}' inner and outer environment must be different.", o.name));
+            log.push(format!(
+                "SoundEnvironment: '{}' inner and outer environment must be different.",
+                o.name
+            ));
             return false;
         }
     }
@@ -392,7 +396,9 @@ mod tests {
         let r = run(&s, Tests::MAKE_GAME);
         assert!(r.is_err());
         assert!(
-            lines(&r).iter().any(|l| l == "SoundEnvironment: 'env_1' inner and outer environment must be different.")
+            lines(&r)
+                .iter()
+                .any(|l| l == "SoundEnvironment: 'env_1' inner and outer environment must be different.")
         );
     }
 
@@ -449,6 +455,15 @@ mod tests {
         });
         let mut part = Writer::new();
         part.chunk(1, |w| w.w_u16(3));
+        // the flags and the tool's parameters are required (`ESceneWallmarkTool::LoadStream`)
+        part.chunk(2, |w| w.w_u32(0));
+        part.chunk(3, |w| {
+            for _ in 0..3 {
+                w.w_f32(1.0);
+            }
+            w.w_stringz("effects\\wallmarkmult");
+            w.w_stringz("wm\\a");
+        });
         part.w_chunk(4, &items.into_bytes());
         let mut s = SceneState::default();
         s.bulk.wallmarks = Some(Arc::new(WallmarkPart::read(&part.into_bytes()).unwrap()));

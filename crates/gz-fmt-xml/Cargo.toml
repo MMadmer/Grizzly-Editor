@@ -14,3 +14,6 @@ workspace = true
 gz-base.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
+
+[dev-dependencies]
+gz-corpus.workspace = true

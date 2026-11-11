@@ -10,7 +10,9 @@ use gz_fmt_xr::ShadersXrlc;
 
 use super::sector::{self, DEFAULT_SECTOR};
 use super::way::{self, LinkOp};
-use super::{Batch, ObjToolState, Outcome, ToolEdit, commit, commit_job, portal, selected_of, set_state, shape};
+use super::{
+    Batch, ObjToolState, Outcome, ToolEdit, commit, commit_job, portal, selected_of, set_state, shape,
+};
 use crate::apply::{SceneCmd, SelectMode};
 use crate::class::ObjClass;
 use crate::library::Library;
@@ -41,7 +43,12 @@ fn scene(ed: &Arc<Editor>) -> Result<Arc<SceneService>, CmdError> {
 
 /// The scene, with the tool made the current one first when `show=true` (the Tools panel then
 /// shows its form).
-async fn scene_for(ed: &Arc<Editor>, a: &Args, o: Origin, class: ObjClass) -> Result<Arc<SceneService>, CmdError> {
+async fn scene_for(
+    ed: &Arc<Editor>,
+    a: &Args,
+    o: Origin,
+    class: ObjClass,
+) -> Result<Arc<SceneService>, CmdError> {
     let svc = scene(ed)?;
     if a.flag("show") && svc.store.snapshot().tools.target != class {
         svc.store.send(SceneCmd::SetTarget(class), o).await?;
@@ -55,7 +62,9 @@ fn unknown(action: &str, known: &str) -> CmdError {
 
 /// An object of a class by name (names are kept lower case).
 fn named(s: &SceneState, class: ObjClass, name: &str, what: &str) -> Result<ObjId, CmdError> {
-    s.find(class, &name.to_lowercase()).map(|o| o.id).ok_or_else(|| CmdError::not_found(format!("{what} '{name}' not found")))
+    s.find(class, &name.to_lowercase())
+        .map(|o| o.id)
+        .ok_or_else(|| CmdError::not_found(format!("{what} '{name}' not found")))
 }
 
 fn merge(mut a: Value, b: Value) -> Value {
@@ -110,12 +119,21 @@ fn target_sector(s: &SceneState, a: &Args) -> Result<ObjId, CmdError> {
 }
 
 /// A scene object and one of its meshes, by name or index.
-fn object_mesh(s: &SceneState, lib: &Library, object: &str, mesh: Option<&str>) -> Result<(ObjId, Option<usize>), CmdError> {
+fn object_mesh(
+    s: &SceneState,
+    lib: &Library,
+    object: &str,
+    mesh: Option<&str>,
+) -> Result<(ObjId, Option<usize>), CmdError> {
     let id = named(s, ObjClass::SceneObject, object, "object")?;
     let Some(mesh) = mesh else { return Ok((id, None)) };
     let o = s.get(id).ok_or_else(|| CmdError::not_found("object not found"))?;
-    let ObjData::SceneObject(d) = &o.data else { return Err(CmdError::invalid("the object is not a scene object")) };
-    let lo = lib.cached(&d.reference).ok_or_else(|| CmdError::invalid("the object's library object could not be loaded"))?;
+    let ObjData::SceneObject(d) = &o.data else {
+        return Err(CmdError::invalid("the object is not a scene object"));
+    };
+    let lo = lib
+        .cached(&d.reference)
+        .ok_or_else(|| CmdError::invalid("the object's library object could not be loaded"))?;
     let i = super::geom::mesh_index(&lo, mesh)
         .or_else(|| mesh.parse::<usize>().ok().filter(|i| *i < lo.object.meshes.len()))
         .ok_or_else(|| CmdError::not_found(format!("the object has no mesh '{mesh}'")))?;
@@ -162,7 +180,9 @@ async fn sector_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "validate" => {
             let sh = shaders(&ed).await;
-            let note = sh.is_none().then_some("The compiler shaders (shaders_xrlc.xr) could not be read: the shader checks were left out.");
+            let note = sh.is_none().then_some(
+                "The compiler shaders (shaders_xrlc.xr) could not be read: the shader checks were left out.",
+            );
             let out = commit_job(&ed, &svc, o, "Validating the sectors", move |s, lib, _| {
                 let (valid, problems) = sector::validate(s, lib, sh.as_deref());
                 Ok((Batch::new("Validate", s.serial), json!({ "valid": valid, "problems": problems })))
@@ -179,19 +199,29 @@ async fn sector_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             Ok(out)
         }
         "create_default" => {
-            commit_job(&ed, &svc, o, "Creating the default sector", |s, lib, _| sector::create_default(s, lib)).await
+            commit_job(&ed, &svc, o, "Creating the default sector", |s, lib, _| {
+                sector::create_default(s, lib)
+            })
+            .await
         }
-        "remove_default" => commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| sector::remove_default(s)).await,
+        "remove_default" => {
+            commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| sector::remove_default(s)).await
+        }
         "capture_volume" => {
             let id = target_sector(&svc.store.snapshot(), &a)?;
-            commit_job(&ed, &svc, o, "Capturing the sector's volume", move |s, lib, _| sector::capture_volume(s, lib, id)).await
+            commit_job(&ed, &svc, o, "Capturing the sector's volume", move |s, lib, _| {
+                sector::capture_volume(s, lib, id)
+            })
+            .await
         }
         "distribute" | "distribute_objects" => {
             let s = svc.store.snapshot();
             let id = target_sector(&s, &a)?;
             let name = s.get(id).map(|x| x.name.to_string()).unwrap_or_default();
             // oracle: `CSector::DistributeInsideObjects` is commented out in the C++: it changes nothing
-            Ok(json!({ "sector": name, "changed": 0, "note": "Distribute Objects changes nothing in this version." }))
+            Ok(
+                json!({ "sector": name, "changed": 0, "note": "Distribute Objects changes nothing in this version." }),
+            )
         }
         "add_mesh" | "remove_mesh" | "add_meshes" | "remove_meshes" => {
             let add = action.starts_with("add");
@@ -228,14 +258,20 @@ async fn sector_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             svc.prefetch_library(&ed, &snap).await;
             let (oid, m) = object_mesh(&snap, &svc.library, a.need("object")?, Some(a.need("mesh")?))?;
             let mesh = m.unwrap_or(0);
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| sector::new_from_mesh(s, lib, oid, mesh)).await
+            commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| {
+                sector::new_from_mesh(s, lib, oid, mesh)
+            })
+            .await
         }
         "new_from_object" => {
             let snap = svc.store.snapshot();
             svc.prefetch_library(&ed, &snap).await;
             let (oid, _) = object_mesh(&snap, &svc.library, a.need("object")?, None)?;
             let seed = a.i64("seed").map_or_else(time_seed, |v| v as i32);
-            commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| sector::new_from_object(s, lib, oid, seed)).await
+            commit(&ed, &svc, o, super::Ctl::default(), move |s, lib, _| {
+                sector::new_from_object(s, lib, oid, seed)
+            })
+            .await
         }
         other => Err(unknown(
             other,
@@ -292,7 +328,13 @@ fn name_gen<'a>(s: &'a SceneState, removed: &[ObjId]) -> impl FnMut() -> String 
 }
 
 /// `CalculateAllPortals` / `CalculateSelectedPortals`.
-fn compute_portals(s: &SceneState, lib: &Library, ctl: &super::Ctl, selected: bool, shaders: Option<&ShadersXrlc>) -> Result<Outcome, CmdError> {
+fn compute_portals(
+    s: &SceneState,
+    lib: &Library,
+    ctl: &super::Ctl,
+    selected: bool,
+    shaders: Option<&ShadersXrlc>,
+) -> Result<Outcome, CmdError> {
     ctl.stage("Validating the sectors");
     let (valid, _) = sector::validate(s, lib, shaders);
     if !valid {
@@ -303,7 +345,8 @@ fn compute_portals(s: &SceneState, lib: &Library, ctl: &super::Ctl, selected: bo
         }));
     }
     let (sectors, removed): (Vec<ObjId>, Vec<ObjId>) = if selected {
-        let sel: Vec<ObjId> = s.of_class(ObjClass::Sector).filter(|o| s.is_selected(o.id)).map(|o| o.id).collect();
+        let sel: Vec<ObjId> =
+            s.of_class(ObjClass::Sector).filter(|o| s.is_selected(o.id)).map(|o| o.id).collect();
         if sel.len() < 2 {
             return Err(CmdError::invalid("Select at least 2 sectors."));
         }
@@ -316,13 +359,17 @@ fn compute_portals(s: &SceneState, lib: &Library, ctl: &super::Ctl, selected: bo
             .collect();
         (sel, old)
     } else {
-        (s.of_class(ObjClass::Sector).map(|o| o.id).collect(), s.of_class(ObjClass::Portal).map(|p| p.id).collect())
+        (
+            s.of_class(ObjClass::Sector).map(|o| o.id).collect(),
+            s.of_class(ObjClass::Portal).map(|p| p.id).collect(),
+        )
     };
     let mut names = name_gen(s, &removed);
     let stop = || ctl.stopped();
     let stage = |t: &str| ctl.stage(t);
     let c = portal::compute(s, lib, &sectors, &mut names, &stop, &stage).map_err(|_| super::stopped())?;
-    let mut b = Batch::new(if selected { "Compute Selected Portals" } else { "Compute All Portals" }, s.serial);
+    let mut b =
+        Batch::new(if selected { "Compute Selected Portals" } else { "Compute All Portals" }, s.serial);
     b.remove = removed.clone();
     let created = c.portals.len();
     let mut names = name_gen(s, &removed);
@@ -362,7 +409,10 @@ async fn portal_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 log_lines(&ed, &lines, true);
             }
             let n = out.get("computed").and_then(Value::as_u64).unwrap_or(0);
-            Ok(merge(out, json!({ "message": format!("Computed {n} portal{}", if n == 1 { "" } else { "s" }) })))
+            Ok(merge(
+                out,
+                json!({ "message": format!("Computed {n} portal{}", if n == 1 { "" } else { "s" }) }),
+            ))
         }
         "remove_duplicates" => {
             let out = commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| {
@@ -509,8 +559,15 @@ pub fn remove_points_batch(s: &SceneState, ways: &[ObjId]) -> Outcome {
 }
 
 fn point_keys(w: &WayData, a: &Args) -> Result<Vec<usize>, CmdError> {
-    let keys = a.list("points").or_else(|| a.str("point").map(|p| vec![p.to_owned()])).ok_or_else(|| CmdError::invalid("missing 'points' argument"))?;
-    keys.iter().map(|k| way::point_index(w, k).ok_or_else(|| CmdError::not_found(format!("the way has no point '{k}'")))).collect()
+    let keys = a
+        .list("points")
+        .or_else(|| a.str("point").map(|p| vec![p.to_owned()]))
+        .ok_or_else(|| CmdError::invalid("missing 'points' argument"))?;
+    keys.iter()
+        .map(|k| {
+            way::point_index(w, k).ok_or_else(|| CmdError::not_found(format!("the way has no point '{k}'")))
+        })
+        .collect()
 }
 
 async fn way_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
@@ -548,7 +605,9 @@ async fn way_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "select_points" => {
             let snap = svc.store.snapshot();
             let id = target_way(&snap, &a)?;
-            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else { return Err(CmdError::invalid("the object is not a way")) };
+            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else {
+                return Err(CmdError::invalid("the object is not a way"));
+            };
             let points = point_keys(w, &a)?;
             let mode = match a.str_or("mode", "set") {
                 "add" => SelectMode::Add,
@@ -556,7 +615,9 @@ async fn way_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 "toggle" => SelectMode::Toggle,
                 _ => SelectMode::Set,
             };
-            svc.store.send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points, mode })), o).await?;
+            svc.store
+                .send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points, mode })), o)
+                .await?;
             let s = svc.store.snapshot();
             let out = s.get(id).and_then(|x| match &x.data {
                 ObjData::Way(w) => Some(way_json(&s, x, w)),
@@ -567,11 +628,20 @@ async fn way_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "move_point" => {
             let snap = svc.store.snapshot();
             let id = target_way(&snap, &a)?;
-            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else { return Err(CmdError::invalid("the object is not a way")) };
+            let Some(ObjData::Way(w)) = snap.get(id).map(|x| &x.data) else {
+                return Err(CmdError::invalid("the object is not a way"));
+            };
             let points = point_keys(w, &a)?;
-            let p = Vec3::from_array(a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?);
+            let p = Vec3::from_array(
+                a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?,
+            );
             let moves = points.into_iter().map(|i| (i, p)).collect();
-            svc.store.send(SceneCmd::ObjTool(Box::new(ToolEdit::MovePoints { way: id, points: moves, merge: None })), o).await?;
+            svc.store
+                .send(
+                    SceneCmd::ObjTool(Box::new(ToolEdit::MovePoints { way: id, points: moves, merge: None })),
+                    o,
+                )
+                .await?;
             Ok(json!({ "moved": true }))
         }
         "remove_points" => {
@@ -650,7 +720,9 @@ async fn shape_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "add" => {
             // a Place click's command form (`DefaultAddObject` with the shape of the switch)
-            let p = Vec3::from_array(a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?);
+            let p = Vec3::from_array(
+                a.vec3("position").ok_or_else(|| CmdError::invalid("missing 'position': x,y,z"))?,
+            );
             if !p.is_finite() {
                 return Err(CmdError::invalid("non-finite position"));
             }
@@ -669,7 +741,8 @@ async fn shape_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             })
             .await?;
             let s = svc.store.snapshot();
-            let added = selected_of(&s, ObjClass::Shape).last().and_then(|id| s.get(*id)).map(|x| x.name.to_string());
+            let added =
+                selected_of(&s, ObjClass::Shape).last().and_then(|id| s.get(*id)).map(|x| x.name.to_string());
             Ok(merge(json!({ "shape": added }), shape_state(&s)))
         }
         "detach" => commit(&ed, &svc, o, super::Ctl::default(), |s, _, _| shape::detach_selected(s)).await,
@@ -691,8 +764,10 @@ async fn shape_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             if !svc.store.snapshot().tools.obj.edit_level_bound {
                 return Err(CmdError::invalid("Turn Edit Level Bound on first"));
             }
-            commit_job(&ed, &svc, o, "Recalculating the level bound", |s, lib, _| shape::edit_level_bound(s, lib, true, None))
-                .await
+            commit_job(&ed, &svc, o, "Recalculating the level bound", |s, lib, _| {
+                shape::edit_level_bound(s, lib, true, None)
+            })
+            .await
         }
         other => Err(unknown(other, "state, set, add, attach, detach, edit_level_bound, recalculate")),
     }
@@ -704,7 +779,9 @@ fn light_state(s: &SceneState) -> Value {
     let lights: Vec<Value> = s
         .of_class(ObjClass::Light)
         .filter_map(|o| match &o.data {
-            ObjData::Light(l) => Some(json!({ "name": o.name.as_str(), "selected": s.is_selected(o.id), "viewport": l.use_in_d3d })),
+            ObjData::Light(l) => Some(
+                json!({ "name": o.name.as_str(), "selected": s.is_selected(o.id), "viewport": l.use_in_d3d }),
+            ),
             _ => None,
         })
         .collect();
@@ -747,9 +824,12 @@ async fn light_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "enable_all" => (true, true),
         "disable_selected" => (false, false),
         "disable_all" => (true, false),
-        other => return Err(unknown(other, "state, enable_selected, enable_all, disable_selected, disable_all")),
+        other => {
+            return Err(unknown(other, "state, enable_selected, enable_all, disable_selected, disable_all"));
+        }
     };
-    let out = commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| Ok(use_in_viewport(s, all, on))).await?;
+    let out =
+        commit(&ed, &svc, o, super::Ctl::default(), move |s, _, _| Ok(use_in_viewport(s, all, on))).await?;
     Ok(merge(out, light_state(&svc.store.snapshot())))
 }
 
@@ -852,7 +932,10 @@ mod tests {
     #[test]
     fn link_commands_that_need_points_say_so() {
         let s = SceneState::default();
-        assert_eq!(link_batch(&s, LinkOp::Create1).err().map(|e| e.message), Some("Switch Select to Points first".into()));
+        assert_eq!(
+            link_batch(&s, LinkOp::Create1).err().map(|e| e.message),
+            Some("Switch Select to Points first".into())
+        );
         assert!(link_batch(&s, LinkOp::Convert1).is_ok());
     }
 }

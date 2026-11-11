@@ -40,3 +40,6 @@ pub use gz_log::Log;
 pub use gz_store::{CmdError, Store};
 pub use gz_task::{Cancel, Executors, JobCtx, JobError, JobId, JobInfo, JobState, Jobs};
 pub use serde_json::{Value, json};
+
+#[cfg(test)]
+mod tests;

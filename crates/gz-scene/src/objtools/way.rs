@@ -268,7 +268,10 @@ pub fn pick_point(w: &WayData, start: Vec3, dir: Vec3, range: f32) -> Option<(us
 /// A point's name or its index, as `way_tool` takes them.
 #[must_use]
 pub fn point_index(w: &WayData, key: &str) -> Option<usize> {
-    w.points.iter().position(|p| p.name.eq_ignore_ascii_case(key)).or_else(|| key.parse::<usize>().ok().filter(|i| *i < w.points.len()))
+    w.points
+        .iter()
+        .position(|p| p.name.eq_ignore_ascii_case(key))
+        .or_else(|| key.parse::<usize>().ok().filter(|i| *i < w.points.len()))
 }
 
 #[cfg(test)]

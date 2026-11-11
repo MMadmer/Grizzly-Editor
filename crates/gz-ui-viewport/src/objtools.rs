@@ -60,7 +60,13 @@ fn svc(editor: &Arc<Editor>) -> Option<Arc<SceneService>> {
 
 /// A press of Place for the classes whose Place is a tool of its own. `serial` names the
 /// gesture (the merge key of its undo step).
-pub(crate) fn place_press(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, serial: u64) -> ToolGesture {
+pub(crate) fn place_press(
+    editor: &Arc<Editor>,
+    vp: &Arc<Viewport>,
+    ray: Ray,
+    b: Buttons,
+    serial: u64,
+) -> ToolGesture {
     let Some(svc) = svc(editor) else { return ToolGesture::None };
     let snap = svc.store.snapshot();
     let t = snap.tools.obj;
@@ -129,7 +135,15 @@ pub(crate) fn paint_step(editor: &Arc<Editor>, vp: &Viewport, p: &Paint, ray: Ra
         if let Some(h) = hit {
             let pick = (h.object.id, h.mesh);
             let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, lib, _| {
-                let (mut b, v) = sector::edit_meshes(s, lib, sector, &[pick], add, false, if add { "Add Mesh" } else { "Remove Mesh" })?;
+                let (mut b, v) = sector::edit_meshes(
+                    s,
+                    lib,
+                    sector,
+                    &[pick],
+                    add,
+                    false,
+                    if add { "Add Mesh" } else { "Remove Mesh" },
+                )?;
                 b.merge = Some(merge.clone());
                 Ok((b, v))
             })
@@ -158,11 +172,18 @@ fn sector_new(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons, multipl
     editor.exec.spawn(async move {
         let snap = svc.store.snapshot();
         let lib = svc.library.clone();
-        let Some(h) = ed.exec.cpu(move || geom::pick_mesh(&snap, &lib, ray.origin, ray.dir, far)).await else { return };
+        let Some(h) = ed.exec.cpu(move || geom::pick_mesh(&snap, &lib, ray.origin, ray.dir, far)).await
+        else {
+            return;
+        };
         let (oid, mesh) = (h.object.id, h.mesh);
         let seed = tools_cmd::time_seed();
         let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, lib, _| {
-            if multiple { sector::new_from_object(s, lib, oid, seed) } else { sector::new_from_mesh(s, lib, oid, mesh) }
+            if multiple {
+                sector::new_from_object(s, lib, oid, seed)
+            } else {
+                sector::new_from_mesh(s, lib, oid, mesh)
+            }
         })
         .await;
         match r {
@@ -209,7 +230,15 @@ pub(crate) fn box_pick_end(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], 
             };
             let add = s.tools.obj.sector.mesh_add;
             let picks = sector::meshes_in_frustum(s, lib, &planes);
-            sector::edit_meshes(s, lib, id, &picks, add, !add, if add { "Add Meshes" } else { "Remove Meshes" })
+            sector::edit_meshes(
+                s,
+                lib,
+                id,
+                &picks,
+                add,
+                !add,
+                if add { "Add Meshes" } else { "Remove Meshes" },
+            )
         })
         .await;
         match r {
@@ -229,20 +258,31 @@ pub(crate) fn box_pick_end(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], 
 fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Some(svc) = svc(editor) else { return };
     let snap = svc.store.snapshot();
-    let sel: Vec<ObjId> = snap.of_class(ObjClass::Way).filter(|o| snap.is_selected(o.id) && o.flags.visible).map(|o| o.id).collect();
+    let sel: Vec<ObjId> = snap
+        .of_class(ObjClass::Way)
+        .filter(|o| snap.is_selected(o.id) && o.flags.visible)
+        .map(|o| o.id)
+        .collect();
     let [way_id] = sel.as_slice() else {
         editor.log.info("Select one WayObject.");
         return;
     };
     let way_id = *way_id;
     let (object_snap, grid, far) = vp.read(|s| {
-        (s.settings.object_snap, s.snap_on(crate::gizmo::GizmoType::Move).then_some(s.step(crate::gizmo::GizmoType::Move)), s.nav.far)
+        (
+            s.settings.object_snap,
+            s.snap_on(crate::gizmo::GizmoType::Move).then_some(s.step(crate::gizmo::GizmoType::Move)),
+            s.nav.far,
+        )
     });
     let (ed, vp) = (editor.clone(), vp.clone());
     let origin = editor.ui_origin();
     editor.exec.spawn(async move {
         if let Some((at, _)) = crate::pane::pick_ground(&ed, &svc, ray, object_snap, grid, far).await {
-            let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, _, _| tools_cmd::add_point_batch(s, way_id, at)).await;
+            let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, _, _| {
+                tools_cmd::add_point_batch(s, way_id, at)
+            })
+            .await;
             if let Err(e) = r {
                 ed.log.error(e.message);
             }
@@ -283,7 +323,11 @@ fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
         if sel.first() == Some(&from) {
             return;
         }
-        match objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, _, _| shape::attach_to_selected(s, from)).await {
+        match objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, _, _| {
+            shape::attach_to_selected(s, from)
+        })
+        .await
+        {
             Ok(_) if !b.alt => {
                 let _ = objtools::set_state(&svc, origin, |st| st.attach_on_click = false).await;
                 vp.with(|s| s.tool.action = Action::Select);
@@ -362,13 +406,21 @@ pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: 
         if !b.ctrl {
             if any {
                 for c in ObjClass::ALL.iter().copied().filter(|c| *c != ObjClass::Way) {
-                    let _ = svc.store.send(SceneCmd::SelectClass { class: Some(c), select: false }, origin).await;
+                    let _ =
+                        svc.store.send(SceneCmd::SelectClass { class: Some(c), select: false }, origin).await;
                 }
             }
             for id in objtools::selected_of(&snap, ObjClass::Way) {
                 let _ = svc
                     .store
-                    .send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points: Vec::new(), mode: SelectMode::Set })), origin)
+                    .send(
+                        SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints {
+                            way: id,
+                            points: Vec::new(),
+                            mode: SelectMode::Set,
+                        })),
+                        origin,
+                    )
                     .await;
             }
         }
@@ -384,7 +436,13 @@ pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: 
         }
         if let Some((id, i, _)) = best {
             let mode = if b.ctrl { SelectMode::Toggle } else { SelectMode::Add };
-            let _ = svc.store.send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points: vec![i], mode })), origin).await;
+            let _ = svc
+                .store
+                .send(
+                    SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points: vec![i], mode })),
+                    origin,
+                )
+                .await;
         }
         ed.exec.wake().ping();
     });
@@ -416,7 +474,14 @@ pub(crate) fn way_points_marquee(editor: &Arc<Editor>, vp: &Viewport, size: [u32
             if !inside.is_empty() {
                 let _ = svc
                     .store
-                    .send(SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints { way: id, points: inside, mode: SelectMode::Add })), origin)
+                    .send(
+                        SceneCmd::ObjTool(Box::new(ToolEdit::SelectPoints {
+                            way: id,
+                            points: inside,
+                            mode: SelectMode::Add,
+                        })),
+                        origin,
+                    )
                     .await;
             }
         }
@@ -433,7 +498,12 @@ pub fn held_points(editor: &Arc<Editor>, ways: &[ObjId]) -> Vec<(ObjId, Vec<(usi
         .filter_map(|id| match snap.get(*id).map(|o| &o.data) {
             Some(ObjData::Way(w)) => Some((
                 *id,
-                w.points.iter().enumerate().filter(|(_, p)| p.selected).map(|(i, p)| (i, p.position)).collect(),
+                w.points
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.selected)
+                    .map(|(i, p)| (i, p.position))
+                    .collect(),
             )),
             _ => None,
         })
@@ -441,12 +511,25 @@ pub fn held_points(editor: &Arc<Editor>, ways: &[ObjId]) -> Vec<(ObjId, Vec<(usi
 }
 
 /// `CWayObject::Move` in Points mode: the held points moved by `delta`, one merged undo step.
-pub(crate) fn move_points(svc: &SceneService, held: &[(ObjId, Vec<(usize, Vec3)>)], delta: Vec3, merge: &SmolStr, origin: gz_editor::Origin) {
+pub(crate) fn move_points(
+    svc: &SceneService,
+    held: &[(ObjId, Vec<(usize, Vec3)>)],
+    delta: Vec3,
+    merge: &SmolStr,
+    origin: gz_editor::Origin,
+) {
     for (id, pts) in held {
         if pts.is_empty() {
             continue;
         }
         let points = pts.iter().map(|(i, p)| (*i, *p + delta)).collect();
-        svc.store.post(SceneCmd::ObjTool(Box::new(ToolEdit::MovePoints { way: *id, points, merge: Some(merge.clone()) })), origin);
+        svc.store.post(
+            SceneCmd::ObjTool(Box::new(ToolEdit::MovePoints {
+                way: *id,
+                points,
+                merge: Some(merge.clone()),
+            })),
+            origin,
+        );
     }
 }

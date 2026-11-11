@@ -160,7 +160,11 @@ impl Summary {
     /// `SSceneSummary::Prepare`: each texture's description (`tex(name)` gives its parameters
     /// and the frames of its `.seq`; an implicitly lit one moves to Implicit) and each library
     /// object's rows.
-    pub fn prepare(&mut self, lib: &Library, tex: &dyn Fn(&str) -> Option<(TextureParams, u32)>) -> Vec<String> {
+    pub fn prepare(
+        &mut self,
+        lib: &Library,
+        tex: &dyn Fn(&str) -> Option<(TextureParams, u32)>,
+    ) -> Vec<String> {
         let mut log = Vec::new();
         for (name, t) in &mut self.textures {
             if name.is_empty() {
@@ -267,7 +271,8 @@ impl Summary {
                     }
                 }
                 if p.bump_mode == BumpMode::USE {
-                    let v = if p.bump_name.is_empty() { "INVALID".to_owned() } else { p.bump_name.to_string() };
+                    let v =
+                        if p.bump_name.is_empty() { "INVALID".to_owned() } else { p.bump_name.to_string() };
                     rows.push((format!("{tp}\\Bump Texture"), v));
                 }
             }
@@ -341,7 +346,9 @@ impl Summary {
                 let bump = p.bump_mode == BumpMode::USE && !p.bump_name.is_empty();
                 // oracle: without the detail fields the bump mask's %s reads the detail name
                 match (detail, bump) {
-                    (true, true) => s.push_str(&format!(",{},{},{}", p.detail_name, f2(p.detail_scale), p.bump_name)),
+                    (true, true) => {
+                        s.push_str(&format!(",{},{},{}", p.detail_name, f2(p.detail_scale), p.bump_name))
+                    }
                     (true, false) => s.push_str(&format!(",{},{}", p.detail_name, f2(p.detail_scale))),
                     (false, true) => s.push_str(&format!(",{}", p.detail_name)),
                     (false, false) => {}

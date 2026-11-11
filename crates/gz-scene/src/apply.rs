@@ -330,7 +330,8 @@ impl SceneState {
             }
         }
         // `UpdateTransform`: Auto Key keys a selected motion's object where it now stands
-        if after.flags.co & (co::MOTION | crate::objmotion::AUTO_KEY) == co::MOTION | crate::objmotion::AUTO_KEY
+        if after.flags.co & (co::MOTION | crate::objmotion::AUTO_KEY)
+            == co::MOTION | crate::objmotion::AUTO_KEY
             && self.selection.contains(&id)
             && let Some(raw) = after.motion.clone()
             && let Some(mut m) = raw.model()
@@ -415,9 +416,17 @@ impl SceneState {
 
     /// A group as read, its objects carried from where the file had it to `at`
     /// (`NumSetPosition`, `NumSetRotation`, `NumSetScale`).
-    fn insert_group_at(&mut self, loaded: crate::objects::Loaded, at: crate::math::Transform) -> Result<ObjId, CmdError> {
+    fn insert_group_at(
+        &mut self,
+        loaded: crate::objects::Loaded,
+        at: crate::math::Transform,
+    ) -> Result<ObjId, CmdError> {
         let gid = crate::io::insert_loaded(self, loaded);
-        for e in [TransformEdit::Position(at.position), TransformEdit::Rotation(at.rotation), TransformEdit::Scale(at.scale)] {
+        for e in [
+            TransformEdit::Position(at.position),
+            TransformEdit::Rotation(at.rotation),
+            TransformEdit::Scale(at.scale),
+        ] {
             self.transform(gid, e, true)?;
         }
         Ok(gid)
@@ -429,7 +438,8 @@ impl SceneState {
         let ObjData::Group(og) = &old.data else {
             return Err(CmdError::invalid(format!("'{}' is not a group.", old.name)));
         };
-        let before: Vec<Object> = og.members.iter().filter_map(|m| self.get(*m)).map(|o| (**o).clone()).collect();
+        let before: Vec<Object> =
+            og.members.iter().filter_map(|m| self.get(*m)).map(|o| (**o).clone()).collect();
         let selected = self.is_selected(id);
         for m in &og.members {
             self.remove(*m);
@@ -1238,7 +1248,9 @@ mod tests {
     fn a_placed_group_stands_where_it_was_put_and_is_selected() {
         let t = T::new(SceneState::default());
         let at = crate::math::Transform::at(Vec3::new(10.0, 0.0, 0.0));
-        let Ok(SceneReply::Id(g)) = t.send(SceneCmd::PlaceGroup { loaded: Box::new(library_group(true)), at }) else {
+        let Ok(SceneReply::Id(g)) =
+            t.send(SceneCmd::PlaceGroup { loaded: Box::new(library_group(true)), at })
+        else {
             panic!()
         };
         let s = t.state();
@@ -1254,7 +1266,9 @@ mod tests {
     fn a_reload_keeps_the_group_its_names_and_its_unique_members() {
         let t = T::new(SceneState::default());
         let at = crate::math::Transform::at(Vec3::new(5.0, 0.0, 0.0));
-        let Ok(SceneReply::Id(g)) = t.send(SceneCmd::PlaceGroup { loaded: Box::new(library_group(false)), at }) else {
+        let Ok(SceneReply::Id(g)) =
+            t.send(SceneCmd::PlaceGroup { loaded: Box::new(library_group(false)), at })
+        else {
             panic!()
         };
         // the author renames one member and marks the other unique, moved off its place
@@ -1266,7 +1280,8 @@ mod tests {
         let mut b = (**s.get(m1).unwrap()).clone();
         b.flags.co |= co::IN_GROUP_UNIQUE;
         b.xform.position = Vec3::new(100.0, 0.0, 0.0);
-        t.send(SceneCmd::ReplaceObjects { objects: vec![a, b], serial: s.serial, label: "Edit".into() }).unwrap();
+        t.send(SceneCmd::ReplaceObjects { objects: vec![a, b], serial: s.serial, label: "Edit".into() })
+            .unwrap();
         let group_name = s.get(g).unwrap().name.clone();
         t.send(SceneCmd::ReloadGroups { groups: vec![(g, Box::new(library_group(false)))] }).unwrap();
         let s = t.state();

@@ -218,7 +218,10 @@ fn motion_rows(pref: &str, o: &Object, out: &mut Vec<Row>) {
     let p = crate::objmotion::params(&m, raw);
     out.push(caption(key(pref, "Motion\\Hint"), "Make KEY only on Parent CS"));
     out.push(button(key(pref, "Motion\\Files"), "Import,Export"));
-    out.push(button(key(pref, "Motion\\Commands"), "Add Key,Delete Key,Scale Keys...,Normalize Keys...,Clamp"));
+    out.push(button(
+        key(pref, "Motion\\Commands"),
+        "Add Key,Delete Key,Scale Keys...,Normalize Keys...,Clamp",
+    ));
     out.push(button(
         key(pref, "Motion\\Controls"),
         "First Frame,Previous Key,Previous Frame,Play,Pause,Next Frame,Next Key,Last Frame",

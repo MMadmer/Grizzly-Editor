@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 use gz_fmt_level::{DETAIL_SLOT_SIZE, DetailSlot, SceneDetails, tool_flags};
+use gz_particles::Rng;
 use gz_render::{
     Aabb, Assets, Batch, BatchInstance, Color, Frustum, Instance, InstanceFlags, MaterialDesc, MeshData,
     MeshVertex, ShapeKind, SubMesh,
 };
-use gz_particles::Rng;
 use gz_scene::library::Library;
 use gz_scene::{ObjClass, ObjId, SceneState};
 use rayon::prelude::*;
@@ -415,9 +415,8 @@ impl DetailCache {
         if self.base.as_deref() != Some(want.as_str()) {
             let tris = gz_scene::pick::box_triangles(p.state, p.lib, snap, &bbox);
             let size = bbox.max - bbox.min;
-            let uv = |v: Vec3| {
-                glam::Vec2::new((v.x - bbox.min.x) / size.x, 1.0 - (v.z - bbox.min.z) / size.z)
-            };
+            let uv =
+                |v: Vec3| glam::Vec2::new((v.x - bbox.min.x) / size.x, 1.0 - (v.z - bbox.min.z) / size.z);
             let mut verts = Vec::with_capacity(tris.len() * 3);
             for t in &tris {
                 let n = (t[1] - t[0]).cross(t[2] - t[0]).try_normalize().unwrap_or(Vec3::Y);
@@ -436,8 +435,9 @@ impl DetailCache {
                 Err(_) => return,
             }
         }
-        let mut inst = Instance::new(p.assets.mesh(gz_render::MeshKey::Named(BASE_MESH.into())), Mat4::IDENTITY)
-            .with_flags(InstanceFlags::NO_ID | InstanceFlags::DECAL | InstanceFlags::TWO_SIDED);
+        let mut inst =
+            Instance::new(p.assets.mesh(gz_render::MeshKey::Named(BASE_MESH.into())), Mat4::IDENTITY)
+                .with_flags(InstanceFlags::NO_ID | InstanceFlags::DECAL | InstanceFlags::TWO_SIDED);
         inst.bounds = crate::draw::ga(&bbox);
         built.list.instances.push(inst);
         built.owners.push(ObjId(0));
@@ -454,7 +454,9 @@ fn slot_boxes(d: &SceneDetails, selected: &[bool], p: &Pass<'_>, built: &mut Bui
     let s = DETAIL_SLOT_SIZE;
     // the slot columns and rows whose centre may lie within reach
     let lo = |c: f32, offs: i32| (((c - BOX_REACH - s) / s).floor() as i64 + i64::from(offs)).max(0);
-    let hi = |c: f32, offs: i32, n: u32| (((c + BOX_REACH) / s).ceil() as i64 + i64::from(offs)).min(i64::from(n) - 1);
+    let hi = |c: f32, offs: i32, n: u32| {
+        (((c + BOX_REACH) / s).ceil() as i64 + i64::from(offs)).min(i64::from(n) - 1)
+    };
     let (x0, x1) = (lo(p.eye.x, h.offs_x), hi(p.eye.x, h.offs_x, h.size_x));
     let (z0, z1) = (lo(p.eye.z, h.offs_z), hi(p.eye.z, h.offs_z, h.size_z));
     for z in z0..=z1 {
@@ -475,7 +477,13 @@ fn slot_boxes(d: &SceneDetails, selected: &[bool], p: &Pass<'_>, built: &mut Bui
                 Vec3::new(c.x + half, slot.base_height() + slot.height() - 0.05, c.z + half),
             );
             let on = h.slot_index(xu, zu).and_then(|i| selected.get(i)).copied().unwrap_or(false);
-            built.list.helpers.shape(ShapeKind::SelectionBox, b.unit_transform(), None, Some(if on { chosen } else { inactive }), true);
+            built.list.helpers.shape(
+                ShapeKind::SelectionBox,
+                b.unit_transform(),
+                None,
+                Some(if on { chosen } else { inactive }),
+                true,
+            );
         }
     }
 }
@@ -500,7 +508,9 @@ mod tests {
     fn the_ray_hits_a_front_face_only() {
         // a floor at y = 0 wound so that it faces up (clockwise seen from above)
         let up = [Vec3::new(-1.0, 0.0, -1.0), Vec3::new(-1.0, 0.0, 1.0), Vec3::new(1.0, 0.0, -1.0)];
-        assert!((ray_tri(Vec3::new(-0.5, 2.0, -0.5), Vec3::new(0.0, -1.0, 0.0), &up).unwrap() - 2.0).abs() < 1e-5);
+        assert!(
+            (ray_tri(Vec3::new(-0.5, 2.0, -0.5), Vec3::new(0.0, -1.0, 0.0), &up).unwrap() - 2.0).abs() < 1e-5
+        );
         let down = [up[0], up[2], up[1]];
         assert!(ray_tri(Vec3::new(-0.5, 2.0, -0.5), Vec3::new(0.0, -1.0, 0.0), &down).is_none());
     }

@@ -29,6 +29,8 @@ gz-query = { path = "crates/gz-query" }
 gz-log = { path = "crates/gz-log" }
 gz-crash = { path = "crates/gz-crash" }
 gz-win = { path = "crates/gz-win" }
+# the corpus tests' data
+gz-corpus = { path = "crates/gz-corpus" }
 # layer 1
 gz-ltx = { path = "crates/gz-ltx" }
 gz-luadata = { path = "crates/gz-luadata" }
@@ -42,7 +44,6 @@ gz-entities = { path = "crates/gz-entities" }
 gz-fmt-xr = { path = "crates/gz-fmt-xr" }
 gz-fmt-xml = { path = "crates/gz-fmt-xml" }
 gz-fmt-sound = { path = "crates/gz-fmt-sound" }
-gz-fmt-release = { path = "crates/gz-fmt-release" }
 # layer 2
 gz-vfs = { path = "crates/gz-vfs" }
 gz-game = { path = "crates/gz-game" }
@@ -59,13 +60,11 @@ gz-build = { path = "crates/gz-build" }
 gz-release = { path = "crates/gz-release" }
 gz-github = { path = "crates/gz-github" }
 gz-catalog = { path = "crates/gz-catalog" }
-gz-virustotal = { path = "crates/gz-virustotal" }
 gz-scene = { path = "crates/gz-scene" }
 gz-export-level = { path = "crates/gz-export-level" }
 gz-levelbuild = { path = "crates/gz-levelbuild" }
 gz-editor = { path = "crates/gz-editor" }
 # layer 4
-gz-cmd = { path = "crates/gz-cmd" }
 gz-mcp = { path = "crates/gz-mcp" }
 gz-ui = { path = "crates/gz-ui" }
 gz-render = { path = "crates/gz-render" }
@@ -73,7 +72,6 @@ gz-app = { path = "crates/gz-app" }
 
 # concurrency
 tokio = { version = "1.54", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros", "fs", "process"] }
-tokio-util = "0.7"
 futures = "0.3"
 rayon = "1.12"
 arc-swap = "1.9"
@@ -83,30 +81,23 @@ imbl = "7"
 # data
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-schemars = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 smol_str = { version = "0.3", features = ["serde"] }
 smallvec = "1"
 rustc-hash = "2"
 bitflags = { version = "2", features = ["serde"] }
 bytemuck = { version = "1", features = ["derive"] }
-memchr = "2"
 encoding_rs = "0.8"
 glam = { version = "0.34", features = ["serde", "bytemuck"] }
 base64 = "0.23"
 hex = "0.4"
 time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
 # files, media
-walkdir = "2"
-jwalk = "0.9"
 notify = "8"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tga", "bmp", "gif", "dds"] }
 png = "0.18"
-gif = "0.14"
 texpresso = { version = "2", features = ["rayon"] }
-zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
-quick-xml = "0.42"
 lewton = "0.10"
 # the second C dependency after LuaJIT: libvorbis (aoTuV) vendored behind a safe API, for encoding
 vorbis_rs = { version = "0.5.6", default-features = false }
@@ -117,23 +108,17 @@ hmac = "0.13"
 pbkdf2 = "0.13"
 p256 = { version = "0.14", features = ["ecdsa"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "stream"] }
-keyring = "4"
-# scripting, geometry
+# scripting
 mlua = { version = "0.12", features = ["luajit", "vendored", "send"] }
-parry3d = "0.31"
-rapier3d = "0.36"
 # presentation
 egui = { version = "0.37", features = ["default_fonts", "rayon", "bytemuck"] }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
 egui-wgpu = { version = "0.37", default-features = false, features = ["winit"] }
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "parking_lot"] }
-egui_dock = "0.21"
 # system
 windows = "0.62"
-backtrace = "0.3"
 # tests
-proptest = "1"
-loom = "0.7"
+tempfile = "3"
 
 [profile.dev]
 opt-level = 1

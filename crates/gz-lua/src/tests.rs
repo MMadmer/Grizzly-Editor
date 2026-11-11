@@ -39,10 +39,17 @@ fn calling_os_is_an_error() {
 #[test]
 fn a_chunk_runs_in_an_empty_environment() {
     let s = script("function id(x) return x end");
-    let chunk = Arg::Chunk(Chunk { name: "asset".into(), text: "return { a = type(string), b = 1 }".into() });
+    // the environment is empty: `string` is nil, so the field is not there
+    let chunk = Arg::Chunk(Chunk { name: "asset".into(), text: "return { a = string, b = 1 }".into() });
     let v = host().call(&s, "id", &[chunk]).unwrap();
-    assert_eq!(v.get("a").and_then(Value::as_str), Some("nil"));
+    assert!(v.get("a").is_none());
     assert_eq!(v.get("b").and_then(Value::as_number), Some(1.0));
+    // and there is no function to call either
+    let chunk = Arg::Chunk(Chunk { name: "asset".into(), text: "return { a = type(1) }".into() });
+    match host().call(&s, "id", &[chunk]) {
+        Err(LuaError::ArgRun { index: 0, message }) => assert!(message.contains("'type'"), "{message}"),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

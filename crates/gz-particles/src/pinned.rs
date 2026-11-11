@@ -64,7 +64,14 @@ fn explosion_pushes_by_the_wave() {
     let mut s = store(&[(Vec3::new(1.0, 1.0, 0.0), X)]);
     step(
         ActionKind::Explosion,
-        ActionParams::Explosion { center: Vec3::Y, velocity: 0.0, magnitude: 1.0, stdev: 1.0, age: 0.0, epsilon: 0.0 },
+        ActionParams::Explosion {
+            center: Vec3::Y,
+            velocity: 0.0,
+            magnitude: 1.0,
+            stdev: 1.0,
+            age: 0.0,
+            epsilon: 0.0,
+        },
         &mut s,
         1.0,
     );
@@ -95,7 +102,13 @@ fn jet_orbits_and_scatter() {
     let mut s = store(&two);
     step(
         ActionKind::Jet,
-        ActionParams::Jet { center: Vec3::Y, acc: pt(Vec3::Y), magnitude: 1.0, epsilon: 1.0, max_radius: 1e9 },
+        ActionParams::Jet {
+            center: Vec3::Y,
+            acc: pt(Vec3::Y),
+            magnitude: 1.0,
+            epsilon: 1.0,
+            max_radius: 1e9,
+        },
         &mut s,
         1.0,
     );
@@ -104,7 +117,13 @@ fn jet_orbits_and_scatter() {
     let mut s = store(&two);
     step(
         ActionKind::OrbitLine,
-        ActionParams::Axis { point: Vec3::ZERO, axis: Vec3::Y, magnitude: 1.0, epsilon: 0.0, max_radius: 1e9 },
+        ActionParams::Axis {
+            point: Vec3::ZERO,
+            axis: Vec3::Y,
+            magnitude: 1.0,
+            epsilon: 0.0,
+            max_radius: 1e9,
+        },
         &mut s,
         1.0,
     );
@@ -166,7 +185,12 @@ fn speed_rotation_and_velocity_targets() {
     let mut s = store(&[(Vec3::ZERO, X)]);
     step(ActionKind::TargetRotate, ActionParams::Target { value: X, scale: 1.0 }, &mut s, 0.5);
     assert!(near(s.list[0].rot, Vec3::new(0.5, 0.0, 0.0)));
-    step(ActionKind::TargetVelocity, ActionParams::Target { value: Vec3::new(0.0, 0.0, 2.0), scale: 1.0 }, &mut s, 0.5);
+    step(
+        ActionKind::TargetVelocity,
+        ActionParams::Target { value: Vec3::new(0.0, 0.0, 2.0), scale: 1.0 },
+        &mut s,
+        0.5,
+    );
     assert!(near(s.list[0].vel, Vec3::new(0.5, 0.0, 1.0)));
 }
 
@@ -175,7 +199,13 @@ fn turbulence_keeps_the_speed() {
     let mut s = store(&[(Vec3::new(0.3, 0.7, 0.2), Vec3::new(0.0, 3.0, 4.0))]);
     step(
         ActionKind::Turbulence,
-        ActionParams::Turbulence { frequency: 1.0, octaves: 2, magnitude: 5.0, epsilon: 0.1, offset: Vec3::ONE },
+        ActionParams::Turbulence {
+            frequency: 1.0,
+            octaves: 2,
+            magnitude: 5.0,
+            epsilon: 0.1,
+            offset: Vec3::ONE,
+        },
         &mut s,
         0.1,
     );
@@ -185,7 +215,8 @@ fn turbulence_keeps_the_speed() {
 #[test]
 fn avoid_bends_away_and_bounce_reflects() {
     let mut s = store(&[(Vec3::new(0.0, 1.2, 0.0), X)]);
-    let sphere = FDomain { kind: dk::SPHERE, p1: Vec3::new(3.0, 1.0, 0.0), radius1: 1.0, ..FDomain::default() };
+    let sphere =
+        FDomain { kind: dk::SPHERE, p1: Vec3::new(3.0, 1.0, 0.0), radius1: 1.0, ..FDomain::default() };
     step(
         ActionKind::Avoid,
         ActionParams::Avoid { position: sphere, look_ahead: 10.0, magnitude: 1.0, epsilon: 0.0 },

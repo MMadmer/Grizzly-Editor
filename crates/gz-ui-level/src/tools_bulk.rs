@@ -52,7 +52,9 @@ fn run(editor: &Arc<Editor>, cmd: &'static str, action: &str, extra: &[(&str, Va
         }
         if let Some(n) = reply.get("note").and_then(Value::as_str) {
             ed.notices.note(n.to_owned());
-        } else if let Some(f) = reply.get("failed").and_then(Value::as_array).and_then(|f| f.first()).and_then(Value::as_str) {
+        } else if let Some(f) =
+            reply.get("failed").and_then(Value::as_array).and_then(|f| f.first()).and_then(Value::as_str)
+        {
             ed.notices.note(f.to_owned());
         } else if reply.get("stopped").and_then(Value::as_bool) == Some(true) {
             let n = reply.get("added").and_then(Value::as_u64).unwrap_or(0);
@@ -144,7 +146,11 @@ impl BulkPanels {
 fn use_selected_button(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, what: &str) {
     let any = gz_scene::snap::selected_scene_objects(snap).len();
     let tip = format!("The selected objects become the ground {what} (the tool's Snap Objects)");
-    if local_button_flow(ui, &[LocalButton::new("Use Selected Objects", &tip).when(any > 0, "Select the ground's objects first")]) == Some(0) {
+    if local_button_flow(
+        ui,
+        &[LocalButton::new("Use Selected Objects", &tip).when(any > 0, "Select the ground's objects first")],
+    ) == Some(0)
+    {
         let mut args = Args::new();
         args.insert("action".into(), Value::String("set_from_selection".into()));
         editor.post("snap_objects", args);
@@ -153,7 +159,11 @@ fn use_selected_button(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, wha
 
 fn snap_line(ui: &mut Ui, names: &[gz_base::SmolStr], what: &str) {
     if names.is_empty() {
-        text::status(ui, Tone::Warning, &format!("No ground {what} yet: select its objects, then Use Selected Objects."));
+        text::status(
+            ui,
+            Tone::Warning,
+            &format!("No ground {what} yet: select its objects, then Use Selected Objects."),
+        );
     } else {
         let list = names.iter().take(3).map(|n| n.as_str()).collect::<Vec<_>>().join(", ");
         let more = if names.len() > 3 { format!(" and {} more", names.len() - 3) } else { String::new() };
@@ -164,12 +174,23 @@ fn snap_line(ui: &mut Ui, names: &[gz_base::SmolStr], what: &str) {
 // ---- AI Map ---------------------------------------------------------------------------------------
 
 /// The AI Map tool's form.
-pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, panels: &mut BulkPanels, chooser: &mut Option<Chooser>) {
+pub(crate) fn aimap_tool(
+    ui: &mut Ui,
+    editor: &Arc<Editor>,
+    snap: &SceneState,
+    panels: &mut BulkPanels,
+    chooser: &mut Option<Chooser>,
+) {
     let part = snap.bulk.ai_map.as_ref();
     let t = &snap.tools.bulk;
     let names = part.map(|a| a.header.snap_objects.clone()).unwrap_or_default();
     let (nodes, selected) = part.map_or((0, 0), |a| {
-        let sel = a.nodes.iter().flat_map(|tile| tile.iter()).filter(|n| n.flags & node_flags::SELECTED != 0).count();
+        let sel = a
+            .nodes
+            .iter()
+            .flat_map(|tile| tile.iter())
+            .filter(|n| n.flags & node_flags::SELECTED != 0)
+            .count();
         (a.node_count(), sel)
     });
     let busy = editor.jobs.running_in("scene").is_some();
@@ -191,7 +212,11 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
         match local_button_flow(
             ui,
             &[
-                LocalButton::new("Generate Full", "Build the AI map out from the nodes there are, over the whole level").when(can_gen, gen_why),
+                LocalButton::new(
+                    "Generate Full",
+                    "Build the AI map out from the nodes there are, over the whole level",
+                )
+                .when(can_gen, gen_why),
                 LocalButton::new("Generate Selected", "Build the AI map out from the selected nodes only")
                     .when(can_gen && selected > 0, if can_gen { "Select nodes first" } else { gen_why }),
             ],
@@ -215,7 +240,13 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
             confirm(
                 ui.ctx(),
                 editor,
-                spec("clear_ai_map", "Clear AI Map", "Remove every node of the AI map?", vec![plural(nodes, "node")], "Clear"),
+                spec(
+                    "clear_ai_map",
+                    "Clear AI Map",
+                    "Remove every node of the AI map?",
+                    vec![plural(nodes, "node")],
+                    "Clear",
+                ),
                 move || run(&ed, "aimap_tool", "clear", &[]),
             );
         }
@@ -231,31 +262,53 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
         ) {
             run(editor, "aimap_tool", "set", &[("ignore_constraints", Value::Bool(v))]);
         }
-        if let Some(v) = switch_row(ui, t.auto_link, "Auto Link", "A node added links to its neighbours at once", true, "") {
+        if let Some(v) =
+            switch_row(ui, t.auto_link, "Auto Link", "A node added links to its neighbours at once", true, "")
+        {
             run(editor, "aimap_tool", "set", &[("auto_link", Value::Bool(v))]);
         }
         let brush = part.map_or(1, |a| a.header.brush_size);
         let mut send = None;
         PropertyGrid::new("tools").show(ui, |g| {
-            panels.local_number_row(g, "brush_size", "Brush Size", "How far round the click nodes are added, in patches (1 adds one node)", brush as f32, 0.1, "", &mut send);
+            panels.local_number_row(
+                g,
+                "brush_size",
+                "Brush Size",
+                "How far round the click nodes are added, in patches (1 adds one node)",
+                brush as f32,
+                0.1,
+                "",
+                &mut send,
+            );
         });
         if let Some((_, v)) = send {
-            run(editor, "aimap_tool", "set", &[("brush_size", Value::from(v.round().clamp(1.0, 100.0) as u32))]);
+            run(
+                editor,
+                "aimap_tool",
+                "set",
+                &[("brush_size", Value::from(v.round().clamp(1.0, 100.0) as u32))],
+            );
         }
     }
     if gz_ui_app::local::local_section(ui, "tool_ai_links", "Links", true) {
         PropertyGrid::new("tools").show(ui, |g| {
-            g.row("Mode", "What a side button does to the links of the selected nodes", PropFlags::NONE, 0, |ui| {
-                let mut cur = match t.link_mode {
-                    LinkMode::Add => 0,
-                    LinkMode::Remove => 1,
-                    LinkMode::Invert => 2,
-                };
-                if gz_ui::segmented(ui, &mut cur, &["Add", "Remove", "Invert"], None) {
-                    let m = ["add", "remove", "invert"][cur.min(2)];
-                    run(editor, "aimap_tool", "set", &[("link_mode", Value::String(m.into()))]);
-                }
-            });
+            g.row(
+                "Mode",
+                "What a side button does to the links of the selected nodes",
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    let mut cur = match t.link_mode {
+                        LinkMode::Add => 0,
+                        LinkMode::Remove => 1,
+                        LinkMode::Invert => 2,
+                    };
+                    if gz_ui::segmented(ui, &mut cur, &["Add", "Remove", "Invert"], None) {
+                        let m = ["add", "remove", "invert"][cur.min(2)];
+                        run(editor, "aimap_tool", "set", &[("link_mode", Value::String(m.into()))]);
+                    }
+                },
+            );
         });
         // the sides follow the camera: up is the side the view looks towards
         let why = "Select nodes first";
@@ -274,16 +327,24 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
             let mut child = crate::local::child_at(ui, ("ai_side", side), at);
             let tip = if selected > 0 { tip } else { why };
             if gz_ui::icon_button(&mut child, icon, tip, false, selected > 0).clicked() {
-                run(editor, "aimap_tool", "links", &[("side", Value::String(side.into())), ("camera", Value::Bool(true))]);
+                run(
+                    editor,
+                    "aimap_tool",
+                    "links",
+                    &[("side", Value::String(side.into())), ("camera", Value::Bool(true))],
+                );
             }
         }
         let _ = rect;
         if let Some(i) = local_button_flow(
             ui,
             &[
-                LocalButton::new("Select 0-Link", "Select the nodes that have no links").when(nodes > 0, "The AI map is empty"),
-                LocalButton::new("Select 1-Link", "Select the nodes that have one link").when(nodes > 0, "The AI map is empty"),
-                LocalButton::new("Select 2-Link", "Select the nodes that have two links").when(nodes > 0, "The AI map is empty"),
+                LocalButton::new("Select 0-Link", "Select the nodes that have no links")
+                    .when(nodes > 0, "The AI map is empty"),
+                LocalButton::new("Select 1-Link", "Select the nodes that have one link")
+                    .when(nodes > 0, "The AI map is empty"),
+                LocalButton::new("Select 2-Link", "Select the nodes that have two links")
+                    .when(nodes > 0, "The AI map is empty"),
             ],
         ) {
             run(editor, "aimap_tool", "select_links", &[("links", Value::from(i))]);
@@ -294,11 +355,22 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
         match local_button_flow(
             ui,
             &[
-                LocalButton::new("Smooth Selected", "Even out the planes of the selected nodes with their neighbours'").when(selected > 0, sel_why),
-                LocalButton::new("Reset Selected", "Lay the selected nodes level again").when(selected > 0, sel_why),
-                LocalButton::new("Invert Selection", "Select the nodes that are not selected, and let the others go").when(nodes > 0, "The AI map is empty"),
-                LocalButton::new("Remove Links", "Remove the links between the selected nodes").when(selected > 1, "Select two nodes or more"),
-                LocalButton::new("Invert Links", "Turn round the one-way links between the selected nodes").when(selected > 1, "Select two nodes or more"),
+                LocalButton::new(
+                    "Smooth Selected",
+                    "Even out the planes of the selected nodes with their neighbours'",
+                )
+                .when(selected > 0, sel_why),
+                LocalButton::new("Reset Selected", "Lay the selected nodes level again")
+                    .when(selected > 0, sel_why),
+                LocalButton::new(
+                    "Invert Selection",
+                    "Select the nodes that are not selected, and let the others go",
+                )
+                .when(nodes > 0, "The AI map is empty"),
+                LocalButton::new("Remove Links", "Remove the links between the selected nodes")
+                    .when(selected > 1, "Select two nodes or more"),
+                LocalButton::new("Invert Links", "Turn round the one-way links between the selected nodes")
+                    .when(selected > 1, "Select two nodes or more"),
             ],
         ) {
             Some(0) => run(editor, "aimap_tool", "smooth_selected", &[]),
@@ -308,12 +380,24 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
             Some(4) => run(editor, "aimap_tool", "invert_links", &[]),
             _ => {}
         }
-        if danger(ui, "Delete Selected...", "Remove the selected nodes and their links", selected > 0, sel_why) {
+        if danger(
+            ui,
+            "Delete Selected...",
+            "Remove the selected nodes and their links",
+            selected > 0,
+            sel_why,
+        ) {
             let ed = editor.clone();
             confirm(
                 ui.ctx(),
                 editor,
-                spec("delete_ai_nodes", "Delete Nodes", "Remove the selected nodes of the AI map?", vec![plural(selected, "node")], "Delete"),
+                spec(
+                    "delete_ai_nodes",
+                    "Delete Nodes",
+                    "Remove the selected nodes of the AI map?",
+                    vec![plural(selected, "node")],
+                    "Delete",
+                ),
                 move || run(&ed, "aimap_tool", "remove_selected", &[]),
             );
         }
@@ -325,7 +409,8 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
             ui,
             &[
                 LocalButton::new("Add...", "Pick a game material the AI map is not generated on"),
-                LocalButton::new("Clear", "Take every material out of the list").when(any, "The list is empty"),
+                LocalButton::new("Clear", "Take every material out of the list")
+                    .when(any, "The list is empty"),
             ],
         ) {
             Some(0) => {
@@ -345,7 +430,12 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
         for name in &t.ignored {
             ui.horizontal(|ui| {
                 if gz_ui::icon_button(ui, Icon::Close, "Take it out of the list", false, true).clicked() {
-                    run(editor, "aimap_tool", "unignore_material", &[("name", Value::String(name.to_string()))]);
+                    run(
+                        editor,
+                        "aimap_tool",
+                        "unignore_material",
+                        &[("name", Value::String(name.to_string()))],
+                    );
                 }
                 text::label(ui, name, Font::Body, p.text, Clip::Start);
             });
@@ -355,15 +445,58 @@ pub(crate) fn aimap_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, p
             let h = &a.header;
             let mut send = None;
             PropertyGrid::new("tools").show(ui, |g| {
-                panels.local_number_row(g, "can_up", "Can Up", "How far a node may lie above its neighbour, metres (0 to 10)", h.params.can_up, 0.01, "m", &mut send);
-                panels.local_number_row(g, "can_down", "Can Down", "How far a node may lie below its neighbour, metres (0 to 10)", h.params.can_down, 0.01, "m", &mut send);
-                panels.local_number_row(g, "smooth_height", "Smooth Height", "How close in height corners must be to be smoothed together, metres", h.smooth_height, 0.01, "m", &mut send);
-                panels.local_number_row(g, "vis_radius", "Visible Radius", "How far round the camera nodes are drawn, metres (10 to 250)", h.vis_radius, 0.5, "m", &mut send);
+                panels.local_number_row(
+                    g,
+                    "can_up",
+                    "Can Up",
+                    "How far a node may lie above its neighbour, metres (0 to 10)",
+                    h.params.can_up,
+                    0.01,
+                    "m",
+                    &mut send,
+                );
+                panels.local_number_row(
+                    g,
+                    "can_down",
+                    "Can Down",
+                    "How far a node may lie below its neighbour, metres (0 to 10)",
+                    h.params.can_down,
+                    0.01,
+                    "m",
+                    &mut send,
+                );
+                panels.local_number_row(
+                    g,
+                    "smooth_height",
+                    "Smooth Height",
+                    "How close in height corners must be to be smoothed together, metres",
+                    h.smooth_height,
+                    0.01,
+                    "m",
+                    &mut send,
+                );
+                panels.local_number_row(
+                    g,
+                    "vis_radius",
+                    "Visible Radius",
+                    "How far round the camera nodes are drawn, metres (10 to 250)",
+                    h.vis_radius,
+                    0.5,
+                    "m",
+                    &mut send,
+                );
             });
             if let Some((key, v)) = send {
                 run(editor, "aimap_tool", "set", &[(key, Value::from(v))]);
             }
-            if let Some(v) = switch_row(ui, h.flags & gz_scene::bulk::aimap::flags::HIDE_NODES == 0, "Draw Nodes", "The viewport draws the nodes", true, "") {
+            if let Some(v) = switch_row(
+                ui,
+                h.flags & gz_scene::bulk::aimap::flags::HIDE_NODES == 0,
+                "Draw Nodes",
+                "The viewport draws the nodes",
+                true,
+                "",
+            ) {
                 run(editor, "aimap_tool", "set", &[("draw_nodes", Value::Bool(v))]);
             }
             if let Some(v) = switch_row(
@@ -403,8 +536,12 @@ pub(crate) fn detail_tool(
             use_selected_button(ui, editor, snap, "of the details");
         }
         PropertyGrid::new("tools").show(ui, |g| {
-            g.row("Base Texture", "The picture whose colours say what grows where", PropFlags::NONE, 0, |ui| {
-                match gz_ui::grid::pick_field(ui, "do_base", &base, !base.is_empty()) {
+            g.row(
+                "Base Texture",
+                "The picture whose colours say what grows where",
+                PropFlags::NONE,
+                0,
+                |ui| match gz_ui::grid::pick_field(ui, "do_base", &base, !base.is_empty()) {
                     PickAction::Browse => {
                         *chooser = Some(Chooser::new(
                             Purpose::ToolCommand { cmd: "details_tool", action: "set", arg: "base_texture" },
@@ -413,12 +550,18 @@ pub(crate) fn detail_tool(
                             &base,
                         ));
                     }
-                    PickAction::Clear => run(editor, "details_tool", "set", &[("base_texture", Value::String(String::new()))]),
+                    PickAction::Clear => {
+                        run(editor, "details_tool", "set", &[("base_texture", Value::String(String::new()))])
+                    }
                     PickAction::None => {}
-                }
-            });
+                },
+            );
         });
-        text::status(ui, Tone::Muted, &format!("{} · {} · {} selected", plural(slots, "slot"), plural(objects, "object"), selected));
+        text::status(
+            ui,
+            Tone::Muted,
+            &format!("{} · {} · {} selected", plural(slots, "slot"), plural(objects, "object"), selected),
+        );
         let ready = !busy && !d.snap_objects.is_empty() && !base.is_empty();
         let why = if busy {
             "Something is being generated already"
@@ -438,33 +581,73 @@ pub(crate) fn detail_tool(
             &[
                 LocalButton::new(first, first_tip).when(ready, why),
                 LocalButton::new("Reinitialize Objects", "Place the detail objects again, keeping the slots")
-                    .when(ready && objects > 0 && slots > 0, if slots == 0 { "There are no slots yet" } else { obj_why }),
+                    .when(
+                        ready && objects > 0 && slots > 0,
+                        if slots == 0 { "There are no slots yet" } else { obj_why },
+                    ),
                 LocalButton::new("Reinitialize Selected", "Place the objects of the selected slots again")
-                    .when(ready && objects > 0 && selected > 0, if selected == 0 { "Select slots first (Draw Slot Boxes, under More)" } else { obj_why }),
-                LocalButton::new("Detail Objects...", "The objects the details are made of, and their colour indices"),
+                    .when(
+                        ready && objects > 0 && selected > 0,
+                        if selected == 0 {
+                            "Select slots first (Draw Slot Boxes, under More)"
+                        } else {
+                            obj_why
+                        },
+                    ),
+                LocalButton::new(
+                    "Detail Objects...",
+                    "The objects the details are made of, and their colour indices",
+                ),
             ],
         ) {
-            Some(0) => run(editor, "details_tool", if slots == 0 { "first_initialize" } else { "reinitialize" }, &[]),
+            Some(0) => {
+                run(editor, "details_tool", if slots == 0 { "first_initialize" } else { "reinitialize" }, &[])
+            }
             Some(1) => run(editor, "details_tool", "reinitialize_objects", &[]),
             Some(2) => run(editor, "details_tool", "reinitialize_selected", &[]),
             Some(3) => *want_dialog = true,
             _ => {}
         }
         // Update Renderer is the tool's view flag: the viewport follows the details by itself
-        if let Some(v) = switch_row(ui, d.flags & tool_flags::OBJECTS_DRAW != 0, "Show Details", "Show the current details in the viewport", true, "") {
+        if let Some(v) = switch_row(
+            ui,
+            d.flags & tool_flags::OBJECTS_DRAW != 0,
+            "Show Details",
+            "Show the current details in the viewport",
+            true,
+            "",
+        ) {
             run(editor, "details_tool", "set", &[("draw_objects", Value::Bool(v))]);
         }
         ui.horizontal_wrapped(|ui| {
-            if danger(ui, "Clear Slots...", "Empty every detail slot of the level", slots > 0, "There are no slots") {
+            if danger(
+                ui,
+                "Clear Slots...",
+                "Empty every detail slot of the level",
+                slots > 0,
+                "There are no slots",
+            ) {
                 let ed = editor.clone();
                 confirm(
                     ui.ctx(),
                     editor,
-                    spec("clear_detail_slots", "Clear Detail Slots", "Empty every detail slot of the level?", vec![plural(slots, "detail slot")], "Clear"),
+                    spec(
+                        "clear_detail_slots",
+                        "Clear Detail Slots",
+                        "Empty every detail slot of the level?",
+                        vec![plural(slots, "detail slot")],
+                        "Clear",
+                    ),
                     move || run(&ed, "details_tool", "clear_slots", &[]),
                 );
             }
-            if danger(ui, "Clear Details...", "Remove the detail objects and every slot", slots > 0 || objects > 0, "There are no details") {
+            if danger(
+                ui,
+                "Clear Details...",
+                "Remove the detail objects and every slot",
+                slots > 0 || objects > 0,
+                "There are no details",
+            ) {
                 let ed = editor.clone();
                 confirm(
                     ui.ctx(),
@@ -484,9 +667,24 @@ pub(crate) fn detail_tool(
     if gz_ui_app::local::local_section(ui, "tool_do_more", "More", false) {
         let boxes = d.flags & tool_flags::SLOT_BOXES_DRAW != 0;
         for (bit, key, label, tip) in [
-            (tool_flags::SLOT_BOXES_DRAW, "draw_slot_boxes", "Draw Slot Boxes", "The slots' boxes are drawn, and a click or a box in the viewport selects them"),
-            (tool_flags::BASE_TEXTURE_DRAW, "draw_base_texture", "Draw Base Texture", "The base texture is laid over the ground"),
-            (tool_flags::BASE_TEXTURE_BLENDED, "base_texture_blended", "Base Texture Blended", "The base texture is blended with the ground, not over it"),
+            (
+                tool_flags::SLOT_BOXES_DRAW,
+                "draw_slot_boxes",
+                "Draw Slot Boxes",
+                "The slots' boxes are drawn, and a click or a box in the viewport selects them",
+            ),
+            (
+                tool_flags::BASE_TEXTURE_DRAW,
+                "draw_base_texture",
+                "Draw Base Texture",
+                "The base texture is laid over the ground",
+            ),
+            (
+                tool_flags::BASE_TEXTURE_BLENDED,
+                "base_texture_blended",
+                "Base Texture Blended",
+                "The base texture is blended with the ground, not over it",
+            ),
         ] {
             if let Some(v) = switch_row(ui, d.flags & bit != 0, label, tip, true, "") {
                 run(editor, "details_tool", "set", &[(key, Value::Bool(v))]);
@@ -494,7 +692,16 @@ pub(crate) fn detail_tool(
         }
         let mut send = None;
         PropertyGrid::new("tools").show(ui, |g| {
-            panels.local_number_row(g, "density", "Objects per Square", "How densely the details are scattered: objects per square metre", d.density.unwrap_or(0.3), 0.01, "", &mut send);
+            panels.local_number_row(
+                g,
+                "density",
+                "Objects per Square",
+                "How densely the details are scattered: objects per square metre",
+                d.density.unwrap_or(0.3),
+                0.01,
+                "",
+                &mut send,
+            );
         });
         if let Some((_, v)) = send {
             run(editor, "details_tool", "set", &[("density", Value::from(v.max(0.0)))]);
@@ -504,8 +711,10 @@ pub(crate) fn detail_tool(
             ui,
             &[
                 LocalButton::new("Select All", "Select every slot").when(slots > 0, "There are no slots"),
-                LocalButton::new("Deselect All", "Let every slot go").when(selected > 0, "No slot is selected"),
-                LocalButton::new("Invert Selection", "Select the slots that are not selected").when(boxes && slots > 0, why),
+                LocalButton::new("Deselect All", "Let every slot go")
+                    .when(selected > 0, "No slot is selected"),
+                LocalButton::new("Invert Selection", "Select the slots that are not selected")
+                    .when(boxes && slots > 0, why),
             ],
         ) {
             Some(0) => run(editor, "details_tool", "select_all", &[]),
@@ -519,20 +728,34 @@ pub(crate) fn detail_tool(
 // ---- Wallmark -------------------------------------------------------------------------------------
 
 /// The Wallmark tool's form.
-pub(crate) fn wallmark_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState, panels: &mut BulkPanels, chooser: &mut Option<Chooser>) {
+pub(crate) fn wallmark_tool(
+    ui: &mut Ui,
+    editor: &Arc<Editor>,
+    snap: &SceneState,
+    panels: &mut BulkPanels,
+    chooser: &mut Option<Chooser>,
+) {
     let model = snap.bulk.wallmarks.as_ref().and_then(|w| w.model.clone());
     let unreadable = snap.bulk.wallmarks.as_ref().is_some_and(|w| w.model.is_none());
     let w = model.map(|m| (*m).clone()).unwrap_or_default();
     let (count, selected) = (w.count(), w.selected_count());
     let placing = gz_ui_viewport::placing(editor);
     if unreadable {
-        text::status(ui, Tone::Warning, "The wallmarks of this scene could not be read; they are kept as they are.");
+        text::status(
+            ui,
+            Tone::Warning,
+            "The wallmarks of this scene could not be read; they are kept as they are.",
+        );
         return;
     }
     if gz_ui_app::local::local_section(ui, "tool_wm_commands", "Commands", true) {
         PropertyGrid::new("tools").show(ui, |g| {
-            g.row("Texture", "What a new mark shows", PropFlags::NONE, 0, |ui| {
-                match gz_ui::grid::pick_field(ui, "wm_texture", &w.texture, false) {
+            g.row(
+                "Texture",
+                "What a new mark shows",
+                PropFlags::NONE,
+                0,
+                |ui| match gz_ui::grid::pick_field(ui, "wm_texture", &w.texture, false) {
                     PickAction::Browse => {
                         *chooser = Some(Chooser::new(
                             Purpose::ToolCommand { cmd: "wallmark_tool", action: "set", arg: "texture" },
@@ -542,14 +765,41 @@ pub(crate) fn wallmark_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState
                         ));
                     }
                     PickAction::Clear | PickAction::None => {}
-                }
-            });
+                },
+            );
         });
         let mut send = None;
         PropertyGrid::new("tools").show(ui, |g| {
-            panels.local_number_row(g, "width", "Width", "The width of a new mark, metres (0.01 to 10)", w.width, 0.01, "m", &mut send);
-            panels.local_number_row(g, "height", "Height", "The height of a new mark, metres (0.01 to 10)", w.height, 0.01, "m", &mut send);
-            panels.local_number_row(g, "rotate", "Rotate", "How a new mark is turned on the surface", w.rotate.to_degrees(), 0.5, "°", &mut send);
+            panels.local_number_row(
+                g,
+                "width",
+                "Width",
+                "The width of a new mark, metres (0.01 to 10)",
+                w.width,
+                0.01,
+                "m",
+                &mut send,
+            );
+            panels.local_number_row(
+                g,
+                "height",
+                "Height",
+                "The height of a new mark, metres (0.01 to 10)",
+                w.height,
+                0.01,
+                "m",
+                &mut send,
+            );
+            panels.local_number_row(
+                g,
+                "rotate",
+                "Rotate",
+                "How a new mark is turned on the surface",
+                w.rotate.to_degrees(),
+                0.5,
+                "°",
+                &mut send,
+            );
         });
         if let Some((key, v)) = send {
             run(editor, "wallmark_tool", "set", &[(key, Value::from(v))]);
@@ -573,12 +823,24 @@ pub(crate) fn wallmark_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState
             gz_ui_viewport::set_placing(editor, v);
         }
         text::status(ui, Tone::Muted, &format!("{} · {} selected", plural(count, "wallmark"), selected));
-        if danger(ui, "Delete Selected...", "Remove the selected wallmarks", selected > 0 && w.draws(), "Select wallmarks first") {
+        if danger(
+            ui,
+            "Delete Selected...",
+            "Remove the selected wallmarks",
+            selected > 0 && w.draws(),
+            "Select wallmarks first",
+        ) {
             let ed = editor.clone();
             confirm(
                 ui.ctx(),
                 editor,
-                spec("delete_wallmarks", "Delete Wallmarks", "Remove the selected wallmarks?", vec![plural(selected, "wallmark")], "Delete"),
+                spec(
+                    "delete_wallmarks",
+                    "Delete Wallmarks",
+                    "Remove the selected wallmarks?",
+                    vec![plural(selected, "wallmark")],
+                    "Delete",
+                ),
                 move || run(&ed, "wallmark_tool", "remove_selected", &[]),
             );
         }
@@ -598,19 +860,33 @@ pub(crate) fn wallmark_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState
             g.row("Alignment", "What a new mark's up is taken from", PropFlags::NONE, 0, |ui| {
                 let mut cur = usize::from(w.flags & wm_flags::AXIS_ALIGN != 0);
                 if gz_ui::segmented(ui, &mut cur, &["By Camera", "By World Axis"], None) {
-                    run(editor, "wallmark_tool", "set", &[("alignment", Value::String(if cur == 1 { "world" } else { "camera" }.into()))]);
+                    run(
+                        editor,
+                        "wallmark_tool",
+                        "set",
+                        &[("alignment", Value::String(if cur == 1 { "world" } else { "camera" }.into()))],
+                    );
                 }
             });
         });
-        if let Some(v) = switch_row(ui, w.draws(), "Draw Wallmarks", "The viewport draws the marks; they can be selected only while it does", true, "") {
+        if let Some(v) = switch_row(
+            ui,
+            w.draws(),
+            "Draw Wallmarks",
+            "The viewport draws the marks; they can be selected only while it does",
+            true,
+            "",
+        ) {
             run(editor, "wallmark_tool", "set", &[("draw", Value::Bool(v))]);
         }
         let why = "The marks are not drawn";
         match local_button_flow(
             ui,
             &[
-                LocalButton::new("Select All", "Select every wallmark").when(w.draws() && count > 0, if count == 0 { "There are no wallmarks" } else { why }),
-                LocalButton::new("Invert Selection", "Select the marks that are not selected").when(w.draws() && count > 0, if count == 0 { "There are no wallmarks" } else { why }),
+                LocalButton::new("Select All", "Select every wallmark")
+                    .when(w.draws() && count > 0, if count == 0 { "There are no wallmarks" } else { why }),
+                LocalButton::new("Invert Selection", "Select the marks that are not selected")
+                    .when(w.draws() && count > 0, if count == 0 { "There are no wallmarks" } else { why }),
             ],
         ) {
             Some(0) => run(editor, "wallmark_tool", "select_all", &[]),
@@ -646,7 +922,9 @@ pub(crate) fn menu_command(id: &str, editor: &Arc<Editor>, ctx: &Context, snap: 
         ObjClass::AiMap => snap.bulk.ai_map.as_ref().map_or(0, |a| {
             a.nodes.iter().flat_map(|t| t.iter()).filter(|n| n.flags & node_flags::SELECTED != 0).count()
         }),
-        ObjClass::Wallmark => snap.bulk.wallmarks.as_ref().and_then(|w| w.model.as_ref()).map_or(0, |m| m.selected_count()),
+        ObjClass::Wallmark => {
+            snap.bulk.wallmarks.as_ref().and_then(|w| w.model.as_ref()).map_or(0, |m| m.selected_count())
+        }
         // the Detail Objects tool deletes nothing
         _ => 0,
     };
@@ -658,7 +936,13 @@ pub(crate) fn menu_command(id: &str, editor: &Arc<Editor>, ctx: &Context, snap: 
     confirm(
         ctx,
         editor,
-        spec(&format!("delete_{what}s"), title, &format!("Remove the selected {what}s?"), vec![plural(selected, what)], "Delete"),
+        spec(
+            &format!("delete_{what}s"),
+            title,
+            &format!("Remove the selected {what}s?"),
+            vec![plural(selected, what)],
+            "Delete",
+        ),
         move || run(&ed, cmd, "remove_selected", &[]),
     );
     true

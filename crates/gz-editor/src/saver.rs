@@ -43,12 +43,14 @@ impl AutoSave {
         S: State,
         R: Fn(&S) -> Option<(PathBuf, Vec<u8>)> + Send + Sync + 'static,
     {
+        // subscribed before the revision is read: an edit published before the task runs is
+        // then seen by it (subscribing inside the task lost it, and its flush waited for ever)
+        let mut changed = store.subscribe();
         let (tx, progress) = watch::channel(Progress { saved: store.rev(), error: None });
         let store = store.clone();
         let io = exec.clone();
         let render = Arc::new(render);
         exec.spawn(async move {
-            let mut changed = store.subscribe();
             let mut on_disk: Option<(PathBuf, Vec<u8>)> = None;
             loop {
                 if changed.changed().await.is_err() || tx.is_closed() {

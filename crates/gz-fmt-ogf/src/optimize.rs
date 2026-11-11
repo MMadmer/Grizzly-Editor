@@ -637,7 +637,8 @@ mod tests {
 
     #[test]
     fn vertices_follow_their_first_use() {
-        assert_eq!(optimize_vertices(&[2, 0, 2], 4), vec![1, 3, 0, 2]);
+        // 2 -> 0, 0 -> 1, then the unused 1 and 3 in their own order (CreateDX.cpp)
+        assert_eq!(optimize_vertices(&[2, 0, 2], 4), vec![1, 2, 0, 3]);
     }
 
     #[test]

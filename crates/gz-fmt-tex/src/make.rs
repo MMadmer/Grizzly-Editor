@@ -420,9 +420,15 @@ mod tests {
 
     #[test]
     fn the_thumbnail_picture_is_128_square() {
-        let px = thumbnail_pixels(&Image::filled(300, 200, [9, 8, 7, 255]).unwrap()).unwrap();
+        // whole ratios (2 and 3): the box's taps add up to one and a flat picture stays flat
+        let px = thumbnail_pixels(&Image::filled(256, 384, [9, 8, 7, 255]).unwrap()).unwrap();
         assert_eq!(px.len(), 128 * 128 * 4);
         assert!(px.as_chunks::<4>().0.iter().all(|p| p[..3] == [9, 8, 7]));
+        // `imf_Process` never brings its weights to a sum of one (xrImage_Resampler.cpp): at
+        // 300 -> 128 a flat picture comes out striped, as the C++ thumbnail does
+        let px = thumbnail_pixels(&Image::filled(300, 200, [9, 8, 7, 255]).unwrap()).unwrap();
+        assert_eq!(px.len(), 128 * 128 * 4);
+        assert!(px.as_chunks::<4>().0.iter().any(|p| p[..3] != [9, 8, 7]));
         assert!(thumbnail_pixels(&Image::filled(1, 200, [0; 4]).unwrap()).is_err());
     }
 

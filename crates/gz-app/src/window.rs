@@ -557,7 +557,13 @@ impl App {
             alive.insert(id);
             if let Some(x) = sh.extra.get_mut(&id) {
                 let mut actions = Vec::new();
-                egui_winit::process_viewport_commands(&live.ctx, &mut x.info, vo.commands, &x.window, &mut actions);
+                egui_winit::process_viewport_commands(
+                    &live.ctx,
+                    &mut x.info,
+                    vo.commands,
+                    &x.window,
+                    &mut actions,
+                );
                 continue;
             }
             let window = match egui_winit::create_window(&live.ctx, event_loop, &vo.builder) {
@@ -634,9 +640,10 @@ impl ApplicationHandler<UserEvent> for App {
                     let _ = x.input.on_window_event(&x.window, &event);
                     match &event {
                         WindowEvent::Resized(size) => {
-                            if let (Some(w), Some(h)) =
-                                (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
-                            {
+                            if let (Some(w), Some(h)) = (
+                                std::num::NonZeroU32::new(size.width),
+                                std::num::NonZeroU32::new(size.height),
+                            ) {
                                 painter.on_window_resized(*id, w, h);
                             }
                         }

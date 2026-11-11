@@ -87,7 +87,11 @@ impl Rngs {
                 break;
             }
         }
-        if self.crt.rand_i() & 1 != 0 { y * sigma * ONE_OVER_SIGMA_EXP } else { -y * sigma * ONE_OVER_SIGMA_EXP }
+        if self.crt.rand_i() & 1 != 0 {
+            y * sigma * ONE_OVER_SIGMA_EXP
+        } else {
+            -y * sigma * ONE_OVER_SIGMA_EXP
+        }
     }
 }
 

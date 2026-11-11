@@ -40,6 +40,9 @@ struct LibSlot {
     read: Option<Option<Rev>>,
     library: Option<Arc<Library>>,
     error: Option<String>,
+    /// The last note logged: a refresh of the same game reads the same file again and must not
+    /// say it once more.
+    noted: Option<String>,
 }
 
 #[derive(Default)]
@@ -55,6 +58,8 @@ struct State {
 #[derive(Default)]
 pub struct Particles {
     lib: Mutex<LibSlot>,
+    /// Held while the library is read: callers that ask meanwhile wait for that read.
+    reading: tokio::sync::Mutex<()>,
     state: Mutex<State>,
 }
 
@@ -68,11 +73,16 @@ impl Particles {
     /// thread once per link revision.
     pub async fn library(&self, editor: &Editor) -> Option<Arc<Library>> {
         let rev = gz_game::GameLink::of(editor).map(|g| g.rev()).ok();
-        {
+        let current = || {
             let slot = self.lib.lock();
-            if slot.read == Some(rev) {
-                return slot.library.clone();
-            }
+            (slot.read == Some(rev)).then(|| slot.library.clone())
+        };
+        if let Some(l) = current() {
+            return l;
+        }
+        let _reading = self.reading.lock().await;
+        if let Some(l) = current() {
+            return l;
         }
         let parse = |bytes: Vec<u8>| async move {
             editor
@@ -84,35 +94,46 @@ impl Particles {
                 })
                 .await
         };
-        let mut read: Result<Arc<Library>, String> = match gz_game::read_game_or_bundled(editor, "particles.xr").await {
-            Ok((bytes, _)) => parse(bytes).await,
-            Err(e) => Err(e.to_string()),
-        };
+        let mut read: Result<Arc<Library>, String> =
+            match gz_game::read_game_or_bundled(editor, "particles.xr").await {
+                Ok((bytes, _)) => parse(bytes).await,
+                Err(e) => Err(e.to_string()),
+            };
         // a file the reader refuses falls back to the editor's own copy, said in the log
         let mut note = None;
         if let Err(e) = &read
             && let Some(bytes) = gz_game::Bundled::of(editor).read("particles.xr").await
             && let Ok(l) = parse(bytes).await
         {
-            let n = format!("the linked game's {e}; the particle systems play from the editor's own particles.xr");
-            editor.log.warn(n.clone());
-            note = Some(n);
+            note = Some(format!(
+                "the linked game's {e}; the particle systems play from the editor's own particles.xr"
+            ));
             read = Ok(l);
         }
         let mut slot = self.lib.lock();
         slot.read = Some(rev);
-        match read {
+        let said = match read {
             Ok(l) => {
                 slot.library = Some(l);
-                slot.error = note;
+                slot.error.clone_from(&note);
+                note
             }
             Err(e) => {
-                editor.log.warn(format!("the particle systems cannot play: {e}"));
                 slot.library = None;
-                slot.error = Some(e);
+                slot.error = Some(e.clone());
+                Some(format!("the particle systems cannot play: {e}"))
             }
+        };
+        let say = said.filter(|n| slot.noted.as_ref() != Some(n));
+        if say.is_some() {
+            slot.noted.clone_from(&say);
         }
-        slot.library.clone()
+        let library = slot.library.clone();
+        drop(slot);
+        if let Some(n) = say {
+            editor.log.warn(n);
+        }
+        library
     }
 
     /// Why there is no library, when there is none.
@@ -138,7 +159,10 @@ pub async fn play(editor: &Arc<Editor>, names: &[String], on: bool) -> Result<Ve
             .map(|o| (o.name.to_string(), Some(o.clone())))
             .collect()
     } else {
-        names.iter().map(|n| (n.clone(), state.find(ObjClass::Particles, &n.to_lowercase()).cloned())).collect()
+        names
+            .iter()
+            .map(|n| (n.clone(), state.find(ObjClass::Particles, &n.to_lowercase()).cloned()))
+            .collect()
     };
     let mut out = Vec::with_capacity(targets.len());
     {
@@ -170,7 +194,11 @@ pub async fn play(editor: &Arc<Editor>, names: &[String], on: bool) -> Result<Ve
                         s.update_parent(&world, Vec3::ZERO, false);
                         entry.transform = world;
                     }
-                    if on { s.play() } else { s.stop(true) }
+                    if on {
+                        s.play()
+                    } else {
+                        s.stop(true)
+                    }
                     out.push(json!({ "name": name, "ok": true, "playing": s.is_playing() }));
                 }
                 None => out.push(json!({
@@ -372,7 +400,12 @@ pub(crate) async fn particles_tool(ed: Arc<Editor>, a: Args) -> Reply {
 /// Whether a system plays somewhere: the viewport keeps drawing while one does.
 #[must_use]
 pub fn any_playing(editor: &Editor) -> bool {
-    Particles::of(editor).state.lock().entries.values().any(|e| e.system.as_ref().is_some_and(System::is_playing))
+    Particles::of(editor)
+        .state
+        .lock()
+        .entries
+        .values()
+        .any(|e| e.system.as_ref().is_some_and(System::is_playing))
 }
 
 #[cfg(test)]

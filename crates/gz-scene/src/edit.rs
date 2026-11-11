@@ -61,13 +61,15 @@ pub async fn save_selection(
 }
 
 /// Reads a selection file and parses it with the linked game's configs.
-async fn read_selection_file(editor: &Arc<Editor>, file: PathBuf) -> Result<(Selection, Vec<String>), CmdError> {
+async fn read_selection_file(
+    editor: &Arc<Editor>,
+    file: PathBuf,
+) -> Result<(Selection, Vec<String>), CmdError> {
     let shown = file.display().to_string();
-    let bytes = editor
-        .exec
-        .io(move || std::fs::read(&file))
-        .await
-        .map_err(|e| CmdError::not_found(format!("the selection file could not be read: {shown} ({e})")))?;
+    let bytes =
+        editor.exec.io(move || std::fs::read(&file)).await.map_err(|e| {
+            CmdError::not_found(format!("the selection file could not be read: {shown} ({e})"))
+        })?;
     let settings = crate::game::settings(editor).await;
     editor
         .exec
@@ -92,7 +94,8 @@ pub async fn load_selection(
     for w in &warnings {
         editor.log.warn(w);
     }
-    let reply = svc.store.send(SceneCmd::Paste { selection: Box::new(sel), label: label.to_owned() }, origin).await?;
+    let reply =
+        svc.store.send(SceneCmd::Paste { selection: Box::new(sel), label: label.to_owned() }, origin).await?;
     let objects = match reply {
         SceneReply::Count(n) => n,
         _ => 0,
@@ -116,7 +119,12 @@ pub async fn copy(editor: &Arc<Editor>, svc: &SceneService, class: ObjClass) -> 
 }
 
 /// `CutSelection(class)`: the copy, then the selection of the class removed as one undo step.
-pub async fn cut(editor: &Arc<Editor>, svc: &SceneService, class: ObjClass, origin: Origin) -> Result<(PathBuf, usize), CmdError> {
+pub async fn cut(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    class: ObjClass,
+    origin: Origin,
+) -> Result<(PathBuf, usize), CmdError> {
     let file = copy(editor, svc, class).await?;
     let reply =
         svc.store.send(SceneCmd::RemoveSelection { class: Some(class), label: "Cut".into() }, origin).await?;
@@ -135,7 +143,12 @@ pub async fn paste(editor: &Arc<Editor>, svc: &SceneService, origin: Origin) -> 
 }
 
 /// Duplicate: a copy pasted where it was (`UIMainForm::LevelEdit` "duplicate").
-pub async fn duplicate(editor: &Arc<Editor>, svc: &SceneService, class: ObjClass, origin: Origin) -> Result<Added, CmdError> {
+pub async fn duplicate(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    class: ObjClass,
+    origin: Origin,
+) -> Result<Added, CmdError> {
     let file = copy(editor, svc, class).await?;
     load_selection(editor, svc, file, "Duplicate", origin).await
 }

@@ -987,6 +987,29 @@ fn c_long(s: &[u8]) -> (i64, usize) {
     (if neg { -v } else { v }, i)
 }
 
+/// `_strtoui64(s, NULL, 10)`: blanks, a sign, digits; `u64::MAX` when it overflows, and a minus
+/// sign negates in two's complement, as the CRT does.
+fn c_strtoui64(s: &[u8]) -> u64 {
+    let mut i = 0;
+    while s.get(i).copied().is_some_and(c_space) {
+        i += 1;
+    }
+    let mut neg = false;
+    if let Some(&c @ (b'+' | b'-')) = s.get(i) {
+        neg = c == b'-';
+        i += 1;
+    }
+    let mut v: u64 = 0;
+    while let Some(&d) = s.get(i).filter(|d| d.is_ascii_digit()) {
+        match v.checked_mul(10).and_then(|x| x.checked_add(u64::from(d - b'0'))) {
+            Some(x) => v = x,
+            None => return u64::MAX,
+        }
+        i += 1;
+    }
+    if neg { v.wrapping_neg() } else { v }
+}
+
 /// `atoi` as the MSVC runtime gives it: saturated at the bounds of `int`.
 fn c_atoi(s: &str) -> i32 {
     let (v, _) = c_long(s.as_bytes());
@@ -1219,8 +1242,9 @@ impl Ltx {
         Ok(c_long(self.text(section, key)?.as_bytes()).0)
     }
     /// `_strtoui64`: a negative number wraps.
+    /// `_strtoui64(.., 10)`: a GUID half above `i64::MAX` reads whole.
     pub fn r_u64(&self, section: &str, key: &str) -> Result<u64, LtxError> {
-        Ok(c_long(self.text(section, key)?.as_bytes()).0 as u64)
+        Ok(c_strtoui64(self.text(section, key)?.as_bytes()))
     }
     pub fn r_float(&self, section: &str, key: &str) -> Result<f32, LtxError> {
         Ok(c_strtod(self.text(section, key)?.as_bytes()).0 as f32)
@@ -1279,6 +1303,17 @@ impl Ltx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsigned_64_bit_values_read_whole() {
+        assert_eq!(c_strtoui64(b"14137665947197255590"), 14_137_665_947_197_255_590);
+        assert_eq!(c_strtoui64(b" 7"), 7);
+        assert_eq!(c_strtoui64(b"99999999999999999999"), u64::MAX);
+        assert_eq!(c_strtoui64(b"-1"), u64::MAX);
+        let l =
+            load(&[("a.ltx", "[guid]\nguid_g1 = 14137665947197255590\n")], "a.ltx", Dialect::Editor).unwrap();
+        assert_eq!(l.ltx.r_u64("guid", "guid_g1").unwrap(), 14_137_665_947_197_255_590);
+    }
 
     fn load(files: &[(&str, &str)], root: &str, dialect: Dialect) -> Result<Loaded, LtxError> {
         let map: FxHashMap<String, ParsedFile> =

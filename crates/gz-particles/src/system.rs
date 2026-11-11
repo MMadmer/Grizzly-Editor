@@ -92,7 +92,11 @@ impl From<&gz_fmt_xr::ParticleEffect> for EffectDef {
             time_limit: e.time_limit.unwrap_or(0.0),
             collide: e.collision.unwrap_or([1.0, 0.0, 0.0]),
             velocity_scale: e.velocity_scale.unwrap_or(Vec3::ZERO),
-            ap_default_rotation: e.align_to_path_rotation.unwrap_or(Vec3::new(-std::f32::consts::FRAC_PI_2, 0.0, 0.0)),
+            ap_default_rotation: e.align_to_path_rotation.unwrap_or(Vec3::new(
+                -std::f32::consts::FRAC_PI_2,
+                0.0,
+                0.0,
+            )),
             actions: e.actions.clone(),
         }
     }
@@ -162,7 +166,8 @@ impl Library {
     /// first of two equal names kept in front.
     #[must_use]
     pub fn new(p: &gz_fmt_xr::Particles) -> Self {
-        let mut effects: Vec<Arc<EffectDef>> = p.effects.iter().map(|e| Arc::new(EffectDef::from(e))).collect();
+        let mut effects: Vec<Arc<EffectDef>> =
+            p.effects.iter().map(|e| Arc::new(EffectDef::from(e))).collect();
         let mut groups: Vec<Arc<GroupDef>> = p.groups.iter().map(|g| Arc::new(GroupDef::from(g))).collect();
         effects.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
         groups.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
@@ -379,7 +384,10 @@ mod tests {
 
     fn library() -> Arc<Library> {
         let p = gz_fmt_xr::Particles {
-            effects: vec![effect("b\\spark", flags::SPRITE, None), effect("a\\puff", flags::SPRITE | flags::TIME_LIMIT, Some(0.2))],
+            effects: vec![
+                effect("b\\spark", flags::SPRITE, None),
+                effect("a\\puff", flags::SPRITE | flags::TIME_LIMIT, Some(0.2)),
+            ],
             groups: vec![gz_fmt_xr::ParticleGroup {
                 name: "g\\boom".into(),
                 flags: 0,

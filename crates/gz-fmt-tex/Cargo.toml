@@ -21,3 +21,6 @@ image.workspace = true
 texpresso.workspace = true
 # BC6H and BC7 decoding (pure Rust port of bcdec).
 bcdec_rs = "0.2"
+
+[dev-dependencies]
+gz-corpus.workspace = true

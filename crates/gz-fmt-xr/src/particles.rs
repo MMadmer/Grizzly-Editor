@@ -250,8 +250,13 @@ pub enum ActionParams {
         color: Vec3,
         alpha: f32,
         scale: f32,
+        /// 0 when not stored.
         time_from: f32,
+        /// 1 when not stored.
         time_to: f32,
+        /// How many of the two time fields the file holds: Shadow of Chernobyl's 20-byte form
+        /// stores none, and Dead Air's engine reads what is there before the list ends.
+        times_stored: u8,
     },
     TargetSize {
         size: Vec3,
@@ -351,7 +356,15 @@ fn domain(r: &mut Reader<'_>) -> Result<Domain> {
     })
 }
 
-fn action(r: &mut Reader<'_>) -> Result<Action> {
+/// The two layouts of `PATargetColor`: Shadow of Chernobyl's 20 bytes, or 28 with the time
+/// window after them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ColorForm {
+    Short,
+    Long,
+}
+
+fn action(r: &mut Reader<'_>, color_form: ColorForm) -> Result<Action> {
     let id = r.r_u32()?;
     let kind = ActionKind::from_id(id)
         .ok_or_else(|| invalid(format!("particle action type {id} is not one the game has")))?;
@@ -419,14 +432,15 @@ fn action(r: &mut Reader<'_>) -> Result<Action> {
             parent_motion: f(r)?,
         },
         A::SpeedLimit => P::SpeedLimit { min_speed: f(r)?, max_speed: f(r)? },
-        // the game is not Shadow of Chernobyl: the time window follows
-        A::TargetColor => P::TargetColor {
-            color: r.r_vec3()?,
-            alpha: f(r)?,
-            scale: f(r)?,
-            time_from: f(r)?,
-            time_to: f(r)?,
-        },
+        A::TargetColor => {
+            let (color, alpha, scale) = (r.r_vec3()?, f(r)?, f(r)?);
+            let (time_from, time_to, times_stored) = match color_form {
+                // `PATargetColor`'s constructor: the whole life
+                ColorForm::Short => (0.0, 1.0, 0),
+                ColorForm::Long => (f(r)?, f(r)?, 2),
+            };
+            P::TargetColor { color, alpha, scale, time_from, time_to, times_stored }
+        }
         A::TargetSize => P::TargetSize { size: r.r_vec3()?, scale: r.r_vec3()? },
         A::TargetRotate | A::TargetRotateD | A::TargetVelocity | A::TargetVelocityD => {
             P::Target { value: r.r_vec3()?, scale: f(r)? }
@@ -442,7 +456,76 @@ fn action(r: &mut Reader<'_>) -> Result<Action> {
     Ok(Action { kind, flags, params })
 }
 
-/// `LoadActions`: a count and the actions.
+/// The type of the action at the reader's place, without moving it.
+fn peek_kind(r: &Reader<'_>) -> Option<ActionKind> {
+    let mut p = r.clone();
+    p.r_u32().ok().and_then(ActionKind::from_id)
+}
+
+/// How many action reads one list may cost before the search for an exact reading gives up: a
+/// list of honest data needs one per action and a few more.
+const SEARCH_BUDGET: usize = 1 << 14;
+
+/// Reads `n` actions. A `TargetColor` is read long first, short when what follows does not read
+/// (a depth-first search over those choices, without recursion). `exact`: the list must end
+/// where its bytes end. `Err` holds the first failure of the long-first reading.
+fn read_list(
+    start: &Reader<'_>,
+    n: usize,
+    exact: bool,
+) -> std::result::Result<Vec<Action>, Option<crate::XrError>> {
+    let mut r = start.clone();
+    let mut out: Vec<Action> = Vec::with_capacity(n);
+    // where a short reading of a colour action is still to be tried
+    let mut choices: Vec<(Reader<'_>, usize)> = Vec::new();
+    let mut first_error = None;
+    let mut work = 0usize;
+    loop {
+        let stepped = if out.len() == n {
+            if !exact || r.elapsed() == 0 {
+                return Ok(out);
+            }
+            false
+        } else {
+            work += 1;
+            if work > SEARCH_BUDGET {
+                return Err(first_error);
+            }
+            if peek_kind(&r) == Some(ActionKind::TargetColor) {
+                choices.push((r.clone(), out.len()));
+            }
+            match action(&mut r, ColorForm::Long) {
+                Ok(a) => {
+                    out.push(a);
+                    true
+                }
+                Err(e) => {
+                    first_error.get_or_insert(e);
+                    false
+                }
+            }
+        };
+        if stepped {
+            continue;
+        }
+        // back to the newest colour action, read short this time
+        loop {
+            let Some((at, len)) = choices.pop() else { return Err(first_error) };
+            r = at;
+            out.truncate(len);
+            if let Ok(a) = action(&mut r, ColorForm::Short) {
+                out.push(a);
+                break;
+            }
+        }
+    }
+}
+
+/// `LoadActions`: a count and the actions. Dead Air's library keeps Shadow of Chernobyl's
+/// 20-byte `TargetColor` in 50 effects, also before other actions (the game's own reader takes
+/// the short form only at the list's end): each colour action takes the form that makes the
+/// whole list read to its end; a list that reads in no form exactly is read as far as it goes,
+/// as the engine, which never checks the end, reads it.
 fn actions(body: &[u8]) -> Result<Vec<Action>> {
     if body.is_empty() {
         return Ok(Vec::new());
@@ -453,7 +536,9 @@ fn actions(body: &[u8]) -> Result<Vec<Action>> {
     if n.saturating_mul(12) > r.elapsed() {
         return Err(invalid(format!("a particle effect states {n} actions and cannot hold them")));
     }
-    (0..n).map(|_| action(&mut r)).collect()
+    read_list(&r, n, true)
+        .or_else(|_| read_list(&r, n, false))
+        .map_err(|e| e.unwrap_or_else(|| invalid("the actions do not read in any form")))
 }
 
 fn need<'a>(r: &Reader<'a>, id: u32, what: &str) -> Result<Reader<'a>> {
@@ -670,6 +755,66 @@ mod tests {
             matches!(&e.actions[1].params, ActionParams::Random { domain } if domain.kind == 5 && domain.radius2_sqr == 2.0)
         );
         assert_eq!(p.group("explosions\\big").map(|g| g.time_limit), Some(3.0));
+    }
+
+    /// A list of a `TargetColor` (with or without its time window) and, optionally, a `Move`.
+    fn colour_list(long: bool, then_move: bool) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.w_u32(1 + u32::from(then_move));
+        for v in [23, 0, 23] {
+            w.w_u32(v);
+        }
+        w.w_vec3(Vec3::new(0.5, 0.25, 1.0));
+        w.w_f32(0.75);
+        w.w_f32(2.0);
+        if long {
+            w.w_f32(0.25);
+            w.w_f32(0.5);
+        }
+        if then_move {
+            for v in [12, 0, 12] {
+                w.w_u32(v);
+            }
+        }
+        w.into_bytes()
+    }
+
+    #[test]
+    fn both_forms_of_the_target_colour_read() {
+        for then_move in [false, true] {
+            let short = actions(&colour_list(false, then_move)).unwrap();
+            assert_eq!(short.len(), 1 + usize::from(then_move));
+            assert!(matches!(
+                short[0].params,
+                ActionParams::TargetColor { time_from: 0.0, time_to: 1.0, times_stored: 0, scale: 2.0, .. }
+            ));
+            let long = actions(&colour_list(true, then_move)).unwrap();
+            assert!(matches!(
+                long[0].params,
+                ActionParams::TargetColor { time_from: 0.25, time_to: 0.5, times_stored: 2, .. }
+            ));
+            if then_move {
+                assert_eq!((short[1].kind, long[1].kind), (ActionKind::Move, ActionKind::Move));
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_list_of_colour_actions_that_never_fits_ends() {
+        // every colour action could be either form and the last is cut: the search is bounded
+        let mut w = Writer::new();
+        w.w_u32(4000);
+        for _ in 0..4000 {
+            for v in [23, 0, 23] {
+                w.w_u32(v);
+            }
+            for _ in 0..5 {
+                w.w_f32(1.0);
+            }
+        }
+        let mut bytes = w.into_bytes();
+        bytes.truncate(bytes.len() - 6);
+        assert!(actions(&bytes).is_err());
     }
 
     #[test]

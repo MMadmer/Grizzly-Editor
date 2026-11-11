@@ -16,10 +16,10 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 use super::geom::{self, CRandom, mknormal, normalize, plane_build, plane_fit, similar};
+use super::geom::{EPS, EPS_L, EPS_S};
 use super::sector::{self, Item};
 use crate::class::ObjClass;
 use crate::library::Library;
-use super::geom::{EPS, EPS_L, EPS_S};
 use crate::math::{Aabb, Mat4, Vec3};
 use crate::model::{ObjData, ObjId, SceneState};
 use crate::objects::PortalData;
@@ -427,7 +427,13 @@ pub fn invert(b: &mut Built) {
 
 /// `CPortal::Update(bLoadMode)`: the centre, the normal, the simplified model; with the sectors'
 /// rays the orientation vote. Messages in the C++ words go to `log`.
-pub fn update(data: PortalData, name: &str, rays: Option<(&SectorRays, &SectorRays)>, seed: i32, log: &mut Vec<String>) -> Built {
+pub fn update(
+    data: PortalData,
+    name: &str,
+    rays: Option<(&SectorRays, &SectorRays)>,
+    seed: i32,
+    log: &mut Vec<String>,
+) -> Built {
     let bounds = Aabb::from_points(data.vertices.iter());
     let (center, _) = geom::box_sphere(&bounds);
     let mut b = Built { data, simplified: Vec::new(), center, normal: Vec3::ZERO, valid: false };
@@ -508,7 +514,9 @@ pub fn compute(
                 .iter()
                 .filter(|it| !geom::is_mu_static(&it.lib))
                 .flat_map(|it| {
-                    geom::mesh_world_faces(&it.lib, it.mesh, &it.object.world()).into_iter().map(move |f| (si, f))
+                    geom::mesh_world_faces(&it.lib, it.mesh, &it.object.world())
+                        .into_iter()
+                        .map(move |f| (si, f))
                 })
                 .collect()
         })
@@ -552,7 +560,9 @@ pub fn compute(
             let name = names();
             todo.push((name, PortalData { front: fa, back: fb, vertices }, *pair));
         } else {
-            log.push(format!("Can't create Portal from one edge :(\nPlease check geometry.\n'{fa}'<->'{fb}'"));
+            log.push(format!(
+                "Can't create Portal from one edge :(\nPlease check geometry.\n'{fa}'<->'{fb}'"
+            ));
         }
     }
     let rays = sector_rays(&items_of);
@@ -609,7 +619,11 @@ fn holds(p: &Aabb, p0: &Aabb) -> bool {
 }
 
 fn portal_box(p: &PortalData) -> Aabb {
-    if p.vertices.is_empty() { Aabb::new(Vec3::ZERO, Vec3::ZERO) } else { Aabb::from_points(p.vertices.iter()) }
+    if p.vertices.is_empty() {
+        Aabb::new(Vec3::ZERO, Vec3::ZERO)
+    } else {
+        Aabb::from_points(p.vertices.iter())
+    }
 }
 
 /// `RemoveSimilar`: the portals that repeat another of the same sectors (one plane, the box

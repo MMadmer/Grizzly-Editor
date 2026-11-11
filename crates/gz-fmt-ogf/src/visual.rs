@@ -106,6 +106,13 @@ fn body<'a>(r: &Reader<'a>, id: u32) -> Result<Option<gz_chunk::Chunk<'a>>> {
     Ok(r.open_chunk(id)?)
 }
 
+/// A chunk the engine reads with `find_chunk` / `r_chunk_safe`: its stored bytes, whatever its
+/// compression mark says (only `open_chunk` unpacks). Dead Air's `dev_pda_hud.ogf` marks a
+/// plain header and description as compressed.
+fn raw<'a>(r: &Reader<'a>, id: u32) -> Result<Option<gz_chunk::Chunk<'a>>> {
+    Ok(r.find_chunk(id).map(|(b, _)| gz_chunk::Chunk::borrowed(b)))
+}
+
 fn buffer_ref(r: &mut Reader<'_>) -> Result<BufferRef> {
     Ok(BufferRef { id: r.r_u32()?, base: r.r_u32()?, count: r.r_u32()? })
 }
@@ -142,7 +149,7 @@ impl Visual {
         }
         let r = Reader::new(bytes);
         let header = {
-            let c = body(&r, chunk::HEADER)?.ok_or_else(|| invalid("the model has no header"))?;
+            let c = raw(&r, chunk::HEADER)?.ok_or_else(|| invalid("the model has no header"))?;
             Header::read(&mut c.reader())?
         };
         if header.format_version != FORMAT_VERSION {
@@ -174,15 +181,15 @@ impl Visual {
             collision_vertices: None,
             collision_indices: None,
         };
-        if let Some(c) = body(&r, chunk::TEXTURE)? {
+        if let Some(c) = raw(&r, chunk::TEXTURE)? {
             let mut t = c.reader();
             v.texture = Some((SmolStr::new(t.r_stringz()?), SmolStr::new(t.r_stringz()?)));
         }
         let skinned = matches!(header.kind, MT::SKELETON_GEOMDEF_PM | MT::SKELETON_GEOMDEF_ST);
-        if let Some(c) = body(&r, chunk::VERTICES)? {
+        if let Some(c) = raw(&r, chunk::VERTICES)? {
             v.vertices = Some(VertexBuffer::read(c.bytes(), skinned)?);
         }
-        if let Some(c) = body(&r, chunk::INDICES)? {
+        if let Some(c) = raw(&r, chunk::INDICES)? {
             let mut ir = c.reader();
             let n = ir.r_u32()? as usize;
             if n.saturating_mul(2) > ir.elapsed() {
@@ -193,10 +200,10 @@ impl Visual {
         if let Some(c) = body(&r, chunk::SWIDATA)? {
             v.swi = Some(swi(c.bytes())?);
         }
-        if let Some(c) = body(&r, chunk::VCONTAINER)? {
+        if let Some(c) = raw(&r, chunk::VCONTAINER)? {
             v.vcontainer = Some(buffer_ref(&mut c.reader())?);
         }
-        if let Some(c) = body(&r, chunk::ICONTAINER)? {
+        if let Some(c) = raw(&r, chunk::ICONTAINER)? {
             v.icontainer = Some(buffer_ref(&mut c.reader())?);
         }
         if let Some(c) = body(&r, chunk::GCONTAINER)? {
@@ -213,7 +220,7 @@ impl Visual {
                 v.fast_path_swi = Some(swi(s.bytes())?);
             }
         }
-        if let Some(c) = body(&r, chunk::SWICONTAINER)? {
+        if let Some(c) = raw(&r, chunk::SWICONTAINER)? {
             v.swi_container = Some(c.reader().r_u32()?);
         }
         if let Some(c) = body(&r, chunk::CHILDREN)? {
@@ -231,7 +238,7 @@ impl Visual {
             let n = cr.r_u32()? as usize;
             v.child_refs = u32_list(&mut cr, n, "child references")?;
         }
-        if let Some(c) = body(&r, chunk::LODDEF2)? {
+        if let Some(c) = raw(&r, chunk::LODDEF2)? {
             let mut lr = c.reader();
             if lr.elapsed() < 8 * 4 * 28 {
                 return Err(invalid("the LOD's billboards are cut short"));
@@ -252,7 +259,7 @@ impl Visual {
             }
             v.lod = Some(Box::new(facets));
         }
-        if let Some(c) = body(&r, chunk::TREEDEF2)? {
+        if let Some(c) = raw(&r, chunk::TREEDEF2)? {
             let mut tr = c.reader();
             let mut xform = [[0.0f32; 4]; 4];
             for row in &mut xform {
@@ -267,27 +274,33 @@ impl Visual {
             let bias = five(&mut tr)?;
             v.tree = Some(TreeDef { xform, scale, bias });
         }
-        if let Some(c) = body(&r, chunk::S_DESC)? {
-            v.desc = Some(Desc::read(c.bytes())?);
+        if let Some(c) = raw(&r, chunk::S_DESC)? {
+            // the game never reads it; a description that is not one (Dead Air's
+            // `dev_pda_hud.ogf` holds a line of text there) leaves the model readable
+            v.desc = Desc::read(c.bytes()).ok();
         }
-        if let Some(c) = body(&r, chunk::S_BONE_NAMES)? {
+        if let Some(c) = raw(&r, chunk::S_BONE_NAMES)? {
             v.bones = read_names(c.bytes())?;
         }
         if let Some(c) = body(&r, chunk::S_IKDATA)? {
             v.ik = read_ik(c.bytes(), v.bones.len())?;
         }
         if let Some(c) = body(&r, chunk::S_USERDATA)? {
-            v.user_data = Some(c.reader().r_stringz()?);
+            // the engine reads the chunk as an ini (`CInifile` over the chunk): a text that ends
+            // with the chunk, without a terminator, is whole too
+            let bytes = c.bytes();
+            let text = bytes.split(|&b| b == 0).next().unwrap_or(&[]);
+            v.user_data = Some(gz_base::text::decode_guess(text).into_owned());
         }
         if let Some(c) = body(&r, chunk::S_LODS)? {
             v.lod_ref = Some(SmolStr::new(c.reader().r_line()));
         }
-        if let Some(c) = body(&r, chunk::S_MOTION_REFS)? {
+        if let Some(c) = raw(&r, chunk::S_MOTION_REFS)? {
             let list = c.reader().r_stringz()?;
             v.motion_refs =
                 list.split(',').map(|s| SmolStr::new(s.trim())).filter(|s| !s.is_empty()).collect();
         }
-        if let Some(c) = body(&r, chunk::S_MOTION_REFS2)? {
+        if let Some(c) = raw(&r, chunk::S_MOTION_REFS2)? {
             let mut mr = c.reader();
             let n = mr.r_u32()? as usize;
             if n > mr.elapsed() {

@@ -202,7 +202,13 @@ struct Pt {
 
 impl Pt {
     fn vec5(&self) -> Vec5 {
-        [f64::from(self.pos.x), f64::from(self.pos.y), f64::from(self.pos.z), f64::from(self.u), f64::from(self.v)]
+        [
+            f64::from(self.pos.x),
+            f64::from(self.pos.y),
+            f64::from(self.pos.z),
+            f64::from(self.u),
+            f64::from(self.v),
+        ]
     }
 }
 
@@ -442,7 +448,8 @@ impl Object {
         let mut sum = Quadric::ZERO;
         for &t in &self.pt(binned)?.tris {
             let p = self.tri(t)?.p;
-            let q = Quadric::of_triangle(&self.pt(p[0])?.vec5(), &self.pt(p[1])?.vec5(), &self.pt(p[2])?.vec5());
+            let q =
+                Quadric::of_triangle(&self.pt(p[0])?.vec5(), &self.pt(p[1])?.vec5(), &self.pt(p[2])?.vec5());
             sum.add(&q);
         }
         let ed = self.edge(edge)?;
@@ -739,7 +746,9 @@ impl Object {
                             cur_num_tris -= 1;
                         }
                         optimise(&mut temp, collapsed.len())?;
-                        indices.overwrite((cur_tri_binned * 3) as usize, &temp, 0, 3 * collapsed.len()).ok_or(Failed)?;
+                        indices
+                            .overwrite((cur_tri_binned * 3) as usize, &temp, 0, 3 * collapsed.len())
+                            .ok_or(Failed)?;
                         cur_tri_binned += collapsed.len() as i32;
                     }
                 } else {
@@ -770,7 +779,9 @@ impl Object {
                     }
                     optimise(&mut temp, original.len())?;
                     indices.resize(((cur_tri_added as usize) + original.len()) * 3);
-                    indices.overwrite((cur_tri_added * 3) as usize, &temp, 0, 3 * original.len()).ok_or(Failed)?;
+                    indices
+                        .overwrite((cur_tri_added * 3) as usize, &temp, 0, 3 * original.len())
+                        .ok_or(Failed)?;
                     cur_tri_added += original.len() as i32;
                 }
                 cur_collapse -= 1;
@@ -899,17 +910,11 @@ mod tests {
     fn a_triangle_soup_collapses_nothing_and_turns_around() {
         // two faces of their own (as every skeleton split is): no point has a closed fan, so
         // nothing collapses; the points are taken last first and the faces newest first
-        let verts: Vec<(Vec3, Vec2)> = [
-            Vec3::ZERO,
-            Vec3::X,
-            Vec3::new(1.0, 0.0, 1.0),
-            Vec3::ZERO,
-            Vec3::new(1.0, 0.0, 1.0),
-            Vec3::Z,
-        ]
-        .iter()
-        .map(|p| (*p, Vec2::ZERO))
-        .collect();
+        let verts: Vec<(Vec3, Vec2)> =
+            [Vec3::ZERO, Vec3::X, Vec3::new(1.0, 0.0, 1.0), Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0), Vec3::Z]
+                .iter()
+                .map(|p| (*p, Vec2::ZERO))
+                .collect();
         let r = convert(&verts, &[[0, 1, 2], [3, 4, 5]]).unwrap();
         assert_eq!(r.permute_verts, vec![5, 4, 3, 2, 1, 0]);
         assert_eq!(r.swr, vec![Swr { offset: 0, num_tris: 2, num_verts: 6 }]);
@@ -920,16 +925,8 @@ mod tests {
     fn octahedron() -> (Vec<(Vec3, Vec2)>, Vec<[u16; 3]>) {
         let p = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z];
         let verts = p.iter().map(|v| (*v, Vec2::new(v.x, v.z))).collect();
-        let faces = vec![
-            [0, 2, 4],
-            [2, 1, 4],
-            [1, 3, 4],
-            [3, 0, 4],
-            [2, 0, 5],
-            [1, 2, 5],
-            [3, 1, 5],
-            [0, 3, 5],
-        ];
+        let faces =
+            vec![[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
         (verts, faces)
     }
 
@@ -971,7 +968,8 @@ mod tests {
 
     #[test]
     fn duplicate_faces_refuse_the_pass() {
-        let verts: Vec<(Vec3, Vec2)> = [Vec3::ZERO, Vec3::X, Vec3::Z].iter().map(|p| (*p, Vec2::ZERO)).collect();
+        let verts: Vec<(Vec3, Vec2)> =
+            [Vec3::ZERO, Vec3::X, Vec3::Z].iter().map(|p| (*p, Vec2::ZERO)).collect();
         assert!(convert(&verts, &[[0, 1, 2], [1, 2, 0]]).is_none());
     }
 }

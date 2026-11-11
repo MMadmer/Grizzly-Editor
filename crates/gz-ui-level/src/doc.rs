@@ -487,7 +487,8 @@ impl LevelDoc {
             // dragged out: a press on the tab let go outside the editor's window
             if may_float {
                 let (pressed_here, released_at, inner) = ctx.input(|i| {
-                    let press = i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|at| tab.contains(at));
+                    let press = i.pointer.primary_pressed()
+                        && i.pointer.interact_pos().is_some_and(|at| tab.contains(at));
                     let release = if i.pointer.primary_released() { i.pointer.latest_pos() } else { None };
                     (press, release, i.viewport().inner_rect)
                 });

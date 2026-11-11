@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
 use gz_chunk::Reader;
-use gz_render::{Aabb, Assets, Color, Frustum, Instance, InstanceFlags, MaterialDesc, MeshData, MeshVertex, SubMesh};
+use gz_render::{
+    Aabb, Assets, Color, Frustum, Instance, InstanceFlags, MaterialDesc, MeshData, MeshVertex, SubMesh,
+};
 use gz_scene::tools::WallmarkPart;
 use gz_scene::{ObjClass, ObjId, SceneState};
 use smol_str::SmolStr;

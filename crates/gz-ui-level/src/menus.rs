@@ -81,9 +81,9 @@ pub fn run_scene_command(id: &str, editor: &Arc<Editor>, ctx: &Context) {
         "COMMAND_UNDO" => editor.post("undo", Args::new()),
         "COMMAND_REDO" => editor.post("redo", Args::new()),
         // `CommandDeleteSelection`: asks nothing, one undo step
-        "COMMAND_DELETE_SELECTION" => svc
-            .store
-            .post(SceneCmd::RemoveSelection { class: Some(class), label: "Delete".into() }, origin),
+        "COMMAND_DELETE_SELECTION" => {
+            svc.store.post(SceneCmd::RemoveSelection { class: Some(class), label: "Delete".into() }, origin)
+        }
         "COMMAND_SELECT_ALL" => {
             svc.store.post(SceneCmd::SelectClass { class: Some(class), select: true }, origin)
         }

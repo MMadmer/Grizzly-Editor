@@ -14,8 +14,8 @@ use crate::assets::{Assets, MaterialHandle, MeshHandle, MeshInfo};
 use crate::camera::project;
 use crate::color::Color;
 use crate::draw_list::{
-    DrawList, Instance, InstanceFlags, LightKind, RoofMap, Sky, SpriteAlign, SpriteBatch, SpriteCull, SpriteSize,
-    Visibility,
+    DrawList, Instance, InstanceFlags, LightKind, RoofMap, Sky, SpriteAlign, SpriteBatch, SpriteCull,
+    SpriteSize, Visibility,
 };
 use crate::gpu::MeshPipe;
 use crate::helpers::{HelperGeometry, grid_lines, tessellate};
@@ -325,7 +325,9 @@ pub fn build_packet_with(
         .iter()
         .zip(&batch_meshes)
         .map(|(b, &m)| match info_of(m) {
-            Some(info) => info.submeshes.iter().map(|sub| intern(b.material.unwrap_or(sub.material))).collect(),
+            Some(info) => {
+                info.submeshes.iter().map(|sub| intern(b.material.unwrap_or(sub.material))).collect()
+            }
             None => {
                 waiting |= resolved.get(m as usize).is_some_and(|r| r.1);
                 Vec::new()
@@ -455,12 +457,14 @@ pub fn build_packet_with(
     let mut batch_gpu: Vec<Vec<InstanceGpu>> = Vec::with_capacity(list.batches.len());
     let mut batched = 0usize;
     for (bi, ((b, mats), &mesh)) in list.batches.iter().zip(&batch_materials).zip(&batch_meshes).enumerate() {
-        let shown = !(preview && b.flags.contains(InstanceFlags::HIDDEN_IN_PREVIEW)) && !b.instances.is_empty();
+        let shown =
+            !(preview && b.flags.contains(InstanceFlags::HIDDEN_IN_PREVIEW)) && !b.instances.is_empty();
         if !shown || mats.is_empty() {
             batch_gpu.push(Vec::new());
             continue;
         }
-        let make = |i: &crate::draw_list::BatchInstance| gpu_of(&i.transform, i.tint, b.id, b.flags, NO_BONES);
+        let make =
+            |i: &crate::draw_list::BatchInstance| gpu_of(&i.transform, i.tint, b.id, b.flags, NO_BONES);
         batch_gpu.push(if b.instances.len() >= PARALLEL {
             b.instances.par_iter().map(make).collect()
         } else {
@@ -598,7 +602,11 @@ pub fn build_packet_with(
                 lights.push(LightGpu {
                     pos_range: l.position.extend(if ranged { l.range } else { f32::MAX }).to_array(),
                     color_cos: l.color.extend(0.0).to_array(),
-                    dir: direction.try_normalize().unwrap_or(-Vec3::Y).extend(if ranged { 1.0 } else { 2.0 }).to_array(),
+                    dir: direction
+                        .try_normalize()
+                        .unwrap_or(-Vec3::Y)
+                        .extend(if ranged { 1.0 } else { 2.0 })
+                        .to_array(),
                 });
             }
         }
@@ -1132,7 +1140,10 @@ mod tests {
         let mat = a.material(MaterialDesc::textured(EditorMaterial::Additive, "glow\\glow_01"));
         let glow = |z: f32| SpriteBatch {
             material: mat,
-            sprites: vec![crate::draw_list::Sprite { half: Vec2::splat(0.5), ..sprite(Vec3::new(0.0, 0.0, z), SpriteAlign::Camera) }],
+            sprites: vec![crate::draw_list::Sprite {
+                half: Vec2::splat(0.5),
+                ..sprite(Vec3::new(0.0, 0.0, z), SpriteAlign::Camera)
+            }],
             cull: SpriteCull::None,
             size: SpriteSize::Screen,
             bounds: None,

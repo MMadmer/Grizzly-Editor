@@ -988,21 +988,24 @@ fn log_line(tone: Tone, what: &str, text_: &str) -> String {
 
 /// Held while a caller who has decided runs something of the window (an MCP caller's row of the
 /// command table): every question raised through this context meanwhile is that caller's to
-/// answer, whatever asker the code that raises it names. Dropped, each question has its own
-/// asker again.
+/// answer, whatever asker the code that raises it names. Dropped, the scope it was opened in is
+/// in force again (none: each question has its own asker).
 #[must_use]
-pub struct CallerScope(Context);
+pub struct CallerScope {
+    ctx: Context,
+    outer: Option<Asker>,
+}
 
 impl Drop for CallerScope {
     fn drop(&mut self) {
-        handle(&self.0).0.lock().caller = None;
+        handle(&self.ctx).0.lock().caller = self.outer;
     }
 }
 
 /// Opens a [`CallerScope`] on the UI thread, for the length of a synchronous run.
 pub fn answer_as(ctx: &Context, caller: Asker) -> CallerScope {
-    handle(ctx).0.lock().caller = Some(caller);
-    CallerScope(ctx.clone())
+    let outer = handle(ctx).0.lock().caller.replace(caller);
+    CallerScope { ctx: ctx.clone(), outer }
 }
 
 /// The asker in force: the caller's while its scope is held.
@@ -1155,8 +1158,54 @@ pub fn close_dialog(ctx: &Context, id: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Answer, Asker, ConfirmSpec, DialogSize, full_name, log_line};
+    use super::{Answer, Asker, ConfirmSpec, DialogSize, ResultSpec, answer_as, full_name, handle, log_line};
     use crate::theme::Tone;
+
+    /// Raises each kind of question as `asker` and returns what each answered: confirm, unsaved;
+    /// with the number of dialogs queued by the four calls.
+    fn ask_all(ctx: &egui::Context, asker: Asker) -> (Option<Answer>, Option<Answer>, usize) {
+        let before = handle(ctx).0.lock().queue.len();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx2 = tx.clone();
+        super::confirm(
+            ctx,
+            asker,
+            ConfirmSpec { title: "Delete".into(), ..ConfirmSpec::default() },
+            move |a| {
+                let _ = tx.send(a);
+            },
+        );
+        let confirmed = rx.try_recv().ok();
+        super::unsaved_prompt(ctx, asker, "unsaved", &["quest.nqasset".to_owned()], move |a| {
+            let _ = tx2.send(a);
+        });
+        let unsaved = rx.try_recv().ok();
+        super::notice(ctx, asker, Tone::Warning, "Note", "text");
+        super::result(ctx, asker, ResultSpec::new("build_result", "Build", Tone::Info, "Built."));
+        (confirmed, unsaved, handle(ctx).0.lock().queue.len() - before)
+    }
+
+    #[test]
+    fn a_callers_scope_answers_every_question_and_ends_with_itself() {
+        let ctx = egui::Context::default();
+        {
+            let _scope = answer_as(&ctx, Asker::Mcp);
+            // whatever asker the code names, the MCP caller answers: Yes, Cancel, nothing opens
+            for asker in [Asker::Ui, Asker::Mcp, Asker::Unattended] {
+                assert_eq!(ask_all(&ctx, asker), (Some(Answer::Yes), Some(Answer::Cancel), 0), "{asker:?}");
+            }
+            {
+                // a scope inside a scope gives the outer one back when it ends
+                let _inner = answer_as(&ctx, Asker::Unattended);
+                assert_eq!(ask_all(&ctx, Asker::Ui), (Some(Answer::No), Some(Answer::No), 0));
+            }
+            assert_eq!(ask_all(&ctx, Asker::Ui), (Some(Answer::Yes), Some(Answer::Cancel), 0));
+        }
+        // each asker is itself again: a person gets four dialogs and no answer yet
+        assert_eq!(ask_all(&ctx, Asker::Ui), (None, None, 4));
+        assert_eq!(ask_all(&ctx, Asker::Mcp), (Some(Answer::Yes), Some(Answer::Cancel), 0));
+        assert_eq!(ask_all(&ctx, Asker::Unattended), (Some(Answer::No), Some(Answer::No), 0));
+    }
 
     #[test]
     fn names_carry_the_prefix_once() {

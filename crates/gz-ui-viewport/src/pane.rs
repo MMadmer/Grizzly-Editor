@@ -471,7 +471,9 @@ impl ViewportPane {
             }
             match crate::objtools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
                 crate::objtools::ToolGesture::Paint(p) => self.gesture = Gesture::ToolPaint(p),
-                crate::objtools::ToolGesture::BoxPick => self.gesture = Gesture::ToolBox { start: at, now: at },
+                crate::objtools::ToolGesture::BoxPick => {
+                    self.gesture = Gesture::ToolBox { start: at, now: at }
+                }
                 crate::objtools::ToolGesture::Done => self.gesture = Gesture::Press { start: at },
                 crate::objtools::ToolGesture::None => {
                     place(&self.editor, &self.vp, ray, *b);
@@ -1185,8 +1187,15 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
     if !d.nodes.is_empty() {
         match d.kind {
             GizmoType::Move => {
-                if let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray) {
-                    crate::bulktools::move_nodes(editor, &d.nodes, |p| gizmo::moved(p, delta, vector, grid), &d.merge, editor.ui_origin());
+                if let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray)
+                {
+                    crate::bulktools::move_nodes(
+                        editor,
+                        &d.nodes,
+                        |p| gizmo::moved(p, delta, vector, grid),
+                        &d.merge,
+                        editor.ui_origin(),
+                    );
                 }
             }
             GizmoType::Rotate => {
@@ -1211,7 +1220,13 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
                 let at = gizmo::moved(h.position, delta, vector, grid);
                 // Points mode: only the selected points of the way move
                 if let Some((_, pts)) = d.points.iter().find(|(id, _)| *id == h.id) {
-                    crate::objtools::move_points(&d.svc, &[(h.id, pts.clone())], at - h.position, &d.merge, editor.ui_origin());
+                    crate::objtools::move_points(
+                        &d.svc,
+                        &[(h.id, pts.clone())],
+                        at - h.position,
+                        &d.merge,
+                        editor.ui_origin(),
+                    );
                     continue;
                 }
                 items.push((h.id, TransformEdit::Position(at)));
@@ -1334,11 +1349,16 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                 let reply = ed.call("group_tool", args, origin).await;
                 if reply.get("ok").and_then(Value::as_bool) != Some(true) {
                     ed.log.error(
-                        reply.get("error").and_then(Value::as_str).unwrap_or("the group could not be placed").to_owned(),
+                        reply
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the group could not be placed")
+                            .to_owned(),
                     );
                     return;
                 }
-                let name = reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
+                let name =
+                    reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
                 svc.store.snapshot().find(ObjClass::Group, name).map(|o| o.id)
             }
             ObjClass::SpawnPoint => {

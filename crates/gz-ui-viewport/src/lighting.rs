@@ -624,7 +624,12 @@ mod tests {
             let mut o = Object::new(
                 ObjClass::Light,
                 if on { "on" } else { "off" },
-                ObjData::Light(LightData { kind: LT_DIRECT, use_in_d3d: on, range: 50.0, ..LightData::default() }),
+                ObjData::Light(LightData {
+                    kind: LT_DIRECT,
+                    use_in_d3d: on,
+                    range: 50.0,
+                    ..LightData::default()
+                }),
             );
             o.xform.position = Vec3::new(0.0, 0.0, 10.0);
             o

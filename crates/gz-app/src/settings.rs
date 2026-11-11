@@ -361,7 +361,9 @@ impl EditorSettings {
 
     pub fn set_tools_settings(&self, flags: u32) {
         let mut s = self.inner.lock();
-        if s.doc.get("editor_prefs", "tools_settings").and_then(|v| v.trim().parse::<u32>().ok()) != Some(flags) {
+        if s.doc.get("editor_prefs", "tools_settings").and_then(|v| v.trim().parse::<u32>().ok())
+            != Some(flags)
+        {
             s.doc.set("editor_prefs", "tools_settings", &flags.to_string());
             s.dirty = true;
         }

@@ -72,8 +72,9 @@ pub fn rewrite_thumbnails(editor: &Arc<Editor>) {
                 headline: "Rewrite every texture description (.thm) of the texture library?".to_owned(),
                 items: files.iter().take(10).map(|(n, _)| n.clone()).collect(),
                 total: files.len(),
-                consequence: "Each file is read and written again in place, in the format this editor writes."
-                    .to_owned(),
+                consequence:
+                    "Each file is read and written again in place, in the format this editor writes."
+                        .to_owned(),
                 action: "Rewrite".to_owned(),
                 destructive: false,
             };
@@ -141,46 +142,58 @@ fn start_rewrite(editor: &Arc<Editor>, files: Vec<(String, std::path::PathBuf)>)
 /// Cube Map \ Smaller Copy (`CreateSmallerCubeMap`): `<name>.tga` of the texture sources made
 /// into `<name>#small.dds` of the game textures, 32 x 32 a face, as a job.
 pub fn smaller_cube_map(editor: &Arc<Editor>, dirs: &EditorDirs, name: &str) {
-    let (src, dst) = (dirs.textures.join(format!("{name}.tga")), dirs.game_textures.join(format!("{name}#small.dds")));
+    let (src, dst) =
+        (dirs.textures.join(format!("{name}.tga")), dirs.game_textures.join(format!("{name}#small.dds")));
     let (ed, name) = (editor.clone(), name.to_owned());
-    let started = editor.jobs.start("texture_library", Some("libraries"), "Cube Map: scale image...", move |ctx| async move {
-        let t = Instant::now();
-        let n = name.clone();
-        let made = ctx
-            .exec
-            .io(move || -> Result<(), String> {
-                let bytes = std::fs::read(&src).map_err(|_| format!("Can't load texture '{n}'."))?;
-                let loaded = gz_fmt_tex::load_image(&bytes, Some("tga")).map_err(|_| format!("Can't load texture '{n}'."))?;
-                let small = gz_fmt_tex::cubemap::simplify(&loaded.image).map_err(|e| match e {
-                    gz_fmt_tex::TexError::Invalid(why) => format!("Texture '{n}' - {why}"),
-                    other => other.to_string(),
-                })?;
-                let params = TextureParams {
-                    width: i32::try_from(small.width).unwrap_or(0),
-                    height: i32::try_from(small.height).unwrap_or(0),
-                    fmt: TextureFormat::RGBA,
-                    ty: TextureType::CUBE_MAP,
-                    flags: TextureFlags::empty(),
-                    ..TextureParams::default()
-                };
-                let made = gz_fmt_tex::make_game_texture(&small, &params, None).map_err(|e| e.to_string())?;
-                if let Some(dir) = dst.parent() {
-                    let _ = std::fs::create_dir_all(dir);
+    let started = editor.jobs.start(
+        "texture_library",
+        Some("libraries"),
+        "Cube Map: scale image...",
+        move |ctx| async move {
+            let t = Instant::now();
+            let n = name.clone();
+            let made = ctx
+                .exec
+                .io(move || -> Result<(), String> {
+                    let bytes = std::fs::read(&src).map_err(|_| format!("Can't load texture '{n}'."))?;
+                    let loaded = gz_fmt_tex::load_image(&bytes, Some("tga"))
+                        .map_err(|_| format!("Can't load texture '{n}'."))?;
+                    let small = gz_fmt_tex::cubemap::simplify(&loaded.image).map_err(|e| match e {
+                        gz_fmt_tex::TexError::Invalid(why) => format!("Texture '{n}' - {why}"),
+                        other => other.to_string(),
+                    })?;
+                    let params = TextureParams {
+                        width: i32::try_from(small.width).unwrap_or(0),
+                        height: i32::try_from(small.height).unwrap_or(0),
+                        fmt: TextureFormat::RGBA,
+                        ty: TextureType::CUBE_MAP,
+                        flags: TextureFlags::empty(),
+                        ..TextureParams::default()
+                    };
+                    let made =
+                        gz_fmt_tex::make_game_texture(&small, &params, None).map_err(|e| e.to_string())?;
+                    if let Some(dir) = dst.parent() {
+                        let _ = std::fs::create_dir_all(dir);
+                    }
+                    gz_editor::fsx::write_atomic(&dst, &made.dds)
+                        .map_err(|e| format!("Can't write {}: {e}", dst.display()))
+                })
+                .await;
+            match made {
+                Ok(()) => {
+                    ed.notices.note(format!(
+                        "Smaller cubemap successfully created [{:.2} sec].",
+                        t.elapsed().as_secs_f32()
+                    ));
+                    Ok(serde_json::json!({ "texture": format!("{name}#small") }))
                 }
-                gz_editor::fsx::write_atomic(&dst, &made.dds).map_err(|e| format!("Can't write {}: {e}", dst.display()))
-            })
-            .await;
-        match made {
-            Ok(()) => {
-                ed.notices.note(format!("Smaller cubemap successfully created [{:.2} sec].", t.elapsed().as_secs_f32()));
-                Ok(serde_json::json!({ "texture": format!("{name}#small") }))
+                Err(e) => {
+                    ed.log.error(&e);
+                    Err(gz_task::JobError::new(e))
+                }
             }
-            Err(e) => {
-                ed.log.error(&e);
-                Err(gz_task::JobError::new(e))
-            }
-        }
-    });
+        },
+    );
     if let Err(busy) = started {
         editor.notices.error(format!("Smaller Copy waits: {busy}."));
     }

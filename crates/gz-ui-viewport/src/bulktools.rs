@@ -47,7 +47,13 @@ pub fn provide_axes(editor: &Arc<Editor>) {
         Some(vp.read(|s| {
             let cam = s.nav.camera();
             let right = cam.up.cross(cam.forward).normalize_or_zero();
-            ViewInfo { position: cam.position, forward: cam.forward, top: cam.up, right, heading: s.nav.hpb.x }
+            ViewInfo {
+                position: cam.position,
+                forward: cam.forward,
+                top: cam.up,
+                right,
+                heading: s.nav.hpb.x,
+            }
         }))
     });
 }
@@ -67,11 +73,20 @@ pub(crate) enum BulkGesture {
 }
 
 /// `TUI_ControlAIMapNodeAdd::Start` / `TUI_ControlWallmarkAdd::Start`.
-pub(crate) fn place_press(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, serial: u64) -> BulkGesture {
+pub(crate) fn place_press(
+    editor: &Arc<Editor>,
+    vp: &Arc<Viewport>,
+    ray: Ray,
+    b: Buttons,
+    serial: u64,
+) -> BulkGesture {
     let Some(s) = svc(editor) else { return BulkGesture::None };
     match s.store.snapshot().tools.target {
         ObjClass::AiMap => {
-            let paint = Paint { merge: SmolStr::new(format!("viewport.aimap.{serial}")), busy: Arc::new(AtomicBool::new(false)) };
+            let paint = Paint {
+                merge: SmolStr::new(format!("viewport.aimap.{serial}")),
+                busy: Arc::new(AtomicBool::new(false)),
+            };
             ai_step(editor, vp, &paint, ray, true, b.alt);
             // with Alt the press adds once and the tool goes back to Select
             if b.alt { BulkGesture::Done } else { BulkGesture::Paint(paint) }
@@ -86,7 +101,14 @@ pub(crate) fn place_press(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b:
 }
 
 /// One step of a brush stroke: `AddNode` where the ray meets the snap objects.
-pub(crate) fn ai_step(editor: &Arc<Editor>, vp: &Arc<Viewport>, p: &Paint, ray: Ray, first: bool, back_to_select: bool) {
+pub(crate) fn ai_step(
+    editor: &Arc<Editor>,
+    vp: &Arc<Viewport>,
+    p: &Paint,
+    ray: Ray,
+    first: bool,
+    back_to_select: bool,
+) {
     if p.busy.swap(true, Ordering::AcqRel) {
         return;
     }
@@ -115,7 +137,14 @@ pub(crate) fn ai_step(editor: &Arc<Editor>, vp: &Arc<Viewport>, p: &Paint, ray: 
                 };
                 report(&ed, bulk::add_nodes(&ed, &s, origin, req).await);
             }
-            None if first && s.store.snapshot().bulk.ai_map.as_ref().is_none_or(|a| a.header.snap_objects.is_empty()) => {
+            None if first
+                && s.store
+                    .snapshot()
+                    .bulk
+                    .ai_map
+                    .as_ref()
+                    .is_none_or(|a| a.header.snap_objects.is_empty()) =>
+            {
                 ed.log.info("Fill object list and try again.");
             }
             None => {}
@@ -152,7 +181,10 @@ fn mark_place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
         } else {
             bulk::mark_add(&ed, &s, origin, ray.origin, ray.dir, far).await
         };
-        let made = r.as_ref().is_ok_and(|v| !v.get("added").is_some_and(gz_editor::Value::is_null) && v.get("moved") != Some(&gz_editor::Value::Bool(false)));
+        let made = r.as_ref().is_ok_and(|v| {
+            !v.get("added").is_some_and(gz_editor::Value::is_null)
+                && v.get("moved") != Some(&gz_editor::Value::Bool(false))
+        });
         report(&ed, r);
         if made && !b.alt {
             vp.with(|v| v.tool.action = Action::Select);
@@ -174,7 +206,9 @@ pub(crate) fn click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons, t
     editor.exec.spawn(async move {
         let r = match target {
             ObjClass::AiMap => bulk::ai_pick(&ed, &s, origin, ray.origin, ray.dir, far, b.ctrl).await,
-            ObjClass::DetailObjects => bulk::slot_pick(&ed, &s, origin, ray.origin, ray.dir, far, b.ctrl).await,
+            ObjClass::DetailObjects => {
+                bulk::slot_pick(&ed, &s, origin, ray.origin, ray.dir, far, b.ctrl).await
+            }
             _ => bulk::mark_pick(&ed, &s, origin, ray.origin, ray.dir, far, b.ctrl).await,
         };
         report(&ed, r);
@@ -184,7 +218,14 @@ pub(crate) fn click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons, t
 }
 
 /// The end of a marquee with a bulk tool current (`FrustumSelect`): `false` for another tool.
-pub(crate) fn marquee(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], a: G2, z: G2, target: ObjClass) -> bool {
+pub(crate) fn marquee(
+    editor: &Arc<Editor>,
+    vp: &Viewport,
+    size: [u32; 2],
+    a: G2,
+    z: G2,
+    target: ObjClass,
+) -> bool {
     if !is_bulk(target) {
         return false;
     }
@@ -197,7 +238,9 @@ pub(crate) fn marquee(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], a: G2
     editor.exec.spawn(async move {
         let r = match target {
             ObjClass::AiMap => bulk::ai_select_frustum(&ed, &s, origin, planes, true).await,
-            ObjClass::DetailObjects => bulk::slots_select_frustum(&ed, &s, origin, planes, SelectMode::Add).await,
+            ObjClass::DetailObjects => {
+                bulk::slots_select_frustum(&ed, &s, origin, planes, SelectMode::Add).await
+            }
             _ => bulk::marks_select_frustum(&ed, &s, origin, planes, SelectMode::Add).await,
         };
         report(&ed, r);
@@ -213,7 +256,13 @@ pub fn held_nodes(editor: &Arc<Editor>) -> Vec<(u32, Vec3)> {
 }
 
 /// `MoveProcess`: the held nodes at their saved centres plus the drag.
-pub(crate) fn move_nodes(editor: &Arc<Editor>, held: &[(u32, Vec3)], to: impl Fn(Vec3) -> Vec3, merge: &SmolStr, origin: Origin) {
+pub(crate) fn move_nodes(
+    editor: &Arc<Editor>,
+    held: &[(u32, Vec3)],
+    to: impl Fn(Vec3) -> Vec3,
+    merge: &SmolStr,
+    origin: Origin,
+) {
     let Some(s) = svc(editor) else { return };
     let moves: Vec<(u32, Vec3)> = held.iter().map(|(i, p)| (*i, to(*p))).collect();
     let (ed, merge) = (editor.clone(), merge.clone());
@@ -243,7 +292,11 @@ pub(crate) fn key(editor: &Arc<Editor>, which: &'static str) -> bool {
     let ed = editor.clone();
     let origin = editor.ui_origin();
     editor.exec.spawn(async move {
-        let r = if which == "delete" { bulk::remove_selected(&ed, origin).await } else { bulk::select_all(&ed, origin, which).await };
+        let r = if which == "delete" {
+            bulk::remove_selected(&ed, origin).await
+        } else {
+            bulk::select_all(&ed, origin, which).await
+        };
         if let Some(r) = r {
             report(&ed, r);
         }

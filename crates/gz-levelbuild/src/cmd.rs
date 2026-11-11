@@ -129,7 +129,9 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
                 "compile_geometry" => (Program::XrLc, String::new()),
                 "compile_details" => (Program::XrDo, String::new()),
                 // `RunXrAI_Verify`
-                "compile_aimap" if a.str("mode") == Some("verify") => (Program::XrAi, format!("-verify {level}")),
+                "compile_aimap" if a.str("mode") == Some("verify") => {
+                    (Program::XrAi, format!("-verify {level}"))
+                }
                 // oracle: the menu's "High" passes `-draft` (`RunXrAI_AIMap(true)`)
                 "compile_aimap" => (
                     Program::XrAi,
@@ -512,9 +514,7 @@ async fn validate_scene(
     let checked = editor
         .exec
         .cpu(move || {
-            let texture = |n: &str| {
-                lods.get(n).cloned().unwrap_or_else(|| (format!("textures\\{n}"), false))
-            };
+            let texture = |n: &str| lods.get(n).cloned().unwrap_or_else(|| (format!("textures\\{n}"), false));
             crate::validate::validate(&snap, &lib, &engine, tests, &texture)
         })
         .await;
@@ -878,7 +878,8 @@ pub(crate) async fn scene_validate(editor: &Arc<Editor>) -> Reply {
             Ok(json!({ "ok": ok, "lines": lines }))
         })
         .map_err(|b| CmdError::busy(format!("{} is still running", b.title)))?;
-    let info = editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the validation job was forgotten"))?;
+    let info =
+        editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the validation job was forgotten"))?;
     match info.error {
         Some(e) => Err(CmdError::invalid(e)),
         None => Ok(info.result.map(|r| (*r).clone()).unwrap_or(json!({}))),
@@ -893,7 +894,8 @@ pub(crate) async fn scene_export_obj(editor: &Arc<Editor>, a: &Args) -> Reply {
     let selected = a.flag("selected");
     let session = editor.project()?;
     let raw = PathBuf::from(a.need("file")?.replace('/', "\\"));
-    let file = if raw.is_absolute() { raw } else { session.root.join("import").join(raw) }.with_extension("obj");
+    let file =
+        if raw.is_absolute() { raw } else { session.root.join("import").join(raw) }.with_extension("obj");
     let ed = editor.clone();
     let out = file.clone();
     let id = editor
@@ -928,7 +930,8 @@ pub(crate) async fn scene_export_obj(editor: &Arc<Editor>, a: &Args) -> Reply {
             Ok(json!({ "file": out.display().to_string().replace('\\', "/"), "objects": objects }))
         })
         .map_err(|b| CmdError::busy(format!("{} is still running", b.title)))?;
-    let info = editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the export job was forgotten"))?;
+    let info =
+        editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the export job was forgotten"))?;
     match info.error {
         Some(e) => Err(CmdError::invalid(e)),
         None => Ok(info.result.map(|r| (*r).clone()).unwrap_or(json!({}))),

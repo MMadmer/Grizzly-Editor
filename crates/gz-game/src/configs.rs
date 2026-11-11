@@ -120,16 +120,19 @@ mod tests {
 
     #[test]
     fn includes_breadth_first() {
+        // a parent must be loaded before the section that inherits it: `CInifile::Load` stores a
+        // section only when the next one of its file starts, so [root] comes from an include
         let src = source(&[
             (
                 "configs/system.ltx",
-                b"#include \"Weapons\\weapons.ltx\"\n#include \"missing.ltx\"\n[root]\na = 1\n",
+                b"#include \"base.ltx\"\n#include \"Weapons\\weapons.ltx\"\n#include \"missing.ltx\"\n",
             ),
+            ("configs/base.ltx", b"[root]\na = 1\n"),
             ("configs/weapons/weapons.ltx", b"#include \"..\\items\\knife.ltx\"\n[wpn]:root\nb = \xc0\n"),
             ("configs/items/knife.ltx", b"[knife]\nc = 3\n"),
         ]);
         let tree = load_tree(&src, SYSTEM_LTX, None, "no root").unwrap();
-        assert_eq!(tree.files, 3);
+        assert_eq!(tree.files, 4);
         assert_eq!(tree.ltx.r_string("wpn", "a").unwrap(), "1");
         assert_eq!(tree.ltx.r_string("wpn", "b").unwrap(), "А");
         assert_eq!(tree.ltx.r_string("knife", "c").unwrap(), "3");

@@ -67,8 +67,9 @@ impl Player {
             let playing = Arc::new(AtomicBool::new(false));
             let error = Arc::new(Mutex::new(None));
             let (p, e) = (playing.clone(), error.clone());
-            if let Err(err) =
-                std::thread::Builder::new().name("gz-audio".into()).spawn(move || run(&rx, &p, &e, &wake, &muted))
+            if let Err(err) = std::thread::Builder::new()
+                .name("gz-audio".into())
+                .spawn(move || run(&rx, &p, &e, &wake, &muted))
             {
                 log.warn(format!("the audio thread did not start: {err}"));
             }
@@ -163,7 +164,9 @@ fn open(
             )
         }
         other => {
-            return Err(format!("The audio device wants samples as {other}, which the editor does not play."));
+            return Err(format!(
+                "The audio device wants samples as {other}, which the editor does not play."
+            ));
         }
     }
     .map_err(|e| format!("The audio device did not open: {e}"))?;

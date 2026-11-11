@@ -727,9 +727,12 @@ mod tests {
         assert_eq!(bake.text.as_deref(), Some(expected.as_str()));
         assert_eq!(
             bake.custom_data,
+            // a new stalker's custom data is `CSE_ALifeTraderAbstract`'s "\r\n[game_info]\r\n",
+            // which the C++ writes as it is before the order (EditorModScene.cpp)
             [(
                 "l01_escape_guard.ltx".to_owned(),
-                "[xms_order]\r\norder = patrol\r\nroute = walk_1\r\nmove = run\r\n".to_owned()
+                "\r\n[game_info]\r\n[xms_order]\r\norder = patrol\r\nroute = walk_1\r\nmove = run\r\n"
+                    .to_owned()
             )]
         );
         let r = &bake.result;

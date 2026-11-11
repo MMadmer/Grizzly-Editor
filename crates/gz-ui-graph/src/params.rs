@@ -1272,7 +1272,10 @@ pub fn position(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, v: &m
         ch = true;
     }
     if from_camera && let Some(pose) = camera.get() {
-        v.set("pos", Value::from(pose.position.iter().map(|c| Value::Number(f64::from(*c))).collect::<Vec<_>>()));
+        v.set(
+            "pos",
+            Value::from(pose.position.iter().map(|c| Value::Number(f64::from(*c))).collect::<Vec<_>>()),
+        );
         if let Some(level) = pose.level {
             v.set("level", level);
         }

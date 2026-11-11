@@ -43,7 +43,12 @@ fn scene(ed: &Arc<Editor>) -> Result<Arc<SceneService>, CmdError> {
     Ok(svc)
 }
 
-async fn scene_for(ed: &Arc<Editor>, a: &Args, o: Origin, class: ObjClass) -> Result<Arc<SceneService>, CmdError> {
+async fn scene_for(
+    ed: &Arc<Editor>,
+    a: &Args,
+    o: Origin,
+    class: ObjClass,
+) -> Result<Arc<SceneService>, CmdError> {
     let svc = scene(ed)?;
     if a.flag("show") && svc.store.snapshot().tools.target != class {
         svc.store.send(SceneCmd::SetTarget(class), o).await?;
@@ -131,8 +136,10 @@ pub fn ai_snap_box(state: &SceneState, lib: &Library) -> Option<Option<Aabb>> {
     if names.is_empty() {
         return None;
     }
-    let ids: Vec<crate::ObjId> =
-        names.iter().filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id)).collect();
+    let ids: Vec<crate::ObjId> = names
+        .iter()
+        .filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id))
+        .collect();
     Some(details::objects_box(state, lib, &ids))
 }
 
@@ -192,7 +199,10 @@ fn ai_state(s: &SceneState) -> Value {
 /// nothing changed), the kind of change and the reply.
 async fn ai_edit<F>(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, f: F) -> Result<Value, CmdError>
 where
-    F: Fn(&mut AiWork, &SceneState) -> Result<(Option<&'static str>, Kind, Value), CmdError> + Send + Sync + 'static,
+    F: Fn(&mut AiWork, &SceneState) -> Result<(Option<&'static str>, Kind, Value), CmdError>
+        + Send
+        + Sync
+        + 'static,
 {
     commit(ed, svc, o, move |s, _| {
         let base = s.bulk.ai_map.as_deref();
@@ -220,7 +230,12 @@ pub struct AddNodes {
 }
 
 /// `TUI_ControlAIMapNodeAdd`: `AddNode` at each position (the brush past a size of one).
-pub async fn add_nodes(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, req: AddNodes) -> Result<Value, CmdError> {
+pub async fn add_nodes(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    req: AddNodes,
+) -> Result<Value, CmdError> {
     let model = ai_model(ed, svc).await?;
     let req = Arc::new(req);
     commit(ed, svc, o, move |s, lib| {
@@ -257,14 +272,24 @@ pub async fn add_nodes(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, req
 /// `PickObjects`: where a ray meets the AI tool's snap objects.
 #[must_use]
 pub fn ai_ground(state: &SceneState, lib: &Library, start: Vec3, dir: Vec3, range: f32) -> Option<Vec3> {
-    let ids: Vec<crate::ObjId> =
-        ai_names(state).iter().filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id)).collect();
+    let ids: Vec<crate::ObjId> = ai_names(state)
+        .iter()
+        .filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id))
+        .collect();
     wallmark::ray_triangle(state, lib, &ids, start, dir, range).map(|(t, _)| start + dir * t)
 }
 
 /// `RaySelect` of nodes: without `toggle` the selection is let go first; the node hit is selected
 /// (oracle: the C++ toggles and then sets the flag again, so Ctrl+click selects too).
-pub async fn ai_pick(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, start: Vec3, dir: Vec3, range: f32, keep: bool) -> Result<Value, CmdError> {
+pub async fn ai_pick(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    keep: bool,
+) -> Result<Value, CmdError> {
     ai_edit(ed, svc, o, move |w, s| {
         if s.bulk.ai_map.as_ref().is_some_and(|a| a.header.flags & ai_flags::HIDE_NODES != 0) {
             return Ok((None, Kind::Selection, json!({ "node": Value::Null })));
@@ -277,13 +302,23 @@ pub async fn ai_pick(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, start
             w.select(&[i], true);
         }
         let position = hit.and_then(|(i, _)| w.nodes.get(i as usize)).map(|n| [n.pos.x, n.pos.y, n.pos.z]);
-        Ok((Some("Select"), Kind::Selection, json!({ "node": hit.map(|(i, _)| i), "position": position, "selected": w.selected_count() })))
+        Ok((
+            Some("Select"),
+            Kind::Selection,
+            json!({ "node": hit.map(|(i, _)| i), "position": position, "selected": w.selected_count() }),
+        ))
     })
     .await
 }
 
 /// `FrustumSelect` of nodes.
-pub async fn ai_select_frustum(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, planes: Vec<Vec4>, on: bool) -> Result<Value, CmdError> {
+pub async fn ai_select_frustum(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    planes: Vec<Vec4>,
+    on: bool,
+) -> Result<Value, CmdError> {
     ai_edit(ed, svc, o, move |w, s| {
         if s.bulk.ai_map.as_ref().is_some_and(|a| a.header.flags & ai_flags::HIDE_NODES != 0) {
             return Ok((None, Kind::Selection, json!({ "count": 0 })));
@@ -296,7 +331,13 @@ pub async fn ai_select_frustum(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Ori
 }
 
 /// The selected nodes moved to positions, one merged undo step per gesture.
-pub async fn ai_move(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, moves: Vec<(u32, Vec3)>, merge: Option<SmolStr>) -> Result<Value, CmdError> {
+pub async fn ai_move(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    moves: Vec<(u32, Vec3)>,
+    merge: Option<SmolStr>,
+) -> Result<Value, CmdError> {
     let moves = Arc::new(moves);
     commit(ed, svc, o, move |s, _| {
         let base = s.bulk.ai_map.as_deref();
@@ -310,7 +351,14 @@ pub async fn ai_move(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, moves
 }
 
 /// The selected nodes' planes turned (`RotateProcess`), one merged undo step per gesture.
-pub async fn ai_rotate(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, about_x: bool, angle: f32, merge: Option<SmolStr>) -> Result<Value, CmdError> {
+pub async fn ai_rotate(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    about_x: bool,
+    angle: f32,
+    merge: Option<SmolStr>,
+) -> Result<Value, CmdError> {
     commit(ed, svc, o, move |s, _| {
         let base = s.bulk.ai_map.as_deref();
         let mut w = AiWork::new(base);
@@ -342,7 +390,12 @@ pub fn selected_nodes(state: &SceneState) -> Vec<(u32, Vec3)> {
 /// `GenerateMap(bFromSelectedOnly)` as a job of the Task Center: the queue is worked through
 /// on the CPU pool and the result goes in as one undo step. Stop keeps what was made, as the C++
 /// did; a scene that changed meanwhile drops it.
-pub async fn ai_generate(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, selected_only: bool) -> Result<Value, CmdError> {
+pub async fn ai_generate(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    selected_only: bool,
+) -> Result<Value, CmdError> {
     let snap = svc.store.snapshot();
     if ai_names(&snap).is_empty() {
         return Err(CmdError::invalid("Fill snap list before generating slots!"));
@@ -351,7 +404,8 @@ pub async fn ai_generate(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, s
         return Err(CmdError::invalid("Append at least one node."));
     }
     let (e2, s2) = (ed.clone(), svc.clone());
-    let title = if selected_only { "Generating the AI map from the selected nodes" } else { "Generating the AI map" };
+    let title =
+        if selected_only { "Generating the AI map from the selected nodes" } else { "Generating the AI map" };
     let started = ed.jobs.start("aimap_generate", Some("scene"), title, move |ctx| async move {
         let (ed, svc) = (e2, s2);
         ctx.stage("Building the collision model");
@@ -426,7 +480,10 @@ fn side_flags(ed: &Editor, a: &Args) -> Result<u8, CmdError> {
         let heading = ViewAxes::of(ed).get().map_or(0.0, |v| v.heading);
         aimap::side_for_heading(pad, heading)
     } else {
-        SIDES.iter().position(|s| *s == side).ok_or_else(|| CmdError::invalid("side is left, forward, right, back or all"))?
+        SIDES
+            .iter()
+            .position(|s| *s == side)
+            .ok_or_else(|| CmdError::invalid("side is left, forward, right, back or all"))?
     };
     Ok(SIDE_FLAGS[k])
 }
@@ -439,7 +496,10 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "set" => {
             let s = svc.store.snapshot();
             let mode = match a.str("link_mode").or_else(|| a.str("mode")) {
-                Some(m) => Some(LinkMode::parse(m).ok_or_else(|| CmdError::invalid("link_mode is add, remove or invert"))?),
+                Some(m) => Some(
+                    LinkMode::parse(m)
+                        .ok_or_else(|| CmdError::invalid("link_mode is add, remove or invert"))?,
+                ),
                 None => None,
             };
             let (bic, auto) = (a.bool("ignore_constraints"), a.bool("auto_link"));
@@ -457,9 +517,22 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 })
                 .await?;
             }
-            let header_args = ["brush_size", "can_up", "can_down", "vis_radius", "smooth_height", "draw_nodes", "slow_calculate"];
+            let header_args = [
+                "brush_size",
+                "can_up",
+                "can_down",
+                "vis_radius",
+                "smooth_height",
+                "draw_nodes",
+                "slow_calculate",
+            ];
             if header_args.iter().any(|k| a.has(k)) {
-                let mut part = s.bulk.ai_map.as_deref().cloned().unwrap_or_else(|| AiMapPart::from_nodes(Default::default(), &[], None));
+                let mut part = s
+                    .bulk
+                    .ai_map
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_else(|| AiMapPart::from_nodes(Default::default(), &[], None));
                 let h = &mut part.header;
                 if let Some(v) = a.u32("brush_size") {
                     h.brush_size = v.clamp(1, 100);
@@ -477,10 +550,15 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     h.smooth_height = v.clamp(0.1, 100.0);
                 }
                 if let Some(v) = a.bool("draw_nodes") {
-                    h.flags = if v { h.flags & !ai_flags::HIDE_NODES } else { h.flags | ai_flags::HIDE_NODES };
+                    h.flags =
+                        if v { h.flags & !ai_flags::HIDE_NODES } else { h.flags | ai_flags::HIDE_NODES };
                 }
                 if let Some(v) = a.bool("slow_calculate") {
-                    h.flags = if v { h.flags | ai_flags::SLOW_CALCULATE } else { h.flags & !ai_flags::SLOW_CALCULATE };
+                    h.flags = if v {
+                        h.flags | ai_flags::SLOW_CALCULATE
+                    } else {
+                        h.flags & !ai_flags::SLOW_CALCULATE
+                    };
                 }
                 // the packing changes with the parameters
                 let nodes = part.all_nodes();
@@ -512,16 +590,20 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             })
             .await
         }
-        "reset_selected" => ai_edit(&ed, &svc, o, |w, _| {
-            let n = w.reset_selected();
-            Ok((if n > 0 { Some("Reset Selected") } else { None }, Kind::Step, json!({ "changed": n })))
-        })
-        .await,
-        "smooth_selected" => ai_edit(&ed, &svc, o, |w, _| {
-            let n = w.smooth_selected();
-            Ok((if n > 0 { Some("Smooth Selected") } else { None }, Kind::Step, json!({ "changed": n })))
-        })
-        .await,
+        "reset_selected" => {
+            ai_edit(&ed, &svc, o, |w, _| {
+                let n = w.reset_selected();
+                Ok((if n > 0 { Some("Reset Selected") } else { None }, Kind::Step, json!({ "changed": n })))
+            })
+            .await
+        }
+        "smooth_selected" => {
+            ai_edit(&ed, &svc, o, |w, _| {
+                let n = w.smooth_selected();
+                Ok((if n > 0 { Some("Smooth Selected") } else { None }, Kind::Step, json!({ "changed": n })))
+            })
+            .await
+        }
         "select_links" => {
             let links = a.usize("links").ok_or_else(|| CmdError::invalid("missing 'links': 0, 1 or 2"))?;
             if links > 4 {
@@ -547,7 +629,10 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "select_nodes" => {
             let mode = mode_of(&a, SelectMode::Set);
-            let ids: Option<Vec<u32>> = a.get("nodes").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_u64).map(|x| x as u32).collect());
+            let ids: Option<Vec<u32>> = a
+                .get("nodes")
+                .and_then(Value::as_array)
+                .map(|v| v.iter().filter_map(Value::as_u64).map(|x| x as u32).collect());
             let pts = points(&a);
             if ids.is_none() && pts.is_none() {
                 return Err(CmdError::invalid("missing 'nodes' (indices) or 'positions'"));
@@ -579,23 +664,45 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                         }
                     }
                 }
-                Ok((Some("Select"), Kind::Selection, json!({ "matched": which.len(), "selected": w.selected_count() })))
+                Ok((
+                    Some("Select"),
+                    Kind::Selection,
+                    json!({ "matched": which.len(), "selected": w.selected_count() }),
+                ))
             })
             .await
         }
         "pick" => {
             let (start, dir) = (need_v3(&a, "start")?, need_v3(&a, "dir")?);
-            ai_pick(&ed, &svc, o, start, dir.normalize_or_zero(), a.f32("range").unwrap_or(1000.0), a.flag("keep")).await
+            ai_pick(
+                &ed,
+                &svc,
+                o,
+                start,
+                dir.normalize_or_zero(),
+                a.f32("range").unwrap_or(1000.0),
+                a.flag("keep"),
+            )
+            .await
         }
         "select_box" => {
             let (min, max) = (need_v3(&a, "min")?, need_v3(&a, "max")?);
-            ai_select_frustum(&ed, &svc, o, box_planes(min.min(max), min.max(max)).to_vec(), a.str("mode") != Some("remove")).await
+            ai_select_frustum(
+                &ed,
+                &svc,
+                o,
+                box_planes(min.min(max), min.max(max)).to_vec(),
+                a.str("mode") != Some("remove"),
+            )
+            .await
         }
         "links" | "link" => {
             let flags = side_flags(&ed, &a)?;
             let snap = svc.store.snapshot();
             let mode = match a.str("mode") {
-                Some(m) => LinkMode::parse(m).ok_or_else(|| CmdError::invalid("mode is add, remove or invert"))?,
+                Some(m) => {
+                    LinkMode::parse(m).ok_or_else(|| CmdError::invalid("mode is add, remove or invert"))?
+                }
                 None => snap.tools.bulk.link_mode,
             };
             let bic = a.bool("ignore_constraints").unwrap_or(snap.tools.bulk.ignore_constraints);
@@ -605,18 +712,23 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             })
             .await
         }
-        "remove_links" => ai_edit(&ed, &svc, o, |w, _| {
-            let n = w.remove_links();
-            Ok((Some("Remove Links"), Kind::Step, json!({ "changed": n })))
-        })
-        .await,
-        "invert_links" => ai_edit(&ed, &svc, o, |w, _| {
-            let n = w.invert_links();
-            Ok((Some("Invert Links"), Kind::Step, json!({ "changed": n })))
-        })
-        .await,
+        "remove_links" => {
+            ai_edit(&ed, &svc, o, |w, _| {
+                let n = w.remove_links();
+                Ok((Some("Remove Links"), Kind::Step, json!({ "changed": n })))
+            })
+            .await
+        }
+        "invert_links" => {
+            ai_edit(&ed, &svc, o, |w, _| {
+                let n = w.invert_links();
+                Ok((Some("Invert Links"), Kind::Step, json!({ "changed": n })))
+            })
+            .await
+        }
         "add_nodes" | "add_node" => {
-            let positions = points(&a).ok_or_else(|| CmdError::invalid("missing 'position' or 'positions'"))?;
+            let positions =
+                points(&a).ok_or_else(|| CmdError::invalid("missing 'position' or 'positions'"))?;
             let req = AddNodes {
                 positions,
                 deselect: a.bool("deselect").unwrap_or(true),
@@ -627,14 +739,21 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             };
             add_nodes(&ed, &svc, o, req).await
         }
-        "remove_selected" | "delete_selected" => ai_edit(&ed, &svc, o, |w, _| {
-            let n = w.remove_selected();
-            Ok((if n > 0 { Some("Remove Nodes") } else { None }, Kind::Step, json!({ "removed": n, "nodes": w.nodes.len() })))
-        })
-        .await,
+        "remove_selected" | "delete_selected" => {
+            ai_edit(&ed, &svc, o, |w, _| {
+                let n = w.remove_selected();
+                Ok((
+                    if n > 0 { Some("Remove Nodes") } else { None },
+                    Kind::Step,
+                    json!({ "removed": n, "nodes": w.nodes.len() }),
+                ))
+            })
+            .await
+        }
         "move_selected" => {
             let delta = need_v3(&a, "delta")?;
-            let moves: Vec<(u32, Vec3)> = selected_nodes(&svc.store.snapshot()).into_iter().map(|(i, p)| (i, p + delta)).collect();
+            let moves: Vec<(u32, Vec3)> =
+                selected_nodes(&svc.store.snapshot()).into_iter().map(|(i, p)| (i, p + delta)).collect();
             ai_move(&ed, &svc, o, moves, None).await
         }
         "rotate_selected" => {
@@ -656,7 +775,9 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                         t.ignored.push(n.clone());
                     }
                 }
-                "unignore_material" => t.ignored.retain(|x| name.as_ref().is_none_or(|n| !x.eq_ignore_ascii_case(n))),
+                "unignore_material" => {
+                    t.ignored.retain(|x| name.as_ref().is_none_or(|n| !x.eq_ignore_ascii_case(n)))
+                }
                 _ => t.ignored.clear(),
             })
             .await?;
@@ -741,7 +862,13 @@ fn time_seed() -> u32 {
 
 /// A regeneration of the details as a job: `Initialize` / `Reinitialize` (`objects_only`
 /// false) or `UpdateObjects` of every slot or the selected ones.
-pub async fn details_job(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, which: &'static str, seed: Option<u32>) -> Result<Value, CmdError> {
+pub async fn details_job(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    which: &'static str,
+    seed: Option<u32>,
+) -> Result<Value, CmdError> {
     let snap = svc.store.snapshot();
     let d = details_of(&snap);
     let all = matches!(which, "first_initialize" | "reinitialize");
@@ -751,7 +878,11 @@ pub async fn details_job(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, w
     let tex = d.base_texture.clone().unwrap_or_default();
     let base = load_base(ed, svc, &tex).await;
     let Some(base) = base else {
-        return Err(CmdError::invalid(if all { details::msg::BASE_EMPTY } else { details::msg::BASE_INVALID }));
+        return Err(CmdError::invalid(if all {
+            details::msg::BASE_EMPTY
+        } else {
+            details::msg::BASE_INVALID
+        }));
     };
     let seed = seed.unwrap_or_else(time_seed);
     let label = match which {
@@ -761,49 +892,74 @@ pub async fn details_job(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, w
         _ => "Reinitialize Selected",
     };
     let (e2, s2) = (ed.clone(), svc.clone());
-    let started = ed.jobs.start("details_generate", Some("scene"), format!("Details: {label}"), move |ctx| async move {
-        let (ed, svc) = (e2, s2);
-        ctx.stage("Loading the library objects");
-        let snap = svc.store.snapshot();
-        svc.prefetch_library(&ed, &snap).await;
-        ctx.stage("Updating the slots");
-        let lib = svc.library.clone();
-        let c = ctx.clone();
-        let base = Arc::new(base);
-        let res = ed
-            .exec
-            .cpu(move || {
-                let d = details_of(&snap);
-                let inp = DetailInputs { base: &base, seed };
-                let progress = |n: usize, t: usize| c.progress(n, t);
-                let out = if all {
-                    details::initialize(&snap, &lib, &d, &inp, &progress)
-                } else {
-                    let sel = details::resized(&snap.tools.bulk.slots_selected, d.slots.len());
-                    details::update_objects(&d, (which == "reinitialize_selected").then_some(&sel[..]), &inp, &progress)
-                };
-                out.map(|m| (m, snap.serial, details::resized(&snap.tools.bulk.slots_selected, d.slots.len()), snap.tools.bulk.clone()))
-            })
-            .await
-            .map_err(JobError::new)?;
-        let (model, serial, _, mut tools) = res;
-        tools.slots_selected = details::resized(&tools.slots_selected, model.slots.len());
-        let slots = model.slots.len();
-        let filled = model.slots.iter().filter(|x| !x.is_empty()).count();
-        let mut e = BulkEdit::new(label, serial).with_details(DetailsPart { raw: None, model: Arc::new(model) });
-        e.tools = Some(tools);
-        match svc.store.send(SceneCmd::Bulk(Box::new(e)), o).await {
-            Ok(_) => Ok(json!({ "slots": slots, "filled": filled, "seed": seed })),
-            Err(err) if err.code == "busy" => Err(JobError::new("The scene changed while the details were made: nothing was changed. Do it again.")),
-            Err(err) => Err(JobError::new(err.message)),
-        }
-    });
+    let started = ed.jobs.start(
+        "details_generate",
+        Some("scene"),
+        format!("Details: {label}"),
+        move |ctx| async move {
+            let (ed, svc) = (e2, s2);
+            ctx.stage("Loading the library objects");
+            let snap = svc.store.snapshot();
+            svc.prefetch_library(&ed, &snap).await;
+            ctx.stage("Updating the slots");
+            let lib = svc.library.clone();
+            let c = ctx.clone();
+            let base = Arc::new(base);
+            let res = ed
+                .exec
+                .cpu(move || {
+                    let d = details_of(&snap);
+                    let inp = DetailInputs { base: &base, seed };
+                    let progress = |n: usize, t: usize| c.progress(n, t);
+                    let out = if all {
+                        details::initialize(&snap, &lib, &d, &inp, &progress)
+                    } else {
+                        let sel = details::resized(&snap.tools.bulk.slots_selected, d.slots.len());
+                        details::update_objects(
+                            &d,
+                            (which == "reinitialize_selected").then_some(&sel[..]),
+                            &inp,
+                            &progress,
+                        )
+                    };
+                    out.map(|m| {
+                        (
+                            m,
+                            snap.serial,
+                            details::resized(&snap.tools.bulk.slots_selected, d.slots.len()),
+                            snap.tools.bulk.clone(),
+                        )
+                    })
+                })
+                .await
+                .map_err(JobError::new)?;
+            let (model, serial, _, mut tools) = res;
+            tools.slots_selected = details::resized(&tools.slots_selected, model.slots.len());
+            let slots = model.slots.len();
+            let filled = model.slots.iter().filter(|x| !x.is_empty()).count();
+            let mut e =
+                BulkEdit::new(label, serial).with_details(DetailsPart { raw: None, model: Arc::new(model) });
+            e.tools = Some(tools);
+            match svc.store.send(SceneCmd::Bulk(Box::new(e)), o).await {
+                Ok(_) => Ok(json!({ "slots": slots, "filled": filled, "seed": seed })),
+                Err(err) if err.code == "busy" => Err(JobError::new(
+                    "The scene changed while the details were made: nothing was changed. Do it again.",
+                )),
+                Err(err) => Err(JobError::new(err.message)),
+            }
+        },
+    );
     let id = started.map_err(|busy| CmdError::busy(format!("{} is still running", busy.title)))?;
     wait_job(ed, id).await
 }
 
 /// A details edit computed from the snapshot.
-async fn details_edit<F>(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, f: F) -> Result<Value, CmdError>
+async fn details_edit<F>(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    f: F,
+) -> Result<Value, CmdError>
 where
     F: Fn(&SceneState) -> Result<Outcome, CmdError> + Send + Sync + 'static,
 {
@@ -833,7 +989,15 @@ fn apply_mode(v: &mut bool, mode: SelectMode) {
 }
 
 /// `EDetailManager::RaySelect`: the slot box hit; only while the slot boxes are drawn.
-pub async fn slot_pick(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, start: Vec3, dir: Vec3, range: f32, toggle: bool) -> Result<Value, CmdError> {
+pub async fn slot_pick(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    toggle: bool,
+) -> Result<Value, CmdError> {
     details_edit(ed, svc, o, move |s| {
         Ok(with_slots(s, |d, sel| {
             if d.flags & tool_flags::SLOT_BOXES_DRAW == 0 {
@@ -857,7 +1021,13 @@ pub async fn slot_pick(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, sta
 }
 
 /// `EDetailManager::FrustumSelect`.
-pub async fn slots_select_frustum(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, planes: Vec<Vec4>, mode: SelectMode) -> Result<Value, CmdError> {
+pub async fn slots_select_frustum(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    planes: Vec<Vec4>,
+    mode: SelectMode,
+) -> Result<Value, CmdError> {
     details_edit(ed, svc, o, move |s| {
         Ok(with_slots(s, |d, sel| {
             if d.flags & tool_flags::SLOT_BOXES_DRAW == 0 {
@@ -886,7 +1056,9 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let action = a.str_or("action", "state").to_owned();
     match action.as_str() {
         "state" => Ok(details_state(&svc.store.snapshot())),
-        "first_initialize" | "initialize" => details_job(&ed, &svc, o, "first_initialize", a.u32("seed")).await,
+        "first_initialize" | "initialize" => {
+            details_job(&ed, &svc, o, "first_initialize", a.u32("seed")).await
+        }
         "reinitialize" | "reinitialize_all" => details_job(&ed, &svc, o, "reinitialize", a.u32("seed")).await,
         "reinitialize_objects" => details_job(&ed, &svc, o, "reinitialize_objects", a.u32("seed")).await,
         "reinitialize_selected" => details_job(&ed, &svc, o, "reinitialize_selected", a.u32("seed")).await,
@@ -898,7 +1070,8 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     return Ok((BulkEdit::default(), json!({ "draw_objects": true })));
                 }
                 d.flags |= tool_flags::OBJECTS_DRAW;
-                let e = BulkEdit::new("Show Details", s.serial).with_details(DetailsPart { raw: None, model: Arc::new(d) });
+                let e = BulkEdit::new("Show Details", s.serial)
+                    .with_details(DetailsPart { raw: None, model: Arc::new(d) });
                 Ok((e, json!({ "draw_objects": true })))
             })
             .await
@@ -929,7 +1102,8 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 for (bit, on) in flags {
                     details_set_flag(&mut d, bit, on);
                 }
-                let e = BulkEdit::new("Detail Settings", s.serial).with_details(DetailsPart { raw: None, model: Arc::new(d) });
+                let e = BulkEdit::new("Detail Settings", s.serial)
+                    .with_details(DetailsPart { raw: None, model: Arc::new(d) });
                 Ok((e, json!({ "note": note })))
             })
             .await?;
@@ -947,7 +1121,9 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                         "select_all" => sel.iter_mut().for_each(|x| *x = true),
                         "deselect_all" => sel.iter_mut().for_each(|x| *x = false),
                         // `InvertSelection`: only while the boxes are drawn
-                        _ if d.flags & tool_flags::SLOT_BOXES_DRAW != 0 => sel.iter_mut().for_each(|x| *x = !*x),
+                        _ if d.flags & tool_flags::SLOT_BOXES_DRAW != 0 => {
+                            sel.iter_mut().for_each(|x| *x = !*x)
+                        }
                         _ => {}
                     }
                     sel.len()
@@ -978,7 +1154,10 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                         let i = if *b < 0 {
                             usize::try_from(*a).ok()
                         } else {
-                            u32::try_from(*a).ok().zip(u32::try_from(*b).ok()).and_then(|(x, z)| d.header.slot_index(x, z))
+                            u32::try_from(*a)
+                                .ok()
+                                .zip(u32::try_from(*b).ok())
+                                .and_then(|(x, z)| d.header.slot_index(x, z))
                         };
                         if let Some(x) = i.and_then(|i| sel.get_mut(i)) {
                             apply_mode(x, mode);
@@ -992,15 +1171,32 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "pick" => {
             let (start, dir) = (need_v3(&a, "start")?, need_v3(&a, "dir")?);
-            slot_pick(&ed, &svc, o, start, dir.normalize_or_zero(), a.f32("range").unwrap_or(1000.0), a.flag("toggle")).await
+            slot_pick(
+                &ed,
+                &svc,
+                o,
+                start,
+                dir.normalize_or_zero(),
+                a.f32("range").unwrap_or(1000.0),
+                a.flag("toggle"),
+            )
+            .await
         }
         "select_box" => {
             let (min, max) = (need_v3(&a, "min")?, need_v3(&a, "max")?);
-            slots_select_frustum(&ed, &svc, o, box_planes(min.min(max), min.max(max)).to_vec(), mode_of(&a, SelectMode::Add)).await
+            slots_select_frustum(
+                &ed,
+                &svc,
+                o,
+                box_planes(min.min(max), min.max(max)).to_vec(),
+                mode_of(&a, SelectMode::Add),
+            )
+            .await
         }
         // the Detail Objects dialog's lists
         "add_objects" | "remove_objects" => {
-            let refs = a.list("objects").ok_or_else(|| CmdError::invalid("missing 'objects': [reference, ...]"))?;
+            let refs =
+                a.list("objects").ok_or_else(|| CmdError::invalid("missing 'objects': [reference, ...]"))?;
             let add = action == "add_objects";
             details_edit(&ed, &svc, o, move |s| {
                 let mut d = details_of(s);
@@ -1009,8 +1205,13 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     let r = r.replace('/', "\\");
                     let at = d.indices.objects.iter().position(|x| x.reference.eq_ignore_ascii_case(&r));
                     match (add, at) {
-                        (true, None) if d.indices.objects.len() < usize::from(gz_fmt_level::DetailSlot::ID_EMPTY) => {
-                            d.indices.objects.push(gz_fmt_level::DetailObjectRef { reference: SmolStr::new(&r), ..Default::default() });
+                        (true, None)
+                            if d.indices.objects.len() < usize::from(gz_fmt_level::DetailSlot::ID_EMPTY) =>
+                        {
+                            d.indices.objects.push(gz_fmt_level::DetailObjectRef {
+                                reference: SmolStr::new(&r),
+                                ..Default::default()
+                            });
                             n += 1;
                         }
                         (false, Some(i)) => {
@@ -1028,14 +1229,16 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     d = details::invalidate_slots(&d);
                 }
                 let label = if add { "Add Detail Objects" } else { "Remove Detail Objects" };
-                let e = BulkEdit::new(label, s.serial).with_details(DetailsPart { raw: None, model: Arc::new(d) });
+                let e = BulkEdit::new(label, s.serial)
+                    .with_details(DetailsPart { raw: None, model: Arc::new(d) });
                 Ok((e, json!({ "changed": n })))
             })
             .await
         }
         "set_color" | "remove_color" => {
             let text = a.need("color")?.trim().trim_start_matches('#').trim_start_matches("0x").to_owned();
-            let mut color = u32::from_str_radix(&text, 16).map_err(|_| CmdError::invalid("color is AARRGGBB or RRGGBB in hex"))?;
+            let mut color = u32::from_str_radix(&text, 16)
+                .map_err(|_| CmdError::invalid("color is AARRGGBB or RRGGBB in hex"))?;
             if text.len() <= 6 {
                 color |= 0xff00_0000;
             }
@@ -1086,11 +1289,9 @@ async fn details_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
 fn marks_of(s: &SceneState) -> Result<Wallmarks, CmdError> {
     match s.bulk.wallmarks.as_ref() {
         None => Ok(Wallmarks::default()),
-        Some(p) => p
-            .model
-            .as_ref()
-            .map(|m| (**m).clone())
-            .ok_or_else(|| CmdError::invalid("The wallmarks of this scene could not be read; they are kept as they are.")),
+        Some(p) => p.model.as_ref().map(|m| (**m).clone()).ok_or_else(|| {
+            CmdError::invalid("The wallmarks of this scene could not be read; they are kept as they are.")
+        }),
     }
 }
 
@@ -1122,7 +1323,10 @@ fn wallmark_state(s: &SceneState) -> Value {
 /// A wallmark edit computed from the snapshot: `f` edits the model.
 async fn marks_edit<F>(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, f: F) -> Result<Value, CmdError>
 where
-    F: Fn(&mut Wallmarks, &SceneState, &Library) -> Result<(Option<&'static str>, Kind, Value), CmdError> + Send + Sync + 'static,
+    F: Fn(&mut Wallmarks, &SceneState, &Library) -> Result<(Option<&'static str>, Kind, Value), CmdError>
+        + Send
+        + Sync
+        + 'static,
 {
     commit(ed, svc, o, move |s, lib| {
         let mut w = marks_of(s)?;
@@ -1149,7 +1353,14 @@ fn lay_of(w: &Wallmarks, ed: &Editor) -> Lay {
 
 /// `TUI_ControlWallmarkAdd::Start`: the marks are let go, a new one laid where the ray meets the
 /// snap list's objects. Answers `added: null` when the ray met nothing.
-pub async fn mark_add(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, start: Vec3, dir: Vec3, range: f32) -> Result<Value, CmdError> {
+pub async fn mark_add(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+) -> Result<Value, CmdError> {
     let snap = svc.store.snapshot();
     svc.prefetch_library(ed, &snap).await;
     let w0 = marks_of(&snap)?;
@@ -1158,20 +1369,32 @@ pub async fn mark_add(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, star
     }
     let lay = lay_of(&w0, ed);
     marks_edit(ed, svc, o, move |w, s, lib| {
-        let Some(mark) = wallmark::mark_at(s, lib, start, dir, range, &lay).map_err(CmdError::invalid)? else {
+        let Some(mark) = wallmark::mark_at(s, lib, start, dir, range, &lay).map_err(CmdError::invalid)?
+        else {
             return Ok((None, Kind::Step, json!({ "added": Value::Null })));
         };
         w.select_all(false);
         let (sh, tx) = (w.shader.clone(), w.texture.clone());
         let (si, mi, replaced) = w.insert(&sh, &tx, mark);
-        Ok((Some("Add Wallmark"), Kind::Step, json!({ "added": { "slot": si, "index": mi, "replaced": replaced }, "marks": w.count() })))
+        Ok((
+            Some("Add Wallmark"),
+            Kind::Step,
+            json!({ "added": { "slot": si, "index": mi, "replaced": replaced }, "marks": w.count() }),
+        ))
     })
     .await
 }
 
 /// `MoveSelectedWallmarkTo`: the one selected mark laid again where the ray meets the geometry,
 /// with its own shader, texture, size and rotation.
-pub async fn mark_move(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, start: Vec3, dir: Vec3, range: f32) -> Result<Value, CmdError> {
+pub async fn mark_move(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+) -> Result<Value, CmdError> {
     let snap = svc.store.snapshot();
     svc.prefetch_library(ed, &snap).await;
     let w0 = marks_of(&snap)?;
@@ -1188,7 +1411,8 @@ pub async fn mark_move(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, sta
             (sl.shader.clone(), sl.texture.clone(), sl.items[mi].clone())
         };
         let lay = Lay { width: old.w, height: old.h, rotate: old.r, ..base_lay };
-        let Some(mark) = wallmark::mark_at(s, lib, start, dir, range, &lay).map_err(CmdError::invalid)? else {
+        let Some(mark) = wallmark::mark_at(s, lib, start, dir, range, &lay).map_err(CmdError::invalid)?
+        else {
             return Ok((None, Kind::Step, json!({ "moved": false })));
         };
         if let Some(slot) = w.slots.get_mut(si) {
@@ -1201,7 +1425,15 @@ pub async fn mark_move(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, sta
 }
 
 /// `ESceneWallmarkTool::RaySelect`: only while the marks are drawn.
-pub async fn mark_pick(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, start: Vec3, dir: Vec3, range: f32, toggle: bool) -> Result<Value, CmdError> {
+pub async fn mark_pick(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    toggle: bool,
+) -> Result<Value, CmdError> {
     marks_edit(ed, svc, o, move |w, _, _| {
         if !w.draws() {
             return Ok((None, Kind::Selection, json!({ "mark": Value::Null })));
@@ -1214,13 +1446,23 @@ pub async fn mark_pick(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, sta
             // oracle: as in the node pick, the C++ sets the flag after toggling it
             w.select(&[(si, mi)], SelectMode::Add);
         }
-        Ok((Some("Select"), Kind::Selection, json!({ "mark": hit.map(|(s, m, _)| [s, m]), "selected": w.selected_count() })))
+        Ok((
+            Some("Select"),
+            Kind::Selection,
+            json!({ "mark": hit.map(|(s, m, _)| [s, m]), "selected": w.selected_count() }),
+        ))
     })
     .await
 }
 
 /// `ESceneWallmarkTool::FrustumSelect`.
-pub async fn marks_select_frustum(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, planes: Vec<Vec4>, mode: SelectMode) -> Result<Value, CmdError> {
+pub async fn marks_select_frustum(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    o: Origin,
+    planes: Vec<Vec4>,
+    mode: SelectMode,
+) -> Result<Value, CmdError> {
     marks_edit(ed, svc, o, move |w, _, _| {
         if !w.draws() {
             return Ok((None, Kind::Selection, json!({ "count": 0 })));
@@ -1263,10 +1505,15 @@ async fn wallmark_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             let (shader, texture) = (a.str("shader").map(SmolStr::new), a.str("texture").map(SmolStr::new));
             marks_edit(&ed, &svc, o, move |w, _, _| {
                 if let Some(v) = draw {
-                    w.flags = if v { w.flags | wallmark::flags::DRAW } else { w.flags & !wallmark::flags::DRAW };
+                    w.flags =
+                        if v { w.flags | wallmark::flags::DRAW } else { w.flags & !wallmark::flags::DRAW };
                 }
                 if let Some(v) = align {
-                    w.flags = if v { w.flags | wallmark::flags::AXIS_ALIGN } else { w.flags & !wallmark::flags::AXIS_ALIGN };
+                    w.flags = if v {
+                        w.flags | wallmark::flags::AXIS_ALIGN
+                    } else {
+                        w.flags & !wallmark::flags::AXIS_ALIGN
+                    };
                 }
                 if let Some(v) = width {
                     w.width = v.clamp(0.01, 10.0);
@@ -1298,11 +1545,27 @@ async fn wallmark_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "pick" => {
             let (start, dir) = (need_v3(&a, "start")?, need_v3(&a, "dir")?);
-            mark_pick(&ed, &svc, o, start, dir.normalize_or_zero(), a.f32("range").unwrap_or(1000.0), a.flag("toggle")).await
+            mark_pick(
+                &ed,
+                &svc,
+                o,
+                start,
+                dir.normalize_or_zero(),
+                a.f32("range").unwrap_or(1000.0),
+                a.flag("toggle"),
+            )
+            .await
         }
         "select_box" => {
             let (min, max) = (need_v3(&a, "min")?, need_v3(&a, "max")?);
-            marks_select_frustum(&ed, &svc, o, box_planes(min.min(max), min.max(max)).to_vec(), mode_of(&a, SelectMode::Add)).await
+            marks_select_frustum(
+                &ed,
+                &svc,
+                o,
+                box_planes(min.min(max), min.max(max)).to_vec(),
+                mode_of(&a, SelectMode::Add),
+            )
+            .await
         }
         "select_all" | "deselect_all" | "invert_selection" => {
             let act = action.clone();
@@ -1325,7 +1588,9 @@ async fn wallmark_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 Some(Value::Array(v)) => v
                     .iter()
                     .filter_map(|x| match x {
-                        Value::Array(p) if p.len() == 2 => Some((p[0].as_u64()? as usize, p[1].as_u64()? as usize)),
+                        Value::Array(p) if p.len() == 2 => {
+                            Some((p[0].as_u64()? as usize, p[1].as_u64()? as usize))
+                        }
                         _ => None,
                     })
                     .collect(),
@@ -1337,15 +1602,24 @@ async fn wallmark_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             })
             .await
         }
-        "remove_selected" | "delete_selected" => marks_edit(&ed, &svc, o, |w, _, _| {
-            if !w.draws() {
-                return Ok((None, Kind::Step, json!({ "removed": 0 })));
-            }
-            let n = w.remove_selected();
-            Ok((if n > 0 { Some("Remove Wallmarks") } else { None }, Kind::Step, json!({ "removed": n, "marks": w.count() })))
-        })
-        .await,
-        other => Err(unknown(other, "state, set, add, move, pick, select_box, select_all, deselect_all, invert_selection, select_marks, remove_selected")),
+        "remove_selected" | "delete_selected" => {
+            marks_edit(&ed, &svc, o, |w, _, _| {
+                if !w.draws() {
+                    return Ok((None, Kind::Step, json!({ "removed": 0 })));
+                }
+                let n = w.remove_selected();
+                Ok((
+                    if n > 0 { Some("Remove Wallmarks") } else { None },
+                    Kind::Step,
+                    json!({ "removed": n, "marks": w.count() }),
+                ))
+            })
+            .await
+        }
+        other => Err(unknown(
+            other,
+            "state, set, add, move, pick, select_box, select_all, deselect_all, invert_selection, select_marks, remove_selected",
+        )),
     }
 }
 
@@ -1394,7 +1668,9 @@ pub async fn select_all(ed: &Arc<Editor>, o: Origin, which: &'static str) -> Opt
     Some(if reply.get("ok").and_then(Value::as_bool) == Some(true) {
         Ok(reply)
     } else {
-        Err(CmdError::invalid(reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned()))
+        Err(CmdError::invalid(
+            reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned(),
+        ))
     })
 }
 

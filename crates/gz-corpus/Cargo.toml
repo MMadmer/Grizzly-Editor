@@ -1,0 +1,15 @@
+[package]
+name = "gz-corpus"
+description = "The real files the corpus tests read: a game install, projects, the repository."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-chunk.workspace = true
+rayon.workspace = true

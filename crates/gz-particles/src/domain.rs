@@ -265,7 +265,8 @@ mod tests {
         }
         assert!(s.within(Vec3::new(1.5, 0.0, 0.0), &mut rng));
         assert!(!s.within(Vec3::new(0.5, 0.0, 0.0), &mut rng));
-        let plane = Domain { kind: kind::PLANE, p1: Vec3::ZERO, p2: Vec3::Y, radius1: 0.0, ..Domain::default() };
+        let plane =
+            Domain { kind: kind::PLANE, p1: Vec3::ZERO, p2: Vec3::Y, radius1: 0.0, ..Domain::default() };
         assert!(plane.within(Vec3::new(0.0, 1.0, 0.0), &mut rng));
         assert!(!plane.within(Vec3::new(0.0, -1.0, 0.0), &mut rng));
         // a plane moved up by 3: d follows
@@ -281,9 +282,15 @@ mod tests {
 
     #[test]
     fn boxes_follow_the_engines_xform() {
-        let b = Domain { kind: kind::BOX, p1: Vec3::new(-1.0, 0.0, -1.0), p2: Vec3::new(1.0, 2.0, 1.0), ..Domain::default() };
+        let b = Domain {
+            kind: kind::BOX,
+            p1: Vec3::new(-1.0, 0.0, -1.0),
+            p2: Vec3::new(1.0, 2.0, 1.0),
+            ..Domain::default()
+        };
         // a quarter turn about y and a move
-        let m = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)) * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let m = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))
+            * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
         let t = Domain::transformed(&b, &m);
         assert!((t.p1 - Vec3::new(9.0, 0.0, -1.0)).abs().max_element() < 1e-5);
         assert!((t.p2 - Vec3::new(11.0, 2.0, 1.0)).abs().max_element() < 1e-5);

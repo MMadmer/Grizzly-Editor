@@ -50,7 +50,9 @@ pub fn selected_scene_objects(state: &SceneState) -> Vec<ObjId> {
 #[must_use]
 pub fn tool_list(state: &SceneState) -> Vec<ObjId> {
     let names = match state.tools.target {
-        ObjClass::AiMap => state.bulk.ai_map.as_ref().map(|a| a.header.snap_objects.clone()).unwrap_or_default(),
+        ObjClass::AiMap => {
+            state.bulk.ai_map.as_ref().map(|a| a.header.snap_objects.clone()).unwrap_or_default()
+        }
         ObjClass::DetailObjects => {
             state.bulk.details.as_ref().map(|d| d.model.snap_objects.clone()).unwrap_or_default()
         }
@@ -61,7 +63,8 @@ pub fn tool_list(state: &SceneState) -> Vec<ObjId> {
 
 /// Writes the current tool's snap list.
 fn set_tool_list(state: &mut SceneState, list: Vec<ObjId>) {
-    let names: Vec<gz_base::SmolStr> = list.iter().filter_map(|id| state.get(*id)).map(|o| o.name.clone()).collect();
+    let names: Vec<gz_base::SmolStr> =
+        list.iter().filter_map(|id| state.get(*id)).map(|o| o.name.clone()).collect();
     match state.tools.target {
         ObjClass::AiMap => {
             let mut part = state.bulk.ai_map.as_deref().cloned().unwrap_or_else(|| {
@@ -74,8 +77,10 @@ fn set_tool_list(state: &mut SceneState, list: Vec<ObjId>) {
         ObjClass::DetailObjects => {
             let mut model = state.bulk.details.as_ref().map(|d| (*d.model).clone()).unwrap_or_default();
             model.snap_objects = names;
-            state.bulk.details =
-                Some(std::sync::Arc::new(crate::tools::DetailsPart { raw: None, model: std::sync::Arc::new(model) }));
+            state.bulk.details = Some(std::sync::Arc::new(crate::tools::DetailsPart {
+                raw: None,
+                model: std::sync::Arc::new(model),
+            }));
         }
         _ => state.tools.snap = list,
     }

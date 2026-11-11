@@ -482,7 +482,8 @@ impl PropsPanel {
             } else {
                 None
             };
-            let mut c = Chooser::new(Purpose::Property { target: t, key: key.clone() }, &label, list, &current);
+            let mut c =
+                Chooser::new(Purpose::Property { target: t, key: key.clone() }, &label, list, &current);
             if let Some(items) = items {
                 c = c.with_items(items);
             }
@@ -852,7 +853,9 @@ fn scene_story_ids(snap: &gz_scene::SceneState) -> Vec<String> {
     let mut out = Vec::new();
     for o in snap.of_class(ObjClass::SpawnPoint) {
         let gz_scene::ObjData::Spawn(sd) = &o.data else { continue };
-        let Some(ini) = sd.entity.as_ref().and_then(|e| e.entity()).and_then(|e| e.custom_data()) else { continue };
+        let Some(ini) = sd.entity.as_ref().and_then(|e| e.entity()).and_then(|e| e.custom_data()) else {
+            continue;
+        };
         let Some(at) = ini.find("[story_object]") else { continue };
         for line in ini[at + "[story_object]".len()..].lines() {
             let line = line.trim();

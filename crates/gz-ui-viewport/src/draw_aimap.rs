@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
 use gz_fmt_level::{AiMapNode, AiParams, INVALID_NODE, SceneAiNode, node_flags, pv_decompress};
-use gz_render::{Aabb, Assets, Color, Instance, InstanceFlags, MaterialDesc, MeshData, MeshHandle, MeshVertex, SubMesh};
+use gz_render::{
+    Aabb, Assets, Color, Instance, InstanceFlags, MaterialDesc, MeshData, MeshHandle, MeshVertex, SubMesh,
+};
 use gz_scene::tools::AiMapPart;
 use gz_scene::{ObjClass, ObjId, SceneState};
 use rayon::prelude::*;
@@ -142,11 +144,7 @@ fn header_key(part: &AiMapPart) -> ([f32; 6], [f32; 4]) {
 }
 
 /// The nodes of a tile cut into cells, each a mesh.
-fn tile_meshes(
-    nodes: &[AiMapNode],
-    part: &AiMapPart,
-    material: &MaterialDesc,
-) -> CellMeshes {
+fn tile_meshes(nodes: &[AiMapNode], part: &AiMapPart, material: &MaterialDesc) -> CellMeshes {
     let mut cells: FxHashMap<[i32; 2], (Vec<MeshVertex>, Vec<u32>)> = FxHashMap::default();
     for n in nodes {
         let node = of_node(n);
@@ -158,7 +156,9 @@ fn tile_meshes(
         .into_iter()
         .filter_map(|(k, (v, i))| {
             let n = i.len() as u32;
-            MeshData::new(v, i, vec![SubMesh { indices: 0..n, material: material.clone() }]).ok().map(|m| (k, m))
+            MeshData::new(v, i, vec![SubMesh { indices: 0..n, material: material.clone() }])
+                .ok()
+                .map(|m| (k, m))
         })
         .collect();
     out.sort_by_key(|(k, _)| *k);
@@ -246,7 +246,8 @@ impl AiMapCache {
         let reach = |b: &Aabb| near(b, eye, r + patch);
         // tiles far from the camera let their meshes go
         for i in 0..self.tiles.len() {
-            let far = self.tiles.get(i).and_then(|t| t.bounds).is_none_or(|b| !near(&b, eye, 3.0 * r + CELL * 4.0));
+            let far =
+                self.tiles.get(i).and_then(|t| t.bounds).is_none_or(|b| !near(&b, eye, 3.0 * r + CELL * 4.0));
             if far {
                 self.drop_tile(i, assets);
             }

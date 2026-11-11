@@ -6,7 +6,10 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use gz_render::{Assets, Camera, Color, InstanceFlags, MaterialDesc, Sprite, SpriteAlign, SpriteBatch, SpriteCull, SpriteSize};
+use gz_render::{
+    Assets, Camera, Color, InstanceFlags, MaterialDesc, Sprite, SpriteAlign, SpriteBatch, SpriteCull,
+    SpriteSize,
+};
 use gz_scene::library::Library;
 use gz_scene::objects::VIS_RADIUS;
 use gz_scene::pick::{ScenePick, ray_scene_objects};
@@ -79,7 +82,14 @@ pub(crate) fn extend(extras: &Extras, parts: &Particles, x: &Input<'_>, built: &
         extras.aimap.lock().draw(x.state, x.assets, eye, built);
     }
     extras.details.lock().draw(
-        &draw_details::Pass { state: x.state, lib: x.lib, assets: x.assets, frustum: &frustum, eye, ssa_discard },
+        &draw_details::Pass {
+            state: x.state,
+            lib: x.lib,
+            assets: x.assets,
+            frustum: &frustum,
+            eye,
+            ssa_discard,
+        },
         built,
     );
     extras.wallmarks.lock().draw(x.state, x.assets, &frustum, eye, ssa_discard / 4.0, built);

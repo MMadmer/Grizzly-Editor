@@ -207,7 +207,8 @@ pub fn clipboard_get() -> Result<Vec<u8>, String> {
     let format = clipboard_win::register_format(CLIPBOARD_FORMAT)
         .ok_or_else(|| "Failed to open clipboard".to_owned())?
         .get();
-    let _clip = clipboard_win::Clipboard::new_attempts(10).map_err(|_| "Failed to open clipboard".to_owned())?;
+    let _clip =
+        clipboard_win::Clipboard::new_attempts(10).map_err(|_| "Failed to open clipboard".to_owned())?;
     let mut out = Vec::new();
     match clipboard_win::raw::get_vec(format, &mut out) {
         Ok(_) if !out.is_empty() => Ok(out),
@@ -220,7 +221,8 @@ pub fn clipboard_set(record: &[u8]) -> Result<(), String> {
     let format = clipboard_win::register_format(CLIPBOARD_FORMAT)
         .ok_or_else(|| "Failed to open clipboard".to_owned())?
         .get();
-    let _clip = clipboard_win::Clipboard::new_attempts(10).map_err(|_| "Failed to open clipboard".to_owned())?;
+    let _clip =
+        clipboard_win::Clipboard::new_attempts(10).map_err(|_| "Failed to open clipboard".to_owned())?;
     clipboard_win::raw::set(format, record).map_err(|_| "Failed to open clipboard".to_owned())
 }
 

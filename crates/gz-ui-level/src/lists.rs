@@ -263,7 +263,9 @@ async fn read(editor: &Arc<Editor>, key: ListKey) -> Vec<String> {
                 .await
         }
         ListKey::RespawnItems => {
-            let Some(bytes) = game_file(editor, "configs\\mp\\respawn_items.ltx").await else { return Vec::new() };
+            let Some(bytes) = game_file(editor, "configs\\mp\\respawn_items.ltx").await else {
+                return Vec::new();
+            };
             let text = gz_base::text::decode_guess(&bytes);
             text.lines()
                 .filter_map(|l| {

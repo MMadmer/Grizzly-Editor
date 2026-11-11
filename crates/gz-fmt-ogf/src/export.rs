@@ -775,9 +775,14 @@ pub fn export_breakable(part: &BreakablePart) -> Result<Export> {
         }
         for v in &s.verts {
             let b = usize::from(v.bones.first().map_or(0, |b| b.id));
-            let bone = part.bones.get(b).ok_or_else(|| fail("A face names a fragment the part does not have."))?;
+            let bone =
+                part.bones.get(b).ok_or_else(|| fail("A face names a fragment the part does not have."))?;
             if let Some(list) = bone_points.get_mut(b) {
-                list.push(Vec3::new(v.offs.x - bone.offset.x, v.offs.y - bone.offset.y, v.offs.z - bone.offset.z));
+                list.push(Vec3::new(
+                    v.offs.x - bone.offset.x,
+                    v.offs.y - bone.offset.y,
+                    v.offs.z - bone.offset.z,
+                ));
             }
         }
     }
@@ -1108,6 +1113,8 @@ mod tests {
     };
 
     use super::*;
+    use gz_chunk::Reader;
+
     use crate::Visual;
     use crate::motion::read_omf;
 
@@ -1226,7 +1233,29 @@ mod tests {
         // no bone motions: every bone keeps its rest pose
         obj.motions =
             vec![SMotion { name: "idle".into(), frame_start: 0, frame_end: 1, ..SMotion::default() }];
+        // a skeleton without bone parts gets the oracle's default part, which the engine
+        // cannot read (`a_skeleton_without_parts_writes_the_unreadable_default_part`)
+        obj.bone_parts = vec![gz_fmt_object::BonePart {
+            alias: "default".into(),
+            bones: vec!["root".into(), "arm".into()],
+        }];
         obj
+    }
+
+    #[test]
+    fn a_skeleton_without_parts_writes_the_unreadable_default_part() {
+        // ExportSkeleton.cpp writes the bone indices without their names; the engine's
+        // `motions_value::load` reads a name before each index, so neither it nor this reader
+        // takes such a file
+        let mut obj = skeleton();
+        obj.bone_parts.clear();
+        let e = export_skeleton(&obj, &ExportOptions::default(), 4).unwrap();
+        assert!(Visual::read(&e.bytes).is_err());
+        let r = Reader::new(&e.bytes);
+        let mut p = r.sub(chunk::S_SMPARAMS).unwrap().unwrap();
+        assert_eq!(p.r_u16().unwrap(), crate::motion::SMPARAMS_VERSION);
+        assert_eq!((p.r_u16().unwrap(), p.r_stringz().unwrap().as_str()), (1, "default"));
+        assert_eq!((p.r_u16().unwrap(), p.r_u32().unwrap(), p.r_u32().unwrap()), (2, 0, 1));
     }
 
     #[test]
@@ -1355,7 +1384,10 @@ mod tests {
         assert_eq!(v.children.len(), 1);
         assert_eq!(v.children[0].kind(), MT::SKELETON_GEOMDEF_ST);
         assert_eq!(v.children[0].indices.as_deref(), Some(&[0, 1, 2, 3, 4, 5, 6, 7, 8][..]));
-        assert_eq!(v.bones.iter().map(|b| (b.name.as_str(), b.parent.as_str())).collect::<Vec<_>>(), [("0", ""), ("1", "0")]);
+        assert_eq!(
+            v.bones.iter().map(|b| (b.name.as_str(), b.parent.as_str())).collect::<Vec<_>>(),
+            [("0", ""), ("1", "0")]
+        );
         assert_eq!(v.ik.len(), 2);
         let ik = &v.ik[1];
         assert_eq!((ik.joint_type, ik.flags, ik.shape.kind, ik.shape.flags), (4, 1, 1, 2));

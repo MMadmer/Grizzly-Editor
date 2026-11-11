@@ -359,13 +359,17 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
         Act::Delete => {
             if let Ok(svc) = SceneService::of(editor) {
                 let target = svc.store.snapshot().tools.target;
-                svc.store.post(SceneCmd::RemoveSelection { class: Some(target), label: "Delete".into() }, editor.ui_origin());
+                svc.store.post(
+                    SceneCmd::RemoveSelection { class: Some(target), label: "Delete".into() },
+                    editor.ui_origin(),
+                );
             }
         }
         Act::DeselectAll => {
             if let Ok(svc) = SceneService::of(editor) {
                 let target = svc.store.snapshot().tools.target;
-                svc.store.post(SceneCmd::SelectClass { class: Some(target), select: false }, editor.ui_origin());
+                svc.store
+                    .post(SceneCmd::SelectClass { class: Some(target), select: false }, editor.ui_origin());
             }
         }
         Act::SelectAll => {

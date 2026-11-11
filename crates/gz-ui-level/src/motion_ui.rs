@@ -36,7 +36,9 @@ fn motion_call(editor: &Arc<Editor>, object: &str, mut a: Args) {
     editor.exec.spawn(async move {
         let r = ed.call("object_motion", a, ed.ui_origin()).await;
         if r.get("ok").and_then(Value::as_bool) != Some(true) {
-            ed.notices.error(r.get("error").and_then(Value::as_str).unwrap_or("The motion command failed.").to_owned());
+            ed.notices.error(
+                r.get("error").and_then(Value::as_str).unwrap_or("The motion command failed.").to_owned(),
+            );
         }
     });
 }
@@ -47,7 +49,11 @@ fn selected_object(editor: &Editor) -> Option<(String, Option<(f32, f32)>)> {
     let snap = svc.store.snapshot();
     let class = snap.tools.target;
     let o = snap.of_class(class).find(|o| snap.is_selected(o.id))?;
-    let range = o.motion.as_ref().and_then(|r| r.model().map(|m| gz_scene::objmotion::params(&m, r))).map(|p| (p.min_t, p.max_t));
+    let range = o
+        .motion
+        .as_ref()
+        .and_then(|r| r.model().map(|m| gz_scene::objmotion::params(&m, r)))
+        .map(|p| (p.min_t, p.max_t));
     Some((o.name.to_string(), range))
 }
 
@@ -67,21 +73,22 @@ pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
             let Some(root) = editor.project_root() else { return true };
             let dir = root.join("gamedata").join("anims");
             let ed = editor.clone();
-            let spawned = std::thread::Builder::new().name("gz-ui-level.motion_file".into()).spawn(move || {
-                let _ = std::fs::create_dir_all(&dir);
-                let d = rfd::FileDialog::new().add_filter("Object motion", &["anm"]).set_directory(&dir);
-                let picked = if import {
-                    d.set_title("Import Motion").pick_file()
-                } else {
-                    d.set_title("Export Motion").set_file_name(format!("{object}.anm")).save_file()
-                };
-                if let Some(f) = picked {
-                    let mut a = Args::new();
-                    a.insert("action".into(), json!(if import { "import" } else { "export" }));
-                    a.insert("file".into(), json!(f.display().to_string()));
-                    motion_call(&ed, &object, a);
-                }
-            });
+            let spawned =
+                std::thread::Builder::new().name("gz-ui-level.motion_file".into()).spawn(move || {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let d = rfd::FileDialog::new().add_filter("Object motion", &["anm"]).set_directory(&dir);
+                    let picked = if import {
+                        d.set_title("Import Motion").pick_file()
+                    } else {
+                        d.set_title("Export Motion").set_file_name(format!("{object}.anm")).save_file()
+                    };
+                    if let Some(f) = picked {
+                        let mut a = Args::new();
+                        a.insert("action".into(), json!(if import { "import" } else { "export" }));
+                        a.insert("file".into(), json!(f.display().to_string()));
+                        motion_call(&ed, &object, a);
+                    }
+                });
             if let Err(e) = spawned {
                 editor.log.warn(format!("the file dialog did not open: {e}"));
             }
@@ -110,12 +117,24 @@ pub fn draw(ui: &mut Ui, editor: &Arc<Editor>) {
         &mut open,
         |ui| {
             gz_ui::PropertyGrid::new("motion_keys").show(ui, |g| {
-                g.row("From Time", "The first key the change takes, in seconds", gz_ui::PropFlags::NONE, 0, |ui| {
-                    ui.add(egui::DragValue::new(&mut sheet.from).speed(1.0 / 30.0).max_decimals(3));
-                });
-                g.row("To Time", "The last key the change takes, in seconds", gz_ui::PropFlags::NONE, 0, |ui| {
-                    ui.add(egui::DragValue::new(&mut sheet.to).speed(1.0 / 30.0).max_decimals(3));
-                });
+                g.row(
+                    "From Time",
+                    "The first key the change takes, in seconds",
+                    gz_ui::PropFlags::NONE,
+                    0,
+                    |ui| {
+                        ui.add(egui::DragValue::new(&mut sheet.from).speed(1.0 / 30.0).max_decimals(3));
+                    },
+                );
+                g.row(
+                    "To Time",
+                    "The last key the change takes, in seconds",
+                    gz_ui::PropFlags::NONE,
+                    0,
+                    |ui| {
+                        ui.add(egui::DragValue::new(&mut sheet.to).speed(1.0 / 30.0).max_decimals(3));
+                    },
+                );
                 let (label, help, lo, hi) = if sheet.scale {
                     ("Scale", "How much longer the time between the keys becomes", -1000.0, 1000.0)
                 } else {

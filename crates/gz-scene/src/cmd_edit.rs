@@ -49,7 +49,12 @@ async fn scene_edit(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     match action.as_str() {
         "copy" => {
             let file = edit::copy(&ed, &svc, class).await?;
-            let n = svc.store.snapshot().of_class(class).filter(|x| svc.store.snapshot().is_selected(x.id)).count();
+            let n = svc
+                .store
+                .snapshot()
+                .of_class(class)
+                .filter(|x| svc.store.snapshot().is_selected(x.id))
+                .count();
             Ok(json!({ "action": "copy", "class": class.name(), "copied": n, "file": path_json(&file) }))
         }
         "cut" => {
@@ -62,7 +67,9 @@ async fn scene_edit(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "duplicate" => {
             let added = edit::duplicate(&ed, &svc, class, o).await?;
-            Ok(json!({ "action": "duplicate", "class": class.name(), "added": added.objects, "warnings": added.warnings }))
+            Ok(
+                json!({ "action": "duplicate", "class": class.name(), "added": added.objects, "warnings": added.warnings }),
+            )
         }
         other => Err(CmdError::invalid(format!("unknown action '{other}' (cut, copy, paste, duplicate)"))),
     }
@@ -80,7 +87,9 @@ async fn selection_file(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         }
         "open" => {
             let added = edit::load_selection(&ed, &svc, file.clone(), "Open Selection", o).await?;
-            Ok(json!({ "action": "open", "file": path_json(&file), "added": added.objects, "warnings": added.warnings }))
+            Ok(
+                json!({ "action": "open", "file": path_json(&file), "added": added.objects, "warnings": added.warnings }),
+            )
         }
         other => Err(CmdError::invalid(format!("unknown action '{other}' (save, open)"))),
     }
@@ -103,18 +112,18 @@ async fn rename_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
 
 /// The scene with unsaved changes is saved first (`save=true`), its changes lost
 /// (`discard=true`), or the command answers `unsaved`.
-pub(crate) async fn settle_scene(ed: &Arc<Editor>, svc: &Arc<SceneService>, a: &Args) -> Result<(), CmdError> {
+pub(crate) async fn settle_scene(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    a: &Args,
+) -> Result<(), CmdError> {
     if !svc.store.is_dirty() || a.flag("discard") {
         return Ok(());
     }
     if a.flag("save") {
-        let file = svc
-            .store
-            .snapshot()
-            .meta
-            .file
-            .clone()
-            .ok_or_else(|| CmdError::invalid("scene has no file yet - pass 'file' or Save As in the editor"))?;
+        let file = svc.store.snapshot().meta.file.clone().ok_or_else(|| {
+            CmdError::invalid("scene has no file yet - pass 'file' or Save As in the editor")
+        })?;
         return service::save_scene(ed, svc, file).await.map_err(CmdError::io);
     }
     let snap = svc.store.snapshot();
@@ -203,7 +212,9 @@ impl SummaryStore {
 /// `rawdata\textures\<name>.thm`, `gamedata\textures\<name>.seq`.
 fn texture_info(roots: &[std::path::PathBuf], name: &str) -> Option<(gz_fmt_tex::TextureParams, u32)> {
     let rel = name.replace('/', "\\");
-    let thm = roots.iter().find_map(|r| std::fs::read(r.join("rawdata\\textures").join(format!("{rel}.thm"))).ok())?;
+    let thm = roots
+        .iter()
+        .find_map(|r| std::fs::read(r.join("rawdata\\textures").join(format!("{rel}.thm"))).ok())?;
     let params = gz_fmt_tex::read_texture_thm(&thm).ok()?.params;
     // `MemoryUsage`: the `.seq` holds a line per frame after its first
     let frames = roots
@@ -256,11 +267,19 @@ async fn scene_summary(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
             Ok(json!({ "rows": rows_json(&s) }))
         }
         "show" => {
-            let s = store.summary.lock().clone().ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
+            let s = store
+                .summary
+                .lock()
+                .clone()
+                .ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
             Ok(json!({ "rows": rows_json(&s) }))
         }
         "export" => {
-            let s = store.summary.lock().clone().ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
+            let s = store
+                .summary
+                .lock()
+                .clone()
+                .ok_or_else(|| CmdError::invalid("nothing collected yet: action=collect first"))?;
             let file = edit::maps_file(&svc, a.need("file")?, "txt");
             let text = s.export();
             let f2 = file.clone();
@@ -301,12 +320,11 @@ async fn compiler_errors(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "import" => {
             let file = file_of(&a)?;
             let shown = file.display().to_string();
-            let bytes = ed
-                .exec
-                .io(move || std::fs::read(&file))
-                .await
-                .map_err(|e| CmdError::not_found(format!("the error list could not be read: {shown} ({e})")))?;
-            let d = crate::debug::read_compiler_error(&bytes).map_err(|e| CmdError::invalid(e.to_string()))?;
+            let bytes = ed.exec.io(move || std::fs::read(&file)).await.map_err(|e| {
+                CmdError::not_found(format!("the error list could not be read: {shown} ({e})"))
+            })?;
+            let d =
+                crate::debug::read_compiler_error(&bytes).map_err(|e| CmdError::invalid(e.to_string()))?;
             let d = Arc::new(d);
             svc.store.send(SceneCmd::DebugDraw(d.clone()), o).await?;
             Ok(state(&d))
@@ -422,11 +440,10 @@ async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "import" => {
             let file = file_of(&a)?;
             let shown = file.display().to_string();
-            let bytes = ed
-                .exec
-                .io(move || std::fs::read(&file))
-                .await
-                .map_err(|e| CmdError::not_found(format!("the motion could not be read: {shown} ({e})")))?;
+            let bytes =
+                ed.exec.io(move || std::fs::read(&file)).await.map_err(|e| {
+                    CmdError::not_found(format!("the motion could not be read: {shown} ({e})"))
+                })?;
             let m = gz_fmt_object::read_anm(&bytes).map_err(|e| CmdError::invalid(e.to_string()))?;
             Some(E::Import(Box::new(m)))
         }
@@ -467,10 +484,16 @@ async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         "current" => Some(E::Current(f("t")?)),
         "key_time" => Some(E::KeyTime(f("t")?)),
         "play" => {
-            let raw = obj.motion.as_ref().ok_or_else(|| CmdError::invalid(format!("'{}' has no motion", obj.name)))?;
-            let m = raw.model().ok_or_else(|| CmdError::invalid("the motion has a version this editor does not read"))?;
+            let raw = obj
+                .motion
+                .as_ref()
+                .ok_or_else(|| CmdError::invalid(format!("'{}' has no motion", obj.name)))?;
+            let m = raw
+                .model()
+                .ok_or_else(|| CmdError::invalid("the motion has a version this editor does not read"))?;
             let p = crate::objmotion::params(&m, raw);
-            *playback.playing.lock() = Some(Play { id: obj.id, from: p.t_current, started: std::time::Instant::now() });
+            *playback.playing.lock() =
+                Some(Play { id: obj.id, from: p.t_current, started: std::time::Instant::now() });
             ed.exec.wake().ping();
             None
         }
@@ -479,7 +502,9 @@ async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             match play {
                 Some(play) if play.id == obj.id => {
                     let raw = obj.motion.as_ref().ok_or_else(|| CmdError::invalid("no motion"))?;
-                    let m = raw.model().ok_or_else(|| CmdError::invalid("the motion has a version this editor does not read"))?;
+                    let m = raw.model().ok_or_else(|| {
+                        CmdError::invalid("the motion has a version this editor does not read")
+                    })?;
                     let p = crate::objmotion::params(&m, raw);
                     Some(E::At(MotionPlayback::time_of(&play, p.min_t, p.max_t)))
                 }
@@ -552,7 +577,12 @@ async fn object_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     }
     let n = objects.len();
     if n > 0 {
-        svc.store.send(SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Reset Surfaces".into() }, o).await?;
+        svc.store
+            .send(
+                SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Reset Surfaces".into() },
+                o,
+            )
+            .await?;
     }
     Ok(json!({ "reset": n }))
 }
@@ -569,7 +599,8 @@ async fn spawn_attach(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             let spawn = match a.text("spawn") {
                 Some(n) => snap.find(ObjClass::SpawnPoint, &n.to_lowercase()).cloned(),
                 None => {
-                    let sel: Vec<_> = snap.of_class(ObjClass::SpawnPoint).filter(|x| snap.is_selected(x.id)).collect();
+                    let sel: Vec<_> =
+                        snap.of_class(ObjClass::SpawnPoint).filter(|x| snap.is_selected(x.id)).collect();
                     if sel.len() != 1 {
                         return Err(CmdError::invalid("Select one shape."));
                     }
@@ -650,7 +681,12 @@ async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 return Ok(json!({ "changed": 0 }));
             }
             let count = objects.len();
-            svc.store.send(SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Group Pivot".into() }, o).await?;
+            svc.store
+                .send(
+                    SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Group Pivot".into() },
+                    o,
+                )
+                .await?;
             Ok(json!({ "changed": count }))
         }
         "save_as" => {
@@ -664,7 +700,8 @@ async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             let file = if file.extension().is_none() { file.with_extension("group") } else { file };
             // `CGroupObject::SaveStream`: the object's body, without the scene's class wrapper
             let mut w = gz_chunk::Writer::new();
-            crate::objects::write_stream(&mut w, g, &snap, 0).map_err(|e| CmdError::invalid(e.to_string()))?;
+            crate::objects::write_stream(&mut w, g, &snap, 0)
+                .map_err(|e| CmdError::invalid(e.to_string()))?;
             let bytes = w.into_bytes();
             let body = gz_chunk::Reader::new(&bytes)
                 .find_chunk(crate::objects::CHUNK_OBJECT_BODY)
@@ -683,7 +720,8 @@ async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             Ok(json!({ "file": path_json(&file) }))
         }
         "reload" => {
-            let sel: Vec<_> = snap.of_class(ObjClass::Group).filter(|g| snap.is_selected(g.id)).cloned().collect();
+            let sel: Vec<_> =
+                snap.of_class(ObjClass::Group).filter(|g| snap.is_selected(g.id)).cloned().collect();
             if sel.is_empty() {
                 ed.log.error("Nothing selected.");
                 return Ok(json!({ "reloaded": 0 }));
@@ -773,9 +811,16 @@ fn with_reference(body: &[u8], reference: &str) -> Vec<u8> {
 
 /// A library group (`$groups$\<reference>.group`, the project's first) read as the scene reads a
 /// group: `CGroupObject::LoadStream` of `UpdateReference`.
-async fn library_group(ed: &Arc<Editor>, svc: &SceneService, reference: &str) -> Result<crate::objects::Loaded, CmdError> {
+async fn library_group(
+    ed: &Arc<Editor>,
+    svc: &SceneService,
+    reference: &str,
+) -> Result<crate::objects::Loaded, CmdError> {
     let rel = format!("{}.group", reference.replace('/', "\\"));
-    let files = [svc.root.join("rawdata").join("groups").join(&rel), ed.paths.root.join("rawdata").join("groups").join(&rel)];
+    let files = [
+        svc.root.join("rawdata").join("groups").join(&rel),
+        ed.paths.root.join("rawdata").join("groups").join(&rel),
+    ];
     let shown = files[0].display().to_string();
     let body = ed
         .exec

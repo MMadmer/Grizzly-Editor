@@ -144,9 +144,17 @@ pub enum ToolEdit {
     State(ObjToolState),
     /// Points of a way: select (in Points mode the selection of a way's points is the point's
     /// own flag, saved with the scene but not an undo step).
-    SelectPoints { way: ObjId, points: Vec<usize>, mode: SelectMode },
+    SelectPoints {
+        way: ObjId,
+        points: Vec<usize>,
+        mode: SelectMode,
+    },
     /// Moves points of a way to positions, as one gesture.
-    MovePoints { way: ObjId, points: Vec<(usize, Vec3)>, merge: Option<SmolStr> },
+    MovePoints {
+        way: ObjId,
+        points: Vec<(usize, Vec3)>,
+        merge: Option<SmolStr>,
+    },
 }
 
 /// Applies an edit (the store's side of [`SceneCmd::ObjTool`]).
@@ -300,7 +308,9 @@ fn apply_batch(state: &mut SceneState, b: Batch, cx: &mut Apply) -> Result<Scene
 pub(crate) fn show_level_bounds(state: &mut SceneState, on: bool) {
     let ids: Vec<ObjId> = state
         .of_class(ObjClass::Shape)
-        .filter(|o| matches!(&o.data, ObjData::Shape(s) if s.usage == SHAPE_LEVEL_BOUND) && o.flags.visible != on)
+        .filter(|o| {
+            matches!(&o.data, ObjData::Shape(s) if s.usage == SHAPE_LEVEL_BOUND) && o.flags.visible != on
+        })
         .map(|o| o.id)
         .collect();
     for id in ids {
@@ -447,9 +457,14 @@ mod tests {
         let mut s = SceneState::default();
         s.insert(Object::new(ObjClass::Glow, "00", ObjData::Glow(GlowData::default())));
         let store = Store::spawn("scene", s, &rt.exec(), StoreOptions::default());
-        let send = |b: Batch| rt.block_on(store.send(SceneCmd::ObjTool(Box::new(ToolEdit::Batch(Box::new(b)))), Origin::Mcp));
+        let send = |b: Batch| {
+            rt.block_on(store.send(SceneCmd::ObjTool(Box::new(ToolEdit::Batch(Box::new(b)))), Origin::Mcp))
+        };
         let mut b = Batch::new("Add", 99);
-        b.add.push((Object::new(ObjClass::Shape, "", ObjData::Shape(ShapeData::unit_box())), NameRule::Gen(None)));
+        b.add.push((
+            Object::new(ObjClass::Shape, "", ObjData::Shape(ShapeData::unit_box())),
+            NameRule::Gen(None),
+        ));
         assert!(send(b.clone()).is_err());
         b.serial = Some(0);
         b.select_added = true;

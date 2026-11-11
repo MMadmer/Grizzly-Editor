@@ -173,10 +173,13 @@ pub fn sub_id(name: &str, desc: &str) -> SmolStr {
 /// Arguments of an editor command, made of the two parameters; `Err` says why they do not fit.
 pub type ArgsFn = Rc<dyn Fn(&CommandVar, &CommandVar) -> Result<Args, String>>;
 /// A function of the window: the answer, or why it refused.
-pub type RunFn = Rc<std::cell::RefCell<dyn FnMut(&mut DocCx<'_>, &CommandVar, &CommandVar) -> Result<CommandVar, String>>>;
+pub type RunFn =
+    Rc<std::cell::RefCell<dyn FnMut(&mut DocCx<'_>, &CommandVar, &CommandVar) -> Result<CommandVar, String>>>;
 /// Work off the UI thread (a macro), told who asked for it: the answer, or why it refused.
 pub type TaskFn = Arc<
-    dyn Fn(Arc<Editor>, CommandVar, CommandVar, Origin) -> BoxFuture<'static, Result<CommandVar, String>> + Send + Sync,
+    dyn Fn(Arc<Editor>, CommandVar, CommandVar, Origin) -> BoxFuture<'static, Result<CommandVar, String>>
+        + Send
+        + Sync,
 >;
 
 /// Whether a row may run now: `(editor, active tab)`.
@@ -209,7 +212,9 @@ impl CppAction {
         CppAction::Shell(Rc::new(std::cell::RefCell::new(f)))
     }
 
-    pub fn task<F>(f: impl Fn(Arc<Editor>, CommandVar, CommandVar, Origin) -> F + Send + Sync + 'static) -> Self
+    pub fn task<F>(
+        f: impl Fn(Arc<Editor>, CommandVar, CommandVar, Origin) -> F + Send + Sync + 'static,
+    ) -> Self
     where
         F: std::future::Future<Output = Result<CommandVar, String>> + Send + 'static,
     {
@@ -394,7 +399,8 @@ impl Table {
                 |(id, _)| *id,
             );
             let first = subs.first().and_then(|(i, _)| commands.get(*i));
-            let (group, label) = first.map_or((String::new(), base.clone()), |c| (c.group.to_string(), c.label.to_string()));
+            let (group, label) =
+                first.map_or((String::new(), base.clone()), |c| (c.group.to_string(), c.label.to_string()));
             let desc = format!("{group}\\{label}");
             let mut cmd = CppCommand::new(id, &base, &desc, CppAction::Ui);
             cmd.subs = subs
@@ -442,7 +448,8 @@ fn make_face(cmd: &CppCommand, sub: &CppSub, id: SmolStr) -> UiCommand {
                 cx.editor.exec.spawn(async move {
                     let reply = ed.call(command, args, origin).await;
                     if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-                        let text = reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.");
+                        let text =
+                            reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.");
                         ed.notices.error(text.to_owned());
                     }
                 });
@@ -509,7 +516,8 @@ pub(crate) fn pick_sub(subs: &[CppSub], p1: Option<&CommandVar>, p2: Option<&Com
         .position(|s| s.p1 == *a && s.p2 == *b)
         .or_else(|| subs.iter().position(|s| s.p1 == *a))
         .or_else(|| {
-            a.text().and_then(|t| subs.iter().position(|s| !s.desc.is_empty() && s.desc.eq_ignore_ascii_case(t)))
+            a.text()
+                .and_then(|t| subs.iter().position(|s| !s.desc.is_empty() && s.desc.eq_ignore_ascii_case(t)))
         })
         .or_else(|| subs.iter().position(|s| s.desc.is_empty()))
         .or(if subs.is_empty() { None } else { Some(0) })

@@ -212,6 +212,8 @@ pub struct SceneMeta {
     pub level: LevelOptions,
     /// Sections of the main file this crate does not read, written back as they were.
     pub kept: Vec<(String, Vec<(String, String)>)>,
+    /// The main file was cp1251 (not UTF-8): it is written back in it.
+    pub cp1251: bool,
 }
 
 impl Default for SceneMeta {
@@ -225,6 +227,7 @@ impl Default for SceneMeta {
             camera_pos: Vec3::ZERO,
             level: LevelOptions::default(),
             kept: Vec::new(),
+            cp1251: false,
         }
     }
 }

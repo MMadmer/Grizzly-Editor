@@ -143,7 +143,9 @@ mod tests {
             assert!((len - 1.0).abs() < 1e-4, "{len}");
             assert_eq!(n.p[B + i], n.p[i]);
         }
-        assert!(seen.iter().all(|s| *s));
+        // oracle: the shuffle's first swap is with p[256], still 0 then (noise.cpp), so one value
+        // may leave the first 256 entries and 0 come twice: a permutation but for that one
+        assert!(seen.iter().filter(|s| **s).count() >= B - 1);
     }
 
     #[test]

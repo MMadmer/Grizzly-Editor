@@ -33,8 +33,15 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, CmdEr
 
 /// The jobs that were the C++ editor's blocking operations (`SProgressOperation`): a level
 /// build, a scene load, a scene tool, the texture and sound libraries' work.
-const BLOCKING_KINDS: [&str; 7] =
-    ["level_build", "scene_load", "scene_tool", "sync_textures", "sync_sounds", "texture_library", "sound_library"];
+const BLOCKING_KINDS: [&str; 7] = [
+    "level_build",
+    "scene_load",
+    "scene_tool",
+    "sync_textures",
+    "sync_sounds",
+    "texture_library",
+    "sound_library",
+];
 
 /// `busy` as `AppendShotWindows` defines it (`ProgressOperationActive`): one of the operations
 /// the C++ ran as a blocking job is running while the picture is taken. They run beside the

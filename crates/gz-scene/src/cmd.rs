@@ -1145,7 +1145,9 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
             "open" => v.open[t] = true,
             "close" => v.open[t] = false,
             _ => {
-                return Err(CmdError::invalid("action must be get, filter, expand, collapse, open, or close"));
+                return Err(CmdError::invalid(
+                    "action must be get, filter, expand, collapse, open, or close",
+                ));
             }
         }
     }

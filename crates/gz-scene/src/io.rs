@@ -290,6 +290,7 @@ fn load_part(
             return Err(SceneError::load(format!("Level part is empty: {}", path.display())));
         }
         if bytes[0] == b'[' && class.uses_ltx() {
+            load.tool.cp1251 |= is_cp1251(bytes);
             let text = gz_base::text::decode_guess(bytes);
             load_part_ltx(&mut load, &text, path, guid, settings)?;
             continue;
@@ -359,6 +360,7 @@ pub fn parse_scene(
     let mut legacy: Vec<Loaded> = Vec::new();
     match kind {
         SceneKind::Ltx => {
+            meta.cp1251 = is_cp1251(main);
             let text = gz_base::text::decode_guess(main);
             let r = IniReader::parse(&text, &fname)?;
             meta.level = LevelOptions::read_ltx(&r)?;
@@ -562,6 +564,16 @@ fn saved_objects(state: &SceneState, class: ObjClass, save_id: usize) -> Vec<&Ar
         .collect()
 }
 
+/// Whether `decode_guess` reads these bytes as cp1251: they are not UTF-8.
+fn is_cp1251(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)).is_err()
+}
+
+/// A file's text in the code page it was read in.
+fn encode(text: String, cp1251: bool) -> Vec<u8> {
+    if cp1251 { gz_base::text::utf8_to_cp1251(&text).0.into_owned() } else { text.into_bytes() }
+}
+
 /// One LTX part file of a tool.
 fn tool_ltx(state: &SceneState, class: ObjClass, index: usize) -> Result<Vec<u8>, SceneError> {
     let mut w = IniWriter::new();
@@ -573,7 +585,7 @@ fn tool_ltx(state: &SceneState, class: ObjClass, index: usize) -> Result<Vec<u8>
     w.w_u32("main", "objects_count", u32::try_from(objs.len()).unwrap_or(0));
     w.w_u64("guid", "guid_g0", state.meta.guid[0]);
     w.w_u64("guid", "guid_g1", state.meta.guid[1]);
-    Ok(w.save().into_bytes())
+    Ok(encode(w.save(), state.tools.part(class).cp1251))
 }
 
 /// A tool's chunk (`SaveStream`).
@@ -618,7 +630,7 @@ pub fn main_ltx(state: &SceneState) -> Vec<u8> {
             w.w_raw(s, k, v);
         }
     }
-    w.save().into_bytes()
+    encode(w.save(), m.cp1251)
 }
 
 /// Everything `EScene::SaveLTX` writes for `file`, part files numbered past what the tool needs
@@ -734,6 +746,11 @@ mod tests {
             if let ObjData::Shape(sh) = &mut o.data {
                 *sh = ShapeData::unit_box();
                 sh.shapes.push(ShapeDef::sphere(Vec3::ZERO, 1.0));
+            }
+            // a scene file keeps six decimals (`CInifile::w_float` is "%f"): the default cone,
+            // pi / 8, comes back as 0.392699, so the fixture holds what the file can
+            if let ObjData::Light(l) = &mut o.data {
+                l.cone = "0.392699".parse().unwrap();
             }
             s.insert(o);
         }

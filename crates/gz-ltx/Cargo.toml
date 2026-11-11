@@ -14,3 +14,7 @@ workspace = true
 gz-base.workspace = true
 thiserror.workspace = true
 rustc-hash.workspace = true
+
+[dev-dependencies]
+gz-corpus.workspace = true
+rayon.workspace = true

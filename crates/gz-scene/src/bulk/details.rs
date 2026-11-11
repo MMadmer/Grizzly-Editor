@@ -37,7 +37,9 @@ impl BaseImage {
             .as_chunks::<4>()
             .0
             .iter()
-            .map(|p| (u32::from(p[3]) << 24) | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2]))
+            .map(|p| {
+                (u32::from(p[3]) << 24) | (u32::from(p[0]) << 16) | (u32::from(p[1]) << 8) | u32::from(p[2])
+            })
             .collect();
         Self { w, h, data }
     }
@@ -73,18 +75,30 @@ impl BaseImage {
 /// `Fcolor::set(u32)`.
 fn fcolor(c: u32) -> [f32; 4] {
     let f = 1.0f32 / 255.0;
-    [f * ((c >> 16) & 0xff) as f32, f * ((c >> 8) & 0xff) as f32, f * (c & 0xff) as f32, f * ((c >> 24) & 0xff) as f32]
+    [
+        f * ((c >> 16) & 0xff) as f32,
+        f * ((c >> 8) & 0xff) as f32,
+        f * (c & 0xff) as f32,
+        f * ((c >> 24) & 0xff) as f32,
+    ]
 }
 
 fn color_dist(c: &[f32; 4], src: &[f32; 4]) -> f32 {
     let inv_a = 1.0 - c[3];
-    inv_a + ((c[0] - src[0]) * (c[0] - src[0]) + (c[1] - src[1]) * (c[1] - src[1]) + (c[2] - src[2]) * (c[2] - src[2])).sqrt()
+    inv_a
+        + ((c[0] - src[0]) * (c[0] - src[0])
+            + (c[1] - src[1]) * (c[1] - src[1])
+            + (c[2] - src[2]) * (c[2] - src[2]))
+            .sqrt()
 }
 
 /// The snap objects of the tool, by name.
 #[must_use]
 pub fn snap_ids(state: &SceneState, d: &SceneDetails) -> Vec<ObjId> {
-    d.snap_objects.iter().filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id)).collect()
+    d.snap_objects
+        .iter()
+        .filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id))
+        .collect()
 }
 
 /// `Scene->GetBox(bb, list)`: the snap objects' world boxes merged.
@@ -142,7 +156,15 @@ fn faces_in(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb) -> Vec<[
 /// `UpdateSlotBBox`: the height of the faces under a slot, a little over and under them; an
 /// empty slot where there are none.
 #[must_use]
-pub fn slot_box(state: &SceneState, lib: &Library, ids: &[ObjId], bbox: &Aabb, h: &DetailHeader, sx: u32, sz: u32) -> DetailSlot {
+pub fn slot_box(
+    state: &SceneState,
+    lib: &Library,
+    ids: &[ObjId],
+    bbox: &Aabb,
+    h: &DetailHeader,
+    sx: u32,
+    sz: u32,
+) -> DetailSlot {
     let r = slot_rect(h, sx, sz);
     let mut b = Aabb::new(Vec3::new(r[0], bbox.min.y, r[1]), Vec3::new(r[2], bbox.max.y, r[3]));
     let faces = faces_in(state, lib, ids, &b);
@@ -449,7 +471,12 @@ pub fn update_objects(
     Ok(SceneDetails { slots: slots.into(), ..d.clone() })
 }
 
-fn objects_for(d: &SceneDetails, selected: Option<&[bool]>, inp: &DetailInputs<'_>, progress: &(dyn Fn(usize, usize) + Sync)) -> Vec<DetailSlot> {
+fn objects_for(
+    d: &SceneDetails,
+    selected: Option<&[bool]>,
+    inp: &DetailInputs<'_>,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Vec<DetailSlot> {
     let map = color_map(d);
     let density: Vec<f32> = d.indices.objects.iter().map(|o| o.density_factor).collect();
     let h = d.header;

@@ -719,16 +719,17 @@ mod tests {
         assert!(b.translate.abs_diff_eq(Vec3::new(1.0, 0.5, 0.25), 1e-4));
         // the axes stay a right-handed orthonormal frame
         let [i, j, k] = b.rotate;
-        assert!(close(i.dot(j), 0.0, 1e-5) && close(j.dot(k), 0.0, 1e-5) && close(i.cross(j).dot(k), 1.0, 1e-4));
+        assert!(
+            close(i.dot(j), 0.0, 1e-5) && close(j.dot(k), 0.0, 1e-5) && close(i.cross(j).dot(k), 1.0, 1e-4)
+        );
     }
 
     #[test]
     fn the_grid_start_and_the_volume_are_the_cpp_ones() {
         // the eight corners of a unit cube: the first grid sample (0, 0, 0) is the identity
         // rotation of axis (0, 0, 1) and already gives volume 1; nothing beats it
-        let pts: Vec<Vec3> = (0..8)
-            .map(|i| Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32))
-            .collect();
+        let pts: Vec<Vec3> =
+            (0..8).map(|i| Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32)).collect();
         assert_eq!(volume(&pts, &[0.0, 0.0, 0.0]), 1.0);
         let b = min_box(&pts);
         assert!(close(b.halfsize.x * b.halfsize.y * b.halfsize.z, 0.125, 1e-5));

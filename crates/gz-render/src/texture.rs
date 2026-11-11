@@ -116,8 +116,10 @@ impl TextureData {
     fn chain(levels: Vec<Image>) -> Result<Self> {
         let Some(top) = levels.first() else { return Err(invalid("the DDS holds no picture")) };
         let (w, h) = (top.width, top.height);
-        let whole =
-            levels.iter().enumerate().all(|(i, l)| l.width == side(w, i as u32) && l.height == side(h, i as u32));
+        let whole = levels
+            .iter()
+            .enumerate()
+            .all(|(i, l)| l.width == side(w, i as u32) && l.height == side(h, i as u32));
         if levels.len() == 1 || !whole {
             return Self::rgba(top, true);
         }
@@ -296,7 +298,13 @@ mod tests {
         assert_eq!(c.levels.len(), 7);
         assert_eq!(&c.levels[0][..4], &[255, 255, 255, 255]);
         assert_eq!(&c.levels[0][8 * 4..8 * 4 + 4], &[0, 0, 0, 255]);
-        let bad = TextureData { width: 6, height: 4, format: TexelFormat::Bc1, layers: 1, levels: vec![vec![0; 16]] };
+        let bad = TextureData {
+            width: 6,
+            height: 4,
+            format: TexelFormat::Bc1,
+            layers: 1,
+            levels: vec![vec![0; 16]],
+        };
         assert!(bad.check().is_err());
     }
 

@@ -21,3 +21,6 @@ pub use error::CmdError;
 pub use history::HistoryInfo;
 pub use imbl;
 pub use store::{Apply, Snap, State, Store, StoreOptions};
+
+#[cfg(test)]
+mod tests;

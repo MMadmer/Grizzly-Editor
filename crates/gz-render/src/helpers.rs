@@ -311,10 +311,11 @@ mod tests {
         assert_eq!(g.tris.len(), 12 * 3);
         assert_eq!(g.lines_overlay.len(), 3 * CIRCLE * 2 + 2);
         assert!(g.tris_overlay.is_empty());
-        // the sphere's circles lie on its radius
+        // the sphere's circles lie on its radius (after the overlay line: lines go first)
         assert!(
             g.lines_overlay
                 .iter()
+                .skip(2)
                 .take(6)
                 .all(|v| (Vec3::from_array(v.position).length() - 2.0).abs() < 1e-5)
         );

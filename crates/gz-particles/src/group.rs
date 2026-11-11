@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
 
+use crate::STEP;
 use crate::actions::Ctx;
 use crate::effect::{Effect, Event, Particle, SpriteBatch};
 use crate::system::{Collider, GroupDef, GroupEffect, Library, group_flags};
-use crate::STEP;
 
 /// xrCore's `EPS_L`.
 const EPS_L: f32 = 0.001_000_0;
@@ -82,7 +82,14 @@ impl Item {
         }
     }
 
-    fn start_free(&mut self, lib: &Library, name: &str, em: Emitter, m: &Particle, warnings: &mut Vec<String>) {
+    fn start_free(
+        &mut self,
+        lib: &Library,
+        name: &str,
+        em: Emitter,
+        m: &Particle,
+        warnings: &mut Vec<String>,
+    ) {
         let mut c = Effect::new(lib.effect(name).cloned());
         if c.is_looped() {
             let w = format!("Can't use looped effect '{name}' as 'On Birth' child for group.");
@@ -249,7 +256,13 @@ impl Group {
     }
 
     /// `OnFrame`.
-    pub(crate) fn on_frame(&mut self, dt_ms: u32, cx: &mut Ctx<'_>, lib: &Library, collider: Option<&dyn Collider>) {
+    pub(crate) fn on_frame(
+        &mut self,
+        dt_ms: u32,
+        cx: &mut Ctx<'_>,
+        lib: &Library,
+        collider: Option<&dyn Collider>,
+    ) {
         if !self.playing {
             let e = Vec3::splat(EPS_L);
             self.bounds = Some((self.initial - e, self.initial + e));

@@ -52,6 +52,7 @@ kept current: a finished package updates its row and adds what it learned.
 | Crate | State | Notes |
 |---|---|---|
 | `gz-base`, `gz-task`, `gz-store`, `gz-query`, `gz-log` | done | layer 0 |
+| `gz-corpus` | done | test support only (dev-dependency of the corpus tests): `GRIZZLY_TEST_GAME` / `GRIZZLY_TEST_PROJECTS`, the game's files read independently of `gz-vfs` (archive directories + loose `gamedata`), `walk`, `stride`, `check_all`, `finish` |
 | `gz-win`, `gz-crash` | done | `gz-win` is the only crate with `unsafe`: process counters, minimised start, dumps, foreground, the caption hit test (`install_caption_hit_test`, `CaptionShape` in an `ArcSwap`), known folders, free space, volume roots |
 | `gz-mcp-bridge` | done | bin `grizzly-mcp`: MCP over stdio (`initialize`, `tools/list`, `tools/call`) to the editor's TCP endpoint (`GRIZZLY_MCP_PORT`, 28017); tools, descriptions, schemas, annotations and instructions from `gz-mcp/tools.json` word for word; `tool_result` of the Python bridge ported (unknown arguments, fixed-argument tools, waits, images). Tests written, not run |
 | `gz-editor`, `gz-mcp` | done | context, registry, `AutoSave`, `fsx`, the endpoint |
@@ -723,6 +724,104 @@ rows, the File menu's rows, the dialogs) and `motion_ui.rs`.
   `ui_audit` escaped nothing. Still to look at: the Make question without `-nodlg`, motion playback
   and Camera View in motion, Random Append placing, Attach on Click, the Rename and Reset Surfaces
   questions, the Group tool's Pivot chooser. Tests written, not run.
+
+## The first test run
+
+Brief `briefs/tests-unit.md`. Every test is run by **`tools/rust/test.sh`** from now on; the rules
+the code is held to by **`tools/rust/check.sh`** (clippy without a warning, `cargo fmt --check`,
+`unsafe` only in `gz-win` - 24 uses -, the editor built and `-dump_commands` holding every `cmd` of
+`gz-mcp/tools.json`; the registry is compared again only when `Grizzly.exe` is newer than its last
+pass).
+
+- **test.sh's mode.** Default: changed only. `cargo test --no-run --message-format=json` builds
+  every test binary once and names it; a binary runs only when its fingerprint differs from its last
+  green run - the executable's size and write time, and for a corpus binary the corpus variables
+  plus one stamp of the folders behind them (each tree's folder count and newest folder time, the
+  game's archives one by one; walking every file cost 5 s, the folders 1.2 s; an edit in place that
+  leaves its folder's time alone needs `--all`). Green runs: `Intermediate/test-stamps.txt`; a failed
+  binary is never cached and prints its failing tests. `--all` runs everything, `-p <crate>` narrows.
+  Binaries run 8 at a time (half the cores) from their package folder; `gz-render` (it makes a
+  graphics device) runs alone at the end. A binary hit by "os error 32" (the scanner holding a fresh
+  executable) is started once more. Without a value of their own the corpus variables are set to
+  this machine's game and projects. Rustdoc is not run: no crate has a runnable doc test.
+- **Timings** (warm, this machine): `test.sh --all` **27.5 s** (cargo's no-op build check 0.7 s,
+  corpus stamp 1.2 s, the 74 binaries 24.5 s - the longest `gz-fmt-object/corpus` 6.6 s under load;
+  run alone every unit binary finishes in under 0.1 s); `test.sh` right after with nothing changed
+  **2.9 s** (74 cached). Building: the first build of every test binary after `cargo fmt` touched
+  127 files took 68.7 s; touching `gz-fmt-xr` rebuilds 15 crates and relinks in 8.0 s. Running, not
+  linking, is the larger part of a warm run, and the test profile was left as it is: a separate test
+  profile would build every dependency a second time beside the editor's `dev` artifacts.
+- **Counts:** 1056 tests green - the 866 unit tests that existed, the new unit and stress tests, and
+  20 corpus tests in 17 crates.
+- **Concurrency** (stress tests, each under 2 s): `gz-store` (readers see growing revisions and whole
+  states under 8 writers; undo / redo interleaved with edits lose and double nothing; merged steps,
+  seal and the saved mark under load; a panicking command leaves the last good snapshot), `gz-task`
+  (48 jobs started / cancelled from 8 threads stop at their next `check`, every `wait` returns, the
+  snapshot never shows an ended job running; a group admits one of 16 at once; a panicking job fails
+  and its waiters return), `gz-editor` (`FrameClock::after` from 32 tasks answered never before
+  their frame; `AutoSave` under a burst ends on disk as the last edit, nothing written after the
+  flush), `gz-query` (16 threads asking one key compute once per revision, `get` and `fresh` share
+  a computation, a panicking computation leaves the key usable).
+- **No device needed:** `gz_render::testing::test_device(limit)` makes a device on a thread of its
+  own and gives up after `TEST_DEVICE_LIMIT` (5 s), printing `skipped: no graphics device`; the one
+  test that draws (`a_red_box_renders_offscreen`) uses it. Everything else is tested without one.
+- Removed from the workspace manifest, used by no crate: `parry3d`, `rapier3d`, `loom`, `egui_dock`,
+  `jwalk`, `walkdir`, `schemars`, `zip`, `proptest`, `memchr`, `gif`, `quick-xml`, `keyring`,
+  `backtrace`, `tokio-util`, and the paths of crates that do not exist (`gz-fmt-release`,
+  `gz-virustotal`, `gz-cmd`). Added: `tempfile` (dev), `gz-corpus`.
+
+The corpus (`crates/<crate>/tests/corpus.rs`): `gz-ltx` every `.ltx` of the repository's `gamedata`,
+the fixtures and the projects (2863) and of the game (4098) written back byte for byte, and
+`system.ltx` plus six other roots in both dialects; `gz-mod` every `mod.ltx` (6); `gz-luadata` 128
+assets; `gz-nq` 39 graphs (the 36 the editor wrote byte for byte, the hand-written examples at a
+fixed point); `gz-fmt-xml` 481 XML files and the rus / eng string tables in both modes; `gz-fmt-xr`
+the six libraries of the editor and of the game; `gz-particles` all 1428 + 2131 effects and groups
+for a second; `gz-fmt-spawn` the 100 MB `all.spawn`; `gz-entities` its 22958 entities, decoded and
+written anew; `gz-fmt-object` **every 16th** of 8844 `.object` and all 1353 motions; `gz-fmt-ogf`
+all 5486 `.ogf` / `.omf`; `gz-fmt-tex` **every 8th** of the repository's 22104 `.thm`, all 946 of the
+projects, all 20469 DDS headers; `gz-fmt-sound` **every 4th** of 29172 `.ogg`; `gz-fmt-level` 231
+built level files; `gz-scene` 37 scenes; `gz-vfs` the mount against the second reader (62042 files,
+every 8th archived file read, 100 compared); `gz-game` modes, items, communities, ranks, trade
+presets, 111 level changers. Rules a test states where byte equality is not the C++'s either: the
+2015 SDK's scenes and older THM / `.skl` versions reach a fixed point instead; the physics update
+block and pre-128 packets are written as `UPDATE_Write` / `Spawn_Write` write them.
+
+Real bugs the tests found, fixed:
+- `gz-fmt-xr`: Dead Air's 50 short `TargetColor`s (also in the middle of a list, `atom_flame`
+  first) - each colour action takes the form that makes the list read to its end, a bounded search;
+  `times_stored` keeps the form. The viewport now plays the game's own library (1520 effects, seen
+  in the editor on a copy of Test, no note in the log).
+- `gz-ui-viewport`: the particles note was logged once per concurrent first read - one read at a
+  time, and one note per text.
+- `gz-ltx`: `r_u64` saturated at `i64::MAX`; a scene GUID half above it no longer matched its binary
+  parts - 20 of the repository's 35 levels and Overnight Delivery's `l03_agroprom` were refused
+  ("Level part GUID does not match the scene"). `_strtoui64` now.
+- `gz-scene`: a cp1251 scene file was written back as UTF-8; each file keeps its code page.
+- `gz-scene`: the compiler error list read a caption's size and capacity 8 bytes too early.
+- `gz-entities`: bytes a class does not read at the end of a state (Call of Pripyat's zone time
+  marker the spawn compiler left, smart terrains) made 7027 of the 22958 entities opaque; they are
+  kept and written back.
+- `gz-query`: `Query::fresh` computed once per concurrent caller; it waits for a running
+  computation now, and a caller that stops waiting or panics leaves no key marked running.
+- `gz-editor`: `AutoSave` subscribed inside its task: an edit published before the task ran was not
+  written and its `flush` waited for ever.
+- `gz-fmt-ogf`: legacy `.omf` motions with fewer tracks than bones were refused (the engine keeps the
+  rest at bind pose); models whose user data has no terminator were refused (the engine reads the
+  chunk as an ini); chunks the engine reads with `find_chunk` were unpacked when marked compressed, and a
+  damaged description failed the model (`dev_pda_hud.ogf`).
+- `gz-ui`: a nested `answer_as` scope ended the outer one too.
+- ~20 test expectations were wrong and were corrected from the C++ (named in their comments): the
+  engine's normal quantisation, `D3DX_OptimizeVertices`, `+N more`, the default bone part, the
+  unnormalised box filter, include order, a touching pair of boxes, the stalker's `[game_info]`,
+  the empty Lua environment, `color_argb_f`'s order, `noise3Init`'s shuffle, the placeholder
+  material, the light's six decimals.
+
+Defects of the game's data the corpus shows (read-only, not changed): Dead Air's engine takes the
+short `TargetColor` only at a list's end, so 50 effects read out of step in the game; 27 `all.spawn`
+packets are shorter than their sections' classes read now (repair kits, containers, generators) and
+stay opaque; `internal_light_torch_r2.dds` states a 128-byte header (DirectXTex refuses it, so do
+we); two `.omf` hold the exporter's nameless default part; 7 THMs of Weapons Evolution are damaged and
+220 have chunk sizes that disagree with their content.
 
 ## Next packages, in dependency order
 

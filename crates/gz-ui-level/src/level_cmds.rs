@@ -12,7 +12,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::Context;
-use gz_app::{CommandVar, CppAction, CppCommand, CppSub, DialogDesc, DocCx, EditorSettings, MenuContent, MenuEntry, ShellBuilder};
+use gz_app::{
+    CommandVar, CppAction, CppCommand, CppSub, DialogDesc, DocCx, EditorSettings, MenuContent, MenuEntry,
+    ShellBuilder,
+};
 use gz_editor::{Args, Editor, SmolStr, Value, json};
 use gz_scene::{ObjClass, SceneCmd, SceneService};
 use gz_ui::dialog::ResultSpec;
@@ -225,11 +228,12 @@ fn settle_then(editor: &Arc<Editor>, ctx: &Context, go: impl FnOnce(&Arc<Editor>
     let name = svc.store.snapshot().meta.name();
     let what = vec![if name.is_empty() { "Untitled scene".to_owned() } else { name }];
     let ed = editor.clone();
-    let line = gz_ui::dialog::unsaved_prompt(ctx, asker(editor), "scene", &what, move |answer| match answer {
-        Answer::Yes => go(&ed, args(&[("save", Value::Bool(true))])),
-        Answer::No => go(&ed, args(&[("discard", Value::Bool(true))])),
-        Answer::Cancel => {}
-    });
+    let line =
+        gz_ui::dialog::unsaved_prompt(ctx, asker(editor), "scene", &what, move |answer| match answer {
+            Answer::Yes => go(&ed, args(&[("save", Value::Bool(true))])),
+            Answer::No => go(&ed, args(&[("discard", Value::Bool(true))])),
+            Answer::Cancel => {}
+        });
     if let Some(l) = line {
         editor.log.plain(l);
     }
@@ -250,7 +254,12 @@ pub fn open_scene_file(editor: &Arc<Editor>, ctx: &Context, file: String) {
             if a.get("save").and_then(Value::as_bool) == Some(true) {
                 let r = ed.call("save_scene", Args::new(), ed.ui_origin()).await;
                 if r.get("ok").and_then(Value::as_bool) != Some(true) {
-                    ed.notices.error(r.get("error").and_then(Value::as_str).unwrap_or("The scene was not saved.").to_owned());
+                    ed.notices.error(
+                        r.get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("The scene was not saved.")
+                            .to_owned(),
+                    );
                     return;
                 }
             }
@@ -258,7 +267,9 @@ pub fn open_scene_file(editor: &Arc<Editor>, ctx: &Context, file: String) {
             a.insert("discard".into(), Value::Bool(true));
             let r = ed.call("open_scene", a, ed.ui_origin()).await;
             if r.get("ok").and_then(Value::as_bool) != Some(true) {
-                ed.notices.error(r.get("error").and_then(Value::as_str).unwrap_or("The scene did not open.").to_owned());
+                ed.notices.error(
+                    r.get("error").and_then(Value::as_str).unwrap_or("The scene did not open.").to_owned(),
+                );
             }
         });
     });
@@ -278,10 +289,12 @@ pub fn open_scene_dialog(editor: &Arc<Editor>, ctx: &Context) {
 pub fn save_as(editor: &Arc<Editor>) {
     let Some(svc) = scene(editor) else { return };
     let snap = svc.store.snapshot();
-    let name = snap.meta.file.as_ref().and_then(|f| f.file_name()).map_or_else(
-        || "level.level".to_owned(),
-        |n| n.to_string_lossy().into_owned(),
-    );
+    let name = snap
+        .meta
+        .file
+        .as_ref()
+        .and_then(|f| f.file_name())
+        .map_or_else(|| "level.level".to_owned(), |n| n.to_string_lossy().into_owned());
     file_dialog(editor, "Save Scene As", ("Level", &["level"]), svc.maps_dir(), Some(name), |ed, f| {
         run(ed, "save_scene", args(&[("file", path_text(&f))]));
     });
@@ -311,17 +324,39 @@ pub fn open_selection(editor: &Arc<Editor>) {
 /// Scene > Save Selection As... (`CommandSaveSelection`).
 pub fn save_selection(editor: &Arc<Editor>) {
     let Some(svc) = scene(editor) else { return };
-    file_dialog(editor, "Save Selection As", ("Level", &["level"]), svc.maps_dir(), Some("selection.level".into()), |ed, f| {
-        run(ed, "selection_file", args(&[("action", Value::String("save".into())), ("file", path_text(&f))]));
-    });
+    file_dialog(
+        editor,
+        "Save Selection As",
+        ("Level", &["level"]),
+        svc.maps_dir(),
+        Some("selection.level".into()),
+        |ed, f| {
+            run(
+                ed,
+                "selection_file",
+                args(&[("action", Value::String("save".into())), ("file", path_text(&f))]),
+            );
+        },
+    );
 }
 
 /// Scene > Export Scene / Selection as OBJ... (`EScene::ExportObj`: the name asked in `$import$`).
 pub fn export_obj(editor: &Arc<Editor>, selected: bool) {
     let Some(root) = editor.project_root() else { return };
-    file_dialog(editor, "Export as OBJ", ("Wavefront OBJ", &["obj"]), root.join("import"), Some("scene.obj".into()), move |ed, f| {
-        run(ed, "scene_export_obj", args(&[("file", path_text(&f)), ("selected", Value::Bool(selected))]));
-    });
+    file_dialog(
+        editor,
+        "Export as OBJ",
+        ("Wavefront OBJ", &["obj"]),
+        root.join("import"),
+        Some("scene.obj".into()),
+        move |ed, f| {
+            run(
+                ed,
+                "scene_export_obj",
+                args(&[("file", path_text(&f)), ("selected", Value::Bool(selected))]),
+            );
+        },
+    );
 }
 
 /// `CommandMultiRenameObjects`: asks, naming the objects.
@@ -340,7 +375,8 @@ pub fn rename_objects(editor: &Arc<Editor>, ctx: &Context) {
         headline: format!("Rename the {} selected object(s) after their references?", sel.len()),
         items: sel.iter().take(10).map(|o| o.name.to_string()).collect(),
         total: sel.len(),
-        consequence: "Each one takes the next free name made from its reference. Undo puts the names back.".into(),
+        consequence: "Each one takes the next free name made from its reference. Undo puts the names back."
+            .into(),
         action: "Rename".into(),
         destructive: false,
     };
@@ -364,10 +400,7 @@ pub fn validate(editor: &Arc<Editor>, ctx: &Context) {
         let ok = r.get("ok").and_then(Value::as_bool) == Some(true);
         let passed = ok && r.get("ok").is_some() && r.get("lines").is_some() && {
             // the reply's own `ok` is the command's; the validation's is the last line
-            r.get("lines")
-                .and_then(Value::as_array)
-                .and_then(|l| l.last())
-                .and_then(Value::as_str)
+            r.get("lines").and_then(Value::as_array).and_then(|l| l.last()).and_then(Value::as_str)
                 == Some("Validation OK!")
         };
         let lines: Vec<String> = r
@@ -376,7 +409,10 @@ pub fn validate(editor: &Arc<Editor>, ctx: &Context) {
             .map(|l| l.iter().filter_map(Value::as_str).map(str::to_owned).collect())
             .unwrap_or_default();
         let (tone, headline) = if !ok {
-            (Tone::Error, r.get("error").and_then(Value::as_str).unwrap_or("The scene was not validated.").to_owned())
+            (
+                Tone::Error,
+                r.get("error").and_then(Value::as_str).unwrap_or("The scene was not validated.").to_owned(),
+            )
         } else if passed {
             (Tone::Success, "Validation OK!".to_owned())
         } else {
@@ -415,8 +451,12 @@ pub fn summary(editor: &Arc<Editor>) {
     }
     let ed = editor.clone();
     editor.exec.spawn(async move {
-        let _ = ed.call("scene_summary", args(&[("action", Value::String("clear".into()))]), ed.ui_origin()).await;
-        let r = ed.call("scene_summary", args(&[("action", Value::String("collect".into()))]), ed.ui_origin()).await;
+        let _ = ed
+            .call("scene_summary", args(&[("action", Value::String("clear".into()))]), ed.ui_origin())
+            .await;
+        let r = ed
+            .call("scene_summary", args(&[("action", Value::String("collect".into()))]), ed.ui_origin())
+            .await;
         let rows: Vec<(String, String)> = r
             .get("rows")
             .and_then(Value::as_array)
@@ -455,21 +495,34 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
         &mut open,
         |ui| {
             if busy {
-                gz_ui::state::empty_state(ui, Icon::Info, "Collecting", "The scene's tools report what they hold.", None);
+                gz_ui::state::empty_state(
+                    ui,
+                    Icon::Info,
+                    "Collecting",
+                    "The scene's tools report what they hold.",
+                    None,
+                );
                 return;
             }
             egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
                 gz_ui::PropertyGrid::new("summary").show(ui, |g| {
                     for (k, v) in &rows {
                         g.row(k, "", gz_ui::PropFlags::NONE, 0, |ui| {
-                            gz_ui::text::label(ui, v, gz_ui::Font::Body, gz_ui::palette(ui.ctx()).text, gz_ui::Clip::End);
+                            gz_ui::text::label(
+                                ui,
+                                v,
+                                gz_ui::Font::Body,
+                                gz_ui::palette(ui.ctx()).text,
+                                gz_ui::Clip::End,
+                            );
                         });
                     }
                 });
             });
         },
         |f| {
-            if f.button("Export...", gz_ui::Kind::Secondary, false, !busy, "Write the summary as a text file") {
+            if f.button("Export...", gz_ui::Kind::Secondary, false, !busy, "Write the summary as a text file")
+            {
                 export = true;
             }
             if f.button("Close", gz_ui::Kind::Primary, true, true, "") {
@@ -478,11 +531,23 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
         },
     );
     if export {
-        let level = scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
+        let level =
+            scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
         if let Some(root) = editor.project_root() {
-            file_dialog(editor, "Export Summary", ("Text", &["txt"]), root.join("import"), Some(format!("{level}.txt")), |ed, f| {
-                run(ed, "scene_summary", args(&[("action", Value::String("export".into())), ("file", path_text(&f))]));
-            });
+            file_dialog(
+                editor,
+                "Export Summary",
+                ("Text", &["txt"]),
+                root.join("import"),
+                Some(format!("{level}.txt")),
+                |ed, f| {
+                    run(
+                        ed,
+                        "scene_summary",
+                        args(&[("action", Value::String("export".into())), ("file", path_text(&f))]),
+                    );
+                },
+            );
         }
     }
     s.lock().open = open && !close;
@@ -491,16 +556,38 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
 /// Build > Import / Export / Clear Error List and Scene > Clear Debug Draw.
 pub fn import_errors(editor: &Arc<Editor>) {
     let Some(root) = editor.project_root() else { return };
-    file_dialog(editor, "Import Error List", ("Error list", &["err", "*"]), root.join("logs"), None, |ed, f| {
-        run(ed, "compiler_errors", args(&[("action", Value::String("import".into())), ("file", path_text(&f))]));
-    });
+    file_dialog(
+        editor,
+        "Import Error List",
+        ("Error list", &["err", "*"]),
+        root.join("logs"),
+        None,
+        |ed, f| {
+            run(
+                ed,
+                "compiler_errors",
+                args(&[("action", Value::String("import".into())), ("file", path_text(&f))]),
+            );
+        },
+    );
 }
 
 pub fn export_errors(editor: &Arc<Editor>) {
     let Some(root) = editor.project_root() else { return };
-    file_dialog(editor, "Export Error List", ("Error list", &["err"]), root.join("logs"), Some("build.err".into()), |ed, f| {
-        run(ed, "compiler_errors", args(&[("action", Value::String("export".into())), ("file", path_text(&f))]));
-    });
+    file_dialog(
+        editor,
+        "Export Error List",
+        ("Error list", &["err"]),
+        root.join("logs"),
+        Some("build.err".into()),
+        |ed, f| {
+            run(
+                ed,
+                "compiler_errors",
+                args(&[("action", Value::String("export".into())), ("file", path_text(&f))]),
+            );
+        },
+    );
 }
 
 pub fn clear_debug_draw(editor: &Arc<Editor>) {
@@ -511,7 +598,8 @@ pub fn clear_debug_draw(editor: &Arc<Editor>) {
 /// not asked about - the build stops with its own error.
 pub fn ask_make(editor: &Arc<Editor>, ctx: &Context, command: &'static str) {
     let Some(m) = MAKES.iter().find(|m| m.command == command) else { return };
-    let level = scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
+    let level =
+        scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
     if level.is_empty() {
         run(editor, command, Args::new());
         return;
@@ -598,7 +686,9 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         .enabled(has_scene),
     );
     // the parts: Enable, Read Only, Show (`p1` class, `p2` on)
-    for (id, name, key) in [(58, "COMMAND_ENABLE_TARGET", "enabled"), (59, "COMMAND_READONLY_TARGET", "readonly")] {
+    for (id, name, key) in
+        [(58, "COMMAND_ENABLE_TARGET", "enabled"), (59, "COMMAND_READONLY_TARGET", "readonly")]
+    {
         b.cpp_command(
             CppCommand::new(
                 id,
@@ -624,14 +714,18 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             CppAction::shell(|cx, p1, p2| {
                 let svc = need_scene(cx)?;
                 let class = p1.int().and_then(ObjClass::from_id).ok_or("no such class")?;
-                svc.store.post(SceneCmd::ToolFlags { class, visible: Some(p2.truthy()), readonly: None }, cx.editor.ui_origin());
+                svc.store.post(
+                    SceneCmd::ToolFlags { class, visible: Some(p2.truthy()), readonly: None },
+                    cx.editor.ui_origin(),
+                );
                 ok()
             }),
         )
         .editable(false)
         .enabled(has_scene),
     );
-    for (id, name, part) in [(79, "COMMAND_LOAD_LEVEL_PART", true), (80, "COMMAND_UNLOAD_LEVEL_PART", false)] {
+    for (id, name, part) in [(79, "COMMAND_LOAD_LEVEL_PART", true), (80, "COMMAND_UNLOAD_LEVEL_PART", false)]
+    {
         b.cpp_command(
             CppCommand::new(
                 id,
@@ -639,7 +733,11 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                 "",
                 CppAction::editor("level_parts", move |p1, _| {
                     let class = p1.int().and_then(ObjClass::from_id).ok_or("p1 names the class by its id")?;
-                    Ok(args(&[("class", json!(class.name())), ("enabled", json!(part)), ("discard", json!(true))]))
+                    Ok(args(&[
+                        ("class", json!(class.name())),
+                        ("enabled", json!(part)),
+                        ("discard", json!(true)),
+                    ]))
                 }),
             )
             .editable(false)
@@ -681,42 +779,57 @@ pub(crate) fn install(b: &mut ShellBuilder) {
     );
     // the scene's file
     b.cpp_command(
-        CppCommand::new(39, "COMMAND_CLEAR", "File\\Clear Scene", CppAction::shell(|cx, _, _| {
-            new_scene(cx.editor, cx.ctx);
-            ok()
-        }))
+        CppCommand::new(
+            39,
+            "COMMAND_CLEAR",
+            "File\\Clear Scene",
+            CppAction::shell(|cx, _, _| {
+                new_scene(cx.editor, cx.ctx);
+                ok()
+            }),
+        )
         .keys("Ctrl+N")
         .face("File", "New Scene", Icon::None)
         .enabled(|ed, _| ed.project_opt().is_some()),
     );
     b.cpp_command(
-        CppCommand::new(40, "COMMAND_LOAD", "File\\Load Level", CppAction::shell(|cx, p1, _| {
-            match p1.text() {
-                Some(file) => open_scene_file(cx.editor, cx.ctx, file.to_owned()),
-                None => open_scene_dialog(cx.editor, cx.ctx),
-            }
-            ok()
-        }))
+        CppCommand::new(
+            40,
+            "COMMAND_LOAD",
+            "File\\Load Level",
+            CppAction::shell(|cx, p1, _| {
+                match p1.text() {
+                    Some(file) => open_scene_file(cx.editor, cx.ctx, file.to_owned()),
+                    None => open_scene_dialog(cx.editor, cx.ctx),
+                }
+                ok()
+            }),
+        )
         .keys("Ctrl+L")
         .face("File", "Open Scene...", Icon::Open)
         .enabled(|ed, _| ed.project_opt().is_some()),
     );
     b.cpp_command(
-        CppCommand::new(41, "COMMAND_SAVE", "File", CppAction::shell(|cx, p1, p2| {
-            if p2.int() == Some(1) {
-                save_as(cx.editor);
-                return ok();
-            }
-            let file = p1.text().filter(|f| !f.is_empty()).map(str::to_owned);
-            match file {
-                Some(f) => run(cx.editor, "save_scene", args(&[("file", json!(f))])),
-                None => match scene(cx.editor).and_then(|s| s.store.snapshot().meta.file.clone()) {
-                    Some(_) => run(cx.editor, "save_scene", Args::new()),
-                    None => save_as(cx.editor),
-                },
-            }
-            ok()
-        }))
+        CppCommand::new(
+            41,
+            "COMMAND_SAVE",
+            "File",
+            CppAction::shell(|cx, p1, p2| {
+                if p2.int() == Some(1) {
+                    save_as(cx.editor);
+                    return ok();
+                }
+                let file = p1.text().filter(|f| !f.is_empty()).map(str::to_owned);
+                match file {
+                    Some(f) => run(cx.editor, "save_scene", args(&[("file", json!(f))])),
+                    None => match scene(cx.editor).and_then(|s| s.store.snapshot().meta.file.clone()) {
+                        Some(_) => run(cx.editor, "save_scene", Args::new()),
+                        None => save_as(cx.editor),
+                    },
+                }
+                ok()
+            }),
+        )
         .subs(vec![
             CppSub::ints("Save", 0, 0).label("Save Scene"),
             CppSub::ints("Save As", 0, 1).label("Save Scene As...").keys("Ctrl+Shift+S"),
@@ -725,15 +838,18 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(106, "COMMAND_LOAD_FIRSTRECENT", "File\\Load First Recent", CppAction::shell(|cx, _, _| {
-            match recent(cx.editor).into_iter().next() {
+        CppCommand::new(
+            106,
+            "COMMAND_LOAD_FIRSTRECENT",
+            "File\\Load First Recent",
+            CppAction::shell(|cx, _, _| match recent(cx.editor).into_iter().next() {
                 Some(f) => {
                     open_scene_file(cx.editor, cx.ctx, f);
                     ok()
                 }
                 None => Ok(CommandVar::Int(0)),
-            }
-        }))
+            }),
+        )
         .keys("Ctrl+R")
         .face("File", "Open Last Scene", Icon::None)
         .enabled(|ed, _| ed.project_opt().is_some() && !EditorSettings::of(ed).recent_scenes().is_empty()),
@@ -745,104 +861,167 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         (76, "COMMAND_PASTE", "Edit\\Paste", "paste", "Paste"),
     ] {
         b.cpp_command(
-            CppCommand::new(id, name, desc, CppAction::shell(move |cx, _, _| {
-                edit(cx.editor, action);
-                ok()
-            }))
+            CppCommand::new(
+                id,
+                name,
+                desc,
+                CppAction::shell(move |cx, _, _| {
+                    edit(cx.editor, action);
+                    ok()
+                }),
+            )
             .face("Edit", label, Icon::None)
             .enabled(|ed, tab| tab == crate::LEVEL && has_scene(ed, tab)),
         );
     }
     // the selection files, the reports
     b.cpp_command(
-        CppCommand::new(77, "COMMAND_LOAD_SELECTION", "", CppAction::shell(|cx, p1, _| {
-            match p1.text() {
-                Some(f) => run(cx.editor, "selection_file", args(&[("action", json!("open")), ("file", json!(f))])),
-                None => open_selection(cx.editor),
-            }
-            ok()
-        }))
+        CppCommand::new(
+            77,
+            "COMMAND_LOAD_SELECTION",
+            "",
+            CppAction::shell(|cx, p1, _| {
+                match p1.text() {
+                    Some(f) => run(
+                        cx.editor,
+                        "selection_file",
+                        args(&[("action", json!("open")), ("file", json!(f))]),
+                    ),
+                    None => open_selection(cx.editor),
+                }
+                ok()
+            }),
+        )
         .editable(false)
         .face("Scene", "Open Selection...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(78, "COMMAND_SAVE_SELECTION", "", CppAction::shell(|cx, p1, _| {
-            match p1.text() {
-                Some(f) => run(cx.editor, "selection_file", args(&[("action", json!("save")), ("file", json!(f))])),
-                None => save_selection(cx.editor),
-            }
-            ok()
-        }))
+        CppCommand::new(
+            78,
+            "COMMAND_SAVE_SELECTION",
+            "",
+            CppAction::shell(|cx, p1, _| {
+                match p1.text() {
+                    Some(f) => run(
+                        cx.editor,
+                        "selection_file",
+                        args(&[("action", json!("save")), ("file", json!(f))]),
+                    ),
+                    None => save_selection(cx.editor),
+                }
+                ok()
+            }),
+        )
         .editable(false)
         .face("Scene", "Save Selection As...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(69, "COMMAND_CLEAR_DEBUG_DRAW", "", CppAction::editor("compiler_errors", |_, _| {
-            Ok(args(&[("action", json!("clear"))]))
-        }))
+        CppCommand::new(
+            69,
+            "COMMAND_CLEAR_DEBUG_DRAW",
+            "",
+            CppAction::editor("compiler_errors", |_, _| Ok(args(&[("action", json!("clear"))]))),
+        )
         .editable(false)
         .face("Scene", "Clear Debug Draw", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(70, "COMMAND_IMPORT_COMPILER_ERROR", "", CppAction::shell(|cx, p1, _| {
-            match p1.text() {
-                Some(f) => run(cx.editor, "compiler_errors", args(&[("action", json!("import")), ("file", json!(f))])),
-                None => import_errors(cx.editor),
-            }
-            ok()
-        }))
+        CppCommand::new(
+            70,
+            "COMMAND_IMPORT_COMPILER_ERROR",
+            "",
+            CppAction::shell(|cx, p1, _| {
+                match p1.text() {
+                    Some(f) => run(
+                        cx.editor,
+                        "compiler_errors",
+                        args(&[("action", json!("import")), ("file", json!(f))]),
+                    ),
+                    None => import_errors(cx.editor),
+                }
+                ok()
+            }),
+        )
         .editable(false)
         .face("Build", "Import Error List...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(71, "COMMAND_EXPORT_COMPILER_ERROR", "", CppAction::shell(|cx, p1, _| {
-            match p1.text() {
-                Some(f) => run(cx.editor, "compiler_errors", args(&[("action", json!("export")), ("file", json!(f))])),
-                None => export_errors(cx.editor),
-            }
-            ok()
-        }))
+        CppCommand::new(
+            71,
+            "COMMAND_EXPORT_COMPILER_ERROR",
+            "",
+            CppAction::shell(|cx, p1, _| {
+                match p1.text() {
+                    Some(f) => run(
+                        cx.editor,
+                        "compiler_errors",
+                        args(&[("action", json!("export")), ("file", json!(f))]),
+                    ),
+                    None => export_errors(cx.editor),
+                }
+                ok()
+            }),
+        )
         .editable(false)
         .face("Build", "Export Error List...", Icon::None)
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(72, "COMMAND_VALIDATE_SCENE", "", CppAction::shell(|cx, _, _| {
-            validate(cx.editor, cx.ctx);
-            ok()
-        }))
+        CppCommand::new(
+            72,
+            "COMMAND_VALIDATE_SCENE",
+            "",
+            CppAction::shell(|cx, _, _| {
+                validate(cx.editor, cx.ctx);
+                ok()
+            }),
+        )
         .editable(false)
         .face("Scene", "Validate", Icon::None)
         .enabled(has_scene),
     );
-    for (id, name, action) in [
-        (81, "COMMAND_CLEAR_SCENE_SUMMARY", "clear"),
-        (82, "COMMAND_COLLECT_SCENE_SUMMARY", "collect"),
-    ] {
+    for (id, name, action) in
+        [(81, "COMMAND_CLEAR_SCENE_SUMMARY", "clear"), (82, "COMMAND_COLLECT_SCENE_SUMMARY", "collect")]
+    {
         b.cpp_command(
-            CppCommand::new(id, name, "", CppAction::editor("scene_summary", move |_, _| Ok(args(&[("action", json!(action))]))))
-                .editable(false)
-                .enabled(has_scene),
+            CppCommand::new(
+                id,
+                name,
+                "",
+                CppAction::editor("scene_summary", move |_, _| Ok(args(&[("action", json!(action))]))),
+            )
+            .editable(false)
+            .enabled(has_scene),
         );
     }
     b.cpp_command(
-        CppCommand::new(83, "COMMAND_SHOW_SCENE_SUMMARY", "", CppAction::shell(|cx, _, _| {
-            summary(cx.editor);
-            ok()
-        }))
+        CppCommand::new(
+            83,
+            "COMMAND_SHOW_SCENE_SUMMARY",
+            "",
+            CppAction::shell(|cx, _, _| {
+                summary(cx.editor);
+                ok()
+            }),
+        )
         .editable(false)
         .face("Scene", "Summary Info", Icon::Info)
         .enabled(has_scene),
     );
     b.cpp_command(
-        CppCommand::new(84, "COMMAND_EXPORT_SCENE_SUMMARY", "", CppAction::editor("scene_summary", |p1, _| {
-            let f = p1.text().ok_or("p1s names the file")?;
-            Ok(args(&[("action", json!("export")), ("file", json!(f))]))
-        }))
+        CppCommand::new(
+            84,
+            "COMMAND_EXPORT_SCENE_SUMMARY",
+            "",
+            CppAction::editor("scene_summary", |p1, _| {
+                let f = p1.text().ok_or("p1s names the file")?;
+                Ok(args(&[("action", json!("export")), ("file", json!(f))]))
+            }),
+        )
         .editable(false)
         .enabled(has_scene),
     );
@@ -850,14 +1029,19 @@ pub(crate) fn install(b: &mut ShellBuilder) {
     for Make { command, id, name, title, desc, .. } in MAKES {
         let keys = DEFAULT_KEYS.iter().find(|(i, _)| *i == name).map_or("", |(_, k)| *k);
         b.cpp_command(
-            CppCommand::new(id, name, desc, CppAction::shell(move |cx, _, p2| {
-                if p2.truthy() {
-                    run(cx.editor, command, Args::new());
-                } else {
-                    ask_make(cx.editor, cx.ctx, command);
-                }
-                ok()
-            }))
+            CppCommand::new(
+                id,
+                name,
+                desc,
+                CppAction::shell(move |cx, _, p2| {
+                    if p2.truthy() {
+                        run(cx.editor, command, Args::new());
+                    } else {
+                        ask_make(cx.editor, cx.ctx, command);
+                    }
+                    ok()
+                }),
+            )
             .keys(keys)
             .face("Build", &format!("{title}..."), Icon::None)
             .enabled(|ed, _| has_scene(ed, "") && ed.registry().has("make_all")),
@@ -872,9 +1056,14 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         (104, "COMMAND_SELECT_SNAP_OBJECTS", "select"),
     ] {
         b.cpp_command(
-            CppCommand::new(id, name, "", CppAction::editor("snap_objects", move |_, _| Ok(args(&[("action", json!(action))]))))
-                .editable(false)
-                .enabled(has_scene),
+            CppCommand::new(
+                id,
+                name,
+                "",
+                CppAction::editor("snap_objects", move |_, _| Ok(args(&[("action", json!(action))]))),
+            )
+            .editable(false)
+            .enabled(has_scene),
         );
     }
     // File menu: New Scene, Open Scene..., Recent Scene above Save; Save As... below it
@@ -930,30 +1119,48 @@ fn file_rows(ui: &mut egui::Ui, cx: &mut DocCx<'_>, top: bool) {
     let has_project = editor.project_opt().is_some();
     let keys = |id: &str, d: &str| crate::menus::keys_now(&editor, id, d);
     if top {
-        if menu_item(ui, "New Scene", MenuItem { keys: &keys("COMMAND_CLEAR", "Ctrl+N"), enabled: has_project, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "New Scene",
+            MenuItem { keys: &keys("COMMAND_CLEAR", "Ctrl+N"), enabled: has_project, ..MenuItem::default() },
+        ) {
             cx.requests.activate(crate::LEVEL);
             new_scene(&editor, cx.ctx);
         }
-        if menu_item(ui, "Open Scene...", MenuItem { keys: &keys("COMMAND_LOAD", "Ctrl+L"), enabled: has_project, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "Open Scene...",
+            MenuItem { keys: &keys("COMMAND_LOAD", "Ctrl+L"), enabled: has_project, ..MenuItem::default() },
+        ) {
             cx.requests.activate(crate::LEVEL);
             open_scene_dialog(&editor, cx.ctx);
         }
         let list = recent(&editor);
-        gz_app::chrome::local_submenu(ui, "Recent Scene", Icon::None, has_project && !list.is_empty(), |ui| {
-            for (i, f) in list.iter().enumerate() {
-                let k = if i == 0 { keys("COMMAND_LOAD_FIRSTRECENT", "Ctrl+R") } else { String::new() };
-                if menu_item(ui, f, MenuItem { keys: &k, ..MenuItem::default() }) {
-                    cx.requests.activate(crate::LEVEL);
-                    open_scene_file(&editor, cx.ctx, f.clone());
+        gz_app::chrome::local_submenu(
+            ui,
+            "Recent Scene",
+            Icon::None,
+            has_project && !list.is_empty(),
+            |ui| {
+                for (i, f) in list.iter().enumerate() {
+                    let k = if i == 0 { keys("COMMAND_LOAD_FIRSTRECENT", "Ctrl+R") } else { String::new() };
+                    if menu_item(ui, f, MenuItem { keys: &k, ..MenuItem::default() }) {
+                        cx.requests.activate(crate::LEVEL);
+                        open_scene_file(&editor, cx.ctx, f.clone());
+                    }
                 }
-            }
-        });
+            },
+        );
     } else {
         let level = cx.active_tab == crate::LEVEL;
         if menu_item(
             ui,
             "Save As...",
-            MenuItem { keys: &keys("COMMAND_SAVE.\"Save As\"", "Ctrl+Shift+S"), enabled: level && scene(&editor).is_some(), ..MenuItem::default() },
+            MenuItem {
+                keys: &keys("COMMAND_SAVE.\"Save As\"", "Ctrl+Shift+S"),
+                enabled: level && scene(&editor).is_some(),
+                ..MenuItem::default()
+            },
         ) {
             save_as(&editor);
         }

@@ -16,7 +16,9 @@ use gz_fmt_tex::{
 use gz_store::{Apply, State, Store, StoreOptions, imbl};
 use gz_ui::grid::{Grid, color, combo, number, read_only, switch};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state};
+use gz_ui::{
+    Button, Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state,
+};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};

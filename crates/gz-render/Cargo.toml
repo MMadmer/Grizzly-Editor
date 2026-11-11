@@ -24,7 +24,8 @@ parking_lot.workspace = true
 rustc-hash.workspace = true
 smol_str.workspace = true
 thiserror.workspace = true
+# `testing::test_device` waits for wgpu's adapter and device
+futures.workspace = true
 
 [dev-dependencies]
 png.workspace = true
-futures.workspace = true

@@ -362,7 +362,8 @@ impl Frustum {
         let mut dst: Vec<Vec3> = Vec::with_capacity(poly.len() + 8);
         for p in &self.planes {
             dst.clear();
-            let cls: Vec<f32> = src.iter().map(|v| p.classify(*v)).chain(src.first().map(|v| p.classify(*v))).collect();
+            let cls: Vec<f32> =
+                src.iter().map(|v| p.classify(*v)).chain(src.first().map(|v| p.classify(*v))).collect();
             if let Some(first) = src.first().copied() {
                 src.push(first);
             }
@@ -495,7 +496,8 @@ impl M43 {
 /// origin then); `None` for a miss.
 #[must_use]
 pub fn box_pick2(min: Vec3, max: Vec3, start: Vec3, dir: Vec3) -> Option<(Vec3, bool)> {
-    crate::math::ray_box(start, dir, &gz_fmt_level::Aabb::new(min, max)).map(|(t, inside)| (start + dir * t, inside))
+    crate::math::ray_box(start, dir, &gz_fmt_level::Aabb::new(min, max))
+        .map(|(t, inside)| (start + dir * t, inside))
 }
 
 /// The CRT `rand` stream (`srand` / `rand`): the MSVC recurrence.
@@ -565,15 +567,20 @@ mod tests {
     #[test]
     fn a_square_clipped_by_a_slab() {
         // inside is x <= 1 and x >= -1
-        let f = Frustum::from_planes(&[
-            Plane { n: Vec3::X, d: -1.0 },
-            Plane { n: Vec3::NEG_X, d: -1.0 },
-        ]);
-        let poly = [Vec3::new(-3.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 1.0), Vec3::new(-3.0, 0.0, 1.0)];
+        let f = Frustum::from_planes(&[Plane { n: Vec3::X, d: -1.0 }, Plane { n: Vec3::NEG_X, d: -1.0 }]);
+        let poly = [
+            Vec3::new(-3.0, 0.0, 0.0),
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::new(3.0, 0.0, 1.0),
+            Vec3::new(-3.0, 0.0, 1.0),
+        ];
         let out = f.clip_poly(&poly).unwrap();
         assert_eq!(out.len(), 4);
         assert!(out.iter().all(|p| p.x.abs() <= 1.0 + 1e-6));
-        assert!(f.clip_poly(&[Vec3::new(5.0, 0.0, 0.0), Vec3::new(6.0, 0.0, 0.0), Vec3::new(6.0, 0.0, 1.0)]).is_none());
+        assert!(
+            f.clip_poly(&[Vec3::new(5.0, 0.0, 0.0), Vec3::new(6.0, 0.0, 0.0), Vec3::new(6.0, 0.0, 1.0)])
+                .is_none()
+        );
     }
 
     #[test]

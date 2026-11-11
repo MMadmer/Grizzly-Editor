@@ -136,7 +136,10 @@ fn check_collision(cl: &mut Collision, tris: &[ClTri]) {
         if in_sphere(poly_point, source, 1.0) {
             cl.stuck = true;
         }
-        if dist_ellipsoid >= 0.0 && dist_ellipsoid <= distance_to_travel && (!cl.found || dist_ellipsoid < cl.nearest_distance) {
+        if dist_ellipsoid >= 0.0
+            && dist_ellipsoid <= distance_to_travel
+            && (!cl.found || dist_ellipsoid < cl.nearest_distance)
+        {
             cl.nearest_distance = dist_ellipsoid;
             cl.nearest_point = s_point;
             cl.nearest_poly_point = poly_point;
@@ -154,7 +157,11 @@ fn resolve_stuck(tris: &[ClTri], position: &mut Vec3) {
         for t in tris {
             let n_inv = Vec3::new(-t.n.x, -t.n.y, -t.n.z);
             let (inside, dist) = ray_tri2(*position, n_inv, &t.p);
-            let poly = if inside { mad(*position, n_inv, dist) } else { closest_on_tri(t, mad(*position, n_inv, dist)) };
+            let poly = if inside {
+                mad(*position, n_inv, dist)
+            } else {
+                closest_on_tri(t, mad(*position, n_inv, dist))
+            };
             if in_sphere(poly, *position, safe_r) {
                 let dir = *position - poly;
                 let len = magnitude(dir);
@@ -226,7 +233,12 @@ fn collide_with_world(cl: &mut Collision, tris: &[ClTri], mut position: Vec3, mu
 #[must_use]
 pub fn simulate(model: &CollideModel, start: Vec3, end: Vec3, radius: f32, height: f32) -> Vec3 {
     let half_height = height / 2.0;
-    let mk = |p: Vec3| Aabb::new(Vec3::new(p.x - radius, p.y, p.z - radius), Vec3::new(p.x + radius, p.y + height, p.z + radius));
+    let mk = |p: Vec3| {
+        Aabb::new(
+            Vec3::new(p.x - radius, p.y, p.z - radius),
+            Vec3::new(p.x + radius, p.y + height, p.z + radius),
+        )
+    };
     let (b1, b2) = (mk(start), mk(end));
     let mut bb = Aabb::new(b1.min.min(b2.min), b1.max.max(b2.max));
     bb.grow(0.05);
@@ -251,7 +263,17 @@ pub fn simulate(model: &CollideModel, start: Vec3, end: Vec3, radius: f32, heigh
             let d = -dot(n, p[0]);
             let (e10, e21, e02) = (p[1] - p[0], p[2] - p[1], p[0] - p[2]);
             let (s10, s21, s02) = (magnitude(e10), magnitude(e21), magnitude(e02));
-            ClTri { e10: div(e10, s10), e10s: s10, e21: div(e21, s21), e21s: s21, e02: div(e02, s02), e02s: s02, p, n, d }
+            ClTri {
+                e10: div(e10, s10),
+                e10s: s10,
+                e21: div(e21, s21),
+                e21s: s21,
+                e02: div(e02, s02),
+                e02s: s02,
+                p,
+                n,
+                d,
+            }
         })
         .collect();
 
@@ -281,7 +303,8 @@ mod tests {
     #[test]
     fn on_a_flat_floor_the_body_gets_there() {
         let s = 20.0;
-        let tris = quad(Vec3::new(-s, 0.0, -s), Vec3::new(-s, 0.0, s), Vec3::new(s, 0.0, s), Vec3::new(s, 0.0, -s));
+        let tris =
+            quad(Vec3::new(-s, 0.0, -s), Vec3::new(-s, 0.0, s), Vec3::new(s, 0.0, s), Vec3::new(s, 0.0, -s));
         let n = tris.len();
         let m = CollideModel::from_tris(tris, vec![0; n], vec!["default".into()]);
         let end = Vec3::new(0.7, 0.0, 0.0);
@@ -292,9 +315,15 @@ mod tests {
     #[test]
     fn a_wall_stops_it() {
         let s = 20.0;
-        let mut tris = quad(Vec3::new(-s, 0.0, -s), Vec3::new(-s, 0.0, s), Vec3::new(s, 0.0, s), Vec3::new(s, 0.0, -s));
+        let mut tris =
+            quad(Vec3::new(-s, 0.0, -s), Vec3::new(-s, 0.0, s), Vec3::new(s, 0.0, s), Vec3::new(s, 0.0, -s));
         // a wall at x = 0.5 facing -x
-        tris.extend(quad(Vec3::new(0.5, -1.0, -s), Vec3::new(0.5, -1.0, s), Vec3::new(0.5, 3.0, s), Vec3::new(0.5, 3.0, -s)));
+        tris.extend(quad(
+            Vec3::new(0.5, -1.0, -s),
+            Vec3::new(0.5, -1.0, s),
+            Vec3::new(0.5, 3.0, s),
+            Vec3::new(0.5, 3.0, -s),
+        ));
         let n = tris.len();
         let m = CollideModel::from_tris(tris, vec![0; n], vec!["default".into()]);
         let end = Vec3::new(0.7, 0.0, 0.0);

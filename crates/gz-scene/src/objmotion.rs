@@ -254,8 +254,16 @@ pub enum MotionEdit {
     Import(Box<OMotion>),
     AddKey,
     DeleteKey,
-    ScaleKeys { from: f32, to: f32, scale: f32 },
-    NormalizeKeys { from: f32, to: f32, speed: f32 },
+    ScaleKeys {
+        from: f32,
+        to: f32,
+        scale: f32,
+    },
+    NormalizeKeys {
+        from: f32,
+        to: f32,
+        speed: f32,
+    },
     Clamp,
     FirstFrame,
     PreviousKey,
@@ -268,7 +276,10 @@ pub enum MotionEdit {
     AutoKey(bool),
     CameraView(bool),
     /// Start / End Frame (sec).
-    Range { min_t: Option<f32>, max_t: Option<f32> },
+    Range {
+        min_t: Option<f32>,
+        max_t: Option<f32>,
+    },
     /// Current Frame (sec): the range grows to hold it.
     Current(f32),
     /// Key Time (sec): the key at the current time moved there.
@@ -302,10 +313,13 @@ pub fn apply(o: &Object, edit: &MotionEdit) -> Result<Edited, String> {
             Edited { motion: None, flags: flags & !co::MOTION, pose: None, label: "Motionable", merge: false }
         });
     }
-    let raw = o.motion.as_ref().filter(|_| flags & co::MOTION != 0).ok_or_else(|| {
-        format!("'{}' has no motion: set Flags\\Motionable first.", o.name)
-    })?;
-    let mut m = raw.model().ok_or_else(|| format!("CustomObject: '{}' - motion has different version.", o.name))?;
+    let raw = o
+        .motion
+        .as_ref()
+        .filter(|_| flags & co::MOTION != 0)
+        .ok_or_else(|| format!("'{}' has no motion: set Flags\\Motionable first.", o.name))?;
+    let mut m =
+        raw.model().ok_or_else(|| format!("CustomObject: '{}' - motion has different version.", o.name))?;
     let p = params(&m, raw);
     let mut t = p.t_current;
     let mut flags_out = flags;
@@ -412,7 +426,13 @@ pub fn apply(o: &Object, edit: &MotionEdit) -> Result<Edited, String> {
         }
     };
     let at = if pose { Some(pose_at(&m, t)) } else { None };
-    Ok(Edited { motion: Some(Arc::new(MotionRaw::from_model(&m, t))), flags: flags_out, pose: at, label, merge })
+    Ok(Edited {
+        motion: Some(Arc::new(MotionRaw::from_model(&m, t))),
+        flags: flags_out,
+        pose: at,
+        label,
+        merge,
+    })
 }
 
 #[cfg(test)]

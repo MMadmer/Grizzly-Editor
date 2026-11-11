@@ -461,6 +461,9 @@ pub struct ToolPart {
     pub kept_ltx: Vec<(String, String, String)>,
     /// Chunks of the tool's stream this crate does not read.
     pub kept_chunks: Vec<(u32, Blob)>,
+    /// The LTX part was cp1251 (not UTF-8): it is written back in it, as the C++ `CInifile`
+    /// writes back the bytes it read.
+    pub cp1251: bool,
 }
 
 impl ToolPart {
@@ -482,6 +485,7 @@ impl ToolPart {
             opts,
             kept_ltx: Vec::new(),
             kept_chunks: Vec::new(),
+            cp1251: false,
         }
     }
 
@@ -849,7 +853,9 @@ impl AiMapPart {
         let mut exact = Vec::with_capacity(nodes.len().div_ceil(AI_TILE));
         let mut packed = Vec::with_capacity(exact.capacity());
         for (t, chunk) in nodes.chunks(AI_TILE).enumerate() {
-            let old = base.and_then(|b| b.nodes.get(t).filter(|o| ***o == *chunk).map(|o| (o.clone(), b.tiles.get(t).cloned())));
+            let old = base.and_then(|b| {
+                b.nodes.get(t).filter(|o| ***o == *chunk).map(|o| (o.clone(), b.tiles.get(t).cloned()))
+            });
             match old {
                 Some((e, Some(p))) if same_packing => {
                     exact.push(e);
@@ -1007,7 +1013,8 @@ impl BulkData {
             ObjClass::Wallmark => match WallmarkPart::read(bytes) {
                 Ok(w) => self.wallmarks = Some(Arc::new(w)),
                 Err(e) => {
-                    self.wallmarks = Some(Arc::new(WallmarkPart { raw: Blob::from(bytes), count: 0, model: None }));
+                    self.wallmarks =
+                        Some(Arc::new(WallmarkPart { raw: Blob::from(bytes), count: 0, model: None }));
                     return Some(format!("the wallmarks are kept as they were read: {e}"));
                 }
             },

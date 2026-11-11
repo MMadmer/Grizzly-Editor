@@ -29,3 +29,6 @@ pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         "panic".to_owned()
     }
 }
+
+#[cfg(test)]
+mod tests;

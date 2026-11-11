@@ -25,9 +25,9 @@
 //!   here a failing build writes none.
 
 use glam::{Vec2, Vec3};
+use gz_base::SmolStr;
 use gz_entities::{Entity, PropContext, PropValue, Settings, Shape};
 use gz_fmt_level::i_floor;
-use gz_base::SmolStr;
 use gz_fmt_object::xmath::{Aabb, Mat4};
 use gz_fmt_ogf::{BreakableBone, BreakableFace, BreakablePart, Obb, export_breakable, rapid_box};
 use gz_scene::{ObjClass, ObjData, SceneState};
@@ -232,9 +232,10 @@ impl VcPacked {
         let (ix, iy, iz) = (self.axis(v.x, 0), self.axis(v.y, 1), self.axis(v.z, 2));
         let c = self.cell(ix, iy, iz);
         if let Some(cell) = self.cells.get(c)
-            && let Some(p) = cell.iter().copied().find(|i| {
-                self.verts.get(*i as usize).is_some_and(|w| Self::similar(*w, v, self.eps))
-            })
+            && let Some(p) = cell
+                .iter()
+                .copied()
+                .find(|i| self.verts.get(*i as usize).is_some_and(|w| Self::similar(*w, v, self.eps)))
         {
             return p;
         }
@@ -476,11 +477,7 @@ impl Extractor {
     fn fragments(&mut self, faces: &[usize], rng: &mut Random) -> Result<Vec<Bone>> {
         let n = faces.len();
         let calc = i_floor(n as f32 / self.face_min as f32);
-        let cnt_max = if calc < 62 {
-            if calc <= 0 { 1 } else { calc }
-        } else {
-            62
-        };
+        let cnt_max = if calc < 62 { if calc <= 0 { 1 } else { calc } } else { 62 };
         let mut face_max = i_floor(n as f32 / cnt_max as f32 + 0.5);
         face_max = (face_max as f32 * 4.0) as i32;
         let mut bones: Vec<Bone> = Vec::new();
@@ -509,7 +506,8 @@ impl Extractor {
             if accum == 1 {
                 self.faces[f].bone_id = -1;
             } else {
-                let mtl = self.surfaces.get(self.faces[f].surf).map(|s| s.game_mtl.clone()).unwrap_or_default();
+                let mtl =
+                    self.surfaces.get(self.faces[f].surf).map(|s| s.game_mtl.clone()).unwrap_or_default();
                 bones.push(Bone {
                     name: bone_idx.to_string(),
                     parent: parent.clone(),
@@ -576,7 +574,8 @@ impl Extractor {
                 .and_then(|b| bones.get_mut(b))
                 .ok_or_else(|| BuildError::new("Breakable object: a face belongs to no fragment."))?;
             for k in 0..3 {
-                b.offset = Vec3::new(b.offset.x + face.o[k].x, b.offset.y + face.o[k].y, b.offset.z + face.o[k].z);
+                b.offset =
+                    Vec3::new(b.offset.x + face.o[k].x, b.offset.y + face.o[k].y, b.offset.z + face.o[k].z);
             }
         }
         for b in &mut bones {
@@ -657,12 +656,18 @@ fn gather(
             for sf in &mesh.surf_faces {
                 let Some(s) = lo.object.surfaces.get(sf.surface as usize) else { continue };
                 let Some(id) = engine.material_id(&s.game_mtl) else {
-                    log.push(format!("Object '{}', surface '{}' contain invalid game material.", lo.name, s.name));
+                    log.push(format!(
+                        "Object '{}', surface '{}' contain invalid game material.",
+                        lo.name, s.name
+                    ));
                     ok = false;
                     break 'meshes;
                 };
                 let Some(flags) = engine.material_flags(id) else {
-                    log.push(format!("Object '{}', surface '{}' contain undefined game material.", lo.name, s.name));
+                    log.push(format!(
+                        "Object '{}', surface '{}' contain undefined game material.",
+                        lo.name, s.name
+                    ));
                     ok = false;
                     break 'meshes;
                 };
@@ -733,9 +738,16 @@ fn tool_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
 }
 
 /// An entity of `section`, named and placed.
-fn entity(section: &str, settings: Option<&(dyn Settings + Sync)>, name: &str, pos: Vec3, rot: Vec3) -> Result<Entity> {
-    let settings =
-        settings.ok_or_else(|| BuildError::new(format!("Can't create '{section}': the game's configs are not loaded.")))?;
+fn entity(
+    section: &str,
+    settings: Option<&(dyn Settings + Sync)>,
+    name: &str,
+    pos: Vec3,
+    rot: Vec3,
+) -> Result<Entity> {
+    let settings = settings.ok_or_else(|| {
+        BuildError::new(format!("Can't create '{section}': the game's configs are not loaded."))
+    })?;
     let mut e = Entity::create(section, settings)
         .map_err(|err| BuildError::new(format!("Can't create '{section}': {err}")))?;
     let _ = e.set_name(name);
@@ -784,11 +796,10 @@ fn breakables(
         let mut e = entity("breakable_object", settings, &sn, p.ref_offset, p.ref_rotate)?;
         let ctx = PropContext::default();
         // `set_visual`: the name without its extension, lower case
-        let visual = e
-            .properties(&ctx)
-            .into_iter()
-            .find(|pr| pr.path.ends_with("\\Model\\Visual"))
-            .ok_or_else(|| BuildError::new(format!("Can't set the visual of '{sn}': the entity has none.")))?;
+        let visual =
+            e.properties(&ctx).into_iter().find(|pr| pr.path.ends_with("\\Model\\Visual")).ok_or_else(
+                || BuildError::new(format!("Can't set the visual of '{sn}': the entity has none.")),
+            )?;
         e.set(&visual.path, &PropValue::Text(sn.clone()), &ctx)
             .map_err(|err| BuildError::new(format!("Can't set the visual of '{sn}': {err}")))?;
         out.spawns.push(e.to_spawn_packet());
@@ -871,8 +882,7 @@ fn climables(
         let m = obb_matrix(&p.obb.rotate, p.obb.translate);
         p.ref_rotate = get_xyz(&m);
         let mut e = entity("climable_object", settings, &sn, p.ref_offset, p.ref_rotate)?;
-        e.set_shapes(&[shape])
-            .map_err(|err| BuildError::new(format!("Can't shape '{sn}': {err}")))?;
+        e.set_shapes(&[shape]).map_err(|err| BuildError::new(format!("Can't shape '{sn}': {err}")))?;
         // `set_additional_info`: the material of the faces
         e.set_climable_material(&material)
             .map_err(|err| BuildError::new(format!("Can't set the material of '{sn}': {err}")))?;
@@ -971,10 +981,11 @@ mod tests {
     fn welded_corners_make_two_boxes_two_parts() {
         // the SDK's welding: the corners the faces of a box share are found through the grid
         let mut ex = Extractor::new(2);
-        ex.init(&Aabb { min: Vec3::new(-1.0, -1.0, -1.0), max: Vec3::new(3.0, 1.0, 1.0) }, ENGINE_EPS_L);
+        // the boxes stand apart: two touching ones would share four corners and be one part
+        ex.init(&Aabb { min: Vec3::new(-1.0, -1.0, -1.0), max: Vec3::new(4.0, 1.0, 1.0) }, ENGINE_EPS_L);
         ex.surfaces.push(surf());
         box_faces(&mut ex, Vec3::ZERO, 1.0, false);
-        box_faces(&mut ex, Vec3::new(2.0, 0.0, 0.0), 1.0, false);
+        box_faces(&mut ex, Vec3::new(3.0, 0.0, 0.0), 1.0, false);
         assert_eq!(ex.verts, 16);
         let mut log = Vec::new();
         ex.process(&mut Random(1), &mut log).unwrap();
@@ -1036,13 +1047,21 @@ mod tests {
         use gz_scene::objects::SceneObjectData;
 
         let corners: Vec<Vec3> = (0..8)
-            .map(|i| Vec3::new(if i & 1 != 0 { 1.0 } else { -1.0 }, if i & 2 != 0 { 1.0 } else { -1.0 }, if i & 4 != 0 { 1.0 } else { -1.0 }))
+            .map(|i| {
+                Vec3::new(
+                    if i & 1 != 0 { 1.0 } else { -1.0 },
+                    if i & 2 != 0 { 1.0 } else { -1.0 },
+                    if i & 4 != 0 { 1.0 } else { -1.0 },
+                )
+            })
             .collect();
         let quads = [[0u32, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]];
         let fv = |p: u32| FaceVert { point: p, vmref: 0 };
         let faces: Vec<MFace> = quads
             .iter()
-            .flat_map(|q| [MFace { v: [fv(q[0]), fv(q[1]), fv(q[2])] }, MFace { v: [fv(q[0]), fv(q[2]), fv(q[3])] }])
+            .flat_map(|q| {
+                [MFace { v: [fv(q[0]), fv(q[1]), fv(q[2])] }, MFace { v: [fv(q[0]), fv(q[2]), fv(q[3])] }]
+            })
             .collect();
         let mesh = Mesh {
             name: "box".into(),
@@ -1090,7 +1109,8 @@ mod tests {
             ..Engine::default()
         };
         let mut scene = SceneState::default();
-        for (i, x) in [0.0f32, 2.0].into_iter().enumerate() {
+        // apart: ladders at 0 and 2 would touch at x = 1 and weld into one part
+        for (i, x) in [0.0f32, 3.0].into_iter().enumerate() {
             let mut o = Object::new(
                 ObjClass::SceneObject,
                 &format!("ladder_{i}"),
@@ -1110,7 +1130,9 @@ mod tests {
         assert!(ex.parts.iter().all(|p| p.valid && p.faces.len() == 12));
         // the export reaches the climable objects, which need the game's configs
         let made = export(&scene, &look, &engine, None);
-        assert!(made.is_err_and(|e| e.0 == "Can't create 'climable_object': the game's configs are not loaded."));
+        assert!(
+            made.is_err_and(|e| e.0 == "Can't create 'climable_object': the game's configs are not loaded.")
+        );
         // a surface whose material the library lacks fails the export
         let empty = Engine { materials: Some(GameMaterials::default()), ..Engine::default() };
         let (ok, out) = export(&scene, &look, &empty, None).unwrap();

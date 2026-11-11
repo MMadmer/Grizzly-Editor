@@ -16,3 +16,6 @@ gz-chunk.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+gz-corpus.workspace = true

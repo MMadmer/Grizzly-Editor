@@ -61,7 +61,8 @@ impl DebugDraw {
 }
 
 fn vec3(b: &[u8], at: usize) -> Vec3 {
-    let f = |o: usize| b.get(at + o..at + o + 4).map_or(0.0, |x| f32::from_le_bytes([x[0], x[1], x[2], x[3]]));
+    let f =
+        |o: usize| b.get(at + o..at + o + 4).map_or(0.0, |x| f32::from_le_bytes([x[0], x[1], x[2], x[3]]));
     Vec3::new(f(0), f(4), f(8))
 }
 
@@ -93,8 +94,8 @@ pub fn read_compiler_error(bytes: &[u8]) -> Result<DebugDraw, SceneError> {
     let mut d = DebugDraw::default();
     if let Some((body, _)) = r.find_chunk(10) {
         for rec in records(body, POINT_SIZE)? {
-            // MSVC x64 `std::string`: the buffer (16), the size, the capacity
-            let (size, cap) = (u64_at(rec, 32), u64_at(rec, 40));
+            // MSVC x64 `std::string` at 24: the buffer (16), the size, the capacity
+            let (size, cap) = (u64_at(rec, 40), u64_at(rec, 48));
             let descr = if cap <= SSO_CAP && size <= SSO_CAP {
                 String::from_utf8_lossy(rec.get(24..24 + size as usize).unwrap_or(&[])).into_owned()
             } else {
@@ -110,7 +111,13 @@ pub fn read_compiler_error(bytes: &[u8]) -> Result<DebugDraw, SceneError> {
         }
     } else if let Some((body, _)) = r.find_chunk(0) {
         for rec in records(body, 12)? {
-            d.points.push(DbgPoint { p: vec3(rec, 0), color: 0xff00_ff00, numbered: true, m: true, descr: "TJ".into() });
+            d.points.push(DbgPoint {
+                p: vec3(rec, 0),
+                color: 0xff00_ff00,
+                numbered: true,
+                m: true,
+                descr: "TJ".into(),
+            });
         }
     }
     if let Some((body, _)) = r.find_chunk(12) {
@@ -193,9 +200,20 @@ mod tests {
     #[test]
     fn the_error_list_reads_back() {
         let d = DebugDraw {
-            points: vec![DbgPoint { p: Vec3::X, color: 0xff00ff00, numbered: true, m: true, descr: "TJ".into() }],
+            points: vec![DbgPoint {
+                p: Vec3::X,
+                color: 0xff00ff00,
+                numbered: true,
+                m: true,
+                descr: "TJ".into(),
+            }],
             lines: vec![DbgLine { p: [Vec3::ZERO, Vec3::Y], color: 1, numbered: false, m: false }],
-            wire_faces: vec![DbgFace { p: [Vec3::ZERO, Vec3::X, Vec3::Z], color: 2, numbered: true, m: false }],
+            wire_faces: vec![DbgFace {
+                p: [Vec3::ZERO, Vec3::X, Vec3::Z],
+                color: 2,
+                numbered: true,
+                m: false,
+            }],
         };
         let bytes = write_compiler_error(&d);
         let back = read_compiler_error(&bytes).unwrap();

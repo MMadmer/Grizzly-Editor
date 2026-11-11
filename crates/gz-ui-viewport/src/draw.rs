@@ -693,7 +693,10 @@ pub fn object_box(state: &SceneState, lib: &Library, o: &Object) -> Aabb {
 pub fn gizmo_points(state: &SceneState, lib: &Library, class: ObjClass) -> Vec<(Vec3, Vec3, Option<Aabb>)> {
     // the AI map's selected nodes stand for one object: their box (`GetBBox(bSelOnly)`)
     if class == ObjClass::AiMap {
-        return bulk_box(state, class, true).flatten().map(|b| vec![(b.center(), Vec3::ZERO, Some(b))]).unwrap_or_default();
+        return bulk_box(state, class, true)
+            .flatten()
+            .map(|b| vec![(b.center(), Vec3::ZERO, Some(b))])
+            .unwrap_or_default();
     }
     state
         .of_class(class)
@@ -760,7 +763,9 @@ mod tests {
         // lights and glows have no mesh: only helpers (a glow's sprite is a pass's extra)
         assert!(b.list.instances.is_empty());
         assert!(!b.list.helpers.shapes.is_empty());
-        assert!(!b.list.helpers.lines.is_empty());
+        // a point light is its turned cross (`DrawPointLight`), no loose lines
+        assert!(b.list.helpers.lines.is_empty());
+        assert!(b.list.helpers.shapes.iter().any(|sh| sh.kind == ShapeKind::Cross { rot45: true }));
         // the selected light draws its range: a sphere of 8 m
         assert!(
             b.list
@@ -769,6 +774,18 @@ mod tests {
                 .iter()
                 .any(|sh| sh.kind == ShapeKind::Sphere && (sh.transform.x_axis.x - 8.0).abs() < 1e-4)
         );
+    }
+
+    #[test]
+    fn a_spot_light_draws_its_cone_as_lines() {
+        let mut s = SceneState::default();
+        let d = LightData { kind: LT_SPOT, ..LightData::default() };
+        s.insert(Object::new(ObjClass::Light, "spot", ObjData::Light(d)));
+        let lib = Library::new(Vec::new());
+        let assets = Assets::headless(gz_render::MaterialTable::default());
+        let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, game: None });
+        // 32 edges of the cone and its axis (`DrawSpotLight`)
+        assert_eq!(b.list.helpers.lines.len(), 33);
     }
 
     #[test]

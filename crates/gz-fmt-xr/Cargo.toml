@@ -16,3 +16,6 @@ gz-chunk.workspace = true
 glam.workspace = true
 thiserror.workspace = true
 smol_str.workspace = true
+
+[dev-dependencies]
+gz-corpus.workspace = true

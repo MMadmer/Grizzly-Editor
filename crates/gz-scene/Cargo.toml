@@ -38,3 +38,6 @@ thiserror.workspace = true
 tokio.workspace = true
 # the C++ editor's clipboard record of a copied selection
 clipboard-win = "5.4"
+
+[dev-dependencies]
+gz-corpus.workspace = true

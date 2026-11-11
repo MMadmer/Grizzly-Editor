@@ -51,11 +51,7 @@ fn get_hp(v: V3) -> (f32, f32) {
         -(x / z).atan()
     };
     let hyp = (x * x + z * z).sqrt();
-    let p = if fis_zero(hyp) {
-        if y > 0.0 { PI_DIV_2 } else { -PI_DIV_2 }
-    } else {
-        (y / hyp).atan()
-    };
+    let p = if fis_zero(hyp) { if y > 0.0 { PI_DIV_2 } else { -PI_DIV_2 } } else { (y / hyp).atan() };
     (h, p)
 }
 

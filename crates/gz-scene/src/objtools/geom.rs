@@ -463,7 +463,9 @@ fn remove_collinear(points: &[Vec2], idx: Vec<usize>) -> Vec<usize> {
 #[must_use]
 pub fn is_static_any(lo: &LibraryObject) -> bool {
     let f = lo.object.flags;
-    !f.contains(ObjectFlags::SOUND_OCCLUDER) && !f.contains(ObjectFlags::DYNAMIC) && !f.contains(ObjectFlags::HOM)
+    !f.contains(ObjectFlags::SOUND_OCCLUDER)
+        && !f.contains(ObjectFlags::DYNAMIC)
+        && !f.contains(ObjectFlags::HOM)
 }
 
 /// `IsMUStatic()`.
@@ -703,7 +705,10 @@ mod tests {
     #[test]
     fn a_triangle_across_a_plane_is_inside() {
         let planes = [Vec4::new(1.0, 0.0, 0.0, 0.0)];
-        assert!(poly_inside(&planes, &[Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)]));
+        assert!(poly_inside(
+            &planes,
+            &[Vec3::new(-1.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)]
+        ));
         assert!(!poly_inside(
             &planes,
             &[Vec3::new(-3.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(-2.0, 1.0, 0.0)]

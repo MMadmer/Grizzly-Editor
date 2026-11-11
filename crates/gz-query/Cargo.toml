@@ -14,4 +14,5 @@ workspace = true
 gz-base.workspace = true
 gz-task.workspace = true
 parking_lot.workspace = true
+tokio.workspace = true
 rustc-hash.workspace = true

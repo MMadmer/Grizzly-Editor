@@ -173,7 +173,12 @@ pub type Outcome = (BulkEdit, Value);
 /// Computes a change from the snapshot there is now and sends it; when the scene moved while it
 /// was computed the result is dropped and computed again (four times at most). `f` runs on the
 /// CPU pool.
-pub async fn commit<F>(editor: &Arc<Editor>, svc: &SceneService, origin: Origin, f: F) -> Result<Value, CmdError>
+pub async fn commit<F>(
+    editor: &Arc<Editor>,
+    svc: &SceneService,
+    origin: Origin,
+    f: F,
+) -> Result<Value, CmdError>
 where
     F: Fn(&SceneState, &Library) -> Result<Outcome, CmdError> + Send + Sync + 'static,
 {

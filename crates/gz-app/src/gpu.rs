@@ -238,9 +238,7 @@ pub fn pick_adapter<'a>(
     wanted: &str,
     surface: Option<&wgpu::Surface<'_>>,
 ) -> Option<&'a wgpu::Adapter> {
-    adapters.iter().find(|a| {
-        a.get_info().name == wanted && surface.is_none_or(|s| a.is_surface_supported(s))
-    })
+    adapters.iter().find(|a| a.get_info().name == wanted && surface.is_none_or(|s| a.is_surface_supported(s)))
 }
 
 #[cfg(test)]

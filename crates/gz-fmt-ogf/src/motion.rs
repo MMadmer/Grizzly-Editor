@@ -75,7 +75,8 @@ pub struct BoneMotion {
     pub trans: TransKeys,
 }
 
-/// One motion: its name, its length in frames and every bone's keys in key-slot order.
+/// One motion: its name, its length in frames and every bone's keys in key-slot order. A legacy
+/// motion may hold fewer tracks than the model has bones: the rest keep their bind pose.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Motion {
     pub name: SmolStr,
@@ -107,6 +108,19 @@ fn qr(k: [i16; 4]) -> Quat {
         f32::from(k[2]) * KEY_QUANT_I,
         f32::from(k[3]) * KEY_QUANT_I,
     )
+}
+
+/// Whether a whole bone track lies at the reader's place: its flags and what they say follows.
+fn track_fits(r: &Reader<'_>, len: usize) -> bool {
+    let Some(&flags) = r.data().get(r.tell()) else { return false };
+    let mut size = 1usize;
+    size += if flags & FL_R_KEY_ABSENT != 0 { 8 } else { 4 + len.saturating_mul(8) };
+    if flags & FL_T_KEY_PRESENT != 0 {
+        size += 4 + len.saturating_mul(if flags & FL_T_KEY_16 != 0 { 6 } else { 3 }) + 24;
+    } else {
+        size += 12;
+    }
+    r.elapsed() >= size
 }
 
 impl BoneMotion {
@@ -327,14 +341,17 @@ impl MotionSet {
                 let mut m = r.sub(i as u32 + 1)?.ok_or_else(|| invalid(format!("motion {i} is missing")))?;
                 let name = SmolStr::new(m.r_stringz()?);
                 let length = m.r_u32()?;
-                // a flag, one rotation and one translation at least
-                if bones.saturating_mul(21) > m.elapsed() {
-                    return Err(invalid(format!("motion '{name}' is shorter than its bones")));
+                // the game's `motions_value::load`: "some legacy OMF files omit unchanged
+                // trailing bone tracks" - a track the rest of the motion cannot hold ends the
+                // list, and the bones after it take their bind pose (`Motion::bones` is shorter)
+                let mut tracks = Vec::with_capacity(bones.min(m.elapsed() / 21));
+                for _ in 0..bones {
+                    if !track_fits(&m, length as usize) {
+                        break;
+                    }
+                    tracks.push(BoneMotion::read(&mut m, length as usize)?);
                 }
-                let bones = (0..bones)
-                    .map(|_| BoneMotion::read(&mut m, length as usize))
-                    .collect::<Result<Vec<_>>>()?;
-                set.motions.push(Motion { name, length, bones });
+                set.motions.push(Motion { name, length, bones: tracks });
             }
         }
         Ok(set)
@@ -442,6 +459,25 @@ pub fn read_omf(bytes: &[u8]) -> Result<MotionSet> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_legacy_motion_with_fewer_tracks_keeps_those_it_has() {
+        // three bones, one track stored: the engine gives the other two their bind pose
+        let mut w = Writer::new();
+        w.chunk(0, |w| w.w_u32(1));
+        w.chunk(1, |w| {
+            w.w_stringz("idle");
+            w.w_u32(1);
+            w.w_u8(FL_R_KEY_ABSENT);
+            for v in [0i16, 0, 0, 32767] {
+                w.w_i16(v);
+            }
+            w.w_vec3(Vec3::X);
+        });
+        let set = MotionSet::read_chunks(None, Some(&w.into_bytes()), Some(3)).unwrap();
+        assert_eq!(set.motions[0].bones.len(), 1);
+        assert_eq!(set.motions[0].bones[0].trans, TransKeys::Constant(Vec3::X));
+    }
 
     pub(crate) fn sample_set() -> MotionSet {
         let keys16: Arc<[[i16; 3]]> = Arc::from(vec![[-32767, 0, 0], [32767, 0, 0]]);

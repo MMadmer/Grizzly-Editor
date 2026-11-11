@@ -86,7 +86,9 @@ impl CollideModel {
                     for &fi in sf.faces.iter() {
                         let Some(f) = m.faces.get(fi as usize) else { continue };
                         let at = |k: usize| {
-                            m.points.get(f.v[k].point as usize).map_or(Vec3::ZERO, |p| world.transform_tiny(*p))
+                            m.points
+                                .get(f.v[k].point as usize)
+                                .map_or(Vec3::ZERO, |p| world.transform_tiny(*p))
                         };
                         let v = [at(0), at(1), at(2)];
                         tris.push(v);
@@ -182,10 +184,16 @@ impl CollideModel {
     /// The triangles whose cells a box's XZ footprint covers, ascending, each once.
     fn candidates(&self, min: Vec3, max: Vec3, out: &mut Vec<u32>) {
         out.clear();
-        if self.nx == 0 || !(min.x <= self.bounds.max.x && max.x >= self.bounds.min.x && min.z <= self.bounds.max.z && max.z >= self.bounds.min.z) {
+        if self.nx == 0
+            || !(min.x <= self.bounds.max.x
+                && max.x >= self.bounds.min.x
+                && min.z <= self.bounds.max.z
+                && max.z >= self.bounds.min.z)
+        {
             return;
         }
-        let (x0, x1, z0, z1) = (self.cell_x(min.x), self.cell_x(max.x), self.cell_z(min.z), self.cell_z(max.z));
+        let (x0, x1, z0, z1) =
+            (self.cell_x(min.x), self.cell_x(max.x), self.cell_z(min.z), self.cell_z(max.z));
         for z in z0..=z1 {
             for x in x0..=x1 {
                 let c = z * self.nx + x;
@@ -207,8 +215,10 @@ impl CollideModel {
         let mut cand = Vec::new();
         self.candidates(bb.min, bb.max, &mut cand);
         // `getcenter` and `getradius`
-        let c = Vec3::new((bb.min.x + bb.max.x) * 0.5, (bb.min.y + bb.max.y) * 0.5, (bb.min.z + bb.max.z) * 0.5);
-        let e = Vec3::new((bb.max.x - bb.min.x) * 0.5, (bb.max.y - bb.min.y) * 0.5, (bb.max.z - bb.min.z) * 0.5);
+        let c =
+            Vec3::new((bb.min.x + bb.max.x) * 0.5, (bb.min.y + bb.max.y) * 0.5, (bb.min.z + bb.max.z) * 0.5);
+        let e =
+            Vec3::new((bb.max.x - bb.min.x) * 0.5, (bb.max.y - bb.min.y) * 0.5, (bb.max.z - bb.min.z) * 0.5);
         cand.retain(|&i| self.tris.get(i as usize).is_some_and(|t| tri_box(c, e, t, full)));
         cand
     }
@@ -324,7 +334,9 @@ mod tests {
         let m = CollideModel::from_tris(floor(10.0), vec![0, 0], vec!["default".into()]);
         let hits = m.box_query(&Aabb::new(Vec3::new(-0.5, -0.5, -0.5), Vec3::new(0.5, 0.5, 0.5)), true);
         assert!(!hits.is_empty());
-        assert!(m.box_query(&Aabb::new(Vec3::new(-0.5, 1.0, -0.5), Vec3::new(0.5, 2.0, 0.5)), true).is_empty());
+        assert!(
+            m.box_query(&Aabb::new(Vec3::new(-0.5, 1.0, -0.5), Vec3::new(0.5, 2.0, 0.5)), true).is_empty()
+        );
         let (_, r) = m.ray_nearest(Vec3::new(0.3, 1.0, 0.3), Vec3::NEG_Y, 3.0).unwrap();
         assert!((r - 1.0).abs() < 1e-5);
         assert!(m.ray_nearest(Vec3::new(0.3, -1.0, 0.3), Vec3::Y, 3.0).is_none());

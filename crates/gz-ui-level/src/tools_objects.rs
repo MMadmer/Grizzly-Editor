@@ -87,7 +87,10 @@ fn confirm(ui: &Ui, editor: &Arc<Editor>, spec: ConfirmSpec, then: impl FnOnce()
 }
 
 fn selected_names(snap: &SceneState, class: ObjClass) -> Vec<String> {
-    snap.of_class(class).filter(|o| snap.is_selected(o.id) && o.flags.visible).map(|o| o.name.to_string()).collect()
+    snap.of_class(class)
+        .filter(|o| snap.is_selected(o.id) && o.flags.visible)
+        .map(|o| o.name.to_string())
+        .collect()
 }
 
 fn plural(n: usize, word: &str) -> String {
@@ -101,12 +104,27 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
     let placing = gz_ui_viewport::placing(editor);
     if gz_ui_app::local::local_section(ui, "tool_sector_edit", "Edit", true) {
         if !placing {
-            gz_ui::text::status(ui, Tone::Muted, "Meshes are added to the selected sector with Place in the viewport.");
-            if local_button_flow(ui, &[LocalButton::new("Place", "A click in the viewport adds or removes meshes")]) == Some(0) {
+            gz_ui::text::status(
+                ui,
+                Tone::Muted,
+                "Meshes are added to the selected sector with Place in the viewport.",
+            );
+            if local_button_flow(
+                ui,
+                &[LocalButton::new("Place", "A click in the viewport adds or removes meshes")],
+            ) == Some(0)
+            {
                 gz_ui_viewport::set_placing(editor, true);
             }
         }
-        if let Some(v) = local_switch_row(ui, m.create_single, "New Sector From Mesh", "A mesh picked in the viewport becomes a sector of its own", true, "") {
+        if let Some(v) = local_switch_row(
+            ui,
+            m.create_single,
+            "New Sector From Mesh",
+            "A mesh picked in the viewport becomes a sector of its own",
+            true,
+            "",
+        ) {
             run(editor, "sector_tool", "set", &[("create_single", Value::Bool(v))]);
         }
         if let Some(v) = local_switch_row(
@@ -120,12 +138,23 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             run(editor, "sector_tool", "set", &[("create_multiple", Value::Bool(v))]);
         }
         PropertyGrid::new("tools").show(ui, |g| {
-            g.row("Meshes", "What a mesh picked in the viewport does to the selected sector", PropFlags::NONE, 0, |ui| {
-                let mut cur = usize::from(!m.mesh_add);
-                if gz_ui::segmented(ui, &mut cur, &["Add", "Remove"], None) {
-                    run(editor, "sector_tool", "set", &[("mesh_mode", Value::String(if cur == 0 { "add" } else { "remove" }.into()))]);
-                }
-            });
+            g.row(
+                "Meshes",
+                "What a mesh picked in the viewport does to the selected sector",
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    let mut cur = usize::from(!m.mesh_add);
+                    if gz_ui::segmented(ui, &mut cur, &["Add", "Remove"], None) {
+                        run(
+                            editor,
+                            "sector_tool",
+                            "set",
+                            &[("mesh_mode", Value::String(if cur == 0 { "add" } else { "remove" }.into()))],
+                        );
+                    }
+                },
+            );
         });
         let creating = m.create_single || m.create_multiple;
         if let Some(v) = local_switch_row(
@@ -149,8 +178,11 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
                 LocalButton::new("Validate", "Check the sectors and report what is wrong with them"),
                 LocalButton::new("Capture Volume", "Grow the selected sector over the objects inside it")
                     .when(selected == 1, one_why),
-                LocalButton::new("Create Default", "Create the sector that holds whatever no other sector does")
-                    .when(!has_default, "The default sector is there already"),
+                LocalButton::new(
+                    "Create Default",
+                    "Create the sector that holds whatever no other sector does",
+                )
+                .when(!has_default, "The default sector is there already"),
             ],
         ) {
             Some(0) => run(editor, "sector_tool", "validate", &[]),
@@ -158,7 +190,13 @@ pub(crate) fn sector_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
             Some(2) => run(editor, "sector_tool", "create_default", &[]),
             _ => {}
         }
-        if danger(ui, "Remove Default...", "Remove the default sector", has_default, "There is no default sector") {
+        if danger(
+            ui,
+            "Remove Default...",
+            "Remove the default sector",
+            has_default,
+            "There is no default sector",
+        ) {
             let portals = gz_scene::objtools::sector::sector_portals(snap, DEFAULT_SECTOR).len();
             let mut items = vec!["Sector_DEFAULT".to_owned()];
             if portals > 0 {
@@ -205,7 +243,13 @@ pub(crate) fn portal_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
         run(editor, "portal_tool", "invert", &[]);
     }
     ui.horizontal_wrapped(|ui| {
-        if danger(ui, "Compute All...", "Remove every portal and compute them from the sectors again", true, "") {
+        if danger(
+            ui,
+            "Compute All...",
+            "Remove every portal and compute them from the sectors again",
+            true,
+            "",
+        ) {
             let spec = ConfirmSpec {
                 id: "compute_all_portals".into(),
                 title: "Compute All Portals".into(),
@@ -242,7 +286,13 @@ pub(crate) fn portal_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) 
         }
     });
     if gz_ui_app::local::local_section(ui, "tool_portal_more", "More", false)
-        && danger(ui, "Remove Duplicates...", "Remove the portals that repeat another one", portals > 0, "There are no portals")
+        && danger(
+            ui,
+            "Remove Duplicates...",
+            "Remove the portals that repeat another one",
+            portals > 0,
+            "There are no portals",
+        )
     {
         let spec = ConfirmSpec {
             id: "remove_duplicate_portals".into(),
@@ -268,7 +318,12 @@ pub(crate) fn way_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             g.row("Select", "Pick whole ways, or the points of a way", PropFlags::NONE, 0, |ui| {
                 let mut cur = usize::from(t.way_points);
                 if gz_ui::segmented(ui, &mut cur, &["Ways", "Points"], None) {
-                    run(editor, "way_tool", "mode", &[("mode", Value::String(if cur == 1 { "points" } else { "ways" }.into()))]);
+                    run(
+                        editor,
+                        "way_tool",
+                        "mode",
+                        &[("mode", Value::String(if cur == 1 { "points" } else { "ways" }.into()))],
+                    );
                 }
             });
         });
@@ -277,7 +332,14 @@ pub(crate) fn way_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
         }
     }
     if gz_ui_app::local::local_section(ui, "tool_way_links", "Links", true) {
-        if let Some(v) = local_switch_row(ui, t.auto_link, "Auto Link", "A point added to a way links to the selected point at once", true, "") {
+        if let Some(v) = local_switch_row(
+            ui,
+            t.auto_link,
+            "Auto Link",
+            "A point added to a way links to the selected point at once",
+            true,
+            "",
+        ) {
             run(editor, "way_tool", "auto_link", &[("on", Value::Bool(v))]);
         }
         let why = "Switch Select to Points first";
@@ -285,11 +347,13 @@ pub(crate) fn way_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
         let pressed = local_button_flow(
             ui,
             &[
-                LocalButton::new("Create 1-Link", "Link the selected points one way, each to the next").when(pts, why),
+                LocalButton::new("Create 1-Link", "Link the selected points one way, each to the next")
+                    .when(pts, why),
                 LocalButton::new("Create 2-Link", "Link the selected points both ways").when(pts, why),
                 LocalButton::new("Convert to 1-Link", "Make the links of the selected ways one-way"),
                 LocalButton::new("Convert to 2-Link", "Make the links of the selected ways two-way"),
-                LocalButton::new("Invert Link", "Turn the links of the selected points around").when(pts, why),
+                LocalButton::new("Invert Link", "Turn the links of the selected points around")
+                    .when(pts, why),
                 LocalButton::new("Remove Link", "Remove the links of the selected points").when(pts, why),
             ],
         );
@@ -315,20 +379,38 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
             g.row("Shape", "What a click in the viewport adds", PropFlags::NONE, 0, |ui| {
                 let mut cur = usize::from(!t.shape_sphere);
                 if gz_ui::segmented(ui, &mut cur, &["Sphere", "Box"], None) {
-                    run(editor, "shape_tool", "set", &[("shape", Value::String(if cur == 0 { "sphere" } else { "box" }.into()))]);
+                    run(
+                        editor,
+                        "shape_tool",
+                        "set",
+                        &[("shape", Value::String(if cur == 0 { "sphere" } else { "box" }.into()))],
+                    );
                 }
             });
         });
     }
     if gz_ui_app::local::local_section(ui, "tool_shape_attach", "Attach", true) {
-        if let Some(v) = local_switch_row(ui, t.attach_on_click, "Attach on Click", "A shape clicked in the viewport joins the selected shape", true, "") {
+        if let Some(v) = local_switch_row(
+            ui,
+            t.attach_on_click,
+            "Attach on Click",
+            "A shape clicked in the viewport joins the selected shape",
+            true,
+            "",
+        ) {
             run(editor, "shape_tool", "set", &[("attach_on_click", Value::Bool(v))]);
             if v {
                 gz_ui_viewport::set_placing(editor, true);
             }
         }
         let selected = selected_names(snap, ObjClass::Shape);
-        if danger(ui, "Detach Selected...", "Split the selected shapes into their parts", !selected.is_empty(), "Select shapes first") {
+        if danger(
+            ui,
+            "Detach Selected...",
+            "Split the selected shapes into their parts",
+            !selected.is_empty(),
+            "Select shapes first",
+        ) {
             let total = selected.len();
             let spec = ConfirmSpec {
                 id: "detach_shapes".into(),
@@ -345,10 +427,19 @@ pub(crate) fn shape_tool(ui: &mut Ui, editor: &Arc<Editor>, snap: &SceneState) {
         }
     }
     if gz_ui_app::local::local_section(ui, "tool_shape_bound", "Level Bound", true) {
-        if let Some(v) = local_switch_row(ui, t.edit_level_bound, "Edit Level Bound", "Show the box the level is bound by and edit it", true, "") {
+        if let Some(v) = local_switch_row(
+            ui,
+            t.edit_level_bound,
+            "Edit Level Bound",
+            "Show the box the level is bound by and edit it",
+            true,
+            "",
+        ) {
             run(editor, "shape_tool", "edit_level_bound", &[("on", Value::Bool(v))]);
         }
-        let has = snap.of_class(ObjClass::Shape).any(|o| matches!(&o.data, ObjData::Shape(s) if s.usage == SHAPE_LEVEL_BOUND));
+        let has = snap
+            .of_class(ObjClass::Shape)
+            .any(|o| matches!(&o.data, ObjData::Shape(s) if s.usage == SHAPE_LEVEL_BOUND));
         if local_button_flow(
             ui,
             &[LocalButton::new("Recalculate", "Fit the level bound to the level again")

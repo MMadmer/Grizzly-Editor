@@ -15,7 +15,9 @@
 use std::sync::Arc;
 
 use glam::{Vec3, Vec4};
-use gz_fmt_level::{AiMapNode, AiParams, INVALID_NODE, PackedPos, SceneAiMap, SceneAiNode, node_flags as nf, pv_compress};
+use gz_fmt_level::{
+    AiMapNode, AiParams, INVALID_NODE, PackedPos, SceneAiMap, SceneAiNode, node_flags as nf, pv_compress,
+};
 use rayon::prelude::*;
 
 use super::collide::CollideModel;
@@ -372,7 +374,11 @@ impl AiWork {
     /// `FindNode(vAt, eps)`: the first node of the point's bucket that close.
     #[must_use]
     pub fn find_node(&self, at: Vec3, eps: f32) -> Option<u32> {
-        self.hash.bucket(at)?.iter().copied().find(|&i| self.nodes.get(i as usize).is_some_and(|n| similar(at, n.pos, eps)))
+        self.hash
+            .bucket(at)?
+            .iter()
+            .copied()
+            .find(|&i| self.nodes.get(i as usize).is_some_and(|n| similar(at, n.pos, eps)))
     }
 
     /// The order-dependent part of `BuildNode`: a node there already is returned, a new one
@@ -391,7 +397,14 @@ impl AiWork {
     }
 
     /// `BuildNode(vFrom, vAt, bIC, bSuperIC)`.
-    pub fn build_node(&mut self, g: &Gen<'_>, from: Vec3, at: Vec3, bic: bool, super_ic: bool) -> Option<u32> {
+    pub fn build_node(
+        &mut self,
+        g: &Gen<'_>,
+        from: Vec3,
+        at: Vec3,
+        bic: bool,
+        super_ic: bool,
+    ) -> Option<u32> {
         let at = snap_xz(at, self.ps());
         if !(bic || g.can_travel(from, at)) {
             return None;
@@ -449,7 +462,8 @@ impl AiWork {
                     reach(to).then_some((i, s, from, to))
                 })
                 .collect();
-            let specs: Vec<Option<AiMapNode>> = jobs.par_iter().map(|&(_, _, from, to)| g.spec(from, to, bic)).collect();
+            let specs: Vec<Option<AiMapNode>> =
+                jobs.par_iter().map(|&(_, _, from, to)| g.spec(from, to, bic)).collect();
             let mut ahead: Vec<Option<usize>> = vec![None; (end - k) * 4];
             for (j, &(i, s, _, _)) in jobs.iter().enumerate() {
                 if let Some(slot) = ahead.get_mut((i - k) * 4 + s) {
@@ -500,7 +514,12 @@ impl AiWork {
     }
 
     /// `BuildNodes(bFromSelectedOnly)`: the generation over the map's box.
-    pub fn generate(&mut self, g: &Gen<'_>, selected_only: bool, progress: &(dyn Fn(usize, usize) -> bool + Sync)) -> Flood {
+    pub fn generate(
+        &mut self,
+        g: &Gen<'_>,
+        selected_only: bool,
+        progress: &(dyn Fn(usize, usize) -> bool + Sync),
+    ) -> Flood {
         self.flood(g, false, selected_only, None, progress)
     }
 
@@ -523,7 +542,14 @@ impl AiWork {
 
     /// `AddNode(pos, bIC, bAutoLink, sz)`: one node, selected and linked when asked, or the
     /// brush for a size over one.
-    pub fn add_node(&mut self, g: &Gen<'_>, pos: Vec3, bic: bool, auto_link: bool, sz: u32) -> Result<usize, &'static str> {
+    pub fn add_node(
+        &mut self,
+        g: &Gen<'_>,
+        pos: Vec3,
+        bic: bool,
+        auto_link: bool,
+        sz: u32,
+    ) -> Result<usize, &'static str> {
         if sz <= 1 {
             let Some(n) = self.build_node(g, pos, pos, bic, true) else { return Err("Can't create node.") };
             if let Some(node) = self.nodes.get_mut(n as usize) {
@@ -641,13 +667,19 @@ impl AiWork {
                 let su = s as usize;
                 match mode {
                     LinkMode::Add => {
-                        if self.selected(su) && let Some(n) = self.nodes.get_mut(t) && n.links[k] != Some(s) {
+                        if self.selected(su)
+                            && let Some(n) = self.nodes.get_mut(t)
+                            && n.links[k] != Some(s)
+                        {
                             n.links[k] = Some(s);
                             changed += 1;
                         }
                     }
                     LinkMode::Remove => {
-                        if self.selected(su) && let Some(n) = self.nodes.get_mut(t) && n.links[k].is_some() {
+                        if self.selected(su)
+                            && let Some(n) = self.nodes.get_mut(t)
+                            && n.links[k].is_some()
+                        {
                             n.links[k] = None;
                             changed += 1;
                         }
@@ -858,7 +890,8 @@ impl AiWork {
                 if n.flags & nf::SELECTED == 0 {
                     return None;
                 }
-                let (left, fwd, right, back) = (get(n.links[0]), get(n.links[1]), get(n.links[2]), get(n.links[3]));
+                let (left, fwd, right, back) =
+                    (get(n.links[0]), get(n.links[1]), get(n.links[2]), get(n.links[3]));
                 // (corner of N, then the corners of the neighbours meeting it)
                 let avg = |rf: Vec3, picks: &[Option<Vec3>]| -> Vec3 {
                     let mut c = 1.0f32;

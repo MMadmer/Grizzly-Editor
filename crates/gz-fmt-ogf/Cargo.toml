@@ -19,3 +19,6 @@ glam.workspace = true
 smol_str.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+gz-corpus.workspace = true

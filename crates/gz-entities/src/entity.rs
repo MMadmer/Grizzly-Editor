@@ -137,6 +137,10 @@ struct Known {
     /// The packets it was read from, until it is changed.
     raw_spawn: Option<Arc<[u8]>>,
     raw_update: Option<Arc<[u8]>>,
+    /// What the state block holds after the fields its class reads: bytes an older script's
+    /// `STATE_Write` added (Call of Pripyat's zones write a time marker the spawn compiler left
+    /// in Dead Air's `all.spawn`). The engine skips them by the size word; they are written back.
+    tail: Arc<[u8]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,7 +291,14 @@ impl Entity {
         // a group template is named after its monster section, as the C++ names it
         let (header, object) = construct(info, section, settings)?;
         Ok(Self {
-            inner: Inner::Known(Box::new(Known { header, info, object, raw_spawn: None, raw_update: None })),
+            inner: Inner::Known(Box::new(Known {
+                header,
+                info,
+                object,
+                raw_spawn: None,
+                raw_update: None,
+                tail: Arc::from([]),
+            })),
         })
     }
 
@@ -366,6 +377,10 @@ impl Entity {
         }
         let stats = r.text_stats();
         header.text = stats.encoding();
+        let tail: Arc<[u8]> = match &bytes {
+            Some(b) => Arc::from(b.get(r.r_tell()..).unwrap_or(&[])),
+            None => Arc::from([]),
+        };
 
         // A packet of today's layout must write back to its own bytes, or it is kept as bytes.
         if let Some(b) = &bytes
@@ -375,12 +390,28 @@ impl Entity {
             let state = b.get(state_at..).unwrap_or(&[]);
             let mut w = NetWriter::new(header.text);
             state_write(&object, &header, info.class, &mut w);
+            w.w(&tail);
             if usize::from(size) != state.len() + 2 || w.bytes() != state {
-                return Ok(opaque(header, OpaqueReason::Lossy, String::new()));
+                let out = w.bytes();
+                let at =
+                    out.iter().zip(state).position(|(a, b)| a != b).unwrap_or(out.len().min(state.len()));
+                let detail = format!(
+                    "state of {} bytes written as {}, first difference at byte {at}",
+                    state.len(),
+                    out.len()
+                );
+                return Ok(opaque(header, OpaqueReason::Lossy, detail));
             }
         }
         Ok(Self {
-            inner: Inner::Known(Box::new(Known { header, info, object, raw_spawn: bytes, raw_update: None })),
+            inner: Inner::Known(Box::new(Known {
+                header,
+                info,
+                object,
+                raw_spawn: bytes,
+                raw_update: None,
+                tail,
+            })),
         })
     }
 
@@ -415,6 +446,7 @@ impl Entity {
                 let mut w = new_writer(&k.header, false);
                 let at = write_header(&k.header, &mut w);
                 state_write(&k.object, &k.header, k.info.class, &mut w);
+                w.w(&k.tail);
                 close_state(&mut w, at);
                 w.into_bytes()
             }

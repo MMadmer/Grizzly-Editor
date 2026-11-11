@@ -95,9 +95,11 @@ fn render_body(ui: &mut Ui, editor: &Arc<Editor>) {
     });
     local_submenu(ui, "Fill Mode", Icon::None, true, |ui| {
         let wire_keys = keys::keys_of(editor, Act::Wireframe);
-        for (fill, label, k) in
-            [(Fill::Point, "Point", ""), (Fill::Wireframe, "Wireframe", wire_keys.as_str()), (Fill::Solid, "Solid", "")]
-        {
+        for (fill, label, k) in [
+            (Fill::Point, "Point", ""),
+            (Fill::Wireframe, "Wireframe", wire_keys.as_str()),
+            (Fill::Solid, "Solid", ""),
+        ] {
             if check(ui, label, k, v.fill == fill) {
                 vp.with(|s| s.view.fill = fill);
             }
@@ -150,8 +152,11 @@ fn gpu_body(ui: &mut Ui, editor: &Arc<Editor>) {
     ui.separator();
     let hint = gpu.hint(editor);
     for h in gz_app::gpu::DriverHint::ALL {
-        if menu_item(ui, h.title(), MenuItem { selected: h == hint, enabled: gpu.hint_known(), ..MenuItem::default() })
-        {
+        if menu_item(
+            ui,
+            h.title(),
+            MenuItem { selected: h == hint, enabled: gpu.hint_known(), ..MenuItem::default() },
+        ) {
             gpu.set_hint(editor, h);
         }
     }

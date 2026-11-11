@@ -16,3 +16,6 @@ gz-chunk.workspace = true
 thiserror.workspace = true
 lewton.workspace = true
 vorbis_rs.workspace = true
+
+[dev-dependencies]
+gz-corpus.workspace = true

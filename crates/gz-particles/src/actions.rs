@@ -35,35 +35,159 @@ pub(crate) struct Ctx<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Op {
-    Avoid { local: Domain, world: Domain, look_ahead: f32, magnitude: f32, epsilon: f32 },
-    Bounce { local: Domain, world: Domain, one_minus_friction: f32, resilience: f32, cutoff_sqr: f32 },
-    CopyVertexB { copy_pos: u32 },
-    Damping { damping: Vec3, vlow_sqr: f32, vhigh_sqr: f32 },
-    Explosion { local: Vec3, center: Vec3, velocity: f32, magnitude: f32, stdev: f32, age: f32, epsilon: f32 },
-    Follow { magnitude: f32, epsilon: f32, max_radius: f32 },
-    Gravitate { magnitude: f32, epsilon: f32, max_radius: f32 },
-    Gravity { direction: Vec3 },
-    Jet { center_l: Vec3, acc_l: Domain, center: Vec3, acc: Domain, magnitude: f32, epsilon: f32, max_radius: f32 },
-    KillOld { age_limit: f32, kill_less_than: u32 },
-    MatchVelocity { magnitude: f32, epsilon: f32, max_radius: f32 },
+    Avoid {
+        local: Domain,
+        world: Domain,
+        look_ahead: f32,
+        magnitude: f32,
+        epsilon: f32,
+    },
+    Bounce {
+        local: Domain,
+        world: Domain,
+        one_minus_friction: f32,
+        resilience: f32,
+        cutoff_sqr: f32,
+    },
+    CopyVertexB {
+        copy_pos: u32,
+    },
+    Damping {
+        damping: Vec3,
+        vlow_sqr: f32,
+        vhigh_sqr: f32,
+    },
+    Explosion {
+        local: Vec3,
+        center: Vec3,
+        velocity: f32,
+        magnitude: f32,
+        stdev: f32,
+        age: f32,
+        epsilon: f32,
+    },
+    Follow {
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    Gravitate {
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    Gravity {
+        direction: Vec3,
+    },
+    Jet {
+        center_l: Vec3,
+        acc_l: Domain,
+        center: Vec3,
+        acc: Domain,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    KillOld {
+        age_limit: f32,
+        kill_less_than: u32,
+    },
+    MatchVelocity {
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
     Move,
-    OrbitLine { p_l: Vec3, axis_l: Vec3, p: Vec3, axis: Vec3, magnitude: f32, epsilon: f32, max_radius: f32 },
-    OrbitPoint { local: Vec3, center: Vec3, magnitude: f32, epsilon: f32, max_radius: f32 },
-    RandomAccel { local: Domain, world: Domain },
-    RandomDisplace { local: Domain, world: Domain },
-    RandomVelocity { local: Domain, world: Domain },
-    Restore { time_left: f32 },
-    Scatter { local: Vec3, center: Vec3, magnitude: f32, epsilon: f32, max_radius: f32 },
-    Sink { kill_inside: u32, local: Domain, world: Domain },
-    SinkVelocity { kill_inside: u32, local: Domain, world: Domain },
+    OrbitLine {
+        p_l: Vec3,
+        axis_l: Vec3,
+        p: Vec3,
+        axis: Vec3,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    OrbitPoint {
+        local: Vec3,
+        center: Vec3,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    RandomAccel {
+        local: Domain,
+        world: Domain,
+    },
+    RandomDisplace {
+        local: Domain,
+        world: Domain,
+    },
+    RandomVelocity {
+        local: Domain,
+        world: Domain,
+    },
+    Restore {
+        time_left: f32,
+    },
+    Scatter {
+        local: Vec3,
+        center: Vec3,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    Sink {
+        kill_inside: u32,
+        local: Domain,
+        world: Domain,
+    },
+    SinkVelocity {
+        kill_inside: u32,
+        local: Domain,
+        world: Domain,
+    },
     Source(Box<SourceOp>),
-    SpeedLimit { min_speed: f32, max_speed: f32 },
-    TargetColor { color: Vec3, alpha: f32, scale: f32, time_from: f32, time_to: f32 },
-    TargetSize { size: Vec3, scale: Vec3 },
-    TargetRotate { rot: Vec3, scale: f32 },
-    TargetVelocity { local: Vec3, velocity: Vec3, scale: f32 },
-    Vortex { center_l: Vec3, axis_l: Vec3, center: Vec3, axis: Vec3, magnitude: f32, epsilon: f32, max_radius: f32 },
-    Turbulence { frequency: f32, octaves: i32, magnitude: f32, epsilon: f32, offset: Vec3, age: f32 },
+    SpeedLimit {
+        min_speed: f32,
+        max_speed: f32,
+    },
+    TargetColor {
+        color: Vec3,
+        alpha: f32,
+        scale: f32,
+        time_from: f32,
+        time_to: f32,
+    },
+    TargetSize {
+        size: Vec3,
+        scale: Vec3,
+    },
+    TargetRotate {
+        rot: Vec3,
+        scale: f32,
+    },
+    TargetVelocity {
+        local: Vec3,
+        velocity: Vec3,
+        scale: f32,
+    },
+    Vortex {
+        center_l: Vec3,
+        axis_l: Vec3,
+        center: Vec3,
+        axis: Vec3,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    Turbulence {
+        frequency: f32,
+        octaves: i32,
+        magnitude: f32,
+        epsilon: f32,
+        offset: Vec3,
+        age: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -97,7 +221,13 @@ impl Action {
         let op = match (&a.kind, &a.params) {
             (_, P::Avoid { position, look_ahead, magnitude, epsilon }) => {
                 let d = Domain::from(position);
-                Op::Avoid { local: d, world: d, look_ahead: *look_ahead, magnitude: *magnitude, epsilon: *epsilon }
+                Op::Avoid {
+                    local: d,
+                    world: d,
+                    look_ahead: *look_ahead,
+                    magnitude: *magnitude,
+                    epsilon: *epsilon,
+                }
             }
             (_, P::Bounce { position, one_minus_friction, resilience, cutoff_sqr }) => {
                 let d = Domain::from(position);
@@ -237,7 +367,7 @@ impl Action {
             (_, P::SpeedLimit { min_speed, max_speed }) => {
                 Op::SpeedLimit { min_speed: *min_speed, max_speed: *max_speed }
             }
-            (_, P::TargetColor { color, alpha, scale, time_from, time_to }) => Op::TargetColor {
+            (_, P::TargetColor { color, alpha, scale, time_from, time_to, .. }) => Op::TargetColor {
                 color: *color,
                 alpha: *alpha,
                 scale: *scale,
@@ -249,7 +379,9 @@ impl Action {
             (ActionKind::TargetRotate | ActionKind::TargetRotateD, P::Target { value, scale }) => {
                 Op::TargetRotate { rot: *value, scale: *scale }
             }
-            (_, P::Target { value, scale }) => Op::TargetVelocity { local: *value, velocity: *value, scale: *scale },
+            (_, P::Target { value, scale }) => {
+                Op::TargetVelocity { local: *value, velocity: *value, scale: *scale }
+            }
             (_, P::Turbulence { frequency, octaves, magnitude, epsilon, offset }) => Op::Turbulence {
                 frequency: *frequency,
                 octaves: *octaves,
@@ -281,9 +413,15 @@ impl Action {
     /// `CParticleManager::Transform`: the world copies from the local ones; a source's parent
     /// velocity from the emitter's.
     pub(crate) fn transform(&mut self, full: &Mat4, vel: Vec3) {
-        let m = if self.flags & ALLOW_ROTATE != 0 { *full } else { Mat4::from_translation(full.w_axis.truncate()) };
+        let m = if self.flags & ALLOW_ROTATE != 0 {
+            *full
+        } else {
+            Mat4::from_translation(full.w_axis.truncate())
+        };
         match &mut self.op {
-            Op::Avoid { local, world, .. } | Op::Bounce { local, world, .. } | Op::Sink { local, world, .. } => {
+            Op::Avoid { local, world, .. }
+            | Op::Bounce { local, world, .. }
+            | Op::Sink { local, world, .. } => {
                 *world = Domain::transformed(local, &m);
             }
             Op::Explosion { local, center, .. }
@@ -601,11 +739,14 @@ impl Action {
                 for m in &mut e.list {
                     let pv = m.pos + *offset * *age;
                     let d = cx.noise.fractalsum3(pv, *frequency, *octaves);
-                    let dx = (cx.noise.fractalsum3(pv + Vec3::new(*epsilon, 0.0, 0.0), *frequency, *octaves) - d)
+                    let dx = (cx.noise.fractalsum3(pv + Vec3::new(*epsilon, 0.0, 0.0), *frequency, *octaves)
+                        - d)
                         * *magnitude;
-                    let dy = (cx.noise.fractalsum3(pv + Vec3::new(0.0, *epsilon, 0.0), *frequency, *octaves) - d)
+                    let dy = (cx.noise.fractalsum3(pv + Vec3::new(0.0, *epsilon, 0.0), *frequency, *octaves)
+                        - d)
                         * *magnitude;
-                    let dz = (cx.noise.fractalsum3(pv + Vec3::new(0.0, 0.0, *epsilon), *frequency, *octaves) - d)
+                    let dz = (cx.noise.fractalsum3(pv + Vec3::new(0.0, 0.0, *epsilon), *frequency, *octaves)
+                        - d)
                         * *magnitude;
                     let before = m.vel.length();
                     m.vel += Vec3::new(dx, dy, dz);
@@ -634,7 +775,9 @@ fn plane_inverse(u: Vec3, v: Vec3) -> (Vec3, Vec3) {
     let wy = u.z * v.x - u.x * v.z;
     let wz = u.x * v.y - u.y * v.x;
     let det = 1.0
-        / (wz * u.x * v.y - wz * u.y * v.x - u.z * wx * v.y - u.x * v.z * wy + v.z * wx * u.y + u.z * v.x * wy);
+        / (wz * u.x * v.y - wz * u.y * v.x - u.z * wx * v.y - u.x * v.z * wy
+            + v.z * wx * u.y
+            + u.z * v.x * wy);
     let s1 = Vec3::new(v.y * wz - v.z * wy, v.z * wx - v.x * wz, v.x * wy - v.y * wx) * det;
     let s2 = Vec3::new(u.y * wz - u.z * wy, u.z * wx - u.x * wz, u.x * wy - u.y * wx) * -det;
     (s1, s2)
@@ -690,8 +833,12 @@ fn avoid(e: &mut Store, d: &Domain, look_ahead: f32, magnitude: f32, epsilon: f3
                     let fofs = un * un.dot(foffset) - foffset;
                     // oracle: the fourth edge repeats the third one
                     let gofs = un * un.dot(foffset) - foffset;
-                    let (ud, vd, fd, gd) =
-                        (uofs.length_squared(), vofs.length_squared(), fofs.length_squared(), gofs.length_squared());
+                    let (ud, vd, fd, gd) = (
+                        uofs.length_squared(),
+                        vofs.length_squared(),
+                        fofs.length_squared(),
+                        gofs.length_squared(),
+                    );
                     if ud <= vd && ud <= fd && ud <= gd {
                         uofs
                     } else if vd <= fd && vd <= gd {
@@ -938,7 +1085,11 @@ mod tests {
     #[test]
     fn move_gravity_and_damping() {
         let mut s = store(2);
-        run(&stored(ActionKind::Gravity, ActionParams::Gravity { direction: Vec3::new(0.0, -10.0, 0.0) }), &mut s, 0.5);
+        run(
+            &stored(ActionKind::Gravity, ActionParams::Gravity { direction: Vec3::new(0.0, -10.0, 0.0) }),
+            &mut s,
+            0.5,
+        );
         assert_eq!(s.list[0].vel, Vec3::new(1.0, -5.0, 0.0));
         run(&stored(ActionKind::Move, ActionParams::Move), &mut s, 0.5);
         // posB is where it was, pos moved by vel * dt, age grew
@@ -960,14 +1111,22 @@ mod tests {
     #[test]
     fn kill_old_removes_by_age_and_sets_the_limit() {
         let mut s = store(5);
-        let tm = run(&stored(ActionKind::KillOld, ActionParams::KillOld { age_limit: 2.5, kill_less_than: 0 }), &mut s, 0.1);
+        let tm = run(
+            &stored(ActionKind::KillOld, ActionParams::KillOld { age_limit: 2.5, kill_less_than: 0 }),
+            &mut s,
+            0.1,
+        );
         assert_eq!(tm, 2.5);
         // ages 0, 1, 2 stay; 3 and 4 go
         let mut ages: Vec<f32> = s.list.iter().map(|m| m.age).collect();
         ages.sort_by(f32::total_cmp);
         assert_eq!(ages, vec![0.0, 1.0, 2.0]);
         let mut s = store(5);
-        run(&stored(ActionKind::KillOld, ActionParams::KillOld { age_limit: 2.5, kill_less_than: 1 }), &mut s, 0.1);
+        run(
+            &stored(ActionKind::KillOld, ActionParams::KillOld { age_limit: 2.5, kill_less_than: 1 }),
+            &mut s,
+            0.1,
+        );
         assert_eq!(s.list.len(), 2);
     }
 
@@ -977,7 +1136,14 @@ mod tests {
         run(
             &stored(
                 ActionKind::TargetColor,
-                ActionParams::TargetColor { color: Vec3::ONE, alpha: 0.0, scale: 1.0, time_from: 0.0, time_to: 1.0 },
+                ActionParams::TargetColor {
+                    color: Vec3::ONE,
+                    alpha: 0.0,
+                    scale: 1.0,
+                    time_from: 0.0,
+                    time_to: 1.0,
+                    times_stored: 2,
+                },
             ),
             &mut s,
             0.5,
@@ -988,7 +1154,10 @@ mod tests {
         assert_eq!((c >> 16) & 0xff, 191);
         let mut s = store(1);
         run(
-            &stored(ActionKind::TargetSize, ActionParams::TargetSize { size: Vec3::splat(3.0), scale: Vec3::new(0.5, 1.0, 0.0) }),
+            &stored(
+                ActionKind::TargetSize,
+                ActionParams::TargetSize { size: Vec3::splat(3.0), scale: Vec3::new(0.5, 1.0, 0.0) },
+            ),
             &mut s,
             1.0,
         );
@@ -1031,7 +1200,13 @@ mod tests {
         run(
             &stored(
                 ActionKind::Vortex,
-                ActionParams::Axis { point: Vec3::ZERO, axis: Vec3::Y, magnitude: 1.0, epsilon: 0.0, max_radius: 1e9 },
+                ActionParams::Axis {
+                    point: Vec3::ZERO,
+                    axis: Vec3::Y,
+                    magnitude: 1.0,
+                    epsilon: 0.0,
+                    max_radius: 1e9,
+                },
             ),
             &mut s,
             0.25,

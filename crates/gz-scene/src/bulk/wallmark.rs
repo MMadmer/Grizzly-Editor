@@ -125,10 +125,7 @@ impl Wallmarks {
         if version != 3 && version != WM_VERSION {
             return Err(unsupported());
         }
-        let mut out = Self {
-            flags: r.need_chunk(WM_CHUNK_FLAGS)?.reader().r_u32()?,
-            ..Self::default()
-        };
+        let mut out = Self { flags: r.need_chunk(WM_CHUNK_FLAGS)?.reader().r_u32()?, ..Self::default() };
         let params = r.need_chunk(WM_CHUNK_PARAMS)?;
         let mut p = params.reader();
         out.width = p.r_f32()?;
@@ -162,10 +159,13 @@ impl Wallmarks {
                     let max = read_vec3(&mut q)?;
                     let center = read_vec3(&mut q)?;
                     let radius = q.r_f32()?;
-                    let (w, h, rr) = if sized { (q.r_f32()?, q.r_f32()?, q.r_f32()?) } else { (1.0, 1.0, 1.0) };
+                    let (w, h, rr) =
+                        if sized { (q.r_f32()?, q.r_f32()?, q.r_f32()?) } else { (1.0, 1.0, 1.0) };
                     let n = q.r_u32()? as usize;
                     if n.saturating_mul(LIT) > q.elapsed() {
-                        return Err(SceneError::load("Static Wallmark: a mark runs past the end of its chunk."));
+                        return Err(SceneError::load(
+                            "Static Wallmark: a mark runs past the end of its chunk.",
+                        ));
                     }
                     let mut verts = Vec::with_capacity(n);
                     for _ in 0..n {
@@ -178,7 +178,16 @@ impl Wallmarks {
                     if n > MAX_VERTICES {
                         continue;
                     }
-                    slot.items.push(Mark { flags, bbox: Aabb::new(min, max), center, radius, w, h, r: rr, verts: verts.into() });
+                    slot.items.push(Mark {
+                        flags,
+                        bbox: Aabb::new(min, max),
+                        center,
+                        radius,
+                        w,
+                        h,
+                        r: rr,
+                        verts: verts.into(),
+                    });
                 }
                 out.slots.push(slot);
             }
@@ -358,7 +367,11 @@ impl Wallmarks {
                 si
             }
             None => {
-                self.slots.push(Slot { shader: SmolStr::new(shader), texture: SmolStr::new(texture), items: Vec::new() });
+                self.slots.push(Slot {
+                    shader: SmolStr::new(shader),
+                    texture: SmolStr::new(texture),
+                    items: Vec::new(),
+                });
                 self.slots.len() - 1
             }
         };
@@ -493,7 +506,16 @@ pub fn build_mark(hit: [Vec3; 3], contact: Vec3, around: &[[Vec3; 3]], lay: &Lay
     let center = bbox.center();
     let radius = xr::dist_sqr(center, bbox.max).sqrt();
     bbox.grow(EPS_L);
-    Ok(Mark { flags: SELECTED, bbox, center, radius, w: lay.width, h: lay.height, r: lay.rotate, verts: out.into() })
+    Ok(Mark {
+        flags: SELECTED,
+        bbox,
+        center,
+        radius,
+        w: lay.width,
+        h: lay.height,
+        r: lay.rotate,
+        verts: out.into(),
+    })
 }
 
 /// The scene objects a mark is laid on: the scene's snap list when it is used (`GetSnapList(false)`
@@ -532,7 +554,10 @@ pub fn ray_triangle(
             continue;
         }
         let Some(t) = lo.tri(hit.tri) else { continue };
-        best = Some((hit.t, [world.transform_tiny(t[0]), world.transform_tiny(t[1]), world.transform_tiny(t[2])]));
+        best = Some((
+            hit.t,
+            [world.transform_tiny(t[0]), world.transform_tiny(t[1]), world.transform_tiny(t[2])],
+        ));
     }
     best
 }
@@ -556,7 +581,8 @@ pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb)
         found.sort_unstable();
         for t in found {
             let Some(tri) = lo.tri(t) else { continue };
-            let w = [world.transform_tiny(tri[0]), world.transform_tiny(tri[1]), world.transform_tiny(tri[2])];
+            let w =
+                [world.transform_tiny(tri[0]), world.transform_tiny(tri[1]), world.transform_tiny(tri[2])];
             if xr::tri_box(c, e, &w, true) {
                 out.push(w);
             }
@@ -589,7 +615,14 @@ mod tests {
     use super::*;
 
     fn lay() -> Lay {
-        Lay { width: 1.0, height: 1.0, rotate: 0.0, axis_align: true, camera_top: Vec3::Y, camera_right: Vec3::X }
+        Lay {
+            width: 1.0,
+            height: 1.0,
+            rotate: 0.0,
+            axis_align: true,
+            camera_top: Vec3::Y,
+            camera_right: Vec3::X,
+        }
     }
 
     /// Two faces of a box corner at the origin: the floor (y = 0, x and z > 0) and a wall

@@ -564,8 +564,10 @@ async fn group_thumbnail(ed: &Arc<Editor>) -> Reply {
     if gd.reference.is_empty() {
         return Err(CmdError::invalid(format!("ERROR: '{}' - has empty reference.", group.name)));
     }
-    let objects: Vec<String> = gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
-    let image = crate::service::capture_preview(ed).await.map_err(|_| CmdError::invalid("Can't make screenshot."))?;
+    let objects: Vec<String> =
+        gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
+    let image =
+        crate::service::capture_preview(ed).await.map_err(|_| CmdError::invalid("Can't make screenshot."))?;
     let rel = gd.reference.replace('/', "\\");
     let dir = svc.root.join("rawdata").join("groups");
     let (group_file, thm_file) = (dir.join(format!("{rel}.group")), dir.join(format!("{rel}.thm")));
@@ -582,7 +584,8 @@ async fn group_thumbnail(ed: &Arc<Editor>) -> Reply {
             }
             let square = gz_fmt_tex::Image { width: side, height: side, rgba: square };
             let t = gz_fmt_tex::THUMB_SIDE;
-            let small = gz_fmt_tex::resize(&square, t, t, gz_fmt_tex::MipFilter::Box).map_err(|e| e.to_string())?;
+            let small =
+                gz_fmt_tex::resize(&square, t, t, gz_fmt_tex::MipFilter::Box).map_err(|e| e.to_string())?;
             let bytes = gz_fmt_tex::write_group_thm(&gz_fmt_tex::GroupThm { pixels: small.rgba, objects })
                 .map_err(|e| e.to_string())?;
             if let Some(d) = thm.parent() {

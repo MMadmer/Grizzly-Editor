@@ -925,7 +925,11 @@ pub(crate) fn upload_texture_to(
             let (lw, lh) = data.level_size(mip as u32 + skip);
             let (row, rows) = level_layout(data.format, lw, lh);
             let extent = if data.format.is_block() {
-                wgpu::Extent3d { width: lw.div_ceil(4) * 4, height: lh.div_ceil(4) * 4, depth_or_array_layers: 1 }
+                wgpu::Extent3d {
+                    width: lw.div_ceil(4) * 4,
+                    height: lh.div_ceil(4) * 4,
+                    depth_or_array_layers: 1,
+                }
             } else {
                 wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 }
             };
@@ -937,7 +941,11 @@ pub(crate) fn upload_texture_to(
                     aspect: wgpu::TextureAspect::All,
                 },
                 level,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rows) },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(rows),
+                },
                 extent,
             );
         }
@@ -1096,7 +1104,8 @@ mod tests {
         let m3 = a.material(MaterialDesc::textured(EditorMaterial::AlphaTest, "x"));
         assert_eq!(m1, m2);
         assert_ne!(m1, m3);
-        assert_eq!(a.stats().materials, 3);
+        // the placeholder's grey is made with the table: two distinct ones and it
+        assert_eq!(a.stats().materials, 3 + 1);
     }
 
     #[test]

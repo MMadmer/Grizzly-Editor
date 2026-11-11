@@ -17,7 +17,14 @@ use crate::call;
 /// The four bakes: the command id, the C++-table id it is listed under, the menu row, the face's
 /// name, the editor command and what a failure is called.
 const BAKES: [(&str, u32, &str, &str, &str, &str); 4] = [
-    ("COMMAND_MOD_BAKE_SPAWN", 128, "Spawn Layer...", "Bake Spawn Layer", "mod_export_spawn", "The spawn layer was not written"),
+    (
+        "COMMAND_MOD_BAKE_SPAWN",
+        128,
+        "Spawn Layer...",
+        "Bake Spawn Layer",
+        "mod_export_spawn",
+        "The spawn layer was not written",
+    ),
     (
         "COMMAND_MOD_BAKE_XCFORM",
         129,
@@ -34,7 +41,14 @@ const BAKES: [(&str, u32, &str, &str, &str, &str); 4] = [
         "mod_export_ogf_probe",
         "The visual overlay was not written",
     ),
-    ("COMMAND_MOD_BAKE_CUT", 131, "Level Cut...", "Bake Level Cut", "mod_export_cut", "The level cut was not written"),
+    (
+        "COMMAND_MOD_BAKE_CUT",
+        131,
+        "Level Cut...",
+        "Bake Level Cut",
+        "mod_export_cut",
+        "The level cut was not written",
+    ),
 ];
 
 fn num(reply: &Value, key: &str) -> i64 {
@@ -88,7 +102,10 @@ fn report(command: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
             if let Some(list) = reply.get("warnings").and_then(Value::as_array) {
                 warnings.extend(list.iter().filter_map(Value::as_str).map(str::to_owned));
             }
-            (format!("The spawn layer holds {} op(s) of the selection.", num(reply, "exported")), parent(&path))
+            (
+                format!("The spawn layer holds {} op(s) of the selection.", num(reply, "exported")),
+                parent(&path),
+            )
         }
         "mod_export_xcform" => {
             let path = text(reply, "path");
@@ -158,12 +175,19 @@ pub(crate) fn install(b: &mut ShellBuilder) {
     let (group, order) = crate::menu::mod_menu_slot(crate::menu::BAKE_SCENE_LAYER).unwrap_or((1, 3));
     for (k, (id, cpp_id, row, label, command, failed)) in BAKES.into_iter().enumerate() {
         b.command(
-            UiCommand::new(id, "Mod", label, Icon::Level, move |cx: &mut DocCx<'_>| bake(cx.editor, command, failed))
-                .enabled(has_project),
+            UiCommand::new(id, "Mod", label, Icon::Level, move |cx: &mut DocCx<'_>| {
+                bake(cx.editor, command, failed)
+            })
+            .enabled(has_project),
         );
         b.cpp_command(
-            CppCommand::new(cpp_id, id, &format!("Mod\\Bake Scene Layer\\{}", row.trim_end_matches('.')), CppAction::Ui)
-                .face("Mod", label, Icon::Level),
+            CppCommand::new(
+                cpp_id,
+                id,
+                &format!("Mod\\Bake Scene Layer\\{}", row.trim_end_matches('.')),
+                CppAction::Ui,
+            )
+            .face("Mod", label, Icon::Level),
         );
         b.menu_entry(MenuEntry {
             menu: SmolStr::new("Mod"),

@@ -966,7 +966,8 @@ mod tests {
         let l = lines(&cat, &n);
         assert_eq!(l.len(), 3);
         assert_eq!(l.get(1).map(|x| x.key.as_str()), Some("Not b"));
-        assert_eq!(l.get(2).map(|x| x.value.as_str()), Some("+3 more"));
+        // four lines, three shown: two of them behind the last (NqLayout.cpp `Lines`)
+        assert_eq!(l.get(2).map(|x| x.value.as_str()), Some("+2 more"));
         assert_eq!(cond_key("Has money", true), "Not has money");
         assert_eq!(cond_key("NPC alive", true), "Not NPC alive");
     }

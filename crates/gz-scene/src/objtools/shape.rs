@@ -105,7 +105,11 @@ pub fn detach_selected(state: &SceneState) -> Result<Outcome, CmdError> {
             };
             let name = unique_after(state, &o.name, &taken);
             taken.push(name.clone());
-            let mut n = Object::new(ObjClass::Shape, &name, ObjData::Shape(ShapeData { shapes: vec![part], usage: d.usage }));
+            let mut n = Object::new(
+                ObjClass::Shape,
+                &name,
+                ObjData::Shape(ShapeData { shapes: vec![part], usage: d.usage }),
+            );
             n.xform = t;
             b.add.push((n, NameRule::Fixed(name)));
             made += 1;
@@ -169,7 +173,10 @@ pub fn edit_level_bound(
             Object::new(
                 ObjClass::Shape,
                 "level_bbox",
-                ObjData::Shape(ShapeData { shapes: vec![ShapeDef::boxed(&Mat4::IDENTITY)], usage: SHAPE_LEVEL_BOUND }),
+                ObjData::Shape(ShapeData {
+                    shapes: vec![ShapeDef::boxed(&Mat4::IDENTITY)],
+                    usage: SHAPE_LEVEL_BOUND,
+                }),
             )
         },
         |e| (**e).clone(),
@@ -186,7 +193,10 @@ pub fn edit_level_bound(
             None => {}
         }
     }
-    let mut batch = Batch::new(if existing.is_none() { "Add Level Bound" } else { "Recalculate Level Bound" }, state.serial);
+    let mut batch = Batch::new(
+        if existing.is_none() { "Add Level Bound" } else { "Recalculate Level Bound" },
+        state.serial,
+    );
     batch.state = state_after;
     let name = o.name.to_string();
     let created = existing.is_none();
