@@ -34,6 +34,7 @@ type config struct {
 	uploadResultsText                                   string
 	vtUploadResults                                     object
 	vtRate, vtMaxUpload                                 int
+	vtRateWindowMs                                      int
 }
 
 // option is one command line flag: target is a *string, an *int, a *bool (a switch) or nil (--help).
@@ -74,7 +75,8 @@ func (c *config) options() []option {
 		{"--vt-queue", "N", "after an upload the file's report stays queued, without verdicts, for N lookups", &c.vtQueue},
 		{"--vt-hide-new", "", "while a file's first analysis is queued, GET /files answers 404, as VirusTotal does", &c.vtHideNew},
 		{"--vt-upload-results", "JSON", `the verdicts an uploaded file ends up with, {"<engine>": "<category>"}; categories: ` + strings.Join(vtCategories, ", "), &c.uploadResultsText},
-		{"--vt-rate", "N", "more than N VirusTotal requests within 60 s answer 429; 0 = unlimited", &c.vtRate},
+		{"--vt-rate", "N", "more than N VirusTotal requests within the rate window answer 429; 0 = unlimited", &c.vtRate},
+		{"--vt-rate-window", "MS", "the rate window of --vt-rate in milliseconds (default 60000, VirusTotal's minute)", &c.vtRateWindowMs},
 		{"--vt-max-upload", "BYTES", fmt.Sprintf("the largest body POST /files takes (413 above it); an upload URL takes up to %d", vtUploadURLLimit), &c.vtMaxUpload},
 	}
 }

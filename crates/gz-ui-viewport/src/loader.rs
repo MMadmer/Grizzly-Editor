@@ -32,6 +32,15 @@ impl SceneLoader {
         })
     }
 
+    /// A model's motions, `meshes\<name>.omf`: the project, the editor, then the game.
+    pub(crate) fn motions(&self, name: &str) -> Option<Vec<u8>> {
+        let name = name.trim_end_matches(".omf");
+        self.roots
+            .iter()
+            .find_map(|r| std::fs::read(under(r, &["gamedata", "meshes"], name, "omf")).ok())
+            .or_else(|| self.game.as_ref()?.read(&game_key("meshes", name, "omf")).ok())
+    }
+
     fn game(&self, key: &str, ext: &'static str) -> Option<AssetBytes> {
         let files = self.game.as_ref()?;
         files.read(key).ok().map(|bytes| AssetBytes { bytes, ext: Some(SmolStr::new_static(ext)) })

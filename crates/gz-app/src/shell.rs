@@ -327,6 +327,7 @@ impl ShellState {
             reset_layout,
             cpp,
         } = builder;
+        JobMarks::of(&editor).log_state.lock().clone_from(&log_state);
         let mut parts = Parts {
             factories,
             commands,
@@ -1246,6 +1247,7 @@ impl ShellState {
         }
         self.seen_jobs.retain(|id| running.iter().any(|j| j.id == *id));
         self.cancelled.retain(|id| running.iter().any(|j| j.id == *id));
+        JobMarks::of(&self.editor).cancelled.lock().retain(|id| running.iter().any(|j| j.id == *id));
         crate::tasks::sweep(&self.editor, &running);
         if running.is_empty() {
             self.card_open = false;
@@ -1637,6 +1639,7 @@ impl ShellState {
 
     pub(crate) fn job_cancel(&mut self, id: JobId) -> bool {
         self.cancelled.insert(id);
+        JobMarks::of(&self.editor).cancelled.lock().insert(id);
         self.editor.jobs.cancel(id)
     }
 
@@ -1667,6 +1670,25 @@ fn project_linked(editor: &Editor) -> bool {
 
 /// What the log says by itself: its last line worth reading and its counts.
 #[must_use]
+/// What `progress` reads without the UI thread: the jobs whose Stop was asked for, and the log
+/// state the status bar shows (the shell's hook, set when the shell is made).
+#[derive(Default)]
+pub(crate) struct JobMarks {
+    pub cancelled: parking_lot::Mutex<FxHashSet<JobId>>,
+    pub log_state: parking_lot::Mutex<Option<crate::builder::LogStateFn>>,
+}
+
+impl JobMarks {
+    pub(crate) fn of(editor: &Editor) -> std::sync::Arc<JobMarks> {
+        editor.services.get_or_init(JobMarks::default)
+    }
+
+    pub(crate) fn log_state(&self, editor: &Editor) -> LogState {
+        let hook = self.log_state.lock().clone();
+        hook.map_or_else(|| default_log_state(editor), |f| f(editor))
+    }
+}
+
 pub fn default_log_state(editor: &Editor) -> LogState {
     let (errors, warnings) = editor.log.counts();
     let last = editor.log.last_notable().map(|r| gz_log::marked(r.level, &r.text)).unwrap_or_default();

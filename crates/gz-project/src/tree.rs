@@ -75,12 +75,18 @@ pub struct FileTree {
     dirs: OrdMap<RelPath, Arc<Dir>>,
 }
 
+/// A file the editor is writing (`fsx::write_atomic`'s `<name>.gz~`, renamed over the file when
+/// whole): no entry of the project, so a build that walks the tree meanwhile never meets it.
+fn is_write_in_progress(name: &str) -> bool {
+    name.ends_with(".gz~")
+}
+
 fn list_dir(root: &Path, rel: &RelPath) -> Option<Dir> {
     let abs = rel.to_fs(root);
     let items = fsys::list_folder(&abs).ok()?;
     let mut entries: Vec<Entry> = Vec::with_capacity(items.len());
     for it in items {
-        if is_tooling_entry(&it.name) {
+        if is_tooling_entry(&it.name) || is_write_in_progress(&it.name) {
             continue;
         }
         let kind = if it.link {

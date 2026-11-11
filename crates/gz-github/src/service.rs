@@ -104,7 +104,7 @@ impl Github {
                 };
             }
         }
-        let saved = self.exec.io(move || cred::read(credential_target(qa))).await;
+        let saved = self.exec.io(move || cred::read(&credential_target(qa))).await;
         if let Some(token) = saved.filter(|t| plausible_token(t)) {
             return Account {
                 source: AccountSource::Saved,
@@ -137,14 +137,14 @@ impl Github {
         }
         let qa = self.qa();
         self.exec
-            .io(move || cred::write(credential_target(qa), token.expose()))
+            .io(move || cred::write(&credential_target(qa), token.expose()))
             .await
             .map_err(|e| format!("Windows refused to store the token ({e})"))
     }
 
     pub async fn forget_token(&self) {
         let qa = self.qa();
-        self.exec.io(move || cred::delete(credential_target(qa))).await;
+        self.exec.io(move || cred::delete(&credential_target(qa))).await;
     }
 
     // The GitHub CLI answers by starting a process, most of a second with an on-access scanner, and
@@ -194,7 +194,7 @@ impl Github {
         if vt::plausible_key(&key) {
             return Some(Secret::from(key));
         }
-        let saved = self.exec.io(move || cred::read(vt::credential_target(qa))).await?;
+        let saved = self.exec.io(move || cred::read(&vt::credential_target(qa))).await?;
         vt::plausible_key(&saved).then(|| Secret::from(saved))
     }
 
@@ -204,14 +204,14 @@ impl Github {
         }
         let qa = self.qa();
         self.exec
-            .io(move || cred::write(vt::credential_target(qa), key.expose()))
+            .io(move || cred::write(&vt::credential_target(qa), key.expose()))
             .await
             .map_err(|e| format!("Windows refused to store the key ({e})"))
     }
 
     pub async fn forget_vt_key(&self) {
         let qa = self.qa();
-        self.exec.io(move || cred::delete(vt::credential_target(qa))).await;
+        self.exec.io(move || cred::delete(&vt::credential_target(qa))).await;
     }
 
     /// Waits for this request's turn at the free API's pace, whichever job asks.

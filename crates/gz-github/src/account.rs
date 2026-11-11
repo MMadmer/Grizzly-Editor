@@ -57,8 +57,22 @@ pub(crate) fn token_variables(qa: bool) -> &'static [&'static str] {
 }
 
 /// The Credential Manager target of the GitHub token; a QA run has its own.
-pub(crate) fn credential_target(qa: bool) -> &'static str {
-    if qa { "GrizzlyEditor:GitHub:qa" } else { "GrizzlyEditor:GitHub" }
+pub(crate) fn credential_target(qa: bool) -> String {
+    if qa {
+        format!("GrizzlyEditor:GitHub:qa{}", qa_credential_suffix())
+    } else {
+        "GrizzlyEditor:GitHub".to_owned()
+    }
+}
+
+/// QA runs side by side keep their credentials apart: `GRIZZLY_QA_CREDENTIAL` names this run's
+/// (`tools/qa/run_all.py` gives every suite its own); empty, the one QA credential of the machine.
+pub(crate) fn qa_credential_suffix() -> String {
+    std::env::var("GRIZZLY_QA_CREDENTIAL")
+        .ok()
+        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+        .map(|s| format!(":{s}"))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -73,6 +87,6 @@ mod tests {
         assert!(!plausible_token("this is a pasted sentence, not a token"));
         assert!(!plausible_token(&"a".repeat(256)));
         assert_eq!(token_variables(true), &["GRIZZLY_GITHUB_TOKEN"]);
-        assert_eq!(credential_target(true), "GrizzlyEditor:GitHub:qa");
+        assert!(credential_target(true).starts_with("GrizzlyEditor:GitHub:qa"));
     }
 }

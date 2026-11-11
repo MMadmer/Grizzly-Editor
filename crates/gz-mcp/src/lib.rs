@@ -25,8 +25,10 @@ pub const TOOLS_JSON: &str = include_str!("../tools.json");
 /// The port the editor has always listened on.
 pub const DEFAULT_PORT: u16 = 28016;
 
-/// A request line longer than this is refused: no asset or picture comes near it.
-const MAX_REQUEST: usize = 64 * 1024 * 1024;
+/// A request line longer than this is refused and the connection closed, as the C++ endpoint
+/// did ("request buffer exceeds 1 MiB"): no command takes more.
+const MAX_REQUEST: usize = 1024 * 1024;
+const OVERFLOW_REPLY: &[u8] = b"{\"ok\":false,\"error\":\"request buffer exceeds 1 MiB\"}\n";
 
 /// How long a request may take, from `GRIZZLY_MCP_REQUEST_TIMEOUT_MS` (three minutes unset).
 fn request_timeout() -> Duration {
@@ -34,7 +36,7 @@ fn request_timeout() -> Duration {
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(180_000);
-    Duration::from_millis(ms.clamp(1_000, 3_600_000))
+    Duration::from_millis(ms.clamp(100, 3_600_000))
 }
 
 /// Binds the endpoint and serves it on the editor's runtime until the editor quits. Returns the
@@ -70,7 +72,15 @@ async fn connection(editor: Arc<Editor>, stream: TcpStream, timeout: Duration) -
     let mut line = Vec::new();
     loop {
         line.clear();
-        let n = read_line_limited(&mut read, &mut line).await?;
+        let n = match read_line_limited(&mut read, &mut line).await {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                write.write_all(OVERFLOW_REPLY).await?;
+                write.flush().await?;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
         if n == 0 {
             return Ok(());
         }
@@ -110,6 +120,9 @@ async fn read_line_limited(
             Some(i) => {
                 line.extend_from_slice(&chunk[..=i]);
                 read.consume(i + 1);
+                if line.len() > MAX_REQUEST + 1 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "request too large"));
+                }
                 return Ok(line.len());
             }
             None => {

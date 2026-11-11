@@ -36,4 +36,3 @@ serde_json.workspace = true
 time.workspace = true
 tokio.workspace = true
 # the system's file dialog (a layer's file, a track)
-rfd = { version = "0.15", default-features = false }

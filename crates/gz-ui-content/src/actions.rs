@@ -806,8 +806,9 @@ pub(crate) fn reveal_in_explorer(
 /// `game_link`.
 pub(crate) fn link_game(editor: &Arc<Editor>) {
     let ed = editor.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-content.link".into()).spawn(move || {
-        let Some(folder) = rfd::FileDialog::new().set_title("Link Game").pick_folder() else { return };
+    let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+    let request = gz_ui::file_dialog::FileRequest::folder("Link Game");
+    let picked = gz_ui::file_dialog::pick(None, asker, request, move |folder| {
         let path = folder.display().to_string();
         let ed2 = ed.clone();
         ed.exec.spawn(async move {
@@ -817,8 +818,8 @@ pub(crate) fn link_game(editor: &Arc<Editor>) {
             ed2.exec.wake().ping();
         });
     });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the folder dialog did not open: {e}"));
+    if let Err(line) = picked {
+        editor.log.plain(line);
     }
 }
 

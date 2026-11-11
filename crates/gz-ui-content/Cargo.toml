@@ -31,4 +31,3 @@ parking_lot.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true
 # the system's folder dialog (Link Game...)
-rfd = { version = "0.15", default-features = false }

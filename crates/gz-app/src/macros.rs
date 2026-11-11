@@ -154,22 +154,24 @@ pub fn assign(editor: &Editor, slot: usize, file: &str) {
     settings.save_soon(editor);
 }
 
-/// The system's open dialog on a thread of its own, in `import`; the file picked, or `None`.
-async fn pick_file(editor: &Arc<Editor>) -> Option<String> {
-    let dir = import_dir(editor);
+/// The system's open dialog (the kit's, on a thread of its own), in `import`; the file picked,
+/// or `None` when cancelled. A caller who cannot answer it gets "name the file".
+async fn pick_file(editor: &Arc<Editor>, origin: Origin) -> Result<Option<String>, String> {
+    let asker = match origin {
+        Origin::Mcp => gz_ui::Asker::Mcp,
+        Origin::Ui if !editor.flags.unattended => gz_ui::Asker::Ui,
+        _ => gz_ui::Asker::Unattended,
+    };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let spawned = std::thread::Builder::new().name("gz-app.macro_pick".into()).spawn(move || {
-        let mut dialog = rfd::FileDialog::new().set_title("Choose the macro");
-        if dir.is_dir() {
-            dialog = dialog.set_directory(&dir);
-        }
-        let _ = tx.send(dialog.pick_file().map(|p| p.display().to_string()));
+    let request = gz_ui::file_dialog::FileRequest::open("Choose the macro").in_folder(import_dir(editor));
+    let picked = gz_ui::file_dialog::pick(None, asker, request, move |p| {
+        let _ = tx.send(p.display().to_string());
     });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the system dialog did not open: {e}"));
-        return None;
+    if let Err(line) = picked {
+        editor.log.plain(line);
+        return Err(gz_ui::file_dialog::NAME_THE_FILE.to_owned());
     }
-    rx.await.ok().flatten()
+    Ok(rx.await.ok())
 }
 
 fn slot_of(p: &CommandVar) -> Result<usize, String> {
@@ -205,19 +207,18 @@ pub(crate) fn rows() -> Vec<CppCommand> {
         };
         run_file(&ed, &name, origin).await.map(|()| CommandVar::Int(1))
     });
-    let assign_task =
-        CppAction::task(|ed: Arc<Editor>, p1: CommandVar, p2: CommandVar, _origin| async move {
-            let slot = slot_of(&p1)?;
-            let file = match p2 {
-                CommandVar::Str(s) => s,
-                CommandVar::Int(_) => match pick_file(&ed).await {
-                    Some(f) => f,
-                    None => return Ok(CommandVar::Int(0)),
-                },
-            };
-            assign(&ed, slot, &file);
-            Ok(CommandVar::Int(1))
-        });
+    let assign_task = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, p2: CommandVar, origin| async move {
+        let slot = slot_of(&p1)?;
+        let file = match p2 {
+            CommandVar::Str(s) => s,
+            CommandVar::Int(_) => match pick_file(&ed, origin).await? {
+                Some(f) => f,
+                None => return Ok(CommandVar::Int(0)),
+            },
+        };
+        assign(&ed, slot, &file);
+        Ok(CommandVar::Int(1))
+    });
     let slots = (0..SLOTS)
         .map(|i| {
             CppSub::new(&format!("Slot #{}", i + 1), CommandVar::Int(i as u32), CommandVar::Int(0))

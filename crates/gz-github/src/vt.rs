@@ -30,8 +30,12 @@ pub fn plausible_key(key: &str) -> bool {
     (8..=128).contains(&key.len()) && key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
-pub(crate) fn credential_target(qa: bool) -> &'static str {
-    if qa { "GrizzlyEditor:VirusTotal:qa" } else { "GrizzlyEditor:VirusTotal" }
+pub(crate) fn credential_target(qa: bool) -> String {
+    if qa {
+        format!("GrizzlyEditor:VirusTotal:qa{}", crate::account::qa_credential_suffix())
+    } else {
+        "GrizzlyEditor:VirusTotal".to_owned()
+    }
 }
 
 /// The policy of the catalog index's `[virustotal]` section.

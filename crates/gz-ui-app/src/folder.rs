@@ -1,18 +1,30 @@
-//! The system's folder dialog, off the UI thread: it blocks its own thread while the author
-//! picks, and the folder comes back to the start of a frame.
+//! The system's folder dialog, off the UI thread (the kit's `file_dialog`): it blocks its own
+//! thread while the author picks, and the folder comes back to the start of a frame.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use gz_app::UiQueue;
 use gz_editor::Editor;
+use gz_ui::Asker;
+use gz_ui::file_dialog::FileRequest;
 
 /// One folder dialog at a time: a second click while one is up does nothing.
 #[derive(Default)]
 struct Picking(AtomicBool);
 
+/// Frees the one dialog's place when the dialog's answer is dropped, picked or not.
+struct Release(Arc<Picking>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Opens the folder dialog titled `title`, starting in `start` when that is set. `done` gets the
-/// folder picked (nothing when the author cancels) on the UI thread.
+/// folder picked (nothing when the author cancels) on the UI thread. Under `-nodlg` nothing
+/// opens.
 pub(crate) fn pick_folder(
     editor: &Arc<Editor>,
     title: &'static str,
@@ -24,25 +36,21 @@ pub(crate) fn pick_folder(
     if busy.0.swap(true, Ordering::SeqCst) {
         return;
     }
-    let start = start.to_owned();
-    let flag = busy.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-app.folder".to_owned()).spawn(move || {
-        let mut dialog = rfd::FileDialog::new().set_title(title);
-        if !start.is_empty() && std::path::Path::new(&start).is_dir() {
-            dialog = dialog.set_directory(&start);
-        }
-        let picked = dialog.pick_folder();
-        flag.0.store(false, Ordering::SeqCst);
-        if let Some(folder) = picked {
-            let text = folder.display().to_string();
-            queue.post(move |_, ctx| {
-                done(text, ctx);
-                ctx.request_repaint();
-            });
-        }
+    let release = Release(busy);
+    let mut request = FileRequest::folder(title);
+    if !start.is_empty() {
+        request = request.in_folder(start);
+    }
+    let asker = if editor.flags.unattended { Asker::Unattended } else { Asker::Ui };
+    let picked = gz_ui::file_dialog::pick(None, asker, request, move |folder| {
+        drop(release);
+        let text = folder.display().to_string();
+        queue.post(move |_, ctx| {
+            done(text, ctx);
+            ctx.request_repaint();
+        });
     });
-    if let Err(e) = spawned {
-        busy.0.store(false, Ordering::SeqCst);
-        editor.log.warn(format!("the folder dialog did not open: {e}"));
+    if let Err(line) = picked {
+        editor.log.plain(line);
     }
 }

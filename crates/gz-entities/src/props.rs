@@ -218,6 +218,9 @@ pub struct PropContext {
     pub spawn_story_names: BTreeMap<u32, SmolStr>,
     /// The Spawn tool's name of a section (`SectionToEditor`: its `$spawn` list path).
     pub profiles: BTreeMap<SmolStr, SmolStr>,
+    /// `fp_data.locations`: a graph point's four location lists (`[location_N]` of `game.ltx`,
+    /// name = the value as written, id = `atoi` of the key), in file order.
+    pub locations: [Vec<(SmolStr, i64)>; 4],
 }
 
 impl PropContext {
@@ -238,6 +241,15 @@ impl PropContext {
         };
         self.story_names = read(&mut story.into_iter(), "NO STORY ID");
         self.spawn_story_names = read(&mut spawn.into_iter(), "NO SPAWN STORY ID");
+        self
+    }
+
+    /// The location lists from the lines of `[location_0]` .. `[location_3]`.
+    #[must_use]
+    pub fn with_locations(mut self, lists: [Vec<(String, String)>; 4]) -> Self {
+        self.locations = lists.map(|lines| {
+            lines.into_iter().map(|(k, v)| (SmolStr::new(v), k.trim().parse::<i64>().unwrap_or(0))).collect()
+        });
         self
     }
 }

@@ -128,6 +128,9 @@ fn main() -> ExitCode {
     gz_world::install(&editor);
     gz_scene::install(&editor);
     gz_export_level::install(&editor);
+    gz_ui_content::install_hooks(&editor);
+    // the Task Center's rows of builds and packaging, also for a build started over MCP
+    gz_ui_mod::cards::ensure(&editor);
 
     startup.stage("Opening the control endpoint");
     let port = cli.mcp_port.unwrap_or(SIDE_BY_SIDE_PORT);
@@ -192,7 +195,7 @@ fn project_probe(editor: &Editor) -> gz_app::project::ProjectInfo {
         active: state.get("project_active").and_then(serde_json::Value::as_bool).unwrap_or(false),
         folder: text("project"),
         name: text("project_name"),
-        game_linked: gz_project::Project::of(editor).is_ok_and(|(_, p)| p.game_linked()),
+        game_linked: gz_project::Project::of(editor).is_ok_and(|(_, p)| p.game_linked_now()),
     }
 }
 

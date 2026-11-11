@@ -86,7 +86,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     @staticmethod
@@ -96,7 +96,7 @@ class Editor:
         mcp("ui_list")
         deadline = time.monotonic() + 600
         while mcp("progress").get("active") and time.monotonic() < deadline:
-            time.sleep(1)
+            time.sleep(0.05)
 
     def close(self) -> None:
         try:

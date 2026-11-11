@@ -597,7 +597,7 @@ impl Github {
                 break;
             }
             if attempt > 0 {
-                http::pause(cancel, 3000).await;
+                http::pause(cancel, self.endpoints().serve_pause_ms).await;
             }
             let served = self.send(Request::new(Kind::Public, Method::GET, address.clone()), cancel).await;
             result.served = served.status == 200 && !local.is_empty() && served.body == local;
@@ -628,7 +628,7 @@ impl Github {
         for attempt in 0..UPLOAD_ATTEMPTS {
             if attempt > 0 {
                 // a broken upload leaves a stub that owns the name
-                http::pause(cancel, 2000).await;
+                http::pause(cancel, self.endpoints().retry_pause_ms).await;
                 let r = api.get(format!("{release_url}/assets?per_page=100")).await;
                 if cancel.is_cancelled() {
                     return cancelled();

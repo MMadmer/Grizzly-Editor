@@ -84,7 +84,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -157,6 +157,9 @@ def run(project: str) -> None:
         check(set_.get("ok") and set_.get("value") == "7.5", "B property_set writes a text row", json.dumps(set_))
         again = rows(mcp("property_inspector", target="world", limit=500)).get(key, {})
         check(again.get("value") == "7.5", "B property_inspector reads it back", json.dumps(again))
+        # the lighting rows take a value under the Custom quality only (EScene::FillProp); the
+        # Escape scene is built at High
+        mcp("property_set", target="world", key="Scene\\Build options\\Quality", value="Custom")
         bad = mcp("property_set", target="world", key="Scene\\Build options\\Lighting\\Hemisphere quality [0-3]", value="9")
         check(not bad.get("ok") and "0 to 3" in bad.get("error", ""), "B a number out of range is refused with the range",
               json.dumps(bad))

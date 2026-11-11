@@ -131,6 +131,9 @@ class Editor:
         env["GRIZZLY_VT_PACE_MS"] = "100"
         env["GRIZZLY_VT_SCAN_WAIT_MS"] = "4000"
         env["GRIZZLY_VT_RATE_WAIT_MS"] = "200"
+        # what the game is served is looked at again, and a broken upload tried again, after a pause: seconds for
+        # the author, a moment here
+        env["GRIZZLY_GITHUB_PAUSE_MS"] = "300"
         # the author key the releases are signed with: a throw-away home, never the user's own - gone with the editor
         self.home = tempfile.mkdtemp(prefix="grizzly_publish_home_")
         env["GRIZZLY_CATALOG_HOME"] = self.home
@@ -150,7 +153,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -173,7 +176,7 @@ def publish(version: str, wait_seconds: float = 180.0, **extra) -> dict:
     data = mcp("mod_publish", **extra)
     deadline = time.monotonic() + wait_seconds
     while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
-        time.sleep(0.3)
+        time.sleep(0.05)
         data = mcp("mod_publish", action="status")
     return data
 
@@ -183,7 +186,7 @@ def releases(wait_seconds: float = 60.0, **extra) -> dict:
     data = mcp("mod_releases", **extra)
     deadline = time.monotonic() + wait_seconds
     while data.get("ok") and data.get("pending") and time.monotonic() < deadline:
-        time.sleep(0.2)
+        time.sleep(0.05)
         data = mcp("mod_releases", action="status")
     return data
 
@@ -453,12 +456,13 @@ def main() -> int:
         mcp("mod_set_manifest", version="0.9.6", github=GITHUB_REPO)
         packaged = mcp("mod_package")
         weight = sum(p.get("size", 0) for p in packaged.get("packages", [])) + (packaged.get("index") or {}).get("size", 0)
-        kbps = max(2, weight * 8 // 1000 // 8)
+        # the upload takes about three seconds: Cancel after one meets it mid-way
+        kbps = max(2, weight * 8 // 1000 // 3)
         mock.stop()
         mock = Mock(port, "--throttle-kbps", str(kbps))
         data = mcp("mod_publish")
         check(data.get("ok") and data.get("pending"), "I the upload starts and the editor answers at once", str(data))
-        time.sleep(3)
+        time.sleep(1)
         mcp("mod_publish", action="cancel")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:

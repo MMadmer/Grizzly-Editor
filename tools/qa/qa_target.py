@@ -11,6 +11,7 @@ With nothing set the target is the C++ editor (Bin\\x64\\Release\\LevelEditor.ex
 from __future__ import annotations
 
 import os
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -55,3 +56,72 @@ def log_glob() -> str:
 
 def busy_text() -> str:
     return "an editor already answers on 127.0.0.1:%d - close it first" % PORT
+
+
+# ---- where a suite's time goes ------------------------------------------------------------------
+# Every suite imports this module first: its wall time is printed when it ends, split by the marks
+# the suite sets ("copy", "editor start", ...; the rest is "checks").
+
+import atexit
+import shutil
+import time
+
+_T0 = time.monotonic()
+_LAST = [_T0]
+_SPENT: dict[str, float] = {}
+
+
+def mark(label: str) -> None:
+    """Books the time since the last mark under `label`."""
+    now = time.monotonic()
+    _SPENT[label] = _SPENT.get(label, 0.0) + now - _LAST[0]
+    _LAST[0] = now
+
+
+def _drop_home() -> None:
+    # a home this module made for the run goes with it; one named by GRIZZLY_QA_HOME is its owner's
+    if RUST and not os.environ.get("GRIZZLY_QA_HOME"):
+        shutil.rmtree(HOME, ignore_errors=True)
+
+
+atexit.register(_drop_home)
+
+
+def _report() -> None:
+    now = time.monotonic()
+    rest = now - _LAST[0]
+    parts = dict(_SPENT)
+    parts["checks"] = parts.get("checks", 0.0) + rest
+    split = ", ".join("%s %.1f s" % (k, v) for k, v in parts.items())
+    print("WALL %.1f s (%s)" % (now - _T0, split), flush=True)
+
+
+atexit.register(_report)
+
+
+def copy_project(src: str, dst: str, ignore=(".git", "releases", "temp", "logs", "backup")) -> str:
+    """Copies a project for a suite: only what a suite needs (no .git, releases, temp, logs,
+    backup unless it names another set), project.ltx naming the copy's own folder, and the
+    export target pointed into the suite's temp folder - never at the game."""
+    t = time.monotonic()
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*ignore))
+    pl = os.path.join(dst, "project.ltx")
+    if os.path.isfile(pl):
+        with open(pl, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+        at = text.lower().find(src.lower())
+        while at >= 0:
+            text = text[:at] + dst + text[at + len(src):]
+            at = text.lower().find(src.lower(), at + len(dst))
+        away = os.path.join(os.path.dirname(dst), "export_target")
+        lines = [l for l in text.splitlines() if not l.strip().lower().startswith("export_target")]
+        if not any(l.strip().lower() == "[xms]" for l in lines):
+            lines.append("[xms]")
+        at = next(i for i, l in enumerate(lines) if l.strip().lower() == "[xms]")
+        lines.insert(at + 1, "export_target=" + away)
+        with open(pl, "w", encoding="utf-8", newline="") as f:
+            f.write("\r\n".join(lines) + "\r\n")
+
+    _SPENT["copy"] = _SPENT.get("copy", 0.0) + time.monotonic() - t
+    _LAST[0] = time.monotonic()
+    return dst

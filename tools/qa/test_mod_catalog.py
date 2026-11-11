@@ -95,6 +95,8 @@ WITHDRAW_SHEET = "dlg.catalog_withdraw"
 # the editor's ImGui layout ($local_root$) and its preferences - the window's size and state among them: the
 # editor writes both when it closes
 LAYOUT = os.path.join(REPO, "level_imgui.ini")
+# the mock's VirusTotal rate window in phase J: VirusTotal's is a minute, the harness's a few seconds
+VT_WINDOW_S = 3.0
 PREFS = os.path.join(REPO, "level.ini")
 
 # the game repository's reference implementation, imported in main()
@@ -118,6 +120,7 @@ def check(ok: bool, text: str, detail: str = "") -> bool:
 
 def phase(name: str, step, *args) -> None:
     """One phase; a phase that throws is a FAIL of its own and the next one still runs."""
+    t0 = time.monotonic()
     try:
         step(*args)
     except Abort:
@@ -125,6 +128,8 @@ def phase(name: str, step, *args) -> None:
     except Exception as exc:  # noqa: BLE001 - the report is the point
         traceback.print_exc()
         check(False, "%s ran to its end" % name, repr(exc))
+    finally:
+        print("TIME phase %s %.1f s" % (name, time.monotonic() - t0), flush=True)
 
 
 def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
@@ -269,6 +274,7 @@ class Editor:
             "GRIZZLY_CATALOG_HOME": home,
             # the free API's pace and the wait for a report, in QA terms
             "GRIZZLY_VT_PACE_MS": "100",
+            "GRIZZLY_GITHUB_PAUSE_MS": "300",
             "GRIZZLY_VT_SCAN_WAIT_MS": "15000",
         })
         if vt_variable:
@@ -288,7 +294,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -308,7 +314,7 @@ def follow(data: dict, seconds: float = JOB_SECONDS) -> dict:
     """A mod_catalog answer, followed through action=status until its job is over."""
     deadline = time.monotonic() + seconds
     while data.get("ok") and (data.get("job") or {}).get("pending") and time.monotonic() < deadline:
-        time.sleep(0.5)
+        time.sleep(0.05)
         data = mcp("mod_catalog", action="status")
     return data
 
@@ -1522,9 +1528,10 @@ class Run:
     # ------------------------------------------------------------------------------ run 2 / J: the maintainer
     def maintainer(self) -> None:
         port = free_port()
-        # two VirusTotal requests a minute: the free API's refusal, met in seconds
+        # two VirusTotal requests a window (VT_WINDOW_S, the mock's stand-in for VirusTotal's minute):
+        # the free API's refusal, met in seconds
         mock = Mock(port, self.work, "mock_maintainer", "--catalog-seed", self.seed, "--login", MAINTAINER,
-                    "--vt-rate", "2", repo=MAINTAINER_REPO)
+                    "--vt-rate", "2", "--vt-rate-window", str(int(VT_WINDOW_S * 1000)), repo=MAINTAINER_REPO)
         editor = None
         try:
             editor = Editor(self.exe, self.copy, port, self.home, vt_variable=True,
@@ -1569,9 +1576,8 @@ class Run:
               "J VirusTotal not answering: nothing is sent, and the author is told to submit again",
               short(data.get("job")) + " " + job_error(data))
         mock.vt_seed({entry.get("sha256", ""): {"Kaspersky": "undetected", "Microsoft": "undetected"}})
-        # the mock's rate window is a real minute (github_mock.VT_RATE_WINDOW): the next scan's lookup has
-        # to find it open again
-        time.sleep(61)
+        # the mock's rate window (--vt-rate-window): the next scan's lookup has to find it open again
+        time.sleep(VT_WINDOW_S + 0.5)
         data = job("submit")
         sub = data.get("submission") or {}
         check(job_done(data, "submit") and sub.get("number", 0) > 0 and sub.get("state") == "open",
@@ -1603,8 +1609,8 @@ class Run:
               "J refused: closed, and the workflow's newest verdict says why", short(sub))
         self.window_shot("catalog_submission_refused")
         if self.shots:
-            # the window's check looked the package up too: the mock's two requests a minute are a real minute
-            time.sleep(61)
+            # the window's check looked the package up too: the mock's two requests a window
+            time.sleep(VT_WINDOW_S + 0.5)
 
         # a refused submission stays closed: submitting again opens a new one, without the old verdict
         data = job("submit")
@@ -1675,7 +1681,10 @@ def main() -> int:
     # when it closes, so both come back byte for byte after the last one has
     layout_backup = read_bytes(LAYOUT)
     prefs_backup = read_bytes(PREFS)
-    write_bytes(LAYOUT, stale_layout(layout_backup or b"", SUBMIT_WINDOW, 3000))
+    # the Rust shell keeps no ImGui layout: a window is never placed from a stale entry, so the precondition has no
+    # meaning there - the check behind it (the window in the picture, centred, more than a flat fill) stays
+    if not qa_target.RUST:
+        write_bytes(LAYOUT, stale_layout(layout_backup or b"", SUBMIT_WINDOW, 3000))
 
     try:
         run = Run(args, work, copy)

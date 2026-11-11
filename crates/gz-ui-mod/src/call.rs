@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gz_app::UiQueue;
 use gz_editor::{Args, Editor, Value};
+use gz_ui::Asker;
+use gz_ui::file_dialog::FileRequest;
 
 /// Runs `name` with `args` as the window would (its origin) and hands the reply to `then` on the
 /// UI thread at the start of the next frame.
@@ -114,31 +116,36 @@ pub(crate) fn pick_path(
     if busy.0.swap(true, Ordering::SeqCst) {
         return;
     }
-    let start = start.to_owned();
-    let flag = busy.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-mod.pick".to_owned()).spawn(move || {
-        let mut dialog = rfd::FileDialog::new().set_title(title);
-        if !start.is_empty() && std::path::Path::new(&start).is_dir() {
-            dialog = dialog.set_directory(&start);
-        }
-        let picked = match what {
-            Pick::Folder => dialog.pick_folder(),
-            Pick::Picture => dialog.add_filter("Pictures", &["png", "jpg", "jpeg", "tga", "bmp"]).pick_file(),
-        };
-        flag.0.store(false, Ordering::SeqCst);
-        if let Some(path) = picked {
-            let text = path.display().to_string();
-            queue.post(move |_, ctx| {
-                done(text, ctx);
-                ctx.request_repaint();
-            });
-        } else {
-            queue.post(|_, ctx| ctx.request_repaint());
-        }
+    let release = Release(busy, queue.clone());
+    let mut request = match what {
+        Pick::Folder => FileRequest::folder(title),
+        Pick::Picture => FileRequest::open(title).filter("Pictures", &["png", "jpg", "jpeg", "tga", "bmp"]),
+    };
+    if !start.is_empty() {
+        request = request.in_folder(start);
+    }
+    let asker = if editor.flags.unattended { Asker::Unattended } else { Asker::Ui };
+    let picked = gz_ui::file_dialog::pick(None, asker, request, move |path| {
+        drop(release);
+        let text = path.display().to_string();
+        queue.post(move |_, ctx| {
+            done(text, ctx);
+            ctx.request_repaint();
+        });
     });
-    if let Err(e) = spawned {
-        busy.0.store(false, Ordering::SeqCst);
-        editor.log.warn(format!("the system dialog did not open: {e}"));
+    if let Err(line) = picked {
+        editor.log.plain(line);
+    }
+}
+
+/// Frees the one dialog's place when the dialog's answer is dropped, picked or not, and draws a
+/// frame for the button that waited.
+struct Release(Arc<Picking>, Arc<UiQueue>);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.0.0.store(false, Ordering::SeqCst);
+        self.1.post(|_, ctx| ctx.request_repaint());
     }
 }
 

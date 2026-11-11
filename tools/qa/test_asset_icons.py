@@ -97,7 +97,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:

@@ -43,7 +43,7 @@ import qa_target
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = qa_target.MCP
-KEEP = [os.path.join(REPO, n) for n in ("_projects.ini", "level.ini", "level_imgui.ini")]
+KEEP = qa_target.KEPT
 WIDE = (1500, 800)       # pt: the Wide size class (W >= 1400, H >= 640)
 COMPACT = (1280, 720)    # pt: Compact
 NARROW = (1000, 700)     # pt: under 1100 the caption's menus fold
@@ -97,7 +97,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -141,14 +141,17 @@ if not user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
 
 
-def editor_hwnd() -> int | None:
+def editor_hwnd(pid: int) -> int | None:
+    """The window of this run's editor: other editors may run beside it (tools/qa/run_all.py)."""
     found: list[int] = []
 
     @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
     def each(hwnd, _):
         cls = ctypes.create_unicode_buffer(64)
         user32.GetClassNameW(hwnd, cls, 64)
-        if cls.value == "Grizzly Editor":
+        owner = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if cls.value == "Grizzly Editor" and owner.value == pid:
             found.append(hwnd)
         return True
 
@@ -207,7 +210,7 @@ def run(project: str, shots: str | None) -> None:
         inter = tb.get("interactive") or [[0, 0], [0, 0]]
         check(bool(tabs) and all(inter[0][0] <= t["rect"][0] and t["rect"][2] <= inter[0][1] for t in tabs),
               "B every tab lies in the interactive range of the caption", short(tb))
-        hwnd = editor_hwnd()
+        hwnd = editor_hwnd(ed.proc.pid if ed.proc else 0)
         if check(bool(hwnd), "B the editor's window is found"):
             cy = (band[1] + band[3]) / 2.0
             level = next((t for t in tabs if t.get("id") == "level"), tabs[0] if tabs else None)

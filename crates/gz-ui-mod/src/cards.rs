@@ -19,8 +19,9 @@ use gz_editor::{Editor, JobId, JobInfo, Value};
 use gz_release::Releases;
 use parking_lot::Mutex;
 
-/// How often the running jobs' rows are looked at.
-const PERIOD: Duration = Duration::from_millis(150);
+/// How often the running jobs' rows are looked at: often enough that `progress` over MCP sees a
+/// copy of a few hundred milliseconds move.
+const PERIOD: Duration = Duration::from_millis(25);
 
 /// The pump: one task for the editor's life, started on first use.
 #[derive(Default)]

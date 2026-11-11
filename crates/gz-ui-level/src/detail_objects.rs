@@ -5,6 +5,7 @@
 //!
 //! Every change is a `SceneCmd::SetBulk` of the scene's details, one undo step each.
 
+use gz_ui::file_dialog::FileRequest;
 use std::sync::Arc;
 
 use egui::{Color32, Ui, Vec2};
@@ -438,46 +439,38 @@ impl DetailObjects {
 fn import(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
     let ed = editor.clone();
     let svc = svc.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-level.dti".into()).spawn(move || {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Import Detail Objects")
-            .add_filter("Detail objects", &["dti"])
-            .pick_file()
-        else {
-            return;
-        };
-        match std::fs::read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|b| DetailColorIndices::read(&b).map_err(|e| e.to_string()))
-        {
-            Ok(indices) => {
-                let mut model = current(&svc);
-                model.indices = indices;
-                commit(&svc, &ed, model);
-                ed.log.info(format!("* Detail objects imported from {}", path.display()));
-            }
-            Err(e) => {
-                ed.notices.error(format!("The detail objects could not be read from {}: {e}", path.display()))
-            }
-        }
-    });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the file dialog did not open: {e}"));
+    let request = FileRequest::open("Import Detail Objects").filter("Detail objects", &["dti"]);
+    let picked =
+        gz_ui::file_dialog::pick(
+            None,
+            crate::tools::asker(editor),
+            request,
+            move |path| match std::fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|b| DetailColorIndices::read(&b).map_err(|e| e.to_string()))
+            {
+                Ok(indices) => {
+                    let mut model = current(&svc);
+                    model.indices = indices;
+                    commit(&svc, &ed, model);
+                    ed.log.info(format!("* Detail objects imported from {}", path.display()));
+                }
+                Err(e) => ed
+                    .notices
+                    .error(format!("The detail objects could not be read from {}: {e}", path.display())),
+            },
+        );
+    if let Err(line) = picked {
+        editor.log.plain(line);
     }
 }
 
 /// Writes the objects and colour indices to a `.dti` file the author picks.
 fn export(editor: &Arc<Editor>, indices: DetailColorIndices) {
     let ed = editor.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-level.dti".into()).spawn(move || {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Export Detail Objects")
-            .add_filter("Detail objects", &["dti"])
-            .set_file_name("details.dti")
-            .save_file()
-        else {
-            return;
-        };
+    let request =
+        FileRequest::save("Export Detail Objects", "details.dti").filter("Detail objects", &["dti"]);
+    let picked = gz_ui::file_dialog::pick(None, crate::tools::asker(editor), request, move |path| {
         match gz_editor::fsx::write_atomic(&path, &indices.write()) {
             Ok(()) => ed.log.info(format!("* Detail objects exported to {}", path.display())),
             Err(e) => ed
@@ -485,7 +478,7 @@ fn export(editor: &Arc<Editor>, indices: DetailColorIndices) {
                 .error(format!("The detail objects could not be written to {}: {e}", path.display())),
         }
     });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the file dialog did not open: {e}"));
+    if let Err(line) = picked {
+        editor.log.plain(line);
     }
 }

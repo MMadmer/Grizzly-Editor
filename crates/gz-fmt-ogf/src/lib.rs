@@ -36,7 +36,7 @@ pub use export::{
 };
 pub use format::{Desc, Header, MT, chunk, crc32};
 pub use motion::{
-    BoneKey, BoneMotion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys, TransKeys, read_omf,
+    BoneKey, BoneMotion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys, SAMPLE_FPS, TransKeys, read_omf,
 };
 pub use obb::{min_box, rapid_box};
 pub use optimize::{optimize_faces, optimize_vertices};

@@ -339,6 +339,23 @@ async fn open_scene(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     if !exists {
         return Err(CmdError::not_found(format!("scene not found: {}", full.display())));
     }
+    // synchronous, as the C++ load was: a scene job still running (the project's last scene
+    // opening, a tool) is waited for, not a reason to refuse
+    for _ in 0..8 {
+        let running: Vec<_> = ed
+            .jobs
+            .snapshot()
+            .into_iter()
+            .filter(|j| j.running() && j.group.as_deref() == Some("scene"))
+            .map(|j| j.id)
+            .collect();
+        if running.is_empty() {
+            break;
+        }
+        for id in running {
+            ed.jobs.wait(id).await;
+        }
+    }
     if svc.store.is_dirty() && !discard {
         return Err(CmdError::new("unsaved", "scene has unsaved changes; pass discard=true to replace it"));
     }

@@ -46,7 +46,7 @@ import qa_target
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = qa_target.MCP
-KEPT = [os.path.join(REPO, name) for name in ("level.ini", "level_imgui.ini", "_projects.ini")]
+KEPT = qa_target.KEPT
 
 BIG = "quests/qa_ui_big.nqasset"
 SMALL = "npc/qa_ui_small.behasset"
@@ -137,7 +137,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:

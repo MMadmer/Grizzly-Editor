@@ -418,7 +418,7 @@ async fn project_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             }
             let mut fields = delete_fields(&failed.info, Some("deleted"));
             fields.insert("removed_from_list".into(), json!(false));
-            Err(refuse_with(failed.message, fields))
+            Err(refuse_with(paths::wire(&failed.message), fields))
         }
     }
 }

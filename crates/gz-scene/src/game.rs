@@ -40,11 +40,46 @@ impl GameSettings {
         out
     }
 
-    /// The Details sheet's lists that come from the configs: the story ids.
+    /// The Details sheet's lists that come from the configs: the story ids, and the graph
+    /// points' locations of `game.ltx` (`SFillPropData::load`). Blocking: reads `game.ltx`.
     #[must_use]
     pub fn prop_context(&self) -> gz_entities::PropContext {
+        let game = self.game_ltx();
+        let lines = |i: usize| {
+            let name = format!("location_{i}");
+            let mut out = Vec::new();
+            if let Some(ltx) = &game {
+                let mut k = 0;
+                while let Ok(Some((key, value))) = ltx.r_line(&name, k) {
+                    out.push((key.to_owned(), value.unwrap_or("").to_owned()));
+                    k += 1;
+                }
+            }
+            out
+        };
         gz_entities::PropContext::default()
             .with_story_names(self.lines("story_ids"), self.lines("spawn_story_ids"))
+            .with_locations([lines(0), lines(1), lines(2), lines(3)])
+    }
+
+    /// `$game_config$\game.ltx` and what it includes, as the editor's `CInifile` reads it.
+    fn game_ltx(&self) -> Option<Ltx> {
+        use gz_ltx::tree::{Dialect, ParsedFile, include_path, parse_file};
+        let mut files: rustc_hash::FxHashMap<String, ParsedFile> = rustc_hash::FxHashMap::default();
+        let mut queue = vec!["game.ltx".to_owned()];
+        while let Some(path) = queue.pop() {
+            if files.contains_key(&path) || files.len() > 256 {
+                continue;
+            }
+            let Some(text) = self.config_text(&path) else { continue };
+            let parsed = parse_file(&text, Dialect::Editor);
+            queue.extend(parsed.includes().iter().map(|inc| include_path(&path, &inc.name)));
+            files.insert(path, parsed);
+        }
+        if !files.contains_key("game.ltx") {
+            return None;
+        }
+        Ltx::assemble_map("game.ltx", &files, Dialect::Editor).ok().map(|l| l.ltx)
     }
 }
 

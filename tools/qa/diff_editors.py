@@ -167,10 +167,9 @@ _PARTS = ["Group", "Glow", "Scene Object", "Light", "Shape", "Sound Source", "Sp
 
 IGNORE_ROWS: dict[str, list[tuple[str, str, set[str], str]]] = {
     "property_inspector": [
-        ("rows", "key", {"physic_destroyable_object\\Model\\Animation", "inventory_box\\Model\\Animation"},
-         "the C++ row of a spawn with a visual is SSpawnData::FillProp's playback buttons (First Frame, Play, ...); "
-         "the Rust editor keeps the startup-animation chooser and plays no spawn animation (STATE.md, "
-         "Differences the differential left)"),
+        ("rows", "key", {"smart_cover\\hold position time"},
+         "a new smart cover's m_hold_position_time: the C++ CSE_SmartCover constructor never sets it (uninitialised "
+         "memory, drawn clamped to its 60 s maximum); the Rust editor starts it at 0"),
         ("rows", "key", {"Detail Objects\\Objects per square", "Detail Objects\\Base Texture",
                          "Detail Objects\\Common\\Draw objects", "Detail Objects\\Common\\Draw base texture",
                          "Detail Objects\\Common\\Base texture blended", "Detail Objects\\Common\\Draw slot boxes"},
@@ -643,6 +642,54 @@ def gen_scene_details(answers: list) -> list[dict]:
     ]
     return steps
 
+# Classes the game's object factory has no server class for (neither the engine's table nor
+# class_registrator.script): the Rust editor refuses them, the C++ editor places an invalid spawn
+# point whose type is never set and stops in CSpawnPoint::SaveStream (THROW) at the next undo
+# snapshot - undefined behaviour, no oracle.
+NO_SERVER_CLASS = {"AI_SPGRP", "II_BTTCH", "NW_ATTCH", "W_MOUNTD"}
+# Sections the C++ factory makes no entity of ("!Can't create entity: <section>" - a script class
+# whose Lua server object fails in the editor): the same invalid spawn point, which a later Details
+# pass (CSpawnPoint::FillProp) stops on with THROW. The Rust editor makes them; their class is
+# compared through the next section of it.
+NO_ENTITY_SECTION = {"holder_stul", "m_lesnik", "m_trader"}
+
+
+def _class_sections(answers: list) -> list[tuple[str, str]]:
+    rows = [a for s, a in answers if s["cmd"] == "list_spawn_sections" and not s["args"].get("filter")]
+    seen: dict[str, str] = {}
+    for row in (rows[-1] if rows else {}).get("sections", []):
+        cls, sec = row.get("class", ""), row.get("section", "")
+        # a "fake" section is no item of the game: the C++ editor stops on it (gl_fake_missile has
+        # no inv_weight, CInifile::r_string)
+        if cls in NO_SERVER_CLASS or sec in NO_ENTITY_SECTION:
+            continue
+        if cls and sec and cls not in seen and "fake" not in sec.lower():
+            seen[cls] = sec
+    return sorted(seen.items())
+
+
+def gen_scene_classes(answers: list) -> list[dict]:
+    """One spawn of every entity class the linked game's sections give (the first section of each
+    class), placed side by side."""
+    steps = []
+    for i, (_cls, sec) in enumerate(_class_sections(answers)):
+        x, z = -260.0 + (i % 12) * 3.0, -190.0 - (i // 12) * 3.0
+        steps.append(S("place_spawn", section=sec, x=x, y=-20.0, z=z, snap_to_ground=False))
+    return steps
+
+
+def gen_scene_class_rows(answers: list) -> list[dict]:
+    """The Details rows of each spawn gen_scene_classes placed."""
+    n = len(_class_sections(answers))
+    placed = [a for s, a in answers if s["cmd"] == "place_spawn"][-n:] if n else []
+    steps = []
+    for a in placed:
+        name = (a.get("object") or {}).get("name", "")
+        if name:
+            steps += [S("select_objects", names=name), S("property_inspector", limit=2000)]
+    return steps
+
+
 S6 = [
     S("open_scene", scene="l01_escape.level", timeout=900, settle="viewport"),
     S("scene_info"), S("scene_stats"), S("scene_load_status"), S("recovery"),
@@ -657,6 +704,13 @@ S6 = [
     # last: the C++ undo stack after a Details edit is not the Rust one (D8), and the saved scene
     # above is compared without these edits
     {"gen": gen_scene_props},
+    # every entity class's rows, on spawns placed after the scene was saved and compared
+    # no undo snapshots from here: the C++ CSpawnPoint::SaveStream throws on a spawn point whose
+    # entity the factory could not make (its type is never set)
+    S("preferences", action="set", key="scene_undo_level", value=0),
+    S("list_spawn_sections", limit=5000),
+    {"gen": gen_scene_classes},
+    {"gen": gen_scene_class_rows},
 ]
 
 SCENARIOS: dict[str, dict] = {
@@ -728,8 +782,10 @@ def gen_sources(name: str) -> str:
     import inspect
     names = sorted({s["gen"].__name__ for s in SCENARIOS[name]["steps"] if "gen" in s})
     if names:
-        names += ["S", "last"]
-    return "".join(inspect.getsource(globals()[n]) for n in names)
+        names += ["S", "last", "_class_sections"]
+    # the data the generators read decides the steps as much as their code
+    data = repr((sorted(NO_SERVER_CLASS), sorted(NO_ENTITY_SECTION)))
+    return "".join(inspect.getsource(globals()[n]) for n in names) + data
 
 
 def scenario_key(name: str, cache: dict) -> str:
@@ -962,6 +1018,11 @@ def run_steps(side: Side, steps: list[dict], expand: bool, log) -> tuple[list[di
             log(f"  ! {side.which} {step['cmd']}: no answer within {step.get('timeout', STEP_TIMEOUT):.0f} s")
         except (OSError, ValueError) as e:
             answer = {"ok": False, "error": f"<transport: {e}>"}
+        # an editor that died fails the run at once, naming the step: every later step would only
+        # wait for a refused connection
+        if side.proc and side.proc.poll() is not None:
+            raise RuntimeError(f"{side.which}: the editor exited ({side.proc.returncode}) during step "
+                               f"{len(done) + 1} {step['cmd']} {json.dumps(args, ensure_ascii=False)[:200]}")
         dt = time.monotonic() - t0
         if dt > 10:
             log(f"  . {side.which} {step['cmd']} took {dt:.1f} s")

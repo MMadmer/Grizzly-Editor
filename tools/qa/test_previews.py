@@ -88,7 +88,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -406,7 +406,7 @@ def main() -> int:
 
     # what the editor keeps between runs: the project list, and the layout and preferences a resize or a new
     # scale would leave behind
-    keep = [os.path.join(REPO, n) for n in ("_projects.ini", "level.ini", "level_imgui.ini")]
+    keep = qa_target.KEPT
     backups = {}
     for path in keep:
         if os.path.isfile(path):

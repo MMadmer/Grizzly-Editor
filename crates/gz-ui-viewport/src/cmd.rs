@@ -88,6 +88,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "screenshot_viewport", |ed, _a, _o| async move { screenshot_viewport(&ed).await });
     reg.add(AREA, "group_thumbnail", |ed, _a, _o| async move { group_thumbnail(&ed).await });
     reg.add(AREA, "particles_tool", |ed, a, _o| crate::draw_particles::particles_tool(ed, a));
+    reg.add(AREA, "spawn_animation", |ed, a, _o| crate::spawn_anim::spawn_animation(ed, a));
 }
 
 /// A change made over MCP is drawn: the pane's next frame builds the pass.
@@ -179,6 +180,8 @@ async fn viewport_navigation(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
 /// bad one changes nothing.
 fn viewport_controls(ed: &Arc<Editor>, a: &Args) -> Reply {
     let vp = Viewport::of(ed);
+    // the snap steps are the Preferences' own: read what was set there since the last pass
+    vp.sync(ed);
     let class = ed
         .project_opt()
         .and_then(|s| s.services.get::<SceneService>())

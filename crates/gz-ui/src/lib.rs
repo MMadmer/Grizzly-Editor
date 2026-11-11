@@ -39,6 +39,8 @@
 //!   `notice`, `result` ([`ResultSpec`]) answered per [`Asker`] with an [`Answer`], drawn by
 //!   [`dialog::draw_overlays`] (call it last every frame); for MCP `open_dialogs`
 //!   ([`DialogInfo`]), `modal_on_top`, `close_dialog`
+//! - [`file_dialog`] - the system's file dialog: `pick` opens it for a person only, on a thread
+//!   of its own; an MCP caller or `-nodlg` gets nothing opened and `NAME_THE_FILE`
 
 pub mod audit;
 pub mod button;
@@ -50,6 +52,7 @@ pub mod theme;
 
 pub mod card;
 pub mod dialog;
+pub mod file_dialog;
 pub mod grid;
 pub mod list;
 pub mod menu;

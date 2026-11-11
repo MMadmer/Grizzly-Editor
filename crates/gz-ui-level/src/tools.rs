@@ -380,38 +380,7 @@ impl ToolsPanel {
                     "object_tool",
                     &[("action", Value::String("reset_surfaces".into())), ("selected", Value::Bool(true))],
                 ),
-                Some(1) => {
-                    let count = snap.of_class(ObjClass::SceneObject).filter(|o| o.flags.visible).count();
-                    let spec = gz_ui::ConfirmSpec {
-                        id: "reset_surfaces".into(),
-                        title: "Reset Surfaces".into(),
-                        headline: "Reset the surfaces of every object in the level?".into(),
-                        items: vec![format!(
-                            "{count} visible scene object{}",
-                            if count == 1 { "" } else { "s" }
-                        )],
-                        total: 1,
-                        consequence: "Surface changes made on these objects in this level are lost.".into(),
-                        action: "Reset All".into(),
-                        destructive: true,
-                    };
-                    let ed = editor.clone();
-                    let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |a| {
-                        if a == gz_ui::Answer::Yes {
-                            tool_call(
-                                &ed,
-                                "object_tool",
-                                &[
-                                    ("action", Value::String("reset_surfaces".into())),
-                                    ("selected", Value::Bool(false)),
-                                ],
-                            );
-                        }
-                    });
-                    if let Some(l) = line {
-                        editor.log.plain(l);
-                    }
-                }
+                Some(1) => ask_reset_all(editor, ui.ctx(), asker(editor)),
                 _ => {}
             }
         }
@@ -593,7 +562,7 @@ impl ToolsPanel {
                     .post(SceneCmd::Group { name: SmolStr::new(snap.gen_name(Some("group"))) }, origin),
                 Some(1) => svc.store.post(SceneCmd::Ungroup, origin),
                 Some(2) => tool_call(editor, "group_thumbnail", &[]),
-                Some(3) => save_group_as(editor, svc, snap),
+                Some(3) => save_group_as(editor, ui.ctx(), svc, snap),
                 _ => {}
             }
         }
@@ -1163,7 +1132,7 @@ fn tool_call(editor: &Arc<Editor>, command: &'static str, pairs: &[(&str, Value)
 }
 
 /// The Group tool's Save As...: the library's `rawdata\\groups` in the system's dialog.
-fn save_group_as(editor: &Arc<Editor>, svc: &SceneService, snap: &SceneState) {
+fn save_group_as(editor: &Arc<Editor>, ctx: &egui::Context, svc: &SceneService, snap: &SceneState) {
     let name = snap
         .selected_in_order()
         .into_iter()
@@ -1174,27 +1143,49 @@ fn save_group_as(editor: &Arc<Editor>, svc: &SceneService, snap: &SceneState) {
     let dir = svc.root.join("rawdata").join("groups");
     let leaf = name.rsplit('\\').next().unwrap_or("group").to_owned();
     let ed = editor.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-level.save_group".into()).spawn(move || {
-        let _ = std::fs::create_dir_all(&dir);
-        let picked = rfd::FileDialog::new()
-            .set_title("Save Group As")
-            .add_filter("Group", &["group"])
-            .set_directory(&dir)
-            .set_file_name(format!("{leaf}.group"))
-            .save_file();
-        if let Some(f) = picked {
+    let request = gz_ui::file_dialog::FileRequest::save("Save Group As", &format!("{leaf}.group"))
+        .filter("Group", &["group"])
+        .in_folder(dir)
+        .creating_folder();
+    let picked = gz_ui::file_dialog::pick(Some(ctx), asker(editor), request, move |f| {
+        tool_call(
+            &ed,
+            "group_tool",
+            &[("action", Value::String("save_as".into())), ("file", Value::String(f.display().to_string()))],
+        );
+    });
+    if let Err(line) = picked {
+        editor.log.plain(line);
+    }
+}
+
+/// Reset All Surfaces' question, naming how many objects it touches; `who` answers it.
+pub(crate) fn ask_reset_all(editor: &Arc<Editor>, ctx: &egui::Context, who: gz_ui::Asker) {
+    let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else { return };
+    let snap = svc.store.snapshot();
+    let count = snap.of_class(ObjClass::SceneObject).filter(|o| o.flags.visible).count();
+    let spec = gz_ui::ConfirmSpec {
+        id: "reset_surfaces".into(),
+        title: "Reset Surfaces".into(),
+        headline: "Reset the surfaces of every object in the level?".into(),
+        items: vec![format!("{count} visible scene object{}", if count == 1 { "" } else { "s" })],
+        total: 1,
+        consequence: "Surface changes made on these objects in this level are lost.".into(),
+        action: "Reset All".into(),
+        destructive: true,
+    };
+    let ed = editor.clone();
+    let line = gz_ui::dialog::confirm(ctx, who, spec, move |a| {
+        if a == gz_ui::Answer::Yes {
             tool_call(
                 &ed,
-                "group_tool",
-                &[
-                    ("action", Value::String("save_as".into())),
-                    ("file", Value::String(f.display().to_string())),
-                ],
+                "object_tool",
+                &[("action", Value::String("reset_surfaces".into())), ("selected", Value::Bool(false))],
             );
         }
     });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the save dialog did not open: {e}"));
+    if let Some(l) = line {
+        editor.log.plain(l);
     }
 }
 

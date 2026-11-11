@@ -208,6 +208,25 @@ fn handle(ctx: &Context) -> Handle {
     })
 }
 
+fn work_area_id() -> Id {
+    Id::unique("gz-ui.dialog_work_area")
+}
+
+/// The window's work area (the shell's, below its toolbar and above its status bar), set every
+/// frame: a dialog is centred and held inside it.
+pub fn set_work_area(ctx: &Context, rect: Rect) {
+    ctx.data_mut(|d| d.insert_temp(work_area_id(), rect));
+}
+
+/// The work area a shell set, else the whole window.
+fn work_area(ctx: &Context) -> Rect {
+    let whole = ctx.content_rect();
+    match ctx.data(|d| d.get_temp::<Rect>(work_area_id())) {
+        Some(r) if r.is_positive() && r.height() > 120.0 => r.intersect(whole),
+        _ => whole,
+    }
+}
+
 /// `dlg.<name>` for a name given with or without the prefix.
 fn full_name(name: &str) -> String {
     if name.starts_with("dlg.") { name.to_owned() } else { format!("dlg.{name}") }
@@ -464,7 +483,7 @@ fn show_impl<R>(
         mem = Mem::default();
     }
 
-    let work = ctx.content_rect();
+    let work = work_area(ctx);
     let mut width = size.width(work.width()).min(work.width() - 32.0);
     let mut max_h = work.height() - 48.0;
     if let Some(par) = &parent {
@@ -520,6 +539,8 @@ fn show_impl<R>(
     let mut footer_state = (0.0, false, Vec::new(), None, false);
     let mut drawn_rect = Rect::from_min_size(pos, size_v);
     let opening = mem.shown <= 1;
+    // where this dialog's record goes in the frame's list: before the sheets its body draws
+    let mut cur_at = usize::MAX;
     let sheet = parent.is_some();
     let last_footer_w = mem.footer_w;
     let mut drag = Vec2::ZERO;
@@ -577,7 +598,11 @@ fn show_impl<R>(
             close_now = true;
         }
 
-        h.0.lock().stack.push(Drawn { name: name.to_owned(), rect });
+        {
+            let mut g = h.0.lock();
+            cur_at = g.cur.len();
+            g.stack.push(Drawn { name: name.to_owned(), rect });
+        }
         // the audit names the dialog as its window is named, `Title###dlg.<name>`: what
         // `ui_audit id=dlg.<name>` and the contract's window names look for
         let window = format!("{title}###{name}");
@@ -679,11 +704,19 @@ fn show_impl<R>(
     }
     let ppp = ctx.pixels_per_point();
     let r = drawn_rect;
-    h.0.lock().cur.push(DialogInfo {
-        id: name.to_owned(),
-        title: title.to_owned(),
-        rect_px: [r.min.x * ppp, r.min.y * ppp, r.max.x * ppp, r.max.y * ppp],
-    });
+    {
+        // before the sheets its body drew: a sheet is on top of the dialog it belongs to
+        let mut g = h.0.lock();
+        let at = cur_at.min(g.cur.len());
+        g.cur.insert(
+            at,
+            DialogInfo {
+                id: name.to_owned(),
+                title: title.to_owned(),
+                rect_px: [r.min.x * ppp, r.min.y * ppp, r.max.x * ppp, r.max.y * ppp],
+            },
+        );
+    }
     if *open {
         ctx.data_mut(|d| d.insert_temp(id, mem));
     } else {
@@ -1009,7 +1042,7 @@ pub fn answer_as(ctx: &Context, caller: Asker) -> CallerScope {
 }
 
 /// The asker in force: the caller's while its scope is held.
-fn who(ctx: &Context, asker: Asker) -> Asker {
+pub(crate) fn who(ctx: &Context, asker: Asker) -> Asker {
     handle(ctx).0.lock().caller.unwrap_or(asker)
 }
 

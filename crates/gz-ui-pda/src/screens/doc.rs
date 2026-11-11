@@ -21,6 +21,7 @@ use gz_project::Project;
 use gz_project::tree::EntryKind;
 use gz_screens::model::{HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, MENU, PAUSE, sanitize};
 use gz_screens::{FileKind, Fit, Layer, Screen, Screens, Track, file_kind};
+use gz_ui::file_dialog::FileRequest;
 use gz_ui::grid::{Grid, chips, number, pick_field, switch, text_field};
 use gz_ui::list::{NavRowSpec, nav_row};
 use gz_ui::state::{busy_line, empty_state};
@@ -475,16 +476,13 @@ impl ScreensDoc {
         if self.picking.swap(true, Ordering::SeqCst) {
             return;
         }
-        let (ed, tab, flag) = (self.editor.clone(), self.tab.clone(), self.picking.clone());
-        let start = self.tab.root.clone();
-        let spawned = std::thread::Builder::new().name("gz-ui-pda.file".to_owned()).spawn(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Choose a File")
-                .add_filter(filter, exts)
-                .set_directory(&start)
-                .pick_file();
-            flag.store(false, Ordering::SeqCst);
-            let Some(file) = picked else { return };
+        let (ed, tab) = (self.editor.clone(), self.tab.clone());
+        let release = ReleasePick(self.picking.clone());
+        let request =
+            FileRequest::open("Choose a File").filter(filter, exts).in_folder(self.tab.root.clone());
+        let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+        let picked = gz_ui::file_dialog::pick(None, asker, request, move |file| {
+            drop(release);
             let file = file.display().to_string();
             let _task = ed.exec.clone().spawn(async move {
                 match pick {
@@ -523,9 +521,8 @@ impl ScreensDoc {
                 }
             });
         });
-        if let Err(e) = spawned {
-            self.picking.store(false, Ordering::SeqCst);
-            self.editor.log.warn(format!("the file dialog did not open: {e}"));
+        if let Err(line) = picked {
+            self.editor.log.plain(line);
         }
     }
 }
@@ -1457,4 +1454,13 @@ pub fn install(b: &mut ShellBuilder) {
         })
         .enabled(|editor, _| editor.project_opt().is_some()),
     );
+}
+
+/// Frees the one file dialog's place when its answer is dropped, picked or not.
+struct ReleasePick(Arc<AtomicBool>);
+
+impl Drop for ReleasePick {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }

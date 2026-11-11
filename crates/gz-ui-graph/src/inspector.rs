@@ -160,6 +160,8 @@ pub struct Inspector {
     reveal_key: String,
     reveal_frames: u8,
     reveal_open: bool,
+    /// The node pane's height last frame.
+    reveal_pane_h: f32,
     pub focus_rename: bool,
     pub focus_action: bool,
     pub pick: PickState,
@@ -253,6 +255,13 @@ impl Inspector {
     /// A key of this tab's own: fold states are the tab's.
     fn key(&self, k: &str) -> String {
         format!("{}|{k}", self.scope)
+    }
+
+    /// Opens or folds every role's More (`quest_view roles_more=`).
+    pub fn set_roles_more(&self, ctx: &egui::Context, open: bool) {
+        for i in 0..self.header.roles.len() {
+            local::set_fold(ctx, &self.key(&format!("role{i}/more")), open);
+        }
     }
 
     /// An action is open under the node.
@@ -1361,6 +1370,13 @@ impl Inspector {
     }
 
     fn node_pane_draw(&mut self, ui: &mut Ui, r: Rect, cx: &mut PanelCx<'_>) {
+        // a pane that changed its height (the split moved) shows the selected action again
+        if (r.height() - self.reveal_pane_h).abs() > 0.5 {
+            if !cx.view.slot.is_empty() {
+                self.reveal_frames = self.reveal_frames.max(3);
+            }
+            self.reveal_pane_h = r.height();
+        }
         let mut pane = ui.new_child(UiBuilder::new().id_salt("node_pane").max_rect(r));
         pane.set_clip_rect(r.intersect(ui.clip_rect()));
         let mut sa = ScrollArea::vertical().id_salt("gz-ui-graph.node").auto_shrink([false, false]);
@@ -1604,7 +1620,12 @@ impl Inspector {
                             if ui.clip_rect().contains_rect(r) {
                                 self.reveal_frames = 0;
                             } else {
-                                ui.scroll_to_rect(r, Some(Align::Center));
+                                // at once: a view asked over MCP is answered from the frame that shows it
+                                ui.scroll_to_rect_animation(
+                                    r,
+                                    Some(Align::Center),
+                                    egui::style::ScrollAnimation::none(),
+                                );
                             }
                         }
                     }

@@ -195,16 +195,16 @@ fn scene_menu(ui: &mut Ui, editor: &Arc<Editor>, ctx: &Context, has_scene: bool)
     }
     ui.separator();
     if item(ui, "Open Selection...", "COMMAND_LOAD_SELECTION", has_scene) {
-        crate::level_cmds::open_selection(editor);
+        let _ = crate::level_cmds::open_selection(editor, ctx);
     }
     if item(ui, "Save Selection As...", "COMMAND_SAVE_SELECTION", has_scene) {
-        crate::level_cmds::save_selection(editor);
+        let _ = crate::level_cmds::save_selection(editor, ctx);
     }
     if item(ui, "Export Scene as OBJ...", "", has_scene) {
-        crate::level_cmds::export_obj(editor, false);
+        let _ = crate::level_cmds::export_obj(editor, ctx, false);
     }
     if item(ui, "Export Selection as OBJ...", "", has_scene) {
-        crate::level_cmds::export_obj(editor, true);
+        let _ = crate::level_cmds::export_obj(editor, ctx, true);
     }
     if item(ui, "Rename Objects After References...", "COMMAND_MULTI_RENAME_OBJECTS", has_scene) {
         crate::level_cmds::rename_objects(editor, ctx);
@@ -298,10 +298,10 @@ fn build_menu(ui: &mut Ui, editor: &Arc<Editor>, builds: &[&toolbar::LevelAction
     ui.separator();
     let has_scene = scene(editor).is_some();
     if menu_item(ui, "Import Error List...", MenuItem { enabled: has_scene, ..MenuItem::default() }) {
-        crate::level_cmds::import_errors(editor);
+        let _ = crate::level_cmds::import_errors(editor, ui.ctx());
     }
     if menu_item(ui, "Export Error List...", MenuItem { enabled: has_scene, ..MenuItem::default() }) {
-        crate::level_cmds::export_errors(editor);
+        let _ = crate::level_cmds::export_errors(editor, ui.ctx());
     }
     if menu_item(ui, "Clear Error List", MenuItem { enabled: has_scene, ..MenuItem::default() }) {
         crate::level_cmds::clear_debug_draw(editor);

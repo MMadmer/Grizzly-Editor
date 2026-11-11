@@ -111,7 +111,11 @@ func (m *mock) checkVT(headers http.Header) error {
 		return nil
 	}
 	now := time.Now()
-	for len(m.vtCalls) > 0 && now.Sub(m.vtCalls[0]) >= VT_RATE_WINDOW {
+	window := VT_RATE_WINDOW
+	if m.cfg.vtRateWindowMs > 0 {
+		window = time.Duration(m.cfg.vtRateWindowMs) * time.Millisecond
+	}
+	for len(m.vtCalls) > 0 && now.Sub(m.vtCalls[0]) >= window {
 		m.vtCalls = m.vtCalls[1:]
 	}
 	if len(m.vtCalls) >= m.cfg.vtRate {

@@ -19,6 +19,7 @@ use gz_app::{
 use gz_editor::{Args, Editor, SmolStr, Value, json};
 use gz_scene::{ObjClass, SceneCmd, SceneService};
 use gz_ui::dialog::ResultSpec;
+use gz_ui::file_dialog::FileRequest;
 use gz_ui::theme::Tone;
 use gz_ui::{Answer, ConfirmSpec, Dialog, DialogSize, Icon, MenuItem, menu_item};
 use parking_lot::Mutex;
@@ -182,30 +183,29 @@ fn run(editor: &Arc<Editor>, command: &'static str, a: Args) {
     });
 }
 
-/// The system's file dialog on a thread of its own; `then` gets the file.
+/// The system's file dialog (the kit's, on a thread of its own); `then` gets the file. For a
+/// caller who cannot answer it nothing opens and the row refuses with "name the file".
 fn file_dialog(
     editor: &Arc<Editor>,
+    ctx: &Context,
     title: &'static str,
     filter: (&'static str, &'static [&'static str]),
     dir: PathBuf,
     save: Option<String>,
     then: impl FnOnce(&Arc<Editor>, PathBuf) + Send + 'static,
-) {
-    let ed = editor.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-level.file_dialog".into()).spawn(move || {
-        let _ = std::fs::create_dir_all(&dir);
-        let d = rfd::FileDialog::new().set_title(title).add_filter(filter.0, filter.1).set_directory(&dir);
-        let picked = match save {
-            Some(name) => d.set_file_name(name).save_file(),
-            None => d.pick_file(),
-        };
-        if let Some(f) = picked {
-            then(&ed, f);
-        }
-    });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the file dialog did not open: {e}"));
+) -> Result<(), String> {
+    let request = match save {
+        Some(name) => FileRequest::save(title, &name),
+        None => FileRequest::open(title),
     }
+    .filter(filter.0, filter.1)
+    .in_folder(dir)
+    .creating_folder();
+    let ed = editor.clone();
+    gz_ui::file_dialog::pick(Some(ctx), asker(editor), request, move |f| then(&ed, f)).map_err(|line| {
+        editor.log.plain(line);
+        gz_ui::file_dialog::NAME_THE_FILE.to_owned()
+    })
 }
 
 fn path_text(p: &std::path::Path) -> Value {
@@ -276,18 +276,20 @@ pub fn open_scene_file(editor: &Arc<Editor>, ctx: &Context, file: String) {
 }
 
 /// File > Open Scene... (`CommandLoad` without a scene): the system's dialog in `$maps$`.
-pub fn open_scene_dialog(editor: &Arc<Editor>, ctx: &Context) {
-    let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else { return };
+pub fn open_scene_dialog(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else {
+        return Ok(());
+    };
     let dir = svc.maps_dir();
-    let ctx = ctx.clone();
-    file_dialog(editor, "Open Scene", ("Level", &["level"]), dir, None, move |ed, f| {
-        open_scene_file(ed, &ctx, f.display().to_string());
-    });
+    let cx = ctx.clone();
+    file_dialog(editor, ctx, "Open Scene", ("Level", &["level"]), dir, None, move |ed, f| {
+        open_scene_file(ed, &cx, f.display().to_string());
+    })
 }
 
 /// File > Save As... (`CommandSave` with p2 = 1).
-pub fn save_as(editor: &Arc<Editor>) {
-    let Some(svc) = scene(editor) else { return };
+pub fn save_as(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    let Some(svc) = scene(editor) else { return Ok(()) };
     let snap = svc.store.snapshot();
     let name = snap
         .meta
@@ -295,9 +297,9 @@ pub fn save_as(editor: &Arc<Editor>) {
         .as_ref()
         .and_then(|f| f.file_name())
         .map_or_else(|| "level.level".to_owned(), |n| n.to_string_lossy().into_owned());
-    file_dialog(editor, "Save Scene As", ("Level", &["level"]), svc.maps_dir(), Some(name), |ed, f| {
+    file_dialog(editor, ctx, "Save Scene As", ("Level", &["level"]), svc.maps_dir(), Some(name), |ed, f| {
         run(ed, "save_scene", args(&[("file", path_text(&f))]));
-    });
+    })
 }
 
 /// File > Recent Scene's list (`scene_recent_list`).
@@ -314,18 +316,19 @@ pub fn edit(editor: &Arc<Editor>, action: &'static str) {
 }
 
 /// Scene > Open Selection... (`CommandLoadSelection`).
-pub fn open_selection(editor: &Arc<Editor>) {
-    let Some(svc) = scene(editor) else { return };
-    file_dialog(editor, "Open Selection", ("Level", &["level"]), svc.maps_dir(), None, |ed, f| {
+pub fn open_selection(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    let Some(svc) = scene(editor) else { return Ok(()) };
+    file_dialog(editor, ctx, "Open Selection", ("Level", &["level"]), svc.maps_dir(), None, |ed, f| {
         run(ed, "selection_file", args(&[("action", Value::String("open".into())), ("file", path_text(&f))]));
-    });
+    })
 }
 
 /// Scene > Save Selection As... (`CommandSaveSelection`).
-pub fn save_selection(editor: &Arc<Editor>) {
-    let Some(svc) = scene(editor) else { return };
+pub fn save_selection(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    let Some(svc) = scene(editor) else { return Ok(()) };
     file_dialog(
         editor,
+        ctx,
         "Save Selection As",
         ("Level", &["level"]),
         svc.maps_dir(),
@@ -337,14 +340,15 @@ pub fn save_selection(editor: &Arc<Editor>) {
                 args(&[("action", Value::String("save".into())), ("file", path_text(&f))]),
             );
         },
-    );
+    )
 }
 
 /// Scene > Export Scene / Selection as OBJ... (`EScene::ExportObj`: the name asked in `$import$`).
-pub fn export_obj(editor: &Arc<Editor>, selected: bool) {
-    let Some(root) = editor.project_root() else { return };
+pub fn export_obj(editor: &Arc<Editor>, ctx: &Context, selected: bool) -> Result<(), String> {
+    let Some(root) = editor.project_root() else { return Ok(()) };
     file_dialog(
         editor,
+        ctx,
         "Export as OBJ",
         ("Wavefront OBJ", &["obj"]),
         root.join("import"),
@@ -356,11 +360,15 @@ pub fn export_obj(editor: &Arc<Editor>, selected: bool) {
                 args(&[("file", path_text(&f)), ("selected", Value::Bool(selected))]),
             );
         },
-    );
+    )
 }
 
 /// `CommandMultiRenameObjects`: asks, naming the objects.
 pub fn rename_objects(editor: &Arc<Editor>, ctx: &Context) {
+    rename_objects_as(editor, ctx, asker(editor));
+}
+
+fn rename_objects_as(editor: &Arc<Editor>, ctx: &Context, who: gz_ui::Asker) {
     let Some(svc) = scene(editor) else { return };
     let snap = svc.store.snapshot();
     let class = snap.tools.target;
@@ -381,7 +389,7 @@ pub fn rename_objects(editor: &Arc<Editor>, ctx: &Context) {
         destructive: false,
     };
     let ed = editor.clone();
-    let line = gz_ui::dialog::confirm(ctx, asker(editor), spec, move |a| {
+    let line = gz_ui::dialog::confirm(ctx, who, spec, move |a| {
         if a == Answer::Yes {
             run(&ed, "rename_objects", Args::new());
         }
@@ -534,8 +542,9 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
         let level =
             scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
         if let Some(root) = editor.project_root() {
-            file_dialog(
+            let _ = file_dialog(
                 editor,
+                ui.ctx(),
                 "Export Summary",
                 ("Text", &["txt"]),
                 root.join("import"),
@@ -554,10 +563,11 @@ fn draw_summary(ui: &mut egui::Ui, editor: &Arc<Editor>) {
 }
 
 /// Build > Import / Export / Clear Error List and Scene > Clear Debug Draw.
-pub fn import_errors(editor: &Arc<Editor>) {
-    let Some(root) = editor.project_root() else { return };
+pub fn import_errors(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    let Some(root) = editor.project_root() else { return Ok(()) };
     file_dialog(
         editor,
+        ctx,
         "Import Error List",
         ("Error list", &["err", "*"]),
         root.join("logs"),
@@ -569,13 +579,14 @@ pub fn import_errors(editor: &Arc<Editor>) {
                 args(&[("action", Value::String("import".into())), ("file", path_text(&f))]),
             );
         },
-    );
+    )
 }
 
-pub fn export_errors(editor: &Arc<Editor>) {
-    let Some(root) = editor.project_root() else { return };
+pub fn export_errors(editor: &Arc<Editor>, ctx: &Context) -> Result<(), String> {
+    let Some(root) = editor.project_root() else { return Ok(()) };
     file_dialog(
         editor,
+        ctx,
         "Export Error List",
         ("Error list", &["err"]),
         root.join("logs"),
@@ -587,7 +598,7 @@ pub fn export_errors(editor: &Arc<Editor>) {
                 args(&[("action", Value::String("export".into())), ("file", path_text(&f))]),
             );
         },
-    );
+    )
 }
 
 pub fn clear_debug_draw(editor: &Arc<Editor>) {
@@ -597,6 +608,12 @@ pub fn clear_debug_draw(editor: &Arc<Editor>) {
 /// `ConfirmLevelBuild`: the level folder named, then the build. A scene that names no folder is
 /// not asked about - the build stops with its own error.
 pub fn ask_make(editor: &Arc<Editor>, ctx: &Context, command: &'static str) {
+    ask_make_as(editor, ctx, command, asker(editor));
+}
+
+/// [`ask_make`] answered by `who`: `ui_dialog open id=make_question` puts the question up to be
+/// looked at whatever `-nodlg` says.
+fn ask_make_as(editor: &Arc<Editor>, ctx: &Context, command: &'static str, who: gz_ui::Asker) {
     let Some(m) = MAKES.iter().find(|m| m.command == command) else { return };
     let level =
         scene(editor).map(|s| s.store.snapshot().meta.level.level_path.to_string()).unwrap_or_default();
@@ -617,7 +634,7 @@ pub fn ask_make(editor: &Arc<Editor>, ctx: &Context, command: &'static str) {
         destructive: m.destructive,
     };
     let ed = editor.clone();
-    let line = gz_ui::dialog::confirm(ctx, asker(editor), spec, move |a| {
+    let line = gz_ui::dialog::confirm(ctx, who, spec, move |a| {
         if a == Answer::Yes {
             run(&ed, command, Args::new());
         }
@@ -800,7 +817,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             CppAction::shell(|cx, p1, _| {
                 match p1.text() {
                     Some(file) => open_scene_file(cx.editor, cx.ctx, file.to_owned()),
-                    None => open_scene_dialog(cx.editor, cx.ctx),
+                    None => open_scene_dialog(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
@@ -816,7 +833,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             "File",
             CppAction::shell(|cx, p1, p2| {
                 if p2.int() == Some(1) {
-                    save_as(cx.editor);
+                    save_as(cx.editor, cx.ctx)?;
                     return ok();
                 }
                 let file = p1.text().filter(|f| !f.is_empty()).map(str::to_owned);
@@ -824,7 +841,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                     Some(f) => run(cx.editor, "save_scene", args(&[("file", json!(f))])),
                     None => match scene(cx.editor).and_then(|s| s.store.snapshot().meta.file.clone()) {
                         Some(_) => run(cx.editor, "save_scene", Args::new()),
-                        None => save_as(cx.editor),
+                        None => save_as(cx.editor, cx.ctx)?,
                     },
                 }
                 ok()
@@ -887,7 +904,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                         "selection_file",
                         args(&[("action", json!("open")), ("file", json!(f))]),
                     ),
-                    None => open_selection(cx.editor),
+                    None => open_selection(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
@@ -908,7 +925,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                         "selection_file",
                         args(&[("action", json!("save")), ("file", json!(f))]),
                     ),
-                    None => save_selection(cx.editor),
+                    None => save_selection(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
@@ -940,7 +957,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                         "compiler_errors",
                         args(&[("action", json!("import")), ("file", json!(f))]),
                     ),
-                    None => import_errors(cx.editor),
+                    None => import_errors(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
@@ -961,7 +978,7 @@ pub(crate) fn install(b: &mut ShellBuilder) {
                         "compiler_errors",
                         args(&[("action", json!("export")), ("file", json!(f))]),
                     ),
-                    None => export_errors(cx.editor),
+                    None => export_errors(cx.editor, cx.ctx)?,
                 }
                 ok()
             }),
@@ -1081,6 +1098,38 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         order: 50,
         content: MenuContent::Custom(Box::new(|ui, cx| file_rows(ui, cx, false))),
     });
+    // the questions a click raises, put up to be looked at (the window's own, answered there):
+    // Make Game's level folder, Rename Objects After References, Reset All Surfaces
+    b.dialog(DialogDesc {
+        id: SmolStr::new("make_question"),
+        window: SmolStr::new("Make Game###dlg.make_game"),
+        needs_project: true,
+        open: Box::new(|cx| {
+            ask_make_as(cx.editor, cx.ctx, "make_game", gz_ui::Asker::Ui);
+            Ok(())
+        }),
+        draw: Box::new(|_, _| {}),
+    });
+    b.dialog(DialogDesc {
+        id: SmolStr::new("rename_question"),
+        window: SmolStr::new("Rename Objects###dlg.rename_objects"),
+        needs_project: true,
+        open: Box::new(|cx| {
+            rename_objects_as(cx.editor, cx.ctx, gz_ui::Asker::Ui);
+            Ok(())
+        }),
+        draw: Box::new(|_, _| {}),
+    });
+    b.dialog(DialogDesc {
+        id: SmolStr::new("reset_surfaces_question"),
+        window: SmolStr::new("Reset Surfaces###dlg.reset_surfaces"),
+        needs_project: true,
+        open: Box::new(|cx| {
+            crate::tools::ask_reset_all(cx.editor, cx.ctx, gz_ui::Asker::Ui);
+            Ok(())
+        }),
+        draw: Box::new(|_, _| {}),
+    });
     b.dialog(DialogDesc {
         id: SmolStr::new("scene_summary"),
         window: SmolStr::new("Summary Info###dlg.scene_summary"),
@@ -1133,7 +1182,7 @@ fn file_rows(ui: &mut egui::Ui, cx: &mut DocCx<'_>, top: bool) {
             MenuItem { keys: &keys("COMMAND_LOAD", "Ctrl+L"), enabled: has_project, ..MenuItem::default() },
         ) {
             cx.requests.activate(crate::LEVEL);
-            open_scene_dialog(&editor, cx.ctx);
+            let _ = open_scene_dialog(&editor, cx.ctx);
         }
         let list = recent(&editor);
         gz_app::chrome::local_submenu(
@@ -1162,7 +1211,7 @@ fn file_rows(ui: &mut egui::Ui, cx: &mut DocCx<'_>, top: bool) {
                 ..MenuItem::default()
             },
         ) {
-            save_as(&editor);
+            let _ = save_as(&editor, cx.ctx);
         }
     }
 }

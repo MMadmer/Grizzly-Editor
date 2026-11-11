@@ -111,6 +111,20 @@ pub fn install(b: &mut ShellBuilder) {
     b.reveal_in_browser(|path, cx| actions::reveal_from_tab(cx, path));
 }
 
+/// What the browser tells the rest of the editor: the folder `content_create` makes an asset in
+/// when the caller names none (the folder shown, as the C++ `UIContentBrowser::GetSelection`).
+pub fn install_hooks(editor: &gz_editor::Editor) {
+    gz_project::ProjectHooks::of(editor).provide_content_folder(|ed| {
+        let loc = service::ContentBrowser::of(ed).inner.lock().loc.clone();
+        match loc.source {
+            model::Source::Project => Ok(loc.folder.replace('/', "\\")),
+            model::Source::Editor | model::Source::Game => {
+                Err("only the project source can be written to".to_owned())
+            }
+        }
+    });
+}
+
 /// The commands of this package.
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "content_browser_navigation", cmd::content_browser_navigation);

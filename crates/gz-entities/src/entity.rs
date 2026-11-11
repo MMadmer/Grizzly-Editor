@@ -614,6 +614,13 @@ impl Entity {
         k.info.class.has_visual().then(|| k.object.visual.name.as_str())
     }
 
+    /// `CSE_Visual::startup_animation` of a class that has a visual.
+    #[must_use]
+    pub fn startup_animation(&self) -> Option<&str> {
+        let k = self.known()?;
+        k.info.class.has_visual().then(|| k.object.visual.startup_animation.as_str())
+    }
+
     #[must_use]
     pub fn shapes(&self) -> &[Shape] {
         self.known().map_or(&[], |k| k.object.shapes())

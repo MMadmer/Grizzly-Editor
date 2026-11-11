@@ -118,7 +118,7 @@ pub struct DrawerDesc {
 /// A dialog's opener: `Err` says why it cannot open.
 pub type OpenFn = Box<dyn FnMut(&mut DocCx<'_>) -> Result<(), String>>;
 /// What the status bar reads of the log.
-pub type LogStateFn = Box<dyn Fn(&Editor) -> LogState>;
+pub type LogStateFn = std::sync::Arc<dyn Fn(&Editor) -> LogState + Send + Sync>;
 /// Shows a project path in the Content Browser.
 pub type RevealFn = Box<dyn FnMut(&str, &mut DocCx<'_>)>;
 /// Rebuilds the layout (`true`: every split too).
@@ -286,8 +286,8 @@ impl ShellBuilder {
     }
 
     /// What the status bar and `progress` say of the log. Unset: the editor's log itself.
-    pub fn log_state(&mut self, f: impl Fn(&Editor) -> LogState + 'static) {
-        self.log_state = Some(Box::new(f));
+    pub fn log_state(&mut self, f: impl Fn(&Editor) -> LogState + Send + Sync + 'static) {
+        self.log_state = Some(std::sync::Arc::new(f));
     }
 
     /// A tab's file shown in the Content Browser (the tab menu's Show in Content Browser).

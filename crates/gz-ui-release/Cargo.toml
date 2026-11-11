@@ -27,4 +27,3 @@ serde_json.workspace = true
 time.workspace = true
 zeroize = "1"
 # the system's file dialog (where a new author key goes, another key file)
-rfd = { version = "0.15", default-features = false }

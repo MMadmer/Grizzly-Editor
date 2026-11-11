@@ -188,6 +188,11 @@ fn apply(t: &mut GraphTab, ctx: &egui::Context, r: ViewReq) -> Result<u32, CmdEr
         t.show_keys = v;
         asked = true;
     }
+    // a behaviour graph's roles keep Title, Binding and Default under a folded More
+    if let Some(v) = toggle(&r.args, "roles_more", false)? {
+        t.inspector.set_roles_more(ctx, v);
+        asked = true;
+    }
     // the drawer: problems=show opens it on the problems, find results come through quest_find
     let drawer = t.drawer();
     if let Some(v) = toggle(&r.args, "problems", drawer == DrawerTab::Problems)? {

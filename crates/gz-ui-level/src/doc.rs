@@ -600,7 +600,7 @@ impl LevelDoc {
         }
     }
 
-    fn save_scene(&mut self) {
+    fn save_scene(&mut self, ctx: &egui::Context) {
         let Some(svc) = self.scene() else { return };
         let snap = svc.store.snapshot();
         if !snap.valid {
@@ -612,7 +612,9 @@ impl LevelDoc {
                 args.insert("file".into(), Value::String(file.display().to_string()));
                 self.editor.post("save_scene", args);
             }
-            None => save_as(&self.editor, &svc),
+            None => {
+                let _ = crate::level_cmds::save_as(&self.editor, ctx);
+            }
         }
     }
 }
@@ -623,34 +625,6 @@ fn tab_menu_id(p: PanelId) -> Id {
 
 fn px(r: Rect, ppp: f32) -> [f32; 4] {
     [(r.min.x * ppp).round(), (r.min.y * ppp).round(), (r.width() * ppp).round(), (r.height() * ppp).round()]
-}
-
-/// Save As: the system's save dialog off the UI thread, then `save_scene` with the file.
-fn save_as(editor: &Arc<Editor>, _svc: &SceneService) {
-    crate::level_cmds::save_as(editor);
-}
-
-#[allow(dead_code)]
-fn save_as_old(editor: &Arc<Editor>, svc: &SceneService) {
-    let dir = svc.maps_dir();
-    let ed = editor.clone();
-    let spawned = std::thread::Builder::new().name("gz-ui-level.save_as".into()).spawn(move || {
-        let _ = std::fs::create_dir_all(&dir);
-        let picked = rfd::FileDialog::new()
-            .set_title("Save Scene As")
-            .add_filter("Level", &["level"])
-            .set_directory(&dir)
-            .set_file_name("level.level")
-            .save_file();
-        if let Some(file) = picked {
-            let mut args = Args::new();
-            args.insert("file".into(), Value::String(file.display().to_string()));
-            ed.post("save_scene", args);
-        }
-    });
-    if let Err(e) = spawned {
-        editor.log.warn(format!("the save dialog did not open: {e}"));
-    }
 }
 
 /// `CapturePreview`: the viewport's own pass, no helpers, written as the project's
@@ -734,7 +708,7 @@ impl Document for LevelDoc {
         let mut save = false;
         toolbar::draw(tb, cx.editor, &mut self.toolbar, &mut save);
         if save {
-            self.save_scene();
+            self.save_scene(cx.ctx);
         }
     }
 
@@ -815,8 +789,8 @@ impl Document for LevelDoc {
         true
     }
 
-    fn save(&mut self, _cx: &mut DocCx<'_>) -> Result<(), String> {
-        self.save_scene();
+    fn save(&mut self, cx: &mut DocCx<'_>) -> Result<(), String> {
+        self.save_scene(cx.ctx);
         Ok(())
     }
 

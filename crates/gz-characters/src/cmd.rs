@@ -285,7 +285,8 @@ async fn characters_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Repl
             rep.failures.first().map_or_else(|| "delete failed".to_owned(), |f| f.reason.clone()),
         ));
     }
-    svc.project().tree.refresh().await;
+    // the roster without it before the answer: a quest validated next names it as gone
+    svc.fresh_roster().await;
     Ok(json!({ "deleted": wire }))
 }
 

@@ -226,6 +226,8 @@ pub struct Project {
     /// `appdata\game_index`: where the game indexes are saved between starts.
     index_dir: PathBuf,
     log: Log,
+    /// [`Project::game_linked_now`]'s last answer: the game root it was for, when, the answer.
+    linked: Arc<Mutex<Option<(String, std::time::Instant, bool)>>>,
 }
 
 /// The linked game's index and the revision it was put in place at.
@@ -259,6 +261,7 @@ impl Project {
             mount_lock: Mutex::new(()),
             index_dir: editor.paths.appdata.join("game_index"),
             log: editor.log.clone(),
+            linked: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -297,6 +300,34 @@ impl Project {
     pub fn game_linked(&self) -> bool {
         let root = self.game_root();
         !root.is_empty() && looks_like_game(&root).is_ok()
+    }
+
+    /// [`Project::game_linked`] without touching the disk: the last answer, looked at again on
+    /// the IO pool when it is a second old or the game root moved. For the window, which draws
+    /// it every frame and must never wait on a file (a build keeping the disk busy made a frame
+    /// of 70 ms of a `stat`).
+    #[must_use]
+    pub fn game_linked_now(&self) -> bool {
+        let root = self.game_root();
+        let mut slot = self.linked.lock();
+        let (answer, stale) = match slot.as_ref() {
+            Some((r, at, a)) if *r == root => (*a, at.elapsed() >= std::time::Duration::from_secs(1)),
+            _ => (false, true),
+        };
+        if stale {
+            // the answer stands until the look ends; one look at a time
+            *slot = Some((root.clone(), std::time::Instant::now(), answer));
+            drop(slot);
+            let cache = self.linked.clone();
+            self.exec.spawn_io(move || {
+                let a = !root.is_empty() && looks_like_game(&root).is_ok();
+                let mut s = cache.lock();
+                if s.as_ref().is_some_and(|(r, _, _)| *r == root) {
+                    *s = Some((root, std::time::Instant::now(), a));
+                }
+            });
+        }
+        answer
     }
 
     /// Applies an edit to `project.ltx` as the disk has it now and writes it.

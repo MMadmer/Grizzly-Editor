@@ -100,7 +100,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -238,7 +238,7 @@ def run(project: str, shot: str | None) -> None:
             shutil.rmtree(d, ignore_errors=True)
 
     # ---------------------------------------------------------------------- G: the process
-    logs = [p for p in glob.glob(os.path.join(REPO, "logs", "leveleditor_*.log"))
+    logs = [p for p in glob.glob(qa_target.log_glob())
             if not p.endswith("_lua.log") and os.path.getmtime(p) >= started]
     text = io.open(logs[0], encoding="utf-8", errors="replace").read() if logs else ""
     check("file names: UTF-8" in text, "G the editor ran with UTF-8 as its ANSI code page",

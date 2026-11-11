@@ -22,6 +22,7 @@ use gz_mod::ManifestService;
 use gz_release::content::Level;
 use gz_release::{AuthorKeys, KeyState};
 use gz_ui::card::card;
+use gz_ui::file_dialog::FileRequest;
 use gz_ui::grid::read_only;
 use gz_ui::text::{self, Clip};
 use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, palette};
@@ -280,37 +281,39 @@ fn pick_file(editor: &Arc<Editor>, facts: &Arc<Mutex<Facts>>, save: bool, start:
         }
         f.picking = true;
     }
-    let (wake, slot, start) = (editor.exec.wake().clone(), facts.clone(), start.to_owned());
-    let spawned = std::thread::Builder::new().name("gz-ui-release.key_file".to_owned()).spawn(move || {
-        let title = if save { "Where the new author key goes" } else { "Use an author key file" };
-        let mut dialog = rfd::FileDialog::new()
-            .set_title(title)
-            .add_filter("Grizzly author key (*.xkey)", &["xkey"])
-            .add_filter("All files", &["*"]);
-        let at = Path::new(&start);
-        if let Some(dir) = at.parent().filter(|d| d.is_dir()) {
-            dialog = dialog.set_directory(dir);
-        }
-        let picked: Option<PathBuf> = if save {
-            if let Some(name) = at.file_name().and_then(|n| n.to_str()) {
-                dialog = dialog.set_file_name(name);
-            }
-            dialog.save_file()
-        } else {
-            dialog.pick_file()
-        };
-        let mut f = slot.lock();
-        f.picking = false;
-        f.picked = picked.map(|p| {
-            let p = p.display().to_string();
-            if save { Picked::Target(p) } else { Picked::Use(p) }
-        });
-        drop(f);
-        wake.ping();
+    let title = if save { "Where the new author key goes" } else { "Use an author key file" };
+    let at = Path::new(start);
+    let mut request = match at.file_name().and_then(|n| n.to_str()) {
+        Some(name) if save => FileRequest::save(title, name),
+        _ => FileRequest::open(title),
+    }
+    .filter("Grizzly author key (*.xkey)", &["xkey"])
+    .filter("All files", &["*"]);
+    if let Some(dir) = at.parent().filter(|d| !d.as_os_str().is_empty()) {
+        request = request.in_folder(dir);
+    }
+    let done = PickDone { slot: facts.clone(), editor: editor.clone() };
+    let asker = if editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+    let picked = gz_ui::file_dialog::pick(None, asker, request, move |p: PathBuf| {
+        let p = p.display().to_string();
+        done.slot.lock().picked = Some(if save { Picked::Target(p) } else { Picked::Use(p) });
     });
-    if let Err(e) = spawned {
-        facts.lock().picking = false;
-        editor.log.warn(format!("the file dialog did not open: {e}"));
+    if let Err(line) = picked {
+        editor.log.plain(line);
+    }
+}
+
+/// Ends a key file dialog when its answer is dropped, picked or not: the window takes the pick
+/// at its next frame.
+struct PickDone {
+    slot: Arc<Mutex<Facts>>,
+    editor: Arc<Editor>,
+}
+
+impl Drop for PickDone {
+    fn drop(&mut self) {
+        self.slot.lock().picking = false;
+        self.editor.exec.wake().ping();
     }
 }
 

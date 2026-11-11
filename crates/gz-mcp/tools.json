@@ -1397,6 +1397,37 @@
    "cmd": "particles_tool"
   },
   {
+   "name": "grizzly_spawn_animation",
+   "description": "A spawn's model in the viewport, posed by its startup animation (the Details row Model\\Animation: First Frame, Play, Pause, Stop, Last Frame). A model starts at its first frame, paused; play loops the cycle, pause pauses a playing cycle and goes on with a paused one, stop shows the model at rest, last stops just before the cycle's end. Nothing is saved and the scene does not change. action=state (the default) answers visual, animation, skeleton (the model has bones), found (the cycle exists), state (playing, paused, stopped), time and length in seconds. Pictures: grizzly_screenshot_viewport.",
+   "annotations": {
+    "title": "Play a spawn's animation in the viewport"
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "object": {
+      "type": "string",
+      "description": "the spawn object's name"
+     },
+     "action": {
+      "type": "string",
+      "enum": [
+       "first",
+       "play",
+       "pause",
+       "stop",
+       "last",
+       "state"
+      ]
+     }
+    },
+    "required": [
+     "object"
+    ]
+   },
+   "cmd": "spawn_animation"
+  },
+  {
    "name": "grizzly_command_palette",
    "description": "Search, open, close, inspect, or execute the editor command palette. action='query' returns the same ranked results shown by Ctrl+Shift+P: the commands of the registry (kind 'command', name = its COMMAND_* id), the Level tab's panels and drawers (kind 'panel' / 'drawer') and the open tabs (kind 'tab'); each has label (what its row shows), path, shortcut and id. Words match the start of a word of the label first; only what a row shows is searched (label, path, keys), never the COMMAND_* id - list_commands has those. action='execute' accepts the returned numeric command/subcommand pair of a command, or any result's exact id (panel:<id>, drawer:<id> and tab:<id> bring that panel, drawer or tab up; their command is -1). Omitting action uses query when query is present, otherwise reports palette state.",
    "inputSchema": {
@@ -3273,6 +3304,15 @@
      "answer_only": {
       "type": "boolean",
       "description": "read the view and apply nothing"
+     },
+     "roles_more": {
+      "type": "string",
+      "enum": [
+       "show",
+       "hide",
+       "toggle"
+      ],
+      "description": "a behaviour graph: every role's More (Title, Binding, Default) in the Graph panel opened or folded"
      }
     },
     "required": [

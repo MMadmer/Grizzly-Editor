@@ -46,6 +46,16 @@ else
     echo "unsafe: only in crates/gz-win ($inside uses)"
 fi
 
+echo "== file dialog"
+dialogs=$(grep -rn 'rfd::' crates --include='*.rs' | grep -v '^crates/gz-ui/src/file_dialog.rs:' || true)
+if [ -n "$dialogs" ]; then
+    printf '%s\n' "$dialogs" | head -20
+    echo "file dialog: rfd:: outside gz-ui/src/file_dialog.rs (use gz_ui::file_dialog::pick)"
+    bad=1
+else
+    echo "file dialog: one kit function"
+fi
+
 echo "== build and registry"
 if ! bash tools/rust/cg.sh build -p grizzly; then
     echo "build: failed"

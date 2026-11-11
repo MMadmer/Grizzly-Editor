@@ -280,6 +280,18 @@ impl Catalog {
             token: account.token,
             vt_key: vt_key.unwrap_or_else(Secret::default),
         };
+        // the last job has said it ended (the view) a moment before its worker leaves the job
+        // table: a start right after it waits for that, instead of being refused as busy
+        let ending: Vec<JobId> = editor
+            .jobs
+            .snapshot()
+            .into_iter()
+            .filter(|j| j.running() && j.group.as_deref() == Some("catalog"))
+            .map(|j| j.id)
+            .collect();
+        for id in ending {
+            editor.jobs.wait(id).await;
+        }
         {
             let mut v = self.view.lock();
             v.job = job;

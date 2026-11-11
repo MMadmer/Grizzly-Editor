@@ -892,10 +892,11 @@ decides which enter section 12.
   `TargetColor` and keeps one group (1035 of 1428).
 - `mod_package` `warnings`: the C++ glues the unsigned-release sentence to the last build warning.
 - `mod_export_spawn` adds `missing` and `removed` (D13).
-- `property_inspector`: a spawn's `Model\Animation` is the C++ playback buttons (`SSpawnData::
-  FillProp`) - the Rust editor plays no spawn animation; the six Detail Objects rows of Level Settings
-  are on the Detail Objects panel and `details_tool`; `Scene\Targets` is in Level Settings (the C++
-  Preferences).
+- `property_inspector`: the six Detail Objects rows of Level Settings are on the Detail Objects panel
+  and `details_tool`; `Scene\Targets` is in Level Settings (the C++ Preferences); a new smart cover's
+  `hold position time` is uninitialised memory in the C++ (`CSE_SmartCover` never sets it; drawn
+  clamped to 60), 0 in Rust. A spawn's `Model\Animation` is compared since "The QA suites" (the Rust
+  editor plays it).
 - A level bound shape counts as visible in the C++ until a viewport frame runs `CEditShape::OnFrame`;
   the minimised oracle never ran one (`object_info`, `scene_tree`, `scene_visibility`).
 - Not in the tables, kept out of the scenarios: the C++ ray pick skips objects its camera does not see
@@ -905,6 +906,171 @@ decides which enter section 12.
 - Fields of their nature: the index fingerprint hashes absolute paths; `fps`, `dpi`, `ui_scale`;
   packages, the index's byte columns and the descriptor's sizes (D4); `preview.png` (D2); the
   shell's tabs (`temp\session.ltx`).
+
+## The QA suites
+
+Brief `briefs/tests-qa.md`. Every suite of `tools/qa` (17), the two `tools/mcp` scripts (through
+`tools/mcp/run_lifecycle.py` and `tools/mcp/run_benchmark.py`, which give them an editor of their own)
+and the new `test_mcp_bridge.py` and `test_stress.py` run against the Rust editor through
+**`tools/qa/run_all.py`** - side by side (`-j`, a quarter of the cores), each suite with its own port,
+`-home`, project copy and mock port, a hard timeout, `PASS/FAIL <suite> <seconds> <failed checks>`,
+every output line stamped with its second in `Intermediate/qa/<suite>.log`, results in
+`Intermediate/qa/state.json` (`--failed` reruns what failed, a name runs one suite, `--extra` passes
+arguments to it). `test_stress`, the lifecycle and the benchmark run alone after the others.
+
+`qa_target` gained `copy_project` (no `.git`, `releases`, `temp`, `logs`, `backup`; `project.ltx`
+naming the copy; `export_target` pointed into the suite's temp folder - no suite can build into the
+game), `mark()` and a `WALL <s> (copy, editor start, checks)` line every suite prints when it ends;
+the start loops poll at 50 ms. The suites restore `qa_target.KEPT` and read `qa_target.log_glob()`.
+
+Fixed in the editor (the suites found them):
+- `gz-ui`: **`file_dialog`** - the one way the system's file dialog opens (`pick(ctx, asker, FileRequest,
+  then)` on a thread of its own); for an MCP caller, a held caller scope or `-nodlg` nothing opens, the line
+  `~ [dlg suppressed] <title>` is logged and a table row answers `refused: name the file`. Twelve callers
+  moved; `rfd` is a dependency of `gz-ui` alone; `check.sh` fails on `rfd::` anywhere else.
+- `gz-ui`: dialogs are centred in the shell's work area (`dialog::set_work_area`, set by the chrome every
+  frame), not in the whole window; a sheet is listed after the dialog it belongs to, so `modal_on_top`
+  names the sheet (`dlg.catalog_withdraw`).
+- `gz-ui-viewport`: **spawn animation** (`spawn_anim.rs`): a spawn's model is posed by its startup
+  animation - the first frame, paused, as `PlayAnimationFirstFrame`; First Frame / Play / Pause (a toggle,
+  `TogglelendCB`) / Stop / Last Frame (0.4444 s before the end, `SetBlendLastFrameCB`) from the Details row
+  `<section>\Model\Animation` (the C++ buttons, which replace the startup-animation chooser) and over MCP
+  `spawn_animation` (tools.json `grizzly_spawn_animation`); rigs (bones, IK, embedded and `.omf` motions)
+  read once per visual on the IO pool, paused poses cached, the viewport draws every frame while one plays.
+- `gz-ui-viewport`: **a deadlock** the stress test found - two scene passes built at once on the CPU pool:
+  a worker inside the first pass's rayon work under the extras' lock (details, AI map, wallmarks) stole
+  the second pass and waited for that lock for ever; the CPU pool stalled and a scene load hung at
+  "Parsing". One pass is built at a time now (`packet_gate`).
+- `gz-ui-viewport`: `viewport_controls` reads the Preferences' snap steps before it answers.
+- `gz-entities` / `gz-scene`: a graph point's Location rows are tokens over `game.ltx`'s `[location_N]`
+  (`PropContext::locations`, `GameSettings::prop_context` reads `game.ltx` and its includes); a flag shown
+  with captions (a lamp's Light\Type Point / Spot) answers the caption in force.
+- `gz-scene`: `open_scene` waits for a scene job that runs (the project's last scene opening) instead of
+  refusing it - the C++ load was synchronous.
+- `gz-project`: the file tree never lists a file being written (`<name>.gz~` of `fsx::write_atomic`) - a
+  build that walked the tree while the bake wrote `spawn\*.xspawn` failed on it; `project_delete`'s
+  refusal spells paths as the wire does (`/`); `Project::game_linked_now` - the window drew a `stat` of
+  the game folder every frame, 70 ms frames while a build kept the disk busy.
+- `gz-ui-content`: `content_create` without `folder=` makes the asset in the folder the browser shows
+  (`install_hooks`: the hook was never filled).
+- `gz-ui-mod`: the Task Center's build and packaging rows are pumped from the start (a build started over
+  MCP had none) and every 25 ms, so `progress` sees a copy of a few hundred ms move.
+- `gz-app`: `progress` answers without the UI thread (`JobMarks`); `window_control resize` answers once
+  frames are drawn at the size asked for (or the size Windows clamped it to); the palette's query is the
+  C++ 256-byte field (a longer one is not taken, never cut).
+- `gz-mcp`: a request line over 1 MiB is refused with the C++ text (`request buffer exceeds 1 MiB`) and
+  the connection closed (the limit was 64 MiB and missed a line whose end came in the last read);
+  `GRIZZLY_MCP_REQUEST_TIMEOUT_MS` is taken down to 100 ms.
+- `gz-characters`: `characters_delete` rebuilds the roster before it answers: a quest validated next says
+  the character is gone.
+- `gz-catalog`: a job started right after the last one ended waits for its worker to leave the job table
+  (it was refused as busy now and then).
+- `gz-ui-graph`: `quest_view roles_more=show|hide|toggle` (a behaviour graph's roles keep Title, Binding
+  and Default under a folded More); the selected action is scrolled into the node pane at once, also when
+  the split moved in the same call.
+- `gz-ui-level`: the questions only a click raises can be put up to be looked at:
+  `ui_dialog open id=make_question | rename_question | reset_surfaces_question`.
+- `gz-github`: under `-qa_github`, `GRIZZLY_GITHUB_PAUSE_MS` shortens the pauses before the served check
+  and an upload's retry (3 s / 2 s for the author). `tools/qa/github_mock`: `--vt-rate-window MS`.
+
+Suite setups moved (what they check unchanged): `test_characters` copies the reference mod without its
+quests (it deletes the author's characters, which those quests name - E030); `test_properties` presses
+Quality > Custom before it sets an out-of-range Hemisphere quality (the Escape scene is built at High,
+where the row is read-only in the C++ too); `test_behaviours` opens the roles' More before it looks for
+the Binding row (the C++ moved it under More after the check was written); `test_ui_shell` takes the
+window of its own editor (others run beside it); `test_mod_publish` throttles the cancelled upload to
+three seconds and cancels after one; `test_mod_catalog` gives the mock a 3 s VirusTotal window instead
+of sleeping out a real minute twice. `diff_editors.py` fails a run at once when an editor died, and its
+key hashes the data its generators read.
+
+The differential run (`tools/qa/diff_editors.py`) now places one spawn of every entity class the linked
+game's sections give (81 of 88 classes; scenario s6, 354 steps) and compares `property_inspector` on
+each, `Model\Animation` included: 0 differences over 722 steps. Left out, with the reason in the script:
+`AI_SPGRP`, `II_BTTCH`, `NW_ATTCH`, `W_MOUNTD` (no server class in the game's factory: the Rust editor
+refuses them, the C++ places a spawn point whose type is never set) and the sections the C++ factory
+cannot make (`m_lesnik`, `m_trader`, `holder_stul`: "Can't create entity", then THROW in
+`CSpawnPoint::FillProp` / `SaveStream`); the class steps run with `scene_undo_level = 0`.
+
+### Results (the whole set through run_all.py)
+
+All 21 PASS, wall **122.7 s** for the whole set (four at a time, the last three alone):
+
+| Suite | s | Suite | s | Suite | s |
+|---|---|---|---|---|---|
+| test_project_browser | 8.5 | test_characters | 14.7 | test_previews | 11.2 |
+| test_ui_shell | 9.6 | test_behaviours | 8.3 | test_mod_publish | 64.0 |
+| test_ui_tour | 31.0 | test_graph_ui | 11.0 | test_mod_catalog | 47.7 |
+| test_asset_icons | 8.0 | test_pda | 21.6 | test_mcp_bridge | 5.6 |
+| test_unicode_names | 9.0 | test_screens | 7.1 | test_stress | 11.7 |
+| test_build_contents | 10.5 | test_world | 5.3 | test_server_lifecycle | 3.5 |
+| test_build_job | 26.3 | test_properties | 5.9 | benchmark_scene_load | 2.3 |
+
+`test_mod_publish` is over the 60 s budget under load (56 s beside the catalog suite alone): its time is
+some thirty packagings of the reference mod (a 6 MB level-9 zip each, about a second) and the waits it
+plays against the mock; the editor's own pauses there are now QA knobs. The stress run: ~5000-6600
+requests in 8 s from ten connections (reads, scene edits, UI commands, screenshots) beside back-to-back
+builds (61-68, every one ended) and scene loads (22-34, every one loaded), the worst ping 16-32 ms, the
+editor gone 0.6 s after `window_control close`, no panic in its log. The benchmark: Escape loads in a
+median 187 ms (ready 212 ms) against the C++ editor's 731 ms (750 ms), 6006 objects both.
+
+### The look that was skipped
+
+Looked at on a copy of Test: the exit path with a panel in a window of its own and the viewport (the
+process gone in 0.65-0.9 s, every run since); the AI Map, Detail Objects and Wallmark panels;
+Generate Selected (262 nodes from one) and the AI map's nodes drawn; `ui_audit` escaping nothing;
+`frame_pacing` while generating; a spawn's animation played, paused, stopped and at its last frame (the
+pictures differ as they should); the Make Game, Rename Objects and Reset Surfaces questions (centred,
+named, closed by Cancel). Not seen, for want of data or of a way to click: details drawn and a wallmark
+drawn (Test has no detail slots or wallmark textures, and First Initialize needs a snap list - "Snap list
+empty!", the C++ text), Random Append placing and Attach on Click (a click in the viewport; no MCP path
+and no synthetic input), the Group tool's Pivot chooser, motion playback with Camera View. Generate Full
+on Escape against the C++: the C++ editor has no MCP command for it - not compared.
+
+### Budgets (plan 10.8, measured)
+
+- **The window within 0.3 s of the process start (warm)**: met. The startup profile ends at the first
+  frame 0.12 s after the process was created (the loader before `main` 0.09 s of it).
+- **File operations of a start**: 383 (30 reads) for a start that opens Test; the C++ editor's 82k.
+- **No UI frame over 16 ms caused by the editor's own work**: measured with `frame_pacing` on Overnight
+  Delivery's Agroprom, the window restored to 2160 x 1350 and View > Real Time on: idle mean 6.6 ms, max
+  20 ms (frames bound by the GPU's acquire / present); during a build mean 12-18 ms, max 52-73 ms; during
+  a scene load max 15 ms. A stack sampler on the UI thread found one piece of editor work there - a
+  `stat` of the game folder every frame (`game_linked`), fixed (`game_linked_now`); what is left in the
+  samples during a build is drawing and wgpu's acquire / present while the build's parallel copy holds
+  the cores and the disk. Not met in the strict sense: frames over 16 ms do occur, idle as well.
+- **A rebuild no slower than the C++ job**: the Rust module build of Overnight Delivery with
+  `test_build_job`'s 1.1 GB payload takes 1.1 s; the C++ job was not timed on the same data in this pass,
+  so the comparison is not made. The scene load (the benchmark) is 3.9 times faster than the C++ one.
+
+### The game as the judge
+
+- `tools/nq/run_lua.py test_examples.lua` with `NQ_EXAMPLES` = the three examples as the Rust editor
+  writes them (`quest_write`, canonical text): **874 passed, 0 failed**.
+- `tools/nq/test_pda_layout.lua` with the Rust editor's PDA template (`pda_write`) and Overnight
+  Delivery's `shmyandex.pdaasset` written back by it: **100 passed, 0 failed**, both assets read without
+  a warning.
+- In game, once: `tools/qa/nq/Run-NqQa.ps1 -Scenario PdaModule -TimeoutSeconds 180` with the game suite's
+  own QA module `pda_qa` (its `mod.ltx` and the courier layout fixture, opened as a project and BUILT by
+  the Rust editor into a temp folder): **PASS, 8 / 0**, the layout's three pages shown and captured in the
+  isolated QA root. The QA root (`<game>\_qa
+q`, its database junction unlinked first) and the run's
+  results folder were removed after; no installed module was touched.
+
+## What the suites could not hold the Rust editor to
+
+ImGui artefacts with no meaning in the new shell:
+- the files the C++ editor rewrote (`level.ini`, `level_imgui.ini`): the suites restore `qa_target.KEPT`
+  instead (`_projects.ini`, `grizzly_editor.ltx` of the repository root, which the Rust editor never
+  writes - it writes into its `-home`);
+- `test_mod_catalog` F: the stale `level_imgui.ini` entry that put the Submit window below the editor is
+  not written for the Rust target (the shell keeps no window placements); the checks behind it stay and
+  pass - the window inside the picture, centred, more than a flat fill, also of a minimised editor.
+
+Deliberate differences of section 12:
+- D15: `test_server_lifecycle.py --shutdown` runs `exec_command COMMAND_QUIT`, a plumbing row the Rust
+  editor does not list; `run_lifecycle.py` proves the same shutdown with idle clients through the palette
+  (`COMMAND_EXIT`).
+- D6: `lint_ui_units.py` is not run.
 
 ## Next packages, in dependency order
 

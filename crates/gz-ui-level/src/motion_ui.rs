@@ -60,6 +60,25 @@ fn selected_object(editor: &Editor) -> Option<(String, Option<(f32, f32)>)> {
 /// A press of a motion button the row itself does not do; `true` when it was one.
 pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
     let Some((object, range)) = selected_object(editor) else { return false };
+    // a spawn's playback buttons (`OnAnimControlClick`): the viewport plays its model
+    if key.ends_with(gz_scene::props::SPAWN_ANIMATION) {
+        let mut a = Args::new();
+        a.insert("object".into(), json!(object));
+        a.insert("action".into(), json!(caption.to_ascii_lowercase()));
+        let ed = editor.clone();
+        editor.exec.spawn(async move {
+            let r = ed.call("spawn_animation", a, ed.ui_origin()).await;
+            if r.get("ok").and_then(Value::as_bool) != Some(true) {
+                ed.notices.error(
+                    r.get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("The animation did not play.")
+                        .to_owned(),
+                );
+            }
+        });
+        return true;
+    }
     let action = |a: &str| {
         let mut args = Args::new();
         args.insert("action".into(), json!(a));
@@ -73,24 +92,22 @@ pub fn press(editor: &Arc<Editor>, key: &str, caption: &str) -> bool {
             let Some(root) = editor.project_root() else { return true };
             let dir = root.join("gamedata").join("anims");
             let ed = editor.clone();
-            let spawned =
-                std::thread::Builder::new().name("gz-ui-level.motion_file".into()).spawn(move || {
-                    let _ = std::fs::create_dir_all(&dir);
-                    let d = rfd::FileDialog::new().add_filter("Object motion", &["anm"]).set_directory(&dir);
-                    let picked = if import {
-                        d.set_title("Import Motion").pick_file()
-                    } else {
-                        d.set_title("Export Motion").set_file_name(format!("{object}.anm")).save_file()
-                    };
-                    if let Some(f) = picked {
-                        let mut a = Args::new();
-                        a.insert("action".into(), json!(if import { "import" } else { "export" }));
-                        a.insert("file".into(), json!(f.display().to_string()));
-                        motion_call(&ed, &object, a);
-                    }
-                });
-            if let Err(e) = spawned {
-                editor.log.warn(format!("the file dialog did not open: {e}"));
+            let request = if import {
+                gz_ui::file_dialog::FileRequest::open("Import Motion")
+            } else {
+                gz_ui::file_dialog::FileRequest::save("Export Motion", &format!("{object}.anm"))
+            }
+            .filter("Object motion", &["anm"])
+            .in_folder(dir)
+            .creating_folder();
+            let picked = gz_ui::file_dialog::pick(None, crate::tools::asker(editor), request, move |f| {
+                let mut a = Args::new();
+                a.insert("action".into(), json!(if import { "import" } else { "export" }));
+                a.insert("file".into(), json!(f.display().to_string()));
+                motion_call(&ed, &object, a);
+            });
+            if let Err(line) = picked {
+                editor.log.plain(line);
             }
         }
         ("Motion\\Commands", "Scale Keys..." | "Normalize Keys...") => {

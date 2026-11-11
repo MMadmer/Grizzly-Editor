@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""THE way the QA suites are run: side by side against the Rust editor, each on its own port,
+editor home, project copy and mock port, with a hard timeout, and each suite's last result kept.
+
+    python tools/qa/run_all.py                 every suite
+    python tools/qa/run_all.py --failed        only the suites that failed last time
+    python tools/qa/run_all.py test_pda ...    the suites named (extra arguments after --)
+    python tools/qa/run_all.py -j 4            four at a time (default: a quarter of the cores)
+
+Prints `PASS/FAIL <suite> <seconds> <failed checks>` per suite and a total; exit code 1 on any
+failure. Each suite's output is Intermediate/qa/<suite>.log; the results Intermediate/qa/state.json.
+A suite marked `alone` (it times frames or loads) runs after the others, by itself.
+"""
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
+OUT = os.path.join(REPO, "Intermediate", "qa")
+STATE = os.path.join(OUT, "state.json")
+OD = r"D:\XFinedProjects\DARF-Overnight-Delivery"
+TEST = r"D:\XFinedProjects\Test"
+RUST_EXE = os.path.join(REPO, "Intermediate", "cargo", "debug", "Grizzly.exe")
+
+# name -> script, arguments, timeout (s), alone
+SUITES: dict[str, dict] = {
+    "test_project_browser": {"args": ["--no-explorer"], "timeout": 120},
+    "test_ui_shell": {"args": ["--project", OD], "timeout": 120},
+    "test_ui_tour": {"args": ["--project", OD], "timeout": 180},
+    "test_asset_icons": {"args": ["--project", OD], "timeout": 120},
+    "test_unicode_names": {"args": ["--project", OD], "timeout": 120},
+    "test_build_contents": {"args": ["--project", OD], "timeout": 180},
+    "test_build_job": {"args": ["--project", OD], "timeout": 180},
+    "test_characters": {"args": ["--project", OD], "timeout": 180},
+    "test_behaviours": {"args": ["--project", OD], "timeout": 180},
+    "test_graph_ui": {"args": ["--project", OD], "timeout": 180},
+    "test_pda": {"args": ["--project", OD], "timeout": 180},
+    "test_screens": {"args": ["--project", OD], "timeout": 180},
+    "test_world": {"args": ["--project", TEST], "timeout": 180},
+    "test_properties": {"args": ["--project", TEST], "timeout": 180},
+    "test_previews": {"args": ["--project", OD], "timeout": 180},
+    "test_mod_publish": {"args": ["--project", OD], "timeout": 240},
+    "test_mod_catalog": {"args": ["--project", OD], "timeout": 300},
+    "test_mcp_bridge": {"args": [], "timeout": 120},
+    "test_stress": {"args": ["--project", TEST], "timeout": 120, "alone": True},
+    "test_server_lifecycle": {"script": os.path.join(REPO, "tools", "mcp", "run_lifecycle.py"), "args": [],
+                              "timeout": 180, "alone": True},
+    "benchmark_scene_load": {"script": os.path.join(REPO, "tools", "mcp", "run_benchmark.py"), "args": [],
+                             "timeout": 300, "alone": True},
+}
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def load_state() -> dict:
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state: dict) -> None:
+    os.makedirs(OUT, exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=1)
+    os.replace(tmp, STATE)
+
+
+def ours() -> list[int]:
+    """Rust editors of this repository still running."""
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "Get-Process Grizzly -ErrorAction SilentlyContinue | "
+                              "ForEach-Object { \"$($_.Id)|$($_.Path)\" }"],
+                             capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = []
+    for line in out.splitlines():
+        pid, _, path = line.partition("|")
+        if path.strip().lower() == RUST_EXE.lower() and pid.strip().isdigit():
+            pids.append(int(pid))
+    return pids
+
+
+def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
+    spec = SUITES[name]
+    script = spec.get("script") or os.path.join(HERE, name + ".py")
+    with port_lock:
+        port = free_port()
+    home = tempfile.mkdtemp(prefix="grizzly_qa_home_")
+    env = dict(os.environ)
+    env.update({"GRIZZLY_QA_TARGET": "rust", "GRIZZLY_QA_PORT": str(port), "GRIZZLY_QA_HOME": home,
+                # the QA credentials of the Credential Manager are this suite's own: two suites side by
+                # side never take away each other's token or VirusTotal key
+                "GRIZZLY_QA_CREDENTIAL": "%s-%d" % (name.replace("_", "-"), port),
+                "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"})
+    log_path = os.path.join(OUT, name + ".log")
+    t0 = time.monotonic()
+    timed_out = False
+    lines: list[str] = []
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+        proc = subprocess.Popen([sys.executable, script, *spec["args"], *extra], cwd=REPO, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+        def pump() -> None:
+            # every line with the second it came at: where a suite's time goes is in its log
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                lines.append(line)
+                log.write("[%6.1f] %s\n" % (time.monotonic() - t0, line))
+                log.flush()
+
+        reader = threading.Thread(target=pump, daemon=True)
+        reader.start()
+        try:
+            code = proc.wait(timeout=spec["timeout"])
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            code = proc.wait(timeout=30)
+        reader.join(timeout=30)
+    seconds = time.monotonic() - t0
+    shutil.rmtree(home, ignore_errors=True)
+    text = "\n".join(lines)
+    failed = [line[5:].split("  <- ")[0].strip() for line in lines if line.startswith("FAIL ")]
+    if timed_out:
+        failed.append("timed out after %d s" % spec["timeout"])
+    elif code != 0 and not failed:
+        tail = [l for l in text.strip().splitlines() if l.strip()][-1:] or ["no output"]
+        failed.append("exit code %d: %s" % (code, tail[0][:200]))
+    ok = code == 0 and not timed_out and not failed
+    return {"ok": ok, "seconds": round(seconds, 1), "failed": failed, "code": code}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("suites", nargs="*", help="suites to run (default: all)")
+    ap.add_argument("--failed", action="store_true", help="only the suites that failed last time")
+    ap.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 4))
+    ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="arguments for a single suite")
+    args = ap.parse_args()
+
+    state = load_state()
+    names = list(SUITES)
+    if args.suites:
+        unknown = [n for n in args.suites if n not in SUITES]
+        if unknown:
+            print("no such suite: " + ", ".join(unknown))
+            return 2
+        names = args.suites
+    elif args.failed:
+        names = [n for n in names if not state.get(n, {}).get("ok")]
+    if not names:
+        print("nothing to run: every suite passed last time")
+        return 0
+    if not os.path.isfile(RUST_EXE):
+        print("build the Rust editor first: bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge")
+        return 2
+    left = ours()
+    if left:
+        print("Rust editors of an earlier run are still running (pids %s): close them first" % left)
+        return 2
+    os.makedirs(OUT, exist_ok=True)
+    extra = args.extra if len(names) == 1 else []
+    together = [n for n in names if not SUITES[n].get("alone")]
+    alone = [n for n in names if SUITES[n].get("alone")]
+    lock = threading.Lock()
+    t0 = time.monotonic()
+    results: dict[str, dict] = {}
+
+    def report(n: str, r: dict) -> None:
+        results[n] = r
+        state[n] = dict(r, when=time.strftime("%Y-%m-%d %H:%M:%S"))
+        save_state(state)
+        print("%s %-24s %6.1f s %s" % ("PASS" if r["ok"] else "FAIL", n, r["seconds"],
+                                     "; ".join(r["failed"][:6]) + (" ..." if len(r["failed"]) > 6 else "")),
+              flush=True)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+        futures = {pool.submit(run_one, n, extra, lock): n for n in together}
+        for f in concurrent.futures.as_completed(futures):
+            report(futures[f], f.result())
+    for n in alone:
+        report(n, run_one(n, extra, lock))
+    wall = time.monotonic() - t0
+    bad = [n for n, r in results.items() if not r["ok"]]
+    left = ours()
+    if left:
+        print("! Rust editors left running after the run: pids %s" % left)
+        bad.append("editors left running")
+    print("TOTAL %d suites, %d passed, %d failed, wall %.1f s" % (len(results), len(results) - len(
+        [n for n in results if not results[n]["ok"]]), len([n for n in results if not results[n]["ok"]]), wall))
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

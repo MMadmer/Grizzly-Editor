@@ -356,6 +356,8 @@ struct BuildKey {
     assets: u64,
     /// Moves on every ask while a particle system in view plays: each frame a pass.
     anim: u64,
+    /// A spawn's rig arrived or its playback changed.
+    spawn: u64,
 }
 
 #[derive(Default)]
@@ -390,6 +392,10 @@ pub struct Viewport {
     /// The last pass found a particle system in view playing.
     animating: AtomicBool,
     anim_tick: AtomicU64,
+    /// One pass is built at a time. The extras keep their caches behind locks and fill them
+    /// with rayon work: a second pass queued on the pool would be stolen by a worker waiting
+    /// inside the first, under its lock, and wait for that lock for ever.
+    packet_gate: tokio::sync::Mutex<()>,
 }
 
 /// Frames per second, measured over about half a second.
@@ -445,6 +451,7 @@ impl Viewport {
                 rates: Mutex::new(Rates::default()),
                 animating: AtomicBool::new(false),
                 anim_tick: AtomicU64::new(0),
+                packet_gate: tokio::sync::Mutex::new(()),
             }
         })
     }
@@ -557,8 +564,9 @@ impl Viewport {
                 Ok(g) => g.files().await.ok(),
                 Err(_) => None,
             };
-            let loader = SceneLoader::new(project, editor_root, game);
-            renderer.assets().set_loader(Some(Arc::new(loader)));
+            let loader = Arc::new(SceneLoader::new(project, editor_root, game));
+            crate::spawn_anim::SpawnAnims::of(&ed).set_loader(loader.clone());
+            renderer.assets().set_loader(Some(loader));
         });
     }
 
@@ -712,6 +720,7 @@ impl Viewport {
             view: self.rev(),
             assets: if stale { renderer.assets().generation() } else { 0 },
             anim,
+            spawn: crate::spawn_anim::SpawnAnims::of(editor).rev(),
         }
     }
 
@@ -759,6 +768,9 @@ impl Viewport {
             self.state_quiet(|s| s.nav.set(hpb, at));
         }
         let posed = posed.map(|(st, _)| st);
+        let _one_pass = self.packet_gate.lock().await;
+        let anims = crate::spawn_anim::SpawnAnims::of(editor);
+        let ed = editor.clone();
         let built = editor
             .exec
             .cpu(move || {
@@ -831,6 +843,15 @@ impl Viewport {
                 };
                 let opts = DrawOptions { helpers: st.view.helpers && !preview, game };
                 let mut built = draw::build(state, library, &assets, &opts);
+                // the spawns' models in their startup animation's pose
+                let poses = anims.poses(&ed, state);
+                if !poses.by_object.is_empty() {
+                    for (inst, owner) in built.list.instances.iter_mut().zip(&built.owners) {
+                        if let Some(p) = poses.by_object.get(owner) {
+                            inst.pose = Some(p.clone());
+                        }
+                    }
+                }
                 // Environment outside Game Lighting: the chosen weather's sky and fog colour
                 if st.view.environment && !st.game.active() && st.game.weather_ok {
                     built.list.environment = Some(lighting::environment(
@@ -870,6 +891,7 @@ impl Viewport {
                     None => gz_render::build_packet(&built.list, &view, &assets),
                 };
                 let anchor = Anchor::of(&draw::gizmo_points(state, library, state.tools.target));
+                let animating = animating || poses.playing;
                 (Arc::new(packet), anchor, roof, baked, gathered, animating)
             })
             .await;

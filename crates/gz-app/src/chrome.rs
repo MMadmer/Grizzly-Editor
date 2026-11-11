@@ -420,6 +420,8 @@ impl ShellState {
             pos2(screen.max.x, status.min.y),
         );
         self.work_rect = work;
+        // the kit centres its dialogs in the work area, between the toolbar and the status bar
+        gz_ui::dialog::set_work_area(&ctx, work);
         self.status_rect = status;
         ui.painter().rect_filled(screen, CornerRadius::ZERO, p.base);
 

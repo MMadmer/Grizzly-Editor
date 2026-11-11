@@ -86,6 +86,11 @@ pub fn local_fold_header(
 
 /// The state of a fold header: keyed by the caller's key alone, so it can be read and set from
 /// outside the scroll area that draws it. The caller scopes the key (the tab's file).
+/// Opens or folds a header drawn by [`local_fold_header`] under `id_salt`.
+pub fn set_fold(ctx: &egui::Context, id_salt: &str, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(fold_id(id_salt), open));
+}
+
 fn fold_id(key: &str) -> Id {
     Id::unique(("gz-ui-graph.fold", key))
 }

@@ -34,6 +34,11 @@ pub struct Endpoints {
     pub mirrors: Vec<String>,
     /// A QA run with its own API address: uploads go there instead of uploads.github.com.
     api_mocked: bool,
+    /// The pauses between two looks at what the game will be served (3 s) and before an upload
+    /// is tried again (2 s); a QA run names one shorter pause for both in
+    /// `GRIZZLY_GITHUB_PAUSE_MS`.
+    pub serve_pause_ms: u64,
+    pub retry_pause_ms: u64,
 }
 
 fn base(qa: bool, env: &dyn Fn(&str) -> Option<String>, variable: &str, real: &str) -> String {
@@ -70,6 +75,8 @@ impl Endpoints {
             catalog_repo: if catalog_repo.is_empty() { CATALOG_REPO.to_owned() } else { catalog_repo },
             mirrors,
             api_mocked: qa && !qa_text("GRIZZLY_GITHUB_API").is_empty(),
+            serve_pause_ms: qa_text("GRIZZLY_GITHUB_PAUSE_MS").parse().unwrap_or(3000),
+            retry_pause_ms: qa_text("GRIZZLY_GITHUB_PAUSE_MS").parse().unwrap_or(2000),
         }
     }
 

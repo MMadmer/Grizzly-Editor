@@ -74,7 +74,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -365,6 +365,8 @@ def run(project: str) -> None:
         v = mcp("quest_view", path="npc/qa_ambush.behasset", frame="all", graph_panel="show", details="show",
                 select="dig_in", slot="enter:0")
         check(v.get("ok"), "G the behaviour graph opens in its tab", json.dumps(v)[:200])
+        # a role's Title, Binding and Default sit under its folded More: open it to look at them
+        mcp("quest_view", path="npc/qa_ambush.behasset", roles_more="show")
         mcp("ui_audit")
         mcp("ui_audit")
         v = mcp("quest_view", path="npc/qa_ambush.behasset")

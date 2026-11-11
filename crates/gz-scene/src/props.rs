@@ -113,6 +113,8 @@ impl Row {
                 vec_text(Vec3::new(v.x.to_degrees(), v.y.to_degrees(), v.z.to_degrees()), *dec)
             }
             (Kind::Button(c), _) => c.iter().map(SmolStr::as_str).collect::<Vec<_>>().join(","),
+            // a flag drawn with captions (`CreateFlag` with on / off texts) shows the one in force
+            (Kind::Flag, Val::Text(t)) => t.clone(),
             (Kind::Bool | Kind::Flag | Kind::Canvas | Kind::FColor, _) => String::new(),
             (_, Val::Text(t)) => t.clone(),
             _ => String::new(),
@@ -194,6 +196,10 @@ fn shape_rows(pref: &str, o: &Object, usage: u8, out: &mut Vec<Row>) {
     custom_rows(pref, o, out);
     out.push(caption(key(pref, "Shape usage"), if usage == SHAPE_COMMON { "common" } else { "level bound" }));
 }
+
+/// A spawn's playback row (`SSpawnData::FillProp`) under its section, and its buttons.
+pub const SPAWN_ANIMATION: &str = "Model\\Animation";
+pub const SPAWN_ANIMATION_BUTTONS: &str = "First Frame,Play,Pause,Stop,Last Frame";
 
 const LIGHT_TYPES: &[(&str, i64)] = &[("Point", LT_POINT as i64)];
 const FUZZY_SHAPES: &[(&str, i64)] = &[("Sphere", 0), ("Box", 1)];
@@ -408,8 +414,23 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
                 ));
                 match e {
                     SpawnEntity::Decoded(ent) => {
+                        let first = out.len();
                         for p in ent.properties(cx.entity) {
                             out.push(entity_row(pref, &p, cx.entity));
+                        }
+                        // oracle: `SSpawnData::FillProp` adds the playback buttons under the
+                        // key of `CSE_Visual`'s animation chooser, which they replace
+                        if ent.visual_name().is_some() {
+                            let anim = key(&key(pref, &section), SPAWN_ANIMATION);
+                            let row = button(anim.clone(), SPAWN_ANIMATION_BUTTONS);
+                            match out.iter().skip(first).position(|r| r.key == anim) {
+                                Some(i) => {
+                                    if let Some(slot) = out.get_mut(first + i) {
+                                        *slot = row;
+                                    }
+                                }
+                                None => out.push(row),
+                            }
                         }
                     }
                     SpawnEntity::RawLtx { .. } | SpawnEntity::RawPacket { .. } => {
@@ -552,6 +573,12 @@ fn entity_row(pref: &str, p: &gz_entities::Prop, ctx: &PropContext) -> Row {
             if !ctx.spawn_story_names.is_empty() =>
         {
             story(&ctx.spawn_story_names, *v)
+        }
+        // `CreateRToken8` over `fp_data.locations[i]`: the name of the id, nothing when the list
+        // does not hold it
+        (PropKind::ListToken { list: ListKind::Locations(i), .. }, PropValue::Int(v)) => {
+            let items = ctx.locations.get(usize::from(*i)).map_or_else(Vec::new, |l| l.clone());
+            Row::new(k.clone(), Kind::Token(items), Val::Num(*v as f64))
         }
         (PropKind::U8 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
         (PropKind::U16 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
@@ -1462,6 +1489,9 @@ pub fn set_object(
                 }
             } else if k.ends_with("\\Profile (spawn section)") {
                 return Err("names another section: place a new spawn of it instead".into());
+            } else if k.ends_with(SPAWN_ANIMATION) && matches!(p, Parsed::Press(_)) {
+                // the playback runs in the viewport (`spawn_animation`); the scene stays as it is
+                return Ok(Effect::Nothing);
             } else {
                 let Some(SpawnEntity::Decoded(ent)) = &mut d.entity else {
                     return Err("is read-only".into());

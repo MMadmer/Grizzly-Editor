@@ -24,7 +24,7 @@ use crate::scroll::{self, ScrollTo};
 use crate::settings::{
     self, EditorSettings, PREFS, PrefType, WIRE_PREFS, parse_pref, pref_json, wire_pref_def,
 };
-use crate::shell::{CloseMode, OpenError, ShellState, default_log_state};
+use crate::shell::{CloseMode, OpenError, ShellState};
 
 const AREA: &str = "shell";
 
@@ -725,6 +725,7 @@ fn settle_unsaved(
 
 async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let action = str_arg(&args, "action").to_owned();
+    let resizing = action == "resize";
     let Ok(queue) = UiQueue::of(&editor) else {
         // without a window there is one thing left of it: closing the editor
         return match action.as_str() {
@@ -810,6 +811,25 @@ async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Rep
     } else {
         // the window takes the change at the end of the frame and reports its size on the next
         editor.frames.after(2).await?;
+        // a resize is answered once frames are drawn at the size asked for: what the caller asks
+        // next (a framing, a layout) is worked out for the new size, also on a busy machine
+        if let (true, (Some(w), Some(h))) = (resizing, size) {
+            // a size the screen cannot hold is clamped by Windows: a size that holds still is
+            // the one the window got
+            let mut last = egui::Vec2::ZERO;
+            let mut still = 0;
+            for _ in 0..100 {
+                let got = queue.run(|_, ctx| Ok(ctx.content_rect().size())).await.unwrap_or_default();
+                still = if (got - last).length() < 0.5 { still + 1 } else { 0 };
+                last = got;
+                if ((got.x - w).abs() <= 1.0 && (got.y - h).abs() <= 1.0) || still >= 10 {
+                    editor.frames.after(1).await?;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                editor.exec.wake().ping();
+            }
+        }
     }
     let mut out = queue
         .run(|_, ctx| {
@@ -1041,7 +1061,9 @@ async fn shortcuts(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 // ---- command_palette, progress ------------------------------------------------------------------
 
 async fn command_palette(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let query = str_arg(&args, "query").to_owned();
+    // oracle: the palette's query is a 256-byte field; a longer one is not taken at all, never
+    // cut inside a character
+    let query = Some(str_arg(&args, "query")).filter(|q| q.len() < 256).unwrap_or("").to_owned();
     let id = str_arg(&args, "id").to_owned();
     let action = args.text("action").map_or_else(
         || if query.is_empty() { "state".to_owned() } else { "query".to_owned() },
@@ -1094,25 +1116,17 @@ async fn progress(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         "get" => {}
         _ => return Err(invalid("action must be get or cancel")),
     }
-    let ids: Vec<gz_editor::JobId> = running.iter().map(|j| j.id).collect();
-    let cancel_mark = action == "cancel";
-    let (cancelled, log) = match UiQueue::of(&editor) {
-        Ok(q) => q
-            .run(move |shell, _| {
-                if cancel_mark {
-                    for id in &ids {
-                        shell.cancelled.insert(*id);
-                    }
-                }
-                Ok((shell.cancelled.iter().copied().collect::<Vec<_>>(), shell.log_state()))
-            })
-            .await
-            .unwrap_or_else(|_| (Vec::new(), default_log_state(&editor))),
-        Err(_) => (
-            if cancel_mark { running.iter().map(|j| j.id).collect() } else { Vec::new() },
-            default_log_state(&editor),
-        ),
-    };
+    // read without the UI thread: a caller polling a build is answered at once
+    let marks = crate::shell::JobMarks::of(&editor);
+    if action == "cancel" {
+        marks.cancelled.lock().extend(running.iter().map(|j| j.id));
+        if let Ok(q) = UiQueue::of(&editor) {
+            let ids: Vec<gz_editor::JobId> = running.iter().map(|j| j.id).collect();
+            q.post(move |shell, _| shell.cancelled.extend(ids));
+        }
+    }
+    let cancelled: Vec<gz_editor::JobId> = marks.cancelled.lock().iter().copied().collect();
+    let log = marks.log_state(&editor);
     let now = crate::tasks::now_ms();
     let background: Vec<Value> = running
         .iter()

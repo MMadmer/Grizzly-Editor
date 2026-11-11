@@ -75,7 +75,7 @@ class Editor:
                 pass
             if self.proc.poll() is not None:
                 raise RuntimeError("the editor exited during startup")
-            time.sleep(1)
+            time.sleep(0.05)
         raise RuntimeError("the editor never opened the project")
 
     def close(self) -> None:
@@ -521,7 +521,9 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_charproj_")
     copy = os.path.join(work, "QaCharacters")
-    shutil.copytree(src, copy)
+    # the run deletes the author's characters (A): the author's quests, which name them, stay
+    # behind, or the module no longer builds (E030) for a reason that is not this suite's
+    qa_target.copy_project(src, copy, ignore=(".git", "releases", "temp", "logs", "backup", "quests"))
     print("running against a copy: " + copy, flush=True)
 
     ini = os.path.join(REPO, "_projects.ini")

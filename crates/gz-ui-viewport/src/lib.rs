@@ -72,6 +72,7 @@ pub mod objtools;
 mod pane;
 mod service;
 mod session;
+pub mod spawn_anim;
 
 pub use cmd::register;
 pub use draw_particles::{any_playing as particles_playing, play as play_particles};

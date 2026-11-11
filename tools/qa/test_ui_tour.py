@@ -30,7 +30,7 @@ import qa_target
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = qa_target.MCP
-KEEP = [os.path.join(REPO, n) for n in ("_projects.ini", "level.ini", "level_imgui.ini")]
+KEEP = qa_target.KEPT
 CONFIGS = {"max": (1707, 912, 1.5), "small": (1280, 720, 1.0)}
 
 rows: list[tuple[str, str, str, str]] = []   # (config, issue, status, text)
