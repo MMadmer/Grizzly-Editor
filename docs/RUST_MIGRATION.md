@@ -395,8 +395,9 @@ Two consequences worth stating:
 3. **Differential MCP.** The same command script against both editors; the JSON answers are
    compared, minus a short documented list of fields (timings, pixel rectangles).
 4. **The QA suites, unchanged in what they check.** Their one edit: the editor binary and
-   the port become parameters. A phase names the suites that must pass against the Rust
-   editor.
+   the port become parameters. They run through `tools/qa/run_all.py`, side by side, every
+   editor in a home of its own (`-home`), so no run touches the author's project list or
+   settings.
 5. **The game is the judge.** Modules and releases made by the Rust editor go through the
    game's own suites. Runs are short and targeted.
 6. **The parity ledger.** `docs/rust/PARITY.md`, made by a read-only audit of the C++ editor
@@ -580,6 +581,7 @@ bug.
 | D15 | The command table lists what does something: the 35 C++ rows that are plumbing or whose bodies do nothing are not listed, and the editor ships its default keys. | A row that does nothing is noise for an author and a trap for an agent; the C++ bound no key until a `level.ini` existed. |
 | D16 | Faults of the C++ editor are not repeated: the particle library holds all of Dead Air's `particles.xr` (the C++ `CPSLibrary::Load` stopped at the first short `TargetColor`: 1035 names of 1428); the unsigned-release sentence is a warning of its own (the C++ glued it to the last build warning); `scene_visibility` takes a JSON boolean. | Each was an accident of the code, not a behaviour anyone relied on. |
 | D17 | A ray pick hits the scene whatever the camera sees (`probe_vertical`, `scan_walls`, `drop_objects`, way point snapping). | The C++ `CSceneObject::RayPick` skipped objects outside the camera's view, so an MCP answer depended on where a minimised window happened to look. |
+| D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
 | D18 | The six Detail Objects settings live on the Detail Objects panel (and `details_tool`), the tools' Enable / Read Only switches in Level Settings > Targets. | The C++ kept the first in Level Settings and the second in Preferences; UI_DESIGN 1a: one task in one view. |
 
 ## 13. Working rules

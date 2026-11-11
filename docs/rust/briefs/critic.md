@@ -11,18 +11,24 @@ find what is wrong and say exactly where.
   section 5, the rules of section 6, the contract with the game of section 9, the deliberate
   differences of section 12 ("a difference that is not here is a bug").
 - The state and every known gap, as the authors tell it: `docs/rust/STATE.md` (the crate
-  table, "Findings", "Closed in integration", "The first test run", "Differences the
-  differential left", "What the suites could not hold the Rust editor to").
+  table, "Findings", "Closed in integration", "The first test run", "The differential run"
+  with "Differences the differential left", "The QA suites", "What the suites could not hold
+  the Rust editor to", "What the QA pass left, closed").
 - The ledger: `docs/rust/PARITY.md`. The project's rules: `CLAUDE.md`. The UI contract:
   `docs/UI_DESIGN.md`. The specification is the C++ editor under `Source/` (untouched on this
   branch - verify that: `git diff 25f76d13 -- Source` must be empty).
 
 ## What to check - go for what would hurt, in this order
 
-1. **The claims of the test passes are true.** Run the three entry points yourself, once:
-   `bash tools/rust/test.sh`, `python tools/qa/diff_editors.py` (needs port 28016 free - if the
-   author's editor holds it, do not touch it; say the differential was not re-run),
-   `GRIZZLY_QA_TARGET=rust python tools/qa/run_all.py`. Then read HOW they pass: the ignore
+1. **The claims of the test passes are true.** Run the four entry points yourself, once:
+   `bash tools/rust/check.sh`, `bash tools/rust/test.sh --all` (about half a minute),
+   `python tools/qa/diff_editors.py --all` (the C++ side is recorded under
+   `Intermediate/oracle`, so no C++ editor starts; about half a minute),
+   `GRIZZLY_QA_TARGET=rust python tools/qa/run_all.py` (the suites side by side, a minute or
+   two). Each has a mode that skips what already passed - `--all` is what proves. Then read
+   HOW they pass: is the recorded oracle really the C++ editor's answers (the record's key,
+   one scenario re-recorded if port 28016 is free - if the author's editor holds it, do not
+   touch it and say so)? the ignore
    table of `diff_editors.py` (is every entry a real non-difference, or a hidden one?), the
    checks the suites skip for the Rust target (`git diff 25f76d13 -- tools/qa` shows every
    edit: was a check weakened?), tests that assert nothing, corpus tests that skip silently or
