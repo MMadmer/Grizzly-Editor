@@ -37,8 +37,33 @@ One Python script (stdlib only), written to stay: it is the parity gate of the c
   exit code 1 on any difference; `--scenario <name>` runs one; `--write-parity` writes
   `docs/rust/PARITY.md` - every command of `crates/gz-mcp/tools.json` with its state: compared
   and equal / compared with the ignored fields named / not compared, and why.
-- **Fast**: both editors start once per scenario group, not per step; polling at 50 ms; the
-  whole run under 5 minutes. Say the time in the report.
+## Time
+
+The user's rule: **nothing that already passed is run again to check something new.**
+
+- **The oracle is recorded once.** The C++ editor does not change on this branch, so what it
+  answers to a scenario on a given project is a fact. Its side of every scenario - each step's
+  answer and the files it wrote (path, size, SHA-256, and the bytes of those a diff will have
+  to show) - is kept under `Intermediate/oracle/<scenario>-<key>/`; the key is a hash of the
+  scenario's steps, `LevelEditor.exe` (size, write time), the source project (paths, sizes,
+  write times) and the linked game's version. A run starts the C++ editor only for a scenario
+  that has no record (`--refresh-oracle` forces it), so a busy 28016 stops only those.
+- **Only what changed runs.** A scenario's last result is remembered with `Grizzly.exe`'s
+  fingerprint and the scenario's key. The default run takes the scenarios that failed last
+  time or whose key or editor changed; `--all` takes every one; `--scenario` one. While you
+  fix: that scenario alone. The whole set once, at the end.
+- **The Rust side runs scenarios side by side**: each on its own port, project copy and home
+  (next point), headless wherever no picture is needed, about half the cores at once.
+- **The editor's own files are isolated.** Add `-home <dir>` to the Rust editor: the folder
+  for what it writes about itself (`_projects.ini`, `grizzly_editor.ltx`, `logs\`); the
+  repository root when the flag is absent, as today. `qa_target` gives every Rust editor it
+  starts a temp home (`GRIZZLY_QA_HOME` names one from outside), so no test touches the
+  author's project list or settings and two editors never share a file. The C++ editor has no
+  such flag: its files are still backed up and put back byte for byte.
+- An editor starts once per scenario, never per step; polling at 50 ms.
+- Budgets, all three named in the report: a first full run (the oracle recorded on the way)
+  under 5 minutes; a full run with the oracle already recorded under 90 s; a run with nothing
+  changed, a few seconds.
 
 ## Scenarios
 
@@ -87,8 +112,9 @@ mod: quests, characters, a PDA layout, screens) and `D:\XFinedProjects\Test` (th
 ## How to work
 
 - Fully autonomous; never ask; never start agents of your own. No `cargo test` marathon here:
-  after a fix run the tests of the crate you touched (`cargo test -p <crate>`), and
-  `tools/rust/test.sh` once at the end.
+  after a fix run the tests of the crate you touched (`bash tools/rust/cg.sh test -p <crate>`),
+  and `tools/rust/test.sh` once at the end - its default mode runs only the test binaries
+  that changed since they were green.
 - Never run a git command that changes the working tree or the index. Never push, publish,
   submit or scan anything; nothing leaves the machine.
 - Nothing real is changed: projects are copied, the game is only read, `_projects.ini` and the

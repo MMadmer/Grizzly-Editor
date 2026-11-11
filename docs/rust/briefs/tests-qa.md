@@ -61,13 +61,28 @@ image content.
 
 - The Rust editor starts in well under a second, so the waits of the C++ era go: poll at
   50 ms, deadlines in seconds. A suite prints its wall time at the end.
-- Budget: any suite under 60 s, all of them in sequence under 10 minutes. A suite over budget
-  is profiled (the editor's log has the timings) and the slow thing is made fast - in the
-  editor when it is the editor.
-- `tools/qa/run_all.py` (new): runs every suite in sequence against the chosen target, each
-  with a hard timeout, prints `PASS/FAIL <suite> <seconds> <failed checks>` and a total, exit
-  code 1 on any failure. That is THE way the suites are run from now on.
-- Run a suite, fix, re-run THAT suite. The whole set once at the end.
+- **Nothing that already passed is run again to check something new** (the user's rule). Run
+  a suite, fix, re-run THAT suite - and inside a suite with phases (`test_mod_catalog` A..W,
+  `test_mod_publish`, `test_pda`, ...) only the phase that failed: every such suite takes
+  `--only <phase,...>`, each phase standing on its own setup. The whole set once, at the end.
+- `tools/qa/run_all.py` (new) is THE way the suites are run from now on:
+  - it runs the suites **side by side** (`-j`, by default about a quarter of the cores): each
+    suite process gets its own `GRIZZLY_QA_PORT`, its own `GRIZZLY_QA_HOME` (the Rust editor's
+    `-home`: its project list, settings and log - the differential pass added it; if it is
+    not there, add it) and its own project copy and mock port, so no two editors share a
+    file. A suite that has to be alone (the scene-load benchmark, anything timing a frame) is
+    marked so in the script and runs after the others;
+  - each suite has a hard timeout; the output is `PASS/FAIL <suite> <seconds> <failed
+    checks>` and a total; exit code 1 on any failure;
+  - it remembers each suite's last result: `--failed` runs only the ones that failed last
+    time, a suite name runs that one, no argument runs all.
+- A suite spends its seconds on checks: it copies only what it needs of a project (no
+  `.git`, `releases`, `temp`, `logs` unless it tests them), starts an editor once and keeps
+  it across the phases that do not need a fresh one, and prints where its time went (copy,
+  editor start, checks) with its wall time.
+- Budget: any suite under 60 s; all of them side by side under 4 minutes of wall time. A
+  suite over budget is profiled (the editor's log has the timings) and the slow thing is made
+  fast - in the editor when it is the editor.
 
 ## The look that was skipped
 
