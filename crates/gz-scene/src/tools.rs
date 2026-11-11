@@ -769,6 +769,8 @@ pub struct ToolSettings {
     /// The Tools panel's Snap Objects switches: use the list, pick into it.
     pub snap_use: bool,
     pub snap_pick: bool,
+    /// The switches of the sector, way, shape and fog volume tools' panels (not saved).
+    pub obj: crate::objtools::ObjToolState,
 }
 
 impl Default for ToolSettings {
@@ -779,6 +781,7 @@ impl Default for ToolSettings {
             snap: Vec::new(),
             snap_use: false,
             snap_pick: false,
+            obj: crate::objtools::ObjToolState::default(),
         }
     }
 }

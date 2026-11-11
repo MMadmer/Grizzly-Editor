@@ -50,6 +50,14 @@
 //! rays take their candidates from it and test each library object's own `Bvh` in object space.
 //! [`library::Library`] loads `.object` files on demand and caches them.
 //!
+//! # The object tools ([`objtools`])
+//!
+//! The Sector, Portal, Way, Shape, Light and Fog Volume tools: their switches
+//! ([`objtools::ObjToolState`] in [`ToolSettings::obj`]), their edits ([`SceneCmd::ObjTool`], one
+//! undo step each, computed from snapshots and refused when the scene moved meanwhile), the
+//! geometry (portals from the sectors' faces, a sector's volume, the level bound) and the commands
+//! `sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`.
+//!
 //! # Registration
 //!
 //! [`register`] adds `open_scene`, `save_scene`, `scene_info`, `scene_stats`, `scene_tree`,
@@ -73,6 +81,7 @@ pub mod ltx;
 pub mod math;
 pub mod model;
 pub mod objects;
+pub mod objtools;
 pub mod pick;
 pub mod props;
 pub mod recovery;

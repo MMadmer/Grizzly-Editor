@@ -4,12 +4,8 @@ pub use glam::Vec3;
 pub use gz_fmt_level::Aabb;
 pub use gz_fmt_object::Mat4;
 
-/// `EPS_L`.
-pub const EPS_L: f32 = 0.0001;
-/// `EPS_S`.
-pub const EPS_S: f32 = 0.000_001;
-/// `EPS`.
-pub const EPS: f32 = 0.000_01;
+// The engine's epsilons (`XrCore/vector.h`), re-exported so the workspace has one copy.
+pub use gz_fmt_level::{EPS, EPS_L, EPS_S};
 
 /// `FTransformR.setXYZi(-x, -y, -z)`, which is `setHPB(y, x, z)`.
 #[must_use]

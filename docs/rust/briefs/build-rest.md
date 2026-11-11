@@ -8,9 +8,12 @@ the top of `gz-fmt-object`, `gz-fmt-ogf` (`export.rs`: the exporters, `optimize.
 
 You own: `crates/gz-fmt-object/**`, `crates/gz-fmt-ogf/**`, `crates/gz-levelbuild/**`, a new
 crate `crates/gz-geom` if the shared geometry needs a home (`src/lib.rs` before `Cargo.toml`).
-Another agent works in the tree at the same time in `gz-scene`, `gz-ui-level`,
-`gz-ui-viewport`: read those, touch nothing of them; if `cargo check` fails in a crate that is
-not yours, wait and retry.
+Other agents work in the tree at the same time (the renderer: `gz-render`, `gz-particles`,
+`gz-ui-viewport`; the shell: `gz-app`, `gz-ui-*`, `gz-fmt-tex`): read what you need, touch
+nothing of theirs; if `cargo check` fails in a crate that is not yours, wait and retry. The
+sector and portal tools were ported just now (`crates/gz-scene/src/objtools/`: a sector's
+captured meshes, the portal computation, the sector validation) - read them, the portal test of
+section 4 builds on them.
 
 ## 1. Minimum boxes (`gz-geom` or `gz-fmt-ogf`)
 

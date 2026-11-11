@@ -105,6 +105,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "property_inspector", property_inspector);
     reg.add(AREA, "property_set", property_set);
     reg.add(AREA, "property_choose", property_choose);
+    crate::objtools::cmd::register(reg);
 }
 
 /// Hooks the scene into the project's life and `list_assets`.

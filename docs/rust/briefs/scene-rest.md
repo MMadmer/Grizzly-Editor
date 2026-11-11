@@ -35,6 +35,8 @@ You own: `crates/gz-scene/**`, `crates/gz-ui-level/**`, `crates/gz-ui-viewport/*
   same: neither asks (it is one undo step, as in the C++); the Outliner's Delete... keeps its
   `dlg.delete_object`. Esc first leaves placing (`TUI::KeyDown`: `COMMAND_CHANGE_ACTION
   etaSelect` before the bound command).
+- Deleting a scene object takes its meshes out of the sectors that hold them, as the C++ does
+  (`EScene::RemoveObject` -> the sector tool's `OnObjectRemove`); undo puts both back.
 - Scene > Pick Any Class (`etfPickAnyClass`): the toggle for the flag that exists.
 - The detail colour-index confirmation id is `clear_colour_indices`.
 

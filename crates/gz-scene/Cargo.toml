@@ -23,6 +23,7 @@ gz-chunk.workspace = true
 gz-ltx.workspace = true
 gz-fmt-object.workspace = true
 gz-fmt-level.workspace = true
+gz-fmt-xr.workspace = true
 gz-entities.workspace = true
 glam.workspace = true
 imbl.workspace = true

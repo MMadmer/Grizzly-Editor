@@ -138,6 +138,8 @@ pub enum SceneCmd {
     },
     /// Marks the content changed without an undo step (a restored recovery snapshot).
     Touch,
+    /// An edit of the sector, portal, way, shape, light and fog volume tools.
+    ObjTool(Box<crate::objtools::ToolEdit>),
 }
 
 /// What a command answers.
@@ -359,6 +361,8 @@ impl State for SceneState {
                 let serial = self.serial + 1;
                 *self = *state;
                 self.serial = serial;
+                // a level bound is seen only while Edit Level Bound is on
+                crate::objtools::show_level_bounds(self, self.tools.obj.edit_level_bound);
                 cx.new_document();
                 // a restored snapshot is unsaved work: it is followed by `Touch`
                 let _ = kind;
@@ -408,6 +412,22 @@ impl State for SceneState {
                     let Some(o) = self.get(id) else { continue };
                     if o.flags.co & co::IN_GROUP != 0 || !self.tools.part(o.class).editable() {
                         continue;
+                    }
+                    // `CWayObject::OnSelectionRemove`: in Points mode a way loses its selected
+                    // points and goes only when none are left
+                    if self.tools.obj.way_points
+                        && let ObjData::Way(w) = &o.data
+                    {
+                        let mut w2 = w.clone();
+                        if crate::objtools::way::remove_selected_points(&mut w2) == 0 && !w2.points.is_empty() {
+                            continue;
+                        }
+                        if !w2.points.is_empty() {
+                            let mut n = (**o).clone();
+                            n.data = ObjData::Way(w2);
+                            self.replace(n);
+                            continue;
+                        }
                     }
                     self.delete(id);
                 }
@@ -492,6 +512,15 @@ impl State for SceneState {
                 Ok(SceneReply::None)
             }
             SceneCmd::SetTarget(class) => {
+                // `ESceneShapeTool::OnActivate` / `OnDeactivate`: Edit Level Bound goes off
+                let before = self.tools.target;
+                if before != class
+                    && (before == ObjClass::Shape || class == ObjClass::Shape)
+                    && self.tools.obj.edit_level_bound
+                {
+                    self.tools.obj.edit_level_bound = false;
+                    crate::objtools::show_level_bounds(self, false);
+                }
                 self.tools.target = class;
                 Ok(SceneReply::None)
             }
@@ -650,6 +679,7 @@ impl State for SceneState {
                 cx.mark_saved();
                 Ok(SceneReply::None)
             }
+            SceneCmd::ObjTool(edit) => crate::objtools::apply(self, *edit, cx),
         }
     }
 
@@ -667,6 +697,9 @@ impl State for SceneState {
         }
         s.meta.file = current.meta.file.clone();
         s.serial = current.serial + 1;
+        s.tools.obj = current.tools.obj;
+        let on = s.tools.obj.edit_level_bound;
+        crate::objtools::show_level_bounds(&mut s, on);
         s
     }
 }
