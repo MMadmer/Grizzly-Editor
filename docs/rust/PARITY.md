@@ -54,10 +54,10 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 
 ### Viewport
 
-- missing S - View > Render > GPU (adapters by name, System Default, the three driver hints): `UIMainMenuForm::DrawViewportOptions` (`GpuAdapterName`, `SetGpuPreference`, `CLevelPreferences::GpuAdapter`).
-- missing S - View > Render > Quality 25 / 50 / 100 / 200 %: `DrawViewportOptions` (`UI->SetRenderQuality`).
-- differs S - Fill Mode (Point / Wireframe / Solid), Shade Mode, Edged Faces, Linear Filtering, Textures, Fog, Environment are `view_mode` arguments but not in the View menu or the Options pill (only a Wireframe toggle): `DrawViewportOptions`; Rust `gz-ui-viewport/src/menus.rs` `options_body`.
-- missing S - View > Mute Sounds and Real Time: `DrawViewportOptions` (`rsMuteSounds`, `rsRenderRealTime`), `UI_MainCommand.cpp` `CommandMuteSound`.
+- closed S - View > Render > GPU (adapters by name, System Default, the three driver hints): `UIMainMenuForm::DrawViewportOptions` (`GpuAdapterName`, `SetGpuPreference`, `CLevelPreferences::GpuAdapter`).
+- closed S - View > Render > Quality 25 / 50 / 100 / 200 %: `DrawViewportOptions` (`UI->SetRenderQuality`).
+- closed S - Fill Mode (Point / Wireframe / Solid), Shade Mode, Edged Faces, Linear Filtering, Textures, Fog, Environment are `view_mode` arguments but not in the View menu or the Options pill (only a Wireframe toggle): `DrawViewportOptions`; Rust `gz-ui-viewport/src/menus.rs` `options_body`.
+- closed S - View > Mute Sounds and Real Time: `DrawViewportOptions` (`rsMuteSounds`, `rsRenderRealTime`), `UI_MainCommand.cpp` `CommandMuteSound`.
 - missing S - Show AI Map toggle (`COMMAND_TOGGLE_AIMAP_VISIBILITY`, the `\` key): `UI_LevelMain.cpp` `CommandToggleAiMapVisibility` (the AI map's drawing itself is in work).
 
 ### Content Browser
@@ -66,24 +66,24 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 
 ### Libraries
 
-- missing S - Libraries > Reload Objects: `UI_LevelMain.cpp` `CommandReloadObjects` (`Lib.ReloadObjects`); `gz-scene/src/library.rs` `Library::clear` exists and nothing calls it.
-- missing S - Libraries > Reload Textures: `UI_MainCommand.cpp` `CommandReloadTextures`.
-- missing S - Libraries > Rewrite Texture Descriptions... (`rewrite_thumbnails` confirmation): `UIMainMenuForm.cpp` `RewriteThumbnails` / `RewriteThumbnailsNow`.
-- missing S - Libraries > Refresh Sound Environment Geometry: `UI_LevelMain.cpp` `CommandRefreshSoundEnvGeometry` (`CLevelSoundManager::RefreshEnvGeometry`).
-- missing S - Texture Library, Cube Map\Smaller Copy: `XrECore/Editor/UIImageEditorForm.cpp` (STATE.md: not done).
+- closed S - Libraries > Reload Objects: `UI_LevelMain.cpp` `CommandReloadObjects` (`Lib.ReloadObjects`); `gz-scene/src/library.rs` `Library::clear` exists and nothing calls it.
+- closed S - Libraries > Reload Textures: `UI_MainCommand.cpp` `CommandReloadTextures`.
+- closed S - Libraries > Rewrite Texture Descriptions... (`rewrite_thumbnails` confirmation): `UIMainMenuForm.cpp` `RewriteThumbnails` / `RewriteThumbnailsNow`.
+- closed (dropped: `RealRefreshEnvGeometry` is commented out, the C++ command does nothing) S - Libraries > Refresh Sound Environment Geometry: `UI_LevelMain.cpp` `CommandRefreshSoundEnvGeometry` (`CLevelSoundManager::RefreshEnvGeometry`).
+- closed S - Texture Library, Cube Map\Smaller Copy: `XrECore/Editor/UIImageEditorForm.cpp` (STATE.md: not done).
 
 ### Mod and build
 
-- missing M - Mod > Bake Scene Layer > Spawn Layer..., Collision Overlay..., Visual Overlay..., Level Cut... (the dialogs; the MCP `mod_export_*` exist): `UIMainMenuForm.cpp` `MenuMod`, `EditorModScene::RequestExportSpawn` / `RequestExportXCForm` / `RequestExportOGF` / `RequestExportCut`. Nobody fills the `BAKE_SCENE_LAYER` slot of `gz-ui-mod/src/menu.rs`.
+- closed M - Mod > Bake Scene Layer > Spawn Layer..., Collision Overlay..., Visual Overlay..., Level Cut... (the dialogs; the MCP `mod_export_*` exist): `UIMainMenuForm.cpp` `MenuMod`, `EditorModScene::RequestExportSpawn` / `RequestExportXCForm` / `RequestExportOGF` / `RequestExportCut`. Nobody fills the `BAKE_SCENE_LAYER` slot of `gz-ui-mod/src/menu.rs`.
 - differs S - Build > Make All... / Make Game... / Make Details... / Make HOM... / Make SOM... / Make AI Map... run at once; the C++ asks first, naming the level folder (Make All empties it for good): `UI_LevelMain.cpp` `ConfirmLevelBuild` in `CommandBuild` / `CommandMake*`; Rust `gz-ui-level/src/menus.rs` `build_menu` posts `make_*`, and `gz-levelbuild` `compile_level` wipes the folder.
 - differs S - the Make commands are no `UiCommand`s: no F9 / F5 binding, not in the palette or the Keyboard page: `REGISTER_CMD_SE` of `COMMAND_BUILD` / `COMMAND_MAKE_*`.
 - missing S - Build > Compile > AI Map > Verify (`xrAI -verify`): `LevelEditor/Editor/UI_LevelTools.cpp` `CLevelTool::RunXrAI_Verify`.
 - missing S - Build > Compile > Spawn > All Levels: `CLevelTool::RunXrAI_Spawn(false)`; Rust `compile_spawn` builds this level only.
-- differs S - Mod Settings picture: a chosen picture is applied to `mod.ltx` at once and Remove deletes `thumbnail.dds` at once (no Keep Picture, nothing waits for a Save): `XrECore/Editor/EditorModManifest.cpp` thumbnail row (`s_ThumbPending`, `s_ThumbRemove`, `PickThumbnail`); Rust `gz-ui-mod/src/settings.rs` `set_picture`.
+- closed S - Mod Settings picture: a chosen picture is applied to `mod.ltx` at once and Remove deletes `thumbnail.dds` at once (no Keep Picture, nothing waits for a Save): `XrECore/Editor/EditorModManifest.cpp` thumbnail row (`s_ThumbPending`, `s_ThumbRemove`, `PickThumbnail`); Rust `gz-ui-mod/src/settings.rs` `set_picture`.
 
 ### Quests
 
-- missing S - the camera button of a position (the viewport camera's position and level): `LevelEditor/UI/QuestGraph/NqInspector.cpp` `NqInspector::DrawPosition` (STATE.md: not ported).
+- closed S - the camera button of a position (the viewport camera's position and level): `LevelEditor/UI/QuestGraph/NqInspector.cpp` `NqInspector::DrawPosition` (STATE.md: not ported).
 
 ### Shell
 
@@ -91,22 +91,22 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 - missing S - File > Open Scene... (Ctrl+L, the file dialog): `CommandLoad` without a path; Rust opens a scene only from the Content Browser or `open_scene`.
 - missing S - File > Recent Scene, Open Last Scene (Ctrl+R) and the recent list itself: `UIMainMenuForm.cpp` `MenuFile`, `CommandLoadFirstRecent`, `CCustomPreferences::AppendRecentFile` / `scene_recent_list`; Rust has only the `scene_recent_count` preference.
 - missing S - File > Save As... (Ctrl+Shift+S): `CommandSave` with p2 = 1.
-- missing S - Show Properties (Enter), Scene Options (Ctrl+O), Show World Outliner, Show Content Browser as bindable commands: `CommandShowProperties`, `CommandOptions`, `CommandShowWorldOutliner`, `CommandShowContentBrowser` (the Window menu rows exist).
-- missing S - macros: Run Macro slots 1-8 (Alt+1..Alt+8), Assign Macro, Execute Command List, Log Commands: `UI_MainCommand.cpp` `CommandRunMacro` / `CommandAssignMacro` / `CommandExecuteCommandList` / `CommandLogCommands` (the Keyboard page's order list names the slots, nothing registers them).
-- missing S - grid slot count command: `UI_MainCommand.cpp` `CommandGridNumberOfSlots`.
-- missing S - `-uiscale <f>`: `XrEUI/XrUIKit.cpp` `CommandLineScale`.
+- closed S - Show Properties (Enter), Scene Options (Ctrl+O), Show World Outliner, Show Content Browser as bindable commands: `CommandShowProperties`, `CommandOptions`, `CommandShowWorldOutliner`, `CommandShowContentBrowser` (the Window menu rows exist).
+- closed S - macros: Run Macro slots 1-8 (Alt+1..Alt+8), Assign Macro, Execute Command List, Log Commands: `UI_MainCommand.cpp` `CommandRunMacro` / `CommandAssignMacro` / `CommandExecuteCommandList` / `CommandLogCommands` (the Keyboard page's order list names the slots, nothing registers them).
+- closed S - grid slot count command: `UI_MainCommand.cpp` `CommandGridNumberOfSlots`.
+- closed S - `-uiscale <f>`: `XrEUI/XrUIKit.cpp` `CommandLineScale`.
 - differs S - no splash window while the editor starts: `EditorStartup` (splash thread); the stage profile is there (`grizzly/src/startup.rs`).
-- differs S - the Start page's status bar shows the Level tab's centre (STATE.md, still open).
+- closed S - the Start page's status bar shows the Level tab's centre (STATE.md, still open).
 
 ### MCP wire
 
-- differs M - `list_commands` / `exec_command` cover the 48 `UiCommand`s, not the 118 `COMMAND_*` of the C++ registry, and `id` is the Rust table's index: `LevelEditor/Editor/Mcp/LevelMcp.cpp` (`GetEditorCommands`); Rust `gz-app/src/cmds.rs` `command_table`.
-- differs S - `exec_command` never reads `p2s` / `p2i`: `LevelMcp.cpp` `exec_command` (`ExecCommand(id, P1, P2)`).
-- differs S - `screenshot_editor` answers `busy: false` and `outside: []` always: `XrECore/Editor/GrizzlyMCP.cpp`; Rust `gz-app/src/shots.rs`.
+- closed M - `list_commands` / `exec_command` cover the 48 `UiCommand`s, not the 118 `COMMAND_*` of the C++ registry, and `id` is the Rust table's index: `LevelEditor/Editor/Mcp/LevelMcp.cpp` (`GetEditorCommands`); Rust `gz-app/src/cmds.rs` `command_table`.
+- closed S - `exec_command` never reads `p2s` / `p2i`: `LevelMcp.cpp` `exec_command` (`ExecCommand(id, P1, P2)`).
+- closed S - `screenshot_editor` answers `busy: false` and `outside: []` always: `XrECore/Editor/GrizzlyMCP.cpp`; Rust `gz-app/src/shots.rs`.
 - differs S - `game_link` / `game_modes` refusals carry `error` first (C++ `EditorProject::McpGameLink` had none).
 - differs S - `characters_write` refuses a path outside the project and validates a text without `id` under its file's id: `XrECore/Editor/EditorCharacters.cpp` `McpWrite`.
 - differs S - `world_set` writes only the section it changed; an empty declared `[start_kit]` becomes `perks = true`: `XrECore/Editor/EditorWorld.cpp` `McpSet` / `Save`.
-- differs S - `screens_set action=drop` always fills the loading surface: `XrECore/Editor/EditorScreens.cpp` `McpSet`.
+- closed S - `screens_set action=drop` always fills the loading surface: `XrECore/Editor/EditorScreens.cpp` `McpSet`.
 - differs S - `mod_publish action=start` answers once packaging ended in one call (no `job_pending` round): `XrECore/Editor/EditorModPublish.cpp` `McpPublish` + `GrizzlyMCP.cpp` `FollowsJob`.
 - differs S - `quest_history` adds `undo_steps` / `redo_steps`, and an undo back to the saved state is clean: `LevelEditor/UI/QuestGraph/UIQuestGraph.cpp` `McpHistory`.
 
@@ -119,7 +119,7 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 | Particles playing (and the Particles tool's Play / Stop), glows, AI map, details, wallmarks, cube sky in the viewport | `briefs/render-rest.md` |
 | Breakable / climable objects and the rest of `Scene->Validate` in the level build | STATE.md |
 | VIPM for progressive skeletons | STATE.md |
-| Panels outside the window (`[ui] floating_panels`, `screenshot_editor` `outside`) | STATE.md |
+| closed - Panels outside the window (`[ui] floating_panels`, `screenshot_editor` `outside`) | STATE.md, "The shell's rest" |
 
 ## Ledger
 

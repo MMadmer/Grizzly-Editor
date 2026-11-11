@@ -1511,7 +1511,9 @@ impl ShellState {
         let room_x1 = left_end.max(right_x - 12.0);
         let mut status_x = room_x1;
         let id = self.active.to_string();
-        if let Some(i) = self.find(&id)
+        // the centre is the active document's: the Start page (or a card over it) has none
+        if self.menus_shown
+            && let Some(i) = self.find(&id)
             && room_x1 - left_end > 24.0
         {
             let want = ctx.data(|d| d.get_temp::<f32>(Id::unique("gz-app.status_centre_w"))).unwrap_or(0.0);

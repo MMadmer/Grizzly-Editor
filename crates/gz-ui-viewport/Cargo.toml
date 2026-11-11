@@ -25,6 +25,8 @@ gz-fmt-level.workspace = true
 gz-fmt-xr.workspace = true
 gz-scene.workspace = true
 gz-render.workspace = true
+gz-chunk.workspace = true
+gz-particles = { path = "../gz-particles" }
 gz-ui.workspace = true
 gz-app.workspace = true
 egui.workspace = true

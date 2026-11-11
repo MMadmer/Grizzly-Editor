@@ -5,16 +5,25 @@
 //! request is waiting for a picture. Frames run straight from the event loop rather than through
 //! a redraw request, so a minimised or covered editor still runs its UI pass and can be
 //! pictured: the pass draws into a capture texture when no surface frame is to be had.
+//!
+//! With panels outside the window allowed (`WindowOptions::floating`), egui's immediate
+//! viewports get native windows of their own: the root frame runs every viewport's pass (a
+//! panel shows its window from inside the Level tab's pass), each with the input of its window,
+//! painted on a surface of its own by the one painter. A window is made after the pass that first
+//! asked for it - the pass before it paints nothing - and goes when no pass asks for it any more.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui::{ViewportId, ViewportInfo};
+use egui::{ImmediateViewport, ViewportId, ViewportIdSet, ViewportInfo};
 use egui_wgpu::winit::Painter;
 use egui_wgpu::{RenderState, RendererOptions, SurfaceConfig, WgpuConfiguration, WgpuSetupCreateNew};
 use egui_winit::winit;
 use gz_editor::{Editor, FrameStamp, SmolStr};
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{StartCause, WindowEvent};
@@ -64,6 +73,10 @@ pub struct WindowOptions {
     pub position: Option<[f32; 2]>,
     /// The window's icon: square straight RGBA and its side.
     pub icon: Option<(Vec<u8>, u32)>,
+    /// The adapter to make the device on, by name; empty is the system's default.
+    pub gpu_adapter: String,
+    /// egui's viewports become native windows (panels outside the window).
+    pub floating: bool,
 }
 
 impl Default for WindowOptions {
@@ -76,6 +89,8 @@ impl Default for WindowOptions {
             decorations: true,
             position: None,
             icon: None,
+            gpu_adapter: String::new(),
+            floating: false,
         }
     }
 }
@@ -86,6 +101,8 @@ pub struct WindowLink {
     captures: Mutex<Vec<egui::ScreenshotCallback>>,
     gpu: Mutex<Option<RenderState>>,
     caption: Arc<gz_win::CaptionHitTest>,
+    /// The titles of the windows of the editor's own the picture does not hold.
+    outside: Mutex<Vec<String>>,
 }
 
 impl WindowLink {
@@ -106,13 +123,36 @@ impl WindowLink {
     pub fn caption(&self) -> &Arc<gz_win::CaptionHitTest> {
         &self.caption
     }
+
+    /// The visible windows of the editor besides the main one (a panel dragged out), by title,
+    /// as the last frame left them.
+    #[must_use]
+    pub fn outside(&self) -> Vec<String> {
+        self.outside.lock().clone()
+    }
+}
+
+/// A native window of an egui viewport other than the root.
+struct Extra {
+    window: Arc<Window>,
+    input: egui_winit::State,
+    info: ViewportInfo,
+}
+
+/// What the root frame and the immediate viewports' passes share on the UI thread.
+struct Shared {
+    painter: Painter,
+    extra: FxHashMap<ViewportId, Extra>,
+    /// The textures of passes no window painted: the next paint applies them first.
+    textures: egui::TexturesDelta,
+    clear: [f32; 4],
 }
 
 struct Live {
     window: Arc<Window>,
     ctx: egui::Context,
     input: egui_winit::State,
-    painter: Painter,
+    shared: Rc<RefCell<Shared>>,
     info: ViewportInfo,
     /// The last size that was not zero: what a minimised window is pictured at.
     size_px: [u32; 2],
@@ -131,6 +171,52 @@ struct App {
     repaint_at: Arc<Mutex<Option<Instant>>>,
     frame: u64,
     failed: Option<String>,
+}
+
+/// One pass of an immediate viewport (a panel's own window): its window's input, the pass, the
+/// paint. Without its window yet, the pass still runs - egui wants it - and only its textures
+/// are kept for the next paint.
+fn render_immediate(ctx: &egui::Context, shared: &Rc<RefCell<Shared>>, vp: ImmediateViewport<'_>) {
+    let ImmediateViewport { ids, builder, mut viewport_ui_cb } = vp;
+    let raw = {
+        let Ok(mut sh) = shared.try_borrow_mut() else { return };
+        match sh.extra.get_mut(&ids.this) {
+            Some(x) => {
+                egui_winit::update_viewport_info(&mut x.info, ctx, &x.window, false);
+                let mut raw = x.input.take_egui_input(&x.window);
+                raw.viewports.insert(ids.this, x.info.clone());
+                x.info.events.clear();
+                raw
+            }
+            None => {
+                let mut raw = egui::RawInput { viewport_id: ids.this, ..Default::default() };
+                raw.screen_rect = builder.inner_size.map(|s| egui::Rect::from_min_size(egui::Pos2::ZERO, s));
+                raw.viewports.insert(ids.this, ViewportInfo::default());
+                raw
+            }
+        }
+    };
+    let output = ctx.run_ui(raw, |ui| viewport_ui_cb(ui));
+    let Ok(mut sh) = shared.try_borrow_mut() else { return };
+    let Shared { painter, extra, textures, clear } = &mut *sh;
+    match extra.get_mut(&ids.this) {
+        Some(x) => {
+            x.input.handle_platform_output(&x.window, output.platform_output);
+            let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+            let mut delta = std::mem::take(textures);
+            delta.append(output.textures_delta);
+            painter.paint_and_update_textures(
+                ids.this,
+                output.pixels_per_point,
+                *clear,
+                &primitives,
+                &mut delta,
+                Vec::new(),
+                &x.window,
+            );
+        }
+        None => textures.append(output.textures_delta),
+    }
 }
 
 impl App {
@@ -184,6 +270,22 @@ impl App {
             desc.required_features |= adapter.features() & egui_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC;
             desc
         });
+        // View > Render > GPU: the adapter of that name, when it can draw into the window
+        if !self.opts.gpu_adapter.is_empty() {
+            let wanted = self.opts.gpu_adapter.clone();
+            let log = self.editor.log.clone();
+            setup.native_adapter_selector = Some(Arc::new(move |adapters, surface| {
+                if let Some(a) = crate::gpu::pick_adapter(adapters, &wanted, surface) {
+                    return Ok(a.clone());
+                }
+                log.warn(format!("the GPU '{wanted}' is not there: the device is made on another one"));
+                adapters
+                    .iter()
+                    .find(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
+                    .cloned()
+                    .ok_or_else(|| "no graphics adapter draws into the window".to_owned())
+            }));
+        }
         let config = WgpuConfiguration {
             surface: SurfaceConfig::LOW_LATENCY,
             wgpu_setup: setup.into(),
@@ -200,6 +302,20 @@ impl App {
         gpu.device.on_uncaptured_error(Arc::new(move |e: egui_wgpu::wgpu::Error| {
             log.error(format!("the graphics device reported an error: {e}"))
         }));
+        crate::gpu::Gpu::of(&self.editor).set_adapters(crate::gpu::Adapters {
+            names: {
+                // one card reports itself once per backend
+                let mut names: Vec<String> = Vec::new();
+                for a in &gpu.available_adapters {
+                    let n = a.get_info().name;
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+                names
+            },
+            active: gpu.adapter.get_info().name,
+        });
 
         let input = egui_winit::State::new(
             ctx.clone(),
@@ -212,6 +328,19 @@ impl App {
         self.shell.init(&ctx, &gpu);
         *self.link.gpu.lock() = Some(gpu);
 
+        let clear = ctx.global_style().visuals.panel_fill.to_normalized_gamma_f32();
+        let shared = Rc::new(RefCell::new(Shared {
+            painter,
+            extra: FxHashMap::default(),
+            textures: egui::TexturesDelta::default(),
+            clear,
+        }));
+        if self.opts.floating {
+            ctx.set_embed_viewports(false);
+            let s = shared.clone();
+            egui::Context::set_immediate_viewport_renderer(move |ctx, vp| render_immediate(ctx, &s, vp));
+        }
+
         let size = window.inner_size();
         if start_minimized {
             window.set_minimized(true);
@@ -220,14 +349,14 @@ impl App {
             window,
             ctx,
             input,
-            painter,
+            shared,
             info: ViewportInfo::default(),
             size_px: [size.width.max(1), size.height.max(1)],
             shown: false,
         })
     }
 
-    fn run_frame(&mut self) {
+    fn run_frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(live) = self.live.as_mut() else { return };
         self.dirty = false;
         *self.repaint_at.lock() = None;
@@ -244,6 +373,12 @@ impl App {
         }
         egui_winit::update_viewport_info(&mut live.info, &live.ctx, &live.window, self.frame == 0);
         raw.viewports.insert(ViewportId::ROOT, live.info.clone());
+        if let Ok(sh) = live.shared.try_borrow() {
+            for (id, x) in &sh.extra {
+                raw.viewports.insert(*id, x.info.clone());
+            }
+        }
+        live.shared.borrow_mut().clear = live.ctx.global_style().visuals.panel_fill.to_normalized_gamma_f32();
 
         let shell = &mut self.shell;
         let mut report = FrameReport::default();
@@ -271,22 +406,45 @@ impl App {
 
         let primitives = live.ctx.tessellate(output.shapes, output.pixels_per_point);
         let clear = live.ctx.global_style().visuals.panel_fill.to_normalized_gamma_f32();
-        live.painter.paint_and_update_textures(
-            ViewportId::ROOT,
-            output.pixels_per_point,
-            clear,
-            &primitives,
-            &mut output.textures_delta,
-            captures,
-            &live.window,
-        );
-        if capturing && let Some(gpu) = live.painter.render_state() {
-            // the picture is handed over when the read-back buffer is mapped, which happens on a
-            // poll; no later frame may come to do it
-            let _ = gpu.device.poll(egui_wgpu::wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(2)),
-            });
+        {
+            let mut sh = live.shared.borrow_mut();
+            let mut delta = std::mem::take(&mut sh.textures);
+            delta.append(std::mem::take(&mut output.textures_delta));
+            sh.painter.paint_and_update_textures(
+                ViewportId::ROOT,
+                output.pixels_per_point,
+                clear,
+                &primitives,
+                &mut delta,
+                captures,
+                &live.window,
+            );
+            if capturing && let Some(gpu) = sh.painter.render_state() {
+                // the picture is handed over when the read-back buffer is mapped, which happens
+                // on a poll; no later frame may come to do it
+                let _ = gpu.device.poll(egui_wgpu::wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(Duration::from_secs(2)),
+                });
+            }
+        }
+
+        // the viewports of the panels outside: windows made for the new, commands for the
+        // others, gone for those no pass asked for
+        if self.opts.floating {
+            Self::sync_extra(&self.editor, live, event_loop, output.viewport_output);
+            let outside: Vec<String> = live
+                .shared
+                .try_borrow()
+                .map(|sh| {
+                    sh.extra
+                        .values()
+                        .filter(|x| x.window.is_visible() != Some(false))
+                        .map(|x| x.window.title())
+                        .collect()
+                })
+                .unwrap_or_default();
+            *self.link.outside.lock() = outside;
         }
 
         if !live.shown {
@@ -304,6 +462,55 @@ impl App {
             width: live.size_px[0],
             height: live.size_px[1],
         });
+    }
+
+    fn sync_extra(
+        editor: &Editor,
+        live: &mut Live,
+        event_loop: &ActiveEventLoop,
+        outputs: std::collections::BTreeMap<ViewportId, egui::ViewportOutput>,
+    ) {
+        let Ok(mut sh) = live.shared.try_borrow_mut() else { return };
+        let mut alive = ViewportIdSet::default();
+        alive.insert(ViewportId::ROOT);
+        for (id, vo) in outputs {
+            if id == ViewportId::ROOT {
+                continue;
+            }
+            alive.insert(id);
+            if let Some(x) = sh.extra.get_mut(&id) {
+                let mut actions = Vec::new();
+                egui_winit::process_viewport_commands(&live.ctx, &mut x.info, vo.commands, &x.window, &mut actions);
+                continue;
+            }
+            let window = match egui_winit::create_window(&live.ctx, event_loop, &vo.builder) {
+                Ok(w) => Arc::new(w),
+                Err(e) => {
+                    editor.log.warn(format!("a panel's window could not be made: {e}"));
+                    continue;
+                }
+            };
+            let rt = editor.exec.handle().clone();
+            if let Err(e) = rt.block_on(sh.painter.set_window(id, Some(window.clone()))) {
+                editor.log.warn(format!("a panel's window could not be drawn into: {e}"));
+                continue;
+            }
+            let input = egui_winit::State::new(
+                live.ctx.clone(),
+                id,
+                &window,
+                Some(window.scale_factor() as f32),
+                window.theme(),
+                sh.painter.max_texture_side(),
+            );
+            let mut info = ViewportInfo::default();
+            egui_winit::update_viewport_info(&mut info, &live.ctx, &window, true);
+            sh.extra.insert(id, Extra { window, input, info });
+            // its first paint is the next frame's
+            live.ctx.request_repaint();
+        }
+        sh.extra.retain(|id, _| alive.contains(id));
+        sh.painter.gc_viewports(&alive);
     }
 }
 
@@ -340,8 +547,30 @@ impl ApplicationHandler<UserEvent> for App {
         self.dirty = true;
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
         let Some(live) = self.live.as_mut() else { return };
+        if window_id != live.window.id() {
+            // a panel's own window: its input, its size, its close (the panel docks again)
+            if let Ok(mut sh) = live.shared.try_borrow_mut() {
+                let Shared { painter, extra, .. } = &mut *sh;
+                if let Some((id, x)) = extra.iter_mut().find(|(_, x)| x.window.id() == window_id) {
+                    let _ = x.input.on_window_event(&x.window, &event);
+                    match &event {
+                        WindowEvent::Resized(size) => {
+                            if let (Some(w), Some(h)) =
+                                (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
+                            {
+                                painter.on_window_resized(*id, w, h);
+                            }
+                        }
+                        WindowEvent::CloseRequested => x.info.events.push(egui::ViewportEvent::Close),
+                        _ => {}
+                    }
+                }
+            }
+            self.dirty = true;
+            return;
+        }
         let response = live.input.on_window_event(&live.window, &event);
         if response.repaint {
             self.dirty = true;
@@ -357,11 +586,11 @@ impl ApplicationHandler<UserEvent> for App {
                     (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
                 {
                     live.size_px = [size.width, size.height];
-                    live.painter.on_window_resized(ViewportId::ROOT, w, h);
+                    live.shared.borrow_mut().painter.on_window_resized(ViewportId::ROOT, w, h);
                 }
                 self.dirty = true;
             }
-            WindowEvent::RedrawRequested => self.run_frame(),
+            WindowEvent::RedrawRequested => self.run_frame(event_loop),
             WindowEvent::CloseRequested => {
                 if self.shell.close_requested() {
                     event_loop.exit();
@@ -384,7 +613,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.dirty = true;
         }
         if self.dirty {
-            self.run_frame();
+            self.run_frame(event_loop);
         }
         match *self.repaint_at.lock() {
             Some(at) if at > Instant::now() => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
@@ -396,6 +625,15 @@ impl ApplicationHandler<UserEvent> for App {
     fn exiting(&mut self, _: &ActiveEventLoop) {
         self.shell.exiting();
         *self.link.gpu.lock() = None;
+        // the immediate viewports' renderer lives in egui's thread-local and holds the painter:
+        // let it go now, or the device is dropped while the process ends (it hangs there)
+        if self.opts.floating {
+            egui::Context::set_immediate_viewport_renderer(|ctx, vp| {
+                let ImmediateViewport { ids, mut viewport_ui_cb, .. } = vp;
+                let raw = egui::RawInput { viewport_id: ids.this, ..Default::default() };
+                let _ = ctx.run_ui(raw, |ui| viewport_ui_cb(ui));
+            });
+        }
         self.live = None;
     }
 }

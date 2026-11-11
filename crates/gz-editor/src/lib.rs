@@ -12,8 +12,10 @@
 //! - [`Notices`] - messages for the author raised off the UI thread
 //! - [`DirtySource`] - how an area says what unsaved work it holds
 //! - [`AutoSave`] - a store's document written to disk as it is edited; [`fsx`] - file helpers
+//! - [`ViewCamera`] - the viewport's camera, read by surfaces that must not depend on it
 
 mod args;
+mod camera;
 mod editor;
 mod frames;
 pub mod fsx;
@@ -23,6 +25,7 @@ mod saver;
 mod services;
 
 pub use args::{Args, ArgsExt};
+pub use camera::{CameraPose, ViewCamera};
 pub use editor::{
     AppPaths, DirtyDoc, DirtySource, Editor, EditorOptions, Flags, ProjectSession, SettleFuture,
 };

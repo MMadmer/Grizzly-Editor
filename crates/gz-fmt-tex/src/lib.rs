@@ -37,9 +37,11 @@
 //! - [`make_screen_picture_dds`] - a screen layer's picture.
 //! - [`texture_tile`] - the picture of an image file for a content browser tile.
 //! - [`check_compliance`], [`apply_borders`], [`is_valid_size`] - the image manager's checks.
+//! - [`cubemap::simplify`] - a cube strip's smaller copy (Cube Map \ Smaller Copy).
 
 mod bc;
 mod bump;
+pub mod cubemap;
 mod dds;
 mod load;
 mod make;

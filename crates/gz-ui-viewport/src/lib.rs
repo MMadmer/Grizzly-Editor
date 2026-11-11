@@ -17,8 +17,21 @@
 //!   shows `target()` and never waits for the scene.
 //! - **Picking and tools read snapshots and emit [`gz_scene::SceneCmd`]s**: a click asks the pick
 //!   tree on the CPU pool, a drag sends merged-undo transforms and seals the gesture on release.
+//! - **The object tools' gestures** ([`objtools`]): the Sector tool's mesh paint and Box Pick,
+//!   the Way tool's Points mode (click, marquee, move, add), Shape's Attach on Click - each a
+//!   `gz_scene::objtools` edit, the same the tools' commands send.
+//! - **The bulk tools' gestures** (`bulktools`): the AI map's brush stroke, the node click,
+//!   marquee and gizmo drags, the detail slots' click and marquee, a wallmark laid (Ctrl moves the
+//!   selected one), Delete and the selection keys - the `gz_scene::bulk::cmd` functions the
+//!   `aimap_tool`, `details_tool` and `wallmark_tool` commands run.
 //! - **Overlays are egui** over the picture: the pills, the axis gizmo, the transform gizmo, the
 //!   stats pill, the labels the renderer reports visible, the safe rect, the marquee.
+//! - **The extras of a pass** (`draw_extra`), on the same CPU task: particle systems playing
+//!   ([`draw_particles`], a `gz-particles` system per particle object, stepped by the time since
+//!   the last pass while it plays and its emitter is in view), the glows' sprites, the AI map
+//!   ([`draw_aimap`], tile meshes made once per tile revision near the camera), detail objects
+//!   ([`draw_details`], slots decompressed round the camera, drawn as batches) and static
+//!   wallmarks ([`draw_wallmarks`]). While a system in view plays every request makes a pass.
 //!
 //! # API
 //!
@@ -28,9 +41,11 @@
 //! view_menu(ui, cx)                      the View menu's viewport options (DrawViewportOptions)
 //! capture_preview(editor).await          preview.png: a pass of its own, no helpers
 //! set_place_item(editor, class, name)    what Place adds for a class (the Tools panel's pick)
+//! placing(editor) / set_placing(editor)  whether a click adds (the Sector tool's Edit section)
 //! register(reg)                          camera_get, camera_set, focus_object, view_mode,
 //!                                        viewport_controls, viewport_navigation, game_lighting,
-//!                                        frame_pacing, screenshot_viewport
+//!                                        frame_pacing, screenshot_viewport, particles_tool
+//! play_particles(editor, names, on).await the Particles tool's Play / Stop
 //! install(b)                             the viewport's commands on the Keyboard page
 //! ```
 //!
@@ -39,20 +54,29 @@
 
 #![forbid(unsafe_code)]
 
+mod bulktools;
 pub mod camera;
 mod cmd;
 pub mod draw;
+pub mod draw_aimap;
+pub mod draw_details;
+mod draw_extra;
+pub mod draw_particles;
+pub mod draw_wallmarks;
 pub mod gizmo;
 mod keys;
 pub mod lighting;
 mod loader;
 mod menus;
+pub mod objtools;
 mod pane;
 mod service;
 mod session;
 
 pub use cmd::register;
+pub use draw_particles::{any_playing as particles_playing, play as play_particles};
 pub use keys::install;
 pub use menus::view_menu;
+pub use objtools::{placing, set_placing};
 pub use pane::ViewportPane;
 pub use service::{Viewport, capture_preview, set_place_item};

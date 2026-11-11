@@ -24,8 +24,9 @@
 //!   `ImageManager.cpp`, `SoundManager.cpp`.
 //!
 //! [`install`] plugs the five tabs and the Libraries menu (Light Animations, Texture Library,
-//! Sound Library, Check New Textures, Synchronize Textures..., Synchronize Sounds...) into the
-//! shell; [`register`] adds `preview_model`, `texture_preview`, `library` and `asset_preview`.
+//! Sound Library, Check New Textures, Synchronize Textures..., Synchronize Sounds..., Reload
+//! Objects, Reload Textures, Rewrite Texture Descriptions...) into the shell, with the C++ rows
+//! `COMMAND_RELOAD_TEXTURES`, `COMMAND_RELOAD_OBJECTS` and `COMMAND_MUTE_SOUND` ([`libtools`]); [`register`] adds `preview_model`, `texture_preview`, `library` and `asset_preview`.
 //!
 //! Widgets the kit lacks, local to this crate: [`local::local_checker`] (a checkerboard lined
 //! up with a picture, clipped to the view), [`local::local_heading`] (a preview's title and its
@@ -45,6 +46,7 @@ mod cmd;
 pub mod gpu;
 pub mod image_pass;
 pub mod library;
+pub mod libtools;
 pub mod loader;
 pub mod local;
 pub mod model;
@@ -255,6 +257,7 @@ pub fn install(b: &mut ShellBuilder) {
     b.menu_item("Libraries", 1, 0, "COMMAND_CHECK_TEXTURES");
     b.menu_item("Libraries", 1, 1, "COMMAND_REFRESH_TEXTURES");
     b.menu_item("Libraries", 1, 2, "COMMAND_SYNC_SOUNDS");
+    libtools::install(b);
 }
 
 /// The commands of this package: `preview_model`, `texture_preview`, `library`, `asset_preview`.

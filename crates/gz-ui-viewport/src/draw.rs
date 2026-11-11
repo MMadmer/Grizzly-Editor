@@ -49,7 +49,7 @@ const ENVMOD_COLOR: u32 = 0x00FF_AE00;
 /// `CGroupObject::Render`.
 const GROUP_SEL: u32 = 0xFF70_70FF;
 /// `glow.cpp`'s romboid, `EParticlesObject`'s cross.
-const GLOW_COLOR: u32 = 0x00FF_8507;
+pub(crate) const GLOW_COLOR: u32 = 0x00FF_8507;
 const PARTICLES_COLOR: u32 = 0xFFFF_EBAA;
 /// A scene object of the snap list (`RenderSnapList` draws it with the selection shader).
 const SNAP_TINT: Color = Color::rgb(150, 210, 255);
@@ -294,9 +294,8 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 }
             }
             ObjData::Glow(g) => {
-                // the sprite is the game's texture: the editor shows where it is and how big
-                romboid(h, p, VIS_RADIUS, line(GLOW_COLOR));
-                h.sphere(p, g.radius, None, Some(line(GLOW_COLOR).with_alpha(110)), true);
+                // the sprite and the romboid of a tested glow need the camera and the pick tree:
+                // `draw_extra::glows` draws them
                 if selected {
                     let b = Aabb::new(p - Vec3::splat(g.radius), p + Vec3::splat(g.radius));
                     selection_box(h, &b, &Mat4::IDENTITY, Color::WHITE);
@@ -617,6 +616,9 @@ pub fn frustum_select(
 /// The box Frame All and Frame Selection fit (`EScene::ZoomExtents` of the current class).
 #[must_use]
 pub fn class_box(state: &SceneState, lib: &Library, class: ObjClass, selected_only: bool) -> Option<Aabb> {
+    if let Some(b) = bulk_box(state, class, selected_only) {
+        return b;
+    }
     let mut b = Aabb::EMPTY;
     for o in state.of_class(class) {
         if !o.flags.visible || (selected_only && !state.is_selected(o.id)) {
@@ -642,11 +644,43 @@ pub fn object_box(state: &SceneState, lib: &Library, o: &Object) -> Aabb {
 /// object's pivot, rotation and box.
 #[must_use]
 pub fn gizmo_points(state: &SceneState, lib: &Library, class: ObjClass) -> Vec<(Vec3, Vec3, Option<Aabb>)> {
+    // the AI map's selected nodes stand for one object: their box (`GetBBox(bSelOnly)`)
+    if class == ObjClass::AiMap {
+        return bulk_box(state, class, true).flatten().map(|b| vec![(b.center(), Vec3::ZERO, Some(b))]).unwrap_or_default();
+    }
     state
         .of_class(class)
         .filter(|o| state.is_selected(o.id) && o.flags.visible && o.editable())
         .map(|o| (o.position(), o.rotation(), world_box(state, lib, o)))
         .collect()
+}
+
+/// `GetBBox` of the bulk tools: the AI map's box or its selected nodes (half a patch round each),
+/// the wallmarks or the selected ones; `None` for another class, `Some(None)` for nothing there.
+#[must_use]
+pub fn bulk_box(state: &SceneState, class: ObjClass, selected_only: bool) -> Option<Option<Aabb>> {
+    match class {
+        ObjClass::AiMap => {
+            let Some(a) = state.bulk.ai_map.as_ref() else { return Some(None) };
+            if !selected_only {
+                return Some(ga(&a.header.bbox));
+            }
+            let h = a.header.params.patch_size * 0.5;
+            let mut b = Aabb::EMPTY;
+            for n in a.nodes.iter().flat_map(|t| t.iter()) {
+                if n.flags & gz_fmt_level::node_flags::SELECTED != 0 {
+                    b = b.union(&Aabb::new(n.pos - Vec3::splat(h), n.pos + Vec3::splat(h)));
+                }
+            }
+            Some((!b.is_empty()).then_some(b))
+        }
+        ObjClass::Wallmark => {
+            let m = state.bulk.wallmarks.as_ref().and_then(|w| w.model.clone());
+            Some(m.and_then(|m| m.bbox(selected_only)).and_then(|b| ga(&b)))
+        }
+        ObjClass::DetailObjects => Some(None),
+        _ => None,
+    }
 }
 
 /// A shared, empty list: what an unopened scene draws (the grid alone).
@@ -676,7 +710,7 @@ mod tests {
         let lib = Library::new(Vec::new());
         let assets = Assets::headless(gz_render::MaterialTable::default());
         let b = build(&s, &lib, &assets, &DrawOptions { helpers: true, game: None });
-        // lights and glows have no mesh: only helpers
+        // lights and glows have no mesh: only helpers (a glow's sprite is a pass's extra)
         assert!(b.list.instances.is_empty());
         assert!(!b.list.helpers.shapes.is_empty());
         assert!(!b.list.helpers.lines.is_empty());

@@ -51,6 +51,9 @@ pub struct ShellOptions {
     pub fonts: FontFiles,
     /// `-iconsheet`: the work area shows every icon of the kit and nothing else.
     pub iconsheet: bool,
+    /// `-uiscale <f>` (0.5..4): the UI at this scale, whatever the monitor says
+    /// (`CommandLineScale`). Taken again when the window meets another monitor's scale.
+    pub ui_scale: Option<f32>,
 }
 
 /// How a tab is closed when asked over MCP.
@@ -162,6 +165,8 @@ pub(crate) struct Parts {
     pub log_state: Option<crate::builder::LogStateFn>,
     pub reveal: Option<crate::builder::RevealFn>,
     pub reset_layout: Option<crate::builder::ResetLayoutFn>,
+    /// The C++ command table over `commands`.
+    pub cpp: crate::cpp::Table,
 }
 
 /// A popup on screen, as `ui_list` names it.
@@ -264,6 +269,8 @@ pub struct ShellState {
     last_frame: Option<Instant>,
     pub(crate) fps: f32,
     panic_guard: Arc<AtomicBool>,
+    /// `exec` logged the command it runs: `run_command` does not log it again.
+    pub(crate) quiet_log: bool,
 }
 
 /// The Level tab a build without the level editor shows.
@@ -318,6 +325,7 @@ impl ShellState {
             log_state,
             reveal,
             reset_layout,
+            cpp,
         } = builder;
         let mut parts = Parts {
             factories,
@@ -333,10 +341,16 @@ impl ShellState {
             log_state,
             reveal,
             reset_layout,
+            cpp: crate::cpp::Table::default(),
         };
         parts.project_toolbar.sort_by_key(|(o, _)| *o);
         parts.status_chips.sort_by_key(|(o, _)| *o);
         add_shell_commands(&mut parts.commands);
+        // the C++ table: what the shell knows of the C++ rows, the shell's own, then the areas'
+        let mut rows = crate::cpp::known_rows();
+        rows.extend(crate::cpp::shell_rows());
+        rows.extend(cpp);
+        parts.cpp = crate::cpp::Table::build(rows, &mut parts.commands);
         let hit_test = editor.services.get_or_init(crate::window::WindowLink::default).caption().clone();
         crate::unsaved::install(&editor);
         let mut s = Self {
@@ -380,6 +394,7 @@ impl ShellState {
             last_frame: None,
             fps: 0.0,
             panic_guard,
+            quiet_log: false,
         };
         s.open_level();
         s
@@ -888,10 +903,13 @@ impl ShellState {
     pub(crate) fn panel(&mut self, ctx: &Context, id: &str, op: PanelOp) -> Option<&'static str> {
         let desc = self.parts.panels.iter().find(|p| p.id == id).cloned()?;
         let open = match op {
-            PanelOp::Open | PanelOp::Focus => true,
+            PanelOp::Open | PanelOp::Focus | PanelOp::Float | PanelOp::Dock => true,
             PanelOp::Close => false,
             PanelOp::Toggle => !self.level_panel(id).is_some_and(|p| p.open),
         };
+        if op == PanelOp::Float && ctx.embed_viewports() {
+            return None;
+        }
         if open {
             self.activate(ctx, LEVEL);
         }
@@ -904,6 +922,9 @@ impl ShellState {
         }
         if !open {
             return Some("none");
+        }
+        if self.level_panel(id).is_some_and(|p| p.floating) || op == PanelOp::Float {
+            return Some("window");
         }
         let has_room = desc.drawer.is_none() || self.size_class() == "wide";
         match desc.drawer {
@@ -954,6 +975,19 @@ impl ShellState {
     pub(crate) fn run_command(&mut self, ctx: &Context, i: usize) -> bool {
         if !self.command_enabled(i) {
             return false;
+        }
+        // Log Commands: a face of a C++ row logs itself; a UiCommand of its own is logged here
+        if !self.quiet_log && crate::cpp::CommandLog::of(&self.editor).on() {
+            for row in &self.parts.cpp.rows {
+                if !matches!(row.cmd.action, crate::cpp::CppAction::Ui) {
+                    continue;
+                }
+                if let Some(k) = row.faces.iter().position(|f| *f == Some(i))
+                    && let Some(sub) = row.cmd.subs.get(k)
+                {
+                    crate::cpp::log_command(&self.editor, &row.cmd.name, &sub.p1, &sub.p2, 0);
+                }
+            }
         }
         let Some(c) = self.parts.commands.get_mut(i) else { return false };
         (c.run)(&mut DocCx {
@@ -1657,12 +1691,23 @@ pub fn window_options(editor: &Editor) -> WindowOptions {
         icon: crate::chrome::logo_rgba(64).map(|rgba| (rgba, 64)),
         ..WindowOptions::default()
     };
-    if let Some(p) = EditorSettings::of(editor).placement() {
+    let settings = EditorSettings::of(editor);
+    if let Some(p) = settings.placement() {
         opts.size = [p.size[0].max(opts.min_size[0]), p.size[1].max(opts.min_size[1])];
         opts.position = p.pos;
         opts.maximized = p.maximized;
     }
+    // read once: both take a restart
+    opts.gpu_adapter = settings.gpu_adapter();
+    opts.floating = settings.pref("floating_panels").is_some_and(|v| v != 0.0);
     opts
+}
+
+/// Whether panels may leave the window in this run (`[ui] floating_panels` as it was read when
+/// the window opened).
+#[must_use]
+pub fn floating_panels(ctx: &Context) -> bool {
+    !ctx.embed_viewports()
 }
 
 /// What the window runs: the shell with its tabs.
@@ -1673,6 +1718,8 @@ pub struct GrizzlyShell {
     opts: ShellOptions,
     state: Option<ShellState>,
     ctx: Option<Context>,
+    /// The monitor's scale `-uiscale` was last applied over.
+    native_seen: Option<f32>,
 }
 
 impl GrizzlyShell {
@@ -1680,7 +1727,7 @@ impl GrizzlyShell {
     pub fn new(editor: Arc<Editor>, builder: ShellBuilder, opts: ShellOptions) -> Self {
         let wake = editor.exec.wake().clone();
         let queue = editor.services.get_or_init(|| UiQueue::new(wake));
-        Self { editor, queue, builder: Some(builder), opts, state: None, ctx: None }
+        Self { editor, queue, builder: Some(builder), opts, state: None, ctx: None, native_seen: None }
     }
 }
 
@@ -1710,6 +1757,15 @@ impl Shell for GrizzlyShell {
     }
 
     fn frame(&mut self, ui: &mut Ui) -> FrameReport {
+        // -uiscale: the scale is the command line's, also after the monitor's scale changes
+        if let Some(scale) = self.opts.ui_scale {
+            let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0).max(0.1);
+            if self.native_seen != Some(native) {
+                self.native_seen = Some(native);
+                ui.ctx().set_zoom_factor(scale / native);
+                ui.ctx().request_repaint();
+            }
+        }
         match self.state.as_mut() {
             Some(s) => s.frame(ui),
             None => FrameReport::default(),

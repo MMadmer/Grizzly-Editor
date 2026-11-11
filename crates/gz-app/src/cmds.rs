@@ -14,6 +14,8 @@ use gz_ui::{Tone, audit, layout};
 use serde_json::Map;
 
 use crate::contract;
+use crate::cpp::{CommandVar, CppAction};
+use crate::doc::DocCx;
 use crate::doc::{Drawer, OpenRequest, PanelOp};
 use crate::keys::Chord;
 use crate::palette as pal;
@@ -202,9 +204,10 @@ fn panel_json(shell: &ShellState, ctx: &Context, id: &str, window: &str) -> Valu
         "open": info.open || id == "viewport" && shell.level_panel(id).is_none_or(|p| p.open),
         "visible": visible,
         "docked": info.docked,
+        "floating": info.floating,
         "focused": info.focused,
         "closable": id != "viewport",
-        "host": if visible { "panel" } else if in_drawer { "drawer" } else { "none" },
+        "host": if info.floating && info.open { "window" } else if visible { "panel" } else if in_drawer { "drawer" } else { "none" },
         "rect": match (visible, info.rect) {
             (true, Some([x, y, w, h])) => json!([r0(x), r0(y), r0(w), r0(h)]),
             _ => { let _ = ppp; Value::Null }
@@ -392,24 +395,48 @@ async fn ui_tab(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 async fn ui_panel(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let id = str_arg(&args, "id").to_owned();
     let action = args.str_or("action", "focus").to_owned();
-    on_ui(&editor, move |shell, ctx| {
+    // floating=true moves the panel into a window of its own, false docks it again
+    let floating = args.bool("floating");
+    let moved = floating.is_some();
+    let answer = on_ui(&editor, move |shell, ctx| {
         if !shell.has_panel(&id) {
             return Err(invalid("id must be tools, world_outliner, details, level_settings, content_browser, output_log or viewport"));
         }
-        let op = match action.as_str() {
-            "open" => PanelOp::Open,
-            "close" => PanelOp::Close,
-            "focus" => PanelOp::Focus,
-            "toggle" => PanelOp::Toggle,
+        let op = match (floating, action.as_str()) {
+            (Some(true), _) => PanelOp::Float,
+            (Some(false), _) => PanelOp::Dock,
+            (None, "open") => PanelOp::Open,
+            (None, "close") => PanelOp::Close,
+            (None, "focus") => PanelOp::Focus,
+            (None, "toggle") => PanelOp::Toggle,
             _ => return Err(invalid("action must be open, close, focus or toggle")),
         };
+        if floating.is_some() && id == "viewport" {
+            return Err(invalid("the viewport stays in the editor's window"));
+        }
+        if op == PanelOp::Float && !crate::shell::floating_panels(ctx) {
+            return Err(invalid(
+                "panels stay in the window: Preferences > General > Allow Panels Outside the Window is off (it takes a restart)",
+            ));
+        }
         let closing = op == PanelOp::Close || op == PanelOp::Toggle && shell.level_panel(&id).is_some_and(|p| p.open);
         if closing && id == "viewport" {
             return Err(invalid("the viewport stays on Level: F11 (View > Maximize Viewport) hides the panels"));
         }
         let host = shell.panel(ctx, &id, op).ok_or_else(|| invalid(format!("the {id} panel did not answer")))?;
-        let open = shell.level_panel(&id).is_some_and(|p| p.open);
-        Ok(json!({ "id": id, "open": open, "host": host, "active_tab": shell.active() }))
+        ctx.request_repaint();
+        Ok((id, host))
+    })
+    .await?;
+    // a window of its own is made after the frame that asked for it, and drawn in the next
+    if moved {
+        editor.frames.after(3).await?;
+    }
+    let (id, host) = answer;
+    on_ui(&editor, move |shell, _| {
+        let info = shell.level_panel(&id).unwrap_or_default();
+        let host = if info.floating { "window" } else if host == "window" { "panel" } else { host };
+        Ok(json!({ "id": id, "open": info.open, "host": host, "floating": info.floating, "active_tab": shell.active() }))
     })
     .await
 }
@@ -1102,48 +1129,37 @@ async fn progress(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 
 // ---- list_commands, exec_command -------------------------------------------------------------
 
-/// The editor's command table as `list_commands` numbers it: one entry per command, its
-/// variants (`COMMAND_ZOOM_EXTENTS."Selected"`) as presets of it, in the order they were
-/// registered. `(name, menu, [(index into the shell's commands, preset)])`.
-type CommandRow = (String, String, Vec<(usize, Option<String>)>);
-
-fn command_table(shell: &ShellState) -> Vec<CommandRow> {
-    let mut out: Vec<CommandRow> = Vec::new();
-    for (i, c) in shell.parts.commands.iter().enumerate() {
-        let (base, preset) = match c.id.split_once('.') {
-            Some((b, p)) => (b.to_owned(), Some(p.trim_matches('"').to_owned())),
-            None => (c.id.to_string(), None),
-        };
-        match out.iter_mut().find(|(n, _, _)| *n == base) {
-            Some(entry) => entry.2.push((i, preset)),
-            None => out.push((base, format!("{}\\{}", c.group, c.label), vec![(i, preset)])),
-        }
-    }
-    out
+/// The keys a face of the table is bound to now, as text.
+fn face_keys(shell: &ShellState, face: Option<usize>) -> String {
+    face.and_then(|i| shell.binding(i)).map(|c| c.label()).unwrap_or_default()
 }
 
 async fn list_commands(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
     on_ui(&editor, |shell, _| {
-        let rows: Vec<Value> = command_table(shell)
-            .into_iter()
-            .enumerate()
-            .map(|(id, (name, menu, variants))| {
+        let rows: Vec<Value> = shell
+            .parts
+            .cpp
+            .rows
+            .iter()
+            .map(|r| {
                 let mut row = Map::new();
-                row.insert("id".into(), json!(id));
-                row.insert("name".into(), json!(name));
-                row.insert("menu".into(), json!(menu));
-                // the variants beyond the plain command are its documented parameter forms
-                if variants.len() > 1 {
-                    let presets: Vec<Value> = variants
+                row.insert("id".into(), json!(r.cmd.id));
+                row.insert("name".into(), json!(r.cmd.name));
+                if !r.cmd.desc.is_empty() {
+                    row.insert("menu".into(), json!(r.cmd.desc));
+                }
+                // presets beyond the implicit one are the documented parameter combinations
+                if r.cmd.subs.len() > 1 {
+                    let presets: Vec<Value> = r
+                        .cmd
+                        .subs
                         .iter()
-                        .map(|(i, p)| {
-                            let desc =
-                                shell.parts.commands.get(*i).map(|c| c.label.to_string()).unwrap_or_default();
-                            json!({ "desc": desc, "p1": p.clone().map_or(json!(0), Value::String), "p2": 0 })
-                        })
+                        .zip(&r.faces)
+                        .map(|(s, f)| crate::cpp::preset_json(s, &face_keys(shell, *f)))
                         .collect();
                     row.insert("presets".into(), Value::Array(presets));
                 }
+                row.insert("keys".into(), json!(face_keys(shell, r.faces.first().copied().flatten())));
                 Value::Object(row)
             })
             .collect();
@@ -1152,39 +1168,155 @@ async fn list_commands(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Rep
     .await
 }
 
+/// What a command run came to: the row, the answer, and why it refused when it did.
+pub(crate) struct Ran {
+    pub id: u32,
+    pub name: String,
+    pub result: CommandVar,
+    pub refused: Option<String>,
+}
+
+/// Why a command did not run at all.
+pub(crate) enum NotRun {
+    Unknown,
+    NoSub(String),
+    Other(CmdError),
+}
+
+/// What the UI thread found and did.
+enum Step {
+    Done(Ran),
+    Call(u32, String, &'static str, Args),
+    Task(u32, String, crate::cpp::TaskFn, CommandVar, CommandVar),
+}
+
+/// Runs a row of the C++ table - the one `exec_command`, a macro's line and a face run - with
+/// its sub-command (named, or picked by the parameters) and the parameters given over the
+/// sub-command's own. Off the UI thread; what the row does there runs there.
+pub(crate) async fn exec(
+    editor: &Arc<Editor>,
+    id: Option<i64>,
+    name: String,
+    sub: Option<String>,
+    p1: Option<CommandVar>,
+    p2: Option<CommandVar>,
+    depth: usize,
+) -> Result<Ran, NotRun> {
+    let step = on_ui(editor, move |shell, ctx| {
+        let Some(at) = shell.parts.cpp.find(id, &name) else { return Ok(Err(NotRun::Unknown)) };
+        let Some(row) = shell.parts.cpp.rows.get(at) else { return Ok(Err(NotRun::Unknown)) };
+        // a sub-command is named by a line (`NAME.Sub(..)`) or by the name (`NAME."Sub"`)
+        let named = sub.filter(|s| !s.is_empty()).or_else(|| {
+            name.split_once('.')
+                .map(|(_, s)| s.trim_matches('"').to_owned())
+                .filter(|s| !s.is_empty() && !row.cmd.desc.eq_ignore_ascii_case(&name))
+        });
+        let k = match &named {
+            Some(s) => match row.cmd.subs.iter().position(|x| x.desc.eq_ignore_ascii_case(s)) {
+                Some(k) => k,
+                None => return Ok(Err(NotRun::NoSub(s.clone()))),
+            },
+            None => crate::cpp::pick_sub(&row.cmd.subs, p1.as_ref(), p2.as_ref()).unwrap_or(0),
+        };
+        let preset = row.cmd.subs.get(k).cloned();
+        let a = p1.or_else(|| preset.as_ref().map(|s| s.p1.clone())).unwrap_or_default();
+        let b = p2.or_else(|| preset.as_ref().map(|s| s.p2.clone())).unwrap_or_default();
+        let (row_id, row_name) = (row.cmd.id, row.cmd.name.to_string());
+        let action = row.cmd.action.clone();
+        let face = row.faces.get(k).copied().flatten();
+        let enabled = row.cmd.enabled.clone();
+        crate::cpp::log_command(&shell.editor, &row_name, &a, &b, depth);
+        let done = |result: CommandVar, refused: Option<String>| {
+            Ok(Ok(Step::Done(Ran { id: row_id, name: row_name.clone(), result, refused })))
+        };
+        if let Some(f) = enabled
+            && !f(&shell.editor, &shell.active)
+        {
+            return done(CommandVar::Int(0), Some("the command is not available now".to_owned()));
+        }
+        if matches!(action, CppAction::Ui) {
+            // logged above, with its depth
+            shell.quiet_log = true;
+            let ran = face.is_some_and(|i| shell.run_command(ctx, i));
+            shell.quiet_log = false;
+            let why = (!ran).then(|| "the command is not available now".to_owned());
+            return done(CommandVar::Int(u32::from(ran)), why);
+        }
+        let outcome = crate::cpp::run_now(&mut crate::shell::cx!(shell, ctx), &action, &a, &b);
+        match outcome {
+            crate::cpp::Outcome::Done(v) => done(v, None),
+            crate::cpp::Outcome::Refused(why) => done(CommandVar::Int(0), Some(why)),
+            crate::cpp::Outcome::Call(c, args) => Ok(Ok(Step::Call(row_id, row_name, c, args))),
+            crate::cpp::Outcome::Task(t, a, b) => Ok(Ok(Step::Task(row_id, row_name, t, a, b))),
+        }
+    })
+    .await
+    .map_err(NotRun::Other)??;
+    Ok(match step {
+        Step::Done(r) => r,
+        Step::Call(id, name, command, args) => {
+            let reply = editor.call(command, args, editor.ui_origin()).await;
+            if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+                Ran { id, name, result: CommandVar::Int(1), refused: None }
+            } else {
+                let why = reply.get("error").and_then(Value::as_str).unwrap_or("the command failed").to_owned();
+                Ran { id, name, result: CommandVar::Int(0), refused: Some(why) }
+            }
+        }
+        Step::Task(id, name, task, a, b) => match task(editor.clone(), a, b).await {
+            Ok(v) => Ran { id, name, result: v, refused: None },
+            Err(why) => Ran { id, name, result: CommandVar::Int(0), refused: Some(why) },
+        },
+    })
+}
+
+/// One line of a command list (`ExecuteCommandList`): the first that is unknown or does not
+/// run is the error, in the C++ words.
+pub(crate) async fn exec_line(editor: &Arc<Editor>, line: &crate::macros::Line, depth: usize) -> Result<(), String> {
+    let sub = (!line.sub.is_empty()).then(|| line.sub.clone());
+    match exec(editor, None, line.name.clone(), sub, line.p1.clone(), line.p2.clone(), depth).await {
+        Ok(r) if r.refused.is_none() && r.result != CommandVar::Int(0) => Ok(()),
+        Ok(r) => {
+            let why = r.refused.map(|w| format!(" - {w}")).unwrap_or_default();
+            Err(format!("Can't execute command: '{}'{why}", line.text))
+        }
+        Err(NotRun::Unknown) => Err(format!("Can't find command: '{}'", line.text)),
+        Err(NotRun::NoSub(s)) => Err(format!("Can't find sub-command: '{s}'")),
+        Err(NotRun::Other(e)) => Err(e.message),
+    }
+}
+
+/// A parameter as `exec_command` takes it: `p1s` a text, `p1i` a number (`-1` is none).
+fn param(args: &Args, s: &str, i: &str) -> Option<CommandVar> {
+    if let Some(t) = args.text(s) {
+        return Some(CommandVar::Str(t.to_owned()));
+    }
+    args.i64(i).filter(|v| *v >= 0).map(|v| CommandVar::Int(u32::try_from(v).unwrap_or(u32::MAX)))
+}
+
 async fn exec_command(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     // an escaped "Edit\Undo" may arrive with both slashes
     let name = str_arg(&args, "name").replace("\\\\", "\\");
-    let id = args.i64("id");
-    let p1 = args
-        .text("p1s")
-        .map(str::to_owned)
-        .or_else(|| args.i64("p1i").filter(|v| *v >= 0).map(|v| v.to_string()));
-    on_ui(&editor, move |shell, ctx| {
-        let table = command_table(shell);
-        let found = match id.filter(|v| *v >= 0) {
-            Some(i) => usize::try_from(i).ok().filter(|i| *i < table.len()),
-            None if !name.is_empty() => table
-                .iter()
-                .position(|(n, menu, _)| n.eq_ignore_ascii_case(&name) || menu.eq_ignore_ascii_case(&name)),
-            None => None,
-        };
-        let Some((at, (cmd_name, _, variants))) = found.and_then(|i| table.get(i).map(|e| (i, e.clone())))
-        else {
-            return Err(invalid("unknown command - see list_commands"));
-        };
-        // the first parameter picks a variant; without one the plain command, else the first
-        let pick = match &p1 {
-            Some(p) => variants
-                .iter()
-                .find(|(_, v)| v.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(p)))
-                .or_else(|| variants.iter().find(|(_, v)| v.is_none())),
-            None => variants.iter().find(|(_, v)| v.is_none()).or_else(|| variants.first()),
-        };
-        let ran = pick.is_some_and(|(i, _)| shell.run_command(ctx, *i));
-        Ok(json!({ "id": at, "name": cmd_name, "result": u32::from(ran) }))
-    })
-    .await
+    let id = args.i64("id").filter(|v| *v >= 0);
+    let (p1, p2) = (param(&args, "p1s", "p1i"), param(&args, "p2s", "p2i"));
+    if id.is_none() && name.is_empty() {
+        return Err(invalid("unknown command - see list_commands"));
+    }
+    match exec(&editor, id, name, None, p1, p2, 0).await {
+        Ok(r) => {
+            let mut out = Map::new();
+            out.insert("id".into(), json!(r.id));
+            out.insert("name".into(), json!(r.name));
+            out.insert("result".into(), r.result.json());
+            if let Some(why) = r.refused {
+                out.insert("refused".into(), json!(why));
+            }
+            Ok(Value::Object(out))
+        }
+        Err(NotRun::Unknown) => Err(invalid("unknown command - see list_commands")),
+        Err(NotRun::NoSub(s)) => Err(invalid(format!("Can't find sub-command: '{s}'"))),
+        Err(NotRun::Other(e)) => Err(e),
+    }
 }
 
 /// Registers the commands of the frame. Call it after the commands it replaces (the headless

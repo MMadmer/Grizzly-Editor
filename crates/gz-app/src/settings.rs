@@ -285,6 +285,46 @@ impl EditorSettings {
         s.dirty = true;
     }
 
+    /// The file a Run Macro slot runs (`[macros] COMMAND_RUN_MACRO."Slot #1"`); empty for none.
+    #[must_use]
+    pub fn macro_file(&self, key: &str) -> String {
+        let s = self.inner.lock();
+        s.doc.get("macros", key).map(|v| gz_ltx::doc::unquote(v).to_owned()).unwrap_or_default()
+    }
+
+    pub fn set_macro_file(&self, key: &str, file: &str) {
+        let mut s = self.inner.lock();
+        s.doc.set("macros", key, &gz_ltx::doc::quote(file));
+        s.dirty = true;
+    }
+
+    /// The adapter the device is made on, by name (`[render] gpu_adapter`, the C++
+    /// `CLevelPreferences::GpuAdapter`); empty is the system's default.
+    #[must_use]
+    pub fn gpu_adapter(&self) -> String {
+        let s = self.inner.lock();
+        s.doc.get("render", "gpu_adapter").map(|v| gz_ltx::doc::unquote(v).to_owned()).unwrap_or_default()
+    }
+
+    pub fn set_gpu_adapter(&self, name: &str) {
+        let mut s = self.inner.lock();
+        s.doc.set("render", "gpu_adapter", &gz_ltx::doc::quote(name));
+        s.dirty = true;
+    }
+
+    /// A switch of the View menu kept with the render settings: `mute_sounds`
+    /// (`rsMuteSounds`), `real_time` (`rsRenderRealTime`).
+    #[must_use]
+    pub fn render_flag(&self, key: &str) -> bool {
+        self.inner.lock().doc.get("render", key).is_some_and(gz_ltx::doc::parse_bool)
+    }
+
+    pub fn set_render_flag(&self, key: &str, on: bool) {
+        let mut s = self.inner.lock();
+        s.doc.set("render", key, if on { "true" } else { "false" });
+        s.dirty = true;
+    }
+
     /// Something changed since the file was last written.
     #[must_use]
     pub fn is_dirty(&self) -> bool {

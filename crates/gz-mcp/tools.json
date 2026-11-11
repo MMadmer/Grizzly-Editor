@@ -1369,6 +1369,34 @@
    "cmd": "frame_pacing"
   },
   {
+   "name": "grizzly_particles_tool",
+   "description": "The Particles tool's Play and Stop: particle systems (effects and groups of the linked game's particles.xr) play in the viewport as the engine plays them - 33 ms steps, time limits, a group's child effects, collision with the scene's objects - while their emitter is in view; the viewport draws every frame while one plays. action=play / stop acts on the named particle objects, or on the selected visible ones without names; a stop lets the particles live out their lives. action=status (the default) answers every particle object: reference, selected, visible, playing, live particles, group. Pictures: grizzly_screenshot_viewport, two a moment apart differ while one plays.",
+   "annotations": {
+    "title": "Play particle systems in the viewport"
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "play",
+       "stop",
+       "status"
+      ]
+     },
+     "names": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "particle objects by name; none = the selected visible ones"
+     }
+    }
+   },
+   "cmd": "particles_tool"
+  },
+  {
    "name": "grizzly_command_palette",
    "description": "Search, open, close, inspect, or execute the editor command palette. action='query' returns the same ranked results shown by Ctrl+Shift+P: the commands of the registry (kind 'command', name = its COMMAND_* id), the Level tab's panels and drawers (kind 'panel' / 'drawer') and the open tabs (kind 'tab'); each has label (what its row shows), path, shortcut and id. Words match the start of a word of the label first; only what a row shows is searched (label, path, keys), never the COMMAND_* id - list_commands has those. action='execute' accepts the returned numeric command/subcommand pair of a command, or any result's exact id (panel:<id>, drawer:<id> and tab:<id> bring that panel, drawer or tab up; their command is -1). Omitting action uses query when query is present, otherwise reports palette state.",
    "inputSchema": {
@@ -2559,6 +2587,37 @@
      },
      "game_lighting": {
       "type": "boolean"
+     },
+     "quality": {
+      "type": "integer",
+      "enum": [
+       25,
+       50,
+       100,
+       200
+      ],
+      "description": "View > Render > Quality: the render size in per cent of the viewport's (25, 50, 100, 200); for this session"
+     },
+     "mute_sounds": {
+      "type": "boolean",
+      "description": "View > Mute Sounds: the editor plays its sounds unheard; kept"
+     },
+     "real_time": {
+      "type": "boolean",
+      "description": "View > Real Time: the viewport draws every frame instead of when something changed; kept"
+     },
+     "gpu": {
+      "type": "string",
+      "description": "View > Render > GPU: the adapter to make the device on, by the name gpu.adapters lists; default (or empty) is the system's. Takes effect after a restart"
+     },
+     "driver_hint": {
+      "type": "string",
+      "enum": [
+       "auto",
+       "performance",
+       "power_saving"
+      ],
+      "description": "View > Render > GPU, the driver's hint Windows keeps for this executable; takes effect after a restart"
      }
     }
    },
@@ -3608,6 +3667,10 @@
        "output_log",
        "viewport"
       ]
+     },
+     "floating": {
+      "type": "boolean",
+      "description": "true moves the panel into a window of its own outside the editor's (only while Preferences > General > Allow Panels Outside the Window is on, which takes a restart); false docks it again. host is then window or panel, and the answer says floating"
      }
     },
     "required": [
@@ -4522,6 +4585,629 @@
     }
    },
    "cmd": "level_build"
+  },
+  {
+   "name": "grizzly_sector_tool",
+   "description": "The Sector tool of the Tools panel: every button and every click of its Edit section. action state (default: the Edit switches and every sector with its objects, meshes, faces and portals) | set (create_single, create_multiple, mesh_mode add|remove, box_pick - the Edit section's switches; New Sector From Mesh and New Sectors From Objects exclude each other, and Box Pick is off while either is on) | validate (valid and the problems in the C++ words: meshes no sector holds, sectors of fewer than five faces, shaders the compiler lacks) | create_default (the red default sector of every static mesh no sector holds) | remove_default (with its portals) | capture_volume (the selected sector, or sector=, takes the meshes inside its volume) | distribute (changes nothing in this version) | add_mesh / remove_mesh (object, mesh: a name or an index; sector= or the selected one; a sector that loses its last mesh goes) | add_meshes / remove_meshes (items [\"object:mesh\", ...]; box=true applies the Box Pick rule) | new_from_mesh (object, mesh) | new_from_object (object: a sector of each mesh, each in a colour of its own). Every change is one undo step; the long ones run as jobs of the Task Center. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Sector tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "set",
+       "validate",
+       "create_default",
+       "remove_default",
+       "capture_volume",
+       "distribute",
+       "add_mesh",
+       "remove_mesh",
+       "add_meshes",
+       "remove_meshes",
+       "new_from_mesh",
+       "new_from_object"
+      ]
+     },
+     "sector": {
+      "type": "string"
+     },
+     "object": {
+      "type": "string"
+     },
+     "mesh": {
+      "type": "string"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "object:mesh"
+     },
+     "box": {
+      "type": "boolean"
+     },
+     "create_single": {
+      "type": "boolean"
+     },
+     "create_multiple": {
+      "type": "boolean"
+     },
+     "mesh_mode": {
+      "type": "string",
+      "enum": [
+       "add",
+       "remove"
+      ]
+     },
+     "box_pick": {
+      "type": "boolean"
+     },
+     "show": {
+      "type": "boolean"
+     }
+    }
+   },
+   "cmd": "sector_tool"
+  },
+  {
+   "name": "grizzly_portal_tool",
+   "description": "The Portal tool of the Tools panel. action state (default: every portal with its sectors and vertex count, how many sectors are selected) | compute_all (every portal removed and computed again from the sectors' faces) | compute_selected (the same for the portals between the selected sectors; two sectors or more) | remove_duplicates (the portals that repeat another of the same sectors) | invert (the selected portals turned around). Computing refuses while a static mesh has no sector or a sector is not valid (see grizzly_sector_tool validate); it answers computed (the loops found, as the C++ counts them), created, removed and the C++ messages, and runs as a job of the Task Center. Every change is one undo step: grizzly_undo brings the old portals back. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Portal tool",
+    "readOnlyHint": false,
+    "destructiveHint": true
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "compute_all",
+       "compute_selected",
+       "remove_duplicates",
+       "invert"
+      ]
+     },
+     "show": {
+      "type": "boolean"
+     }
+    }
+   },
+   "cmd": "portal_tool"
+  },
+  {
+   "name": "grizzly_way_tool",
+   "description": "The Way tool of the Tools panel and its viewport clicks. action state (default: the mode, Auto Link, and the selected ways with their points, selection and links) | mode (mode ways|points: what the viewport selects and moves) | auto_link (on) | create_1link | create_2link | invert_link | remove_link (between the selected points of the selected ways; Points mode only, else 'Switch Select to Points first') | convert_1link | convert_2link | add_point (position x,y,z; way= or the one selected; linked from the selected point when Auto Link is on) | select_points (points: names or indices; mode set|add|remove|toggle; way= or the one selected) | move_point (point, position) | remove_points (the selected points of the selected ways, or of way=; a way left without points goes). The selection of points is saved with the scene; every other change is one undo step. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Way tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "mode",
+       "auto_link",
+       "create_1link",
+       "create_2link",
+       "convert_1link",
+       "convert_2link",
+       "invert_link",
+       "remove_link",
+       "add_point",
+       "select_points",
+       "move_point",
+       "remove_points"
+      ]
+     },
+     "mode": {
+      "type": "string"
+     },
+     "on": {
+      "type": "boolean"
+     },
+     "way": {
+      "type": "string"
+     },
+     "point": {
+      "type": "string"
+     },
+     "points": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "position": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "show": {
+      "type": "boolean"
+     }
+    }
+   },
+   "cmd": "way_tool"
+  },
+  {
+   "name": "grizzly_shape_tool",
+   "description": "The Shape tool of the Tools panel. action state (default: what a click adds, Attach on Click, Edit Level Bound, the level bound shape and the selected shapes with their parts) | set (shape sphere|box: what a Place click adds; attach_on_click) | add (position x,y,z; shape sphere|box, else the switch's: what a Place click adds, selected) | attach (from: the shape that joins; to=, or the one selected shape) | detach (each selected shape of several parts keeps its first one, the others become shapes of their own named after it) | edit_level_bound (on: shows the level bound shape, made and fitted to the level when there is none) | recalculate (fits the level bound to the scene objects and groups again; Edit Level Bound must be on). Every change is one undo step. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Shape tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "set",
+       "add",
+       "attach",
+       "detach",
+       "edit_level_bound",
+       "recalculate"
+      ]
+     },
+     "shape": {
+      "type": "string",
+      "enum": [
+       "sphere",
+       "box"
+      ]
+     },
+     "attach_on_click": {
+      "type": "boolean"
+     },
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     },
+     "on": {
+      "type": "boolean"
+     },
+     "show": {
+      "type": "boolean"
+     },
+     "position": {
+      "type": "string",
+      "description": "x,y,z"
+     }
+    }
+   },
+   "cmd": "shape_tool"
+  },
+  {
+   "name": "grizzly_light_tool",
+   "description": "The Light tool's Viewport Lighting: which lights light the viewport (each light's Use In D3D, saved with the scene). action state (default: every light with viewport true|false) | enable_selected | enable_all | disable_selected | disable_all. Answers changed and the list; one undo step. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Light tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "enable_selected",
+       "enable_all",
+       "disable_selected",
+       "disable_all"
+      ]
+     },
+     "show": {
+      "type": "boolean"
+     }
+    }
+   },
+   "cmd": "light_tool"
+  },
+  {
+   "name": "grizzly_fog_tool",
+   "description": "The Fog Volume tool's groups. action state (default: every fog volume with its group and type) | group (the selected volumes become one new group) | ungroup (the selected volumes leave their group). Answers changed, the group and the list; one undo step. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Fog Volume tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "group",
+       "ungroup"
+      ]
+     },
+     "show": {
+      "type": "boolean"
+     }
+    }
+   },
+   "cmd": "fog_tool"
+  },
+  {
+   "name": "grizzly_aimap_tool",
+   "description": "The AI Map tool: the nodes the game's AI walks on, generated over the tool's snap objects (snap_objects with the AI Map the current tool fills that list). action state (default: nodes, selected, links histogram 0-4, box, params, brush_size, vis_radius, smooth_height, draw_nodes, slow_calculate, ignore_constraints, auto_link, link_mode, ignored_materials, snap_objects) | set (ignore_constraints, auto_link, link_mode add|remove|invert, brush_size 1-100, can_up, can_down, vis_radius, smooth_height, draw_nodes, slow_calculate) | add_nodes (position or positions [[x,y,z],...]: AddNode at each, the brush past brush_size 1; deselect=true first; answers added, nodes, failed) | generate (the flood from the nodes there are over the whole level; selected=true or action generate_selected: from the selected nodes only; a job of the Task Center that answers when it ends: added, nodes, seconds, stopped) | clear | reset_selected | smooth_selected | remove_selected | move_selected (delta) | rotate_selected (axis x|z, angle in degrees) | select_links (links 0-4: only those nodes are selected) | select_all | deselect_all | invert_selection | select_nodes (nodes [indices] or positions, mode set|add|remove|toggle) | pick (start, dir: the node a ray hits; keep=true keeps the selection) | select_box (min, max) | links (side left|forward|right|back|all, or with camera=true away|left|right|towards as the panel's pad; mode add|remove|invert, default the panel's) | remove_links | invert_links | ignore_material (name) | unignore_material (name) | clear_ignored. Every edit is one undo step; a selection alone is none. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The AI Map tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "set",
+       "add_nodes",
+       "generate",
+       "generate_selected",
+       "clear",
+       "reset_selected",
+       "smooth_selected",
+       "remove_selected",
+       "move_selected",
+       "rotate_selected",
+       "select_links",
+       "select_all",
+       "deselect_all",
+       "invert_selection",
+       "select_nodes",
+       "pick",
+       "select_box",
+       "links",
+       "remove_links",
+       "invert_links",
+       "ignore_material",
+       "unignore_material",
+       "clear_ignored"
+      ]
+     },
+     "show": {
+      "type": "boolean"
+     },
+     "position": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "positions": {
+      "type": "array",
+      "items": {
+       "type": "array",
+       "items": {
+        "type": "number"
+       }
+      }
+     },
+     "deselect": {
+      "type": "boolean"
+     },
+     "brush_size": {
+      "type": "integer"
+     },
+     "selected": {
+      "type": "boolean"
+     },
+     "ignore_constraints": {
+      "type": "boolean"
+     },
+     "auto_link": {
+      "type": "boolean"
+     },
+     "link_mode": {
+      "type": "string",
+      "enum": [
+       "add",
+       "remove",
+       "invert"
+      ]
+     },
+     "mode": {
+      "type": "string"
+     },
+     "side": {
+      "type": "string"
+     },
+     "camera": {
+      "type": "boolean"
+     },
+     "links": {
+      "type": "integer"
+     },
+     "nodes": {
+      "type": "array",
+      "items": {
+       "type": "integer"
+      }
+     },
+     "start": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "dir": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "keep": {
+      "type": "boolean"
+     },
+     "min": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "max": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "delta": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "axis": {
+      "type": "string",
+      "enum": [
+       "x",
+       "z"
+      ]
+     },
+     "angle": {
+      "type": "number"
+     },
+     "name": {
+      "type": "string"
+     },
+     "can_up": {
+      "type": "number"
+     },
+     "can_down": {
+      "type": "number"
+     },
+     "vis_radius": {
+      "type": "number"
+     },
+     "smooth_height": {
+      "type": "number"
+     },
+     "draw_nodes": {
+      "type": "boolean"
+     },
+     "slow_calculate": {
+      "type": "boolean"
+     }
+    }
+   },
+   "cmd": "aimap_tool"
+  },
+  {
+   "name": "grizzly_details_tool",
+   "description": "The Detail Objects tool: grass and the like, in 2 m slots over the tool's snap objects (snap_objects with Detail Objects the current tool fills that list), each slot's objects from the colours of the base texture. action state (default: slots, filled, size, offset, selected, objects, colors, base_texture, density, draw_objects, draw_base_texture, base_texture_blended, draw_slot_boxes, snap_objects) | set (base_texture: a change empties every slot's objects until they are made again; density; draw_objects; draw_base_texture; base_texture_blended; draw_slot_boxes) | first_initialize | reinitialize (the slots and their objects again) | reinitialize_objects | reinitialize_selected (jobs of the Task Center; seed= fixes the shuffle the C++ seeds with the clock; answer slots, filled, seed) | update_renderer (the viewport shows the details: turns draw_objects on) | select_all | deselect_all | invert_selection | select_slots (slots [index, ...] or [[x, z], ...], mode set|add|remove|toggle) | pick (start, dir; toggle) | select_box (min, max) | add_objects (objects [reference, ...]) | remove_objects (objects; the slots then name no object until they are made again) | set_color (color AARRGGBB or RRGGBB, objects: what that colour of the base texture scatters) | remove_color (color): the Detail Objects dialog's lists | clear_slots | clear (the objects and every slot). Every edit is one undo step; a selection alone is none. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Detail Objects tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "set",
+       "first_initialize",
+       "reinitialize",
+       "reinitialize_objects",
+       "reinitialize_selected",
+       "update_renderer",
+       "select_all",
+       "deselect_all",
+       "invert_selection",
+       "select_slots",
+       "pick",
+       "select_box",
+       "add_objects",
+       "remove_objects",
+       "set_color",
+       "remove_color",
+       "clear_slots",
+       "clear"
+      ]
+     },
+     "show": {
+      "type": "boolean"
+     },
+     "base_texture": {
+      "type": "string"
+     },
+     "density": {
+      "type": "number"
+     },
+     "draw_objects": {
+      "type": "boolean"
+     },
+     "draw_base_texture": {
+      "type": "boolean"
+     },
+     "base_texture_blended": {
+      "type": "boolean"
+     },
+     "draw_slot_boxes": {
+      "type": "boolean"
+     },
+     "seed": {
+      "type": "integer"
+     },
+     "slots": {
+      "type": "array"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "set",
+       "add",
+       "remove",
+       "toggle"
+      ]
+     },
+     "start": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "dir": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "toggle": {
+      "type": "boolean"
+     },
+     "min": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "max": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "objects": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "color": {
+      "type": "string"
+     }
+    }
+   },
+   "cmd": "details_tool"
+  },
+  {
+   "name": "grizzly_wallmark_tool",
+   "description": "The Wallmark tool: static marks laid on the geometry of the scene's snap list (it must be filled and in use: snap_objects use=true). action state (default: marks, selected, slots with shader / texture / marks, draw, alignment camera|world, width, height, rotate in degrees, shader, texture) | set (draw, alignment camera|world, width, height, rotate in degrees, shader, texture: what a new mark is made with) | add (a ray: start + dir, or position + normal, or position seen from the camera; the marks are let go and the new one is selected; one within 2 cm of another of its shader and texture replaces it; answers added {slot, index, replaced} or null) | move (the one selected mark laid again at the ray, its own size and texture kept) | pick (start, dir; toggle) | select_box (min, max) | select_all | deselect_all | invert_selection | select_marks (marks [[slot, index], ...], mode) | remove_selected. A mark is selectable only while the marks are drawn. Every edit is one undo step; a selection alone is none. show=true makes it the current tool first (the Tools panel shows its form).",
+   "annotations": {
+    "title": "The Wallmark tool",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "state",
+       "set",
+       "add",
+       "move",
+       "pick",
+       "select_box",
+       "select_all",
+       "deselect_all",
+       "invert_selection",
+       "select_marks",
+       "remove_selected"
+      ]
+     },
+     "show": {
+      "type": "boolean"
+     },
+     "draw": {
+      "type": "boolean"
+     },
+     "alignment": {
+      "type": "string",
+      "enum": [
+       "camera",
+       "world"
+      ]
+     },
+     "width": {
+      "type": "number"
+     },
+     "height": {
+      "type": "number"
+     },
+     "rotate": {
+      "type": "number"
+     },
+     "shader": {
+      "type": "string"
+     },
+     "texture": {
+      "type": "string"
+     },
+     "start": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "dir": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "position": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "normal": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "range": {
+      "type": "number"
+     },
+     "toggle": {
+      "type": "boolean"
+     },
+     "min": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "max": {
+      "type": "string",
+      "description": "x,y,z"
+     },
+     "marks": {
+      "type": "array"
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "set",
+       "add",
+       "remove",
+       "toggle"
+      ]
+     }
+    }
+   },
+   "cmd": "wallmark_tool"
   }
  ]
 }

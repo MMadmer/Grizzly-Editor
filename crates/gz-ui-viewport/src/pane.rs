@@ -13,7 +13,7 @@ use gz_app::{Chord, DocCx};
 use gz_editor::{Editor, SmolStr, Value, json};
 use gz_render::{Color, Ray};
 use gz_scene::apply::{SelectMode, TransformEdit};
-use gz_scene::objects::{ParticlesData, SceneObjectData, ShapeData, WayData, default_data};
+use gz_scene::objects::{ParticlesData, SceneObjectData, WayData, default_data};
 use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneCmd, SceneService};
 use gz_ui::text::{self, Clip};
 use gz_ui::{Font, Icon, Kind, Palette, Toolbar, ToolbarStyle, palette};
@@ -39,6 +39,15 @@ enum Gesture {
         start: Pos2,
         now: Pos2,
     },
+    /// The Sector tool's mesh paint (Place with Meshes Add or Remove).
+    ToolPaint(crate::objtools::Paint),
+    /// The Sector tool's Box Pick.
+    ToolBox {
+        start: Pos2,
+        now: Pos2,
+    },
+    /// The AI map's brush stroke (Place with the AI Map tool).
+    AiPaint(crate::bulktools::Paint),
 }
 
 /// An object a transform drag holds, as it was at the press.
@@ -65,6 +74,10 @@ struct Drag {
     remainder: f32,
     merge: SmolStr,
     svc: Arc<SceneService>,
+    /// In the Way tool's Points mode: the selected points of each held way, as at the press.
+    points: Vec<(ObjId, Vec<(usize, Vec3)>)>,
+    /// With the AI Map tool: the selected nodes, as at the press.
+    nodes: Vec<(u32, Vec3)>,
 }
 
 /// The 3D view of the Level tab. UI thread only.
@@ -87,6 +100,7 @@ impl ViewportPane {
     pub fn new(editor: &Arc<Editor>, gpu: &egui_wgpu::RenderState) -> Self {
         let vp = Viewport::of(editor);
         vp.ensure_renderer(editor, gpu);
+        crate::bulktools::provide_axes(editor);
         Self {
             editor: editor.clone(),
             vp,
@@ -141,25 +155,28 @@ impl ViewportPane {
         let bg = game.map_or(p.canvas, |c| Color32::from_rgb(c.0[0], c.0[1], c.0[2]));
         painter.rect_filled(rect, CornerRadius::ZERO, bg);
         let mut finished = None;
+        // View > Render > Quality: the picture, rendered at a scale of the pane's size, fills it;
+        // a label's pixel of the picture is this many pixels of it
+        let mut label_px = ppp * self.vp.read(|s| s.view.quality);
         if let Some(r) = &renderer {
             let info = r.finished();
             self.vp.rates.lock().tick(info.frame);
             if let Some(t) = r.target() {
                 let id = self.texture_of(cx.gpu, &t);
                 let [u, v] = t.uv();
-                let shown = Rect::from_min_size(rect.min, vec2(t.size[0] as f32, t.size[1] as f32) / ppp);
-                painter.image(id, shown, Rect::from_min_max(Pos2::ZERO, pos2(u, v)), Color32::WHITE);
+                label_px = t.size[0] as f32 / rect.width().max(1.0);
+                painter.image(id, rect, Rect::from_min_max(Pos2::ZERO, pos2(u, v)), Color32::WHITE);
             }
             finished = Some(info);
         }
         if let Some(info) = &finished {
-            draw_labels(&painter, rect, info, ppp);
+            draw_labels(&painter, rect, info, label_px);
         }
         let v = self.vp.read(|s| s.view.clone());
         if v.safe_rect {
             draw_safe_rect(&painter, rect, &p);
         }
-        if let Gesture::Marquee { start, now } = &self.gesture {
+        if let Gesture::Marquee { start, now } | Gesture::ToolBox { start, now } = &self.gesture {
             let r = Rect::from_two_pos(*start, *now);
             painter.rect_filled(r, CornerRadius::ZERO, p.accent_bright.gamma_multiply(0.12));
             painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
@@ -333,7 +350,45 @@ impl ViewportPane {
                     let (a, z) = (*start, *now);
                     self.gesture = Gesture::None;
                     let to_px = |q: Pos2| G2::new((q.x - rect.min.x) * ppp, (q.y - rect.min.y) * ppp);
-                    marquee_select(&self.editor, &self.vp, size, to_px(a), to_px(z));
+                    let target = scene_target(&self.editor).unwrap_or(ObjClass::SceneObject);
+                    if crate::bulktools::marquee(&self.editor, &self.vp, size, to_px(a), to_px(z), target) {
+                    } else if crate::objtools::way_points_mode(&self.editor) {
+                        crate::objtools::way_points_marquee(&self.editor, &self.vp, size, to_px(a), to_px(z));
+                    } else {
+                        marquee_select(&self.editor, &self.vp, size, to_px(a), to_px(z));
+                    }
+                }
+            }
+            Gesture::ToolBox { start, now } => {
+                *now = clamped;
+                if !b.left {
+                    let (a, z) = (*start, *now);
+                    self.gesture = Gesture::None;
+                    let to_px = |q: Pos2| G2::new((q.x - rect.min.x) * ppp, (q.y - rect.min.y) * ppp);
+                    crate::objtools::box_pick_end(&self.editor, &self.vp, size, to_px(a), to_px(z));
+                }
+            }
+            Gesture::AiPaint(paint) => {
+                if !b.left {
+                    crate::bulktools::paint_end(&self.editor, &self.vp, b);
+                    self.gesture = Gesture::None;
+                } else if (dx != 0.0 || dy != 0.0)
+                    && let Some(ray) = ray
+                {
+                    crate::bulktools::ai_step(&self.editor, &self.vp, paint, ray, false, false);
+                }
+            }
+            Gesture::ToolPaint(paint) => {
+                if !b.left {
+                    // the whole paint is one undo step
+                    if let Ok(svc) = SceneService::of(&self.editor) {
+                        svc.store.seal();
+                    }
+                    self.gesture = Gesture::None;
+                } else if (dx != 0.0 || dy != 0.0)
+                    && let Some(ray) = ray
+                {
+                    crate::objtools::paint_step(&self.editor, &self.vp, paint, ray);
                 }
             }
             Gesture::Transform(drag) => {
@@ -398,8 +453,27 @@ impl ViewportPane {
     fn tool_press(&mut self, b: &Buttons, ray: Ray, at: Pos2) {
         let (action, kind) = self.vp.read(|s| (s.tool.action, s.tool.gizmo));
         if action == Action::Place {
-            place(&self.editor, &self.vp, ray, *b);
-            self.gesture = Gesture::Press { start: at };
+            self.serial += 1;
+            match crate::bulktools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
+                crate::bulktools::BulkGesture::Paint(p) => {
+                    self.gesture = Gesture::AiPaint(p);
+                    return;
+                }
+                crate::bulktools::BulkGesture::Done => {
+                    self.gesture = Gesture::Press { start: at };
+                    return;
+                }
+                crate::bulktools::BulkGesture::None => {}
+            }
+            match crate::objtools::place_press(&self.editor, &self.vp, ray, *b, self.serial) {
+                crate::objtools::ToolGesture::Paint(p) => self.gesture = Gesture::ToolPaint(p),
+                crate::objtools::ToolGesture::BoxPick => self.gesture = Gesture::ToolBox { start: at, now: at },
+                crate::objtools::ToolGesture::Done => self.gesture = Gesture::Press { start: at },
+                crate::objtools::ToolGesture::None => {
+                    place(&self.editor, &self.vp, ray, *b);
+                    self.gesture = Gesture::Press { start: at };
+                }
+            }
             return;
         }
         let target = scene_target(&self.editor).unwrap_or(ObjClass::SceneObject);
@@ -417,7 +491,12 @@ impl ViewportPane {
             self.gesture = Gesture::Transform(Box::new(drag));
             return;
         }
-        click_select(&self.editor, &self.vp, ray, *b, target);
+        if crate::bulktools::click(&self.editor, &self.vp, ray, *b, target) {
+        } else if target == ObjClass::Way && crate::objtools::way_points_mode(&self.editor) {
+            crate::objtools::way_point_click(&self.editor, &self.vp, ray, *b);
+        } else {
+            click_select(&self.editor, &self.vp, ray, *b, target);
+        }
         self.gesture = Gesture::Press { start: at };
     }
 
@@ -425,6 +504,26 @@ impl ViewportPane {
         let svc = SceneService::of(&self.editor).ok()?;
         let snap = svc.store.snapshot();
         let start = self.vp.read(|s| s.anchor.map(|a| a.position))?;
+        if class == ObjClass::AiMap {
+            let nodes = crate::bulktools::held_nodes(&self.editor);
+            if nodes.is_empty() {
+                return None;
+            }
+            self.serial += 1;
+            return Some(Drag {
+                kind,
+                status: self.hover,
+                ray0,
+                start,
+                held: Vec::new(),
+                turned: Vec::new(),
+                remainder: 0.0,
+                merge: SmolStr::new(format!("viewport.aimap.gizmo.{}", self.serial)),
+                svc,
+                points: Vec::new(),
+                nodes,
+            });
+        }
         let held: Vec<Held> = snap
             .of_class(class)
             .filter(|o| snap.is_selected(o.id) && o.flags.visible && o.editable())
@@ -442,6 +541,11 @@ impl ViewportPane {
         }
         self.serial += 1;
         let turned = held.iter().map(|h| h.rotation).collect();
+        let points = if class == ObjClass::Way && crate::objtools::way_points_mode(&self.editor) {
+            crate::objtools::held_points(&self.editor, &held.iter().map(|h| h.id).collect::<Vec<_>>())
+        } else {
+            Vec::new()
+        };
         Some(Drag {
             kind,
             status: self.hover,
@@ -452,6 +556,8 @@ impl ViewportPane {
             remainder: 0.0,
             merge: SmolStr::new(format!("viewport.gizmo.{}", self.serial)),
             svc,
+            points,
+            nodes: Vec::new(),
         })
     }
 
@@ -1061,7 +1167,7 @@ fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G
 }
 
 /// One mouse move of a gizmo drag: the held objects' new transforms, as one merged undo step.
-fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: &Editor) {
+fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: &Arc<Editor>) {
     let (cam, grid, scale_step, angle, sr) = vp.read(|s| {
         (
             s.nav.camera(),
@@ -1071,6 +1177,25 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
             s.prefs.tools_sr(),
         )
     });
+    // the AI map's nodes (`TUI_ControlAIMapNodeSelect`)
+    if !d.nodes.is_empty() {
+        match d.kind {
+            GizmoType::Move => {
+                if let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray) {
+                    crate::bulktools::move_nodes(editor, &d.nodes, |p| gizmo::moved(p, delta, vector, grid), &d.merge, editor.ui_origin());
+                }
+            }
+            GizmoType::Rotate => {
+                let amount = gizmo::rotate_amount(d.status, dx, dy, sr, angle, &mut d.remainder);
+                if amount != 0.0 {
+                    let about_x = gizmo::rotate_vector(d.status).x.abs() > gz_scene::math::EPS;
+                    crate::bulktools::rotate_nodes(editor, about_x, amount, &d.merge, editor.ui_origin());
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
     let mut items = Vec::with_capacity(d.held.len());
     let label = match d.kind {
         GizmoType::Move => {
@@ -1079,7 +1204,13 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
                 return;
             };
             for h in &d.held {
-                items.push((h.id, TransformEdit::Position(gizmo::moved(h.position, delta, vector, grid))));
+                let at = gizmo::moved(h.position, delta, vector, grid);
+                // Points mode: only the selected points of the way move
+                if let Some((_, pts)) = d.points.iter().find(|(id, _)| *id == h.id) {
+                    crate::objtools::move_points(&d.svc, &[(h.id, pts.clone())], at - h.position, &d.merge, editor.ui_origin());
+                    continue;
+                }
+                items.push((h.id, TransformEdit::Position(at)));
             }
             "Move"
         }
@@ -1124,7 +1255,7 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
 /// Where a placed object lands (`PickGround`): with Object Snap on the surface of a scene
 /// object or a spawn point (the snap list's objects only when it is used), otherwise the grid's
 /// plane, on the grid's steps when the grid snap is on. The surface's normal comes with it.
-async fn pick_ground(
+pub(crate) async fn pick_ground(
     editor: &Arc<Editor>,
     svc: &Arc<SceneService>,
     ray: Ray,
@@ -1256,7 +1387,7 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
             | ObjClass::Way => {
                 let data = match class {
                     ObjClass::Way => ObjData::Way(WayData::build(&[at], false)),
-                    ObjClass::Shape => ObjData::Shape(ShapeData::unit_box()),
+                    ObjClass::Shape => crate::objtools::new_shape(&ed),
                     _ => default_data(class),
                 };
                 let mut o = Object::new(class, &snap.gen_name(Some(class.name())), data);

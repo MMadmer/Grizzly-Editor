@@ -140,6 +140,8 @@ pub enum SceneCmd {
     Touch,
     /// An edit of the sector, portal, way, shape, light and fog volume tools.
     ObjTool(Box<crate::objtools::ToolEdit>),
+    /// An edit of the AI map, detail objects and wallmark tools.
+    Bulk(Box<crate::bulk::BulkEdit>),
 }
 
 /// What a command answers.
@@ -680,6 +682,7 @@ impl State for SceneState {
                 Ok(SceneReply::None)
             }
             SceneCmd::ObjTool(edit) => crate::objtools::apply(self, *edit, cx),
+            SceneCmd::Bulk(edit) => crate::bulk::apply(self, *edit, cx),
         }
     }
 
@@ -698,6 +701,7 @@ impl State for SceneState {
         s.meta.file = current.meta.file.clone();
         s.serial = current.serial + 1;
         s.tools.obj = current.tools.obj;
+        s.tools.bulk = current.tools.bulk.clone();
         let on = s.tools.obj.edit_level_bound;
         crate::objtools::show_level_bounds(&mut s, on);
         s

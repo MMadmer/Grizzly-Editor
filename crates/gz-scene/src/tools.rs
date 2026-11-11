@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use gz_base::{Blob, SmolStr};
 use gz_chunk::{Reader, Writer};
-use gz_fmt_level::{SceneAiMap, SceneAiNode, SceneDetails};
+use gz_fmt_level::{AiMapNode, SceneAiMap, SceneAiNode, SceneDetails};
 
 use crate::SceneError;
 use crate::class::{CLASSES, ObjClass};
@@ -771,6 +771,8 @@ pub struct ToolSettings {
     pub snap_pick: bool,
     /// The switches of the sector, way, shape and fog volume tools' panels (not saved).
     pub obj: crate::objtools::ObjToolState,
+    /// The switches of the AI map panel and the detail slots' selection (not saved).
+    pub bulk: crate::bulk::BulkToolState,
 }
 
 impl Default for ToolSettings {
@@ -782,6 +784,7 @@ impl Default for ToolSettings {
             snap_use: false,
             snap_pick: false,
             obj: crate::objtools::ObjToolState::default(),
+            bulk: crate::bulk::BulkToolState::default(),
         }
     }
 }
@@ -800,27 +803,75 @@ impl ToolSettings {
 /// Nodes per tile of the AI map: an edit replaces one tile.
 pub const AI_TILE: usize = 4096;
 
-/// The AI Map tool's data.
+/// The AI Map tool's data: the nodes as the tool works on them, and packed as the files hold
+/// them, both in tiles of [`AI_TILE`] that an edit shares where it left them alone.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AiMapPart {
     /// The chunk as read; written back while nothing changed.
     pub raw: Option<Blob>,
     /// Everything but the nodes.
     pub header: SceneAiMap,
+    /// The nodes packed over `header.bbox` (`SaveStream`'s arithmetic).
     pub tiles: Vec<Arc<[SceneAiNode]>>,
+    /// The tool's nodes: exact positions and planes, links by index.
+    pub nodes: Vec<Arc<[AiMapNode]>>,
 }
 
 impl AiMapPart {
     pub fn read(bytes: &[u8]) -> Result<Self, SceneError> {
         let mut map = SceneAiMap::read(bytes).map_err(|e| SceneError::load(e.to_string()))?;
+        let (decoded, _) = map.decode_nodes();
         let nodes = std::mem::replace(&mut map.nodes, Arc::from([]));
         let tiles = nodes.chunks(AI_TILE).map(Arc::from).collect();
-        Ok(Self { raw: Some(Blob::from(bytes)), header: map, tiles })
+        let exact = decoded.chunks(AI_TILE).map(Arc::from).collect();
+        Ok(Self { raw: Some(Blob::from(bytes)), header: map, tiles, nodes: exact })
+    }
+
+    /// The part of a set of nodes: a tile equal to `base`'s is `base`'s, and so is its packed
+    /// tile while the box and the parameters stay.
+    #[must_use]
+    pub fn from_nodes(mut header: SceneAiMap, nodes: &[AiMapNode], base: Option<&AiMapPart>) -> Self {
+        header.nodes = Arc::from([]);
+        let same_packing =
+            base.is_some_and(|b| b.header.bbox == header.bbox && b.header.params == header.params);
+        let pack = |chunk: &[AiMapNode]| -> Arc<[SceneAiNode]> {
+            chunk.iter().map(|n| crate::bulk::aimap::encode(n, &header.bbox, &header.params)).collect()
+        };
+        let mut exact = Vec::with_capacity(nodes.len().div_ceil(AI_TILE));
+        let mut packed = Vec::with_capacity(exact.capacity());
+        for (t, chunk) in nodes.chunks(AI_TILE).enumerate() {
+            let old = base.and_then(|b| b.nodes.get(t).filter(|o| ***o == *chunk).map(|o| (o.clone(), b.tiles.get(t).cloned())));
+            match old {
+                Some((e, Some(p))) if same_packing => {
+                    exact.push(e);
+                    packed.push(p);
+                }
+                Some((e, _)) => {
+                    packed.push(pack(chunk));
+                    exact.push(e);
+                }
+                None => {
+                    packed.push(pack(chunk));
+                    exact.push(Arc::from(chunk));
+                }
+            }
+        }
+        Self { raw: None, header, tiles: packed, nodes: exact }
     }
 
     #[must_use]
     pub fn node_count(&self) -> usize {
-        self.tiles.iter().map(|t| t.len()).sum()
+        self.nodes.iter().map(|t| t.len()).sum()
+    }
+
+    /// The tool's nodes in order.
+    #[must_use]
+    pub fn all_nodes(&self) -> Vec<AiMapNode> {
+        let mut out = Vec::with_capacity(self.node_count());
+        for t in &self.nodes {
+            out.extend_from_slice(t);
+        }
+        out
     }
 
     /// The tool's chunk: the bytes as read, or the model written again.
@@ -854,52 +905,32 @@ impl DetailsPart {
     }
 }
 
-/// The Wallmark tool's data: held as read; its editing tools are a later package.
+/// The Wallmark tool's data: the chunk as written, the marks in it, and the model the tool edits
+/// (`None` for a chunk this crate cannot read: kept as it is, never edited).
 #[derive(Clone, Debug, PartialEq)]
 pub struct WallmarkPart {
     pub raw: Blob,
-    /// Wallmarks in it (`IsNeedSave`).
+    /// Wallmarks in it.
     pub count: usize,
+    pub model: Option<Arc<crate::bulk::wallmark::Wallmarks>>,
 }
 
 impl WallmarkPart {
     pub fn read(bytes: &[u8]) -> Result<Self, SceneError> {
-        let r = Reader::new(bytes);
-        let v = r
-            .open_chunk(1)?
-            .ok_or_else(|| SceneError::load("Static Wallmark: Unsupported version."))?
-            .reader()
-            .r_u16()?;
-        if v != 3 && v != 4 {
-            return Err(SceneError::load("Static Wallmark: Unsupported version."));
-        }
-        let mut count = 0;
-        for id in [4u32, 5] {
-            if let Some(items) = r.open_chunk(id)? {
-                for (_, _, slot) in items.reader().chunks() {
-                    count += Reader::new(slot).r_u32().map_or(0, |n| n as usize);
-                }
-                break;
-            }
-        }
-        Ok(Self { raw: Blob::from(bytes), count })
+        let model = crate::bulk::wallmark::Wallmarks::read(bytes)?;
+        Ok(Self { raw: Blob::from(bytes), count: model.count(), model: Some(Arc::new(model)) })
+    }
+
+    /// The part of an edited model: its chunk written again.
+    #[must_use]
+    pub fn of_model(model: crate::bulk::wallmark::Wallmarks) -> Self {
+        Self { raw: Blob::from(model.write()), count: model.count(), model: Some(Arc::new(model)) }
     }
 
     /// What an empty tool writes (`SaveStream` with no marks and the defaults of `Clear`).
     #[must_use]
     pub fn empty_stream() -> Vec<u8> {
-        let mut w = Writer::new();
-        w.chunk(1, |w| w.w_u16(4));
-        w.chunk(2, |w| w.w_u32(1));
-        w.chunk(3, |w| {
-            w.w_f32(1.0);
-            w.w_f32(1.0);
-            w.w_f32(0.0);
-            w.w_stringz("effects\\wallmarkmult");
-            w.w_stringz("");
-        });
-        w.chunk(5, |_| {});
-        w.into_bytes()
+        crate::bulk::wallmark::Wallmarks::default().write()
     }
 }
 
@@ -933,9 +964,22 @@ impl BulkData {
     #[must_use]
     pub fn needs_save(&self, class: ObjClass) -> bool {
         match class {
-            ObjClass::AiMap => self.ai_map.as_ref().is_some_and(|a| a.node_count() > 0),
-            ObjClass::DetailObjects => self.details.as_ref().is_some_and(|d| !d.model.slots.is_empty()),
-            ObjClass::Wallmark => self.wallmarks.as_ref().is_some_and(|w| w.count > 0),
+            // `IsNeedSave`: nodes or a snap list; slots, objects, a base texture or a snap list;
+            // any slot of marks
+            ObjClass::AiMap => {
+                self.ai_map.as_ref().is_some_and(|a| a.node_count() > 0 || !a.header.snap_objects.is_empty())
+            }
+            ObjClass::DetailObjects => self.details.as_ref().is_some_and(|d| {
+                let m = &d.model;
+                !m.slots.is_empty()
+                    || !m.indices.objects.is_empty()
+                    || m.base_texture.as_ref().is_some_and(|t| !t.is_empty())
+                    || !m.snap_objects.is_empty()
+            }),
+            ObjClass::Wallmark => self
+                .wallmarks
+                .as_ref()
+                .is_some_and(|w| w.model.as_ref().map_or(w.count > 0, |m| !m.slots.is_empty())),
             _ => false,
         }
     }
@@ -954,7 +998,7 @@ impl BulkData {
             ObjClass::Wallmark => match WallmarkPart::read(bytes) {
                 Ok(w) => self.wallmarks = Some(Arc::new(w)),
                 Err(e) => {
-                    self.wallmarks = Some(Arc::new(WallmarkPart { raw: Blob::from(bytes), count: 0 }));
+                    self.wallmarks = Some(Arc::new(WallmarkPart { raw: Blob::from(bytes), count: 0, model: None }));
                     return Some(format!("the wallmarks are kept as they were read: {e}"));
                 }
             },

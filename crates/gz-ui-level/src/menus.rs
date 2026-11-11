@@ -72,6 +72,10 @@ pub fn run_scene_command(id: &str, editor: &Arc<Editor>, ctx: &Context) {
     let snap = svc.store.snapshot();
     let origin = editor.ui_origin();
     let class = snap.tools.target;
+    // the AI map, the detail slots and the wallmarks keep their own selection
+    if crate::tools_bulk::menu_command(id, editor, ctx, &snap) {
+        return;
+    }
     match id {
         "COMMAND_UNDO" => editor.post("undo", Args::new()),
         "COMMAND_REDO" => editor.post("redo", Args::new()),

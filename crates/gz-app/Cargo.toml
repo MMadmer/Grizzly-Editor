@@ -29,3 +29,6 @@ rustc-hash.workspace = true
 png.workspace = true
 base64.workspace = true
 parking_lot.workspace = true
+futures.workspace = true
+# the system's open dialog of Assign Macro
+rfd = { version = "0.15", default-features = false }

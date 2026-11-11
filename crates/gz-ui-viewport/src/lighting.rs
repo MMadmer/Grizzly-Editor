@@ -8,7 +8,7 @@ use glam::Vec3;
 use gz_ltx::{Ltx, LtxDoc};
 use gz_render::{Environment, Frustum, Light, LightKind, RoofMap};
 use gz_scene::library::Library;
-use gz_scene::objects::{LT_POINT, light_flags};
+use gz_scene::objects::{LT_DIRECT, LT_POINT, light_flags};
 use gz_scene::{ObjClass, ObjData, SceneState};
 use rayon::prelude::*;
 use smol_str::SmolStr;
@@ -22,7 +22,7 @@ pub const ROOF_CELLS: u32 = 256;
 pub const ROOF_CELL: f32 = 1.0;
 
 /// The weather at an hour, as loaded (not yet scaled by the lumscales).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Weather {
     pub ambient: Vec3,
     pub hemi: Vec3,
@@ -30,6 +30,19 @@ pub struct Weather {
     /// From the sun.
     pub sun_dir: Vec3,
     pub fog_color: Vec3,
+    pub sky: WeatherSky,
+}
+
+/// The sky of the two sections round the hour (`CEnvDescriptorMixer::lerp`): both cube maps,
+/// how far from the first to the second, the colour and the turn blended.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WeatherSky {
+    /// `sky_texture` of the section before the hour and of the one after.
+    pub textures: [SmolStr; 2],
+    pub weight: f32,
+    pub color: Vec3,
+    /// Radians about the world's Y (`sky_rotation`, degrees in the file).
+    pub rotation: f32,
 }
 
 /// "22:00:00" -> seconds of the day; `None` for a section that is not a time.
@@ -90,12 +103,23 @@ pub fn weather_at(doc: &LtxDoc, name: &str, hour: f32) -> Result<Weather, String
     if sun_dir.length_squared() < 1e-6 {
         sun_dir = Vec3::new(0.0, -1.0, 0.0);
     }
+    let texture = |sect: &str| SmolStr::new(doc.get(sect, "sky_texture").map_or("", str::trim));
+    let rotation = |sect: &str| {
+        doc.get(sect, "sky_rotation").and_then(|t| t.trim().parse::<f32>().ok()).map_or(0.0, f32::to_radians)
+    };
+    let sky = WeatherSky {
+        textures: [texture(ka.1), texture(kb.1)],
+        weight: f,
+        color: lerp("sky_color"),
+        rotation: (1.0 - f) * rotation(ka.1) + f * rotation(kb.1),
+    };
     Ok(Weather {
         ambient: lerp("ambient_color"),
         hemi: lerp("hemisphere_color"),
         sun_color: lerp("sun_color"),
         sun_dir: sun_dir.normalize(),
         fog_color: lerp("fog_color"),
+        sky,
     })
 }
 
@@ -472,6 +496,50 @@ pub fn bake_roof(state: &SceneState, lib: &Library, eye: Vec3, revision: u64) ->
     (RoofMap { origin, cell, cells, heights: heights.into(), revision }, candidates.len())
 }
 
+/// `ESceneLightTool::flShowSun`.
+pub const LIGHT_SHOW_SUN: u32 = 1 << 31;
+
+/// `ESceneLightTool::BeforeRender`: the lights the editor's own lighting sets for a frame - every
+/// visible scene light switched on for the viewport (`m_UseInD3D`, the Light tool's Viewport
+/// Lighting) that affects anything and whose range the view sees, in the scene's order, then the
+/// sun when the tool shows it. The C++ editor's fixed-function emulation lights with the
+/// directional ones alone (`EDevice_PushFFConstants`): those are what is kept.
+#[must_use]
+pub fn editor_lights(state: &SceneState, frustum: &Frustum) -> Vec<Light> {
+    let mut out = Vec::new();
+    for o in state.of_class(ObjClass::Light) {
+        let ObjData::Light(l) = &o.data else { continue };
+        if !o.flags.visible
+            || !l.use_in_d3d
+            || l.flags & (light_flags::AFFECT_STATIC | light_flags::AFFECT_DYNAMIC) == 0
+            || l.kind != LT_DIRECT
+            || !frustum.intersects_sphere(o.position(), l.range)
+        {
+            continue;
+        }
+        let r = o.rotation();
+        out.push(Light {
+            kind: LightKind::Directional { direction: dir_hp(r.y, r.x), ranged: true },
+            position: o.position(),
+            range: l.range,
+            color: Vec3::new(l.color[0], l.color[1], l.color[2]) * l.brightness,
+        });
+    }
+    let tool = state.tools.part(ObjClass::Light);
+    if tool.flags & LIGHT_SHOW_SUN != 0
+        && let gz_scene::tools::ToolOpts::Light(lt) = &tool.opts
+    {
+        let [p, h] = lt.sun_shadow_dir;
+        out.push(Light {
+            kind: LightKind::Directional { direction: dir_hp(h, p), ranged: false },
+            position: Vec3::ZERO,
+            range: 0.0,
+            color: Vec3::ONE,
+        });
+    }
+    out
+}
+
 /// The renderer's environment for a weather, the settings and the exposure.
 #[must_use]
 pub fn environment(
@@ -492,6 +560,12 @@ pub fn environment(
         exposure,
         indoor_hemi,
         roof,
+        sky: (!w.sky.textures[0].is_empty()).then(|| gz_render::Sky {
+            textures: w.sky.textures.clone(),
+            color: w.sky.color,
+            weight: w.sky.weight,
+            rotation: w.sky.rotation,
+        }),
     }
 }
 
@@ -516,6 +590,9 @@ mod tests {
     const WEATHER: &str = "[00:00:00]\nambient_color = 0.1, 0.1, 0.1\nhemisphere_color = 0.2, 0.2, 0.2, 1\nsun_color = 0, 0, 0\nfog_color = 0.1, 0.1, 0.2\nsun_altitude = -30\nsun_longitude = 0\n\
 [12:00:00]\nambient_color = 0.3, 0.3, 0.3\nhemisphere_color = 0.6, 0.6, 0.6, 1\nsun_color = 1, 1, 1\nfog_color = 0.5, 0.5, 0.6\nsun_altitude = -30\nsun_longitude = 0\n";
 
+    const SKY: &str = "[00:00:00]\nsky_texture = sky\\sky_9_cube\nsky_color = 0, 0, 0.5\nsky_rotation = 90\n\
+[12:00:00]\nsky_texture = sky\\sky_1_cube\nsky_color = 1, 1, 1\n";
+
     #[test]
     fn the_weather_is_blended_between_its_hours() {
         let doc = LtxDoc::parse(WEATHER);
@@ -525,9 +602,47 @@ mod tests {
         // past the last key it blends towards the first one, round midnight
         let late = weather_at(&doc, "w", 18.0).unwrap_or_default();
         assert!((late.ambient.x - 0.2).abs() < 1e-4);
+        // the sky of both sections, the blend half way, the turn blended in radians
+        let w = weather_at(&LtxDoc::parse(SKY), "w", 6.0).unwrap_or_default();
+        assert_eq!(w.sky.textures, [SmolStr::new("sky\\sky_9_cube"), SmolStr::new("sky\\sky_1_cube")]);
+        assert!((w.sky.weight - 0.5).abs() < 1e-6);
+        assert!((w.sky.color - Vec3::new(0.5, 0.5, 0.75)).abs().max_element() < 1e-5);
+        assert!((w.sky.rotation - 45f32.to_radians()).abs() < 1e-5);
+        let env = environment(&w, &GameSettings::default(), 1.0, 0.15, None);
+        assert!(env.sky.is_some_and(|s| s.weight == 0.5));
         assert!(weather_at(&LtxDoc::parse("[x]\na = 1\n"), "w", 1.0).is_err());
         assert_eq!(section_seconds("22:00:00"), Some(79200));
         assert_eq!(section_seconds("sky"), None);
+    }
+
+    #[test]
+    fn the_editor_lights_follow_use_in_d3d() {
+        use gz_scene::objects::LightData;
+        use gz_scene::{Object, SceneState};
+        let mut s = SceneState::default();
+        let direct = |on: bool| {
+            let mut o = Object::new(
+                ObjClass::Light,
+                if on { "on" } else { "off" },
+                ObjData::Light(LightData { kind: LT_DIRECT, use_in_d3d: on, range: 50.0, ..LightData::default() }),
+            );
+            o.xform.position = Vec3::new(0.0, 0.0, 10.0);
+            o
+        };
+        s.insert(direct(true));
+        s.insert(direct(false));
+        // a point light is switched on but the emulation takes directional lights only
+        s.insert(Object::new(ObjClass::Light, "point", ObjData::Light(LightData::default())));
+        let cam = gz_render::Camera::looking(Vec3::ZERO, Vec3::Z);
+        let f = cam.frustum([100, 100]);
+        let got = editor_lights(&s, &f);
+        assert_eq!(got.len(), 1);
+        assert!(matches!(got[0].kind, LightKind::Directional { ranged: true, .. }));
+        // the sun comes last, along the tool's direction
+        s.tools.part_mut(ObjClass::Light).flags |= LIGHT_SHOW_SUN;
+        let got = editor_lights(&s, &f);
+        assert_eq!(got.len(), 2);
+        assert!(matches!(got[1].kind, LightKind::Directional { ranged: false, .. }));
     }
 
     #[test]

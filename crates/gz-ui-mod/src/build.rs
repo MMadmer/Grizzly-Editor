@@ -514,7 +514,7 @@ impl ExportDialog {
 
 pub(crate) fn install(b: &mut ShellBuilder) {
     // the results open over MCP only to be looked at again: they show even under -nodlg
-    for id in ["build_result", "export_result", "package_result"] {
+    for id in ["build_result", "export_result", "package_result", "bake_result"] {
         b.dialog(DialogDesc {
             id: id.into(),
             window: format!("###dlg.{id}").into(),

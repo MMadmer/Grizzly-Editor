@@ -60,13 +60,15 @@ impl Player {
     pub fn of(editor: &Editor) -> Arc<Player> {
         let wake = editor.exec.wake().clone();
         let log = editor.log.clone();
+        // View > Mute Sounds and COMMAND_MUTE_SOUND: the sound plays on, unheard
+        let muted = gz_app::gpu::Gpu::of(editor).mute_flag();
         editor.services.get_or_init(move || {
             let (tx, rx) = unbounded();
             let playing = Arc::new(AtomicBool::new(false));
             let error = Arc::new(Mutex::new(None));
             let (p, e) = (playing.clone(), error.clone());
             if let Err(err) =
-                std::thread::Builder::new().name("gz-audio".into()).spawn(move || run(&rx, &p, &e, &wake))
+                std::thread::Builder::new().name("gz-audio".into()).spawn(move || run(&rx, &p, &e, &wake, &muted))
             {
                 log.warn(format!("the audio thread did not start: {err}"));
             }
@@ -101,6 +103,7 @@ fn open(
     voice: &Arc<Mutex<Voice>>,
     playing: &Arc<AtomicBool>,
     wake: &gz_task::Wake,
+    muted: &Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or_else(|| "There is no audio output device.".to_owned())?;
@@ -121,11 +124,15 @@ fn open(
     let on_error = |_e: cpal::Error| {};
     let stream = match format {
         cpal::SampleFormat::F32 => {
-            let voice = voice.clone();
+            let (voice, muted) = (voice.clone(), muted.clone());
             device.build_output_stream::<f32, _, _>(
                 config,
                 move |data: &mut [f32], _| {
-                    if mix(&mut voice.lock(), data, channels, rate) {
+                    let done = mix(&mut voice.lock(), data, channels, rate);
+                    if muted.load(Ordering::Acquire) {
+                        data.fill(0.0);
+                    }
+                    if done {
                         ended();
                     }
                 },
@@ -134,13 +141,16 @@ fn open(
             )
         }
         cpal::SampleFormat::I16 => {
-            let voice = voice.clone();
+            let (voice, muted) = (voice.clone(), muted.clone());
             let mut scratch: Vec<f32> = Vec::new();
             device.build_output_stream::<i16, _, _>(
                 config,
                 move |data: &mut [i16], _| {
                     scratch.resize(data.len(), 0.0);
                     let done = mix(&mut voice.lock(), &mut scratch, channels, rate);
+                    if muted.load(Ordering::Acquire) {
+                        scratch.fill(0.0);
+                    }
                     for (d, s) in data.iter_mut().zip(&scratch) {
                         *d = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
                     }
@@ -166,6 +176,7 @@ fn run(
     playing: &Arc<AtomicBool>,
     error: &Arc<Mutex<Option<String>>>,
     wake: &gz_task::Wake,
+    muted: &Arc<AtomicBool>,
 ) {
     let voice = Arc::new(Mutex::new(Voice::default()));
     let mut stream: Option<cpal::Stream> = None;
@@ -173,7 +184,7 @@ fn run(
         match msg {
             Msg::Play(pcm) => {
                 if stream.is_none() {
-                    match open(&voice, playing, wake) {
+                    match open(&voice, playing, wake, muted) {
                         Ok(s) => {
                             stream = Some(s);
                             *error.lock() = None;

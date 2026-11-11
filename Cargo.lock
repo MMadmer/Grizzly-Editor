@@ -1298,6 +1298,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "futures",
  "gz-base",
  "gz-editor",
  "gz-log",
@@ -1307,6 +1308,7 @@ dependencies = [
  "gz-win",
  "parking_lot 0.13.0",
  "png",
+ "rfd",
  "rustc-hash 2.1.3",
  "serde",
  "serde_json",
@@ -1607,6 +1609,7 @@ dependencies = [
  "gz-export-level",
  "gz-fmt-level",
  "gz-fmt-object",
+ "gz-fmt-ogf",
  "gz-fmt-spawn",
  "gz-fmt-tex",
  "gz-fmt-xr",
@@ -1719,6 +1722,15 @@ dependencies = [
  "serde_json",
  "smol_str 0.3.7",
  "tokio",
+]
+
+[[package]]
+name = "gz-particles"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "gz-fmt-xr",
+ "smol_str 0.3.7",
 ]
 
 [[package]]
@@ -1851,6 +1863,8 @@ dependencies = [
  "gz-entities",
  "gz-fmt-level",
  "gz-fmt-object",
+ "gz-fmt-tex",
+ "gz-fmt-xr",
  "gz-game",
  "gz-ltx",
  "gz-project",
@@ -2094,6 +2108,7 @@ dependencies = [
  "gz-project",
  "gz-query",
  "gz-render",
+ "gz-scene",
  "gz-store",
  "gz-task",
  "gz-ui",
@@ -2140,6 +2155,7 @@ dependencies = [
  "glam",
  "gz-app",
  "gz-base",
+ "gz-chunk",
  "gz-editor",
  "gz-entities",
  "gz-fmt-level",
@@ -2147,6 +2163,7 @@ dependencies = [
  "gz-fmt-xr",
  "gz-game",
  "gz-ltx",
+ "gz-particles",
  "gz-project",
  "gz-render",
  "gz-scene",

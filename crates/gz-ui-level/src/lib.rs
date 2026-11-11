@@ -12,7 +12,9 @@
 //!   keys), which the editor's settings file keeps.
 //! - **Panels**: the World Outliner ([`outliner`], rows from a `Query` keyed by the scene's
 //!   revision and the filter, laid out only where they show), Tools ([`tools`]: tiles, the
-//!   active tool's form, Snap Objects; the Detail Objects dialog [`detail_objects`]), Details and
+//!   active tool's form, Snap Objects; the Detail Objects dialog [`detail_objects`]; the Sector,
+//!   Portal, Way, Shape, Light and Fog Volume forms in `tools_objects`, posting their tools'
+//!   commands), Details and
 //!   Level Settings ([`details`]: the kit's property grid over `gz-scene`'s rows, choosers
 //!   `###dlg.choose` [`choose`], the text dialog `###dlg.edit_text`), and the hosts of the
 //!   Content Browser and the Output Log (`gz-ui-content`, `gz-ui-app`).
@@ -35,7 +37,7 @@
 //! Widgets the kit lacks, local to this crate ([`local`]): `local_eye_toggle`,
 //! `local_button_flow`, `local_panel_header`, `local_tool_tile`, `local_thumbnail`,
 //! `local_badge_button`, `local_tab` (a panel tab with its cross on hover), `local_tree_list`
-//! (the filtered tree list of a tool).
+//! (the filtered tree list of a tool); `tools_objects::local_switch_row` (a switch with its label).
 
 #![forbid(unsafe_code)]
 
@@ -58,6 +60,8 @@ pub mod recovery;
 pub mod status;
 pub mod toolbar;
 pub mod tools;
+mod tools_bulk;
+mod tools_objects;
 
 use gz_app::{PanelDesc, ShellBuilder};
 use gz_editor::{Registry, SmolStr};

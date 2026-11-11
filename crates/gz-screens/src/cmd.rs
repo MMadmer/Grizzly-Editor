@@ -278,12 +278,31 @@ fn parse_surfaces(text: &str) -> u32 {
         .fold(0, |m, (_, b)| m | b)
 }
 
-/// What a screen shows on when a drop makes it: the loading screen, the tab's first surface.
-const DEFAULT_SHOW: u32 = LOADING;
+/// What a screen or a track made by a drop shows on (`DefaultShow`): the surface the Screens
+/// tab shows - the loading screen, or the menu and the pause screen.
+fn default_show(menu: bool) -> u32 {
+    if menu { MENU | PAUSE } else { LOADING }
+}
+
+/// The surface a drop lands on: `surface=` when given, else the one the open Screens tab shows
+/// (`s_Surface`), else the loading screen.
+async fn drop_surface(ed: &Arc<Editor>, args: &Args) -> bool {
+    if let Some(v) = arg(args, "surface") {
+        return v == "menu";
+    }
+    if !ed.registry().has("screens_view") {
+        return false;
+    }
+    let view = ed.call("screens_view", Args::new(), Origin::Mcp).await;
+    view.get("open").and_then(Value::as_bool) == Some(true)
+        && view.get("surface").and_then(Value::as_str) == Some("menu")
+}
 
 /// Everything an action needs while it runs on the IO pool.
 struct Cx<'a> {
     root: &'a str,
+    /// What a screen or a track made by a drop shows on.
+    show: u32,
     args: &'a Args,
     exec: &'a Executors,
     err: String,
@@ -404,7 +423,7 @@ impl Cx<'_> {
             };
             if file_kind(&rel) == FileKind::Music {
                 let id = s.new_track_id(&stem(&rel));
-                s.tracks.push(Track { id, file: rel, play: DEFAULT_SHOW, ..Track::default() });
+                s.tracks.push(Track { id, file: rel, play: self.show, ..Track::default() });
                 continue;
             }
             if to_music {
@@ -417,7 +436,7 @@ impl Cx<'_> {
                     let id = s.new_screen_id(&stem(&rel));
                     s.screens.push(Screen {
                         id,
-                        show: DEFAULT_SHOW,
+                        show: self.show,
                         layers: vec![Layer { file: rel, ..Layer::default() }],
                         ..Screen::default()
                     });
@@ -585,11 +604,13 @@ async fn screens_set(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let mut s = Screens::parse(doc);
     let root = project.root().to_owned();
     let exec = ed.exec.clone();
+    let dropping = arg(&args, "action").as_deref() == Some("drop");
+    let show = default_show(dropping && drop_surface(&ed, &args).await);
     // imports are file work: the whole action runs on the IO pool
     let (s, outcome) = ed
         .exec
         .io(move || {
-            let mut cx = Cx { root: &root, args: &args, exec: &exec, err: String::new() };
+            let mut cx = Cx { root: &root, show, args: &args, exec: &exec, err: String::new() };
             let outcome = run(&mut cx, &mut s).map(|()| cx.err);
             (s, outcome)
         })

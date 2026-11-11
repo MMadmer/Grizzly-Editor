@@ -60,6 +60,9 @@ fn main() -> ExitCode {
     for arg in &cli.unknown {
         log.warn(format!("unknown command line option '{arg}'"));
     }
+    if cli.bad_ui_scale {
+        log.warn("-uiscale wants a scale from 0.5 to 4, e.g. -uiscale 1.5");
+    }
 
     startup.stage("Starting the workers");
     let runtime = match Runtime::start(ExecOptions::default()) {
@@ -150,7 +153,7 @@ fn main() -> ExitCode {
         let shell = gz_app::GrizzlyShell::new(
             editor.clone(),
             shell,
-            gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet },
+            gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet, ui_scale: cli.ui_scale },
         );
         startup.finish(&log);
         if let Err(e) = gz_app::run(editor.clone(), opts, Box::new(shell)) {

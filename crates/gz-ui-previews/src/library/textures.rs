@@ -16,7 +16,7 @@ use gz_fmt_tex::{
 use gz_store::{Apply, State, Store, StoreOptions, imbl};
 use gz_ui::grid::{Grid, color, combo, number, read_only, switch};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state};
+use gz_ui::{Button, Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};
@@ -625,6 +625,24 @@ impl TexLibDoc {
                             &mut gesture,
                         );
                     });
+                }
+            }
+            // `OnCubeMapBtnClick`: the strip made into a smaller one beside its game texture
+            if p.ty == TextureType::CUBE_MAP && !self.import_mode() {
+                let mut make = false;
+                g.section("Cube Map", true, None, |g| {
+                    g.row(
+                        "Smaller Copy",
+                        "Makes <name>#small.dds in the game textures: 32 x 32 a face, sampled from the source.",
+                        PropFlags::NONE,
+                        0,
+                        |ui| {
+                            make = Button::new("Make").kind(Kind::Secondary).show(ui).clicked();
+                        },
+                    );
+                });
+                if make {
+                    crate::libtools::smaller_cube_map(&self.editor, &self.dirs, &item.name);
                 }
             }
         });

@@ -38,17 +38,13 @@ pub fn view_menu(ui: &mut Ui, cx: &mut DocCx<'_>) {
     options_body(ui, cx.editor);
 }
 
-/// View Options: lighting, Game Lighting, wireframe, the grid, the safe rect, the helpers, stats.
+/// View Options (`DrawViewportOptions`): the rarely changed render switches folded under
+/// Render, then the safe rect and the grid, fog and environment, the lighting, the sounds and
+/// Real Time, the helpers and stats.
 pub(crate) fn options_body(ui: &mut Ui, editor: &Arc<Editor>) {
     let vp = Viewport::of(editor);
     let v = vp.read(|s| s.view.clone());
-    if check(ui, "Lighting", "", v.lighting) {
-        vp.with(|s| s.view.lighting = !s.view.lighting);
-    }
-    local_submenu(ui, "Game Lighting", Icon::None, true, |ui| game_body(ui, editor));
-    if check(ui, "Wireframe", &keys::keys_of(editor, Act::Wireframe), v.fill != Fill::Solid) {
-        keys::run(editor, Act::Wireframe);
-    }
+    local_submenu(ui, "Render", Icon::None, true, |ui| render_body(ui, editor));
     ui.separator();
     if check(ui, "Safe Rect", &keys::keys_of(editor, Act::SafeRect), v.safe_rect) {
         keys::run(editor, Act::SafeRect);
@@ -56,13 +52,111 @@ pub(crate) fn options_body(ui: &mut Ui, editor: &Arc<Editor>) {
     if check(ui, "Grid", &keys::keys_of(editor, Act::Grid), v.grid) {
         keys::run(editor, Act::Grid);
     }
+    ui.separator();
+    if check(ui, "Fog", "", v.fog) {
+        vp.with(|s| s.view.fog = !s.view.fog);
+    }
+    if check(ui, "Environment", "", v.environment) {
+        vp.with(|s| s.view.environment = !s.view.environment);
+    }
+    ui.separator();
+    if check(ui, "Lighting", "", v.lighting) {
+        vp.with(|s| s.view.lighting = !s.view.lighting);
+    }
+    local_submenu(ui, "Game Lighting", Icon::None, true, |ui| game_body(ui, editor));
+    let settings = gz_app::EditorSettings::of(editor);
+    let (mute, real) = (settings.render_flag("mute_sounds"), crate::service::real_time(editor));
+    if check(ui, "Mute Sounds", "", mute) {
+        crate::service::set_mute_sounds(editor, !mute);
+    }
+    if check(ui, "Real Time", "", real) {
+        crate::service::set_real_time(editor, !real);
+    }
+    ui.separator();
     if check(ui, "Spawn Helpers", "", v.helpers) {
         vp.with(|s| s.view.helpers = !s.view.helpers);
     }
-    ui.separator();
     if check(ui, "Stats", "", v.stats) {
         vp.with(|s| s.view.stats = !s.view.stats);
     }
+}
+
+/// View > Render: GPU, Quality, Fill Mode, Shade Mode, Edged Faces, Linear Filtering, Textures.
+fn render_body(ui: &mut Ui, editor: &Arc<Editor>) {
+    let vp = Viewport::of(editor);
+    let v = vp.read(|s| s.view.clone());
+    local_submenu(ui, "GPU", Icon::None, true, |ui| gpu_body(ui, editor));
+    local_submenu(ui, "Quality", Icon::None, true, |ui| {
+        for (q, label) in crate::service::QUALITIES {
+            if check(ui, label, "", (v.quality - q).abs() < 0.01) {
+                vp.set_quality(q);
+            }
+        }
+    });
+    local_submenu(ui, "Fill Mode", Icon::None, true, |ui| {
+        let wire_keys = keys::keys_of(editor, Act::Wireframe);
+        for (fill, label, k) in
+            [(Fill::Point, "Point", ""), (Fill::Wireframe, "Wireframe", wire_keys.as_str()), (Fill::Solid, "Solid", "")]
+        {
+            if check(ui, label, k, v.fill == fill) {
+                vp.with(|s| s.view.fill = fill);
+            }
+        }
+    });
+    local_submenu(ui, "Shade Mode", Icon::None, true, |ui| {
+        if check(ui, "Flat", "", v.flat) {
+            vp.with(|s| s.view.flat = true);
+        }
+        if check(ui, "Gouraud", "", !v.flat) {
+            vp.with(|s| s.view.flat = false);
+        }
+    });
+    if check(ui, "Edged Faces", "", v.edged_faces) {
+        vp.with(|s| s.view.edged_faces = !s.view.edged_faces);
+    }
+    ui.separator();
+    if check(ui, "Linear Filtering", "", v.filter_linear) {
+        vp.with(|s| s.view.filter_linear = !s.view.filter_linear);
+    }
+    if check(ui, "Textures", "", v.textures) {
+        vp.with(|s| s.view.textures = !s.view.textures);
+    }
+}
+
+/// View > Render > GPU: the adapters by name and the driver's hint; both take a restart.
+fn gpu_body(ui: &mut Ui, editor: &Arc<Editor>) {
+    let gpu = gz_app::gpu::Gpu::of(editor);
+    let settings = gz_app::EditorSettings::of(editor);
+    let adapters = gpu.adapters().unwrap_or_default();
+    let active = if adapters.active.is_empty() { "unknown" } else { adapters.active.as_str() };
+    menu_item(ui, &format!("Active: {active}"), MenuItem { enabled: false, ..MenuItem::default() });
+    ui.separator();
+    let wanted = settings.gpu_adapter();
+    let pick = |name: &str| {
+        settings.set_gpu_adapter(name);
+        settings.save_soon(editor);
+    };
+    if check(ui, "System Default", "", wanted.is_empty()) {
+        pick("");
+    }
+    for name in &adapters.names {
+        if check(ui, name, "", *name == wanted) {
+            pick(name);
+        }
+    }
+    if adapters.names.is_empty() {
+        menu_item(ui, "No adapters reported", MenuItem { enabled: false, ..MenuItem::default() });
+    }
+    ui.separator();
+    let hint = gpu.hint(editor);
+    for h in gz_app::gpu::DriverHint::ALL {
+        if menu_item(ui, h.title(), MenuItem { selected: h == hint, enabled: gpu.hint_known(), ..MenuItem::default() })
+        {
+            gpu.set_hint(editor, h);
+        }
+    }
+    ui.separator();
+    menu_item(ui, "Takes effect after a restart", MenuItem { enabled: false, ..MenuItem::default() });
 }
 
 /// Game Lighting (`GameLighting_Menu`).

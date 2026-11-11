@@ -45,47 +45,89 @@ pub fn selected_scene_objects(state: &SceneState) -> Vec<ObjId> {
         .collect()
 }
 
-/// Applies a snap action to the scene's list; `true` when the list or the selection changed.
+/// The snap list of the current tool (`GetSnapList(true)`): the AI Map and Detail Objects tools
+/// keep their own (by name, in their part of the scene), every other tool the scene's.
+#[must_use]
+pub fn tool_list(state: &SceneState) -> Vec<ObjId> {
+    let names = match state.tools.target {
+        ObjClass::AiMap => state.bulk.ai_map.as_ref().map(|a| a.header.snap_objects.clone()).unwrap_or_default(),
+        ObjClass::DetailObjects => {
+            state.bulk.details.as_ref().map(|d| d.model.snap_objects.clone()).unwrap_or_default()
+        }
+        _ => return state.tools.snap.clone(),
+    };
+    names.iter().filter_map(|n| state.find(ObjClass::SceneObject, &n.to_lowercase()).map(|o| o.id)).collect()
+}
+
+/// Writes the current tool's snap list.
+fn set_tool_list(state: &mut SceneState, list: Vec<ObjId>) {
+    let names: Vec<gz_base::SmolStr> = list.iter().filter_map(|id| state.get(*id)).map(|o| o.name.clone()).collect();
+    match state.tools.target {
+        ObjClass::AiMap => {
+            let mut part = state.bulk.ai_map.as_deref().cloned().unwrap_or_else(|| {
+                crate::tools::AiMapPart::from_nodes(gz_fmt_level::SceneAiMap::default(), &[], None)
+            });
+            part.header.snap_objects = names;
+            part.raw = None;
+            state.bulk.ai_map = Some(std::sync::Arc::new(part));
+        }
+        ObjClass::DetailObjects => {
+            let mut model = state.bulk.details.as_ref().map(|d| (*d.model).clone()).unwrap_or_default();
+            model.snap_objects = names;
+            state.bulk.details =
+                Some(std::sync::Arc::new(crate::tools::DetailsPart { raw: None, model: std::sync::Arc::new(model) }));
+        }
+        _ => state.tools.snap = list,
+    }
+}
+
+/// Applies a snap action to the current tool's list; `true` when the list or the selection
+/// changed.
 pub fn apply_snap(state: &mut SceneState, action: SnapAction) -> bool {
     let sel = selected_scene_objects(state);
-    match action {
+    let mut list = tool_list(state);
+    let changed = match action {
         SnapAction::SetFromSelection => {
-            state.tools.snap = sel;
+            list = sel;
             true
         }
         SnapAction::AddSelection => {
             let mut changed = false;
             for id in sel {
-                if !state.tools.snap.contains(&id) {
-                    state.tools.snap.push(id);
+                if !list.contains(&id) {
+                    list.push(id);
                     changed = true;
                 }
             }
             changed
         }
         SnapAction::RemoveSelection => {
-            let before = state.tools.snap.len();
-            state.tools.snap.retain(|id| !sel.contains(id));
-            before != state.tools.snap.len()
+            let before = list.len();
+            list.retain(|id| !sel.contains(id));
+            before != list.len()
         }
         SnapAction::Select => {
             let scene: Vec<ObjId> = state.by_class[ObjClass::SceneObject.index()].iter().copied().collect();
             for id in scene {
                 state.selection.remove(&id);
             }
-            for id in state.tools.snap.clone() {
-                if state.get(id).is_some_and(|o| o.flags.visible) {
-                    state.selection.insert(id);
+            for id in &list {
+                if state.get(*id).is_some_and(|o| o.flags.visible) {
+                    state.selection.insert(*id);
                 }
             }
-            true
+            return true;
         }
         SnapAction::Clear => {
-            let had = !state.tools.snap.is_empty();
-            state.tools.snap.clear();
+            let had = !list.is_empty();
+            list.clear();
             had
         }
+    };
+    if changed {
+        set_tool_list(state, list);
     }
+    changed
 }
 
 /// Where an object lands: its new position and, when aligned, its new rotation.

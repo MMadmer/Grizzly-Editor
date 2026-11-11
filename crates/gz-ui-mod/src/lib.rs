@@ -25,6 +25,9 @@
 //!   names every row's slot, so the packages that own Characters, World Rules, Screens & Music,
 //!   PDA Interface, Bake Scene Layer, Publish Release, Releases and Submit add theirs in place),
 //!   and the Build Mod split at the right end of every toolbar.
+//! - **Bake Scene Layer** (`bake`): Spawn Layer..., Collision Overlay..., Visual Overlay...,
+//!   Level Cut... - faces of `mod_export_spawn`, `mod_export_xcform`, `mod_export_ogf_probe`
+//!   and `mod_export_cut`, reporting in `dlg.bake_result`.
 //! - [`register`] - `mod_settings_view`.
 //!
 //! Widgets the kit lacks, local to this crate ([`local`]): `local_text_field` (a one-line field
@@ -40,6 +43,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bake;
 pub mod build;
 mod call;
 pub mod cards;
@@ -66,6 +70,7 @@ pub fn install(b: &mut ShellBuilder) {
     build::install(b);
     package::install(b);
     menu::install(b);
+    bake::install(b);
 }
 
 /// The commands of this package: `mod_settings_view`.

@@ -435,6 +435,7 @@ impl Inspector {
             pick: &mut self.pick,
             text_edit: &mut self.text_edit,
             siblings: None,
+            camera: gz_editor::ViewCamera::of(cx.editor),
         }
     }
 

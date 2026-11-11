@@ -85,6 +85,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "game_lighting", |ed, a, _o| async move { game_lighting(&ed, &a).await });
     reg.add(AREA, "frame_pacing", |ed, a, _o| async move { frame_pacing(&ed, &a) });
     reg.add(AREA, "screenshot_viewport", |ed, _a, _o| async move { screenshot_viewport(&ed).await });
+    reg.add(AREA, "particles_tool", |ed, a, _o| crate::draw_particles::particles_tool(ed, a));
 }
 
 /// A change made over MCP is drawn: the pane's next frame builds the pass.
@@ -264,6 +265,8 @@ const PRESETS: [&str; 5] = ["unlit", "lit", "game", "wireframe", "point"];
 
 async fn view_mode(ed: &Arc<Editor>, a: &Args) -> Reply {
     let vp = Viewport::of(ed);
+    // View > Render > GPU and Quality, Mute Sounds, Real Time
+    crate::service::render_args(ed, a)?;
     let mut game_on: Option<bool> = None;
     // presets first, so explicit fields can still override them
     if let Some(preset) = a.str("preset").filter(|p| !p.is_empty()) {
@@ -340,9 +343,10 @@ async fn view_mode(ed: &Arc<Editor>, a: &Args) -> Reply {
         }
     }
     redraw(ed);
+    let render = crate::service::render_json(ed);
     vp.read(|s| {
         let v = &s.view;
-        Ok(json!({
+        let mut out = json!({
             "fill": v.fill.key(),
             "shade": if v.flat { "flat" } else { "gouraud" },
             "lighting": v.lighting,
@@ -357,7 +361,11 @@ async fn view_mode(ed: &Arc<Editor>, a: &Args) -> Reply {
             "helpers": v.helpers,
             "game_lighting": s.game.enabled,
             "presets": PRESETS,
-        }))
+        });
+        if let (Some(o), Value::Object(r)) = (out.as_object_mut(), render) {
+            o.extend(r);
+        }
+        Ok(out)
     })
 }
 
@@ -525,7 +533,8 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         "last_wait_reason": "",
         "app_active": window,
         "play_in_editor": false,
-        "realtime_render": false,
+        // a particle system in view plays: the viewport draws every frame
+        "realtime_render": Viewport::of(ed).animating(),
         "redraw_pending": false,
         "idle_cap_active": false,
         "frames": stamp.frame,

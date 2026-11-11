@@ -122,6 +122,8 @@ pub struct ParamCx<'a> {
     /// The parameter table the current widget belongs to: a `value` asks what type the `name`
     /// beside it was declared with, an `objective_id` which task it belongs to.
     pub siblings: Option<Value>,
+    /// The viewport's camera, for a position's camera button (the slot the viewport fills).
+    pub camera: std::sync::Arc<gz_editor::ViewCamera>,
 }
 
 /// A row in a grid of its own, inside an id scope.
@@ -1247,14 +1249,33 @@ pub fn position(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, v: &m
             }
         }
     }
+    let camera = cx.camera.clone();
+    let mut from_camera = false;
     let changed = grid(ui, cx.role, (salt, "xyz"), |g| {
-        g.row("Position", "The point, in the level's coordinates", PropFlags::NONE, depth, |ui| {
-            grid::vec3_field(ui, "xyz", &mut xyz, 0.1)
-        })
-        .unwrap_or(false)
+        let edited = g
+            .row(
+                "Position",
+                "The point, in the level's coordinates. The camera icon takes the viewport camera's position",
+                PropFlags::NONE,
+                depth,
+                |ui| grid::vec3_field(ui, "xyz", &mut xyz, 0.1),
+            )
+            .unwrap_or(false);
+        // the camera button only where the viewport fills the slot
+        if camera.filled() && g.trailing(Icon::Perspective, "Use the viewport camera's position and level") {
+            from_camera = true;
+        }
+        edited
     });
     if changed {
         v.set("pos", Value::from(xyz.iter().map(|c| Value::Number(f64::from(*c))).collect::<Vec<_>>()));
+        ch = true;
+    }
+    if from_camera && let Some(pose) = camera.get() {
+        v.set("pos", Value::from(pose.position.iter().map(|c| Value::Number(f64::from(*c))).collect::<Vec<_>>()));
+        if let Some(level) = pose.level {
+            v.set("level", level);
+        }
         ch = true;
     }
     let mut r = v.get_number("radius", 5.0) as f32;

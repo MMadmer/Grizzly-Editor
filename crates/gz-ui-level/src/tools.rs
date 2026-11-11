@@ -63,6 +63,7 @@ pub struct ToolsPanel {
     random: Option<RandomSettings>,
     /// The Detail Objects dialog asked for.
     pub want_detail_objects: bool,
+    bulk: crate::tools_bulk::BulkPanels,
 }
 
 /// The Random Settings dialog's values (`FillAppendRandomProperties`).
@@ -90,6 +91,7 @@ impl ToolsPanel {
             snap_row: None,
             random: None,
             want_detail_objects: false,
+            bulk: crate::tools_bulk::BulkPanels::default(),
         }
     }
 
@@ -175,7 +177,22 @@ impl ToolsPanel {
             ObjClass::SpawnPoint => self.spawn_tool(ui, editor, svc, snap, &choice),
             ObjClass::Particles => self.particles_tool(ui, editor, svc, snap, &choice),
             ObjClass::Group => self.group_tool(ui, editor, svc, snap, &choice, chooser),
-            ObjClass::DetailObjects => self.detail_tool(ui, editor, svc, snap),
+            ObjClass::DetailObjects => crate::tools_bulk::detail_tool(
+                ui,
+                editor,
+                snap,
+                &mut self.bulk,
+                chooser,
+                &mut self.want_detail_objects,
+            ),
+            ObjClass::AiMap => crate::tools_bulk::aimap_tool(ui, editor, snap, &mut self.bulk, chooser),
+            ObjClass::Wallmark => crate::tools_bulk::wallmark_tool(ui, editor, snap, &mut self.bulk, chooser),
+            ObjClass::Sector => crate::tools_objects::sector_tool(ui, editor, snap),
+            ObjClass::Portal => crate::tools_objects::portal_tool(ui, editor, snap),
+            ObjClass::Way => crate::tools_objects::way_tool(ui, editor, snap),
+            ObjClass::Shape => crate::tools_objects::shape_tool(ui, editor, snap),
+            ObjClass::Light => crate::tools_objects::light_tool(ui, editor, snap),
+            ObjClass::FogVolume => crate::tools_objects::fog_tool(ui, editor, snap),
             _ => {
                 gz_ui::text::status(ui, Tone::Muted, "This tool has no settings of its own.");
             }
@@ -370,6 +387,26 @@ impl ToolsPanel {
         ui.add_space(6.0);
         if gz_ui_app::local::local_section(ui, "tool_particles_commands", "Commands", false) {
             self.same_buttons(ui, editor, svc, snap, ObjClass::Particles, &current, "effect");
+            // `PlaySelected`: the selected visible systems play or stop; the systems are the
+            // viewport's, reached off the UI thread
+            let mut asked = None;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if gz_ui::icon_button(ui, Icon::Play, "Play the selected particle systems", false, true).clicked() {
+                    asked = Some(true);
+                }
+                if gz_ui::icon_button(ui, Icon::Stop, "Stop the selected particle systems", false, true).clicked() {
+                    asked = Some(false);
+                }
+            });
+            if let Some(on) = asked {
+                let ed = editor.clone();
+                editor.exec.spawn(async move {
+                    if let Err(e) = gz_ui_viewport::play_particles(&ed, &[], on).await {
+                        ed.log.warn(format!("the particle systems did not {}: {e}", if on { "play" } else { "stop" }));
+                    }
+                });
+            }
         }
     }
 
@@ -425,78 +462,6 @@ impl ToolsPanel {
             });
         }
         self.select_by_reference(ui, editor, svc, snap, ObjClass::Group, &current, "group");
-    }
-
-    fn detail_tool(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState) {
-        if !gz_ui_app::local::local_section(ui, "tool_do_commands", "Commands", true) {
-            return;
-        }
-        let model = snap.bulk.details.as_ref().map(|d| d.model.clone());
-        let slots = model.as_ref().map_or(0, |m| m.header.size_x as usize * m.header.size_z as usize);
-        let objects = model.as_ref().map_or(0, |m| m.indices.objects.len());
-        let pressed = local_button_flow(
-            ui,
-            &[
-                LocalButton::new(
-                    "Detail Objects...",
-                    "The objects the details are made of, and their colour indices",
-                ),
-                LocalButton::new("Clear Slots...", "Empty every detail slot of the level")
-                    .when(slots > 0, "There are no slots"),
-                LocalButton::new("Clear Details...", "Remove the detail objects and every slot")
-                    .when(slots > 0 || objects > 0, "There are no details"),
-            ],
-        );
-        match pressed {
-            Some(0) => self.want_detail_objects = true,
-            Some(i @ (1 | 2)) => {
-                let all = i == 2;
-                let plural = |n: usize, w: &str| format!("{n} {w}{}", if n == 1 { "" } else { "s" });
-                let mut items = vec![plural(slots, "detail slot")];
-                if all {
-                    items.push(plural(objects, "detail object"));
-                }
-                let spec = ConfirmSpec {
-                    id: if all { "clear_details" } else { "clear_detail_slots" }.into(),
-                    title: if all { "Clear Details" } else { "Clear Detail Slots" }.into(),
-                    headline: if all {
-                        "Remove every detail of the level?"
-                    } else {
-                        "Empty every detail slot of the level?"
-                    }
-                    .into(),
-                    total: items.len(),
-                    items,
-                    consequence: "Initialize the details again to get them back.".into(),
-                    action: "Clear".into(),
-                    destructive: true,
-                };
-                let store = svc.store.clone();
-                let origin = editor.ui_origin();
-                let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |answer| {
-                    if answer != Answer::Yes {
-                        return;
-                    }
-                    let snap = store.snapshot();
-                    let mut bulk = snap.bulk.clone();
-                    let mut model = bulk.details.as_ref().map(|d| (*d.model).clone()).unwrap_or_default();
-                    if all {
-                        model = gz_fmt_level::SceneDetails::default();
-                    } else {
-                        model.slots = Arc::from([]);
-                        model.header.size_x = 0;
-                        model.header.size_z = 0;
-                    }
-                    bulk.details =
-                        Some(Arc::new(gz_scene::tools::DetailsPart { raw: None, model: Arc::new(model) }));
-                    store.post(SceneCmd::SetBulk(Box::new(bulk)), origin);
-                });
-                if let Some(line) = line {
-                    editor.log.plain(line);
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Select Same, Deselect Same.
@@ -579,7 +544,8 @@ impl ToolsPanel {
         svc: &Arc<SceneService>,
         snap: &SceneState,
     ) {
-        let count = snap.tools.snap.len();
+        let list = gz_scene::snap::tool_list(snap);
+        let count = list.len();
         let title = if count > 0 { format!("Snap Objects ({count})") } else { "Snap Objects".to_owned() };
         if !gz_ui_app::local::local_section(ui, "tool_snap_objects", &title, false) {
             return;
@@ -641,9 +607,7 @@ impl ToolsPanel {
                 .store
                 .post(SceneCmd::Snap { action: action("select"), use_list: None, pick: None }, origin),
             Some(4) => {
-                let names: Vec<String> = snap
-                    .tools
-                    .snap
+                let names: Vec<String> = list
                     .iter()
                     .filter_map(|id| snap.get(*id))
                     .take(10)
@@ -680,7 +644,7 @@ impl ToolsPanel {
         }
         let h = count as f32 * metrics::ROW + 10.0;
         gz_ui::list::list(ui, "snap_list", Vec2::new(0.0, h), |l| {
-            for (i, id) in snap.tools.snap.iter().enumerate() {
+            for (i, id) in list.iter().enumerate() {
                 let Some(o) = snap.get(*id) else { continue };
                 let name = o.name.to_string();
                 if l.row(&format!("snap_{}", id.0), self.snap_row == Some(i), |ui| {

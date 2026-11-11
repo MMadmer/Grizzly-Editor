@@ -346,6 +346,12 @@ impl LevelDoc {
                             detail_objects::add_objects(ui, &editor, svc, &items);
                         }
                     }
+                    Purpose::ToolCommand { cmd, action, arg } => {
+                        let mut args = Args::new();
+                        args.insert("action".into(), Value::String((*action).into()));
+                        args.insert((*arg).into(), Value::String(first));
+                        editor.post(cmd, args);
+                    }
                     Purpose::ColorIndexObjects(i) => {
                         if let Some(svc) = &svc {
                             detail_objects::set_color_objects(&editor, svc, *i, &items);
@@ -406,6 +412,7 @@ impl LevelDoc {
                 open: true,
                 visible: true,
                 docked: true,
+                floating: false,
                 focused: self.viewport_focused,
                 rect: Some(px(rect, ppp)),
                 scroll_y: 0.0,
@@ -445,6 +452,8 @@ impl LevelDoc {
             let layer = ui.layer_id();
             let mut moved = None;
             let mut close = false;
+            let may_float = gz_app::floating_panels(&ctx);
+            let mut float = false;
             gz_ui::menu::menu_popup(&ctx, tab_menu_id(*panel), tab, layer, |ui| {
                 gz_app::chrome::local_submenu(ui, "Move To", Icon::None, true, |ui| {
                     for to in Slot::ALL {
@@ -456,6 +465,12 @@ impl LevelDoc {
                             moved = Some(to);
                         }
                     }
+                    if may_float {
+                        ui.separator();
+                        if menu_item(ui, "Own Window", MenuItem::default()) {
+                            float = true;
+                        }
+                    }
                 });
                 ui.separator();
                 if menu_item(ui, "Close", MenuItem { icon: Icon::Close, ..MenuItem::default() }) {
@@ -464,6 +479,29 @@ impl LevelDoc {
             });
             if let Some(to) = moved {
                 self.layout_mut(&ctx).move_panel(*panel, to);
+            }
+            // dragged out: a press on the tab let go outside the editor's window
+            if may_float {
+                let (pressed_here, released_at, inner) = ctx.input(|i| {
+                    let press = i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|at| tab.contains(at));
+                    let release = if i.pointer.primary_released() { i.pointer.latest_pos() } else { None };
+                    (press, release, i.viewport().inner_rect)
+                });
+                let drag = Id::unique(("gz-ui-level.tab_drag", panel.id()));
+                if pressed_here {
+                    ctx.data_mut(|d| d.insert_temp(drag, true));
+                }
+                if let Some(at) = released_at
+                    && ctx.data_mut(|d| d.remove_temp::<bool>(drag)).unwrap_or(false)
+                    && !ctx.content_rect().contains(at)
+                {
+                    float = true;
+                    let origin = inner.map_or(egui::Pos2::ZERO, |r| r.min);
+                    self.layout_mut(&ctx).float_panel(*panel, Some([origin.x + at.x, origin.y + at.y]));
+                }
+            }
+            if float && !self.layout.as_ref().is_some_and(|l| l.is_floating(*panel)) {
+                self.layout_mut(&ctx).float_panel(*panel, None);
             }
             if close {
                 self.layout_mut(&ctx).close_panel(*panel);
@@ -487,6 +525,7 @@ impl LevelDoc {
                 open: true,
                 visible,
                 docked: true,
+                floating: false,
                 focused: self.focused == Some(*panel),
                 rect: None,
                 scroll_y: 0.0,
@@ -499,6 +538,46 @@ impl LevelDoc {
                 audit::surface(&ctx, panel.window(), || self.draw_panel(&mut child, cx, *panel));
             }
             self.infos.insert(panel.id(), info);
+        }
+    }
+
+    /// The panels out in windows of their own: each drawn in its window, docked again when its
+    /// close is pressed, its place kept.
+    fn draw_floating(&mut self, cx: &mut DocCx<'_>) {
+        let ctx = cx.ctx.clone();
+        if !gz_app::floating_panels(&ctx) {
+            return;
+        }
+        let l = self.layout_mut(&ctx).clone();
+        for p in l.floating_panels() {
+            let stood = l.float_rect.get(p.index()).copied().flatten();
+            let window = p.window();
+            let f = dock::floating_window(&ctx, p, stood, |ui| {
+                audit::surface(&ctx, window, || self.draw_panel(ui, cx, p));
+            });
+            if f.closed {
+                self.layout_mut(&ctx).dock_panel(p);
+                continue;
+            }
+            // the place is kept rounded: a window moving by a fraction is not a new layout
+            if let Some(r) = f.rect.map(|r| r.map(f32::round))
+                && stood != Some(r)
+            {
+                self.layout_mut(&ctx).set_float_rect(p, r);
+            }
+            self.infos.insert(
+                p.id(),
+                PanelInfo {
+                    open: true,
+                    visible: true,
+                    docked: false,
+                    floating: true,
+                    focused: self.focused == Some(p),
+                    rect: None,
+                    scroll_y: 0.0,
+                    scroll_max_y: 0.0,
+                },
+            );
         }
     }
 
@@ -660,6 +739,7 @@ impl Document for LevelDoc {
         self.run_pending(cx);
         self.follow_mcp_chooser();
         self.draw_dock(ui, cx);
+        self.draw_floating(cx);
         if let Some(p) = self.focused.filter(|p| p.owns_keys()) {
             cx.requests.own_keys(p.id());
         }
@@ -731,6 +811,7 @@ impl Document for LevelDoc {
             pane.inactive(cx);
         }
         self.infos.clear();
+        self.draw_floating(cx);
     }
 
     fn mcp_state(&self) -> serde_json::Value {
@@ -753,7 +834,9 @@ impl Document for LevelDoc {
         let open = self.panel_open(p);
         let mut info = self.infos.get(p.id()).cloned().unwrap_or_default();
         info.open = open;
-        info.docked = self.layout.as_ref().is_some_and(|l| l.slot_of(p).is_some());
+        let floating = self.layout.as_ref().is_some_and(|l| l.is_floating(p));
+        info.docked = !floating && self.layout.as_ref().is_some_and(|l| l.slot_of(p).is_some());
+        info.floating = floating && open;
         if !open {
             info.visible = false;
             info.rect = None;
@@ -774,6 +857,17 @@ impl Document for LevelDoc {
         match op {
             PanelOp::Close => self.layout_mut(cx.ctx).close_panel(p),
             PanelOp::Toggle if self.panel_open(p) => self.layout_mut(cx.ctx).close_panel(p),
+            PanelOp::Float => {
+                if !gz_app::floating_panels(cx.ctx) {
+                    return false;
+                }
+                self.layout_mut(cx.ctx).float_panel(p, None);
+                cx.ctx.request_repaint();
+            }
+            PanelOp::Dock => {
+                self.layout_mut(cx.ctx).dock_panel(p);
+                self.maximized = false;
+            }
             _ => self.open_panel(cx.ctx, p),
         }
         true

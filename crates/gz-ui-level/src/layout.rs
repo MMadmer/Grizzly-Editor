@@ -9,6 +9,9 @@
 //! What persists goes into the kit's layout store (`level.*` keys), which the editor's
 //! settings file keeps: the sizes (the splitters' keys), and per panel its slot and whether it
 //! is open, per slot the tab in front, the class the layout was built for and the custom flag.
+//! A panel moved out into a window of its own (Preferences > General > Allow Panels Outside the
+//! Window) keeps its slot to come back to; whether it is out and where its window stood (pt, the
+//! screen's) are `level.float.<panel>` and `level.float.<panel>.x` / `.y` / `.w` / `.h`.
 
 use egui::Context;
 use gz_ui::layout as store;
@@ -232,6 +235,10 @@ pub struct DockLayout {
     pub open: [bool; 6],
     /// The tab in front of each slot.
     pub front: [Option<PanelId>; 4],
+    /// Out in a window of its own.
+    pub floating: [bool; 6],
+    /// Where its window stood: x, y, w, h in pt of the screen.
+    pub float_rect: [Option<[f32; 4]>; 6],
 }
 
 impl DockLayout {
@@ -266,6 +273,50 @@ impl DockLayout {
                 Some(PanelId::Details),
                 if wide { Some(PanelId::ContentBrowser) } else { None },
             ],
+            floating: [false; 6],
+            float_rect: before.map_or([None; 6], |b| b.float_rect),
+        }
+    }
+
+    #[must_use]
+    pub fn is_floating(&self, p: PanelId) -> bool {
+        self.floating.get(p.index()).copied().unwrap_or(false)
+    }
+
+    /// The open panels out in windows of their own.
+    #[must_use]
+    pub fn floating_panels(&self) -> Vec<PanelId> {
+        PanelId::ALL.into_iter().filter(|p| self.is_open(*p) && self.is_floating(*p)).collect()
+    }
+
+    /// Moves a panel out into a window of its own (`at`: where, pt of the screen; else where it
+    /// stood last).
+    pub fn float_panel(&mut self, p: PanelId, at: Option<[f32; 2]>) {
+        if let Some(o) = self.open.get_mut(p.index()) {
+            *o = true;
+        }
+        if let Some(f) = self.floating.get_mut(p.index()) {
+            *f = true;
+        }
+        if let (Some([x, y]), Some(r)) = (at, self.float_rect.get_mut(p.index())) {
+            let (w, h) = r.map_or_else(|| (p.min_size().0 + 80.0, p.min_size().1 + 200.0), |r| (r[2], r[3]));
+            *r = Some([x, y, w, h]);
+        }
+        self.custom = true;
+    }
+
+    /// Brings a panel back into its slot, in front there.
+    pub fn dock_panel(&mut self, p: PanelId) {
+        if let Some(f) = self.floating.get_mut(p.index()) {
+            *f = false;
+        }
+        self.open_panel(p);
+    }
+
+    /// Where a floating panel's window stands now (pt of the screen).
+    pub fn set_float_rect(&mut self, p: PanelId, r: [f32; 4]) {
+        if let Some(slot) = self.float_rect.get_mut(p.index()) {
+            *slot = Some(r);
         }
     }
 
@@ -282,7 +333,10 @@ impl DockLayout {
     /// The open panels of a slot, in their order.
     #[must_use]
     pub fn panels_in(&self, s: Slot) -> Vec<PanelId> {
-        PanelId::ALL.into_iter().filter(|p| self.is_open(*p) && self.slot_of(*p) == Some(s)).collect()
+        PanelId::ALL
+            .into_iter()
+            .filter(|p| self.is_open(*p) && !self.is_floating(*p) && self.slot_of(*p) == Some(s))
+            .collect()
     }
 
     /// Whether the slot is drawn: it holds an open panel, and the strip under the viewport only
@@ -346,7 +400,7 @@ impl DockLayout {
     #[must_use]
     pub fn placement_is_built(&self) -> bool {
         let built = DockLayout::built(self.class, None);
-        built.slot == self.slot
+        built.slot == self.slot && !self.floating.iter().any(|f| *f)
     }
 
     /// Reads the layout from the store; `None` when none was saved (or it is broken).
@@ -370,6 +424,19 @@ impl DockLayout {
                 out.front[s.index()] = usize::try_from(v - 1).ok().and_then(|i| PanelId::ALL.get(i).copied());
             }
         }
+        // panels stay in the window while they may not leave it
+        let may_float = gz_app::floating_panels(ctx);
+        for p in PanelId::ALL {
+            let i = p.index();
+            out.floating[i] = may_float && store::get(ctx, &float_key(p), 0.0) >= 0.5;
+            let part = |k: &str| {
+                let key = format!("{}.{k}", float_key(p));
+                store::has(ctx, &key).then(|| store::get(ctx, &key, 0.0))
+            };
+            if let (Some(x), Some(y), Some(w), Some(h)) = (part("x"), part("y"), part("w"), part("h")) {
+                out.float_rect[i] = Some([x, y, w, h]);
+            }
+        }
         Some(out)
     }
 
@@ -388,6 +455,17 @@ impl DockLayout {
                 self.front.get(s.index()).copied().flatten().map_or(0.0, |p| (p.index() + 1) as f32),
             );
         }
+        for p in PanelId::ALL {
+            let i = p.index();
+            if self.is_floating(p) || store::has(ctx, &float_key(p)) {
+                set_if(ctx, &float_key(p), if self.is_floating(p) { 1.0 } else { 0.0 });
+            }
+            if let Some(Some(r)) = self.float_rect.get(i) {
+                for (k, v) in ["x", "y", "w", "h"].iter().zip(r) {
+                    set_if(ctx, &format!("{}.{k}", float_key(p)), v.round());
+                }
+            }
+        }
     }
 }
 
@@ -403,6 +481,10 @@ fn slot_key(p: PanelId) -> String {
 
 fn open_key(p: PanelId) -> String {
     format!("level.open.{}", p.id())
+}
+
+fn float_key(p: PanelId) -> String {
+    format!("level.float.{}", p.id())
 }
 
 fn front_key(s: Slot) -> String {
@@ -479,6 +561,19 @@ mod tests {
         assert!(l.custom);
         assert_eq!(l.front_of(Slot::Left), Some(PanelId::OutputLog));
         assert!(!l.placement_is_built());
+    }
+
+    #[test]
+    fn a_floating_panel_leaves_its_slot_and_comes_back() {
+        let mut l = DockLayout::built(SizeClass::Wide, None);
+        l.float_panel(PanelId::Details, Some([100.0, 50.0]));
+        assert!(l.is_floating(PanelId::Details));
+        assert_eq!(l.panels_in(Slot::RightBottom), vec![PanelId::LevelSettings]);
+        assert_eq!(l.floating_panels(), vec![PanelId::Details]);
+        assert!(!l.placement_is_built());
+        l.dock_panel(PanelId::Details);
+        assert_eq!(l.front_of(Slot::RightBottom), Some(PanelId::Details));
+        assert!(l.float_rect[PanelId::Details.index()].is_some());
     }
 
     #[test]

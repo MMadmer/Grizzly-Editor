@@ -84,11 +84,13 @@ pub struct TextureDoc {
     gpu: Option<egui_wgpu::RenderState>,
     /// The level on show, sampled linear and nearest; made again when the level changes.
     draws: Option<(u32, Arc<ImageDraw>, Arc<ImageDraw>)>,
+    /// The Reload Textures generation the file was read at.
+    reload_seen: u64,
 }
 
 impl TextureDoc {
     #[must_use]
-    pub fn new(_editor: &Arc<Editor>, name: String, source: TexSource, load: Pending<TexFile>) -> Self {
+    pub fn new(editor: &Arc<Editor>, name: String, source: TexSource, load: Pending<TexFile>) -> Self {
         Self {
             name,
             source,
@@ -103,6 +105,7 @@ impl TextureDoc {
             drawn_frame: None,
             gpu: None,
             draws: None,
+            reload_seen: gz_app::gpu::TextureReload::generation(editor),
         }
     }
 
@@ -531,6 +534,13 @@ impl Document for TextureDoc {
         self.drawn_frame = Some(frame);
         if self.gpu.is_none() {
             self.gpu = Some(cx.gpu.clone());
+        }
+        // Libraries > Reload Textures: the file is read again
+        let reload = gz_app::gpu::TextureReload::generation(cx.editor);
+        if reload != self.reload_seen {
+            self.reload_seen = reload;
+            self.load = Pending::spawn(&cx.editor.exec, load(cx.editor.clone(), self.name.clone(), self.source));
+            self.draws = None;
         }
         let full = ui.max_rect();
         let (canvas, details) = if self.show_details {

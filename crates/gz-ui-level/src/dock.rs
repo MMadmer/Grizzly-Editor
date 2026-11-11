@@ -168,6 +168,53 @@ pub fn front(layout: &DockLayout, s: Slot) -> Option<PanelId> {
     layout.front_of(s)
 }
 
+/// What a panel's own window came to this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Floated {
+    /// Its window's close was pressed: the panel goes back into its slot.
+    pub closed: bool,
+    /// Where the window stands: x, y, w, h in pt of the screen.
+    pub rect: Option<[f32; 4]>,
+}
+
+/// A panel in a native window of its own (`ImGuiWindowFlags` of a dragged-out dock node):
+/// egui's immediate viewport, titled with the panel's name, where it stood last, at least the
+/// panel's minimum size. `body` draws into it.
+pub fn floating_window(
+    ctx: &Context,
+    panel: PanelId,
+    stood: Option<[f32; 4]>,
+    body: impl FnMut(&mut Ui),
+) -> Floated {
+    let (min_w, min_h) = panel.min_size();
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(panel.label())
+        .with_min_inner_size([min_w, min_h + STRIP])
+        .with_inner_size([min_w + 80.0, min_h + 200.0]);
+    if let Some([x, y, w, h]) = stood {
+        builder = builder.with_position([x, y]).with_inner_size([w.max(min_w), h.max(min_h)]);
+    }
+    let id = egui::ViewportId::from_hash_of(("gz-ui-level.float", panel.id()));
+    let mut body = body;
+    ctx.show_viewport_immediate(id, builder, |ui, _class| {
+        let mut out = Floated::default();
+        let (close, inner) = ui.input(|i| (i.viewport().close_requested(), i.viewport().inner_rect));
+        out.closed = close;
+        out.rect = inner.map(|r| [r.min.x, r.min.y, r.width(), r.height()]);
+        let full = ui.max_rect();
+        let p = gz_ui::palette(ui.ctx());
+        ui.painter().rect_filled(full, egui::CornerRadius::ZERO, p.base);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("gz-ui-level.float.body", panel.id()))
+                .max_rect(full.shrink(8.0))
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        body(&mut child);
+        out
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

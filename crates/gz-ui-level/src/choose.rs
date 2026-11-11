@@ -27,6 +27,8 @@ pub enum Purpose {
     DetailObjects,
     /// The objects a colour index scatters (several), by the index's position.
     ColorIndexObjects(usize),
+    /// A tool command takes the pick as an argument (`aimap_tool action=ignore_material name=`).
+    ToolCommand { cmd: &'static str, action: &'static str, arg: &'static str },
 }
 
 /// One open chooser.

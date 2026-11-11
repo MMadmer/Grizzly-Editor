@@ -350,6 +350,11 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
             vp.sync(editor);
         }
         Act::DropToGround => editor.post("drop_objects", Args::new()),
+        // the AI map, the detail slots and the wallmarks keep their own selection
+        Act::Delete if crate::bulktools::key(editor, "delete") => {}
+        Act::DeselectAll if crate::bulktools::key(editor, "deselect_all") => {}
+        Act::SelectAll if crate::bulktools::key(editor, "select_all") => {}
+        Act::InvertSelection if crate::bulktools::key(editor, "invert_selection") => {}
         Act::Delete => scene_cmd(editor, SceneCmd::DeleteSelected),
         Act::DeselectAll => scene_cmd(editor, SceneCmd::SelectClass { class: None, select: false }),
         Act::SelectAll => {

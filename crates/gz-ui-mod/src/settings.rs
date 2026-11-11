@@ -41,6 +41,29 @@ use crate::local::{
 /// The tab's id and kind.
 pub const TAB: &str = "mod_settings";
 
+/// The scratch file a chosen picture waits in (`PendingThumbnailPath`).
+const PENDING_NAME: &str = "thumbnail_pending.dds";
+
+/// `PlaceThumbnail`: the waiting picture takes the place of `thumbnail.dds` (the read-only mark
+/// cleared; on another volume a copy).
+fn place_thumbnail(pending: &Path, target: &Path) -> Result<(), String> {
+    let cant = || format!("can't write {}", target.display());
+    if let Ok(md) = std::fs::metadata(target) {
+        let mut perms = md.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(target, perms);
+        }
+    }
+    if std::fs::rename(pending, target).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(pending, target).map_err(|_| cant())?;
+    let _ = std::fs::remove_file(pending);
+    Ok(())
+}
+
 /// Each page's icon, in [`PAGES`]' order.
 const PAGE_ICONS: [Icon; 7] =
     [Icon::Info, Icon::Globe, Icon::Mode, Icon::Relations, Icon::Exclude, Icon::PdaInterface, Icon::Terminal];
@@ -74,7 +97,11 @@ struct Inbox {
     picture: Option<(String, Option<ColorImage>)>,
     picture_chosen: Option<String>,
     picture_done: Option<Result<(), String>>,
+    /// A picture made into the scratch `thumbnail_pending.dds`: its path, or why not.
+    picture_pending: Option<Result<String, String>>,
     saved: Option<Result<(), String>>,
+    /// The footer's Save was pressed.
+    save_asked: bool,
     updates_yes: bool,
     service_ready: bool,
 }
@@ -92,6 +119,12 @@ struct PictureView {
     making: bool,
     /// Moves when a picture was made: the file of the same name is read again.
     made: u64,
+    /// The picture chosen and made into `temp\thumbnail_pending.dds`: it takes the place of
+    /// `thumbnail.dds` when the tab is saved (`s_ThumbPending`).
+    pending: Option<String>,
+    /// Remove was pressed: the manifest stops naming the picture when the tab is saved, and the
+    /// editor's own `thumbnail.dds` goes with it (`s_ThumbRemove`).
+    remove: bool,
 }
 
 /// What a page asks of the shell once it is drawn.
@@ -102,6 +135,7 @@ enum Action {
     ReadScripts,
     ChoosePicture,
     RemovePicture,
+    KeepPicture,
 }
 
 /// The Mod Settings tab.
@@ -260,6 +294,8 @@ impl ModSettingsDoc {
         inbox.service_ready = false;
         let chosen = inbox.picture_chosen.take();
         let done = inbox.picture_done.take();
+        let pending = inbox.picture_pending.take();
+        let save_asked = std::mem::take(&mut inbox.save_asked);
         let saved = inbox.saved.take();
         let picture = if ctx.is_some() { inbox.picture.take() } else { None };
         drop(inbox);
@@ -275,13 +311,29 @@ impl ModSettingsDoc {
             self.set_picture(&path);
         }
         if let Some(result) = done {
-            self.picture.making = false;
             self.picture.made += 1;
             self.aux.picture_error = result.err().unwrap_or_default();
             self.aux_gen += 1;
         }
+        if let Some(result) = pending {
+            self.picture.making = false;
+            self.picture.made += 1;
+            match result {
+                Ok(path) => {
+                    self.picture.pending = Some(path);
+                    self.picture.remove = false;
+                    self.aux.picture_error.clear();
+                }
+                Err(e) if e.is_empty() => {}
+                Err(e) => self.aux.picture_error = e,
+            }
+            self.aux_gen += 1;
+        }
         if let Some(result) = saved {
             self.save_answered(result);
+        }
+        if save_asked && let Err(e) = self.save_now() {
+            self.status = e;
         }
     }
 
@@ -383,11 +435,12 @@ impl ModSettingsDoc {
 
     /// Reads the thumbnail for the preview when what it is of changed.
     fn want_picture(&mut self) {
-        let key = if self.thumbnail.is_empty() {
-            String::new()
-        } else {
-            format!("{}\\{}|{}", self.root, self.thumbnail, self.picture.made)
+        let shown = match (&self.picture.pending, self.picture.remove) {
+            (Some(p), _) => p.clone(),
+            (None, false) if !self.thumbnail.is_empty() => format!("{}\\{}", self.root, self.thumbnail),
+            _ => String::new(),
         };
+        let key = if shown.is_empty() { String::new() } else { format!("{shown}|{}", self.picture.made) };
         if key == self.picture.key {
             return;
         }
@@ -399,7 +452,7 @@ impl ModSettingsDoc {
             return;
         }
         self.picture.loading = true;
-        let path = format!("{}\\{}", self.root, self.thumbnail);
+        let path = shown;
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let _task = self.editor.exec.spawn(async move {
             let image = ed.exec.io(move || read_picture(Path::new(&path))).await;
@@ -408,13 +461,79 @@ impl ModSettingsDoc {
         });
     }
 
-    /// A picture the author picked becomes `thumbnail.dds` (`mod_set_manifest thumbnail=`).
+    /// A picture the author picked is made into the scratch `temp\thumbnail_pending.dds`
+    /// (`ConvertThumbnail`); nothing reaches the module before the tab is saved.
     fn set_picture(&mut self, path: &str) {
         self.picture.making = true;
-        let inbox = self.inbox.clone();
-        call::call_then(&self.editor, "mod_set_manifest", args([("thumbnail", s(path))]), move |reply, _| {
-            inbox.lock().picture_done =
-                Some(if call::ok(reply) { Ok(()) } else { Err(call::error_text(reply)) });
+        let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
+        let picture = std::path::PathBuf::from(path);
+        let temp = Path::new(&self.root).join("temp");
+        let _task = self.editor.exec.spawn(async move {
+            let made = ed
+                .exec
+                .io(move || -> Result<String, String> {
+                    let dds = gz_release::browser::make_thumbnail(&picture)?;
+                    let _ = std::fs::create_dir_all(&temp);
+                    let pending = temp.join(PENDING_NAME);
+                    gz_editor::fsx::write_atomic(&pending, &dds)
+                        .map_err(|_| format!("can't write {}", pending.display()))?;
+                    Ok(pending.display().to_string())
+                })
+                .await;
+            inbox.lock().picture_pending = Some(made);
+            call::wake_ui(&ed);
+        });
+    }
+
+    /// Remove: the picture waiting goes now (it is the editor's scratch); the module's is only
+    /// marked, and goes when the tab is saved.
+    fn remove_picture(&mut self) {
+        if let Some(p) = self.picture.pending.take() {
+            self.editor.exec.spawn_io(move || {
+                let _ = std::fs::remove_file(p);
+            });
+        }
+        self.picture.remove = !self.thumbnail.is_empty();
+        self.picture.made += 1;
+    }
+
+    /// The picture's change waits for a save.
+    fn picture_waits(&self) -> bool {
+        self.picture.pending.is_some() || self.picture.remove
+    }
+
+    /// Saves the picture's change (`SaveSettings`' thumbnail part): the waiting picture moved to
+    /// `thumbnail.dds` and named, or the removal carried out.
+    fn save_picture(&mut self) {
+        if !self.picture_waits() {
+            return;
+        }
+        let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
+        let pending = self.picture.pending.take();
+        self.picture.remove = false;
+        self.picture.making = true;
+        let root = std::path::PathBuf::from(&self.root);
+        let origin = self.editor.ui_origin();
+        let _task = self.editor.exec.spawn(async move {
+            let value = match pending {
+                Some(p) => {
+                    let target = root.join(gz_release::browser::THUMBNAIL_NAME);
+                    let placed = ed.exec.io(move || place_thumbnail(Path::new(&p), &target)).await;
+                    if let Err(e) = placed {
+                        inbox.lock().picture_pending = Some(Err(e));
+                        call::wake_ui(&ed);
+                        return;
+                    }
+                    gz_release::browser::THUMBNAIL_NAME.to_owned()
+                }
+                None => String::new(),
+            };
+            let reply = ed.call("mod_set_manifest", args([("thumbnail", s(&value))]), origin).await;
+            let mut i = inbox.lock();
+            i.picture_done = Some(if call::ok(&reply) { Ok(()) } else { Err(call::error_text(&reply)) });
+            i.picture_pending = Some(Err(String::new()));
+            drop(i);
+            call::wake_ui(&ed);
         });
     }
 
@@ -436,7 +555,7 @@ impl ModSettingsDoc {
     /// The tab holds edits `mod.ltx` does not have yet.
     #[must_use]
     pub fn dirty(&self) -> bool {
-        self.form != self.base
+        self.form != self.base || self.picture_waits()
     }
 
     /// Opens a page; what its pickers and checks read is read now (`kSettingsPages` click).
@@ -466,6 +585,8 @@ impl ModSettingsDoc {
             let label = PAGES.get(first.page).map_or("", |p| p.label);
             return Err(format!("{label}: {}", first.text));
         }
+        // the picture goes with an explicit save only: the fields save as they are edited
+        self.save_picture();
         if self.saving.is_some() {
             return Ok(());
         }
@@ -530,7 +651,7 @@ impl ModSettingsDoc {
 
     /// Saves once nothing is being typed in and nothing blocks (`DrawSettingsBody`).
     fn save_when_idle(&mut self, ctx: &egui::Context) {
-        if !self.dirty() || self.saving.is_some() || self.failed.as_ref() == Some(&self.form) {
+        if self.form == self.base || self.saving.is_some() || self.failed.as_ref() == Some(&self.form) {
             return;
         }
         if ctx.egui_wants_keyboard_input()
@@ -699,8 +820,21 @@ impl ModSettingsDoc {
                             ui.add_space(12.0);
                             ui.vertical(|ui| {
                                 let p = palette(ui.ctx());
+                                let own = thumbnail.eq_ignore_ascii_case(gz_release::browser::THUMBNAIL_NAME);
                                 if picture.making {
                                     gz_ui::state::busy_line(ui, "Making thumbnail.dds...");
+                                } else if picture.pending.is_some() {
+                                    let _ = text::prose(ui, if own || thumbnail.is_empty() {
+                                        "A new picture: it becomes thumbnail.dds when you save."
+                                    } else {
+                                        "A new picture: it is saved as thumbnail.dds."
+                                    });
+                                } else if picture.remove {
+                                    let _ = text::prose(ui, if own {
+                                        "thumbnail.dds is deleted for good when you save."
+                                    } else {
+                                        "The manifest stops naming it when you save; the file stays."
+                                    });
                                 } else if thumbnail.is_empty() {
                                     let _ = text::prose(ui, "No picture: the Mods window shows the first letter of the name.");
                                 } else {
@@ -715,8 +849,13 @@ impl ModSettingsDoc {
                                     if Button::new("Choose Picture...").enabled(!picking && !picture.making, why).show(ui).clicked() {
                                         actions.push(Action::ChoosePicture);
                                     }
-                                    if !thumbnail.is_empty() && Button::new("Remove").kind(Kind::Ghost).enabled(!picture.making, why).show(ui).clicked() {
-                                        actions.push(Action::RemovePicture);
+                                    let has_picture = picture.pending.is_some() || (!picture.remove && !thumbnail.is_empty());
+                                    if has_picture {
+                                        if Button::new("Remove").kind(Kind::Ghost).enabled(!picture.making, why).show(ui).clicked() {
+                                            actions.push(Action::RemovePicture);
+                                        }
+                                    } else if picture.remove && Button::new("Keep Picture").kind(Kind::Ghost).show(ui).clicked() {
+                                        actions.push(Action::KeepPicture);
                                     }
                                 });
                             });
@@ -1194,7 +1333,11 @@ impl ModSettingsDoc {
                         },
                     );
                 }
-                Action::RemovePicture => self.set_picture(""),
+                Action::RemovePicture => self.remove_picture(),
+                Action::KeepPicture => {
+                    self.picture.remove = false;
+                    self.picture.made += 1;
+                }
             }
         }
     }
@@ -1209,6 +1352,9 @@ impl ModSettingsDoc {
             }
             None if !self.status.is_empty() => (self.status.clone(), Tone::Error),
             None if !self.exists => ("No mod.ltx yet: the first edit makes it.".to_owned(), Tone::Muted),
+            None if self.picture_waits() => {
+                ("The picture waits for Save; the rest is saved as you edit".to_owned(), Tone::Warning)
+            }
             None => ("Saved to mod.ltx as you edit".to_owned(), Tone::Muted),
         };
         let r = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 4.0), rect.max);
@@ -1221,6 +1367,20 @@ impl ModSettingsDoc {
         let mut tb = gz_ui::Toolbar::begin(&mut child, "mod_settings_footer", gz_ui::ToolbarStyle::Row);
         tb.group(1);
         tb.status(&status, tone);
+        if self.picture_waits() {
+            tb.group(2);
+            if tb.action(
+                "save",
+                Icon::Save,
+                "Save",
+                "Save the picture into the module (Ctrl+S)",
+                !self.picture.making,
+                false,
+                Kind::Primary,
+            ) {
+                self.inbox.lock().save_asked = true;
+            }
+        }
         tb.end();
     }
 }
@@ -1314,6 +1474,13 @@ impl Document for ModSettingsDoc {
     }
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {
+        if let Some(p) = self.picture.pending.take() {
+            self.editor.exec.spawn_io(move || {
+                let _ = std::fs::remove_file(p);
+            });
+        }
+        self.picture.remove = false;
+        self.picture.made += 1;
         self.form = self.base.clone();
         self.failed = None;
         self.status.clear();

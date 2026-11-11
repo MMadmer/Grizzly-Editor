@@ -58,6 +58,14 @@
 //! geometry (portals from the sectors' faces, a sector's volume, the level bound) and the commands
 //! `sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`.
 //!
+//! # The AI map, detail objects and wallmark tools ([`bulk`])
+//!
+//! Their panels' switches ([`bulk::BulkToolState`] in [`ToolSettings::bulk`]), their edits
+//! ([`SceneCmd::Bulk`], one undo step each, computed from snapshots): the AI map's generation over
+//! the snap objects' collision model, the brush, the link edits, smoothing and selection; the
+//! detail slots from the base texture; wallmarks laid on the geometry - and the commands
+//! `aimap_tool`, `details_tool`, `wallmark_tool`.
+//!
 //! # Registration
 //!
 //! [`register`] adds `open_scene`, `save_scene`, `scene_info`, `scene_stats`, `scene_tree`,
@@ -72,6 +80,7 @@
 #![forbid(unsafe_code)]
 
 pub mod apply;
+pub mod bulk;
 pub mod class;
 mod cmd;
 pub mod game;

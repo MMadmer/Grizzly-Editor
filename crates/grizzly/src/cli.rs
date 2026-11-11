@@ -22,6 +22,10 @@ pub struct Cli {
     pub iconsheet: bool,
     /// `-dump_commands`: print every registered command with its area and exit.
     pub dump_commands: bool,
+    /// `-uiscale <f>`: the UI at a fixed scale (0.5..4), whatever the monitor says.
+    pub ui_scale: Option<f32>,
+    /// `-uiscale` was given a value outside 0.5..4 or none (`CommandLineScale`'s message).
+    pub bad_ui_scale: bool,
     /// Options nobody knows: named in the log, never fatal.
     pub unknown: Vec<String>,
 }
@@ -46,6 +50,10 @@ impl Cli {
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
                 "dump_commands" => cli.dump_commands = true,
+                "uiscale" => match it.next().and_then(|v| v.trim().parse::<f32>().ok()) {
+                    Some(v) if (0.5..=4.0).contains(&v) => cli.ui_scale = Some(v),
+                    _ => cli.bad_ui_scale = true,
+                },
                 _ => cli.unknown.push(arg),
             }
         }

@@ -260,6 +260,8 @@ pub struct ModelDoc {
     gpu: Option<egui_wgpu::RenderState>,
     /// The serial of the last packet handed to the renderer.
     submitted: Arc<std::sync::atomic::AtomicU64>,
+    /// The Reload Textures generation the model's textures were loaded at.
+    reload_seen: u64,
 }
 
 impl ModelDoc {
@@ -302,6 +304,7 @@ impl ModelDoc {
             target: None,
             gpu: None,
             submitted: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            reload_seen: gz_app::gpu::TextureReload::generation(editor),
         }
     }
 
@@ -446,9 +449,20 @@ impl ModelDoc {
     /// Takes the loaded model into the renderer once.
     fn take_model(&mut self, renderer: &Arc<Renderer>) {
         let Some(data) = self.data() else { return };
+        // Libraries > Reload Textures: the same sources again drop what was loaded
+        let reload = gz_app::gpu::TextureReload::generation(&self.editor);
+        if self.uploaded == self.serial && reload != self.reload_seen {
+            self.reload_seen = reload;
+            if let Some(sources) = &data.sources {
+                renderer.assets().set_loader(Some(Arc::new(sources.clone())));
+                self.last_key = None;
+            }
+            return;
+        }
         if self.uploaded == self.serial {
             return;
         }
+        self.reload_seen = reload;
         self.uploaded = self.serial;
         self.orbit = Some(Orbit::new(&data.bounds));
         self.last_key = None;

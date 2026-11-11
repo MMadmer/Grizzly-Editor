@@ -31,6 +31,18 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, CmdEr
     Ok(out)
 }
 
+/// The jobs that were the C++ editor's blocking operations (`SProgressOperation`): a level
+/// build, a scene load, a scene tool, the texture and sound libraries' work.
+const BLOCKING_KINDS: [&str; 7] =
+    ["level_build", "scene_load", "scene_tool", "sync_textures", "sync_sounds", "texture_library", "sound_library"];
+
+/// `busy` as `AppendShotWindows` defines it (`ProgressOperationActive`): one of the operations
+/// the C++ ran as a blocking job is running while the picture is taken. They run beside the
+/// window here, so the frame is drawn as usual.
+fn busy_now(editor: &Editor) -> bool {
+    editor.jobs.snapshot().iter().any(|j| j.running() && BLOCKING_KINDS.contains(&j.kind.as_str()))
+}
+
 /// One call, always current: the request is held for the frames it asked for, then pictured.
 async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
     let link = editor
@@ -72,6 +84,8 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
     };
 
     let stamp = editor.frames.current();
+    let busy = busy_now(&editor);
+    let outside = link.outside();
     let [w, h] = image.size;
     let png = editor
         .exec
@@ -90,11 +104,9 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
         "width": w,
         "height": h,
         "active_tab": stamp.active_tab,
-        // jobs run beside the editor: no frame is ever a busy one
-        "busy": false,
+        "busy": busy,
         "dpi": (f64::from(stamp.scale) * 1000.0).round() / 1000.0,
-        // panels never leave the window: there is nothing outside the picture
-        "outside": [],
+        "outside": outside,
         "modal": modal,
         "frame": stamp.frame,
     }))

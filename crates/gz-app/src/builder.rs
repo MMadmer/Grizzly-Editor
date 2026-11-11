@@ -181,9 +181,17 @@ pub struct ShellBuilder {
     pub(crate) log_state: Option<LogStateFn>,
     pub(crate) reveal: Option<RevealFn>,
     pub(crate) reset_layout: Option<ResetLayoutFn>,
+    pub(crate) cpp: Vec<crate::cpp::CppCommand>,
 }
 
 impl ShellBuilder {
+    /// A row of the C++ command table (`list_commands`, `exec_command`): its C++ id, name,
+    /// description, sub-commands with their keys, and its action. A row of an id registered twice
+    /// keeps the later one; one whose action is not there is left out.
+    pub fn cpp_command(&mut self, command: crate::cpp::CppCommand) {
+        self.cpp.push(command);
+    }
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()

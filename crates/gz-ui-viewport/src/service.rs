@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use glam::Vec3;
@@ -69,6 +69,9 @@ pub struct ViewOpts {
     pub stats: bool,
     /// `g_SpawnHelpers`.
     pub helpers: bool,
+    /// View > Render > Quality (`m_ScreenQuality`): the render size over the pane's, 0.25..2.
+    /// A session's choice, as in the C++.
+    pub quality: f32,
 }
 
 impl Default for ViewOpts {
@@ -86,6 +89,7 @@ impl Default for ViewOpts {
             safe_rect: false,
             stats: false,
             helpers: true,
+            quality: 1.0,
         }
     }
 }
@@ -347,6 +351,8 @@ struct BuildKey {
     library: Rev,
     view: u64,
     assets: u64,
+    /// Moves on every ask while a particle system in view plays: each frame a pass.
+    anim: u64,
 }
 
 #[derive(Default)]
@@ -378,6 +384,9 @@ pub struct Viewport {
     game_data: Mutex<GameData>,
     /// The pane's own frame rate and the renderer's, for the stats pill.
     pub(crate) rates: Mutex<Rates>,
+    /// The last pass found a particle system in view playing.
+    animating: AtomicBool,
+    anim_tick: AtomicU64,
 }
 
 /// Frames per second, measured over about half a second.
@@ -425,7 +434,16 @@ impl Viewport {
             loader_key: Mutex::new(None),
             game_data: Mutex::new(GameData::default()),
             rates: Mutex::new(Rates::default()),
+            animating: AtomicBool::new(false),
+            anim_tick: AtomicU64::new(0),
         })
+    }
+
+    /// Whether the last pass found a particle system in view playing (`frame_pacing`'s
+    /// `realtime_render`).
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.animating.load(Ordering::Acquire)
     }
 
     /// Changes the view state: the next scene pass draws it.
@@ -497,6 +515,7 @@ impl Viewport {
         }
         self.sync_loader(editor);
         self.sync_scene_camera(editor);
+        self.sync_render(editor);
     }
 
     fn sync_loader(&self, editor: &Arc<Editor>) {
@@ -661,11 +680,14 @@ impl Viewport {
             None => (Rev::ZERO, Rev::ZERO),
         };
         let stale = self.build.lock().packet.as_ref().is_some_and(|p| p.waiting_on_assets());
+        // View > Real Time draws every frame too
+        let anim = if self.animating.load(Ordering::Acquire) || real_time(editor) { self.anim_tick.fetch_add(1, Ordering::AcqRel) + 1 } else { 0 };
         BuildKey {
             scene,
             library,
             view: self.rev(),
             assets: if stale { renderer.assets().generation() } else { 0 },
+            anim,
         }
     }
 
@@ -700,11 +722,17 @@ impl Viewport {
         };
         let st = self.read(Clone::clone);
         let assets = renderer.assets().clone();
+        let parts = crate::draw_particles::Particles::of(editor);
+        let extras = crate::draw_extra::Extras::of(editor);
+        // the particle library is read only for a scene that has particle systems
+        let has_particles = snap.as_ref().is_some_and(|s| s.state.count(ObjClass::Particles) > 0);
+        let particles = if has_particles { parts.library(editor).await } else { None };
         let built = editor
             .exec
             .cpu(move || {
                 let cam = st.nav.camera();
-                let size = st.size;
+                // Quality scales the render size; the picture of the project keeps the pane's
+                let size = if preview { st.size } else { scaled(st.size, st.view.quality) };
                 let mut view = View::new(cam, size);
                 view.background = st.background;
                 view.mode = if st.view.fill != Fill::Solid {
@@ -761,7 +789,26 @@ impl Viewport {
                     None
                 };
                 let opts = DrawOptions { helpers: st.view.helpers && !preview, game };
-                let built = draw::build(state, library, &assets, &opts);
+                let mut built = draw::build(state, library, &assets, &opts);
+                // the editor's own lighting: the Light tool's lights switched on for the viewport
+                if view.mode == ViewMode::Lit {
+                    view.flags |= ViewFlags::SCENE_LIGHTS;
+                    built.list.lights = lighting::editor_lights(state, &frustum);
+                }
+                let animating = crate::draw_extra::extend(
+                    &extras,
+                    &parts,
+                    &crate::draw_extra::Input {
+                        state,
+                        lib: library,
+                        pick: pick.as_deref(),
+                        assets: &assets,
+                        camera: &cam,
+                        size,
+                        particles,
+                    },
+                    &mut built,
+                );
                 let packet = match &pick {
                     Some(pick) => {
                         let reach = draw::frustum_reach(&vp_m);
@@ -771,10 +818,11 @@ impl Viewport {
                     None => gz_render::build_packet(&built.list, &view, &assets),
                 };
                 let anchor = Anchor::of(&draw::gizmo_points(state, library, state.tools.target));
-                (Arc::new(packet), anchor, roof, baked, gathered)
+                (Arc::new(packet), anchor, roof, baked, gathered, animating)
             })
             .await;
-        let (packet, anchor, roof, baked, gathered) = built;
+        let (packet, anchor, roof, baked, gathered, animating) = built;
+        self.animating.store(animating, Ordering::Release);
         let log_bake = baked.map(|(ms, count)| (ms, count, roof.as_ref().map(|r| r.origin)));
         self.state_quiet(|s| {
             s.anchor = anchor;
@@ -1026,4 +1074,174 @@ pub fn set_place_item(editor: &Editor, class: ObjClass, name: Option<&str>) {
             s.place.remove(&class);
         }
     });
+}
+
+// ---- View > Render, Mute Sounds, Real Time; the camera other surfaces read ------------------
+
+/// The render size at a quality (`m_ScreenQuality`): at least a pixel a side.
+fn scaled(size: [u32; 2], quality: f32) -> [u32; 2] {
+    let q = if quality.is_finite() { quality.clamp(0.25, 2.0) } else { 1.0 };
+    [((size[0] as f32 * q).round() as u32).max(1), ((size[1] as f32 * q).round() as u32).max(1)]
+}
+
+/// View > Real Time (`rsRenderRealTime`), kept with the render settings: the viewport draws
+/// every frame instead of when something changed.
+pub(crate) fn real_time(editor: &Editor) -> bool {
+    gz_app::EditorSettings::of(editor).render_flag("real_time")
+}
+
+/// The Reload Textures generation the viewport last loaded at.
+#[derive(Default)]
+struct ReloadSeen(AtomicU64);
+
+/// The qualities View > Render > Quality offers.
+pub const QUALITIES: [(f32, &str); 4] = [(0.25, "25%"), (0.5, "50%"), (1.0, "100%"), (2.0, "200%")];
+
+impl Viewport {
+    /// Fills the camera slot quests read, once; asks for the next frame while Real Time is on.
+    fn sync_render(&self, editor: &Arc<Editor>) {
+        let cam = gz_editor::ViewCamera::of(editor);
+        if !cam.filled() {
+            let weak = Arc::downgrade(editor);
+            cam.provide(move || {
+                let ed = weak.upgrade()?;
+                let vp = ed.services.get::<Viewport>()?;
+                let position = vp.read(|s| s.nav.position.to_array());
+                let level = SceneService::of_opt(&ed)
+                    .map(|s| s.store.snapshot())
+                    .filter(|s| s.valid)
+                    .map(|s| s.meta.name())
+                    .filter(|n| !n.is_empty());
+                Some(gz_editor::CameraPose { position, level })
+            });
+        }
+        // Libraries > Reload Textures: a new loader of the same sources drops what was loaded
+        let wanted = gz_app::gpu::TextureReload::generation(editor);
+        let seen = editor.services.get_or_init(ReloadSeen::default);
+        if seen.0.swap(wanted, Ordering::AcqRel) != wanted {
+            self.reload_assets(editor);
+        }
+        if real_time(editor)
+            && let Ok(q) = gz_app::UiQueue::of(editor)
+        {
+            let fps = gz_app::EditorSettings::of(editor).pref("active_idle_fps").unwrap_or(120.0).clamp(30.0, 240.0);
+            q.post(move |_, ctx| ctx.request_repaint_after(Duration::from_secs_f64(1.0 / fps)));
+        }
+    }
+
+    /// View > Render > Quality.
+    pub fn set_quality(&self, quality: f32) {
+        let q = QUALITIES.iter().map(|(v, _)| *v).find(|v| (v - quality).abs() < 0.01).unwrap_or(1.0);
+        self.with(|s| s.view.quality = q);
+    }
+
+    /// Libraries > Reload Textures: the renderer drops what it loaded and reads it again when
+    /// drawn (a new loader of the same sources).
+    pub fn reload_assets(&self, editor: &Editor) {
+        *self.loader_key.lock() = None;
+        self.with(|_| {});
+        editor.exec.wake().ping();
+    }
+}
+
+/// View > Mute Sounds.
+pub fn set_mute_sounds(editor: &Editor, on: bool) {
+    gz_app::gpu::Gpu::of(editor).set_mute_sounds(editor, on);
+}
+
+/// View > Real Time.
+pub fn set_real_time(editor: &Editor, on: bool) {
+    let settings = gz_app::EditorSettings::of(editor);
+    settings.set_render_flag("real_time", on);
+    settings.save_soon(editor);
+    Viewport::of(editor).with(|_| {});
+    editor.exec.wake().ping();
+}
+
+/// The render options `view_mode` takes besides the view flags: `quality` (25, 50, 100, 200 or
+/// 0.25..2), `mute_sounds`, `real_time`, `gpu` (an adapter's name; `default` or empty is the
+/// system's), `driver_hint` (auto, performance, power_saving). A bad one changes nothing.
+pub(crate) fn render_args(editor: &Arc<Editor>, a: &gz_editor::Args) -> Result<(), CmdError> {
+    use gz_editor::ArgsExt;
+    let quality = match a.f32("quality") {
+        Some(v) => {
+            let q = if v > 4.0 { v / 100.0 } else { v };
+            if !QUALITIES.iter().any(|(x, _)| (x - q).abs() < 0.01) {
+                return Err(CmdError::invalid("quality must be 25, 50, 100 or 200"));
+            }
+            Some(q)
+        }
+        None => None,
+    };
+    let hint = match a.str("driver_hint").filter(|h| !h.is_empty()) {
+        Some(h) => Some(
+            gz_app::gpu::DriverHint::parse(h)
+                .ok_or_else(|| CmdError::invalid("driver_hint must be auto, performance or power_saving"))?,
+        ),
+        None => None,
+    };
+    let gpu = gz_app::gpu::Gpu::of(editor);
+    let gpu_name = match a.text("gpu") {
+        Some(n) if n.is_empty() || n.eq_ignore_ascii_case("default") => Some(String::new()),
+        Some(n) => {
+            let known = gpu.adapters().is_none_or(|ad| ad.names.iter().any(|x| x == n));
+            if !known {
+                return Err(CmdError::invalid(format!("no adapter '{n}' (view_mode lists gpu.adapters)")));
+            }
+            Some(n.to_owned())
+        }
+        None => None,
+    };
+    if let Some(q) = quality {
+        Viewport::of(editor).set_quality(q);
+    }
+    if let Some(on) = a.bool("mute_sounds") {
+        set_mute_sounds(editor, on);
+    }
+    if let Some(on) = a.bool("real_time") {
+        set_real_time(editor, on);
+    }
+    if let Some(name) = gpu_name {
+        let settings = gz_app::EditorSettings::of(editor);
+        settings.set_gpu_adapter(&name);
+        settings.save_soon(editor);
+    }
+    if let Some(h) = hint {
+        gpu.set_hint(editor, h);
+    }
+    Ok(())
+}
+
+/// What `view_mode` answers of them.
+pub(crate) fn render_json(editor: &Arc<Editor>) -> gz_editor::Value {
+    let vp = Viewport::of(editor);
+    let settings = gz_app::EditorSettings::of(editor);
+    let gpu = gz_app::gpu::Gpu::of(editor);
+    let adapters = gpu.adapters().unwrap_or_default();
+    let quality = vp.read(|s| s.view.quality);
+    gz_editor::json!({
+        "quality": (quality * 100.0).round() as i64,
+        "mute_sounds": settings.render_flag("mute_sounds"),
+        "real_time": real_time(editor),
+        "gpu": {
+            "active": adapters.active,
+            "adapter": settings.gpu_adapter(),
+            "adapters": adapters.names,
+            "driver_hint": gpu.hint(editor).key(),
+            "note": "the adapter and the driver hint take effect after a restart",
+        },
+    })
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::scaled;
+
+    #[test]
+    fn quality_scales_the_render_size() {
+        assert_eq!(scaled([1280, 720], 0.5), [640, 360]);
+        assert_eq!(scaled([1280, 720], 2.0), [2560, 1440]);
+        assert_eq!(scaled([3, 3], 0.25), [1, 1]);
+        assert_eq!(scaled([100, 100], f32::NAN), [100, 100]);
+    }
 }

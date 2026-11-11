@@ -106,6 +106,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "property_set", property_set);
     reg.add(AREA, "property_choose", property_choose);
     crate::objtools::cmd::register(reg);
+    crate::bulk::cmd::register(reg);
 }
 
 /// Hooks the scene into the project's life and `list_assets`.
@@ -933,7 +934,8 @@ async fn snap_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     };
     svc.store.send(SceneCmd::Snap { action, use_list: a.bool("use"), pick: a.bool("pick") }, o).await?;
     let s = svc.store.snapshot();
-    let list: Vec<&str> = s.tools.snap.iter().filter_map(|id| s.get(*id)).map(|x| x.name.as_str()).collect();
+    let list: Vec<String> =
+        crate::snap::tool_list(&s).iter().filter_map(|id| s.get(*id)).map(|x| x.name.to_string()).collect();
     Ok(json!({ "use": s.tools.snap_use, "pick": s.tools.snap_pick, "objects": list }))
 }
 

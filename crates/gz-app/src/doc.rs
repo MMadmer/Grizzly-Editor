@@ -97,6 +97,10 @@ pub enum PanelOp {
     Close,
     Focus,
     Toggle,
+    /// Into a window of its own (only while panels may leave the window).
+    Float,
+    /// Back into its slot.
+    Dock,
 }
 
 /// What a panel of the Level tab says of itself, as the last frame left it.
@@ -106,6 +110,8 @@ pub struct PanelInfo {
     /// Drawn last frame, and the visible tab of its dock node.
     pub visible: bool,
     pub docked: bool,
+    /// In a window of its own, outside the editor's.
+    pub floating: bool,
     pub focused: bool,
     /// px: x, y, w, h.
     pub rect: Option<[f32; 4]>,
