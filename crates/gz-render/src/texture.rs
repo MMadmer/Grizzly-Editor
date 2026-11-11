@@ -43,12 +43,15 @@ impl TexelFormat {
     }
 }
 
-/// A texture's levels, largest first, each half the one before.
+/// A texture's levels, largest first, each half the one before; a cube map holds its six faces
+/// one after the other, each with all its levels (the order of a DDS file).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureData {
     pub width: u32,
     pub height: u32,
     pub format: TexelFormat,
+    /// 1, or 6 for a cube map (+X, -X, +Y, -Y, +Z, -Z).
+    pub layers: u32,
     pub levels: Vec<Vec<u8>>,
 }
 
@@ -74,37 +77,69 @@ impl TextureData {
         if mips {
             levels.extend(mip_chain(image, MipFilter::Box)?.into_iter().map(|l| l.rgba));
         }
-        Ok(Self { width: image.width, height: image.height, format: TexelFormat::Rgba8, levels })
+        Ok(Self { width: image.width, height: image.height, format: TexelFormat::Rgba8, layers: 1, levels })
     }
 
     /// Any picture a texture can be: a DDS (BC1-3 kept as blocks when `bc` - the device samples
-    /// them - and the sides are whole blocks; anything else decoded), TGA, PNG, JPG or BMP.
+    /// them - and the sides are whole blocks; anything else decoded; a cube map with its six
+    /// faces), TGA, PNG, JPG or BMP.
     pub fn decode(bytes: &[u8], ext: Option<&str>, bc: bool) -> Result<Self> {
         if bytes.starts_with(b"DDS ") {
             if bc && let Some(t) = dds_blocks(bytes)? {
                 return Ok(t);
             }
             let dds = read_dds(bytes)?;
-            let levels = dds.layers.into_iter().next().ok_or_else(|| invalid("the DDS holds no picture"))?;
-            let Some(top) = levels.first() else { return Err(invalid("the DDS holds no picture")) };
-            // a chain that stops short is completed: the sampler expects every level
-            let (w, h) = (top.width, top.height);
-            let whole = levels
-                .iter()
-                .enumerate()
-                .all(|(i, l)| l.width == side(w, i as u32) && l.height == side(h, i as u32));
-            if levels.len() == 1 || !whole {
-                return Self::rgba(top, true);
+            let cube = dds.info.kind == DdsKind::Cube && dds.layers.len() == 6;
+            let mut faces = Vec::with_capacity(if cube { 6 } else { 1 });
+            for levels in dds.layers.into_iter().take(if cube { 6 } else { 1 }) {
+                faces.push(Self::chain(levels)?);
             }
-            return Ok(Self {
-                width: w,
-                height: h,
-                format: TexelFormat::Rgba8,
-                levels: levels.into_iter().map(|l| l.rgba).collect(),
-            });
+            let Some(first) = faces.first() else { return Err(invalid("the DDS holds no picture")) };
+            let (width, height) = (first.width, first.height);
+            if !cube {
+                return faces.pop().ok_or_else(|| invalid("the DDS holds no picture"));
+            }
+            // the faces of a cube are one size with one chain: a short one is made whole
+            let n = first.levels.len();
+            if faces.iter().any(|f| f.width != width || f.height != height || f.levels.len() != n) {
+                return Err(invalid("the faces of the cube map differ in size"));
+            }
+            let levels = faces.into_iter().flat_map(|f| f.levels).collect();
+            return Ok(Self { width, height, format: TexelFormat::Rgba8, layers: 6, levels });
         }
         let loaded = load_image(bytes, ext)?;
         Self::rgba(&loaded.image, true)
+    }
+
+    /// One picture's levels as RGBA; a chain that stops short is completed: the sampler expects
+    /// every level.
+    fn chain(levels: Vec<Image>) -> Result<Self> {
+        let Some(top) = levels.first() else { return Err(invalid("the DDS holds no picture")) };
+        let (w, h) = (top.width, top.height);
+        let whole =
+            levels.iter().enumerate().all(|(i, l)| l.width == side(w, i as u32) && l.height == side(h, i as u32));
+        if levels.len() == 1 || !whole {
+            return Self::rgba(top, true);
+        }
+        Ok(Self {
+            width: w,
+            height: h,
+            format: TexelFormat::Rgba8,
+            layers: 1,
+            levels: levels.into_iter().map(|l| l.rgba).collect(),
+        })
+    }
+
+    /// Levels of each layer.
+    #[must_use]
+    pub fn mips(&self) -> u32 {
+        (self.levels.len() as u32) / self.layers.max(1)
+    }
+
+    /// Whether the texture is a cube map.
+    #[must_use]
+    pub fn is_cube(&self) -> bool {
+        self.layers == 6 && self.width == self.height
     }
 
     /// A checker of two colours, `cell` pixels a square.
@@ -126,7 +161,13 @@ impl TextureData {
     /// One pixel.
     #[must_use]
     pub fn solid(color: Color) -> Self {
-        Self { width: 1, height: 1, format: TexelFormat::Rgba8, levels: vec![color.0.to_vec()] }
+        Self { width: 1, height: 1, format: TexelFormat::Rgba8, layers: 1, levels: vec![color.0.to_vec()] }
+    }
+
+    /// A cube map of one colour, a pixel a face.
+    #[must_use]
+    pub fn solid_cube(color: Color) -> Self {
+        Self { width: 1, height: 1, format: TexelFormat::Rgba8, layers: 6, levels: vec![color.0.to_vec(); 6] }
     }
 
     #[must_use]
@@ -139,13 +180,25 @@ impl TextureData {
         if self.width == 0 || self.height == 0 || self.levels.is_empty() {
             return Err(invalid("the texture has no pixels"));
         }
+        if !matches!(self.layers, 1 | 6) || !(self.levels.len() as u32).is_multiple_of(self.layers) {
+            return Err(invalid(format!(
+                "a texture of {} layers cannot hold {} levels",
+                self.layers,
+                self.levels.len()
+            )));
+        }
+        if self.layers == 6 && self.width != self.height {
+            return Err(invalid("the faces of a cube map are not square"));
+        }
+        let mips = self.mips().max(1) as usize;
         if self.format.is_block() && (!self.width.is_multiple_of(4) || !self.height.is_multiple_of(4)) {
             return Err(invalid(format!(
                 "a block-compressed texture of {} x {} is not whole blocks",
                 self.width, self.height
             )));
         }
-        for (i, level) in self.levels.iter().enumerate() {
+        for (n, level) in self.levels.iter().enumerate() {
+            let i = n % mips;
             let (row, rows) =
                 level_layout(self.format, side(self.width, i as u32), side(self.height, i as u32));
             if level.len() != (row * rows) as usize {
@@ -174,28 +227,32 @@ fn dds_blocks(bytes: &[u8]) -> Result<Option<TextureData>> {
         DdsFormat::Dxt5 => TexelFormat::Bc3,
         _ => return Ok(None),
     };
-    if info.kind != DdsKind::Texture
-        || info.layers != 1
-        || info.depth > 1
-        || info.width % 4 != 0
-        || info.height % 4 != 0
-    {
+    let layers = match (info.kind, info.layers) {
+        (DdsKind::Texture, 1) => 1,
+        (DdsKind::Cube, 6) if info.width == info.height => 6,
+        _ => return Ok(None),
+    };
+    if info.depth > 1 || info.width % 4 != 0 || info.height % 4 != 0 {
         return Ok(None);
     }
     // the header is 128 bytes, and 20 more when the pixel format's FourCC is "DX10"
     let at = if bytes.get(84..88) == Some(b"DX10") { 148 } else { 128 };
-    let mut levels = Vec::with_capacity(info.mips.max(1) as usize);
+    let mips = info.mips.max(1);
+    let mut levels = Vec::with_capacity((mips * layers) as usize);
     let mut cursor = at;
-    for mip in 0..info.mips.max(1) {
-        let (row, rows) = level_layout(format, side(info.width, mip), side(info.height, mip));
-        let len = (row * rows) as usize;
-        let Some(data) = bytes.get(cursor..cursor + len) else {
-            return Err(invalid(format!("the DDS is cut short in level {mip}")));
-        };
-        levels.push(data.to_vec());
-        cursor += len;
+    // a cube map's faces come one after the other, each with its whole chain
+    for _ in 0..layers {
+        for mip in 0..mips {
+            let (row, rows) = level_layout(format, side(info.width, mip), side(info.height, mip));
+            let len = (row * rows) as usize;
+            let Some(data) = bytes.get(cursor..cursor + len) else {
+                return Err(invalid(format!("the DDS is cut short in level {mip}")));
+            };
+            levels.push(data.to_vec());
+            cursor += len;
+        }
     }
-    Ok(Some(TextureData { width: info.width, height: info.height, format, levels }))
+    Ok(Some(TextureData { width: info.width, height: info.height, format, layers, levels }))
 }
 
 #[cfg(test)]
@@ -239,7 +296,27 @@ mod tests {
         assert_eq!(c.levels.len(), 7);
         assert_eq!(&c.levels[0][..4], &[255, 255, 255, 255]);
         assert_eq!(&c.levels[0][8 * 4..8 * 4 + 4], &[0, 0, 0, 255]);
-        let bad = TextureData { width: 6, height: 4, format: TexelFormat::Bc1, levels: vec![vec![0; 16]] };
+        let bad = TextureData { width: 6, height: 4, format: TexelFormat::Bc1, layers: 1, levels: vec![vec![0; 16]] };
         assert!(bad.check().is_err());
+    }
+
+    #[test]
+    fn cube_maps_keep_their_faces() {
+        let c = TextureData::solid_cube(Color::WHITE);
+        c.check().unwrap();
+        assert!(c.is_cube());
+        assert_eq!(c.mips(), 1);
+        // six faces of a 4 x 4 picture with its three levels
+        let mut levels = Vec::new();
+        for _ in 0..6 {
+            levels.extend([vec![0u8; 64], vec![0u8; 16], vec![0u8; 4]]);
+        }
+        let t = TextureData { width: 4, height: 4, format: TexelFormat::Rgba8, layers: 6, levels };
+        t.check().unwrap();
+        assert_eq!(t.mips(), 3);
+        let short = TextureData { layers: 6, levels: vec![vec![0u8; 64]; 5], ..t.clone() };
+        assert!(short.check().is_err());
+        let flat = TextureData { width: 8, height: 4, ..t };
+        assert!(flat.check().is_err());
     }
 }

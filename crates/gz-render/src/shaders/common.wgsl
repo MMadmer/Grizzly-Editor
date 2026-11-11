@@ -8,7 +8,8 @@ struct Frame {
     // width, height, 1 / width, 1 / height
     viewport: vec4<f32>,
     // x: view mode (0 lit, 1 unlit, 2 wireframe, 3 game lighting), y: lights,
-    // z: flags (1 roof map, 4 orthographic), w: 1 when the selection is shown
+    // z: flags (1 roof map, 4 orthographic, 8 the editor's own lights), w: 1 when the selection
+    // is shown
     mode: vec4<u32>,
     // rgb, w = exposure
     ambient: vec4<f32>,
@@ -60,5 +61,7 @@ const MODE_GAME: u32 = 3u;
 // InstanceFlags
 const INST_SELECTED: u32 = 1u;
 const INST_NO_ID: u32 = 16u;
+const INST_SKY_TC: u32 = 32u;
+const INST_DECAL: u32 = 64u;
 const SELECTED_BIT: u32 = 0x80000000u;
 const NO_BONES: u32 = 0xffffffffu;

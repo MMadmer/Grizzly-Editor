@@ -13,15 +13,21 @@ use smol_str::SmolStr;
 use crate::assets::{Assets, MaterialHandle, MeshHandle, MeshInfo};
 use crate::camera::project;
 use crate::color::Color;
-use crate::draw_list::{DrawList, Instance, InstanceFlags, LightKind, RoofMap, Visibility};
+use crate::draw_list::{
+    DrawList, Instance, InstanceFlags, LightKind, RoofMap, Sky, SpriteAlign, SpriteBatch, SpriteCull, SpriteSize,
+    Visibility,
+};
 use crate::gpu::MeshPipe;
 use crate::helpers::{HelperGeometry, grid_lines, tessellate};
-use crate::material::{EditorMaterial, Pass};
+use crate::material::{EditorMaterial, MaterialDesc, Pass, texture_key};
 use crate::math::{Aabb, Frustum};
+use crate::mesh::MeshVertex;
 use crate::view::{View, ViewFlags, ViewMode};
 
 /// The most lights the game-lighting mode draws, nearest first (`EGameLighting::MAX_LIGHTS`).
 pub(crate) const MAX_LIGHTS: usize = 128;
+/// The directional lights the C++ editor's fixed-function emulation takes.
+const MAX_EDITOR_LIGHTS: usize = 4;
 /// The most labels a frame tests for depth.
 pub(crate) const MAX_LABEL_QUERIES: usize = 4096;
 /// Lists at least this long are culled and sorted in parallel.
@@ -81,6 +87,8 @@ pub(crate) struct Draw {
     pub material: u32,
     pub pipe: MeshPipe,
     pub instances: Range<u32>,
+    /// Vertices of [`FramePacket::dynamic`] drawn as a triangle list instead of the mesh.
+    pub dynamic: Option<Range<u32>>,
 }
 
 /// A label where the frame put it.
@@ -111,6 +119,10 @@ pub struct PacketStats {
     /// Lights whose range reaches the view, before the cut to the nearest 128.
     pub lights_in_view: usize,
     pub lights: usize,
+    /// Sprites built (particles, glows).
+    pub sprites: usize,
+    /// Copies drawn from batches (detail objects).
+    pub batched: usize,
 }
 
 /// A frame, ready to record.
@@ -121,6 +133,8 @@ pub struct FramePacket {
     pub(crate) frame: FrameUniform,
     pub(crate) clear: [f64; 4],
     pub(crate) instances: Vec<InstanceGpu>,
+    /// Geometry built for this frame alone: the sprites' quads.
+    pub(crate) dynamic: Vec<MeshVertex>,
     pub(crate) bones: Vec<[[f32; 4]; 4]>,
     pub(crate) lights: Vec<LightGpu>,
     pub(crate) meshes: Vec<MeshHandle>,
@@ -178,6 +192,18 @@ struct Item {
     sub: u32,
     depth: f32,
     instance: InstanceGpu,
+    /// A sprite batch's vertices in [`FramePacket::dynamic`].
+    dynamic: Option<(u32, u32)>,
+}
+
+/// A part of a [`crate::Batch`]: drawn with every copy of the batch.
+struct BatchPart {
+    order: u8,
+    pipe: MeshPipe,
+    material: u32,
+    mesh: u32,
+    sub: u32,
+    batch: usize,
 }
 
 /// [`build_packet_with`] with the packet's own culling.
@@ -208,19 +234,24 @@ pub fn build_packet_with(
     let eye = view.camera.position;
     let forward = view.camera.forward;
 
+    let env = if view.mode == ViewMode::GameLighting { list.environment.as_ref() } else { None };
+    let sky_def = env.and_then(|e| e.sky.as_ref());
+
     // the meshes, each once; the placeholder last
     let mut mesh_index: FxHashMap<MeshHandle, u32> = FxHashMap::default();
     let mut meshes: Vec<MeshHandle> = Vec::new();
-    for inst in &list.instances {
-        mesh_index.entry(inst.mesh).or_insert_with(|| {
-            meshes.push(inst.mesh);
+    let mut index_mesh = |h: MeshHandle| -> u32 {
+        *mesh_index.entry(h).or_insert_with(|| {
+            meshes.push(h);
             meshes.len() as u32 - 1
-        });
+        })
+    };
+    for inst in &list.instances {
+        index_mesh(inst.mesh);
     }
-    let placeholder = *mesh_index.entry(assets.placeholder()).or_insert_with(|| {
-        meshes.push(assets.placeholder());
-        meshes.len() as u32 - 1
-    });
+    let batch_meshes: Vec<u32> = list.batches.iter().map(|b| index_mesh(b.mesh)).collect();
+    let skybox = sky_def.map(|_| index_mesh(assets.skybox()));
+    let placeholder = index_mesh(assets.placeholder());
     let resolved = assets.resolve_meshes(&meshes, tick);
     let info_of = |m: u32| -> Option<&Arc<MeshInfo>> { resolved.get(m as usize).and_then(|r| r.0.as_ref()) };
 
@@ -282,7 +313,28 @@ pub fn build_packet_with(
         }
         parts.push(start..part_materials.len());
     }
+    // a batch whose mesh is not there yet draws nothing until it is
+    let batch_materials: Vec<Vec<u32>> = list
+        .batches
+        .iter()
+        .zip(&batch_meshes)
+        .map(|(b, &m)| match info_of(m) {
+            Some(info) => info.submeshes.iter().map(|sub| intern(b.material.unwrap_or(sub.material))).collect(),
+            None => {
+                waiting |= resolved.get(m as usize).is_some_and(|r| r.1);
+                Vec::new()
+            }
+        })
+        .collect();
+    let sprite_materials: Vec<u32> = list.sprites.iter().map(|b| intern(b.material)).collect();
+    let sky_material = sky_def.map(|s| intern(assets.material(sky_material(s))));
     let mat_infos = assets.resolve_materials(&materials, tick);
+    let material_info = |m: u32| {
+        mat_infos
+            .get(m as usize)
+            .copied()
+            .unwrap_or(crate::assets::MaterialInfo { kind: EditorMaterial::Opaque, two_sided: false })
+    };
 
     // instance data, poses, and the draws before grouping
     let mut bones: Vec<[[f32; 4]; 4]> = Vec::new();
@@ -308,10 +360,10 @@ pub fn build_packet_with(
         };
         let gpu = instance_gpu(&model, inst, bones_at);
         for (sub, &material) in mats.iter().enumerate() {
-            let m = mat_infos
-                .get(material as usize)
-                .copied()
-                .unwrap_or(crate::assets::MaterialInfo { kind: EditorMaterial::Opaque, two_sided: false });
+            let m = material_info(material);
+            if m.kind == EditorMaterial::Distort {
+                continue;
+            }
             let two_sided = m.two_sided || inst.flags.contains(InstanceFlags::TWO_SIDED);
             let pipe = MeshPipe::of(m.kind, two_sided, wireframe);
             let pass = if wireframe && m.kind != EditorMaterial::Sky { Pass::Opaque } else { m.kind.pass() };
@@ -323,13 +375,108 @@ pub fn build_packet_with(
                 sub: sub as u32,
                 depth: s.depth,
                 instance: gpu,
+                dynamic: None,
             };
             if pass == Pass::Blended { blended.push(item) } else { items.push(item) }
         }
     }
 
+    // the weather's sky box, round the camera
+    if let (Some(s), Some(material), Some(mesh)) = (sky_def, sky_material, skybox)
+        && info_of(mesh).is_some()
+    {
+        let q = |v: f32| ((v * 255.0).floor() as i32).clamp(0, 255) as u8;
+        let tint = Color::rgba(q(s.color.x), q(s.color.y), q(s.color.z), q(s.weight));
+        let flags = InstanceFlags::SKY_TC | InstanceFlags::NO_ID | InstanceFlags::NO_CULL;
+        let model = Mat4::from_rotation_y(s.rotation);
+        items.push(Item {
+            order: pass_order(Pass::Sky),
+            pipe: MeshPipe::Sky,
+            material,
+            mesh,
+            sub: 0,
+            depth: 0.0,
+            instance: gpu_of(&model, tint, 0, flags, NO_BONES),
+            dynamic: None,
+        });
+    }
+
+    // sprites: quads built facing this camera, one draw per batch
+    let mut dynamic: Vec<MeshVertex> = Vec::new();
+    let mut sprite_count = 0usize;
+    for (b, &material) in list.sprites.iter().zip(&sprite_materials) {
+        if (preview && b.flags.contains(InstanceFlags::HIDDEN_IN_PREVIEW))
+            || b.bounds.is_some_and(|bb| !frustum.intersects_aabb(&bb))
+        {
+            continue;
+        }
+        let m = material_info(material);
+        if m.kind == EditorMaterial::Distort {
+            continue;
+        }
+        let start = dynamic.len() as u32;
+        expand_sprites(b, view, size, &mut dynamic);
+        let end = dynamic.len() as u32;
+        if end == start {
+            continue;
+        }
+        sprite_count += b.sprites.len();
+        let depth = match (b.bounds, b.sprites.first()) {
+            (Some(bb), _) => (bb.center() - eye).dot(forward),
+            (None, Some(s)) => (s.position - eye).dot(forward),
+            (None, None) => 0.0,
+        };
+        let pass = m.kind.pass();
+        let item = Item {
+            order: pass_order(pass),
+            pipe: MeshPipe::of(m.kind, true, false),
+            material,
+            mesh: placeholder,
+            sub: 0,
+            depth,
+            instance: gpu_of(&Mat4::IDENTITY, Color::WHITE, b.id, b.flags, NO_BONES),
+            dynamic: Some((start, end)),
+        };
+        if pass == Pass::Blended { blended.push(item) } else { items.push(item) }
+    }
+
+    // batches: every copy as it comes, a draw per part
+    let mut batch_parts: Vec<BatchPart> = Vec::new();
+    let mut batch_gpu: Vec<Vec<InstanceGpu>> = Vec::with_capacity(list.batches.len());
+    let mut batched = 0usize;
+    for (bi, ((b, mats), &mesh)) in list.batches.iter().zip(&batch_materials).zip(&batch_meshes).enumerate() {
+        let shown = !(preview && b.flags.contains(InstanceFlags::HIDDEN_IN_PREVIEW)) && !b.instances.is_empty();
+        if !shown || mats.is_empty() {
+            batch_gpu.push(Vec::new());
+            continue;
+        }
+        let make = |i: &crate::draw_list::BatchInstance| gpu_of(&i.transform, i.tint, b.id, b.flags, NO_BONES);
+        batch_gpu.push(if b.instances.len() >= PARALLEL {
+            b.instances.par_iter().map(make).collect()
+        } else {
+            b.instances.iter().map(make).collect()
+        });
+        batched += b.instances.len();
+        for (sub, &material) in mats.iter().enumerate() {
+            let m = material_info(material);
+            if m.kind == EditorMaterial::Distort {
+                continue;
+            }
+            let two_sided = m.two_sided || b.flags.contains(InstanceFlags::TWO_SIDED);
+            let pass = if wireframe && m.kind != EditorMaterial::Sky { Pass::Opaque } else { m.kind.pass() };
+            batch_parts.push(BatchPart {
+                order: pass_order(pass),
+                pipe: MeshPipe::of(m.kind, two_sided, wireframe),
+                material,
+                mesh,
+                sub: sub as u32,
+                batch: bi,
+            });
+        }
+    }
+
     // opaque by state; blended back to front
-    let key = |i: &Item| (i.order, i.pipe, i.material, i.mesh, i.sub);
+    let key = |i: &Item| (i.order, i.pipe, i.material, i.mesh, i.sub, i.dynamic);
     if items.len() >= PARALLEL {
         items.par_sort_unstable_by_key(key);
     } else {
@@ -340,8 +487,10 @@ pub fn build_packet_with(
     } else {
         blended.sort_by(|a, b| b.depth.total_cmp(&a.depth));
     }
-    let mut instances: Vec<InstanceGpu> = Vec::with_capacity(items.len() + blended.len());
+    let mut instances: Vec<InstanceGpu> =
+        Vec::with_capacity(items.len() + blended.len() + batch_gpu.iter().map(Vec::len).sum::<usize>());
     let mut draws: Vec<Draw> = Vec::new();
+    let mut batch_ranges: Vec<Option<Range<u32>>> = vec![None; batch_gpu.len()];
     // the end of each pass's draws: opaque, alpha-tested, sky, blended
     let mut ends = [0usize; 4];
     for (order, set) in [(0u8, &items), (1, &items), (2, &items), (3, &blended)] {
@@ -349,11 +498,13 @@ pub fn build_packet_with(
         for it in set.iter().filter(|i| i.order == order) {
             let at = instances.len() as u32;
             instances.push(it.instance);
-            // only a run of the same draw within the pass merges
+            // only a run of the same draw within the pass merges; a sprite batch never does
             let in_pass = draws.len() > pass_start;
             match draws.last_mut() {
                 Some(d)
                     if in_pass
+                        && it.dynamic.is_none()
+                        && d.dynamic.is_none()
                         && d.instances.end == at
                         && (d.pipe, d.material, d.mesh, d.submesh)
                             == (it.pipe, it.material, it.mesh, it.sub) =>
@@ -366,8 +517,30 @@ pub fn build_packet_with(
                     material: it.material,
                     pipe: it.pipe,
                     instances: at..at + 1,
+                    dynamic: it.dynamic.map(|(a, b)| a..b),
                 }),
             }
+        }
+        for p in batch_parts.iter().filter(|p| p.order == order) {
+            let Some(slot) = batch_ranges.get_mut(p.batch) else { continue };
+            let range = match slot {
+                Some(r) => r.clone(),
+                None => {
+                    let at = instances.len() as u32;
+                    instances.extend(batch_gpu.get(p.batch).map_or(&[][..], Vec::as_slice));
+                    let r = at..instances.len() as u32;
+                    *slot = Some(r.clone());
+                    r
+                }
+            };
+            draws.push(Draw {
+                mesh: p.mesh,
+                submesh: p.sub,
+                material: p.material,
+                pipe: p.pipe,
+                instances: range,
+                dynamic: None,
+            });
         }
         if let Some(e) = ends.get_mut(order as usize) {
             *e = draws.len();
@@ -382,6 +555,9 @@ pub fn build_packet_with(
     let triangles = draws
         .iter()
         .map(|d| {
+            if let Some(r) = &d.dynamic {
+                return u64::from(r.end - r.start) / 3;
+            }
             let tris = info_of(d.mesh)
                 .and_then(|i| i.submeshes.get(d.submesh as usize))
                 .map_or(12, |s| u64::from(s.indices.end - s.indices.start) / 3);
@@ -390,13 +566,27 @@ pub fn build_packet_with(
         .sum();
 
     // lights: those that reach the view, nearest first
-    let env = if view.mode == ViewMode::GameLighting { list.environment.as_ref() } else { None };
     let mut lights: Vec<LightGpu> = Vec::new();
     let mut lights_in_view = 0;
-    if env.is_some() {
+    let editor_lights = view.mode == ViewMode::Lit && view.flags.contains(ViewFlags::SCENE_LIGHTS);
+    if editor_lights {
+        // the emulation takes the first four directional lights, in the list's order
+        for l in &list.lights {
+            let LightKind::Directional { direction, ranged } = l.kind else { continue };
+            lights_in_view += 1;
+            if lights.len() < MAX_EDITOR_LIGHTS {
+                lights.push(LightGpu {
+                    pos_range: l.position.extend(if ranged { l.range } else { f32::MAX }).to_array(),
+                    color_cos: l.color.extend(0.0).to_array(),
+                    dir: direction.try_normalize().unwrap_or(-Vec3::Y).extend(if ranged { 1.0 } else { 2.0 }).to_array(),
+                });
+            }
+        }
+    } else if env.is_some() {
         let mut near: Vec<(f32, &crate::draw_list::Light)> = list
             .lights
             .iter()
+            .filter(|l| !matches!(l.kind, LightKind::Directional { .. }))
             .filter(|l| l.range > 0.0 && frustum.intersects_sphere(l.position, l.range))
             .map(|l| (l.position.distance_squared(eye), l))
             .collect();
@@ -408,6 +598,7 @@ pub fn build_packet_with(
                 LightKind::Spot { direction, cos_half } => {
                     (direction.try_normalize().unwrap_or(Vec3::Z), cos_half.clamp(0.0, 0.9999))
                 }
+                LightKind::Directional { .. } => (Vec3::ZERO, 0.0),
             };
             LightGpu {
                 pos_range: l.position.extend(l.range).to_array(),
@@ -467,6 +658,9 @@ pub fn build_packet_with(
     if view.camera.projection.is_ortho() {
         flags |= 4;
     }
+    if editor_lights {
+        flags |= 8;
+    }
     let mut frame = FrameUniform {
         view_proj: view_proj.to_cols_array_2d(),
         view: view_m.to_cols_array_2d(),
@@ -503,6 +697,8 @@ pub fn build_packet_with(
         placeholders,
         lights_in_view,
         lights: lights.len(),
+        sprites: sprite_count,
+        batched,
     };
     FramePacket {
         view: *view,
@@ -510,6 +706,7 @@ pub fn build_packet_with(
         frame,
         clear,
         instances,
+        dynamic,
         bones,
         lights,
         meshes,
@@ -539,6 +736,10 @@ fn pass_order(p: Pass) -> u8 {
 }
 
 fn instance_gpu(model: &Mat4, inst: &Instance, bones_at: u32) -> InstanceGpu {
+    gpu_of(model, inst.tint, inst.id, inst.flags, bones_at)
+}
+
+fn gpu_of(model: &Mat4, tint: Color, id: u32, flags: InstanceFlags, bones_at: u32) -> InstanceGpu {
     let m3 = Mat3::from_mat4(*model);
     let n = if m3.determinant().abs() > 1e-12 { m3.inverse().transpose() } else { m3 };
     InstanceGpu {
@@ -548,11 +749,80 @@ fn instance_gpu(model: &Mat4, inst: &Instance, bones_at: u32) -> InstanceGpu {
             n.y_axis.extend(0.0).to_array(),
             n.z_axis.extend(0.0).to_array(),
         ],
-        color: inst.tint.to_f32(),
-        id: inst.id,
-        flags: inst.flags.bits(),
+        color: tint.to_f32(),
+        id,
+        flags: flags.bits(),
         bones_at,
         pad: 0,
+    }
+}
+
+/// The material a weather's sky is drawn with: the two cube maps.
+fn sky_material(s: &Sky) -> MaterialDesc {
+    let mut m = MaterialDesc::textured(EditorMaterial::Sky, &s.textures[0]);
+    m.detail = (!s.textures[1].is_empty()).then(|| texture_key(&s.textures[1]));
+    m
+}
+
+/// `normalize_safe`.
+fn normalize_safe(v: Vec3) -> Vec3 {
+    let m = v.length_squared();
+    if m > f32::MIN_POSITIVE { v * (1.0 / m).sqrt() } else { v }
+}
+
+/// `FillSprite` for every sprite of a batch: two triangles each, as the engine's quad index
+/// buffer winds them, facing this view's camera.
+fn expand_sprites(b: &SpriteBatch, view: &View, size: [u32; 2], out: &mut Vec<MeshVertex>) {
+    let cam = &view.camera;
+    let (up, right, fwd, eye) = (cam.up, cam.right(), cam.forward, cam.position);
+    let ortho = cam.projection.is_ortho();
+    // the picture's x scale: a glow's half size is width * radius / depth pixels
+    let p11 = cam.proj_matrix(size).x_axis.x.abs().max(1e-6);
+    out.reserve(b.sprites.len() * 6);
+    let normal = (-fwd).to_array();
+    for s in &b.sprites {
+        let depth = if ortho { 1.0 } else { (s.position - eye).dot(fwd) };
+        let half = match b.size {
+            SpriteSize::World => s.half,
+            SpriteSize::Screen => s.half * (2.0 / p11),
+            SpriteSize::ScreenFixed => s.half * (depth / p11),
+        };
+        if b.size != SpriteSize::World && depth <= 0.0 {
+            continue;
+        }
+        let (t, r) = match s.align {
+            SpriteAlign::Camera => (up, right),
+            SpriteAlign::Axes { top, right } => (top, right),
+            SpriteAlign::Along(dir) => (dir, normalize_safe(dir.cross(fwd))),
+        };
+        let (sa, ca) = s.angle.sin_cos();
+        let vr = (t * sa + r * ca) * half.x;
+        let vt = (t * ca - r * sa) * half.y;
+        let a = vt - vr;
+        let bb = vt + vr;
+        let (c, d) = (-a, -bb);
+        let p = s.position;
+        if b.cull != SpriteCull::None {
+            // (d, a, c) clockwise on the picture: its normal points at the camera
+            let to_eye = if ortho { -fwd } else { eye - (p + d) };
+            let clockwise = (a - d).cross(c - d).dot(to_eye) > 0.0;
+            if clockwise == (b.cull == SpriteCull::Clockwise) {
+                continue;
+            }
+        }
+        let [l, tp, rt, bt] = s.uv;
+        let v = |o: Vec3, u: f32, w: f32| MeshVertex {
+            position: (p + o).to_array(),
+            normal,
+            uv: [u, w],
+            uv2: [0.0; 2],
+            color: s.color.0,
+            bones: [0; 4],
+            weights: [0; 4],
+        };
+        let (vd, va, vc, vb) = (v(d, l, bt), v(a, l, tp), v(c, rt, bt), v(bb, rt, tp));
+        // the quad index buffer: 0 1 2, 3 2 1
+        out.extend_from_slice(&[vd, va, vc, vb, vc, va]);
     }
 }
 
@@ -755,5 +1025,132 @@ mod tests {
         let p = build_packet(&list, &v, &a);
         assert_eq!(p.frame.mode[0], 0);
         assert!(p.lights.is_empty());
+    }
+
+    fn sprite(at: Vec3, align: SpriteAlign) -> crate::draw_list::Sprite {
+        crate::draw_list::Sprite {
+            position: at,
+            half: Vec2::new(1.0, 0.5),
+            angle: 0.0,
+            color: Color::rgba(255, 128, 0, 200),
+            uv: [0.0, 0.25, 0.5, 0.75],
+            align,
+        }
+    }
+
+    #[test]
+    fn sprites_face_the_camera_and_cull_by_winding() {
+        let (a, ..) = setup();
+        let mat = a.material(MaterialDesc::textured(EditorMaterial::Particle, "pfx\\spark"));
+        let batch = |cull, align| SpriteBatch {
+            material: mat,
+            sprites: vec![sprite(Vec3::new(0.0, 0.0, 5.0), align)],
+            cull,
+            size: SpriteSize::World,
+            bounds: None,
+            id: 7,
+            flags: InstanceFlags::NO_ID,
+        };
+        let mut list = DrawList::new();
+        list.sprites.push(batch(SpriteCull::None, SpriteAlign::Camera));
+        let p = build_packet(&list, &view(), &a);
+        assert_eq!(p.dynamic.len(), 6);
+        assert_eq!(p.stats.sprites, 1);
+        let d = &p.draws[p.blended.clone()][0];
+        assert_eq!(d.dynamic, Some(0..6));
+        // the camera looks along +Z with Y up: d is the bottom left, a the top left, c the bottom
+        // right, b the top right; uv as the atlas frame says
+        let pos = |i: usize| Vec3::from_array(p.dynamic[i].position);
+        assert!((pos(0) - Vec3::new(-1.0, -0.5, 5.0)).abs().max_element() < 1e-5);
+        assert!((pos(1) - Vec3::new(-1.0, 0.5, 5.0)).abs().max_element() < 1e-5);
+        assert!((pos(2) - Vec3::new(1.0, -0.5, 5.0)).abs().max_element() < 1e-5);
+        assert!((pos(3) - Vec3::new(1.0, 0.5, 5.0)).abs().max_element() < 1e-5);
+        assert_eq!(p.dynamic[0].uv, [0.0, 0.75]);
+        assert_eq!(p.dynamic[3].uv, [0.5, 0.25]);
+        assert_eq!(p.dynamic[0].color, [255, 128, 0, 200]);
+        // a sprite facing the camera is clockwise: CULL_CW drops it, CULL_CCW keeps it
+        let mut list = DrawList::new();
+        list.sprites.push(batch(SpriteCull::Clockwise, SpriteAlign::Camera));
+        list.sprites.push(batch(SpriteCull::CounterClockwise, SpriteAlign::Camera));
+        let p = build_packet(&list, &view(), &a);
+        assert_eq!(p.dynamic.len(), 6);
+        // along a direction: its top is the direction
+        let mut list = DrawList::new();
+        list.sprites.push(batch(SpriteCull::None, SpriteAlign::Along(Vec3::X)));
+        let p = build_packet(&list, &view(), &a);
+        let top = Vec3::from_array(p.dynamic[1].position) - Vec3::from_array(p.dynamic[0].position);
+        assert!((top.normalize() - Vec3::X).abs().max_element() < 1e-5);
+    }
+
+    #[test]
+    fn a_glow_is_as_wide_as_the_engine_draws_it() {
+        let (a, ..) = setup();
+        let mat = a.material(MaterialDesc::textured(EditorMaterial::Additive, "glow\\glow_01"));
+        let glow = |z: f32| SpriteBatch {
+            material: mat,
+            sprites: vec![crate::draw_list::Sprite { half: Vec2::splat(0.5), ..sprite(Vec3::new(0.0, 0.0, z), SpriteAlign::Camera) }],
+            cull: SpriteCull::None,
+            size: SpriteSize::Screen,
+            bounds: None,
+            id: 0,
+            flags: InstanceFlags::NO_ID,
+        };
+        let v = view();
+        let width_px = |z: f32| {
+            let mut list = DrawList::new();
+            list.sprites.push(glow(z));
+            let p = build_packet(&list, &v, &a);
+            let vp = v.camera.view_proj(v.size);
+            let s = |i: usize| project(&vp, v.size, Vec3::from_array(p.dynamic[i].position)).unwrap();
+            s(2).x - s(0).x
+        };
+        // width * radius / depth pixels each way (CTLSprite): the camera stands at z = -10, so
+        // 2 * 800 * 0.5 / 15 across at z = 5 and a quarter of that at z = 50
+        assert!((width_px(5.0) - 800.0 / 15.0).abs() < 0.05);
+        assert!((width_px(50.0) - 800.0 / 60.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn batches_draw_every_copy_and_the_sky_its_box() {
+        let (a, boxes, ..) = setup();
+        let mut list = DrawList::new();
+        let instances: Vec<crate::draw_list::BatchInstance> = (0..3000)
+            .map(|i| crate::draw_list::BatchInstance {
+                transform: at((i % 7) as f32, (i % 50) as f32),
+                tint: Color::WHITE,
+            })
+            .collect();
+        list.batches.push(crate::draw_list::Batch {
+            mesh: boxes,
+            material: None,
+            instances,
+            bounds: Aabb::new(Vec3::ZERO, Vec3::splat(50.0)),
+            id: 0,
+            flags: InstanceFlags::NO_ID,
+        });
+        list.environment = Some(crate::draw_list::Environment {
+            sky: Some(Sky {
+                textures: ["sky\\sky_9_cube".into(), "sky\\sky_10_cube".into()],
+                color: Vec3::new(0.5, 0.25, 1.5),
+                weight: 0.5,
+                rotation: 1.0,
+            }),
+            ..crate::draw_list::Environment::default()
+        });
+        let v = View { mode: ViewMode::GameLighting, ..view() };
+        let p = build_packet(&list, &v, &a);
+        assert_eq!(p.stats.batched, 3000);
+        // one draw for all the copies, none culled
+        let d = &p.draws[p.opaque.clone()];
+        assert!(d.iter().any(|d| d.instances.len() == 3000));
+        // the sky: one draw in its pass with its colour (clamped) and blend weight
+        assert_eq!(p.sky.len(), 1);
+        let sky = &p.draws[p.sky.start];
+        let inst = &p.instances[sky.instances.start as usize];
+        assert_eq!(inst.color, Color::rgba(127, 63, 255, 127).to_f32());
+        assert_ne!(inst.flags & InstanceFlags::SKY_TC.bits(), 0);
+        // no sky outside game lighting
+        let p = build_packet(&list, &view(), &a);
+        assert!(p.sky.is_empty());
     }
 }

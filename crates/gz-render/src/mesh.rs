@@ -341,6 +341,35 @@ impl MeshData {
         Self::built(vertices, indices, material)
     }
 
+    /// `dxEnvironmentRender`'s half box: twelve corners from just under the horizon up, each
+    /// with its cube-map direction in its normal (`hbox_verts`, `hbox_faces`).
+    #[must_use]
+    pub fn sky_box() -> Self {
+        const VERTS: [([f32; 3], [f32; 3]); 12] = [
+            ([-1.0, -1.0, -1.0], [-1.0, -1.01, -1.0]),
+            ([1.0, -1.0, -1.0], [1.0, -1.01, -1.0]),
+            ([-1.0, -1.0, 1.0], [-1.0, -1.01, 1.0]),
+            ([1.0, -1.0, 1.0], [1.0, -1.01, 1.0]),
+            ([-1.0, 2.0, -1.0], [-1.0, 1.0, -1.0]),
+            ([1.0, 2.0, -1.0], [1.0, 1.0, -1.0]),
+            ([-1.0, 2.0, 1.0], [-1.0, 1.0, 1.0]),
+            ([1.0, 2.0, 1.0], [1.0, 1.0, 1.0]),
+            ([-1.0, 0.0, -1.0], [-1.0, -1.0, -1.0]),
+            ([1.0, 0.0, -1.0], [1.0, -1.0, -1.0]),
+            ([1.0, 0.0, 1.0], [1.0, -1.0, 1.0]),
+            ([-1.0, 0.0, 1.0], [-1.0, -1.0, 1.0]),
+        ];
+        const FACES: [u32; 60] = [
+            0, 2, 3, 3, 1, 0, 4, 5, 7, 7, 6, 4, 0, 1, 9, 9, 8, 0, 8, 9, 5, 5, 4, 8, 1, 3, 10, 10, 9, 1, 9, 10, 7,
+            7, 5, 9, 3, 2, 11, 11, 10, 3, 10, 11, 6, 6, 7, 10, 2, 0, 8, 8, 11, 2, 11, 8, 4, 4, 6, 11,
+        ];
+        let vertices = VERTS
+            .iter()
+            .map(|(p, tc)| MeshVertex::new(Vec3::from_array(*p), Vec3::from_array(*tc), Vec2::ZERO))
+            .collect();
+        Self::built(vertices, FACES.to_vec(), MaterialDesc::new(EditorMaterial::Sky))
+    }
+
     fn built(vertices: Vec<MeshVertex>, indices: Vec<u32>, material: MaterialDesc) -> Self {
         let bounds = Aabb::from_points(vertices.iter().map(|v| Vec3::from_array(v.position)));
         let n = indices.len() as u32;

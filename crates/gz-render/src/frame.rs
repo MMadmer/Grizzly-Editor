@@ -73,6 +73,7 @@ pub(crate) struct FrameResources {
     lights: GrowBuffer,
     helpers: GrowBuffer,
     labels: GrowBuffer,
+    dynamic: GrowBuffer,
     queries: Option<Queries>,
     roof: Option<(u64, wgpu::TextureView)>,
     bind: Option<wgpu::BindGroup>,
@@ -104,6 +105,7 @@ impl FrameResources {
             lights: GrowBuffer::new(gpu, "gz-render lights", storage),
             helpers: GrowBuffer::new(gpu, "gz-render helpers", wgpu::BufferUsages::VERTEX),
             labels: GrowBuffer::new(gpu, "gz-render label anchors", wgpu::BufferUsages::VERTEX),
+            dynamic: GrowBuffer::new(gpu, "gz-render sprites", wgpu::BufferUsages::VERTEX),
             queries: None,
             roof: None,
             bind: None,
@@ -143,6 +145,7 @@ impl FrameResources {
             bytes.extend_from_slice(bytemuck::cast_slice(part));
         }
         self.helpers.write(gpu, &bytes);
+        self.dynamic.write(gpu, bytemuck::cast_slice(&packet.dynamic));
         let mut helper_at = [0u32; 4];
         for i in 1..4 {
             helper_at[i] = helper_at[i - 1] + counts[i - 1];
@@ -199,6 +202,7 @@ impl FrameResources {
             placeholder: &placeholder,
             fallback_bind: &fallback_bind,
             helpers: &self.helpers.buffer,
+            dynamic: &self.dynamic.buffer,
             helper_at,
             helper_counts: counts,
             labels: &self.labels.buffer,
@@ -346,6 +350,7 @@ struct Ctx<'a> {
     placeholder: &'a Arc<GpuMesh>,
     fallback_bind: &'a Arc<wgpu::BindGroup>,
     helpers: &'a wgpu::Buffer,
+    dynamic: &'a wgpu::Buffer,
     helper_at: [u32; 4],
     helper_counts: [u32; 4],
     labels: &'a wgpu::Buffer,
@@ -536,6 +541,34 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
     let mut last_material = usize::MAX;
     let mut last_mesh: (usize, bool) = (0, false);
     for d in draws {
+        if let Some(range) = &d.dynamic {
+            // a sprite batch: its own vertices, no index buffer
+            let pipe = if ids {
+                let Some(p) = d.pipe.id_pipe() else { continue };
+                (d.pipe, Some(p))
+            } else {
+                (d.pipe, None)
+            };
+            if range.is_empty() || d.instances.is_empty() {
+                continue;
+            }
+            if last_pipe != Some(pipe) {
+                match pipe.1 {
+                    Some(p) => pass.set_pipeline(ctx.gpu.id(p)),
+                    None => pass.set_pipeline(ctx.gpu.mesh(pipe.0)),
+                }
+                last_pipe = Some(pipe);
+            }
+            if d.material as usize != last_material {
+                let bg = ctx.materials.get(d.material as usize).unwrap_or(ctx.fallback_bind);
+                pass.set_bind_group(1, bg.as_ref(), &[]);
+                last_material = d.material as usize;
+            }
+            pass.set_vertex_buffer(0, ctx.dynamic.slice(..));
+            last_mesh = (usize::MAX, false);
+            pass.draw(range.clone(), d.instances.clone());
+            continue;
+        }
         let (mesh, sub) = match ctx.meshes.get(d.mesh as usize) {
             Some(Some(m)) => (m, d.submesh as usize),
             _ => (ctx.placeholder, 0),

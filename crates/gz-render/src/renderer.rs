@@ -115,6 +115,14 @@ impl Renderer {
         )?;
         let checker =
             upload_texture_to(&gpu.device, &gpu.queue, gpu.bc, gpu.max_side, &checker, "gz-render checker")?;
+        let white_cube = upload_texture_to(
+            &gpu.device,
+            &gpu.queue,
+            gpu.bc,
+            gpu.max_side,
+            &TextureData::solid_cube(Color::WHITE),
+            "gz-render white cube",
+        )?;
         let asset_gpu = AssetGpu {
             device: gpu.device.clone(),
             queue: gpu.queue.clone(),
@@ -122,6 +130,7 @@ impl Renderer {
             sampler: gpu.sampler.clone(),
             white,
             checker,
+            white_cube,
             bc: gpu.bc,
             max_side: gpu.max_side,
         };

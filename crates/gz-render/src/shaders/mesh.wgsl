@@ -2,7 +2,8 @@
 
 struct Material {
     color: vec4<f32>,
-    // alpha reference, detail scale, 1 when there is a detail texture
+    // alpha reference, detail scale, 1 when there is a detail texture,
+    // 1 when the base texture is a cube map + 2 when the detail one is
     params: vec4<f32>,
 };
 
@@ -10,6 +11,8 @@ struct Material {
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var detail_tex: texture_2d<f32>;
 @group(1) @binding(3) var samp: sampler;
+@group(1) @binding(4) var base_cube: texture_cube<f32>;
+@group(1) @binding(5) var detail_cube: texture_cube<f32>;
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -57,6 +60,10 @@ fn vs_main(v: VsIn, @builtin(instance_index) ii: u32) -> VsOut {
     let nm = mat3x3<f32>(inst.n0.xyz, inst.n1.xyz, inst.n2.xyz);
     var out: VsOut;
     out.clip = frame.view_proj * world;
+    // a wallmark lies on its wall: a little nearer wins the depth test (depth is reversed)
+    if ((inst.flags & INST_DECAL) != 0u) {
+        out.clip.z = out.clip.z * 1.0005;
+    }
     out.world = world.xyz;
     out.normal = nm * n;
     out.uv = v.uv;
@@ -75,7 +82,9 @@ fn vs_sky(v: VsIn, @builtin(instance_index) ii: u32) -> VsOut {
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
     out.clip.z = 0.0;
     out.world = world;
-    out.normal = rot * v.normal;
+    // the cube-map direction: the sky box's own coordinates (they do not turn with it, as in
+    // dxEnvironmentRender), else the point's own direction
+    out.normal = select(v.position, v.normal, (inst.flags & INST_SKY_TC) != 0u);
     out.uv = v.uv;
     out.color = v.color * inst.color;
     out.inst = ii;
@@ -136,6 +145,27 @@ fn game_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return l * frame.ambient.w;
 }
 
+// calc_ffp_lighting of the C++ editor: the directional lights enabled for this point - the sun
+// always (dir.w 2), a scene light within its range (dir.w 1, SelectLightsForObject) - over no
+// ambient; with none of them the surface as it is.
+fn editor_light(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    var l = vec3<f32>(0.0);
+    var enabled = 0u;
+    let count = frame.mode.y;
+    for (var i = 0u; i < count; i = i + 1u) {
+        let lp = lights[i].pos_range;
+        if (lights[i].dir.w < 1.5 && distance(p, lp.xyz) > lp.w) {
+            continue;
+        }
+        enabled = enabled + 1u;
+        l = l + lights[i].color_cos.rgb * max(0.0, dot(n, -lights[i].dir.xyz));
+    }
+    if (enabled == 0u) {
+        return vec3<f32>(1.0);
+    }
+    return l;
+}
+
 fn shade(world: vec3<f32>, normal: vec3<f32>, front: bool) -> vec3<f32> {
     let mode = frame.mode.x;
     if (mode == MODE_UNLIT || mode == MODE_WIRE) {
@@ -148,6 +178,9 @@ fn shade(world: vec3<f32>, normal: vec3<f32>, front: bool) -> vec3<f32> {
     }
     if (mode == MODE_GAME) {
         return game_light(world, n);
+    }
+    if ((frame.mode.z & 8u) != 0u) {
+        return editor_light(world, n);
     }
     return studio(n, world);
 }
@@ -186,10 +219,18 @@ fn fs_blend(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     return vec4<f32>(fogged(c.rgb * shade(in.world, in.normal, front), in.world), c.a);
 }
 
+// D3DBLEND_ONE, D3DBLEND_ONE: the colour is added as it is, its alpha does nothing
 @fragment
 fn fs_add(in: VsOut) -> @location(0) vec4<f32> {
     let c = surface(in);
-    return vec4<f32>(c.rgb * c.a, 0.0);
+    return vec4<f32>(c.rgb, 0.0);
+}
+
+// D3DBLEND_DESTCOLOR with ZERO or SRCCOLOR: the blend multiplies what is behind by the colour
+@fragment
+fn fs_mul(in: VsOut) -> @location(0) vec4<f32> {
+    let c = surface(in);
+    return vec4<f32>(c.rgb, 1.0);
 }
 
 @fragment
@@ -212,9 +253,21 @@ fn fs_water(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<
     return vec4<f32>(fogged(c.rgb * shade(in.world, in.normal, front), in.world), c.a * 0.75);
 }
 
+// sky2.ps: the factor's colour times the two cube maps blended by its alpha; a flat sky texture
+// is drawn as it is
 @fragment
 fn fs_sky(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(surface(in).rgb, 1.0);
+    let cubes = u32(material.params.w);
+    if ((cubes & 1u) == 0u) {
+        return vec4<f32>(surface(in).rgb, 1.0);
+    }
+    let dir = safe_normalize(in.normal);
+    let s0 = textureSample(base_cube, samp, dir).rgb;
+    var s1 = s0;
+    if ((cubes & 2u) != 0u) {
+        s1 = textureSample(detail_cube, samp, dir).rgb;
+    }
+    return vec4<f32>(material.color.rgb * in.color.rgb * mix(s0, s1, in.color.a), 1.0);
 }
 
 @fragment

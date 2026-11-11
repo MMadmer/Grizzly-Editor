@@ -51,6 +51,15 @@ The format crates have no test that reads real data. Add one integration test pe
     (the game's `all.spawn`: every entity read, written, equal bytes) - parse everything; where
     the crate has a writer, write and compare bytes; a difference is a bug of the crate unless
     the C++ writer provably normalises the same thing (then the test states the rule).
+    **Known to fail today:** `gz-fmt-xr` refuses Dead Air's `particles.xr` - 50 effects (the
+    first is `atom_flame`) carry the older 20-byte `TargetColor` action; the C++ loader reads
+    both forms (`Source/XrParticles/particle_actions_collection_io.cpp`, the versions of
+    `Source/XrRender/Private/ParticleEffectDef.cpp`). Fix the reader (and the writer, which
+    must write back what it read); the viewport then plays the game's own `particles.xr`
+    (`gz-ui-viewport` falls back to the editor's bundled file and logs a note until it parses -
+    check that the note is gone).
+  - `gz-particles` - every effect and group of the game's `particles.xr` steps for a second of
+    simulated time without a panic or a NaN.
   - `gz-vfs` - the game mounts; every file an archive lists can be read; a hundred sampled
     files hash equal through the archive and (where present) loose.
   - `gz-game` - modes, communities, ranks, items, trade categories, level changers come out

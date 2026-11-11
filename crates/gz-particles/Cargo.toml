@@ -1,0 +1,16 @@
+[package]
+name = "gz-particles"
+description = "Particle systems as the editor plays them: the engine's actions, effects and groups over particles.xr, pure and deterministic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-fmt-xr.workspace = true
+glam.workspace = true
+smol_str.workspace = true

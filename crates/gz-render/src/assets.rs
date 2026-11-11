@@ -147,7 +147,10 @@ pub(crate) struct GpuMesh {
 
 pub(crate) struct GpuTexture {
     _texture: wgpu::Texture,
+    /// The picture, or a cube map's first face.
     pub view: wgpu::TextureView,
+    /// A cube map's view as a cube.
+    pub cube: Option<wgpu::TextureView>,
 }
 
 /// What a material is drawn as, for the packet builder.
@@ -165,6 +168,8 @@ pub(crate) struct AssetGpu {
     pub sampler: wgpu::Sampler,
     pub white: Arc<GpuTexture>,
     pub checker: Arc<GpuTexture>,
+    /// What a material without a cube map binds where a sky would sample one.
+    pub white_cube: Arc<GpuTexture>,
     pub bc: bool,
     pub max_side: u32,
 }
@@ -249,9 +254,11 @@ pub struct Assets {
     on_change: RwLock<Option<Arc<dyn Fn() + Send + Sync>>>,
     placeholder: MeshHandle,
     default_material: MaterialHandle,
+    skybox: MeshHandle,
 }
 
 const PLACEHOLDER: &str = "<placeholder>";
+const SKYBOX: &str = "<skybox>";
 
 impl Assets {
     /// Assets without a GPU and without loading: what tests and packet building ahead of a
@@ -292,12 +299,19 @@ impl Assets {
                 on_change: RwLock::new(None),
                 placeholder: MeshHandle(0),
                 default_material: MaterialHandle(0),
+                skybox: MeshHandle(0),
             };
             let grey = MaterialDesc::color(EditorMaterial::Opaque, Color::PLACEHOLDER);
             a.default_material = a.material(grey.clone());
             a.placeholder = a.add_mesh(PLACEHOLDER, MeshData::cube(grey));
+            a.skybox = a.add_mesh(SKYBOX, MeshData::sky_box());
             a
         })
+    }
+
+    /// The half box a weather's sky is drawn on ([`MeshData::sky_box`]).
+    pub(crate) fn skybox(&self) -> MeshHandle {
+        self.skybox
     }
 
     /// Sets where the bytes come from. Everything loaded through the previous loader is dropped
@@ -409,6 +423,26 @@ impl Assets {
             self.changed();
         }
         h
+    }
+
+    /// Lets go of a mesh handed over with [`Assets::add_mesh`]: its GPU copy goes, the handle
+    /// draws nothing until a mesh of that name is handed over again.
+    pub fn remove_mesh(&self, name: &str) {
+        {
+            let mut guard = self.inner.lock();
+            let inner = &mut *guard;
+            let Some(&id) = inner.mesh_ids.get(&MeshKey::Named(name.into())) else { return };
+            if id == self.placeholder.0 || id == self.skybox.0 {
+                return;
+            }
+            let Some(slot) = inner.meshes.get_mut(id as usize) else { return };
+            inner.mesh_bytes = inner.mesh_bytes.saturating_sub(slot.bytes);
+            slot.bytes = 0;
+            slot.state = State::Failed("removed".into());
+            slot.pinned = false;
+            slot.version += 1;
+        }
+        self.changed();
     }
 
     /// The handle of a texture by its game name; nothing loads until it is drawn.
@@ -855,9 +889,11 @@ pub(crate) fn upload_texture_to(
     if data.format.is_block() && !bc {
         return Err(invalid("the graphics device does not sample block-compressed textures"));
     }
+    let layers = data.layers.max(1);
+    let mips = data.mips().max(1);
     // a texture larger than the device takes loses its top levels
     let mut skip = 0u32;
-    while skip + 1 < data.levels.len() as u32 {
+    while skip + 1 < mips {
         let (w, h) = data.level_size(skip);
         if w.max(h) <= max_side {
             break;
@@ -872,10 +908,10 @@ pub(crate) fn upload_texture_to(
         )));
     }
     let format = data.format.wgpu();
-    let levels = data.levels.len() as u32 - skip;
+    let levels = mips - skip;
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: layers },
         mip_level_count: levels,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -883,28 +919,43 @@ pub(crate) fn upload_texture_to(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    for (mip, level) in data.levels.iter().skip(skip as usize).enumerate() {
-        let (lw, lh) = data.level_size(mip as u32 + skip);
-        let (row, rows) = level_layout(data.format, lw, lh);
-        let extent = if data.format.is_block() {
-            wgpu::Extent3d { width: lw.div_ceil(4) * 4, height: lh.div_ceil(4) * 4, depth_or_array_layers: 1 }
-        } else {
-            wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 }
-        };
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: mip as u32,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            level,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rows) },
-            extent,
-        );
+    for layer in 0..layers {
+        let chain = data.levels.iter().skip((layer * mips + skip) as usize).take(levels as usize);
+        for (mip, level) in chain.enumerate() {
+            let (lw, lh) = data.level_size(mip as u32 + skip);
+            let (row, rows) = level_layout(data.format, lw, lh);
+            let extent = if data.format.is_block() {
+                wgpu::Extent3d { width: lw.div_ceil(4) * 4, height: lh.div_ceil(4) * 4, depth_or_array_layers: 1 }
+            } else {
+                wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 }
+            };
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip as u32,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                level,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rows) },
+                extent,
+            );
+        }
     }
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    Ok(Arc::new(GpuTexture { _texture: texture, view }))
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        base_array_layer: 0,
+        array_layer_count: Some(1),
+        ..wgpu::TextureViewDescriptor::default()
+    });
+    let cube = data.is_cube().then(|| {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            array_layer_count: Some(6),
+            ..wgpu::TextureViewDescriptor::default()
+        })
+    });
+    Ok(Arc::new(GpuTexture { _texture: texture, view, cube }))
 }
 
 /// The uniform block of a material.
@@ -937,18 +988,26 @@ fn material_bind_group(gpu: &AssetGpu, inner: &mut Inner, id: u32) -> Option<Arc
     }
     let desc = m.desc.clone();
     let m = inner.materials.get_mut(id as usize)?;
-    let ubo = m.ubo.get_or_insert_with(|| {
-        let has_detail = if desc.detail.is_some() { 1.0 } else { 0.0 };
-        let block = MaterialGpu {
-            color: desc.color.to_f32(),
-            params: [desc.alpha_ref, desc.detail_scale, has_detail, 0.0],
-        };
-        gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    let has_detail = if desc.detail.is_some() { 1.0 } else { 0.0 };
+    // which of the textures are cube maps is known once they are loaded: the block follows
+    let cubes = u32::from(base.cube.is_some()) | (u32::from(detail.cube.is_some()) << 1);
+    let block = MaterialGpu {
+        color: desc.color.to_f32(),
+        params: [desc.alpha_ref, desc.detail_scale, has_detail, cubes as f32],
+    };
+    let ubo = match &m.ubo {
+        Some(u) => {
+            gpu.queue.write_buffer(u, 0, bytemuck::bytes_of(&block));
+            u
+        }
+        None => m.ubo.insert(gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("gz-render material"),
             contents: bytemuck::bytes_of(&block),
-            usage: wgpu::BufferUsages::UNIFORM,
-        })
-    });
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })),
+    };
+    let base_cube = base.cube.as_ref().or(gpu.white_cube.cube.as_ref()).unwrap_or(&gpu.white_cube.view);
+    let detail_cube = detail.cube.as_ref().or(gpu.white_cube.cube.as_ref()).unwrap_or(&gpu.white_cube.view);
     let bg = Arc::new(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("gz-render material"),
         layout: &gpu.material_layout,
@@ -957,6 +1016,8 @@ fn material_bind_group(gpu: &AssetGpu, inner: &mut Inner, id: u32) -> Option<Arc
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&base.view) },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&detail.view) },
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&gpu.sampler) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(base_cube) },
+            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(detail_cube) },
         ],
     }));
     m.bind = Some((bg.clone(), stamp));

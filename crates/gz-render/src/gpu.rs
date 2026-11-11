@@ -31,10 +31,13 @@ pub(crate) enum MeshPipe {
     Unlit,
     Unlit2s,
     Wire,
+    AlphaAdd,
+    Mul,
+    Mul2x,
 }
 
 impl MeshPipe {
-    const ALL: [MeshPipe; 16] = [
+    const ALL: [MeshPipe; 19] = [
         Self::Opaque,
         Self::Opaque2s,
         Self::Alpha,
@@ -51,6 +54,9 @@ impl MeshPipe {
         Self::Unlit,
         Self::Unlit2s,
         Self::Wire,
+        Self::AlphaAdd,
+        Self::Mul,
+        Self::Mul2x,
     ];
 
     /// The pipeline of a material; every surface's edges in the wireframe view.
@@ -71,7 +77,11 @@ impl MeshPipe {
             (EditorMaterial::Terrain, _) => Self::Terrain,
             (EditorMaterial::Water, _) => Self::Water,
             (EditorMaterial::Sky, _) => Self::Sky,
-            (EditorMaterial::Particle, _) => Self::Particle,
+            // a distortion is never drawn: the packet leaves it out
+            (EditorMaterial::Particle | EditorMaterial::Distort, _) => Self::Particle,
+            (EditorMaterial::AlphaAdd, _) => Self::AlphaAdd,
+            (EditorMaterial::Multiply, _) => Self::Mul,
+            (EditorMaterial::Multiply2x, _) => Self::Mul2x,
             (EditorMaterial::UnlitColor | EditorMaterial::SelectionOutline, false) => Self::Unlit,
             (EditorMaterial::UnlitColor | EditorMaterial::SelectionOutline, true) => Self::Unlit2s,
             (EditorMaterial::Wireframe, _) => Self::Wire,
@@ -86,7 +96,13 @@ impl MeshPipe {
             Self::Alpha => IdPipe::Alpha,
             Self::Alpha2s => IdPipe::Alpha2s,
             Self::Blend => IdPipe::Blend,
-            Self::Blend2s | Self::Add | Self::Water | Self::Particle => IdPipe::Blend2s,
+            Self::Blend2s
+            | Self::Add
+            | Self::Water
+            | Self::Particle
+            | Self::AlphaAdd
+            | Self::Mul
+            | Self::Mul2x => IdPipe::Blend2s,
             Self::Sky => return None,
         })
     }
@@ -114,6 +130,9 @@ impl MeshPipe {
             Self::Unlit => ("vs_main", "fs_unlit", back, Blend::None, true),
             Self::Unlit2s => ("vs_main", "fs_unlit", None, Blend::None, true),
             Self::Wire => ("vs_main", "fs_wire", None, Blend::None, true),
+            Self::AlphaAdd => ("vs_main", "fs_particle", None, Blend::AlphaAdd, false),
+            Self::Mul => ("vs_main", "fs_mul", None, Blend::Mul, false),
+            Self::Mul2x => ("vs_main", "fs_mul", None, Blend::Mul2x, false),
         }
     }
 }
@@ -139,6 +158,9 @@ enum Blend {
     None,
     Alpha,
     Add,
+    AlphaAdd,
+    Mul,
+    Mul2x,
 }
 
 impl Blend {
@@ -149,24 +171,20 @@ impl Blend {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
+        let color = |src_factor, dst_factor| {
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent { src_factor, dst_factor, operation: wgpu::BlendOperation::Add },
+                alpha: keep_alpha,
+            })
+        };
+        use wgpu::BlendFactor as F;
         match self {
             Self::None => None,
-            Self::Alpha => Some(wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: keep_alpha,
-            }),
-            Self::Add => Some(wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: keep_alpha,
-            }),
+            Self::Alpha => color(F::SrcAlpha, F::OneMinusSrcAlpha),
+            Self::Add => color(F::One, F::One),
+            Self::AlphaAdd => color(F::SrcAlpha, F::One),
+            Self::Mul => color(F::Dst, F::Zero),
+            Self::Mul2x => color(F::Dst, F::Src),
         }
     }
 }
@@ -211,7 +229,7 @@ pub(crate) struct Gpu {
     pub frame_layout: wgpu::BindGroupLayout,
     pub material_layout: wgpu::BindGroupLayout,
     pub id_layout: wgpu::BindGroupLayout,
-    mesh: [wgpu::RenderPipeline; 16],
+    mesh: [wgpu::RenderPipeline; 19],
     id: [wgpu::RenderPipeline; 6],
     pub line: wgpu::RenderPipeline,
     pub line_overlay: wgpu::RenderPipeline,
@@ -316,6 +334,14 @@ fn texture(sample_type: wgpu::TextureSampleType) -> wgpu::BindingType {
     }
 }
 
+fn cube() -> wgpu::BindingType {
+    wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        view_dimension: wgpu::TextureViewDimension::Cube,
+        multisampled: false,
+    }
+}
+
 impl Gpu {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         let features = device.features();
@@ -342,6 +368,9 @@ impl Gpu {
                 entry(1, texture(wgpu::TextureSampleType::Float { filterable: true })),
                 entry(2, texture(wgpu::TextureSampleType::Float { filterable: true })),
                 entry(3, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+                // the same textures as cube maps, for a sky (a white cube for a flat one)
+                entry(4, cube()),
+                entry(5, cube()),
             ],
         });
         let id_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

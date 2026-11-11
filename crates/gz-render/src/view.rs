@@ -43,6 +43,11 @@ bitflags::bitflags! {
         /// gizmo or helpers whatever the other flags say, and no instance flagged
         /// [`crate::InstanceFlags::HIDDEN_IN_PREVIEW`].
         const PREVIEW = 1 << 3;
+        /// [`ViewMode::Lit`] by the list's directional lights the way the C++ editor's
+        /// fixed-function emulation lights (`EDevice_PushFFConstants`, at most four, no
+        /// ambient), and a surface no light reaches as it is (`calc_ffp_lighting` returns 1);
+        /// without it the studio light.
+        const SCENE_LIGHTS = 1 << 4;
     }
 }
 
@@ -106,7 +111,8 @@ impl View {
     /// The same view as a picture: [`ViewFlags::PREVIEW`] alone.
     #[must_use]
     pub fn as_preview(&self) -> Self {
-        Self { flags: ViewFlags::PREVIEW, ..*self }
+        // the picture is lit as the view is
+        Self { flags: ViewFlags::PREVIEW | (self.flags & ViewFlags::SCENE_LIGHTS), ..*self }
     }
 
     pub(crate) fn shows(&self, flag: ViewFlags) -> bool {

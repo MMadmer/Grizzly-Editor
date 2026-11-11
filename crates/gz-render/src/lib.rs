@@ -28,6 +28,12 @@
 //!   [`Visibility`] set), groups what is visible by mesh and material into instanced draws, sorts
 //!   the blended ones back to front and tessellates the helpers. The packet is immutable and
 //!   self-contained: handles and instance data.
+//! - **Geometry of the frame alone**: [`SpriteBatch`]es (particles, glows) become quads facing
+//!   the packet's camera (`FillSprite`: camera-, axis- or path-aligned, turned, an atlas frame,
+//!   culled by face as the engine culls), one draw per batch sorted with the blended ones;
+//!   [`Batch`]es (detail objects) are many copies of one mesh the caller culled, drawn instanced
+//!   without a test each; an [`Environment`]'s [`Sky`] is the weather's half box with its two
+//!   cube maps blended (`dxEnvironmentRender::RenderSky`).
 //! - **The render thread** owns the targets: it takes the newest packet, records the passes (in
 //!   parallel chunks on the CPU pool when a pass is large), submits, waits for the GPU, bumps the
 //!   frame counter and pings `Wake`. The UI never waits for it.
@@ -78,8 +84,8 @@ pub use assets::{
 pub use camera::{Camera, Projection, aspect, frame_fit, pick_ray, project};
 pub use color::Color;
 pub use draw_list::{
-    DrawList, Environment, Helpers, Instance, InstanceFlags, Label, Light, LightKind, Line, RoofMap, Shape,
-    ShapeKind, Visibility,
+    Batch, BatchInstance, DrawList, Environment, Helpers, Instance, InstanceFlags, Label, Light, LightKind, Line,
+    RoofMap, Shape, ShapeKind, Sky, Sprite, SpriteAlign, SpriteBatch, SpriteCull, SpriteSize, Visibility,
 };
 pub use helpers::LineVertex;
 pub use material::{EditorMaterial, MaterialDesc, MaterialTable, Pass};

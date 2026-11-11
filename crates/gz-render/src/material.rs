@@ -26,6 +26,15 @@ pub enum EditorMaterial {
     Wireframe,
     /// Not a surface's: the selection outline pass.
     SelectionOutline,
+    /// Its colour times its alpha added (`D3DBLEND_SRCALPHA`, `D3DBLEND_ONE`).
+    AlphaAdd,
+    /// What is behind times its colour (`D3DBLEND_DESTCOLOR`, `D3DBLEND_ZERO`).
+    Multiply,
+    /// What is behind times twice its colour (`D3DBLEND_DESTCOLOR`, `D3DBLEND_SRCCOLOR`): grey
+    /// leaves it as it is.
+    Multiply2x,
+    /// A distortion the R1 renderer the editor uses does not draw: nothing.
+    Distort,
 }
 
 /// When a material is drawn.
@@ -39,7 +48,7 @@ pub enum Pass {
     Overlay,
 }
 
-const NAMES: [(EditorMaterial, &str); 13] = [
+const NAMES: [(EditorMaterial, &str); 17] = [
     (EditorMaterial::Opaque, "opaque"),
     (EditorMaterial::AlphaTest, "alpha_test"),
     (EditorMaterial::Blended, "blended"),
@@ -53,6 +62,10 @@ const NAMES: [(EditorMaterial, &str); 13] = [
     (EditorMaterial::UnlitColor, "unlit_color"),
     (EditorMaterial::Wireframe, "wireframe"),
     (EditorMaterial::SelectionOutline, "selection_outline"),
+    (EditorMaterial::AlphaAdd, "alpha_add"),
+    (EditorMaterial::Multiply, "multiply"),
+    (EditorMaterial::Multiply2x, "multiply_2x"),
+    (EditorMaterial::Distort, "distort"),
 ];
 
 impl EditorMaterial {
@@ -72,7 +85,14 @@ impl EditorMaterial {
             Self::Opaque | Self::SelfLit | Self::Terrain | Self::UnlitColor | Self::Wireframe => Pass::Opaque,
             Self::AlphaTest | Self::Tree => Pass::AlphaTest,
             Self::Sky => Pass::Sky,
-            Self::Blended | Self::Additive | Self::Water | Self::Particle => Pass::Blended,
+            Self::Blended
+            | Self::Additive
+            | Self::Water
+            | Self::Particle
+            | Self::AlphaAdd
+            | Self::Multiply
+            | Self::Multiply2x
+            | Self::Distort => Pass::Blended,
             Self::SelectionOutline => Pass::Overlay,
         }
     }
@@ -80,7 +100,17 @@ impl EditorMaterial {
     /// Whether the material is drawn from both sides whatever the surface says.
     #[must_use]
     pub fn two_sided(self) -> bool {
-        matches!(self, Self::Tree | Self::Additive | Self::Water | Self::Particle | Self::Sky)
+        matches!(
+            self,
+            Self::Tree
+                | Self::Additive
+                | Self::Water
+                | Self::Particle
+                | Self::Sky
+                | Self::AlphaAdd
+                | Self::Multiply
+                | Self::Multiply2x
+        )
     }
 
     /// The alpha under which a pixel is dropped: the cut of an alpha-tested surface, and where a
@@ -109,9 +139,17 @@ pub const DEFAULT_RULES: &[(&str, EditorMaterial)] = &[
     ("terrain\\*", EditorMaterial::Terrain),
     ("*lightplanes*", EditorMaterial::Additive),
     ("effects\\glow*", EditorMaterial::Additive),
+    // the particle blender's modes (`Blender_Particle`): set, blend, add, mul, alpha-add; the
+    // x-shaders of shaders\r1 add or distort
+    ("particles\\alpha_add*", EditorMaterial::AlphaAdd),
+    ("particles\\xadd*", EditorMaterial::Additive),
     ("particles\\add*", EditorMaterial::Additive),
+    ("particles\\dark*", EditorMaterial::Multiply),
+    ("particles\\set*", EditorMaterial::AlphaTest),
+    ("particles\\*distort*", EditorMaterial::Distort),
     ("*_xadd*", EditorMaterial::Additive),
     ("particles\\*", EditorMaterial::Particle),
+    ("effects\\wallmarkmult*", EditorMaterial::Multiply2x),
     ("effects\\wallmark*", EditorMaterial::Blended),
     ("*selflight*", EditorMaterial::SelfLit),
     ("selflight*", EditorMaterial::SelfLit),
@@ -360,6 +398,14 @@ mod tests {
             ("details\\blend", EditorMaterial::Tree),
             ("def_shaders\\lod", EditorMaterial::Tree),
             ("particles\\add", EditorMaterial::Additive),
+            ("particles\\xadd", EditorMaterial::Additive),
+            ("particles\\alpha_add", EditorMaterial::AlphaAdd),
+            ("particles\\dark", EditorMaterial::Multiply),
+            ("particles\\set", EditorMaterial::AlphaTest),
+            ("particles\\xdistort", EditorMaterial::Distort),
+            ("particles\\xblend", EditorMaterial::Particle),
+            ("effects\\wallmarkmult", EditorMaterial::Multiply2x),
+            ("effects\\wallmarkblend", EditorMaterial::Blended),
             ("particles\\blend", EditorMaterial::Particle),
             ("editor\\wire", EditorMaterial::Wireframe),
             ("editor\\selection", EditorMaterial::UnlitColor),

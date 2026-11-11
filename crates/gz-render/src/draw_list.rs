@@ -23,6 +23,11 @@ bitflags::bitflags! {
         const NO_CULL = 1 << 3;
         /// Left out of the id target: never outlined, never picked by id.
         const NO_ID = 1 << 4;
+        /// A sky mesh whose normals are its cube-map coordinates, kept as they are while the
+        /// instance turns it (`dxEnvironmentRender`'s sky box).
+        const SKY_TC = 1 << 5;
+        /// Lies on another surface (a wallmark): drawn a little nearer than it is.
+        const DECAL = 1 << 6;
     }
 }
 
@@ -93,6 +98,13 @@ pub enum LightKind {
         direction: Vec3,
         cos_half: f32,
     },
+    /// A light along `direction` (the editor's sun, a scene light of the direct type), only in
+    /// the editor's own lighting ([`crate::ViewFlags::SCENE_LIGHTS`]). `ranged`: it lights only
+    /// what lies within its range of its position, as the editor enables a light per object.
+    Directional {
+        direction: Vec3,
+        ranged: bool,
+    },
 }
 
 /// A light of the scene, drawn in [`crate::ViewMode::GameLighting`] with the game's falloff,
@@ -139,6 +151,8 @@ pub struct Environment {
     /// The share of the hemisphere light that reaches indoors.
     pub indoor_hemi: f32,
     pub roof: Option<Arc<RoofMap>>,
+    /// The weather's sky box.
+    pub sky: Option<Sky>,
 }
 
 impl Default for Environment {
@@ -154,8 +168,103 @@ impl Default for Environment {
             exposure: 1.0,
             indoor_hemi: 0.15,
             roof: None,
+            sky: None,
         }
     }
+}
+
+/// The sky of a weather as `dxEnvironmentRender::RenderSky` draws it: a half box round the
+/// camera, the two hours' cube maps blended by `weight`, times `color`, turned by `rotation`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sky {
+    /// The cube maps of the hour before and the hour after (`sky_texture`).
+    pub textures: [SmolStr; 2],
+    /// `sky_color`.
+    pub color: Vec3,
+    /// How far from the first hour to the second, 0..1.
+    pub weight: f32,
+    /// `sky_rotation`, radians about the world's Y.
+    pub rotation: f32,
+}
+
+/// How a sprite is turned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpriteAlign {
+    /// Facing the camera: the camera's up is its top, the camera's right its right.
+    Camera,
+    /// Its top and its right in the world.
+    Axes { top: Vec3, right: Vec3 },
+    /// Its top along a direction, its right `dir x the camera's forward`.
+    Along(Vec3),
+}
+
+/// Which faces of a sprite are not drawn, as they appear on the picture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpriteCull {
+    #[default]
+    None,
+    Clockwise,
+    CounterClockwise,
+}
+
+/// What a sprite's half size is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpriteSize {
+    /// Metres.
+    #[default]
+    World,
+    /// A glow's radius (`CTLSprite::Render`): `width * radius / depth` pixels, whatever its
+    /// distance.
+    Screen,
+    /// A fixed share of the picture: `radius` is in clip units across.
+    ScreenFixed,
+}
+
+/// A quad the frame builds facing the camera (`FillSprite`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sprite {
+    pub position: Vec3,
+    /// Half the width, half the height.
+    pub half: glam::Vec2,
+    /// Turned by this angle about its normal.
+    pub angle: f32,
+    pub color: Color,
+    /// The part of the texture: left-top u, v, right-bottom u, v.
+    pub uv: [f32; 4],
+    pub align: SpriteAlign,
+}
+
+/// Sprites drawn with one material: a particle effect's particles, a glow.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpriteBatch {
+    pub material: MaterialHandle,
+    pub sprites: Vec<Sprite>,
+    pub cull: SpriteCull,
+    pub size: SpriteSize,
+    /// Where the sprites are; culled by it when known, never otherwise.
+    pub bounds: Option<Aabb>,
+    pub id: u32,
+    pub flags: InstanceFlags,
+}
+
+/// One copy of a [`Batch`]'s mesh.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BatchInstance {
+    pub transform: Mat4,
+    pub tint: Color,
+}
+
+/// Many copies of one mesh the caller culled already (detail objects): drawn instanced as
+/// they come, without a test of each.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Batch {
+    pub mesh: MeshHandle,
+    pub material: Option<MaterialHandle>,
+    pub instances: Vec<BatchInstance>,
+    /// Where the copies are, for the order of blended draws.
+    pub bounds: Aabb,
+    pub id: u32,
+    pub flags: InstanceFlags,
 }
 
 /// A line of a helper.
@@ -336,6 +445,8 @@ pub struct DrawList {
     /// The weather of [`crate::ViewMode::GameLighting`].
     pub environment: Option<Environment>,
     pub helpers: Helpers,
+    pub sprites: Vec<SpriteBatch>,
+    pub batches: Vec<Batch>,
 }
 
 impl DrawList {
