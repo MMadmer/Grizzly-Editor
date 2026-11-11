@@ -174,8 +174,12 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 ### 5.6 UI
 
 - **egui**, immediate mode like the ImGui it replaces: a surface is a function of snapshots
-  and its own view state that returns commands. Docking (`egui_dock`) and several native
-  windows exist for it.
+  and its own view state that returns commands.
+- **The frame loop is the editor's own** (`gz-app/src/window.rs`: winit, egui-winit and
+  egui-wgpu, no eframe): frames run on demand, a frame-held request asks for the ones it
+  needs, and leaving stops every thread that draws before the device goes.
+- The Level tab's dock is the kit's (splitters and slots; `egui_dock` is not used). A panel may
+  leave the window as a native window of its own - an opt-in preference that takes a restart.
 - **The kit stays the only way to draw** (`gz-ui`), and `docs/UI_DESIGN.md` stays the
   contract. What a lint checks today the types check: a size is `Pt`, never a bare number; a
   colour is a theme token; a shortcut label comes from the binding table.
@@ -188,9 +192,15 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 
 ### 5.7 MCP
 
-- A command is a serialisable type registered with its store. The MCP name, the JSON schema
-  and the bridge tool are **generated from the type**, so "every action has an MCP command"
-  is checked by the compiler: the UI has no other way to change state (I8).
+- A command is registered by name with its area (`gz_editor::Registry::add(area, name, fn)`)
+  and changes state through a store, which the UI has no other way to do (I8). **The
+  catalogue is `crates/gz-mcp/tools.json`**: every tool with its description, schema,
+  annotations and the safety paragraphs - the C++ bridge's export plus what the Rust editor
+  adds. The bridge serves it as written; `Grizzly.exe -dump_commands` prints the registry and
+  `tools/rust/check.sh` fails when the registry lacks a command of the catalogue.
+- **Who asked travels with the command** (`Origin`: the window, an MCP caller, `-nodlg`). A
+  question raised for an MCP caller is answered, never shown - also when the caller runs a
+  row of the command table (`exec_command`), a macro, or anything the row starts.
 - The server is a task per connection. Reads answer from snapshots without visiting the UI
   thread; writes go to the store's queue. A command no longer waits for a frame unless its
   contract is a frame.
@@ -214,14 +224,17 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
   what an author needs to place and judge; the look of the game is the game's.
 - **Frame packets.** Extraction reads a scene snapshot and a camera, culls and sorts on the
   CPU pool, and hands an immutable packet to the render thread. The scene is never locked to
-  be drawn.
+  be drawn. `gz-render` knows no scene: it takes a plain `DrawList`, and the adapter that
+  makes one of a snapshot is the viewport's (`gz-ui-viewport/src/draw*.rs`). Particles are a
+  crate of their own (`gz-particles`: the engine's actions stepped off the UI thread).
 - Textures and meshes decode on the pools and upload through the queue; a missing resource
   draws a placeholder and fills in.
 - Thumbnails, `preview.png`, the model and texture viewers are offscreen passes scheduled as
   jobs.
 - **Gate and fallback:** spike S2 (section 11, phase 0). If wgpu cannot carry the viewport,
   the renderer becomes D3D11 through `windows-rs` in one extra allow-listed crate, with the
-  same frame packets. Nothing above the renderer changes.
+  same frame packets. Nothing above the renderer changes. *Outcome: wgpu carries it; the
+  fallback was not taken.*
 
 ### 5.9 Files and the linked game
 
@@ -270,15 +283,14 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 
 | Crate | Why |
 |---|---|
-| `gz-win` | Win32 that `std` lacks: caption hit test, per-monitor DPI, dropped files, reparse tags and final path names, Credential Manager, a minimised start |
-| `gz-crash` | the crash handler and the dump |
-| `gz-d3d11` | only if the renderer fallback of 5.8 is taken |
+| `gz-win` | Win32 that `std` lacks: caption hit test, per-monitor DPI, dropped files, the clipboard, reparse tags and final path names, known folders, Credential Manager, a minimised start, the crash dump |
 
-- An allow-listed crate exposes a safe API only; every `unsafe` block carries a `// SAFETY:`
-  line; its tests run under Miri where the API allows.
+- `gz-win` is the whole list: the crash handler (`gz-crash`) needs none of its own, and the
+  renderer fallback of 5.8 was not taken.
+- The crate exposes a safe API only; every `unsafe` block carries a `// SAFETY:` line.
 - **No `unsafe impl Send` or `Sync` anywhere** without a line in this section. That is where
   a race would get back in.
-- `tools/rust/check.ps1` fails on `unsafe` outside the allow-list and prints the count
+- `tools/rust/check.sh` fails on `unsafe` outside the allow-list and prints the count
   inside it.
 
 **Shared state.**
@@ -287,16 +299,17 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - `Rc` and `RefCell` only in a surface's own view state on the UI thread.
 - A mutex guards a small private structure and is never held across an `.await`, a frame or
   a call into another module. Two locks at once need a documented order.
-- The few hand-written synchronisation pieces (the store, the frame stamp, the job token)
-  are model-checked with `loom`.
+- The synchronisation pieces (the store, the frame stamp, the job token) are compositions of
+  tokio channels and `arc-swap` with no lock-free code of our own, so they are held by stress
+  tests in the workspace's test run, not by a model checker.
 
 **Dependencies.**
 
 - Pure Rust first. The C dependencies are two: LuaJIT (vendored by `mlua`) and libvorbis with
   the aoTuV tunings (vendored by `vorbis_rs`, a safe API) for the game sounds the Sound Library
   encodes.
-- `cargo-deny` checks licences, advisories and duplicates; the toolchain is pinned in
-  `rust-toolchain.toml` (1.99.1, edition 2024).
+- The toolchain is pinned in `rust-toolchain.toml` (1.99.1, edition 2024); the workspace
+  declares no dependency that no crate uses.
 - TLS trusts the **Windows certificate store** (schannel or the platform verifier), not a
   bundled root list: a machine whose antivirus inspects HTTPS must keep working.
 
@@ -307,12 +320,16 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 
 | Layer | Crates |
 |---|---|
-| 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win` |
-| 1 Formats | `gz-ltx` (lossless: comments, order and spacing survive an edit), `gz-luadata` (declarative Lua, refuses code), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (cform, xcform, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema and packets), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound`, `gz-fmt-release` |
+| 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251, `Origin`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win` |
+| 1 Formats | `gz-ltx` (lossless: comments, order and spacing survive an edit), `gz-luadata` (declarative Lua, refuses code), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (cform, xcform, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema and packets), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound` |
 | 2 Game link | `gz-vfs`, `gz-game` (configs, strings, modes, communities, ranks, trade presets, fonts, kind catalog, world), `gz-lua` (host for the game's pure-Lua readers) |
-| 3 Domain | `gz-project`, `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release`, `gz-github`, `gz-catalog`, `gz-virustotal`, `gz-scene`, `gz-export-level`, `gz-levelbuild` |
-| 4 Presentation | `gz-cmd` (command registry, schema), `gz-mcp`, `gz-ui` (kit, shell, icons), `gz-render`, `gz-app` (tabs and surfaces) |
-| Binaries | `grizzly` (the editor; `--headless` runs layers 0-3 and MCP without a window), `grizzly-mcp` (stdio bridge), `xtask` (corpus, parity report, checks) |
+| 3 Domain | `gz-editor` (the editor's handle: stores, services, the command registry, the frame clock), `gz-project`, `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release` (packages, the index, signing, the VirusTotal scan), `gz-github`, `gz-publish`, `gz-catalog`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-levelbuild` |
+| 4 Presentation | `gz-mcp` (the server and the catalogue), `gz-ui` (the kit, icons), `gz-render`, `gz-app` (the window, the shell, the command table), and a crate per surface: `gz-ui-app` (Start page), `gz-ui-content`, `gz-ui-graph`, `gz-ui-level`, `gz-ui-viewport`, `gz-ui-mod`, `gz-ui-pda`, `gz-ui-previews`, `gz-ui-release`, `gz-ui-world` |
+| Binaries | `grizzly` (the editor; `--headless` runs layers 0-3 and MCP without a window), `gz-mcp-bridge` (the stdio bridge `grizzly-mcp`) |
+
+An area crate is its domain plus `service.rs` and `cmd.rs` with one `register(reg)`; a surface
+crate has one `install(builder)`. The scripts that check and test the workspace are
+`tools/rust/check.sh` and `tools/rust/test.sh`; there is no `xtask`.
 
 ## 8. What replaces what
 
@@ -324,18 +341,19 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 | D3D11 device + R1 blenders | wgpu + editor materials (5.8) |
 | `CLocatorAPI`, `CInifile` | `gz-vfs`, `gz-ltx` |
 | `xr_string`, `shared_str` (5,428 uses) | `String`, interned `Symbol` |
-| Opcode (`XrCDB`) | BVH with parallel build (`parry3d`) |
-| ODE (`XrPhysics`: dropped objects, the physics shells of spawn points and previews) | `rapier3d` |
+| Opcode (`XrCDB`) | the scene's own BVH with a parallel build (`gz-scene/src/pick.rs`) |
+| ODE (`XrPhysics`: dropped objects, the physics shells of spawn points and previews) | ray casts against that BVH; nothing is simulated in the editor |
 | `XrSE_Factory` + `XrGame.dll` | `gz-entities`: a declarative schema of Dead Air's classes |
 | luabind + LuaJIT | `mlua` + LuaJIT for the game's readers; `gz-luadata` for assets |
 | WinHTTP | an async HTTP client on the Windows certificate store |
 | BCrypt (SHA-256, PBKDF2, HMAC, ECDSA P-256) | RustCrypto (`sha2`, `pbkdf2`, `hmac`, `p256`) |
-| minizip | `zip` with parallel deflate |
+| minizip | the editor's own zip writer over `flate2`, deflating in parallel; the layout is read back from the finished archive |
 | nvtt, ispc_texcomp, stb_image, RedImage | `image`, a DDS codec with BC1/BC3 and mip generation |
-| `XrSound` (OpenAL), Vorbis | a Rust audio output and Vorbis decoder; OGG comments by `gz-fmt-sound` |
+| `XrSound` (OpenAL), Vorbis | `cpal` for output, `lewton` to decode; OGG comments by `gz-fmt-sound` |
 | `ogg_enc` (oggenc + libvorbis) | `vorbis_rs` (libvorbis aoTuV, vendored): VBR at the description's quality, the parameters put in as the first comment by `gz-fmt-sound` |
 | QSlim, WildMagic, FreeMagic | ported with the mesh tools that use them |
-| `tools/mcp/grizzly_mcp.py` | `grizzly-mcp`, tools generated from the command types |
+| `tools/mcp/grizzly_mcp.py` | `grizzly-mcp`, serving the catalogue `crates/gz-mcp/tools.json` |
+| Win32 file dialogs | `rfd`, each on a thread of its own |
 | `tools/qa/lint_ui_units.py` | the kit's types |
 
 ## 9. The contract with the game
@@ -370,8 +388,8 @@ Two consequences worth stating:
 
 ## 10. Verification
 
-1. **The oracle.** The C++ editor at the branch point, driven over MCP. `xtask corpus` runs
-   it on the fixture projects and stores what it produced.
+1. **The oracle.** The C++ editor at the branch point, driven over MCP.
+   `tools/qa/diff_editors.py` runs both editors side by side on copies of one project.
 2. **Golden files** for every row of section 9, and for every format read: parse, write,
    compare. Parsers also get property tests (parse → write → parse).
 3. **Differential MCP.** The same command script against both editors; the JSON answers are
@@ -381,12 +399,13 @@ Two consequences worth stating:
    editor.
 5. **The game is the judge.** Modules and releases made by the Rust editor go through the
    game's own suites. Runs are short and targeted.
-6. **The parity ledger.** `docs/rust/PARITY.md`, generated in phase 0 from the oracle
-   (`list_commands`, `ui_contract`, the sections of `UI_DESIGN.md`): every command and
-   surface with its phase and its state. The cutover needs every line done or listed in
-   section 12.
-7. **Concurrency.** `loom` for the hand-written primitives; a stress run per phase: MCP
-   commands flooding from several connections while a build, a scene load and UI edits run.
+6. **The parity ledger.** `docs/rust/PARITY.md`, made by a read-only audit of the C++ editor
+   against the Rust one (menus, commands, tools, panels, dialogs, keys) and kept by the
+   differential run: every item with its state. The cutover needs every line done or listed
+   in section 12.
+7. **Concurrency.** Stress tests of the store, the jobs, the frame clock and the queries in
+   the workspace's test run; a stress run of the whole editor: MCP commands flooding from
+   several connections while a build, a scene load and UI edits run.
 8. **Budgets**, checked from phase 3 on: the window within 0.3 s of the process start (warm),
    fewer file operations per start than today's 82k, no UI frame over 16 ms caused by the
    editor's own work, a rebuild no slower than the C++ job.
@@ -401,11 +420,11 @@ unnecessary, in lines, rounded.
 Goal: the skeleton every later crate stands on, and the three bets proven or refuted before
 anything is built on them.
 
-- The workspace, the pinned toolchain, lints, `cargo-deny`, `tools/rust/check.ps1` (format,
-  clippy, tests, the `unsafe` audit).
+- The workspace, the pinned toolchain, lints, `tools/rust/check.sh` (format, clippy, the
+  `unsafe` audit, the registry against the catalogue) and `tools/rust/test.sh` (the tests).
 - Layer 0: `gz-base`, `gz-task`, `gz-store`, `gz-query`, `gz-log`, `gz-crash`.
 - `gz-ltx`, `gz-luadata`, `gz-chunk` - the three formats everything else reads.
-- The oracle harness: `xtask corpus`, the differential runner, the parity ledger.
+- The oracle harness: the differential runner (`tools/qa/diff_editors.py`), the parity ledger.
 - **S1, the shell:** egui on wgpu with a docked layout, the custom caption with its hit
   test, per-monitor DPI, Segoe UI and Cascadia Mono at 100% and 150%, Cyrillic input, a
   second native window, a 3D texture inside a panel, `screenshot_editor` with a frame stamp,
@@ -440,10 +459,10 @@ Replaces about 55k (`XrECore/Editor` without its windows).
 
 - `gz-project`, `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`,
   the content operations, with their commands.
-- `gz-build`, `gz-release`, `gz-github`, `gz-catalog`, `gz-virustotal`: Build Into Game,
+- `gz-build`, `gz-release`, `gz-github`, `gz-publish`, `gz-catalog`: Build Into Game,
   Build to Folder, Export Flat, Package Release, Publish Release, Submit, Withdraw, the
   releases list.
-- `gz-cmd` and `gz-mcp`; `grizzly --headless`; `grizzly-mcp`.
+- `gz-editor` and `gz-mcp`; `grizzly --headless`; `grizzly-mcp`.
 
 Usable: an agent drives a whole mod - assets, checks, build, release - without a window.
 
@@ -482,8 +501,7 @@ phase 3; needs phases 1-2.
   environments, particles, details, AI map, wallmarks, fog volumes), selection, transforms,
   the typed properties, undo by snapshot.
 - Scene files: read and write the format the C++ editor uses (I4).
-- Picking, snapping, drop to ground, wall scan on the parallel BVH; `rapier3d` for the
-  physics of dropped objects.
+- Picking, snapping, drop to ground and wall scan on the scene's parallel BVH.
 - `gz-export-level`: `.xspawn`, custom data, `overlay.xcform`, `overlay_visuals.ltx`, the
   AI map and graph fragments; OGF export; recovery snapshots.
 - Every scene command over MCP, headless.
@@ -551,6 +569,14 @@ bug.
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |
 | D5 | Clear Sky and Shadow of Chernobyl data are not supported. | Mods target Dead Air Refined strictly. |
 | D6 | The raw-pixel and colour lint is gone. | The kit's types refuse what it searched for. |
+| D7 | No splash window. | The editor's own window is up before one could be. |
+| D8 | Operations the C++ editor could not undo are one undo step: portal computation, detach, the clears; Edit > Delete and the Delete key ask nothing (the Outliner's Delete still names what goes). | Undo is the previous snapshot, so it costs nothing to offer. |
+| D9 | A classic module keeps `target = any` when its manifest is saved. | The C++ `mod_set_manifest` rewrote it to `existing`, against the project's own rule for classic mods. |
+| D10 | Breakable and climable objects are built. | The fork's `VCPacked::add_vert` lost its welding, so the C++ editor of the branch point writes errors instead; the Rust build welds on the SDK's grid. |
+| D11 | Tools that did nothing in the C++ editor work: the AI Map tool's Ignored Materials leave holes, the link pad's Invert turns a one-way link round, a wallmark can be moved, a marquee in points mode selects the points inside it, a library group is placed by a click. | Each was a commented-out check, a self-link, a disabled control or a missing handler in the C++. |
+| D12 | A group's Make Thumbnail writes `<project>\rawdata\groups\<reference>.thm`. | That is where the Groups chooser reads it; the C++ wrote `$objects$\<scene name>.thm`, which nothing reads. |
+| D13 | The wire adds, never removes: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a path outside the project; `world_set` writes only its section; `mod_publish start` answers in one call; `quest_history` adds `undo_steps` / `redo_steps`; new commands `jobs`, `level_build`, the tool commands (`sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `aimap_tool`, `details_tool`, `wallmark_tool`, `particles_tool`) and the scene's own. | Each closes a hole an agent would otherwise fall into; nothing a C++-era script sends changes meaning. |
+| D14 | Orders the C++ took from pointer addresses or `rand` are stable. | Section 9: the game does not depend on them, and a stable order makes a build reproducible. |
 
 ## 13. Working rules
 
@@ -561,9 +587,10 @@ bug.
 - **Areas flip one at a time.** When an area passes its gate, new work on it lands in Rust
   and the C++ side takes fixes only. Until then a feature lands in C++ and joins the port
   list.
-- **Side by side.** The Rust editor is `Bin\x64\Release\Grizzly.exe` and listens on 28017
-  until the cutover; the project list is shared, the tab session and the settings are its
-  own.
+- **Side by side.** The Rust editor is `Intermediate\cargo\debug\Grizzly.exe` and listens on
+  28017 until the cutover (`-mcp_port` names another; QA uses 28917); the project list is
+  shared, the tab session and the settings are its own. The QA suites pick the editor through
+  `tools/qa/qa_target.py` (`GRIZZLY_QA_TARGET=rust`).
 - **A work package is done** when its code, its commands, its tests and its line of the
   parity ledger are in, and the document that describes its behaviour still tells the
   truth.
@@ -581,6 +608,6 @@ bug.
 | Floating point differs between compilers in `xcform` and AI map output | the same order of operations and no fast-math; a stated tolerance and the game's load where bytes cannot match |
 | Two editors to maintain during the move | the port list from git, areas flipping one at a time, both on one project |
 | Persistent structures cost more than vectors on hot paths | measured in S3 and S4; bulk data stays in flat immutable blobs |
-| Deadlocks, which the compiler does not catch | stores never await stores; no lock across an await or a frame; `loom`; the stress run |
+| Deadlocks, which the compiler does not catch | stores never await stores; no lock across an await or a frame; the stress tests and the stress run |
 | Antivirus meets a new unsigned binary on every build | one executable, few modules to load; the loader line of the profile shows it |
 | Scope: 400k lines cannot be moved as they are | they are not moved: sections 4 and 8 drop or replace more than half before any porting |
