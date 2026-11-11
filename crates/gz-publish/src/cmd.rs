@@ -90,7 +90,9 @@ async fn mod_publish(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply 
         }
         "sign_in" => {
             if !Github::of(&ed).endpoints().device_sign_in() {
-                return Err(refuse("the device sign-in is not set up in this build: use a token, GH_TOKEN or the GitHub CLI"));
+                return Err(refuse(
+                    "the device sign-in is not set up in this build: use a token, GH_TOKEN or the GitHub CLI",
+                ));
             }
             // the caller hands the code over; no clipboard, no browser behind its back
             publisher.sign_in(&ed);
@@ -100,7 +102,9 @@ async fn mod_publish(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply 
         "save_token" => {
             // The one request that carries a token. It goes into the Credential Manager and
             // nowhere else: not into the answer, not into the log.
-            let Some(token) = take_secret(&mut args, "token") else { return Err(refuse("save_token needs 'token'")) };
+            let Some(token) = take_secret(&mut args, "token") else {
+                return Err(refuse("save_token needs 'token'"));
+            };
             Github::of(&ed).save_token(Secret::from(token)).await.map_err(refuse)?;
             return account_json(&ed).await;
         }
@@ -110,7 +114,11 @@ async fn mod_publish(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply 
             return account_json(&ed).await;
         }
         "start" => {}
-        _ => return Err(refuse("unknown action: start, status, cancel, account, save_token, sign_in, sign_in_status or sign_out expected")),
+        _ => {
+            return Err(refuse(
+                "unknown action: start, status, cancel, account, save_token, sign_in, sign_in_status or sign_out expected",
+            ));
+        }
     }
     if args.flag("answer_only") {
         let (ok, v) = publisher.started_json();
@@ -173,7 +181,9 @@ async fn mod_releases(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             if rq.title.is_none() && rq.notes.is_none() {
                 return Err(refuse("edit needs 'title' or 'notes'"));
             }
-            if rq.title.as_ref().is_some_and(|t| t.len() > 200) || rq.notes.as_ref().is_some_and(|n| n.len() > MAX_NOTES) {
+            if rq.title.as_ref().is_some_and(|t| t.len() > 200)
+                || rq.notes.as_ref().is_some_and(|n| n.len() > MAX_NOTES)
+            {
                 return Err(refuse("the title takes 200 characters, the notes 120 000"));
             }
         }

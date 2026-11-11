@@ -34,6 +34,9 @@ pub struct ExportOptions {
     pub source_file: SmolStr,
     /// `"\\\\" + computer + "\\" + user`.
     pub build_name: SmolStr,
+    /// The game's materials (`gamemtl.xr`): a surface's material must be one of them, a bone's
+    /// one that is dynamic. `None` checks nothing.
+    pub materials: Option<std::sync::Arc<gz_fmt_xr::GameMaterials>>,
 }
 
 /// An exported model and what the C++ would have logged.
@@ -61,7 +64,10 @@ fn desc(obj: &Object, opts: &ExportOptions) -> Desc {
 }
 
 fn check_tex_count(obj: &Object, surface: usize) -> Result<&gz_fmt_object::Surface> {
-    let s = obj.surfaces.get(surface).ok_or_else(|| fail("A face list names a surface the object does not have."))?;
+    let s = obj
+        .surfaces
+        .get(surface)
+        .ok_or_else(|| fail("A face list names a surface the object does not have."))?;
     if s.tex_count() != 1 {
         return Err(fail(format!("Surface '{}' must have exactly one texture coordinate set.", s.name)));
     }
@@ -106,7 +112,9 @@ impl Part {
             return true;
         }
         // oracle: a vertex packed before the part filled up stays in it, its face is lost
-        let (Some(a), Some(b), Some(c)) = (self.pack(v[0]), self.pack(v[1]), self.pack(v[2])) else { return false };
+        let (Some(a), Some(b), Some(c)) = (self.pack(v[0]), self.pack(v[1]), self.pack(v[2])) else {
+            return false;
+        };
         self.faces.push([a, b, c]);
         true
     }
@@ -150,6 +158,14 @@ pub fn export_static(obj: &Object, opts: &ExportOptions) -> Result<Export> {
             let si = match splits.iter().position(|s| s.surface == surface) {
                 Some(i) => i,
                 None => {
+                    if let Some(m) = &opts.materials
+                        && m.by_name(&surf.game_mtl).is_none()
+                    {
+                        return Err(fail(format!(
+                            "Surface: '{}' contains undefined game material.",
+                            surf.name
+                        )));
+                    }
                     splits.push(StaticSplit { surface, parts: Vec::new(), current: None });
                     splits.len() - 1
                 }
@@ -164,12 +180,20 @@ pub fn export_static(obj: &Object, opts: &ExportOptions) -> Result<Export> {
             // oracle: the counter drops once per face, so a two-sided list is walked twice
             loop {
                 for &f in sf.faces.iter() {
-                    let face = mesh.faces.get(f as usize).ok_or_else(|| fail("A face list names a face the mesh does not have."))?;
+                    let face = mesh
+                        .faces
+                        .get(f as usize)
+                        .ok_or_else(|| fail("A face list names a face the mesh does not have."))?;
                     let mut v = [OgfVert { p: Vec3::ZERO, n: Vec3::Y, uv: Vec2::ZERO }; 3];
                     for (k, fv) in face.v.iter().enumerate() {
                         let uv = mesh.corner_uv(*fv).ok_or_else(|| fail("uv empty"))?;
-                        let p = *mesh.points.get(fv.point as usize).ok_or_else(|| fail("A face names a point the mesh does not have."))?;
-                        let n = *normals.get(f as usize * 3 + k).ok_or_else(|| fail("Normal index out of range."))?;
+                        let p = *mesh
+                            .points
+                            .get(fv.point as usize)
+                            .ok_or_else(|| fail("A face names a point the mesh does not have."))?;
+                        let n = *normals
+                            .get(f as usize * 3 + k)
+                            .ok_or_else(|| fail("Normal index out of range."))?;
                         v[k] = OgfVert { p, n, uv };
                     }
                     elapsed -= 1;
@@ -261,7 +285,7 @@ impl SkelVert {
     /// `SSkelVert::set`: the bones sorted by id.
     fn new(sv: &SkinVertex, bones: &[Bw]) -> Self {
         let mut b: SmallVec<[Bw; 4]> = bones.iter().copied().collect();
-        b.sort_by(|x, y| x.id.cmp(&y.id));
+        b.sort_by_key(|x| x.id);
         Self { offs: sv.offs, norm: sv.norm, uv: sv.uv, bones: b }
     }
 
@@ -286,12 +310,18 @@ struct SkelSplit {
 
 impl SkelSplit {
     fn add_face(&mut self, v: [&SkelVert; 3], warnings: &mut Vec<String>) -> Result<()> {
-        if similar(v[0].offs, v[1].offs, EPS) || similar(v[0].offs, v[2].offs, EPS) || similar(v[1].offs, v[2].offs, EPS) {
+        if similar(v[0].offs, v[1].offs, EPS)
+            || similar(v[0].offs, v[2].offs, EPS)
+            || similar(v[1].offs, v[2].offs, EPS)
+        {
             warnings.push("Degenerate face found. Removed.".to_owned());
             return Ok(());
         }
         if self.verts.len() + 3 > 0xFFFF {
-            return Err(fail(format!("Split '{}' / '{}' has more than 65535 vertices.", self.shader, self.texture)));
+            return Err(fail(format!(
+                "Split '{}' / '{}' has more than 65535 vertices.",
+                self.shader, self.texture
+            )));
         }
         let base = self.verts.len() as u16;
         self.verts.extend(v.iter().map(|x| (*x).clone()));
@@ -437,16 +467,19 @@ fn bone_obb(points: &[Vec3]) -> Obb {
         let t = if theta == 0.0 { 1.0 } else { t };
         let cs = 1.0 / (t * t + 1.0).sqrt();
         let sn = t * cs;
-        for k in 0..3 {
-            let (a, b) = (c[k][p], c[k][q]);
-            c[k][p] = cs * a - sn * b;
-            c[k][q] = sn * a + cs * b;
+        for row in c.iter_mut() {
+            let (a, b) = (row[p], row[q]);
+            row[p] = cs * a - sn * b;
+            row[q] = sn * a + cs * b;
         }
-        for k in 0..3 {
-            let (a, b) = (c[p][k], c[q][k]);
-            c[p][k] = cs * a - sn * b;
-            c[q][k] = sn * a + cs * b;
+        let (mut rp, mut rq) = (c[p], c[q]);
+        for (x, y) in rp.iter_mut().zip(rq.iter_mut()) {
+            let (a, b) = (*x, *y);
+            *x = cs * a - sn * b;
+            *y = sn * a + cs * b;
         }
+        c[p] = rp;
+        c[q] = rq;
         for row in &mut v {
             let (a, b) = (row[p], row[q]);
             row[p] = cs * a - sn * b;
@@ -466,7 +499,9 @@ fn bone_obb(points: &[Vec3]) -> Obb {
             hi[k] = hi[k].max(d);
         }
     }
-    let center = axes[0] * ((lo[0] + hi[0]) * 0.5) + axes[1] * ((lo[1] + hi[1]) * 0.5) + axes[2] * ((lo[2] + hi[2]) * 0.5);
+    let center = axes[0] * ((lo[0] + hi[0]) * 0.5)
+        + axes[1] * ((lo[1] + hi[1]) * 0.5)
+        + axes[2] * ((lo[2] + hi[2]) * 0.5);
     let half = glam::DVec3::new((hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5, (hi[2] - lo[2]) * 0.5);
     // `B.m_rotate.i.crossproduct(j, k); j.crossproduct(k, i)`: re-orthogonalised
     let (j, k) = (axes[1].as_vec3(), axes[2].as_vec3());
@@ -475,7 +510,11 @@ fn bone_obb(points: &[Vec3]) -> Obb {
     Obb { rotate: [i, j, k], translate: center.as_vec3(), halfsize: half.as_vec3() }
 }
 
-fn prepare_geometry(obj: &Object, influence: u8, warnings: &mut Vec<String>) -> Result<(Vec<SkelSplit>, Aabb)> {
+fn prepare_geometry(
+    obj: &Object,
+    influence: u8,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<SkelSplit>, Aabb)> {
     if obj.meshes.is_empty() {
         return Err(fail("The object has no meshes."));
     }
@@ -498,13 +537,16 @@ fn prepare_geometry(obj: &Object, influence: u8, warnings: &mut Vec<String>) -> 
     let mut splits: Vec<SkelSplit> = Vec::new();
     for mesh in &obj.meshes {
         let normals = mesh.vertex_normals();
-        let svs = mesh.skin_vertices(&obj.bones, u32::from(influence), &normals).map_err(|e| fail(e.to_string()))?;
+        let svs = mesh
+            .skin_vertices(&obj.bones, u32::from(influence), &normals)
+            .map_err(|e| fail(e.to_string()))?;
         prepare_mesh(obj, mesh, &svs, &groups, breakable, &mut splits, warnings)?;
     }
     let mut kept = Vec::with_capacity(splits.len());
     for mut s in splits {
         if s.verts.is_empty() || s.faces.is_empty() {
-            warnings.push(format!("Empty split found (Shader/Texture: {}/{}). Removed.", s.shader, s.texture));
+            warnings
+                .push(format!("Empty split found (Shader/Texture: {}/{}). Removed.", s.shader, s.texture));
             continue;
         }
         s.used_bones.sort_unstable();
@@ -564,7 +606,10 @@ fn prepare_mesh(
                     return Err(fail("Can't export object as breakable. Object have N-Link face(s)."));
                 }
             }
-            let si = match splits.iter().position(|s| s.shader == surf.shader && s.texture == surf.texture && s.part == part) {
+            let si = match splits
+                .iter()
+                .position(|s| s.shader == surf.shader && s.texture == surf.texture && s.part == part)
+            {
                 Some(i) => i,
                 None => {
                     splits.push(SkelSplit {
@@ -627,12 +672,25 @@ pub fn export_skeleton(obj: &Object, opts: &ExportOptions, influence: u8) -> Res
         .bones
         .iter()
         .enumerate()
-        .map(|(i, b)| BoneName { name: b.name.clone(), parent: b.parent.clone(), obb: bone_obb(&bone_points[i]) })
+        .map(|(i, b)| BoneName {
+            name: b.name.clone(),
+            parent: b.parent.clone(),
+            obb: bone_obb(&bone_points[i]),
+        })
         .collect();
     w.chunk(chunk::S_BONE_NAMES, |w| write_names(&names, w));
     for b in &obj.bones {
         if !b.shape.valid() {
             return Err(fail(format!("Bone '{}' has invalid shape.", b.name)));
+        }
+        if let Some(m) = &opts.materials {
+            match m.by_name(&b.game_mtl) {
+                None => return Err(fail(format!("Bone '{}' has invalid game material.", b.name))),
+                Some(mtl) if !mtl.is_dynamic() => {
+                    return Err(fail(format!("Bone '{}' has non-dynamic game material.", b.name)));
+                }
+                Some(_) => {}
+            }
         }
     }
     w.chunk(chunk::S_IKDATA, |w| obj.bones.iter().for_each(|b| BoneIk::from_bone(b).write(w)));
@@ -696,7 +754,10 @@ fn align_y(m: &mut Mat4) {
 /// `ExportMotionKeys`: the `OGF_S_MOTIONS` chunk.
 fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
     let bones = &obj.bones;
-    let gt = Mat4::mul(&Mat4::translation(obj.actor_position), &Mat4::hpb(obj.actor_rotation.y, obj.actor_rotation.x, obj.actor_rotation.z));
+    let gt = Mat4::mul(
+        &Mat4::translation(obj.actor_position),
+        &Mat4::hpb(obj.actor_rotation.y, obj.actor_rotation.x, obj.actor_rotation.z),
+    );
     let root_id = obj.root_bone().unwrap_or(0);
     let mut w = Writer::new();
     w.open_chunk(chunk::S_MOTIONS);
@@ -722,8 +783,16 @@ fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
                 .iter()
                 .enumerate()
                 .map(|(i, b)| {
-                    let (offset, rotate) = if m.bone_motions.len() > i { m.evaluate(i, t).unwrap_or((b.rest_offset, b.rest_rotate)) } else { (b.rest_offset, b.rest_rotate) };
-                    BoneState { offset, rotate, world_orient: m.bone_flags(i) & gz_fmt_object::BoneMotion::WORLD_ORIENT != 0 }
+                    let (offset, rotate) = if m.bone_motions.len() > i {
+                        m.evaluate(i, t).unwrap_or((b.rest_offset, b.rest_rotate))
+                    } else {
+                        (b.rest_offset, b.rest_rotate)
+                    };
+                    BoneState {
+                        offset,
+                        rotate,
+                        world_orient: m.bone_flags(i) & gz_fmt_object::BoneMotion::WORLD_ORIENT != 0,
+                    }
                 })
                 .collect();
             let mut pose = animate(bones, &states);
@@ -733,7 +802,10 @@ fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
                     anchor = Mat4::invert_43(&pose.world[anchor_bone]);
                 }
                 // `CalculateRootObjectAnimation`
-                let bottom = (1..bones.len()).filter(|i| !bones[*i].is_root()).map(|i| pose.world[i].c().y).fold(f32::MAX, f32::min);
+                let bottom = (1..bones.len())
+                    .filter(|i| !bones[*i].is_root())
+                    .map(|i| pose.world[i].c().y)
+                    .fold(f32::MAX, f32::min);
                 let gl_anchor = Mat4::mul_43(&pose.world[anchor_bone], &anchor);
                 let mut root = gl_anchor;
                 align_y(&mut root);
@@ -793,8 +865,14 @@ fn motion_keys(obj: &Object, warnings: &mut Vec<String>) -> Result<Vec<u8>> {
                 }
             }
             st /= if bit16 { 32767.0 } else { 127.0 };
-            w.w_u8((if t_present { FL_T_KEY_PRESENT } else { 0 }) | (if r_present { 0 } else { FL_R_KEY_ABSENT }) | (if bit16 { FL_T_KEY_16 } else { 0 }));
-            let rbytes = |keys: &[[i16; 4]]| keys.iter().flat_map(|k| k.iter().flat_map(|v| v.to_le_bytes())).collect::<Vec<u8>>();
+            w.w_u8(
+                (if t_present { FL_T_KEY_PRESENT } else { 0 })
+                    | (if r_present { 0 } else { FL_R_KEY_ABSENT })
+                    | (if bit16 { FL_T_KEY_16 } else { 0 }),
+            );
+            let rbytes = |keys: &[[i16; 4]]| {
+                keys.iter().flat_map(|k| k.iter().flat_map(|v| v.to_le_bytes())).collect::<Vec<u8>>()
+            };
             if r_present {
                 let b = rbytes(keys_r);
                 w.w_u32(crc32(&b));
@@ -834,7 +912,9 @@ fn motion_defs(obj: &Object, w: &mut Writer) -> Result<()> {
     }
     let parts = checked.bone_parts;
     for m in &obj.motions {
-        if !m.flags.contains(SMotionFlags::FX) && !(m.bone_or_part == BI_NONE || usize::from(m.bone_or_part) < parts.len()) {
+        if !m.flags.contains(SMotionFlags::FX)
+            && !(m.bone_or_part == BI_NONE || usize::from(m.bone_or_part) < parts.len())
+        {
             return Err(fail(format!("Invalid Bone Part of motion: '{}'.", m.name)));
         }
     }
@@ -888,7 +968,9 @@ fn motion_defs(obj: &Object, w: &mut Writer) -> Result<()> {
 mod tests {
     use std::sync::Arc;
 
-    use gz_fmt_object::{Bone, BoneShape, Face, FaceVert, SMotion, SurfFaces, Surface, SurfaceFlags, VMap, VMapKind, VMapPt};
+    use gz_fmt_object::{
+        Bone, BoneShape, Face, FaceVert, SMotion, SurfFaces, Surface, SurfaceFlags, VMap, VMapKind, VMapPt,
+    };
 
     use super::*;
     use crate::Visual;
@@ -896,13 +978,21 @@ mod tests {
 
     fn vmap(name: &str, kind: VMapKind, values: &[f32]) -> VMap {
         let n = values.len() / if kind == VMapKind::Uv { 2 } else { 1 };
-        VMap { name: name.into(), kind, polymap: false, values: values.to_vec(), vindices: (0..n as u32).collect(), pindices: Vec::new() }
+        VMap {
+            name: name.into(),
+            kind,
+            polymap: false,
+            values: values.to_vec(),
+            vindices: (0..n as u32).collect(),
+            pindices: Vec::new(),
+        }
     }
 
     fn quad_mesh(two_sided_surface: u32) -> Mesh {
         let points: Arc<[Vec3]> = Arc::from(vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 0.0, 1.0), Vec3::Z]);
         let fv = |p: u32| FaceVert { point: p, vmref: p };
-        let faces: Arc<[Face]> = Arc::from(vec![Face { v: [fv(0), fv(1), fv(2)] }, Face { v: [fv(0), fv(2), fv(3)] }]);
+        let faces: Arc<[Face]> =
+            Arc::from(vec![Face { v: [fv(0), fv(1), fv(2)] }, Face { v: [fv(0), fv(2), fv(3)] }]);
         let uv = vmap("uv", VMapKind::Uv, &[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
         Mesh {
             name: "quad".into(),
@@ -919,8 +1009,21 @@ mod tests {
     fn object() -> Object {
         Object {
             surfaces: vec![
-                Surface { name: "s".into(), texture: "tex\\a".into(), shader: "models\\model".into(), fvf: 0x112, ..Surface::default() },
-                Surface { name: "d".into(), texture: "tex\\b".into(), shader: "models\\model".into(), fvf: 0x112, flags: SurfaceFlags::TWO_SIDED, ..Surface::default() },
+                Surface {
+                    name: "s".into(),
+                    texture: "tex\\a".into(),
+                    shader: "models\\model".into(),
+                    fvf: 0x112,
+                    ..Surface::default()
+                },
+                Surface {
+                    name: "d".into(),
+                    texture: "tex\\b".into(),
+                    shader: "models\\model".into(),
+                    fvf: 0x112,
+                    flags: SurfaceFlags::TWO_SIDED,
+                    ..Surface::default()
+                },
             ],
             meshes: vec![quad_mesh(0)],
             ..Object::default()
@@ -946,7 +1049,15 @@ mod tests {
         let mut second = quad_mesh(1);
         second.name = "back".into();
         obj.meshes.push(second);
-        let e = export_static(&obj, &ExportOptions { source_file: "a.object".into(), build_name: "\\\\pc\\me".into() }).unwrap();
+        let e = export_static(
+            &obj,
+            &ExportOptions {
+                source_file: "a.object".into(),
+                build_name: "\\\\pc\\me".into(),
+                materials: None,
+            },
+        )
+        .unwrap();
         let v = Visual::read(&e.bytes).unwrap();
         assert_eq!(v.kind(), MT::HIERRARHY);
         assert_eq!(v.children.len(), 2);
@@ -961,14 +1072,25 @@ mod tests {
         let shape = BoneShape { kind: 2, sphere_radius: 0.5, ..BoneShape::default() };
         obj.bones = vec![
             Bone { name: "root".into(), wmap: "root".into(), shape, ..Bone::default() },
-            Bone { name: "arm".into(), parent: "root".into(), wmap: "arm".into(), parent_id: Some(0), rest_offset: Vec3::X, shape, ..Bone::default() },
+            Bone {
+                name: "arm".into(),
+                parent: "root".into(),
+                wmap: "arm".into(),
+                parent_id: Some(0),
+                rest_offset: Vec3::X,
+                shape,
+                ..Bone::default()
+            },
         ];
         let w = vmap("root", VMapKind::Weight, &[1.0, 1.0, 1.0, 1.0]);
         let m = &mut obj.meshes[0];
         m.vmaps.push(w);
-        m.vmrefs = (0..4).map(|i| smallvec::smallvec![VMapPt { vmap: 0, index: i }, VMapPt { vmap: 1, index: i }]).collect();
+        m.vmrefs = (0..4)
+            .map(|i| smallvec::smallvec![VMapPt { vmap: 0, index: i }, VMapPt { vmap: 1, index: i }])
+            .collect();
         // no bone motions: every bone keeps its rest pose
-        obj.motions = vec![SMotion { name: "idle".into(), frame_start: 0, frame_end: 1, ..SMotion::default() }];
+        obj.motions =
+            vec![SMotion { name: "idle".into(), frame_start: 0, frame_end: 1, ..SMotion::default() }];
         obj
     }
 
@@ -992,7 +1114,12 @@ mod tests {
         assert_eq!(motions.motions[0].length, 2);
         assert_eq!(motions.defs[0].name, "idle");
         // a motion that does not move: one rotation, no translation keys
-        assert!(motions.motions[0].bones.iter().all(|b| b.flags & FL_R_KEY_ABSENT != 0 && b.flags & FL_T_KEY_PRESENT == 0));
+        assert!(
+            motions.motions[0]
+                .bones
+                .iter()
+                .all(|b| b.flags & FL_R_KEY_ABSENT != 0 && b.flags & FL_T_KEY_PRESENT == 0)
+        );
         // the arm's rest offset comes back from its constant key
         let pose = motions.pose(0, 0.0).unwrap();
         assert!(similar(pose[1].translation, Vec3::X, 1e-6));
@@ -1001,7 +1128,8 @@ mod tests {
     #[test]
     fn an_omf_holds_the_keys_and_the_definitions() {
         let mut obj = skeleton();
-        obj.bone_parts = vec![gz_fmt_object::BonePart { alias: "Body".into(), bones: vec!["root".into(), "arm".into()] }];
+        obj.bone_parts =
+            vec![gz_fmt_object::BonePart { alias: "Body".into(), bones: vec!["root".into(), "arm".into()] }];
         let e = export_omf(&obj).unwrap();
         let set = read_omf(&e.bytes).unwrap();
         assert_eq!(set.parts[0].name, "body");

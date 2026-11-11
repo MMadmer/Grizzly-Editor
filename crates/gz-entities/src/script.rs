@@ -81,7 +81,13 @@ pub struct TerrainExt {
 
 impl Default for TerrainExt {
     fn default() -> Self {
-        Self { arriving_npc: Vec::new(), jobs: Vec::new(), dead_time: Vec::new(), respawn: None, faction: NIL }
+        Self {
+            arriving_npc: Vec::new(),
+            jobs: Vec::new(),
+            dead_time: Vec::new(),
+            respawn: None,
+            faction: NIL,
+        }
     }
 }
 
@@ -288,7 +294,13 @@ impl Script {
                 } else {
                     None
                 };
-                Self::SmartTerrain(Box::new(TerrainExt { arriving_npc, jobs, dead_time, respawn, faction: r.r_stringz()? }))
+                Self::SmartTerrain(Box::new(TerrainExt {
+                    arriving_npc,
+                    jobs,
+                    dead_time,
+                    respawn,
+                    faction: r.r_stringz()?,
+                }))
             }
             ScriptKind::Squad => {
                 if empty {
@@ -482,7 +494,9 @@ mod tests {
         let b = bytes(&squad);
         assert_eq!(&b[..b.len() - 2], b"nil\0nil\0nil\0nil\0nil\0false\0");
         assert_eq!(&b[b.len() - 2..], [26, 0]);
-        for (kind, s) in [(ScriptKind::Actor, actor), (ScriptKind::LevelChanger, changer), (ScriptKind::Squad, squad)] {
+        for (kind, s) in
+            [(ScriptKind::Actor, actor), (ScriptKind::LevelChanger, changer), (ScriptKind::Squad, squad)]
+        {
             assert_eq!(back(kind, &bytes(&s), 12), s);
         }
     }
@@ -491,8 +505,16 @@ mod tests {
     fn every_kind_reads_back_what_it_wrote() {
         let terrain = Script::SmartTerrain(Box::new(TerrainExt {
             arriving_npc: vec![5, 9],
-            jobs: vec![TerrainJob { npc_id: 7, job_section: "walker".into(), begin_job: true, need_job: "nil".into() }],
-            dead_time: vec![("guard".into(), Some(ScriptTime { date: [12, 5, 1, 9, 0, 0], ms: 0 })), ("camper".into(), None)],
+            jobs: vec![TerrainJob {
+                npc_id: 7,
+                job_section: "walker".into(),
+                begin_job: true,
+                need_job: "nil".into(),
+            }],
+            dead_time: vec![
+                ("guard".into(), Some(ScriptTime { date: [12, 5, 1, 9, 0, 0], ms: 0 })),
+                ("camper".into(), None),
+            ],
             respawn: Some(TerrainRespawn {
                 spawned: vec![("stalker_sim".into(), 2)],
                 last_update: Some(ScriptTime { date: [12, 5, 1, 8, 30, 0], ms: 250 }),
@@ -521,7 +543,10 @@ mod tests {
             (ScriptKind::Heli, heli),
             (ScriptKind::Artefact, artefact),
             (ScriptKind::Eatable, Script::Eatable { remaining_uses: 3 }),
-            (ScriptKind::Monster, Script::Monster { level_vertex_id: "120".into(), active_section: "nil".into() }),
+            (
+                ScriptKind::Monster,
+                Script::Monster { level_vertex_id: "120".into(), active_section: "nil".into() },
+            ),
         ] {
             assert_eq!(back(kind, &bytes(&s), 12), s, "{kind:?}");
         }
@@ -572,13 +597,18 @@ mod tests {
         s.sync_loopholes("combat", &["a", "b"]);
         assert_eq!(
             s,
-            Script::SmartCover { last_description: "combat".into(), loopholes: vec![("a".into(), true), ("b".into(), true)] }
+            Script::SmartCover {
+                last_description: "combat".into(),
+                loopholes: vec![("a".into(), true), ("b".into(), true)]
+            }
         );
         if let Script::SmartCover { loopholes, .. } = &mut s {
             loopholes[0].1 = false;
         }
         s.sync_loopholes("combat", &["a", "b", "c"]);
-        assert!(matches!(&s, Script::SmartCover { loopholes, .. } if loopholes.len() == 3 && !loopholes[0].1));
+        assert!(
+            matches!(&s, Script::SmartCover { loopholes, .. } if loopholes.len() == 3 && !loopholes[0].1)
+        );
         s.sync_loopholes("other", &["x"]);
         assert!(matches!(&s, Script::SmartCover { loopholes, .. } if loopholes.len() == 1));
     }

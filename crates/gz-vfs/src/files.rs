@@ -198,7 +198,9 @@ impl GameFiles {
     fn build(root: &Path, root_key: String, saved: Option<Records>, opts: &MountOptions) -> GameFiles {
         let mut stats = MountStats { from_cache: saved.is_some(), ..MountStats::default() };
         let saved = saved.unwrap_or_default();
-        let fsgame_text = std::fs::read(root.join("fsgame.ltx")).ok().map(|b| gz_base::text::cp1251_to_utf8(&b).into_owned());
+        let fsgame_text = std::fs::read(root.join("fsgame.ltx"))
+            .ok()
+            .map(|b| gz_base::text::cp1251_to_utf8(&b).into_owned());
         let layout = fsgame::layout(root, fsgame_text.as_deref());
 
         // the archives: a saved directory is kept while the archive's size and time are
@@ -212,7 +214,12 @@ impl GameFiles {
                 if let Some(rec) = saved.archive(&path).filter(|r| r.len == len && r.mtime == mtime) {
                     return (path, Ok(rec.clone()), true);
                 }
-                let rec = archive::read_directory(&path).map(|entries| ArchiveRec { path: path.clone(), len, mtime, entries: entries.into() });
+                let rec = archive::read_directory(&path).map(|entries| ArchiveRec {
+                    path: path.clone(),
+                    len,
+                    mtime,
+                    entries: entries.into(),
+                });
                 (path, rec.map_err(|e| e.to_string()), false)
             })
             .collect();
@@ -241,10 +248,13 @@ impl GameFiles {
                 module_list.push((r, id, dir));
             }
         }
-        let walked: Vec<(String, walk::Walked)> = trees.into_par_iter().map(|(key, dir)| {
-            let w = walk::walk(&dir, saved.tree(&key));
-            (key, w)
-        }).collect();
+        let walked: Vec<(String, walk::Walked)> = trees
+            .into_par_iter()
+            .map(|(key, dir)| {
+                let w = walk::walk(&dir, saved.tree(&key));
+                (key, w)
+            })
+            .collect();
         for (key, w) in walked {
             stats.dirs_checked += w.checked;
             stats.dirs_read += w.read;
@@ -259,7 +269,11 @@ impl GameFiles {
                 Module { root: r, id, dir, index }
             })
             .collect();
-        let archives = records.archives.iter().map(|a| Archive { path: a.path.clone(), files: a.entries.len() }).collect();
+        let archives = records
+            .archives
+            .iter()
+            .map(|a| Archive { path: a.path.clone(), files: a.entries.len() })
+            .collect();
 
         let changed = !stats.from_cache
             || stats.dirs_read > 0
@@ -269,28 +283,47 @@ impl GameFiles {
         if changed && let Some(dir) = &opts.cache_dir {
             match cache::store(dir, &root_key, &records) {
                 Ok(()) => stats.cache_written = true,
-                Err(e) => stats.cache_problem = Some(format!("the game index could not be saved in {}: {e}", dir.display())),
+                Err(e) => {
+                    stats.cache_problem =
+                        Some(format!("the game index could not be saved in {}: {e}", dir.display()))
+                }
             }
         }
-        GameFiles { root: root.to_path_buf(), root_key, game_data: layout.game_data, archives, index, modules, skipped, records, stats }
+        GameFiles {
+            root: root.to_path_buf(),
+            root_key,
+            game_data: layout.game_data,
+            archives,
+            index,
+            modules,
+            skipped,
+            records,
+            stats,
+        }
     }
 
     /// One table: the archives in order (a later one replaces a path), the loose tree over them.
     fn merge(records: &Records) -> Index {
-        let total = records.archives.iter().map(|a| a.entries.len()).sum::<usize>() + records.tree("gamedata").iter().map(|d| d.files.len()).sum::<usize>();
+        let total = records.archives.iter().map(|a| a.entries.len()).sum::<usize>()
+            + records.tree("gamedata").iter().map(|d| d.files.len()).sum::<usize>();
         let mut map: FxHashMap<&str, (u64, Source)> = FxHashMap::default();
         map.reserve(total);
         for (i, a) in records.archives.iter().enumerate() {
             let archive = u32::try_from(i).unwrap_or(u32::MAX);
             for ArchEntry { path, size, packed, offset } in a.entries.iter() {
-                map.insert(path.as_str(), (u64::from(*size), Source::Archive { archive, offset: *offset, packed: *packed }));
+                map.insert(
+                    path.as_str(),
+                    (u64::from(*size), Source::Archive { archive, offset: *offset, packed: *packed }),
+                );
             }
         }
-        let loose: Vec<(String, u64)> = walk::files_of(records.tree("gamedata")).map(|(rel, size)| (normalize(&rel), size)).collect();
+        let loose: Vec<(String, u64)> =
+            walk::files_of(records.tree("gamedata")).map(|(rel, size)| (normalize(&rel), size)).collect();
         for (key, size) in &loose {
             map.insert(key.as_str(), (*size, Source::Loose));
         }
-        let items: Vec<(String, u64, Source)> = map.into_iter().map(|(k, (size, source))| (k.to_owned(), size, source)).collect();
+        let items: Vec<(String, u64, Source)> =
+            map.into_iter().map(|(k, (size, source))| (k.to_owned(), size, source)).collect();
         Index::build(items)
     }
 
@@ -380,7 +413,10 @@ impl GameFiles {
     }
 
     fn archive_path(&self, archive: u32) -> io::Result<&Path> {
-        self.archives.get(archive as usize).map(|a| a.path.as_path()).ok_or_else(|| io::Error::other("the archive is not mounted"))
+        self.archives
+            .get(archive as usize)
+            .map(|a| a.path.as_path())
+            .ok_or_else(|| io::Error::other("the archive is not mounted"))
     }
 
     /// The bytes of a file. Blocking.
@@ -394,7 +430,8 @@ impl GameFiles {
         match f.source {
             Source::Loose => std::fs::read(walk::dir_path(&self.game_data, f.path)),
             Source::Archive { archive, offset, packed } => {
-                let size = u32::try_from(f.size).map_err(|_| io::Error::other("the archived file is too large"))?;
+                let size =
+                    u32::try_from(f.size).map_err(|_| io::Error::other("the archived file is too large"))?;
                 archive::Open::new(self.archive_path(archive)?)?.read(offset, packed, size)
             }
         }
@@ -416,7 +453,12 @@ impl GameFiles {
                 None => jobs.push(Job::Missing(i)),
                 Some(FileRef { source: Source::Loose, .. }) => jobs.push(Job::Loose(i)),
                 Some(FileRef { source: Source::Archive { archive, offset, packed }, size, .. }) => {
-                    runs.entry(archive).or_default().push((i, offset, packed, u32::try_from(size).unwrap_or(u32::MAX)));
+                    runs.entry(archive).or_default().push((
+                        i,
+                        offset,
+                        packed,
+                        u32::try_from(size).unwrap_or(u32::MAX),
+                    ));
                 }
             }
         }
@@ -432,8 +474,14 @@ impl GameFiles {
                 Job::Missing(i) => vec![(i, Err(not_found(paths.get(i).copied().unwrap_or(""))))],
                 Job::Loose(i) => vec![(i, paths.get(i).map_or_else(|| Err(not_found("")), |p| self.read(p)))],
                 Job::Run(archive, run) => match self.archive_path(archive).and_then(archive::Open::new) {
-                    Ok(mut open) => run.into_iter().map(|(i, offset, packed, size)| (i, open.read(offset, packed, size))).collect(),
-                    Err(e) => run.into_iter().map(|(i, ..)| (i, Err(io::Error::new(e.kind(), e.to_string())))).collect(),
+                    Ok(mut open) => run
+                        .into_iter()
+                        .map(|(i, offset, packed, size)| (i, open.read(offset, packed, size)))
+                        .collect(),
+                    Err(e) => run
+                        .into_iter()
+                        .map(|(i, ..)| (i, Err(io::Error::new(e.kind(), e.to_string()))))
+                        .collect(),
                 },
             })
             .collect();

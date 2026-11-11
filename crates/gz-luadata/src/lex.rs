@@ -42,9 +42,9 @@ pub(crate) const TK_STRING: Tok = 288;
 pub(crate) const TK_EOF: Tok = 289;
 
 const TOKEN_NAMES: [&str; 33] = [
-    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in",
-    "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "..", "...",
-    "==", ">=", "<=", "~=", "::", "<number>", "<name>", "<string>", "<eof>",
+    "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local",
+    "nil", "not", "or", "repeat", "return", "then", "true", "until", "while", "..", "...", "==", ">=", "<=",
+    "~=", "::", "<number>", "<name>", "<string>", "<eof>",
 ];
 
 /// The reserved words, in token order (`TK_and` .. `TK_while`).
@@ -110,7 +110,11 @@ pub(crate) enum TokVal {
 /// stood on, and the token it was near (`None` for the errors LuaJIT raises without one).
 #[derive(Clone, Debug)]
 pub(crate) enum SynErr {
-    At { line: u32, msg: Vec<u8>, near: Option<Vec<u8>> },
+    At {
+        line: u32,
+        msg: Vec<u8>,
+        near: Option<Vec<u8>>,
+    },
     /// A message that carries no location (the bytecode loader's).
     Raw(Vec<u8>),
 }
@@ -455,7 +459,9 @@ impl<'a> Lexer<'a> {
                         break;
                     }
                 }
-                if let Some(i) = TOKEN_NAMES.iter().take(RESERVED).position(|w| w.as_bytes() == self.sb.as_slice()) {
+                if let Some(i) =
+                    TOKEN_NAMES.iter().take(RESERVED).position(|w| w.as_bytes() == self.sb.as_slice())
+                {
                     return Ok((TK_OFS + 1 + i as Tok, TokVal::Str(self.sb.clone())));
                 }
                 return Ok((TK_NAME, TokVal::Str(self.sb.clone())));

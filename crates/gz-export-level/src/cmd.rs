@@ -34,7 +34,9 @@ pub fn register(reg: &mut Registry) {
 /// `SceneStarts` slot with the scene's Player Starts (`E201` counts them for the scene's level).
 /// Called once at start.
 pub fn install(editor: &Arc<Editor>) {
-    BuildChecks::of(editor).set_bake(|ed, session| -> BoxFuture<'static, String> { Box::pin(async move { bake_note(&ed, &session).await }) });
+    BuildChecks::of(editor).set_bake(|ed, session| -> BoxFuture<'static, String> {
+        Box::pin(async move { bake_note(&ed, &session).await })
+    });
     gz_world::SceneStarts::of(editor).provide(|ed| {
         let session = ed.project_opt()?;
         let svc = session.services.get::<SceneService>()?;
@@ -104,7 +106,14 @@ struct SpawnRun {
     path: Option<PathBuf>,
 }
 
-async fn run_spawn(editor: &Arc<Editor>, c: &Ctx, selected_only: bool, section: Option<String>, mode: Option<String>, mirror: bool) -> Result<SpawnRun, String> {
+async fn run_spawn(
+    editor: &Arc<Editor>,
+    c: &Ctx,
+    selected_only: bool,
+    section: Option<String>,
+    mode: Option<String>,
+    mirror: bool,
+) -> Result<SpawnRun, String> {
     let settings = gz_scene::game::settings(editor).await;
     let patrols = ExportService::game_patrols(editor).await;
     let game = match GameLink::of(editor) {
@@ -155,9 +164,8 @@ async fn run_spawn(editor: &Arc<Editor>, c: &Ctx, selected_only: bool, section: 
     log_lines(editor, &bake.log);
     let (path, failed) = written?;
     log_lines(editor, &failed);
-    match &path {
-        Some(p) => editor.log.info(format!("* [XMS] spawn layer: {} op(s) -> {}", bake.result.exported, p.display())),
-        None => {}
+    if let Some(p) = &path {
+        editor.log.info(format!("* [XMS] spawn layer: {} op(s) -> {}", bake.result.exported, p.display()))
     }
     Ok(SpawnRun { bake, path })
 }
@@ -165,9 +173,16 @@ async fn run_spawn(editor: &Arc<Editor>, c: &Ctx, selected_only: bool, section: 
 async fn export_spawn(editor: &Arc<Editor>, a: &Args, _o: Origin) -> Reply {
     let c = ctx(editor, a)?;
     let selected_only = arg_bool(a, "selected_only", true);
-    let run = run_spawn(editor, &c, selected_only, a.text("section").map(str::to_owned), a.text("mode").map(str::to_owned), false)
-        .await
-        .map_err(CmdError::invalid)?;
+    let run = run_spawn(
+        editor,
+        &c,
+        selected_only,
+        a.text("section").map(str::to_owned),
+        a.text("mode").map(str::to_owned),
+        false,
+    )
+    .await
+    .map_err(CmdError::invalid)?;
     let r = &run.bake.result;
     Ok(json!({
         "exported": r.exported,
@@ -189,7 +204,12 @@ async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
     let selected_only = arg_bool(a, "selected_only", true);
     let lib = library(editor, &c.svc, &c.snap).await;
     let (root, level) = (c.session.root.clone(), c.level.clone());
-    let existing = editor.exec.io(move || std::fs::read(gather::level_dir(&root, &level).join("overlay.xcform")).unwrap_or_default()).await;
+    let existing = editor
+        .exec
+        .io(move || {
+            std::fs::read(gather::level_dir(&root, &level).join("overlay.xcform")).unwrap_or_default()
+        })
+        .await;
     let snap = c.snap.clone();
     let made = editor
         .exec
@@ -206,8 +226,15 @@ async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
         .io(move || gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform"))
         .await
         .map_err(CmdError::invalid)?;
-    editor.log.info(format!("* [XMS] collision overlay: {} object(s), {} tri(s) -> {}", made.objects_used, made.form.tris.len(), path.display()));
-    Ok(json!({ "path": json_path(&path), "vertices": made.form.verts.len(), "tris": made.form.tris.len(), "materials": made.form.materials.len() }))
+    editor.log.info(format!(
+        "* [XMS] collision overlay: {} object(s), {} tri(s) -> {}",
+        made.objects_used,
+        made.form.tris.len(),
+        path.display()
+    ));
+    Ok(
+        json!({ "path": json_path(&path), "vertices": made.form.verts.len(), "tris": made.form.tris.len(), "materials": made.form.materials.len() }),
+    )
 }
 
 async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
@@ -223,7 +250,9 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
         .io(move || {
             let dir = gather::level_dir(&root, &level);
             let x = std::fs::read(dir.join("overlay.xcform")).unwrap_or_default();
-            let l = std::fs::read(dir.join("overlay_visuals.ltx")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            let l = std::fs::read(dir.join("overlay_visuals.ltx"))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
             (x, l)
         })
         .await;
@@ -231,7 +260,9 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
     let made = editor
         .exec
         .cpu(move || {
-            let bounds = |o: &Object| gz_scene::objects::world_box(&snap, o, &|r: &str| lib.cached(r).map(|l| l.bounds));
+            let bounds = |o: &Object| {
+                gz_scene::objects::world_box(&snap, o, &|r: &str| lib.cached(r).map(|l| l.bounds))
+            };
             overlay::cut(&snap, selected_only, overlap, grow, &bounds, &xcform, &ltx)
         })
         .await
@@ -244,8 +275,14 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
         .exec
         .io(move || -> Result<PathBuf, String> {
             let p = gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform")?;
-            gather::write_level_file(&root, &level, "overlay_visuals.ltx", ltx.as_bytes(), "overlay_visuals.ltx")
-                .map_err(|_| "cuts written, but overlay_visuals.ltx is not writable".to_owned())?;
+            gather::write_level_file(
+                &root,
+                &level,
+                "overlay_visuals.ltx",
+                ltx.as_bytes(),
+                "overlay_visuals.ltx",
+            )
+            .map_err(|_| "cuts written, but overlay_visuals.ltx is not writable".to_owned())?;
             Ok(p)
         })
         .await
@@ -272,13 +309,24 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
     let dir = gather::level_dir(&c.session.root, &c.level);
     let ltx_path = dir.join("overlay_visuals.ltx");
     let lp = ltx_path.clone();
-    let registry_text = editor.exec.io(move || std::fs::read(&lp).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()).await;
+    let registry_text = editor
+        .exec
+        .io(move || std::fs::read(&lp).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default())
+        .await;
     let snap = c.snap.clone();
+    // the game's materials: a surface whose material the game lacks is not exported (C++
+    // ExportObjectOGF against GameMaterialLibrary)
+    let materials = match gz_game::read_game_or_bundled(editor, "gamemtl.xr").await {
+        Ok((bytes, _)) => {
+            editor.exec.cpu(move || gz_fmt_xr::GameMaterials::read(&bytes).ok().map(Arc::new)).await
+        }
+        Err(_) => None,
+    };
     let made = editor
         .exec
         .cpu(move || {
             let look = lookup(lib);
-            overlay::visuals(&snap, selected_only, &look, &build_name())
+            overlay::visuals(&snap, selected_only, &look, &build_name(), materials)
         })
         .await;
     let visuals_dir = dir.join("visuals");
@@ -288,7 +336,11 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
     };
     log_lines(editor, &made.log);
     let vd = visuals_dir.clone();
-    let files: Vec<(String, PathBuf, Vec<u8>)> = made.files.iter().map(|f| (f.name.clone(), vd.join(format!("{}.ogf", f.name)), f.bytes.clone())).collect();
+    let files: Vec<(String, PathBuf, Vec<u8>)> = made
+        .files
+        .iter()
+        .map(|f| (f.name.clone(), vd.join(format!("{}.ogf", f.name)), f.bytes.clone()))
+        .collect();
     let exec = editor.exec.clone();
     let written: Vec<(String, bool)> = editor
         .exec
@@ -300,7 +352,9 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
     let names: Vec<String> = written.iter().filter(|(_, ok)| *ok).map(|(n, _)| n.clone()).collect();
     let skipped_failed = made.skipped_failed + u32::try_from(written.len() - names.len()).unwrap_or(0);
     if names.is_empty() {
-        return Err(CmdError::invalid("nothing exported - only skeleton/dynamic or unresolvable objects in the selection"));
+        return Err(CmdError::invalid(
+            "nothing exported - only skeleton/dynamic or unresolvable objects in the selection",
+        ));
     }
     let ltx = overlay::registry(&registry_text, &names);
     editor

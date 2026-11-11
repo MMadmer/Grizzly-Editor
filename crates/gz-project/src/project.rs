@@ -106,7 +106,11 @@ pub fn scene_in_project(root: &str, file: &str) -> Option<String> {
     if file.is_empty() || root.is_empty() {
         return None;
     }
-    let file = if paths::is_absolute(file) { paths::to_backslash(file) } else { paths::join(root, &paths::to_backslash(file)) };
+    let file = if paths::is_absolute(file) {
+        paths::to_backslash(file)
+    } else {
+        paths::join(root, &paths::to_backslash(file))
+    };
     for real in [false, true] {
         let (path, base) = if real {
             (paths::real_path(&file), paths::real_path(root))
@@ -147,7 +151,11 @@ pub fn base_scenes(editor_root: &std::path::Path) -> Vec<String> {
 /// Copies the base scene `name` (`<name>.level` and its folder) into
 /// `<project>\rawdata\levels`, and answers the project-side `.level`. A scene the project has
 /// already is the author's copy: nothing is copied, the same answer.
-pub fn import_base_scene(editor_root: &std::path::Path, project_root: &std::path::Path, name: &str) -> Result<std::path::PathBuf, String> {
+pub fn import_base_scene(
+    editor_root: &std::path::Path,
+    project_root: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, String> {
     if name.is_empty() {
         return Err("no scene name".into());
     }
@@ -229,8 +237,14 @@ mod tests {
 
     #[test]
     fn scenes_inside_only() {
-        assert_eq!(scene_in_project("D:\\P", "D:\\P\\rawdata\\levels\\a.level").as_deref(), Some("rawdata\\levels\\a.level"));
-        assert_eq!(scene_in_project("D:\\P", "rawdata/levels/a.level").as_deref(), Some("rawdata\\levels\\a.level"));
+        assert_eq!(
+            scene_in_project("D:\\P", "D:\\P\\rawdata\\levels\\a.level").as_deref(),
+            Some("rawdata\\levels\\a.level")
+        );
+        assert_eq!(
+            scene_in_project("D:\\P", "rawdata/levels/a.level").as_deref(),
+            Some("rawdata\\levels\\a.level")
+        );
         assert_eq!(scene_in_project("D:\\P", "D:\\Other\\a.level"), None);
         assert_eq!(scene_in_project("D:\\P", "D:\\P2\\a.level"), None);
         assert_eq!(scene_in_project("D:\\P", "D:\\P"), None);

@@ -175,7 +175,18 @@ async fn read(editor: &Arc<Editor>, key: ListKey) -> Vec<String> {
         }
         ListKey::SpawnSections => {
             let roster = gz_game::spawn_roster(editor).await;
-            sorted(roster.iter().map(|s| if s.group.is_empty() { s.section.clone() } else { format!("{}\\{}", s.group, s.section) }).collect())
+            sorted(
+                roster
+                    .iter()
+                    .map(|s| {
+                        if s.group.is_empty() {
+                            s.section.clone()
+                        } else {
+                            format!("{}\\{}", s.group, s.section)
+                        }
+                    })
+                    .collect(),
+            )
         }
         ListKey::Textures | ListKey::Sounds | ListKey::Visuals => {
             let Ok(link) = gz_game::GameLink::of(editor) else { return Vec::new() };
@@ -192,33 +203,71 @@ async fn read(editor: &Arc<Editor>, key: ListKey) -> Vec<String> {
             editor
                 .exec
                 .cpu(move || match gz_fmt_xr::Particles::read(&bytes) {
-                    Ok(p) => sorted(p.effects.iter().map(|e| e.name.to_string()).chain(p.groups.iter().map(|g| g.name.to_string())).collect()),
+                    Ok(p) => sorted(
+                        p.effects
+                            .iter()
+                            .map(|e| e.name.to_string())
+                            .chain(p.groups.iter().map(|g| g.name.to_string()))
+                            .collect(),
+                    ),
                     Err(_) => Vec::new(),
                 })
                 .await
         }
         ListKey::EngineShaders => {
             let Some(bytes) = game_file(editor, "shaders.xr").await else { return Vec::new() };
-            editor.exec.cpu(move || gz_fmt_xr::Shaders::read(&bytes).map(|s| sorted(s.blenders.iter().map(|b| b.name.to_string()).collect())).unwrap_or_default()).await
+            editor
+                .exec
+                .cpu(move || {
+                    gz_fmt_xr::Shaders::read(&bytes)
+                        .map(|s| sorted(s.blenders.iter().map(|b| b.name.to_string()).collect()))
+                        .unwrap_or_default()
+                })
+                .await
         }
         ListKey::CompilerShaders => {
             let Some(bytes) = game_file(editor, "shaders_xrlc.xr").await else { return Vec::new() };
-            editor.exec.cpu(move || gz_fmt_xr::ShadersXrlc::read(&bytes).map(|s| sorted(s.shaders.iter().map(gz_fmt_xr::ShaderXrlc::name).collect())).unwrap_or_default()).await
+            editor
+                .exec
+                .cpu(move || {
+                    gz_fmt_xr::ShadersXrlc::read(&bytes)
+                        .map(|s| sorted(s.shaders.iter().map(gz_fmt_xr::ShaderXrlc::name).collect()))
+                        .unwrap_or_default()
+                })
+                .await
         }
         ListKey::GameMaterials => {
             let Some(bytes) = game_file(editor, "gamemtl.xr").await else { return Vec::new() };
-            editor.exec.cpu(move || gz_fmt_xr::GameMaterials::read(&bytes).map(|m| sorted(m.materials.iter().map(|x| x.name.to_string()).collect())).unwrap_or_default()).await
+            editor
+                .exec
+                .cpu(move || {
+                    gz_fmt_xr::GameMaterials::read(&bytes)
+                        .map(|m| sorted(m.materials.iter().map(|x| x.name.to_string()).collect()))
+                        .unwrap_or_default()
+                })
+                .await
         }
         ListKey::SoundEnvironments => {
             let Some(bytes) = game_file(editor, "sound_env.xr").await else { return Vec::new() };
             editor
                 .exec
-                .cpu(move || gz_fmt_xr::SoundEnvironments::read(&bytes).map(|m| sorted(m.environments.iter().map(|x| x.name.to_string()).collect())).unwrap_or_default())
+                .cpu(move || {
+                    gz_fmt_xr::SoundEnvironments::read(&bytes)
+                        .map(|m| sorted(m.environments.iter().map(|x| x.name.to_string()).collect()))
+                        .unwrap_or_default()
+                })
                 .await
         }
         ListKey::LightAnims => {
             let Some(bytes) = game_file(editor, "lanims.xr").await else { return Vec::new() };
-            editor.exec.cpu(move || gz_fmt_xr::LightAnims::read(&bytes).map(|m| sorted(m.items.iter().map(|x| x.name.to_string()).collect())).unwrap_or_default()).await
+            editor
+                .exec
+                .cpu(move || {
+                    gz_fmt_xr::LightAnims::read(&bytes)
+                        .map(|m| sorted(m.items.iter().map(|x| x.name.to_string()).collect()))
+                        .unwrap_or_default()
+                })
+                .await
         }
     }
 }

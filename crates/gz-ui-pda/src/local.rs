@@ -1,7 +1,10 @@
 //! Widgets the kit lacks, local to this crate until a second surface wants them
 //! (docs/UI_DESIGN.md, section 4: "A widget the kit lacks is written as a local one").
 
-use egui::{Align2, ComboBox, CornerRadius, Frame, Key, Margin, Modifiers, PopupCloseBehavior, Rect, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui, Vec2, pos2};
+use egui::{
+    Align2, ComboBox, CornerRadius, Frame, Key, Margin, Modifiers, PopupCloseBehavior, Rect, Sense, Shape,
+    Stroke, StrokeKind, TextEdit, Ui, Vec2, pos2,
+};
 use gz_ui::text::{self, Clip};
 use gz_ui::{Font, Icon, Tone, icon_button, icons, metrics, palette};
 
@@ -11,9 +14,22 @@ pub fn local_list_header(ui: &mut Ui, title: &str, tip: &str) -> bool {
     let p = palette(ui.ctx());
     let w = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, metrics::ICON_BUTTON), Sense::hover());
-    text::paint(ui.painter(), &Font::Strong.id(), pos2(rect.min.x, rect.center().y), Align2::LEFT_CENTER, p.text, title, Some((w - metrics::ICON_BUTTON - 4.0).max(0.0)), Clip::End);
-    let b = Rect::from_min_size(pos2(rect.max.x - metrics::ICON_BUTTON, rect.min.y), Vec2::splat(metrics::ICON_BUTTON));
-    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("gz-ui-pda.list_header", title)).max_rect(b));
+    text::paint(
+        ui.painter(),
+        &Font::Strong.id(),
+        pos2(rect.min.x, rect.center().y),
+        Align2::LEFT_CENTER,
+        p.text,
+        title,
+        Some((w - metrics::ICON_BUTTON - 4.0).max(0.0)),
+        Clip::End,
+    );
+    let b = Rect::from_min_size(
+        pos2(rect.max.x - metrics::ICON_BUTTON, rect.min.y),
+        Vec2::splat(metrics::ICON_BUTTON),
+    );
+    let mut child =
+        ui.new_child(egui::UiBuilder::new().id_salt(("gz-ui-pda.list_header", title)).max_rect(b));
     icon_button(&mut child, Icon::Plus, tip, false, true).clicked()
 }
 
@@ -35,10 +51,27 @@ pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> boo
         if resp.hovered() {
             painter.rect_filled(rect, CornerRadius::same(3), p.hover);
         }
-        let chevron = Rect::from_min_size(pos2(rect.min.x + 4.0, rect.center().y - metrics::GLYPH_STATUS * 0.5), Vec2::splat(metrics::GLYPH_STATUS));
-        icons::draw(painter, if is_open { Icon::ChevronDown } else { Icon::ChevronRight }, chevron, p.text_secondary);
+        let chevron = Rect::from_min_size(
+            pos2(rect.min.x + 4.0, rect.center().y - metrics::GLYPH_STATUS * 0.5),
+            Vec2::splat(metrics::GLYPH_STATUS),
+        );
+        icons::draw(
+            painter,
+            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
+            chevron,
+            p.text_secondary,
+        );
         let x = chevron.max.x + 6.0;
-        text::paint(painter, &Font::Strong.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, p.text, title, Some((rect.max.x - x).max(0.0)), Clip::End);
+        text::paint(
+            painter,
+            &Font::Strong.id(),
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            p.text,
+            title,
+            Some((rect.max.x - x).max(0.0)),
+            Clip::End,
+        );
     }
     gz_ui::audit::control(&ctx, title, true, None, None, rect);
     is_open
@@ -52,7 +85,10 @@ pub fn local_tab_strip(ui: &mut Ui, id_salt: &str, labels: &[String], current: &
     let font = Font::Body.id();
     let w = ui.available_width();
     let (strip, _) = ui.allocate_exact_size(Vec2::new(w, metrics::PANEL_TABS), Sense::hover());
-    ui.painter().line_segment([pos2(strip.min.x, strip.max.y - 0.5), pos2(strip.max.x, strip.max.y - 0.5)], Stroke::new(1.0, p.border_subtle));
+    ui.painter().line_segment(
+        [pos2(strip.min.x, strip.max.y - 0.5), pos2(strip.max.x, strip.max.y - 0.5)],
+        Stroke::new(1.0, p.border_subtle),
+    );
     // the tabs share the strip when it is too narrow for their labels
     let wants: Vec<f32> = labels.iter().map(|l| text::width(&ctx, &font, l) + 24.0).collect();
     let total: f32 = wants.iter().sum();
@@ -73,11 +109,24 @@ pub fn local_tab_strip(ui: &mut Ui, id_salt: &str, labels: &[String], current: &
         let painter = ui.painter();
         if on {
             painter.rect_filled(r, CornerRadius::ZERO, p.base);
-            painter.rect_filled(Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 2.0)), CornerRadius::ZERO, p.accent_bright);
+            painter.rect_filled(
+                Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + 2.0)),
+                CornerRadius::ZERO,
+                p.accent_bright,
+            );
         } else if resp.hovered() {
             painter.rect_filled(r, CornerRadius::ZERO, p.hover);
         }
-        let shown_cut = text::paint(painter, &font, r.center(), Align2::CENTER_CENTER, if on { p.text } else { p.text_secondary }, label, Some((tw - 12.0).max(0.0)), Clip::End);
+        let shown_cut = text::paint(
+            painter,
+            &font,
+            r.center(),
+            Align2::CENTER_CENTER,
+            if on { p.text } else { p.text_secondary },
+            label,
+            Some((tw - 12.0).max(0.0)),
+            Clip::End,
+        );
         if shown_cut {
             gz_ui::audit::truncated(&ctx, label, label, r);
         }
@@ -106,7 +155,11 @@ pub fn local_check(ui: &mut Ui, label: &str, value: &mut bool) -> bool {
 /// is what the field says, `add` draws the rows.
 pub fn local_multi_combo(ui: &mut Ui, id_salt: &str, shown: &str, add: impl FnOnce(&mut Ui)) {
     let w = ui.available_width();
-    let resp = ComboBox::from_id_salt(("gz-ui-pda.multi", id_salt)).selected_text(shown).width(w).close_behavior(PopupCloseBehavior::CloseOnClickOutside).show_ui(ui, add);
+    let resp = ComboBox::from_id_salt(("gz-ui-pda.multi", id_salt))
+        .selected_text(shown)
+        .width(w)
+        .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, add);
     gz_ui::audit::control(ui.ctx(), shown, true, None, None, resp.response.rect);
 }
 
@@ -123,7 +176,13 @@ pub struct CodeOut {
 /// A code text: Cascadia Mono, line numbers in a gutter, an error line marked; the field is as
 /// tall as the text, so the pane scrolls - the gutter with it - and follows the caret. `goto`
 /// scrolls to a line (1-based) once.
-pub fn local_code_view(ui: &mut Ui, id_salt: &str, value: &mut String, error_line: u32, goto: &mut u32) -> CodeOut {
+pub fn local_code_view(
+    ui: &mut Ui,
+    id_salt: &str,
+    value: &mut String,
+    error_line: u32,
+    goto: &mut u32,
+) -> CodeOut {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let font = Font::Mono.id();
@@ -138,9 +197,11 @@ pub fn local_code_view(ui: &mut Ui, id_salt: &str, value: &mut String, error_lin
     let rect = ui.available_rect_before_wrap();
     ui.painter().rect_filled(rect, CornerRadius::ZERO, p.inset);
     let gutter = text::width(&ctx, &font, "00000") + 12.0;
-    let mut scroll = egui::ScrollArea::both().id_salt(("gz-ui-pda.code_scroll", id_salt)).auto_shrink([false, false]);
+    let mut scroll =
+        egui::ScrollArea::both().id_salt(("gz-ui-pda.code_scroll", id_salt)).auto_shrink([false, false]);
     if *goto > 0 {
-        scroll = scroll.vertical_scroll_offset((4.0 + (*goto as f32 - 1.0) * line_h - rect.height() / 3.0).max(0.0));
+        scroll = scroll
+            .vertical_scroll_offset((4.0 + (*goto as f32 - 1.0) * line_h - rect.height() / 3.0).max(0.0));
         *goto = 0;
     }
     scroll.show(ui, |ui| {
@@ -180,7 +241,10 @@ pub fn local_code_view(ui: &mut Ui, id_salt: &str, value: &mut String, error_lin
                 }
                 if starts {
                     if line == error_line {
-                        let band = Rect::from_min_max(pos2(left, r.min.y), pos2(area.max.x, r.min.y + line_h.max(r.height())));
+                        let band = Rect::from_min_max(
+                            pos2(left, r.min.y),
+                            pos2(area.max.x, r.min.y + line_h.max(r.height())),
+                        );
                         painter.set(under, Shape::rect_filled(band, CornerRadius::ZERO, p.tint(Tone::Error)));
                     }
                     let color = if line == error_line {
@@ -190,7 +254,13 @@ pub fn local_code_view(ui: &mut Ui, id_salt: &str, value: &mut String, error_lin
                     } else {
                         p.text_disabled
                     };
-                    painter.text(pos2(left + gutter - 8.0, r.min.y), Align2::RIGHT_TOP, line.to_string(), font.clone(), color);
+                    painter.text(
+                        pos2(left + gutter - 8.0, r.min.y),
+                        Align2::RIGHT_TOP,
+                        line.to_string(),
+                        font.clone(),
+                        color,
+                    );
                 }
                 chars += n + usize::from(row.ends_with_newline);
                 starts = row.ends_with_newline;
@@ -199,7 +269,10 @@ pub fn local_code_view(ui: &mut Ui, id_salt: &str, value: &mut String, error_lin
                 }
             }
             let x = left + gutter - 3.0;
-            painter.line_segment([pos2(x, area.min.y), pos2(x, area.max.y.max(rect.max.y))], Stroke::new(1.0, p.border_subtle));
+            painter.line_segment(
+                [pos2(x, area.min.y), pos2(x, area.max.y.max(rect.max.y))],
+                Stroke::new(1.0, p.border_subtle),
+            );
         });
     });
     out
@@ -217,14 +290,30 @@ pub fn local_toggle_row(ui: &mut Ui, label: &str, on: bool) -> bool {
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if resp.hovered() {
-            painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), if resp.is_pointer_button_down_on() { p.pressed } else { p.hover });
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(metrics::RADIUS),
+                if resp.is_pointer_button_down_on() { p.pressed } else { p.hover },
+            );
         }
-        let glyph = Rect::from_min_size(pos2(rect.min.x + 8.0, rect.center().y - metrics::GLYPH * 0.5), Vec2::splat(metrics::GLYPH));
+        let glyph = Rect::from_min_size(
+            pos2(rect.min.x + 8.0, rect.center().y - metrics::GLYPH * 0.5),
+            Vec2::splat(metrics::GLYPH),
+        );
         if on {
             icons::draw(painter, Icon::Check, glyph, p.accent_bright);
         }
         let x = glyph.max.x + 8.0;
-        text::paint(painter, &font, pos2(x, rect.center().y), Align2::LEFT_CENTER, p.text, label, Some((rect.max.x - 8.0 - x).max(0.0)), Clip::End);
+        text::paint(
+            painter,
+            &font,
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            p.text,
+            label,
+            Some((rect.max.x - 8.0 - x).max(0.0)),
+            Clip::End,
+        );
     }
     gz_ui::audit::control(ui.ctx(), label, true, None, None, rect);
     resp.clicked()
@@ -233,5 +322,10 @@ pub fn local_toggle_row(ui: &mut Ui, label: &str, on: bool) -> bool {
 /// The frame round the row a dragged row would land on.
 pub fn local_drop_mark(ui: &Ui, rect: Rect) {
     let p = palette(ui.ctx());
-    ui.painter().rect_stroke(rect, CornerRadius::same(metrics::RADIUS), Stroke::new(2.0, p.accent_bright), StrokeKind::Inside);
+    ui.painter().rect_stroke(
+        rect,
+        CornerRadius::same(metrics::RADIUS),
+        Stroke::new(2.0, p.accent_bright),
+        StrokeKind::Inside,
+    );
 }

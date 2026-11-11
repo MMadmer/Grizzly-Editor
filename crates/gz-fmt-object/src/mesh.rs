@@ -9,7 +9,9 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::bone::Bone;
-use crate::io::{Text, TextEncoding, checked_count, chunk, chunk_u32, need_chunk, r_f32s, r_i32s, r_vec3s, w_str};
+use crate::io::{
+    Text, TextEncoding, checked_count, chunk, chunk_u32, need_chunk, r_f32s, r_i32s, r_vec3s, w_str,
+};
 use crate::object::Surface;
 use crate::xmath::{Aabb, EPS_S, magnitude, mknormal};
 use crate::{ObjectError, Result};
@@ -252,12 +254,15 @@ impl Mesh {
         }
 
         let mut faces = Vec::with_capacity(face_count);
-        for f in raw.chunks_exact(6) {
+        for f in raw.as_chunks::<6>().0 {
             let mut face = Face::default();
             for k in 0..3 {
                 let (p, vr) = (f[k * 2], f[k * 2 + 1]);
                 if p < 0 || p as usize >= vert_count || vr < 0 || vr as usize >= ref_count {
-                    return Err(bad(&name, "a face points outside the vertices or the vertex map references"));
+                    return Err(bad(
+                        &name,
+                        "a face points outside the vertices or the vertex map references",
+                    ));
                 }
                 face.v[k] = FaceVert { point: p as u32, vmref: vr as u32 };
             }
@@ -270,7 +275,10 @@ impl Mesh {
         for _ in 0..surf_count {
             let surf_name = text.r_str(&mut c)?;
             let Some(surface) = surfaces.iter().position(|s| s.name.eq_ignore_ascii_case(&surf_name)) else {
-                return Err(bad(&name, format_args!("its faces wear surface '{surf_name}', which the object lacks")));
+                return Err(bad(
+                    &name,
+                    format_args!("its faces wear surface '{surf_name}', which the object lacks"),
+                ));
             };
             let n = c.r_u32()? as usize;
             if n == 0 {
@@ -280,7 +288,10 @@ impl Mesh {
             let mut list = Vec::with_capacity(n);
             for id in r_i32s(&mut c, n)? {
                 if id < 0 || id as usize >= face_count {
-                    return Err(bad(&name, format_args!("surface '{surf_name}' lists a face the mesh lacks")));
+                    return Err(bad(
+                        &name,
+                        format_args!("surface '{surf_name}' lists a face the mesh lacks"),
+                    ));
                 }
                 list.push(id as u32);
             }
@@ -392,14 +403,27 @@ impl Mesh {
     fn rebuild_with(&mut self, source: impl Fn(VMapPt) -> Option<(SmolStr, bool, [f32; 2])>) -> Result<()> {
         let mut vert_claimed = vec![false; self.points.len()];
         let mut maps: Vec<VMap> = Vec::new();
-        let mut refs: Vec<VMapRefs> =
-            self.vmrefs.iter().map(|r| r.iter().map(|_| VMapPt { vmap: NO_INDEX, index: NO_INDEX }).collect()).collect();
+        let mut refs: Vec<VMapRefs> = self
+            .vmrefs
+            .iter()
+            .map(|r| r.iter().map(|_| VMapPt { vmap: NO_INDEX, index: NO_INDEX }).collect())
+            .collect();
 
         let find = |maps: &mut Vec<VMap>, name: &SmolStr, kind: VMapKind, polymap: bool| -> usize {
-            match maps.iter().position(|m| m.kind == kind && m.polymap == polymap && m.name.eq_ignore_ascii_case(name)) {
+            match maps
+                .iter()
+                .position(|m| m.kind == kind && m.polymap == polymap && m.name.eq_ignore_ascii_case(name))
+            {
                 Some(i) => i,
                 None => {
-                    maps.push(VMap { name: name.clone(), kind, polymap, values: Vec::new(), vindices: Vec::new(), pindices: Vec::new() });
+                    maps.push(VMap {
+                        name: name.clone(),
+                        kind,
+                        polymap,
+                        values: Vec::new(),
+                        vindices: Vec::new(),
+                        pindices: Vec::new(),
+                    });
                     maps.len() - 1
                 }
             }
@@ -407,7 +431,9 @@ impl Mesh {
 
         for (f_id, face) in self.faces.iter().enumerate() {
             for fv in face.v {
-                let (Some(old), Some(new)) = (self.vmrefs.get(fv.vmref as usize), refs.get_mut(fv.vmref as usize)) else {
+                let (Some(old), Some(new)) =
+                    (self.vmrefs.get(fv.vmref as usize), refs.get_mut(fv.vmref as usize))
+                else {
                     return Err(bad(&self.name, "a face points outside the vertex map references"));
                 };
                 let Some(claimed) = vert_claimed.get_mut(fv.point as usize) else {
@@ -541,7 +567,10 @@ impl Mesh {
     /// `GenerateFNormals`: one normal per face.
     #[must_use]
     pub fn face_normals(&self) -> Vec<Vec3> {
-        self.faces.iter().map(|f| mknormal(self.point(f.v[0].point), self.point(f.v[1].point), self.point(f.v[2].point))).collect()
+        self.faces
+            .iter()
+            .map(|f| mknormal(self.point(f.v[0].point), self.point(f.v[1].point), self.point(f.v[2].point)))
+            .collect()
     }
 
     /// `GenerateVNormals`: three normals per face, one per corner. A corner's normal is the
@@ -611,7 +640,11 @@ impl Mesh {
                             continue;
                         }
                         let (f_from, f_test) = (list[from as usize], list[test as usize]);
-                        let (Some(face_a), Some(face_b)) = (self.faces.get(f_from as usize), self.faces.get(f_test as usize)) else { continue };
+                        let (Some(face_a), Some(face_b)) =
+                            (self.faces.get(f_from as usize), self.faces.get(f_test as usize))
+                        else {
+                            continue;
+                        };
                         let Some((ea, eb)) = same_edge(face_a, face_b) else { continue };
                         if f_from == f_test || connects(sg(f_from), sg(f_test), ea, eb) {
                             processed[test as usize] = true;
@@ -667,7 +700,9 @@ impl Mesh {
             .vmaps
             .iter()
             .map(|m| match m.kind {
-                VMapKind::Weight => bones.iter().position(|b| b.wmap == m.name).and_then(|i| u16::try_from(i).ok()),
+                VMapKind::Weight => {
+                    bones.iter().position(|b| b.wmap == m.name).and_then(|i| u16::try_from(i).ok())
+                }
                 VMapKind::Uv => None,
             })
             .collect();
@@ -688,7 +723,10 @@ impl Mesh {
                     match map.kind {
                         VMapKind::Weight => {
                             let Some(id) = map_bone.get(pt.vmap as usize).copied().flatten() else {
-                                return Err(bad(&self.name, format_args!("no bone is bound to weight map '{}'", map.name)));
+                                return Err(bad(
+                                    &self.name,
+                                    format_args!("no bone is bound to weight map '{}'", map.name),
+                                ));
                             };
                             wb.push(BoneWeight { id, w: map.weight(pt.index).unwrap_or(0.0) });
                         }
@@ -757,9 +795,15 @@ pub(crate) mod tests {
 
     /// Two triangles sharing an edge, bent 90 degrees: (0,1,2) in the floor, (1,3,2) up the wall.
     pub(crate) fn bent_quad(sg: [u32; 2]) -> Mesh {
-        let points = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 1.0)];
+        let points = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 1.0),
+        ];
         let fv = |point, vmref| FaceVert { point, vmref };
-        let faces = vec![Face { v: [fv(0, 0), fv(1, 1), fv(2, 2)] }, Face { v: [fv(1, 1), fv(3, 3), fv(2, 2)] }];
+        let faces =
+            vec![Face { v: [fv(0, 0), fv(1, 1), fv(2, 2)] }, Face { v: [fv(1, 1), fv(3, 3), fv(2, 2)] }];
         let uv = VMap {
             name: "Texture".into(),
             kind: VMapKind::Uv,
@@ -879,7 +923,14 @@ pub(crate) mod tests {
     fn skin_vertices_keep_the_heaviest_bones() {
         let mut m = bent_quad([0, 0]);
         for (name, w) in [("a", 0.2f32), ("b", 0.6), ("c", 0.2)] {
-            m.vmaps.push(VMap { name: name.into(), kind: VMapKind::Weight, polymap: false, values: vec![w], vindices: vec![0], pindices: vec![] });
+            m.vmaps.push(VMap {
+                name: name.into(),
+                kind: VMapKind::Weight,
+                polymap: false,
+                values: vec![w],
+                vindices: vec![0],
+                pindices: vec![],
+            });
         }
         for (i, r) in m.vmrefs.iter_mut().enumerate() {
             if i == 0 {
@@ -888,7 +939,10 @@ pub(crate) mod tests {
                 r.push(VMapPt { vmap: 2, index: 0 });
             }
         }
-        let bones: Vec<Bone> = ["a", "b", "c"].iter().map(|n| Bone { name: (*n).into(), wmap: (*n).into(), ..Bone::default() }).collect();
+        let bones: Vec<Bone> = ["a", "b", "c"]
+            .iter()
+            .map(|n| Bone { name: (*n).into(), wmap: (*n).into(), ..Bone::default() })
+            .collect();
         let normals = m.vertex_normals();
         let sv = m.skin_vertices(&bones, 2, &normals).unwrap();
         assert_eq!(sv.len(), 6);

@@ -48,10 +48,73 @@ impl Finding {
 }
 
 const ALLOWED: &[&str] = &[
-    "ltx", "ltxp", "xml", "xmlp", "script", "txt", "md", "json", "csv", "ini", "cfg", "seq", "gif", "mp4", "webm", "wmv", "html", "htm", "css",
-    "png", "jpg", "jpeg", "nqasset", "behasset", "npcasset", "pdaasset", "xspawn", "xcform", "dds", "thm", "ogg", "ogm", "ogf", "omf", "skl",
-    "skls", "anm", "ppe", "xr", "ps", "vs", "gs", "hs", "ds", "cs", "h", "hlsl", "s", "spawn", "graph", "ai", "gct", "cform", "details",
-    "env_mod", "fog_vol", "game", "geom", "geomx", "hom", "ps_static", "snd_env", "snd_static", "som", "sectors", "wallmarks", "lanims",
+    "ltx",
+    "ltxp",
+    "xml",
+    "xmlp",
+    "script",
+    "txt",
+    "md",
+    "json",
+    "csv",
+    "ini",
+    "cfg",
+    "seq",
+    "gif",
+    "mp4",
+    "webm",
+    "wmv",
+    "html",
+    "htm",
+    "css",
+    "png",
+    "jpg",
+    "jpeg",
+    "nqasset",
+    "behasset",
+    "npcasset",
+    "pdaasset",
+    "xspawn",
+    "xcform",
+    "dds",
+    "thm",
+    "ogg",
+    "ogm",
+    "ogf",
+    "omf",
+    "skl",
+    "skls",
+    "anm",
+    "ppe",
+    "xr",
+    "ps",
+    "vs",
+    "gs",
+    "hs",
+    "ds",
+    "cs",
+    "h",
+    "hlsl",
+    "s",
+    "spawn",
+    "graph",
+    "ai",
+    "gct",
+    "cform",
+    "details",
+    "env_mod",
+    "fog_vol",
+    "game",
+    "geom",
+    "geomx",
+    "hom",
+    "ps_static",
+    "snd_env",
+    "snd_static",
+    "som",
+    "sectors",
+    "wallmarks",
+    "lanims",
 ];
 
 /// MOD_CATALOG 8 for a path (module-relative, `/`): `Err` says why not (`PathAllowed`).
@@ -107,7 +170,9 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
 pub fn bytes_allowed(data: &[u8]) -> Result<(), &'static str> {
     if data.len() >= 0x40 && data.starts_with(b"MZ") {
         let offset = u32_at(data, 0x3C).unwrap_or(0) as usize;
-        if offset.checked_add(4).is_some_and(|e| e <= data.len()) && data.get(offset..offset + 4) == Some(b"PE\0\0") {
+        if offset.checked_add(4).is_some_and(|e| e <= data.len())
+            && data.get(offset..offset + 4) == Some(b"PE\0\0")
+        {
             return Err("a Windows program or library");
         }
     }
@@ -297,7 +362,10 @@ fn tokenize(t: &[u8]) -> Vec<Token<'_>> {
                 }
                 *q = e;
             };
-            let hex = c == b'0' && q + 2 < end && matches!(t.get(q + 1), Some(b'x' | b'X')) && (xdigit_at(q + 2) || t.get(q + 2) == Some(&b'.'));
+            let hex = c == b'0'
+                && q + 2 < end
+                && matches!(t.get(q + 1), Some(b'x' | b'X'))
+                && (xdigit_at(q + 2) || t.get(q + 2) == Some(&b'.'));
             if hex {
                 q += 2;
                 while xdigit_at(q) || t.get(q) == Some(&b'.') {
@@ -329,7 +397,10 @@ fn tokenize(t: &[u8]) -> Vec<Token<'_>> {
             p = q;
             continue;
         }
-        let mut n = LONGER.iter().find(|op| t.get(p..).is_some_and(|rest| rest.starts_with(op))).map_or(0, |op| op.len());
+        let mut n = LONGER
+            .iter()
+            .find(|op| t.get(p..).is_some_and(|rest| rest.starts_with(op)))
+            .map_or(0, |op| op.len());
         if n == 0 && c != 0 && OPS.contains(&c) {
             n = 1;
         }
@@ -398,7 +469,10 @@ pub fn script_report(path: &str, text: &[u8], out: &mut Vec<Finding>) {
         // the dotted name starting here: a, a.b, a:b
         let mut parts: Vec<&[u8]> = vec![token.text];
         let mut after = i + 1;
-        while after + 1 < tokens.len() && matches!(text_at(after), b"." | b":") && kind_at(after + 1) == Some(Kind::Name) {
+        while after + 1 < tokens.len()
+            && matches!(text_at(after), b"." | b":")
+            && kind_at(after + 1) == Some(Kind::Name)
+        {
             parts.push(text_at(after + 1));
             after += 2;
         }
@@ -409,13 +483,25 @@ pub fn script_report(path: &str, text: &[u8], out: &mut Vec<Finding>) {
                 add(out, Level::Block, line, &format!("uses {what}"));
             }
         }
-        if first == b"require" && text_at(after) == b"(" && kind_at(after + 1) == Some(Kind::String) && contains(text_at(after + 1), b"ffi") {
+        if first == b"require"
+            && text_at(after) == b"("
+            && kind_at(after + 1) == Some(Kind::String)
+            && contains(text_at(after + 1), b"ffi")
+        {
             add(out, Level::Block, line, "loads ffi");
         }
-        if matches!(first, b"load" | b"loadstring" | b"require" | b"dofile" | b"loadfile") && text_at(after) == b"(" {
-            let literal = kind_at(after + 1) == Some(Kind::String) && matches!(text_at(after + 2), b")" | b",");
+        if matches!(first, b"load" | b"loadstring" | b"require" | b"dofile" | b"loadfile")
+            && text_at(after) == b"("
+        {
+            let literal =
+                kind_at(after + 1) == Some(Kind::String) && matches!(text_at(after + 2), b")" | b",");
             if !literal {
-                add(out, Level::Review, line, &format!("{} of a computed string", String::from_utf8_lossy(first)));
+                add(
+                    out,
+                    Level::Review,
+                    line,
+                    &format!("{} of a computed string", String::from_utf8_lossy(first)),
+                );
             }
         }
         if first == b"_G" && text_at(after) == b"[" {
@@ -427,7 +513,9 @@ pub fn script_report(path: &str, text: &[u8], out: &mut Vec<Finding>) {
             }
         }
         let n = parts.len();
-        let console = (n >= 2 && parts.get(n - 2) == Some(&&b"get_console"[..]) && parts.last() == Some(&&b"execute"[..]))
+        let console = (n >= 2
+            && parts.get(n - 2) == Some(&&b"get_console"[..])
+            && parts.last() == Some(&&b"execute"[..]))
             || (first == b"get_console" && text_at(after + 2) == b":" && text_at(after + 3) == b"execute");
         if console {
             add(out, Level::Review, line, "runs a console command");
@@ -448,13 +536,23 @@ pub fn script_report(path: &str, text: &[u8], out: &mut Vec<Finding>) {
                 }
             }
             if commas >= 16 {
-                add(out, Level::Review, line, &format!("builds a string of {} characters with string.char", commas + 1));
+                add(
+                    out,
+                    Level::Review,
+                    line,
+                    &format!("builds a string of {} characters with string.char", commas + 1),
+                );
             }
         }
     }
     for t in &tokens {
         if t.kind == Kind::String && t.text.len() > 2000 && encoded_blob(t.text) {
-            add(out, Level::Review, t.line, &format!("holds a long encoded blob ({} characters)", t.text.len()));
+            add(
+                out,
+                Level::Review,
+                t.line,
+                &format!("holds a long encoded blob ({} characters)", t.text.len()),
+            );
         }
     }
 }
@@ -478,14 +576,20 @@ mod tests {
         assert!(path_allowed("gamedata/configs/mod.ltx").is_ok());
         assert!(path_allowed("README").is_ok());
         assert!(path_allowed("Textures/A.DDS").is_ok());
-        assert_eq!(path_allowed("bin/evil.dll").unwrap_err(), ".dll files are not allowed in a Mod Browser module");
+        assert_eq!(
+            path_allowed("bin/evil.dll").unwrap_err(),
+            ".dll files are not allowed in a Mod Browser module"
+        );
         assert_eq!(path_allowed("a/.git/config").unwrap_err(), "a dot-named file or folder");
         assert_eq!(path_allowed("a//b").unwrap_err(), "unsafe path");
         assert_eq!(path_allowed("/a").unwrap_err(), "unsafe path");
         assert_eq!(path_allowed("a\\b").unwrap_err(), "unsafe path");
         assert_eq!(path_allowed("c:x").unwrap_err(), "unsafe path");
         assert_eq!(path_allowed("a/../b").unwrap_err(), "unsafe path");
-        assert_eq!(path_allowed("gamedata.db").unwrap_err(), ".db files are not allowed in a Mod Browser module");
+        assert_eq!(
+            path_allowed("gamedata.db").unwrap_err(),
+            ".db files are not allowed in a Mod Browser module"
+        );
     }
 
     #[test]
@@ -495,7 +599,10 @@ mod tests {
         pe[1] = b'Z';
         pe[0x3C] = 0x80;
         pe[0x80..0x84].copy_from_slice(b"PE\0\0");
-        assert_eq!(findings("qa_disguised/program.txt", &pe), [(Level::Block, "qa_disguised/program.txt: a Windows program or library".to_owned())]);
+        assert_eq!(
+            findings("qa_disguised/program.txt", &pe),
+            [(Level::Block, "qa_disguised/program.txt: a Windows program or library".to_owned())]
+        );
         // an MZ header alone is no program
         let mut mz = pe.clone();
         mz[0x80] = b'X';
@@ -565,7 +672,11 @@ mod tests {
             ("loadfile(name)", Level::Review, "loadfile of a computed string"),
             ("require(name)", Level::Review, "require of a computed string"),
             ("load(\"a\" .. b)", Level::Review, "load of a computed string"),
-            ("local c = get_console() c:execute('x') get_console():execute('y')", Level::Review, "runs a console command"),
+            (
+                "local c = get_console() c:execute('x') get_console():execute('y')",
+                Level::Review,
+                "runs a console command",
+            ),
         ];
         for (code, level, what) in lines {
             let got = findings("s.script", code.as_bytes());
@@ -579,11 +690,17 @@ mod tests {
     fn chains_blobs_and_numbers() {
         let chars: Vec<String> = (0..17).map(|i| (65 + i).to_string()).collect();
         let script = format!("local s = string.char({})\n", chars.join(", "));
-        assert_eq!(findings("a.script", script.as_bytes()), [(Level::Review, "a.script:1 builds a string of 17 characters with string.char".to_owned())]);
+        assert_eq!(
+            findings("a.script", script.as_bytes()),
+            [(Level::Review, "a.script:1 builds a string of 17 characters with string.char".to_owned())]
+        );
         let short = "local s = string.char(65, 66)\n";
         assert!(findings("a.script", short.as_bytes()).is_empty());
         let blob = format!("local b = \"{}\"\n", "QUJD".repeat(600));
-        assert_eq!(findings("b.script", blob.as_bytes()), [(Level::Review, format!("b.script:1 holds a long encoded blob ({} characters)", 2402))]);
+        assert_eq!(
+            findings("b.script", blob.as_bytes()),
+            [(Level::Review, format!("b.script:1 holds a long encoded blob ({} characters)", 2402))]
+        );
         // numbers and exponents do not swallow names; 0x1p4 is one number
         let tokens = tokenize(b"x = 0x1p4 + 1e e2 .5");
         let texts: Vec<&[u8]> = tokens.iter().map(|t| t.text).collect();

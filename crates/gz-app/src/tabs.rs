@@ -61,7 +61,12 @@ pub fn plan_strip(want: &[f32], active: Option<usize>, avail: f32, count_extra: 
     let mut avail = avail.max(0.0);
     let mut width = want.to_vec();
     let total: f32 = want.iter().sum::<f32>() + SPACING * n as f32;
-    let at_min: f32 = SPACING * n as f32 + want.iter().enumerate().map(|(i, w)| if Some(i) == active { *w } else { w.min(W_MIN) }).sum::<f32>();
+    let at_min: f32 = SPACING * n as f32
+        + want
+            .iter()
+            .enumerate()
+            .map(|(i, w)| if Some(i) == active { *w } else { w.min(W_MIN) })
+            .sum::<f32>();
     if at_min > avail {
         avail = (avail - count_extra).max(0.0);
     }
@@ -78,7 +83,12 @@ pub fn plan_strip(want: &[f32], active: Option<usize>, avail: f32, count_extra: 
         let (mut lo, mut hi) = (W_MIN, W_MAX);
         for _ in 0..24 {
             let cap = (lo + hi) * 0.5;
-            let sum: f32 = want.iter().enumerate().filter(|(i, _)| Some(*i) != active).map(|(_, w)| w.min(cap) + SPACING).sum();
+            let sum: f32 = want
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| Some(*i) != active)
+                .map(|(_, w)| w.min(cap) + SPACING)
+                .sum();
             if sum > rest {
                 hi = cap;
             } else {
@@ -157,7 +167,11 @@ pub fn decode_session(text: &str) -> Vec<SessionTab> {
         }
         let Some((_, rest)) = line.split_once('=') else { continue };
         let mut fields = rest.trim_start_matches(' ').splitn(5, '|');
-        let (Some(id), Some(kind), Some(icon), Some(label)) = (fields.next(), fields.next(), fields.next(), fields.next()) else { continue };
+        let (Some(id), Some(kind), Some(icon), Some(label)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
         let arg = fields.next().unwrap_or("");
         if id.is_empty() || id == LEVEL || out.iter().any(|t| t.id == id) {
             continue;
@@ -191,8 +205,20 @@ mod tests {
     #[test]
     fn sessions_round_trip() {
         let tabs = vec![
-            SessionTab { id: "quest:quests\\a.nqasset".into(), kind: "quest".into(), icon: Icon::Quest, label: "a".into(), arg: "quests\\a.nqasset".into() },
-            SessionTab { id: "characters".into(), kind: "characters".into(), icon: Icon::Character, label: "Characters".into(), arg: String::new() },
+            SessionTab {
+                id: "quest:quests\\a.nqasset".into(),
+                kind: "quest".into(),
+                icon: Icon::Quest,
+                label: "a".into(),
+                arg: "quests\\a.nqasset".into(),
+            },
+            SessionTab {
+                id: "characters".into(),
+                kind: "characters".into(),
+                icon: Icon::Character,
+                label: "Characters".into(),
+                arg: String::new(),
+            },
         ];
         let text = encode_session(&tabs);
         assert!(text.starts_with("[session]\ntab0 = quest:"));

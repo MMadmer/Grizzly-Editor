@@ -66,7 +66,12 @@ async fn outliner_show(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
 
 /// The classes of the scene as the Outliner groups them (sorted by class name).
 fn groups(state: &gz_scene::SceneState) -> Vec<Group> {
-    let mut out: Vec<Group> = ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool() && state.count(*c) > 0).map(|c| Group { class: c, total: state.count(c), shown: 0 }).collect();
+    let mut out: Vec<Group> = ObjClass::ALL
+        .iter()
+        .copied()
+        .filter(|c| c.is_object_tool() && state.count(*c) > 0)
+        .map(|c| Group { class: c, total: state.count(c), shown: 0 })
+        .collect();
     out.sort_by_key(|g| g.class.name());
     out
 }
@@ -84,7 +89,10 @@ async fn outliner_filter(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
 
     // a rejected request leaves none of its filter applied
     let next_visibility = match &visibility {
-        Some(v) => Some(Visibility::parse(v).ok_or_else(|| CmdError::invalid("visibility must be all, visible, or hidden"))?),
+        Some(v) => Some(
+            Visibility::parse(v)
+                .ok_or_else(|| CmdError::invalid("visibility must be all, visible, or hidden"))?,
+        ),
         None => None,
     };
     let next_hierarchy = match layout.as_deref() {
@@ -134,7 +142,8 @@ async fn outliner_filter(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let s = snap.clone();
     let f = filter.clone();
     let listing = ed.exec.cpu(move || compute(&s, &f, &folds)).await;
-    let hidden: Vec<&str> = listing.groups.iter().filter(|g| filter.class_hidden(g.class)).map(|g| g.class.name()).collect();
+    let hidden: Vec<&str> =
+        listing.groups.iter().filter(|g| filter.class_hidden(g.class)).map(|g| g.class.name()).collect();
     Ok(json!({
         "text": filter.text,
         "selected_only": filter.selected_only,
@@ -153,7 +162,10 @@ async fn scene_visibility(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let name = a.str("name").filter(|s| !s.is_empty()).map(str::to_owned);
     let selection = arg_bool(&a, "selection").unwrap_or(false);
     let all = arg_bool(&a, "all").unwrap_or(false);
-    let targets = usize::from(class.is_some()) + usize::from(name.is_some()) + usize::from(selection) + usize::from(all);
+    let targets = usize::from(class.is_some())
+        + usize::from(name.is_some())
+        + usize::from(selection)
+        + usize::from(all);
     let has_visible = a.get("visible").is_some_and(|v| !matches!(v, Value::Null) && v.as_str() != Some(""));
     let visible = arg_bool(&a, "visible").unwrap_or(true);
     if targets > 1 {
@@ -166,13 +178,21 @@ async fn scene_visibility(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let mut changed = 0usize;
     if let Some(c) = &class {
         let tool = ObjClass::ALL.iter().copied().find(|x| x.name().eq_ignore_ascii_case(c));
-        let Some(tool) = tool else { return Err(CmdError::invalid(format!("no class '{c}': the classes are listed by scene_visibility without arguments"))) };
+        let Some(tool) = tool else {
+            return Err(CmdError::invalid(format!(
+                "no class '{c}': the classes are listed by scene_visibility without arguments"
+            )));
+        };
         if snap.tools.part(tool).visible != visible {
-            svc.store.send(SceneCmd::ToolFlags { class: tool, visible: Some(visible), readonly: None }, o).await?;
+            svc.store
+                .send(SceneCmd::ToolFlags { class: tool, visible: Some(visible), readonly: None }, o)
+                .await?;
             changed = 1;
         }
     } else if let Some(n) = &name {
-        let Some(obj) = snap.find_relaxed(n) else { return Err(CmdError::invalid(format!("no object '{n}'"))) };
+        let Some(obj) = snap.find_relaxed(n) else {
+            return Err(CmdError::invalid(format!("no object '{n}'")));
+        };
         if obj.flags.visible != visible {
             svc.store.send(SceneCmd::Show { ids: vec![obj.id], visible }, o).await?;
             changed = 1;
@@ -211,7 +231,10 @@ fn target_index(t: &str) -> Result<usize, CmdError> {
 async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     let filter_arg = a.str("filter").unwrap_or("").to_owned();
-    let action = a.text("action").map(str::to_ascii_lowercase).unwrap_or_else(|| if filter_arg.is_empty() { "get".into() } else { "filter".into() });
+    let action = a
+        .text("action")
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| if filter_arg.is_empty() { "get".into() } else { "filter".into() });
     let target_name = a.text("target").unwrap_or("selection").to_ascii_lowercase();
     let t = target_index(&target_name)?;
     if !matches!(action.as_str(), "get" | "filter" | "expand" | "collapse" | "open" | "close") {
@@ -243,7 +266,10 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
         let open = match shown {
             Ok(Some(o)) => o,
             // without a window the view keeps the flag, as the C++ forms did
-            _ => action == "open" || (action != "close" && svc.view.lock().open.get(t).copied().unwrap_or(false)),
+            _ => {
+                action == "open"
+                    || (action != "close" && svc.view.lock().open.get(t).copied().unwrap_or(false))
+            }
         };
         if let Some(o) = svc.view.lock().open.get_mut(t) {
             *o = open;
@@ -277,5 +303,7 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
             Value::Object(o)
         })
         .collect();
-    Ok(json!({ "target": target_name, "filter": filter, "visible": visible, "total": rows.len(), "open": open, "rows": out }))
+    Ok(
+        json!({ "target": target_name, "filter": filter, "visible": visible, "total": rows.len(), "open": open, "rows": out }),
+    )
 }

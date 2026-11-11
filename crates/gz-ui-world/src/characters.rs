@@ -21,7 +21,7 @@ use gz_luadata::Value as LuaValue;
 use gz_mod::ManifestService;
 use gz_project::Project;
 use gz_ui::dialog::{Answer, ConfirmSpec, confirm, unsaved_prompt};
-use gz_ui::{Icon, Kind, Toolbar, Tone};
+use gz_ui::{Icon, Kind, Tone, Toolbar};
 use parking_lot::Mutex;
 
 use crate::call::{self, args, s};
@@ -81,20 +81,31 @@ pub(crate) async fn run_save(ed: &Arc<Editor>, plan: SavePlan) -> Result<String,
     let mut target = plan.target;
     if plan.rename {
         let leaf = target.rsplit('/').next().unwrap_or(&target).to_owned();
-        let reply = ed.call("content_rename", args([("path", s(&plan.old)), ("name", s(&leaf))]), origin).await;
+        let reply =
+            ed.call("content_rename", args([("path", s(&plan.old)), ("name", s(&leaf))]), origin).await;
         // a rename refused leaves the file where it is: the text goes there
         if !call::ok(&reply) {
             target = plan.old;
         }
     }
-    let reply = ed.call("characters_write", args([("text", s(&plan.text)), ("path", s(&target))]), origin).await;
-    if call::ok(&reply) { Ok(reply.get("file").and_then(Value::as_str).map_or(target, str::to_owned)) } else { Err(call::error_text(&reply)) }
+    let reply =
+        ed.call("characters_write", args([("text", s(&plan.text)), ("path", s(&target))]), origin).await;
+    if call::ok(&reply) {
+        Ok(reply.get("file").and_then(Value::as_str).map_or(target, str::to_owned))
+    } else {
+        Err(call::error_text(&reply))
+    }
 }
 
 /// The problems of the edited character as the build will see it: resolved against the others
 /// (its base, the ids they take), then validated - the answer `characters_write` gives
 /// (`Revalidate`). Blocking: run it on the IO pool (a model's bones may be read).
-pub(crate) fn own_problems(roster: &Roster, sel: Option<usize>, edit: &Character, checker: &Checker) -> Vec<String> {
+pub(crate) fn own_problems(
+    roster: &Roster,
+    sel: Option<usize>,
+    edit: &Character,
+    checker: &Checker,
+) -> Vec<String> {
     let mut all = roster.raw.clone();
     let at = match sel.filter(|i| *i < all.len()) {
         Some(i) => {
@@ -125,7 +136,12 @@ pub(crate) fn own_problems(roster: &Roster, sel: Option<usize>, edit: &Character
 }
 
 /// The problems of the edited character, worked out on the pools.
-pub(crate) async fn problems_of(ed: &Arc<Editor>, roster: Arc<Roster>, sel: Option<usize>, edit: Character) -> Vec<String> {
+pub(crate) async fn problems_of(
+    ed: &Arc<Editor>,
+    roster: Arc<Roster>,
+    sel: Option<usize>,
+    edit: Character,
+) -> Vec<String> {
     let checker = match Characters::of(ed).await {
         Ok(svc) => svc.checker(ed).await,
         Err(_) => Checker::unlinked(),
@@ -318,7 +334,11 @@ impl CharactersDoc {
         let file = self.edit.file.clone();
         self.module_id = module;
         self.roster = Some(roster.clone());
-        let found = if file.is_empty() { None } else { roster.raw.iter().position(|c| c.file.eq_ignore_ascii_case(&file)) };
+        let found = if file.is_empty() {
+            None
+        } else {
+            roster.raw.iter().position(|c| c.file.eq_ignore_ascii_case(&file))
+        };
         if self.dirty {
             self.sel = found;
             self.recompute_inherited();
@@ -342,7 +362,10 @@ impl CharactersDoc {
     pub(crate) fn find(&self, id: Option<&str>, path: Option<&str>) -> Option<usize> {
         let roster = self.roster.as_ref()?;
         let norm = |p: &str| p.replace('\\', "/").to_lowercase();
-        roster.raw.iter().position(|c| id.is_some_and(|i| c.id == i) || path.is_some_and(|p| norm(&c.file) == norm(p)))
+        roster
+            .raw
+            .iter()
+            .position(|c| id.is_some_and(|i| c.id == i) || path.is_some_and(|p| norm(&c.file) == norm(p)))
     }
 
     /// Selects a character of the roster (`None`: nothing), its edits gone (`SelectIndex`).
@@ -386,7 +409,11 @@ impl CharactersDoc {
 
     /// What the base chain gives this character (`RecomputeInherited`): the base resolved.
     pub(crate) fn recompute_inherited(&mut self) {
-        self.inherited = if self.edit.base.is_empty() { None } else { self.roster.as_ref().and_then(|r| r.get(&self.edit.base)).cloned() };
+        self.inherited = if self.edit.base.is_empty() {
+            None
+        } else {
+            self.roster.as_ref().and_then(|r| r.get(&self.edit.base)).cloned()
+        };
     }
 
     /// The form changed the character.
@@ -415,7 +442,8 @@ impl CharactersDoc {
         }
         let Some(roster) = self.roster.clone() else { return };
         self.asked_gen = self.edit_gen;
-        let (ed, inbox, serial, sel, edit) = (self.editor.clone(), self.inbox.clone(), self.edit_gen, self.sel, self.edit.clone());
+        let (ed, inbox, serial, sel, edit) =
+            (self.editor.clone(), self.inbox.clone(), self.edit_gen, self.sel, self.edit.clone());
         let _task = self.editor.exec.spawn(async move {
             let problems = problems_of(&ed, roster, sel, edit).await;
             inbox.lock().problems = Some((serial, problems));
@@ -506,9 +534,14 @@ impl CharactersDoc {
         let old = self.edit.file.clone();
         let wanted = format!("characters/{}.npcasset", self.edit.id);
         let taken = |rel: &str| {
-            Project::of(&self.editor).ok().is_some_and(|(_, p)| RelPath::new(rel).ok().is_some_and(|r| p.tree.snapshot().entry(&r).is_some()))
+            Project::of(&self.editor).ok().is_some_and(|(_, p)| {
+                RelPath::new(rel).ok().is_some_and(|r| p.tree.snapshot().entry(&r).is_some())
+            })
         };
-        let rename = !old.is_empty() && old.to_ascii_lowercase().starts_with("characters/") && !old.eq_ignore_ascii_case(&wanted) && !taken(&wanted);
+        let rename = !old.is_empty()
+            && old.to_ascii_lowercase().starts_with("characters/")
+            && !old.eq_ignore_ascii_case(&wanted)
+            && !taken(&wanted);
         let target = if old.is_empty() || rename { wanted } else { old.clone() };
         Ok(SavePlan { old, target, rename, text })
     }
@@ -573,7 +606,8 @@ impl CharactersDoc {
             self.run_then(then);
             return;
         }
-        let what = vec![if self.edit.id.is_empty() { "the new character".to_owned() } else { self.edit.id.clone() }];
+        let what =
+            vec![if self.edit.id.is_empty() { "the new character".to_owned() } else { self.edit.id.clone() }];
         let (ed, inbox) = (self.editor.clone(), self.inbox.clone());
         let Ok(queue) = gz_app::UiQueue::of(&self.editor) else { return };
         // the kit question needs the context: it is asked at the start of the next frame
@@ -659,14 +693,23 @@ impl CharactersDoc {
         if visual.is_empty() {
             return;
         }
-        let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") { "visual" } else { "darf" };
+        let source = if self.lists.visuals.get(&visual.to_lowercase()).is_some_and(|e| e.extra == "project") {
+            "visual"
+        } else {
+            "darf"
+        };
         let ed = self.editor.clone();
-        call::call_then(&self.editor, "preview_model", args([("name", s(&visual)), ("source", s(source))]), move |reply, ctx| {
-            if !call::ok(reply) {
-                gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
-                ed.log.warn(format!("the model preview did not open: {}", call::error_text(reply)));
-            }
-        });
+        call::call_then(
+            &self.editor,
+            "preview_model",
+            args([("name", s(&visual)), ("source", s(source))]),
+            move |reply, ctx| {
+                if !call::ok(reply) {
+                    gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                    ed.log.warn(format!("the model preview did not open: {}", call::error_text(reply)));
+                }
+            },
+        );
     }
 
     fn run_actions(&mut self, ctx: &egui::Context) {
@@ -715,17 +758,35 @@ impl CharactersDoc {
     fn draw_body(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let full = ui.max_rect();
-        let mut head = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.characters.split").max_rect(full).layout(Layout::left_to_right(Align::Min)));
+        let mut head = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-world.characters.split")
+                .max_rect(full)
+                .layout(Layout::left_to_right(Align::Min)),
+        );
         let split = gz_ui::splitter::splitter(&mut head, "characters.list", true, 220.0, 400.0, 260.0);
         let gap = head.spacing().item_spacing.x;
-        let list_rect = Rect::from_min_max(full.min, pos2((full.min.x + split.size).min(full.max.x), full.max.y));
-        let form_rect = Rect::from_min_max(pos2((list_rect.max.x + gap).min(full.max.x), full.min.y), full.max);
+        let list_rect =
+            Rect::from_min_max(full.min, pos2((full.min.x + split.size).min(full.max.x), full.max.y));
+        let form_rect =
+            Rect::from_min_max(pos2((list_rect.max.x + gap).min(full.max.x), full.min.y), full.max);
 
-        let mut left = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.characters.side").max_rect(list_rect).layout(Layout::top_down(Align::Min)));
+        let mut left = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-world.characters.side")
+                .max_rect(list_rect)
+                .layout(Layout::top_down(Align::Min)),
+        );
         self.draw_list(&mut left);
 
-        let mut right = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.characters.form").max_rect(form_rect).layout(Layout::top_down(Align::Min)));
-        let mut scroll = ScrollArea::vertical().id_salt("gz-ui-world.characters.scroll").auto_shrink([false, false]);
+        let mut right = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-world.characters.form")
+                .max_rect(form_rect)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        let mut scroll =
+            ScrollArea::vertical().id_salt("gz-ui-world.characters.scroll").auto_shrink([false, false]);
         match gz_app::take_scroll(&ctx, HOST) {
             Some(gz_app::ScrollTo::Top) => scroll = scroll.vertical_scroll_offset(0.0),
             Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(self.scroll_max),
@@ -734,11 +795,17 @@ impl CharactersDoc {
         }
         let out = scroll.show(&mut right, |ui| {
             egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 0)).show(ui, |ui| {
-                let column = ui.available_width().min(gz_ui::metrics::FORM_W).max(1.0);
+                let column = ui.available_width().clamp(1.0, gz_ui::metrics::FORM_W);
                 ui.set_max_width(column);
                 ui.set_min_width(column);
                 if self.sel.is_none() && !self.dirty {
-                    if gz_ui::state::empty_state(ui, Icon::Character, "No character selected", "Pick one in the list, or add one with +.", Some("New Character")) {
+                    if gz_ui::state::empty_state(
+                        ui,
+                        Icon::Character,
+                        "No character selected",
+                        "Pick one in the list, or add one with +.",
+                        Some("New Character"),
+                    ) {
                         self.actions.push(Action::New);
                     }
                 } else {
@@ -776,7 +843,15 @@ impl Document for CharactersDoc {
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         let project = cx.editor.project_opt().is_some();
         tb.group(1);
-        if tb.action("reload", Icon::Refresh, "Reload", "Read the characters, the linked game's lists and the project's models again", project, false, Kind::Ghost) {
+        if tb.action(
+            "reload",
+            Icon::Refresh,
+            "Reload",
+            "Read the characters, the linked game's lists and the project's models again",
+            project,
+            false,
+            Kind::Ghost,
+        ) {
             self.reload_fresh();
             if let Some(lists) = Lists::of(cx.editor) {
                 lists.force(cx.editor);
@@ -788,7 +863,13 @@ impl Document for CharactersDoc {
         let ctx = ui.ctx().clone();
         self.take_inbox(Some(&ctx));
         if cx.editor.project_opt().is_none() {
-            gz_ui::state::empty_state(ui, Icon::Character, "No project", "Characters are .npcasset files of the open project.", None);
+            gz_ui::state::empty_state(
+                ui,
+                Icon::Character,
+                "No project",
+                "Characters are .npcasset files of the open project.",
+                None,
+            );
             return;
         }
         self.sync();
@@ -860,14 +941,22 @@ mod tests {
     fn the_edited_character_is_checked_against_the_others() {
         let mut roster = Roster::default();
         let a = Character { id: "a".into(), file: "characters/a.npcasset".into(), ..Character::default() };
-        let b = Character { id: "b".into(), file: "characters/b.npcasset".into(), base: "nobody".into(), ..Character::default() };
+        let b = Character {
+            id: "b".into(),
+            file: "characters/b.npcasset".into(),
+            base: "nobody".into(),
+            ..Character::default()
+        };
         roster.raw = vec![a, b.clone()];
         let problems = own_problems(&roster, Some(1), &b, &Checker::unlinked());
         assert!(problems.iter().any(|p| p.starts_with("E111 characters/b.npcasset: ")), "{problems:?}");
         assert!(!problems.iter().any(|p| p.starts_with("E101")));
         let twin = Character { id: "a".into(), ..Character::default() };
         let problems = own_problems(&roster, None, &twin, &Checker::unlinked());
-        assert!(problems.iter().any(|p| p.starts_with("E101 a: another character has the id 'a'")), "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p.starts_with("E101 a: another character has the id 'a'")),
+            "{problems:?}"
+        );
     }
 
     #[test]

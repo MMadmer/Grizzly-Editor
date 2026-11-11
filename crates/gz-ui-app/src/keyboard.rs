@@ -129,7 +129,11 @@ impl ShortcutRow {
     /// "group · label", the name the shell and MCP know it by.
     #[must_use]
     pub fn full_label(&self) -> String {
-        if self.group.is_empty() { self.label.clone() } else { format!("{}{PATH_DOT}{}", self.group, self.label) }
+        if self.group.is_empty() {
+            self.label.clone()
+        } else {
+            format!("{}{PATH_DOT}{}", self.group, self.label)
+        }
     }
 }
 
@@ -157,7 +161,8 @@ pub fn parse_rows(reply: &Value) -> Vec<ShortcutRow> {
     let order = |r: &ShortcutRow| COMMAND_ORDER.iter().position(|id| *id == r.id).unwrap_or(usize::MAX);
     rows.sort_by(|a, b| {
         let (oa, ob) = (order(a), order(b));
-        oa.cmp(&ob).then_with(|| if oa == usize::MAX { a.group.cmp(&b.group) } else { std::cmp::Ordering::Equal })
+        oa.cmp(&ob)
+            .then_with(|| if oa == usize::MAX { a.group.cmp(&b.group) } else { std::cmp::Ordering::Equal })
     });
     rows
 }
@@ -223,7 +228,8 @@ impl KeyboardPage {
                 busy_line(ui, "Reading the shortcuts...");
                 return;
             };
-            let shown: Vec<&ShortcutRow> = rows.iter().filter(|r| search.is_empty() || row_matches(search, r)).collect();
+            let shown: Vec<&ShortcutRow> =
+                rows.iter().filter(|r| search.is_empty() || row_matches(search, r)).collect();
             // the Shortcut column is as wide as the widest keycaps
             let keys_w = shown.iter().map(|r| keycaps_width(ui, &r.keys) + 16.0).fold(em(6.0), f32::max);
             let assign_w = button_width(&ctx, "Assign...", Kind::Secondary, false, 0.0);
@@ -231,52 +237,109 @@ impl KeyboardPage {
             let actions_w = assign_w + clear_w + 8.0 + 12.0;
             let width = ui.available_width();
             let command_w = (width - keys_w - actions_w).max(em(8.0));
-            table_headers(ui, &[Column::new("Command", command_w), Column::new("Shortcut", keys_w), Column::new("", actions_w)]);
+            table_headers(
+                ui,
+                &[
+                    Column::new("Command", command_w),
+                    Column::new("Shortcut", keys_w),
+                    Column::new("", actions_w),
+                ],
+            );
             let mut group: Option<&str> = None;
             for row in shown {
                 // the group's name over its commands, as the menus hold them
                 if group != Some(row.group.as_str()) {
                     group = Some(row.group.as_str());
                     let (r, _) = ui.allocate_exact_size(Vec2::new(width, 28.0), Sense::hover());
-                    text::paint(ui.painter(), &Font::Strong.id(), pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, p.text, &row.group, Some(command_w - 12.0), Clip::End);
+                    text::paint(
+                        ui.painter(),
+                        &Font::Strong.id(),
+                        pos2(r.min.x + 6.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        p.text,
+                        &row.group,
+                        Some(command_w - 12.0),
+                        Clip::End,
+                    );
                 }
                 let (r, _) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::hover());
                 let x = r.min.x + 6.0 + 12.0;
-                let cut = text::paint(ui.painter(), &Font::Body.id(), pos2(x, r.center().y), Align2::LEFT_CENTER, p.text, &row.label, Some(command_w - 18.0 - 6.0), Clip::End);
+                let cut = text::paint(
+                    ui.painter(),
+                    &Font::Body.id(),
+                    pos2(x, r.center().y),
+                    Align2::LEFT_CENTER,
+                    p.text,
+                    &row.label,
+                    Some(command_w - 18.0 - 6.0),
+                    Clip::End,
+                );
                 // the id MCP and the settings file know the command by is its tooltip
                 let label_rect = Rect::from_min_max(pos2(x, r.min.y), pos2(r.min.x + command_w, r.max.y));
                 let tip = if cut { format!("{}\n{}", row.label, row.id) } else { row.id.clone() };
-                ui.interact(label_rect, ui.make_persistent_id(("gz-ui-app.shortcut", row.id.as_str())), Sense::hover()).on_hover_text(tip);
+                ui.interact(
+                    label_rect,
+                    ui.make_persistent_id(("gz-ui-app.shortcut", row.id.as_str())),
+                    Sense::hover(),
+                )
+                .on_hover_text(tip);
                 let keys_x = r.min.x + command_w + 6.0;
                 if row.keys.is_empty() {
-                    ui.painter().text(pos2(keys_x, r.center().y), Align2::LEFT_CENTER, "None", Font::Body.id(), p.text_muted);
+                    ui.painter().text(
+                        pos2(keys_x, r.center().y),
+                        Align2::LEFT_CENTER,
+                        "None",
+                        Font::Body.id(),
+                        p.text_muted,
+                    );
                 } else {
                     let w = keycaps_width(ui, &row.keys);
                     keycaps(ui, pos2(keys_x + w, r.center().y), &row.keys, true);
                 }
                 let cell = Rect::from_min_max(pos2(r.min.x + command_w + keys_w + 6.0, r.min.y), r.max);
-                let mut c = ui.new_child(UiBuilder::new().id_salt(("gz-ui-app.shortcut.actions", row.id.as_str())).max_rect(cell).layout(Layout::left_to_right(Align::Center)));
+                let mut c = ui.new_child(
+                    UiBuilder::new()
+                        .id_salt(("gz-ui-app.shortcut.actions", row.id.as_str()))
+                        .max_rect(cell)
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
                 c.spacing_mut().item_spacing.x = 8.0;
-                if Button::new("Assign...").tip("Press the new shortcut in the dialog that opens").show(&mut c).clicked() {
+                if Button::new("Assign...")
+                    .tip("Press the new shortcut in the dialog that opens")
+                    .show(&mut c)
+                    .clicked()
+                {
                     ask = Some(Ask::Assign(row.id.clone(), row.full_label()));
                 }
-                if Button::new("Clear").enabled(!row.keys.is_empty(), "This command has no shortcut").show(&mut c).clicked() {
+                if Button::new("Clear")
+                    .enabled(!row.keys.is_empty(), "This command has no shortcut")
+                    .show(&mut c)
+                    .clicked()
+                {
                     ask = Some(Ask::Clear(row.id.clone()));
                 }
-                ui.painter().line_segment([pos2(r.min.x, r.max.y - 0.5), pos2(r.max.x, r.max.y - 0.5)], Stroke::new(1.0, p.border_subtle));
+                ui.painter().line_segment(
+                    [pos2(r.min.x, r.max.y - 0.5), pos2(r.max.x, r.max.y - 0.5)],
+                    Stroke::new(1.0, p.border_subtle),
+                );
             }
         }
         match ask {
             Some(Ask::Assign(id, name)) => self.assign = Some(Assign { id, name, chord: None }),
             Some(Ask::Clear(id)) => {
                 let rows = self.rows.clone();
-                call_then(editor, "shortcuts", args([("action", s("clear")), ("command", s(&id))]), move |reply, ctx| {
-                    if ok(reply) {
-                        set_row_keys(&rows, &id, "");
-                    } else {
-                        gz_ui::state::toast(ctx, Tone::Error, &error_text(reply));
-                    }
-                });
+                call_then(
+                    editor,
+                    "shortcuts",
+                    args([("action", s("clear")), ("command", s(&id))]),
+                    move |reply, ctx| {
+                        if ok(reply) {
+                            set_row_keys(&rows, &id, "");
+                        } else {
+                            gz_ui::state::toast(ctx, Tone::Error, &error_text(reply));
+                        }
+                    },
+                );
             }
             None => {}
         }
@@ -295,7 +358,11 @@ impl KeyboardPage {
         let label = a.chord.map(|c| c.label()).unwrap_or_default();
         let owner = {
             let rows = self.rows.lock();
-            rows.as_ref().and_then(|rows| rows.iter().find(|r| !label.is_empty() && r.keys == label && r.id != a.id).map(ShortcutRow::full_label))
+            rows.as_ref().and_then(|rows| {
+                rows.iter()
+                    .find(|r| !label.is_empty() && r.keys == label && r.id != a.id)
+                    .map(ShortcutRow::full_label)
+            })
         };
         let mut open = true;
         let mut assign = false;
@@ -313,18 +380,32 @@ impl KeyboardPage {
                 ui.add_space(8.0);
                 let (r, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::hover());
                 if label.is_empty() {
-                    ui.painter().text(pos2(r.min.x, r.center().y), Align2::LEFT_CENTER, "Waiting for a key...", Font::Body.id(), p.text_muted);
+                    ui.painter().text(
+                        pos2(r.min.x, r.center().y),
+                        Align2::LEFT_CENTER,
+                        "Waiting for a key...",
+                        Font::Body.id(),
+                        p.text_muted,
+                    );
                 } else {
                     let w = keycaps_width(ui, &label);
                     keycaps(ui, pos2(r.min.x + w, r.center().y), &label, true);
                 }
                 if let Some(owner) = &owner {
                     ui.add_space(4.0);
-                    text::status(ui, Tone::Warning, &format!("{label} is bound to {owner}: it moves to this command."));
+                    text::status(
+                        ui,
+                        Tone::Warning,
+                        &format!("{label} is bound to {owner}: it moves to this command."),
+                    );
                 }
                 if reserved {
                     ui.add_space(4.0);
-                    text::status(ui, Tone::Warning, "The shell keeps this shortcut for itself: the scene never sees it.");
+                    text::status(
+                        ui,
+                        Tone::Warning,
+                        "The shell keeps this shortcut for itself: the scene never sees it.",
+                    );
                 }
             },
             |f: &mut Footer<'_>| {
@@ -341,19 +422,28 @@ impl KeyboardPage {
             let new_name = a.name.clone();
             let rows = self.rows.clone();
             let ed = editor.clone();
-            call_then(editor, "shortcuts", args([("action", s("set")), ("command", s(&id)), ("keys", s(&keys))]), move |reply, ctx| {
-                if !ok(reply) {
-                    gz_ui::state::toast(ctx, Tone::Error, &error_text(reply));
-                    return;
-                }
-                // one shortcut, one command: the one that had it lets it go
-                if let Some(from) = reply.get("moved_from").and_then(Value::as_str) {
-                    let old = rows.lock().as_ref().and_then(|r| r.iter().find(|r| r.id == from).map(ShortcutRow::full_label)).unwrap_or_else(|| from.to_owned());
-                    ed.log.info(format!("Shortcut {keys} moved from {old} to {new_name}"));
-                    set_row_keys(&rows, from, "");
-                }
-                set_row_keys(&rows, &id, &keys);
-            });
+            call_then(
+                editor,
+                "shortcuts",
+                args([("action", s("set")), ("command", s(&id)), ("keys", s(&keys))]),
+                move |reply, ctx| {
+                    if !ok(reply) {
+                        gz_ui::state::toast(ctx, Tone::Error, &error_text(reply));
+                        return;
+                    }
+                    // one shortcut, one command: the one that had it lets it go
+                    if let Some(from) = reply.get("moved_from").and_then(Value::as_str) {
+                        let old = rows
+                            .lock()
+                            .as_ref()
+                            .and_then(|r| r.iter().find(|r| r.id == from).map(ShortcutRow::full_label))
+                            .unwrap_or_else(|| from.to_owned());
+                        ed.log.info(format!("Shortcut {keys} moved from {old} to {new_name}"));
+                        set_row_keys(&rows, from, "");
+                    }
+                    set_row_keys(&rows, &id, &keys);
+                },
+            );
             self.assign = None;
         } else if !open || cancel {
             self.assign = None;
@@ -388,7 +478,12 @@ mod tests {
 
     #[test]
     fn a_search_finds_names_keys_and_ids() {
-        let row = ShortcutRow { id: "COMMAND_UNDO".to_owned(), group: "Edit".to_owned(), label: "Undo".to_owned(), keys: "Ctrl+Z".to_owned() };
+        let row = ShortcutRow {
+            id: "COMMAND_UNDO".to_owned(),
+            group: "Edit".to_owned(),
+            label: "Undo".to_owned(),
+            keys: "Ctrl+Z".to_owned(),
+        };
         assert!(row_matches("undo", &row));
         assert!(row_matches("ctrl+z", &row));
         assert!(row_matches("command_undo", &row));

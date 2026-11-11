@@ -93,7 +93,9 @@ struct CommentPacket<'a> {
 }
 
 fn parse_comment_packet(packet: &[u8]) -> Result<CommentPacket<'_>> {
-    let body = packet.strip_prefix(COMMENT_MAGIC).ok_or(SoundError::NotOgg("the second packet is not a Vorbis comment header"))?;
+    let body = packet
+        .strip_prefix(COMMENT_MAGIC)
+        .ok_or(SoundError::NotOgg("the second packet is not a Vorbis comment header"))?;
     let mut r = Reader::new(body);
     let cut = |_| SoundError::Damaged("the Vorbis comment header is cut short");
     let vendor_len = r.r_u32().map_err(cut)? as usize;
@@ -160,7 +162,8 @@ pub fn write_ogg_params(ogg: &[u8], params: &OggParams) -> Result<Vec<u8>> {
     comments.extend(old.comments.iter().skip(1));
     let packet = build_comment_packet(old.vendor, &comments);
 
-    let first = pages.get(headers.first_page).ok_or(SoundError::Damaged("the Vorbis headers are incomplete"))?;
+    let first =
+        pages.get(headers.first_page).ok_or(SoundError::Damaged("the Vorbis headers are incomplete"))?;
     let page_bytes = |p: &ogg::Page<'_>| ogg.get(p.start..p.start + p.len).unwrap_or(&[]);
     let first_sequence = ogg::sequence_of(page_bytes(first));
 
@@ -229,7 +232,8 @@ pub(crate) mod tests {
 
     #[test]
     fn every_version_of_the_block_is_read() {
-        let p = OggParams { min_dist: 1.0, max_dist: 30.0, base_volume: 0.7, game_type: 5, max_ai_dist: 20.0 };
+        let p =
+            OggParams { min_dist: 1.0, max_dist: 30.0, base_volume: 0.7, game_type: 5, max_ai_dist: 20.0 };
         let block = p.to_comment();
         assert_eq!(block.len(), 24);
         assert_eq!(&block[..4], &[3, 0, 0, 0]);
@@ -241,7 +245,10 @@ pub(crate) mod tests {
         w.w_f32(40.0);
         w.w_u32(9);
         let v1 = OggParams::from_comment(w.bytes()).unwrap();
-        assert_eq!(v1, OggParams { min_dist: 2.0, max_dist: 40.0, base_volume: 1.0, game_type: 9, max_ai_dist: 40.0 });
+        assert_eq!(
+            v1,
+            OggParams { min_dist: 2.0, max_dist: 40.0, base_volume: 1.0, game_type: 9, max_ai_dist: 40.0 }
+        );
 
         let mut w = Writer::new();
         w.w_u32(2);
@@ -259,11 +266,18 @@ pub(crate) mod tests {
 
     #[test]
     fn parameters_are_read_and_replaced_in_place() {
-        let old = OggParams { min_dist: 1.0, max_dist: 30.0, base_volume: 1.0, game_type: 0, max_ai_dist: 30.0 };
+        let old =
+            OggParams { min_dist: 1.0, max_dist: 30.0, base_volume: 1.0, game_type: 0, max_ai_dist: 30.0 };
         let file = fake_ogg(VENDOR, &[&old.to_comment(), b"TITLE=keep me"], 600);
         assert_eq!(read_ogg_params(&file).unwrap(), Some(old));
 
-        let new = OggParams { min_dist: 3.0, max_dist: 90.0, base_volume: 1.2, game_type: 0x400, max_ai_dist: 45.0 };
+        let new = OggParams {
+            min_dist: 3.0,
+            max_dist: 90.0,
+            base_volume: 1.2,
+            game_type: 0x400,
+            max_ai_dist: 45.0,
+        };
         let out = write_ogg_params(&file, &new).unwrap();
         // same size, same pages: only the block and a checksum differ
         assert_eq!(out.len(), file.len());
@@ -287,7 +301,8 @@ pub(crate) mod tests {
         assert_eq!(read_ogg_params(&file).unwrap(), None);
         let before = ogg::parse_pages(&file).unwrap().len();
 
-        let p = OggParams { min_dist: 1.0, max_dist: 10.0, base_volume: 1.0, game_type: 1, max_ai_dist: 10.0 };
+        let p =
+            OggParams { min_dist: 1.0, max_dist: 10.0, base_volume: 1.0, game_type: 1, max_ai_dist: 10.0 };
         let out = write_ogg_params(&file, &p).unwrap();
         assert_eq!(read_ogg_params(&out).unwrap(), Some(p));
 

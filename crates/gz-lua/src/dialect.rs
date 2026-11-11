@@ -74,7 +74,9 @@ pub fn vanilla_source(src: &str) -> Cow<'_, str> {
         let end = match c {
             b'"' | b'\'' => short_string_end(b, i),
             b'[' => long_open(b, i).map_or(i + 1, |level| long_end(b, i, level)),
-            b'-' if next == Some(b'-') => long_open(b, i + 2).map_or_else(|| line_end(b, i), |level| long_end(b, i + 2, level)),
+            b'-' if next == Some(b'-') => {
+                long_open(b, i + 2).map_or_else(|| line_end(b, i), |level| long_end(b, i + 2, level))
+            }
             b'/' if next == Some(b'/') => {
                 changed = true;
                 out.push(b' ');

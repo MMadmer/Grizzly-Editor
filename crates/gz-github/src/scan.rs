@@ -22,7 +22,8 @@ use crate::service::Github;
 use crate::vt::{self, VtPolicy, VtReport, VtVerdict};
 
 /// The most decisive state first: a scan takes the first one any of its packages has.
-pub const ORDER: [&str; 8] = ["no_key", "block", "too_large", "unknown", "unavailable", "analysing", "warn", "clean"];
+pub const ORDER: [&str; 8] =
+    ["no_key", "block", "too_large", "unknown", "unavailable", "analysing", "warn", "clean"];
 
 /// A package of the release.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -118,7 +119,13 @@ pub fn json(scan: &Scan) -> Value {
 }
 
 fn begin(packages: &[Package]) -> Scan {
-    Scan { state: "none".to_owned(), packages: packages.iter().map(|p| ScanResult { package: p.clone(), ..ScanResult::default() }).collect() }
+    Scan {
+        state: "none".to_owned(),
+        packages: packages
+            .iter()
+            .map(|p| ScanResult { package: p.clone(), ..ScanResult::default() })
+            .collect(),
+    }
 }
 
 // the key refused or its quota used up: asking about another package would fail the same way
@@ -175,7 +182,13 @@ pub fn file_sha256(path: &Path, cancel: &Cancel) -> Option<(String, u64)> {
 impl Github {
     /// A request refused for the rate is waited out a few times - the key may be busy elsewhere,
     /// the game's Mods window takes one too; after that the quota counts as used up.
-    async fn look(&self, sha256: &str, key: &str, cancel: &Cancel, stage: Stage<'_>) -> Result<VtReport, (u16, String)> {
+    async fn look(
+        &self,
+        sha256: &str,
+        key: &str,
+        cancel: &Cancel,
+        stage: Stage<'_>,
+    ) -> Result<VtReport, (u16, String)> {
         let mut attempt = 0;
         loop {
             let r = self.vt_lookup(sha256, key, cancel).await;
@@ -189,7 +202,13 @@ impl Github {
         }
     }
 
-    async fn upload_within_rate(&self, path: &Path, key: &str, cancel: &Cancel, stage: Stage<'_>) -> Result<(), (u16, String)> {
+    async fn upload_within_rate(
+        &self,
+        path: &Path,
+        key: &str,
+        cancel: &Cancel,
+        stage: Stage<'_>,
+    ) -> Result<(), (u16, String)> {
         let mut attempt = 0;
         loop {
             let r = self.vt_upload(path, key, cancel).await;
@@ -204,7 +223,14 @@ impl Github {
     }
 
     /// What VirusTotal knows now; nothing is uploaded, nothing waited for.
-    pub async fn lookup(&self, packages: &[Package], key: &str, policy: &VtPolicy, cancel: &Cancel, stage: Stage<'_>) -> Scan {
+    pub async fn lookup(
+        &self,
+        packages: &[Package],
+        key: &str,
+        policy: &VtPolicy,
+        cancel: &Cancel,
+        stage: Stage<'_>,
+    ) -> Scan {
         let mut out = begin(packages);
         for i in 0..out.packages.len() {
             if cancel.is_cancelled() {
@@ -243,7 +269,14 @@ impl Github {
 
     /// Every package looked up, the ones VirusTotal does not know uploaded from this computer,
     /// and their reports waited for - ten minutes at most.
-    pub async fn scan(&self, packages: &[Package], key: &str, policy: &VtPolicy, cancel: &Cancel, stage: Stage<'_>) -> Scan {
+    pub async fn scan(
+        &self,
+        packages: &[Package],
+        key: &str,
+        policy: &VtPolicy,
+        cancel: &Cancel,
+        stage: Stage<'_>,
+    ) -> Scan {
         let mut out = begin(packages);
         if key.is_empty() {
             for r in &mut out.packages {
@@ -288,7 +321,11 @@ impl Github {
                 // only the very bytes the descriptor pins go up
                 stage(&format!("Hashing {}", package.name));
                 let (path, c) = (package.path.clone(), cancel.clone());
-                let hashed = if path.as_os_str().is_empty() { None } else { self.exec().io(move || file_sha256(&path, &c)).await };
+                let hashed = if path.as_os_str().is_empty() {
+                    None
+                } else {
+                    self.exec().io(move || file_sha256(&path, &c)).await
+                };
                 if hashed.is_none_or(|(sha, _)| sha != package.sha256) {
                     if cancel.is_cancelled() {
                         break;
@@ -321,7 +358,11 @@ impl Github {
                 if r.state.is_empty() {
                     let (name, sha) = (r.package.name.clone(), r.package.sha256.clone());
                     let seconds = start.elapsed().as_secs();
-                    stage(&format!("Waiting for VirusTotal's report on {name} ({}:{:02})", seconds / 60, seconds % 60));
+                    stage(&format!(
+                        "Waiting for VirusTotal's report on {name} ({}:{:02})",
+                        seconds / 60,
+                        seconds % 60
+                    ));
                     match self.look(&sha, key, cancel, stage).await {
                         Ok(report) => {
                             if let Some(r) = out.packages.get_mut(i) {
@@ -367,12 +408,19 @@ mod tests {
     use super::*;
 
     fn result(name: &str, state: &str) -> ScanResult {
-        ScanResult { package: Package { name: name.to_owned(), ..Package::default() }, state: state.to_owned(), ..ScanResult::default() }
+        ScanResult {
+            package: Package { name: name.to_owned(), ..Package::default() },
+            state: state.to_owned(),
+            ..ScanResult::default()
+        }
     }
 
     #[test]
     fn the_most_decisive_state_wins() {
-        let mut s = Scan { state: String::new(), packages: vec![result("a", "clean"), result("b", "analysing"), result("c", "warn")] };
+        let mut s = Scan {
+            state: String::new(),
+            packages: vec![result("a", "clean"), result("b", "analysing"), result("c", "warn")],
+        };
         settle(&mut s, false);
         assert_eq!(s.state, "analysing");
         assert_eq!(deciding(&s).map(|r| r.package.name.as_str()), Some("b"));
@@ -406,7 +454,10 @@ mod tests {
         let mut r = result("od-1.0.0.zip", "unknown");
         assert_eq!(describe(&r), "VirusTotal does not know od-1.0.0.zip");
         r.error = "this computer has no copy of it to upload".to_owned();
-        assert_eq!(describe(&r), "VirusTotal does not know od-1.0.0.zip, and this computer has no copy of it to upload");
+        assert_eq!(
+            describe(&r),
+            "VirusTotal does not know od-1.0.0.zip, and this computer has no copy of it to upload"
+        );
         r.state = "clean".to_owned();
         r.verdict.engines = 70;
         assert_eq!(describe(&r), "VirusTotal: od-1.0.0.zip is clean (70 engines)");

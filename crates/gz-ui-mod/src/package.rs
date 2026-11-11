@@ -109,13 +109,27 @@ impl KeyLine {
     pub fn draw(&mut self, ui: &mut Ui, editor: &Arc<Editor>, id_salt: &str) {
         self.take();
         let Some(state) = self.state.clone() else {
-            let _ = text::label(ui, "Reading the author key...", Font::Body, palette(ui.ctx()).text_muted, Clip::End);
+            let _ = text::label(
+                ui,
+                "Reading the author key...",
+                Font::Body,
+                palette(ui.ctx()).text_muted,
+                Clip::End,
+            );
             return;
         };
         if !state.exists {
-            let _ = text::status(ui, Tone::Warning, "Not signed: no author key. Submit to Mod Browser creates one.");
+            let _ = text::status(
+                ui,
+                Tone::Warning,
+                "Not signed: no author key. Submit to Mod Browser creates one.",
+            );
         } else if !state.error.is_empty() {
-            let _ = text::status(ui, Tone::Error, &format!("Not signed: the key file does not read: {}.", state.error));
+            let _ = text::status(
+                ui,
+                Tone::Error,
+                &format!("Not signed: the key file does not read: {}.", state.error),
+            );
         } else if state.locked {
             let mut unlock = false;
             local_value_column(ui, id_salt, |ui| {
@@ -169,7 +183,10 @@ struct PackageDialog {
 fn cannot_package(editor: &Arc<Editor>, ctx: &egui::Context, err: &str) {
     let mut spec = ResultSpec::new("package_result", "Cannot Package", Tone::Error, &format!("{err}."));
     let ed = editor.clone();
-    spec.action = Some(ResultAction { label: "Mod Settings".to_owned(), run: Arc::new(move || call::open_tab(&ed, crate::settings::TAB)) });
+    spec.action = Some(ResultAction {
+        label: "Mod Settings".to_owned(),
+        run: Arc::new(move || call::open_tab(&ed, crate::settings::TAB)),
+    });
     crate::build::show_result(editor, ctx, spec);
 }
 
@@ -198,11 +215,16 @@ pub fn request(cx: &mut DocCx<'_>) {
         let ed2 = ed.clone();
         post_ui(&ed, move |ctx| match gate {
             Err(e) => cannot_package(&ed2, ctx, &e),
-            Ok(()) => call::call_then(&ed2, "ui_dialog", args([("action", s("open")), ("id", s(PACKAGE_RELEASE))]), |reply, ctx| {
-                if !call::ok(reply) {
-                    gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
-                }
-            }),
+            Ok(()) => call::call_then(
+                &ed2,
+                "ui_dialog",
+                args([("action", s("open")), ("id", s(PACKAGE_RELEASE))]),
+                |reply, ctx| {
+                    if !call::ok(reply) {
+                        gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                    }
+                },
+            ),
         });
     });
 }
@@ -225,10 +247,20 @@ pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     for p in &r.packages {
         rows.push(("Package".to_owned(), format!("{}  ({:.1} MB)", p.name, p.size as f64 / 1_048_576.0)));
     }
-    rows.push(("Signed".to_owned(), if r.signed { format!("With the author key {}", r.key_id) } else { "No - the Mod Browser lists signed releases only".to_owned() }));
+    rows.push((
+        "Signed".to_owned(),
+        if r.signed {
+            format!("With the author key {}", r.key_id)
+        } else {
+            "No - the Mod Browser lists signed releases only".to_owned()
+        },
+    ));
     add_bake_note(&r.baked, &mut rows, &mut warnings);
     if m.update_github.is_empty() {
-        warnings.push("No GitHub repository in Mod Settings: the game does not look for updates of this module.".to_owned());
+        warnings.push(
+            "No GitHub repository in Mod Settings: the game does not look for updates of this module."
+                .to_owned(),
+        );
     }
     split_lines(&r.warnings, &mut warnings);
     // the index addresses the zip by byte offset: a repacked copy is another file
@@ -245,7 +277,10 @@ pub fn package_report(m: &Manifest, r: &PackageResult) -> ResultSpec {
     spec.left_out.clone_from(&r.left_out);
     spec.warnings = warnings;
     let dir = r.out_dir.clone();
-    spec.action = Some(ResultAction { label: "Open Folder".to_owned(), run: Arc::new(move || call::open_folder(&dir)) });
+    spec.action = Some(ResultAction {
+        label: "Open Folder".to_owned(),
+        run: Arc::new(move || call::open_folder(&dir)),
+    });
     spec
 }
 
@@ -256,7 +291,10 @@ fn queue_package(editor: &Arc<Editor>, ctx: &egui::Context, m: Manifest, out_dir
             crate::cards::started_from_ui(editor, job);
             follow_package(editor, job, m);
         }
-        Err(e) => call::log_lines(editor, notice(ctx, asker(editor), Tone::Warning, "Packaging Release", &format!("{}.", e.message))),
+        Err(e) => call::log_lines(
+            editor,
+            notice(ctx, asker(editor), Tone::Warning, "Packaging Release", &format!("{}.", e.message)),
+        ),
     }
 }
 
@@ -267,10 +305,19 @@ fn follow_package(editor: &Arc<Editor>, job: JobId, m: Manifest) {
         let r = Releases::of(&ed).result(job);
         let ed2 = ed.clone();
         post_ui(&ed, move |ctx| match r {
-            Some(r) if r.cancelled => gz_ui::state::toast(ctx, Tone::Info, "Packaging stopped: the release folder holds nothing new."),
+            Some(r) if r.cancelled => gz_ui::state::toast(
+                ctx,
+                Tone::Info,
+                "Packaging stopped: the release folder holds nothing new.",
+            ),
             Some(r) => crate::build::show_result(&ed2, ctx, package_report(&m, &r)),
             None => {
-                let spec = ResultSpec::new("package_result", "Packaging Failed", Tone::Error, "The packaging ended without an answer.");
+                let spec = ResultSpec::new(
+                    "package_result",
+                    "Packaging Failed",
+                    Tone::Error,
+                    "The packaging ended without an answer.",
+                );
                 crate::build::show_result(&ed2, ctx, spec);
             }
         });
@@ -316,7 +363,8 @@ impl PackageDialog {
     fn check_replace(&mut self, editor: &Arc<Editor>) {
         let Some(root) = editor.project_root() else { return };
         self.checking = true;
-        let (out_dir, id, version) = (self.out_dir.clone(), self.manifest.id.clone(), self.manifest.version.clone());
+        let (out_dir, id, version) =
+            (self.out_dir.clone(), self.manifest.id.clone(), self.manifest.version.clone());
         let (ed, inbox) = (editor.clone(), self.inbox.clone());
         let _task = editor.exec.spawn(async move {
             let found = ed
@@ -349,14 +397,19 @@ impl PackageDialog {
                 drop(inbox);
                 // the dialog closes when the job starts: the Task Center's card follows it
                 self.open = false;
-                let (m, out, req) = (self.manifest.clone(), self.out_dir.trim().to_owned(), self.requires.trim().to_owned());
+                let (m, out, req) =
+                    (self.manifest.clone(), self.out_dir.trim().to_owned(), self.requires.trim().to_owned());
                 queue_package(&editor, cx.ctx, m, out, req);
                 return;
             }
         }
         let running = build_running(&editor);
         let requires_ok = check_requires_game(self.requires.trim()).is_ok();
-        let can = !self.out_dir.trim().is_empty() && requires_ok && !running && self.requires_read && !self.checking;
+        let can = !self.out_dir.trim().is_empty()
+            && requires_ok
+            && !running
+            && self.requires_read
+            && !self.checking;
         let why = if running {
             "A build is running"
         } else if self.out_dir.trim().is_empty() {
@@ -473,7 +526,8 @@ impl PackageDialog {
         if start_now {
             // the dialog closes when the job starts: the Task Center's card follows it
             self.open = false;
-            let (m, out, req) = (self.manifest.clone(), self.out_dir.trim().to_owned(), self.requires.trim().to_owned());
+            let (m, out, req) =
+                (self.manifest.clone(), self.out_dir.trim().to_owned(), self.requires.trim().to_owned());
             queue_package(&editor, cx.ctx, m, out, req);
         }
     }

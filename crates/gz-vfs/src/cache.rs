@@ -118,7 +118,8 @@ fn count(r: &mut Reader<'_>, min: usize) -> Result<usize, ChunkError> {
 
 fn text(r: &mut Reader<'_>) -> Result<String, ChunkError> {
     let raw = r.r_stringz_raw()?;
-    String::from_utf8(raw.to_vec()).map_err(|_| ChunkError::Invalid("a name of the saved game index is not UTF-8".into()))
+    String::from_utf8(raw.to_vec())
+        .map_err(|_| ChunkError::Invalid("a name of the saved game index is not UTF-8".into()))
 }
 
 /// The records of a saved index of `root_key`.
@@ -201,8 +202,18 @@ mod tests {
             trees: vec![(
                 "gamedata".into(),
                 vec![
-                    DirRec { rel: String::new(), mtime: 7, files: vec![("a.ltx".into(), 3)], dirs: vec!["Configs".into()] },
-                    DirRec { rel: "Configs".into(), mtime: 9, files: vec![("Тест.xml".into(), 12)], dirs: Vec::new() },
+                    DirRec {
+                        rel: String::new(),
+                        mtime: 7,
+                        files: vec![("a.ltx".into(), 3)],
+                        dirs: vec!["Configs".into()],
+                    },
+                    DirRec {
+                        rel: "Configs".into(),
+                        mtime: 9,
+                        files: vec![("Тест.xml".into(), 12)],
+                        dirs: Vec::new(),
+                    },
                 ]
                 .into(),
             )],
@@ -210,7 +221,13 @@ mod tests {
                 path: PathBuf::from("D:\\G\\database\\configs.xdb0"),
                 len: 100,
                 mtime: 5,
-                entries: vec![ArchEntry { path: "configs/system.ltx".into(), size: 10, packed: 6, offset: 8 }].into(),
+                entries: vec![ArchEntry {
+                    path: "configs/system.ltx".into(),
+                    size: 10,
+                    packed: 6,
+                    offset: 8,
+                }]
+                .into(),
             }],
         }
     }

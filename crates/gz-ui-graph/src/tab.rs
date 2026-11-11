@@ -20,7 +20,7 @@ use gz_nq::index::FindHit;
 use gz_nq::{Catalog, DocHandle, NqService};
 use gz_query::Derived;
 use gz_ui::menu::{MenuItem, menu_item};
-use gz_ui::{Clip, Font, Icon, Kind, Toolbar, Tone, palette};
+use gz_ui::{Clip, Font, Icon, Kind, Tone, Toolbar, palette};
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 
@@ -175,7 +175,11 @@ pub struct GraphTab {
 impl GraphTab {
     /// The factory: the document of a path, opened on the IO pool when it is not open yet.
     pub fn open(editor: &Arc<Editor>, req: &OpenRequest) -> Result<GraphTab, String> {
-        let path = req.path.clone().or_else(|| req.id.as_ref().and_then(|i| i.split_once(':').map(|(_, p)| p.to_owned()))).ok_or_else(|| "path= names the graph (project-relative)".to_owned())?;
+        let path = req
+            .path
+            .clone()
+            .or_else(|| req.id.as_ref().and_then(|i| i.split_once(':').map(|(_, p)| p.to_owned())))
+            .ok_or_else(|| "path= names the graph (project-relative)".to_owned())?;
         let svc = NqService::of(editor).map_err(|e| e.message)?;
         let p = svc.resolve(&path, false)?;
         let behaviour = gz_nq::asset::is_behaviour_path(&p.wire);
@@ -299,13 +303,18 @@ impl GraphTab {
         let pending = self.pending.clone();
         let errors = self.errors.clone();
         let ctx = ctx.clone();
-        doc.store.post_then(&self.editor.exec, DocCmd { catalog: catalog.clone(), op }, self.editor.ui_origin(), move |r| {
-            pending.fetch_sub(1, Ordering::AcqRel);
-            if let Err(e) = r {
-                errors.lock().push(e.message);
-            }
-            ctx.request_repaint();
-        });
+        doc.store.post_then(
+            &self.editor.exec,
+            DocCmd { catalog: catalog.clone(), op },
+            self.editor.ui_origin(),
+            move |r| {
+                pending.fetch_sub(1, Ordering::AcqRel);
+                if let Err(e) = r {
+                    errors.lock().push(e.message);
+                }
+                ctx.request_repaint();
+            },
+        );
     }
 
     fn undo_redo(&self, ctx: &egui::Context, undo: bool) {
@@ -326,7 +335,10 @@ impl GraphTab {
     /// The selection and the open action reach the document before a command that reads them.
     fn flush_selection(&mut self, ctx: &egui::Context) {
         if self.mirror.selection != self.synced.selection {
-            self.post(ctx, DocOp::View(ViewOp::Select(self.mirror.selection.iter().map(ToString::to_string).collect())));
+            self.post(
+                ctx,
+                DocOp::View(ViewOp::Select(self.mirror.selection.iter().map(ToString::to_string).collect())),
+            );
             self.synced.selection.clone_from(&self.mirror.selection);
             self.synced.slot.clear();
         }
@@ -372,7 +384,12 @@ impl GraphTab {
 
     /// Centres a node at 1:1 or closer and selects it: one step of the view history.
     pub fn frame_node(&mut self, ctx: &egui::Context, id: &str) {
-        let Some(n) = self.scene.as_ref().and_then(|s| s.node_of(id).and_then(|i| s.nodes.get(i))).map(|n| (n.pos, n.size)) else {
+        let Some(n) = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.node_of(id).and_then(|i| s.nodes.get(i)))
+            .map(|n| (n.pos, n.size))
+        else {
             self.post(ctx, DocOp::View(ViewOp::FrameNode(id.to_owned())));
             return;
         };
@@ -431,7 +448,10 @@ impl GraphTab {
 
     #[must_use]
     pub fn details_width(&self, ctx: &egui::Context) -> f32 {
-        self.pane_details.map_or_else(|| gz_ui::layout::get(ctx, DETAILS_W, DETAILS_DEF).clamp(DETAILS_MIN, DETAILS_MAX), |r| r.width())
+        self.pane_details.map_or_else(
+            || gz_ui::layout::get(ctx, DETAILS_W, DETAILS_DEF).clamp(DETAILS_MIN, DETAILS_MAX),
+            |r| r.width(),
+        )
     }
 
     #[must_use]
@@ -455,7 +475,8 @@ impl GraphTab {
                     return Err("a behaviour graph has roles, not tasks".into());
                 }
                 let id = rest.split('/').next().unwrap_or(rest);
-                let exists = self.doc.as_ref().is_some_and(|d| d.store.snapshot().graph.find_task(id).is_some());
+                let exists =
+                    self.doc.as_ref().is_some_and(|d| d.store.snapshot().graph.find_task(id).is_some());
                 if !exists {
                     return Err(format!("no task '{id}' in this quest"));
                 }
@@ -536,7 +557,13 @@ impl GraphTab {
             let mut c = ui.new_child(UiBuilder::new().max_rect(full.shrink(16.0)));
             match &self.load_error {
                 Some(e) => {
-                    gz_ui::state::empty_state(&mut c, Icon::Error, &format!("The {} could not be opened", self.noun()), e, None);
+                    gz_ui::state::empty_state(
+                        &mut c,
+                        Icon::Error,
+                        &format!("The {} could not be opened", self.noun()),
+                        e,
+                        None,
+                    );
                 }
                 None => gz_ui::state::busy_line(&mut c, "Reading the file"),
             }
@@ -571,14 +598,18 @@ impl GraphTab {
         let p = palette(&ctx);
         let rev = Rev(snap.edit).mix(Rev(u64::from(cat.generation)));
         let (s2, c2, p2) = (snap.clone(), cat.clone(), p.clone());
-        let ans = self.scenes.get(rev, move || Scene::build(&SceneInput { graph: &s2.graph, catalog: &c2, edit: s2.edit, palette: &p2 }));
+        let ans = self.scenes.get(rev, move || {
+            Scene::build(&SceneInput { graph: &s2.graph, catalog: &c2, edit: s2.edit, palette: &p2 })
+        });
         self.scene = ans.value().cloned();
         if !ans.is_fresh() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
         let queued = std::mem::take(&mut self.queued);
         self.run_ops(&ctx, queued);
-        let doc_status = (snap.view.status != self.last_status_rev.clone().unwrap_or_default()).then(|| snap.view.status.clone()).filter(|s| !s.is_empty());
+        let doc_status = (snap.view.status != self.last_status_rev.clone().unwrap_or_default())
+            .then(|| snap.view.status.clone())
+            .filter(|s| !s.is_empty());
         self.last_status_rev = Some(snap.view.status.clone());
 
         // the panes: the panels keep their pt size, the canvas takes what is left
@@ -586,10 +617,13 @@ impl GraphTab {
         let mut top = origin.y;
         let bottom = full.max.y;
         if self.data.external {
-            let banner_r = Rect::from_min_max(pos2(origin.x + 8.0, top + 8.0), pos2(full.max.x - 8.0, bottom));
+            let banner_r =
+                Rect::from_min_max(pos2(origin.x + 8.0, top + 8.0), pos2(full.max.x - 8.0, bottom));
             let mut b = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.banner").max_rect(banner_r));
             let name = gz_nq::asset::base_name(&self.wire);
-            let file = std::path::Path::new(&self.wire).file_name().map_or(name, |f| f.to_string_lossy().into_owned());
+            let file = std::path::Path::new(&self.wire)
+                .file_name()
+                .map_or(name, |f| f.to_string_lossy().into_owned());
             let text_ = format!("{file} changed on disk. Reload it, or keep this version and save over it.");
             match gz_ui::state::banner(&mut b, Tone::Warning, &text_, Some("Reload"), Some("Overwrite...")) {
                 Some(0) => self.reload(&ctx),
@@ -607,7 +641,11 @@ impl GraphTab {
         };
         let main_h = (bottom - top - if drawer_h > 0.0 { drawer_h + GAP } else { 0.0 }).max(60.0);
         let width = full.width();
-        let mut dw = if self.show_details { gz_ui::layout::get(&ctx, DETAILS_W, DETAILS_DEF).clamp(DETAILS_MIN, DETAILS_MAX) } else { 0.0 };
+        let mut dw = if self.show_details {
+            gz_ui::layout::get(&ctx, DETAILS_W, DETAILS_DEF).clamp(DETAILS_MIN, DETAILS_MAX)
+        } else {
+            0.0
+        };
         let mut gw = if self.show_graph { self.graph_width(&ctx) } else { 0.0 };
         let gaps = f32::from(u8::from(self.show_graph) + u8::from(self.show_details));
         self.rail = self.show_graph && width - gw - dw - GAP * gaps < CANVAS_MIN;
@@ -633,13 +671,33 @@ impl GraphTab {
             if self.rail {
                 self.draw_rail(ui, r);
                 let lx = x + gw + GAP * 0.5;
-                ui.painter().line_segment([pos2(lx, top), pos2(lx, top + main_h)], Stroke::new(1.0, p.border_subtle));
+                ui.painter()
+                    .line_segment([pos2(lx, top), pos2(lx, top + main_h)], Stroke::new(1.0, p.border_subtle));
             } else {
                 ui.painter().rect_filled(r, CornerRadius::ZERO, p.base);
-                let mut pcx = PanelCx { editor: &self.editor, cat: &cat, graph: &snap.graph, edit: snap.edit, data: &self.data, view: &mut self.mirror, ops: &mut ops, pending };
+                let mut pcx = PanelCx {
+                    editor: &self.editor,
+                    cat: &cat,
+                    graph: &snap.graph,
+                    edit: snap.edit,
+                    data: &self.data,
+                    view: &mut self.mirror,
+                    ops: &mut ops,
+                    pending,
+                };
                 self.inspector.draw_graph_panel(ui, r.shrink(8.0), &mut pcx);
                 self.pane_graph = Some(r);
-                gz_ui::splitter::splitter_at(ui, GRAPH_W, true, pos2(x + gw + GAP * 0.5, top), main_h, 1.0, GRAPH_MIN, graph_hi, GRAPH_DEF);
+                gz_ui::splitter::splitter_at(
+                    ui,
+                    GRAPH_W,
+                    true,
+                    pos2(x + gw + GAP * 0.5, top),
+                    main_h,
+                    1.0,
+                    GRAPH_MIN,
+                    graph_hi,
+                    GRAPH_DEF,
+                );
             }
             x += gw + GAP;
         }
@@ -666,7 +724,13 @@ impl GraphTab {
             self.canvas.draw(&mut cui, canvas_r, &mut ccx);
             // Ctrl+C / Ctrl+X / Ctrl+V reach the canvas as clipboard events, not keys
             if self.canvas.takes_keys(&ctx) {
-                let events: Vec<Event> = ctx.input(|i| i.events.iter().filter(|e| matches!(e, Event::Copy | Event::Cut | Event::Paste(_))).cloned().collect());
+                let events: Vec<Event> = ctx.input(|i| {
+                    i.events
+                        .iter()
+                        .filter(|e| matches!(e, Event::Copy | Event::Cut | Event::Paste(_)))
+                        .cloned()
+                        .collect()
+                });
                 for e in events {
                     match e {
                         Event::Copy | Event::Cut => {
@@ -703,11 +767,30 @@ impl GraphTab {
         }
         self.pane_details = None;
         if self.show_details {
-            gz_ui::splitter::splitter_at(ui, DETAILS_W, true, pos2(x + GAP * 0.5, top), main_h, -1.0, DETAILS_MIN, details_hi, DETAILS_DEF);
+            gz_ui::splitter::splitter_at(
+                ui,
+                DETAILS_W,
+                true,
+                pos2(x + GAP * 0.5, top),
+                main_h,
+                -1.0,
+                DETAILS_MIN,
+                details_hi,
+                DETAILS_DEF,
+            );
             x += GAP;
             let r = Rect::from_min_size(pos2(x, top), vec2(dw, main_h));
             ui.painter().rect_filled(r, CornerRadius::ZERO, p.base);
-            let mut pcx = PanelCx { editor: &self.editor, cat: &cat, graph: &snap.graph, edit: snap.edit, data: &self.data, view: &mut self.mirror, ops: &mut ops, pending };
+            let mut pcx = PanelCx {
+                editor: &self.editor,
+                cat: &cat,
+                graph: &snap.graph,
+                edit: snap.edit,
+                data: &self.data,
+                view: &mut self.mirror,
+                ops: &mut ops,
+                pending,
+            };
             self.inspector.draw_details(ui, r.shrink(8.0), &mut pcx);
             self.pane_details = Some(r);
         }
@@ -719,8 +802,21 @@ impl GraphTab {
             oui.painter().rect_filled(r, CornerRadius::ZERO, p.overlay);
             oui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, p.border), StrokeKind::Inside);
             // the canvas under it takes no clicks meant for the panel
-            oui.interact(r, egui::Id::unique(("gz-ui-graph.overlay_block", self.id.as_str())), egui::Sense::click_and_drag());
-            let mut pcx = PanelCx { editor: &self.editor, cat: &cat, graph: &snap.graph, edit: snap.edit, data: &self.data, view: &mut self.mirror, ops: &mut ops, pending };
+            oui.interact(
+                r,
+                egui::Id::unique(("gz-ui-graph.overlay_block", self.id.as_str())),
+                egui::Sense::click_and_drag(),
+            );
+            let mut pcx = PanelCx {
+                editor: &self.editor,
+                cat: &cat,
+                graph: &snap.graph,
+                edit: snap.edit,
+                data: &self.data,
+                view: &mut self.mirror,
+                ops: &mut ops,
+                pending,
+            };
             self.inspector.draw_graph_panel(&mut oui, r.shrink(8.0), &mut pcx);
             self.pane_graph = Some(r);
         }
@@ -729,7 +825,17 @@ impl GraphTab {
         self.pane_drawer = None;
         if drawer != DrawerTab::None {
             let y = top + main_h;
-            gz_ui::splitter::splitter_at(ui, DRAWER_H, false, pos2(origin.x, y + GAP * 0.5), width, -1.0, DRAWER_MIN, 1000.0, DRAWER_DEF);
+            gz_ui::splitter::splitter_at(
+                ui,
+                DRAWER_H,
+                false,
+                pos2(origin.x, y + GAP * 0.5),
+                width,
+                -1.0,
+                DRAWER_MIN,
+                1000.0,
+                DRAWER_DEF,
+            );
             let r = Rect::from_min_size(pos2(origin.x, y + GAP), vec2(width, drawer_h));
             self.draw_drawer(ui, r, drawer, &snap.graph, &mut ops);
             self.pane_drawer = Some(r);
@@ -737,7 +843,16 @@ impl GraphTab {
 
         // the tab's dialogs belong to it, whichever panes are shown
         if let Some(id) = self.inspector.rename_task.take() {
-            let mut pcx = PanelCx { editor: &self.editor, cat: &cat, graph: &snap.graph, edit: snap.edit, data: &self.data, view: &mut self.mirror, ops: &mut ops, pending };
+            let mut pcx = PanelCx {
+                editor: &self.editor,
+                cat: &cat,
+                graph: &snap.graph,
+                edit: snap.edit,
+                data: &self.data,
+                view: &mut self.mirror,
+                ops: &mut ops,
+                pending,
+            };
             self.inspector.flush(&mut pcx);
             self.task_rename.begin(&id);
         }
@@ -756,11 +871,16 @@ impl GraphTab {
         }
         dialogs::draw_text_edit(ui, &mut self.inspector.text_edit);
         if let Some((path, node)) = self.project_find.draw(ui, &self.editor) {
-            if gz_nq::asset::base_name(&path) == gz_nq::asset::base_name(&self.wire) && path.replace('\\', "/") == self.wire {
+            if gz_nq::asset::base_name(&path) == gz_nq::asset::base_name(&self.wire)
+                && path.replace('\\', "/") == self.wire
+            {
                 self.frame_node(&ctx, &node);
             } else {
                 self.open_after = Some((path.clone(), node));
-                let mut req = OpenRequest::file(if gz_nq::asset::is_behaviour_path(&path) { "beh" } else { "quest" }, &path);
+                let mut req = OpenRequest::file(
+                    if gz_nq::asset::is_behaviour_path(&path) { "beh" } else { "quest" },
+                    &path,
+                );
                 req.id = Some(doc_id(&path, gz_nq::asset::is_behaviour_path(&path)));
                 cx.requests.open(req);
                 // the other tab frames the node when it comes up
@@ -777,7 +897,16 @@ impl GraphTab {
             }
         }
         {
-            let mut pcx = PanelCx { editor: &self.editor, cat: &cat, graph: &snap.graph, edit: snap.edit, data: &self.data, view: &mut self.mirror, ops: &mut ops, pending };
+            let mut pcx = PanelCx {
+                editor: &self.editor,
+                cat: &cat,
+                graph: &snap.graph,
+                edit: snap.edit,
+                data: &self.data,
+                view: &mut self.mirror,
+                ops: &mut ops,
+                pending,
+            };
             self.inspector.commit_idle(&ctx, &mut pcx);
         }
         self.run_ops(&ctx, ops);
@@ -785,10 +914,21 @@ impl GraphTab {
         self.flush_view(&ctx);
         // what the frame drew, for quest_minimap
         let ppp = ctx.pixels_per_point();
-        let drawn = ([(canvas_w * ppp) as u32, (main_h * ppp) as u32], (ppp * 100.0) as u32, self.canvas.minimap_shown);
+        let drawn = (
+            [(canvas_w * ppp) as u32, (main_h * ppp) as u32],
+            (ppp * 100.0) as u32,
+            self.canvas.minimap_shown,
+        );
         if self.drawn_sent != Some(drawn) {
             self.drawn_sent = Some(drawn);
-            self.post(&ctx, DocOp::View(ViewOp::Drawn { canvas: Some([canvas_w * ppp, main_h * ppp]), dpi: ppp, minimap_shown: self.canvas.minimap_shown }));
+            self.post(
+                &ctx,
+                DocOp::View(ViewOp::Drawn {
+                    canvas: Some([canvas_w * ppp, main_h * ppp]),
+                    dpi: ppp,
+                    minimap_shown: self.canvas.minimap_shown,
+                }),
+            );
         }
         if self.view_frames > 0 {
             self.view_frames -= 1;
@@ -801,13 +941,34 @@ impl GraphTab {
     fn draw_rail(&mut self, ui: &mut Ui, r: Rect) {
         let p = palette(ui.ctx());
         ui.painter().rect_filled(r, CornerRadius::ZERO, p.base);
-        let mut rui = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.rail").max_rect(r.shrink(4.0)).layout(egui::Layout::top_down(egui::Align::Center)));
+        let mut rui = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-graph.rail")
+                .max_rect(r.shrink(4.0))
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
         rui.spacing_mut().item_spacing.y = 4.0;
-        if gz_ui::icon_button(&mut rui, Icon::SidebarLeft, "The Graph panel, over the graph", self.graph_overlay, true).clicked() {
+        if gz_ui::icon_button(
+            &mut rui,
+            Icon::SidebarLeft,
+            "The Graph panel, over the graph",
+            self.graph_overlay,
+            true,
+        )
+        .clicked()
+        {
             self.graph_overlay = !self.graph_overlay;
         }
         let behaviour = self.behaviour;
-        if gz_ui::icon_button(&mut rui, if behaviour { Icon::Role } else { Icon::Task }, if behaviour { "Roles" } else { "Tasks" }, false, true).clicked() {
+        if gz_ui::icon_button(
+            &mut rui,
+            if behaviour { Icon::Role } else { Icon::Task },
+            if behaviour { "Roles" } else { "Tasks" },
+            false,
+            true,
+        )
+        .clicked()
+        {
             self.graph_overlay = true;
             self.inspector.scroll = Some("tasks".to_owned());
         }
@@ -825,10 +986,15 @@ impl GraphTab {
             return;
         }
         let p = palette(ui.ctx());
-        let r = Rect::from_min_max(pos2(c.max.x - w - 8.0, c.min.y + 8.0), pos2(c.max.x - 8.0, c.max.y - 8.0));
+        let r =
+            Rect::from_min_max(pos2(c.max.x - w - 8.0, c.min.y + 8.0), pos2(c.max.x - 8.0, c.max.y - 8.0));
         let mut kui = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.keys").max_rect(r));
         kui.set_clip_rect(r.intersect(ui.clip_rect()));
-        let frame = egui::Frame::new().fill(p.overlay).stroke(Stroke::new(1.0, p.border)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8));
+        let frame = egui::Frame::new()
+            .fill(p.overlay)
+            .stroke(Stroke::new(1.0, p.border))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(8));
         let inner = frame.show(&mut kui, |ui| {
             ui.set_width(w - 16.0);
             ui.horizontal(|ui| {
@@ -839,37 +1005,68 @@ impl GraphTab {
                     }
                 });
             });
-            ui.add(egui::Label::new(egui::RichText::new("They work while the cursor is over the graph. Every edit is also an MCP call.").font(Font::Small.id()).color(p.text_muted)).wrap());
-            egui::ScrollArea::vertical().id_salt("gz-ui-graph.keys_rows").max_height((r.height() - 80.0).max(60.0)).show(ui, |ui| {
-                for (keys, what) in KEYS {
-                    match keys {
-                        None => {
-                            ui.add_space(2.0);
-                            gz_ui::text::label(ui, what, Font::Strong, p.text, Clip::End);
-                        }
-                        Some(k) => {
-                            ui.horizontal(|ui| {
-                                ui.scope(|ui| {
-                                    ui.set_width(gz_ui::units::em(9.0));
-                                    gz_ui::text::label(ui, k, Font::Body, p.text, Clip::End);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(
+                        "They work while the cursor is over the graph. Every edit is also an MCP call.",
+                    )
+                    .font(Font::Small.id())
+                    .color(p.text_muted),
+                )
+                .wrap(),
+            );
+            egui::ScrollArea::vertical()
+                .id_salt("gz-ui-graph.keys_rows")
+                .max_height((r.height() - 80.0).max(60.0))
+                .show(ui, |ui| {
+                    for (keys, what) in KEYS {
+                        match keys {
+                            None => {
+                                ui.add_space(2.0);
+                                gz_ui::text::label(ui, what, Font::Strong, p.text, Clip::End);
+                            }
+                            Some(k) => {
+                                ui.horizontal(|ui| {
+                                    ui.scope(|ui| {
+                                        ui.set_width(gz_ui::units::em(9.0));
+                                        gz_ui::text::label(ui, k, Font::Body, p.text, Clip::End);
+                                    });
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(what)
+                                                .font(Font::Body.id())
+                                                .color(p.text_secondary),
+                                        )
+                                        .wrap(),
+                                    );
                                 });
-                                ui.add(egui::Label::new(egui::RichText::new(what).font(Font::Body.id()).color(p.text_secondary)).wrap());
-                            });
+                            }
                         }
                     }
-                }
-            });
+                });
         });
         // the card takes the clicks over it
-        ui.interact(inner.response.rect, egui::Id::unique(("gz-ui-graph.keys_block", self.id.as_str())), egui::Sense::click());
+        ui.interact(
+            inner.response.rect,
+            egui::Id::unique(("gz-ui-graph.keys_block", self.id.as_str())),
+            egui::Sense::click(),
+        );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn draw_drawer(&mut self, ui: &mut Ui, r: Rect, drawer: DrawerTab, graph: &gz_nq::Graph, ops: &mut Vec<Op>) {
+    fn draw_drawer(
+        &mut self,
+        ui: &mut Ui,
+        r: Rect,
+        drawer: DrawerTab,
+        graph: &gz_nq::Graph,
+        ops: &mut Vec<Op>,
+    ) {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         ui.painter().rect_filled(r, CornerRadius::ZERO, p.base);
-        let inner = Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 6.0), pos2(r.max.x - 8.0, r.max.y - 6.0));
+        let inner =
+            Rect::from_min_max(pos2(r.min.x + 8.0, r.min.y + 6.0), pos2(r.max.x - 8.0, r.max.y - 6.0));
         let mut dui = ui.new_child(UiBuilder::new().id_salt("gz-ui-graph.drawer").max_rect(inner));
         dui.set_clip_rect(inner.intersect(ui.clip_rect()));
         let (results, index) = self.find_results();
@@ -894,16 +1091,24 @@ impl GraphTab {
             self.set_drawer(&ctx, want);
         }
         if want == DrawerTab::Find {
-            let snap_query = self.doc.as_ref().map(|d| d.store.snapshot().view.find_query.clone()).unwrap_or_default();
-            if !dui.ctx().egui_wants_keyboard_input() || self.find_text.is_empty() && !snap_query.is_empty() {
-                if self.find_text != snap_query && !self.find_focus {
-                    self.find_text = snap_query.clone();
-                }
+            let snap_query =
+                self.doc.as_ref().map(|d| d.store.snapshot().view.find_query.clone()).unwrap_or_default();
+            if (!dui.ctx().egui_wants_keyboard_input() || self.find_text.is_empty() && !snap_query.is_empty())
+                && self.find_text != snap_query
+                && !self.find_focus
+            {
+                self.find_text = snap_query.clone();
             }
             let mut go: Option<i64> = None;
             dui.horizontal(|ui| {
-                let w = (ui.available_width() - 24.0 * 2.0 - 4.0 - gz_ui::units::em(5.0)).max(gz_ui::units::em(8.0));
-                let resp = gz_ui::SearchField::new(&mut self.find_text).hint("Find by id, kind, parameters, actions or comments").min_em(12.0).width(w).id_salt("gz-ui-graph.find").show(ui);
+                let w = (ui.available_width() - 24.0 * 2.0 - 4.0 - gz_ui::units::em(5.0))
+                    .max(gz_ui::units::em(8.0));
+                let resp = gz_ui::SearchField::new(&mut self.find_text)
+                    .hint("Find by id, kind, parameters, actions or comments")
+                    .min_em(12.0)
+                    .width(w)
+                    .id_salt("gz-ui-graph.find")
+                    .show(ui);
                 if self.find_focus {
                     resp.request_focus();
                     self.find_focus = false;
@@ -916,17 +1121,33 @@ impl GraphTab {
                     go = Some(if ui.input(|i| i.modifiers.shift) { index - 1 } else { index + 1 });
                     resp.request_focus();
                 }
-                if gz_ui::icon_button(ui, Icon::ChevronUp, "Previous (Shift+F3)", false, !results.is_empty()).clicked() {
+                if gz_ui::icon_button(ui, Icon::ChevronUp, "Previous (Shift+F3)", false, !results.is_empty())
+                    .clicked()
+                {
                     go = Some(index - 1);
                 }
-                if gz_ui::icon_button(ui, Icon::ChevronDown, "Next (F3)", false, !results.is_empty()).clicked() {
+                if gz_ui::icon_button(ui, Icon::ChevronDown, "Next (F3)", false, !results.is_empty())
+                    .clicked()
+                {
                     go = Some(index + 1);
                 }
-                let count = if results.is_empty() { "0".to_owned() } else { format!("{} / {}", if index >= 0 { index + 1 } else { 0 }, results.len()) };
+                let count = if results.is_empty() {
+                    "0".to_owned()
+                } else {
+                    format!("{} / {}", if index >= 0 { index + 1 } else { 0 }, results.len())
+                };
                 gz_ui::text::label(ui, &count, Font::Body, p.text_muted, Clip::End);
             });
             if results.is_empty() {
-                gz_ui::text::status(&mut dui, Tone::Muted, if self.find_text.is_empty() { "Type to find nodes. Spaces separate terms, -term leaves a term out." } else { "No node matches." });
+                gz_ui::text::status(
+                    &mut dui,
+                    Tone::Muted,
+                    if self.find_text.is_empty() {
+                        "Type to find nodes. Spaces separate terms, -term leaves a term out."
+                    } else {
+                        "No node matches."
+                    },
+                );
             } else {
                 gz_ui::list::list(&mut dui, "gz-ui-graph.find_results", vec2(0.0, -2.0), |l| {
                     for (i, hit) in results.iter().enumerate() {
@@ -949,17 +1170,29 @@ impl GraphTab {
         }
         // the problems
         if self.data.problems.is_empty() {
-            gz_ui::state::empty_state(&mut dui, Icon::Success, "No problems", "Validate checks the graph again.", None);
+            gz_ui::state::empty_state(
+                &mut dui,
+                Icon::Success,
+                "No problems",
+                "Validate checks the graph again.",
+                None,
+            );
             return;
         }
         let mut go: Option<(String, String)> = None;
         let all: String = self.data.problems.iter().map(|pr| format!("{}\r\n", pr.text())).collect();
         gz_ui::list::list(&mut dui, "gz-ui-graph.problems", vec2(0.0, -2.0), |l| {
             for (i, pr) in self.data.problems.iter().enumerate() {
-                let selected = !pr.node.is_empty() && self.mirror.selection.len() == 1 && self.mirror.selection.first().is_some_and(|s| *s == pr.node.as_str());
+                let selected = !pr.node.is_empty()
+                    && self.mirror.selection.len() == 1
+                    && self.mirror.selection.first().is_some_and(|s| *s == pr.node.as_str());
                 let text_ = pr.text();
                 let resp = l.row(&format!("p{i}"), selected, |ui| {
-                    let (icon, tone) = if pr.is_error() { (Icon::Error, Tone::Error) } else { (Icon::Warning, Tone::Warning) };
+                    let (icon, tone) = if pr.is_error() {
+                        (Icon::Error, Tone::Error)
+                    } else {
+                        (Icon::Warning, Tone::Warning)
+                    };
                     let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
                     gz_ui::icons::draw(ui.painter(), icon, rect, p.tone(tone));
                     ui.add_space(6.0);
@@ -975,7 +1208,11 @@ impl GraphTab {
                     }
                 });
                 if resp.clicked() && !pr.node.is_empty() {
-                    let slot = if pr.slot.starts_with("enter:") || pr.slot.starts_with("exit:") { pr.slot.clone() } else { String::new() };
+                    let slot = if pr.slot.starts_with("enter:") || pr.slot.starts_with("exit:") {
+                        pr.slot.clone()
+                    } else {
+                        String::new()
+                    };
                     go = Some((pr.node.clone(), slot));
                 }
             }
@@ -994,10 +1231,15 @@ impl GraphTab {
         let Some(doc) = self.doc.clone() else { return Ok(()) };
         if self.data.external {
             self.set_message("Not saved: the file changed on disk", Tone::Warning);
-            return Err("the file changed on disk - Reload it, or Overwrite it from the banner over the graph".to_owned());
+            return Err(
+                "the file changed on disk - Reload it, or Overwrite it from the banner over the graph"
+                    .to_owned(),
+            );
         }
         if !doc.path().inside {
-            return Err("the document is outside the project folder - it cannot be saved from here".to_owned());
+            return Err(
+                "the document is outside the project folder - it cannot be saved from here".to_owned()
+            );
         }
         self.write(ctx, &doc, false);
         Ok(())
@@ -1026,8 +1268,18 @@ impl GraphTab {
             if let Ok(q) = gz_app::UiQueue::of(&ed) {
                 let id = doc_id(&d.path().wire, gz_nq::asset::is_behaviour_path(&d.path().wire));
                 q.post(move |shell, _| {
-                    if let Some(t) = shell.document_mut(&id).and_then(|d| d.as_any_mut()).and_then(|a| a.downcast_mut::<GraphTab>()) {
-                        let tone = if text_.starts_with("Saved") { Tone::Success } else if text_.starts_with("Not saved") { Tone::Warning } else { Tone::Error };
+                    if let Some(t) = shell
+                        .document_mut(&id)
+                        .and_then(|d| d.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<GraphTab>())
+                    {
+                        let tone = if text_.starts_with("Saved") {
+                            Tone::Success
+                        } else if text_.starts_with("Not saved") {
+                            Tone::Warning
+                        } else {
+                            Tone::Error
+                        };
                         t.set_message(&text_, tone);
                         t.refresher_force();
                     }
@@ -1060,8 +1312,15 @@ impl GraphTab {
                     if let Ok(q) = gz_app::UiQueue::of(&ed) {
                         let id = doc_id(&d.path().wire, gz_nq::asset::is_behaviour_path(&d.path().wire));
                         q.post(move |shell, _| {
-                            if let Some(t) = shell.document_mut(&id).and_then(|d| d.as_any_mut()).and_then(|a| a.downcast_mut::<GraphTab>()) {
-                                t.set_message(&text_, if text_ == "Reloaded" { Tone::Success } else { Tone::Error });
+                            if let Some(t) = shell
+                                .document_mut(&id)
+                                .and_then(|d| d.as_any_mut())
+                                .and_then(|a| a.downcast_mut::<GraphTab>())
+                            {
+                                t.set_message(
+                                    &text_,
+                                    if text_ == "Reloaded" { Tone::Success } else { Tone::Error },
+                                );
                                 t.refresher_force();
                             }
                         });
@@ -1114,7 +1373,11 @@ impl GraphTab {
             }
             if let Ok(q) = gz_app::UiQueue::of(&ed) {
                 q.post(move |shell, ctx| {
-                    if let Some(t) = shell.document_mut(&id).and_then(|d| d.as_any_mut()).and_then(|a| a.downcast_mut::<GraphTab>()) {
+                    if let Some(t) = shell
+                        .document_mut(&id)
+                        .and_then(|d| d.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<GraphTab>())
+                    {
                         t.write(ctx, &doc, true);
                     }
                 });
@@ -1147,7 +1410,9 @@ impl GraphTab {
     }
 
     fn minimap_available(&self) -> bool {
-        self.doc.as_ref().is_some_and(|d| d.store.snapshot().graph.nodes.len() >= gz_nq::doc::MINIMAP_MIN_NODES)
+        self.doc
+            .as_ref()
+            .is_some_and(|d| d.store.snapshot().graph.nodes.len() >= gz_nq::doc::MINIMAP_MIN_NODES)
     }
 
     fn minimap_tip(&self) -> String {
@@ -1155,11 +1420,17 @@ impl GraphTab {
         if self.minimap_available() {
             "The whole graph in the canvas's corner: click or drag it to pan".to_owned()
         } else {
-            format!("A graph of {} nodes or more gets a minimap; this one has {n}", gz_nq::doc::MINIMAP_MIN_NODES)
+            format!(
+                "A graph of {} nodes or more gets a minimap; this one has {n}",
+                gz_nq::doc::MINIMAP_MIN_NODES
+            )
         }
     }
 
-    fn with_canvas_cx<R>(&mut self, f: impl FnOnce(&mut Canvas, Option<&Scene>, &mut CanvasCx<'_>) -> R) -> Option<R> {
+    fn with_canvas_cx<R>(
+        &mut self,
+        f: impl FnOnce(&mut Canvas, Option<&Scene>, &mut CanvasCx<'_>) -> R,
+    ) -> Option<R> {
         let doc = self.doc.clone()?;
         let snap = doc.store.snapshot();
         let cat = self.data.catalog.clone()?;
@@ -1224,6 +1495,10 @@ impl Document for GraphTab {
         self.doc.as_ref().is_some_and(|d| d.is_dirty())
     }
 
+    fn dirty_elsewhere(&self) -> bool {
+        true
+    }
+
     fn missing(&self) -> bool {
         self.data.missing
     }
@@ -1276,9 +1551,19 @@ impl Document for GraphTab {
         }
         let mut act: Vec<A> = Vec::new();
         let snap = self.doc.as_ref().map(|d| d.store.snapshot());
-        let (back_n, fwd_n, bookmarks) = snap.as_ref().map_or((0, 0, Vec::new()), |s| (s.view.back.len(), s.view.forward.len(), s.view.bookmarks.clone()));
+        let (back_n, fwd_n, bookmarks) = snap.as_ref().map_or((0, 0, Vec::new()), |s| {
+            (s.view.back.len(), s.view.forward.len(), s.view.bookmarks.clone())
+        });
         tb.group(10);
-        if tb.action("save", Icon::Save, "Save", if behaviour { "Save the graph (Ctrl+S)" } else { "Save the quest (Ctrl+S)" }, true, false, Kind::Ghost) {
+        if tb.action(
+            "save",
+            Icon::Save,
+            "Save",
+            if behaviour { "Save the graph (Ctrl+S)" } else { "Save the quest (Ctrl+S)" },
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             act.push(A::Save);
         }
         tb.group(8);
@@ -1292,17 +1577,45 @@ impl Document for GraphTab {
         // the graph is checked as it is edited: this is here only when there is something to look at
         let (e, w) = (self.data.errors, self.data.warnings);
         if e > 0 || w > 0 {
-            let count = if e > 0 { look::plural(e, "error", "errors") } else { look::plural(w, "warning", "warnings") };
-            if tb.action("problems", if e > 0 { Icon::Error } else { Icon::Warning }, &count, "List the problems", true, false, Kind::Ghost) {
+            let count = if e > 0 {
+                look::plural(e, "error", "errors")
+            } else {
+                look::plural(w, "warning", "warnings")
+            };
+            if tb.action(
+                "problems",
+                if e > 0 { Icon::Error } else { Icon::Warning },
+                &count,
+                "List the problems",
+                true,
+                false,
+                Kind::Ghost,
+            ) {
                 act.push(A::Problems);
             }
         }
-        if tb.action("frame", Icon::FrameAll, "Frame All", "Show the whole graph (Home)", true, false, Kind::Ghost) {
+        if tb.action(
+            "frame",
+            Icon::FrameAll,
+            "Frame All",
+            "Show the whole graph (Home)",
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             act.push(A::FrameAll);
         }
         tb.group(5);
         let find_open = self.drawer() == DrawerTab::Find;
-        if tb.action("find", Icon::Search, "Find", "Find nodes in this graph (Ctrl+F, F3 next)", true, find_open, Kind::Ghost) {
+        if tb.action(
+            "find",
+            Icon::Search,
+            "Find",
+            "Find nodes in this graph (Ctrl+F, F3 next)",
+            true,
+            find_open,
+            Kind::Ghost,
+        ) {
             act.push(A::Find);
         }
         tb.group(6);
@@ -1313,56 +1626,116 @@ impl Document for GraphTab {
                 .iter()
                 .filter_map(|b| {
                     let kind = snap.as_ref()?.graph.find_node(b)?.kind.clone();
-                    let title = cat.as_ref().map_or_else(|| kind.to_string(), |c| look::kind_title(c, &kind, behaviour));
+                    let title = cat
+                        .as_ref()
+                        .map_or_else(|| kind.to_string(), |c| look::kind_title(c, &kind, behaviour));
                     Some((b.to_string(), title))
                 })
                 .collect()
         };
-        tb.menu("more", Icon::More, "More", &format!("Everything else of this {}", self.noun()), Some("graph_more"), true, |ui| {
-            if menu_item(ui, "Reload", MenuItem { icon: Icon::Reload, ..MenuItem::default() }) {
-                act.push(A::Reload);
-            }
-            if menu_item(ui, "Auto Layout", MenuItem { icon: Icon::AutoLayout, ..MenuItem::default() }) {
-                act.push(A::Layout);
-            }
-            if menu_item(ui, "Find in Project", MenuItem { icon: Icon::FindInProject, keys: "Ctrl+Shift+F", ..MenuItem::default() }) {
-                act.push(A::ProjectFind);
-            }
-            ui.separator();
-            if menu_item(ui, "Back", MenuItem { icon: Icon::Back, keys: "Alt+Left", enabled: back_n > 0, ..MenuItem::default() }) {
-                act.push(A::Back);
-            }
-            if menu_item(ui, "Forward", MenuItem { icon: Icon::Forward, keys: "Alt+Right", enabled: fwd_n > 0, ..MenuItem::default() }) {
-                act.push(A::Forward);
-            }
-            ui.separator();
-            gz_app::chrome::local_submenu(ui, "Bookmarks", Icon::Bookmark, true, |ui| {
-                for (id, title) in &graph_nodes {
-                    if menu_item(ui, &format!("{id}  \u{b7}  {title}"), MenuItem::default()) {
-                        act.push(A::Bookmark(id.clone()));
-                    }
+        tb.menu(
+            "more",
+            Icon::More,
+            "More",
+            &format!("Everything else of this {}", self.noun()),
+            Some("graph_more"),
+            true,
+            |ui| {
+                if menu_item(ui, "Reload", MenuItem { icon: Icon::Reload, ..MenuItem::default() }) {
+                    act.push(A::Reload);
                 }
-                if graph_nodes.is_empty() {
-                    menu_item(ui, "No bookmarks yet", MenuItem { enabled: false, ..MenuItem::default() });
+                if menu_item(ui, "Auto Layout", MenuItem { icon: Icon::AutoLayout, ..MenuItem::default() }) {
+                    act.push(A::Layout);
+                }
+                if menu_item(
+                    ui,
+                    "Find in Project",
+                    MenuItem { icon: Icon::FindInProject, keys: "Ctrl+Shift+F", ..MenuItem::default() },
+                ) {
+                    act.push(A::ProjectFind);
                 }
                 ui.separator();
-                if menu_item(ui, "Bookmark the Selection", MenuItem { keys: "Ctrl+B", enabled: has_sel, ..MenuItem::default() }) {
-                    act.push(A::ToggleBookmarks);
+                if menu_item(
+                    ui,
+                    "Back",
+                    MenuItem {
+                        icon: Icon::Back,
+                        keys: "Alt+Left",
+                        enabled: back_n > 0,
+                        ..MenuItem::default()
+                    },
+                ) {
+                    act.push(A::Back);
                 }
-                if menu_item(ui, "Previous Bookmark", MenuItem { icon: Icon::BookmarkPrev, enabled: !bookmarks.is_empty(), ..MenuItem::default() }) {
-                    act.push(A::PrevBookmark);
+                if menu_item(
+                    ui,
+                    "Forward",
+                    MenuItem {
+                        icon: Icon::Forward,
+                        keys: "Alt+Right",
+                        enabled: fwd_n > 0,
+                        ..MenuItem::default()
+                    },
+                ) {
+                    act.push(A::Forward);
                 }
-                if menu_item(ui, "Next Bookmark", MenuItem { icon: Icon::BookmarkNext, enabled: !bookmarks.is_empty(), ..MenuItem::default() }) {
-                    act.push(A::NextBookmark);
+                ui.separator();
+                gz_app::chrome::local_submenu(ui, "Bookmarks", Icon::Bookmark, true, |ui| {
+                    for (id, title) in &graph_nodes {
+                        if menu_item(ui, &format!("{id}  \u{b7}  {title}"), MenuItem::default()) {
+                            act.push(A::Bookmark(id.clone()));
+                        }
+                    }
+                    if graph_nodes.is_empty() {
+                        menu_item(ui, "No bookmarks yet", MenuItem { enabled: false, ..MenuItem::default() });
+                    }
+                    ui.separator();
+                    if menu_item(
+                        ui,
+                        "Bookmark the Selection",
+                        MenuItem { keys: "Ctrl+B", enabled: has_sel, ..MenuItem::default() },
+                    ) {
+                        act.push(A::ToggleBookmarks);
+                    }
+                    if menu_item(
+                        ui,
+                        "Previous Bookmark",
+                        MenuItem {
+                            icon: Icon::BookmarkPrev,
+                            enabled: !bookmarks.is_empty(),
+                            ..MenuItem::default()
+                        },
+                    ) {
+                        act.push(A::PrevBookmark);
+                    }
+                    if menu_item(
+                        ui,
+                        "Next Bookmark",
+                        MenuItem {
+                            icon: Icon::BookmarkNext,
+                            enabled: !bookmarks.is_empty(),
+                            ..MenuItem::default()
+                        },
+                    ) {
+                        act.push(A::NextBookmark);
+                    }
+                    if menu_item(
+                        ui,
+                        "Clear Bookmarks",
+                        MenuItem { enabled: !bookmarks.is_empty(), ..MenuItem::default() },
+                    ) {
+                        act.push(A::ClearBookmarks);
+                    }
+                });
+                if menu_item(
+                    ui,
+                    "Shortcuts",
+                    MenuItem { icon: Icon::Keyboard, selected: self.show_keys, ..MenuItem::default() },
+                ) {
+                    act.push(A::Keys);
                 }
-                if menu_item(ui, "Clear Bookmarks", MenuItem { enabled: !bookmarks.is_empty(), ..MenuItem::default() }) {
-                    act.push(A::ClearBookmarks);
-                }
-            });
-            if menu_item(ui, "Shortcuts", MenuItem { icon: Icon::Keyboard, selected: self.show_keys, ..MenuItem::default() }) {
-                act.push(A::Keys);
-            }
-        });
+            },
+        );
         tb.spring();
         tb.group(4);
         // the label is the zoom itself, one width whatever the level: a figure space leads two digits
@@ -1370,17 +1743,33 @@ impl Document for GraphTab {
         let zoom = if pct < 100 { format!("\u{2007}{pct}%") } else { format!("{pct}%") };
         let z = self.mirror.zoom;
         tb.menu("zoom", Icon::None, &zoom, "Zoom", Some("graph_zoom"), true, |ui| {
-            if menu_item(ui, "Zoom In", MenuItem { icon: Icon::ZoomIn, enabled: z + 1 < ZOOM.len() as i32, ..MenuItem::default() }) {
+            if menu_item(
+                ui,
+                "Zoom In",
+                MenuItem { icon: Icon::ZoomIn, enabled: z + 1 < ZOOM.len() as i32, ..MenuItem::default() },
+            ) {
                 act.push(A::ZoomIn);
             }
-            if menu_item(ui, "Zoom Out", MenuItem { icon: Icon::ZoomOut, enabled: z > 0, ..MenuItem::default() }) {
+            if menu_item(
+                ui,
+                "Zoom Out",
+                MenuItem { icon: Icon::ZoomOut, enabled: z > 0, ..MenuItem::default() },
+            ) {
                 act.push(A::ZoomOut);
             }
             ui.separator();
-            if menu_item(ui, "Frame All", MenuItem { icon: Icon::ZoomFit, keys: "Home", ..MenuItem::default() }) {
+            if menu_item(
+                ui,
+                "Frame All",
+                MenuItem { icon: Icon::ZoomFit, keys: "Home", ..MenuItem::default() },
+            ) {
                 act.push(A::FrameAll);
             }
-            if menu_item(ui, "Frame Selection", MenuItem { icon: Icon::FrameSelection, keys: "F", enabled: has_sel, ..MenuItem::default() }) {
+            if menu_item(
+                ui,
+                "Frame Selection",
+                MenuItem { icon: Icon::FrameSelection, keys: "F", enabled: has_sel, ..MenuItem::default() },
+            ) {
                 act.push(A::FrameSel);
             }
             ui.separator();
@@ -1394,14 +1783,42 @@ impl Document for GraphTab {
         // a small graph draws no minimap: its toggle is off and disabled, and its tip says why
         let minimap_on = self.minimap_available();
         let minimap_vis = snap.as_ref().is_some_and(|s| s.view.minimap);
-        if tb.action("minimap", Icon::Minimap, "Minimap", &self.minimap_tip(), minimap_on, minimap_on && minimap_vis, Kind::Ghost) {
+        if tb.action(
+            "minimap",
+            Icon::Minimap,
+            "Minimap",
+            &self.minimap_tip(),
+            minimap_on,
+            minimap_on && minimap_vis,
+            Kind::Ghost,
+        ) {
             act.push(A::Minimap);
         }
         let graph_shown = self.graph_on_screen();
-        if tb.action("graph_panel", Icon::SidebarLeft, "Graph Panel", if behaviour { "The graph's settings, roles and variables" } else { "The quest's settings, tasks and variables" }, true, graph_shown, Kind::Ghost) {
+        if tb.action(
+            "graph_panel",
+            Icon::SidebarLeft,
+            "Graph Panel",
+            if behaviour {
+                "The graph's settings, roles and variables"
+            } else {
+                "The quest's settings, tasks and variables"
+            },
+            true,
+            graph_shown,
+            Kind::Ghost,
+        ) {
             act.push(A::GraphPanel);
         }
-        if tb.action("details", Icon::SidebarRight, "Details Panel", "The selected node and its action", true, self.show_details, Kind::Ghost) {
+        if tb.action(
+            "details",
+            Icon::SidebarRight,
+            "Details Panel",
+            "The selected node and its action",
+            true,
+            self.show_details,
+            Kind::Ghost,
+        ) {
             act.push(A::Details);
         }
 
@@ -1458,7 +1875,12 @@ impl Document for GraphTab {
             look::plural(self.data.errors, "error", "errors"),
             look::plural(self.data.warnings, "warning", "warnings")
         );
-        let tip = self.data.catalog.as_ref().map(|c| format!("Catalog: {}, version {}", c.source, c.header.version)).unwrap_or_default();
+        let tip = self
+            .data
+            .catalog
+            .as_ref()
+            .map(|c| format!("Catalog: {}, version {}", c.source, c.header.version))
+            .unwrap_or_default();
         let r = gz_ui::text::label(ui, &text_, Font::Small, p.text_secondary, Clip::End);
         if !tip.is_empty() {
             r.on_hover_text(tip);
@@ -1482,7 +1904,9 @@ impl Document for GraphTab {
         let mm = mm_avail && self.doc.as_ref().is_some_and(|d| d.store.snapshot().view.minimap);
         let keys = self.show_keys;
         bar.menu("Graph", |ui| {
-            let item = |ui: &mut Ui, label: &str, keys: &str, enabled: bool, selected: bool| menu_item(ui, label, MenuItem { keys, enabled, selected, ..MenuItem::default() });
+            let item = |ui: &mut Ui, label: &str, keys: &str, enabled: bool, selected: bool| {
+                menu_item(ui, label, MenuItem { keys, enabled, selected, ..MenuItem::default() })
+            };
             if item(ui, "Save", "Ctrl+S", true, false) {
                 act.push("save");
             }
@@ -1567,7 +1991,9 @@ impl Document for GraphTab {
                 "next_bookmark" => self.queued.push(Op::Doc(DocOp::View(ViewOp::BookmarkJump(1)))),
                 "graph_panel" => self.set_graph_panel(!graph),
                 "details" => self.show_details = !self.show_details,
-                "problems" => self.set_drawer(&ctx, if problems { DrawerTab::None } else { DrawerTab::Problems }),
+                "problems" => {
+                    self.set_drawer(&ctx, if problems { DrawerTab::None } else { DrawerTab::Problems })
+                }
                 "minimap" => self.queued.push(Op::Doc(DocOp::View(ViewOp::Minimap(!mm)))),
                 "keys" => self.show_keys = !self.show_keys,
                 _ => {}
@@ -1628,7 +2054,9 @@ impl Document for GraphTab {
                 });
             }
             EditAction::Paste => self.paste_from_clipboard(&ctx),
-            EditAction::Duplicate => self.queued.push(Op::Doc(DocOp::Canvas(gz_nq::doc::CanvasOp::Duplicate))),
+            EditAction::Duplicate => {
+                self.queued.push(Op::Doc(DocOp::Canvas(gz_nq::doc::CanvasOp::Duplicate)))
+            }
             EditAction::Delete => {
                 self.with_canvas_cx(|c, _, ccx| c.delete_selection(ccx));
             }
@@ -1685,5 +2113,10 @@ impl Document for GraphTab {
 /// A text of a toolbar row the kit measures.
 #[must_use]
 pub fn status_line(n: usize, e: usize, w: usize) -> String {
-    format!("{}  \u{b7}  {}  \u{b7}  {}", look::plural(n, "node", "nodes"), look::plural(e, "error", "errors"), look::plural(w, "warning", "warnings"))
+    format!(
+        "{}  \u{b7}  {}  \u{b7}  {}",
+        look::plural(n, "node", "nodes"),
+        look::plural(e, "error", "errors"),
+        look::plural(w, "warning", "warnings")
+    )
 }

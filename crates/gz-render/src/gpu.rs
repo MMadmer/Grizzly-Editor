@@ -130,7 +130,8 @@ pub(crate) enum IdPipe {
 }
 
 impl IdPipe {
-    const ALL: [IdPipe; 6] = [Self::Opaque, Self::Opaque2s, Self::Alpha, Self::Alpha2s, Self::Blend, Self::Blend2s];
+    const ALL: [IdPipe; 6] =
+        [Self::Opaque, Self::Opaque2s, Self::Alpha, Self::Alpha2s, Self::Blend, Self::Blend2s];
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -143,7 +144,11 @@ enum Blend {
 impl Blend {
     fn state(self) -> Option<wgpu::BlendState> {
         // the target's alpha stays 1: a picture is opaque
-        let keep_alpha = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add };
+        let keep_alpha = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
         match self {
             Self::None => None,
             Self::Alpha => Some(wgpu::BlendState {
@@ -155,7 +160,11 @@ impl Blend {
                 alpha: keep_alpha,
             }),
             Self::Add => Some(wgpu::BlendState {
-                color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
                 alpha: keep_alpha,
             }),
         }
@@ -169,15 +178,27 @@ const LINE_ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Flo
 const LABEL_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x3];
 
 fn mesh_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout { array_stride: 56, step_mode: wgpu::VertexStepMode::Vertex, attributes: &MESH_ATTRS }
+    wgpu::VertexBufferLayout {
+        array_stride: 56,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &MESH_ATTRS,
+    }
 }
 
 fn line_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Vertex, attributes: &LINE_ATTRS }
+    wgpu::VertexBufferLayout {
+        array_stride: 16,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &LINE_ATTRS,
+    }
 }
 
 fn label_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout { array_stride: 16, step_mode: wgpu::VertexStepMode::Instance, attributes: &LABEL_ATTRS }
+    wgpu::VertexBufferLayout {
+        array_stride: 16,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &LABEL_ATTRS,
+    }
 }
 
 /// Layouts, pipelines and samplers, made once per device.
@@ -251,7 +272,11 @@ fn pipeline(device: &wgpu::Device, d: &PipeDesc<'_>) -> wgpu::RenderPipeline {
             module: d.module,
             entry_point: Some(d.fs),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState { format: d.format, blend: d.blend, write_mask: d.write_mask })],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: d.format,
+                blend: d.blend,
+                write_mask: d.write_mask,
+            })],
         }),
         multiview_mask: None,
         cache: None,
@@ -259,19 +284,36 @@ fn pipeline(device: &wgpu::Device, d: &PipeDesc<'_>) -> wgpu::RenderPipeline {
 }
 
 fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty, count: None }
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+        ty,
+        count: None,
+    }
 }
 
 fn storage() -> wgpu::BindingType {
-    wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }
+    wgpu::BindingType::Buffer {
+        ty: wgpu::BufferBindingType::Storage { read_only: true },
+        has_dynamic_offset: false,
+        min_binding_size: None,
+    }
 }
 
 fn uniform() -> wgpu::BindingType {
-    wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }
+    wgpu::BindingType::Buffer {
+        ty: wgpu::BufferBindingType::Uniform,
+        has_dynamic_offset: false,
+        min_binding_size: None,
+    }
 }
 
 fn texture(sample_type: wgpu::TextureSampleType) -> wgpu::BindingType {
-    wgpu::BindingType::Texture { sample_type, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }
+    wgpu::BindingType::Texture {
+        sample_type,
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled: false,
+    }
 }
 
 impl Gpu {
@@ -344,7 +386,11 @@ impl Gpu {
                     vs,
                     fs,
                     buffers: &mesh_buffers,
-                    topology: if p.is_wire() { wgpu::PrimitiveTopology::LineList } else { wgpu::PrimitiveTopology::TriangleList },
+                    topology: if p.is_wire() {
+                        wgpu::PrimitiveTopology::LineList
+                    } else {
+                        wgpu::PrimitiveTopology::TriangleList
+                    },
                     cull,
                     blend: blend.state(),
                     write_mask: wgpu::ColorWrites::ALL,
@@ -401,7 +447,11 @@ impl Gpu {
                     blend: Blend::Alpha.state(),
                     write_mask: wgpu::ColorWrites::ALL,
                     depth_write: false,
-                    depth_compare: if tested { wgpu::CompareFunction::GreaterEqual } else { wgpu::CompareFunction::Always },
+                    depth_compare: if tested {
+                        wgpu::CompareFunction::GreaterEqual
+                    } else {
+                        wgpu::CompareFunction::Always
+                    },
                     format: COLOR_FORMAT,
                     samples,
                 },
@@ -476,7 +526,12 @@ impl Gpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        queue.write_texture(roof.as_image_copy(), &f32::MAX.to_le_bytes(), wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) }, roof.size());
+        queue.write_texture(
+            roof.as_image_copy(),
+            &f32::MAX.to_le_bytes(),
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            roof.size(),
+        );
         let roof_dummy = roof.create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
@@ -546,6 +601,9 @@ mod tests {
         // the wgsl feature of wgpu carries naga; reach it through wgpu's re-export
         use wgpu::naga::valid::{Capabilities, ValidationFlags, Validator};
         let module = wgpu::naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
-        Validator::new(ValidationFlags::all(), Capabilities::all()).validate(&module).map(|_| ()).map_err(|e| format!("{e:?}"))
+        Validator::new(ValidationFlags::all(), Capabilities::all())
+            .validate(&module)
+            .map(|_| ())
+            .map_err(|e| format!("{e:?}"))
     }
 }

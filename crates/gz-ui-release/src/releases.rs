@@ -63,10 +63,20 @@ pub(crate) fn local_time(utc: &str) -> String {
         let month = time::Month::try_from(d.next()?.parse::<u8>().ok()?).ok()?;
         let day: u8 = d.next()?.parse().ok()?;
         let (h, m) = hm.split_once(':')?;
-        let at = time::PrimitiveDateTime::new(time::Date::from_calendar_date(year, month, day).ok()?, time::Time::from_hms(h.parse().ok()?, m.parse().ok()?, 0).ok()?)
-            .assume_utc();
+        let at = time::PrimitiveDateTime::new(
+            time::Date::from_calendar_date(year, month, day).ok()?,
+            time::Time::from_hms(h.parse().ok()?, m.parse().ok()?, 0).ok()?,
+        )
+        .assume_utc();
         let local = at.to_offset(time::UtcOffset::local_offset_at(at).ok()?);
-        Some(format!("{:04}-{:02}-{:02} {:02}:{:02}", local.year(), u8::from(local.month()), local.day(), local.hour(), local.minute()))
+        Some(format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            local.year(),
+            u8::from(local.month()),
+            local.day(),
+            local.hour(),
+            local.minute()
+        ))
     };
     read().unwrap_or_else(|| utc.to_owned())
 }
@@ -110,7 +120,9 @@ pub(crate) fn sorted_order(releases: &[ReleaseInfo], sort: Sort) -> Vec<usize> {
             1 => x.title.to_lowercase().cmp(&y.title.to_lowercase()),
             2 => state_rank(x).cmp(&state_rank(y)),
             3 => {
-                let key = |r: &ReleaseInfo| if r.published.is_empty() { "~".to_owned() } else { r.published.clone() };
+                let key = |r: &ReleaseInfo| {
+                    if r.published.is_empty() { "~".to_owned() } else { r.published.clone() }
+                };
                 key(x).cmp(&key(y))
             }
             _ => x.bytes.cmp(&y.bytes),
@@ -125,18 +137,29 @@ pub(crate) fn sorted_order(releases: &[ReleaseInfo], sort: Sort) -> Vec<usize> {
 #[must_use]
 pub(crate) fn delete_spec(view: &ManageView, target: &ReleaseInfo) -> ConfirmSpec {
     // the list is newest first: the first other release players may receive is the fallback
-    let next = view.releases.iter().find(|r| r.id != target.id && !r.draft && !r.prerelease).map(|r| r.tag.clone());
+    let next =
+        view.releases.iter().find(|r| r.id != target.id && !r.draft && !r.prerelease).map(|r| r.tag.clone());
     let tag = if target.tag.is_empty() { "(no tag)" } else { &target.tag };
-    let headline = format!("Delete {} {tag} \"{}\" from {}?", if target.draft { "draft release" } else { "release" }, target.title, view.repo);
+    let headline = format!(
+        "Delete {} {tag} \"{}\" from {}?",
+        if target.draft { "draft release" } else { "release" },
+        target.title,
+        view.repo
+    );
     let mut consequence = String::new();
     if target.latest {
         match &next {
-            None => consequence.push_str("It is the latest release: players are offered no update until another one is published. "),
-            Some(next) => consequence.push_str(&format!("It is the latest release: GitHub then serves {next} to players. ")),
+            None => consequence.push_str(
+                "It is the latest release: players are offered no update until another one is published. ",
+            ),
+            Some(next) => consequence
+                .push_str(&format!("It is the latest release: GitHub then serves {next} to players. ")),
         }
     }
     if !target.draft && !target.prerelease {
-        consequence.push_str("Players who have this version keep it; published again, the game offers it to them as a fix. ");
+        consequence.push_str(
+            "Players who have this version keep it; published again, the game offers it to them as a fix. ",
+        );
     }
     consequence.push_str("Deleted from GitHub for good - this cannot be undone.");
     let mut items = target.assets.clone();
@@ -170,7 +193,13 @@ pub(crate) fn status_text(view: &ManageView) -> String {
 }
 
 /// Asks before a release goes; Yes deletes it, the release first, its tag second.
-pub(crate) fn ask_delete(ctx: &egui::Context, editor: &Arc<Editor>, view: &ManageView, target: &ReleaseInfo, start_error: &Arc<Mutex<String>>) {
+pub(crate) fn ask_delete(
+    ctx: &egui::Context,
+    editor: &Arc<Editor>,
+    view: &ManageView,
+    target: &ReleaseInfo,
+    start_error: &Arc<Mutex<String>>,
+) {
     let spec = delete_spec(view, target);
     let (ed, slot, id) = (editor.clone(), start_error.clone(), target.id);
     let line = dialog::confirm(ctx, asker(editor), spec, move |answer| {
@@ -264,7 +293,8 @@ impl ReleasesDoc {
         if list.running() || Publisher::of(&self.editor).running() {
             return;
         }
-        let (ed, slot, error) = (self.editor.clone(), self.slot.clone(), self.hub.borrow().start_error.clone());
+        let (ed, slot, error) =
+            (self.editor.clone(), self.slot.clone(), self.hub.borrow().start_error.clone());
         self.editor.exec.spawn(async move {
             let started = ReleaseList::of(&ed).start(&ed, ManageRequest::default()).await;
             match started {
@@ -322,7 +352,11 @@ impl ReleasesDoc {
                 id: r.id,
                 tag: if r.tag.is_empty() { "(no tag)".to_owned() } else { r.tag.clone() },
                 title: r.title.clone(),
-                published: if r.published.is_empty() { "Not published".to_owned() } else { local_time(&r.published) },
+                published: if r.published.is_empty() {
+                    "Not published".to_owned()
+                } else {
+                    local_time(&r.published)
+                },
                 files: files_text(r),
             })
             .collect();
@@ -334,7 +368,15 @@ impl ReleasesDoc {
         self.tag_w = w.min(em(14.0));
     }
 
-    fn table(&mut self, ui: &mut Ui, ctx: &egui::Context, view: &ManageView, busy: bool, size: Vec2, web: &str) {
+    fn table(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &egui::Context,
+        view: &ManageView,
+        busy: bool,
+        size: Vec2,
+        web: &str,
+    ) {
         self.make_rows(ctx, view);
         if self.sorted != Some((view.generation, self.sort)) {
             self.order = sorted_order(&view.releases, self.sort);
@@ -365,7 +407,11 @@ impl ReleasesDoc {
             ui.add_space(5.0);
             if let Some(c) = local_table_head(ui, &columns) {
                 // a click on the sorted column turns it round; another column sorts its own way
-                self.sort = if self.sort.column == c { Sort { column: c, ascending: !self.sort.ascending } } else { Sort { column: c, ascending: c != 3 } };
+                self.sort = if self.sort.column == c {
+                    Sort { column: c, ascending: !self.sort.ascending }
+                } else {
+                    Sort { column: c, ascending: c != 3 }
+                };
             }
         });
         let height = (size.y - 28.0).max(metrics::ROW * 2.0);
@@ -376,7 +422,10 @@ impl ReleasesDoc {
                     let rect = ui.max_rect();
                     let mut x = rect.min.x - 6.0;
                     for (i, w) in widths.iter().enumerate() {
-                        let cell_rect = Rect::from_min_max(pos2(x + 6.0, rect.min.y), pos2((x + w - 6.0).max(x + 7.0), rect.max.y));
+                        let cell_rect = Rect::from_min_max(
+                            pos2(x + 6.0, rect.min.y),
+                            pos2((x + w - 6.0).max(x + 7.0), rect.max.y),
+                        );
                         x += w;
                         let mut c = cell(ui, ("cell", row.id, i), cell_rect);
                         match i {
@@ -402,17 +451,38 @@ impl ReleasesDoc {
                 let index = row.index;
                 let _ = resp.context_menu(|ui| {
                     popup_body(ui, |ui| {
-                        if menu_item(ui, "Edit Title and Notes...", MenuItem { enabled: !busy, ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Edit Title and Notes...",
+                            MenuItem { enabled: !busy, ..MenuItem::default() },
+                        ) {
                             menu_act = Some((RowAct::Edit, index));
                         }
-                        if menu_item(ui, "Open Release Page", MenuItem { enabled: crate::page_ok(&r.url, web), ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Open Release Page",
+                            MenuItem { enabled: crate::page_ok(&r.url, web), ..MenuItem::default() },
+                        ) {
                             menu_act = Some((RowAct::Page, index));
                         }
-                        if menu_item(ui, "Copy Tag", MenuItem { enabled: !r.tag.is_empty(), ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Copy Tag",
+                            MenuItem { enabled: !r.tag.is_empty(), ..MenuItem::default() },
+                        ) {
                             menu_act = Some((RowAct::CopyTag, index));
                         }
                         ui.separator();
-                        if menu_item(ui, "Delete Release...", MenuItem { icon: Icon::Delete, enabled: !busy, danger: true, ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Delete Release...",
+                            MenuItem {
+                                icon: Icon::Delete,
+                                enabled: !busy,
+                                danger: true,
+                                ..MenuItem::default()
+                            },
+                        ) {
                             menu_act = Some((RowAct::Delete, index));
                         }
                     });
@@ -437,21 +507,44 @@ impl ReleasesDoc {
 
     fn details(&self, ui: &mut Ui, ctx: &egui::Context, view: &ManageView, busy: bool, web: &str) {
         let Some(r) = self.selected(view) else {
-            empty_state(ui, Icon::Releases, "No release selected", "Select a release to see its files and notes.", None);
+            empty_state(
+                ui,
+                Icon::Releases,
+                "No release selected",
+                "Select a release to see its files and notes.",
+                None,
+            );
             return;
         };
         let p = palette(ctx);
         let (edit, page, delete) = {
             let mut tb = Toolbar::begin(ui, "release_actions", ToolbarStyle::Panel);
             tb.group(2);
-            let edit_tip = if busy { BUSY_WHY } else { "Edit the title and the notes. The files, the tag and the latest mark stay as they are." };
+            let edit_tip = if busy {
+                BUSY_WHY
+            } else {
+                "Edit the title and the notes. The files, the tag and the latest mark stay as they are."
+            };
             let edit = tb.action("edit", Icon::Rename, "Edit...", edit_tip, !busy, false, Kind::Ghost);
             tb.group(1);
-            let page = tb.action("page", Icon::External, "Open Page", "The release's page on GitHub.", crate::page_ok(&r.url, web), false, Kind::Ghost);
+            let page = tb.action(
+                "page",
+                Icon::External,
+                "Open Page",
+                "The release's page on GitHub.",
+                crate::page_ok(&r.url, web),
+                false,
+                Kind::Ghost,
+            );
             tb.spring();
             tb.group(3);
-            let delete_tip = if busy { BUSY_WHY } else { "Delete the release and its git tag from GitHub. Asks first, naming what goes." };
-            let delete = tb.action("delete", Icon::Delete, "Delete...", delete_tip, !busy, false, Kind::GhostDanger);
+            let delete_tip = if busy {
+                BUSY_WHY
+            } else {
+                "Delete the release and its git tag from GitHub. Asks first, naming what goes."
+            };
+            let delete =
+                tb.action("delete", Icon::Delete, "Delete...", delete_tip, !busy, false, Kind::GhostDanger);
             tb.end();
             (edit, page, delete)
         };
@@ -469,14 +562,30 @@ impl ReleasesDoc {
         }
         ui.add_space(4.0);
         PropertyGrid::new("release").label_frac(0.35).show(ui, |g| {
-            let published = if r.published.is_empty() { "Not published (draft)".to_owned() } else { local_time(&r.published) };
-            g.row("Published", "In your local time. A draft is not published: players never see it.", PropFlags::READ_ONLY, 0, |ui| {
-                read_only(ui, &published, Clip::End);
-            });
+            let published = if r.published.is_empty() {
+                "Not published (draft)".to_owned()
+            } else {
+                local_time(&r.published)
+            };
+            g.row(
+                "Published",
+                "In your local time. A draft is not published: players never see it.",
+                PropFlags::READ_ONLY,
+                0,
+                |ui| {
+                    read_only(ui, &published, Clip::End);
+                },
+            );
             let files = files_text(r);
-            g.row("Files", "What the release holds: the packages, the file index and the descriptor.", PropFlags::READ_ONLY, 0, |ui| {
-                read_only(ui, &files, Clip::End);
-            });
+            g.row(
+                "Files",
+                "What the release holds: the packages, the file index and the descriptor.",
+                PropFlags::READ_ONLY,
+                0,
+                |ui| {
+                    read_only(ui, &files, Clip::End);
+                },
+            );
         });
         ui.indent("release_files", |ui| {
             for name in &r.assets {
@@ -553,20 +662,40 @@ impl Document for ReleasesDoc {
 
     fn tooltip(&self) -> Option<String> {
         let repo = ReleaseList::of(&self.editor).view().repo;
-        Some(if repo.is_empty() { "The module's releases on GitHub".to_owned() } else { format!("The releases of {repo} on GitHub") })
+        Some(if repo.is_empty() {
+            "The module's releases on GitHub".to_owned()
+        } else {
+            format!("The releases of {repo} on GitHub")
+        })
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         let view = ReleaseList::of(cx.editor).view();
         let busy = self.busy(&view);
         tb.group(2);
-        if tb.action("refresh", Icon::Refresh, "Refresh", if busy { BUSY_WHY } else { "Read the releases from GitHub again (F5)." }, !busy, false, Kind::Ghost) {
+        if tb.action(
+            "refresh",
+            Icon::Refresh,
+            "Refresh",
+            if busy { BUSY_WHY } else { "Read the releases from GitHub again (F5)." },
+            !busy,
+            false,
+            Kind::Ghost,
+        ) {
             self.refresh();
         }
         tb.group(1);
         let web = web_of(cx.editor);
         let page = if view.repo.is_empty() { String::new() } else { format!("{web}/{}/releases", view.repo) };
-        if tb.action("github", Icon::External, "Open on GitHub", "The repository's releases page in the browser.", crate::page_ok(&page, &web), false, Kind::Ghost) {
+        if tb.action(
+            "github",
+            Icon::External,
+            "Open on GitHub",
+            "The repository's releases page in the browser.",
+            crate::page_ok(&page, &web),
+            false,
+            Kind::Ghost,
+        ) {
             open_page(cx.ctx, &page, &web);
         }
     }
@@ -576,7 +705,13 @@ impl Document for ReleasesDoc {
         let ctx = cx.ctx.clone();
         let p = palette(&ctx);
         if cx.editor.project_opt().is_none() {
-            empty_state(ui, Icon::Releases, "No project", "Open a project to see the releases of its module.", None);
+            empty_state(
+                ui,
+                Icon::Releases,
+                "No project",
+                "Open a project to see the releases of its module.",
+                None,
+            );
             return;
         }
         let setup = self.slot.lock().setup;
@@ -586,17 +721,35 @@ impl Document for ReleasesDoc {
         }
         match setup {
             Setup::NoProject => {
-                empty_state(ui, Icon::Releases, "No project", "Open a project to see the releases of its module.", None);
+                empty_state(
+                    ui,
+                    Icon::Releases,
+                    "No project",
+                    "Open a project to see the releases of its module.",
+                    None,
+                );
                 return;
             }
             Setup::NoRepo => {
-                if empty_state(ui, Icon::Releases, "No GitHub repository", "The game updates this module from the latest release of the GitHub repository Mod Settings names.", Some("Open Mod Settings")) {
+                if empty_state(
+                    ui,
+                    Icon::Releases,
+                    "No GitHub repository",
+                    "The game updates this module from the latest release of the GitHub repository Mod Settings names.",
+                    Some("Open Mod Settings"),
+                ) {
                     cx.requests.open(OpenRequest::kind("mod_settings"));
                 }
                 return;
             }
             Setup::NoAccount => {
-                if empty_state(ui, Icon::Link, "Not signed in to GitHub", "Sign in from Publish Release, sign in to the GitHub CLI (gh auth login) or set GH_TOKEN, then refresh.", Some("Sign In...")) {
+                if empty_state(
+                    ui,
+                    Icon::Link,
+                    "Not signed in to GitHub",
+                    "Sign in from Publish Release, sign in to the GitHub CLI (gh auth login) or set GH_TOKEN, then refresh.",
+                    Some("Sign In..."),
+                ) {
                     cx.requests.dialog(crate::PUBLISH_ID);
                 }
                 return;
@@ -608,7 +761,13 @@ impl Document for ReleasesDoc {
         let busy = self.busy(&view);
         let start_error = self.hub.borrow().start_error.lock().clone();
         if Publisher::of(cx.editor).running() {
-            banner(ui, Tone::Info, "A release is being published: the list is read again when it is out.", None, None);
+            banner(
+                ui,
+                Tone::Info,
+                "A release is being published: the list is read again when it is out.",
+                None,
+                None,
+            );
         }
         if view.state == ManageState::Running {
             busy_line(
@@ -632,7 +791,13 @@ impl Document for ReleasesDoc {
             return;
         }
         if view.releases.is_empty() {
-            if empty_state(ui, Icon::Releases, "No releases yet", "Publish Release packages the module and publishes it here.", Some("Publish Release...")) {
+            if empty_state(
+                ui,
+                Icon::Releases,
+                "No releases yet",
+                "Publish Release packages the module and publishes it here.",
+                Some("Publish Release..."),
+            ) {
                 cx.requests.dialog(crate::PUBLISH_ID);
             }
             return;
@@ -644,7 +809,9 @@ impl Document for ReleasesDoc {
         let origin = ui.cursor().min;
         let gap = ui.spacing().item_spacing.x;
         if avail.x < 400.0 + 260.0 + gap {
-            let mut t = ui.new_child(UiBuilder::new().id_salt("releases_table").max_rect(Rect::from_min_size(origin, avail)));
+            let mut t = ui.new_child(
+                UiBuilder::new().id_salt("releases_table").max_rect(Rect::from_min_size(origin, avail)),
+            );
             self.table(&mut t, &ctx, &view, busy, avail, &web);
             ui.allocate_rect(Rect::from_min_size(origin, avail), Sense::hover());
             return;
@@ -655,14 +822,23 @@ impl Document for ReleasesDoc {
         let mut t = ui.new_child(UiBuilder::new().id_salt("releases_table").max_rect(table_rect));
         self.table(&mut t, &ctx, &view, busy, table_rect.size(), &web);
 
-        let side_rect = Rect::from_min_size(pos2(origin.x + table_w + gap, origin.y), Vec2::new(side, avail.y));
-        ui.painter().rect_stroke(side_rect, egui::CornerRadius::same(metrics::RADIUS), Stroke::new(1.0, p.border_subtle), StrokeKind::Inside);
+        let side_rect =
+            Rect::from_min_size(pos2(origin.x + table_w + gap, origin.y), Vec2::new(side, avail.y));
+        ui.painter().rect_stroke(
+            side_rect,
+            egui::CornerRadius::same(metrics::RADIUS),
+            Stroke::new(1.0, p.border_subtle),
+            StrokeKind::Inside,
+        );
         let inner = side_rect.shrink2(Vec2::new(12.0, 8.0));
         let mut d = ui.new_child(UiBuilder::new().id_salt("release_details").max_rect(inner));
         d.set_clip_rect(inner.intersect(ui.clip_rect()));
-        ScrollArea::vertical().id_salt("release_details_scroll").auto_shrink([false, false]).show(&mut d, |ui| {
-            self.details(ui, &ctx, &view, busy, &web);
-        });
+        ScrollArea::vertical().id_salt("release_details_scroll").auto_shrink([false, false]).show(
+            &mut d,
+            |ui| {
+                self.details(ui, &ctx, &view, busy, &web);
+            },
+        );
         ui.allocate_rect(Rect::from_min_size(origin, avail), Sense::hover());
     }
 
@@ -734,7 +910,13 @@ mod tests {
     use super::*;
 
     fn rel(id: u64, tag: &str, published: &str) -> ReleaseInfo {
-        ReleaseInfo { id, tag: tag.to_owned(), title: format!("OD {tag}"), published: published.to_owned(), ..ReleaseInfo::default() }
+        ReleaseInfo {
+            id,
+            tag: tag.to_owned(),
+            title: format!("OD {tag}"),
+            published: published.to_owned(),
+            ..ReleaseInfo::default()
+        }
     }
 
     #[test]
@@ -742,7 +924,11 @@ mod tests {
         assert_eq!(size_text(512), "512 B");
         assert_eq!(size_text(15 * 1024), "15 KB");
         assert_eq!(size_text(3 * 1_048_576 + 400_000), "3.4 MB");
-        let r = ReleaseInfo { assets: vec!["a".into(), "b".into(), "c".into()], bytes: 15 * 1024, ..ReleaseInfo::default() };
+        let r = ReleaseInfo {
+            assets: vec!["a".into(), "b".into(), "c".into()],
+            bytes: 15 * 1024,
+            ..ReleaseInfo::default()
+        };
         assert_eq!(files_text(&r), "3 files · 15 KB");
         let one = ReleaseInfo { assets: vec!["a".into()], bytes: 10, ..ReleaseInfo::default() };
         assert_eq!(files_text(&one), "1 file · 10 B");
@@ -759,7 +945,8 @@ mod tests {
     fn drafts_are_the_newest() {
         let mut draft = rel(3, "v1.2.0", "");
         draft.draft = true;
-        let releases = vec![rel(1, "v1.0.0", "2026-01-01 10:00"), draft, rel(2, "v1.1.0", "2026-02-01 10:00")];
+        let releases =
+            vec![rel(1, "v1.0.0", "2026-01-01 10:00"), draft, rel(2, "v1.1.0", "2026-02-01 10:00")];
         assert_eq!(sorted_order(&releases, Sort::default()), vec![1, 2, 0]);
         assert_eq!(sorted_order(&releases, Sort { column: 0, ascending: true }), vec![0, 2, 1]);
         assert_eq!(sorted_order(&releases, Sort { column: 2, ascending: true }), vec![0, 2, 1]);
@@ -770,12 +957,22 @@ mod tests {
         let mut latest = rel(2, "v1.1.0", "2026-02-01 10:00");
         latest.latest = true;
         latest.assets = vec!["od-1.1.0.zip".into(), "od.update.ltx".into()];
-        let view = ManageView { repo: "me/od".into(), listed: true, releases: vec![latest.clone(), rel(1, "v1.0.0", "2026-01-01 10:00")], ..ManageView::default() };
+        let view = ManageView {
+            repo: "me/od".into(),
+            listed: true,
+            releases: vec![latest.clone(), rel(1, "v1.0.0", "2026-01-01 10:00")],
+            ..ManageView::default()
+        };
         let spec = delete_spec(&view, &latest);
         assert_eq!(spec.headline, "Delete release v1.1.0 \"OD v1.1.0\" from me/od?");
-        assert_eq!(spec.items, vec!["od-1.1.0.zip".to_owned(), "od.update.ltx".to_owned(), "the git tag v1.1.0".to_owned()]);
+        assert_eq!(
+            spec.items,
+            vec!["od-1.1.0.zip".to_owned(), "od.update.ltx".to_owned(), "the git tag v1.1.0".to_owned()]
+        );
         assert_eq!(spec.total, 3);
-        assert!(spec.consequence.starts_with("It is the latest release: GitHub then serves v1.0.0 to players."));
+        assert!(
+            spec.consequence.starts_with("It is the latest release: GitHub then serves v1.0.0 to players.")
+        );
         assert!(spec.consequence.ends_with("Deleted from GitHub for good - this cannot be undone."));
         assert!(spec.destructive);
         let mut draft = rel(3, "v1.2.0", "");
@@ -789,7 +986,12 @@ mod tests {
     fn the_status_counts_drafts() {
         let mut draft = rel(3, "v1.2.0", "");
         draft.draft = true;
-        let view = ManageView { repo: "me/od".into(), listed: true, releases: vec![draft, rel(1, "v1.0.0", "x")], ..ManageView::default() };
+        let view = ManageView {
+            repo: "me/od".into(),
+            listed: true,
+            releases: vec![draft, rel(1, "v1.0.0", "x")],
+            ..ManageView::default()
+        };
         assert_eq!(status_text(&view), "me/od · 1 published · 1 draft");
     }
 }

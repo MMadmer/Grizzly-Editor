@@ -33,3 +33,6 @@ p256.workspace = true
 getrandom = "0.3"
 crc32fast = "1"
 zeroize = "1"
+
+[target.'cfg(windows)'.dependencies]
+gz-win.workspace = true

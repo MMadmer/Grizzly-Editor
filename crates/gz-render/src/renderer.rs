@@ -38,7 +38,10 @@ pub struct TargetHandle {
 impl TargetHandle {
     #[must_use]
     pub fn uv(&self) -> [f32; 2] {
-        [self.size[0] as f32 / self.extent[0].max(1) as f32, self.size[1] as f32 / self.extent[1].max(1) as f32]
+        [
+            self.size[0] as f32 / self.extent[0].max(1) as f32,
+            self.size[1] as f32 / self.extent[1].max(1) as f32,
+        ]
     }
 }
 
@@ -102,8 +105,16 @@ impl Renderer {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, exec: Executors) -> Result<Self> {
         let gpu = Gpu::new(device, queue);
         let checker = TextureData::checker(64, 8, Color::rgb(200, 200, 200), Color::rgb(140, 140, 140));
-        let white = upload_texture_to(&gpu.device, &gpu.queue, gpu.bc, gpu.max_side, &TextureData::solid(Color::WHITE), "gz-render white")?;
-        let checker = upload_texture_to(&gpu.device, &gpu.queue, gpu.bc, gpu.max_side, &checker, "gz-render checker")?;
+        let white = upload_texture_to(
+            &gpu.device,
+            &gpu.queue,
+            gpu.bc,
+            gpu.max_side,
+            &TextureData::solid(Color::WHITE),
+            "gz-render white",
+        )?;
+        let checker =
+            upload_texture_to(&gpu.device, &gpu.queue, gpu.bc, gpu.max_side, &checker, "gz-render checker")?;
         let asset_gpu = AssetGpu {
             device: gpu.device.clone(),
             queue: gpu.queue.clone(),
@@ -212,10 +223,12 @@ impl Renderer {
             let mut pool = self.shared.offscreen.lock();
             pool.iter().position(|(t, _)| t.extent == extent).map(|i| pool.swap_remove(i))
         };
-        let (targets, mut res) = slot.unwrap_or_else(|| (Targets::new(gpu, extent, 0), FrameResources::new(gpu)));
+        let (targets, mut res) =
+            slot.unwrap_or_else(|| (Targets::new(gpu, extent, 0), FrameResources::new(gpu)));
         let rec = res.record(gpu, &self.shared.assets, packet, &targets, size, self.shared.exec.cpu_pool());
         let index = gpu.queue.submit(rec.buffers);
-        let waited = gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(GPU_WAIT) });
+        let waited =
+            gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(GPU_WAIT) });
         let picture = match waited {
             Ok(_) => read_picture(gpu, &targets, size),
             Err(e) => Err(RenderError::Device(e.to_string())),
@@ -268,12 +281,18 @@ fn read_picture(gpu: &Gpu, t: &Targets, size: [u32; 2]) -> Result<Image> {
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render read-back") });
+    let mut enc = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render read-back") });
     enc.copy_texture_to_buffer(
         t.color.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(h) },
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(h),
+            },
         },
         wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
     );
@@ -308,7 +327,10 @@ fn render_loop(s: &Shared) {
                     m.redraw = false;
                     break Some((p, m.serial));
                 }
-                if m.redraw && last_pending && let Some(l) = &last {
+                if m.redraw
+                    && last_pending
+                    && let Some(l) = &last
+                {
                     m.redraw = false;
                     break Some(l.clone());
                 }
@@ -329,7 +351,11 @@ fn render_loop(s: &Shared) {
             let Some(t) = targets.as_ref() else { continue };
             let rec = res.record(gpu, &s.assets, &packet, t, size, s.exec.cpu_pool());
             let index = gpu.queue.submit(rec.buffers);
-            let error = gpu.device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(GPU_WAIT) }).err().map(|e| e.to_string());
+            let error = gpu
+                .device
+                .poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: Some(GPU_WAIT) })
+                .err()
+                .map(|e| e.to_string());
             let mut labels: Vec<ScreenLabel> = packet.labels().to_vec();
             if rec.queries > 0 && error.is_none() {
                 let seen = res.label_visibility(gpu, rec.queries);
@@ -343,7 +369,14 @@ fn render_loop(s: &Shared) {
             last_pending = rec.pending || packet.waiting_on_assets();
             {
                 let mut d = s.done.lock();
-                d.info = FrameInfo { frame: frames, packet: serial, size, labels: labels.into(), stats: packet.stats, error };
+                d.info = FrameInfo {
+                    frame: frames,
+                    packet: serial,
+                    size,
+                    labels: labels.into(),
+                    stats: packet.stats,
+                    error,
+                };
                 d.target = Some(TargetHandle {
                     texture: t.color.clone(),
                     view: t.color_view.clone(),
@@ -362,7 +395,8 @@ fn render_loop(s: &Shared) {
         let drawn = last.as_ref().map_or(0, |(_, serial)| *serial);
         let ready: Vec<Capture> = {
             let mut m = s.mail.lock();
-            let (now, later): (Vec<Capture>, Vec<Capture>) = m.captures.drain(..).partition(|c| c.after <= drawn);
+            let (now, later): (Vec<Capture>, Vec<Capture>) =
+                m.captures.drain(..).partition(|c| c.after <= drawn);
             m.captures = later;
             now
         };

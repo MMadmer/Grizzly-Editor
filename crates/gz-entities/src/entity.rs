@@ -282,10 +282,13 @@ enum Source<'a> {
 impl Entity {
     /// `xrFactory_Create(section)`: a new entity with the section's defaults.
     pub fn create(section: &str, settings: &dyn Settings) -> Result<Self> {
-        let info = class_of_section(section, settings).ok_or_else(|| EntityError::UnknownClass(SmolStr::new(section)))?;
+        let info = class_of_section(section, settings)
+            .ok_or_else(|| EntityError::UnknownClass(SmolStr::new(section)))?;
         // a group template is named after its monster section, as the C++ names it
         let (header, object) = construct(info, section, settings)?;
-        Ok(Self { inner: Inner::Known(Box::new(Known { header, info, object, raw_spawn: None, raw_update: None })) })
+        Ok(Self {
+            inner: Inner::Known(Box::new(Known { header, info, object, raw_spawn: None, raw_update: None })),
+        })
     }
 
     /// A spawn packet (`M_SPAWN` word first), as a scene's binary chunk or `all.spawn` holds it.
@@ -365,17 +368,20 @@ impl Entity {
         header.text = stats.encoding();
 
         // A packet of today's layout must write back to its own bytes, or it is kept as bytes.
-        if let Some(b) = &bytes {
-            if header.version == SPAWN_VERSION && header.script_version == header.write_script_version {
-                let state = b.get(state_at..).unwrap_or(&[]);
-                let mut w = NetWriter::new(header.text);
-                state_write(&object, &header, info.class, &mut w);
-                if usize::from(size) != state.len() + 2 || w.bytes() != state {
-                    return Ok(opaque(header, OpaqueReason::Lossy, String::new()));
-                }
+        if let Some(b) = &bytes
+            && header.version == SPAWN_VERSION
+            && header.script_version == header.write_script_version
+        {
+            let state = b.get(state_at..).unwrap_or(&[]);
+            let mut w = NetWriter::new(header.text);
+            state_write(&object, &header, info.class, &mut w);
+            if usize::from(size) != state.len() + 2 || w.bytes() != state {
+                return Ok(opaque(header, OpaqueReason::Lossy, String::new()));
             }
         }
-        Ok(Self { inner: Inner::Known(Box::new(Known { header, info, object, raw_spawn: bytes, raw_update: None })) })
+        Ok(Self {
+            inner: Inner::Known(Box::new(Known { header, info, object, raw_spawn: bytes, raw_update: None })),
+        })
     }
 
     /// Reads an update packet (`M_UPDATE` word first) and keeps it to write back. The fields it
@@ -671,6 +677,36 @@ impl Entity {
         Ok(())
     }
 
+    /// Where an anomalous zone's artefact points start in the spawn's point list
+    /// (`m_artefact_position_offset`, set by the spawn constructor).
+    pub fn set_artefact_offset(&mut self, offset: u32) -> Result<()> {
+        if self.known().and_then(|k| k.object.zone()).is_none() {
+            return Err(EntityError::NoProperty("artefact position offset".to_owned()));
+        }
+        self.known_mut()?.object.zone_mut().artefact_position_offset = offset;
+        Ok(())
+    }
+
+    /// Where a level changer leads: the game vertex, its level vertex, the position and the
+    /// direction of the graph point it names (`fill_level_changers`).
+    pub fn set_level_changer_destination(
+        &mut self,
+        graph_id: u16,
+        node_id: u32,
+        position: Vec3,
+        angles: Vec3,
+    ) -> Result<()> {
+        if self.known().and_then(|k| k.object.level_changer()).is_none() {
+            return Err(EntityError::NoProperty("level changer destination".to_owned()));
+        }
+        let lc = self.known_mut()?.object.level_changer_mut();
+        lc.next_graph_id = graph_id;
+        lc.next_node_id = node_id;
+        lc.next_position = position;
+        lc.angles = angles;
+        Ok(())
+    }
+
     /// The properties `FillProps` lists, in its order. An opaque entity lists its header,
     /// read-only.
     #[must_use]
@@ -695,7 +731,10 @@ impl Entity {
             }
         };
         let list = props::list(&k.header, k.info, &k.object, ctx);
-        let prop = list.into_iter().find(|p| p.path == path).ok_or_else(|| EntityError::NoProperty(path.to_owned()))?;
+        let prop = list
+            .into_iter()
+            .find(|p| p.path == path)
+            .ok_or_else(|| EntityError::NoProperty(path.to_owned()))?;
         if prop.read_only {
             return Err(EntityError::ReadOnly(path.to_owned()));
         }
@@ -711,7 +750,11 @@ impl Entity {
         let Inner::Known(k) = &mut self.inner else { return };
         let Some(cover) = k.object.cover() else { return };
         let description = cover.description.clone();
-        let ids: Vec<&str> = ctx.smart_covers.get(&description).map(|d| d.loopholes.iter().map(SmolStr::as_str).collect()).unwrap_or_default();
+        let ids: Vec<&str> = ctx
+            .smart_covers
+            .get(&description)
+            .map(|d| d.loopholes.iter().map(SmolStr::as_str).collect())
+            .unwrap_or_default();
         let before = k.object.script.clone();
         k.object.script.sync_loopholes(&description, &ids);
         if k.object.script != before {
@@ -866,7 +909,15 @@ mod tests {
         let again = moved.to_spawn_packet();
         assert_eq!(again.len(), p.len());
         assert_eq!(Entity::from_spawn_packet(&again, &s).unwrap().position(), Vec3::new(9.0, 0.0, 0.0));
-        assert!(matches!(moved.set(&format!("{}\\Custom data", "nothin"), &PropValue::Text("x".into()), &PropContext::default()), Err(_)));
+        assert!(
+            moved
+                .set(
+                    &format!("{}\\Custom data", "nothin"),
+                    &PropValue::Text("x".into()),
+                    &PropContext::default()
+                )
+                .is_err()
+        );
     }
 
     #[test]

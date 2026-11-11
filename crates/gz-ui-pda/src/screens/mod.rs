@@ -44,7 +44,11 @@ impl ScreensTab {
     #[must_use]
     pub fn of_session(session: &ProjectSession) -> Arc<Self> {
         let root = session.root.display().to_string();
-        session.services.get_or_init(|| ScreensTab { root, v: Mutex::new(View { sel_layer: -1, ..View::default() }), busy: AtomicUsize::new(0) })
+        session.services.get_or_init(|| ScreensTab {
+            root,
+            v: Mutex::new(View { sel_layer: -1, ..View::default() }),
+            busy: AtomicUsize::new(0),
+        })
     }
 }
 
@@ -91,7 +95,15 @@ pub type Change = Arc<dyn Fn(&mut Screens) -> Selection + Send + Sync>;
 /// Files from anywhere, imported, put where they were dropped (`TakeFiles`): music into the
 /// tracks, anything else on the screen `screen` (its layer `layer`, or a new one), or each as a
 /// new screen of its own. `err` gets the last refusal.
-pub fn take_files(s: &mut Screens, rels: &[String], screen: &str, layer: i64, to_music: bool, show: u32, err: &mut String) -> Selection {
+pub fn take_files(
+    s: &mut Screens,
+    rels: &[String],
+    screen: &str,
+    layer: i64,
+    to_music: bool,
+    show: u32,
+    err: &mut String,
+) -> Selection {
     let mut sel = Selection::default();
     for rel in rels {
         if file_kind(rel) == FileKind::Music {
@@ -108,7 +120,12 @@ pub fn take_files(s: &mut Screens, rels: &[String], screen: &str, layer: i64, to
         match found {
             None => {
                 let id = s.new_screen_id(&gz_screens::import::stem(rel));
-                s.screens.push(Screen { id: id.clone(), show, layers: vec![Layer { file: rel.clone(), ..Layer::default() }], ..Screen::default() });
+                s.screens.push(Screen {
+                    id: id.clone(),
+                    show,
+                    layers: vec![Layer { file: rel.clone(), ..Layer::default() }],
+                    ..Screen::default()
+                });
                 sel = Selection { screen: Some(id), track: None, layer: Some(0) };
             }
             Some(d) => {
@@ -160,17 +177,28 @@ async fn save(editor: &Arc<Editor>, change: Change) -> Result<Selection, String>
     let mut s = Screens::parse(doc);
     let sel = change(&mut s);
     let edits = s.edits(doc);
-    manifest.edit(edits, Origin::Ui).await.map_err(|e| if e.code == "io" { "can't write mod.ltx".to_owned() } else { e.message })?;
+    manifest
+        .edit(edits, Origin::Ui)
+        .await
+        .map_err(|e| if e.code == "io" { "can't write mod.ltx".to_owned() } else { e.message })?;
     Ok(sel)
 }
 
 /// Files dropped on the tab or picked for it (`TakeDrop`): imported off the UI thread, in
 /// parallel, then put where they landed and saved. A refused import is the status.
-pub async fn take_drop(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, files: Vec<String>, screen: String, layer: i64, to_music: bool) {
+pub async fn take_drop(
+    editor: &Arc<Editor>,
+    tab: &Arc<ScreensTab>,
+    files: Vec<String>,
+    screen: String,
+    layer: i64,
+    to_music: bool,
+) {
     tab.busy.fetch_add(1, Ordering::SeqCst);
     let root = tab.root.clone();
     let exec = editor.exec.clone();
-    let imported: Vec<Result<String, String>> = editor.exec.io(move || exec.par_io(files, |f| gz_screens::import(&root, &f))).await;
+    let imported: Vec<Result<String, String>> =
+        editor.exec.io(move || exec.par_io(files, |f| gz_screens::import(&root, &f))).await;
     if let Ok((_, project)) = Project::of(editor) {
         project.tree.mark_fs(&std::path::Path::new(&tab.root).join("screens"));
     }
@@ -208,9 +236,12 @@ pub async fn take_drop(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, files: Vec<S
     editor.exec.wake().ping();
 }
 
+/// Where an imported file goes in the screens: the model and the file's project path.
+pub type PutFile = Arc<dyn Fn(&mut Screens, &str) + Send + Sync>;
+
 /// A file picked for one place (a layer's file or texture, a track's file): imported, then set
 /// by `put`.
-pub async fn take_one(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, file: String, put: Arc<dyn Fn(&mut Screens, &str) + Send + Sync>) {
+pub async fn take_one(editor: &Arc<Editor>, tab: &Arc<ScreensTab>, file: String, put: PutFile) {
     tab.busy.fetch_add(1, Ordering::SeqCst);
     let root = tab.root.clone();
     let imported = editor.exec.io(move || gz_screens::import(&root, &file)).await;

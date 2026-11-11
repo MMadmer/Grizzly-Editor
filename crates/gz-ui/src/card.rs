@@ -7,7 +7,10 @@
 //! - [`page_card`] + [`card_footer`] per [`CardAction`] - a centred card on a page that asks a
 //!   question without a modal: status left, buttons right, Enter presses the default.
 
-use egui::{Align2, CornerRadius, Frame, Id, Key, Margin, Modifiers, Popup, Rect, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2, pos2};
+use egui::{
+    Align2, CornerRadius, Frame, Id, Key, Margin, Modifiers, Popup, Rect, ScrollArea, Sense, Stroke, Ui,
+    UiBuilder, Vec2, pos2,
+};
 
 use crate::audit;
 use crate::button::{Button, Kind};
@@ -18,7 +21,14 @@ use crate::units::{button_width, em};
 
 /// A raised box around one part of a surface, as tall as what it holds, the whole width it gets.
 /// `attention` puts a strip in the tone's colour down its left edge.
-pub fn card<R>(ui: &mut Ui, id_salt: &str, title: &str, tone: Tone, attention: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn card<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    title: &str,
+    tone: Tone,
+    attention: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
     let p = palette(ui.ctx());
     let out = ui.push_id(("gz-ui.card", id_salt), |ui| {
         Frame::new()
@@ -39,7 +49,11 @@ pub fn card<R>(ui: &mut Ui, id_salt: &str, title: &str, tone: Tone, attention: b
     if attention {
         let r = frame.response.rect;
         let strip = Rect::from_min_max(r.min, pos2(r.min.x + 3.0, r.max.y));
-        ui.painter().rect_filled(strip, CornerRadius { nw: metrics::RADIUS_POPUP, sw: metrics::RADIUS_POPUP, ne: 0, se: 0 }, p.tone(tone));
+        ui.painter().rect_filled(
+            strip,
+            CornerRadius { nw: metrics::RADIUS_POPUP, sw: metrics::RADIUS_POPUP, ne: 0, se: 0 },
+            p.tone(tone),
+        );
     }
     ui.add_space(4.0);
     frame.inner
@@ -84,7 +98,13 @@ const CARD_PAD: Vec2 = Vec2::new(20.0, 16.0);
 
 /// A card centred on a page, a little above the middle, at most `width` wide, with its title.
 /// A card taller than the page makes the page scroll.
-pub fn page_card<R>(ui: &mut Ui, id_salt: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn page_card<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    title: &str,
+    width: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
     let id = Id::unique(("gz-ui.page_card", id_salt));
@@ -102,7 +122,11 @@ pub fn page_card<R>(ui: &mut Ui, id_salt: &str, title: &str, width: f32, add: im
     ctx.data_mut(|d| d.insert_temp(current_card_id(), (id, mem.shown)));
     let left = origin.x + (avail.x - w) * 0.5;
     let card_rect = Rect::from_min_size(pos2(left, ui.cursor().min.y), Vec2::new(w, 0.0));
-    let mut child = ui.new_child(UiBuilder::new().id_salt(id).max_rect(Rect::from_min_size(card_rect.min, Vec2::new(w, f32::INFINITY))));
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .id_salt(id)
+            .max_rect(Rect::from_min_size(card_rect.min, Vec2::new(w, f32::INFINITY))),
+    );
     let out = Frame::new()
         .fill(p.raised)
         .stroke(Stroke::new(1.0, p.border_subtle))
@@ -179,16 +203,33 @@ pub fn card_footer(ui: &mut Ui, status: &str, tone: Tone, actions: &[CardAction<
     );
     ui.add_space(12.0);
 
-    let widths: Vec<f32> = actions.iter().map(|a| button_width(&ctx, a.label, a.kind, false, metrics::DIALOG_BUTTON_W)).collect();
+    let widths: Vec<f32> = actions
+        .iter()
+        .map(|a| button_width(&ctx, a.label, a.kind, false, metrics::DIALOG_BUTTON_W))
+        .collect();
     let total: f32 = widths.iter().sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
     let room = ui.available_width();
     let (row, _) = ui.allocate_exact_size(Vec2::new(room, h), Sense::hover());
     let status_w = room - total - 12.0;
     if !status.is_empty() && status_w > em(2.0) {
         let color = if tone == Tone::Muted { p.text_secondary } else { p.tone(tone) };
-        let cut = text::paint(ui.painter(), &Font::Body.id(), pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, color, status, Some(status_w), Clip::End);
+        let cut = text::paint(
+            ui.painter(),
+            &Font::Body.id(),
+            pos2(row.min.x, row.center().y),
+            Align2::LEFT_CENTER,
+            color,
+            status,
+            Some(status_w),
+            Clip::End,
+        );
         if cut {
-            ui.interact(Rect::from_min_size(row.min, Vec2::new(status_w, h)), ui.make_persistent_id("gz-ui.card_footer.status"), Sense::hover()).on_hover_text(status);
+            ui.interact(
+                Rect::from_min_size(row.min, Vec2::new(status_w, h)),
+                ui.make_persistent_id("gz-ui.card_footer.status"),
+                Sense::hover(),
+            )
+            .on_hover_text(status);
         }
     }
     let mut clicked = None;

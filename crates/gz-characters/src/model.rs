@@ -55,7 +55,16 @@ pub struct Trade {
 
 impl Default for Trade {
     fn default() -> Self {
-        Self { declared: false, off: false, sells: Vec::new(), buys: Vec::new(), stock: Vec::new(), markup: 1.0, pays: 0.3, restock: 24 }
+        Self {
+            declared: false,
+            off: false,
+            sells: Vec::new(),
+            buys: Vec::new(),
+            stock: Vec::new(),
+            markup: 1.0,
+            pays: 0.3,
+            restock: 24,
+        }
     }
 }
 
@@ -146,7 +155,9 @@ fn trim(s: &str) -> &str {
 pub fn text_languages(v: &Value, langs: &mut Vec<String>) {
     match v {
         Value::String(_) => langs.push("rus".to_owned()),
-        Value::Table(t) => langs.extend(t.fields.iter().filter(|(_, x)| x.is_string()).map(|(k, _)| k.to_string())),
+        Value::Table(t) => {
+            langs.extend(t.fields.iter().filter(|(_, x)| x.is_string()).map(|(k, _)| k.to_string()))
+        }
         _ => {}
     }
 }
@@ -159,7 +170,10 @@ pub fn text_in(v: &Value, lang: &str) -> String {
         Value::String(s) => s.to_string(),
         Value::Table(t) => {
             let pick = |k: &str| t.get(k).and_then(Value::as_str).map(str::to_owned);
-            pick(lang).or_else(|| pick("rus")).or_else(|| t.fields.iter().find_map(|(_, x)| x.as_str().map(str::to_owned))).unwrap_or_default()
+            pick(lang)
+                .or_else(|| pick("rus"))
+                .or_else(|| t.fields.iter().find_map(|(_, x)| x.as_str().map(str::to_owned)))
+                .unwrap_or_default()
         }
         _ => String::new(),
     }
@@ -266,7 +280,9 @@ fn names(list: Option<&Value>, out: &mut Vec<String>) {
                 out.push(s.to_string());
             }
         }
-        Some(v) => out.extend(v.arr().iter().filter_map(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned)),
+        Some(v) => {
+            out.extend(v.arr().iter().filter_map(Value::as_str).filter(|s| !s.is_empty()).map(str::to_owned))
+        }
     }
 }
 
@@ -308,7 +324,8 @@ fn read_trade(t: &Value, trade: &mut Trade) {
 /// names the chunk in its messages: the file's base name. The error is the sentence the C++
 /// gave: `line N: <message>` when the reader names a line.
 pub fn parse(text: &str, chunk_name: &str) -> Result<Character, String> {
-    let v = gz_luadata::parse_named(text, chunk_name).map_err(|e| if e.line != 0 { format!("line {}: {}", e.line, e.message) } else { e.message })?;
+    let v = gz_luadata::parse_named(text, chunk_name)
+        .map_err(|e| if e.line != 0 { format!("line {}: {}", e.line, e.message) } else { e.message })?;
     if !v.is_table() {
         return Err("a character file must return one table".into());
     }
@@ -444,7 +461,9 @@ pub fn write(c: &Character) -> String {
     text_collapse(&mut bio);
 
     let mut s = String::with_capacity(512);
-    s.push_str("-- A character of this module. The game reads this file as it is - see docs/MOD_QUICKSTART.md.\n");
+    s.push_str(
+        "-- A character of this module. The game reads this file as it is - see docs/MOD_QUICKSTART.md.\n",
+    );
     s.push_str("return {\n");
     s.push_str("\tnpc       = 1,\n");
     s.push_str(&format!("\tid        = {},\n", lua_string(&c.id)));
@@ -460,7 +479,12 @@ pub fn write(c: &Character) -> String {
     if !text_empty(&bio) {
         s.push_str(&format!("\tbio       = {},\n", write_value(&bio, 1)));
     }
-    for (key, value) in [("community", &c.community), ("visual   ", &c.visual), ("icon     ", &c.icon), ("spec_rank", &c.spec_rank)] {
+    for (key, value) in [
+        ("community", &c.community),
+        ("visual   ", &c.visual),
+        ("icon     ", &c.icon),
+        ("spec_rank", &c.spec_rank),
+    ] {
         if !value.is_empty() {
             s.push_str(&format!("\t{key} = {},\n", lua_string(value)));
         }

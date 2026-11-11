@@ -55,16 +55,42 @@ pub struct Pref {
     pub hi: f64,
 }
 
-const fn pref(path: &'static str, key: &'static str, kind: PrefKind, help: &'static str, unit: &'static str) -> Pref {
+const fn pref(
+    path: &'static str,
+    key: &'static str,
+    kind: PrefKind,
+    help: &'static str,
+    unit: &'static str,
+) -> Pref {
     Pref { path, key, kind, help, unit, default: 0.0, lo: 0.0, hi: 0.0 }
 }
 
-const fn own(path: &'static str, key: &'static str, kind: PrefKind, help: &'static str, unit: &'static str, default: f64, lo: f64, hi: f64) -> Pref {
+// one row of the const table of preferences, in the order the table reads
+#[allow(clippy::too_many_arguments)]
+const fn own(
+    path: &'static str,
+    key: &'static str,
+    kind: PrefKind,
+    help: &'static str,
+    unit: &'static str,
+    default: f64,
+    lo: f64,
+    hi: f64,
+) -> Pref {
     Pref { path, key, kind, help, unit, default, lo, hi }
 }
 
 const fn flag(path: &'static str, bit: u32, help: &'static str) -> Pref {
-    Pref { path, key: OBJECT_FLAGS, kind: PrefKind::Flag(bit), help, unit: "", default: 0.0, lo: 0.0, hi: 0.0 }
+    Pref {
+        path,
+        key: OBJECT_FLAGS,
+        kind: PrefKind::Flag(bit),
+        help,
+        unit: "",
+        default: 0.0,
+        lo: 0.0,
+        hi: 0.0,
+    }
 }
 
 /// The objects' display and loading switches, one bit each (`EditorPreferences.h`, `epo*`).
@@ -73,49 +99,251 @@ pub const OBJECT_FLAGS: &str = "object_flags";
 /// Every preference, in the order the pages list them.
 pub const PREFS: &[Pref] = &[
     pref("General\\Theme", "theme", PrefKind::Theme, "The editor's colours.", ""),
-    pref("General\\Allow Panels Outside the Window", "floating_panels", PrefKind::Switch, "A panel can be dragged out of the editor into a window of its own. Takes effect after a restart.", ""),
-    pref("General\\Frame Rate Limit", "active_idle_fps", PrefKind::Whole, "The most frames a second the editor draws while its window is in front.", "fps"),
-    pref("General\\Recent Files", "scene_recent_count", PrefKind::Whole, "How many scenes File > Recent Scene remembers.", ""),
-    pref("General\\Undo Steps", "scene_undo_level", PrefKind::Whole, "How many scene changes Undo can take back.", ""),
-    pref("Viewport\\Camera\\Move Sensitivity", "cam_sens_move", PrefKind::Float, "How far the camera moves for a mouse movement.", ""),
-    pref("Viewport\\Camera\\Rotate Sensitivity", "cam_sens_rot", PrefKind::Float, "How far the camera turns for a mouse movement.", ""),
-    pref("Viewport\\Camera\\Fly Speed", "cam_fly_speed", PrefKind::Float, "The camera's speed in fly mode.", "m/s"),
-    pref("Viewport\\Camera\\Fly Altitude", "cam_fly_alt", PrefKind::Float, "The height above the ground the camera keeps in fly mode.", "m"),
+    pref(
+        "General\\Allow Panels Outside the Window",
+        "floating_panels",
+        PrefKind::Switch,
+        "A panel can be dragged out of the editor into a window of its own. Takes effect after a restart.",
+        "",
+    ),
+    pref(
+        "General\\Frame Rate Limit",
+        "active_idle_fps",
+        PrefKind::Whole,
+        "The most frames a second the editor draws while its window is in front.",
+        "fps",
+    ),
+    pref(
+        "General\\Recent Files",
+        "scene_recent_count",
+        PrefKind::Whole,
+        "How many scenes File > Recent Scene remembers.",
+        "",
+    ),
+    pref(
+        "General\\Undo Steps",
+        "scene_undo_level",
+        PrefKind::Whole,
+        "How many scene changes Undo can take back.",
+        "",
+    ),
+    pref(
+        "Viewport\\Camera\\Move Sensitivity",
+        "cam_sens_move",
+        PrefKind::Float,
+        "How far the camera moves for a mouse movement.",
+        "",
+    ),
+    pref(
+        "Viewport\\Camera\\Rotate Sensitivity",
+        "cam_sens_rot",
+        PrefKind::Float,
+        "How far the camera turns for a mouse movement.",
+        "",
+    ),
+    pref(
+        "Viewport\\Camera\\Fly Speed",
+        "cam_fly_speed",
+        PrefKind::Float,
+        "The camera's speed in fly mode.",
+        "m/s",
+    ),
+    pref(
+        "Viewport\\Camera\\Fly Altitude",
+        "cam_fly_alt",
+        PrefKind::Float,
+        "The height above the ground the camera keeps in fly mode.",
+        "m",
+    ),
     pref("Viewport\\Field of View", "view_fov", PrefKind::Angle, "The camera's vertical field of view.", ""),
-    pref("Viewport\\Near Plane", "view_np", PrefKind::Float, "Nothing closer to the camera than this is drawn.", "m"),
-    pref("Viewport\\Far Plane", "view_fp", PrefKind::Float, "Nothing farther from the camera than this is drawn.", "m"),
-    pref("Viewport\\Render Radius", "render_radius", PrefKind::Float, "Scene objects farther than this from the camera are not drawn.", "m"),
-    pref("Viewport\\Background Color", "scene_clear_color", PrefKind::Color, "The colour behind everything the viewport draws.", ""),
+    pref(
+        "Viewport\\Near Plane",
+        "view_np",
+        PrefKind::Float,
+        "Nothing closer to the camera than this is drawn.",
+        "m",
+    ),
+    pref(
+        "Viewport\\Far Plane",
+        "view_fp",
+        PrefKind::Float,
+        "Nothing farther from the camera than this is drawn.",
+        "m",
+    ),
+    pref(
+        "Viewport\\Render Radius",
+        "render_radius",
+        PrefKind::Float,
+        "Scene objects farther than this from the camera are not drawn.",
+        "m",
+    ),
+    pref(
+        "Viewport\\Background Color",
+        "scene_clear_color",
+        PrefKind::Color,
+        "The colour behind everything the viewport draws.",
+        "",
+    ),
     pref("Viewport\\Fog\\Color", "fog_color", PrefKind::Color, "The colour distant things fade into.", ""),
-    pref("Viewport\\Fog\\Density", "fog_fogness", PrefKind::Float, "How quickly distant things fade into the fog.", ""),
+    pref(
+        "Viewport\\Fog\\Density",
+        "fog_fogness",
+        PrefKind::Float,
+        "How quickly distant things fade into the fog.",
+        "",
+    ),
     pref("Viewport\\Grid\\Cell Size", "grid_cell_size", PrefKind::Float, "The side of a grid cell.", "m"),
-    pref("Viewport\\Grid\\Cell Count", "grid_cell_count", PrefKind::Whole, "How many cells the grid has along each side.", ""),
-    pref("Tools\\Gizmo\\Move Sensitivity", "tools_sens_move", PrefKind::Float, "How far an object moves for a mouse movement.", ""),
-    pref("Tools\\Gizmo\\Rotate Sensitivity", "tools_sens_rot", PrefKind::Float, "How far an object turns for a mouse movement.", ""),
-    pref("Tools\\Gizmo\\Scale Sensitivity", "tools_sens_scale", PrefKind::Float, "How much an object grows for a mouse movement.", ""),
-    pref("Tools\\Gizmo\\Show Move Axes", "tools_show_move_axis", PrefKind::Switch, "Draws the move gizmo's axes on the object being moved.", ""),
-    pref("Tools\\Snap\\Grid Step", "snap_grid_step", PrefKind::Float, "How far a move goes per step while Grid Snap is on. The viewport toolbar and the status bar show this step.", "m"),
-    pref("Tools\\Snap\\Angle Step", "snap_angle_step", PrefKind::Angle, "How far a rotation turns per step while Angle Snap is on. The viewport toolbar and the status bar show this step.", ""),
-    pref("Tools\\Snap\\Scale Step", "snap_scale_step", PrefKind::Float, "How much scaling changes per step while Scale Snap is on. The viewport toolbar shows this step.", ""),
-    pref("Tools\\Snap\\Surface Search Distance", "snap_moveto", PrefKind::Float, "How far above and below an object the move to a surface looks for the surface it lands on.", "m"),
-    pref("Tools\\Box Selection\\Limited Depth", "bp_lim_depth", PrefKind::Switch, "A box selects only as deep as the nearest object under its corners.", ""),
-    pref("Tools\\Box Selection\\Back Face Culling", "bp_cull", PrefKind::Switch, "Faces turned away from the camera are not picked.", ""),
-    pref("Tools\\Box Selection\\Depth Tolerance", "bp_depth_tolerance", PrefKind::Float, "How far past that nearest object a box still selects.", "m"),
+    pref(
+        "Viewport\\Grid\\Cell Count",
+        "grid_cell_count",
+        PrefKind::Whole,
+        "How many cells the grid has along each side.",
+        "",
+    ),
+    pref(
+        "Tools\\Gizmo\\Move Sensitivity",
+        "tools_sens_move",
+        PrefKind::Float,
+        "How far an object moves for a mouse movement.",
+        "",
+    ),
+    pref(
+        "Tools\\Gizmo\\Rotate Sensitivity",
+        "tools_sens_rot",
+        PrefKind::Float,
+        "How far an object turns for a mouse movement.",
+        "",
+    ),
+    pref(
+        "Tools\\Gizmo\\Scale Sensitivity",
+        "tools_sens_scale",
+        PrefKind::Float,
+        "How much an object grows for a mouse movement.",
+        "",
+    ),
+    pref(
+        "Tools\\Gizmo\\Show Move Axes",
+        "tools_show_move_axis",
+        PrefKind::Switch,
+        "Draws the move gizmo's axes on the object being moved.",
+        "",
+    ),
+    pref(
+        "Tools\\Snap\\Grid Step",
+        "snap_grid_step",
+        PrefKind::Float,
+        "How far a move goes per step while Grid Snap is on. The viewport toolbar and the status bar show this step.",
+        "m",
+    ),
+    pref(
+        "Tools\\Snap\\Angle Step",
+        "snap_angle_step",
+        PrefKind::Angle,
+        "How far a rotation turns per step while Angle Snap is on. The viewport toolbar and the status bar show this step.",
+        "",
+    ),
+    pref(
+        "Tools\\Snap\\Scale Step",
+        "snap_scale_step",
+        PrefKind::Float,
+        "How much scaling changes per step while Scale Snap is on. The viewport toolbar shows this step.",
+        "",
+    ),
+    pref(
+        "Tools\\Snap\\Surface Search Distance",
+        "snap_moveto",
+        PrefKind::Float,
+        "How far above and below an object the move to a surface looks for the surface it lands on.",
+        "m",
+    ),
+    pref(
+        "Tools\\Box Selection\\Limited Depth",
+        "bp_lim_depth",
+        PrefKind::Switch,
+        "A box selects only as deep as the nearest object under its corners.",
+        "",
+    ),
+    pref(
+        "Tools\\Box Selection\\Back Face Culling",
+        "bp_cull",
+        PrefKind::Switch,
+        "Faces turned away from the camera are not picked.",
+        "",
+    ),
+    pref(
+        "Tools\\Box Selection\\Depth Tolerance",
+        "bp_depth_tolerance",
+        PrefKind::Float,
+        "How far past that nearest object a box still selects.",
+        "m",
+    ),
     flag("Tools\\Groups\\Select Whole Group", 1 << 11, "Selecting a group selects every object in it too."),
-    flag("Objects\\Library\\Unload Unused Objects", 1 << 8, "A library object leaves memory when no scene object uses it any more."),
-    flag("Objects\\Loading\\Load Render Buffers at Once", 1 << 9, "Meshes build their render buffers as they load, not when they are first drawn."),
-    flag("Objects\\Loading\\Load Collision Models at Once", 1 << 10, "Meshes build their collision models as they load, not when they are first needed."),
+    flag(
+        "Objects\\Library\\Unload Unused Objects",
+        1 << 8,
+        "A library object leaves memory when no scene object uses it any more.",
+    ),
+    flag(
+        "Objects\\Loading\\Load Render Buffers at Once",
+        1 << 9,
+        "Meshes build their render buffers as they load, not when they are first drawn.",
+    ),
+    flag(
+        "Objects\\Loading\\Load Collision Models at Once",
+        1 << 10,
+        "Meshes build their collision models as they load, not when they are first needed.",
+    ),
     flag("Objects\\Display\\Show Pivot", 1 << 0, "Draws the pivot of a selected object."),
     flag("Objects\\Display\\Show Animation Path", 1 << 1, "Draws the path an animated object follows."),
-    flag("Objects\\Display\\Use LODs", 1 << 7, "An object that has a LOD draws it when it is small on screen."),
+    flag(
+        "Objects\\Display\\Use LODs",
+        1 << 7,
+        "An object that has a LOD draws it when it is small on screen.",
+    ),
     flag("Objects\\Skeleton\\Show Joints", 1 << 2, "Draws the joints of a skeleton."),
     flag("Objects\\Skeleton\\Show Bone Axes", 1 << 3, "Draws the axes of every bone."),
     flag("Objects\\Skeleton\\Show Bone Names", 1 << 4, "Draws the name of every bone."),
     flag("Objects\\Skeleton\\Show Bone Shapes", 1 << 5, "Draws the collision shape of every bone."),
-    own("Recovery\\Enabled", "recovery_enabled", PrefKind::Switch, "Keeps snapshots of the open scene while it has unsaved changes, and offers the last one after the editor did not close cleanly.", "", 1.0, 0.0, 1.0),
-    own("Recovery\\Interval", "recovery_interval_minutes", PrefKind::Whole, "Time between two snapshots of the open scene.", "min", 10.0, 1.0, 120.0),
-    own("Recovery\\Delay After Input", "recovery_interaction_delay_seconds", PrefKind::Whole, "How long a snapshot waits after the last click or key, so it never interrupts work.", "s", 15.0, 0.0, 120.0),
-    own("Recovery\\Snapshots Kept", "recovery_retention", PrefKind::Whole, "How many snapshots of a scene are kept; the oldest go first.", "", 10.0, 2.0, 64.0),
+    own(
+        "Recovery\\Enabled",
+        "recovery_enabled",
+        PrefKind::Switch,
+        "Keeps snapshots of the open scene while it has unsaved changes, and offers the last one after the editor did not close cleanly.",
+        "",
+        1.0,
+        0.0,
+        1.0,
+    ),
+    own(
+        "Recovery\\Interval",
+        "recovery_interval_minutes",
+        PrefKind::Whole,
+        "Time between two snapshots of the open scene.",
+        "min",
+        10.0,
+        1.0,
+        120.0,
+    ),
+    own(
+        "Recovery\\Delay After Input",
+        "recovery_interaction_delay_seconds",
+        PrefKind::Whole,
+        "How long a snapshot waits after the last click or key, so it never interrupts work.",
+        "s",
+        15.0,
+        0.0,
+        120.0,
+    ),
+    own(
+        "Recovery\\Snapshots Kept",
+        "recovery_retention",
+        PrefKind::Whole,
+        "How many snapshots of a scene are kept; the oldest go first.",
+        "",
+        10.0,
+        2.0,
+        64.0,
+    ),
 ];
 
 /// The Keyboard page: the shortcuts, not a page of the grid.
@@ -163,7 +391,9 @@ impl Pref {
     #[must_use]
     pub fn bounds(&self) -> (f64, f64, f64) {
         match (self.kind, pref_def(self.key)) {
-            (PrefKind::Flag(bit), def) => (if def.is_some_and(|d| (d.default as u32) & bit != 0) { 1.0 } else { 0.0 }, 0.0, 1.0),
+            (PrefKind::Flag(bit), def) => {
+                (if def.is_some_and(|d| (d.default as u32) & bit != 0) { 1.0 } else { 0.0 }, 0.0, 1.0)
+            }
             (_, Some(d)) => (d.default, d.lo, d.hi),
             (_, None) => (self.default, self.lo, self.hi),
         }
@@ -267,7 +497,14 @@ impl PreferencesDoc {
     pub fn new(editor: &Arc<Editor>) -> Self {
         let settings = EditorSettings::of(editor);
         let page = page_named(&settings.page.lock()).unwrap_or("General").to_owned();
-        Self { editor: editor.clone(), settings, page, search: String::new(), save_pending: false, keyboard: KeyboardPage::default() }
+        Self {
+            editor: editor.clone(),
+            settings,
+            page,
+            search: String::new(),
+            save_pending: false,
+            keyboard: KeyboardPage::default(),
+        }
     }
 
     fn set_page(&mut self, page: &str) {
@@ -283,14 +520,27 @@ impl PreferencesDoc {
     /// The nav: the search, then a row per page; while searching, a page without a match stays
     /// in its place, dimmed, and one with matches counts them.
     fn draw_nav(&mut self, ui: &mut Ui, width: f32) {
-        if SearchField::new(&mut self.search).hint("Search settings").width(width).id_salt("prefs_search").show(ui).changed() && !self.search.is_empty() {
+        if SearchField::new(&mut self.search)
+            .hint("Search settings")
+            .width(width)
+            .id_salt("prefs_search")
+            .show(ui)
+            .changed()
+            && !self.search.is_empty()
+        {
             self.keyboard.reload(&self.editor);
         }
         ui.add_space(4.0);
         let searching = !self.search.is_empty();
         let counts: Vec<usize> = PAGES
             .iter()
-            .map(|(name, _)| if *name == KEYBOARD { self.keyboard.matches(&self.search) } else { PREFS.iter().filter(|p| p.parts().0 == *name && p.matches(&self.search)).count() })
+            .map(|(name, _)| {
+                if *name == KEYBOARD {
+                    self.keyboard.matches(&self.search)
+                } else {
+                    PREFS.iter().filter(|p| p.parts().0 == *name && p.matches(&self.search)).count()
+                }
+            })
             .collect();
         let mut picked = None;
         list(ui, "prefs_nav", Vec2::new(width, 0.0), |l| {
@@ -362,7 +612,9 @@ impl PreferencesDoc {
                     let mut c32 = Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
                     color(ui, &mut c32).changed().then(|| {
                         let [r, gr, b, _] = c32.to_srgba_unmultiplied();
-                        f64::from((c & 0xff00_0000) | (u32::from(r) << 16) | (u32::from(gr) << 8) | u32::from(b))
+                        f64::from(
+                            (c & 0xff00_0000) | (u32::from(r) << 16) | (u32::from(gr) << 8) | u32::from(b),
+                        )
                     })
                 }
             }
@@ -379,7 +631,10 @@ impl PreferencesDoc {
 
     /// The rows of one page: its own rows first, then its sections, each in the order given.
     fn draw_page_rows(&mut self, g: &mut Grid<'_>, page: &str, depth: u32, ctx: &egui::Context) {
-        let rows: Vec<&'static Pref> = PREFS.iter().filter(|p| p.parts().0 == page && (self.search.is_empty() || p.matches(&self.search))).collect();
+        let rows: Vec<&'static Pref> = PREFS
+            .iter()
+            .filter(|p| p.parts().0 == page && (self.search.is_empty() || p.matches(&self.search)))
+            .collect();
         for p in rows.iter().filter(|p| p.parts().1.is_empty()) {
             self.draw_row(g, p, depth, ctx);
         }
@@ -419,37 +674,62 @@ impl PreferencesDoc {
         let footer_h = if keyboard { 0.0 } else { 8.0 * 2.0 + Font::Small.line() * 2.0 + 2.0 + 4.0 };
         let height = (ui.available_height() - footer_h).max(80.0);
         let area = Rect::from_min_size(ui.cursor().min, Vec2::new(width, height));
-        let mut rows = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.prefs.rows").max_rect(area).layout(Layout::top_down(Align::Min)));
-        ScrollArea::vertical().id_salt(("gz-ui-app.prefs.scroll", self.page.as_str(), searching)).auto_shrink([false, false]).show(&mut rows, |ui| {
-            if keyboard {
-                let ed = self.editor.clone();
-                self.keyboard.draw(ui, &ed, "");
-            } else if searching {
-                let pages: Vec<&'static str> = PAGES.iter().map(|(n, _)| *n).filter(|n| *n != KEYBOARD && PREFS.iter().any(|p| p.parts().0 == *n && p.matches(&self.search))).collect();
-                let keys = self.keyboard.matches(&self.search);
-                if pages.is_empty() && keys == 0 {
-                    gz_ui::state::empty_state(ui, Icon::Search, "No settings match", "No setting or command holds every word of the search.", None);
-                }
-                if !pages.is_empty() {
-                    PropertyGrid::new("preferences").show(ui, |g| {
-                        for page in pages {
-                            let n = PREFS.iter().filter(|p| p.parts().0 == page && p.matches(&self.search)).count().to_string();
-                            g.section(page, true, Some(&n), |g| self.draw_page_rows(g, page, 1, &ctx));
-                        }
-                    });
-                }
-                if keys > 0 {
-                    ui.add_space(8.0);
-                    if crate::local::local_section(ui, "prefs.keyboard_results", KEYBOARD, true) {
-                        let (ed, search) = (self.editor.clone(), self.search.clone());
-                        self.keyboard.draw(ui, &ed, &search);
+        let mut rows = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-app.prefs.rows")
+                .max_rect(area)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        ScrollArea::vertical()
+            .id_salt(("gz-ui-app.prefs.scroll", self.page.as_str(), searching))
+            .auto_shrink([false, false])
+            .show(&mut rows, |ui| {
+                if keyboard {
+                    let ed = self.editor.clone();
+                    self.keyboard.draw(ui, &ed, "");
+                } else if searching {
+                    let pages: Vec<&'static str> = PAGES
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .filter(|n| {
+                            *n != KEYBOARD
+                                && PREFS.iter().any(|p| p.parts().0 == *n && p.matches(&self.search))
+                        })
+                        .collect();
+                    let keys = self.keyboard.matches(&self.search);
+                    if pages.is_empty() && keys == 0 {
+                        gz_ui::state::empty_state(
+                            ui,
+                            Icon::Search,
+                            "No settings match",
+                            "No setting or command holds every word of the search.",
+                            None,
+                        );
                     }
+                    if !pages.is_empty() {
+                        PropertyGrid::new("preferences").show(ui, |g| {
+                            for page in pages {
+                                let n = PREFS
+                                    .iter()
+                                    .filter(|p| p.parts().0 == page && p.matches(&self.search))
+                                    .count()
+                                    .to_string();
+                                g.section(page, true, Some(&n), |g| self.draw_page_rows(g, page, 1, &ctx));
+                            }
+                        });
+                    }
+                    if keys > 0 {
+                        ui.add_space(8.0);
+                        if crate::local::local_section(ui, "prefs.keyboard_results", KEYBOARD, true) {
+                            let (ed, search) = (self.editor.clone(), self.search.clone());
+                            self.keyboard.draw(ui, &ed, &search);
+                        }
+                    }
+                } else {
+                    let page = self.page.clone();
+                    PropertyGrid::new("preferences").show(ui, |g| self.draw_page_rows(g, &page, 0, &ctx));
                 }
-            } else {
-                let page = self.page.clone();
-                PropertyGrid::new("preferences").show(ui, |g| self.draw_page_rows(g, &page, 0, &ctx));
-            }
-        });
+            });
         ui.allocate_rect(area, egui::Sense::hover());
         if !keyboard {
             ui.add_space(4.0);
@@ -492,10 +772,20 @@ impl Document for PreferencesDoc {
         let nav_w = 200.0;
         let gap = 16.0;
         let nav = Rect::from_min_max(full.min, pos2((full.min.x + nav_w).min(full.max.x), full.max.y));
-        let mut left = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.prefs.nav").max_rect(nav).layout(Layout::top_down(Align::Min)));
+        let mut left = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-app.prefs.nav")
+                .max_rect(nav)
+                .layout(Layout::top_down(Align::Min)),
+        );
         self.draw_nav(&mut left, nav_w);
         let page = Rect::from_min_max(pos2((nav.max.x + gap).min(full.max.x), full.min.y), full.max);
-        let mut right = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.prefs.page").max_rect(page).layout(Layout::top_down(Align::Min)));
+        let mut right = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-app.prefs.page")
+                .max_rect(page)
+                .layout(Layout::top_down(Align::Min)),
+        );
         self.draw_page(&mut right);
         ui.allocate_rect(full, egui::Sense::hover());
         let ed = self.editor.clone();

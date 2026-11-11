@@ -85,7 +85,9 @@ pub enum LtxError {
     NoSection { section: String },
     #[error("Can't find variable '{key}' in section [{section}] ({file}, line {line}).")]
     NoKey { section: String, key: String, file: String, line: u32 },
-    #[error("Duplicate section '{section}' found ({file}, line {line}; first in {first_file}, line {first_line}).")]
+    #[error(
+        "Duplicate section '{section}' found ({file}, line {line}; first in {first_file}, line {first_line})."
+    )]
     DuplicateSection { section: String, file: String, line: u32, first_file: String, first_line: u32 },
     #[error("Section [{section}] inherits from '{parent}', which does not exist ({file}, line {line}).")]
     UnknownParent { section: String, parent: String, file: String, line: u32 },
@@ -97,7 +99,9 @@ pub enum LtxError {
     BadSection { text: String, file: String, line: u32 },
     #[error("A line is longer than the engine's 4096-byte buffer ({file}, line {line}).")]
     LineTooLong { file: String, line: u32 },
-    #[error("Incorrect inifile format: section [{section}], variable [{key}]. Odd number of quotes (\") found, but should be even ({file}, line {line}).")]
+    #[error(
+        "Incorrect inifile format: section [{section}], variable [{key}]. Odd number of quotes (\") found, but should be even ({file}, line {line})."
+    )]
     OddQuotes { section: String, key: String, file: String, line: u32 },
     #[error("Can't find the config file '{file}'.")]
     MissingRoot { file: String },
@@ -220,18 +224,18 @@ fn parse_value(src: &str) -> (String, bool) {
 fn strip_comment(s: &str) -> &str {
     let b = s.as_bytes();
     let mut comm = b.iter().position(|&c| c == b';');
-    if let Some(c1) = b.iter().position(|&c| c == b'/') {
-        if b.get(c1 + 1) == Some(&b'/') && comm.is_none_or(|c| c1 < c) {
-            comm = Some(c1);
-        }
+    if let Some(c1) = b.iter().position(|&c| c == b'/')
+        && b.get(c1 + 1) == Some(&b'/')
+        && comm.is_none_or(|c| c1 < c)
+    {
+        comm = Some(c1);
     }
     let Some(comm) = comm else { return s };
-    if let Some(q1) = b.iter().position(|&c| c == b'"').filter(|&q| q < comm) {
-        if let Some(q2) = b.get(q1 + 1..).and_then(|r| r.iter().position(|&c| c == b'"')).map(|p| p + q1 + 1) {
-            if q2 > comm {
-                return s;
-            }
-        }
+    if let Some(q1) = b.iter().position(|&c| c == b'"').filter(|&q| q < comm)
+        && let Some(q2) = b.get(q1 + 1..).and_then(|r| r.iter().position(|&c| c == b'"')).map(|p| p + q1 + 1)
+        && q2 > comm
+    {
+        return s;
     }
     s.get(..comm).unwrap_or(s)
 }
@@ -274,7 +278,10 @@ impl Lines<'_> {
             self.line = 1;
         }
         let end = pos.min(self.data.len());
-        self.line += u32::try_from(self.data.get(self.at..end).map_or(0, |r| r.iter().filter(|&&c| c == b'\n').count())).unwrap_or(0);
+        self.line += u32::try_from(
+            self.data.get(self.at..end).map_or(0, |r| r.iter().filter(|&&c| c == b'\n').count()),
+        )
+        .unwrap_or(0);
         self.at = end;
         self.line
     }
@@ -321,9 +328,14 @@ pub fn parse_file(text: &str, dialect: Dialect) -> ParsedFile {
                 out.events.push(Ev::BadSection { text: str.to_owned(), line });
                 return out;
             };
-            let parents = str.find("]:").map(|i| get_items(str.get(i + 2..).unwrap_or(""))).unwrap_or_default();
+            let parents =
+                str.find("]:").map(|i| get_items(str.get(i + 2..).unwrap_or(""))).unwrap_or_default();
             let name = str.get(1..close).unwrap_or("").to_ascii_lowercase();
-            out.events.push(Ev::Section { name: arc(&name), parents: parents.into_iter().map(arc).collect(), line });
+            out.events.push(Ev::Section {
+                name: arc(&name),
+                parents: parents.into_iter().map(arc).collect(),
+                line,
+            });
             in_section = true;
             continue;
         }
@@ -342,7 +354,8 @@ pub fn parse_file(text: &str, dialect: Dialect) -> ParsedFile {
                         value_raw.push_str("\r\n");
                         let (cs, ce, cnext) = next_line(data, pos);
                         let add = line_text(cs, ce);
-                        let section_like = add.find('[').is_some_and(|b| add.get(b..).is_some_and(|r| r.contains(']')));
+                        let section_like =
+                            add.find('[').is_some_and(|b| add.get(b..).is_some_and(|r| r.contains(']')));
                         let overflow = value_raw.chars().count() + add.chars().count() >= BUF;
                         // past the end the engine reads empty lines until the buffer overflows
                         let eof = cs >= data.len();
@@ -544,7 +557,9 @@ impl Builder {
 
     /// Loads a file and everything it includes (`CInifile::Load` on a fresh reader).
     pub fn load(&mut self, path: &str, loader: &dyn Loader) -> Result<(), LtxError> {
-        let Some(file) = loader.file(path) else { return Err(LtxError::MissingRoot { file: path.to_owned() }) };
+        let Some(file) = loader.file(path) else {
+            return Err(LtxError::MissingRoot { file: path.to_owned() });
+        };
         self.load_file(path, file, folder_of(path).to_owned(), loader)
     }
 
@@ -580,7 +595,13 @@ impl Builder {
         Ok(())
     }
 
-    fn load_file(&mut self, path: &str, file: &ParsedFile, dir: String, loader: &dyn Loader) -> Result<(), LtxError> {
+    fn load_file(
+        &mut self,
+        path: &str,
+        file: &ParsedFile,
+        dir: String,
+        loader: &dyn Loader,
+    ) -> Result<(), LtxError> {
         if self.stack.len() >= MAX_INCLUDE_DEPTH || self.stack.iter().any(|p| p.eq_ignore_ascii_case(path)) {
             let (file, line) = self.stack.last().map_or((String::new(), 0), |p| (p.clone(), 0));
             return Err(LtxError::IncludeCycle { name: path.to_owned(), file, line });
@@ -591,7 +612,13 @@ impl Builder {
         r
     }
 
-    fn load_events(&mut self, path: &str, file: &ParsedFile, dir: &str, loader: &dyn Loader) -> Result<(), LtxError> {
+    fn load_events(
+        &mut self,
+        path: &str,
+        file: &ParsedFile,
+        dir: &str,
+        loader: &dyn Loader,
+    ) -> Result<(), LtxError> {
         let fid = self.file_id(path);
         let layer = loader.layer(path);
         let fname = path.to_owned();
@@ -639,7 +666,12 @@ impl Builder {
                 }
                 Ev::QuotesTrimmed { key, line } => {
                     let section = current.as_ref().map_or_else(String::new, |s| s.name.to_string());
-                    self.warnings.push(LtxWarning::QuotesTrimmed { section, key: key.clone(), file: fname.clone(), line: *line });
+                    self.warnings.push(LtxWarning::QuotesTrimmed {
+                        section,
+                        key: key.clone(),
+                        file: fname.clone(),
+                        line: *line,
+                    });
                 }
             }
         }
@@ -649,7 +681,13 @@ impl Builder {
         Ok(())
     }
 
-    fn include(&mut self, inc: &Include, fname: &str, dir: &str, loader: &dyn Loader) -> Result<(), LtxError> {
+    fn include(
+        &mut self,
+        inc: &Include,
+        fname: &str,
+        dir: &str,
+        loader: &dyn Loader,
+    ) -> Result<(), LtxError> {
         let path = format!("{dir}{}", inc.name);
         let inc_dir = folder_of(&path).to_owned();
         if inc.wildcard {
@@ -672,18 +710,38 @@ impl Builder {
         self.include_one(&path, &inc.name, inc, fname, &inc_dir, loader)
     }
 
-    fn include_one(&mut self, path: &str, name: &str, inc: &Include, fname: &str, inc_dir: &str, loader: &dyn Loader) -> Result<(), LtxError> {
+    fn include_one(
+        &mut self,
+        path: &str,
+        name: &str,
+        inc: &Include,
+        fname: &str,
+        inc_dir: &str,
+        loader: &dyn Loader,
+    ) -> Result<(), LtxError> {
         match loader.file(path) {
             Some(f) => self.load_file(path, f, inc_dir.to_owned(), loader),
             None if self.dialect == Dialect::Editor => {
-                self.warnings.push(LtxWarning::IncludeSkipped { name: name.to_owned(), file: fname.to_owned(), line: inc.line });
+                self.warnings.push(LtxWarning::IncludeSkipped {
+                    name: name.to_owned(),
+                    file: fname.to_owned(),
+                    line: inc.line,
+                });
                 Ok(())
             }
             None if inc.optional => {
-                self.warnings.push(LtxWarning::OptionalSkipped { name: name.to_owned(), file: fname.to_owned(), line: inc.line });
+                self.warnings.push(LtxWarning::OptionalSkipped {
+                    name: name.to_owned(),
+                    file: fname.to_owned(),
+                    line: inc.line,
+                });
                 Ok(())
             }
-            None => Err(LtxError::MissingInclude { name: name.to_owned(), file: fname.to_owned(), line: inc.line }),
+            None => Err(LtxError::MissingInclude {
+                name: name.to_owned(),
+                file: fname.to_owned(),
+                line: inc.line,
+            }),
         }
     }
 
@@ -697,7 +755,11 @@ impl Builder {
         if let Some(parents) = parents.filter(|p| !p.is_empty()) {
             for p in get_items(parents) {
                 let Some(pi) = self.find(p) else {
-                    self.warnings.push(LtxWarning::PatchParentMissing { section: name.to_owned(), parent: p.to_owned(), line });
+                    self.warnings.push(LtxWarning::PatchParentMissing {
+                        section: name.to_owned(),
+                        parent: p.to_owned(),
+                        line,
+                    });
                     return false;
                 };
                 if let Some(ps) = self.sections.get(pi) {
@@ -738,7 +800,12 @@ impl Builder {
     }
 
     fn list_items(value: &str) -> Vec<String> {
-        value.split(',').map(|x| x.trim_matches([' ', '\t', '\r'])).filter(|x| !x.is_empty()).map(str::to_owned).collect()
+        value
+            .split(',')
+            .map(|x| x.trim_matches([' ', '\t', '\r']))
+            .filter(|x| !x.is_empty())
+            .map(str::to_owned)
+            .collect()
     }
 
     /// Applies a `.ltxp` directive file (`apply_patch_file`). `path` names it in the tree;
@@ -764,10 +831,10 @@ impl Builder {
                 let parents = rest.strip_prefix(':').map(tr);
                 if let Some(del) = name.strip_prefix('!') {
                     let del = tr(del).to_ascii_lowercase();
-                    if let Some(i) = self.by_name.remove(del.as_str()) {
-                        if let Some(r) = self.removed.get_mut(i) {
-                            *r = true;
-                        }
+                    if let Some(i) = self.by_name.remove(del.as_str())
+                        && let Some(r) = self.removed.get_mut(i)
+                    {
+                        *r = true;
                     }
                     valid = false;
                     continue;
@@ -791,16 +858,16 @@ impl Builder {
                 }
             } else if let Some(k) = t.strip_prefix('!') {
                 let k = tr(k);
-                if let Some(s) = self.find(&section).and_then(|i| self.sections.get_mut(i)) {
-                    if let Some(&at) = s.index.get(k.as_str()) {
-                        s.items.remove(at as usize);
-                        if let Some(v) = s.item_layers.as_mut() {
-                            if (at as usize) < v.len() {
-                                v.remove(at as usize);
-                            }
-                        }
-                        s.rebuild_index();
+                if let Some(s) = self.find(&section).and_then(|i| self.sections.get_mut(i))
+                    && let Some(&at) = s.index.get(k.as_str())
+                {
+                    s.items.remove(at as usize);
+                    if let Some(v) = s.item_layers.as_mut()
+                        && (at as usize) < v.len()
+                    {
+                        v.remove(at as usize);
                     }
+                    s.rebuild_index();
                 }
             }
         }
@@ -830,8 +897,11 @@ impl Builder {
     #[must_use]
     pub fn finish(self) -> Loaded {
         let Builder { sections, removed, created, files, warnings, .. } = self;
-        let mut keep: Vec<(usize, Section)> =
-            sections.into_iter().enumerate().filter(|(i, _)| !removed.get(*i).copied().unwrap_or(false)).collect();
+        let mut keep: Vec<(usize, Section)> = sections
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !removed.get(*i).copied().unwrap_or(false))
+            .collect();
         keep.sort_by(|a, b| a.1.name.as_bytes().cmp(b.1.name.as_bytes()));
         let mut pos_of = vec![u32::MAX; removed.len()];
         for (sorted, (orig, _)) in keep.iter().enumerate() {
@@ -839,14 +909,20 @@ impl Builder {
                 *p = u32::try_from(sorted).unwrap_or(u32::MAX);
             }
         }
-        let file_order: Vec<u32> = created.iter().filter_map(|&i| pos_of.get(i).copied()).filter(|&p| p != u32::MAX).collect();
+        let file_order: Vec<u32> =
+            created.iter().filter_map(|&i| pos_of.get(i).copied()).filter(|&p| p != u32::MAX).collect();
         let sections: Vec<Section> = keep.into_iter().map(|(_, s)| s).collect();
         let mut by_name = FxHashMap::default();
         for (i, s) in sections.iter().enumerate() {
             by_name.insert(s.name.clone(), u32::try_from(i).unwrap_or(u32::MAX));
         }
         Loaded {
-            ltx: Ltx { sections: sections.into(), by_name: Arc::new(by_name), file_order: file_order.into(), files: files.into() },
+            ltx: Ltx {
+                sections: sections.into(),
+                by_name: Arc::new(by_name),
+                file_order: file_order.into(),
+                files: files.into(),
+            },
             warnings,
         }
     }
@@ -927,9 +1003,8 @@ fn c_strtod(s: &[u8]) -> (f64, usize) {
     if let Some(b'+' | b'-') = s.get(i) {
         i += 1;
     }
-    let lower = |j: usize, w: &[u8]| -> bool {
-        s.get(j..j + w.len()).is_some_and(|x| x.eq_ignore_ascii_case(w))
-    };
+    let lower =
+        |j: usize, w: &[u8]| -> bool { s.get(j..j + w.len()).is_some_and(|x| x.eq_ignore_ascii_case(w)) };
     let sign = if s.get(start) == Some(&b'-') { -1.0 } else { 1.0 };
     if lower(i, b"infinity") {
         return (sign * f64::INFINITY, i + 8);
@@ -1040,7 +1115,11 @@ impl Ltx {
     }
 
     /// [`Ltx::assemble`] over a map of parsed files keyed by the paths [`include_path`] gives.
-    pub fn assemble_map(root: &str, files: &FxHashMap<String, ParsedFile>, dialect: Dialect) -> Result<Loaded, LtxError> {
+    pub fn assemble_map(
+        root: &str,
+        files: &FxHashMap<String, ParsedFile>,
+        dialect: Dialect,
+    ) -> Result<Loaded, LtxError> {
         Self::assemble(root, &MapLoader(|p: &str| files.get(p)), dialect)
     }
 
@@ -1202,7 +1281,8 @@ mod tests {
     use super::*;
 
     fn load(files: &[(&str, &str)], root: &str, dialect: Dialect) -> Result<Loaded, LtxError> {
-        let map: FxHashMap<String, ParsedFile> = files.iter().map(|(p, t)| ((*p).to_owned(), parse_file(t, dialect))).collect();
+        let map: FxHashMap<String, ParsedFile> =
+            files.iter().map(|(p, t)| ((*p).to_owned(), parse_file(t, dialect))).collect();
         Ltx::assemble_map(root, &map, dialect)
     }
 
@@ -1248,7 +1328,10 @@ mod tests {
     #[test]
     fn includes_resolve_against_the_includer() {
         let files = [
-            ("configs\\system.ltx", "#include \"items\\items.ltx\"\n[sys]:item\nk = v\n#include \"missing.ltx\"\n"),
+            (
+                "configs\\system.ltx",
+                "#include \"items\\items.ltx\"\n[sys]:item\nk = v\n#include \"missing.ltx\"\n",
+            ),
             ("configs\\items\\items.ltx", "#include \"weapons.ltx\"\n[item]\ncost = 10\n"),
             ("configs\\items\\weapons.ltx", "[wpn]\nammo = a, b\n"),
         ];
@@ -1278,7 +1361,10 @@ mod tests {
         assert_eq!(r.ltx.r_string_raw("s", "m").unwrap(), Some("one"));
         assert_eq!(r.ltx.r_s32("t", "k").unwrap(), 1);
         assert!(matches!(r.warnings.as_slice(), [LtxWarning::QuotesTrimmed { .. }]));
-        assert!(matches!(load(&[("a.ltx", "[s]\nm = \"open\n")], "a.ltx", Dialect::Editor), Err(LtxError::OddQuotes { .. })));
+        assert!(matches!(
+            load(&[("a.ltx", "[s]\nm = \"open\n")], "a.ltx", Dialect::Editor),
+            Err(LtxError::OddQuotes { .. })
+        ));
     }
 
     #[test]
@@ -1331,7 +1417,11 @@ mod tests {
         b.load("c\\system.ltx", &loader).unwrap();
         b.set_merge(true);
         b.overlay("mod\\over.ltx", &loader).unwrap();
-        b.patch("mod\\patch\\p.ltxp", "[w]\n+list = x, y\n-list = x\n!a\ncost = 3 000 ; c\n[!b]\n[n] : w\n", 1);
+        b.patch(
+            "mod\\patch\\p.ltxp",
+            "[w]\n+list = x, y\n-list = x\n!a\ncost = 3 000 ; c\n[!b]\n[n] : w\n",
+            1,
+        );
         let r = b.finish();
         let l = &r.ltx;
         assert_eq!(r.warnings.len(), 1);

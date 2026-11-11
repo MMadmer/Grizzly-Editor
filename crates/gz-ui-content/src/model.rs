@@ -94,7 +94,10 @@ pub struct Category {
 const LIB_OBJECT: &[LibFile] = &[LibFile { folder: "rawdata\\objects", ext: ".object" }];
 const LIB_LEVEL: &[LibFile] = &[LibFile { folder: "rawdata\\levels", ext: ".level" }];
 const LIB_GROUP: &[LibFile] = &[LibFile { folder: "rawdata\\groups", ext: ".group" }];
-const LIB_VISUAL: &[LibFile] = &[LibFile { folder: "gamedata\\meshes", ext: ".ogf" }, LibFile { folder: "gamedata\\meshes", ext: ".omf" }];
+const LIB_VISUAL: &[LibFile] = &[
+    LibFile { folder: "gamedata\\meshes", ext: ".ogf" },
+    LibFile { folder: "gamedata\\meshes", ext: ".omf" },
+];
 const LIB_TEXTURE: &[LibFile] = &[
     LibFile { folder: "gamedata\\textures", ext: ".dds" },
     LibFile { folder: "rawdata\\textures", ext: ".thm" },
@@ -109,16 +112,76 @@ const LIB_SOUND: &[LibFile] = &[
 /// The Editor source's categories, in the C++ order (`kCategories`, `EditorUiContract`'s
 /// `CATEGORIES`).
 pub const CATEGORIES: [Category; 10] = [
-    Category { caption: "Objects", folder: Some("rawdata\\objects"), shared_file: "", lib: LIB_OBJECT, icon: Icon::SceneObject },
-    Category { caption: "Levels", folder: Some("rawdata\\levels"), shared_file: "", lib: LIB_LEVEL, icon: Icon::Level },
-    Category { caption: "Groups", folder: Some("rawdata\\groups"), shared_file: "", lib: LIB_GROUP, icon: Icon::Group },
-    Category { caption: "Visuals", folder: Some("gamedata\\meshes"), shared_file: "", lib: LIB_VISUAL, icon: Icon::FileModel },
-    Category { caption: "Textures", folder: Some("gamedata\\textures"), shared_file: "", lib: LIB_TEXTURE, icon: Icon::FileTexture },
-    Category { caption: "Textures (raw)", folder: Some("rawdata\\textures"), shared_file: "", lib: LIB_TEXTURE, icon: Icon::FileTexture },
-    Category { caption: "Particles", folder: None, shared_file: "gamedata\\particles.xr", lib: &[], icon: Icon::Particles },
-    Category { caption: "Sounds", folder: Some("gamedata\\sounds"), shared_file: "", lib: LIB_SOUND, icon: Icon::FileSound },
-    Category { caption: "Entities", folder: None, shared_file: "gamedata\\configs\\system.ltx", lib: &[], icon: Icon::Spawn },
-    Category { caption: "Light Anims", folder: None, shared_file: "gamedata\\lanims.xr", lib: &[], icon: Icon::Light },
+    Category {
+        caption: "Objects",
+        folder: Some("rawdata\\objects"),
+        shared_file: "",
+        lib: LIB_OBJECT,
+        icon: Icon::SceneObject,
+    },
+    Category {
+        caption: "Levels",
+        folder: Some("rawdata\\levels"),
+        shared_file: "",
+        lib: LIB_LEVEL,
+        icon: Icon::Level,
+    },
+    Category {
+        caption: "Groups",
+        folder: Some("rawdata\\groups"),
+        shared_file: "",
+        lib: LIB_GROUP,
+        icon: Icon::Group,
+    },
+    Category {
+        caption: "Visuals",
+        folder: Some("gamedata\\meshes"),
+        shared_file: "",
+        lib: LIB_VISUAL,
+        icon: Icon::FileModel,
+    },
+    Category {
+        caption: "Textures",
+        folder: Some("gamedata\\textures"),
+        shared_file: "",
+        lib: LIB_TEXTURE,
+        icon: Icon::FileTexture,
+    },
+    Category {
+        caption: "Textures (raw)",
+        folder: Some("rawdata\\textures"),
+        shared_file: "",
+        lib: LIB_TEXTURE,
+        icon: Icon::FileTexture,
+    },
+    Category {
+        caption: "Particles",
+        folder: None,
+        shared_file: "gamedata\\particles.xr",
+        lib: &[],
+        icon: Icon::Particles,
+    },
+    Category {
+        caption: "Sounds",
+        folder: Some("gamedata\\sounds"),
+        shared_file: "",
+        lib: LIB_SOUND,
+        icon: Icon::FileSound,
+    },
+    Category {
+        caption: "Entities",
+        folder: None,
+        shared_file: "gamedata\\configs\\system.ltx",
+        lib: &[],
+        icon: Icon::Spawn,
+    },
+    Category {
+        caption: "Light Anims",
+        folder: None,
+        shared_file: "gamedata\\lanims.xr",
+        lib: &[],
+        icon: Icon::Light,
+    },
 ];
 
 /// The Levels category: its entries open as scenes.
@@ -160,7 +223,9 @@ impl Location {
     /// Editor source (`SameLocation`).
     #[must_use]
     pub fn same(&self, other: &Location) -> bool {
-        self.source == other.source && (self.source != Source::Editor || self.category == other.category) && self.folder.eq_ignore_ascii_case(&other.folder)
+        self.source == other.source
+            && (self.source != Source::Editor || self.category == other.category)
+            && self.folder.eq_ignore_ascii_case(&other.folder)
     }
 
     /// What the source's root is called in the breadcrumb and the tree.
@@ -236,7 +301,8 @@ pub fn is_ancestor(parent: &str, path: &str) -> bool {
     if parent.is_empty() {
         return true;
     }
-    if parent.len() > path.len() || !path.get(..parent.len()).is_some_and(|h| h.eq_ignore_ascii_case(parent)) {
+    if parent.len() > path.len() || !path.get(..parent.len()).is_some_and(|h| h.eq_ignore_ascii_case(parent))
+    {
         return false;
     }
     parent.len() == path.len() || path.as_bytes().get(parent.len()) == Some(&b'\\')
@@ -266,7 +332,7 @@ pub fn thousands(n: usize) -> String {
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     let len = digits.len();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -404,7 +470,7 @@ mod tests {
         // the Wide strip: under two rows even of the smallest tiles
         assert_eq!(shown_tile(0.0, 150.0, 64.0), 48.0);
         assert_eq!(shown_tile(0.0, 400.0, 96.0), 96.0);
-        assert!(find_category("textures (RAW)") == Some(5) && find_category("") .is_none());
+        assert!(find_category("textures (RAW)") == Some(5) && find_category("").is_none());
         assert!(!search_active("  \t"));
     }
 }

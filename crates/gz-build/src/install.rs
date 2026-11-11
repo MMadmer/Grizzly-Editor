@@ -118,7 +118,9 @@ fn rename_folder(from: &Path, to: &Path) -> io::Result<()> {
     for _ in 0..30 {
         match fs::rename(from, to) {
             Ok(()) => return Ok(()),
-            Err(e) if matches!(e.raw_os_error(), Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)) => last = e,
+            Err(e) if matches!(e.raw_os_error(), Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION)) => {
+                last = e
+            }
             Err(e) => return Err(e),
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -131,7 +133,8 @@ fn rename_folder(from: &Path, to: &Path) -> io::Result<()> {
 /// gets the first ten, for the question that names what goes.
 pub fn count_stale(dir: &Path, rel_dir: &str, will: &FxHashSet<String>, names: &mut Vec<String>) -> usize {
     let Ok(listing) = fs::read_dir(dir) else { return 0 };
-    let mut entries: Vec<(String, PathBuf)> = listing.flatten().filter_map(|e| e.file_name().into_string().ok().map(|n| (n, e.path()))).collect();
+    let mut entries: Vec<(String, PathBuf)> =
+        listing.flatten().filter_map(|e| e.file_name().into_string().ok().map(|n| (n, e.path()))).collect();
     entries.sort_by_key(|(n, _)| n.to_ascii_lowercase());
     let mut n = 0;
     for (name, path) in entries {
@@ -158,7 +161,8 @@ pub fn count_stale(dir: &Path, rel_dir: &str, will: &FxHashSet<String>, names: &
 /// Whether `folder` holds this very file: same size, same write time.
 fn same_file_there(f: &BuildFile, folder: &Path) -> bool {
     let Some(modified) = f.modified else { return false };
-    fs::symlink_metadata(f.rel.to_fs(folder)).is_ok_and(|md| md.is_file() && md.len() == f.size && md.modified().ok() == Some(modified))
+    fs::symlink_metadata(f.rel.to_fs(folder))
+        .is_ok_and(|md| md.is_file() && md.len() == f.size && md.modified().ok() == Some(modified))
 }
 
 enum Copied {
@@ -220,7 +224,11 @@ pub fn copy_files(
             Ok(_) => Copied::Done,
             Err(e) => {
                 stop.store(true, Ordering::Relaxed);
-                Copied::Failed(format!("cannot copy {} (error {})", f.rel.to_backslash(), e.raw_os_error().unwrap_or(0)))
+                Copied::Failed(format!(
+                    "cannot copy {} (error {})",
+                    f.rel.to_backslash(),
+                    e.raw_os_error().unwrap_or(0)
+                ))
             }
         }
     });
@@ -243,16 +251,31 @@ pub fn copy_files(
 /// The module build into `dst` (`<target>\modules\<id>`). Without `clean`, a folder there that
 /// holds files this build does not write is refused with them named: it may be somebody else's
 /// module that happens to share the id.
-pub fn install_build(walk: &BuildWalk, dst: &Path, clean: bool, exec: &Executors, ctx: &JobCtx, feed: &(dyn Fn(Feed<'_>) + Sync)) -> Result<usize, Refusal> {
+pub fn install_build(
+    walk: &BuildWalk,
+    dst: &Path,
+    clean: bool,
+    exec: &Executors,
+    ctx: &JobCtx,
+    feed: &(dyn Fn(Feed<'_>) + Sync),
+) -> Result<usize, Refusal> {
     let had = fs::metadata(dst).is_ok_and(|m| m.is_dir());
     if !clean && had {
         let mut names = Vec::new();
         let count = count_stale(dst, "", &walk.keys(), &mut names);
         if count > 0 {
-            return Err(Refusal { err: format!("target already holds a module: {count} file(s) there are not part of this build"), stale_names: names, stale_count: count });
+            return Err(Refusal {
+                err: format!(
+                    "target already holds a module: {count} file(s) there are not part of this build"
+                ),
+                stale_names: names,
+                stale_count: count,
+            });
         }
     }
-    let (Some(parent), Some(leaf)) = (dst.parent(), dst.file_name()) else { return Err(Refusal::new("can't create target folder")) };
+    let (Some(parent), Some(leaf)) = (dst.parent(), dst.file_name()) else {
+        return Err(Refusal::new("can't create target folder"));
+    };
     let yard = parent.join(".new");
     let staged = yard.join(leaf);
     let mut old_name = leaf.to_os_string();
@@ -270,11 +293,29 @@ pub fn install_build(walk: &BuildWalk, dst: &Path, clean: bool, exec: &Executors
     };
 
     feed(Feed::Stage { step: 1, text: "Comparing with the last build", bytes: 0, files: 0 });
-    let reuse: Vec<bool> = if had { exec.par_io(walk.files.iter().collect(), |f| same_file_there(f, dst)) } else { vec![false; walk.files.len()] };
+    let reuse: Vec<bool> = if had {
+        exec.par_io(walk.files.iter().collect(), |f| same_file_there(f, dst))
+    } else {
+        vec![false; walk.files.len()]
+    };
     if ctx.cancel.is_cancelled() {
         clean_up();
         return Err(Refusal::new("cancelled"));
     }
+    let need: u64 = walk.files.iter().zip(&reuse).filter(|(_, r)| !**r).map(|(f, _)| f.size).sum();
+    #[cfg(windows)]
+    if let Ok(free) = gz_win::free_space(&yard)
+        && free < need
+    {
+        clean_up();
+        return Err(Refusal::new(format!(
+            "the build needs {} free on the target's drive and has {}: the new build is written beside the last one before it replaces it",
+            crate::job::bytes_text(need),
+            crate::job::bytes_text(free)
+        )));
+    }
+    #[cfg(not(windows))]
+    let _ = need;
 
     feed(Feed::Stage { step: 1, text: "Copying files", bytes: walk.bytes, files: walk.files.len() });
     let files = match copy_files(&walk.files, &walk.root, &staged, None, &reuse, dst, exec, ctx, feed) {
@@ -288,14 +329,20 @@ pub fn install_build(walk: &BuildWalk, dst: &Path, clean: bool, exec: &Executors
     feed(Feed::Stage { step: 2, text: "Putting the module in place", bytes: 0, files: 0 });
     if had && rename_folder(dst, &previous).is_err() {
         clean_up();
-        return Err(Refusal::new(format!("the module in {} is in use: close the game and build again. It stays as it was", dst.display())));
+        return Err(Refusal::new(format!(
+            "the module in {} is in use: close the game and build again. It stays as it was",
+            dst.display()
+        )));
     }
     if let Err(e) = rename_folder(&staged, dst) {
         if had {
             let _ = rename_folder(&previous, dst);
         }
         clean_up();
-        return Err(Refusal::new(format!("can't put the build in place (error {})", e.raw_os_error().unwrap_or(0))));
+        return Err(Refusal::new(format!(
+            "can't put the build in place (error {})",
+            e.raw_os_error().unwrap_or(0)
+        )));
     }
     remove_tree(&previous);
     let _ = fs::remove_dir(&yard);
@@ -304,21 +351,32 @@ pub fn install_build(walk: &BuildWalk, dst: &Path, clean: bool, exec: &Executors
 
 /// The flat overlay into `dst` (`<target>\gamedata_<id>`): `gamedata` alone, plus the report of
 /// what a plain gamedata folder cannot carry. It IS a JSGME mod, so it keeps its own name.
-pub fn export_flat(walk: &BuildWalk, dst: &Path, report: &str, exec: &Executors, ctx: &JobCtx, feed: &(dyn Fn(Feed<'_>) + Sync)) -> Result<usize, Refusal> {
+pub fn export_flat(
+    walk: &BuildWalk,
+    dst: &Path,
+    report: &str,
+    exec: &Executors,
+    ctx: &JobCtx,
+    feed: &(dyn Fn(Feed<'_>) + Sync),
+) -> Result<usize, Refusal> {
     let _ = fs::create_dir_all(dst);
     if !dst.is_dir() {
         return Err(Refusal::new("can't create target folder"));
     }
     feed(Feed::Stage { step: 1, text: "Copying files", bytes: walk.bytes, files: walk.files.len() });
     let gamedata = RelPath::new("gamedata").map_err(|e| Refusal::new(e.to_string()))?;
-    let files = copy_files(&walk.files, &walk.root, dst, Some(&gamedata), &[], dst, exec, ctx, feed).map_err(Refusal::new)?;
+    let files = copy_files(&walk.files, &walk.root, dst, Some(&gamedata), &[], dst, exec, ctx, feed)
+        .map_err(Refusal::new)?;
     let _ = fs::write(dst.join("_xms_export_report.txt"), report);
     Ok(files)
 }
 
 fn count_under(tree: &FileTree, folder: &str, skip_name: Option<&str>) -> usize {
     let Ok(rel) = RelPath::new(folder) else { return 0 };
-    tree.files_under(&rel).iter().filter(|(_, e)| skip_name.is_none_or(|s| !e.name.eq_ignore_ascii_case(s))).count()
+    tree.files_under(&rel)
+        .iter()
+        .filter(|(_, e)| skip_name.is_none_or(|s| !e.name.eq_ignore_ascii_case(s)))
+        .count()
 }
 
 /// The report a flat export leaves in its folder: XMS-only content is not representable as a
@@ -329,14 +387,24 @@ pub fn flat_report(tree: &FileTree, m: &Manifest) -> String {
     let c_spawn = count_under(tree, "spawn", None);
     let c_scripts = count_under(tree, "scripts", None);
     let c_levels = count_under(tree, "levels", None);
-    let module_files = |ext: &str| tree.files_with_extension(ext).into_iter().filter(|p| !outside_build(&m.exclude, p.as_str())).count();
+    let module_files = |ext: &str| {
+        tree.files_with_extension(ext).into_iter().filter(|p| !outside_build(&m.exclude, p.as_str())).count()
+    };
     // quests are module-only content wherever they sit: the NQ runtime finds them under
     // <game>\modules\<id>, which a flat overlay is not
     let c_quests = module_files("nqasset") + module_files("behasset");
     let characters = module_files("npcasset");
 
     let mut rep = format!("XMS flat export report - module '{}'\r\n\r\n", m.id);
-    if c_patch == 0 && c_spawn == 0 && c_scripts == 0 && c_levels == 0 && c_quests == 0 && m.mode.is_empty() && m.provides_modes.is_empty() && characters == 0 {
+    if c_patch == 0
+        && c_spawn == 0
+        && c_scripts == 0
+        && c_levels == 0
+        && c_quests == 0
+        && m.mode.is_empty()
+        && m.provides_modes.is_empty()
+        && characters == 0
+    {
         rep.push_str("fully vanilla-compatible\r\n");
         return rep;
     }
@@ -380,7 +448,12 @@ mod tests {
             let base = std::env::temp_dir().join(format!("gz-build-{tag}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&base);
             fs::create_dir_all(&base).unwrap();
-            let rt = gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 2 }).unwrap();
+            let rt = gz_task::Runtime::start(gz_task::ExecOptions {
+                async_threads: 1,
+                cpu_threads: 1,
+                io_threads: 2,
+            })
+            .unwrap();
             Self { base, rt }
         }
 
@@ -480,7 +553,8 @@ mod tests {
         fx.write("keep/keep.txt", "mine");
         fx.write("dir/a/b.txt", "x");
         fx.write("dir/c.txt", "x");
-        let linked = std::os::windows::fs::symlink_dir(fx.base.join("keep"), fx.base.join("dir\\link")).is_ok();
+        let linked =
+            std::os::windows::fs::symlink_dir(fx.base.join("keep"), fx.base.join("dir\\link")).is_ok();
         let removed = wipe_tree(&fx.base.join("dir"));
         assert_eq!(removed, 2);
         assert!(fx.base.join("dir").is_dir());
@@ -514,13 +588,21 @@ mod tests {
         fx.write("p/gamedata/configs/a.ltx", "a");
         let tree = FileTree::scan(&fx.base.join("p"));
         let m = Manifest { id: "od".into(), ..Manifest::default() };
-        assert_eq!(flat_report(&tree, &m), "XMS flat export report - module 'od'\r\n\r\nfully vanilla-compatible\r\n");
+        assert_eq!(
+            flat_report(&tree, &m),
+            "XMS flat export report - module 'od'\r\n\r\nfully vanilla-compatible\r\n"
+        );
         fx.write("p/patch/_readme.txt", "x");
         fx.write("p/patch/a.ltxp", "x");
         fx.write("p/quests/q.nqasset", "x");
         fx.write("p/wip/q.nqasset", "x");
         let tree = FileTree::scan(&fx.base.join("p"));
-        let m = Manifest { id: "od".into(), mode: "night".into(), exclude: vec!["wip".into()], ..Manifest::default() };
+        let m = Manifest {
+            id: "od".into(),
+            mode: "night".into(),
+            exclude: vec!["wip".into()],
+            ..Manifest::default()
+        };
         let rep = flat_report(&tree, &m);
         assert!(rep.contains("patch: 1 file(s) - NOT exported (XMS-only)\r\n"));
         assert!(rep.contains("graphs: 1 .nqasset/.behasset"));

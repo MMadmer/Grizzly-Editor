@@ -57,7 +57,17 @@ pub(super) struct Prim {
 
 impl Prim {
     fn new(kind: PrimKind, flags: u8) -> Self {
-        Self { kind, flags, r: 0.0, a: Pos2::ZERO, b: Pos2::ZERO, first: 0, count: 0, tri_first: 0, tri_count: 0 }
+        Self {
+            kind,
+            flags,
+            r: 0.0,
+            a: Pos2::ZERO,
+            b: Pos2::ZERO,
+            first: 0,
+            count: 0,
+            tri_first: 0,
+            tri_count: 0,
+        }
     }
 
     #[must_use]
@@ -200,7 +210,10 @@ impl<'g> B<'g> {
     pub fn head(&mut self, x: f64, y: f64, deg: f64, len: f64) {
         let back0 = (deg + 180.0 - 42.0) * DEG;
         let back1 = (deg + 180.0 + 42.0) * DEG;
-        self.m_at(x + len * back0.cos(), y + len * back0.sin()).to(x, y).to(x + len * back1.cos(), y + len * back1.sin()).end(false);
+        self.m_at(x + len * back0.cos(), y + len * back0.sin())
+            .to(x, y)
+            .to(x + len * back1.cos(), y + len * back1.sin())
+            .end(false);
     }
 
     pub fn arrow(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, head: f64) {
@@ -215,7 +228,12 @@ impl<'g> B<'g> {
         // the tangent at the end, in the direction of travel
         let a = a1 * DEG;
         let s = if a1 >= a0 { 1.0 } else { -1.0 };
-        self.head(cx + rx * a.cos(), cy + ry * a.sin(), (s * ry * a.cos()).atan2(-s * rx * a.sin()) / DEG, head);
+        self.head(
+            cx + rx * a.cos(),
+            cy + ry * a.sin(),
+            (s * ry * a.cos()).atan2(-s * rx * a.sin()) / DEG,
+            head,
+        );
     }
 
     /// Starts a path.
@@ -264,7 +282,10 @@ impl<'g> B<'g> {
     /// Finishes the path.
     pub fn end(&mut self, closed: bool) {
         let mut closed = closed;
-        if closed && self.path.len() > 2 && self.path.first().zip(self.path.last()).is_some_and(|(a, b)| near(*a, *b)) {
+        if closed
+            && self.path.len() > 2
+            && self.path.first().zip(self.path.last()).is_some_and(|(a, b)| near(*a, *b))
+        {
             let last = self.flags.pop().unwrap_or(0);
             self.path.pop();
             if let Some(f) = self.flags.first_mut() {
@@ -288,7 +309,9 @@ impl<'g> B<'g> {
         let n = self.path.len();
         for i in 0..n {
             if closed || (i > 0 && i + 1 < n) {
-                let (Some(a), Some(p), Some(c)) = (self.path.get((i + n - 1) % n), self.path.get(i), self.path.get((i + 1) % n)) else {
+                let (Some(a), Some(p), Some(c)) =
+                    (self.path.get((i + n - 1) % n), self.path.get(i), self.path.get((i + 1) % n))
+                else {
                     continue;
                 };
                 let (ux, uy, vx, vy) = (p.x - a.x, p.y - a.y, c.x - p.x, c.y - p.y);
@@ -314,16 +337,15 @@ impl<'g> B<'g> {
 
     pub fn poly(&mut self, xy: &[f64], closed: bool) {
         self.m();
-        for pair in xy.chunks_exact(2) {
-            if let [x, y] = pair {
-                self.to(*x, *y);
-            }
+        for [x, y] in xy.as_chunks::<2>().0 {
+            self.to(*x, *y);
         }
         self.end(closed);
     }
 
     pub fn fill(&mut self, xy: &[f64]) {
-        let mut pts: Vec<Pos2> = xy.chunks_exact(2).filter_map(|p| if let [x, y] = p { Some(pos2(*x as f32, *y as f32)) } else { None }).collect();
+        let mut pts: Vec<Pos2> =
+            xy.as_chunks::<2>().0.iter().map(|[x, y]| pos2(*x as f32, *y as f32)).collect();
         if pts.len() < 3 {
             return;
         }
@@ -332,7 +354,10 @@ impl<'g> B<'g> {
             pts.reverse();
         }
         let convex = is_convex(&pts);
-        let mut prim = Prim::new(PrimKind::Fill, (if self.quiet { QUIET } else { 0 }) | FILLED | if convex { CONVEX } else { 0 });
+        let mut prim = Prim::new(
+            PrimKind::Fill,
+            (if self.quiet { QUIET } else { 0 }) | FILLED | if convex { CONVEX } else { 0 },
+        );
         prim.first = self.g.pts.len() as u32;
         prim.count = pts.len() as u32;
         if !convex {
@@ -396,14 +421,20 @@ pub(super) fn ear_clip(p: &[Pos2]) -> Vec<u16> {
     let mut out = Vec::with_capacity(p.len().saturating_sub(2) * 3);
     let at = |i: u16| p.get(i as usize).copied().unwrap_or(Pos2::ZERO);
     let cross = |a: Pos2, b: Pos2, c: Pos2| (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
-    let inside = |q: Pos2, a: Pos2, b: Pos2, c: Pos2| cross(a, b, q) >= 0.0 && cross(b, c, q) >= 0.0 && cross(c, a, q) >= 0.0;
+    let inside = |q: Pos2, a: Pos2, b: Pos2, c: Pos2| {
+        cross(a, b, q) >= 0.0 && cross(b, c, q) >= 0.0 && cross(c, a, q) >= 0.0
+    };
     let mut guard = p.len() * p.len();
     while idx.len() > 3 && guard > 0 {
         guard -= 1;
         let n = idx.len();
         let mut clipped = false;
         for k in 0..n {
-            let (Some(&ia), Some(&ib), Some(&ic)) = (idx.get((k + n - 1) % n), idx.get(k), idx.get((k + 1) % n)) else { continue };
+            let (Some(&ia), Some(&ib), Some(&ic)) =
+                (idx.get((k + n - 1) % n), idx.get(k), idx.get((k + 1) % n))
+            else {
+                continue;
+            };
             let (a, b, c) = (at(ia), at(ib), at(ic));
             if cross(a, b, c) <= 1e-6 {
                 continue;
@@ -482,7 +513,7 @@ fn corners(b: &mut B<'_>) {
 }
 
 fn lens(b: &mut B<'_>, cx: f64, cy: f64, r: f64, reach: f64) {
-    let d = r * 0.7071;
+    let d = r * std::f64::consts::FRAC_1_SQRT_2;
     b.c(cx, cy, r);
     b.l(&[cx + d, cy + d, reach, reach]);
 }
@@ -570,7 +601,11 @@ fn cloud(b: &mut B<'_>) {
     if t1 < t0 {
         t1 += 360.0;
     }
-    b.m().arc(lx, ly, lr, 90.0, angle_of(lx, ly, ax, ay)).arc(tx, ty, tr, t0, t1).arc(rx, ry, rr, angle_of(rx, ry, bx, by), 450.0).end(true);
+    b.m()
+        .arc(lx, ly, lr, 90.0, angle_of(lx, ly, ax, ay))
+        .arc(tx, ty, tr, t0, t1)
+        .arc(rx, ry, rr, angle_of(rx, ry, bx, by), 450.0)
+        .end(true);
 }
 
 /// The editor's own asset kinds keep the shapes they were drawn with in a unit square.
@@ -887,7 +922,13 @@ fn build(icon: Icon, b: &mut B<'_>) {
         }
         // the sides are arcs tangent to the straight upper sides, meeting in a point at the foot
         Icon::Shield => {
-            b.m_at(8.0, 1.5).to(13.5, 3.5).to(13.5, 8.0).arc(6.91, 8.0, 6.59, 0.0, 80.5).arc(9.09, 8.0, 6.59, 99.5, 180.0).to(2.5, 3.5).end(true);
+            b.m_at(8.0, 1.5)
+                .to(13.5, 3.5)
+                .to(13.5, 8.0)
+                .arc(6.91, 8.0, 6.59, 0.0, 80.5)
+                .arc(9.09, 8.0, 6.59, 99.5, 180.0)
+                .to(2.5, 3.5)
+                .end(true);
         }
         Icon::Tag => {
             b.z(&[2.0, 2.0, 8.5, 2.0, 14.25, 7.75, 7.75, 14.25, 2.0, 8.5]);
@@ -1258,8 +1299,14 @@ fn build(icon: Icon, b: &mut B<'_>) {
         }
         Icon::FileScript => {
             page(b);
-            b.l(&[7.0, 7.25, 6.25, 7.25, 5.75, 7.75, 5.75, 9.25, 5.0, 9.75, 5.75, 10.25, 5.75, 11.75, 6.25, 12.25, 7.0, 12.25]);
-            b.l(&[9.0, 7.25, 9.75, 7.25, 10.25, 7.75, 10.25, 9.25, 11.0, 9.75, 10.25, 10.25, 10.25, 11.75, 9.75, 12.25, 9.0, 12.25]);
+            b.l(&[
+                7.0, 7.25, 6.25, 7.25, 5.75, 7.75, 5.75, 9.25, 5.0, 9.75, 5.75, 10.25, 5.75, 11.75, 6.25,
+                12.25, 7.0, 12.25,
+            ]);
+            b.l(&[
+                9.0, 7.25, 9.75, 7.25, 10.25, 7.75, 10.25, 9.25, 11.0, 9.75, 10.25, 10.25, 10.25, 11.75,
+                9.75, 12.25, 9.0, 12.25,
+            ]);
         }
         // keys and values: sliders, not lines of text
         Icon::FileConfig => {
@@ -1484,7 +1531,13 @@ fn build(icon: Icon, b: &mut B<'_>) {
         // a starting kit is a backpack
         Icon::Kit => {
             b.r(2.75, 4.0, 13.25, 14.5, 2.5);
-            b.m_at(6.0, 4.0).to(6.0, 3.0).arc(7.0, 3.0, 1.0, 180.0, 270.0).to(9.0, 2.0).arc(9.0, 3.0, 1.0, 270.0, 360.0).to(10.0, 4.0).end(false);
+            b.m_at(6.0, 4.0)
+                .to(6.0, 3.0)
+                .arc(7.0, 3.0, 1.0, 180.0, 270.0)
+                .to(9.0, 2.0)
+                .arc(9.0, 3.0, 1.0, 270.0, 360.0)
+                .to(10.0, 4.0)
+                .end(false);
             b.l(&[5.5, 7.0, 10.5, 7.0]);
             b.l(&[5.5, 14.5, 5.5, 10.5, 10.5, 10.5, 10.5, 14.5]);
         }

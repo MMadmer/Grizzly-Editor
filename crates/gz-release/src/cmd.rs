@@ -124,11 +124,15 @@ pub async fn key_action(editor: &Arc<Editor>, action: &str, args: &mut Args) -> 
             editor.exec.io(move || keys.create(Some(&path), &password, project.as_deref())).await
         }
         "key_use" => {
-            let Some(path) = args.text("path").map(str::to_owned) else { return Some(Err(refuse("key_use needs 'path'"))) };
+            let Some(path) = args.text("path").map(str::to_owned) else {
+                return Some(Err(refuse("key_use needs 'path'")));
+            };
             editor.exec.io(move || keys.use_file(&path, project.as_deref())).await
         }
         "key_unlock" => {
-            let Some(password) = take_secret(args, "password") else { return Some(Err(refuse("key_unlock needs 'password'"))) };
+            let Some(password) = take_secret(args, "password") else {
+                return Some(Err(refuse("key_unlock needs 'password'")));
+            };
             editor.exec.io(move || keys.unlock(&password)).await
         }
         _ => return None,
@@ -142,7 +146,11 @@ async fn mod_catalog(ed: Arc<Editor>, mut args: Args, _origin: Origin) -> Reply 
     if action != "status" {
         match key_action(&ed, &action, &mut args).await {
             Some(done) => done?,
-            None => return Err(refuse("unknown action: status, key_create, key_use or key_unlock expected (the rest of Submit to Mod Browser is not in this editor yet)")),
+            None => {
+                return Err(refuse(
+                    "unknown action: status, key_create, key_use or key_unlock expected (the rest of Submit to Mod Browser is not in this editor yet)",
+                ));
+            }
         }
     }
     Ok(json!({ "key": key_state(&ed).await }))

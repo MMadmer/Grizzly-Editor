@@ -118,7 +118,12 @@ pub fn tag_attr(tag: &str, name: &str) -> String {
     while let Some(at) = tag.get(from..).and_then(|r| r.find(&key)).map(|i| from + i) {
         if at == 0 || matches!(tag.as_bytes().get(at - 1), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             let v = at + key.len();
-            return tag.get(v..).and_then(|r| r.find('"')).and_then(|e| tag.get(v..v + e)).unwrap_or("").to_owned();
+            return tag
+                .get(v..)
+                .and_then(|r| r.find('"'))
+                .and_then(|e| tag.get(v..v + e))
+                .unwrap_or("")
+                .to_owned();
         }
         from = at + key.len();
     }
@@ -229,7 +234,10 @@ impl LtxSection {
                     break;
                 }
                 let Some(eq) = line.find('=') else { continue };
-                values.push((trim(line.get(..eq).unwrap_or("")).to_owned(), trim(line.get(eq + 1..).unwrap_or("")).to_owned()));
+                values.push((
+                    trim(line.get(..eq).unwrap_or("")).to_owned(),
+                    trim(line.get(eq + 1..).unwrap_or("")).to_owned(),
+                ));
             }
             let mut parents = Vec::new();
             if let Some(colon) = header.find("]:")
@@ -370,8 +378,16 @@ impl Default for Device {
         };
         Self {
             sides: [
-                side(FRect::new(0.0, 0.0, 1024.0, 768.0), FRect::new(25.0, 33.0, 998.0, 716.0), FRect::new(973.0, 26.0, 1006.0, 60.0)),
-                side(FRect::new(102.0, 0.0, 921.0, 768.0), FRect::new(122.0, 33.0, 900.0, 716.0), FRect::new(880.0, 26.0, 906.0, 60.0)),
+                side(
+                    FRect::new(0.0, 0.0, 1024.0, 768.0),
+                    FRect::new(25.0, 33.0, 998.0, 716.0),
+                    FRect::new(973.0, 26.0, 1006.0, 60.0),
+                ),
+                side(
+                    FRect::new(102.0, 0.0, 921.0, 768.0),
+                    FRect::new(122.0, 33.0, 900.0, 716.0),
+                    FRect::new(880.0, 26.0, 906.0, 60.0),
+                ),
             ],
         }
     }

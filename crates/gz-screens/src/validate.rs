@@ -21,7 +21,12 @@ fn without_ext(file: &str) -> &str {
 /// The problems of `s`. `outside` says whether the build leaves a project path out; `levels`
 /// are the linked game's levels, `None` when they are not known (W407 is not checked then).
 /// Blocking: a file is looked for on the disk.
-pub fn validate(root: &Path, s: &Screens, outside: &dyn Fn(&str) -> bool, levels: Option<&[String]>) -> Vec<String> {
+pub fn validate(
+    root: &Path,
+    s: &Screens,
+    outside: &dyn Fn(&str) -> bool,
+    levels: Option<&[String]>,
+) -> Vec<String> {
     let exists = |rel: &str| root.join(rel.replace('/', "\\")).is_file();
     let mut problems = Vec::new();
     for d in &s.screens {
@@ -45,10 +50,14 @@ pub fn validate(root: &Path, s: &Screens, outside: &dyn Fn(&str) -> bool, levels
             } else if outside(&l.file) {
                 problems.push(format!("E408 {tag}{at}: the build leaves this file out: {}", l.file));
             }
-            if kind == FileKind::Shader && exists(&l.file) && !exists(&format!("{}.ps", without_ext(&l.file))) {
+            if kind == FileKind::Shader && exists(&l.file) && !exists(&format!("{}.ps", without_ext(&l.file)))
+            {
                 problems.push(format!("E404 {tag}{at}: there is no .ps beside this shader"));
             }
-            if kind == FileKind::Shader && extension(&l.file) == ".ps" && !exists(&format!("{}.s", without_ext(&l.file))) {
+            if kind == FileKind::Shader
+                && extension(&l.file) == ".ps"
+                && !exists(&format!("{}.s", without_ext(&l.file)))
+            {
                 problems.push(format!("E404 {tag}{at}: there is no .s beside this shader"));
             }
             if !l.texture.is_empty() && !exists(&l.texture) {

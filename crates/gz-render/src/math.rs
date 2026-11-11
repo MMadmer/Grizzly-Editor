@@ -201,7 +201,9 @@ mod tests {
         assert!((turned.size() - Vec3::new(2.0, 2.0, 4.0)).abs().max_element() < 1e-5);
         let u = b.unit_transform();
         let back = Aabb::UNIT.transformed(&u);
-        assert!((back.min - b.min).abs().max_element() < 1e-5 && (back.max - b.max).abs().max_element() < 1e-5);
+        assert!(
+            (back.min - b.min).abs().max_element() < 1e-5 && (back.max - b.max).abs().max_element() < 1e-5
+        );
     }
 
     #[test]

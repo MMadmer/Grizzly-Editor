@@ -108,7 +108,7 @@ impl CForm {
 
         let verts = read_vec3s(body.get(..nv * 12).unwrap_or_default());
         let mut tris = Vec::with_capacity(nf);
-        for rec in rest.get(..nf * TRI).unwrap_or_default().chunks_exact(TRI) {
+        for rec in rest.get(..nf * TRI).unwrap_or_default().as_chunks::<TRI>().0 {
             let tri = Tri { verts: [u32_at(rec, 0), u32_at(rec, 4), u32_at(rec, 8)], dummy: u32_at(rec, 12) };
             if tri.verts.iter().any(|&v| v >= vert_count) {
                 return Err(LevelError::Invalid(format!(
@@ -133,7 +133,7 @@ impl CForm {
         let start = out.len();
         out.resize(start + self.tris.len() * TRI, 0);
         if let Some(dst) = out.get_mut(start..) {
-            for (rec, t) in dst.chunks_exact_mut(TRI).zip(self.tris.iter()) {
+            for (rec, t) in dst.as_chunks_mut::<TRI>().0.iter_mut().zip(self.tris.iter()) {
                 put_u32(rec, 0, t.verts[0]);
                 put_u32(rec, 4, t.verts[1]);
                 put_u32(rec, 8, t.verts[2]);

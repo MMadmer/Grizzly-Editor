@@ -119,7 +119,8 @@ pub fn text_value(value: &str) -> String {
 /// list.
 #[must_use]
 pub fn split_list(src: &str, sep: char) -> Vec<String> {
-    let parts: Vec<&str> = if sep == '\n' { src.split(['\n', '\r']).collect() } else { src.split(sep).collect() };
+    let parts: Vec<&str> =
+        if sep == '\n' { src.split(['\n', '\r']).collect() } else { src.split(sep).collect() };
     parts.into_iter().map(trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
 }
 

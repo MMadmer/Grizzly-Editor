@@ -88,7 +88,13 @@ pub struct OMotion {
 
 impl Default for OMotion {
     fn default() -> Self {
-        Self { name: SmolStr::default(), frame_start: 0, frame_end: 0, fps: 30.0, envelopes: Default::default() }
+        Self {
+            name: SmolStr::default(),
+            frame_start: 0,
+            frame_end: 0,
+            fps: 30.0,
+            envelopes: Default::default(),
+        }
     }
 }
 
@@ -379,7 +385,11 @@ impl SMotion {
         for bone in bones {
             if self.find_bone_motion(&bone.name).is_none() {
                 // flRKeyAbsent
-                self.bone_motions.push(BoneMotion { name: bone.name.clone(), flags: 1 << 1, ..BoneMotion::default() });
+                self.bone_motions.push(BoneMotion {
+                    name: bone.name.clone(),
+                    flags: 1 << 1,
+                    ..BoneMotion::default()
+                });
             }
         }
     }

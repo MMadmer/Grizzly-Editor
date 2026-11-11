@@ -65,7 +65,11 @@ mod tests {
         files.insert("system.ltx".to_owned(), parse_file(text, Dialect::Editor));
         let ltx = Ltx::assemble_map("system.ltx", &files, Dialect::Editor).unwrap().ltx;
         let got = sections(&ltx);
-        let names: Vec<(&str, &str, &str)> = got.iter().map(|s| (s.section.as_str(), s.group.as_str(), s.class.as_str())).collect();
-        assert_eq!(names, [("child", "weapons\\pistols\\pm", "WP_PM"), ("wpn_pm", "weapons\\pistols\\pm", "WP_PM")]);
+        let names: Vec<(&str, &str, &str)> =
+            got.iter().map(|s| (s.section.as_str(), s.group.as_str(), s.class.as_str())).collect();
+        assert_eq!(
+            names,
+            [("child", "weapons\\pistols\\pm", "WP_PM"), ("wpn_pm", "weapons\\pistols\\pm", "WP_PM")]
+        );
     }
 }

@@ -155,7 +155,10 @@ impl GameLink {
         let value = self
             .language
             .fresh(&(), rev, move || {
-                let text = files.read("configs/localization.ltx").map(|b| gz_base::text::cp1251_to_utf8(&b).into_owned()).unwrap_or_default();
+                let text = files
+                    .read("configs/localization.ltx")
+                    .map(|b| gz_base::text::cp1251_to_utf8(&b).into_owned())
+                    .unwrap_or_default();
                 strings::language(&text)
             })
             .await;
@@ -180,8 +183,11 @@ impl GameLink {
             strings::order(&mut names);
             let refs: Vec<&str> = names.iter().map(String::as_str).collect();
             let bytes = exec.io_pool().install(|| files.read_many(&refs));
-            let texts: Vec<(String, String)> =
-                names.iter().zip(bytes).filter_map(|(n, b)| b.ok().map(|b| (n.clone(), gz_fmt_xml::decode(&b).into_owned()))).collect();
+            let texts: Vec<(String, String)> = names
+                .iter()
+                .zip(bytes)
+                .filter_map(|(n, b)| b.ok().map(|b| (n.clone(), gz_fmt_xml::decode(&b).into_owned())))
+                .collect();
             let pairs: Vec<(&str, &str)> = texts.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
             Ok(Arc::new(StringTable::build(&pairs, mode).0))
         })
@@ -191,9 +197,14 @@ impl GameLink {
     /// The UI texture descriptions (`configs\ui\textures_descr\*.xml`): `id -> (sheet, rect)`.
     pub async fn texture_sheets(&self) -> Result<Arc<TextureSheets>, GameError> {
         self.derive(&self.sheets, (), |files, exec| {
-            let paths: Vec<&str> = files.find("configs/ui/textures_descr", "xml").into_iter().map(|f| f.path).collect();
+            let paths: Vec<&str> =
+                files.find("configs/ui/textures_descr", "xml").into_iter().map(|f| f.path).collect();
             let bytes = exec.io_pool().install(|| files.read_many(&paths));
-            let texts: Vec<String> = bytes.into_iter().filter_map(Result::ok).map(|b| gz_fmt_xml::decode(&b).into_owned()).collect();
+            let texts: Vec<String> = bytes
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(|b| gz_fmt_xml::decode(&b).into_owned())
+                .collect();
             let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
             Ok(Arc::new(TextureSheets::build(&refs)))
         })
@@ -230,7 +241,9 @@ impl GameLink {
             .version
             .fresh(&(), self.rev(), move || {
                 let exe = std::path::Path::new(&root).join("xrEngine.exe");
-                exec.io_pool().install(|| std::fs::read(exe).ok()).and_then(|bytes| version::exe_version(&bytes))
+                exec.io_pool()
+                    .install(|| std::fs::read(exe).ok())
+                    .and_then(|bytes| version::exe_version(&bytes))
             })
             .await;
         value.as_ref().clone()
@@ -276,7 +289,13 @@ impl Bundled {
         let value = self
             .configs
             .fresh(&(), Rev::ZERO, move || {
-                configs::load_tree(&source, SYSTEM_LTX, Some(exec.io_pool()), "the editor has no gamedata\\configs\\system.ltx").map(Arc::new)
+                configs::load_tree(
+                    &source,
+                    SYSTEM_LTX,
+                    Some(exec.io_pool()),
+                    "the editor has no gamedata\\configs\\system.ltx",
+                )
+                .map(Arc::new)
             })
             .await;
         value.as_ref().clone().map_err(GameError::Read)

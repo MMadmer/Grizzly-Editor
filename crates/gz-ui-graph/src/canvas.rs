@@ -8,7 +8,10 @@
 use std::sync::Arc;
 
 use egui::epaint::{CubicBezierShape, Mesh, PathShape};
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Key, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Id, Key, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke,
+    StrokeKind, Ui, Vec2, pos2, vec2,
+};
 use gz_luadata::Value;
 use gz_nq::asset::{self, Graph, Node};
 use gz_nq::catalog::{USE_EXTRA, USE_MAIN, USE_TRIGGER};
@@ -85,6 +88,8 @@ impl ViewMirror {
 }
 
 /// What the canvas asks of the tab.
+// a few per frame at most, consumed at once: the size of a document op costs nothing
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
     /// A command of the document (content or view).
@@ -135,11 +140,25 @@ struct ActDrag {
 #[derive(Clone, Debug, PartialEq)]
 enum Menu {
     Node(SmolStr),
-    Action { node: SmolStr, exit: bool, index: usize },
-    Link { from: SmolStr, pin: SmolStr, to: SmolStr },
+    Action {
+        node: SmolStr,
+        exit: bool,
+        index: usize,
+    },
+    Link {
+        from: SmolStr,
+        pin: SmolStr,
+        to: SmolStr,
+    },
     /// Add a node at a world point; `link` wires it from a pin.
-    AddNode { at: [f32; 2], link: Option<(SmolStr, SmolStr)> },
-    AddAction { node: SmolStr, exit: bool },
+    AddNode {
+        at: [f32; 2],
+        link: Option<(SmolStr, SmolStr)>,
+    },
+    AddAction {
+        node: SmolStr,
+        exit: bool,
+    },
 }
 
 /// The canvas of one tab.
@@ -348,13 +367,19 @@ impl Canvas {
     #[must_use]
     pub fn to_screen(&self, view: &ViewMirror, w: [f32; 2]) -> Pos2 {
         let s = Self::scale(view);
-        pos2(self.origin.x + self.size.x * 0.5 + (w[0] - view.center[0]) * s, self.origin.y + self.size.y * 0.5 + (w[1] - view.center[1]) * s)
+        pos2(
+            self.origin.x + self.size.x * 0.5 + (w[0] - view.center[0]) * s,
+            self.origin.y + self.size.y * 0.5 + (w[1] - view.center[1]) * s,
+        )
     }
 
     #[must_use]
     pub fn to_world(&self, view: &ViewMirror, p: Pos2) -> [f32; 2] {
         let s = Self::scale(view);
-        [view.center[0] + (p.x - self.origin.x - self.size.x * 0.5) / s, view.center[1] + (p.y - self.origin.y - self.size.y * 0.5) / s]
+        [
+            view.center[0] + (p.x - self.origin.x - self.size.x * 0.5) / s,
+            view.center[1] + (p.y - self.origin.y - self.size.y * 0.5) / s,
+        ]
     }
 
     /// The world rectangle the view shows, `None` before the canvas was measured.
@@ -411,7 +436,10 @@ impl Canvas {
                 view.zoom = z;
                 let p = self.to_screen(view, w);
                 let s = Self::scale(view);
-                view.center = [layout::sane(view.center[0] + (p.x - a.x) / s), layout::sane(view.center[1] + (p.y - a.y) / s)];
+                view.center = [
+                    layout::sane(view.center[0] + (p.x - a.x) / s),
+                    layout::sane(view.center[1] + (p.y - a.y) / s),
+                ];
             }
             None => view.zoom = z,
         }
@@ -445,7 +473,10 @@ impl Canvas {
 
     /// Brings the nearest node beyond an edge into view (`RevealBeyond`).
     fn reveal_beyond(&self, sc: &Scene, view: &mut ViewMirror, side: usize) {
-        let Some(n) = self.beyond_near.get(side).copied().flatten().and_then(|i| sc.nodes.get(i as usize)) else { return };
+        let Some(n) = self.beyond_near.get(side).copied().flatten().and_then(|i| sc.nodes.get(i as usize))
+        else {
+            return;
+        };
         let Some(v) = self.viewport(view) else { return };
         let m = scene::FRAME_MARGIN;
         let (mut dx, mut dy) = (0.0, 0.0);
@@ -563,7 +594,14 @@ impl Canvas {
     }
 
     /// The nearest node within the grab radius of its box, `except` skipped (`HitNodeNear`).
-    fn hit_node_near(&mut self, sc: &Scene, view: &ViewMirror, p: Pos2, except: Option<usize>, grab: f32) -> Option<usize> {
+    fn hit_node_near(
+        &mut self,
+        sc: &Scene,
+        view: &ViewMirror,
+        p: Pos2,
+        except: Option<usize>,
+        grab: f32,
+    ) -> Option<usize> {
         let mut best = f32::MAX;
         let mut hit = None;
         for i in self.candidates(sc, view, p, grab) {
@@ -582,7 +620,14 @@ impl Canvas {
         hit
     }
 
-    fn hit_pin(&self, sc: &Scene, view: &ViewMirror, node: usize, p: Pos2, grab: f32) -> Option<(usize, f32)> {
+    fn hit_pin(
+        &self,
+        sc: &Scene,
+        view: &ViewMirror,
+        node: usize,
+        p: Pos2,
+        grab: f32,
+    ) -> Option<(usize, f32)> {
         let n = sc.nodes.get(node)?;
         let mut best: Option<(usize, f32)> = None;
         for k in 0..n.pins.len() {
@@ -638,7 +683,14 @@ impl Canvas {
 
     /// Where a dragged action would land: the node, the slot (exit?), the index it goes in at,
     /// and the y of the line that shows it (`DropTarget`).
-    fn drop_target(&mut self, sc: &Scene, view: &ViewMirror, g: &Graph, p: Pos2, lod: u8) -> Option<(usize, bool, usize, f32)> {
+    fn drop_target(
+        &mut self,
+        sc: &Scene,
+        view: &ViewMirror,
+        g: &Graph,
+        p: Pos2,
+        lod: u8,
+    ) -> Option<(usize, bool, usize, f32)> {
         let node = self.hit_node(sc, view, p)?;
         let n = sc.nodes.get(node)?;
         if n.trigger || lod < 2 {
@@ -667,12 +719,20 @@ impl Canvas {
     }
 
     /// The screen shape of a link now: its bezier controls or its route.
-    fn link_shape(&self, sc: &Scene, view: &ViewMirror, l: &SceneLink) -> (Pos2, Pos2, Pos2, Pos2, Vec<Pos2>) {
-        let moved = self.moving() && (self.pos_of(sc, l.from as usize) != sc.nodes.get(l.from as usize).map_or([0.0; 2], |n| n.pos)
-            || self.pos_of(sc, l.to as usize) != sc.nodes.get(l.to as usize).map_or([0.0; 2], |n| n.pos));
+    fn link_shape(
+        &self,
+        sc: &Scene,
+        view: &ViewMirror,
+        l: &SceneLink,
+    ) -> (Pos2, Pos2, Pos2, Pos2, Vec<Pos2>) {
+        let moved = self.moving()
+            && (self.pos_of(sc, l.from as usize)
+                != sc.nodes.get(l.from as usize).map_or([0.0; 2], |n| n.pos)
+                || self.pos_of(sc, l.to as usize) != sc.nodes.get(l.to as usize).map_or([0.0; 2], |n| n.pos));
         let (w0, w3, path) = if moved {
             // a dragged end: the edge is laid out again here, against the nodes where they are drawn
-            let (Some(fnode), Some(tnode)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else {
+            let (Some(fnode), Some(tnode)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize))
+            else {
                 return (Pos2::ZERO, Pos2::ZERO, Pos2::ZERO, Pos2::ZERO, Vec::new());
             };
             let pin = fnode.pins.iter().position(|p| *p == l.pin).unwrap_or(0);
@@ -681,10 +741,12 @@ impl Canvas {
             let path = if SceneLink::goes_back(w0, w3) {
                 let boxes: Vec<[f32; 4]> = [l.from as usize, l.to as usize]
                     .iter()
-                    .filter_map(|&i| sc.nodes.get(i).map(|n| {
-                        let p = self.pos_of(sc, i);
-                        [p[0], p[1], p[0] + n.size[0], p[1] + n.size[1]]
-                    }))
+                    .filter_map(|&i| {
+                        sc.nodes.get(i).map(|n| {
+                            let p = self.pos_of(sc, i);
+                            [p[0], p[1], p[0] + n.size[0], p[1] + n.size[1]]
+                        })
+                    })
                     .collect();
                 scene::route_back(&boxes, w0, w3, &mut Vec::new())
             } else {
@@ -798,7 +860,10 @@ impl Canvas {
 
         let lod = Self::lod(cx.view, ppp);
         let Some(sc) = cx.scene else {
-            gz_ui::state::busy_line(&mut ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(16.0))), "Reading the graph");
+            gz_ui::state::busy_line(
+                &mut ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(16.0))),
+                "Reading the graph",
+            );
             return;
         };
         let mouse = ctx.input(|i| i.pointer.hover_pos()).unwrap_or(Pos2::new(-1.0e6, -1.0e6));
@@ -809,7 +874,8 @@ impl Canvas {
         self.draw_grid(&painter, &p, cx.view);
         let view_r = self.viewport(cx.view).unwrap_or([0.0; 4]);
         let pad = 64.0;
-        let links = self.visible_links(sc, [view_r[0] - pad, view_r[1] - pad, view_r[2] + pad, view_r[3] + pad]);
+        let links =
+            self.visible_links(sc, [view_r[0] - pad, view_r[1] - pad, view_r[2] + pad, view_r[3] + pad]);
         self.draw_links(&painter, &p, sc, cx, &links);
         self.draw_linking(&painter, &p, sc, cx.view, mouse);
         self.scratch.clear();
@@ -836,7 +902,13 @@ impl Canvas {
         self.draw_beyond(&painter, &p, sc, cx.view, mouse);
         self.draw_status(&painter, &p, &ctx);
         if sc.nodes.is_empty() {
-            painter.text(rect.center(), Align2::CENTER_CENTER, "Right-click to add a node", Font::Body.id(), p.text_muted);
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "Right-click to add a node",
+                Font::Body.id(),
+                p.text_muted,
+            );
         }
 
         self.handle_input(&ctx, sc, cx, mouse, lod, grab, &resp, menu_up);
@@ -857,7 +929,8 @@ impl Canvas {
         let view = &*cx.view;
         if let Some((from, _)) = &self.linking {
             let from = sc.node_of(from);
-            let node = self.hit_node(sc, view, mouse).or_else(|| self.hit_node_near(sc, view, mouse, from, grab));
+            let node =
+                self.hit_node(sc, view, mouse).or_else(|| self.hit_node_near(sc, view, mouse, from, grab));
             if let Some(n) = node
                 && Some(n) != from
                 && sc.nodes.get(n).is_some_and(|x| !x.trigger)
@@ -866,7 +939,11 @@ impl Canvas {
             }
             return;
         }
-        if self.drag.as_ref().is_some_and(|d| d.moved) || self.marquee.is_some() || self.pan.is_some_and(|(_, m)| m) || self.act_drag.as_ref().is_some_and(|a| a.dragging) {
+        if self.drag.as_ref().is_some_and(|d| d.moved)
+            || self.marquee.is_some()
+            || self.pan.is_some_and(|(_, m)| m)
+            || self.act_drag.as_ref().is_some_and(|a| a.dragging)
+        {
             return;
         }
         let mut best = f32::MAX;
@@ -943,7 +1020,8 @@ impl Canvas {
         let base = (2.0 * s).max(1.0);
         for &i in links {
             let Some(l) = sc.links.get(i) else { continue };
-            let sel = sc.nodes.get(l.from as usize).is_some_and(|n| cx.view.is_selected(&n.id)) || sc.nodes.get(l.to as usize).is_some_and(|n| cx.view.is_selected(&n.id));
+            let sel = sc.nodes.get(l.from as usize).is_some_and(|n| cx.view.is_selected(&n.id))
+                || sc.nodes.get(l.to as usize).is_some_and(|n| cx.view.is_selected(&n.id));
             let hot = self.hot_link == Some(i);
             let col = if hot {
                 p.text
@@ -955,7 +1033,12 @@ impl Canvas {
             let (p0, p1, p2, p3, path) = self.link_shape(sc, cx.view, l);
             let stroke = |c: Color32, w: f32| {
                 if path.is_empty() {
-                    painter.add(Shape::CubicBezier(CubicBezierShape::from_points_stroke([p0, p1, p2, p3], false, Color32::TRANSPARENT, Stroke::new(w, c))));
+                    painter.add(Shape::CubicBezier(CubicBezierShape::from_points_stroke(
+                        [p0, p1, p2, p3],
+                        false,
+                        Color32::TRANSPARENT,
+                        Stroke::new(w, c),
+                    )));
                 } else {
                     painter.add(Shape::Path(PathShape::line(path.clone(), Stroke::new(w, c))));
                 }
@@ -986,7 +1069,9 @@ impl Canvas {
     fn draw_linking(&self, painter: &Painter, p: &Palette, sc: &Scene, view: &ViewMirror, mouse: Pos2) {
         let Some((from, pin)) = &self.linking else { return };
         let Some(i) = sc.node_of(from) else { return };
-        let Some(k) = sc.nodes.get(i).and_then(|n| n.pins.iter().position(|x| x == pin.as_str())) else { return };
+        let Some(k) = sc.nodes.get(i).and_then(|n| n.pins.iter().position(|x| x == pin.as_str())) else {
+            return;
+        };
         let p0 = self.output_pin(sc, view, i, k);
         let d = (scene::LINK_TANGENT * Self::scale(view)).max((mouse.y - p0.y).abs() * 0.4);
         painter.add(Shape::CubicBezier(CubicBezierShape::from_points_stroke(
@@ -998,7 +1083,17 @@ impl Canvas {
     }
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn draw_node(&mut self, painter: &Painter, p: &Palette, sc: &Scene, cx: &CanvasCx<'_>, i: usize, lod: u8, mouse: Pos2, ppp: f32) {
+    fn draw_node(
+        &mut self,
+        painter: &Painter,
+        p: &Palette,
+        sc: &Scene,
+        cx: &CanvasCx<'_>,
+        i: usize,
+        lod: u8,
+        mouse: Pos2,
+        ppp: f32,
+    ) {
         let Some(n) = sc.nodes.get(i) else { return };
         let view = &*cx.view;
         let s = Self::scale(view);
@@ -1011,7 +1106,11 @@ impl Canvas {
         let rnd = (if n.trigger { HEADER * 0.5 } else { 6.0 }) * s;
         let header_only = n.b.h <= HEADER + PAD + 0.5;
         let hb = pos2(b.x, if header_only { b.y } else { a.y + header });
-        let head_corners = if header_only { radius(rnd) } else { CornerRadius { nw: radius(rnd).nw, ne: radius(rnd).ne, sw: 0, se: 0 } };
+        let head_corners = if header_only {
+            radius(rnd)
+        } else {
+            CornerRadius { nw: radius(rnd).nw, ne: radius(rnd).ne, sw: 0, se: 0 }
+        };
         let fam = |f: Family, k: f32| look::family_color(p, f, k);
 
         // the card: body, header tinted by the family, the family line under it
@@ -1020,7 +1119,10 @@ impl Canvas {
         painter.rect_filled(head, head_corners, Palette::alpha(p.hover, alpha));
         painter.rect_filled(head, head_corners, fam(n.family, 0.20 * alpha));
         if !header_only {
-            painter.line_segment([pos2(a.x + rnd * 0.5, hb.y), pos2(b.x - rnd * 0.5, hb.y)], Stroke::new((2.0 * s).max(1.0), fam(n.family, alpha)));
+            painter.line_segment(
+                [pos2(a.x + rnd * 0.5, hb.y), pos2(b.x - rnd * 0.5, hb.y)],
+                Stroke::new((2.0 * s).max(1.0), fam(n.family, alpha)),
+            );
         }
 
         let small = Self::font(Font::Small, SMALL_PT, view, ppp);
@@ -1032,37 +1134,68 @@ impl Canvas {
             let mut right = b.x - inset;
             if lod == 2 {
                 let icon = 16.0 * s;
-                icons::draw(painter, n.icon, Rect::from_min_size(pos2(x, cy - icon * 0.5), Vec2::splat(icon)), fam(n.family, alpha));
+                icons::draw(
+                    painter,
+                    n.icon,
+                    Rect::from_min_size(pos2(x, cy - icon * 0.5), Vec2::splat(icon)),
+                    fam(n.family, alpha),
+                );
                 x += icon + 6.0 * s;
                 // badges from the right: problems, the bookmark, "once"
                 let badge = 14.0 * s;
                 if let Some((sev, msg)) = cx.data.severity(&n.id) {
                     let bm = Rect::from_min_size(pos2(right - badge, cy - badge * 0.5), Vec2::splat(badge));
-                    icons::draw(painter, if *sev == 2 { Icon::Error } else { Icon::Warning }, bm, Palette::alpha(if *sev == 2 { p.error } else { p.warning }, alpha));
+                    icons::draw(
+                        painter,
+                        if *sev == 2 { Icon::Error } else { Icon::Warning },
+                        bm,
+                        Palette::alpha(if *sev == 2 { p.error } else { p.warning }, alpha),
+                    );
                     if self.hovered && bm.contains(mouse) {
                         msg.clone_into(&mut self.tip);
                     }
                     right -= badge + 4.0 * s;
                 }
-                if cx.bookmarks.iter().any(|b| *b == n.id) {
+                if cx.bookmarks.contains(&n.id) {
                     let bm = Rect::from_min_size(pos2(right - badge, cy - badge * 0.5), Vec2::splat(badge));
                     icons::draw(painter, Icon::BookmarkFilled, bm, Palette::alpha(p.accent_bright, alpha));
                     right -= badge + 4.0 * s;
                 }
                 if n.once {
                     let tw = gz_ui::text::width(painter.ctx(), &small, "once");
-                    painter.text(pos2(right - tw, cy), Align2::LEFT_CENTER, "once", small.clone(), Palette::alpha(p.text_muted, alpha));
+                    painter.text(
+                        pos2(right - tw, cy),
+                        Align2::LEFT_CENTER,
+                        "once",
+                        small.clone(),
+                        Palette::alpha(p.text_muted, alpha),
+                    );
                     right -= tw + 6.0 * s;
                 }
                 // the id gets what the title leaves, and never more than 40% of the row
                 let room = (right - x).max(0.0);
                 let title_w = gz_ui::text::width(painter.ctx(), &strong, &n.title);
-                let id_w = gz_ui::text::width(painter.ctx(), &small, &n.id).min((room - title_w - 8.0 * s).max(room * 0.4));
+                let id_w = gz_ui::text::width(painter.ctx(), &small, &n.id)
+                    .min((room - title_w - 8.0 * s).max(room * 0.4));
                 let line_px = small.size / 0.75;
                 if id_w > line_px * 1.5 {
-                    paint_fit(painter, &small, pos2(right - id_w, cy), Palette::alpha(p.text_muted, alpha), &n.id, id_w);
+                    paint_fit(
+                        painter,
+                        &small,
+                        pos2(right - id_w, cy),
+                        Palette::alpha(p.text_muted, alpha),
+                        &n.id,
+                        id_w,
+                    );
                 }
-                paint_fit(painter, &strong, pos2(x, cy), Palette::alpha(p.text, alpha), &n.title, if id_w > line_px * 1.5 { room - id_w - 8.0 * s } else { room });
+                paint_fit(
+                    painter,
+                    &strong,
+                    pos2(x, cy),
+                    Palette::alpha(p.text, alpha),
+                    &n.title,
+                    if id_w > line_px * 1.5 { room - id_w - 8.0 * s } else { room },
+                );
             } else {
                 paint_fit(painter, &strong, pos2(x, cy), Palette::alpha(p.text, alpha), &n.title, right - x);
             }
@@ -1076,7 +1209,14 @@ impl Canvas {
             for (k, line) in n.lines.iter().take(n.b.lines).enumerate() {
                 let ly = a.y + (n.b.lines_y + LINE * k as f32 + LINE * 0.5) * s;
                 if line.key.is_empty() {
-                    paint_fit(painter, &small, pos2(a.x + inset, ly), Palette::alpha(p.text_secondary, alpha), &line.value, inner);
+                    paint_fit(
+                        painter,
+                        &small,
+                        pos2(a.x + inset, ly),
+                        Palette::alpha(p.text_secondary, alpha),
+                        &line.value,
+                        inner,
+                    );
                     continue;
                 }
                 // a parameter reads "name: value", a condition "Title what"
@@ -1088,9 +1228,23 @@ impl Canvas {
                 } else {
                     0.6
                 };
-                let kw = paint_fit(painter, &body, pos2(a.x + inset, ly), Palette::alpha(p.text_muted, alpha), &key, inner * share);
+                let kw = paint_fit(
+                    painter,
+                    &body,
+                    pos2(a.x + inset, ly),
+                    Palette::alpha(p.text_muted, alpha),
+                    &key,
+                    inner * share,
+                );
                 let vx = a.x + inset + kw + 6.0 * s;
-                paint_fit(painter, &body, pos2(vx, ly), Palette::alpha(p.text, alpha), &line.value, b.x - inset - vx);
+                paint_fit(
+                    painter,
+                    &body,
+                    pos2(vx, ly),
+                    Palette::alpha(p.text, alpha),
+                    &line.value,
+                    b.x - inset - vx,
+                );
             }
             if n.b.actions > 0 {
                 self.draw_actions(painter, p, n, cx, i, a, alpha, &body, &small);
@@ -1100,11 +1254,25 @@ impl Canvas {
             let inset = INSET * s;
             for k in 0..n.b.lines {
                 let ly = a.y + (n.b.lines_y + LINE * (k as f32 + 0.3)) * s;
-                painter.rect_filled(Rect::from_min_size(pos2(a.x + inset, ly), vec2((n.size[0] * s - inset * 2.0) * 0.6, LINE * 0.4 * s)), radius(2.0 * s), bar);
+                painter.rect_filled(
+                    Rect::from_min_size(
+                        pos2(a.x + inset, ly),
+                        vec2((n.size[0] * s - inset * 2.0) * 0.6, LINE * 0.4 * s),
+                    ),
+                    radius(2.0 * s),
+                    bar,
+                );
             }
             for k in 0..n.b.action_rows {
                 let ly = a.y + (n.b.actions_y + ACTION_ROW * (k as f32 + 0.3)) * s;
-                painter.rect_filled(Rect::from_min_size(pos2(a.x + inset, ly), vec2((n.size[0] * s - inset * 2.0) * 0.8, ACTION_ROW * 0.4 * s)), radius(2.0 * s), bar);
+                painter.rect_filled(
+                    Rect::from_min_size(
+                        pos2(a.x + inset, ly),
+                        vec2((n.size[0] * s - inset * 2.0) * 0.8, ACTION_ROW * 0.4 * s),
+                    ),
+                    radius(2.0 * s),
+                    bar,
+                );
             }
         }
 
@@ -1127,15 +1295,30 @@ impl Canvas {
             let hot = self.linking.as_ref().is_some_and(|(f, pn)| *f == n.id && pn == pin);
             let over = self.hot_node == Some(i) && self.hot_pin == Some(k);
             if lod == 2 && n.b.pin_labels {
-                let (shown, _) = gz_ui::text::ellipsize(painter.ctx(), &small, pin, slot_w - 4.0 * s, gz_ui::Clip::End);
+                let (shown, _) =
+                    gz_ui::text::ellipsize(painter.ctx(), &small, pin, slot_w - 4.0 * s, gz_ui::Clip::End);
                 let ly = a.y + (n.b.pins_y + PIN_ROW * 0.5) * s;
-                painter.text(pos2(c.x, ly), Align2::CENTER_CENTER, shown, small.clone(), if hot || over { Palette::alpha(p.accent_bright, alpha) } else { Palette::alpha(p.text_secondary, alpha) });
+                painter.text(
+                    pos2(c.x, ly),
+                    Align2::CENTER_CENTER,
+                    shown,
+                    small.clone(),
+                    if hot || over {
+                        Palette::alpha(p.accent_bright, alpha)
+                    } else {
+                        Palette::alpha(p.text_secondary, alpha)
+                    },
+                );
             }
             if over {
                 painter.circle_filled(c, halo, Palette::alpha(p.accent_bright, 0.15));
             }
             let rr = if over { pr * 1.4 } else { pr };
-            painter.circle_filled(c, rr, if hot || over { p.accent_bright } else { Palette::alpha(p.text_secondary, alpha) });
+            painter.circle_filled(
+                c,
+                rr,
+                if hot || over { p.accent_bright } else { Palette::alpha(p.text_secondary, alpha) },
+            );
             painter.circle_stroke(c, rr, Stroke::new(1.0, p.canvas));
         }
         if !n.trigger {
@@ -1145,13 +1328,28 @@ impl Canvas {
                 painter.circle_filled(c, halo, Palette::alpha(p.accent_bright, 0.15));
             }
             let rr = if over { pr * 1.4 } else { pr };
-            painter.circle_filled(c, rr, if over { p.accent_bright } else { Palette::alpha(p.text_secondary, alpha) });
+            painter.circle_filled(
+                c,
+                rr,
+                if over { p.accent_bright } else { Palette::alpha(p.text_secondary, alpha) },
+            );
             painter.circle_stroke(c, rr, Stroke::new(1.0, p.canvas));
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw_actions(&self, painter: &Painter, p: &Palette, n: &SceneNode, cx: &CanvasCx<'_>, index: usize, a: Pos2, alpha: f32, body: &FontId, small: &FontId) {
+    fn draw_actions(
+        &self,
+        painter: &Painter,
+        p: &Palette,
+        n: &SceneNode,
+        cx: &CanvasCx<'_>,
+        index: usize,
+        a: Pos2,
+        alpha: f32,
+        body: &FontId,
+        small: &FontId,
+    ) {
         let view = &*cx.view;
         let s = Self::scale(view);
         let w = n.size[0] * s;
@@ -1160,7 +1358,10 @@ impl Canvas {
         let inset = INSET * s;
         let one_selected = view.is_selected(&n.id) && view.selection.len() == 1;
         if n.b.lines > 0 {
-            painter.line_segment([pos2(a.x + inset, y0 - PAD * 0.5 * s), pos2(a.x + w - inset, y0 - PAD * 0.5 * s)], Stroke::new(1.0, Palette::alpha(p.border_subtle, alpha)));
+            painter.line_segment(
+                [pos2(a.x + inset, y0 - PAD * 0.5 * s), pos2(a.x + w - inset, y0 - PAD * 0.5 * s)],
+                Stroke::new(1.0, Palette::alpha(p.border_subtle, alpha)),
+            );
         }
         for (r, act) in n.actions.iter().enumerate() {
             let ra = pos2(a.x + 3.0 * s, y0 + row_h * r as f32);
@@ -1168,40 +1369,77 @@ impl Canvas {
             let row = Rect::from_min_max(ra, rb);
             let selected = one_selected && view.slot == format!("{}:{}", slot_name(act.exit), act.index);
             let hot = self.hot_action.is_some_and(|h| h.node == index && h.row == r && !h.more);
-            let dragged = self.act_drag.as_ref().is_some_and(|d| d.dragging && d.node == n.id && d.exit == act.exit && d.index == act.index);
+            let dragged = self
+                .act_drag
+                .as_ref()
+                .is_some_and(|d| d.dragging && d.node == n.id && d.exit == act.exit && d.index == act.index);
             if selected {
                 painter.rect_filled(row, radius(3.0 * s), Palette::alpha(p.selection_focused, alpha));
             } else if hot {
                 painter.rect_filled(row, radius(3.0 * s), Palette::alpha(p.hover, alpha));
             }
             if dragged {
-                painter.rect_stroke(row, radius(3.0 * s), Stroke::new((1.5 * s).max(1.0), p.accent_bright), StrokeKind::Inside);
+                painter.rect_stroke(
+                    row,
+                    radius(3.0 * s),
+                    Stroke::new((1.5 * s).max(1.0), p.accent_bright),
+                    StrokeKind::Inside,
+                );
             }
             let mut x = a.x + inset;
             let icon = 14.0 * s;
             let cy = row.center().y;
-            icons::draw(painter, act.icon, Rect::from_min_size(pos2(x, cy - icon * 0.5), Vec2::splat(icon)), look::family_color(p, act.family, alpha));
+            icons::draw(
+                painter,
+                act.icon,
+                Rect::from_min_size(pos2(x, cy - icon * 0.5), Vec2::splat(icon)),
+                look::family_color(p, act.family, alpha),
+            );
             x += icon + 6.0 * s;
             let mut right = a.x + w - inset;
             if act.exit {
                 let tw = gz_ui::text::width(painter.ctx(), small, "exit");
-                painter.text(pos2(right - tw, cy), Align2::LEFT_CENTER, "exit", small.clone(), Palette::alpha(p.text_muted, alpha));
+                painter.text(
+                    pos2(right - tw, cy),
+                    Align2::LEFT_CENTER,
+                    "exit",
+                    small.clone(),
+                    Palette::alpha(p.text_muted, alpha),
+                );
                 right -= tw + 6.0 * s;
             }
-            let tw = paint_fit(painter, body, pos2(x, cy), Palette::alpha(p.text, alpha), &act.title, right - x);
+            let tw =
+                paint_fit(painter, body, pos2(x, cy), Palette::alpha(p.text, alpha), &act.title, right - x);
             let sx = x + tw + 6.0 * s;
             if right - sx > body.size / 0.75 * 3.0 {
-                paint_fit(painter, body, pos2(sx, cy), Palette::alpha(p.text_muted, alpha), &act.summary, right - sx);
+                paint_fit(
+                    painter,
+                    body,
+                    pos2(sx, cy),
+                    Palette::alpha(p.text_muted, alpha),
+                    &act.summary,
+                    right - sx,
+                );
             }
         }
         if n.b.more {
             let top = y0 + row_h * n.b.action_rows as f32;
             let hot = self.hot_action.is_some_and(|h| h.node == index && h.more);
             if hot {
-                painter.rect_filled(Rect::from_min_max(pos2(a.x + 3.0 * s, top), pos2(a.x + w - 3.0 * s, top + row_h)), radius(3.0 * s), Palette::alpha(p.hover, alpha));
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(a.x + 3.0 * s, top), pos2(a.x + w - 3.0 * s, top + row_h)),
+                    radius(3.0 * s),
+                    Palette::alpha(p.hover, alpha),
+                );
             }
             let more = format!("+{} more", n.b.actions - n.b.action_rows);
-            painter.text(pos2(a.x + inset, top + row_h * 0.5), Align2::LEFT_CENTER, more, small.clone(), Palette::alpha(p.text_secondary, alpha));
+            painter.text(
+                pos2(a.x + inset, top + row_h * 0.5),
+                Align2::LEFT_CENTER,
+                more,
+                small.clone(),
+                Palette::alpha(p.text_secondary, alpha),
+            );
         }
     }
 
@@ -1209,10 +1447,23 @@ impl Canvas {
         let Some(from) = self.marquee else { return };
         let r = Rect::from_two_pos(from, mouse);
         painter.rect_filled(r, CornerRadius::ZERO, Palette::alpha(p.accent_bright, 0.12));
-        painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Palette::alpha(p.accent_bright, 0.8)), StrokeKind::Inside);
+        painter.rect_stroke(
+            r,
+            CornerRadius::ZERO,
+            Stroke::new(1.0, Palette::alpha(p.accent_bright, 0.8)),
+            StrokeKind::Inside,
+        );
     }
 
-    fn draw_action_drag(&mut self, painter: &Painter, p: &Palette, sc: &Scene, cx: &CanvasCx<'_>, mouse: Pos2, lod: u8) {
+    fn draw_action_drag(
+        &mut self,
+        painter: &Painter,
+        p: &Palette,
+        sc: &Scene,
+        cx: &CanvasCx<'_>,
+        mouse: Pos2,
+        lod: u8,
+    ) {
         let Some(d) = self.act_drag.clone().filter(|d| d.dragging) else { return };
         let Some(gn) = cx.graph.find_node(&d.node) else { return };
         let list = if d.exit { &gn.on_exit } else { &gn.on_enter };
@@ -1221,17 +1472,37 @@ impl Canvas {
         if let Some((node, _, _, line)) = target {
             let r = self.rect_of(sc, cx.view, node);
             let s = Self::scale(cx.view);
-            painter.line_segment([pos2(r.min.x + 4.0 * s, line), pos2(r.max.x - 4.0 * s, line)], Stroke::new(2.0, p.accent_bright));
+            painter.line_segment(
+                [pos2(r.min.x + 4.0 * s, line), pos2(r.max.x - 4.0 * s, line)],
+                Stroke::new(2.0, p.accent_bright),
+            );
         }
         // red over anything that is not a place for it: releasing there cancels the move
         let title = look::kind_title(cx.catalog, &act.kind, cx.graph.is_behaviour());
         let w = gz_ui::text::width(painter.ctx(), &Font::Body.id(), &title).min(200.0) + 34.0;
         let pill = Rect::from_min_size(pos2(mouse.x + 12.0, mouse.y + 4.0), vec2(w, 24.0));
         painter.rect_filled(pill, CornerRadius::same(4), Palette::alpha(p.overlay, 0.95));
-        painter.rect_stroke(pill, CornerRadius::same(4), Stroke::new(1.0, if target.is_some() { p.accent_bright } else { p.error }), StrokeKind::Inside);
+        painter.rect_stroke(
+            pill,
+            CornerRadius::same(4),
+            Stroke::new(1.0, if target.is_some() { p.accent_bright } else { p.error }),
+            StrokeKind::Inside,
+        );
         let icon = look::kind_icon(cx.catalog, &act.kind);
-        icons::draw(painter, icon, Rect::from_min_size(pos2(pill.min.x + 6.0, pill.center().y - 7.0), Vec2::splat(14.0)), look::family_color(p, look::family_of(icon), 1.0));
-        paint_fit(painter, &Font::Body.id(), pos2(pill.min.x + 26.0, pill.center().y), p.text, &title, w - 32.0);
+        icons::draw(
+            painter,
+            icon,
+            Rect::from_min_size(pos2(pill.min.x + 6.0, pill.center().y - 7.0), Vec2::splat(14.0)),
+            look::family_color(p, look::family_of(icon), 1.0),
+        );
+        paint_fit(
+            painter,
+            &Font::Body.id(),
+            pos2(pill.min.x + 26.0, pill.center().y),
+            p.text,
+            &title,
+            w - 32.0,
+        );
     }
 
     /// 180 x 120 pt in the bottom-right corner, only for a graph big enough to get lost in
@@ -1270,7 +1541,12 @@ impl Canvas {
         for id in &cx.view.selection {
             if let Some(n) = sc.node_of(id).and_then(|i| sc.nodes.get(i)) {
                 let r = Rect::from_min_max(local(n.pos), local(add(n.pos, n.size)));
-                painter.rect_stroke(r.expand(0.5), CornerRadius::same(1), Stroke::new(1.5, p.text), StrokeKind::Outside);
+                painter.rect_stroke(
+                    r.expand(0.5),
+                    CornerRadius::same(1),
+                    Stroke::new(1.5, p.text),
+                    StrokeKind::Outside,
+                );
             }
         }
         for id in cx.bookmarks {
@@ -1279,14 +1555,25 @@ impl Canvas {
             }
             if let Some(n) = sc.node_of(id).and_then(|i| sc.nodes.get(i)) {
                 let r = Rect::from_min_max(local(n.pos), local(add(n.pos, n.size)));
-                painter.rect_stroke(r.expand(0.5), CornerRadius::same(1), Stroke::new(1.5, p.accent_bright), StrokeKind::Outside);
+                painter.rect_stroke(
+                    r.expand(0.5),
+                    CornerRadius::same(1),
+                    Stroke::new(1.5, p.accent_bright),
+                    StrokeKind::Outside,
+                );
             }
         }
         if let Some(v) = self.viewport(cx.view) {
             let fitted = mm.fitted.translate(bmin.to_vec2());
-            let clamp = |q: Pos2| pos2(q.x.clamp(fitted.min.x, fitted.max.x), q.y.clamp(fitted.min.y, fitted.max.y));
+            let clamp =
+                |q: Pos2| pos2(q.x.clamp(fitted.min.x, fitted.max.x), q.y.clamp(fitted.min.y, fitted.max.y));
             let vr = Rect::from_min_max(clamp(local([v[0], v[1]])), clamp(local([v[2], v[3]])));
-            painter.rect_stroke(vr, CornerRadius::ZERO, Stroke::new(1.5, p.accent_bright), StrokeKind::Middle);
+            painter.rect_stroke(
+                vr,
+                CornerRadius::ZERO,
+                Stroke::new(1.5, p.accent_bright),
+                StrokeKind::Middle,
+            );
         }
         self.minimap_hovered = self.hovered && boxr.contains(mouse);
         if self.minimap_hovered {
@@ -1339,13 +1626,33 @@ impl Canvas {
             if hot {
                 painter.rect_filled(r, CornerRadius::same(6), p.hover);
             }
-            painter.rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, p.border_subtle), StrokeKind::Inside);
+            painter.rect_stroke(
+                r,
+                CornerRadius::same(6),
+                Stroke::new(1.0, p.border_subtle),
+                StrokeKind::Inside,
+            );
             if let Some(ic) = ICONS.get(side) {
-                icons::draw(painter, *ic, Rect::from_min_size(pos2(r.min.x + padx, r.center().y - icon * 0.5), Vec2::splat(icon)), p.text_secondary);
+                icons::draw(
+                    painter,
+                    *ic,
+                    Rect::from_min_size(pos2(r.min.x + padx, r.center().y - icon * 0.5), Vec2::splat(icon)),
+                    p.text_secondary,
+                );
             }
-            painter.text(pos2(r.min.x + padx + icon + 4.0, r.center().y), Align2::LEFT_CENTER, label, font.clone(), p.text_secondary);
+            painter.text(
+                pos2(r.min.x + padx + icon + 4.0, r.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                font.clone(),
+                p.text_secondary,
+            );
             if hot {
-                self.tip = format!("{count} {} {} the view. Click to bring the nearest one in", if count == 1 { "node" } else { "nodes" }, WHERE.get(side).copied().unwrap_or(""));
+                self.tip = format!(
+                    "{count} {} {} the view. Click to bring the nearest one in",
+                    if count == 1 { "node" } else { "nodes" },
+                    WHERE.get(side).copied().unwrap_or("")
+                );
             }
         }
     }
@@ -1361,7 +1668,8 @@ impl Canvas {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
         let font = Font::Body.id();
-        let (shown, _) = gz_ui::text::ellipsize(ctx, &font, &self.status, self.size.x - 40.0, gz_ui::Clip::End);
+        let (shown, _) =
+            gz_ui::text::ellipsize(ctx, &font, &self.status, self.size.x - 40.0, gz_ui::Clip::End);
         let w = gz_ui::text::width(ctx, &font, &shown);
         let r = Rect::from_min_size(self.origin + vec2(8.0, 8.0), vec2(w + 20.0, Font::Body.line() + 8.0));
         painter.rect_filled(r, CornerRadius::same(6), Palette::alpha(p.overlay, 0.92));
@@ -1372,8 +1680,31 @@ impl Canvas {
     // ---- input --------------------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn handle_input(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>, mouse: Pos2, lod: u8, grab: f32, resp: &egui::Response, menu_up: bool) {
-        let (pressed, down, released, sec_pressed, sec_down, sec_released, mid_down, delta, mods, wheel, double, now) = ctx.input(|i| {
+    fn handle_input(
+        &mut self,
+        ctx: &egui::Context,
+        sc: &Scene,
+        cx: &mut CanvasCx<'_>,
+        mouse: Pos2,
+        lod: u8,
+        grab: f32,
+        resp: &egui::Response,
+        menu_up: bool,
+    ) {
+        let (
+            pressed,
+            down,
+            released,
+            sec_pressed,
+            sec_down,
+            sec_released,
+            mid_down,
+            delta,
+            mods,
+            wheel,
+            double,
+            now,
+        ) = ctx.input(|i| {
             (
                 i.pointer.primary_pressed(),
                 i.pointer.primary_down(),
@@ -1384,7 +1715,13 @@ impl Canvas {
                 i.pointer.button_down(PointerButton::Middle),
                 i.pointer.delta(),
                 i.modifiers,
-                i.events.iter().map(|e| match e { egui::Event::MouseWheel { delta, .. } => delta.y, _ => 0.0 }).sum::<f32>(),
+                i.events
+                    .iter()
+                    .map(|e| match e {
+                        egui::Event::MouseWheel { delta, .. } => delta.y,
+                        _ => 0.0,
+                    })
+                    .sum::<f32>(),
                 i.pointer.button_double_clicked(PointerButton::Primary),
                 i.time,
             )
@@ -1404,7 +1741,10 @@ impl Canvas {
         if self.minimap_panning {
             if down {
                 if let Some(mm) = &sc.minimap {
-                    let bmin = pos2(self.origin.x + self.size.x - 8.0 - MINIMAP_W, self.origin.y + self.size.y - 8.0 - MINIMAP_H);
+                    let bmin = pos2(
+                        self.origin.x + self.size.x - 8.0 - MINIMAP_W,
+                        self.origin.y + self.size.y - 8.0 - MINIMAP_H,
+                    );
                     let w = mm.to_world(mouse - bmin.to_vec2());
                     cx.view.center = [layout::sane(w[0]), layout::sane(w[1])];
                     self.cancel_framing();
@@ -1484,7 +1824,13 @@ impl Canvas {
                             self.want_focus_action = true;
                         } else if let Some(row) = sn.action_at(hit.row) {
                             cx.view.slot = format!("{}:{}", slot_name(row.exit), row.index);
-                            self.act_drag = Some(ActDrag { node: sn.id.clone(), exit: row.exit, index: row.index, start: mouse, dragging: false });
+                            self.act_drag = Some(ActDrag {
+                                node: sn.id.clone(),
+                                exit: row.exit,
+                                index: row.index,
+                                start: mouse,
+                                dragging: false,
+                            });
                             if double {
                                 self.want_focus_action = true;
                             }
@@ -1501,8 +1847,12 @@ impl Canvas {
                         } else {
                             cx.view.slot.clear();
                         }
-                        let nodes: Vec<(usize, SmolStr, [f32; 2])> =
-                            cx.view.selection.iter().filter_map(|s| sc.node_of(s).map(|i| (i, s.clone(), self.pos_of(sc, i)))).collect();
+                        let nodes: Vec<(usize, SmolStr, [f32; 2])> = cx
+                            .view
+                            .selection
+                            .iter()
+                            .filter_map(|s| sc.node_of(s).map(|i| (i, s.clone(), self.pos_of(sc, i))))
+                            .collect();
                         self.drag = Some(Drag { nodes, start: mouse, moved: false, delta: [0.0, 0.0] });
                     }
                 }
@@ -1589,13 +1939,20 @@ impl Canvas {
 
         // what the view does is the document's once the gesture is over
         let wheel_busy = now - self.last_wheel < WHEEL_SETTLE;
-        self.view_moving = self.pan.is_some_and(|(_, m)| m) || self.middle_pan || self.minimap_panning || wheel_busy;
+        self.view_moving =
+            self.pan.is_some_and(|(_, m)| m) || self.middle_pan || self.minimap_panning || wheel_busy;
         if wheel_busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         // what the cursor is on, said on hover
-        if hovered && self.tip.is_empty() && self.drag.is_none() && self.linking.is_none() && self.marquee.is_none() && self.act_drag.as_ref().is_none_or(|a| !a.dragging) {
+        if hovered
+            && self.tip.is_empty()
+            && self.drag.is_none()
+            && self.linking.is_none()
+            && self.marquee.is_none()
+            && self.act_drag.as_ref().is_none_or(|a| !a.dragging)
+        {
             if let Some(h) = self.hot_action {
                 if h.more {
                     self.tip = "Show the rest of the actions in the Details panel".to_owned();
@@ -1604,7 +1961,12 @@ impl Canvas {
                     && let Some(gn) = cx.graph.find_node(&sn.id)
                     && let Some(a) = (if row.exit { &gn.on_exit } else { &gn.on_enter }).get(row.index)
                 {
-                    let mut t = format!("{} {}: {}", if row.exit { "On exit" } else { "On enter" }, row.index + 1, row.title);
+                    let mut t = format!(
+                        "{} {}: {}",
+                        if row.exit { "On exit" } else { "On enter" },
+                        row.index + 1,
+                        row.title
+                    );
                     let sum = text::value_summary(&a.params, 96);
                     if !sum.is_empty() && sum != "{}" {
                         t.push('\n');
@@ -1669,7 +2031,11 @@ impl Canvas {
             }
         }
         match node.and_then(|n| sc.nodes.get(n)) {
-            Some(t) => cx.ops.push(Op::Doc(DocOp::Connect { from: from.to_string(), pin: pin.to_string(), to: t.id.to_string() })),
+            Some(t) => cx.ops.push(Op::Doc(DocOp::Connect {
+                from: from.to_string(),
+                pin: pin.to_string(),
+                to: t.id.to_string(),
+            })),
             None if self.hovered => {
                 // dropped on empty space: a node made there is wired from the pin
                 let at = self.to_world(cx.view, mouse);
@@ -1696,7 +2062,14 @@ impl Canvas {
         self.next_menu = Some((m, at));
     }
 
-    fn open_context_menu(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>, mouse: Pos2, lod: u8) {
+    fn open_context_menu(
+        &mut self,
+        ctx: &egui::Context,
+        sc: &Scene,
+        cx: &mut CanvasCx<'_>,
+        mouse: Pos2,
+        lod: u8,
+    ) {
         if let Some(i) = self.hit_node(sc, cx.view, mouse) {
             let Some(n) = sc.nodes.get(i) else { return };
             if !cx.view.is_selected(&n.id) {
@@ -1707,15 +2080,25 @@ impl Canvas {
             {
                 self.act_drag = None;
                 cx.view.slot = format!("{}:{}", slot_name(row.exit), row.index);
-                self.open_menu(ctx, Menu::Action { node: n.id.clone(), exit: row.exit, index: row.index }, mouse);
+                self.open_menu(
+                    ctx,
+                    Menu::Action { node: n.id.clone(), exit: row.exit, index: row.index },
+                    mouse,
+                );
             } else {
                 self.open_menu(ctx, Menu::Node(n.id.clone()), mouse);
             }
             return;
         }
         if let Some(l) = self.hit_link(sc, cx.view, mouse).and_then(|i| sc.links.get(i)) {
-            let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else { return };
-            self.open_menu(ctx, Menu::Link { from: f.id.clone(), pin: l.pin.clone(), to: t.id.clone() }, mouse);
+            let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else {
+                return;
+            };
+            self.open_menu(
+                ctx,
+                Menu::Link { from: f.id.clone(), pin: l.pin.clone(), to: t.id.clone() },
+                mouse,
+            );
             return;
         }
         let at = self.to_world(cx.view, mouse);
@@ -1730,7 +2113,11 @@ impl Canvas {
     fn delete_hot_link(&mut self, ctx: &egui::Context, sc: &Scene, cx: &mut CanvasCx<'_>) {
         let Some(l) = self.hot_link.and_then(|i| sc.links.get(i)) else { return };
         let (Some(f), Some(t)) = (sc.nodes.get(l.from as usize), sc.nodes.get(l.to as usize)) else { return };
-        cx.ops.push(Op::Doc(DocOp::Disconnect { from: f.id.to_string(), pin: l.pin.to_string(), to: t.id.to_string() }));
+        cx.ops.push(Op::Doc(DocOp::Disconnect {
+            from: f.id.to_string(),
+            pin: l.pin.to_string(),
+            to: t.id.to_string(),
+        }));
         let msg = format!("Removed {}.{} -> {}", f.id, l.pin, t.id);
         self.set_status(ctx, &msg);
         self.hot_link = None;
@@ -1745,7 +2132,13 @@ impl Canvas {
     }
 
     /// A key of the canvas (`HandleKeys`); `true` when taken.
-    pub fn key(&mut self, ctx: &egui::Context, sc: Option<&Scene>, cx: &mut CanvasCx<'_>, chord: &gz_app::Chord) -> bool {
+    pub fn key(
+        &mut self,
+        ctx: &egui::Context,
+        sc: Option<&Scene>,
+        cx: &mut CanvasCx<'_>,
+        chord: &gz_app::Chord,
+    ) -> bool {
         let (ctrl, shift, alt) = (chord.ctrl, chord.shift, chord.alt);
         match (chord.key, ctrl, shift, alt) {
             (Key::Delete, false, false, false) => {
@@ -1873,7 +2266,8 @@ impl Canvas {
             return;
         };
         let mut shape = Vec::new();
-        let mut src: Vec<Node> = nodes.arr().iter().filter_map(|nv| asset::node_from_value(cx.catalog, nv, &mut shape)).collect();
+        let mut src: Vec<Node> =
+            nodes.arr().iter().filter_map(|nv| asset::node_from_value(cx.catalog, nv, &mut shape)).collect();
         if src.is_empty() {
             return;
         }
@@ -1894,13 +2288,20 @@ impl Canvas {
             remap.push((n.id.clone(), SmolStr::new(&nid)));
             n.id = SmolStr::new(&nid);
         }
-        let shift = src.first().filter(|n| n.has_pos).map_or([0.0, 0.0], |f| [anchor[0] - f.pos[0], anchor[1] - f.pos[1]]);
+        let shift = src
+            .first()
+            .filter(|n| n.has_pos)
+            .map_or([0.0, 0.0], |f| [anchor[0] - f.pos[0], anchor[1] - f.pos[1]]);
         let mut stack_y = anchor[1];
         let mut ops: Vec<Value> = Vec::with_capacity(src.len());
         let mut made: Vec<SmolStr> = Vec::with_capacity(src.len());
         for mut n in src {
             for pin in &mut n.out {
-                pin.targets = pin.targets.iter().filter_map(|t| remap.iter().find(|(o, _)| o == t).map(|(_, nn)| nn.clone())).collect();
+                pin.targets = pin
+                    .targets
+                    .iter()
+                    .filter_map(|t| remap.iter().find(|(o, _)| o == t).map(|(_, nn)| nn.clone()))
+                    .collect();
             }
             n.out.retain(|p| !p.targets.is_empty());
             if n.has_pos {
@@ -1940,21 +2341,24 @@ impl Canvas {
         let mut close = false;
         menu_popup(&ctx, popup_id, anchor, ui.layer_id(), |ui| match &menu {
             Menu::Node(id) => {
-                let item = |ui: &mut Ui, label: &str, keys: &str, enabled: bool| menu_item(ui, label, MenuItem { keys, enabled, ..MenuItem::default() });
+                let item = |ui: &mut Ui, label: &str, keys: &str, enabled: bool| {
+                    menu_item(ui, label, MenuItem { keys, enabled, ..MenuItem::default() })
+                };
                 if item(ui, "Rename", "F2", true) {
                     self.want_rename = true;
                 }
-                let all = !cx.view.selection.is_empty() && cx.view.selection.iter().all(|s| cx.bookmarks.iter().any(|b| b == s));
+                let all = !cx.view.selection.is_empty()
+                    && cx.view.selection.iter().all(|s| cx.bookmarks.iter().any(|b| b == s));
                 if item(ui, if all { "Remove Bookmarks" } else { "Bookmark" }, "Ctrl+B", true) {
                     self.toggle_bookmarks(&ctx, cx);
                 }
                 if item(ui, "Duplicate", "Ctrl+D", true) {
                     cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Duplicate)));
                 }
-                if item(ui, "Copy", "Ctrl+C", true) {
-                    if let Some(t) = Self::copy_text(cx.graph, &cx.view.selection) {
-                        ctx.copy_text(t);
-                    }
+                if item(ui, "Copy", "Ctrl+C", true)
+                    && let Some(t) = Self::copy_text(cx.graph, &cx.view.selection)
+                {
+                    ctx.copy_text(t);
                 }
                 ui.separator();
                 let trigger = cx.graph.find_node(id).is_some_and(|n| cx.catalog.is_trigger(&n.kind));
@@ -1972,10 +2376,18 @@ impl Canvas {
                     cx.ops.push(Op::Doc(DocOp::Canvas(CanvasOp::Bypass)));
                 }
                 if item(ui, "Disconnect Outputs", "", true) {
-                    cx.ops.push(Op::Doc(DocOp::Disconnect { from: id.to_string(), pin: String::new(), to: String::new() }));
+                    cx.ops.push(Op::Doc(DocOp::Disconnect {
+                        from: id.to_string(),
+                        pin: String::new(),
+                        to: String::new(),
+                    }));
                 }
                 ui.separator();
-                if menu_item(ui, "Delete", MenuItem { icon: Icon::Delete, keys: "Del", danger: true, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Delete",
+                    MenuItem { icon: Icon::Delete, keys: "Del", danger: true, ..MenuItem::default() },
+                ) {
                     self.delete_selection(cx);
                 }
             }
@@ -1986,7 +2398,8 @@ impl Canvas {
                 let valid = *index < list_len;
                 let enabled = |on: bool| MenuItem { enabled: on, ..MenuItem::default() };
                 if menu_item(ui, "Duplicate Action", enabled(valid))
-                    && let Some(a) = gn.and_then(|n| (if *exit { &n.on_exit } else { &n.on_enter }).get(*index))
+                    && let Some(a) =
+                        gn.and_then(|n| (if *exit { &n.on_exit } else { &n.on_enter }).get(*index))
                 {
                     cx.ops.push(Op::Doc(DocOp::Apply(op_table(&[
                         ("op", Value::from("add_action")),
@@ -2006,7 +2419,11 @@ impl Canvas {
                     move_action(cx, node, *exit, *index, node, !*exit, other_len);
                 }
                 ui.separator();
-                if menu_item(ui, "Remove Action", MenuItem { enabled: valid, danger: true, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Remove Action",
+                    MenuItem { enabled: valid, danger: true, ..MenuItem::default() },
+                ) {
                     cx.ops.push(Op::Doc(DocOp::Apply(op_table(&[
                         ("op", Value::from("remove_action")),
                         ("id", Value::from(node.as_str())),
@@ -2017,22 +2434,53 @@ impl Canvas {
                 }
             }
             Menu::Link { from, pin, to } => {
-                gz_ui::text::label(ui, &format!("{from}.{pin} -> {to}"), Font::Small, palette(&ctx).text_muted, gz_ui::Clip::Middle);
+                gz_ui::text::label(
+                    ui,
+                    &format!("{from}.{pin} -> {to}"),
+                    Font::Small,
+                    palette(&ctx).text_muted,
+                    gz_ui::Clip::Middle,
+                );
                 if menu_item(ui, "Remove Link", MenuItem { danger: true, ..MenuItem::default() }) {
-                    cx.ops.push(Op::Doc(DocOp::Disconnect { from: from.to_string(), pin: pin.to_string(), to: to.to_string() }));
+                    cx.ops.push(Op::Doc(DocOp::Disconnect {
+                        from: from.to_string(),
+                        pin: pin.to_string(),
+                        to: to.to_string(),
+                    }));
                 }
             }
             Menu::AddNode { at, link } => {
-                if let Some(kind) = local::pick_kind(ui, cx.catalog, USE_TRIGGER | USE_MAIN, behaviour, "Search kinds", &mut self.filter, &mut self.filter_sel, &mut self.filter_focus) {
+                if let Some(kind) = local::pick_kind(
+                    ui,
+                    cx.catalog,
+                    USE_TRIGGER | USE_MAIN,
+                    behaviour,
+                    "Search kinds",
+                    &mut self.filter,
+                    &mut self.filter_sel,
+                    &mut self.filter_focus,
+                ) {
                     create_node(cx, &kind, *at, link.as_ref());
                     close = true;
                 }
             }
             Menu::AddAction { node, exit } => {
-                if let Some(kind) = local::pick_kind(ui, cx.catalog, USE_EXTRA, behaviour, "Search actions", &mut self.filter, &mut self.filter_sel, &mut self.filter_focus) {
+                if let Some(kind) = local::pick_kind(
+                    ui,
+                    cx.catalog,
+                    USE_EXTRA,
+                    behaviour,
+                    "Search actions",
+                    &mut self.filter,
+                    &mut self.filter_sel,
+                    &mut self.filter_focus,
+                ) {
                     let mut a = Value::table();
                     a.set("kind", kind.as_str());
-                    let len = cx.graph.find_node(node).map_or(0, |n| if *exit { n.on_exit.len() } else { n.on_enter.len() });
+                    let len = cx
+                        .graph
+                        .find_node(node)
+                        .map_or(0, |n| if *exit { n.on_exit.len() } else { n.on_enter.len() });
                     cx.ops.push(Op::Doc(DocOp::Apply(op_table(&[
                         ("op", Value::from("add_action")),
                         ("id", Value::from(node.as_str())),
@@ -2055,7 +2503,15 @@ impl Canvas {
 
 /// Moves one action: within its slot, to the other slot or to another node - one undo step, and
 /// the Details panel follows it to where it landed (`MoveAction`).
-fn move_action(cx: &mut CanvasCx<'_>, from: &str, from_exit: bool, index: usize, to: &str, to_exit: bool, at: usize) {
+fn move_action(
+    cx: &mut CanvasCx<'_>,
+    from: &str,
+    from_exit: bool,
+    index: usize,
+    to: &str,
+    to_exit: bool,
+    at: usize,
+) {
     // dropping an action on its own place is not a move
     if from == to && from_exit == to_exit && (at == index || at == index + 1) {
         return;
@@ -2064,7 +2520,8 @@ fn move_action(cx: &mut CanvasCx<'_>, from: &str, from_exit: bool, index: usize,
     if from == to && from_exit == to_exit && pos > index {
         pos -= 1;
     }
-    let dst_len = cx.graph.find_node(to).map_or(0, |n| if to_exit { n.on_exit.len() } else { n.on_enter.len() });
+    let dst_len =
+        cx.graph.find_node(to).map_or(0, |n| if to_exit { n.on_exit.len() } else { n.on_enter.len() });
     let dst_len = if from == to && from_exit == to_exit { dst_len.saturating_sub(1) } else { dst_len };
     let pos = pos.min(dst_len);
     cx.ops.push(Op::Doc(DocOp::Apply(op_table(&[
@@ -2095,7 +2552,12 @@ fn create_node(cx: &mut CanvasCx<'_>, kind: &str, at: [f32; 2], link: Option<&(S
     n.has_pos = true;
     let mut ops = vec![op_table(&[("op", Value::from("add_node")), ("node", asset::node_to_value(&n))])];
     if let Some((from, pin)) = link {
-        ops.push(op_table(&[("op", Value::from("connect")), ("from", Value::from(from.as_str())), ("pin", Value::from(pin.as_str())), ("to", Value::from(id.as_str()))]));
+        ops.push(op_table(&[
+            ("op", Value::from("connect")),
+            ("from", Value::from(from.as_str())),
+            ("pin", Value::from(pin.as_str())),
+            ("to", Value::from(id.as_str())),
+        ]));
     }
     cx.ops.push(Op::Doc(DocOp::ApplyOps(Value::from(ops))));
     cx.view.select_only(&id);

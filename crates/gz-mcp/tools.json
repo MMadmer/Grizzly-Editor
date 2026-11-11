@@ -186,6 +186,10 @@
        "recent",
        "name"
       ]
+     },
+     "new_project": {
+      "type": "boolean",
+      "description": "shows (true) or hides (false) the New Project form on the Start page"
      }
     }
    },
@@ -1459,6 +1463,19 @@
    "cmd": "progress"
   },
   {
+   "name": "grizzly_jobs",
+   "description": "Every job the editor ran or runs since it started: [{id, kind, group, title, stage, fraction, state, started_ms, ended_ms, result, error}]. 'kind' names what runs (build, package, publish, scene_load, level_build, level_run, ...), jobs of one 'group' run one at a time, 'state' is running, done, failed or cancelled. Reads only; grizzly_progress cancels.",
+   "annotations": {
+    "title": "List the jobs",
+    "readOnlyHint": true
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "cmd": "jobs"
+  },
+  {
    "name": "grizzly_property_inspector",
    "description": "Drive the Details panel (target='selection', default) or the Level Settings panel (target='world'): read counts/filter/open state and the rows, set a search filter, expand or collapse all matching branches, or open/close the panel. 'open' brings the Level tab up with the panel in front (target='world' raises Level Settings); the other actions never switch tabs. Answers visible/total counts, open, and rows [{key, label, value, unit, enabled, mixed, help}] ('limit', default 200): label is what the grid shows (a range such as [0-3] moved into help), unit is there where a number has one ('m', '°', 'fps': the grid draws the value with it, value stays the number as text), help the row's tooltip and help-footer text (a number with limits says its range), mixed true where the selected objects differ; enabled is false for the rows of a read-only form too. Setting a row is grizzly_property_set.",
    "inputSchema": {
@@ -1948,6 +1965,10 @@
        "pda"
       ],
       "description": "quest graph (.nqasset), NPC behaviour graph (.behasset), character (.npcasset) or PDA interface (.pdaasset)"
+     },
+     "folder": {
+      "type": "string",
+      "description": "project-relative folder to create it in; without it, the folder the content browser has open"
      }
     },
     "required": [
@@ -4006,6 +4027,20 @@
      },
      "discard": {
       "type": "boolean"
+     },
+     "show": {
+      "type": "string",
+      "enum": [
+       "base",
+       "visual",
+       "icon",
+       "community",
+       "rank",
+       "dialog",
+       "sells",
+       "buys"
+      ],
+      "description": "puts that picker of the form up to be looked at, never to act; opens the tab"
      }
     }
    },
@@ -4227,6 +4262,10 @@
      },
      "open": {
       "type": "boolean"
+     },
+     "more": {
+      "type": "boolean",
+      "description": "unfolds More (Applies On, Playable Area, Transitions); 'level' and 'filter' unfold it too"
      }
     }
    },
@@ -4432,6 +4471,57 @@
     }
    },
    "cmd": "snap_objects"
+  },
+  {
+   "name": "grizzly_level_build",
+   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph / build_all build the open scene's collision, AI map, game graph or all of them and answer when done; make_* writes one part of the level build (make_all the whole build project); compile_geometry / compile_details / compile_aimap / compile_spawn start xrLC, xrDO or xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once the program started; play / play_game build what Play needs and start the game on the scene, play_clean starts the game alone; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
+   "annotations": {
+    "title": "Build or run the level"
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "action": {
+      "type": "string",
+      "enum": [
+       "status",
+       "stop",
+       "build_cform",
+       "build_aimap",
+       "build_game_graph",
+       "build_all",
+       "play",
+       "play_game",
+       "play_clean",
+       "play_stop",
+       "reload_configs",
+       "make_all",
+       "make_game",
+       "make_details",
+       "make_hom",
+       "make_som",
+       "make_aimap",
+       "compile_geometry",
+       "compile_details",
+       "compile_aimap",
+       "compile_spawn"
+      ]
+     },
+     "mode": {
+      "type": "string",
+      "enum": [
+       "low",
+       "high"
+      ],
+      "description": "compile_aimap only: high (the default) or low"
+     },
+     "verify_restrictors": {
+      "type": "boolean",
+      "description": "play / play_game: every space restrictor that asks for it must lie on the AI map (the Play menu's Verify Space Restrictors)"
+     }
+    }
+   },
+   "cmd": "level_build"
   }
  ]
 }

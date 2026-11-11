@@ -34,7 +34,8 @@ pub struct ModeScan {
 pub const LAYOUT_16: &str = "configs/ui/ui_mm_faction_select_16.xml";
 pub const LAYOUT: &str = "configs/ui/ui_mm_faction_select.xml";
 pub const SCRIPT: &str = "scripts/ui_mm_faction_select.script";
-pub const NO_LAYOUT: &str = "the linked game has no ui_mm_faction_select xml - cannot tell modes from options";
+pub const NO_LAYOUT: &str =
+    "the linked game has no ui_mm_faction_select xml - cannot tell modes from options";
 
 fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if needle.is_empty() {
@@ -154,7 +155,10 @@ fn checkbox_live(script: &[u8], node: &[u8]) -> bool {
     while let Some(found) = find(script, &needle, at) {
         let bol = rfind_byte(script, b'\n', found).map_or(0, |p| p + 1);
         let line = script.get(bol..found).unwrap_or(&[]);
-        let commented = line.iter().position(|c| *c != b' ' && *c != b'\t').is_some_and(|first| line.get(first..).is_some_and(|l| l.starts_with(b"--")));
+        let commented = line
+            .iter()
+            .position(|c| *c != b' ' && *c != b'\t')
+            .is_some_and(|first| line.get(first..).is_some_and(|l| l.starts_with(b"--")));
         if !commented && contains(line, b"InitCheck") && !inside_block_comment(script, found) {
             return true;
         }
@@ -289,7 +293,8 @@ pub fn provides_mode(manifest: &[u8], module: &str) -> Vec<GameMode> {
         if key.eq_ignore_ascii_case(b"id") {
             out.extend(pending.take().filter(|p| !p.id.is_empty()));
             let id = manifest_text(val);
-            pending = Some(GameMode { caption: id.clone(), id, key: String::new(), source: module.to_owned() });
+            pending =
+                Some(GameMode { caption: id.clone(), id, key: String::new(), source: module.to_owned() });
         } else if key.eq_ignore_ascii_case(b"title")
             && let Some(p) = pending.as_mut().filter(|p| !p.id.is_empty())
         {
@@ -423,8 +428,10 @@ end\n";
     #[test]
     fn columns_scripts_and_captions() {
         let boxes = checkboxes(UI.as_bytes(), SCRIPT.as_bytes());
-        let summary: Vec<(&str, &str, &str, bool, bool)> =
-            boxes.iter().map(|b| (b.node.as_str(), b.key.as_str(), b.id.as_str(), b.campaign, b.available)).collect();
+        let summary: Vec<(&str, &str, &str, bool, bool)> = boxes
+            .iter()
+            .map(|b| (b.node.as_str(), b.key.as_str(), b.id.as_str(), b.campaign, b.available))
+            .collect();
         assert_eq!(
             summary,
             [
@@ -471,8 +478,16 @@ end\n";
     fn captions_first_file_wins() {
         let ids = vec![b"st_a".to_vec(), b"st_b".to_vec(), Vec::new()];
         let mut caps = vec![String::new(); 3];
-        resolve_in(b"<string id=\"st_a\"><text>\xc0\xe1</text></string><string id=\"st_b\"><text></text></string>", &ids, &mut caps);
-        resolve_in(b"<string id=\"st_a\"><text>later</text></string><string id=\"st_b\"><text> B </text></string>", &ids, &mut caps);
+        resolve_in(
+            b"<string id=\"st_a\"><text>\xc0\xe1</text></string><string id=\"st_b\"><text></text></string>",
+            &ids,
+            &mut caps,
+        );
+        resolve_in(
+            b"<string id=\"st_a\"><text>later</text></string><string id=\"st_b\"><text> B </text></string>",
+            &ids,
+            &mut caps,
+        );
         assert_eq!(caps, ["Аб", " B ", ""]);
     }
 
@@ -480,20 +495,35 @@ end\n";
     fn module_manifests() {
         let text = b"[module]\r\nname = X\r\n[provides_mode]\r\nid = night\r\ntitle = \xcd\xee\xf7\xfc\r\n  id = skipped\r\nid=day\r\ntitle=Day \r\n[other]\r\nid = never\r\n";
         let modes = provides_mode(text, "mymod");
-        let got: Vec<(&str, &str, &str)> = modes.iter().map(|m| (m.id.as_str(), m.caption.as_str(), m.source.as_str())).collect();
+        let got: Vec<(&str, &str, &str)> =
+            modes.iter().map(|m| (m.id.as_str(), m.caption.as_str(), m.source.as_str())).collect();
         assert_eq!(got, [("night", "Ночь", "mymod"), ("day", "Day", "mymod")]);
         assert!(provides_mode(b"[module]\nid = x\n", "m").is_empty());
         // an empty id opens nothing: its title goes nowhere
         let empty = provides_mode(b"[provides_mode]\nid =\ntitle = T\nid = a\n", "m");
-        assert_eq!(empty.iter().map(|m| (m.id.as_str(), m.caption.as_str())).collect::<Vec<_>>(), [("a", "a")]);
-        assert_eq!(provides_mode("[provides_mode]\nid = n\ntitle = Ночь UTF\n".as_bytes(), "m")[0].caption, "Ночь UTF");
+        assert_eq!(
+            empty.iter().map(|m| (m.id.as_str(), m.caption.as_str())).collect::<Vec<_>>(),
+            [("a", "a")]
+        );
+        assert_eq!(
+            provides_mode("[provides_mode]\nid = n\ntitle = Ночь UTF\n".as_bytes(), "m")[0].caption,
+            "Ночь UTF"
+        );
     }
 
     #[test]
     fn module_modes_once() {
-        let m = |id: &str, src: &str| GameMode { id: id.into(), caption: id.into(), key: String::new(), source: src.into() };
+        let m = |id: &str, src: &str| GameMode {
+            id: id.into(),
+            caption: id.into(),
+            key: String::new(),
+            source: src.into(),
+        };
         let mut out = vec![m("metro", "game")];
-        add_module_modes(&mut out, [vec![m("night", "a"), m("metro", "a"), m("Night", "b")], vec![m("night", "a"), m("day", "c")]]);
+        add_module_modes(
+            &mut out,
+            [vec![m("night", "a"), m("metro", "a"), m("Night", "b")], vec![m("night", "a"), m("day", "c")]],
+        );
         let ids: Vec<(&str, &str)> = out.iter().map(|g| (g.id.as_str(), g.source.as_str())).collect();
         // a module's mode is compared with the other modules' only: the game's metro stays beside it
         assert_eq!(ids, [("metro", "game"), ("night", "a"), ("metro", "a"), ("day", "c")]);

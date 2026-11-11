@@ -4,7 +4,10 @@
 //! - [`matches()`] - space-separated terms that must all occur, ignoring case (Cyrillic too), with
 //!   "ё" read as "е".
 
-use egui::{CornerRadius, Frame, Id, Key, Margin, Modifiers, Rect, Response, Sense, Stroke, StrokeKind, TextEdit, Ui, Vec2, pos2};
+use egui::{
+    CornerRadius, Frame, Id, Key, Margin, Modifiers, Rect, Response, Sense, Stroke, StrokeKind, TextEdit, Ui,
+    Vec2, pos2,
+};
 
 use crate::audit;
 use crate::button::icon_button_sized;
@@ -123,16 +126,27 @@ impl<'a> SearchField<'a> {
             let fill = if hovered || focused { p.input_hover } else { p.input };
             ui.painter().rect_filled(rect, CornerRadius::same(metrics::RADIUS), fill);
             if focused {
-                ui.painter().rect_stroke(rect, CornerRadius::same(metrics::RADIUS), Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::same(metrics::RADIUS),
+                    Stroke::new(1.0, p.accent_bright),
+                    StrokeKind::Inside,
+                );
             }
-            let glass = Rect::from_min_size(pos2(rect.min.x + 8.0, rect.center().y - 7.0), Vec2::splat(metrics::GLYPH_ROW));
+            let glass = Rect::from_min_size(
+                pos2(rect.min.x + 8.0, rect.center().y - 7.0),
+                Vec2::splat(metrics::GLYPH_ROW),
+            );
             icons::draw(ui.painter(), Icon::Search, glass, if focused { p.text } else { p.text_muted });
         }
 
         // the padding hosts the magnifier on the left and the clear cross on the right
         let side = 8.0 + metrics::GLYPH_ROW + 6.0;
         let clear_w: f32 = if self.text.is_empty() { 0.0 } else { 22.0 };
-        let edit_rect = Rect::from_min_max(pos2(rect.min.x + side, rect.min.y), pos2(rect.max.x - clear_w.max(8.0), rect.max.y));
+        let edit_rect = Rect::from_min_max(
+            pos2(rect.min.x + side, rect.min.y),
+            pos2(rect.max.x - clear_w.max(8.0), rect.max.y),
+        );
         let mut resp = ui.put(
             edit_rect,
             TextEdit::singleline(&mut *self.text)
@@ -151,9 +165,15 @@ impl<'a> SearchField<'a> {
         }
         if !self.text.is_empty() {
             let side_c = 20.0;
-            let clear_rect = Rect::from_min_size(pos2(rect.max.x - side_c - 2.0, rect.center().y - side_c * 0.5), Vec2::splat(side_c));
-            let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id.with("clear")).max_rect(clear_rect));
-            if icon_button_sized(&mut child, Icon::Clear, "Clear", false, true, side_c, metrics::GLYPH_STATUS).clicked() {
+            let clear_rect = Rect::from_min_size(
+                pos2(rect.max.x - side_c - 2.0, rect.center().y - side_c * 0.5),
+                Vec2::splat(side_c),
+            );
+            let mut child =
+                ui.new_child(egui::UiBuilder::new().id_salt(id.with("clear")).max_rect(clear_rect));
+            if icon_button_sized(&mut child, Icon::Clear, "Clear", false, true, side_c, metrics::GLYPH_STATUS)
+                .clicked()
+            {
                 self.text.clear();
                 resp.mark_changed();
             }

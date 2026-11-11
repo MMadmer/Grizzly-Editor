@@ -108,6 +108,8 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 flate2 = "1"
 quick-xml = "0.42"
 lewton = "0.10"
+# the second C dependency after LuaJIT: libvorbis (aoTuV) vendored behind a safe API, for encoding
+vorbis_rs = { version = "0.5.6", default-features = false }
 cpal = "0.18"
 # crypto, network
 sha2 = "0.11"

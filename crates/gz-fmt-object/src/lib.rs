@@ -59,8 +59,8 @@ pub use envelope::{Envelope, Key, behavior, shape};
 pub use io::TextEncoding;
 pub use mesh::{BoneWeight, Face, FaceVert, Mesh, MeshFlags, SkinVertex, SurfFaces, VMap, VMapKind, VMapPt};
 pub use motion::{
-    BoneMotion, Channel, MotionMark, OMotion, SMotion, SMotionFlags, read_anm, read_skl, read_skls, write_anm,
-    write_skl, write_skls,
+    BoneMotion, Channel, MotionMark, OMotion, SMotion, SMotionFlags, read_anm, read_skl, read_skls,
+    write_anm, write_skl, write_skls,
 };
 pub use object::{BonePart, Object, ObjectFlags, Surface, SurfaceFlags};
 pub use skeleton::{BoneState, Pose, RestPose, animate, rest_pose};

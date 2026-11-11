@@ -39,7 +39,12 @@ fn color_argb(a: u32, r: u32, g: u32, b: u32) -> u32 {
 /// `Fcolor::set(u32)`.
 fn fcolor(dw: u32) -> [f32; 4] {
     let f = 1.0f32 / 255.0;
-    [f * ((dw >> 16) & 0xff) as f32, f * ((dw >> 8) & 0xff) as f32, f * (dw & 0xff) as f32, f * ((dw >> 24) & 0xff) as f32]
+    [
+        f * ((dw >> 16) & 0xff) as f32,
+        f * ((dw >> 8) & 0xff) as f32,
+        f * (dw & 0xff) as f32,
+        f * ((dw >> 24) & 0xff) as f32,
+    ]
 }
 
 /// `color_rgba_f`: `clampr(iFloor(x * 255), 0, 255)`.
@@ -103,14 +108,19 @@ impl LightAnims {
             let lr = list.reader();
             for c in numbered(&lr)? {
                 let ir = c.reader();
-                let mut common = ir.sub(CHUNK_ITEM_COMMON)?.ok_or_else(|| invalid("a light animation has no name"))?;
+                let mut common =
+                    ir.sub(CHUNK_ITEM_COMMON)?.ok_or_else(|| invalid("a light animation has no name"))?;
                 let name = text.r_str(&mut common)?;
                 let fps = common.r_f32()?;
                 let frame_count = common.r_u32()? as i32;
-                let mut kr = ir.sub(CHUNK_ITEM_KEYS)?.ok_or_else(|| invalid(format!("light animation '{name}' has no keys")))?;
+                let mut kr = ir
+                    .sub(CHUNK_ITEM_KEYS)?
+                    .ok_or_else(|| invalid(format!("light animation '{name}' has no keys")))?;
                 let n = kr.r_u32()? as usize;
                 if n.saturating_mul(8) > kr.elapsed() {
-                    return Err(invalid(format!("light animation '{name}' states {n} keys and cannot hold them")));
+                    return Err(invalid(format!(
+                        "light animation '{name}' states {n} keys and cannot hold them"
+                    )));
                 }
                 let mut keys = BTreeMap::new();
                 for _ in 0..n {
@@ -166,7 +176,11 @@ mod tests {
 
     fn lib() -> LightAnims {
         let keys = BTreeMap::from([(0, 0xff00_0000), (10, 0xffff_ffff)]);
-        LightAnims { version: 1, items: vec![LightAnim { name: "flicker".into(), fps: 15.0, frame_count: 20, keys }], encoding: Encoding::Utf8 }
+        LightAnims {
+            version: 1,
+            items: vec![LightAnim { name: "flicker".into(), fps: 15.0, frame_count: 20, keys }],
+            encoding: Encoding::Utf8,
+        }
     }
 
     #[test]

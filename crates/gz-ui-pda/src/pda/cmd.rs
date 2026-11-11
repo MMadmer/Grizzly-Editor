@@ -54,7 +54,11 @@ fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
         Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|v| v as i64)).unwrap_or(def),
         Some(Value::String(s)) => {
             let t = s.trim_start_matches([' ', '\t']);
-            if t.starts_with(|c: char| c == '-' || c.is_ascii_digit()) { crate::gamefile::atoi(t) } else { def }
+            if t.starts_with(|c: char| c == '-' || c.is_ascii_digit()) {
+                crate::gamefile::atoi(t)
+            } else {
+                def
+            }
         }
         _ => def,
     }
@@ -167,7 +171,11 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
     };
     if given_path || current.is_empty() || action == "open" {
         if path.is_empty() {
-            path = if current.is_empty() { PdaService::of_session(&editor, &session).used_layout(&editor).await } else { current.clone() };
+            path = if current.is_empty() {
+                PdaService::of_session(&editor, &session).used_layout(&editor).await
+            } else {
+                current.clone()
+            };
         }
         if path.is_empty() {
             return Err(invalid("missing 'path' (and the module uses no PDA layout yet)"));
@@ -193,12 +201,25 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
                 m.open = true;
                 m.rel.clone()
             };
-            let _ = ui_tab(&editor, &[("action", json!("open")), ("kind", json!("pda")), ("path", json!(rel)), ("discard", json!(true))]).await;
+            let _ = ui_tab(
+                &editor,
+                &[
+                    ("action", json!("open")),
+                    ("kind", json!("pda")),
+                    ("path", json!(rel)),
+                    ("discard", json!(true)),
+                ],
+            )
+            .await;
         }
         "close" => {
             settle(&editor, &tab, save, discard).await?;
             tab.m.lock().open = false;
-            let _ = ui_tab(&editor, &[("action", json!("close")), ("id", json!("pda")), ("discard", json!(true))]).await;
+            let _ = ui_tab(
+                &editor,
+                &[("action", json!("close")), ("id", json!("pda")), ("discard", json!(true))],
+            )
+            .await;
         }
         "reset" => tab.m.lock().reset_state(),
         // reload keeps the Source pane's edits: it reads the game's side again
@@ -265,7 +286,9 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             m.show_side = pane == "details" || pane == "both";
         }
         if !tab_arg.is_empty() {
-            let Some(t) = TAB_IDS.iter().position(|id| *id == tab_arg) else { return Err(invalid("tab must be problems, pages, vars or log")) };
+            let Some(t) = TAB_IDS.iter().position(|id| *id == tab_arg) else {
+                return Err(invalid("tab must be problems, pages, vars or log"));
+            };
             m.tab = t;
             m.want_tab = Some(t);
             m.show_side = true;
@@ -287,7 +310,13 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
     let (active, frame) = shown(&editor).await;
     let drawn = tab.m.lock().drawn_frame;
     let stale = drawn.is_none_or(|d| d + 1 < frame);
-    let owed = active && (action != "state" || given_path || !pane.is_empty() || !tab_arg.is_empty() || !zoom.is_empty() || stale);
+    let owed = active
+        && (action != "state"
+            || given_path
+            || !pane.is_empty()
+            || !tab_arg.is_empty()
+            || !zoom.is_empty()
+            || stale);
     if owed {
         let _ = editor.frames.after(2).await;
     }
@@ -296,12 +325,20 @@ pub async fn pda_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
 
 /// Whether the pda tab is up, and the egui frame being drawn.
 async fn shown(editor: &Arc<Editor>) -> (bool, u64) {
-    gz_app::on_ui(editor, |shell, ctx| Ok((shell.active() == "pda", ctx.cumulative_frame_nr()))).await.unwrap_or((false, 0))
+    gz_app::on_ui(editor, |shell, ctx| Ok((shell.active() == "pda", ctx.cumulative_frame_nr())))
+        .await
+        .unwrap_or((false, 0))
 }
 
 /// The answer (`AnswerPreview` and `JsonState`): the panes, the zoom and what the last frame
 /// drew, then the state in canvas units.
-async fn answer(editor: &Arc<Editor>, tab: &Arc<PdaTab>, assets: &Arc<PdaAssets>, pending: bool, active: bool) -> Value {
+async fn answer(
+    editor: &Arc<Editor>,
+    tab: &Arc<PdaTab>,
+    assets: &Arc<PdaAssets>,
+    pending: bool,
+    active: bool,
+) -> Value {
     let device = assets.device_wait(editor).await;
     let level = tab.m.lock().preview.layout.preview_level.clone();
     let map = assets.level_map_wait(editor, &level).await;
@@ -329,7 +366,12 @@ async fn answer(editor: &Arc<Editor>, tab: &Arc<PdaTab>, assets: &Arc<PdaAssets>
     out.insert("scale".into(), fixed(scale, 3));
     out.insert("device_gap".into(), fixed(m.device_gap, 1));
     out.insert("read_line".into(), json!(if m.read_ok { 0 } else { m.read_line }));
-    let edges: Vec<&str> = ["top", "bottom", "left", "right"].iter().enumerate().filter(|(i, _)| m.screen_edges & (1 << i) != 0).map(|(_, n)| *n).collect();
+    let edges: Vec<&str> = ["top", "bottom", "left", "right"]
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| m.screen_edges & (1 << i) != 0)
+        .map(|(_, n)| *n)
+        .collect();
     out.insert("screen_edges".into(), json!(edges));
     out.insert("pending".into(), json!(pending));
 
@@ -343,7 +385,11 @@ async fn answer(editor: &Arc<Editor>, tab: &Arc<PdaTab>, assets: &Arc<PdaAssets>
     st.insert("lang".into(), json!(m.preview.lang));
     st.insert("read".into(), json!(m.read_ok));
     if !m.read_ok {
-        let e = if m.read_line > 0 { format!("line {}: {}", m.read_line, m.read_err) } else { m.read_err.clone() };
+        let e = if m.read_line > 0 {
+            format!("line {}: {}", m.read_line, m.read_err)
+        } else {
+            m.read_err.clone()
+        };
         st.insert("read_error".into(), json!(e));
     }
     st.insert("errors".into(), json!(m.preview.layout.errors));

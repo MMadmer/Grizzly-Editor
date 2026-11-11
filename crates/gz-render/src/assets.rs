@@ -261,11 +261,21 @@ impl Assets {
         Self::create(None, None, table, Budgets::default())
     }
 
-    pub(crate) fn with_gpu(gpu: AssetGpu, exec: Executors, table: MaterialTable, budgets: Budgets) -> Arc<Self> {
+    pub(crate) fn with_gpu(
+        gpu: AssetGpu,
+        exec: Executors,
+        table: MaterialTable,
+        budgets: Budgets,
+    ) -> Arc<Self> {
         Self::create(Some(gpu), Some(exec), table, budgets)
     }
 
-    fn create(gpu: Option<AssetGpu>, exec: Option<Executors>, table: MaterialTable, budgets: Budgets) -> Arc<Self> {
+    fn create(
+        gpu: Option<AssetGpu>,
+        exec: Option<Executors>,
+        table: MaterialTable,
+        budgets: Budgets,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|me| {
             let mut a = Self {
                 me: me.clone(),
@@ -489,7 +499,10 @@ impl Assets {
             for &h in &meshes {
                 match self.touch_mesh(&mut inner, h, tick) {
                     Some(info) => mats.extend(info.submeshes.iter().map(|s| s.material)),
-                    None => busy |= matches!(inner.meshes.get(h.0 as usize).map(|s| &s.state), Some(State::Loading)),
+                    None => {
+                        busy |=
+                            matches!(inner.meshes.get(h.0 as usize).map(|s| &s.state), Some(State::Loading))
+                    }
                 }
             }
             for m in mats {
@@ -506,13 +519,18 @@ impl Assets {
 
     /// The packet builder's look at meshes: their info when loaded, a load started otherwise,
     /// and whether one that is not there is still to come.
-    pub(crate) fn resolve_meshes(&self, handles: &[MeshHandle], tick: u64) -> Vec<(Option<Arc<MeshInfo>>, bool)> {
+    pub(crate) fn resolve_meshes(
+        &self,
+        handles: &[MeshHandle],
+        tick: u64,
+    ) -> Vec<(Option<Arc<MeshInfo>>, bool)> {
         let mut inner = self.inner.lock();
         handles
             .iter()
             .map(|h| {
                 let info = self.touch_mesh(&mut inner, *h, tick);
-                let pending = info.is_none() && matches!(inner.meshes.get(h.0 as usize).map(|s| &s.state), Some(State::Loading));
+                let pending = info.is_none()
+                    && matches!(inner.meshes.get(h.0 as usize).map(|s| &s.state), Some(State::Loading));
                 (info, pending)
             })
             .collect()
@@ -525,10 +543,12 @@ impl Assets {
             .iter()
             .map(|h| {
                 self.touch_material(&mut inner, *h, tick);
-                inner.materials.get(h.0 as usize).map_or(MaterialInfo { kind: EditorMaterial::Opaque, two_sided: false }, |m| MaterialInfo {
-                    kind: m.desc.kind,
-                    two_sided: m.desc.two_sided,
-                })
+                inner
+                    .materials
+                    .get(h.0 as usize)
+                    .map_or(MaterialInfo { kind: EditorMaterial::Opaque, two_sided: false }, |m| {
+                        MaterialInfo { kind: m.desc.kind, two_sided: m.desc.two_sided }
+                    })
             })
             .collect()
     }
@@ -546,7 +566,11 @@ impl Assets {
 
     /// The recorder's look at materials: a bind group each, built again when one of its
     /// textures changed. `true` when a texture is still to come.
-    pub(crate) fn bind_groups(&self, handles: &[MaterialHandle], out: &mut Vec<Arc<wgpu::BindGroup>>) -> bool {
+    pub(crate) fn bind_groups(
+        &self,
+        handles: &[MaterialHandle],
+        out: &mut Vec<Arc<wgpu::BindGroup>>,
+    ) -> bool {
         out.clear();
         let Some(gpu) = &self.gpu else { return false };
         let tick = self.tick.load(Ordering::Acquire);
@@ -627,7 +651,8 @@ impl Assets {
 
     /// The epoch a load belongs to, when loads can run at all.
     fn start_load(&self) -> Option<u64> {
-        (self.gpu.is_some() && self.exec.is_some() && self.loader.read().is_some()).then(|| self.epoch.load(Ordering::Acquire))
+        (self.gpu.is_some() && self.exec.is_some() && self.loader.read().is_some())
+            .then(|| self.epoch.load(Ordering::Acquire))
     }
 
     fn spawn_mesh(&self, id: u32, key: MeshKey, epoch: u64) {
@@ -647,8 +672,12 @@ impl Assets {
                 Ok(bytes) => exec.spawn_cpu(move || {
                     let table = me.table();
                     let data = match &key {
-                        MeshKey::Visual(_) => gz_fmt_ogf::Visual::read(&bytes.bytes).map_err(Into::into).and_then(|v| MeshData::from_visual(&v, &table)),
-                        _ => gz_fmt_object::Object::read(&bytes.bytes).map_err(Into::into).and_then(|o| MeshData::from_object(&o, &table)),
+                        MeshKey::Visual(_) => gz_fmt_ogf::Visual::read(&bytes.bytes)
+                            .map_err(Into::into)
+                            .and_then(|v| MeshData::from_visual(&v, &table)),
+                        _ => gz_fmt_object::Object::read(&bytes.bytes)
+                            .map_err(Into::into)
+                            .and_then(|o| MeshData::from_object(&o, &table)),
                     };
                     me.finish_mesh(id, epoch, data.map_err(|e| e.to_string()));
                 }),
@@ -777,10 +806,16 @@ fn finish_mesh_info(inner: &mut Inner, data: &MeshData, uploaded: Option<Uploade
         .submeshes
         .iter()
         .enumerate()
-        .map(|(i, s)| SubInfo { indices: s.indices.clone(), wire: wires.get(i).cloned().unwrap_or(0..0), material: material_slot(inner, s.material.clone()) })
+        .map(|(i, s)| SubInfo {
+            indices: s.indices.clone(),
+            wire: wires.get(i).cloned().unwrap_or(0..0),
+            material: material_slot(inner, s.material.clone()),
+        })
         .collect();
     let info = Arc::new(MeshInfo { bounds: data.bounds, submeshes, skinned: data.skinned });
-    let gpu = uploaded.map(|(vertices, indices, wire, _)| Arc::new(GpuMesh { vertices, indices, wire, info: info.clone() }));
+    let gpu = uploaded.map(|(vertices, indices, wire, _)| {
+        Arc::new(GpuMesh { vertices, indices, wire, info: info.clone() })
+    });
     MeshReady { info, gpu }
 }
 
@@ -788,7 +823,11 @@ fn upload_mesh(gpu: &AssetGpu, data: &MeshData) -> Uploaded {
     use wgpu::util::DeviceExt;
     let (wire, ranges) = data.wire_indices();
     let make = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
-        gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some(label), contents, usage })
+        gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents,
+            usage,
+        })
     };
     let wire_bytes: &[u8] = if wire.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&wire) };
     (
@@ -827,7 +866,10 @@ pub(crate) fn upload_texture_to(
     }
     let (w, h) = data.level_size(skip);
     if w.max(h) > max_side || (data.format.is_block() && (w % 4 != 0 || h % 4 != 0)) {
-        return Err(invalid(format!("a texture of {} x {} is larger than the graphics device takes", data.width, data.height)));
+        return Err(invalid(format!(
+            "a texture of {} x {} is larger than the graphics device takes",
+            data.width, data.height
+        )));
     }
     let format = data.format.wgpu();
     let levels = data.levels.len() as u32 - skip;
@@ -850,7 +892,12 @@ pub(crate) fn upload_texture_to(
             wgpu::Extent3d { width: lw, height: lh, depth_or_array_layers: 1 }
         };
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: mip as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             level,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rows) },
             extent,
@@ -892,7 +939,10 @@ fn material_bind_group(gpu: &AssetGpu, inner: &mut Inner, id: u32) -> Option<Arc
     let m = inner.materials.get_mut(id as usize)?;
     let ubo = m.ubo.get_or_insert_with(|| {
         let has_detail = if desc.detail.is_some() { 1.0 } else { 0.0 };
-        let block = MaterialGpu { color: desc.color.to_f32(), params: [desc.alpha_ref, desc.detail_scale, has_detail, 0.0] };
+        let block = MaterialGpu {
+            color: desc.color.to_f32(),
+            params: [desc.alpha_ref, desc.detail_scale, has_detail, 0.0],
+        };
         gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("gz-render material"),
             contents: bytemuck::bytes_of(&block),
@@ -991,7 +1041,8 @@ mod tests {
     #[test]
     fn headless_meshes_are_ready_or_fail() {
         let a = Assets::headless(MaterialTable::default());
-        let cube = a.add_mesh("cube", MeshData::cube(MaterialDesc::textured(EditorMaterial::Opaque, "crate")));
+        let cube =
+            a.add_mesh("cube", MeshData::cube(MaterialDesc::textured(EditorMaterial::Opaque, "crate")));
         assert_eq!(a.mesh_state(cube), AssetState::Ready);
         assert_eq!(a.mesh_bounds(cube), Some(Aabb::UNIT));
         let far = a.object("nowhere");

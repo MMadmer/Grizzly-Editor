@@ -47,7 +47,9 @@ pub use cmd::register;
 pub use layout::{InnerSpot, Item, Layout, MapSpot, Marker, Page, PdaProblem};
 pub use preview::{Aspect, Clock, Hit, ItemBox, Preview, VisibleItem};
 pub use read::{BUNDLED_READER, GAME_READER, ReadError, Reader, base_name, evaluate, is_pda_path, template};
-pub use service::{KnownTextures, PdaService, install, project_relative, read_text, same_path, validate_for_build};
+pub use service::{
+    KnownTextures, PdaService, install, project_relative, read_text, same_path, validate_for_build,
+};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

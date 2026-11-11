@@ -104,7 +104,14 @@ pub fn validate_github_repo(repo: &str) -> bool {
 #[must_use]
 pub fn normalize_github_repo(input: &str) -> String {
     let mut out = trim(input).to_owned();
-    const PREFIXES: [&str; 6] = ["https://github.com/", "http://github.com/", "https://www.github.com/", "http://www.github.com/", "github.com/", "www.github.com/"];
+    const PREFIXES: [&str; 6] = [
+        "https://github.com/",
+        "http://github.com/",
+        "https://www.github.com/",
+        "http://www.github.com/",
+        "github.com/",
+        "www.github.com/",
+    ];
     for p in PREFIXES {
         let hit = out.get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p));
         if !hit {
@@ -143,7 +150,10 @@ pub fn valid_global_name(name: &str) -> bool {
 pub fn validate(m: &Manifest) -> Vec<Problem> {
     let mut out = Vec::new();
     if !validate_id(&m.id) {
-        out.push(Problem::error("mod.id", "module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)").in_field("id"));
+        out.push(
+            Problem::error("mod.id", "module id missing or invalid in mod.ltx (allowed: a-z 0-9 _ . -)")
+                .in_field("id"),
+        );
     }
     // A finished module always states which game it is for. "Nothing chosen" is not a third
     // option - it is how content ends up applied in a campaign it was never built for.
@@ -157,11 +167,26 @@ pub fn validate(m: &Manifest) -> Vec<Problem> {
         );
     }
     if m.disable_game_updates {
-        out.push(Problem::warning("mod.updates_off", "This module turns off the game's updates and bug reports for everyone who has it.").in_field("disable_game_updates"));
+        out.push(
+            Problem::warning(
+                "mod.updates_off",
+                "This module turns off the game's updates and bug reports for everyone who has it.",
+            )
+            .in_field("disable_game_updates"),
+        );
     }
     for mode in m.provides_modes.iter().filter(|p| !p.id.is_empty()) {
         if !validate_mode_id(&mode.id) || mode.id.len() > 64 {
-            out.push(Problem::error("mod.mode_id", format!("invalid declared mode id '{}' (allowed: a-z 0-9 _ . -, up to 64 chars)", mode.id)).about(mode.id.as_str()));
+            out.push(
+                Problem::error(
+                    "mod.mode_id",
+                    format!(
+                        "invalid declared mode id '{}' (allowed: a-z 0-9 _ . -, up to 64 chars)",
+                        mode.id
+                    ),
+                )
+                .about(mode.id.as_str()),
+            );
         }
         // the game shows the title in cp1251, and a build driven over MCP never sees the
         // field's own warning

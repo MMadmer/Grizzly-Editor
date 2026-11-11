@@ -87,7 +87,10 @@ pub(crate) fn layout(root: &Path, fsgame: Option<&str>) -> Layout {
 
 fn is_archive_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.rfind('.').and_then(|d| lower.get(d..)).is_some_and(|ext| ext.starts_with(".db") || ext.starts_with(".xdb"))
+    lower
+        .rfind('.')
+        .and_then(|d| lower.get(d..))
+        .is_some_and(|ext| ext.starts_with(".db") || ext.starts_with(".xdb"))
 }
 
 #[cfg(windows)]
@@ -131,7 +134,10 @@ fn collect(dir: &Path, recurse: bool, depth: usize, out: &mut Vec<PathBuf>) {
             if recurse && depth < 16 {
                 collect(&path, true, depth + 1, out);
             }
-        } else if meta.len() > 0 && is_archive_name(&name) && !out.iter().any(|p| p.as_os_str().eq_ignore_ascii_case(path.as_os_str())) {
+        } else if meta.len() > 0
+            && is_archive_name(&name)
+            && !out.iter().any(|p| p.as_os_str().eq_ignore_ascii_case(path.as_os_str()))
+        {
             out.push(path);
         }
     }
@@ -155,7 +161,10 @@ $game_config$ = true| false| $game_data$| configs\\\r\n";
         assert_eq!(l.game_data, PathBuf::from("D:\\Games\\Dead Air\\gamedata"));
         assert_eq!(
             l.archive_dirs,
-            vec![(PathBuf::from("D:\\Games\\Dead Air\\database"), false), (PathBuf::from("D:\\Games\\Dead Air\\database\\sound"), false)]
+            vec![
+                (PathBuf::from("D:\\Games\\Dead Air\\database"), false),
+                (PathBuf::from("D:\\Games\\Dead Air\\database\\sound"), false)
+            ]
         );
     }
 

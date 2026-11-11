@@ -21,7 +21,9 @@ mod peek;
 mod spawn;
 
 pub use bytes::Bytes;
-pub use graph::{CROSS_TABLE_HEADER_SIZE, CrossTable, GameGraph, GraphEdge, GraphLevel, GraphVertex, LevelPoint, Guid};
+pub use graph::{
+    CROSS_TABLE_HEADER_SIZE, CrossTable, GameGraph, GraphEdge, GraphLevel, GraphVertex, Guid, LevelPoint,
+};
 pub use index::{IndexEntity, IndexLevel, SpawnIndex};
 pub use patrol::{PatrolLink, PatrolPath, PatrolPoint};
 pub use peek::{PacketHead, peek_packet};

@@ -27,7 +27,9 @@ mod visual;
 pub use bones::{BoneIk, BoneName, Obb};
 pub use export::{Export, ExportOptions, export_omf, export_skeleton, export_static};
 pub use format::{Desc, Header, MT, chunk, crc32};
-pub use motion::{BoneKey, BoneMotion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys, TransKeys, read_omf};
+pub use motion::{
+    BoneKey, BoneMotion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys, TransKeys, read_omf,
+};
 pub use optimize::{optimize_faces, optimize_vertices};
 pub use vertex::{Vertex, VertexBuffer, VertexFormat};
 pub use visual::{BufferRef, LodFacet, LodVertex, SlideWindow, SlideWindows, TreeDef, Visual};

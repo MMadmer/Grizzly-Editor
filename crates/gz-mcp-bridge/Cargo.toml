@@ -1,0 +1,18 @@
+[package]
+name = "gz-mcp-bridge"
+description = "grizzly-mcp: the MCP server over stdio that forwards tool calls to the editor's endpoint."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "grizzly-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true

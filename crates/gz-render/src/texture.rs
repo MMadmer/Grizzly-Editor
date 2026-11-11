@@ -54,7 +54,11 @@ pub struct TextureData {
 
 /// Row bytes and rows of a level.
 pub(crate) fn level_layout(format: TexelFormat, w: u32, h: u32) -> (u32, u32) {
-    if format.is_block() { (w.div_ceil(4).max(1) * format.unit_bytes(), h.div_ceil(4).max(1)) } else { (w * 4, h) }
+    if format.is_block() {
+        (w.div_ceil(4).max(1) * format.unit_bytes(), h.div_ceil(4).max(1))
+    } else {
+        (w * 4, h)
+    }
 }
 
 fn side(v: u32, mip: u32) -> u32 {
@@ -85,11 +89,19 @@ impl TextureData {
             let Some(top) = levels.first() else { return Err(invalid("the DDS holds no picture")) };
             // a chain that stops short is completed: the sampler expects every level
             let (w, h) = (top.width, top.height);
-            let whole = levels.iter().enumerate().all(|(i, l)| l.width == side(w, i as u32) && l.height == side(h, i as u32));
+            let whole = levels
+                .iter()
+                .enumerate()
+                .all(|(i, l)| l.width == side(w, i as u32) && l.height == side(h, i as u32));
             if levels.len() == 1 || !whole {
                 return Self::rgba(top, true);
             }
-            return Ok(Self { width: w, height: h, format: TexelFormat::Rgba8, levels: levels.into_iter().map(|l| l.rgba).collect() });
+            return Ok(Self {
+                width: w,
+                height: h,
+                format: TexelFormat::Rgba8,
+                levels: levels.into_iter().map(|l| l.rgba).collect(),
+            });
         }
         let loaded = load_image(bytes, ext)?;
         Self::rgba(&loaded.image, true)
@@ -103,7 +115,7 @@ impl TextureData {
         let mut rgba = Vec::with_capacity((side * side * 4) as usize);
         for y in 0..side {
             for x in 0..side {
-                let c = if ((x / cell) + (y / cell)) % 2 == 0 { a } else { b };
+                let c = if ((x / cell) + (y / cell)).is_multiple_of(2) { a } else { b };
                 rgba.extend_from_slice(&c.0);
             }
         }
@@ -127,13 +139,21 @@ impl TextureData {
         if self.width == 0 || self.height == 0 || self.levels.is_empty() {
             return Err(invalid("the texture has no pixels"));
         }
-        if self.format.is_block() && (self.width % 4 != 0 || self.height % 4 != 0) {
-            return Err(invalid(format!("a block-compressed texture of {} x {} is not whole blocks", self.width, self.height)));
+        if self.format.is_block() && (!self.width.is_multiple_of(4) || !self.height.is_multiple_of(4)) {
+            return Err(invalid(format!(
+                "a block-compressed texture of {} x {} is not whole blocks",
+                self.width, self.height
+            )));
         }
         for (i, level) in self.levels.iter().enumerate() {
-            let (row, rows) = level_layout(self.format, side(self.width, i as u32), side(self.height, i as u32));
+            let (row, rows) =
+                level_layout(self.format, side(self.width, i as u32), side(self.height, i as u32));
             if level.len() != (row * rows) as usize {
-                return Err(invalid(format!("level {i} of the texture holds {} bytes, not {}", level.len(), row * rows)));
+                return Err(invalid(format!(
+                    "level {i} of the texture holds {} bytes, not {}",
+                    level.len(),
+                    row * rows
+                )));
             }
         }
         Ok(())
@@ -154,7 +174,12 @@ fn dds_blocks(bytes: &[u8]) -> Result<Option<TextureData>> {
         DdsFormat::Dxt5 => TexelFormat::Bc3,
         _ => return Ok(None),
     };
-    if info.kind != DdsKind::Texture || info.layers != 1 || info.depth > 1 || info.width % 4 != 0 || info.height % 4 != 0 {
+    if info.kind != DdsKind::Texture
+        || info.layers != 1
+        || info.depth > 1
+        || info.width % 4 != 0
+        || info.height % 4 != 0
+    {
         return Ok(None);
     }
     // the header is 128 bytes, and 20 more when the pixel format's FourCC is "DX10"

@@ -91,7 +91,12 @@ impl SceneLookup for LiveScene {
     }
 
     fn way_paths(&self) -> Vec<PickerEntry> {
-        self.with(|s| s.of_class(ObjClass::Way).filter(|o| !o.name.is_empty()).map(|o| entry(&o.name, "scene".to_owned())).collect())
+        self.with(|s| {
+            s.of_class(ObjClass::Way)
+                .filter(|o| !o.name.is_empty())
+                .map(|o| entry(&o.name, "scene".to_owned()))
+                .collect()
+        })
     }
 
     fn level(&self) -> Option<String> {
@@ -109,7 +114,10 @@ mod tests {
 
     #[test]
     fn story_ids_are_read_from_custom_data() {
-        assert_eq!(story_id("[logic]\nactive = x\n[story_object]\nstory_id = esc_trader\n").as_deref(), Some("esc_trader"));
+        assert_eq!(
+            story_id("[logic]\nactive = x\n[story_object]\nstory_id = esc_trader\n").as_deref(),
+            Some("esc_trader")
+        );
         assert_eq!(story_id("[story_object]\r\nesc_wolf\r\n").as_deref(), Some("esc_wolf"));
         assert_eq!(story_id("[story_object]\n[logic]\n"), None);
         assert_eq!(story_id("[logic]\n"), None);

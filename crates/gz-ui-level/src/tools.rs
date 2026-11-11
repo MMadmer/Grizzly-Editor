@@ -19,7 +19,10 @@ use gz_scene::snap::SnapAction;
 use gz_scene::tools::{FL_APPEND_RANDOM, ToolOpts};
 use gz_scene::{ObjClass, ObjId, SceneCmd, SceneService, SceneState};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Answer, Asker, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, SearchField, Tone, metrics, palette, state};
+use gz_ui::{
+    Answer, Asker, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, SearchField, Tone, metrics, palette,
+    state,
+};
 use parking_lot::Mutex;
 
 use crate::choose::{Chooser, Purpose};
@@ -80,14 +83,27 @@ impl Default for ToolsPanel {
 impl ToolsPanel {
     #[must_use]
     pub fn new() -> Self {
-        Self { search: Default::default(), percent: 50.0, add_percent: false, snap_row: None, random: None, want_detail_objects: false }
+        Self {
+            search: Default::default(),
+            percent: 50.0,
+            add_percent: false,
+            snap_row: None,
+            random: None,
+            want_detail_objects: false,
+        }
     }
 
     /// The panel's body.
     pub fn draw(&mut self, ui: &mut Ui, editor: &Arc<Editor>, chooser: &mut Option<Chooser>) {
         let svc = editor.project_opt().and_then(|s| s.services.get::<SceneService>());
         let Some(svc) = svc.filter(|s| s.store.snapshot().valid) else {
-            state::empty_state(ui, Icon::Settings, "No scene", "Open or create a scene to use the tools.", None);
+            state::empty_state(
+                ui,
+                Icon::Settings,
+                "No scene",
+                "Open or create a scene to use the tools.",
+                None,
+            );
             return;
         };
         let snap = svc.store.snapshot();
@@ -97,11 +113,14 @@ impl ToolsPanel {
         let target = snap.tools.target;
         header(ui, target);
         ui.add_space(4.0);
-        egui::ScrollArea::vertical().id_salt("gz-ui-level.tool_body").auto_shrink([false, false]).show(ui, |ui| {
-            ui.push_id(target.id(), |ui| self.body(ui, editor, &svc, &snap, target, chooser));
-            ui.add_space(6.0);
-            self.snap_objects(ui, editor, &svc, &snap);
-        });
+        egui::ScrollArea::vertical().id_salt("gz-ui-level.tool_body").auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.push_id(target.id(), |ui| self.body(ui, editor, &svc, &snap, target, chooser));
+                ui.add_space(6.0);
+                self.snap_objects(ui, editor, &svc, &snap);
+            },
+        );
         self.draw_random(ui, &svc);
     }
 
@@ -113,20 +132,43 @@ impl ToolsPanel {
         let h = rows as f32 * (TILE_H + TILE_GAP) - TILE_GAP;
         let (area, _) = ui.allocate_exact_size(Vec2::new(avail, h.max(0.0)), egui::Sense::hover());
         for (n, c) in TOOL_CLASSES.iter().enumerate() {
-            let pos = pos2(area.min.x + (n % cols) as f32 * (tile_w + TILE_GAP), area.min.y + (n / cols) as f32 * (TILE_H + TILE_GAP));
+            let pos = pos2(
+                area.min.x + (n % cols) as f32 * (tile_w + TILE_GAP),
+                area.min.y + (n / cols) as f32 * (TILE_H + TILE_GAP),
+            );
             let rect = Rect::from_min_size(pos, Vec2::new(tile_w, TILE_H));
             let part = snap.tools.part(c.class);
             let active = snap.tools.target == c.class;
-            let click = local_tool_tile(ui, Id::unique(("gz-ui-level.tile", c.class.id())), rect, c.icon, c.label, c.title, active, part.visible);
+            let click = local_tool_tile(
+                ui,
+                Id::unique(("gz-ui-level.tile", c.class.id())),
+                rect,
+                c.icon,
+                c.label,
+                c.title,
+                active,
+                part.visible,
+            );
             if click.eye {
-                svc.store.post(SceneCmd::ToolFlags { class: c.class, visible: Some(!part.visible), readonly: None }, origin);
+                svc.store.post(
+                    SceneCmd::ToolFlags { class: c.class, visible: Some(!part.visible), readonly: None },
+                    origin,
+                );
             } else if click.tile && !active {
                 svc.store.post(SceneCmd::SetTarget(c.class), origin);
             }
         }
     }
 
-    fn body(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, class: ObjClass, chooser: &mut Option<Chooser>) {
+    fn body(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        class: ObjClass,
+        chooser: &mut Option<Chooser>,
+    ) {
         let choice = ToolChoice::of(editor);
         match class {
             ObjClass::SceneObject => self.object_tool(ui, editor, svc, snap, &choice, chooser),
@@ -141,8 +183,15 @@ impl ToolsPanel {
     }
 
     /// The list a tool adds from, under its search, `index` naming the tool's own search.
-    fn list(&mut self, ui: &mut Ui, editor: &Arc<Editor>, index: usize, key: ListKey, current: &str) -> Option<String> {
-        let Some(search) = self.search.get_mut(index) else { return None };
+    fn list(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        index: usize,
+        key: ListKey,
+        current: &str,
+    ) -> Option<String> {
+        let search = self.search.get_mut(index)?;
         SearchField::new(search).hint("Search").min_em(8.0).id_salt(&format!("tool_search_{index}")).show(ui);
         ui.add_space(4.0);
         let Some(items) = Lists::get(editor, key) else {
@@ -154,27 +203,65 @@ impl ToolsPanel {
             return None;
         }
         // the list takes what the closed sections leave, and at least four rows
-        let h = (ui.available_height() - 140.0).max(metrics::ROW * 4.0 + 10.0).min(480.0);
+        let h = (ui.available_height() - 140.0).clamp(metrics::ROW * 4.0 + 10.0, 480.0);
         let search = self.search.get(index).cloned().unwrap_or_default();
         local_tree_list(ui, &format!("tool_list_{index}"), &items, &search, current, h)
     }
 
-    fn object_tool(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, choice: &ToolChoice, chooser: &mut Option<Chooser>) {
+    fn object_tool(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        choice: &ToolChoice,
+        chooser: &mut Option<Chooser>,
+    ) {
         let p = palette(ui.ctx());
         let current = choice.object.lock().clone();
         let avail = ui.available_width();
         let side = ((ui.available_height() * 0.2).clamp(56.0, 96.0)).min(avail).floor();
         ui.horizontal(|ui| {
-            local_thumbnail(ui, side, Icon::SceneObject, if current.is_empty() { "Pick an object in the list, or browse the library" } else { "This object has no thumbnail" });
+            local_thumbnail(
+                ui,
+                side,
+                Icon::SceneObject,
+                if current.is_empty() {
+                    "Pick an object in the list, or browse the library"
+                } else {
+                    "This object has no thumbnail"
+                },
+            );
             ui.vertical(|ui| {
                 let leaf = current.rsplit('\\').next().unwrap_or("");
-                text::label(ui, if current.is_empty() { "Nothing picked" } else { leaf }, Font::Body, p.text, Clip::End);
+                text::label(
+                    ui,
+                    if current.is_empty() { "Nothing picked" } else { leaf },
+                    Font::Body,
+                    p.text,
+                    Clip::End,
+                );
                 if let Some(o) = (!current.is_empty()).then(|| svc.library.cached(&current)).flatten() {
-                    text::label(ui, &format!("Faces: {}", o.tris.len()), Font::Body, p.text_secondary, Clip::End);
-                    text::label(ui, &format!("Vertices: {}", o.verts.len()), Font::Body, p.text_secondary, Clip::End);
+                    text::label(
+                        ui,
+                        &format!("Faces: {}", o.tris.len()),
+                        Font::Body,
+                        p.text_secondary,
+                        Clip::End,
+                    );
+                    text::label(
+                        ui,
+                        &format!("Vertices: {}", o.verts.len()),
+                        Font::Body,
+                        p.text_secondary,
+                        Clip::End,
+                    );
                 }
-                if local_button_flow(ui, &[LocalButton::new("Browse...", "Pick the object from the library")]) == Some(0) {
-                    *chooser = Some(Chooser::new(Purpose::ToolObject, "Object", Some(ListKey::Objects), &current));
+                if local_button_flow(ui, &[LocalButton::new("Browse...", "Pick the object from the library")])
+                    == Some(0)
+                {
+                    *chooser =
+                        Some(Chooser::new(Purpose::ToolObject, "Object", Some(ListKey::Objects), &current));
                 }
             });
         });
@@ -189,7 +276,12 @@ impl ToolsPanel {
         ui.add_space(6.0);
         let part = snap.tools.part(ObjClass::SceneObject);
         let random = part.flags & FL_APPEND_RANDOM != 0;
-        if gz_ui_app::local::local_section(ui, "tool_add_objects", if random { "Add Objects (Randomized)" } else { "Add Objects" }, false) {
+        if gz_ui_app::local::local_section(
+            ui,
+            "tool_add_objects",
+            if random { "Add Objects (Randomized)" } else { "Add Objects" },
+            false,
+        ) {
             ui.horizontal(|ui| {
                 let mut on = random;
                 if gz_ui::grid::switch(ui, &mut on).on_hover_text("Each object added gets a random scale and rotation, picked from what Random Settings holds").changed() {
@@ -201,14 +293,29 @@ impl ToolsPanel {
             });
             let pressed = local_button_flow(
                 ui,
-                &[LocalButton::new("Add Several...", "Pick several objects and add them all at the origin"), LocalButton::new("Random Settings...", "The scale and rotation ranges Randomize picks from")],
+                &[
+                    LocalButton::new("Add Several...", "Pick several objects and add them all at the origin"),
+                    LocalButton::new(
+                        "Random Settings...",
+                        "The scale and rotation ranges Randomize picks from",
+                    ),
+                ],
             );
             match pressed {
-                Some(0) => *chooser = Some(Chooser::new(Purpose::ToolObject, "Objects", Some(ListKey::Objects), "").multi()),
+                Some(0) => {
+                    *chooser =
+                        Some(Chooser::new(Purpose::ToolObject, "Objects", Some(ListKey::Objects), "").multi())
+                }
                 Some(1) => {
                     if let ToolOpts::Objects(o) = &part.opts {
-                        let deg = |v: gz_scene::math::Vec3| [v.x.to_degrees(), v.y.to_degrees(), v.z.to_degrees()];
-                        self.random = Some(RandomSettings { min_scale: o.min_scale.to_array(), max_scale: o.max_scale.to_array(), min_rot: deg(o.min_rotation), max_rot: deg(o.max_rotation) });
+                        let deg =
+                            |v: gz_scene::math::Vec3| [v.x.to_degrees(), v.y.to_degrees(), v.z.to_degrees()];
+                        self.random = Some(RandomSettings {
+                            min_scale: o.min_scale.to_array(),
+                            max_scale: o.max_scale.to_array(),
+                            min_rot: deg(o.min_rotation),
+                            max_rot: deg(o.max_rotation),
+                        });
                     }
                 }
                 _ => {}
@@ -217,25 +324,45 @@ impl ToolsPanel {
         self.select_by_reference(ui, editor, svc, snap, ObjClass::SceneObject, &current, "object");
     }
 
-    fn spawn_tool(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, choice: &ToolChoice) {
+    fn spawn_tool(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        choice: &ToolChoice,
+    ) {
         let current = choice.spawn.lock().clone();
         if let Some(item) = self.list(ui, editor, 1, ListKey::SpawnSections, &current) {
             set_choice(editor, ObjClass::SpawnPoint, &item);
         }
         ui.add_space(6.0);
         gz_ui::PropertyGrid::new("tools").show(ui, |g| {
-            g.row("Zone Shape", "The shape a restrictor or another zone entity is placed with", gz_ui::PropFlags::NONE, 0, |ui| {
-                let mut cur = usize::from(*choice.zone_box.lock());
-                if gz_ui::segmented(ui, &mut cur, &["Sphere", "Box"], None) {
-                    *choice.zone_box.lock() = cur == 1;
-                }
-            });
+            g.row(
+                "Zone Shape",
+                "The shape a restrictor or another zone entity is placed with",
+                gz_ui::PropFlags::NONE,
+                0,
+                |ui| {
+                    let mut cur = usize::from(*choice.zone_box.lock());
+                    if gz_ui::segmented(ui, &mut cur, &["Sphere", "Box"], None) {
+                        *choice.zone_box.lock() = cur == 1;
+                    }
+                },
+            );
         });
         let section = current.rsplit('\\').next().unwrap_or("").to_owned();
         self.select_by_reference(ui, editor, svc, snap, ObjClass::SpawnPoint, &section, "entry");
     }
 
-    fn particles_tool(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, choice: &ToolChoice) {
+    fn particles_tool(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        choice: &ToolChoice,
+    ) {
         let current = choice.particles.lock().clone();
         if let Some(item) = self.list(ui, editor, 2, ListKey::Particles, &current) {
             set_choice(editor, ObjClass::Particles, &item);
@@ -246,19 +373,34 @@ impl ToolsPanel {
         }
     }
 
-    fn group_tool(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, choice: &ToolChoice, chooser: &mut Option<Chooser>) {
+    fn group_tool(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        choice: &ToolChoice,
+        chooser: &mut Option<Chooser>,
+    ) {
         let origin = editor.ui_origin();
         if gz_ui_app::local::local_section(ui, "tool_group_commands", "Commands", true) {
             let any = !snap.selection.is_empty();
-            let groups = snap.selected_in_order().iter().any(|id| snap.get(*id).is_some_and(|o| o.class == ObjClass::Group));
+            let groups = snap
+                .selected_in_order()
+                .iter()
+                .any(|id| snap.get(*id).is_some_and(|o| o.class == ObjClass::Group));
             match local_button_flow(
                 ui,
                 &[
-                    LocalButton::new("Group", "Put the selected objects into a new group").when(any, "Select the objects first"),
-                    LocalButton::new("Ungroup", "Take the selected groups apart").when(groups, "Select a group first"),
+                    LocalButton::new("Group", "Put the selected objects into a new group")
+                        .when(any, "Select the objects first"),
+                    LocalButton::new("Ungroup", "Take the selected groups apart")
+                        .when(groups, "Select a group first"),
                 ],
             ) {
-                Some(0) => svc.store.post(SceneCmd::Group { name: SmolStr::new(snap.gen_name(Some("group"))) }, origin),
+                Some(0) => svc
+                    .store
+                    .post(SceneCmd::Group { name: SmolStr::new(snap.gen_name(Some("group"))) }, origin),
                 Some(1) => svc.store.post(SceneCmd::Ungroup, origin),
                 _ => {}
             }
@@ -266,10 +408,19 @@ impl ToolsPanel {
         let current = choice.group.lock().clone();
         if gz_ui_app::local::local_section(ui, "tool_group_add", "Group to Add", true) {
             gz_ui::PropertyGrid::new("tools").show(ui, |g| {
-                g.row("Current", "The library group the viewport adds", gz_ui::PropFlags::NONE, 0, |ui| match gz_ui::grid::pick_field(ui, "tool_group", &current, true) {
-                    gz_ui::PickAction::Browse => *chooser = Some(Chooser::new(Purpose::ToolGroup, "Group", Some(ListKey::Groups), &current)),
-                    gz_ui::PickAction::Clear => set_choice(editor, ObjClass::Group, ""),
-                    gz_ui::PickAction::None => {}
+                g.row("Current", "The library group the viewport adds", gz_ui::PropFlags::NONE, 0, |ui| {
+                    match gz_ui::grid::pick_field(ui, "tool_group", &current, true) {
+                        gz_ui::PickAction::Browse => {
+                            *chooser = Some(Chooser::new(
+                                Purpose::ToolGroup,
+                                "Group",
+                                Some(ListKey::Groups),
+                                &current,
+                            ))
+                        }
+                        gz_ui::PickAction::Clear => set_choice(editor, ObjClass::Group, ""),
+                        gz_ui::PickAction::None => {}
+                    }
                 });
             });
         }
@@ -286,9 +437,14 @@ impl ToolsPanel {
         let pressed = local_button_flow(
             ui,
             &[
-                LocalButton::new("Detail Objects...", "The objects the details are made of, and their colour indices"),
-                LocalButton::new("Clear Slots...", "Empty every detail slot of the level").when(slots > 0, "There are no slots"),
-                LocalButton::new("Clear Details...", "Remove the detail objects and every slot").when(slots > 0 || objects > 0, "There are no details"),
+                LocalButton::new(
+                    "Detail Objects...",
+                    "The objects the details are made of, and their colour indices",
+                ),
+                LocalButton::new("Clear Slots...", "Empty every detail slot of the level")
+                    .when(slots > 0, "There are no slots"),
+                LocalButton::new("Clear Details...", "Remove the detail objects and every slot")
+                    .when(slots > 0 || objects > 0, "There are no details"),
             ],
         );
         match pressed {
@@ -303,7 +459,12 @@ impl ToolsPanel {
                 let spec = ConfirmSpec {
                     id: if all { "clear_details" } else { "clear_detail_slots" }.into(),
                     title: if all { "Clear Details" } else { "Clear Detail Slots" }.into(),
-                    headline: if all { "Remove every detail of the level?" } else { "Empty every detail slot of the level?" }.into(),
+                    headline: if all {
+                        "Remove every detail of the level?"
+                    } else {
+                        "Empty every detail slot of the level?"
+                    }
+                    .into(),
                     total: items.len(),
                     items,
                     consequence: "Initialize the details again to get them back.".into(),
@@ -326,7 +487,8 @@ impl ToolsPanel {
                         model.header.size_x = 0;
                         model.header.size_z = 0;
                     }
-                    bulk.details = Some(Arc::new(gz_scene::tools::DetailsPart { raw: None, model: Arc::new(model) }));
+                    bulk.details =
+                        Some(Arc::new(gz_scene::tools::DetailsPart { raw: None, model: Arc::new(model) }));
                     store.post(SceneCmd::SetBulk(Box::new(bulk)), origin);
                 });
                 if let Some(line) = line {
@@ -339,23 +501,59 @@ impl ToolsPanel {
 
     /// Select Same, Deselect Same.
     #[allow(clippy::too_many_arguments)]
-    fn same_buttons(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, class: ObjClass, reference: &str, noun: &str) {
+    fn same_buttons(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        class: ObjClass,
+        reference: &str,
+        noun: &str,
+    ) {
         let picked = !reference.is_empty();
         let why = format!("Pick an {noun} in the list first");
         let tip_select = format!("Select every visible object made from the {noun} picked in the list");
         let tip_deselect = format!("Deselect every object made from the {noun} picked in the list");
-        match local_button_flow(ui, &[LocalButton::new("Select Same", &tip_select).when(picked, &why), LocalButton::new("Deselect Same", &tip_deselect).when(picked, &why)]) {
-            Some(i @ (0 | 1)) => {
-                let ids: Vec<ObjId> = snap.of_class(class).filter(|o| (i == 1 || o.flags.visible) && o.ref_name().is_some_and(|r| r.eq_ignore_ascii_case(reference))).map(|o| o.id).collect();
-                svc.store.post(SceneCmd::Select { ids, mode: if i == 0 { SelectMode::Add } else { SelectMode::Remove } }, editor.ui_origin());
-            }
-            _ => {}
+        if let Some(i @ (0 | 1)) = local_button_flow(
+            ui,
+            &[
+                LocalButton::new("Select Same", &tip_select).when(picked, &why),
+                LocalButton::new("Deselect Same", &tip_deselect).when(picked, &why),
+            ],
+        ) {
+            let ids: Vec<ObjId> = snap
+                .of_class(class)
+                .filter(|o| {
+                    (i == 1 || o.flags.visible)
+                        && o.ref_name().is_some_and(|r| r.eq_ignore_ascii_case(reference))
+                })
+                .map(|o| o.id)
+                .collect();
+            svc.store.post(
+                SceneCmd::Select { ids, mode: if i == 0 { SelectMode::Add } else { SelectMode::Remove } },
+                editor.ui_origin(),
+            );
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn select_by_reference(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, class: ObjClass, reference: &str, noun: &str) {
-        if !gz_ui_app::local::local_section(ui, &format!("tool_select_ref_{}", class.id()), "Select by Reference", false) {
+    fn select_by_reference(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        class: ObjClass,
+        reference: &str,
+        noun: &str,
+    ) {
+        if !gz_ui_app::local::local_section(
+            ui,
+            &format!("tool_select_ref_{}", class.id()),
+            "Select by Reference",
+            false,
+        ) {
             return;
         }
         self.same_buttons(ui, editor, svc, snap, class, reference, noun);
@@ -374,7 +572,13 @@ impl ToolsPanel {
         });
     }
 
-    fn snap_objects(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState) {
+    fn snap_objects(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+    ) {
         let count = snap.tools.snap.len();
         let title = if count > 0 { format!("Snap Objects ({count})") } else { "Snap Objects".to_owned() };
         if !gz_ui_app::local::local_section(ui, "tool_snap_objects", &title, false) {
@@ -383,13 +587,27 @@ impl ToolsPanel {
         let p = palette(ui.ctx());
         let origin = editor.ui_origin();
         for (label, tip, on, use_list) in [
-            ("Snap to Listed Objects", "Object snap uses only the objects in this list, and the viewport highlights them", snap.tools.snap_use, true),
-            ("Pick in Viewport", "A click on a scene object adds it to the list; Ctrl+click takes a listed one out", snap.tools.snap_pick, false),
+            (
+                "Snap to Listed Objects",
+                "Object snap uses only the objects in this list, and the viewport highlights them",
+                snap.tools.snap_use,
+                true,
+            ),
+            (
+                "Pick in Viewport",
+                "A click on a scene object adds it to the list; Ctrl+click takes a listed one out",
+                snap.tools.snap_pick,
+                false,
+            ),
         ] {
             ui.horizontal(|ui| {
                 let mut v = on;
                 if gz_ui::grid::switch(ui, &mut v).on_hover_text(tip).changed() {
-                    let cmd = if use_list { SceneCmd::Snap { action: None, use_list: Some(v), pick: None } } else { SceneCmd::Snap { action: None, use_list: None, pick: Some(v) } };
+                    let cmd = if use_list {
+                        SceneCmd::Snap { action: None, use_list: Some(v), pick: None }
+                    } else {
+                        SceneCmd::Snap { action: None, use_list: None, pick: Some(v) }
+                    };
                     svc.store.post(cmd, origin);
                 }
                 text::label(ui, label, Font::Body, p.text, Clip::End);
@@ -401,18 +619,36 @@ impl ToolsPanel {
                 LocalButton::new("Set From Selection", "Replace the list with the selected objects"),
                 LocalButton::new("Add Selection", "Add the selected objects to the list"),
                 LocalButton::new("Remove Selection", "Take the selected objects out of the list"),
-                LocalButton::new("Select Listed", "Select the objects in the list").when(count > 0, "The list is empty"),
+                LocalButton::new("Select Listed", "Select the objects in the list")
+                    .when(count > 0, "The list is empty"),
                 LocalButton::new("Clear...", "Empty the list").when(count > 0, "The list is empty"),
             ],
         );
         let action = |name: &str| SnapAction::parse(name);
         match pressed {
-            Some(0) => svc.store.post(SceneCmd::Snap { action: action("set_from_selection"), use_list: None, pick: None }, origin),
-            Some(1) => svc.store.post(SceneCmd::Snap { action: action("add_selection"), use_list: None, pick: None }, origin),
-            Some(2) => svc.store.post(SceneCmd::Snap { action: action("remove_selection"), use_list: None, pick: None }, origin),
-            Some(3) => svc.store.post(SceneCmd::Snap { action: action("select"), use_list: None, pick: None }, origin),
+            Some(0) => svc.store.post(
+                SceneCmd::Snap { action: action("set_from_selection"), use_list: None, pick: None },
+                origin,
+            ),
+            Some(1) => svc
+                .store
+                .post(SceneCmd::Snap { action: action("add_selection"), use_list: None, pick: None }, origin),
+            Some(2) => svc.store.post(
+                SceneCmd::Snap { action: action("remove_selection"), use_list: None, pick: None },
+                origin,
+            ),
+            Some(3) => svc
+                .store
+                .post(SceneCmd::Snap { action: action("select"), use_list: None, pick: None }, origin),
             Some(4) => {
-                let names: Vec<String> = snap.tools.snap.iter().filter_map(|id| snap.get(*id)).take(10).map(|o| o.name.to_string()).collect();
+                let names: Vec<String> = snap
+                    .tools
+                    .snap
+                    .iter()
+                    .filter_map(|id| snap.get(*id))
+                    .take(10)
+                    .map(|o| o.name.to_string())
+                    .collect();
                 let spec = ConfirmSpec {
                     id: "clear_snap_list".into(),
                     title: "Clear Snap Objects".into(),
@@ -426,7 +662,10 @@ impl ToolsPanel {
                 let store = svc.store.clone();
                 let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |answer| {
                     if answer == Answer::Yes {
-                        store.post(SceneCmd::Snap { action: SnapAction::parse("clear"), use_list: None, pick: None }, origin);
+                        store.post(
+                            SceneCmd::Snap { action: SnapAction::parse("clear"), use_list: None, pick: None },
+                            origin,
+                        );
                     }
                 });
                 if let Some(line) = line {
@@ -466,12 +705,34 @@ impl ToolsPanel {
             |ui| {
                 gz_ui::PropertyGrid::new("dialog").show(ui, |g| {
                     for (label, help, v, speed) in [
-                        ("Minimum Scale", "The smallest scale an added object gets, per axis", &mut r.min_scale, 0.01),
-                        ("Maximum Scale", "The largest scale an added object gets, per axis", &mut r.max_scale, 0.01),
-                        ("Minimum Rotation", "The smallest rotation an added object gets, per axis, in degrees", &mut r.min_rot, 0.5),
-                        ("Maximum Rotation", "The largest rotation an added object gets, per axis, in degrees", &mut r.max_rot, 0.5),
+                        (
+                            "Minimum Scale",
+                            "The smallest scale an added object gets, per axis",
+                            &mut r.min_scale,
+                            0.01,
+                        ),
+                        (
+                            "Maximum Scale",
+                            "The largest scale an added object gets, per axis",
+                            &mut r.max_scale,
+                            0.01,
+                        ),
+                        (
+                            "Minimum Rotation",
+                            "The smallest rotation an added object gets, per axis, in degrees",
+                            &mut r.min_rot,
+                            0.5,
+                        ),
+                        (
+                            "Maximum Rotation",
+                            "The largest rotation an added object gets, per axis, in degrees",
+                            &mut r.max_rot,
+                            0.5,
+                        ),
                     ] {
-                        g.row(label, help, gz_ui::PropFlags::NONE, 0, |ui| gz_ui::grid::vec3_field(ui, label, v, speed));
+                        g.row(label, help, gz_ui::PropFlags::NONE, 0, |ui| {
+                            gz_ui::grid::vec3_field(ui, label, v, speed)
+                        });
                     }
                 });
             },
@@ -488,13 +749,23 @@ impl ToolsPanel {
             let snap = svc.store.snapshot();
             let mut t = snap.tools.part(ObjClass::SceneObject).clone();
             if let ToolOpts::Objects(o) = &mut t.opts {
-                let rad = |v: [f32; 3]| gz_scene::math::Vec3::new(v[0].to_radians(), v[1].to_radians(), v[2].to_radians());
+                let rad = |v: [f32; 3]| {
+                    gz_scene::math::Vec3::new(v[0].to_radians(), v[1].to_radians(), v[2].to_radians())
+                };
                 o.min_scale = gz_scene::math::Vec3::from_array(r.min_scale);
                 o.max_scale = gz_scene::math::Vec3::from_array(r.max_scale);
                 o.min_rotation = rad(r.min_rot);
                 o.max_rotation = rad(r.max_rot);
             }
-            svc.store.post(SceneCmd::SetWorld { level: Box::new(snap.meta.level.clone()), tools: vec![t], serial: snap.serial, label: "Random Settings".into() }, Origin::Ui);
+            svc.store.post(
+                SceneCmd::SetWorld {
+                    level: Box::new(snap.meta.level.clone()),
+                    tools: vec![t],
+                    serial: snap.serial,
+                    label: "Random Settings".into(),
+                },
+                Origin::Ui,
+            );
         }
         if ok || cancel || !open {
             self.random = None;
@@ -532,9 +803,26 @@ fn header(ui: &mut Ui, class: ObjClass) {
     }
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), p.raised);
-    gz_ui::icons::draw(painter, classes::icon(class), Rect::from_min_size(pos2((rect.min.x + 8.0).round(), (rect.center().y - 8.0).round()), Vec2::splat(16.0)), p.accent_bright);
+    gz_ui::icons::draw(
+        painter,
+        classes::icon(class),
+        Rect::from_min_size(
+            pos2((rect.min.x + 8.0).round(), (rect.center().y - 8.0).round()),
+            Vec2::splat(16.0),
+        ),
+        p.accent_bright,
+    );
     let title = format!("{} Tool", classes::title(class));
-    let cut = text::paint(painter, &Font::Strong.id(), pos2(rect.min.x + 32.0, rect.center().y), Align2::LEFT_CENTER, p.text, &title, Some((rect.width() - 40.0).max(0.0)), Clip::End);
+    let cut = text::paint(
+        painter,
+        &Font::Strong.id(),
+        pos2(rect.min.x + 32.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        p.text,
+        &title,
+        Some((rect.width() - 40.0).max(0.0)),
+        Clip::End,
+    );
     if cut {
         gz_ui::audit::truncated(&ctx, &title, &title, rect);
     }
@@ -542,14 +830,20 @@ fn header(ui: &mut Ui, class: ObjClass) {
 
 /// A seed for the % pick: the clock is as random as a pick needs.
 fn now_seed() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64 | 1)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64 | 1)
 }
 
 /// `MultiSelByRefObject`: of the objects that share a reference with a selected one, a share
 /// picked at random.
 #[must_use]
 pub fn percent_of_same(snap: &SceneState, class: ObjClass, percent: f32, seed: u64) -> Vec<ObjId> {
-    let refs: rustc_hash::FxHashSet<String> = snap.of_class(class).filter(|o| snap.is_selected(o.id)).filter_map(|o| o.ref_name().map(str::to_lowercase)).collect();
+    let refs: rustc_hash::FxHashSet<String> = snap
+        .of_class(class)
+        .filter(|o| snap.is_selected(o.id))
+        .filter_map(|o| o.ref_name().map(str::to_lowercase))
+        .collect();
     let mut state = seed.max(1);
     let mut next = move || {
         state ^= state << 13;

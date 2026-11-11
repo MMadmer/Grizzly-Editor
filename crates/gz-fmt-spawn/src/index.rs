@@ -43,7 +43,17 @@ impl SpawnIndex {
     pub fn build(file: &SpawnFile) -> Self {
         let graph = file.game_graph.as_ref();
         let levels = graph
-            .map(|g| g.levels.iter().map(|l| IndexLevel { id: l.id, name: l.name.clone(), section: l.section.clone(), offset: l.offset }).collect())
+            .map(|g| {
+                g.levels
+                    .iter()
+                    .map(|l| IndexLevel {
+                        id: l.id,
+                        name: l.name.clone(),
+                        section: l.section.clone(),
+                        offset: l.offset,
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let entities = file
             .vertices
@@ -51,7 +61,9 @@ impl SpawnIndex {
             .map(|v| match peek_packet(&v.spawn) {
                 Ok(h) => IndexEntity {
                     spawn_id: v.id,
-                    level: h.game_vertex.and_then(|gv| graph?.vertices.get(usize::from(gv)).map(|x| x.level_id)),
+                    level: h
+                        .game_vertex
+                        .and_then(|gv| graph?.vertices.get(usize::from(gv)).map(|x| x.level_id)),
                     section: h.section,
                     name: h.name,
                     position: h.position,
@@ -99,10 +111,21 @@ mod tests {
 
     #[test]
     fn entities_find_their_level_through_the_graph() {
-        let mut f = SpawnFile::new(SpawnHeader { version: 10, guid: [0; 16], graph_guid: [7; 16], spawn_count: 3, level_count: 1 }, Some(sample_graph()));
+        let mut f = SpawnFile::new(
+            SpawnHeader { version: 10, guid: [0; 16], graph_guid: [7; 16], spawn_count: 3, level_count: 1 },
+            Some(sample_graph()),
+        );
         f.vertices = vec![
-            SpawnVertex { id: 0, spawn: Bytes::from_vec(packet("stalker", "a", 1, 5)), update: Bytes::default() },
-            SpawnVertex { id: 1, spawn: Bytes::from_vec(packet("medkit", "b", 9, 5)), update: Bytes::default() },
+            SpawnVertex {
+                id: 0,
+                spawn: Bytes::from_vec(packet("stalker", "a", 1, 5)),
+                update: Bytes::default(),
+            },
+            SpawnVertex {
+                id: 1,
+                spawn: Bytes::from_vec(packet("medkit", "b", 9, 5)),
+                update: Bytes::default(),
+            },
             SpawnVertex { id: 2, spawn: Bytes::from_vec(vec![1, 0, b'x']), update: Bytes::default() },
         ];
         f.declared_vertices = 3;

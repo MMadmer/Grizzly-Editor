@@ -183,10 +183,22 @@ pub(crate) fn perspective_body(ui: &mut Ui, editor: &Arc<Editor>) {
         vp.with(|s| s.nav.ortho = !s.nav.ortho);
     }
     ui.separator();
-    if menu_item(ui, "Frame All", MenuItem { icon: Icon::FrameAll, keys: &keys::keys_of(editor, Act::FrameAll), ..MenuItem::default() }) {
+    if menu_item(
+        ui,
+        "Frame All",
+        MenuItem { icon: Icon::FrameAll, keys: &keys::keys_of(editor, Act::FrameAll), ..MenuItem::default() },
+    ) {
         keys::run(editor, Act::FrameAll);
     }
-    if menu_item(ui, "Frame Selection", MenuItem { icon: Icon::FrameSelection, keys: &keys::keys_of(editor, Act::FrameSelection), ..MenuItem::default() }) {
+    if menu_item(
+        ui,
+        "Frame Selection",
+        MenuItem {
+            icon: Icon::FrameSelection,
+            keys: &keys::keys_of(editor, Act::FrameSelection),
+            ..MenuItem::default()
+        },
+    ) {
         keys::run(editor, Act::FrameSelection);
     }
 }

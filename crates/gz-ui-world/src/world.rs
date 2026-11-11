@@ -3,10 +3,10 @@
 //! What the module's mode keeps of the original game, where the player starts and with what -
 //! on the surface; where the rules apply, the playable area and the transitions that start closed
 //! - under one folded More. The tab is saved as it is edited: every edit is a `world_set` call,
-//! sent one after another; `mod.ltx` is the one truth and the tab follows the manifest's store.
-//! The Player Starts and the problems are read again a second apart, on the pools. A problems bar
-//! (and the drawer it opens) shows only when there are problems. The C++ specification is the
-//! World Rules tab of `EditorWorld.cpp` (`DrawRules` .. `DrawWorldBody`, `McpView`).
+//!   sent one after another; `mod.ltx` is the one truth and the tab follows the manifest's store.
+//!   The Player Starts and the problems are read again a second apart, on the pools. A problems bar
+//!   (and the drawer it opens) shows only when there are problems. The C++ specification is the
+//!   World Rules tab of `EditorWorld.cpp` (`DrawRules` .. `DrawWorldBody`, `McpView`).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -25,14 +25,22 @@ use gz_ui::grid::chips;
 use gz_ui::list::{Column, table_headers};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Toolbar, Tone, icon_button, metrics, palette, segmented};
-use gz_world::{GameWorld, KitItem, MAX_PLAYER_CHOICES, RULES, SceneStarts, Start, StartKit, World, WorldService};
+use gz_ui::{
+    Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Tone, Toolbar, icon_button, metrics,
+    palette, segmented,
+};
+use gz_world::{
+    GameWorld, KitItem, MAX_PLAYER_CHOICES, RULES, SceneStarts, Start, StartKit, World, WorldService,
+};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::call::{self, args, s};
 use crate::lists::{Lists, ListsView};
-use crate::local::{drawer_height, local_cell, local_cell_check, local_check, local_level_picker, local_number_text, local_problems_drawer, local_section, open_level_picker, set_section_open};
+use crate::local::{
+    drawer_height, local_cell, local_cell_check, local_check, local_level_picker, local_number_text,
+    local_problems_drawer, local_section, open_level_picker, set_section_open,
+};
 use crate::picker::{item_picker, local_combo};
 
 /// The tab's id and kind.
@@ -47,11 +55,23 @@ const TABLE_ROW: f32 = 26.0;
 
 /// The five rules as the author reads them (`kRules`).
 const RULE_TEXT: [(&str, &str); 5] = [
-    ("Original characters", "Traders, story characters and every squad the game placed by name (a story id). Off: they are not in the world at all."),
-    ("Random stalkers", "The simulation's stalker squads: the ones placed at the start and the ones smart terrains bring back."),
+    (
+        "Original characters",
+        "Traders, story characters and every squad the game placed by name (a story id). Off: they are not in the world at all.",
+    ),
+    (
+        "Random stalkers",
+        "The simulation's stalker squads: the ones placed at the start and the ones smart terrains bring back.",
+    ),
     ("Mutants", "The simulation's monster squads, placed at the start and respawned."),
-    ("Jobs from NPCs", "\"Got any work?\" - the jobs squad leaders hand out: fetch, kill, escort. Off: the offer is not in their dialogs."),
-    ("Story quests", "Tasks of the named characters and the storylines. Off: their offers are not in the dialogs."),
+    (
+        "Jobs from NPCs",
+        "\"Got any work?\" - the jobs squad leaders hand out: fetch, kill, escort. Off: the offer is not in their dialogs.",
+    ),
+    (
+        "Story quests",
+        "Tasks of the named characters and the storylines. Off: their offers are not in the dialogs.",
+    ),
 ];
 
 /// "W203 world: locked names 'x', ..." as the sentence the author reads (`ProblemLine`).
@@ -76,10 +96,15 @@ pub fn problem_line(problem: &str) -> String {
 #[must_use]
 pub fn mode_text(m: &Manifest, modes: Option<&ModeScan>) -> String {
     if let Some(p) = m.provides_modes.first() {
-        return format!("These rules shape the module's own mode '{}'.", if p.title.is_empty() { &p.id } else { &p.title });
+        return format!(
+            "These rules shape the module's own mode '{}'.",
+            if p.title.is_empty() { &p.id } else { &p.title }
+        );
     }
     if !m.mode.is_empty() && m.mode != "*" {
-        let caption = modes.and_then(|s| s.modes.iter().find(|x| x.id == m.mode)).map_or(m.mode.as_str(), |x| x.caption.as_str());
+        let caption = modes
+            .and_then(|s| s.modes.iter().find(|x| x.id == m.mode))
+            .map_or(m.mode.as_str(), |x| x.caption.as_str());
         return format!("These rules shape the mode '{caption}'.");
     }
     if m.target.eq_ignore_ascii_case("default") {
@@ -94,7 +119,12 @@ pub fn mode_text(m: &Manifest, modes: Option<&ModeScan>) -> String {
 /// A kit's items as `world_set start_kit=` takes them: `section` or `section=N`.
 #[must_use]
 pub fn kit_list(items: &[KitItem]) -> String {
-    items.iter().filter(|i| !i.section.is_empty()).map(|i| if i.count == 1 { i.section.clone() } else { format!("{}={}", i.section, i.count) }).collect::<Vec<_>>().join(", ")
+    items
+        .iter()
+        .filter(|i| !i.section.is_empty())
+        .map(|i| if i.count == 1 { i.section.clone() } else { format!("{}={}", i.section, i.count) })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The calls of the tab, sent one after another so that they land in the order made.
@@ -110,13 +140,16 @@ impl Outbox {
     }
 }
 
+/// The linked game's world as read at a revision: the world, the level captions, the modes.
+type GameRead = (Rev, Arc<GameWorld>, Arc<FxHashMap<String, String>>, Option<Arc<ModeScan>>);
+
 /// What tasks leave for the tab; taken at the start of its next frame.
 #[derive(Default)]
 struct Inbox {
     /// A save's answer: empty when it went in.
     status: Option<String>,
     checked: Option<(Vec<Start>, Vec<String>, String)>,
-    game: Option<(Rev, Arc<GameWorld>, Arc<FxHashMap<String, String>>, Option<Arc<ModeScan>>)>,
+    game: Option<GameRead>,
     empty_yes: bool,
 }
 
@@ -359,7 +392,12 @@ impl WorldDoc {
         }
     }
 
-    fn set_game(&mut self, game: Arc<GameWorld>, captions: Arc<FxHashMap<String, String>>, modes: Option<Arc<ModeScan>>) {
+    fn set_game(
+        &mut self,
+        game: Arc<GameWorld>,
+        captions: Arc<FxHashMap<String, String>>,
+        modes: Option<Arc<ModeScan>>,
+    ) {
         let caption = |l: &str| captions.get(l).cloned().unwrap_or_default();
         self.levels = game.levels.iter().map(|l| (l.clone(), caption(l))).collect();
         self.level_rows = game
@@ -382,7 +420,11 @@ impl WorldDoc {
         if !self.status.is_empty() {
             lines.push((Tone::Error, self.status.clone()));
         }
-        lines.extend(self.problems.iter().map(|p| (if p.starts_with('E') { Tone::Error } else { Tone::Warning }, problem_line(p))));
+        lines.extend(
+            self.problems
+                .iter()
+                .map(|p| (if p.starts_with('E') { Tone::Error } else { Tone::Warning }, problem_line(p))),
+        );
         self.lines = lines;
     }
 
@@ -401,7 +443,11 @@ impl WorldDoc {
         }
         self.kit_dirty = false;
         let money = if self.kit.money >= 0 { Value::from(self.kit.money) } else { Value::from(-1) };
-        self.send(args([("start_kit", s(&kit_list(&self.kit.items))), ("start_money", money), ("start_perks", Value::Bool(self.kit.perks))]));
+        self.send(args([
+            ("start_kit", s(&kit_list(&self.kit.items))),
+            ("start_money", money),
+            ("start_perks", Value::Bool(self.kit.perks)),
+        ]));
     }
 
     fn run_actions(&mut self, cx: &mut DocCx<'_>) {
@@ -412,35 +458,63 @@ impl WorldDoc {
                     // the game's own base kit is where a mode's kit usually starts from
                     let ed = self.editor.clone();
                     let (outbox, inbox) = (self.outbox.clone(), self.inbox.clone());
-                    call::call_then(&self.editor, "world_set", args([("start_kit_base", Value::Bool(true))]), move |reply, _| {
-                        if !call::ok(reply) {
-                            outbox.queue.lock().push_back(args([("start_money", Value::from(0))]));
-                            run_outbox(&ed, &outbox, &inbox);
-                        }
-                    });
+                    call::call_then(
+                        &self.editor,
+                        "world_set",
+                        args([("start_kit_base", Value::Bool(true))]),
+                        move |reply, _| {
+                            if !call::ok(reply) {
+                                outbox.queue.lock().push_back(args([("start_money", Value::from(0))]));
+                                run_outbox(&ed, &outbox, &inbox);
+                            }
+                        },
+                    );
                 }
                 Action::BaseKit => {
                     let inbox = self.inbox.clone();
-                    call::call_then(&self.editor, "world_set", args([("start_kit_base", Value::Bool(true))]), move |reply, ctx| {
-                        if call::ok(reply) {
-                            inbox.lock().status = Some(String::new());
-                        } else {
-                            gz_ui::state::toast(ctx, Tone::Warning, "The linked game has no plugins\\faction_loadouts.ltx to read its base kit from.");
-                        }
-                    });
+                    call::call_then(
+                        &self.editor,
+                        "world_set",
+                        args([("start_kit_base", Value::Bool(true))]),
+                        move |reply, ctx| {
+                            if call::ok(reply) {
+                                inbox.lock().status = Some(String::new());
+                            } else {
+                                gz_ui::state::toast(
+                                    ctx,
+                                    Tone::Warning,
+                                    "The linked game has no plugins\\faction_loadouts.ltx to read its base kit from.",
+                                );
+                            }
+                        },
+                    );
                 }
                 Action::PlaceStart => {
                     let inbox = self.inbox.clone();
-                    call::call_then(&self.editor, "place_spawn", args([("section", s("player_start"))]), move |reply, _| {
-                        inbox.lock().status = Some(if call::ok(reply) { String::new() } else { format!("Not placed: {}", call::error_text(reply)) });
-                    });
+                    call::call_then(
+                        &self.editor,
+                        "place_spawn",
+                        args([("section", s("player_start"))]),
+                        move |reply, _| {
+                            inbox.lock().status = Some(if call::ok(reply) {
+                                String::new()
+                            } else {
+                                format!("Not placed: {}", call::error_text(reply))
+                            });
+                        },
+                    );
                 }
                 Action::Focus(name) => {
-                    call::call_then(&self.editor, "focus_object", args([("name", s(&name)), ("select", Value::Bool(true))]), |reply, ctx| {
-                        if !call::ok(reply) {
-                            gz_ui::state::toast(ctx, Tone::Warning, &call::error_text(reply));
-                        }
-                    });
+                    call::call_then(
+                        &self.editor,
+                        "focus_object",
+                        args([("name", s(&name)), ("select", Value::Bool(true))]),
+                        |reply, ctx| {
+                            if !call::ok(reply) {
+                                gz_ui::state::toast(ctx, Tone::Warning, &call::error_text(reply));
+                            }
+                        },
+                    );
                 }
                 Action::OpenSettings => cx.requests.open(OpenRequest::kind("mod_settings")),
                 Action::AskEmpty => self.ask_empty_world(cx.ctx),
@@ -451,9 +525,18 @@ impl WorldDoc {
     /// Takes everything of the original game out: reversible, but it is five decisions at once,
     /// so it asks (`AskEmptyWorld`).
     fn ask_empty_world(&mut self, ctx: &egui::Context) {
-        let kept: Vec<String> = RULE_TEXT.iter().zip(self.world.keep).filter(|(_, keep)| *keep).map(|((caption, _), _)| (*caption).to_owned()).collect();
+        let kept: Vec<String> = RULE_TEXT
+            .iter()
+            .zip(self.world.keep)
+            .filter(|(_, keep)| *keep)
+            .map(|((caption, _), _)| (*caption).to_owned())
+            .collect();
         if kept.is_empty() {
-            gz_ui::state::toast(ctx, Tone::Info, "The world is empty already: the mode keeps nothing of the original game.");
+            gz_ui::state::toast(
+                ctx,
+                Tone::Info,
+                "The world is empty already: the mode keeps nothing of the original game.",
+            );
             return;
         }
         let spec = ConfirmSpec {
@@ -529,10 +612,16 @@ impl WorldDoc {
                 ui.horizontal(|ui| {
                     ui.set_height(TABLE_ROW);
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    local_cell(ui, Vec2::new(rule_w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
-                        ui.add_space(6.0);
-                        let _ = text::label(ui, caption, Font::Body, p.text, Clip::End).on_hover_text(format!("{hint}\nmod.ltx: {key}"));
-                    });
+                    local_cell(
+                        ui,
+                        Vec2::new(rule_w, metrics::FRAME),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.add_space(6.0);
+                            let _ = text::label(ui, caption, Font::Body, p.text, Clip::End)
+                                .on_hover_text(format!("{hint}\nmod.ltx: {key}"));
+                        },
+                    );
                     let mut keep = self.world.keep.get(i).copied().unwrap_or(true);
                     let tip = if keep { "Kept in the mode" } else { "Taken out of the mode" };
                     if local_cell_check(ui, &format!("world.keep.{i}"), &mut keep, keep_w, true, tip) {
@@ -552,17 +641,29 @@ impl WorldDoc {
                         if let Some(c) = self.world.player_choice.get_mut(i) {
                             *c = choice;
                         }
-                        self.actions.push(Action::Send(args([("player_choice", s(&self.world.choices().join(",")))])));
+                        self.actions.push(Action::Send(args([(
+                            "player_choice",
+                            s(&self.world.choices().join(",")),
+                        )])));
                     }
                 });
             });
         }
         ui.add_space(2.0);
-        let _ = text::prose(ui, &format!("{choices} of {MAX_PLAYER_CHOICES} rules offered on the new-game screen."));
+        let _ = text::prose(
+            ui,
+            &format!("{choices} of {MAX_PLAYER_CHOICES} rules offered on the new-game screen."),
+        );
         let all = self.world.keep.iter().all(|k| *k);
         if Button::new("Keep Everything").enabled(!all, "Everything is kept already").show(ui).clicked() {
             self.world.keep = [true; 5];
-            let a = args([(RULES[0], Value::Bool(true)), (RULES[1], Value::Bool(true)), (RULES[2], Value::Bool(true)), (RULES[3], Value::Bool(true)), (RULES[4], Value::Bool(true))]);
+            let a = args([
+                (RULES[0], Value::Bool(true)),
+                (RULES[1], Value::Bool(true)),
+                (RULES[2], Value::Bool(true)),
+                (RULES[3], Value::Bool(true)),
+                (RULES[4], Value::Bool(true)),
+            ]);
             self.actions.push(Action::Send(a));
         }
     }
@@ -575,16 +676,36 @@ impl WorldDoc {
         for (i, st) in self.starts.iter().enumerate() {
             ui.push_id(i, |ui| {
                 ui.horizontal(|ui| {
-                    if st.source == "scene" && icon_button(ui, Icon::FrameSelection, "Select it in the scene and frame it", false, true).clicked() {
+                    if st.source == "scene"
+                        && icon_button(
+                            ui,
+                            Icon::FrameSelection,
+                            "Select it in the scene and frame it",
+                            false,
+                            true,
+                        )
+                        .clicked()
+                    {
                         self.actions.push(Action::Focus(st.name.clone()));
                     }
-                    let line = format!("{}  at {:.1}, {:.1}, {:.1}", level_label(&self.captions, &st.level), st.position[0], st.position[1], st.position[2]);
-                    let _ = text::label(ui, &line, Font::Body, p.text, Clip::End).on_hover_text(format!("{}: {}", st.source, st.name));
+                    let line = format!(
+                        "{}  at {:.1}, {:.1}, {:.1}",
+                        level_label(&self.captions, &st.level),
+                        st.position[0],
+                        st.position[1],
+                        st.position[2]
+                    );
+                    let _ = text::label(ui, &line, Font::Body, p.text, Clip::End)
+                        .on_hover_text(format!("{}: {}", st.source, st.name));
                 });
             });
         }
         if self.starts.len() > 1 {
-            let _ = text::status(ui, Tone::Error, &format!("A module has one Player Start: the build refuses {}.", self.starts.len()));
+            let _ = text::status(
+                ui,
+                Tone::Error,
+                &format!("A module has one Player Start: the build refuses {}.", self.starts.len()),
+            );
         }
         ui.add_space(2.0);
         let resp = Button::new("Place in Scene")
@@ -600,7 +721,10 @@ impl WorldDoc {
     /// (`DrawStartKit`).
     fn draw_kit(&mut self, ui: &mut Ui) {
         if !self.kit.declared {
-            let _ = text::prose(ui, "None: a new game begins with the loadout picked on the new-game screen - the faction's kit and the extra kits.");
+            let _ = text::prose(
+                ui,
+                "None: a new game begins with the loadout picked on the new-game screen - the faction's kit and the extra kits.",
+            );
             ui.add_space(2.0);
             if Button::new("Set a Starting Kit").tip("It starts as the linked game's base kit, the one every faction gets, and changes from there.").show(ui).clicked() {
                 self.kit.declared = true;
@@ -610,10 +734,15 @@ impl WorldDoc {
         }
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
-        let _ = text::prose(ui, "A new game begins with exactly this: what the new-game screen's loadout and extra kits gave is taken away. The PDA and the bolt always stay.");
+        let _ = text::prose(
+            ui,
+            "A new game begins with exactly this: what the new-game screen's loadout and extra kits gave is taken away. The PDA and the bolt always stay.",
+        );
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            let _ = text::label(ui, "Money", Font::Body, p.text_secondary, Clip::End).on_hover_text("The money a new game begins with. Empty: what the new-game screen gives.\nmod.ltx: money");
+            let _ = text::label(ui, "Money", Font::Body, p.text_secondary, Clip::End).on_hover_text(
+                "The money a new game begins with. Empty: what the new-game screen gives.\nmod.ltx: money",
+            );
             ui.add_space(8.0);
             let money = (self.kit.money >= 0).then_some(i64::from(self.kit.money));
             if let Some(v) = local_number_text(ui, "world.money", money, "the screen's", em(8.0)) {
@@ -631,12 +760,20 @@ impl WorldDoc {
         });
         ui.add_space(2.0);
         if self.kit.items.is_empty() {
-            let _ = text::status(ui, Tone::Muted, "No items: the player begins with the PDA and nothing else.");
+            let _ =
+                text::status(ui, Tone::Muted, "No items: the player begins with the PDA and nothing else.");
         } else {
             let total = ui.available_width();
             let (count_w, action_w) = (em(5.0), metrics::ICON_BUTTON);
             let item_w = (total - count_w - action_w - 16.0).max(em(6.0));
-            let _ = table_headers(ui, &[Column::new("Item", item_w + 8.0), Column::new("Count", count_w + 8.0), Column::new("", action_w)]);
+            let _ = table_headers(
+                ui,
+                &[
+                    Column::new("Item", item_w + 8.0),
+                    Column::new("Count", count_w + 8.0),
+                    Column::new("", action_w),
+                ],
+            );
             let mut remove = None;
             let lists = &self.lists;
             for (i, it) in self.kit.items.iter_mut().enumerate() {
@@ -644,13 +781,23 @@ impl WorldDoc {
                     ui.horizontal(|ui| {
                         ui.set_height(TABLE_ROW);
                         let mut section = it.section.clone();
-                        let picked = local_cell(ui, Vec2::new(item_w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| item_picker(ui, &format!("world.kit.{i}"), &mut section, lists, None)).inner;
+                        let picked = local_cell(
+                            ui,
+                            Vec2::new(item_w, metrics::FRAME),
+                            Layout::left_to_right(Align::Center),
+                            |ui| item_picker(ui, &format!("world.kit.{i}"), &mut section, lists, None),
+                        )
+                        .inner;
                         if picked && !section.is_empty() {
                             it.section = section;
                             self.kit_dirty = true;
                         }
                         let changed = ui
-                            .allocate_ui_with_layout(Vec2::new(count_w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| gz_ui::grid::integer(ui, &mut it.count, 0.1, "").changed())
+                            .allocate_ui_with_layout(
+                                Vec2::new(count_w, metrics::FRAME),
+                                Layout::left_to_right(Align::Center),
+                                |ui| gz_ui::grid::integer(ui, &mut it.count, 0.1, "").changed(),
+                            )
                             .inner;
                         if changed {
                             it.count = it.count.max(1);
@@ -744,7 +891,11 @@ impl WorldDoc {
             let list = if area { &self.world.area } else { &self.world.levels };
             let unknown: Vec<&str> = list.iter().filter(|l| !g.level_exists(l)).map(String::as_str).collect();
             if !unknown.is_empty() {
-                let _ = text::status(ui, Tone::Warning, &format!("Not in the linked game: {}.", unknown.join(", ")));
+                let _ = text::status(
+                    ui,
+                    Tone::Warning,
+                    &format!("Not in the linked game: {}.", unknown.join(", ")),
+                );
             }
         }
         let popup = Id::unique(("gz-ui-world.pick_level", key));
@@ -772,7 +923,11 @@ impl WorldDoc {
             return;
         };
         if !game.ok {
-            let text_ = if game.error.is_empty() { "Link a game to list its transitions." } else { game.error.as_str() };
+            let text_ = if game.error.is_empty() {
+                "Link a game to list its transitions."
+            } else {
+                game.error.as_str()
+            };
             let _ = text::status(ui, Tone::Muted, text_);
             return;
         }
@@ -793,19 +948,34 @@ impl WorldDoc {
         let current = self.level_rows.iter().position(|(name, _)| *name == self.trans_level);
         let level_locked = self.world.locked_levels.contains(&self.trans_level);
         PropertyGrid::new("world").label_frac(0.25).show(ui, |g| {
-            let picked = g.row("Level", "The level whose transitions are listed: the linked game's levels that have any.", PropFlags::NONE, 0, |ui| {
-                let w = ui.available_width().min(em(24.0));
-                local_cell(ui, Vec2::new(w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| local_combo(ui, "world.trans_level", &preview, false, &rows, current)).inner
-            });
+            let picked = g.row(
+                "Level",
+                "The level whose transitions are listed: the linked game's levels that have any.",
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    let w = ui.available_width().min(em(24.0));
+                    local_cell(ui, Vec2::new(w, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
+                        local_combo(ui, "world.trans_level", &preview, false, &rows, current)
+                    })
+                    .inner
+                },
+            );
             if let Some(Some(i)) = picked {
                 picked_level = self.level_rows.get(i).map(|(name, _)| name.clone());
             }
-            let flipped = g.row("Whole Level", "Every transition on this level starts closed; quests open them one by one.", PropFlags::NONE, 0, |ui| {
-                let label = "Close every transition on this level";
-                let w = metrics::FRAME + 8.0 + text::width(ui.ctx(), &Font::Body.id(), label);
-                let mut on = level_locked;
-                local_check(ui, "world.lock_level", label, &mut on, w).then_some(on)
-            });
+            let flipped = g.row(
+                "Whole Level",
+                "Every transition on this level starts closed; quests open them one by one.",
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    let label = "Close every transition on this level";
+                    let w = metrics::FRAME + 8.0 + text::width(ui.ctx(), &Font::Body.id(), label);
+                    let mut on = level_locked;
+                    local_check(ui, "world.lock_level", label, &mut on, w).then_some(on)
+                },
+            );
             if let Some(Some(on)) = flipped {
                 lock_level = Some(on);
             }
@@ -819,16 +989,28 @@ impl WorldDoc {
             self.actions.push(Action::Send(args([(key, s(&self.trans_level))])));
         }
         let w = ui.available_width().min(em(18.0));
-        let _ = SearchField::new(&mut self.trans_filter).hint("Filter transitions").width(w).id_salt("gz-ui-world.trans_filter").show(ui);
+        let _ = SearchField::new(&mut self.trans_filter)
+            .hint("Filter transitions")
+            .width(w)
+            .id_salt("gz-ui-world.trans_filter")
+            .show(ui);
         ui.add_space(4.0);
 
-        if self.trans_memo.0 != self.trans_level || self.trans_memo.1 != self.trans_filter || self.trans_memo.2 != self.game_gen {
+        if self.trans_memo.0 != self.trans_level
+            || self.trans_memo.1 != self.trans_filter
+            || self.trans_memo.2 != self.game_gen
+        {
             let rows: Vec<usize> = game
                 .transitions
                 .iter()
                 .enumerate()
                 .filter(|(_, t)| t.level == self.trans_level)
-                .filter(|(_, t)| gz_ui::search::matches(&self.trans_filter, &format!("{} {} {}", t.name, level_caption(&self.captions, &t.to_level), t.to_level)))
+                .filter(|(_, t)| {
+                    gz_ui::search::matches(
+                        &self.trans_filter,
+                        &format!("{} {} {}", t.name, level_caption(&self.captions, &t.to_level), t.to_level),
+                    )
+                })
                 .map(|(i, _)| i)
                 .collect();
             self.trans_memo = (self.trans_level.clone(), self.trans_filter.clone(), self.game_gen, rows);
@@ -836,7 +1018,11 @@ impl WorldDoc {
         let total = ui.available_width();
         let closed_w = em(5.0);
         let half = ((total - closed_w) * 0.5).max(em(6.0));
-        let columns = [Column::new("Transition", half), Column::new("Leads To", half), Column { centred: true, ..Column::new("Closed", closed_w) }];
+        let columns = [
+            Column::new("Transition", half),
+            Column::new("Leads To", half),
+            Column { centred: true, ..Column::new("Closed", closed_w) },
+        ];
         let _ = table_headers(ui, &columns);
         let mut toggled: Option<(String, bool)> = None;
         for &i in &self.trans_memo.3 {
@@ -846,15 +1032,30 @@ impl WorldDoc {
                     ui.set_height(TABLE_ROW);
                     ui.spacing_mut().item_spacing.x = 0.0;
                     let to = level_caption(&self.captions, &t.to_level);
-                    local_cell(ui, Vec2::new(half, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
-                        ui.add_space(6.0);
-                        let tip = format!("{}\nat {:.1}, {:.1}, {:.1}", t.name, t.position[0], t.position[1], t.position[2]);
-                        let _ = text::label(ui, &t.name, Font::Body, p.text, Clip::End).on_hover_text(tip);
-                    });
-                    local_cell(ui, Vec2::new(half, metrics::FRAME), Layout::left_to_right(Align::Center), |ui| {
-                        ui.add_space(6.0);
-                        let _ = text::label(ui, &to, Font::Body, p.text, Clip::End).on_hover_text(t.to_level.as_str());
-                    });
+                    local_cell(
+                        ui,
+                        Vec2::new(half, metrics::FRAME),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.add_space(6.0);
+                            let tip = format!(
+                                "{}\nat {:.1}, {:.1}, {:.1}",
+                                t.name, t.position[0], t.position[1], t.position[2]
+                            );
+                            let _ =
+                                text::label(ui, &t.name, Font::Body, p.text, Clip::End).on_hover_text(tip);
+                        },
+                    );
+                    local_cell(
+                        ui,
+                        Vec2::new(half, metrics::FRAME),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.add_space(6.0);
+                            let _ = text::label(ui, &to, Font::Body, p.text, Clip::End)
+                                .on_hover_text(t.to_level.as_str());
+                        },
+                    );
                     let by = self.world.closed_by(&t.name, &t.level, &t.to_level);
                     let mut closed = !by.is_empty();
                     let own = by == "locked" || by.is_empty();
@@ -864,14 +1065,29 @@ impl WorldDoc {
                         _ if closed => "Starts closed: a quest opens it",
                         _ => "Open at the start of a game",
                     };
-                    if local_cell_check(ui, &format!("world.closed.{}", t.name), &mut closed, closed_w, own, tip) {
+                    if local_cell_check(
+                        ui,
+                        &format!("world.closed.{}", t.name),
+                        &mut closed,
+                        closed_w,
+                        own,
+                        tip,
+                    ) {
                         toggled = Some((t.name.clone(), closed));
                     }
                 });
             });
         }
         if self.trans_memo.3.is_empty() {
-            let _ = text::status(ui, Tone::Muted, if self.trans_filter.is_empty() { "This level has no transitions." } else { "No transition matches the filter." });
+            let _ = text::status(
+                ui,
+                Tone::Muted,
+                if self.trans_filter.is_empty() {
+                    "This level has no transitions."
+                } else {
+                    "No transition matches the filter."
+                },
+            );
         }
         if let Some((name, closed)) = toggled {
             gz_world::model::toggle(&mut self.world.locked, &name, closed);
@@ -885,7 +1101,11 @@ impl WorldDoc {
                     if icon_button(ui, Icon::Close, "Take it off the closed list", false, true).clicked() {
                         forget = Some(name.clone());
                     }
-                    let _ = text::status(ui, Tone::Warning, &format!("Closed, but not in the linked game: {name}"));
+                    let _ = text::status(
+                        ui,
+                        Tone::Warning,
+                        &format!("Closed, but not in the linked game: {name}"),
+                    );
                 });
             });
         }
@@ -918,16 +1138,30 @@ impl WorldDoc {
         }
         if local_section(ui, MORE, "More", false, None) {
             ui.indent("gz-ui-world.more", |ui| {
-                let levels = if self.world.levels.is_empty() { "Every level".to_owned() } else { format!("{} levels", self.world.levels.len()) };
+                let levels = if self.world.levels.is_empty() {
+                    "Every level".to_owned()
+                } else {
+                    format!("{} levels", self.world.levels.len())
+                };
                 if local_section(ui, "world.applies", "Applies On", true, Some(&levels)) {
-                    let _ = text::prose(ui, "Where the five rules hold. The rest of the map keeps the original game.");
+                    let _ = text::prose(
+                        ui,
+                        "Where the five rules hold. The rest of the map keeps the original game.",
+                    );
                     ui.add_space(2.0);
                     self.scope(ui, "world.levels", ["Every Level", "These Levels"], false);
                     ui.add_space(8.0);
                 }
-                let area = if self.world.area.is_empty() { "Anywhere".to_owned() } else { format!("{} levels", self.world.area.len()) };
+                let area = if self.world.area.is_empty() {
+                    "Anywhere".to_owned()
+                } else {
+                    format!("{} levels", self.world.area.len())
+                };
                 if local_section(ui, "world.area", "Playable Area", true, Some(&area)) {
-                    let _ = text::prose(ui, "A transition out of the area stays closed. A quest can open it or grow the area.");
+                    let _ = text::prose(
+                        ui,
+                        "A transition out of the area stays closed. A quest can open it or grow the area.",
+                    );
                     ui.add_space(2.0);
                     self.scope(ui, "world.area_levels", ["Anywhere", "Only These Levels"], true);
                     ui.add_space(8.0);
@@ -944,9 +1178,21 @@ impl WorldDoc {
         let full = ui.max_rect();
         let any_problem = !self.lines.is_empty();
         let drawer = if any_problem { drawer_height(self.drawer_open, full.height()) } else { 0.0 };
-        let body = Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - drawer - if any_problem { 4.0 } else { 0.0 }).max(full.min.y + 1.0)));
-        let mut page = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.world.page").max_rect(body).layout(Layout::top_down(Align::Min)));
-        let mut scroll = ScrollArea::vertical().id_salt("gz-ui-world.world.scroll").auto_shrink([false, false]);
+        let body = Rect::from_min_max(
+            full.min,
+            pos2(
+                full.max.x,
+                (full.max.y - drawer - if any_problem { 4.0 } else { 0.0 }).max(full.min.y + 1.0),
+            ),
+        );
+        let mut page = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-world.world.page")
+                .max_rect(body)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        let mut scroll =
+            ScrollArea::vertical().id_salt("gz-ui-world.world.scroll").auto_shrink([false, false]);
         match gz_app::take_scroll(&ctx, HOST) {
             Some(gz_app::ScrollTo::Top) => scroll = scroll.vertical_scroll_offset(0.0),
             Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(self.scroll_max),
@@ -956,22 +1202,44 @@ impl WorldDoc {
         let out = scroll.show(&mut page, |ui| {
             // one column of up to 900 pt in the middle, the scrollbar at the right edge of the tab
             let avail = ui.available_width();
-            let column = avail.min(COLUMN_W).max(1.0);
+            let column = avail.clamp(1.0, COLUMN_W);
             let x = ui.cursor().min.x + ((avail - column) * 0.5).max(0.0);
             let top = ui.cursor().min.y;
-            let mut col = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.world.column").max_rect(Rect::from_min_max(pos2(x, top), pos2(x + column, f32::INFINITY))).layout(Layout::top_down(Align::Min)));
+            let mut col = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-world.world.column")
+                    .max_rect(Rect::from_min_max(pos2(x, top), pos2(x + column, f32::INFINITY)))
+                    .layout(Layout::top_down(Align::Min)),
+            );
             col.set_width(column);
             self.draw_page(&mut col);
             let used = col.min_rect();
-            ui.allocate_rect(Rect::from_min_max(pos2(ui.cursor().min.x, top), pos2(ui.cursor().min.x + avail, used.max.y + 12.0)), egui::Sense::hover());
+            ui.allocate_rect(
+                Rect::from_min_max(
+                    pos2(ui.cursor().min.x, top),
+                    pos2(ui.cursor().min.x + avail, used.max.y + 12.0),
+                ),
+                egui::Sense::hover(),
+            );
         });
         let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
         self.scroll_max = max;
         gz_app::report_scroll(&ctx, HOST, out.state.clamped_offset().y.min(max), max);
         if any_problem {
             let r = Rect::from_min_max(pos2(full.min.x, full.max.y - drawer), full.max);
-            let mut bottom = ui.new_child(UiBuilder::new().id_salt("gz-ui-world.world.drawer").max_rect(r).layout(Layout::top_down(Align::Min)));
-            local_problems_drawer(&mut bottom, &mut self.drawer_open, drawer, &self.lines, "No problems: the build takes these rules as they are.");
+            let mut bottom = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-world.world.drawer")
+                    .max_rect(r)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            local_problems_drawer(
+                &mut bottom,
+                &mut self.drawer_open,
+                drawer,
+                &self.lines,
+                "No problems: the build takes these rules as they are.",
+            );
         }
         ui.allocate_rect(full, egui::Sense::hover());
     }
@@ -1008,7 +1276,11 @@ fn run_outbox(editor: &Arc<Editor>, outbox: &Arc<Outbox>, inbox: &Arc<Mutex<Inbo
                 continue;
             };
             let reply = ed.call("world_set", a, origin).await;
-            inbox.lock().status = Some(if call::ok(&reply) { String::new() } else { format!("Not saved: {}", call::error_text(&reply)) });
+            inbox.lock().status = Some(if call::ok(&reply) {
+                String::new()
+            } else {
+                format!("Not saved: {}", call::error_text(&reply))
+            });
             call::wake_ui(&ed);
         }
         call::wake_ui(&ed);
@@ -1034,7 +1306,15 @@ impl Document for WorldDoc {
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         tb.group(2);
-        if tb.action("reload", Icon::Refresh, "Reload Game Data", "Read the linked game's levels, transitions and their names again", true, false, Kind::Ghost) {
+        if tb.action(
+            "reload",
+            Icon::Refresh,
+            "Reload Game Data",
+            "Read the linked game's levels, transitions and their names again",
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             self.game_rev = None;
             self.checked_at = None;
             let ed = cx.editor.clone();
@@ -1048,7 +1328,11 @@ impl Document for WorldDoc {
                 call::wake_ui(&ed);
             });
         }
-        let tip = if self.have_manifest { "Take everything of the original game out of this mode" } else { "The project has no mod.ltx yet" };
+        let tip = if self.have_manifest {
+            "Take everything of the original game out of this mode"
+        } else {
+            "The project has no mod.ltx yet"
+        };
         if tb.action("empty", Icon::Clear, "Empty World...", tip, self.have_manifest, false, Kind::Ghost) {
             self.actions.push(Action::AskEmpty);
         }
@@ -1065,7 +1349,13 @@ impl Document for WorldDoc {
         let ctx = ui.ctx().clone();
         self.take_inbox();
         if cx.editor.project_opt().is_none() {
-            gz_ui::state::empty_state(ui, Icon::World, "No project", "World rules live in the mod.ltx of the open project.", None);
+            gz_ui::state::empty_state(
+                ui,
+                Icon::World,
+                "No project",
+                "World rules live in the mod.ltx of the open project.",
+                None,
+            );
             return;
         }
         self.sync();
@@ -1080,7 +1370,13 @@ impl Document for WorldDoc {
             return;
         }
         if !self.have_manifest {
-            if gz_ui::state::empty_state(ui, Icon::World, "No mod.ltx yet", "World rules live in the module's mod.ltx. Mod Settings makes it.", Some("Open Mod Settings")) {
+            if gz_ui::state::empty_state(
+                ui,
+                Icon::World,
+                "No mod.ltx yet",
+                "World rules live in the module's mod.ltx. Mod Settings makes it.",
+                Some("Open Mod Settings"),
+            ) {
                 self.actions.push(Action::OpenSettings);
             }
             self.run_actions(cx);
@@ -1131,13 +1427,23 @@ mod tests {
 
     #[test]
     fn a_problem_reads_as_a_sentence() {
-        assert_eq!(problem_line("W203 world: levels names 'x', a level the linked game does not have"), "Levels names 'x', a level the linked game does not have.");
-        assert_eq!(problem_line("E201 world: 2 Player Starts - a module has one: a"), "2 Player Starts - a module has one: a.");
+        assert_eq!(
+            problem_line("W203 world: levels names 'x', a level the linked game does not have"),
+            "Levels names 'x', a level the linked game does not have."
+        );
+        assert_eq!(
+            problem_line("E201 world: 2 Player Starts - a module has one: a"),
+            "2 Player Starts - a module has one: a."
+        );
     }
 
     #[test]
     fn a_kit_goes_out_as_one_list() {
-        let items = vec![KitItem { section: "bandage".into(), count: 2 }, KitItem { section: "wpn_knife".into(), count: 1 }, KitItem { section: String::new(), count: 1 }];
+        let items = vec![
+            KitItem { section: "bandage".into(), count: 2 },
+            KitItem { section: "wpn_knife".into(), count: 1 },
+            KitItem { section: String::new(), count: 1 },
+        ];
         assert_eq!(kit_list(&items), "bandage=2, wpn_knife");
         assert_eq!(kit_list(&[]), "");
     }
@@ -1147,7 +1453,10 @@ mod tests {
         let mut m = Manifest::default();
         assert_eq!(mode_text(&m, None), "No game mode is chosen yet: pick one in Mod Settings, Game Mode.");
         m.target = "default".into();
-        assert_eq!(mode_text(&m, None), "These rules shape every new game: the module targets the plain game.");
+        assert_eq!(
+            mode_text(&m, None),
+            "These rules shape every new game: the module targets the plain game."
+        );
         m.mode = "metro".into();
         assert_eq!(mode_text(&m, None), "These rules shape the mode 'metro'.");
         m.provides_modes.push(gz_mod::ProvidesMode { id: "mine".into(), title: "Mine".into() });

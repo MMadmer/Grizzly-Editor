@@ -29,8 +29,9 @@ use crate::card::{CardFile, StringTables, card_section};
 use crate::content::{Finding, Level, check_content, content_head, content_need};
 use crate::crypto::{Sha256Stream, sha256_hex};
 use crate::format::{
-    ASSET_LIMIT, Asset, INDEX_LIMIT, IndexRecord, MAX_PACKAGES, ReleaseFacts, check_requires_game, descriptor_head, descriptor_name,
-    index_name, index_text, is_release_file, package_name, package_path_ok, release_gate, resolve_release_dir, split_parts,
+    ASSET_LIMIT, Asset, INDEX_LIMIT, IndexRecord, MAX_PACKAGES, ReleaseFacts, check_requires_game,
+    descriptor_head, descriptor_name, index_name, index_text, is_release_file, package_name, package_path_ok,
+    release_gate, resolve_release_dir, split_parts,
 };
 use crate::game_version::linked_game_version;
 use crate::keys::AuthorKeys;
@@ -225,7 +226,12 @@ fn cancelled() -> String {
 }
 
 /// Runs a packaging to its end inside a job: what Package Release and Publish Release call.
-pub async fn run_package(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &PackageRequest, ctx: &JobCtx) -> PackageResult {
+pub async fn run_package(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    req: &PackageRequest,
+    ctx: &JobCtx,
+) -> PackageResult {
     let releases = Releases::of(editor);
     releases.begin(String::new());
     let feeder = Feeder { releases: releases.clone(), ctx: ctx.clone() };
@@ -233,7 +239,11 @@ pub async fn run_package(editor: &Arc<Editor>, session: &Arc<ProjectSession>, re
     match package(editor, session, req, &feeder, &mut out).await {
         Ok(()) => out.ok = true,
         Err(err) => {
-            let keep = PackageResult { err, warnings: std::mem::take(&mut out.warnings), ..PackageResult::default() };
+            let keep = PackageResult {
+                err,
+                warnings: std::mem::take(&mut out.warnings),
+                ..PackageResult::default()
+            };
             out = keep;
         }
     }
@@ -258,12 +268,19 @@ fn add_warning(to: &mut String, line: &str) {
     to.push_str(line);
 }
 
-async fn package(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &PackageRequest, feeder: &Feeder, out: &mut PackageResult) -> Result<(), String> {
+async fn package(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    req: &PackageRequest,
+    feeder: &Feeder,
+    out: &mut PackageResult,
+) -> Result<(), String> {
     let ctx = &feeder.ctx;
     let project = session.services.get::<Project>().ok_or_else(|| "no active project".to_owned())?;
     let manifest = ManifestService::of_session(editor, session).await.map_err(|e| e.message)?;
     manifest.sync().await.map_err(|e| e.message)?;
-    let m = manifest.snapshot().manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
+    let m =
+        manifest.snapshot().manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
     if let Some(s) = feeder.releases.status.lock().as_mut() {
         s.subtitle = format!("{} {}", m.title(), m.version);
     }
@@ -335,7 +352,12 @@ async fn stage_and_pack(
     let build = run_build(
         editor,
         session,
-        &BuildRequest { kind: BuildKind::ToFolder, target: stage.to_string_lossy().into_owned(), clean: true, remember_target: false },
+        &BuildRequest {
+            kind: BuildKind::ToFolder,
+            target: stage.to_string_lossy().into_owned(),
+            clean: true,
+            remember_target: false,
+        },
         &feeder.ctx,
     )
     .await;
@@ -375,8 +397,20 @@ async fn stage_and_pack(
 
 /// The descriptor, the job's last step: it goes last, because it is the file that vouches for
 /// the other two kinds (`FinishRelease`).
-async fn finish_release(editor: &Arc<Editor>, root: &Path, m: &Manifest, draft: &Draft, out: &mut PackageResult) -> Result<(), String> {
-    let facts = ReleaseFacts { id: &m.id, version: &m.version, requires_game: &out.requires_game, files: out.files, unpacked: out.unpacked };
+async fn finish_release(
+    editor: &Arc<Editor>,
+    root: &Path,
+    m: &Manifest,
+    draft: &Draft,
+    out: &mut PackageResult,
+) -> Result<(), String> {
+    let facts = ReleaseFacts {
+        id: &m.id,
+        version: &m.version,
+        requires_game: &out.requires_game,
+        files: out.files,
+        unpacked: out.unpacked,
+    };
     let mut text = descriptor_head(&facts, &out.index, &out.packages);
     let root_io = root.to_path_buf();
     let tables = editor.exec.io(move || StringTables::read(&root_io)).await;
@@ -414,7 +448,11 @@ async fn finish_release(editor: &Arc<Editor>, root: &Path, m: &Manifest, draft: 
         out.key_id = id;
     }
     // a publisher checks every uploaded asset against these, the descriptor included
-    out.descriptor_file = Asset { name: descriptor_name(&m.id), size: written.len() as u64, sha256: sha256_hex(written.as_bytes()) };
+    out.descriptor_file = Asset {
+        name: descriptor_name(&m.id),
+        size: written.len() as u64,
+        sha256: sha256_hex(written.as_bytes()),
+    };
     out.descriptor = path.to_string_lossy().into_owned();
     editor.log.info(format!(
         "* [XMS] release {} {}: {} file(s), {} byte(s) in {} package(s) -> {}",
@@ -500,7 +538,10 @@ fn list_staged(dir: &Path, rel_dir: &str, out: &mut Vec<Staged>) -> Result<(), S
     for entry in listing.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
-            return Err(format!("file name the game's updater refuses (reserved name, trailing dot or space, control character): {}", entry.path().display()));
+            return Err(format!(
+                "file name the game's updater refuses (reserved name, trailing dot or space, control character): {}",
+                entry.path().display()
+            ));
         };
         let rel = if rel_dir.is_empty() { name.to_owned() } else { format!("{rel_dir}\\{name}") };
         let Ok(kind) = entry.file_type() else { continue };
@@ -512,7 +553,12 @@ fn list_staged(dir: &Path, rel_dir: &str, out: &mut Vec<Staged>) -> Result<(), S
             continue;
         }
         let md = entry.metadata().ok();
-        out.push(Staged { rel, size: md.as_ref().map_or(0, std::fs::Metadata::len), written: md.and_then(|m| m.modified().ok()), ..Staged::default() });
+        out.push(Staged {
+            rel,
+            size: md.as_ref().map_or(0, std::fs::Metadata::len),
+            written: md.and_then(|m| m.modified().ok()),
+            ..Staged::default()
+        });
     }
     Ok(())
 }
@@ -528,8 +574,10 @@ fn dos_time(written: Option<SystemTime>, offset: time::UtcOffset) -> u32 {
     if !(1980..=2107).contains(&year) {
         return NONE;
     }
-    let date = (((year - 1980) as u32) << 9) | (u32::from(u8::from(local.month())) << 5) | u32::from(local.day());
-    let clock = (u32::from(local.hour()) << 11) | (u32::from(local.minute()) << 5) | (u32::from(local.second()) / 2);
+    let date =
+        (((year - 1980) as u32) << 9) | (u32::from(u8::from(local.month())) << 5) | u32::from(local.day());
+    let clock =
+        (u32::from(local.hour()) << 11) | (u32::from(local.minute()) << 5) | (u32::from(local.second()) / 2);
     (date << 16) | clock
 }
 
@@ -580,11 +628,17 @@ impl PackJob {
         for f in &mut files {
             let rel = f.rel.replace('\\', "/");
             if !package_path_ok(&rel) {
-                return Err(format!("file name the game's updater refuses (reserved name, trailing dot or space, control character): {}", f.rel));
+                return Err(format!(
+                    "file name the game's updater refuses (reserved name, trailing dot or space, control character): {}",
+                    f.rel
+                ));
             }
             // an index record is space-separated and the path is the rest of its line
             if rel.starts_with(' ') {
-                return Err(format!("file name starts with a space - the file index cannot state it safely: {}", f.rel));
+                return Err(format!(
+                    "file name starts with a space - the file index cannot state it safely: {}",
+                    f.rel
+                ));
             }
             f.entry = format!("{prefix}{rel}");
             f.key = f.entry.to_ascii_lowercase();
@@ -603,10 +657,14 @@ impl PackJob {
             warnings.push_str(&format!("the Mod Browser refuses {text}\n"));
         }
         if catalog_block.len() > 10 {
-            warnings.push_str(&format!("the Mod Browser refuses {} more file(s)\n", catalog_block.len() - 10));
+            warnings
+                .push_str(&format!("the Mod Browser refuses {} more file(s)\n", catalog_block.len() - 10));
         }
         if let Some(first) = catalog_review.first() {
-            warnings.push_str(&format!("the Mod Browser's review looks at {} place(s) in the scripts, first: {first}\n", catalog_review.len()));
+            warnings.push_str(&format!(
+                "the Mod Browser's review looks at {} place(s) in the scripts, first: {first}\n",
+                catalog_review.len()
+            ));
         }
 
         // the same input always yields the same package order
@@ -614,7 +672,10 @@ impl PackJob {
         let sizes: Vec<u64> = files.iter().map(|f| f.size).collect();
         let parts = split_parts(&sizes);
         if parts.len() > MAX_PACKAGES {
-            return Err(format!("the module needs {} packages - a release holds {MAX_PACKAGES} at most", parts.len()));
+            return Err(format!(
+                "the module needs {} packages - a release holds {MAX_PACKAGES} at most",
+                parts.len()
+            ));
         }
 
         let packages_dir = self.stage.join("packages");
@@ -635,7 +696,9 @@ impl PackJob {
             let (sha256, size) = hash_file(&path, &self.feeder)?;
             if size >= ASSET_LIMIT {
                 let biggest = slice.iter().max_by_key(|f| f.size).map_or("", |f| f.rel.as_str());
-                return Err(format!("package {name} is {size} bytes - GitHub refuses a release asset of 2 GiB and more (largest file inside: {biggest})"));
+                return Err(format!(
+                    "package {name} is {size} bytes - GitHub refuses a release asset of 2 GiB and more (largest file inside: {biggest})"
+                ));
             }
             packed += size;
             packages.push(Asset { name, size, sha256 });
@@ -643,12 +706,19 @@ impl PackJob {
 
         // The file index (2.2)
         let names: Vec<String> = packages.iter().map(|p| p.name.clone()).collect();
-        let records: Vec<IndexRecord> = files.iter().map(|f| IndexRecord { path: f.path.clone(), size: f.size, ..f.rec.clone() }).collect();
+        let records: Vec<IndexRecord> = files
+            .iter()
+            .map(|f| IndexRecord { path: f.path.clone(), size: f.size, ..f.rec.clone() })
+            .collect();
         let index = index_text(&names, &records);
         if index.len() as u64 > INDEX_LIMIT {
             return Err(format!("the file index is {} bytes - the game reads 64 MiB at most", index.len()));
         }
-        let index_asset = Asset { name: index_name(&self.id, &self.version), size: index.len() as u64, sha256: sha256_hex(index.as_bytes()) };
+        let index_asset = Asset {
+            name: index_name(&self.id, &self.version),
+            size: index.len() as u64,
+            sha256: sha256_hex(index.as_bytes()),
+        };
 
         self.feeder.stage("Writing the release", 0, 0);
         self.write_out(&packages_dir, &packages, &index_asset.name, &index)?;
@@ -666,24 +736,38 @@ impl PackJob {
         }
         if !self.thumbnail.is_empty() {
             if draft.thumbnail_ref.is_none() {
-                warnings.push_str(&format!("the thumbnail {} is not in the build - the Mod Browser shows no picture\n", self.thumbnail));
+                warnings.push_str(&format!(
+                    "the thumbnail {} is not in the build - the Mod Browser shows no picture\n",
+                    self.thumbnail
+                ));
             } else {
                 let picture = self.module_dir.join(self.thumbnail.replace('/', "\\"));
-                let valid = std::fs::metadata(&picture).is_ok_and(|md| md.len() <= 1 << 20) && std::fs::read(&picture).is_ok_and(|b| crate::browser::valid_thumbnail(&b));
+                let valid = std::fs::metadata(&picture).is_ok_and(|md| md.len() <= 1 << 20)
+                    && std::fs::read(&picture).is_ok_and(|b| crate::browser::valid_thumbnail(&b));
                 if !valid {
                     warnings.push_str(&format!("the thumbnail {} is not a 256 x 256 DXT1/DXT5 DDS - the Mod Browser shows no picture\n", self.thumbnail));
                     draft.thumbnail_ref = None;
                 }
             }
         }
-        Ok(Packaged { files: files.len(), unpacked, packed, index: index_asset, packages, catalog_block, catalog_review, draft })
+        Ok(Packaged {
+            files: files.len(),
+            unpacked,
+            packed,
+            index: index_asset,
+            packages,
+            catalog_block,
+            catalog_review,
+            draft,
+        })
     }
 
     /// MOD_CATALOG 8 and 10.3 over what the release ships, read the way the catalog reads a
     /// release: a script whole, anything else by what it starts with. In the order the files
     /// were found.
     fn check_content(&self, files: &[Staged]) -> (Vec<String>, Vec<String>) {
-        let items: Vec<(PathBuf, String, u64)> = files.iter().map(|f| (self.module_dir.join(&f.rel), f.path.clone(), f.size)).collect();
+        let items: Vec<(PathBuf, String, u64)> =
+            files.iter().map(|f| (self.module_dir.join(&f.rel), f.path.clone(), f.size)).collect();
         let found: Vec<Vec<Finding>> = self.exec.par_io(items, |(src, path, size)| {
             let mut out = Vec::new();
             let Ok(mut file) = File::open(&src) else { return out };
@@ -709,7 +793,12 @@ impl PackJob {
 
     /// Files of one package into one zip, every file hashed on its way in - the index wants the
     /// SHA-256 of the content, and the content is read once.
-    fn write_package(&self, zip_path: &Path, files: &mut [Staged], offset: time::UtcOffset) -> Result<(), String> {
+    fn write_package(
+        &self,
+        zip_path: &Path,
+        files: &mut [Staged],
+        offset: time::UtcOffset,
+    ) -> Result<(), String> {
         let zip_text = zip_path.display().to_string();
         let cant_write = || format!("can't write {zip_text}");
         let mut w = ZipWriter::create(zip_path).map_err(|_| format!("can't create {zip_text}"))?;
@@ -729,7 +818,15 @@ impl PackJob {
                         sha.update(piece);
                         if feeder.cancelled() { Err(std::io::Error::other("cancelled")) } else { Ok(()) }
                     })
-                    .map_err(|e| if self.feeder.cancelled() { cancelled() } else if e.kind() == std::io::ErrorKind::Other && e.to_string().contains("grew") { format!("size changed while packaging: {}", f.rel) } else { cant_write() })?;
+                    .map_err(|e| {
+                        if self.feeder.cancelled() {
+                            cancelled()
+                        } else if e.kind() == std::io::ErrorKind::Other && e.to_string().contains("grew") {
+                            format!("size changed while packaging: {}", f.rel)
+                        } else {
+                            cant_write()
+                        }
+                    })?;
                 if read != f.size {
                     return Err(format!("size changed while packaging: {}", f.rel));
                 }
@@ -749,7 +846,8 @@ impl PackJob {
                 j += 1;
             }
             let batch = files.get_mut(i..j).unwrap_or(&mut []);
-            let reads: Vec<(PathBuf, String, u64)> = batch.iter().map(|f| (self.module_dir.join(&f.rel), f.rel.clone(), f.size)).collect();
+            let reads: Vec<(PathBuf, String, u64)> =
+                batch.iter().map(|f| (self.module_dir.join(&f.rel), f.rel.clone(), f.size)).collect();
             let contents: Vec<Result<Vec<u8>, String>> = self.exec.par_io(reads, |(src, rel, size)| {
                 let data = std::fs::read(&src).map_err(|_| format!("can't read {rel}"))?;
                 if data.len() as u64 != size {
@@ -761,14 +859,29 @@ impl PackJob {
             if self.feeder.cancelled() {
                 return Err(cancelled());
             }
-            let jobs: Vec<(Vec<u8>, String, u32)> = contents.into_iter().zip(batch.iter()).map(|(data, f)| (data, f.entry.clone(), dos_time(f.written, offset))).collect();
-            let packed: Vec<Result<(Packed, String), String>> = self.exec.par_cpu(jobs, |(data, entry, dos)| {
-                let sha = sha256_hex(&data);
-                let mut crc = crc32fast::Hasher::new();
-                crc.update(&data);
-                let compressed = deflate(&data).map_err(|_| format!("can't add {entry} to the package"))?;
-                Ok((Packed { name: entry, dos_time: dos, crc: crc.finalize(), size: data.len() as u64, data: compressed }, sha))
-            });
+            let jobs: Vec<(Vec<u8>, String, u32)> = contents
+                .into_iter()
+                .zip(batch.iter())
+                .map(|(data, f)| (data, f.entry.clone(), dos_time(f.written, offset)))
+                .collect();
+            let packed: Vec<Result<(Packed, String), String>> =
+                self.exec.par_cpu(jobs, |(data, entry, dos)| {
+                    let sha = sha256_hex(&data);
+                    let mut crc = crc32fast::Hasher::new();
+                    crc.update(&data);
+                    let compressed =
+                        deflate(&data).map_err(|_| format!("can't add {entry} to the package"))?;
+                    Ok((
+                        Packed {
+                            name: entry,
+                            dos_time: dos,
+                            crc: crc.finalize(),
+                            size: data.len() as u64,
+                            data: compressed,
+                        },
+                        sha,
+                    ))
+                });
             for (f, item) in batch.iter_mut().zip(packed) {
                 let (entry, sha) = item?;
                 w.add(&entry).map_err(|_| cant_write())?;
@@ -784,7 +897,13 @@ impl PackJob {
     /// left there goes first - a 3-part build followed by a 1-part one must not leave part2 and
     /// part3 beside the new release. A release is rebuilt from the module every time, so the
     /// files it replaces are deleted outright.
-    fn write_out(&self, packages_dir: &Path, packages: &[Asset], index_name: &str, index: &str) -> Result<(), String> {
+    fn write_out(
+        &self,
+        packages_dir: &Path,
+        packages: &[Asset],
+        index_name: &str,
+        index: &str,
+    ) -> Result<(), String> {
         let out = Path::new(&self.out_dir);
         let _ = std::fs::create_dir_all(out);
         if !out.is_dir() {
@@ -804,7 +923,9 @@ impl PackJob {
                 return Err(cancelled());
             }
             let (from, to) = (packages_dir.join(&p.name), out.join(&p.name));
-            let cant = || if self.feeder.cancelled() { cancelled() } else { format!("can't write {}", to.display()) };
+            let cant = || {
+                if self.feeder.cancelled() { cancelled() } else { format!("can't write {}", to.display()) }
+            };
             if std::fs::rename(&from, &to).is_err() {
                 std::fs::copy(&from, &to).map_err(|_| cant())?;
                 let _ = std::fs::remove_file(&from);
@@ -918,13 +1039,19 @@ mod tests {
     /// Three files into one package: the index states what the archive holds.
     #[test]
     fn three_files_read_back_as_the_index_says() {
-        let rt = gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 2, io_threads: 2 }).unwrap();
+        let rt =
+            gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 2, io_threads: 2 })
+                .unwrap();
         let base = std::env::temp_dir().join(format!("gz-release-pack-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let module = base.join("stage").join("modules").join("od");
         std::fs::create_dir_all(module.join("gamedata").join("scripts")).unwrap();
         std::fs::write(module.join("mod.ltx"), "[module]\r\nid = od\r\nversion = 1.0.0\r\n").unwrap();
-        std::fs::write(module.join("gamedata").join("scripts").join("od.script"), "function main()\n  os.execute('x')\nend\n".repeat(50)).unwrap();
+        std::fs::write(
+            module.join("gamedata").join("scripts").join("od.script"),
+            "function main()\n  os.execute('x')\nend\n".repeat(50),
+        )
+        .unwrap();
         std::fs::write(module.join("\u{43c}\u{438}\u{440}.txt"), vec![7u8; 4000]).unwrap();
         let out = base.join("out");
         let job = PackJob {
@@ -943,7 +1070,11 @@ mod tests {
         assert_eq!(done.packages.len(), 1);
         assert_eq!(done.packages[0].name, "od-1.0.0.zip");
         assert!(done.catalog_block.iter().any(|t| t.contains("od.script:2 uses os.execute")));
-        assert!(outcome.warnings.contains("the Mod Browser refuses gamedata/scripts/od.script:2 uses os.execute\n"));
+        assert!(
+            outcome
+                .warnings
+                .contains("the Mod Browser refuses gamedata/scripts/od.script:2 uses os.execute\n")
+        );
 
         let zip = out.join("od-1.0.0.zip");
         let bytes = std::fs::read(&zip).unwrap();
@@ -958,7 +1089,15 @@ mod tests {
         for line in lines {
             let f: Vec<&str> = line.splitn(8, ' ').collect();
             assert_eq!(f[0], "file");
-            let (sha, size, pack, offset, packed, method, path) = (f[1], f[2].parse::<u64>().unwrap(), f[3], f[4].parse::<u64>().unwrap(), f[5].parse::<u64>().unwrap(), f[6], f[7]);
+            let (sha, size, pack, offset, packed, method, path) = (
+                f[1],
+                f[2].parse::<u64>().unwrap(),
+                f[3],
+                f[4].parse::<u64>().unwrap(),
+                f[5].parse::<u64>().unwrap(),
+                f[6],
+                f[7],
+            );
             assert_eq!(pack, "1");
             assert_eq!(method, "8");
             // the offsets the archive itself says

@@ -97,7 +97,10 @@ pub fn resolve(all: &mut [Character], problems: &mut Vec<String>) {
                     break;
                 };
                 if chain.contains(&b) || chain.len() > MAX_CHAIN {
-                    problems.push(format!("E112 {place}: the base chain of '{}' comes back to where it started", c.id));
+                    problems.push(format!(
+                        "E112 {place}: the base chain of '{}' comes back to where it started",
+                        c.id
+                    ));
                     broken = true;
                     break;
                 }

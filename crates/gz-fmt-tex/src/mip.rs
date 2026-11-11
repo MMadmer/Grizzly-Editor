@@ -204,13 +204,7 @@ fn plan(in_size: usize, out_size: usize, filter: MipFilter) -> Axis {
 }
 
 fn encode(v: f32) -> u8 {
-    let s = if v < 0.0 {
-        0.0
-    } else if v > 1.0 {
-        1.0
-    } else {
-        v
-    };
+    let s = v.clamp(0.0, 1.0);
     (f64::from(s * 255.0) + 0.5) as i32 as u8
 }
 
@@ -230,7 +224,7 @@ fn halve_box(src: &[u8], sw: usize, dw: usize, dh: usize) -> Vec<u8> {
     out.par_chunks_mut(dw * 4).enumerate().for_each(|(y, row)| {
         let top = src.get(2 * y * sw * 4..).unwrap_or(&[]);
         let bottom = src.get((2 * y + 1) * sw * 4..).unwrap_or(&[]);
-        for (x, px) in row.chunks_exact_mut(4).enumerate() {
+        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let a = top.get(x * 8..x * 8 + 8);
             let b = bottom.get(x * 8..x * 8 + 8);
             let (Some(a), Some(b)) = (a, b) else { continue };
@@ -262,7 +256,7 @@ fn resize_general(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize, filter
         let mut wide = vec![0f32; (s1 - s0) * dw * 4];
         for (line, sy) in wide.chunks_exact_mut(dw * 4).zip(s0..s1) {
             let Some(src_row) = src.get(sy * sw * 4..(sy + 1) * sw * 4) else { continue };
-            for (k, px) in line.chunks_exact_mut(4).enumerate() {
+            for (k, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 for &(sx, w) in xs.of(k) {
                     if let Some(p) = src_row.get(sx as usize * 4..sx as usize * 4 + 4) {
                         for c in 0..4 {
@@ -380,7 +374,14 @@ mod tests {
 
     #[test]
     fn weights_sum_to_one_for_every_filter_and_direction() {
-        for filter in [MipFilter::Default, MipFilter::Box, MipFilter::Triangle, MipFilter::CubicBSpline, MipFilter::CatmullRom, MipFilter::Mitchell] {
+        for filter in [
+            MipFilter::Default,
+            MipFilter::Box,
+            MipFilter::Triangle,
+            MipFilter::CubicBSpline,
+            MipFilter::CatmullRom,
+            MipFilter::Mitchell,
+        ] {
             for (from, to) in [(16usize, 8usize), (5, 2), (7, 3), (4, 9), (1, 4)] {
                 // the box filter is for shrinking only
                 if filter == MipFilter::Box && to > from {
@@ -401,10 +402,10 @@ mod tests {
         let src = Image::filled(13, 7, [200, 100, 50, 25]).unwrap();
         for filter in [MipFilter::Default, MipFilter::Triangle, MipFilter::CatmullRom] {
             let out = resize(&src, 6, 3, filter).unwrap();
-            assert!(out.rgba.chunks_exact(4).all(|p| p == [200, 100, 50, 25]), "{filter:?}");
+            assert!(out.rgba.as_chunks::<4>().0.iter().all(|p| *p == [200, 100, 50, 25]), "{filter:?}");
         }
         let up = resize(&src, 20, 9, MipFilter::Default).unwrap();
-        assert!(up.rgba.chunks_exact(4).all(|p| p == [200, 100, 50, 25]));
+        assert!(up.rgba.as_chunks::<4>().0.iter().all(|p| *p == [200, 100, 50, 25]));
     }
 
     #[test]

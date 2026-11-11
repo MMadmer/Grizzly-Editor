@@ -16,7 +16,10 @@
 use std::sync::Arc;
 
 use egui::epaint::RectShape;
-use egui::{Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Layout, Margin, Popup, Rect, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, Vec2, pos2};
+use egui::{
+    Align, Align2, Color32, ColorImage, CornerRadius, Frame, Id, Layout, Margin, Popup, Rect, ScrollArea,
+    Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, UiBuilder, Vec2, pos2,
+};
 use gz_app::{DocCx, ShellBuilder, contract};
 use gz_base::Rev;
 use gz_editor::{Editor, Value};
@@ -27,7 +30,10 @@ use gz_ui::grid::{PathAction, path_field};
 use gz_ui::state::{badge, banner, busy_line, empty_state, toast};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, Tone, icon_button_sized, icons, menu_item, palette, segmented};
+use gz_ui::{
+    Button, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, Tone, icon_button_sized, icons,
+    menu_item, palette, segmented,
+};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -125,7 +131,10 @@ pub struct StartPage {
 impl StartPage {
     /// The page of this editor, made on first use.
     pub fn of(editor: &Editor) -> Arc<StartPage> {
-        editor.services.get_or_init(|| StartPage { state: Mutex::new(PageState::default()), previews: Query::new(editor.exec.clone()) })
+        editor.services.get_or_init(|| StartPage {
+            state: Mutex::new(PageState::default()),
+            previews: Query::new(editor.exec.clone()),
+        })
     }
 }
 
@@ -141,7 +150,8 @@ pub(crate) fn apply_snapshot(st: &mut PageState, snap: Snapshot) {
     }
     st.create_parent = snap.create_parent;
     let keep: Vec<&str> = snap.cards.iter().map(|c| c.path.as_str()).collect();
-    let gone: Vec<String> = st.textures.keys().filter(|k| !keep.iter().any(|p| paths::same_path(p, k))).cloned().collect();
+    let gone: Vec<String> =
+        st.textures.keys().filter(|k| !keep.iter().any(|p| paths::same_path(p, k))).cloned().collect();
     for k in gone {
         if let Some((_, Some(tex))) = st.textures.remove(&k) {
             st.dead.push(tex);
@@ -199,7 +209,14 @@ pub fn valid_name(name: &str) -> bool {
 pub fn menu_items(state: EntryState) -> [(&'static str, bool); 2] {
     [
         (contract::CARD_SHOW_IN_EXPLORER, state != EntryState::Missing),
-        (if state == EntryState::Project { contract::CARD_DELETE } else { contract::CARD_REMOVE_FROM_LIST }, true),
+        (
+            if state == EntryState::Project {
+                contract::CARD_DELETE
+            } else {
+                contract::CARD_REMOVE_FROM_LIST
+            },
+            true,
+        ),
     ]
 }
 
@@ -300,12 +317,22 @@ fn draw(page: &Arc<StartPage>, ui: &mut Ui, cx: &mut DocCx<'_>) {
             let mut x = origin.x;
             if form {
                 let r = Rect::from_min_size(origin, Vec2::new(FORM_W, height));
-                let mut col = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.start.form").max_rect(r).layout(Layout::top_down(Align::Min)));
+                let mut col = ui.new_child(
+                    UiBuilder::new()
+                        .id_salt("gz-ui-app.start.form")
+                        .max_rect(r)
+                        .layout(Layout::top_down(Align::Min)),
+                );
                 draw_form(&mut col, &mut st, &mut actions);
                 x += FORM_W + 24.0;
             }
             let r = Rect::from_min_max(pos2(x, origin.y), pos2(origin.x + avail_w, origin.y + height));
-            let mut col = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.start.projects").max_rect(r).layout(Layout::top_down(Align::Min)));
+            let mut col = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-app.start.projects")
+                    .max_rect(r)
+                    .layout(Layout::top_down(Align::Min)),
+            );
             draw_projects(&mut col, &mut st, page, &mut actions, true);
             ui.allocate_rect(Rect::from_min_size(origin, Vec2::new(avail_w, height)), Sense::hover());
         }
@@ -378,7 +405,8 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
     text::label(ui, "New Project", Font::Title, p.text, Clip::End);
     ui.add_space(4.0);
     text::secondary(ui, "Name");
-    let resp = local_text_field(ui, "new_project.name", &mut st.name, "Latin letters, digits, _ and -", width);
+    let resp =
+        local_text_field(ui, "new_project.name", &mut st.name, "Latin letters, digits, _ and -", width);
     let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
     // the worst first
@@ -397,10 +425,20 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
         form_message(ui, Tone::Error, &e);
     }
     ui.add_space(8.0);
-    if local_section(ui, "new_project.more", "More", st.parent.is_empty() || st.new_state == NewState::NotFullPath) {
+    if local_section(
+        ui,
+        "new_project.more",
+        "More",
+        st.parent.is_empty() || st.new_state == NewState::NotFullPath,
+    ) {
         text::secondary(ui, "Location");
         let r = Rect::from_min_size(ui.cursor().min, Vec2::new(width, gz_ui::metrics::FRAME));
-        let mut row = ui.new_child(UiBuilder::new().id_salt("gz-ui-app.start.location").max_rect(r).layout(Layout::left_to_right(Align::Center)));
+        let mut row = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-app.start.location")
+                .max_rect(r)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
         match path_field(&mut row, "new_project.location", &mut st.parent, true) {
             PathAction::Edited => st.parent_set = true,
             PathAction::Browse => actions.push(Action::BrowseLocation),
@@ -423,14 +461,22 @@ fn draw_form(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
     } else {
         None
     };
-    if Button::new("Create").primary().enabled(why.is_none(), why.unwrap_or("")).show(ui).clicked() || (enter && why.is_none()) {
+    if Button::new("Create").primary().enabled(why.is_none(), why.unwrap_or("")).show(ui).clicked()
+        || (enter && why.is_none())
+    {
         actions.push(Action::Create);
     }
 }
 
 /// Right of the form: New Project, Open Folder..., the search and the sort, then the cards on an
 /// inset panel of their own.
-fn draw_projects(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, actions: &mut Vec<Action>, own_scroll: bool) {
+fn draw_projects(
+    ui: &mut Ui,
+    st: &mut PageState,
+    page: &Arc<StartPage>,
+    actions: &mut Vec<Action>,
+    own_scroll: bool,
+) {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let body = Font::Body.id();
@@ -454,34 +500,61 @@ fn draw_projects(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, actions
     ui.add_space(8.0);
 
     let order = cards::card_order(&st.cards, &st.search, st.sort);
-    Frame::new().fill(p.inset).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(16)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let mut fill = |ui: &mut Ui| {
-            if !st.loaded {
-                busy_line(ui, "Reading the project list...");
-            } else if st.cards.is_empty() {
-                empty_state(ui, Icon::Folder, "No projects yet", "Create one with New Project, or open a folder that holds one.", None);
-            } else if order.is_empty() {
-                empty_state(ui, Icon::Search, "No matching projects", "No project name or folder holds every word of the search.", None);
+    Frame::new().fill(p.inset).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(16)).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            let mut fill = |ui: &mut Ui| {
+                if !st.loaded {
+                    busy_line(ui, "Reading the project list...");
+                } else if st.cards.is_empty() {
+                    empty_state(
+                        ui,
+                        Icon::Folder,
+                        "No projects yet",
+                        "Create one with New Project, or open a folder that holds one.",
+                        None,
+                    );
+                } else if order.is_empty() {
+                    empty_state(
+                        ui,
+                        Icon::Search,
+                        "No matching projects",
+                        "No project name or folder holds every word of the search.",
+                        None,
+                    );
+                } else {
+                    draw_grid(ui, st, page, &order, actions);
+                }
+            };
+            if own_scroll {
+                ScrollArea::vertical()
+                    .id_salt("gz-ui-app.start.cards")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| fill(ui));
             } else {
-                draw_grid(ui, st, page, &order, actions);
+                fill(ui);
             }
-        };
-        if own_scroll {
-            ScrollArea::vertical().id_salt("gz-ui-app.start.cards").auto_shrink([false, false]).show(ui, |ui| fill(ui));
-        } else {
-            fill(ui);
-        }
-    });
+        },
+    );
 }
 
 /// The cards in rows as wide as the room allows.
-fn draw_grid(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, order: &[usize], actions: &mut Vec<Action>) {
+fn draw_grid(
+    ui: &mut Ui,
+    st: &mut PageState,
+    page: &Arc<StartPage>,
+    order: &[usize],
+    actions: &mut Vec<Action>,
+) {
     let avail = ui.available_width();
     let per_row = (((avail + CARD_GAP) / (CARD_W + CARD_GAP)) as usize).max(1);
     let origin = ui.cursor().min;
     for (n, &i) in order.iter().enumerate() {
-        let at = pos2(origin.x + (n % per_row) as f32 * (CARD_W + CARD_GAP), origin.y + (n / per_row) as f32 * (CARD_H + CARD_GAP));
+        let at = pos2(
+            origin.x + (n % per_row) as f32 * (CARD_W + CARD_GAP),
+            origin.y + (n / per_row) as f32 * (CARD_H + CARD_GAP),
+        );
         draw_card(ui, st, page, i, at, actions);
     }
     // the grid as one block, so the scroll knows how far it reaches
@@ -492,7 +565,13 @@ fn draw_grid(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, order: &[us
 }
 
 /// The picture of a card, uploaded once its decode is in; the old one while a new one comes.
-fn texture_for(st: &mut PageState, page: &StartPage, ctx: &egui::Context, path: &str, rev: Rev) -> Option<TextureHandle> {
+fn texture_for(
+    st: &mut PageState,
+    page: &StartPage,
+    ctx: &egui::Context,
+    path: &str,
+    rev: Rev,
+) -> Option<TextureHandle> {
     if let Some((r, tex)) = st.textures.get(path)
         && *r == rev
     {
@@ -501,7 +580,13 @@ fn texture_for(st: &mut PageState, page: &StartPage, ctx: &egui::Context, path: 
     let folder = path.to_owned();
     match page.previews.get(&path.to_owned(), rev, move || cards::read_preview(&folder)) {
         Answer::Fresh(value) => {
-            let tex = value.as_ref().as_ref().map(|pic| ctx.load_texture(format!("gz-ui-app.preview:{path}"), ColorImage::from_rgb([pic.w, pic.h], &pic.rgb), TextureOptions::LINEAR));
+            let tex = value.as_ref().as_ref().map(|pic| {
+                ctx.load_texture(
+                    format!("gz-ui-app.preview:{path}"),
+                    ColorImage::from_rgb([pic.w, pic.h], &pic.rgb),
+                    TextureOptions::LINEAR,
+                )
+            });
             if let Some((_, Some(old))) = st.textures.insert(path.to_owned(), (rev, tex.clone())) {
                 st.dead.push(old);
             }
@@ -513,7 +598,14 @@ fn texture_for(st: &mut PageState, page: &StartPage, ctx: &egui::Context, path: 
 
 /// One card, 232 x 184 pt: the preview, the name and the `...` menu, the path with a start
 /// ellipsis (a twin's differing parent kept whole in it).
-fn draw_card(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, i: usize, at: egui::Pos2, actions: &mut Vec<Action>) {
+fn draw_card(
+    ui: &mut Ui,
+    st: &mut PageState,
+    page: &Arc<StartPage>,
+    i: usize,
+    at: egui::Pos2,
+    actions: &mut Vec<Action>,
+) {
     let Some(card) = st.cards.get(i).cloned() else { return };
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
@@ -537,7 +629,12 @@ fn draw_card(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, i: usize, a
     if visible {
         let painter = ui.painter().clone();
         painter.rect_filled(rect, CornerRadius::same(6), if hovered { p.hover } else { p.raised });
-        painter.rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, if hovered { p.border } else { p.border_subtle }), StrokeKind::Inside);
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            Stroke::new(1.0, if hovered { p.border } else { p.border_subtle }),
+            StrokeKind::Inside,
+        );
 
         // the preview is cut to the card's shape, never stretched
         let tex = match (here, card.preview) {
@@ -548,30 +645,72 @@ fn draw_card(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, i: usize, a
             Some(tex) => {
                 let [tw, th] = tex.size();
                 let uv = cards::crop_uv(tw as f32, th as f32, prect.width(), prect.height());
-                painter.add(RectShape::filled(prect, CornerRadius::same(4), Color32::WHITE.gamma_multiply(veil)).with_texture(tex.id(), uv));
+                painter.add(
+                    RectShape::filled(prect, CornerRadius::same(4), Color32::WHITE.gamma_multiply(veil))
+                        .with_texture(tex.id(), uv),
+                );
             }
             None => {
                 painter.rect_filled(prect, CornerRadius::same(4), p.canvas.gamma_multiply(veil));
                 let side = 32.0;
-                let icon_rect = Rect::from_min_size(pos2((prect.center().x - side * 0.5).round(), (prect.center().y - side * 0.5).round()), Vec2::splat(side));
-                icons::draw(&painter, if here { Icon::Level } else { Icon::Folder }, icon_rect, p.text_muted.gamma_multiply(veil));
+                let icon_rect = Rect::from_min_size(
+                    pos2((prect.center().x - side * 0.5).round(), (prect.center().y - side * 0.5).round()),
+                    Vec2::splat(side),
+                );
+                icons::draw(
+                    &painter,
+                    if here { Icon::Level } else { Icon::Folder },
+                    icon_rect,
+                    p.text_muted.gamma_multiply(veil),
+                );
             }
         }
         if !here {
-            let r = Rect::from_min_size(pos2(prect.min.x + 6.0, prect.min.y + 6.0), Vec2::new(prect.width() - 12.0, 18.0));
-            let mut b = ui.new_child(UiBuilder::new().id_salt(id.with("badge")).max_rect(r).layout(Layout::left_to_right(Align::Center)));
-            badge(&mut b, if card.state == EntryState::Missing { "Missing" } else { "Not a project" }, Tone::Warning);
+            let r = Rect::from_min_size(
+                pos2(prect.min.x + 6.0, prect.min.y + 6.0),
+                Vec2::new(prect.width() - 12.0, 18.0),
+            );
+            let mut b = ui.new_child(
+                UiBuilder::new()
+                    .id_salt(id.with("badge"))
+                    .max_rect(r)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            badge(
+                &mut b,
+                if card.state == EntryState::Missing { "Missing" } else { "Not a project" },
+                Tone::Warning,
+            );
         }
 
         // the name has its row to itself, the ... menu at its end; the path under it
         let name_room = w - pad * 2.0 - more - 4.0;
-        text::paint(&painter, &Font::Strong.id(), pos2(prect.min.x, row_y + row_h * 0.5), Align2::LEFT_CENTER, p.text.gamma_multiply(veil), &card.name, Some(name_room), Clip::End);
-        path_cut = draw_card_path(&painter, &ctx, &card, pos2(prect.min.x, row_y + row_h + 2.0), w - pad * 2.0, veil);
+        text::paint(
+            &painter,
+            &Font::Strong.id(),
+            pos2(prect.min.x, row_y + row_h * 0.5),
+            Align2::LEFT_CENTER,
+            p.text.gamma_multiply(veil),
+            &card.name,
+            Some(name_room),
+            Clip::End,
+        );
+        path_cut = draw_card_path(
+            &painter,
+            &ctx,
+            &card,
+            pos2(prect.min.x, row_y + row_h + 2.0),
+            w - pad * 2.0,
+            veil,
+        );
     }
 
     let mut child = ui.new_child(UiBuilder::new().id_salt(id.with("more")).max_rect(more_rect));
-    let open_here = st.menu.as_ref().is_some_and(|m| paths::same_path(&m.path, &card.path) && m.anchor.is_some());
-    let more_clicked = icon_button_sized(&mut child, Icon::More, "Actions", open_here, true, more, gz_ui::metrics::GLYPH).clicked();
+    let open_here =
+        st.menu.as_ref().is_some_and(|m| paths::same_path(&m.path, &card.path) && m.anchor.is_some());
+    let more_clicked =
+        icon_button_sized(&mut child, Icon::More, "Actions", open_here, true, more, gz_ui::metrics::GLYPH)
+            .clicked();
     if more_clicked {
         st.menu = Some(Menu { path: card.path.clone(), anchor: Some(more_rect), request: false });
         Popup::open_id(&ctx, menu_id());
@@ -579,7 +718,11 @@ fn draw_card(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, i: usize, a
     } else if resp.secondary_clicked()
         && let Some(at) = ctx.pointer_interact_pos()
     {
-        st.menu = Some(Menu { path: card.path.clone(), anchor: Some(Rect::from_min_size(at, Vec2::ZERO)), request: false });
+        st.menu = Some(Menu {
+            path: card.path.clone(),
+            anchor: Some(Rect::from_min_size(at, Vec2::ZERO)),
+            request: false,
+        });
         Popup::open_id(&ctx, menu_id());
         actions.push(Action::Recheck(card.path.clone()));
     }
@@ -607,7 +750,14 @@ fn draw_card(ui: &mut Ui, st: &mut PageState, page: &Arc<StartPage>, i: usize, a
 /// stays whole and reads in the text colour: when the path from it on is too long, the cut moves
 /// between it and the leaf too (`…\tour3a\…\Name`); only a folder wider than the card is cut
 /// itself. Returns whether the path was cut (its tooltip is then the whole path).
-fn draw_card_path(painter: &egui::Painter, ctx: &egui::Context, card: &Card, at: egui::Pos2, room: f32, veil: f32) -> bool {
+fn draw_card_path(
+    painter: &egui::Painter,
+    ctx: &egui::Context,
+    card: &Card,
+    at: egui::Pos2,
+    room: f32,
+    veil: f32,
+) -> bool {
     let p = palette(ctx);
     let font = Font::Small.id();
     let secondary = p.text_secondary.gamma_multiply(veil);
@@ -615,15 +765,39 @@ fn draw_card_path(painter: &egui::Painter, ctx: &egui::Context, card: &Card, at:
     let y = at.y + Font::Small.line() * 0.5;
     let path = card.path.as_str();
     let Some(seg) = card.seg.filter(|s| s.end > s.begin) else {
-        return text::paint(painter, &font, pos2(at.x, y), Align2::LEFT_CENTER, secondary, path, Some(room), Clip::Start);
+        return text::paint(
+            painter,
+            &font,
+            pos2(at.x, y),
+            Align2::LEFT_CENTER,
+            secondary,
+            path,
+            Some(room),
+            Clip::Start,
+        );
     };
-    let (Some(head), Some(folder), Some(tail)) = (path.get(..seg.begin), path.get(seg.begin..seg.end), path.get(seg.end..)) else {
-        return text::paint(painter, &font, pos2(at.x, y), Align2::LEFT_CENTER, secondary, path, Some(room), Clip::Start);
+    let (Some(head), Some(folder), Some(tail)) =
+        (path.get(..seg.begin), path.get(seg.begin..seg.end), path.get(seg.end..))
+    else {
+        return text::paint(
+            painter,
+            &font,
+            pos2(at.x, y),
+            Align2::LEFT_CENTER,
+            secondary,
+            path,
+            Some(room),
+            Clip::Start,
+        );
     };
     // a cut before the folder only where something stands before it, after it only where folders
     // stand between it and the leaf
     let lead = if seg.begin > 0 { "…\\" } else { "" };
-    let past = if seg.leaf > seg.end + 1 { format!("\\…\\{}", path.get(seg.leaf..).unwrap_or("")) } else { tail.to_owned() };
+    let past = if seg.leaf > seg.end + 1 {
+        format!("\\…\\{}", path.get(seg.leaf..).unwrap_or(""))
+    } else {
+        tail.to_owned()
+    };
     let width = |t: &str| text::width(ctx, &font, t);
     let folder_w = width(folder);
     let tries = [(head, tail.to_owned()), (lead, tail.to_owned()), (lead, past)];
@@ -640,7 +814,16 @@ fn draw_card_path(painter: &egui::Painter, ctx: &egui::Context, card: &Card, at:
             k != 0
         }
         None => {
-            text::paint(painter, &font, pos2(at.x, y), Align2::LEFT_CENTER, strong, &card.parent, Some(room), Clip::End);
+            text::paint(
+                painter,
+                &font,
+                pos2(at.x, y),
+                Align2::LEFT_CENTER,
+                strong,
+                &card.parent,
+                Some(room),
+                Clip::End,
+            );
             true
         }
     }
@@ -650,7 +833,7 @@ fn draw_card_path(painter: &egui::Painter, ctx: &egui::Context, card: &Card, at:
 /// menu this frame drew.
 fn draw_menu(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) -> Option<String> {
     let menu = st.menu.clone()?;
-    let Some(anchor) = menu.anchor else { return None };
+    let anchor = menu.anchor?;
     let ctx = ui.ctx().clone();
     let Some(card) = st.cards.iter().find(|c| paths::same_path(&c.path, &menu.path)).cloned() else {
         st.menu = None;
@@ -659,15 +842,27 @@ fn draw_menu(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) -> Opti
     };
     let shown = gz_ui::menu::menu_popup(&ctx, menu_id(), anchor, ui.layer_id(), |ui| {
         let missing = card.state == EntryState::Missing;
-        if menu_item(ui, contract::CARD_SHOW_IN_EXPLORER, MenuItem { icon: Icon::Reveal, enabled: !missing, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            contract::CARD_SHOW_IN_EXPLORER,
+            MenuItem { icon: Icon::Reveal, enabled: !missing, ..MenuItem::default() },
+        ) {
             actions.push(Action::Reveal(card.path.clone()));
         }
         ui.separator();
         if card.state == EntryState::Project {
-            if menu_item(ui, contract::CARD_DELETE, MenuItem { icon: Icon::Delete, danger: true, ..MenuItem::default() }) {
+            if menu_item(
+                ui,
+                contract::CARD_DELETE,
+                MenuItem { icon: Icon::Delete, danger: true, ..MenuItem::default() },
+            ) {
                 actions.push(Action::AskDelete(card.path.clone(), card.name.clone()));
             }
-        } else if menu_item(ui, contract::CARD_REMOVE_FROM_LIST, MenuItem { icon: Icon::Clear, ..MenuItem::default() }) {
+        } else if menu_item(
+            ui,
+            contract::CARD_REMOVE_FROM_LIST,
+            MenuItem { icon: Icon::Clear, ..MenuItem::default() },
+        ) {
             actions.push(Action::Forget(card.path.clone(), card.name.clone()));
         }
     });
@@ -707,7 +902,13 @@ fn draw_confirm(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
                 f.busy("Deleting the project...");
             }
             if question {
-                if f.button("Delete", Kind::Danger, false, !counting && !deleting, if counting { "The folder is still being counted." } else { "" }) {
+                if f.button(
+                    "Delete",
+                    Kind::Danger,
+                    false,
+                    !counting && !deleting,
+                    if counting { "The folder is still being counted." } else { "" },
+                ) {
                     pressed = Some(true);
                 }
                 if f.button("Cancel", Kind::Secondary, true, !deleting, "") {
@@ -733,7 +934,13 @@ fn draw_confirm(ui: &mut Ui, st: &mut PageState, actions: &mut Vec<Action>) {
 fn confirm_body(ui: &mut Ui, c: &Confirm) {
     let p = palette(ui.ctx());
     let Some(d) = c.info.as_ref() else {
-        text::label(ui, &format!("Delete the project \"{}\" from disk?", c.name), Font::Strong, p.text, Clip::Middle);
+        text::label(
+            ui,
+            &format!("Delete the project \"{}\" from disk?", c.name),
+            Font::Strong,
+            p.text,
+            Clip::Middle,
+        );
         text::label(ui, &c.path, Font::Body, p.text_secondary, Clip::Start);
         ui.add_space(8.0);
         busy_line(ui, "Counting what the folder holds...");
@@ -741,7 +948,12 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
     };
     let name = if d.name.is_empty() { c.name.as_str() } else { d.name.as_str() };
     let path = if d.path.is_empty() { c.path.as_str() } else { d.path.as_str() };
-    let held = format!("{} in {}, {}", cards::count_text(d.files, "file", "files"), cards::count_text(d.folders, "folder", "folders"), cards::size_text(d.bytes));
+    let held = format!(
+        "{} in {}, {}",
+        cards::count_text(d.files, "file", "files"),
+        cards::count_text(d.folders, "folder", "folders"),
+        cards::size_text(d.bytes)
+    );
     let question = !c.done && d.refused.is_none() && !d.missing;
     let partial = c.done && d.refused.is_none();
     let headline = if question {
@@ -763,10 +975,23 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
             what_goes(ui, ".git - the git repository, with the project's whole history");
         }
         if d.releases {
-            what_goes(ui, &format!("releases\\ - the files of published releases: {}, {}", cards::count_text(d.release_files, "file", "files"), cards::size_text(d.release_bytes)));
+            what_goes(
+                ui,
+                &format!(
+                    "releases\\ - the files of published releases: {}, {}",
+                    cards::count_text(d.release_files, "file", "files"),
+                    cards::size_text(d.release_bytes)
+                ),
+            );
         }
         if d.links > 0 {
-            what_goes(ui, &format!("{} - removed as links; what they point at stays", cards::count_text(d.links, "link", "links")));
+            what_goes(
+                ui,
+                &format!(
+                    "{} - removed as links; what they point at stays",
+                    cards::count_text(d.links, "link", "links")
+                ),
+            );
         }
         ui.add_space(8.0);
         text::status(ui, Tone::Warning, "Deleted for good - this cannot be undone.");
@@ -780,9 +1005,17 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
             what_goes(ui, &format!("and {} more", d.failed_total - listed));
         }
         ui.add_space(8.0);
-        text::status(ui, Tone::Info, "The project stays in the list. Close whatever holds these files, then delete it again.");
+        text::status(
+            ui,
+            Tone::Info,
+            "The project stays in the list. Close whatever holds these files, then delete it again.",
+        );
     } else if d.missing {
-        text::status(ui, Tone::Muted, "Nothing was deleted. Remove from List in its menu takes it off the list.");
+        text::status(
+            ui,
+            Tone::Muted,
+            "Nothing was deleted. Remove from List in its menu takes it off the list.",
+        );
     } else {
         text::status(ui, Tone::Error, d.refused.as_deref().unwrap_or(""));
         for n in d.nested.iter().skip(1) {
@@ -794,9 +1027,16 @@ fn confirm_body(ui: &mut Ui, c: &Confirm) {
 }
 
 /// Opens the confirmation and takes the check and the count off the UI thread.
-pub(crate) fn open_confirm(st: &mut PageState, editor: &Arc<Editor>, page: &Arc<StartPage>, path: String, name: String) {
+pub(crate) fn open_confirm(
+    st: &mut PageState,
+    editor: &Arc<Editor>,
+    page: &Arc<StartPage>,
+    path: String,
+    name: String,
+) {
     st.menu = None;
-    st.confirm = Some(Confirm { path: path.clone(), name, info: None, done: false, deleting: false, shown: false });
+    st.confirm =
+        Some(Confirm { path: path.clone(), name, info: None, done: false, deleting: false, shown: false });
     let (ed, page) = (editor.clone(), page.clone());
     let _task = editor.exec.spawn(async move {
         let info = delete_plan(&ed, path.clone()).await;
@@ -819,14 +1059,18 @@ fn set_page_error(page: &StartPage, text_: String) {
 fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<StartPage>) {
     let (ed, pg) = (editor.clone(), page.clone());
     match action {
-        Action::Open(path) => call_then(editor, "open_project", args([("path", s(&path))]), move |reply, _| {
-            if !ok(reply) {
-                let mut st = pg.state.lock();
-                st.page_error = format!("The project cannot be opened: {}", error_text(reply));
-                refresh(&mut st, &ed, &pg);
-            }
-        }),
-        Action::OpenFolder => pick_folder(editor, "Open Project Folder", "", move |folder, _| open_folder(&ed, &pg, folder)),
+        Action::Open(path) => {
+            call_then(editor, "open_project", args([("path", s(&path))]), move |reply, _| {
+                if !ok(reply) {
+                    let mut st = pg.state.lock();
+                    st.page_error = format!("The project cannot be opened: {}", error_text(reply));
+                    refresh(&mut st, &ed, &pg);
+                }
+            })
+        }
+        Action::OpenFolder => {
+            pick_folder(editor, "Open Project Folder", "", move |folder, _| open_folder(&ed, &pg, folder))
+        }
         Action::BrowseLocation => {
             let start = st.parent.clone();
             pick_folder(editor, "Project Location", &start, move |folder, _| {
@@ -856,39 +1100,49 @@ fn run(action: Action, st: &mut PageState, editor: &Arc<Editor>, page: &Arc<Star
                 }
             });
         }
-        Action::Reveal(path) => call_then(editor, "project_reveal", args([("path", s(&path))]), move |reply, _| {
-            if !ok(reply) {
-                set_page_error(&pg, format!("Show in Explorer: {}", error_text(reply)));
-            }
-        }),
+        Action::Reveal(path) => {
+            call_then(editor, "project_reveal", args([("path", s(&path))]), move |reply, _| {
+                if !ok(reply) {
+                    set_page_error(&pg, format!("Show in Explorer: {}", error_text(reply)));
+                }
+            })
+        }
         Action::AskDelete(path, name) => open_confirm(st, editor, page, path, name),
-        Action::Forget(path, name) => call_then(editor, "project_forget", args([("path", s(&path))]), move |reply, ctx| {
-            let mut st = pg.state.lock();
-            if ok(reply) {
-                toast(ctx, Tone::Info, &format!("{name} was taken off the list."));
-            } else {
-                st.page_error = error_text(reply);
-            }
-            refresh(&mut st, &ed, &pg);
-        }),
-        Action::DeleteNow(path, name) => call_then(editor, "project_delete", args([("path", s(&path))]), move |reply, ctx| {
-            let mut st = pg.state.lock();
-            if ok(reply) {
-                st.confirm = None;
-                let info = cards::info_from_reply(reply);
-                let line = if info.missing {
-                    format!("Project \"{name}\" removed from the list: its folder was gone already.")
+        Action::Forget(path, name) => {
+            call_then(editor, "project_forget", args([("path", s(&path))]), move |reply, ctx| {
+                let mut st = pg.state.lock();
+                if ok(reply) {
+                    toast(ctx, Tone::Info, &format!("{name} was taken off the list."));
                 } else {
-                    format!("Project \"{name}\" deleted: {}, {}.", cards::count_text(info.files, "file", "files"), cards::count_text(info.folders, "folder", "folders"))
-                };
-                toast(ctx, Tone::Success, &line);
-            } else if let Some(c) = st.confirm.as_mut().filter(|c| c.path == path) {
-                c.deleting = false;
-                c.done = true;
-                c.info = Some(cards::info_from_reply(reply));
-            }
-            refresh(&mut st, &ed, &pg);
-        }),
+                    st.page_error = error_text(reply);
+                }
+                refresh(&mut st, &ed, &pg);
+            })
+        }
+        Action::DeleteNow(path, name) => {
+            call_then(editor, "project_delete", args([("path", s(&path))]), move |reply, ctx| {
+                let mut st = pg.state.lock();
+                if ok(reply) {
+                    st.confirm = None;
+                    let info = cards::info_from_reply(reply);
+                    let line = if info.missing {
+                        format!("Project \"{name}\" removed from the list: its folder was gone already.")
+                    } else {
+                        format!(
+                            "Project \"{name}\" deleted: {}, {}.",
+                            cards::count_text(info.files, "file", "files"),
+                            cards::count_text(info.folders, "folder", "folders")
+                        )
+                    };
+                    toast(ctx, Tone::Success, &line);
+                } else if let Some(c) = st.confirm.as_mut().filter(|c| c.path == path) {
+                    c.deleting = false;
+                    c.done = true;
+                    c.info = Some(cards::info_from_reply(reply));
+                }
+                refresh(&mut st, &ed, &pg);
+            })
+        }
         Action::Recheck(path) => {
             let _task = editor.exec.spawn(async move {
                 let probe = path.clone();
@@ -909,7 +1163,8 @@ fn open_folder(editor: &Arc<Editor>, page: &Arc<StartPage>, folder: String) {
     let (ed, pg) = (editor.clone(), page.clone());
     let _task = editor.exec.spawn(async move {
         let probe = folder.clone();
-        let is_project = ed.exec.io(move || gz_project::list::has_manifest(std::path::Path::new(&probe))).await;
+        let is_project =
+            ed.exec.io(move || gz_project::list::has_manifest(std::path::Path::new(&probe))).await;
         if !is_project {
             let text_ = format!("Not a project folder - it holds no mod.ltx or project.ltx: {folder}");
             post_ui(&ed, move |_| set_page_error(&pg, text_));
@@ -958,8 +1213,14 @@ mod tests {
     #[test]
     fn the_menu_follows_the_state() {
         assert_eq!(menu_items(EntryState::Project), [("Show in Explorer", true), ("Delete...", true)]);
-        assert_eq!(menu_items(EntryState::Missing), [("Show in Explorer", false), ("Remove from List", true)]);
-        assert_eq!(menu_items(EntryState::NotAProject), [("Show in Explorer", true), ("Remove from List", true)]);
+        assert_eq!(
+            menu_items(EntryState::Missing),
+            [("Show in Explorer", false), ("Remove from List", true)]
+        );
+        assert_eq!(
+            menu_items(EntryState::NotAProject),
+            [("Show in Explorer", true), ("Remove from List", true)]
+        );
     }
 
     #[test]
@@ -971,12 +1232,29 @@ mod tests {
     #[test]
     fn a_new_read_releases_the_pictures_of_cards_that_left() {
         let mut st = PageState::default();
-        let card = |p: &str| Card { path: p.to_owned(), name: p.to_owned(), state: EntryState::Project, parent: String::new(), seg: None, preview: None };
-        apply_snapshot(&mut st, Snapshot { cards: vec![card("D:\\a"), card("D:\\b")], create_parent: "D:\\".to_owned(), sort: Sort::Name });
+        let card = |p: &str| Card {
+            path: p.to_owned(),
+            name: p.to_owned(),
+            state: EntryState::Project,
+            parent: String::new(),
+            seg: None,
+            preview: None,
+        };
+        apply_snapshot(
+            &mut st,
+            Snapshot {
+                cards: vec![card("D:\\a"), card("D:\\b")],
+                create_parent: "D:\\".to_owned(),
+                sort: Sort::Name,
+            },
+        );
         assert_eq!(st.sort, Sort::Name);
         assert_eq!(st.parent, "D:\\");
         st.sort = Sort::Recent;
-        apply_snapshot(&mut st, Snapshot { cards: vec![card("D:\\b")], create_parent: "E:\\".to_owned(), sort: Sort::Name });
+        apply_snapshot(
+            &mut st,
+            Snapshot { cards: vec![card("D:\\b")], create_parent: "E:\\".to_owned(), sort: Sort::Name },
+        );
         // a later read keeps the sort the page shows
         assert_eq!(st.sort, Sort::Recent);
         assert_eq!(st.cards.len(), 1);

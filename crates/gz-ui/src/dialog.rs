@@ -2,10 +2,10 @@
 //!
 //! - [`Dialog::new(title, "dlg.<name>", size)`](Dialog::new)`.show(ui, &mut open, |body|, |footer|)`
 //!   - a modal over the dim colour, centred (clamped once the author moved it), at most W-32 x
-//!   H-48: a 36 pt title with a close cross that takes no keyboard focus, a body that scrolls, a
-//!   52 pt footer that stays put. It fits what it holds while it opens and keeps that height:
-//!   a running job never resizes it. [`Dialog::sheet`] raises it from the dialog being drawn:
-//!   under its parent's title, no wider than it, the parent dimmed.
+//!     H-48: a 36 pt title with a close cross that takes no keyboard focus, a body that scrolls, a
+//!     52 pt footer that stays put. It fits what it holds while it opens and keeps that height:
+//!     a running job never resizes it. [`Dialog::sheet`] raises it from the dialog being drawn:
+//!     under its parent's title, no wider than it, the parent dimmed.
 //! - [`Footer`] - status on the left ([`Footer::status`], or [`Footer::busy`] while a job runs),
 //!   buttons on the right ([`Footer::button`], at least 88 x 28). Enter presses the default, Esc
 //!   cancels; in a destructive dialog (one with a Danger button) both cancel.
@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use egui::{
-    Align, Align2, Area, Context, CornerRadius, Frame, Id, Key, Layout, Margin, Modal, Modifiers, Order, Popup, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, StrokeKind, Ui, UiBuilder, UiKind, Vec2, pos2,
+    Align, Align2, Area, Context, CornerRadius, Frame, Id, Key, Layout, Margin, Modal, Modifiers, Order,
+    Popup, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, UiBuilder, UiKind, Vec2, pos2,
 };
 use parking_lot::Mutex;
 
@@ -224,6 +224,11 @@ struct Mem {
     work: Rect,
     buttons: Vec<Id>,
     default_button: Option<Id>,
+    /// The body's height the window was last sized by.
+    measured: f32,
+    /// When the author last pressed, released or typed: a change of height that follows is
+    /// theirs, and the window keeps its size under them.
+    touched: f64,
 }
 
 impl Default for Mem {
@@ -239,6 +244,8 @@ impl Default for Mem {
             work: Rect::NOTHING,
             buttons: Vec::new(),
             default_button: None,
+            measured: 0.0,
+            touched: f64::NEG_INFINITY,
         }
     }
 }
@@ -247,6 +254,8 @@ const TITLE_H: f32 = metrics::DIALOG_TITLE;
 const FOOTER_H: f32 = metrics::DIALOG_FOOTER;
 /// The frames a dialog measures its height on.
 const MEASURE_FRAMES: u32 = 2;
+/// How long after the author's last press or key a change of height stays theirs.
+const QUIET_S: f64 = 0.6;
 
 /// The footer of a dialog: the status on the left, the buttons on the right.
 pub struct Footer<'u> {
@@ -263,6 +272,8 @@ pub struct Footer<'u> {
     opening: bool,
     buttons: Vec<Id>,
     default_button: Option<Id>,
+    /// A job runs: the window keeps its height.
+    busy: bool,
 }
 
 impl Footer<'_> {
@@ -276,11 +287,25 @@ impl Footer<'_> {
         let x = self.rect.min.x + 16.0;
         let cy = self.rect.center().y;
         let icon = metrics::GLYPH_ROW;
-        icons::draw(self.ui.painter(), tone_icon(tone), Rect::from_min_size(pos2(x, cy - icon * 0.5), Vec2::splat(icon)), p.tone(tone));
+        icons::draw(
+            self.ui.painter(),
+            tone_icon(tone),
+            Rect::from_min_size(pos2(x, cy - icon * 0.5), Vec2::splat(icon)),
+            p.tone(tone),
+        );
         let room = (self.rect.width() - 32.0 - self.last_w - 16.0 - icon - 6.0).max(0.0);
         let color = if tone == Tone::Muted { p.text_secondary } else { p.tone(tone) };
         let tx = x + icon + 6.0;
-        let cut = text::paint(self.ui.painter(), &Font::Body.id(), pos2(tx, cy), Align2::LEFT_CENTER, color, text_, Some(room), Clip::End);
+        let cut = text::paint(
+            self.ui.painter(),
+            &Font::Body.id(),
+            pos2(tx, cy),
+            Align2::LEFT_CENTER,
+            color,
+            text_,
+            Some(room),
+            Clip::End,
+        );
         if cut {
             let r = Rect::from_min_size(pos2(tx, cy - 8.0), Vec2::new(room, 16.0));
             self.ui.interact(r, self.ui.scope_id().with("status"), Sense::hover()).on_hover_text(text_);
@@ -290,16 +315,30 @@ impl Footer<'_> {
     /// While a job runs: a spinner and its stage on the left. The job's stop is a labelled
     /// button of the footer (`Stop <job>`).
     pub fn busy(&mut self, stage: &str) {
+        self.busy = true;
         let ctx = self.ui.ctx().clone();
         let p = palette(&ctx);
         let x = self.rect.min.x + 16.0;
         let cy = self.rect.center().y;
-        paint_spinner(&ctx, self.ui.painter(), Rect::from_center_size(pos2(x + 8.0, cy), Vec2::splat(metrics::GLYPH)));
+        paint_spinner(
+            &ctx,
+            self.ui.painter(),
+            Rect::from_center_size(pos2(x + 8.0, cy), Vec2::splat(metrics::GLYPH)),
+        );
         let tx = x + metrics::GLYPH + 8.0;
         let buttons_x = self.rect.max.x - 16.0 - self.last_w;
         let room = (buttons_x - 16.0 - tx).max(em(3.0));
         let stage = if stage.is_empty() { "Working..." } else { stage };
-        text::paint(self.ui.painter(), &Font::Body.id(), pos2(tx, cy), Align2::LEFT_CENTER, p.text, stage, Some(room), Clip::End);
+        text::paint(
+            self.ui.painter(),
+            &Font::Body.id(),
+            pos2(tx, cy),
+            Align2::LEFT_CENTER,
+            p.text,
+            stage,
+            Some(room),
+            Clip::End,
+        );
     }
 
     /// A button, placed after the ones before it. `is_default` takes the keyboard focus when the
@@ -310,7 +349,15 @@ impl Footer<'_> {
 
     /// A button whose label changes with the state: it keeps the width of the widest of
     /// `label_set`.
-    pub fn button_set(&mut self, label: &str, label_set: &[&str], kind: Kind, is_default: bool, enabled: bool, why: &str) -> bool {
+    pub fn button_set(
+        &mut self,
+        label: &str,
+        label_set: &[&str],
+        kind: Kind,
+        is_default: bool,
+        enabled: bool,
+        why: &str,
+    ) -> bool {
         let ctx = self.ui.ctx().clone();
         let w = label_set
             .iter()
@@ -327,7 +374,9 @@ impl Footer<'_> {
         if kind == Kind::Danger {
             self.danger = true;
         }
-        let resp = self.ui.put(rect, Button::new(label).kind(kind).enabled(enabled, why).label_set(label_set).dialog());
+        let resp = self
+            .ui
+            .put(rect, Button::new(label).kind(kind).enabled(enabled, why).label_set(label_set).dialog());
         self.buttons.push(resp.id);
         let mut pressed = resp.clicked() && enabled;
         if is_default && enabled && kind != Kind::Danger {
@@ -368,7 +417,13 @@ impl<'a> Dialog<'a> {
 
     /// Shows the dialog while `open` is true; the close cross and Esc clear it. Returns what
     /// `body` returned, `None` while it is closed.
-    pub fn show<R>(self, ui: &mut Ui, open: &mut bool, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Footer<'_>)) -> Option<R> {
+    pub fn show<R>(
+        self,
+        ui: &mut Ui,
+        open: &mut bool,
+        body: impl FnOnce(&mut Ui) -> R,
+        footer: impl FnOnce(&mut Footer<'_>),
+    ) -> Option<R> {
         let ctx = ui.ctx().clone();
         let parent = if self.sheet { handle(&ctx).0.lock().stack.last().cloned() } else { None };
         show_impl(&ctx, self.title, &full_name(self.name), self.size, parent, open, body, footer)
@@ -451,10 +506,16 @@ fn show_impl<R>(
     }
     let enter_ready = keys_ok && !mem.danger && focused.is_none_or(|f| Some(f) == mem.default_button);
 
-    let area = Area::new(id).kind(UiKind::Modal).sense(Sense::hover()).order(Order::Foreground).interactable(true).fixed_pos(pos).constrain(false);
+    let area = Area::new(id)
+        .kind(UiKind::Modal)
+        .sense(Sense::hover())
+        .order(Order::Foreground)
+        .interactable(true)
+        .fixed_pos(pos)
+        .constrain(false);
     let mut content_h = 0.0;
     let mut out = None;
-    let mut footer_state = (0.0, false, Vec::new(), None);
+    let mut footer_state = (0.0, false, Vec::new(), None, false);
     let mut drawn_rect = Rect::from_min_size(pos, size_v);
     let opening = mem.shown <= 1;
     let sheet = parent.is_some();
@@ -477,42 +538,88 @@ fn show_impl<R>(
             }
         }
         let room = title_rect.width() - 16.0 - close_w;
-        text::paint(ui.painter(), &Font::Title.id(), pos2(title_rect.min.x + 16.0, title_rect.center().y), Align2::LEFT_CENTER, p.text, title, Some(room), Clip::End);
-        ui.painter().line_segment([pos2(title_rect.min.x, title_rect.max.y - 0.5), pos2(title_rect.max.x, title_rect.max.y - 0.5)], Stroke::new(1.0, p.border_subtle));
+        text::paint(
+            ui.painter(),
+            &Font::Title.id(),
+            pos2(title_rect.min.x + 16.0, title_rect.center().y),
+            Align2::LEFT_CENTER,
+            p.text,
+            title,
+            Some(room),
+            Clip::End,
+        );
+        ui.painter().line_segment(
+            [pos2(title_rect.min.x, title_rect.max.y - 0.5), pos2(title_rect.max.x, title_rect.max.y - 0.5)],
+            Stroke::new(1.0, p.border_subtle),
+        );
         // a title bar item: never the focus a dialog opens with, never a Tab stop
-        let cross = Rect::from_min_size(pos2(title_rect.max.x - 8.0 - 24.0, title_rect.center().y - 12.0), Vec2::splat(24.0));
+        let cross = Rect::from_min_size(
+            pos2(title_rect.max.x - 8.0 - 24.0, title_rect.center().y - 12.0),
+            Vec2::splat(24.0),
+        );
         let c = ui.interact(cross, id.with("close"), Sense::CLICK);
         if c.hovered() {
-            ui.painter().rect_filled(cross, CornerRadius::same(metrics::RADIUS), if c.is_pointer_button_down_on() { p.pressed } else { p.hover });
+            ui.painter().rect_filled(
+                cross,
+                CornerRadius::same(metrics::RADIUS),
+                if c.is_pointer_button_down_on() { p.pressed } else { p.hover },
+            );
         }
-        icons::draw(ui.painter(), Icon::Close, Rect::from_center_size(cross.center(), Vec2::splat(metrics::GLYPH)), if c.hovered() { p.text } else { p.text_secondary });
-        audit::control(ctx, "Close", true, None, Some("Close"), cross);
+        icons::draw(
+            ui.painter(),
+            Icon::Close,
+            Rect::from_center_size(cross.center(), Vec2::splat(metrics::GLYPH)),
+            if c.hovered() { p.text } else { p.text_secondary },
+        );
         if c.on_hover_text("Close").clicked() {
             close_now = true;
         }
 
         h.0.lock().stack.push(Drawn { name: name.to_owned(), rect });
-        audit::surface(ctx, name, || {
+        // the audit names the dialog as its window is named, `Title###dlg.<name>`: what
+        // `ui_audit id=dlg.<name>` and the contract's window names look for
+        let window = format!("{title}###{name}");
+        audit::surface(ctx, &window, || {
+            audit::control(ctx, "Close", true, None, Some("Close"), cross);
             // the body scrolls; the window itself never does
-            let body_rect = Rect::from_min_max(pos2(rect.min.x, title_rect.max.y), pos2(rect.max.x, (rect.max.y - FOOTER_H).max(title_rect.max.y + 24.0)));
-            let mut body_ui = ui.new_child(UiBuilder::new().id_salt(id.with("body")).max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+            let body_rect = Rect::from_min_max(
+                pos2(rect.min.x, title_rect.max.y),
+                pos2(rect.max.x, (rect.max.y - FOOTER_H).max(title_rect.max.y + 24.0)),
+            );
+            let mut body_ui = ui.new_child(
+                UiBuilder::new()
+                    .id_salt(id.with("body"))
+                    .max_rect(body_rect)
+                    .layout(Layout::top_down(Align::Min)),
+            );
             body_ui.set_clip_rect(body_rect.intersect(ui.clip_rect()));
-            let scroll = ScrollArea::vertical().id_salt(id.with("scroll")).max_height(body_rect.height()).auto_shrink([false, false]).show(&mut body_ui, |ui| {
-                Frame::NONE
-                    .inner_margin(Margin::symmetric(16, 12))
-                    .show(ui, |ui| {
-                        ui.set_width((body_rect.width() - 32.0).max(1.0));
-                        body(ui)
-                    })
-                    .inner
-            });
+            let scroll = ScrollArea::vertical()
+                .id_salt(id.with("scroll"))
+                .max_height(body_rect.height())
+                .auto_shrink([false, false])
+                .show(&mut body_ui, |ui| {
+                    Frame::NONE
+                        .inner_margin(Margin::symmetric(16, 12))
+                        .show(ui, |ui| {
+                            ui.set_width((body_rect.width() - 32.0).max(1.0));
+                            body(ui)
+                        })
+                        .inner
+                });
             content_h = scroll.content_size.y;
             out = Some(scroll.inner);
 
             // the footer stays put right under the body
             let footer_rect = Rect::from_min_max(pos2(rect.min.x, body_rect.max.y), rect.max);
-            ui.painter().line_segment([pos2(footer_rect.min.x, footer_rect.min.y + 0.5), pos2(footer_rect.max.x, footer_rect.min.y + 0.5)], Stroke::new(1.0, p.border_subtle));
-            let mut footer_ui = ui.new_child(UiBuilder::new().id_salt(id.with("footer")).max_rect(footer_rect));
+            ui.painter().line_segment(
+                [
+                    pos2(footer_rect.min.x, footer_rect.min.y + 0.5),
+                    pos2(footer_rect.max.x, footer_rect.min.y + 0.5),
+                ],
+                Stroke::new(1.0, p.border_subtle),
+            );
+            let mut footer_ui =
+                ui.new_child(UiBuilder::new().id_salt(id.with("footer")).max_rect(footer_rect));
             let mut f = Footer {
                 ui: &mut footer_ui,
                 rect: footer_rect,
@@ -525,14 +632,15 @@ fn show_impl<R>(
                 opening,
                 buttons: Vec::new(),
                 default_button: None,
+                busy: false,
             };
             footer(&mut f);
-            footer_state = (f.w_cur, f.danger, f.buttons, f.default_button);
+            footer_state = (f.w_cur, f.danger, f.buttons, f.default_button, f.busy);
         });
         h.0.lock().stack.pop();
     });
 
-    let (footer_w, danger, buttons, default_button) = footer_state;
+    let (footer_w, danger, buttons, default_button, busy) = footer_state;
     mem.footer_w = footer_w;
     mem.danger = danger;
     mem.buttons = buttons;
@@ -541,9 +649,26 @@ fn show_impl<R>(
         mem.moved = true;
         mem.pos = Some(pos + drag);
     }
-    // fitted to what it holds while it opens, fixed afterwards: the body scrolls from then on
-    if mem.shown < MEASURE_FRAMES {
+    // Fitted to what it holds while it opens. Afterwards it measures again only when what it
+    // holds changed by itself - a note from a read that ended - while nobody works in it: a
+    // change the author made, a focused field and a running job keep the height (the body
+    // scrolls then).
+    let now = ctx.input(|i| i.time);
+    let touched = ctx.input(|i| {
+        i.pointer.any_down()
+            || i.pointer.any_released()
+            || i.events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_)))
+    });
+    if touched {
+        mem.touched = now;
+    }
+    let typing = ctx.memory(|m| m.focused()).is_some_and(|f| !mem.buttons.contains(&f));
+    let quiet = !busy && !typing && now - mem.touched > QUIET_S;
+    if mem.shown < MEASURE_FRAMES || (quiet && (content_h - mem.measured).abs() > 0.5) {
         mem.desired_h = TITLE_H + content_h + FOOTER_H + 1.0;
+        mem.measured = content_h;
+    } else if !quiet {
+        mem.measured = content_h;
     }
     mem.shown += 1;
     mem.last_frame = frame;
@@ -552,7 +677,11 @@ fn show_impl<R>(
     }
     let ppp = ctx.pixels_per_point();
     let r = drawn_rect;
-    h.0.lock().cur.push(DialogInfo { id: name.to_owned(), title: title.to_owned(), rect_px: [r.min.x * ppp, r.min.y * ppp, r.max.x * ppp, r.max.y * ppp] });
+    h.0.lock().cur.push(DialogInfo {
+        id: name.to_owned(),
+        title: title.to_owned(),
+        rect_px: [r.min.x * ppp, r.min.y * ppp, r.max.x * ppp, r.max.y * ppp],
+    });
     if *open {
         ctx.data_mut(|d| d.insert_temp(id, mem));
     } else {
@@ -614,7 +743,11 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                     list(ui, &c.items, c.total, 10);
                     if !c.consequence.is_empty() || c.destructive {
                         ui.add_space(4.0);
-                        let text_ = if c.consequence.is_empty() { "Deleted for good - this cannot be undone." } else { c.consequence.as_str() };
+                        let text_ = if c.consequence.is_empty() {
+                            "Deleted for good - this cannot be undone."
+                        } else {
+                            c.consequence.as_str()
+                        };
                         text::status(ui, Tone::Warning, text_);
                     }
                 }
@@ -635,11 +768,32 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                         ui.add_space(4.0);
                         let key_w = em(9.0);
                         for (key, value) in &r.rows {
-                            let (row, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::ROW), Sense::hover());
+                            let (row, _) = ui.allocate_exact_size(
+                                Vec2::new(ui.available_width(), metrics::ROW),
+                                Sense::hover(),
+                            );
                             let font = Font::Body.id();
-                            text::paint(ui.painter(), &font, pos2(row.min.x, row.center().y), Align2::LEFT_CENTER, p.text_secondary, key, Some(key_w - 8.0), Clip::End);
+                            text::paint(
+                                ui.painter(),
+                                &font,
+                                pos2(row.min.x, row.center().y),
+                                Align2::LEFT_CENTER,
+                                p.text_secondary,
+                                key,
+                                Some(key_w - 8.0),
+                                Clip::End,
+                            );
                             let vx = row.min.x + key_w;
-                            text::paint(ui.painter(), &font, pos2(vx, row.center().y), Align2::LEFT_CENTER, p.text, value, Some((row.max.x - vx).max(0.0)), Clip::Middle);
+                            text::paint(
+                                ui.painter(),
+                                &font,
+                                pos2(vx, row.center().y),
+                                Align2::LEFT_CENTER,
+                                p.text,
+                                value,
+                                Some((row.max.x - vx).max(0.0)),
+                                Clip::Middle,
+                            );
                         }
                     }
                     if !r.left_out.is_empty() {
@@ -654,7 +808,13 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                             text::status(ui, Tone::Warning, w);
                         }
                         if r.warnings.len() > shown {
-                            text::label(ui, &format!("and {} more warnings", r.warnings.len() - shown), Font::Body, p.text_muted, Clip::End);
+                            text::label(
+                                ui,
+                                &format!("and {} more warnings", r.warnings.len() - shown),
+                                Font::Body,
+                                p.text_muted,
+                                Clip::End,
+                            );
                         }
                     }
                 }
@@ -669,7 +829,13 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                 } else {
                     "OK"
                 };
-                if f.button(label, if c.destructive { Kind::Danger } else { Kind::Primary }, !c.destructive, true, "") {
+                if f.button(
+                    label,
+                    if c.destructive { Kind::Danger } else { Kind::Primary },
+                    !c.destructive,
+                    true,
+                    "",
+                ) {
                     answer = Some(Answer::Yes);
                 }
                 if f.button("Cancel", Kind::Secondary, c.destructive, true, "") {
@@ -677,7 +843,8 @@ fn draw_queued(ctx: &Context, q: &mut Queued, parent: Option<Drawn>) {
                 }
             }
             QKind::Unsaved { items, .. } => {
-                if f.button(if items.len() > 1 { "Save All" } else { "Save" }, Kind::Primary, true, true, "") {
+                if f.button(if items.len() > 1 { "Save All" } else { "Save" }, Kind::Primary, true, true, "")
+                {
                     answer = Some(Answer::Yes);
                 }
                 if f.button("Don't Save", Kind::Secondary, false, true, "") {
@@ -726,7 +893,8 @@ fn draw_one(ctx: &Context, parent: Option<(&str, Rect)>) {
     let h = handle(ctx);
     let taken = {
         let mut s = h.0.lock();
-        let at = s.queue.iter().position(|q| q.answer.is_none() && q.parent.as_deref() == parent.map(|(n, _)| n));
+        let at =
+            s.queue.iter().position(|q| q.answer.is_none() && q.parent.as_deref() == parent.map(|(n, _)| n));
         at.map(|i| (i, s.queue.remove(i)))
     };
     let Some((i, mut q)) = taken else { return };
@@ -818,7 +986,12 @@ fn log_line(tone: Tone, what: &str, text_: &str) -> String {
 
 /// Asks to confirm an action. `Mcp` runs `then(Yes)` before returning, `Unattended` runs
 /// `then(No)`; both return the line to log. `Ui` queues the dialog and returns `None`.
-pub fn confirm(ctx: &Context, asker: Asker, spec: ConfirmSpec, then: impl FnOnce(Answer) + Send + 'static) -> Option<String> {
+pub fn confirm(
+    ctx: &Context,
+    asker: Asker,
+    spec: ConfirmSpec,
+    then: impl FnOnce(Answer) + Send + 'static,
+) -> Option<String> {
     let what = or(&spec.headline, or(&spec.title, "Confirm")).to_owned();
     match asker {
         Asker::Mcp => {
@@ -841,7 +1014,13 @@ pub fn confirm(ctx: &Context, asker: Asker, spec: ConfirmSpec, then: impl FnOnce
 /// Asks to save before something is lost: Save (Yes), Don't Save (No), Cancel. `what` names
 /// the dirty documents. `Mcp` answers Cancel (a command decides with its `save` / `discard`
 /// argument before it asks), `Unattended` No; both return the line to log.
-pub fn unsaved_prompt(ctx: &Context, asker: Asker, id: &str, what: &[String], then: impl FnOnce(Answer) + Send + 'static) -> Option<String> {
+pub fn unsaved_prompt(
+    ctx: &Context,
+    asker: Asker,
+    id: &str,
+    what: &[String],
+    then: impl FnOnce(Answer) + Send + 'static,
+) -> Option<String> {
     let joined = what.join(", ");
     match asker {
         Asker::Mcp => {
@@ -858,7 +1037,13 @@ pub fn unsaved_prompt(ctx: &Context, asker: Asker, id: &str, what: &[String], th
                 _ => "Save changes to these items?".to_owned(),
             };
             let kind = QKind::Unsaved { headline, items: what.to_vec() };
-            queue(ctx, kind, "Unsaved Changes".to_owned(), full_name(or(id, "unsaved")), Some(Box::new(then)));
+            queue(
+                ctx,
+                kind,
+                "Unsaved Changes".to_owned(),
+                full_name(or(id, "unsaved")),
+                Some(Box::new(then)),
+            );
             None
         }
     }
@@ -874,7 +1059,13 @@ pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str)
             Tone::Warning => "Warning",
             _ => "Information",
         };
-        queue(ctx, QKind::Notice { tone, text: text_.to_owned() }, or(title, fallback).to_owned(), "dlg.notice".to_owned(), None);
+        queue(
+            ctx,
+            QKind::Notice { tone, text: text_.to_owned() },
+            or(title, fallback).to_owned(),
+            "dlg.notice".to_owned(),
+            None,
+        );
     }
     Some(line)
 }
@@ -964,7 +1155,12 @@ mod tests {
     #[test]
     fn mcp_confirms_at_once_and_unattended_declines() {
         let ctx = egui::Context::default();
-        let spec = ConfirmSpec { title: "Delete Project".into(), headline: "Delete Overnight Delivery?".into(), destructive: true, ..ConfirmSpec::default() };
+        let spec = ConfirmSpec {
+            title: "Delete Project".into(),
+            headline: "Delete Overnight Delivery?".into(),
+            destructive: true,
+            ..ConfirmSpec::default()
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         let tx2 = tx.clone();
         let line = super::confirm(&ctx, Asker::Mcp, spec.clone(), move |a| {
@@ -976,6 +1172,9 @@ mod tests {
             let _ = tx2.send(a);
         });
         assert_eq!(rx.try_recv().ok(), Some(Answer::No));
-        assert_eq!(line.as_deref(), Some("~ [dlg suppressed] Delete Overnight Delivery?  -> auto-answer: No"));
+        assert_eq!(
+            line.as_deref(),
+            Some("~ [dlg suppressed] Delete Overnight Delivery?  -> auto-answer: No")
+        );
     }
 }

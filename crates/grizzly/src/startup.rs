@@ -31,18 +31,29 @@ impl Startup {
         let counters = gz_win::process_counters().ok();
         let loader = Stage {
             name: "loader (before main)".to_owned(),
-            seconds: counters.map_or(0.0, |c| SystemTime::now().duration_since(c.created).map_or(0.0, |d| d.as_secs_f64())),
+            seconds: counters.map_or(0.0, |c| {
+                SystemTime::now().duration_since(c.created).map_or(0.0, |d| d.as_secs_f64())
+            }),
             reads: counters.map_or(0, |c| c.read_ops),
             ops: counters.map_or(0, |c| c.file_ops()),
         };
-        Self { began: now, stage_start: now, stage_counters: counters, current: "Starting".to_owned(), stages: Vec::new(), loader }
+        Self {
+            began: now,
+            stage_start: now,
+            stage_counters: counters,
+            current: "Starting".to_owned(),
+            stages: Vec::new(),
+            loader,
+        }
     }
 
     fn close_stage(&mut self) {
         let now = Instant::now();
         let counters = gz_win::process_counters().ok();
         let (reads, ops) = match (self.stage_counters, counters) {
-            (Some(a), Some(b)) => (b.read_ops.saturating_sub(a.read_ops), b.file_ops().saturating_sub(a.file_ops())),
+            (Some(a), Some(b)) => {
+                (b.read_ops.saturating_sub(a.read_ops), b.file_ops().saturating_sub(a.file_ops()))
+            }
             _ => (0, 0),
         };
         self.stages.push(Stage {

@@ -72,7 +72,10 @@ fn start_kit_round_trips_through_the_manifest() {
     assert!(k.declared);
     assert_eq!(k.money, 500);
     assert!(!k.perks);
-    assert_eq!(k.items, [KitItem { section: "wpn_knife".into(), count: 1 }, KitItem { section: "bandage".into(), count: 3 }]);
+    assert_eq!(
+        k.items,
+        [KitItem { section: "wpn_knife".into(), count: 1 }, KitItem { section: "bandage".into(), count: 3 }]
+    );
     let d = doc(MANIFEST);
     let text = applied(MANIFEST, vec![k.edit(&d).unwrap()]);
     assert!(text.ends_with("[start_kit]\r\nmoney           = 500\r\nperks           = false\r\nwpn_knife       = 1\r\nbandage         = 3\r\n"));
@@ -107,7 +110,10 @@ fn the_json_of_both() {
     );
     let keys: Vec<&String> = w.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["rules", "player_choice", "levels", "area", "locked_levels", "locked", "declared"]);
-    assert_eq!(StartKit::default().json(), json!({ "declared": false, "money": null, "perks": true, "items": [] }));
+    assert_eq!(
+        StartKit::default().json(),
+        json!({ "declared": false, "money": null, "perks": true, "items": [] })
+    );
 }
 
 #[test]
@@ -123,13 +129,18 @@ fn world_set_changes_only_what_it_is_given() {
     assert!(lists.levels.is_empty());
     assert_eq!(lists.area, ["b"]);
     assert_eq!(lists.locked, ["x"]);
-    assert!(set_world(&args(json!({ "preset": "nothing" })), w.clone()).unwrap_err().starts_with("preset must be"));
+    assert!(
+        set_world(&args(json!({ "preset": "nothing" })), w.clone())
+            .unwrap_err()
+            .starts_with("preset must be")
+    );
     assert_eq!(
         set_world(&args(json!({ "player_choice": "mutants, aliens" })), w.clone()).unwrap_err(),
         "player_choice: unknown rule 'aliens' (original_npcs, random_stalkers, mutants, npc_quests, story_quests)"
     );
     assert_eq!(
-        set_world(&args(json!({ "player_choice": "mutants,npc_quests,story_quests,original_npcs" })), w).unwrap_err(),
+        set_world(&args(json!({ "player_choice": "mutants,npc_quests,story_quests,original_npcs" })), w)
+            .unwrap_err(),
         "player_choice: the new-game screen has room for 3 rules"
     );
 }
@@ -137,7 +148,12 @@ fn world_set_changes_only_what_it_is_given() {
 #[test]
 fn world_set_kit_fields_declare_the_kit() {
     let k = StartKit::default();
-    let set = set_kit(&args(json!({ "start_kit": "device_torch, wpn_knife ,bandage=2", "start_money": "-5" })), k.clone(), None).unwrap();
+    let set = set_kit(
+        &args(json!({ "start_kit": "device_torch, wpn_knife ,bandage=2", "start_money": "-5" })),
+        k.clone(),
+        None,
+    )
+    .unwrap();
     assert!(set.declared);
     assert_eq!(set.money, -1);
     assert_eq!(set.items.len(), 3);
@@ -148,8 +164,18 @@ fn world_set_kit_fields_declare_the_kit() {
     );
     let perks = set_kit(&args(json!({ "start_perks": false })), k.clone(), None).unwrap();
     assert!(perks.declared && !perks.perks);
-    let base = StartKit { declared: true, money: 1000, perks: true, items: vec![KitItem { section: "bread".into(), count: 1 }] };
-    let from_base = set_kit(&args(json!({ "start_kit_remove": true, "start_perks": false })), set.clone(), Some(Some(base))).unwrap();
+    let base = StartKit {
+        declared: true,
+        money: 1000,
+        perks: true,
+        items: vec![KitItem { section: "bread".into(), count: 1 }],
+    };
+    let from_base = set_kit(
+        &args(json!({ "start_kit_remove": true, "start_perks": false })),
+        set.clone(),
+        Some(Some(base)),
+    )
+    .unwrap();
     assert_eq!(from_base.money, 1000);
     assert!(!from_base.perks);
     assert!(set_kit(&args(json!({})), k.clone(), Some(None)).unwrap_err().starts_with("start_kit_base: "));
@@ -161,7 +187,10 @@ fn the_game_base_kit_is_shared() {
     let text = "[stalker]\nwpn_pm = 1\n[shared] ; every faction\nmoney = 1000,3000\nbread\nbandage = 0\n[bandit]\nvodka\n";
     let k = base_kit(text).unwrap();
     assert_eq!(k.money, 1000);
-    assert_eq!(k.items, [KitItem { section: "bread".into(), count: 1 }, KitItem { section: "bandage".into(), count: 1 }]);
+    assert_eq!(
+        k.items,
+        [KitItem { section: "bread".into(), count: 1 }, KitItem { section: "bandage".into(), count: 1 }]
+    );
     assert!(base_kit("[stalker]\nx\n").is_none());
 }
 
@@ -186,7 +215,12 @@ fn game() -> GameWorld {
         ok: true,
         error: String::new(),
         levels: vec!["l01_escape".into(), "l02_garbage".into()],
-        transitions: vec![GameTransition { name: "esc_to_gar".into(), level: "l01_escape".into(), to_level: "l02_garbage".into(), position: [0.0; 3] }],
+        transitions: vec![GameTransition {
+            name: "esc_to_gar".into(),
+            level: "l01_escape".into(),
+            to_level: "l02_garbage".into(),
+            position: [0.0; 3],
+        }],
         patrols: vec!["esc_guard".into()],
     }
 }
@@ -197,7 +231,11 @@ fn start(level: &str, name: &str) -> Start {
 
 #[test]
 fn every_world_code() {
-    let mut w = World::from_lines(["player_choice = original_npcs, random_stalkers, mutants, npc_quests", "levels = L01_ESCAPE, nowhere", "locked = esc_to_gar, gone"]);
+    let mut w = World::from_lines([
+        "player_choice = original_npcs, random_stalkers, mutants, npc_quests",
+        "levels = L01_ESCAPE, nowhere",
+        "locked = esc_to_gar, gone",
+    ]);
     w.area = vec!["l02_garbage".into()];
     let k = StartKit::from_lines(["wpn_knife = 0", "bread", "bread", "toy"]);
     let starts = [start("l01_escape", "a"), start("moon", "b")];
@@ -222,16 +260,33 @@ fn every_world_code() {
     let p = validate(&area_only, &StartKit::default(), &[], None, None);
     assert_eq!(
         p,
-        ["W206 world: the playable area is limited, but there is no Player Start - the player begins at the faction's start, which may lie outside it"]
+        [
+            "W206 world: the playable area is limited, but there is no Player Start - the player begins at the faction's start, which may lie outside it"
+        ]
     );
-    let row = StartKit { declared: true, items: vec![KitItem { section: String::new(), count: 1 }], ..StartKit::default() };
-    assert_eq!(validate(&World::default(), &row, &[], None, None), ["E207 world: a start kit row names no item"]);
-    assert!(validate(&World::default(), &StartKit::default(), &[start("l01_escape", "a")], Some(&game()), None).is_empty());
+    let row = StartKit {
+        declared: true,
+        items: vec![KitItem { section: String::new(), count: 1 }],
+        ..StartKit::default()
+    };
+    assert_eq!(
+        validate(&World::default(), &row, &[], None, None),
+        ["E207 world: a start kit row names no item"]
+    );
+    assert!(
+        validate(&World::default(), &StartKit::default(), &[start("l01_escape", "a")], Some(&game()), None)
+            .is_empty()
+    );
 }
 
 #[test]
 fn transitions_close_in_the_engines_order() {
-    let w = World { locked: vec!["a".into()], locked_levels: vec!["l1".into()], area: vec!["l2".into()], ..World::default() };
+    let w = World {
+        locked: vec!["a".into()],
+        locked_levels: vec!["l1".into()],
+        area: vec!["l2".into()],
+        ..World::default()
+    };
     assert_eq!(w.closed_by("a", "l2", "l2"), "locked");
     assert_eq!(w.closed_by("b", "l1", "l2"), "level");
     assert_eq!(w.closed_by("b", "l3", "l4"), "area");

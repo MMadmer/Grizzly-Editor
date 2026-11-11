@@ -17,9 +17,9 @@ use gz_editor::{Editor, FrameStamp, SmolStr};
 use parking_lot::Mutex;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::platform::windows::WindowAttributesExtWindows;
 use winit::event::{StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowId};
 
 /// What wakes the event loop from another thread.
@@ -85,6 +85,7 @@ impl Default for WindowOptions {
 pub struct WindowLink {
     captures: Mutex<Vec<egui::ScreenshotCallback>>,
     gpu: Mutex<Option<RenderState>>,
+    caption: Arc<gz_win::CaptionHitTest>,
 }
 
 impl WindowLink {
@@ -98,6 +99,12 @@ impl WindowLink {
     #[must_use]
     pub fn gpu(&self) -> Option<RenderState> {
         self.gpu.lock().clone()
+    }
+
+    /// What the window's hit test answers from: the shell publishes the caption every frame.
+    #[must_use]
+    pub fn caption(&self) -> &Arc<gz_win::CaptionHitTest> {
+        &self.caption
     }
 }
 
@@ -147,7 +154,19 @@ impl App {
         {
             attrs = attrs.with_window_icon(Some(icon));
         }
-        let window = Arc::new(event_loop.create_window(attrs).map_err(|e| format!("the window could not be created: {e}"))?);
+        let window = Arc::new(
+            event_loop.create_window(attrs).map_err(|e| format!("the window could not be created: {e}"))?,
+        );
+        // an undecorated window answers "client" everywhere: the caption's own hit test
+        if !self.opts.decorations {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle()
+                && let RawWindowHandle::Win32(h) = handle.as_raw()
+                && let Err(e) = gz_win::install_caption_hit_test(h.hwnd.get(), self.link.caption.clone())
+            {
+                self.editor.log.warn(format!("the caption hit test could not be installed: {e}"));
+            }
+        }
 
         let ctx = egui::Context::default();
         let repaint_at = self.repaint_at.clone();
@@ -165,15 +184,22 @@ impl App {
             desc.required_features |= adapter.features() & egui_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC;
             desc
         });
-        let config = WgpuConfiguration { surface: SurfaceConfig::LOW_LATENCY, wgpu_setup: setup.into(), ..Default::default() };
+        let config = WgpuConfiguration {
+            surface: SurfaceConfig::LOW_LATENCY,
+            wgpu_setup: setup.into(),
+            ..Default::default()
+        };
         let rt = self.editor.exec.handle().clone();
         let mut painter = rt.block_on(Painter::new(ctx.clone(), config, false, RendererOptions::default()));
         rt.block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
             .map_err(|e| format!("the graphics device could not be created: {e}"))?;
-        let gpu = painter.render_state().ok_or_else(|| "the graphics device could not be created".to_owned())?;
+        let gpu =
+            painter.render_state().ok_or_else(|| "the graphics device could not be created".to_owned())?;
         // wgpu's default handler panics: a device error is the log's, not the process's end
         let log = self.editor.log.clone();
-        gpu.device.on_uncaptured_error(Arc::new(move |e: egui_wgpu::wgpu::Error| log.error(format!("the graphics device reported an error: {e}"))));
+        gpu.device.on_uncaptured_error(Arc::new(move |e: egui_wgpu::wgpu::Error| {
+            log.error(format!("the graphics device reported an error: {e}"))
+        }));
 
         let input = egui_winit::State::new(
             ctx.clone(),
@@ -211,7 +237,10 @@ impl App {
         // size of its taskbar button while it is iconic
         if live.window.is_minimized() == Some(true) {
             let ppp = live.window.scale_factor() as f32 * live.ctx.zoom_factor();
-            raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(live.size_px[0] as f32, live.size_px[1] as f32) / ppp.max(0.01)));
+            raw.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(live.size_px[0] as f32, live.size_px[1] as f32) / ppp.max(0.01),
+            ));
         }
         egui_winit::update_viewport_info(&mut live.info, &live.ctx, &live.window, self.frame == 0);
         raw.viewports.insert(ViewportId::ROOT, live.info.clone());
@@ -224,7 +253,13 @@ impl App {
 
         let mut actions = Vec::new();
         if let Some(root) = output.viewport_output.remove(&ViewportId::ROOT) {
-            egui_winit::process_viewport_commands(&live.ctx, &mut live.info, root.commands, &live.window, &mut actions);
+            egui_winit::process_viewport_commands(
+                &live.ctx,
+                &mut live.info,
+                root.commands,
+                &live.window,
+                &mut actions,
+            );
         }
         let mut captures: Vec<egui::ScreenshotCallback> = self.link.captures.lock().drain(..).collect();
         for action in actions {
@@ -248,7 +283,10 @@ impl App {
         if capturing && let Some(gpu) = live.painter.render_state() {
             // the picture is handed over when the read-back buffer is mapped, which happens on a
             // poll; no later frame may come to do it
-            let _ = gpu.device.poll(egui_wgpu::wgpu::PollType::Wait { submission_index: None, timeout: Some(Duration::from_secs(2)) });
+            let _ = gpu.device.poll(egui_wgpu::wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(2)),
+            });
         }
 
         if !live.shown {
@@ -315,7 +353,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.dirty = true;
                     return;
                 }
-                if let (Some(w), Some(h)) = (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height)) {
+                if let (Some(w), Some(h)) =
+                    (std::num::NonZeroU32::new(size.width), std::num::NonZeroU32::new(size.height))
+                {
                     live.size_px = [size.width, size.height];
                     live.painter.on_window_resized(ViewportId::ROOT, w, h);
                 }
@@ -363,7 +403,9 @@ impl ApplicationHandler<UserEvent> for App {
 /// Opens the window and runs the editor's frame loop on the calling thread - the main thread -
 /// until the window closes or the editor is asked to quit.
 pub fn run(editor: Arc<Editor>, opts: WindowOptions, shell: Box<dyn Shell>) -> Result<(), String> {
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build().map_err(|e| format!("the event loop did not start: {e}"))?;
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .map_err(|e| format!("the event loop did not start: {e}"))?;
     let proxy = event_loop.create_proxy();
     editor.exec.wake().set(move || {
         let _ = proxy.send_event(UserEvent::Wake);

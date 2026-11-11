@@ -72,6 +72,7 @@ pub mod prj;
 pub mod runs;
 mod service;
 pub mod spawn;
+pub mod validate;
 pub mod wallmarks;
 
 pub use cmd::{COMMANDS, register};

@@ -47,7 +47,14 @@ pub struct Header {
 impl Header {
     #[must_use]
     pub fn of(g: &Graph) -> Self {
-        Self { id: g.id.clone(), title: g.title.clone(), activation: g.activation.clone(), vars: g.vars.clone(), tasks: g.tasks.iter().cloned().collect(), roles: g.roles.clone() }
+        Self {
+            id: g.id.clone(),
+            title: g.title.clone(),
+            activation: g.activation.clone(),
+            vars: g.vars.clone(),
+            tasks: g.tasks.iter().cloned().collect(),
+            roles: g.roles.clone(),
+        }
     }
 }
 
@@ -304,7 +311,9 @@ impl Inspector {
         self.node_dirty = false;
         let Some(cur) = cx.graph.find_node(&self.node_id) else { return };
         let n = &self.node;
-        if asset::node_to_value(cur) == asset::node_to_value(&Node { pos: cur.pos, has_pos: cur.has_pos, ..n.clone() }) {
+        if asset::node_to_value(cur)
+            == asset::node_to_value(&Node { pos: cur.pos, has_pos: cur.has_pos, ..n.clone() })
+        {
             return;
         }
         // the canvas owns the coordinates: the panel never writes a stale copy over a drag
@@ -324,11 +333,18 @@ impl Inspector {
         for p in n.out.iter().filter(|p| !p.targets.is_empty()) {
             match p.targets.as_slice() {
                 [one] => out.set(&p.name, one.as_str()),
-                many => out.set(&p.name, Value::from(many.iter().map(|t| Value::from(t.as_str())).collect::<Vec<_>>())),
+                many => out.set(
+                    &p.name,
+                    Value::from(many.iter().map(|t| Value::from(t.as_str())).collect::<Vec<_>>()),
+                ),
             };
         }
         patch.set("out", out);
-        cx.ops.push(Op::Doc(DocOp::Apply(op(&[("op", Value::from("set_node")), ("id", Value::from(self.node_id.as_str())), ("patch", patch)]))));
+        cx.ops.push(Op::Doc(DocOp::Apply(op(&[
+            ("op", Value::from("set_node")),
+            ("id", Value::from(self.node_id.as_str())),
+            ("patch", patch),
+        ]))));
     }
 
     fn sync_header(&mut self, cx: &mut PanelCx<'_>) {
@@ -400,7 +416,13 @@ impl Inspector {
         }
     }
 
-    fn param_cx<'s>(&'s mut self, ui: &Ui, cx: &'s PanelCx<'_>, role: &'static str, header_ctx: bool) -> ParamCx<'s> {
+    fn param_cx<'s>(
+        &'s mut self,
+        ui: &Ui,
+        cx: &'s PanelCx<'_>,
+        role: &'static str,
+        header_ctx: bool,
+    ) -> ParamCx<'s> {
         ParamCx {
             ctx: ui.ctx().clone(),
             cat: cx.cat,
@@ -436,7 +458,15 @@ impl Inspector {
         }
         let vars_open = local::local_fold_open(&child, &self.key("vars"), true);
         let top_h = if vars_open {
-            gz_ui::splitter::splitter(&mut child, VARS_SPLIT, false, 120.0, 90.0, (self.graph_column * 0.62).max(120.0)).size
+            gz_ui::splitter::splitter(
+                &mut child,
+                VARS_SPLIT,
+                false,
+                120.0,
+                90.0,
+                (self.graph_column * 0.62).max(120.0),
+            )
+            .size
         } else {
             (rect.height() - head - spacing).max(1.0)
         };
@@ -483,7 +513,8 @@ impl Inspector {
             self.scroll = None;
         }
         self.anchors = anchors;
-        self.graph_scroll = [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
+        self.graph_scroll =
+            [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
 
         // the Variables, under the splitter: their header stays while the list scrolls
         let vars_y = rect.min.y + top_h + spacing;
@@ -491,7 +522,8 @@ impl Inspector {
         let mut vui = child.new_child(UiBuilder::new().id_salt("vars").max_rect(vars_rect));
         vui.set_clip_rect(vars_rect.intersect(child.clip_rect()));
         let count = (!self.header.vars.is_empty()).then(|| self.header.vars.len().to_string());
-        let (open, _) = local::local_fold_header(&mut vui, &self.key("vars"), "Variables", count.as_deref(), true, None);
+        let (open, _) =
+            local::local_fold_header(&mut vui, &self.key("vars"), "Variables", count.as_deref(), true, None);
         if open {
             let body = Rect::from_min_max(pos2(vars_rect.min.x, vui.cursor().min.y), vars_rect.max);
             let mut bui = vui.new_child(UiBuilder::new().id_salt("vars_body").max_rect(body));
@@ -506,7 +538,8 @@ impl Inspector {
                 ui.add_space(6.0);
                 self.draw_globals(ui, cx);
             });
-            self.vars_scroll = [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
+            self.vars_scroll =
+                [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
         } else {
             self.vars_scroll = [0.0, 0.0];
         }
@@ -516,12 +549,29 @@ impl Inspector {
         ui.allocate_rect(rect, egui::Sense::hover());
     }
 
-    fn draw_header_pane(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>, origin: f32, anchors: &mut Vec<(String, f32)>) {
+    fn draw_header_pane(
+        &mut self,
+        ui: &mut Ui,
+        cx: &mut PanelCx<'_>,
+        origin: f32,
+        anchors: &mut Vec<(String, f32)>,
+    ) {
         let behaviour = cx.graph.is_behaviour();
         let mut ch = false;
-        let (open, _) = local::local_fold_header(ui, &self.key("head"), if behaviour { "Behaviour Graph" } else { "Quest" }, None, true, None);
+        let (open, _) = local::local_fold_header(
+            ui,
+            &self.key("head"),
+            if behaviour { "Behaviour Graph" } else { "Quest" },
+            None,
+            true,
+            None,
+        );
         if open {
-            let help = if behaviour { "For the author only - a behaviour graph shows the player nothing" } else { "What the player reads in the PDA" };
+            let help = if behaviour {
+                "For the author only - a behaviour graph shows the player nothing"
+            } else {
+                "What the player reads in the PDA"
+            };
             let mut title = self.header.title.clone();
             let mut acti = usize::from(self.header.activation == "manual");
             let mut id = self.header.id.clone();
@@ -536,10 +586,18 @@ impl Inspector {
                     });
                     ch |= changed;
                 }
-                let (more, _) = local::local_fold_header(ui, &self.key("head_more"), "More", None, false, None);
+                let (more, _) =
+                    local::local_fold_header(ui, &self.key("head_more"), "More", None, false, None);
                 if more {
-                    let h = if behaviour { "The graph's id: what behaviour.run names. a-z, 0-9 and _" } else { "The quest's id: unique in the module. a-z, 0-9 and _" };
-                    ch |= params::grid(ui, ROLE_HEADER, "id", |g| g.row("ID", h, PropFlags::NONE, 1, |ui| grid::text_field(ui, &mut id).changed()).unwrap_or(false));
+                    let h = if behaviour {
+                        "The graph's id: what behaviour.run names. a-z, 0-9 and _"
+                    } else {
+                        "The quest's id: unique in the module. a-z, 0-9 and _"
+                    };
+                    ch |= params::grid(ui, ROLE_HEADER, "id", |g| {
+                        g.row("ID", h, PropFlags::NONE, 1, |ui| grid::text_field(ui, &mut id).changed())
+                            .unwrap_or(false)
+                    });
                 }
             }
             if ch {
@@ -562,15 +620,34 @@ impl Inspector {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn draw_tasks(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>, origin: f32, anchors: &mut Vec<(String, f32)>) -> bool {
+    fn draw_tasks(
+        &mut self,
+        ui: &mut Ui,
+        cx: &mut PanelCx<'_>,
+        origin: f32,
+        anchors: &mut Vec<(String, f32)>,
+    ) -> bool {
         let mut ch = false;
-        let (open, add) = local::local_fold_header(ui, &self.key("tasks"), "Tasks", None, true, Some((Icon::Plus, "Add a task")));
+        let (open, add) = local::local_fold_header(
+            ui,
+            &self.key("tasks"),
+            "Tasks",
+            None,
+            true,
+            Some((Icon::Plus, "Add a task")),
+        );
         if add {
             let mut n = 1;
             while self.header.tasks.iter().any(|t| t.id == format!("task{n}")) {
                 n += 1;
             }
-            self.header.tasks.push(Task { id: format!("task{n}"), ty: "additional".to_owned(), title: Value::from(""), descr: Value::from(""), ..Task::default() });
+            self.header.tasks.push(Task {
+                id: format!("task{n}"),
+                ty: "additional".to_owned(),
+                title: Value::from(""),
+                descr: Value::from(""),
+                ..Task::default()
+            });
             ch = true;
         }
         if !open {
@@ -582,7 +659,18 @@ impl Inspector {
             let Some(mut t) = self.header.tasks.get(i).cloned() else { continue };
             anchors.push((format!("task:{}", t.id), ui.cursor().min.y - origin));
             let head = if t.id.is_empty() { "(no id)".to_owned() } else { t.id.clone() };
-            let (topen, x) = ui.push_id(i, |ui| local::local_fold_header(ui, &self.key(&format!("task:{}", t.id)), &head, None, true, Some((Icon::Close, "Remove the task. Ctrl+Z brings it back")))).inner;
+            let (topen, x) = ui
+                .push_id(i, |ui| {
+                    local::local_fold_header(
+                        ui,
+                        &self.key(&format!("task:{}", t.id)),
+                        &head,
+                        None,
+                        true,
+                        Some((Icon::Close, "Remove the task. Ctrl+Z brings it back")),
+                    )
+                })
+                .inner;
             if x {
                 removed = Some(i);
             }
@@ -715,13 +803,24 @@ impl Inspector {
     /// The cast of a behaviour graph: named slots its caller fills (`DrawRolesSection`).
     fn draw_roles(&mut self, ui: &mut Ui, cx: &mut PanelCx<'_>) -> bool {
         let mut ch = false;
-        let (open, add) = local::local_fold_header(ui, &self.key("roles"), "Roles", None, true, Some((Icon::Plus, "Add a role")));
+        let (open, add) = local::local_fold_header(
+            ui,
+            &self.key("roles"),
+            "Roles",
+            None,
+            true,
+            Some((Icon::Plus, "Add a role")),
+        );
         if add {
             let mut n = 1;
             while self.header.roles.iter().any(|r| r.name == format!("role{n}")) {
                 n += 1;
             }
-            self.header.roles.push(Role { name: format!("role{n}"), title: Value::from(""), ..Role::default() });
+            self.header.roles.push(Role {
+                name: format!("role{n}"),
+                title: Value::from(""),
+                ..Role::default()
+            });
             ch = true;
         }
         if !open {
@@ -730,8 +829,23 @@ impl Inspector {
         let mut removed = None;
         for i in 0..self.header.roles.len() {
             let Some(mut r) = self.header.roles.get(i).cloned() else { continue };
-            let head = format!("{}{}", if r.name.is_empty() { "(no name)" } else { &r.name }, if r.many { " (group)" } else { "" });
-            let (ropen, x) = ui.push_id(i, |ui| local::local_fold_header(ui, &self.key(&format!("role{i}")), &head, None, true, Some((Icon::Close, "Remove the role. Ctrl+Z brings it back")))).inner;
+            let head = format!(
+                "{}{}",
+                if r.name.is_empty() { "(no name)" } else { &r.name },
+                if r.many { " (group)" } else { "" }
+            );
+            let (ropen, x) = ui
+                .push_id(i, |ui| {
+                    local::local_fold_header(
+                        ui,
+                        &self.key(&format!("role{i}")),
+                        &head,
+                        None,
+                        true,
+                        Some((Icon::Close, "Remove the role. Ctrl+Z brings it back")),
+                    )
+                })
+                .inner;
             if x {
                 removed = Some(i);
             }
@@ -783,7 +897,13 @@ impl Inspector {
         let mut ch = false;
         let add;
         if self.header.vars.is_empty() {
-            add = gz_ui::state::empty_state(ui, Icon::Variable, "No variables", "A variable's default value is also its type.", Some("Add Variable"));
+            add = gz_ui::state::empty_state(
+                ui,
+                Icon::Variable,
+                "No variables",
+                "A variable's default value is also its type.",
+                Some("Add Variable"),
+            );
         } else {
             self.var_sel = self.var_sel.min(self.header.vars.len() - 1);
             let rows = self.header.vars.len().min(6) as f32;
@@ -791,7 +911,12 @@ impl Inspector {
             let mut pick = None;
             gz_ui::list::list(ui, "gz-ui-graph.vars", vec2(0.0, rows * 22.0 + 10.0), |l| {
                 for (i, v) in self.header.vars.iter().enumerate() {
-                    let label = format!("{}  \u{b7}  {} {}", v.name, params::type_name(&v.value), params::value_text(&v.value));
+                    let label = format!(
+                        "{}  \u{b7}  {} {}",
+                        v.name,
+                        params::type_name(&v.value),
+                        params::value_text(&v.value)
+                    );
                     if l.row(&format!("var{i}"), i == self.var_sel, |ui| {
                         gz_ui::text::label(ui, &label, Font::Body, palette(ui.ctx()).text, Clip::End);
                     })
@@ -822,10 +947,16 @@ impl Inspector {
                 let mut commit = false;
                 ui.push_id(("var", i), |ui| {
                     params::grid(ui, ROLE_VARS, "name", |g| {
-                        g.row("Name", "Renaming changes every var node and condition that names it", PropFlags::NONE, 0, |ui| {
-                            let r = grid::text_field(ui, &mut buf);
-                            commit = r.lost_focus();
-                        });
+                        g.row(
+                            "Name",
+                            "Renaming changes every var node and condition that names it",
+                            PropFlags::NONE,
+                            0,
+                            |ui| {
+                                let r = grid::text_field(ui, &mut buf);
+                                commit = r.lost_focus();
+                            },
+                        );
                     });
                 });
                 self.var_name_buf = buf;
@@ -840,14 +971,26 @@ impl Inspector {
                     }
                 }
                 let mut value = var.value.clone();
-                let mut cur = if value.is_bool() { 0 } else if value.is_number() { 1 } else { 2 };
+                let mut cur = if value.is_bool() {
+                    0
+                } else if value.is_number() {
+                    1
+                } else {
+                    2
+                };
                 let was = cur;
                 let mut type_ch = false;
                 ui.push_id(("var_type", i), |ui| {
                     params::grid(ui, ROLE_VARS, "type", |g| {
-                        g.row("Type", "Bool, number or text: the type of the default, and of every value it takes", PropFlags::NONE, 0, |ui| {
-                            type_ch = gz_ui::segmented(ui, &mut cur, &["Bool", "Number", "Text"], None);
-                        });
+                        g.row(
+                            "Type",
+                            "Bool, number or text: the type of the default, and of every value it takes",
+                            PropFlags::NONE,
+                            0,
+                            |ui| {
+                                type_ch = gz_ui::segmented(ui, &mut cur, &["Bool", "Number", "Text"], None);
+                            },
+                        );
                     });
                 });
                 if type_ch && cur != was {
@@ -855,7 +998,19 @@ impl Inspector {
                     ch = true;
                 }
                 let as_type = value.clone();
-                if ui.push_id(("var_default", i), |ui| params::typed_value(ui, ROLE_VARS, "default", &Row::new("Default", "The value the variable has when the graph starts", 0), &mut value, &as_type)).inner {
+                if ui
+                    .push_id(("var_default", i), |ui| {
+                        params::typed_value(
+                            ui,
+                            ROLE_VARS,
+                            "default",
+                            &Row::new("Default", "The value the variable has when the graph starts", 0),
+                            &mut value,
+                            &as_type,
+                        )
+                    })
+                    .inner
+                {
                     ch = true;
                 }
                 if let Some(slot) = self.header.vars.get_mut(i)
@@ -946,7 +1101,13 @@ impl Inspector {
         if !cx.data.has_project {
             gz_ui::text::status(ui, Tone::Muted, "No project: nowhere to keep them.");
         } else if self.globals.is_empty() {
-            add = gz_ui::state::empty_state(ui, Icon::Variable, "No global variables", "A value every quest of the module sees - the night, a flag, a count.", Some("Add Global"));
+            add = gz_ui::state::empty_state(
+                ui,
+                Icon::Variable,
+                "No global variables",
+                "A value every quest of the module sees - the night, a flag, a count.",
+                Some("Add Global"),
+            );
         } else {
             self.global_sel = self.global_sel.min(self.globals.len() - 1);
             let rows = self.globals.len().min(6) as f32;
@@ -954,7 +1115,8 @@ impl Inspector {
             let mut pick = None;
             gz_ui::list::list(ui, "gz-ui-graph.globals", vec2(0.0, rows * 22.0 + 10.0), |l| {
                 for (i, (name, value)) in self.globals.iter().enumerate() {
-                    let label = format!("{name}  \u{b7}  {} {}", params::type_name(value), global_text(value));
+                    let label =
+                        format!("{name}  \u{b7}  {} {}", params::type_name(value), global_text(value));
                     if l.row(&format!("global{i}"), i == self.global_sel, |ui| {
                         gz_ui::text::label(ui, &label, Font::Body, palette(ui.ctx()).text, Clip::End);
                     })
@@ -962,7 +1124,11 @@ impl Inspector {
                     {
                         pick = Some(i);
                     }
-                    if l.row_actions(&[Icon::Delete], &["Remove the global variable - the quests that name it are E030 until they stop"]) == Some(0) {
+                    if l.row_actions(
+                        &[Icon::Delete],
+                        &["Remove the global variable - the quests that name it are E030 until they stop"],
+                    ) == Some(0)
+                    {
                         drop = Some(i);
                     }
                 }
@@ -995,7 +1161,9 @@ impl Inspector {
                     let want = self.global_name_buf.trim().to_owned();
                     if !want.is_empty() && want != name {
                         if !gz_mod::valid_global_name(&want) {
-                            self.notes.push(format!("A global variable is named by letters, digits and _: '{want}'"));
+                            self.notes.push(format!(
+                                "A global variable is named by letters, digits and _: '{want}'"
+                            ));
                         } else if self.globals.iter().any(|(n, _)| *n == want) {
                             self.notes.push(format!("The global variable '{want}' already exists"));
                         } else if let Some(slot) = self.globals.get_mut(i) {
@@ -1005,14 +1173,26 @@ impl Inspector {
                     }
                 }
                 let mut v = value.clone();
-                let mut cur = if v.is_bool() { 0 } else if v.is_number() { 1 } else { 2 };
+                let mut cur = if v.is_bool() {
+                    0
+                } else if v.is_number() {
+                    1
+                } else {
+                    2
+                };
                 let was = cur;
                 let mut type_ch = false;
                 ui.push_id(("global_type", i), |ui| {
                     params::grid(ui, ROLE_GLOBALS, "type", |g| {
-                        g.row("Type", "Bool, number or text: the type of the default, and of every value it takes", PropFlags::NONE, 0, |ui| {
-                            type_ch = gz_ui::segmented(ui, &mut cur, &["Bool", "Number", "Text"], None);
-                        });
+                        g.row(
+                            "Type",
+                            "Bool, number or text: the type of the default, and of every value it takes",
+                            PropFlags::NONE,
+                            0,
+                            |ui| {
+                                type_ch = gz_ui::segmented(ui, &mut cur, &["Bool", "Number", "Text"], None);
+                            },
+                        );
                     });
                 });
                 if type_ch && cur != was {
@@ -1020,7 +1200,23 @@ impl Inspector {
                     ch = true;
                 }
                 let as_type = v.clone();
-                if ui.push_id(("global_default", i), |ui| params::typed_value(ui, ROLE_GLOBALS, "default", &Row::new("Default", "The value a new game starts with; a save keeps what the quests made of it", 0), &mut v, &as_type)).inner {
+                if ui
+                    .push_id(("global_default", i), |ui| {
+                        params::typed_value(
+                            ui,
+                            ROLE_GLOBALS,
+                            "default",
+                            &Row::new(
+                                "Default",
+                                "The value a new game starts with; a save keeps what the quests made of it",
+                                0,
+                            ),
+                            &mut v,
+                            &as_type,
+                        )
+                    })
+                    .inner
+                {
                     ch = true;
                 }
                 if let Some(slot) = self.globals.get_mut(i) {
@@ -1046,7 +1242,11 @@ impl Inspector {
     /// Writes the globals into mod.ltx `[vars]` through the manifest's store (`SaveGlobals`).
     fn save_globals(&mut self, editor: &Arc<Editor>) {
         self.globals_dirty = false;
-        let lines: Vec<String> = self.globals.iter().map(|(n, v)| gz_mod::doc::entry_line(n, &global_text(v), gz_mod::doc::key_width("vars"))).collect();
+        let lines: Vec<String> = self
+            .globals
+            .iter()
+            .map(|(n, v)| gz_mod::doc::entry_line(n, &global_text(v), gz_mod::doc::key_width("vars")))
+            .collect();
         let ed = editor.clone();
         let origin = editor.ui_origin();
         let _task = editor.exec.spawn(async move {
@@ -1055,7 +1255,10 @@ impl Inspector {
                 Err(e) => Err(e),
             };
             if let Err(e) = result {
-                ed.log.error(format!("[nq] mod.ltx could not be written - the global variables were not saved: {}", e.message));
+                ed.log.error(format!(
+                    "[nq] mod.ltx could not be written - the global variables were not saved: {}",
+                    e.message
+                ));
             }
         });
         // read back from the manifest once it moved
@@ -1081,7 +1284,11 @@ impl Inspector {
         child.spacing_mut().item_spacing.y = spacing;
 
         // a newly selected action is brought into view in the node pane
-        let reveal = if self.node_id.is_empty() { String::new() } else { format!("{}|{}", self.node_id, cx.view.slot) };
+        let reveal = if self.node_id.is_empty() {
+            String::new()
+        } else {
+            format!("{}|{}", self.node_id, cx.view.slot)
+        };
         if reveal != self.reveal_key {
             self.reveal_frames = if self.node_id.is_empty() || cx.view.slot.is_empty() { 0 } else { 3 };
             self.reveal_open = self.reveal_frames > 0;
@@ -1095,14 +1302,24 @@ impl Inspector {
             let (title, text_) = if n > 1 {
                 (format!("{n} nodes selected"), "Select one node to edit it.".to_owned())
             } else {
-                ("Nothing selected".to_owned(), format!("Select a node to edit it. The {}'s own settings are in the Graph panel.", look::doc_noun(cx.graph.is_behaviour())))
+                (
+                    "Nothing selected".to_owned(),
+                    format!(
+                        "Select a node to edit it. The {}'s own settings are in the Graph panel.",
+                        look::doc_noun(cx.graph.is_behaviour())
+                    ),
+                )
             };
             gz_ui::state::empty_state(&mut child, Icon::Info, &title, &text_, None);
             ui.allocate_rect(rect, egui::Sense::hover());
             return;
         }
         let has_action = Self::has_action(cx.view);
-        let mut col = child.new_child(UiBuilder::new().id_salt("column").max_rect(Rect::from_min_size(rect.min, vec2(rect.width(), column))));
+        let mut col = child.new_child(
+            UiBuilder::new()
+                .id_salt("column")
+                .max_rect(Rect::from_min_size(rect.min, vec2(rect.width(), column))),
+        );
         col.spacing_mut().item_spacing.y = spacing;
         let node_h = if has_action {
             if let Some(f) = self.pending_action.take() {
@@ -1113,7 +1330,10 @@ impl Inspector {
             column
         };
         let node_r = Rect::from_min_size(rect.min, vec2(rect.width(), node_h));
-        let action_r = Rect::from_min_max(pos2(rect.min.x, rect.min.y + node_h + spacing), pos2(rect.max.x, rect.min.y + column));
+        let action_r = Rect::from_min_max(
+            pos2(rect.min.x, rect.min.y + node_h + spacing),
+            pos2(rect.max.x, rect.min.y + column),
+        );
         self.node_pane = Some(node_r);
         if has_action {
             self.action_pane = Some(action_r);
@@ -1157,7 +1377,8 @@ impl Inspector {
             self.bottom_next = Some("node");
             self.scroll = None;
         }
-        self.node_scroll = [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
+        self.node_scroll =
+            [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
     }
 
     fn action_pane_draw(&mut self, ui: &mut Ui, r: Rect, cx: &mut PanelCx<'_>) {
@@ -1178,7 +1399,8 @@ impl Inspector {
             self.bottom_next = Some("action");
             self.scroll = None;
         }
-        self.action_scroll = [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
+        self.action_scroll =
+            [out.state.clamped_offset().y, (out.content_size.y - out.inner_rect.height()).max(0.0)];
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1188,7 +1410,14 @@ impl Inspector {
         let cat = cx.cat;
         let trig = cat.is_trigger(&self.node.kind);
         let title = look::kind_title(cat, &self.node.kind, behaviour);
-        local::local_pane_header(ui, look::kind_icon(cat, &self.node.kind), look::kind_color(&p, cat, &self.node.kind, 1.0), &title, &self.node.id, 0.0);
+        local::local_pane_header(
+            ui,
+            look::kind_icon(cat, &self.node.kind),
+            look::kind_color(&p, cat, &self.node.kind, 1.0),
+            &title,
+            &self.node.id,
+            0.0,
+        );
         // what is wrong with the node, first: each line names a parameter and says what to do
         for pr in cx.data.problems.iter().filter(|pr| pr.node == self.node_id.as_str()) {
             gz_ui::text::status(ui, if pr.is_error() { Tone::Error } else { Tone::Warning }, &pr.text());
@@ -1205,20 +1434,29 @@ impl Inspector {
             let mut commit = false;
             let focus = std::mem::take(&mut self.focus_rename);
             params::grid(ui, ROLE_NODE, "id", |g| {
-                g.row("ID", "The node's id: what links, bookmarks and other nodes name. F2 renames it", PropFlags::NONE, 0, |ui| {
-                    let r = grid::text_field(ui, &mut buf);
-                    if focus {
-                        r.request_focus();
-                    }
-                    commit = r.lost_focus();
-                });
+                g.row(
+                    "ID",
+                    "The node's id: what links, bookmarks and other nodes name. F2 renames it",
+                    PropFlags::NONE,
+                    0,
+                    |ui| {
+                        let r = grid::text_field(ui, &mut buf);
+                        if focus {
+                            r.request_focus();
+                        }
+                        commit = r.lost_focus();
+                    },
+                );
             });
             self.id_buf = buf;
             if commit {
                 let nid = self.id_buf.trim().to_owned();
                 if nid != self.node_id.as_str() && !nid.is_empty() {
                     self.commit_node(cx);
-                    cx.ops.push(Op::Doc(DocOp::RenameNode { id: self.node_id.to_string(), new_id: nid.clone() }));
+                    cx.ops.push(Op::Doc(DocOp::RenameNode {
+                        id: self.node_id.to_string(),
+                        new_id: nid.clone(),
+                    }));
                     cx.view.select_only(&nid);
                     self.node_id = SmolStr::new(&nid);
                     self.node.id = SmolStr::new(&nid);
@@ -1229,9 +1467,26 @@ impl Inspector {
             let desc = look::kind_desc(cat, &self.node.kind, behaviour);
             let mut kind = self.node.kind.to_string();
             let changed = params::grid(ui, ROLE_NODE, "kind", |g| {
-                g.row("Kind", if desc.is_empty() { "What the node does. Changing it resets the parameters" } else { &desc }, PropFlags::NONE, 0, |ui| {
-                    local::local_kind_combo(ui, "node_kind", cat, if trig { USE_TRIGGER } else { USE_MAIN }, behaviour, &mut kind)
-                })
+                g.row(
+                    "Kind",
+                    if desc.is_empty() {
+                        "What the node does. Changing it resets the parameters"
+                    } else {
+                        &desc
+                    },
+                    PropFlags::NONE,
+                    0,
+                    |ui| {
+                        local::local_kind_combo(
+                            ui,
+                            "node_kind",
+                            cat,
+                            if trig { USE_TRIGGER } else { USE_MAIN },
+                            behaviour,
+                            &mut kind,
+                        )
+                    },
+                )
                 .unwrap_or(false)
             });
             if changed && kind != self.node.kind.as_str() {
@@ -1246,7 +1501,8 @@ impl Inspector {
             let k = cat.find(&self.node.kind).cloned();
             if !trig && let Some(k) = &k {
                 let mut once = if self.node.once_set { self.node.once } else { k.once_default };
-                let flags = PropFlags::INLINE | if self.node.once_set { PropFlags::MODIFIED } else { PropFlags::NONE };
+                let flags = PropFlags::INLINE
+                    | if self.node.once_set { PropFlags::MODIFIED } else { PropFlags::NONE };
                 let mut reset = false;
                 let toggled = params::grid(ui, ROLE_NODE, "once", |g| {
                     let t = g.row("Once", "Runs once: after it has run, the node is passed over. The kind decides when unset", flags, 0, |ui| grid::switch(ui, &mut once).changed()).unwrap_or(false);
@@ -1276,13 +1532,20 @@ impl Inspector {
                 }
                 None => {
                     params::grid(ui, ROLE_NODE, "unknown", |g| {
-                        g.row("Kind", "", PropFlags::INVALID | PropFlags::READ_ONLY, 0, |ui| grid::read_only(ui, &kind, Clip::End));
+                        g.row("Kind", "", PropFlags::INVALID | PropFlags::READ_ONLY, 0, |ui| {
+                            grid::read_only(ui, &kind, Clip::End)
+                        });
                         g.message(Tone::Error, "Unknown kind - not in the catalog");
                     });
                 }
             }
             let mut comment = self.node.comment.clone();
-            if params::grid(ui, ROLE_NODE, "comment", |g| g.row("Comment", "For the author: the player never sees it", PropFlags::NONE, 0, |ui| grid::text_field(ui, &mut comment).changed()).unwrap_or(false)) {
+            if params::grid(ui, ROLE_NODE, "comment", |g| {
+                g.row("Comment", "For the author: the player never sees it", PropFlags::NONE, 0, |ui| {
+                    grid::text_field(ui, &mut comment).changed()
+                })
+                .unwrap_or(false)
+            }) {
                 self.node.comment = comment;
                 ch = true;
             }
@@ -1290,7 +1553,8 @@ impl Inspector {
 
         // the conditions: all main and trigger kinds may carry them
         let count = (!self.node.cond.is_empty()).then(|| self.node.cond.len().to_string());
-        let (copen, _) = local::local_fold_header(ui, &self.key("conds"), "Conditions", count.as_deref(), true, None);
+        let (copen, _) =
+            local::local_fold_header(ui, &self.key("conds"), "Conditions", count.as_deref(), true, None);
         if copen {
             let mut conds = self.node.cond.clone();
             let mut pcx = self.param_cx(ui, cx, ROLE_NODE, false);
@@ -1308,7 +1572,8 @@ impl Inspector {
                 self.reveal_open = false;
             }
             let count = (total > 0).then(|| total.to_string());
-            let (aopen, _) = local::local_fold_header(ui, &self.key("acts"), "Actions", count.as_deref(), true, None);
+            let (aopen, _) =
+                local::local_fold_header(ui, &self.key("acts"), "Actions", count.as_deref(), true, None);
             if aopen {
                 for (exit, list) in [(false, &self.node.on_enter), (true, &self.node.on_exit)] {
                     for (i, a) in list.iter().enumerate() {
@@ -1319,7 +1584,11 @@ impl Inspector {
                         let spec = NavRowSpec {
                             icon: look::kind_icon(cat, &a.kind),
                             count: Some(&where_),
-                            tip: if exit { "Runs when the node is left. Click to edit it below" } else { "Runs when the node is entered. Click to edit it below" },
+                            tip: if exit {
+                                "Runs when the node is left. Click to edit it below"
+                            } else {
+                                "Runs when the node is entered. Click to edit it below"
+                            },
                             ..NavRowSpec::default()
                         };
                         let top = ui.cursor().min.y;
@@ -1327,7 +1596,10 @@ impl Inspector {
                             cx.view.slot.clone_from(&sel);
                         }
                         if selected && self.reveal_frames > 0 {
-                            let r = Rect::from_min_max(pos2(ui.min_rect().min.x, top), pos2(ui.min_rect().max.x, top + gz_ui::theme::metrics::ROW));
+                            let r = Rect::from_min_max(
+                                pos2(ui.min_rect().min.x, top),
+                                pos2(ui.min_rect().max.x, top + gz_ui::theme::metrics::ROW),
+                            );
                             if ui.clip_rect().contains_rect(r) {
                                 self.reveal_frames = 0;
                             } else {
@@ -1373,7 +1645,13 @@ impl Inspector {
             if oopen {
                 for (i, pin) in self.node.out.iter().enumerate() {
                     let tg = pin.targets.iter().map(SmolStr::as_str).collect::<Vec<_>>().join(", ");
-                    params::text_row(ui, ROLE_NODE, ("out", i), &Row::new(&pin.name, "", 0), if tg.is_empty() { "(nothing)" } else { &tg });
+                    params::text_row(
+                        ui,
+                        ROLE_NODE,
+                        ("out", i),
+                        &Row::new(&pin.name, "", 0),
+                        if tg.is_empty() { "(nothing)" } else { &tg },
+                    );
                 }
             }
         }
@@ -1393,20 +1671,45 @@ impl Inspector {
         let behaviour = cx.graph.is_behaviour();
         let cat = cx.cat;
         let p = palette(ui.ctx());
-        let Some(mut a) = (if exit { &self.node.on_exit } else { &self.node.on_enter }).get(index).cloned() else { return };
+        let Some(mut a) = (if exit { &self.node.on_exit } else { &self.node.on_enter }).get(index).cloned()
+        else {
+            return;
+        };
         let where_ = format!("{} {}", if exit { "On exit" } else { "On enter" }, index + 1);
         let title = look::kind_title(cat, &a.kind, behaviour);
         let head = ui.cursor().min;
         let tools = 3.0 * 26.0;
-        local::local_pane_header(ui, look::kind_icon(cat, &a.kind), look::kind_color(&p, cat, &a.kind, 1.0), &title, &where_, tools);
+        local::local_pane_header(
+            ui,
+            look::kind_icon(cat, &a.kind),
+            look::kind_color(&p, cat, &a.kind, 1.0),
+            &title,
+            &where_,
+            tools,
+        );
         let right = ui.max_rect().max.x;
         let (mut up, mut down, mut remove) = (false, false, false);
         let tools_r = Rect::from_min_size(pos2(right - tools, head.y + 2.0), vec2(tools, 24.0));
-        let mut tui = ui.new_child(UiBuilder::new().id_salt("action_tools").max_rect(tools_r).layout(egui::Layout::left_to_right(Align::Center)));
+        let mut tui = ui.new_child(
+            UiBuilder::new()
+                .id_salt("action_tools")
+                .max_rect(tools_r)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
         tui.spacing_mut().item_spacing.x = 2.0;
         up = gz_ui::icon_button(&mut tui, Icon::MoveUp, "Move up", false, index > 0).clicked() || up;
-        down = gz_ui::icon_button(&mut tui, Icon::MoveDown, "Move down", false, index + 1 < list_len).clicked() || down;
-        remove = gz_ui::icon_button(&mut tui, Icon::Delete, "Remove the action (Ctrl+Z brings it back)", false, true).clicked() || remove;
+        down = gz_ui::icon_button(&mut tui, Icon::MoveDown, "Move down", false, index + 1 < list_len)
+            .clicked()
+            || down;
+        remove = gz_ui::icon_button(
+            &mut tui,
+            Icon::Delete,
+            "Remove the action (Ctrl+Z brings it back)",
+            false,
+            true,
+        )
+        .clicked()
+            || remove;
         let list = if exit { &mut self.node.on_exit } else { &mut self.node.on_enter };
         if up && index > 0 {
             list.swap(index, index - 1);
@@ -1431,12 +1734,22 @@ impl Inspector {
         let mut kind = a.kind.to_string();
         let focus = std::mem::take(&mut self.focus_action);
         let changed = params::grid(ui, ROLE_ACTION, "kind", |g| {
-            g.row("Kind", if desc.is_empty() { "What the action does. Changing it resets the parameters" } else { &desc }, PropFlags::NONE, 0, |ui| {
-                if focus {
-                    ui.memory_mut(|m| m.request_focus(ui.next_auto_id()));
-                }
-                local::local_kind_combo(ui, "action_kind", cat, USE_EXTRA, behaviour, &mut kind)
-            })
+            g.row(
+                "Kind",
+                if desc.is_empty() {
+                    "What the action does. Changing it resets the parameters"
+                } else {
+                    &desc
+                },
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    if focus {
+                        ui.memory_mut(|m| m.request_focus(ui.next_auto_id()));
+                    }
+                    local::local_kind_combo(ui, "action_kind", cat, USE_EXTRA, behaviour, &mut kind)
+                },
+            )
             .unwrap_or(false)
         });
         if changed && kind != a.kind.as_str() {
@@ -1455,7 +1768,9 @@ impl Inspector {
             }
             None => {
                 params::grid(ui, ROLE_ACTION, "unknown", |g| {
-                    g.row("Kind", "", PropFlags::INVALID | PropFlags::READ_ONLY, 0, |ui| grid::read_only(ui, &kind, Clip::End));
+                    g.row("Kind", "", PropFlags::INVALID | PropFlags::READ_ONLY, 0, |ui| {
+                        grid::read_only(ui, &kind, Clip::End)
+                    });
                     g.message(Tone::Error, "Unknown kind - not in the catalog");
                 });
             }

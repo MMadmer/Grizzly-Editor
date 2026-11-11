@@ -55,7 +55,8 @@ impl Release {
             ..Self::default()
         };
         for (name, value) in ini::section(&text, "packages") {
-            let sha256 = value.split_once(',').map_or("", |(_, h)| h).trim_start_matches(' ').to_ascii_lowercase();
+            let sha256 =
+                value.split_once(',').map_or("", |(_, h)| h).trim_start_matches(' ').to_ascii_lowercase();
             rel.packages.push(RelPackage { name: name.to_owned(), size: leading_u64(value), sha256 });
         }
         let card = ini::section(&text, "card");
@@ -91,7 +92,12 @@ impl Release {
         let dir = root.join("releases").join(&self.version);
         self.packages
             .iter()
-            .map(|p| gz_github::Package { name: p.name.clone(), path: dir.join(&p.name), size: p.size, sha256: p.sha256.clone() })
+            .map(|p| gz_github::Package {
+                name: p.name.clone(),
+                path: dir.join(&p.name),
+                size: p.size,
+                sha256: p.sha256.clone(),
+            })
             .collect()
     }
 }
@@ -210,7 +216,14 @@ fn heading(m: &Manifest) -> String {
 
 /// What the issue says after the file: the module, the links, the verdicts, the editor's check.
 #[must_use]
-pub fn submission_details(m: &Manifest, key: &KeyState, seen: &Checked, check: &Check, website: &str, repo_page: &str) -> String {
+pub fn submission_details(
+    m: &Manifest,
+    key: &KeyState,
+    seen: &Checked,
+    check: &Check,
+    website: &str,
+    repo_page: &str,
+) -> String {
     let mut body = format!("{} {}\n\n", heading(m), seen.rel.version);
     body.push_str(&format!("- Repository: {repo_page}\n"));
     body.push_str(&format!("- Website: {website}\n"));
@@ -222,7 +235,11 @@ pub fn submission_details(m: &Manifest, key: &KeyState, seen: &Checked, check: &
         } else {
             scan::describe(r)
         };
-        body.push_str(&format!("- `{}`: {verdict} - {}\n", r.package.name, vt::report_page(&r.package.sha256)));
+        body.push_str(&format!(
+            "- `{}`: {verdict} - {}\n",
+            r.package.name,
+            vt::report_page(&r.package.sha256)
+        ));
     }
     body.push_str("\nChecked by Grizzly Editor:\n");
     for f in &check.findings {
@@ -246,8 +263,12 @@ pub fn vt_refusal(r: &ScanResult, version: &str) -> String {
     let what = scan::describe(r);
     match r.state.as_str() {
         "block" => format!("{what}: the catalog would refuse it"),
-        "too_large" => format!("{what}: package the release again - Package Release keeps every package under that size unless a single file alone is larger"),
-        "unknown" => format!("{what}: put the published files into releases\\{version}, or upload the package at virustotal.com"),
+        "too_large" => format!(
+            "{what}: package the release again - Package Release keeps every package under that size unless a single file alone is larger"
+        ),
+        "unknown" => format!(
+            "{what}: put the published files into releases\\{version}, or upload the package at virustotal.com"
+        ),
         "analysing" => format!("{what}: submit again in a few minutes"),
         "unavailable" => format!("{what}: submit again when VirusTotal answers"),
         _ => what,
@@ -275,7 +296,12 @@ mod tests {
     }
 
     fn key() -> KeyState {
-        KeyState { exists: true, key_id: "0123456789abcdef".to_owned(), public_key: "p256:AAAA".to_owned(), ..KeyState::default() }
+        KeyState {
+            exists: true,
+            key_id: "0123456789abcdef".to_owned(),
+            public_key: "p256:AAAA".to_owned(),
+            ..KeyState::default()
+        }
     }
 
     #[test]
@@ -283,7 +309,10 @@ mod tests {
         let text = "[release]\nid = od\nversion = 1.2.0\n[packages]\nod-1.2.0.zip = 1234, ABCDEF\n[card]\nwebsite = \"https://ap-pro.ru/stuff/mods/od-r1/\"\ntags = story, quests\n";
         let rel = Release::read(text.as_bytes().to_vec(), "");
         assert_eq!((rel.id.as_str(), rel.version.as_str()), ("od", "1.2.0"));
-        assert_eq!(rel.packages, vec![RelPackage { name: "od-1.2.0.zip".to_owned(), size: 1234, sha256: "abcdef".to_owned() }]);
+        assert_eq!(
+            rel.packages,
+            vec![RelPackage { name: "od-1.2.0.zip".to_owned(), size: 1234, sha256: "abcdef".to_owned() }]
+        );
         assert!(rel.card);
         assert_eq!(rel.website, "https://ap-pro.ru/stuff/mods/od-r1/");
         assert_eq!(rel.tags, "story, quests");
@@ -294,7 +323,10 @@ mod tests {
     #[test]
     fn listings() {
         let index = "[catalog]\n[mods]\nod = me/od, p256:AAAA, 1.0.0, 2026-01-01\n[withdrawn]\nold = me/old, p256:BBBB, 1.0.0, 2026-01-01\n";
-        assert_eq!(read_listing(Some(index), "od", "p256:AAAA"), Listing { state: "listed".to_owned(), github: "me/od".to_owned(), this_key: true });
+        assert_eq!(
+            read_listing(Some(index), "od", "p256:AAAA"),
+            Listing { state: "listed".to_owned(), github: "me/od".to_owned(), this_key: true }
+        );
         assert_eq!(read_listing(Some(index), "old", "p256:AAAA").state, "withdrawn");
         assert!(!read_listing(Some(index), "old", "p256:AAAA").this_key);
         assert_eq!(read_listing(Some(index), "new", "").state, "free");
@@ -332,7 +364,14 @@ mod tests {
         r.verdict.engines = 70;
         seen.vt.packages.push(r);
         assert_eq!(
-            submission_details(&m, &k, &seen, &check, "https://ap-pro.ru/stuff/mods/od-r1/", "https://github.com/me/od"),
+            submission_details(
+                &m,
+                &k,
+                &seen,
+                &check,
+                "https://ap-pro.ru/stuff/mods/od-r1/",
+                "https://github.com/me/od"
+            ),
             "**Overnight Delivery** by Madmer - `od` 1.2.0\n\n- Repository: https://github.com/me/od\n- Website: https://ap-pro.ru/stuff/mods/od-r1/\n- Author key: `0123456789abcdef`\n\n\
              VirusTotal:\n- `od-1.2.0.zip`: clean, 70 engines - https://www.virustotal.com/gui/file/ab\n\nChecked by Grizzly Editor:\n- ok: Author key 0123456789abcdef.\n"
         );

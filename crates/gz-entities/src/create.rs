@@ -51,7 +51,11 @@ fn need_hit_type(s: &dyn Settings, section: &str, key: &str) -> Result<()> {
     if HIT_TYPES.iter().any(|t| value.eq_ignore_ascii_case(t)) {
         Ok(())
     } else {
-        Err(EntityError::BadValue { section: SmolStr::new(section), key: SmolStr::new(key), value: SmolStr::new(value) })
+        Err(EntityError::BadValue {
+            section: SmolStr::new(section),
+            key: SmolStr::new(key),
+            value: SmolStr::new(value),
+        })
     }
 }
 
@@ -291,11 +295,11 @@ pub(crate) fn construct(info: &ClassInfo, section: &str, s: &dyn Settings) -> Re
     let mut o = Object::default();
 
     // CSE_Abstract: the custom data file the section names
-    if let Some(file) = s.r_string(section, "custom_data") {
-        if let Some(text) = s.config_text(file) {
-            let text = text.split('\0').next().unwrap_or("");
-            o.alife.ini_string = SmolStr::new(text);
-        }
+    if let Some(file) = s.r_string(section, "custom_data")
+        && let Some(text) = s.config_text(file)
+    {
+        let text = text.split('\0').next().unwrap_or("");
+        o.alife.ini_string = SmolStr::new(text);
     }
 
     if class.has_visual() && class != Class::AbstractVisual && class != Class::ZoneVisual {
@@ -307,15 +311,18 @@ pub(crate) fn construct(info: &ClassInfo, section: &str, s: &dyn Settings) -> Re
         Class::Spectator | Class::GraphPoint | Class::Temporary => {}
         Class::AbstractVisual => o.visual.name = visual_name(section),
         Class::DynamicObjectVisual | Class::MountedWeapon | Class::StationaryMgun | Class::InventoryBox => {}
-        Class::PhSkeletonObject | Class::Projector | Class::HangingLamp | Class::Breakable => no_switches(&mut o),
+        Class::PhSkeletonObject | Class::Projector | Class::HangingLamp | Class::Breakable => {
+            no_switches(&mut o)
+        }
         Class::SpaceRestrictor | Class::LevelChanger | Class::SmartZone | Class::TeamBaseZone => {
             space_restrictor(&mut o);
         }
         Class::ObjectPhysic => {
-            if s.section_exist(section) && s.line_exist(section, "visual") {
-                if let Some(animation) = s.r_string(section, "startup_animation") {
-                    o.visual.startup_animation = SmolStr::new(animation);
-                }
+            if s.section_exist(section)
+                && s.line_exist(section, "visual")
+                && let Some(animation) = s.r_string(section, "startup_animation")
+            {
+                o.visual.startup_animation = SmolStr::new(animation);
             }
             if let Some(bones) = s.r_string(section, "fixed_bones") {
                 o.physic_mut().fixed_bones = SmolStr::new(bones);
@@ -469,7 +476,12 @@ pub(crate) mod fixtures {
             .section("smart_zone", &[("class", "SMRTZONE")])
             .section(
                 "physic_object",
-                &[("class", "O_PHYS_S"), ("visual", "dynamics\\Barrel.ogf"), ("fixed_bones", "link"), ("startup_animation", "idle")],
+                &[
+                    ("class", "O_PHYS_S"),
+                    ("visual", "dynamics\\Barrel.ogf"),
+                    ("fixed_bones", "link"),
+                    ("startup_animation", "idle"),
+                ],
             )
             .section("lamp", &[("class", "SO_HLAMP"), ("visual", "dynamics\\lamp.ogf")])
             .section("projector", &[("class", "O_SEARCH")])
@@ -479,22 +491,42 @@ pub(crate) mod fixtures {
             .section("climable", &[("class", "O_CLMBL")])
             .section("mounted", &[("class", "W_STMGUN"), ("visual", "dynamics\\mgun.ogf")])
             .section("team_base", &[("class", "Z_TEAMBS")])
-            .section("inventory_box", &[("class", "S_INVBOX"), ("visual", "dynamics\\box.ogf"), ("custom_data", "scripts\\box.ltx")])
+            .section(
+                "inventory_box",
+                &[
+                    ("class", "S_INVBOX"),
+                    ("visual", "dynamics\\box.ogf"),
+                    ("custom_data", "scripts\\box.ltx"),
+                ],
+            )
             .section("zone", &[("class", "Z_ZONE")])
             .section("anomaly", &[("class", "ZS_MBALD"), ("hit_type", "strike"), ("min_start_power", "0.25")])
             .section("torrid", &[("class", "ZS_TORRD")])
             .section("zone_bfuzz.x", &[("class", "ZS_BFUZZ"), ("visual", "dynamics\\Fuzz.ogf")])
-            .section("crow", &[("class", "AI_CROW"), ("ef_creature_type", "2"), ("visual", "monsters\\crow.ogf")])
+            .section(
+                "crow",
+                &[("class", "AI_CROW"), ("ef_creature_type", "2"), ("visual", "monsters\\crow.ogf")],
+            )
             .section("phantom", &[("class", "AI_PHANT"), ("ef_creature_type", "2")])
             .section("squad", &[("class", "ON_OFF_S")])
             .section("plain_squad", &[("class", "ON_OFF_G")])
             .section(
                 "smart_cover",
-                &[("class", "SMRT_C_S"), ("enter_min_enemy_distance", "15"), ("exit_min_enemy_distance", "10"), ("is_combat_cover", "true")],
+                &[
+                    ("class", "SMRT_C_S"),
+                    ("enter_min_enemy_distance", "15"),
+                    ("exit_min_enemy_distance", "10"),
+                    ("is_combat_cover", "true"),
+                ],
             )
             .section(
                 "animpoint",
-                &[("class", "SMRTCOVR"), ("enter_min_enemy_distance", "1"), ("exit_min_enemy_distance", "2"), ("is_combat_cover", "false")],
+                &[
+                    ("class", "SMRTCOVR"),
+                    ("enter_min_enemy_distance", "1"),
+                    ("exit_min_enemy_distance", "2"),
+                    ("is_combat_cover", "false"),
+                ],
             )
             .section("unknown_thing", &[("class", "NOCLASS")])
             .file("scripts\\box.ltx", "[spawn]\r\nmedkit = 2\r\n");
@@ -528,19 +560,37 @@ pub(crate) mod fixtures {
         add("counted_bolt", with(&item, &[("class", "II_BOLT"), ("infinite", "false")]));
         add("outfit", with(&item, &[("class", "E_STLK"), ("ef_equipment_type", "3")]));
         add("helmet", with(&item, &[("class", "E_HLMET")]));
-        add("trader", vec![
-            ("class".to_owned(), "AI_TRD_S".to_owned()),
-            ("max_item_mass".to_owned(), "1000".to_owned()),
-            ("money".to_owned(), "5000".to_owned()),
-            ("visual".to_owned(), "actors\\trader.ogf".to_owned()),
-        ]);
+        add(
+            "trader",
+            vec![
+                ("class".to_owned(), "AI_TRD_S".to_owned()),
+                ("max_item_mass".to_owned(), "1000".to_owned()),
+                ("money".to_owned(), "5000".to_owned()),
+                ("visual".to_owned(), "actors\\trader.ogf".to_owned()),
+            ],
+        );
         add("actor", with(&creature, &[("class", "S_ACTOR"), ("max_item_mass", "50")]));
-        add("dog", with(&creature, &[("class", "SM_DOG_S"), ("SpaceRestrictionSection", "space_restrictor")]));
+        add(
+            "dog",
+            with(&creature, &[("class", "SM_DOG_S"), ("SpaceRestrictionSection", "space_restrictor")]),
+        );
         add("plain_dog", with(&creature, &[("class", "AI_DOG_R")]));
         add("phantom_dog", with(&creature, &[("class", "AI_DOG_F")]));
         add("rat", with(&with_refs(&creature, &item), &[("class", "AI_RAT")]));
-        add("flesh_group", vec![("class".to_owned(), "AI_FLE_G".to_owned()), ("monster_section".to_owned(), "plain_dog".to_owned())]);
-        add("stalker", with(&creature, &[("class", "AI_STL_S"), ("max_item_mass", "50"), ("character_profile", "sim_default")]));
+        add(
+            "flesh_group",
+            vec![
+                ("class".to_owned(), "AI_FLE_G".to_owned()),
+                ("monster_section".to_owned(), "plain_dog".to_owned()),
+            ],
+        );
+        add(
+            "stalker",
+            with(
+                &creature,
+                &[("class", "AI_STL_S"), ("max_item_mass", "50"), ("character_profile", "sim_default")],
+            ),
+        );
         s
     }
 
@@ -576,13 +626,22 @@ mod tests {
     #[test]
     fn flags_follow_the_class() {
         use alife_flags::*;
-        assert_eq!(make("physic_object").1.alife.flags, 0xffff_ffbf & !(USE_SWITCHES | SWITCH_OFFLINE | USED_AI_LOCATIONS));
+        assert_eq!(
+            make("physic_object").1.alife.flags,
+            0xffff_ffbf & !(USE_SWITCHES | SWITCH_OFFLINE | USED_AI_LOCATIONS)
+        );
         assert_eq!(make("space_restrictor").1.alife.flags, 0xffff_ffbf & !(USE_SWITCHES | USED_AI_LOCATIONS));
-        assert_eq!(make("helicopter").1.alife.flags, 0xffff_ffbf & !(USE_SWITCHES | SWITCH_OFFLINE | INTERACTIVE));
+        assert_eq!(
+            make("helicopter").1.alife.flags,
+            0xffff_ffbf & !(USE_SWITCHES | SWITCH_OFFLINE | INTERACTIVE)
+        );
         assert_eq!(make("bolt").1.alife.flags, 0xffff_ffbf & !(USE_SWITCHES | SWITCH_OFFLINE | CAN_SAVE));
         assert_eq!(make("counted_bolt").1.alife.flags, 0xffff_ffbf);
         assert_eq!(make("squad").1.alife.flags, 0xffff_ffbf & !USED_AI_LOCATIONS);
-        assert_eq!(make("lamp").1.lamp().map(|l| l.flags), Some(lamp_flags::TYPE_SPOT | lamp_flags::R1 | lamp_flags::R2));
+        assert_eq!(
+            make("lamp").1.lamp().map(|l| l.flags),
+            Some(lamp_flags::TYPE_SPOT | lamp_flags::R1 | lamp_flags::R2)
+        );
     }
 
     #[test]
@@ -594,7 +653,10 @@ mod tests {
 
         assert_eq!(make("ammo_9x18").1.ammo().map(|a| (a.box_size, a.elapsed)), Some((20, 20)));
         assert_eq!(make("ammo_half").1.ammo().map(|a| (a.box_size, a.elapsed)), Some((20, 7)));
-        assert_eq!(make("pistol").1.weapon().map(|w| (w.scope_status, w.mag_size, w.a_current)), Some((2, 8, 90)));
+        assert_eq!(
+            make("pistol").1.weapon().map(|w| (w.scope_status, w.mag_size, w.a_current)),
+            Some((2, 8, 90))
+        );
         assert_eq!(make("anomaly").1.zone().map(|z| z.max_power), Some(0.25));
         assert_eq!(make("zone").1.zone().map(|z| z.max_power), Some(1.0));
         // CSE_Visual(caSection) cuts the section name like a file name; the section's visual wins
@@ -602,7 +664,10 @@ mod tests {
         assert_eq!(make("inventory_box").1.alife.ini_string, "[spawn]\r\nmedkit = 2\r\n");
         assert_eq!(make("smart_cover").1.cover().map(|c| (c.is_combat_cover, c.can_fire)), Some((1, 1)));
         assert_eq!(make("animpoint").1.cover().map(|c| (c.is_combat_cover, c.can_fire)), Some((0, 0)));
-        assert_eq!(make("dog").1.monster().map(|m| m.space_restriction_section.as_str()), Some("space_restrictor"));
+        assert_eq!(
+            make("dog").1.monster().map(|m| m.space_restriction_section.as_str()),
+            Some("space_restrictor")
+        );
     }
 
     #[test]
@@ -610,7 +675,10 @@ mod tests {
         let (_, o) = make("stalker");
         assert_eq!(o.alife.ini_string, "\r\n[game_info]\r\n");
         let t = o.trader().unwrap();
-        assert_eq!((t.character_profile.as_str(), t.flags, t.max_item_mass), ("sim_default", TRADER_INFINITE_AMMO, 50.0));
+        assert_eq!(
+            (t.character_profile.as_str(), t.flags, t.max_item_mass),
+            ("sim_default", TRADER_INFINITE_AMMO, 50.0)
+        );
         assert_eq!(make("trader").1.trader().map(|t| t.money), Some(5000));
         assert_eq!(make("actor").1.alife.ini_string, "\r\n[game_info]\r\n");
         assert_eq!(make("rat").1.creature().map(|c| c.health), Some(5.0));
@@ -627,7 +695,9 @@ mod tests {
     fn a_missing_required_key_is_an_error() {
         let s = settings().section("broken", &[("class", "II_MEDKI"), ("inv_weight", "1")]);
         let info = class_of_section("broken", &s).unwrap();
-        assert!(matches!(construct(info, "broken", &s), Err(EntityError::MissingKey { key, .. }) if key == "cost"));
+        assert!(
+            matches!(construct(info, "broken", &s), Err(EntityError::MissingKey { key, .. }) if key == "cost")
+        );
         let s = settings().section("odd", &[("class", "Z_ZONE"), ("hit_type", "tickle")]);
         let info = class_of_section("odd", &s).unwrap();
         assert!(matches!(construct(info, "odd", &s), Err(EntityError::BadValue { .. })));

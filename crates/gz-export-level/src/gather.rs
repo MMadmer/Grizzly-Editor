@@ -138,7 +138,9 @@ pub fn spawn_inputs(
         })
         .collect();
 
-    let old_text = std::fs::read(xspawn_path(root, level)).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let old_text = std::fs::read(xspawn_path(root, level))
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
     let mut stale = Vec::new();
     let prefix = format!("{level}_").to_lowercase();
     if let Ok(rd) = std::fs::read_dir(root.join("spawn").join("custom_data")) {
@@ -150,7 +152,11 @@ pub fn spawn_inputs(
         }
     }
     stale.sort();
-    Gathered { visuals: Visuals { props: prop_found.into_iter().collect(), spawns: spawns.into_iter().collect() }, old_text, stale_custom_data: stale }
+    Gathered {
+        visuals: Visuals { props: prop_found.into_iter().collect(), spawns: spawns.into_iter().collect() },
+        old_text,
+        stale_custom_data: stale,
+    }
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -163,7 +169,13 @@ fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Writes a spawn bake: the stale custom data of a mirror pass removed, the models staged, the
 /// custom data files, then the `.xspawn` (or its removal, when a mirror pass found nothing).
 /// Returns the file and the log lines of what failed on the way.
-pub fn apply_spawn(root: &Path, level: &str, mirror: bool, stale: &[PathBuf], bake: &SpawnBake) -> Result<(Option<PathBuf>, Vec<String>), String> {
+pub fn apply_spawn(
+    root: &Path,
+    level: &str,
+    mirror: bool,
+    stale: &[PathBuf],
+    bake: &SpawnBake,
+) -> Result<(Option<PathBuf>, Vec<String>), String> {
     let mut log = Vec::new();
     if mirror {
         // stale logic files would outlive their ops in a mirror pass
@@ -173,15 +185,20 @@ pub fn apply_spawn(root: &Path, level: &str, mirror: bool, stale: &[PathBuf], ba
     }
     for (src, visual) in &bake.stage {
         let dst = staged_path(root, visual);
-        let copied = dst.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::copy(src, &dst).is_ok();
+        let copied = dst.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok())
+            && std::fs::copy(src, &dst).is_ok();
         if !copied {
-            log.push(format!("! [XMS] spawn export: can't stage '{}' -> gamedata\\meshes\\{visual}.ogf", src.display()));
+            log.push(format!(
+                "! [XMS] spawn export: can't stage '{}' -> gamedata\\meshes\\{visual}.ogf",
+                src.display()
+            ));
         }
     }
     let cd_dir = root.join("spawn").join("custom_data");
     for (file, text) in &bake.custom_data {
         if write_file(&cd_dir.join(file), text.as_bytes()).is_err() {
-            let op = file.strip_suffix(".ltx").and_then(|f| f.strip_prefix(&format!("{level}_"))).unwrap_or(file);
+            let op =
+                file.strip_suffix(".ltx").and_then(|f| f.strip_prefix(&format!("{level}_"))).unwrap_or(file);
             log.push(format!("! [XMS] spawn export: can't write custom_data for '{op}'"));
         }
     }
@@ -192,7 +209,8 @@ pub fn apply_spawn(root: &Path, level: &str, mirror: bool, stale: &[PathBuf], ba
             if std::fs::create_dir_all(&dir).is_err() || !dir.is_dir() {
                 return Err("can't create the spawn folder".to_owned());
             }
-            gz_editor::fsx::write_atomic(&path, text.as_bytes()).map_err(|_| "can't write the .xspawn file".to_owned())?;
+            gz_editor::fsx::write_atomic(&path, text.as_bytes())
+                .map_err(|_| "can't write the .xspawn file".to_owned())?;
             Ok((Some(path), log))
         }
         None => {
@@ -204,7 +222,13 @@ pub fn apply_spawn(root: &Path, level: &str, mirror: bool, stale: &[PathBuf], ba
 
 /// Writes a file of the level's overlay folder, the folder made first. `what` names the file
 /// in the C++ error (`overlay.xcform`).
-pub fn write_level_file(root: &Path, level: &str, rel: &str, bytes: &[u8], what: &str) -> Result<PathBuf, String> {
+pub fn write_level_file(
+    root: &Path,
+    level: &str,
+    rel: &str,
+    bytes: &[u8],
+    what: &str,
+) -> Result<PathBuf, String> {
     let dir = level_dir(root, level);
     if std::fs::create_dir_all(&dir).is_err() || !dir.is_dir() {
         return Err("can't create the overlay folder".to_owned());

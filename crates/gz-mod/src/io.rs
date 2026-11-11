@@ -14,7 +14,8 @@ use crate::model::{FILE, Manifest, scaffold_text};
 /// `<root>\mod.ltx` as text (UTF-8, a BOM skipped, anything that is not UTF-8 read as cp1251 -
 /// the reading the game gives the file); `Ok(None)` when there is none.
 pub fn read_manifest_file(root: &Path) -> io::Result<Option<String>> {
-    Ok(gz_editor::fsx::read_opt(&root.join(FILE))?.map(|bytes| gz_base::text::decode_guess(&bytes).into_owned()))
+    Ok(gz_editor::fsx::read_opt(&root.join(FILE))?
+        .map(|bytes| gz_base::text::decode_guess(&bytes).into_owned()))
 }
 
 /// The project scaffold: a project without `mod.ltx` gets [`scaffold_text`]. Never overwrites
@@ -45,7 +46,9 @@ pub fn script_functions(root: &Path, tree: &FileTree, exclude: &[String]) -> Vec
     let Some(dir) = tree.dir(&dir_rel) else { return out };
     for entry in dir.entries.iter().filter(|e| e.is_file()) {
         let name = entry.name.as_str();
-        let Some(stem) = name.len().checked_sub(7).filter(|&n| n > 0).and_then(|n| name.get(..n)) else { continue };
+        let Some(stem) = name.len().checked_sub(7).filter(|&n| n > 0).and_then(|n| name.get(..n)) else {
+            continue;
+        };
         if !name.get(stem.len()..).is_some_and(|ext| ext.eq_ignore_ascii_case(".script")) {
             continue;
         }
@@ -120,16 +123,24 @@ mod tests {
         fs::write(dir.join("gamedata\\scripts\\wip.script"), "function hidden()\n").unwrap();
         fs::write(dir.join("gamedata\\scripts\\deep\\x.script"), "function no()\n").unwrap();
         let tree = FileTree::scan(&dir);
-        assert_eq!(script_functions(&dir, &tree, &["gamedata/scripts/wip.script".to_owned()]), ["od.aaa", "od.status"]);
+        assert_eq!(
+            script_functions(&dir, &tree, &["gamedata/scripts/wip.script".to_owned()]),
+            ["od.aaa", "od.status"]
+        );
 
         let game = dir.join("game");
         fs::create_dir_all(game.join("modules\\other")).unwrap();
         fs::create_dir_all(game.join("modules\\self")).unwrap();
         fs::create_dir_all(game.join("mods\\noid")).unwrap();
-        fs::write(game.join("modules\\other\\mod.ltx"), "[module]\nid = other\n[commands]\nnight = o.n\n").unwrap();
-        fs::write(game.join("modules\\self\\mod.ltx"), "[module]\nid = od\n[commands]\nstatus = od.s\n").unwrap();
+        fs::write(game.join("modules\\other\\mod.ltx"), "[module]\nid = other\n[commands]\nnight = o.n\n")
+            .unwrap();
+        fs::write(game.join("modules\\self\\mod.ltx"), "[module]\nid = od\n[commands]\nstatus = od.s\n")
+            .unwrap();
         fs::write(game.join("mods\\noid\\mod.ltx"), "[commands]\nfly = n.f\n").unwrap();
-        assert_eq!(installed_commands(&game, "OD"), [("night".to_owned(), "other".to_owned()), ("fly".to_owned(), "noid".to_owned())]);
+        assert_eq!(
+            installed_commands(&game, "OD"),
+            [("night".to_owned(), "other".to_owned()), ("fly".to_owned(), "noid".to_owned())]
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -29,21 +29,93 @@ pub struct LevelAction {
     pub group: i32,
 }
 
-const fn act(id: &'static str, icon: Icon, label: &'static str, name: &'static str, tip: &'static str, command: &'static str, group: i32) -> LevelAction {
+const fn act(
+    id: &'static str,
+    icon: Icon,
+    label: &'static str,
+    name: &'static str,
+    tip: &'static str,
+    command: &'static str,
+    group: i32,
+) -> LevelAction {
     LevelAction { id, icon, label, name, tip, command, group }
 }
 
 /// The level builds and the runs, as `gz-levelbuild` registers them.
 pub const LEVEL_ACTIONS: [LevelAction; 9] = [
-    act("build_cform", Icon::BuildCollision, "", "Build Collision", "Build the collision geometry (CForm) of this scene", "build_cform", 1),
-    act("build_aimap", Icon::BuildAIMap, "", "Build AI Map", "Build the AI map of this scene", "build_aimap", 1),
-    act("build_ggraph", Icon::BuildGameGraph, "", "Build Game Graph", "Build the game graph of this scene", "build_game_graph", 1),
-    act("build_all", Icon::BuildAll, "", "Build All", "Compile the level and run the level builder (xrLC)", "build_all", 1),
-    act("play", Icon::Play, "Play", "Play", "Play the scene: build what it needs and launch the game on it", "play", 2),
-    act("play_game", Icon::PlayGame, "", "Play in Game", "Build the scene for play and launch the game on it", "play_game", 2),
-    act("play_clean", Icon::PlayClean, "", "Play Clean", "Launch the game as it is, without building anything", "play_clean", 2),
+    act(
+        "build_cform",
+        Icon::BuildCollision,
+        "",
+        "Build Collision",
+        "Build the collision geometry (CForm) of this scene",
+        "build_cform",
+        1,
+    ),
+    act(
+        "build_aimap",
+        Icon::BuildAIMap,
+        "",
+        "Build AI Map",
+        "Build the AI map of this scene",
+        "build_aimap",
+        1,
+    ),
+    act(
+        "build_ggraph",
+        Icon::BuildGameGraph,
+        "",
+        "Build Game Graph",
+        "Build the game graph of this scene",
+        "build_game_graph",
+        1,
+    ),
+    act(
+        "build_all",
+        Icon::BuildAll,
+        "",
+        "Build All",
+        "Compile the level and run the level builder (xrLC)",
+        "build_all",
+        1,
+    ),
+    act(
+        "play",
+        Icon::Play,
+        "Play",
+        "Play",
+        "Play the scene: build what it needs and launch the game on it",
+        "play",
+        2,
+    ),
+    act(
+        "play_game",
+        Icon::PlayGame,
+        "",
+        "Play in Game",
+        "Build the scene for play and launch the game on it",
+        "play_game",
+        2,
+    ),
+    act(
+        "play_clean",
+        Icon::PlayClean,
+        "",
+        "Play Clean",
+        "Launch the game as it is, without building anything",
+        "play_clean",
+        2,
+    ),
     act("stop", Icon::Stop, "", "Stop", "Stop the compiler or the game that is running", "play_stop", 2),
-    act("reload_configs", Icon::ReloadConfigs, "", "Reload Configs", "Re-read the game configs from disk (system.ltx, game.ltx)", "reload_configs", 3),
+    act(
+        "reload_configs",
+        Icon::ReloadConfigs,
+        "",
+        "Reload Configs",
+        "Re-read the game configs from disk (system.ltx, game.ltx)",
+        "reload_configs",
+        3,
+    ),
 ];
 
 /// The job groups the level builds and the runs use: while one runs, the others wait.
@@ -82,18 +154,34 @@ pub struct ToolbarState {
 pub fn draw(tb: &mut Toolbar<'_, '_>, editor: &Arc<Editor>, st: &mut ToolbarState, save: &mut bool) {
     let busy = running(editor);
     let has = |c: &str| editor.registry().has(c);
-    let history = editor.project_opt().and_then(|s| s.services.get::<SceneService>()).map(|svc| svc.store.history());
-    let (can_undo, can_redo) = history.as_ref().map_or((false, false), |h| (!h.undo.is_empty(), !h.redo.is_empty()));
+    let history =
+        editor.project_opt().and_then(|s| s.services.get::<SceneService>()).map(|svc| svc.store.history());
+    let (can_undo, can_redo) =
+        history.as_ref().map_or((false, false), |h| (!h.undo.is_empty(), !h.redo.is_empty()));
 
     tb.group(0);
-    if has("save_scene") && tb.action("save", Icon::Save, "", "Save the scene (Ctrl+S)", true, false, Kind::Ghost) {
+    if has("save_scene")
+        && tb.action("save", Icon::Save, "", "Save the scene (Ctrl+S)", true, false, Kind::Ghost)
+    {
         *save = true;
     }
     tb.separator();
-    if has("undo") && tb.action("undo", Icon::Undo, "", "Undo the last change (Ctrl+Z)", can_undo, false, Kind::Ghost) {
+    if has("undo")
+        && tb.action("undo", Icon::Undo, "", "Undo the last change (Ctrl+Z)", can_undo, false, Kind::Ghost)
+    {
         editor.post("undo", Args::new());
     }
-    if has("redo") && tb.action("redo", Icon::Redo, "", "Redo the change that was undone (Ctrl+Y)", can_redo, false, Kind::Ghost) {
+    if has("redo")
+        && tb.action(
+            "redo",
+            Icon::Redo,
+            "",
+            "Redo the change that was undone (Ctrl+Y)",
+            can_redo,
+            false,
+            Kind::Ghost,
+        )
+    {
         editor.post("redo", Args::new());
     }
 
@@ -125,18 +213,34 @@ pub fn draw(tb: &mut Toolbar<'_, '_>, editor: &Arc<Editor>, st: &mut ToolbarStat
         }
         if a.id == "play" {
             let verify = &mut st.verify_restrictors;
-            tb.menu("play_options", Icon::None, "", "Options for playing", Some("toolbar_split:play"), true, |ui| {
-                if menu_item(ui, "Verify Space Restrictors", MenuItem { selected: *verify, ..MenuItem::default() }) {
-                    *verify = !*verify;
-                }
-            });
+            tb.menu(
+                "play_options",
+                Icon::None,
+                "",
+                "Options for playing",
+                Some("toolbar_split:play"),
+                true,
+                |ui| {
+                    if menu_item(
+                        ui,
+                        "Verify Space Restrictors",
+                        MenuItem { selected: *verify, ..MenuItem::default() },
+                    ) {
+                        *verify = !*verify;
+                    }
+                },
+            );
         }
     }
     if group != 3 {
         tb.group(3);
     }
     let root = gz_game::GameLink::of(editor).ok().map(|l| l.root()).filter(|r| !r.is_empty());
-    let why = if root.is_some() { "Open the gamedata folder of the linked game in Explorer" } else { "No game is linked" };
+    let why = if root.is_some() {
+        "Open the gamedata folder of the linked game in Explorer"
+    } else {
+        "No game is linked"
+    };
     if tb.action("game_folder", Icon::GameFolder, "", why, root.is_some(), false, Kind::Ghost)
         && let Some(root) = root
     {

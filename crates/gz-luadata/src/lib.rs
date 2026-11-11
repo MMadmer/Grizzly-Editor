@@ -111,10 +111,11 @@ fn split_lua_error(raw: &[u8], chunk: &[u8]) -> (u32, Vec<u8>) {
     if !chunk.is_empty() && raw.starts_with(chunk) {
         p = chunk.len();
     }
-    if p == 0 && raw.first() == Some(&b'[') {
-        if let Some(close) = raw.windows(2).position(|w| w == b"\"]") {
-            p = close + 2;
-        }
+    if p == 0
+        && raw.first() == Some(&b'[')
+        && let Some(close) = raw.windows(2).position(|w| w == b"\"]")
+    {
+        p = close + 2;
     }
     if raw.get(p) == Some(&b':') {
         // strtol: spaces, a sign, digits
@@ -169,7 +170,8 @@ fn guess_column(text: &[u8], line: u32, msg: &[u8]) -> u32 {
         }
         i += 1;
     }
-    let line_end = text.get(i..).and_then(|r| r.iter().position(|&c| c == b'\n')).map_or(text.len(), |e| i + e);
+    let line_end =
+        text.get(i..).and_then(|r| r.iter().position(|&c| c == b'\n')).map_or(text.len(), |e| i + e);
     let src = text.get(i..line_end).unwrap_or(&[]);
     src.windows(tok.len()).position(|w| w == tok).map_or(0, |at| u32::try_from(at + 1).unwrap_or(0))
 }
@@ -227,9 +229,13 @@ pub fn parse_named(text: &str, chunk_name: &str) -> Result<Value, LuaDataError> 
     }
     match eval::run(&compiled) {
         Ok(Outcome::Value(v)) => Ok(v),
-        Ok(Outcome::NotOneTable) => Err(LuaDataError::plain("the file must return one table (return { ... })")),
+        Ok(Outcome::NotOneTable) => {
+            Err(LuaDataError::plain("the file must return one table (return { ... })"))
+        }
         Ok(Outcome::Walk(m)) => Err(LuaDataError::plain(m)),
-        Err(RunErr::Limit) => Err(LuaDataError::plain("execution limit exceeded (a quest file must be plain data)")),
+        Err(RunErr::Limit) => {
+            Err(LuaDataError::plain("execution limit exceeded (a quest file must be plain data)"))
+        }
         Err(RunErr::At { line, msg }) => {
             let raw = located(chunk, line, msg.as_bytes());
             let (line, m) = split_lua_error(&raw, chunk);
@@ -270,7 +276,8 @@ mod tests {
         let v = parse("-- header\nreturn { zeta = 1, name = \"n\", kind = \"x\", 2, 3 } -- tail").unwrap();
         assert_eq!(keys(&v), ["kind", "name", "zeta"]);
         assert_eq!(v.arr(), [Value::from(2), Value::from(3)]);
-        let v = parse("return { a = 0x10, b = 1e2, c = .5, d = -2, e = - -3, f = true, g = nil, goto = 1 }").unwrap();
+        let v = parse("return { a = 0x10, b = 1e2, c = .5, d = -2, e = - -3, f = true, g = nil, goto = 1 }")
+            .unwrap();
         assert_eq!(v.get_number("a", 0.0), 16.0);
         assert_eq!(v.get_number("b", 0.0), 100.0);
         assert_eq!(v.get_number("c", 0.0), 0.5);
@@ -281,7 +288,8 @@ mod tests {
         assert!(v.has("goto"));
         let v = parse("return { s = \"a\\tb\\\\\\\"\\65\\x41\\u{416}\", l = [[\nline]], q = 'it''s' }");
         assert!(v.is_err());
-        let v = parse("return { s = \"a\\tb\\\\\\\"\\65\\x41\\u{416}\", l = [[\nline]], q = 'x\"' }").unwrap();
+        let v =
+            parse("return { s = \"a\\tb\\\\\\\"\\65\\x41\\u{416}\", l = [[\nline]], q = 'x\"' }").unwrap();
         assert_eq!(v.get_string("s", ""), "a\tb\\\"AAЖ");
         assert_eq!(v.get_string("l", ""), "line");
         assert_eq!(v.get_string("q", ""), "x\"");
@@ -304,7 +312,10 @@ mod tests {
     #[test]
     fn syntax_errors_read_as_luajit_writes_them() {
         assert_eq!(err("return { a = }"), (1, 14, "unexpected symbol near '}'".into()));
-        assert_eq!(err("return {\n a = 1\n b = 2 }"), (3, 2, "'}' expected (to close '{' at line 1) near 'b'".into()));
+        assert_eq!(
+            err("return {\n a = 1\n b = 2 }"),
+            (3, 2, "'}' expected (to close '{' at line 1) near 'b'".into())
+        );
         assert_eq!(err("return { a = \"abc }"), (1, 0, "unfinished string near '<eof>'".into()));
         assert_eq!(err("return { a = \"abc\n}"), (1, 14, "unfinished string near '\"abc'".into()));
         assert_eq!(err("return { a = 1 } x"), (1, 18, "'<eof>' expected near 'x'".into()));
@@ -329,9 +340,18 @@ mod tests {
         assert_eq!(err("").2, "no 'return' statement");
         assert_eq!(err("return 1").2, "the file must return one table (return { ... })");
         assert_eq!(err("return {}, {}").2, "the file must return one table (return { ... })");
-        assert_eq!(err("return {\n  a = 1,\n  b = -{},\n}"), (3, 0, "code outside strings: attempt to perform arithmetic on a table value".into()));
-        assert_eq!(err("return { a = \"x\" - 3 }").2, "code outside strings: attempt to perform arithmetic on a string value");
-        assert_eq!(err("return { a = -nil }").2, "code outside strings: attempt to perform arithmetic on a nil value");
+        assert_eq!(
+            err("return {\n  a = 1,\n  b = -{},\n}"),
+            (3, 0, "code outside strings: attempt to perform arithmetic on a table value".into())
+        );
+        assert_eq!(
+            err("return { a = \"x\" - 3 }").2,
+            "code outside strings: attempt to perform arithmetic on a string value"
+        );
+        assert_eq!(
+            err("return { a = -nil }").2,
+            "code outside strings: attempt to perform arithmetic on a nil value"
+        );
         assert_eq!(err("return { [nil] = 1 }"), (1, 0, "code outside strings: table index is nil".into()));
         let nested = |n: usize| format!("return {}{}", "{".repeat(n), "}".repeat(n));
         assert!(parse(&nested(49)).is_ok());
@@ -352,9 +372,15 @@ mod tests {
         assert_eq!(e("for i do end"), (1, "'=' or 'in' expected near 'do'".into()));
         assert_eq!(e("function f(a,) end"), (1, "<name> or '...' expected near ')'".into()));
         assert!(syntax_check("return ...").is_ok());
-        assert_eq!(e("function f() return ... end"), (1, "cannot use '...' outside a vararg function near '...'".into()));
+        assert_eq!(
+            e("function f() return ... end"),
+            (1, "cannot use '...' outside a vararg function near '...'".into())
+        );
         assert!(syntax_check("do local x end goto l ::l::").is_ok());
-        assert_eq!(e("goto l local x ::l:: print(x)"), (1, "<goto l> jumps into the scope of local 'x'".into()));
+        assert_eq!(
+            e("goto l local x ::l:: print(x)"),
+            (1, "<goto l> jumps into the scope of local 'x'".into())
+        );
     }
 
     #[test]

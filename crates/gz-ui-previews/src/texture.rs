@@ -141,7 +141,13 @@ impl TextureDoc {
     }
 
     /// The view asked for over MCP (`McpView`): `zoom` 0 fits; `None` keeps.
-    pub fn apply_view(&mut self, zoom: Option<f32>, mip: Option<u32>, channel: Option<usize>, details: Option<bool>) -> Result<(), String> {
+    pub fn apply_view(
+        &mut self,
+        zoom: Option<f32>,
+        mip: Option<u32>,
+        channel: Option<usize>,
+        details: Option<bool>,
+    ) -> Result<(), String> {
         if let Some(z) = zoom {
             self.zoom = if z > 0.0 { z.clamp(ZOOM_MIN, ZOOM_MAX) } else { 0.0 };
             self.pan = Vec2::ZERO;
@@ -165,45 +171,100 @@ impl TextureDoc {
         let on = img.is_some();
         let none = "No texture is open";
         tb.group(3);
-        if tb.action("fit", Icon::ZoomFit, "Fit", if on { "Fit the image into the canvas (F)" } else { none }, on, self.zoom <= 0.0, Kind::Ghost) {
+        if tb.action(
+            "fit",
+            Icon::ZoomFit,
+            "Fit",
+            if on { "Fit the image into the canvas (F)" } else { none },
+            on,
+            self.zoom <= 0.0,
+            Kind::Ghost,
+        ) {
             self.fit();
         }
         // the icon already reads "1:1": the label says what it does
-        if tb.action("one_to_one", Icon::Zoom100, "Actual Size", if on { "One screen pixel per texel (1:1)" } else { none }, on, self.zoom == 1.0, Kind::Ghost) {
+        if tb.action(
+            "one_to_one",
+            Icon::Zoom100,
+            "Actual Size",
+            if on { "One screen pixel per texel (1:1)" } else { none },
+            on,
+            self.zoom == 1.0,
+            Kind::Ghost,
+        ) {
             self.zoom = 1.0;
             self.pan = Vec2::ZERO;
         }
         let zoom = &mut self.zoom;
         let pan = &mut self.pan;
-        tb.menu("zoom", Icon::ZoomIn, "Zoom", "Pick a zoom; the wheel zooms at the mouse, any button drags", Some("texture_zoom"), true, |ui| {
-            for step in ZOOM_STEPS {
-                let label = format!("{}%", step * 100.0);
-                if menu_item(ui, &label, MenuItem { selected: *zoom == step, enabled: on, ..MenuItem::default() }) {
-                    *zoom = step;
-                    *pan = Vec2::ZERO;
-                }
-            }
-        });
-        // in the overflow the channels become radio items
-        tb.group(5);
-        tb.segmented("channels", "Channels", &mut self.channel, &CHANNELS, "RGBA shows the image over a checkerboard; R, G and B one colour channel; A the alpha as grey", on);
-        tb.group(2);
-        let mip = &mut self.mip;
-        tb.menu("mip", Icon::Picture, "Mip", "Which mip level the canvas shows", Some("texture_mip"), true, |ui| match &img {
-            Some(t) => {
-                for m in 0..t.mips.max(1) {
-                    let (w, h) = t.mip_size(m);
-                    if menu_item(ui, &format!("Mip {m} \u{b7} {w} x {h}"), MenuItem { selected: m == *mip, ..MenuItem::default() }) {
-                        *mip = m;
+        tb.menu(
+            "zoom",
+            Icon::ZoomIn,
+            "Zoom",
+            "Pick a zoom; the wheel zooms at the mouse, any button drags",
+            Some("texture_zoom"),
+            true,
+            |ui| {
+                for step in ZOOM_STEPS {
+                    let label = format!("{}%", step * 100.0);
+                    if menu_item(
+                        ui,
+                        &label,
+                        MenuItem { selected: *zoom == step, enabled: on, ..MenuItem::default() },
+                    ) {
+                        *zoom = step;
+                        *pan = Vec2::ZERO;
                     }
                 }
-            }
-            None => {
-                menu_item(ui, none, MenuItem { enabled: false, ..MenuItem::default() });
-            }
-        });
+            },
+        );
+        // in the overflow the channels become radio items
+        tb.group(5);
+        tb.segmented(
+            "channels",
+            "Channels",
+            &mut self.channel,
+            &CHANNELS,
+            "RGBA shows the image over a checkerboard; R, G and B one colour channel; A the alpha as grey",
+            on,
+        );
+        tb.group(2);
+        let mip = &mut self.mip;
+        tb.menu(
+            "mip",
+            Icon::Picture,
+            "Mip",
+            "Which mip level the canvas shows",
+            Some("texture_mip"),
+            true,
+            |ui| match &img {
+                Some(t) => {
+                    for m in 0..t.mips.max(1) {
+                        let (w, h) = t.mip_size(m);
+                        if menu_item(
+                            ui,
+                            &format!("Mip {m} \u{b7} {w} x {h}"),
+                            MenuItem { selected: m == *mip, ..MenuItem::default() },
+                        ) {
+                            *mip = m;
+                        }
+                    }
+                }
+                None => {
+                    menu_item(ui, none, MenuItem { enabled: false, ..MenuItem::default() });
+                }
+            },
+        );
         tb.group(4);
-        if tb.action("details", Icon::SidebarRight, "Details", "Show the texture's facts beside the canvas", true, self.show_details, Kind::Ghost) {
+        if tb.action(
+            "details",
+            Icon::SidebarRight,
+            "Details",
+            "Show the texture's facts beside the canvas",
+            true,
+            self.show_details,
+            Kind::Ghost,
+        ) {
             self.show_details = !self.show_details;
         }
     }
@@ -277,9 +338,21 @@ impl TextureDoc {
         // past 2:1 every texel is a block of pixels: sampled nearest, so it reads as one
         if let Some((linear, nearest)) = self.draws(t) {
             let draw = if scale >= 2.0 { nearest } else { linear };
-            paint_image(&painter, image_rect, clip, [0.0, 0.0, 1.0, 1.0], ImageMode::of_channel(self.channel), &draw);
+            paint_image(
+                &painter,
+                image_rect,
+                clip,
+                [0.0, 0.0, 1.0, 1.0],
+                ImageMode::of_channel(self.channel),
+                &draw,
+            );
         }
-        painter.rect_stroke(image_rect, CornerRadius::ZERO, egui::Stroke::new(1.0, p.border_subtle), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            image_rect,
+            CornerRadius::ZERO,
+            egui::Stroke::new(1.0, p.border_subtle),
+            egui::StrokeKind::Outside,
+        );
     }
 
     fn draw_details(&self, ui: &mut Ui) {
@@ -293,50 +366,85 @@ impl TextureDoc {
         let (mw, mh) = t.mip_size(mip);
         PropertyGrid::new("texture").show(ui, |g| {
             g.section("Texture", true, None, |g| {
-                g.row("Name", "The texture's file name", ro, 0, |ui| read_only(ui, crate::paths::leaf(&t.name), Clip::End));
-                g.row("Size", "Its size as imported, in pixels", ro, 0, |ui| read_only(ui, &format!("{} x {}", t.width, t.height), Clip::End));
-                let help = if t.decoded { "The GPU cannot take this file as it is: the preview shows its top level decoded" } else { "The file's pixel format, as the GPU holds it" };
+                g.row("Name", "The texture's file name", ro, 0, |ui| {
+                    read_only(ui, crate::paths::leaf(&t.name), Clip::End)
+                });
+                g.row("Size", "Its size as imported, in pixels", ro, 0, |ui| {
+                    read_only(ui, &format!("{} x {}", t.width, t.height), Clip::End)
+                });
+                let help = if t.decoded {
+                    "The GPU cannot take this file as it is: the preview shows its top level decoded"
+                } else {
+                    "The file's pixel format, as the GPU holds it"
+                };
                 g.row("Format", help, ro, 0, |ui| read_only(ui, &t.format_text(), Clip::End));
                 // what a decoded copy has is not what the file has: those rows would describe the preview
                 if !t.decoded {
                     let yes = |b: bool| if b { "Yes" } else { "No" };
-                    g.row("Alpha", "Whether the format keeps an alpha channel", ro, 0, |ui| read_only(ui, fi.map_or("Unknown", |f| yes(f.alpha)), Clip::End));
-                    g.row("sRGB", "Whether the colours are read as sRGB", ro, 0, |ui| read_only(ui, fi.map_or("Unknown", |f| yes(f.srgb)), Clip::End));
-                    g.row("Mips", "The mip levels the file holds", ro, 0, |ui| read_only(ui, &t.mips.to_string(), Clip::End));
+                    g.row("Alpha", "Whether the format keeps an alpha channel", ro, 0, |ui| {
+                        read_only(ui, fi.map_or("Unknown", |f| yes(f.alpha)), Clip::End)
+                    });
+                    g.row("sRGB", "Whether the colours are read as sRGB", ro, 0, |ui| {
+                        read_only(ui, fi.map_or("Unknown", |f| yes(f.srgb)), Clip::End)
+                    });
+                    g.row("Mips", "The mip levels the file holds", ro, 0, |ui| {
+                        read_only(ui, &t.mips.to_string(), Clip::End)
+                    });
                     if let Some(f) = fi {
-                        g.row("GPU Memory", "What the whole mip chain takes on the GPU", ro, 0, |ui| read_only(ui, &human_bytes(gpu_bytes(&f, t.width, t.height, t.mips)), Clip::End));
+                        g.row("GPU Memory", "What the whole mip chain takes on the GPU", ro, 0, |ui| {
+                            read_only(ui, &human_bytes(gpu_bytes(&f, t.width, t.height, t.mips)), Clip::End)
+                        });
                     }
                 }
                 if t.file_size > 0 {
-                    g.row("On Disk", "The size of the file", ro, 0, |ui| read_only(ui, &human_bytes(t.file_size), Clip::End));
+                    g.row("On Disk", "The size of the file", ro, 0, |ui| {
+                        read_only(ui, &human_bytes(t.file_size), Clip::End)
+                    });
                 }
                 // where it lives and its path are two rows: an ellipsis at the start of one line ate the origin's label
                 let (word, hint) = match t.origin.id() {
                     "project" => ("Project", "A file of the project"),
                     "library" => ("Editor library", "A file of the editor's own library"),
                     "game_folder" => ("Game folder", "A loose file under the linked game's gamedata folder"),
-                    "game_archive" => ("Game archive", "The linked game keeps this texture packed in its database archives"),
+                    "game_archive" => {
+                        ("Game archive", "The linked game keeps this texture packed in its database archives")
+                    }
                     _ => ("", ""),
                 };
                 if !word.is_empty() {
                     g.row("Source", hint, ro, 0, |ui| read_only(ui, word, Clip::End));
                 }
-                let path = t.file.as_ref().map_or_else(|| t.archive.clone(), |f| f.to_string_lossy().into_owned());
+                let path =
+                    t.file.as_ref().map_or_else(|| t.archive.clone(), |f| f.to_string_lossy().into_owned());
                 if !path.is_empty() {
-                    let help = if t.file.is_none() { "Its path below the game's gamedata, inside the archives" } else { "The file the texture was read from" };
+                    let help = if t.file.is_none() {
+                        "Its path below the game's gamedata, inside the archives"
+                    } else {
+                        "The file the texture was read from"
+                    };
                     g.row("Path", help, ro, 0, |ui| read_only(ui, &path, Clip::Start));
                     if let Some(f) = &t.file
                         && g.trailing(Icon::Reveal, "Show in Explorer")
                     {
-                        let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", f.display())).spawn();
+                        let _ = std::process::Command::new("explorer.exe")
+                            .arg(format!("/select,{}", f.display()))
+                            .spawn();
                     }
                 }
             });
             g.section("View", true, None, |g| {
-                g.row("Shown", "The mip level the canvas shows and its size", ro, 0, |ui| read_only(ui, &format!("Mip {mip} \u{b7} {mw} x {mh}"), Clip::End));
-                let zoom = if self.zoom > 0.0 { format!("{:.0}%", self.scale * 100.0) } else { format!("Fit ({:.0}%)", self.scale * 100.0) };
+                g.row("Shown", "The mip level the canvas shows and its size", ro, 0, |ui| {
+                    read_only(ui, &format!("Mip {mip} \u{b7} {mw} x {mh}"), Clip::End)
+                });
+                let zoom = if self.zoom > 0.0 {
+                    format!("{:.0}%", self.scale * 100.0)
+                } else {
+                    format!("Fit ({:.0}%)", self.scale * 100.0)
+                };
                 g.row("Zoom", "Screen pixels per texel", ro, 0, |ui| read_only(ui, &zoom, Clip::End));
-                g.row("Channels", "What the canvas shows of the colour", ro, 0, |ui| read_only(ui, CHANNELS.get(self.channel).copied().unwrap_or("RGBA"), Clip::End));
+                g.row("Channels", "What the canvas shows of the colour", ro, 0, |ui| {
+                    read_only(ui, CHANNELS.get(self.channel).copied().unwrap_or("RGBA"), Clip::End)
+                });
             });
         });
     }
@@ -351,15 +459,24 @@ impl TextureDoc {
         let fi = t.filter(|_| shown).and_then(TexFile::format);
         out.insert("open".into(), json!(true));
         out.insert("name".into(), json!(self.name));
-        out.insert("file".into(), json!(t.and_then(|t| t.file.as_ref()).map_or_else(String::new, |f| crate::paths::json_path(f))));
-        out.insert("archive".into(), json!(t.map_or_else(String::new, |t| crate::paths::json_path_str(&t.archive))));
+        out.insert(
+            "file".into(),
+            json!(t.and_then(|t| t.file.as_ref()).map_or_else(String::new, |f| crate::paths::json_path(f))),
+        );
+        out.insert(
+            "archive".into(),
+            json!(t.map_or_else(String::new, |t| crate::paths::json_path_str(&t.archive))),
+        );
         out.insert("origin".into(), json!(t.map_or("", |t| t.origin.id())));
         out.insert("error".into(), json!(t.map_or("", |t| t.error.as_str())));
-        out.insert("format".into(), json!(match fi {
-            Some(f) => f.name,
-            None if shown => "unknown",
-            None => "",
-        }));
+        out.insert(
+            "format".into(),
+            json!(match fi {
+                Some(f) => f.name,
+                None if shown => "unknown",
+                None => "",
+            }),
+        );
         out.insert("container".into(), json!(t.map_or("", |t| t.container)));
         out.insert("decoded".into(), json!(t.is_some_and(|t| t.decoded)));
         let (w, h, mips) = t.filter(|_| shown).map_or((0, 0, 0), |t| (t.width, t.height, t.mips));
@@ -420,7 +537,10 @@ impl Document for TextureDoc {
             let split = splitter_tail(ui, "texture.details", true, CANVAS_MIN, SIDE_MIN, DETAILS_W);
             self.details_w = split.size;
             let gap = ui.spacing().item_spacing.x;
-            let canvas = Rect::from_min_max(full.min, pos2((full.max.x - split.size - gap).max(full.min.x + 1.0), full.max.y));
+            let canvas = Rect::from_min_max(
+                full.min,
+                pos2((full.max.x - split.size - gap).max(full.min.x + 1.0), full.max.y),
+            );
             (canvas, Some(Rect::from_min_max(pos2(full.max.x - split.size, full.min.y), full.max)))
         } else {
             self.details_w = 0.0;
@@ -431,18 +551,36 @@ impl Document for TextureDoc {
             Some(t) if t.texture.is_some() => self.draw_image(ui, canvas, &t),
             other => {
                 ui.painter().rect_filled(canvas, CornerRadius::ZERO, p.canvas);
-                let mut child = ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
+                let mut child =
+                    ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
                 match other {
                     Some(t) => {
-                        state::empty_state(&mut child, Icon::Warning, "This texture cannot be shown", &format!("{}: {}", t.name, t.error), None);
+                        state::empty_state(
+                            &mut child,
+                            Icon::Warning,
+                            "This texture cannot be shown",
+                            &format!("{}: {}", t.name, t.error),
+                            None,
+                        );
                     }
-                    None => state::busy_line(&mut child, &format!("Reading {}...", crate::paths::leaf(&self.name))),
+                    None => state::busy_line(
+                        &mut child,
+                        &format!("Reading {}...", crate::paths::leaf(&self.name)),
+                    ),
                 }
             }
         }
         if let Some(rect) = details {
-            let mut child = ui.new_child(UiBuilder::new().id_salt("texture.details.pane").max_rect(rect.shrink(8.0)).layout(Layout::top_down(Align::Min)));
-            ScrollArea::vertical().id_salt("texture.details.scroll").auto_shrink([false, false]).show(&mut child, |ui| self.draw_details(ui));
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("texture.details.pane")
+                    .max_rect(rect.shrink(8.0))
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            ScrollArea::vertical()
+                .id_salt("texture.details.scroll")
+                .auto_shrink([false, false])
+                .show(&mut child, |ui| self.draw_details(ui));
         }
         ui.allocate_rect(full, Sense::hover());
     }
@@ -451,7 +589,12 @@ impl Document for TextureDoc {
         let Some(t) = self.image() else { return };
         let mip = self.mip.min(t.mips.saturating_sub(1));
         let (w, h) = t.mip_size(mip);
-        let line = format!("{w} x {h} \u{b7} {} \u{b7} mip {mip} of {} \u{b7} {:.0}%", t.format_text(), t.mips, self.scale * 100.0);
+        let line = format!(
+            "{w} x {h} \u{b7} {} \u{b7} mip {mip} of {} \u{b7} {:.0}%",
+            t.format_text(),
+            t.mips,
+            self.scale * 100.0
+        );
         let p = palette(ui.ctx());
         text::label(ui, &line, Font::Small, p.text_secondary, Clip::End);
     }
@@ -507,7 +650,8 @@ pub fn factory(editor: &Arc<Editor>, req: &OpenRequest) -> Result<Box<dyn Docume
     if name.is_empty() {
         return Err("open takes path= and source=project|editor|darf".to_owned());
     }
-    let source = TexSource::parse(req.arg.as_deref().unwrap_or("")).ok_or_else(|| "source must be project, editor or darf".to_owned())?;
+    let source = TexSource::parse(req.arg.as_deref().unwrap_or(""))
+        .ok_or_else(|| "source must be project, editor or darf".to_owned())?;
     let preload = editor.services.get_or_init(TexturePreload::default);
     let pending = preload.take(&name, source).unwrap_or_else(|| {
         let (ed, n) = (editor.clone(), name.clone());
@@ -528,7 +672,8 @@ mod tests {
         assert_eq!(s, 0.5);
         assert_eq!(c, pos2(0.0, 50.0));
         // a pan far away is held so some of the image stays in view
-        let (_, _, pan) = place(Vec2::new(100.0, 100.0), Vec2::new(100.0, 100.0), 1.0, Vec2::new(10_000.0, 0.0), 64.0);
+        let (_, _, pan) =
+            place(Vec2::new(100.0, 100.0), Vec2::new(100.0, 100.0), 1.0, Vec2::new(10_000.0, 0.0), 64.0);
         assert_eq!(pan.x, 36.0);
     }
 

@@ -101,19 +101,19 @@ pub struct DeleteContext {
     pub guards: Vec<Guard>,
 }
 
-fn env_path(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.is_empty())
-}
-
 /// The guards of this machine: the editor (`exe_dir`, `editor_root`), the user's own folders,
 /// Windows, Program Files, Temp, the open project's game, and what every listed project points
 /// at (its game, its editor, where it builds to). Reads the listed `project.ltx` files.
 ///
-/// The user's folders come from the environment (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`,
-/// `OneDrive`, `SystemRoot`, `ProgramFiles`): the known-folder API is not reachable without
-/// `unsafe`, so a Documents folder redirected elsewhere than the profile or OneDrive is missed.
+/// The user's folders are where the shell keeps them (`SHGetKnownFolderPath`), redirected ones
+/// included.
 #[must_use]
-pub fn system_guards(exe_dir: &Path, editor_root: &Path, open_game_root: Option<&str>, listed: &[String]) -> Vec<Guard> {
+pub fn system_guards(
+    exe_dir: &Path,
+    editor_root: &Path,
+    open_game_root: Option<&str>,
+    listed: &[String],
+) -> Vec<Guard> {
     let mut out = Vec::new();
     let mut add = |path: &str, what: &str, inside: bool| {
         if let Some(g) = Guard::new(path, what, inside) {
@@ -126,31 +126,26 @@ pub fn system_guards(exe_dir: &Path, editor_root: &Path, open_game_root: Option<
     if let Some(p) = editor_root.to_str() {
         add(p, "the editor", true);
     }
-    if let Some(profile) = env_path("USERPROFILE") {
-        add(&profile, "your user profile", false);
-        add(&paths::join(&profile, "Documents"), "your Documents folder", false);
-        add(&paths::join(&profile, "Desktop"), "your Desktop", false);
-        add(&paths::join(&profile, "Downloads"), "your Downloads folder", false);
-    }
-    for var in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
-        if let Some(cloud) = env_path(var) {
-            add(&paths::join(&cloud, "Documents"), "your Documents folder", false);
-            add(&paths::join(&cloud, "Desktop"), "your Desktop", false);
+    #[cfg(windows)]
+    {
+        use gz_win::KnownFolder as K;
+        for (folder, what) in [
+            (K::Profile, "your user profile"),
+            (K::Documents, "your Documents folder"),
+            (K::Desktop, "your Desktop"),
+            (K::Downloads, "your Downloads folder"),
+            (K::LocalAppData, "your AppData folder"),
+            (K::RoamingAppData, "your AppData folder"),
+            (K::Windows, "the Windows folder"),
+            (K::ProgramFiles, "Program Files"),
+            (K::ProgramFilesX86, "Program Files (x86)"),
+        ] {
+            if let Some(p) = gz_win::known_folder(folder)
+                && let Some(p) = p.to_str()
+            {
+                add(p, what, false);
+            }
         }
-    }
-    for var in ["LOCALAPPDATA", "APPDATA"] {
-        if let Some(p) = env_path(var) {
-            add(&p, "your AppData folder", false);
-        }
-    }
-    if let Some(p) = env_path("SystemRoot").or_else(|| env_path("windir")) {
-        add(&p, "the Windows folder", false);
-    }
-    if let Some(p) = env_path("ProgramFiles") {
-        add(&p, "Program Files", false);
-    }
-    if let Some(p) = env_path("ProgramFiles(x86)") {
-        add(&p, "Program Files (x86)", false);
     }
     if let Some(p) = std::env::temp_dir().to_str() {
         add(p, "the Temp folder", false);
@@ -170,6 +165,17 @@ pub fn system_guards(exe_dir: &Path, editor_root: &Path, open_game_root: Option<
     out
 }
 
+/// A folder a volume is mounted into is the root of that volume (C++ `GetVolumePathName`).
+fn volume_root(path: &str) -> bool {
+    #[cfg(windows)]
+    return gz_win::is_volume_root(Path::new(path));
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 fn is_manifest_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("project.ltx") || name.eq_ignore_ascii_case("mod.ltx")
 }
@@ -177,7 +183,8 @@ fn is_manifest_name(name: &str) -> bool {
 /// A crashed packaging leaves its stage in `temp\` - a copy of the module, no project.
 fn is_release_stage(root: &str, dir: &str) -> bool {
     const STAGE: &str = "\\temp\\release_stage_";
-    dir.len() > root.len() + STAGE.len() && dir.get(root.len()..root.len() + STAGE.len()).is_some_and(|s| s.eq_ignore_ascii_case(STAGE))
+    dir.len() > root.len() + STAGE.len()
+        && dir.get(root.len()..root.len() + STAGE.len()).is_some_and(|s| s.eq_ignore_ascii_case(STAGE))
 }
 
 struct Scan<'a> {
@@ -274,8 +281,12 @@ pub fn check_delete(cx: &DeleteContext, path: &str) -> DeleteInfo {
     // a link: the folder it points at is deleted - if at all - where it really is
     if fsys::is_link(&meta) {
         match paths::real_path(&info.path) {
-            Some(target) => info.refuse(format!("The project folder is a link to {target}. Delete the project where it really is.")),
-            None => info.refuse("The project folder is a link whose target cannot be reached. Remove the link where it is."),
+            Some(target) => info.refuse(format!(
+                "The project folder is a link to {target}. Delete the project where it really is."
+            )),
+            None => info.refuse(
+                "The project folder is a link whose target cannot be reached. Remove the link where it is.",
+            ),
         }
         return info;
     }
@@ -291,21 +302,30 @@ pub fn check_delete(cx: &DeleteContext, path: &str) -> DeleteInfo {
     let full = paths::full_path(&info.path).unwrap_or_else(|| info.path.clone());
     let real = paths::real_path(&info.path);
     if let Some(open) = &cx.open {
-        let same_real = real.as_ref().is_some_and(|r| paths::real_path(open).is_some_and(|o| o.eq_ignore_ascii_case(r)));
+        let same_real =
+            real.as_ref().is_some_and(|r| paths::real_path(open).is_some_and(|o| o.eq_ignore_ascii_case(r)));
         if paths::same_path(open, &info.path) || same_real {
             info.refuse("It is the open project. Close it first: File > Project > Switch Project...");
             return info;
         }
     }
-    if paths::is_drive_root(&full) || real.as_deref().is_some_and(paths::is_drive_root) {
+    if paths::is_drive_root(&full)
+        || real.as_deref().is_some_and(paths::is_drive_root)
+        || volume_root(&full)
+        || real.as_deref().is_some_and(volume_root)
+    {
         info.refuse("It is the root of a drive.");
         return info;
     }
     for g in &cx.guards {
         let both = real.as_deref().zip(g.real.as_deref());
-        let same = g.path.eq_ignore_ascii_case(&full) || both.is_some_and(|(r, gr)| gr.eq_ignore_ascii_case(r));
-        let holds = paths::same_or_below(&g.path, &full) || both.is_some_and(|(r, gr)| paths::same_or_below(gr, r));
-        let within = g.inside && (paths::same_or_below(&full, &g.path) || both.is_some_and(|(r, gr)| paths::same_or_below(r, gr)));
+        let same =
+            g.path.eq_ignore_ascii_case(&full) || both.is_some_and(|(r, gr)| gr.eq_ignore_ascii_case(r));
+        let holds =
+            paths::same_or_below(&g.path, &full) || both.is_some_and(|(r, gr)| paths::same_or_below(gr, r));
+        let within = g.inside
+            && (paths::same_or_below(&full, &g.path)
+                || both.is_some_and(|(r, gr)| paths::same_or_below(r, gr)));
         if same || holds {
             info.refuse(format!("{} {}: {}.", if same { "It is" } else { "It holds" }, g.what, g.path));
             return info;
@@ -320,7 +340,10 @@ pub fn check_delete(cx: &DeleteContext, path: &str) -> DeleteInfo {
     let mut scan = Scan { info: &mut info, root: root.clone(), unreadable: None };
     if !scan_folder(&mut scan, &root, false) {
         let (dir, code) = scan.unreadable.unwrap_or_default();
-        info.refuse(format!("{}.", fsys::win32_text(&format!("A folder inside cannot be read: {dir}"), code)));
+        info.refuse(format!(
+            "{}.",
+            fsys::win32_text(&format!("A folder inside cannot be read: {dir}"), code)
+        ));
         return info;
     }
     if info.nested_total > 0 {
@@ -358,8 +381,10 @@ fn delete_entry(path: &Path, folder: bool) -> Result<(), u32> {
         if code == fsys::ERROR_FILE_NOT_FOUND || code == fsys::ERROR_PATH_NOT_FOUND {
             return Ok(());
         }
-        let passing = matches!(code, fsys::ERROR_SHARING_VIOLATION | fsys::ERROR_LOCK_VIOLATION | fsys::ERROR_ACCESS_DENIED)
-            || (folder && code == fsys::ERROR_DIR_NOT_EMPTY);
+        let passing = matches!(
+            code,
+            fsys::ERROR_SHARING_VIOLATION | fsys::ERROR_LOCK_VIOLATION | fsys::ERROR_ACCESS_DENIED
+        ) || (folder && code == fsys::ERROR_DIR_NOT_EMPTY);
         if !passing || attempt >= 5 {
             return Err(code);
         }
@@ -370,7 +395,12 @@ fn delete_entry(path: &Path, folder: bool) -> Result<(), u32> {
 
 /// Empties `dir` and removes it. At the root the manifests are handed back and the folder
 /// stays: the caller finishes both once everything else is gone.
-fn wipe_folder(dir: &str, dir_meta: Option<&std::fs::Metadata>, info: &mut DeleteInfo, mut root_manifests: Option<&mut Vec<DirItem>>) -> bool {
+fn wipe_folder(
+    dir: &str,
+    dir_meta: Option<&std::fs::Metadata>,
+    info: &mut DeleteInfo,
+    mut root_manifests: Option<&mut Vec<DirItem>>,
+) -> bool {
     let entries = match fsys::list_folder(Path::new(dir)) {
         Ok(e) => e,
         Err(code) => {
@@ -407,7 +437,11 @@ fn wipe_folder(dir: &str, dir_meta: Option<&std::fs::Metadata>, info: &mut Delet
                 }
             }
             Err(code) => {
-                let reason = if e.link { fsys::win32_text("the link cannot be removed", code) } else { fail_reason(code) };
+                let reason = if e.link {
+                    fsys::win32_text("the link cannot be removed", code)
+                } else {
+                    fail_reason(code)
+                };
                 info.note_failure(&path, reason);
                 all = false;
             }
@@ -543,18 +577,30 @@ mod tests {
         let t = Temp::new("refuse");
         let p = project(&t, "Alpha");
         let cx = DeleteContext::default();
-        assert_eq!(check_delete(&cx, "Alpha").refused.as_deref(), Some("Name the project by the full path of its folder."));
+        assert_eq!(
+            check_delete(&cx, "Alpha").refused.as_deref(),
+            Some("Name the project by the full path of its folder.")
+        );
         assert_eq!(
             check_delete(&cx, &p).refused.as_deref(),
             Some("It is not in the project list - only a listed project is deleted from here.")
         );
         let ghost = t.text("Ghost");
-        assert_eq!(check_delete(&cx, &ghost).refused.as_deref(), Some("There is no such folder, and it is not in the project list."));
+        assert_eq!(
+            check_delete(&cx, &ghost).refused.as_deref(),
+            Some("There is no such folder, and it is not in the project list.")
+        );
         fs::create_dir_all(t.path("Plain")).unwrap();
         let cx = DeleteContext { listed: vec![t.text("Plain")], ..DeleteContext::default() };
-        assert_eq!(check_delete(&cx, &t.text("Plain")).refused.as_deref(), Some("It holds no project.ltx or mod.ltx - it is not a project."));
+        assert_eq!(
+            check_delete(&cx, &t.text("Plain")).refused.as_deref(),
+            Some("It holds no project.ltx or mod.ltx - it is not a project.")
+        );
         fs::write(t.path("file.txt"), "x").unwrap();
-        assert_eq!(check_delete(&cx, &t.text("file.txt")).refused.as_deref(), Some("It is a file, not a project folder."));
+        assert_eq!(
+            check_delete(&cx, &t.text("file.txt")).refused.as_deref(),
+            Some("It is a file, not a project folder.")
+        );
     }
 
     #[test]
@@ -572,14 +618,23 @@ mod tests {
     fn refuses_the_open_project_guards_and_nested_projects() {
         let t = Temp::new("guards");
         let p = project(&t, "Alpha");
-        let open = DeleteContext { listed: vec![p.clone()], open: Some(p.to_lowercase()), guards: Vec::new() };
+        let open =
+            DeleteContext { listed: vec![p.clone()], open: Some(p.to_lowercase()), guards: Vec::new() };
         assert!(check_delete(&open, &p).refused.unwrap().starts_with("It is the open project."));
 
-        let inside_game = DeleteContext { listed: vec![p.clone()], open: None, guards: vec![Guard::new(&t.text(""), "a game", true).unwrap()] };
+        let inside_game = DeleteContext {
+            listed: vec![p.clone()],
+            open: None,
+            guards: vec![Guard::new(&t.text(""), "a game", true).unwrap()],
+        };
         assert!(check_delete(&inside_game, &p).refused.unwrap().starts_with("It lies inside a game: "));
 
         fs::create_dir_all(t.path("Alpha\\gamedata")).unwrap();
-        let holds = DeleteContext { listed: vec![p.clone()], open: None, guards: vec![Guard::new(&t.text("Alpha\\gamedata"), "the Temp folder", false).unwrap()] };
+        let holds = DeleteContext {
+            listed: vec![p.clone()],
+            open: None,
+            guards: vec![Guard::new(&t.text("Alpha\\gamedata"), "the Temp folder", false).unwrap()],
+        };
         assert!(check_delete(&holds, &p).refused.unwrap().starts_with("It holds the Temp folder: "));
 
         let nested = project(&t, "Alpha\\sub\\Beta");

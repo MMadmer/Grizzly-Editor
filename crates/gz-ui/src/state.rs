@@ -10,7 +10,10 @@
 use std::f32::consts::TAU;
 
 use egui::text::LayoutJob;
-use egui::{Align, Align2, Area, Context, CornerRadius, Id, Order, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2, pos2};
+use egui::{
+    Align, Align2, Area, Context, CornerRadius, Id, Order, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui,
+    Vec2, pos2,
+};
 
 use crate::button::{Button, Kind, icon_button_sized};
 use crate::font::Font;
@@ -57,7 +60,9 @@ pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Op
     let text_h = galley.as_ref().map_or(0.0, |g| g.size().y);
     let button_h = if action.is_some() { metrics::FRAME } else { 0.0 };
     let icon_block = icon_side + 12.0;
-    let words = title_h + if text_h > 0.0 { 6.0 + text_h } else { 0.0 } + if button_h > 0.0 { 16.0 + button_h } else { 0.0 };
+    let words = title_h
+        + if text_h > 0.0 { 6.0 + text_h } else { 0.0 }
+        + if button_h > 0.0 { 16.0 + button_h } else { 0.0 };
     let with_icon = icon != Icon::None && (grows || avail.y >= icon_block + words + 32.0);
     let block = if with_icon { icon_block } else { 0.0 } + words;
     let room_y = if avail.y.is_finite() { avail.y } else { block };
@@ -67,11 +72,25 @@ pub fn empty_state(ui: &mut Ui, icon: Icon, title: &str, text_: &str, action: Op
 
     let mut y = top;
     if with_icon {
-        icons::draw(ui.painter(), icon, Rect::from_min_size(pos2(cx - icon_side * 0.5, y), Vec2::splat(icon_side)), p.text_muted);
+        icons::draw(
+            ui.painter(),
+            icon,
+            Rect::from_min_size(pos2(cx - icon_side * 0.5, y), Vec2::splat(icon_side)),
+            p.text_muted,
+        );
         y += icon_block;
     }
     if title_h > 0.0 {
-        text::paint(ui.painter(), &Font::Title.id(), pos2(cx, y + title_h * 0.5), Align2::CENTER_CENTER, p.text, title, Some(avail.x - 16.0), Clip::End);
+        text::paint(
+            ui.painter(),
+            &Font::Title.id(),
+            pos2(cx, y + title_h * 0.5),
+            Align2::CENTER_CENTER,
+            p.text,
+            title,
+            Some(avail.x - 16.0),
+            Clip::End,
+        );
         y += title_h;
     }
     if let Some(galley) = galley {
@@ -103,7 +122,13 @@ pub fn badge(ui: &mut Ui, text_: &str, tone: Tone) {
     if ui.is_rect_visible(rect) {
         let muted = tone == Tone::Muted;
         ui.painter().rect_filled(rect, CornerRadius::same(9), if muted { p.raised } else { p.tint(tone) });
-        ui.painter().text(pos2(rect.min.x + 6.0, rect.center().y), Align2::LEFT_CENTER, text_, font, tone_text(&p, tone));
+        ui.painter().text(
+            pos2(rect.min.x + 6.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            text_,
+            font,
+            tone_text(&p, tone),
+        );
     }
 }
 
@@ -139,7 +164,10 @@ pub(crate) fn paint_spinner(ctx: &Context, painter: &Painter, rect: Rect) {
 
 /// A spinner as an item of the row: 16 pt.
 pub fn spinner(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(metrics::GLYPH, Font::Body.line().max(metrics::GLYPH)), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(metrics::GLYPH, Font::Body.line().max(metrics::GLYPH)),
+        Sense::hover(),
+    );
     if ui.is_rect_visible(rect) {
         let ctx = ui.ctx().clone();
         paint_spinner(&ctx, ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(metrics::GLYPH)));
@@ -169,7 +197,8 @@ pub fn banner(ui: &mut Ui, tone: Tone, text_: &str, a1: Option<&str>, a2: Option
     let w2 = a2.map_or(0.0, |a| button_width(&ctx, a, Kind::Secondary, false, 0.0));
     let buttons = w1 + w2 + if w1 > 0.0 && w2 > 0.0 { 6.0 } else { 0.0 };
     let text_x = origin.x + pad + icon + 8.0;
-    let wrap = (origin.x + width - pad - if buttons > 0.0 { buttons + 12.0 } else { 0.0 } - text_x).max(em(6.0));
+    let wrap =
+        (origin.x + width - pad - if buttons > 0.0 { buttons + 12.0 } else { 0.0 } - text_x).max(em(6.0));
     let galley = ctx.fonts_mut(|f| f.layout(text_.to_owned(), Font::Body.id(), p.text, wrap));
     let h = galley.size().y.max(metrics::FRAME) + pad * 2.0;
     let rect = Rect::from_min_size(origin, Vec2::new(width, h));
@@ -178,8 +207,15 @@ pub fn banner(ui: &mut Ui, tone: Tone, text_: &str, a1: Option<&str>, a2: Option
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS_POPUP), p.tint(tone));
         let strip = Rect::from_min_max(rect.min, pos2(rect.min.x + 3.0, rect.max.y));
-        painter.rect_filled(strip, CornerRadius { nw: metrics::RADIUS_POPUP, sw: metrics::RADIUS_POPUP, ne: 0, se: 0 }, p.tone(tone));
-        let glyph = Rect::from_min_size(pos2(origin.x + pad, rect.min.y + pad + (Font::Body.line() - icon) * 0.5), Vec2::splat(icon));
+        painter.rect_filled(
+            strip,
+            CornerRadius { nw: metrics::RADIUS_POPUP, sw: metrics::RADIUS_POPUP, ne: 0, se: 0 },
+            p.tone(tone),
+        );
+        let glyph = Rect::from_min_size(
+            pos2(origin.x + pad, rect.min.y + pad + (Font::Body.line() - icon) * 0.5),
+            Vec2::splat(icon),
+        );
         icons::draw(painter, tone_icon(tone), glyph, p.tone(tone));
         painter.galley(pos2(text_x, rect.min.y + pad), galley, p.text);
     }
@@ -251,7 +287,9 @@ pub fn draw_toasts(ui: &mut Ui) {
         for item in &mut t.items {
             item.born.get_or_insert(now);
         }
-        t.items.retain(|item| now - item.born.unwrap_or(now) <= if item.tone == Tone::Error { 10.0 } else { 6.0 });
+        t.items.retain(|item| {
+            now - item.born.unwrap_or(now) <= if item.tone == Tone::Error { 10.0 } else { 6.0 }
+        });
         t.items.clone()
     });
     if list.is_empty() {
@@ -280,17 +318,40 @@ pub fn draw_toasts(ui: &mut Ui) {
             ui.push_id(item.serial, |ui| {
                 let inner_w = TOAST_W - 24.0;
                 let text_w = inner_w - 22.0 - 24.0;
-                let galley = ui.ctx().fonts_mut(|f| f.layout(item.text.clone(), Font::Body.id(), p.text, text_w));
+                let galley =
+                    ui.ctx().fonts_mut(|f| f.layout(item.text.clone(), Font::Body.id(), p.text, text_w));
                 let h = galley.size().y.max(metrics::GLYPH) + 20.0;
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(TOAST_W, h), Sense::hover());
                 let painter = ui.painter();
-                painter.rect(rect, CornerRadius::same(metrics::RADIUS_POPUP), p.overlay, Stroke::new(1.0, p.border_strong), egui::StrokeKind::Inside);
-                let glyph = Rect::from_min_size(pos2(rect.min.x + 12.0, rect.min.y + 10.0 + (Font::Body.line() - metrics::GLYPH) * 0.5), Vec2::splat(metrics::GLYPH));
+                painter.rect(
+                    rect,
+                    CornerRadius::same(metrics::RADIUS_POPUP),
+                    p.overlay,
+                    Stroke::new(1.0, p.border_strong),
+                    egui::StrokeKind::Inside,
+                );
+                let glyph = Rect::from_min_size(
+                    pos2(rect.min.x + 12.0, rect.min.y + 10.0 + (Font::Body.line() - metrics::GLYPH) * 0.5),
+                    Vec2::splat(metrics::GLYPH),
+                );
                 icons::draw(painter, tone_icon(item.tone), glyph, p.tone(item.tone));
                 painter.galley(pos2(rect.min.x + 12.0 + 22.0, rect.min.y + 10.0), galley, p.text);
-                let close = Rect::from_min_size(pos2(rect.max.x - 12.0 - 20.0 + 4.0, rect.min.y + 8.0), Vec2::splat(20.0));
+                let close = Rect::from_min_size(
+                    pos2(rect.max.x - 12.0 - 20.0 + 4.0, rect.min.y + 8.0),
+                    Vec2::splat(20.0),
+                );
                 let mut child = ui.new_child(egui::UiBuilder::new().id_salt("dismiss").max_rect(close));
-                if icon_button_sized(&mut child, Icon::Close, "Dismiss", false, true, 20.0, metrics::GLYPH_STATUS).clicked() {
+                if icon_button_sized(
+                    &mut child,
+                    Icon::Close,
+                    "Dismiss",
+                    false,
+                    true,
+                    20.0,
+                    metrics::GLYPH_STATUS,
+                )
+                .clicked()
+                {
                     dismissed = Some(item.serial);
                 }
             });
@@ -298,6 +359,8 @@ pub fn draw_toasts(ui: &mut Ui) {
     });
     ctx.move_to_top(layer);
     if let Some(serial) = dismissed {
-        ctx.data_mut(|d| d.get_temp_mut_or_default::<Toasts>(toasts_id()).items.retain(|t| t.serial != serial));
+        ctx.data_mut(|d| {
+            d.get_temp_mut_or_default::<Toasts>(toasts_id()).items.retain(|t| t.serial != serial)
+        });
     }
 }

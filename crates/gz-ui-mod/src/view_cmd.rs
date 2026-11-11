@@ -26,13 +26,19 @@ pub(crate) async fn mod_settings_view(ed: Arc<Editor>, a: Args, origin: Origin) 
     let ask = a.flag("ask_game_updates");
     if page.is_some() || ask {
         let reply = ed.call("ui_tab", args([("action", s("open")), ("kind", s(TAB))]), origin).await;
-        if !ok(&reply) && reply.get("error").and_then(serde_json::Value::as_str) != Some("the editor runs without a window") {
+        if !ok(&reply)
+            && reply.get("error").and_then(serde_json::Value::as_str)
+                != Some("the editor runs without a window")
+        {
             return Err(CmdError::new("refused", crate::call::error_text(&reply)));
         }
     }
     let answer = on_ui(&ed, move |shell, _ctx| {
         let active = shell.active() == TAB;
-        let doc = shell.document_mut(TAB).and_then(|d| d.as_any_mut()).and_then(|any| any.downcast_mut::<ModSettingsDoc>());
+        let doc = shell
+            .document_mut(TAB)
+            .and_then(|d| d.as_any_mut())
+            .and_then(|any| any.downcast_mut::<ModSettingsDoc>());
         let Some(doc) = doc else { return Ok(view_json(false, false, form::GENERAL, false, &[])) };
         if let Some(page) = page {
             doc.set_page(page);
@@ -47,7 +53,9 @@ pub(crate) async fn mod_settings_view(ed: Arc<Editor>, a: Args, origin: Origin) 
     match answer {
         Ok(v) => Ok(v),
         // without a window there is no tab: it reports as closed
-        Err(e) if e.code == "no_window" => Ok(view_json(false, false, page.unwrap_or(form::GENERAL), false, &[])),
+        Err(e) if e.code == "no_window" => {
+            Ok(view_json(false, false, page.unwrap_or(form::GENERAL), false, &[]))
+        }
         Err(e) => Err(e),
     }
 }

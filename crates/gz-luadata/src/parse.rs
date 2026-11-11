@@ -35,6 +35,9 @@ const FSCOPE_NOCLOSE: u8 = 0x10;
 const VSTACK_GOTO: u8 = 0x02;
 const VSTACK_LABEL: u8 = 0x04;
 
+// LuaJIT's expression kinds (VKNIL, VKFALSE, ... VLOCAL): the constant kinds keep their K, the
+// order of the variants is LuaJIT's and the comparisons depend on it
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum K {
     KNil,
@@ -417,13 +420,11 @@ impl Parser<'_> {
                         return;
                     }
                 }
-                Op::KNilRange(pfrom, pto) => {
-                    if pfrom <= from && from <= pto + 1 {
-                        if from + n - 1 > pto {
-                            fs.set_op(last, Op::KNilRange(pfrom, from + n - 1));
-                        }
-                        return;
+                Op::KNilRange(pfrom, pto) if pfrom <= from && from <= pto + 1 => {
+                    if from + n - 1 > pto {
+                        fs.set_op(last, Op::KNilRange(pfrom, from + n - 1));
                     }
+                    return;
                 }
                 _ => {}
             }
@@ -1168,10 +1169,13 @@ impl Parser<'_> {
                 // the break label lives one moment on the variable stack (gola_new + vtop = idx)
                 let idx = self.vtop();
                 if idx >= MAX_VSTACK {
-                    return Err(self.ls.error(0, format!("chunk has more than {MAX_VSTACK} local variables")));
+                    return Err(self
+                        .ls
+                        .error(0, format!("chunk has more than {MAX_VSTACK} local variables")));
                 }
                 let pc = self.cur.pc();
-                let vl = VarInfo { name: VName::Break, startpc: pc, slot: self.cur.nactvar, info: VSTACK_LABEL };
+                let vl =
+                    VarInfo { name: VName::Break, startpc: pc, slot: self.cur.nactvar, info: VSTACK_LABEL };
                 self.gola_resolve(bl.vstart, idx, vl)?;
             } else {
                 return self.gola_fixup(bl);
@@ -1207,7 +1211,15 @@ impl Parser<'_> {
         self.cur.bl_flags_or(FSCOPE_NOCLOSE);
         self.fscope_end()?;
         if self.cur.flags & PROTO_FIXUP_RETURN != 0 {
-            let rets = self.cur.ops.iter().take(lastpc as usize).skip(1).take_while(|o| **o != Op::Uclo).filter(|o| **o == Op::Ret).count();
+            let rets = self
+                .cur
+                .ops
+                .iter()
+                .take(lastpc as usize)
+                .skip(1)
+                .take_while(|o| **o != Op::Uclo)
+                .filter(|o| **o == Op::Ret)
+                .count();
             for _ in 0..rets {
                 self.emit(Op::Ret);
             }
@@ -1303,7 +1315,8 @@ impl Parser<'_> {
                     self.expr_index(&mut e, &mut key)?;
                 }
                 self.lex_check(Tok::from(b'='))?;
-            } else if (self.ls.tok == TK_NAME || self.ls.tok == TK_GOTO) && self.ls.peek()? == Tok::from(b'=') {
+            } else if (self.ls.tok == TK_NAME || self.ls.tok == TK_GOTO) && self.ls.peek()? == Tok::from(b'=')
+            {
                 key = self.expr_str()?;
                 self.lex_check(Tok::from(b'='))?;
             } else {
@@ -1524,16 +1537,14 @@ impl Parser<'_> {
     fn expr_simple(&mut self) -> R<Exp> {
         let mut v;
         match self.ls.tok {
-            TK_NUMBER => {
-                match self.ls.tokval {
-                    TokVal::Num(n) => {
-                        v = Exp::new(K::KNum, 0);
-                        v.num = n;
-                        v.d = self.node(DNode::Num(n));
-                    }
-                    _ => v = Exp::new(K::KCdata, 0),
+            TK_NUMBER => match self.ls.tokval {
+                TokVal::Num(n) => {
+                    v = Exp::new(K::KNum, 0);
+                    v.num = n;
+                    v.d = self.node(DNode::Num(n));
                 }
-            }
+                _ => v = Exp::new(K::KCdata, 0),
+            },
             TK_STRING => {
                 v = Exp::new(K::KStr, 0);
                 if let TokVal::Str(s) = &self.ls.tokval {
@@ -1748,7 +1759,8 @@ impl Parser<'_> {
                 }
             }
             let mut e = Exp::new(K::Void, 0);
-            let nexps = if self.lex_opt(Tok::from(b'='))? { self.expr_list(&mut e, &mut Vec::new())? } else { 0 };
+            let nexps =
+                if self.lex_opt(Tok::from(b'='))? { self.expr_list(&mut e, &mut Vec::new())? } else { 0 };
             self.assign_adjust(nvars, nexps, &mut e)?;
             self.var_add(nvars);
         }

@@ -347,7 +347,11 @@ pub fn read_static_particles(bytes: &[u8]) -> Result<Vec<StaticParticles>> {
             continue;
         }
         let game_type = if versioned { c.r_u16()? } else { u16::MAX };
-        out.push(StaticParticles { game_type, reference: SmolStr::new(c.r_stringz()?), transform: c.r_matrix()? });
+        out.push(StaticParticles {
+            game_type,
+            reference: SmolStr::new(c.r_stringz()?),
+            transform: c.r_matrix()?,
+        });
     }
     Ok(out)
 }
@@ -524,7 +528,11 @@ mod tests {
         let bytes = write_static_sounds(&sounds);
         assert_eq!(read_static_sounds(&bytes).unwrap(), sounds);
 
-        let particles = vec![StaticParticles { game_type: 0xffff, reference: "static\\fire".into(), transform: IDENTITY }];
+        let particles = vec![StaticParticles {
+            game_type: 0xffff,
+            reference: "static\\fire".into(),
+            transform: IDENTITY,
+        }];
         let bytes = write_static_particles(&particles);
         assert_eq!(read_static_particles(&bytes).unwrap(), particles);
         assert!(write_static_particles(&[]).is_empty());
@@ -555,7 +563,8 @@ mod tests {
 
         assert!(read_fog_volumes(&[3, 0, 0xff, 0xff, 0xff, 0xff]).is_err());
         assert!(read_fog_volumes(&[2, 0, 0, 0, 0, 0]).is_err());
-        let mut fog = write_fog_volumes(&[FogGroup { profile: "p".into(), emitter: IDENTITY, occluders: vec![] }]);
+        let mut fog =
+            write_fog_volumes(&[FogGroup { profile: "p".into(), emitter: IDENTITY, occluders: vec![] }]);
         let n = fog.len();
         fog[n - 4..].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(read_fog_volumes(&fog).is_err());

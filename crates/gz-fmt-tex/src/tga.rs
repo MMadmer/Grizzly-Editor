@@ -82,11 +82,13 @@ pub fn read_tga(bytes: &[u8]) -> Result<Loaded> {
     } else {
         &[]
     };
-    let data = bytes.get(data_at..).ok_or(TexError::Truncated { need: data_at.saturating_sub(bytes.len()) })?;
+    let data =
+        bytes.get(data_at..).ok_or(TexError::Truncated { need: data_at.saturating_sub(bytes.len()) })?;
 
     // the file must be able to hold the picture before memory is taken for it: a plain file has
     // every pixel, a packed one at most 128 pixels for each packet of a count and one pixel
-    let enough = if rle { data.len() / (1 + px_bytes) * 128 >= pixels } else { data.len() / px_bytes >= pixels };
+    let enough =
+        if rle { data.len() / (1 + px_bytes) * 128 >= pixels } else { data.len() / px_bytes >= pixels };
     if !enough {
         return Err(TexError::Truncated { need: (pixels * px_bytes).saturating_sub(data.len()) });
     }
@@ -95,7 +97,9 @@ pub fn read_tga(bytes: &[u8]) -> Result<Loaded> {
     let decode = |raw: &[u8]| -> [u8; 4] {
         if mapped {
             let entry = usize::from(raw.first().copied().unwrap_or(0)) * map_entry;
-            palette.get(entry..entry + map_entry).map_or([0, 0, 0, 255], |e| pixel(e, map_entry, false, alpha_bits))
+            palette
+                .get(entry..entry + map_entry)
+                .map_or([0, 0, 0, 255], |e| pixel(e, map_entry, false, alpha_bits))
         } else {
             pixel(raw, px_bytes, grey, alpha_bits)
         }
@@ -173,7 +177,7 @@ pub fn write_tga(image: &Image, depth: TgaDepth) -> Result<Vec<u8>> {
     out.extend_from_slice(&(image.height as u16).to_le_bytes());
     out.push(bits);
     out.push(desc);
-    for p in image.rgba.chunks_exact(4) {
+    for p in image.rgba.as_chunks::<4>().0 {
         match depth {
             TgaDepth::Grey8 => out.push(p[0]),
             TgaDepth::Bgr24 => out.extend_from_slice(&[p[2], p[1], p[0]]),

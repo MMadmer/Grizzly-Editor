@@ -111,7 +111,18 @@ pub fn secondary(ui: &mut Ui, text: &str) -> Response {
 
 /// Paints a text at a point, cut to `max_w` when given. Returns whether it was cut. For rows
 /// and canvases that lay out by hand; reports a cut to the audit like the kit's own labels.
-pub fn paint(painter: &Painter, font: &FontId, pos: Pos2, anchor: Align2, color: Color32, text: &str, max_w: Option<f32>, clip: Clip) -> bool {
+// every argument is one the caller decides at each call; a struct of them would only rename them
+#[allow(clippy::too_many_arguments)]
+pub fn paint(
+    painter: &Painter,
+    font: &FontId,
+    pos: Pos2,
+    anchor: Align2,
+    color: Color32,
+    text: &str,
+    max_w: Option<f32>,
+    clip: Clip,
+) -> bool {
     let ctx = painter.ctx();
     let (shown, was_cut) = match max_w {
         Some(w) => ellipsize(ctx, font, text, w, clip),

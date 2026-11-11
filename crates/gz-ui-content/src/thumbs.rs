@@ -13,7 +13,10 @@ use std::time::Duration;
 use glam::{Mat4, Vec3};
 use gz_editor::Editor;
 use gz_project::Project;
-use gz_render::{AssetBytes, AssetRef, Camera, Color, DrawList, Image, Instance, MeshData, Projection, Renderer, ThumbnailCache, View};
+use gz_render::{
+    AssetBytes, AssetRef, Camera, Color, DrawList, Image, Instance, MeshData, Projection, Renderer,
+    ThumbnailCache, View,
+};
 use parking_lot::Mutex;
 
 /// The pictures kept, by bytes.
@@ -31,7 +34,12 @@ pub(crate) struct Thumbs {
 
 impl Default for Thumbs {
     fn default() -> Self {
-        Self { renderer: Mutex::new(None), starting: AtomicBool::new(false), failed: Mutex::new(None), cache: ThumbnailCache::new(BUDGET) }
+        Self {
+            renderer: Mutex::new(None),
+            starting: AtomicBool::new(false),
+            failed: Mutex::new(None),
+            cache: ThumbnailCache::new(BUDGET),
+        }
     }
 }
 
@@ -56,12 +64,19 @@ fn load_texture(editor: &Editor, name: &str) -> Result<AssetBytes, String> {
         return Ok(AssetBytes { bytes, ext: Some("dds".into()) });
     }
     let tga = editor.paths.root.join("rawdata\\textures").join(format!("{rel}.tga"));
-    std::fs::read(&tga).map(|bytes| AssetBytes { bytes, ext: Some("tga".into()) }).map_err(|_| format!("the texture '{name}' is not in the project, the editor or the game"))
+    std::fs::read(&tga)
+        .map(|bytes| AssetBytes { bytes, ext: Some("tga".into()) })
+        .map_err(|_| format!("the texture '{name}' is not in the project, the editor or the game"))
 }
 
 impl Thumbs {
     /// The renderer, when it is up; the first call starts it on the CPU pool.
-    pub(crate) fn renderer(&self, editor: &Arc<Editor>, gpu: Option<(&wgpu::Device, &wgpu::Queue)>, me: &Arc<Thumbs>) -> Option<Arc<Renderer>> {
+    pub(crate) fn renderer(
+        &self,
+        editor: &Arc<Editor>,
+        gpu: Option<(&wgpu::Device, &wgpu::Queue)>,
+        me: &Arc<Thumbs>,
+    ) -> Option<Arc<Renderer>> {
         if let Some(r) = self.renderer.lock().clone() {
             return Some(r);
         }
@@ -98,7 +113,14 @@ impl Thumbs {
 
     /// The picture of a model file's bytes at `side` pixels. Blocks while the model's textures
     /// load: call it on the IO pool.
-    pub(crate) fn render(&self, renderer: &Renderer, name: &str, bytes: &[u8], side: u32, background: Color) -> Result<Arc<Image>, String> {
+    pub(crate) fn render(
+        &self,
+        renderer: &Renderer,
+        name: &str,
+        bytes: &[u8],
+        side: u32,
+        background: Color,
+    ) -> Result<Arc<Image>, String> {
         let table = renderer.assets().table();
         let object = crate::icons::extension(name).is_some_and(|e| e.eq_ignore_ascii_case(".object"));
         let mesh = if object {
@@ -115,7 +137,11 @@ impl Thumbs {
         let fov = 45f32.to_radians();
         let dist = radius / (fov * 0.5).sin() * 1.12;
         let eye = center + Vec3::new(1.0, 0.8, -1.0).normalize() * dist;
-        let camera = Camera::look_at(eye, center).with_projection(Projection::Perspective { fov_y: fov, near: (dist - radius * 1.5).max(0.01), far: dist + radius * 2.0 });
+        let camera = Camera::look_at(eye, center).with_projection(Projection::Perspective {
+            fov_y: fov,
+            near: (dist - radius * 1.5).max(0.01),
+            far: dist + radius * 2.0,
+        });
         self.cache
             .get_or_render(renderer, key, [side, side], WAIT, move |_| {
                 let mut list = DrawList::new();

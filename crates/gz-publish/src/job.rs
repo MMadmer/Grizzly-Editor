@@ -105,7 +105,14 @@ pub struct PublishOptions {
 
 impl Default for PublishOptions {
     fn default() -> Self {
-        Self { tag: String::new(), title: String::new(), notes: String::new(), requires_game: None, prerelease: false, latest: true }
+        Self {
+            tag: String::new(),
+            title: String::new(),
+            notes: String::new(),
+            requires_game: None,
+            prerelease: false,
+            latest: true,
+        }
     }
 }
 
@@ -168,7 +175,9 @@ impl Publisher {
         match job.state {
             PublishState::Packaging => "Packaging Release".to_owned(),
             PublishState::Scanning => "Scanning Release".to_owned(),
-            PublishState::Uploading => format!("Publishing {}%", if job.total > 0 { job.sent * 100 / job.total } else { 0 }),
+            PublishState::Uploading => {
+                format!("Publishing {}%", (job.sent * 100).checked_div(job.total).unwrap_or(0))
+            }
             _ => "Publish Release".to_owned(),
         }
     }
@@ -195,6 +204,10 @@ impl Publisher {
     }
 
     fn card(&self, editor: &Editor, job: JobId, step: usize, numbers: String, stop_tip: &str) {
+        self.card_at(editor, job, step, numbers, "", stop_tip);
+    }
+
+    fn card_at(&self, editor: &Editor, job: JobId, step: usize, numbers: String, file: &str, stop_tip: &str) {
         publish_card(
             editor,
             job,
@@ -204,6 +217,7 @@ impl Publisher {
                 "steps": STEPS,
                 "step": step,
                 "numbers": numbers,
+                "file": file,
                 "from_mcp": !self.from_ui.load(Ordering::Relaxed),
                 "stop_label": STOP,
                 "stop_tip": stop_tip,
@@ -213,7 +227,12 @@ impl Publisher {
 
     /// Starts Publish Release of the open project: the checks, then the packaging job. The one
     /// path the dialog and MCP share. Answers the packaging job.
-    pub async fn start(self: &Arc<Self>, editor: &Arc<Editor>, options: PublishOptions, from_ui: bool) -> Result<JobId, String> {
+    pub async fn start(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        options: PublishOptions,
+        from_ui: bool,
+    ) -> Result<JobId, String> {
         let session = editor.project().map_err(|e| e.message)?;
         if self.running() {
             return Err("a release is being published already".to_owned());
@@ -223,7 +242,11 @@ impl Publisher {
         }
         let manifest = ManifestService::of_session(editor, &session).await.map_err(|e| e.message)?;
         manifest.sync().await.map_err(|e| e.message)?;
-        let m = manifest.snapshot().manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
+        let m = manifest
+            .snapshot()
+            .manifest()
+            .ok_or_else(|| "mod.ltx not found in the project".to_owned())?
+            .clone();
         if m.update_github.is_empty() {
             return Err("no GitHub repository in the manifest: set it in Mod Settings (MCP: mod_set_manifest github=owner/repo)".to_owned());
         }
@@ -238,9 +261,15 @@ impl Publisher {
         } else {
             options.tag.clone()
         };
-        let title = if options.title.is_empty() { default_title(&m.id, &m.name, &m.version) } else { options.title.clone() };
+        let title = if options.title.is_empty() {
+            default_title(&m.id, &m.name, &m.version)
+        } else {
+            options.title.clone()
+        };
         if !valid_tag(&tag) {
-            return Err("invalid tag: 1-100 characters of A-Z a-z 0-9 . _ -, not starting with '-' or '.'".to_owned());
+            return Err(
+                "invalid tag: 1-100 characters of A-Z a-z 0-9 . _ -, not starting with '-' or '.'".to_owned()
+            );
         }
         if title.len() > 200 {
             return Err("the title is longer than 200 characters".to_owned());
@@ -311,19 +340,26 @@ impl Publisher {
     }
 
     /// The packaging, with the card following the packaging's own steps.
-    async fn package_with_card(&self, editor: &Arc<Editor>, session: &Arc<ProjectSession>, request: &PackageRequest, ctx: &JobCtx) -> PackageResult {
+    async fn package_with_card(
+        &self,
+        editor: &Arc<Editor>,
+        session: &Arc<ProjectSession>,
+        request: &PackageRequest,
+        ctx: &JobCtx,
+    ) -> PackageResult {
         let work = run_package(editor, session, request, ctx);
         let mut work = std::pin::pin!(work);
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(300));
-        let mut step = usize::MAX;
+        let mut shown: Option<(usize, String, String)> = None;
         loop {
             tokio::select! {
                 r = &mut work => return r,
                 _ = tick.tick() => {
-                    let now = Releases::of(editor).status(editor).map_or(0, |s| s.step);
-                    if now != step {
-                        step = now;
-                        self.card(editor, ctx.id, step, String::new(), "Stops the packaging. Nothing has reached GitHub yet.");
+                    // the packaging's own row: its step, how far, the file at hand
+                    let row = Releases::of(editor).status(editor).map_or((0, String::new(), String::new()), |s| (s.step, s.numbers(), s.file));
+                    if shown.as_ref() != Some(&row) {
+                        self.card_at(editor, ctx.id, row.0, row.1.clone(), &row.2, "Stops the packaging. Nothing has reached GitHub yet.");
+                        shown = Some(row);
                     }
                 }
             }
@@ -347,14 +383,24 @@ impl Publisher {
         let packages: Vec<Package> = r
             .packages
             .iter()
-            .map(|p| Package { name: p.name.clone(), path: out_dir.join(&p.name), size: p.size, sha256: p.sha256.clone() })
+            .map(|p| Package {
+                name: p.name.clone(),
+                path: out_dir.join(&p.name),
+                size: p.size,
+                sha256: p.sha256.clone(),
+            })
             .collect();
         // the descriptor goes last, as it does on disk: it vouches for the rest
         let assets: Vec<Asset> = r
             .packages
             .iter()
             .chain([&r.index, &r.descriptor_file])
-            .map(|f| Asset { path: out_dir.join(&f.name), name: f.name.clone(), size: f.size, sha256: f.sha256.clone() })
+            .map(|f| Asset {
+                path: out_dir.join(&f.name),
+                name: f.name.clone(),
+                size: f.size,
+                sha256: f.sha256.clone(),
+            })
             .collect();
         let total = assets.iter().map(|a| a.size).sum();
         let request = PublishRequest {
@@ -376,7 +422,10 @@ impl Publisher {
             job.stage = "Starting".to_owned();
             job.total = total;
         }
-        editor.log.info(format!("[XMS] publishing {} {} to {} as {}", pending.module_id, pending.version, pending.repo, pending.tag));
+        editor.log.info(format!(
+            "[XMS] publishing {} {} to {} as {}",
+            pending.module_id, pending.version, pending.repo, pending.tag
+        ));
 
         let (me, ed) = (self.clone(), editor.clone());
         let module_id = pending.module_id;
@@ -396,7 +445,14 @@ impl Publisher {
     }
 
     /// The scan of a listed module, then GitHub.
-    async fn upload(self: &Arc<Self>, editor: &Arc<Editor>, gh: &Github, request: PublishRequest, plan: ScanPlan, ctx: &JobCtx) -> Result<Value, JobError> {
+    async fn upload(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        gh: &Github,
+        request: PublishRequest,
+        plan: ScanPlan,
+        ctx: &JobCtx,
+    ) -> Result<Value, JobError> {
         let started = Instant::now();
         let sink = Sink {
             me: self.clone(),
@@ -406,7 +462,13 @@ impl Publisher {
             sent: request.assets.iter().map(|_| AtomicU64::new(0)).collect(),
             started,
         };
-        self.card(editor, ctx.id, 3, String::new(), "Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
+        self.card(
+            editor,
+            ctx.id,
+            3,
+            String::new(),
+            "Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.",
+        );
         let stage = |text: &str| sink.stage(text);
         let set_scan = |state: PublishState, scan: &Scan| {
             let mut job = self.job.lock();
@@ -414,7 +476,13 @@ impl Publisher {
             job.virustotal = scan.clone();
             drop(job);
             if state == PublishState::Scanning {
-                self.card(editor, ctx.id, 3, String::new(), "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub.");
+                self.card(
+                    editor,
+                    ctx.id,
+                    3,
+                    String::new(),
+                    "Stops the VirusTotal scan. Nothing is published and nothing reaches GitHub.",
+                );
             }
         };
         let scanned = scan_first(gh, &plan, &ctx.cancel, &stage, &set_scan).await;
@@ -468,10 +536,18 @@ impl Publisher {
     fn report(&self, editor: &Editor) {
         let job = self.view();
         match job.state {
-            PublishState::Done => editor.log.info(format!("[XMS] release {} {} published: {}", job.id, job.version, job.url)),
-            PublishState::Cancelled => editor.log.info(format!("[XMS] publishing {} {} cancelled", job.id, job.version)),
-            _ if job.refused => editor.log.warn(format!("[XMS] release {} {} not published: {}", job.id, job.version, job.error)),
-            _ => editor.log.warn(format!("[XMS] publishing {} {} failed: {}", job.id, job.version, job.error)),
+            PublishState::Done => {
+                editor.log.info(format!("[XMS] release {} {} published: {}", job.id, job.version, job.url))
+            }
+            PublishState::Cancelled => {
+                editor.log.info(format!("[XMS] publishing {} {} cancelled", job.id, job.version))
+            }
+            _ if job.refused => editor
+                .log
+                .warn(format!("[XMS] release {} {} not published: {}", job.id, job.version, job.error)),
+            _ => {
+                editor.log.warn(format!("[XMS] publishing {} {} failed: {}", job.id, job.version, job.error))
+            }
         }
         if !job.warnings.is_empty() {
             editor.log.warn(format!("[XMS] {}", job.warnings));
@@ -483,7 +559,11 @@ impl Publisher {
     pub fn status_json(&self) -> (bool, Value) {
         let job = self.view();
         let failed = matches!(job.state, PublishState::Failed | PublishState::Cancelled);
-        let error = if job.state == PublishState::Cancelled { gz_github::CANCELLED.to_owned() } else { job.error.clone() };
+        let error = if job.state == PublishState::Cancelled {
+            gz_github::CANCELLED.to_owned()
+        } else {
+            job.error.clone()
+        };
         (
             !failed,
             json!({
@@ -573,7 +653,13 @@ impl PublishSink for Sink {
                 let left = (spent as f64 * (total.saturating_sub(done)) as f64 / done as f64) as u64;
                 numbers.push_str(&format!(" · {} s left", left / 1000));
             }
-            self.me.card(&self.editor, self.ctx.id, 3, numbers, "Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.");
+            self.me.card(
+                &self.editor,
+                self.ctx.id,
+                3,
+                numbers,
+                "Stops the upload. Nothing is published; the draft stays on GitHub for the next attempt.",
+            );
         }
     }
 }

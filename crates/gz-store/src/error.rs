@@ -30,7 +30,11 @@ impl CmdError {
     /// The command would lose unsaved work and was not told to. `dirty` names the documents.
     /// The wire has always answered the bare word `unsaved`: callers branch on it.
     pub fn unsaved(dirty: serde_json::Value) -> Self {
-        Self { code: SmolStr::new("unsaved"), message: "unsaved".to_owned(), data: Some(serde_json::json!({ "dirty": dirty })) }
+        Self {
+            code: SmolStr::new("unsaved"),
+            message: "unsaved".to_owned(),
+            data: Some(serde_json::json!({ "dirty": dirty })),
+        }
     }
 
     /// Something that must not be busy is busy.

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use egui::Key;
 use gz_app::{Chord, DocCx, ShellBuilder, UiCommand};
 use gz_editor::{Args, Editor};
-use gz_scene::{ObjClass, SceneCmd, SceneService};
 use gz_scene::apply::SelectMode;
+use gz_scene::{ObjClass, SceneCmd, SceneService};
 use gz_ui::Icon;
 
 use crate::gizmo::GizmoType;
@@ -60,27 +60,195 @@ const fn ctrl(key: Key) -> Option<Chord> {
 
 /// The table, in the Keyboard page's order.
 pub const BINDINGS: &[Binding] = &[
-    Binding { id: "COMMAND_GIZMO_MODE.\"Select\"", group: "Viewport Tools", label: "Select", icon: Icon::Select, keys: c(Key::Q), act: Act::Gizmo(GizmoType::None), own: true },
-    Binding { id: "COMMAND_CHANGE_ACTION.\"Add\"", group: "Viewport Tools", label: "Place", icon: Icon::Place, keys: c(Key::A), act: Act::Place, own: true },
-    Binding { id: "COMMAND_GIZMO_MODE.\"Move\"", group: "Viewport Tools", label: "Move", icon: Icon::Move, keys: c(Key::W), act: Act::Gizmo(GizmoType::Move), own: true },
-    Binding { id: "COMMAND_GIZMO_MODE.\"Rotate\"", group: "Viewport Tools", label: "Rotate", icon: Icon::Rotate, keys: c(Key::E), act: Act::Gizmo(GizmoType::Rotate), own: true },
-    Binding { id: "COMMAND_GIZMO_MODE.\"Scale\"", group: "Viewport Tools", label: "Scale", icon: Icon::Scale, keys: c(Key::R), act: Act::Gizmo(GizmoType::Scale), own: true },
-    Binding { id: "COMMAND_GIZMO_MODE.\"Cycle\"", group: "Viewport Tools", label: "Next Transform Tool", icon: Icon::None, keys: c(Key::Space), act: Act::CycleGizmo, own: true },
-    Binding { id: "COMMAND_CHANGE_ACTION.\"Select\"", group: "Viewport Tools", label: "Stop Placing", icon: Icon::None, keys: c(Key::S), act: Act::StopPlacing, own: true },
-    Binding { id: "COMMAND_ZOOM_EXTENTS.\"Extent\"", group: "View", label: "Frame All", icon: Icon::FrameAll, keys: None, act: Act::FrameAll, own: true },
-    Binding { id: "COMMAND_ZOOM_EXTENTS.\"Selected\"", group: "View", label: "Frame Selection", icon: Icon::FrameSelection, keys: c(Key::F), act: Act::FrameSelection, own: true },
-    Binding { id: "COMMAND_TOGGLE_RENDER_WIRE", group: "View", label: "Wireframe", icon: Icon::Wireframe, keys: c(Key::F3), act: Act::Wireframe, own: true },
-    Binding { id: "COMMAND_TOGGLE_GRID", group: "View", label: "Show Grid", icon: Icon::None, keys: ctrl(Key::G), act: Act::Grid, own: true },
-    Binding { id: "COMMAND_GRID_SLOT_SIZE.\"Decrease\"", group: "View", label: "Smaller Grid Cells", icon: Icon::None, keys: c(Key::OpenBracket), act: Act::GridSmaller, own: true },
-    Binding { id: "COMMAND_GRID_SLOT_SIZE.\"Increase\"", group: "View", label: "Larger Grid Cells", icon: Icon::None, keys: c(Key::CloseBracket), act: Act::GridLarger, own: true },
-    Binding { id: "COMMAND_TOGGLE_SAFE_RECT", group: "View", label: "Show Safe Rect", icon: Icon::None, keys: ctrl(Key::F), act: Act::SafeRect, own: true },
-    Binding { id: "COMMAND_DROP_TO_GROUND", group: "Object", label: "Drop to Ground", icon: Icon::None, keys: c(Key::End), act: Act::DropToGround, own: true },
-    Binding { id: "COMMAND_DELETE_SELECTION", group: "Edit", label: "Delete", icon: Icon::None, keys: c(Key::Delete), act: Act::Delete, own: false },
-    Binding { id: "COMMAND_SELECT_ALL", group: "Selection", label: "Select All", icon: Icon::None, keys: ctrl(Key::A), act: Act::SelectAll, own: false },
-    Binding { id: "COMMAND_DESELECT_ALL", group: "Selection", label: "Deselect All", icon: Icon::None, keys: c(Key::Escape), act: Act::DeselectAll, own: false },
-    Binding { id: "COMMAND_INVERT_SELECTION_ALL", group: "Selection", label: "Invert Selection", icon: Icon::None, keys: None, act: Act::InvertSelection, own: false },
-    Binding { id: "COMMAND_HIDE_SEL", group: "Visibility", label: "Hide Selected", icon: Icon::None, keys: c(Key::Minus), act: Act::HideSelected, own: false },
-    Binding { id: "COMMAND_HIDE_UNSEL", group: "Visibility", label: "Hide Unselected", icon: Icon::None, keys: c(Key::Equals), act: Act::HideUnselected, own: false },
+    Binding {
+        id: "COMMAND_GIZMO_MODE.\"Select\"",
+        group: "Viewport Tools",
+        label: "Select",
+        icon: Icon::Select,
+        keys: c(Key::Q),
+        act: Act::Gizmo(GizmoType::None),
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_CHANGE_ACTION.\"Add\"",
+        group: "Viewport Tools",
+        label: "Place",
+        icon: Icon::Place,
+        keys: c(Key::A),
+        act: Act::Place,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_GIZMO_MODE.\"Move\"",
+        group: "Viewport Tools",
+        label: "Move",
+        icon: Icon::Move,
+        keys: c(Key::W),
+        act: Act::Gizmo(GizmoType::Move),
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_GIZMO_MODE.\"Rotate\"",
+        group: "Viewport Tools",
+        label: "Rotate",
+        icon: Icon::Rotate,
+        keys: c(Key::E),
+        act: Act::Gizmo(GizmoType::Rotate),
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_GIZMO_MODE.\"Scale\"",
+        group: "Viewport Tools",
+        label: "Scale",
+        icon: Icon::Scale,
+        keys: c(Key::R),
+        act: Act::Gizmo(GizmoType::Scale),
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_GIZMO_MODE.\"Cycle\"",
+        group: "Viewport Tools",
+        label: "Next Transform Tool",
+        icon: Icon::None,
+        keys: c(Key::Space),
+        act: Act::CycleGizmo,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_CHANGE_ACTION.\"Select\"",
+        group: "Viewport Tools",
+        label: "Stop Placing",
+        icon: Icon::None,
+        keys: c(Key::S),
+        act: Act::StopPlacing,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_ZOOM_EXTENTS.\"Extent\"",
+        group: "View",
+        label: "Frame All",
+        icon: Icon::FrameAll,
+        keys: None,
+        act: Act::FrameAll,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_ZOOM_EXTENTS.\"Selected\"",
+        group: "View",
+        label: "Frame Selection",
+        icon: Icon::FrameSelection,
+        keys: c(Key::F),
+        act: Act::FrameSelection,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_TOGGLE_RENDER_WIRE",
+        group: "View",
+        label: "Wireframe",
+        icon: Icon::Wireframe,
+        keys: c(Key::F3),
+        act: Act::Wireframe,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_TOGGLE_GRID",
+        group: "View",
+        label: "Show Grid",
+        icon: Icon::None,
+        keys: ctrl(Key::G),
+        act: Act::Grid,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_GRID_SLOT_SIZE.\"Decrease\"",
+        group: "View",
+        label: "Smaller Grid Cells",
+        icon: Icon::None,
+        keys: c(Key::OpenBracket),
+        act: Act::GridSmaller,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_GRID_SLOT_SIZE.\"Increase\"",
+        group: "View",
+        label: "Larger Grid Cells",
+        icon: Icon::None,
+        keys: c(Key::CloseBracket),
+        act: Act::GridLarger,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_TOGGLE_SAFE_RECT",
+        group: "View",
+        label: "Show Safe Rect",
+        icon: Icon::None,
+        keys: ctrl(Key::F),
+        act: Act::SafeRect,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_DROP_TO_GROUND",
+        group: "Object",
+        label: "Drop to Ground",
+        icon: Icon::None,
+        keys: c(Key::End),
+        act: Act::DropToGround,
+        own: true,
+    },
+    Binding {
+        id: "COMMAND_DELETE_SELECTION",
+        group: "Edit",
+        label: "Delete",
+        icon: Icon::None,
+        keys: c(Key::Delete),
+        act: Act::Delete,
+        own: false,
+    },
+    Binding {
+        id: "COMMAND_SELECT_ALL",
+        group: "Selection",
+        label: "Select All",
+        icon: Icon::None,
+        keys: ctrl(Key::A),
+        act: Act::SelectAll,
+        own: false,
+    },
+    Binding {
+        id: "COMMAND_DESELECT_ALL",
+        group: "Selection",
+        label: "Deselect All",
+        icon: Icon::None,
+        keys: c(Key::Escape),
+        act: Act::DeselectAll,
+        own: false,
+    },
+    Binding {
+        id: "COMMAND_INVERT_SELECTION_ALL",
+        group: "Selection",
+        label: "Invert Selection",
+        icon: Icon::None,
+        keys: None,
+        act: Act::InvertSelection,
+        own: false,
+    },
+    Binding {
+        id: "COMMAND_HIDE_SEL",
+        group: "Visibility",
+        label: "Hide Selected",
+        icon: Icon::None,
+        keys: c(Key::Minus),
+        act: Act::HideSelected,
+        own: false,
+    },
+    Binding {
+        id: "COMMAND_HIDE_UNSEL",
+        group: "Visibility",
+        label: "Hide Unselected",
+        icon: Icon::None,
+        keys: c(Key::Equals),
+        act: Act::HideUnselected,
+        own: false,
+    },
 ];
 
 /// What each command of the table is bound to now: the author's binding, or the default.
@@ -102,7 +270,12 @@ pub fn bound(editor: &Editor) -> Vec<(Act, Option<Chord>)> {
 /// The keys of a command now, as a menu shows them ("Ctrl+G"); empty when it has none.
 #[must_use]
 pub fn keys_of(editor: &Editor, act: Act) -> String {
-    bound(editor).into_iter().find(|(a, _)| *a == act).and_then(|(_, k)| k).map(|k| k.label()).unwrap_or_default()
+    bound(editor)
+        .into_iter()
+        .find(|(a, _)| *a == act)
+        .and_then(|(_, k)| k)
+        .map(|k| k.label())
+        .unwrap_or_default()
 }
 
 /// The command bound to a chord, if any.
@@ -116,7 +289,10 @@ pub fn act_of(editor: &Editor, chord: &Chord) -> Option<Act> {
 pub fn install(b: &mut ShellBuilder) {
     for bind in BINDINGS.iter().filter(|b| b.own) {
         let act = bind.act;
-        let mut cmd = UiCommand::new(bind.id, bind.group, bind.label, bind.icon, move |cx: &mut DocCx<'_>| run(cx.editor, act));
+        let mut cmd =
+            UiCommand::new(bind.id, bind.group, bind.label, bind.icon, move |cx: &mut DocCx<'_>| {
+                run(cx.editor, act)
+            });
         cmd.default_keys = bind.keys;
         b.command(cmd.enabled(|_, tab| tab == "level"));
     }
@@ -148,7 +324,9 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
                 }
             });
         }
-        Act::Wireframe => vp.with(|s| s.view.fill = if s.view.fill == Fill::Wireframe { Fill::Solid } else { Fill::Wireframe }),
+        Act::Wireframe => vp.with(|s| {
+            s.view.fill = if s.view.fill == Fill::Wireframe { Fill::Solid } else { Fill::Wireframe }
+        }),
         Act::Grid => vp.with(|s| s.view.grid = !s.view.grid),
         Act::SafeRect => vp.with(|s| s.view.safe_rect = !s.view.safe_rect),
         Act::GridSmaller | Act::GridLarger => {
@@ -177,7 +355,8 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
         Act::SelectAll => {
             if let Ok(svc) = SceneService::of(editor) {
                 let target = svc.store.snapshot().tools.target;
-                svc.store.post(SceneCmd::SelectClass { class: Some(target), select: true }, editor.ui_origin());
+                svc.store
+                    .post(SceneCmd::SelectClass { class: Some(target), select: true }, editor.ui_origin());
             }
         }
         Act::InvertSelection | Act::HideSelected | Act::HideUnselected => {
@@ -185,14 +364,20 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
             let snap = svc.store.snapshot();
             let target = snap.tools.target;
             let pick = |want_selected: bool| -> Vec<gz_scene::ObjId> {
-                snap.of_class(target).filter(|o| o.flags.visible && snap.is_selected(o.id) == want_selected).map(|o| o.id).collect()
+                snap.of_class(target)
+                    .filter(|o| o.flags.visible && snap.is_selected(o.id) == want_selected)
+                    .map(|o| o.id)
+                    .collect()
             };
             match act {
                 Act::InvertSelection => {
-                    let ids: Vec<_> = snap.of_class(target).filter(|o| o.flags.visible).map(|o| o.id).collect();
+                    let ids: Vec<_> =
+                        snap.of_class(target).filter(|o| o.flags.visible).map(|o| o.id).collect();
                     svc.store.post(SceneCmd::Select { ids, mode: SelectMode::Toggle }, editor.ui_origin());
                 }
-                Act::HideSelected => svc.store.post(SceneCmd::Show { ids: pick(true), visible: false }, editor.ui_origin()),
+                Act::HideSelected => {
+                    svc.store.post(SceneCmd::Show { ids: pick(true), visible: false }, editor.ui_origin())
+                }
                 _ => svc.store.post(SceneCmd::Show { ids: pick(false), visible: false }, editor.ui_origin()),
             }
         }

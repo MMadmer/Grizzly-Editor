@@ -19,6 +19,7 @@ gz-entities.workspace = true
 gz-fmt-level.workspace = true
 gz-fmt-object.workspace = true
 gz-fmt-ogf.workspace = true
+gz-fmt-xr.workspace = true
 gz-world.workspace = true
 gz-nq.workspace = true
 gz-project.workspace = true

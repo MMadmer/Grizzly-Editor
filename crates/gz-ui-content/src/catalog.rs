@@ -61,7 +61,15 @@ impl Catalog {
     /// A catalog of nothing: a source that cannot be read, a category without a folder.
     #[must_use]
     pub fn empty(source: Source, category: usize) -> Self {
-        let mut c = Self { source, category, disk_root: None, game: None, nodes: Vec::new(), by_path: FxHashMap::default(), file_at: FxHashMap::default() };
+        let mut c = Self {
+            source,
+            category,
+            disk_root: None,
+            game: None,
+            nodes: Vec::new(),
+            by_path: FxHashMap::default(),
+            file_at: FxHashMap::default(),
+        };
         c.node_for("");
         c
     }
@@ -72,7 +80,11 @@ impl Catalog {
         }
         let parent = if path.is_empty() { None } else { Some(self.node_for(crate::model::parent_of(path))) };
         let i = self.nodes.len() as u32;
-        self.nodes.push(Node { path: SmolStr::new(path), name: SmolStr::new(crate::model::leaf_of(path)), ..Node::default() });
+        self.nodes.push(Node {
+            path: SmolStr::new(path),
+            name: SmolStr::new(crate::model::leaf_of(path)),
+            ..Node::default()
+        });
         self.by_path.insert(key(path), i);
         if let Some(p) = parent.and_then(|p| self.nodes.get_mut(p as usize)) {
             p.children.push(i);
@@ -118,7 +130,10 @@ impl Catalog {
                         c.node_for(&full);
                     }
                     EntryKind::File { size, asset, .. } => {
-                        if project && path.is_empty() && (is_editor_only_entry(&e.name) || e.name.eq_ignore_ascii_case("mod.ltx")) {
+                        if project
+                            && path.is_empty()
+                            && (is_editor_only_entry(&e.name) || e.name.eq_ignore_ascii_case("mod.ltx"))
+                        {
                             continue;
                         }
                         c.add_file(&full, size, asset);
@@ -286,7 +301,9 @@ impl View {
 fn picture_of(source: Source, category: usize, path: &str) -> Picture {
     if icons::is_image(path) {
         Picture::Image
-    } else if icons::is_model(path) || (source == Source::Editor && category == crate::model::VISUALS && icons::extension(path).is_none()) {
+    } else if icons::is_model(path)
+        || (source == Source::Editor && category == crate::model::VISUALS && icons::extension(path).is_none())
+    {
         Picture::Model
     } else {
         Picture::None
@@ -320,7 +337,11 @@ pub fn build_view(cat: &Catalog, folder: &str, search: &str, rules: Option<&[Str
         own: f.asset,
         ship: ship(&f.path),
         size: f.size,
-        picture: if f.asset.is_some() { Picture::None } else { picture_of(cat.source, cat.category, &f.path) },
+        picture: if f.asset.is_some() {
+            Picture::None
+        } else {
+            picture_of(cat.source, cat.category, &f.path)
+        },
     };
     if searching {
         // depth first, in tree order

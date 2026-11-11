@@ -89,7 +89,9 @@ pub fn tile_icon(path: &str, folder: bool, own: Option<AssetKind>, source: Sourc
 /// An image the tile path decodes (`IsImageExt`).
 #[must_use]
 pub fn is_image(path: &str) -> bool {
-    extension(path).is_some_and(|e| [".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"].iter().any(|x| x.eq_ignore_ascii_case(e)))
+    extension(path).is_some_and(|e| {
+        [".dds", ".tga", ".png", ".jpg", ".jpeg", ".bmp"].iter().any(|x| x.eq_ignore_ascii_case(e))
+    })
 }
 
 /// A model whose picture is rendered (`IsVisualExt`, `IsObjectExt`).
@@ -107,7 +109,10 @@ mod tests {
         assert_eq!(tile_icon("a\\b", true, None, Source::Project, 0).name(), "folder");
         assert_eq!(tile_icon("qa\\notes.txt", false, None, Source::Project, 0).name(), "file_text");
         assert_eq!(tile_icon("q.nqasset", false, Some(AssetKind::Quest), Source::Project, 0).name(), "quest");
-        assert_eq!(tile_icon("t.npcasset", false, Some(AssetKind::CharacterTemplate), Source::Project, 0).name(), "character_template");
+        assert_eq!(
+            tile_icon("t.npcasset", false, Some(AssetKind::CharacterTemplate), Source::Project, 0).name(),
+            "character_template"
+        );
         assert_eq!(tile_icon("gamedata.db3", false, None, Source::Game, 0), Icon::FileArchive);
         assert_eq!(tile_icon("noext", false, None, Source::Editor, 6), Icon::Particles);
         assert_eq!(tile_icon("noext", false, None, Source::Game, 6), Icon::File);

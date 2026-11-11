@@ -25,9 +25,15 @@ impl Eol {
 
 #[derive(Clone, Debug)]
 enum Kind {
-    Section { name: SmolStr, parents: Vec<SmolStr> },
+    Section {
+        name: SmolStr,
+        parents: Vec<SmolStr>,
+    },
     /// `value` is the byte range of the trimmed value inside `raw`.
-    Entry { key: SmolStr, value: Range<usize> },
+    Entry {
+        key: SmolStr,
+        value: Range<usize>,
+    },
     /// Blank, comment, `#include`, anything else: kept, never interpreted.
     Other,
 }
@@ -191,11 +197,15 @@ impl LtxDoc {
 
     /// The sections whose name starts with `prefix` (ASCII case ignored), in file order.
     pub fn sections_with_prefix<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = &'a str> {
-        self.sections().filter(move |n| n.len() >= prefix.len() && n.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes()))
+        self.sections().filter(move |n| {
+            n.len() >= prefix.len() && n.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+        })
     }
 
     fn header(&self, section: &str) -> Option<usize> {
-        self.lines.iter().position(|l| matches!(&l.kind, Kind::Section { name, .. } if name.eq_ignore_ascii_case(section)))
+        self.lines
+            .iter()
+            .position(|l| matches!(&l.kind, Kind::Section { name, .. } if name.eq_ignore_ascii_case(section)))
     }
 
     /// The lines of a section's body: after its header, up to the next header.
@@ -265,7 +275,10 @@ impl LtxDoc {
         if self.lines.last().is_some_and(|l| !l.is_blank()) {
             self.lines.push(self.new_line(String::new(), Kind::Other));
         }
-        let line = self.new_line(format!("[{section}]"), Kind::Section { name: SmolStr::new(section), parents: Vec::new() });
+        let line = self.new_line(
+            format!("[{section}]"),
+            Kind::Section { name: SmolStr::new(section), parents: Vec::new() },
+        );
         self.lines.push(line);
     }
 
@@ -309,7 +322,10 @@ impl LtxDoc {
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
         self.ensure_section(section);
         let Some(body) = self.body(section) else { return };
-        let existing = body.clone().rev().find(|&i| matches!(&self.lines[i].kind, Kind::Entry { key: k, .. } if k == key));
+        let existing = body
+            .clone()
+            .rev()
+            .find(|&i| matches!(&self.lines[i].kind, Kind::Entry { key: k, .. } if k == key));
         if let Some(i) = existing {
             let line = &mut self.lines[i];
             if let Kind::Entry { value: range, .. } = &mut line.kind {
@@ -353,11 +369,19 @@ impl LtxDoc {
 
     /// Replaces the entries of a section by `entries`, in that order. Comments inside the
     /// section stay where they are; the section is added when missing.
-    pub fn replace_entries<K: AsRef<str>, V: AsRef<str>>(&mut self, section: &str, entries: impl IntoIterator<Item = (K, V)>) {
+    pub fn replace_entries<K: AsRef<str>, V: AsRef<str>>(
+        &mut self,
+        section: &str,
+        entries: impl IntoIterator<Item = (K, V)>,
+    ) {
         self.ensure_section(section);
         let Some(body) = self.body(section) else { return };
-        let model = body.clone().find(|&i| matches!(self.lines[i].kind, Kind::Entry { .. })).map(|i| self.lines[i].clone());
-        let first = body.clone().find(|&i| matches!(self.lines[i].kind, Kind::Entry { .. })).unwrap_or(body.start);
+        let model = body
+            .clone()
+            .find(|&i| matches!(self.lines[i].kind, Kind::Entry { .. }))
+            .map(|i| self.lines[i].clone());
+        let first =
+            body.clone().find(|&i| matches!(self.lines[i].kind, Kind::Entry { .. })).unwrap_or(body.start);
         let mut kept: Vec<Line> = Vec::with_capacity(body.len());
         let mut insert_at = None;
         for (n, i) in body.clone().enumerate() {
@@ -396,7 +420,10 @@ impl LtxDoc {
         let Some(body) = self.body(section) else { return false };
         let mut end = body.end;
         if end < self.lines.len() {
-            while end > body.start && matches!(self.lines[end - 1].kind, Kind::Other) && !self.lines[end - 1].is_blank() {
+            while end > body.start
+                && matches!(self.lines[end - 1].kind, Kind::Other)
+                && !self.lines[end - 1].is_blank()
+            {
                 end -= 1;
             }
         }
@@ -432,7 +459,11 @@ pub fn unquote(value: &str) -> &str {
 /// comment mark in it.
 #[must_use]
 pub fn quote(value: &str) -> String {
-    let bare = !value.is_empty() && value.trim() == value && !value.contains(';') && !value.contains("//") && !value.contains('"');
+    let bare = !value.is_empty()
+        && value.trim() == value
+        && !value.contains(';')
+        && !value.contains("//")
+        && !value.contains('"');
     if bare { value.to_owned() } else { format!("\"{}\"", value.replace('"', "'")) }
 }
 
@@ -440,7 +471,10 @@ pub fn quote(value: &str) -> String {
 #[must_use]
 pub fn parse_bool(value: &str) -> bool {
     let v = unquote(value);
-    v.eq_ignore_ascii_case("on") || v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("true") || v == "1"
+    v.eq_ignore_ascii_case("on")
+        || v.eq_ignore_ascii_case("yes")
+        || v.eq_ignore_ascii_case("true")
+        || v == "1"
 }
 
 #[cfg(test)]
@@ -451,7 +485,14 @@ mod tests {
 
     #[test]
     fn untouched_is_identical() {
-        for text in [SAMPLE, "", "a = 1", "[s]\nk=v\n", "\r\n\r\n", "[s]\r\nk = \"line one\r\nline two\" ; c\r\nz = 1\r\n"] {
+        for text in [
+            SAMPLE,
+            "",
+            "a = 1",
+            "[s]\nk=v\n",
+            "\r\n\r\n",
+            "[s]\r\nk = \"line one\r\nline two\" ; c\r\nz = 1\r\n",
+        ] {
             assert_eq!(LtxDoc::parse(text).to_string(), text);
         }
     }

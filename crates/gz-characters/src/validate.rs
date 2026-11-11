@@ -66,7 +66,12 @@ fn check_skeleton(models: &dyn Models, rel: &str, place: &str, problems: &mut Ve
     if have.is_empty() {
         return;
     }
-    let missing: Vec<&str> = models.damage_bones().iter().filter(|bone| !have.iter().any(|h| h.eq_ignore_ascii_case(bone))).map(String::as_str).collect();
+    let missing: Vec<&str> = models
+        .damage_bones()
+        .iter()
+        .filter(|bone| !have.iter().any(|h| h.eq_ignore_ascii_case(bone)))
+        .map(String::as_str)
+        .collect();
     if !missing.is_empty() {
         problems.push(format!(
             "E123 {place}: the model has no bone {} - an NPC's damage names them and the game stops the moment it comes online; pick a model on the stalker skeleton",
@@ -80,7 +85,10 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
     let place = if c.file.is_empty() { "character" } else { c.file.as_str() };
 
     if !valid_id(&c.id) {
-        problems.push(format!("E102 {place}: id '{}' is not usable (a-z, 0-9 and _, not starting with a digit, up to 48)", c.id));
+        problems.push(format!(
+            "E102 {place}: id '{}' is not usable (a-z, 0-9 and _, not starting with a digit, up to 48)",
+            c.id
+        ));
     }
 
     // a template is not a character: it exists to be inherited from, so it owes the player nothing
@@ -100,7 +108,9 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
         if models.exists(&rel) {
             check_skeleton(models, &rel, place, problems);
         } else {
-            problems.push(format!("W105 {place}: the linked game has no model at '{rel}' - check it is staged in the project"));
+            problems.push(format!(
+                "W105 {place}: the linked game has no model at '{rel}' - check it is staged in the project"
+            ));
         }
     }
 
@@ -123,7 +133,10 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
             problems.push(format!("W115 {place}: no portrait '{}' in the linked game or the project - the player sees an empty frame", c.icon));
         }
         if !c.start_dialog.is_empty() && !p.known(PickerType::Dialog, &c.start_dialog) {
-            problems.push(format!("W116 {place}: no dialog '{}' in the linked game or the project", c.start_dialog));
+            problems.push(format!(
+                "W116 {place}: no dialog '{}' in the linked game or the project",
+                c.start_dialog
+            ));
         }
         for s in &c.supplies {
             if !s.section.is_empty() && !p.known(PickerType::Item, &s.section) {
@@ -143,7 +156,9 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
     for lang in &langs {
         let text = text_in(&c.name, lang) + &text_in(&c.bio, lang);
         if let Some(bad) = outside_cp1251(&text) {
-            problems.push(format!("W107 {place}: '{bad}' does not exist in cp1251 and will not reach the player"));
+            problems.push(format!(
+                "W107 {place}: '{bad}' does not exist in cp1251 and will not reach the player"
+            ));
         }
     }
 
@@ -169,7 +184,13 @@ pub fn validate(c: &Character, cx: &Cx<'_>, problems: &mut Vec<String>) {
 
 // a NaN chance or markup must fail the range checks, as the C++ ones did
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn validate_trade(c: &Character, cx: &Cx<'_>, pickers: Option<&dyn Lookups>, place: &str, problems: &mut Vec<String>) {
+fn validate_trade(
+    c: &Character,
+    cx: &Cx<'_>,
+    pickers: Option<&dyn Lookups>,
+    place: &str,
+    problems: &mut Vec<String>,
+) {
     let t = &c.trade;
     for (i, r) in t.stock.iter().enumerate() {
         if r.section.is_empty() {
@@ -179,12 +200,15 @@ fn validate_trade(c: &Character, cx: &Cx<'_>, pickers: Option<&dyn Lookups>, pla
         } else if !(r.chance > 0.0 && r.chance <= 1.0) {
             problems.push(format!("E118 {place}: stock '{}' has a chance outside 0..1", r.section));
         }
-        if !r.section.is_empty() && t.stock.iter().take(i).any(|o| o.section.eq_ignore_ascii_case(&r.section)) {
+        if !r.section.is_empty() && t.stock.iter().take(i).any(|o| o.section.eq_ignore_ascii_case(&r.section))
+        {
             problems.push(format!("E118 {place}: '{}' is in the stock twice - one row per item", r.section));
         }
     }
     if !(t.markup > 0.0) {
-        problems.push(format!("E119 {place}: the markup must be above zero - it is what the trader asks of an item's cost"));
+        problems.push(format!(
+            "E119 {place}: the markup must be above zero - it is what the trader asks of an item's cost"
+        ));
     }
     if t.pays < 0.0 {
         problems.push(format!("E119 {place}: the trader cannot pay less than nothing"));
@@ -217,6 +241,7 @@ fn validate_trade(c: &Character, cx: &Cx<'_>, pickers: Option<&dyn Lookups>, pla
         }
     }
     if t.stock.is_empty() && t.sells.is_empty() {
-        problems.push(format!("W122 {place}: the trader has nothing to sell - give it a stock or a category"));
+        problems
+            .push(format!("W122 {place}: the trader has nothing to sell - give it a stock or a category"));
     }
 }

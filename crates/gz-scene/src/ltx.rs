@@ -63,7 +63,13 @@ pub fn fmt_g(v: f32) -> String {
         return "0".to_owned();
     }
     if !v.is_finite() {
-        return if v.is_nan() { "nan".to_owned() } else if v < 0.0 { "-inf".to_owned() } else { "inf".to_owned() };
+        return if v.is_nan() {
+            "nan".to_owned()
+        } else if v < 0.0 {
+            "-inf".to_owned()
+        } else {
+            "inf".to_owned()
+        };
     }
     let exp = v.abs().log10().floor() as i32;
     if !(-5..6).contains(&exp) {
@@ -138,7 +144,11 @@ impl IniWriter {
         self.w_string(section, key, &format!("{},{},{}", fmt_f(v.x), fmt_f(v.y), fmt_f(v.z)));
     }
     pub fn w_fcolor(&mut self, section: &str, key: &str, v: [f32; 4]) {
-        self.w_string(section, key, &format!("{},{},{},{}", fmt_f(v[0]), fmt_f(v[1]), fmt_f(v[2]), fmt_f(v[3])));
+        self.w_string(
+            section,
+            key,
+            &format!("{},{},{},{}", fmt_f(v[0]), fmt_f(v[1]), fmt_f(v[2]), fmt_f(v[3])),
+        );
     }
     /// `w_color`: `r,g,b,a` of `0xAARRGGBB`.
     pub fn w_color(&mut self, section: &str, key: &str, argb: u32) {
@@ -202,7 +212,8 @@ impl IniReader {
         let parsed = gz_ltx::parse_file(text, Dialect::Editor);
         let mut map = FxHashMap::default();
         map.insert("scene".to_owned(), parsed);
-        let loaded = Ltx::assemble_map("scene", &map, Dialect::Editor).map_err(|e| SceneError::load(format!("{e} ({file})")))?;
+        let loaded = Ltx::assemble_map("scene", &map, Dialect::Editor)
+            .map_err(|e| SceneError::load(format!("{e} ({file})")))?;
         Ok(Self { ltx: loaded.ltx, file: file.to_owned() })
     }
 
@@ -231,7 +242,12 @@ impl IniReader {
     pub fn lines(&self, section: &str) -> Vec<(String, String)> {
         self.ltx
             .section(&section.to_lowercase())
-            .map(|s| s.items.iter().map(|it| (it.key.to_string(), it.value.as_deref().unwrap_or("").to_owned())).collect())
+            .map(|s| {
+                s.items
+                    .iter()
+                    .map(|it| (it.key.to_string(), it.value.as_deref().unwrap_or("").to_owned()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 

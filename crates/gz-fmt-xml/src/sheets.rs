@@ -70,7 +70,12 @@ fn tag_attr(tag: &str, name: &str) -> String {
             continue;
         }
         let b = at + key.len();
-        return tag.get(b..).and_then(|r| r.find('"')).and_then(|e| tag.get(b..b + e)).unwrap_or("").to_owned();
+        return tag
+            .get(b..)
+            .and_then(|r| r.find('"'))
+            .and_then(|e| tag.get(b..b + e))
+            .unwrap_or("")
+            .to_owned();
     }
     String::new()
 }
@@ -151,7 +156,10 @@ impl TextureSheets {
                     continue;
                 }
                 let file = u32::try_from(i).unwrap_or(u32::MAX);
-                map.insert(Arc::from(e.id.to_ascii_lowercase()), TexRect { sheet: Arc::from(e.sheet), rect, file });
+                map.insert(
+                    Arc::from(e.id.to_ascii_lowercase()),
+                    TexRect { sheet: Arc::from(e.sheet), rect, file },
+                );
             }
         }
         Self { map }
@@ -195,7 +203,8 @@ mod tests {
         assert_eq!(e[0].rect_int(), [10, 20, 32, 16]);
         assert_eq!(e[1].sheet, "ui\\other");
         assert_eq!(tag_attr("<texture xid=\"q\" id=\"z\"", "id"), "z");
-        let later = "<file name=\"mod\"><texture id=\"ICON_A\" x=\"0\" y=\"0\" width=\"8\" height=\"8\"/></file>";
+        let later =
+            "<file name=\"mod\"><texture id=\"ICON_A\" x=\"0\" y=\"0\" width=\"8\" height=\"8\"/></file>";
         let s = TextureSheets::build(&[D, later]);
         assert_eq!(s.len(), 2);
         let a = s.get("icon_a").unwrap();

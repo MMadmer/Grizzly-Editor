@@ -77,7 +77,16 @@ impl WorldLookup for Lookup {
     fn transitions(&self) -> Vec<Transition> {
         self.0
             .latest()
-            .map(|g| g.transitions.iter().map(|t| Transition { name: t.name.clone(), level: t.level.clone(), to_level: t.to_level.clone() }).collect())
+            .map(|g| {
+                g.transitions
+                    .iter()
+                    .map(|t| Transition {
+                        name: t.name.clone(),
+                        level: t.level.clone(),
+                        to_level: t.to_level.clone(),
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -152,14 +161,23 @@ impl WorldService {
             return (rev, g);
         }
         if !files.exists(ALL_SPAWN) {
-            return (rev, self.game.fresh(&(), rev, || GameWorld::failed("the linked game has no spawns\\all.spawn")).await);
+            return (
+                rev,
+                self.game
+                    .fresh(&(), rev, || GameWorld::failed("the linked game has no spawns\\all.spawn"))
+                    .await,
+            );
         }
         let bytes = self.exec.io(move || files.read(ALL_SPAWN)).await;
         let Ok(bytes) = bytes else {
-            return (rev, self.game.fresh(&(), rev, || GameWorld::failed("spawns\\all.spawn could not be read")).await);
+            return (
+                rev,
+                self.game.fresh(&(), rev, || GameWorld::failed("spawns\\all.spawn could not be read")).await,
+            );
         };
         let configs = self.link.configs().await.ok();
-        let world = self.game.fresh(&(), rev, move || read_all_spawn(Arc::from(bytes), configs.as_deref())).await;
+        let world =
+            self.game.fresh(&(), rev, move || read_all_spawn(Arc::from(bytes), configs.as_deref())).await;
         (rev, world)
     }
 
@@ -198,7 +216,12 @@ impl WorldService {
     pub async fn captions(&self, editor: &Editor) -> FxHashMap<String, String> {
         let Ok(nq) = NqService::of(editor) else { return FxHashMap::default() };
         let pickers = nq.pickers(editor).await;
-        pickers.entries(PickerType::Level).iter().filter(|e| !e.name.is_empty()).map(|e| (e.id.clone(), e.name.clone())).collect()
+        pickers
+            .entries(PickerType::Level)
+            .iter()
+            .filter(|e| !e.name.is_empty())
+            .map(|e| (e.id.clone(), e.name.clone()))
+            .collect()
     }
 
     /// Every Player Start (`Starts`): the spawn layers' `op = start` entries, with the open
@@ -207,7 +230,12 @@ impl WorldService {
         let (scene_level, scene) = SceneStarts::of(editor).get(editor).unwrap_or_default();
         let tree = self.project.tree.snapshot();
         let files: Vec<RelPath> = match RelPath::new("spawn") {
-            Ok(spawn) => tree.files_under(&spawn).into_iter().map(|(rel, _)| rel).filter(|rel| rel.has_extension("xspawn")).collect(),
+            Ok(spawn) => tree
+                .files_under(&spawn)
+                .into_iter()
+                .map(|(rel, _)| rel)
+                .filter(|rel| rel.has_extension("xspawn"))
+                .collect(),
             Err(_) => Vec::new(),
         };
         let root = PathBuf::from(&self.root);
@@ -216,11 +244,17 @@ impl WorldService {
             .exec
             .io(move || {
                 exec.par_io(files, |rel| {
-                    std::fs::read(rel.to_fs(&root)).map(|b| read_starts(&gz_base::text::decode_guess(&b), rel.as_str())).unwrap_or_default()
+                    std::fs::read(rel.to_fs(&root))
+                        .map(|b| read_starts(&gz_base::text::decode_guess(&b), rel.as_str()))
+                        .unwrap_or_default()
                 })
             })
             .await;
-        let mut out: Vec<Start> = found.into_iter().flatten().filter(|s| scene_level.is_empty() || !s.level.eq_ignore_ascii_case(&scene_level)).collect();
+        let mut out: Vec<Start> = found
+            .into_iter()
+            .flatten()
+            .filter(|s| scene_level.is_empty() || !s.level.eq_ignore_ascii_case(&scene_level))
+            .collect();
         out.extend(scene);
         out
     }
@@ -240,7 +274,8 @@ impl WorldService {
             None
         };
         let known = pickers.as_ref().map(|p| move |id: &str| p.known(PickerType::Item, id));
-        let problems = validate(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
+        let problems =
+            validate(w, k, &starts, Some(&game), known.as_ref().map(|f| f as &dyn Fn(&str) -> bool));
         (starts, problems)
     }
 }

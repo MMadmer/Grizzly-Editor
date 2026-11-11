@@ -62,7 +62,11 @@ impl RelPath {
     }
 
     fn from_normal(text: String) -> Self {
-        let key = if text.chars().any(char::is_uppercase) { SmolStr::new(text.to_lowercase()) } else { SmolStr::new(&text) };
+        let key = if text.chars().any(char::is_uppercase) {
+            SmolStr::new(text.to_lowercase())
+        } else {
+            SmolStr::new(&text)
+        };
         Self { text: SmolStr::new(text), key }
     }
 

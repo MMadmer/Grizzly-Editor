@@ -112,7 +112,8 @@ mod tests {
 
     #[test]
     fn a_section_is_taken_out() {
-        let mut t = "[logic]\r\nactive = walker\r\n[XMS_Order]\r\norder = guard\r\n[walker]\r\npath = x\r\n".to_owned();
+        let mut t = "[logic]\r\nactive = walker\r\n[XMS_Order]\r\norder = guard\r\n[walker]\r\npath = x\r\n"
+            .to_owned();
         assert!(strip_ini_section(&mut t, "xms_order"));
         assert_eq!(t, "[logic]\r\nactive = walker\r\n[walker]\r\npath = x\r\n");
         assert!(!strip_ini_section(&mut t, "xms_order"));

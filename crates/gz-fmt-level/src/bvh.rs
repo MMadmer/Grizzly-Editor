@@ -189,7 +189,13 @@ fn partition(items: &mut [Prim], pred: impl Fn(&Prim) -> bool) -> usize {
 fn median_split(prims: &mut [Prim], extent: Vec3A) -> usize {
     let mid = prims.len() / 2;
     let [x, y, z] = extent.to_array();
-    let axis = if x >= y && x >= z { 0 } else if y >= z { 1 } else { 2 };
+    let axis = if x >= y && x >= z {
+        0
+    } else if y >= z {
+        1
+    } else {
+        2
+    };
     let key = move |p: &Prim| (p.min + p.max).to_array()[axis];
     if mid > 0 && mid < prims.len() {
         prims.select_nth_unstable_by(mid, |a, b| key(a).total_cmp(&key(b)));
@@ -205,7 +211,9 @@ fn split(prims: &mut [Prim], node: &Bin, lo: Vec3A, hi: Vec3A, depth: u32) -> Op
         return None;
     }
     let extent = hi - lo;
-    let flat = !(extent.max_element() > 0.0) || !extent.is_finite();
+    // a NaN extent is flat too
+    let flat =
+        extent.max_element().partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || !extent.is_finite();
     if flat || depth > SAH_DEPTH {
         // nothing to tell the triangles apart by, or a tree that grows too deep
         return (n > LEAF_MAX).then(|| median_split(prims, extent)).filter(|&m| m > 0 && m < n);
@@ -400,7 +408,9 @@ fn tri_box(center: Vec3A, half: Vec3A, tri: &[Vec3; 3]) -> bool {
         return false;
     }
     for e in edges {
-        if separated(Vec3A::new(0.0, -e.z, e.y)) || separated(Vec3A::new(e.z, 0.0, -e.x)) || separated(Vec3A::new(-e.y, e.x, 0.0))
+        if separated(Vec3A::new(0.0, -e.z, e.y))
+            || separated(Vec3A::new(e.z, 0.0, -e.x))
+            || separated(Vec3A::new(-e.y, e.x, 0.0))
         {
             return false;
         }
@@ -769,7 +779,8 @@ impl Bvh {
     /// triangle is taken unless all of its vertices are outside one plane, which keeps a few
     /// near the corners of the volume, as the engine's frustum query does.
     pub fn query_frustum(&self, planes: &[Vec4], out: &mut Vec<u32>) {
-        let planes: SmallVec<[(Vec3A, f32); 8]> = planes.iter().map(|p| (Vec3A::from(p.truncate()), p.w)).collect();
+        let planes: SmallVec<[(Vec3A, f32); 8]> =
+            planes.iter().map(|p| (Vec3A::from(p.truncate()), p.w)).collect();
         let planes = &planes;
         self.query(
             out,

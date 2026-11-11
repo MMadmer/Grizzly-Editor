@@ -157,7 +157,8 @@ impl ReleaseList {
     /// read - nothing goes to GitHub. `show_edit` asks the UI for its edit dialog, to be looked at.
     pub fn select_release(&self, id: u64, tag: &str, show_edit: bool) -> Result<(), String> {
         let view = self.view();
-        let matches: Vec<&ReleaseInfo> = view.releases.iter().filter(|r| if id != 0 { r.id == id } else { r.tag == tag }).collect();
+        let matches: Vec<&ReleaseInfo> =
+            view.releases.iter().filter(|r| if id != 0 { r.id == id } else { r.tag == tag }).collect();
         if !view.listed {
             return Err("the list is not read yet: mod_releases action=list first".to_owned());
         }
@@ -178,15 +179,22 @@ impl ReleaseList {
     }
 
     /// Starts a request: the checks, then the work on a task of its own.
-    pub async fn start(self: &Arc<Self>, editor: &Arc<Editor>, rq: ManageRequest) -> Result<(), (String, Setup)> {
-        let Ok(session) = editor.project() else { return Err(("no active project".to_owned(), Setup::NoProject)) };
+    pub async fn start(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        rq: ManageRequest,
+    ) -> Result<(), (String, Setup)> {
+        let Ok(session) = editor.project() else {
+            return Err(("no active project".to_owned(), Setup::NoProject));
+        };
         if Publisher::of(editor).running() {
             return Err(("a release is being published - wait for it to finish".to_owned(), Setup::Ok));
         }
         if self.running() {
             return Err(("the release list is busy - try again in a moment".to_owned(), Setup::Ok));
         }
-        let manifest = ManifestService::of_session(editor, &session).await.map_err(|e| (e.message, Setup::NoRepo))?;
+        let manifest =
+            ManifestService::of_session(editor, &session).await.map_err(|e| (e.message, Setup::NoRepo))?;
         manifest.sync().await.map_err(|e| (e.message, Setup::NoRepo))?;
         let Some(repo) = manifest.snapshot().manifest().map(|m| m.update_github.clone()) else {
             return Err(("mod.ltx not found in the project".to_owned(), Setup::NoRepo));
@@ -228,12 +236,23 @@ impl ReleaseList {
         }
         let tags_file = deleted_tags_file(&session.root);
         let (me, exec) = (self.clone(), editor.exec.clone());
-        editor.exec.spawn(async move { me.work(&gh, &exec, repo, account.token, rq, tags_file, cancel).await });
+        editor
+            .exec
+            .spawn(async move { me.work(&gh, &exec, repo, account.token, rq, tags_file, cancel).await });
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn work(&self, gh: &Github, exec: &Executors, repo: String, token: Secret, mut rq: ManageRequest, tags_file: PathBuf, cancel: Cancel) {
+    async fn work(
+        &self,
+        gh: &Github,
+        exec: &Executors,
+        repo: String,
+        token: Secret,
+        mut rq: ManageRequest,
+        tags_file: PathBuf,
+        cancel: Cancel,
+    ) {
         let mut error = String::new();
         let mut note = String::new();
         let mut tag_kept = false;
@@ -242,11 +261,18 @@ impl ReleaseList {
             match gh.list_releases(&repo, &token, &cancel).await {
                 Ok(releases) => {
                     // a tag names one published release, but any number of drafts may share it
-                    let matches: Vec<u64> = releases.iter().filter(|r| r.tag == rq.tag).map(|r| r.id).collect();
+                    let matches: Vec<u64> =
+                        releases.iter().filter(|r| r.tag == rq.tag).map(|r| r.id).collect();
                     match matches.as_slice() {
                         [] => error = format!("no release carries the tag {}", rq.tag),
                         [one] => rq.id = *one,
-                        many => error = format!("{} releases carry the tag {} - name one by its id", many.len(), rq.tag),
+                        many => {
+                            error = format!(
+                                "{} releases carry the tag {} - name one by its id",
+                                many.len(),
+                                rq.tag
+                            )
+                        }
                     }
                 }
                 Err(e) => error = e,
@@ -272,14 +298,21 @@ impl ReleaseList {
             }
         }
         if error.is_empty() && rq.id != 0 && rq.op == ManageOp::Edit {
-            match gh.edit_release(&repo, &token, rq.id, rq.title.as_deref(), rq.notes.as_deref(), &cancel).await {
+            match gh
+                .edit_release(&repo, &token, rq.id, rq.title.as_deref(), rq.notes.as_deref(), &cancel)
+                .await
+            {
                 Ok(tag) => note = format!("Release {tag} is updated."),
                 Err(e) => error = e,
             }
         }
         let mut error_text = String::new();
         if !error.is_empty() {
-            let what = if rq.op == ManageOp::Delete { "The release could not be deleted: " } else { "The release could not be saved: " };
+            let what = if rq.op == ManageOp::Delete {
+                "The release could not be deleted: "
+            } else {
+                "The release could not be saved: "
+            };
             error_text = format!("{what}{}.", reason(&error));
         }
 

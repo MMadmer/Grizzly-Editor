@@ -66,7 +66,11 @@ pub fn card_of(kind: &str, status: Option<BuildStatus>, from_mcp: bool) -> TaskC
             "Stop Packaging",
             "Stops the packaging. Nothing is written to the release folder before the packages are done.",
         ),
-        _ => (vec!["Check", "Copy", "Install"], "Stop Build", "Stops the build. The module in the target stays as it was."),
+        _ => (
+            vec!["Check", "Copy", "Install"],
+            "Stop Build",
+            "Stops the build. The module in the target stays as it was.",
+        ),
     };
     let mut card = TaskCard {
         key: kind.to_owned(),
@@ -114,7 +118,12 @@ impl CardPump {
     }
 
     fn tick(&self, editor: &Editor) {
-        let running: Vec<JobInfo> = editor.jobs.snapshot().into_iter().filter(|j| j.running() && matches!(j.kind.as_str(), "build" | "package")).collect();
+        let running: Vec<JobInfo> = editor
+            .jobs
+            .snapshot()
+            .into_iter()
+            .filter(|j| j.running() && matches!(j.kind.as_str(), "build" | "package"))
+            .collect();
         for job in &running {
             self.publish(editor, job);
         }
@@ -134,7 +143,16 @@ mod tests {
         assert_eq!(card.steps, ["Check", "Copy", "Install"]);
         assert_eq!(card.stop_label, "Stop Build");
         assert!(card.from_mcp);
-        let status = BuildStatus { steps: vec!["Check", "Copy"], step: 1, total: 2 << 20, done: 1 << 20, files: 1, files_total: 2, stop_label: "Stop Export", ..BuildStatus::default() };
+        let status = BuildStatus {
+            steps: vec!["Check", "Copy"],
+            step: 1,
+            total: 2 << 20,
+            done: 1 << 20,
+            files: 1,
+            files_total: 2,
+            stop_label: "Stop Export",
+            ..BuildStatus::default()
+        };
         let card = card_of("build", Some(status), false);
         assert_eq!(card.steps, ["Check", "Copy"]);
         assert_eq!(card.step, 1);

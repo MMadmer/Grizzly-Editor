@@ -4,7 +4,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use egui::{Align, Align2, Color32, CornerRadius, Key, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{
+    Align, Align2, Color32, CornerRadius, Key, Layout, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder,
+    Vec2, pos2, vec2,
+};
 use glam::{Vec2 as G2, Vec3};
 use gz_app::{Chord, DocCx};
 use gz_editor::{Editor, SmolStr, Value, json};
@@ -28,9 +31,14 @@ enum Gesture {
     Camera,
     /// A left press the tools did not capture: a drag that follows flies the camera, a Ctrl
     /// drag draws a marquee.
-    Press { start: Pos2 },
+    Press {
+        start: Pos2,
+    },
     Transform(Box<Drag>),
-    Marquee { start: Pos2, now: Pos2 },
+    Marquee {
+        start: Pos2,
+        now: Pos2,
+    },
 }
 
 /// An object a transform drag holds, as it was at the press.
@@ -107,10 +115,12 @@ impl ViewportPane {
     pub fn ui(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
-        let (rect, canvas) = ui.allocate_exact_size(ui.available_size().max(vec2(32.0, 32.0)), Sense::click_and_drag());
+        let (rect, canvas) =
+            ui.allocate_exact_size(ui.available_size().max(vec2(32.0, 32.0)), Sense::click_and_drag());
         self.rect = rect;
         let ppp = ctx.pixels_per_point();
-        let size = [(rect.width() * ppp).round().max(32.0) as u32, (rect.height() * ppp).round().max(32.0) as u32];
+        let size =
+            [(rect.width() * ppp).round().max(32.0) as u32, (rect.height() * ppp).round().max(32.0) as u32];
         let renderer = self.vp.ensure_renderer(cx.editor, cx.gpu);
         let canvas_c = Color::rgb(p.canvas.r(), p.canvas.g(), p.canvas.b());
         if self.vp.read(|s| s.size != size || s.background != canvas_c) {
@@ -125,7 +135,9 @@ impl ViewportPane {
 
         self.vp.request_build(cx.editor);
         let painter = ui.painter_at(rect);
-        let game = self.vp.read(|s| s.game.active().then(|| crate::lighting::clear_color(&s.game.at, s.game.exposure_now())));
+        let game = self.vp.read(|s| {
+            s.game.active().then(|| crate::lighting::clear_color(&s.game.at, s.game.exposure_now()))
+        });
         let bg = game.map_or(p.canvas, |c| Color32::from_rgb(c.0[0], c.0[1], c.0[2]));
         painter.rect_filled(rect, CornerRadius::ZERO, bg);
         let mut finished = None;
@@ -156,7 +168,16 @@ impl ViewportPane {
         if let Some((text_, at)) = self.vp.read(|s| s.status.clone())
             && at.elapsed().as_secs_f32() < 2.0
         {
-            text::paint(&painter, &Font::Small.id(), pos2(rect.min.x + 8.0, rect.max.y - 8.0), Align2::LEFT_BOTTOM, p.text_secondary, &text_, None, Clip::End);
+            text::paint(
+                &painter,
+                &Font::Small.id(),
+                pos2(rect.min.x + 8.0, rect.max.y - 8.0),
+                Align2::LEFT_BOTTOM,
+                p.text_secondary,
+                &text_,
+                None,
+                Clip::End,
+            );
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
         if v.stats {
@@ -197,7 +218,10 @@ impl ViewportPane {
         let mut out = crate::cmd::view_state(&self.vp);
         if let Value::Object(m) = &mut out {
             let ppp_rect = self.rect;
-            m.insert("rect".into(), json!([ppp_rect.min.x, ppp_rect.min.y, ppp_rect.width(), ppp_rect.height()]));
+            m.insert(
+                "rect".into(),
+                json!([ppp_rect.min.x, ppp_rect.min.y, ppp_rect.width(), ppp_rect.height()]),
+            );
             m.insert("frame".into(), json!(self.vp.renderer().map_or(0, |r| r.finished().frame)));
             m.insert("serial".into(), json!(self.serial));
         }
@@ -234,7 +258,15 @@ impl ViewportPane {
                 ctrl: m.ctrl || m.command,
                 alt: m.alt,
             };
-            (b, i.pointer.any_pressed(), i.pointer.any_released(), i.pointer.delta(), i.pointer.latest_pos(), wheel_steps(i), i.stable_dt)
+            (
+                b,
+                i.pointer.any_pressed(),
+                i.pointer.any_released(),
+                i.pointer.delta(),
+                i.pointer.latest_pos(),
+                wheel_steps(i),
+                i.stable_dt,
+            )
         });
         let over = canvas.hovered();
         let pos = pos.unwrap_or(rect.center());
@@ -276,9 +308,9 @@ impl ViewportPane {
                         s.nav.process(b, dx, dy, aspect)
                     });
                 }
-                if released && self.vp.with(|s| s.nav.move_end(b)) {
-                    self.gesture = Gesture::None;
-                } else if !b.any_button() && !self.vp.read(|s| s.nav.is_moving()) {
+                if (released && self.vp.with(|s| s.nav.move_end(b)))
+                    || (!b.any_button() && !self.vp.read(|s| s.nav.is_moving()))
+                {
                     self.gesture = Gesture::None;
                 }
             }
@@ -320,7 +352,20 @@ impl ViewportPane {
         // flying: WASD and QE held move the camera every frame
         let flying = self.vp.read(|s| s.nav.flying());
         if flying {
-            let down: Vec<FlyKey> = ctx.input(|i| [(Key::W, FlyKey::W), (Key::S, FlyKey::S), (Key::A, FlyKey::A), (Key::D, FlyKey::D), (Key::E, FlyKey::E), (Key::Q, FlyKey::Q)].into_iter().filter(|(k, _)| i.key_down(*k)).map(|(_, f)| f).collect());
+            let down: Vec<FlyKey> = ctx.input(|i| {
+                [
+                    (Key::W, FlyKey::W),
+                    (Key::S, FlyKey::S),
+                    (Key::A, FlyKey::A),
+                    (Key::D, FlyKey::D),
+                    (Key::E, FlyKey::E),
+                    (Key::Q, FlyKey::Q),
+                ]
+                .into_iter()
+                .filter(|(k, _)| i.key_down(*k))
+                .map(|(_, f)| f)
+                .collect()
+            });
             let moved = self.vp.with(|s| {
                 s.nav.set_keys(&down);
                 s.nav.update(dt.min(0.1))
@@ -338,7 +383,9 @@ impl ViewportPane {
     /// The gizmo's part under the ray (`Gizmo::OnFrame`), when the gizmo is up.
     fn hover_status(&self, ray: Option<&Ray>, size: [u32; 2]) -> Status {
         let Some(ray) = ray else { return Status::None };
-        let (kind, action, anchor, cam, class) = self.vp.read(|s| (s.tool.gizmo, s.tool.action, s.anchor, s.nav.camera(), scene_target(&self.editor)));
+        let (kind, action, anchor, cam, class) = self
+            .vp
+            .read(|s| (s.tool.gizmo, s.tool.action, s.anchor, s.nav.camera(), scene_target(&self.editor)));
         if action != Action::Select || kind == GizmoType::None {
             return Status::None;
         }
@@ -395,26 +442,40 @@ impl ViewportPane {
         }
         self.serial += 1;
         let turned = held.iter().map(|h| h.rotation).collect();
-        Some(Drag { kind, status: self.hover, ray0, start, held, turned, remainder: 0.0, merge: SmolStr::new(format!("viewport.gizmo.{}", self.serial)), svc })
+        Some(Drag {
+            kind,
+            status: self.hover,
+            ray0,
+            start,
+            held,
+            turned,
+            remainder: 0.0,
+            merge: SmolStr::new(format!("viewport.gizmo.{}", self.serial)),
+            svc,
+        })
     }
 
     // ---- what is drawn over the picture --------------------------------------------------------
 
     fn draw_gizmo(&self, painter: &egui::Painter, rect: Rect, size: [u32; 2], ppp: f32, p: &Palette) {
-        let (kind, action, anchor, cam) = self.vp.read(|s| (s.tool.gizmo, s.tool.action, s.anchor, s.nav.camera()));
+        let (kind, action, anchor, cam) =
+            self.vp.read(|s| (s.tool.gizmo, s.tool.action, s.anchor, s.nav.camera()));
         if action != Action::Select || kind == GizmoType::None {
             return;
         }
         let Some(anchor) = anchor else { return };
         let Some(at) = gizmo::screen_position(&cam, size, anchor.position) else { return };
         let vp_m = cam.view_proj(size);
-        let to_screen = |w: Vec3| gz_render::project(&vp_m, size, w).map(|q| pos2(rect.min.x + q.x / ppp, rect.min.y + q.y / ppp));
+        let to_screen = |w: Vec3| {
+            gz_render::project(&vp_m, size, w).map(|q| pos2(rect.min.x + q.x / ppp, rect.min.y + q.y / ppp))
+        };
         let status = match &self.gesture {
             Gesture::Transform(d) => d.status,
             _ => self.hover,
         };
         let aimap = scene_target(&self.editor) == Some(ObjClass::AiMap);
-        let axes = [(Vec3::X, p.axis_x, Status::X), (Vec3::Y, p.axis_y, Status::Y), (Vec3::Z, p.axis_z, Status::Z)];
+        let axes =
+            [(Vec3::X, p.axis_x, Status::X), (Vec3::Y, p.axis_y, Status::Y), (Vec3::Z, p.axis_z, Status::Z)];
         let hot = |s: Status, c: Color32| if status == s { p.text } else { c };
         let Some(o) = to_screen(at) else { return };
         match kind {
@@ -424,40 +485,65 @@ impl ViewportPane {
                         continue;
                     }
                     let c = hot(s, c);
-                    let (Some(shaft), Some(tip)) = (to_screen(at + axis * 0.82), to_screen(at + axis)) else { continue };
+                    let (Some(shaft), Some(tip)) = (to_screen(at + axis * 0.82), to_screen(at + axis)) else {
+                        continue;
+                    };
                     painter.line_segment([o, shaft], Stroke::new(3.0, c));
                     let dir = (tip - shaft).normalized();
                     let side = vec2(-dir.y, dir.x) * ((tip - shaft).length() * 0.35).clamp(3.0, 7.0);
-                    painter.add(egui::Shape::convex_polygon(vec![tip, shaft + side, shaft - side], c, Stroke::NONE));
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![tip, shaft + side, shaft - side],
+                        c,
+                        Stroke::NONE,
+                    ));
                 }
                 let pivot = if status == Status::Xyz { p.text } else { p.text_secondary };
-                painter.rect_filled(Rect::from_center_size(o, Vec2::splat(6.0)), CornerRadius::same(1), pivot);
+                painter.rect_filled(
+                    Rect::from_center_size(o, Vec2::splat(6.0)),
+                    CornerRadius::same(1),
+                    pivot,
+                );
             }
             GizmoType::Scale => {
                 for (axis, c, s) in axes {
                     let c = hot(s, c);
                     let Some(end) = to_screen(at + axis) else { continue };
                     painter.line_segment([o, end], Stroke::new(2.0, c));
-                    painter.rect_filled(Rect::from_center_size(end, Vec2::splat(7.0)), CornerRadius::same(1), c);
+                    painter.rect_filled(
+                        Rect::from_center_size(end, Vec2::splat(7.0)),
+                        CornerRadius::same(1),
+                        c,
+                    );
                 }
                 let centre = if status == Status::Xyz { p.text } else { p.text_secondary };
-                painter.rect_filled(Rect::from_center_size(o, Vec2::splat(9.0)), CornerRadius::same(1), centre);
+                painter.rect_filled(
+                    Rect::from_center_size(o, Vec2::splat(9.0)),
+                    CornerRadius::same(1),
+                    centre,
+                );
             }
             GizmoType::Rotate => {
                 let [x, y, z] = gizmo::rotate_axes(&anchor.rotation);
-                for (axis, c, s) in [(x, p.axis_x, Status::X), (y, p.axis_y, Status::Y), (z, p.axis_z, Status::Z)] {
+                for (axis, c, s) in
+                    [(x, p.axis_x, Status::X), (y, p.axis_y, Status::Y), (z, p.axis_z, Status::Z)]
+                {
                     if aimap && s == Status::Y {
                         continue;
                     }
                     let c = hot(s, c);
                     let u = axis.any_orthonormal_vector();
                     let w = axis.cross(u);
-                    let ring: Vec<Pos2> = (0..=48).filter_map(|i| {
-                        let t = i as f32 / 48.0 * std::f32::consts::TAU;
-                        to_screen(at + (u * t.cos() + w * t.sin()))
-                    }).collect();
+                    let ring: Vec<Pos2> = (0..=48)
+                        .filter_map(|i| {
+                            let t = i as f32 / 48.0 * std::f32::consts::TAU;
+                            to_screen(at + (u * t.cos() + w * t.sin()))
+                        })
+                        .collect();
                     if ring.len() > 2 {
-                        painter.add(egui::Shape::line(ring, Stroke::new(if status == s { 3.0 } else { 2.0 }, c)));
+                        painter.add(egui::Shape::line(
+                            ring,
+                            Stroke::new(if status == s { 3.0 } else { 2.0 }, c),
+                        ));
                     }
                 }
                 painter.circle_filled(o, 2.5, p.text_secondary);
@@ -491,7 +577,11 @@ impl ViewportPane {
         }
         let mut ends = Vec::with_capacity(6);
         // a view looks from the end it is named by: Right from +X, Top from +Y, Back from +Z
-        for (dir, pos_t, neg_t, color, label) in [(Vec3::X, Target::Right, Target::Left, p.axis_x, "X"), (Vec3::Y, Target::Top, Target::Bottom, p.axis_y, "Y"), (Vec3::Z, Target::Back, Target::Front, p.axis_z, "Z")] {
+        for (dir, pos_t, neg_t, color, label) in [
+            (Vec3::X, Target::Right, Target::Left, p.axis_x, "X"),
+            (Vec3::Y, Target::Top, Target::Bottom, p.axis_y, "Y"),
+            (Vec3::Z, Target::Back, Target::Front, p.axis_z, "Z"),
+        ] {
             let screen = vec2(dir.dot(right) * reach, -dir.dot(up) * reach);
             let depth = dir.dot(forward);
             ends.push(End { target: pos_t, pos: centre + screen, depth, color, label: Some(label) });
@@ -526,13 +616,21 @@ impl ViewportPane {
                 }
             }
             if hot == Some(i) {
-                painter.circle_stroke(e.pos, if e.label.is_some() { 8.5 } else { 6.5 }, Stroke::new(1.5, p.text));
+                painter.circle_stroke(
+                    e.pos,
+                    if e.label.is_some() { 8.5 } else { 6.5 },
+                    Stroke::new(1.5, p.text),
+                );
             }
         }
         painter.circle_filled(centre, 2.5, p.text_secondary);
         // a click on an end looks from it; anywhere else on the gizmo goes back to the free view
         let target = hot.and_then(|i| ends.get(i)).map_or(Target::Perspective, |e| e.target);
-        let tip = if target == Target::Perspective { "Perspective: back to the free view".to_owned() } else { format!("{} view", target.name()) };
+        let tip = if target == Target::Perspective {
+            "Perspective: back to the free view".to_owned()
+        } else {
+            format!("{} view", target.name())
+        };
         gz_ui::audit::control(ui.ctx(), "Axis gizmo", true, None, Some(&tip), r);
         if resp.on_hover_text(tip).clicked() {
             self.vp.with(|s| s.nav.set_target(target));
@@ -550,14 +648,28 @@ impl ViewportPane {
         // a transform the tool cannot do falls back to plain selection
         let reset = vp.read(|s| {
             s.tool.action == Action::Select
-                && ((s.tool.gizmo == GizmoType::Move && !can_move) || (s.tool.gizmo == GizmoType::Rotate && !can_rotate) || (s.tool.gizmo == GizmoType::Scale && !can_scale))
+                && ((s.tool.gizmo == GizmoType::Move && !can_move)
+                    || (s.tool.gizmo == GizmoType::Rotate && !can_rotate)
+                    || (s.tool.gizmo == GizmoType::Scale && !can_scale))
         });
         if reset {
             vp.with(|s| s.tool.gizmo = GizmoType::None);
         }
-        let (tool, settings, view_target, ortho) = vp.read(|s| (s.tool, s.settings, s.nav.current(), s.nav.ortho));
-        let bar = Rect::from_min_max(pos2(rect.min.x + 8.0, rect.min.y + 4.0), pos2((rect.max.x - 8.0).max(rect.min.x + 32.0), rect.min.y + 4.0 + ToolbarStyle::Overlay.height()));
-        let mut child = ui.new_child(UiBuilder::new().id_salt("gz-ui-viewport.pills").max_rect(bar).layout(Layout::left_to_right(Align::Center)));
+        let (tool, settings, view_target, ortho) =
+            vp.read(|s| (s.tool, s.settings, s.nav.current(), s.nav.ortho));
+        let bar = Rect::from_min_max(
+            pos2(rect.min.x + 8.0, rect.min.y + 4.0),
+            pos2(
+                (rect.max.x - 8.0).max(rect.min.x + 32.0),
+                rect.min.y + 4.0 + ToolbarStyle::Overlay.height(),
+            ),
+        );
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-viewport.pills")
+                .max_rect(bar)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
         let mut maximize = false;
         let maximized = self.maximized;
         {
@@ -566,47 +678,147 @@ impl ViewportPane {
             tb.menu("options", Icon::ViewOptions, "", "View options", Some("viewport:options"), true, |ui| {
                 menus::options_body(ui, &ed);
                 ui.separator();
-                if gz_ui::menu_item(ui, "Maximize Viewport", gz_ui::MenuItem { keys: "F11", selected: maximized, ..gz_ui::MenuItem::default() }) {
+                if gz_ui::menu_item(
+                    ui,
+                    "Maximize Viewport",
+                    gz_ui::MenuItem { keys: "F11", selected: maximized, ..gz_ui::MenuItem::default() },
+                ) {
                     maximize = true;
                 }
             });
-            let icon = if view_target == Target::Perspective && !ortho { Icon::Perspective } else { Icon::Ortho };
-            tb.menu("perspective", icon, view_target.name(), "Camera view, Frame All and Frame Selection", Some("viewport:perspective"), true, |ui| menus::perspective_body(ui, &ed));
-            tb.menu("show", Icon::Eye, "Show", "What the viewport draws over the scene", Some("viewport:show"), true, |ui| menus::show_body(ui, &ed));
+            let icon =
+                if view_target == Target::Perspective && !ortho { Icon::Perspective } else { Icon::Ortho };
+            tb.menu(
+                "perspective",
+                icon,
+                view_target.name(),
+                "Camera view, Frame All and Frame Selection",
+                Some("viewport:perspective"),
+                true,
+                |ui| menus::perspective_body(ui, &ed),
+            );
+            tb.menu(
+                "show",
+                Icon::Eye,
+                "Show",
+                "What the viewport draws over the scene",
+                Some("viewport:show"),
+                true,
+                |ui| menus::show_body(ui, &ed),
+            );
             tb.spring();
 
             tb.group(2);
             let title = tool_title(target);
-            if tb.action("tool_select", Icon::Select, "", "Select", true, tool.action == Action::Select && tool.gizmo == GizmoType::None, Kind::Ghost) {
+            if tb.action(
+                "tool_select",
+                Icon::Select,
+                "",
+                "Select",
+                true,
+                tool.action == Action::Select && tool.gizmo == GizmoType::None,
+                Kind::Ghost,
+            ) {
                 keys::run(&ed, keys::Act::Gizmo(GizmoType::None));
             }
-            if tb.action("tool_place", Icon::Place, "", "Place: a click in the viewport adds what the Tools panel has picked", true, tool.action == Action::Place, Kind::Ghost) {
+            if tb.action(
+                "tool_place",
+                Icon::Place,
+                "",
+                "Place: a click in the viewport adds what the Tools panel has picked",
+                true,
+                tool.action == Action::Place,
+                Kind::Ghost,
+            ) {
                 vp.with(|s| {
                     s.tool.action = Action::Place;
                     s.tool.gizmo = GizmoType::None;
                 });
             }
             for (id, icon, tip, cannot, kind, on) in [
-                ("tool_move", Icon::Move, "Move the selection", "cannot move objects", GizmoType::Move, can_move),
-                ("tool_rotate", Icon::Rotate, "Rotate the selection", "cannot rotate objects", GizmoType::Rotate, can_rotate),
-                ("tool_scale", Icon::Scale, "Scale the selection", "cannot scale objects", GizmoType::Scale, can_scale),
+                (
+                    "tool_move",
+                    Icon::Move,
+                    "Move the selection",
+                    "cannot move objects",
+                    GizmoType::Move,
+                    can_move,
+                ),
+                (
+                    "tool_rotate",
+                    Icon::Rotate,
+                    "Rotate the selection",
+                    "cannot rotate objects",
+                    GizmoType::Rotate,
+                    can_rotate,
+                ),
+                (
+                    "tool_scale",
+                    Icon::Scale,
+                    "Scale the selection",
+                    "cannot scale objects",
+                    GizmoType::Scale,
+                    can_scale,
+                ),
             ] {
                 let tip = if on { tip.to_owned() } else { format!("The {title} tool {cannot}") };
-                if tb.action(id, icon, "", &tip, on, tool.action == Action::Select && tool.gizmo == kind, Kind::Ghost) {
+                if tb.action(
+                    id,
+                    icon,
+                    "",
+                    &tip,
+                    on,
+                    tool.action == Action::Select && tool.gizmo == kind,
+                    Kind::Ghost,
+                ) {
                     keys::run(&ed, keys::Act::Gizmo(kind));
                 }
             }
 
             tb.group(1);
-            if tb.action("osnap", Icon::SnapObject, "", "Object Snap: placed and moved objects land on other objects", true, settings.object_snap, Kind::Ghost) {
+            if tb.action(
+                "osnap",
+                Icon::SnapObject,
+                "",
+                "Object Snap: placed and moved objects land on other objects",
+                true,
+                settings.object_snap,
+                Kind::Ghost,
+            ) {
                 vp.with(|s| s.settings.object_snap = !s.settings.object_snap);
             }
-            tb.menu("snap", Icon::None, "", "Snap options", Some("viewport:snap"), true, |ui| menus::snap_body(ui, &ed));
+            tb.menu("snap", Icon::None, "", "Snap options", Some("viewport:snap"), true, |ui| {
+                menus::snap_body(ui, &ed)
+            });
 
             for (kind, icon, toggle, name, tip, menu, request) in [
-                (GizmoType::Move, Icon::SnapGrid, "grid_snap", "Grid", "Grid Snap: movement goes in steps", "grid", "viewport:grid"),
-                (GizmoType::Scale, Icon::SnapScale, "scale_snap", "Scale", "Scale Snap: scaling goes in steps", "scale", "viewport:scale"),
-                (GizmoType::Rotate, Icon::SnapAngle, "angle_snap", "Angle", "Angle Snap: rotation goes in steps", "angle", "viewport:angle"),
+                (
+                    GizmoType::Move,
+                    Icon::SnapGrid,
+                    "grid_snap",
+                    "Grid",
+                    "Grid Snap: movement goes in steps",
+                    "grid",
+                    "viewport:grid",
+                ),
+                (
+                    GizmoType::Scale,
+                    Icon::SnapScale,
+                    "scale_snap",
+                    "Scale",
+                    "Scale Snap: scaling goes in steps",
+                    "scale",
+                    "viewport:scale",
+                ),
+                (
+                    GizmoType::Rotate,
+                    Icon::SnapAngle,
+                    "angle_snap",
+                    "Angle",
+                    "Angle Snap: rotation goes in steps",
+                    "angle",
+                    "viewport:angle",
+                ),
             ] {
                 tb.group(0);
                 let (on, step) = vp.read(|s| (s.snap_on(kind), s.step(kind)));
@@ -618,7 +830,9 @@ impl ViewportPane {
                     });
                 }
                 let value = menus::step_label(kind, step);
-                tb.menu(menu, Icon::None, &value, &format!("{name} step"), Some(request), true, |ui| menus::step_body(ui, &ed, kind));
+                tb.menu(menu, Icon::None, &value, &format!("{name} step"), Some(request), true, |ui| {
+                    menus::step_body(ui, &ed, kind)
+                });
             }
         }
         if maximize {
@@ -629,7 +843,10 @@ impl ViewportPane {
 
 /// The class the tools work on now (`LTools->CurrentClassID()`).
 fn scene_target(editor: &Editor) -> Option<ObjClass> {
-    editor.project_opt().and_then(|s| s.services.get::<SceneService>()).map(|svc| svc.store.snapshot().tools.target)
+    editor
+        .project_opt()
+        .and_then(|s| s.services.get::<SceneService>())
+        .map(|svc| svc.store.snapshot().tools.target)
 }
 
 /// The Tools panel's title of a class (`kToolClasses`).
@@ -720,10 +937,16 @@ fn draw_safe_rect(painter: &egui::Painter, rect: Rect, p: &Palette) {
 
 /// Show > Stats: what the last pass drew, as a Mono pill under the left pills; as many lines as
 /// the view has room for, and none on a view too narrow for them.
-fn local_stats_pill(painter: &egui::Painter, rect: Rect, vp: &Viewport, info: Option<&gz_render::FrameInfo>, p: &Palette) {
+fn local_stats_pill(
+    painter: &egui::Painter,
+    rect: Rect,
+    vp: &Viewport,
+    info: Option<&gz_render::FrameInfo>,
+    p: &Palette,
+) {
     let rates = vp.rates.lock().clone();
     let stats = info.map(|i| i.stats).unwrap_or_default();
-    let game = vp.read(|s| s.game.active().then(|| (s.game.drawn.len(), s.game.in_view)));
+    let game = vp.read(|s| s.game.active().then_some((s.game.drawn.len(), s.game.in_view)));
     let (lights, of) = game.unwrap_or((stats.lights, stats.lights_in_view));
     let lines = [
         format!("FPS         {:.0}", rates.ui_fps),
@@ -745,7 +968,13 @@ fn local_stats_pill(painter: &egui::Painter, rect: Rect, vp: &Viewport, info: Op
     let bg = Rect::from_min_size(at, vec2(w + pad * 2.0, n as f32 * line + pad * 1.5));
     painter.rect_filled(bg, CornerRadius::same(6), p.overlay.gamma_multiply(0.92));
     for (i, l) in lines.iter().take(n).enumerate() {
-        painter.text(pos2(at.x + pad, at.y + pad * 0.75 + i as f32 * line), Align2::LEFT_TOP, l, font.clone(), p.text_secondary);
+        painter.text(
+            pos2(at.x + pad, at.y + pad * 0.75 + i as f32 * line),
+            Align2::LEFT_TOP,
+            l,
+            font.clone(),
+            p.text_secondary,
+        );
     }
 }
 
@@ -754,7 +983,10 @@ fn local_stats_pill(painter: &egui::Painter, rect: Rect, vp: &Viewport, info: Op
 /// The pick the C++ selection makes (`RaySelect`): visible objects of a visible tool, of the
 /// current class or of any class; an object inside a group that is not editable picks the group.
 fn accept(o: &Object, state: &gz_scene::SceneState, filter: Option<ObjClass>) -> bool {
-    o.flags.visible && state.tools.part(o.class).visible && filter.is_none_or(|c| c == o.class) && (o.owner.is_none() || o.editable())
+    o.flags.visible
+        && state.tools.part(o.class).visible
+        && filter.is_none_or(|c| c == o.class)
+        && (o.owner.is_none() || o.editable())
 }
 
 /// A click of the selection tool (`SelectStart`): Ctrl adds to what is selected, toggling the
@@ -768,13 +1000,24 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
     let origin = ed.ui_origin();
     editor.exec.spawn(async move {
         if !b.ctrl {
-            let _ = svc.store.send(SceneCmd::SelectClass { class: if any { None } else { Some(target) }, select: false }, origin).await;
+            let _ = svc
+                .store
+                .send(
+                    SceneCmd::SelectClass { class: if any { None } else { Some(target) }, select: false },
+                    origin,
+                )
+                .await;
         }
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
         let filter = if any { None } else { Some(target) };
         let s = snap.clone();
-        let hit = ed.exec.cpu(move || pick.ray_pick(&s, &lib, ray.origin, ray.dir, far, &|o: &Object| accept(o, &s, filter))).await;
+        let hit = ed
+            .exec
+            .cpu(move || {
+                pick.ray_pick(&s, &lib, ray.origin, ray.dir, far, &|o: &Object| accept(o, &s, filter))
+            })
+            .await;
         let Some(hit) = hit else { return };
         let Some(obj) = snap.get(hit.id) else { return };
         let id = match obj.owner {
@@ -782,7 +1025,16 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
             _ => obj.id,
         };
         let class = snap.get(id).map_or(obj.class, |o| o.class);
-        let _ = svc.store.send(SceneCmd::Select { ids: vec![id], mode: if b.ctrl { SelectMode::Toggle } else { SelectMode::Add } }, origin).await;
+        let _ = svc
+            .store
+            .send(
+                SceneCmd::Select {
+                    ids: vec![id],
+                    mode: if b.ctrl { SelectMode::Toggle } else { SelectMode::Add },
+                },
+                origin,
+            )
+            .await;
         if any && class != target {
             let _ = svc.store.send(SceneCmd::SetTarget(class), origin).await;
         }
@@ -799,7 +1051,8 @@ fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G
         let snap = svc.store.snapshot();
         let lib = svc.library.clone();
         let class = snap.tools.target;
-        let ids = ed.exec.cpu(move || crate::draw::frustum_select(&snap, &lib, &cam, size, a, b, class)).await;
+        let ids =
+            ed.exec.cpu(move || crate::draw::frustum_select(&snap, &lib, &cam, size, a, b, class)).await;
         if !ids.is_empty() {
             let _ = svc.store.send(SceneCmd::Select { ids, mode: SelectMode::Add }, ed.ui_origin()).await;
         }
@@ -821,19 +1074,27 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
     let mut items = Vec::with_capacity(d.held.len());
     let label = match d.kind {
         GizmoType::Move => {
-            let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray) else { return };
+            let Some((delta, vector)) = gizmo::move_delta(d.status, d.start, cam.forward, &d.ray0, ray)
+            else {
+                return;
+            };
             for h in &d.held {
                 items.push((h.id, TransformEdit::Position(gizmo::moved(h.position, delta, vector, grid))));
             }
             "Move"
         }
         GizmoType::Scale => {
-            let Some((delta, vector)) = gizmo::scale_delta(d.status, d.start, &cam, &d.ray0, ray) else { return };
+            let Some((delta, vector)) = gizmo::scale_delta(d.status, d.start, &cam, &d.ray0, ray) else {
+                return;
+            };
             for h in &d.held {
                 if h.dynamic {
                     continue;
                 }
-                items.push((h.id, TransformEdit::Scale(gizmo::scaled(h.scale, delta, vector, d.status, h.glow, scale_step))));
+                items.push((
+                    h.id,
+                    TransformEdit::Scale(gizmo::scaled(h.scale, delta, vector, d.status, h.glow, scale_step)),
+                ));
             }
             "Scale"
         }
@@ -854,13 +1115,23 @@ fn apply_drag(vp: &Viewport, d: &mut Drag, ray: &Ray, dx: f32, dy: f32, editor: 
     if items.is_empty() {
         return;
     }
-    d.svc.store.post(SceneCmd::Transform { items, members: true, label: label.into(), merge: Some(d.merge.clone()) }, editor.ui_origin());
+    d.svc.store.post(
+        SceneCmd::Transform { items, members: true, label: label.into(), merge: Some(d.merge.clone()) },
+        editor.ui_origin(),
+    );
 }
 
 /// Where a placed object lands (`PickGround`): with Object Snap on the surface of a scene
 /// object or a spawn point (the snap list's objects only when it is used), otherwise the grid's
 /// plane, on the grid's steps when the grid snap is on. The surface's normal comes with it.
-async fn pick_ground(editor: &Arc<Editor>, svc: &Arc<SceneService>, ray: Ray, object_snap: bool, grid: Option<f32>, far: f32) -> Option<(Vec3, Vec3)> {
+async fn pick_ground(
+    editor: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    ray: Ray,
+    object_snap: bool,
+    grid: Option<f32>,
+    far: f32,
+) -> Option<(Vec3, Vec3)> {
     if object_snap {
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
@@ -869,7 +1140,9 @@ async fn pick_ground(editor: &Arc<Editor>, svc: &Arc<SceneService>, ray: Ray, ob
             .cpu(move || {
                 let only: Option<Vec<ObjId>> = snap.tools.snap_use.then(|| snap.tools.snap.clone());
                 pick.ray_pick(&snap, &lib, ray.origin, ray.dir, far, &|o: &Object| {
-                    matches!(o.class, ObjClass::SceneObject | ObjClass::SpawnPoint) && o.flags.visible && only.as_ref().is_none_or(|l| l.contains(&o.id))
+                    matches!(o.class, ObjClass::SceneObject | ObjClass::SpawnPoint)
+                        && o.flags.visible
+                        && only.as_ref().is_none_or(|l| l.contains(&o.id))
                 })
             })
             .await;
@@ -893,7 +1166,14 @@ async fn pick_ground(editor: &Arc<Editor>, svc: &Arc<SceneService>, ray: Ray, ob
 /// at the ground hit, stood on the surface with Align to Surface Normal; Alt keeps placing.
 fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let Ok(svc) = SceneService::of(editor) else { return };
-    let (object_snap, normal_align, grid, far) = vp.read(|s| (s.settings.object_snap, s.settings.normal_align, s.snap_on(GizmoType::Move).then_some(s.step(GizmoType::Move)), s.nav.far));
+    let (object_snap, normal_align, grid, far) = vp.read(|s| {
+        (
+            s.settings.object_snap,
+            s.settings.normal_align,
+            s.snap_on(GizmoType::Move).then_some(s.step(GizmoType::Move)),
+            s.nav.far,
+        )
+    });
     let class = svc.store.snapshot().tools.target;
     let item = vp.read(|s| s.place.get(&class).cloned());
     let ed = editor.clone();
@@ -916,13 +1196,31 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                 }
                 let reply = ed.call("place_spawn", args, origin).await;
                 if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-                    ed.log.error(reply.get("error").and_then(Value::as_str).unwrap_or("the spawn point could not be placed").to_owned());
+                    ed.log.error(
+                        reply
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("the spawn point could not be placed")
+                            .to_owned(),
+                    );
                     return;
                 }
-                let name = reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
+                let name =
+                    reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
                 let id = svc.store.snapshot().find(ObjClass::SpawnPoint, name).map(|o| o.id);
                 if let (Some(id), Some(_)) = (id, up) {
-                    let _ = svc.store.send(SceneCmd::Transform { items: vec![(id, TransformEdit::MoveTo { position: at, up })], members: true, label: "Move".into(), merge: None }, origin).await;
+                    let _ = svc
+                        .store
+                        .send(
+                            SceneCmd::Transform {
+                                items: vec![(id, TransformEdit::MoveTo { position: at, up })],
+                                members: true,
+                                label: "Move".into(),
+                                merge: None,
+                            },
+                            origin,
+                        )
+                        .await;
                 }
                 id
             }
@@ -940,13 +1238,22 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                     }
                     ObjData::SceneObject(SceneObjectData::library(&reference))
                 } else {
-                    ObjData::Particles(ParticlesData { reference: reference.clone(), ..ParticlesData::default() })
+                    ObjData::Particles(ParticlesData {
+                        reference: reference.clone(),
+                        ..ParticlesData::default()
+                    })
                 };
                 let mut o = Object::new(class, &snap.gen_name(Some(&reference)), data);
                 stand(&mut o, at, up);
                 send_place(&svc, o, origin).await
             }
-            ObjClass::Light | ObjClass::Glow | ObjClass::SoundSrc | ObjClass::SoundEnv | ObjClass::Shape | ObjClass::FogVolume | ObjClass::Way => {
+            ObjClass::Light
+            | ObjClass::Glow
+            | ObjClass::SoundSrc
+            | ObjClass::SoundEnv
+            | ObjClass::Shape
+            | ObjClass::FogVolume
+            | ObjClass::Way => {
                 let data = match class {
                     ObjClass::Way => ObjData::Way(WayData::build(&[at], false)),
                     ObjClass::Shape => ObjData::Shape(ShapeData::unit_box()),

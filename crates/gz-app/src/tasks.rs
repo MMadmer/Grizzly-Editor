@@ -123,7 +123,9 @@ mod tests {
 
     #[test]
     fn a_card_reads_from_partial_json() {
-        let card: TaskCard = serde_json::from_value(serde_json::json!({ "steps": ["Check", "Copy"], "step": 1 })).unwrap_or_default();
+        let card: TaskCard =
+            serde_json::from_value(serde_json::json!({ "steps": ["Check", "Copy"], "step": 1 }))
+                .unwrap_or_default();
         assert_eq!(card.steps.len(), 2);
         assert_eq!(card.step, 1);
         assert!(!card.from_mcp);

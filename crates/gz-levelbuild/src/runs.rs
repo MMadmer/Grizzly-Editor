@@ -82,12 +82,22 @@ pub enum Ended {
 
 /// Ends a process and every process it started (`taskkill /T /F`).
 fn kill_tree(pid: u32) {
-    let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = std::process::Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// Runs `exe` in `cwd` until it ends or `cancel` asks to stop. Every line it prints goes to
 /// `on_line`. A program that does not start is a sentence for the author.
-pub async fn run(exe: &Path, args: &[String], cwd: &Path, cancel: &Cancel, on_line: impl Fn(&str) + Send + Sync) -> Result<Ended, String> {
+pub async fn run(
+    exe: &Path,
+    args: &[String],
+    cwd: &Path,
+    cancel: &Cancel,
+    on_line: impl Fn(&str) + Send + Sync,
+) -> Result<Ended, String> {
     let mut child = Command::new(exe)
         .args(args)
         .current_dir(cwd)

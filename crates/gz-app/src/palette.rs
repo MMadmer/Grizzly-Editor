@@ -73,7 +73,9 @@ pub fn score_in(token: &str, hay: &str, letters: bool) -> i32 {
         if at > 0 && h.get(at - 1).copied().is_some_and(is_break) {
             let mut word = 0;
             for i in 0..at {
-                if h.get(i).copied().is_some_and(is_break) && h.get(i + 1).copied().is_some_and(|c| !is_break(c)) {
+                if h.get(i).copied().is_some_and(is_break)
+                    && h.get(i + 1).copied().is_some_and(|c| !is_break(c))
+                {
                     word += 1;
                 }
             }
@@ -126,7 +128,9 @@ pub fn score_row(label: &str, path: &str, shortcut: &str, tokens: &[String]) -> 
     let (label, path, shortcut) = (label.to_lowercase(), path.to_lowercase(), shortcut.to_lowercase());
     let mut total = 0;
     for token in tokens {
-        let best = score_in(token, &label, true).min(score_in(token, &path, false).saturating_add(12)).min(score_in(token, &shortcut, false).saturating_add(30));
+        let best = score_in(token, &label, true)
+            .min(score_in(token, &path, false).saturating_add(12))
+            .min(score_in(token, &shortcut, false).saturating_add(30));
         if best >= NO_MATCH {
             return NO_MATCH;
         }
@@ -156,7 +160,11 @@ pub fn rank(mut rows: Vec<PaletteRow>, query: &str, limit: usize) -> Vec<Palette
     let tokens = tokenize(query);
     let ranked = !tokens.is_empty();
     for row in &mut rows {
-        row.score = if ranked { score_row(&row.label, &row.path, &row.shortcut, &tokens) } else { kind_rank(row.kind) };
+        row.score = if ranked {
+            score_row(&row.label, &row.path, &row.shortcut, &tokens)
+        } else {
+            kind_rank(row.kind)
+        };
     }
     rows.retain(|r| r.score < NO_MATCH);
     rows.sort_by(|a, b| {

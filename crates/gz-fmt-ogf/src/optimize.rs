@@ -138,7 +138,11 @@ struct Cache {
 impl Cache {
     fn new(vertices: usize) -> Self {
         let state = |len: usize| CacheState { misses: 0, fifo: vec![UNUSED; len], write: 0 };
-        Self { refcount: vec![[0; 2]; vertices], history: Vec::new(), states: [state(CACHE_TYPES[0].0), state(CACHE_TYPES[1].0)] }
+        Self {
+            refcount: vec![[0; 2]; vertices],
+            history: Vec::new(),
+            states: [state(CACHE_TYPES[0].0), state(CACHE_TYPES[1].0)],
+        }
     }
 
     fn rc(&self, v: u16, t: usize) -> u8 {
@@ -316,7 +320,7 @@ impl Optimizer {
     }
 
     /// `FindBestScoreLookahead`.
-    fn lookahead_score(&mut self, countdown: i32, current: f32, input_best: f32, num_tris: i32, out: usize) -> f32 {
+    fn lookahead_score(&mut self, countdown: i32, current: f32, input_best: f32, out: usize) -> f32 {
         let la = countdown.min(self.lookahead);
         let mut best = input_best;
         let average = (best - current) / la as f32;
@@ -378,7 +382,7 @@ impl Optimizer {
             self.cache.add(self.tris[cur].index, false);
             self.tris[cur].used = true;
             if la > 1 {
-                score = self.lookahead_score(la - 1, score, best, num_tris - 1, out + 3);
+                score = self.lookahead_score(la - 1, score, best, out + 3);
             }
             if score < best {
                 best = score;
@@ -401,7 +405,7 @@ impl Optimizer {
             self.tris[b].used = true;
             let valence = self.use_tri(b);
             score += valence + current;
-            new_best = self.lookahead_score(countdown - 1, score, 1e10, num_tris - 1, out + 3);
+            new_best = self.lookahead_score(countdown - 1, score, 1e10, out + 3);
             self.cache.remove();
             self.tris[b].used = false;
             self.unuse_tri(b);
@@ -433,14 +437,14 @@ impl Optimizer {
 
             let mut no_mad = false;
             let mut prev = [UNUSED; 3];
-            if countdown == la {
-                if let Some(p) = self.cache.last() {
-                    prev = p;
-                    no_mad = true;
-                    if self.allow_neighbours(prev, None) < 1 {
-                        no_mad = false;
-                        self.clear_allowed(prev, true);
-                    }
+            if countdown == la
+                && let Some(p) = self.cache.last()
+            {
+                prev = p;
+                no_mad = true;
+                if self.allow_neighbours(prev, None) < 1 {
+                    no_mad = false;
+                    self.clear_allowed(prev, true);
                 }
             }
 
@@ -490,7 +494,7 @@ impl Optimizer {
                 self.cache.add(self.tris[t].index, false);
                 self.tris[t].used = true;
                 if la > 1 {
-                    score = self.lookahead_score(la - 1, score, best, num_tris - 1, out + 3);
+                    score = self.lookahead_score(la - 1, score, best, out + 3);
                 }
                 if score < best {
                     best = score;
@@ -540,7 +544,7 @@ fn optimise_tri_list(indices: &mut [u16]) {
     let mut valence = vec![0i32; biggest + 1];
     let mut tris_of = vec![Vec::new(); biggest + 1];
     let mut tris = Vec::with_capacity(n);
-    for (i, f) in indices.chunks_exact(3).enumerate() {
+    for (i, f) in indices.as_chunks::<3>().0.iter().enumerate() {
         for &v in f {
             valence[usize::from(v)] += 1;
             tris_of[usize::from(v)].push(i);
@@ -572,10 +576,12 @@ pub fn optimize_faces(indices: &[u16]) -> Vec<u32> {
     optimise_tri_list(&mut tmp);
     let key = |f: &[u16]| (u64::from(f[0]) << 32) | (u64::from(f[1]) << 16) | u64::from(f[2]);
     let mut lookup: HashMap<u64, VecDeque<u32>> = HashMap::new();
-    for (i, f) in indices.chunks_exact(3).enumerate() {
+    for (i, f) in indices.as_chunks::<3>().0.iter().enumerate() {
         lookup.entry(key(f)).or_default().push_back(i as u32);
     }
-    tmp.chunks_exact(3)
+    tmp.as_chunks::<3>()
+        .0
+        .iter()
         .enumerate()
         .map(|(i, f)| lookup.get_mut(&key(f)).and_then(VecDeque::pop_front).unwrap_or(i as u32))
         .collect()
@@ -588,11 +594,11 @@ pub fn optimize_vertices(indices: &[u16], num_vertices: usize) -> Vec<u32> {
     let mut remap = vec![u32::MAX; num_vertices];
     let mut next = 0u32;
     for &i in indices {
-        if let Some(slot) = remap.get_mut(usize::from(i)) {
-            if *slot == u32::MAX {
-                *slot = next;
-                next += 1;
-            }
+        if let Some(slot) = remap.get_mut(usize::from(i))
+            && *slot == u32::MAX
+        {
+            *slot = next;
+            next += 1;
         }
     }
     for slot in &mut remap {

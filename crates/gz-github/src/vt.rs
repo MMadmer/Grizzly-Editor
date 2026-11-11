@@ -49,17 +49,45 @@ impl Default for VtPolicy {
     /// The catalog's template settings: used until the index is read.
     fn default() -> Self {
         const ENGINES: [&str; 21] = [
-            "microsoft", "kaspersky", "eset-nod32", "bitdefender", "avast", "avg", "sophos", "symantec", "malwarebytes", "trendmicro",
-            "mcafee", "f-secure", "drweb", "emsisoft", "gdata", "panda", "avira", "fortinet", "crowdstrike", "sentinelone", "paloalto",
+            "microsoft",
+            "kaspersky",
+            "eset-nod32",
+            "bitdefender",
+            "avast",
+            "avg",
+            "sophos",
+            "symantec",
+            "malwarebytes",
+            "trendmicro",
+            "mcafee",
+            "f-secure",
+            "drweb",
+            "emsisoft",
+            "gdata",
+            "panda",
+            "avira",
+            "fortinet",
+            "crowdstrike",
+            "sentinelone",
+            "paloalto",
         ];
-        Self { trusted: ENGINES.iter().map(|e| (*e).to_owned()).collect(), block_trusted: 1, warn_trusted: 1, block_others: 5, warn_others: 2 }
+        Self {
+            trusted: ENGINES.iter().map(|e| (*e).to_owned()).collect(),
+            block_trusted: 1,
+            warn_trusted: 1,
+            block_others: 5,
+            warn_others: 2,
+        }
     }
 }
 
 /// `strtoul`: the leading digits, 0 without any.
 fn number(v: &str) -> u32 {
     let digits = v.trim_start().bytes().take_while(u8::is_ascii_digit).count();
-    v.trim_start().get(..digits).and_then(|d| d.parse::<u64>().ok()).map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
+    v.trim_start()
+        .get(..digits)
+        .and_then(|d| d.parse::<u64>().ok())
+        .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
 }
 
 impl VtPolicy {
@@ -68,7 +96,11 @@ impl VtPolicy {
     pub fn read(index: &str) -> Self {
         let mut out = Self::default();
         if let Some(value) = ini::value(index, "virustotal", "trusted") {
-            out.trusted = value.split(',').map(|e| e.trim_matches(' ').to_ascii_lowercase()).filter(|e| !e.is_empty()).collect();
+            out.trusted = value
+                .split(',')
+                .map(|e| e.trim_matches(' ').to_ascii_lowercase())
+                .filter(|e| !e.is_empty())
+                .collect();
         }
         for (key, field) in [
             ("block_trusted", &mut out.block_trusted),
@@ -107,7 +139,8 @@ pub struct VtVerdict {
 /// The verdict of a report under a policy (`VtVerdict`).
 #[must_use]
 pub fn verdict(results: &[VtEngine], policy: &VtPolicy) -> VtVerdict {
-    let mut v = VtVerdict { engines: u32::try_from(results.len()).unwrap_or(u32::MAX), ..VtVerdict::default() };
+    let mut v =
+        VtVerdict { engines: u32::try_from(results.len()).unwrap_or(u32::MAX), ..VtVerdict::default() };
     for r in results {
         let engine = r.engine.to_ascii_lowercase();
         let trusted = policy.trusted.contains(&engine);
@@ -155,7 +188,10 @@ pub(crate) fn read_report(status: u16, body: &Value) -> Option<VtReport> {
         .and_then(Value::as_object)
         .map(|m| {
             m.iter()
-                .map(|(engine, r)| VtEngine { engine: engine.clone(), category: crate::json::str_of(r, "category").to_owned() })
+                .map(|(engine, r)| VtEngine {
+                    engine: engine.clone(),
+                    category: crate::json::str_of(r, "category").to_owned(),
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -174,8 +210,15 @@ pub(crate) fn problem(r: &Response) -> String {
     if r.status == 429 {
         return "VirusTotal's free API takes 4 requests a minute and 500 a day - try again later".to_owned();
     }
-    let text = r.json().and_then(|j| j.get("error").map(|e| crate::json::str_of(e, "message").to_owned())).unwrap_or_default();
-    if text.is_empty() { format!("VirusTotal answered {}", r.status) } else { format!("VirusTotal answered {}: {text}", r.status) }
+    let text = r
+        .json()
+        .and_then(|j| j.get("error").map(|e| crate::json::str_of(e, "message").to_owned()))
+        .unwrap_or_default();
+    if text.is_empty() {
+        format!("VirusTotal answered {}", r.status)
+    } else {
+        format!("VirusTotal answered {}: {text}", r.status)
+    }
 }
 
 /// The free API takes 4 requests a minute, and two jobs - a submission and a release - may ask at
@@ -205,7 +248,9 @@ pub struct VtWaits {
 impl VtWaits {
     #[must_use]
     pub fn from_env(qa: bool, env: &dyn Fn(&str) -> Option<String>) -> Self {
-        let qa_number = |name: &str| if qa { env(name).filter(|v| !v.is_empty()).map(|v| u64::from(number(&v))) } else { None };
+        let qa_number = |name: &str| {
+            if qa { env(name).filter(|v| !v.is_empty()).map(|v| u64::from(number(&v))) } else { None }
+        };
         let ms = |name: &str, fallback: u64| Duration::from_millis(qa_number(name).unwrap_or(fallback));
         Self {
             pace: ms("GRIZZLY_VT_PACE_MS", 16_000),
@@ -267,10 +312,16 @@ mod tests {
             _ => None,
         };
         let qa = VtWaits::from_env(true, &env);
-        assert_eq!((qa.pace, qa.scan_wait, qa.rate_wait), (gap, Duration::from_secs(4), Duration::from_millis(200)));
+        assert_eq!(
+            (qa.pace, qa.scan_wait, qa.rate_wait),
+            (gap, Duration::from_secs(4), Duration::from_millis(200))
+        );
         // outside a QA run the variables change nothing
         let real = VtWaits::from_env(false, &env);
-        assert_eq!((real.pace, real.scan_wait, real.direct_limit), (Duration::from_secs(16), Duration::from_secs(600), 32 << 20));
+        assert_eq!(
+            (real.pace, real.scan_wait, real.direct_limit),
+            (Duration::from_secs(16), Duration::from_secs(600), 32 << 20)
+        );
     }
 
     #[test]

@@ -36,7 +36,10 @@ pub struct KeyFile {
 
 impl std::fmt::Debug for KeyFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KeyFile").field("public", &self.public_text).field("protected", &self.protected).finish_non_exhaustive()
+        f.debug_struct("KeyFile")
+            .field("public", &self.public_text)
+            .field("protected", &self.protected)
+            .finish_non_exhaustive()
     }
 }
 
@@ -68,7 +71,15 @@ pub fn parse(text: &str) -> Result<KeyFile, String> {
     if private_raw.len() != 32 {
         return Err("the key file holds no private key".to_owned());
     }
-    let mut file = KeyFile { public_text, private_raw, protected: false, rounds: 0, salt: Vec::new(), nonce: Vec::new(), mac: Vec::new() };
+    let mut file = KeyFile {
+        public_text,
+        private_raw,
+        protected: false,
+        rounds: 0,
+        salt: Vec::new(),
+        nonce: Vec::new(),
+        mac: Vec::new(),
+    };
     let kdf = field(text, "kdf");
     file.protected = !kdf.is_empty();
     if !file.protected {
@@ -77,7 +88,9 @@ pub fn parse(text: &str) -> Result<KeyFile, String> {
     let parts: Vec<&str> = kdf.split(',').map(|p| p.trim_start_matches(' ')).collect();
     let cipher = field(text, "cipher");
     let comma = cipher.find(',');
-    let known = parts.len() == 3 && parts.first() == Some(&"pbkdf2-sha256") && comma.is_some_and(|c| cipher.get(..c) == Some("hmac-sha256-ctr"));
+    let known = parts.len() == 3
+        && parts.first() == Some(&"pbkdf2-sha256")
+        && comma.is_some_and(|c| cipher.get(..c) == Some("hmac-sha256-ctr"));
     if !known {
         return Err("the key file is protected in a way this editor does not know".to_owned());
     }
@@ -95,7 +108,11 @@ pub fn parse(text: &str) -> Result<KeyFile, String> {
 
 /// `strtoul`: the digits a text starts with, 0 for none.
 fn leading_number(text: &str) -> u32 {
-    let digits = text.trim_start().bytes().take_while(u8::is_ascii_digit).fold(0u64, |n, d| (n * 10 + u64::from(d - b'0')).min(u64::from(u32::MAX)));
+    let digits = text
+        .trim_start()
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0u64, |n, d| (n * 10 + u64::from(d - b'0')).min(u64::from(u32::MAX)));
     digits as u32
 }
 
@@ -192,7 +209,10 @@ mod tests {
     fn damaged_files() {
         assert_eq!(parse("xms-kez 1\n").unwrap_err(), "not an Grizzly key file");
         assert_eq!(parse("xms-key 1\npublic = x\n").unwrap_err(), "the key file names no public key");
-        assert_eq!(parse("xms-key 1\npublic = p256:AA\nprivate = AA\n").unwrap_err(), "the key file holds no private key");
+        assert_eq!(
+            parse("xms-key 1\npublic = p256:AA\nprivate = AA\n").unwrap_err(),
+            "the key file holds no private key"
+        );
         let key = EcKey::generate().unwrap();
         let good = text_with(&key, "pw", &[1; 16], &[2; 16], 1000);
         let odd = good.replace("hmac-sha256-ctr", "aes-ctr");
@@ -203,7 +223,10 @@ mod tests {
         // another key's public half
         let other = EcKey::generate().unwrap();
         let swapped = text(&key, "").unwrap().replace(&key.public.text(), &other.public.text());
-        assert_eq!(parse(&swapped).unwrap().open("").unwrap_err(), "the key file's private key does not match its public key");
+        assert_eq!(
+            parse(&swapped).unwrap().open("").unwrap_err(),
+            "the key file's private key does not match its public key"
+        );
         // CRLF and padded fields read the same
         let crlf = good.replace('\n', "\r\n");
         assert!(parse(&crlf).unwrap().open("pw").unwrap().matches(&key.public));

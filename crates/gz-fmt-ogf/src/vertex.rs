@@ -102,8 +102,7 @@ fn fvf_layout(fvf: u32) -> Result<(usize, Vec<usize>, usize, bool)> {
 
 fn read_fvf(r: &mut Reader<'_>, fvf: u32) -> Result<Vertex> {
     let (_, tex, betas, last_beta_index) = fvf_layout(fvf)?;
-    let mut v = Vertex::default();
-    v.position = r.r_vec3()?;
+    let mut v = Vertex { position: r.r_vec3()?, ..Vertex::default() };
     if matches!(fvf & FVF_POSITION_MASK, FVF_XYZRHW | FVF_XYZW) {
         r.r_f32()?;
     }
@@ -111,7 +110,8 @@ fn read_fvf(r: &mut Reader<'_>, fvf: u32) -> Result<Vertex> {
     for i in 0..betas {
         if i + 1 == betas && last_beta_index {
             let b = r.r_u32()?;
-            v.bones = [(b & 0xff) as u16, ((b >> 8) & 0xff) as u16, ((b >> 16) & 0xff) as u16, (b >> 24) as u16];
+            v.bones =
+                [(b & 0xff) as u16, ((b >> 8) & 0xff) as u16, ((b >> 16) & 0xff) as u16, (b >> 24) as u16];
         } else {
             weights.push(r.r_f32()?);
         }
@@ -238,7 +238,10 @@ impl VertexBuffer {
         let count = r.r_u32()? as usize;
         let stride = format.stride()?;
         if count.saturating_mul(stride) > r.elapsed() {
-            return Err(invalid(format!("the model states {count} vertices of {stride} bytes and holds {} bytes", r.elapsed())));
+            return Err(invalid(format!(
+                "the model states {count} vertices of {stride} bytes and holds {} bytes",
+                r.elapsed()
+            )));
         }
         let mut vertices = Vec::with_capacity(count);
         for _ in 0..count {
@@ -276,7 +279,10 @@ mod tests {
         let vb = VertexBuffer::read(&b, false).unwrap();
         assert_eq!(vb.format, VertexFormat::Fvf(0x112));
         assert_eq!(vb.format.stride().unwrap(), 32);
-        assert_eq!((vb.vertices[0].position, vb.vertices[0].normal, vb.vertices[0].uv), (Vec3::ONE, Vec3::Y, Vec2::new(0.5, 0.25)));
+        assert_eq!(
+            (vb.vertices[0].position, vb.vertices[0].normal, vb.vertices[0].uv),
+            (Vec3::ONE, Vec3::Y, Vec2::new(0.5, 0.25))
+        );
     }
 
     #[test]

@@ -36,8 +36,8 @@ use smol_str::SmolStr;
 
 pub use class::{Class, ClassInfo, ScriptKind, class_by_clsid, class_of_section, class_table};
 pub use entity::{
-    Entity, Header, LevelChangerDestination, M_SPAWN_OBJECT_ASPLAYER, M_SPAWN_OBJECT_LOCAL, M_SPAWN_VERSION, Opaque,
-    OpaqueReason, SPAWN_VERSION,
+    Entity, Header, LevelChangerDestination, M_SPAWN_OBJECT_ASPLAYER, M_SPAWN_OBJECT_LOCAL, M_SPAWN_VERSION,
+    Opaque, OpaqueReason, SPAWN_VERSION,
 };
 pub use model::{Object, Shape};
 pub use packet::{IniSource, IniValue, NetReader, NetWriter, PacketError, TextEncoding};

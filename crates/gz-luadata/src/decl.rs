@@ -124,9 +124,12 @@ pub(crate) fn problem(s: &[u8]) -> Option<Vec<u8>> {
             let mut j = i;
             while let Some(&d) = s.get(j) {
                 let prev = if j > i { s.get(j - 1).copied() } else { None };
-                if hex(d) || d == b'x' || d == b'X' || d == b'.' {
-                    j += 1;
-                } else if (d == b'+' || d == b'-') && matches!(prev, Some(b'e' | b'E' | b'p' | b'P')) {
+                if hex(d)
+                    || d == b'x'
+                    || d == b'X'
+                    || d == b'.'
+                    || ((d == b'+' || d == b'-') && matches!(prev, Some(b'e' | b'E' | b'p' | b'P')))
+                {
                     j += 1;
                 } else {
                     break;

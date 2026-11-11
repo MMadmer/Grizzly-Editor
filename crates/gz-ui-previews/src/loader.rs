@@ -89,7 +89,10 @@ impl Sources {
         local.push(self.dirs.levels.join(&rel));
         local.push(self.dirs.saves.join(&rel));
         local.push(self.dirs.game_textures.join(&rel));
-        local.into_iter().find_map(|p| self.local(p)).or_else(|| self.game_file(&format!("textures/{}", rel.replace('\\', "/"))))
+        local
+            .into_iter()
+            .find_map(|p| self.local(p))
+            .or_else(|| self.game_file(&format!("textures/{}", rel.replace('\\', "/"))))
     }
 
     /// A texture's source picture of the editor's library (`$textures$\name.tga`).
@@ -112,7 +115,11 @@ impl Sources {
         {
             return Some(f);
         }
-        let rel = if crate::paths::strip_ext(&name).len() == name.len() { format!("{name}.ogf") } else { name.clone() };
+        let rel = if crate::paths::strip_ext(&name).len() == name.len() {
+            format!("{name}.ogf")
+        } else {
+            name.clone()
+        };
         let mut local = Vec::with_capacity(4);
         if let Some(p) = &self.project {
             local.push(p.join("meshes").join(&rel));
@@ -192,8 +199,12 @@ impl AssetLoader for Sources {
         };
         let Some(found) = found else {
             return Err(match what {
-                AssetRef::Texture(n) => format!("the texture {n} is neither in the project, the editor nor the linked game"),
-                AssetRef::Visual(n) => format!("the model {n} is neither in the project, the editor nor the linked game"),
+                AssetRef::Texture(n) => {
+                    format!("the texture {n} is neither in the project, the editor nor the linked game")
+                }
+                AssetRef::Visual(n) => {
+                    format!("the model {n} is neither in the project, the editor nor the linked game")
+                }
                 AssetRef::Object(n) => format!("the library has no object {n}"),
             });
         };

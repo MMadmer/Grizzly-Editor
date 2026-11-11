@@ -280,7 +280,11 @@ impl CollectorPacked {
             flags: Vec::with_capacity(cap(approx_faces)),
             vm_min: bb.min,
             vm_scale: scale,
-            vm_eps: Vec3::new(half_cell(scale.x, CLP_MX), half_cell(scale.y, CLP_MY), half_cell(scale.z, CLP_MZ)),
+            vm_eps: Vec3::new(
+                half_cell(scale.x, CLP_MX),
+                half_cell(scale.y, CLP_MY),
+                half_cell(scale.z, CLP_MZ),
+            ),
             cells: vec![Vec::new(); ((CLP_MX + 1) * (CLP_MY + 1) * (CLP_MZ + 1)) as usize],
         }
     }
@@ -292,7 +296,8 @@ impl CollectorPacked {
     /// The grid cell of a point: the C++ takes the floor into a `u32` and clamps from above, so
     /// a point below the box lands in the last cell.
     fn cell(&self, v: Vec3) -> (u32, u32, u32) {
-        let one = |val: f32, min: f32, scale: f32, n: u32| (i_floor((val - min) / scale * n as f32) as u32).min(n);
+        let one =
+            |val: f32, min: f32, scale: f32, n: u32| (i_floor((val - min) / scale * n as f32) as u32).min(n);
         (
             one(v.x, self.vm_min.x, self.vm_scale.x, CLP_MX),
             one(v.y, self.vm_min.y, self.vm_scale.y, CLP_MY),
@@ -428,12 +433,17 @@ mod tests {
         for _ in 0..400 {
             // points on a coarse lattice with jitter around the epsilon: plenty of near misses
             let mut p = || {
-                let cell = Vec3::new((rng.next() % 6) as f32, (rng.next() % 6) as f32, (rng.next() % 6) as f32);
+                let cell =
+                    Vec3::new((rng.next() % 6) as f32, (rng.next() % 6) as f32, (rng.next() % 6) as f32);
                 cell * 0.02 + Vec3::new(rng.unit(), rng.unit(), rng.unit()) * 0.012 - Vec3::splat(0.05)
             };
             let (a, b, d) = (p(), p(), p());
             c.add_face_packed(a, b, d, 1, 2, eps);
-            faces.push([naive_pack(&mut verts, a, eps), naive_pack(&mut verts, b, eps), naive_pack(&mut verts, d, eps)]);
+            faces.push([
+                naive_pack(&mut verts, a, eps),
+                naive_pack(&mut verts, b, eps),
+                naive_pack(&mut verts, d, eps),
+            ]);
         }
         assert_eq!(c.verts(), verts.as_slice());
         let got: Vec<[u32; 3]> = c.tris().iter().map(|t| t.verts).collect();

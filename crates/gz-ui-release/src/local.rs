@@ -10,7 +10,13 @@ use gz_ui::{Button, Font, Kind, PropertyGrid, audit};
 
 /// A one-line field whose text is never drawn (a password, a token, an API key): dots, a hint
 /// while it is empty. `width` is the field's. Returns whether Enter was pressed in it.
-pub(crate) fn local_secret_field(ui: &mut Ui, id_salt: &str, value: &mut String, hint: &str, width: f32) -> bool {
+pub(crate) fn local_secret_field(
+    ui: &mut Ui,
+    id_salt: &str,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+) -> bool {
     let p = palette(ui.ctx());
     let response = ui.add(
         TextEdit::singleline(value)
@@ -28,7 +34,15 @@ pub(crate) fn local_secret_field(ui: &mut Ui, id_salt: &str, value: &mut String,
 
 /// A secret field and its button on one line, the field taking what the button leaves. Returns
 /// whether the button was pressed, or Enter in the field while the button is on.
-pub(crate) fn local_secret_row(ui: &mut Ui, id_salt: &str, value: &mut String, hint: &str, button: &str, enabled: bool, why: &str) -> bool {
+pub(crate) fn local_secret_row(
+    ui: &mut Ui,
+    id_salt: &str,
+    value: &mut String,
+    hint: &str,
+    button: &str,
+    enabled: bool,
+    why: &str,
+) -> bool {
     let ctx = ui.ctx().clone();
     let bw = button_width(&ctx, button, Kind::Secondary, false, 0.0);
     let gap = ui.spacing().item_spacing.x;
@@ -69,7 +83,8 @@ pub(crate) fn local_card_title(
     let mut pressed = false;
     ui.horizontal(|ui| {
         ui.set_min_height(metrics::FRAME);
-        let bw = button.map_or(0.0, |(label, _, _)| button_width(&ctx, label, Kind::Secondary, false, 0.0) + 8.0);
+        let bw =
+            button.map_or(0.0, |(label, _, _)| button_width(&ctx, label, Kind::Secondary, false, 0.0) + 8.0);
         let room = (ui.available_width() - bw).max(em(4.0));
         ui.scope(|ui| {
             ui.set_max_width(room);
@@ -108,7 +123,10 @@ pub(crate) fn local_table_head(ui: &mut Ui, columns: &[Column<'_>]) -> Option<us
     for c in columns.iter().take(columns.len().saturating_sub(1)) {
         x += c.width;
         let at = x.round() - 0.5;
-        ui.painter().line_segment([pos2(at, origin.y + 5.0), pos2(at, origin.y + 19.0)], Stroke::new(1.0, p.border_subtle));
+        ui.painter().line_segment(
+            [pos2(at, origin.y + 5.0), pos2(at, origin.y + 19.0)],
+            Stroke::new(1.0, p.border_subtle),
+        );
     }
     clicked
 }

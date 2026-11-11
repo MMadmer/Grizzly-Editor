@@ -111,9 +111,9 @@ impl LevelGraphHeader {
     #[must_use]
     pub fn pack_position(&self, p: Vec3) -> (u32, u16) {
         let row = self.row_length() as i32;
-        let pxz = i_floor((p.x - self.aabb.min.x) / self.cell_size + 0.5).wrapping_mul(row).wrapping_add(i_floor(
-            (p.z - self.aabb.min.z) / self.cell_size + 0.5,
-        ));
+        let pxz = i_floor((p.x - self.aabb.min.x) / self.cell_size + 0.5)
+            .wrapping_mul(row)
+            .wrapping_add(i_floor((p.z - self.aabb.min.z) / self.cell_size + 0.5));
         let py = i_floor(65535.0 * (p.y - self.aabb.min.y) / self.factor_y + EPS_S).clamp(0, 65535);
         (pxz as u32, py as u16)
     }
@@ -157,7 +157,10 @@ fn cover_from(word: u16) -> [u8; 4] {
 }
 
 fn cover_to(c: [u8; 4]) -> u16 {
-    u16::from(c[0] & 0xf) | (u16::from(c[1] & 0xf) << 4) | (u16::from(c[2] & 0xf) << 8) | (u16::from(c[3] & 0xf) << 12)
+    u16::from(c[0] & 0xf)
+        | (u16::from(c[1] & 0xf) << 4)
+        | (u16::from(c[2] & 0xf) << 8)
+        | (u16::from(c[3] & 0xf) << 12)
 }
 
 impl AiNode {

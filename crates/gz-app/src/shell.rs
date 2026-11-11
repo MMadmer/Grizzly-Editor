@@ -17,8 +17,13 @@ use gz_ui::font::FontFiles;
 use gz_ui::{Icon, Tone, audit, layout, state};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::builder::{DialogDesc, DrawFn, DrawerDesc, LogState, MenuEntry, PageCard, PanelDesc, ShellBuilder, ToolbarFn, UiCommand};
-use crate::doc::{DocCx, Document, Drawer, EditAction, Factory, OpenRequest, PanelOp, Request, ShellRequests};
+use crate::builder::{
+    DialogDesc, DrawFn, DrawerDesc, LogState, MenuEntry, PageCard, PanelDesc, ShellBuilder, ToolbarFn,
+    UiCommand,
+};
+use crate::doc::{
+    DocCx, Document, Drawer, EditAction, Factory, OpenRequest, PanelOp, Request, ShellRequests,
+};
 use crate::keys::{self, Chord};
 use crate::queue::UiQueue;
 use crate::settings::{EditorSettings, Placement};
@@ -28,7 +33,13 @@ use crate::window::{FrameReport, Shell, WindowOptions};
 /// A `DocCx` over the shell's own fields, so a tab can be borrowed beside it.
 macro_rules! cx {
     ($s:ident, $ctx:expr) => {
-        DocCx { editor: &$s.editor, gpu: &$s.gpu, ctx: $ctx, active_tab: &$s.active, requests: &mut $s.requests }
+        DocCx {
+            editor: &$s.editor,
+            gpu: &$s.gpu,
+            ctx: $ctx,
+            active_tab: &$s.active,
+            requests: &mut $s.requests,
+        }
     };
 }
 pub(crate) use cx;
@@ -109,7 +120,11 @@ impl Tab {
             text = self.label();
         }
         if self.dirty() {
-            text.push_str(if self.id == LEVEL { "\nThe scene has unsaved changes." } else { "\nUnsaved changes." });
+            text.push_str(if self.id == LEVEL {
+                "\nThe scene has unsaved changes."
+            } else {
+                "\nUnsaved changes."
+            });
         }
         if self.missing() {
             text.push_str("\nFile not found.");
@@ -144,9 +159,9 @@ pub(crate) struct Parts {
     pub page_cards: Vec<PageCard>,
     pub dialogs: Vec<DialogDesc>,
     pub panels: Vec<PanelDesc>,
-    pub log_state: Option<Box<dyn Fn(&Editor) -> LogState>>,
-    pub reveal: Option<Box<dyn FnMut(&str, &mut DocCx<'_>)>>,
-    pub reset_layout: Option<Box<dyn FnMut(bool, &mut DocCx<'_>)>>,
+    pub log_state: Option<crate::builder::LogStateFn>,
+    pub reveal: Option<crate::builder::RevealFn>,
+    pub reset_layout: Option<crate::builder::ResetLayoutFn>,
 }
 
 /// A popup on screen, as `ui_list` names it.
@@ -187,7 +202,14 @@ pub(crate) struct PaletteState {
 
 impl Default for PaletteState {
     fn default() -> Self {
-        Self { open: false, query: String::new(), selected: 0, focus: false, scroll_to_selected: false, rect: Rect::NOTHING }
+        Self {
+            open: false,
+            query: String::new(),
+            selected: 0,
+            focus: false,
+            scroll_to_selected: false,
+            rect: Rect::NOTHING,
+        }
     }
 }
 
@@ -215,6 +237,11 @@ pub struct ShellState {
     pub(crate) status_rect: Rect,
     pub(crate) work_rect: Rect,
     pub(crate) caption: Caption,
+    /// What the window's `WM_NCHITTEST` answers from.
+    pub(crate) hit_test: Arc<gz_win::CaptionHitTest>,
+    /// The panel that answers its own keys and had the focus this frame, and the last frame's.
+    pub(crate) key_owner_now: Option<SmolStr>,
+    pub(crate) key_owner_last: Option<SmolStr>,
     pub(crate) folded: bool,
     pub(crate) menus_shown: bool,
     pub(crate) start_page: bool,
@@ -264,18 +291,54 @@ impl Document for LevelPlaceholder {
 }
 
 impl ShellState {
-    fn new(editor: Arc<Editor>, gpu: RenderState, queue: Arc<UiQueue>, builder: ShellBuilder, iconsheet: bool, panic_guard: Arc<AtomicBool>) -> Self {
+    fn new(
+        editor: Arc<Editor>,
+        gpu: RenderState,
+        queue: Arc<UiQueue>,
+        builder: ShellBuilder,
+        iconsheet: bool,
+        panic_guard: Arc<AtomicBool>,
+    ) -> Self {
         let settings = EditorSettings::of(&editor);
         let mut bindings = FxHashMap::default();
         for (id, keys) in settings.shortcuts() {
             bindings.insert(id, Chord::parse(&keys));
         }
-        let ShellBuilder { factories, commands, menus, project_toolbar, drawers, status_chips, start_page, page_cards, dialogs, panels, log_state, reveal, reset_layout } =
-            builder;
-        let mut parts = Parts { factories, commands, menus, project_toolbar, drawers, status_chips, start_page, page_cards, dialogs, panels, log_state, reveal, reset_layout };
+        let ShellBuilder {
+            factories,
+            commands,
+            menus,
+            project_toolbar,
+            drawers,
+            status_chips,
+            start_page,
+            page_cards,
+            dialogs,
+            panels,
+            log_state,
+            reveal,
+            reset_layout,
+        } = builder;
+        let mut parts = Parts {
+            factories,
+            commands,
+            menus,
+            project_toolbar,
+            drawers,
+            status_chips,
+            start_page,
+            page_cards,
+            dialogs,
+            panels,
+            log_state,
+            reveal,
+            reset_layout,
+        };
         parts.project_toolbar.sort_by_key(|(o, _)| *o);
         parts.status_chips.sort_by_key(|(o, _)| *o);
         add_shell_commands(&mut parts.commands);
+        let hit_test = editor.services.get_or_init(crate::window::WindowLink::default).caption().clone();
+        crate::unsaved::install(&editor);
         let mut s = Self {
             editor,
             gpu,
@@ -292,6 +355,9 @@ impl ShellState {
             status_rect: Rect::NOTHING,
             work_rect: Rect::NOTHING,
             caption: Caption::default(),
+            hit_test,
+            key_owner_now: None,
+            key_owner_last: None,
             folded: false,
             menus_shown: false,
             start_page: true,
@@ -330,7 +396,20 @@ impl ShellState {
             },
             None => Box::new(LevelPlaceholder),
         };
-        self.tabs.insert(0, Tab { id: SmolStr::new(LEVEL), kind: SmolStr::new("level"), icon: doc.icon(), label: String::new(), path: String::new(), doc: Some(doc), failed: false, panicked: None, rect: None });
+        self.tabs.insert(
+            0,
+            Tab {
+                id: SmolStr::new(LEVEL),
+                kind: SmolStr::new("level"),
+                icon: doc.icon(),
+                label: String::new(),
+                path: String::new(),
+                doc: Some(doc),
+                failed: false,
+                panicked: None,
+                rect: None,
+            },
+        );
         self.active = SmolStr::new(LEVEL);
     }
 
@@ -430,11 +509,21 @@ impl ShellState {
     /// Opens a document, or brings up the one of that id. A singleton that switches to a new
     /// target asks first while dirty: `discard` drops its changes, otherwise an MCP caller gets
     /// `unsaved` and a person the question.
-    pub(crate) fn open(&mut self, ctx: &Context, req: OpenRequest, discard: bool, asker: Asker) -> Result<(), OpenError> {
+    pub(crate) fn open(
+        &mut self,
+        ctx: &Context,
+        req: OpenRequest,
+        discard: bool,
+        asker: Asker,
+    ) -> Result<(), OpenError> {
         if let Some(id) = &req.id
             && self.find(id).is_some()
         {
-            return if self.activate(ctx, id) { Ok(()) } else { Err(OpenError::Other(format!("no tab '{id}'"))) };
+            return if self.activate(ctx, id) {
+                Ok(())
+            } else {
+                Err(OpenError::Other(format!("no tab '{id}'")))
+            };
         }
         if req.kind == LEVEL {
             self.activate(ctx, LEVEL);
@@ -452,7 +541,9 @@ impl ShellState {
         let activate = req.activate || self.active.is_empty();
         match self.find(&id) {
             Some(i) => {
-                let Some(tab) = self.tabs.get(i) else { return Err(OpenError::Other("the tab went away".to_owned())) };
+                let Some(tab) = self.tabs.get(i) else {
+                    return Err(OpenError::Other("the tab went away".to_owned()));
+                };
                 let same = tab.loaded() && tab.path() == doc.path().unwrap_or_default();
                 if same {
                     if activate {
@@ -474,7 +565,13 @@ impl ShellState {
                                 if answer == Answer::Yes
                                     && let Err(e) = shell.save_tab(ctx, &target)
                                 {
-                                    let _ = gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &e);
+                                    let _ = gz_ui::dialog::notice(
+                                        ctx,
+                                        shell.asker(),
+                                        Tone::Error,
+                                        "Save failed",
+                                        &e,
+                                    );
                                     return;
                                 }
                                 let _ = shell.open(ctx, retarget, true, Asker::Ui);
@@ -510,7 +607,17 @@ impl ShellState {
                 }
             }
             None => {
-                let tab = Tab { id: id.clone(), kind: SmolStr::new(doc.kind()), icon: doc.icon(), label: String::new(), path: String::new(), doc: Some(doc), failed: false, panicked: None, rect: None };
+                let tab = Tab {
+                    id: id.clone(),
+                    kind: SmolStr::new(doc.kind()),
+                    icon: doc.icon(),
+                    label: String::new(),
+                    path: String::new(),
+                    doc: Some(doc),
+                    failed: false,
+                    panicked: None,
+                    rect: None,
+                };
                 self.tabs.push(tab);
                 self.session.dirty = true;
                 if activate {
@@ -585,7 +692,8 @@ impl ShellState {
             return Ok(());
         }
         let Some(doc) = tab.doc.as_mut() else { return Ok(()) };
-        doc.save(&mut cx!(self, ctx)).map_err(|e| if e.is_empty() { "it cannot be saved".to_owned() } else { e })
+        doc.save(&mut cx!(self, ctx))
+            .map_err(|e| if e.is_empty() { "it cannot be saved".to_owned() } else { e })
     }
 
     /// A tab's discard without closing it; `true` when it is clean afterwards.
@@ -623,7 +731,11 @@ impl ShellState {
         }
         if was_active {
             // the neighbour to the left takes over, Level when there is none
-            let next = i.checked_sub(1).or((!self.tabs.is_empty()).then_some(0)).and_then(|j| self.tabs.get(j)).map(|t| t.id.clone());
+            let next = i
+                .checked_sub(1)
+                .or((!self.tabs.is_empty()).then_some(0))
+                .and_then(|j| self.tabs.get(j))
+                .map(|t| t.id.clone());
             self.active = SmolStr::default();
             if let Some(next) = next {
                 self.activate(ctx, &next);
@@ -695,8 +807,18 @@ impl ShellState {
                 for id in &ids {
                     if answer == Answer::Yes {
                         if let Err(e) = shell.save_tab(ctx, id) {
-                            let label = shell.find(id).and_then(|i| shell.tabs.get(i)).map(Tab::label).unwrap_or_default();
-                            gz_ui::dialog::notice(ctx, shell.asker(), Tone::Error, "Save failed", &format!("{label}: {e}"));
+                            let label = shell
+                                .find(id)
+                                .and_then(|i| shell.tabs.get(i))
+                                .map(Tab::label)
+                                .unwrap_or_default();
+                            gz_ui::dialog::notice(
+                                ctx,
+                                shell.asker(),
+                                Tone::Error,
+                                "Save failed",
+                                &format!("{label}: {e}"),
+                            );
                             return;
                         }
                     } else {
@@ -715,7 +837,11 @@ impl ShellState {
 
     /// The panel that shows a drawer's object is on screen: the drawer gives way to it.
     pub(crate) fn drawer_panel_visible(&self, which: Drawer) -> bool {
-        let Some(panel) = self.parts.drawers.get(which.index()).and_then(|d| d.as_ref()).and_then(|d| d.panel.clone()) else { return false };
+        let Some(panel) =
+            self.parts.drawers.get(which.index()).and_then(|d| d.as_ref()).and_then(|d| d.panel.clone())
+        else {
+            return false;
+        };
         self.active == LEVEL && self.level_panel(&panel).is_some_and(|p| p.visible)
     }
 
@@ -747,7 +873,9 @@ impl ShellState {
         // its panel is on screen: that is where it goes instead
         if self.drawer_panel_visible(which) {
             self.drawer = None;
-            if let Some(panel) = self.parts.drawers.get(which.index()).and_then(|d| d.as_ref()).and_then(|d| d.panel.clone()) {
+            if let Some(panel) =
+                self.parts.drawers.get(which.index()).and_then(|d| d.as_ref()).and_then(|d| d.panel.clone())
+            {
                 self.panel(ctx, &panel, PanelOp::Focus);
             }
             return;
@@ -794,7 +922,10 @@ impl ShellState {
     }
 
     pub(crate) fn screen_pt(&self) -> Rect {
-        Rect::from_min_max(self.caption.bar.min, egui::pos2(self.caption.bar.max.x, self.status_rect.max.y.max(self.caption.bar.max.y)))
+        Rect::from_min_max(
+            self.caption.bar.min,
+            egui::pos2(self.caption.bar.max.x, self.status_rect.max.y.max(self.caption.bar.max.y)),
+        )
     }
 
     // ---- commands and keys -----------------------------------------------------------------
@@ -813,7 +944,10 @@ impl ShellState {
     }
 
     pub(crate) fn command_enabled(&self, i: usize) -> bool {
-        self.parts.commands.get(i).is_some_and(|c| c.enabled.as_ref().is_none_or(|f| f(&self.editor, &self.active)))
+        self.parts
+            .commands
+            .get(i)
+            .is_some_and(|c| c.enabled.as_ref().is_none_or(|f| f(&self.editor, &self.active)))
     }
 
     /// Runs a command when it is on; `false` when it is not.
@@ -822,22 +956,36 @@ impl ShellState {
             return false;
         }
         let Some(c) = self.parts.commands.get_mut(i) else { return false };
-        (c.run)(&mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx, active_tab: &self.active, requests: &mut self.requests });
+        (c.run)(&mut DocCx {
+            editor: &self.editor,
+            gpu: &self.gpu,
+            ctx,
+            active_tab: &self.active,
+            requests: &mut self.requests,
+        });
         true
     }
 
     /// The keys bound to a command id now, as text; `fallback` when it has none.
     pub(crate) fn keys_of(&self, id: &str, fallback: &str) -> String {
-        self.command_index(id).and_then(|i| self.binding(i)).map_or_else(|| fallback.to_owned(), |c| c.label())
+        self.command_index(id)
+            .and_then(|i| self.binding(i))
+            .map_or_else(|| fallback.to_owned(), |c| c.label())
     }
 
     pub(crate) fn modal_up(&self, ctx: &Context) -> bool {
-        self.palette.open || dialog::modal_on_top(ctx).is_some() || ctx.memory(|m| m.top_modal_layer().is_some())
+        self.palette.open
+            || dialog::modal_on_top(ctx).is_some()
+            || ctx.memory(|m| m.top_modal_layer().is_some())
     }
 
     /// The scene's bindings may act: Level is up, nothing modal, no popup, no drawer.
     pub(crate) fn scene_keys_allowed(&self, ctx: &Context) -> bool {
-        self.active == LEVEL && !self.modal_up(ctx) && !egui::Popup::is_any_open(ctx) && self.drawer.is_none()
+        self.active == LEVEL
+            && !self.modal_up(ctx)
+            && !egui::Popup::is_any_open(ctx)
+            && self.drawer.is_none()
+            && self.key_owner_last.is_none()
     }
 
     /// Keys, first taker wins: a text field, the shell's chords, the document, the bindings.
@@ -910,8 +1058,15 @@ impl ShellState {
         for i in 0..self.parts.commands.len() {
             let Some(chord) = self.binding(i) else { continue };
             let Some(c) = self.parts.commands.get(i) else { continue };
-            if keys::shell_chord(&chord) && c.id != "COMMAND_COMMAND_PALETTE" && self.warned.insert(c.id.clone()) {
-                self.editor.log.warn(format!("{} is bound to {}, which the editor's frame keeps for itself: the binding is ignored", c.label, chord.label()));
+            if keys::shell_chord(&chord)
+                && c.id != "COMMAND_COMMAND_PALETTE"
+                && self.warned.insert(c.id.clone())
+            {
+                self.editor.log.warn(format!(
+                    "{} is bound to {}, which the editor's frame keeps for itself: the binding is ignored",
+                    c.label,
+                    chord.label()
+                ));
             }
         }
     }
@@ -935,7 +1090,9 @@ impl ShellState {
         match r {
             Request::Open(req) => match self.open(ctx, req, false, self.asker()) {
                 Ok(()) => {}
-                Err(OpenError::Unsaved { label, .. }) => state::toast(ctx, Tone::Warning, &format!("{label} has unsaved changes.")),
+                Err(OpenError::Unsaved { label, .. }) => {
+                    state::toast(ctx, Tone::Warning, &format!("{label} has unsaved changes."))
+                }
                 Err(OpenError::Other(e)) => state::toast(ctx, Tone::Error, &e),
             },
             Request::Activate(id) => {
@@ -962,6 +1119,7 @@ impl ShellState {
             Request::Popup(name) => {
                 let _ = self.show_popup(ctx, &name);
             }
+            Request::OwnKeys(who) => self.key_owner_now = Some(SmolStr::new(who)),
         }
     }
 
@@ -979,7 +1137,13 @@ impl ShellState {
             return Err("no project is open".to_owned());
         }
         let Some(d) = self.parts.dialogs.get_mut(i) else { return Err("the dialog went away".to_owned()) };
-        (d.open)(&mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx, active_tab: &self.active, requests: &mut self.requests })
+        (d.open)(&mut DocCx {
+            editor: &self.editor,
+            gpu: &self.gpu,
+            ctx,
+            active_tab: &self.active,
+            requests: &mut self.requests,
+        })
     }
 
     // ---- the frame -------------------------------------------------------------------------
@@ -1017,7 +1181,9 @@ impl ShellState {
     fn begin_frame(&mut self, ctx: &Context) {
         self.sync_session(ctx);
         // an owner that closed its document took the tab with it
-        while let Some(i) = self.tabs.iter().position(|t| t.id != LEVEL && t.doc.as_ref().is_some_and(|d| !d.alive())) {
+        while let Some(i) =
+            self.tabs.iter().position(|t| t.id != LEVEL && t.doc.as_ref().is_some_and(|d| !d.alive()))
+        {
             self.remove(ctx, i);
         }
         if self.find(&self.active).is_none() {
@@ -1032,7 +1198,8 @@ impl ShellState {
         self.menus_shown = project_ready && !card_wants;
         self.warn_collisions();
         // a job the UI started comes with its card; an MCP caller never gets one
-        let running: Vec<gz_editor::JobInfo> = self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
+        let running: Vec<gz_editor::JobInfo> =
+            self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
         for job in &running {
             if !self.seen_jobs.contains(&job.id)
                 && let Some(card) = crate::tasks::card_of(&self.editor, job.id)
@@ -1053,6 +1220,7 @@ impl ShellState {
 
     fn end_frame(&mut self, ctx: &Context) {
         self.popups_last = std::mem::take(&mut self.popups_cur);
+        self.key_owner_last = self.key_owner_now.take();
         if self.session.dirty {
             self.write_session();
         }
@@ -1063,8 +1231,16 @@ impl ShellState {
         {
             let maximized = viewport.maximized == Some(true);
             let p = Placement {
-                pos: if maximized { self.placement.and_then(|p| p.pos) } else { viewport.outer_rect.map(|r| [r.min.x, r.min.y]) },
-                size: if maximized { self.placement.map_or([inner.width(), inner.height()], |p| p.size) } else { [inner.width(), inner.height()] },
+                pos: if maximized {
+                    self.placement.and_then(|p| p.pos)
+                } else {
+                    viewport.outer_rect.map(|r| [r.min.x, r.min.y])
+                },
+                size: if maximized {
+                    self.placement.map_or([inner.width(), inner.height()], |p| p.size)
+                } else {
+                    [inner.width(), inner.height()]
+                },
                 maximized,
             };
             if self.placement != Some(p) {
@@ -1100,9 +1276,17 @@ impl ShellState {
             .map(|t| {
                 let arg = match &t.doc {
                     None => t.path.clone(),
-                    Some(d) => d.restore_arg().unwrap_or_else(|| t.id.split_once(':').map(|(_, rest)| rest.to_owned()).unwrap_or_default()),
+                    Some(d) => d.restore_arg().unwrap_or_else(|| {
+                        t.id.split_once(':').map(|(_, rest)| rest.to_owned()).unwrap_or_default()
+                    }),
                 };
-                SessionTab { id: t.id.to_string(), kind: t.kind.to_string(), icon: t.icon, label: t.label(), arg }
+                SessionTab {
+                    id: t.id.to_string(),
+                    kind: t.kind.to_string(),
+                    icon: t.icon,
+                    label: t.label(),
+                    arg,
+                }
             })
             .collect();
         tabs::encode_session(&tabs)
@@ -1130,7 +1314,9 @@ impl ShellState {
         if let Some(root) = &self.session.root {
             let path = Self::session_file(root);
             if let Err(e) = gz_editor::fsx::write_atomic(&path, self.session_text().as_bytes()) {
-                self.editor.log.warn(format!("the open tabs could not be written to {}: {e}", path.display()));
+                self.editor
+                    .log
+                    .warn(format!("the open tabs could not be written to {}: {e}", path.display()));
             }
         }
     }
@@ -1165,7 +1351,9 @@ impl ShellState {
         }
         let queue = self.queue.clone();
         self.editor.exec.spawn_io(move || {
-            let text = std::fs::read(Self::session_file(&root)).map(|b| gz_base::text::decode_guess(&b).into_owned()).unwrap_or_default();
+            let text = std::fs::read(Self::session_file(&root))
+                .map(|b| gz_base::text::decode_guess(&b).into_owned())
+                .unwrap_or_default();
             let tabs = tabs::decode_session(&text);
             queue.post(move |shell, _ctx| shell.restore_session(&root, tabs));
         });
@@ -1203,7 +1391,13 @@ impl ShellState {
         let ctx = ui.ctx().clone();
         let Some(tab) = self.tabs.get_mut(i) else { return };
         let Some(doc) = tab.doc.as_mut() else { return };
-        let mut cx = DocCx { editor: &self.editor, gpu: &self.gpu, ctx: &ctx, active_tab: &self.active, requests: &mut self.requests };
+        let mut cx = DocCx {
+            editor: &self.editor,
+            gpu: &self.gpu,
+            ctx: &ctx,
+            active_tab: &self.active,
+            requests: &mut self.requests,
+        };
         self.panic_guard.store(true, Ordering::SeqCst);
         let ran = std::panic::catch_unwind(AssertUnwindSafe(|| doc.body(ui, &mut cx)));
         self.panic_guard.store(false, Ordering::SeqCst);
@@ -1222,7 +1416,13 @@ impl ShellState {
                 continue;
             }
             if let Some(doc) = tab.doc.as_mut() {
-                doc.inactive(&mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx, active_tab: &self.active, requests: &mut self.requests });
+                doc.inactive(&mut DocCx {
+                    editor: &self.editor,
+                    gpu: &self.gpu,
+                    ctx,
+                    active_tab: &self.active,
+                    requests: &mut self.requests,
+                });
             }
         }
     }
@@ -1237,7 +1437,12 @@ impl ShellState {
     }
 
     pub(crate) fn note_popup(&mut self, id: &str, title: &str, window: &str, rect: Rect) {
-        self.popups_cur.push(PopupInfo { id: id.to_owned(), title: title.to_owned(), window: window.to_owned(), rect });
+        self.popups_cur.push(PopupInfo {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            window: window.to_owned(),
+            rect,
+        });
     }
 
     // ---- what MCP reads of the frame (pt, as the last frame left it) --------------------------
@@ -1326,12 +1531,20 @@ impl ShellState {
 
     pub(crate) fn shortcut_row(&self, i: usize) -> Option<(String, String, String)> {
         let c = self.parts.commands.get(i).filter(|c| c.bindable)?;
-        Some((c.id.to_string(), format!("{} \u{b7} {}", c.group, c.label), self.binding(i).map(|k| k.label()).unwrap_or_default()))
+        Some((
+            c.id.to_string(),
+            format!("{} \u{b7} {}", c.group, c.label),
+            self.binding(i).map(|k| k.label()).unwrap_or_default(),
+        ))
     }
 
     /// A command by its id or by the label the Keyboard page shows.
     pub(crate) fn shortcut_target(&self, name: &str) -> Option<usize> {
-        (0..self.parts.commands.len()).find(|&i| self.shortcut_row(i).is_some_and(|(id, label, _)| id.eq_ignore_ascii_case(name) || label.eq_ignore_ascii_case(name)))
+        (0..self.parts.commands.len()).find(|&i| {
+            self.shortcut_row(i).is_some_and(|(id, label, _)| {
+                id.eq_ignore_ascii_case(name) || label.eq_ignore_ascii_case(name)
+            })
+        })
     }
 
     /// Binds a command (`None` takes its shortcut away); the command that had the chord lets it
@@ -1407,24 +1620,30 @@ fn add_shell_commands(commands: &mut Vec<UiCommand>) {
             commands.push(c);
         }
     };
-    add(UiCommand::new("COMMAND_COMMAND_PALETTE", "Edit", "Command Palette", Icon::Search, |cx| cx.requests.palette()).keys("Ctrl+Shift+P"));
-    add(UiCommand::new("COMMAND_EDITOR_PREF", "Edit", "Preferences", Icon::Settings, |cx| cx.requests.open(OpenRequest::kind("preferences"))));
+    add(UiCommand::new("COMMAND_COMMAND_PALETTE", "Edit", "Command Palette", Icon::Search, |cx| {
+        cx.requests.palette()
+    })
+    .keys("Ctrl+Shift+P"));
+    add(UiCommand::new("COMMAND_EDITOR_PREF", "Edit", "Preferences", Icon::Settings, |cx| {
+        cx.requests.open(OpenRequest::kind("preferences"))
+    }));
     add(UiCommand::new("COMMAND_EXIT", "File", "Quit", Icon::Close, |cx| cx.requests.exit()));
-    add(
-        UiCommand::new("COMMAND_BREAK_LAST_OPERATION", "Edit", "Cancel Running Job", Icon::Stop, |cx| {
-            for job in cx.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running) {
-                cx.editor.jobs.cancel(job.id);
-            }
-        })
-        .enabled(|editor, _| editor.jobs.any_running()),
-    );
+    add(UiCommand::new("COMMAND_BREAK_LAST_OPERATION", "Edit", "Cancel Running Job", Icon::Stop, |cx| {
+        for job in cx.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running) {
+            cx.editor.jobs.cancel(job.id);
+        }
+    })
+    .enabled(|editor, _| editor.jobs.any_running()));
 }
 
 /// Why an open did not happen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OpenError {
     /// The tab to switch has unsaved changes.
-    Unsaved { id: String, label: String },
+    Unsaved {
+        id: String,
+        label: String,
+    },
     Other(String),
 }
 
@@ -1432,7 +1651,12 @@ pub(crate) enum OpenError {
 #[must_use]
 pub fn window_options(editor: &Editor) -> WindowOptions {
     // window_control resize goes down to 320 x 240 pt; the C++ editor's frame did not stop it either
-    let mut opts = WindowOptions { decorations: false, min_size: [320.0, 240.0], icon: crate::chrome::logo_rgba(64).map(|rgba| (rgba, 64)), ..WindowOptions::default() };
+    let mut opts = WindowOptions {
+        decorations: false,
+        min_size: [320.0, 240.0],
+        icon: crate::chrome::logo_rgba(64).map(|rgba| (rgba, 64)),
+        ..WindowOptions::default()
+    };
     if let Some(p) = EditorSettings::of(editor).placement() {
         opts.size = [p.size[0].max(opts.min_size[0]), p.size[1].max(opts.min_size[1])];
         opts.position = p.pos;
@@ -1472,7 +1696,14 @@ impl Shell for GrizzlyShell {
             install_tab_panic_guard(&self.editor, guard.clone());
         }
         let builder = self.builder.take().unwrap_or_default();
-        let mut state = ShellState::new(self.editor.clone(), gpu.clone(), self.queue.clone(), builder, self.opts.iconsheet, guard);
+        let mut state = ShellState::new(
+            self.editor.clone(),
+            gpu.clone(),
+            self.queue.clone(),
+            builder,
+            self.opts.iconsheet,
+            guard,
+        );
         state.logo = crate::chrome::load_logo(ctx);
         self.state = Some(state);
         self.ctx = Some(ctx.clone());
@@ -1509,7 +1740,9 @@ fn install_tab_panic_guard(editor: &Editor, guard: Arc<AtomicBool>) {
     let log = editor.log.clone();
     std::panic::set_hook(Box::new(move |info| {
         if std::thread::current().id() == ui_thread && guard.load(Ordering::SeqCst) {
-            let at = info.location().map_or_else(|| "unknown location".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
+            let at = info
+                .location()
+                .map_or_else(|| "unknown location".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
             log.error(format!("internal error in a tab at {at}"));
             for line in std::backtrace::Backtrace::force_capture().to_string().lines() {
                 log.plain(format!("    {}", line.trim_end()));

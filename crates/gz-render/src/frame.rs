@@ -49,7 +49,12 @@ impl GrowBuffer {
 }
 
 fn create(gpu: &Gpu, label: &str, usage: wgpu::BufferUsages, size: u64) -> wgpu::Buffer {
-    gpu.device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false })
+    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage,
+        mapped_at_creation: false,
+    })
 }
 
 struct Queries {
@@ -88,7 +93,12 @@ impl FrameResources {
     pub fn new(gpu: &Gpu) -> Self {
         let storage = wgpu::BufferUsages::STORAGE;
         Self {
-            frame_ubo: create(gpu, "gz-render frame", wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, size_of::<crate::packet::FrameUniform>() as u64),
+            frame_ubo: create(
+                gpu,
+                "gz-render frame",
+                wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                size_of::<crate::packet::FrameUniform>() as u64,
+            ),
             instances: GrowBuffer::new(gpu, "gz-render instances", storage),
             bones: GrowBuffer::new(gpu, "gz-render poses", storage),
             lights: GrowBuffer::new(gpu, "gz-render lights", storage),
@@ -103,9 +113,18 @@ impl FrameResources {
     }
 
     /// Uploads `packet` and records its passes into `targets`, the view `size` in their corner.
-    pub fn record(&mut self, gpu: &Gpu, assets: &Assets, packet: &FramePacket, targets: &Targets, size: [u32; 2], pool: &rayon::ThreadPool) -> Recorded {
+    pub fn record(
+        &mut self,
+        gpu: &Gpu,
+        assets: &Assets,
+        packet: &FramePacket,
+        targets: &Targets,
+        size: [u32; 2],
+        pool: &rayon::ThreadPool,
+    ) -> Recorded {
         let mut frame = packet.frame;
-        frame.viewport = [size[0] as f32, size[1] as f32, 1.0 / size[0].max(1) as f32, 1.0 / size[1].max(1) as f32];
+        frame.viewport =
+            [size[0] as f32, size[1] as f32, 1.0 / size[0].max(1) as f32, 1.0 / size[1].max(1) as f32];
         gpu.queue.write_buffer(&self.frame_ubo, 0, bytemuck::bytes_of(&frame));
         let mut stale = self.bind.is_none();
         stale |= self.instances.write(gpu, bytemuck::cast_slice(&packet.instances));
@@ -115,8 +134,11 @@ impl FrameResources {
 
         // helper vertices back to back: lines, overlay lines, faces, overlay faces
         let h = &packet.helpers;
-        let counts = [h.lines.len(), h.lines_overlay.len(), h.tris.len(), h.tris_overlay.len()].map(|c| c as u32);
-        let mut bytes: Vec<u8> = Vec::with_capacity((counts.iter().sum::<u32>() as usize) * size_of::<crate::helpers::LineVertex>());
+        let counts =
+            [h.lines.len(), h.lines_overlay.len(), h.tris.len(), h.tris_overlay.len()].map(|c| c as u32);
+        let mut bytes: Vec<u8> = Vec::with_capacity(
+            (counts.iter().sum::<u32>() as usize) * size_of::<crate::helpers::LineVertex>(),
+        );
         for part in [&h.lines, &h.lines_overlay, &h.tris, &h.tris_overlay] {
             bytes.extend_from_slice(bytemuck::cast_slice(part));
         }
@@ -126,7 +148,8 @@ impl FrameResources {
             helper_at[i] = helper_at[i - 1] + counts[i - 1];
         }
         let queries = packet.label_points.len().min(MAX_LABEL_QUERIES) as u32;
-        self.labels.write(gpu, bytemuck::cast_slice(packet.label_points.get(..queries as usize).unwrap_or(&[])));
+        self.labels
+            .write(gpu, bytemuck::cast_slice(packet.label_points.get(..queries as usize).unwrap_or(&[])));
         if queries > 0 {
             self.ensure_queries(gpu, queries);
         }
@@ -156,9 +179,13 @@ impl FrameResources {
             .and_then(|i| self.meshes.get(i).cloned().flatten());
         let fallback_bind = assets.fallback_bind_group();
 
-        let (Some(bind), Some(placeholder), Some(fallback_bind)) = (self.bind.as_ref(), placeholder, fallback_bind) else {
+        let (Some(bind), Some(placeholder), Some(fallback_bind)) =
+            (self.bind.as_ref(), placeholder, fallback_bind)
+        else {
             // nothing to draw with: the frame is the background alone
-            let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render clear") });
+            let mut enc = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render clear") });
             drop(begin(&mut enc, targets, size, Clear::Both(packet.clear), true, None));
             return Recorded { buffers: vec![enc.finish()], pending, queries: 0 };
         };
@@ -205,7 +232,9 @@ impl FrameResources {
         let buffers: Vec<wgpu::CommandBuffer> = if many {
             pool.install(|| passes.par_iter().map(|j| record_job(&ctx, j)).collect())
         } else {
-            let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render frame") });
+            let mut enc = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render frame") });
             for j in &passes {
                 encode_job(&ctx, j, &mut enc);
             }
@@ -236,7 +265,11 @@ impl FrameResources {
         gpu.queue.write_texture(
             tex.as_image_copy(),
             bytemuck::cast_slice(heights),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(cells * 4), rows_per_image: Some(cells) },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(cells * 4),
+                rows_per_image: Some(cells),
+            },
             tex.size(),
         );
         self.roof = Some((r.revision, tex.create_view(&wgpu::TextureViewDescriptor::default())));
@@ -250,10 +283,24 @@ impl FrameResources {
         let capacity = count.next_power_of_two().max(64);
         let bytes = u64::from(capacity) * 8;
         self.queries = Some(Queries {
-            set: gpu.device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("gz-render labels"), ty: wgpu::QueryType::Occlusion, count: capacity }),
+            set: gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
+                label: Some("gz-render labels"),
+                ty: wgpu::QueryType::Occlusion,
+                count: capacity,
+            }),
             capacity,
-            resolve: create(gpu, "gz-render label queries", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, bytes),
-            readback: create(gpu, "gz-render label read-back", wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, bytes),
+            resolve: create(
+                gpu,
+                "gz-render label queries",
+                wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                bytes,
+            ),
+            readback: create(
+                gpu,
+                "gz-render label read-back",
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                bytes,
+            ),
         });
     }
 
@@ -267,7 +314,7 @@ impl FrameResources {
         let slice = q.readback.slice(..bytes);
         let Ok(raw) = map_read(gpu, &slice) else { return vec![true; count as usize] };
         q.readback.unmap();
-        raw.chunks_exact(8).map(|c| c.iter().any(|b| *b != 0)).collect()
+        raw.as_chunks::<8>().0.iter().map(|c| c.iter().any(|b| *b != 0)).collect()
     }
 }
 
@@ -310,7 +357,10 @@ struct Ctx<'a> {
 
 enum Job<'a> {
     Ids(&'a [Draw]),
-    Meshes { draws: &'a [Draw], first: bool },
+    Meshes {
+        draws: &'a [Draw],
+        first: bool,
+    },
     /// The depth-tested helper lines and the sky.
     Middle(&'a [Draw]),
     /// Helper faces, the outline, the label queries, the overlays; resolves the picture.
@@ -324,7 +374,10 @@ enum Clear {
 }
 
 fn record_job(ctx: &Ctx<'_>, job: &Job<'_>) -> wgpu::CommandBuffer {
-    let mut enc = ctx.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render pass") });
+    let mut enc = ctx
+        .gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("gz-render pass") });
     encode_job(ctx, job, &mut enc);
     enc.finish()
 }
@@ -337,12 +390,18 @@ fn encode_job(ctx: &Ctx<'_>, job: &Job<'_>, enc: &mut wgpu::CommandEncoder) {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &ctx.targets.id_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &ctx.targets.id_depth_view,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Discard }),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
@@ -367,7 +426,8 @@ fn encode_job(ctx: &Ctx<'_>, job: &Job<'_>, enc: &mut wgpu::CommandEncoder) {
         }
         Job::Last => {
             {
-                let mut pass = begin(enc, ctx.targets, ctx.size, Clear::None, true, ctx.queries.map(|q| &q.set));
+                let mut pass =
+                    begin(enc, ctx.targets, ctx.size, Clear::None, true, ctx.queries.map(|q| &q.set));
                 frame_state(ctx, &mut pass);
                 draw_helpers(ctx, &mut pass, &ctx.gpu.tri, 2);
                 if ctx.outline {
@@ -406,19 +466,34 @@ fn begin<'e>(
     queries: Option<&'e wgpu::QuerySet>,
 ) -> wgpu::RenderPass<'e> {
     let (color_load, depth_load) = match clear {
-        Clear::Both(c) => (wgpu::LoadOp::Clear(wgpu::Color { r: c[0], g: c[1], b: c[2], a: c[3] }), wgpu::LoadOp::Clear(0.0)),
+        Clear::Both(c) => (
+            wgpu::LoadOp::Clear(wgpu::Color { r: c[0], g: c[1], b: c[2], a: c[3] }),
+            wgpu::LoadOp::Clear(0.0),
+        ),
         Clear::None => (wgpu::LoadOp::Load, wgpu::LoadOp::Load),
     };
     let (view, resolve_target, store) = match &t.msaa_view {
-        Some(msaa) => (msaa, last.then_some(&t.color_view), if last { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store }),
+        Some(msaa) => (
+            msaa,
+            last.then_some(&t.color_view),
+            if last { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store },
+        ),
         None => (&t.color_view, None, wgpu::StoreOp::Store),
     };
     let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("gz-render scene"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, resolve_target, ops: wgpu::Operations { load: color_load, store }, depth_slice: None })],
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target,
+            ops: wgpu::Operations { load: color_load, store },
+            depth_slice: None,
+        })],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
             view: &t.depth_view,
-            depth_ops: Some(wgpu::Operations { load: depth_load, store: if last { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store } }),
+            depth_ops: Some(wgpu::Operations {
+                load: depth_load,
+                store: if last { wgpu::StoreOp::Discard } else { wgpu::StoreOp::Store },
+            }),
             stencil_ops: None,
         }),
         timestamp_writes: None,
@@ -440,7 +515,12 @@ fn frame_state(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>) {
     pass.set_bind_group(0, ctx.bind, &[]);
 }
 
-fn draw_helpers(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, pipeline: &wgpu::RenderPipeline, part: usize) {
+fn draw_helpers(
+    ctx: &Ctx<'_>,
+    pass: &mut wgpu::RenderPass<'_>,
+    pipeline: &wgpu::RenderPipeline,
+    part: usize,
+) {
     let (Some(&at), Some(&count)) = (ctx.helper_at.get(part), ctx.helper_counts.get(part)) else { return };
     if count == 0 {
         return;
@@ -487,7 +567,10 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
         let key = (Arc::as_ptr(mesh) as usize, wire);
         if key != last_mesh {
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_index_buffer(if wire { mesh.wire.slice(..) } else { mesh.indices.slice(..) }, wgpu::IndexFormat::Uint32);
+            pass.set_index_buffer(
+                if wire { mesh.wire.slice(..) } else { mesh.indices.slice(..) },
+                wgpu::IndexFormat::Uint32,
+            );
             last_mesh = key;
         }
         pass.draw_indexed(range, 0, d.instances.clone());

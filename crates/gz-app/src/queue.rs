@@ -40,7 +40,10 @@ impl UiQueue {
     }
 
     /// Runs `f` on the UI thread at the start of the next frame and answers what it returned.
-    pub async fn run<T: Send + 'static>(&self, f: impl FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static) -> Result<T, CmdError> {
+    pub async fn run<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static,
+    ) -> Result<T, CmdError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             if !*self.open.lock() {
@@ -78,6 +81,9 @@ impl UiQueue {
 }
 
 /// Runs `f` on the UI thread: [`UiQueue::run`] on this editor's queue, or the "no window" error.
-pub async fn on_ui<T: Send + 'static>(editor: &Editor, f: impl FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static) -> Result<T, CmdError> {
+pub async fn on_ui<T: Send + 'static>(
+    editor: &Editor,
+    f: impl FnOnce(&mut ShellState, &egui::Context) -> Result<T, CmdError> + Send + 'static,
+) -> Result<T, CmdError> {
     UiQueue::of(editor)?.run(f).await
 }

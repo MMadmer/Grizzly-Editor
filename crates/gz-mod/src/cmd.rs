@@ -11,7 +11,10 @@ use serde_json::{Map, Value, json};
 use crate::doc::entry_line;
 use crate::edit::Edit;
 use crate::model::{Command, GlobalVar, Manifest};
-use crate::rules::{normalize_github_repo, valid_global_name, validate_github_repo, validate_id, validate_mode_id, validate_version, validate_website};
+use crate::rules::{
+    normalize_github_repo, valid_global_name, validate_github_repo, validate_id, validate_mode_id,
+    validate_version, validate_website,
+};
 use crate::service::{ArgCx, ManifestArgs, ManifestFields, ManifestService, ManifestState, command_check};
 use crate::text::{display_value, split_list, trim};
 use crate::{commands, io};
@@ -31,7 +34,9 @@ pub fn register(reg: &mut Registry) {
 /// Hangs the area on the editor: a project that opens or is created without `mod.ltx` gets
 /// its scaffold.
 pub fn install(editor: &Editor) {
-    ProjectHooks::of(editor).on_scaffold(|root, name| io::scaffold(root, name).map(|_| ()).map_err(|e| format!("mod.ltx could not be written: {e}")));
+    ProjectHooks::of(editor).on_scaffold(|root, name| {
+        io::scaffold(root, name).map(|_| ()).map_err(|e| format!("mod.ltx could not be written: {e}"))
+    });
 }
 
 fn refuse(message: impl Into<String>) -> CmdError {
@@ -56,7 +61,10 @@ async fn open(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<ManifestService>), 
 }
 
 fn has_dir(tree: &FileTree, name: &str) -> bool {
-    RelPath::new(name).ok().and_then(|rel| tree.entry(&rel).map(|e| e.kind)).is_some_and(|k| matches!(k, EntryKind::Dir | EntryKind::Link))
+    RelPath::new(name)
+        .ok()
+        .and_then(|rel| tree.entry(&rel).map(|e| e.kind))
+        .is_some_and(|k| matches!(k, EntryKind::Dir | EntryKind::Link))
 }
 
 fn commands_json(commands: &[Command]) -> Value {
@@ -83,7 +91,8 @@ fn commands_json(commands: &[Command]) -> Value {
 #[must_use]
 pub fn manifest_json(editor: &Editor, state: &ManifestState, m: &Manifest, tree: &FileTree) -> Value {
     let world = ManifestFields::of(editor).get("world").map_or(Value::Null, |f| f(state));
-    let modes: Vec<Value> = m.provides_modes.iter().map(|p| json!({ "id": p.id, "title": p.title })).collect();
+    let modes: Vec<Value> =
+        m.provides_modes.iter().map(|p| json!({ "id": p.id, "title": p.title })).collect();
     let vars: Vec<Value> = m.vars.iter().map(|v| json!({ "name": v.name, "value": v.value })).collect();
     let mut dirs = Map::new();
     for d in ["gamedata", "patch", "spawn", "scripts", "levels"] {
@@ -179,7 +188,11 @@ async fn mod_set_manifest(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply 
         edits.push(Edit::set("module", "version", v));
     }
     if let Some(v) = arg(&args, "author") {
-        edits.push(if v.is_empty() { Edit::remove("module", "author") } else { Edit::set("module", "author", display_value(&v, false)) });
+        edits.push(if v.is_empty() {
+            Edit::remove("module", "author")
+        } else {
+            Edit::set("module", "author", display_value(&v, false))
+        });
     }
     if let Some(v) = arg(&args, "description") {
         let d = trim(&v);
@@ -187,15 +200,25 @@ async fn mod_set_manifest(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply 
             return Err(refuse("description is too long (4095 bytes at most)"));
         }
         // the one text that routinely holds ';' and line breaks: always quoted
-        edits.push(if d.is_empty() { Edit::remove("module", "description") } else { Edit::set("module", "description", display_value(d, true)) });
+        edits.push(if d.is_empty() {
+            Edit::remove("module", "description")
+        } else {
+            Edit::set("module", "description", display_value(d, true))
+        });
     }
     if let Some(off) = args.bool("disable_game_updates") {
-        edits.push(if off { Edit::set("module", "disable_game_updates", "true") } else { Edit::remove("module", "disable_game_updates") });
+        edits.push(if off {
+            Edit::set("module", "disable_game_updates", "true")
+        } else {
+            Edit::remove("module", "disable_game_updates")
+        });
     }
     if let Some(v) = arg(&args, "website") {
         let w = trim(&v);
         if !validate_website(w) {
-            return Err(refuse("invalid website (only https://ap-pro.ru or https://moddb.com links are allowed)"));
+            return Err(refuse(
+                "invalid website (only https://ap-pro.ru or https://moddb.com links are allowed)",
+            ));
         }
         edits.push(Edit::optional("module", "website", w));
     }
@@ -260,6 +283,10 @@ async fn mod_set_manifest(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply 
         edits.push(Edit::set("module", "target", v));
     } else if !modes.is_empty() {
         edits.push(Edit::set("module", "target", "new"));
+    } else if mode == "*" {
+        // oracle: the C++ wrote `existing` here, which turned a classic module (`mode = *`,
+        // `target = any`: it mounts in every game) into one gated on a mode named "*" the first
+        // time anything of its manifest was set; a classic module stays classic
     } else if !mode.is_empty() {
         edits.push(Edit::set("module", "target", "existing"));
     }
@@ -288,7 +315,8 @@ async fn mod_set_manifest(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply 
         let Some(hook) = ManifestArgs::of(&ed).get(key) else {
             return Err(refuse(format!("'{key}' cannot be set: this editor has no Mod Browser support")));
         };
-        let cx = ArgCx { editor: ed.clone(), root: service.root().to_path_buf(), value, manifest: cur.clone() };
+        let cx =
+            ArgCx { editor: ed.clone(), root: service.root().to_path_buf(), value, manifest: cur.clone() };
         edits.extend(hook(cx).await.map_err(refuse)?);
     }
 
@@ -301,7 +329,9 @@ async fn mod_set_manifest(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply 
 
 async fn mod_exclude(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let (_project, service) = open(&ed).await?;
-    let Some(path) = args.text("path") else { return Err(refuse("missing 'path' (project-relative, e.g. docs or design/story.md)")) };
+    let Some(path) = args.text("path") else {
+        return Err(refuse("missing 'path' (project-relative, e.g. docs or design/story.md)"));
+    };
     // a value that still carries its escaped separators
     let path = path.replace("\\\\", "\\");
     // true unless told otherwise - the menu item it stands for excludes
@@ -364,7 +394,8 @@ async fn mod_commands(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let Some(m) = snap.manifest() else { return Err(refuse("mod.ltx not found in the project")) };
     let (functions, problems) = command_check(&ed, &session, m).await;
     // "E404 commands: '...'" -> {code, text}
-    let problems: Vec<Value> = problems.iter().map(|p| json!({ "code": p.code, "text": p.message })).collect();
+    let problems: Vec<Value> =
+        problems.iter().map(|p| json!({ "code": p.code, "text": p.message })).collect();
     Ok(json!({ "commands": commands_json(&m.commands), "functions": functions, "problems": problems }))
 }
 
@@ -379,7 +410,10 @@ mod tests {
         assert_eq!(vars.len(), 2);
         assert_eq!(vars[1].value, "\"1\"");
         assert_eq!(parse_vars("a=1, b=2").unwrap().len(), 2);
-        assert_eq!(parse_vars("a-b = 1").unwrap_err().message, "a global variable is named by letters, digits and _: 'a-b'");
+        assert_eq!(
+            parse_vars("a-b = 1").unwrap_err().message,
+            "a global variable is named by letters, digits and _: 'a-b'"
+        );
         assert_eq!(parse_vars("a=1,a=2").unwrap_err().message, "the global variable 'a' is declared twice");
     }
 

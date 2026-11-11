@@ -87,7 +87,10 @@ impl SpawnBake {
 }
 
 /// The entity of a spawn point, decoded with the game's configs when the scene kept it raw.
-fn entity_of<'a>(e: &'a SpawnEntity, settings: Option<&(dyn Settings + Sync)>) -> Option<std::borrow::Cow<'a, Entity>> {
+fn entity_of<'a>(
+    e: &'a SpawnEntity,
+    settings: Option<&(dyn Settings + Sync)>,
+) -> Option<std::borrow::Cow<'a, Entity>> {
     match e {
         SpawnEntity::Decoded(d) => Some(std::borrow::Cow::Borrowed(d.as_ref())),
         raw => settings.and_then(|s| raw.decode(s)).map(std::borrow::Cow::Owned),
@@ -101,7 +104,12 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
     let level = input.level.as_str();
     // O_PHYS_S with an overridden visual is the vanilla recipe for a placed prop
     let section = input.section.as_deref().filter(|s| !s.is_empty()).unwrap_or("physic_object");
-    let mode_line = input.mode.as_deref().filter(|m| !m.is_empty()).map(|m| format!("mode      = {m}\r\n")).unwrap_or_default();
+    let mode_line = input
+        .mode
+        .as_deref()
+        .filter(|m| !m.is_empty())
+        .map(|m| format!("mode      = {m}\r\n"))
+        .unwrap_or_default();
     let mut fresh = String::new();
     let mut replaced: Vec<String> = Vec::new();
     // models staged by this bake: a later op naming one finds it there
@@ -148,7 +156,10 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
                 Found::Staged | Found::Game => true,
                 Found::Project(src) => {
                     out.stage.push((src.clone(), visual.clone()));
-                    out.log.push(format!("* [XMS] spawn export: staged '{}' -> gamedata\\meshes\\{visual}.ogf", so.reference));
+                    out.log.push(format!(
+                        "* [XMS] spawn export: staged '{}' -> gamedata\\meshes\\{visual}.ogf",
+                        so.reference
+                    ));
                     staged_now.insert(visual.clone());
                     true
                 }
@@ -211,7 +222,12 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         // build's check sees both and names them.
         if pt.kind == PointKind::PlayerStart {
             let op = unique_op(&replaced, &o.name);
-            let _ = write!(fresh, "[obj:{op}]\r\nop        = start\r\nlevel     = {level}\r\nposition  = {}\r\ndirection = {}\r\n", f3(xf.c()), f3(angles));
+            let _ = write!(
+                fresh,
+                "[obj:{op}]\r\nop        = start\r\nlevel     = {level}\r\nposition  = {}\r\ndirection = {}\r\n",
+                f3(xf.c()),
+                f3(angles)
+            );
             fresh.push_str(&mode_line);
             fresh.push_str("\r\n");
             replaced.push(format!("obj:{op}"));
@@ -246,18 +262,27 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         // the WHOLE op - a physic entity that spawns without a visual crashes the client inside
         // net_Spawn.
         let vname = entity_visual(&entity, input.settings);
-        let section_visual = input.settings.filter(|s| s.section_exist(&sp_section)).and_then(|s| s.r_string(&sp_section, "visual"));
+        let section_visual = input
+            .settings
+            .filter(|s| s.section_exist(&sp_section))
+            .and_then(|s| s.r_string(&sp_section, "visual"));
         let mut bytes = None;
         if !vname.is_empty() {
             let info = input.visuals.spawns.get(&vname);
-            let found = if staged_now.contains(&vname) { Found::Staged } else { info.map_or(Found::Missing, |i| i.found.clone()) };
+            let found = if staged_now.contains(&vname) {
+                Found::Staged
+            } else {
+                info.map_or(Found::Missing, |i| i.found.clone())
+            };
             match found {
                 Found::Staged | Found::Game | Found::Project(_) => {}
                 Found::Sdk(src) => {
                     // the chooser lists the SDK's own meshes too: a model picked there is staged
                     // into the project, so the module carries it like any project mesh
                     out.stage.push((src, vname.clone()));
-                    out.log.push(format!("* [XMS] spawn export: staged SDK model -> gamedata\\meshes\\{vname}.ogf"));
+                    out.log.push(format!(
+                        "* [XMS] spawn export: staged SDK model -> gamedata\\meshes\\{vname}.ogf"
+                    ));
                     staged_now.insert(vname.clone());
                 }
                 Found::Missing => {
@@ -375,7 +400,8 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
                 if sh.kind == CF_SPHERE {
                     let p = s_matrix.transform_tiny(sh.center());
                     let r = sh.radius() * sc.x;
-                    let _ = write!(fresh, "shape{si}    = sphere,{},{},{},{}\r\n", f(p.x), f(p.y), f(p.z), f(r));
+                    let _ =
+                        write!(fresh, "shape{si}    = sphere,{},{},{},{}\r\n", f(p.x), f(p.y), f(p.z), f(r));
                 } else {
                     let b = sh.matrix().mul_a43(&s_matrix);
                     let (i, j, k, c) = (b.row(0), b.row(1), b.row(2), b.c());
@@ -394,9 +420,14 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             if !pt.can_take_order() && !entity_takes_order(&entity) {
                 out.warn(format!("'{op}' ({sp_section}) is no stalker - its order is left out"));
             } else if order.kind == 2 && order.route.is_empty() {
-                out.warn(format!("'{op}' patrols without a route - its order is left out; pick one in Order\\Route"));
+                out.warn(format!(
+                    "'{op}' patrols without a route - its order is left out; pick one in Order\\Route"
+                ));
             } else {
-                if order.kind == 2 && scene.find(ObjClass::Way, &order.route).is_none() && !input.game_patrols.contains(order.route.as_str()) {
+                if order.kind == 2
+                    && scene.find(ObjClass::Way, &order.route).is_none()
+                    && !input.game_patrols.contains(order.route.as_str())
+                {
                     out.warn(format!("'{op}' patrols '{}', which is neither a way path of this level nor a path of the game", order.route));
                 }
                 if strip_ini_section(&mut cd, "xms_order") {
@@ -434,12 +465,16 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
         };
         let name = o.name.as_str();
         if !valid_path_name(name) {
-            out.warn(format!("way path '{name}' is left out - a path name takes a-z, 0-9, _ - . only; rename it"));
+            out.warn(format!(
+                "way path '{name}' is left out - a path name takes a-z, 0-9, _ - . only; rename it"
+            ));
             out.result.skipped += 1;
             continue;
         }
         if input.game_patrols.contains(name) {
-            out.warn(format!("way path '{name}' is left out - the game has a path of that name; rename yours"));
+            out.warn(format!(
+                "way path '{name}' is left out - the game has a path of that name; rename yours"
+            ));
             out.result.skipped += 1;
             continue;
         }
@@ -487,7 +522,11 @@ pub fn bake(input: &SpawnInput<'_>) -> Result<SpawnBake, ExportError> {
             out.stage.clear();
             return Ok(out);
         }
-        return Err(ExportError::new(if input.selected_only { "no scene objects selected" } else { "the scene has no placeable objects" }));
+        return Err(ExportError::new(if input.selected_only {
+            "no scene objects selected"
+        } else {
+            "the scene has no placeable objects"
+        }));
     }
     out.text = Some(if input.mirror { fresh } else { merge_spawn_text(input.old_text, &replaced, &fresh) });
     Ok(out)
@@ -504,7 +543,8 @@ pub fn spawn_visual(e: &SpawnEntity, settings: Option<&(dyn Settings + Sync)>) -
 fn entity_visual(entity: &Entity, settings: Option<&(dyn Settings + Sync)>) -> String {
     let mut vname = entity.visual_name().map(config_visual).unwrap_or_default();
     let section = entity.section();
-    if let Some(def) = settings.filter(|s| s.section_exist(section)).and_then(|s| s.r_string(section, "visual"))
+    if let Some(def) =
+        settings.filter(|s| s.section_exist(section)).and_then(|s| s.r_string(section, "visual"))
         && !vname.is_empty()
         && vname.eq_ignore_ascii_case(&config_visual(def))
     {
@@ -612,9 +652,29 @@ mod tests {
     /// A prop, a Player Start, a way path and a stalker who patrols it.
     fn scene(st: &MapSettings) -> SceneState {
         let mut s = SceneState::default();
-        s.insert(authored(Object::new(ObjClass::SceneObject, "box 1", ObjData::SceneObject(SceneObjectData::library("meshes/props/box.ogf"))), Vec3::new(1.0, 2.0, 3.0)));
-        s.insert(authored(Object::new(ObjClass::SpawnPoint, "start", ObjData::Spawn(Box::new(SpawnData::of_kind(PointKind::PlayerStart)))), Vec3::new(10.0, 0.5, -4.25)));
-        let mut way = WayData { kind: 0, points: vec![WayPoint::new("wp00", Vec3::new(0.0, 0.0, 0.0)), WayPoint::new("", Vec3::new(5.0, 0.0, 0.0))] };
+        s.insert(authored(
+            Object::new(
+                ObjClass::SceneObject,
+                "box 1",
+                ObjData::SceneObject(SceneObjectData::library("meshes/props/box.ogf")),
+            ),
+            Vec3::new(1.0, 2.0, 3.0),
+        ));
+        s.insert(authored(
+            Object::new(
+                ObjClass::SpawnPoint,
+                "start",
+                ObjData::Spawn(Box::new(SpawnData::of_kind(PointKind::PlayerStart))),
+            ),
+            Vec3::new(10.0, 0.5, -4.25),
+        ));
+        let mut way = WayData {
+            kind: 0,
+            points: vec![
+                WayPoint::new("wp00", Vec3::new(0.0, 0.0, 0.0)),
+                WayPoint::new("", Vec3::new(5.0, 0.0, 0.0)),
+            ],
+        };
         way.points[0].flags = 1;
         way.points[0].links.push((1, 1.0));
         way.points[1].links.push((0, 0.5));
@@ -623,7 +683,10 @@ mod tests {
         let mut sd = SpawnData::of_kind(PointKind::Spawn);
         sd.entity = Some(SpawnEntity::Decoded(Arc::new(entity)));
         sd.order = XmsOrder { kind: 2, route: "walk_1".into(), flags: 1, ..XmsOrder::default() };
-        s.insert(authored(Object::new(ObjClass::SpawnPoint, "guard", ObjData::Spawn(Box::new(sd))), Vec3::new(-1.0, 0.0, 2.0)));
+        s.insert(authored(
+            Object::new(ObjClass::SpawnPoint, "guard", ObjData::Spawn(Box::new(sd))),
+            Vec3::new(-1.0, 0.0, 2.0),
+        ));
         s
     }
 
@@ -662,7 +725,13 @@ mod tests {
             dir(&s, "guard"),
         );
         assert_eq!(bake.text.as_deref(), Some(expected.as_str()));
-        assert_eq!(bake.custom_data, [("l01_escape_guard.ltx".to_owned(), "[xms_order]\r\norder = patrol\r\nroute = walk_1\r\nmove = run\r\n".to_owned())]);
+        assert_eq!(
+            bake.custom_data,
+            [(
+                "l01_escape_guard.ltx".to_owned(),
+                "[xms_order]\r\norder = patrol\r\nroute = walk_1\r\nmove = run\r\n".to_owned()
+            )]
+        );
         let r = &bake.result;
         assert_eq!((r.exported, r.starts, r.paths, r.orders, r.skipped, r.missing), (4, 1, 1, 1, 0, 0));
         assert_eq!(r.names, ["box_1", "start", "guard", "walk_1"]);
@@ -714,7 +783,14 @@ mod tests {
     fn op_names_are_made_unique() {
         let mut s = SceneState::default();
         for n in ["box 1", "box-1", "box_1"] {
-            s.insert(authored(Object::new(ObjClass::SceneObject, n, ObjData::SceneObject(SceneObjectData::library("props\\box"))), Vec3::ZERO));
+            s.insert(authored(
+                Object::new(
+                    ObjClass::SceneObject,
+                    n,
+                    ObjData::SceneObject(SceneObjectData::library("props\\box")),
+                ),
+                Vec3::ZERO,
+            ));
         }
         let mut visuals = Visuals::default();
         visuals.props.insert("props\\box".into(), Found::Staged);

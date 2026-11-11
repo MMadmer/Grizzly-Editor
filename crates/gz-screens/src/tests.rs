@@ -26,10 +26,16 @@ fn the_model_reads_the_file() {
     assert_eq!(night.show, LOADING | PAUSE);
     assert_eq!(night.levels, ["l01_escape", "l02_garbage"]);
     assert_eq!(night.weight, 2.5);
-    assert_eq!((night.music.as_str(), night.tracks.clone()), ("tracks", vec!["rain".to_owned(), "wind".to_owned()]));
+    assert_eq!(
+        (night.music.as_str(), night.tracks.clone()),
+        ("tracks", vec!["rain".to_owned(), "wind".to_owned()])
+    );
     assert_eq!(night.hide, HIDE_BAR | HIDE_TIP);
     let (a, b) = (&night.layers[0], &night.layers[1]);
-    assert_eq!((a.file.as_str(), a.fit, a.opacity, a.x, a.y, a.w, a.h), ("screens\\night.dds", Fit::Contain, 0.5, 10.0, 20.0, 30.0, 40.0));
+    assert_eq!(
+        (a.file.as_str(), a.fit, a.opacity, a.x, a.y, a.w, a.h),
+        ("screens\\night.dds", Fit::Contain, 0.5, 10.0, 20.0, 30.0, 40.0)
+    );
     assert_eq!((b.texture.as_str(), b.sound), ("screens\\grain.dds", false));
     assert_eq!(s.track("rain").map(|t| (t.play, t.volume)), Some((MENU, 0.8)));
 }
@@ -55,7 +61,14 @@ fn a_changed_model_writes_its_sections_in_its_order() {
     let mut s = Screens::parse(&doc);
     let id = s.new_screen_id("Night");
     assert_eq!(id, "night_2");
-    s.screens.insert(0, Screen { id, layers: vec![Layer { file: "screens\\b.gif".into(), ..Layer::default() }], ..Screen::default() });
+    s.screens.insert(
+        0,
+        Screen {
+            id,
+            layers: vec![Layer { file: "screens\\b.gif".into(), ..Layer::default() }],
+            ..Screen::default()
+        },
+    );
     s.remove_track("rain");
     s.only_screens = [false, false];
     s.next_track = [false, false];
@@ -64,7 +77,9 @@ fn a_changed_model_writes_its_sections_in_its_order() {
     assert!(!text.contains("[screens]"));
     assert!(!text.contains("[track.rain]"));
     assert!(text.find("[screen.night_2]").unwrap() < text.find("[screen.night]").unwrap());
-    assert!(text.contains("show              = loading, menu, pause\r\nlayer             = screens\\b.gif\r\n"));
+    assert!(
+        text.contains("show              = loading, menu, pause\r\nlayer             = screens\\b.gif\r\n")
+    );
     let back = Screens::parse(&doc);
     assert_eq!(back, s);
     assert_eq!(back.screen("night").map(|d| d.tracks.clone()), Some(vec!["wind".to_owned()]));
@@ -154,7 +169,13 @@ fn validation_says_what_is_wrong() {
                 ],
                 ..Screen::default()
             },
-            Screen { id: "two".into(), music: "tracks".into(), tracks: vec!["nope".into()], layers: vec![Layer { file: "screens\\a.dds".into(), ..Layer::default() }], ..Screen::default() },
+            Screen {
+                id: "two".into(),
+                music: "tracks".into(),
+                tracks: vec!["nope".into()],
+                layers: vec![Layer { file: "screens\\a.dds".into(), ..Layer::default() }],
+                ..Screen::default()
+            },
         ],
         tracks: vec![Track { id: "t".into(), file: "screens\\t.wav".into(), ..Track::default() }],
         ..Screens::default()

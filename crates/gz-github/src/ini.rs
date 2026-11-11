@@ -89,7 +89,11 @@ pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
             if digits == 0 {
                 break;
             }
-            *slot = rest.get(..digits).and_then(|d| d.parse::<u64>().ok()).unwrap_or(u64::from(u32::MAX)).min(u64::from(u32::MAX));
+            *slot = rest
+                .get(..digits)
+                .and_then(|d| d.parse::<u64>().ok())
+                .unwrap_or(u64::from(u32::MAX))
+                .min(u64::from(u32::MAX));
             rest = rest.get(digits..).unwrap_or("");
             match rest.strip_prefix('.') {
                 Some(next) => rest = next,

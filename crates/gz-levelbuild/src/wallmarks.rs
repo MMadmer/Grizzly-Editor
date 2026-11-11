@@ -33,11 +33,12 @@ pub struct Slot {
 #[must_use]
 pub fn read(part: &[u8]) -> Vec<Slot> {
     let r = Reader::new(part);
-    let (items, sized) = match (r.open_chunk(WM_CHUNK_ITEMS).ok().flatten(), r.open_chunk(WM_CHUNK_ITEMS2).ok().flatten()) {
-        (Some(c), _) => (c, false),
-        (None, Some(c)) => (c, true),
-        (None, None) => return Vec::new(),
-    };
+    let (items, sized) =
+        match (r.open_chunk(WM_CHUNK_ITEMS).ok().flatten(), r.open_chunk(WM_CHUNK_ITEMS2).ok().flatten()) {
+            (Some(c), _) => (c, false),
+            (None, Some(c)) => (c, true),
+            (None, None) => return Vec::new(),
+        };
     let items = items.reader();
     let mut out = Vec::new();
     for id in 0u32.. {
@@ -61,10 +62,16 @@ pub fn read(part: &[u8]) -> Vec<Slot> {
             let Ok(n) = q.r_u32() else { break };
             let Ok(raw) = q.take((n as usize).saturating_mul(LIT)) else { break };
             let verts = raw
-                .chunks_exact(LIT)
+                .as_chunks::<LIT>()
+                .0
+                .iter()
                 .map(|v| {
                     let f = |i: usize| f32::from_le_bytes([v[i], v[i + 1], v[i + 2], v[i + 3]]);
-                    (Vec3::new(f(0), f(4), f(8)), u32::from_le_bytes([v[12], v[13], v[14], v[15]]), Vec2::new(f(16), f(20)))
+                    (
+                        Vec3::new(f(0), f(4), f(8)),
+                        u32::from_le_bytes([v[12], v[13], v[14], v[15]]),
+                        Vec2::new(f(16), f(20)),
+                    )
                 })
                 .collect();
             marks.push(Mark { center, radius, verts });

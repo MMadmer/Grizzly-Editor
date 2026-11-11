@@ -42,7 +42,10 @@ impl Services {
     }
 
     /// Like [`Self::get_or_init`] for an `init` that can fail. Nothing is stored on failure.
-    pub fn get_or_try_init<T: Any + Send + Sync, E>(&self, init: impl FnOnce() -> Result<T, E>) -> Result<Arc<T>, E> {
+    pub fn get_or_try_init<T: Any + Send + Sync, E>(
+        &self,
+        init: impl FnOnce() -> Result<T, E>,
+    ) -> Result<Arc<T>, E> {
         if let Some(found) = self.get::<T>() {
             return Ok(found);
         }

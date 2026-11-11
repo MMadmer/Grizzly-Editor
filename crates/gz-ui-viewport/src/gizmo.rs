@@ -36,7 +36,9 @@ pub fn supports(class: ObjClass) -> [bool; 3] {
         ObjClass::Particles => [true, false, false],
         ObjClass::Way => [true, false, false],
         ObjClass::AiMap => [true, true, false],
-        ObjClass::Portal | ObjClass::Sector | ObjClass::Wallmark | ObjClass::DetailObjects => [false, false, false],
+        ObjClass::Portal | ObjClass::Sector | ObjClass::Wallmark | ObjClass::DetailObjects => {
+            [false, false, false]
+        }
         _ => [true, true, true],
     }
 }
@@ -78,7 +80,11 @@ impl Anchor {
     pub fn of(points: &[(Vec3, Vec3, Option<Aabb>)]) -> Option<Anchor> {
         let (first_pos, first_rot, _) = *points.first()?;
         if points.len() == 1 {
-            return Some(Anchor { position: first_pos, rotation: gz_scene::math::rotation_matrix(first_rot), count: 1 });
+            return Some(Anchor {
+                position: first_pos,
+                rotation: gz_scene::math::rotation_matrix(first_rot),
+                count: 1,
+            });
         }
         let mut b = Aabb::EMPTY;
         for (p, _, bb) in points {
@@ -274,7 +280,13 @@ fn drag_plane(status: Status, camera_dir: Vec3) -> Option<(Vec3, Vec3)> {
 /// The world delta of a move drag from the press's ray to this one, and the axis it moves
 /// along (`SelectProcess` for `EType::Move`).
 #[must_use]
-pub fn move_delta(status: Status, start: Vec3, camera_dir: Vec3, ray0: &Ray, ray: &Ray) -> Option<(Vec3, Vec3)> {
+pub fn move_delta(
+    status: Status,
+    start: Vec3,
+    camera_dir: Vec3,
+    ray0: &Ray,
+    ray: &Ray,
+) -> Option<(Vec3, Vec3)> {
     if status == Status::Xyz {
         return None;
     }
@@ -302,7 +314,13 @@ pub fn moved(saved: Vec3, delta: Vec3, vector: Vec3, snap: Option<f32>) -> Vec3 
 /// The delta of a scale drag (`SelectProcess` for `EType::Scale`); the centre takes the sum
 /// of the view-space delta's components, times 0.7, on every axis.
 #[must_use]
-pub fn scale_delta(status: Status, start: Vec3, camera: &gz_render::Camera, ray0: &Ray, ray: &Ray) -> Option<(Vec3, Vec3)> {
+pub fn scale_delta(
+    status: Status,
+    start: Vec3,
+    camera: &gz_render::Camera,
+    ray0: &Ray,
+    ray: &Ray,
+) -> Option<(Vec3, Vec3)> {
     let (normal, vector) = drag_plane(status, camera.forward)?;
     let a = ray_plane(ray0, start, normal)?;
     let b = ray_plane(ray, start, normal)?;
@@ -318,7 +336,14 @@ pub fn scale_delta(status: Status, start: Vec3, camera: &gz_render::Camera, ray0
 /// `ScaleProcess` for one object: a glow takes the dragged component on every axis; steps when
 /// the scale snap is on; never zero.
 #[must_use]
-pub fn scaled(saved: Vec3, mut delta: Vec3, mut vector: Vec3, status: Status, glow: bool, snap: Option<f32>) -> Vec3 {
+pub fn scaled(
+    saved: Vec3,
+    mut delta: Vec3,
+    mut vector: Vec3,
+    status: Status,
+    glow: bool,
+    snap: Option<f32>,
+) -> Vec3 {
     if glow {
         match status {
             Status::X => delta = Vec3::splat(delta.x),
@@ -347,7 +372,14 @@ pub fn scaled(saved: Vec3, mut delta: Vec3, mut vector: Vec3, status: Status, gl
 /// The angle one mouse move turns by (`SelectProcess` for `EType::Rotate`): `dx`, `dy` in
 /// pixels, `sr` the tools' rotation sensitivity; `step` the angle snap in degrees when on.
 #[must_use]
-pub fn rotate_amount(status: Status, dx: f32, dy: f32, sr: f32, step: Option<f32>, remainder: &mut f32) -> f32 {
+pub fn rotate_amount(
+    status: Status,
+    dx: f32,
+    dy: f32,
+    sr: f32,
+    step: Option<f32>,
+    remainder: &mut f32,
+) -> f32 {
     let amount = sr * dx + -sr * dy;
     let mut f = match status {
         Status::X => -amount,
@@ -450,8 +482,14 @@ mod tests {
         let a = rotate_amount(Status::Y, 10.0, 0.0, 0.01, step, &mut rem);
         assert_eq!(a, 0.0);
         assert!(rem != 0.0);
-        assert_eq!(scaled(Vec3::ONE, Vec3::new(-1.0, 0.0, 0.0), Vec3::X, Status::X, false, None).x, gz_scene::math::EPS);
-        assert_eq!(scaled(Vec3::ONE, Vec3::new(0.5, 0.0, 0.0), Vec3::X, Status::X, true, None), Vec3::splat(1.5));
+        assert_eq!(
+            scaled(Vec3::ONE, Vec3::new(-1.0, 0.0, 0.0), Vec3::X, Status::X, false, None).x,
+            gz_scene::math::EPS
+        );
+        assert_eq!(
+            scaled(Vec3::ONE, Vec3::new(0.5, 0.0, 0.0), Vec3::X, Status::X, true, None),
+            Vec3::splat(1.5)
+        );
     }
 
     #[test]

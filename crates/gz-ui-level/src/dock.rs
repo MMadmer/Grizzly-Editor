@@ -6,7 +6,9 @@ use egui::{Context, Pos2, Rect, Ui, pos2};
 use gz_ui::layout as store;
 use gz_ui::splitter;
 
-use crate::layout::{DockLayout, KEY_BOTTOM, KEY_LEFT, KEY_RIGHT, KEY_RIGHT_TOP, PanelId, SizeClass, Sizes, Slot};
+use crate::layout::{
+    DockLayout, KEY_BOTTOM, KEY_LEFT, KEY_RIGHT, KEY_RIGHT_TOP, PanelId, SizeClass, Sizes, Slot,
+};
 
 /// The gap between two slots (the docking separator).
 pub const GAP: f32 = 2.0;
@@ -36,7 +38,11 @@ pub struct Geometry {
 }
 
 fn min_of(layout: &DockLayout, s: Slot, horizontal: bool) -> f32 {
-    layout.panels_in(s).iter().map(|p| if horizontal { p.min_size().0 } else { p.min_size().1 }).fold(0.0, f32::max)
+    layout
+        .panels_in(s)
+        .iter()
+        .map(|p| if horizontal { p.min_size().0 } else { p.min_size().1 })
+        .fold(0.0, f32::max)
 }
 
 fn stored(ctx: &Context, key: &str, default: f32) -> f32 {
@@ -48,7 +54,8 @@ fn stored(ctx: &Context, key: &str, default: f32) -> f32 {
 pub fn geometry(ctx: &Context, rect: Rect, layout: &DockLayout, class: SizeClass) -> Geometry {
     let d = Sizes::of(class);
     let shown = |s: Slot| layout.slot_shown(s, class);
-    let (left, rt, rb, bottom) = (shown(Slot::Left), shown(Slot::RightTop), shown(Slot::RightBottom), shown(Slot::Bottom));
+    let (left, rt, rb, bottom) =
+        (shown(Slot::Left), shown(Slot::RightTop), shown(Slot::RightBottom), shown(Slot::Bottom));
     let right = rt || rb;
     let (w, h) = (rect.width(), rect.height());
     let mut lines = Vec::new();
@@ -71,12 +78,30 @@ pub fn geometry(ctx: &Context, rect: Rect, layout: &DockLayout, class: SizeClass
     let mut slots = [None; 4];
     if left {
         slots[Slot::Left.index()] = Some(Rect::from_min_max(rect.min, pos2(x0 + left_w, rect.max.y)));
-        lines.push(Line { key: KEY_LEFT, vertical: true, at: pos2(x0 + left_w + GAP * 0.5, rect.min.y), length: h, sign: 1.0, lo: lmin, hi: left_hi, default: d.left });
+        lines.push(Line {
+            key: KEY_LEFT,
+            vertical: true,
+            at: pos2(x0 + left_w + GAP * 0.5, rect.min.y),
+            length: h,
+            sign: 1.0,
+            lo: lmin,
+            hi: left_hi,
+            default: d.left,
+        });
     }
     if right {
         let hi = (w - VIEWPORT_MIN.0 - GAP - if left { left_w + GAP } else { 0.0 }).max(rmin);
         let col = Rect::from_min_max(pos2(x1 - right_w, rect.min.y), rect.max);
-        lines.push(Line { key: KEY_RIGHT, vertical: true, at: pos2(col.min.x - GAP * 0.5, rect.min.y), length: h, sign: -1.0, lo: rmin, hi, default: d.right });
+        lines.push(Line {
+            key: KEY_RIGHT,
+            vertical: true,
+            at: pos2(col.min.x - GAP * 0.5, rect.min.y),
+            length: h,
+            sign: -1.0,
+            lo: rmin,
+            hi,
+            default: d.right,
+        });
         match (rt, rb) {
             (true, true) => {
                 let tmin = min_of(layout, Slot::RightTop, false) + STRIP;
@@ -84,9 +109,20 @@ pub fn geometry(ctx: &Context, rect: Rect, layout: &DockLayout, class: SizeClass
                 let default = (h * d.right_top_frac).round();
                 let hi = (h - GAP - bmin).max(tmin);
                 let top = stored(ctx, KEY_RIGHT_TOP, default).clamp(tmin, hi);
-                slots[Slot::RightTop.index()] = Some(Rect::from_min_max(col.min, pos2(col.max.x, col.min.y + top)));
-                slots[Slot::RightBottom.index()] = Some(Rect::from_min_max(pos2(col.min.x, col.min.y + top + GAP), col.max));
-                lines.push(Line { key: KEY_RIGHT_TOP, vertical: false, at: pos2(col.min.x, col.min.y + top + GAP * 0.5), length: col.width(), sign: 1.0, lo: tmin, hi, default });
+                slots[Slot::RightTop.index()] =
+                    Some(Rect::from_min_max(col.min, pos2(col.max.x, col.min.y + top)));
+                slots[Slot::RightBottom.index()] =
+                    Some(Rect::from_min_max(pos2(col.min.x, col.min.y + top + GAP), col.max));
+                lines.push(Line {
+                    key: KEY_RIGHT_TOP,
+                    vertical: false,
+                    at: pos2(col.min.x, col.min.y + top + GAP * 0.5),
+                    length: col.width(),
+                    sign: 1.0,
+                    lo: tmin,
+                    hi,
+                    default,
+                });
             }
             (true, false) => slots[Slot::RightTop.index()] = Some(col),
             _ => slots[Slot::RightBottom.index()] = Some(col),
@@ -97,8 +133,18 @@ pub fn geometry(ctx: &Context, rect: Rect, layout: &DockLayout, class: SizeClass
         let bmin = min_of(layout, Slot::Bottom, false) + STRIP;
         let hi = (h - VIEWPORT_MIN.1 - GAP).max(bmin);
         let bh = stored(ctx, KEY_BOTTOM, d.bottom).clamp(bmin, hi);
-        let strip = Rect::from_min_max(pos2(viewport.min.x, rect.max.y - bh), pos2(viewport.max.x, rect.max.y));
-        lines.push(Line { key: KEY_BOTTOM, vertical: false, at: pos2(strip.min.x, strip.min.y - GAP * 0.5), length: strip.width(), sign: -1.0, lo: bmin, hi, default: d.bottom });
+        let strip =
+            Rect::from_min_max(pos2(viewport.min.x, rect.max.y - bh), pos2(viewport.max.x, rect.max.y));
+        lines.push(Line {
+            key: KEY_BOTTOM,
+            vertical: false,
+            at: pos2(strip.min.x, strip.min.y - GAP * 0.5),
+            length: strip.width(),
+            sign: -1.0,
+            lo: bmin,
+            hi,
+            default: d.bottom,
+        });
         viewport.max.y = strip.min.y - GAP;
         slots[Slot::Bottom.index()] = Some(strip);
     }
@@ -109,7 +155,9 @@ pub fn geometry(ctx: &Context, rect: Rect, layout: &DockLayout, class: SizeClass
 pub fn splitters(ui: &mut Ui, g: &Geometry) -> bool {
     let mut changed = false;
     for l in &g.lines {
-        changed |= splitter::splitter_at(ui, l.key, l.vertical, l.at, l.length, l.sign, l.lo, l.hi, l.default).changed;
+        changed |=
+            splitter::splitter_at(ui, l.key, l.vertical, l.at, l.length, l.sign, l.lo, l.hi, l.default)
+                .changed;
     }
     changed
 }

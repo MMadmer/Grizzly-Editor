@@ -14,7 +14,8 @@ use crate::AREA;
 use crate::canvas::Canvas;
 use crate::tab::{self, DrawerTab, GraphTab};
 
-const NEED_PATH: &str = "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset or npc/ambush.behasset)";
+const NEED_PATH: &str =
+    "missing 'path' (project-relative, e.g. quests/wolf_debt.nqasset or npc/ambush.behasset)";
 
 fn refused(message: impl Into<String>) -> CmdError {
     CmdError::new("refused", message)
@@ -77,17 +78,27 @@ async fn open_tab(ed: &Arc<Editor>, wire: &str, id: &str) -> Result<(), CmdError
 }
 
 fn tab_of<'s>(shell: &'s mut gz_app::ShellState, id: &str) -> Result<&'s mut GraphTab, CmdError> {
-    shell.document_mut(id).and_then(|d| d.as_any_mut()).and_then(|a| a.downcast_mut::<GraphTab>()).ok_or_else(|| refused("window not found"))
+    shell
+        .document_mut(id)
+        .and_then(|d| d.as_any_mut())
+        .and_then(|a| a.downcast_mut::<GraphTab>())
+        .ok_or_else(|| refused("window not found"))
 }
 
 /// What the view of a tab is now (`AppendView`).
 fn view_json(t: &GraphTab, ctx: &egui::Context, open_tabs: usize) -> Value {
     let ppp = ctx.pixels_per_point();
     let m = &t.mirror;
-    let abs = t.handle().map(|d| d.path().abs.to_string_lossy().replace('\\', "/")).unwrap_or_else(|| t.wire().to_owned());
+    let abs = t
+        .handle()
+        .map(|d| d.path().abs.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|| t.wire().to_owned());
     let nodes = t.handle().map_or(0, |d| d.store.snapshot().graph.nodes.len());
     let drawer = t.drawer();
-    let pane = |r: Option<egui::Rect>| r.filter(|r| r.width() > 0.0).map_or(Value::Null, |r| json!([r0(r.min.x), r0(r.min.y), r0(r.width()), r0(r.height())]));
+    let pane = |r: Option<egui::Rect>| {
+        r.filter(|r| r.width() > 0.0)
+            .map_or(Value::Null, |r| json!([r0(r.min.x), r0(r.min.y), r0(r.width()), r0(r.height())]))
+    };
     let graph_drawn = t.pane_graph.is_some();
     let details_drawn = t.pane_details.is_some();
     let ins = &t.inspector;
@@ -137,7 +148,11 @@ fn graph_tabs(shell: &gz_app::ShellState) -> usize {
     shell
         .tabs_json()
         .iter()
-        .filter(|t| t.get("id").and_then(Value::as_str).is_some_and(|i| i.starts_with("quest:") || i.starts_with("beh:")))
+        .filter(|t| {
+            t.get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|i| i.starts_with("quest:") || i.starts_with("beh:"))
+        })
         .count()
 }
 
@@ -195,7 +210,11 @@ fn apply(t: &mut GraphTab, ctx: &egui::Context, r: ViewReq) -> Result<u32, CmdEr
         asked = true;
     }
     if r.action_split.is_some() || r.vars_split.is_some() {
-        t.inspector.set_split(ctx, r.action_split.filter(|v| *v >= 0.0).map(|v| v as f32), r.vars_split.filter(|v| *v >= 0.0).map(|v| v as f32));
+        t.inspector.set_split(
+            ctx,
+            r.action_split.filter(|v| *v >= 0.0).map(|v| v as f32),
+            r.vars_split.filter(|v| *v >= 0.0).map(|v| v as f32),
+        );
         asked = true;
     }
     let graph = t.handle().map(|d| d.store.snapshot()).ok_or_else(|| refused("window not found"))?;
@@ -249,7 +268,13 @@ fn apply(t: &mut GraphTab, ctx: &egui::Context, r: ViewReq) -> Result<u32, CmdEr
         t.can_scroll(&r.scroll).map_err(|why| refused(format!("scroll={}: {why}", r.scroll)))?;
         t.inspector.scroll = Some(r.scroll.clone());
     }
-    let any = asked || !r.frame.is_empty() || r.zoom.is_some() || r.center.is_some() || !r.select.is_empty() || !r.slot.is_empty() || !r.scroll.is_empty();
+    let any = asked
+        || !r.frame.is_empty()
+        || r.zoom.is_some()
+        || r.center.is_some()
+        || !r.select.is_empty()
+        || !r.slot.is_empty()
+        || !r.scroll.is_empty();
     let owe = if any { if !r.scroll.is_empty() || !r.slot.is_empty() { 2 } else { 1 } } else { 0 };
     t.owe_frames(owe);
     ctx.request_repaint();
@@ -257,7 +282,9 @@ fn apply(t: &mut GraphTab, ctx: &egui::Context, r: ViewReq) -> Result<u32, CmdEr
 }
 
 async fn quest_view(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
-    let Some(path) = arg(&args, "path").filter(|p| !p.is_empty()) else { return Err(refused("path is required")) };
+    let Some(path) = arg(&args, "path").filter(|p| !p.is_empty()) else {
+        return Err(refused("path is required"));
+    };
     let svc = NqService::of(&ed)?;
     let d = svc.open(&ed, &path).await.map_err(refused)?;
     let wire = d.path().wire;
@@ -337,10 +364,49 @@ async fn quest_open(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
     Err(refused(reply.get("error").and_then(Value::as_str).unwrap_or("quest_open failed")))
 }
 
-/// Registers `quest_view` and `quest_open` (after `gz_nq::register`: this one brings the tab up).
+/// The graph's tab up before a tab command acts, as the C++ `OpenMcpWindow` did: the document
+/// opens and its tab comes up in the same call when there is a window. A path that does not
+/// open is left to the command, which answers it as it always did.
+async fn bring_up(ed: &Arc<Editor>, args: &Args) {
+    if !ed.frames.has_window() {
+        return;
+    }
+    let Some(path) = arg(args, "path").filter(|p| !p.is_empty()) else { return };
+    let Ok(svc) = NqService::of(ed) else { return };
+    let Ok(d) = svc.open(ed, &path).await else { return };
+    let wire = d.path().wire;
+    let id = tab::doc_id(&wire, gz_nq::asset::is_behaviour_path(&wire));
+    if let Err(e) = open_tab(ed, &wire, &id).await {
+        ed.log.warn(format!("[nq] the tab of {wire} did not come up: {}", e.message));
+    }
+}
+
+macro_rules! with_tab {
+    ($($name:ident),*) => {
+        $(
+            pub(super) async fn $name(ed: Arc<Editor>, args: Args, o: Origin) -> Reply {
+                bring_up(&ed, &args).await;
+                gz_nq::tab_handlers::$name(ed, args, o).await
+            }
+        )*
+    };
+}
+
+mod tab_cmds {
+    use super::*;
+    with_tab!(quest_edit, quest_find, quest_bookmarks, quest_history, quest_minimap);
+}
+
+/// Registers `quest_view`, `quest_open` and the tab commands that bring the tab up (after
+/// `gz_nq::register`, whose handlers they wrap).
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "quest_view", quest_view);
     reg.add(AREA, "quest_open", quest_open);
+    reg.add(AREA, "quest_edit", tab_cmds::quest_edit);
+    reg.add(AREA, "quest_find", tab_cmds::quest_find);
+    reg.add(AREA, "quest_bookmarks", tab_cmds::quest_bookmarks);
+    reg.add(AREA, "quest_history", tab_cmds::quest_history);
+    reg.add(AREA, "quest_minimap", tab_cmds::quest_minimap);
 }
 
 #[cfg(test)]
@@ -354,7 +420,10 @@ mod tests {
         a.insert("keys".into(), json!("sideways"));
         assert_eq!(toggle(&a, "details", true).ok().flatten(), Some(false));
         assert_eq!(toggle(&a, "graph_panel", true).ok().flatten(), None);
-        assert_eq!(toggle(&a, "keys", false).err().map(|e| e.message), Some("keys must be \"show\", \"hide\" or \"toggle\"".to_owned()));
+        assert_eq!(
+            toggle(&a, "keys", false).err().map(|e| e.message),
+            Some("keys must be \"show\", \"hide\" or \"toggle\"".to_owned())
+        );
         assert_eq!(tab::doc_id("quests\\a.nqasset", false), "quest:quests/a.nqasset");
         assert_eq!(tab::doc_id("npc/x.behasset", true), "beh:npc/x.behasset");
     }

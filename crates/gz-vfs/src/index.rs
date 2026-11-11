@@ -216,7 +216,11 @@ mod tests {
 
     #[test]
     fn backslash_order() {
-        let ix = Index::build(vec![("s/a/x.ogg".into(), 1, Source::Loose), ("s/a1.ogg".into(), 2, Source::Loose), ("s/a.ogg".into(), 3, Source::Loose)]);
+        let ix = Index::build(vec![
+            ("s/a/x.ogg".into(), 1, Source::Loose),
+            ("s/a1.ogg".into(), 2, Source::Loose),
+            ("s/a.ogg".into(), 3, Source::Loose),
+        ]);
         let keys: Vec<&str> = ix.iter().map(|f| f.path).collect();
         assert_eq!(keys, ["s/a.ogg", "s/a1.ogg", "s/a/x.ogg"]);
         assert_eq!(ix.get("s/a1.ogg").map(|f| f.size), Some(2));

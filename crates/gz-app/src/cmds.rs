@@ -19,7 +19,9 @@ use crate::keys::Chord;
 use crate::palette as pal;
 use crate::queue::{UiQueue, on_ui};
 use crate::scroll::{self, ScrollTo};
-use crate::settings::{self, EditorSettings, PREFS, PrefType, parse_pref, pref_def, pref_json};
+use crate::settings::{
+    self, EditorSettings, PREFS, PrefType, WIRE_PREFS, parse_pref, pref_json, wire_pref_def,
+};
 use crate::shell::{CloseMode, OpenError, ShellState, default_log_state};
 
 const AREA: &str = "shell";
@@ -87,23 +89,32 @@ fn dirty_json(list: &[(String, String)]) -> Value {
 }
 
 fn unsaved(list: &[(String, String)]) -> CmdError {
-    CmdError::unsaved(dirty_json(list)).with_data(json!({ "dirty": dirty_json(list), "note": "pass save=true or discard=true" }))
+    CmdError::unsaved(dirty_json(list))
+        .with_data(json!({ "dirty": dirty_json(list), "note": "pass save=true or discard=true" }))
 }
 
 /// The modal on top: a kit dialog, else the palette. `(title, id, rect pt)`.
 fn top_modal(shell: &ShellState, ctx: &Context) -> Option<(String, String, Rect)> {
     if let Some(d) = dialog::modal_on_top(ctx) {
         let ppp = ctx.pixels_per_point();
-        let r = Rect::from_min_max(egui::pos2(d.rect_px[0] / ppp, d.rect_px[1] / ppp), egui::pos2(d.rect_px[2] / ppp, d.rect_px[3] / ppp));
+        let r = Rect::from_min_max(
+            egui::pos2(d.rect_px[0] / ppp, d.rect_px[1] / ppp),
+            egui::pos2(d.rect_px[2] / ppp, d.rect_px[3] / ppp),
+        );
         return Some((d.title, d.id, r));
     }
-    shell.palette_open().then(|| ("Command Palette".to_owned(), contract::PALETTE_ID.to_owned(), shell.palette_rect()))
+    shell
+        .palette_open()
+        .then(|| ("Command Palette".to_owned(), contract::PALETTE_ID.to_owned(), shell.palette_rect()))
 }
 
 /// The MCP id a kit dialog answers to: the contract's id for one of its dialogs, else
 /// `dlg.<name>`.
 fn dialog_mcp_id(kit: &str) -> String {
-    contract::DIALOGS.iter().find(|(_, w)| w.ends_with(&format!("###{kit}"))).map_or_else(|| kit.to_owned(), |(id, _)| (*id).to_owned())
+    contract::DIALOGS
+        .iter()
+        .find(|(_, w)| w.ends_with(&format!("###{kit}")))
+        .map_or_else(|| kit.to_owned(), |(id, _)| (*id).to_owned())
 }
 
 fn dialogs_json(shell: &ShellState, ctx: &Context) -> Vec<Value> {
@@ -206,19 +217,39 @@ async fn ui_list(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
     on_ui(&editor, |shell, ctx| {
         let ppp = ctx.pixels_per_point();
         let mut out = tabs_fields(shell);
-        out.insert("panels".into(), Value::Array(contract::PANELS.iter().map(|(id, w)| panel_json(shell, ctx, id, w)).collect()));
+        out.insert(
+            "panels".into(),
+            Value::Array(contract::PANELS.iter().map(|(id, w)| panel_json(shell, ctx, id, w)).collect()),
+        );
         out.insert("drawer".into(), json!(shell.drawer.map_or("none", Drawer::id)));
-        let drawers: Vec<Value> = contract::DRAWERS.iter().map(|(id, w)| json!({ "id": id, "window": w, "open": shell.drawer.map(Drawer::id) == Some(*id) })).collect();
+        let drawers: Vec<Value> = contract::DRAWERS
+            .iter()
+            .map(
+                |(id, w)| json!({ "id": id, "window": w, "open": shell.drawer.map(Drawer::id) == Some(*id) }),
+            )
+            .collect();
         out.insert("drawers".into(), Value::Array(drawers));
         out.insert("dialogs".into(), Value::Array(dialogs_json(shell, ctx)));
-        let popups: Vec<Value> = shell.popups().iter().map(|p| json!({ "id": p.id, "title": p.title, "window": p.window, "rect": rect_px(p.rect, ppp) })).collect();
+        let popups: Vec<Value> = shell
+            .popups()
+            .iter()
+            .map(
+                |p| json!({ "id": p.id, "title": p.title, "window": p.window, "rect": rect_px(p.rect, ppp) }),
+            )
+            .collect();
         out.insert("popups".into(), Value::Array(popups));
         out.insert("work_area".into(), rect_px(shell.work(), ppp));
         out.insert("start_page".into(), json!(shell.start_page()));
         out.insert("size_class".into(), json!(shell.size_class()));
         let level = shell.level_state();
-        out.insert("layout_custom".into(), json!(level.get("layout_custom").and_then(Value::as_bool).unwrap_or(false)));
-        out.insert("viewport_maximized".into(), json!(level.get("viewport_maximized").and_then(Value::as_bool).unwrap_or(false)));
+        out.insert(
+            "layout_custom".into(),
+            json!(level.get("layout_custom").and_then(Value::as_bool).unwrap_or(false)),
+        );
+        out.insert(
+            "viewport_maximized".into(),
+            json!(level.get("viewport_maximized").and_then(Value::as_bool).unwrap_or(false)),
+        );
         out.insert("ui_scale".into(), json!(r2(ppp)));
         out.insert("dpi".into(), json!(r3(ppp)));
         Ok(Value::Object(out))
@@ -237,6 +268,16 @@ async fn ui_tab(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let save = args.flag("save");
     let discard = args.flag("discard");
     let has_project = editor.project_opt().is_some();
+    if action == "close" && save && !discard {
+        // the tab's save, waited for until it is clean: a document that writes on the pools has
+        // not finished when its save returns
+        let wanted = id.clone();
+        let target = on_ui(&editor, move |shell, _| {
+            Ok(if wanted.is_empty() { shell.active().to_owned() } else { wanted })
+        })
+        .await?;
+        crate::unsaved::save_tabs(&editor, vec![target]).await.map_err(invalid)?;
+    }
     on_ui(&editor, move |shell, ctx| match action.as_str() {
         "list" => Ok(Value::Object(tabs_fields(shell))),
         "next" | "prev" => {
@@ -279,9 +320,15 @@ async fn ui_tab(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
                 return Err(invalid("pass id=, or kind= (and path= for a file)"));
             }
             match kind.as_str() {
-                "quest" | "beh" if path.is_empty() => return Err(invalid("path= names the graph (project-relative)")),
-                "model" if path.is_empty() => return Err(invalid("path= names the model (a visual, meshes-relative)")),
-                "texture" if !matches!(source.as_str(), "" | "project" | "0" | "editor" | "1" | "darf" | "2") => {
+                "quest" | "beh" if path.is_empty() => {
+                    return Err(invalid("path= names the graph (project-relative)"));
+                }
+                "model" if path.is_empty() => {
+                    return Err(invalid("path= names the model (a visual, meshes-relative)"));
+                }
+                "texture"
+                    if !matches!(source.as_str(), "" | "project" | "0" | "editor" | "1" | "darf" | "2") =>
+                {
                     return Err(invalid("source must be project, editor or darf"));
                 }
                 "mod_settings" | "releases" if !has_project => return Err(invalid("no project is open")),
@@ -312,7 +359,9 @@ async fn ui_tab(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             if save && discard {
                 return Err(invalid("save and discard exclude each other"));
             }
-            let Some(info) = shell.tab_json(&id) else { return Err(invalid(format!("no tab '{id}' (ui_tab action=list names them)"))) };
+            let Some(info) = shell.tab_json(&id) else {
+                return Err(invalid(format!("no tab '{id}' (ui_tab action=list names them)")));
+            };
             let mode = if save {
                 CloseMode::SaveFirst
             } else if discard {
@@ -515,7 +564,9 @@ async fn ui_split(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         }
         match value {
             Some(v) => layout::set(ctx, &key, v),
-            None if !layout::has(ctx, &key) => return Err(invalid(format!("no split '{key}' (ui_split with no key lists them)"))),
+            None if !layout::has(ctx, &key) => {
+                return Err(invalid(format!("no split '{key}' (ui_split with no key lists them)")));
+            }
             None => {}
         }
         Ok(json!({ "key": key, "value": g(layout::get(ctx, &key, 0.0)), "unit": "pt" }))
@@ -613,7 +664,13 @@ fn ui_contract_json() -> Value {
 /// save= or discard= decides what happens to unsaved tabs; neither refuses with the list
 /// ("unsaved"), except under -nodlg, where they are discarded as the exit prompt always answered
 /// there. Returns the fields that say what was done.
-fn settle_unsaved(shell: &mut ShellState, ctx: &Context, save: bool, mut discard: bool, unattended: bool) -> Result<Map<String, Value>, CmdError> {
+fn settle_unsaved(
+    shell: &mut ShellState,
+    ctx: &Context,
+    save: bool,
+    mut discard: bool,
+    unattended: bool,
+) -> Result<Map<String, Value>, CmdError> {
     if save && discard {
         return Err(invalid("save and discard exclude each other"));
     }
@@ -657,6 +714,16 @@ async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Rep
     let discard = args.flag("discard");
     let size = (args.f32("width"), args.f32("height"));
     let unattended = editor.flags.unattended;
+    // saving on request: every area's documents and the tabs' own work are written first, and
+    // the answer names the tabs that were dirty
+    let mut saved_before = None;
+    if action == "close" && save && !discard {
+        let dirty = queue.run(|shell, _| Ok(shell.dirty_tabs())).await?;
+        editor.save_all().await.map_err(|e| invalid(e.message))?;
+        if !dirty.is_empty() {
+            saved_before = Some(dirty_json(&dirty));
+        }
+    }
     let done = queue
         .run(move |shell, ctx| {
             let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
@@ -672,7 +739,9 @@ async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Rep
                     }
                 }
                 "resize" => {
-                    let (Some(w), Some(h)) = size else { return Err(invalid("resize takes width and height in pt, at least 320 x 240")) };
+                    let (Some(w), Some(h)) = size else {
+                        return Err(invalid("resize takes width and height in pt, at least 320 x 240"));
+                    };
                     if !(320.0..=16384.0).contains(&w) || !(240.0..=16384.0).contains(&h) {
                         return Err(invalid("resize takes width and height in pt, at least 320 x 240"));
                     }
@@ -695,7 +764,10 @@ async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Rep
             Ok((false, Map::new()))
         })
         .await?;
-    let (closing, settled) = done;
+    let (closing, mut settled) = done;
+    if let Some(saved) = saved_before {
+        settled.insert("saved".into(), saved);
+    }
     if closing {
         quit_soon(&editor);
     } else {
@@ -736,7 +808,11 @@ async fn titlebar_info(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Rep
         let ppp = ctx.pixels_per_point();
         let c = shell.caption_geom();
         let px = |v: f32| (v * ppp) as i64;
-        let tabs: Vec<Value> = shell.tab_rects().into_iter().map(|(id, r)| json!({ "id": id, "rect": [px(r.min.x), px(r.min.y), px(r.max.x), px(r.max.y)] })).collect();
+        let tabs: Vec<Value> = shell
+            .tab_rects()
+            .into_iter()
+            .map(|(id, r)| json!({ "id": id, "rect": [px(r.min.x), px(r.min.y), px(r.max.x), px(r.max.y)] }))
+            .collect();
         let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
         Ok(json!({
             "enabled": true,
@@ -786,13 +862,17 @@ fn theme_json(accent: gz_ui::Accent) -> Value {
 
 async fn theme(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let requested = str_arg(&args, "preset").to_owned();
-    let action = args.text("action").map_or_else(|| if requested.is_empty() { "get".to_owned() } else { "set".to_owned() }, |a| a.to_ascii_lowercase());
+    let action = args.text("action").map_or_else(
+        || if requested.is_empty() { "get".to_owned() } else { "set".to_owned() },
+        |a| a.to_ascii_lowercase(),
+    );
     let settings = EditorSettings::of(&editor);
     let accent = match action.as_str() {
         "set" => match settings::parse_theme(&requested) {
             Some(a) => Some(a),
             None => {
-                return Err(CmdError::invalid("unknown theme preset").with_data(json!({ "accepted": ["grizzly-purple", "graphite"] })));
+                return Err(CmdError::invalid("unknown theme preset")
+                    .with_data(json!({ "accepted": ["grizzly-purple", "graphite"] })));
             }
         },
         "reset" => Some(gz_ui::Accent::default()),
@@ -831,18 +911,34 @@ async fn preferences(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply 
         let shown = settings.page.lock().to_string();
         let arg = if search.is_empty() { shown.clone() } else { format!("{shown}|{search}") };
         let active = on_ui(&editor, move |shell, ctx| {
-            shell.open(ctx, OpenRequest { arg: Some(arg), ..OpenRequest::kind("preferences") }, false, Asker::Mcp).map_err(|e| match e {
-                OpenError::Unsaved { id, label } => unsaved(&[(id, label)]),
-                OpenError::Other(e) => invalid(e),
-            })?;
+            shell
+                .open(
+                    ctx,
+                    OpenRequest { arg: Some(arg), ..OpenRequest::kind("preferences") },
+                    false,
+                    Asker::Mcp,
+                )
+                .map_err(|e| match e {
+                    OpenError::Unsaved { id, label } => unsaved(&[(id, label)]),
+                    OpenError::Other(e) => invalid(e),
+                })?;
             Ok(shell.active().to_owned())
         })
         .await?;
         return Ok(json!({ "page": shown, "active_tab": active }));
     }
-    let def = if key.is_empty() { None } else { Some(pref_def(&key).ok_or_else(|| invalid(format!("no preference '{key}' (preferences action=get lists them)")))?) };
+    let def =
+        if key.is_empty() {
+            None
+        } else {
+            Some(wire_pref_def(&key).ok_or_else(|| {
+                invalid(format!("no preference '{key}' (preferences action=get lists them)"))
+            })?)
+        };
     if action == "set" {
-        let (Some(def), Some(value)) = (def, text_arg(&args, "value")) else { return Err(invalid("set takes key= and value=")) };
+        let (Some(def), Some(value)) = (def, text_arg(&args, "value")) else {
+            return Err(invalid("set takes key= and value="));
+        };
         let v = parse_pref(def, &value).map_err(|e| invalid(format!("{} takes {e}", def.key)))?;
         settings.set_pref(def.key, v);
         settings.save_soon(&editor);
@@ -860,7 +956,7 @@ async fn preferences(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply 
         return Ok(Value::Object(out));
     }
     let mut all = Map::new();
-    for d in &PREFS {
+    for d in PREFS.iter().take(WIRE_PREFS) {
         all.insert(d.key.to_owned(), pref_json(d, settings.pref(d.key).unwrap_or(d.default)));
     }
     let page = settings.page.lock().to_string();
@@ -874,16 +970,32 @@ async fn shortcuts(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let filter = str_arg(&args, "filter").to_owned();
     on_ui(&editor, move |shell, _ctx| {
         if action == "list" {
-            let rows: Vec<Value> = shell.shortcut_rows().into_iter().filter(|r| gz_ui::search::matches(&filter, &format!("{} {} {}", r.0, r.1, r.2))).map(|(id, label, keys)| json!({ "id": id, "label": label, "keys": keys })).collect();
+            let rows: Vec<Value> = shell
+                .shortcut_rows()
+                .into_iter()
+                .filter(|r| gz_ui::search::matches(&filter, &format!("{} {} {}", r.0, r.1, r.2)))
+                .map(|(id, label, keys)| json!({ "id": id, "label": label, "keys": keys }))
+                .collect();
             return Ok(json!({ "shortcuts": rows }));
         }
         if action != "set" && action != "clear" {
             return Err(invalid("action must be list, set or clear"));
         }
-        let target = shell.shortcut_target(&command).ok_or_else(|| invalid(format!("no command '{command}' takes a shortcut (shortcuts action=list names them)")))?;
-        let chord = if action == "set" { Some(Chord::parse(&keys).ok_or_else(|| invalid("keys must be a shortcut such as Ctrl+Shift+S, F5 or Num Del"))?) } else { None };
+        let target = shell.shortcut_target(&command).ok_or_else(|| {
+            invalid(format!("no command '{command}' takes a shortcut (shortcuts action=list names them)"))
+        })?;
+        let chord = if action == "set" {
+            Some(
+                Chord::parse(&keys)
+                    .ok_or_else(|| invalid("keys must be a shortcut such as Ctrl+Shift+S, F5 or Num Del"))?,
+            )
+        } else {
+            None
+        };
         let moved_from = shell.bind(target, chord);
-        let row = shell.shortcut_row(target).map_or(Value::Null, |(id, label, keys)| json!({ "id": id, "label": label, "keys": keys }));
+        let row = shell
+            .shortcut_row(target)
+            .map_or(Value::Null, |(id, label, keys)| json!({ "id": id, "label": label, "keys": keys }));
         Ok(json!({ "shortcut": row, "moved_from": moved_from.map_or(Value::Null, Value::String) }))
     })
     .await
@@ -894,7 +1006,10 @@ async fn shortcuts(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 async fn command_palette(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let query = str_arg(&args, "query").to_owned();
     let id = str_arg(&args, "id").to_owned();
-    let action = args.text("action").map_or_else(|| if query.is_empty() { "state".to_owned() } else { "query".to_owned() }, str::to_owned);
+    let action = args.text("action").map_or_else(
+        || if query.is_empty() { "state".to_owned() } else { "query".to_owned() },
+        str::to_owned,
+    );
     let command = args.i64("command");
     let limit = args.i64("limit").unwrap_or(50).clamp(1, 250) as usize;
     on_ui(&editor, move |shell, ctx| {
@@ -928,7 +1043,8 @@ use crate::palette::PaletteRow;
 
 async fn progress(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let action = args.str_or("action", "get").to_owned();
-    let running: Vec<gz_editor::JobInfo> = editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
+    let running: Vec<gz_editor::JobInfo> =
+        editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
     match action.as_str() {
         "cancel" => {
             if running.is_empty() {
@@ -955,10 +1071,23 @@ async fn progress(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             })
             .await
             .unwrap_or_else(|_| (Vec::new(), default_log_state(&editor))),
-        Err(_) => (if cancel_mark { running.iter().map(|j| j.id).collect() } else { Vec::new() }, default_log_state(&editor)),
+        Err(_) => (
+            if cancel_mark { running.iter().map(|j| j.id).collect() } else { Vec::new() },
+            default_log_state(&editor),
+        ),
     };
     let now = crate::tasks::now_ms();
-    let background: Vec<Value> = running.iter().map(|j| crate::tasks::task_json(j, crate::tasks::card_of(&editor, j.id).as_ref(), cancelled.contains(&j.id), now)).collect();
+    let background: Vec<Value> = running
+        .iter()
+        .map(|j| {
+            crate::tasks::task_json(
+                j,
+                crate::tasks::card_of(&editor, j.id).as_ref(),
+                cancelled.contains(&j.id),
+                now,
+            )
+        })
+        .collect();
     Ok(json!({
         "active": false,
         "cancelable": false,
@@ -969,6 +1098,93 @@ async fn progress(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         "warnings": log.warnings,
         "status_line": log.last,
     }))
+}
+
+// ---- list_commands, exec_command -------------------------------------------------------------
+
+/// The editor's command table as `list_commands` numbers it: one entry per command, its
+/// variants (`COMMAND_ZOOM_EXTENTS."Selected"`) as presets of it, in the order they were
+/// registered. `(name, menu, [(index into the shell's commands, preset)])`.
+type CommandRow = (String, String, Vec<(usize, Option<String>)>);
+
+fn command_table(shell: &ShellState) -> Vec<CommandRow> {
+    let mut out: Vec<CommandRow> = Vec::new();
+    for (i, c) in shell.parts.commands.iter().enumerate() {
+        let (base, preset) = match c.id.split_once('.') {
+            Some((b, p)) => (b.to_owned(), Some(p.trim_matches('"').to_owned())),
+            None => (c.id.to_string(), None),
+        };
+        match out.iter_mut().find(|(n, _, _)| *n == base) {
+            Some(entry) => entry.2.push((i, preset)),
+            None => out.push((base, format!("{}\\{}", c.group, c.label), vec![(i, preset)])),
+        }
+    }
+    out
+}
+
+async fn list_commands(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
+    on_ui(&editor, |shell, _| {
+        let rows: Vec<Value> = command_table(shell)
+            .into_iter()
+            .enumerate()
+            .map(|(id, (name, menu, variants))| {
+                let mut row = Map::new();
+                row.insert("id".into(), json!(id));
+                row.insert("name".into(), json!(name));
+                row.insert("menu".into(), json!(menu));
+                // the variants beyond the plain command are its documented parameter forms
+                if variants.len() > 1 {
+                    let presets: Vec<Value> = variants
+                        .iter()
+                        .map(|(i, p)| {
+                            let desc =
+                                shell.parts.commands.get(*i).map(|c| c.label.to_string()).unwrap_or_default();
+                            json!({ "desc": desc, "p1": p.clone().map_or(json!(0), Value::String), "p2": 0 })
+                        })
+                        .collect();
+                    row.insert("presets".into(), Value::Array(presets));
+                }
+                Value::Object(row)
+            })
+            .collect();
+        Ok(json!({ "commands": rows }))
+    })
+    .await
+}
+
+async fn exec_command(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
+    // an escaped "Edit\Undo" may arrive with both slashes
+    let name = str_arg(&args, "name").replace("\\\\", "\\");
+    let id = args.i64("id");
+    let p1 = args
+        .text("p1s")
+        .map(str::to_owned)
+        .or_else(|| args.i64("p1i").filter(|v| *v >= 0).map(|v| v.to_string()));
+    on_ui(&editor, move |shell, ctx| {
+        let table = command_table(shell);
+        let found = match id.filter(|v| *v >= 0) {
+            Some(i) => usize::try_from(i).ok().filter(|i| *i < table.len()),
+            None if !name.is_empty() => table
+                .iter()
+                .position(|(n, menu, _)| n.eq_ignore_ascii_case(&name) || menu.eq_ignore_ascii_case(&name)),
+            None => None,
+        };
+        let Some((at, (cmd_name, _, variants))) = found.and_then(|i| table.get(i).map(|e| (i, e.clone())))
+        else {
+            return Err(invalid("unknown command - see list_commands"));
+        };
+        // the first parameter picks a variant; without one the plain command, else the first
+        let pick = match &p1 {
+            Some(p) => variants
+                .iter()
+                .find(|(_, v)| v.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(p)))
+                .or_else(|| variants.iter().find(|(_, v)| v.is_none())),
+            None => variants.iter().find(|(_, v)| v.is_none()).or_else(|| variants.first()),
+        };
+        let ran = pick.is_some_and(|(i, _)| shell.run_command(ctx, *i));
+        Ok(json!({ "id": at, "name": cmd_name, "result": u32::from(ran) }))
+    })
+    .await
 }
 
 /// Registers the commands of the frame. Call it after the commands it replaces (the headless
@@ -995,6 +1211,8 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "shortcuts", shortcuts);
     reg.add(AREA, "command_palette", command_palette);
     reg.add(AREA, "progress", progress);
+    reg.add(AREA, "list_commands", list_commands);
+    reg.add(AREA, "exec_command", exec_command);
     crate::shots::register(reg);
 }
 

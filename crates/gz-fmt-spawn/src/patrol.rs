@@ -57,7 +57,13 @@ fn need<'a>(r: &Reader<'a>, id: u32, what: &'static str) -> Result<Reader<'a>> {
 
 impl PatrolPoint {
     fn read(r: &mut Reader<'_>) -> Result<Self> {
-        Ok(Self { name: r_name(r)?, position: r.r_vec3()?, flags: r.r_u32()?, level_vertex: r.r_u32()?, game_vertex: r.r_u16()? })
+        Ok(Self {
+            name: r_name(r)?,
+            position: r.r_vec3()?,
+            flags: r.r_u32()?,
+            level_vertex: r.r_u32()?,
+            game_vertex: r.r_u16()?,
+        })
     }
 
     fn write(&self, w: &mut Writer) {
@@ -164,7 +170,13 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn sample_path(name: &str) -> PatrolPath {
-        let point = |n: &str, x: f32| PatrolPoint { name: n.into(), position: Vec3::new(x, 0.0, 1.0), flags: 1, level_vertex: 10, game_vertex: 2 };
+        let point = |n: &str, x: f32| PatrolPoint {
+            name: n.into(),
+            position: Vec3::new(x, 0.0, 1.0),
+            flags: 1,
+            level_vertex: 10,
+            game_vertex: 2,
+        };
         PatrolPath {
             name: name.into(),
             declared_points: 2,

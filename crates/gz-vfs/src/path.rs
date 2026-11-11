@@ -58,7 +58,9 @@ pub fn is_tooling_entry(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    name.starts_with('.') || name.starts_with("~$") || SHELL_LITTER.iter().any(|n| n.eq_ignore_ascii_case(name))
+    name.starts_with('.')
+        || name.starts_with("~$")
+        || SHELL_LITTER.iter().any(|n| n.eq_ignore_ascii_case(name))
 }
 
 /// `Ok` when `game_root` looks like an X-Ray game: the folder, `fsgame.ltx`, and `database\` or

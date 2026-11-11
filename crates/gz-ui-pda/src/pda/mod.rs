@@ -245,6 +245,28 @@ impl DirtySource for PdaDirty {
         }
         vec![DirtyDoc { kind: SmolStr::new("pda"), name: m.shown_name(), path: Some(m.rel.clone()) }]
     }
+
+    fn save<'a>(&'a self, editor: &'a Arc<Editor>) -> gz_editor::SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(tab) = editor.project_opt().and_then(|s| s.services.get::<PdaTab>()) else {
+                return Ok(());
+            };
+            let name = tab.m.lock().shown_name();
+            save_and_read(editor, &tab).await.map_err(|e| format!("{name}: {e}"))
+        })
+    }
+
+    fn discard<'a>(&'a self, editor: &'a Arc<Editor>) -> gz_editor::SettleFuture<'a> {
+        Box::pin(async move {
+            if let Some(tab) = editor.project_opt().and_then(|s| s.services.get::<PdaTab>()) {
+                let mut m = tab.m.lock();
+                m.text = m.disk.clone();
+                m.text_dirty = false;
+            }
+            wake(editor);
+            Ok(())
+        })
+    }
 }
 
 #[derive(Default)]
@@ -318,7 +340,11 @@ pub async fn save_text(editor: &Arc<Editor>, tab: &Arc<PdaTab>) -> Result<(), St
         return Err("no PDA layout is open".to_owned());
     }
     let (p, t) = (path.clone(), text.clone());
-    editor.exec.io(move || gz_editor::fsx::write_atomic(Path::new(&p), t.as_bytes())).await.map_err(|_| format!("can't write {path}"))?;
+    editor
+        .exec
+        .io(move || gz_editor::fsx::write_atomic(Path::new(&p), t.as_bytes()))
+        .await
+        .map_err(|_| format!("can't write {path}"))?;
     {
         let mut m = tab.m.lock();
         if m.path == path {
@@ -371,7 +397,10 @@ pub async fn follow(editor: &Arc<Editor>, tab: &Arc<PdaTab>) {
         (m.path.clone(), m.disk.clone())
     };
     let p = path.clone();
-    let now = editor.exec.io(move || if Path::new(&p).is_file() { Some(gz_pda::read_text(Path::new(&p)).ok()) } else { None }).await;
+    let now = editor
+        .exec
+        .io(move || if Path::new(&p).is_file() { Some(gz_pda::read_text(Path::new(&p)).ok()) } else { None })
+        .await;
     match now {
         None => {
             let mut m = tab.m.lock();
@@ -413,9 +442,13 @@ pub async fn module_layout(editor: &Arc<Editor>) -> Option<String> {
     // nothing yet: the template, made the module's layout
     let manifest = ManifestService::of_session(editor, &session).await.ok()?;
     let _ = manifest.sync().await;
-    let (id, name) = manifest.snapshot().manifest().map(|m| (m.id.clone(), m.name.clone())).unwrap_or_default();
+    let (id, name) =
+        manifest.snapshot().manifest().map(|m| (m.id.clone(), m.name.clone())).unwrap_or_default();
     let id = if id.is_empty() { "app".to_owned() } else { id };
-    let safe: String = id.bytes().map(|c| if c.is_ascii_alphanumeric() { char::from(c.to_ascii_lowercase()) } else { '_' }).collect();
+    let safe: String = id
+        .bytes()
+        .map(|c| if c.is_ascii_alphanumeric() { char::from(c.to_ascii_lowercase()) } else { '_' })
+        .collect();
     let folder = Path::new(project.root()).join("pda");
     let file = folder.join(format!("{safe}.pdaasset"));
     let text = gz_pda::template(&safe, if name.is_empty() { &safe } else { &name });

@@ -2,11 +2,11 @@
 
 use gz_fmt_xr::{GameMaterials, Shaders, ShadersXrlc};
 
-/// `SGameMtl` flags the build reads (`XrGameMaterialLibraryInterface.h`).
+/// `SGameMtl` flags the build reads: the material library's own.
 pub mod mtl_flags {
-    pub const BREAKABLE: u32 = 1 << 0;
-    pub const CLIMABLE: u32 = 1 << 5;
-    pub const DYNAMIC: u32 = 1 << 8;
+    pub const BREAKABLE: u32 = gz_fmt_xr::GameMaterial::BREAKABLE;
+    pub const CLIMABLE: u32 = gz_fmt_xr::GameMaterial::CLIMABLE;
+    pub const DYNAMIC: u32 = gz_fmt_xr::GameMaterial::DYNAMIC;
 }
 
 /// `Shader_xrLC` flags (`Shader_xrLC.h`).
@@ -53,7 +53,8 @@ impl Engine {
     #[must_use]
     pub fn material_index(&self, name: &str) -> u16 {
         let Some(lib) = &self.materials else { return 0 };
-        lib.materials.iter().position(|m| m.name.eq_ignore_ascii_case(name)).unwrap_or(lib.materials.len()) as u16
+        lib.materials.iter().position(|m| m.name.eq_ignore_ascii_case(name)).unwrap_or(lib.materials.len())
+            as u16
     }
 
     /// `CSurface::_GameMtl`: the material's id, `None` when the name is unknown.

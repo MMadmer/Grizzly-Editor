@@ -13,7 +13,12 @@ struct Picking(AtomicBool);
 
 /// Opens the folder dialog titled `title`, starting in `start` when that is set. `done` gets the
 /// folder picked (nothing when the author cancels) on the UI thread.
-pub(crate) fn pick_folder(editor: &Arc<Editor>, title: &'static str, start: &str, done: impl FnOnce(String, &egui::Context) + Send + 'static) {
+pub(crate) fn pick_folder(
+    editor: &Arc<Editor>,
+    title: &'static str,
+    start: &str,
+    done: impl FnOnce(String, &egui::Context) + Send + 'static,
+) {
     let Ok(queue) = UiQueue::of(editor) else { return };
     let busy = editor.services.get_or_init(Picking::default);
     if busy.0.swap(true, Ordering::SeqCst) {

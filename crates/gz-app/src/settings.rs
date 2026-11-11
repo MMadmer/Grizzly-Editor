@@ -42,8 +42,13 @@ const fn def(key: &'static str, ty: PrefType, default: f64, lo: f64, hi: f64) ->
     PrefDef { key, ty, default, lo, hi }
 }
 
-/// Every preference in the order `preferences action=get` lists them.
-pub const PREFS: [PrefDef; 28] = [
+/// How many of [`PREFS`] the `preferences` command lists and takes: the C++ editor's table
+/// (`kPrefs`). The rest are kept and edited by the Preferences tab only.
+pub const WIRE_PREFS: usize = 28;
+
+/// Every preference: first the ones `preferences action=get` lists, in its order, then the ones
+/// only the Preferences tab edits (the objects' switches, recovery).
+pub const PREFS: [PrefDef; 33] = [
     def("active_idle_fps", PrefType::U32, 120.0, 30.0, 240.0),
     def("floating_panels", PrefType::Bool, 0.0, 0.0, 1.0),
     def("view_np", PrefType::Float, 0.1, 0.01, 10.0),
@@ -72,11 +77,22 @@ pub const PREFS: [PrefDef; 28] = [
     def("scene_recent_count", PrefType::U32, 10.0, 0.0, 25.0),
     def("scene_clear_color", PrefType::Color, 0x0055_5555 as f64, 0.0, 0.0),
     def("render_radius", PrefType::Float, 400.0, 10.0, 100000.0),
+    def("object_flags", PrefType::U32, 0.0, 0.0, 4_294_967_295.0),
+    def("recovery_enabled", PrefType::Bool, 1.0, 0.0, 1.0),
+    def("recovery_interval_minutes", PrefType::U32, 10.0, 1.0, 120.0),
+    def("recovery_interaction_delay_seconds", PrefType::U32, 15.0, 0.0, 120.0),
+    def("recovery_retention", PrefType::U32, 10.0, 2.0, 64.0),
 ];
 
 #[must_use]
 pub fn pref_def(key: &str) -> Option<&'static PrefDef> {
     PREFS.iter().find(|p| p.key == key)
+}
+
+/// A preference the `preferences` command knows.
+#[must_use]
+pub fn wire_pref_def(key: &str) -> Option<&'static PrefDef> {
+    PREFS.iter().take(WIRE_PREFS).find(|p| p.key == key)
 }
 
 /// A number as C's `%g` would print it, as a JSON number.
@@ -109,7 +125,8 @@ pub fn parse_pref(def: &PrefDef, text: &str) -> Result<f64, String> {
                 Some(rest) => (rest, rest.len() == 6),
                 None => (text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")).unwrap_or(text), false),
             };
-            let c = u32::from_str_radix(digits, 16).map_err(|_| "a colour as 0xAARRGGBB or #RRGGBB".to_owned())?;
+            let c = u32::from_str_radix(digits, 16)
+                .map_err(|_| "a colour as 0xAARRGGBB or #RRGGBB".to_owned())?;
             Ok(f64::from(if rgb_only { c | 0xff00_0000 } else { c }))
         }
         _ => {
@@ -154,12 +171,18 @@ impl EditorSettings {
     /// Reads the file (one read; a missing file is the defaults).
     #[must_use]
     pub fn load(path: &Path) -> Self {
-        let doc = std::fs::read(path).map(|b| LtxDoc::parse(&gz_base::text::decode_guess(&b))).unwrap_or_else(|_| LtxDoc::new());
+        let doc = std::fs::read(path)
+            .map(|b| LtxDoc::parse(&gz_base::text::decode_guess(&b)))
+            .unwrap_or_else(|_| LtxDoc::new());
         let prefs = PREFS
             .iter()
             .map(|d| doc.get("preferences", d.key).and_then(|t| parse_pref(d, t).ok()).unwrap_or(d.default))
             .collect();
-        Self { path: path.to_path_buf(), inner: Mutex::new(Inner { doc, prefs, dirty: false }), page: Mutex::new(SmolStr::new("General")) }
+        Self {
+            path: path.to_path_buf(),
+            inner: Mutex::new(Inner { doc, prefs, dirty: false }),
+            page: Mutex::new(SmolStr::new("General")),
+        }
     }
 
     /// The settings of this editor, read on first use from the editor's data root.
@@ -209,7 +232,11 @@ impl EditorSettings {
         let num = |k: &str| s.doc.get("window", k).and_then(|v| v.trim().parse::<f32>().ok());
         let size = [num("w")?, num("h")?];
         let pos = num("x").zip(num("y")).map(|(x, y)| [x, y]);
-        Some(Placement { pos, size, maximized: s.doc.get("window", "maximized").is_some_and(gz_ltx::doc::parse_bool) })
+        Some(Placement {
+            pos,
+            size,
+            maximized: s.doc.get("window", "maximized").is_some_and(gz_ltx::doc::parse_bool),
+        })
     }
 
     pub fn set_placement(&self, p: Placement) {
@@ -228,12 +255,16 @@ impl EditorSettings {
     #[must_use]
     pub fn layout(&self) -> Vec<(SmolStr, f32)> {
         let s = self.inner.lock();
-        s.doc.entries("layout").filter_map(|(k, v)| v.trim().parse::<f32>().ok().map(|v| (SmolStr::new(k), v))).collect()
+        s.doc
+            .entries("layout")
+            .filter_map(|(k, v)| v.trim().parse::<f32>().ok().map(|v| (SmolStr::new(k), v)))
+            .collect()
     }
 
     pub fn set_layout(&self, values: &[(SmolStr, f32)]) {
         let mut s = self.inner.lock();
-        let entries: Vec<(String, String)> = values.iter().map(|(k, v)| (k.to_string(), format!("{v}"))).collect();
+        let entries: Vec<(String, String)> =
+            values.iter().map(|(k, v)| (k.to_string(), format!("{v}"))).collect();
         s.doc.replace_entries("layout", entries);
         s.dirty = true;
     }
@@ -242,7 +273,10 @@ impl EditorSettings {
     #[must_use]
     pub fn shortcuts(&self) -> Vec<(SmolStr, String)> {
         let s = self.inner.lock();
-        s.doc.entries("shortcuts").map(|(k, v)| (SmolStr::new(k), gz_ltx::doc::unquote(v).to_owned())).collect()
+        s.doc
+            .entries("shortcuts")
+            .map(|(k, v)| (SmolStr::new(k), gz_ltx::doc::unquote(v).to_owned()))
+            .collect()
     }
 
     pub fn set_shortcut(&self, id: &str, keys: &str) {
@@ -263,7 +297,10 @@ impl EditorSettings {
             let log = editor.log.clone();
             editor.exec.spawn_io(move || {
                 if let Err(e) = gz_editor::fsx::write_atomic(&path, text.as_bytes()) {
-                    log.warn(format!("the editor's settings could not be written to {}: {e}", path.display()));
+                    log.warn(format!(
+                        "the editor's settings could not be written to {}: {e}",
+                        path.display()
+                    ));
                 }
             });
         }
@@ -308,12 +345,14 @@ pub fn theme_name(accent: Accent) -> &'static str {
 /// A preset by its key or its name, any case.
 #[must_use]
 pub fn parse_theme(text: &str) -> Option<Accent> {
-    [Accent::Violet, Accent::Graphite].into_iter().find(|a| text.eq_ignore_ascii_case(theme_key(*a)) || text.eq_ignore_ascii_case(theme_name(*a)))
+    [Accent::Violet, Accent::Graphite]
+        .into_iter()
+        .find(|a| text.eq_ignore_ascii_case(theme_key(*a)) || text.eq_ignore_ascii_case(theme_name(*a)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PREFS, parse_pref, parse_theme, pref_def, pref_json};
+    use super::{PREFS, WIRE_PREFS, parse_pref, parse_theme, pref_def, pref_json};
     use gz_ui::Accent;
 
     #[test]
@@ -336,7 +375,8 @@ mod tests {
         assert_eq!(pref_json(fov, 60.0), serde_json::json!(60));
         let Some(c) = pref_def("fog_color") else { return };
         assert_eq!(pref_json(c, f64::from(0x0055_5555u32)), serde_json::json!("0x00555555"));
-        assert_eq!(PREFS.len(), 28);
+        assert_eq!(PREFS.len(), 33);
+        assert_eq!(PREFS.get(WIRE_PREFS - 1).map(|d| d.key), Some("render_radius"));
     }
 
     #[test]

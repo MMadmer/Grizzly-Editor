@@ -92,6 +92,7 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
 
     let mut clicked = None;
     let mut browse = false;
+    let live_scene = gz_project::ProjectHooks::of(editor).live_scene(editor);
     page(ui, contract::WINDOW_START_PAGE, |ui| {
         page_card(ui, "link_game", "Link Game", gz_ui::metrics::DIALOG_M, |ui| {
             text::prose(
@@ -124,7 +125,9 @@ fn draw(card: &Arc<LinkCard>, ui: &mut Ui, editor: &Arc<Editor>) {
                 st.hint.as_str()
             };
             let actions = [
-                CardAction::new("Close Project", Kind::Secondary),
+                // a link that went away mid-session leaves a scene open behind this card: it is
+                // not closed from here
+                CardAction::new("Close Project", Kind::Secondary).enabled(!live_scene, "A scene is open. Link the game to get back to it; File > Project > Switch Project... closes the project."),
                 CardAction::new("Link", Kind::Primary).default_action().enabled(st.hint_ok && !st.linking, why),
             ];
             clicked = card_footer(ui, &format!("Project: {}", info.name), Tone::Muted, &actions);

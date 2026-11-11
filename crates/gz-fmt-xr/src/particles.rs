@@ -147,29 +147,88 @@ impl ActionKind {
 }
 
 /// The values an action reads, by its kind.
+// one value per action of a particle effect, read once: the size of the largest kind costs
+// nothing worth a box per action
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum ActionParams {
     /// Avoid: domain, look ahead, magnitude, epsilon.
-    Avoid { position: Domain, look_ahead: f32, magnitude: f32, epsilon: f32 },
-    Bounce { position: Domain, one_minus_friction: f32, resilience: f32, cutoff_sqr: f32 },
-    CopyVertexB { copy_pos: u32 },
-    Damping { damping: Vec3, vlow_sqr: f32, vhigh_sqr: f32 },
-    Explosion { center: Vec3, velocity: f32, magnitude: f32, stdev: f32, age: f32, epsilon: f32 },
+    Avoid {
+        position: Domain,
+        look_ahead: f32,
+        magnitude: f32,
+        epsilon: f32,
+    },
+    Bounce {
+        position: Domain,
+        one_minus_friction: f32,
+        resilience: f32,
+        cutoff_sqr: f32,
+    },
+    CopyVertexB {
+        copy_pos: u32,
+    },
+    Damping {
+        damping: Vec3,
+        vlow_sqr: f32,
+        vhigh_sqr: f32,
+    },
+    Explosion {
+        center: Vec3,
+        velocity: f32,
+        magnitude: f32,
+        stdev: f32,
+        age: f32,
+        epsilon: f32,
+    },
     /// Follow, Gravitate, MatchVelocity.
-    Field { magnitude: f32, epsilon: f32, max_radius: f32 },
-    Gravity { direction: Vec3 },
-    Jet { center: Vec3, acc: Domain, magnitude: f32, epsilon: f32, max_radius: f32 },
-    KillOld { age_limit: f32, kill_less_than: u32 },
+    Field {
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    Gravity {
+        direction: Vec3,
+    },
+    Jet {
+        center: Vec3,
+        acc: Domain,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
+    KillOld {
+        age_limit: f32,
+        kill_less_than: u32,
+    },
     Move,
     /// OrbitLine, Vortex.
-    Axis { point: Vec3, axis: Vec3, magnitude: f32, epsilon: f32, max_radius: f32 },
+    Axis {
+        point: Vec3,
+        axis: Vec3,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
     /// OrbitPoint, Scatter.
-    Point { center: Vec3, magnitude: f32, epsilon: f32, max_radius: f32 },
+    Point {
+        center: Vec3,
+        magnitude: f32,
+        epsilon: f32,
+        max_radius: f32,
+    },
     /// RandomAccel, RandomDisplace, RandomVelocity.
-    Random { domain: Domain },
-    Restore { time_left: f32 },
+    Random {
+        domain: Domain,
+    },
+    Restore {
+        time_left: f32,
+    },
     /// Sink, SinkVelocity.
-    Sink { kill_inside: u32, domain: Domain },
+    Sink {
+        kill_inside: u32,
+        domain: Domain,
+    },
     Source {
         position: Domain,
         velocity: Domain,
@@ -183,12 +242,33 @@ pub enum ActionParams {
         parent_vel: Vec3,
         parent_motion: f32,
     },
-    SpeedLimit { min_speed: f32, max_speed: f32 },
-    TargetColor { color: Vec3, alpha: f32, scale: f32, time_from: f32, time_to: f32 },
-    TargetSize { size: Vec3, scale: Vec3 },
+    SpeedLimit {
+        min_speed: f32,
+        max_speed: f32,
+    },
+    TargetColor {
+        color: Vec3,
+        alpha: f32,
+        scale: f32,
+        time_from: f32,
+        time_to: f32,
+    },
+    TargetSize {
+        size: Vec3,
+        scale: Vec3,
+    },
     /// TargetRotate, TargetRotateD, TargetVelocity, TargetVelocityD.
-    Target { value: Vec3, scale: f32 },
-    Turbulence { frequency: f32, octaves: i32, magnitude: f32, epsilon: f32, offset: Vec3 },
+    Target {
+        value: Vec3,
+        scale: f32,
+    },
+    Turbulence {
+        frequency: f32,
+        octaves: i32,
+        magnitude: f32,
+        epsilon: f32,
+        offset: Vec3,
+    },
 }
 
 /// One compiled action.
@@ -273,7 +353,8 @@ fn domain(r: &mut Reader<'_>) -> Result<Domain> {
 
 fn action(r: &mut Reader<'_>) -> Result<Action> {
     let id = r.r_u32()?;
-    let kind = ActionKind::from_id(id).ok_or_else(|| invalid(format!("particle action type {id} is not one the game has")))?;
+    let kind = ActionKind::from_id(id)
+        .ok_or_else(|| invalid(format!("particle action type {id} is not one the game has")))?;
     // `ParticleAction::Load`: the flags and the type again
     let flags = r.r_u32()?;
     r.r_u32()?;
@@ -282,17 +363,45 @@ fn action(r: &mut Reader<'_>) -> Result<Action> {
     let f = |r: &mut Reader<'_>| r.r_f32();
     let params = match kind {
         A::Avoid => P::Avoid { position: domain(r)?, look_ahead: f(r)?, magnitude: f(r)?, epsilon: f(r)? },
-        A::Bounce => P::Bounce { position: domain(r)?, one_minus_friction: f(r)?, resilience: f(r)?, cutoff_sqr: f(r)? },
+        A::Bounce => P::Bounce {
+            position: domain(r)?,
+            one_minus_friction: f(r)?,
+            resilience: f(r)?,
+            cutoff_sqr: f(r)?,
+        },
         A::CopyVertexB => P::CopyVertexB { copy_pos: r.r_u32()? },
         A::Damping => P::Damping { damping: r.r_vec3()?, vlow_sqr: f(r)?, vhigh_sqr: f(r)? },
-        A::Explosion => P::Explosion { center: r.r_vec3()?, velocity: f(r)?, magnitude: f(r)?, stdev: f(r)?, age: f(r)?, epsilon: f(r)? },
-        A::Follow | A::Gravitate | A::MatchVelocity => P::Field { magnitude: f(r)?, epsilon: f(r)?, max_radius: f(r)? },
+        A::Explosion => P::Explosion {
+            center: r.r_vec3()?,
+            velocity: f(r)?,
+            magnitude: f(r)?,
+            stdev: f(r)?,
+            age: f(r)?,
+            epsilon: f(r)?,
+        },
+        A::Follow | A::Gravitate | A::MatchVelocity => {
+            P::Field { magnitude: f(r)?, epsilon: f(r)?, max_radius: f(r)? }
+        }
         A::Gravity => P::Gravity { direction: r.r_vec3()? },
-        A::Jet => P::Jet { center: r.r_vec3()?, acc: domain(r)?, magnitude: f(r)?, epsilon: f(r)?, max_radius: f(r)? },
+        A::Jet => P::Jet {
+            center: r.r_vec3()?,
+            acc: domain(r)?,
+            magnitude: f(r)?,
+            epsilon: f(r)?,
+            max_radius: f(r)?,
+        },
         A::KillOld => P::KillOld { age_limit: f(r)?, kill_less_than: r.r_u32()? },
         A::Move => P::Move,
-        A::OrbitLine | A::Vortex => P::Axis { point: r.r_vec3()?, axis: r.r_vec3()?, magnitude: f(r)?, epsilon: f(r)?, max_radius: f(r)? },
-        A::OrbitPoint | A::Scatter => P::Point { center: r.r_vec3()?, magnitude: f(r)?, epsilon: f(r)?, max_radius: f(r)? },
+        A::OrbitLine | A::Vortex => P::Axis {
+            point: r.r_vec3()?,
+            axis: r.r_vec3()?,
+            magnitude: f(r)?,
+            epsilon: f(r)?,
+            max_radius: f(r)?,
+        },
+        A::OrbitPoint | A::Scatter => {
+            P::Point { center: r.r_vec3()?, magnitude: f(r)?, epsilon: f(r)?, max_radius: f(r)? }
+        }
         A::RandomAccel | A::RandomDisplace | A::RandomVelocity => P::Random { domain: domain(r)? },
         A::Restore => P::Restore { time_left: f(r)? },
         A::Sink | A::SinkVelocity => P::Sink { kill_inside: r.r_u32()?, domain: domain(r)? },
@@ -311,10 +420,24 @@ fn action(r: &mut Reader<'_>) -> Result<Action> {
         },
         A::SpeedLimit => P::SpeedLimit { min_speed: f(r)?, max_speed: f(r)? },
         // the game is not Shadow of Chernobyl: the time window follows
-        A::TargetColor => P::TargetColor { color: r.r_vec3()?, alpha: f(r)?, scale: f(r)?, time_from: f(r)?, time_to: f(r)? },
+        A::TargetColor => P::TargetColor {
+            color: r.r_vec3()?,
+            alpha: f(r)?,
+            scale: f(r)?,
+            time_from: f(r)?,
+            time_to: f(r)?,
+        },
         A::TargetSize => P::TargetSize { size: r.r_vec3()?, scale: r.r_vec3()? },
-        A::TargetRotate | A::TargetRotateD | A::TargetVelocity | A::TargetVelocityD => P::Target { value: r.r_vec3()?, scale: f(r)? },
-        A::Turbulence => P::Turbulence { frequency: f(r)?, octaves: r.r_i32()?, magnitude: f(r)?, epsilon: f(r)?, offset: r.r_vec3()? },
+        A::TargetRotate | A::TargetRotateD | A::TargetVelocity | A::TargetVelocityD => {
+            P::Target { value: r.r_vec3()?, scale: f(r)? }
+        }
+        A::Turbulence => P::Turbulence {
+            frequency: f(r)?,
+            octaves: r.r_i32()?,
+            magnitude: f(r)?,
+            epsilon: f(r)?,
+            offset: r.r_vec3()?,
+        },
     };
     Ok(Action { kind, flags, params })
 }
@@ -372,7 +495,13 @@ fn effect(body: &[u8], text: &mut Text) -> Result<Option<ParticleEffect>> {
     }
     if flags & F::FRAMED != 0 {
         let mut fr = need(&r, PED_CHUNK_FRAME, "frame")?;
-        e.frame = Some(EffectFrame { tex_size: fr.r_vec2()?, reserved: fr.r_vec2()?, dim_x: fr.r_i32()?, frame_count: fr.r_i32()?, speed: fr.r_f32()? });
+        e.frame = Some(EffectFrame {
+            tex_size: fr.r_vec2()?,
+            reserved: fr.r_vec2()?,
+            dim_x: fr.r_i32()?,
+            frame_count: fr.r_i32()?,
+            speed: fr.r_f32()?,
+        });
     }
     if flags & F::TIME_LIMIT != 0 {
         e.time_limit = Some(need(&r, PED_CHUNK_TIMELIMIT, "time limit")?.r_f32()?);
@@ -384,10 +513,10 @@ fn effect(body: &[u8], text: &mut Text) -> Result<Option<ParticleEffect>> {
     if flags & F::VELOCITY_SCALE != 0 {
         e.velocity_scale = Some(need(&r, PED_CHUNK_VEL_SCALE, "velocity scale")?.r_vec3()?);
     }
-    if flags & F::ALIGN_TO_PATH != 0 {
-        if let Some(mut a) = r.sub(PED_CHUNK_ALIGN_TO_PATH)? {
-            e.align_to_path_rotation = Some(a.r_vec3()?);
-        }
+    if flags & F::ALIGN_TO_PATH != 0
+        && let Some(mut a) = r.sub(PED_CHUNK_ALIGN_TO_PATH)?
+    {
+        e.align_to_path_rotation = Some(a.r_vec3()?);
     }
     Ok(Some(e))
 }
@@ -537,7 +666,9 @@ mod tests {
         let e = p.effect("smoke\\puff").unwrap();
         assert_eq!((e.max_particles, e.time_limit, e.texture.as_str()), (64, Some(2.5), "pfx\\smoke"));
         assert_eq!(e.actions[0].params, ActionParams::Gravity { direction: Vec3::new(0.0, -9.8, 0.0) });
-        assert!(matches!(&e.actions[1].params, ActionParams::Random { domain } if domain.kind == 5 && domain.radius2_sqr == 2.0));
+        assert!(
+            matches!(&e.actions[1].params, ActionParams::Random { domain } if domain.kind == 5 && domain.radius2_sqr == 2.0)
+        );
         assert_eq!(p.group("explosions\\big").map(|g| g.time_limit), Some(3.0));
     }
 

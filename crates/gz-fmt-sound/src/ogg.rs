@@ -126,7 +126,9 @@ pub(crate) fn read_headers(pages: &[Page<'_>]) -> Result<Headers> {
         for (seg, &lace) in page.lacing.iter().enumerate() {
             let len = usize::from(lace);
             // the lacing table was summed when the page was parsed, so this stays inside the body
-            let Some(part) = page.body.get(at..at + len) else { return Err(SoundError::Damaged("a page is shorter than its lacing")) };
+            let Some(part) = page.body.get(at..at + len) else {
+                return Err(SoundError::Damaged("a page is shorter than its lacing"));
+            };
             at += len;
             if let Some(packet) = packets.get_mut(current) {
                 packet.extend_from_slice(part);

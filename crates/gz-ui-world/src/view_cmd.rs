@@ -19,7 +19,10 @@ use crate::world::{self, WorldDoc};
 const SHOWN_PICKERS: [&str; 8] = ["base", "visual", "icon", "community", "rank", "dialog", "sells", "buys"];
 
 fn characters_doc(shell: &mut ShellState) -> Option<&mut CharactersDoc> {
-    shell.document_mut(characters::TAB).and_then(|d| d.as_any_mut()).and_then(|a| a.downcast_mut::<CharactersDoc>())
+    shell
+        .document_mut(characters::TAB)
+        .and_then(|d| d.as_any_mut())
+        .and_then(|a| a.downcast_mut::<CharactersDoc>())
 }
 
 fn world_doc(shell: &mut ShellState) -> Option<&mut WorldDoc> {
@@ -29,7 +32,9 @@ fn world_doc(shell: &mut ShellState) -> Option<&mut WorldDoc> {
 /// Brings a tab up through the shell's own opener; a window-less editor has none to bring.
 async fn open_tab(ed: &Arc<Editor>, kind: &str, origin: Origin) -> Result<(), CmdError> {
     let reply = ed.call("ui_tab", args([("action", s("open")), ("kind", s(kind))]), origin).await;
-    if !ok(&reply) && reply.get("error").and_then(serde_json::Value::as_str) != Some("the editor runs without a window") {
+    if !ok(&reply)
+        && reply.get("error").and_then(serde_json::Value::as_str) != Some("the editor runs without a window")
+    {
         return Err(CmdError::new("refused", error_text(&reply)));
     }
     Ok(())
@@ -90,11 +95,15 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
         if want_id.is_none() && want_path.is_none() {
             return Ok(Step::Done);
         }
-        let Some(index) = doc.find(want_id.as_deref(), want_path.as_deref()) else { return Ok(Step::NotFound) };
+        let Some(index) = doc.find(want_id.as_deref(), want_path.as_deref()) else {
+            return Ok(Step::NotFound);
+        };
         if Some(index) != doc.sel && doc.is_dirty() {
             // the caller decides what happens to edits in progress: MCP never asks
             if save {
-                return doc.save_plan().map(Step::Save).map_err(|e| CmdError::new("refused", format!("the edited character was not saved: {e}")));
+                return doc.save_plan().map(Step::Save).map_err(|e| {
+                    CmdError::new("refused", format!("the edited character was not saved: {e}"))
+                });
             }
             if !discard {
                 return Ok(Step::Unsaved(doc.dirty_names()));
@@ -119,10 +128,14 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
             return Err(CmdError::not_found(format!("no character {what} (characters_list names them)")));
         }
         Step::Unsaved(names) => {
-            return Err(CmdError::unsaved(json!(names)).with_data(json!({ "dirty": names, "note": "save=true or discard=true settles the edits first" })));
+            return Err(CmdError::unsaved(json!(names)).with_data(
+                json!({ "dirty": names, "note": "save=true or discard=true settles the edits first" }),
+            ));
         }
         Step::Save(plan) => {
-            let file = run_save(&ed, plan).await.map_err(|e| CmdError::new("refused", format!("the edited character was not saved: {e}")))?;
+            let file = run_save(&ed, plan)
+                .await
+                .map_err(|e| CmdError::new("refused", format!("the edited character was not saved: {e}")))?;
             let roster = svc.fresh_roster().await;
             on_ui(&ed, move |shell, _| {
                 let doc = characters_doc(shell).ok_or_else(gone)?;
@@ -138,9 +151,14 @@ pub(crate) async fn characters_view(ed: Arc<Editor>, a: Args, origin: Origin) ->
         }
     }
     // the problems of the character the tab shows now, resolved against its base
-    let input = on_ui(&ed, |shell, _| Ok(characters_doc(shell).and_then(|d| d.validation_input().map(|i| (i, d.is_dirty()))))).await?;
+    let input = on_ui(&ed, |shell, _| {
+        Ok(characters_doc(shell).and_then(|d| d.validation_input().map(|i| (i, d.is_dirty()))))
+    })
+    .await?;
     let problems = match input {
-        Some(((roster, sel, edit), dirty)) if sel.is_some() || dirty => problems_of(&ed, roster, sel, edit).await,
+        Some(((roster, sel, edit), dirty)) if sel.is_some() || dirty => {
+            problems_of(&ed, roster, sel, edit).await
+        }
         _ => Vec::new(),
     };
     on_ui(&ed, move |shell, ctx| {
@@ -172,7 +190,10 @@ pub(crate) async fn world_view(ed: Arc<Editor>, a: Args, origin: Origin) -> Repl
     if let Some(level) = &level {
         let game = svc.game().await;
         if !game.level_exists(level) {
-            return Err(CmdError::new("refused", format!("the linked game has no level '{level}' (world_transitions lists them)")));
+            return Err(CmdError::new(
+                "refused",
+                format!("the linked game has no level '{level}' (world_transitions lists them)"),
+            ));
         }
     }
     // anything to set opens the tab on it; without one this only looks

@@ -44,8 +44,8 @@
 #![forbid(unsafe_code)]
 
 mod call;
-pub mod characters;
 mod char_form;
+pub mod characters;
 pub mod lists;
 pub mod local;
 pub mod picker;
@@ -69,7 +69,13 @@ fn has_project(editor: &Editor, _tab: &str) -> bool {
 /// A row of the Mod menu at its slot.
 fn menu_row(b: &mut ShellBuilder, command: &str) {
     let (group, order) = gz_ui_mod::mod_menu_slot(command).unwrap_or((0, 9));
-    b.menu_entry(MenuEntry { menu: SmolStr::new("Mod"), submenu: None, group, order, content: MenuContent::Command { command: SmolStr::new(command), label: None } });
+    b.menu_entry(MenuEntry {
+        menu: SmolStr::new("Mod"),
+        submenu: None,
+        group,
+        order,
+        content: MenuContent::Command { command: SmolStr::new(command), label: None },
+    });
 }
 
 /// Plugs the Characters and World Rules tabs and their Mod menu rows into the shell.
@@ -77,9 +83,17 @@ pub fn install(b: &mut ShellBuilder) {
     characters::install(b);
     world::install(b);
     b.command(
-        UiCommand::new(gz_ui_mod::menu::CHARACTERS, "Mod", "Characters", Icon::Character, |cx| cx.requests.open(OpenRequest::kind(characters::TAB))).enabled(has_project),
+        UiCommand::new(gz_ui_mod::menu::CHARACTERS, "Mod", "Characters", Icon::Character, |cx| {
+            cx.requests.open(OpenRequest::kind(characters::TAB))
+        })
+        .enabled(has_project),
     );
-    b.command(UiCommand::new(gz_ui_mod::menu::WORLD_RULES, "Mod", "World Rules", Icon::World, |cx| cx.requests.open(OpenRequest::kind(world::TAB))).enabled(has_project));
+    b.command(
+        UiCommand::new(gz_ui_mod::menu::WORLD_RULES, "Mod", "World Rules", Icon::World, |cx| {
+            cx.requests.open(OpenRequest::kind(world::TAB))
+        })
+        .enabled(has_project),
+    );
     menu_row(b, gz_ui_mod::menu::CHARACTERS);
     menu_row(b, gz_ui_mod::menu::WORLD_RULES);
 }

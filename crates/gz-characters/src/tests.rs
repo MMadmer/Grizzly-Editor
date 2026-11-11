@@ -7,7 +7,10 @@ use gz_luadata::Value;
 use gz_nq::PickerType;
 
 use crate::game::{model_path, ogf_bone_names, trade_categories};
-use crate::model::{Character, Supply, TradeRow, load_text, parse, template, text_collapse, text_in, text_raw, text_set, valid_id, write};
+use crate::model::{
+    Character, Supply, TradeRow, load_text, parse, template, text_collapse, text_in, text_raw, text_set,
+    valid_id, write,
+};
 use crate::resolve::resolve;
 use crate::service::Roster;
 use crate::validate::{Cx, Lookups, Models, validate};
@@ -167,7 +170,10 @@ fn resolve_inherits_unset_fields_and_merges_kits() {
     assert_eq!(captain.rank, 500);
     assert!(!captain.is_abstract);
     // a repeated section takes the new count and keeps its place, count 0 drops a row
-    assert_eq!(captain.supplies, vec![Supply::new("wpn_ak74", 1), Supply::new("medkit", 5), Supply::new("vodka", 1)]);
+    assert_eq!(
+        captain.supplies,
+        vec![Supply::new("wpn_ak74", 1), Supply::new("medkit", 5), Supply::new("vodka", 1)]
+    );
     // a shop is replaced as a whole
     assert!(captain.trade.sells.is_empty());
     assert_eq!(captain.trade.buys, ["weapon"]);
@@ -186,7 +192,10 @@ fn resolve_reports_missing_bases_and_loops() {
     let mut all = vec![
         ch(r#"return { id = "a", base = "b" }"#, "a.npcasset"),
         ch(r#"return { id = "b", base = "a" }"#, "b.npcasset"),
-        ch(r#"return { id = "c", base = "nobody", supplies = { { section = "x", count = 0 } } }"#, "c.npcasset"),
+        ch(
+            r#"return { id = "c", base = "nobody", supplies = { { section = "x", count = 0 } } }"#,
+            "c.npcasset",
+        ),
         ch(r#"return { id = "d", base = "d" }"#, "d.npcasset"),
     ];
     let mut problems = Vec::new();
@@ -272,7 +281,11 @@ impl Models for FakeModels {
     }
 
     fn bones(&self, rel: &str) -> Arc<[String]> {
-        let names: &[&str] = if rel.contains("forester") { &["root", "spine"] } else { &["root", "spine", "eye_left", "jaw_1"] };
+        let names: &[&str] = if rel.contains("forester") {
+            &["root", "spine"]
+        } else {
+            &["root", "spine", "eye_left", "jaw_1"]
+        };
         names.iter().map(|s| (*s).to_owned()).collect()
     }
 
@@ -307,7 +320,10 @@ fn a_good_character_has_no_problem() {
 fn every_code_on_its_fixture() {
     let p = problems_of(r#"return { id = "2x" , visual = "v" }"#, false);
     assert_eq!(codes(&p), ["E102", "E103"]);
-    assert_eq!(p[0], "E102 characters/x.npcasset: id '2x' is not usable (a-z, 0-9 and _, not starting with a digit, up to 48)");
+    assert_eq!(
+        p[0],
+        "E102 characters/x.npcasset: id '2x' is not usable (a-z, 0-9 and _, not starting with a digit, up to 48)"
+    );
     assert_eq!(p[1], "E103 characters/x.npcasset: no name - it is what the player reads");
 
     let p = problems_of(r#"return { id = "x", name = "a" }"#, false);
@@ -316,19 +332,33 @@ fn every_code_on_its_fixture() {
     assert!(problems_of(r#"return { id = "x", abstract = true }"#, true).is_empty());
 
     let p = problems_of(r#"return { id = "x", name = "a", visual = "other\\m" }"#, true);
-    assert_eq!(p, ["W105 characters/x.npcasset: the linked game has no model at 'meshes\\other\\m.ogf' - check it is staged in the project"]);
+    assert_eq!(
+        p,
+        [
+            "W105 characters/x.npcasset: the linked game has no model at 'meshes\\other\\m.ogf' - check it is staged in the project"
+        ]
+    );
 
     let p = problems_of(r#"return { id = "x", name = "a", visual = "actors\\forester.ogf" }"#, true);
     assert_eq!(
         p,
-        ["E123 characters/x.npcasset: the model has no bone eye_left, jaw_1 - an NPC's damage names them and the game stops the moment it comes online; pick a model on the stalker skeleton"]
+        [
+            "E123 characters/x.npcasset: the model has no bone eye_left, jaw_1 - an NPC's damage names them and the game stops the moment it comes online; pick a model on the stalker skeleton"
+        ]
     );
 
-    let p = problems_of(r#"return { id = "x", name = "a", visual = "actors\\s", community = "aliens" }"#, true);
+    let p =
+        problems_of(r#"return { id = "x", name = "a", visual = "actors\\s", community = "aliens" }"#, true);
     assert_eq!(codes(&p), ["W114"]);
-    assert!(problems_of(r#"return { id = "x", name = "a", visual = "actors\\s", community = "aliens" }"#, false).is_empty());
+    assert!(
+        problems_of(r#"return { id = "x", name = "a", visual = "actors\\s", community = "aliens" }"#, false)
+            .is_empty()
+    );
 
-    let p = problems_of(r#"return { id = "x", name = "a", visual = "actors\\s", icon = "nope", start_dialog = "nope", supplies = { "nope" } }"#, true);
+    let p = problems_of(
+        r#"return { id = "x", name = "a", visual = "actors\\s", icon = "nope", start_dialog = "nope", supplies = { "nope" } }"#,
+        true,
+    );
     assert_eq!(codes(&p), ["W115", "W116", "W117"]);
     assert_eq!(p[1], "W116 characters/x.npcasset: no dialog 'nope' in the linked game or the project");
 
@@ -354,7 +384,10 @@ fn trade_codes() {
                       stock = { { count = 1 }, { section = "a", count = 0 }, { section = "b", chance = 2 }, { section = "medkit" }, { section = "MEDKIT" } } } }"#,
         true,
     );
-    assert_eq!(codes(&p), ["W105", "E118", "E118", "E118", "E118", "E119", "E119", "E119", "W120", "W121", "W121", "W121"]);
+    assert_eq!(
+        codes(&p),
+        ["W105", "E118", "E118", "E118", "E118", "E119", "E119", "E119", "W120", "W121", "W121", "W121"]
+    );
     assert_eq!(p[1], "E118 characters/x.npcasset: a stock row without an item");
     assert_eq!(p[3], "E118 characters/x.npcasset: stock 'b' has a chance outside 0..1");
     assert_eq!(p[4], "E118 characters/x.npcasset: 'MEDKIT' is in the stock twice - one row per item");
@@ -362,8 +395,12 @@ fn trade_codes() {
         p[8],
         "W120 characters/x.npcasset: the linked game has no trade category 'toys' the trader sells - the trade presets name weapon, drugs, food and the like"
     );
-    let p = problems_of(r#"return { id = "x", name = "a", visual = "v", trade = { buys = { "food" } } }"#, false);
-    assert_eq!(p, ["W122 characters/x.npcasset: the trader has nothing to sell - give it a stock or a category"]);
+    let p =
+        problems_of(r#"return { id = "x", name = "a", visual = "v", trade = { buys = { "food" } } }"#, false);
+    assert_eq!(
+        p,
+        ["W122 characters/x.npcasset: the trader has nothing to sell - give it a stock or a category"]
+    );
 }
 
 // ---- the linked game -----------------------------------------------------------------------

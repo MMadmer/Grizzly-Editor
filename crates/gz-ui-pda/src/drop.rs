@@ -64,8 +64,19 @@ fn with_board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
 pub fn begin_drops(ctx: &Context) {
     let frame = ctx.cumulative_frame_nr();
     let (dropped, moved, latest) = ctx.input(|i| {
-        let files: Vec<String> = i.raw.dropped_files.iter().map(|f| f.path().display().to_string()).filter(|p| !p.is_empty()).collect();
-        let moved = i.raw.events.iter().rev().find_map(|e| if let Event::PointerMoved(p) = e { Some(*p) } else { None });
+        let files: Vec<String> = i
+            .raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().display().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        let moved = i
+            .raw
+            .events
+            .iter()
+            .rev()
+            .find_map(|e| if let Event::PointerMoved(p) = e { Some(*p) } else { None });
         (files, moved, i.pointer.latest_pos())
     });
     let wait = with_board(ctx, |b| {
@@ -119,7 +130,13 @@ fn payload_paths(ctx: &Context) -> Option<Vec<String>> {
     // the Content Browser's tiles: the files they carry that are files on the disk (a game file
     // inside an archive is not one, and a folder is not a layer)
     if let Some(p) = DragAndDrop::payload::<gz_ui_content::DragPayload>(ctx) {
-        return Some(p.entries.iter().filter(|e| !e.folder).filter_map(|e| e.file.as_ref().map(|f| f.display().to_string())).collect());
+        return Some(
+            p.entries
+                .iter()
+                .filter(|e| !e.folder)
+                .filter_map(|e| e.file.as_ref().map(|f| f.display().to_string()))
+                .collect(),
+        );
     }
     if let Some(s) = DragAndDrop::payload::<String>(ctx) {
         return Some(vec![(*s).clone()]);
@@ -135,13 +152,19 @@ fn payload_paths(ctx: &Context) -> Option<Vec<String>> {
 
 fn light(ui: &Ui, rect: Rect, p: &Palette) {
     let painter = ui.painter();
-    painter.rect(rect.shrink(1.0), CornerRadius::same(4), Palette::alpha(p.accent, 0.14), Stroke::new(2.0, p.accent_bright), StrokeKind::Inside);
+    painter.rect(
+        rect.shrink(1.0),
+        CornerRadius::same(4),
+        Palette::alpha(p.accent, 0.14),
+        Stroke::new(2.0, p.accent_bright),
+        StrokeKind::Inside,
+    );
 }
 
 /// A place files can be dropped on: `rect` in pt. Returns the files that landed on it this frame
 /// - absolute or project-relative paths. Call it after what it covers is drawn, inner zones
-/// before outer ones; `catch_all` is the outermost zone of a surface, which also takes a drop
-/// nobody knows the point of.
+///   before outer ones; `catch_all` is the outermost zone of a surface, which also takes a drop
+///   nobody knows the point of.
 pub fn local_file_drop_zone(ui: &Ui, id_salt: &str, rect: Rect, catch_all: bool) -> Option<Vec<String>> {
     let ctx = ui.ctx().clone();
     if !rect.is_positive() {

@@ -62,12 +62,18 @@ pub fn scene_kind(bytes: &[u8]) -> Result<SceneKind, String> {
             return Err("not a level file (no version value)".into());
         };
         let version = low[val..].find('=').map_or(0, |eq| atoi(&low[val + eq + 1..]));
-        return if version == CURRENT_FILE_VERSION as i64 { Ok(SceneKind::Ltx) } else { Err("unsupported level version".into()) };
+        return if version == CURRENT_FILE_VERSION as i64 {
+            Ok(SceneKind::Ltx)
+        } else {
+            Err("unsupported level version".into())
+        };
     }
     match Reader::new(bytes).find_chunk(CHUNK_VERSION) {
         None => Err("not a level file (no version chunk)".into()),
         Some((b, _)) if b.len() != 4 => Err("not a level file (invalid version chunk)".into()),
-        Some((b, _)) if u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != CURRENT_FILE_VERSION => Err("unsupported level version".into()),
+        Some((b, _)) if u32::from_le_bytes([b[0], b[1], b[2], b[3]]) != CURRENT_FILE_VERSION => {
+            Err("unsupported level version".into())
+        }
         Some(_) => Ok(SceneKind::Binary),
     }
 }
@@ -78,7 +84,10 @@ fn atoi(s: &str) -> i64 {
         Some(rest) => (true, rest),
         None => (false, s.strip_prefix('+').unwrap_or(s)),
     };
-    let n: i64 = digits.bytes().take_while(u8::is_ascii_digit).fold(0i64, |a, d| a.saturating_mul(10).saturating_add(i64::from(d - b'0')));
+    let n: i64 = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i64, |a, d| a.saturating_mul(10).saturating_add(i64::from(d - b'0')));
     if neg { -n } else { n }
 }
 
@@ -117,15 +126,22 @@ pub fn parts_needed(main: &[u8], kind: SceneKind) -> Vec<ObjClass> {
         SceneKind::Ltx => ObjClass::ALL.to_vec(),
         SceneKind::Binary => {
             let r = Reader::new(main);
-            ObjClass::ALL.iter().copied().filter(|c| r.find_chunk(CHUNK_TOOLS_DATA + c.id()).is_none()).collect()
+            ObjClass::ALL
+                .iter()
+                .copied()
+                .filter(|c| r.find_chunk(CHUNK_TOOLS_DATA + c.id()).is_none())
+                .collect()
         }
     }
 }
 
 /// The part files that were found, per class, in their numbered order.
+/// The part files of one class: each file's path and bytes.
+pub type ClassFiles = Vec<(PathBuf, Vec<u8>)>;
+
 #[derive(Default)]
 pub struct PartFiles {
-    pub files: Vec<(ObjClass, Vec<(PathBuf, Vec<u8>)>)>,
+    pub files: Vec<(ObjClass, ClassFiles)>,
 }
 
 /// A loaded scene and what the load noticed.
@@ -159,15 +175,21 @@ fn guid_from(b: &[u8]) -> [u64; 2] {
 }
 
 /// The objects and the tool's own data of a tool chunk (`ESceneCustomOTool::LoadStream`).
-fn load_tool_stream(class: ObjClass, body: &[u8], settings: SyncSettings<'_>) -> Result<ToolLoad, SceneError> {
+fn load_tool_stream(
+    class: ObjClass,
+    body: &[u8],
+    settings: SyncSettings<'_>,
+) -> Result<ToolLoad, SceneError> {
     let mut tool = ToolPart::new(class);
-    let mut load = ToolLoad { class, tool: ToolPart::new(class), objects: Vec::new(), bulk: None, warnings: Vec::new() };
+    let mut load =
+        ToolLoad { class, tool: ToolPart::new(class), objects: Vec::new(), bulk: None, warnings: Vec::new() };
     if !class.is_object_tool() {
         load.bulk = Some(body.to_vec());
         return Ok(load);
     }
     let r = Reader::new(body);
-    let rejected = || SceneError::load(format!("Editor tool '{}' rejected embedded scene data", class.name()));
+    let rejected =
+        || SceneError::load(format!("Editor tool '{}' rejected embedded scene data", class.name()));
     tool.read_stream(&r)?;
     let count = match r.find_chunk(TOOL_CHUNK_OBJECT_COUNT) {
         Some((b, false)) if b.len() == 4 => i32::from_le_bytes([b[0], b[1], b[2], b[3]]),
@@ -191,7 +213,13 @@ fn load_tool_stream(class: ObjClass, body: &[u8], settings: SyncSettings<'_>) ->
 }
 
 /// `LoadLevelPartLTX` for one numbered file, added to what earlier files gave.
-fn load_part_ltx(load: &mut ToolLoad, text: &str, file: &Path, guid: [u64; 2], settings: SyncSettings<'_>) -> Result<(), SceneError> {
+fn load_part_ltx(
+    load: &mut ToolLoad,
+    text: &str,
+    file: &Path,
+    guid: [u64; 2],
+    settings: SyncSettings<'_>,
+) -> Result<(), SceneError> {
     let fname = file.display().to_string();
     let r = IniReader::parse(text, &fname)?;
     if !r.line_exist("guid", "guid_g0") || !r.line_exist("guid", "guid_g1") {
@@ -202,14 +230,20 @@ fn load_part_ltx(load: &mut ToolLoad, text: &str, file: &Path, guid: [u64; 2], s
     }
     let used = load.tool.read_ltx(&r)?;
     if !r.line_exist("main", "objects_count") {
-        return Err(SceneError::load(format!("{} tools: required objects_count is missing", load.class.desc())));
+        return Err(SceneError::load(format!(
+            "{} tools: required objects_count is missing",
+            load.class.desc()
+        )));
     }
     let count = r.r_u32("main", "objects_count")?;
     let mut cx = ReadCx::new(settings.map(|s| s as &dyn Settings));
     for i in 0..count {
         let s = format!("object_{i}");
         if !r.section_exist(&s) {
-            return Err(SceneError::load(format!("{} tools: required section '{s}' is missing", load.class.desc())));
+            return Err(SceneError::load(format!(
+                "{} tools: required section '{s}' is missing",
+                load.class.desc()
+            )));
         }
         load.objects.push(objects::read_ltx(&r, &s, &mut cx)?);
     }
@@ -217,7 +251,10 @@ fn load_part_ltx(load: &mut ToolLoad, text: &str, file: &Path, guid: [u64; 2], s
     // what neither the tool nor its objects read stays as it is
     let own = load.tool.own_sections();
     for sect in r.sections() {
-        let object = sect.strip_prefix("object_").and_then(|rest| rest.split('_').next()).and_then(|n| n.parse::<u32>().ok());
+        let object = sect
+            .strip_prefix("object_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|n| n.parse::<u32>().ok());
         if object.is_some_and(|n| n < count) {
             continue;
         }
@@ -240,8 +277,14 @@ fn load_part_ltx(load: &mut ToolLoad, text: &str, file: &Path, guid: [u64; 2], s
 }
 
 /// A tool's part files: LTX files numbered until the first gap, or one chunk stream.
-fn load_part(class: ObjClass, files: &[(PathBuf, Vec<u8>)], guid: [u64; 2], settings: SyncSettings<'_>) -> Result<ToolLoad, SceneError> {
-    let mut load = ToolLoad { class, tool: ToolPart::new(class), objects: Vec::new(), bulk: None, warnings: Vec::new() };
+fn load_part(
+    class: ObjClass,
+    files: &[(PathBuf, Vec<u8>)],
+    guid: [u64; 2],
+    settings: SyncSettings<'_>,
+) -> Result<ToolLoad, SceneError> {
+    let mut load =
+        ToolLoad { class, tool: ToolPart::new(class), objects: Vec::new(), bulk: None, warnings: Vec::new() };
     for (path, bytes) in files {
         if bytes.is_empty() {
             return Err(SceneError::load(format!("Level part is empty: {}", path.display())));
@@ -255,10 +298,18 @@ fn load_part(class: ObjClass, files: &[(PathBuf, Vec<u8>)], guid: [u64; 2], sett
         match r.find_chunk(CHUNK_TOOLS_GUID) {
             Some((g, false)) if g.len() == 16 => {
                 if guid_from(g) != guid {
-                    return Err(SceneError::load(format!("Level part GUID does not match the scene: {}", path.display())));
+                    return Err(SceneError::load(format!(
+                        "Level part GUID does not match the scene: {}",
+                        path.display()
+                    )));
                 }
             }
-            _ => return Err(SceneError::load(format!("Level part has an invalid GUID chunk: {}", path.display()))),
+            _ => {
+                return Err(SceneError::load(format!(
+                    "Level part has an invalid GUID chunk: {}",
+                    path.display()
+                )));
+            }
         }
         let Some(data) = r.open_chunk(CHUNK_TOOLS_DATA + class.id())? else {
             return Err(SceneError::load(format!("Level part has no tool data chunk: {}", path.display())));
@@ -271,9 +322,15 @@ fn load_part(class: ObjClass, files: &[(PathBuf, Vec<u8>)], guid: [u64; 2], sett
 }
 
 /// Reads the scene: `main` is the `.level`, `parts` the part files that exist.
-pub fn parse_scene(main: &[u8], file: &Path, parts: &PartFiles, settings: SyncSettings<'_>) -> Result<LoadedScene, SceneError> {
+pub fn parse_scene(
+    main: &[u8],
+    file: &Path,
+    parts: &PartFiles,
+    settings: SyncSettings<'_>,
+) -> Result<LoadedScene, SceneError> {
     let fname = file.display().to_string();
-    let kind = scene_kind(main).map_err(|why| SceneError::load(format!("Can't load map '{fname}': {why}")))?;
+    let kind =
+        scene_kind(main).map_err(|why| SceneError::load(format!("Can't load map '{fname}': {why}")))?;
     let mut meta = SceneMeta { file: Some(file.to_path_buf()), ..SceneMeta::default() };
     let mut loads: Vec<ToolLoad> = Vec::new();
     let mut warnings = Vec::new();
@@ -284,9 +341,16 @@ pub fn parse_scene(main: &[u8], file: &Path, parts: &PartFiles, settings: SyncSe
             let text = gz_base::text::decode_guess(main);
             let r = IniReader::parse(&text, &fname)?;
             meta.level = LevelOptions::read_ltx(&r)?;
-            let complete = ["camera:pos", "camera:hpb", "guid:guid_g0", "guid:guid_g1", "level_tag:owner", "level_tag:create_time"]
-                .iter()
-                .all(|k| k.split_once(':').is_some_and(|(s, key)| r.line_exist(s, key)));
+            let complete = [
+                "camera:pos",
+                "camera:hpb",
+                "guid:guid_g0",
+                "guid:guid_g1",
+                "level_tag:owner",
+                "level_tag:create_time",
+            ]
+            .iter()
+            .all(|k| k.split_once(':').is_some_and(|(s, key)| r.line_exist(s, key)));
             if !complete {
                 return Err(SceneError::load(format!("LTX scene metadata is incomplete: {fname}")));
             }
@@ -296,16 +360,23 @@ pub fn parse_scene(main: &[u8], file: &Path, parts: &PartFiles, settings: SyncSe
             meta.owner = r.r_string("level_tag", "owner")?.into();
             meta.create_time = r.r_u32("level_tag", "create_time")?;
             snap_names = r.lines("snap_objects").into_iter().map(|(k, _)| k).collect();
-            const OWN: [&str; 7] = ["version", "level_options", "build_params", "guid", "level_tag", "camera", "snap_objects"];
-            meta.kept = r.sections().filter(|s| !OWN.contains(s)).map(|s| (s.to_owned(), r.lines(s))).collect();
+            const OWN: [&str; 7] =
+                ["version", "level_options", "build_params", "guid", "level_tag", "camera", "snap_objects"];
+            meta.kept =
+                r.sections().filter(|s| !OWN.contains(s)).map(|s| (s.to_owned(), r.lines(s))).collect();
         }
         SceneKind::Binary => {
             let r = Reader::new(main);
-            let lop = r.open_chunk(CHUNK_LEVELOP)?.ok_or_else(|| SceneError::load(format!("Binary scene has no level-options chunk: {fname}")))?;
-            meta.level = LevelOptions::read_bin(&lop.reader()).map_err(|_| SceneError::load(format!("Invalid binary level options: {fname}")))?;
+            let lop = r.open_chunk(CHUNK_LEVELOP)?.ok_or_else(|| {
+                SceneError::load(format!("Binary scene has no level-options chunk: {fname}"))
+            })?;
+            meta.level = LevelOptions::read_bin(&lop.reader())
+                .map_err(|_| SceneError::load(format!("Invalid binary level options: {fname}")))?;
             if let Some(c) = r.open_chunk(CHUNK_CAMERA)? {
                 if c.bytes().len() != 24 {
-                    return Err(SceneError::load(format!("Binary scene has an invalid camera chunk: {fname}")));
+                    return Err(SceneError::load(format!(
+                        "Binary scene has an invalid camera chunk: {fname}"
+                    )));
                 }
                 let mut q = c.reader();
                 meta.camera_hpb = q.r_vec3()?;
@@ -313,12 +384,20 @@ pub fn parse_scene(main: &[u8], file: &Path, parts: &PartFiles, settings: SyncSe
             }
             match r.find_chunk(CHUNK_TOOLS_GUID) {
                 Some((g, false)) if g.len() == 16 => meta.guid = guid_from(g),
-                _ => return Err(SceneError::load(format!("Binary scene has an invalid tool GUID chunk: {fname}"))),
+                _ => {
+                    return Err(SceneError::load(format!(
+                        "Binary scene has an invalid tool GUID chunk: {fname}"
+                    )));
+                }
             }
             if let Some(c) = r.open_chunk(CHUNK_LEVEL_TAG)? {
                 let b = c.bytes();
-                if b.len() <= 4 || b.get(..b.len() - 4).and_then(|s| s.iter().position(|x| *x == 0)) != Some(b.len() - 5) {
-                    return Err(SceneError::load(format!("Binary scene has an invalid level-tag chunk: {fname}")));
+                if b.len() <= 4
+                    || b.get(..b.len() - 4).and_then(|s| s.iter().position(|x| *x == 0)) != Some(b.len() - 5)
+                {
+                    return Err(SceneError::load(format!(
+                        "Binary scene has an invalid level-tag chunk: {fname}"
+                    )));
                 }
                 let mut q = c.reader();
                 meta.owner = q.r_stringz()?.into();
@@ -327,23 +406,32 @@ pub fn parse_scene(main: &[u8], file: &Path, parts: &PartFiles, settings: SyncSe
             let count = r.find_chunk(CHUNK_OBJECT_COUNT);
             let list = r.open_chunk(CHUNK_OBJECT_LIST)?;
             if count.is_some() != list.is_some() {
-                return Err(SceneError::load(format!("Binary scene has incomplete legacy object metadata: {fname}")));
+                return Err(SceneError::load(format!(
+                    "Binary scene has incomplete legacy object metadata: {fname}"
+                )));
             }
             if let (Some((cb, _)), Some(list)) = (count, list) {
                 if cb.len() != 4 {
-                    return Err(SceneError::load(format!("Binary scene has an invalid legacy object-count chunk: {fname}")));
+                    return Err(SceneError::load(format!(
+                        "Binary scene has an invalid legacy object-count chunk: {fname}"
+                    )));
                 }
                 let n = u32::from_le_bytes([cb[0], cb[1], cb[2], cb[3]]);
                 let mut cx = ReadCx::new(settings.map(|s| s as &dyn Settings));
                 legacy = objects::read_stream_list(&list.reader(), &mut cx)?;
                 warnings.append(&mut cx.warnings);
                 if legacy.len() != n as usize {
-                    return Err(SceneError::load(format!("Binary scene '{fname}' declares {n} legacy objects but contains {}", legacy.len())));
+                    return Err(SceneError::load(format!(
+                        "Binary scene '{fname}' declares {n} legacy objects but contains {}",
+                        legacy.len()
+                    )));
                 }
             }
             let embedded: Vec<(ObjClass, Vec<u8>)> = ObjClass::ALL
                 .iter()
-                .filter_map(|c| r.open_chunk(CHUNK_TOOLS_DATA + c.id()).ok().flatten().map(|ch| (*c, ch.into_owned())))
+                .filter_map(|c| {
+                    r.open_chunk(CHUNK_TOOLS_DATA + c.id()).ok().flatten().map(|ch| (*c, ch.into_owned()))
+                })
                 .collect();
             let results: Vec<Result<ToolLoad, SceneError>> =
                 embedded.par_iter().map(|(c, body)| load_tool_stream(*c, body, settings)).collect();
@@ -354,10 +442,14 @@ pub fn parse_scene(main: &[u8], file: &Path, parts: &PartFiles, settings: SyncSe
                 let mut q = c.reader();
                 let n = q.r_u32()?;
                 for _ in 0..n {
-                    snap_names.push(q.r_stringz().map_err(|_| SceneError::load(format!("Binary scene has a truncated snap-object list: {fname}")))?);
+                    snap_names.push(q.r_stringz().map_err(|_| {
+                        SceneError::load(format!("Binary scene has a truncated snap-object list: {fname}"))
+                    })?);
                 }
                 if !q.eof() {
-                    return Err(SceneError::load(format!("Binary scene has trailing snap-object data: {fname}")));
+                    return Err(SceneError::load(format!(
+                        "Binary scene has trailing snap-object data: {fname}"
+                    )));
                 }
             }
         }
@@ -437,7 +529,7 @@ pub struct SaveFile {
 }
 
 /// The objects a tool saves: not inside a group, with this `save_id`.
-fn saved_objects<'a>(state: &'a SceneState, class: ObjClass, save_id: usize) -> Vec<&'a Arc<Object>> {
+fn saved_objects(state: &SceneState, class: ObjClass, save_id: usize) -> Vec<&Arc<Object>> {
     state
         .of_class(class)
         .filter(|o| o.flags.co & co::IN_GROUP == 0 || o.owner.is_none())
@@ -469,7 +561,11 @@ pub fn tool_stream(state: &SceneState, class: ObjClass) -> Result<Vec<u8>, Scene
         return Ok(state.bulk.stream_of(class));
     }
     let mut w = Writer::new();
-    let objs: Vec<&Object> = state.of_class(class).filter(|o| o.owner.is_none_or(|g| state.get(g).is_none())).map(AsRef::as_ref).collect();
+    let objs: Vec<&Object> = state
+        .of_class(class)
+        .filter(|o| o.owner.is_none_or(|g| state.get(g).is_none()))
+        .map(AsRef::as_ref)
+        .collect();
     w.open_chunk(TOOL_CHUNK_OBJECTS);
     objects::write_stream_list(&mut w, objs.iter().copied(), state, 0)?;
     w.close_chunk();
@@ -507,7 +603,11 @@ pub fn main_ltx(state: &SceneState) -> Vec<u8> {
 /// Everything `EScene::SaveLTX` writes for `file`, part files numbered past what the tool needs
 /// listed as files to remove. Parts of tools that are disabled or read-only are left alone.
 pub fn write_scene(state: &SceneState, file: &Path) -> Result<Vec<SaveFile>, SceneError> {
-    let classes: Vec<ObjClass> = ObjClass::ALL.iter().copied().filter(|c| state.tools.part(*c).enabled && state.tools.part(*c).editable()).collect();
+    let classes: Vec<ObjClass> = ObjClass::ALL
+        .iter()
+        .copied()
+        .filter(|c| state.tools.part(*c).enabled && state.tools.part(*c).editable())
+        .collect();
     let parts: Vec<Result<Vec<SaveFile>, SceneError>> = classes
         .par_iter()
         .map(|c| -> Result<Vec<SaveFile>, SceneError> {
@@ -551,7 +651,8 @@ pub fn write_undo_stream(state: &SceneState, force: bool) -> Result<Vec<u8>, Sce
         w.w_vec3(m.camera_hpb);
         w.w_vec3(m.camera_pos);
     });
-    let snap: Vec<&SmolStr> = state.tools.snap.iter().filter_map(|id| state.get(*id)).map(|o| &o.name).collect();
+    let snap: Vec<&SmolStr> =
+        state.tools.snap.iter().filter_map(|id| state.get(*id)).map(|o| &o.name).collect();
     w.chunk(CHUNK_SNAPOBJECTS, |w| {
         w.w_u32(u32::try_from(snap.len()).unwrap_or(0));
         for n in &snap {
@@ -572,7 +673,12 @@ pub fn write_undo_stream(state: &SceneState, force: bool) -> Result<Vec<u8>, Sce
 #[must_use]
 pub fn needs_save(state: &SceneState, class: ObjClass) -> bool {
     match class {
-        ObjClass::Glow | ObjClass::Light | ObjClass::Portal | ObjClass::Sector | ObjClass::SpawnPoint | ObjClass::SceneObject => true,
+        ObjClass::Glow
+        | ObjClass::Light
+        | ObjClass::Portal
+        | ObjClass::Sector
+        | ObjClass::SpawnPoint
+        | ObjClass::SceneObject => true,
         ObjClass::DetailObjects | ObjClass::AiMap | ObjClass::Wallmark => state.bulk.needs_save(class),
         _ => state.count(class) > 0,
     }
@@ -586,7 +692,8 @@ pub fn new_guid(seed: u64) -> [u64; 2] {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     };
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+    let t =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
     [mix(t ^ seed), mix(t.rotate_left(17) ^ seed.wrapping_add(0x9E37_79B9_7F4A_7C15))]
 }
 
@@ -610,7 +717,11 @@ mod tests {
             s.insert(o);
         }
         let m = s.insert(Object::new(ObjClass::Glow, "member", default_data(ObjClass::Glow)));
-        let mut g = Object::new(ObjClass::Group, "grp", ObjData::Group(GroupData { reference: "g\\one".into(), members: vec![m] }));
+        let mut g = Object::new(
+            ObjClass::Group,
+            "grp",
+            ObjData::Group(GroupData { reference: "g\\one".into(), members: vec![m] }),
+        );
         g.xform.position = Vec3::ONE;
         let gid = s.insert(g);
         let mut mo = (**s.get(m).unwrap()).clone();
@@ -626,7 +737,11 @@ mod tests {
         for c in ObjClass::ALL {
             let mine: Vec<(PathBuf, Vec<u8>)> = files
                 .iter()
-                .filter(|f| f.path.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&format!("{}.part", c.name()))))
+                .filter(|f| {
+                    f.path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(&format!("{}.part", c.name())))
+                })
                 .filter_map(|f| f.bytes.clone().map(|b| (f.path.clone(), b)))
                 .collect();
             p.files.push((c, mine));
@@ -647,7 +762,12 @@ mod tests {
             let b = back.find(o.class, &o.name).unwrap();
             assert_eq!(b.class, o.class);
             if o.class != ObjClass::SoundEnv {
-                assert_eq!(b.data.clone().without_members(), o.data.clone().without_members(), "{:?}", o.class);
+                assert_eq!(
+                    b.data.clone().without_members(),
+                    o.data.clone().without_members(),
+                    "{:?}",
+                    o.class
+                );
             }
         }
         let g = back.find(ObjClass::Group, "grp").unwrap();

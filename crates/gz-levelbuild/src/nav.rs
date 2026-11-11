@@ -31,6 +31,12 @@ impl LevelNav {
         Self { header: graph.header, nodes: graph.nodes.clone(), row, column }
     }
 
+    /// The side of an AI map cell.
+    #[must_use]
+    pub fn cell_size(&self) -> f32 {
+        self.header.cell_size
+    }
+
     #[must_use]
     pub fn count(&self) -> u32 {
         self.nodes.len() as u32
@@ -69,12 +75,17 @@ impl LevelNav {
     /// `unpack_xz` in metres.
     fn unpack_metres(&self, id: u32) -> Vec2 {
         let (x, z) = self.unpack_cells(self.xz(id));
-        Vec2::new(x as f32 * self.header.cell_size + self.header.aabb.min.x, z as f32 * self.header.cell_size + self.header.aabb.min.z)
+        Vec2::new(
+            x as f32 * self.header.cell_size + self.header.aabb.min.x,
+            z as f32 * self.header.cell_size + self.header.aabb.min.z,
+        )
     }
 
     fn pack_xz(&self, x: f32, z: f32) -> i32 {
         let h = &self.header;
-        i_floor((x - h.aabb.min.x) / h.cell_size + 0.5).wrapping_mul(self.row as i32).wrapping_add(i_floor((z - h.aabb.min.z) / h.cell_size + 0.5))
+        i_floor((x - h.aabb.min.x) / h.cell_size + 0.5)
+            .wrapping_mul(self.row as i32)
+            .wrapping_add(i_floor((z - h.aabb.min.z) / h.cell_size + 0.5))
     }
 
     /// `valid_vertex_position`.
@@ -82,7 +93,11 @@ impl LevelNav {
     pub fn valid_position(&self, p: Vec3) -> bool {
         let h = &self.header;
         let half = h.cell_size * 0.5;
-        if p.x < h.aabb.min.x - half || p.x > h.aabb.max.x + half || p.z < h.aabb.min.z - half || p.z > h.aabb.max.z + half {
+        if p.x < h.aabb.min.x - half
+            || p.x > h.aabb.max.x + half
+            || p.z < h.aabb.min.z - half
+            || p.z > h.aabb.max.z + half
+        {
             return false;
         }
         if i_floor((p.z - h.aabb.min.z) / h.cell_size + 0.5) >= self.row as i32 {
@@ -405,7 +420,11 @@ impl LevelNav {
         while i < path.len() {
             let node = path[node_idx];
             let target = self.vertex_position(path[i]);
-            let direct = if self.valid_id(self.check_position_in_direction(node, pos, target)) { pos.distance(target) } else { MAX_RANGE };
+            let direct = if self.valid_id(self.check_position_in_direction(node, pos, target)) {
+                pos.distance(target)
+            } else {
+                MAX_RANGE
+            };
             if direct == MAX_RANGE {
                 if last_direct == 0.0 {
                     cumulative += self.vertex_position(node).distance(target);
@@ -426,7 +445,11 @@ impl LevelNav {
             i += 1;
         }
         let node = path[node_idx];
-        let direct = if self.valid_id(self.check_position_in_direction(node, pos, p1)) { pos.distance(p1) } else { MAX_RANGE };
+        let direct = if self.valid_id(self.check_position_in_direction(node, pos, p1)) {
+            pos.distance(p1)
+        } else {
+            MAX_RANGE
+        };
         Some(if direct == MAX_RANGE {
             cumulative + last_direct + p1.distance(self.vertex_position(path[path.len() - 1]))
         } else {

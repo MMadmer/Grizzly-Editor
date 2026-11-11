@@ -39,7 +39,10 @@ pub(crate) struct Walked {
 
 /// The write time of a file or folder in 100 ns units since 1970; 0 when unknown.
 pub(crate) fn mtime(meta: &Metadata) -> u64 {
-    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| u64::try_from(d.as_nanos() / 100).unwrap_or(u64::MAX))
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| u64::try_from(d.as_nanos() / 100).unwrap_or(u64::MAX))
 }
 
 /// `(size, write time)` of a path, following links.
@@ -118,7 +121,9 @@ pub(crate) fn walk(base: &Path, saved: &[DirRec]) -> Walked {
     let by_rel: FxHashMap<&str, &DirRec> = saved.iter().map(|d| (d.rel.as_str(), d)).collect();
     let valid: FxHashSet<&str> = saved
         .par_iter()
-        .filter(|d| std::fs::metadata(dir_path(base, &d.rel)).is_ok_and(|m| m.is_dir() && mtime(&m) == d.mtime))
+        .filter(|d| {
+            std::fs::metadata(dir_path(base, &d.rel)).is_ok_and(|m| m.is_dir() && mtime(&m) == d.mtime)
+        })
         .map(|d| d.rel.as_str())
         .collect();
     let read = AtomicUsize::new(0);

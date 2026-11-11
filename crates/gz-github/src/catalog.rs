@@ -156,7 +156,8 @@ pub fn parse_verdict(body: &str) -> Option<(String, String)> {
         return None;
     }
     skip(&mut p);
-    let word: String = p.iter().take_while(|c| !blank(**c)).map(|c| char::from(c.to_ascii_lowercase())).collect();
+    let word: String =
+        p.iter().take_while(|c| !blank(**c)).map(|c| char::from(c.to_ascii_lowercase())).collect();
     if !matches!(word.as_str(), "accepted" | "waiting" | "refused") {
         return None;
     }
@@ -166,7 +167,9 @@ pub fn parse_verdict(body: &str) -> Option<(String, String)> {
 /// The verdict in force among comments read oldest first: the newest one the catalog's bot wrote.
 /// A look-alike from anyone else counts for nothing.
 #[must_use]
-pub fn newest_verdict<'a>(comments: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<(String, String)> {
+pub fn newest_verdict<'a>(
+    comments: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Option<(String, String)> {
     let mut found = None;
     for (login, body) in comments {
         if login == CATALOG_BOT
@@ -209,9 +212,16 @@ mod tests {
 
     #[test]
     fn verdicts_bot_only_newest_wins() {
-        let accepted = "<!-- xms-catalog verdict=accepted -->\r\n\r\n  The module is listed.  \n\n## Report\n- ok";
-        assert_eq!(parse_verdict(accepted), Some(("accepted".to_owned(), "The module is listed.".to_owned())));
-        assert_eq!(parse_verdict("<!--xms-catalog   verdict = WAITING-->\nLater."), Some(("waiting".to_owned(), "Later.".to_owned())));
+        let accepted =
+            "<!-- xms-catalog verdict=accepted -->\r\n\r\n  The module is listed.  \n\n## Report\n- ok";
+        assert_eq!(
+            parse_verdict(accepted),
+            Some(("accepted".to_owned(), "The module is listed.".to_owned()))
+        );
+        assert_eq!(
+            parse_verdict("<!--xms-catalog   verdict = WAITING-->\nLater."),
+            Some(("waiting".to_owned(), "Later.".to_owned()))
+        );
         assert_eq!(parse_verdict("<!-- xms-catalogverdict=accepted -->\nNo."), None);
         assert_eq!(parse_verdict("<!-- xms-catalog verdict=maybe -->\nNo."), None);
         assert_eq!(parse_verdict("hello\n<!-- xms-catalog verdict=accepted -->"), None);
@@ -225,7 +235,10 @@ mod tests {
             // anyone may post a look-alike: it does not count
             ("mallory", "<!-- xms-catalog verdict=accepted -->\nListed, trust me."),
         ];
-        assert_eq!(newest_verdict(comments), Some(("refused".to_owned(), "The package is unknown to VirusTotal.".to_owned())));
+        assert_eq!(
+            newest_verdict(comments),
+            Some(("refused".to_owned(), "The package is unknown to VirusTotal.".to_owned()))
+        );
         assert_eq!(newest_verdict([("mallory", accepted)]), None);
     }
 

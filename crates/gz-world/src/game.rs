@@ -90,7 +90,9 @@ impl Settings for LtxSettings<'_> {
 pub(crate) fn is_level_changer(section: &str, ltx: Option<&Ltx>) -> bool {
     let s = section.to_ascii_lowercase();
     match ltx {
-        Some(l) if l.section_exist(&s) && l.line_exist(&s, "class") => l.r_string(&s, "class").is_ok_and(|c| c.trim().eq_ignore_ascii_case("LVL_CHNG")),
+        Some(l) if l.section_exist(&s) && l.line_exist(&s, "class") => {
+            l.r_string(&s, "class").is_ok_and(|c| c.trim().eq_ignore_ascii_case("LVL_CHNG"))
+        }
         _ => section.starts_with("level_changer"),
     }
 }
@@ -168,11 +170,17 @@ pub fn read_all_spawn(bytes: Arc<[u8]>, configs: Option<&Ltx>) -> GameWorld {
     let mut levels: Vec<String> = index.levels.iter().map(|l| l.name.to_string()).collect();
     levels.sort();
     levels.dedup();
-    let mut patrols: Vec<String> = index.patrol_names.iter().filter(|n| !n.is_empty()).map(ToString::to_string).collect();
+    let mut patrols: Vec<String> =
+        index.patrol_names.iter().filter(|n| !n.is_empty()).map(ToString::to_string).collect();
     patrols.sort();
     patrols.dedup();
     if Reader::new(&bytes).find_chunk(1).is_none() {
-        return GameWorld { error: "all.spawn has no objects (chunk 1)".into(), levels, patrols, ..GameWorld::default() };
+        return GameWorld {
+            error: "all.spawn has no objects (chunk 1)".into(),
+            levels,
+            patrols,
+            ..GameWorld::default()
+        };
     }
 
     let settings = configs.map(LtxSettings);
@@ -188,7 +196,12 @@ pub fn read_all_spawn(bytes: Arc<[u8]>, configs: Option<&Ltx>) -> GameWorld {
             }
             let to_level = destination(&v.spawn, settings.as_ref())?;
             let level = e.level.and_then(|id| index.level_name(id)).unwrap_or("").to_owned();
-            Some(GameTransition { name: e.name.to_string(), level, to_level, position: e.position.to_array() })
+            Some(GameTransition {
+                name: e.name.to_string(),
+                level,
+                to_level,
+                position: e.position.to_array(),
+            })
         })
         .collect();
     transitions.sort_by(|a, b| a.level.cmp(&b.level).then_with(|| a.name.cmp(&b.name)));

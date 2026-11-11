@@ -220,7 +220,8 @@ fn scan_floats<const N: usize>(text: &str) -> [f32; N] {
     for slot in &mut out {
         let Some(part) = parts.next() else { break };
         let t = part.trim_start();
-        let numeric = t.as_bytes().first().is_some_and(|c| c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.'));
+        let numeric =
+            t.as_bytes().first().is_some_and(|c| c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.'));
         if !numeric {
             break;
         }
@@ -364,7 +365,9 @@ impl<'a> NetReader<'a> {
                         *pos = end;
                         Ok(out)
                     }
-                    None => Err(PacketError::Eof { at: *pos, wanted: n - data.len().saturating_sub(*pos).min(n) }),
+                    None => {
+                        Err(PacketError::Eof { at: *pos, wanted: n - data.len().saturating_sub(*pos).min(n) })
+                    }
                 }
             }
             Src::Ini { .. } => Err(PacketError::IniRaw),
@@ -840,7 +843,9 @@ mod tests {
     #[test]
     fn angles_are_normalised_before_they_are_packed() {
         assert_eq!(angle_normalize(1.0), 1.0);
-        assert!((angle_normalize(-std::f32::consts::FRAC_PI_2) - 3.0 * std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+        assert!(
+            (angle_normalize(-std::f32::consts::FRAC_PI_2) - 3.0 * std::f32::consts::FRAC_PI_2).abs() < 1e-5
+        );
         assert!((angle_normalize(7.0) - (7.0 - PI_MUL_2)).abs() < 1e-5);
         let mut w = NetWriter::new(TextEncoding::Cp1251);
         w.w_angle8(std::f32::consts::PI); // q = 0.5 -> 128

@@ -26,3 +26,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 notify.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+gz-win.workspace = true

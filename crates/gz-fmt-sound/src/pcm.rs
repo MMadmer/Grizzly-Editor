@@ -92,7 +92,8 @@ impl Pcm {
         for b in 0..buckets {
             // widened: a long sound times a bucket index overflows 32 bits
             let from = (b as u128 * frames as u128 / buckets as u128) as usize;
-            let to = (((b + 1) as u128 * frames as u128 / buckets as u128) as usize).max(from + 1).min(frames);
+            let to =
+                (((b + 1) as u128 * frames as u128 / buckets as u128) as usize).max(from + 1).min(frames);
             let stretch = self.samples.get(from * channels..to * channels).unwrap_or(&[]);
             let mut peak = Peak { min: i16::MAX, max: i16::MIN };
             for &s in stretch {

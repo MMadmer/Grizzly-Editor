@@ -35,12 +35,21 @@ fn delete_fields(out: &mut Map<String, Value>, d: &DeleteInfo) {
     out.insert("nested_total".into(), json!(d.nested_total));
     out.insert("failed_total".into(), json!(d.failed_total));
     out.insert("nested".into(), d.nested.iter().map(|n| json!(paths::wire(n))).collect());
-    out.insert("failed".into(), d.failed.iter().map(|f| json!({ "path": paths::wire(&f.path), "reason": paths::wire(&f.reason) })).collect());
+    out.insert(
+        "failed".into(),
+        d.failed
+            .iter()
+            .map(|f| json!({ "path": paths::wire(&f.path), "reason": paths::wire(&f.reason) }))
+            .collect(),
+    );
 }
 
 /// The menu a card offers in its state, as the page draws it.
 fn menu_json(path: &str, shown: bool, state: EntryState) -> Value {
-    let items: Vec<Value> = start::menu_items(state).iter().map(|(label, enabled)| json!({ "label": label, "enabled": enabled })).collect();
+    let items: Vec<Value> = start::menu_items(state)
+        .iter()
+        .map(|(label, enabled)| json!({ "label": label, "enabled": enabled }))
+        .collect();
     json!({ "path": paths::wire(path), "shown": shown, "state": cards::state_name(state), "items": items })
 }
 
@@ -92,8 +101,16 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
     }
 
     let target = if !show.is_empty() && !none {
-        let found = page.state.lock().cards.iter().find(|c| !path.is_empty() && paths::same_path(&c.path, &path)).map(|c| (c.path.clone(), c.name.clone()));
-        let Some((target, name)) = found else { return Err(refuse(format!("no card of the project browser shows '{path}'"))) };
+        let found = page
+            .state
+            .lock()
+            .cards
+            .iter()
+            .find(|c| !path.is_empty() && paths::same_path(&c.path, &path))
+            .map(|c| (c.path.clone(), c.name.clone()));
+        let Some((target, name)) = found else {
+            return Err(refuse(format!("no card of the project browser shows '{path}'")));
+        };
         let probe = target.clone();
         let state = ed.exec.io(move || gz_project::list::entry_state(&probe)).await;
         {
@@ -103,7 +120,9 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
             }
         }
         if confirm && state != EntryState::Project {
-            return Err(refuse("that folder holds no project: its menu offers Remove from List, which asks nothing"));
+            return Err(refuse(
+                "that folder holds no project: its menu offers Remove from List, which asks nothing",
+            ));
         }
         Some((target, name))
     } else {
@@ -131,7 +150,11 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
             st.confirm = None;
         } else if let Some((target, name)) = &target {
             // a card the search hides has no menu to show: the search goes
-            let hidden = st.cards.iter().find(|c| &c.path == target).is_some_and(|c| !gz_ui::search::matches(&st.search, &format!("{} {}", c.name, c.path)));
+            let hidden = st
+                .cards
+                .iter()
+                .find(|c| &c.path == target)
+                .is_some_and(|c| !gz_ui::search::matches(&st.search, &format!("{} {}", c.name, c.path)));
             if hidden {
                 st.search.clear();
             }
@@ -142,7 +165,14 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
             } else {
                 st.menu = None;
                 st.menu_close = true;
-                st.confirm = Some(Confirm { path: target.clone(), name: name.clone(), info: plan, done: false, deleting: false, shown: false });
+                st.confirm = Some(Confirm {
+                    path: target.clone(),
+                    name: name.clone(),
+                    info: plan,
+                    done: false,
+                    deleting: false,
+                    shown: false,
+                });
             }
         }
 
@@ -151,12 +181,21 @@ pub(crate) async fn project_browser_menu(ed: Arc<Editor>, args: Args, _origin: O
             Some(m) if m.request => Some((m.path.clone(), false)),
             _ => st.menu_shown.clone().filter(|_| !st.menu_close).map(|p| (p, true)),
         }
-        .and_then(|(p, shown)| st.cards.iter().find(|c| paths::same_path(&c.path, &p)).map(|c| menu_json(&c.path, shown, c.state)));
+        .and_then(|(p, shown)| {
+            st.cards
+                .iter()
+                .find(|c| paths::same_path(&c.path, &p))
+                .map(|c| menu_json(&c.path, shown, c.state))
+        });
         let confirm_out = st.confirm.as_ref().map(|c| {
             let mut out = Map::new();
             out.insert("id".into(), json!(start::delete_dialog_name()));
             out.insert("shown".into(), json!(c.shown));
-            let d = c.info.clone().unwrap_or_else(|| DeleteInfo { path: c.path.clone(), name: c.name.clone(), ..DeleteInfo::default() });
+            let d = c.info.clone().unwrap_or_else(|| DeleteInfo {
+                path: c.path.clone(),
+                name: c.name.clone(),
+                ..DeleteInfo::default()
+            });
             let view = if c.done {
                 "result"
             } else if d.refused.is_some() || d.missing {

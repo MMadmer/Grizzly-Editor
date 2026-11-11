@@ -7,7 +7,9 @@
 use std::sync::Arc;
 
 use egui::style::{Selection, WidgetVisuals, Widgets};
-use egui::{Color32, Context, CornerRadius, FontFamily, FontId, Id, Margin, Stroke, Style, TextStyle, Vec2, Visuals};
+use egui::{
+    Color32, Context, CornerRadius, FontFamily, FontId, Id, Margin, Stroke, Style, TextStyle, Vec2, Visuals,
+};
 
 /// Sizes of the chrome and of controls, in points.
 pub mod metrics {
@@ -142,10 +144,27 @@ pub struct Palette {
 impl Palette {
     #[must_use]
     pub fn new(accent: Accent) -> Self {
-        let (accent_c, bright, selection, selection_focused, primary, primary_hover, primary_pressed) = match accent {
-            Accent::Violet => (rgb(0x7971bd), rgb(0xa79fed), rgb(0x464150), rgb(0x554f72), rgb(0x6a62ae), rgb(0x7971bd), rgb(0x5c5599)),
-            Accent::Graphite => (rgb(0x727782), rgb(0x9399a5), rgb(0x454951), rgb(0x50545d), rgb(0x60656f), rgb(0x727782), rgb(0x545862)),
-        };
+        let (accent_c, bright, selection, selection_focused, primary, primary_hover, primary_pressed) =
+            match accent {
+                Accent::Violet => (
+                    rgb(0x7971bd),
+                    rgb(0xa79fed),
+                    rgb(0x464150),
+                    rgb(0x554f72),
+                    rgb(0x6a62ae),
+                    rgb(0x7971bd),
+                    rgb(0x5c5599),
+                ),
+                Accent::Graphite => (
+                    rgb(0x727782),
+                    rgb(0x9399a5),
+                    rgb(0x454951),
+                    rgb(0x50545d),
+                    rgb(0x60656f),
+                    rgb(0x727782),
+                    rgb(0x545862),
+                ),
+            };
         Self {
             accent_family: accent,
             chrome: rgb(0x17161b),
@@ -251,7 +270,7 @@ fn visuals(p: &Palette) -> Visuals {
         active: widget(p.pressed, p.border_strong, p.text),
         open: widget(p.hover, p.border, p.text),
     };
-    v.selection = Selection { bg_fill: p.selection_focused, stroke: Stroke::new(1.0, p.text), ..v.selection };
+    v.selection = Selection { bg_fill: p.selection_focused, stroke: Stroke::new(1.0, p.text) };
     v.override_text_color = None;
     v.weak_text_color = Some(p.text_muted);
     v.hyperlink_color = p.accent_bright;
@@ -304,7 +323,10 @@ pub fn install(ctx: &Context, accent: Accent) {
         (TextStyle::Body, FontId::new(crate::font::Font::Body.size(), FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(crate::font::Font::Body.size(), FontFamily::Proportional)),
         (TextStyle::Small, FontId::new(crate::font::Font::Small.size(), FontFamily::Proportional)),
-        (TextStyle::Heading, FontId::new(crate::font::Font::Title.size(), FontFamily::Name(STRONG_FAMILY.into()))),
+        (
+            TextStyle::Heading,
+            FontId::new(crate::font::Font::Title.size(), FontFamily::Name(STRONG_FAMILY.into())),
+        ),
         (TextStyle::Monospace, FontId::new(crate::font::Font::Mono.size(), FontFamily::Monospace)),
     ]
     .into();

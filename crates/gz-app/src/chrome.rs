@@ -9,11 +9,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use egui::containers::menu::SubMenu;
-use egui::{Align, Align2, Area, Color32, Context, CornerRadius, CursorIcon, Frame, Id, Key, Layout, Margin, Modifiers, Order, Popup, Pos2, Rect, ResizeDirection, Response, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, ViewportCommand, pos2};
+use egui::{
+    Align, Align2, Area, Color32, Context, CornerRadius, Frame, Id, Key, Layout, Margin, Modifiers, Order,
+    Popup, Pos2, Rect, Response, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2,
+    ViewportCommand, pos2,
+};
 use gz_editor::SmolStr;
 use gz_ui::menu::{menu_popup, popup_body};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, MenuItem, SearchField, Toolbar, ToolbarStyle, Tone, audit, icon_button_sized, icons, menu_item, palette, state};
+use gz_ui::{
+    Button, Font, Icon, Kind, MenuItem, SearchField, Tone, Toolbar, ToolbarStyle, audit, icon_button_sized,
+    icons, menu_item, palette, state,
+};
 
 use crate::builder::MenuContent;
 use crate::contract;
@@ -85,7 +92,11 @@ pub fn logo_rgba(side: u32) -> Option<Vec<u8>> {
 pub(crate) fn load_logo(ctx: &Context) -> Option<TextureHandle> {
     let side = 64;
     let rgba = logo_rgba(side)?;
-    Some(ctx.load_texture("gz-app.logo", egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], &rgba), egui::TextureOptions::LINEAR))
+    Some(ctx.load_texture(
+        "gz-app.logo",
+        egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], &rgba),
+        egui::TextureOptions::LINEAR,
+    ))
 }
 
 // ---- local widgets --------------------------------------------------------------------------
@@ -101,7 +112,11 @@ pub fn local_caption_button(ui: &mut Ui, label: &str, open: bool, enabled: bool)
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, h), sense);
     if ui.is_rect_visible(rect) {
         if enabled && (open || resp.hovered()) {
-            ui.painter().rect_filled(rect.shrink2(Vec2::new(0.0, 4.0)), CornerRadius::same(4), if resp.is_pointer_button_down_on() { p.pressed } else { p.hover });
+            ui.painter().rect_filled(
+                rect.shrink2(Vec2::new(0.0, 4.0)),
+                CornerRadius::same(4),
+                if resp.is_pointer_button_down_on() { p.pressed } else { p.hover },
+            );
         }
         let color = if enabled { p.text } else { p.text_disabled };
         ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, color);
@@ -130,9 +145,31 @@ pub fn local_window_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, dange
     resp.on_hover_text(tip).clicked()
 }
 
+/// The maximise button: Windows owns its clicks (`HTMAXBUTTON`), so its hover comes from the
+/// window's hit test, not from egui.
+fn local_max_button(ui: &mut Ui, rect: Rect, icon: Icon, tip: &str, hot: bool) {
+    let p = palette(ui.ctx());
+    if hot {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, p.hover);
+    }
+    icons::draw(
+        ui.painter(),
+        icon,
+        Rect::from_center_size(rect.center(), Vec2::splat(12.0)),
+        if hot { p.text } else { p.text_secondary },
+    );
+    audit::control(ui.ctx(), tip, true, None, Some(tip), rect);
+}
+
 /// A menu row that opens a submenu to its right while hovered: the kit's look, a chevron at
 /// the end.
-pub fn local_submenu<R>(ui: &mut Ui, label: &str, icon: Icon, enabled: bool, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+pub fn local_submenu<R>(
+    ui: &mut Ui,
+    label: &str,
+    icon: Icon,
+    enabled: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     let p = palette(ui.ctx());
     let font = Font::Body.id();
     let slot = icon != Icon::None;
@@ -147,11 +184,30 @@ pub fn local_submenu<R>(ui: &mut Ui, label: &str, icon: Icon, enabled: bool, add
         let color = if enabled { p.text } else { p.text_disabled };
         let mut x = rect.min.x + 8.0;
         if slot {
-            icons::draw(ui.painter(), icon, Rect::from_min_size(pos2(x, rect.center().y - 8.0), Vec2::splat(16.0)), p.text_secondary);
+            icons::draw(
+                ui.painter(),
+                icon,
+                Rect::from_min_size(pos2(x, rect.center().y - 8.0), Vec2::splat(16.0)),
+                p.text_secondary,
+            );
             x += 24.0;
         }
-        text::paint(ui.painter(), &font, pos2(x, rect.center().y), Align2::LEFT_CENTER, color, label, Some((rect.max.x - 24.0 - x).max(0.0)), Clip::End);
-        icons::draw(ui.painter(), Icon::ChevronRight, Rect::from_min_size(pos2(rect.max.x - 20.0, rect.center().y - 6.0), Vec2::splat(12.0)), p.text_secondary);
+        text::paint(
+            ui.painter(),
+            &font,
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            color,
+            label,
+            Some((rect.max.x - 24.0 - x).max(0.0)),
+            Clip::End,
+        );
+        icons::draw(
+            ui.painter(),
+            Icon::ChevronRight,
+            Rect::from_min_size(pos2(rect.max.x - 20.0, rect.center().y - 6.0), Vec2::splat(12.0)),
+            p.text_secondary,
+        );
     }
     audit::control(ui.ctx(), label, enabled, None, None, rect);
     if !enabled {
@@ -161,19 +217,41 @@ pub fn local_submenu<R>(ui: &mut Ui, label: &str, icon: Icon, enabled: bool, add
 }
 
 /// A chip of the status bar: an icon in its tone and a short text in Small.
-pub fn local_status_chip(ui: &mut Ui, icon: Icon, tone: Option<Tone>, label: &str, tip: &str, checked: bool) -> Response {
+pub fn local_status_chip(
+    ui: &mut Ui,
+    icon: Icon,
+    tone: Option<Tone>,
+    label: &str,
+    tip: &str,
+    checked: bool,
+) -> Response {
     let p = palette(ui.ctx());
     let font = Font::Small.id();
     let text_w = if label.is_empty() { 0.0 } else { text::width(ui.ctx(), &font, label) + 4.0 };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(6.0 + 14.0 + text_w + 6.0, 20.0), Sense::click());
     if ui.is_rect_visible(rect) {
         if checked || resp.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(4), if checked { p.selection_focused } else { p.hover });
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(4),
+                if checked { p.selection_focused } else { p.hover },
+            );
         }
         let icon_color = tone.map_or(p.text_secondary, |t| p.tone(t));
-        icons::draw(ui.painter(), icon, Rect::from_min_size(pos2(rect.min.x + 6.0, rect.center().y - 7.0), Vec2::splat(14.0)), icon_color);
+        icons::draw(
+            ui.painter(),
+            icon,
+            Rect::from_min_size(pos2(rect.min.x + 6.0, rect.center().y - 7.0), Vec2::splat(14.0)),
+            icon_color,
+        );
         if !label.is_empty() {
-            ui.painter().text(pos2(rect.min.x + 24.0, rect.center().y), Align2::LEFT_CENTER, label, font, p.text_secondary);
+            ui.painter().text(
+                pos2(rect.min.x + 24.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                label,
+                font,
+                p.text_secondary,
+            );
         }
     }
     audit::control(ui.ctx(), if label.is_empty() { tip } else { label }, true, None, Some(tip), rect);
@@ -236,7 +314,12 @@ impl MenuBar<'_, '_> {
         if menu_popup(&ctx, id, resp.rect, layer, add).is_some() {
             self.state.open_now = Some(SmolStr::new(name));
             let rect = ctx.memory(|m| m.area_rect(id)).unwrap_or(resp.rect);
-            self.state.shown.push(PopupInfo { id: format!("menu:{name}"), title: name.to_owned(), window: format!("##Menu_{name}"), rect });
+            self.state.shown.push(PopupInfo {
+                id: format!("menu:{name}"),
+                title: name.to_owned(),
+                window: format!("##Menu_{name}"),
+                rect,
+            });
         }
     }
 
@@ -322,9 +405,20 @@ impl ShellState {
         let p = palette(&ctx);
         let screen = ui.max_rect();
         let caption = Rect::from_min_max(screen.min, pos2(screen.max.x, screen.min.y + CAPTION_H));
-        let status = Rect::from_min_max(pos2(screen.min.x, (screen.max.y - STATUS_H).max(caption.max.y)), screen.max);
-        let toolbar = if self.start_page { None } else { Some(Rect::from_min_max(pos2(screen.min.x, caption.max.y), pos2(screen.max.x, (caption.max.y + TOOLBAR_H).min(status.min.y)))) };
-        let work = Rect::from_min_max(pos2(screen.min.x, toolbar.map_or(caption.max.y, |t| t.max.y)), pos2(screen.max.x, status.min.y));
+        let status =
+            Rect::from_min_max(pos2(screen.min.x, (screen.max.y - STATUS_H).max(caption.max.y)), screen.max);
+        let toolbar = if self.start_page {
+            None
+        } else {
+            Some(Rect::from_min_max(
+                pos2(screen.min.x, caption.max.y),
+                pos2(screen.max.x, (caption.max.y + TOOLBAR_H).min(status.min.y)),
+            ))
+        };
+        let work = Rect::from_min_max(
+            pos2(screen.min.x, toolbar.map_or(caption.max.y, |t| t.max.y)),
+            pos2(screen.max.x, status.min.y),
+        );
         self.work_rect = work;
         self.status_rect = status;
         ui.painter().rect_filled(screen, CornerRadius::ZERO, p.base);
@@ -341,15 +435,52 @@ impl ShellState {
         self.draw_card(ui);
         self.draw_palette(ui);
         let toast_bottom = self.card_rect.map_or(work.max.y, |r| r.min.y + 8.0);
-        let mut toasts = ui.new_child(UiBuilder::new().id_salt("gz-app.toasts").max_rect(Rect::from_min_max(work.min, pos2(work.max.x, toast_bottom.max(work.min.y)))));
+        let mut toasts = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-app.toasts")
+                .max_rect(Rect::from_min_max(work.min, pos2(work.max.x, toast_bottom.max(work.min.y)))),
+        );
         state::draw_toasts(&mut toasts);
-        self.resize_edges(ui, screen);
+        self.publish_hit_test(&ctx);
+        self.publish_dirty_tabs();
         self.title_sync(&ctx);
+    }
+
+    /// Hands the window's hit test what the caption drew, in client pixels: menus, tabs and
+    /// buttons take the mouse, the maximise button is `HTMAXBUTTON` (snap layouts), the rest of
+    /// the band drags the window, and a restored window resizes from its edges.
+    fn publish_hit_test(&self, ctx: &Context) {
+        let ppp = ctx.pixels_per_point();
+        let px = |r: Rect| gz_win::PxRect {
+            x0: (r.min.x * ppp) as i32,
+            y0: (r.min.y * ppp) as i32,
+            x1: (r.max.x * ppp) as i32,
+            y1: (r.max.y * ppp) as i32,
+        };
+        let c = &self.caption;
+        let bar = c.bar;
+        let shape = if c.valid && bar.is_positive() {
+            let span = |x0: f32, x1: f32| px(Rect::from_min_max(pos2(x0, bar.min.y), pos2(x1, bar.max.y)));
+            gz_win::CaptionShape {
+                band: Some(px(bar)),
+                interactive: vec![
+                    span(c.menus_x0, c.menus_end),
+                    span(c.buttons_x, c.buttons_x + BUTTON_W),
+                    span(c.buttons_x + 2.0 * BUTTON_W, bar.max.x),
+                ],
+                max_button: Some(span(c.buttons_x + BUTTON_W, c.buttons_x + 2.0 * BUTTON_W)),
+                border: (EDGE * ppp).round() as i32,
+            }
+        } else {
+            gz_win::CaptionShape { border: (EDGE * ppp).round() as i32, ..Default::default() }
+        };
+        self.hit_test.publish(shape);
     }
 
     fn title_sync(&self, ctx: &Context) {
         let info = crate::project::project_info(&self.editor);
-        let title = if info.active { format!("{} - Grizzly Editor", info.name) } else { "Grizzly Editor".to_owned() };
+        let title =
+            if info.active { format!("{} - Grizzly Editor", info.name) } else { "Grizzly Editor".to_owned() };
         let current = ctx.input(|i| i.viewport().title.clone());
         if current.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(ViewportCommand::Title(title));
@@ -373,7 +504,10 @@ impl ShellState {
         let mut row = ui.new_child(
             UiBuilder::new()
                 .id_salt("gz-app.caption")
-                .max_rect(Rect::from_min_max(pos2(self.caption.menus_x0, bar.min.y), pos2(self.caption.buttons_x, bar.max.y)))
+                .max_rect(Rect::from_min_max(
+                    pos2(self.caption.menus_x0, bar.min.y),
+                    pos2(self.caption.buttons_x, bar.max.y),
+                ))
                 .layout(Layout::left_to_right(Align::Center)),
         );
         row.spacing_mut().item_spacing = Vec2::ZERO;
@@ -387,15 +521,24 @@ impl ShellState {
                 mb.folded = true;
                 let open = Popup::is_id_open(&ctx, fold_id());
                 let r = row.allocate_exact_size(Vec2::new(28.0, CAPTION_H), Sense::hover()).0;
-                let mut cell = row.new_child(UiBuilder::new().max_rect(Rect::from_center_size(r.center(), Vec2::splat(24.0))));
+                let mut cell = row.new_child(
+                    UiBuilder::new().max_rect(Rect::from_center_size(r.center(), Vec2::splat(24.0))),
+                );
                 if icon_button_sized(&mut cell, Icon::Menu, "Menus", open, true, 24.0, 16.0).clicked() {
                     Popup::toggle_id(&ctx, fold_id());
                 }
                 let layer = row.layer_id();
                 let anchor = Rect::from_min_max(pos2(r.min.x, bar.min.y), pos2(r.max.x, bar.max.y));
-                if menu_popup(&ctx, fold_id(), anchor, layer, |ui| self.draw_menus(ui, &ctx, &mut mb)).is_some() {
+                if menu_popup(&ctx, fold_id(), anchor, layer, |ui| self.draw_menus(ui, &ctx, &mut mb))
+                    .is_some()
+                {
                     let rect = ctx.memory(|m| m.area_rect(fold_id())).unwrap_or(anchor);
-                    mb.shown.push(PopupInfo { id: "menu:Menu".to_owned(), title: "Menu".to_owned(), window: "##caption_menus".to_owned(), rect });
+                    mb.shown.push(PopupInfo {
+                        id: "menu:Menu".to_owned(),
+                        title: "Menu".to_owned(),
+                        window: "##caption_menus".to_owned(),
+                        rect,
+                    });
                 }
                 row.add_space(4.0);
             } else {
@@ -422,33 +565,32 @@ impl ShellState {
             let w = text::width(&ctx, &font, &name);
             let right = self.caption.buttons_x - 12.0;
             if right - w >= end + 48.0 {
-                ui.painter().text(pos2((right - w).round(), bar.center().y), Align2::LEFT_CENTER, &name, font, p.text_muted);
+                ui.painter().text(
+                    pos2((right - w).round(), bar.center().y),
+                    Align2::LEFT_CENTER,
+                    &name,
+                    font,
+                    p.text_muted,
+                );
             }
         }
 
-        // the free band drags the window; a double click maximises it
-        let band = Rect::from_min_max(pos2(end, bar.min.y), pos2(self.caption.buttons_x, bar.max.y));
-        if band.width() > 0.0 {
-            let drag = ui.interact(band, Id::unique("gz-app.caption_band"), Sense::click_and_drag());
-            if drag.double_clicked() {
-                let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
-                ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
-            } else if drag.drag_started() {
-                ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-            }
-        }
+        // the free band is HTCAPTION to Windows: the system drags, maximises on a double click
+        // and snaps (`publish_hit_test`)
 
         // the window buttons, flush with the window's edge
         let maximized = ctx.input(|i| i.viewport().maximized == Some(true));
         let buttons_x = self.caption.buttons_x;
-        let b = |n: f32| Rect::from_min_size(pos2(buttons_x + n * BUTTON_W, bar.min.y), Vec2::new(BUTTON_W, CAPTION_H));
+        let b = |n: f32| {
+            Rect::from_min_size(pos2(buttons_x + n * BUTTON_W, bar.min.y), Vec2::new(BUTTON_W, CAPTION_H))
+        };
         if local_window_button(ui, b(0.0), Icon::Minimize, "Minimize", false) {
             ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
         }
+        // HTMAXBUTTON: Windows clicks it (and offers its snap layouts); egui only sees the hover
+        // the hit test reports
         let (icon, tip) = if maximized { (Icon::Restore, "Restore") } else { (Icon::Maximize, "Maximize") };
-        if local_window_button(ui, b(1.0), icon, tip, false) {
-            ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
-        }
+        local_max_button(ui, b(1.0), icon, tip, self.hit_test.max_hot());
         if local_window_button(ui, b(2.0), Icon::Close, "Close", true) {
             self.request_exit(&ctx);
         }
@@ -535,7 +677,14 @@ impl ShellState {
         }
     }
 
-    fn menu_rows(&mut self, ui: &mut Ui, ctx: &Context, menu: &str, submenu: Option<&str>, picks: &mut Vec<Pick>) {
+    fn menu_rows(
+        &mut self,
+        ui: &mut Ui,
+        ctx: &Context,
+        menu: &str,
+        submenu: Option<&str>,
+        picks: &mut Vec<Pick>,
+    ) {
         let rows = self.rows_of(menu, submenu);
         let mut last_group = None;
         for (group, _, row) in rows {
@@ -547,7 +696,9 @@ impl ShellState {
                 Row::Builtin(b) => self.builtin_row(ui, ctx, b, picks),
                 Row::Entry(i) => self.entry_row(ui, ctx, i, picks),
                 Row::Submenu(name) => {
-                    local_submenu(ui, &name, Icon::None, true, |ui| self.menu_rows(ui, ctx, menu, Some(&name), picks));
+                    local_submenu(ui, &name, Icon::None, true, |ui| {
+                        self.menu_rows(ui, ctx, menu, Some(&name), picks)
+                    });
                 }
             }
         }
@@ -558,7 +709,16 @@ impl ShellState {
             Some(MenuContent::Command { command, label }) => (command.clone(), label.clone()),
             Some(MenuContent::Custom(_)) => {
                 if let Some(MenuContent::Custom(draw)) = self.parts.menus.get_mut(i).map(|e| &mut e.content) {
-                    draw(ui, &mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx, active_tab: &self.active, requests: &mut self.requests });
+                    draw(
+                        ui,
+                        &mut DocCx {
+                            editor: &self.editor,
+                            gpu: &self.gpu,
+                            ctx,
+                            active_tab: &self.active,
+                            requests: &mut self.requests,
+                        },
+                    );
                 }
                 return;
             }
@@ -579,19 +739,25 @@ impl ShellState {
     fn builtin_row(&mut self, ui: &mut Ui, ctx: &Context, b: Builtin, picks: &mut Vec<Pick>) {
         match b {
             Builtin::Save => {
-                if menu_item(ui, "Save", MenuItem { icon: Icon::Save, keys: "Ctrl+S", ..MenuItem::default() }) {
+                if menu_item(ui, "Save", MenuItem { icon: Icon::Save, keys: "Ctrl+S", ..MenuItem::default() })
+                {
                     picks.push(Pick::Builtin(b));
                 }
             }
             Builtin::OpenProjectFolder => {
                 let on = self.editor.project_opt().is_some();
-                if menu_item(ui, "Open Project Folder", MenuItem { icon: Icon::Reveal, enabled: on, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Open Project Folder",
+                    MenuItem { icon: Icon::Reveal, enabled: on, ..MenuItem::default() },
+                ) {
                     picks.push(Pick::Builtin(b));
                 }
             }
             Builtin::SwitchProject => {
                 let on = self.editor.project_opt().is_some();
-                let resp = menu_item(ui, "Switch Project...", MenuItem { enabled: on, ..MenuItem::default() });
+                let resp =
+                    menu_item(ui, "Switch Project...", MenuItem { enabled: on, ..MenuItem::default() });
                 if resp {
                     picks.push(Pick::Builtin(b));
                 }
@@ -615,13 +781,21 @@ impl ShellState {
             }
             Builtin::Palette => {
                 let keys = self.keys_of("COMMAND_COMMAND_PALETTE", "Ctrl+Shift+P");
-                if menu_item(ui, "Command Palette...", MenuItem { icon: Icon::Search, keys: &keys, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Command Palette...",
+                    MenuItem { icon: Icon::Search, keys: &keys, ..MenuItem::default() },
+                ) {
                     picks.push(Pick::Builtin(b));
                 }
             }
             Builtin::Preferences => {
                 let keys = self.keys_of("COMMAND_EDITOR_PREF", "");
-                if menu_item(ui, "Preferences", MenuItem { icon: Icon::Settings, keys: &keys, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Preferences",
+                    MenuItem { icon: Icon::Settings, keys: &keys, ..MenuItem::default() },
+                ) {
                     picks.push(Pick::Builtin(b));
                 }
             }
@@ -629,27 +803,47 @@ impl ShellState {
                 let panels = self.parts.panels.clone();
                 for panel in panels {
                     let open = self.level_panel(&panel.id).is_some_and(|p| p.open);
-                    if menu_item(ui, &panel.label, MenuItem { icon: panel.icon, selected: open, ..MenuItem::default() }) {
+                    if menu_item(
+                        ui,
+                        &panel.label,
+                        MenuItem { icon: panel.icon, selected: open, ..MenuItem::default() },
+                    ) {
                         self.requests.panel(&panel.id, if open { PanelOp::Close } else { PanelOp::Focus });
                     }
                 }
             }
             Builtin::Drawers => {
-                for (which, label, keys, icon) in [(Drawer::Content, "Content Drawer", "Ctrl+Space", Icon::Drawer), (Drawer::Log, "Log Drawer", "Ctrl+`", Icon::Log)] {
+                for (which, label, keys, icon) in [
+                    (Drawer::Content, "Content Drawer", "Ctrl+Space", Icon::Drawer),
+                    (Drawer::Log, "Log Drawer", "Ctrl+`", Icon::Log),
+                ] {
                     if !self.has_drawer(which) {
                         continue;
                     }
-                    if menu_item(ui, label, MenuItem { icon, keys, selected: self.drawer == Some(which), ..MenuItem::default() }) {
+                    if menu_item(
+                        ui,
+                        label,
+                        MenuItem { icon, keys, selected: self.drawer == Some(which), ..MenuItem::default() },
+                    ) {
                         self.requests.toggle_drawer(which);
                     }
                 }
             }
             Builtin::Documents => {
                 // the open documents, the way Ctrl+Tab walks them
-                let list: Vec<(SmolStr, String, bool)> = self.tabs.iter().map(|t| (t.id.clone(), t.label(), t.dirty())).collect();
+                let list: Vec<(SmolStr, String, bool)> =
+                    self.tabs.iter().map(|t| (t.id.clone(), t.label(), t.dirty())).collect();
                 for (id, label, dirty) in list {
                     let text = if dirty { format!("{label} *") } else { label };
-                    let picked = ui.push_id(id.as_str(), |ui| menu_item(ui, &text, MenuItem { selected: id == self.active, ..MenuItem::default() })).inner;
+                    let picked = ui
+                        .push_id(id.as_str(), |ui| {
+                            menu_item(
+                                ui,
+                                &text,
+                                MenuItem { selected: id == self.active, ..MenuItem::default() },
+                            )
+                        })
+                        .inner;
                     if picked {
                         self.requests.activate(&id);
                     }
@@ -661,12 +855,17 @@ impl ShellState {
                 }
             }
             Builtin::KeyboardShortcuts => {
-                if menu_item(ui, "Keyboard Shortcuts", MenuItem { icon: Icon::Keyboard, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "Keyboard Shortcuts",
+                    MenuItem { icon: Icon::Keyboard, ..MenuItem::default() },
+                ) {
                     picks.push(Pick::Builtin(b));
                 }
             }
             Builtin::About => {
-                if menu_item(ui, "About Grizzly Editor", MenuItem { icon: Icon::Info, ..MenuItem::default() }) {
+                if menu_item(ui, "About Grizzly Editor", MenuItem { icon: Icon::Info, ..MenuItem::default() })
+                {
                     picks.push(Pick::Builtin(b));
                 }
             }
@@ -693,9 +892,18 @@ impl ShellState {
                 Builtin::Palette => self.open_palette(""),
                 Builtin::Preferences => self.requests.open(OpenRequest::kind("preferences")),
                 Builtin::ResetLayout => self.reset_layout(ctx, false),
-                Builtin::KeyboardShortcuts => self.requests.open(OpenRequest { arg: Some("Keyboard".to_owned()), ..OpenRequest::kind("preferences") }),
+                Builtin::KeyboardShortcuts => self.requests.open(OpenRequest {
+                    arg: Some("Keyboard".to_owned()),
+                    ..OpenRequest::kind("preferences")
+                }),
                 Builtin::About => {
-                    if let Some(line) = gz_ui::dialog::notice(ctx, self.asker(), Tone::Info, "About Grizzly Editor", "Grizzly Editor - the level and mod editor of Dead Air Refined.\nAgents drive it over MCP on 127.0.0.1.") {
+                    if let Some(line) = gz_ui::dialog::notice(
+                        ctx,
+                        self.asker(),
+                        Tone::Info,
+                        "About Grizzly Editor",
+                        "Grizzly Editor - the level and mod editor of Dead Air Refined.\nAgents drive it over MCP on 127.0.0.1.",
+                    ) {
                         self.editor.log.plain(line);
                     }
                 }
@@ -706,9 +914,15 @@ impl ShellState {
 
     /// Back to the Start page, after the question about the unsaved tabs.
     fn switch_project(&mut self, ctx: &Context) {
-        let dirty: Vec<(String, String)> = self.dirty_tabs().into_iter().filter(|(id, _)| id != LEVEL).collect();
+        let dirty: Vec<(String, String)> =
+            self.dirty_tabs().into_iter().filter(|(id, _)| id != LEVEL).collect();
         let editor = self.editor.clone();
-        let close = move |editor: Arc<gz_editor::Editor>| editor.post("project_close", gz_editor::Args::from_iter([("discard".to_owned(), serde_json::Value::Bool(true))]));
+        let close = move |editor: Arc<gz_editor::Editor>| {
+            editor.post(
+                "project_close",
+                gz_editor::Args::from_iter([("discard".to_owned(), serde_json::Value::Bool(true))]),
+            )
+        };
         if dirty.is_empty() {
             close(editor);
             return;
@@ -742,7 +956,16 @@ impl ShellState {
             gz_ui::layout::reset_all(ctx);
         }
         if let Some(f) = self.parts.reset_layout.as_mut() {
-            f(all, &mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx, active_tab: &self.active, requests: &mut self.requests });
+            f(
+                all,
+                &mut DocCx {
+                    editor: &self.editor,
+                    gpu: &self.gpu,
+                    ctx,
+                    active_tab: &self.active,
+                    requests: &mut self.requests,
+                },
+            );
         }
     }
 
@@ -770,7 +993,16 @@ impl ShellState {
                 let tab = self.tabs.get(i)?;
                 let w = plan.widths.get(i).copied().unwrap_or(0.0);
                 let cross = tab.closable() && Some(i) == active_i;
-                shown.then(|| text::ellipsize(&ctx, &font, labels.get(i).map_or("", String::as_str), tabs::text_room(w, cross, tab.dirty()), Clip::End).0)
+                shown.then(|| {
+                    text::ellipsize(
+                        &ctx,
+                        &font,
+                        labels.get(i).map_or("", String::as_str),
+                        tabs::text_room(w, cross, tab.dirty()),
+                        Clip::End,
+                    )
+                    .0
+                })
             })
             .collect();
 
@@ -787,7 +1019,8 @@ impl ShellState {
                 continue;
             }
             let w = plan.widths.get(i).copied().unwrap_or(tabs::W_MIN);
-            let rect = Rect::from_min_max(pos2(x.round(), y0.round()), pos2((x + w).round(), bar.max.y.round()));
+            let rect =
+                Rect::from_min_max(pos2(x.round(), y0.round()), pos2((x + w).round(), bar.max.y.round()));
             x += w + tabs::SPACING;
             tab.rect = Some(rect);
             let id = Id::unique(("gz-app.tab", tab.id.as_str()));
@@ -808,7 +1041,10 @@ impl ShellState {
                 self.drag_tab = Some(tab.id.clone());
             }
             let dirty = tab.dirty();
-            let slot = Rect::from_min_max(pos2(rect.max.x - tabs::PAD_R - tabs::SLOT, rect.min.y + (tab_h - tabs::SLOT) * 0.5), pos2(rect.max.x - tabs::PAD_R, rect.min.y + (tab_h + tabs::SLOT) * 0.5));
+            let slot = Rect::from_min_max(
+                pos2(rect.max.x - tabs::PAD_R - tabs::SLOT, rect.min.y + (tab_h - tabs::SLOT) * 0.5),
+                pos2(rect.max.x - tabs::PAD_R, rect.min.y + (tab_h + tabs::SLOT) * 0.5),
+            );
             let show_close = tab.closable() && (hovered || active);
             let mut slot_hovered = false;
             if show_close {
@@ -820,23 +1056,61 @@ impl ShellState {
             }
             let painter = row.painter();
             if active || hovered {
-                painter.rect_filled(rect, CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 }, if active { p.base } else { p.hover });
+                painter.rect_filled(
+                    rect,
+                    CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 },
+                    if active { p.base } else { p.hover },
+                );
             }
             if active {
-                painter.rect_filled(Rect::from_min_max(pos2(rect.min.x + 1.0, rect.min.y), pos2(rect.max.x - 1.0, rect.min.y + 2.0)), CornerRadius::ZERO, p.accent_bright);
+                painter.rect_filled(
+                    Rect::from_min_max(
+                        pos2(rect.min.x + 1.0, rect.min.y),
+                        pos2(rect.max.x - 1.0, rect.min.y + 2.0),
+                    ),
+                    CornerRadius::ZERO,
+                    p.accent_bright,
+                );
             }
-            let icon_rect = Rect::from_min_size(pos2((rect.min.x + tabs::PAD_L).round(), (rect.min.y + (tab_h - tabs::ICON) * 0.5).round()), Vec2::splat(tabs::ICON));
-            icons::draw(painter, tab.icon, icon_rect, if active { p.accent_bright } else { p.text_secondary });
+            let icon_rect = Rect::from_min_size(
+                pos2((rect.min.x + tabs::PAD_L).round(), (rect.min.y + (tab_h - tabs::ICON) * 0.5).round()),
+                Vec2::splat(tabs::ICON),
+            );
+            icons::draw(
+                painter,
+                tab.icon,
+                icon_rect,
+                if active { p.accent_bright } else { p.text_secondary },
+            );
             let tx = rect.min.x + tabs::PAD_L + tabs::ICON + tabs::GAP;
             let room = tabs::text_room(rect.width(), show_close, dirty);
             let label = labels.get(i).map_or("", String::as_str);
-            let middle = cut_end.iter().enumerate().any(|(j, c)| j != i && c.is_some() && *c == cut_end.get(i).cloned().flatten() && labels.get(j).map(String::as_str) != Some(label));
-            let cut = text::paint(painter, &font, pos2(tx, rect.center().y), Align2::LEFT_CENTER, if active { p.text } else { p.text_secondary }, label, Some(room), if middle { Clip::Middle } else { Clip::End });
+            let middle = cut_end.iter().enumerate().any(|(j, c)| {
+                j != i
+                    && c.is_some()
+                    && *c == cut_end.get(i).cloned().flatten()
+                    && labels.get(j).map(String::as_str) != Some(label)
+            });
+            let cut = text::paint(
+                painter,
+                &font,
+                pos2(tx, rect.center().y),
+                Align2::LEFT_CENTER,
+                if active { p.text } else { p.text_secondary },
+                label,
+                Some(room),
+                if middle { Clip::Middle } else { Clip::End },
+            );
             if show_close {
                 if slot_hovered {
                     painter.rect_filled(slot, CornerRadius::same(3), p.pressed);
                 }
-                icons::draw(painter, Icon::Close, Rect::from_center_size(slot.center(), Vec2::splat(12.0)), if slot_hovered { p.text } else { p.text_secondary });
+                icons::draw(
+                    painter,
+                    Icon::Close,
+                    Rect::from_center_size(slot.center(), Vec2::splat(12.0)),
+                    if slot_hovered { p.text } else { p.text_secondary },
+                );
             } else if dirty {
                 painter.circle_filled(slot.center(), 3.5, if tab.id == LEVEL { p.warning } else { p.text });
             }
@@ -857,7 +1131,9 @@ impl ShellState {
                     if b == a {
                         continue;
                     }
-                    let Some(mid) = self.tabs.get(b).and_then(|t| t.rect).map(|r| r.center().x) else { continue };
+                    let Some(mid) = self.tabs.get(b).and_then(|t| t.rect).map(|r| r.center().x) else {
+                        continue;
+                    };
                     if (a < b && mx > mid) || (a > b && mx < mid) {
                         self.tabs.swap(a, b);
                         self.mark_session_dirty();
@@ -874,8 +1150,12 @@ impl ShellState {
         let chevron_rect;
         {
             let label = format!("+{hidden}");
-            let w = if hidden > 0 { text::width(&ctx, &more_font, &label) + 16.0 + 16.0 } else { tabs::CHEVRON };
-            let r = Rect::from_min_size(pos2((x + 2.0).round(), (y0 + (tab_h - tabs::CHEVRON) * 0.5).round()), Vec2::new(w, tabs::CHEVRON));
+            let w =
+                if hidden > 0 { text::width(&ctx, &more_font, &label) + 16.0 + 16.0 } else { tabs::CHEVRON };
+            let r = Rect::from_min_size(
+                pos2((x + 2.0).round(), (y0 + (tab_h - tabs::CHEVRON) * 0.5).round()),
+                Vec2::new(w, tabs::CHEVRON),
+            );
             chevron_rect = r;
             let tip = match hidden {
                 0 => "Open tabs".to_owned(),
@@ -885,13 +1165,33 @@ impl ShellState {
             let resp = row.interact(r, Id::unique("gz-app.tab_overflow_button"), Sense::click());
             let painter = row.painter();
             if open || resp.hovered() {
-                painter.rect_filled(r, CornerRadius::same(4), if open { p.selection_focused } else { p.hover });
+                painter.rect_filled(
+                    r,
+                    CornerRadius::same(4),
+                    if open { p.selection_focused } else { p.hover },
+                );
             }
             if hidden > 0 {
-                painter.text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, &label, more_font.clone(), p.text_secondary);
-                icons::draw(painter, Icon::ChevronDown, Rect::from_min_size(pos2(r.max.x - 18.0, r.center().y - 6.0), Vec2::splat(12.0)), p.text_secondary);
+                painter.text(
+                    pos2(r.min.x + 6.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    &label,
+                    more_font.clone(),
+                    p.text_secondary,
+                );
+                icons::draw(
+                    painter,
+                    Icon::ChevronDown,
+                    Rect::from_min_size(pos2(r.max.x - 18.0, r.center().y - 6.0), Vec2::splat(12.0)),
+                    p.text_secondary,
+                );
             } else {
-                icons::draw(painter, Icon::ChevronDown, Rect::from_center_size(r.center(), Vec2::splat(12.0)), p.text_secondary);
+                icons::draw(
+                    painter,
+                    Icon::ChevronDown,
+                    Rect::from_center_size(r.center(), Vec2::splat(12.0)),
+                    p.text_secondary,
+                );
             }
             audit::control(&ctx, &tip, true, None, Some(&tip), r);
             if resp.on_hover_text(&tip).clicked() {
@@ -900,13 +1200,23 @@ impl ShellState {
             x = r.max.x;
         }
         let layer = row.layer_id();
-        let entries: Vec<(SmolStr, String, Icon, bool)> = self.tabs.iter().map(|t| (t.id.clone(), t.label(), t.icon, t.dirty())).collect();
+        let entries: Vec<(SmolStr, String, Icon, bool)> =
+            self.tabs.iter().map(|t| (t.id.clone(), t.label(), t.icon, t.dirty())).collect();
         let current = self.active.clone();
         let mut picked = None;
         if menu_popup(&ctx, overflow, chevron_rect, layer, |ui| {
             for (id, label, icon, dirty) in &entries {
                 let text = if *dirty { format!("{label} *") } else { label.clone() };
-                if ui.push_id(id.as_str(), |ui| menu_item(ui, &text, MenuItem { icon: *icon, selected: *id == current, ..MenuItem::default() })).inner {
+                if ui
+                    .push_id(id.as_str(), |ui| {
+                        menu_item(
+                            ui,
+                            &text,
+                            MenuItem { icon: *icon, selected: *id == current, ..MenuItem::default() },
+                        )
+                    })
+                    .inner
+                {
                     picked = Some(id.clone());
                 }
             }
@@ -927,7 +1237,8 @@ impl ShellState {
             Popup::open_id(&ctx, menu_popup_id);
         }
         if let Some(target) = self.tab_menu.clone() {
-            let found = self.find(&target).and_then(|i| self.tabs.get(i)).map(|t| (t.rect, t.closable(), t.path()));
+            let found =
+                self.find(&target).and_then(|i| self.tabs.get(i)).map(|t| (t.rect, t.closable(), t.path()));
             match found {
                 None => {
                     self.tab_menu = None;
@@ -938,7 +1249,11 @@ impl ShellState {
                     let mut action = None;
                     let has_reveal = self.parts.reveal.is_some();
                     let shown = menu_popup(&ctx, menu_popup_id, anchor, layer, |ui| {
-                        if menu_item(ui, "Close", MenuItem { keys: "Ctrl+F4", enabled: closable, ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Close",
+                            MenuItem { keys: "Ctrl+F4", enabled: closable, ..MenuItem::default() },
+                        ) {
                             action = Some(1);
                         }
                         if menu_item(ui, "Close Others", MenuItem::default()) {
@@ -951,13 +1266,29 @@ impl ShellState {
                             action = Some(4);
                         }
                         ui.separator();
-                        if menu_item(ui, "Copy Path", MenuItem { icon: Icon::Copy, enabled: !path.is_empty(), ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Copy Path",
+                            MenuItem { icon: Icon::Copy, enabled: !path.is_empty(), ..MenuItem::default() },
+                        ) {
                             action = Some(5);
                         }
-                        if menu_item(ui, "Show in Content Browser", MenuItem { icon: Icon::Folder, enabled: !path.is_empty() && has_reveal, ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Show in Content Browser",
+                            MenuItem {
+                                icon: Icon::Folder,
+                                enabled: !path.is_empty() && has_reveal,
+                                ..MenuItem::default()
+                            },
+                        ) {
                             action = Some(6);
                         }
-                        if menu_item(ui, "Show in Explorer", MenuItem { icon: Icon::Reveal, enabled: !path.is_empty(), ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            "Show in Explorer",
+                            MenuItem { icon: Icon::Reveal, enabled: !path.is_empty(), ..MenuItem::default() },
+                        ) {
                             action = Some(7);
                         }
                     });
@@ -985,16 +1316,29 @@ impl ShellState {
     }
 
     fn tab_menu_action(&mut self, ctx: &Context, target: &str, path: &str, action: u8) {
-        let ids: Vec<(SmolStr, bool, bool)> = self.tabs.iter().map(|t| (t.id.clone(), t.closable(), t.dirty())).collect();
+        let ids: Vec<(SmolStr, bool, bool)> =
+            self.tabs.iter().map(|t| (t.id.clone(), t.closable(), t.dirty())).collect();
         match action {
             1 => self.request_close(ctx, target),
-            2 => ids.iter().filter(|(id, c, _)| *c && id != target).for_each(|(id, _, _)| self.request_close(ctx, id)),
+            2 => ids
+                .iter()
+                .filter(|(id, c, _)| *c && id != target)
+                .for_each(|(id, _, _)| self.request_close(ctx, id)),
             3 => ids.iter().filter(|(_, c, _)| *c).for_each(|(id, _, _)| self.request_close(ctx, id)),
             4 => ids.iter().filter(|(_, c, d)| *c && !*d).for_each(|(id, _, _)| self.request_close(ctx, id)),
             5 => ctx.copy_text(path.to_owned()),
             6 => {
                 if let Some(f) = self.parts.reveal.as_mut() {
-                    f(path, &mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx, active_tab: &self.active, requests: &mut self.requests });
+                    f(
+                        path,
+                        &mut DocCx {
+                            editor: &self.editor,
+                            gpu: &self.gpu,
+                            ctx,
+                            active_tab: &self.active,
+                            requests: &mut self.requests,
+                        },
+                    );
                 }
             }
             7 => {
@@ -1014,9 +1358,18 @@ impl ShellState {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         ui.painter().rect_filled(rect, CornerRadius::ZERO, p.base);
-        ui.painter().line_segment([pos2(rect.min.x, rect.max.y - 0.5), pos2(rect.max.x, rect.max.y - 0.5)], Stroke::new(1.0, p.border_subtle));
-        let inner = Rect::from_min_max(pos2(rect.min.x + 8.0, rect.min.y), pos2(rect.max.x - 8.0, rect.max.y));
-        let mut child = ui.new_child(UiBuilder::new().id_salt("gz-app.toolbar").max_rect(inner).layout(Layout::left_to_right(Align::Center)));
+        ui.painter().line_segment(
+            [pos2(rect.min.x, rect.max.y - 0.5), pos2(rect.max.x, rect.max.y - 0.5)],
+            Stroke::new(1.0, p.border_subtle),
+        );
+        let inner =
+            Rect::from_min_max(pos2(rect.min.x + 8.0, rect.min.y), pos2(rect.max.x - 8.0, rect.max.y));
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-app.toolbar")
+                .max_rect(inner)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
         let id = self.active.to_string();
         let project = self.editor.project_opt().is_some();
         let on_prefs = self.active == "preferences";
@@ -1050,25 +1403,61 @@ impl ShellState {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         ui.painter().rect_filled(rect, CornerRadius::ZERO, p.chrome);
-        ui.painter().line_segment([pos2(rect.min.x, rect.min.y + 0.5), pos2(rect.max.x, rect.min.y + 0.5)], Stroke::new(1.0, p.border_subtle));
+        ui.painter().line_segment(
+            [pos2(rect.min.x, rect.min.y + 0.5), pos2(rect.max.x, rect.min.y + 0.5)],
+            Stroke::new(1.0, p.border_subtle),
+        );
         let log = self.log_state();
         let small = Font::Small.id();
 
         // right: the chips, Tasks, the counts, the MCP dot - right to left
-        let right_rect = Rect::from_min_max(pos2(rect.min.x + 4.0, rect.min.y), pos2(rect.max.x - 8.0, rect.max.y));
-        let mut right = ui.new_child(UiBuilder::new().id_salt("gz-app.status_right").max_rect(right_rect).layout(Layout::right_to_left(Align::Center)));
+        let right_rect =
+            Rect::from_min_max(pos2(rect.min.x + 4.0, rect.min.y), pos2(rect.max.x - 8.0, rect.max.y));
+        let mut right = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-app.status_right")
+                .max_rect(right_rect)
+                .layout(Layout::right_to_left(Align::Center)),
+        );
         right.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-        local_status_chip(&mut right, Icon::Mcp, Some(Tone::Success), "", "MCP is on: agents drive the editor over 127.0.0.1.", false);
+        local_status_chip(
+            &mut right,
+            Icon::Mcp,
+            Some(Tone::Success),
+            "",
+            "MCP is on: agents drive the editor over 127.0.0.1.",
+            false,
+        );
         let log_open = self.drawer == Some(Drawer::Log);
-        let warnings_tip = format!("{} warnings since the project opened. Opens the Output Log.", log.warnings);
-        if local_status_chip(&mut right, Icon::Warning, Some(if log.warnings > 0 { Tone::Warning } else { Tone::Muted }), &log.warnings.to_string(), &warnings_tip, false).clicked() {
+        let warnings_tip =
+            format!("{} warnings since the project opened. Opens the Output Log.", log.warnings);
+        if local_status_chip(
+            &mut right,
+            Icon::Warning,
+            Some(if log.warnings > 0 { Tone::Warning } else { Tone::Muted }),
+            &log.warnings.to_string(),
+            &warnings_tip,
+            false,
+        )
+        .clicked()
+        {
             self.toggle_drawer(&ctx, Drawer::Log);
         }
         let errors_tip = format!("{} errors since the project opened. Opens the Output Log.", log.errors);
-        if local_status_chip(&mut right, Icon::Error, Some(if log.errors > 0 { Tone::Error } else { Tone::Muted }), &log.errors.to_string(), &errors_tip, false).clicked() {
+        if local_status_chip(
+            &mut right,
+            Icon::Error,
+            Some(if log.errors > 0 { Tone::Error } else { Tone::Muted }),
+            &log.errors.to_string(),
+            &errors_tip,
+            false,
+        )
+        .clicked()
+        {
             self.toggle_drawer(&ctx, Drawer::Log);
         }
-        let running: Vec<gz_editor::JobInfo> = self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
+        let running: Vec<gz_editor::JobInfo> =
+            self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
         if !running.is_empty() {
             let label = match running.as_slice() {
                 [one] => one.title.clone(),
@@ -1089,7 +1478,12 @@ impl ShellState {
         let right_x = right.min_rect().min.x.min(right_rect.max.x);
 
         // left: the drawers
-        let mut left = ui.new_child(UiBuilder::new().id_salt("gz-app.status_left").max_rect(Rect::from_min_max(pos2(rect.min.x + 4.0, rect.min.y), pos2(right_x, rect.max.y))).layout(Layout::left_to_right(Align::Center)));
+        let mut left = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-app.status_left")
+                .max_rect(Rect::from_min_max(pos2(rect.min.x + 4.0, rect.min.y), pos2(right_x, rect.max.y)))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
         left.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
         for (which, label, icon, tip) in [
             (Drawer::Content, "Content Drawer", Icon::Drawer, "Open the Content Browser over this tab"),
@@ -1098,7 +1492,16 @@ impl ShellState {
             if !self.has_drawer(which) {
                 continue;
             }
-            if local_status_chip(&mut left, icon, None, label, tip, self.drawer == Some(which) || (which == Drawer::Log && log_open)).clicked() {
+            if local_status_chip(
+                &mut left,
+                icon,
+                None,
+                label,
+                tip,
+                self.drawer == Some(which) || (which == Drawer::Log && log_open),
+            )
+            .clicked()
+            {
                 self.toggle_drawer(&ctx, which);
             }
         }
@@ -1117,7 +1520,12 @@ impl ShellState {
             let (lo, hi) = (left_end + 160.0, (room_x1 - want).max(left_end));
             status_x = (if centred < lo { lo } else { centred.min(hi) }).min(room_x1);
             let area = Rect::from_min_max(pos2(status_x, rect.min.y), pos2(room_x1, rect.max.y));
-            let mut centre = ui.new_child(UiBuilder::new().id_salt("gz-app.status_centre").max_rect(area).layout(Layout::left_to_right(Align::Center)));
+            let mut centre = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-app.status_centre")
+                    .max_rect(area)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
             centre.set_clip_rect(area);
             centre.style_mut().override_font_id = Some(small.clone());
             if let Some(tab) = self.tabs.get_mut(i)
@@ -1126,7 +1534,16 @@ impl ShellState {
                 && let Some(doc) = tab.doc.as_mut()
                 && !doc.missing()
             {
-                doc.status(&mut centre, &mut DocCx { editor: &self.editor, gpu: &self.gpu, ctx: &ctx, active_tab: &self.active, requests: &mut self.requests });
+                doc.status(
+                    &mut centre,
+                    &mut DocCx {
+                        editor: &self.editor,
+                        gpu: &self.gpu,
+                        ctx: &ctx,
+                        active_tab: &self.active,
+                        requests: &mut self.requests,
+                    },
+                );
             }
             let used = (centre.min_rect().max.x - status_x).max(0.0);
             ctx.data_mut(|d| d.insert_temp(Id::unique("gz-app.status_centre_w"), used));
@@ -1136,7 +1553,16 @@ impl ShellState {
         }
         let line_x1 = status_x - 16.0;
         if !log.last.is_empty() && line_x1 - left_end > 40.0 {
-            text::paint(ui.painter(), &small, pos2(left_end.round(), rect.center().y), Align2::LEFT_CENTER, p.text_muted, &log.last, Some(line_x1 - left_end), Clip::End);
+            text::paint(
+                ui.painter(),
+                &small,
+                pos2(left_end.round(), rect.center().y),
+                Align2::LEFT_CENTER,
+                p.text_muted,
+                &log.last,
+                Some(line_x1 - left_end),
+                Clip::End,
+            );
         }
     }
 
@@ -1146,12 +1572,17 @@ impl ShellState {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         ui.painter().rect_filled(work, CornerRadius::ZERO, p.base);
-        let mut host = ui.new_child(UiBuilder::new().id_salt("###doc.host").max_rect(work).layout(Layout::top_down(Align::Min)));
+        let mut host = ui.new_child(
+            UiBuilder::new().id_salt("###doc.host").max_rect(work).layout(Layout::top_down(Align::Min)),
+        );
         host.set_clip_rect(work);
 
         if self.iconsheet {
             audit::surface(&ctx, "###doc.host", || {
-                egui::ScrollArea::vertical().id_salt("gz-app.iconsheet").auto_shrink([false, false]).show(&mut host, |ui| icons::sheet(ui, 0));
+                egui::ScrollArea::vertical()
+                    .id_salt("gz-app.iconsheet")
+                    .auto_shrink([false, false])
+                    .show(&mut host, |ui| icons::sheet(ui, 0));
             });
             self.tick_inactive(&ctx);
             return;
@@ -1171,7 +1602,11 @@ impl ShellState {
                 (None, Some(draw)) => draw(&mut host, &mut cx),
                 (None, None) => {
                     gz_ui::card::page(&mut host, contract::WINDOW_START_PAGE, |ui| {
-                        let text_ = if editor.project_opt().is_some() { "Link the game this project is for: the Link Game card is not part of this build yet." } else { "Open a project with open_project over MCP, or start the editor with -project <folder>." };
+                        let text_ = if editor.project_opt().is_some() {
+                            "Link the game this project is for: the Link Game card is not part of this build yet."
+                        } else {
+                            "Open a project with open_project over MCP, or start the editor with -project <folder>."
+                        };
                         state::empty_state(ui, Icon::Folder, "No project is open", text_, None);
                     });
                 }
@@ -1183,15 +1618,33 @@ impl ShellState {
         let id = self.active.to_string();
         let Some(i) = self.find(&id) else { return };
         let (padded, missing, panicked, loaded, path, label) = match self.tabs.get(i) {
-            Some(t) => (t.doc.as_ref().is_none_or(|d| d.padded()) || t.missing(), t.missing(), t.panicked.clone(), t.loaded(), t.path(), t.label()),
+            Some(t) => (
+                t.doc.as_ref().is_none_or(|d| d.padded()) || t.missing(),
+                t.missing(),
+                t.panicked.clone(),
+                t.loaded(),
+                t.path(),
+                t.label(),
+            ),
             None => return,
         };
         let body_rect = if padded && !missing { work.shrink(8.0) } else { work };
-        let mut body = host.new_child(UiBuilder::new().id_salt(("gz-app.doc", id.as_str())).max_rect(body_rect).layout(Layout::top_down(Align::Min)));
+        let mut body = host.new_child(
+            UiBuilder::new()
+                .id_salt(("gz-app.doc", id.as_str()))
+                .max_rect(body_rect)
+                .layout(Layout::top_down(Align::Min)),
+        );
         body.set_clip_rect(body_rect);
         audit::surface(&ctx, "###doc.host", || {
             if let Some(text_) = panicked {
-                if state::empty_state(&mut body, Icon::Error, "This tab stopped on an internal error", &text_, Some("Close Tab")) {
+                if state::empty_state(
+                    &mut body,
+                    Icon::Error,
+                    "This tab stopped on an internal error",
+                    &text_,
+                    Some("Close Tab"),
+                ) {
                     self.requests.close(&id);
                     if let Some(tab) = self.tabs.get_mut(i) {
                         tab.panicked = None;
@@ -1199,7 +1652,13 @@ impl ShellState {
                     }
                 }
             } else if missing {
-                state::empty_state(&mut body, Icon::File, "File not found", if path.is_empty() { &label } else { &path }, None);
+                state::empty_state(
+                    &mut body,
+                    Icon::File,
+                    "File not found",
+                    if path.is_empty() { &label } else { &path },
+                    None,
+                );
             } else if loaded {
                 self.draw_body(&mut body, i);
             }
@@ -1234,32 +1693,77 @@ impl ShellState {
         let ShellState { parts, editor, gpu, active, requests, drawer_focus, .. } = self;
         let Some(desc) = parts.drawers.get_mut(which.index()).and_then(|d| d.as_mut()) else { return };
         let window = which.window();
-        let resp = Area::new(Id::unique(window)).order(Order::Middle).fixed_pos(rect.min).movable(false).constrain(false).show(&ctx, |ui| {
-            let (r, _) = ui.allocate_exact_size(rect.size(), Sense::click());
-            ui.painter().rect_filled(r, CornerRadius::ZERO, p.base);
-            ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, p.border_strong));
-            let head = Rect::from_min_size(r.min, Vec2::new(r.width(), 32.0));
-            icons::draw(ui.painter(), desc.icon, Rect::from_min_size(pos2(head.min.x + 8.0, head.center().y - 8.0), Vec2::splat(16.0)), p.text_secondary);
-            ui.painter().text(pos2(head.min.x + 32.0, head.center().y), Align2::LEFT_CENTER, desc.label.as_str(), Font::Strong.id(), p.text);
-            let cross = Rect::from_min_size(pos2(head.max.x - 16.0 - 24.0, head.center().y - 12.0), Vec2::splat(24.0));
-            let mut cell = ui.new_child(UiBuilder::new().max_rect(cross));
-            if icon_button_sized(&mut cell, Icon::Close, "Close the drawer (Esc)", false, true, 24.0, 16.0).clicked() {
-                close = true;
-            }
-            let body_rect = Rect::from_min_max(pos2(r.min.x + 8.0, head.max.y), r.max);
-            let mut body = ui.new_child(UiBuilder::new().id_salt(("gz-app.drawer_body", window)).max_rect(body_rect).layout(Layout::top_down(Align::Min)));
-            body.set_clip_rect(body_rect);
-            audit::surface(&ctx, window, || (desc.body)(&mut body, &mut DocCx { editor, gpu, ctx: &ctx, active_tab: active, requests }));
-        });
+        let resp = Area::new(Id::unique(window))
+            .order(Order::Middle)
+            .fixed_pos(rect.min)
+            .movable(false)
+            .constrain(false)
+            .show(&ctx, |ui| {
+                let (r, _) = ui.allocate_exact_size(rect.size(), Sense::click());
+                ui.painter().rect_filled(r, CornerRadius::ZERO, p.base);
+                ui.painter().line_segment([r.left_top(), r.right_top()], Stroke::new(1.0, p.border_strong));
+                let head = Rect::from_min_size(r.min, Vec2::new(r.width(), 32.0));
+                icons::draw(
+                    ui.painter(),
+                    desc.icon,
+                    Rect::from_min_size(pos2(head.min.x + 8.0, head.center().y - 8.0), Vec2::splat(16.0)),
+                    p.text_secondary,
+                );
+                ui.painter().text(
+                    pos2(head.min.x + 32.0, head.center().y),
+                    Align2::LEFT_CENTER,
+                    desc.label.as_str(),
+                    Font::Strong.id(),
+                    p.text,
+                );
+                let cross = Rect::from_min_size(
+                    pos2(head.max.x - 16.0 - 24.0, head.center().y - 12.0),
+                    Vec2::splat(24.0),
+                );
+                let mut cell = ui.new_child(UiBuilder::new().max_rect(cross));
+                if icon_button_sized(
+                    &mut cell,
+                    Icon::Close,
+                    "Close the drawer (Esc)",
+                    false,
+                    true,
+                    24.0,
+                    16.0,
+                )
+                .clicked()
+                {
+                    close = true;
+                }
+                let body_rect = Rect::from_min_max(pos2(r.min.x + 8.0, head.max.y), r.max);
+                let mut body = ui.new_child(
+                    UiBuilder::new()
+                        .id_salt(("gz-app.drawer_body", window))
+                        .max_rect(body_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                body.set_clip_rect(body_rect);
+                audit::surface(&ctx, window, || {
+                    (desc.body)(
+                        &mut body,
+                        &mut DocCx { editor, gpu, ctx: &ctx, active_tab: active, requests },
+                    )
+                });
+            });
         *drawer_focus = false;
         let _ = resp;
         // Esc, a click outside it (the status bar's own buttons toggle it), or a drag that leaves it
         let pointer = ctx.pointer_latest_pos();
         let outside = pointer.is_some_and(|m| !rect.contains(m) && !self.status_rect.contains(m));
-        if !ctx.egui_wants_keyboard_input() && !self.modal_up(&ctx) && ctx.input(|i| i.key_pressed(Key::Escape)) {
+        if !ctx.egui_wants_keyboard_input()
+            && !self.modal_up(&ctx)
+            && ctx.input(|i| i.key_pressed(Key::Escape))
+        {
             close = true;
         }
-        if outside && !Popup::is_any_open(&ctx) && ctx.input(|i| i.pointer.primary_pressed() || i.pointer.secondary_pressed()) {
+        if outside
+            && !Popup::is_any_open(&ctx)
+            && ctx.input(|i| i.pointer.primary_pressed() || i.pointer.secondary_pressed())
+        {
             close = true;
         }
         if outside && egui::DragAndDrop::has_any_payload(&ctx) {
@@ -1283,7 +1787,8 @@ impl ShellState {
     fn draw_card(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.card_rect = None;
-        let running: Vec<gz_editor::JobInfo> = self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
+        let running: Vec<gz_editor::JobInfo> =
+            self.editor.jobs.snapshot().into_iter().filter(gz_editor::JobInfo::running).collect();
         // a dialog is the author's work now: the card waits behind it
         if running.is_empty() || !self.card_open || self.modal_up(&ctx) {
             return;
@@ -1294,25 +1799,34 @@ impl ShellState {
         let now = crate::tasks::now_ms();
         let mut stop = None;
         let mut hide = false;
-        let resp = Area::new(Id::unique(contract::TASK_CARD)).order(Order::Foreground).pivot(Align2::RIGHT_BOTTOM).fixed_pos(corner).show(&ctx, |ui| {
-            Frame::new().fill(p.overlay).stroke(Stroke::new(1.0, p.border_strong)).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
-                ui.set_width(width - 28.0);
-                ui.spacing_mut().item_spacing = Vec2::new(8.0, 2.0);
-                let room = width - 28.0;
-                for (n, job) in running.iter().enumerate() {
-                    if n > 0 {
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-                    }
-                    let card = crate::tasks::card_of(&self.editor, job.id).unwrap_or_default();
-                    let cancel_requested = self.cancelled.contains(&job.id);
-                    if card_row(ui, job, &card, room, n == 0, cancel_requested, now, &mut hide) {
-                        stop = Some(job.id);
-                    }
-                }
+        let resp = Area::new(Id::unique(contract::TASK_CARD))
+            .order(Order::Foreground)
+            .pivot(Align2::RIGHT_BOTTOM)
+            .fixed_pos(corner)
+            .show(&ctx, |ui| {
+                Frame::new()
+                    .fill(p.overlay)
+                    .stroke(Stroke::new(1.0, p.border_strong))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(width - 28.0);
+                        ui.spacing_mut().item_spacing = Vec2::new(8.0, 2.0);
+                        let room = width - 28.0;
+                        for (n, job) in running.iter().enumerate() {
+                            if n > 0 {
+                                ui.add_space(6.0);
+                                ui.separator();
+                                ui.add_space(6.0);
+                            }
+                            let card = crate::tasks::card_of(&self.editor, job.id).unwrap_or_default();
+                            let cancel_requested = self.cancelled.contains(&job.id);
+                            if card_row(ui, job, &card, room, n == 0, cancel_requested, now, &mut hide) {
+                                stop = Some(job.id);
+                            }
+                        }
+                    });
             });
-        });
         self.card_rect = Some(resp.response.rect);
         self.note_popup("tasks", "Tasks", contract::TASK_CARD, resp.response.rect);
         ctx.request_repaint_after(Duration::from_millis(50));
@@ -1358,7 +1872,9 @@ impl ShellState {
                 score: 0,
             });
         }
-        for (which, label, keys) in [(Drawer::Content, "Content Drawer", "Ctrl+Space"), (Drawer::Log, "Log Drawer", "Ctrl+`")] {
+        for (which, label, keys) in
+            [(Drawer::Content, "Content Drawer", "Ctrl+Space"), (Drawer::Log, "Log Drawer", "Ctrl+`")]
+        {
             if !self.has_drawer(which) {
                 continue;
             }
@@ -1430,7 +1946,8 @@ impl ShellState {
         let head_h = 12.0 + 32.0 + 8.0;
         let footer_h = 32.0;
         let list_h = if count == 0 { 168.0 } else { count as f32 * row_h + 14.0 };
-        let height = (head_h + row_h + 12.0 + footer_h).max((head_h + list_h + footer_h).min(480.0_f32.min(work.height() - 40.0 - 24.0)));
+        let height = (head_h + row_h + 12.0 + footer_h)
+            .max((head_h + list_h + footer_h).min(480.0_f32.min(work.height() - 40.0 - 24.0)));
         let pos = pos2((work.center().x - width * 0.5).round(), work.min.y + 40.0);
         self.palette.rect = Rect::from_min_size(pos, Vec2::new(width, height));
 
@@ -1465,61 +1982,115 @@ impl ShellState {
         }
         let mut run = if enter && count > 0 { Some(self.palette.selected) } else { None };
         let id = Id::unique(contract::PALETTE_ID);
-        let area = Area::new(id).kind(egui::UiKind::Modal).order(Order::Foreground).fixed_pos(pos).constrain(false);
+        let area =
+            Area::new(id).kind(egui::UiKind::Modal).order(Order::Foreground).fixed_pos(pos).constrain(false);
         let query_before = self.palette.query.clone();
         let focus = std::mem::take(&mut self.palette.focus);
         let scroll_to = std::mem::take(&mut self.palette.scroll_to_selected);
         let selected = self.palette.selected;
         let mut query = std::mem::take(&mut self.palette.query);
         let mut clicked = None;
-        let modal = egui::Modal::new(id).area(area).backdrop_color(p.dim).frame(Frame::NONE).show(&ctx, |ui| {
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-            ui.painter().rect(rect, CornerRadius::same(8), p.overlay, Stroke::new(1.0, p.border_strong), StrokeKind::Inside);
-            audit::surface(&ctx, contract::PALETTE_WINDOW, || {
-                let field = Rect::from_min_size(rect.min + Vec2::new(12.0, 12.0), Vec2::new(width - 24.0, 32.0));
-                let mut field_ui = ui.new_child(UiBuilder::new().id_salt("gz-app.palette_field").max_rect(field).layout(Layout::left_to_right(Align::Center)));
-                let edit_id = field_ui.make_persistent_id(("gz-ui.search", "palette")).with("edit");
-                if focus {
-                    ctx.memory_mut(|m| m.request_focus(edit_id));
-                }
-                SearchField::new(&mut query).hint("Run a command, open a panel or go to a tab").id_salt("palette").width(width - 24.0).show(&mut field_ui);
-                let line_y = field.max.y + 8.0;
-                ui.painter().line_segment([pos2(rect.min.x, line_y), pos2(rect.max.x, line_y)], Stroke::new(1.0, p.border_subtle));
-                let list = Rect::from_min_max(pos2(rect.min.x + 6.0, line_y + 6.0), pos2(rect.max.x - 6.0, rect.max.y - footer_h - 6.0));
-                let mut list_ui = ui.new_child(UiBuilder::new().id_salt("gz-app.palette_list").max_rect(list).layout(Layout::top_down_justified(Align::Min)));
-                if rows.is_empty() {
-                    state::empty_state(&mut list_ui, Icon::Search, "No matches", "No command, panel or tab has these words in its name.", None);
-                } else {
-                    egui::ScrollArea::vertical().id_salt("gz-app.palette_scroll").auto_shrink([false, false]).max_height(list.height()).show_rows(&mut list_ui, row_h, rows.len(), |ui, range| {
-                        ui.spacing_mut().item_spacing = Vec2::ZERO;
-                        for i in range {
-                            let Some(row) = rows.get(i) else { continue };
-                            let resp = palette_row(ui, row, i == selected, row_h);
-                            if i == selected && scroll_to {
-                                resp.scroll_to_me(None);
-                            }
-                            if resp.clicked() {
-                                clicked = Some(i);
-                            }
-                        }
-                    });
-                }
-                // the footer: how many, and the keys
-                let footer = Rect::from_min_max(pos2(rect.min.x, rect.max.y - footer_h), rect.max);
-                ui.painter().line_segment([footer.left_top(), footer.right_top()], Stroke::new(1.0, p.border_subtle));
-                let small = Font::Small.id();
-                let found = if count == 1 { "1 result".to_owned() } else { format!("{count} results") };
-                ui.painter().text(pos2(footer.min.x + 12.0, footer.center().y), Align2::LEFT_CENTER, found, small.clone(), p.text_muted);
-                let mut x = footer.max.x - 12.0;
-                for (keys, what) in [("Esc", "Close"), ("Enter", "Run")] {
-                    x -= text::width(&ctx, &small, what);
-                    ui.painter().text(pos2(x, footer.center().y), Align2::LEFT_CENTER, what, small.clone(), p.text_muted);
-                    x -= 6.0;
-                    let kw = gz_ui::keycaps(ui, pos2(x, footer.center().y), keys, true);
-                    x -= kw + 16.0;
-                }
+        let modal =
+            egui::Modal::new(id).area(area).backdrop_color(p.dim).frame(Frame::NONE).show(&ctx, |ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+                ui.painter().rect(
+                    rect,
+                    CornerRadius::same(8),
+                    p.overlay,
+                    Stroke::new(1.0, p.border_strong),
+                    StrokeKind::Inside,
+                );
+                audit::surface(&ctx, contract::PALETTE_WINDOW, || {
+                    let field =
+                        Rect::from_min_size(rect.min + Vec2::new(12.0, 12.0), Vec2::new(width - 24.0, 32.0));
+                    let mut field_ui = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt("gz-app.palette_field")
+                            .max_rect(field)
+                            .layout(Layout::left_to_right(Align::Center)),
+                    );
+                    let edit_id = field_ui.make_persistent_id(("gz-ui.search", "palette")).with("edit");
+                    if focus {
+                        ctx.memory_mut(|m| m.request_focus(edit_id));
+                    }
+                    SearchField::new(&mut query)
+                        .hint("Run a command, open a panel or go to a tab")
+                        .id_salt("palette")
+                        .width(width - 24.0)
+                        .show(&mut field_ui);
+                    let line_y = field.max.y + 8.0;
+                    ui.painter().line_segment(
+                        [pos2(rect.min.x, line_y), pos2(rect.max.x, line_y)],
+                        Stroke::new(1.0, p.border_subtle),
+                    );
+                    let list = Rect::from_min_max(
+                        pos2(rect.min.x + 6.0, line_y + 6.0),
+                        pos2(rect.max.x - 6.0, rect.max.y - footer_h - 6.0),
+                    );
+                    let mut list_ui = ui.new_child(
+                        UiBuilder::new()
+                            .id_salt("gz-app.palette_list")
+                            .max_rect(list)
+                            .layout(Layout::top_down_justified(Align::Min)),
+                    );
+                    if rows.is_empty() {
+                        state::empty_state(
+                            &mut list_ui,
+                            Icon::Search,
+                            "No matches",
+                            "No command, panel or tab has these words in its name.",
+                            None,
+                        );
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("gz-app.palette_scroll")
+                            .auto_shrink([false, false])
+                            .max_height(list.height())
+                            .show_rows(&mut list_ui, row_h, rows.len(), |ui, range| {
+                                ui.spacing_mut().item_spacing = Vec2::ZERO;
+                                for i in range {
+                                    let Some(row) = rows.get(i) else { continue };
+                                    let resp = palette_row(ui, row, i == selected, row_h);
+                                    if i == selected && scroll_to {
+                                        resp.scroll_to_me(None);
+                                    }
+                                    if resp.clicked() {
+                                        clicked = Some(i);
+                                    }
+                                }
+                            });
+                    }
+                    // the footer: how many, and the keys
+                    let footer = Rect::from_min_max(pos2(rect.min.x, rect.max.y - footer_h), rect.max);
+                    ui.painter().line_segment(
+                        [footer.left_top(), footer.right_top()],
+                        Stroke::new(1.0, p.border_subtle),
+                    );
+                    let small = Font::Small.id();
+                    let found = if count == 1 { "1 result".to_owned() } else { format!("{count} results") };
+                    ui.painter().text(
+                        pos2(footer.min.x + 12.0, footer.center().y),
+                        Align2::LEFT_CENTER,
+                        found,
+                        small.clone(),
+                        p.text_muted,
+                    );
+                    let mut x = footer.max.x - 12.0;
+                    for (keys, what) in [("Esc", "Close"), ("Enter", "Run")] {
+                        x -= text::width(&ctx, &small, what);
+                        ui.painter().text(
+                            pos2(x, footer.center().y),
+                            Align2::LEFT_CENTER,
+                            what,
+                            small.clone(),
+                            p.text_muted,
+                        );
+                        x -= 6.0;
+                        let kw = gz_ui::keycaps(ui, pos2(x, footer.center().y), keys, true);
+                        x -= kw + 16.0;
+                    }
+                });
             });
-        });
         self.palette.query = query;
         if self.palette.query != query_before {
             self.palette.selected = 0;
@@ -1542,35 +2113,6 @@ impl ShellState {
                 if !executed {
                     state::toast(&ctx, Tone::Warning, &format!("{} is not available here.", row.label));
                 }
-            }
-        }
-    }
-
-    // ---- the window's edges --------------------------------------------------------------
-
-    fn resize_edges(&mut self, ui: &mut Ui, screen: Rect) {
-        let ctx = ui.ctx().clone();
-        if ctx.input(|i| i.viewport().maximized == Some(true)) {
-            return;
-        }
-        let e = EDGE;
-        let edges = [
-            (Rect::from_min_max(screen.min, pos2(screen.min.x + e, screen.max.y)), ResizeDirection::West, CursorIcon::ResizeWest),
-            (Rect::from_min_max(pos2(screen.max.x - e, screen.min.y), screen.max), ResizeDirection::East, CursorIcon::ResizeEast),
-            (Rect::from_min_max(pos2(screen.min.x, screen.max.y - e), screen.max), ResizeDirection::South, CursorIcon::ResizeSouth),
-            (Rect::from_min_max(screen.min, pos2(screen.max.x, screen.min.y + 3.0)), ResizeDirection::North, CursorIcon::ResizeNorth),
-            (Rect::from_min_size(screen.min, Vec2::splat(e * 2.0)), ResizeDirection::NorthWest, CursorIcon::ResizeNorthWest),
-            (Rect::from_min_size(pos2(screen.max.x - e * 2.0, screen.min.y), Vec2::splat(e * 2.0)), ResizeDirection::NorthEast, CursorIcon::ResizeNorthEast),
-            (Rect::from_min_size(pos2(screen.min.x, screen.max.y - e * 2.0), Vec2::splat(e * 2.0)), ResizeDirection::SouthWest, CursorIcon::ResizeSouthWest),
-            (Rect::from_min_size(screen.max - Vec2::splat(e * 2.0), Vec2::splat(e * 2.0)), ResizeDirection::SouthEast, CursorIcon::ResizeSouthEast),
-        ];
-        for (n, (rect, dir, cursor)) in edges.into_iter().enumerate() {
-            let resp = ui.interact(rect, Id::unique(("gz-app.edge", n)), Sense::drag());
-            if resp.hovered() || resp.dragged() {
-                ctx.set_cursor_icon(cursor);
-            }
-            if resp.drag_started() {
-                ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
             }
         }
     }
@@ -1662,19 +2204,53 @@ impl ShellState {
 
 /// One row of the Task Center's card; `true` when its Stop was pressed.
 #[allow(clippy::too_many_arguments)]
-fn card_row(ui: &mut Ui, job: &gz_editor::JobInfo, card: &crate::TaskCard, width: f32, first: bool, cancel_requested: bool, now: u64, hide: &mut bool) -> bool {
+fn card_row(
+    ui: &mut Ui,
+    job: &gz_editor::JobInfo,
+    card: &crate::TaskCard,
+    width: f32,
+    first: bool,
+    cancel_requested: bool,
+    now: u64,
+    hide: &mut bool,
+) -> bool {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
     let small = Font::Small.id();
     // the title, its spinner, and the chevron that hides the card
     let (head, _) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::hover());
-    let mut spin = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_size(pos2(head.min.x, head.center().y - 8.0), Vec2::splat(16.0))));
+    let mut spin = ui.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_size(pos2(head.min.x, head.center().y - 8.0), Vec2::splat(16.0))),
+    );
     state::spinner(&mut spin);
     let hide_w = if first { 24.0 } else { 0.0 };
-    text::paint(ui.painter(), &Font::Strong.id(), pos2(head.min.x + 24.0, head.center().y), Align2::LEFT_CENTER, p.text, &job.title, Some((width - 24.0 - hide_w).max(0.0)), Clip::End);
+    text::paint(
+        ui.painter(),
+        &Font::Strong.id(),
+        pos2(head.min.x + 24.0, head.center().y),
+        Align2::LEFT_CENTER,
+        p.text,
+        &job.title,
+        Some((width - 24.0 - hide_w).max(0.0)),
+        Clip::End,
+    );
     if first {
-        let mut cell = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_size(pos2(head.max.x - 24.0, head.min.y), Vec2::splat(24.0))));
-        if icon_button_sized(&mut cell, Icon::ChevronDown, "Hide. The job goes on, and the chip in the status bar brings this back.", false, true, 24.0, 16.0).clicked() {
+        let mut cell = ui.new_child(
+            UiBuilder::new()
+                .max_rect(Rect::from_min_size(pos2(head.max.x - 24.0, head.min.y), Vec2::splat(24.0))),
+        );
+        if icon_button_sized(
+            &mut cell,
+            Icon::ChevronDown,
+            "Hide. The job goes on, and the chip in the status bar brings this back.",
+            false,
+            true,
+            24.0,
+            16.0,
+        )
+        .clicked()
+        {
             *hide = true;
         }
     }
@@ -1693,8 +2269,23 @@ fn card_row(ui: &mut Ui, job: &gz_editor::JobInfo, card: &crate::TaskCard, width
     }
     let time_w = text::width(&ctx, &small, &time);
     let (line, _) = ui.allocate_exact_size(Vec2::new(width, 16.0), Sense::hover());
-    text::paint(ui.painter(), &small, pos2(line.min.x, line.center().y), Align2::LEFT_CENTER, p.text, &job.stage, Some((width - time_w - 12.0).max(0.0)), Clip::End);
-    ui.painter().text(pos2(line.max.x - time_w, line.center().y), Align2::LEFT_CENTER, &time, small.clone(), p.text_muted);
+    text::paint(
+        ui.painter(),
+        &small,
+        pos2(line.min.x, line.center().y),
+        Align2::LEFT_CENTER,
+        p.text,
+        &job.stage,
+        Some((width - time_w - 12.0).max(0.0)),
+        Clip::End,
+    );
+    ui.painter().text(
+        pos2(line.max.x - time_w, line.center().y),
+        Align2::LEFT_CENTER,
+        &time,
+        small.clone(),
+        p.text_muted,
+    );
     // how far: "38% · 2.1 of 4.6 GB · 3412 of 7146 files"
     if let Some(f) = job.fraction {
         let mut numbers = format!("{:.0}%", f * 100.0);
@@ -1718,13 +2309,27 @@ fn card_row(ui: &mut Ui, job: &gz_editor::JobInfo, card: &crate::TaskCard, width
     let w = gz_ui::units::button_width(&ctx, &label, Kind::Secondary, false, 0.0);
     let (row, _) = ui.allocate_exact_size(Vec2::new(width, 24.0), Sense::hover());
     let tip = if card.stop_tip.is_empty() { "It stops at the next step." } else { card.stop_tip.as_str() };
-    let stopped = ui.put(Rect::from_min_size(pos2(row.max.x - w, row.min.y), Vec2::new(w, 24.0)), Button::new(&label).enabled(!cancel_requested, "It stops at the next step.").tip(tip)).clicked();
+    let stopped = ui
+        .put(
+            Rect::from_min_size(pos2(row.max.x - w, row.min.y), Vec2::new(w, 24.0)),
+            Button::new(&label).enabled(!cancel_requested, "It stops at the next step.").tip(tip),
+        )
+        .clicked();
     stopped && !cancel_requested
 }
 
 fn small_line(ui: &mut Ui, text_: &str, color: Color32, width: f32, clip: Clip) {
     let (r, _) = ui.allocate_exact_size(Vec2::new(width, 16.0), Sense::hover());
-    let shown_cut = text::paint(ui.painter(), &Font::Small.id(), pos2(r.min.x, r.center().y), Align2::LEFT_CENTER, color, text_, Some(width), clip);
+    let shown_cut = text::paint(
+        ui.painter(),
+        &Font::Small.id(),
+        pos2(r.min.x, r.center().y),
+        Align2::LEFT_CENTER,
+        color,
+        text_,
+        Some(width),
+        clip,
+    );
     if shown_cut {
         ui.interact(r, ui.scope_id().with(("gz-app.small_line", text_)), Sense::hover()).on_hover_text(text_);
     }
@@ -1759,13 +2364,22 @@ fn card_steps(ui: &mut Ui, card: &crate::TaskCard, width: f32) {
             ui.painter().circle_stroke(c, dot + 2.0, Stroke::new(1.0, p.accent.gamma_multiply(0.45)));
         }
         x += dot * 2.0 + gap;
-        let color = if now { p.text } else if done { p.text_secondary } else { p.text_muted };
+        let color = if now {
+            p.text
+        } else if done {
+            p.text_secondary
+        } else {
+            p.text_muted
+        };
         ui.painter().text(pos2(x, cy), Align2::LEFT_CENTER, name, small.clone(), color);
         x += text::width(&ctx, &small, name);
         if (i as usize) + 1 < count {
             let (a, b) = (x + gap, x + link - gap);
             if b > a {
-                ui.painter().line_segment([pos2(a, cy), pos2(b, cy)], Stroke::new(1.0, if done { p.accent.gamma_multiply(0.6) } else { p.border_strong }));
+                ui.painter().line_segment(
+                    [pos2(a, cy), pos2(b, cy)],
+                    Stroke::new(1.0, if done { p.accent.gamma_multiply(0.6) } else { p.border_strong }),
+                );
             }
             x += link;
         }
@@ -1808,20 +2422,51 @@ fn palette_row(ui: &mut Ui, row: &PaletteRow, selected: bool, row_h: f32) -> Res
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::click());
     if ui.is_rect_visible(rect) {
         if selected || resp.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(4), if selected { p.selection_focused } else { p.hover });
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(4),
+                if selected { p.selection_focused } else { p.hover },
+            );
         }
-        icons::draw(ui.painter(), row.icon, Rect::from_min_size(pos2(rect.min.x + 10.0, rect.center().y - 8.0), Vec2::splat(16.0)), if selected { p.accent_bright } else { p.text_secondary });
+        icons::draw(
+            ui.painter(),
+            row.icon,
+            Rect::from_min_size(pos2(rect.min.x + 10.0, rect.center().y - 8.0), Vec2::splat(16.0)),
+            if selected { p.accent_bright } else { p.text_secondary },
+        );
         let keys_w = gz_ui::keycaps_width(ui, &row.shortcut);
         let right = rect.max.x - 10.0 - if keys_w > 0.0 { keys_w + 12.0 } else { 0.0 };
         let name_x = rect.min.x + 36.0;
         let body = Font::Body.id();
         let parent = pal::parent(row);
         let room = (right - name_x).max(0.0);
-        let name_w = text::width(&ctx, &body, &row.label).min(if parent.is_empty() { room } else { (room * 0.6).max(room - gz_ui::units::em(8.0)) });
-        text::paint(ui.painter(), &body, pos2(name_x, rect.center().y), Align2::LEFT_CENTER, p.text, &row.label, Some(name_w + 0.5), Clip::End);
+        let name_w = text::width(&ctx, &body, &row.label).min(if parent.is_empty() {
+            room
+        } else {
+            (room * 0.6).max(room - gz_ui::units::em(8.0))
+        });
+        text::paint(
+            ui.painter(),
+            &body,
+            pos2(name_x, rect.center().y),
+            Align2::LEFT_CENTER,
+            p.text,
+            &row.label,
+            Some(name_w + 0.5),
+            Clip::End,
+        );
         let path_x = name_x + name_w + 12.0;
         if !parent.is_empty() && right - path_x > 24.0 {
-            text::paint(ui.painter(), &Font::Small.id(), pos2(path_x, rect.center().y), Align2::LEFT_CENTER, p.text_muted, parent, Some(right - path_x), Clip::Start);
+            text::paint(
+                ui.painter(),
+                &Font::Small.id(),
+                pos2(path_x, rect.center().y),
+                Align2::LEFT_CENTER,
+                p.text_muted,
+                parent,
+                Some(right - path_x),
+                Clip::Start,
+            );
         }
         if keys_w > 0.0 {
             gz_ui::keycaps(ui, pos2(rect.max.x - 10.0, rect.center().y), &row.shortcut, true);

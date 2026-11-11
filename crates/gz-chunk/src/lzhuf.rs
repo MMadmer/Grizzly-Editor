@@ -33,8 +33,8 @@ const MAX_FREQ: u32 = 0x4000;
 
 /// Code lengths of the upper six bits of a match position.
 const P_LEN: [u8; 64] = [
-    3, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
-    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+    3, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
 ];
 
 struct PositionTables {
@@ -411,11 +411,11 @@ impl Lzss {
         if self.dad[p] == NIL {
             return;
         }
-        let q;
-        if self.rson[p] == NIL {
-            q = self.lson[p];
+
+        let q = if self.rson[p] == NIL {
+            self.lson[p]
         } else if self.lson[p] == NIL {
-            q = self.rson[p];
+            self.rson[p]
         } else {
             let mut m = self.lson[p];
             if self.rson[m] != NIL {
@@ -432,8 +432,8 @@ impl Lzss {
             self.rson[m] = self.rson[p];
             let p_right = self.rson[p];
             self.dad[p_right] = m;
-            q = m;
-        }
+            m
+        };
         self.dad[q] = self.dad[p];
         let parent = self.dad[p];
         if self.rson[parent] == p {

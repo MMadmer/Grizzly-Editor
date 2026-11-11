@@ -117,7 +117,9 @@ fn swi(body: &[u8]) -> Result<SlideWindows> {
     if n.saturating_mul(8) > r.elapsed() {
         return Err(invalid(format!("the model states {n} slide windows and cannot hold them")));
     }
-    let windows = (0..n).map(|_| Ok(SlideWindow { offset: r.r_u32()?, num_tris: r.r_u16()?, num_verts: r.r_u16()? })).collect::<Result<_>>()?;
+    let windows = (0..n)
+        .map(|_| Ok(SlideWindow { offset: r.r_u32()?, num_tris: r.r_u16()?, num_verts: r.r_u16()? }))
+        .collect::<Result<_>>()?;
     Ok(SlideWindows { reserved, windows })
 }
 
@@ -234,10 +236,17 @@ impl Visual {
             if lr.elapsed() < 8 * 4 * 28 {
                 return Err(invalid("the LOD's billboards are cut short"));
             }
-            let mut facets = [LodFacet { vertices: [LodVertex { position: Vec3::ZERO, uv: Vec2::ZERO, rgb_hemi: 0, sun: 0 }; 4] }; 8];
+            let mut facets = [LodFacet {
+                vertices: [LodVertex { position: Vec3::ZERO, uv: Vec2::ZERO, rgb_hemi: 0, sun: 0 }; 4],
+            }; 8];
             for f in &mut facets {
                 for lv in &mut f.vertices {
-                    *lv = LodVertex { position: lr.r_vec3()?, uv: lr.r_vec2()?, rgb_hemi: lr.r_u32()?, sun: lr.r_u8()? };
+                    *lv = LodVertex {
+                        position: lr.r_vec3()?,
+                        uv: lr.r_vec2()?,
+                        rgb_hemi: lr.r_u32()?,
+                        sun: lr.r_u8()?,
+                    };
                     lr.advance(3)?;
                 }
             }
@@ -251,7 +260,9 @@ impl Visual {
                     *x = tr.r_f32()?;
                 }
             }
-            let five = |tr: &mut Reader<'_>| -> Result<[f32; 5]> { Ok([tr.r_f32()?, tr.r_f32()?, tr.r_f32()?, tr.r_f32()?, tr.r_f32()?]) };
+            let five = |tr: &mut Reader<'_>| -> Result<[f32; 5]> {
+                Ok([tr.r_f32()?, tr.r_f32()?, tr.r_f32()?, tr.r_f32()?, tr.r_f32()?])
+            };
             let scale = five(&mut tr)?;
             let bias = five(&mut tr)?;
             v.tree = Some(TreeDef { xform, scale, bias });
@@ -273,7 +284,8 @@ impl Visual {
         }
         if let Some(c) = body(&r, chunk::S_MOTION_REFS)? {
             let list = c.reader().r_stringz()?;
-            v.motion_refs = list.split(',').map(|s| SmolStr::new(s.trim())).filter(|s| !s.is_empty()).collect();
+            v.motion_refs =
+                list.split(',').map(|s| SmolStr::new(s.trim())).filter(|s| !s.is_empty()).collect();
         }
         if let Some(c) = body(&r, chunk::S_MOTION_REFS2)? {
             let mut mr = c.reader();
@@ -287,7 +299,11 @@ impl Visual {
         let keys = body(&r, chunk::S_MOTIONS)?;
         if params.is_some() || keys.is_some() {
             let count = (!v.bones.is_empty()).then_some(v.bones.len());
-            v.motions = Some(MotionSet::read_chunks(params.as_ref().map(|c| c.bytes()), keys.as_ref().map(|c| c.bytes()), count)?);
+            v.motions = Some(MotionSet::read_chunks(
+                params.as_ref().map(|c| c.bytes()),
+                keys.as_ref().map(|c| c.bytes()),
+                count,
+            )?);
         }
         if let Some(c) = body(&r, chunk::COLLISION_VERTICES)? {
             let mut cr = c.reader();

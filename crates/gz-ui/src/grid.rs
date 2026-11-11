@@ -20,8 +20,8 @@
 use std::ops::BitOr;
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, CursorIcon, Frame, Id, Key, Layout, Margin, Rect, Response, RichText, Sense, Stroke,
-    StrokeKind, TextEdit, Ui, UiBuilder, Vec2, pos2,
+    Align, Align2, Color32, CornerRadius, CursorIcon, Frame, Id, Key, Layout, Margin, Rect, Response,
+    RichText, Sense, Stroke, StrokeKind, TextEdit, Ui, UiBuilder, Vec2, pos2,
 };
 
 use crate::audit;
@@ -205,7 +205,13 @@ impl Grid<'_> {
 
     /// A full-row header that folds what it holds; `open` is its state until it is clicked.
     /// `body` draws the section's rows while it is open. Returns whether it is open.
-    pub fn section(&mut self, title: &str, open: bool, badge: Option<&str>, body: impl FnOnce(&mut Self)) -> bool {
+    pub fn section(
+        &mut self,
+        title: &str,
+        open: bool,
+        badge: Option<&str>,
+        body: impl FnOnce(&mut Self),
+    ) -> bool {
         self.close_row();
         let p = palette(self.ui.ctx());
         let ctx = self.ui.ctx().clone();
@@ -221,8 +227,14 @@ impl Grid<'_> {
             let painter = self.ui.painter();
             painter.rect_filled(rect, CornerRadius::ZERO, if resp.hovered() { p.hover } else { p.raised });
             let cy = rect.center().y;
-            let chevron = Rect::from_min_size(pos2(rect.min.x + 6.0, cy - 6.0), Vec2::splat(metrics::GLYPH_STATUS));
-            icons::draw(painter, if is_open { Icon::ChevronDown } else { Icon::ChevronRight }, chevron, p.text_secondary);
+            let chevron =
+                Rect::from_min_size(pos2(rect.min.x + 6.0, cy - 6.0), Vec2::splat(metrics::GLYPH_STATUS));
+            icons::draw(
+                painter,
+                if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
+                chevron,
+                p.text_secondary,
+            );
             let mut right = rect.max.x - 8.0;
             if let Some(badge) = badge.filter(|b| !b.is_empty()) {
                 let font = Font::Small.id();
@@ -233,7 +245,16 @@ impl Grid<'_> {
                 right = pill.min.x - 6.0;
             }
             let x = rect.min.x + 24.0;
-            text::paint(painter, &Font::Strong.id(), pos2(x, cy), Align2::LEFT_CENTER, p.text, title, Some((right - x).max(0.0)), Clip::End);
+            text::paint(
+                painter,
+                &Font::Strong.id(),
+                pos2(x, cy),
+                Align2::LEFT_CENTER,
+                p.text,
+                title,
+                Some((right - x).max(0.0)),
+                Clip::End,
+            );
         }
         audit::control(&ctx, title, true, None, None, rect);
         self.y = rect.max.y;
@@ -247,7 +268,14 @@ impl Grid<'_> {
     /// A property row. `value` draws in the value column, a field-high line that starts at the
     /// left of the column; what it draws below that line makes the row taller. Returns `None`
     /// for a row scrolled out of view (it keeps the height it took when last drawn).
-    pub fn row<R>(&mut self, label: &str, help: &str, flags: PropFlags, depth: u32, value: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    pub fn row<R>(
+        &mut self,
+        label: &str,
+        help: &str,
+        flags: PropFlags,
+        depth: u32,
+        value: impl FnOnce(&mut Ui) -> R,
+    ) -> Option<R> {
         self.close_row();
         let ctx = self.ui.ctx().clone();
         let p = palette(&ctx);
@@ -262,7 +290,9 @@ impl Grid<'_> {
         // out of view: keep the height the row took when it was drawn, and skip the work. Never in a
         // sizing pass: a row skipped while its window grows would hold its height back a frame
         let drawn_h = rect.height().max(mem.height);
-        if !self.ui.is_sizing_pass() && !self.ui.is_rect_visible(Rect::from_min_size(rect.min, Vec2::new(rect.width(), drawn_h))) {
+        if !self.ui.is_sizing_pass()
+            && !self.ui.is_rect_visible(Rect::from_min_size(rect.min, Vec2::new(rect.width(), drawn_h)))
+        {
             self.y = y + drawn_h;
             return None;
         }
@@ -272,7 +302,11 @@ impl Grid<'_> {
         }
         let painter = self.ui.painter().clone();
         if flags.contains(PropFlags::INVALID) {
-            painter.rect_filled(Rect::from_min_max(pos2(self.x0, rect.min.y + 3.0), pos2(self.x0 + 2.0, rect.max.y - 3.0)), CornerRadius::ZERO, p.error);
+            painter.rect_filled(
+                Rect::from_min_max(pos2(self.x0, rect.min.y + 3.0), pos2(self.x0 + 2.0, rect.max.y - 3.0)),
+                CornerRadius::ZERO,
+                p.error,
+            );
         }
 
         // the label: secondary text cut with an ellipsis; its tooltip names it and says what it does
@@ -292,12 +326,24 @@ impl Grid<'_> {
         let font = Font::Body.id();
         let room = (label_right - label_x - dot).max(0.0);
         let color = if flags.contains(PropFlags::READ_ONLY) { p.text_muted } else { p.text_secondary };
-        text::paint(&painter, &font, pos2(label_x, label_cy), Align2::LEFT_CENTER, color, label, Some(room), Clip::End);
+        text::paint(
+            &painter,
+            &font,
+            pos2(label_x, label_cy),
+            Align2::LEFT_CENTER,
+            color,
+            label,
+            Some(room),
+            Clip::End,
+        );
         if flags.contains(PropFlags::REQUIRED) {
             let dot_x = label_x + text::width(&ctx, &font, label).min(room) + 5.0;
             painter.circle_filled(pos2(dot_x, label_cy), 2.5, p.required);
         }
-        let label_rect = Rect::from_min_max(pos2(label_x, label_cy - line * 0.5), pos2(label_right.max(label_x), label_cy + line * 0.5));
+        let label_rect = Rect::from_min_max(
+            pos2(label_x, label_cy - line * 0.5),
+            pos2(label_right.max(label_x), label_cy + line * 0.5),
+        );
         self.ui.interact(label_rect, id.with("label"), Sense::hover()).on_hover_ui(|ui| {
             ui.set_max_width(metrics::TOOLTIP_W - 8.0);
             ui.label(RichText::new(label).font(Font::Strong.id()).color(p.text));
@@ -305,14 +351,28 @@ impl Grid<'_> {
                 ui.label(RichText::new(help).font(Font::Body.id()).color(p.text_secondary));
             }
         });
-        audit::control(&ctx, label, !flags.contains(PropFlags::READ_ONLY), None, if help.is_empty() { None } else { Some(help) }, rect);
+        audit::control(
+            &ctx,
+            label,
+            !flags.contains(PropFlags::READ_ONLY),
+            None,
+            if help.is_empty() { None } else { Some(help) },
+            rect,
+        );
 
         // the value: the rest of the row, less the trailing icons
         let value_x = if self.stacked { self.x0 + indent } else { self.x0 + self.label_w + LABEL_GAP };
-        let value_w = if inline_value { metrics::FRAME } else { (self.x1 - value_x - trailing_w - 2.0).max(em(3.0)) };
-        let value_y = if self.stacked && !inline_value { y + label_h + (ROW_H - metrics::FRAME) * 0.5 } else { y + (ROW_H - metrics::FRAME) * 0.5 };
+        let value_w =
+            if inline_value { metrics::FRAME } else { (self.x1 - value_x - trailing_w - 2.0).max(em(3.0)) };
+        let value_y = if self.stacked && !inline_value {
+            y + label_h + (ROW_H - metrics::FRAME) * 0.5
+        } else {
+            y + (ROW_H - metrics::FRAME) * 0.5
+        };
         let value_rect = Rect::from_min_size(pos2(value_x, value_y), Vec2::new(value_w, metrics::FRAME));
-        let mut child = self.ui.new_child(UiBuilder::new().id_salt(id).max_rect(value_rect).layout(Layout::left_to_right(Align::Center)));
+        let mut child = self.ui.new_child(
+            UiBuilder::new().id_salt(id).max_rect(value_rect).layout(Layout::left_to_right(Align::Center)),
+        );
         let mixed = flags.contains(PropFlags::MIXED);
         if mixed {
             ctx.data_mut(|d| d.insert_temp(mixed_id(), true));
@@ -323,7 +383,8 @@ impl Grid<'_> {
         }
         let bottom = child.min_rect().max.y.max(rect.max.y);
         self.row = Some(OpenRow { id, rect, value_x, bottom, slots_used: 0, reset: false });
-        if flags.contains(PropFlags::MODIFIED) && self.trailing(Icon::Undo, "Reset to default")
+        if flags.contains(PropFlags::MODIFIED)
+            && self.trailing(Icon::Undo, "Reset to default")
             && let Some(row) = self.row.as_mut()
         {
             row.reset = true;
@@ -368,7 +429,8 @@ impl Grid<'_> {
             Some(row) => (row.value_x, row.bottom.max(row.rect.max.y - 2.0)),
             None => (self.x0 + 6.0, self.y),
         };
-        let galley = ctx.fonts_mut(|f| f.layout(text_.to_owned(), Font::Small.id(), color, (self.x1 - x).max(em(3.0))));
+        let galley = ctx
+            .fonts_mut(|f| f.layout(text_.to_owned(), Font::Small.id(), color, (self.x1 - x).max(em(3.0))));
         let h = galley.size().y;
         self.ui.painter().galley(pos2(x, y), galley, color);
         match self.row.as_mut() {
@@ -382,7 +444,9 @@ impl Grid<'_> {
         self.close_row();
         let rect = Rect::from_min_max(pos2(self.x0, self.y + 2.0), pos2(self.x1, f32::INFINITY));
         let salt = (self.id, "block", self.y.to_bits());
-        let mut child = self.ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::top_down(Align::Min)));
+        let mut child = self
+            .ui
+            .new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::top_down(Align::Min)));
         let r = add(&mut child);
         self.y = child.min_rect().max.y + 4.0;
         r
@@ -404,7 +468,8 @@ impl Grid<'_> {
                 ctx.set_cursor_icon(CursorIcon::ResizeHorizontal);
             }
             if held && let Some(pointer) = resp.interact_pointer_pos() {
-                let label = (pointer.x - self.x0 - LABEL_GAP * 0.5).clamp(em(6.0), em(6.0).max(width - em(8.0)));
+                let label =
+                    (pointer.x - self.x0 - LABEL_GAP * 0.5).clamp(em(6.0), em(6.0).max(width - em(8.0)));
                 layout::set(&ctx, &self.key, label / width);
             }
             if resp.double_clicked() {
@@ -412,7 +477,9 @@ impl Grid<'_> {
             }
             if resp.hovered() || held {
                 let color = if held { p.accent } else { p.accent_bright.gamma_multiply(0.6) };
-                self.ui.painter().line_segment([pos2(edge, self.top), pos2(edge, bottom)], Stroke::new(1.0, color));
+                self.ui
+                    .painter()
+                    .line_segment([pos2(edge, self.top), pos2(edge, bottom)], Stroke::new(1.0, color));
             }
         }
         // several grids may share one footer: the one hovered this frame is what it shows
@@ -420,7 +487,10 @@ impl Grid<'_> {
             let frame = ctx.cumulative_frame_nr();
             ctx.data_mut(|d| d.insert_temp(footer_id(), FooterState { label, help, frame }));
         }
-        self.ui.allocate_rect(Rect::from_min_max(pos2(self.x0, self.top), pos2(self.x1, bottom.max(self.top))), Sense::hover());
+        self.ui.allocate_rect(
+            Rect::from_min_max(pos2(self.x0, self.top), pos2(self.x1, bottom.max(self.top))),
+            Sense::hover(),
+        );
     }
 }
 
@@ -443,13 +513,40 @@ pub fn help_footer(ui: &mut Ui) {
     let w = Some(rect.width() - 8.0);
     match state.filter(|s| s.frame + 1 >= now && !(s.label.is_empty() && s.help.is_empty())) {
         Some(s) => {
-            text::paint(painter, &font, pos2(x, rect.min.y + 8.0), Align2::LEFT_TOP, p.text_secondary, &s.label, w, Clip::End);
+            text::paint(
+                painter,
+                &font,
+                pos2(x, rect.min.y + 8.0),
+                Align2::LEFT_TOP,
+                p.text_secondary,
+                &s.label,
+                w,
+                Clip::End,
+            );
             if !s.help.is_empty() {
-                text::paint(painter, &font, pos2(x, rect.min.y + 8.0 + line), Align2::LEFT_TOP, p.text_muted, &s.help, w, Clip::End);
+                text::paint(
+                    painter,
+                    &font,
+                    pos2(x, rect.min.y + 8.0 + line),
+                    Align2::LEFT_TOP,
+                    p.text_muted,
+                    &s.help,
+                    w,
+                    Clip::End,
+                );
             }
         }
         None => {
-            text::paint(painter, &font, pos2(x, rect.min.y + 8.0), Align2::LEFT_TOP, p.text_muted, "Point at a property to see what it does.", w, Clip::End);
+            text::paint(
+                painter,
+                &font,
+                pos2(x, rect.min.y + 8.0),
+                Align2::LEFT_TOP,
+                p.text_muted,
+                "Point at a property to see what it does.",
+                w,
+                Clip::End,
+            );
         }
     }
 }
@@ -503,7 +600,9 @@ pub fn format_number(value: f64, decimals: usize) -> String {
 #[must_use]
 pub fn parse_number(typed: &str) -> Option<f64> {
     let t = typed.trim();
-    let end = t.find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | ',' | 'e' | 'E'))).unwrap_or(t.len());
+    let end = t
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | ',' | 'e' | 'E')))
+        .unwrap_or(t.len());
     let num = t.get(..end)?.replace(',', ".");
     num.parse::<f64>().ok().filter(|v| v.is_finite())
 }
@@ -520,7 +619,8 @@ fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize
 
     let editing = ctx.data(|d| d.get_temp::<String>(edit_id));
     if let Some(mut buf) = editing {
-        let first = !ctx.memory(|m| m.has_focus(edit_id)) && ctx.data(|d| d.get_temp::<bool>(edit_id.with("asked"))).is_none();
+        let first = !ctx.memory(|m| m.has_focus(edit_id))
+            && ctx.data(|d| d.get_temp::<bool>(edit_id.with("asked"))).is_none();
         if first {
             ctx.memory_mut(|m| m.request_focus(edit_id));
             ctx.data_mut(|d| d.insert_temp(edit_id.with("asked"), true));
@@ -528,7 +628,12 @@ fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize
         field_frame(ui, rect, true, true);
         let edit = ui.put(
             rect,
-            TextEdit::singleline(&mut buf).id(edit_id).frame(Frame::NONE).margin(Margin::symmetric(8, 4)).font(Font::Body.id()).desired_width(rect.width()),
+            TextEdit::singleline(&mut buf)
+                .id(edit_id)
+                .frame(Frame::NONE)
+                .margin(Margin::symmetric(8, 4))
+                .font(Font::Body.id())
+                .desired_width(rect.width()),
         );
         if edit.lost_focus() || (!first && !edit.has_focus()) {
             if !ctx.input(|i| i.key_pressed(Key::Escape))
@@ -579,7 +684,13 @@ fn number_field(ui: &mut Ui, value: f64, speed: f64, unit: &str, decimals: usize
             // a number is never cut
             let r = painter.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, &shown, font.clone(), p.text);
             if !unit.is_empty() {
-                painter.text(pos2(r.max.x + 4.0, rect.center().y), Align2::LEFT_CENTER, unit, font, p.text_muted);
+                painter.text(
+                    pos2(r.max.x + 4.0, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    unit,
+                    font,
+                    p.text_muted,
+                );
             }
         }
     }
@@ -621,13 +732,24 @@ pub fn switch(ui: &mut Ui, value: &mut bool) -> Response {
             ui.painter().rect_filled(b, radius, if resp.hovered() { p.primary_hover } else { p.accent });
             icons::draw(ui.painter(), Icon::Check, b.shrink(2.0), p.on_fill);
         } else {
-            ui.painter().rect(b, radius, if resp.hovered() { p.input_hover } else { p.input }, Stroke::new(1.0, p.border_strong), StrokeKind::Inside);
+            ui.painter().rect(
+                b,
+                radius,
+                if resp.hovered() { p.input_hover } else { p.input },
+                Stroke::new(1.0, p.border_strong),
+                StrokeKind::Inside,
+            );
             if mixed {
                 icons::draw(ui.painter(), Icon::Minus, b.shrink(2.0), p.text_secondary);
             }
         }
         if resp.has_focus() {
-            ui.painter().rect_stroke(b.expand(2.0), CornerRadius::same(5), Stroke::new(metrics::FOCUS_RING, p.accent_bright), StrokeKind::Outside);
+            ui.painter().rect_stroke(
+                b.expand(2.0),
+                CornerRadius::same(5),
+                Stroke::new(metrics::FOCUS_RING, p.accent_bright),
+                StrokeKind::Outside,
+            );
         }
     }
     resp
@@ -638,14 +760,19 @@ pub fn combo(ui: &mut Ui, id_salt: &str, current: &mut usize, options: &[&str]) 
     let shown = if is_mixed(ui) { MULTIPLE } else { options.get(*current).copied().unwrap_or("") };
     let mut changed = false;
     let w = ui.available_width();
-    let resp = egui::ComboBox::from_id_salt(("gz-ui.combo", id_salt)).selected_text(shown).width(w).show_ui(ui, |ui| {
-        for (i, option) in options.iter().enumerate() {
-            if menu_item(ui, option, MenuItem { selected: i == *current, ..MenuItem::default() }) && i != *current {
-                *current = i;
-                changed = true;
+    let resp = egui::ComboBox::from_id_salt(("gz-ui.combo", id_salt)).selected_text(shown).width(w).show_ui(
+        ui,
+        |ui| {
+            for (i, option) in options.iter().enumerate() {
+                if menu_item(ui, option, MenuItem { selected: i == *current, ..MenuItem::default() })
+                    && i != *current
+                {
+                    *current = i;
+                    changed = true;
+                }
             }
-        }
-    });
+        },
+    );
     audit::control(ui.ctx(), shown, true, None, None, resp.response.rect);
     changed
 }
@@ -736,7 +863,8 @@ pub fn vec3_field(ui: &mut Ui, id_salt: &str, value: &mut [f32; 3], speed: f32) 
             pos2(origin.x + i as f32 * (each + gap), origin.y)
         };
         let cell = Rect::from_min_size(pos, Vec2::new(each, metrics::FRAME));
-        let field = Rect::from_min_max(pos2(cell.min.x + tag - f32::from(metrics::RADIUS), cell.min.y), cell.max);
+        let field =
+            Rect::from_min_max(pos2(cell.min.x + tag - f32::from(metrics::RADIUS), cell.min.y), cell.max);
         let mut child = ui.new_child(UiBuilder::new().id_salt(("gz-ui.vec3", id_salt, i)).max_rect(field));
         changed |= number(&mut child, v, speed, "").changed();
         // the tag sits over the field's rounded left corners
@@ -822,13 +950,21 @@ pub fn pick_field(ui: &mut Ui, id_salt: &str, value: &str, clearable: bool) -> P
     } else {
         ui.painter().text(pos, Align2::LEFT_CENTER, "None", font, p.text_muted);
     }
-    let ch = Rect::from_min_size(pos2(rect.max.x - chevron + 4.0, rect.center().y - 6.0), Vec2::splat(metrics::GLYPH_STATUS));
+    let ch = Rect::from_min_size(
+        pos2(rect.max.x - chevron + 4.0, rect.center().y - 6.0),
+        Vec2::splat(metrics::GLYPH_STATUS),
+    );
     icons::draw(ui.painter(), Icon::ChevronDown, ch, if resp.hovered() { p.text } else { p.text_secondary });
     audit::control(&ctx, id_salt, true, None, None, rect);
     if clear > 0.0 {
-        let r = Rect::from_min_size(pos2(rect.max.x - chevron - clear, rect.center().y - clear * 0.5), Vec2::splat(clear));
+        let r = Rect::from_min_size(
+            pos2(rect.max.x - chevron - clear, rect.center().y - clear * 0.5),
+            Vec2::splat(clear),
+        );
         let mut child = ui.new_child(UiBuilder::new().id_salt(id.with("clear")).max_rect(r));
-        if icon_button_sized(&mut child, Icon::Clear, "Clear", false, true, clear, metrics::GLYPH_STATUS).clicked() {
+        if icon_button_sized(&mut child, Icon::Clear, "Clear", false, true, clear, metrics::GLYPH_STATUS)
+            .clicked()
+        {
             action = PickAction::Clear;
         }
     }
@@ -865,12 +1001,19 @@ pub fn path_field(ui: &mut Ui, id_salt: &str, value: &mut String, folder: bool) 
         field_frame(ui, rect, true, true);
         let resp = ui.put(
             rect,
-            TextEdit::singleline(value).id(edit_id).frame(Frame::NONE).margin(Margin::symmetric(8, 4)).font(Font::Body.id()).desired_width(rect.width()),
+            TextEdit::singleline(value)
+                .id(edit_id)
+                .frame(Frame::NONE)
+                .margin(Margin::symmetric(8, 4))
+                .font(Font::Body.id())
+                .desired_width(rect.width()),
         );
         if resp.changed() {
             action = PathAction::Edited;
         }
-        if resp.lost_focus() || (!resp.has_focus() && ctx.data(|d| d.get_temp::<bool>(edit_id.with("asked"))).is_some()) {
+        if resp.lost_focus()
+            || (!resp.has_focus() && ctx.data(|d| d.get_temp::<bool>(edit_id.with("asked"))).is_some())
+        {
             ctx.data_mut(|d| {
                 d.remove::<bool>(edit_id);
                 d.remove::<bool>(edit_id.with("asked"));
@@ -888,7 +1031,13 @@ pub fn path_field(ui: &mut Ui, id_salt: &str, value: &mut String, folder: bool) 
         let font = Font::Body.id();
         let pos = pos2(rect.min.x + 8.0, rect.center().y);
         if value.is_empty() {
-            ui.painter().text(pos, Align2::LEFT_CENTER, if folder { "No folder selected" } else { "No file selected" }, font, p.text_muted);
+            ui.painter().text(
+                pos,
+                Align2::LEFT_CENTER,
+                if folder { "No folder selected" } else { "No file selected" },
+                font,
+                p.text_muted,
+            );
         } else {
             let (shown, cut) = fit_start(value, rect.width() - 16.0, &|s| text::width(&ctx, &font, s));
             ui.painter().text(pos, Align2::LEFT_CENTER, &shown, font, p.text);
@@ -900,7 +1049,8 @@ pub fn path_field(ui: &mut Ui, id_salt: &str, value: &mut String, folder: bool) 
     }
     let r = Rect::from_min_size(pos2(rect.max.x + gap, rect.min.y), Vec2::splat(button));
     let mut child = ui.new_child(UiBuilder::new().id_salt(id.with("browse")).max_rect(r));
-    let (icon, tip) = if folder { (Icon::FolderOpen, "Browse for a folder") } else { (Icon::Open, "Browse for a file") };
+    let (icon, tip) =
+        if folder { (Icon::FolderOpen, "Browse for a folder") } else { (Icon::Open, "Browse for a file") };
     if icon_button_sized(&mut child, icon, tip, false, true, button, metrics::GLYPH).clicked() {
         action = PathAction::Browse;
     }
@@ -933,10 +1083,25 @@ pub fn chips(ui: &mut Ui, id_salt: &str, items: &[&str], removable: bool) -> Opt
         if !ui.is_rect_visible(rect) {
             continue;
         }
-        ui.painter().rect(rect, CornerRadius::same(11), p.raised, Stroke::new(1.0, p.border_subtle), StrokeKind::Inside);
-        ui.painter().text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, *item, font.clone(), p.text);
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(11),
+            p.raised,
+            Stroke::new(1.0, p.border_subtle),
+            StrokeKind::Inside,
+        );
+        ui.painter().text(
+            pos2(rect.min.x + 8.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            *item,
+            font.clone(),
+            p.text,
+        );
         if removable {
-            let r = Rect::from_min_size(pos2(rect.max.x - 6.0 - close, rect.center().y - close * 0.5), Vec2::splat(close));
+            let r = Rect::from_min_size(
+                pos2(rect.max.x - 6.0 - close, rect.center().y - close * 0.5),
+                Vec2::splat(close),
+            );
             let mut child = ui.new_child(UiBuilder::new().id_salt(("gz-ui.chip", id_salt, i)).max_rect(r));
             if icon_button_sized(&mut child, Icon::Close, "Remove", false, true, close, 10.0).clicked() {
                 removed = Some(i);
@@ -959,7 +1124,13 @@ pub fn text_block(ui: &mut Ui, label: &str, help: &str, value: &mut String, line
         }
     });
     let w = ui.available_width().max(1.0);
-    let resp = ui.add(TextEdit::multiline(value).font(Font::Body.id()).margin(Margin::symmetric(8, 4)).desired_rows(lines.max(1)).desired_width(w));
+    let resp = ui.add(
+        TextEdit::multiline(value)
+            .font(Font::Body.id())
+            .margin(Margin::symmetric(8, 4))
+            .desired_rows(lines.max(1))
+            .desired_width(w),
+    );
     audit::control(ui.ctx(), label, true, None, if help.is_empty() { None } else { Some(help) }, resp.rect);
     ui.add_space(6.0);
     resp
@@ -975,7 +1146,11 @@ pub fn read_only(ui: &mut Ui, value: &str, clip: Clip) {
     let room = (ui.available_width() - 16.0).max(0.0);
     let fits = text::width(&ctx, &font, first) <= room && first.len() == value.len();
     if fits || clip == Clip::End {
-        let resp = ui.add(egui::Label::new(RichText::new(first).font(font.clone()).color(p.text_secondary)).truncate().selectable(true));
+        let resp = ui.add(
+            egui::Label::new(RichText::new(first).font(font.clone()).color(p.text_secondary))
+                .truncate()
+                .selectable(true),
+        );
         if !fits {
             audit::truncated(&ctx, value, first, resp.rect);
             resp.on_hover_text(value);
@@ -988,7 +1163,9 @@ pub fn read_only(ui: &mut Ui, value: &str, clip: Clip) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PropFlags, color_hex, fit_start, format_number, label_width, leaf_name, parse_hex, parse_number};
+    use super::{
+        PropFlags, color_hex, fit_start, format_number, label_width, leaf_name, parse_hex, parse_number,
+    };
     use egui::Color32;
 
     #[test]

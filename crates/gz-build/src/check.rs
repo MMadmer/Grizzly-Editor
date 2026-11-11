@@ -28,7 +28,12 @@ pub trait BuildCheck: Send + Sync {
 
     /// The problems of the module as `walk` says it will ship. Reads what the area's open tabs
     /// read; must not ask anything.
-    fn check(&self, editor: Arc<Editor>, session: Arc<ProjectSession>, walk: Arc<BuildWalk>) -> BoxFuture<'static, Vec<Problem>>;
+    fn check(
+        &self,
+        editor: Arc<Editor>,
+        session: Arc<ProjectSession>,
+        walk: Arc<BuildWalk>,
+    ) -> BoxFuture<'static, Vec<Problem>>;
 }
 
 /// The scene's bake, run before anything else: a build ships what the author sees. It answers
@@ -58,7 +63,10 @@ impl BuildChecks {
         self.checks.read().clone()
     }
 
-    pub fn set_bake(&self, bake: impl Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, String> + Send + Sync + 'static) {
+    pub fn set_bake(
+        &self,
+        bake: impl Fn(Arc<Editor>, Arc<ProjectSession>) -> BoxFuture<'static, String> + Send + Sync + 'static,
+    ) {
         *self.bake.write() = Some(Arc::new(bake));
     }
 
@@ -73,7 +81,9 @@ impl BuildChecks {
 #[must_use]
 pub fn problem_line(p: &Problem) -> String {
     let b = p.code.as_bytes();
-    let coded = b.len() == 4 && b.first().is_some_and(|c| matches!(c, b'E' | b'W' | b'N')) && b.iter().skip(1).all(u8::is_ascii_digit);
+    let coded = b.len() == 4
+        && b.first().is_some_and(|c| matches!(c, b'E' | b'W' | b'N'))
+        && b.iter().skip(1).all(u8::is_ascii_digit);
     if coded { format!("{} {}", p.code, p.message) } else { p.message.clone() }
 }
 
@@ -88,11 +98,13 @@ pub(crate) struct Verdict {
 impl Verdict {
     /// `first_only`: the manifest's check refused with its first error alone, as the C++ did.
     pub(crate) fn of(problems: &[Problem], headline: Option<&str>, first_only: bool) -> Self {
-        let mut errors: Vec<String> = problems.iter().filter(|p| p.severity == Severity::Error).map(problem_line).collect();
+        let mut errors: Vec<String> =
+            problems.iter().filter(|p| p.severity == Severity::Error).map(problem_line).collect();
         if first_only {
             errors.truncate(1);
         }
-        let warnings = problems.iter().filter(|p| p.severity == Severity::Warning).map(problem_line).collect();
+        let warnings =
+            problems.iter().filter(|p| p.severity == Severity::Warning).map(problem_line).collect();
         let err = match (errors.is_empty(), headline) {
             (true, _) => String::new(),
             (false, Some(head)) => format!("{head}\n{}", errors.join("\n")),
@@ -113,7 +125,11 @@ mod tests {
         let warn = Problem::warning("W301", "a texture");
         assert_eq!(problem_line(&coded), "E404 commands: 'x': no function");
         assert_eq!(problem_line(&plain), "module id missing");
-        let v = Verdict::of(&[coded.clone(), warn.clone(), plain.clone()], Some("The PDA layout has errors:"), false);
+        let v = Verdict::of(
+            &[coded.clone(), warn.clone(), plain.clone()],
+            Some("The PDA layout has errors:"),
+            false,
+        );
         assert_eq!(v.err, "The PDA layout has errors:\nE404 commands: 'x': no function\nmodule id missing");
         assert_eq!(v.warnings, ["W301 a texture"]);
         assert_eq!(Verdict::of(&[plain, coded], None, true).err, "module id missing");

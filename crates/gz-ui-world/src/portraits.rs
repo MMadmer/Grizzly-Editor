@@ -5,7 +5,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use egui::{Align2, ColorImage, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, Vec2, pos2};
+use egui::{
+    Align2, ColorImage, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind,
+    TextureHandle, TextureId, TextureOptions, Ui, Vec2, pos2,
+};
 use gz_editor::Editor;
 use gz_game::GameLink;
 use gz_nq::PickerEntry;
@@ -78,7 +81,10 @@ impl Sheets {
         match slots.get(&key) {
             Some(Slot::Ready { texture, size }) => {
                 let (sw, sh) = (size[0].max(1) as f32, size[1].max(1) as f32);
-                Some((texture.id(), Rect::from_min_max(pos2(x / sw, y / sh), pos2((x + w) / sw, (y + h) / sh))))
+                Some((
+                    texture.id(),
+                    Rect::from_min_max(pos2(x / sw, y / sh), pos2((x + w) / sw, (y + h) / sh)),
+                ))
             }
             Some(_) => None,
             None => {
@@ -97,7 +103,10 @@ impl Sheets {
                 let root = ed.project_opt().map(|s| s.root.clone());
                 ed.exec
                     .io(move || {
-                        let path: PathBuf = root?.join("gamedata").join("textures").join(format!("{}.dds", sheet.replace('/', "\\")));
+                        let path: PathBuf = root?
+                            .join("gamedata")
+                            .join("textures")
+                            .join(format!("{}.dds", sheet.replace('/', "\\")));
                         if std::fs::metadata(&path).ok()?.len() > SHEET_READ_LIMIT {
                             return None;
                         }
@@ -120,7 +129,14 @@ impl Sheets {
                 let slot = match image {
                     Some(img) => {
                         let size = [img.size[0] as u32, img.size[1] as u32];
-                        Slot::Ready { texture: ctx.load_texture(format!("gz-ui-world.sheet.{key}"), img, TextureOptions::LINEAR), size }
+                        Slot::Ready {
+                            texture: ctx.load_texture(
+                                format!("gz-ui-world.sheet.{key}"),
+                                img,
+                                TextureOptions::LINEAR,
+                            ),
+                            size,
+                        }
                     }
                     None => Slot::Failed,
                 };
@@ -132,7 +148,14 @@ impl Sheets {
 
 /// The face the player sees, `height` tall (and 1.42 times as wide), or a frame with a person in
 /// it while there is none (`DrawPortrait`).
-pub fn draw_portrait(ui: &mut Ui, editor: &Arc<Editor>, sheets: Option<&Arc<Sheets>>, lists: &ListsView, icon: &str, height: f32) -> Response {
+pub fn draw_portrait(
+    ui: &mut Ui,
+    editor: &Arc<Editor>,
+    sheets: Option<&Arc<Sheets>>,
+    lists: &ListsView,
+    icon: &str,
+    height: f32,
+) -> Response {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(height * 1.42, height), Sense::hover());
@@ -147,7 +170,12 @@ pub fn draw_portrait(ui: &mut Ui, editor: &Arc<Editor>, sheets: Option<&Arc<Shee
             None => {
                 ui.painter().rect_stroke(rect, radius, Stroke::new(1.0, p.border_subtle), StrokeKind::Inside);
                 let glyph = height.min(40.0) * 0.6;
-                icons::draw(ui.painter(), Icon::Person, Rect::from_center_size(rect.center(), Vec2::splat(glyph)), p.text_muted);
+                icons::draw(
+                    ui.painter(),
+                    Icon::Person,
+                    Rect::from_center_size(rect.center(), Vec2::splat(glyph)),
+                    p.text_muted,
+                );
             }
         }
     }
@@ -165,7 +193,14 @@ struct Shown {
 /// The portrait, picked from a gallery of every face the linked game and the project have: by
 /// looking, not by remembering `ui_inGame2_neutral_2_mask` (`IconPicker`). Only the rows in view
 /// are laid out, and only their sheets read. Returns whether the value changed.
-pub fn local_portrait_gallery(ui: &mut Ui, salt: &str, value: &mut String, editor: &Arc<Editor>, sheets: Option<&Arc<Sheets>>, lists: &ListsView) -> bool {
+pub fn local_portrait_gallery(
+    ui: &mut Ui,
+    salt: &str,
+    value: &mut String,
+    editor: &Arc<Editor>,
+    sheets: Option<&Arc<Sheets>>,
+    lists: &ListsView,
+) -> bool {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let list: &Indexed = &lists.icons;
@@ -180,8 +215,19 @@ pub fn local_portrait_gallery(ui: &mut Ui, salt: &str, value: &mut String, edito
         p.text
     };
     let (resp, _) = paint_field(ui, shown_text, color, !lists.loaded);
-    gz_ui::audit::control(&ctx, shown_text, lists.loaded, (!lists.loaded).then_some("The linked game's lists are being read"), None, resp.rect);
-    let resp = if unknown { resp.on_hover_text(format!("'{value}' is not in the linked game or the project: kept as written")) } else { resp };
+    gz_ui::audit::control(
+        &ctx,
+        shown_text,
+        lists.loaded,
+        (!lists.loaded).then_some("The linked game's lists are being read"),
+        None,
+        resp.rect,
+    );
+    let resp = if unknown {
+        resp.on_hover_text(format!("'{value}' is not in the linked game or the project: kept as written"))
+    } else {
+        resp
+    };
     // a click toggles it; `characters_view show=icon` puts it up to be looked at
     let asked = lists.loaded && gz_ui::menu::take_popup_request(&ctx, salt);
     if (resp.clicked() && !Popup::is_id_open(&ctx, id)) || asked {
@@ -203,7 +249,11 @@ pub fn local_portrait_gallery(ui: &mut Ui, salt: &str, value: &mut String, edito
     let _ = menu_popup(&ctx, id, resp.rect, ui.layer_id(), |ui| {
         ui.set_width(width);
         let mut query = ctx.data(|d| d.get_temp::<String>(id.with("search"))).unwrap_or_default();
-        let field = SearchField::new(&mut query).hint("Type to filter").width(width).id_salt("gz-ui-world.gallery_search").show(ui);
+        let field = SearchField::new(&mut query)
+            .hint("Type to filter")
+            .width(width)
+            .id_salt("gz-ui-world.gallery_search")
+            .show(ui);
         if ctx.data_mut(|d| d.remove_temp::<bool>(id.with("focus"))).is_some() {
             field.request_focus();
         }
@@ -220,11 +270,19 @@ pub fn local_portrait_gallery(ui: &mut Ui, salt: &str, value: &mut String, edito
                     .entries
                     .iter()
                     .enumerate()
-                    .filter(|(_, e)| query.trim().is_empty() || gz_ui::search::matches(&query, &format!("{} {}", e.id, e.name)))
+                    .filter(|(_, e)| {
+                        query.trim().is_empty()
+                            || gz_ui::search::matches(&query, &format!("{} {}", e.id, e.name))
+                    })
                     .filter_map(|(i, _)| u32::try_from(i).ok())
                     .collect();
                 let rows = Arc::new(rows);
-                ctx.data_mut(|d| d.insert_temp(key, Shown { query: query.clone(), serial: list.serial, rows: rows.clone() }));
+                ctx.data_mut(|d| {
+                    d.insert_temp(
+                        key,
+                        Shown { query: query.clone(), serial: list.serial, rows: rows.clone() },
+                    )
+                });
                 rows
             }
         };
@@ -235,36 +293,66 @@ pub fn local_portrait_gallery(ui: &mut Ui, salt: &str, value: &mut String, edito
         let cols = (((width + gap) / (cell.x + gap)).floor() as usize).max(1);
         let lines = rows.len().div_ceil(cols);
         ui.spacing_mut().item_spacing.y = gap;
-        ScrollArea::vertical().id_salt(id.with("grid")).max_height(360.0).auto_shrink([false, true]).show_rows(ui, cell.y, lines, |ui, range| {
-            for line in range {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for c in 0..cols {
-                        let Some(e) = rows.get(line * cols + c).and_then(|r| list.entries.get(*r as usize)) else { break };
-                        let (r, cell_resp) = ui.allocate_exact_size(cell, Sense::click());
-                        if ui.is_rect_visible(r) {
-                            let radius = CornerRadius::same(3);
-                            ui.painter().rect_filled(r, radius, if cell_resp.hovered() { p.hover } else { p.inset });
-                            match sheets.and_then(|s| s.portrait(editor, e)) {
-                                Some((texture, uv)) => {
-                                    ui.painter().image(texture, r.shrink(2.0), uv, egui::Color32::WHITE);
+        ScrollArea::vertical()
+            .id_salt(id.with("grid"))
+            .max_height(360.0)
+            .auto_shrink([false, true])
+            .show_rows(ui, cell.y, lines, |ui, range| {
+                for line in range {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for c in 0..cols {
+                            let Some(e) =
+                                rows.get(line * cols + c).and_then(|r| list.entries.get(*r as usize))
+                            else {
+                                break;
+                            };
+                            let (r, cell_resp) = ui.allocate_exact_size(cell, Sense::click());
+                            if ui.is_rect_visible(r) {
+                                let radius = CornerRadius::same(3);
+                                ui.painter().rect_filled(
+                                    r,
+                                    radius,
+                                    if cell_resp.hovered() { p.hover } else { p.inset },
+                                );
+                                match sheets.and_then(|s| s.portrait(editor, e)) {
+                                    Some((texture, uv)) => {
+                                        ui.painter().image(texture, r.shrink(2.0), uv, egui::Color32::WHITE);
+                                    }
+                                    None => {
+                                        text::paint(
+                                            ui.painter(),
+                                            &Font::Small.id(),
+                                            r.center(),
+                                            Align2::CENTER_CENTER,
+                                            p.text_secondary,
+                                            &e.id,
+                                            Some(r.width() - 6.0),
+                                            Clip::Middle,
+                                        );
+                                    }
                                 }
-                                None => {
-                                    text::paint(ui.painter(), &Font::Small.id(), r.center(), Align2::CENTER_CENTER, p.text_secondary, &e.id, Some(r.width() - 6.0), Clip::Middle);
+                                if e.id == *value {
+                                    ui.painter().rect_stroke(
+                                        r,
+                                        radius,
+                                        Stroke::new(2.0, p.accent_bright),
+                                        StrokeKind::Inside,
+                                    );
                                 }
                             }
-                            if e.id == *value {
-                                ui.painter().rect_stroke(r, radius, Stroke::new(2.0, p.accent_bright), StrokeKind::Inside);
+                            let tip = if e.extra.starts_with("project:") {
+                                format!("{}\nThe project's", e.id)
+                            } else {
+                                e.id.clone()
+                            };
+                            if cell_resp.on_hover_text(tip).clicked() {
+                                picked = Some(e.id.clone());
                             }
                         }
-                        let tip = if e.extra.starts_with("project:") { format!("{}\nThe project's", e.id) } else { e.id.clone() };
-                        if cell_resp.on_hover_text(tip).clicked() {
-                            picked = Some(e.id.clone());
-                        }
-                    }
-                });
-            }
-        });
+                    });
+                }
+            });
     });
     match picked {
         Some(v) => {
@@ -283,7 +371,10 @@ mod tests {
 
     #[test]
     fn a_portrait_names_its_sheet_and_rectangle() {
-        assert_eq!(place("ui\\ui_actor_portrets|10|20|30|40"), Some((false, "ui\\ui_actor_portrets", [10.0, 20.0, 30.0, 40.0])));
+        assert_eq!(
+            place("ui\\ui_actor_portrets|10|20|30|40"),
+            Some((false, "ui\\ui_actor_portrets", [10.0, 20.0, 30.0, 40.0]))
+        );
         assert_eq!(place("project:ui\\mine|0|0|165|108").map(|p| p.0), Some(true));
         assert_eq!(place("ui\\x|1|2|3"), None);
         assert_eq!(place("|1|2|3|4"), None);

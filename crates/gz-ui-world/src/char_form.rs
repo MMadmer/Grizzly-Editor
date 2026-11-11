@@ -7,7 +7,10 @@ use gz_ui::grid::{Grid, integer, number, switch, text_block};
 use gz_ui::list::{Column, list, table_headers};
 use gz_ui::text::{self, Clip};
 use gz_ui::units::{button_width, em};
-use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Tone, icon_button, icons, metrics, palette};
+use gz_ui::{
+    Button, Font, Icon, Kind, PropFlags, PropertyGrid, SearchField, Tone, icon_button, icons, metrics,
+    palette,
+};
 
 use crate::characters::{Action, CharactersDoc, field_of, problem_text, problem_tone};
 use crate::lists::{Indexed, ListsView};
@@ -22,7 +25,11 @@ const TABLE_ROW: f32 = 26.0;
 
 /// A row's flags with Invalid when one of its problems is an error (`RowFlags`).
 fn flags(own: &[String], field: &str, base: PropFlags) -> PropFlags {
-    if own.iter().any(|p| p.starts_with('E') && field_of(p) == field) { base | PropFlags::INVALID } else { base }
+    if own.iter().any(|p| p.starts_with('E') && field_of(p) == field) {
+        base | PropFlags::INVALID
+    } else {
+        base
+    }
 }
 
 /// The sentences of a row's problems under it (`FieldMessages`).
@@ -76,7 +83,11 @@ impl CharactersDoc {
         let p = palette(&ctx);
         ui.horizontal(|ui| {
             let w = (ui.available_width() - metrics::ICON_BUTTON - 6.0).max(em(4.0));
-            let _ = SearchField::new(&mut self.list_filter).hint("Search characters").width(w).id_salt("gz-ui-world.characters.search").show(ui);
+            let _ = SearchField::new(&mut self.list_filter)
+                .hint("Search characters")
+                .width(w)
+                .id_salt("gz-ui-world.characters.search")
+                .show(ui);
             if icon_button(ui, Icon::Plus, "Add a character", false, true).clicked() {
                 self.actions.push(Action::New);
             }
@@ -86,17 +97,26 @@ impl CharactersDoc {
             gz_ui::state::busy_line(ui, "Reading the characters...");
             return;
         };
-        if self.shown.0 != self.list_filter || self.shown.1 != roster.stamp || self.shown.2.len() > roster.raw.len() {
+        if self.shown.0 != self.list_filter
+            || self.shown.1 != roster.stamp
+            || self.shown.2.len() > roster.raw.len()
+        {
             let rows = roster
                 .raw
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| gz_ui::search::matches(&self.list_filter, &format!("{} {} {}", c.id, text_in(&c.name, "rus"), text_in(&c.name, "eng"))))
+                .filter(|(_, c)| {
+                    gz_ui::search::matches(
+                        &self.list_filter,
+                        &format!("{} {} {}", c.id, text_in(&c.name, "rus"), text_in(&c.name, "eng")),
+                    )
+                })
                 .map(|(i, _)| i)
                 .collect();
             self.shown = (self.list_filter.clone(), roster.stamp, rows);
         }
-        let unread: Vec<&String> = roster.problems.iter().filter(|x| x.starts_with("E100") || x.starts_with("E101")).collect();
+        let unread: Vec<&String> =
+            roster.problems.iter().filter(|x| x.starts_with("E100") || x.starts_with("E101")).collect();
         let foot = if unread.is_empty() { 0.0 } else { Font::Body.line() + 8.0 };
         let fresh = self.sel.is_none() && self.dirty;
         let (sel, dirty) = (self.sel, self.dirty);
@@ -112,9 +132,23 @@ impl CharactersDoc {
                 let resp = l.row("##new", true, |ui| {
                     let r = ui.max_rect();
                     let x = r.min.x;
-                    icons::draw(ui.painter(), Icon::Character, Rect::from_min_size(pos2(x, r.center().y - 7.0), Vec2::splat(metrics::GLYPH_ROW)), p.accent_bright);
+                    icons::draw(
+                        ui.painter(),
+                        Icon::Character,
+                        Rect::from_min_size(pos2(x, r.center().y - 7.0), Vec2::splat(metrics::GLYPH_ROW)),
+                        p.accent_bright,
+                    );
                     let tx = x + 20.0;
-                    text::paint(ui.painter(), &Font::Body.id(), pos2(tx, r.center().y), Align2::LEFT_CENTER, p.text, &label, Some((r.max.x - tx - 18.0).max(0.0)), Clip::End);
+                    text::paint(
+                        ui.painter(),
+                        &Font::Body.id(),
+                        pos2(tx, r.center().y),
+                        Align2::LEFT_CENTER,
+                        p.text,
+                        &label,
+                        Some((r.max.x - tx - 18.0).max(0.0)),
+                        Clip::End,
+                    );
                     local_dirty_dot(ui.painter(), pos2(r.max.x - 10.0, r.center().y), ui.ctx());
                 });
                 let _ = resp.on_hover_text("Not saved yet");
@@ -127,21 +161,54 @@ impl CharactersDoc {
                     let r = ui.max_rect();
                     let cy = r.center().y;
                     let icon = if c.is_abstract { Icon::CharacterTemplate } else { Icon::Character };
-                    icons::draw(ui.painter(), icon, Rect::from_min_size(pos2(r.min.x, cy - 7.0), Vec2::splat(metrics::GLYPH_ROW)), if selected { p.accent_bright } else { p.text_secondary });
+                    icons::draw(
+                        ui.painter(),
+                        icon,
+                        Rect::from_min_size(pos2(r.min.x, cy - 7.0), Vec2::splat(metrics::GLYPH_ROW)),
+                        if selected { p.accent_bright } else { p.text_secondary },
+                    );
                     // what sits at the right end: the template mark, the dot of unsaved edits
-                    let right = if c.is_abstract { em(4.5) } else { 0.0 } + if selected && dirty { 16.0 } else { 0.0 } + 6.0;
+                    let right = if c.is_abstract { em(4.5) } else { 0.0 }
+                        + if selected && dirty { 16.0 } else { 0.0 }
+                        + 6.0;
                     let x = r.min.x + 20.0;
                     let room = (r.max.x - x - right).max(0.0);
                     let font = Font::Body.id();
                     let id_w = text::width(ui.ctx(), &font, &c.id).min(room);
-                    text::paint(ui.painter(), &font, pos2(x, cy), Align2::LEFT_CENTER, p.text, &c.id, Some(room), Clip::End);
+                    text::paint(
+                        ui.painter(),
+                        &font,
+                        pos2(x, cy),
+                        Align2::LEFT_CENTER,
+                        p.text,
+                        &c.id,
+                        Some(room),
+                        Clip::End,
+                    );
                     if !name.is_empty() && room - id_w > em(3.0) {
                         let nx = x + id_w + 8.0;
-                        text::paint(ui.painter(), &font, pos2(nx, cy), Align2::LEFT_CENTER, p.text_muted, &name, Some((room - id_w - 8.0).max(0.0)), Clip::End);
+                        text::paint(
+                            ui.painter(),
+                            &font,
+                            pos2(nx, cy),
+                            Align2::LEFT_CENTER,
+                            p.text_muted,
+                            &name,
+                            Some((room - id_w - 8.0).max(0.0)),
+                            Clip::End,
+                        );
                     }
                     if c.is_abstract {
-                        let badge = Rect::from_min_max(pos2(r.max.x - right + 2.0, r.min.y), pos2(r.max.x - if selected && dirty { 16.0 } else { 0.0 }, r.max.y));
-                        let mut child = ui.new_child(UiBuilder::new().id_salt(("gz-ui-world.template", i)).max_rect(badge).layout(Layout::left_to_right(Align::Center)));
+                        let badge = Rect::from_min_max(
+                            pos2(r.max.x - right + 2.0, r.min.y),
+                            pos2(r.max.x - if selected && dirty { 16.0 } else { 0.0 }, r.max.y),
+                        );
+                        let mut child = ui.new_child(
+                            UiBuilder::new()
+                                .id_salt(("gz-ui-world.template", i))
+                                .max_rect(badge)
+                                .layout(Layout::left_to_right(Align::Center)),
+                        );
                         gz_ui::state::badge(&mut child, "Template", Tone::Muted);
                     }
                     if selected && dirty {
@@ -154,7 +221,13 @@ impl CharactersDoc {
                 }
             }
             if roster.raw.is_empty() && !fresh {
-                if gz_ui::state::empty_state(l.ui(), Icon::Character, "No characters", "The module's own NPCs live here.", Some("New Character")) {
+                if gz_ui::state::empty_state(
+                    l.ui(),
+                    Icon::Character,
+                    "No characters",
+                    "The module's own NPCs live here.",
+                    Some("New Character"),
+                ) {
                     new_clicked = true;
                 }
             } else if shown.is_empty() && filtering {
@@ -162,7 +235,11 @@ impl CharactersDoc {
             }
         });
         if !unread.is_empty() {
-            let count = if unread.len() == 1 { "1 file does not read".to_owned() } else { format!("{} files do not read", unread.len()) };
+            let count = if unread.len() == 1 {
+                "1 file does not read".to_owned()
+            } else {
+                format!("{} files do not read", unread.len())
+            };
             let all: Vec<&str> = unread.iter().map(|x| x.as_str()).collect();
             let _ = text::status(ui, Tone::Error, &count).on_hover_text(all.join("\n"));
         }
@@ -193,7 +270,8 @@ impl CharactersDoc {
         } else {
             format!("In game: {}", game_id(&self.module_id, &self.edit.id))
         };
-        let file = if self.edit.file.is_empty() { "Not saved yet".to_owned() } else { self.edit.file.clone() };
+        let file =
+            if self.edit.file.is_empty() { "Not saved yet".to_owned() } else { self.edit.file.clone() };
         let mut delete = false;
         ui.horizontal_top(|ui| {
             let _ = draw_portrait(ui, &self.editor, self.sheets.as_ref(), &self.lists, &self.edit.icon, portrait);
@@ -234,7 +312,8 @@ impl CharactersDoc {
         let mut base_changed = false;
         let mut preview = false;
         let editor = self.editor.clone();
-        let Self { edit, name_rus, name_eng, bio_rus, bio_eng, inherited, own, lists, sheets, sel, .. } = self;
+        let Self { edit, name_rus, name_eng, bio_rus, bio_eng, inherited, own, lists, sheets, sel, .. } =
+            self;
         let own: &[String] = own;
         let lists: &ListsView = lists;
         let inherited: Option<&Character> = inherited.as_ref();
@@ -449,7 +528,8 @@ fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
         let preview = if !edit.has_rank {
             "Not set".to_owned()
         } else {
-            cur.and_then(|i| ranks.get(i)).map_or_else(|| "Below the lowest rank".to_owned(), |r| name(&r.entry))
+            cur.and_then(|i| ranks.get(i))
+                .map_or_else(|| "Below the lowest rank".to_owned(), |r| name(&r.entry))
         };
         let rows: Vec<String> = ranks
             .iter()
@@ -459,7 +539,9 @@ fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
                 None => format!("{}   {}+", name(&r.entry), r.from),
             })
             .collect();
-        let picked = cell(ui, combo_w, |ui| local_combo(ui, "character.rank", &preview, false, &rows, if edit.has_rank { cur } else { None }));
+        let picked = cell(ui, combo_w, |ui| {
+            local_combo(ui, "character.rank", &preview, false, &rows, if edit.has_rank { cur } else { None })
+        });
         if let Some(i) = picked
             && let Some(r) = ranks.get(i)
         {
@@ -484,7 +566,9 @@ fn rank_row(ui: &mut Ui, edit: &mut Character, lists: &ListsView) -> bool {
 /// base's amounts as the hints (`MoneyRow`, `MoneyField`).
 fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -> bool {
     let ctx = ui.ctx().clone();
-    let (base_min, base_max, base_inf) = inherited.filter(|b| b.has_money).map_or((0, 0, false), |b| (b.money_min, b.money_max, b.money_infinite));
+    let (base_min, base_max, base_inf) = inherited
+        .filter(|b| b.has_money)
+        .map_or((0, 0, false), |b| (b.money_min, b.money_max, b.money_infinite));
     let number = em(5.5);
     let check_label = "Never runs out";
     let check_w = metrics::FRAME + 8.0 + text::width(&ctx, &Font::Body.id(), check_label);
@@ -501,7 +585,11 @@ fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -
         }
     };
     let numbers = |ui: &mut Ui, edit: &mut Character, changed: &mut bool| {
-        let (min, max) = if edit.has_money { (Some(i64::from(edit.money_min)), Some(i64::from(edit.money_max))) } else { (None, None) };
+        let (min, max) = if edit.has_money {
+            (Some(i64::from(edit.money_min)), Some(i64::from(edit.money_max)))
+        } else {
+            (None, None)
+        };
         if let Some(v) = local_number_text(ui, "character.money_min", min, &base_min.to_string(), number) {
             adopt(edit);
             edit.money_min = i32::try_from(v.unwrap_or(0).max(0)).unwrap_or(i32::MAX);
@@ -544,17 +632,32 @@ fn money_row(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>) -
 
 /// The starting kit: what the base already gives (shown, not editable), then this character's
 /// rows; Add Item (`DrawKit`). True when something changed.
-fn draw_kit(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>, base: &str, lists: &ListsView, own: &[String]) -> bool {
+fn draw_kit(
+    ui: &mut Ui,
+    edit: &mut Character,
+    inherited: Option<&Character>,
+    base: &str,
+    lists: &ListsView,
+    own: &[String],
+) -> bool {
     let p = palette(ui.ctx());
     let mut changed = false;
     let given: &[Supply] = inherited.map_or(&[], |b| b.supplies.as_slice());
     if given.is_empty() && edit.supplies.is_empty() {
-        let _ = text::status(ui, Tone::Muted, "No starting kit: the NPC spawns with what its community gives.");
+        let _ =
+            text::status(ui, Tone::Muted, "No starting kit: the NPC spawns with what its community gives.");
     } else {
         let total = ui.available_width();
         let (count_w, action_w) = (em(5.0), metrics::ICON_BUTTON);
         let item_w = (total - count_w - action_w - 16.0).max(em(6.0));
-        let _ = table_headers(ui, &[Column::new("Item", item_w + 8.0), Column::new("Count", count_w + 8.0), Column::new("", action_w)]);
+        let _ = table_headers(
+            ui,
+            &[
+                Column::new("Item", item_w + 8.0),
+                Column::new("Count", count_w + 8.0),
+                Column::new("", action_w),
+            ],
+        );
         for (i, row) in given.iter().enumerate() {
             ui.push_id(("inherited", i), |ui| {
                 ui.horizontal(|ui| {
@@ -577,7 +680,9 @@ fn draw_kit(ui: &mut Ui, edit: &mut Character, inherited: Option<&Character>, ba
             ui.push_id(("own", i), |ui| {
                 ui.horizontal(|ui| {
                     ui.set_height(TABLE_ROW);
-                    if cell(ui, item_w, |ui| item_picker(ui, &format!("character.kit.{i}"), &mut row.section, lists, None)) {
+                    if cell(ui, item_w, |ui| {
+                        item_picker(ui, &format!("character.kit.{i}"), &mut row.section, lists, None)
+                    }) {
                         changed = true;
                     }
                     if cell(ui, count_w, |ui| integer(ui, &mut row.count, 0.1, "").changed()) {
@@ -617,25 +722,41 @@ fn trade_rows(g: &mut Grid<'_>, t: &mut Trade, lists: &ListsView, own: &[String]
     let cats: &[String] = &lists.trade_categories;
     let busy = !lists.loaded;
     let help = "Besides its stock, which it always sells: the categories of the linked game's trade presets it sells when it has them. None: only the stock.";
-    if g.row("Sells", help, flags(own, "trade", PropFlags::NONE), 0, |ui| local_multi_combo(ui, "character.sells", &mut t.sells, cats, "Only its stock", busy)) == Some(true) {
-        changed = true;
-    }
-    if g.row("Buys", "The categories it buys from the player. None: it buys nothing.", PropFlags::NONE, 0, |ui| {
-        local_multi_combo(ui, "character.buys", &mut t.buys, cats, "Nothing", busy)
+    if g.row("Sells", help, flags(own, "trade", PropFlags::NONE), 0, |ui| {
+        local_multi_combo(ui, "character.sells", &mut t.sells, cats, "Only its stock", busy)
     }) == Some(true)
     {
         changed = true;
     }
-    if g.row("Markup", "What it asks, as a share of an item's cost: 1 is the cost, 1.5 half as much again.", PropFlags::NONE, 0, |ui| number(ui, &mut t.markup, 0.01, "").changed())
-        == Some(true)
+    if g.row(
+        "Buys",
+        "The categories it buys from the player. None: it buys nothing.",
+        PropFlags::NONE,
+        0,
+        |ui| local_multi_combo(ui, "character.buys", &mut t.buys, cats, "Nothing", busy),
+    ) == Some(true)
+    {
+        changed = true;
+    }
+    if g.row(
+        "Markup",
+        "What it asks, as a share of an item's cost: 1 is the cost, 1.5 half as much again.",
+        PropFlags::NONE,
+        0,
+        |ui| number(ui, &mut t.markup, 0.01, "").changed(),
+    ) == Some(true)
     {
         changed = true;
     }
     let help = "What it pays for an item, as a share of its cost - over the factors the game gives single items, the way the game's own traders do: 0.3 is about a third.";
-    if g.row("Pays", help, PropFlags::NONE, 0, |ui| number(ui, &mut t.pays, 0.01, "").changed()) == Some(true) {
+    if g.row("Pays", help, PropFlags::NONE, 0, |ui| number(ui, &mut t.pays, 0.01, "").changed()) == Some(true)
+    {
         changed = true;
     }
-    if g.row("Restock", "Game hours until the stock comes back.", PropFlags::NONE, 0, |ui| integer(ui, &mut t.restock, 0.2, "h").changed()) == Some(true) {
+    if g.row("Restock", "Game hours until the stock comes back.", PropFlags::NONE, 0, |ui| {
+        integer(ui, &mut t.restock, 0.2, "h").changed()
+    }) == Some(true)
+    {
         changed = true;
     }
     changed
@@ -646,21 +767,36 @@ fn trade_rows(g: &mut Grid<'_>, t: &mut Trade, lists: &ListsView, own: &[String]
 fn draw_stock(ui: &mut Ui, t: &mut Trade, inherited: &Trade, lists: &ListsView, own: &[String]) -> bool {
     let p = palette(ui.ctx());
     let mut changed = false;
-    let _ = text::label(ui, "Stock", Font::Body, p.text_secondary, Clip::End)
-        .on_hover_text("What is on the shelf after every restock: an item, how many, and the chance that it is there.");
+    let _ = text::label(ui, "Stock", Font::Body, p.text_secondary, Clip::End).on_hover_text(
+        "What is on the shelf after every restock: an item, how many, and the chance that it is there.",
+    );
     if t.stock.is_empty() {
-        let _ = text::status(ui, Tone::Muted, "Nothing on the shelf: it sells only what its categories let it sell of what it carries.");
+        let _ = text::status(
+            ui,
+            Tone::Muted,
+            "Nothing on the shelf: it sells only what its categories let it sell of what it carries.",
+        );
     } else {
         let total = ui.available_width();
         let (count_w, chance_w, action_w) = (em(4.5), em(4.5), metrics::ICON_BUTTON);
         let item_w = (total - count_w - chance_w - action_w - 24.0).max(em(6.0));
-        let _ = table_headers(ui, &[Column::new("Item", item_w + 8.0), Column::new("Count", count_w + 8.0), Column::new("Chance", chance_w + 8.0), Column::new("", action_w)]);
+        let _ = table_headers(
+            ui,
+            &[
+                Column::new("Item", item_w + 8.0),
+                Column::new("Count", count_w + 8.0),
+                Column::new("Chance", chance_w + 8.0),
+                Column::new("", action_w),
+            ],
+        );
         let mut remove = None;
         for (i, row) in t.stock.iter_mut().enumerate() {
             ui.push_id(("stock", i), |ui| {
                 ui.horizontal(|ui| {
                     ui.set_height(TABLE_ROW);
-                    if cell(ui, item_w, |ui| item_picker(ui, &format!("character.stock.{i}"), &mut row.section, lists, None)) {
+                    if cell(ui, item_w, |ui| {
+                        item_picker(ui, &format!("character.stock.{i}"), &mut row.section, lists, None)
+                    }) {
                         changed = true;
                     }
                     if cell(ui, count_w, |ui| integer(ui, &mut row.count, 0.1, "").changed()) {
@@ -691,7 +827,11 @@ fn draw_stock(ui: &mut Ui, t: &mut Trade, inherited: &Trade, lists: &ListsView, 
             t.stock.push(TradeRow::default());
             changed = true;
         }
-        if Button::new("Not a Trader").tip("The NPC keeps no shop: it trades like any stalker of its community.").show(ui).clicked() {
+        if Button::new("Not a Trader")
+            .tip("The NPC keeps no shop: it trades like any stalker of its community.")
+            .show(ui)
+            .clicked()
+        {
             let base_trades = inherited.is_trader();
             *t = Trade::default();
             // with a base that trades, saying nothing would bring its shop back
@@ -744,14 +884,29 @@ mod tests {
 
     #[test]
     fn a_shop_is_summed_up_in_one_line() {
-        let t = Trade { declared: true, sells: vec!["weapon".into(), "food".into()], markup: 1.5, pays: 0.3, ..Trade::default() };
-        assert_eq!(trade_summary(&t), "sells weapon, food, a stock of 0 item(s), asks 1.5 and pays 0.3 of the cost");
-        assert_eq!(trade_summary(&Trade::default()), "sells its stock only, a stock of 0 item(s), asks 1 and pays 0.3 of the cost");
+        let t = Trade {
+            declared: true,
+            sells: vec!["weapon".into(), "food".into()],
+            markup: 1.5,
+            pays: 0.3,
+            ..Trade::default()
+        };
+        assert_eq!(
+            trade_summary(&t),
+            "sells weapon, food, a stock of 0 item(s), asks 1.5 and pays 0.3 of the cost"
+        );
+        assert_eq!(
+            trade_summary(&Trade::default()),
+            "sells its stock only, a stock of 0 item(s), asks 1 and pays 0.3 of the cost"
+        );
     }
 
     #[test]
     fn an_item_reads_by_its_name() {
-        let items = Indexed::new(vec![gz_nq::PickerEntry { id: "bandage".into(), name: "Bandage".into(), extra: String::new() }], 1);
+        let items = Indexed::new(
+            vec![gz_nq::PickerEntry { id: "bandage".into(), name: "Bandage".into(), extra: String::new() }],
+            1,
+        );
         assert_eq!(item_label(&items, "bandage"), "Bandage  (bandage)");
         assert_eq!(item_label(&items, "medkit"), "medkit");
     }

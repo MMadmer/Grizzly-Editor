@@ -73,7 +73,8 @@ pub fn exclude_match<'a>(rules: &'a [String], rel: &str) -> Option<&'a String> {
     if rel.is_empty() {
         return None;
     }
-    let ends: Vec<usize> = rel.match_indices('\\').map(|(i, _)| i).chain(std::iter::once(rel.len())).collect();
+    let ends: Vec<usize> =
+        rel.match_indices('\\').map(|(i, _)| i).chain(std::iter::once(rel.len())).collect();
     for rule in rules {
         let r = normalize_rel(rule);
         if r.is_empty() {
@@ -236,7 +237,10 @@ mod tests {
         let next = set_excluded(&r, "design", true).unwrap().unwrap();
         assert_eq!(next, ["docs", "*.psd", "wip_char", "design"]);
         assert_eq!(set_excluded(&next, "design/story.md", true), Ok(None));
-        assert_eq!(set_excluded(&next, "design/story.md", false), Err("still excluded by 'design' in mod.ltx [exclude]".into()));
+        assert_eq!(
+            set_excluded(&next, "design/story.md", false),
+            Err("still excluded by 'design' in mod.ltx [exclude]".into())
+        );
         assert!(set_excluded(&next, "mod.ltx", true).is_err());
         assert!(set_excluded(&next, "/", true).is_err());
         let folded = set_excluded(&rules(&["docs/a", "docs/*.md", "x"]), "docs", true).unwrap().unwrap();

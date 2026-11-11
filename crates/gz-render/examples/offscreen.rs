@@ -12,8 +12,8 @@ use std::time::Duration;
 use glam::{Mat4, Quat, Vec2, Vec3};
 use gz_fmt_tex::{DdsEncoding, Image, MipFilter, encode_dds, mip_chain};
 use gz_render::{
-    AssetBytes, AssetRef, Camera, Color, DrawList, EditorMaterial, Environment, Instance, InstanceFlags, Light, LightKind,
-    MaterialDesc, MeshData, Renderer, ShapeKind, TextureData, View, ViewMode, build_packet,
+    AssetBytes, AssetRef, Camera, Color, DrawList, EditorMaterial, Environment, Instance, InstanceFlags,
+    Light, LightKind, MaterialDesc, MeshData, Renderer, ShapeKind, TextureData, View, ViewMode, build_packet,
 };
 
 fn main() {
@@ -29,13 +29,19 @@ fn run() -> Result<(), String> {
     let (device, queue, info) = futures::executor::block_on(headless_device())?;
     println!("adapter: {} ({:?})", info.name, info.backend);
     let renderer = Renderer::new(device, queue, rt.exec()).map_err(|e| e.to_string())?;
-    println!("msaa: {}x, BC textures as they are: {}", renderer.samples(), renderer.block_compressed_textures());
+    println!(
+        "msaa: {}x, BC textures as they are: {}",
+        renderer.samples(),
+        renderer.block_compressed_textures()
+    );
     let assets = renderer.assets().clone();
 
     // the fence texture comes through a loader, as a game's texture would: a PNG made here
     let fence_png = png_bytes(&fence(128))?;
     assets.set_loader(Some(Arc::new(move |what: AssetRef<'_>| match what {
-        AssetRef::Texture("example\\fence") => Ok(AssetBytes { bytes: fence_png.clone(), ext: Some("png".into()) }),
+        AssetRef::Texture("example\\fence") => {
+            Ok(AssetBytes { bytes: fence_png.clone(), ext: Some("png".into()) })
+        }
         other => Err(format!("{other:?} is not part of the example")),
     })));
 
@@ -44,32 +50,66 @@ fn run() -> Result<(), String> {
     let mut levels = vec![planks.clone()];
     levels.extend(mip_chain(&planks, MipFilter::Box).map_err(|e| e.to_string())?);
     let dds = encode_dds(&levels, DdsEncoding::Dxt1).map_err(|e| e.to_string())?;
-    let crate_tex = TextureData::decode(&dds, Some("dds"), renderer.block_compressed_textures()).map_err(|e| e.to_string())?;
+    let crate_tex = TextureData::decode(&dds, Some("dds"), renderer.block_compressed_textures())
+        .map_err(|e| e.to_string())?;
     println!("crate texture: {:?}, {} levels", crate_tex.format, crate_tex.levels.len());
     assets.add_texture("example\\crate", &crate_tex).map_err(|e| e.to_string())?;
 
-    let boxes = assets.add_mesh("example\\box", MeshData::cube(MaterialDesc::textured(EditorMaterial::Opaque, "example\\crate")));
+    let boxes = assets.add_mesh(
+        "example\\box",
+        MeshData::cube(MaterialDesc::textured(EditorMaterial::Opaque, "example\\crate")),
+    );
     let fence = assets.add_mesh(
         "example\\fence",
-        MeshData::quad(MaterialDesc::textured(EditorMaterial::AlphaTest, "example\\fence").with_two_sided(true), Vec2::new(2.0, 2.0)),
+        MeshData::quad(
+            MaterialDesc::textured(EditorMaterial::AlphaTest, "example\\fence").with_two_sided(true),
+            Vec2::new(2.0, 2.0),
+        ),
     );
     let glass = assets.add_mesh(
         "example\\glass",
-        MeshData::quad(MaterialDesc::color(EditorMaterial::Blended, Color::rgba(90, 170, 255, 110)).with_two_sided(true), Vec2::new(1.6, 1.2)),
+        MeshData::quad(
+            MaterialDesc::color(EditorMaterial::Blended, Color::rgba(90, 170, 255, 110)).with_two_sided(true),
+            Vec2::new(1.6, 1.2),
+        ),
     );
 
     let mut list = DrawList::new();
-    let box_at = Mat4::from_scale_rotation_translation(Vec3::splat(1.2), Quat::from_rotation_y(0.5), Vec3::new(-1.0, 0.6, 0.0));
+    let box_at = Mat4::from_scale_rotation_translation(
+        Vec3::splat(1.2),
+        Quat::from_rotation_y(0.5),
+        Vec3::new(-1.0, 0.6, 0.0),
+    );
     list.push(Instance::new(boxes, box_at).with_id(1).with_flags(InstanceFlags::SELECTED));
-    list.push(Instance::new(fence, Mat4::from_rotation_translation(Quat::from_rotation_y(-0.6), Vec3::new(1.5, 1.0, 0.4))).with_id(2));
-    list.push(Instance::new(glass, Mat4::from_rotation_translation(Quat::from_rotation_y(0.25), Vec3::new(0.3, 0.6, -1.5))).with_id(3));
+    list.push(
+        Instance::new(
+            fence,
+            Mat4::from_rotation_translation(Quat::from_rotation_y(-0.6), Vec3::new(1.5, 1.0, 0.4)),
+        )
+        .with_id(2),
+    );
+    list.push(
+        Instance::new(
+            glass,
+            Mat4::from_rotation_translation(Quat::from_rotation_y(0.25), Vec3::new(0.3, 0.6, -1.5)),
+        )
+        .with_id(3),
+    );
 
     let h = &mut list.helpers;
     h.shape(ShapeKind::SelectionBox, box_at, None, Some(Color::WHITE), true);
     h.sphere(Vec3::new(-1.0, 0.6, 0.0), 1.15, None, Some(Color::rgb(120, 220, 255)), true);
     h.arrow(Vec3::new(2.6, 0.0, -1.0), Vec3::new(2.6, 1.6, -1.0), 0.25, Color::rgb(255, 90, 60), false);
     h.cross(Vec3::new(0.0, 2.4, 1.0), 0.3, true, Color::rgb(255, 230, 80), true);
-    h.cone(Vec3::new(-2.6, 1.8, 1.4), Vec3::new(0.3, -1.0, 0.0), 1.2, 0.5, Some(Color::rgba(255, 230, 80, 60)), Some(Color::rgb(255, 230, 80)), true);
+    h.cone(
+        Vec3::new(-2.6, 1.8, 1.4),
+        Vec3::new(0.3, -1.0, 0.0),
+        1.2,
+        0.5,
+        Some(Color::rgba(255, 230, 80, 60)),
+        Some(Color::rgb(255, 230, 80)),
+        true,
+    );
     h.label(Vec3::new(-1.0, 1.4, 0.0), "crate", Color::WHITE, true);
     h.label(Vec3::new(1.5, 0.0, 2.5), "behind the fence", Color::WHITE, true);
     h.label(Vec3::new(2.6, 1.8, -1.0), "up", Color::WHITE, false);
@@ -98,7 +138,10 @@ fn run() -> Result<(), String> {
     let thread_out = out.replace(".png", "-thread.png");
     write_png(&thread_out, &shot)?;
     let target = renderer.target().ok_or("no target")?;
-    println!("frame {} of packet {}, target {:?} of {:?}, wrote {thread_out}", frame.frame, frame.packet, target.size, target.extent);
+    println!(
+        "frame {} of packet {}, target {:?} of {:?}, wrote {thread_out}",
+        frame.frame, frame.packet, target.size, target.extent
+    );
     if shot.rgba != picture.rgba {
         println!("note: the thread's picture differs from the offscreen one");
     }
@@ -115,7 +158,12 @@ fn run() -> Result<(), String> {
         exposure: 1.2,
         ..Environment::default()
     });
-    list.lights.push(Light { kind: LightKind::Point, position: Vec3::new(0.2, 1.6, -0.6), range: 4.0, color: Vec3::new(1.2, 0.9, 0.5) });
+    list.lights.push(Light {
+        kind: LightKind::Point,
+        position: Vec3::new(0.2, 1.6, -0.6),
+        range: 4.0,
+        color: Vec3::new(1.2, 0.9, 0.5),
+    });
     list.lights.push(Light {
         kind: LightKind::Spot { direction: Vec3::new(-0.2, -1.0, 0.1), cos_half: 0.85 },
         position: Vec3::new(1.5, 3.0, 0.4),
@@ -146,7 +194,11 @@ async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue, wgpu::AdapterIn
         .map_err(|e| format!("no graphics adapter: {e}"))?;
     let required_features = adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC;
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor { label: Some("gz-render example"), required_features, ..Default::default() })
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("gz-render example"),
+            required_features,
+            ..Default::default()
+        })
         .await
         .map_err(|e| format!("no graphics device: {e}"))?;
     Ok((device, queue, adapter.get_info()))

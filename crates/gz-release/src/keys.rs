@@ -89,7 +89,12 @@ fn make_folders(file: &str) {
 impl AuthorKeys {
     #[must_use]
     pub fn of(editor: &Editor) -> Arc<Self> {
-        editor.services.get_or_init(|| Self { qa: editor.flags.qa_github, log: editor.log.clone(), open: Mutex::new(None), home: Mutex::new(None) })
+        editor.services.get_or_init(|| Self {
+            qa: editor.flags.qa_github,
+            log: editor.log.clone(),
+            open: Mutex::new(None),
+            home: Mutex::new(None),
+        })
     }
 
     /// `Documents\Grizzly Editor`, or `GRIZZLY_CATALOG_HOME` under `-qa_github`.
@@ -98,8 +103,13 @@ impl AuthorKeys {
         if let Some(h) = self.home.lock().clone() {
             return h;
         }
-        let qa_home = if self.qa { std::env::var("GRIZZLY_CATALOG_HOME").unwrap_or_default() } else { String::new() };
-        let home = if qa_home.is_empty() { format!("{}\\Grizzly Editor", crate::documents::documents_folder()) } else { qa_home };
+        let qa_home =
+            if self.qa { std::env::var("GRIZZLY_CATALOG_HOME").unwrap_or_default() } else { String::new() };
+        let home = if qa_home.is_empty() {
+            format!("{}\\Grizzly Editor", crate::documents::documents_folder())
+        } else {
+            qa_home
+        };
         *self.home.lock() = Some(home.clone());
         home
     }
@@ -124,7 +134,9 @@ impl AuthorKeys {
     fn remember_key_path(&self, path: &str) {
         let file = self.settings_path();
         make_folders(&file);
-        let text = format!("; Grizzly Editor: where this Windows user's Mod Browser author key file is\r\n[author]\r\nkey = {path}\r\n");
+        let text = format!(
+            "; Grizzly Editor: where this Windows user's Mod Browser author key file is\r\n[author]\r\nkey = {path}\r\n"
+        );
         let _ = std::fs::remove_file(&file);
         write_new(&file, &text);
     }
@@ -156,14 +168,20 @@ impl AuthorKeys {
         state.public_key.clone_from(&file.public_text);
         state.key_id = point.id();
         let open = self.open.lock();
-        let opened = open.as_ref().is_some_and(|o| o.path == state.path && o.key.public.text() == file.public_text);
+        let opened =
+            open.as_ref().is_some_and(|o| o.path == state.path && o.key.public.text() == file.public_text);
         state.locked = file.protected && !opened;
         state
     }
 
     /// A new key in a new file, and the path remembered (`CreateKey`). Never overwrites a file;
     /// never inside the open project (`project_root`).
-    pub fn create(&self, path: Option<&str>, password: &str, project_root: Option<&Path>) -> Result<(), String> {
+    pub fn create(
+        &self,
+        path: Option<&str>,
+        password: &str,
+        project_root: Option<&Path>,
+    ) -> Result<(), String> {
         let target = path.filter(|p| !p.is_empty()).map_or_else(|| self.default_key_path(), str::to_owned);
         inside_project(&target, project_root)?;
         if std::fs::symlink_metadata(&target).is_ok() {
@@ -201,7 +219,9 @@ impl AuthorKeys {
     /// closes.
     pub fn unlock(&self, password: &str) -> Result<(), String> {
         let path = self.current_key_path();
-        let Some(text) = read_limited(&path, KEY_FILE_LIMIT) else { return Err(format!("no author key file at {path}")) };
+        let Some(text) = read_limited(&path, KEY_FILE_LIMIT) else {
+            return Err(format!("no author key file at {path}"));
+        };
         let key = keyfile::parse(&text)?.open(password)?;
         *self.open.lock() = Some(Open { key, path });
         Ok(())
@@ -226,11 +246,13 @@ impl AuthorKeys {
         }
         let mut open = self.open.lock();
         if !open.as_ref().is_some_and(|o| o.path == state.path) {
-            let text = read_limited(&state.path, KEY_FILE_LIMIT).ok_or_else(|| format!("can't read {}", state.path))?;
+            let text = read_limited(&state.path, KEY_FILE_LIMIT)
+                .ok_or_else(|| format!("can't read {}", state.path))?;
             let key = keyfile::parse(&text)?.open("")?;
             *open = Some(Open { key, path: state.path.clone() });
         }
-        let key = open.as_ref().map(|o| &o.key).ok_or_else(|| "the author key could not be opened".to_owned())?;
+        let key =
+            open.as_ref().map(|o| &o.key).ok_or_else(|| "the author key could not be opened".to_owned())?;
         sign_text(body, key).map_err(|_| "Windows could not sign".to_owned())
     }
 
@@ -245,10 +267,16 @@ impl AuthorKeys {
 /// every build a player downloads. The build leaves `*.xkey` out anyway; this says it first.
 fn inside_project(path: &str, project_root: Option<&Path>) -> Result<(), String> {
     let Some(root) = project_root else { return Ok(()) };
-    let (Some(full), Some(root)) = (gz_project::paths::full_path(path), root.to_str().and_then(gz_project::paths::full_path)) else { return Ok(()) };
+    let (Some(full), Some(root)) =
+        (gz_project::paths::full_path(path), root.to_str().and_then(gz_project::paths::full_path))
+    else {
+        return Ok(());
+    };
     let root = root.trim_end_matches(['\\', '/']);
     let n = root.len();
-    let below = full.len() > n && full.get(..n).is_some_and(|h| h.eq_ignore_ascii_case(root)) && matches!(full.as_bytes().get(n), Some(b'\\' | b'/'));
+    let below = full.len() > n
+        && full.get(..n).is_some_and(|h| h.eq_ignore_ascii_case(root))
+        && matches!(full.as_bytes().get(n), Some(b'\\' | b'/'));
     if below {
         return Err("a key file never goes inside a project - it would ship with the module; keep it in Documents or on a stick".to_owned());
     }
@@ -261,7 +289,12 @@ mod tests {
     use super::*;
 
     fn keys(home: &Path) -> AuthorKeys {
-        AuthorKeys { qa: true, log: Log::memory(), open: Mutex::new(None), home: Mutex::new(Some(home.to_string_lossy().into_owned())) }
+        AuthorKeys {
+            qa: true,
+            log: Log::memory(),
+            open: Mutex::new(None),
+            home: Mutex::new(Some(home.to_string_lossy().into_owned())),
+        }
     }
 
     #[test]
@@ -285,7 +318,9 @@ mod tests {
         assert!(st.usable(), "{st:?}");
         assert!(std::fs::read_to_string(base.join("home").join("catalog.ltx")).unwrap().contains("\nkey = "));
         let before = std::fs::read(&st.path).unwrap();
-        assert!(k.create(None, "other", None).unwrap_err().ends_with("exists: a key file is never overwritten"));
+        assert!(
+            k.create(None, "other", None).unwrap_err().ends_with("exists: a key file is never overwritten")
+        );
         assert_eq!(std::fs::read(&st.path).unwrap(), before);
 
         let signed = k.sign("[a]\r\nb = 1\r\n").unwrap();

@@ -20,7 +20,9 @@ use gz_query::Query;
 use gz_vfs::GameFiles;
 
 use crate::layout::Layout;
-use crate::read::{BUNDLED_READER, GAME_READER, ReadError, Reader, base_name, evaluate, is_pda_path, template};
+use crate::read::{
+    BUNDLED_READER, GAME_READER, ReadError, Reader, base_name, evaluate, is_pda_path, template,
+};
 
 /// The bundled texture description of Refined's PDA sheet, for a game without it.
 const BUNDLED_SHEET: &str = "configs\\pda\\ui_xms_pda.xml";
@@ -77,7 +79,10 @@ fn load_reader(files: Option<&GameFiles>, bundled: &Path) -> Result<Arc<Reader>,
     }
     match std::fs::read(bundled) {
         Ok(bytes) if !bytes.is_empty() => Ok(Arc::new(Reader::new(lossy(bytes), false))),
-        _ => Err(format!("the PDA layout reader was found neither in the linked game nor at {}", bundled.display().to_string().replace('/', "\\"))),
+        _ => Err(format!(
+            "the PDA layout reader was found neither in the linked game nor at {}",
+            bundled.display().to_string().replace('/', "\\")
+        )),
     }
 }
 
@@ -95,7 +100,9 @@ pub fn read_text(path: &Path) -> Result<String, String> {
 /// Two project paths name one file: `/` and `\` alike, ASCII case ignored (`SamePath`).
 #[must_use]
 pub fn same_path(a: &str, b: &str) -> bool {
-    let norm = |s: &str| s.bytes().map(|c| if c == b'/' { b'\\' } else { c.to_ascii_lowercase() }).collect::<Vec<u8>>();
+    let norm = |s: &str| {
+        s.bytes().map(|c| if c == b'/' { b'\\' } else { c.to_ascii_lowercase() }).collect::<Vec<u8>>()
+    };
     norm(a) == norm(b)
 }
 
@@ -106,7 +113,9 @@ pub fn project_relative(root: &str, abs: &str) -> String {
     let n = abs.replace('/', "\\");
     let root = root.replace('/', "\\");
     let root = root.trim_end_matches('\\');
-    let inside = n.len() > root.len() + 1 && n.get(..root.len()).is_some_and(|h| h.eq_ignore_ascii_case(root)) && n.as_bytes().get(root.len()) == Some(&b'\\');
+    let inside = n.len() > root.len() + 1
+        && n.get(..root.len()).is_some_and(|h| h.eq_ignore_ascii_case(root))
+        && n.as_bytes().get(root.len()) == Some(&b'\\');
     let rel = if inside { n.get(root.len() + 1..).unwrap_or(&n).to_owned() } else { n };
     rel.replace('\\', "/")
 }
@@ -165,7 +174,13 @@ impl PdaService {
 
     /// The layout of a text (`EditorPda::Read`), computed on the CPU pool once per text, reader
     /// and inputs. `chunk` is the file's base name, `lang` the language of the texts.
-    pub async fn evaluate(&self, editor: &Editor, text: Arc<str>, chunk: &str, lang: &str) -> Result<Arc<Layout>, ReadError> {
+    pub async fn evaluate(
+        &self,
+        editor: &Editor,
+        text: Arc<str>,
+        chunk: &str,
+        lang: &str,
+    ) -> Result<Arc<Layout>, ReadError> {
         let lang = if lang.is_empty() { "rus" } else { lang };
         let reader = match self.reader(editor).await {
             Ok(r) => r,
@@ -183,7 +198,10 @@ impl PdaService {
         let rev = Rev(reader.script.rev()).mix(Rev(text_hash(&text)));
         let host = self.host.clone();
         let (c, l) = (chunk.to_owned(), lang.to_owned());
-        let value = self.layouts.fresh(&key, rev, move || evaluate(&host, &reader, &text, &c, &l).map(Arc::new)).await;
+        let value = self
+            .layouts
+            .fresh(&key, rev, move || evaluate(&host, &reader, &text, &c, &l).map(Arc::new))
+            .await;
         value.as_ref().clone()
     }
 
@@ -212,7 +230,12 @@ impl PdaService {
                 }
                 let dir = root.join("gamedata").join("configs").join("ui").join("textures_descr");
                 let mut descr: Vec<PathBuf> = std::fs::read_dir(&dir)
-                    .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml"))).collect())
+                    .map(|rd| {
+                        rd.filter_map(Result::ok)
+                            .map(|e| e.path())
+                            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml")))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 descr.sort();
                 let project_texts: Vec<String> = exec.io_pool().install(|| {
@@ -221,7 +244,12 @@ impl PdaService {
                 });
                 texts.extend(project_texts);
                 let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-                Arc::new(KnownTextures { game: files, game_sheets, extra: TextureSheets::build(&refs), project_textures: root.join("gamedata").join("textures") })
+                Arc::new(KnownTextures {
+                    game: files,
+                    game_sheets,
+                    extra: TextureSheets::build(&refs),
+                    project_textures: root.join("gamedata").join("textures"),
+                })
             })
             .await;
         Some(built.as_ref().clone())
@@ -229,7 +257,12 @@ impl PdaService {
 
     /// The textures of a layout neither the linked game nor the project has (W320); nothing
     /// when no game is linked.
-    pub async fn missing_textures(&self, editor: &Editor, session: &ProjectSession, layout: &Layout) -> Vec<String> {
+    pub async fn missing_textures(
+        &self,
+        editor: &Editor,
+        session: &ProjectSession,
+        layout: &Layout,
+    ) -> Vec<String> {
         let Some(known) = self.known_textures(editor, session).await else { return Vec::new() };
         let mut seen: Vec<String> = Vec::new();
         for it in &layout.items {
@@ -249,7 +282,12 @@ impl PdaService {
         let manifest = ManifestService::of_session(editor, &session).await?;
         project.tree.refresh().await;
         let tree = project.tree.snapshot();
-        let mut files: Vec<String> = tree.files_with_extension("pdaasset").iter().map(RelPath::to_backslash).filter(|rel| !manifest.outside_build(rel)).collect();
+        let mut files: Vec<String> = tree
+            .files_with_extension("pdaasset")
+            .iter()
+            .map(RelPath::to_backslash)
+            .filter(|rel| !manifest.outside_build(rel))
+            .collect();
         files.sort();
         Ok(files)
     }
@@ -281,12 +319,17 @@ impl PdaService {
             }
             value = project_relative(project.root(), &abs);
             if manifest.outside_build(&value) {
-                return Err(format!("{value} is left out of the build ([exclude] or tooling) - the game would never see it"));
+                return Err(format!(
+                    "{value} is left out of the build ([exclude] or tooling) - the game would never see it"
+                ));
             }
         }
         // one spelling in mod.ltx, whatever separators the caller used
         let value = value.replace('/', "\\");
-        manifest.edit(vec![Edit::optional("pda", "layout", &value)], origin).await.map_err(|e| if e.code == "io" { "mod.ltx cannot be written".to_owned() } else { e.message })?;
+        manifest
+            .edit(vec![Edit::optional("pda", "layout", &value)], origin)
+            .await
+            .map_err(|e| if e.code == "io" { "mod.ltx cannot be written".to_owned() } else { e.message })?;
         Ok(())
     }
 }
@@ -303,7 +346,9 @@ pub async fn validate_for_build(editor: &Arc<Editor>, session: &Arc<ProjectSessi
     let Ok(manifest) = ManifestService::of_session(editor, session).await else { return Vec::new() };
     let _ = manifest.sync().await;
     let snap = manifest.snapshot();
-    let Some(rel) = snap.manifest().map(|m| m.pda_layout.clone()).filter(|r| !r.is_empty()) else { return Vec::new() };
+    let Some(rel) = snap.manifest().map(|m| m.pda_layout.clone()).filter(|r| !r.is_empty()) else {
+        return Vec::new();
+    };
     let abs = session.root.join(rel.replace('/', "\\"));
     let check = abs.clone();
     let (exists, text) = editor.exec.io(move || (check.is_file(), read_text(&check))).await;
@@ -322,17 +367,34 @@ pub async fn validate_for_build(editor: &Arc<Editor>, session: &Arc<ProjectSessi
     let layout = match layout {
         Ok(l) => l,
         Err(e) => {
-            let text = if e.line > 0 { format!("{rel}:{}: {}", e.line, e.message) } else { format!("{rel}: {}", e.message) };
+            let text = if e.line > 0 {
+                format!("{rel}:{}: {}", e.line, e.message)
+            } else {
+                format!("{rel}: {}", e.message)
+            };
             return vec![line(true, text)];
         }
     };
     let mut out: Vec<Problem> = layout
         .problems
         .iter()
-        .map(|p| line(p.is_error(), format!("{rel} {} {}: {}", p.code, if p.path.is_empty() { "layout" } else { p.path.as_str() }, p.message)))
+        .map(|p| {
+            line(
+                p.is_error(),
+                format!(
+                    "{rel} {} {}: {}",
+                    p.code,
+                    if p.path.is_empty() { "layout" } else { p.path.as_str() },
+                    p.message
+                ),
+            )
+        })
         .collect();
     for t in service.missing_textures(editor, session, &layout).await {
-        out.push(line(false, format!("{rel} W320: texture '{t}' is neither in the linked game nor in the project")));
+        out.push(line(
+            false,
+            format!("{rel} W320: texture '{t}' is neither in the linked game nor in the project"),
+        ));
     }
     out
 }
@@ -348,7 +410,12 @@ impl BuildCheck for PdaCheck {
         Some("The PDA layout has errors:")
     }
 
-    fn check(&self, editor: Arc<Editor>, session: Arc<ProjectSession>, _walk: Arc<BuildWalk>) -> BoxFuture<'static, Vec<Problem>> {
+    fn check(
+        &self,
+        editor: Arc<Editor>,
+        session: Arc<ProjectSession>,
+        _walk: Arc<BuildWalk>,
+    ) -> BoxFuture<'static, Vec<Problem>> {
         Box::pin(async move { validate_for_build(&editor, &session).await })
     }
 }

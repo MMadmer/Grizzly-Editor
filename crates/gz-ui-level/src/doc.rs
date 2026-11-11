@@ -84,9 +84,19 @@ pub struct LevelDoc {
     project_rev: Rev,
 }
 
+/// Marks the close hook that takes `preview.png` as registered.
+struct PreviewOnClose;
+
 impl LevelDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>) -> Self {
+        // the Start page's picture of the project, while the scene is still up (C++
+        // `EditorProject::CapturePreview` before the clear)
+        editor.services.get_or_init(|| {
+            gz_project::ProjectHooks::of(editor)
+                .on_before_close(|ed, _session| async move { write_preview(&ed).await });
+            PreviewOnClose
+        });
         Self {
             editor: editor.clone(),
             pane: None,
@@ -163,7 +173,9 @@ impl LevelDoc {
                 Act::Panel(p, op) => {
                     match op {
                         PanelOp::Close => self.layout_mut(cx.ctx).close_panel(p),
-                        PanelOp::Toggle if self.layout_mut(cx.ctx).is_open(p) => self.layout_mut(cx.ctx).close_panel(p),
+                        PanelOp::Toggle if self.layout_mut(cx.ctx).is_open(p) => {
+                            self.layout_mut(cx.ctx).close_panel(p)
+                        }
                         _ => self.open_panel(cx.ctx, p),
                     };
                 }
@@ -217,10 +229,45 @@ impl LevelDoc {
         let dirty = svc.store.is_dirty();
         let saved = self.was_dirty && !dirty;
         self.was_dirty = dirty;
-        let due = self.preview_at.is_none_or(|(t, rev)| rev != snap.rev && t.elapsed() >= Duration::from_secs(60));
+        let due =
+            self.preview_at.is_none_or(|(t, rev)| rev != snap.rev && t.elapsed() >= Duration::from_secs(60));
         if saved || due {
             self.preview_at = Some((Instant::now(), snap.rev));
             store_preview(&self.editor);
+        }
+    }
+
+    /// The Preferences' recovery rows reach the scene's autosave, and the author's input holds
+    /// it off for the interaction delay (`EditorRecovery::Tick`).
+    fn sync_recovery(&self, ctx: &egui::Context) {
+        let Some(svc) = self.scene() else { return };
+        let settings = gz_app::EditorSettings::of(&self.editor);
+        let get = |key: &str, default: f64| settings.pref(key).unwrap_or(default);
+        let prefs = gz_scene::recovery::RecoveryPrefs {
+            enabled: get("recovery_enabled", 1.0) != 0.0,
+            interval_minutes: get("recovery_interval_minutes", 10.0) as u32,
+            interaction_delay_seconds: get("recovery_interaction_delay_seconds", 15.0) as u32,
+            retention: get("recovery_retention", 10.0) as u32,
+        };
+        {
+            let mut cur = svc.recovery.prefs.lock();
+            if *cur != prefs {
+                *cur = prefs;
+            }
+        }
+        let touched = ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key { .. }
+                        | egui::Event::PointerButton { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::MouseWheel { .. }
+                )
+            })
+        });
+        if touched {
+            svc.recovery.note_input();
         }
     }
 
@@ -248,7 +295,9 @@ impl LevelDoc {
                     svc.view.lock().choosing = None;
                 }
             }
-            (None, Some(c)) if matches!(c.purpose, Purpose::Property { target: 0, .. }) => self.chooser = None,
+            (None, Some(c)) if matches!(c.purpose, Purpose::Property { target: 0, .. }) => {
+                self.chooser = None
+            }
             _ => {}
         }
     }
@@ -269,13 +318,20 @@ impl LevelDoc {
                 let first = items.first().cloned().unwrap_or_default();
                 match &c.purpose {
                     Purpose::Property { target, key } => {
-                        if *target == details::SELECTION && let Some(svc) = &svc {
+                        if *target == details::SELECTION
+                            && let Some(svc) = &svc
+                        {
                             let mut v = svc.view.lock();
                             v.choosing = None;
                             v.chosen.clone_from(&first);
                         }
                         let mut args = Args::new();
-                        args.insert("target".into(), Value::String(if *target == details::WORLD { "world" } else { "selection" }.into()));
+                        args.insert(
+                            "target".into(),
+                            Value::String(
+                                if *target == details::WORLD { "world" } else { "selection" }.into(),
+                            ),
+                        );
                         args.insert("key".into(), Value::String(key.clone()));
                         args.insert("value".into(), Value::String(first));
                         editor.post("property_set", args);
@@ -321,7 +377,9 @@ impl LevelDoc {
             if g.viewport.contains(at) {
                 self.focused = None;
                 self.viewport_focused = true;
-            } else if let Some(s) = Slot::ALL.iter().find(|s| g.slots[s.index()].is_some_and(|r| r.contains(at))) {
+            } else if let Some(s) =
+                Slot::ALL.iter().find(|s| g.slots[s.index()].is_some_and(|r| r.contains(at)))
+            {
                 self.focused = l.front_of(*s);
                 self.viewport_focused = false;
             }
@@ -344,7 +402,15 @@ impl LevelDoc {
         }
         self.infos.insert(
             "viewport",
-            PanelInfo { open: true, visible: true, docked: true, focused: self.viewport_focused, rect: Some(px(rect, ppp)), scroll_y: 0.0, scroll_max_y: 0.0 },
+            PanelInfo {
+                open: true,
+                visible: true,
+                docked: true,
+                focused: self.viewport_focused,
+                rect: Some(px(rect, ppp)),
+                scroll_y: 0.0,
+                scroll_max_y: 0.0,
+            },
         );
     }
 
@@ -362,7 +428,14 @@ impl LevelDoc {
         for panel in &panels {
             let w = local_tab_width(&ctx, panel.label()).min(each_max);
             let tab = Rect::from_min_size(pos2(x, strip.min.y + 2.0), Vec2::new(w, STRIP - 2.0));
-            let resp = local_tab(ui, Id::unique(("gz-ui-level.tab", panel.id())), tab, panel.label(), front == Some(*panel), true);
+            let resp = local_tab(
+                ui,
+                Id::unique(("gz-ui-level.tab", panel.id())),
+                tab,
+                panel.label(),
+                front == Some(*panel),
+                true,
+            );
             if resp.clicked || resp.close || resp.menu {
                 picked = Some((*panel, resp));
             }
@@ -375,7 +448,11 @@ impl LevelDoc {
             gz_ui::menu::menu_popup(&ctx, tab_menu_id(*panel), tab, layer, |ui| {
                 gz_app::chrome::local_submenu(ui, "Move To", Icon::None, true, |ui| {
                     for to in Slot::ALL {
-                        if menu_item(ui, to.label(), MenuItem { selected: l.slot_of(*panel) == Some(to), ..MenuItem::default() }) {
+                        if menu_item(
+                            ui,
+                            to.label(),
+                            MenuItem { selected: l.slot_of(*panel) == Some(to), ..MenuItem::default() },
+                        ) {
                             moved = Some(to);
                         }
                     }
@@ -406,7 +483,15 @@ impl LevelDoc {
         ui.painter().rect_filled(body, CornerRadius::ZERO, p.base);
         for panel in &panels {
             let visible = front == Some(*panel);
-            let mut info = PanelInfo { open: true, visible, docked: true, focused: self.focused == Some(*panel), rect: None, scroll_y: 0.0, scroll_max_y: 0.0 };
+            let mut info = PanelInfo {
+                open: true,
+                visible,
+                docked: true,
+                focused: self.focused == Some(*panel),
+                rect: None,
+                scroll_y: 0.0,
+                scroll_max_y: 0.0,
+            };
             if visible {
                 info.rect = Some(px(rect, ppp));
                 let inner = body.shrink(8.0);
@@ -462,7 +547,12 @@ fn save_as(editor: &Arc<Editor>, svc: &SceneService) {
     let ed = editor.clone();
     let spawned = std::thread::Builder::new().name("gz-ui-level.save_as".into()).spawn(move || {
         let _ = std::fs::create_dir_all(&dir);
-        let picked = rfd::FileDialog::new().set_title("Save Scene As").add_filter("Level", &["level"]).set_directory(&dir).set_file_name("level.level").save_file();
+        let picked = rfd::FileDialog::new()
+            .set_title("Save Scene As")
+            .add_filter("Level", &["level"])
+            .set_directory(&dir)
+            .set_file_name("level.level")
+            .save_file();
         if let Some(file) = picked {
             let mut args = Args::new();
             args.insert("file".into(), Value::String(file.display().to_string()));
@@ -477,26 +567,36 @@ fn save_as(editor: &Arc<Editor>, svc: &SceneService) {
 /// `CapturePreview`: the viewport's own pass, no helpers, written as the project's
 /// `preview.png`; a picture of nothing keeps the last good one.
 pub fn store_preview(editor: &Arc<Editor>) {
-    let Some(root) = editor.project_root() else { return };
     let ed = editor.clone();
-    editor.exec.spawn(async move {
-        let Ok(img) = gz_ui_viewport::capture_preview(&ed).await else { return };
-        let (w, h) = (img.width as usize, img.height as usize);
-        let rgb: Vec<u8> = img.rgba.chunks_exact(4).flat_map(|c| [c[0], c[1], c[2]]).collect();
-        if w == 0 || h == 0 || gz_ui_app::cards::shows_no_scene(&rgb, w, h) {
-            return;
-        }
-        let Ok(png) = gz_app::encode_png(img.width, img.height, &img.rgba) else { return };
-        let file = root.join("preview.png");
-        let log = ed.log.clone();
-        ed.exec
-            .io(move || {
-                if let Err(e) = gz_editor::fsx::write_atomic(&file, &png) {
-                    log.warn(format!("the project's preview could not be written: {e}"));
-                }
-            })
-            .await;
-    });
+    editor.exec.spawn(async move { write_preview(&ed).await });
+}
+
+/// Takes the picture and writes it; nothing when no scene is up.
+async fn write_preview(ed: &Arc<Editor>) {
+    let Some(root) = ed.project_root() else { return };
+    let up = ed
+        .project_opt()
+        .and_then(|s| s.services.get::<gz_scene::SceneService>())
+        .is_some_and(|s| s.store.snapshot().valid);
+    if !up {
+        return;
+    }
+    let Ok(img) = gz_ui_viewport::capture_preview(ed).await else { return };
+    let (w, h) = (img.width as usize, img.height as usize);
+    let rgb: Vec<u8> = img.rgba.as_chunks::<4>().0.iter().flat_map(|c| [c[0], c[1], c[2]]).collect();
+    if w == 0 || h == 0 || gz_ui_app::cards::shows_no_scene(&rgb, w, h) {
+        return;
+    }
+    let Ok(png) = gz_app::encode_png(img.width, img.height, &img.rgba) else { return };
+    let file = root.join("preview.png");
+    let log = ed.log.clone();
+    ed.exec
+        .io(move || {
+            if let Err(e) = gz_editor::fsx::write_atomic(&file, &png) {
+                log.warn(format!("the project's preview could not be written: {e}"));
+            }
+        })
+        .await;
 }
 
 impl Document for LevelDoc {
@@ -533,6 +633,10 @@ impl Document for LevelDoc {
         self.scene().is_some_and(|s| s.store.is_dirty() && self.discarded != Some(s.store.snapshot().edit))
     }
 
+    fn dirty_elsewhere(&self) -> bool {
+        true
+    }
+
     fn padded(&self) -> bool {
         false
     }
@@ -556,10 +660,14 @@ impl Document for LevelDoc {
         self.run_pending(cx);
         self.follow_mcp_chooser();
         self.draw_dock(ui, cx);
+        if let Some(p) = self.focused.filter(|p| p.owns_keys()) {
+            cx.requests.own_keys(p.id());
+        }
         self.draw_chooser(ui);
         self.detail_objects.draw(ui, cx.editor, &mut self.chooser);
         self.sync_view();
         self.tick_preview();
+        self.sync_recovery(ui.ctx());
     }
 
     fn status(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
@@ -616,6 +724,7 @@ impl Document for LevelDoc {
     }
 
     fn inactive(&mut self, cx: &mut DocCx<'_>) {
+        self.sync_recovery(cx.ctx);
         self.run_pending(cx);
         self.ensure_pane(cx);
         if let Some(pane) = self.pane.as_mut() {
@@ -634,7 +743,11 @@ impl Document for LevelDoc {
 
     fn panel_state(&self, id: &str) -> Option<PanelInfo> {
         if id == "viewport" {
-            return Some(self.infos.get("viewport").cloned().unwrap_or(PanelInfo { open: true, docked: true, ..PanelInfo::default() }));
+            return Some(self.infos.get("viewport").cloned().unwrap_or(PanelInfo {
+                open: true,
+                docked: true,
+                ..PanelInfo::default()
+            }));
         }
         let p = PanelId::parse(id)?;
         let open = self.panel_open(p);

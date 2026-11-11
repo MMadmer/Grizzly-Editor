@@ -9,11 +9,14 @@ use std::sync::Arc;
 use egui::{Color32, CornerRadius, Rect, Sense, TextureHandle, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
 use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin};
-use gz_fmt_tex::{BumpMode, MipFilterId, TextureFlags, TextureFormat, TextureMaterial, TextureParams, TextureType, read_texture_thm, texture_tile};
+use gz_fmt_tex::{
+    BumpMode, MipFilterId, TextureFlags, TextureFormat, TextureMaterial, TextureParams, TextureType,
+    read_texture_thm, texture_tile,
+};
 use gz_store::{Apply, State, Store, StoreOptions, imbl};
 use gz_ui::grid::{Grid, color, combo, number, read_only, switch};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Toolbar, Tone, menu_item, palette, state};
+use gz_ui::{Font, Icon, Kind, MenuItem, PropFlags, PropertyGrid, Tone, Toolbar, menu_item, palette, state};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};
@@ -47,7 +50,11 @@ pub fn list_library(dirs: &EditorDirs, pool: &gz_task::Executors) -> Vec<TexItem
         files
             .into_par_iter()
             .map(|(name, path)| {
-                let params = std::fs::read(dir.join(format!("{name}.thm"))).ok().and_then(|b| read_texture_thm(&b).ok()).map(|t| t.params).unwrap_or_default();
+                let params = std::fs::read(dir.join(format!("{name}.thm")))
+                    .ok()
+                    .and_then(|b| read_texture_thm(&b).ok())
+                    .map(|t| t.params)
+                    .unwrap_or_default();
                 TexItem { name, params, picture: path }
             })
             .collect()
@@ -63,11 +70,18 @@ pub fn list_import(dirs: &EditorDirs) -> Vec<TexItem> {
         .into_iter()
         .map(|(name, path)| {
             let stem = crate::paths::strip_ext(&name).to_owned();
-            let own = std::fs::read(dirs.import.join(format!("{stem}.thm"))).ok().and_then(|b| read_texture_thm(&b).ok());
-            let game = || std::fs::read(dirs.game_textures.join(format!("{}.thm", texture_folder_name(&stem)))).ok().and_then(|b| read_texture_thm(&b).ok());
+            let own = std::fs::read(dirs.import.join(format!("{stem}.thm")))
+                .ok()
+                .and_then(|b| read_texture_thm(&b).ok());
+            let game = || {
+                std::fs::read(dirs.game_textures.join(format!("{}.thm", texture_folder_name(&stem))))
+                    .ok()
+                    .and_then(|b| read_texture_thm(&b).ok())
+            };
             let mut params = own.or_else(game).map(|t| t.params);
             if let Ok((img, alpha)) = read_picture(&path) {
-                let p = params.get_or_insert_with(|| TextureParams::for_new_texture(img.width, img.height, alpha));
+                let p = params
+                    .get_or_insert_with(|| TextureParams::for_new_texture(img.width, img.height, alpha));
                 p.width = i32::try_from(img.width).unwrap_or(i32::MAX);
                 p.height = i32::try_from(img.height).unwrap_or(i32::MAX);
                 p.flags.set(TextureFlags::HAS_ALPHA, alpha);
@@ -84,7 +98,11 @@ pub struct TexEdits {
 }
 
 pub enum TexCmd {
-    Set { name: String, params: TextureParams, gesture: String },
+    Set {
+        name: String,
+        params: TextureParams,
+        gesture: String,
+    },
     /// Every edit dropped (a revert, a save that wrote them, a new list).
     Reset,
 }
@@ -143,7 +161,12 @@ impl TexLibDoc {
         }
         let mut doc = Self {
             editor: editor.clone(),
-            store: Store::spawn("texture library", TexEdits::default(), &editor.exec, StoreOptions::default()),
+            store: Store::spawn(
+                "texture library",
+                TexEdits::default(),
+                &editor.exec,
+                StoreOptions::default(),
+            ),
             dirs,
             import: None,
             list: LibraryList::default(),
@@ -163,7 +186,8 @@ impl TexLibDoc {
     pub fn start_import(&mut self) {
         let dirs = self.dirs.clone();
         let exec = self.editor.exec.clone();
-        self.import = Some(Pending::spawn(&self.editor.exec, async move { exec.io(move || list_import(&dirs)).await }));
+        self.import =
+            Some(Pending::spawn(&self.editor.exec, async move { exec.io(move || list_import(&dirs)).await }));
         self.selected.clear();
         self.preview = None;
         self.list.search.clear();
@@ -243,7 +267,10 @@ impl TexLibDoc {
                         let bytes = std::fs::read(&path).ok()?;
                         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
                         let tile = texture_tile(&bytes, ext.as_deref(), 512).ok()?;
-                        Some(egui::ColorImage::from_rgba_unmultiplied([tile.image.width as usize, tile.image.height as usize], &tile.image.rgba))
+                        Some(egui::ColorImage::from_rgba_unmultiplied(
+                            [tile.image.width as usize, tile.image.height as usize],
+                            &tile.image.rgba,
+                        ))
                     })
                     .await
                 });
@@ -262,89 +289,102 @@ impl TexLibDoc {
             return Ok(());
         }
         let edits = self.store.snapshot().edits.clone();
-        let import: Option<Vec<TexItem>> = self.import.as_ref().and_then(Pending::get).map(|i| i.as_ref().clone());
+        let import: Option<Vec<TexItem>> =
+            self.import.as_ref().and_then(Pending::get).map(|i| i.as_ref().clone());
         let library = self.items().map(|i| i.as_ref().clone()).unwrap_or_default();
         let (dirs, saving, store) = (self.dirs.clone(), self.saving.clone(), self.store.clone());
         let editor = self.editor.clone();
         let importing = import.is_some();
         saving.store(true, std::sync::atomic::Ordering::Release);
         let title = if importing { "Importing New Textures" } else { "Saving the Texture Library" };
-        let started = self.editor.jobs.start("texture_library", Some("libraries"), title, move |ctx| async move {
-            let exec = ctx.exec.clone();
-            let c = ctx.clone();
-            let result = exec
-                .io(move || -> Result<(usize, Vec<String>), String> {
-                    let age = super::texsync::now();
-                    let mut failed = Vec::new();
-                    let mut done = 0usize;
-                    match import {
-                        Some(items) => {
-                            for (i, item) in items.iter().enumerate() {
-                                c.check().map_err(|_| "Stopped.".to_owned())?;
-                                c.stage(format!("Importing {}", item.name));
-                                c.progress(i, items.len());
-                                let params = edits.get(&item.name).cloned().unwrap_or_else(|| item.params.clone());
-                                match import_picture(&dirs, &item.name).and_then(|name| sync_texture(&dirs, &name, Some(&params), true, true, age)) {
-                                    Ok(s) => {
-                                        done += 1;
-                                        if s.low_gloss {
-                                            failed.push(format!("Invalid gloss mask '{}'.", item.name));
+        let started =
+            self.editor.jobs.start("texture_library", Some("libraries"), title, move |ctx| async move {
+                let exec = ctx.exec.clone();
+                let c = ctx.clone();
+                let result = exec
+                    .io(move || -> Result<(usize, Vec<String>), String> {
+                        let age = super::texsync::now();
+                        let mut failed = Vec::new();
+                        let mut done = 0usize;
+                        match import {
+                            Some(items) => {
+                                for (i, item) in items.iter().enumerate() {
+                                    c.check().map_err(|_| "Stopped.".to_owned())?;
+                                    c.stage(format!("Importing {}", item.name));
+                                    c.progress(i, items.len());
+                                    let params =
+                                        edits.get(&item.name).cloned().unwrap_or_else(|| item.params.clone());
+                                    match import_picture(&dirs, &item.name).and_then(|name| {
+                                        sync_texture(&dirs, &name, Some(&params), true, true, age)
+                                    }) {
+                                        Ok(s) => {
+                                            done += 1;
+                                            if s.low_gloss {
+                                                failed.push(format!("Invalid gloss mask '{}'.", item.name));
+                                            }
                                         }
+                                        Err(e) => failed.push(e),
                                     }
-                                    Err(e) => failed.push(e),
+                                }
+                            }
+                            None => {
+                                let total = edits.len();
+                                for (i, (name, params)) in edits.iter().enumerate() {
+                                    c.check().map_err(|_| "Stopped.".to_owned())?;
+                                    c.stage(format!("Building {name}"));
+                                    c.progress(i, total);
+                                    if !library.iter().any(|t| t.name == *name) {
+                                        continue;
+                                    }
+                                    match sync_texture(&dirs, name, Some(params), true, true, age) {
+                                        Ok(s) => {
+                                            done += 1;
+                                            if s.low_gloss {
+                                                failed.push(format!("Invalid gloss mask '{name}'."));
+                                            }
+                                        }
+                                        Err(e) => failed.push(e),
+                                    }
                                 }
                             }
                         }
-                        None => {
-                            let total = edits.len();
-                            for (i, (name, params)) in edits.iter().enumerate() {
-                                c.check().map_err(|_| "Stopped.".to_owned())?;
-                                c.stage(format!("Building {name}"));
-                                c.progress(i, total);
-                                if !library.iter().any(|t| t.name == *name) {
-                                    continue;
-                                }
-                                match sync_texture(&dirs, name, Some(params), true, true, age) {
-                                    Ok(s) => {
-                                        done += 1;
-                                        if s.low_gloss {
-                                            failed.push(format!("Invalid gloss mask '{name}'."));
-                                        }
+                        Ok((done, failed))
+                    })
+                    .await;
+                saving.store(false, std::sync::atomic::Ordering::Release);
+                LibraryLists::of(&editor).textures_rev.bump();
+                match result {
+                    Ok((done, failed)) => {
+                        for f in &failed {
+                            editor.log.error(f.clone());
+                        }
+                        let _ = store.send(TexCmd::Reset, Origin::Ui).await;
+                        if importing {
+                            // the new textures are in the library now: the library they stood in for comes back
+                            if let Ok(q) = gz_app::UiQueue::of(&editor) {
+                                q.post(|shell, _ctx| {
+                                    if let Some(doc) = shell
+                                        .document_mut(KIND)
+                                        .and_then(|d| d.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<TexLibDoc>())
+                                    {
+                                        doc.back_to_library();
                                     }
-                                    Err(e) => failed.push(e),
-                                }
+                                });
                             }
                         }
-                    }
-                    Ok((done, failed))
-                })
-                .await;
-            saving.store(false, std::sync::atomic::Ordering::Release);
-            LibraryLists::of(&editor).textures_rev.bump();
-            match result {
-                Ok((done, failed)) => {
-                    for f in &failed {
-                        editor.log.error(f.clone());
-                    }
-                    let _ = store.send(TexCmd::Reset, Origin::Ui).await;
-                    if importing {
-                        // the new textures are in the library now: the library they stood in for comes back
-                        if let Ok(q) = gz_app::UiQueue::of(&editor) {
-                            q.post(|shell, _ctx| {
-                                if let Some(doc) = shell.document_mut(KIND).and_then(|d| d.as_any_mut()).and_then(|a| a.downcast_mut::<TexLibDoc>()) {
-                                    doc.back_to_library();
-                                }
-                            });
+                        if !failed.is_empty() {
+                            editor.notices.error(format!(
+                                "{} of the textures could not be built: {}",
+                                failed.len(),
+                                failed.join(" ")
+                            ));
                         }
+                        Ok(json!({ "written": done, "failed": failed }))
                     }
-                    if !failed.is_empty() {
-                        editor.notices.error(format!("{} of the textures could not be built: {}", failed.len(), failed.join(" ")));
-                    }
-                    Ok(json!({ "written": done, "failed": failed }))
+                    Err(e) => Err(gz_task::JobError::new(e)),
                 }
-                Err(e) => Err(gz_task::JobError::new(e)),
-            }
-        });
+            });
         if let Err(busy) = started {
             self.saving.store(false, std::sync::atomic::Ordering::Release);
             return Err(format!("The save could not be started: {busy}."));
@@ -358,16 +398,30 @@ impl TexLibDoc {
         let params = self.params_of(item);
         let alpha = params.flags.contains(TextureFlags::HAS_ALPHA);
         let fmt = params.fmt.label().unwrap_or("unknown");
-        let facts = format!("{} x {} \u{b7} {fmt}{}", params.width, params.height, if alpha { " \u{b7} alpha" } else { "" });
+        let facts = format!(
+            "{} x {} \u{b7} {fmt}{}",
+            params.width,
+            params.height,
+            if alpha { " \u{b7} alpha" } else { "" }
+        );
         let src = item.picture.to_string_lossy().into_owned();
-        local_heading(ui, &crate::paths::label_of(&item.name), Clip::End, &[(&src, Clip::Start), (&facts, Clip::End)]);
+        local_heading(
+            ui,
+            &crate::paths::label_of(&item.name),
+            Clip::End,
+            &[(&src, Clip::Start), (&facts, Clip::End)],
+        );
         ui.add_space(8.0);
         let Some(pv) = self.preview.as_mut().filter(|v| v.name == item.name) else { return };
         if pv.texture.is_none()
             && let Some(img) = pv.pending.get()
             && let Some(img) = img.as_ref()
         {
-            pv.texture = Some(ctx.load_texture(format!("gz-ui-previews.texlib.{}", item.name), img.clone(), egui::TextureOptions::LINEAR));
+            pv.texture = Some(ctx.load_texture(
+                format!("gz-ui-previews.texlib.{}", item.name),
+                img.clone(),
+                egui::TextureOptions::LINEAR,
+            ));
         }
         let Some(tex) = &pv.texture else {
             if pv.pending.get().is_some() {
@@ -390,8 +444,18 @@ impl TexLibDoc {
         if alpha {
             local_checker(ui.painter(), &p, rect.min, rect);
         }
-        ui.painter().image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        ui.painter().rect_stroke(rect, CornerRadius::ZERO, egui::Stroke::new(1.0, p.border_subtle), egui::StrokeKind::Outside);
+        ui.painter().image(
+            tex.id(),
+            rect,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::ZERO,
+            egui::Stroke::new(1.0, p.border_subtle),
+            egui::StrokeKind::Outside,
+        );
     }
 
     /// `STextureParams::FillProp`: the rows a description has, by its type.
@@ -401,22 +465,50 @@ impl TexLibDoc {
         let ro = if self.read_only || self.saving() { PropFlags::READ_ONLY } else { PropFlags::NONE };
         let mut gesture = String::new();
         PropertyGrid::new("texture_library").show(ui, |g| {
-            token(g, "Type", "What the game makes of the texture", ro, &mut p.ty.0, &TYPE_TOKENS, &mut gesture);
+            token(
+                g,
+                "Type",
+                "What the game makes of the texture",
+                ro,
+                &mut p.ty.0,
+                &TYPE_TOKENS,
+                &mut gesture,
+            );
             if p.ty != before.ty {
                 p.apply_type_defaults();
             }
             g.section("Source", true, None, |g| {
-                g.row("Width", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &p.width.to_string(), Clip::End));
-                g.row("Height", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &p.height.to_string(), Clip::End));
+                g.row("Width", "", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, &p.width.to_string(), Clip::End)
+                });
+                g.row("Height", "", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, &p.height.to_string(), Clip::End)
+                });
                 let alpha = if p.flags.contains(TextureFlags::HAS_ALPHA) { "present" } else { "absent" };
                 g.row("Alpha", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, alpha, Clip::End));
             });
             match p.ty {
                 TextureType::IMAGE | TextureType::CUBE_MAP => {
-                    token(g, "Format", "How the game texture is stored", ro, &mut p.fmt.0, &format_tokens(), &mut gesture);
+                    token(
+                        g,
+                        "Format",
+                        "How the game texture is stored",
+                        ro,
+                        &mut p.fmt.0,
+                        &format_tokens(),
+                        &mut gesture,
+                    );
                     g.section("MipMaps", true, None, |g| {
                         flag(g, "Enabled", ro, &mut p.flags, TextureFlags::GENERATE_MIP_MAPS, &mut gesture);
-                        token(g, "Filter", "How the smaller levels are made", ro, &mut p.mip_filter.0, &mip_tokens(), &mut gesture);
+                        token(
+                            g,
+                            "Filter",
+                            "How the smaller levels are made",
+                            ro,
+                            &mut p.mip_filter.0,
+                            &mip_tokens(),
+                            &mut gesture,
+                        );
                     });
                     g.section("Bump", true, None, |g| {
                         let was = p.bump_mode;
@@ -425,14 +517,36 @@ impl TexLibDoc {
                             p.apply_type_defaults();
                         }
                         if p.bump_mode == BumpMode::USE || p.bump_mode == BumpMode::USE_PARALLAX {
-                            pick(g, "Texture", "The bump map it is lit with", ro, &mut p.bump_name, names, &mut gesture);
+                            pick(
+                                g,
+                                "Texture",
+                                "The bump map it is lit with",
+                                ro,
+                                &mut p.bump_name,
+                                names,
+                                &mut gesture,
+                            );
                         }
                     });
                     details(g, ro, &mut p, names, &mut gesture);
                     g.section("Flags", true, None, |g| {
                         flag(g, "Dither", ro, &mut p.flags, TextureFlags::DITHER_COLOR, &mut gesture);
-                        flag(g, "Dither Each MIP", ro, &mut p.flags, TextureFlags::DITHER_EACH_MIP_LEVEL, &mut gesture);
-                        flag(g, "Implicit Lighted", ro, &mut p.flags, TextureFlags::IMPLICIT_LIGHTED, &mut gesture);
+                        flag(
+                            g,
+                            "Dither Each MIP",
+                            ro,
+                            &mut p.flags,
+                            TextureFlags::DITHER_EACH_MIP_LEVEL,
+                            &mut gesture,
+                        );
+                        flag(
+                            g,
+                            "Implicit Lighted",
+                            ro,
+                            &mut p.flags,
+                            TextureFlags::IMPLICIT_LIGHTED,
+                            &mut gesture,
+                        );
                     });
                     g.section("Fade", true, None, |g| {
                         flag(g, "Enable Color", ro, &mut p.flags, TextureFlags::FADE_TO_COLOR, &mut gesture);
@@ -453,31 +567,71 @@ impl TexLibDoc {
                 }
                 TextureType::BUMP_MAP => {
                     g.section("Bump", true, None, |g| {
-                        pick(g, "Special NormalMap", "A normal map of its own, 32 bit, of the same size", ro, &mut p.ext_normal_map_name, names, &mut gesture);
+                        pick(
+                            g,
+                            "Special NormalMap",
+                            "A normal map of its own, 32 bit, of the same size",
+                            ro,
+                            &mut p.ext_normal_map_name,
+                            names,
+                            &mut gesture,
+                        );
                         let mut h = p.bump_virtual_height;
                         real(g, "Virtual Height", ro, &mut h, 0.001, "m", "bump_height", &mut gesture);
                         p.bump_virtual_height = h.clamp(0.0, 0.1);
                     });
                 }
                 TextureType::NORMAL_MAP => {
-                    token(g, "Format", "How the game texture is stored", PropFlags::READ_ONLY, &mut p.fmt.0, &format_tokens(), &mut gesture);
+                    token(
+                        g,
+                        "Format",
+                        "How the game texture is stored",
+                        PropFlags::READ_ONLY,
+                        &mut p.fmt.0,
+                        &format_tokens(),
+                        &mut gesture,
+                    );
                     g.section("MipMaps", true, None, |g| {
                         flag(g, "Enabled", ro, &mut p.flags, TextureFlags::GENERATE_MIP_MAPS, &mut gesture);
-                        token(g, "Filter", "How the smaller levels are made", ro, &mut p.mip_filter.0, &mip_tokens(), &mut gesture);
+                        token(
+                            g,
+                            "Filter",
+                            "How the smaller levels are made",
+                            ro,
+                            &mut p.mip_filter.0,
+                            &mip_tokens(),
+                            &mut gesture,
+                        );
                     });
                 }
                 _ => {
-                    token(g, "Format", "How the game texture is stored", PropFlags::READ_ONLY, &mut p.fmt.0, &format_tokens(), &mut gesture);
+                    token(
+                        g,
+                        "Format",
+                        "How the game texture is stored",
+                        PropFlags::READ_ONLY,
+                        &mut p.fmt.0,
+                        &format_tokens(),
+                        &mut gesture,
+                    );
                     details(g, ro, &mut p, names, &mut gesture);
                     g.section("Flags", true, None, |g| {
-                        flag(g, "Implicit Lighted", PropFlags::READ_ONLY, &mut p.flags, TextureFlags::IMPLICIT_LIGHTED, &mut gesture);
+                        flag(
+                            g,
+                            "Implicit Lighted",
+                            PropFlags::READ_ONLY,
+                            &mut p.flags,
+                            TextureFlags::IMPLICIT_LIGHTED,
+                            &mut gesture,
+                        );
                     });
                 }
             }
         });
         if p != before && ro == PropFlags::NONE {
             let gesture = format!("{}:{gesture}", item.name);
-            self.store.post(TexCmd::Set { name: item.name.clone(), params: p, gesture }, self.editor.ui_origin());
+            self.store
+                .post(TexCmd::Set { name: item.name.clone(), params: p, gesture }, self.editor.ui_origin());
         }
     }
 
@@ -501,7 +655,12 @@ impl TexLibDoc {
             out.insert("height".into(), json!(p.height));
             out.insert("alpha".into(), json!(p.flags.contains(TextureFlags::HAS_ALPHA)));
             out.insert("format".into(), json!(p.fmt.label().unwrap_or("")));
-            let preview = self.preview.as_ref().filter(|v| v.name == item.name).and_then(|v| v.pending.get()).is_some_and(|i| i.is_some());
+            let preview = self
+                .preview
+                .as_ref()
+                .filter(|v| v.name == item.name)
+                .and_then(|v| v.pending.get())
+                .is_some_and(|i| i.is_some());
             out.insert("preview".into(), json!(preview));
         }
         out
@@ -513,14 +672,21 @@ impl TexLibDoc {
     }
 
     /// Applies `search=` and `select` against the list `items` (read by the command).
-    pub fn mcp_with(&mut self, action: &str, args: &Args, items: &[TexItem]) -> Result<Map<String, Value>, String> {
+    pub fn mcp_with(
+        &mut self,
+        action: &str,
+        args: &Args,
+        items: &[TexItem],
+    ) -> Result<Map<String, Value>, String> {
         if let Some(s) = args.str("search") {
             self.list.search = s.to_owned();
         }
         if action == "select" {
             let item = args.str("item").unwrap_or_default();
             let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
-            let Some(at) = find(&keys, item) else { return Err(format!("no texture is named or matches '{item}'")) };
+            let Some(at) = find(&keys, item) else {
+                return Err(format!("no texture is named or matches '{item}'"));
+            };
             let picked = items.get(at).cloned();
             self.select(picked.as_ref());
         }
@@ -528,7 +694,8 @@ impl TexLibDoc {
     }
 }
 
-const TYPE_TOKENS: [(u32, &str); 5] = [(0, "2D Texture"), (1, "Cube Map"), (2, "Bump Map"), (3, "Normal Map"), (4, "Terrain")];
+const TYPE_TOKENS: [(u32, &str); 5] =
+    [(0, "2D Texture"), (1, "Cube Map"), (2, "Bump Map"), (3, "Normal Map"), (4, "Terrain")];
 const BUMP_TOKENS: [(u32, &str); 3] = [(1, "None"), (2, "Use"), (3, "Use parallax")];
 
 fn format_tokens() -> Vec<(u32, &'static str)> {
@@ -544,7 +711,15 @@ fn material_tokens() -> Vec<(u32, &'static str)> {
 }
 
 /// A row picking one of a token list; a value the list lacks is shown by its number.
-fn token(g: &mut Grid<'_>, label: &str, help: &str, flags: PropFlags, value: &mut u32, tokens: &[(u32, &str)], gesture: &mut String) {
+fn token(
+    g: &mut Grid<'_>,
+    label: &str,
+    help: &str,
+    flags: PropFlags,
+    value: &mut u32,
+    tokens: &[(u32, &str)],
+    gesture: &mut String,
+) {
     g.row(label, help, flags, 0, |ui| {
         let unknown = format!("{value}");
         let mut names: Vec<&str> = tokens.iter().map(|(_, n)| *n).collect();
@@ -563,7 +738,14 @@ fn token(g: &mut Grid<'_>, label: &str, help: &str, flags: PropFlags, value: &mu
     });
 }
 
-fn flag(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut TextureFlags, bit: TextureFlags, gesture: &mut String) {
+fn flag(
+    g: &mut Grid<'_>,
+    label: &str,
+    flags: PropFlags,
+    value: &mut TextureFlags,
+    bit: TextureFlags,
+    gesture: &mut String,
+) {
     g.row(label, "", flags | PropFlags::INLINE, 0, |ui| {
         let mut on = value.contains(bit);
         if flags.contains(PropFlags::READ_ONLY) {
@@ -576,7 +758,16 @@ fn flag(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut TextureFlag
 }
 
 #[allow(clippy::too_many_arguments)]
-fn whole(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut i32, lo: i32, hi: i32, key: &str, gesture: &mut String) {
+fn whole(
+    g: &mut Grid<'_>,
+    label: &str,
+    flags: PropFlags,
+    value: &mut i32,
+    lo: i32,
+    hi: i32,
+    key: &str,
+    gesture: &mut String,
+) {
     g.row(label, "", flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
             read_only(ui, &value.to_string(), Clip::End);
@@ -592,7 +783,16 @@ fn whole(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut i32, lo: i
 }
 
 #[allow(clippy::too_many_arguments)]
-fn real(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut f32, speed: f32, unit: &str, key: &str, gesture: &mut String) {
+fn real(
+    g: &mut Grid<'_>,
+    label: &str,
+    flags: PropFlags,
+    value: &mut f32,
+    speed: f32,
+    unit: &str,
+    key: &str,
+    gesture: &mut String,
+) {
     g.row(label, "", flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
             read_only(ui, &format!("{value}"), Clip::End);
@@ -610,7 +810,8 @@ fn real(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut f32, speed:
 fn argb(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut u32, key: &str, gesture: &mut String) {
     g.row(label, "", flags, 0, |ui| {
         let v = *value;
-        let mut c = Color32::from_rgba_unmultiplied((v >> 16) as u8, (v >> 8) as u8, v as u8, (v >> 24) as u8);
+        let mut c =
+            Color32::from_rgba_unmultiplied((v >> 16) as u8, (v >> 8) as u8, v as u8, (v >> 24) as u8);
         if flags.contains(PropFlags::READ_ONLY) {
             read_only(ui, &gz_ui::grid::color_hex(c), Clip::End);
         } else if color(ui, &mut c).changed() {
@@ -622,7 +823,15 @@ fn argb(g: &mut Grid<'_>, label: &str, flags: PropFlags, value: &mut u32, key: &
 }
 
 /// A texture of the library picked from its list, or none.
-fn pick(g: &mut Grid<'_>, label: &str, help: &str, flags: PropFlags, value: &mut gz_editor::SmolStr, names: &[&str], gesture: &mut String) {
+fn pick(
+    g: &mut Grid<'_>,
+    label: &str,
+    help: &str,
+    flags: PropFlags,
+    value: &mut gz_editor::SmolStr,
+    names: &[&str],
+    gesture: &mut String,
+) {
     g.row(label, help, flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
             read_only(ui, if value.is_empty() { "None" } else { value }, Clip::Start);
@@ -645,7 +854,15 @@ fn details(g: &mut Grid<'_>, ro: PropFlags, p: &mut TextureParams, names: &[&str
         p.detail_scale = s.clamp(0.1, 10000.0);
     });
     g.section("Material", true, None, |g| {
-        token(g, "Base", "The lighting model the game blends from", ro, &mut p.material.0, &material_tokens(), gesture);
+        token(
+            g,
+            "Base",
+            "The lighting model the game blends from",
+            ro,
+            &mut p.material.0,
+            &material_tokens(),
+            gesture,
+        );
         let mut w = p.material_weight;
         real(g, "Weight", ro, &mut w, 0.01, "", "material_weight", gesture);
         p.material_weight = w;
@@ -684,7 +901,11 @@ impl Document for TexLibDoc {
         self.import_mode().then(|| "import".to_owned())
     }
     fn tooltip(&self) -> Option<String> {
-        Some(if self.import_mode() { "Textures found in the import folder".to_owned() } else { "The texture descriptions of the editor's library".to_owned() })
+        Some(if self.import_mode() {
+            "Textures found in the import folder".to_owned()
+        } else {
+            "The texture descriptions of the editor's library".to_owned()
+        })
     }
     fn dirty(&self) -> bool {
         self.dirty_now()
@@ -697,7 +918,11 @@ impl Document for TexLibDoc {
         let dirty = self.dirty_now();
         let import = self.import_mode();
         let on = !self.read_only && !self.saving() && dirty;
-        let tip = if import { "Import the new textures into the library and build their game textures" } else { "Save the changed descriptions and rebuild their game textures" };
+        let tip = if import {
+            "Import the new textures into the library and build their game textures"
+        } else {
+            "Save the changed descriptions and rebuild their game textures"
+        };
         let why = if self.read_only {
             "The texture folder cannot be written"
         } else if self.saving() {
@@ -708,10 +933,18 @@ impl Document for TexLibDoc {
             "No unsaved changes"
         };
         tb.group(1);
-        if tb.action("save", if import { Icon::Plus } else { Icon::Save }, if import { "Import" } else { "Save" }, if on { tip } else { why }, on, false, Kind::Ghost)
-            && let Err(e) = self.queue_save()
+        if tb.action(
+            "save",
+            if import { Icon::Plus } else { Icon::Save },
+            if import { "Import" } else { "Save" },
+            if on { tip } else { why },
+            on,
+            false,
+            Kind::Ghost,
+        ) && let Err(e) = self.queue_save()
         {
-            let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+            let asker =
+                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
             if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Save failed", &e) {
                 self.editor.log.plain(line);
             }
@@ -719,15 +952,23 @@ impl Document for TexLibDoc {
         if !import {
             tb.group(0);
             let filter = &mut self.filter;
-            tb.menu("types", Icon::Filter, "Types", "The kinds of texture the list shows", Some("texture_library_types"), true, |ui| {
-                for (i, name) in TYPE_NAMES.iter().enumerate() {
-                    if let Some(f) = filter.get_mut(i)
-                        && menu_item(ui, name, MenuItem { selected: *f, ..MenuItem::default() })
-                    {
-                        *f = !*f;
+            tb.menu(
+                "types",
+                Icon::Filter,
+                "Types",
+                "The kinds of texture the list shows",
+                Some("texture_library_types"),
+                true,
+                |ui| {
+                    for (i, name) in TYPE_NAMES.iter().enumerate() {
+                        if let Some(f) = filter.get_mut(i)
+                            && menu_item(ui, name, MenuItem { selected: *f, ..MenuItem::default() })
+                        {
+                            *f = !*f;
+                        }
                     }
-                }
-            });
+                },
+            );
         }
         tb.group(2);
         if self.read_only {
@@ -742,9 +983,13 @@ impl Document for TexLibDoc {
         if let Some(found) = self.import.as_ref().and_then(Pending::get)
             && found.is_empty()
         {
-            let text_ = format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import));
-            let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
-            if let Some(line) = gz_ui::dialog::notice(ui.ctx(), asker, Tone::Info, "Check New Textures", &text_) {
+            let text_ =
+                format!("Nothing in {} is new to the library.", folder_text(&self.editor, &self.dirs.import));
+            let asker =
+                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+            if let Some(line) =
+                gz_ui::dialog::notice(ui.ctx(), asker, Tone::Info, "Check New Textures", &text_)
+            {
                 self.editor.log.plain(line);
             }
             self.back_to_library();
@@ -776,12 +1021,22 @@ impl Document for TexLibDoc {
         } else if import {
             Empty { title: "No new textures", text: &where_, action: None }
         } else if none {
-            Empty { title: "No textures", text: &where_, action: (!self.read_only).then_some("Check New Textures") }
+            Empty {
+                title: "No textures",
+                text: &where_,
+                action: (!self.read_only).then_some("Check New Textures"),
+            }
         } else {
-            Empty { title: "No textures of these kinds", text: "The Types filter hides every texture in the library.", action: None }
+            Empty {
+                title: "No textures of these kinds",
+                text: "The Types filter hides every texture in the library.",
+                action: None,
+            }
         };
         let selected = self.selected.clone();
-        let out = pane(ui, list_r, "texture_library.list.pane", false, false, |ui| self.list.draw(ui, KIND, &keys, &rows, &selected, &empty));
+        let out = pane(ui, list_r, "texture_library.list.pane", false, false, |ui| {
+            self.list.draw(ui, KIND, &keys, &rows, &selected, &empty)
+        });
         if out.acted {
             // Check New Textures turns this tab into New Textures
             self.start_import();
@@ -794,14 +1049,26 @@ impl Document for TexLibDoc {
         pane(ui, preview_r, "texture_library.preview", true, false, |ui| match &current {
             Some(item) => self.draw_preview(ui, item),
             None => {
-                state::empty_state(ui, Icon::FileTexture, "No texture selected", "Pick a texture in the list to see its description.", None);
+                state::empty_state(
+                    ui,
+                    Icon::FileTexture,
+                    "No texture selected",
+                    "Pick a texture in the list to see its description.",
+                    None,
+                );
             }
         });
         let names: Vec<&str> = if import { Vec::new() } else { keys.clone() };
         pane(ui, details_r, "texture_library.details", false, true, |ui| match &current {
             Some(item) => self.draw_properties(ui, item, &names),
             None => {
-                state::empty_state(ui, Icon::Settings, "No properties", "Pick a texture to edit its description.", None);
+                state::empty_state(
+                    ui,
+                    Icon::Settings,
+                    "No properties",
+                    "Pick a texture to edit its description.",
+                    None,
+                );
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());

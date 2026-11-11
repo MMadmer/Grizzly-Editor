@@ -80,11 +80,17 @@ fn push_tri(out: &mut Vec<LineVertex>, m: &Mat4, a: Vec3, b: Vec3, c: Vec3, col:
 }
 
 fn box_corner(i: usize) -> Vec3 {
-    Vec3::new(if i & 1 == 0 { -0.5 } else { 0.5 }, if i & 2 == 0 { -0.5 } else { 0.5 }, if i & 4 == 0 { -0.5 } else { 0.5 })
+    Vec3::new(
+        if i & 1 == 0 { -0.5 } else { 0.5 },
+        if i & 2 == 0 { -0.5 } else { 0.5 },
+        if i & 4 == 0 { -0.5 } else { 0.5 },
+    )
 }
 
-const BOX_EDGES: [(usize, usize); 12] = [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
-const BOX_FACES: [[usize; 4]; 6] = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+const BOX_EDGES: [(usize, usize); 12] =
+    [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
+const BOX_FACES: [[usize; 4]; 6] =
+    [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
 
 /// Every shape and line of `helpers`, transformed into the world.
 pub(crate) fn tessellate(helpers: &Helpers, out: &mut HelperGeometry) {
@@ -94,7 +100,11 @@ pub(crate) fn tessellate(helpers: &Helpers, out: &mut HelperGeometry) {
         dst.push(LineVertex::new(l.b, l.color));
     }
     for s in &helpers.shapes {
-        let (lines, tris) = if s.depth_tested { (&mut out.lines, &mut out.tris) } else { (&mut out.lines_overlay, &mut out.tris_overlay) };
+        let (lines, tris) = if s.depth_tested {
+            (&mut out.lines, &mut out.tris)
+        } else {
+            (&mut out.lines_overlay, &mut out.tris_overlay)
+        };
         if let Some(c) = s.wire {
             shape_lines(s, c, lines);
         }
@@ -144,7 +154,12 @@ fn shape_lines(s: &Shape, c: Color, out: &mut Vec<LineVertex>) {
             }
         }
         ShapeKind::Plane => {
-            let p = [Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, 0.5), Vec3::new(-0.5, 0.0, 0.5)];
+            let p = [
+                Vec3::new(-0.5, 0.0, -0.5),
+                Vec3::new(0.5, 0.0, -0.5),
+                Vec3::new(0.5, 0.0, 0.5),
+                Vec3::new(-0.5, 0.0, 0.5),
+            ];
             for i in 0..4 {
                 push_line(out, m, p[i], p[(i + 1) % 4], c);
             }
@@ -155,7 +170,12 @@ fn shape_lines(s: &Shape, c: Color, out: &mut Vec<LineVertex>) {
                 push_line(out, m, a, -a, c);
             }
             if rot45 {
-                let r = Mat4::from_euler(glam::EulerRot::YXZ, std::f32::consts::FRAC_PI_4, std::f32::consts::FRAC_PI_4, std::f32::consts::FRAC_PI_4);
+                let r = Mat4::from_euler(
+                    glam::EulerRot::YXZ,
+                    std::f32::consts::FRAC_PI_4,
+                    std::f32::consts::FRAC_PI_4,
+                    std::f32::consts::FRAC_PI_4,
+                );
                 for a in arms {
                     let d = r.transform_vector3(a);
                     push_line(out, m, d, -d, c);
@@ -188,8 +208,10 @@ const ROMBOID: [Vec3; 6] = [
     Vec3::new(-1.0, 0.0, 0.0),
     Vec3::new(1.0, 0.0, 0.0),
 ];
-const ROMBOID_EDGES: [(usize, usize); 12] = [(0, 2), (2, 5), (0, 5), (3, 5), (3, 0), (4, 3), (4, 0), (4, 2), (1, 2), (1, 5), (1, 3), (1, 4)];
-const ROMBOID_TRIS: [[usize; 3]; 8] = [[2, 4, 0], [4, 3, 0], [3, 5, 0], [5, 2, 0], [4, 2, 1], [2, 5, 1], [5, 3, 1], [3, 4, 1]];
+const ROMBOID_EDGES: [(usize, usize); 12] =
+    [(0, 2), (2, 5), (0, 5), (3, 5), (3, 0), (4, 3), (4, 0), (4, 2), (1, 2), (1, 5), (1, 3), (1, 4)];
+const ROMBOID_TRIS: [[usize; 3]; 8] =
+    [[2, 4, 0], [4, 3, 0], [3, 5, 0], [5, 2, 0], [4, 2, 1], [2, 5, 1], [5, 3, 1], [3, 4, 1]];
 
 fn shape_tris(s: &Shape, c: Color, out: &mut Vec<LineVertex>) {
     let m = &s.transform;
@@ -237,7 +259,12 @@ fn shape_tris(s: &Shape, c: Color, out: &mut Vec<LineVertex>) {
             }
         }
         ShapeKind::Plane => {
-            let p = [Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, -0.5), Vec3::new(0.5, 0.0, 0.5), Vec3::new(-0.5, 0.0, 0.5)];
+            let p = [
+                Vec3::new(-0.5, 0.0, -0.5),
+                Vec3::new(0.5, 0.0, -0.5),
+                Vec3::new(0.5, 0.0, 0.5),
+                Vec3::new(-0.5, 0.0, 0.5),
+            ];
             push_tri(out, m, p[0], p[1], p[2], c);
             push_tri(out, m, p[0], p[2], p[3], c);
         }
@@ -285,6 +312,11 @@ mod tests {
         assert_eq!(g.lines_overlay.len(), 3 * CIRCLE * 2 + 2);
         assert!(g.tris_overlay.is_empty());
         // the sphere's circles lie on its radius
-        assert!(g.lines_overlay.iter().take(6).all(|v| (Vec3::from_array(v.position).length() - 2.0).abs() < 1e-5));
+        assert!(
+            g.lines_overlay
+                .iter()
+                .take(6)
+                .all(|v| (Vec3::from_array(v.position).length() - 2.0).abs() < 1e-5)
+        );
     }
 }

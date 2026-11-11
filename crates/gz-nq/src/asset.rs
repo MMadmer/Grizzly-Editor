@@ -322,7 +322,10 @@ impl Graph {
     /// Edges arriving at `id`, over every pin of every node.
     #[must_use]
     pub fn in_degree(&self, id: &str) -> usize {
-        self.nodes.iter().map(|n| n.out.iter().map(|p| p.targets.iter().filter(|t| *t == id).count()).sum::<usize>()).sum()
+        self.nodes
+            .iter()
+            .map(|n| n.out.iter().map(|p| p.targets.iter().filter(|t| *t == id).count()).sum::<usize>())
+            .sum()
     }
 
     /// The nodes reachable from the triggers, or from `from`, by index.
@@ -703,7 +706,10 @@ pub fn node_from_value(catalog: &Catalog, v: &Value, errs: &mut Vec<String>) -> 
                         for (k, x) in tt.arr.iter().enumerate() {
                             match x {
                                 Value::String(s) => targets.push(s.clone()),
-                                _ => errs.push(format!("node '{id}': out.{pin}: target #{} is not a node id", k + 1)),
+                                _ => errs.push(format!(
+                                    "node '{id}': out.{pin}: target #{} is not a node id",
+                                    k + 1
+                                )),
                             }
                         }
                     }
@@ -719,7 +725,10 @@ pub fn node_from_value(catalog: &Catalog, v: &Value, errs: &mut Vec<String>) -> 
     if let Some(pos) = v.get("pos") {
         if pos.is_table() && pos.arr().len() >= 2 {
             let a = pos.arr();
-            n.pos = [a.first().map_or(0.0, |x| x.to_number(0.0)) as f32, a.get(1).map_or(0.0, |x| x.to_number(0.0)) as f32];
+            n.pos = [
+                a.first().map_or(0.0, |x| x.to_number(0.0)) as f32,
+                a.get(1).map_or(0.0, |x| x.to_number(0.0)) as f32,
+            ];
             n.has_pos = true;
         } else if pos.is_table() && pos.has("x") && pos.has("y") {
             n.pos = [pos.get_number("x", 0.0) as f32, pos.get_number("y", 0.0) as f32];
@@ -763,7 +772,9 @@ pub fn graph_from_value(catalog: &Catalog, v: &Value) -> (Graph, Vec<String>) {
         None => 0,
     };
     if v.has("type") {
-        errs.push("there is no type key: .nqasset + nq is a quest, .behasset + beh is a behaviour graph".to_owned());
+        errs.push(
+            "there is no type key: .nqasset + nq is a quest, .behasset + beh is a behaviour graph".to_owned(),
+        );
     }
     q.id = v.get_string("id", "");
     if let Some(x) = v.get("title") {
@@ -873,7 +884,11 @@ impl ReadError {
 /// The value of a file, or why it is no declarative table (`ParseValue`). `chunk` is the file's
 /// base name.
 pub fn parse_value(text: &str, chunk: &str) -> Result<Value, ReadError> {
-    gz_luadata::parse_named(text, chunk).map_err(|e| ReadError { message: e.message, line: e.line, column: e.column })
+    gz_luadata::parse_named(text, chunk).map_err(|e| ReadError {
+        message: e.message,
+        line: e.line,
+        column: e.column,
+    })
 }
 
 /// A graph from its text; any shape problem fails it, one message per line (`ParseQuest`).
@@ -944,7 +959,11 @@ pub fn node_to_value(n: &Node) -> Value {
             match p.targets.as_slice() {
                 [] => {}
                 [one] => put(&mut o, &p.name, one.clone()),
-                many => put(&mut o, &p.name, Value::from(many.iter().map(|t| Value::from(t.clone())).collect::<Vec<_>>())),
+                many => put(
+                    &mut o,
+                    &p.name,
+                    Value::from(many.iter().map(|t| Value::from(t.clone())).collect::<Vec<_>>()),
+                ),
             }
         }
         put(&mut t, "out", o);
@@ -1105,12 +1124,17 @@ fn params_summary(params: &Value, skip_text: bool) -> String {
 }
 
 fn actions_summary(list: &[Action]) -> String {
-    list.iter().map(|a| format!("{}({})", a.kind, params_summary(&a.params, false))).collect::<Vec<_>>().join(", ")
+    list.iter()
+        .map(|a| format!("{}({})", a.kind, params_summary(&a.params, false)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn conds_summary(list: &[Cond]) -> String {
     list.iter()
-        .map(|c| format!("{}{}({})", if c.negate { "not " } else { "" }, c.kind, params_summary(&c.params, false)))
+        .map(|c| {
+            format!("{}{}({})", if c.negate { "not " } else { "" }, c.kind, params_summary(&c.params, false))
+        })
         .collect::<Vec<_>>()
         .join(" and ")
 }
@@ -1251,7 +1275,12 @@ pub fn behaviour_template(id: &str) -> String {
         id: if id.is_empty() { "new_behaviour".to_owned() } else { id.to_owned() },
         kind: DocKind::Behaviour,
         title: Value::from("New behaviour"),
-        roles: vec![Role { name: "squad".to_owned(), title: Value::from("Squad"), many: true, ..Role::default() }],
+        roles: vec![Role {
+            name: "squad".to_owned(),
+            title: Value::from("Squad"),
+            many: true,
+            ..Role::default()
+        }],
         nodes: start_finish(),
         ..Graph::default()
     };
@@ -1273,7 +1302,12 @@ mod tests {
     fn bundled() -> Catalog {
         let bytes = include_bytes!("../../../gamedata/configs/nq/catalog.ltx");
         let text = gz_base::text::cp1251_to_utf8(bytes).into_owned();
-        Catalog::assemble(&[crate::catalog::SourceFile { label: "bundled:configs\\nq\\catalog.ltx".into(), text }], false, None, 1)
+        Catalog::assemble(
+            &[crate::catalog::SourceFile { label: "bundled:configs\\nq\\catalog.ltx".into(), text }],
+            false,
+            None,
+            1,
+        )
     }
 
     const EXAMPLES: [(&str, &str); 3] = [
@@ -1312,10 +1346,16 @@ mod tests {
     #[test]
     fn shape_errors_name_what_was_dropped() {
         let cat = Catalog::empty();
-        let (g, errs) = graph_from_value(&cat, &match parse_value("return { nq = 1, id = 'q', type = 'x', nodes = { { kind = 'a' }, { id = 'b', out = { next = { 1 } } } } }", "q") {
-            Ok(v) => v,
-            Err(e) => panic!("{}", e.message),
-        });
+        let (g, errs) = graph_from_value(
+            &cat,
+            &match parse_value(
+                "return { nq = 1, id = 'q', type = 'x', nodes = { { kind = 'a' }, { id = 'b', out = { next = { 1 } } } } }",
+                "q",
+            ) {
+                Ok(v) => v,
+                Err(e) => panic!("{}", e.message),
+            },
+        );
         assert_eq!(g.nodes.len(), 1);
         assert_eq!(
             errs,
@@ -1346,7 +1386,8 @@ mod tests {
         for n in [lone, w, p2, p1, t, s] {
             g.nodes.push_front(n);
         }
-        let ids: Vec<&str> = g.topo_order(&cat).iter().filter_map(|&i| g.nodes.get(i)).map(|n| n.id.as_str()).collect();
+        let ids: Vec<&str> =
+            g.topo_order(&cat).iter().filter_map(|&i| g.nodes.get(i)).map(|n| n.id.as_str()).collect();
         assert_eq!(ids, ["s", "topic", "p1", "p2", "world", "lone"]);
     }
 
@@ -1354,7 +1395,9 @@ mod tests {
     fn templates() {
         let q = quest_template("wolf");
         assert!(q.starts_with("-- nq: wolf \"New quest\"\n-- quest wolf \"New quest\" (active: auto)\n-- [T] start (trigger.start) -> finish\n"));
-        assert!(q.contains("    { id = \"finish\", kind = \"flow.end\", params = { status = \"completed\" } },\n"));
+        assert!(q.contains(
+            "    { id = \"finish\", kind = \"flow.end\", params = { status = \"completed\" } },\n"
+        ));
         let b = behaviour_template("");
         assert!(b.starts_with("-- beh: new_behaviour \"New behaviour\"\n-- behaviour new_behaviour \"New behaviour\" (roles: squad)\n"));
         assert!(b.contains("  roles = { squad = { title = \"Squad\", many = true } },\n"));

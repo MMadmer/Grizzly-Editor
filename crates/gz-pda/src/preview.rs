@@ -176,7 +176,11 @@ impl Preview {
         self.row_sel.clear();
         self.scroll.clear();
         // the game centres on the player close up (ViewActor); zoom = "global" shows it all
-        self.map_zoom = if self.layout.items.iter().any(|it| it.kind == "map" && it.zoom == "global") { 1.0 } else { 3.0 };
+        self.map_zoom = if self.layout.items.iter().any(|it| it.kind == "map" && it.zoom == "global") {
+            1.0
+        } else {
+            3.0
+        };
         self.map_center_set = false;
     }
 
@@ -217,7 +221,11 @@ impl Preview {
             return Some(v.clone());
         }
         let l = &self.layout;
-        l.preview_vars.iter().find(|(k, _)| k == name).or_else(|| l.vars.iter().find(|(k, _)| k == name)).map(|(_, v)| v.clone())
+        l.preview_vars
+            .iter()
+            .find(|(k, _)| k == name)
+            .or_else(|| l.vars.iter().find(|(k, _)| k == name))
+            .map(|(_, v)| v.clone())
     }
 
     /// A text with its `{placeholders}` filled in: the game's own from `preview.vars` or a
@@ -314,7 +322,13 @@ impl Preview {
                     let y = (it.row as f32 - 1.0) * (list.row_h + list.gap) - off;
                     ItemBox { x0: bx, y0: by + y, x1: bx + list.w, y1: by + y + it.h, shown }
                 }
-                _ => ItemBox { x0: bx + it.x, y0: by + it.y, x1: bx + it.x + it.w, y1: by + it.y + it.h, shown },
+                _ => ItemBox {
+                    x0: bx + it.x,
+                    y0: by + it.y,
+                    x1: bx + it.x + it.w,
+                    y1: by + it.y + it.h,
+                    shown,
+                },
             };
             out.push(b);
         }
@@ -441,7 +455,12 @@ impl Preview {
             }
             "stock" => self.stock_action(arg),
             "map" => {
-                let map_page = self.layout.items.iter().find(|it| it.kind == "map" && it.page != self.page && !it.page.is_empty()).map(|it| it.page.clone());
+                let map_page = self
+                    .layout
+                    .items
+                    .iter()
+                    .find(|it| it.kind == "map" && it.page != self.page && !it.page.is_empty())
+                    .map(|it| it.page.clone());
                 if let Some(p) = map_page {
                     self.set_page(&p);
                 }
@@ -533,7 +552,11 @@ impl Preview {
     /// The item a click names by the `n` of the state's `visible` list.
     pub fn target_by_n(boxes: &[ItemBox], n: usize) -> Result<usize, String> {
         let i = n.checked_sub(1).ok_or_else(|| "that item is not on the screen".to_owned())?;
-        if boxes.get(i).is_some_and(|b| b.shown) { Ok(i) } else { Err("that item is not on the screen".to_owned()) }
+        if boxes.get(i).is_some_and(|b| b.shown) {
+            Ok(i)
+        } else {
+            Err("that item is not on the screen".to_owned())
+        }
     }
 
     /// The item under a canvas point.
@@ -573,7 +596,8 @@ impl Preview {
     /// values, then those only actions set.
     #[must_use]
     pub fn vars_view(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self.layout.vars.iter().map(|(k, _)| (k.clone(), self.var_of(k).unwrap_or_default())).collect();
+        let mut out: Vec<(String, String)> =
+            self.layout.vars.iter().map(|(k, _)| (k.clone(), self.var_of(k).unwrap_or_default())).collect();
         for (k, v) in &self.vars {
             if !self.layout.vars.iter().any(|(d, _)| d == k) {
                 out.push((k.clone(), v.clone()));
@@ -591,7 +615,11 @@ impl Preview {
             if !a.shown {
                 continue;
             }
-            let interesting = !it.id.is_empty() || Self::clickable(it) || it.has_text || it.kind == "map" || it.kind == "list";
+            let interesting = !it.id.is_empty()
+                || Self::clickable(it)
+                || it.has_text
+                || it.kind == "map"
+                || it.kind == "list";
             if !interesting {
                 continue;
             }

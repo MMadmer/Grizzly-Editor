@@ -6,8 +6,8 @@ use egui::Context;
 
 use crate::button::Kind;
 use crate::font::Font;
-use crate::theme::metrics;
 use crate::text;
+use crate::theme::metrics;
 
 /// One em in points: the Body line.
 pub const EM: f32 = Font::Body.line();

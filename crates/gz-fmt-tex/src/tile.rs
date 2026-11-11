@@ -36,9 +36,15 @@ fn fit(width: u32, height: u32, side: u32) -> (u32, u32) {
         return (width, height);
     }
     if width >= height {
-        (side, ((u64::from(height) * u64::from(side) + u64::from(width) / 2) / u64::from(width)).max(1) as u32)
+        (
+            side,
+            ((u64::from(height) * u64::from(side) + u64::from(width) / 2) / u64::from(width)).max(1) as u32,
+        )
     } else {
-        (((u64::from(width) * u64::from(side) + u64::from(height) / 2) / u64::from(height)).max(1) as u32, side)
+        (
+            ((u64::from(width) * u64::from(side) + u64::from(height) / 2) / u64::from(height)).max(1) as u32,
+            side,
+        )
     }
 }
 
@@ -53,13 +59,13 @@ fn shrink(src: &Image, w: u32, h: u32) -> Result<Image> {
     out.par_chunks_exact_mut(w as usize * 4).enumerate().for_each(|(y, row)| {
         let y0 = y * sh / h as usize;
         let y1 = ((y + 1) * sh / h as usize).max(y0 + 1).min(sh);
-        for (x, px) in row.chunks_exact_mut(4).enumerate() {
+        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let x0 = x * sw / w as usize;
             let x1 = ((x + 1) * sw / w as usize).max(x0 + 1).min(sw);
             let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
             for sy in y0..y1 {
                 let line = &src.rgba[sy * sw * 4..(sy + 1) * sw * 4];
-                for p in line[x0 * 4..x1 * 4].chunks_exact(4) {
+                for p in line[x0 * 4..x1 * 4].as_chunks::<4>().0 {
                     let pa = u64::from(p[3]);
                     r += u64::from(p[0]) * pa;
                     g += u64::from(p[1]) * pa;
@@ -68,10 +74,10 @@ fn shrink(src: &Image, w: u32, h: u32) -> Result<Image> {
                     n += 1;
                 }
             }
-            if a > 0 {
-                px[0] = ((r + a / 2) / a) as u8;
-                px[1] = ((g + a / 2) / a) as u8;
-                px[2] = ((b + a / 2) / a) as u8;
+            if let Some(na) = std::num::NonZeroU64::new(a) {
+                px[0] = ((r + a / 2) / na) as u8;
+                px[1] = ((g + a / 2) / na) as u8;
+                px[2] = ((b + a / 2) / na) as u8;
             }
             px[3] = ((a + n / 2) / n.max(1)) as u8;
         }
@@ -81,7 +87,7 @@ fn shrink(src: &Image, w: u32, h: u32) -> Result<Image> {
 
 fn alpha_of(img: &Image) -> TileAlpha {
     let mut cut = false;
-    for p in img.rgba.chunks_exact(4) {
+    for p in img.rgba.as_chunks::<4>().0 {
         match p[3] {
             255 => {}
             0 => cut = true,

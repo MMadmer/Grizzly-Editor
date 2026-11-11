@@ -96,7 +96,11 @@ impl SceneObjectData {
             let mut n = 0u32;
             let mut put = |w: &mut IniWriter, v: &str, quoted: bool| {
                 n += 1;
-                if quoted { w.w_string(s, &format!("{n:06}"), &format!("\"{v}\"")) } else { w.w_string(s, &format!("{n:06}"), v) }
+                if quoted {
+                    w.w_string(s, &format!("{n:06}"), &format!("\"{v}\""))
+                } else {
+                    w.w_string(s, &format!("{n:06}"), v)
+                }
             };
             put(w, &(self.surfaces.len() as i32).to_string(), false);
             for sf in &self.surfaces {
@@ -266,7 +270,11 @@ impl LightData {
             color: r.r_fcolor(s, "color")?,
             brightness: r.r_float(s, "brightness")?,
             range: r.r_float(s, "range")?,
-            attenuation: [r.r_float(s, "attenuation0")?, r.r_float(s, "attenuation1")?, r.r_float(s, "attenuation2")?],
+            attenuation: [
+                r.r_float(s, "attenuation0")?,
+                r.r_float(s, "attenuation1")?,
+                r.r_float(s, "attenuation2")?,
+            ],
             cone: r.r_float(s, "cone")?,
             virtual_size: r.r_float(s, "virtual_size")?,
             use_in_d3d: r.r_bool(s, "use_in_d3d")?,
@@ -434,7 +442,12 @@ pub struct GlowData {
 
 impl Default for GlowData {
     fn default() -> Self {
-        Self { shader: SmolStr::new_static("effects\\glow"), texture: SmolStr::default(), radius: 0.5, flags: 0 }
+        Self {
+            shader: SmolStr::new_static("effects\\glow"),
+            texture: SmolStr::default(),
+            radius: 0.5,
+            flags: 0,
+        }
     }
 }
 

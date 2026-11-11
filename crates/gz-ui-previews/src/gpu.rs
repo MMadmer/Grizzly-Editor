@@ -1,8 +1,6 @@
 //! Textures on the window's device for the previews: made once, off the frame, and shown through
 //! the window's egui renderer.
 
-
-
 /// A side of a block-compressed format is whole 4 x 4 blocks; an uncompressed one is pixels.
 fn physical(format: wgpu::TextureFormat, w: u32, h: u32) -> (u32, u32) {
     let (bw, bh) = format.block_dimensions();
@@ -19,10 +17,20 @@ pub fn level_layout(format: wgpu::TextureFormat, w: u32, h: u32) -> (u32, u32) {
 
 /// Makes a 2D texture with these levels (largest first) and writes them. Callable from any
 /// thread: the device and queue are shared.
-pub fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, format: wgpu::TextureFormat, width: u32, height: u32, levels: &[Vec<u8>]) -> Result<wgpu::Texture, String> {
+pub fn upload(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    levels: &[Vec<u8>],
+) -> Result<wgpu::Texture, String> {
     let max = device.limits().max_texture_dimension_2d;
     if width == 0 || height == 0 || width > max || height > max {
-        return Err(format!("a texture of {width} x {height} is larger than the graphics device takes ({max} a side)"));
+        return Err(format!(
+            "a texture of {width} x {height} is larger than the graphics device takes ({max} a side)"
+        ));
     }
     if levels.is_empty() {
         return Err("the texture holds no picture".to_owned());
@@ -50,7 +58,12 @@ pub fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, format: w
         }
         let (pw, ph) = physical(format, w, h);
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: mip, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             data,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rows) },
             wgpu::Extent3d { width: pw, height: ph, depth_or_array_layers: 1 },
@@ -62,5 +75,9 @@ pub fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, format: w
 /// One level of a texture as a view.
 #[must_use]
 pub fn mip_view(texture: &wgpu::Texture, mip: u32) -> wgpu::TextureView {
-    texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: mip, mip_level_count: Some(1), ..Default::default() })
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        base_mip_level: mip,
+        mip_level_count: Some(1),
+        ..Default::default()
+    })
 }

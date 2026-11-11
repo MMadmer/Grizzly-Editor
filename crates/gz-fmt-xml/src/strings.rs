@@ -83,6 +83,9 @@ pub fn order(files: &mut [String]) {
     files.sort_by_key(|f| !is_engine(f));
 }
 
+/// One file's strings and what was wrong with it.
+pub type FileStrings = (Vec<(String, String)>, Vec<XmlWarning>);
+
 /// The entries of one file in file order, and what the reader read past.
 #[must_use]
 pub fn file_strings(text: &str, mode: Mode) -> (Vec<(String, String)>, Vec<XmlWarning>) {
@@ -149,8 +152,7 @@ impl StringTable {
     /// are parsed in parallel on the caller's pool. Returns the warnings with their file.
     #[must_use]
     pub fn build(files: &[(&str, &str)], mode: Mode) -> (Self, Vec<(String, XmlWarning)>) {
-        let parsed: Vec<(Vec<(String, String)>, Vec<XmlWarning>)> =
-            files.par_iter().map(|(_, text)| file_strings(text, mode)).collect();
+        let parsed: Vec<FileStrings> = files.par_iter().map(|(_, text)| file_strings(text, mode)).collect();
         let mut map: FxHashMap<Arc<str>, Arc<str>> = FxHashMap::default();
         let mut warnings = Vec::new();
         for ((name, _), (entries, w)) in files.iter().zip(parsed) {
@@ -217,9 +219,19 @@ mod tests {
     #[test]
     fn both_readings() {
         let (e, _) = file_strings(A, Mode::Editor);
-        assert_eq!(e, [("a".to_owned(), "First\\nline &amp; more".to_owned()), ("b".to_owned(), "B1".to_owned())]);
+        assert_eq!(
+            e,
+            [("a".to_owned(), "First\\nline &amp; more".to_owned()), ("b".to_owned(), "B1".to_owned())]
+        );
         let (g, w) = file_strings(A, Mode::Game);
-        assert_eq!(g, [("a".to_owned(), "First\\nline & more".to_owned()), ("b".to_owned(), "B1".to_owned()), ("b".to_owned(), "B2".to_owned())]);
+        assert_eq!(
+            g,
+            [
+                ("a".to_owned(), "First\\nline & more".to_owned()),
+                ("b".to_owned(), "B1".to_owned()),
+                ("b".to_owned(), "B2".to_owned())
+            ]
+        );
         assert_eq!(w.len(), 1);
         let (t, _) = StringTable::build(&[("a.xml", A), ("b.xml", B)], Mode::Game);
         assert_eq!(t.get("a"), Some("Override"));

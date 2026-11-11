@@ -106,7 +106,8 @@ fn outline(l: &Layout) -> Value {
 
 /// The problems of a layout and the textures W320 names (`JsonProblems`).
 fn problems_json(problems: &[PdaProblem], missing: &[String]) -> Value {
-    let mut out: Vec<Value> = problems.iter().map(|p| json!({ "code": p.code, "path": p.path, "message": p.message })).collect();
+    let mut out: Vec<Value> =
+        problems.iter().map(|p| json!({ "code": p.code, "path": p.path, "message": p.message })).collect();
     for t in missing {
         out.push(json!({ "code": "W320", "path": "", "message": format!("texture '{t}' is neither in the linked game nor in the project") }));
     }
@@ -135,7 +136,8 @@ async fn resolve(ed: &Arc<Editor>, o: &Open, args: &Args) -> Result<(String, Str
             return Err(refuse("missing 'path' (and the module uses no PDA layout yet)"));
         }
     }
-    let abs = gz_project::ops::resolve_in_project(o.project.root(), &path).map_err(refuse)?.replace('/', "\\");
+    let abs =
+        gz_project::ops::resolve_in_project(o.project.root(), &path).map_err(refuse)?.replace('/', "\\");
     if !is_pda_path(&abs) {
         return Err(refuse("a PDA layout is a .pdaasset file"));
     }
@@ -235,7 +237,8 @@ async fn pda_write(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
         }
         path = format!("pda\\{id}.pdaasset");
     }
-    let mut abs = gz_project::ops::resolve_in_project(o.project.root(), &path).map_err(refuse)?.replace('/', "\\");
+    let mut abs =
+        gz_project::ops::resolve_in_project(o.project.root(), &path).map_err(refuse)?.replace('/', "\\");
     // a bare name gets the family's extension, the way the browser's rename does
     if extension(&abs).is_empty() {
         abs.push_str(".pdaasset");

@@ -47,7 +47,8 @@ impl Row {
     #[must_use]
     pub fn more_help(mut self, text_: &str) -> Self {
         if !text_.is_empty() {
-            self.help = if self.help.is_empty() { text_.to_owned() } else { format!("{}. {text_}", self.help) };
+            self.help =
+                if self.help.is_empty() { text_.to_owned() } else { format!("{}. {text_}", self.help) };
         }
         self
     }
@@ -71,7 +72,15 @@ pub struct TextEdit {
 
 impl TextEdit {
     pub fn open_for(&mut self, target: &str, title: &str, text_: &str, code: bool) {
-        *self = TextEdit { open: true, code, target: target.to_owned(), apply: false, title: title.to_owned(), text: text_.to_owned(), check: String::new() };
+        *self = TextEdit {
+            open: true,
+            code,
+            target: target.to_owned(),
+            apply: false,
+            title: title.to_owned(),
+            text: text_.to_owned(),
+            check: String::new(),
+        };
     }
 
     /// The text Apply left for a field, once (`TakeTextEdit`).
@@ -116,14 +125,21 @@ pub struct ParamCx<'a> {
 }
 
 /// A row in a grid of its own, inside an id scope.
-pub fn grid<R>(ui: &mut Ui, role: &'static str, salt: impl Hash + std::fmt::Debug, f: impl FnOnce(&mut Grid<'_>) -> R) -> R {
+pub fn grid<R>(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: impl Hash + std::fmt::Debug,
+    f: impl FnOnce(&mut Grid<'_>) -> R,
+) -> R {
     ui.push_id(salt, |ui| PropertyGrid::new(role).show(ui, f)).inner
 }
 
 /// A row that only says something (a count, "Pick the task first").
 pub fn text_row(ui: &mut Ui, role: &'static str, salt: impl Hash + std::fmt::Debug, row: &Row, value: &str) {
     grid(ui, role, salt, |g| {
-        g.row(&row.label, &row.help, row.flags | PropFlags::READ_ONLY, row.depth, |ui| grid::read_only(ui, value, Clip::End));
+        g.row(&row.label, &row.help, row.flags | PropFlags::READ_ONLY, row.depth, |ui| {
+            grid::read_only(ui, value, Clip::End)
+        });
     });
 }
 
@@ -169,11 +185,8 @@ fn combo_field(ui: &mut Ui, salt: &str, cur: &mut String, items: &[String], empt
     if stray {
         options.push(cur.as_str());
     }
-    let mut at = if cur.is_empty() {
-        0
-    } else {
-        options.iter().position(|o| *o == cur.as_str()).unwrap_or(0)
-    };
+    let mut at =
+        if cur.is_empty() { 0 } else { options.iter().position(|o| *o == cur.as_str()).unwrap_or(0) };
     let owned: Vec<String> = options.iter().map(|s| (*s).to_owned()).collect();
     let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
     if grid::combo(ui, salt, &mut at, &refs) {
@@ -184,20 +197,50 @@ fn combo_field(ui: &mut Ui, salt: &str, cur: &mut String, items: &[String], empt
     false
 }
 
-fn combo_row(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, cur: &mut String, items: &[String], empty: Option<&str>) -> bool {
-    grid(ui, role, salt, |g| g.row(&row.label, &row.help, row.flags, row.depth, |ui| combo_field(ui, "v", cur, items, empty)).unwrap_or(false))
+fn combo_row(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: &str,
+    row: &Row,
+    cur: &mut String,
+    items: &[String],
+    empty: Option<&str>,
+) -> bool {
+    grid(ui, role, salt, |g| {
+        g.row(&row.label, &row.help, row.flags, row.depth, |ui| combo_field(ui, "v", cur, items, empty))
+            .unwrap_or(false)
+    })
 }
 
 fn check_row(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, v: &mut bool) -> bool {
-    grid(ui, role, salt, |g| g.row(&row.label, &row.help, row.flags | PropFlags::INLINE, row.depth, |ui| grid::switch(ui, v).changed()).unwrap_or(false))
+    grid(ui, role, salt, |g| {
+        g.row(&row.label, &row.help, row.flags | PropFlags::INLINE, row.depth, |ui| {
+            grid::switch(ui, v).changed()
+        })
+        .unwrap_or(false)
+    })
 }
 
 fn text_row_edit(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, s: &mut String) -> bool {
-    grid(ui, role, salt, |g| g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::text_field(ui, s).changed()).unwrap_or(false))
+    grid(ui, role, salt, |g| {
+        g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::text_field(ui, s).changed())
+            .unwrap_or(false)
+    })
 }
 
-fn number_row(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, v: &mut f32, speed: f32, unit: &str) -> bool {
-    grid(ui, role, salt, |g| g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::number(ui, v, speed, unit).changed()).unwrap_or(false))
+fn number_row(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: &str,
+    row: &Row,
+    v: &mut f32,
+    speed: f32,
+    unit: &str,
+) -> bool {
+    grid(ui, role, salt, |g| {
+        g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::number(ui, v, speed, unit).changed())
+            .unwrap_or(false)
+    })
 }
 
 /// The first line of a text, with an ellipsis when there is more.
@@ -255,34 +298,47 @@ pub fn convert(v: &Value, to: usize) -> Value {
 }
 
 /// A value edited as the type of the variable it belongs to (`DrawTypedValue`).
-pub fn typed_value(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, v: &mut Value, as_type: &Value) -> bool {
+pub fn typed_value(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    as_type: &Value,
+) -> bool {
     grid(ui, role, salt, |g| {
-        g.row(&row.label, &row.help, row.flags | if as_type.is_bool() { PropFlags::INLINE } else { PropFlags::NONE }, row.depth, |ui| match as_type {
-            Value::Bool(_) => {
-                let mut b = v.as_bool() == Some(true);
-                let ch = grid::switch(ui, &mut b).changed();
-                if ch {
-                    *v = Value::Bool(b);
+        g.row(
+            &row.label,
+            &row.help,
+            row.flags | if as_type.is_bool() { PropFlags::INLINE } else { PropFlags::NONE },
+            row.depth,
+            |ui| match as_type {
+                Value::Bool(_) => {
+                    let mut b = v.as_bool() == Some(true);
+                    let ch = grid::switch(ui, &mut b).changed();
+                    if ch {
+                        *v = Value::Bool(b);
+                    }
+                    ch
                 }
-                ch
-            }
-            Value::Number(_) => {
-                let mut f = v.as_number().unwrap_or(0.0) as f32;
-                let ch = grid::number(ui, &mut f, 0.1, "").changed();
-                if ch {
-                    *v = Value::Number(f64::from(f));
+                Value::Number(_) => {
+                    let mut f = v.as_number().unwrap_or(0.0) as f32;
+                    let ch = grid::number(ui, &mut f, 0.1, "").changed();
+                    if ch {
+                        *v = Value::Number(f64::from(f));
+                    }
+                    ch
                 }
-                ch
-            }
-            _ => {
-                let mut s = v.as_str().unwrap_or("").to_owned();
-                let ch = grid::text_field(ui, &mut s).changed();
-                if ch {
-                    *v = Value::from(s);
+                _ => {
+                    let mut s = v.as_str().unwrap_or("").to_owned();
+                    let ch = grid::text_field(ui, &mut s).changed();
+                    if ch {
+                        *v = Value::from(s);
+                    }
+                    ch
                 }
-                ch
-            }
-        })
+            },
+        )
         .unwrap_or(false)
     })
 }
@@ -313,8 +369,24 @@ impl ParamCx<'_> {
         let q = self.pick.search.as_str();
         let m = |id: &str| q.is_empty() || gz_ui::search::matches(q, id);
         let mut rows: Vec<PickRow> = Vec::new();
-        let row = |id: &str, extra: &str| PickRow { label: id.to_owned(), value: id.to_owned(), extra: extra.to_owned() };
-        let doc_scoped = matches!(ty, "task_id" | "var_name" | "ref_name" | "node_id" | "quest_id" | "behaviour_id" | "role" | "way_path" | "character_id" | "global_name");
+        let row = |id: &str, extra: &str| PickRow {
+            label: id.to_owned(),
+            value: id.to_owned(),
+            extra: extra.to_owned(),
+        };
+        let doc_scoped = matches!(
+            ty,
+            "task_id"
+                | "var_name"
+                | "ref_name"
+                | "node_id"
+                | "quest_id"
+                | "behaviour_id"
+                | "role"
+                | "way_path"
+                | "character_id"
+                | "global_name"
+        );
         if doc_scoped {
             let mut any = false;
             let mut push = |id: &str, extra: &str| {
@@ -335,14 +407,25 @@ impl ParamCx<'_> {
                 }
                 "quest_id" | "behaviour_id" => {
                     let want = ty == "behaviour_id";
-                    for g in self.data.graphs.iter().filter(|g| g.behaviour == want && g.readable && !g.id.is_empty()) {
+                    for g in self
+                        .data
+                        .graphs
+                        .iter()
+                        .filter(|g| g.behaviour == want && g.readable && !g.id.is_empty())
+                    {
                         push(&g.id, "");
                     }
                 }
                 "role" => self.graph.roles.iter().for_each(|r| push(&r.name, "")),
                 "character_id" => {
                     for c in self.data.characters.iter() {
-                        let extra = if c.template { "template - cannot be spawned".to_owned() } else if c.name.is_empty() { c.file.clone() } else { c.name.clone() };
+                        let extra = if c.template {
+                            "template - cannot be spawned".to_owned()
+                        } else if c.name.is_empty() {
+                            c.file.clone()
+                        } else {
+                            c.name.clone()
+                        };
                         push(&c.id, &extra);
                     }
                 }
@@ -358,7 +441,9 @@ impl ParamCx<'_> {
                     "behaviour_id" => "No behaviour graphs in this project",
                     "role" => "This graph declares no roles",
                     "character_id" => "No characters in this project - Create > Character",
-                    "global_name" => "The module declares no global variables - add one under Global in the Variables",
+                    "global_name" => {
+                        "The module declares no global variables - add one under Global in the Variables"
+                    }
                     _ if self.behaviour => "Nothing declared in this graph",
                     _ => "Nothing declared in this quest",
                 }
@@ -366,8 +451,12 @@ impl ParamCx<'_> {
             };
             return (rows, note);
         }
-        let Some(t) = PickerType::from_name(ty) else { return (rows, "No index for this parameter".to_owned()) };
-        let Some(p) = self.pickers().filter(|p| p.available()) else { return (rows, "Link a game to get suggestions".to_owned()) };
+        let Some(t) = PickerType::from_name(ty) else {
+            return (rows, "No index for this parameter".to_owned());
+        };
+        let Some(p) = self.pickers().filter(|p| p.available()) else {
+            return (rows, "Link a game to get suggestions".to_owned());
+        };
         for e in p.search(t, q, 200) {
             let label = if e.name.is_empty() { e.id.clone() } else { format!("{}  -  {}", e.id, e.name) };
             rows.push(PickRow { label, value: e.id.clone(), extra: e.extra.clone() });
@@ -381,7 +470,8 @@ impl ParamCx<'_> {
         if !egui::Popup::is_id_open(&self.ctx, id) {
             return None;
         }
-        let stale = self.pick.cache.as_ref().is_none_or(|(cid, q, _, _)| *cid != id || *q != self.pick.search);
+        let stale =
+            self.pick.cache.as_ref().is_none_or(|(cid, q, _, _)| *cid != id || *q != self.pick.search);
         if stale {
             let (rows, note) = self.pick_rows(ty);
             self.pick.cache = Some((id, self.pick.search.clone(), rows, note));
@@ -389,7 +479,10 @@ impl ParamCx<'_> {
         let (rows, note) = self.pick.cache.clone().map(|(_, _, r, n)| (r, n)).unwrap_or_default();
         let anchor = Rect::from_min_size(self.pick.anchor, Vec2::ZERO);
         let (search, focus) = (&mut self.pick.search, &mut self.pick.focus);
-        let picked = menu_popup(&self.ctx, id, anchor, ui.layer_id(), |ui| local::local_pick_list(ui, &rows, &note, search, focus)).flatten();
+        let picked = menu_popup(&self.ctx, id, anchor, ui.layer_id(), |ui| {
+            local::local_pick_list(ui, &rows, &note, search, focus)
+        })
+        .flatten();
         if picked.is_some() {
             egui::Popup::close_id(&self.ctx, id);
         }
@@ -421,10 +514,20 @@ pub fn draw_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Val
             }
         }
         // parameters present in the file but unknown to the catalog stay editable as raw Lua
-        let unknown: Vec<SmolStr> = params.fields().iter().filter(|(key, _)| k.param(key).is_none()).map(|(key, _)| key.clone()).collect();
+        let unknown: Vec<SmolStr> = params
+            .fields()
+            .iter()
+            .filter(|(key, _)| k.param(key).is_none())
+            .map(|(key, _)| key.clone())
+            .collect();
         for (i, key) in unknown.iter().enumerate() {
             let mut v = params.get(key).cloned().unwrap_or_default();
-            let row = Row::new(&format!("{key} (unknown)"), "Not a parameter of this kind: kept as written, in Lua", depth).flags(PropFlags::INVALID);
+            let row = Row::new(
+                &format!("{key} (unknown)"),
+                "Not a parameter of this kind: kept as written, in Lua",
+                depth,
+            )
+            .flags(PropFlags::INVALID);
             if raw(ui, cx, &format!("unknown{i}"), &row, &mut v) {
                 params.set(key, v);
                 ch = true;
@@ -435,7 +538,14 @@ pub fn draw_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Val
 }
 
 /// One parameter (`DrawParam`): its typed editor, the catalog default written back as nothing.
-pub fn draw_param(ui: &mut Ui, cx: &mut ParamCx<'_>, p: &Param, params: &mut Value, kind: &str, depth: u32) -> bool {
+pub fn draw_param(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    p: &Param,
+    params: &mut Value,
+    kind: &str,
+    depth: u32,
+) -> bool {
     let mut v = params.get(&p.name).cloned().unwrap_or_default();
     // a parameter another form ruled out stays visible but dead
     let ruled_out = catalog::form_ruled_out(kind, &p.name, params);
@@ -472,18 +582,33 @@ pub fn draw_param(ui: &mut Ui, cx: &mut ParamCx<'_>, p: &Param, params: &mut Val
 
 /// The editor of a parameter type (`DrawTyped`).
 #[allow(clippy::too_many_lines)]
-pub fn typed(ui: &mut Ui, cx: &mut ParamCx<'_>, ty: &str, p: Option<&Param>, salt: &str, row: &Row, v: &mut Value) -> bool {
+pub fn typed(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    ty: &str,
+    p: Option<&Param>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+) -> bool {
     let role = cx.role;
     match ty {
         "text" => draw_text(ui, cx, salt, row, v, true),
         "lua" => lua(ui, cx, salt, row, v),
         "bool" => {
             let set = v.is_bool();
-            let mut b = if set { v.as_bool() == Some(true) } else { p.and_then(|p| p.default.as_deref()) == Some("true") };
+            let mut b = if set {
+                v.as_bool() == Some(true)
+            } else {
+                p.and_then(|p| p.default.as_deref()) == Some("true")
+            };
             let mut ch = false;
             grid(ui, role, salt, |g| {
-                let flags = row.flags | PropFlags::INLINE | if set { PropFlags::MODIFIED } else { PropFlags::NONE };
-                if g.row(&row.label, &row.help, flags, row.depth, |ui| grid::switch(ui, &mut b).changed()).unwrap_or(false) {
+                let flags =
+                    row.flags | PropFlags::INLINE | if set { PropFlags::MODIFIED } else { PropFlags::NONE };
+                if g.row(&row.label, &row.help, flags, row.depth, |ui| grid::switch(ui, &mut b).changed())
+                    .unwrap_or(false)
+                {
                     *v = Value::Bool(b);
                     ch = true;
                 }
@@ -539,9 +664,15 @@ pub fn typed(ui: &mut Ui, cx: &mut ParamCx<'_>, ty: &str, p: Option<&Param>, sal
             ch
         }
         "enum" | "relation" => {
-            let items = if ty == "relation" { modes(&["enemy", "neutral", "friend"]) } else { p.map(|p| p.enums.clone()).unwrap_or_default() };
+            let items = if ty == "relation" {
+                modes(&["enemy", "neutral", "friend"])
+            } else {
+                p.map(|p| p.enums.clone()).unwrap_or_default()
+            };
             let mut cur = v.as_str().unwrap_or("").to_owned();
-            let empty = p.and_then(|p| p.default.as_deref()).map_or_else(|| "(unset)".to_owned(), |d| format!("(default: {d})"));
+            let empty = p
+                .and_then(|p| p.default.as_deref())
+                .map_or_else(|| "(unset)".to_owned(), |d| format!("(default: {d})"));
             if combo_row(ui, role, salt, row, &mut cur, &items, Some(&empty)) {
                 *v = opt_str(&cur);
                 return true;
@@ -578,7 +709,13 @@ pub fn typed(ui: &mut Ui, cx: &mut ParamCx<'_>, ty: &str, p: Option<&Param>, sal
         "value" => {
             // `value` sits next to the `name` it is assigned to or compared with: the variable's
             // declared type decides the widget
-            let name = cx.siblings.as_ref().and_then(|s| s.get("name")).and_then(Value::as_str).unwrap_or("").to_owned();
+            let name = cx
+                .siblings
+                .as_ref()
+                .and_then(|s| s.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
             if let Some(var) = cx.var(&name) {
                 let as_type = var.value.clone();
                 return typed_value(ui, role, salt, row, v, &as_type);
@@ -617,18 +754,22 @@ pub fn typed(ui: &mut Ui, cx: &mut ParamCx<'_>, ty: &str, p: Option<&Param>, sal
 /// A string with a picker beside it, marked when the index does not know it (`DrawPicked`).
 pub fn picked(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, ty: &str, s: &mut String) -> bool {
     let pt = PickerType::from_name(ty);
-    let unknown = !s.is_empty() && pt.is_some_and(|t| cx.pickers().is_some_and(|p| !p.entries(t).is_empty() && !p.known(t, s)));
+    let unknown = !s.is_empty()
+        && pt.is_some_and(|t| cx.pickers().is_some_and(|p| !p.entries(t).is_empty() && !p.known(t, s)));
     let flags = row.flags | if unknown { PropFlags::INVALID } else { PropFlags::NONE };
     let pid = ui.make_persistent_id(("gz-ui-graph.pick", salt));
     let role = cx.role;
     let mut ch = false;
     let mut open = false;
     grid(ui, role, salt, |g| {
-        ch |= g.row(&row.label, &row.help, flags, row.depth, |ui| grid::text_field(ui, s).changed()).unwrap_or(false);
+        ch |= g
+            .row(&row.label, &row.help, flags, row.depth, |ui| grid::text_field(ui, s).changed())
+            .unwrap_or(false);
         open = g.trailing(Icon::More, "Pick from the list");
         if unknown {
             let list = pt.map_or_else(|| ty.to_owned(), |t| t.name().to_owned());
-            let why = format!("Nothing named '{s}' is in the {list} list: place it first, or pick one that exists");
+            let why =
+                format!("Nothing named '{s}' is in the {list} list: place it first, or pick one that exists");
             g.message(Tone::Error, &why);
         }
     });
@@ -644,7 +785,14 @@ pub fn picked(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, ty: &str
 
 /// A text: one line typed in its row, a longer one shown by its first line and edited in a
 /// dialog; a text per language puts each language on a row of its own (`DrawText`).
-pub fn draw_text(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, multiline: bool) -> bool {
+pub fn draw_text(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    multiline: bool,
+) -> bool {
     let role = cx.role;
     let mut ch = false;
     let target = format!("{:?}/{salt}", ui.scope_id());
@@ -652,7 +800,9 @@ pub fn draw_text(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
         let mut add_eng = false;
         let mut single = false;
         grid(ui, role, salt, |g| {
-            g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::read_only(ui, "(per language)", Clip::End));
+            g.row(&row.label, &row.help, row.flags, row.depth, |ui| {
+                grid::read_only(ui, "(per language)", Clip::End)
+            });
             if !v.has("eng") && g.trailing(Icon::Plus, "Add an English text") {
                 add_eng = true;
             }
@@ -731,7 +881,16 @@ pub fn draw_text(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
 }
 
 #[allow(clippy::too_many_arguments)]
-fn line_field(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, s: &mut String, multiline: bool, target: &str, what: &str) -> bool {
+fn line_field(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    s: &mut String,
+    multiline: bool,
+    target: &str,
+    what: &str,
+) -> bool {
     let role = cx.role;
     let has_lines = s.contains('\n');
     let mut edit = false;
@@ -814,7 +973,14 @@ fn pick_type_of(mode: &str) -> &str {
 
 /// The row of a value that takes one of several forms: the form picked here, what it needs on
 /// rows under it (`ModeRow`).
-fn mode_row(ui: &mut Ui, role: &'static str, salt: &str, row: &Row, mode: &mut String, list: &[String]) -> bool {
+fn mode_row(
+    ui: &mut Ui,
+    role: &'static str,
+    salt: &str,
+    row: &Row,
+    mode: &mut String,
+    list: &[String],
+) -> bool {
     combo_row(ui, role, salt, row, mode, list, Some("(unset)"))
 }
 
@@ -829,7 +995,15 @@ fn fresh_pos(level: &str, radius: Option<f64>) -> Value {
 }
 
 /// A creature or a spot a quest points at: the form, then its value (`DrawNpcRef`).
-pub fn npc_ref(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, target: bool, kill: bool) -> bool {
+pub fn npc_ref(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    target: bool,
+    kill: bool,
+) -> bool {
     let mut list = modes(&["character", "story", "ref", "profile", "community"]);
     if target {
         list.extend(modes(&["smart", "restrictor", "pos"]));
@@ -875,13 +1049,27 @@ pub fn npc_ref(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut
         }
         m => {
             let mut s = v.get_string(m, "");
-            if picked(ui, cx, &format!("{salt}/value"), &Row::new(&look::pretty(m), "", d), pick_type_of(m), &mut s) {
+            if picked(
+                ui,
+                cx,
+                &format!("{salt}/value"),
+                &Row::new(&look::pretty(m), "", d),
+                pick_type_of(m),
+                &mut s,
+            ) {
                 v.set(m, s);
                 ch = true;
             }
             if m == "community" {
                 let mut lvl = v.get_string("level", "");
-                if picked(ui, cx, &format!("{salt}/level"), &Row::new("Level", "Only NPCs of the community on this level; unset: any level", d), "level", &mut lvl) {
+                if picked(
+                    ui,
+                    cx,
+                    &format!("{salt}/level"),
+                    &Row::new("Level", "Only NPCs of the community on this level; unset: any level", d),
+                    "level",
+                    &mut lvl,
+                ) {
                     if lvl.is_empty() {
                         v.erase("level");
                     } else {
@@ -896,7 +1084,14 @@ pub fn npc_ref(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut
 }
 
 /// One concrete object (`DrawObjectRef`): a story id, a ref, and for an object a character.
-pub fn object_ref(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, character: bool) -> bool {
+pub fn object_ref(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    character: bool,
+) -> bool {
     let mut list = modes(&["story", "ref"]);
     if character {
         list.push("character".to_owned());
@@ -917,7 +1112,14 @@ pub fn object_ref(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
     }
     if !mode.is_empty() {
         let mut s = v.get_string(&mode, "");
-        if picked(ui, cx, &format!("{salt}/value"), &row.nested(&look::pretty(&mode), ""), pick_type_of(&mode), &mut s) {
+        if picked(
+            ui,
+            cx,
+            &format!("{salt}/value"),
+            &row.nested(&look::pretty(&mode), ""),
+            pick_type_of(&mode),
+            &mut s,
+        ) {
             v.set(&mode, s);
             ch = true;
         }
@@ -929,10 +1131,15 @@ pub fn object_ref(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
 pub fn objective_id(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value) -> bool {
     let owner = cx.siblings.as_ref().and_then(|s| s.get("task").or_else(|| s.get("spot_task"))).cloned();
     let task = owner.as_ref().and_then(Value::as_str).and_then(|id| cx.tasks.iter().find(|t| t.id == id));
-    let ids: Vec<String> = task.map(|t| t.objectives.iter().map(|o| o.id.clone()).collect()).unwrap_or_default();
+    let ids: Vec<String> =
+        task.map(|t| t.objectives.iter().map(|o| o.id.clone()).collect()).unwrap_or_default();
     match task {
         None => {
-            let msg = if owner.as_ref().is_some_and(Value::is_string) { "Pick a task that exists first" } else { "Pick the task first" };
+            let msg = if owner.as_ref().is_some_and(Value::is_string) {
+                "Pick a task that exists first"
+            } else {
+                "Pick the task first"
+            };
             text_row(ui, cx.role, salt, row, msg);
             false
         }
@@ -985,7 +1192,11 @@ pub fn place(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
         "pos" => ch |= position(ui, cx, &format!("{salt}/pos"), d, v),
         "actor" => {
             let mut dist = v.get_number("distance", 0.0) as f32;
-            let r = Row::new("Ahead, m", "Resolved when the action runs: that many metres in front of the player, snapped to the navmesh. 0 = at their feet", d);
+            let r = Row::new(
+                "Ahead, m",
+                "Resolved when the action runs: that many metres in front of the player, snapped to the navmesh. 0 = at their feet",
+                d,
+            );
             if number_row(ui, cx.role, &format!("{salt}/distance"), &r, &mut dist, 0.1, "m") {
                 if dist <= 0.0 {
                     v.erase("distance");
@@ -997,7 +1208,14 @@ pub fn place(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
         }
         m => {
             let mut s = v.get_string(m, "");
-            if picked(ui, cx, &format!("{salt}/value"), &Row::new(&look::pretty(m), "", d), pick_type_of(m), &mut s) {
+            if picked(
+                ui,
+                cx,
+                &format!("{salt}/value"),
+                &Row::new(&look::pretty(m), "", d),
+                pick_type_of(m),
+                &mut s,
+            ) {
                 v.set(m, s);
                 ch = true;
             }
@@ -1010,7 +1228,14 @@ pub fn place(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
 pub fn position(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, v: &mut Value) -> bool {
     let mut ch = false;
     let mut lvl = v.get_string("level", "");
-    if picked(ui, cx, &format!("{salt}/level"), &Row::new("Level", "The level the point is on", depth), "level", &mut lvl) {
+    if picked(
+        ui,
+        cx,
+        &format!("{salt}/level"),
+        &Row::new("Level", "The level the point is on", depth),
+        "level",
+        &mut lvl,
+    ) {
         v.set("level", lvl);
         ch = true;
     }
@@ -1023,14 +1248,25 @@ pub fn position(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, v: &m
         }
     }
     let changed = grid(ui, cx.role, (salt, "xyz"), |g| {
-        g.row("Position", "The point, in the level's coordinates", PropFlags::NONE, depth, |ui| grid::vec3_field(ui, "xyz", &mut xyz, 0.1)).unwrap_or(false)
+        g.row("Position", "The point, in the level's coordinates", PropFlags::NONE, depth, |ui| {
+            grid::vec3_field(ui, "xyz", &mut xyz, 0.1)
+        })
+        .unwrap_or(false)
     });
     if changed {
         v.set("pos", Value::from(xyz.iter().map(|c| Value::Number(f64::from(*c))).collect::<Vec<_>>()));
         ch = true;
     }
     let mut r = v.get_number("radius", 5.0) as f32;
-    if number_row(ui, cx.role, &format!("{salt}/radius"), &Row::new("Radius, m", "How close the player has to get, in metres. 5 when not set", depth), &mut r, 0.1, "m") {
+    if number_row(
+        ui,
+        cx.role,
+        &format!("{salt}/radius"),
+        &Row::new("Radius, m", "How close the player has to get, in metres. 5 when not set", depth),
+        &mut r,
+        0.1,
+        "m",
+    ) {
         v.set("radius", f64::from(r));
         ch = true;
     }
@@ -1078,7 +1314,14 @@ pub fn destination(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: 
         "pos" => ch |= position(ui, cx, &format!("{salt}/pos"), d, v),
         m => {
             let mut s = v.get_string(m, "");
-            if picked(ui, cx, &format!("{salt}/value"), &Row::new(&look::pretty(m), "", d), pick_type_of(m), &mut s) {
+            if picked(
+                ui,
+                cx,
+                &format!("{salt}/value"),
+                &Row::new(&look::pretty(m), "", d),
+                pick_type_of(m),
+                &mut s,
+            ) {
                 v.set(m, s);
                 ch = true;
             }
@@ -1095,7 +1338,8 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
         Value::Table(t) => t.arr.iter().filter_map(Value::as_str).map(str::to_owned).collect(),
         _ => Vec::new(),
     };
-    let stray: Vec<String> = picked_roles.iter().filter(|p| !roles.iter().any(|r| r.name == **p)).cloned().collect();
+    let stray: Vec<String> =
+        picked_roles.iter().filter(|p| !roles.iter().any(|r| r.name == **p)).cloned().collect();
     let flags = row.flags | if stray.is_empty() { PropFlags::NONE } else { PropFlags::INVALID };
     let mut ch = false;
     grid(ui, cx.role, salt, |g| {
@@ -1108,9 +1352,13 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
             let w = ui.available_width();
             egui::ComboBox::from_id_salt("who").selected_text(preview).width(w).show_ui(ui, |ui| {
                 for r in roles {
-                    let on = picked_roles.iter().any(|p| *p == r.name);
+                    let on = picked_roles.contains(&r.name);
                     let cap = if r.many { format!("{}  (group)", r.name) } else { r.name.clone() };
-                    if gz_ui::menu_item(ui, &cap, gz_ui::MenuItem { selected: on, ..gz_ui::MenuItem::default() }) {
+                    if gz_ui::menu_item(
+                        ui,
+                        &cap,
+                        gz_ui::MenuItem { selected: on, ..gz_ui::MenuItem::default() },
+                    ) {
                         if on {
                             picked_roles.retain(|p| *p != r.name);
                         } else {
@@ -1121,13 +1369,23 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
                 }
                 // a stray name can still be unticked
                 for s in &stray {
-                    if gz_ui::menu_item(ui, &format!("{s}  (not a role of this graph)"), gz_ui::MenuItem { selected: true, ..gz_ui::MenuItem::default() }) {
+                    if gz_ui::menu_item(
+                        ui,
+                        &format!("{s}  (not a role of this graph)"),
+                        gz_ui::MenuItem { selected: true, ..gz_ui::MenuItem::default() },
+                    ) {
                         picked_roles.retain(|p| p != s);
                         ch = true;
                     }
                 }
                 if roles.is_empty() {
-                    gz_ui::text::label(ui, "Declare a role in the Graph panel first", Font::Body, palette(ui.ctx()).text_disabled, Clip::End);
+                    gz_ui::text::label(
+                        ui,
+                        "Declare a role in the Graph panel first",
+                        Font::Body,
+                        palette(ui.ctx()).text_disabled,
+                        Clip::End,
+                    );
                 }
             });
         });
@@ -1146,7 +1404,14 @@ pub fn who(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
 }
 
 /// Who a follow walks after, or who an attack is aimed at (`DrawRoleTarget`).
-pub fn role_target(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, attack: bool) -> bool {
+pub fn role_target(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    attack: bool,
+) -> bool {
     let mut list = modes(&["actor", "ref", "story", "character"]);
     if cx.behaviour || v.has("role") {
         list.insert(1, "role".to_owned());
@@ -1176,7 +1441,14 @@ pub fn role_target(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: 
     }
     if !mode.is_empty() && mode != "actor" {
         let mut s = v.get_string(&mode, "");
-        if picked(ui, cx, &format!("{salt}/value"), &row.nested(&look::pretty(&mode), ""), pick_type_of(&mode), &mut s) {
+        if picked(
+            ui,
+            cx,
+            &format!("{salt}/value"),
+            &row.nested(&look::pretty(&mode), ""),
+            pick_type_of(&mode),
+            &mut s,
+        ) {
             v.set(&mode, s);
             ch = true;
         }
@@ -1205,7 +1477,9 @@ pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v
         } else {
             String::new()
         };
-        g.row(&row.label, &row.help, flags | PropFlags::READ_ONLY, row.depth, |ui| grid::read_only(ui, &shown, Clip::End));
+        g.row(&row.label, &row.help, flags | PropFlags::READ_ONLY, row.depth, |ui| {
+            grid::read_only(ui, &shown, Clip::End)
+        });
         if !error.is_empty() {
             g.message(Tone::Error, &error);
         }
@@ -1230,7 +1504,15 @@ pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v
         } else if r.optional {
             add(&mut help, "Optional");
         }
-        if npc_ref(ui, cx, &format!("{salt}/bind{i}"), &row.nested(&r.name, &help), &mut binding, false, false) {
+        if npc_ref(
+            ui,
+            cx,
+            &format!("{salt}/bind{i}"),
+            &row.nested(&r.name, &help),
+            &mut binding,
+            false,
+            false,
+        ) {
             if binding.is_empty() {
                 v.erase(&r.name);
             } else {
@@ -1246,13 +1528,16 @@ pub fn role_bindings(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v
     if !(roles.is_empty() && asset_id.is_empty()) {
         let keys: Vec<SmolStr> = v.fields().iter().map(|(k, _)| k.clone()).collect();
         for (k, key) in keys.iter().enumerate() {
-            let known = (roles.is_empty() && !error.is_empty()) || roles.iter().any(|r| r.name == key.as_str());
+            let known =
+                (roles.is_empty() && !error.is_empty()) || roles.iter().any(|r| r.name == key.as_str());
             if known {
                 continue;
             }
             let mut drop = false;
             grid(ui, cx.role, (salt, "stray", k), |g| {
-                g.row(key, "", PropFlags::INVALID | PropFlags::READ_ONLY, row.depth + 1, |ui| grid::read_only(ui, "", Clip::End));
+                g.row(key, "", PropFlags::INVALID | PropFlags::READ_ONLY, row.depth + 1, |ui| {
+                    grid::read_only(ui, "", Clip::End)
+                });
                 drop = g.trailing(Icon::Delete, "Remove the binding");
                 g.message(Tone::Warning, "The asset declares no such role");
             });
@@ -1274,7 +1559,13 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
     }
     let mut ch = false;
     let n = v.arr().len();
-    text_row(ui, cx.role, salt, &row.clone().more_help("A row is one NPC: a project character or a spawn section"), &format!("{n} NPC{}", if n == 1 { "" } else { "s" }));
+    text_row(
+        ui,
+        cx.role,
+        salt,
+        &row.clone().more_help("A row is one NPC: a project character or a spawn section"),
+        &format!("{n} NPC{}", if n == 1 { "" } else { "s" }),
+    );
     let d = row.depth + 1;
     let (mut remove, mut up, mut down) = (None, None, None);
     for i in 0..n {
@@ -1317,14 +1608,29 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
         let section_now = r.has("section") && !r.has("character");
         let key = if section_now { "section" } else { "character" };
         let mut s = r.get_string(key, "");
-        let who_row = if section_now { Row::new("Section", "The spawn section of the NPC", d + 1) } else { Row::new("Character", "The project's character: its id", d + 1) };
-        if picked(ui, cx, &format!("{salt}/{i}/who"), &who_row, if section_now { "spawn_section" } else { "character_id" }, &mut s) {
+        let who_row = if section_now {
+            Row::new("Section", "The spawn section of the NPC", d + 1)
+        } else {
+            Row::new("Character", "The project's character: its id", d + 1)
+        };
+        if picked(
+            ui,
+            cx,
+            &format!("{salt}/{i}/who"),
+            &who_row,
+            if section_now { "spawn_section" } else { "character_id" },
+            &mut s,
+        ) {
             r.erase(if section_now { "character" } else { "section" });
             r.set(key, s);
             row_ch = true;
         }
         let mut rf = r.get_string("ref", "");
-        let ref_row = Row::new("Ref", "The name this NPC is known by from here on: { ref = ... } in a later node, a role of behaviour.run, a kill objective. Type a new name or pick one", d + 1);
+        let ref_row = Row::new(
+            "Ref",
+            "The name this NPC is known by from here on: { ref = ... } in a later node, a role of behaviour.run, a kill objective. Type a new name or pick one",
+            d + 1,
+        );
         if picked(ui, cx, &format!("{salt}/{i}/ref"), &ref_row, "ref_name", &mut rf) {
             if rf.is_empty() {
                 r.erase("ref");
@@ -1335,7 +1641,11 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
         }
         let unique_def = !section_now;
         let mut unique = r.get_bool("unique", unique_def);
-        let u_row = Row::new("Unique", "Every NPC of this kind already in the world is removed first, so there is never a second one. On by default for a character, off for a section", d + 1);
+        let u_row = Row::new(
+            "Unique",
+            "Every NPC of this kind already in the world is removed first, so there is never a second one. On by default for a character, off for a section",
+            d + 1,
+        );
         if check_row(ui, cx.role, &format!("{salt}/{i}/unique"), &u_row, &mut unique) {
             if unique == unique_def {
                 r.erase("unique");
@@ -1345,7 +1655,13 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
             row_ch = true;
         }
         let mut dead = r.get_bool("dead", false);
-        if check_row(ui, cx.role, &format!("{salt}/{i}/dead"), &Row::new("Dead", "Spawned as a corpse", d + 1), &mut dead) {
+        if check_row(
+            ui,
+            cx.role,
+            &format!("{salt}/{i}/dead"),
+            &Row::new("Dead", "Spawned as a corpse", d + 1),
+            &mut dead,
+        ) {
             if dead {
                 r.set("dead", true);
             } else {
@@ -1354,7 +1670,15 @@ pub fn npc_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mu
             row_ch = true;
         }
         let mut yaw = r.get_number("yaw", 0.0) as f32;
-        if number_row(ui, cx.role, &format!("{salt}/{i}/yaw"), &Row::new("Yaw", "Where it faces, in degrees", d + 1), &mut yaw, 1.0, "\u{b0}") {
+        if number_row(
+            ui,
+            cx.role,
+            &format!("{salt}/{i}/yaw"),
+            &Row::new("Yaw", "Where it faces, in degrees", d + 1),
+            &mut yaw,
+            1.0,
+            "\u{b0}",
+        ) {
             if yaw == 0.0 {
                 r.erase("yaw");
             } else {
@@ -1396,12 +1720,31 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
     let d = row.depth;
     let mut ch = false;
     let mut s = v.get_string("section", "");
-    if picked(ui, cx, &format!("{salt}/section"), &Row::new("Squad section", "Which squad to create; its section decides how many and who they are", d).flags(PropFlags::REQUIRED), "squad_section", &mut s) {
+    if picked(
+        ui,
+        cx,
+        &format!("{salt}/section"),
+        &Row::new("Squad section", "Which squad to create; its section decides how many and who they are", d)
+            .flags(PropFlags::REQUIRED),
+        "squad_section",
+        &mut s,
+    ) {
         v.set("section", s);
         ch = true;
     }
     let mut smart = v.get_string("smart", "");
-    if picked(ui, cx, &format!("{salt}/smart"), &Row::new("Smart", "Optional: the smart that owns them. Empty and with a place set, the nearest one is used", d), "smart", &mut smart) {
+    if picked(
+        ui,
+        cx,
+        &format!("{salt}/smart"),
+        &Row::new(
+            "Smart",
+            "Optional: the smart that owns them. Empty and with a place set, the nearest one is used",
+            d,
+        ),
+        "smart",
+        &mut smart,
+    ) {
         // erased when empty: a written "" reads as "a smart was named"
         if smart.is_empty() {
             v.erase("smart");
@@ -1411,7 +1754,17 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
         ch = true;
     }
     let mut pl = v.get("place").cloned().unwrap_or_default();
-    if place(ui, cx, &format!("{salt}/place"), &Row::new("Appear at", "Where they appear. Empty = on the smart. A zone scatters them across it, a point puts them all on it", d), &mut pl) {
+    if place(
+        ui,
+        cx,
+        &format!("{salt}/place"),
+        &Row::new(
+            "Appear at",
+            "Where they appear. Empty = on the smart. A zone scatters them across it, a point puts them all on it",
+            d,
+        ),
+        &mut pl,
+    ) {
         if pl.is_nil() {
             v.erase("place");
         } else {
@@ -1421,7 +1774,19 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
     }
     if pl.is_table() && pl.has("restrictor") {
         let mut spread = v.get_number("spread", 1.0) as f32;
-        if number_row(ui, cx.role, &format!("{salt}/spread"), &Row::new("Spread", "How much of the zone to spawn in: 0.5 keeps them off the edges. The zone itself does not change", d), &mut spread, 0.01, "") {
+        if number_row(
+            ui,
+            cx.role,
+            &format!("{salt}/spread"),
+            &Row::new(
+                "Spread",
+                "How much of the zone to spawn in: 0.5 keeps them off the edges. The zone itself does not change",
+                d,
+            ),
+            &mut spread,
+            0.01,
+            "",
+        ) {
             spread = spread.clamp(0.05, 1.0);
             if spread >= 0.999 {
                 v.erase("spread");
@@ -1432,7 +1797,18 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
         }
     }
     let mut pen = v.get_string("restrictor", "");
-    if picked(ui, cx, &format!("{salt}/pen"), &Row::new("Penned in", "A zone they are penned into. They keep working, they just cannot wander off", d), "restrictor", &mut pen) {
+    if picked(
+        ui,
+        cx,
+        &format!("{salt}/pen"),
+        &Row::new(
+            "Penned in",
+            "A zone they are penned into. They keep working, they just cannot wander off",
+            d,
+        ),
+        "restrictor",
+        &mut pen,
+    ) {
         if pen.is_empty() {
             v.erase("restrictor");
         } else {
@@ -1441,7 +1817,14 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
         ch = true;
     }
     let mut rf = v.get_string("ref", "");
-    if picked(ui, cx, &format!("{salt}/ref"), &Row::new("Ref", "Other nodes point at this squad by that name", d), "ref_name", &mut rf) {
+    if picked(
+        ui,
+        cx,
+        &format!("{salt}/ref"),
+        &Row::new("Ref", "Other nodes point at this squad by that name", d),
+        "ref_name",
+        &mut rf,
+    ) {
         if rf.is_empty() {
             v.erase("ref");
         } else {
@@ -1450,7 +1833,13 @@ pub fn spawn_spec(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
         ch = true;
     }
     let mut hold = v.get_bool("hold", true);
-    if check_row(ui, cx.role, &format!("{salt}/hold"), &Row::new("Hold", "Pins the squad to its smart, so the simulation cannot send it elsewhere", d), &mut hold) {
+    if check_row(
+        ui,
+        cx.role,
+        &format!("{salt}/hold"),
+        &Row::new("Hold", "Pins the squad to its smart, so the simulation cannot send it elsewhere", d),
+        &mut hold,
+    ) {
         v.set("hold", hold);
         ch = true;
     }
@@ -1487,14 +1876,33 @@ fn row_state_summary(e: &Value) -> String {
 }
 
 /// The upgrades installed on the item, ticked from what its section can take (`DrawUpgrades`).
-fn upgrades(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, item_caps: &Caps, v: &mut Value) -> bool {
-    let chosen: Vec<String> = text::split(&v.to_text(""), ',').into_iter().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+fn upgrades(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    depth: u32,
+    item_caps: &Caps,
+    v: &mut Value,
+) -> bool {
+    let chosen: Vec<String> = text::split(&v.to_text(""), ',')
+        .into_iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
     let mut shown = chosen.join(", ");
     let pid = ui.make_persistent_id(("gz-ui-graph.upgrades", salt));
     let mut ch = false;
     let mut open = false;
     grid(ui, cx.role, (salt, "upgrades"), |g| {
-        if g.row("Upgrades", "The upgrades installed on the item, picked from what its section can take", PropFlags::NONE, depth, |ui| grid::text_field(ui, &mut shown).changed()).unwrap_or(false) {
+        if g.row(
+            "Upgrades",
+            "The upgrades installed on the item, picked from what its section can take",
+            PropFlags::NONE,
+            depth,
+            |ui| grid::text_field(ui, &mut shown).changed(),
+        )
+        .unwrap_or(false)
+        {
             *v = if shown.trim().is_empty() { Value::Nil } else { Value::from(shown.as_str()) };
             ch = true;
         }
@@ -1508,7 +1916,17 @@ fn upgrades(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, item_caps
         let mut toggled: Option<(String, bool)> = None;
         menu_popup(&cx.ctx, pid, anchor, ui.layer_id(), |ui| {
             if item_caps.upgrades.is_empty() {
-                gz_ui::text::label(ui, if item_caps.known { "This item has no upgrades" } else { "Link a game to list the upgrades" }, Font::Body, palette(ui.ctx()).text_disabled, Clip::End);
+                gz_ui::text::label(
+                    ui,
+                    if item_caps.known {
+                        "This item has no upgrades"
+                    } else {
+                        "Link a game to list the upgrades"
+                    },
+                    Font::Body,
+                    palette(ui.ctx()).text_disabled,
+                    Clip::End,
+                );
             }
             for id in &item_caps.upgrades {
                 let mut on = chosen.iter().any(|c| c == id);
@@ -1521,7 +1939,12 @@ fn upgrades(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, item_caps
         });
         if let Some((id, on)) = toggled {
             // in the section's own order, an id at most once: the engine aborts on a duplicate
-            let out: Vec<&str> = item_caps.upgrades.iter().filter(|c| if **c == id { on } else { chosen.iter().any(|x| x == *c) }).map(String::as_str).collect();
+            let out: Vec<&str> = item_caps
+                .upgrades
+                .iter()
+                .filter(|c| if **c == id { on } else { chosen.iter().any(|x| x == *c) })
+                .map(String::as_str)
+                .collect();
             *v = if out.is_empty() { Value::Nil } else { Value::from(out.join(", ")) };
             ch = true;
         }
@@ -1606,7 +2029,15 @@ fn row_state(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, depth: u32, k: &Kind
 
 /// The rows of "what to bring": a section with a count, or one concrete object (`DrawItemList`).
 #[allow(clippy::too_many_lines)]
-pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, objects_ok: bool, rows_of: Option<&Kind>) -> bool {
+pub fn item_list(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    objects_ok: bool,
+    rows_of: Option<&Kind>,
+) -> bool {
     let mut ch = false;
     let count_or_all = rows_of.and_then(|k| k.row_param("count")).is_some_and(|p| p.ty == "count_or_all");
     let with_state = rows_have_state(rows_of);
@@ -1624,7 +2055,13 @@ pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
         ch = true;
     }
     let n = v.arr().len();
-    text_row(ui, cx.role, salt, &Row { help: help.to_owned(), ..row.clone() }, &format!("{n} row{}", if n == 1 { "" } else { "s" }));
+    text_row(
+        ui,
+        cx.role,
+        salt,
+        &Row { help: help.to_owned(), ..row.clone() },
+        &format!("{n} row{}", if n == 1 { "" } else { "s" }),
+    );
     let d = row.depth + 1;
     let mut kill = None;
     for i in 0..n {
@@ -1637,7 +2074,14 @@ pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
         let mut row_ch = false;
         if e.has("item") {
             let mut it = e.get("item").cloned().unwrap_or_default();
-            if object_ref(ui, cx, &format!("{salt}/{i}/item"), &Row::new(&head, "One concrete object: a story id or a ref this graph created", d), &mut it, false) {
+            if object_ref(
+                ui,
+                cx,
+                &format!("{salt}/{i}/item"),
+                &Row::new(&head, "One concrete object: a story id or a ref this graph created", d),
+                &mut it,
+                false,
+            ) {
                 e.set("item", it);
                 row_ch = true;
             }
@@ -1650,11 +2094,22 @@ pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
         } else {
             let mut sect = e.get_string("section", "");
             let pickers = cx.pickers();
-            let unknown = !sect.is_empty() && pickers.is_some_and(|p| !p.entries(PickerType::Item).is_empty() && !p.known(PickerType::Item, &sect));
+            let unknown = !sect.is_empty()
+                && pickers.is_some_and(|p| {
+                    !p.entries(PickerType::Item).is_empty() && !p.known(PickerType::Item, &sect)
+                });
             let pid = ui.make_persistent_id(("gz-ui-graph.pick", salt, i, "section"));
             let mut open = false;
             grid(ui, cx.role, (salt, i, "section"), |g| {
-                if g.row(&head, "The item section: what to bring or make", if unknown { PropFlags::INVALID } else { PropFlags::NONE }, d, |ui| grid::text_field(ui, &mut sect).changed()).unwrap_or(false) {
+                if g.row(
+                    &head,
+                    "The item section: what to bring or make",
+                    if unknown { PropFlags::INVALID } else { PropFlags::NONE },
+                    d,
+                    |ui| grid::text_field(ui, &mut sect).changed(),
+                )
+                .unwrap_or(false)
+                {
                     row_ch = true;
                 }
                 if g.trailing(Icon::Delete, "Remove the row") {
@@ -1682,7 +2137,13 @@ pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
                     Some(Value::Number(n)) => format!("{}", *n as i64),
                     Some(other) => other.to_text(""),
                 };
-                if text_row_edit(ui, cx.role, &format!("{salt}/{i}/count"), &Row::new("Count", "How many, or \"all\"", d + 1), &mut s) {
+                if text_row_edit(
+                    ui,
+                    cx.role,
+                    &format!("{salt}/{i}/count"),
+                    &Row::new("Count", "How many, or \"all\"", d + 1),
+                    &mut s,
+                ) {
                     let c = s.trim();
                     if c.is_empty() || c == "1" {
                         e.erase("count");
@@ -1696,7 +2157,12 @@ pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
                 }
             } else {
                 let mut count = e.get_number("count", 1.0) as i32;
-                let changed = grid(ui, cx.role, (salt, i, "count"), |g| g.row("Count", "How many", PropFlags::NONE, d + 1, |ui| grid::integer(ui, &mut count, 0.25, "").changed()).unwrap_or(false));
+                let changed = grid(ui, cx.role, (salt, i, "count"), |g| {
+                    g.row("Count", "How many", PropFlags::NONE, d + 1, |ui| {
+                        grid::integer(ui, &mut count, 0.25, "").changed()
+                    })
+                    .unwrap_or(false)
+                });
                 if changed {
                     let count = count.clamp(1, 100_000);
                     if count == 1 {
@@ -1714,8 +2180,17 @@ pub fn item_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &m
                 let mut open_state = cx.ctx.data(|dd| dd.get_temp::<bool>(key)).unwrap_or(!sum.is_empty());
                 let mut flip = false;
                 grid(ui, cx.role, (salt, i, "state"), |g| {
-                    g.row("State", "The state every item of the row is made with; unset means full", PropFlags::READ_ONLY, d + 1, |ui| grid::read_only(ui, if sum.is_empty() { "full" } else { &sum }, Clip::End));
-                    flip = g.trailing(if open_state { Icon::ChevronUp } else { Icon::ChevronDown }, if open_state { "Hide the state" } else { "Edit the state" });
+                    g.row(
+                        "State",
+                        "The state every item of the row is made with; unset means full",
+                        PropFlags::READ_ONLY,
+                        d + 1,
+                        |ui| grid::read_only(ui, if sum.is_empty() { "full" } else { &sum }, Clip::End),
+                    );
+                    flip = g.trailing(
+                        if open_state { Icon::ChevronUp } else { Icon::ChevronDown },
+                        if open_state { "Hide the state" } else { "Edit the state" },
+                    );
                 });
                 if flip {
                     open_state = !open_state;
@@ -1794,7 +2269,15 @@ fn item_rows_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Va
         }
         None => Value::Nil,
     };
-    if item_list(ui, cx, "rows_items", &Row::new("Items", "", depth).flags(PropFlags::REQUIRED), &mut rows, false, Some(k)) {
+    if item_list(
+        ui,
+        cx,
+        "rows_items",
+        &Row::new("Items", "", depth).flags(PropFlags::REQUIRED),
+        &mut rows,
+        false,
+        Some(k),
+    ) {
         params.erase("section");
         params.erase("count");
         // whatever the rows carry moved into them
@@ -1853,7 +2336,18 @@ fn fetch_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Value,
         }
     }
     let mut from = params.get("from").cloned().unwrap_or_default();
-    if object_ref(ui, cx, "fetch_from", &Row::new("From container", "Optional: credit only items taken from this container. An identical item from elsewhere does not count", depth), &mut from, false) {
+    if object_ref(
+        ui,
+        cx,
+        "fetch_from",
+        &Row::new(
+            "From container",
+            "Optional: credit only items taken from this container. An identical item from elsewhere does not count",
+            depth,
+        ),
+        &mut from,
+        false,
+    ) {
         ch = true;
         if from.is_empty() {
             params.erase("from");
@@ -1862,7 +2356,17 @@ fn fetch_params(ui: &mut Ui, cx: &mut ParamCx<'_>, k: &Kind, params: &mut Value,
         }
     }
     let mut spawn = params.get("spawn").cloned().unwrap_or_default();
-    if loot_spawn(ui, cx, "fetch_spawn", &Row::new("Spawn loot", "Optional: the node creates the items on entry and credits only those instances", depth), &mut spawn) {
+    if loot_spawn(
+        ui,
+        cx,
+        "fetch_spawn",
+        &Row::new(
+            "Spawn loot",
+            "Optional: the node creates the items on entry and credits only those instances",
+            depth,
+        ),
+        &mut spawn,
+    ) {
         ch = true;
         if spawn.is_empty() {
             params.erase("spawn");
@@ -1922,21 +2426,50 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
     match mode.as_str() {
         "place" => {
             let mut pl = v.get("place").cloned().unwrap_or_default();
-            if place(ui, cx, &format!("{salt}/place"), &Row::new("Place", "Drops the loot on the ground at the place", d), &mut pl) {
+            if place(
+                ui,
+                cx,
+                &format!("{salt}/place"),
+                &Row::new("Place", "Drops the loot on the ground at the place", d),
+                &mut pl,
+            ) {
                 v.set("place", pl);
                 ch = true;
             }
         }
         "into" => {
             let mut r = v.get("into").cloned().unwrap_or_default();
-            if object_ref(ui, cx, &format!("{salt}/into"), &Row::new("Into object", "A specific container: a story id (ALife\\Story ID (script) on the object) or a ref created by this graph", d), &mut r, false) {
+            if object_ref(
+                ui,
+                cx,
+                &format!("{salt}/into"),
+                &Row::new(
+                    "Into object",
+                    "A specific container: a story id (ALife\\Story ID (script) on the object) or a ref created by this graph",
+                    d,
+                ),
+                &mut r,
+                false,
+            ) {
                 v.set("into", r);
                 ch = true;
             }
         }
         "npc" => {
             let mut r = v.get("npc").cloned().unwrap_or_default();
-            if npc_ref(ui, cx, &format!("{salt}/npc"), &Row::new("NPC", "Puts the loot into a live NPC inventory. profile/community match the first online one", d), &mut r, false, false) {
+            if npc_ref(
+                ui,
+                cx,
+                &format!("{salt}/npc"),
+                &Row::new(
+                    "NPC",
+                    "Puts the loot into a live NPC inventory. profile/community match the first online one",
+                    d,
+                ),
+                &mut r,
+                false,
+                false,
+            ) {
                 v.set("npc", r);
                 ch = true;
             }
@@ -1945,7 +2478,15 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
             let mut sel = v.get(&mode).cloned().filter(Value::is_table).unwrap_or_else(Value::table);
             let mut sel_ch = false;
             let mut pick = sel.get_string("pick", "");
-            if combo_row(ui, cx.role, &format!("{salt}/pick"), &Row::new("Pick", "Which of the matches gets the loot", d), &mut pick, &modes(&["random", "nearest", "farthest"]), Some("(default)")) {
+            if combo_row(
+                ui,
+                cx.role,
+                &format!("{salt}/pick"),
+                &Row::new("Pick", "Which of the matches gets the loot", d),
+                &mut pick,
+                &modes(&["random", "nearest", "farthest"]),
+                Some("(default)"),
+            ) {
                 if pick.is_empty() {
                     sel.erase("pick");
                 } else {
@@ -1955,7 +2496,15 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
             }
             if mode == "stash" {
                 let mut st = sel.get_string("state", "");
-                if combo_row(ui, cx.role, &format!("{salt}/state"), &Row::new("State", "Full: has anything inside. Empty: holds nothing", d), &mut st, &modes(&["any", "full", "empty"]), Some("(any)")) {
+                if combo_row(
+                    ui,
+                    cx.role,
+                    &format!("{salt}/state"),
+                    &Row::new("State", "Full: has anything inside. Empty: holds nothing", d),
+                    &mut st,
+                    &modes(&["any", "full", "empty"]),
+                    Some("(any)"),
+                ) {
                     if st.is_empty() {
                         sel.erase("state");
                     } else {
@@ -1965,7 +2514,15 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
                 }
             }
             let mut within = sel.get_number("within", 0.0) as f32;
-            if number_row(ui, cx.role, &format!("{salt}/within"), &Row::new("Within, m", "0 = unlimited. Nothing within it: the nearest match is used", d), &mut within, 1.0, "m") {
+            if number_row(
+                ui,
+                cx.role,
+                &format!("{salt}/within"),
+                &Row::new("Within, m", "0 = unlimited. Nothing within it: the nearest match is used", d),
+                &mut within,
+                1.0,
+                "m",
+            ) {
                 if within <= 0.0 {
                     sel.erase("within");
                 } else {
@@ -1974,7 +2531,15 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
                 sel_ch = true;
             }
             let mut beyond = sel.get_number("beyond", 0.0) as f32;
-            if number_row(ui, cx.role, &format!("{salt}/beyond"), &Row::new("Beyond, m", "0 = unlimited. Nothing beyond it: the farthest match is used", d), &mut beyond, 1.0, "m") {
+            if number_row(
+                ui,
+                cx.role,
+                &format!("{salt}/beyond"),
+                &Row::new("Beyond, m", "0 = unlimited. Nothing beyond it: the farthest match is used", d),
+                &mut beyond,
+                1.0,
+                "m",
+            ) {
                 if beyond <= 0.0 {
                     sel.erase("beyond");
                 } else {
@@ -1984,7 +2549,17 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
             }
             if mode == "stash" {
                 let mut scatter = sel.get_bool("scatter", false);
-                if check_row(ui, cx.role, &format!("{salt}/scatter"), &Row::new("Scatter", "Each item goes to its own matching stash, otherwise all share one", d), &mut scatter) {
+                if check_row(
+                    ui,
+                    cx.role,
+                    &format!("{salt}/scatter"),
+                    &Row::new(
+                        "Scatter",
+                        "Each item goes to its own matching stash, otherwise all share one",
+                        d,
+                    ),
+                    &mut scatter,
+                ) {
                     if scatter {
                         sel.set("scatter", true);
                     } else {
@@ -2002,12 +2577,25 @@ pub fn loot_spawn(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
             let mut nc = v.get("new_corpse").cloned().filter(Value::is_table).unwrap_or_else(Value::table);
             let mut nc_ch = false;
             let mut sect = nc.get_string("section", "");
-            if picked(ui, cx, &format!("{salt}/ncs"), &Row::new("Corpse section", "The corpse's spawn section", d), "spawn_section", &mut sect) {
+            if picked(
+                ui,
+                cx,
+                &format!("{salt}/ncs"),
+                &Row::new("Corpse section", "The corpse's spawn section", d),
+                "spawn_section",
+                &mut sect,
+            ) {
                 nc.set("section", sect);
                 nc_ch = true;
             }
             let mut pl = nc.get("place").cloned().unwrap_or_default();
-            if place(ui, cx, &format!("{salt}/ncp"), &Row::new("Place", "Where the fresh corpse drops. The loot goes into its inventory", d), &mut pl) {
+            if place(
+                ui,
+                cx,
+                &format!("{salt}/ncp"),
+                &Row::new("Place", "Where the fresh corpse drops. The loot goes into its inventory", d),
+                &mut pl,
+            ) {
                 nc.set("place", pl);
                 nc_ch = true;
             }
@@ -2028,8 +2616,18 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
     }
     let mut ch = false;
     let n = v.arr().len();
-    let more = if weights { "Each case is a pin; the weights decide how often each one fires" } else { "Each case is a pin; the first case whose conditions hold fires" };
-    text_row(ui, cx.role, salt, &row.clone().more_help(more), &format!("{n} case{}", if n == 1 { "" } else { "s" }));
+    let more = if weights {
+        "Each case is a pin; the weights decide how often each one fires"
+    } else {
+        "Each case is a pin; the first case whose conditions hold fires"
+    };
+    text_row(
+        ui,
+        cx.role,
+        salt,
+        &row.clone().more_help(more),
+        &format!("{n} case{}", if n == 1 { "" } else { "s" }),
+    );
     let d = row.depth + 1;
     let mut drop = None;
     for i in 0..n {
@@ -2040,7 +2638,15 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
         let mut c_ch = false;
         let mut name = c.get_string("name", "");
         grid(ui, cx.role, (salt, i, "name"), |g| {
-            if g.row(&format!("Case {}", i + 1), "The case's name: the pin it leaves the node by", PropFlags::NONE, d, |ui| grid::text_field(ui, &mut name).changed()).unwrap_or(false) {
+            if g.row(
+                &format!("Case {}", i + 1),
+                "The case's name: the pin it leaves the node by",
+                PropFlags::NONE,
+                d,
+                |ui| grid::text_field(ui, &mut name).changed(),
+            )
+            .unwrap_or(false)
+            {
                 c_ch = true;
             }
             if g.trailing(Icon::Delete, "Remove the case") {
@@ -2052,7 +2658,15 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
         }
         if weights {
             let mut w = c.get_number("weight", 1.0) as f32;
-            if number_row(ui, cx.role, &format!("{salt}/{i}/weight"), &Row::new("Weight", "How often this case fires against the others", d + 1), &mut w, 0.1, "") {
+            if number_row(
+                ui,
+                cx.role,
+                &format!("{salt}/{i}/weight"),
+                &Row::new("Weight", "How often this case fires against the others", d + 1),
+                &mut w,
+                0.1,
+                "",
+            ) {
                 c.set("weight", f64::from(w));
                 c_ch = true;
             }
@@ -2090,7 +2704,14 @@ pub fn cases(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut V
 
 /// A condition list inside parameters: generic values edited as typed conditions
 /// (`DrawCondValue`).
-pub fn cond_value(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Value, depth: u32) -> bool {
+pub fn cond_value(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row: &Row,
+    v: &mut Value,
+    depth: u32,
+) -> bool {
     let mut conds: Vec<Cond> = v.arr().iter().filter_map(|c| asset::cond_from_value(c).ok()).collect();
     if !cond_list(ui, cx, salt, row.depth, &mut conds, depth) {
         return false;
@@ -2101,7 +2722,14 @@ pub fn cond_value(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &
 
 /// The conditions of a node or a case: "If" then "And", each with its kind and its parameters
 /// (`DrawCondList`).
-pub fn cond_list(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row_depth: u32, conds: &mut Vec<Cond>, nesting: u32) -> bool {
+pub fn cond_list(
+    ui: &mut Ui,
+    cx: &mut ParamCx<'_>,
+    salt: &str,
+    row_depth: u32,
+    conds: &mut Vec<Cond>,
+    nesting: u32,
+) -> bool {
     let mut ch = false;
     let mut drop = None;
     for (i, c) in conds.iter_mut().enumerate() {
@@ -2163,7 +2791,13 @@ pub fn lua(ui: &mut Ui, cx: &mut ParamCx<'_>, salt: &str, row: &Row, v: &mut Val
     }
     let mut edit = false;
     grid(ui, cx.role, salt, |g| {
-        g.row(&row.label, &row.help, row.flags, row.depth, |ui| grid::read_only(ui, &if code.is_empty() { "(empty)".to_owned() } else { first_line(&code) }, Clip::End));
+        g.row(&row.label, &row.help, row.flags, row.depth, |ui| {
+            grid::read_only(
+                ui,
+                &if code.is_empty() { "(empty)".to_owned() } else { first_line(&code) },
+                Clip::End,
+            )
+        });
         edit = g.trailing(Icon::Rename, "Edit the Lua");
     });
     if edit {

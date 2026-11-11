@@ -23,11 +23,13 @@ mod saver;
 mod services;
 
 pub use args::{Args, ArgsExt};
-pub use editor::{AppPaths, DirtyDoc, DirtySource, Editor, EditorOptions, Flags, ProjectSession};
+pub use editor::{
+    AppPaths, DirtyDoc, DirtySource, Editor, EditorOptions, Flags, ProjectSession, SettleFuture,
+};
 pub use frames::{FrameClock, FrameStamp};
 pub use notices::{Notice, NoticeKind, Notices};
-pub use saver::AutoSave;
 pub use registry::{CommandInfo, Registry, Reply, error_reply, ok_reply};
+pub use saver::AutoSave;
 pub use services::Services;
 
 pub use gz_base::{Origin, Problem, RelPath, Rev, Severity, SmolStr};

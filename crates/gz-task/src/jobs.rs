@@ -262,7 +262,9 @@ impl Jobs {
         inner.exec.spawn(async move {
             let outcome = AssertUnwindSafe(async move { work(ctx).await }).catch_unwind().await;
             let end = match outcome {
-                Ok(Ok(value)) => End { state: JobState::Done, at_ms: now_ms(), result: Some(Arc::new(value)), error: None },
+                Ok(Ok(value)) => {
+                    End { state: JobState::Done, at_ms: now_ms(), result: Some(Arc::new(value)), error: None }
+                }
                 Ok(Err(e)) => End {
                     state: if e.cancelled { JobState::Cancelled } else { JobState::Failed },
                     at_ms: now_ms(),
@@ -273,7 +275,10 @@ impl Jobs {
                     state: JobState::Failed,
                     at_ms: now_ms(),
                     result: None,
-                    error: Some(format!("The job stopped on an internal error: {}", panic_message(&*payload))),
+                    error: Some(format!(
+                        "The job stopped on an internal error: {}",
+                        panic_message(&*payload)
+                    )),
                 },
             };
             *entry.end.lock() = Some(end);
@@ -312,7 +317,8 @@ impl Jobs {
     /// The running job of a group, when there is one.
     #[must_use]
     pub fn running_in(&self, group: &str) -> Option<JobInfo> {
-        let entry = self.0.list.lock().iter().find(|e| e.group.as_deref() == Some(group) && e.running()).cloned();
+        let entry =
+            self.0.list.lock().iter().find(|e| e.group.as_deref() == Some(group) && e.running()).cloned();
         entry.map(|e| e.info())
     }
 

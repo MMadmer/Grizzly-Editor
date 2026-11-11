@@ -73,7 +73,13 @@ impl NqProblem {
 pub fn shape_errors(shape: &[String]) -> Vec<NqProblem> {
     shape
         .iter()
-        .map(|m| NqProblem { severity: Severity::Error, code: "E003".into(), node: String::new(), slot: String::new(), message: m.clone() })
+        .map(|m| NqProblem {
+            severity: Severity::Error,
+            code: "E003".into(),
+            node: String::new(),
+            slot: String::new(),
+            message: m.clone(),
+        })
         .collect()
 }
 
@@ -188,7 +194,13 @@ fn str_of(v: &Value) -> Option<&str> {
 
 impl<'a> V<'a> {
     fn add(&mut self, sev: Severity, code: &str, node: Option<&str>, slot: &str, message: String) {
-        self.out.push(NqProblem { severity: sev, code: code.into(), node: node.unwrap_or("").to_owned(), slot: slot.to_owned(), message });
+        self.out.push(NqProblem {
+            severity: sev,
+            code: code.into(),
+            node: node.unwrap_or("").to_owned(),
+            slot: slot.to_owned(),
+            message,
+        });
     }
 
     fn err(&mut self, code: &str, node: Option<&str>, slot: &str, message: String) {
@@ -223,10 +235,20 @@ impl<'a> V<'a> {
         let used = picked.iter().filter(|p| p.is_some()).count();
         if used > 1 {
             let list = picked.iter().flatten().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(" and ");
-            self.err("E022", node, slot, format!("{kind} takes only one of these at a time, {list} are set together"));
+            self.err(
+                "E022",
+                node,
+                slot,
+                format!("{kind} takes only one of these at a time, {list} are set together"),
+            );
         }
         if used == 0 && matches!(kind, "objective.fetch" | "item.spawn" | "item.give" | "item.take") {
-            self.err("E022", node, slot, format!("{kind} needs an items list (or its one-line spelling, section)"));
+            self.err(
+                "E022",
+                node,
+                slot,
+                format!("{kind} needs an items list (or its one-line spelling, section)"),
+            );
         }
         if matches!(kind, "objective.fetch" | "objective.kill" | "objective.reach") {
             if params.has("map_spot") || params.has("spot_text") {
@@ -241,19 +263,41 @@ impl<'a> V<'a> {
         }
         if kind == "objective.fetch" {
             if params.has("item") {
-                self.err("E006", node, "", "the separate 'item' parameter is gone - use an items row { item = { ref = ... } }".into());
+                self.err(
+                    "E006",
+                    node,
+                    "",
+                    "the separate 'item' parameter is gone - use an items row { item = { ref = ... } }"
+                        .into(),
+                );
             }
             if params.has("from") && params.has("spawn") {
-                self.err("E022", node, "", "spawn already decides where the loot is - from would watch a second container".into());
+                self.err(
+                    "E022",
+                    node,
+                    "",
+                    "spawn already decides where the loot is - from would watch a second container".into(),
+                );
             }
             if params.has("count") && params.has("items") {
-                self.err("E022", node, "", "count belongs to section - the items list carries its own counts".into());
+                self.err(
+                    "E022",
+                    node,
+                    "",
+                    "count belongs to section - the items list carries its own counts".into(),
+                );
             }
             if params.has("spawn")
                 && let Some(rows) = params.get("items")
                 && rows.arr().iter().any(|r| r.is_table() && r.has("item"))
             {
-                self.err("E022", node, "", "spawn creates its own instances - a concrete-object row cannot be combined with it".into());
+                self.err(
+                    "E022",
+                    node,
+                    "",
+                    "spawn creates its own instances - a concrete-object row cannot be combined with it"
+                        .into(),
+                );
             }
         }
     }
@@ -267,9 +311,19 @@ impl<'a> V<'a> {
         }
         // restrictors are the one index the project fills, not the game
         if t == PickerType::Restrictor {
-            self.warn("W060", node, slot, format!("'{value}' is not a restrictor placed in this project's levels"));
+            self.warn(
+                "W060",
+                node,
+                slot,
+                format!("'{value}' is not a restrictor placed in this project's levels"),
+            );
         } else {
-            self.warn("W060", node, slot, format!("'{value}' is not a known {} of the linked game", t.name()));
+            self.warn(
+                "W060",
+                node,
+                slot,
+                format!("'{value}' is not a known {} of the linked game", t.name()),
+            );
         }
     }
 
@@ -280,7 +334,12 @@ impl<'a> V<'a> {
             Value::String(s) => {
                 let (ok, bad) = cp1251_covers(s);
                 if !ok {
-                    self.warn("W040", node, slot, format!("text has characters outside cp1251 ({bad}) - the game will show '?'"));
+                    self.warn(
+                        "W040",
+                        node,
+                        slot,
+                        format!("text has characters outside cp1251 ({bad}) - the game will show '?'"),
+                    );
                 }
             }
             Value::Table(t) => {
@@ -298,7 +357,13 @@ impl<'a> V<'a> {
         if let Some(Value::String(r)) = tbl.get("ref")
             && !r.is_empty()
         {
-            self.uses.push(RefSite { reference: r.to_string(), node, order, slot: slot.to_owned(), kind: "" });
+            self.uses.push(RefSite {
+                reference: r.to_string(),
+                node,
+                order,
+                slot: slot.to_owned(),
+                kind: "",
+            });
         }
     }
 
@@ -331,14 +396,30 @@ impl<'a> V<'a> {
             return;
         }
         match self.ctx.characters.iter().rev().find(|b| b.id == name) {
-            None => self.err("E030", node, slot, format!("character '{name}' is not a character of this project")),
-            Some(b) if b.template => self.err("E030", node, slot, format!("character '{name}' is a template - it never becomes an NPC")),
+            None => {
+                self.err("E030", node, slot, format!("character '{name}' is not a character of this project"))
+            }
+            Some(b) if b.template => self.err(
+                "E030",
+                node,
+                slot,
+                format!("character '{name}' is a template - it never becomes an NPC"),
+            ),
             Some(_) => {}
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn check_npc_ref(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, allow_smart: bool, allow_spawn: bool) -> bool {
+    fn check_npc_ref(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        allow_smart: bool,
+        allow_spawn: bool,
+    ) -> bool {
         if !v.is_table() {
             self.err(
                 "E006",
@@ -395,7 +476,12 @@ impl<'a> V<'a> {
             if v.has("level") {
                 self.check_indexed(Some(PickerType::Level), &v.get_string("level", ""), node, slot);
             } else {
-                self.warn("W060", node, slot, "a { pos } target without a level is placed on the level the quest runs on".into());
+                self.warn(
+                    "W060",
+                    node,
+                    slot,
+                    "a { pos } target without a level is placed on the level the quest runs on".into(),
+                );
             }
         }
         if allow_spawn && let Some(sp) = v.get("spawn") {
@@ -429,10 +515,26 @@ impl<'a> V<'a> {
         true
     }
 
-    fn check_object_ref(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, ty: &str) {
+    fn check_object_ref(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        ty: &str,
+    ) {
         let object = ty == "object_ref";
         if !v.is_table() {
-            self.err("E006", node, slot, format!("expected {ty} = {{ story = ... }} or {{ ref = ... }}{}", if object { " or { character = ... }" } else { "" }));
+            self.err(
+                "E006",
+                node,
+                slot,
+                format!(
+                    "expected {ty} = {{ story = ... }} or {{ ref = ... }}{}",
+                    if object { " or { character = ... }" } else { "" }
+                ),
+            );
             return;
         }
         let mut alts = 0;
@@ -449,7 +551,12 @@ impl<'a> V<'a> {
             self.check_character_name(v.get("character"), node, slot);
         }
         if alts != 1 {
-            self.err("E006", node, slot, format!("{ty} needs exactly one of story / ref{}", if object { " / character" } else { "" }));
+            self.err(
+                "E006",
+                node,
+                slot,
+                format!("{ty} needs exactly one of story / ref{}", if object { " / character" } else { "" }),
+            );
         }
         for (k, x) in v.fields() {
             if k != "story" && k != "ref" && !(object && k == "character") {
@@ -460,11 +567,24 @@ impl<'a> V<'a> {
         }
     }
 
-    fn check_spawn_spec(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, what: &str) {
+    fn check_spawn_spec(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        what: &str,
+    ) {
         // an empty smart is not a smart: the runtime reads it as unset, so must this
         let smart = v.get_string("smart", "");
         if !v.is_table() || !v.has("section") || (smart.is_empty() && !v.has("place")) {
-            self.err("E006", node, slot, format!("'{what}' needs {{ section = ... }} and a smart or a place to put them on"));
+            self.err(
+                "E006",
+                node,
+                slot,
+                format!("'{what}' needs {{ section = ... }} and a smart or a place to put them on"),
+            );
             return;
         }
         self.check_indexed(Some(PickerType::Squad), &v.get_string("section", ""), node, slot);
@@ -477,12 +597,26 @@ impl<'a> V<'a> {
         }
         self.note_ref_decl(&v.get_string("ref", ""), nidx, order, slot, "squad");
         if let Some(Value::Bool(false)) = v.get("hold") {
-            self.warn("W031", node, slot, "spawned squad without hold - it may leave for the simulation".into());
+            self.warn(
+                "W031",
+                node,
+                slot,
+                "spawned squad without hold - it may leave for the simulation".into(),
+            );
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn check_row_state(&mut self, e: &Value, k: &Kind, sect: &str, node: Option<&str>, sl: &str, nidx: Option<usize>, order: i32) {
+    fn check_row_state(
+        &mut self,
+        e: &Value,
+        k: &Kind,
+        sect: &str,
+        node: Option<&str>,
+        sl: &str,
+        nidx: Option<usize>,
+        order: i32,
+    ) {
         let caps = self.ctx.caps.map_or_else(|| std::sync::Arc::new(caps::Caps::default()), |c| c.of(sect));
         for (key, val) in e.fields() {
             if key == "section" || key == "item" {
@@ -496,14 +630,29 @@ impl<'a> V<'a> {
             self.check_param_value(k, rp, val, node, sl, nidx, order, false, Some(e));
             let need = caps::cap_of_key(key);
             if need != caps::ALL && caps.known && !caps.has(need) {
-                self.warn("W062", node, sl, format!("{} does not apply to {sect} - {}", caps::field_name(need), caps::why(need)));
+                self.warn(
+                    "W062",
+                    node,
+                    sl,
+                    format!("{} does not apply to {sect} - {}", caps::field_name(need), caps::why(need)),
+                );
             }
         }
         if let Some(Value::Number(a)) = e.get("ammo") {
             if caps.has(caps::AMMO_BOX) && caps.box_size > 0 && *a > f64::from(caps.box_size) {
-                self.warn("W063", node, sl, format!("ammo {} is over the box of {sect} ({})", *a as i32, caps.box_size));
+                self.warn(
+                    "W063",
+                    node,
+                    sl,
+                    format!("ammo {} is over the box of {sect} ({})", *a as i32, caps.box_size),
+                );
             } else if !caps.has(caps::AMMO_BOX) && caps.mag_size > 0 && *a > f64::from(caps.mag_size) {
-                self.warn("W063", node, sl, format!("ammo {} is over the magazine of {sect} ({})", *a as i32, caps.mag_size));
+                self.warn(
+                    "W063",
+                    node,
+                    sl,
+                    format!("ammo {} is over the magazine of {sect} ({})", *a as i32, caps.mag_size),
+                );
             }
         }
         if let Some(Value::String(ak)) = e.get("ammo_kind")
@@ -512,7 +661,12 @@ impl<'a> V<'a> {
             && !caps.ammo_class.is_empty()
             && !caps.ammo_class.iter().any(|c| c == ak.as_str())
         {
-            self.err("E006", node, sl, format!("{sect} does not chamber '{ak}' - its ammo_class is {}", caps.ammo_class.join(", ")));
+            self.err(
+                "E006",
+                node,
+                sl,
+                format!("{sect} does not chamber '{ak}' - its ammo_class is {}", caps.ammo_class.join(", ")),
+            );
         }
         if let Some(Value::String(up)) = e.get("upgrades") {
             let mut seen: Vec<String> = Vec::new();
@@ -523,11 +677,21 @@ impl<'a> V<'a> {
                 }
                 // the engine stops on a duplicate upgrade, and no pcall catches that
                 if seen.contains(&id) {
-                    self.err("E006", node, sl, format!("upgrade '{id}' is listed twice - the game aborts on a duplicate upgrade"));
+                    self.err(
+                        "E006",
+                        node,
+                        sl,
+                        format!("upgrade '{id}' is listed twice - the game aborts on a duplicate upgrade"),
+                    );
                 }
                 seen.push(id.clone());
                 if caps.known && !caps.upgrades.is_empty() && !caps.upgrades.contains(&id) {
-                    self.err("E006", node, sl, format!("upgrade '{id}' does not belong to {sect} - it would crash on spawn"));
+                    self.err(
+                        "E006",
+                        node,
+                        sl,
+                        format!("upgrade '{id}' does not belong to {sect} - it would crash on spawn"),
+                    );
                 }
             }
         }
@@ -545,12 +709,26 @@ impl<'a> V<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn check_item_list(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, objects_ok: bool, rows_of: Option<&Kind>) {
+    fn check_item_list(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        objects_ok: bool,
+        rows_of: Option<&Kind>,
+    ) {
         if !v.is_table() || v.arr().is_empty() {
             if objects_ok {
                 self.err("E006", node, slot, "items must be a non-empty list of rows: { section = ..., count = N } or { item = { ref/story } }".into());
             } else {
-                self.err("E006", node, slot, "items must be a non-empty list of rows: { section = ..., count = N }".into());
+                self.err(
+                    "E006",
+                    node,
+                    slot,
+                    "items must be a non-empty list of rows: { section = ..., count = N }".into(),
+                );
             }
             return;
         }
@@ -564,12 +742,25 @@ impl<'a> V<'a> {
             let has_section = !e.get_string("section", "").is_empty();
             let has_item = e.has("item");
             if has_section == has_item {
-                self.err("E006", node, &sl, format!("a row is either a section or a concrete object, not {}", if has_item { "both" } else { "neither" }));
+                self.err(
+                    "E006",
+                    node,
+                    &sl,
+                    format!(
+                        "a row is either a section or a concrete object, not {}",
+                        if has_item { "both" } else { "neither" }
+                    ),
+                );
                 continue;
             }
             if let Some(item) = e.get("item") {
                 if !objects_ok {
-                    self.err("E006", node, &sl, "a concrete object cannot be spawned - this list takes sections only".into());
+                    self.err(
+                        "E006",
+                        node,
+                        &sl,
+                        "a concrete object cannot be spawned - this list takes sections only".into(),
+                    );
                     continue;
                 }
                 if e.has("count") {
@@ -581,7 +772,12 @@ impl<'a> V<'a> {
             }
             let sect = e.get_string("section", "");
             if seen.contains(&sect) {
-                self.err("E006", node, &sl, format!("section '{sect}' is listed twice - the counts would be ambiguous"));
+                self.err(
+                    "E006",
+                    node,
+                    &sl,
+                    format!("section '{sect}' is listed twice - the counts would be ambiguous"),
+                );
             }
             seen.push(sect.clone());
             self.check_indexed(Some(PickerType::Item), &sect, node, &sl);
@@ -597,7 +793,12 @@ impl<'a> V<'a> {
                     // the rows of objective.fetch say what the player must BRING
                     for (key, _) in e.fields() {
                         if key != "section" && key != "count" && key != "item" {
-                            self.err("E006", node, &sl, format!("unknown row key '{key}' - a row here takes section and count"));
+                            self.err(
+                                "E006",
+                                node,
+                                &sl,
+                                format!("unknown row key '{key}' - a row here takes section and count"),
+                            );
                         }
                     }
                 }
@@ -605,15 +806,34 @@ impl<'a> V<'a> {
         }
     }
 
-    fn check_loot_spawn(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32) {
+    fn check_loot_spawn(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+    ) {
         const KEYS: [&str; 6] = ["place", "into", "stash", "npc", "corpse", "new_corpse"];
         if !v.is_table() {
-            self.err("E006", node, slot, "spawn must be a table with one of place | into | stash | npc | corpse | new_corpse".into());
+            self.err(
+                "E006",
+                node,
+                slot,
+                "spawn must be a table with one of place | into | stash | npc | corpse | new_corpse".into(),
+            );
             return;
         }
         let used = KEYS.iter().filter(|k| v.has(k)).count();
         if used != 1 {
-            self.err("E006", node, slot, format!("spawn needs exactly one of place | into | stash | npc | corpse | new_corpse ({used} set)"));
+            self.err(
+                "E006",
+                node,
+                slot,
+                format!(
+                    "spawn needs exactly one of place | into | stash | npc | corpse | new_corpse ({used} set)"
+                ),
+            );
             return;
         }
         if let Some(pl) = v.get("place") {
@@ -677,7 +897,14 @@ impl<'a> V<'a> {
         }
     }
 
-    fn check_place(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32) -> bool {
+    fn check_place(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+    ) -> bool {
         if !v.is_table() {
             self.err(
                 "E006",
@@ -690,7 +917,12 @@ impl<'a> V<'a> {
         // relative to the player: resolved at run time, nothing to look up
         if let Some(a) = v.get("actor") {
             if a.as_bool() != Some(true) {
-                self.err("E006", node, slot, "actor must be true: { actor = true, distance = metres ahead of the player }".into());
+                self.err(
+                    "E006",
+                    node,
+                    slot,
+                    "actor must be true: { actor = true, distance = metres ahead of the player }".into(),
+                );
             }
             if let Some(d) = v.get("distance")
                 && !d.as_number().is_some_and(|n| n >= 0.0)
@@ -725,7 +957,9 @@ impl<'a> V<'a> {
             } else {
                 self.check_indexed(Some(PickerType::Level), &v.get_string("level", ""), node, slot);
             }
-            let ok = v.get("pos").is_some_and(|p| p.is_table() && p.arr().len() == 3 && p.arr().iter().all(Value::is_number));
+            let ok = v
+                .get("pos")
+                .is_some_and(|p| p.is_table() && p.arr().len() == 3 && p.arr().iter().all(Value::is_number));
             if !ok {
                 self.err("E006", node, slot, "place needs pos = { x, y, z }".into());
             }
@@ -768,7 +1002,12 @@ impl<'a> V<'a> {
             }
         }
         if alts != 1 {
-            self.err("E006", node, slot, "duration needs exactly one of seconds / game_hours / game_minutes / game_seconds".into());
+            self.err(
+                "E006",
+                node,
+                slot,
+                "duration needs exactly one of seconds / game_hours / game_minutes / game_seconds".into(),
+            );
             return false;
         }
         true
@@ -776,7 +1015,18 @@ impl<'a> V<'a> {
 
     /// One parameter against its catalog definition; `siblings` is the table it came out of.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-    fn check_param_value(&mut self, k: &Kind, p: &Param, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, events_ok: bool, siblings: Option<&Value>) {
+    fn check_param_value(
+        &mut self,
+        k: &Kind,
+        p: &Param,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        events_ok: bool,
+        siblings: Option<&Value>,
+    ) {
         let t = p.ty.as_str();
         let name = p.name.as_str();
         match t {
@@ -816,14 +1066,24 @@ impl<'a> V<'a> {
                     return;
                 };
                 if !allowed.is_empty() && !allowed.iter().any(|a| a == s) {
-                    self.err("E006", node, slot, format!("'{name}' = \"{s}\" is not one of {}", allowed.join("|")));
+                    self.err(
+                        "E006",
+                        node,
+                        slot,
+                        format!("'{name}' = \"{s}\" is not one of {}", allowed.join("|")),
+                    );
                 }
                 return;
             }
             "text" => {
                 let table_ok = v.as_table().is_some_and(|t| !t.fields.is_empty());
                 if !v.is_string() && !table_ok {
-                    self.err("E006", node, slot, format!("'{name}' must be a string or {{ rus = ..., eng = ... }}"));
+                    self.err(
+                        "E006",
+                        node,
+                        slot,
+                        format!("'{name}' must be a string or {{ rus = ..., eng = ... }}"),
+                    );
                     return;
                 }
                 if let Some(tb) = v.as_table() {
@@ -864,7 +1124,12 @@ impl<'a> V<'a> {
                     if e.message.contains("cannot create") {
                         self.warn("W050", node, slot, format!("Lua syntax not checked: {}", e.message));
                     } else if e.line > 0 {
-                        self.err("E050", node, slot, format!("Lua syntax error at {}:{}: {}", e.line, e.column, e.message));
+                        self.err(
+                            "E050",
+                            node,
+                            slot,
+                            format!("Lua syntax error at {}:{}: {}", e.line, e.column, e.message),
+                        );
                     } else {
                         self.err("E050", node, slot, format!("Lua syntax error: {}", e.message));
                     }
@@ -878,7 +1143,10 @@ impl<'a> V<'a> {
             "place" => {
                 self.check_place(v, node, slot, nidx, order);
                 // "where the player stands" is a spawn point, not a destination
-                if v.is_table() && v.has("actor") && matches!(k.id.as_str(), "objective.reach" | "actor_in_place" | "actor.teleport") {
+                if v.is_table()
+                    && v.has("actor")
+                    && matches!(k.id.as_str(), "objective.reach" | "actor_in_place" | "actor.teleport")
+                {
                     self.err(
                         "E006",
                         node,
@@ -914,7 +1182,15 @@ impl<'a> V<'a> {
             }
             // a kind that declares a row schema CREATES the items: its rows carry state
             "item_list" => {
-                self.check_item_list(v, node, slot, nidx, order, !k.has_rows(), if k.has_rows() { Some(k) } else { None });
+                self.check_item_list(
+                    v,
+                    node,
+                    slot,
+                    nidx,
+                    order,
+                    !k.has_rows(),
+                    if k.has_rows() { Some(k) } else { None },
+                );
                 return;
             }
             "loot_spawn" => {
@@ -989,7 +1265,11 @@ impl<'a> V<'a> {
                         slot,
                         format!(
                             "'{name}' must be {{ actor = true }} / {{ role = ... }}{}",
-                            if attack { " / { community = ... } / { story = ... }" } else { " / { ref = ... } / { story = ... }" }
+                            if attack {
+                                " / { community = ... } / { story = ... }"
+                            } else {
+                                " / { ref = ... } / { story = ... }"
+                            }
                         ),
                     );
                     return;
@@ -1037,7 +1317,12 @@ impl<'a> V<'a> {
             }
             "role_bindings" => {
                 if !v.is_table() || !v.arr().is_empty() {
-                    self.err("E006", node, slot, format!("'{name}' must be a table {{ role = {{ story = ... }}, ... }}"));
+                    self.err(
+                        "E006",
+                        node,
+                        slot,
+                        format!("'{name}' must be a table {{ role = {{ story = ... }}, ... }}"),
+                    );
                     return;
                 }
                 for (key, b) in v.fields() {
@@ -1131,7 +1416,12 @@ impl<'a> V<'a> {
                     && let Some(ids) = self.ctx.project_behaviour_ids
                     && !ids.iter().any(|i| i == s)
                 {
-                    self.err("E030", node, slot, format!("behaviour graph '{s}' is not a graph of this project"));
+                    self.err(
+                        "E030",
+                        node,
+                        slot,
+                        format!("behaviour graph '{s}' is not a graph of this project"),
+                    );
                 }
                 if self.q.is_behaviour() && s == self.q.id {
                     self.err("E113", node, slot, "a behaviour graph may not run itself".into());
@@ -1151,7 +1441,16 @@ impl<'a> V<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn check_npc_list(&mut self, k: &Kind, p: &Param, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32) {
+    fn check_npc_list(
+        &mut self,
+        k: &Kind,
+        p: &Param,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+    ) {
         const ROW_KEYS: [&str; 6] = ["character", "section", "ref", "unique", "dead", "yaw"];
         if !v.is_table() || v.arr().is_empty() || !v.fields().is_empty() {
             self.err("E006", node, slot, format!("'{}' must be a non-empty list of rows", p.name));
@@ -1160,11 +1459,18 @@ impl<'a> V<'a> {
         for (i, row) in v.arr().iter().enumerate() {
             let sl = format!("{slot}/row:{}", i + 1);
             if !row.is_table() || !row.arr().is_empty() {
-                self.err("E006", node, &sl, "a row must be a table { character = ... | section = ..., ref = ..., unique = ... }".into());
+                self.err(
+                    "E006",
+                    node,
+                    &sl,
+                    "a row must be a table { character = ... | section = ..., ref = ..., unique = ... }"
+                        .into(),
+                );
                 continue;
             }
             for (key, _) in row.fields() {
-                let known = if k.has_rows() { k.row_param(key).is_some() } else { ROW_KEYS.contains(&key.as_str()) };
+                let known =
+                    if k.has_rows() { k.row_param(key).is_some() } else { ROW_KEYS.contains(&key.as_str()) };
                 if !known {
                     self.err("E006", node, &sl, format!("unknown key '{key}' in a row"));
                 }
@@ -1202,7 +1508,16 @@ impl<'a> V<'a> {
 
     /// Every parameter of an entity against its kind (`CheckParams`).
     #[allow(clippy::too_many_arguments)]
-    fn check_params(&mut self, k: &Kind, params: &Value, node: Option<&str>, prefix: &str, nidx: Option<usize>, order: i32, events_ok: bool) {
+    fn check_params(
+        &mut self,
+        k: &Kind,
+        params: &Value,
+        node: Option<&str>,
+        prefix: &str,
+        nidx: Option<usize>,
+        order: i32,
+        events_ok: bool,
+    ) {
         if !params.is_nil() && !params.is_table() {
             self.err("E006", node, prefix, "params must be a table".into());
             return;
@@ -1212,7 +1527,12 @@ impl<'a> V<'a> {
             match params.get(&p.name) {
                 None | Some(Value::Nil) => {
                     if p.required {
-                        self.err("E006", node, &slot, format!("required parameter '{}' ({}) is missing", p.name, p.ty));
+                        self.err(
+                            "E006",
+                            node,
+                            &slot,
+                            format!("required parameter '{}' ({}) is missing", p.name, p.ty),
+                        );
                     }
                 }
                 Some(v) => self.check_param_value(k, p, v, node, &slot, nidx, order, events_ok, Some(params)),
@@ -1226,7 +1546,12 @@ impl<'a> V<'a> {
         if k.in_doc(behaviour) {
             return true;
         }
-        self.err("E023", node, slot, format!("'{}' cannot be used in a {}", k.id, if behaviour { "behaviour graph" } else { "quest" }));
+        self.err(
+            "E023",
+            node,
+            slot,
+            format!("'{}' cannot be used in a {}", k.id, if behaviour { "behaviour graph" } else { "quest" }),
+        );
         false
     }
 
@@ -1258,12 +1583,25 @@ impl<'a> V<'a> {
         }
         for n in names {
             if !self.q.roles.iter().any(|r| r.name == n) {
-                self.err("E024", node, slot, format!("no role called '{n}' is declared by this behaviour graph"));
+                self.err(
+                    "E024",
+                    node,
+                    slot,
+                    format!("no role called '{n}' is declared by this behaviour graph"),
+                );
             }
         }
     }
 
-    fn check_cond(&mut self, cd: &Cond, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, events_ok: bool) {
+    fn check_cond(
+        &mut self,
+        cd: &Cond,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        events_ok: bool,
+    ) {
         let cat = self.cat;
         let Some(k) = cat.find(&cd.kind).filter(|k| k.is(USE_COND)) else {
             if self.catalog {
@@ -1275,13 +1613,29 @@ impl<'a> V<'a> {
             return;
         }
         if k.event && !events_ok {
-            self.err("E020", node, slot, format!("event condition '{}' is only allowed in trigger.when / wait.when / wait.any", cd.kind));
+            self.err(
+                "E020",
+                node,
+                slot,
+                format!(
+                    "event condition '{}' is only allowed in trigger.when / wait.when / wait.any",
+                    cd.kind
+                ),
+            );
         }
         self.check_params(k, &cd.params, node, slot, nidx, order, events_ok);
         self.check_who(k, &cd.params, node, slot);
     }
 
-    fn check_cond_value(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, events_ok: bool) {
+    fn check_cond_value(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        events_ok: bool,
+    ) {
         match cond_from_value(v) {
             Ok(cd) => self.check_cond(&cd, node, slot, nidx, order, events_ok),
             Err(e) => self.err("E006", node, slot, e),
@@ -1289,13 +1643,25 @@ impl<'a> V<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn check_cases(&mut self, v: &Value, node: Option<&str>, slot: &str, nidx: Option<usize>, order: i32, weighted: bool, events_ok: bool) {
+    fn check_cases(
+        &mut self,
+        v: &Value,
+        node: Option<&str>,
+        slot: &str,
+        nidx: Option<usize>,
+        order: i32,
+        weighted: bool,
+        events_ok: bool,
+    ) {
         if !v.is_table() || v.arr().is_empty() {
             self.err(
                 "E021",
                 node,
                 slot,
-                format!("cases must be a non-empty list {{ {{ name = ..., {} }}, ... }}", if weighted { "weight = N" } else { "cond = { ... }" }),
+                format!(
+                    "cases must be a non-empty list {{ {{ name = ..., {} }}, ... }}",
+                    if weighted { "weight = N" } else { "cond = { ... }" }
+                ),
             );
             return;
         }
@@ -1320,7 +1686,12 @@ impl<'a> V<'a> {
                 }
             } else {
                 let Some(cl) = cs.get("cond").filter(|c| c.is_table()) else {
-                    self.err("E021", node, &sl, format!("case '{name}' needs cond = {{ {{ kind = ... }}, ... }}"));
+                    self.err(
+                        "E021",
+                        node,
+                        &sl,
+                        format!("case '{name}' needs cond = {{ {{ kind = ... }}, ... }}"),
+                    );
                     continue;
                 };
                 if cl.arr().is_empty() && cl.has("kind") {
@@ -1350,7 +1721,12 @@ impl<'a> V<'a> {
         // an action kind with exclusive forms (item.spawn) is checked like a node kind
         self.check_kind_form(&k.id, &a.params, node, slot);
         if k.id == "spawn.squad" && a.params.get("hold").and_then(Value::as_bool) == Some(false) {
-            self.warn("W031", node, slot, "spawn.squad without hold - the squad may leave for the simulation".into());
+            self.warn(
+                "W031",
+                node,
+                slot,
+                "spawn.squad without hold - the squad may leave for the simulation".into(),
+            );
         }
         // the one-line spelling IS one row; beside an items list the state belongs to no row
         if k.id == "item.spawn" && a.params.is_table() {
@@ -1431,14 +1807,28 @@ impl<'a> V<'a> {
                     );
                 }
             }
-            let has_phrase = topic
-                .targets("next")
-                .is_some_and(|nx| nx.iter().any(|t| idx.get(t.as_str()).and_then(|&j| q.nodes.get(j)).is_some_and(|n| text::is_phrase_kind(&n.kind))));
+            let has_phrase = topic.targets("next").is_some_and(|nx| {
+                nx.iter().any(|t| {
+                    idx.get(t.as_str())
+                        .and_then(|&j| q.nodes.get(j))
+                        .is_some_and(|n| text::is_phrase_kind(&n.kind))
+                })
+            });
             if !has_phrase {
-                self.warn("W012", Some(&topic.id), "", "dialog topic has no phrase after it (out.next)".into());
+                self.warn(
+                    "W012",
+                    Some(&topic.id),
+                    "",
+                    "dialog topic has no phrase after it (out.next)".into(),
+                );
             }
             if topic.once_set && !topic.once && topic.cond.is_empty() {
-                self.warn("W013", Some(&topic.id), "", "topic with once=false and no cond will be offered forever".into());
+                self.warn(
+                    "W013",
+                    Some(&topic.id),
+                    "",
+                    "topic with once=false and no cond will be offered forever".into(),
+                );
             }
         }
         // W011: a non-leaf PHRASE needs an unconditional continuation
@@ -1478,7 +1868,12 @@ impl<'a> V<'a> {
                 continue;
             }
             if !in_chain.get(i).copied().unwrap_or(false) {
-                self.err("E010", Some(&n.id), "", "phrase is not reachable from any dialog.topic through next pins".into());
+                self.err(
+                    "E010",
+                    Some(&n.id),
+                    "",
+                    "phrase is not reachable from any dialog.topic through next pins".into(),
+                );
             }
             for src in &q.nodes {
                 for p in &src.out {
@@ -1512,11 +1907,25 @@ impl<'a> V<'a> {
         for u in &item_uses {
             if self.decls.iter().any(|d| d.reference == u.reference && d.kind == "squad") {
                 let node = self.node_id(u.node);
-                self.warn("W031", node, &u.slot, format!("ref '{}' was created by spawn.squad - it is a squad, not an item or a container", u.reference));
+                self.warn(
+                    "W031",
+                    node,
+                    &u.slot,
+                    format!(
+                        "ref '{}' was created by spawn.squad - it is a squad, not an item or a container",
+                        u.reference
+                    ),
+                );
             }
         }
         let uses = std::mem::take(&mut self.uses);
-        let triggers: Vec<usize> = q.nodes.iter().enumerate().filter(|(_, n)| self.cat.is_trigger(&n.kind)).map(|(i, _)| i).collect();
+        let triggers: Vec<usize> = q
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| self.cat.is_trigger(&n.kind))
+            .map(|(i, _)| i)
+            .collect();
         for u in &uses {
             let node = self.node_id(u.node);
             let mut declaring: Vec<Option<usize>> = Vec::new();
@@ -1532,7 +1941,12 @@ impl<'a> V<'a> {
                 continue;
             }
             if declaring.is_empty() {
-                self.err("E030", node, &u.slot, format!("ref '{}' is never created by this quest", u.reference));
+                self.err(
+                    "E030",
+                    node,
+                    &u.slot,
+                    format!("ref '{}' is never created by this quest", u.reference),
+                );
                 continue;
             }
             let Some(use_node) = u.node else { continue };
@@ -1571,7 +1985,15 @@ impl<'a> V<'a> {
                 }
             }
             if reached {
-                self.warn("W030", node, &u.slot, format!("ref '{}' may be used before the node that creates it (not on every path)", u.reference));
+                self.warn(
+                    "W030",
+                    node,
+                    &u.slot,
+                    format!(
+                        "ref '{}' may be used before the node that creates it (not on every path)",
+                        u.reference
+                    ),
+                );
             }
         }
     }
@@ -1596,7 +2018,12 @@ impl<'a> V<'a> {
         match k.filter(|k| k.is(USE_MAIN) || k.is(USE_TRIGGER)) {
             None => {
                 if self.catalog {
-                    self.err("E005", nid, "", format!("'{}' is not a node kind (main action or trigger)", n.kind));
+                    self.err(
+                        "E005",
+                        nid,
+                        "",
+                        format!("'{}' is not a node kind (main action or trigger)", n.kind),
+                    );
                 }
             }
             Some(k) => {
@@ -1608,7 +2035,16 @@ impl<'a> V<'a> {
                 self.check_kind_form(&n.kind, &n.params, nid, "");
                 let idx = q.index();
                 let case_names: Vec<String> = if k.pins_from_cases {
-                    n.params.get("cases").map(|c| c.arr().iter().map(|x| x.get_string("name", "")).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+                    n.params
+                        .get("cases")
+                        .map(|c| {
+                            c.arr()
+                                .iter()
+                                .map(|x| x.get_string("name", ""))
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default()
                 } else {
                     Vec::new()
                 };
@@ -1620,7 +2056,12 @@ impl<'a> V<'a> {
                     let mut seen: FxHashSet<&str> = FxHashSet::default();
                     for target in &p.targets {
                         if !seen.insert(target.as_str()) {
-                            self.warn("W022", nid, &sl, format!("target '{target}' is listed twice, the duplicate edge is ignored"));
+                            self.warn(
+                                "W022",
+                                nid,
+                                &sl,
+                                format!("target '{target}' is listed twice, the duplicate edge is ignored"),
+                            );
                             continue;
                         }
                         let Some(tn) = idx.get(target.as_str()).and_then(|&j| q.nodes.get(j)) else {
@@ -1628,7 +2069,12 @@ impl<'a> V<'a> {
                             continue;
                         };
                         if cat.is_trigger(&tn.kind) {
-                            self.err("E007", nid, &sl, format!("edge leads into trigger '{}' - triggers have no input", tn.id));
+                            self.err(
+                                "E007",
+                                nid,
+                                &sl,
+                                format!("edge leads into trigger '{}' - triggers have no input", tn.id),
+                            );
                         }
                     }
                 }
@@ -1636,7 +2082,12 @@ impl<'a> V<'a> {
                     self.err("E009", nid, "", "flow.join has no incoming edges".into());
                 }
                 if k.wait && n.out_degree() == 0 && !text::is_topic_kind(&n.kind) {
-                    self.warn("W021", nid, "", "waiting node has no outgoing edges - the quest will stop here".into());
+                    self.warn(
+                        "W021",
+                        nid,
+                        "",
+                        "waiting node has no outgoing edges - the quest will stop here".into(),
+                    );
                 }
                 for (ci, c) in n.cond.iter().enumerate() {
                     let sl = format!("cond:{ci}");
@@ -1665,7 +2116,12 @@ impl<'a> V<'a> {
             if q.nq == 0 {
                 self.err("E001", None, "", format!("{vkey} (format version) is missing - write {vkey} = 1"));
             } else {
-                self.err("E001", None, "", format!("{vkey} = {} is not supported (this editor writes {vkey} = 1)", q.nq));
+                self.err(
+                    "E001",
+                    None,
+                    "",
+                    format!("{vkey} = {} is not supported (this editor writes {vkey} = 1)", q.nq),
+                );
             }
         }
         // the extension is the kind of document and the header key has to agree
@@ -1681,19 +2137,40 @@ impl<'a> V<'a> {
         } else if let Some(ids) = ctx.project_quest_ids
             && ids.contains(&q.id)
         {
-            self.err("E002", None, "", format!("quest id '{}' is used by another quest of this project", q.id));
+            self.err(
+                "E002",
+                None,
+                "",
+                format!("quest id '{}' is used by another quest of this project", q.id),
+            );
         }
         let behaviour = q.is_behaviour();
         if behaviour {
             if !q.tasks.is_empty() {
-                self.err("E006", None, "param:tasks", "a behaviour graph has no tasks of its own - those belong to the quest that runs it".into());
+                self.err(
+                    "E006",
+                    None,
+                    "param:tasks",
+                    "a behaviour graph has no tasks of its own - those belong to the quest that runs it"
+                        .into(),
+                );
             }
             if q.roles.is_empty() {
-                self.err("E006", None, "param:roles", "a behaviour graph needs at least one role - it has nobody to drive otherwise".into());
+                self.err(
+                    "E006",
+                    None,
+                    "param:roles",
+                    "a behaviour graph needs at least one role - it has nobody to drive otherwise".into(),
+                );
             }
             for (i, r) in q.roles.iter().enumerate() {
                 if !valid_id(&r.name) {
-                    self.err("E006", None, "param:roles", format!("role name '{}' must be [a-z0-9_]+", r.name));
+                    self.err(
+                        "E006",
+                        None,
+                        "param:roles",
+                        format!("role name '{}' must be [a-z0-9_]+", r.name),
+                    );
                 }
                 for other in q.roles.iter().skip(i + 1) {
                     if other.name == r.name {
@@ -1704,11 +2181,24 @@ impl<'a> V<'a> {
                     self.check_text(&r.title, None, "param:roles");
                 }
                 if !r.default.is_nil() && !r.default.is_table() {
-                    self.err("E006", None, "param:roles", format!("the default of role '{}' must be a reference table {{ story = ... }}", r.name));
+                    self.err(
+                        "E006",
+                        None,
+                        "param:roles",
+                        format!(
+                            "the default of role '{}' must be a reference table {{ story = ... }}",
+                            r.name
+                        ),
+                    );
                 }
             }
         } else if !q.roles.is_empty() {
-            self.err("E006", None, "param:roles", "roles belong to a behaviour graph (.behasset) - a quest has none".into());
+            self.err(
+                "E006",
+                None,
+                "param:roles",
+                "roles belong to a behaviour graph (.behasset) - a quest has none".into(),
+            );
         }
         if !behaviour && q.activation != "auto" && q.activation != "manual" {
             self.err("E006", None, "param:activation", "activation must be \"auto\" or \"manual\"".into());
@@ -1717,15 +2207,30 @@ impl<'a> V<'a> {
         if !q.title.is_nil() {
             self.check_text(&q.title, None, "param:title");
             if !q.title.is_string() && !q.title.as_table().is_some_and(|t| !t.fields.is_empty()) {
-                self.err("E006", None, "param:title", "title must be a string or { rus = ..., eng = ... }".into());
+                self.err(
+                    "E006",
+                    None,
+                    "param:title",
+                    "title must be a string or { rus = ..., eng = ... }".into(),
+                );
             }
         }
         for v in &q.vars {
             if !valid_id(&v.name) {
-                self.err("E006", None, "param:vars", format!("variable name '{}' must be [a-z0-9_]+", v.name));
+                self.err(
+                    "E006",
+                    None,
+                    "param:vars",
+                    format!("variable name '{}' must be [a-z0-9_]+", v.name),
+                );
             }
             if v.value.is_table() || v.value.is_nil() {
-                self.err("E006", None, "param:vars", format!("variable '{}' default must be a bool, number or string", v.name));
+                self.err(
+                    "E006",
+                    None,
+                    "param:vars",
+                    format!("variable '{}' default must be a bool, number or string", v.name),
+                );
             }
             if v.value.is_string() {
                 let slot = format!("param:vars/{}", v.name);
@@ -1801,7 +2306,12 @@ pub fn run(q: &Graph, catalog: &Catalog, ctx: &Context<'_>) -> Vec<NqProblem> {
         v.err("E008", None, "", "the quest has no trigger node (trigger.start / trigger.when)".into());
     }
     if ends == 0 {
-        v.warn("W070", None, "", "no flow.end - the quest completes implicitly when nothing is left to do".into());
+        v.warn(
+            "W070",
+            None,
+            "",
+            "no flow.end - the quest completes implicitly when nothing is left to do".into(),
+        );
     }
     let reach = q.reachable(catalog, None);
     for (i, n) in q.nodes.iter().enumerate() {
@@ -1819,7 +2329,17 @@ pub fn run(q: &Graph, catalog: &Catalog, ctx: &Context<'_>) -> Vec<NqProblem> {
 #[must_use]
 pub fn declared_refs(q: &Graph, catalog: &Catalog) -> Vec<(String, &'static str)> {
     let ctx = Context::default();
-    let mut v = V { q, cat: catalog, ctx: &ctx, out: Vec::new(), catalog: catalog.loaded(), pickers: None, decls: Vec::new(), item_uses: Vec::new(), uses: Vec::new() };
+    let mut v = V {
+        q,
+        cat: catalog,
+        ctx: &ctx,
+        out: Vec::new(),
+        catalog: catalog.loaded(),
+        pickers: None,
+        decls: Vec::new(),
+        item_uses: Vec::new(),
+        uses: Vec::new(),
+    };
     for (i, n) in q.nodes.iter().enumerate() {
         let nid = Some(n.id.as_str());
         if let Some(k) = catalog.find(&n.kind) {
@@ -1870,7 +2390,12 @@ mod tests {
             };
             let path = format!("quests/{name}.nqasset");
             let ids: Vec<String> = Vec::new();
-            let ctx = Context { file_path: Some(&path), project_quest_ids: Some(&ids), project_behaviour_ids: Some(&ids), ..Context::default() };
+            let ctx = Context {
+                file_path: Some(&path),
+                project_quest_ids: Some(&ids),
+                project_behaviour_ids: Some(&ids),
+                ..Context::default()
+            };
             let problems = run(&g, &cat, &ctx);
             let errors: Vec<String> = problems.iter().filter(|p| p.is_error()).map(NqProblem::text).collect();
             assert!(errors.is_empty(), "{name}: {errors:?}");
@@ -1895,12 +2420,23 @@ mod tests {
         assert!(has("E002: quest id 'Bad' must be [a-z0-9_]+"), "{texts:?}");
         assert!(has("E007 a[out:zap]: pin 'zap' is not declared by flow.step"), "{texts:?}");
         assert!(has("E007 a[out:next]: target node 'ghost' does not exist"), "{texts:?}");
-        assert!(has("W022 a[out:next]: target 'ghost' is listed twice, the duplicate edge is ignored"), "{texts:?}");
+        assert!(
+            has("W022 a[out:next]: target 'ghost' is listed twice, the duplicate edge is ignored"),
+            "{texts:?}"
+        );
         assert!(has("E004 a: duplicate node id 'a'"), "{texts:?}");
         assert!(has("E005 a: 'nope.kind' is not a node kind (main action or trigger)"), "{texts:?}");
         assert!(has("E008: the quest has no trigger node (trigger.start / trigger.when)"), "{texts:?}");
-        assert!(has("E011 b: phrase is entered from 'a' (flow.step.zap) - phrases may only follow a topic or another phrase"), "{texts:?}");
-        assert!(has("W070: no flow.end - the quest completes implicitly when nothing is left to do"), "{texts:?}");
+        assert!(
+            has(
+                "E011 b: phrase is entered from 'a' (flow.step.zap) - phrases may only follow a topic or another phrase"
+            ),
+            "{texts:?}"
+        );
+        assert!(
+            has("W070: no flow.end - the quest completes implicitly when nothing is left to do"),
+            "{texts:?}"
+        );
         assert_eq!(to_text(&[]), "problems: none");
     }
 
@@ -1917,14 +2453,22 @@ mod tests {
             Err(e) => panic!("{}", e.message),
         };
         let texts: Vec<String> = run(&g, &cat, &Context::default()).iter().map(NqProblem::text).collect();
-        assert!(texts.iter().any(|t| t.starts_with("E005 k:") || t.contains("ref 'nobody' is never created by this quest")), "{texts:?}");
+        assert!(
+            texts.iter().any(
+                |t| t.starts_with("E005 k:") || t.contains("ref 'nobody' is never created by this quest")
+            ),
+            "{texts:?}"
+        );
         let beh = r#"return { beh = 1, id = "b", nodes = { { id = "s", kind = "trigger.start" } } }"#;
         let g = match parse(&cat, beh, "b") {
             Ok(g) => g,
             Err(e) => panic!("{}", e.message),
         };
         let path = "npc/b.nqasset";
-        let texts: Vec<String> = run(&g, &cat, &Context { file_path: Some(path), ..Context::default() }).iter().map(NqProblem::text).collect();
+        let texts: Vec<String> = run(&g, &cat, &Context { file_path: Some(path), ..Context::default() })
+            .iter()
+            .map(NqProblem::text)
+            .collect();
         assert!(texts.iter().any(|t| t == "E006[param:roles]: a behaviour graph needs at least one role - it has nobody to drive otherwise"), "{texts:?}");
         assert!(texts.iter().any(|t| t.starts_with("E001: a .nqasset is a quest")), "{texts:?}");
     }

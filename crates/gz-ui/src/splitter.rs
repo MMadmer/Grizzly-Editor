@@ -68,7 +68,11 @@ fn paint_line(ui: &Ui, vertical: bool, at: f32, from: f32, length: f32, hovered:
         p.border_subtle
     };
     let stroke = Stroke::new(if held || hovered { 2.0 } else { 1.0 }, color);
-    let (a, b) = if vertical { (pos2(at, from), pos2(at, from + length)) } else { (pos2(from, at), pos2(from + length, at)) };
+    let (a, b) = if vertical {
+        (pos2(at, from), pos2(at, from + length))
+    } else {
+        (pos2(from, at), pos2(from + length, at))
+    };
     ui.painter().line_segment([a, b], stroke);
 }
 
@@ -92,7 +96,11 @@ fn grab(ui: &Ui, id: Id, hit: Rect, vertical: bool, key: &str) -> Grab {
     let dragging = resp.dragged();
     let held = dragging || resp.is_pointer_button_down_on();
     if hovered || held {
-        ui.ctx().set_cursor_icon(if vertical { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
+        ui.ctx().set_cursor_icon(if vertical {
+            CursorIcon::ResizeHorizontal
+        } else {
+            CursorIcon::ResizeVertical
+        });
     }
     let axis = |p: Pos2| if vertical { p.x } else { p.y };
     let pointer = resp.interact_pointer_pos().or_else(|| ui.ctx().pointer_latest_pos()).map(axis);
@@ -131,7 +139,7 @@ pub fn splitter(ui: &mut Ui, key: &str, vertical: bool, min_a: f32, min_b: f32, 
         && let (Some(pointer), Some(begin)) = (g.pointer, g.start)
     {
         // from where the pointer is, not from how far it moved: past a limit and back, the line follows at once
-        let grabbed_at = ctx.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or_else(|| begin - line);
+        let grabbed_at = ctx.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(begin - line);
         ctx.data_mut(|d| d.insert_temp(id.with("offset"), grabbed_at));
         let next = clamp_head(pointer - grabbed_at - gap * 0.5 - origin, min_a, min_b, total, gap);
         if next != size {
@@ -152,7 +160,14 @@ pub fn splitter(ui: &mut Ui, key: &str, vertical: bool, min_a: f32, min_b: f32, 
 }
 
 /// A splitter for the pane that ends where the region ends: returns that pane's size.
-pub fn splitter_tail(ui: &mut Ui, key: &str, vertical: bool, min_head: f32, min_tail: f32, default_tail: f32) -> Split {
+pub fn splitter_tail(
+    ui: &mut Ui,
+    key: &str,
+    vertical: bool,
+    min_head: f32,
+    min_tail: f32,
+    default_tail: f32,
+) -> Split {
     let avail = ui.available_size();
     let start = ui.cursor().min;
     let gap = if vertical { ui.spacing().item_spacing.x } else { ui.spacing().item_spacing.y };
@@ -168,7 +183,7 @@ pub fn splitter_tail(ui: &mut Ui, key: &str, vertical: bool, min_head: f32, min_
     if g.dragging
         && let (Some(pointer), Some(begin)) = (g.pointer, g.start)
     {
-        let grabbed_at = ctx.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or_else(|| begin - line);
+        let grabbed_at = ctx.data(|d| d.get_temp::<f32>(id.with("offset"))).unwrap_or(begin - line);
         ctx.data_mut(|d| d.insert_temp(id.with("offset"), grabbed_at));
         let next = clamp_tail(end - (pointer - grabbed_at) - gap * 0.5, min_head, min_tail, total, gap);
         if next != tail {
@@ -191,7 +206,19 @@ pub fn splitter_tail(ui: &mut Ui, key: &str, vertical: bool, min_head: f32, min_
 /// A splitter whose line the caller placed: `line` is its start, `length` how long it runs.
 /// The value grows by the pointer's travel times `sign` (+1 when the pane lies before the line,
 /// -1 after it), within `lo..=hi`.
-pub fn splitter_at(ui: &mut Ui, key: &str, vertical: bool, line: Pos2, length: f32, sign: f32, lo: f32, hi: f32, default: f32) -> Split {
+// every argument is one the caller decides at each call; a struct of them would only rename them
+#[allow(clippy::too_many_arguments)]
+pub fn splitter_at(
+    ui: &mut Ui,
+    key: &str,
+    vertical: bool,
+    line: Pos2,
+    length: f32,
+    sign: f32,
+    lo: f32,
+    hi: f32,
+    default: f32,
+) -> Split {
     let ctx = ui.ctx().clone();
     let (at, from) = if vertical { (line.x, line.y) } else { (line.y, line.x) };
     let id = Id::unique(("gz-ui.splitter", key));

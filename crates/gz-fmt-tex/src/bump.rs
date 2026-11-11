@@ -69,7 +69,9 @@ fn vpack(src: [f32; 3]) -> [u8; 3] {
 fn normals_from_height(height_gloss: &[u8], w: usize, h: usize, scale: f32) -> Vec<u8> {
     // AverageRGBToAlpha
     let heights: Vec<u8> = height_gloss
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| ((f32::from(p[0]) + f32::from(p[1]) + f32::from(p[2])) / 3.0) as u8)
         .collect();
     const BYTE_TO_FLOAT: f32 = 1.0 / 255.0;
@@ -80,14 +82,8 @@ fn normals_from_height(height_gloss: &[u8], w: usize, h: usize, scale: f32) -> V
         let up = (j + 1) % h;
         // oracle: the bordered copy the convolution reads takes its row below the first from
         // one row short of the last, so the wrap downwards is off by one; kept
-        let down = if j > 0 {
-            j - 1
-        } else if h >= 2 {
-            h - 2
-        } else {
-            0
-        };
-        for (i, px) in row.chunks_exact_mut(4).enumerate() {
+        let down = if j > 0 { j - 1 } else { h.saturating_sub(2) };
+        for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let left = if i > 0 { i - 1 } else { w - 1 };
             let right = (i + 1) % w;
             let du = (0.0 + at(left, j) * -0.5) + at(right, j) * 0.5;
@@ -102,7 +98,8 @@ fn normals_from_height(height_gloss: &[u8], w: usize, h: usize, scale: f32) -> V
     out
 }
 
-const DXT5_WITH_MIPS: DdsRequest = DdsRequest { encoding: DdsEncoding::Dxt5, mips: true, filter: MipFilter::Box };
+const DXT5_WITH_MIPS: DdsRequest =
+    DdsRequest { encoding: DdsEncoding::Dxt5, mips: true, filter: MipFilter::Box };
 
 /// Makes the two textures of a bump map (`DXTCompressBump`).
 ///
@@ -114,7 +111,11 @@ const DXT5_WITH_MIPS: DdsRequest = DdsRequest { encoding: DdsEncoding::Dxt5, mip
 /// reads no blocks at all - the file it has just written lacks the linear-size flag its
 /// decompressor relies on - so its `#` texture is made from whatever the memory held. Here the
 /// first level is decompressed as that code means to.
-pub fn make_bump_textures(height_gloss: &Image, normal_map: Option<&Image>, virtual_height: f32) -> Result<BumpTextures> {
+pub fn make_bump_textures(
+    height_gloss: &Image,
+    normal_map: Option<&Image>,
+    virtual_height: f32,
+) -> Result<BumpTextures> {
     height_gloss.check()?;
     let (w, h) = (height_gloss.width as usize, height_gloss.height as usize);
     let source = &height_gloss.rgba;
@@ -137,7 +138,13 @@ pub fn make_bump_textures(height_gloss: &Image, normal_map: Option<&Image>, virt
     // gloss into red, the normal turned around into alpha, blue, green
     let mut gloss_power = 0f32;
     let mut packed = vec![0u8; w * h * 4];
-    for ((d, n), s) in packed.chunks_exact_mut(4).zip(normals.chunks_exact(4)).zip(source.chunks_exact(4)) {
+    for ((d, n), s) in packed
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(normals.as_chunks::<4>().0)
+        .zip(source.as_chunks::<4>().0)
+    {
         // summed in pixel order, in single precision, as the editor does
         gloss_power += f32::from(s[3]) / 255.0;
         d.copy_from_slice(&[s[3].saturating_add(1), n[2], n[1], n[0]]);
@@ -155,7 +162,10 @@ pub fn make_bump_textures(height_gloss: &Image, normal_map: Option<&Image>, virt
     if h_scale > 1.0 {
         h_scale = h_scale.sqrt();
     }
-    let heights: Vec<u8> = source.par_chunks_exact(4).map(|p| (f32::from(p[0]) * h_scale + 0.000_000_1).floor() as i32 as u8).collect();
+    let heights: Vec<u8> = source
+        .par_chunks_exact(4)
+        .map(|p| (f32::from(p[0]) * h_scale + 0.000_000_1).floor() as i32 as u8)
+        .collect();
     let (mut sum, mut lo, mut hi) = (0u32, 255u32, 0u32);
     for &v in &heights {
         let v = u32::from(v);
@@ -208,8 +218,8 @@ mod tests {
     fn a_flat_height_field_has_straight_normals() {
         let src = vec![100u8; 8 * 8 * 4];
         let n = normals_from_height(&src, 8, 8, 10.0);
-        assert!(n.chunks_exact(4).all(|p| matches!(p, [127 | 128, 127 | 128, 255, 0])));
-        assert!(n.chunks_exact(4).all(|p| p == &n[..4]));
+        assert!(n.as_chunks::<4>().0.iter().all(|p| matches!(p, [127 | 128, 127 | 128, 255, 0])));
+        assert!(n.as_chunks::<4>().0.iter().all(|p| p == &n[..4]));
         // a single row and a single column do not read outside the picture
         assert_eq!(normals_from_height(&src[..32], 8, 1, 10.0).len(), 32);
         assert_eq!(normals_from_height(&src[..32], 1, 8, 10.0).len(), 32);
@@ -253,7 +263,7 @@ mod tests {
         assert!(bump.rgba[0].abs_diff(201) < 12);
         // the error texture stays around 128 and carries the height in alpha
         let error = read_dds_level(&out.error, 0, 0).unwrap();
-        assert!(error.rgba.chunks_exact(4).all(|p| p[0].abs_diff(128) < 90));
+        assert!(error.rgba.as_chunks::<4>().0.iter().all(|p| p[0].abs_diff(128) < 90));
     }
 
     #[test]

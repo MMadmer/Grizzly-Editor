@@ -69,7 +69,15 @@ pub struct World {
 
 impl Default for World {
     fn default() -> Self {
-        Self { keep: [true; 5], player_choice: [false; 5], levels: Vec::new(), area: Vec::new(), locked_levels: Vec::new(), locked: Vec::new(), extra: Vec::new() }
+        Self {
+            keep: [true; 5],
+            player_choice: [false; 5],
+            levels: Vec::new(),
+            area: Vec::new(),
+            locked_levels: Vec::new(),
+            locked: Vec::new(),
+            extra: Vec::new(),
+        }
     }
 }
 
@@ -142,7 +150,11 @@ impl World {
         if self.is_empty() {
             return Vec::new();
         }
-        let mut out: Vec<String> = RULES.iter().zip(self.keep).map(|(k, keep)| entry_line(k, if keep { "true" } else { "false" }, KEY_WIDTH)).collect();
+        let mut out: Vec<String> = RULES
+            .iter()
+            .zip(self.keep)
+            .map(|(k, keep)| entry_line(k, if keep { "true" } else { "false" }, KEY_WIDTH))
+            .collect();
         let joined = |key: &str, v: &[String], out: &mut Vec<String>| {
             if !v.is_empty() {
                 out.push(entry_line(key, &v.join(", "), KEY_WIDTH));
@@ -259,7 +271,10 @@ impl StartKit {
             } else if key == "perks" {
                 k.perks = !is_no(val);
             } else if !key.is_empty() {
-                k.items.push(KitItem { section: key.to_owned(), count: if val.is_empty() { 1 } else { atoi(val) } });
+                k.items.push(KitItem {
+                    section: key.to_owned(),
+                    count: if val.is_empty() { 1 } else { atoi(val) },
+                });
             }
         }
         k
@@ -304,7 +319,8 @@ impl StartKit {
     /// while the kit leaves it to the new-game screen (`JsonStartKit`).
     #[must_use]
     pub fn json(&self) -> Value {
-        let items: Vec<Value> = self.items.iter().map(|i| json!({ "section": i.section, "count": i.count })).collect();
+        let items: Vec<Value> =
+            self.items.iter().map(|i| json!({ "section": i.section, "count": i.count })).collect();
         json!({
             "declared": self.declared,
             "money": if self.money >= 0 { json!(self.money) } else { Value::Null },
@@ -342,7 +358,10 @@ pub fn base_kit(text: &str) -> Option<StartKit> {
             out.money = atoi(val).max(0);
             continue;
         }
-        out.items.push(KitItem { section: key.to_owned(), count: if val.is_empty() { 1 } else { atoi(val).max(1) } });
+        out.items.push(KitItem {
+            section: key.to_owned(),
+            count: if val.is_empty() { 1 } else { atoi(val).max(1) },
+        });
     }
     (!out.items.is_empty() || out.money >= 0).then_some(out)
 }

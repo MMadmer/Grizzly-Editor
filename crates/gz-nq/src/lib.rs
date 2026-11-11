@@ -57,6 +57,14 @@ pub mod validate;
 pub use asset::{Action, Cond, DocKind, Graph, Node, Objective, Pin, Role, Task, Var};
 pub use catalog::{Catalog, Kind, Param};
 pub use cmd::{install, register};
+/// The tab commands whose C++ handlers bring the graph's tab up (`OpenMcpWindow`): `gz-ui-graph`
+/// registers over them and calls these after it did.
+pub mod tab_handlers {
+    pub use crate::cmd::{quest_bookmarks, quest_edit, quest_find, quest_history, quest_minimap};
+}
 pub use pickers::{PickerEntry, PickerType, Pickers};
-pub use service::{CharacterBrief, CharacterLookup, DocHandle, DocPath, NqService, SceneLookup, Transition, ValidateEnv, WorldLookup};
+pub use service::{
+    CharacterBrief, CharacterLookup, DocHandle, DocPath, NqService, SceneLookup, Transition, ValidateEnv,
+    WorldLookup,
+};
 pub use validate::{NqProblem, Severity};

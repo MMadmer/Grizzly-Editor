@@ -52,8 +52,8 @@ mod tile;
 
 pub use bump::{BumpTextures, make_bump_textures};
 pub use dds::{
-    Dds, DdsEncoding, DdsFormat, DdsInfo, DdsKind, PixelMasks, build_dds, encode_dds, read_dds, read_dds_info,
-    read_dds_level,
+    Dds, DdsEncoding, DdsFormat, DdsInfo, DdsKind, PixelMasks, build_dds, encode_dds, read_dds,
+    read_dds_info, read_dds_level,
 };
 pub use gz_fmt_sound::{SoundThm, read_sound_thm, write_sound_thm};
 pub use load::{Loaded, load_image};
@@ -63,13 +63,14 @@ pub use make::{
 };
 pub use mip::{MipFilter, mip_chain, mip_count, resize};
 pub use params::{
-    BumpMode, DdsRequest, MipFilterId, TextureFlags, TextureFormat, TextureMaterial, TextureParams, TextureType,
+    BumpMode, DdsRequest, MipFilterId, TextureFlags, TextureFormat, TextureMaterial, TextureParams,
+    TextureType,
 };
 pub use resample::{ImfFilter, imf_resample};
 pub use tga::{TgaDepth, read_tga, write_tga};
 pub use thm::{
-    GroupThm, ObjectThm, THUMB_SIDE, TextureThm, Thm, ThmKind, read_group_thm, read_object_thm, read_texture_thm,
-    read_thm, thm_kind, write_group_thm, write_object_thm, write_texture_thm,
+    GroupThm, ObjectThm, THUMB_SIDE, TextureThm, Thm, ThmKind, read_group_thm, read_object_thm,
+    read_texture_thm, read_thm, thm_kind, write_group_thm, write_object_thm, write_texture_thm,
 };
 pub use tile::{TextureTile, TileAlpha, texture_tile};
 
@@ -122,7 +123,7 @@ impl Image {
     pub fn filled(width: u32, height: u32, rgba: [u8; 4]) -> Result<Self> {
         let need = checked_len(width, height)?;
         let mut data = vec![0u8; need];
-        for px in data.chunks_exact_mut(4) {
+        for px in data.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&rgba);
         }
         Ok(Self { width, height, rgba: data })
@@ -132,7 +133,12 @@ impl Image {
     pub fn check(&self) -> Result<()> {
         let need = checked_len(self.width, self.height)?;
         if self.rgba.len() != need {
-            return Err(TexError::BadPixels { width: self.width, height: self.height, need, got: self.rgba.len() });
+            return Err(TexError::BadPixels {
+                width: self.width,
+                height: self.height,
+                need,
+                got: self.rgba.len(),
+            });
         }
         Ok(())
     }
@@ -140,7 +146,7 @@ impl Image {
     /// Whether any pixel is less than opaque.
     #[must_use]
     pub fn has_transparency(&self) -> bool {
-        self.rgba.chunks_exact(4).any(|p| p[3] != 255)
+        self.rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255)
     }
 }
 

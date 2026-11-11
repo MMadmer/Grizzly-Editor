@@ -9,7 +9,12 @@ use gz_editor::{Args, Editor, Value};
 
 /// Runs `name` with `args` as the window would (its origin) and hands the reply to `then` on the
 /// UI thread at the start of the next frame.
-pub(crate) fn call_then(editor: &Arc<Editor>, name: &'static str, args: Args, then: impl FnOnce(&Value, &egui::Context) + Send + 'static) {
+pub(crate) fn call_then(
+    editor: &Arc<Editor>,
+    name: &'static str,
+    args: Args,
+    then: impl FnOnce(&Value, &egui::Context) + Send + 'static,
+) {
     let ed = editor.clone();
     let origin = editor.ui_origin();
     let _task = editor.exec.spawn(async move {
@@ -97,7 +102,13 @@ pub(crate) enum Pick {
 /// Opens the system's folder or picture dialog on a thread of its own (it blocks while the
 /// author picks), starting in `start` when that is a folder; `done` gets the path picked on the
 /// UI thread, nothing when the author cancels.
-pub(crate) fn pick_path(editor: &Arc<Editor>, what: Pick, title: &'static str, start: &str, done: impl FnOnce(String, &egui::Context) + Send + 'static) {
+pub(crate) fn pick_path(
+    editor: &Arc<Editor>,
+    what: Pick,
+    title: &'static str,
+    start: &str,
+    done: impl FnOnce(String, &egui::Context) + Send + 'static,
+) {
     let Ok(queue) = UiQueue::of(editor) else { return };
     let busy = editor.services.get_or_init(Picking::default);
     if busy.0.swap(true, Ordering::SeqCst) {

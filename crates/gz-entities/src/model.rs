@@ -67,9 +67,17 @@ pub const NO_COMMUNITY_INDEX: i32 = -1;
 /// One shape of a `CSE_Shape`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape {
-    Sphere { center: Vec3, radius: f32 },
+    Sphere {
+        center: Vec3,
+        radius: f32,
+    },
     /// The rows `i`, `j`, `k`, `c` of the box matrix.
-    Box { i: Vec3, j: Vec3, k: Vec3, c: Vec3 },
+    Box {
+        i: Vec3,
+        j: Vec3,
+        k: Vec3,
+        c: Vec3,
+    },
     /// A type byte the engine writes no data for.
     Other(u8),
 }
@@ -97,7 +105,7 @@ impl Default for ALife {
             distance: 0.0,
             direct_control: true,
             node_id: u32::MAX,
-            flags: u32::MAX & !alife_flags::OFFLINE_NO_MOVE,
+            flags: !alife_flags::OFFLINE_NO_MOVE,
             ini_string: SmolStr::default(),
             story_id: u32::MAX,
             spawn_story_id: u32::MAX,
@@ -154,7 +162,13 @@ pub struct SavedBones {
 
 impl Default for SavedBones {
     fn default() -> Self {
-        Self { bones_mask: u64::MAX, root_bone: 0, min: Vec3::splat(-100.0), max: Vec3::splat(100.0), bones: Vec::new() }
+        Self {
+            bones_mask: u64::MAX,
+            root_bone: 0,
+            min: Vec3::splat(-100.0),
+            max: Vec3::splat(100.0),
+            bones: Vec::new(),
+        }
     }
 }
 
@@ -656,7 +670,11 @@ pub struct Pda {
 
 impl Default for Pda {
     fn default() -> Self {
-        Self { original_owner: u16::MAX, specific_character: SmolStr::default(), info_portion: SmolStr::default() }
+        Self {
+            original_owner: u16::MAX,
+            specific_character: SmolStr::default(),
+            info_portion: SmolStr::default(),
+        }
     }
 }
 

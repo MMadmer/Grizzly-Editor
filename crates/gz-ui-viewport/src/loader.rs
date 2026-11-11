@@ -27,7 +27,9 @@ impl SceneLoader {
     }
 
     fn read_first(&self, candidates: &[(PathBuf, &'static str)]) -> Option<AssetBytes> {
-        candidates.iter().find_map(|(p, ext)| std::fs::read(p).ok().map(|bytes| AssetBytes { bytes, ext: Some(SmolStr::new_static(ext)) }))
+        candidates.iter().find_map(|(p, ext)| {
+            std::fs::read(p).ok().map(|bytes| AssetBytes { bytes, ext: Some(SmolStr::new_static(ext)) })
+        })
     }
 
     fn game(&self, key: &str, ext: &'static str) -> Option<AssetBytes> {
@@ -67,15 +69,27 @@ impl AssetLoader for SceneLoader {
                     c.push((under(r, &["gamedata", "textures"], name, "dds"), "dds"));
                     c.push((under(r, &["rawdata", "textures"], name, "tga"), "tga"));
                 }
-                self.read_first(&c).or_else(|| self.game(&game_key("textures", name, "dds"), "dds")).ok_or_else(|| format!("no texture '{name}' in the project, the editor or the game"))
+                self.read_first(&c)
+                    .or_else(|| self.game(&game_key("textures", name, "dds"), "dds"))
+                    .ok_or_else(|| format!("no texture '{name}' in the project, the editor or the game"))
             }
             AssetRef::Object(name) => {
-                let c: Vec<_> = self.roots.iter().map(|r| (under(r, &["rawdata", "objects"], name, "object"), "object")).collect();
+                let c: Vec<_> = self
+                    .roots
+                    .iter()
+                    .map(|r| (under(r, &["rawdata", "objects"], name, "object"), "object"))
+                    .collect();
                 self.read_first(&c).ok_or_else(|| format!("Can't find file '{name}.object'"))
             }
             AssetRef::Visual(name) => {
-                let c: Vec<_> = self.roots.iter().map(|r| (under(r, &["gamedata", "meshes"], name, "ogf"), "ogf")).collect();
-                self.read_first(&c).or_else(|| self.game(&game_key("meshes", name, "ogf"), "ogf")).ok_or_else(|| format!("no model '{name}' in the project, the editor or the game"))
+                let c: Vec<_> = self
+                    .roots
+                    .iter()
+                    .map(|r| (under(r, &["gamedata", "meshes"], name, "ogf"), "ogf"))
+                    .collect();
+                self.read_first(&c)
+                    .or_else(|| self.game(&game_key("meshes", name, "ogf"), "ogf"))
+                    .ok_or_else(|| format!("no model '{name}' in the project, the editor or the game"))
             }
         }
     }

@@ -82,10 +82,15 @@ impl ImfFilter {
                 let tt = t * t;
                 let t = t.abs();
                 if t < 1.0 {
-                    let v = ((12.0 - 9.0 * B - 6.0 * C) * (t * tt)) + ((-18.0 + 12.0 * B + 6.0 * C) * tt) + (6.0 - 2.0 * B);
+                    let v = ((12.0 - 9.0 * B - 6.0 * C) * (t * tt))
+                        + ((-18.0 + 12.0 * B + 6.0 * C) * tt)
+                        + (6.0 - 2.0 * B);
                     v / 6.0
                 } else if t < 2.0 {
-                    let v = ((-B - 6.0 * C) * (t * tt)) + ((6.0 * B + 30.0 * C) * tt) + ((-12.0 * B - 48.0 * C) * t) + (8.0 * B + 24.0 * C);
+                    let v = ((-B - 6.0 * C) * (t * tt))
+                        + ((6.0 * B + 30.0 * C) * tt)
+                        + ((-12.0 * B - 48.0 * C) * t)
+                        + (8.0 * B + 24.0 * C);
                     v / 6.0
                 } else {
                     0.0
@@ -95,6 +100,8 @@ impl ImfFilter {
     }
 }
 
+// the C++ resampler's literal, one ulp from `f32::consts::PI`: the filter weights stay its own
+#[allow(clippy::approx_constant)]
 fn sinc(x: f32) -> f32 {
     let x = x * 3.141_592_6;
     if x != 0.0 { x.sin() / x } else { 1.0 }
@@ -128,7 +135,8 @@ fn contributions(src: usize, dst: usize, filter: ImfFilter) -> Vec<Contrib> {
             (left..=right)
                 .map(|j| {
                     let t = centre - j as f32;
-                    let weight = if scale < 1.0 { filter.weight(t / fscale) / fscale } else { filter.weight(t) };
+                    let weight =
+                        if scale < 1.0 { filter.weight(t / fscale) / fscale } else { filter.weight(t) };
                     (mirror(j), weight)
                 })
                 .collect()
@@ -168,7 +176,7 @@ pub fn imf_resample(src: &Image, width: u32, height: u32, filter: ImfFilter) -> 
     let xs = contributions(sw, dw, filter);
     let mut tmp = vec![0u8; dw * sh * 4];
     tmp.par_chunks_mut(dw * 4).zip(src.rgba.par_chunks(sw * 4)).for_each(|(dst, row)| {
-        for (px, taps) in dst.chunks_exact_mut(4).zip(&xs) {
+        for (px, taps) in dst.as_chunks_mut::<4>().0.iter_mut().zip(&xs) {
             let p = mix(taps, |at| {
                 let i = at as usize * 4;
                 row.get(i..i + 4).map_or([0; 4], |s| [s[0], s[1], s[2], s[3]])
@@ -181,7 +189,7 @@ pub fn imf_resample(src: &Image, width: u32, height: u32, filter: ImfFilter) -> 
     let ys = contributions(sh, dh, filter);
     let mut out = vec![0u8; len];
     out.par_chunks_mut(dw * 4).zip(ys.par_iter()).for_each(|(dst, taps)| {
-        for (x, px) in dst.chunks_exact_mut(4).enumerate() {
+        for (x, px) in dst.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let p = mix(taps, |at| {
                 let i = (at as usize * dw + x) * 4;
                 tmp.get(i..i + 4).map_or([0; 4], |s| [s[0], s[1], s[2], s[3]])
@@ -202,7 +210,7 @@ mod tests {
         let out = imf_resample(&src, 128, 128, ImfFilter::Box).unwrap();
         assert_eq!((out.width, out.height), (128, 128));
         // two taps of weight one half each
-        assert!(out.rgba.chunks_exact(4).all(|p| p == [10, 200, 30, 255]));
+        assert!(out.rgba.as_chunks::<4>().0.iter().all(|p| *p == [10, 200, 30, 255]));
     }
 
     #[test]
@@ -240,7 +248,15 @@ mod tests {
         for filter in [ImfFilter::Hermite, ImfFilter::Box, ImfFilter::Triangle, ImfFilter::Lanczos3] {
             assert!((filter.weight(0.0) - 1.0).abs() < 1e-6, "{filter:?}");
         }
-        for filter in [ImfFilter::Hermite, ImfFilter::Box, ImfFilter::Triangle, ImfFilter::Bell, ImfFilter::BSpline, ImfFilter::Lanczos3, ImfFilter::Mitchell] {
+        for filter in [
+            ImfFilter::Hermite,
+            ImfFilter::Box,
+            ImfFilter::Triangle,
+            ImfFilter::Bell,
+            ImfFilter::BSpline,
+            ImfFilter::Lanczos3,
+            ImfFilter::Mitchell,
+        ] {
             assert_eq!(filter.weight(filter.support() + 0.25), 0.0, "{filter:?}");
         }
         assert!((ImfFilter::Bell.weight(0.0) - 0.75).abs() < 1e-6);

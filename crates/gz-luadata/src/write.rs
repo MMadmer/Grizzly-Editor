@@ -221,11 +221,11 @@ fn indent(out: &mut String, n: usize) {
 /// entry per line otherwise.
 pub fn pretty_into(out: &mut String, v: &Value, ind: usize, first_line_used: usize) {
     let Value::Table(t) = v else {
-        if let Value::String(s) = v {
-            if wants_long_bracket(s) {
-                long_string_into(out, s);
-                return;
-            }
+        if let Value::String(s) = v
+            && wants_long_bracket(s)
+        {
+            long_string_into(out, s);
+            return;
         }
         inline_into(out, v);
         return;
@@ -471,7 +471,11 @@ mod tests {
         top.put("nq", 1);
         top.put("id", "q");
         top.put("tasks", t(&[("t1", t(&[("title", "T".into()), ("type", "additional".into())]))]));
-        let nodes: Value = vec![t(&[("id", "a".into()), ("kind", "trigger.start".into())]), t(&[("id", "b".into()), ("kind", "flow.end".into())])].into();
+        let nodes: Value = vec![
+            t(&[("id", "a".into()), ("kind", "trigger.start".into())]),
+            t(&[("id", "b".into()), ("kind", "flow.end".into())]),
+        ]
+        .into();
         top.put("nodes", nodes);
         let head = comment_block("quest q \"\"\na (trigger.start)\n");
         assert_eq!(head, "-- quest q \"\"\n-- a (trigger.start)\n");

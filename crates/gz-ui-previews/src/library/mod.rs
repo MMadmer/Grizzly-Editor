@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use egui::{Align, CornerRadius, Layout, Rect, ScrollArea, Ui, UiBuilder, pos2};
 use gz_editor::{Args, Editor};
-use gz_ui::splitter::{splitter, splitter_tail};
 use gz_ui::palette;
+use gz_ui::splitter::{splitter, splitter_tail};
 use serde_json::{Map, Value};
 
 /// pt: list | preview | properties.
@@ -35,20 +35,32 @@ pub fn panes(ui: &mut Ui, kind: &str) -> [Rect; 3] {
     let list = splitter(ui, &format!("{kind}.list"), true, SIDE_MIN, CANVAS_MIN + SIDE_MIN + 8.0, LIST_W);
     let list_rect = Rect::from_min_max(full.min, pos2((full.min.x + list.size).min(full.max.x), full.max.y));
     let rest = Rect::from_min_max(pos2((list_rect.max.x + gap).min(full.max.x), full.min.y), full.max);
-    let mut child = ui.new_child(UiBuilder::new().id_salt((kind, "rest")).max_rect(rest).layout(Layout::left_to_right(Align::Min)));
+    let mut child = ui.new_child(
+        UiBuilder::new().id_salt((kind, "rest")).max_rect(rest).layout(Layout::left_to_right(Align::Min)),
+    );
     let tail = splitter_tail(&mut child, &format!("{kind}.details"), true, CANVAS_MIN, SIDE_MIN, GRID_W);
-    let preview = Rect::from_min_max(rest.min, pos2((rest.max.x - tail.size - gap).max(rest.min.x + 1.0), rest.max.y));
+    let preview =
+        Rect::from_min_max(rest.min, pos2((rest.max.x - tail.size - gap).max(rest.min.x + 1.0), rest.max.y));
     let details = Rect::from_min_max(pos2(rest.max.x - tail.size, rest.min.y), rest.max);
     [list_rect, preview, details]
 }
 
 /// A pane: its padding, its fill, and a vertical scroll when `scroll`.
-pub fn pane<R>(ui: &mut Ui, rect: Rect, salt: &str, canvas: bool, scroll: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn pane<R>(
+    ui: &mut Ui,
+    rect: Rect,
+    salt: &str,
+    canvas: bool,
+    scroll: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
     if canvas {
         let p = palette(ui.ctx());
         ui.painter().rect_filled(rect, CornerRadius::ZERO, p.canvas);
     }
-    let mut child = ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect.shrink(8.0)).layout(Layout::top_down(Align::Min)));
+    let mut child = ui.new_child(
+        UiBuilder::new().id_salt(salt).max_rect(rect.shrink(8.0)).layout(Layout::top_down(Align::Min)),
+    );
     if scroll {
         ScrollArea::vertical().id_salt(salt).auto_shrink([false, false]).show(&mut child, add).inner
     } else {
@@ -78,7 +90,9 @@ pub fn can_write(dir: &std::path::Path) -> bool {
     match std::fs::metadata(dir) {
         Ok(m) => m.is_dir() && !m.permissions().readonly(),
         // a folder that is not there yet is made by the first save
-        Err(_) => dir.parent().is_some_and(|p| std::fs::metadata(p).is_ok_and(|m| !m.permissions().readonly())),
+        Err(_) => {
+            dir.parent().is_some_and(|p| std::fs::metadata(p).is_ok_and(|m| !m.permissions().readonly()))
+        }
     }
 }
 

@@ -21,9 +21,12 @@ mod shaders;
 
 pub use gamemtl::{GameMaterial, GameMaterialPair, GameMaterials};
 pub use lanims::{LightAnim, LightAnims};
-pub use particles::{effect_flags, Action, ActionKind, ActionParams, Domain, EffectFrame, GroupEffect, ParticleEffect, ParticleGroup, Particles};
+pub use particles::{
+    Action, ActionKind, ActionParams, Domain, EffectFrame, GroupEffect, ParticleEffect, ParticleGroup,
+    Particles, effect_flags,
+};
 pub use senv::{SoundEnvironment, SoundEnvironments};
-pub use shaders::{Blender, MatrixDef, Shaders, ShaderXrlc, ShadersXrlc, WaveForm};
+pub use shaders::{Blender, MatrixDef, ShaderXrlc, Shaders, ShadersXrlc, WaveForm};
 
 use gz_chunk::{Reader, Writer};
 use smol_str::SmolStr;

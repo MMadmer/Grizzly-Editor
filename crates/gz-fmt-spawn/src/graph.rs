@@ -136,9 +136,17 @@ impl CrossTable {
     pub fn parse_gct(buf: &Arc<[u8]>) -> Result<Self> {
         let r = Reader::new(buf);
         let mut head = r.sub(0)?.ok_or(SpawnError::Missing("cross table header"))?;
-        let (version, level_vertex_count, game_vertex_count, level_guid, game_guid) = Self::read_header(&mut head)?;
+        let (version, level_vertex_count, game_vertex_count, level_guid, game_guid) =
+            Self::read_header(&mut head)?;
         let cells = r.sub(1)?.ok_or(SpawnError::Missing("cross table data"))?;
-        Ok(Self { version, level_vertex_count, game_vertex_count, level_guid, game_guid, cells: Bytes::of_part(buf, cells.data()) })
+        Ok(Self {
+            version,
+            level_vertex_count,
+            game_vertex_count,
+            level_guid,
+            game_guid,
+            cells: Bytes::of_part(buf, cells.data()),
+        })
     }
 
     #[must_use]
@@ -225,14 +233,36 @@ impl GameGraph {
             cross_tables.reserve(levels.len());
             for _ in 0..levels.len() {
                 let size = r.r_u32()? as usize;
-                let body_size = size.checked_sub(4 + CROSS_TABLE_HEADER_SIZE).ok_or_else(|| damaged("cross table", format!("size {size}")))?;
-                let (version, level_vertex_count, game_vertex_count, level_guid, game_guid) = CrossTable::read_header(&mut r)?;
+                let body_size = size
+                    .checked_sub(4 + CROSS_TABLE_HEADER_SIZE)
+                    .ok_or_else(|| damaged("cross table", format!("size {size}")))?;
+                let (version, level_vertex_count, game_vertex_count, level_guid, game_guid) =
+                    CrossTable::read_header(&mut r)?;
                 let cells = r.take(body_size)?;
-                cross_tables.push(CrossTable { version, level_vertex_count, game_vertex_count, level_guid, game_guid, cells: Bytes::of_part(buf, cells) });
+                cross_tables.push(CrossTable {
+                    version,
+                    level_vertex_count,
+                    game_vertex_count,
+                    level_guid,
+                    game_guid,
+                    cells: Bytes::of_part(buf, cells),
+                });
             }
         }
         let tail = Bytes::of_part(buf, r.rest());
-        Ok(Self { version, vertex_count, edge_count, death_point_count, guid, levels, vertices, edges, death_points, cross_tables, tail })
+        Ok(Self {
+            version,
+            vertex_count,
+            edge_count,
+            death_point_count,
+            guid,
+            levels,
+            vertices,
+            edges,
+            death_points,
+            cross_tables,
+            tail,
+        })
     }
 
     /// `game.graph` as a file of its own.
@@ -302,7 +332,9 @@ impl GameGraph {
     pub fn edges_of(&self, vertex: u16) -> &[GraphEdge] {
         let Some(v) = self.vertices.get(usize::from(vertex)) else { return &[] };
         let base = self.vertices.len() * VERTEX_SIZE;
-        let Some(first) = (v.edge_offset as usize).checked_sub(base).filter(|o| o % EDGE_SIZE == 0).map(|o| o / EDGE_SIZE) else {
+        let Some(first) =
+            (v.edge_offset as usize).checked_sub(base).filter(|o| o % EDGE_SIZE == 0).map(|o| o / EDGE_SIZE)
+        else {
             return &[];
         };
         self.edges.get(first..first + usize::from(v.edge_count)).unwrap_or(&[])
@@ -336,18 +368,27 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn sample_graph() -> GameGraph {
-        let cells: Vec<u8> = [(0u16, 0.5f32), (1, 1.5)].iter().flat_map(|(v, d)| {
-            let mut b = v.to_le_bytes().to_vec();
-            b.extend_from_slice(&d.to_le_bytes());
-            b
-        }).collect();
+        let cells: Vec<u8> = [(0u16, 0.5f32), (1, 1.5)]
+            .iter()
+            .flat_map(|(v, d)| {
+                let mut b = v.to_le_bytes().to_vec();
+                b.extend_from_slice(&d.to_le_bytes());
+                b
+            })
+            .collect();
         GameGraph {
             version: 10,
             vertex_count: 2,
             edge_count: 2,
             death_point_count: 1,
             guid: [7; 16],
-            levels: vec![GraphLevel { name: "l01_escape".into(), offset: Vec3::ZERO, id: 0, section: "level_l01".into(), guid: [1; 16] }],
+            levels: vec![GraphLevel {
+                name: "l01_escape".into(),
+                offset: Vec3::ZERO,
+                id: 0,
+                section: "level_l01".into(),
+                guid: [1; 16],
+            }],
             vertices: vec![
                 GraphVertex {
                     local_point: Vec3::new(1.0, 0.0, 0.0),

@@ -43,7 +43,8 @@ impl EntryState {
 /// mod's repository; opening it writes `project.ltx`).
 #[must_use]
 pub fn has_manifest(folder: &Path) -> bool {
-    std::fs::symlink_metadata(folder.join("project.ltx")).is_ok() || std::fs::symlink_metadata(folder.join("mod.ltx")).is_ok()
+    std::fs::symlink_metadata(folder.join("project.ltx")).is_ok()
+        || std::fs::symlink_metadata(folder.join("mod.ltx")).is_ok()
 }
 
 /// What a listed folder is now. Two or three attribute reads.
@@ -106,7 +107,9 @@ impl ProjectList {
     #[must_use]
     pub fn entries(&self) -> Vec<String> {
         (0..MAX_RECENT)
-            .filter_map(|i| ini::get(&self.doc, "recent", &format!("p{i}")).filter(|v| !v.is_empty()).map(str::to_owned))
+            .filter_map(|i| {
+                ini::get(&self.doc, "recent", &format!("p{i}")).filter(|v| !v.is_empty()).map(str::to_owned)
+            })
             .collect()
     }
 
@@ -201,7 +204,13 @@ mod tests {
     fn opening_moves_to_the_front() {
         let list = ProjectList::parse(SAMPLE).opened("D:\\Mods\\Beta", "D:\\Mods");
         assert_eq!(list.entries(), ["D:\\Mods\\Beta", "D:\\Mods\\Alpha"]);
-        assert_eq!(list.to_text(), SAMPLE.replace("p0=D:\\Mods\\Alpha\r\np1=D:\\Mods\\Beta", "p0=D:\\Mods\\Beta\r\np1=D:\\Mods\\Alpha"));
+        assert_eq!(
+            list.to_text(),
+            SAMPLE.replace(
+                "p0=D:\\Mods\\Alpha\r\np1=D:\\Mods\\Beta",
+                "p0=D:\\Mods\\Beta\r\np1=D:\\Mods\\Alpha"
+            )
+        );
         // the same move again changes nothing
         assert_eq!(list.opened("D:\\Mods\\Beta", "D:\\Mods").to_text(), list.to_text());
     }

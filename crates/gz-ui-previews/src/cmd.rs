@@ -47,7 +47,12 @@ async fn owe_frames(editor: &Editor, n: u64) {
 
 /// Opens a tab through the shell's own opener (`ui_tab open`), so a person and an agent share
 /// one path; an error reply becomes this command's error.
-async fn open_tab(editor: &Arc<Editor>, kind: &str, path: Option<&str>, source: Option<&str>) -> Result<(), CmdError> {
+async fn open_tab(
+    editor: &Arc<Editor>,
+    kind: &str,
+    path: Option<&str>,
+    source: Option<&str>,
+) -> Result<(), CmdError> {
     let mut args = Args::new();
     args.insert("action".into(), json!("open"));
     args.insert("kind".into(), json!(kind));
@@ -112,7 +117,8 @@ async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
         "unlit" => Some(1),
         _ => return Err(invalid("lighting must be studio or unlit")),
     };
-    let (wireframe, bones, details) = (flag(&args, "wireframe"), flag(&args, "bones"), flag(&args, "details"));
+    let (wireframe, bones, details) =
+        (flag(&args, "wireframe"), flag(&args, "bones"), flag(&args, "details"));
     let (frame, reset) = (args.flag("frame"), args.flag("reset"));
     if args.flag("answer_only") {
         return model_answer(&editor).await;
@@ -132,7 +138,9 @@ async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
         if !showing {
             let pending = Pending::spawn(&editor.exec, load_model(editor.clone(), name.clone(), source));
             let loaded = pending.wait(LOAD_WAIT).await;
-            if source == ModelSource::Game && loaded.as_ref().is_some_and(|d| d.error == "not found in the linked game install") {
+            if source == ModelSource::Game
+                && loaded.as_ref().is_some_and(|d| d.error == "not found in the linked game install")
+            {
                 return Err(invalid("not found in the linked game install"));
             }
             editor.services.get_or_init(ModelPreload::default).put(&name, source, pending);
@@ -145,7 +153,13 @@ async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
         }
     }
 
-    let asked = !name.is_empty() || lighting.is_some() || wireframe.is_some() || bones.is_some() || details.is_some() || frame || reset;
+    let asked = !name.is_empty()
+        || lighting.is_some()
+        || wireframe.is_some()
+        || bones.is_some()
+        || details.is_some()
+        || frame
+        || reset;
     let (active, drawn) = on_ui(&editor, move |shell, ctx| {
         let frame_nr = ctx.cumulative_frame_nr();
         let active = shell.active() == "model";
@@ -166,11 +180,16 @@ async fn preview_model(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
         if let Some((renderer, list)) = ready {
             let r = renderer.clone();
             editor.exec.io(move || r.assets().prepare(&list, Duration::from_secs(10))).await;
-            let before = on_ui(&editor, |shell, _| Ok(doc::<ModelDoc>(shell, "model").map_or(0, |d| d.redraw()))).await?;
+            let before =
+                on_ui(&editor, |shell, _| Ok(doc::<ModelDoc>(shell, "model").map_or(0, |d| d.redraw())))
+                    .await?;
             let mut serial = before;
             for _ in 0..30 {
                 owe_frames(&editor, 1).await;
-                serial = on_ui(&editor, |shell, _| Ok(doc::<ModelDoc>(shell, "model").map_or(0, |d| d.submitted()))).await?;
+                serial = on_ui(&editor, |shell, _| {
+                    Ok(doc::<ModelDoc>(shell, "model").map_or(0, |d| d.submitted()))
+                })
+                .await?;
                 if serial > before || !editor.frames.has_window() {
                     break;
                 }
@@ -211,10 +230,14 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
         "open" => {
             let path = args.str("path").unwrap_or_default().replace('/', "\\");
             let source = TexSource::parse(args.str("source").unwrap_or_default());
-            let Some(source) = source.filter(|_| !path.is_empty()) else { return Err(invalid("open takes path= and source=project|editor|darf")) };
+            let Some(source) = source.filter(|_| !path.is_empty()) else {
+                return Err(invalid("open takes path= and source=project|editor|darf"));
+            };
             let (p, s) = (path.clone(), source);
             let showing = on_ui(&editor, move |shell, ctx| {
-                let same = doc::<TextureDoc>(shell, "texture").is_some_and(|d| d.name() == p && d.source() == s && d.data().is_some_and(|t| t.texture.is_some()));
+                let same = doc::<TextureDoc>(shell, "texture").is_some_and(|d| {
+                    d.name() == p && d.source() == s && d.data().is_some_and(|t| t.texture.is_some())
+                });
                 if same {
                     shell.activate(ctx, "texture");
                 }
@@ -222,14 +245,19 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
             })
             .await?;
             if !showing {
-                let pending = Pending::spawn(&editor.exec, load_texture(editor.clone(), path.clone(), source));
+                let pending =
+                    Pending::spawn(&editor.exec, load_texture(editor.clone(), path.clone(), source));
                 let loaded = pending.wait(LOAD_WAIT).await;
                 editor.services.get_or_init(TexturePreload::default).put(&path, source, pending);
                 open_tab(&editor, "texture", Some(&path), Some(source.arg())).await?;
                 if let Some(t) = loaded
                     && !t.error.is_empty()
                 {
-                    return Err(invalid(if t.error == UNREADABLE { UNREADABLE_REPLY.to_owned() } else { t.error.clone() }));
+                    return Err(invalid(if t.error == UNREADABLE {
+                        UNREADABLE_REPLY.to_owned()
+                    } else {
+                        t.error.clone()
+                    }));
                 }
             }
             asked = true;
@@ -259,8 +287,13 @@ async fn texture_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Re
         z => Some(z.trim().parse::<f32>().unwrap_or(0.0)),
     };
     let channel_text = args.str("channel").unwrap_or_default();
-    let channel = if channel_text.is_empty() { None } else { parse_channel(channel_text).map(Some).unwrap_or(Some(usize::MAX)) };
-    if channel == Some(usize::MAX) || (zoom_text != "fit" && zoom.is_some_and(|z| z <= 0.0 || !z.is_finite())) {
+    let channel = if channel_text.is_empty() {
+        None
+    } else {
+        parse_channel(channel_text).map(Some).unwrap_or(Some(usize::MAX))
+    };
+    if channel == Some(usize::MAX) || (zoom_text != "fit" && zoom.is_some_and(|z| z <= 0.0 || !z.is_finite()))
+    {
         return Err(invalid("zoom is fit or a factor, channel rgba, r, g, b or a"));
     }
     let mip = args.i64("mip").filter(|m| *m >= 0).map(|m| u32::try_from(m).unwrap_or(u32::MAX));
@@ -294,7 +327,9 @@ async fn library(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     // open brings the tab up; state and select never switch tabs
     if action == "open" {
         let k = kind.clone();
-        let there = on_ui(&editor, move |shell, ctx| Ok(shell.document_mut(&k).is_some() && shell.activate(ctx, &k))).await?;
+        let there =
+            on_ui(&editor, move |shell, ctx| Ok(shell.document_mut(&k).is_some() && shell.activate(ctx, &k)))
+                .await?;
         if !there {
             open_tab(&editor, &kind, None, None).await?;
         }
@@ -309,12 +344,18 @@ async fn library(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     // what the tab answers about is its list as read
     match kind.as_str() {
         "light_animations" => {
-            if let Some(store) = on_ui(&editor, |shell, _| Ok(doc::<LanimDoc>(shell, "light_animations").map(|d| d.store()))).await? {
+            if let Some(store) =
+                on_ui(&editor, |shell, _| Ok(doc::<LanimDoc>(shell, "light_animations").map(|d| d.store())))
+                    .await?
+            {
                 LanimDoc::loaded(&store).await;
             }
         }
         "texture_library" => {
-            let import = on_ui(&editor, |shell, _| Ok(doc::<TexLibDoc>(shell, "texture_library").and_then(|d| d.import_pending()))).await?;
+            let import = on_ui(&editor, |shell, _| {
+                Ok(doc::<TexLibDoc>(shell, "texture_library").and_then(|d| d.import_pending()))
+            })
+            .await?;
             TexLibDoc::items_now(&editor, import).await;
         }
         _ => {
@@ -329,7 +370,9 @@ async fn library(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
                 "texture_library" => doc::<TexLibDoc>(shell, &kind).map(|d| d as &mut dyn LibraryDoc),
                 _ => doc::<SoundLibDoc>(shell, &kind).map(|d| d as &mut dyn LibraryDoc),
             };
-            let Some(d) = d else { return Err(invalid(format!("the {kind} tab is not open: action=open opens it"))) };
+            let Some(d) = d else {
+                return Err(invalid(format!("the {kind} tab is not open: action=open opens it")));
+            };
             let body = d.mcp(&action, &args).map_err(invalid)?;
             let settle = if action == "select" { d.settle() } else { None };
             Ok((active, body, settle))
@@ -367,7 +410,10 @@ async fn thumb_renderer(editor: &Arc<Editor>) -> Result<Arc<Renderer>, String> {
             return Err("the editor runs without a graphics device".to_owned());
         };
         let (device, queue, exec) = (gpu.device.clone(), gpu.queue.clone(), editor.exec.clone());
-        let made = editor.exec.cpu(move || Renderer::new(device, queue, exec).map(Arc::new).map_err(|e| e.to_string())).await;
+        let made = editor
+            .exec
+            .cpu(move || Renderer::new(device, queue, exec).map(Arc::new).map_err(|e| e.to_string()))
+            .await;
         *slot = Some(made);
     }
     slot.clone().unwrap_or_else(|| Err("the renderer did not start".to_owned()))
@@ -395,7 +441,8 @@ async fn render_model(editor: &Arc<Editor>, name: &str, source: ModelSource) -> 
             let Some(mesh) = &data.mesh else { return Err("the model has no geometry to draw".to_owned()) };
             let handle = assets.add_mesh("gz-ui-previews\\thumbnail", mesh.clone());
             let mut list = gz_render::DrawList::new();
-            let mut inst = Instance::new(handle, glam::Mat4::IDENTITY).with_flags(InstanceFlags::NO_ID | InstanceFlags::NO_CULL);
+            let mut inst = Instance::new(handle, glam::Mat4::IDENTITY)
+                .with_flags(InstanceFlags::NO_ID | InstanceFlags::NO_CULL);
             inst.bounds = Some(data.bounds);
             if let Some(pose) = &data.pose {
                 inst = inst.with_pose(pose.clone());
@@ -449,7 +496,11 @@ fn category_thumbnail(sources: &crate::loader::Sources, category: &str, name: &s
             dirs.into_iter().find_map(|d| thm_pixels(d.join(format!("{rel}.thm"))))
         }
         "Textures" | "Textures (raw)" => {
-            let path = if category == "Textures" { sources.dirs.game_textures.join(format!("{rel}.dds")) } else { sources.dirs.textures.join(format!("{rel}.tga")) };
+            let path = if category == "Textures" {
+                sources.dirs.game_textures.join(format!("{rel}.dds"))
+            } else {
+                sources.dirs.textures.join(format!("{rel}.tga"))
+            };
             let bytes = std::fs::read(&path).ok()?;
             let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
             let tile = gz_fmt_tex::texture_tile(&bytes, ext.as_deref(), gz_fmt_tex::THUMB_SIDE).ok()?;
@@ -470,12 +521,16 @@ fn png_reply(name: &str, png: &[u8], rendered: bool) -> Value {
 }
 
 async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Some(raw) = args.text("name") else { return Err(invalid("missing 'name' argument (see list_assets)")) };
+    let Some(raw) = args.text("name") else {
+        return Err(invalid("missing 'name' argument (see list_assets)"));
+    };
     let name = engine_name(raw);
     let source = args.str("source").unwrap_or_default().to_lowercase();
     match source.as_str() {
         "object" => {
-            let png = render_model(&editor, &name, ModelSource::Visual).await.map_err(|_| invalid("cannot render this library object"))?;
+            let png = render_model(&editor, &name, ModelSource::Visual)
+                .await
+                .map_err(|_| invalid("cannot render this library object"))?;
             return Ok(png_reply(&name, &png, true));
         }
         "visual" | "darf" => {
@@ -489,7 +544,9 @@ async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
                     return Err(invalid("not found in the linked game install (see darf_list)"));
                 }
             }
-            let png = render_model(&editor, &name, src).await.map_err(|_| invalid("cannot render a preview for this model"))?;
+            let png = render_model(&editor, &name, src)
+                .await
+                .map_err(|_| invalid("cannot render a preview for this model"))?;
             return Ok(png_reply(&name, &png, true));
         }
         _ => {}
@@ -510,7 +567,11 @@ async fn asset_preview(editor: Arc<Editor>, args: Args, _origin: Origin) -> Repl
     let png = match baked {
         Some(p) => p,
         // the visual hook answers through a per-frame queue: a one-shot call renders instead
-        None if matches!(category, "Visuals" | "Objects") => render_model(&editor, &name, ModelSource::Visual).await.map_err(|_| invalid("no preview for this asset (missing thumbnail or wrong name)"))?,
+        None if matches!(category, "Visuals" | "Objects") => {
+            render_model(&editor, &name, ModelSource::Visual)
+                .await
+                .map_err(|_| invalid("no preview for this asset (missing thumbnail or wrong name)"))?
+        }
         None => return Err(invalid("no preview for this asset (missing thumbnail or wrong name)")),
     };
     Ok(png_reply(&name, &png, false))

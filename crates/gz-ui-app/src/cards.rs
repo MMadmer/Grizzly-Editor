@@ -170,7 +170,11 @@ pub fn preview_rev(folder: &str) -> Option<Rev> {
     if !meta.is_file() {
         return None;
     }
-    let nanos = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64);
+    let nanos = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as u64);
     // the size goes in as well: a copy made within the clock's step is still another picture
     Some(Rev((nanos ^ meta.len().rotate_left(48)) | 1))
 }
@@ -216,7 +220,9 @@ pub fn shows_no_scene(rgb: &[u8], w: usize, h: usize) -> bool {
     for y in (0..h).step_by(step) {
         for x in (0..w).step_by(step) {
             let i = (y * w + x) * 3;
-            let (Some(&r), Some(&g), Some(&b)) = (rgb.get(i), rgb.get(i + 1), rgb.get(i + 2)) else { continue };
+            let (Some(&r), Some(&g), Some(&b)) = (rgb.get(i), rgb.get(i + 1), rgb.get(i + 2)) else {
+                continue;
+            };
             let key = (usize::from(r >> 4) << 8) | (usize::from(g >> 4) << 4) | usize::from(b >> 4);
             if let Some(bin) = bins.get_mut(key) {
                 *bin += 1;
@@ -327,12 +333,20 @@ pub fn crop_uv(have_w: f32, have_h: f32, want_w: f32, want_h: f32) -> egui::Rect
 #[must_use]
 pub fn info_from_reply(reply: &serde_json::Value) -> gz_project::DeleteInfo {
     use serde_json::Value;
-    let text = |k: &str| reply.get(k).and_then(Value::as_str).map(gz_project::paths::to_backslash).unwrap_or_default();
+    let text = |k: &str| {
+        reply.get(k).and_then(Value::as_str).map(gz_project::paths::to_backslash).unwrap_or_default()
+    };
     let flag = |k: &str| reply.get(k).and_then(Value::as_bool).unwrap_or(false);
     let num = |v: Option<&Value>| v.and_then(Value::as_u64).unwrap_or(0);
     let counts = reply.get("deleted").unwrap_or(reply);
     let u32_of = |v: Option<&Value>| u32::try_from(num(v)).unwrap_or(u32::MAX);
-    let refused = flag("refused").then(|| reply.get("error").and_then(Value::as_str).unwrap_or("The project cannot be deleted from here.").to_owned());
+    let refused = flag("refused").then(|| {
+        reply
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("The project cannot be deleted from here.")
+            .to_owned()
+    });
     gz_project::DeleteInfo {
         path: text("path"),
         name: text("name"),
@@ -346,7 +360,11 @@ pub fn info_from_reply(reply: &serde_json::Value) -> gz_project::DeleteInfo {
         releases: flag("releases"),
         release_files: u32_of(reply.get("release_files")),
         release_bytes: num(reply.get("release_bytes")),
-        nested: reply.get("nested").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(gz_project::paths::to_backslash).collect()).unwrap_or_default(),
+        nested: reply
+            .get("nested")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(gz_project::paths::to_backslash).collect())
+            .unwrap_or_default(),
         nested_total: u32_of(reply.get("nested_total")),
         failed: reply
             .get("failed")
@@ -354,7 +372,11 @@ pub fn info_from_reply(reply: &serde_json::Value) -> gz_project::DeleteInfo {
             .map(|a| {
                 a.iter()
                     .map(|f| gz_project::DeleteFailure {
-                        path: f.get("path").and_then(Value::as_str).map(gz_project::paths::to_backslash).unwrap_or_default(),
+                        path: f
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .map(gz_project::paths::to_backslash)
+                            .unwrap_or_default(),
                         reason: f.get("reason").and_then(Value::as_str).unwrap_or_default().to_owned(),
                     })
                     .collect()
@@ -407,7 +429,11 @@ mod tests {
 
     #[test]
     fn twins_name_the_parent_that_differs() {
-        let cards = card_texts(vec![row("C:\\Users\\x\\GrizzlyProjects\\Mod"), row("C:\\Temp\\Mod"), row("C:\\Other\\Solo")]);
+        let cards = card_texts(vec![
+            row("C:\\Users\\x\\GrizzlyProjects\\Mod"),
+            row("C:\\Temp\\Mod"),
+            row("C:\\Other\\Solo"),
+        ]);
         assert_eq!(cards.first().map(|c| c.parent.as_str()), Some("GrizzlyProjects"));
         assert_eq!(cards.get(1).map(|c| c.parent.as_str()), Some("Temp"));
         assert_eq!(cards.get(2).map(|c| c.parent.as_str()), Some(""));

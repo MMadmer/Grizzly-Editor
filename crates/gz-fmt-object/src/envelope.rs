@@ -339,7 +339,11 @@ fn bez2(key0: &Key, key1: &Key, time: f32) -> f32 {
         key0.time + (key1.time - key0.time) / 3.0
     };
     let t = bez2_time(key0.time, x, key1.time + key1.param[0], key1.time, time);
-    let y = if key0.shape == shape::BEZIER_2D { key0.value + key0.param[3] } else { key0.value + key0.param[1] / 3.0 };
+    let y = if key0.shape == shape::BEZIER_2D {
+        key0.value + key0.param[3]
+    } else {
+        key0.value + key0.param[1] / 3.0
+    };
     bezier(key0.value, y, key1.param[1] + key1.value, key1.value, t)
 }
 
@@ -453,7 +457,11 @@ mod tests {
 
     #[test]
     fn linear_and_stepped_spans() {
-        let e = env(&[key(0.0, 0.0, shape::LINEAR), key(2.0, 10.0, shape::LINEAR), key(4.0, 20.0, shape::STEPPED)]);
+        let e = env(&[
+            key(0.0, 0.0, shape::LINEAR),
+            key(2.0, 10.0, shape::LINEAR),
+            key(4.0, 20.0, shape::STEPPED),
+        ]);
         // t = 0.25 of the first span
         assert_eq!(e.evaluate(0.5), 2.5);
         // a stepped key holds the previous value until it is reached
@@ -525,7 +533,8 @@ mod tests {
 
     #[test]
     fn both_file_forms_read_and_the_current_one_round_trips() {
-        let mut e = env(&[key(0.0, 1.0, shape::TCB), key(1.0, 2.0, shape::STEPPED), key(2.0, 3.0, shape::LINEAR)]);
+        let mut e =
+            env(&[key(0.0, 1.0, shape::TCB), key(1.0, 2.0, shape::STEPPED), key(2.0, 3.0, shape::LINEAR)]);
         e.keys[0].tension = 0.5;
         e.keys[0].param = [1.0, -1.0, 0.25, 31.0];
         let mut w = Writer::new();

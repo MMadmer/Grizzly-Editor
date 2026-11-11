@@ -55,7 +55,12 @@ impl Projection {
                 let w = h / aspect;
                 let b = n * f / (f - n);
                 let a = -n / (f - n);
-                Mat4::from_cols(Vec4::new(w, 0.0, 0.0, 0.0), Vec4::new(0.0, h, 0.0, 0.0), Vec4::new(0.0, 0.0, a, 1.0), Vec4::new(0.0, 0.0, b, 0.0))
+                Mat4::from_cols(
+                    Vec4::new(w, 0.0, 0.0, 0.0),
+                    Vec4::new(0.0, h, 0.0, 0.0),
+                    Vec4::new(0.0, 0.0, a, 1.0),
+                    Vec4::new(0.0, 0.0, b, 0.0),
+                )
             }
             Self::Orthographic { height, near, far } => {
                 let (n, f) = sane_ortho_range(near, far);
@@ -64,7 +69,12 @@ impl Projection {
                 let sx = sy / aspect;
                 let a = -1.0 / (f - n);
                 let b = f / (f - n);
-                Mat4::from_cols(Vec4::new(sx, 0.0, 0.0, 0.0), Vec4::new(0.0, sy, 0.0, 0.0), Vec4::new(0.0, 0.0, a, 0.0), Vec4::new(0.0, 0.0, b, 1.0))
+                Mat4::from_cols(
+                    Vec4::new(sx, 0.0, 0.0, 0.0),
+                    Vec4::new(0.0, sy, 0.0, 0.0),
+                    Vec4::new(0.0, 0.0, a, 0.0),
+                    Vec4::new(0.0, 0.0, b, 1.0),
+                )
             }
         }
     }

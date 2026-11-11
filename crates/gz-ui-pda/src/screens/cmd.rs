@@ -48,7 +48,11 @@ fn arg_int(args: &Args, key: &str, def: i64) -> i64 {
         Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|v| v as i64)).unwrap_or(def),
         Some(Value::String(s)) => {
             let t = s.trim_start_matches([' ', '\t']);
-            if t.starts_with(|c: char| c == '-' || c.is_ascii_digit()) { crate::gamefile::atoi(t) } else { def }
+            if t.starts_with(|c: char| c == '-' || c.is_ascii_digit()) {
+                crate::gamefile::atoi(t)
+            } else {
+                def
+            }
         }
         _ => def,
     }
@@ -81,7 +85,12 @@ pub async fn screens_view(editor: Arc<Editor>, args: Args, _origin: Origin) -> R
     }
     // the same way a drop from Explorer lands: at a point of the editor's window
     if let Some(list) = arg(&args, "simulate_drop") {
-        let files: Vec<String> = list.split('|').map(|f| f.trim_matches([' ', '\t', '\r', '\n'])).filter(|f| !f.is_empty()).map(str::to_owned).collect();
+        let files: Vec<String> = list
+            .split('|')
+            .map(|f| f.trim_matches([' ', '\t', '\r', '\n']))
+            .filter(|f| !f.is_empty())
+            .map(str::to_owned)
+            .collect();
         let (x, y) = (arg_f32(&args, "x"), arg_f32(&args, "y"));
         let landed = gz_app::on_ui(&editor, move |_, ctx| {
             let ppp = ctx.pixels_per_point();

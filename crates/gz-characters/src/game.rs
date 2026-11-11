@@ -33,7 +33,11 @@ pub fn trade_categories(text: &str) -> Vec<String> {
             flush(&current, &mut listed, &mut out);
             let close = rest.find(']');
             let derived = close.is_some_and(|c| rest.get(c..).is_some_and(|tail| tail.contains(':')));
-            current = if derived { String::new() } else { close.map_or(rest, |c| rest.get(..c).unwrap_or("")).to_owned() };
+            current = if derived {
+                String::new()
+            } else {
+                close.map_or(rest, |c| rest.get(..c).unwrap_or("")).to_owned()
+            };
             continue;
         }
         if !current.is_empty() {

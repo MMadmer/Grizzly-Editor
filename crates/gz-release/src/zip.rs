@@ -88,7 +88,15 @@ fn u16_len(n: usize, what: &str) -> io::Result<u16> {
     u16::try_from(n).map_err(|_| io::Error::other(format!("{what} is too long for a ZIP entry")))
 }
 
-fn local_header(name: &str, flags: u16, zip64: bool, dos_time: u32, crc: u32, size: u64, packed: u64) -> io::Result<Vec<u8>> {
+fn local_header(
+    name: &str,
+    flags: u16,
+    zip64: bool,
+    dos_time: u32,
+    crc: u32,
+    size: u64,
+    packed: u64,
+) -> io::Result<Vec<u8>> {
     let mut h = Vec::with_capacity(30 + name.len() + 20);
     h.extend_from_slice(&LOCAL_SIG.to_le_bytes());
     h.extend_from_slice(&(if zip64 { 45u16 } else { 20 }).to_le_bytes());
@@ -134,14 +142,30 @@ impl ZipWriter {
         let header = local_header(&e.name, flags, zip64, e.dos_time, e.crc, e.size, e.data.len() as u64)?;
         self.put(&header)?;
         self.put(&e.data)?;
-        self.entries.push(Central { name: e.name.clone(), flags, zip64, dos_time: e.dos_time, crc: e.crc, size: e.size, packed: e.data.len() as u64, offset });
+        self.entries.push(Central {
+            name: e.name.clone(),
+            flags,
+            zip64,
+            dos_time: e.dos_time,
+            crc: e.crc,
+            size: e.size,
+            packed: e.data.len() as u64,
+            offset,
+        });
         Ok(())
     }
 
     /// An entry deflated as it is read - a file too large to hold in memory. `feed` sees every
     /// piece of the content (the hash); the header is completed once the data is written.
     /// Answers the bytes read.
-    pub fn add_stream(&mut self, name: &str, dos_time: u32, size_hint: u64, src: &mut dyn Read, feed: &mut dyn FnMut(&[u8]) -> io::Result<()>) -> io::Result<u64> {
+    pub fn add_stream(
+        &mut self,
+        name: &str,
+        dos_time: u32,
+        size_hint: u64,
+        src: &mut dyn Read,
+        feed: &mut dyn FnMut(&[u8]) -> io::Result<()>,
+    ) -> io::Result<u64> {
         let flags = flags_of(name);
         let zip64 = size_hint >= ZIP64_FROM;
         let offset = self.pos;
@@ -179,7 +203,16 @@ impl ZipWriter {
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(&header)?;
         file.seek(SeekFrom::Start(self.pos))?;
-        self.entries.push(Central { name: name.to_owned(), flags, zip64, dos_time, crc, size: read, packed, offset });
+        self.entries.push(Central {
+            name: name.to_owned(),
+            flags,
+            zip64,
+            dos_time,
+            crc,
+            size: read,
+            packed,
+            offset,
+        });
         Ok(read)
     }
 
@@ -311,7 +344,10 @@ pub fn read_layout(path: &Path) -> io::Result<Vec<Stored>> {
     }
     let tail_len = len.min(22 + 0xFFFF + 20);
     let tail = read_at(&mut file, len - tail_len, tail_len as usize)?;
-    let end_at = (0..=tail.len().saturating_sub(22)).rev().find(|&i| le32(&tail, i) == Some(END_SIG)).ok_or_else(|| bad("no end of central directory"))?;
+    let end_at = (0..=tail.len().saturating_sub(22))
+        .rev()
+        .find(|&i| le32(&tail, i) == Some(END_SIG))
+        .ok_or_else(|| bad("no end of central directory"))?;
     let mut count = u64::from(le16(&tail, end_at + 10).unwrap_or(0));
     let mut cd_size = u64::from(le32(&tail, end_at + 12).unwrap_or(0));
     let mut cd_start = u64::from(le32(&tail, end_at + 16).unwrap_or(0));
@@ -342,14 +378,21 @@ pub fn read_layout(path: &Path) -> io::Result<Vec<Stored>> {
         if le32(&cd, at) != Some(CENTRAL_SIG) {
             return Err(bad("a central directory entry is damaged"));
         }
-        let field16 = |o: usize| le16(&cd, at + o).ok_or_else(|| bad("a central directory entry is cut short"));
-        let field32 = |o: usize| le32(&cd, at + o).ok_or_else(|| bad("a central directory entry is cut short"));
+        let field16 =
+            |o: usize| le16(&cd, at + o).ok_or_else(|| bad("a central directory entry is cut short"));
+        let field32 =
+            |o: usize| le32(&cd, at + o).ok_or_else(|| bad("a central directory entry is cut short"));
         let (flags, method) = (field16(8)?, field16(10)?);
         let (mut packed, mut size) = (u64::from(field32(20)?), u64::from(field32(24)?));
-        let (name_len, extra_len, comment_len) = (usize::from(field16(28)?), usize::from(field16(30)?), usize::from(field16(32)?));
+        let (name_len, extra_len, comment_len) =
+            (usize::from(field16(28)?), usize::from(field16(30)?), usize::from(field16(32)?));
         let mut offset = u64::from(field32(42)?);
-        let name_bytes = cd.get(at + 46..at + 46 + name_len).ok_or_else(|| bad("a central directory entry is cut short"))?;
-        let extra = cd.get(at + 46 + name_len..at + 46 + name_len + extra_len).ok_or_else(|| bad("a central directory entry is cut short"))?;
+        let name_bytes = cd
+            .get(at + 46..at + 46 + name_len)
+            .ok_or_else(|| bad("a central directory entry is cut short"))?;
+        let extra = cd
+            .get(at + 46 + name_len..at + 46 + name_len + extra_len)
+            .ok_or_else(|| bad("a central directory entry is cut short"))?;
         // ZIP64: the fields written as 0xFFFFFFFF follow in this order
         let mut x = 0usize;
         while x + 4 <= extra.len() {
@@ -379,11 +422,19 @@ pub fn read_layout(path: &Path) -> io::Result<Vec<Stored>> {
         if le32(&local, 0) != Some(LOCAL_SIG) {
             return Err(bad("a local header is damaged"));
         }
-        let data_offset = offset + 30 + u64::from(le16(&local, 26).unwrap_or(0)) + u64::from(le16(&local, 28).unwrap_or(0));
+        let data_offset =
+            offset + 30 + u64::from(le16(&local, 26).unwrap_or(0)) + u64::from(le16(&local, 28).unwrap_or(0));
         if data_offset.checked_add(packed).is_none_or(|e| e > len) {
             return Err(bad("an entry's data lies outside the file"));
         }
-        out.push(Stored { name: String::from_utf8_lossy(name_bytes).into_owned(), flags, method, size, packed, data_offset });
+        out.push(Stored {
+            name: String::from_utf8_lossy(name_bytes).into_owned(),
+            flags,
+            method,
+            size,
+            packed,
+            data_offset,
+        });
     }
     Ok(out)
 }
@@ -404,12 +455,25 @@ mod tests {
         let mut w = ZipWriter::create(&path).unwrap();
         let mut crc = crc32fast::Hasher::new();
         crc.update(&a);
-        w.add(&Packed { name: "modules/od/a.txt".into(), dos_time: 0x0021_0000, crc: crc.finalize(), size: a.len() as u64, data: deflate(&a).unwrap() }).unwrap();
+        w.add(&Packed {
+            name: "modules/od/a.txt".into(),
+            dos_time: 0x0021_0000,
+            crc: crc.finalize(),
+            size: a.len() as u64,
+            data: deflate(&a).unwrap(),
+        })
+        .unwrap();
         let mut seen = 0usize;
-        let n = w.add_stream("modules/od/\u{43f}/b.bin", 0x0021_0000, b.len() as u64, &mut Cursor::new(b.clone()), &mut |p| {
-            seen += p.len();
-            Ok(())
-        });
+        let n = w.add_stream(
+            "modules/od/\u{43f}/b.bin",
+            0x0021_0000,
+            b.len() as u64,
+            &mut Cursor::new(b.clone()),
+            &mut |p| {
+                seen += p.len();
+                Ok(())
+            },
+        );
         assert_eq!(n.unwrap(), b.len() as u64);
         assert_eq!(seen, b.len());
         w.finish().unwrap();

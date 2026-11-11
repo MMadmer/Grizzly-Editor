@@ -307,7 +307,7 @@ pub(crate) fn update_write(o: &Object, h: &Header, class: Class, w: &mut NetWrit
             w.w_u8(u8::from(working));
             // `save_data(Fvector)`: raw
             let mut raw = [0u8; 12];
-            for (slot, c) in raw.chunks_exact_mut(4).zip(dir.to_array()) {
+            for (slot, c) in raw.as_chunks_mut::<4>().0.iter_mut().zip(dir.to_array()) {
                 slot.copy_from_slice(&c.to_le_bytes());
             }
             w.w(&raw);
@@ -387,7 +387,12 @@ pub(crate) fn update_write(o: &Object, h: &Header, class: Class, w: &mut NetWrit
 
 /// `UPDATE_Read` of the entity's class: the update-only fields are taken, the rest is passed
 /// over.
-pub(crate) fn update_read(o: &mut Object, h: &Header, info: &ClassInfo, r: &mut NetReader<'_>) -> PacketResult<()> {
+pub(crate) fn update_read(
+    o: &mut Object,
+    h: &Header,
+    info: &ClassInfo,
+    r: &mut NetReader<'_>,
+) -> PacketResult<()> {
     match info.class {
         Class::ObjectPhysic => {
             // "backward compatibility": an update may be empty
@@ -400,7 +405,7 @@ pub(crate) fn update_read(o: &mut Object, h: &Header, info: &ClassInfo, r: &mut 
             let working = r.r_u8()? != 0;
             let raw = r.take(12)?;
             let mut dir = [0.0f32; 3];
-            for (c, bytes) in dir.iter_mut().zip(raw.chunks_exact(4)) {
+            for (c, bytes) in dir.iter_mut().zip(raw.as_chunks::<4>().0) {
                 let mut b = [0u8; 4];
                 b.copy_from_slice(bytes);
                 *c = f32::from_le_bytes(b);

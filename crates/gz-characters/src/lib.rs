@@ -48,7 +48,7 @@ mod tests;
 
 pub use cmd::{character_json, install, register};
 pub use model::{
-    Character, Supply, Trade, TradeRow, game_id, load_text, parse, template, text_collapse, text_empty, text_in, text_languages, text_raw, text_set,
-    valid_id, write,
+    Character, Supply, Trade, TradeRow, game_id, load_text, parse, template, text_collapse, text_empty,
+    text_in, text_languages, text_raw, text_set, valid_id, write,
 };
 pub use service::{Characters, Checker, Roster};

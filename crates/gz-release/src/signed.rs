@@ -84,12 +84,16 @@ pub fn verify_text(text: &str, public_key: &str) -> Result<String, VerifyError> 
     let Some(colon) = sig_text.find(':') else { return Err(fail("", "the signature is damaged")) };
     let signer = sig_text.get(..colon).unwrap_or("").to_owned();
 
-    let Some(expected) = PublicPoint::parse(public_key) else { return Err(fail(&signer, "the expected key is damaged")) };
+    let Some(expected) = PublicPoint::parse(public_key) else {
+        return Err(fail(&signer, "the expected key is damaged"));
+    };
     if signer != expected.id() {
         return Err(VerifyError { message: format!("signed with another key ({signer})"), signer });
     }
     let raw = b64::decode(sig_text.get(colon + 1..).unwrap_or("")).unwrap_or_default();
-    let Ok(signature) = <[u8; 64]>::try_from(raw.as_slice()) else { return Err(fail(&signer, "the signature is damaged")) };
+    let Ok(signature) = <[u8; 64]>::try_from(raw.as_slice()) else {
+        return Err(fail(&signer, "the signature is damaged"));
+    };
     if !verify(&expected, bytes.get(..header).unwrap_or(&[]), &signature) {
         return Err(fail(&signer, "the signature does not match the text: it was changed after signing"));
     }
@@ -115,7 +119,10 @@ mod tests {
 
         // one changed byte of the body breaks it
         let changed = signed.replacen("id = od", "id = oe", 1);
-        assert_eq!(verify_text(&changed, &key.public.text()).unwrap_err().message, "the signature does not match the text: it was changed after signing");
+        assert_eq!(
+            verify_text(&changed, &key.public.text()).unwrap_err().message,
+            "the signature does not match the text: it was changed after signing"
+        );
         // another key is named as such
         let other = EcKey::generate().unwrap();
         let e = verify_text(&signed, &other.public.text()).unwrap_err();
@@ -127,7 +134,10 @@ mod tests {
         assert!(verify_text(&lf, &key.public.text()).is_ok());
         // anything after the section, or a second header, is refused
         assert!(verify_text(&format!("{signed}x = 1\r\n"), &key.public.text()).is_err());
-        assert_eq!(verify_text(&format!("{signed}[signature]\r\n"), &key.public.text()).unwrap_err().message, "the text is signed twice");
+        assert_eq!(
+            verify_text(&format!("{signed}[signature]\r\n"), &key.public.text()).unwrap_err().message,
+            "the text is signed twice"
+        );
         assert_eq!(verify_text(body, &key.public.text()).unwrap_err().message, "not signed");
     }
 }

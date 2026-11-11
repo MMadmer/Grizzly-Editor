@@ -147,7 +147,11 @@ impl Pictures {
             let pic = match d.made {
                 Some(m) => {
                     let image = ColorImage::from_rgba_unmultiplied([m.w as usize, m.h as usize], &m.rgba);
-                    let tex = ctx.load_texture(format!("content_browser:{}", d.key.2), image, TextureOptions::LINEAR);
+                    let tex = ctx.load_texture(
+                        format!("content_browser:{}", d.key.2),
+                        image,
+                        TextureOptions::LINEAR,
+                    );
                     Pic {
                         tex: Some(tex),
                         aspect: m.w as f32 / m.h.max(1) as f32,
@@ -161,7 +165,17 @@ impl Pictures {
                     }
                 }
                 // nothing to show: the glyph stays, and nobody asks again
-                None => Pic { tex: None, aspect: 1.0, side: 0, edge: 0, full: true, alpha: TileAlpha::Opaque, source_size: None, used: frame, model: d.model },
+                None => Pic {
+                    tex: None,
+                    aspect: 1.0,
+                    side: 0,
+                    edge: 0,
+                    full: true,
+                    alpha: TileAlpha::Opaque,
+                    source_size: None,
+                    used: frame,
+                    model: d.model,
+                },
             };
             if let Some(old) = self.cache.insert(d.key, pic)
                 && let Some(t) = old.tex
@@ -175,7 +189,12 @@ impl Pictures {
     fn evict(&mut self, frame: u64) {
         while self.cache.len() > BUDGET {
             // the coldest picture no tile drew this frame
-            let victim = self.cache.iter().filter(|(_, p)| p.used < frame).min_by_key(|(_, p)| p.used).map(|(k, _)| k.clone());
+            let victim = self
+                .cache
+                .iter()
+                .filter(|(_, p)| p.used < frame)
+                .min_by_key(|(_, p)| p.used)
+                .map(|(k, _)| k.clone());
             let Some(k) = victim else { break };
             if let Some(p) = self.cache.remove(&k)
                 && let Some(t) = p.tex
@@ -187,17 +206,40 @@ impl Pictures {
 
     /// The picture of an entry drawn `px` pixels wide, when there is one; asks for it (or for a
     /// better one) otherwise. `from` says where its bytes are.
-    pub fn get(&mut self, key: &PicKey, kind: Picture, name: &str, px: f32, frame: u64, from: impl FnOnce() -> Option<Bytes>) -> Option<Shown> {
+    pub fn get(
+        &mut self,
+        key: &PicKey,
+        kind: Picture,
+        name: &str,
+        px: f32,
+        frame: u64,
+        from: impl FnOnce() -> Option<Bytes>,
+    ) -> Option<Shown> {
         if kind == Picture::None {
             return None;
         }
-        let want = if kind == Picture::Model { crate::model::picture_side(px).clamp(64, 256) } else { crate::model::picture_side(px) };
+        let want = if kind == Picture::Model {
+            crate::model::picture_side(px).clamp(64, 256)
+        } else {
+            crate::model::picture_side(px)
+        };
         let pending = self.pending.contains(key);
         if let Some(p) = self.cache.get_mut(key) {
-            let remake = !p.model && p.side > 0 && p.used != frame && ((want > p.side && !p.full) || (want < p.side && p.edge > want));
+            let remake = !p.model
+                && p.side > 0
+                && p.used != frame
+                && ((want > p.side && !p.full) || (want < p.side && p.edge > want));
             p.used = frame;
-            let shown = p.tex.as_ref().map(|t| Shown { tex: t.id(), aspect: p.aspect, alpha: p.alpha, source_size: p.source_size });
-            if remake && !pending && let Some(from) = from() {
+            let shown = p.tex.as_ref().map(|t| Shown {
+                tex: t.id(),
+                aspect: p.aspect,
+                alpha: p.alpha,
+                source_size: p.source_size,
+            });
+            if remake
+                && !pending
+                && let Some(from) = from()
+            {
                 self.ask(key, want, kind, name, from);
             }
             return shown;
@@ -217,7 +259,13 @@ impl Pictures {
 
     /// Starts what the frame asked for, as many as may run; the rest is asked again by the
     /// tiles of a later frame.
-    pub(crate) fn dispatch(&mut self, editor: &Arc<Editor>, thumbs: &Arc<crate::thumbs::Thumbs>, gpu: Option<(&wgpu::Device, &wgpu::Queue)>, background: gz_render::Color) {
+    pub(crate) fn dispatch(
+        &mut self,
+        editor: &Arc<Editor>,
+        thumbs: &Arc<crate::thumbs::Thumbs>,
+        gpu: Option<(&wgpu::Device, &wgpu::Queue)>,
+        background: gz_render::Color,
+    ) {
         let asked = std::mem::take(&mut self.asked);
         let generation = self.shared.generation.load(Ordering::Acquire);
         for r in asked {
@@ -240,16 +288,29 @@ impl Pictures {
                             if let Some(bytes) = bytes
                                 && live()
                             {
-                                let ext = crate::icons::extension(&r.name).map(|e| e.trim_start_matches('.').to_ascii_lowercase());
+                                let ext = crate::icons::extension(&r.name)
+                                    .map(|e| e.trim_start_matches('.').to_ascii_lowercase());
                                 let side = r.side;
                                 made = exec
                                     .cpu(move || gz_fmt_tex::texture_tile(&bytes, ext.as_deref(), side).ok())
                                     .await
-                                    .map(|t| Made { w: t.image.width, h: t.image.height, rgba: t.image.rgba, source_size: Some((t.source_width, t.source_height)), alpha: t.alpha });
+                                    .map(|t| Made {
+                                        w: t.image.width,
+                                        h: t.image.height,
+                                        rgba: t.image.rgba,
+                                        source_size: Some((t.source_width, t.source_height)),
+                                        alpha: t.alpha,
+                                    });
                             }
                         }
                         shared.images.fetch_sub(1, Ordering::AcqRel);
-                        shared.done.lock().push(Done { key: r.key, side: r.side, generation, model: false, made });
+                        shared.done.lock().push(Done {
+                            key: r.key,
+                            side: r.side,
+                            generation,
+                            model: false,
+                            made,
+                        });
                         ping(&ed);
                     });
                 }
@@ -264,18 +325,28 @@ impl Pictures {
                     editor.exec.spawn_io(move || {
                         let live = shared.generation.load(Ordering::Acquire) == generation;
                         let made = if live {
-                            read(&r.from, MAX_MODEL_BYTES).and_then(|bytes| thumbs.render(&renderer, &r.name, &bytes, r.side, background).ok()).map(|img| Made {
-                                w: img.width,
-                                h: img.height,
-                                rgba: img.rgba.clone(),
-                                source_size: None,
-                                alpha: TileAlpha::Opaque,
-                            })
+                            read(&r.from, MAX_MODEL_BYTES)
+                                .and_then(|bytes| {
+                                    thumbs.render(&renderer, &r.name, &bytes, r.side, background).ok()
+                                })
+                                .map(|img| Made {
+                                    w: img.width,
+                                    h: img.height,
+                                    rgba: img.rgba.clone(),
+                                    source_size: None,
+                                    alpha: TileAlpha::Opaque,
+                                })
                         } else {
                             None
                         };
                         shared.models.fetch_sub(1, Ordering::AcqRel);
-                        shared.done.lock().push(Done { key: r.key, side: r.side, generation, model: true, made });
+                        shared.done.lock().push(Done {
+                            key: r.key,
+                            side: r.side,
+                            generation,
+                            model: true,
+                            made,
+                        });
                         ping(&ed);
                     });
                 }

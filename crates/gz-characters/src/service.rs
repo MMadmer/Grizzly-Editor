@@ -60,14 +60,20 @@ impl Roster {
             if let [a, b] = pair
                 && a.id == b.id
             {
-                problems.push(format!("E101 two characters share the id '{}': {} and {}", a.id, a.file, b.file));
+                problems
+                    .push(format!("E101 two characters share the id '{}': {} and {}", a.id, a.file, b.file));
             }
         }
         let mut resolved = raw.clone();
         resolve(&mut resolved, &mut problems);
         let briefs: Vec<CharacterBrief> = resolved
             .iter()
-            .map(|c| CharacterBrief { id: c.id.clone(), template: c.is_abstract, name: text_in(&c.name, "rus"), file: c.file.clone() })
+            .map(|c| CharacterBrief {
+                id: c.id.clone(),
+                template: c.is_abstract,
+                name: text_in(&c.name, "rus"),
+                file: c.file.clone(),
+            })
             .collect();
         Self { stamp, raw, resolved, problems, briefs: Arc::from(briefs) }
     }
@@ -108,7 +114,12 @@ impl Models for GameModels {
         if let Some(b) = self.cache.lock().get(&key) {
             return b.clone();
         }
-        let bones: Arc<[String]> = self.files.read(rel).ok().and_then(|data| ogf_bone_names(&data)).map_or_else(|| Arc::from(Vec::new()), Arc::from);
+        let bones: Arc<[String]> = self
+            .files
+            .read(rel)
+            .ok()
+            .and_then(|data| ogf_bone_names(&data))
+            .map_or_else(|| Arc::from(Vec::new()), Arc::from);
         self.cache.lock().insert(key, bones.clone());
         bones
     }
@@ -267,7 +278,10 @@ impl Characters {
     /// The `.npcasset` files of the build, in path order (`List`): a character in an excluded
     /// folder, the editor's scratch or tooling is no character of the module.
     fn files(tree: &FileTree, rules: &[String]) -> Vec<RelPath> {
-        tree.files_with_extension("npcasset").into_iter().filter(|r| !gz_mod::outside_build(rules, r.as_str())).collect()
+        tree.files_with_extension("npcasset")
+            .into_iter()
+            .filter(|r| !gz_mod::outside_build(rules, r.as_str()))
+            .collect()
     }
 
     fn stamp_of(tree: &FileTree, files: &[RelPath], rules: &[String]) -> Rev {
@@ -280,7 +294,9 @@ impl Characters {
             h = fnv(h, rel.key().as_bytes());
             if let Some(EntryKind::File { size, modified, .. }) = tree.entry(rel).map(|e| e.kind) {
                 h = fnv(h, &size.to_le_bytes());
-                let t = modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                let t = modified
+                    .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
                 h = fnv(h, &t.to_le_bytes());
             }
         }
@@ -314,7 +330,10 @@ impl Characters {
         }
         let root = PathBuf::from(&self.root);
         let exec = self.exec.clone();
-        let read = self.exec.io(move || exec.par_io(files, |rel| (rel.as_str().to_owned(), read_file(&rel.to_fs(&root))))).await;
+        let read = self
+            .exec
+            .io(move || exec.par_io(files, |rel| (rel.as_str().to_owned(), read_file(&rel.to_fs(&root)))))
+            .await;
         let roster = self.roster.fresh(&(), stamp, move || Roster::build(stamp, read)).await;
         *self.latest.write() = Some((roster.stamp, roster.briefs.clone()));
         roster
@@ -370,8 +389,15 @@ impl Characters {
         let briefs: Vec<CharacterBrief> = Self::files(&tree, &rules)
             .into_iter()
             .map(|rel| {
-                let template = tree.entry(&rel).is_some_and(|e| matches!(e.kind, EntryKind::File { asset: Some(AssetKind::CharacterTemplate), .. }));
-                CharacterBrief { id: id_from_name(rel.stem()), template, name: String::new(), file: rel.as_str().to_owned() }
+                let template = tree.entry(&rel).is_some_and(|e| {
+                    matches!(e.kind, EntryKind::File { asset: Some(AssetKind::CharacterTemplate), .. })
+                });
+                CharacterBrief {
+                    id: id_from_name(rel.stem()),
+                    template,
+                    name: String::new(),
+                    file: rel.as_str().to_owned(),
+                }
             })
             .collect();
         Arc::from(briefs)
@@ -392,15 +418,24 @@ impl Characters {
             Some(t) => t,
             None => {
                 let f = files.clone();
-                let text = self.exec.io(move || f.read(TRADE_PRESETS).ok().map(|b| gz_base::text::cp1251_to_utf8(&b).into_owned())).await;
-                self.presets.fresh(&(), rev, move || text.map(|t| trade_categories(&t)).unwrap_or_default()).await
+                let text = self
+                    .exec
+                    .io(move || {
+                        f.read(TRADE_PRESETS).ok().map(|b| gz_base::text::cp1251_to_utf8(&b).into_owned())
+                    })
+                    .await;
+                self.presets
+                    .fresh(&(), rev, move || text.map(|t| trade_categories(&t)).unwrap_or_default())
+                    .await
             }
         };
         let damage = match self.damage.peek_at(&(), rev) {
             Some(d) => d,
             None => {
                 let ltx = link.configs().await.ok();
-                self.damage.fresh(&(), rev, move || ltx.map(|l| stalker_damage_bones(&l)).unwrap_or_default()).await
+                self.damage
+                    .fresh(&(), rev, move || ltx.map(|l| stalker_damage_bones(&l)).unwrap_or_default())
+                    .await
             }
         };
         let cache = {
@@ -410,13 +445,22 @@ impl Characters {
             }
             b.1.clone()
         };
-        Checker { linked: true, pickers, trade_categories: trade, models: Some(GameModels { files, damage, cache }) }
+        Checker {
+            linked: true,
+            pickers,
+            trade_categories: trade,
+            models: Some(GameModels { files, damage, cache }),
+        }
     }
 
     /// The absolute path of a project-relative file of the roster.
     #[must_use]
     pub fn abs(&self, file: &str) -> PathBuf {
         let p = Path::new(file);
-        if p.is_absolute() { p.to_path_buf() } else { PathBuf::from(&self.root).join(file.replace('/', "\\")) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            PathBuf::from(&self.root).join(file.replace('/', "\\"))
+        }
     }
 }

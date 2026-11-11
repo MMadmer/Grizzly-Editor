@@ -91,14 +91,21 @@ pub struct DraggedEntry {
 /// Plugs the browser into the shell: the Level panel's description, the Content Drawer's body
 /// and the tab menu's Show in Content Browser.
 pub fn install(b: &mut ShellBuilder) {
-    b.panel(PanelDesc { id: SmolStr::new(PANEL_ID), label: SmolStr::new("Content Browser"), icon: Icon::Folder, drawer: Some(Drawer::Content) });
+    b.panel(PanelDesc {
+        id: SmolStr::new(PANEL_ID),
+        label: SmolStr::new("Content Browser"),
+        icon: Icon::Folder,
+        drawer: Some(Drawer::Content),
+    });
     b.drawer(
         Drawer::Content,
         DrawerDesc {
             label: SmolStr::new("Content Browser"),
             icon: Icon::Folder,
             panel: Some(SmolStr::new(PANEL_ID)),
-            body: Box::new(|ui: &mut egui::Ui, cx: &mut gz_app::DocCx<'_>| content_browser(ui, cx, Host::Drawer)),
+            body: Box::new(|ui: &mut egui::Ui, cx: &mut gz_app::DocCx<'_>| {
+                content_browser(ui, cx, Host::Drawer)
+            }),
         },
     );
     b.reveal_in_browser(|path, cx| actions::reveal_from_tab(cx, path));

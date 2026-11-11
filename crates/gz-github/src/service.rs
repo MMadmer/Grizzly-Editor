@@ -97,12 +97,20 @@ impl Github {
         for name in token_variables(qa) {
             let value = Zeroizing::new(std::env::var(name).unwrap_or_default());
             if plausible_token(&value) {
-                return Account { source: AccountSource::Environment, token: Secret::from(value), detail: (*name).to_owned() };
+                return Account {
+                    source: AccountSource::Environment,
+                    token: Secret::from(value),
+                    detail: (*name).to_owned(),
+                };
             }
         }
         let saved = self.exec.io(move || cred::read(credential_target(qa))).await;
         if let Some(token) = saved.filter(|t| plausible_token(t)) {
-            return Account { source: AccountSource::Saved, token: Secret::from(token), detail: String::new() };
+            return Account {
+                source: AccountSource::Saved,
+                token: Secret::from(token),
+                detail: String::new(),
+            };
         }
         if !qa && let Some(token) = self.cli_token().await {
             return Account { source: AccountSource::GithubCli, token, detail: String::new() };
@@ -216,27 +224,40 @@ impl Github {
     }
 
     fn vt_request(&self, method: Method, url: String, key: &str) -> Request {
-        Request::new(Kind::Api, method, url).header(ACCEPT, "application/json").secret_header(HeaderName::from_static("x-apikey"), key)
+        Request::new(Kind::Api, method, url)
+            .header(ACCEPT, "application/json")
+            .secret_header(HeaderName::from_static("x-apikey"), key)
     }
 
     /// What VirusTotal says about a file, by its SHA-256. `Err((status, why))`; 429 = over the rate.
-    pub async fn vt_lookup(&self, sha256: &str, key: &str, cancel: &Cancel) -> Result<VtReport, (u16, String)> {
+    pub async fn vt_lookup(
+        &self,
+        sha256: &str,
+        key: &str,
+        cancel: &Cancel,
+    ) -> Result<VtReport, (u16, String)> {
         self.vt_pace(cancel).await;
-        let r = self.send(self.vt_request(Method::GET, format!("{}/files/{sha256}", self.endpoints.vt), key), cancel).await;
+        let r = self
+            .send(self.vt_request(Method::GET, format!("{}/files/{sha256}", self.endpoints.vt), key), cancel)
+            .await;
         if cancel.is_cancelled() {
             return Err((r.status, CANCELLED.to_owned()));
         }
         if r.status == 404 {
             return Ok(VtReport { status: 404, ..VtReport::default() });
         }
-        let report = if r.status == 200 { r.json().and_then(|j| vt::read_report(r.status, &j)) } else { None };
+        let report =
+            if r.status == 200 { r.json().and_then(|j| vt::read_report(r.status, &j)) } else { None };
         report.ok_or_else(|| (r.status, vt::problem(&r)))
     }
 
     /// Sends a file for analysis (an upload address for one over 32 MB). VirusTotal shares uploaded
     /// files with the security industry; results follow within minutes.
     pub async fn vt_upload(&self, path: &Path, key: &str, cancel: &Cancel) -> Result<(), (u16, String)> {
-        let size = tokio::fs::metadata(path).await.map(|m| m.len()).map_err(|_| (0, format!("cannot read {}", path.display())))?;
+        let size = tokio::fs::metadata(path)
+            .await
+            .map(|m| m.len())
+            .map_err(|_| (0, format!("cannot read {}", path.display())))?;
         if vt::too_large(size) {
             return Err((0, "the file is larger than the 650 MB VirusTotal takes".to_owned()));
         }
@@ -244,11 +265,20 @@ impl Github {
         let mut url = format!("{}/files", self.endpoints.vt);
         if size + vt::WRAPPING > self.waits.direct_limit {
             self.vt_pace(cancel).await;
-            let r = self.send(self.vt_request(Method::GET, format!("{}/files/upload_url", self.endpoints.vt), key), cancel).await;
+            let r = self
+                .send(
+                    self.vt_request(Method::GET, format!("{}/files/upload_url", self.endpoints.vt), key),
+                    cancel,
+                )
+                .await;
             if cancel.is_cancelled() {
                 return Err((r.status, CANCELLED.to_owned()));
             }
-            let named = if r.status == 200 { r.json().and_then(|j| j.get("data").and_then(|d| d.as_str()).map(str::to_owned)) } else { None };
+            let named = if r.status == 200 {
+                r.json().and_then(|j| j.get("data").and_then(|d| d.as_str()).map(str::to_owned))
+            } else {
+                None
+            };
             url = named.ok_or_else(|| (r.status, vt::problem(&r)))?;
             // the key goes wherever that address points, and it came out of a response body
             if !self.endpoints.vt_url_trusted(&url) {
@@ -261,7 +291,12 @@ impl Github {
         let boundary = format!("GrizzlyEditor{}", hex::encode(random));
         let name: String = path
             .file_name()
-            .map(|n| n.to_string_lossy().chars().map(|c| if c == '"' || u32::from(c) < 0x20 { '_' } else { c }).collect())
+            .map(|n| {
+                n.to_string_lossy()
+                    .chars()
+                    .map(|c| if c == '"' || u32::from(c) < 0x20 { '_' } else { c })
+                    .collect()
+            })
             .unwrap_or_default();
         let prefix = format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
@@ -282,7 +317,8 @@ impl Github {
             return Err((r.status, CANCELLED.to_owned()));
         }
         let accepted = r.status == 200
-            && r.json().is_some_and(|j| j.get("data").is_some_and(|d| !crate::json::str_of(d, "id").is_empty()));
+            && r.json()
+                .is_some_and(|j| j.get("data").is_some_and(|d| !crate::json::str_of(d, "id").is_empty()));
         if accepted { Ok(()) } else { Err((r.status, vt::problem(&r))) }
     }
 }

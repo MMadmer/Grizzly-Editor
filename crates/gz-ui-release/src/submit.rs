@@ -38,7 +38,8 @@ use crate::{open_page, reason};
 const BODY_PT: f32 = 600.0;
 const BUSY_WHY: &str = "A Mod Browser job is running.";
 const SIGN_IN_WHY: &str = "Sign in to GitHub first: Publish Release.";
-const STOP_LABELS: [&str; 5] = ["Stop Checking", "Stop Scanning", "Stop Submitting", "Stop Refreshing", "Stop Withdrawing"];
+const STOP_LABELS: [&str; 5] =
+    ["Stop Checking", "Stop Scanning", "Stop Submitting", "Stop Refreshing", "Stop Withdrawing"];
 const SUBMIT_LABELS: [&str; 4] = ["Scan and Submit", "Scan and Update", "Update Submission", "Submit"];
 const REPORT_LABELS: [&str; 2] = ["Open Report", "Open Reports"];
 
@@ -82,7 +83,12 @@ pub(crate) fn issue_tone(issue: &CatalogIssue) -> Tone {
 /// verdict says what it waits for; closed, only an accepted or a refused one says what became of
 /// it: the author may have closed it after a waiting one.
 #[must_use]
-pub(crate) fn issue_lines(issue: &CatalogIssue, done: bool, accepted_done: &str, accepted_soon: &str) -> Vec<(Tone, String)> {
+pub(crate) fn issue_lines(
+    issue: &CatalogIssue,
+    done: bool,
+    accepted_done: &str,
+    accepted_soon: &str,
+) -> Vec<(Tone, String)> {
     let n = issue.number;
     let mut out = Vec::new();
     if issue.state == "open" {
@@ -255,7 +261,11 @@ fn start_job(editor: &Arc<Editor>, facts: &Arc<Mutex<Facts>>, job: Job) {
         let started = Catalog::of(&ed).start(&ed, job, true).await;
         let why = started.err().unwrap_or_default();
         let mut f = facts.lock();
-        if job == Job::Vt { f.vt_error = why } else { f.start_error = why }
+        if job == Job::Vt {
+            f.vt_error = why
+        } else {
+            f.start_error = why
+        }
         drop(f);
         ed.exec.wake().ping();
     });
@@ -273,7 +283,10 @@ fn pick_file(editor: &Arc<Editor>, facts: &Arc<Mutex<Facts>>, save: bool, start:
     let (wake, slot, start) = (editor.exec.wake().clone(), facts.clone(), start.to_owned());
     let spawned = std::thread::Builder::new().name("gz-ui-release.key_file".to_owned()).spawn(move || {
         let title = if save { "Where the new author key goes" } else { "Use an author key file" };
-        let mut dialog = rfd::FileDialog::new().set_title(title).add_filter("Grizzly author key (*.xkey)", &["xkey"]).add_filter("All files", &["*"]);
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(title)
+            .add_filter("Grizzly author key (*.xkey)", &["xkey"])
+            .add_filter("All files", &["*"]);
         let at = Path::new(&start);
         if let Some(dir) = at.parent().filter(|d| d.is_dir()) {
             dialog = dialog.set_directory(dir);
@@ -424,7 +437,8 @@ impl SubmitUi {
         let had_question = self.want_withdraw;
         let ctx = ui.ctx().clone();
 
-        let blocks: Vec<&str> = view.check.findings.iter().filter(|f| f.level == Level::Block).map(|f| f.text.as_str()).collect();
+        let blocks: Vec<&str> =
+            view.check.findings.iter().filter(|f| f.level == Level::Block).map(|f| f.text.as_str()).collect();
         let ready = view.check.done && !view.check.blocking && signed_in && !running;
         let why = if running {
             BUSY_WHY
@@ -436,7 +450,11 @@ impl SubmitUi {
             blocks.first().copied().unwrap_or("Every requirement above has to be met.")
         };
         let status = if !running && view.check.done && !blocks.is_empty() {
-            format!("{} {} to fix", blocks.len(), if blocks.len() == 1 { "requirement" } else { "requirements" })
+            format!(
+                "{} {} to fix",
+                blocks.len(),
+                if blocks.len() == 1 { "requirement" } else { "requirements" }
+            )
         } else {
             String::new()
         };
@@ -529,7 +547,15 @@ impl SubmitUi {
         }
     }
 
-    fn key_card(&mut self, ui: &mut Ui, editor: &Arc<Editor>, key: Option<&KeyState>, key_error: &str, picking: bool, acts: &mut Vec<Act>) {
+    fn key_card(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        key: Option<&KeyState>,
+        key_error: &str,
+        picking: bool,
+        acts: &mut Vec<Act>,
+    ) {
         let Some(key) = key else {
             card(ui, "card_key", "Author Key", Tone::Muted, false, |ui| {
                 text::status(ui, Tone::Muted, "Reading the author key...");
@@ -577,25 +603,42 @@ impl SubmitUi {
                     }
                 });
                 ui.horizontal(|ui| {
-                    if Button::new("Create Key").enabled(!differ, "The two passwords differ.").show(ui).clicked() {
+                    if Button::new("Create Key")
+                        .enabled(!differ, "The two passwords differ.")
+                        .show(ui)
+                        .clicked()
+                    {
                         acts.push(Act::CreateKey);
                     }
-                    if Button::new("Use Key File...").enabled(!picking, "A file dialog is open.").tip("The key file from another computer, or its copy.").show(ui).clicked() {
+                    if Button::new("Use Key File...")
+                        .enabled(!picking, "A file dialog is open.")
+                        .tip("The key file from another computer, or its copy.")
+                        .show(ui)
+                        .clicked()
+                    {
                         acts.push(Act::PickKeyFile);
                     }
                 });
             } else if !key.error.is_empty() {
                 text::status(ui, Tone::Error, &format!("The key file does not read: {}.", key.error));
                 PropertyGrid::new("catalog_key").show(ui, |g| {
-                    g.row("Key File", "The key file the editor remembers.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &key.path, Clip::Start));
+                    g.row("Key File", "The key file the editor remembers.", PropFlags::READ_ONLY, 0, |ui| {
+                        read_only(ui, &key.path, Clip::Start)
+                    });
                 });
-                if Button::new("Use Another Key File...").enabled(!picking, "A file dialog is open.").show(ui).clicked() {
+                if Button::new("Use Another Key File...")
+                    .enabled(!picking, "A file dialog is open.")
+                    .show(ui)
+                    .clicked()
+                {
                     acts.push(Act::PickKeyFile);
                 }
             } else if key.locked || self.key_created {
                 self.key_details(ui, editor, key, picking, acts);
             } else {
-                local_fold(ui, "catalog_key_more", "More", false, |ui| self.key_details(ui, editor, key, picking, acts));
+                local_fold(ui, "catalog_key_more", "More", false, |ui| {
+                    self.key_details(ui, editor, key, picking, acts)
+                });
             }
             if !key_error.is_empty() {
                 text::status(ui, Tone::Error, key_error);
@@ -603,14 +646,27 @@ impl SubmitUi {
         });
     }
 
-    fn key_details(&mut self, ui: &mut Ui, editor: &Arc<Editor>, key: &KeyState, picking: bool, acts: &mut Vec<Act>) {
+    fn key_details(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        key: &KeyState,
+        picking: bool,
+        acts: &mut Vec<Act>,
+    ) {
         PropertyGrid::new("catalog_key").show(ui, |g| {
-            g.row("Key", "The key's id: what a signed release names.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &key.key_id, Clip::End));
-            g.row("Key File", "The key file this computer signs with.", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &key.path, Clip::Start));
+            g.row("Key", "The key's id: what a signed release names.", PropFlags::READ_ONLY, 0, |ui| {
+                read_only(ui, &key.key_id, Clip::End)
+            });
+            g.row("Key File", "The key file this computer signs with.", PropFlags::READ_ONLY, 0, |ui| {
+                read_only(ui, &key.path, Clip::Start)
+            });
             if key.locked {
                 // the author key row Package Release and Publish Release draw: the password, once per session
                 let help = "The key file is protected: its password opens it until the editor closes.";
-                g.row("Password", help, PropFlags::REQUIRED, 0, |ui| self.key_line.draw(ui, editor, "submit"));
+                g.row("Password", help, PropFlags::REQUIRED, 0, |ui| {
+                    self.key_line.draw(ui, editor, "submit")
+                });
             }
         });
         text::status(
@@ -620,28 +676,55 @@ impl SubmitUi {
         );
         // the card's actions, named and framed like every other button of the window
         ui.horizontal(|ui| {
-            let use_tip = "Signs with another key file from now on: the key file from another computer, or its copy.";
-            if Button::new("Use Another Key File...").enabled(!picking, "A file dialog is open.").tip(use_tip).show(ui).clicked() {
+            let use_tip =
+                "Signs with another key file from now on: the key file from another computer, or its copy.";
+            if Button::new("Use Another Key File...")
+                .enabled(!picking, "A file dialog is open.")
+                .tip(use_tip)
+                .show(ui)
+                .clicked()
+            {
                 acts.push(Act::PickKeyFile);
             }
-            if Button::new("Show in Folder").tip("Opens the key file's folder in Explorer, the file selected - to copy it somewhere safe.").show(ui).clicked() {
+            if Button::new("Show in Folder")
+                .tip(
+                    "Opens the key file's folder in Explorer, the file selected - to copy it somewhere safe.",
+                )
+                .show(ui)
+                .clicked()
+            {
                 acts.push(Act::ShowKeyFile);
             }
         });
     }
 
     /// The one place the VirusTotal verdict appears; required, so its open state is never grey.
-    fn vt_card(&mut self, ui: &mut Ui, view: &View, vt_known: Option<bool>, vt_error: &str, acts: &mut Vec<Act>) {
+    fn vt_card(
+        &mut self,
+        ui: &mut Ui,
+        view: &View,
+        vt_known: Option<bool>,
+        vt_error: &str,
+        acts: &mut Vec<Act>,
+    ) {
         let settled = vt_settled(&view.virustotal);
         let running = view.state == JobState::Running;
         let scanning = running && matches!(view.job, Job::Vt | Job::Submit);
         let packages = &view.virustotal.packages;
-        let tone = if vt_known == Some(true) && !packages.is_empty() { level_tone(vt_level(&view.virustotal.state, view.vt_scanned)) } else { Tone::Required };
+        let tone = if vt_known == Some(true) && !packages.is_empty() {
+            level_tone(vt_level(&view.virustotal.state, view.vt_scanned))
+        } else {
+            Tone::Required
+        };
         card(ui, "card_vt", "", tone, !settled, |ui| {
             local_card_title(ui, "VirusTotal (required)", tone, !settled, None, None);
             match vt_known {
                 None => {
-                    text::status(ui, Tone::Required, "Required: every package of the release needs a VirusTotal report before the module is listed.");
+                    text::status(
+                        ui,
+                        Tone::Required,
+                        "Required: every package of the release needs a VirusTotal report before the module is listed.",
+                    );
                 }
                 Some(false) => {
                     text::status(
@@ -650,10 +733,22 @@ impl SubmitUi {
                         "Required: the catalog lists a package only when VirusTotal knows it, and every release is scanned with your own VirusTotal key. A free account at virustotal.com has one.",
                     );
                     let typed = !self.vt_input.is_empty();
-                    if local_secret_row(ui, "vt_key", &mut self.vt_input, "VirusTotal API key", "Save Key", typed, "Paste the key first.") {
+                    if local_secret_row(
+                        ui,
+                        "vt_key",
+                        &mut self.vt_input,
+                        "VirusTotal API key",
+                        "Save Key",
+                        typed,
+                        "Paste the key first.",
+                    ) {
                         acts.push(Act::SaveVtKey);
                     }
-                    text::status(ui, Tone::Muted, "Kept in the Windows Credential Manager - never in the project.");
+                    text::status(
+                        ui,
+                        Tone::Muted,
+                        "Kept in the Windows Credential Manager - never in the project.",
+                    );
                 }
                 Some(true) => {
                     // a check looks the packages up: until it has, "not scanned" would be a guess
@@ -671,10 +766,18 @@ impl SubmitUi {
                             "Not scanned yet. Every package needs a VirusTotal report before the module is listed: Scan runs it now, and Submit scans first.",
                         );
                     } else if !packages.is_empty() && !settled {
-                        text::status(ui, Tone::Required, "Not every package has a VirusTotal report yet: the module is not submitted without one.");
+                        text::status(
+                            ui,
+                            Tone::Required,
+                            "Not every package has a VirusTotal report yet: the module is not submitted without one.",
+                        );
                     }
                     for r in packages {
-                        text::status(ui, level_tone(vt_level(&r.state, view.vt_scanned)), &format!("{}.", describe(r)));
+                        text::status(
+                            ui,
+                            level_tone(vt_level(&r.state, view.vt_scanned)),
+                            &format!("{}.", describe(r)),
+                        );
                     }
                     let reports = packages.iter().filter(|r| has_report(r)).count();
                     ui.horizontal(|ui| {
@@ -705,14 +808,26 @@ impl SubmitUi {
     /// The one question before a withdrawal leaves, as a sheet over the window: what it does, for
     /// whom, and that it is public. Cancel is the default - Enter and Esc both back out.
     #[allow(clippy::too_many_arguments)]
-    fn withdraw_sheet(&mut self, ui: &mut Ui, view: &View, signed_in: bool, name: &str, id: &str, catalog_repo: &str, acts: &mut Vec<Act>) {
+    fn withdraw_sheet(
+        &mut self,
+        ui: &mut Ui,
+        view: &View,
+        signed_in: bool,
+        name: &str,
+        id: &str,
+        catalog_repo: &str,
+        acts: &mut Vec<Act>,
+    ) {
         let running = view.state == JobState::Running;
         let can = !running && signed_in;
         let mut go = false;
         let mut cancel = false;
-        let headline = format!("Withdraw {} ({id}) from the Mod Browser?", if name.is_empty() { id } else { name });
+        let headline =
+            format!("Withdraw {} ({id}) from the Mod Browser?", if name.is_empty() { id } else { name });
         let from = if view.login.is_empty() { String::new() } else { format!(", from {}", view.login) };
-        let where_ = format!("The request is a public issue at github.com/{catalog_repo}{from}, judged by the catalog's own checks.");
+        let where_ = format!(
+            "The request is a public issue at github.com/{catalog_repo}{from}, judged by the catalog's own checks."
+        );
         Dialog::new("Withdraw from Mod Browser", "dlg.catalog_withdraw", DialogSize::M).sheet().show(
             ui,
             &mut self.want_withdraw,
@@ -757,7 +872,8 @@ impl SubmitUi {
                 editor.exec.spawn(async move {
                     let keys = AuthorKeys::of(&ed);
                     let project = ed.project_root();
-                    let done = ed.exec.io(move || keys.create(Some(&target), &password, project.as_deref())).await;
+                    let done =
+                        ed.exec.io(move || keys.create(Some(&target), &password, project.as_deref())).await;
                     let state = gz_release::key_state(&ed).await;
                     let mut f = facts.lock();
                     f.key_created = done.is_ok();
@@ -826,9 +942,11 @@ fn manifest_names(editor: &Editor) -> (String, String) {
 /// What section 7 asks, failures first; the requirements that are met fold away - a wall of green
 /// reads as nothing. The VirusTotal findings are the VirusTotal card's.
 fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec<Act>) {
-    let mut open: Vec<_> = view.check.findings.iter().filter(|f| f.code != "virustotal" && f.level != Level::Ok).collect();
-    let met: Vec<_> = view.check.findings.iter().filter(|f| f.code != "virustotal" && f.level == Level::Ok).collect();
-    open.sort_by(|a, b| b.level.cmp(&a.level));
+    let mut open: Vec<_> =
+        view.check.findings.iter().filter(|f| f.code != "virustotal" && f.level != Level::Ok).collect();
+    let met: Vec<_> =
+        view.check.findings.iter().filter(|f| f.code != "virustotal" && f.level == Level::Ok).collect();
+    open.sort_by_key(|a| std::cmp::Reverse(a.level));
     let blocks = open.iter().filter(|f| f.level == Level::Block).count();
     let required = open.iter().filter(|f| f.level == Level::Required).count();
     let running = view.state == JobState::Running;
@@ -844,8 +962,13 @@ fn requirements_card(ui: &mut Ui, view: &View, start_error: &str, acts: &mut Vec
     };
     card(ui, "card_requirements", "", tone, blocks > 0, |ui| {
         let fix = format!("{blocks} to fix");
-        let badge = (view.check.done && !checking).then(|| if blocks > 0 { (fix.as_str(), Tone::Error) } else { ("Met", Tone::Success) });
-        if local_card_title(ui, "Requirements", tone, false, badge, Some(("Check Again", !running, BUSY_WHY))) {
+        let badge = (view.check.done && !checking).then_some(if blocks > 0 {
+            (fix.as_str(), Tone::Error)
+        } else {
+            ("Met", Tone::Success)
+        });
+        if local_card_title(ui, "Requirements", tone, false, badge, Some(("Check Again", !running, BUSY_WHY)))
+        {
             acts.push(Act::Check);
         }
         if checking {
@@ -881,14 +1004,23 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
             if signed_in && view.state == JobState::Running && view.job != Job::Vt {
                 text::status(ui, Tone::Muted, "Looking up the submission...");
             } else if signed_in && !view.submission_error.is_empty() {
-                text::status(ui, Tone::Warning, &format!("The submission could not be looked up: {}.", reason(&view.submission_error)));
+                text::status(
+                    ui,
+                    Tone::Warning,
+                    &format!("The submission could not be looked up: {}.", reason(&view.submission_error)),
+                );
             } else if signed_in {
                 text::status(ui, Tone::Muted, "Not looked up yet: Check Again reads where it stands.");
             }
         } else if submission.number == 0 {
             text::status(ui, Tone::Muted, "Not submitted yet.");
         } else {
-            for (tone, line) in issue_lines(submission, view.listed(), "was accepted: the module is in the Mod Browser.", "was accepted: the module appears in the Mod Browser within minutes.") {
+            for (tone, line) in issue_lines(
+                submission,
+                view.listed(),
+                "was accepted: the module is in the Mod Browser.",
+                "was accepted: the module appears in the Mod Browser within minutes.",
+            ) {
                 text::status(ui, tone, &line);
             }
             if !submission.note.is_empty() {
@@ -900,7 +1032,15 @@ fn submission_card(ui: &mut Ui, view: &View, signed_in: bool, catalog_repo: &str
         }
         let from = if view.login.is_empty() { String::new() } else { format!(" from {}", view.login) };
         let where_ = format!("Submitting opens a public issue at github.com/{catalog_repo}{from}.");
-        text::status(ui, Tone::Muted, if signed_in { &where_ } else { "Submitting needs a GitHub account: sign in from Publish Release." });
+        text::status(
+            ui,
+            Tone::Muted,
+            if signed_in {
+                &where_
+            } else {
+                "Submitting needs a GitHub account: sign in from Publish Release."
+            },
+        );
         if view.state == JobState::Failed && !view.error.is_empty() && view.job != Job::Withdraw {
             text::status(ui, Tone::Error, &view.error);
         }
@@ -924,7 +1064,12 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
             text::status(ui, Tone::Muted, "Withdrawing...");
         }
         if w.number != 0 {
-            for (tone, line) in issue_lines(w, withdrawn, "was accepted: the module is withdrawn from the Mod Browser.", "was accepted: the module leaves the Mod Browser within minutes.") {
+            for (tone, line) in issue_lines(
+                w,
+                withdrawn,
+                "was accepted: the module is withdrawn from the Mod Browser.",
+                "was accepted: the module leaves the Mod Browser within minutes.",
+            ) {
                 text::status(ui, tone, &line);
             }
         }
@@ -934,7 +1079,11 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
         if withdrawn && w.number != 0 && w.verdict == "accepted" {
             text::status(ui, Tone::Muted, "Submitting the module again lists it again.");
         } else if withdrawn {
-            text::status(ui, Tone::Muted, "Not in the Mod Browser: its author withdrew it. Submitting lists it again.");
+            text::status(
+                ui,
+                Tone::Muted,
+                "Not in the Mod Browser: its author withdrew it. Submitting lists it again.",
+            );
         }
         if listed {
             text::status(
@@ -947,7 +1096,11 @@ fn withdrawal_card(ui: &mut Ui, view: &View, signed_in: bool, acts: &mut Vec<Act
         let owner = owner(&view.listing.github);
         let other_account = listed && !view.login.is_empty() && !owner.eq_ignore_ascii_case(&view.login);
         if other_account {
-            text::status(ui, Tone::Warning, &format!("Only {owner}, the owner of {}, can withdraw it.", view.listing.github));
+            text::status(
+                ui,
+                Tone::Warning,
+                &format!("Only {owner}, the owner of {}, can withdraw it.", view.listing.github),
+            );
         }
         ui.horizontal(|ui| {
             if listed {
@@ -980,7 +1133,13 @@ mod tests {
     use super::*;
 
     fn issue(number: u64, state: &str, verdict: &str, text_: &str) -> CatalogIssue {
-        CatalogIssue { number, state: state.to_owned(), verdict: verdict.to_owned(), verdict_text: text_.to_owned(), ..CatalogIssue::default() }
+        CatalogIssue {
+            number,
+            state: state.to_owned(),
+            verdict: verdict.to_owned(),
+            verdict_text: text_.to_owned(),
+            ..CatalogIssue::default()
+        }
     }
 
     #[test]
@@ -998,10 +1157,27 @@ mod tests {
         assert_eq!(issue_tone(&issue(4, "closed", "accepted", "")), Tone::Success);
         assert_eq!(issue_tone(&issue(4, "closed", "refused", "")), Tone::Error);
         assert_eq!(issue_tone(&issue(4, "closed", "waiting", "")), Tone::Muted);
-        let lines = issue_lines(&issue(4, "open", "waiting", "VirusTotal is still analysing od-1.0.0.zip."), false, "a", "b");
-        assert_eq!(lines, vec![(Tone::Muted, "#4 is open: the catalog checks it.".to_owned()), (Tone::Warning, "VirusTotal is still analysing od-1.0.0.zip.".to_owned())]);
-        assert_eq!(issue_lines(&issue(4, "closed", "accepted", ""), true, "was in.", "comes in."), vec![(Tone::Success, "#4 was in.".to_owned())]);
-        assert_eq!(issue_lines(&issue(4, "closed", "", ""), true, "a", "b"), vec![(Tone::Muted, "#4 was closed.".to_owned())]);
+        let lines = issue_lines(
+            &issue(4, "open", "waiting", "VirusTotal is still analysing od-1.0.0.zip."),
+            false,
+            "a",
+            "b",
+        );
+        assert_eq!(
+            lines,
+            vec![
+                (Tone::Muted, "#4 is open: the catalog checks it.".to_owned()),
+                (Tone::Warning, "VirusTotal is still analysing od-1.0.0.zip.".to_owned())
+            ]
+        );
+        assert_eq!(
+            issue_lines(&issue(4, "closed", "accepted", ""), true, "was in.", "comes in."),
+            vec![(Tone::Success, "#4 was in.".to_owned())]
+        );
+        assert_eq!(
+            issue_lines(&issue(4, "closed", "", ""), true, "a", "b"),
+            vec![(Tone::Muted, "#4 was closed.".to_owned())]
+        );
     }
 
     #[test]

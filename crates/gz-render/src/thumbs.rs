@@ -7,12 +7,12 @@ use gz_fmt_tex::Image;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
+use crate::Result;
 use crate::assets::Assets;
 use crate::draw_list::DrawList;
 use crate::packet::build_packet;
 use crate::renderer::Renderer;
 use crate::view::View;
-use crate::Result;
 
 /// Pictures by `(content key, size)`, the least recently used dropped beyond a byte budget.
 /// The key is the caller's: a hash of the file's bytes, or its revision - whatever changes
@@ -46,7 +46,8 @@ impl Lru {
             self.bytes -= old.rgba.len();
         }
         if self.bytes > budget {
-            let mut order: Vec<(u64, (u64, [u32; 2]))> = self.map.iter().filter(|(k, _)| **k != key).map(|(k, (_, t))| (*t, *k)).collect();
+            let mut order: Vec<(u64, (u64, [u32; 2]))> =
+                self.map.iter().filter(|(k, _)| **k != key).map(|(k, (_, t))| (*t, *k)).collect();
             order.sort_unstable();
             for (_, k) in order {
                 if self.bytes <= budget {
@@ -138,7 +139,11 @@ mod tests {
         cache.inner.lock().put((4, [64, 64]), img(64), cache.budget);
         // 2 was the oldest untouched
         assert!(cache.get(2, [64, 64]).is_none());
-        assert!(cache.get(1, [64, 64]).is_some() && cache.get(3, [64, 64]).is_some() && cache.get(4, [64, 64]).is_some());
+        assert!(
+            cache.get(1, [64, 64]).is_some()
+                && cache.get(3, [64, 64]).is_some()
+                && cache.get(4, [64, 64]).is_some()
+        );
         assert_eq!(cache.bytes(), 3 * 64 * 64 * 4);
         // the same content at another size is another picture
         assert!(cache.get(1, [128, 128]).is_none());

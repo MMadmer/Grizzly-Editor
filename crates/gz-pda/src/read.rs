@@ -83,27 +83,44 @@ pub fn is_pda_path(path: &str) -> bool {
 /// The preview's aspect and state do not enter here: the reader turns the asset into canvas
 /// units for every aspect, and the preview plays its state on top of the list
 /// ([`crate::Preview`]).
-pub fn evaluate(host: &LuaHost, reader: &Reader, text: &str, chunk: &str, lang: &str) -> Result<Layout, ReadError> {
+pub fn evaluate(
+    host: &LuaHost,
+    reader: &Reader,
+    text: &str,
+    chunk: &str,
+    lang: &str,
+) -> Result<Layout, ReadError> {
     // the loader the game uses for every declarative asset: a syntax error gets its line, code
     // outside strings is refused before anything runs
-    let value = gz_luadata::parse_named(text, chunk).map_err(|e| ReadError { message: e.message, line: e.line })?;
+    let value =
+        gz_luadata::parse_named(text, chunk).map_err(|e| ReadError { message: e.message, line: e.line })?;
     let name = if chunk.is_empty() { "pdaasset" } else { chunk };
-    let asset = Arg::Chunk(Chunk { name: name.to_owned(), text: Arc::from(gz_lua::vanilla_source(text).as_ref()) });
+    let asset =
+        Arg::Chunk(Chunk { name: name.to_owned(), text: Arc::from(gz_lua::vanilla_source(text).as_ref()) });
     let mut opts = Table::new();
     opts.fields.push(("lang".into(), Value::String(if lang.is_empty() { "rus" } else { lang }.into())));
     // `state` and `lists` are the reader's bookkeeping for run-time rows: no data of the layout
-    let answer = host.call_omitting(&reader.script, "normalize", &[asset, Arg::Value(Value::Table(opts))], &["state", "lists"]).map_err(|e| {
-        ReadError::plain(match e {
-            LuaError::State(_) => "cannot create a Lua state".to_owned(),
-            LuaError::ScriptCompile(m) => format!("the PDA layout reader does not compile: {m}"),
-            LuaError::ScriptRun(m) | LuaError::Call(m) => format!("the PDA layout reader failed: {m}"),
-            LuaError::NoFunction(_) => "the PDA layout reader has no normalize()".to_owned(),
-            LuaError::ArgCompile { message, .. } => message,
-            LuaError::ArgRun { message, .. } => format!("code outside strings: {message}"),
-            LuaError::Result(m) => format!("the PDA layout reader failed: {m}"),
-        })
-    })?;
-    let Some(r) = answer.as_table() else { return Err(ReadError::plain("the PDA layout reader returned nothing")) };
+    let answer = host
+        .call_omitting(
+            &reader.script,
+            "normalize",
+            &[asset, Arg::Value(Value::Table(opts))],
+            &["state", "lists"],
+        )
+        .map_err(|e| {
+            ReadError::plain(match e {
+                LuaError::State(_) => "cannot create a Lua state".to_owned(),
+                LuaError::ScriptCompile(m) => format!("the PDA layout reader does not compile: {m}"),
+                LuaError::ScriptRun(m) | LuaError::Call(m) => format!("the PDA layout reader failed: {m}"),
+                LuaError::NoFunction(_) => "the PDA layout reader has no normalize()".to_owned(),
+                LuaError::ArgCompile { message, .. } => message,
+                LuaError::ArgRun { message, .. } => format!("code outside strings: {message}"),
+                LuaError::Result(m) => format!("the PDA layout reader failed: {m}"),
+            })
+        })?;
+    let Some(r) = answer.as_table() else {
+        return Err(ReadError::plain("the PDA layout reader returned nothing"));
+    };
     let mut layout = from_reader(r);
     read_preview(&value, &mut layout);
     Ok(layout)

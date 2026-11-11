@@ -84,7 +84,8 @@ pub use apply::{SceneCmd, SceneReply};
 pub use class::ObjClass;
 pub use cmd::{install, register};
 pub use model::{
-    BulkData, ModMarks, ObjData, ObjFlags, ObjId, Object, RenderItem, SceneMeta, SceneState, ToolSettings, Transform,
+    BulkData, ModMarks, ObjData, ObjFlags, ObjId, Object, RenderItem, SceneMeta, SceneState, ToolSettings,
+    Transform,
 };
 pub use service::{LoadStatus, SceneService};
 

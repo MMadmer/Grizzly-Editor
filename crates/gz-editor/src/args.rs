@@ -93,11 +93,14 @@ impl ArgsExt for Args {
         match self.get(key)? {
             Value::Array(a) if a.len() == 3 => take(as_f64(&a[0]), as_f64(&a[1]), as_f64(&a[2])),
             Value::String(s) => {
-                let mut it = s.split([',', ' ']).filter(|p| !p.is_empty()).map(|p| p.trim().parse::<f64>().ok());
+                let mut it =
+                    s.split([',', ' ']).filter(|p| !p.is_empty()).map(|p| p.trim().parse::<f64>().ok());
                 let out = take(it.next()?, it.next()?, it.next()?);
                 if it.next().is_some() { None } else { out }
             }
-            Value::Object(o) => take(o.get("x").and_then(as_f64), o.get("y").and_then(as_f64), o.get("z").and_then(as_f64)),
+            Value::Object(o) => {
+                take(o.get("x").and_then(as_f64), o.get("y").and_then(as_f64), o.get("z").and_then(as_f64))
+            }
             _ => None,
         }
     }
@@ -105,7 +108,9 @@ impl ArgsExt for Args {
     fn list(&self, key: &str) -> Option<Vec<String>> {
         match self.get(key)? {
             Value::Array(a) => Some(a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()),
-            Value::String(s) => Some(s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned).collect()),
+            Value::String(s) => {
+                Some(s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned).collect())
+            }
             _ => None,
         }
     }

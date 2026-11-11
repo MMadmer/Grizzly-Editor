@@ -27,7 +27,8 @@ pub const COUNT_MARK: &str = "The project opened - warnings and errors are count
 /// The line the project area writes as a project opens: the counts start before it.
 const PROJECT_OPENED: &str = "Project opened: ";
 /// Notes of the editor's own machinery: never the status bar's line.
-const CHATTER: [&str; 5] = ["startup: ", "file names: ", "control endpoint: ", "Grizzly Editor ", "DARF content mounted"];
+const CHATTER: [&str; 5] =
+    ["startup: ", "file names: ", "control endpoint: ", "Grizzly Editor ", "DARF content mounted"];
 /// The most lines the view keeps; past it the oldest go in a block.
 const KEEP_MAX: usize = 50_000;
 const KEEP_DROP: usize = 20_000;
@@ -170,7 +171,13 @@ impl Inner {
 
     fn intake(&mut self, record: &Record) {
         let text: Arc<str> = if record.text.contains(['\r', '\n']) {
-            record.text.chars().filter(|&c| c != '\r').map(|c| if c == '\n' { ' ' } else { c }).collect::<String>().into()
+            record
+                .text
+                .chars()
+                .filter(|&c| c != '\r')
+                .map(|c| if c == '\n' { ' ' } else { c })
+                .collect::<String>()
+                .into()
         } else {
             record.text.as_str().into()
         };
@@ -211,7 +218,13 @@ impl Inner {
         if mark.is_empty() || self.lines.last().is_none_or(|l| l.mark) {
             return;
         }
-        self.lines.push(Line { text: mark.into(), level: LineLevel::Info, epoch: self.epoch, mark: true, counted: false });
+        self.lines.push(Line {
+            text: mark.into(),
+            level: LineLevel::Info,
+            epoch: self.epoch,
+            mark: true,
+            counted: false,
+        });
         self.marks += 1;
     }
 
@@ -342,9 +355,37 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
         );
         tb.spring();
         tb.group(0);
-        toggle_auto = tb.action("autoscroll", Icon::MoveDown, "Auto-scroll", "Follow the new lines as they come", true, auto, Kind::Ghost);
-        copy = tb.action("copy", Icon::Copy, "Copy", if any_shown { "Copy the lines shown to the clipboard" } else { "No lines are shown" }, any_shown, false, Kind::Ghost);
-        clear = tb.action("clear", Icon::Clear, "Clear", if any_lines { "Clear the lines shown here; the log file keeps them" } else { "The log is empty" }, any_lines, false, Kind::Ghost);
+        toggle_auto = tb.action(
+            "autoscroll",
+            Icon::MoveDown,
+            "Auto-scroll",
+            "Follow the new lines as they come",
+            true,
+            auto,
+            Kind::Ghost,
+        );
+        copy = tb.action(
+            "copy",
+            Icon::Copy,
+            "Copy",
+            if any_shown { "Copy the lines shown to the clipboard" } else { "No lines are shown" },
+            any_shown,
+            false,
+            Kind::Ghost,
+        );
+        clear = tb.action(
+            "clear",
+            Icon::Clear,
+            "Clear",
+            if any_lines {
+                "Clear the lines shown here; the log file keeps them"
+            } else {
+                "The log is empty"
+            },
+            any_lines,
+            false,
+            Kind::Ghost,
+        );
         tb.end();
     }
     if toggle_auto {
@@ -373,13 +414,22 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
             return;
         }
         if m.visible.is_empty() {
-            show_all = empty_state(ui, Icon::Search, "No lines match", "Nothing in the log matches the search and the level.", Some("Show All"));
+            show_all = empty_state(
+                ui,
+                Icon::Search,
+                "No lines match",
+                "Nothing in the log matches the search and the level.",
+                Some("Show All"),
+            );
             return;
         }
         let row_h = Font::Mono.line();
         ui.spacing_mut().item_spacing = Vec2::new(8.0, 1.0);
         let total = m.visible.len();
-        let mut area = ScrollArea::both().id_salt("gz-ui-app.log.lines").auto_shrink([false, false]).stick_to_bottom(m.auto_scroll);
+        let mut area = ScrollArea::both()
+            .id_salt("gz-ui-app.log.lines")
+            .auto_shrink([false, false])
+            .stick_to_bottom(m.auto_scroll);
         if m.scroll_down > 0 {
             area = area.vertical_scroll_offset(total as f32 * (row_h + 1.0));
             m.scroll_down -= 1;
@@ -400,7 +450,11 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
                 let galley = ui.painter().layout_no_wrap(line.text.to_string(), font.clone(), color);
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(galley.size().x, row_h), Sense::click());
                 if ui.is_rect_visible(rect) {
-                    ui.painter().galley(pos2(rect.min.x, rect.center().y - galley.size().y * 0.5), galley, color);
+                    ui.painter().galley(
+                        pos2(rect.min.x, rect.center().y - galley.size().y * 0.5),
+                        galley,
+                        color,
+                    );
                 }
                 if line.mark {
                     // where the counts start: its reason, then a rule to the edge
@@ -433,14 +487,21 @@ pub fn output_log(ui: &mut Ui, editor: &Editor, host: LogHost) {
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
-    b.panel(PanelDesc { id: SmolStr::new("output_log"), label: SmolStr::new("Output Log"), icon: Icon::Log, drawer: Some(Drawer::Log) });
+    b.panel(PanelDesc {
+        id: SmolStr::new("output_log"),
+        label: SmolStr::new("Output Log"),
+        icon: Icon::Log,
+        drawer: Some(Drawer::Log),
+    });
     b.drawer(
         Drawer::Log,
         DrawerDesc {
             label: SmolStr::new("Output Log"),
             icon: Icon::Log,
             panel: Some(SmolStr::new("output_log")),
-            body: Box::new(|ui: &mut Ui, cx: &mut gz_app::DocCx<'_>| output_log(ui, cx.editor, LogHost::Drawer)),
+            body: Box::new(|ui: &mut Ui, cx: &mut gz_app::DocCx<'_>| {
+                output_log(ui, cx.editor, LogHost::Drawer)
+            }),
         },
     );
     b.log_state(|editor| LogModel::of(editor).state(&editor.log));

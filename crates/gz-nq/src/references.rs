@@ -87,10 +87,47 @@ pub struct FindResult {
 }
 
 const KNOWN_TYPES: &[&str] = &[
-    "string", "int", "float", "bool", "enum", "text", "duration", "npc_ref", "target_ref", "place", "spawn_spec", "item_section",
-    "squad_section", "level", "smart", "story_id", "profile", "community", "info", "var_name", "task_id", "quest_id", "ref_name",
-    "signal_name", "spot_type", "relation", "lua", "cases", "cases_cond", "cases_weight", "kill_target", "count_or_all", "value",
-    "cond_list", "node_id", "restrictor", "squad_ref", "object_ref", "objective_id", "character_id", "global_name",
+    "string",
+    "int",
+    "float",
+    "bool",
+    "enum",
+    "text",
+    "duration",
+    "npc_ref",
+    "target_ref",
+    "place",
+    "spawn_spec",
+    "item_section",
+    "squad_section",
+    "level",
+    "smart",
+    "story_id",
+    "profile",
+    "community",
+    "info",
+    "var_name",
+    "task_id",
+    "quest_id",
+    "ref_name",
+    "signal_name",
+    "spot_type",
+    "relation",
+    "lua",
+    "cases",
+    "cases_cond",
+    "cases_weight",
+    "kill_target",
+    "count_or_all",
+    "value",
+    "cond_list",
+    "node_id",
+    "restrictor",
+    "squad_ref",
+    "object_ref",
+    "objective_id",
+    "character_id",
+    "global_name",
 ];
 
 /// Whether references of a type can be looked for.
@@ -102,9 +139,27 @@ pub fn is_known_type(t: &str) -> bool {
 fn is_string_type(t: &str) -> bool {
     matches!(
         t,
-        "string" | "enum" | "item_section" | "squad_section" | "level" | "smart" | "story_id" | "profile" | "character_id" | "global_name"
-            | "community" | "info" | "var_name" | "task_id" | "quest_id" | "ref_name" | "signal_name" | "spot_type" | "relation"
-            | "cases" | "node_id"
+        "string"
+            | "enum"
+            | "item_section"
+            | "squad_section"
+            | "level"
+            | "smart"
+            | "story_id"
+            | "profile"
+            | "character_id"
+            | "global_name"
+            | "community"
+            | "info"
+            | "var_name"
+            | "task_id"
+            | "quest_id"
+            | "ref_name"
+            | "signal_name"
+            | "spot_type"
+            | "relation"
+            | "cases"
+            | "node_id"
     )
 }
 
@@ -127,7 +182,16 @@ struct Walker<'a> {
 
 impl Walker<'_> {
     #[allow(clippy::too_many_arguments)]
-    fn diag(&mut self, code: &str, message: String, node: &str, slot: &str, kind: &str, param: &str, blocking: bool) {
+    fn diag(
+        &mut self,
+        code: &str,
+        message: String,
+        node: &str,
+        slot: &str,
+        kind: &str,
+        param: &str,
+        blocking: bool,
+    ) {
         self.diagnostics.push(Diagnostic {
             path: self.path.clone(),
             node: node.to_owned(),
@@ -171,11 +235,27 @@ impl Walker<'_> {
     fn walk_kind(&mut self, kind_id: &str, params: &mut Value, node: &str, slot: &str, expected: u8) {
         let cat = self.cat;
         let Some(kind) = cat.find(kind_id) else {
-            self.diag("unknown_kind", format!("kind '{kind_id}' is absent from the active catalog"), node, slot, kind_id, "", true);
+            self.diag(
+                "unknown_kind",
+                format!("kind '{kind_id}' is absent from the active catalog"),
+                node,
+                slot,
+                kind_id,
+                "",
+                true,
+            );
             return;
         };
         if kind.uses & expected == 0 {
-            self.diag("wrong_kind_use", format!("kind '{kind_id}' is not valid in this slot"), node, slot, kind_id, "", true);
+            self.diag(
+                "wrong_kind_use",
+                format!("kind '{kind_id}' is not valid in this slot"),
+                node,
+                slot,
+                kind_id,
+                "",
+                true,
+            );
             return;
         }
         if !params.is_nil() && !params.is_table() {
@@ -183,9 +263,22 @@ impl Walker<'_> {
             return;
         }
         if !params.arr().is_empty() {
-            self.diag("malformed", "params must not contain array entries".into(), node, slot, kind_id, "", false);
+            self.diag(
+                "malformed",
+                "params must not contain array entries".into(),
+                node,
+                slot,
+                kind_id,
+                "",
+                false,
+            );
         }
-        let unknown: Vec<String> = params.fields().iter().filter(|(k, _)| kind.param(k).is_none()).map(|(k, _)| k.to_string()).collect();
+        let unknown: Vec<String> = params
+            .fields()
+            .iter()
+            .filter(|(k, _)| kind.param(k).is_none())
+            .map(|(k, _)| k.to_string())
+            .collect();
         for k in unknown {
             self.diag(
                 "unknown_param",
@@ -202,7 +295,15 @@ impl Walker<'_> {
             let present = params.get(&param.name).is_some_and(|v| !v.is_nil());
             if !present {
                 if param.required {
-                    self.diag("malformed", format!("required parameter '{}' ({}) is missing", param.name, param.ty), node, &pslot, kind_id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        format!("required parameter '{}' ({}) is missing", param.name, param.ty),
+                        node,
+                        &pslot,
+                        kind_id,
+                        &param.name,
+                        false,
+                    );
                 }
                 continue;
             }
@@ -234,32 +335,96 @@ impl Walker<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn object(&mut self, kind: &Kind, param: &Param, value: &Value, node: &str, slot: &str, schema: &str, allowed: &[&str]) -> bool {
+    fn object(
+        &mut self,
+        kind: &Kind,
+        param: &Param,
+        value: &Value,
+        node: &str,
+        slot: &str,
+        schema: &str,
+        allowed: &[&str],
+    ) -> bool {
         if !value.is_table() {
-            self.diag("malformed", format!("{schema} must be a table"), node, slot, &kind.id, &param.name, true);
+            self.diag(
+                "malformed",
+                format!("{schema} must be a table"),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                true,
+            );
             return false;
         }
         if !value.arr().is_empty() {
-            self.diag("malformed", format!("{schema} must not contain array entries"), node, slot, &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                format!("{schema} must not contain array entries"),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
-        let unknown: Vec<String> = value.fields().iter().filter(|(k, _)| !allowed.contains(&k.as_str())).map(|(k, _)| k.to_string()).collect();
+        let unknown: Vec<String> = value
+            .fields()
+            .iter()
+            .filter(|(k, _)| !allowed.contains(&k.as_str()))
+            .map(|(k, _)| k.to_string())
+            .collect();
         for k in unknown {
-            self.diag("unknown_field", format!("field '{k}' is not valid for {schema}"), node, &format!("{slot}/{k}"), &kind.id, &param.name, false);
+            self.diag(
+                "unknown_field",
+                format!("field '{k}' is not valid for {schema}"),
+                node,
+                &format!("{slot}/{k}"),
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
         true
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn string_leaf(&mut self, kind: &Kind, param: &Param, owner: &mut Value, key: &str, ty: &str, required: bool, node: &str, slot: &str) -> bool {
+    fn string_leaf(
+        &mut self,
+        kind: &Kind,
+        param: &Param,
+        owner: &mut Value,
+        key: &str,
+        ty: &str,
+        required: bool,
+        node: &str,
+        slot: &str,
+    ) -> bool {
         let leaf = format!("{slot}/{key}");
         let Some(value) = owner.table_mut().and_then(|t| t.get_mut(key)) else {
             if required {
-                self.diag("malformed", format!("required string field '{key}' is missing"), node, &leaf, &kind.id, &param.name, false);
+                self.diag(
+                    "malformed",
+                    format!("required string field '{key}' is missing"),
+                    node,
+                    &leaf,
+                    &kind.id,
+                    &param.name,
+                    false,
+                );
             }
             return false;
         };
         if !value.is_string() {
-            self.diag("malformed", format!("field '{key}' must be a string"), node, &leaf, &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                format!("field '{key}' must be a string"),
+                node,
+                &leaf,
+                &kind.id,
+                &param.name,
+                false,
+            );
             return false;
         }
         self.reference(kind, param, ty, value, node, &leaf);
@@ -271,11 +436,29 @@ impl Walker<'_> {
         let pos = owner.get("pos");
         let ok = pos.is_some_and(|p| p.is_table() && p.arr().len() == 3 && p.fields().is_empty());
         if !ok {
-            self.diag("malformed", "pos must be an array of exactly three numbers".into(), node, &leaf, &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                "pos must be an array of exactly three numbers".into(),
+                node,
+                &leaf,
+                &kind.id,
+                &param.name,
+                false,
+            );
             return;
         }
-        if let Some((i, _)) = pos.map(Value::arr).unwrap_or(&[]).iter().enumerate().find(|(_, x)| !x.is_number()) {
-            self.diag("malformed", "pos must be an array of exactly three numbers".into(), node, &format!("{leaf}/{i}"), &kind.id, &param.name, false);
+        if let Some((i, _)) =
+            pos.map(Value::arr).unwrap_or(&[]).iter().enumerate().find(|(_, x)| !x.is_number())
+        {
+            self.diag(
+                "malformed",
+                "pos must be an array of exactly three numbers".into(),
+                node,
+                &format!("{leaf}/{i}"),
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
     }
 
@@ -283,12 +466,28 @@ impl Walker<'_> {
         if let Some(r) = owner.get("radius")
             && !r.as_number().is_some_and(|n| n > 0.0)
         {
-            self.diag("malformed", "radius must be a positive number".into(), node, &format!("{slot}/radius"), &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                "radius must be a positive number".into(),
+                node,
+                &format!("{slot}/radius"),
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
     }
 
     fn spawn_spec(&mut self, kind: &Kind, param: &Param, value: &mut Value, node: &str, slot: &str) {
-        if !self.object(kind, param, value, node, slot, "spawn_spec", &["section", "smart", "ref", "hold", "place", "restrictor"]) {
+        if !self.object(
+            kind,
+            param,
+            value,
+            node,
+            slot,
+            "spawn_spec",
+            &["section", "smart", "ref", "hold", "place", "restrictor"],
+        ) {
             return;
         }
         self.string_leaf(kind, param, value, "section", "squad_section", true, node, slot);
@@ -306,20 +505,55 @@ impl Walker<'_> {
             self.place(kind, param, place, node, slot);
         }
         if value.get("hold").is_some_and(|h| !h.is_bool()) {
-            self.diag("malformed", "spawn_spec field 'hold' must be a bool".into(), node, &format!("{slot}/hold"), &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                "spawn_spec field 'hold' must be a bool".into(),
+                node,
+                &format!("{slot}/hold"),
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn npc_ref(&mut self, kind: &Kind, param: &Param, value: &mut Value, node: &str, slot: &str, target: bool, kill: bool) {
+    fn npc_ref(
+        &mut self,
+        kind: &Kind,
+        param: &Param,
+        value: &mut Value,
+        node: &str,
+        slot: &str,
+        target: bool,
+        kill: bool,
+    ) {
         const NPC: &[&str] = &["story", "ref", "character", "profile", "community", "level"];
-        const TARGET: &[&str] = &["story", "ref", "character", "profile", "community", "level", "smart", "restrictor", "pos", "radius"];
+        const TARGET: &[&str] = &[
+            "story",
+            "ref",
+            "character",
+            "profile",
+            "community",
+            "level",
+            "smart",
+            "restrictor",
+            "pos",
+            "radius",
+        ];
         const KILL: &[&str] = &["story", "ref", "character", "profile", "community", "level", "spawn"];
-        let allowed = if target { TARGET } else if kill { KILL } else { NPC };
+        let allowed = if target {
+            TARGET
+        } else if kill {
+            KILL
+        } else {
+            NPC
+        };
         if !self.object(kind, param, value, node, slot, &param.ty, allowed) {
             return;
         }
-        let mut alts = ["story", "ref", "character", "profile", "community"].iter().filter(|k| value.has(k)).count();
+        let mut alts =
+            ["story", "ref", "character", "profile", "community"].iter().filter(|k| value.has(k)).count();
         if target {
             alts += ["smart", "restrictor", "pos"].iter().filter(|k| value.has(k)).count();
         }
@@ -327,16 +561,38 @@ impl Walker<'_> {
             alts += 1;
         }
         if alts != 1 {
-            self.diag("malformed", format!("{} must select exactly one target variant", param.ty), node, slot, &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                format!("{} must select exactly one target variant", param.ty),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
-        for (key, ty) in [("story", "story_id"), ("ref", "ref_name"), ("character", "character_id"), ("profile", "profile"), ("community", "community")] {
+        for (key, ty) in [
+            ("story", "story_id"),
+            ("ref", "ref_name"),
+            ("character", "character_id"),
+            ("profile", "profile"),
+            ("community", "community"),
+        ] {
             if value.has(key) {
                 self.string_leaf(kind, param, value, key, ty, false, node, slot);
             }
         }
         if value.has("level") {
             if !value.has("community") && !(target && value.has("pos")) {
-                self.diag("malformed", "level is valid only for community or pos variants".into(), node, &format!("{slot}/level"), &kind.id, &param.name, false);
+                self.diag(
+                    "malformed",
+                    "level is valid only for community or pos variants".into(),
+                    node,
+                    &format!("{slot}/level"),
+                    &kind.id,
+                    &param.name,
+                    false,
+                );
             }
             self.string_leaf(kind, param, value, "level", "level", false, node, slot);
         }
@@ -351,7 +607,15 @@ impl Walker<'_> {
         }
         if target && value.has("radius") {
             if !value.has("pos") {
-                self.diag("malformed", "radius is valid only for the pos variant".into(), node, &format!("{slot}/radius"), &kind.id, &param.name, false);
+                self.diag(
+                    "malformed",
+                    "radius is valid only for the pos variant".into(),
+                    node,
+                    &format!("{slot}/radius"),
+                    &kind.id,
+                    &param.name,
+                    false,
+                );
             }
             self.radius(kind, param, value, node, slot);
         }
@@ -366,11 +630,17 @@ impl Walker<'_> {
         if !self.object(kind, param, value, node, slot, &param.ty, allowed) {
             return;
         }
-        let alts = usize::from(value.has("story")) + usize::from(value.has("ref")) + usize::from(object && value.has("character"));
+        let alts = usize::from(value.has("story"))
+            + usize::from(value.has("ref"))
+            + usize::from(object && value.has("character"));
         if alts != 1 {
             self.diag(
                 "malformed",
-                format!("{} must select exactly one of story / ref{}", param.ty, if object { " / character" } else { "" }),
+                format!(
+                    "{} must select exactly one of story / ref{}",
+                    param.ty,
+                    if object { " / character" } else { "" }
+                ),
                 node,
                 slot,
                 &kind.id,
@@ -390,13 +660,32 @@ impl Walker<'_> {
     }
 
     fn place(&mut self, kind: &Kind, param: &Param, value: &mut Value, node: &str, slot: &str) {
-        if !self.object(kind, param, value, node, slot, "place", &["level", "pos", "radius", "restrictor", "smart", "ref"]) {
+        if !self.object(
+            kind,
+            param,
+            value,
+            node,
+            slot,
+            "place",
+            &["level", "pos", "radius", "restrictor", "smart", "ref"],
+        ) {
             return;
         }
         let position = value.has("pos") || value.has("level") || value.has("radius");
-        let alts = usize::from(position) + usize::from(value.has("restrictor")) + usize::from(value.has("smart")) + usize::from(value.has("ref"));
+        let alts = usize::from(position)
+            + usize::from(value.has("restrictor"))
+            + usize::from(value.has("smart"))
+            + usize::from(value.has("ref"));
         if alts != 1 {
-            self.diag("malformed", "place must select exactly one of level+pos, restrictor or smart".into(), node, slot, &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                "place must select exactly one of level+pos, restrictor or smart".into(),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
         if position {
             self.string_leaf(kind, param, value, "level", "level", true, node, slot);
@@ -417,7 +706,15 @@ impl Walker<'_> {
     fn duration(&mut self, kind: &Kind, param: &Param, value: &Value, node: &str, slot: &str) {
         if let Some(n) = value.as_number() {
             if n < 0.0 {
-                self.diag("malformed", "duration must be non-negative".into(), node, slot, &kind.id, &param.name, false);
+                self.diag(
+                    "malformed",
+                    "duration must be non-negative".into(),
+                    node,
+                    slot,
+                    &kind.id,
+                    &param.name,
+                    false,
+                );
             }
             return;
         }
@@ -430,27 +727,67 @@ impl Walker<'_> {
             let Some(u) = value.get(unit) else { continue };
             alts += 1;
             if !u.as_number().is_some_and(|n| n >= 0.0) {
-                self.diag("malformed", format!("duration field '{unit}' must be a non-negative number"), node, &format!("{slot}/{unit}"), &kind.id, &param.name, false);
+                self.diag(
+                    "malformed",
+                    format!("duration field '{unit}' must be a non-negative number"),
+                    node,
+                    &format!("{slot}/{unit}"),
+                    &kind.id,
+                    &param.name,
+                    false,
+                );
             }
         }
         if alts != 1 {
-            self.diag("malformed", "duration must select exactly one unit".into(), node, slot, &kind.id, &param.name, false);
+            self.diag(
+                "malformed",
+                "duration must select exactly one unit".into(),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            );
         }
     }
 
     fn walk_param(&mut self, kind: &Kind, param: &Param, value: &mut Value, node: &str, slot: &str) {
         let ty = param.ty.as_str();
         if !is_known_type(ty) {
-            self.diag("unknown_type", format!("parameter type '{ty}' is not inspectable"), node, slot, &kind.id, &param.name, false);
+            self.diag(
+                "unknown_type",
+                format!("parameter type '{ty}' is not inspectable"),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            );
             return;
         }
         if ty == "lua" {
-            self.diag("lua_uninspectable", "Lua may contain runtime references that cannot be proven statically".into(), node, slot, &kind.id, &param.name, false);
+            self.diag(
+                "lua_uninspectable",
+                "Lua may contain runtime references that cannot be proven statically".into(),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            );
             return;
         }
         if is_string_type(ty) {
             let Some(s) = value.as_str() else {
-                self.diag("malformed", format!("parameter '{}' ({ty}) must be a string", param.name), node, slot, &kind.id, &param.name, false);
+                self.diag(
+                    "malformed",
+                    format!("parameter '{}' ({ty}) must be a string", param.name),
+                    node,
+                    slot,
+                    &kind.id,
+                    &param.name,
+                    false,
+                );
                 return;
             };
             if ty == "enum" || ty == "relation" {
@@ -460,7 +797,15 @@ impl Walker<'_> {
                     param.enums.is_empty() || param.enums.iter().any(|e| e == s)
                 };
                 if !allowed {
-                    self.diag("malformed", format!("'{s}' is not an allowed {ty} value"), node, slot, &kind.id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        format!("'{s}' is not an allowed {ty} value"),
+                        node,
+                        slot,
+                        &kind.id,
+                        &param.name,
+                        false,
+                    );
                 }
             }
             self.reference(kind, param, ty, value, node, slot);
@@ -478,22 +823,62 @@ impl Walker<'_> {
             "spawn_spec" => self.spawn_spec(kind, param, value, node, slot),
             "duration" => self.duration(kind, param, value, node, slot),
             "int" | "float" => match value.as_number() {
-                None => self.diag("malformed", format!("parameter '{}' must be a number", param.name), node, slot, &kind.id, &param.name, false),
+                None => self.diag(
+                    "malformed",
+                    format!("parameter '{}' must be a number", param.name),
+                    node,
+                    slot,
+                    &kind.id,
+                    &param.name,
+                    false,
+                ),
                 Some(n) => {
                     if ty == "int" && !is_integer(n) {
-                        self.diag("malformed", format!("parameter '{}' must be an integer", param.name), node, slot, &kind.id, &param.name, false);
+                        self.diag(
+                            "malformed",
+                            format!("parameter '{}' must be an integer", param.name),
+                            node,
+                            slot,
+                            &kind.id,
+                            &param.name,
+                            false,
+                        );
                     }
                     if param.min.is_some_and(|m| n < m) {
-                        self.diag("malformed", format!("parameter '{}' is below its catalog minimum", param.name), node, slot, &kind.id, &param.name, false);
+                        self.diag(
+                            "malformed",
+                            format!("parameter '{}' is below its catalog minimum", param.name),
+                            node,
+                            slot,
+                            &kind.id,
+                            &param.name,
+                            false,
+                        );
                     }
                     if param.max.is_some_and(|m| n > m) {
-                        self.diag("malformed", format!("parameter '{}' is above its catalog maximum", param.name), node, slot, &kind.id, &param.name, false);
+                        self.diag(
+                            "malformed",
+                            format!("parameter '{}' is above its catalog maximum", param.name),
+                            node,
+                            slot,
+                            &kind.id,
+                            &param.name,
+                            false,
+                        );
                     }
                 }
             },
             "bool" => {
                 if !value.is_bool() {
-                    self.diag("malformed", format!("parameter '{}' must be a bool", param.name), node, slot, &kind.id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        format!("parameter '{}' must be a bool", param.name),
+                        node,
+                        slot,
+                        &kind.id,
+                        &param.name,
+                        false,
+                    );
                 }
             }
             "text" => {
@@ -502,32 +887,86 @@ impl Walker<'_> {
                 }
                 let ok = value.as_table().is_some_and(|t| !t.fields.is_empty() && t.arr.is_empty());
                 if !ok {
-                    self.diag("malformed", "text must be a string or a non-empty language table".into(), node, slot, &kind.id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        "text must be a string or a non-empty language table".into(),
+                        node,
+                        slot,
+                        &kind.id,
+                        &param.name,
+                        false,
+                    );
                     return;
                 }
-                let bad: Vec<String> = value.fields().iter().filter(|(_, x)| !x.is_string()).map(|(k, _)| k.to_string()).collect();
+                let bad: Vec<String> = value
+                    .fields()
+                    .iter()
+                    .filter(|(_, x)| !x.is_string())
+                    .map(|(k, _)| k.to_string())
+                    .collect();
                 for k in bad {
-                    self.diag("malformed", "localized text value must be a string".into(), node, &format!("{slot}/{k}"), &kind.id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        "localized text value must be a string".into(),
+                        node,
+                        &format!("{slot}/{k}"),
+                        &kind.id,
+                        &param.name,
+                        false,
+                    );
                 }
             }
             "value" => {
                 if value.is_table() || value.is_nil() {
-                    self.diag("malformed", "value must be a bool, number or string".into(), node, slot, &kind.id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        "value must be a bool, number or string".into(),
+                        node,
+                        slot,
+                        &kind.id,
+                        &param.name,
+                        false,
+                    );
                 }
             }
             "count_or_all" => {
-                let ok = value.as_str() == Some("all") || value.as_number().is_some_and(|n| is_integer(n) && n >= 1.0);
+                let ok = value.as_str() == Some("all")
+                    || value.as_number().is_some_and(|n| is_integer(n) && n >= 1.0);
                 if !ok {
-                    self.diag("malformed", "count_or_all must be a positive integer or 'all'".into(), node, slot, &kind.id, &param.name, false);
+                    self.diag(
+                        "malformed",
+                        "count_or_all must be a positive integer or 'all'".into(),
+                        node,
+                        slot,
+                        &kind.id,
+                        &param.name,
+                        false,
+                    );
                 }
             }
-            _ => self.diag("unknown_type", format!("parameter type '{ty}' has no structural walker"), node, slot, &kind.id, &param.name, false),
+            _ => self.diag(
+                "unknown_type",
+                format!("parameter type '{ty}' has no structural walker"),
+                node,
+                slot,
+                &kind.id,
+                &param.name,
+                false,
+            ),
         }
     }
 
     fn cond_list(&mut self, list: &mut Value, node: &str, slot: &str) {
         if !list.is_table() || list.arr().is_empty() || !list.fields().is_empty() {
-            self.diag("malformed", "condition list must be a non-empty array".into(), node, slot, "", "", true);
+            self.diag(
+                "malformed",
+                "condition list must be a non-empty array".into(),
+                node,
+                slot,
+                "",
+                "",
+                true,
+            );
             return;
         }
         if let Some(t) = list.table_mut() {
@@ -547,7 +986,15 @@ impl Walker<'_> {
             return;
         }
         if !list.fields().is_empty() {
-            self.diag("malformed", "condition list must contain only condition entries".into(), node, slot, "", "", false);
+            self.diag(
+                "malformed",
+                "condition list must contain only condition entries".into(),
+                node,
+                slot,
+                "",
+                "",
+                false,
+            );
             return;
         }
         if let Some(t) = list.table_mut() {
@@ -563,11 +1010,32 @@ impl Walker<'_> {
             return;
         }
         if !value.arr().is_empty() {
-            self.diag("malformed", "condition must not contain array entries".into(), node, slot, "", "", false);
+            self.diag(
+                "malformed",
+                "condition must not contain array entries".into(),
+                node,
+                slot,
+                "",
+                "",
+                false,
+            );
         }
-        let unknown: Vec<String> = value.fields().iter().filter(|(k, _)| !matches!(k.as_str(), "kind" | "params" | "not")).map(|(k, _)| k.to_string()).collect();
+        let unknown: Vec<String> = value
+            .fields()
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "kind" | "params" | "not"))
+            .map(|(k, _)| k.to_string())
+            .collect();
         for k in unknown {
-            self.diag("unknown_field", format!("unknown condition field '{k}'"), node, &format!("{slot}/{k}"), "", "", false);
+            self.diag(
+                "unknown_field",
+                format!("unknown condition field '{k}'"),
+                node,
+                &format!("{slot}/{k}"),
+                "",
+                "",
+                false,
+            );
         }
         let kind = match value.get("kind") {
             Some(Value::String(s)) if !s.is_empty() => s.to_string(),
@@ -577,7 +1045,15 @@ impl Walker<'_> {
             }
         };
         if value.get("not").is_some_and(|n| !n.is_bool()) {
-            self.diag("malformed", "condition field 'not' must be a bool".into(), node, &format!("{slot}/not"), "", "", false);
+            self.diag(
+                "malformed",
+                "condition field 'not' must be a bool".into(),
+                node,
+                &format!("{slot}/not"),
+                "",
+                "",
+                false,
+            );
         }
         let mut empty = Value::Nil;
         let params = match value.table_mut().and_then(|t| t.get_mut("params")) {
@@ -592,7 +1068,8 @@ impl Walker<'_> {
             self.diag("malformed", "cases must be a non-empty array".into(), node, slot, "", "", false);
             return;
         }
-        let names: Vec<Option<String>> = cases.arr().iter().map(|c| c.get("name").and_then(Value::as_str).map(str::to_owned)).collect();
+        let names: Vec<Option<String>> =
+            cases.arr().iter().map(|c| c.get("name").and_then(Value::as_str).map(str::to_owned)).collect();
         let Some(t) = cases.table_mut() else { return };
         for (i, item) in t.arr.iter_mut().enumerate() {
             let case_slot = format!("{slot}/case:{i}");
@@ -601,31 +1078,92 @@ impl Walker<'_> {
                 continue;
             }
             if !item.arr().is_empty() {
-                self.diag("malformed", "case must not contain array entries".into(), node, &case_slot, "", "", false);
+                self.diag(
+                    "malformed",
+                    "case must not contain array entries".into(),
+                    node,
+                    &case_slot,
+                    "",
+                    "",
+                    false,
+                );
             }
             let want = if weighted { "weight" } else { "cond" };
-            let unknown: Vec<String> = item.fields().iter().filter(|(k, _)| k != "name" && k != want).map(|(k, _)| k.to_string()).collect();
+            let unknown: Vec<String> = item
+                .fields()
+                .iter()
+                .filter(|(k, _)| k != "name" && k != want)
+                .map(|(k, _)| k.to_string())
+                .collect();
             for k in unknown {
-                self.diag("unknown_field", format!("unknown case field '{k}'"), node, &format!("{case_slot}/{k}"), "", "", false);
+                self.diag(
+                    "unknown_field",
+                    format!("unknown case field '{k}'"),
+                    node,
+                    &format!("{case_slot}/{k}"),
+                    "",
+                    "",
+                    false,
+                );
             }
             match item.get("name") {
                 Some(Value::String(name)) => {
                     if !valid_id(name) {
-                        self.diag("malformed", "case name must be [a-z0-9_]+".into(), node, &format!("{case_slot}/name"), "", "", false);
+                        self.diag(
+                            "malformed",
+                            "case name must be [a-z0-9_]+".into(),
+                            node,
+                            &format!("{case_slot}/name"),
+                            "",
+                            "",
+                            false,
+                        );
                     }
                     if names.iter().take(i).any(|p| p.as_deref() == Some(name.as_str())) {
-                        self.diag("malformed", format!("duplicate case name '{name}'"), node, &format!("{case_slot}/name"), "", "", false);
+                        self.diag(
+                            "malformed",
+                            format!("duplicate case name '{name}'"),
+                            node,
+                            &format!("{case_slot}/name"),
+                            "",
+                            "",
+                            false,
+                        );
                     }
                 }
-                _ => self.diag("malformed", "case needs a string name".into(), node, &format!("{case_slot}/name"), "", "", false),
+                _ => self.diag(
+                    "malformed",
+                    "case needs a string name".into(),
+                    node,
+                    &format!("{case_slot}/name"),
+                    "",
+                    "",
+                    false,
+                ),
             }
             if weighted {
                 if !item.get("weight").and_then(Value::as_number).is_some_and(|w| w > 0.0) {
-                    self.diag("malformed", "weighted case needs weight > 0".into(), node, &format!("{case_slot}/weight"), "", "", false);
+                    self.diag(
+                        "malformed",
+                        "weighted case needs weight > 0".into(),
+                        node,
+                        &format!("{case_slot}/weight"),
+                        "",
+                        "",
+                        false,
+                    );
                 }
             } else {
                 match item.table_mut().and_then(|t| t.get_mut("cond")) {
-                    None => self.diag("malformed", "conditional case needs cond".into(), node, &format!("{case_slot}/cond"), "", "", false),
+                    None => self.diag(
+                        "malformed",
+                        "conditional case needs cond".into(),
+                        node,
+                        &format!("{case_slot}/cond"),
+                        "",
+                        "",
+                        false,
+                    ),
                     Some(c) => self.cond_container(c, node, &case_slot),
                 }
             }
@@ -635,8 +1173,19 @@ impl Walker<'_> {
 
 /// Every exact reference of `ty` = `value` in the snapshot, or in the one graph whose
 /// project-relative path key is `scope` (`Find`).
-pub fn find(snapshot: &IndexSnapshot, catalog: &Catalog, ty: &str, value: &str, scope: Option<&str>) -> Result<FindResult, String> {
-    let mut out = FindResult { generation: snapshot.generation, fingerprint: snapshot.fingerprint, catalog_generation: catalog.generation, ..FindResult::default() };
+pub fn find(
+    snapshot: &IndexSnapshot,
+    catalog: &Catalog,
+    ty: &str,
+    value: &str,
+    scope: Option<&str>,
+) -> Result<FindResult, String> {
+    let mut out = FindResult {
+        generation: snapshot.generation,
+        fingerprint: snapshot.fingerprint,
+        catalog_generation: catalog.generation,
+        ..FindResult::default()
+    };
     if ty.is_empty() {
         return Err("reference type is empty".into());
     }
@@ -661,7 +1210,11 @@ pub fn find(snapshot: &IndexSnapshot, catalog: &Catalog, ty: &str, value: &str, 
             out.diagnostics.push(Diagnostic {
                 path: e.rel.clone(),
                 code: (if e.readable { "incomplete_model" } else { "unreadable" }).to_owned(),
-                message: if e.error.is_empty() { "quest could not be inspected".to_owned() } else { e.error.clone() },
+                message: if e.error.is_empty() {
+                    "quest could not be inspected".to_owned()
+                } else {
+                    e.error.clone()
+                },
                 source: e.source().to_owned(),
                 // unread content can hide anything
                 blocking: true,
@@ -695,8 +1248,20 @@ pub fn find(snapshot: &IndexSnapshot, catalog: &Catalog, ty: &str, value: &str, 
 
 /// Renames a task and every proven `task_id` reference to it (`RenameTask`): all or nothing.
 /// `Err` carries the diagnostics that refused it.
-pub fn rename_task(q: &Graph, catalog: &Catalog, path: &str, from: &str, to: &str) -> Result<(Graph, usize), Vec<Diagnostic>> {
-    let memory = |code: &str, message: String| Diagnostic { path: path.to_owned(), code: code.to_owned(), message, source: "memory".into(), ..Diagnostic::default() };
+pub fn rename_task(
+    q: &Graph,
+    catalog: &Catalog,
+    path: &str,
+    from: &str,
+    to: &str,
+) -> Result<(Graph, usize), Vec<Diagnostic>> {
+    let memory = |code: &str, message: String| Diagnostic {
+        path: path.to_owned(),
+        code: code.to_owned(),
+        message,
+        source: "memory".into(),
+        ..Diagnostic::default()
+    };
     if !catalog.loaded() {
         return Err(vec![memory("catalog_unavailable", format!("catalog unavailable: {}", catalog.error))]);
     }
@@ -746,13 +1311,16 @@ mod tests {
             Ok(g) => g,
             Err(e) => panic!("{}", e.message),
         };
-        let (after, n) = match rename_task(&g, &cat, "quests/dialog_branching.nqasset", "kill_boars", "cull") {
+        let (after, n) = match rename_task(&g, &cat, "quests/dialog_branching.nqasset", "kill_boars", "cull")
+        {
             Ok(r) => r,
             Err(d) => panic!("{:?}", d.iter().map(Diagnostic::text).collect::<Vec<_>>()),
         };
         assert_eq!(n, 2);
         assert!(after.find_task("cull").is_some());
         assert!(after.find_task("kill_boars").is_none());
-        assert!(matches!(rename_task(&g, &cat, "p", "nope", "x"), Err(d) if d.first().is_some_and(|d| d.code == "missing_declaration")));
+        assert!(
+            matches!(rename_task(&g, &cat, "p", "nope", "x"), Err(d) if d.first().is_some_and(|d| d.code == "missing_declaration"))
+        );
     }
 }

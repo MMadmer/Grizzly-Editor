@@ -70,7 +70,8 @@ fn editor_root_text(editor: &Editor) -> String {
 async fn list_projects(ed: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
     let list = Projects::of(&ed).list(&ed).await;
     let entries = list.entries();
-    let states = ed.exec.io(move || entries.into_iter().map(|e| (list::entry_state(&e), e)).collect::<Vec<_>>()).await;
+    let states =
+        ed.exec.io(move || entries.into_iter().map(|e| (list::entry_state(&e), e)).collect::<Vec<_>>()).await;
     let projects: Vec<Value> = states
         .iter()
         .map(|(state, path)| json!({ "name": paths::wire(list::entry_name(path)), "path": paths::wire(path), "state": state.as_str() }))
@@ -87,7 +88,9 @@ fn lets_go(ed: &Editor, args: &Args, origin: Origin) -> bool {
 }
 
 async fn open_project(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
-    let Some(path) = arg_path(&args, "path") else { return Err(CmdError::invalid("missing 'path' argument")) };
+    let Some(path) = arg_path(&args, "path") else {
+        return Err(CmdError::invalid("missing 'path' argument"));
+    };
     if let Ok((_, open)) = Project::of(&ed)
         && (open.root().eq_ignore_ascii_case(&path) || paths::same_path(open.root(), &path))
     {
@@ -96,9 +99,14 @@ async fn open_project(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     // -project <name> from the command line: not a folder, so the name of a listed project
     let mut folder = path.clone();
     let probe = PathBuf::from(&path);
-    if origin != Origin::Mcp && !paths::is_absolute(&path) && !ed.exec.io(move || fsys::dir_exists(&probe)).await {
+    if origin != Origin::Mcp
+        && !paths::is_absolute(&path)
+        && !ed.exec.io(move || fsys::dir_exists(&probe)).await
+    {
         let list = Projects::of(&ed).list(&ed).await;
-        if let Some(listed) = list.entries().into_iter().find(|e| list::entry_name(e).eq_ignore_ascii_case(&path)) {
+        if let Some(listed) =
+            list.entries().into_iter().find(|e| list::entry_name(e).eq_ignore_ascii_case(&path))
+        {
             folder = listed;
         }
     }
@@ -116,6 +124,9 @@ pub(crate) async fn open(ed: &Arc<Editor>, folder: &str, discard: bool) -> Resul
     }
     if ed.project_opt().is_some() {
         ed.refuse_unsaved(discard)?;
+        if discard {
+            ed.discard_all().await?;
+        }
         close_session(ed).await?;
     }
 
@@ -127,7 +138,8 @@ pub(crate) async fn open(ed: &Arc<Editor>, folder: &str, discard: bool) -> Resul
         .exec
         .io(move || {
             // the module skeleton first: a project that predates it gets it silently
-            let problems: Vec<String> = scaffolds.iter().filter_map(|s| s(&root, &scaffold_name).err()).collect();
+            let problems: Vec<String> =
+                scaffolds.iter().filter_map(|s| s(&root, &scaffold_name).err()).collect();
             let file = match gz_editor::fsx::read_opt(&root.join(project::FILE)) {
                 Ok(Some(bytes)) => ProjectFile::parse(&gz_base::text::decode_guess(&bytes)),
                 _ => ProjectFile::default(),
@@ -148,7 +160,10 @@ pub(crate) async fn open(ed: &Arc<Editor>, folder: &str, discard: bool) -> Resul
     let game_root = file.game_root().to_owned();
     let session = Arc::new(ProjectSession::new(PathBuf::from(folder)));
     let project = session.services.insert(Project::new(ed, folder, &name, file));
-    if let Err(e) = project.edit(FileCmd::Manifest { name: name.clone(), sdk_root: editor_root_text(ed), game_root }).await {
+    if let Err(e) = project
+        .edit(FileCmd::Manifest { name: name.clone(), sdk_root: editor_root_text(ed), game_root })
+        .await
+    {
         ed.log.warn(e.message);
     }
 
@@ -190,11 +205,22 @@ async fn remember_opened(ed: &Arc<Editor>, folder: &str) {
     }
 }
 
+/// Closes the open project when the editor quits (C++ `EditorProject::Close` on the way out):
+/// nothing is asked - the exit prompt settled the tabs, and graphs nobody settled are written by
+/// their own close hook.
+pub async fn close_project(ed: &Arc<Editor>) {
+    if let Err(e) = close_session(ed).await {
+        ed.log.warn(format!("the project did not close cleanly: {}", e.message));
+    }
+}
+
 /// Closes the open project: its hooks, the scene to reopen, the list, then the session goes.
 /// The caller settled unsaved work.
 pub(crate) async fn close_session(ed: &Arc<Editor>) -> Result<(), CmdError> {
     let Some(session) = ed.project_opt() else { return Ok(()) };
-    ProjectHooks::of(ed).run_close(ed, &session);
+    let hooks = ProjectHooks::of(ed);
+    hooks.run_before_close(ed, &session).await;
+    hooks.run_close(ed, &session);
     if let Some(project) = session.services.get::<Project>() {
         let root = project.root().to_owned();
         let scene = project.scene_to_remember();
@@ -215,7 +241,7 @@ async fn project_close(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
         return Err(refuse("no project is open: the Start page is up"));
     }
     let save = args.flag("save");
-    let mut discard = args.flag("discard");
+    let discard = args.flag("discard");
     if save && discard {
         return Err(refuse("save and discard exclude each other"));
     }
@@ -223,24 +249,31 @@ async fn project_close(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     let dirty_json = serde_json::to_value(&dirty).unwrap_or(Value::Null);
     if !dirty.is_empty() {
         if save {
-            // oracle: the C++ saved each tab here; no area of this build can save on request yet
-            return Err(refuse_with(
-                "unsaved work cannot be saved from project_close in this build: save each document, or pass discard=true",
-                Map::from_iter([("dirty".to_owned(), dirty_json)]),
-            ));
-        }
-        if !discard {
-            if origin != Origin::Unattended && !ed.flags.unattended {
-                return Err(CmdError::unsaved(dirty_json.clone()).with_data(json!({ "dirty": dirty_json, "note": "pass save=true or discard=true" })));
+            // every area saves its own documents; the first that cannot names itself
+            ed.save_all().await?;
+            let left = ed.dirty_docs();
+            if let Some(d) = left.first() {
+                return Err(refuse_with(
+                    format!("{}: it is still unsaved", d.name),
+                    Map::from_iter([(
+                        "dirty".to_owned(),
+                        serde_json::to_value(&left).unwrap_or(Value::Null),
+                    )]),
+                ));
             }
-            discard = true;
+        } else {
+            if !discard && origin != Origin::Unattended && !ed.flags.unattended {
+                return Err(CmdError::unsaved(dirty_json.clone())
+                    .with_data(json!({ "dirty": dirty_json, "note": "pass save=true or discard=true" })));
+            }
+            ed.discard_all().await?;
         }
     }
     close_session(&ed).await?;
     let mut out = Map::new();
     out.insert("start_page".into(), json!(true));
-    if discard && !dirty.is_empty() {
-        out.insert("discarded".into(), dirty_json);
+    if !dirty.is_empty() {
+        out.insert(if save { "saved" } else { "discarded" }.into(), dirty_json);
     }
     Ok(Value::Object(out))
 }
@@ -254,7 +287,8 @@ async fn project_create(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let projects = Projects::of(&ed);
     let list = projects.list(&ed).await;
     // no parent: the location the Start page's form shows
-    let parent = paths::trim_trailing(arg_path(&args, "parent").unwrap_or_else(|| Projects::create_parent(&list)));
+    let parent =
+        paths::trim_trailing(arg_path(&args, "parent").unwrap_or_else(|| Projects::create_parent(&list)));
     if ed.project_opt().is_some() {
         return Err(refuse("a project is open: project_close first, then create"));
     }
@@ -274,11 +308,20 @@ async fn project_create(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     }
     if !existed {
         let target = PathBuf::from(&folder);
-        let made = ed.exec.io(move || std::fs::create_dir_all(&target).map_err(|e| fsys::win32(&e)).map(|()| fsys::dir_exists(&target))).await;
+        let made = ed
+            .exec
+            .io(move || {
+                std::fs::create_dir_all(&target)
+                    .map_err(|e| fsys::win32(&e))
+                    .map(|()| fsys::dir_exists(&target))
+            })
+            .await;
         match made {
             Ok(true) => {}
             Ok(false) => return Err(refuse(format!("The folder cannot be created: {folder} (win32 0)."))),
-            Err(code) => return Err(refuse(format!("The folder cannot be created: {folder} (win32 {code})."))),
+            Err(code) => {
+                return Err(refuse(format!("The folder cannot be created: {folder} (win32 {code}).")));
+            }
         }
     }
     // a project there already is simply opened; the skeleton is written by the open's hooks
@@ -312,7 +355,13 @@ fn delete_fields(d: &DeleteInfo, counts: Option<&str>) -> Map<String, Value> {
     m.insert("nested_total".into(), json!(d.nested_total));
     m.insert("failed_total".into(), json!(d.failed_total));
     m.insert("nested".into(), d.nested.iter().map(|n| json!(paths::wire(n))).collect());
-    m.insert("failed".into(), d.failed.iter().map(|f| json!({ "path": paths::wire(&f.path), "reason": paths::wire(&f.reason) })).collect());
+    m.insert(
+        "failed".into(),
+        d.failed
+            .iter()
+            .map(|f| json!({ "path": paths::wire(&f.path), "reason": paths::wire(&f.reason) }))
+            .collect(),
+    );
     m
 }
 
@@ -330,7 +379,9 @@ async fn delete_context(ed: &Arc<Editor>) -> DeleteContext {
 }
 
 async fn project_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Some(path) = arg_path(&args, "path") else { return Err(refuse("missing 'path' - a project folder from list_projects")) };
+    let Some(path) = arg_path(&args, "path") else {
+        return Err(refuse("missing 'path' - a project folder from list_projects"));
+    };
     // the caller decided: no confirmation on this path, the same checks as the window's
     let cx = delete_context(&ed).await;
     let outcome = ed.exec.io(move || delete::delete_project(&cx, &path)).await;
@@ -339,13 +390,20 @@ async fn project_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             Projects::of(&ed).edit(ListCmd::Forget(info.path.clone())).await?;
             info.removed_from_list = true;
             if info.missing {
-                ed.log.info(format!("Project list: {} removed, the folder does not exist any more", info.path));
+                ed.log
+                    .info(format!("Project list: {} removed, the folder does not exist any more", info.path));
             } else {
-                ed.log.info(format!("Project deleted: {} ({} files, {} folders, {} links)", info.path, info.files, info.folders, info.links));
+                ed.log.info(format!(
+                    "Project deleted: {} ({} files, {} folders, {} links)",
+                    info.path, info.files, info.folders, info.links
+                ));
             }
             let mut out = Map::new();
             if info.missing {
-                out.insert("note".into(), json!("the folder does not exist any more - removed from the list only"));
+                out.insert(
+                    "note".into(),
+                    json!("the folder does not exist any more - removed from the list only"),
+                );
             }
             out.extend(delete_fields(&info, Some("deleted")));
             out.insert("removed_from_list".into(), json!(true));
@@ -366,7 +424,9 @@ async fn project_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 }
 
 async fn project_forget(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Some(path) = arg_path(&args, "path") else { return Err(refuse("missing 'path' - a folder from list_projects")) };
+    let Some(path) = arg_path(&args, "path") else {
+        return Err(refuse("missing 'path' - a folder from list_projects"));
+    };
     let projects = Projects::of(&ed);
     let list = projects.list(&ed).await;
     let Some(listed) = list.find_listed(&path) else { return Err(refuse("It is not in the project list.")) };
@@ -398,9 +458,13 @@ fn launch_explorer(folder: &str) -> Result<(), String> {
 }
 
 async fn project_reveal(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Some(path) = arg_path(&args, "path") else { return Err(refuse("missing 'path' - a project folder from list_projects")) };
+    let Some(path) = arg_path(&args, "path") else {
+        return Err(refuse("missing 'path' - a project folder from list_projects"));
+    };
     let list = Projects::of(&ed).list(&ed).await;
-    let Some(folder) = list.find_listed(&path) else { return Err(refuse("It is not in the project list - only a listed project is shown from here.")) };
+    let Some(folder) = list.find_listed(&path) else {
+        return Err(refuse("It is not in the project list - only a listed project is shown from here."));
+    };
     let probe = PathBuf::from(&folder);
     if !ed.exec.io(move || fsys::dir_exists(&probe)).await {
         return Err(refuse("The folder does not exist any more."));
@@ -426,7 +490,12 @@ async fn mounted(ed: &Arc<Editor>) -> Result<(Arc<Project>, Arc<GameFiles>), Cmd
 /// Copies a file of the game to `<project>\gamedata\<its path>`, the one write path of the DARF
 /// browser (`EditorGameContent::CopyToProject`). `Ok((target, existed))`, or the target, whether
 /// it existed and the C++ reason.
-fn copy_to_project(files: &GameFiles, project_root: &str, rel: &str, overwrite: bool) -> Result<(String, bool), (String, bool, &'static str)> {
+fn copy_to_project(
+    files: &GameFiles,
+    project_root: &str,
+    rel: &str,
+    overwrite: bool,
+) -> Result<(String, bool), (String, bool, &'static str)> {
     let Some(item) = files.get(rel) else { return Err((String::new(), false, "unknown file")) };
     let target = format!("{project_root}\\gamedata\\{}", paths::to_backslash(item.path));
     let existed = fsys::file_exists(Path::new(&target));
@@ -438,7 +507,9 @@ fn copy_to_project(files: &GameFiles, project_root: &str, rel: &str, overwrite: 
         let _ = std::fs::create_dir_all(parent);
     }
     fsys::clear_readonly(Path::new(&target));
-    let Ok(mut file) = std::fs::File::create(&target) else { return Err((target, existed, "can't create the target file")) };
+    let Ok(mut file) = std::fs::File::create(&target) else {
+        return Err((target, existed, "can't create the target file"));
+    };
     if std::io::Write::write_all(&mut file, &data).is_err() {
         return Err((target, existed, "write failed"));
     }
@@ -475,7 +546,9 @@ async fn darf_list(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 
 async fn darf_copy(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let (project, index) = mounted(&ed).await?;
-    let Some(path) = args.text("path").map(str::to_owned) else { return Err(refuse("missing 'path' argument")) };
+    let Some(path) = args.text("path").map(str::to_owned) else {
+        return Err(refuse("missing 'path' argument"));
+    };
     let overwrite = args.flag("overwrite");
     let root = project.root().to_owned();
     let outcome = ed.exec.io(move || copy_to_project(&index, &root, &path, overwrite)).await;
@@ -527,8 +600,12 @@ enum Transfer {
 
 async fn transfer(ed: Arc<Editor>, args: Args, op: Transfer) -> Reply {
     let project = content_project(&ed)?;
-    let Some(src) = args.text("src").map(str::to_owned) else { return Err(refuse("missing 'src' argument (';'-separated list allowed)")) };
-    let Some(dst) = args.text("dst").map(str::to_owned) else { return Err(refuse("missing 'dst' argument (target folder inside the project)")) };
+    let Some(src) = args.text("src").map(str::to_owned) else {
+        return Err(refuse("missing 'src' argument (';'-separated list allowed)"));
+    };
+    let Some(dst) = args.text("dst").map(str::to_owned) else {
+        return Err(refuse("missing 'dst' argument (target folder inside the project)"));
+    };
     let recursive = args.bool("recursive").unwrap_or(true);
     let overwrite = args.flag("overwrite");
     let p = project.clone();
@@ -567,7 +644,9 @@ fn no_game() -> Option<Arc<GameFiles>> {
 
 async fn content_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let project = content_project(&ed)?;
-    let Some(list) = args.text("path").map(str::to_owned) else { return Err(refuse("missing 'path' argument (';'-separated list allowed)")) };
+    let Some(list) = args.text("path").map(str::to_owned) else {
+        return Err(refuse("missing 'path' argument (';'-separated list allowed)"));
+    };
     let recursive = args.flag("recursive");
     let p = project.clone();
     let (rep, touched) = ed
@@ -589,7 +668,9 @@ async fn content_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 
 async fn content_mkdir(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let project = content_project(&ed)?;
-    let Some(path) = args.text("path").map(str::to_owned) else { return Err(refuse("missing 'path' argument (folder inside the project)")) };
+    let Some(path) = args.text("path").map(str::to_owned) else {
+        return Err(refuse("missing 'path' argument (folder inside the project)"));
+    };
     let p = project.clone();
     let (made, touched) = ed
         .exec
@@ -607,8 +688,12 @@ async fn content_mkdir(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 
 async fn content_rename(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let project = content_project(&ed)?;
-    let (Some(path), Some(name)) = (args.text("path").map(str::to_owned), args.text("name").map(str::to_owned)) else {
-        return Err(refuse("missing 'path' (file or folder inside the project) or 'name' (the new leaf name)"));
+    let (Some(path), Some(name)) =
+        (args.text("path").map(str::to_owned), args.text("name").map(str::to_owned))
+    else {
+        return Err(refuse(
+            "missing 'path' (file or folder inside the project) or 'name' (the new leaf name)",
+        ));
     };
     let p = project.clone();
     let (renamed, touched) = ed
@@ -637,14 +722,25 @@ async fn content_create(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     }
     let Ok((_, project)) = Project::of(&ed) else { return Err(refuse("no active project")) };
     let Some(kind) = TemplateKind::parse(&kind_text) else { return Err(refuse(KINDS)) };
-    // oracle: the C++ made it in the folder its content browser had open; the browser's state
-    // is not this crate's, so the caller names the folder (project-relative, the root without)
+    // `folder=` names the folder (project-relative); without it the browser's, through the hook
     let folder = match args.text("folder") {
         Some(f) => RelPath::new(f).map_err(|e| refuse(e.to_string()))?,
-        None => RelPath::root(),
+        None => {
+            // the folder the Content Browser shows, as the C++ made it there
+            let shown = ProjectHooks::of(&ed).content_folder(&ed).map_err(refuse)?;
+            if shown.is_empty() {
+                RelPath::root()
+            } else {
+                RelPath::new(&shown).map_err(|e| refuse(e.to_string()))?
+            }
+        }
     };
     let Some(template) = AssetTemplates::of(&ed).get(kind) else {
-        return Err(refuse(format!("Cannot create the {}: this build has no {} template", kind.noun(), kind.key())));
+        return Err(refuse(format!(
+            "Cannot create the {}: this build has no {} template",
+            kind.noun(),
+            kind.key()
+        )));
     };
     let root = PathBuf::from(project.root());
     let rel_folder = folder.clone();
@@ -653,13 +749,21 @@ async fn content_create(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         .io(move || -> Result<RelPath, String> {
             let dir = rel_folder.to_fs(&root);
             if !fsys::dir_exists(&dir) {
-                return Err(format!("Cannot create the {}: the folder {} does not exist", kind.noun(), rel_folder.to_backslash()));
+                return Err(format!(
+                    "Cannot create the {}: the folder {} does not exist",
+                    kind.noun(),
+                    rel_folder.to_backslash()
+                ));
             }
-            let found = (1..=999u32).map(|n| (n, kind.leaf(n))).find(|(_, leaf)| std::fs::symlink_metadata(dir.join(leaf)).is_err());
+            let found = (1..=999u32)
+                .map(|n| (n, kind.leaf(n)))
+                .find(|(_, leaf)| std::fs::symlink_metadata(dir.join(leaf)).is_err());
             let Some((n, leaf)) = found else { return Err(kind.too_many().to_owned()) };
             let stem = leaf.rfind('.').and_then(|d| leaf.get(..d)).unwrap_or(&leaf).to_owned();
-            let bytes = template(&TemplateCx { stem: &stem, n }).map_err(|e| format!("Cannot create the {}: {e}", kind.noun()))?;
-            gz_editor::fsx::write_atomic(&dir.join(&leaf), &bytes).map_err(|e| format!("Cannot create the {}: {e}", kind.noun()))?;
+            let bytes = template(&TemplateCx { stem: &stem, n })
+                .map_err(|e| format!("Cannot create the {}: {e}", kind.noun()))?;
+            gz_editor::fsx::write_atomic(&dir.join(&leaf), &bytes)
+                .map_err(|e| format!("Cannot create the {}: {e}", kind.noun()))?;
             rel_folder.join(&leaf).map_err(|e| e.to_string())
         })
         .await
@@ -711,7 +815,9 @@ async fn list_assets(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let items = if category == "Levels" {
         level_names(&ed).await
     } else {
-        let Some(provider) = AssetLists::of(&ed).get(category) else { return Err(refuse("category has no enumerator in this build")) };
+        let Some(provider) = AssetLists::of(&ed).get(category) else {
+            return Err(refuse("category has no enumerator in this build"));
+        };
         let editor = ed.clone();
         ed.exec.io(move || provider(&editor)).await
     };

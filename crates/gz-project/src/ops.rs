@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
-use gz_vfs::GameFiles;
 use crate::fsys;
 use crate::{asset_kind, paths};
+use gz_vfs::GameFiles;
 
 /// The first entries of each detail list a report keeps; the counters stay exact.
 const MAX_DETAILS: usize = 64;
@@ -62,7 +62,11 @@ impl Report {
     /// and `details_truncated` when the lists no longer tell the whole story.
     #[must_use]
     pub fn fields(&self) -> Map<String, Value> {
-        let details = |v: &[Failure]| -> Value { v.iter().map(|f| json!({ "path": paths::wire(&f.path), "reason": paths::wire(&f.reason) })).collect() };
+        let details = |v: &[Failure]| -> Value {
+            v.iter()
+                .map(|f| json!({ "path": paths::wire(&f.path), "reason": paths::wire(&f.reason) }))
+                .collect()
+        };
         let mut m = Map::new();
         m.insert("files".into(), json!(self.files));
         m.insert("folders".into(), json!(self.dirs));
@@ -70,7 +74,9 @@ impl Report {
         m.insert("failed".into(), json!(self.failed));
         m.insert("errors".into(), details(&self.failures));
         m.insert("skips".into(), details(&self.skips));
-        if (self.failures.len() as u64) < u64::from(self.failed) || (self.skips.len() as u64) < u64::from(self.skipped) {
+        if (self.failures.len() as u64) < u64::from(self.failed)
+            || (self.skips.len() as u64) < u64::from(self.skipped)
+        {
             m.insert("details_truncated".into(), json!(true));
         }
         m
@@ -99,7 +105,8 @@ pub fn resolve_source(root: Option<&str>, path: &str) -> Result<String, String> 
 /// A path PROVEN to sit inside the project root.
 pub fn resolve_in_project(root: &str, path: &str) -> Result<String, String> {
     let out = resolve_source(Some(root), path)?;
-    let root = paths::lexical_normalize(root).ok_or_else(|| "the project root is not a usable absolute path".to_owned())?;
+    let root = paths::lexical_normalize(root)
+        .ok_or_else(|| "the project root is not a usable absolute path".to_owned())?;
     if !paths::is_inside(&root, &out) {
         return Err("path leaves the project folder - only the project is writable".into());
     }
@@ -161,7 +168,14 @@ impl<'a> FileOps<'a> {
         }
     }
 
-    fn copy_tree(&mut self, src_dir: &str, dst_dir: &str, recursive: bool, overwrite: bool, rep: &mut Report) {
+    fn copy_tree(
+        &mut self,
+        src_dir: &str,
+        dst_dir: &str,
+        recursive: bool,
+        overwrite: bool,
+        rep: &mut Report,
+    ) {
         if !ensure_dir(dst_dir) {
             rep.fail(dst_dir, "cannot create the target folder (win32 0)");
             return;
@@ -307,14 +321,26 @@ impl<'a> FileOps<'a> {
 
     /// Moves `src` inside the project into the project FOLDER `dst_dir`. Both sides must be in
     /// the project.
-    pub fn move_entry(&mut self, src: &str, dst_dir: &str, recursive: bool, overwrite: bool, rep: &mut Report) {
+    pub fn move_entry(
+        &mut self,
+        src: &str,
+        dst_dir: &str,
+        recursive: bool,
+        overwrite: bool,
+        rep: &mut Report,
+    ) {
         let dst_root = match resolve_in_project(self.root, dst_dir) {
             Ok(p) => p,
             Err(e) => return rep.fail(dst_dir, e),
         };
         let from = match resolve_in_project(self.root, src) {
             Ok(p) => p,
-            Err(e) => return rep.fail(src, format!("{e} (a move deletes its source, so read-only sources can only be copied)")),
+            Err(e) => {
+                return rep.fail(
+                    src,
+                    format!("{e} (a move deletes its source, so read-only sources can only be copied)"),
+                );
+            }
         };
         let from_path = Path::new(&from);
         if !fsys::dir_exists(from_path) && !fsys::file_exists(from_path) {
@@ -343,16 +369,18 @@ impl<'a> FileOps<'a> {
             match std::fs::rename(&from, &target) {
                 Ok(()) => rep.files += 1,
                 // across volumes: copy, then drop the source
-                Err(e) if fsys::win32(&e) == fsys::ERROR_NOT_SAME_DEVICE => match std::fs::copy(&from, &target) {
-                    Ok(_) => {
-                        fsys::clear_readonly(from_path);
-                        match std::fs::remove_file(&from) {
-                            Ok(()) => rep.files += 1,
-                            Err(e) => rep.fail(&from, win32_reason("move failed", &e)),
+                Err(e) if fsys::win32(&e) == fsys::ERROR_NOT_SAME_DEVICE => {
+                    match std::fs::copy(&from, &target) {
+                        Ok(_) => {
+                            fsys::clear_readonly(from_path);
+                            match std::fs::remove_file(&from) {
+                                Ok(()) => rep.files += 1,
+                                Err(e) => rep.fail(&from, win32_reason("move failed", &e)),
+                            }
                         }
+                        Err(e) => rep.fail(&from, win32_reason("move failed", &e)),
                     }
-                    Err(e) => rep.fail(&from, win32_reason("move failed", &e)),
-                },
+                }
                 Err(e) => rep.fail(&from, win32_reason("move failed", &e)),
             }
             return;
@@ -476,7 +504,9 @@ impl<'a> FileOps<'a> {
         if is_file && let Some(own) = asset_kind::own_extension(old_leaf) {
             match asset_kind::own_extension(&leaf) {
                 Some(typed) if !typed.eq_ignore_ascii_case(own) => {
-                    return Err(format!("a rename cannot turn a {own} into a {typed} - the extension is the kind of the asset"));
+                    return Err(format!(
+                        "a rename cannot turn a {own} into a {typed} - the extension is the kind of the asset"
+                    ));
                 }
                 Some(_) => {}
                 None => {
@@ -539,8 +569,14 @@ mod tests {
     #[test]
     fn paths_stay_in_the_project() {
         assert_eq!(resolve_in_project("D:\\P", "a/b").as_deref(), Ok("D:\\P\\a\\b"));
-        assert_eq!(resolve_in_project("D:\\P", "..\\Other").unwrap_err(), "path leaves the project folder - only the project is writable");
-        assert_eq!(resolve_in_project("D:\\P", "D:\\P_backup\\x").unwrap_err(), "path leaves the project folder - only the project is writable");
+        assert_eq!(
+            resolve_in_project("D:\\P", "..\\Other").unwrap_err(),
+            "path leaves the project folder - only the project is writable"
+        );
+        assert_eq!(
+            resolve_in_project("D:\\P", "D:\\P_backup\\x").unwrap_err(),
+            "path leaves the project folder - only the project is writable"
+        );
         assert_eq!(resolve_in_project("D:\\P", "a\\..\\..\\..").unwrap_err(), "malformed path");
         assert_eq!(resolve_source(None, "rel").unwrap_err(), "no project is open");
         assert_eq!(resolve_source(None, "").unwrap_err(), "empty path");
@@ -555,10 +591,16 @@ mod tests {
         let darf = no_game;
         let mut ops = FileOps::new(&root, &darf);
 
-        assert_eq!(ops.rename("NewQuest.nqasset", "x.npcasset").unwrap_err(), "a rename cannot turn a .nqasset into a .npcasset - the extension is the kind of the asset");
+        assert_eq!(
+            ops.rename("NewQuest.nqasset", "x.npcasset").unwrap_err(),
+            "a rename cannot turn a .nqasset into a .npcasset - the extension is the kind of the asset"
+        );
         assert_eq!(ops.rename("NewQuest.nqasset", ".nqasset").unwrap_err(), "the new name is empty");
         assert_eq!(ops.rename("NewQuest.nqasset", "  ").unwrap_err(), "the new name is empty");
-        assert_eq!(ops.rename("NewQuest.nqasset", "a/b").unwrap_err(), "a name cannot contain \\ / : * ? \" < > |");
+        assert_eq!(
+            ops.rename("NewQuest.nqasset", "a/b").unwrap_err(),
+            "a name cannot contain \\ / : * ? \" < > |"
+        );
         assert_eq!(ops.rename("NewQuest.nqasset", "taken").unwrap_err(), "'taken.nqasset' is already there");
         assert_eq!(ops.rename("missing.nqasset", "x").unwrap_err(), "source not found");
 
@@ -567,7 +609,8 @@ mod tests {
         let (_, to) = ops.rename("route.v2.nqasset", "Route.V2.NQASSET").unwrap();
         assert!(to.ends_with("\\Route.V2.NQASSET"));
         // a case-only rename lands on the disk
-        let names: Vec<String> = fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        let names: Vec<String> =
+            fs::read_dir(&t.0).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         assert!(names.contains(&"Route.V2.NQASSET".to_owned()));
     }
 
@@ -590,7 +633,10 @@ mod tests {
         assert_eq!(rep.skipped, 1);
         let mut rep = Report::default();
         ops.copy("src", "src\\sub", true, false, &mut rep);
-        assert_eq!(rep.failures.first().map(|f| f.reason.as_str()), Some("destination is inside the source folder"));
+        assert_eq!(
+            rep.failures.first().map(|f| f.reason.as_str()),
+            Some("destination is inside the source folder")
+        );
         let mut rep = Report::default();
         ops.copy("nothing.txt", "dst", true, false, &mut rep);
         assert_eq!(rep.failures.first().map(|f| f.reason.as_str()), Some("source not found"));
@@ -602,18 +648,26 @@ mod tests {
         assert!(!t.0.join("dst\\src").exists());
         let mut rep = Report::default();
         ops.move_entry("C:\\Windows\\win.ini", "moved", true, false, &mut rep);
-        assert!(rep.failures.first().is_some_and(|f| f.reason.ends_with("(a move deletes its source, so read-only sources can only be copied)")));
+        assert!(rep.failures.first().is_some_and(|f| {
+            f.reason.ends_with("(a move deletes its source, so read-only sources can only be copied)")
+        }));
 
         let mut rep = Report::default();
         ops.delete("moved", false, &mut rep);
-        assert_eq!(rep.failures.first().map(|f| f.reason.as_str()), Some("folder is not empty (pass recursive=1)"));
+        assert_eq!(
+            rep.failures.first().map(|f| f.reason.as_str()),
+            Some("folder is not empty (pass recursive=1)")
+        );
         let mut rep = Report::default();
         ops.delete("moved", true, &mut rep);
         assert!(rep.ok());
         assert_eq!((rep.files, rep.dirs), (2, 3));
         let mut rep = Report::default();
         ops.delete(".", true, &mut rep);
-        assert_eq!(rep.failures.first().map(|f| f.reason.as_str()), Some("refusing to delete the project root itself"));
+        assert_eq!(
+            rep.failures.first().map(|f| f.reason.as_str()),
+            Some("refusing to delete the project root itself")
+        );
 
         assert!(ops.mkdir("gamedata/meshes/mod").unwrap().ends_with("\\gamedata\\meshes\\mod"));
         assert!(ops.mkdir("gamedata/meshes/mod").is_ok());

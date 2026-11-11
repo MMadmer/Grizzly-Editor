@@ -47,7 +47,8 @@ fn archive(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
     w.into_bytes()
 }
 
-const FSGAME: &str = "$arch_dir$ = false| false| $fs_root$| database\\\r\n$game_data$ = true| true| $fs_root$| gamedata\\\r\n";
+const FSGAME: &str =
+    "$arch_dir$ = false| false| $fs_root$| database\\\r\n$game_data$ = true| true| $fs_root$| gamedata\\\r\n";
 
 fn ogf() -> Vec<u8> {
     (0..4000u32).map(|i| (i % 13) as u8).collect()
@@ -57,7 +58,12 @@ fn game(t: &Temp) {
     t.put("fsgame.ltx", FSGAME.as_bytes());
     t.put(
         "database/a.db0",
-        &archive(&[("configs\\", b"", false), ("configs\\System.ltx", b"packed", false), ("meshes\\A.ogf", &ogf(), true), ("textures\\t.dds", b"old", false)]),
+        &archive(&[
+            ("configs\\", b"", false),
+            ("configs\\System.ltx", b"packed", false),
+            ("meshes\\A.ogf", &ogf(), true),
+            ("textures\\t.dds", b"old", false),
+        ]),
     );
     t.put("database/b.db1", &archive(&[("textures\\t.dds", b"newer", false)]));
     t.put("database/empty.db2", b"");
@@ -73,7 +79,14 @@ fn game(t: &Temp) {
 fn archive_index_round_trip() {
     let t = Temp::new("archive");
     let bytes: Vec<u8> = (0..20_000u32).map(|i| (i * 7 % 251) as u8).collect();
-    t.put("x.db0", &archive(&[("a\\b.bin", &bytes, true), ("Кириллица.txt", b"text", false), ("a\\b.bin", b"later", false)]));
+    t.put(
+        "x.db0",
+        &archive(&[
+            ("a\\b.bin", &bytes, true),
+            ("Кириллица.txt", b"text", false),
+            ("a\\b.bin", b"later", false),
+        ]),
+    );
     let entries = archive::read_directory(&t.0.join("x.db0")).unwrap();
     // a later record of a path replaces the earlier one in place
     assert_eq!(entries.len(), 2);
@@ -154,7 +167,10 @@ fn saved_index_is_checked_by_stamps() {
 
     // a new file in one folder and a rewritten archive: only those are read again
     t.put("gamedata/configs/new.ltx", b"n");
-    t.put("database/b.db1", &archive(&[("textures\\t.dds", b"newest!", false), ("textures\\u.dds", b"u", false)]));
+    t.put(
+        "database/b.db1",
+        &archive(&[("textures\\t.dds", b"newest!", false), ("textures\\u.dds", b"u", false)]),
+    );
     let third = second.refresh(&opts).unwrap();
     let s = third.stats();
     assert_eq!((s.archives_read, s.archives_reused), (1, 1));
@@ -175,5 +191,8 @@ fn saved_index_is_checked_by_stamps() {
 #[test]
 fn not_a_game() {
     let t = Temp::new("nogame");
-    assert_eq!(GameFiles::mount(&t.0, &MountOptions::default()).unwrap_err(), MountError::NotAGame("no fsgame.ltx - not an X-Ray game folder"));
+    assert_eq!(
+        GameFiles::mount(&t.0, &MountOptions::default()).unwrap_err(),
+        MountError::NotAGame("no fsgame.ltx - not an X-Ray game folder")
+    );
 }

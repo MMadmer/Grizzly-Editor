@@ -537,7 +537,9 @@ impl Viewport {
             let file = root.join("temp").join(session::FILE);
             let r = root.clone();
             editor.exec.spawn_io(move || {
-                let text = std::fs::read(&file).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+                let text = std::fs::read(&file)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
                 let cams = session::parse(&text);
                 vp.with(|s| {
                     if s.cameras_for.as_ref() == Some(&r) {
@@ -557,7 +559,8 @@ impl Viewport {
         let Some(svc) = SceneService::of_opt(editor) else { return };
         let snap = svc.store.snapshot();
         let key = snap.meta.file.as_ref().map(|f| session::scene_key(&root, f));
-        let (current, pose) = self.read(|s| (s.scene_key.clone(), Saved { hpb: s.nav.hpb, position: s.nav.position }));
+        let (current, pose) =
+            self.read(|s| (s.scene_key.clone(), Saved { hpb: s.nav.hpb, position: s.nav.position }));
         if key != current {
             let meta = (snap.meta.camera_hpb, snap.meta.camera_pos);
             self.with(|s| {
@@ -565,7 +568,10 @@ impl Viewport {
                     s.cameras.insert(old.clone(), pose);
                 }
                 if let Some(k) = &key {
-                    let saved = s.cameras.get(k).copied().or_else(|| (meta.0 != Vec3::ZERO || meta.1 != Vec3::ZERO).then_some(Saved { hpb: meta.0, position: meta.1 }));
+                    let saved = s.cameras.get(k).copied().or_else(|| {
+                        (meta.0 != Vec3::ZERO || meta.1 != Vec3::ZERO)
+                            .then_some(Saved { hpb: meta.0, position: meta.1 })
+                    });
                     if let Some(c) = saved {
                         s.nav.set(c.hpb, c.position);
                         s.nav.target = c.position + s.nav.direction() * 10.0;
@@ -655,7 +661,12 @@ impl Viewport {
             None => (Rev::ZERO, Rev::ZERO),
         };
         let stale = self.build.lock().packet.as_ref().is_some_and(|p| p.waiting_on_assets());
-        BuildKey { scene, library, view: self.rev(), assets: if stale { renderer.assets().generation() } else { 0 } }
+        BuildKey {
+            scene,
+            library,
+            view: self.rev(),
+            assets: if stale { renderer.assets().generation() } else { 0 },
+        }
     }
 
     /// Waits until no pass is being built: a picture asked over MCP draws the newest state.
@@ -670,7 +681,12 @@ impl Viewport {
 
     /// Builds a packet of the scene as the view stands now (`preview`: the picture of the scene
     /// alone). Publishes what the pass found: the gizmo's anchor, the lights drawn, the roof map.
-    pub(crate) async fn make_packet(self: &Arc<Self>, editor: &Arc<Editor>, renderer: &Arc<Renderer>, preview: bool) -> Option<Arc<FramePacket>> {
+    pub(crate) async fn make_packet(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        renderer: &Arc<Renderer>,
+        preview: bool,
+    ) -> Option<Arc<FramePacket>> {
         self.sync(editor);
         let game_on = self.read(|s| s.game.active());
         let game_data = if game_on { self.game_data(editor).await } else { GameData::default() };
@@ -726,11 +742,18 @@ impl Viewport {
                         baked = Some((t.elapsed().as_millis() as u32, count));
                         roof = Some(Arc::new(map));
                     }
-                    let all = lighting::collect(state, game_data.configs.as_deref(), game_data.anims.as_deref());
+                    let all =
+                        lighting::collect(state, game_data.configs.as_deref(), game_data.anims.as_deref());
                     let (drawn, in_view) = lighting::gather(&all, &frustum, cam.position);
                     let exposure = st.game.exposure_now();
                     view.background = lighting::clear_color(&st.game.at, exposure);
-                    let env = lighting::environment(&st.game.at, &st.game.settings, exposure, st.game.indoor_hemi, roof.clone());
+                    let env = lighting::environment(
+                        &st.game.at,
+                        &st.game.settings,
+                        exposure,
+                        st.game.indoor_hemi,
+                        roof.clone(),
+                    );
                     let lights = drawn.iter().map(GameLight::render).collect();
                     gathered = Some((drawn, in_view));
                     Some((env, lights))
@@ -785,7 +808,10 @@ impl Viewport {
     }
 
     /// The linked game's configs and light animations Game Lighting reads.
-    pub(crate) async fn game_data_for(&self, editor: &Arc<Editor>) -> (Option<Arc<gz_ltx::Ltx>>, Option<Arc<gz_fmt_xr::LightAnims>>) {
+    pub(crate) async fn game_data_for(
+        &self,
+        editor: &Arc<Editor>,
+    ) -> (Option<Arc<gz_ltx::Ltx>>, Option<Arc<gz_fmt_xr::LightAnims>>) {
         let d = self.game_data(editor).await;
         (d.configs, d.anims)
     }
@@ -799,7 +825,11 @@ impl Viewport {
         }
         let configs = link.configs().await.ok();
         let anims = match link.files().await {
-            Ok(files) => editor.exec.io(move || files.read("lanims.xr").ok().and_then(|b| gz_fmt_xr::LightAnims::read(&b).ok())).await.map(Arc::new),
+            Ok(files) => editor
+                .exec
+                .io(move || files.read("lanims.xr").ok().and_then(|b| gz_fmt_xr::LightAnims::read(&b).ok()))
+                .await
+                .map(Arc::new),
             Err(_) => None,
         };
         let data = GameData { rev: Some(rev), configs, anims };
@@ -810,9 +840,13 @@ impl Viewport {
     /// Draws the scene now and reads the picture back, cropped to the render size
     /// (`screenshot_viewport`): a pass of its own, also while Level is hidden.
     pub async fn picture(self: &Arc<Self>, editor: &Arc<Editor>) -> Result<Image, CmdError> {
-        let renderer = self.renderer_any(editor).ok_or_else(|| CmdError::new("no_window", "viewport RT unavailable"))?;
+        let renderer =
+            self.renderer_any(editor).ok_or_else(|| CmdError::new("no_window", "viewport RT unavailable"))?;
         self.settle().await;
-        let packet = self.make_packet(editor, &renderer, false).await.ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
+        let packet = self
+            .make_packet(editor, &renderer, false)
+            .await
+            .ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
         let serial = renderer.submit(packet.clone());
         {
             let mut b = self.build.lock();
@@ -820,7 +854,11 @@ impl Viewport {
             b.packet = Some(packet);
         }
         let r = renderer.clone();
-        let image = editor.exec.io(move || r.capture(serial, Duration::from_secs(10))).await.map_err(|e| CmdError::internal(format!("viewport RT unavailable: {e}")))?;
+        let image = editor
+            .exec
+            .io(move || r.capture(serial, Duration::from_secs(10)))
+            .await
+            .map_err(|e| CmdError::internal(format!("viewport RT unavailable: {e}")))?;
         editor.exec.wake().ping();
         Ok(image)
     }
@@ -901,7 +939,12 @@ struct WeatherRead {
 }
 
 /// `LoadWeather` over the linked game's files: the list, the default for the hour, the file.
-async fn read_weather(editor: &Arc<Editor>, weather: &str, hour: f32, settings: bool) -> Result<WeatherRead, String> {
+async fn read_weather(
+    editor: &Arc<Editor>,
+    weather: &str,
+    hour: f32,
+    settings: bool,
+) -> Result<WeatherRead, String> {
     let link = gz_game::GameLink::of(editor).map_err(|e| e.to_string())?;
     let files = link.files().await.map_err(|e| e.to_string())?;
     let start_date = match link.configs().await {
@@ -917,20 +960,37 @@ async fn read_weather(editor: &Arc<Editor>, weather: &str, hour: f32, settings: 
             let mut names: Vec<String> = files
                 .find("configs/environment/weathers", "ltx")
                 .into_iter()
-                .filter_map(|f| f.path.strip_prefix(dir).filter(|rest| !rest.contains('/')).map(|rest| rest.trim_end_matches(".ltx").to_owned()))
+                .filter_map(|f| {
+                    f.path
+                        .strip_prefix(dir)
+                        .filter(|rest| !rest.contains('/'))
+                        .map(|rest| rest.trim_end_matches(".ltx").to_owned())
+                })
                 .collect();
             names.sort();
             names.dedup();
             let settings = settings.then(|| {
                 let path = PathBuf::from(&root).join("appdata").join("user.ltx");
-                GameSettings::read(&std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default())
+                GameSettings::read(
+                    &std::fs::read(path)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default(),
+                )
             });
-            let name = if wanted.is_empty() { lighting::default_weather(&names, start_date.as_deref(), hour) } else { wanted };
+            let name = if wanted.is_empty() {
+                lighting::default_weather(&names, start_date.as_deref(), hour)
+            } else {
+                wanted
+            };
             let at = if name.is_empty() {
                 Err("the game has no weathers (configs\\environment\\weathers)".to_owned())
             } else {
                 match files.read(&format!("{dir}{}.ltx", name.to_lowercase())) {
-                    Ok(bytes) => lighting::weather_at(&gz_ltx::LtxDoc::parse(&gz_base::text::cp1251_to_utf8(&bytes)), &name, hour),
+                    Ok(bytes) => lighting::weather_at(
+                        &gz_ltx::LtxDoc::parse(&gz_base::text::cp1251_to_utf8(&bytes)),
+                        &name,
+                        hour,
+                    ),
                     Err(_) => Err(format!("no weather '{name}' in the game's configs")),
                 }
             };
@@ -945,7 +1005,10 @@ async fn read_weather(editor: &Arc<Editor>, weather: &str, hour: f32, settings: 
 pub async fn capture_preview(editor: &Arc<Editor>) -> Result<Image, String> {
     let vp = Viewport::of(editor);
     let renderer = vp.renderer_any(editor).ok_or_else(|| "the editor runs without a window".to_owned())?;
-    let packet = vp.make_packet(editor, &renderer, true).await.ok_or_else(|| "the scene could not be drawn".to_owned())?;
+    let packet = vp
+        .make_packet(editor, &renderer, true)
+        .await
+        .ok_or_else(|| "the scene could not be drawn".to_owned())?;
     // the packet's own assets may still be loading: give them a moment, as a thumbnail does
     let r = renderer.clone();
     let size = vp.read(|s| s.size);

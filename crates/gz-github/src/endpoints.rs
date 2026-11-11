@@ -52,7 +52,12 @@ impl Endpoints {
         let mirrors = if qa {
             // loopback only, like the game's own QA override
             let b = qa_text("GRIZZLY_CATALOG_BASE");
-            if (b.starts_with("http://127.0.0.1:") || b.starts_with("http://localhost:")) && b.ends_with('/') { vec![b] } else { Vec::new() }
+            if (b.starts_with("http://127.0.0.1:") || b.starts_with("http://localhost:")) && b.ends_with('/')
+            {
+                vec![b]
+            } else {
+                Vec::new()
+            }
         } else {
             CATALOG_MIRRORS.iter().map(|m| (*m).to_owned()).collect()
         };
@@ -188,7 +193,8 @@ mod tests {
         assert_eq!(qa.mirrors, vec!["http://127.0.0.1:5000/catalog/public/".to_owned()]);
         assert_eq!(qa.catalog_repo, "qa/catalog");
         assert!(qa.device_sign_in());
-        let remote = Endpoints::from_env(true, &env_of(&[("GRIZZLY_CATALOG_BASE", "https://example.com/catalog/")]));
+        let remote =
+            Endpoints::from_env(true, &env_of(&[("GRIZZLY_CATALOG_BASE", "https://example.com/catalog/")]));
         assert!(remote.mirrors.is_empty());
         let real = Endpoints::from_env(false, &env_of(&[("GRIZZLY_CATALOG_REPO", "evil/catalog")]));
         assert_eq!(real.catalog_repo, CATALOG_REPO);

@@ -60,7 +60,15 @@ const ORDER_KEYS: [&str; 5] = ["", "guard", "patrol", "wander", "follow"];
 
 impl Default for XmsOrder {
     fn default() -> Self {
-        Self { kind: 0, route: SmolStr::default(), look: SmolStr::default(), radius: 20.0, target: SmolStr::default(), distance: 3.0, flags: 0 }
+        Self {
+            kind: 0,
+            route: SmolStr::default(),
+            look: SmolStr::default(),
+            radius: 20.0,
+            target: SmolStr::default(),
+            distance: 3.0,
+            flags: 0,
+        }
     }
 }
 
@@ -113,7 +121,10 @@ impl XmsOrder {
                 }
             }
             4 => {
-                out.push_str(&format!("target = {}\r\n", if self.target.is_empty() { "actor" } else { &self.target }));
+                out.push_str(&format!(
+                    "target = {}\r\n",
+                    if self.target.is_empty() { "actor" } else { &self.target }
+                ));
                 out.push_str(&format!("distance = {}\r\n", fmt_g(self.distance)));
             }
             _ => {}
@@ -187,9 +198,15 @@ pub mod env_flags {
 pub enum SpawnEntity {
     Decoded(Arc<Entity>),
     /// The numbered values of an LTX `_spawndata` section.
-    RawLtx { section: SmolStr, values: Vec<String> },
+    RawLtx {
+        section: SmolStr,
+        values: Vec<String>,
+    },
     /// A binary spawn packet.
-    RawPacket { section: SmolStr, packet: Blob },
+    RawPacket {
+        section: SmolStr,
+        packet: Blob,
+    },
 }
 
 impl SpawnEntity {
@@ -256,17 +273,29 @@ impl SpawnData {
     /// `CanTakeOrder`: a stalker (`AI_STL_S`).
     #[must_use]
     pub fn can_take_order(&self) -> bool {
-        self.entity.as_ref().and_then(SpawnEntity::entity).and_then(Entity::class_info).is_some_and(|c| c.clsid.trim() == "AI_STL_S")
+        self.entity
+            .as_ref()
+            .and_then(SpawnEntity::entity)
+            .and_then(Entity::class_info)
+            .is_some_and(|c| c.clsid.trim() == "AI_STL_S")
     }
 
     /// The `_spawndata` section (`SSpawnData::LoadLTX`).
-    pub fn read_entity_ltx(r: &IniReader, s: &str, settings: Option<&dyn Settings>) -> Result<(SpawnEntity, u8), SceneError> {
+    pub fn read_entity_ltx(
+        r: &IniReader,
+        s: &str,
+        settings: Option<&dyn Settings>,
+    ) -> Result<(SpawnEntity, u8), SceneError> {
         if !r.line_exist(s, "name") {
             return Err(SceneError::load("SPAWNPOINT: Can't load Spawn Data."));
         }
         let section: SmolStr = r.r_string(s, "name")?.into();
         let fl = r.opt_u32(s, "fl").unwrap_or(0) as u8;
-        let mut values: Vec<(String, String)> = r.lines(s).into_iter().filter(|(k, _)| k.len() == 6 && k.bytes().all(|b| b.is_ascii_digit())).collect();
+        let mut values: Vec<(String, String)> = r
+            .lines(s)
+            .into_iter()
+            .filter(|(k, _)| k.len() == 6 && k.bytes().all(|b| b.is_ascii_digit()))
+            .collect();
         values.sort_by(|a, b| a.0.cmp(&b.0));
         let values: Vec<String> = values.into_iter().map(|(_, v)| v).collect();
         let entity = match settings.map(|st| Entity::from_scene(&values, st)) {
@@ -278,7 +307,11 @@ impl SpawnData {
 
     /// The point's own keys (`CSpawnPoint::LoadLTX` without the common part and the attached
     /// object).
-    pub fn read_ltx(r: &IniReader, s: &str, settings: Option<&dyn Settings>) -> Result<Body<Self>, SceneError> {
+    pub fn read_ltx(
+        r: &IniReader,
+        s: &str,
+        settings: Option<&dyn Settings>,
+    ) -> Result<Body<Self>, SceneError> {
         if !r.line_exist(s, "version") || r.r_u32(s, "version")? < 0x14 {
             return Ok(Body::Refused("SPAWNPOINT: Unsupported version.".into()));
         }
@@ -362,7 +395,11 @@ impl SpawnData {
                         w.w_string(&sd, "name", e.section());
                         w.w_u8(&sd, "fl", self.sd_flags);
                         for (i, v) in values.iter().enumerate() {
-                            w.w_raw(&sd, &IniValue::key(u32::try_from(i + 1).unwrap_or(u32::MAX)), &v.to_ltx());
+                            w.w_raw(
+                                &sd,
+                                &IniValue::key(u32::try_from(i + 1).unwrap_or(u32::MAX)),
+                                &v.to_ltx(),
+                            );
                         }
                     }
                     Some(SpawnEntity::RawLtx { section, values }) => {
@@ -465,7 +502,9 @@ impl SpawnData {
             return Ok(Body::Read(d));
         }
         let kind = match r.find_chunk(0xE417) {
-            Some((b, false)) if b.len() == 4 => PointKind::from_u32(u32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+            Some((b, false)) if b.len() == 4 => {
+                PointKind::from_u32(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            }
             _ => return Ok(Body::Refused("SPAWNPOINT: no type".into())),
         };
         let Some(kind) = kind else {
@@ -474,7 +513,8 @@ impl SpawnData {
         let mut d = Self::of_kind(kind);
         match kind {
             PointKind::RPoint => {
-                let c = r.open_chunk(0xE413)?.ok_or_else(|| SceneError::load("SPAWNPOINT: no respawn data"))?;
+                let c =
+                    r.open_chunk(0xE413)?.ok_or_else(|| SceneError::load("SPAWNPOINT: no respawn data"))?;
                 let mut q = c.reader();
                 d.rpoint.team = q.r_u8()?;
                 d.rpoint.kind = q.r_u8()?;
@@ -484,7 +524,9 @@ impl SpawnData {
                 }
             }
             PointKind::EnvMod => {
-                let c = r.open_chunk(0xE422)?.ok_or_else(|| SceneError::load("SPAWNPOINT: no environment data"))?;
+                let c = r
+                    .open_chunk(0xE422)?
+                    .ok_or_else(|| SceneError::load("SPAWNPOINT: no environment data"))?;
                 if c.bytes().len() != 28 {
                     return Err(SceneError::load("SPAWNPOINT: bad environment data"));
                 }
@@ -577,8 +619,16 @@ mod tests {
 
     #[test]
     fn order_section_matches_the_cpp() {
-        let o = XmsOrder { kind: 2, route: "patrol_1".into(), flags: ORDER_RUN | ORDER_HOSTILE, ..XmsOrder::default() };
-        assert_eq!(o.section(), "[xms_order]\r\norder = patrol\r\nroute = patrol_1\r\nmove = run\r\nhostile = true\r\n");
+        let o = XmsOrder {
+            kind: 2,
+            route: "patrol_1".into(),
+            flags: ORDER_RUN | ORDER_HOSTILE,
+            ..XmsOrder::default()
+        };
+        assert_eq!(
+            o.section(),
+            "[xms_order]\r\norder = patrol\r\nroute = patrol_1\r\nmove = run\r\nhostile = true\r\n"
+        );
         let g = XmsOrder { kind: 1, ..XmsOrder::default() };
         assert_eq!(g.section(), "[xms_order]\r\norder = guard\r\nradius = 20\r\n");
         assert_eq!(XmsOrder::kind_from_key("Follow"), 4);
@@ -588,7 +638,8 @@ mod tests {
     #[test]
     fn raw_entities_round_trip() {
         let mut d = SpawnData::of_kind(PointKind::Spawn);
-        d.entity = Some(SpawnEntity::RawLtx { section: "stalker".into(), values: vec!["1".into(), "\"x\"".into()] });
+        d.entity =
+            Some(SpawnEntity::RawLtx { section: "stalker".into(), values: vec!["1".into(), "\"x\"".into()] });
         let mut w = IniWriter::new();
         d.write_ltx(&mut w, "object_0", "s").unwrap();
         let r = IniReader::parse(&w.save(), "t").unwrap();
@@ -596,7 +647,8 @@ mod tests {
         assert_eq!(back.entity, d.entity);
 
         let mut p = SpawnData::of_kind(PointKind::Spawn);
-        p.entity = Some(SpawnEntity::RawPacket { section: "zone".into(), packet: Blob::from(&[1u8, 2, 3][..]) });
+        p.entity =
+            Some(SpawnEntity::RawPacket { section: "zone".into(), packet: Blob::from(&[1u8, 2, 3][..]) });
         let mut w = Writer::new();
         w.chunk(0xE411, |w| w.w_u16(0x17));
         p.write_stream(&mut w, "z").unwrap();

@@ -39,7 +39,9 @@ pub fn install(log: Log, opts: CrashOptions) {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("unnamed").to_owned();
-        let location = info.location().map_or_else(|| "unknown location".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
+        let location = info
+            .location()
+            .map_or_else(|| "unknown location".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
         let message = info
             .payload()
             .downcast_ref::<&'static str>()
@@ -65,7 +67,10 @@ pub fn install(log: Log, opts: CrashOptions) {
         write_report(&base.with_extension("txt"), &report);
         if fatal {
             let _ = gz_win::write_minidump(&base.with_extension("dmp"));
-            log.error(format!("the editor exits with code {CRASH_EXIT_CODE}; report: {}", base.with_extension("txt").display()));
+            log.error(format!(
+                "the editor exits with code {CRASH_EXIT_CODE}; report: {}",
+                base.with_extension("txt").display()
+            ));
             log.flush();
             std::process::exit(CRASH_EXIT_CODE);
         }

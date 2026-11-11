@@ -73,11 +73,39 @@ fn row(b: &mut ShellBuilder, command: &str, label: Option<&str>) {
 }
 
 pub(crate) fn install(b: &mut ShellBuilder) {
-    b.command(UiCommand::new(MOD_SETTINGS, "Mod", "Mod Settings", Icon::Settings, |cx| cx.requests.open(OpenRequest::kind(crate::settings::TAB))).enabled(has_project));
-    b.command(UiCommand::new(BUILD_INTO_GAME, "Mod", "Build Into Game", Icon::BuildMod, build::request_build_into_game).keys("Ctrl+B").enabled(|ed, _| can_build_into_game(ed)));
-    b.command(UiCommand::new(BUILD_TO_FOLDER, "Mod", "Build to Folder", Icon::GameFolder, |cx| build::request_export(cx, false)).enabled(has_project));
-    b.command(UiCommand::new(EXPORT_FLAT, "Mod", "Export Flat Gamedata", Icon::FileArchive, |cx| build::request_export(cx, true)).enabled(has_project));
-    b.command(UiCommand::new(PACKAGE, "Mod", "Package Release", Icon::Package, crate::package::request).enabled(has_project));
+    b.command(
+        UiCommand::new(MOD_SETTINGS, "Mod", "Mod Settings", Icon::Settings, |cx| {
+            cx.requests.open(OpenRequest::kind(crate::settings::TAB))
+        })
+        .enabled(has_project),
+    );
+    b.command(
+        UiCommand::new(
+            BUILD_INTO_GAME,
+            "Mod",
+            "Build Into Game",
+            Icon::BuildMod,
+            build::request_build_into_game,
+        )
+        .keys("Ctrl+B")
+        .enabled(|ed, _| can_build_into_game(ed)),
+    );
+    b.command(
+        UiCommand::new(BUILD_TO_FOLDER, "Mod", "Build to Folder", Icon::GameFolder, |cx| {
+            build::request_export(cx, false)
+        })
+        .enabled(has_project),
+    );
+    b.command(
+        UiCommand::new(EXPORT_FLAT, "Mod", "Export Flat Gamedata", Icon::FileArchive, |cx| {
+            build::request_export(cx, true)
+        })
+        .enabled(has_project),
+    );
+    b.command(
+        UiCommand::new(PACKAGE, "Mod", "Package Release", Icon::Package, crate::package::request)
+            .enabled(has_project),
+    );
     row(b, MOD_SETTINGS, None);
     row(b, BUILD_INTO_GAME, None);
     row(b, BUILD_TO_FOLDER, Some("Build to Folder..."));
@@ -113,7 +141,11 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
     tb.group(100);
     let can = can_build_into_game(&editor);
     if tb.split("build_mod", Icon::BuildMod, "Build Mod", &tip, can, Kind::Primary, |ui| {
-        if menu_item(ui, "Build Into Game", MenuItem { icon: Icon::BuildMod, enabled: !busy && can, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "Build Into Game",
+            MenuItem { icon: Icon::BuildMod, enabled: !busy && can, ..MenuItem::default() },
+        ) {
             picked = Some(Picked::IntoGame);
         }
         if menu_item(ui, "Build to Folder...", MenuItem { enabled: !busy, ..MenuItem::default() }) {
@@ -123,7 +155,11 @@ fn build_mod(tb: &mut gz_ui::Toolbar<'_, '_>, cx: &mut DocCx<'_>) {
             picked = Some(Picked::Flat);
         }
         ui.separator();
-        if menu_item(ui, "Package Release...", MenuItem { icon: Icon::Package, enabled: !busy, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "Package Release...",
+            MenuItem { icon: Icon::Package, enabled: !busy, ..MenuItem::default() },
+        ) {
             picked = Some(Picked::Package);
         }
     }) {

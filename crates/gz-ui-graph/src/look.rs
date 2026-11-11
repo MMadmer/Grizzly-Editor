@@ -101,7 +101,9 @@ pub fn family_of(icon: Icon) -> Family {
         Icon::Wait => Family::Wait,
         Icon::Dialog => Family::Dialog,
         Icon::Task | Icon::Quest | Icon::PdaMsg => Family::Task,
-        Icon::Role | Icon::Behaviour | Icon::Order | Icon::Squad | Icon::Relation | Icon::Person => Family::Role,
+        Icon::Role | Icon::Behaviour | Icon::Order | Icon::Squad | Icon::Relation | Icon::Person => {
+            Family::Role
+        }
         Icon::Item | Icon::Money | Icon::SpawnNpc | Icon::World => Family::Item,
         _ => Family::Muted,
     }
@@ -155,10 +157,14 @@ pub fn doc_noun(behaviour: bool) -> &'static str {
 /// `spot_task` -> `Spot task`: a catalog name read as a label (`Pretty`).
 #[must_use]
 pub fn pretty(name: &str) -> String {
-    const WORDS: [(&str, &str); 6] = [("id", "ID"), ("npc", "NPC"), ("npcs", "NPCs"), ("pda", "PDA"), ("lua", "Lua"), ("ui", "UI")];
+    const WORDS: [(&str, &str); 6] =
+        [("id", "ID"), ("npc", "NPC"), ("npcs", "NPCs"), ("pda", "PDA"), ("lua", "Lua"), ("ui", "UI")];
     let mut out = String::with_capacity(name.len() + 4);
     for w in name.split('_').filter(|w| !w.is_empty()) {
-        let mut word = WORDS.iter().find(|(from, _)| *from == w).map_or_else(|| w.to_owned(), |(_, to)| (*to).to_owned());
+        let mut word = WORDS
+            .iter()
+            .find(|(from, _)| *from == w)
+            .map_or_else(|| w.to_owned(), |(_, to)| (*to).to_owned());
         if out.is_empty()
             && let Some(first) = word.get(..1)
             && first.as_bytes().first().is_some_and(u8::is_ascii_lowercase)

@@ -294,8 +294,19 @@ pub fn value_summary(v: &Value, max_len: usize) -> String {
             if v.has("section") && v.has("ref") && !v.has("smart") && !v.has("place") {
                 return v.get_string("section", "");
             }
-            const REFS: [&str; 11] =
-                ["story", "ref", "profile", "smart", "spawn", "restrictor", "community", "level", "seconds", "game_hours", "game_minutes"];
+            const REFS: [&str; 11] = [
+                "story",
+                "ref",
+                "profile",
+                "smart",
+                "spawn",
+                "restrictor",
+                "community",
+                "level",
+                "seconds",
+                "game_hours",
+                "game_minutes",
+            ];
             if REFS.iter().any(|k| v.has(k)) {
                 return ref_summary(v);
             }

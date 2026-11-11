@@ -123,7 +123,9 @@ impl XcForm {
             return (out, bad("the triangles do not fit into the file"));
         };
         out.tris = raw
-            .chunks_exact(TRI)
+            .as_chunks::<TRI>()
+            .0
+            .iter()
             .map(|c| XcTri { v: [u32_at(c, 0), u32_at(c, 4), u32_at(c, 8)], material: u16_at(c, 12) })
             .collect();
 

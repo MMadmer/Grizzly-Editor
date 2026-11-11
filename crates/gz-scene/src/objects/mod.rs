@@ -17,16 +17,21 @@ use gz_base::{Blob, SmolStr};
 use gz_chunk::{Reader, Writer};
 use gz_entities::Settings;
 
-pub use shape::{CF_BOX, CF_SPHERE, FV_EMITTER, FV_OCCLUSION, FogData, SHAPE_COMMON, SHAPE_LEVEL_BOUND, ShapeData, ShapeDef, SoundEnvData};
+pub use shape::{
+    CF_BOX, CF_SPHERE, FV_EMITTER, FV_OCCLUSION, FogData, SHAPE_COMMON, SHAPE_LEVEL_BOUND, ShapeData,
+    ShapeDef, SoundEnvData,
+};
 pub use simple::{
-    Body, Fuzzy, GlowData, KeptObject, LT_DIRECT, LT_POINT, LT_SPOT, LightData, ParticlesData, SO_USE_SURFACE, SO_VISUAL_MODE,
-    SceneObjectData, SoundSrcData, SurfaceOverride, light_flags,
+    Body, Fuzzy, GlowData, KeptObject, LT_DIRECT, LT_POINT, LT_SPOT, LightData, ParticlesData,
+    SO_USE_SURFACE, SO_VISUAL_MODE, SceneObjectData, SoundSrcData, SurfaceOverride, light_flags,
 };
 pub use spawn::{
-    ENVMOD_CHOOSE_NAME, EnvMod, ORDER_HOSTILE, ORDER_RUN, PLAYERSTART_CHOOSE_NAME, PointKind, RPOINT_CHOOSE_NAME, RPoint,
-    SpawnData, SpawnEntity, XmsOrder, env_flags,
+    ENVMOD_CHOOSE_NAME, EnvMod, ORDER_HOSTILE, ORDER_RUN, PLAYERSTART_CHOOSE_NAME, PointKind,
+    RPOINT_CHOOSE_NAME, RPoint, SpawnData, SpawnEntity, XmsOrder, env_flags,
 };
-pub use way::{PortalData, SectorData, WAYPOINT_RADIUS, WAYPOINT_SIZE, WayData, WayPoint, fcolor_from, fcolor_get};
+pub use way::{
+    PortalData, SectorData, WAYPOINT_RADIUS, WAYPOINT_SIZE, WayData, WayPoint, fcolor_from, fcolor_get,
+};
 
 use crate::SceneError;
 use crate::class::ObjClass;
@@ -119,9 +124,10 @@ pub fn read_ltx(r: &IniReader, sect: &str, cx: &mut ReadCx<'_>) -> Result<Loaded
     if !r.section_exist(sect) || !r.line_exist(sect, "clsid") {
         return Err(SceneError::load(format!("{}: object section '{sect}' is invalid", r.file())));
     }
-    let class = ObjClass::from_id(r.r_u32(sect, "clsid")?)
-        .filter(|c| c.is_object_tool())
-        .ok_or_else(|| SceneError::load(format!("{}: object section '{sect}' names no object class", r.file())))?;
+    let class =
+        ObjClass::from_id(r.r_u32(sect, "clsid")?).filter(|c| c.is_object_tool()).ok_or_else(|| {
+            SceneError::load(format!("{}: object section '{sect}' names no object class", r.file()))
+        })?;
     let mut obj = Object::new(class, "", default_data(class));
     obj.set_co_flags(r.r_u32(sect, "co_flags")?);
     obj.name = r.r_string(sect, "name")?.into();
@@ -178,7 +184,9 @@ pub fn read_ltx(r: &IniReader, sect: &str, cx: &mut ReadCx<'_>) -> Result<Loaded
                     for i in 0..n.min(1) {
                         let a = read_ltx(r, &format!("{sect}_attached_{i}"), cx)?;
                         if a.obj.class != ObjClass::Shape {
-                            return Err(SceneError::load(format!("'{sect}': only a shape can be attached to a spawn point")));
+                            return Err(SceneError::load(format!(
+                                "'{sect}': only a shape can be attached to a spawn point"
+                            )));
                         }
                         d.attached = Some(Arc::new(a.obj));
                     }
@@ -222,7 +230,13 @@ fn unreachable_class() -> ObjData {
 
 /// `SaveObjectLTX`: `clear` takes bits out of the `co_flags` written (a group's members are
 /// saved without `flObjectInGroup`).
-pub fn write_ltx(w: &mut IniWriter, sect: &str, obj: &Object, state: &SceneState, clear: u32) -> Result<(), SceneError> {
+pub fn write_ltx(
+    w: &mut IniWriter,
+    sect: &str,
+    obj: &Object,
+    state: &SceneState,
+    clear: u32,
+) -> Result<(), SceneError> {
     w.w_u32(sect, "clsid", obj.class.id());
     if let ObjData::Kept(KeptObject::Ltx { sections, .. }) = &obj.data {
         for (suffix, lines) in sections {
@@ -270,7 +284,10 @@ pub fn write_ltx(w: &mut IniWriter, sect: &str, obj: &Object, state: &SceneState
             w.w_string(sect, "ref_name", &g.reference);
         }
         ObjData::Kept(KeptObject::Stream { .. }) => {
-            return Err(SceneError::Save(format!("'{}' came from a binary scene in a form that cannot be written as text.", obj.name)));
+            return Err(SceneError::Save(format!(
+                "'{}' came from a binary scene in a form that cannot be written as text.",
+                obj.name
+            )));
         }
         ObjData::Kept(KeptObject::Ltx { .. }) => {}
     }
@@ -289,17 +306,31 @@ pub fn read_stream_list(list: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Vec<Lo
 
 /// `ReadObjectStream`.
 pub fn read_stream(r: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneError> {
-    let class_id = r.open_chunk(CHUNK_OBJECT_CLASS)?.ok_or_else(|| SceneError::load("an object has no class chunk"))?.reader().r_u32()?;
+    let class_id = r
+        .open_chunk(CHUNK_OBJECT_CLASS)?
+        .ok_or_else(|| SceneError::load("an object has no class chunk"))?
+        .reader()
+        .r_u32()?;
     let class = ObjClass::from_id(class_id)
         .filter(|c| c.is_object_tool())
         .ok_or_else(|| SceneError::load(format!("an object names class {class_id}, which has no objects")))?;
-    let body_chunk = r.open_chunk(CHUNK_OBJECT_BODY)?.ok_or_else(|| SceneError::load("an object has no body"))?;
+    let body_chunk =
+        r.open_chunk(CHUNK_OBJECT_BODY)?.ok_or_else(|| SceneError::load("an object has no body"))?;
     let raw = Blob::from(body_chunk.bytes());
     let b = body_chunk.reader();
     let mut obj = Object::new(class, "", default_data(class));
-    let flags = b.open_chunk(CO_CHUNK_FLAGS)?.ok_or_else(|| SceneError::load("an object has no flags"))?.reader().r_u32()?;
+    let flags = b
+        .open_chunk(CO_CHUNK_FLAGS)?
+        .ok_or_else(|| SceneError::load("an object has no flags"))?
+        .reader()
+        .r_u32()?;
     obj.set_co_flags(flags);
-    obj.name = b.open_chunk(CO_CHUNK_NAME)?.ok_or_else(|| SceneError::load("an object has no name"))?.reader().r_stringz()?.into();
+    obj.name = b
+        .open_chunk(CO_CHUNK_NAME)?
+        .ok_or_else(|| SceneError::load("an object has no name"))?
+        .reader()
+        .r_stringz()?
+        .into();
     let mut has_transform = false;
     if let Some(c) = b.open_chunk(CO_CHUNK_TRANSFORM)? {
         let mut q = c.reader();
@@ -395,7 +426,9 @@ pub fn read_stream(r: &Reader<'_>, cx: &mut ReadCx<'_>) -> Result<Loaded, SceneE
                 _ => 0,
             };
             let reference = match b.open_chunk(4)? {
-                Some(c) if c.bytes().last() == Some(&0) && c.bytes().first().is_some_and(|b| *b != 0) => c.reader().r_stringz()?,
+                Some(c) if c.bytes().last() == Some(&0) && c.bytes().first().is_some_and(|b| *b != 0) => {
+                    c.reader().r_stringz()?
+                }
                 _ => String::new(),
             };
             if version < 0x11 || reference.is_empty() {
@@ -485,14 +518,18 @@ pub fn write_stream(w: &mut Writer, obj: &Object, state: &SceneState, clear: u32
         }
         ObjData::Group(g) => {
             body.chunk(0, |w| w.w_u16(GROUP_VERSION as u16));
-            let members: Vec<&Object> = g.members.iter().filter_map(|id| state.get(*id).map(AsRef::as_ref)).collect();
+            let members: Vec<&Object> =
+                g.members.iter().filter_map(|id| state.get(*id).map(AsRef::as_ref)).collect();
             body.open_chunk(1);
             write_stream_list(&mut body, members, state, co::IN_GROUP)?;
             body.close_chunk();
             body.chunk(4, |w| w.w_stringz(&g.reference));
         }
         ObjData::Kept(KeptObject::Ltx { .. }) => {
-            return Err(SceneError::Save(format!("'{}' came from a text scene in a form that cannot be written as a stream.", obj.name)));
+            return Err(SceneError::Save(format!(
+                "'{}' came from a text scene in a form that cannot be written as a stream.",
+                obj.name
+            )));
         }
         ObjData::Kept(KeptObject::Stream { .. }) => {}
     }
@@ -509,7 +546,10 @@ pub const PSOBJECT_SIZE: f32 = 0.5;
 pub const VIS_RADIUS: f32 = 0.25;
 
 fn rpoint_box(p: Vec3) -> Aabb {
-    Aabb::new(Vec3::new(p.x - RPOINT_SIZE, p.y, p.z - RPOINT_SIZE), Vec3::new(p.x + RPOINT_SIZE, p.y + RPOINT_SIZE * 2.0, p.z + RPOINT_SIZE))
+    Aabb::new(
+        Vec3::new(p.x - RPOINT_SIZE, p.y, p.z - RPOINT_SIZE),
+        Vec3::new(p.x + RPOINT_SIZE, p.y + RPOINT_SIZE * 2.0, p.z + RPOINT_SIZE),
+    )
 }
 
 /// `GetBox`: the world box. `local_ref` gives a library object's local box by reference name.
@@ -527,10 +567,16 @@ pub fn world_box(state: &SceneState, obj: &Object, local_ref: &dyn Fn(&str) -> O
         ObjData::Spawn(d) => {
             let mut b = match d.kind {
                 PointKind::RPoint => rpoint_box(p),
-                PointKind::EnvMod => point_box(p, if state.is_selected(obj.id) { d.env.radius } else { ENVMOD_SIZE }),
+                PointKind::EnvMod => {
+                    point_box(p, if state.is_selected(obj.id) { d.env.radius } else { ENVMOD_SIZE })
+                }
                 PointKind::PlayerStart => Aabb::new(
                     Vec3::new(p.x - PLAYERSTART_HALF_WIDTH, p.y, p.z - PLAYERSTART_HALF_WIDTH),
-                    Vec3::new(p.x + PLAYERSTART_HALF_WIDTH, p.y + PLAYERSTART_HEIGHT, p.z + PLAYERSTART_HALF_WIDTH),
+                    Vec3::new(
+                        p.x + PLAYERSTART_HALF_WIDTH,
+                        p.y + PLAYERSTART_HEIGHT,
+                        p.z + PLAYERSTART_HALF_WIDTH,
+                    ),
                 ),
                 PointKind::Spawn => match d.attached.as_ref().and_then(|a| attached_box(a)) {
                     Some(sb) => sb,
@@ -626,7 +672,11 @@ mod tests {
         if let ObjData::SceneObject(s) = &mut o.data {
             s.reference = "props\\box_1".into();
             s.flags = SO_USE_SURFACE;
-            s.surfaces.push(SurfaceOverride { name: "default".into(), texture: "a\\b".into(), ..SurfaceOverride::default() });
+            s.surfaces.push(SurfaceOverride {
+                name: "default".into(),
+                texture: "a\\b".into(),
+                ..SurfaceOverride::default()
+            });
         }
         if let ObjData::Shape(s) = &mut o.data {
             s.shapes.push(ShapeDef::sphere(Vec3::ZERO, 2.0));

@@ -102,7 +102,9 @@ impl Log {
             warnings: AtomicU32::new(0),
             rev: RevCounter::new(),
         }));
-        let writer = std::thread::Builder::new().name("gz-log".to_owned()).spawn(move || write_loop(&rx, out, echo))?;
+        let writer = std::thread::Builder::new()
+            .name("gz-log".to_owned())
+            .spawn(move || write_loop(&rx, out, echo))?;
         Ok((log.clone(), LogGuard { log, writer: Some(writer) }))
     }
 

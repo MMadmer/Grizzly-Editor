@@ -9,7 +9,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use egui::{Align, Color32, CornerRadius, DragAndDrop, Id, LayerId, Layout, Order, Rect, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, UiBuilder, Vec2, pos2};
+use egui::{
+    Align, Color32, CornerRadius, DragAndDrop, Id, LayerId, Layout, Order, Rect, ScrollArea, Sense, Stroke,
+    StrokeKind, TextureHandle, TextureId, TextureOptions, Ui, UiBuilder, Vec2, pos2,
+};
 use gz_app::{DocCx, Document, OpenRequest, ShellBuilder, UiCommand};
 use gz_base::{RelPath, Rev};
 use gz_editor::Editor;
@@ -22,13 +25,18 @@ use gz_ui::grid::{Grid, chips, number, pick_field, switch, text_field};
 use gz_ui::list::{NavRowSpec, nav_row};
 use gz_ui::state::{busy_line, empty_state};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, MenuItem, PickAction, PropFlags, PropertyGrid, Toolbar, Tone, icon_button_sized, icons, menu_item, metrics, palette, segmented};
+use gz_ui::{
+    Font, Icon, Kind, MenuItem, PickAction, PropFlags, PropertyGrid, Tone, Toolbar, icon_button_sized, icons,
+    menu_item, metrics, palette, segmented,
+};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use crate::drop::{begin_drops, local_file_drop_zone};
 use crate::local::{local_check, local_drop_mark, local_list_header, local_multi_combo, local_toggle_row};
-use crate::screens::{Change, ScreensTab, Selection, View, commit, default_show, surface_mask, take_drop, take_one};
+use crate::screens::{
+    Change, ScreensTab, Selection, View, commit, default_show, surface_mask, take_drop, take_one,
+};
 
 /// pt (docs/UI_DESIGN.md, section 6).
 const LEFT_W: f32 = 260.0;
@@ -57,14 +65,28 @@ enum ThumbSlot {
 }
 
 /// Pictures of the layers, decoded on the pools and uploaded once per file version.
+/// A picture decoded for a file at its stamp: the texture and its size, `None` when it did not
+/// decode.
+/// The problems read for the manifest and the tree at their revisions.
+type ProblemsRead = ((Rev, Rev), Vec<String>);
+
+type ThumbArrival = (String, Option<Stamp>, Option<(TextureHandle, Vec2)>);
+
 #[derive(Default)]
 struct Thumbs {
     map: FxHashMap<String, (Option<Stamp>, ThumbSlot)>,
-    inbox: Arc<Mutex<Vec<(String, Option<Stamp>, Option<(TextureHandle, Vec2)>)>>>,
+    inbox: Arc<Mutex<Vec<ThumbArrival>>>,
 }
 
 impl Thumbs {
-    fn get(&mut self, editor: &Arc<Editor>, ctx: &egui::Context, root: &str, rel: &str, stamp: Option<Stamp>) -> Option<(TextureId, Vec2)> {
+    fn get(
+        &mut self,
+        editor: &Arc<Editor>,
+        ctx: &egui::Context,
+        root: &str,
+        rel: &str,
+        stamp: Option<Stamp>,
+    ) -> Option<(TextureId, Vec2)> {
         for (k, st, made) in self.inbox.lock().drain(..) {
             self.map.insert(k, (st, ThumbSlot::Ready(made)));
         }
@@ -78,7 +100,8 @@ impl Thumbs {
         }
         self.map.insert(rel.to_owned(), (stamp, ThumbSlot::Loading));
         let (inbox, ctx, ed) = (self.inbox.clone(), ctx.clone(), editor.clone());
-        let (path, key, ext) = (Path::new(root).join(rel), rel.to_owned(), gz_screens::import::extension(rel));
+        let (path, key, ext) =
+            (Path::new(root).join(rel), rel.to_owned(), gz_screens::import::extension(rel));
         let _task = editor.exec.spawn(async move {
             let bytes = ed.exec.io(move || std::fs::read(path).ok()).await;
             let name = format!("screens:{key}");
@@ -88,11 +111,22 @@ impl Thumbs {
                         .cpu(move || {
                             let mut img = gz_fmt_tex::load_image(&bytes, Some(&ext)).ok()?.image;
                             if img.width > THUMB_MAX {
-                                let h = (u64::from(img.height) * u64::from(THUMB_MAX) / u64::from(img.width)).max(1);
-                                img = gz_fmt_tex::resize(&img, THUMB_MAX, u32::try_from(h).ok()?, gz_fmt_tex::MipFilter::Default).ok()?;
+                                let h = (u64::from(img.height) * u64::from(THUMB_MAX) / u64::from(img.width))
+                                    .max(1);
+                                img = gz_fmt_tex::resize(
+                                    &img,
+                                    THUMB_MAX,
+                                    u32::try_from(h).ok()?,
+                                    gz_fmt_tex::MipFilter::Default,
+                                )
+                                .ok()?;
                             }
                             let size = [usize::try_from(img.width).ok()?, usize::try_from(img.height).ok()?];
-                            let handle = ctx.load_texture(name, egui::ColorImage::from_rgba_unmultiplied(size, &img.rgba), TextureOptions::LINEAR);
+                            let handle = ctx.load_texture(
+                                name,
+                                egui::ColorImage::from_rgba_unmultiplied(size, &img.rgba),
+                                TextureOptions::LINEAR,
+                            );
                             Some((handle, Vec2::new(img.width as f32, img.height as f32)))
                         })
                         .await
@@ -153,7 +187,7 @@ pub struct ScreensDoc {
     manifest_asked: bool,
     problems: Vec<String>,
     problems_key: Option<(Rev, Rev)>,
-    problems_in: Arc<Mutex<Option<((Rev, Rev), Vec<String>)>>>,
+    problems_in: Arc<Mutex<Option<ProblemsRead>>>,
     checking: Arc<AtomicBool>,
     checked_at: Option<Instant>,
     levels: Arc<Mutex<Option<Option<Vec<String>>>>>,
@@ -262,7 +296,18 @@ fn set_track(id: &str, f: impl Fn(&mut Track) + Send + Sync + 'static) -> Change
 
 /// A number edited by dragging or typing: shown from the drag while it lasts, saved when it is
 /// let go of. Returns the value to save.
-fn edited_number(ui: &mut Ui, edit: &mut Edit, key: &str, value: f32, speed: f32, unit: &str, lo: f32, hi: f32) -> Option<f32> {
+// every argument is one the caller decides at each call; a struct of them would only rename them
+#[allow(clippy::too_many_arguments)]
+fn edited_number(
+    ui: &mut Ui,
+    edit: &mut Edit,
+    key: &str,
+    value: f32,
+    speed: f32,
+    unit: &str,
+    lo: f32,
+    hi: f32,
+) -> Option<f32> {
     let mut v = match &edit.drag {
         Some((k, v)) if k == key => *v,
         _ => value,
@@ -364,7 +409,14 @@ impl ScreensDoc {
             && !self.checking.swap(true, Ordering::SeqCst)
         {
             self.checked_at = Some(Instant::now());
-            let (out, flag, ed, m, s, root) = (self.problems_in.clone(), self.checking.clone(), self.editor.clone(), manifest.clone(), l.s.clone(), session.root.clone());
+            let (out, flag, ed, m, s, root) = (
+                self.problems_in.clone(),
+                self.checking.clone(),
+                self.editor.clone(),
+                manifest.clone(),
+                l.s.clone(),
+                session.root.clone(),
+            );
             let _task = self.editor.exec.spawn(async move {
                 let list = gz_screens::problems(&ed, root, &m, s).await;
                 *out.lock() = Some((key, list));
@@ -426,15 +478,35 @@ impl ScreensDoc {
         let (ed, tab, flag) = (self.editor.clone(), self.tab.clone(), self.picking.clone());
         let start = self.tab.root.clone();
         let spawned = std::thread::Builder::new().name("gz-ui-pda.file".to_owned()).spawn(move || {
-            let picked = rfd::FileDialog::new().set_title("Choose a File").add_filter(filter, exts).set_directory(&start).pick_file();
+            let picked = rfd::FileDialog::new()
+                .set_title("Choose a File")
+                .add_filter(filter, exts)
+                .set_directory(&start)
+                .pick_file();
             flag.store(false, Ordering::SeqCst);
             let Some(file) = picked else { return };
             let file = file.display().to_string();
             let _task = ed.exec.clone().spawn(async move {
                 match pick {
                     Pick::Music => take_drop(&ed, &tab, vec![file], String::new(), -1, true).await,
-                    Pick::LayerFile(id, i) => take_one(&ed, &tab, file, Arc::new(move |s: &mut Screens, rel: &str| set_file(s, &id, i, rel, false))).await,
-                    Pick::LayerTexture(id, i) => take_one(&ed, &tab, file, Arc::new(move |s: &mut Screens, rel: &str| set_file(s, &id, i, rel, true))).await,
+                    Pick::LayerFile(id, i) => {
+                        take_one(
+                            &ed,
+                            &tab,
+                            file,
+                            Arc::new(move |s: &mut Screens, rel: &str| set_file(s, &id, i, rel, false)),
+                        )
+                        .await
+                    }
+                    Pick::LayerTexture(id, i) => {
+                        take_one(
+                            &ed,
+                            &tab,
+                            file,
+                            Arc::new(move |s: &mut Screens, rel: &str| set_file(s, &id, i, rel, true)),
+                        )
+                        .await
+                    }
                     Pick::TrackFile(id) => {
                         take_one(
                             &ed,
@@ -537,7 +609,11 @@ impl Frame<'_> {
             }
         }
         if !any {
-            text::status(ui, Tone::Muted, "Drop pictures, videos or shaders here. Without a screen the game shows its own.");
+            text::status(
+                ui,
+                Tone::Muted,
+                "Drop pictures, videos or shaders here. Without a screen the game shows its own.",
+            );
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
         if let Some(files) = local_file_drop_zone(ui, "drop_screens", Rect::from_min_max(from, to), false) {
@@ -615,10 +691,15 @@ impl Frame<'_> {
         painter.rect_filled(rect, CornerRadius::ZERO, p.base);
         for (i, l) in d.layers.iter().enumerate() {
             let kind = kind_of(&l.file);
-            let mut r = Rect::from_min_size(pos2(rect.min.x + l.x * 0.01 * w, rect.min.y + l.y * 0.01 * h), Vec2::new(l.w * 0.01 * w, l.h * 0.01 * h));
-            let picture = (kind == FileKind::Picture && gz_screens::import::extension(&l.file) == ".dds") || kind == FileKind::Gif;
+            let mut r = Rect::from_min_size(
+                pos2(rect.min.x + l.x * 0.01 * w, rect.min.y + l.y * 0.01 * h),
+                Vec2::new(l.w * 0.01 * w, l.h * 0.01 * h),
+            );
+            let picture = (kind == FileKind::Picture && gz_screens::import::extension(&l.file) == ".dds")
+                || kind == FileKind::Gif;
             let stamp = if picture { self.stamp(&l.file) } else { None };
-            let thumb = if picture { self.thumbs.get(self.editor, &ctx, self.root, &l.file, stamp) } else { None };
+            let thumb =
+                if picture { self.thumbs.get(self.editor, &ctx, self.root, &l.file, stamp) } else { None };
             if let Some((tid, size)) = thumb.filter(|(_, s)| s.x > 0.0 && s.y > 0.0) {
                 let mut uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
                 let (bw, bh) = (r.width(), r.height());
@@ -626,12 +707,18 @@ impl Frame<'_> {
                     Fit::Cover => {
                         let k = (bw / size.x).max(bh / size.y);
                         let (u, v) = (bw / k / size.x, bh / k / size.y);
-                        uv = Rect::from_min_max(pos2((1.0 - u) * 0.5, (1.0 - v) * 0.5), pos2((1.0 + u) * 0.5, (1.0 + v) * 0.5));
+                        uv = Rect::from_min_max(
+                            pos2((1.0 - u) * 0.5, (1.0 - v) * 0.5),
+                            pos2((1.0 + u) * 0.5, (1.0 + v) * 0.5),
+                        );
                     }
                     Fit::Contain => {
                         let k = (bw / size.x).min(bh / size.y);
                         let (ix, iy) = ((bw - size.x * k) * 0.5, (bh - size.y * k) * 0.5);
-                        r = Rect::from_min_max(pos2(r.min.x + ix, r.min.y + iy), pos2(r.max.x - ix, r.max.y - iy));
+                        r = Rect::from_min_max(
+                            pos2(r.min.x + ix, r.min.y + iy),
+                            pos2(r.max.x - ix, r.max.y - iy),
+                        );
                     }
                     Fit::Stretch => {}
                 }
@@ -641,7 +728,12 @@ impl Frame<'_> {
             } else if kind != FileKind::None {
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, p.border), StrokeKind::Inside);
                 let c = pos2(r.center().x, r.center().y - 16.0 + i as f32 * 18.0);
-                icons::draw(&painter, kind_icon(kind), Rect::from_center_size(c, Vec2::splat(16.0)), p.text_secondary);
+                icons::draw(
+                    &painter,
+                    kind_icon(kind),
+                    Rect::from_center_size(c, Vec2::splat(16.0)),
+                    p.text_secondary,
+                );
             }
         }
         ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, p.border), StrokeKind::Inside);
@@ -650,7 +742,14 @@ impl Frame<'_> {
     fn pick(&mut self, ui: &mut Ui, id_salt: &str, value: &str, on_clear: Change, browse: Pick) {
         match pick_field(ui, id_salt, value, !value.is_empty()) {
             PickAction::Clear => self.out.changes.push(on_clear),
-            PickAction::Browse => self.out.picks.push(("Screens and music", &["dds", "gif", "mp4", "webm", "wmv", "ogm", "ps", "s", "html", "htm", "png", "jpg", "jpeg", "tga", "bmp", "ogg"], browse)),
+            PickAction::Browse => self.out.picks.push((
+                "Screens and music",
+                &[
+                    "dds", "gif", "mp4", "webm", "wmv", "ogm", "ps", "s", "html", "htm", "png", "jpg",
+                    "jpeg", "tga", "bmp", "ogg",
+                ],
+                browse,
+            )),
             PickAction::None => {}
         }
     }
@@ -778,15 +877,53 @@ impl Frame<'_> {
                 painter.rect_filled(at, CornerRadius::same(3), p.hover);
             }
             let cy = at.center().y;
-            icons::draw(painter, Icon::Grip, Rect::from_min_size(pos2(at.min.x + 4.0, cy - 6.0), Vec2::splat(12.0)), p.text_disabled);
-            icons::draw(painter, kind_icon(kind), Rect::from_min_size(pos2(at.min.x + 20.0, cy - 7.0), Vec2::splat(14.0)), p.text_secondary);
+            icons::draw(
+                painter,
+                Icon::Grip,
+                Rect::from_min_size(pos2(at.min.x + 4.0, cy - 6.0), Vec2::splat(12.0)),
+                p.text_disabled,
+            );
+            icons::draw(
+                painter,
+                kind_icon(kind),
+                Rect::from_min_size(pos2(at.min.x + 20.0, cy - 7.0), Vec2::splat(14.0)),
+                p.text_secondary,
+            );
             let right = at.min.x + width - 26.0;
             let name = if l.file.is_empty() { "Empty: drop a file here" } else { leaf(&l.file) };
-            text::paint(painter, &Font::Body.id(), pos2(at.min.x + 40.0, cy), egui::Align2::LEFT_CENTER, if kind == FileKind::None { p.text_secondary } else { p.text }, name, Some((right - at.min.x - 120.0).max(0.0)), Clip::Start);
-            text::paint(painter, &Font::Small.id(), pos2(right - 68.0, cy), egui::Align2::LEFT_CENTER, p.text_secondary, kind.label(), None, Clip::End);
+            text::paint(
+                painter,
+                &Font::Body.id(),
+                pos2(at.min.x + 40.0, cy),
+                egui::Align2::LEFT_CENTER,
+                if kind == FileKind::None { p.text_secondary } else { p.text },
+                name,
+                Some((right - at.min.x - 120.0).max(0.0)),
+                Clip::Start,
+            );
+            text::paint(
+                painter,
+                &Font::Small.id(),
+                pos2(right - 68.0, cy),
+                egui::Align2::LEFT_CENTER,
+                p.text_secondary,
+                kind.label(),
+                None,
+                Clip::End,
+            );
             let b = Rect::from_min_size(pos2(right, at.min.y + 3.0), Vec2::splat(22.0));
             let mut child = ui.new_child(UiBuilder::new().id_salt(("gz-ui-pda.layer_remove", i)).max_rect(b));
-            if icon_button_sized(&mut child, Icon::Close, "Remove this layer. Its file stays in the project.", false, true, 22.0, metrics::GLYPH_ROW).clicked() {
+            if icon_button_sized(
+                &mut child,
+                Icon::Close,
+                "Remove this layer. Its file stays in the project.",
+                false,
+                true,
+                22.0,
+                metrics::GLYPH_ROW,
+            )
+            .clicked()
+            {
                 if selected {
                     self.view.sel_layer = -1;
                 }
@@ -812,9 +949,22 @@ impl Frame<'_> {
         {
             let painter = ctx.layer_painter(LayerId::new(Order::Tooltip, Id::unique("gz-ui-pda.layer_drag")));
             let name = if l.file.is_empty() { "Empty layer" } else { leaf(&l.file) };
-            let r = text::bounds(&ctx, &Font::Body.id(), pos2(pt.x + 14.0, pt.y + 4.0), egui::Align2::LEFT_TOP, name).expand2(Vec2::new(8.0, 4.0));
+            let r = text::bounds(
+                &ctx,
+                &Font::Body.id(),
+                pos2(pt.x + 14.0, pt.y + 4.0),
+                egui::Align2::LEFT_TOP,
+                name,
+            )
+            .expand2(Vec2::new(8.0, 4.0));
             painter.rect_filled(r, CornerRadius::same(metrics::RADIUS), Palette::alpha(p.overlay, 0.92));
-            painter.text(pos2(pt.x + 14.0, pt.y + 4.0), egui::Align2::LEFT_TOP, name, Font::Body.id(), p.text);
+            painter.text(
+                pos2(pt.x + 14.0, pt.y + 4.0),
+                egui::Align2::LEFT_TOP,
+                name,
+                Font::Body.id(),
+                p.text,
+            );
         }
         let to = pos2(from.x + ui.available_width(), ui.cursor().min.y + 8.0);
         if let Some(files) = local_file_drop_zone(ui, "drop_layers", Rect::from_min_max(from, to), false) {
@@ -880,9 +1030,17 @@ impl Frame<'_> {
         match self.levels {
             // values from a list are picked
             Some(known) => {
-                let free: Vec<String> = known.iter().filter(|k| !d.levels.iter().any(|l| l.eq_ignore_ascii_case(k))).cloned().collect();
+                let free: Vec<String> = known
+                    .iter()
+                    .filter(|k| !d.levels.iter().any(|l| l.eq_ignore_ascii_case(k)))
+                    .cloned()
+                    .collect();
                 let mut add: Option<String> = None;
-                let resp = gz_ui::Button::new("Add Level").kind(Kind::Ghost).icon(Icon::Plus).enabled(!free.is_empty(), "Every level of the linked game is on the list").show(ui);
+                let resp = gz_ui::Button::new("Add Level")
+                    .kind(Kind::Ghost)
+                    .icon(Icon::Plus)
+                    .enabled(!free.is_empty(), "Every level of the linked game is on the list")
+                    .show(ui);
                 let popup = ui.make_persistent_id("gz-ui-pda.add_level");
                 if resp.clicked() {
                     egui::Popup::toggle_id(ui.ctx(), popup);
@@ -904,7 +1062,10 @@ impl Frame<'_> {
             // no list of the game's levels: typed
             None => {
                 let resp = text_field(ui, &mut self.edit.level);
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.edit.level.trim().is_empty() {
+                if resp.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && !self.edit.level.trim().is_empty()
+                {
                     let level = std::mem::take(&mut self.edit.level).trim().to_owned();
                     let id = d.id.clone();
                     self.out.changes.push(set_screen(&id, move |d| d.levels.push(level.clone())));
@@ -1061,11 +1222,14 @@ impl Document for ScreensDoc {
     }
 
     fn tooltip(&self) -> Option<String> {
-        Some("The module's loading and menu screens and their music - saved to mod.ltx as you edit".to_owned())
+        Some(
+            "The module's loading and menu screens and their music - saved to mod.ltx as you edit".to_owned(),
+        )
     }
 
     fn alive(&self) -> bool {
-        self.tab.v.lock().open && self.editor.project_opt().is_some_and(|s| s.root.display().to_string() == self.tab.root)
+        self.tab.v.lock().open
+            && self.editor.project_opt().is_some_and(|s| s.root.display().to_string() == self.tab.root)
     }
 
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, _cx: &mut DocCx<'_>) {
@@ -1074,7 +1238,11 @@ impl Document for ScreensDoc {
             (v.surface.min(1), v.status.clone())
         };
         let (have, only_s, only_m) = self.local.as_ref().map_or((false, false, false), |l| {
-            (l.have, l.s.only_screens.get(surface).copied().unwrap_or(false), l.s.only_music.get(surface).copied().unwrap_or(false))
+            (
+                l.have,
+                l.s.only_screens.get(surface).copied().unwrap_or(false),
+                l.s.only_music.get(surface).copied().unwrap_or(false),
+            )
         });
         tb.group(2);
         let mut sfc = surface;
@@ -1087,7 +1255,14 @@ impl Document for ScreensDoc {
         tb.group(1);
         tb.status("Screens", Tone::Muted);
         let mut screens = usize::from(only_s);
-        if tb.segmented("policy_screens", "Screens", &mut screens, &["Mix In", "Only Mine"], "Mix In: yours come up among the game's and other mods'. Only Mine: nobody else's are shown.", have) {
+        if tb.segmented(
+            "policy_screens",
+            "Screens",
+            &mut screens,
+            &["Mix In", "Only Mine"],
+            "Mix In: yours come up among the game's and other mods'. Only Mine: nobody else's are shown.",
+            have,
+        ) {
             let only = screens == 1;
             self.apply(change(move |s| {
                 if let Some(slot) = s.only_screens.get_mut(surface) {
@@ -1126,7 +1301,13 @@ impl Document for ScreensDoc {
     fn body(&mut self, ui: &mut Ui, cx: &mut DocCx<'_>) {
         let full = ui.max_rect();
         if self.editor.project_opt().is_none() {
-            empty_state(ui, Icon::Picture, "No project", "Screens and music live in the mod.ltx of the open project.", None);
+            empty_state(
+                ui,
+                Icon::Picture,
+                "No project",
+                "Screens and music live in the mod.ltx of the open project.",
+                None,
+            );
             return;
         }
         self.refresh();
@@ -1135,7 +1316,13 @@ impl Document for ScreensDoc {
             return;
         };
         if !local.have {
-            if empty_state(ui, Icon::Picture, "No mod.ltx yet", "Screens and music live in the module's mod.ltx. Mod Settings makes it.", Some("Open Mod Settings")) {
+            if empty_state(
+                ui,
+                Icon::Picture,
+                "No mod.ltx yet",
+                "Screens and music live in the module's mod.ltx. Mod Settings makes it.",
+                Some("Open Mod Settings"),
+            ) {
                 cx.requests.open(OpenRequest::kind("mod_settings"));
             }
             self.local = Some(local);
@@ -1166,31 +1353,63 @@ impl Document for ScreensDoc {
             let gap = 8.0;
             let left = Rect::from_min_max(full.min, pos2((full.min.x + LEFT_W).min(full.max.x), full.max.y));
             let right = Rect::from_min_max(pos2((left.max.x + gap).min(full.max.x), full.min.y), full.max);
-            let mut l_ui = ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.screens_left").max_rect(left).layout(Layout::top_down(Align::Min)));
-            ScrollArea::vertical().id_salt("gz-ui-pda.screens_left_scroll").auto_shrink([false, false]).show(&mut l_ui, |ui| {
-                f.screens_list(ui);
-                ui.add_space(12.0);
-                f.music_list(ui);
-            });
-            let mut r_ui = ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.screens_right").max_rect(right).layout(Layout::top_down(Align::Min)));
-            ScrollArea::vertical().id_salt("gz-ui-pda.screens_right_scroll").auto_shrink([false, false]).show(&mut r_ui, |ui| {
-                let avail = ui.available_width();
-                let column = avail.min(COLUMN_W);
-                let x0 = ui.cursor().min.x + ((avail - column) * 0.5).max(0.0);
-                let col = Rect::from_min_size(pos2(x0, ui.cursor().min.y), Vec2::new(column, f32::INFINITY));
-                ui.scope_builder(UiBuilder::new().max_rect(col).layout(Layout::top_down(Align::Min)), |ui| {
-                    ui.set_width(column);
-                    let screen = (!f.view.sel_screen.is_empty()).then(|| f.s.screen(&f.view.sel_screen)).flatten().cloned();
-                    let track = (!f.view.sel_track.is_empty()).then(|| f.s.track(&f.view.sel_track)).flatten().cloned();
-                    if let Some(d) = screen {
-                        f.screen_details(ui, &d);
-                    } else if let Some(t) = track {
-                        f.track_details(ui, &t);
-                    } else {
-                        empty_state(ui, Icon::Picture, "Pick a screen or a track", "Or drop files anywhere on this tab.", None);
-                    }
+            let mut l_ui = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-pda.screens_left")
+                    .max_rect(left)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            ScrollArea::vertical().id_salt("gz-ui-pda.screens_left_scroll").auto_shrink([false, false]).show(
+                &mut l_ui,
+                |ui| {
+                    f.screens_list(ui);
+                    ui.add_space(12.0);
+                    f.music_list(ui);
+                },
+            );
+            let mut r_ui = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-pda.screens_right")
+                    .max_rect(right)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            ScrollArea::vertical()
+                .id_salt("gz-ui-pda.screens_right_scroll")
+                .auto_shrink([false, false])
+                .show(&mut r_ui, |ui| {
+                    let avail = ui.available_width();
+                    let column = avail.min(COLUMN_W);
+                    let x0 = ui.cursor().min.x + ((avail - column) * 0.5).max(0.0);
+                    let col =
+                        Rect::from_min_size(pos2(x0, ui.cursor().min.y), Vec2::new(column, f32::INFINITY));
+                    ui.scope_builder(
+                        UiBuilder::new().max_rect(col).layout(Layout::top_down(Align::Min)),
+                        |ui| {
+                            ui.set_width(column);
+                            let screen = (!f.view.sel_screen.is_empty())
+                                .then(|| f.s.screen(&f.view.sel_screen))
+                                .flatten()
+                                .cloned();
+                            let track = (!f.view.sel_track.is_empty())
+                                .then(|| f.s.track(&f.view.sel_track))
+                                .flatten()
+                                .cloned();
+                            if let Some(d) = screen {
+                                f.screen_details(ui, &d);
+                            } else if let Some(t) = track {
+                                f.track_details(ui, &t);
+                            } else {
+                                empty_state(
+                                    ui,
+                                    Icon::Picture,
+                                    "Pick a screen or a track",
+                                    "Or drop files anywhere on this tab.",
+                                    None,
+                                );
+                            }
+                        },
+                    );
                 });
-            });
             // what no list or layer took falls on the tab: sorted by what it is
             if let Some(files) = local_file_drop_zone(ui, "drop_tab", full, true) {
                 f.out.drops.push((files, String::new(), -1, false));
@@ -1203,7 +1422,10 @@ impl Document for ScreensDoc {
             if view.surface != before.surface {
                 v.surface = view.surface;
             }
-            if view.sel_screen != before.sel_screen || view.sel_track != before.sel_track || view.sel_layer != before.sel_layer {
+            if view.sel_screen != before.sel_screen
+                || view.sel_track != before.sel_track
+                || view.sel_layer != before.sel_layer
+            {
                 v.sel_screen = view.sel_screen;
                 v.sel_track = view.sel_track;
                 v.sel_layer = view.sel_layer;
@@ -1230,7 +1452,9 @@ pub fn install(b: &mut ShellBuilder) {
         Ok(Box::new(ScreensDoc::new(editor.clone(), tab)) as Box<dyn Document>)
     });
     b.command(
-        UiCommand::new("COMMAND_MOD_SCREENS", "Mod", "Screens & Music", Icon::Picture, |cx| cx.requests.open(OpenRequest::kind("screens")))
-            .enabled(|editor, _| editor.project_opt().is_some()),
+        UiCommand::new("COMMAND_MOD_SCREENS", "Mod", "Screens & Music", Icon::Picture, |cx| {
+            cx.requests.open(OpenRequest::kind("screens"))
+        })
+        .enabled(|editor, _| editor.project_opt().is_some()),
     );
 }

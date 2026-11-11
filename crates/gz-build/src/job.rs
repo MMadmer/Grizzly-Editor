@@ -84,7 +84,11 @@ impl CleanQuestion {
         Some(Self {
             id: "clean_target",
             title: "Replace Module Files",
-            headline: format!("{} holds {} this build does not write.", r.path, count_text(r.stale_count, "file", "files")),
+            headline: format!(
+                "{} holds {} this build does not write.",
+                r.path,
+                count_text(r.stale_count, "file", "files")
+            ),
             items: r.stale_names.clone(),
             total: r.stale_count,
             consequence: "Deleted for good - this cannot be undone. The folder then holds exactly this build.",
@@ -112,7 +116,7 @@ pub struct BuildStatus {
     pub stop_tip: &'static str,
 }
 
-fn bytes_text(bytes: u64) -> String {
+pub(crate) fn bytes_text(bytes: u64) -> String {
     let b = bytes as f64;
     if bytes >= 1 << 30 {
         format!("{:.1} GB", b / f64::from(1u32 << 30))
@@ -132,7 +136,11 @@ impl BuildStatus {
         }
         let mut out = format!("{} of {}", bytes_text(self.done), bytes_text(self.total));
         if self.files_total > 0 {
-            out.push_str(&format!(" \u{b7} {} of {} files", self.files.min(self.files_total), self.files_total));
+            out.push_str(&format!(
+                " \u{b7} {} of {} files",
+                self.files.min(self.files_total),
+                self.files_total
+            ));
         }
         out
     }
@@ -214,7 +222,11 @@ impl Builds {
             subtitle: req.target.clone(),
             steps,
             stop_label: if flat { "Stop Export" } else { "Stop Build" },
-            stop_tip: if flat { "Stops the export. The folder keeps the files written so far." } else { "Stops the build. The module in the target stays as it was." },
+            stop_tip: if flat {
+                "Stops the export. The folder keeps the files written so far."
+            } else {
+                "Stops the build. The module in the target stays as it was."
+            },
             ..BuildStatus::default()
         });
     }
@@ -297,7 +309,12 @@ fn listed(list: &[String], sep: &str) -> String {
 /// Runs a build to its end inside a job and answers what it did. The release packaging stages
 /// its module through this very function, so a release ships what a build ships and refuses
 /// what a build refuses.
-pub async fn run_build(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &BuildRequest, ctx: &JobCtx) -> BuildResult {
+pub async fn run_build(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    req: &BuildRequest,
+    ctx: &JobCtx,
+) -> BuildResult {
     let builds = Builds::of(editor);
     builds.begin(req);
     let feeder = Feeder { builds: builds.clone(), ctx: ctx.clone() };
@@ -313,7 +330,14 @@ pub async fn run_build(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req:
     out
 }
 
-async fn build(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &BuildRequest, feeder: &Feeder, out: &mut BuildResult, warnings: &mut Vec<String>) -> Result<(), String> {
+async fn build(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    req: &BuildRequest,
+    feeder: &Feeder,
+    out: &mut BuildResult,
+    warnings: &mut Vec<String>,
+) -> Result<(), String> {
     let ctx = &feeder.ctx;
     let flat = req.kind == BuildKind::Flat;
     feeder.stage(0, "Reading the project");
@@ -350,8 +374,18 @@ async fn build(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &BuildR
     // the areas, in parallel over the same walk; the first in their order that refuses decides
     let areas = checks.checks();
     if !areas.is_empty() {
-        feeder.stage(0, if areas.len() == 1 { areas.first().map_or("Checking the module", |c| c.stage()) } else { "Checking the module" });
-        let found = futures::future::join_all(areas.iter().map(|c| c.check(editor.clone(), session.clone(), walk.clone()))).await;
+        feeder.stage(
+            0,
+            if areas.len() == 1 {
+                areas.first().map_or("Checking the module", |c| c.stage())
+            } else {
+                "Checking the module"
+            },
+        );
+        let found = futures::future::join_all(
+            areas.iter().map(|c| c.check(editor.clone(), session.clone(), walk.clone())),
+        )
+        .await;
         for (check, problems) in areas.iter().zip(found) {
             let v = Verdict::of(&problems, check.headline(), false);
             warnings.extend(v.warnings);
@@ -372,7 +406,8 @@ async fn build(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &BuildR
     }
 
     feeder.stage(0, "Checking the target folder");
-    let (target, id, root, game) = (req.target.clone(), m.id.clone(), session.root.clone(), project.game_root());
+    let (target, id, root, game) =
+        (req.target.clone(), m.id.clone(), session.root.clone(), project.game_root());
     let dst = editor.exec.io(move || plan_target(&target, &id, flat, &root, &game)).await?;
     out.path.clone_from(&dst);
     still_open(editor, session, ctx)?;
@@ -424,9 +459,26 @@ async fn build(editor: &Arc<Editor>, session: &Arc<ProjectSession>, req: &BuildR
         editor.log.warn(format!("! [XMS] build: the game cannot open {name} - a character outside cp1251"));
     }
     if !unreadable.is_empty() {
-        warnings.push(format!("file names the game cannot open (characters outside cp1251): {}\n  {}", unreadable.len(), listed(&unreadable, "\n  ")));
+        warnings.push(format!(
+            "file names the game cannot open (characters outside cp1251): {}\n  {}",
+            unreadable.len(),
+            listed(&unreadable, "\n  ")
+        ));
     }
-    editor.log.info(format!("* [XMS] export {}: {} file(s) -> {dst}", if flat { "flat" } else { "module" }, out.files));
+    editor.log.info(format!(
+        "* [XMS] export {}: {} file(s) -> {dst}",
+        if flat { "flat" } else { "module" },
+        out.files
+    ));
+    // what is installed in the linked game changed: its modes and modules follow
+    // (C++ EditorGameModes::Invalidate)
+    let game = project.game_root();
+    if !flat && !game.is_empty() && gz_project::paths::same_path(&req.target, &game) {
+        let p = project.clone();
+        if let Err(e) = editor.exec.io(move || p.refresh_game()).await {
+            editor.log.warn(format!("the linked game could not be read again: {e}"));
+        }
+    }
     if req.remember_target
         && let Err(e) = project.set_value("xms", "export_target", &req.target).await
     {
@@ -444,12 +496,23 @@ mod tests {
         assert_eq!(bytes_text(600), "1 KB");
         assert_eq!(bytes_text(3 << 20), "3 MB");
         assert_eq!(bytes_text(3 << 29), "1.5 GB");
-        let s = BuildStatus { done: 1 << 20, total: 2 << 20, files: 3, files_total: 24, ..BuildStatus::default() };
+        let s = BuildStatus {
+            done: 1 << 20,
+            total: 2 << 20,
+            files: 3,
+            files_total: 24,
+            ..BuildStatus::default()
+        };
         assert_eq!(s.numbers(), "1 MB of 2 MB \u{b7} 3 of 24 files");
         let many: Vec<String> = (0..14).map(|i| format!("f{i}")).collect();
         assert!(listed(&many, ", ").ends_with("f11 and 2 more"));
         assert!(listed(&many, "\n  ").ends_with("f11\n  and 2 more"));
-        let refused = BuildResult { path: "D:\\G\\modules\\od".into(), err: "target already holds a module: 2 file(s) there are not part of this build".into(), stale_count: 2, ..BuildResult::default() };
+        let refused = BuildResult {
+            path: "D:\\G\\modules\\od".into(),
+            err: "target already holds a module: 2 file(s) there are not part of this build".into(),
+            stale_count: 2,
+            ..BuildResult::default()
+        };
         let q = CleanQuestion::of(&refused).map(|q| q.headline);
         assert_eq!(q.as_deref(), Some("D:\\G\\modules\\od holds 2 files this build does not write."));
         assert!(CleanQuestion::of(&BuildResult { ok: true, ..refused }).is_none());

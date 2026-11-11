@@ -3,13 +3,17 @@
 //! One Primary per surface. The Danger fill goes only on the destructive action; the button that
 //! opens the question is [`Kind::GhostDanger`]. A disabled button says why in its tooltip.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, Role, Widget, WidgetInfo};
+use egui::{
+    Align2, Color32, CornerRadius, Rect, Response, Role, Sense, Stroke, StrokeKind, Ui, Vec2, Widget,
+    WidgetInfo,
+};
 
 use crate::audit;
 use crate::font::Font;
 use crate::icons::{self, Icon};
 use crate::text;
 use crate::theme::{Palette, metrics, palette};
+use crate::units::em;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
@@ -33,7 +37,8 @@ struct Look {
 
 fn look(p: &Palette, kind: Kind, enabled: bool, hovered: bool, pressed: bool, checked: bool) -> Look {
     if !enabled {
-        let fill = if matches!(kind, Kind::Ghost | Kind::GhostDanger) { Color32::TRANSPARENT } else { p.input };
+        let fill =
+            if matches!(kind, Kind::Ghost | Kind::GhostDanger) { Color32::TRANSPARENT } else { p.input };
         return Look { fill, text: p.text_disabled, font: Font::Body };
     }
     let pick = |rest: Color32, hover: Color32, press: Color32| {
@@ -46,15 +51,27 @@ fn look(p: &Palette, kind: Kind, enabled: bool, hovered: bool, pressed: bool, ch
         }
     };
     match kind {
-        Kind::Secondary => Look { fill: pick(p.button, p.button_hover, p.pressed), text: p.text, font: Font::Body },
-        Kind::Primary => Look { fill: pick(p.primary, p.primary_hover, p.primary_pressed), text: p.on_fill, font: Font::Strong },
-        Kind::Danger => Look { fill: pick(p.danger, p.danger_hover, p.danger_pressed), text: p.on_fill, font: Font::Strong },
+        Kind::Secondary => {
+            Look { fill: pick(p.button, p.button_hover, p.pressed), text: p.text, font: Font::Body }
+        }
+        Kind::Primary => Look {
+            fill: pick(p.primary, p.primary_hover, p.primary_pressed),
+            text: p.on_fill,
+            font: Font::Strong,
+        },
+        Kind::Danger => Look {
+            fill: pick(p.danger, p.danger_hover, p.danger_pressed),
+            text: p.on_fill,
+            font: Font::Strong,
+        },
         Kind::Ghost => Look {
             fill: if checked { p.selection_focused } else { pick(Color32::TRANSPARENT, p.hover, p.pressed) },
             text: p.text,
             font: Font::Body,
         },
-        Kind::GhostDanger => Look { fill: pick(Color32::TRANSPARENT, p.hover, p.pressed), text: p.error, font: Font::Body },
+        Kind::GhostDanger => {
+            Look { fill: pick(Color32::TRANSPARENT, p.hover, p.pressed), text: p.error, font: Font::Body }
+        }
     }
 }
 
@@ -155,20 +172,35 @@ impl Widget for Button<'_> {
         let pad = 8.0;
         let gap = 6.0;
         // measured in the widest face a kind can use, so the width does not depend on the state
-        let measure_font = if matches!(self.kind, Kind::Primary | Kind::Danger) { Font::Strong } else { Font::Body };
+        let measure_font =
+            if matches!(self.kind, Kind::Primary | Kind::Danger) { Font::Strong } else { Font::Body };
         let font_id = measure_font.id();
         let mut text_w = text::width(ui.ctx(), &font_id, self.label);
         for other in self.label_set {
             text_w = text_w.max(text::width(ui.ctx(), &font_id, other));
         }
-        let icon_w = if self.icon.is_some() { metrics::GLYPH + if self.label.is_empty() { 0.0 } else { gap } } else { 0.0 };
-        let size = Vec2::new((pad * 2.0 + icon_w + text_w).max(self.min_size.x), self.min_size.y.max(metrics::FRAME));
+        let icon_w = if self.icon.is_some() {
+            metrics::GLYPH + if self.label.is_empty() { 0.0 } else { gap }
+        } else {
+            0.0
+        };
+        let size = Vec2::new(
+            (pad * 2.0 + icon_w + text_w).max(self.min_size.x),
+            self.min_size.y.max(metrics::FRAME),
+        );
         let sense = if self.enabled { Sense::click() } else { Sense::hover() };
         let (rect, mut resp) = ui.allocate_exact_size(size, sense);
         resp.widget_info(|| WidgetInfo::labeled(Role::Button, self.enabled, self.label));
 
         if ui.is_rect_visible(rect) {
-            let l = look(&p, self.kind, self.enabled, resp.hovered(), resp.is_pointer_button_down_on(), self.checked);
+            let l = look(
+                &p,
+                self.kind,
+                self.enabled,
+                resp.hovered(),
+                resp.is_pointer_button_down_on(),
+                self.checked,
+            );
             let painter = ui.painter();
             if l.fill != Color32::TRANSPARENT {
                 painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), l.fill);
@@ -176,12 +208,21 @@ impl Widget for Button<'_> {
             let content_w = icon_w + text::width(ui.ctx(), &l.font.id(), self.label);
             let mut x = rect.center().x - content_w * 0.5;
             if let Some(icon) = self.icon {
-                let r = Rect::from_min_size(egui::pos2(x, rect.center().y - metrics::GLYPH * 0.5), Vec2::splat(metrics::GLYPH));
+                let r = Rect::from_min_size(
+                    egui::pos2(x, rect.center().y - metrics::GLYPH * 0.5),
+                    Vec2::splat(metrics::GLYPH),
+                );
                 icons::draw(painter, icon, r, l.text);
                 x += icon_w;
             }
             if !self.label.is_empty() {
-                painter.text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, self.label, l.font.id(), l.text);
+                painter.text(
+                    egui::pos2(x, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    self.label,
+                    l.font.id(),
+                    l.text,
+                );
             }
             if resp.has_focus() {
                 focus_ring(ui, rect, &p);
@@ -203,7 +244,15 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, tip: &str, checked: bool, enabled: b
 }
 
 /// An icon button of another size: a row action is as tall as its row with a 14 pt glyph.
-pub fn icon_button_sized(ui: &mut Ui, icon: Icon, tip: &str, checked: bool, enabled: bool, side: f32, glyph: f32) -> Response {
+pub fn icon_button_sized(
+    ui: &mut Ui,
+    icon: Icon,
+    tip: &str,
+    checked: bool,
+    enabled: bool,
+    side: f32,
+    glyph: f32,
+) -> Response {
     let p = palette(ui.ctx());
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, mut resp) = ui.allocate_exact_size(Vec2::splat(side), sense);
@@ -253,11 +302,44 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
         .iter()
         .enumerate()
         .map(|(i, l)| {
-            let icon_w = if icons_of.and_then(|ic| ic.get(i)).is_some() { metrics::GLYPH + if l.is_empty() { 0.0 } else { 6.0 } } else { 0.0 };
+            let icon_w = if icons_of.and_then(|ic| ic.get(i)).is_some() {
+                metrics::GLYPH + if l.is_empty() { 0.0 } else { 6.0 }
+            } else {
+                0.0
+            };
             pad * 2.0 + icon_w + text::width(ui.ctx(), &font, l)
         })
         .collect();
     let total: f32 = widths.iter().sum();
+    // what does not fit side by side becomes a combo of the same choices
+    if total > ui.available_width() && labels.len() > 1 {
+        let shown = labels.get(*current).copied().unwrap_or("");
+        let widest = widths.iter().copied().fold(0.0, f32::max);
+        let w = (widest + metrics::GLYPH + 16.0).min(ui.available_width()).max(em(4.0));
+        let mut changed = false;
+        let resp = egui::ComboBox::from_id_salt((
+            "gz-ui.segmented",
+            labels.first().copied().unwrap_or(""),
+            labels.len(),
+        ))
+        .selected_text(shown)
+        .width(w)
+        .show_ui(ui, |ui| {
+            for (i, label) in labels.iter().enumerate() {
+                let item = crate::menu::MenuItem {
+                    icon: icons_of.and_then(|ic| ic.get(i)).copied().unwrap_or(Icon::None),
+                    selected: i == *current,
+                    ..crate::menu::MenuItem::default()
+                };
+                if crate::menu::menu_item(ui, label, item) && i != *current {
+                    *current = i;
+                    changed = true;
+                }
+            }
+        });
+        audit::control(ui.ctx(), shown, true, None, None, resp.response.rect);
+        return changed;
+    }
     let (rect, _) = ui.allocate_exact_size(Vec2::new(total, metrics::FRAME), Sense::hover());
     let radius = CornerRadius::same(metrics::RADIUS);
     if ui.is_rect_visible(rect) {
@@ -268,7 +350,8 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
     for (i, label) in labels.iter().enumerate() {
         let cell = Rect::from_min_size(egui::pos2(x, rect.min.y), Vec2::new(widths[i], rect.height()));
         x += widths[i];
-        let resp = ui.interact(cell, ui.scope_id().with(("segmented", rect.min.x.to_bits(), i)), Sense::click());
+        let resp =
+            ui.interact(cell, ui.scope_id().with(("segmented", rect.min.x.to_bits(), i)), Sense::click());
         resp.widget_info(|| WidgetInfo::selected(Role::RadioButton, true, *current == i, *label));
         if resp.clicked() && *current != i {
             *current = i;
@@ -278,14 +361,21 @@ pub fn segmented(ui: &mut Ui, current: &mut usize, labels: &[&str], icons_of: Op
             let on = *current == i;
             let painter = ui.painter();
             if on {
-                painter.rect_filled(cell.shrink(2.0), CornerRadius::same(metrics::RADIUS - 1), p.selection_focused);
+                painter.rect_filled(
+                    cell.shrink(2.0),
+                    CornerRadius::same(metrics::RADIUS - 1),
+                    p.selection_focused,
+                );
             } else if resp.hovered() {
                 painter.rect_filled(cell.shrink(2.0), CornerRadius::same(metrics::RADIUS - 1), p.hover);
             }
             let color = if on { p.text } else { p.text_secondary };
             let mut tx = cell.min.x + pad;
             if let Some(icon) = icons_of.and_then(|ic| ic.get(i)) {
-                let r = Rect::from_min_size(egui::pos2(tx, cell.center().y - metrics::GLYPH * 0.5), Vec2::splat(metrics::GLYPH));
+                let r = Rect::from_min_size(
+                    egui::pos2(tx, cell.center().y - metrics::GLYPH * 0.5),
+                    Vec2::splat(metrics::GLYPH),
+                );
                 icons::draw(painter, *icon, r, if on { p.accent_bright } else { color });
                 tx += metrics::GLYPH + if label.is_empty() { 0.0 } else { 6.0 };
             }
@@ -308,7 +398,8 @@ pub fn keycaps(ui: &Ui, right_center: egui::Pos2, keys: &str, enabled: bool) -> 
     let pad = 4.0;
     let gap = 3.0;
     let parts: Vec<&str> = keys.split('+').map(str::trim).filter(|s| !s.is_empty()).collect();
-    let widths: Vec<f32> = parts.iter().map(|k| (text::width(ui.ctx(), &font, k) + pad * 2.0).max(h)).collect();
+    let widths: Vec<f32> =
+        parts.iter().map(|k| (text::width(ui.ctx(), &font, k) + pad * 2.0).max(h)).collect();
     let total: f32 = widths.iter().sum::<f32>() + gap * (parts.len().saturating_sub(1)) as f32;
     let mut x = right_center.x - total;
     let color = if enabled { p.text_secondary } else { p.text_disabled };

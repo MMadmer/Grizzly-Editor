@@ -25,7 +25,11 @@ pub const REBUILD_STATUS: &str = "level_rebuild_status";
 
 /// The chip's items: the name, the field of [`REBUILD_STATUS`] and the toolbar action that
 /// builds it.
-const ITEMS: [(&str, &str, &str); 3] = [("Collision", "collision", "build_cform"), ("AI Map", "ai_map", "build_aimap"), ("Game Graph", "game_graph", "build_ggraph")];
+const ITEMS: [(&str, &str, &str); 3] = [
+    ("Collision", "collision", "build_cform"),
+    ("AI Map", "ai_map", "build_aimap"),
+    ("Game Graph", "game_graph", "build_ggraph"),
+];
 
 /// What the last ask answered.
 #[derive(Default)]
@@ -66,18 +70,26 @@ fn pending(editor: &Arc<Editor>) -> [bool; 3] {
 /// Whether the Rebuild chip is up (`UIMainForm::RebuildPending`).
 #[must_use]
 pub fn rebuild_pending(editor: &Arc<Editor>) -> bool {
-    let objects = editor.project_opt().and_then(|s| s.services.get::<SceneService>()).is_some_and(|svc| !svc.store.snapshot().objects.is_empty());
+    let objects = editor
+        .project_opt()
+        .and_then(|s| s.services.get::<SceneService>())
+        .is_some_and(|svc| !svc.store.snapshot().objects.is_empty());
     objects && pending(editor).iter().any(|p| *p)
 }
 
 /// The centre of the status bar on Level.
 pub fn centre(ui: &mut Ui, cx: &DocCx<'_>) {
     let p = palette(ui.ctx());
-    let selected = cx.editor.project_opt().and_then(|s| s.services.get::<SceneService>()).map_or(0, |svc| svc.store.snapshot().selection.len());
+    let selected = cx
+        .editor
+        .project_opt()
+        .and_then(|s| s.services.get::<SceneService>())
+        .map_or(0, |svc| svc.store.snapshot().selection.len());
     let settings = EditorSettings::of(cx.editor);
     let grid = settings.pref("snap_grid_step").unwrap_or(0.1);
     let angle = settings.pref("snap_angle_step").unwrap_or(5.625);
-    let text_ = format!("{selected} selected  \u{b7}  Grid {}  \u{b7}  Angle {}\u{b0}", fmt_g(grid), fmt_g(angle));
+    let text_ =
+        format!("{selected} selected  \u{b7}  Grid {}  \u{b7}  Angle {}\u{b0}", fmt_g(grid), fmt_g(angle));
     text::label(ui, &text_, Font::Small, p.text_secondary, Clip::End);
 }
 
@@ -111,9 +123,17 @@ fn draw_chip(ui: &mut Ui, cx: &mut DocCx<'_>) {
     if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::same(4), p.hover);
     }
-    ui.painter().text(pos2(rect.min.x + 6.0, rect.center().y), Align2::LEFT_CENTER, &label, font, p.tone(Tone::Warning));
+    ui.painter().text(
+        pos2(rect.min.x + 6.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        &label,
+        font,
+        p.tone(Tone::Warning),
+    );
     audit::control(&ctx, &label, true, None, None, rect);
-    let resp = resp.on_hover_text("The scene changed since these were built. The game needs them rebuilt before it can play the level.");
+    let resp = resp.on_hover_text(
+        "The scene changed since these were built. The game needs them rebuilt before it can play the level.",
+    );
     let popup = id.with("popup");
     if resp.clicked() {
         egui::Popup::toggle_id(&ctx, popup);
@@ -130,16 +150,23 @@ fn draw_chip(ui: &mut Ui, cx: &mut DocCx<'_>) {
         .gap(4.0)
         .frame(gz_ui::menu::popup_frame(&ctx))
         .show(|ui| {
-            let name_w = ITEMS.iter().map(|(n, _, _)| text::width(&ctx, &Font::Body.id(), n)).fold(0.0, f32::max);
+            let name_w =
+                ITEMS.iter().map(|(n, _, _)| text::width(&ctx, &Font::Body.id(), n)).fold(0.0, f32::max);
             for (i, (name, _, action)) in ITEMS.iter().enumerate() {
                 if !items.get(i).copied().unwrap_or(false) {
                     continue;
                 }
                 ui.horizontal(|ui| {
-                    ui.allocate_ui(Vec2::new(name_w + 24.0, gz_ui::metrics::FRAME), |ui| text::label(ui, name, Font::Body, p.text, Clip::End));
+                    ui.allocate_ui(Vec2::new(name_w + 24.0, gz_ui::metrics::FRAME), |ui| {
+                        text::label(ui, name, Font::Body, p.text, Clip::End)
+                    });
                     let Some(a) = toolbar::action(action) else { return };
                     let registered = editor.registry().has(a.command);
-                    let why = if registered { "A compiler or the game is running." } else { "The level builders are not part of this build yet." };
+                    let why = if registered {
+                        "A compiler or the game is running."
+                    } else {
+                        "The level builders are not part of this build yet."
+                    };
                     if gz_ui::Button::new("Build").enabled(registered && !busy, why).show(ui).clicked() {
                         toolbar::run(&editor, a, Args::new());
                         egui::Popup::close_id(&ctx, popup);

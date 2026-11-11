@@ -101,7 +101,13 @@ impl SpawnFile {
     /// Reads the whole file. Packets and tables are ranges of `buf`, not copies.
     pub fn parse(buf: Arc<[u8]>) -> Result<Self> {
         let mut file = Self {
-            header: SpawnHeader { version: 0, guid: [0; 16], graph_guid: [0; 16], spawn_count: 0, level_count: 0 },
+            header: SpawnHeader {
+                version: 0,
+                guid: [0; 16],
+                graph_guid: [0; 16],
+                spawn_count: 0,
+                level_count: 0,
+            },
             declared_vertices: 0,
             vertices: Vec::new(),
             edges: Vec::new(),
@@ -126,23 +132,34 @@ impl SpawnFile {
             let part = match slot {
                 Some(0) => {
                     let mut r = Reader::new(body);
-                    file.header = SpawnHeader { version: r.r_u32()?, guid: guid(&mut r)?, graph_guid: guid(&mut r)?, spawn_count: r.r_u32()?, level_count: r.r_u32()? };
+                    file.header = SpawnHeader {
+                        version: r.r_u32()?,
+                        guid: guid(&mut r)?,
+                        graph_guid: guid(&mut r)?,
+                        spawn_count: r.r_u32()?,
+                        level_count: r.r_u32()?,
+                    };
                     Part::Header
                 }
                 Some(1) => {
                     let r = Reader::new(body);
                     file.declared_vertices = need(&r, 0, "spawn graph header")?.r_u32()?;
                     let bodies = numbered(&need(&r, 1, "spawn graph vertices")?, "spawn graph vertices")?;
-                    file.vertices = bodies.par_iter().map(|b| read_vertex(&owner, b)).collect::<Result<Vec<_>>>()?;
+                    file.vertices =
+                        bodies.par_iter().map(|b| read_vertex(&owner, b)).collect::<Result<Vec<_>>>()?;
                     if let Some(mut e) = r.sub(2)? {
                         file.has_edges_chunk = true;
                         while !e.eof() {
                             let from = e.r_u16()?;
                             let n = e.r_u32()? as usize;
                             if n.saturating_mul(6) > e.elapsed() {
-                                return Err(SpawnError::Short { what: "spawn graph edges", wanted: n * 6 - e.elapsed() });
+                                return Err(SpawnError::Short {
+                                    what: "spawn graph edges",
+                                    wanted: n * 6 - e.elapsed(),
+                                });
                             }
-                            let to = (0..n).map(|_| Ok((e.r_u16()?, e.r_f32()?))).collect::<Result<Vec<_>>>()?;
+                            let to =
+                                (0..n).map(|_| Ok((e.r_u16()?, e.r_f32()?))).collect::<Result<Vec<_>>>()?;
                             file.edges.push(SpawnEdge { from, to });
                         }
                     }
@@ -168,10 +185,10 @@ impl SpawnFile {
                 }
                 _ => Part::Raw(Bytes::of_part(&owner, body)),
             };
-            if let Some(i) = slot {
-                if !matches!(part, Part::Raw(_)) {
-                    seen[i] = true;
-                }
+            if let Some(i) = slot
+                && !matches!(part, Part::Raw(_))
+            {
+                seen[i] = true;
             }
             file.layout.push((id, compressed, part));
         }
@@ -261,7 +278,12 @@ impl SpawnFile {
     /// A new file in the layout `save_spawn` writes.
     #[must_use]
     pub fn new(header: SpawnHeader, game_graph: Option<GameGraph>) -> Self {
-        let mut layout = vec![(0, false, Part::Header), (1, false, Part::Spawns), (2, false, Part::Artefacts), (3, false, Part::Patrols)];
+        let mut layout = vec![
+            (0, false, Part::Header),
+            (1, false, Part::Spawns),
+            (2, false, Part::Artefacts),
+            (3, false, Part::Patrols),
+        ];
         if game_graph.is_some() {
             layout.push((4, false, Part::Graph));
         }
@@ -312,8 +334,16 @@ mod tests {
         );
         f.declared_vertices = 2;
         f.vertices = vec![
-            SpawnVertex { id: 0, spawn: Bytes::from_vec(packet("stalker", "esc_wolf", 1, 10)), update: update() },
-            SpawnVertex { id: 1, spawn: Bytes::from_vec(packet("medkit", "medkit_0001", 0, 11)), update: Bytes::from_vec(vec![0, 0]) },
+            SpawnVertex {
+                id: 0,
+                spawn: Bytes::from_vec(packet("stalker", "esc_wolf", 1, 10)),
+                update: update(),
+            },
+            SpawnVertex {
+                id: 1,
+                spawn: Bytes::from_vec(packet("medkit", "medkit_0001", 0, 11)),
+                update: Bytes::from_vec(vec![0, 0]),
+            },
         ];
         f.edges = vec![SpawnEdge { from: 0, to: vec![(1, 1.0)] }];
         f.artefact_points = vec![LevelPoint { point: glam::Vec3::ONE, level_vertex: 3, distance: 0.5 }];

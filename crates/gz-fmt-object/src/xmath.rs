@@ -215,7 +215,8 @@ impl Mat4 {
     #[must_use]
     pub fn invert_43(a: &Mat4) -> Mat4 {
         let a = &a.0;
-        let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+        let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+            - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
             + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
         let d = 1.0 / det;
         let mut m = [[0.0f32; 4]; 4];
@@ -341,9 +342,21 @@ impl Mat4 {
             Big::E
         };
         let _ = match biggest {
-            Big::A => try_a(&mut x, &mut y, &mut z, &mut w) || try_i(&mut x, &mut y, &mut z, &mut w) || try_e(&mut x, &mut y, &mut z, &mut w),
-            Big::E => try_e(&mut x, &mut y, &mut z, &mut w) || try_i(&mut x, &mut y, &mut z, &mut w) || try_a(&mut x, &mut y, &mut z, &mut w),
-            Big::I => try_i(&mut x, &mut y, &mut z, &mut w) || try_a(&mut x, &mut y, &mut z, &mut w) || try_e(&mut x, &mut y, &mut z, &mut w),
+            Big::A => {
+                try_a(&mut x, &mut y, &mut z, &mut w)
+                    || try_i(&mut x, &mut y, &mut z, &mut w)
+                    || try_e(&mut x, &mut y, &mut z, &mut w)
+            }
+            Big::E => {
+                try_e(&mut x, &mut y, &mut z, &mut w)
+                    || try_i(&mut x, &mut y, &mut z, &mut w)
+                    || try_a(&mut x, &mut y, &mut z, &mut w)
+            }
+            Big::I => {
+                try_i(&mut x, &mut y, &mut z, &mut w)
+                    || try_a(&mut x, &mut y, &mut z, &mut w)
+                    || try_e(&mut x, &mut y, &mut z, &mut w)
+            }
         };
         Quat::from_xyzw(x, y, z, w)
     }

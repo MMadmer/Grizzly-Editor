@@ -144,7 +144,7 @@ fn decode_block(kind: Block, block: &[u8]) -> [[u8; 4]; 16] {
             let mut rgb = [0f32; 48];
             bcdec_rs::bc6h_float(&data, &mut rgb, 12, signed);
             let mut px = [[0u8, 0, 0, 255]; 16];
-            for (p, c) in px.iter_mut().zip(rgb.chunks_exact(3)) {
+            for (p, c) in px.iter_mut().zip(rgb.as_chunks::<3>().0) {
                 for (d, &s) in p.iter_mut().zip(c) {
                     // high dynamic range is shown clamped, not tone mapped
                     *d = (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
@@ -157,7 +157,7 @@ fn decode_block(kind: Block, block: &[u8]) -> [[u8; 4]; 16] {
             let mut flat = [0u8; 64];
             bcdec_rs::bc7(&data, &mut flat, 16);
             let mut px = [[0u8; 4]; 16];
-            for (p, c) in px.iter_mut().zip(flat.chunks_exact(4)) {
+            for (p, c) in px.iter_mut().zip(flat.as_chunks::<4>().0) {
                 p.copy_from_slice(c);
             }
             px
@@ -182,7 +182,7 @@ pub(crate) fn decode_level(kind: Block, data: &[u8], width: usize, height: usize
             let cols = (width - bx * 4).min(4);
             for (py, row) in rows.chunks_exact_mut(width * 4).enumerate() {
                 let dst = &mut row[bx * 16..bx * 16 + cols * 4];
-                for (d, s) in dst.chunks_exact_mut(4).zip(&px[py * 4..py * 4 + cols]) {
+                for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(&px[py * 4..py * 4 + cols]) {
                     d.copy_from_slice(s);
                 }
             }
@@ -204,7 +204,13 @@ pub(crate) enum AlphaRule {
 
 /// Compresses one level. Blocks at the right and bottom edges of a size that is no multiple
 /// of four are fitted to the pixels they really have.
-pub(crate) fn encode_level(format: texpresso::Format, alpha: AlphaRule, rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
+pub(crate) fn encode_level(
+    format: texpresso::Format,
+    alpha: AlphaRule,
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+) -> Vec<u8> {
     let bs = format.block_size();
     let wide = blocks(width);
     let mut out = vec![0u8; wide * blocks(height) * bs];
@@ -266,7 +272,8 @@ pub(crate) fn nv_decode_dxt5(data: &[u8], width: usize, height: usize) -> Vec<u8
             let block: [u8; 16] = arr(line.get(bx * 16..(bx + 1) * 16).unwrap_or(&[]));
             let c0 = u16::from_le_bytes([block[8], block[9]]);
             let c1 = u16::from_le_bytes([block[10], block[11]]);
-            let wide = |c: u16| [(((c >> 11) & 31) << 3) as u8, (((c >> 5) & 63) << 2) as u8, ((c & 31) << 3) as u8];
+            let wide =
+                |c: u16| [(((c >> 11) & 31) << 3) as u8, (((c >> 5) & 63) << 2) as u8, ((c & 31) << 3) as u8];
             let (a, b) = (wide(c0), wide(c1));
             let mut palette = [[0u8; 3]; 4];
             palette[0] = a;
@@ -389,24 +396,24 @@ mod tests {
     #[test]
     fn encoding_keeps_flat_colours_and_alpha_rules() {
         let mut rgba = vec![0u8; 8 * 4 * 4];
-        for p in rgba.chunks_exact_mut(4) {
+        for p in rgba.as_chunks_mut::<4>().0 {
             p.copy_from_slice(&[255, 0, 0, 100]);
         }
         let opaque = encode_level(texpresso::Format::Bc1, AlphaRule::Opaque, &rgba, 8, 4);
         assert_eq!(opaque.len(), 16);
         let px = decode_level(Block::Bc1, &opaque, 8, 4);
-        assert!(px.chunks_exact(4).all(|p| p == [255, 0, 0, 255]));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| *p == [255, 0, 0, 255]));
 
         let binary = encode_level(texpresso::Format::Bc1, AlphaRule::Binary, &rgba, 8, 4);
         let px = decode_level(Block::Bc1, &binary, 8, 4);
-        assert!(px.chunks_exact(4).all(|p| p[3] == 0));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[3] == 0));
 
         let dxt5 = encode_level(texpresso::Format::Bc3, AlphaRule::Keep, &rgba, 8, 4);
         assert_eq!(dxt5.len(), 32);
         let px = decode_level(Block::Bc3, &dxt5, 8, 4);
-        assert!(px.chunks_exact(4).all(|p| p == [255, 0, 0, 100]));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| *p == [255, 0, 0, 100]));
         // the bump generator's decoder widens 5 bits by shifting: 31 becomes 248
         let nv = nv_decode_dxt5(&dxt5, 8, 4);
-        assert!(nv.chunks_exact(4).all(|p| p == [248, 0, 0, 100]));
+        assert!(nv.as_chunks::<4>().0.iter().all(|p| *p == [248, 0, 0, 100]));
     }
 }

@@ -9,7 +9,11 @@
 
 use gz_editor::{Args, Value};
 use gz_mod::text::outside_cp1251;
-use gz_mod::{Command, Manifest, has_script_function, normalize_github_repo, valid_command_function, valid_command_name, validate_github_repo, validate_id, validate_mode_id, validate_version, validate_website};
+use gz_mod::{
+    Command, Manifest, has_script_function, normalize_github_repo, valid_command_function,
+    valid_command_name, validate_github_repo, validate_id, validate_mode_id, validate_version,
+    validate_website,
+};
 use gz_ui::Tone;
 
 /// A page of the tab: its MCP id, its label and the sentence under its title.
@@ -30,7 +34,11 @@ pub const COMMANDS: usize = 6;
 
 /// The pages in the nav's order (`kSettingsPages`).
 pub const PAGES: [PageInfo; 7] = [
-    PageInfo { id: "general", label: "General", about: "What the game's Mods menu shows, and where the game looks for updates." },
+    PageInfo {
+        id: "general",
+        label: "General",
+        about: "What the game's Mods menu shows, and where the game looks for updates.",
+    },
     PageInfo {
         id: "mod_browser",
         label: "Mod Browser",
@@ -51,7 +59,11 @@ pub const PAGES: [PageInfo; 7] = [
         label: "Build Contents",
         about: "The project folder is your working place as well as the module. The build ships everything in it except what is listed here.",
     },
-    PageInfo { id: "pda", label: "PDA", about: "A module can give the PDA screens of its own. The layout named here is the one the game shows." },
+    PageInfo {
+        id: "pda",
+        label: "PDA",
+        about: "A module can give the PDA screens of its own. The layout named here is the one the game shows.",
+    },
     PageInfo {
         id: "commands",
         label: "Commands",
@@ -145,7 +157,27 @@ impl Form {
                 $(if self.$f == base.$f { self.$f.clone_from(&fresh.$f); })*
             };
         }
-        follow!(id, name, version, author, description, website, github, target, mode, pmode_id, pmode_title, requires, after, before, conflicts, exclude, tags, pda, commands);
+        follow!(
+            id,
+            name,
+            version,
+            author,
+            description,
+            website,
+            github,
+            target,
+            mode,
+            pmode_id,
+            pmode_title,
+            requires,
+            after,
+            before,
+            conflicts,
+            exclude,
+            tags,
+            pda,
+            commands
+        );
         if self.updates_off == base.updates_off {
             self.updates_off = fresh.updates_off;
         }
@@ -256,10 +288,16 @@ impl Kind {
     #[must_use]
     pub fn about(self) -> &'static str {
         match self {
-            Kind::Plain => "Applies only while no campaign mode is active: Revolution II and the like do not see this module's level work.",
+            Kind::Plain => {
+                "Applies only while no campaign mode is active: Revolution II and the like do not see this module's level work."
+            }
             Kind::Existing => "The level work applies only in that mode.",
-            Kind::New => "A new mode is a new game of its own: the player picks it on the new-game screen, by its title.",
-            Kind::Any => "No gate: the level work lands in the plain game and in every campaign. Use it only for what belongs everywhere.",
+            Kind::New => {
+                "A new mode is a new game of its own: the player picks it on the new-game screen, by its title."
+            }
+            Kind::Any => {
+                "No gate: the level work lands in the plain game and in every campaign. Use it only for what belongs everywhere."
+            }
         }
     }
 }
@@ -307,8 +345,10 @@ pub fn relation_value(line: &str) -> &str {
 }
 
 fn check_relations(f: &Form, out: &mut Vec<Problem>) {
-    let rels: [(&str, &[String]); 4] = [("requires", &f.requires), ("after", &f.after), ("before", &f.before), ("conflicts", &f.conflicts)];
-    let ids: Vec<Vec<String>> = rels.iter().map(|(_, lines)| lines.iter().map(|l| relation_id(l)).collect()).collect();
+    let rels: [(&str, &[String]); 4] =
+        [("requires", &f.requires), ("after", &f.after), ("before", &f.before), ("conflicts", &f.conflicts)];
+    let ids: Vec<Vec<String>> =
+        rels.iter().map(|(_, lines)| lines.iter().map(|l| relation_id(l)).collect()).collect();
     let me = f.id.to_ascii_lowercase();
     let warn = |field: &str, text: String| problem(RELATIONS, field, Tone::Warning, false, text);
     for ((field, _), list) in rels.iter().zip(&ids) {
@@ -333,8 +373,29 @@ fn check_relations(f: &Form, out: &mut Vec<Problem>) {
 /// with `gz_mod::commands`).
 fn stock_command_word(name: &str) -> bool {
     const WORDS: [&str; 23] = [
-        "bind", "chat", "disconnect", "flush", "fov", "help", "hide", "load", "name", "nq", "quit", "renderer", "save", "screenshot", "start", "unbind",
-        "unbindall", "cfg_save", "cfg_load", "main_menu", "run_string", "time_factor", "default_controls",
+        "bind",
+        "chat",
+        "disconnect",
+        "flush",
+        "fov",
+        "help",
+        "hide",
+        "load",
+        "name",
+        "nq",
+        "quit",
+        "renderer",
+        "save",
+        "screenshot",
+        "start",
+        "unbind",
+        "unbindall",
+        "cfg_save",
+        "cfg_load",
+        "main_menu",
+        "run_string",
+        "time_factor",
+        "default_controls",
     ];
     WORDS.contains(&name)
 }
@@ -342,8 +403,9 @@ fn stock_command_word(name: &str) -> bool {
 /// The game's own command families: a warning (`StockCommandFamily`).
 fn stock_command_family(name: &str) -> Option<&'static str> {
     const FAMILIES: [&str; 32] = [
-        "xms_", "r_", "r1_", "r2_", "r3_", "r4_", "r__", "rs_", "g_", "sv_", "cl_", "net_", "dbg_", "debug_", "ai_", "al_", "ph_", "hud_", "snd_", "vid_",
-        "mm_", "mt_", "dar_", "cam_", "ui_", "inv_", "lua_", "gamepad_", "demo_", "stat_", "bind_", "unbind_",
+        "xms_", "r_", "r1_", "r2_", "r3_", "r4_", "r__", "rs_", "g_", "sv_", "cl_", "net_", "dbg_", "debug_",
+        "ai_", "al_", "ph_", "hud_", "snd_", "vid_", "mm_", "mt_", "dar_", "cam_", "ui_", "inv_", "lua_",
+        "gamepad_", "demo_", "stat_", "bind_", "unbind_",
     ];
     FAMILIES.into_iter().find(|f| name.starts_with(f))
 }
@@ -351,34 +413,87 @@ fn stock_command_family(name: &str) -> Option<&'static str> {
 fn check_commands(f: &Form, aux: &Aux, out: &mut Vec<Problem>) {
     for (i, c) in f.commands.iter().enumerate() {
         let field = |part: &str| format!("commands.{i}.{part}");
-        let mut add = |part: &str, tone: Tone, blocks: bool, text: String| out.push(Problem { page: COMMANDS, field: field(part), tone, blocks, text });
+        let mut add = |part: &str, tone: Tone, blocks: bool, text: String| {
+            out.push(Problem { page: COMMANDS, field: field(part), tone, blocks, text })
+        };
         if c.name.is_empty() {
             add("name", Tone::Required, true, "Required: what the player types in the console.".to_owned());
         } else if !valid_command_name(&c.name) {
-            add("name", Tone::Error, true, "Use a-z, 0-9 and _ only: the console finds a command by its exact name.".to_owned());
+            add(
+                "name",
+                Tone::Error,
+                true,
+                "Use a-z, 0-9 and _ only: the console finds a command by its exact name.".to_owned(),
+            );
         } else if stock_command_word(&c.name) {
-            add("name", Tone::Error, true, "The game has a command of this name: it keeps its own and refuses this one.".to_owned());
+            add(
+                "name",
+                Tone::Error,
+                true,
+                "The game has a command of this name: it keeps its own and refuses this one.".to_owned(),
+            );
         } else if let Some(family) = stock_command_family(&c.name) {
-            add("name", Tone::Warning, false, format!("Named like the game's own {family}* commands: if the game has one of this name, it keeps it."));
+            add(
+                "name",
+                Tone::Warning,
+                false,
+                format!(
+                    "Named like the game's own {family}* commands: if the game has one of this name, it keeps it."
+                ),
+            );
         }
         if !c.name.is_empty() && f.commands.iter().take(i).any(|k| k.name.eq_ignore_ascii_case(&c.name)) {
-            add("name", Tone::Error, true, "Declared twice: the game takes the first and refuses this one.".to_owned());
+            add(
+                "name",
+                Tone::Error,
+                true,
+                "Declared twice: the game takes the first and refuses this one.".to_owned(),
+            );
         }
-        if let Some((_, module)) = aux.taken.iter().find(|(command, _)| command.eq_ignore_ascii_case(&c.name)) {
-            add("name", Tone::Warning, false, format!("Module {module} of the linked game has this command too: the one that loads first keeps it."));
+        if let Some((_, module)) = aux.taken.iter().find(|(command, _)| command.eq_ignore_ascii_case(&c.name))
+        {
+            add(
+                "name",
+                Tone::Warning,
+                false,
+                format!(
+                    "Module {module} of the linked game has this command too: the one that loads first keeps it."
+                ),
+            );
         }
         if c.function.is_empty() {
-            add("function", Tone::Required, true, "Required: <script>.<function> of the project's scripts.".to_owned());
+            add(
+                "function",
+                Tone::Required,
+                true,
+                "Required: <script>.<function> of the project's scripts.".to_owned(),
+            );
         } else if !valid_command_function(&c.function) {
             add("function", Tone::Error, true, "<script>.<function>, e.g. my_mod.status.".to_owned());
         } else if !has_script_function(&aux.functions, &c.function) {
-            add("function", Tone::Warning, false, "gamedata\\scripts has no such function: the build refuses the module until it does.".to_owned());
+            add(
+                "function",
+                Tone::Warning,
+                false,
+                "gamedata\\scripts has no such function: the build refuses the module until it does."
+                    .to_owned(),
+            );
         }
         if let Some(bad) = outside_cp1251(&c.help) {
-            add("help", Tone::Warning, false, format!("Outside cp1251 ({bad}): the console shows '?' for it."));
+            add(
+                "help",
+                Tone::Warning,
+                false,
+                format!("Outside cp1251 ({bad}): the console shows '?' for it."),
+            );
         }
         if let Some(bad) = outside_cp1251(&c.args) {
-            add("args", Tone::Warning, false, format!("Outside cp1251 ({bad}): the console shows '?' for it."));
+            add(
+                "args",
+                Tone::Warning,
+                false,
+                format!("Outside cp1251 ({bad}): the console shows '?' for it."),
+            );
         }
     }
 }
@@ -399,11 +514,23 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
         out.push(problem(GENERAL, "id", Tone::Error, true, "Use a-z, 0-9, _ . and - only."));
     }
     if !validate_version(&f.version) {
-        out.push(problem(GENERAL, "version", Tone::Error, true, "1 to 4 numbers separated by dots, e.g. 1.2.0."));
+        out.push(problem(
+            GENERAL,
+            "version",
+            Tone::Error,
+            true,
+            "1 to 4 numbers separated by dots, e.g. 1.2.0.",
+        ));
     }
     let website = f.website.trim();
     if !validate_website(website) {
-        out.push(problem(GENERAL, "website", Tone::Error, true, "Only https://ap-pro.ru and https://moddb.com links are allowed."));
+        out.push(problem(
+            GENERAL,
+            "website",
+            Tone::Error,
+            true,
+            "Only https://ap-pro.ru and https://moddb.com links are allowed.",
+        ));
     } else if !website.is_empty() && !website_is_module_page(website) {
         // the listing wants the module's own page, which the game's own check does not ask for
         out.push(problem(GENERAL, "website", Tone::Warning, false, "The Mod Browser lists a module with its own page, e.g. https://ap-pro.ru/stuff/<section>/<name>-r<number>/."));
@@ -418,10 +545,28 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
 
     // the choice sticks while its details are still blank, so the missing detail is named instead
     match f.kind() {
-        None => out.push(problem(MODE, "target", Tone::Required, false, "Not chosen yet: the module cannot be built.")),
-        Some(Kind::Existing) if f.mode.is_empty() => out.push(problem(MODE, "mode", Tone::Required, false, "Pick the mode: the module cannot be built until then.")),
+        None => out.push(problem(
+            MODE,
+            "target",
+            Tone::Required,
+            false,
+            "Not chosen yet: the module cannot be built.",
+        )),
+        Some(Kind::Existing) if f.mode.is_empty() => out.push(problem(
+            MODE,
+            "mode",
+            Tone::Required,
+            false,
+            "Pick the mode: the module cannot be built until then.",
+        )),
         Some(Kind::New) if f.pmode_id.is_empty() => {
-            out.push(problem(MODE, "pmode_id", Tone::Required, false, "Enter the mode's id: the module cannot be built until then."));
+            out.push(problem(
+                MODE,
+                "pmode_id",
+                Tone::Required,
+                false,
+                "Enter the mode's id: the module cannot be built until then.",
+            ));
         }
         _ => {}
     }
@@ -437,14 +582,32 @@ pub fn check(f: &Form, aux: &Aux) -> Vec<Problem> {
     if f.kind() == Some(Kind::New)
         && let Some(bad) = outside_cp1251(&f.pmode_title)
     {
-        out.push(problem(MODE, "pmode_title", Tone::Warning, false, format!("Outside cp1251 ({bad}): the new-game screen shows a look-alike letter or '?'.")));
+        out.push(problem(
+            MODE,
+            "pmode_title",
+            Tone::Warning,
+            false,
+            format!("Outside cp1251 ({bad}): the new-game screen shows a look-alike letter or '?'."),
+        ));
     }
 
     if !f.pda.is_empty() {
         if !aux.pda_files.iter().any(|p| same_path(p, &f.pda)) {
-            out.push(problem(PDA, "pda", Tone::Warning, false, "The file does not exist: the build refuses the module until it does."));
+            out.push(problem(
+                PDA,
+                "pda",
+                Tone::Warning,
+                false,
+                "The file does not exist: the build refuses the module until it does.",
+            ));
         } else if gz_mod::outside_build(&f.exclude_rules(), &f.pda.replace('/', "\\")) {
-            out.push(problem(PDA, "pda", Tone::Warning, false, "The build leaves this file out, so the game would never see it."));
+            out.push(problem(
+                PDA,
+                "pda",
+                Tone::Warning,
+                false,
+                "The build leaves this file out, so the game would never see it.",
+            ));
         }
     }
 
@@ -530,7 +693,11 @@ pub fn plan(base: &Form, form: &Form) -> Plan {
     if stated && (form.target != base.target || !a.is_empty()) {
         a.insert("target".to_owned(), s(&form.target.to_ascii_lowercase()));
     }
-    Plan { manifest: (!a.is_empty()).then_some(a), commands: command_ops(&base.commands, &form.commands), pda: (form.pda != base.pda).then(|| form.pda.clone()) }
+    Plan {
+        manifest: (!a.is_empty()).then_some(a),
+        commands: command_ops(&base.commands, &form.commands),
+        pda: (form.pda != base.pda).then(|| form.pda.clone()),
+    }
 }
 
 /// The `mod_commands` calls that turn `base` into `form`: the commands gone first, then every
@@ -548,7 +715,14 @@ pub fn command_ops(base: &[Command], form: &[Command]) -> Vec<Args> {
     }
     for c in form {
         let same = base.iter().find(|b| b.name.eq_ignore_ascii_case(&c.name));
-        if same.is_some_and(|b| b.name == c.name && b.function == c.function && b.help == c.help && b.args == c.args && b.cheat == c.cheat && b.declared == c.declared) {
+        if same.is_some_and(|b| {
+            b.name == c.name
+                && b.function == c.function
+                && b.help == c.help
+                && b.args == c.args
+                && b.cheat == c.cheat
+                && b.declared == c.declared
+        }) {
             continue;
         }
         let mut a = Args::new();
@@ -601,7 +775,9 @@ pub fn website_is_module_page(url: &str) -> bool {
         }
         if let Some(p) = starts(p, "forums/topic/") {
             let digits = p.iter().take_while(|c| c.is_ascii_digit()).count();
-            let Some(p) = p.get(digits..).filter(|_| digits > 0).and_then(|p| p.strip_prefix(b"-")) else { return false };
+            let Some(p) = p.get(digits..).filter(|_| digits > 0).and_then(|p| p.strip_prefix(b"-")) else {
+                return false;
+            };
             return segment(p, slug_char).is_some_and(|(_, rest)| page_end(rest));
         }
         return false;
@@ -643,7 +819,13 @@ mod tests {
 
     #[test]
     fn the_general_fields_say_why() {
-        let f = Form { id: String::new(), version: "x".into(), website: "https://example.com".into(), github: "nope".into(), ..form() };
+        let f = Form {
+            id: String::new(),
+            version: "x".into(),
+            website: "https://example.com".into(),
+            github: "nope".into(),
+            ..form()
+        };
         let p = check(&f, &Aux::default());
         let fields: Vec<&str> = p.iter().map(|p| p.field.as_str()).collect();
         assert_eq!(fields, ["id", "version", "website", "github"]);
@@ -687,7 +869,13 @@ mod tests {
 
     #[test]
     fn relations_warn_about_what_the_game_cannot_keep() {
-        let f = Form { requires: vec!["qa.other = >=1.0".into()], conflicts: vec!["qa.other".into()], after: vec!["b".into(), "OD".into()], before: vec!["b".into()], ..form() };
+        let f = Form {
+            requires: vec!["qa.other = >=1.0".into()],
+            conflicts: vec!["qa.other".into()],
+            after: vec!["b".into(), "OD".into()],
+            before: vec!["b".into()],
+            ..form()
+        };
         let p = check(&f, &Aux::default());
         let texts: Vec<&str> = p.iter().map(|p| p.text.as_str()).collect();
         assert!(texts[0].starts_with("The module itself"));
@@ -700,12 +888,30 @@ mod tests {
 
     #[test]
     fn commands_are_checked_per_row() {
-        let c = |name: &str, function: &str| Command { name: name.into(), function: function.into(), ..Command::default() };
-        let f = Form { commands: vec![c("", ""), c("save", "od.x"), c("od_s", "od.missing"), c("OD_S", "od.ok")], ..form() };
+        let c = |name: &str, function: &str| Command {
+            name: name.into(),
+            function: function.into(),
+            ..Command::default()
+        };
+        let f = Form {
+            commands: vec![c("", ""), c("save", "od.x"), c("od_s", "od.missing"), c("OD_S", "od.ok")],
+            ..form()
+        };
         let aux = Aux { functions: vec!["od.ok".into()], ..Aux::default() };
         let p = check(&f, &aux);
         let fields: Vec<&str> = p.iter().map(|p| p.field.as_str()).collect();
-        assert_eq!(fields, ["commands.0.name", "commands.0.function", "commands.1.name", "commands.1.function", "commands.2.function", "commands.3.name", "commands.3.name"]);
+        assert_eq!(
+            fields,
+            [
+                "commands.0.name",
+                "commands.0.function",
+                "commands.1.name",
+                "commands.1.function",
+                "commands.2.function",
+                "commands.3.name",
+                "commands.3.name"
+            ]
+        );
         assert_eq!(p[0].tone, Tone::Required);
     }
 
@@ -733,7 +939,12 @@ mod tests {
     fn the_plan_sends_what_changed_and_states_the_target() {
         let base = form();
         assert!(plan(&base, &base).is_empty());
-        let f = Form { name: "OD".into(), requires: vec!["a".into(), "b = 1.0".into()], exclude: "docs\n\n*.psd".into(), ..base.clone() };
+        let f = Form {
+            name: "OD".into(),
+            requires: vec!["a".into(), "b = 1.0".into()],
+            exclude: "docs\n\n*.psd".into(),
+            ..base.clone()
+        };
         let p = plan(&base, &f);
         let a = p.manifest.unwrap();
         assert_eq!(a.get("name"), Some(&s("OD")));
@@ -742,6 +953,19 @@ mod tests {
         assert_eq!(a.get("target"), Some(&s("default")));
         let f = Form { pda: "pda\\x.pdaasset".into(), ..base.clone() };
         assert_eq!(plan(&base, &f).pda.as_deref(), Some("pda\\x.pdaasset"));
+    }
+
+    #[test]
+    fn a_classic_module_stays_classic() {
+        let base = Form { target: "any".into(), mode: "*".into(), ..form() };
+        assert_eq!(base.kind(), Some(Kind::Any));
+        let f = Form { name: "Weapons".into(), ..base.clone() };
+        let a = plan(&base, &f).manifest.unwrap();
+        assert!(a.get("target").is_none() && a.get("mode").is_none());
+        let mut back = base.clone();
+        back.set_kind(Kind::Plain, None);
+        back.set_kind(Kind::Any, None);
+        assert!(plan(&base, &back).is_empty());
     }
 
     #[test]

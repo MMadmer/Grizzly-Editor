@@ -305,7 +305,11 @@ impl SectorData {
         if version < 0x11 {
             return Ok(Body::Refused("CSector: Unsupported version.".into()));
         }
-        let mut d = Self { color: fcolor_from(r.r_color(s, "sector_color")?), default: r.r_bool(s, "default")?, ..Self::default() };
+        let mut d = Self {
+            color: fcolor_from(r.r_color(s, "sector_color")?),
+            default: r.r_bool(s, "default")?,
+            ..Self::default()
+        };
         let n = r.r_u32(s, "items_count")?;
         for i in 0..n.min(1 << 16) {
             d.items.push((
@@ -401,7 +405,11 @@ impl PortalData {
         if r.r_u32(s, "version")? != PORTAL_VERSION {
             return Ok(Body::Refused("CPortal: Unsupported version.".into()));
         }
-        let mut d = Self { front: r.r_string(s, "sector_front")?.into(), back: r.r_string(s, "sector_back")?.into(), vertices: Vec::new() };
+        let mut d = Self {
+            front: r.r_string(s, "sector_front")?.into(),
+            back: r.r_string(s, "sector_back")?.into(),
+            vertices: Vec::new(),
+        };
         let n = r.r_u32(s, "vert_count")?;
         for i in 0..n.min(1 << 16) {
             d.vertices.push(r.r_fvector3(s, &format!("vertex_{i:04}"))?);
@@ -488,13 +496,15 @@ mod tests {
 
     #[test]
     fn sectors_and_portals_round_trip() {
-        let s = SectorData { items: vec![("wall".into(), "mesh0".into())], map_idx: 2, ..SectorData::default() };
+        let s =
+            SectorData { items: vec![("wall".into(), "mesh0".into())], map_idx: 2, ..SectorData::default() };
         let mut sw = Writer::new();
         s.write_stream(&mut sw);
         let bytes = sw.into_bytes();
         let Body::Read(back) = SectorData::read_stream(&Reader::new(&bytes)).unwrap() else { panic!() };
         assert_eq!(back, s);
-        let p = PortalData { front: "a".into(), back: "b".into(), vertices: vec![Vec3::ZERO, Vec3::X, Vec3::Y] };
+        let p =
+            PortalData { front: "a".into(), back: "b".into(), vertices: vec![Vec3::ZERO, Vec3::X, Vec3::Y] };
         let mut iw = IniWriter::new();
         p.write_ltx(&mut iw, "o");
         let r = IniReader::parse(&iw.save(), "t").unwrap();

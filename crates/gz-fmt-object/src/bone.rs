@@ -91,7 +91,9 @@ impl BoneShape {
             2 => !zero(self.sphere_radius),
             3 => {
                 let d = self.cylinder_direction;
-                !zero(self.cylinder_height) && !zero(self.cylinder_radius) && !zero(d.x * d.x + d.y * d.y + d.z * d.z)
+                !zero(self.cylinder_height)
+                    && !zero(self.cylinder_radius)
+                    && !zero(d.x * d.x + d.y * d.y + d.z * d.z)
             }
             _ => true,
         }
@@ -279,7 +281,12 @@ impl Default for Bone {
 impl Bone {
     /// `Load_0`: the first form, fields in a row.
     pub(crate) fn read_v0(r: &mut Reader<'_>, text: &mut Text) -> Result<Bone> {
-        let mut b = Bone { name: lower(&text.r_str(r)?), parent: lower(&text.r_str(r)?), wmap: text.r_str(r)?, ..Bone::default() };
+        let mut b = Bone {
+            name: lower(&text.r_str(r)?),
+            parent: lower(&text.r_str(r)?),
+            wmap: text.r_str(r)?,
+            ..Bone::default()
+        };
         b.rest_offset = r.r_vec3()?;
         b.rest_rotate = r.r_vec3()?;
         b.rest_length = r.r_f32()?;
@@ -379,7 +386,12 @@ mod tests {
 
     #[test]
     fn a_bone_round_trips() {
-        let mut b = Bone { name: "bip01_spine".into(), parent: "bip01".into(), wmap: "Bip01_Spine".into(), ..Bone::default() };
+        let mut b = Bone {
+            name: "bip01_spine".into(),
+            parent: "bip01".into(),
+            wmap: "Bip01_Spine".into(),
+            ..Bone::default()
+        };
         b.rest_offset = Vec3::new(0.0, 1.5, -0.25);
         b.rest_rotate = Vec3::new(0.1, 0.2, 0.3);
         b.rest_length = 0.4;
@@ -430,7 +442,10 @@ mod tests {
     fn a_cut_or_unknown_bone_is_an_error() {
         let mut w = Writer::new();
         w.chunk(CHUNK_VERSION, |w| w.w_u16(9));
-        assert!(matches!(Bone::read(&Reader::new(w.bytes()), &mut Text::default()), Err(ObjectError::Version { .. })));
+        assert!(matches!(
+            Bone::read(&Reader::new(w.bytes()), &mut Text::default()),
+            Err(ObjectError::Version { .. })
+        ));
 
         let mut w = Writer::new();
         Bone::default().write(&mut w, TextEncoding::Utf8);

@@ -74,7 +74,12 @@ pub struct Refresher {
 
 impl Default for Refresher {
     fn default() -> Self {
-        Self { data: Arc::new(Mutex::new(DocData::default())), running: Arc::new(AtomicBool::new(false)), last_edit: None, last_at: None }
+        Self {
+            data: Arc::new(Mutex::new(DocData::default())),
+            running: Arc::new(AtomicBool::new(false)),
+            last_edit: None,
+            last_at: None,
+        }
     }
 }
 
@@ -90,14 +95,22 @@ impl Refresher {
     }
 
     /// Starts a refresh when one is due. `force` refreshes whatever happened.
-    pub fn tick(&mut self, editor: &Arc<Editor>, doc: &Arc<DocHandle>, ctx: &egui::Context, edit: u64, force: bool) {
+    pub fn tick(
+        &mut self,
+        editor: &Arc<Editor>,
+        doc: &Arc<DocHandle>,
+        ctx: &egui::Context,
+        edit: u64,
+        force: bool,
+    ) {
         let due = force || self.last_edit != Some(edit) || self.last_at.is_none_or(|t| t.elapsed() >= POLL);
         if !due || self.running.swap(true, Ordering::AcqRel) {
             return;
         }
         self.last_edit = Some(edit);
         self.last_at = Some(Instant::now());
-        let (ed, doc, data, running, ctx) = (editor.clone(), doc.clone(), self.data.clone(), self.running.clone(), ctx.clone());
+        let (ed, doc, data, running, ctx) =
+            (editor.clone(), doc.clone(), self.data.clone(), self.running.clone(), ctx.clone());
         let _task = editor.exec.spawn(async move {
             let fresh = fetch(&ed, &doc).await;
             if let Some(fresh) = fresh {

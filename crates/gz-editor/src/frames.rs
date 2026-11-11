@@ -71,7 +71,11 @@ impl FrameClock {
                 Err(_) => {
                     return Err(CmdError::new(
                         "no_frame",
-                        if now.frame == 0 { "the editor runs without a window" } else { "the editor did not draw a frame in time" },
+                        if now.frame == 0 {
+                            "the editor runs without a window"
+                        } else {
+                            "the editor did not draw a frame in time"
+                        },
                     ));
                 }
             }

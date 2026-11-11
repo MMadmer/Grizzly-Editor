@@ -31,7 +31,11 @@ fn args(pairs: &[(&str, Value)]) -> Args {
 }
 
 /// Runs a command and splits its answer: the fields, or the error and the fields.
-pub(crate) async fn call(editor: &Arc<Editor>, name: &str, pairs: &[(&str, Value)]) -> Result<Value, (String, Value)> {
+pub(crate) async fn call(
+    editor: &Arc<Editor>,
+    name: &str,
+    pairs: &[(&str, Value)],
+) -> Result<Value, (String, Value)> {
     let reply = editor.call(name, args(pairs), editor.ui_origin()).await;
     if reply.get("ok").and_then(Value::as_bool) == Some(true) {
         Ok(reply)
@@ -42,7 +46,14 @@ pub(crate) async fn call(editor: &Arc<Editor>, name: &str, pairs: &[(&str, Value
 }
 
 fn first_reason(reply: &Value) -> String {
-    reply.get("errors").and_then(Value::as_array).and_then(|a| a.first()).and_then(|e| e.get("reason")).and_then(Value::as_str).unwrap_or("").to_owned()
+    reply
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(|e| e.get("reason"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn count(reply: &Value, key: &str) -> u64 {
@@ -83,7 +94,12 @@ pub(crate) fn game_level(source: Source, path: &str) -> Option<&str> {
 }
 
 /// What opening an entry means (`OpenAsset`). `root` is where the source keeps its files on disk.
-pub(crate) fn what_opens(source: Source, cat: usize, path: &str, root: Option<&std::path::Path>) -> Result<Open, String> {
+pub(crate) fn what_opens(
+    source: Source,
+    cat: usize,
+    path: &str,
+    root: Option<&std::path::Path>,
+) -> Result<Open, String> {
     if path.is_empty() {
         return Err("empty asset name".into());
     }
@@ -105,17 +121,25 @@ pub(crate) fn what_opens(source: Source, cat: usize, path: &str, root: Option<&s
         // the game's levels are compiled: the editor opens the source scene of that name
         return Ok(Open::Scene(level.to_owned()));
     }
-    let model = ext == ".ogf" || ext == ".object" || (source == Source::Editor && (cat == VISUALS || cat == OBJECTS));
+    let model =
+        ext == ".ogf" || ext == ".object" || (source == Source::Editor && (cat == VISUALS || cat == OBJECTS));
     if model {
         let target = match source {
             Source::Game => visual_name(path),
             Source::Editor if cat == VISUALS => visual_name(path),
             _ => path.to_owned(),
         };
-        return Ok(Open::Doc(OpenRequest { arg: Some(source.wire().to_owned()), ..OpenRequest::file("model", &target) }));
+        return Ok(Open::Doc(OpenRequest {
+            arg: Some(source.wire().to_owned()),
+            ..OpenRequest::file("model", &target)
+        }));
     }
     let project_only = |what: &str| -> Result<(), String> {
-        if source == Source::Project { Ok(()) } else { Err(format!("{path}: {what} open from the project only")) }
+        if source == Source::Project {
+            Ok(())
+        } else {
+            Err(format!("{path}: {what} open from the project only"))
+        }
     };
     match ext.as_str() {
         ".pdaasset" => {
@@ -134,13 +158,22 @@ pub(crate) fn what_opens(source: Source, cat: usize, path: &str, root: Option<&s
     }
     let texture = icons::is_image(path) || (source == Source::Editor && (cat == 4 || cat == 5));
     if texture {
-        return Ok(Open::Doc(OpenRequest { arg: Some(source.wire().to_owned()), ..OpenRequest::file("texture", path) }));
+        return Ok(Open::Doc(OpenRequest {
+            arg: Some(source.wire().to_owned()),
+            ..OpenRequest::file("texture", path)
+        }));
     }
     Err(format!("no viewer for this asset kind yet: '{path}'"))
 }
 
 /// A double click from the window: into a folder, a game level's scene, an asset's tab.
-pub(crate) fn open_entry(cx: &mut DocCx<'_>, st: &mut Inner, browser: &ContentBrowser, entry: &Entry, has_project: bool) {
+pub(crate) fn open_entry(
+    cx: &mut DocCx<'_>,
+    st: &mut Inner,
+    browser: &ContentBrowser,
+    entry: &Entry,
+    has_project: bool,
+) {
     let source = st.loc.source;
     let cat = st.loc.category;
     if entry.folder {
@@ -166,13 +199,21 @@ fn open_asset(cx: &mut DocCx<'_>, source: Source, cat: usize, path: &str, root: 
     match what_opens(source, cat, path, root) {
         Ok(Open::Doc(req)) => cx.requests.open(req),
         Ok(Open::Scene(scene)) => cx.editor.post("open_scene", args(&[("scene", json!(scene))])),
-        Err(e) if e.starts_with("no viewer") => cx.editor.notices.note(format!("No viewer for this kind of file yet: '{path}'")),
+        Err(e) if e.starts_with("no viewer") => {
+            cx.editor.notices.note(format!("No viewer for this kind of file yet: '{path}'"))
+        }
         Err(e) => cx.editor.notices.error(e),
     }
 }
 
 /// The same for MCP: the outcome comes back instead of a notice.
-pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, source: Source, cat: usize, path: &str, root: Option<PathBuf>) -> Result<(), String> {
+pub(crate) async fn open_for_mcp(
+    editor: &Arc<Editor>,
+    source: Source,
+    cat: usize,
+    path: &str,
+    root: Option<PathBuf>,
+) -> Result<(), String> {
     match what_opens(source, cat, path, root.as_deref())? {
         Open::Doc(req) => {
             let mut pairs = vec![("action", json!("open")), ("kind", json!(req.kind))];
@@ -184,7 +225,9 @@ pub(crate) async fn open_for_mcp(editor: &Arc<Editor>, source: Source, cat: usiz
             }
             call(editor, "ui_tab", &pairs).await.map(|_| ()).map_err(|(e, _)| format!("{path}: {e}"))
         }
-        Open::Scene(scene) => call(editor, "open_scene", &[("scene", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e),
+        Open::Scene(scene) => {
+            call(editor, "open_scene", &[("scene", json!(scene))]).await.map(|_| ()).map_err(|(e, _)| e)
+        }
     }
 }
 
@@ -195,7 +238,11 @@ pub(crate) fn placeable_ref(source: Source, cat: usize, path: &str) -> Option<St
     let is_object = icons::extension(path).is_some_and(|e| e.eq_ignore_ascii_case(".object"));
     let strip = |p: &str| icons::extension(p).map_or(p, |e| &p[..p.len() - e.len()]).to_owned();
     match source {
-        Source::Project if is_object => path.get(..16).filter(|h| h.eq_ignore_ascii_case("rawdata\\objects\\")).and(path.get(16..)).map(strip),
+        Source::Project if is_object => path
+            .get(..16)
+            .filter(|h| h.eq_ignore_ascii_case("rawdata\\objects\\"))
+            .and(path.get(16..))
+            .map(strip),
         Source::Editor if cat == OBJECTS && is_object => Some(strip(path)),
         _ => None,
     }
@@ -230,7 +277,11 @@ pub(crate) fn begin_rename(st: &mut Inner, entry: &Entry) {
 pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &mut Inner) {
     let Some(r) = st.rename.take() else { return };
     let leaf = leaf_of(&r.entry.path);
-    let shown = if r.entry.folder { leaf.to_owned() } else { gz_project::own_extension(leaf).map_or(leaf.to_owned(), |e| leaf[..leaf.len() - e.len()].to_owned()) };
+    let shown = if r.entry.folder {
+        leaf.to_owned()
+    } else {
+        gz_project::own_extension(leaf).map_or(leaf.to_owned(), |e| leaf[..leaf.len() - e.len()].to_owned())
+    };
     if r.text == shown {
         return;
     }
@@ -242,7 +293,11 @@ pub(crate) fn commit_rename(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>,
             Ok(reply) => {
                 let to = reply.get("path").and_then(Value::as_str).unwrap_or("").replace('/', "\\");
                 let parent = parent_of(&was);
-                let now = if parent.is_empty() { leaf_of(&to).to_owned() } else { format!("{parent}\\{}", leaf_of(&to)) };
+                let now = if parent.is_empty() {
+                    leaf_of(&to).to_owned()
+                } else {
+                    format!("{parent}\\{}", leaf_of(&to))
+                };
                 if !now.is_empty() && now != was {
                     inbox.lock().renamed = Some((was, now));
                 }
@@ -278,12 +333,20 @@ pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSp
     let headline = match entries {
         [one] if one.folder => format!("Delete the folder {} and everything in it?", leaf_of(&one.path)),
         [one] => format!("Delete {}?", leaf_of(&one.path)),
-        _ if folders > 0 && files > 0 => format!("Delete {} and {}?", counted(folders, "folder", "folders"), counted(files, "file", "files")),
+        _ if folders > 0 && files > 0 => format!(
+            "Delete {} and {}?",
+            counted(folders, "folder", "folders"),
+            counted(files, "file", "files")
+        ),
         _ if folders > 0 => format!("Delete {}?", counted(folders, "folder", "folders")),
         _ => format!("Delete {}?", counted(files, "file", "files")),
     };
     let consequence = if inside > 0 {
-        format!("{}{}. Deleted for good - this cannot be undone.", if folders == 1 { "It holds " } else { "The folders hold " }, counted(inside, "file", "files"))
+        format!(
+            "{}{}. Deleted for good - this cannot be undone.",
+            if folders == 1 { "It holds " } else { "The folders hold " },
+            counted(inside, "file", "files")
+        )
     } else {
         String::new()
     };
@@ -300,7 +363,13 @@ pub(crate) fn delete_spec(entries: &[Entry], cat: Option<&Catalog>) -> ConfirmSp
 }
 
 /// Asks, then deletes the selection for good through `content_delete`.
-pub(crate) fn delete_selection(ctx: &egui::Context, editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &Inner, has_project: bool) {
+pub(crate) fn delete_selection(
+    ctx: &egui::Context,
+    editor: &Arc<Editor>,
+    browser: &Arc<ContentBrowser>,
+    st: &Inner,
+    has_project: bool,
+) {
     if st.sel.is_empty() {
         return;
     }
@@ -316,7 +385,9 @@ pub(crate) fn delete_selection(ctx: &egui::Context, editor: &Arc<Editor>, browse
     let inbox = browser.inbox.clone();
     let line = dialog::confirm(ctx, asker(editor), spec, move |answer| {
         // the answer comes a frame later: the project it was asked about must still be the open one
-        if answer != Answer::Yes || ed.project_root().is_none_or(|r| !r.display().to_string().eq_ignore_ascii_case(&project)) {
+        if answer != Answer::Yes
+            || ed.project_root().is_none_or(|r| !r.display().to_string().eq_ignore_ascii_case(&project))
+        {
             return;
         }
         let list = doomed.iter().map(|e| e.path.to_string()).collect::<Vec<_>>().join(";");
@@ -324,7 +395,11 @@ pub(crate) fn delete_selection(ctx: &egui::Context, editor: &Arc<Editor>, browse
         let ed2 = ed.clone();
         ed.exec.spawn(async move {
             match call(&ed2, "content_delete", &[("path", json!(list)), ("recursive", json!(true))]).await {
-                Ok(r) => ed2.log.info(format!("Deleted {} file(s), {} folder(s) for good.", count(&r, "files"), count(&r, "folders"))),
+                Ok(r) => ed2.log.info(format!(
+                    "Deleted {} file(s), {} folder(s) for good.",
+                    count(&r, "files"),
+                    count(&r, "folders")
+                )),
                 Err((_, r)) => ed2.notices.error(format!(
                     "Deleted {} file(s); {} could not be deleted: {}",
                     count(&r, "files"),
@@ -362,7 +437,13 @@ pub(crate) fn clips_of(entries: &[Entry], cat: &Catalog) -> Vec<Clip> {
     out
 }
 
-pub(crate) fn clipboard_copy(ctx: &egui::Context, editor: &Editor, st: &mut Inner, cat: Option<&Catalog>, cut: bool) {
+pub(crate) fn clipboard_copy(
+    ctx: &egui::Context,
+    editor: &Editor,
+    st: &mut Inner,
+    cat: Option<&Catalog>,
+    cut: bool,
+) {
     if st.sel.is_empty() {
         return;
     }
@@ -373,7 +454,11 @@ pub(crate) fn clipboard_copy(ctx: &egui::Context, editor: &Editor, st: &mut Inne
     let Some(cat) = cat else { return };
     let n = st.sel.len();
     st.clip = Clipboard { source: st.loc.source, cut, items: clips_of(st.sel.entries(), cat) };
-    editor.log.info(format!("{} {n} entr{}.", if cut { "Cut" } else { "Copied" }, if n == 1 { "y" } else { "ies" }));
+    editor.log.info(format!(
+        "{} {n} entr{}.",
+        if cut { "Cut" } else { "Copied" },
+        if n == 1 { "y" } else { "ies" }
+    ));
 }
 
 /// Why a paste cannot happen here, or `None`.
@@ -391,7 +476,13 @@ pub(crate) fn paste_blocked(st: &Inner) -> Option<&'static str> {
 /// Copies or moves clipboard entries into the project folder `dst` (project-relative): the
 /// entries grouped by the folder each lands in, one command per group. Answers the files
 /// written and the first failure.
-pub(crate) async fn transfer(editor: &Arc<Editor>, source: Source, cut: bool, clips: Vec<Clip>, dst: &str) -> (u64, Option<String>) {
+pub(crate) async fn transfer(
+    editor: &Arc<Editor>,
+    source: Source,
+    cut: bool,
+    clips: Vec<Clip>,
+    dst: &str,
+) -> (u64, Option<String>) {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for c in clips {
         let sub = parent_of(&c.rel);
@@ -416,7 +507,12 @@ pub(crate) async fn transfer(editor: &Arc<Editor>, source: Source, cut: bool, cl
     for (folder, list) in groups {
         let dst_arg = if folder.is_empty() { ".".to_owned() } else { folder };
         let cmd = if cut && source == Source::Project { "content_move" } else { "content_copy" };
-        let pairs = [("src", json!(list.join(";"))), ("dst", json!(dst_arg)), ("recursive", json!(true)), ("overwrite", json!(true))];
+        let pairs = [
+            ("src", json!(list.join(";"))),
+            ("dst", json!(dst_arg)),
+            ("recursive", json!(true)),
+            ("overwrite", json!(true)),
+        ];
         match call(editor, cmd, &pairs).await {
             Ok(r) => files += count(&r, "files"),
             Err((e, r)) => {
@@ -433,7 +529,12 @@ pub(crate) async fn transfer(editor: &Arc<Editor>, source: Source, cut: bool, cl
 }
 
 /// Paste into the folder shown; what would be replaced is asked about first (`ClipboardPaste`).
-pub(crate) fn paste(ctx: &egui::Context, editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, st: &mut Inner) {
+pub(crate) fn paste(
+    ctx: &egui::Context,
+    editor: &Arc<Editor>,
+    browser: &Arc<ContentBrowser>,
+    st: &mut Inner,
+) {
     if paste_blocked(st).is_some() {
         return;
     }
@@ -470,7 +571,8 @@ pub(crate) fn paste(ctx: &egui::Context, editor: &Arc<Editor>, browser: &Arc<Con
         run();
         return;
     }
-    let where_ = if st.loc.folder.is_empty() { "the project's root".to_owned() } else { st.loc.folder.clone() };
+    let where_ =
+        if st.loc.folder.is_empty() { "the project's root".to_owned() } else { st.loc.folder.clone() };
     let spec = ConfirmSpec {
         id: "cb_replace".into(),
         title: "Replace".into(),
@@ -493,14 +595,23 @@ pub(crate) fn paste(ctx: &egui::Context, editor: &Arc<Editor>, browser: &Arc<Con
 }
 
 /// A drop of tiles onto a project folder: project entries move there, read-only ones are copied.
-pub(crate) fn drop_into(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, payload: &crate::DragPayload, category: usize, dst: &str) {
+pub(crate) fn drop_into(
+    editor: &Arc<Editor>,
+    browser: &Arc<ContentBrowser>,
+    payload: &crate::DragPayload,
+    category: usize,
+    dst: &str,
+) {
     let key: CatKey = (payload.source, if payload.source == Source::Editor { category } else { 0 });
     let Some(cat) = browser.cats.peek(key) else { return };
     // a folder never goes into itself or below itself
     let entries: Vec<Entry> = payload
         .entries
         .iter()
-        .filter(|e| payload.source != Source::Project || !(crate::model::is_ancestor(&e.path, dst) || parent_of(&e.path).eq_ignore_ascii_case(dst)))
+        .filter(|e| {
+            payload.source != Source::Project
+                || !(crate::model::is_ancestor(&e.path, dst) || parent_of(&e.path).eq_ignore_ascii_case(dst))
+        })
         .map(|e| Entry::new(&e.path, e.folder))
         .collect();
     if entries.is_empty() {
@@ -514,7 +625,10 @@ pub(crate) fn drop_into(editor: &Arc<Editor>, browser: &Arc<ContentBrowser>, pay
         let (files, err) = transfer(&ed, key.0, cut, clips, &dst).await;
         let verb = if cut { "Moved" } else { "Copied" };
         match err {
-            None => ed.log.info(format!("{verb} {files} file(s) into {}.", if dst.is_empty() { "the project's root" } else { &dst })),
+            None => ed.log.info(format!(
+                "{verb} {files} file(s) into {}.",
+                if dst.is_empty() { "the project's root" } else { &dst }
+            )),
             Some(e) => ed.notices.error(format!("{verb} {files} file(s); {e}")),
         }
         ed.exec.wake().ping();
@@ -529,10 +643,16 @@ pub(crate) fn free_folder_name(cat: Option<&Catalog>, folder: &str) -> Option<St
     let node = cat.and_then(|c| c.folder(folder));
     let taken = |leaf: &str| {
         node.is_some_and(|n| {
-            n.files.iter().any(|f| leaf_of(&f.path).eq_ignore_ascii_case(leaf)) || n.children.iter().filter_map(|&i| cat.and_then(|c| c.node(i))).any(|c| c.name.eq_ignore_ascii_case(leaf))
+            n.files.iter().any(|f| leaf_of(&f.path).eq_ignore_ascii_case(leaf))
+                || n.children
+                    .iter()
+                    .filter_map(|&i| cat.and_then(|c| c.node(i)))
+                    .any(|c| c.name.eq_ignore_ascii_case(leaf))
         })
     };
-    (1..=999).map(|n| if n == 1 { "New Folder".to_owned() } else { format!("New Folder {n}") }).find(|leaf| !taken(leaf))
+    (1..=999)
+        .map(|n| if n == 1 { "New Folder".to_owned() } else { format!("New Folder {n}") })
+        .find(|leaf| !taken(leaf))
 }
 
 /// New Folder: made, then its name is up for typing.
@@ -591,7 +711,11 @@ pub(crate) const ADD_ITEMS: [(&str, &str, Option<&str>); 5] = [
     ("Quest", "A quest graph (.nqasset).", Some("quest")),
     ("Behaviour Graph", "What an NPC does, step by step (.behasset).", Some("behaviour")),
     ("Character", "One of the module's own NPCs (.npcasset).", Some("character")),
-    ("PDA Interface", "The module's own PDA screens: pages, buttons, menus, the live map (.pdaasset).", Some("pda")),
+    (
+        "PDA Interface",
+        "The module's own PDA screens: pages, buttons, menus, the live map (.pdaasset).",
+        Some("pda"),
+    ),
 ];
 
 // ---- Exclude from Build ---------------------------------------------------------------------------
@@ -636,7 +760,9 @@ pub(crate) fn set_excluded(editor: &Arc<Editor>, paths: Vec<String>, excluded: b
     let ed = editor.clone();
     editor.exec.spawn(async move {
         for p in paths {
-            if let Err((e, _)) = call(&ed, "mod_exclude", &[("path", json!(p)), ("excluded", json!(excluded))]).await {
+            if let Err((e, _)) =
+                call(&ed, "mod_exclude", &[("path", json!(p)), ("excluded", json!(excluded))]).await
+            {
                 ed.notices.error(format!("Build Contents: {e}"));
                 break;
             }
@@ -649,7 +775,11 @@ pub(crate) fn set_excluded(editor: &Arc<Editor>, paths: Vec<String>, excluded: b
 
 /// Show in Explorer: the entry selected in a window of Explorer; `dry_run` only answers the path
 /// (`RevealInExplorer`).
-pub(crate) fn reveal_in_explorer(project_root: Option<PathBuf>, entry: &str, dry_run: bool) -> Result<String, String> {
+pub(crate) fn reveal_in_explorer(
+    project_root: Option<PathBuf>,
+    entry: &str,
+    dry_run: bool,
+) -> Result<String, String> {
     let Some(root) = project_root else { return Err("no project is open".into()) };
     if entry.is_empty() {
         return Err("missing 'name'".into());
@@ -665,7 +795,10 @@ pub(crate) fn reveal_in_explorer(project_root: Option<PathBuf>, entry: &str, dry
     if dry_run {
         return Ok(path);
     }
-    std::process::Command::new("explorer.exe").arg(format!("/select,{path}")).spawn().map_err(|_| "Explorer did not start".to_owned())?;
+    std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{path}"))
+        .spawn()
+        .map_err(|_| "Explorer did not start".to_owned())?;
     Ok(path)
 }
 
@@ -757,7 +890,9 @@ mod tests {
         assert_eq!(visual_name("meshes\\dynamics\\box\\box_1a.ogf"), "dynamics\\box\\box_1a");
         assert_eq!(game_level(Source::Game, "levels\\l05_bar\\level.ai"), Some("l05_bar"));
         assert_eq!(game_level(Source::Project, "levels\\x"), None);
-        assert!(matches!(what_opens(Source::Game, 0, "levels\\l05_bar", None), Ok(Open::Scene(s)) if s == "l05_bar"));
+        assert!(
+            matches!(what_opens(Source::Game, 0, "levels\\l05_bar", None), Ok(Open::Scene(s)) if s == "l05_bar")
+        );
         let Ok(Open::Doc(q)) = what_opens(Source::Project, 0, "quests\\a.nqasset", None) else { panic!() };
         assert_eq!((q.kind.as_str(), q.path.as_deref()), ("quest", Some("quests\\a.nqasset")));
         assert!(what_opens(Source::Game, 0, "x.nqasset", None).is_err());
@@ -768,7 +903,10 @@ mod tests {
 
     #[test]
     fn references_and_names() {
-        assert_eq!(placeable_ref(Source::Project, 0, "rawdata\\objects\\box\\b.object").as_deref(), Some("box\\b"));
+        assert_eq!(
+            placeable_ref(Source::Project, 0, "rawdata\\objects\\box\\b.object").as_deref(),
+            Some("box\\b")
+        );
         assert_eq!(placeable_ref(Source::Project, 0, "gamedata\\b.object"), None);
         assert_eq!(placeable_ref(Source::Editor, 0, "box\\b.object").as_deref(), Some("box\\b"));
         let spec = delete_spec(&[Entry::new("a\\b.txt", false)], None);
@@ -782,8 +920,17 @@ mod tests {
     #[test]
     fn the_build_toggle() {
         let rules = vec!["docs".to_owned()];
-        assert_eq!(build_toggle(&rules, &[Entry::new("docs", true)]), BuildToggle::Include(vec!["docs".into()]));
-        assert_eq!(build_toggle(&rules, &[Entry::new("docs\\a.md", false)]), BuildToggle::ByRule("docs".into()));
-        assert_eq!(build_toggle(&rules, &[Entry::new("gamedata", true)]), BuildToggle::Exclude(vec!["gamedata".into()]));
+        assert_eq!(
+            build_toggle(&rules, &[Entry::new("docs", true)]),
+            BuildToggle::Include(vec!["docs".into()])
+        );
+        assert_eq!(
+            build_toggle(&rules, &[Entry::new("docs\\a.md", false)]),
+            BuildToggle::ByRule("docs".into())
+        );
+        assert_eq!(
+            build_toggle(&rules, &[Entry::new("gamedata", true)]),
+            BuildToggle::Exclude(vec!["gamedata".into()])
+        );
     }
 }

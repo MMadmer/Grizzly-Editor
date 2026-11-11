@@ -10,15 +10,30 @@ use crate::model::{Command, Manifest};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Edit {
     /// Sets a key: its line keeps its spacing and comment, a new line follows its neighbours.
-    Set { section: String, key: String, value: String },
+    Set {
+        section: String,
+        key: String,
+        value: String,
+    },
     /// Removes every line of a key; a section left with nothing but blank lines goes too.
-    Remove { section: String, key: String },
+    Remove {
+        section: String,
+        key: String,
+    },
     /// Replaces the entry lines of a section by these raw lines (comments stay); empty clears
     /// it, and a section left with nothing but blank lines goes.
-    SetLines { section: String, lines: Vec<String> },
-    RemoveSection { section: String },
+    SetLines {
+        section: String,
+        lines: Vec<String>,
+    },
+    RemoveSection {
+        section: String,
+    },
     /// The browser's Exclude from Build / Include in Build of one project-relative entry.
-    SetExcluded { rel: String, excluded: bool },
+    SetExcluded {
+        rel: String,
+        excluded: bool,
+    },
     /// Adds a console command or replaces the first of its name (any case): its `[commands]`
     /// line and its `[command.<name>]` section.
     SetCommand(Command),
@@ -115,7 +130,10 @@ mod tests {
     #[test]
     fn optional_keys_come_and_go() {
         let base = "[module]\r\nid          = od ; mine\r\n\r\n[update]\r\ngithub      = a/b\r\n";
-        assert_eq!(run(base, vec![Edit::optional("update", "github", "")]), "[module]\r\nid          = od ; mine\r\n");
+        assert_eq!(
+            run(base, vec![Edit::optional("update", "github", "")]),
+            "[module]\r\nid          = od ; mine\r\n"
+        );
         assert_eq!(
             run(base, vec![Edit::optional("module", "author", "Madmer")]),
             "[module]\r\nid          = od ; mine\r\nauthor      = Madmer\r\n\r\n[update]\r\ngithub      = a/b\r\n"
@@ -145,7 +163,10 @@ mod tests {
     #[test]
     fn exclusions_are_lines() {
         let base = "[module]\nid = od\n\n[exclude]\n; out\ndocs\n";
-        assert_eq!(run(base, vec![Edit::SetExcluded { rel: "design\\".into(), excluded: true }]), "[module]\nid = od\n\n[exclude]\n; out\ndocs\ndesign\n");
+        assert_eq!(
+            run(base, vec![Edit::SetExcluded { rel: "design\\".into(), excluded: true }]),
+            "[module]\nid = od\n\n[exclude]\n; out\ndocs\ndesign\n"
+        );
         let mut doc = ManifestDoc::parse(base);
         let refused = apply(&mut doc, Edit::SetExcluded { rel: "mod.ltx".into(), excluded: true });
         assert!(refused.is_err());
@@ -154,14 +175,30 @@ mod tests {
     #[test]
     fn commands_keep_their_sections() {
         let base = "[commands]\nstatus          = od.status\n\n[command.status]\nhelp        = old\n";
-        let c = Command { name: "status".into(), function: "od.show".into(), args: "<n>".into(), cheat: true, ..Command::default() };
+        let c = Command {
+            name: "status".into(),
+            function: "od.show".into(),
+            args: "<n>".into(),
+            cheat: true,
+            ..Command::default()
+        };
         let out = run(base, vec![Edit::SetCommand(c)]);
-        assert_eq!(out, "[commands]\nstatus          = od.show\n\n[command.status]\nargs        = <n>\ncheat       = true\n");
+        assert_eq!(
+            out,
+            "[commands]\nstatus          = od.show\n\n[command.status]\nargs        = <n>\ncheat       = true\n"
+        );
         let m = Manifest::parse(&ManifestDoc::parse(&out));
         assert_eq!(m.commands.len(), 1);
         assert!(m.commands[0].cheat);
         assert_eq!(run(&out, vec![Edit::RemoveCommand("STATUS".into())]), "");
-        let added = run("[module]\nid = od\n", vec![Edit::SetCommand(Command { name: "night".into(), function: "od.night".into(), ..Command::default() })]);
+        let added = run(
+            "[module]\nid = od\n",
+            vec![Edit::SetCommand(Command {
+                name: "night".into(),
+                function: "od.night".into(),
+                ..Command::default()
+            })],
+        );
         assert_eq!(added, "[module]\nid = od\n\n[commands]\nnight           = od.night\n");
     }
 }

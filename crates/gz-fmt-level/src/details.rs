@@ -260,7 +260,7 @@ impl DetailSlot {
 }
 
 fn read_slots(bytes: &[u8]) -> Vec<DetailSlot> {
-    bytes.chunks_exact(SLOT).map(DetailSlot::read).collect()
+    bytes.as_chunks::<SLOT>().0.iter().map(|c| DetailSlot::read(c)).collect()
 }
 
 /// A vertex of a detail model: position and texture coordinates.
@@ -297,11 +297,13 @@ impl DetailModel {
         let nv = fits(r.elapsed(), u64::from(vert_count), VERTEX as u64, "detail model vertices")?;
         let verts = r
             .take(nv * VERTEX)?
-            .chunks_exact(VERTEX)
+            .as_chunks::<VERTEX>()
+            .0
+            .iter()
             .map(|c| DetailVertex { pos: vec3_at(c, 0), u: f32_at(c, 12), v: f32_at(c, 16) })
             .collect();
         let ni = fits(r.elapsed(), u64::from(index_count), 2, "detail model indices")?;
-        let indices = r.take(ni * 2)?.chunks_exact(2).map(|c| u16_at(c, 0)).collect();
+        let indices = r.take(ni * 2)?.as_chunks::<2>().0.iter().map(|c| u16_at(c, 0)).collect();
         Ok(Self { shader, texture, flags, min_scale, max_scale, verts, indices })
     }
 
@@ -366,11 +368,12 @@ impl LevelDetails {
         let mut chunk_order = [u32::MAX; 3];
         let mut seen = 0;
         for (id, _, _) in r.chunks() {
-            if matches!(id, CHUNK_HEADER | CHUNK_OBJECTS | CHUNK_SLOTS) && !chunk_order[..seen].contains(&id) {
-                if let Some(slot) = chunk_order.get_mut(seen) {
-                    *slot = id;
-                    seen += 1;
-                }
+            if matches!(id, CHUNK_HEADER | CHUNK_OBJECTS | CHUNK_SLOTS)
+                && !chunk_order[..seen].contains(&id)
+                && let Some(slot) = chunk_order.get_mut(seen)
+            {
+                *slot = id;
+                seen += 1;
             }
         }
         // a file without an objects chunk still gets a full order
@@ -436,7 +439,8 @@ impl DetailObjectRef {
         let reference = SmolStr::new(r.need_chunk(DETOBJ_CHUNK_REFERENCE)?.reader().r_stringz()?);
         let scale = r.need_chunk(DETOBJ_CHUNK_SCALE_LIMITS)?;
         let mut scale = scale.reader();
-        let mut out = Self { reference, min_scale: scale.r_f32()?, max_scale: scale.r_f32()?, ..Self::default() };
+        let mut out =
+            Self { reference, min_scale: scale.r_f32()?, max_scale: scale.r_f32()?, ..Self::default() };
         if let Some(c) = r.open_chunk(DETOBJ_CHUNK_DENSITY_FACTOR)? {
             out.density_factor = c.reader().r_f32()?;
         }
@@ -769,7 +773,10 @@ mod tests {
             header: DetailHeader { version: 0, object_count: 0, offs_x: 1, offs_z: 1, size_x: 3, size_z: 2 },
             indices: DetailColorIndices {
                 objects: vec![
-                    DetailObjectRef { reference: "trees\\grass\\grass_01".into(), ..DetailObjectRef::default() },
+                    DetailObjectRef {
+                        reference: "trees\\grass\\grass_01".into(),
+                        ..DetailObjectRef::default()
+                    },
                     DetailObjectRef {
                         reference: "trees\\grass\\bush".into(),
                         min_scale: 0.0,
@@ -779,7 +786,10 @@ mod tests {
                     },
                 ],
                 colors: vec![
-                    ColorIndex { color: 0xff00_ff00, objects: vec!["trees\\grass\\grass_01".into(), "trees\\grass\\bush".into()] },
+                    ColorIndex {
+                        color: 0xff00_ff00,
+                        objects: vec!["trees\\grass\\grass_01".into(), "trees\\grass\\bush".into()],
+                    },
                     ColorIndex { color: 0xff80_8080, objects: vec![] },
                 ],
             },

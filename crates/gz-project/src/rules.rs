@@ -6,7 +6,17 @@ use std::path::Path;
 
 /// The editor's scratch, path bookkeeping and captured preview, by their name in the project
 /// root. Everything else there is the author's module: never shown as content, never exported.
-const EDITOR_ONLY: [&str; 9] = ["import", "temp", "logs", "savedgames", "screenshots", "backup", "releases", "project.ltx", "preview.png"];
+const EDITOR_ONLY: [&str; 9] = [
+    "import",
+    "temp",
+    "logs",
+    "savedgames",
+    "screenshots",
+    "backup",
+    "releases",
+    "project.ltx",
+    "preview.png",
+];
 
 /// What the Windows shell leaves in folders it has shown.
 const SHELL_LITTER: [&str; 4] = ["Thumbs.db", "ehthumbs.db", "ehthumbs_vista.db", "desktop.ini"];
@@ -91,7 +101,17 @@ mod tests {
 
     #[test]
     fn tooling_at_any_depth() {
-        for n in [".git", ".gitignore", ".vscode", ".DS_Store", "Thumbs.db", "THUMBS.DB", "ehthumbs_vista.db", "Desktop.ini", "~$report.docx"] {
+        for n in [
+            ".git",
+            ".gitignore",
+            ".vscode",
+            ".DS_Store",
+            "Thumbs.db",
+            "THUMBS.DB",
+            "ehthumbs_vista.db",
+            "Desktop.ini",
+            "~$report.docx",
+        ] {
             assert!(is_tooling_entry(n), "{n}");
         }
         for n in ["", "gamedata", "thumbs.dbx", "~report", "mod.ltx"] {

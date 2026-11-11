@@ -35,8 +35,8 @@
 
 pub mod asset_kind;
 mod cmd;
-mod fsys;
 pub mod delete;
+mod fsys;
 mod hooks;
 mod ini;
 pub mod list;
@@ -48,13 +48,18 @@ mod service;
 pub mod tree;
 
 pub use asset_kind::{AssetKind, kind_of, own_extension};
-pub use cmd::register;
+pub use cmd::{close_project, register};
+pub use delete::{
+    DeleteContext, DeleteFailed, DeleteFailure, DeleteInfo, Guard, check_delete, delete_project,
+    system_guards,
+};
 pub use gz_vfs::looks_like_game;
-pub use delete::{DeleteContext, DeleteFailed, DeleteFailure, DeleteInfo, Guard, check_delete, delete_project, system_guards};
 pub use hooks::{AssetLists, AssetTemplates, CATEGORIES, ProjectHooks, TemplateCx, TemplateKind};
 pub use list::{EntryState, MAX_RECENT, ProjectList, Sort};
 pub use ops::{Failure, FileOps, Report};
 pub use project::{ProjectFile, scene_in_project};
-pub use rules::{GITIGNORE_TEXT, ensure_gitignore, is_editor_only_entry, is_source_only_entry, is_tooling_entry};
+pub use rules::{
+    GITIGNORE_TEXT, ensure_gitignore, is_editor_only_entry, is_source_only_entry, is_tooling_entry,
+};
 pub use service::{NOT_LINKED, Project, Projects, project_state};
 pub use tree::{Dir, Entry, EntryKind, FileTree, TreeWatch};

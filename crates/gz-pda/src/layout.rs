@@ -370,7 +370,8 @@ fn read_item(t: &Table) -> Item {
         it.text_color = c;
     }
     (it.has_text_hover, it.text_hover) = get_color(t, "text_hover").map_or((false, 0), |c| (true, c));
-    (it.has_text_selected, it.text_selected) = get_color(t, "text_selected").map_or((false, 0), |c| (true, c));
+    (it.has_text_selected, it.text_selected) =
+        get_color(t, "text_selected").map_or((false, 0), |c| (true, c));
     it.align = get_str(t, "align").chars().next().unwrap_or('l');
     it.valign = get_str(t, "valign").chars().next().unwrap_or('c');
     it.wrap = get_bool(t, "wrap", false);
@@ -379,7 +380,8 @@ fn read_item(t: &Table) -> Item {
     if let Some(c) = get_color(t, "icon_color") {
         it.icon_color = c;
     }
-    (it.has_icon_selected, it.icon_selected) = get_color(t, "icon_selected").map_or((false, 0), |c| (true, c));
+    (it.has_icon_selected, it.icon_selected) =
+        get_color(t, "icon_selected").map_or((false, 0), |c| (true, c));
     it.action = get_list(t, "action");
     it.selected_on = get_list(t, "selected_on");
     it.row_h = get_f32(t, "row_h", 0.0);
@@ -392,7 +394,8 @@ fn read_item(t: &Table) -> Item {
 
 fn read_spot(t: &Table) -> MapSpot {
     let size = get_f32(t, "size", 24.0);
-    let rect = sub(t, "rect").map(|r| [get_f32(r, "x", 0.0), get_f32(r, "y", 0.0), get_f32(r, "w", 0.0), get_f32(r, "h", 0.0)]);
+    let rect = sub(t, "rect")
+        .map(|r| [get_f32(r, "x", 0.0), get_f32(r, "y", 0.0), get_f32(r, "w", 0.0), get_f32(r, "h", 0.0)]);
     let inner = sub(t, "inner").map(|i| InnerSpot {
         icon: get_str(i, "icon"),
         color: get_color(i, "color").unwrap_or(0xFFFF_FFFF),
@@ -439,13 +442,25 @@ pub fn from_reader(r: &Table) -> Layout {
         out.key_contacts = get_str(k, "contacts");
     }
     if let Some(v) = sub(r, "vars") {
-        out.vars = v.fields.iter().filter_map(|(k, val)| val.as_str().map(|s| (k.to_string(), s.to_owned()))).collect();
+        out.vars = v
+            .fields
+            .iter()
+            .filter_map(|(k, val)| val.as_str().map(|s| (k.to_string(), s.to_owned())))
+            .collect();
         out.vars.sort();
     }
-    out.pages = tables(r, "pages").map(|p| Page { id: get_str(p, "id"), title: get_str(p, "title"), stock: get_str(p, "stock") }).collect();
+    out.pages = tables(r, "pages")
+        .map(|p| Page { id: get_str(p, "id"), title: get_str(p, "title"), stock: get_str(p, "stock") })
+        .collect();
     out.items = tables(r, "items").map(read_item).collect();
     out.map_spots = tables(r, "map_spots").map(read_spot).collect();
-    out.problems = tables(r, "problems").map(|p| PdaProblem { code: get_str(p, "code"), path: get_str(p, "path"), message: get_str(p, "message") }).collect();
+    out.problems = tables(r, "problems")
+        .map(|p| PdaProblem {
+            code: get_str(p, "code"),
+            path: get_str(p, "path"),
+            message: get_str(p, "message"),
+        })
+        .collect();
     out
 }
 

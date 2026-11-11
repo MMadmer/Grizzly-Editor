@@ -55,7 +55,7 @@ pub(crate) fn aabb_at(b: &[u8], at: usize) -> Aabb {
 
 /// Every 12 bytes as a vector.
 pub(crate) fn read_vec3s(bytes: &[u8]) -> Vec<Vec3> {
-    bytes.chunks_exact(12).map(|c| vec3_at(c, 0)).collect()
+    bytes.as_chunks::<12>().0.iter().map(|c| vec3_at(c, 0)).collect()
 }
 
 #[inline]
@@ -89,7 +89,7 @@ pub(crate) fn push_vec3s(out: &mut Vec<u8>, items: &[Vec3]) {
     let start = out.len();
     out.resize(start + items.len() * 12, 0);
     if let Some(dst) = out.get_mut(start..) {
-        for (rec, v) in dst.chunks_exact_mut(12).zip(items) {
+        for (rec, v) in dst.as_chunks_mut::<12>().0.iter_mut().zip(items) {
             put_vec3(rec, 0, *v);
         }
     }

@@ -57,10 +57,14 @@ fn expand(
 ) {
     for (n, line) in lines(text).enumerate() {
         if line.starts_with('#') && line.contains("#include") {
-            let name = line.split('"').nth(1).unwrap_or("").trim_matches(|c: char| u32::from(c) <= 0x20).to_owned();
+            let name =
+                line.split('"').nth(1).unwrap_or("").trim_matches(|c: char| u32::from(c) <= 0x20).to_owned();
             let lineno = u32::try_from(n + 1).unwrap_or(u32::MAX);
             if depth >= MAX_DEPTH || chain.iter().any(|c| c.eq_ignore_ascii_case(&name)) {
-                warnings.push(XmlWarning { line: lineno, message: format!("The include of '{name}' loops back on itself; it is skipped.") });
+                warnings.push(XmlWarning {
+                    line: lineno,
+                    message: format!("The include of '{name}' loops back on itself; it is skipped."),
+                });
                 continue;
             }
             match include(&name) {
@@ -69,7 +73,10 @@ fn expand(
                     expand(&body, include, out, warnings, depth + 1, chain);
                     chain.pop();
                 }
-                None => warnings.push(XmlWarning { line: lineno, message: format!("Can't find include file '{name}'; it is skipped.") }),
+                None => warnings.push(XmlWarning {
+                    line: lineno,
+                    message: format!("Can't find include file '{name}'; it is skipped."),
+                }),
             }
             continue;
         }
@@ -91,7 +98,10 @@ mod tests {
                 _ => None,
             }
         };
-        let (out, w) = preprocess("<w>\r\n\r\n#include \"ui\\a.xml\"\r\n #include \"x\"\r\n#include \"gone.xml\"\r\n</w>", &inc);
+        let (out, w) = preprocess(
+            "<w>\r\n\r\n#include \"ui\\a.xml\"\r\n #include \"x\"\r\n#include \"gone.xml\"\r\n</w>",
+            &inc,
+        );
         assert_eq!(out, "<w>\r\n<a/>\r\n<b/>\r\n #include \"x\"\r\n</w>\r\n");
         assert_eq!(w.len(), 1);
         let (_, w) = preprocess("#include \"self.xml\"", &|_| Some("#include \"self.xml\"".into()));

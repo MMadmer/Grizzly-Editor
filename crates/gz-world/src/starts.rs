@@ -19,7 +19,8 @@ pub struct Start {
 /// The longest prefix of `s` that reads as a float, and what follows it (`%f`).
 fn scan_float(s: &str) -> Option<(f32, &str)> {
     let t = s.trim_start_matches([' ', '\t', '\r', '\n']);
-    let n = t.bytes().take_while(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.' | b'e' | b'E')).count();
+    let n =
+        t.bytes().take_while(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.' | b'e' | b'E')).count();
     (1..=n).rev().find_map(|i| Some((t.get(..i)?.parse::<f32>().ok()?, t.get(i..)?)))
 }
 
@@ -49,7 +50,12 @@ pub fn read_starts(text: &str, source: &str) -> Vec<Start> {
         if let Some(name) = section.strip_prefix("obj:")
             && get("op") == "start"
         {
-            let mut s = Start { name: name.to_owned(), level: get("level").to_owned(), source: source.to_owned(), ..Start::default() };
+            let mut s = Start {
+                name: name.to_owned(),
+                level: get("level").to_owned(),
+                source: source.to_owned(),
+                ..Start::default()
+            };
             parse_vec(get("position"), &mut s.position);
             parse_vec(get("direction"), &mut s.direction);
             out.push(s);

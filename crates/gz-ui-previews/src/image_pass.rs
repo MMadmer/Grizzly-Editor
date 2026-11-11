@@ -87,39 +87,90 @@ pub struct ImagePass {
 impl ImagePass {
     fn new(gpu: &RenderState) -> Self {
         let device = &gpu.device;
-        let entry = |binding: u32, ty: wgpu::BindingType| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty, count: None };
+        let entry = |binding: u32, ty: wgpu::BindingType| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gz-ui-previews image"),
             entries: &[
-                entry(0, wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }),
+                entry(
+                    0,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
                 entry(1, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
-                entry(2, wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }),
+                entry(
+                    2,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
             ],
         });
-        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("gz-ui-previews image"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("gz-ui-previews image"), source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SHADER)) });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gz-ui-previews image"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gz-ui-previews image"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(SHADER)),
+        });
         let blend = wgpu::BlendState {
-            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
-            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
         };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("gz-ui-previews image"),
             layout: Some(&pl),
-            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: wgpu::PipelineCompilationOptions::default(), buffers: &[] },
-            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: gpu.target_format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: gpu.target_format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             multiview_mask: None,
             cache: None,
         });
         let sampler = |mag: wgpu::FilterMode, label: &str| {
-            device.create_sampler(&wgpu::SamplerDescriptor { label: Some(label), mag_filter: mag, min_filter: wgpu::FilterMode::Linear, ..Default::default() })
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(label),
+                mag_filter: mag,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            })
         };
         Self {
             pipeline,
@@ -165,7 +216,14 @@ impl ImageDraw {
             layout: &pass.layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(if nearest { &pass.nearest } else { &pass.linear }) },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(if nearest {
+                        &pass.nearest
+                    } else {
+                        &pass.linear
+                    }),
+                },
                 wgpu::BindGroupEntry { binding: 2, resource: uniforms.as_entire_binding() },
             ],
         });
@@ -177,11 +235,11 @@ impl ImageDraw {
 #[must_use]
 pub fn uniform_bytes(uv: [f32; 4], mode: ImageMode, srgb: bool) -> [u8; 32] {
     let mut bytes = [0u8; 32];
-    for (chunk, v) in bytes.chunks_exact_mut(4).zip(uv) {
+    for (chunk, v) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(uv) {
         chunk.copy_from_slice(&v.to_le_bytes());
     }
     let tail = [mode as u32, u32::from(srgb)];
-    for (chunk, v) in bytes.chunks_exact_mut(4).skip(4).zip(tail) {
+    for (chunk, v) in bytes.as_chunks_mut::<4>().0.iter_mut().skip(4).zip(tail) {
         chunk.copy_from_slice(&v.to_le_bytes());
     }
     bytes
@@ -194,13 +252,25 @@ struct ImageCallback {
 }
 
 impl egui_wgpu::CallbackTrait for ImageCallback {
-    fn prepare(&self, _device: &wgpu::Device, queue: &wgpu::Queue, _screen: &egui_wgpu::ScreenDescriptor, _encoder: &mut wgpu::CommandEncoder, res: &mut egui_wgpu::CallbackResources) -> Vec<wgpu::CommandBuffer> {
+    fn prepare(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen: &egui_wgpu::ScreenDescriptor,
+        _encoder: &mut wgpu::CommandEncoder,
+        res: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
         let srgb = res.get::<Arc<ImagePass>>().is_some_and(|p| p.srgb);
         queue.write_buffer(&self.draw.uniforms, 0, &uniform_bytes(self.uv, self.mode, srgb));
         Vec::new()
     }
 
-    fn paint(&self, _info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, res: &egui_wgpu::CallbackResources) {
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        pass: &mut wgpu::RenderPass<'static>,
+        res: &egui_wgpu::CallbackResources,
+    ) {
         let Some(p) = res.get::<Arc<ImagePass>>() else { return };
         pass.set_pipeline(&p.pipeline);
         pass.set_bind_group(0, &self.draw.bind, &[]);
@@ -210,7 +280,14 @@ impl egui_wgpu::CallbackTrait for ImageCallback {
 
 /// Draws a picture whose whole lies at `image` (points), the part inside `clip` only: the
 /// texture coordinates of that part are worked out here.
-pub fn paint_image(painter: &egui::Painter, image: egui::Rect, clip: egui::Rect, uv: [f32; 4], mode: ImageMode, draw: &Arc<ImageDraw>) {
+pub fn paint_image(
+    painter: &egui::Painter,
+    image: egui::Rect,
+    clip: egui::Rect,
+    uv: [f32; 4],
+    mode: ImageMode,
+    draw: &Arc<ImageDraw>,
+) {
     let shown = image.intersect(clip);
     if shown.width() <= 0.0 || shown.height() <= 0.0 || image.width() <= 0.0 || image.height() <= 0.0 {
         return;
@@ -218,7 +295,10 @@ pub fn paint_image(painter: &egui::Painter, image: egui::Rect, clip: egui::Rect,
     let fx = |x: f32| uv[0] + (uv[2] - uv[0]) * (x - image.min.x) / image.width();
     let fy = |y: f32| uv[1] + (uv[3] - uv[1]) * (y - image.min.y) / image.height();
     let part = [fx(shown.min.x), fy(shown.min.y), fx(shown.max.x), fy(shown.max.y)];
-    painter.add(egui_wgpu::Callback::new_paint_callback(shown, ImageCallback { draw: draw.clone(), uv: part, mode }));
+    painter.add(egui_wgpu::Callback::new_paint_callback(
+        shown,
+        ImageCallback { draw: draw.clone(), uv: part, mode },
+    ));
 }
 
 #[cfg(test)]

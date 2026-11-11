@@ -80,15 +80,19 @@ pub(super) fn drop_backtracks(s: &mut Vec<Pos2>, closed: bool) {
         }
         w += 1;
         while w >= 3 {
-            let (Some(a), Some(b), Some(c)) = (s.get(w - 3).copied(), s.get(w - 2).copied(), s.get(w - 1).copied()) else { break };
+            let (Some(a), Some(b), Some(c)) =
+                (s.get(w - 3).copied(), s.get(w - 2).copied(), s.get(w - 1).copied())
+            else {
+                break;
+            };
             let (back, ab, bc) = doubles_back(a, b, c);
             if !back {
                 break;
             }
-            if bc > ab || (!closed && i + 1 == n) {
-                if let Some(slot) = s.get_mut(w - 2) {
-                    *slot = c;
-                }
+            if (bc > ab || (!closed && i + 1 == n))
+                && let Some(slot) = s.get_mut(w - 2)
+            {
+                *slot = c;
             }
             w -= 1;
         }
@@ -97,7 +101,11 @@ pub(super) fn drop_backtracks(s: &mut Vec<Pos2>, closed: bool) {
     if closed {
         while s.len() >= 4 {
             let k = s.len();
-            let (Some(a), Some(b), Some(c)) = (s.get(k - 2).copied(), s.get(k - 1).copied(), s.first().copied()) else { break };
+            let (Some(a), Some(b), Some(c)) =
+                (s.get(k - 2).copied(), s.get(k - 1).copied(), s.first().copied())
+            else {
+                break;
+            };
             if !doubles_back(a, b, c).0 {
                 break;
             }
@@ -123,7 +131,11 @@ fn stroke_dashed(painter: &Painter, pts: &[Pos2], stroke: Stroke, unit: f32, loo
     if length < base_gap {
         return;
     }
-    let count = ((if looped { length } else { length + base_gap }) / base_period).round().max(if looped { 3.0 } else { 2.0 });
+    let count = ((if looped { length } else { length + base_gap }) / base_period).round().max(if looped {
+        3.0
+    } else {
+        2.0
+    });
     let fit = length / if looped { count * base_period } else { count * base_period - base_gap };
     let (dash, period) = (base_dash * fit, base_period * fit);
     let mut phase = 0.0f32;
@@ -205,7 +217,12 @@ fn rounded_rect(a: Pos2, b: Pos2, r: f32) -> Vec<Pos2> {
     }
     let steps = (r.ceil() as usize).clamp(2, 8);
     let mut out = Vec::with_capacity((steps + 1) * 4);
-    let corners = [(pos2(a.x + r, a.y + r), 180.0f32), (pos2(b.x - r, a.y + r), 270.0), (pos2(b.x - r, b.y - r), 0.0), (pos2(a.x + r, b.y - r), 90.0)];
+    let corners = [
+        (pos2(a.x + r, a.y + r), 180.0f32),
+        (pos2(b.x - r, a.y + r), 270.0),
+        (pos2(b.x - r, b.y - r), 0.0),
+        (pos2(a.x + r, b.y - r), 90.0),
+    ];
     for (c, a0) in corners {
         for k in 0..=steps {
             let ang = (a0 + 90.0 * k as f32 / steps as f32).to_radians();
@@ -235,7 +252,8 @@ pub(super) fn draw_glyph(painter: &Painter, g: &Glyph, min: Pos2, side: f32, col
         match p.kind {
             PrimKind::Stroke => {
                 let (src, fl) = g.points(p);
-                let mut s: Vec<Pos2> = src.iter().zip(fl).map(|(pt, f)| v.at(*pt, f & PF_FREE != 0)).collect();
+                let mut s: Vec<Pos2> =
+                    src.iter().zip(fl).map(|(pt, f)| v.at(*pt, f & PF_FREE != 0)).collect();
                 let closed = p.has(CLOSED);
                 let dashed = p.has(DASHED);
                 // a snapped glyph is at most 20 px, where no stroke is drawn round: the flags need not
@@ -290,10 +308,8 @@ pub(super) fn draw_glyph(painter: &Painter, g: &Glyph, min: Pos2, side: f32, col
                     for pt in src {
                         mesh.colored_vertex(to_pt(v.at(*pt, false)), c);
                     }
-                    for tri in g.triangles(p).chunks_exact(3) {
-                        if let [a, b, cc] = tri {
-                            mesh.add_triangle(u32::from(*a), u32::from(*b), u32::from(*cc));
-                        }
+                    for [a, b, cc] in g.triangles(p).as_chunks::<3>().0 {
+                        mesh.add_triangle(u32::from(*a), u32::from(*b), u32::from(*cc));
                     }
                     painter.add(Shape::mesh(mesh));
                 }

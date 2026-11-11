@@ -12,11 +12,11 @@ use gz_project::{AssetLists, ProjectHooks};
 use crate::apply::{ReplaceKind, SceneCmd, SceneReply, SelectMode, TransformEdit};
 use crate::class::ObjClass;
 use crate::library::{self, normalize};
-use crate::math::{Vec3, Transform};
+use crate::math::{Transform, Vec3};
 use crate::model::{ObjData, Object, SceneState};
 use crate::objects::{
-    ENVMOD_CHOOSE_NAME, PLAYERSTART_CHOOSE_NAME, PointKind, RPOINT_CHOOSE_NAME, SceneObjectData, ShapeData, ShapeDef, SpawnData, SpawnEntity,
-    WayData, XmsOrder,
+    ENVMOD_CHOOSE_NAME, PLAYERSTART_CHOOSE_NAME, PointKind, RPOINT_CHOOSE_NAME, SceneObjectData, ShapeData,
+    ShapeDef, SpawnData, SpawnEntity, WayData, XmsOrder,
 };
 use crate::pick::ray_scene_objects;
 use crate::props::{self, Effect, PropCx};
@@ -29,8 +29,16 @@ const AREA: &str = "gz-scene";
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "open_scene", open_scene);
     reg.add(AREA, "save_scene", save_scene);
-    reg.add(AREA, "scene_info", |ed, _a, _o| async move { with_scene(&ed, |s, svc| scene_info(s, svc, false)) });
-    reg.add(AREA, "scene_stats", |ed, _a, _o| async move { with_scene(&ed, |s, svc| scene_info(s, svc, true)) });
+    reg.add(
+        AREA,
+        "scene_info",
+        |ed, _a, _o| async move { with_scene(&ed, |s, svc| scene_info(s, svc, false)) },
+    );
+    reg.add(
+        AREA,
+        "scene_stats",
+        |ed, _a, _o| async move { with_scene(&ed, |s, svc| scene_info(s, svc, true)) },
+    );
     reg.add(AREA, "scene_tree", |ed, a, _o| async move { with_scene(&ed, |s, _| Ok(scene_tree(s, &a))) });
     reg.add(AREA, "scene_load_status", |ed, _a, _o| async move { scene_load_status(&ed) });
     reg.add(AREA, "list_objects", |ed, a, _o| async move { with_scene(&ed, |s, _| Ok(list_objects(s, &a))) });
@@ -43,7 +51,8 @@ pub fn register(reg: &mut Registry) {
     });
     reg.add(AREA, "selection", |ed, _a, _o| async move {
         with_scene(&ed, |s, _| {
-            let list: Vec<Value> = s.selected_in_order().iter().filter_map(|id| s.get(*id)).map(|o| object_json(s, o)).collect();
+            let list: Vec<Value> =
+                s.selected_in_order().iter().filter_map(|id| s.get(*id)).map(|o| object_json(s, o)).collect();
             Ok(json!({ "selection": list }))
         })
     });
@@ -55,7 +64,9 @@ pub fn register(reg: &mut Registry) {
     });
     reg.add(AREA, "delete_selected", |ed, _a, o| async move {
         let svc = SceneService::of(&ed)?;
-        let SceneReply::Count(n) = svc.store.send(SceneCmd::DeleteSelected, o).await? else { return Ok(json!({ "removed": 0 })) };
+        let SceneReply::Count(n) = svc.store.send(SceneCmd::DeleteSelected, o).await? else {
+            return Ok(json!({ "removed": 0 }));
+        };
         Ok(json!({ "removed": n }))
     });
     reg.add(AREA, "rename_object", rename_object);
@@ -71,13 +82,17 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "mark_authored", |ed, a, o| async move {
         let svc = SceneService::of(&ed)?;
         let on = a.bool("authored").unwrap_or(true);
-        let SceneReply::Count(n) = svc.store.send(SceneCmd::MarkAuthored(on), o).await? else { return Err(CmdError::internal("mark_authored")) };
+        let SceneReply::Count(n) = svc.store.send(SceneCmd::MarkAuthored(on), o).await? else {
+            return Err(CmdError::internal("mark_authored"));
+        };
         Ok(json!({ "changed": n, "authored": on }))
     });
     reg.add(AREA, "mark_removed", |ed, a, o| async move {
         let svc = SceneService::of(&ed)?;
         let on = a.bool("removed").unwrap_or(true);
-        let SceneReply::Counts(n, own) = svc.store.send(SceneCmd::MarkRemoved(on), o).await? else { return Err(CmdError::internal("mark_removed")) };
+        let SceneReply::Counts(n, own) = svc.store.send(SceneCmd::MarkRemoved(on), o).await? else {
+            return Err(CmdError::internal("mark_removed"));
+        };
         Ok(json!({ "changed": n, "skipped_authored": own, "removed": on }))
     });
     reg.add(AREA, "drop_objects", drop_objects);
@@ -102,11 +117,20 @@ pub fn install(editor: &Editor) {
             return svc.library.list().as_ref().clone();
         }
         // no project: the editor's own library, listed once
-        let lib = ed.services.get_or_init(|| EditorLibrary(library::Library::new(vec![ed.paths.root.join("rawdata").join("objects")])));
+        let lib = ed.services.get_or_init(|| {
+            EditorLibrary(library::Library::new(vec![ed.paths.root.join("rawdata").join("objects")]))
+        });
         lib.0.list().as_ref().clone()
     });
     lists.provide("Groups", |ed| library::list_groups(&ed.paths.root.join("rawdata").join("groups")));
     let hooks = ProjectHooks::of(editor);
+    // something placed or unsaved (C++ `ObjCount() || IsUnsaved() || IsModified()`)
+    hooks.provide_live_scene(|ed| {
+        ed.project_opt().and_then(|s| s.services.get::<SceneService>()).is_some_and(|svc| {
+            let snap = svc.store.snapshot();
+            snap.valid && (!snap.objects.is_empty() || svc.store.is_dirty())
+        })
+    });
     hooks.on_open(|ed, session| {
         let svc = SceneService::of_session(ed, session);
         let ed = ed.clone();
@@ -193,7 +217,14 @@ fn camera_json(s: &SceneState) -> Value {
 }
 
 fn tools_json(s: &SceneState) -> Value {
-    Value::Array(ObjClass::ALL.iter().map(|c| json!({ "class": c.name(), "objects": if c.is_object_tool() { s.count(*c) } else { 0 } })).collect())
+    Value::Array(
+        ObjClass::ALL
+            .iter()
+            .map(
+                |c| json!({ "class": c.name(), "objects": if c.is_object_tool() { s.count(*c) } else { 0 } }),
+            )
+            .collect(),
+    )
 }
 
 fn scene_info(s: &SceneState, svc: &SceneService, stats: bool) -> Reply {
@@ -202,20 +233,30 @@ fn scene_info(s: &SceneState, svc: &SceneService, stats: bool) -> Reply {
         return Ok(json!({ "scene": scene_path(s), "modified": modified, "tools": tools_json(s) }));
     }
     let selected = s.selection.len();
-    Ok(json!({ "scene": scene_path(s), "modified": modified, "selected": selected, "camera": camera_json(s), "tools": tools_json(s) }))
+    Ok(
+        json!({ "scene": scene_path(s), "modified": modified, "selected": selected, "camera": camera_json(s), "tools": tools_json(s) }),
+    )
 }
 
 fn scene_tree(s: &SceneState, a: &Args) -> Value {
     let class = a.str("class").unwrap_or("");
     let filter = a.str("filter").unwrap_or("").to_lowercase();
     let limit = a.i64("limit").unwrap_or(200).max(0) as usize;
-    let mut classes: Vec<ObjClass> =
-        ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool() && (class.is_empty() || c.name().eq_ignore_ascii_case(class)) && s.count(*c) > 0).collect();
+    let mut classes: Vec<ObjClass> = ObjClass::ALL
+        .iter()
+        .copied()
+        .filter(|c| {
+            c.is_object_tool()
+                && (class.is_empty() || c.name().eq_ignore_ascii_case(class))
+                && s.count(*c) > 0
+        })
+        .collect();
     classes.sort_by_key(|c| c.name());
     let mut tree = Vec::new();
     for c in classes {
         let total = s.count(c);
-        let matched: Vec<&Arc<Object>> = s.of_class(c).filter(|o| filter.is_empty() || o.name.to_lowercase().contains(&filter)).collect();
+        let matched: Vec<&Arc<Object>> =
+            s.of_class(c).filter(|o| filter.is_empty() || o.name.to_lowercase().contains(&filter)).collect();
         if matched.is_empty() {
             continue;
         }
@@ -231,7 +272,11 @@ fn list_objects(s: &SceneState, a: &Args) -> Value {
     let contains = a.str("name_contains").unwrap_or("");
     let limit = a.i64("limit").unwrap_or(100).max(0) as usize;
     let (mut shown, mut total) = (Vec::new(), 0usize);
-    for c in ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool() && (class.is_empty() || c.name().eq_ignore_ascii_case(class))) {
+    for c in ObjClass::ALL
+        .iter()
+        .copied()
+        .filter(|c| c.is_object_tool() && (class.is_empty() || c.name().eq_ignore_ascii_case(class)))
+    {
         for o in s.of_class(c) {
             if !contains.is_empty() && !o.name.contains(contains) {
                 continue;
@@ -282,7 +327,9 @@ async fn save_scene(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     let file = match a.text("file") {
         Some(f) => PathBuf::from(f.replace('/', "\\")),
-        None => svc.store.snapshot().meta.file.clone().ok_or_else(|| CmdError::invalid("scene has no file yet - pass 'file' or Save As in the editor"))?,
+        None => svc.store.snapshot().meta.file.clone().ok_or_else(|| {
+            CmdError::invalid("scene has no file yet - pass 'file' or Save As in the editor")
+        })?,
     };
     let file = if file.is_absolute() { file } else { svc.maps_dir().join(file) };
     service::save_scene(&ed, &svc, file.clone()).await.map_err(CmdError::io)?;
@@ -296,7 +343,8 @@ fn names(text: &str) -> Vec<String> {
 
 async fn select_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let list = a.str("names").ok_or_else(|| CmdError::invalid("missing 'names' argument (comma-separated list)"))?;
+    let list =
+        a.str("names").ok_or_else(|| CmdError::invalid("missing 'names' argument (comma-separated list)"))?;
     let snap = svc.store.snapshot();
     let mut ids = Vec::new();
     let mut missing = Vec::new();
@@ -374,7 +422,17 @@ async fn set_transform(ed: Arc<Editor>, a: Args, o: Origin, which: u8) -> Reply 
             2 => (TransformEdit::Scale(v), "Scale"),
             _ => (TransformEdit::Position(v), "Move"),
         };
-        svc.store.send(SceneCmd::Transform { items: vec![(id, edit)], members: false, label: label.into(), merge: None }, o).await?;
+        svc.store
+            .send(
+                SceneCmd::Transform {
+                    items: vec![(id, edit)],
+                    members: false,
+                    label: label.into(),
+                    merge: None,
+                },
+                o,
+            )
+            .await?;
     }
     let s = svc.store.snapshot();
     let obj = s.get(id).ok_or_else(|| CmdError::not_found("object not found"))?;
@@ -386,7 +444,14 @@ fn in_front(s: &SceneState) -> Vec3 {
     s.meta.camera_pos + direction(s.meta.camera_hpb) * 10.0
 }
 
-async fn drop_and_respond(ed: &Arc<Editor>, svc: &Arc<SceneService>, id: crate::model::ObjId, snap: bool, align: bool, o: Origin) -> Reply {
+async fn drop_and_respond(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    id: crate::model::ObjId,
+    snap: bool,
+    align: bool,
+    o: Origin,
+) -> Reply {
     let mut dropped = false;
     if snap {
         dropped = drop_ids(ed, svc, &[id], align, false, o).await? > 0;
@@ -400,7 +465,14 @@ async fn drop_and_respond(ed: &Arc<Editor>, svc: &Arc<SceneService>, id: crate::
     Ok(out)
 }
 
-async fn drop_ids(ed: &Arc<Editor>, svc: &Arc<SceneService>, ids: &[crate::model::ObjId], align: bool, line: bool, o: Origin) -> Result<usize, CmdError> {
+async fn drop_ids(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    ids: &[crate::model::ObjId],
+    align: bool,
+    line: bool,
+    o: Origin,
+) -> Result<usize, CmdError> {
     let snap = svc.store.snapshot();
     svc.prefetch_library(ed, &snap).await;
     let (snap, pick) = svc.pick().await;
@@ -412,14 +484,22 @@ async fn drop_ids(ed: &Arc<Editor>, svc: &Arc<SceneService>, ids: &[crate::model
         return Ok(0);
     }
     let n = landings.len();
-    let items = landings.into_iter().map(|l| (l.id, TransformEdit::Land { position: l.position, rotation: l.rotation })).collect();
-    svc.store.send(SceneCmd::Transform { items, members: false, label: "Drop to Ground".into(), merge: None }, o).await?;
+    let items = landings
+        .into_iter()
+        .map(|l| (l.id, TransformEdit::Land { position: l.position, rotation: l.rotation }))
+        .collect();
+    svc.store
+        .send(SceneCmd::Transform { items, members: false, label: "Drop to Ground".into(), merge: None }, o)
+        .await?;
     Ok(n)
 }
 
 async fn place_object(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let reference = a.text("ref").ok_or_else(|| CmdError::invalid("missing 'ref' argument (library object, e.g. props\\\\box_1)"))?.replace('/', "\\");
+    let reference = a
+        .text("ref")
+        .ok_or_else(|| CmdError::invalid("missing 'ref' argument (library object, e.g. props\\\\box_1)"))?
+        .replace('/', "\\");
     let snap = svc.store.snapshot();
     let mut pos = in_front(&snap);
     for (i, k) in ["x", "y", "z"].iter().enumerate() {
@@ -467,15 +547,20 @@ async fn place_object(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     if loaded.is_err() {
         return Err(CmdError::invalid("can't load reference object (check the library path)"));
     }
-    let mut obj = Object::new(ObjClass::SceneObject, &name, ObjData::SceneObject(SceneObjectData::library(&reference)));
+    let mut obj =
+        Object::new(ObjClass::SceneObject, &name, ObjData::SceneObject(SceneObjectData::library(&reference)));
     obj.xform = Transform { position: pos, rotation: rot, scale };
-    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else { return Err(CmdError::internal("place")) };
+    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else {
+        return Err(CmdError::internal("place"));
+    };
     drop_and_respond(&ed, &svc, id, a.flag("snap_to_ground"), a.flag("align_normal"), o).await
 }
 
 async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let section = a.str("section").ok_or_else(|| CmdError::invalid("missing 'section' argument (see list_spawn_sections)"))?;
+    let section = a
+        .str("section")
+        .ok_or_else(|| CmdError::invalid("missing 'section' argument (see list_spawn_sections)"))?;
     let point = [PLAYERSTART_CHOOSE_NAME, ENVMOD_CHOOSE_NAME, RPOINT_CHOOSE_NAME]
         .into_iter()
         .find(|p| p.eq_ignore_ascii_case(section) || p[1..].eq_ignore_ascii_case(section));
@@ -508,7 +593,8 @@ async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                     if !settings.section_exist(&sec) || !settings.line_exist(&sec, "$spawn") {
                         return Err(refused());
                     }
-                    let e = Entity::create(&sec, settings.as_ref()).map_err(|_| CmdError::invalid("the spawn factory refused this section"))?;
+                    let e = Entity::create(&sec, settings.as_ref())
+                        .map_err(|_| CmdError::invalid("the spawn factory refused this section"))?;
                     let def = settings.r_float(&sec, "$def_sphere");
                     let needs = e.class_info().is_some_and(|c| c.class.has_shape());
                     Ok((e, def, needs))
@@ -518,7 +604,14 @@ async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             let mut d = SpawnData::of_kind(PointKind::Spawn);
             d.entity = Some(SpawnEntity::Decoded(Arc::new(entity)));
             if def_sphere.is_some() || needs_shape {
-                let mut shape = Object::new(ObjClass::Shape, "", ObjData::Shape(ShapeData { shapes: vec![ShapeDef::sphere(Vec3::ZERO, def_sphere.unwrap_or(5.0))], usage: 0 }));
+                let mut shape = Object::new(
+                    ObjClass::Shape,
+                    "",
+                    ObjData::Shape(ShapeData {
+                        shapes: vec![ShapeDef::sphere(Vec3::ZERO, def_sphere.unwrap_or(5.0))],
+                        usage: 0,
+                    }),
+                );
                 shape.xform.position = pos;
                 d.attached = Some(Arc::new(shape));
             }
@@ -532,7 +625,9 @@ async fn place_spawn(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let name = snap.gen_name(Some(pref));
     let mut obj = Object::new(ObjClass::SpawnPoint, &name, ObjData::Spawn(Box::new(data)));
     obj.xform.position = pos;
-    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else { return Err(CmdError::internal("place")) };
+    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else {
+        return Err(CmdError::internal("place"));
+    };
     drop_and_respond(&ed, &svc, id, a.flag("snap_to_ground"), false, o).await
 }
 
@@ -542,7 +637,9 @@ fn parse_points(text: &str) -> Result<Vec<Vec3>, String> {
     for item in text.split(';').map(str::trim).filter(|i| !i.is_empty()) {
         let parts: Vec<Option<f32>> = item.split(',').map(|p| p.trim().parse::<f32>().ok()).collect();
         match parts.as_slice() {
-            [Some(x), Some(y), Some(z)] if x.is_finite() && y.is_finite() && z.is_finite() => out.push(Vec3::new(*x, *y, *z)),
+            [Some(x), Some(y), Some(z)] if x.is_finite() && y.is_finite() && z.is_finite() => {
+                out.push(Vec3::new(*x, *y, *z))
+            }
             _ => return Err(item.to_owned()),
         }
     }
@@ -551,13 +648,17 @@ fn parse_points(text: &str) -> Result<Vec<Vec3>, String> {
 
 async fn place_way(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let name = a.text("name").ok_or_else(|| CmdError::invalid("missing 'name' - the path's name, what orders and quests call it"))?.to_owned();
+    let name = a
+        .text("name")
+        .ok_or_else(|| CmdError::invalid("missing 'name' - the path's name, what orders and quests call it"))?
+        .to_owned();
     let text = a.str("points").ok_or_else(|| CmdError::invalid("missing 'points': \"x,y,z; x,y,z; ...\""))?;
     let snap = svc.store.snapshot();
     if snap.find_any(&name).is_some() {
         return Err(CmdError::invalid("an object of that name exists already"));
     }
-    let mut points = parse_points(text).map_err(|item| CmdError::invalid(format!("a point is not x,y,z: {item}")))?;
+    let mut points =
+        parse_points(text).map_err(|item| CmdError::invalid(format!("a point is not x,y,z: {item}")))?;
     if points.is_empty() {
         return Err(CmdError::invalid("a path needs at least one point"));
     }
@@ -570,9 +671,19 @@ async fn place_way(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             .cpu(move || {
                 points
                     .into_iter()
-                    .map(|p| match ray_scene_objects(&pick, &snap, &lib, p + Vec3::Y * 2.0, Vec3::NEG_Y, DROP_REACH, None) {
-                        Some(h) if h.point.is_finite() => h.point,
-                        _ => p,
+                    .map(|p| {
+                        match ray_scene_objects(
+                            &pick,
+                            &snap,
+                            &lib,
+                            p + Vec3::Y * 2.0,
+                            Vec3::NEG_Y,
+                            DROP_REACH,
+                            None,
+                        ) {
+                            Some(h) if h.point.is_finite() => h.point,
+                            _ => p,
+                        }
                     })
                     .collect()
             })
@@ -581,7 +692,9 @@ async fn place_way(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let n = points.len();
     let way = WayData::build(&points, a.bool("loop").unwrap_or(true));
     let obj = Object::new(ObjClass::Way, &name, ObjData::Way(way));
-    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else { return Err(CmdError::internal("place")) };
+    let SceneReply::Id(id) = svc.store.send(SceneCmd::Place(Box::new(obj)), o).await? else {
+        return Err(CmdError::internal("place"));
+    };
     let s = svc.store.snapshot();
     let obj = s.get(id).ok_or_else(|| CmdError::not_found("object not found"))?;
     let mut out = respond_object(&s, obj);
@@ -593,12 +706,18 @@ async fn place_way(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
 
 async fn spawn_order(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let name = a.str("name").ok_or_else(|| CmdError::invalid("missing 'name' (a stalker placed with the Spawn tool)"))?;
+    let name = a
+        .str("name")
+        .ok_or_else(|| CmdError::invalid("missing 'name' (a stalker placed with the Spawn tool)"))?;
     let snap = svc.store.snapshot();
     let obj = snap.find_relaxed(name).ok_or_else(|| CmdError::not_found("no spawn object of that name"))?;
-    let ObjData::Spawn(sp) = &obj.data else { return Err(CmdError::not_found("no spawn object of that name")) };
+    let ObjData::Spawn(sp) = &obj.data else {
+        return Err(CmdError::not_found("no spawn object of that name"));
+    };
     if !sp.can_take_order() {
-        return Err(CmdError::invalid("only a stalker takes an order - the game's schemes drive stalkers alone"));
+        return Err(CmdError::invalid(
+            "only a stalker takes an order - the game's schemes drive stalkers alone",
+        ));
     }
     let mut ord: XmsOrder = sp.order.clone();
     let mut changed = false;
@@ -664,12 +783,22 @@ fn g(v: f32) -> Value {
 /// A spawn's decoded entity and the row of it that ends in `suffix`.
 fn spawn_entity_row(obj: &Object, suffix: &str) -> Result<(Arc<Entity>, String), CmdError> {
     let ObjData::Spawn(sp) = &obj.data else { return Err(CmdError::not_found("spawn object not found")) };
-    let Some(SpawnEntity::Decoded(e)) = &sp.entity else { return Err(CmdError::invalid("object carries no spawn data")) };
-    let path = e.properties(&PropContext::default()).into_iter().find(|p| p.path.ends_with(suffix)).map(|p| p.path);
+    let Some(SpawnEntity::Decoded(e)) = &sp.entity else {
+        return Err(CmdError::invalid("object carries no spawn data"));
+    };
+    let path =
+        e.properties(&PropContext::default()).into_iter().find(|p| p.path.ends_with(suffix)).map(|p| p.path);
     path.map(|p| (e.clone(), p)).ok_or_else(|| CmdError::invalid("this section has no visual"))
 }
 
-async fn replace_spawn(svc: &SceneService, obj: &Object, entity: Entity, label: &str, o: Origin, serial: u64) -> Result<(), CmdError> {
+async fn replace_spawn(
+    svc: &SceneService,
+    obj: &Object,
+    entity: Entity,
+    label: &str,
+    o: Origin,
+    serial: u64,
+) -> Result<(), CmdError> {
     let mut n = obj.clone();
     if let ObjData::Spawn(sp) = &mut n.data {
         sp.entity = Some(SpawnEntity::Decoded(Arc::new(entity)));
@@ -684,7 +813,10 @@ async fn spawn_set_visual(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         return Err(CmdError::invalid("need 'name' and non-empty 'visual'"));
     };
     let snap = svc.store.snapshot();
-    let obj = snap.find_relaxed(name).filter(|x| x.class == ObjClass::SpawnPoint).ok_or_else(|| CmdError::not_found("spawn object not found"))?;
+    let obj = snap
+        .find_relaxed(name)
+        .filter(|x| x.class == ObjClass::SpawnPoint)
+        .ok_or_else(|| CmdError::not_found("spawn object not found"))?;
     let (entity, path) = spawn_entity_row(obj, "\\Model\\Visual")?;
     // normalized to what configs carry: meshes-relative, backslashes, no .ogf
     let mut v = visual.replace('/', "\\");
@@ -709,10 +841,13 @@ async fn spawn_set_visual(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         found
     };
     if !reachable {
-        return Err(CmdError::not_found("mesh not found in the game or the project (meshes\\\\<visual>.ogf)"));
+        return Err(CmdError::not_found(
+            "mesh not found in the game or the project (meshes\\\\<visual>.ogf)",
+        ));
     }
     let mut e = (*entity).clone();
-    e.set(&path, &gz_entities::PropValue::Text(v.clone()), &PropContext::default()).map_err(|err| CmdError::invalid(err.to_string()))?;
+    e.set(&path, &gz_entities::PropValue::Text(v.clone()), &PropContext::default())
+        .map_err(|err| CmdError::invalid(err.to_string()))?;
     replace_spawn(&svc, obj, e, "Visual", o, snap.serial).await?;
     Ok(json!({ "visual": v, "draws_nothing": false }))
 }
@@ -722,9 +857,17 @@ async fn spawn_set_fixed_bones(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let name = a.text("name").ok_or_else(|| CmdError::invalid("need 'name'"))?;
     let bones = a.str("bones").unwrap_or("").to_owned();
     let snap = svc.store.snapshot();
-    let obj = snap.find_relaxed(name).filter(|x| x.class == ObjClass::SpawnPoint).ok_or_else(|| CmdError::not_found("spawn object not found"))?;
+    let obj = snap
+        .find_relaxed(name)
+        .filter(|x| x.class == ObjClass::SpawnPoint)
+        .ok_or_else(|| CmdError::not_found("spawn object not found"))?;
     let physic = match &obj.data {
-        ObjData::Spawn(sp) => sp.entity.as_ref().and_then(SpawnEntity::entity).and_then(Entity::class_info).is_some_and(|c| c.class == gz_entities::Class::ObjectPhysic),
+        ObjData::Spawn(sp) => sp
+            .entity
+            .as_ref()
+            .and_then(SpawnEntity::entity)
+            .and_then(Entity::class_info)
+            .is_some_and(|c| c.class == gz_entities::Class::ObjectPhysic),
         _ => false,
     };
     let entity = match &obj.data {
@@ -744,7 +887,8 @@ async fn spawn_set_fixed_bones(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         .map(|p| p.path)
         .ok_or_else(|| CmdError::invalid("this section has no fixed bones (not a physic object)"))?;
     let mut e = (*entity).clone();
-    e.set(&path, &gz_entities::PropValue::Text(bones.clone()), &PropContext::default()).map_err(|err| CmdError::invalid(err.to_string()))?;
+    e.set(&path, &gz_entities::PropValue::Text(bones.clone()), &PropContext::default())
+        .map_err(|err| CmdError::invalid(err.to_string()))?;
     replace_spawn(&svc, obj, e, "Fixed Bones", o, snap.serial).await?;
     Ok(json!({ "fixed_bones": bones }))
 }
@@ -771,14 +915,18 @@ async fn drop_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let line = a.str("mode").is_some_and(|m| m.eq_ignore_ascii_case("line"));
     let requested = batch.len();
     let dropped = drop_ids(&ed, &svc, &batch, a.flag("align_normal"), line, o).await?;
-    Ok(json!({ "mode": if line { "line" } else { "box" }, "requested": requested, "dropped": dropped, "missing": missing.join(",") }))
+    Ok(
+        json!({ "mode": if line { "line" } else { "box" }, "requested": requested, "dropped": dropped, "missing": missing.join(",") }),
+    )
 }
 
 async fn snap_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     let action = match a.text("action") {
         Some(t) => Some(SnapAction::parse(t).ok_or_else(|| {
-            CmdError::invalid("action must be set_from_selection, add_selection, remove_selection, select or clear")
+            CmdError::invalid(
+                "action must be set_from_selection, add_selection, remove_selection, select or clear",
+            )
         })?),
         None => None,
     };
@@ -790,7 +938,9 @@ async fn snap_objects(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
 
 async fn scan_walls(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
-    let (Some(x0), Some(x1), Some(z0), Some(z1), Some(y)) = (a.f32("x0"), a.f32("x1"), a.f32("z0"), a.f32("z1"), a.f32("y")) else {
+    let (Some(x0), Some(x1), Some(z0), Some(z1), Some(y)) =
+        (a.f32("x0"), a.f32("x1"), a.f32("z0"), a.f32("z1"), a.f32("y"))
+    else {
         return Err(CmdError::invalid("x0, x1, z0, z1 and y are required"));
     };
     let step = a.f32("step").unwrap_or(0.5).max(0.1);
@@ -843,7 +993,9 @@ async fn scan_walls(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
         .await;
     cells.sort_unstable();
     cells.dedup();
-    Ok(json!({ "x0": r(x0, 3), "z0": r(z0, 3), "res": r(res, 3), "w": w, "h": h, "rays": cast, "cells": cells }))
+    Ok(
+        json!({ "x0": r(x0, 3), "z0": r(z0, 3), "res": r(res, 3), "w": w, "h": h, "rays": cast, "cells": cells }),
+    )
 }
 
 async fn probe_vertical(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
@@ -860,7 +1012,12 @@ async fn probe_vertical(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
         .exec
         .cpu(move || {
             let start = Vec3::new(x, y, z);
-            let cast = |d: Vec3| ray_scene_objects(&pick, &snap, &lib, start, d, reach, None).map(|h| h.point).filter(|p| p.is_finite()).map(|p| p.y);
+            let cast = |d: Vec3| {
+                ray_scene_objects(&pick, &snap, &lib, start, d, reach, None)
+                    .map(|h| h.point)
+                    .filter(|p| p.is_finite())
+                    .map(|p| p.y)
+            };
             (cast(Vec3::Y), cast(Vec3::NEG_Y))
         })
         .await;
@@ -919,8 +1076,10 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
         .exec
         .io(move || -> Result<crate::io::LoadedScene, String> {
             let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
-            let st: crate::io::SyncSettings<'_> = settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
-            crate::io::parse_scene(&bytes, &p, &crate::io::PartFiles::default(), st).map_err(|_| "cannot deserialize the recovery snapshot".to_owned())
+            let st: crate::io::SyncSettings<'_> =
+                settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
+            crate::io::parse_scene(&bytes, &p, &crate::io::PartFiles::default(), st)
+                .map_err(|_| "cannot deserialize the recovery snapshot".to_owned())
         })
         .await;
     let outcome = match result {
@@ -936,7 +1095,10 @@ async fn restore(ed: &Arc<Editor>, svc: &Arc<SceneService>, linked: bool, o: Ori
     };
     svc.recovery.end_restore(outcome.clone());
     if outcome.is_ok() {
-        ed.log.info(format!("Recovered scene from '{}'. Save explicitly to update the original file.", path.display()));
+        ed.log.info(format!(
+            "Recovered scene from '{}'. Save explicitly to update the original file.",
+            path.display()
+        ));
     }
     outcome
 }
@@ -965,7 +1127,10 @@ fn rows_of(s: &SceneState, svc: &SceneService, target: usize) -> Vec<props::Merg
 async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     let filter_arg = a.str("filter").unwrap_or("").to_owned();
-    let action = a.text("action").map(str::to_ascii_lowercase).unwrap_or_else(|| if filter_arg.is_empty() { "get".into() } else { "filter".into() });
+    let action = a
+        .text("action")
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| if filter_arg.is_empty() { "get".into() } else { "filter".into() });
     let target_name = a.text("target").unwrap_or("selection").to_ascii_lowercase();
     let t = target_index(&target_name)?;
     {
@@ -975,7 +1140,9 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
             "expand" | "collapse" | "get" => {}
             "open" => v.open[t] = true,
             "close" => v.open[t] = false,
-            _ => return Err(CmdError::invalid("action must be get, filter, expand, collapse, open, or close")),
+            _ => {
+                return Err(CmdError::invalid("action must be get, filter, expand, collapse, open, or close"));
+            }
         }
     }
     let (filter, open) = {
@@ -1005,29 +1172,56 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
             Value::Object(o)
         })
         .collect();
-    Ok(json!({ "target": target_name, "filter": filter, "visible": visible, "total": rows.len(), "open": open, "rows": out }))
+    Ok(
+        json!({ "target": target_name, "filter": filter, "visible": visible, "total": rows.len(), "open": open, "rows": out }),
+    )
 }
 
 /// Applies a row's value as text; answers the row's key and its value after.
-async fn set_row(ed: &Arc<Editor>, svc: &Arc<SceneService>, t: usize, k: &str, value: &str, o: Origin) -> Result<(String, String), CmdError> {
+async fn set_row(
+    ed: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    t: usize,
+    k: &str,
+    value: &str,
+    o: Origin,
+) -> Result<(String, String), CmdError> {
     let snap = svc.store.snapshot();
     let rows = rows_of(&snap, svc, t);
     let target_name = if t == 1 { "world" } else { "selection" };
-    let row = props::find(&rows, k).ok_or_else(|| CmdError::not_found(format!("no row '{k}' (property_inspector target={target_name} lists them)")))?.clone();
+    let row = props::find(&rows, k)
+        .ok_or_else(|| {
+            CmdError::not_found(format!("no row '{k}' (property_inspector target={target_name} lists them)"))
+        })?
+        .clone();
     let key = row.row.key.clone();
     let parsed = props::parse(&row.row, value).map_err(|e| CmdError::invalid(format!("{key} {e}")))?;
     if t == 1 {
-        let (level, tools) = props::set_world(&snap, &key, &parsed).map_err(|e| CmdError::invalid(format!("{key} {e}")))?;
-        svc.store.send(SceneCmd::SetWorld { level: Box::new(level), tools, serial: snap.serial, label: "Level Settings".into() }, o).await?;
+        let (level, tools) =
+            props::set_world(&snap, &key, &parsed).map_err(|e| CmdError::invalid(format!("{key} {e}")))?;
+        svc.store
+            .send(
+                SceneCmd::SetWorld {
+                    level: Box::new(level),
+                    tools,
+                    serial: snap.serial,
+                    label: "Level Settings".into(),
+                },
+                o,
+            )
+            .await?;
     } else {
         let ctx = PropContext::default();
         let cx = PropCx { lib: Some(&svc.library), entity: &ctx };
         let class = snap.tools.target;
-        let selected: Vec<Arc<Object>> = snap.of_class(class).filter(|x| snap.is_selected(x.id)).cloned().collect();
+        let selected: Vec<Arc<Object>> =
+            snap.of_class(class).filter(|x| snap.is_selected(x.id)).cloned().collect();
         let mut objects = Vec::new();
         let mut transforms = Vec::new();
         for obj in &selected {
-            match props::set_object(&snap, obj, &key, &parsed, &cx).map_err(|e| CmdError::invalid(format!("{key} {e}")))? {
+            match props::set_object(&snap, obj, &key, &parsed, &cx)
+                .map_err(|e| CmdError::invalid(format!("{key} {e}")))?
+            {
                 Effect::Object(n) => objects.push(n),
                 Effect::Objects(list) => objects.extend(list),
                 Effect::Transform(e) => transforms.push((obj.id, e)),
@@ -1035,15 +1229,29 @@ async fn set_row(ed: &Arc<Editor>, svc: &Arc<SceneService>, t: usize, k: &str, v
             }
         }
         if !transforms.is_empty() {
-            svc.store.send(SceneCmd::Transform { items: transforms, members: true, label: "Transform".into(), merge: None }, o).await?;
+            svc.store
+                .send(
+                    SceneCmd::Transform {
+                        items: transforms,
+                        members: true,
+                        label: "Transform".into(),
+                        merge: None,
+                    },
+                    o,
+                )
+                .await?;
         }
         if !objects.is_empty() {
-            svc.store.send(SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Property".into() }, o).await?;
+            svc.store
+                .send(SceneCmd::ReplaceObjects { objects, serial: snap.serial, label: "Property".into() }, o)
+                .await?;
         }
     }
     let after = svc.store.snapshot();
     let rows = rows_of(&after, svc, t);
-    let text = props::find(&rows, &key).map(|m| if m.mixed { "(mixed)".to_owned() } else { m.row.text() }).unwrap_or_default();
+    let text = props::find(&rows, &key)
+        .map(|m| if m.mixed { "(mixed)".to_owned() } else { m.row.text() })
+        .unwrap_or_default();
     let _ = ed;
     Ok((key, text))
 }
@@ -1082,7 +1290,11 @@ async fn property_choose(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
                 v.chosen.clear();
             }
             let fields = json!({ "key": r.row.key, "value": r.row.text() });
-            if started { Ok(fields) } else { Err(CmdError::invalid("the row has no chooser, or one is open").with_data(fields)) }
+            if started {
+                Ok(fields)
+            } else {
+                Err(CmdError::invalid("the row has no chooser, or one is open").with_data(fields))
+            }
         }
         "cancel" => {
             let closed = svc.view.lock().choosing.take().is_some();
@@ -1120,7 +1332,10 @@ mod tests {
 
     #[test]
     fn points_and_names_parse_like_the_cpp() {
-        assert_eq!(parse_points("1,2,3; 4 , 5 , 6").unwrap(), vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0)]);
+        assert_eq!(
+            parse_points("1,2,3; 4 , 5 , 6").unwrap(),
+            vec![Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0)]
+        );
         assert_eq!(parse_points("1,2").unwrap_err(), "1,2");
         assert_eq!(names(" a , b,, c "), vec!["a", "b", "c"]);
     }

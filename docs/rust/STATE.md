@@ -52,9 +52,10 @@ kept current: a finished package updates its row and adds what it learned.
 | Crate | State | Notes |
 |---|---|---|
 | `gz-base`, `gz-task`, `gz-store`, `gz-query`, `gz-log` | done | layer 0 |
-| `gz-win`, `gz-crash` | done | `gz-win` is the only crate with `unsafe` |
+| `gz-win`, `gz-crash` | done | `gz-win` is the only crate with `unsafe`: process counters, minimised start, dumps, foreground, the caption hit test (`install_caption_hit_test`, `CaptionShape` in an `ArcSwap`), known folders, free space, volume roots |
+| `gz-mcp-bridge` | done | bin `grizzly-mcp`: MCP over stdio (`initialize`, `tools/list`, `tools/call`) to the editor's TCP endpoint (`GRIZZLY_MCP_PORT`, 28017); tools, descriptions, schemas, annotations and instructions from `gz-mcp/tools.json` word for word; `tool_result` of the Python bridge ported (unknown arguments, fixed-argument tools, waits, images). Tests written, not run |
 | `gz-editor`, `gz-mcp` | done | context, registry, `AutoSave`, `fsx`, the endpoint |
-| `gz-app`, `grizzly` | done | the shell: caption (menus, fold under 1100 pt, tab strip, drag band, window buttons, 6 pt resize edges), toolbar, status bar, work area, drawers, Task Center card, palette, keys, session, settings file `grizzly_editor.ltx`; `ShellBuilder` + `Document` for areas (`install(b)` lines go into `grizzly/src/main.rs` `install_ui`); `UiQueue`/`on_ui`; 22 commands (`state`, `ui_*`, `window_control`, `titlebar_info`, `reset_layout`, `theme`, `preferences`, `shortcuts`, `command_palette`, `progress`, `screenshot_editor`). Not matched: WM_NCHITTEST (no subclassing without `gz-win`), busy frame (no blocking jobs). Tests written, not run |
+| `gz-app`, `grizzly` | done | the shell: caption (menus, fold under 1100 pt, tab strip, window buttons; drag, double-click, snap and the 6 pt resize edges are Windows' own through `gz-win`'s `WM_NCHITTEST` hook), toolbar, status bar, work area, drawers, Task Center card, palette, keys, session, settings file `grizzly_editor.ltx`; `ShellBuilder` + `Document` for areas (`install(b)` lines go into `grizzly/src/main.rs` `install_ui`); `UiQueue`/`on_ui`; 24 commands (`state`, `ui_*`, `window_control`, `titlebar_info`, `reset_layout`, `theme`, `preferences`, `shortcuts`, `command_palette`, `progress`, `screenshot_editor`, `list_commands`, `exec_command`); the tabs' own unsaved work as a `DirtySource` (`unsaved.rs`). Not matched: busy frame (no blocking jobs). Tests written, not run |
 | `gz-chunk` | done | reader, writer, `lzhuf` (byte-equal compress), `lzo` (LZO1X + archive index helpers) |
 | `gz-ltx` | done | `doc.rs` (lossless); `tree.rs`: `parse_file` (parallel per file) + `Ltx::assemble` / `Builder` (the sequential C++ load), `Dialect::Editor` / `Dialect::Game` (`#include_optional`, `*.ltx` includes, multi-line recovery, XMS layer merge, `.ltxp` patches) |
 | `gz-luadata` | done | `parse` = LuaJIT 2.1 lexer/parser port (the editor's fork) + `DeclarativeProblem` + a run of the data subset with the interpreter's semantics; writer byte-equal to `NqLua.cpp` (`write_value`, `write_node`, `write_asset`); `syntax_check`; JSON |
@@ -84,7 +85,7 @@ kept current: a finished package updates its row and adds what it learned.
 ecovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
 | `gz-lua` | done | LuaJIT 2.1 vendored (`mlua` 0.12, JIT off, count hook = instruction budget); `LuaHost` pool of states (one per caller, scripts kept per revision), `Script`, `Arg::{Value, Chunk}` (a text run in an empty env: the asset is the table LuaJIT builds), `call_omitting`; sandbox = base + string/table/math, the C++ reader's 18 globals; `vanilla_source` rewrites the fork's `//` `/* */` comments; tests written, not run |
 | `gz-pda` | done | `evaluate` (gz-luadata check, then the game's `normalize`), `Layout`/`Item`/... read as the C++ read the stack, `preview` block, `template`; `Preview` state machine (pages, vars, log, toasts, rows, scroll, keys, map zoom, boxes / hit test / `visible` in canvas units); `PdaService` (reader and layout `Query`s, W320 textures, list, `[pda] layout`); the build check; `content_create kind=pda` template; `pda_list`, `pda_get`, `pda_write`, `pda_delete`, `pda_use`, `pda_validate`; tests written, not run |
-| `gz-ui-app` | done | the Start page (`ShellBuilder::start_page`: New Project form, Open Folder via `rfd` on a thread of its own, search, Last Opened / Name sort, 232x184 cards with twin parents, previews decoded on the pools through a `Query` keyed by path + write time, `ShowsNoScene`, card menu, `dlg.delete_project` counted off the UI thread), Link Game page card, the Output Log (one body for the drawer and the Level panel `output_log`, cursor over `gz_log::Log`, distinct counting per window from "Project opened:", the `log_state` hook), Preferences (`preferences` tab: 44 rows of `EditorPreferences`/`LevelPreferences`, nav, search, Keyboard page over `shortcuts` with an Assign dialog `dlg.assign_shortcut`); command `project_browser_menu`. Rows whose key `gz-app`'s `PREFS` lacks (`object_flags`, `recovery_*`) show their default read-only until those keys are added there. Tests written, not run |
+| `gz-ui-app` | done | the Start page (`ShellBuilder::start_page`: New Project form, Open Folder via `rfd` on a thread of its own, search, Last Opened / Name sort, 232x184 cards with twin parents, previews decoded on the pools through a `Query` keyed by path + write time, `ShowsNoScene`, card menu, `dlg.delete_project` counted off the UI thread), Link Game page card, the Output Log (one body for the drawer and the Level panel `output_log`, cursor over `gz_log::Log`, distinct counting per window from "Project opened:", the `log_state` hook), Preferences (`preferences` tab: 44 rows of `EditorPreferences`/`LevelPreferences`, nav, search, Keyboard page over `shortcuts` with an Assign dialog `dlg.assign_shortcut`); command `project_browser_menu`. Every row is live (`object_flags` and `recovery_*` are in `gz-app`'s `PREFS`, not on the `preferences` wire). Tests written, not run |
 | `gz-nq` | done | quests and behaviour graphs: `asset` (typed `Graph` with `imbl` node/task vectors, read with the C++ shape messages, `write` byte-equal to `NqLua::Write`, outline, topo order, templates), `catalog` (hand-rolled reader, fold order game|bundled -> modules -> project, `Catalog::is_trigger`, exclusive forms, JSON), `layout` (`node_box`, the one rectangle; the dominator-tree auto layout on bitsets), `validate` (every code and message of `NqValidate`), `references` (typed walker, `find`, `rename_task`), `index` (snapshot, fingerprint, search), `pickers` (15 types from the game's ltx tree / strings / XML / `all.spawn`, the project's custom data, `spawn.part`, looks; `compose` with the scene), `caps` (`class_registrator.script` families), `doc` (`Store<GraphDoc>`: every `quest_apply` op, canvas ops, view state with bookmarks / history / find), `NqService` (queries keyed by game rev, file stamps, manifest, docs' edit serials; slots `CharacterLookup` / `SceneLookup` / `WorldLookup`), the build check (`E113` across graphs); 24 `quest_*` commands (all but `quest_view`), templates, rename hook, `DirtySource`. Tests written, not run |
 | `gz-screens` | done | `Screens` model parsed off `ManifestDoc`, written back with `AppendScreens`' rows (sections in place while their order holds), `import` (+ `plan`: the decision by place and extension; parallel-safe copies), `validate` (E401..W411), the build check, `GameLevels` slot for W407; `screens_get`, `screens_set`; tests written, not run |
 | `gz-characters` | done | `model` (`Character` keeping unset unset, `parse` / `load_text` / `write` as `EditorCharacters::Parse` / `Write`, `{ rus = .. }` alone collapsed on write, `text_in` / `text_raw` / `text_set`, `template`, `game_id`), `resolve` (`E111` / `E112`, kits merged, a shop whole, defaults once), `validate` (every C++ code word for word over `Lookups` = `gz_nq::Pickers` and `Models`; `E123` from `OGF_S_BONE_NAMES` read off the chunk list, cached per model and game rev), `game` (trade presets, bone names, stalker damage bones); `Characters` service: `Roster` as a `Query` keyed by a stamp of the `.npcasset` files + `[exclude]`, read in parallel; fills `gz_nq`'s `CharacterLookup` on project open (briefs refreshed in the background, the file tree's until the first roster); `Checker` (linked game: pickers, presets, models); build check (first error, as `CheckForBuild`); `content_create kind=character` template; `characters_list`, `characters_get`, `characters_write`, `characters_delete`. Tests written, not run |
@@ -94,7 +95,7 @@ ecovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
 | `gz-ui-world` | done | the Characters tab (`characters`: list 260 pt with search, dirty dots, Template badges, splitter, form up to 760 pt bound to the RAW values, base's values as hints / muted kit rows, Ctrl+S = `characters_write` with `gz_characters::write`, the file follows the id via `content_rename`, `dlg.delete_character` -> `characters_delete`, unsaved prompt before any switch, problems resolved + validated on the pools) and the World Rules tab (`world_rules`: every edit a `world_set`, sent in order; Original Game / Player Start / Starting Kit, More with Applies On / Playable Area / Transitions; problems bar + drawer; `dlg.empty_world`); `Lists` (pickers, trade categories, `meshes\actors` models, read on the pools, busy until read); portrait sheets decoded on the pools, kept per project; `item_picker` (both tabs); Mod menu rows; `characters_view`, `world_view`. Looked at on a temp copy. Tests written, not run |
 | `gz-ui-release` | done | Publish Release (`publish_release`, L: one Release line + Notes, the rest under More unless it stops the release; reads the releases as it opens, a version that is out is a problem with Open Mod Settings / Open Releases, a failed read a muted note; account rows, device code in Title Mono, token field; Publish closes it, the card follows, the kit `result` `dlg.publish_result`), `dlg.edit_release` (also from `take_edit_request`), the Releases tab (`releases`: sortable table, details with Edit... / Open Page / Delete... GhostDanger, row menu, Del / F5, the kit `confirm` `dlg.delete_release`, banners), Submit to Mod Browser (`submit`, fixed 600 pt body, five cards, VirusTotal card in the Required tone, footer busy + Stop <job> + Hide, label sets) with the sheet `dlg.catalog_withdraw`, follows `Catalog::window_open` / `wants_withdraw_question`; toolbar Publish Release / Releases, Mod rows at `gz_ui_mod::mod_menu_slot`; the key row is `gz_ui_mod::KeyLine`. Every button runs the domain path its command runs (`Publisher::start`, `ReleaseList::start`, `Catalog::start`, `AuthorKeys`, `Github` token / VT key). Locals: `local_secret_field`, `local_secret_row`, `local_code`, `local_card_title`, `local_fold`, `local_table_head`. Looked at under `-qa_github` with dead loopback endpoints; tests written, not run |
 | `gz-ui-pda` | done | the `pda` tab (singleton view over a session `PdaTab` model behind one lock: file, Source text, the reader's answer via `PdaService::evaluate`, `gz_pda::Preview`, view, last frame's geometry; retargets through the shell's unsaved prompt, follows the file on the tree revision and before every `pda_preview`), the canvas (device of `pda.xml` / `pda_16.xml`, sheets / fonts / level maps from `PdaAssets` - decoded on the pools, uploaded once, dropped with the session, the link or Reload; bitmap glyph quads; Fit / 100% / wheel-at-mouse / pan in px semantics; screen edges; stock panel, toasts, map with actor and markers), Details tabs, Source pane (Mono, gutter, error band, Apply / Ctrl+Enter / Ctrl+S); `pda_preview` (canvas-unit state, `map.bound` / `spots`, waits for 2 frames when owed); the `screens` tab (lists, 16:9 preview with DDS / GIF thumbnails, layers with drag reorder, music combo, More, track form; edits as `Change`s applied locally and saved through `ManifestService::edit` on the freshest model); `local_file_drop_zone` (Explorer drops wait for the pointer's next move, `gz_ui_content::DragPayload` and std path payloads, inner zones first, `simulate_drop`); `screens_view` (waits for the drop's import and save); `COMMAND_MOD_SCREENS` / `COMMAND_MOD_PDA` at `gz_ui_mod::mod_menu_slot`. Looked at on a temp project: 4:3, 16:9, Source with an error, a two-layer screen. Tests written, not run |
-| `gz-ui-previews` | done | the `model` tab (own `gz_render::Renderer` sized to the canvas, a hand-built `DrawList`: the model posed by `idle` / its first cycle, a floor of round metre steps under it, bones as overlays; orbit / pan / zoom-at-cursor `Orbit`; packets built and submitted on the CPU pool only when the view changed or went stale; Details grid), the `texture` tab (read + uploaded on the pools: native DDS as the GPU takes it - BC1-7, 32-bit, R8, RGBA16F, every whole level - else decoded to B8G8R8A8; Fit / 1:1 / Zoom / channels / Mip / Details), both drawn through `image_pass` (a WGSL pass in egui's render pass: straight alpha, channel and alpha-as-grey views, opaque renders, nearest past 2:1); `loader::Sources` = project, editor, linked game (also the renderer's `AssetLoader`); Light Animations (`Store` with undo over `lanims.xr`, timeline, key bar, Play), Texture Library + New Textures (`.tga`/`.thm` walk as a `Query`, `Store` of edited descriptions, save/import as a job writing `.thm`, `.dds`, `.tga`; Types filter; texture picker), Sound Library (`.wav`/`.thm` walk, waveform from `Pcm::peaks`, `cpal` audio thread, save rewrites `.thm` and the `.ogg` params in place); Libraries menu incl. Check New Textures, Synchronize Textures... / Sounds... (confirm, then jobs); `preview_model`, `texture_preview`, `library`, `asset_preview`. Not done: Vorbis encoding (Rebuild / changed .wav), the cube map Smaller Copy button. `gz-app/src/window.rs`: BC feature requested when the adapter has it, device errors logged. Looked at on a temp project. Tests written, not run |
+| `gz-ui-previews` | done | the `model` tab (own `gz_render::Renderer` sized to the canvas, a hand-built `DrawList`: the model posed by `idle` / its first cycle, a floor of round metre steps under it, bones as overlays; orbit / pan / zoom-at-cursor `Orbit`; packets built and submitted on the CPU pool only when the view changed or went stale; Details grid), the `texture` tab (read + uploaded on the pools: native DDS as the GPU takes it - BC1-7, 32-bit, R8, RGBA16F, every whole level - else decoded to B8G8R8A8; Fit / 1:1 / Zoom / channels / Mip / Details), both drawn through `image_pass` (a WGSL pass in egui's render pass: straight alpha, channel and alpha-as-grey views, opaque renders, nearest past 2:1); `loader::Sources` = project, editor, linked game (also the renderer's `AssetLoader`); Light Animations (`Store` with undo over `lanims.xr`, timeline, key bar, Play), Texture Library + New Textures (`.tga`/`.thm` walk as a `Query`, `Store` of edited descriptions, save/import as a job writing `.thm`, `.dds`, `.tga`; Types filter; texture picker), Sound Library (`.wav`/`.thm` walk, waveform from `Pcm::peaks`, `cpal` audio thread, save writes `.thm` and makes the `.ogg` again from the `.wav`, Rebuild, Synchronize encodes what is missing or of another age); Libraries menu incl. Check New Textures, Synchronize Textures... / Sounds... (confirm, then jobs); `preview_model`, `texture_preview`, `library`, `asset_preview`. Not done: the cube map Smaller Copy button. `gz-app/src/window.rs`: BC feature requested when the adapter has it, device errors logged. Looked at on a temp project. Tests written, not run |
 | `gz-ui-level` | done | the Level document (kind `level`): a dock of its own over the kit's splitters (`layout`: Wide / Compact builds, four slots, open / slot / front per panel and the sizes in `level.*` layout keys, custom = placement or 8 pt-rounded sizes differ from the build; `dock`: side slots keep pt, viewport min 360 x 240, splitters last; 26 pt tab strips with cross on hover and a Move To / Close menu; F11), the viewport pane in the centre; Level toolbar over registry commands (`toolbar::LEVEL_ACTIONS` - `build_cform`, `build_aimap`, `build_game_graph`, `build_all`, `play`, `play_game`, `play_clean`, `play_stop`, `reload_configs` - added only when registered), status centre + Rebuild chip over `level_rebuild_status` (polled, cached); World Outliner (`outliner_model::compute` as a `Query` by scene rev + filter, Unreal search grammar, natural sort, By Hierarchy, virtualised rows, Filters badge, More, Type / Owner columns, `dlg.rename_object`, `dlg.delete_object`); Tools (tiles, sticky header, Object / Spawn / Particles lists from `lists::Lists` read on the pools, Group, Detail Objects + `dlg.detail_objects`, Select by Reference, Random Settings `dlg.properties`, Snap Objects; picks go to `gz_ui_viewport::set_place_item`); Details / Level Settings (rows prepared as a `Query`, categories, kit grid, transform drags merged + sealed, other values sent on release, `dlg.choose` over the lists, `dlg.edit_text`, Quality segmented); Scene / Build / View menus and 11 scene `UiCommand`s; Recovery page card; `dlg.import_base_scene`; `preview.png` on save and a minute after a change; `outliner_show`, `outliner_filter`, `scene_visibility`, `property_inspector` (wraps gz-scene's, adds the panels). Tests written, not run |
 | `gz-ui-viewport` | done | the Level tab's 3D view: `ViewportPane` (`new`/`ui`/`inactive`/`shortcut`/`mcp_state`, plus `set_maximized`/`take_maximize_request`), `Viewport` service (camera `Nav` = `CUI_Camera` + `ViewportNavigation`, view flags, tool and snaps, Game Lighting, render size), pure `draw::build` (scene snapshot -> `DrawList` with every class's helpers in the C++ colours) + `draw::visibility` from the scene's pick tree, packets built on the CPU pool only when scene/library/view/assets change, egui overlays (pills, 64 pt axis gizmo, transform gizmo, Mono stats pill, labels, safe rect, marquee), picking/select/place/move/rotate/scale as `SceneCmd`s (one merged undo step per drag), Game Lighting (`lighting`: weathers, user.ltx, lamps/campfires/level lights, roof map), the asset loader (project, editor, game), the camera per scene in `<project>	empiewport.ltx`, `capture_preview`, `set_place_item`, `view_menu`, `install` (Keyboard page commands); 9 commands (`camera_get`, `camera_set`, `focus_object`, `viewport_navigation`, `viewport_controls`, `view_mode`, `game_lighting`, `frame_pacing`, `screenshot_viewport`). Looked at in the running editor; tests written, not run |
 | `gz-ui-graph` | done | the graph tab (kinds `quest` / `beh`, ids `quest:<rel>` / `beh:<rel>`): `Scene` built per revision on the CPU pool from `gz_nq::layout` (texts, pins, beziers + back edges routed like `RouteBack`, 512 pt grid index, extents, sorted edges for `beyond`, the minimap's mesh) - a frame draws only the cells in view; `Canvas` (10 zoom levels, LOD by title px, pan / wheel / drag / link / marquee / action drag, edge pills, minimap, context menus, kind pickers by the document's vocabulary); a `ViewMirror` of the store's view, posted when a gesture ends and taken back when the document moved it; `Inspector` (Graph panel: header, Tasks or Roles, Variables, Global -> `mod.ltx [vars]`; Details: node, action under `graph.action_split`, help footer) staging a copy committed as `set_node` / `set_quest` (Replace only for roles and a variable rename); typed editors of `DrawTyped` in `params`; dialogs (Find in Project, Rename Task, Task References via their commands, Edit Text / Lua); `quest_view` (C++ wire, held for its frames), `quest_open` brings the tab up. Not ported: the camera button of a position. Tests written, not run |
@@ -169,9 +170,7 @@ From the game link:
 - The configs are read with the C++ editor's `CInifile` rules (`Dialect::Editor`: a missing
   include is skipped), as `EditorGameConfigs` handed them to it; cp1251. Without a link (or when
   the linked configs fail) `list_spawn_sections` reads the editor's own `gamedata\configs`.
-- Whatever writes into the game (Build Into Game) must call `GameLink::refresh()` afterwards:
-  the C++ called `EditorGameModes::Invalidate`; here the modes, configs and strings follow the
-  new index revision by themselves.
+- A build into the linked game refreshes it (`gz-build`, after the module is in place).
 - `game_link` / `game_modes` refusals carry `error` before their fields (the shared error
   reply); the C++ `game_link` refusal had no `error` key at all.
 
@@ -233,8 +232,6 @@ From the manifest and build port:
 - The file tree never holds tooling entries, but `left_out` must name them (QA asserts `.git`,
   `Thumbs.db`, `gamedata/.git`): the walk lists each folder it enters once more for tooling
   names only. A field of skipped names in `gz_project::Dir` would remove that listing.
-- Not ported: the C++ free-space check before a build (`GetDiskFreeSpaceEx` needs a `gz-win`
-  function).
 - Areas plug in: `gz_build::BuildChecks::of(editor).add(..)` (quests, characters, world, PDA,
   screens), `.set_bake(..)` (the scene), `gz_mod::ManifestFields::of(editor).provide("world", ..)`
   (the `world` field of `mod_manifest`, `null` until then), `gz_mod::ManifestArgs::of(editor)
@@ -248,10 +245,8 @@ From the release port:
   catalog's `xms_catalog.py`, which is RFC 6979 too).
 - Dead stages are found by a lock file (`owner.lock`, held unshared) instead of the C++ pid
   check; a C++ editor's stage (no lock file) is left to it.
-- Documents is read from `HKCU\...\User Shell Folders\Personal` through `reg export` (UTF-16,
-  no `unsafe`), `%USERPROFILE%\Documents` as the fallback.
-- While the module stages, `gz_build::Builds::status` shows "Building Module"; the Task Center
-  should show `gz_release::Releases::status`, which overlays the build's row.
+- Documents is the shell's known folder (`gz_win::known_folder`), `%USERPROFILE%\Documents` as the fallback.
+- While the module stages, the cards (package and publish) show `gz_release::Releases::status`, which overlays the build's row.
 
 From the publish / catalog port:
 - The Credential Manager is used through `windows-native-keyring-store` (+ `keyring-core`) with
@@ -300,10 +295,7 @@ From the PDA and screens port:
   tab's selected surface (loading unless the author switched it).
 
 From the Content Browser:
-- `content_create` lands in the browser's folder only when `folder=` is passed (`gz-project`'s
-  handler; its templates are `pub(crate)`, so the browser cannot take the command over). The C++
-  made it in the folder the browser showed: QA's `test_asset_icons.py` A needs a hook in
-  `gz-project` (a default-folder provider) to pass again.
+- `content_create` without `folder=` lands in the folder the browser shows (`ProjectHooks::provide_content_folder`, filled by `gz-ui-content`).
 - The Editor source is files, not the C++ library references: each category is a folder of the
   data root (Objects = `rawdata\objects`, Visuals = `gamedata\meshes`, ...); Particles,
   Entities and Light Anims live in one shared file each and list nothing. `content_browser_open`
@@ -340,8 +332,7 @@ From the graphs port (`gz-nq`):
   tab commands answer project-relative. Positions and bounds are JSON floats (`-112.0`).
 - `quest_history` keeps the C++ view history and adds `undo_steps` / `redo_steps`, the store's
   labels. Undo back to the saved state is clean again (the C++ stayed dirty).
-- Not ported: the on-disk picker cache (`nq_index_*.txt`) - the pickers are in-memory `Query`s; the
-  rescue save of dirty graphs on project close (`NqDocs::SaveDirty`).
+- Not ported: the on-disk picker cache (`nq_index_*.txt`) - the pickers are in-memory `Query`s.
 
 From the Mod Settings and build dialogs port:
 - UI builds call `gz_build::Builds::start` / `gz_release::Releases::start` themselves: `mod_export`
@@ -351,9 +342,7 @@ From the Mod Settings and build dialogs port:
 - The Mod menu rows of other packages (Characters, World Rules, Screens & Music, PDA Interface,
   Bake Scene Layer, Publish Release, Releases, Submit) are theirs to add at
   `gz_ui_mod::mod_menu_slot(id)` with a `UiCommand` of that id; until then they are not shown.
-- `mod_set_manifest` without `target` reads it off the mode (the C++ too): Mod Settings always
-  states `target` when it is default/existing/new; a classic `target = any` module turns into
-  `existing` (mode `*` kept) on its first save from the tab.
+- `mod_set_manifest` without `target` reads it off the mode (the C++ too), except `mode = *`: a classic module keeps `target = any`.
 
 From the characters and world port:
 - Deviations from the C++ wire: `characters_write` refuses a path outside the project (the C++
@@ -365,8 +354,7 @@ From the characters and world port:
 - `gz_nq`'s slots are sync: the briefs and the game world are cached and refreshed in the
   background when their revision moves; commands await the fresh value themselves. Until the
   first roster the characters lookup answers what the file tree says (as `gz-nq`'s own fallback).
-- The scene area fills `gz_world::SceneStarts::of(editor).provide(..)` (its level and Player
-  Starts, `SetSceneStarts`); until then `E201` counts the baked `spawn\*.xspawn` files alone.
+- `gz-export-level` fills `gz_world::SceneStarts` (the scene's level and Player Starts).
 - No `list_assets` category for characters: `gz_project::CATEGORIES` is closed (as for the PDA).
 - The UI half (Characters tab, World Rules tab, the item picker) is not here; the tab binds to
   `gz_characters::text_raw`, edits with `text_set`, and reads `Roster::raw` for what a base gives.
@@ -380,12 +368,53 @@ From the level export and build port:
   game graph's equal-weight edge removals, the A* ties and the artefact / death points (C++
   `rand` shuffles) are deterministic here; the editor's cross-table size prefix (`+1`) is written
   as xrAI writes it (`+4`).
-- `gz-fmt-xr`'s `GameMaterial::DYNAMIC` is `1 << 3`; the engine's `flDynamic` is `1 << 8`
-  (`XrGameMaterialLibraryInterface.h`). `gz-levelbuild` uses its own flags.
-- `gz-entities` has no setters for a zone's `m_artefact_position_offset` or a level changer's
-  destination: the spawn build leaves both as the scene holds them. The space restrictor
-  separator check (Play's option), the breakable / climable objects of `BuildGame` and
-  `Scene->Validate` before a build are not ported.
+- Not ported in `gz-levelbuild`: the breakable and climable objects `BuildGame` adds to `level.spawn`
+  (`ESceneObjectToolsExportBreakable.cpp` over `GeometryPartExtractor`). `Scene->Validate` is ported
+  in part (`validate.rs` names what it leaves out).
+
+## Closed in integration
+
+- `gz-win`: the caption hit test (`WM_NCHITTEST` from a `CaptionShape` the shell publishes each
+  frame; `HTMAXBUTTON` with the clicks and the hover handled; resize edges), known folders, free
+  space, volume roots. `gz-app` dropped `StartDrag` / `BeginResize`. Looked at: `titlebar_info`
+  and the hit test answer client / caption / max button / left edge as they should.
+- The build's free-space check (C++ message), the delete guards and the catalog home on known
+  folders, "the root of a drive" also for a volume mounted into a folder.
+- `gz_ui_viewport::install` called; a build into the linked game refreshes `GameLink`; the publish
+  card shows `Releases::status` (step, numbers, file) while packaging.
+- `content_create` default folder hook; `ProjectHooks::on_before_close` (awaited, first) - the
+  Level tab takes `preview.png` there; the editor closes its project on quit (last scene,
+  preview, unsaved graphs).
+- Saving on request: `DirtySource::save` / `discard`, `Editor::save_all` / `discard_all`;
+  quests, the scene, the PDA source, and every tab-only document (characters, libraries) through
+  the shell's own source, waited for until clean; used by `project_close save=`,
+  `window_control close save=`, `ui_tab close save=`. The rescue save of graphs on close
+  (`NqDocs::SaveDirty`, `.recovered` beside a file changed on disk).
+- `game_link` refuses a different game under a live scene; Link Game's Close Project is off then.
+- `object_flags`, `recovery_*` in `PREFS` (not on the wire); recovery follows the Preferences and
+  the author's input.
+- Key owners: the Content Browser and the Level's owning panels keep the scene's bindings away.
+- `list_commands`, `exec_command`; `-dump_commands` lists every `cmd` of `tools.json`.
+- Kit: dialogs audit under `Title###dlg.<name>`; a dialog measures again when what it holds
+  changes by itself; `MenuItem::tip`; a segmented that does not fit is a combo; lists take the
+  arrows, Home / End, Page Up / Down and type-ahead.
+- A classic module (`mode = *`, `target = any`) stays classic: `mod_set_manifest` infers no
+  target from `*` (`// oracle:`), Mod Settings shows Every Mode for it.
+- `quest_edit` / `_find` / `_bookmarks` / `_history` / `_minimap` bring the tab up first.
+- `tools.json`: `grizzly_jobs`, `grizzly_level_build` (+ `verify_restrictors`), `content_create
+  folder`, `characters_view show`, `world_view more`, `project_browser_menu new_project`.
+- `UI_DESIGN.md`: the Characters sentence. Sound encoding (`vorbis_rs`, `gz_fmt_sound::
+  encode_game_sound`), noted in `RUST_MIGRATION.md` sections 6 and 8.
+- Level build: `GameMaterial::DYNAMIC` is bit 8 (and `gz-fmt-ogf` checks bone / surface
+  materials when given them); zone artefact offsets and level changer destinations set by the
+  spawn build; `Scene->Validate` in part; Play's Verify Space Restrictors.
+- Clippy clean over the workspace, `cargo fmt --all`, `unsafe` in `gz-win` only.
+
+Still open from integration: the breakable / climable objects of `BuildGame`; the rest of
+`Scene->Validate` (portals, sector and wallmark shaders, LOD texture notes, the sound library);
+`gz_ltx::LtxDoc` and `ManifestDoc` stay two documents (entries without `=`, raw line edits and
+headers without inheritance would all have to enter `LtxDoc`); the Start page's status bar still
+shows the Level tab's centre.
 
 ## Next packages, in dependency order
 

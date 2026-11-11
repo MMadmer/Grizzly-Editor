@@ -125,7 +125,11 @@ pub fn folder_text(project: Option<&Path>, editor_root: &Path, folder: &Path) ->
     let inside = |root: &Path, owner: &str| -> Option<String> {
         let r = root.to_string_lossy();
         let r = r.trim_end_matches(['\\', '/']);
-        if r.is_empty() || text.len() <= r.len() || !text.is_char_boundary(r.len()) || !text[..r.len()].eq_ignore_ascii_case(r) {
+        if r.is_empty()
+            || text.len() <= r.len()
+            || !text.is_char_boundary(r.len())
+            || !text[..r.len()].eq_ignore_ascii_case(r)
+        {
             return None;
         }
         // the root ends at a separator: C:\Mod is not a folder of C:\Mo
@@ -193,7 +197,8 @@ pub fn list_files(dir: &Path, exts: &[&str], root_only: bool, clamp_ext: bool) -
             if !exts.contains(&&lower[dot + 1..]) {
                 continue;
             }
-            let key = if clamp_ext { format!("{prefix}{}", &lower[..dot]) } else { format!("{prefix}{lower}") };
+            let key =
+                if clamp_ext { format!("{prefix}{}", &lower[..dot]) } else { format!("{prefix}{lower}") };
             out.push((key, e.path()));
         }
     }
@@ -221,8 +226,14 @@ mod tests {
     #[test]
     fn folders_are_named_by_where_they_sit() {
         let editor = Path::new("D:\\Ed");
-        assert_eq!(folder_text(None, editor, Path::new("D:\\Ed\\rawdata\\textures")), "the editor's rawdata\\textures folder");
-        assert_eq!(folder_text(Some(Path::new("C:\\Mod")), editor, Path::new("C:\\Mod\\import")), "the project's import folder");
+        assert_eq!(
+            folder_text(None, editor, Path::new("D:\\Ed\\rawdata\\textures")),
+            "the editor's rawdata\\textures folder"
+        );
+        assert_eq!(
+            folder_text(Some(Path::new("C:\\Mod")), editor, Path::new("C:\\Mod\\import")),
+            "the project's import folder"
+        );
         // C:\Mod is not a folder of C:\Mo
         assert_eq!(folder_text(Some(Path::new("C:\\Mo")), editor, Path::new("C:\\Mod\\x")), "C:\\Mod\\x");
     }

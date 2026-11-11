@@ -139,7 +139,10 @@ fn key_from_label(part: &str) -> Option<Key> {
             if stripped.len() == 1 {
                 Key::from_name(&stripped.to_ascii_uppercase())
             } else if let Some(n) = stripped.strip_prefix('f') {
-                n.parse::<u8>().ok().filter(|n| (1..=35).contains(n)).and_then(|_| Key::from_name(&stripped.to_ascii_uppercase()))
+                n.parse::<u8>()
+                    .ok()
+                    .filter(|n| (1..=35).contains(n))
+                    .and_then(|_| Key::from_name(&stripped.to_ascii_uppercase()))
             } else {
                 Key::from_name(part)
             }
@@ -171,7 +174,9 @@ pub fn pressed(events: &[Event]) -> Vec<Chord> {
     events
         .iter()
         .filter_map(|e| match e {
-            Event::Key { key, pressed: true, repeat: false, modifiers, .. } => Some(Chord::of(*key, *modifiers)),
+            Event::Key { key, pressed: true, repeat: false, modifiers, .. } => {
+                Some(Chord::of(*key, *modifiers))
+            }
             _ => None,
         })
         .collect()

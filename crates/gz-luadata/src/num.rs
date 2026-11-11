@@ -239,7 +239,8 @@ pub(crate) fn strscan(p: &[u8], cdata: bool) -> Option<Scanned> {
     }
 
     // the significant digits, without the point
-    let digits: Vec<u8> = p.get(sp..).unwrap_or(&[]).iter().copied().filter(|c| *c != b'.').take(dig).collect();
+    let digits: Vec<u8> =
+        p.get(sp..).unwrap_or(&[]).iter().copied().filter(|c| *c != b'.').take(dig).collect();
     let integer = matches!(fmt, Fmt::I64 | Fmt::U64);
     let wrap = |x: u64| -> Scanned {
         let x = if neg { x.wrapping_neg() } else { x };

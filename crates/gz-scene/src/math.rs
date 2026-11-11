@@ -226,7 +226,8 @@ mod tests {
 
     #[test]
     fn matrix_carries_points() {
-        let t = Transform { position: Vec3::new(1.0, 2.0, 3.0), rotation: Vec3::ZERO, scale: Vec3::splat(2.0) };
+        let t =
+            Transform { position: Vec3::new(1.0, 2.0, 3.0), rotation: Vec3::ZERO, scale: Vec3::splat(2.0) };
         let p = t.matrix().transform_tiny(Vec3::ONE);
         assert!((p - Vec3::new(3.0, 4.0, 5.0)).length() < 1e-5);
         let back = t.inverse().transform_tiny(p);

@@ -100,7 +100,9 @@ impl Filter {
     /// The badge on Filters: how many of its switches are on (`ActiveFilters`).
     #[must_use]
     pub fn active_filters(&self, any_hidden: bool) -> usize {
-        usize::from(self.selected_only) + usize::from(self.visibility != Visibility::All) + usize::from(any_hidden)
+        usize::from(self.selected_only)
+            + usize::from(self.visibility != Visibility::All)
+            + usize::from(any_hidden)
     }
 }
 
@@ -275,7 +277,8 @@ impl Listing {
 pub fn compute(state: &SceneState, filter: &Filter, folds: &Folds) -> Listing {
     let terms = parse_terms(&filter.text);
     let filtering = filter.filtering();
-    let mut classes: Vec<ObjClass> = ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool() && state.count(*c) > 0).collect();
+    let mut classes: Vec<ObjClass> =
+        ObjClass::ALL.iter().copied().filter(|c| c.is_object_tool() && state.count(*c) > 0).collect();
     classes.sort_by_key(|c| c.name());
 
     let mut out = Listing::default();
@@ -333,7 +336,14 @@ pub fn compute(state: &SceneState, filter: &Filter, folds: &Folds) -> Listing {
         let open = filtering || !folds.collapsed.contains(c);
         out.rows.push(Row::Class { class: *c, shown: shown.len(), total: all.len(), open });
         if open {
-            out.rows.extend(shown.iter().map(|id| Row::Object { id: *id, class: *c, depth: 0, direct: true, children: false, expanded: false }));
+            out.rows.extend(shown.iter().map(|id| Row::Object {
+                id: *id,
+                class: *c,
+                depth: 0,
+                direct: true,
+                children: false,
+                expanded: false,
+            }));
         }
     }
     out
@@ -341,7 +351,13 @@ pub fn compute(state: &SceneState, filter: &Filter, folds: &Folds) -> Listing {
 
 /// By Hierarchy: every object once, under the group that owns it; a match keeps its owners in
 /// view; a broken owner chain degrades to roots.
-fn hierarchy_rows(state: &SceneState, filter: &Filter, folds: &Folds, lists: &[(ObjClass, Vec<ObjId>, Vec<ObjId>)], filtering: bool) -> Vec<Row> {
+fn hierarchy_rows(
+    state: &SceneState,
+    filter: &Filter,
+    folds: &Folds,
+    lists: &[(ObjClass, Vec<ObjId>, Vec<ObjId>)],
+    filtering: bool,
+) -> Vec<Row> {
     let mut nodes: Vec<ObjId> = Vec::new();
     let mut index: FxHashMap<ObjId, usize> = FxHashMap::default();
     for (_, all, _) in lists {
@@ -356,7 +372,9 @@ fn hierarchy_rows(state: &SceneState, filter: &Filter, folds: &Folds, lists: &[(
     let mut parent: Vec<Option<usize>> = nodes
         .iter()
         .enumerate()
-        .map(|(i, id)| state.get(*id).and_then(|o| o.owner).and_then(|ow| index.get(&ow).copied()).filter(|p| *p != i))
+        .map(|(i, id)| {
+            state.get(*id).and_then(|o| o.owner).and_then(|ow| index.get(&ow).copied()).filter(|p| *p != i)
+        })
         .collect();
     // cycles: the lowest index of each loop becomes a root
     let mut mark = vec![0u8; n];
@@ -412,8 +430,8 @@ fn hierarchy_rows(state: &SceneState, filter: &Filter, folds: &Folds, lists: &[(
     }
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut roots = Vec::new();
-    for i in 0..n {
-        match parent[i] {
+    for (i, up) in parent.iter().enumerate().take(n) {
+        match *up {
             Some(p) => children[p].push(i),
             None => roots.push(i),
         }
@@ -430,7 +448,8 @@ fn hierarchy_rows(state: &SceneState, filter: &Filter, folds: &Folds, lists: &[(
             c.sort_by(less);
         }
     }
-    let open_set: FxHashSet<(ObjClass, &str)> = folds.expanded.iter().map(|(c, n)| (*c, n.as_str())).collect();
+    let open_set: FxHashSet<(ObjClass, &str)> =
+        folds.expanded.iter().map(|(c, n)| (*c, n.as_str())).collect();
     let filtering = filtering || !filter.hidden.is_empty();
     let mut rows = Vec::new();
     let mut pending: Vec<(usize, u16)> = roots.iter().rev().map(|r| (*r, 0u16)).collect();
@@ -441,7 +460,14 @@ fn hierarchy_rows(state: &SceneState, filter: &Filter, folds: &Folds, lists: &[(
         let Some(o) = state.get(nodes[i]) else { continue };
         let has_children = children[i].iter().any(|c| included[*c]);
         let expanded = open_set.contains(&(o.class, o.name.as_str()));
-        rows.push(Row::Object { id: nodes[i], class: o.class, depth, direct: direct[i], children: has_children, expanded: filtering || expanded });
+        rows.push(Row::Object {
+            id: nodes[i],
+            class: o.class,
+            depth,
+            direct: direct[i],
+            children: has_children,
+            expanded: filtering || expanded,
+        });
         if !has_children || (!filtering && !expanded) {
             continue;
         }
@@ -462,12 +488,20 @@ pub fn types_to_hide(groups: &[Group], types: &str) -> Result<Vec<ObjClass>, Str
         return Ok(Vec::new());
     }
     let wanted: Vec<&str> = types.split(';').map(|t| t.trim_matches(' ')).filter(|t| !t.is_empty()).collect();
-    let unknown: Vec<&str> = wanted.iter().copied().filter(|w| !groups.iter().any(|g| g.class.name().eq_ignore_ascii_case(w))).collect();
+    let unknown: Vec<&str> = wanted
+        .iter()
+        .copied()
+        .filter(|w| !groups.iter().any(|g| g.class.name().eq_ignore_ascii_case(w)))
+        .collect();
     if !unknown.is_empty() {
         let has: Vec<&str> = groups.iter().map(|g| g.class.name()).collect();
         return Err(format!("unknown object type(s): {}; scene has: {}", unknown.join(", "), has.join(", ")));
     }
-    Ok(groups.iter().filter(|g| !wanted.iter().any(|w| g.class.name().eq_ignore_ascii_case(w))).map(|g| g.class).collect())
+    Ok(groups
+        .iter()
+        .filter(|g| !wanted.iter().any(|w| g.class.name().eq_ignore_ascii_case(w)))
+        .map(|g| g.class)
+        .collect())
 }
 
 #[cfg(test)]
@@ -512,7 +546,10 @@ mod tests {
         let s = scene(&[("l1", ObjClass::Light), ("w1", ObjClass::Way), ("l2", ObjClass::Light)]);
         let l = compute(&s, &Filter::default(), &Folds::default());
         assert_eq!(l.total, 3);
-        assert_eq!(l.groups.iter().map(|g| g.class).collect::<Vec<_>>(), vec![ObjClass::Light, ObjClass::Way]);
+        assert_eq!(
+            l.groups.iter().map(|g| g.class).collect::<Vec<_>>(),
+            vec![ObjClass::Light, ObjClass::Way]
+        );
         assert_eq!(l.rows.len(), 5);
         let f = Filter { text: "l2".into(), ..Filter::default() };
         let l = compute(&s, &f, &Folds::default());
@@ -525,7 +562,10 @@ mod tests {
 
     #[test]
     fn unknown_types_are_named() {
-        let groups = vec![Group { class: ObjClass::Way, total: 1, shown: 1 }, Group { class: ObjClass::Light, total: 1, shown: 1 }];
+        let groups = vec![
+            Group { class: ObjClass::Way, total: 1, shown: 1 },
+            Group { class: ObjClass::Light, total: 1, shown: 1 },
+        ];
         assert_eq!(types_to_hide(&groups, "way"), Ok(vec![ObjClass::Light]));
         let e = types_to_hide(&groups, "way;boat").unwrap_err();
         assert!(e.starts_with("unknown object type(s): boat; scene has: way, light"));

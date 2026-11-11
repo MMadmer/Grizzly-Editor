@@ -34,7 +34,10 @@ fn atoi64(s: &str) -> i64 {
         Some(b'+') => (false, s.get(1..).unwrap_or("")),
         _ => (false, s),
     };
-    let n = digits.bytes().take_while(u8::is_ascii_digit).fold(0i64, |acc, d| acc.saturating_mul(10).saturating_add(i64::from(d - b'0')));
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i64, |acc, d| acc.saturating_mul(10).saturating_add(i64::from(d - b'0')));
     if neg { -n } else { n }
 }
 
@@ -64,7 +67,13 @@ pub fn fresh_tag(version: &str, deleted: &str, now: i64) -> String {
 #[must_use]
 pub fn valid_tag(tag: &str) -> bool {
     let n = tag.len();
-    if n == 0 || n > 100 || tag.starts_with('-') || tag.starts_with('.') || tag.ends_with('.') || tag.contains("..") {
+    if n == 0
+        || n > 100
+        || tag.starts_with('-')
+        || tag.starts_with('.')
+        || tag.ends_with('.')
+        || tag.contains("..")
+    {
         return false;
     }
     tag.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))

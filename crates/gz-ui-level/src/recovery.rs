@@ -62,7 +62,9 @@ fn seen(editor: &Editor) -> Seen {
                 rec.bind(&root);
                 let linked = project.game_linked();
                 let status = rec.status(dirty, linked);
-                let snapshots = std::fs::read_to_string(Recovery::dir_of(&root).join("manifest.ltx")).map(|t| read_manifest(&t).len()).unwrap_or(0);
+                let snapshots = std::fs::read_to_string(Recovery::dir_of(&root).join("manifest.ltx"))
+                    .map(|t| read_manifest(&t).len())
+                    .unwrap_or(0);
                 let mut s = v.seen.lock();
                 let changed = s.status.as_ref() != Some(&status) || s.snapshots != snapshots;
                 s.status = Some(status);
@@ -102,7 +104,11 @@ fn post(editor: &Arc<Editor>, action: &str) {
         args.insert("action".into(), Value::String(action));
         let reply = ed.call("recovery", args, ed.ui_origin()).await;
         if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-            let e = reply.get("error").and_then(Value::as_str).unwrap_or("The recovery did not answer.").to_owned();
+            let e = reply
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("The recovery did not answer.")
+                .to_owned();
             let view = ed.services.get_or_init(RecoveryView::default);
             view.seen.lock().error = e;
         }
@@ -121,28 +127,52 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
     let mut clicked = None;
     card::page(ui, gz_app::contract::WINDOW_START_PAGE, |ui| {
         card::page_card(ui, "recovery", "Recover Unsaved Scene", 560.0, |ui| {
-            gz_ui::text::label(ui, "The previous session did not close cleanly.", Font::Strong, p.text, Clip::End);
-            gz_ui::text::prose(ui, "A snapshot of its unsaved scene was kept. Restore opens it as an unsaved scene; the scene file stays as it is.");
+            gz_ui::text::label(
+                ui,
+                "The previous session did not close cleanly.",
+                Font::Strong,
+                p.text,
+                Clip::End,
+            );
+            gz_ui::text::prose(
+                ui,
+                "A snapshot of its unsaved scene was kept. Restore opens it as an unsaved scene; the scene file stays as it is.",
+            );
             ui.add_space(8.0);
-            for (k, v, clip) in [("Saved", saved_at.as_str(), Clip::End), ("Scene", scene.as_str(), Clip::Start)] {
+            for (k, v, clip) in
+                [("Saved", saved_at.as_str(), Clip::End), ("Scene", scene.as_str(), Clip::Start)]
+            {
                 ui.horizontal(|ui| {
-                    ui.allocate_ui(egui::Vec2::new(gz_ui::units::em(5.0), gz_ui::metrics::ROW), |ui| gz_ui::text::label(ui, k, Font::Body, p.text_secondary, Clip::End));
+                    ui.allocate_ui(egui::Vec2::new(gz_ui::units::em(5.0), gz_ui::metrics::ROW), |ui| {
+                        gz_ui::text::label(ui, k, Font::Body, p.text_secondary, Clip::End)
+                    });
                     gz_ui::text::label(ui, v, Font::Body, p.text, clip);
                 });
             }
             if st.source_newer {
                 ui.add_space(4.0);
-                gz_ui::text::status(ui, Tone::Warning, "The scene file changed after this snapshot. Restore only if you need the older unsaved state.");
+                gz_ui::text::status(
+                    ui,
+                    Tone::Warning,
+                    "The scene file changed after this snapshot. Restore only if you need the older unsaved state.",
+                );
             }
             let error = if s.error.is_empty() { st.last_error.clone() } else { s.error.clone() };
             if !error.is_empty() {
                 ui.add_space(4.0);
                 gz_ui::text::status(ui, Tone::Error, &error);
             }
-            let restore_why = if st.dirty { "Save or discard the open scene first." } else { "The recovery cannot restore now." };
+            let restore_why = if st.dirty {
+                "Save or discard the open scene first."
+            } else {
+                "The recovery cannot restore now."
+            };
             let actions = [
-                CardAction::new("Discard...", Kind::GhostDanger).enabled(st.can_discard, "The recovery cannot discard now."),
-                CardAction::new("Restore", Kind::Primary).default_action().enabled(st.can_restore, restore_why),
+                CardAction::new("Discard...", Kind::GhostDanger)
+                    .enabled(st.can_discard, "The recovery cannot discard now."),
+                CardAction::new("Restore", Kind::Primary)
+                    .default_action()
+                    .enabled(st.can_restore, restore_why),
             ];
             clicked = card::card_footer(ui, "", Tone::Muted, &actions);
         });

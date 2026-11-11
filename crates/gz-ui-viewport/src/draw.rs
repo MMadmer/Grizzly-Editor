@@ -8,10 +8,14 @@ use std::sync::Arc;
 
 use glam::{Mat4, Quat, Vec3};
 use gz_fmt_object::Mat4 as XMat;
-use gz_render::{Aabb, Assets, Color, DrawList, Environment, Helpers, Instance, InstanceFlags, Light, ShapeKind, Visibility};
+use gz_render::{
+    Aabb, Assets, Color, DrawList, Environment, Helpers, Instance, InstanceFlags, Light, ShapeKind,
+    Visibility,
+};
 use gz_scene::library::Library;
 use gz_scene::objects::{
-    self, CF_SPHERE, FV_OCCLUSION, LT_POINT, LT_SPOT, PLAYERSTART_HALF_WIDTH, PointKind, ShapeData, VIS_RADIUS, WAYPOINT_RADIUS, WAYPOINT_SIZE, light_flags,
+    self, CF_SPHERE, FV_OCCLUSION, LT_POINT, LT_SPOT, PLAYERSTART_HALF_WIDTH, PointKind, ShapeData,
+    VIS_RADIUS, WAYPOINT_RADIUS, WAYPOINT_SIZE, light_flags,
 };
 use gz_scene::pick::ScenePick;
 use gz_scene::{ObjClass, ObjData, ObjId, Object, SceneState};
@@ -117,19 +121,34 @@ fn selection_box(h: &mut Helpers, local: &Aabb, world: &Mat4, c: Color) {
 }
 
 fn romboid(h: &mut Helpers, p: Vec3, r: f32, c: Color) {
-    h.shape(ShapeKind::Romboid, Mat4::from_scale_rotation_translation(Vec3::splat(r), Quat::IDENTITY, p), None, Some(c), true);
+    h.shape(
+        ShapeKind::Romboid,
+        Mat4::from_scale_rotation_translation(Vec3::splat(r), Quat::IDENTITY, p),
+        None,
+        Some(c),
+        true,
+    );
 }
 
 /// `DrawEntity`: the flag of a spawn point in its own space, and its icon's square.
 fn entity_flag(h: &mut Helpers, rp: &Mat4, c: Color) {
-    let pts = [Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 0.5), Vec3::new(0.0, 0.5, 0.5), Vec3::new(0.0, 0.5, 0.0)];
+    let pts = [
+        Vec3::ZERO,
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.5),
+        Vec3::new(0.0, 0.5, 0.5),
+        Vec3::new(0.0, 0.5, 0.0),
+    ];
     for w in pts.windows(2) {
         if let [a, b] = w {
             h.line(rp.transform_point3(*a), rp.transform_point3(*b), c, true);
         }
     }
     // the square the icon is drawn on: the XZ plane turned to face +X, between y .5..1, z 0...5
-    let plane = *rp * Mat4::from_translation(Vec3::new(0.0, 0.75, 0.25)) * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_2) * Mat4::from_scale(Vec3::splat(0.5));
+    let plane = *rp
+        * Mat4::from_translation(Vec3::new(0.0, 0.75, 0.25))
+        * Mat4::from_rotation_z(-std::f32::consts::FRAC_PI_2)
+        * Mat4::from_scale(Vec3::splat(0.5));
     h.shape(ShapeKind::Plane, plane, Some(c.with_alpha(140)), None, true);
 }
 
@@ -139,7 +158,8 @@ fn shapes(h: &mut Helpers, data: &ShapeData, world: &Mat4, transp: Color, edge: 
     let fill_c = if selected { transp.with_alpha((a * 2).min(255) as u8) } else { transp };
     for s in &data.shapes {
         if s.kind == CF_SPHERE {
-            let b = *world * Mat4::from_scale_rotation_translation(Vec3::splat(s.radius()), Quat::IDENTITY, s.center());
+            let b = *world
+                * Mat4::from_scale_rotation_translation(Vec3::splat(s.radius()), Quat::IDENTITY, s.center());
             h.shape(ShapeKind::Cross { rot45: false }, b, None, Some(edge), true);
             h.shape(ShapeKind::Sphere, b, Some(fill_c), Some(edge), true);
         } else {
@@ -147,9 +167,7 @@ fn shapes(h: &mut Helpers, data: &ShapeData, world: &Mat4, transp: Color, edge: 
             h.shape(ShapeKind::Box, b, Some(fill_c), Some(edge), true);
         }
     }
-    if selected
-        && let Some(local) = ga(&data.local_box())
-    {
+    if selected && let Some(local) = ga(&data.local_box()) {
         selection_box(h, &local, world, Color::WHITE);
     }
 }
@@ -184,7 +202,8 @@ fn rpoint_color(team: u8) -> Color {
 pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOptions) -> Built {
     let mut out = Built::default();
     let tools = &state.tools;
-    let snap: rustc_hash::FxHashSet<ObjId> = if tools.snap_use { tools.snap.iter().copied().collect() } else { rustc_hash::FxHashSet::default() };
+    let snap: rustc_hash::FxHashSet<ObjId> =
+        if tools.snap_use { tools.snap.iter().copied().collect() } else { rustc_hash::FxHashSet::default() };
     let h = &mut out.list.helpers;
     for o in state.objects.values() {
         if !(o.flags.visible && tools.part(o.class).visible) {
@@ -213,7 +232,8 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                     continue;
                 }
                 let local = lib.cached(&d.reference).and_then(|l| ga(&l.bounds));
-                let mesh = if d.visual_mode() { assets.visual(&d.reference) } else { assets.object(&d.reference) };
+                let mesh =
+                    if d.visual_mode() { assets.visual(&d.reference) } else { assets.object(&d.reference) };
                 push(mesh, world, local);
                 if selected {
                     let b = local.or_else(|| assets.mesh_bounds(mesh)).unwrap_or(Aabb::UNIT);
@@ -247,9 +267,21 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                             }
                             let soft = clr.with_alpha(0x40);
                             if f.shape == 0 {
-                                h.shape(ShapeKind::Sphere, rp * Mat4::from_scale(Vec3::splat(f.sphere_radius)), Some(soft), Some(soft), true);
+                                h.shape(
+                                    ShapeKind::Sphere,
+                                    rp * Mat4::from_scale(Vec3::splat(f.sphere_radius)),
+                                    Some(soft),
+                                    Some(soft),
+                                    true,
+                                );
                             } else {
-                                h.shape(ShapeKind::Box, rp * Mat4::from_scale(f.box_dim * 2.0), Some(soft), Some(soft), true);
+                                h.shape(
+                                    ShapeKind::Box,
+                                    rp * Mat4::from_scale(f.box_dim * 2.0),
+                                    Some(soft),
+                                    Some(soft),
+                                    true,
+                                );
                             }
                         }
                     }
@@ -279,8 +311,19 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 let transp = fill(if d.kind == FV_OCCLUSION { FOG_OCCLUSION_TRANSP } else { ENV_TRANSP });
                 // `ESceneFogVolumeTool::Selected`: the volumes of a selected one's group show it
                 let grouped = d.group_id != u32::MAX
-                    && state.selection.iter().filter_map(|id| state.get(*id)).any(|s| matches!(&s.data, ObjData::FogVolume(f) if f.group_id == d.group_id));
-                shapes(h, &d.shape, &world, transp, line(if grouped { FOG_GROUP_EDGE } else { SHAPE_EDGE }), selected);
+                    && state
+                        .selection
+                        .iter()
+                        .filter_map(|id| state.get(*id))
+                        .any(|s| matches!(&s.data, ObjData::FogVolume(f) if f.group_id == d.group_id));
+                shapes(
+                    h,
+                    &d.shape,
+                    &world,
+                    transp,
+                    line(if grouped { FOG_GROUP_EDGE } else { SHAPE_EDGE }),
+                    selected,
+                );
             }
             ObjData::SoundSrc(d) => {
                 if selected {
@@ -297,7 +340,13 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 {
                     shapes(h, s, &gm(&a.xform.matrix()), fill(SHAPE_TRANSP), line(SHAPE_EDGE), selected);
                 }
-                if let Some(visual) = d.entity.as_ref().and_then(|e| e.entity()).and_then(|e| e.visual_name()).filter(|v| !v.is_empty()) {
+                if let Some(visual) = d
+                    .entity
+                    .as_ref()
+                    .and_then(|e| e.entity())
+                    .and_then(|e| e.visual_name())
+                    .filter(|v| !v.is_empty())
+                {
                     let mesh = assets.visual(visual);
                     push(mesh, rp, None);
                 }
@@ -308,7 +357,13 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                         PointKind::EnvMod => {
                             h.cross(p, 0.25, true, line(ENVMOD_COLOR), true);
                             if selected {
-                                h.sphere(p, d.env.radius, Some(with_alpha(ENVMOD_COLOR, 0x30)), Some(line(ENVMOD_COLOR)), true);
+                                h.sphere(
+                                    p,
+                                    d.env.radius,
+                                    Some(with_alpha(ENVMOD_COLOR, 0x30)),
+                                    Some(line(ENVMOD_COLOR)),
+                                    true,
+                                );
                             }
                         }
                         PointKind::PlayerStart => {
@@ -321,8 +376,21 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                             h.line(rp.transform_point3(tip), rp.transform_point3(left), c, true);
                             h.line(rp.transform_point3(tip), rp.transform_point3(right), c, true);
                             // the player's standing room
-                            let room = Aabb::new(Vec3::new(-PLAYERSTART_HALF_WIDTH, 0.0, -PLAYERSTART_HALF_WIDTH), Vec3::new(PLAYERSTART_HALF_WIDTH, objects::PLAYERSTART_HEIGHT, PLAYERSTART_HALF_WIDTH));
-                            h.shape(ShapeKind::Box, rp * room.unit_transform(), None, Some(c.with_alpha(120)), true);
+                            let room = Aabb::new(
+                                Vec3::new(-PLAYERSTART_HALF_WIDTH, 0.0, -PLAYERSTART_HALF_WIDTH),
+                                Vec3::new(
+                                    PLAYERSTART_HALF_WIDTH,
+                                    objects::PLAYERSTART_HEIGHT,
+                                    PLAYERSTART_HALF_WIDTH,
+                                ),
+                            );
+                            h.shape(
+                                ShapeKind::Box,
+                                rp * room.unit_transform(),
+                                None,
+                                Some(c.with_alpha(120)),
+                                true,
+                            );
                         }
                     }
                     let spawn_flags = tools.part(ObjClass::SpawnPoint).flags;
@@ -338,7 +406,17 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 let lift = Vec3::new(0.0, WAYPOINT_SIZE * 0.85, 0.0);
                 for wp in &w.points {
                     let top = wp.position + lift;
-                    cross6(h, top, WAYPOINT_RADIUS, WAYPOINT_SIZE * 0.85, WAYPOINT_RADIUS, WAYPOINT_RADIUS, WAYPOINT_SIZE * 0.15, WAYPOINT_RADIUS, line(0x0000_ff00));
+                    cross6(
+                        h,
+                        top,
+                        WAYPOINT_RADIUS,
+                        WAYPOINT_SIZE * 0.85,
+                        WAYPOINT_RADIUS,
+                        WAYPOINT_RADIUS,
+                        WAYPOINT_SIZE * 0.15,
+                        WAYPOINT_RADIUS,
+                        line(0x0000_ff00),
+                    );
                     let link_c = Color::from_argb(if selected {
                         if wp.selected { 0xffff_ff00 } else { 0xff90_9000 }
                     } else {
@@ -357,7 +435,12 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                         let c = Color::from_argb(if wp.selected { 0xFFFF_FFFF } else { 0xFFA0_A0A0 });
                         h.label(wp.position, format!(" {} [{}]", o.name, wp.name), c, false);
                         if wp.selected {
-                            selection_box(h, &ga(&wp.bounds()).unwrap_or(Aabb::UNIT), &Mat4::IDENTITY, Color::WHITE);
+                            selection_box(
+                                h,
+                                &ga(&wp.bounds()).unwrap_or(Aabb::UNIT),
+                                &Mat4::IDENTITY,
+                                Color::WHITE,
+                            );
                         }
                     }
                 }
@@ -368,7 +451,11 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
             ObjData::Sector(s) => {
                 // the sector's room: its items' box in its colour
                 if let Some(b) = world_box(state, lib, o) {
-                    let base = Color::rgb((s.color[0] * 255.0) as u8, (s.color[1] * 255.0) as u8, (s.color[2] * 255.0) as u8);
+                    let base = Color::rgb(
+                        (s.color[0] * 255.0) as u8,
+                        (s.color[1] * 255.0) as u8,
+                        (s.color[2] * 255.0) as u8,
+                    );
                     let k = if selected { 0.4 } else { 0.2 };
                     let edge = base.scaled(if selected { 0.8 } else { 0.5 });
                     h.aabb(&b, Some(base.with_alpha((k * 255.0) as u8)), Some(edge), true);
@@ -381,7 +468,11 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
                 let center = pd.vertices.iter().copied().sum::<Vec3>() / pd.vertices.len() as f32;
                 let sector_color = |name: &str| {
                     state.find(ObjClass::Sector, name).and_then(|s| match &s.data {
-                        ObjData::Sector(sd) => Some(Color::rgb((sd.color[0] * 255.0) as u8, (sd.color[1] * 255.0) as u8, (sd.color[2] * 255.0) as u8)),
+                        ObjData::Sector(sd) => Some(Color::rgb(
+                            (sd.color[0] * 255.0) as u8,
+                            (sd.color[1] * 255.0) as u8,
+                            (sd.color[2] * 255.0) as u8,
+                        )),
                         _ => None,
                     })
                 };
@@ -434,8 +525,16 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
 /// Which instances a frustum sees, from the scene's own pick tree: scene objects by the tree's
 /// boxes, the rest by their own bounds (or always, while those are not known).
 #[must_use]
-pub fn visibility(built: &Built, state: &SceneState, pick: &ScenePick, assets: &Assets, frustum: &gz_render::Frustum, reach: &Aabb) -> Visibility {
-    let near: rustc_hash::FxHashSet<ObjId> = pick.box_candidates(&gz_fmt_level::Aabb::new(reach.min, reach.max)).into_iter().collect();
+pub fn visibility(
+    built: &Built,
+    state: &SceneState,
+    pick: &ScenePick,
+    assets: &Assets,
+    frustum: &gz_render::Frustum,
+    reach: &Aabb,
+) -> Visibility {
+    let near: rustc_hash::FxHashSet<ObjId> =
+        pick.box_candidates(&gz_fmt_level::Aabb::new(reach.min, reach.max)).into_iter().collect();
     let mut visible = Vec::with_capacity(built.list.instances.len());
     for (i, (inst, owner)) in built.list.instances.iter().zip(&built.owners).enumerate() {
         let scene_object = state.get(*owner).is_some_and(|o| o.class == ObjClass::SceneObject);
@@ -474,7 +573,15 @@ pub fn frustum_reach(view_proj: &Mat4) -> Aabb {
 /// The objects a box of the picture holds (`FrustumSelect`): a frustum through the rectangle
 /// (pixels of a picture `size` big), tested against each object's world box.
 #[must_use]
-pub fn frustum_select(state: &SceneState, lib: &Library, camera: &gz_render::Camera, size: [u32; 2], a: glam::Vec2, b: glam::Vec2, class: ObjClass) -> Vec<ObjId> {
+pub fn frustum_select(
+    state: &SceneState,
+    lib: &Library,
+    camera: &gz_render::Camera,
+    size: [u32; 2],
+    a: glam::Vec2,
+    b: glam::Vec2,
+    class: ObjClass,
+) -> Vec<ObjId> {
     let (w, h) = (size[0].max(1) as f32, size[1].max(1) as f32);
     let (x0, x1) = (a.x.min(b.x) / w * 2.0 - 1.0, a.x.max(b.x) / w * 2.0 - 1.0);
     let (y0, y1) = (1.0 - a.y.max(b.y) / h * 2.0, 1.0 - a.y.min(b.y) / h * 2.0);
@@ -486,7 +593,12 @@ pub fn frustum_select(state: &SceneState, lib: &Library, camera: &gz_render::Cam
     let sy = 2.0 / (y1 - y0);
     let tx = -(x1 + x0) / (x1 - x0);
     let ty = -(y1 + y0) / (y1 - y0);
-    let s = Mat4::from_cols(glam::Vec4::new(sx, 0.0, 0.0, 0.0), glam::Vec4::new(0.0, sy, 0.0, 0.0), glam::Vec4::new(0.0, 0.0, 1.0, 0.0), glam::Vec4::new(tx, ty, 0.0, 1.0));
+    let s = Mat4::from_cols(
+        glam::Vec4::new(sx, 0.0, 0.0, 0.0),
+        glam::Vec4::new(0.0, sy, 0.0, 0.0),
+        glam::Vec4::new(0.0, 0.0, 1.0, 0.0),
+        glam::Vec4::new(tx, ty, 0.0, 1.0),
+    );
     let frustum = gz_render::Frustum::from_view_proj(&(s * camera.view_proj(size)));
     state
         .of_class(class)
@@ -569,7 +681,13 @@ mod tests {
         assert!(!b.list.helpers.shapes.is_empty());
         assert!(!b.list.helpers.lines.is_empty());
         // the selected light draws its range: a sphere of 8 m
-        assert!(b.list.helpers.shapes.iter().any(|sh| sh.kind == ShapeKind::Sphere && (sh.transform.x_axis.x - 8.0).abs() < 1e-4));
+        assert!(
+            b.list
+                .helpers
+                .shapes
+                .iter()
+                .any(|sh| sh.kind == ShapeKind::Sphere && (sh.transform.x_axis.x - 8.0).abs() < 1e-4)
+        );
     }
 
     #[test]
@@ -589,9 +707,25 @@ mod tests {
         let lib = Library::new(Vec::new());
         let cam = gz_render::Camera::look_at(Vec3::new(1.0, 2.0, -10.0), Vec3::new(1.0, 2.0, 3.0));
         let size = [800, 600];
-        let hit = frustum_select(&s, &lib, &cam, size, glam::Vec2::new(350.0, 250.0), glam::Vec2::new(450.0, 350.0), ObjClass::Light);
+        let hit = frustum_select(
+            &s,
+            &lib,
+            &cam,
+            size,
+            glam::Vec2::new(350.0, 250.0),
+            glam::Vec2::new(450.0, 350.0),
+            ObjClass::Light,
+        );
         assert_eq!(hit.len(), 1);
-        let miss = frustum_select(&s, &lib, &cam, size, glam::Vec2::new(0.0, 0.0), glam::Vec2::new(50.0, 50.0), ObjClass::Light);
+        let miss = frustum_select(
+            &s,
+            &lib,
+            &cam,
+            size,
+            glam::Vec2::new(0.0, 0.0),
+            glam::Vec2::new(50.0, 50.0),
+            ObjClass::Light,
+        );
         assert!(miss.is_empty());
     }
 

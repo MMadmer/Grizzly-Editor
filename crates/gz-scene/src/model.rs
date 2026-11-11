@@ -11,8 +11,8 @@ use crate::class::{CLASSES, ObjClass};
 pub use crate::math::Transform;
 use crate::math::{Aabb, Mat4, Vec3};
 use crate::objects::{
-    FogData, GlowData, GroupData, KeptObject, LightData, ParticlesData, PortalData, SceneObjectData, SectorData, ShapeData,
-    SoundEnvData, SoundSrcData, SpawnData, WayData,
+    FogData, GlowData, GroupData, KeptObject, LightData, ParticlesData, PortalData, SceneObjectData,
+    SectorData, ShapeData, SoundEnvData, SoundSrcData, SpawnData, WayData,
 };
 pub use crate::tools::{BulkData, LevelOptions, ToolPart, ToolSettings};
 
@@ -233,7 +233,11 @@ impl SceneMeta {
     /// The scene's name: its file's stem, or empty.
     #[must_use]
     pub fn name(&self) -> String {
-        self.file.as_ref().and_then(|f| f.file_stem()).map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        self.file
+            .as_ref()
+            .and_then(|f| f.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 }
 
@@ -307,7 +311,9 @@ impl SceneState {
     #[must_use]
     pub fn find_any(&self, name: &str) -> Option<&Arc<Object>> {
         let key = SmolStr::new(name);
-        ObjClass::ALL.iter().find_map(|c| self.names.get(&(*c, key.clone())).and_then(|id| self.objects.get(id)))
+        ObjClass::ALL
+            .iter()
+            .find_map(|c| self.names.get(&(*c, key.clone())).and_then(|id| self.objects.get(id)))
     }
 
     /// `FindObjectRelaxed`: names are lower-cased when set, so the lookup is too.
@@ -364,11 +370,11 @@ impl SceneState {
     /// Replaces an object in place, keeping the name index right.
     pub fn replace(&mut self, obj: Object) {
         let id = obj.id;
-        if let Some(old) = self.objects.get(&id) {
-            if old.name != obj.name {
-                self.names.remove(&(old.class, old.name.clone()));
-                self.names.insert((obj.class, obj.name.clone()), id);
-            }
+        if let Some(old) = self.objects.get(&id)
+            && old.name != obj.name
+        {
+            self.names.remove(&(old.class, old.name.clone()));
+            self.names.insert((obj.class, obj.name.clone()), id);
         }
         self.objects.insert(id, Arc::new(obj));
     }

@@ -24,10 +24,27 @@ pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> boo
         if resp.hovered() {
             painter.rect_filled(rect, CornerRadius::same(3), p.hover);
         }
-        let chevron = Rect::from_min_size(pos2(rect.min.x + 4.0, rect.center().y - metrics::GLYPH_STATUS * 0.5), Vec2::splat(metrics::GLYPH_STATUS));
-        icons::draw(painter, if is_open { Icon::ChevronDown } else { Icon::ChevronRight }, chevron, p.text_secondary);
+        let chevron = Rect::from_min_size(
+            pos2(rect.min.x + 4.0, rect.center().y - metrics::GLYPH_STATUS * 0.5),
+            Vec2::splat(metrics::GLYPH_STATUS),
+        );
+        icons::draw(
+            painter,
+            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
+            chevron,
+            p.text_secondary,
+        );
         let x = chevron.max.x + 6.0;
-        text::paint(painter, &Font::Strong.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, p.text, title, Some((rect.max.x - x).max(0.0)), Clip::End);
+        text::paint(
+            painter,
+            &Font::Strong.id(),
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            p.text,
+            title,
+            Some((rect.max.x - x).max(0.0)),
+            Clip::End,
+        );
     }
     gz_ui::audit::control(&ctx, title, true, None, None, rect);
     is_open

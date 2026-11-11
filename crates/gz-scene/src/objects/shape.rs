@@ -76,7 +76,11 @@ impl ShapeDef {
 fn unit_corners() -> [Vec3; 8] {
     let h = 0.5;
     std::array::from_fn(|i| {
-        Vec3::new(if i & 1 == 0 { -h } else { h }, if i & 2 == 0 { -h } else { h }, if i & 4 == 0 { -h } else { h })
+        Vec3::new(
+            if i & 1 == 0 { -h } else { h },
+            if i & 2 == 0 { -h } else { h },
+            if i & 4 == 0 { -h } else { h },
+        )
     })
 }
 
@@ -304,7 +308,11 @@ impl SoundEnvData {
         }
         // oracle: the C++ LTX reader never reads env_inner / env_outer back, so an LTX scene
         // loses them on load; kept that way so both editors answer the same.
-        Ok(Body::Read(Self { shape: ShapeData::read_ltx(r, s)?, inner: SmolStr::default(), outer: SmolStr::default() }))
+        Ok(Body::Read(Self {
+            shape: ShapeData::read_ltx(r, s)?,
+            inner: SmolStr::default(),
+            outer: SmolStr::default(),
+        }))
     }
 
     pub fn write_ltx(&self, w: &mut IniWriter, s: &str) {
@@ -361,7 +369,12 @@ pub struct FogData {
 
 impl Default for FogData {
     fn default() -> Self {
-        Self { shape: ShapeData::unit_box(), kind: FV_EMITTER, group_id: u32::MAX, profile: SmolStr::new_static("environment\\fog\\default.ltx") }
+        Self {
+            shape: ShapeData::unit_box(),
+            kind: FV_EMITTER,
+            group_id: u32::MAX,
+            profile: SmolStr::new_static("environment\\fog\\default.ltx"),
+        }
     }
 }
 

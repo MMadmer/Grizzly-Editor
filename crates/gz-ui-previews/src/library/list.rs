@@ -27,7 +27,8 @@ pub fn before(a: &str, b: &str) -> Ordering {
 /// The rows a list shows: the visible keys the search matches, in the list's order.
 #[must_use]
 pub fn shown(keys: &[&str], visible: &dyn Fn(usize) -> bool, search: &str) -> Vec<usize> {
-    let mut out: Vec<usize> = (0..keys.len()).filter(|&i| visible(i) && keys.get(i).is_some_and(|k| matches(search, k))).collect();
+    let mut out: Vec<usize> =
+        (0..keys.len()).filter(|&i| visible(i) && keys.get(i).is_some_and(|k| matches(search, k))).collect();
     out.sort_by(|&a, &b| before(keys.get(a).copied().unwrap_or(""), keys.get(b).copied().unwrap_or("")));
     out
 }
@@ -39,12 +40,15 @@ pub fn find(keys: &[&str], name: &str) -> Option<usize> {
     if name.is_empty() {
         return None;
     }
-    if let Some(i) = keys.iter().position(|k| k.eq_ignore_ascii_case(name) || ci(k, name) == Ordering::Equal) {
+    if let Some(i) = keys.iter().position(|k| k.eq_ignore_ascii_case(name) || ci(k, name) == Ordering::Equal)
+    {
         return Some(i);
     }
     let mut first: Option<usize> = None;
     for (i, k) in keys.iter().enumerate() {
-        if matches(name, k) && first.is_none_or(|f| before(k, keys.get(f).copied().unwrap_or("")) == Ordering::Less) {
+        if matches(name, k)
+            && first.is_none_or(|f| before(k, keys.get(f).copied().unwrap_or("")) == Ordering::Less)
+        {
             first = Some(i);
         }
     }
@@ -78,14 +82,26 @@ pub struct LibraryList {
 impl LibraryList {
     /// Draws the list into `ui` (its whole room). `rows` are what [`shown`] answers for the
     /// current search; `selected` is the key on show.
-    pub fn draw(&mut self, ui: &mut Ui, id: &str, keys: &[&str], rows: &[usize], selected: &str, empty: &Empty<'_>) -> ListOutput {
+    pub fn draw(
+        &mut self,
+        ui: &mut Ui,
+        id: &str,
+        keys: &[&str],
+        rows: &[usize],
+        selected: &str,
+        empty: &Empty<'_>,
+    ) -> ListOutput {
         let mut out = ListOutput::default();
         let w = ui.available_width();
         SearchField::new(&mut self.search).id_salt(id).width(w).show(ui);
         ui.add_space(4.0);
         // the selected row among the shown ones; a selection made elsewhere (MCP, a reload) is
         // brought into view
-        let at = if selected.is_empty() { None } else { rows.iter().position(|&i| keys.get(i).is_some_and(|k| *k == selected)) };
+        let at = if selected.is_empty() {
+            None
+        } else {
+            rows.iter().position(|&i| keys.get(i).is_some_and(|k| *k == selected))
+        };
         let scroll_to = if self.last_selected != selected {
             self.last_selected = selected.to_owned();
             at
@@ -93,7 +109,15 @@ impl LibraryList {
             None
         };
         if self.focused && !rows.is_empty() && !ui.ctx().egui_wants_keyboard_input() {
-            let step = ui.input(|i| if i.key_pressed(Key::ArrowDown) { 1i64 } else if i.key_pressed(Key::ArrowUp) { -1 } else { 0 });
+            let step = ui.input(|i| {
+                if i.key_pressed(Key::ArrowDown) {
+                    1i64
+                } else if i.key_pressed(Key::ArrowUp) {
+                    -1
+                } else {
+                    0
+                }
+            });
             if step != 0 {
                 let next = at.map_or(0, |a| (a as i64 + step).clamp(0, rows.len() as i64 - 1) as usize);
                 if Some(next) != at {
@@ -107,15 +131,21 @@ impl LibraryList {
         list(ui, id, Vec2::ZERO, |l| {
             if rows.is_empty() {
                 let ui = l.ui();
-                let (icon, title, text_, action) =
-                    if search_on { (Icon::Search, "No matches", "Nothing in the library matches the search.", None) } else { (Icon::Folder, empty.title, empty.text, empty.action) };
+                let (icon, title, text_, action) = if search_on {
+                    (Icon::Search, "No matches", "Nothing in the library matches the search.", None)
+                } else {
+                    (Icon::Folder, empty.title, empty.text, empty.action)
+                };
                 out.acted = state::empty_state(ui, icon, title, text_, action);
                 return;
             }
             let row_h = metrics::ROW;
             let top = l.ui().cursor().min.y;
             if let Some(r) = scroll_to {
-                let rect = Rect::from_min_size(pos2(l.ui().cursor().min.x, top + r as f32 * row_h), Vec2::new(1.0, row_h));
+                let rect = Rect::from_min_size(
+                    pos2(l.ui().cursor().min.x, top + r as f32 * row_h),
+                    Vec2::new(1.0, row_h),
+                );
                 l.ui().scroll_to_rect(rect, None);
             }
             let clip = l.ui().clip_rect();
@@ -134,11 +164,29 @@ impl LibraryList {
                     let rect = ui.max_rect();
                     let y = rect.center().y;
                     let shown_w = text::width(ui.ctx(), &font, name).min(room);
-                    text::paint(ui.painter(), &font, pos2(rect.min.x, y), Align2::LEFT_CENTER, p.text, name, Some(room.max(0.0)), Clip::End);
+                    text::paint(
+                        ui.painter(),
+                        &font,
+                        pos2(rect.min.x, y),
+                        Align2::LEFT_CENTER,
+                        p.text,
+                        name,
+                        Some(room.max(0.0)),
+                        Clip::End,
+                    );
                     let rest = room - shown_w - 8.0;
                     if key.len() > name.len() && rest > em(3.0) {
                         let folder = &key[..key.len() - name.len() - 1];
-                        text::paint(ui.painter(), &font, pos2(rect.min.x + shown_w + 8.0, y), Align2::LEFT_CENTER, p.text_muted, folder, Some(rest), Clip::Start);
+                        text::paint(
+                            ui.painter(),
+                            &font,
+                            pos2(rect.min.x + shown_w + 8.0, y),
+                            Align2::LEFT_CENTER,
+                            p.text_muted,
+                            folder,
+                            Some(rest),
+                            Clip::Start,
+                        );
                     }
                     ui.allocate_rect(rect, Sense::hover());
                 });

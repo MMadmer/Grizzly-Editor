@@ -8,7 +8,12 @@ use gz_editor::{Args, Editor, Value};
 
 /// Runs `name` with `args` as the window would (its origin) and hands the reply to `then` on the
 /// UI thread at the start of the next frame.
-pub(crate) fn call_then(editor: &Arc<Editor>, name: &'static str, args: Args, then: impl FnOnce(&Value, &egui::Context) + Send + 'static) {
+pub(crate) fn call_then(
+    editor: &Arc<Editor>,
+    name: &'static str,
+    args: Args,
+    then: impl FnOnce(&Value, &egui::Context) + Send + 'static,
+) {
     let ed = editor.clone();
     let origin = editor.ui_origin();
     let _task = editor.exec.spawn(async move {

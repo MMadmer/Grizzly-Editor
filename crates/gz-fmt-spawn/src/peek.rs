@@ -45,7 +45,18 @@ pub fn peek_packet(packet: &[u8]) -> Result<PacketHead> {
     r.advance(2)?;
     let flags = r.r_u16()?;
     let v = if flags & M_SPAWN_VERSION != 0 { r.r_u16()? } else { 0 };
-    let mut head = PacketHead { section, name, position, angle, id, id_parent, version: v, spawn_id: u16::MAX, game_vertex: None, level_vertex: None };
+    let mut head = PacketHead {
+        section,
+        name,
+        position,
+        angle,
+        id,
+        id_parent,
+        version: v,
+        spawn_id: u16::MAX,
+        game_vertex: None,
+        level_vertex: None,
+    };
     if v == 0 || v > 128 {
         return Ok(head);
     }
@@ -141,7 +152,10 @@ pub(crate) mod tests {
     fn the_head_and_the_vertices_are_found() {
         let p = packet("stalker", "esc_wolf", 42, 1234);
         let h = peek_packet(&p).unwrap();
-        assert_eq!((h.section.as_str(), h.name.as_str(), h.id, h.version, h.spawn_id), ("stalker", "esc_wolf", 7, 128, 3));
+        assert_eq!(
+            (h.section.as_str(), h.name.as_str(), h.id, h.version, h.spawn_id),
+            ("stalker", "esc_wolf", 7, 128, 3)
+        );
         assert_eq!((h.game_vertex, h.level_vertex), (Some(42), Some(1234)));
         assert_eq!(h.position, Vec3::new(1.0, 2.0, 3.0));
         assert!(peek_packet(&p[..p.len() - 3]).is_err());

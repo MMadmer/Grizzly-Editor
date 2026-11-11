@@ -131,11 +131,17 @@ impl Lists {
         if id.is_empty() {
             return;
         }
-        let (Some(known), Some(list)) = (self.known.get_mut(t.slot()), self.lists.get_mut(t.slot())) else { return };
+        let (Some(known), Some(list)) = (self.known.get_mut(t.slot()), self.lists.get_mut(t.slot())) else {
+            return;
+        };
         if !known.insert(id.to_owned()) {
             return;
         }
-        list.push(PickerEntry { id: id.to_owned(), name: if name == id { String::new() } else { name.to_owned() }, extra: extra.to_owned() });
+        list.push(PickerEntry {
+            id: id.to_owned(),
+            name: if name == id { String::new() } else { name.to_owned() },
+            extra: extra.to_owned(),
+        });
     }
 
     fn add_all(&mut self, raw: &[Raw]) {
@@ -193,7 +199,12 @@ impl Pickers {
     /// game), then the project's stories, restrictors and looks, the project-fed lists sorted,
     /// then the scene's restrictors and story ids.
     #[must_use]
-    pub fn compose(game: Option<&GameIndex>, project: &ProjectPart, scene_restrictors: &[PickerEntry], scene_stories: &[PickerEntry]) -> Self {
+    pub fn compose(
+        game: Option<&GameIndex>,
+        project: &ProjectPart,
+        scene_restrictors: &[PickerEntry],
+        scene_stories: &[PickerEntry],
+    ) -> Self {
         let mut lists = match game {
             Some(g) => g.lists.clone(),
             None => {
@@ -257,7 +268,9 @@ impl Pickers {
                 return true;
             }
             let id = e.id.as_bytes();
-            if id.len() >= query.len() && id.get(..query.len()).is_some_and(|h| h.eq_ignore_ascii_case(query.as_bytes())) {
+            if id.len() >= query.len()
+                && id.get(..query.len()).is_some_and(|h| h.eq_ignore_ascii_case(query.as_bytes()))
+            {
                 return true;
             }
             !e.name.is_empty() && fold(&e.name).starts_with(&fq)
@@ -271,15 +284,18 @@ impl Pickers {
                 if pass == 0 && !prefix {
                     continue;
                 }
-                if pass == 1 && (prefix || !(contains_no_case(&e.id, query) || contains_no_case(&e.name, query))) {
+                if pass == 1
+                    && (prefix || !(contains_no_case(&e.id, query) || contains_no_case(&e.name, query)))
+                {
                     continue;
                 }
                 out.push(e);
             }
         }
         if t == PickerType::Story {
-            let (mut first, rest): (Vec<&PickerEntry>, Vec<&PickerEntry>) =
-                out.into_iter().partition(|e| e.extra.as_bytes().get(..5).is_some_and(|h| h.eq_ignore_ascii_case(b"spawn")));
+            let (mut first, rest): (Vec<&PickerEntry>, Vec<&PickerEntry>) = out
+                .into_iter()
+                .partition(|e| e.extra.as_bytes().get(..5).is_some_and(|h| h.eq_ignore_ascii_case(b"spawn")));
             first.extend(rest);
             out = first;
         }
@@ -373,7 +389,9 @@ fn build_profiles(inp: &GameInput<'_>) -> (Vec<Raw>, FxHashMap<String, String>, 
     let mut captions: FxHashMap<String, String> = FxHashMap::default();
     let mut icons: FxHashSet<String> = FxHashSet::default();
     let Some(ltx) = inp.ltx else { return (raw, captions, icons) };
-    let Some(list) = ltx_line(ltx, "profiles", "specific_characters_files") else { return (raw, captions, icons) };
+    let Some(list) = ltx_line(ltx, "profiles", "specific_characters_files") else {
+        return (raw, captions, icons);
+    };
     for f in split(list, ',') {
         let text = read_xml(inp.files, &format!("configs/gameplay/{f}.xml"));
         if text.is_empty() {
@@ -411,7 +429,12 @@ fn build_profiles(inp: &GameInput<'_>) -> (Vec<Raw>, FxHashMap<String, String>, 
 
 /// The caption of a spawn section: an NPC by its profile, an item by its `inv_name`
 /// (`SectionCaption`).
-fn section_caption(ltx: Option<&Ltx>, sect: &str, st: &StringTable, profiles: &FxHashMap<String, String>) -> String {
+fn section_caption(
+    ltx: Option<&Ltx>,
+    sect: &str,
+    st: &StringTable,
+    profiles: &FxHashMap<String, String>,
+) -> String {
     let Some(s) = ltx.and_then(|l| l.section(sect)) else { return String::new() };
     if let Some(prof) = line(s, "character_profile")
         && !prof.is_empty()
@@ -446,7 +469,8 @@ fn build_from_settings(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>
         if line(s, "class").is_some_and(|v| v.eq_ignore_ascii_case("ON_OFF_S")) {
             // how many bodies a squad gives has to be answerable without opening the configs
             let mut extra = line(s, "faction").filter(|f| !f.is_empty()).unwrap_or("").to_owned();
-            let mut members = line(s, "npc").filter(|n| !n.is_empty()).map_or(0, |n| split(n, ',').len() as i64);
+            let mut members =
+                line(s, "npc").filter(|n| !n.is_empty()).map_or(0, |n| split(n, ',').len() as i64);
             if members == 0
                 && let Some(c) = line(s, "npc_count").filter(|c| !c.is_empty())
             {
@@ -518,7 +542,11 @@ fn build_levels(inp: &GameInput<'_>) -> Vec<Raw> {
             continue;
         }
         let Some((k, v)) = key_value(l) else { continue };
-        let v = if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') { v.get(1..v.len() - 1).unwrap_or("") } else { v };
+        let v = if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
+            v.get(1..v.len() - 1).unwrap_or("")
+        } else {
+            v
+        };
         if k == "name" {
             name = v.to_owned();
         } else if k == "caption" {
@@ -540,7 +568,12 @@ fn build_level_changers(transitions: &[Transition], levels: &[Raw]) -> Vec<Raw> 
                 .iter()
                 .rfind(|(_, id, name, _)| id == &t.to_level && !name.is_empty())
                 .map_or_else(|| t.to_level.clone(), |(_, _, name, _)| name.clone());
-            (PickerType::LevelChanger, t.name.clone(), format!("to {to}"), format!("{} -> {}", t.level, t.to_level))
+            (
+                PickerType::LevelChanger,
+                t.name.clone(),
+                format!("to {to}"),
+                format!("{} -> {}", t.level, t.to_level),
+            )
         })
         .collect()
 }
@@ -818,7 +851,9 @@ fn build_spawn_stories(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>
     let end = bytes.len();
     let mut p = 0;
     while p + MARK.len() < end {
-        let Some(off) = bytes.get(p..end - MARK.len()).and_then(|r| r.iter().position(|&c| c == b'[')) else { break };
+        let Some(off) = bytes.get(p..end - MARK.len()).and_then(|r| r.iter().position(|&c| c == b'[')) else {
+            break;
+        };
         let at = p + off;
         if bytes.get(at..at + MARK.len()) != Some(MARK) {
             p = at + 1;
@@ -869,7 +904,8 @@ fn build_spawn_stories(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>
                     }
                     if tok_len >= 4 {
                         let d = tok_at.abs_diff(at);
-                        let tok = String::from_utf8_lossy(bytes.get(tok_at..tok_at + tok_len).unwrap_or(&[])).into_owned();
+                        let tok = String::from_utf8_lossy(bytes.get(tok_at..tok_at + tok_len).unwrap_or(&[]))
+                            .into_owned();
                         tokens.push((d, tok));
                     }
                     tok_len = 0;
@@ -904,24 +940,43 @@ fn build_spawn_stories(inp: &GameInput<'_>, profiles: &FxHashMap<String, String>
 pub fn build_game(inp: &GameInput<'_>) -> GameIndex {
     let (profiles, captions, used_icons) = build_profiles(inp);
     let relations = read_text(inp.files, "configs/creatures/game_relations.ltx");
-    let ((stories, settings), ((levels, smarts), ((communities, infos), ((dialogs, icons), ranks)))) = rayon::join(
-        || rayon::join(|| build_spawn_stories(inp, &captions), || build_from_settings(inp, &captions)),
-        || {
-            rayon::join(
-                || rayon::join(|| build_levels(inp), || build_smarts(inp)),
-                || {
-                    rayon::join(
-                        || rayon::join(|| build_communities(inp, &relations), || build_infos(inp)),
-                        || rayon::join(|| rayon::join(|| build_dialogs(inp), || build_icons(inp, &used_icons)), || build_ranks(inp, &relations)),
-                    )
-                },
-            )
-        },
-    );
+    let ((stories, settings), ((levels, smarts), ((communities, infos), ((dialogs, icons), ranks)))) =
+        rayon::join(
+            || rayon::join(|| build_spawn_stories(inp, &captions), || build_from_settings(inp, &captions)),
+            || {
+                rayon::join(
+                    || rayon::join(|| build_levels(inp), || build_smarts(inp)),
+                    || {
+                        rayon::join(
+                            || rayon::join(|| build_communities(inp, &relations), || build_infos(inp)),
+                            || {
+                                rayon::join(
+                                    || rayon::join(|| build_dialogs(inp), || build_icons(inp, &used_icons)),
+                                    || build_ranks(inp, &relations),
+                                )
+                            },
+                        )
+                    },
+                )
+            },
+        );
     let changers = build_level_changers(inp.transitions, &levels);
     let mut lists = Lists::new();
     // placed objects first: a template id looks the same in the list but resolves to nothing
-    for part in [&profiles, &stories, &settings, &levels, &changers, &smarts, &communities, &infos, &dialogs, &icons, &ranks, &spots()] {
+    for part in [
+        &profiles,
+        &stories,
+        &settings,
+        &levels,
+        &changers,
+        &smarts,
+        &communities,
+        &infos,
+        &dialogs,
+        &icons,
+        &ranks,
+        &spots(),
+    ] {
         lists.add_all(part);
     }
     for t in PickerType::ALL {
@@ -1004,7 +1059,8 @@ fn project_restrictors(files: &ProjectFiles, part: &mut ProjectPart) {
         let mut segs = rel.rsplit(['/', '\\']);
         segs.next();
         let level = segs.next().unwrap_or("").to_owned();
-        let (mut section, mut name, mut at, mut hdr_name, mut hdr_at) = (String::new(), String::new(), String::new(), String::new(), String::new());
+        let (mut section, mut name, mut at, mut hdr_name, mut hdr_at) =
+            (String::new(), String::new(), String::new(), String::new(), String::new());
         let (mut in_spawndata, mut in_header) = (false, false);
         // 0 outside 000024, 1 inside it, 2 inside its [story_object]
         let mut cd = 0;
@@ -1042,7 +1098,12 @@ fn project_restrictors(files: &ProjectFiles, part: &mut ProjectPart) {
                         let sid = trim(sid);
                         if !sid.is_empty() {
                             let who = if name.is_empty() { &hdr_name } else { &name };
-                            part.stories.push((PickerType::Story, sid.to_owned(), String::new(), format!("project: {who}")));
+                            part.stories.push((
+                                PickerType::Story,
+                                sid.to_owned(),
+                                String::new(),
+                                format!("project: {who}"),
+                            ));
                         }
                         cd = 1;
                     }
@@ -1057,7 +1118,8 @@ fn project_restrictors(files: &ProjectFiles, part: &mut ProjectPart) {
                 name.clear();
                 at.clear();
                 let lower = l.to_ascii_lowercase();
-                in_spawndata = l.len() > 11 && lower.starts_with("[object_") && lower.ends_with("_spawndata]");
+                in_spawndata =
+                    l.len() > 11 && lower.starts_with("[object_") && lower.ends_with("_spawndata]");
                 in_header = false;
                 if !in_spawndata && lower.starts_with("[object_") && l.ends_with(']') {
                     in_header = l.get(8..l.len() - 1).is_some_and(|d| d.bytes().all(|c| c.is_ascii_digit()));
@@ -1069,7 +1131,11 @@ fn project_restrictors(files: &ProjectFiles, part: &mut ProjectPart) {
                 continue;
             }
             let Some((key, value)) = key_value(l) else { continue };
-            let value = if value.len() >= 2 && value.starts_with('"') { value.get(1..value.len() - 1).unwrap_or("") } else { value };
+            let value = if value.len() >= 2 && value.starts_with('"') {
+                value.get(1..value.len() - 1).unwrap_or("")
+            } else {
+                value
+            };
             if in_header {
                 if key == "name" {
                     hdr_name = value.to_owned();
@@ -1139,7 +1205,9 @@ mod tests {
         let ids = scan_ids("<dialogs><dialog id=\"a\"><text>x</text></dialog>\n<dialog\tid=\"b\">", "dialog");
         assert_eq!(ids.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(tag_attr("<texture id=\"x\" xid=\"no\" x=\"5\"", "x"), "5");
-        let t = read_texture_descr("<w><!-- <texture id=\"dead\" --><file name=\"ui\\ui_npc\"><texture id=\"face\" x=\"1\" y=\"2\" width=\"3\" height=\"4\"/></file></w>");
+        let t = read_texture_descr(
+            "<w><!-- <texture id=\"dead\" --><file name=\"ui\\ui_npc\"><texture id=\"face\" x=\"1\" y=\"2\" width=\"3\" height=\"4\"/></file></w>",
+        );
         assert_eq!(t.len(), 1);
         assert_eq!(t.first().map(|t| icon_extra(t, true)), Some("project:ui\\ui_npc|1|2|3|4".to_owned()));
     }
@@ -1149,14 +1217,20 @@ mod tests {
         let part_text = "[object_1]\nname = gate_zone\nposition = 10.4, 0, -3.6\n[object_1_spawndata]\n000002 = space_restrictor\n000003 = \n000006 = 0.000000, 0.000000, 0.000000\n000024 = \"[story_object]\nstory_id = gate_guard\n\"\n[object_2]\nname = s1\n";
         let files = ProjectFiles {
             spawn_parts: vec![("rawdata/levels/l01_escape/spawn.part".into(), part_text.into())],
-            custom_data: vec![("spawn/custom_data/a.ltx".into(), "[story_object]\nstory_id = esc_x ; c\n".into())],
+            custom_data: vec![(
+                "spawn/custom_data/a.ltx".into(),
+                "[story_object]\nstory_id = esc_x ; c\n".into(),
+            )],
             ..ProjectFiles::default()
         };
         let part = build_project(&files);
         let p = Pickers::compose(None, &part, &[], &[]);
         assert!(!p.available());
         assert!(p.known(PickerType::Restrictor, "gate_zone"));
-        assert_eq!(p.entries(PickerType::Restrictor).first().map(|e| e.extra.as_str()), Some("l01_escape (10, 0, -4)"));
+        assert_eq!(
+            p.entries(PickerType::Restrictor).first().map(|e| e.extra.as_str()),
+            Some("l01_escape (10, 0, -4)")
+        );
         assert!(p.known(PickerType::Story, "gate_guard"));
         assert!(p.known(PickerType::Story, "esc_x"));
         assert!(p.known(PickerType::Spot, "treasure"));
@@ -1168,7 +1242,12 @@ mod tests {
         for id in ["b_wolf", "wolf", "a_wolfish"] {
             part.stories.push((PickerType::Story, id.into(), String::new(), "project".into()));
         }
-        let p = Pickers::compose(None, &part, &[], &[PickerEntry { id: "wolf_scene".into(), name: String::new(), extra: "spawn".into() }]);
+        let p = Pickers::compose(
+            None,
+            &part,
+            &[],
+            &[PickerEntry { id: "wolf_scene".into(), name: String::new(), extra: "spawn".into() }],
+        );
         let ids: Vec<&str> = p.search(PickerType::Story, "wolf", 10).iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, ["wolf_scene", "wolf", "a_wolfish", "b_wolf"]);
     }

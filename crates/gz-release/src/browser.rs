@@ -12,7 +12,20 @@ use gz_mod::text::split_list;
 use gz_mod::{ArgCx, Edit, ManifestArgs};
 
 /// MOD_CATALOG 6.2, in its order.
-pub const TAG_VOCABULARY: &[&str] = &["story", "quests", "gameplay", "weapons", "equipment", "npcs", "mutants", "locations", "graphics", "audio", "interface", "fixes"];
+pub const TAG_VOCABULARY: &[&str] = &[
+    "story",
+    "quests",
+    "gameplay",
+    "weapons",
+    "equipment",
+    "npcs",
+    "mutants",
+    "locations",
+    "graphics",
+    "audio",
+    "interface",
+    "fixes",
+];
 
 /// The thumbnail the editor makes, at the project root.
 pub const THUMBNAIL_NAME: &str = "thumbnail.dds";
@@ -124,15 +137,19 @@ pub fn apply_thumbnail(project_root: &Path, value: &str, current: &str) -> Resul
     let b = v.as_bytes();
     let absolute = b.len() > 2 && (b.get(1) == Some(&b':') || v.starts_with("\\\\"));
     let full = if absolute { v.clone() } else { format!("{root}\\{v}") };
-    let dds = Path::new(&full).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("dds"));
+    let dds =
+        Path::new(&full).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("dds"));
     if dds {
         // a ready thumbnail inside the project is named as it is
         let n = root.len();
-        let inside = full.len() > n + 1 && full.get(..n).is_some_and(|h| h.eq_ignore_ascii_case(&root)) && full.as_bytes().get(n) == Some(&b'\\');
+        let inside = full.len() > n + 1
+            && full.get(..n).is_some_and(|h| h.eq_ignore_ascii_case(&root))
+            && full.as_bytes().get(n) == Some(&b'\\');
         if !inside {
             return Err(format!("a .dds thumbnail has to be a file of the project: {v}"));
         }
-        if !read_limited(Path::new(&full), THUMBNAIL_READ_LIMIT).is_some_and(|bytes| valid_thumbnail(&bytes)) {
+        if !read_limited(Path::new(&full), THUMBNAIL_READ_LIMIT).is_some_and(|bytes| valid_thumbnail(&bytes))
+        {
             return Err(format!("{v} is not a 256 x 256 DXT1/DXT5 DDS (one mip level or all nine)"));
         }
         return Ok(full.get(n + 1..).unwrap_or("").to_owned());
@@ -221,8 +238,15 @@ mod tests {
         std::fs::write(root.join("ui").join("t.dds"), &made).unwrap();
         assert_eq!(apply_thumbnail(&root, "ui/t.dds", "").unwrap(), "ui\\t.dds");
         std::fs::write(root.join("ui").join("bad.dds"), b"DDS nothing").unwrap();
-        assert_eq!(apply_thumbnail(&root, "ui/bad.dds", "").unwrap_err(), "ui\\bad.dds is not a 256 x 256 DXT1/DXT5 DDS (one mip level or all nine)");
-        assert!(apply_thumbnail(&root, "C:\\elsewhere\\t.dds", "").unwrap_err().starts_with("a .dds thumbnail has to be a file of the project"));
+        assert_eq!(
+            apply_thumbnail(&root, "ui/bad.dds", "").unwrap_err(),
+            "ui\\bad.dds is not a 256 x 256 DXT1/DXT5 DDS (one mip level or all nine)"
+        );
+        assert!(
+            apply_thumbnail(&root, "C:\\elsewhere\\t.dds", "")
+                .unwrap_err()
+                .starts_with("a .dds thumbnail has to be a file of the project")
+        );
         assert!(apply_thumbnail(&root, "missing.png", "").unwrap_err().starts_with("can't read the picture"));
         // removed: the editor's own file goes, the author's stays
         assert_eq!(apply_thumbnail(&root, "", "ui\\t.dds").unwrap(), "");

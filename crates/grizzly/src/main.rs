@@ -32,7 +32,8 @@ fn find_root(exe_dir: &Path) -> PathBuf {
 }
 
 fn app_paths(cli: &Cli) -> AppPaths {
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
+    let exe_dir =
+        std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let root = cli.root.clone().unwrap_or_else(|| find_root(&exe_dir));
     AppPaths { exe_dir, appdata: root.join("_appdata_"), logs: root.join("logs"), root }
 }
@@ -51,7 +52,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    gz_crash::install(log.clone(), gz_crash::CrashOptions { dir: paths.logs.clone(), unattended: cli.unattended });
+    gz_crash::install(
+        log.clone(),
+        gz_crash::CrashOptions { dir: paths.logs.clone(), unattended: cli.unattended },
+    );
     log.info(format!("Grizzly Editor {} starting", env!("CARGO_PKG_VERSION")));
     for arg in &cli.unknown {
         log.warn(format!("unknown command line option '{arg}'"));
@@ -143,13 +147,20 @@ fn main() -> ExitCode {
         let mut shell = gz_app::ShellBuilder::new();
         install_ui(&mut shell);
         let opts = gz_app::window_options(&editor);
-        let shell = gz_app::GrizzlyShell::new(editor.clone(), shell, gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet });
+        let shell = gz_app::GrizzlyShell::new(
+            editor.clone(),
+            shell,
+            gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet },
+        );
         startup.finish(&log);
         if let Err(e) = gz_app::run(editor.clone(), opts, Box::new(shell)) {
             log.error(&e);
+            runtime.block_on(gz_project::close_project(&editor));
             return ExitCode::from(2);
         }
     }
+    // the project closes with the editor: the scene to reopen, the preview, unsaved graphs
+    runtime.block_on(gz_project::close_project(&editor));
     log.info("Grizzly Editor closed");
     ExitCode::SUCCESS
 }
@@ -163,6 +174,7 @@ fn install_ui(shell: &mut gz_app::ShellBuilder) {
     gz_ui_release::install(shell);
     gz_ui_pda::install(shell);
     gz_ui_level::install(shell);
+    gz_ui_viewport::install(shell);
     gz_ui_graph::install(shell);
     gz_ui_world::install(shell);
 }

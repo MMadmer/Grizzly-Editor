@@ -1,8 +1,8 @@
 //! The model of `[screens]`, `[screen.<id>]` and `[track.<id>]` (`EditorMod::SScreens`): read off
 //! the manifest document, written back as the C++ `AppendScreens` wrote it.
 
-use gz_mod::{Edit, ManifestDoc};
 use gz_mod::doc::Item;
+use gz_mod::{Edit, ManifestDoc};
 
 /// The surfaces a screen shows on or a track plays on.
 pub const LOADING: u32 = 1;
@@ -65,7 +65,17 @@ pub struct Layer {
 
 impl Default for Layer {
     fn default() -> Self {
-        Self { file: String::new(), texture: String::new(), fit: Fit::Cover, opacity: 1.0, x: 0.0, y: 0.0, w: 100.0, h: 100.0, sound: true }
+        Self {
+            file: String::new(),
+            texture: String::new(),
+            fit: Fit::Cover,
+            opacity: 1.0,
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+            sound: true,
+        }
     }
 }
 
@@ -87,7 +97,17 @@ pub struct Screen {
 
 impl Default for Screen {
     fn default() -> Self {
-        Self { id: String::new(), show: ALL, levels: Vec::new(), modes: Vec::new(), weight: 1.0, music: "any".to_owned(), tracks: Vec::new(), hide: 0, layers: Vec::new() }
+        Self {
+            id: String::new(),
+            show: ALL,
+            levels: Vec::new(),
+            modes: Vec::new(),
+            weight: 1.0,
+            music: "any".to_owned(),
+            tracks: Vec::new(),
+            hide: 0,
+            layers: Vec::new(),
+        }
     }
 }
 
@@ -182,7 +202,11 @@ pub fn scan_floats(s: &str, n: usize) -> Vec<f32> {
 /// `NqUtil::Split`: pieces between `sep`, trimmed, empty ones dropped.
 #[must_use]
 pub fn split(s: &str, sep: char) -> Vec<String> {
-    s.split(sep).map(|p| p.trim_matches([' ', '\t', '\r', '\n'])).filter(|p| !p.is_empty()).map(str::to_owned).collect()
+    s.split(sep)
+        .map(|p| p.trim_matches([' ', '\t', '\r', '\n']))
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The surfaces of a file's `show` / `play` (`ScreenSurfaces`): names separated by `,`.
@@ -201,7 +225,11 @@ pub fn surfaces(value: &str) -> u32 {
 /// `loading, menu, pause` as the file writes them.
 #[must_use]
 pub fn surfaces_text(mask: u32) -> String {
-    let names: Vec<&str> = [(LOADING, "loading"), (MENU, "menu"), (PAUSE, "pause")].into_iter().filter(|(b, _)| mask & b != 0).map(|(_, n)| n).collect();
+    let names: Vec<&str> = [(LOADING, "loading"), (MENU, "menu"), (PAUSE, "pause")]
+        .into_iter()
+        .filter(|(b, _)| mask & b != 0)
+        .map(|(_, n)| n)
+        .collect();
     names.join(", ")
 }
 
@@ -271,7 +299,9 @@ fn parse_screen_key(s: &mut Screen, key: &str, val: &str) {
                 "opacity" => layer.opacity = atof(val) as f32,
                 "rect" => {
                     let v = scan_floats(val, 4);
-                    for (slot, n) in [&mut layer.x, &mut layer.y, &mut layer.w, &mut layer.h].into_iter().zip(v) {
+                    for (slot, n) in
+                        [&mut layer.x, &mut layer.y, &mut layer.w, &mut layer.h].into_iter().zip(v)
+                    {
                         *slot = n;
                     }
                 }
@@ -404,7 +434,12 @@ impl Screens {
             out.push(row("music", &d.music));
         }
         if d.hide != 0 {
-            let names: Vec<&str> = [(HIDE_BAR, "bar"), (HIDE_PERCENT, "percent"), (HIDE_STAGE, "stage"), (HIDE_TIP, "tip")].into_iter().filter(|(b, _)| d.hide & b != 0).map(|(_, n)| n).collect();
+            let names: Vec<&str> =
+                [(HIDE_BAR, "bar"), (HIDE_PERCENT, "percent"), (HIDE_STAGE, "stage"), (HIDE_TIP, "tip")]
+                    .into_iter()
+                    .filter(|(b, _)| d.hide & b != 0)
+                    .map(|(_, n)| n)
+                    .collect();
             out.push(row("hide", &names.join(", ")));
         }
         for l in &d.layers {
@@ -418,7 +453,10 @@ impl Screens {
                 out.push(row("opacity", &number(l.opacity)));
             }
             if l.x != 0.0 || l.y != 0.0 || l.w != 100.0 || l.h != 100.0 {
-                out.push(row("rect", &format!("{} {} {} {}", number(l.x), number(l.y), number(l.w), number(l.h))));
+                out.push(row(
+                    "rect",
+                    &format!("{} {} {} {}", number(l.x), number(l.y), number(l.w), number(l.h)),
+                ));
             }
             if !l.texture.is_empty() {
                 out.push(row("texture", &l.texture));
@@ -453,11 +491,19 @@ impl Screens {
     #[must_use]
     pub fn edits(&self, doc: &ManifestDoc) -> Vec<Edit> {
         let mut out = vec![Edit::lines("screens", self.policy_lines())];
-        let screens: Vec<(String, Vec<String>)> = self.screens.iter().map(|d| (format!("screen.{}", d.id), Self::screen_lines(d))).collect();
-        let tracks: Vec<(String, Vec<String>)> = self.tracks.iter().map(|t| (format!("track.{}", t.id), Self::track_lines(t))).collect();
+        let screens: Vec<(String, Vec<String>)> =
+            self.screens.iter().map(|d| (format!("screen.{}", d.id), Self::screen_lines(d))).collect();
+        let tracks: Vec<(String, Vec<String>)> =
+            self.tracks.iter().map(|t| (format!("track.{}", t.id), Self::track_lines(t))).collect();
         for (prefix, want) in [("screen.", screens), ("track.", tracks)] {
-            let have: Vec<String> = doc.sections_with_prefix(prefix).into_iter().filter(|n| n.len() > prefix.len()).map(str::to_ascii_lowercase).collect();
-            let same = have.len() == want.len() && have.iter().zip(&want).all(|(h, (w, _))| *h == w.to_ascii_lowercase());
+            let have: Vec<String> = doc
+                .sections_with_prefix(prefix)
+                .into_iter()
+                .filter(|n| n.len() > prefix.len())
+                .map(str::to_ascii_lowercase)
+                .collect();
+            let same = have.len() == want.len()
+                && have.iter().zip(&want).all(|(h, (w, _))| *h == w.to_ascii_lowercase());
             if !same {
                 out.extend(have.into_iter().map(|section| Edit::RemoveSection { section }));
             }

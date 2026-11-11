@@ -42,7 +42,8 @@ const D_BITS: u32 = 14;
 const BLOCK: usize = 49152;
 
 const INPUT_OVERRUN: ChunkError = ChunkError::Compression("the LZO stream ends early");
-const OUTPUT_OVERRUN: ChunkError = ChunkError::Compression("the LZO stream unpacks to more than its stated size");
+const OUTPUT_OVERRUN: ChunkError =
+    ChunkError::Compression("the LZO stream unpacks to more than its stated size");
 const LOOKBEHIND_OVERRUN: ChunkError = ChunkError::Compression("an LZO match starts before the output");
 
 #[inline]
@@ -181,7 +182,9 @@ pub fn decompress(packed: &[u8], unpacked_len: usize) -> Result<Vec<u8>> {
                         return if ip != src.len() {
                             Err(ChunkError::Compression("the LZO stream ends before its data does"))
                         } else if out.len() != limit {
-                            Err(ChunkError::Compression("the LZO stream unpacks to less than its stated size"))
+                            Err(ChunkError::Compression(
+                                "the LZO stream unpacks to less than its stated size",
+                            ))
                         } else {
                             Ok(out)
                         };
@@ -264,13 +267,20 @@ fn put_long_length(out: &mut Vec<u8>, mut len: usize) {
 
 /// `do_compress`: one block of at most [`BLOCK`] bytes at `src[base..base + len]`. `ti` is the
 /// count of literals the block before left unwritten; the return is this block's.
-fn compress_block(src: &[u8], base: usize, len: usize, out: &mut Vec<u8>, mut ti: usize, dict: &mut [u16]) -> usize {
+fn compress_block(
+    src: &[u8],
+    base: usize,
+    len: usize,
+    out: &mut Vec<u8>,
+    mut ti: usize,
+    dict: &mut [u16],
+) -> usize {
     let in_end = base + len;
     let ip_end = in_end.saturating_sub(20);
     let mut ip = base;
     let mut ii = base;
 
-    ip += if ti < 4 { 4 - ti } else { 0 };
+    ip += 4_usize.saturating_sub(ti);
     'literal: loop {
         ip += 1 + ((ip - ii) >> 5);
         loop {
@@ -533,7 +543,9 @@ mod tests {
     #[test]
     fn archive_framing() {
         let mut w = Writer::new();
-        for (name, real, packed, offset) in [("configs\\system.ltx", 10u32, 10u32, 0u32), ("a.ogf", 4000, 1200, 10)] {
+        for (name, real, packed, offset) in
+            [("configs\\system.ltx", 10u32, 10u32, 0u32), ("a.ogf", 4000, 1200, 10)]
+        {
             w.w_u16((16 + name.len()) as u16);
             w.w_u32(real);
             w.w_u32(packed);

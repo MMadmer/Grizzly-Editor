@@ -97,7 +97,12 @@ pub fn read_manifest(text: &str) -> Vec<Entry> {
         }
     }
     let get = |s: &str, k: &str| -> String {
-        sections.iter().find(|(n, _)| n == s).and_then(|(_, kv)| kv.iter().find(|(kk, _)| kk == k)).map(|(_, v)| v.clone()).unwrap_or_default()
+        sections
+            .iter()
+            .find(|(n, _)| n == s)
+            .and_then(|(_, kv)| kv.iter().find(|(kk, _)| kk == k))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
     };
     let num = |s: &str, k: &str| get(s, k).parse::<u64>().unwrap_or(0);
     if num("recovery", "version") != u64::from(MANIFEST_VERSION) {
@@ -294,7 +299,11 @@ impl Recovery {
         s.claim = Some(claim);
         let marker = dir.join("session.lock");
         let unclean = marker.is_file();
-        let text = format!("[session]\r\nversion=1\r\npid={}\r\nstarted_at={}\r\n", std::process::id(), file_time_now());
+        let text = format!(
+            "[session]\r\nversion=1\r\npid={}\r\nstarted_at={}\r\n",
+            std::process::id(),
+            file_time_now()
+        );
         if gz_editor::fsx::write_atomic(&marker, text.as_bytes()).is_err() {
             s.claim = None;
             s.shared = true;
@@ -313,7 +322,9 @@ impl Recovery {
                 }
                 None => {
                     s.op = OpState::Error;
-                    s.last_error = "the previous session ended unexpectedly, but no valid recovery snapshot was found".into();
+                    s.last_error =
+                        "the previous session ended unexpectedly, but no valid recovery snapshot was found"
+                            .into();
                 }
             }
         }
@@ -338,7 +349,12 @@ impl Recovery {
     pub fn can_snapshot(&self, game_linked: bool) -> Result<(), String> {
         let s = self.inner.lock();
         if s.bound.is_none() || s.shared || !s.owns {
-            return Err(if s.shared { "recovery is disabled because another live session owns this project" } else { "recovery session is not available" }.into());
+            return Err(if s.shared {
+                "recovery is disabled because another live session owns this project"
+            } else {
+                "recovery session is not available"
+            }
+            .into());
         }
         if s.offer {
             return Err("resolve the startup recovery offer before creating another snapshot".into());
@@ -361,7 +377,8 @@ impl Recovery {
             s.next_save = now + prefs.interval();
             return false;
         }
-        let idle = now.duration_since(s.last_input) >= Duration::from_secs(u64::from(prefs.interaction_delay_seconds.min(120)));
+        let idle = now.duration_since(s.last_input)
+            >= Duration::from_secs(u64::from(prefs.interaction_delay_seconds.min(120)));
         now >= s.next_save && idle
     }
 
@@ -388,7 +405,8 @@ impl Recovery {
         };
         let name = format!("snapshot-{saved_at:016x}-{:08x}-{seq:04}.recovery", std::process::id());
         let path = dir.join(&name);
-        gz_editor::fsx::write_atomic(&path, stream).map_err(|e| format!("cannot write recovery file '{}' ({e})", path.display()))?;
+        gz_editor::fsx::write_atomic(&path, stream)
+            .map_err(|e| format!("cannot write recovery file '{}' ({e})", path.display()))?;
         let (source_mtime, source_size) = file_meta(Path::new(source)).unwrap_or((0, 0));
         let fresh = Entry {
             snapshot: name.clone(),
@@ -472,11 +490,17 @@ impl Recovery {
             return Err("the project has no valid game link".into());
         }
         if dirty {
-            return Err("the current scene has unsaved changes; save or clear it before restoring startup recovery".into());
+            return Err(
+                "the current scene has unsaved changes; save or clear it before restoring startup recovery"
+                    .into(),
+            );
         }
         let (root, entry) = {
             let s = self.inner.lock();
-            (s.bound.clone().ok_or("recovery session is not available")?, s.entry.clone().ok_or("no startup recovery snapshot is available")?)
+            (
+                s.bound.clone().ok_or("recovery session is not available")?,
+                s.entry.clone().ok_or("no startup recovery snapshot is available")?,
+            )
         };
         let path = Self::dir_of(&root).join(&entry.snapshot);
         validate(&entry, &path).map_err(|why| format!("the recovery snapshot is no longer valid: {why}"))?;
@@ -607,7 +631,9 @@ impl Recovery {
                 }
             }
         };
-        let source_newer = entry.as_ref().is_some_and(|e| !e.source.is_empty() && file_meta(Path::new(&e.source)) != Some((e.source_mtime, e.source_size)));
+        let source_newer = entry.as_ref().is_some_and(|e| {
+            !e.source.is_empty() && file_meta(Path::new(&e.source)) != Some((e.source_mtime, e.source_size))
+        });
         Status {
             state,
             operation_id: s.op_id,
@@ -636,7 +662,8 @@ fn validate(e: &Entry, path: &Path) -> Result<(), String> {
     if e.snapshot_size == 0 || e.snapshot_hash == 0 {
         return Err("missing size or checksum metadata".into());
     }
-    let bytes = std::fs::read(path).map_err(|err| format!("cannot read recovery file '{}' ({err})", path.display()))?;
+    let bytes = std::fs::read(path)
+        .map_err(|err| format!("cannot read recovery file '{}' ({err})", path.display()))?;
     if bytes.len() as u64 != e.snapshot_size || fnv1a(&bytes) != e.snapshot_hash {
         return Err("size or checksum mismatch".into());
     }
@@ -662,7 +689,9 @@ fn delete_snapshots_not_in(dir: &Path, keep: &[Entry]) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
-        if n.to_ascii_lowercase().ends_with(".recovery") && !keep.iter().any(|k| k.snapshot.eq_ignore_ascii_case(&n)) {
+        if n.to_ascii_lowercase().ends_with(".recovery")
+            && !keep.iter().any(|k| k.snapshot.eq_ignore_ascii_case(&n))
+        {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -672,7 +701,8 @@ fn delete_snapshots_not_in(dir: &Path, keep: &[Entry]) {
 fn delete_recovery_data(dir: &Path) -> Result<(), String> {
     let manifest = dir.join("manifest.ltx");
     if manifest.exists() {
-        gz_editor::fsx::write_atomic(&manifest, build_manifest(&[]).as_bytes()).map_err(|e| format!("cannot commit recovery metadata '{}' ({e})", manifest.display()))?;
+        gz_editor::fsx::write_atomic(&manifest, build_manifest(&[]).as_bytes())
+            .map_err(|e| format!("cannot commit recovery metadata '{}' ({e})", manifest.display()))?;
     }
     delete_snapshots_not_in(dir, &[]);
     let _ = std::fs::remove_file(&manifest);
@@ -686,7 +716,15 @@ mod tests {
 
     #[test]
     fn the_manifest_round_trips() {
-        let e = Entry { snapshot: "snapshot-1.recovery".into(), source: "C:\\a.level".into(), saved_at: 5, snapshot_size: 10, snapshot_hash: 11, source_mtime: 3, source_size: 4 };
+        let e = Entry {
+            snapshot: "snapshot-1.recovery".into(),
+            source: "C:\\a.level".into(),
+            saved_at: 5,
+            snapshot_size: 10,
+            snapshot_hash: 11,
+            source_mtime: 3,
+            source_size: 4,
+        };
         let text = build_manifest(std::slice::from_ref(&e));
         assert!(text.starts_with("[recovery]\r\nversion=1\r\ncount=1\r\n\r\n[entry_0]\r\n"));
         assert_eq!(read_manifest(&text), vec![e]);

@@ -112,7 +112,8 @@ pub fn layout_text(t: &GlyphTable, cp: &[u8], max_w: f32, wrap: bool) -> Vec<Lin
         let mut line: Vec<u8> = Vec::new();
         let mut i = 0usize;
         while i <= para.len() {
-            let e = para.get(i..).and_then(|r| r.iter().position(|&c| c == b' ')).map_or(para.len(), |k| i + k);
+            let e =
+                para.get(i..).and_then(|r| r.iter().position(|&c| c == b' ')).map_or(para.len(), |k| i + k);
             let word = para.get(i..e).unwrap_or(&[]);
             let mut cand = line.clone();
             if !cand.is_empty() {

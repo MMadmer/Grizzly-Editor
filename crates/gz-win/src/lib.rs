@@ -7,9 +7,18 @@
 //!   the numbers of the startup profile;
 //! - [`started_minimized`] - whether the launcher asked for a minimised window;
 //! - [`write_minidump`], [`install_fatal_exception_dump`] - what a crash leaves behind;
-//! - [`foreground_is_ours`] - whether a window of this process is in front.
+//! - [`foreground_is_ours`] - whether a window of this process is in front;
+//! - [`install_caption_hit_test`] - `WM_NCHITTEST` for a window that draws its own caption;
+//! - [`known_folder`], [`free_space`], [`volume_path_name`], [`is_volume_root`] - the user's
+//!   folders and the volumes.
 
 #![cfg(windows)]
+
+mod caption;
+mod folders;
+
+pub use caption::{CaptionHitTest, CaptionShape, PxRect, hit_test, install_caption_hit_test};
+pub use folders::{KnownFolder, free_space, is_volume_root, known_folder, volume_path_name};
 
 use std::fs::File;
 use std::io;
@@ -20,12 +29,12 @@ use std::time::{Duration, SystemTime};
 
 use windows::Win32::Foundation::{FILETIME, HANDLE};
 use windows::Win32::System::Diagnostics::Debug::{
-    EXCEPTION_POINTERS, MINIDUMP_EXCEPTION_INFORMATION, MiniDumpNormal, MiniDumpWithIndirectlyReferencedMemory,
-    MiniDumpWriteDump, SetUnhandledExceptionFilter,
+    EXCEPTION_POINTERS, MINIDUMP_EXCEPTION_INFORMATION, MiniDumpNormal,
+    MiniDumpWithIndirectlyReferencedMemory, MiniDumpWriteDump, SetUnhandledExceptionFilter,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, GetProcessIoCounters, GetProcessTimes, GetStartupInfoW,
-    IO_COUNTERS, STARTF_USESHOWWINDOW, STARTUPINFOW,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, GetProcessIoCounters, GetProcessTimes,
+    GetStartupInfoW, IO_COUNTERS, STARTF_USESHOWWINDOW, STARTUPINFOW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -69,7 +78,8 @@ pub fn process_counters() -> io::Result<ProcessCounters> {
     // refers to a live local of the exact type the call writes.
     unsafe {
         let process = GetCurrentProcess();
-        GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user).map_err(io::Error::other)?;
+        GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user)
+            .map_err(io::Error::other)?;
         GetProcessIoCounters(process, &mut io_counters).map_err(io::Error::other)?;
     }
     Ok(ProcessCounters {

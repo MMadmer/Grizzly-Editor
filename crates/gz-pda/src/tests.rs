@@ -101,7 +101,10 @@ fn the_preview_plays_actions() {
     assert_eq!(p.page, "one");
     let boxes = p.boxes();
     let go = p.target_by_id(&boxes, "go", 0).unwrap();
-    assert_eq!(p.visible(&boxes, &NOW).iter().find(|v| v.id == "go").and_then(|v| v.text.clone()), Some("nobody".to_owned()));
+    assert_eq!(
+        p.visible(&boxes, &NOW).iter().find(|v| v.id == "go").and_then(|v| v.text.clone()),
+        Some("nobody".to_owned())
+    );
     p.click(go, &NOW);
     assert_eq!((p.page.as_str(), p.prev_page.as_str()), ("two", "one"));
     // the page's own button, by a canvas point

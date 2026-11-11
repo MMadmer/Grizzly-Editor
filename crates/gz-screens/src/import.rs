@@ -91,7 +91,9 @@ pub fn normalize_path(input: &str) -> String {
 /// `abs` lies below `root` (ASCII case ignored).
 #[must_use]
 pub fn inside(abs: &str, root: &str) -> bool {
-    abs.len() > root.len() + 1 && abs.get(..root.len()).is_some_and(|h| h.eq_ignore_ascii_case(root)) && abs.as_bytes().get(root.len()) == Some(&b'\\')
+    abs.len() > root.len() + 1
+        && abs.get(..root.len()).is_some_and(|h| h.eq_ignore_ascii_case(root))
+        && abs.as_bytes().get(root.len()) == Some(&b'\\')
 }
 
 /// Where a file given from anywhere ends up, decided by its place and its extension alone.
@@ -123,10 +125,18 @@ pub fn plan(root: &str, given: &str) -> Result<Plan, String> {
     let kind = file_kind(&source);
     if kind == FileKind::None {
         let leaf = source.rsplit('\\').next().unwrap_or(&source);
-        return Err(format!("The game shows pictures, GIFs, videos, shaders and HTML pages, and plays .ogg music - not {leaf}."));
+        return Err(format!(
+            "The game shows pictures, GIFs, videos, shaders and HTML pages, and plays .ogg music - not {leaf}."
+        ));
     }
     let copy = !inside(&source, &root);
-    Ok(Plan { convert: kind == FileKind::Convert, shader_script: extension(&source) == ".ps", copy, kind, source })
+    Ok(Plan {
+        convert: kind == FileKind::Convert,
+        shader_script: extension(&source) == ".ps",
+        copy,
+        kind,
+        source,
+    })
 }
 
 /// Creates `dst` from `src` only when nothing is there yet: `false` when something is. Two
@@ -164,7 +174,8 @@ fn make_picture(image: &str, dds: &str) -> Result<(), String> {
     if img.width < 1 || img.height < 1 {
         return Err(unreadable());
     }
-    let out = gz_fmt_tex::make_screen_picture_dds(&img.rgba, img.width, img.height).map_err(|_| "the DXT compressor failed".to_owned())?;
+    let out = gz_fmt_tex::make_screen_picture_dds(&img.rgba, img.width, img.height)
+        .map_err(|_| "the DXT compressor failed".to_owned())?;
     let _ = fs::remove_file(dds);
     fs::write(dds, out).map_err(|_| "the DXT compressor failed".to_owned())
 }
@@ -184,7 +195,9 @@ pub fn import(root: &str, given: &str) -> Result<String, String> {
         let _ = fs::create_dir(&folder);
         let leaf = abs.rsplit('\\').next().unwrap_or(&abs).to_owned();
         let (base, ext) = match leaf.rfind('.') {
-            Some(dot) => (leaf.get(..dot).unwrap_or(&leaf).to_owned(), leaf.get(dot..).unwrap_or("").to_owned()),
+            Some(dot) => {
+                (leaf.get(..dot).unwrap_or(&leaf).to_owned(), leaf.get(dot..).unwrap_or("").to_owned())
+            }
             None => (leaf.clone(), String::new()),
         };
         let source = fs::read(&abs).map_err(|_| format!("The file cannot be read: {abs}"))?;
@@ -193,7 +206,8 @@ pub fn import(root: &str, given: &str) -> Result<String, String> {
             if n > 100_000 {
                 return Err(format!("The file cannot be copied into the project: {abs}"));
             }
-            let candidate = if n == 1 { format!("{folder}\\{leaf}") } else { format!("{folder}\\{base}_{n}{ext}") };
+            let candidate =
+                if n == 1 { format!("{folder}\\{leaf}") } else { format!("{folder}\\{base}_{n}{ext}") };
             let path = Path::new(&candidate);
             if path.exists() {
                 // the same file there already is the one to use
@@ -223,7 +237,8 @@ pub fn import(root: &str, given: &str) -> Result<String, String> {
         }
     }
     if p.convert {
-        let dds = format!("{}.dds", target.get(..target.rfind('.').unwrap_or(target.len())).unwrap_or(&target));
+        let dds =
+            format!("{}.dds", target.get(..target.rfind('.').unwrap_or(target.len())).unwrap_or(&target));
         make_picture(&target, &dds)?;
         if p.copy {
             let _ = fs::remove_file(&target);

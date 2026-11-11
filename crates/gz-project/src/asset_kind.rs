@@ -79,7 +79,11 @@ pub fn kind_of(name: &str, head: Option<&[u8]>) -> Option<AssetKind> {
         Some(AssetKind::Pda)
     } else if is(".npcasset") {
         let head = head.map(|h| h.get(..HEAD_LEN).unwrap_or(h));
-        if head.is_some_and(|h| head_says(h, "abstract", "true")) { Some(AssetKind::CharacterTemplate) } else { Some(AssetKind::Character) }
+        if head.is_some_and(|h| head_says(h, "abstract", "true")) {
+            Some(AssetKind::CharacterTemplate)
+        } else {
+            Some(AssetKind::Character)
+        }
     } else {
         None
     }
@@ -142,9 +146,18 @@ mod tests {
         assert_eq!(kind_of("b.behasset", None), Some(AssetKind::Behaviour));
         assert_eq!(kind_of("p.pdaasset", None), Some(AssetKind::Pda));
         assert_eq!(kind_of("c.npcasset", None), Some(AssetKind::Character));
-        assert_eq!(kind_of("c.npcasset", Some(b"return {\n  abstract = true,\n")), Some(AssetKind::CharacterTemplate));
-        assert_eq!(kind_of("c.npcasset", Some(b"return { abstract = \"TRUE\" }")), Some(AssetKind::CharacterTemplate));
-        assert_eq!(kind_of("c.npcasset", Some(b"return { not_abstract = true }")), Some(AssetKind::Character));
+        assert_eq!(
+            kind_of("c.npcasset", Some(b"return {\n  abstract = true,\n")),
+            Some(AssetKind::CharacterTemplate)
+        );
+        assert_eq!(
+            kind_of("c.npcasset", Some(b"return { abstract = \"TRUE\" }")),
+            Some(AssetKind::CharacterTemplate)
+        );
+        assert_eq!(
+            kind_of("c.npcasset", Some(b"return { not_abstract = true }")),
+            Some(AssetKind::Character)
+        );
         assert_eq!(kind_of("c.npcasset", Some(b"return { abstract = false }")), Some(AssetKind::Character));
         assert_eq!(kind_of("x.ltx", None), None);
         assert!(needs_head("A.NpcAsset"));

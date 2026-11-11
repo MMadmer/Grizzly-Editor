@@ -195,7 +195,8 @@ fn w_skeleton_data(o: &Object, h: &Header, class: Class, w: &mut NetWriter) {
     if class == Class::Car {
         w.w_vec3(h.position);
         w.w_vec3(h.angle);
-        let (doors, wheels, health) = o.car().map_or((&[][..], &[][..], 1.0), |c| (&c.doors[..], &c.wheels[..], c.health));
+        let (doors, wheels, health) =
+            o.car().map_or((&[][..], &[][..], 1.0), |c| (&c.doors[..], &c.wheels[..], c.health));
         w.w_u16(doors.len() as u16);
         for (open_state, health) in doors {
             w.w_u8(*open_state);
@@ -1022,11 +1023,8 @@ fn r_monster(c: &mut ReadCtx<'_, '_>) -> PacketResult<()> {
         m.smart_terrain_id = r.r_u16()?;
     }
     if v > 113 {
-        m.task_reached = if r.is_ini() {
-            u8::from(r.r_u16()? != 0)
-        } else {
-            r.take(1)?.first().copied().unwrap_or(0)
-        };
+        m.task_reached =
+            if r.is_ini() { u8::from(r.r_u16()? != 0) } else { r.take(1)?.first().copied().unwrap_or(0) };
     }
     Ok(())
 }
@@ -1220,11 +1218,11 @@ fn w_human(o: &Object, w: &mut NetWriter) {
     w_trader_abstract(o, w);
     w_monster(o, w);
     // `CALifeHumanBrain::on_state_write`: not for a scene section
-    if !w.is_ini() {
-        if let Some(human) = o.human() {
-            w_bytes_vec(w, &human.equipment_preferences);
-            w_bytes_vec(w, &human.weapon_preferences);
-        }
+    if !w.is_ini()
+        && let Some(human) = o.human()
+    {
+        w_bytes_vec(w, &human.equipment_preferences);
+        w_bytes_vec(w, &human.weapon_preferences);
     }
 }
 

@@ -1,7 +1,8 @@
 //! The Sound Library: the `sound_library` tab over the descriptions of `rawdata\sounds`
 //! (`UISoundEditorForm.cpp`, `SoundManager.cpp`). The selected sound's game file is read and
 //! decoded on the pools - its waveform from the peak envelope - and played on the audio thread.
-//! Save writes the changed descriptions and puts their parameters into the game sounds.
+//! Save writes the changed descriptions and makes their game sounds again from the `.wav`;
+//! Rebuild makes the selected one's.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,11 +10,13 @@ use std::sync::Arc;
 use egui::{CornerRadius, Pos2, Sense, Stroke, Ui, Vec2, pos2};
 use gz_app::{DocCx, Document, EditAction, OpenRequest};
 use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin};
-use gz_fmt_sound::{OggParams, Pcm, Peak, SoundThm, decode_ogg, read_sound_thm, write_ogg_params, write_sound_thm};
+use gz_fmt_sound::{
+    OggParams, Pcm, Peak, SoundThm, decode_ogg, encode_game_sound, read_sound_thm, read_wav, write_sound_thm,
+};
 use gz_store::{Apply, State, Store, StoreOptions, imbl};
 use gz_ui::grid::{Grid, combo, number, read_only};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Toolbar, Tone, palette, state};
+use gz_ui::{Button, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar, palette, state};
 use serde_json::{Map, Value, json};
 
 use super::list::{Empty, LibraryList, find, shown};
@@ -71,7 +74,10 @@ pub fn list_sounds(dirs: &EditorDirs, pool: &gz_task::Executors) -> Vec<SoundIte
         files
             .into_par_iter()
             .map(|(name, _)| {
-                let thm = std::fs::read(dir.join(format!("{name}.thm"))).ok().and_then(|b| read_sound_thm(&b).ok()).unwrap_or_default();
+                let thm = std::fs::read(dir.join(format!("{name}.thm")))
+                    .ok()
+                    .and_then(|b| read_sound_thm(&b).ok())
+                    .unwrap_or_default();
                 SoundItem { name, thm }
             })
             .collect()
@@ -147,6 +153,8 @@ pub struct SoundLibDoc {
     read_only: bool,
     saving: Arc<std::sync::atomic::AtomicBool>,
     game: Option<(String, Pending<Option<GameSound>>)>,
+    /// A rebuild ended: the preview reads the new file.
+    rebuilt: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SoundLibDoc {
@@ -159,7 +167,12 @@ impl SoundLibDoc {
         }
         Self {
             editor: editor.clone(),
-            store: Store::spawn("sound library", SoundEdits::default(), &editor.exec, StoreOptions::default()),
+            store: Store::spawn(
+                "sound library",
+                SoundEdits::default(),
+                &editor.exec,
+                StoreOptions::default(),
+            ),
             dirs,
             list: LibraryList::default(),
             selected: String::new(),
@@ -168,6 +181,7 @@ impl SoundLibDoc {
             read_only,
             saving: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             game: None,
+            rebuilt: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -221,7 +235,8 @@ impl SoundLibDoc {
             let size = got.len() as u64;
             let sound = exec
                 .cpu(move || {
-                    let ms = gz_fmt_sound::ogg_info(&got).map_or(0, |i| (i.seconds() * 1000.0).floor() as u32);
+                    let ms =
+                        gz_fmt_sound::ogg_info(&got).map_or(0, |i| (i.seconds() * 1000.0).floor() as u32);
                     let pcm = decode_ogg(&got).ok().map(Arc::new);
                     let peaks = pcm.as_ref().map_or_else(Vec::new, |p| p.peaks(WAVE_BUCKETS));
                     GameSound { bytes: size, ms, peaks, pcm }
@@ -245,48 +260,86 @@ impl SoundLibDoc {
             return Ok(());
         }
         let edits = self.store.snapshot().edits.clone();
-        let originals: Vec<SoundItem> = self.items().map(|i| i.as_ref().clone()).unwrap_or_default();
-        let (dirs, saving, store, editor) = (self.dirs.clone(), self.saving.clone(), self.store.clone(), self.editor.clone());
+        let (dirs, saving, store, editor) =
+            (self.dirs.clone(), self.saving.clone(), self.store.clone(), self.editor.clone());
         Player::of(&self.editor).stop();
         saving.store(true, std::sync::atomic::Ordering::Release);
-        let started = self.editor.jobs.start("sound_library", Some("libraries"), "Saving the Sound Library", move |ctx| async move {
-            let exec = ctx.exec.clone();
-            let c = ctx.clone();
-            let result = exec
-                .io(move || -> Result<(usize, Vec<String>), String> {
-                    let age = super::texsync::now();
-                    let (mut done, mut notes) = (0usize, Vec::new());
-                    for (i, (name, thm)) in edits.iter().enumerate() {
-                        c.check().map_err(|_| "Stopped.".to_owned())?;
-                        c.stage(format!("Saving {name}"));
-                        c.progress(i, edits.len());
-                        match save_sound(&dirs, name, thm, originals.iter().find(|o| o.name == *name).map(|o| o.thm), age) {
-                            Ok(note) => {
-                                done += 1;
-                                notes.extend(note);
+        let started = self.editor.jobs.start(
+            "sound_library",
+            Some("libraries"),
+            "Saving the Sound Library",
+            move |ctx| async move {
+                let exec = ctx.exec.clone();
+                let c = ctx.clone();
+                let result = exec
+                    .io(move || -> Result<(usize, Vec<String>), String> {
+                        let age = super::texsync::now();
+                        let (mut done, mut notes) = (0usize, Vec::new());
+                        for (i, (name, thm)) in edits.iter().enumerate() {
+                            c.check().map_err(|_| "Stopped.".to_owned())?;
+                            c.stage(format!("Saving {name}"));
+                            c.progress(i, edits.len());
+                            match save_sound(&dirs, name, thm, age) {
+                                Ok(()) => done += 1,
+                                Err(e) => notes.push(e),
                             }
-                            Err(e) => notes.push(e),
                         }
+                        Ok((done, notes))
+                    })
+                    .await;
+                saving.store(false, std::sync::atomic::Ordering::Release);
+                LibraryLists::of(&editor).sounds_rev.bump();
+                match result {
+                    Ok((done, notes)) => {
+                        for n in &notes {
+                            editor.log.warn(n.clone());
+                        }
+                        let _ = store.send(SoundCmd::Reset, Origin::Ui).await;
+                        Ok(json!({ "written": done, "notes": notes }))
                     }
-                    Ok((done, notes))
-                })
-                .await;
-            saving.store(false, std::sync::atomic::Ordering::Release);
-            LibraryLists::of(&editor).sounds_rev.bump();
-            match result {
-                Ok((done, notes)) => {
-                    for n in &notes {
-                        editor.log.warn(n.clone());
-                    }
-                    let _ = store.send(SoundCmd::Reset, Origin::Ui).await;
-                    Ok(json!({ "written": done, "notes": notes }))
+                    Err(e) => Err(gz_task::JobError::new(e)),
                 }
-                Err(e) => Err(gz_task::JobError::new(e)),
-            }
-        });
+            },
+        );
         if let Err(busy) = started {
             self.saving.store(false, std::sync::atomic::Ordering::Release);
             return Err(format!("The save could not be started: {busy}."));
+        }
+        Ok(())
+    }
+
+    /// Makes the selected sound's game file again from its `.wav` (`RebuildGameSound`), as a job.
+    fn queue_rebuild(&mut self) -> Result<(), String> {
+        let items = self.items().unwrap_or_default();
+        let Some(item) = items.iter().find(|i| i.name == self.selected) else {
+            return Err("Pick a sound first.".to_owned());
+        };
+        let (name, thm) = (item.name.clone(), self.thm_of(item));
+        let (dirs, saving, rebuilt, editor) =
+            (self.dirs.clone(), self.saving.clone(), self.rebuilt.clone(), self.editor.clone());
+        Player::of(&self.editor).stop();
+        saving.store(true, std::sync::atomic::Ordering::Release);
+        let started = self.editor.jobs.start(
+            "sound_library",
+            Some("libraries"),
+            "Rebuilding the Game Sound",
+            move |ctx| async move {
+                editor.log.info(format!(
+                    "Rebuilding the game sound {}",
+                    dirs.game_sounds.join(format!("{name}.ogg")).display()
+                ));
+                ctx.stage(format!("Encoding {name}"));
+                let d = dirs.clone();
+                let result = ctx.exec.cpu(move || make_game_sound(&d, &name, &thm, None)).await;
+                saving.store(false, std::sync::atomic::Ordering::Release);
+                rebuilt.store(true, std::sync::atomic::Ordering::Release);
+                editor.exec.wake().ping();
+                result.map(|()| json!({ "rebuilt": true })).map_err(gz_task::JobError::new)
+            },
+        );
+        if let Err(busy) = started {
+            self.saving.store(false, std::sync::atomic::Ordering::Release);
+            return Err(format!("The rebuild could not be started: {busy}."));
         }
         Ok(())
     }
@@ -298,10 +351,17 @@ impl SoundLibDoc {
         let src = self.dirs.sounds.join(format!("{}.wav", item.name)).to_string_lossy().into_owned();
         let game = self.game_sound();
         let facts = match game.as_deref() {
-            Some(Some(g)) => format!("{:.1} KB \u{b7} {:.2} s", g.bytes as f32 / 1024.0, g.ms as f32 / 1000.0),
+            Some(Some(g)) => {
+                format!("{:.1} KB \u{b7} {:.2} s", g.bytes as f32 / 1024.0, g.ms as f32 / 1000.0)
+            }
             _ => String::new(),
         };
-        local_heading(ui, &crate::paths::label_of(&item.name), Clip::End, &[(&src, Clip::Start), (&facts, Clip::End)]);
+        local_heading(
+            ui,
+            &crate::paths::label_of(&item.name),
+            Clip::End,
+            &[(&src, Clip::Start), (&facts, Clip::End)],
+        );
         match game.as_deref() {
             Some(None) => {
                 text::status(ui, Tone::Warning, "No game sound (.ogg) was built from this description yet.");
@@ -319,9 +379,17 @@ impl SoundLibDoc {
                     let x = rect.min.x + rect.width() * (i as f32 + 0.5) / n as f32;
                     let hi = mid - f32::from(pk.max) / 32768.0 * half;
                     let lo = mid - f32::from(pk.min) / 32768.0 * half;
-                    ui.painter().line_segment([pos2(x, hi), pos2(x, lo.max(hi + 1.0))], Stroke::new(1.0, p.accent_bright));
+                    ui.painter().line_segment(
+                        [pos2(x, hi), pos2(x, lo.max(hi + 1.0))],
+                        Stroke::new(1.0, p.accent_bright),
+                    );
                 }
-                ui.painter().rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, p.border_subtle), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::same(4),
+                    Stroke::new(1.0, p.border_subtle),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
         ui.add_space(12.0);
@@ -339,10 +407,37 @@ impl SoundLibDoc {
         let mut gesture = String::new();
         let mut clamped = false;
         PropertyGrid::new("sound_library").show(ui, |g| {
-            real(g, "Quality", "The Vorbis quality the game sound is encoded with", ro, &mut t.quality, 0.01, "", &mut gesture);
-            real(g, "Min Dist", "Up to this distance the sound plays at full volume", ro, &mut t.min_dist, 0.1, "m", &mut gesture);
+            real(
+                g,
+                "Quality",
+                "The Vorbis quality the game sound is encoded with",
+                ro,
+                &mut t.quality,
+                0.01,
+                "",
+                &mut gesture,
+            );
+            real(
+                g,
+                "Min Dist",
+                "Up to this distance the sound plays at full volume",
+                ro,
+                &mut t.min_dist,
+                0.1,
+                "m",
+                &mut gesture,
+            );
             t.min_dist = t.min_dist.clamp(0.01, 1000.0);
-            real(g, "Max Dist", "Past this distance the sound is silent", ro, &mut t.max_dist, 0.1, "m", &mut gesture);
+            real(
+                g,
+                "Max Dist",
+                "Past this distance the sound is silent",
+                ro,
+                &mut t.max_dist,
+                0.1,
+                "m",
+                &mut gesture,
+            );
             t.max_dist = t.max_dist.clamp(0.1, 1000.0);
             if t.max_ai_dist > t.max_dist {
                 // 'Max AI Dist' <= 'Max Dist': it is clamped
@@ -350,11 +445,29 @@ impl SoundLibDoc {
                 clamped = true;
             }
             let mut ai = t.max_ai_dist;
-            real(g, "Max AI Dist", "How far NPCs hear the sound; at most the maximum distance", ro, &mut ai, 0.1, "m", &mut gesture);
+            real(
+                g,
+                "Max AI Dist",
+                "How far NPCs hear the sound; at most the maximum distance",
+                ro,
+                &mut ai,
+                0.1,
+                "m",
+                &mut gesture,
+            );
             if ai < t.max_dist {
                 t.max_ai_dist = ai.max(0.1);
             }
-            real(g, "Base Volume", "The volume the sound plays at, 0 to 2", ro, &mut t.base_volume, 0.01, "", &mut gesture);
+            real(
+                g,
+                "Base Volume",
+                "The volume the sound plays at, 0 to 2",
+                ro,
+                &mut t.base_volume,
+                0.01,
+                "",
+                &mut gesture,
+            );
             t.base_volume = t.base_volume.clamp(0.0, 2.0);
             g.row("Game Type", "What NPCs make of the sound", ro, 0, |ui| {
                 let unknown = format!("{:#010x}", t.game_type);
@@ -375,32 +488,63 @@ impl SoundLibDoc {
             g.section("Attenuation", true, None, |g| {
                 // one button a row: two side by side do not fit the pane's 220 pt
                 let on = !ro.contains(PropFlags::READ_ONLY);
-                g.row("Max Dist", "The distance where the sound falls to 1%, from the minimum, with the game's rolloff", ro, 1, |ui| {
-                    if ui.add(Button::new("Max from Min").enabled(on, "The sound folder cannot be written")).clicked() {
-                        t.max_dist = max_from_min(t.min_dist);
-                        gesture = "auto".to_owned();
-                    }
-                });
-                g.row("Min Dist", "The minimum distance worked out from the maximum, with the game's rolloff", ro, 1, |ui| {
-                    if ui.add(Button::new("Min from Max").enabled(on, "The sound folder cannot be written")).clicked() {
-                        t.min_dist = min_from_max(t.max_dist);
-                        gesture = "auto".to_owned();
-                    }
-                });
+                g.row(
+                    "Max Dist",
+                    "The distance where the sound falls to 1%, from the minimum, with the game's rolloff",
+                    ro,
+                    1,
+                    |ui| {
+                        if ui
+                            .add(
+                                Button::new("Max from Min").enabled(on, "The sound folder cannot be written"),
+                            )
+                            .clicked()
+                        {
+                            t.max_dist = max_from_min(t.min_dist);
+                            gesture = "auto".to_owned();
+                        }
+                    },
+                );
+                g.row(
+                    "Min Dist",
+                    "The minimum distance worked out from the maximum, with the game's rolloff",
+                    ro,
+                    1,
+                    |ui| {
+                        if ui
+                            .add(
+                                Button::new("Min from Max").enabled(on, "The sound folder cannot be written"),
+                            )
+                            .clicked()
+                        {
+                            t.min_dist = min_from_max(t.max_dist);
+                            gesture = "auto".to_owned();
+                        }
+                    },
+                );
             });
             if let Some(Some(gs)) = game.as_deref() {
                 g.section("Game Sound", true, None, |g| {
-                    g.row("File Size", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &format!("{:.2} KB", gs.bytes as f32 / 1024.0), Clip::End));
-                    g.row("Length", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &format!("{:.2} s", gs.ms as f32 / 1000.0), Clip::End));
+                    g.row("File Size", "", PropFlags::READ_ONLY, 0, |ui| {
+                        read_only(ui, &format!("{:.2} KB", gs.bytes as f32 / 1024.0), Clip::End)
+                    });
+                    g.row("Length", "", PropFlags::READ_ONLY, 0, |ui| {
+                        read_only(ui, &format!("{:.2} s", gs.ms as f32 / 1000.0), Clip::End)
+                    });
                 });
             }
         });
         if clamped {
-            gz_ui::state::toast(ui.ctx(), Tone::Info, "'Max AI Dist' <= 'Max Dist'. 'Max AI Dist' will be clamped.");
+            gz_ui::state::toast(
+                ui.ctx(),
+                Tone::Info,
+                "'Max AI Dist' <= 'Max Dist'. 'Max AI Dist' will be clamped.",
+            );
         }
         if t != before && ro == PropFlags::NONE {
             let gesture = format!("{}:{gesture}", item.name);
-            self.store.post(SoundCmd::Set { name: item.name.clone(), thm: t, gesture }, self.editor.ui_origin());
+            self.store
+                .post(SoundCmd::Set { name: item.name.clone(), thm: t, gesture }, self.editor.ui_origin());
         }
     }
 
@@ -430,14 +574,21 @@ impl SoundLibDoc {
         out
     }
 
-    pub fn mcp_with(&mut self, action: &str, args: &Args, items: &[SoundItem]) -> Result<Map<String, Value>, String> {
+    pub fn mcp_with(
+        &mut self,
+        action: &str,
+        args: &Args,
+        items: &[SoundItem],
+    ) -> Result<Map<String, Value>, String> {
         if let Some(s) = args.str("search") {
             self.list.search = s.to_owned();
         }
         if action == "select" {
             let item = args.str("item").unwrap_or_default();
             let keys: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
-            let Some(at) = find(&keys, item) else { return Err(format!("no sound is named or matches '{item}'")) };
+            let Some(at) = find(&keys, item) else {
+                return Err(format!("no sound is named or matches '{item}'"));
+            };
             let name = keys.get(at).copied().unwrap_or_default().to_owned();
             self.select(Some(&name));
         }
@@ -445,36 +596,61 @@ impl SoundLibDoc {
     }
 }
 
-/// Writes one description and puts its parameters into its game sound without encoding it
-/// again; says what the game sound could not take.
-fn save_sound(dirs: &EditorDirs, name: &str, thm: &SoundThm, before: Option<SoundThm>, age: i64) -> Result<Vec<String>, String> {
-    let thm_path = dirs.sounds.join(format!("{name}.thm"));
-    gz_editor::fsx::write_atomic(&thm_path, &write_sound_thm(thm)).map_err(|e| format!("{} could not be written: {e}", thm_path.display()))?;
-    let _ = set_file_age(&thm_path, age);
-    let mut notes = Vec::new();
+/// Makes the game sound of `name` from its `.wav` (`MakeGameSound`): Vorbis at the description's
+/// quality, its parameters as the first comment. A sound that cannot be made leaves no file.
+pub fn make_game_sound(
+    dirs: &EditorDirs,
+    name: &str,
+    thm: &SoundThm,
+    age: Option<i64>,
+) -> Result<(), String> {
+    let wav_path = dirs.sounds.join(format!("{name}.wav"));
     let ogg_path = dirs.game_sounds.join(format!("{name}.ogg"));
-    match std::fs::read(&ogg_path) {
-        Ok(ogg) => {
-            let params = OggParams { min_dist: thm.min_dist, max_dist: thm.max_dist, base_volume: thm.base_volume, game_type: thm.game_type, max_ai_dist: thm.max_ai_dist };
-            let out = write_ogg_params(&ogg, &params).map_err(|e| format!("The parameters of {} could not be written: {e}", ogg_path.display()))?;
-            gz_editor::fsx::write_atomic(&ogg_path, &out).map_err(|e| format!("{} could not be written: {e}", ogg_path.display()))?;
-            let _ = set_file_age(&ogg_path, age);
-            if before.is_some_and(|b| b.quality != thm.quality) {
-                notes.push(format!("{name}: the game sound keeps its encoding; a new quality takes effect when it is encoded again from the .wav."));
-            }
-        }
-        Err(_) => notes.push(format!("{name}: there is no game sound (.ogg) to put the parameters into; it has to be encoded from the .wav.")),
+    let failed = || {
+        let _ = std::fs::remove_file(&ogg_path);
+        format!("Can't make game sound '{}'.", ogg_path.display())
+    };
+    let made = std::fs::read(&wav_path)
+        .map_err(|e| e.to_string())
+        .and_then(|b| read_wav(&b).map_err(|e| e.to_string()))
+        .and_then(|wav| {
+            encode_game_sound(&wav, thm.quality, &OggParams::from(thm)).map_err(|e| e.to_string())
+        });
+    let ogg = match made {
+        Ok(ogg) => ogg,
+        Err(e) => return Err(format!("{} {e}", failed())),
+    };
+    if let Some(dir) = ogg_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
     }
+    if let Err(e) = gz_editor::fsx::write_atomic(&ogg_path, &ogg) {
+        return Err(format!("{} {e}", failed()));
+    }
+    if let Some(age) = age {
+        let _ = set_file_age(&ogg_path, age);
+    }
+    Ok(())
+}
+
+/// Writes one description and makes its game sound again (`UpdateLib`: `SynchronizeSounds`
+/// with the game sounds forced), every file of it at the same age.
+fn save_sound(dirs: &EditorDirs, name: &str, thm: &SoundThm, age: i64) -> Result<(), String> {
+    let thm_path = dirs.sounds.join(format!("{name}.thm"));
+    gz_editor::fsx::write_atomic(&thm_path, &write_sound_thm(thm))
+        .map_err(|e| format!("{} could not be written: {e}", thm_path.display()))?;
+    let _ = set_file_age(&thm_path, age);
+    make_game_sound(dirs, name, thm, Some(age))?;
     let wav = dirs.sounds.join(format!("{name}.wav"));
     let _ = set_file_age(&wav, age);
-    Ok(notes)
+    Ok(())
 }
 
 /// What a sound synchronisation would take away (`OrphanSounds`): game sounds and descriptions
 /// whose `.wav` is gone; up to ten named, and how many there are.
 #[must_use]
 pub fn orphans(dirs: &EditorDirs) -> (Vec<String>, usize) {
-    let base: rustc_hash::FxHashSet<String> = list_files(&dirs.sounds, &["wav"], false, true).into_iter().map(|(n, _)| n).collect();
+    let base: rustc_hash::FxHashSet<String> =
+        list_files(&dirs.sounds, &["wav"], false, true).into_iter().map(|(n, _)| n).collect();
     let mut items = Vec::new();
     let mut total = 0;
     for (dir, ext) in [(&dirs.game_sounds, "ogg"), (&dirs.sounds, "thm")] {
@@ -491,10 +667,13 @@ pub fn orphans(dirs: &EditorDirs) -> (Vec<String>, usize) {
     (items, total)
 }
 
-/// `RefreshSounds(true)`: a description for every `.wav` that has none or one of another age,
-/// the orphans renamed to `.~ogg` / `.~thm` (`CleanupSounds`). Game sounds missing or older than
-/// their `.wav` are named: this editor does not encode Vorbis.
-pub fn synchronize_sounds(dirs: &EditorDirs, cancel: &gz_task::Cancel) -> Result<(usize, Vec<String>), String> {
+/// `SynchronizeSounds` + `CleanupSounds`: a description for every `.wav` that has none or one of
+/// another age, its game sound made again with it and wherever it is missing or of another age
+/// than its `.wav`; the orphans renamed to `.~ogg` / `.~thm`.
+pub fn synchronize_sounds(
+    dirs: &EditorDirs,
+    cancel: &gz_task::Cancel,
+) -> Result<(usize, Vec<String>), String> {
     let base = list_files(&dirs.sounds, &["wav"], false, true);
     let age = super::texsync::now();
     let mut updated = 0;
@@ -506,14 +685,28 @@ pub fn synchronize_sounds(dirs: &EditorDirs, cancel: &gz_task::Cancel) -> Result
         let thm_age = file_age(&thm_path);
         if thm_age.is_none() || thm_age != base_age {
             let thm = std::fs::read(&thm_path).ok().and_then(|b| read_sound_thm(&b).ok()).unwrap_or_default();
-            gz_editor::fsx::write_atomic(&thm_path, &write_sound_thm(&thm)).map_err(|e| format!("{} could not be written: {e}", thm_path.display()))?;
+            gz_editor::fsx::write_atomic(&thm_path, &write_sound_thm(&thm))
+                .map_err(|e| format!("{} could not be written: {e}", thm_path.display()))?;
             let _ = set_file_age(&thm_path, age);
             let _ = set_file_age(path, age);
             updated += 1;
         }
+        // the game sound is made again when the description was, or when it is missing or of
+        // another age than its source
         let ogg_age = file_age(&dirs.game_sounds.join(format!("{name}.ogg")));
-        if ogg_age.is_none() || (thm_age.is_some() && ogg_age != base_age && ogg_age < base_age) {
-            notes.push(format!("{name}: its game sound has to be encoded from the .wav, which this editor does not do yet."));
+        let thm_new = thm_age.is_none() || thm_age != base_age;
+        if thm_new || ogg_age.is_none() || ogg_age != base_age {
+            let thm = std::fs::read(&thm_path).ok().and_then(|b| read_sound_thm(&b).ok()).unwrap_or_default();
+            match make_game_sound(dirs, name, &thm, Some(age)) {
+                Ok(()) => {
+                    let _ = set_file_age(&thm_path, age);
+                    let _ = set_file_age(path, age);
+                    if !thm_new {
+                        updated += 1;
+                    }
+                }
+                Err(e) => notes.push(e),
+            }
         }
     }
     let wavs: rustc_hash::FxHashSet<&str> = base.iter().map(|(n, _)| n.as_str()).collect();
@@ -544,19 +737,36 @@ fn draw_attenuation(ui: &mut Ui, thm: &SoundThm, height: f32) {
     let points: Vec<Pos2> = (0..=CURVE_POINTS)
         .map(|i| {
             let d = (max_d * i as f32 / CURVE_POINTS as f32).max(1e-3);
-            pos2(rect.min.x + w * i as f32 / CURVE_POINTS as f32, rect.max.y - volume_at(thm.min_dist, d) * height)
+            pos2(
+                rect.min.x + w * i as f32 / CURVE_POINTS as f32,
+                rect.max.y - volume_at(thm.min_dist, d) * height,
+            )
         })
         .collect();
     painter.add(egui::Shape::line(points, Stroke::new(2.0, p.accent_bright)));
     let min_x = rect.min.x + w * (thm.min_dist / max_d).clamp(0.0, 1.0);
     painter.line_segment([pos2(min_x, rect.min.y), pos2(min_x, rect.max.y)], Stroke::new(1.0, p.border));
-    painter.rect_stroke(rect, CornerRadius::same(4), Stroke::new(1.0, p.border_subtle), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0, p.border_subtle),
+        egui::StrokeKind::Inside,
+    );
     resp.on_hover_text("Volume over distance: full up to the minimum distance, silent past the maximum.");
     local_ends(ui, &format!("Min {:.1} m", thm.min_dist), &format!("Max {:.1} m", thm.max_dist));
 }
 
 #[allow(clippy::too_many_arguments)]
-fn real(g: &mut Grid<'_>, label: &str, help: &str, flags: PropFlags, value: &mut f32, speed: f32, unit: &str, gesture: &mut String) {
+fn real(
+    g: &mut Grid<'_>,
+    label: &str,
+    help: &str,
+    flags: PropFlags,
+    value: &mut f32,
+    speed: f32,
+    unit: &str,
+    gesture: &mut String,
+) {
     g.row(label, help, flags, 0, |ui| {
         if flags.contains(PropFlags::READ_ONLY) {
             read_only(ui, &format!("{value:.2}"), Clip::End);
@@ -619,10 +829,18 @@ impl Document for SoundLibDoc {
             "No unsaved changes"
         };
         tb.group(2);
-        if tb.action("save", Icon::Save, "Save", if on { "Save the changed descriptions and put them into their game sounds" } else { why }, on, false, Kind::Ghost)
-            && let Err(e) = self.queue_save()
+        if tb.action(
+            "save",
+            Icon::Save,
+            "Save",
+            if on { "Save the changed descriptions and make their game sounds again" } else { why },
+            on,
+            false,
+            Kind::Ghost,
+        ) && let Err(e) = self.queue_save()
         {
-            let asker = if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+            let asker =
+                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
             if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Save failed", &e) {
                 self.editor.log.plain(line);
             }
@@ -631,21 +849,70 @@ impl Document for SoundLibDoc {
         let game = self.game_sound();
         let pcm = game.as_deref().and_then(Option::as_ref).and_then(|g| g.pcm.clone());
         let one = !self.selected.is_empty();
-        let no_sound = if one { "This description has no game sound (.ogg) yet" } else { "Pick a sound first" };
+        let no_sound =
+            if one { "This description has no game sound (.ogg) yet" } else { "Pick a sound first" };
         let player = Player::of(&self.editor);
         let play_tip = player.error().unwrap_or_else(|| "Play the game sound".to_owned());
-        if tb.action("play", Icon::Play, "Play", if pcm.is_some() { &play_tip } else { no_sound }, pcm.is_some(), false, Kind::Ghost)
-            && let Some(pcm) = pcm
+        if tb.action(
+            "play",
+            Icon::Play,
+            "Play",
+            if pcm.is_some() { &play_tip } else { no_sound },
+            pcm.is_some(),
+            false,
+            Kind::Ghost,
+        ) && let Some(pcm) = pcm
         {
             player.play(pcm);
         }
         // Stop is there to stop something: off while nothing plays
         let playing = player.is_playing();
-        if tb.action("stop", Icon::Stop, "Stop", if playing { "Stop the sound" } else { "Nothing is playing" }, playing, false, Kind::Ghost) {
+        if tb.action(
+            "stop",
+            Icon::Stop,
+            "Stop",
+            if playing { "Stop the sound" } else { "Nothing is playing" },
+            playing,
+            false,
+            Kind::Ghost,
+        ) {
             player.stop();
         }
-        if tb.action("auto_play", Icon::SoundSource, "Auto Play", "Play every sound as it is picked in the list", true, self.auto_play, Kind::Ghost) {
+        if tb.action(
+            "auto_play",
+            Icon::SoundSource,
+            "Auto Play",
+            "Play every sound as it is picked in the list",
+            true,
+            self.auto_play,
+            Kind::Ghost,
+        ) {
             self.auto_play = !self.auto_play;
+        }
+        tb.group(1);
+        let rebuild = !self.read_only && !self.saving() && one;
+        let rebuild_tip = if rebuild {
+            "Build the game sound (.ogg) of this description again"
+        } else if self.read_only {
+            "The sound folder cannot be written"
+        } else if self.saving() {
+            "The library is saving"
+        } else {
+            "Pick a sound first"
+        };
+        if tb.action("rebuild", Icon::Refresh, "Rebuild", rebuild_tip, rebuild, false, Kind::Ghost)
+            && let Err(e) = self.queue_rebuild()
+        {
+            let asker =
+                if self.editor.flags.unattended { gz_ui::Asker::Unattended } else { gz_ui::Asker::Ui };
+            if let Some(line) = gz_ui::dialog::notice(cx.ctx, asker, Tone::Error, "Rebuild failed", &e) {
+                self.editor.log.plain(line);
+            }
+        }
+        if self.rebuilt.swap(false, std::sync::atomic::Ordering::AcqRel) && !self.selected.is_empty() {
+            // the preview follows the new file
+            let name = self.selected.clone();
+            self.select(Some(&name));
         }
         tb.group(0);
         if self.read_only {
@@ -666,13 +933,22 @@ impl Document for SoundLibDoc {
         let rows = shown(&keys, &|_| true, &self.list.search);
         // only an empty list says where the library is read from
         let empty_text = if items.is_some() && all.is_empty() {
-            format!("The library lists the .wav files in {}. A sound copied there shows up the next time the library opens.", folder_text(&self.editor, &self.dirs.sounds))
+            format!(
+                "The library lists the .wav files in {}. A sound copied there shows up the next time the library opens.",
+                folder_text(&self.editor, &self.dirs.sounds)
+            )
         } else {
             String::new()
         };
-        let empty = Empty { title: if items.is_some() { "No sounds" } else { "Reading the library..." }, text: &empty_text, action: None };
+        let empty = Empty {
+            title: if items.is_some() { "No sounds" } else { "Reading the library..." },
+            text: &empty_text,
+            action: None,
+        };
         let selected = self.selected.clone();
-        let out = pane(ui, list_r, "sound_library.list.pane", false, false, |ui| self.list.draw(ui, KIND, &keys, &rows, &selected, &empty));
+        let out = pane(ui, list_r, "sound_library.list.pane", false, false, |ui| {
+            self.list.draw(ui, KIND, &keys, &rows, &selected, &empty)
+        });
         if let Some(i) = out.picked
             && let Some(name) = keys.get(i)
         {
@@ -683,13 +959,25 @@ impl Document for SoundLibDoc {
         pane(ui, preview_r, "sound_library.preview", true, true, |ui| match &current {
             Some(item) => self.draw_preview(ui, item),
             None => {
-                state::empty_state(ui, Icon::FileSound, "No sound selected", "Pick a sound in the list to hear it and see how far it carries.", None);
+                state::empty_state(
+                    ui,
+                    Icon::FileSound,
+                    "No sound selected",
+                    "Pick a sound in the list to hear it and see how far it carries.",
+                    None,
+                );
             }
         });
         pane(ui, details_r, "sound_library.details", false, true, |ui| match &current {
             Some(item) => self.draw_properties(ui, item),
             None => {
-                state::empty_state(ui, Icon::Settings, "No properties", "Pick a sound to edit its description.", None);
+                state::empty_state(
+                    ui,
+                    Icon::Settings,
+                    "No properties",
+                    "Pick a sound to edit its description.",
+                    None,
+                );
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());

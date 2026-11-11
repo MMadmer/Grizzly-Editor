@@ -12,7 +12,8 @@ pub fn encode(data: &[u8]) -> String {
         let b1 = chunk.get(1).copied().map(u32::from);
         let b2 = chunk.get(2).copied().map(u32::from);
         let v = (b0 << 16) | (b1.unwrap_or(0) << 8) | b2.unwrap_or(0);
-        let digit = |shift: u32| char::from(ALPHABET.get(((v >> shift) & 63) as usize).copied().unwrap_or(b'A'));
+        let digit =
+            |shift: u32| char::from(ALPHABET.get(((v >> shift) & 63) as usize).copied().unwrap_or(b'A'));
         out.push(digit(18));
         out.push(digit(12));
         if b1.is_some() {

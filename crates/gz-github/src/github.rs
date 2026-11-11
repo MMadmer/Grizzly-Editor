@@ -48,7 +48,8 @@ fn problem(r: &Response) -> String {
         text = str_of(&j, "message").to_owned();
         // an entry is an object with code and field, or the sentence itself
         if let Some(first) = array_of(&j, "errors").first() {
-            let mut detail = first.as_str().map_or_else(|| str_of(first, "message").to_owned(), str::to_owned);
+            let mut detail =
+                first.as_str().map_or_else(|| str_of(first, "message").to_owned(), str::to_owned);
             if detail.is_empty() && !str_of(first, "code").is_empty() {
                 detail = format!("{} {}", str_of(first, "field"), str_of(first, "code"));
             }
@@ -57,7 +58,11 @@ fn problem(r: &Response) -> String {
             }
         }
     }
-    if text.is_empty() { format!("GitHub answered {}", r.status) } else { format!("GitHub answered {}: {text}", r.status) }
+    if text.is_empty() {
+        format!("GitHub answered {}", r.status)
+    } else {
+        format!("GitHub answered {}: {text}", r.status)
+    }
 }
 
 /// The refusals that mean the same thing whatever was asked.
@@ -101,7 +106,13 @@ impl Api<'_> {
 
     async fn upload(&self, url: String, path: PathBuf, progress: Progress) -> Response {
         let mut rq = self.request(Kind::Upload, Method::POST, url);
-        rq.body = Body::File { path, prefix: Vec::new(), suffix: Vec::new(), content_type: "application/octet-stream".to_owned(), progress: Some(progress) };
+        rq.body = Body::File {
+            path,
+            prefix: Vec::new(),
+            suffix: Vec::new(),
+            content_type: "application/octet-stream".to_owned(),
+            progress: Some(progress),
+        };
         self.gh.send(rq, self.cancel).await
     }
 }
@@ -188,9 +199,17 @@ struct RemoteAsset {
 }
 
 fn read_assets(release_or_list: &Value) -> Vec<RemoteAsset> {
-    let list = if release_or_list.is_array() { release_or_list.as_array().map_or(&[][..], Vec::as_slice) } else { array_of(release_or_list, "assets") };
+    let list = if release_or_list.is_array() {
+        release_or_list.as_array().map_or(&[][..], Vec::as_slice)
+    } else {
+        array_of(release_or_list, "assets")
+    };
     list.iter()
-        .map(|a| RemoteAsset { id: u64_of(a, "id"), name: str_of(a, "name").to_owned(), state: str_of(a, "state").to_owned() })
+        .map(|a| RemoteAsset {
+            id: u64_of(a, "id"),
+            name: str_of(a, "name").to_owned(),
+            state: str_of(a, "state").to_owned(),
+        })
         .filter(|a| a.id != 0)
         .collect()
 }
@@ -302,11 +321,21 @@ impl Github {
         let ep = self.endpoints();
         // public_repo: a release the game can download lives in a public repository
         let r = self
-            .post_form(format!("{}/login/device/code", ep.web), format!("client_id={}&scope=public_repo", url_encode(&ep.client_id)), cancel)
+            .post_form(
+                format!("{}/login/device/code", ep.web),
+                format!("client_id={}&scope=public_repo", url_encode(&ep.client_id)),
+                cancel,
+            )
             .await;
         let j = if r.status == 200 { r.json() } else { None };
-        let Some(j) = j.filter(|j| !str_of(j, "device_code").is_empty() && !str_of(j, "user_code").is_empty()) else {
-            return Err(if r.status != 0 { format!("GitHub refused to start the sign-in ({})", r.status) } else { r.error });
+        let Some(j) =
+            j.filter(|j| !str_of(j, "device_code").is_empty() && !str_of(j, "user_code").is_empty())
+        else {
+            return Err(if r.status != 0 {
+                format!("GitHub refused to start the sign-in ({})", r.status)
+            } else {
+                r.error
+            });
         };
         let mut uri = str_of(&j, "verification_uri").to_owned();
         if uri.is_empty() {
@@ -366,7 +395,12 @@ impl Github {
 
     /// Publishes a packaged release. Leaves a draft behind when it fails or is stopped before the
     /// last step; the next attempt for the same tag picks that draft up again.
-    pub async fn publish(&self, rq: &PublishRequest, cancel: &Cancel, sink: &dyn PublishSink) -> Result<PublishResult, String> {
+    pub async fn publish(
+        &self,
+        rq: &PublishRequest,
+        cancel: &Cancel,
+        sink: &dyn PublishSink,
+    ) -> Result<PublishResult, String> {
         let api = self.api(&rq.token, cancel);
         let repo_url = self.repo_url(&rq.repo);
         let descriptor_name = format!("{}.update.ltx", rq.module_id);
@@ -379,8 +413,15 @@ impl Github {
         check()?;
         let repo = match r.status {
             401 => return Err("GitHub rejected the sign-in. Sign in again.".to_owned()),
-            404 => return Err(format!("Repository {} was not found, or this account cannot see it.", rq.repo)),
-            300..=399 => return Err(format!("Repository {} has moved. Set its current name in Mod Settings.", rq.repo)),
+            404 => {
+                return Err(format!("Repository {} was not found, or this account cannot see it.", rq.repo));
+            }
+            300..=399 => {
+                return Err(format!(
+                    "Repository {} has moved. Set its current name in Mod Settings.",
+                    rq.repo
+                ));
+            }
             200 => r.json().ok_or_else(|| problem(&r))?,
             _ => return Err(problem(&r)),
         };
@@ -402,7 +443,9 @@ impl Github {
             check()?;
             match (r.status, r.json()) {
                 (200, Some(j)) => {
-                    if let Some(other) = read_assets(&j).iter().find(|a| ends_with_ci(&a.name, ".update.ltx") && !a.name.eq_ignore_ascii_case(&descriptor_name)) {
+                    if let Some(other) = read_assets(&j).iter().find(|a| {
+                        ends_with_ci(&a.name, ".update.ltx") && !a.name.eq_ignore_ascii_case(&descriptor_name)
+                    }) {
                         return Err(format!(
                             "The latest release of {} serves another module ({}). This release would hide it from its players. Use a repository of its own for each module.",
                             rq.repo, other.name
@@ -444,7 +487,11 @@ impl Github {
         // The editor's tags for one version are v<version> and v<version>-r<N>: the suffix is how a
         // version goes out again under a fresh address, not a way around "this version is out".
         let version_tag = format!("v{}", rq.version);
-        if let Some(out) = items.iter().find(|i| !bool_of(i, "draft") && str_of(i, "tag_name") != rq.tag && is_version_tag(str_of(i, "tag_name"), &version_tag)) {
+        if let Some(out) = items.iter().find(|i| {
+            !bool_of(i, "draft")
+                && str_of(i, "tag_name") != rq.tag
+                && is_version_tag(str_of(i, "tag_name"), &version_tag)
+        }) {
             return Err(format!(
                 "Version {} is already published in {} as {}, and a published release is never overwritten. Raise the version - or, to put other files out under this one, delete that release in Releases first: the game then offers the new one to players who have it as a fix.",
                 rq.version,
@@ -521,12 +568,14 @@ impl Github {
         let Some(published) = (if r.status == 200 { r.json() } else { None }) else {
             // the request may have landed before the connection was cut
             return Err(if cancel.is_cancelled() {
-                "Cancelled while the release was being published. Check the release page: it may be out.".to_owned()
+                "Cancelled while the release was being published. Check the release page: it may be out."
+                    .to_owned()
             } else {
                 problem(&r)
             });
         };
-        let mut result = PublishResult { url: str_of(&published, "html_url").to_owned(), ..PublishResult::default() };
+        let mut result =
+            PublishResult { url: str_of(&published, "html_url").to_owned(), ..PublishResult::default() };
         if result.url.is_empty() {
             result.url = self.endpoints().releases_page(&rq.repo);
         }
@@ -541,7 +590,8 @@ impl Github {
         }
         sink.stage("Checking what the game will see");
         let local = tokio::fs::read(&rq.descriptor).await.unwrap_or_default();
-        let address = format!("{}/{}/releases/latest/download/{descriptor_name}", self.endpoints().web, rq.repo);
+        let address =
+            format!("{}/{}/releases/latest/download/{descriptor_name}", self.endpoints().web, rq.repo);
         for attempt in 0..SERVE_ATTEMPTS {
             if result.served || cancel.is_cancelled() {
                 break;
@@ -563,7 +613,15 @@ impl Github {
 
     /// One asset into the draft, tried again after a lost connection, a 5xx or a name clash, and
     /// checked against what was packaged.
-    async fn upload_asset(&self, api: &Api<'_>, repo_url: &str, release_url: &str, upload_url: &str, asset: &Asset, sink: &dyn PublishSink) -> Result<(), String> {
+    async fn upload_asset(
+        &self,
+        api: &Api<'_>,
+        repo_url: &str,
+        release_url: &str,
+        upload_url: &str,
+        asset: &Asset,
+        sink: &dyn PublishSink,
+    ) -> Result<(), String> {
         let cancel = api.cancel;
         sink.stage(&format!("Uploading {}", asset.name));
         let mut failure = String::new();
@@ -575,7 +633,11 @@ impl Github {
                 if cancel.is_cancelled() {
                     return cancelled();
                 }
-                let now = if r.status == 200 { r.json().map(|j| read_assets(&j)).unwrap_or_default() } else { Vec::new() };
+                let now = if r.status == 200 {
+                    r.json().map(|j| read_assets(&j)).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 for stub in now.iter().filter(|a| a.name.eq_ignore_ascii_case(&asset.name)) {
                     let _ = api.delete(format!("{repo_url}/releases/assets/{}", stub.id)).await;
                 }
@@ -591,7 +653,11 @@ impl Github {
                 let sent = sent.clone();
                 Arc::new(move |done: u64, _total: u64| sent.store(done, Ordering::Relaxed))
             };
-            let upload = api.upload(format!("{upload_url}?name={}", url_encode(&asset.name)), asset.path.clone(), progress);
+            let upload = api.upload(
+                format!("{upload_url}?name={}", url_encode(&asset.name)),
+                asset.path.clone(),
+                progress,
+            );
             let r = report_progress(upload, &sent, &asset.name, asset.size, sink).await;
             if cancel.is_cancelled() {
                 return cancelled();
@@ -601,7 +667,10 @@ impl Github {
             {
                 let mismatch = asset_mismatch(&j, asset);
                 if !mismatch.is_empty() {
-                    return Err(format!("GitHub did not store {} as it was packaged: {mismatch}. Nothing was published.", asset.name));
+                    return Err(format!(
+                        "GitHub did not store {} as it was packaged: {mismatch}. Nothing was published.",
+                        asset.name
+                    ));
                 }
                 sink.upload(&asset.name, asset.size, asset.size);
                 return Ok(());
@@ -620,7 +689,12 @@ impl Github {
     //--------------------------------------------------------------------------
 
     /// Newest first, drafts included - those are what a failed attempt leaves behind.
-    pub async fn list_releases(&self, repo: &str, token: &Secret, cancel: &Cancel) -> Result<Vec<ReleaseInfo>, String> {
+    pub async fn list_releases(
+        &self,
+        repo: &str,
+        token: &Secret,
+        cancel: &Cancel,
+    ) -> Result<Vec<ReleaseInfo>, String> {
         let api = self.api(token, cancel);
         let repo_url = self.repo_url(repo);
         // the list does not say which release is the latest; this does
@@ -679,7 +753,15 @@ impl Github {
     /// else: not the assets, not the tag, and not which release is the latest - GitHub's default
     /// for an edit would move that mark onto the edited release, so the request always states
     /// where the mark is now. Answers the release's tag.
-    pub async fn edit_release(&self, repo: &str, token: &Secret, id: u64, title: Option<&str>, notes: Option<&str>, cancel: &Cancel) -> Result<String, String> {
+    pub async fn edit_release(
+        &self,
+        repo: &str,
+        token: &Secret,
+        id: u64,
+        title: Option<&str>,
+        notes: Option<&str>,
+        cancel: &Cancel,
+    ) -> Result<String, String> {
         let api = self.api(token, cancel);
         let repo_url = self.repo_url(repo);
         let release_url = format!("{repo_url}/releases/{id}");
@@ -690,7 +772,9 @@ impl Github {
         if r.status == 404 {
             return Err("The release no longer exists.".to_owned());
         }
-        let Some(j) = (if r.status == 200 { r.json() } else { None }) else { return Err(access_problem(&r, repo)) };
+        let Some(j) = (if r.status == 200 { r.json() } else { None }) else {
+            return Err(access_problem(&r, repo));
+        };
         let tag = str_of(&j, "tag_name").to_owned();
         let can_be_latest = !bool_of(&j, "draft") && !bool_of(&j, "prerelease");
 
@@ -715,7 +799,10 @@ impl Github {
         if let Some(n) = notes {
             body.insert("body".to_owned(), Value::String(n.to_owned()));
         }
-        body.insert("make_latest".to_owned(), Value::String(if is_latest { "true" } else { "false" }.to_owned()));
+        body.insert(
+            "make_latest".to_owned(),
+            Value::String(if is_latest { "true" } else { "false" }.to_owned()),
+        );
         let r = api.send(Method::PATCH, release_url, &Value::Object(body)).await;
         if r.status == 403 {
             return Err(format!(
@@ -724,7 +811,8 @@ impl Github {
         }
         if r.status != 200 {
             return Err(if cancel.is_cancelled() {
-                "Cancelled while the release was being saved. Refresh the list to see what it holds.".to_owned()
+                "Cancelled while the release was being saved. Refresh the list to see what it holds."
+                    .to_owned()
             } else {
                 access_problem(&r, repo)
             });
@@ -736,7 +824,13 @@ impl Github {
     /// turns into a draft instead of going away. A draft owns no tag, so none is touched for it.
     /// GitHub keeps nothing of either - there is no undo. `Ok` = the release is gone; the tag's
     /// fate is in the result.
-    pub async fn delete_release(&self, repo: &str, token: &Secret, id: u64, cancel: &Cancel) -> Result<DeleteResult, String> {
+    pub async fn delete_release(
+        &self,
+        repo: &str,
+        token: &Secret,
+        id: u64,
+        cancel: &Cancel,
+    ) -> Result<DeleteResult, String> {
         let api = self.api(token, cancel);
         let repo_url = self.repo_url(repo);
         let release_url = format!("{repo_url}/releases/{id}");
@@ -748,8 +842,14 @@ impl Github {
         if r.status == 404 {
             return Err("The release no longer exists.".to_owned());
         }
-        let Some(j) = (if r.status == 200 { r.json() } else { None }) else { return Err(access_problem(&r, repo)) };
-        let mut result = DeleteResult { tag: str_of(&j, "tag_name").to_owned(), draft: bool_of(&j, "draft"), ..DeleteResult::default() };
+        let Some(j) = (if r.status == 200 { r.json() } else { None }) else {
+            return Err(access_problem(&r, repo));
+        };
+        let mut result = DeleteResult {
+            tag: str_of(&j, "tag_name").to_owned(),
+            draft: bool_of(&j, "draft"),
+            ..DeleteResult::default()
+        };
 
         let r = api.delete(release_url).await;
         match r.status {
@@ -763,7 +863,8 @@ impl Github {
             _ => {
                 // the request may have landed before the connection was cut
                 return Err(if cancel.is_cancelled() {
-                    "Cancelled while the release was being deleted. Refresh the list: it may be gone.".to_owned()
+                    "Cancelled while the release was being deleted. Refresh the list: it may be gone."
+                        .to_owned()
                 } else {
                     access_problem(&r, repo)
                 });
@@ -774,10 +875,17 @@ impl Github {
         }
         let r = api.delete(format!("{repo_url}/git/refs/tags/{}", encode_ref(&result.tag))).await;
         // "Reference does not exist": nothing to remove is as good as removed
-        if r.status == 204 || r.status == 404 || (r.status == 422 && String::from_utf8_lossy(&r.body).contains("does not exist")) {
+        if r.status == 204
+            || r.status == 404
+            || (r.status == 422 && String::from_utf8_lossy(&r.body).contains("does not exist"))
+        {
             result.tag_removed = true;
         } else {
-            result.tag_note = if cancel.is_cancelled() { "cancelled before the tag was removed".to_owned() } else { problem(&r) };
+            result.tag_note = if cancel.is_cancelled() {
+                "cancelled before the tag was removed".to_owned()
+            } else {
+                problem(&r)
+            };
         }
         Ok(result)
     }
@@ -788,7 +896,12 @@ impl Github {
 
     /// An anonymous GET that follows redirects. No token travels with it, whatever the address: a
     /// release asset, the catalog index, a website. `Ok((status, body))`.
-    pub async fn fetch_public(&self, url: &str, limit: u64, cancel: &Cancel) -> Result<(u16, Vec<u8>), String> {
+    pub async fn fetch_public(
+        &self,
+        url: &str,
+        limit: u64,
+        cancel: &Cancel,
+    ) -> Result<(u16, Vec<u8>), String> {
         let mut rq = Request::new(Kind::Public, Method::GET, url);
         rq.limit = limit;
         let r = self.send(rq, cancel).await;
@@ -834,11 +947,24 @@ impl Github {
     /// The account's newest `Submit <id>` (or `Withdraw <id>`) issue of the catalog, in any
     /// state; `out` keeps what it has when there is none. The list is newest first and holds the
     /// account's pull requests as well.
-    async fn find_issue(&self, api: &Api<'_>, login: &str, module_id: &str, kind: IssueKind, out: &mut CatalogIssue) -> Result<(), String> {
+    async fn find_issue(
+        &self,
+        api: &Api<'_>,
+        login: &str,
+        module_id: &str,
+        kind: IssueKind,
+        out: &mut CatalogIssue,
+    ) -> Result<(), String> {
         let catalog = &self.endpoints().catalog_repo;
         let title = issue_title(kind, module_id);
         for page in 1..=10 {
-            let r = api.get(format!("{}/issues?creator={}&state=all&per_page=100&page={page}", self.catalog_url(), url_encode(login))).await;
+            let r = api
+                .get(format!(
+                    "{}/issues?creator={}&state=all&per_page=100&page={page}",
+                    self.catalog_url(),
+                    url_encode(login)
+                ))
+                .await;
             if api.cancel.is_cancelled() {
                 return cancelled();
             }
@@ -849,7 +975,9 @@ impl Github {
                 Some(Value::Array(items)) if r.status == 200 => items,
                 _ => return Err(access_problem(&r, catalog)),
             };
-            if let Some(found) = items.iter().find(|i| i.get("pull_request").is_none() && str_of(i, "title") == title) {
+            if let Some(found) =
+                items.iter().find(|i| i.get("pull_request").is_none() && str_of(i, "title") == title)
+            {
                 read_issue(found, out);
                 return Ok(());
             }
@@ -865,12 +993,19 @@ impl Github {
     /// the submission without a verdict rather than with an old one.
     async fn read_verdict(&self, api: &Api<'_>, out: &mut CatalogIssue) -> Result<(), String> {
         for page in 1..=30 {
-            let r = api.get(format!("{}/issues/{}/comments?per_page=100&page={page}", self.catalog_url(), out.number)).await;
+            let r = api
+                .get(format!(
+                    "{}/issues/{}/comments?per_page=100&page={page}",
+                    self.catalog_url(),
+                    out.number
+                ))
+                .await;
             if api.cancel.is_cancelled() {
                 return cancelled();
             }
             let Some(Value::Array(items)) = (if r.status == 200 { r.json() } else { None }) else { break };
-            let comments = items.iter().map(|c| (c.get("user").map_or("", |u| str_of(u, "login")), str_of(c, "body")));
+            let comments =
+                items.iter().map(|c| (c.get("user").map_or("", |u| str_of(u, "login")), str_of(c, "body")));
             if let Some((state, text)) = catalog::newest_verdict(comments) {
                 out.verdict = state;
                 out.verdict_text = text;
@@ -886,11 +1021,28 @@ impl Github {
 
     /// A new issue, or the text of the account's open one - an edit makes the catalog judge it
     /// again. `what` names it in an error: submission, withdrawal.
-    async fn send_issue(&self, api: &Api<'_>, title: &str, text: &str, what: &str, out: &mut CatalogIssue) -> Result<(), String> {
+    async fn send_issue(
+        &self,
+        api: &Api<'_>,
+        title: &str,
+        text: &str,
+        what: &str,
+        out: &mut CatalogIssue,
+    ) -> Result<(), String> {
         let r = if out.number != 0 && out.state == "open" {
-            api.send(Method::PATCH, format!("{}/issues/{}", self.catalog_url(), out.number), &json!({ "body": text })).await
+            api.send(
+                Method::PATCH,
+                format!("{}/issues/{}", self.catalog_url(), out.number),
+                &json!({ "body": text }),
+            )
+            .await
         } else {
-            api.send(Method::POST, format!("{}/issues", self.catalog_url()), &json!({ "body": text, "title": title })).await
+            api.send(
+                Method::POST,
+                format!("{}/issues", self.catalog_url()),
+                &json!({ "body": text, "title": title }),
+            )
+            .await
         };
         if api.cancel.is_cancelled() {
             return cancelled();
@@ -900,7 +1052,10 @@ impl Github {
                 read_issue(&j, out);
                 Ok(())
             }
-            _ => Err(format!("GitHub refused the {what}: {}", access_problem(&r, &self.endpoints().catalog_repo))),
+            _ => Err(format!(
+                "GitHub refused the {what}: {}",
+                access_problem(&r, &self.endpoints().catalog_repo)
+            )),
         }
     }
 
@@ -908,7 +1063,9 @@ impl Github {
     async fn listing(&self, api: &Api<'_>, module_id: &str) -> (Response, Option<String>) {
         let r = api.get(format!("{}/contents/mods/{module_id}.ltx", self.catalog_url())).await;
         let text = if r.status == 200 {
-            r.json().and_then(|j| catalog::un_base64(str_of(&j, "content"))).map(|b| String::from_utf8_lossy(&b).into_owned())
+            r.json()
+                .and_then(|j| catalog::un_base64(str_of(&j, "content")))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
         } else {
             None
         };
@@ -918,7 +1075,12 @@ impl Github {
     /// The account's open submission takes the new text - an edit makes the catalog judge it
     /// again; without one a new issue opens. Nothing is sent when the catalog's default branch
     /// already holds this very file. An issue is public from the first second.
-    pub async fn catalog_submit(&self, rq: &CatalogRequest, cancel: &Cancel, stage: &(dyn Fn(&str) + Send + Sync)) -> Result<CatalogIssue, String> {
+    pub async fn catalog_submit(
+        &self,
+        rq: &CatalogRequest,
+        cancel: &Cancel,
+        stage: &(dyn Fn(&str) + Send + Sync),
+    ) -> Result<CatalogIssue, String> {
         let api = self.api(&rq.token, cancel);
         let mut out = CatalogIssue::default();
         stage("Reading the GitHub account");
@@ -943,9 +1105,20 @@ impl Github {
 
         // The open submission takes the new text, and the edit makes the catalog judge it again.
         // Once the last one is closed - accepted or refused - a new one opens.
-        stage(if out.number != 0 && out.state == "open" { "Updating the submission" } else { "Opening the submission" });
+        stage(if out.number != 0 && out.state == "open" {
+            "Updating the submission"
+        } else {
+            "Opening the submission"
+        });
         let body = catalog::submission_body(&rq.file_text, &rq.details);
-        self.send_issue(&api, &issue_title(IssueKind::Submission, &rq.module_id), &body, "submission", &mut out).await?;
+        self.send_issue(
+            &api,
+            &issue_title(IssueKind::Submission, &rq.module_id),
+            &body,
+            "submission",
+            &mut out,
+        )
+        .await?;
         Ok(out)
     }
 
@@ -953,7 +1126,12 @@ impl Github {
     /// one. Refused with nothing sent when the default branch does not hold the module or names
     /// another owner; a note and nothing sent when it is withdrawn already. The account's open
     /// withdrawal is edited rather than doubled.
-    pub async fn catalog_withdraw(&self, rq: &CatalogWithdrawal, cancel: &Cancel, stage: &(dyn Fn(&str) + Send + Sync)) -> Result<CatalogIssue, String> {
+    pub async fn catalog_withdraw(
+        &self,
+        rq: &CatalogWithdrawal,
+        cancel: &Cancel,
+        stage: &(dyn Fn(&str) + Send + Sync),
+    ) -> Result<CatalogIssue, String> {
         let api = self.api(&rq.token, cancel);
         let catalog = self.endpoints().catalog_repo.clone();
         let mut out = CatalogIssue::default();
@@ -967,9 +1145,14 @@ impl Github {
             return cancelled();
         }
         if r.status == 404 {
-            return Err(format!("{} is not in the Mod Browser catalog: there is nothing to withdraw.", rq.module_id));
+            return Err(format!(
+                "{} is not in the Mod Browser catalog: there is nothing to withdraw.",
+                rq.module_id
+            ));
         }
-        let Some(listing) = listing else { return Err(format!("The catalog's listing could not be read: {}", access_problem(&r, &catalog))) };
+        let Some(listing) = listing else {
+            return Err(format!("The catalog's listing could not be read: {}", access_problem(&r, &catalog)));
+        };
         let github = ini::value(&listing, "mod", "github").unwrap_or("").to_owned();
         let withdrawn = ini::value(&listing, "mod", "withdrawn").unwrap_or("");
         let owner = github.split('/').next().unwrap_or("");
@@ -993,15 +1176,32 @@ impl Github {
             }
             return Ok(out);
         }
-        stage(if out.number != 0 && out.state == "open" { "Updating the withdrawal" } else { "Opening the withdrawal" });
+        stage(if out.number != 0 && out.state == "open" {
+            "Updating the withdrawal"
+        } else {
+            "Opening the withdrawal"
+        });
         let body = catalog::withdrawal_body(&rq.module_id, &rq.details);
-        self.send_issue(&api, &issue_title(IssueKind::Withdrawal, &rq.module_id), &body, "withdrawal", &mut out).await?;
+        self.send_issue(
+            &api,
+            &issue_title(IssueKind::Withdrawal, &rq.module_id),
+            &body,
+            "withdrawal",
+            &mut out,
+        )
+        .await?;
         Ok(out)
     }
 
     /// The account's newest submission (or withdrawal) of the module, in any state, with the
     /// catalog's newest verdict.
-    pub async fn catalog_issue(&self, module_id: &str, token: &Secret, kind: IssueKind, cancel: &Cancel) -> Result<CatalogIssue, String> {
+    pub async fn catalog_issue(
+        &self,
+        module_id: &str,
+        token: &Secret,
+        kind: IssueKind,
+        cancel: &Cancel,
+    ) -> Result<CatalogIssue, String> {
         let api = self.api(token, cancel);
         let mut out = CatalogIssue { login: read_login(&api).await?, ..CatalogIssue::default() };
         self.find_issue(&api, &out.login.clone(), module_id, kind, &mut out).await?;
@@ -1013,7 +1213,13 @@ impl Github {
 }
 
 /// Waits for an upload and passes its progress on to the sink as it goes.
-async fn report_progress(upload: impl Future<Output = Response>, sent: &AtomicU64, name: &str, total: u64, sink: &dyn PublishSink) -> Response {
+async fn report_progress(
+    upload: impl Future<Output = Response>,
+    sent: &AtomicU64,
+    name: &str,
+    total: u64,
+    sink: &dyn PublishSink,
+) -> Response {
     let mut upload = std::pin::pin!(upload);
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(200));
     loop {
@@ -1063,15 +1269,31 @@ mod tests {
 
     #[test]
     fn stored_asset_check() {
-        let local = Asset { name: "od-1.0.0.zip".to_owned(), size: 10, sha256: "ab".to_owned(), ..Asset::default() };
+        let local =
+            Asset { name: "od-1.0.0.zip".to_owned(), size: 10, sha256: "ab".to_owned(), ..Asset::default() };
         let ok = json!({ "name": "od-1.0.0.zip", "size": 10, "state": "uploaded", "digest": "sha256:AB" });
         assert_eq!(asset_mismatch(&ok, &local), "");
         let no_digest = json!({ "name": "od-1.0.0.zip", "size": 10, "state": "uploaded" });
         assert_eq!(asset_mismatch(&no_digest, &local), "");
-        assert_eq!(asset_mismatch(&json!({ "name": "od-1.0.0.zip", "size": 9, "state": "uploaded" }), &local), "9 byte(s) stored, 10 packaged");
-        assert_eq!(asset_mismatch(&json!({ "name": "x.zip", "size": 10 }), &local), "stored under the name 'x.zip'");
-        assert_eq!(asset_mismatch(&json!({ "name": "od-1.0.0.zip", "size": 10, "state": "starter" }), &local), "state 'starter'");
-        assert_eq!(asset_mismatch(&json!({ "name": "od-1.0.0.zip", "size": 10, "state": "uploaded", "digest": "sha256:cd" }), &local), "the SHA-256 differs");
+        assert_eq!(
+            asset_mismatch(&json!({ "name": "od-1.0.0.zip", "size": 9, "state": "uploaded" }), &local),
+            "9 byte(s) stored, 10 packaged"
+        );
+        assert_eq!(
+            asset_mismatch(&json!({ "name": "x.zip", "size": 10 }), &local),
+            "stored under the name 'x.zip'"
+        );
+        assert_eq!(
+            asset_mismatch(&json!({ "name": "od-1.0.0.zip", "size": 10, "state": "starter" }), &local),
+            "state 'starter'"
+        );
+        assert_eq!(
+            asset_mismatch(
+                &json!({ "name": "od-1.0.0.zip", "size": 10, "state": "uploaded", "digest": "sha256:cd" }),
+                &local
+            ),
+            "the SHA-256 differs"
+        );
     }
 
     #[test]
@@ -1095,8 +1317,17 @@ mod tests {
         assert!(!own_asset_name(&rq, "other.update.ltx"));
         assert_eq!(short_time("2026-09-19T12:34:56Z"), "2026-09-19 12:34");
         assert_eq!(short_time("soon"), "soon");
-        let r = Response { status: 422, body: br#"{"message":"Validation Failed","errors":[{"field":"tag_name","code":"already_exists"}]}"#.to_vec(), ..Response::default() };
+        let r = Response {
+            status: 422,
+            body:
+                br#"{"message":"Validation Failed","errors":[{"field":"tag_name","code":"already_exists"}]}"#
+                    .to_vec(),
+            ..Response::default()
+        };
         assert_eq!(problem(&r), "GitHub answered 422: Validation Failed (tag_name already_exists)");
-        assert_eq!(access_problem(&Response { status: 401, ..Response::default() }, "a/b"), "GitHub rejected the sign-in. Sign in again.");
+        assert_eq!(
+            access_problem(&Response { status: 401, ..Response::default() }, "a/b"),
+            "GitHub rejected the sign-in. Sign in again."
+        );
     }
 }

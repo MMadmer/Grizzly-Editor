@@ -19,7 +19,10 @@ use gz_ui::grid::read_only;
 use gz_ui::list::list;
 use gz_ui::state::{badge, busy_line, empty_state};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Answer, Asker, Button, ConfirmSpec, Font, Icon, Kind, PropFlags, PropertyGrid, Toolbar, ToolbarStyle, Tone, metrics, palette};
+use gz_ui::{
+    Answer, Asker, Button, ConfirmSpec, Font, Icon, Kind, PropFlags, PropertyGrid, Tone, Toolbar,
+    ToolbarStyle, metrics, palette,
+};
 
 use crate::assets::PdaAssets;
 use crate::local::{local_code_view, local_section, local_tab_strip};
@@ -70,7 +73,13 @@ fn set_toast(m: &mut Model, text: String) {
 }
 
 impl PdaDoc {
-    fn new(editor: Arc<Editor>, tab: Arc<PdaTab>, assets: Arc<PdaAssets>, serial: u64, target: Target) -> Self {
+    fn new(
+        editor: Arc<Editor>,
+        tab: Arc<PdaTab>,
+        assets: Arc<PdaAssets>,
+        serial: u64,
+        target: Target,
+    ) -> Self {
         Self {
             editor,
             tab,
@@ -86,7 +95,10 @@ impl PdaDoc {
         }
     }
 
-    fn spawn(&self, f: impl FnOnce(Arc<Editor>, Arc<PdaTab>) -> futures::future::BoxFuture<'static, ()> + Send + 'static) {
+    fn spawn(
+        &self,
+        f: impl FnOnce(Arc<Editor>, Arc<PdaTab>) -> futures::future::BoxFuture<'static, ()> + Send + 'static,
+    ) {
         let (ed, tab) = (self.editor.clone(), self.tab.clone());
         let _task = self.editor.exec.spawn(f(ed, tab));
     }
@@ -228,12 +240,21 @@ impl PdaDoc {
         // what the tab shows and whether the module uses it
         let name = m.shown_name();
         let is_used = !m.rel.is_empty() && same_path(&used, &m.rel);
-        let right = if is_used { text::width(ui.ctx(), &Font::Small.id(), "Used by the module") + 12.0 } else { gz_ui::units::button_width(ui.ctx(), "Use in Module", Kind::Secondary, false, 0.0) };
+        let right = if is_used {
+            text::width(ui.ctx(), &Font::Small.id(), "Used by the module") + 12.0
+        } else {
+            gz_ui::units::button_width(ui.ctx(), "Use in Module", Kind::Secondary, false, 0.0)
+        };
         let mut use_it = false;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let (r, _) = ui.allocate_exact_size(Vec2::new(metrics::GLYPH, metrics::FRAME), Sense::hover());
-            gz_ui::icons::draw(ui.painter(), Icon::PdaInterface, Rect::from_center_size(r.center(), Vec2::splat(metrics::GLYPH)), p.text_secondary);
+            gz_ui::icons::draw(
+                ui.painter(),
+                Icon::PdaInterface,
+                Rect::from_center_size(r.center(), Vec2::splat(metrics::GLYPH)),
+                p.text_secondary,
+            );
             let room = (ui.available_width() - right - 8.0).max(0.0);
             ui.scope(|ui| {
                 ui.set_max_width(room);
@@ -241,9 +262,14 @@ impl PdaDoc {
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if is_used {
-                    ui.scope(|ui| badge(ui, "Used by the module", Tone::Success)).response.on_hover_text("mod.ltx [pda] layout names this file: the game shows it in the PDA.");
+                    ui.scope(|ui| badge(ui, "Used by the module", Tone::Success))
+                        .response
+                        .on_hover_text("mod.ltx [pda] layout names this file: the game shows it in the PDA.");
                 } else {
-                    let tip = format!("Write [pda] layout = {} into mod.ltx: the game shows this interface in the PDA.", m.rel);
+                    let tip = format!(
+                        "Write [pda] layout = {} into mod.ltx: the game shows this interface in the PDA.",
+                        m.rel
+                    );
                     use_it = Button::new("Use in Module").tip(&tip).show(ui).clicked();
                 }
             });
@@ -265,7 +291,12 @@ impl PdaDoc {
         ui.add_space(4.0);
 
         let problems = m.preview.layout.problems.len() + usize::from(!m.read_ok);
-        let labels = [if problems > 0 { format!("Problems ({problems})") } else { "Problems".to_owned() }, "Pages".to_owned(), "Vars".to_owned(), "Log".to_owned()];
+        let labels = [
+            if problems > 0 { format!("Problems ({problems})") } else { "Problems".to_owned() },
+            "Pages".to_owned(),
+            "Vars".to_owned(),
+            "Log".to_owned(),
+        ];
         if let Some(t) = m.want_tab.take() {
             m.tab = t;
         }
@@ -273,18 +304,25 @@ impl PdaDoc {
         local_tab_strip(ui, "pda_details", &labels, &mut tab);
         m.tab = tab;
         ui.add_space(6.0);
-        ScrollArea::vertical().id_salt(("gz-ui-pda.details", tab)).auto_shrink([false, false]).show(ui, |ui| match tab {
-            0 => self.draw_problems(ui, m),
-            1 => draw_pages(ui, m),
-            2 => draw_vars(ui, m),
-            _ => draw_log(ui, m),
-        });
+        ScrollArea::vertical().id_salt(("gz-ui-pda.details", tab)).auto_shrink([false, false]).show(
+            ui,
+            |ui| match tab {
+                0 => self.draw_problems(ui, m),
+                1 => draw_pages(ui, m),
+                2 => draw_vars(ui, m),
+                _ => draw_log(ui, m),
+            },
+        );
     }
 
     fn draw_problems(&self, ui: &mut Ui, m: &mut Model) {
         let p = palette(ui.ctx());
         if !m.read_ok {
-            let text = if m.read_line > 0 { format!("Line {}: {}", m.read_line, m.read_err) } else { m.read_err.clone() };
+            let text = if m.read_line > 0 {
+                format!("Line {}: {}", m.read_line, m.read_err)
+            } else {
+                m.read_err.clone()
+            };
             text::status(ui, Tone::Error, &text);
             if m.read_line > 0 && Button::new("Go to Line").show(ui).clicked() {
                 m.show_source = true;
@@ -300,14 +338,26 @@ impl PdaDoc {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     badge(ui, &pr.code, if pr.is_error() { Tone::Error } else { Tone::Warning });
-                    text::label(ui, if pr.path.is_empty() { "layout" } else { &pr.path }, Font::Small, p.text_muted, Clip::End);
+                    text::label(
+                        ui,
+                        if pr.path.is_empty() { "layout" } else { &pr.path },
+                        Font::Small,
+                        p.text_muted,
+                        Clip::End,
+                    );
                 });
                 text::prose(ui, &pr.message);
                 ui.add_space(6.0);
             });
         }
         if !m.reader_source.is_empty() {
-            text::label(ui, &format!("Checked by {}", m.reader_source), Font::Small, p.text_muted, Clip::Start);
+            text::label(
+                ui,
+                &format!("Checked by {}", m.reader_source),
+                Font::Small,
+                p.text_muted,
+                Clip::Start,
+            );
         }
     }
 
@@ -317,15 +367,42 @@ impl PdaDoc {
         {
             // the toolbar keeps the pane's margin; the text runs edge to edge under it
             let w = ui.available_width();
-            let bar = Rect::from_min_size(ui.cursor().min + Vec2::new(8.0, 0.0), Vec2::new((w - 16.0).max(1.0), ToolbarStyle::Panel.height()));
-            let mut bar_ui = ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.source_bar").max_rect(bar).layout(Layout::left_to_right(Align::Center)));
-            ui.allocate_rect(Rect::from_min_size(ui.cursor().min, Vec2::new(w, ToolbarStyle::Panel.height())), Sense::hover());
+            let bar = Rect::from_min_size(
+                ui.cursor().min + Vec2::new(8.0, 0.0),
+                Vec2::new((w - 16.0).max(1.0), ToolbarStyle::Panel.height()),
+            );
+            let mut bar_ui = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-pda.source_bar")
+                    .max_rect(bar)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            ui.allocate_rect(
+                Rect::from_min_size(ui.cursor().min, Vec2::new(w, ToolbarStyle::Panel.height())),
+                Sense::hover(),
+            );
             let mut tb = Toolbar::begin(&mut bar_ui, "pda_source", ToolbarStyle::Panel);
             tb.group(2);
-            apply = tb.action("apply", Icon::Check, "Apply", "Show the text in the preview without saving it (Ctrl+Enter)", true, false, Kind::Ghost);
+            apply = tb.action(
+                "apply",
+                Icon::Check,
+                "Apply",
+                "Show the text in the preview without saving it (Ctrl+Enter)",
+                true,
+                false,
+                Kind::Ghost,
+            );
             if !m.read_ok && m.read_line > 0 {
                 let label = format!("Line {}", m.read_line);
-                goto = tb.action("goto_error", Icon::Error, &label, "Scroll to the line the reader stopped at", true, false, Kind::Ghost);
+                goto = tb.action(
+                    "goto_error",
+                    Icon::Error,
+                    &label,
+                    "Scroll to the line the reader stopped at",
+                    true,
+                    false,
+                    Kind::Ghost,
+                );
             }
             tb.spring();
             tb.group(1);
@@ -363,7 +440,13 @@ fn post_notice(editor: &Arc<Editor>, title: &'static str, text: String) {
     let log = editor.log.clone();
     match gz_app::UiQueue::of(editor) {
         Ok(q) => q.post(move |_, ctx| {
-            if let Some(line) = gz_ui::dialog::notice(ctx, if unattended { Asker::Unattended } else { Asker::Ui }, Tone::Error, title, &text) {
+            if let Some(line) = gz_ui::dialog::notice(
+                ctx,
+                if unattended { Asker::Unattended } else { Asker::Ui },
+                Tone::Error,
+                title,
+                &text,
+            ) {
                 log.info(line);
             }
         }),
@@ -387,7 +470,11 @@ fn draw_pages(ui: &mut Ui, m: &mut Model) {
                         ui.set_max_width(room * 0.6);
                         text::label(ui, title, Font::Body, p.text, Clip::End);
                     });
-                    let id = if pg.stock.is_empty() { pg.id.clone() } else { format!("{} \u{b7} stock {}", pg.id, pg.stock) };
+                    let id = if pg.stock.is_empty() {
+                        pg.id.clone()
+                    } else {
+                        format!("{} \u{b7} stock {}", pg.id, pg.stock)
+                    };
                     text::label(ui, &id, Font::Body, p.text_muted, Clip::End);
                 });
                 if resp.clicked() {
@@ -399,7 +486,11 @@ fn draw_pages(ui: &mut Ui, m: &mut Model) {
     }
     ui.add_space(8.0);
     if local_section(ui, "pda_keys", "Keys", true) {
-        let keys = [("map", "Map key", layout.key_map.clone()), ("contacts", "Contacts key", layout.key_contacts.clone()), ("tasks", "Tasks key", layout.key_tasks.clone())];
+        let keys = [
+            ("map", "Map key", layout.key_map.clone()),
+            ("contacts", "Contacts key", layout.key_contacts.clone()),
+            ("tasks", "Tasks key", layout.key_tasks.clone()),
+        ];
         let now = super::canvas::clock_now();
         list(ui, "pda_keys_list", Vec2::new(0.0, metrics::ROW * 3.0 + 10.0), |l| {
             for (key, label, action) in &keys {
@@ -409,7 +500,13 @@ fn draw_pages(ui: &mut Ui, m: &mut Model) {
                         ui.set_max_width(room * 0.45);
                         text::label(ui, label, Font::Body, p.text, Clip::End);
                     });
-                    text::label(ui, if action.is_empty() { "the stock section" } else { action }, Font::Body, p.text_muted, Clip::End);
+                    text::label(
+                        ui,
+                        if action.is_empty() { "the stock section" } else { action },
+                        Font::Body,
+                        p.text_muted,
+                        Clip::End,
+                    );
                 });
                 if resp.clicked() {
                     m.preview.open_key(key, &now);
@@ -425,13 +522,20 @@ fn draw_vars(ui: &mut Ui, m: &mut Model) {
     let declared = layout.vars.len();
     let view = m.preview.vars_view();
     if view.is_empty() {
-        empty_state(ui, Icon::Variable, "No vars", "The layout declares none, and no action has set one yet.", None);
+        empty_state(
+            ui,
+            Icon::Variable,
+            "No vars",
+            "The layout declares none, and no action has set one yet.",
+            None,
+        );
         return;
     }
     PropertyGrid::new("pda_vars").show(ui, |g| {
         for (i, (name, value)) in view.iter().enumerate() {
             let label = format!("{{{name}}}");
-            let help = if i < declared { "Declared by the layout" } else { "Set by an action in the preview" };
+            let help =
+                if i < declared { "Declared by the layout" } else { "Set by an action in the preview" };
             g.row(&label, help, PropFlags::READ_ONLY, 0, |ui| read_only(ui, value, Clip::End));
         }
     });
@@ -440,7 +544,13 @@ fn draw_vars(ui: &mut Ui, m: &mut Model) {
 fn draw_log(ui: &mut Ui, m: &mut Model) {
     let p = palette(ui.ctx());
     if m.preview.log.is_empty() {
-        empty_state(ui, Icon::Log, "No actions yet", "Click a button in the preview: every action it runs is listed here, the newest first.", None);
+        empty_state(
+            ui,
+            Icon::Log,
+            "No actions yet",
+            "Click a button in the preview: every action it runs is listed here, the newest first.",
+            None,
+        );
         return;
     }
     if Button::new("Clear").kind(Kind::Ghost).show(ui).clicked() {
@@ -497,6 +607,10 @@ impl Document for PdaDoc {
         self.tab.m.lock().text_dirty
     }
 
+    fn dirty_elsewhere(&self) -> bool {
+        true
+    }
+
     fn padded(&self) -> bool {
         false
     }
@@ -513,10 +627,26 @@ impl Document for PdaDoc {
             (m.text_dirty, m.preview.aspect == Aspect::Wide, m.preview.lang.clone(), m.zoom)
         };
         tb.group(3);
-        if tb.action("save", Icon::Save, "Save", if dirty { "Write the Source pane's text to the file (Ctrl+S)" } else { clean }, dirty, false, Kind::Ghost) {
+        if tb.action(
+            "save",
+            Icon::Save,
+            "Save",
+            if dirty { "Write the Source pane's text to the file (Ctrl+S)" } else { clean },
+            dirty,
+            false,
+            Kind::Ghost,
+        ) {
             self.save_async();
         }
-        if tb.action("revert", Icon::Undo, "Revert", if dirty { "Drop the unsaved edits and read the file again" } else { clean }, dirty, false, Kind::Ghost) {
+        if tb.action(
+            "revert",
+            Icon::Undo,
+            "Revert",
+            if dirty { "Drop the unsaved edits and read the file again" } else { clean },
+            dirty,
+            false,
+            Kind::Ghost,
+        ) {
             self.revert(cx.ctx);
         }
         if tb.action("reload", Icon::Reload, "Reload", "Read the game's textures, fonts and layout reader again, and the file when the Source pane holds no edits", true, false, Kind::Ghost) {
@@ -526,11 +656,25 @@ impl Document for PdaDoc {
         // in the overflow each of these is a set of radio items
         tb.group(5);
         let mut aspect = usize::from(wide);
-        if tb.segmented("aspect", "Aspect", &mut aspect, &["4:3", "16:9"], "The device's shape: 4:3 draws the game's pda.xml, 16:9 its pda_16.xml", true) {
+        if tb.segmented(
+            "aspect",
+            "Aspect",
+            &mut aspect,
+            &["4:3", "16:9"],
+            "The device's shape: 4:3 draws the game's pda.xml, 16:9 its pda_16.xml",
+            true,
+        ) {
             self.tab.m.lock().preview.aspect = if aspect == 1 { Aspect::Wide } else { Aspect::Standard };
         }
         let mut lang_i = usize::from(lang == "eng");
-        if tb.segmented("lang", "Language", &mut lang_i, &["rus", "eng"], "The language the texts show in: { rus = ..., eng = ... }", true) {
+        if tb.segmented(
+            "lang",
+            "Language",
+            &mut lang_i,
+            &["rus", "eng"],
+            "The language the texts show in: { rus = ..., eng = ... }",
+            true,
+        ) {
             self.tab.m.lock().preview.lang = if lang_i == 1 { "eng" } else { "rus" }.to_owned();
             self.read_async();
         }
@@ -555,7 +699,15 @@ impl Document for PdaDoc {
         }
 
         tb.group(0);
-        if tb.action("reset_state", Icon::Refresh, "Reset State", "Back to the start page, with every var and panel as the file declares them", true, false, Kind::Ghost) {
+        if tb.action(
+            "reset_state",
+            Icon::Refresh,
+            "Reset State",
+            "Back to the start page, with every var and panel as the file declares them",
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             self.tab.m.lock().reset_state();
         }
 
@@ -564,11 +716,27 @@ impl Document for PdaDoc {
             let m = self.tab.m.lock();
             (m.show_source, m.show_side)
         };
-        if tb.action("source", Icon::FileScript, "Source", "Show the layout's text under the preview", true, src, Kind::Ghost) {
+        if tb.action(
+            "source",
+            Icon::FileScript,
+            "Source",
+            "Show the layout's text under the preview",
+            true,
+            src,
+            Kind::Ghost,
+        ) {
             let mut m = self.tab.m.lock();
             m.show_source = !m.show_source;
         }
-        if tb.action("details", Icon::SidebarRight, "Details", "Show the problems, pages, vars and the action log beside the preview", true, side, Kind::Ghost) {
+        if tb.action(
+            "details",
+            Icon::SidebarRight,
+            "Details",
+            "Show the problems, pages, vars and the action log beside the preview",
+            true,
+            side,
+            Kind::Ghost,
+        ) {
             let mut m = self.tab.m.lock();
             m.show_side = !m.show_side;
         }
@@ -588,11 +756,18 @@ impl Document for PdaDoc {
         m.drawn_frame = Some(ctx.cumulative_frame_nr());
         if m.path.is_empty() {
             drop(m);
-            let mut child = ui.new_child(UiBuilder::new().max_rect(full.shrink(16.0)).layout(Layout::top_down(Align::Min)));
+            let mut child = ui
+                .new_child(UiBuilder::new().max_rect(full.shrink(16.0)).layout(Layout::top_down(Align::Min)));
             if self.opening.load(Ordering::SeqCst) {
                 busy_line(&mut child, "Opening the PDA interface...");
             } else {
-                empty_state(&mut child, Icon::PdaInterface, "No PDA interface", "Open a .pdaasset from the Content Browser, or Mod > PDA Interface.", None);
+                empty_state(
+                    &mut child,
+                    Icon::PdaInterface,
+                    "No PDA interface",
+                    "Open a .pdaasset from the Content Browser, or Mod > PDA Interface.",
+                    None,
+                );
             }
             ui.allocate_rect(full, Sense::hover());
             return;
@@ -601,33 +776,77 @@ impl Document for PdaDoc {
         // canvas | Details, over the Source pane; Details and Source keep their pt size, the canvas takes every resize
         let gap_y = ui.spacing().item_spacing.y;
         let gap_x = ui.spacing().item_spacing.x;
-        let source_h = if m.show_source { gz_ui::splitter::splitter_tail(ui, "pda.source", false, CANVAS_MIN_H, SOURCE_MIN, SOURCE_H).size } else { 0.0 };
+        let source_h = if m.show_source {
+            gz_ui::splitter::splitter_tail(ui, "pda.source", false, CANVAS_MIN_H, SOURCE_MIN, SOURCE_H).size
+        } else {
+            0.0
+        };
         m.source_h = source_h;
-        let top = if m.show_source { Rect::from_min_max(full.min, pos2(full.max.x, (full.max.y - source_h - gap_y).max(full.min.y + 1.0))) } else { full };
-        let mut top_ui = ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.top").max_rect(top).layout(Layout::left_to_right(Align::Min)));
-        let details_w = if m.show_side { gz_ui::splitter::splitter_tail(&mut top_ui, "pda.details", true, CANVAS_MIN_W, SIDE_MIN, DETAILS_W).size } else { 0.0 };
+        let top = if m.show_source {
+            Rect::from_min_max(
+                full.min,
+                pos2(full.max.x, (full.max.y - source_h - gap_y).max(full.min.y + 1.0)),
+            )
+        } else {
+            full
+        };
+        let mut top_ui = ui.new_child(
+            UiBuilder::new().id_salt("gz-ui-pda.top").max_rect(top).layout(Layout::left_to_right(Align::Min)),
+        );
+        let details_w = if m.show_side {
+            gz_ui::splitter::splitter_tail(
+                &mut top_ui,
+                "pda.details",
+                true,
+                CANVAS_MIN_W,
+                SIDE_MIN,
+                DETAILS_W,
+            )
+            .size
+        } else {
+            0.0
+        };
         m.details_w = details_w;
-        let canvas = if m.show_side { Rect::from_min_max(top.min, pos2((top.max.x - details_w - gap_x).max(top.min.x + 1.0), top.max.y)) } else { top };
+        let canvas = if m.show_side {
+            Rect::from_min_max(top.min, pos2((top.max.x - details_w - gap_x).max(top.min.x + 1.0), top.max.y))
+        } else {
+            top
+        };
         top_ui.painter().rect_filled(canvas, egui::CornerRadius::ZERO, p.canvas);
-        let mut canvas_ui = top_ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.canvas_ui").max_rect(canvas));
+        let mut canvas_ui =
+            top_ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.canvas_ui").max_rect(canvas));
         canvas_ui.set_clip_rect(canvas.intersect(ui.clip_rect()));
         match &device {
-            Some(dev) => draw_canvas(&mut canvas_ui, canvas, &mut m, dev, &self.assets, &self.editor, &mut self.canvas),
+            Some(dev) => {
+                draw_canvas(&mut canvas_ui, canvas, &mut m, dev, &self.assets, &self.editor, &mut self.canvas)
+            }
             None => {
-                let mut c = canvas_ui.new_child(UiBuilder::new().max_rect(canvas.shrink(16.0)).layout(Layout::top_down(Align::Min)));
+                let mut c = canvas_ui.new_child(
+                    UiBuilder::new().max_rect(canvas.shrink(16.0)).layout(Layout::top_down(Align::Min)),
+                );
                 busy_line(&mut c, "Reading the game's PDA...");
             }
         }
         if m.show_side {
             let side = Rect::from_min_max(pos2(canvas.max.x + gap_x, top.min.y), top.max);
             top_ui.painter().rect_filled(side, egui::CornerRadius::ZERO, p.base);
-            let mut d = top_ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.details_ui").max_rect(side.shrink(8.0)).layout(Layout::top_down(Align::Min)));
+            let mut d = top_ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-pda.details_ui")
+                    .max_rect(side.shrink(8.0))
+                    .layout(Layout::top_down(Align::Min)),
+            );
             d.set_clip_rect(side.intersect(ui.clip_rect()));
             self.draw_details(&mut d, &mut m);
         }
         if m.show_source {
             let src = Rect::from_min_max(pos2(full.min.x, top.max.y + gap_y), full.max);
-            let mut s = ui.new_child(UiBuilder::new().id_salt("gz-ui-pda.source_ui").max_rect(src).layout(Layout::top_down(Align::Min)));
+            let mut s = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("gz-ui-pda.source_ui")
+                    .max_rect(src)
+                    .layout(Layout::top_down(Align::Min)),
+            );
             s.set_clip_rect(src.intersect(ui.clip_rect()));
             self.draw_source(&mut s, &mut m);
         }
@@ -645,7 +864,12 @@ impl Document for PdaDoc {
             page.filter(|p| !p.title.is_empty()).map_or_else(|| m.preview.page.clone(), |p| p.title.clone())
         };
         let scale = m.geom.map_or(1.0, |g| g.ky * m.ppp);
-        let text = format!("Page: {where_} \u{b7} {} \u{b7} {} \u{b7} {:.0}%", m.preview.aspect.label(), m.preview.lang, scale * 100.0);
+        let text = format!(
+            "Page: {where_} \u{b7} {} \u{b7} {} \u{b7} {:.0}%",
+            m.preview.aspect.label(),
+            m.preview.lang,
+            scale * 100.0
+        );
         drop(m);
         text::label(ui, &text, Font::Small, p.text_secondary, Clip::End);
     }
@@ -736,7 +960,12 @@ fn module_layout_now(editor: &Editor) -> Option<String> {
     }
     let (_, project) = Project::of(editor).ok()?;
     let tree = project.tree.snapshot();
-    let mut files: Vec<String> = tree.files_with_extension("pdaasset").iter().map(RelPath::to_backslash).filter(|rel| !manifest.outside_build(rel)).collect();
+    let mut files: Vec<String> = tree
+        .files_with_extension("pdaasset")
+        .iter()
+        .map(RelPath::to_backslash)
+        .filter(|rel| !manifest.outside_build(rel))
+        .collect();
     files.sort();
     files.into_iter().next()
 }
@@ -754,7 +983,8 @@ fn open_module_layout(cx: &mut DocCx<'_>) {
     let ed = cx.editor.clone();
     let _task = cx.editor.exec.spawn(async move {
         let Some(rel) = super::module_layout(&ed).await else {
-            ed.notices.error("The PDA interface could not be made: the pda folder of the project is not writable.");
+            ed.notices
+                .error("The PDA interface could not be made: the pda folder of the project is not writable.");
             return;
         };
         let mut args = Args::new();
@@ -797,6 +1027,7 @@ pub fn install(b: &mut ShellBuilder) {
         Ok(Box::new(PdaDoc::new(editor.clone(), tab, assets, serial, target)) as Box<dyn Document>)
     });
     b.command(
-        UiCommand::new("COMMAND_MOD_PDA", "Mod", "PDA Interface", Icon::PdaInterface, open_module_layout).enabled(|editor, _| editor.project_opt().is_some()),
+        UiCommand::new("COMMAND_MOD_PDA", "Mod", "PDA Interface", Icon::PdaInterface, open_module_layout)
+            .enabled(|editor, _| editor.project_opt().is_some()),
     );
 }

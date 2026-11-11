@@ -51,14 +51,19 @@ mod service;
 pub mod text;
 
 pub use cmd::{install, manifest_json, register};
-pub use commands::{has_script_function, scan_script_functions, valid_command_function, valid_command_name, validate_commands};
+pub use commands::{
+    has_script_function, scan_script_functions, valid_command_function, valid_command_name, validate_commands,
+};
 pub use doc::ManifestDoc;
 pub use edit::Edit;
 pub use exclude::{ShipState, exclude_match, normalize_rel, outside_build, set_excluded, ship_state};
 pub use io::{installed_commands, read_manifest_file, scaffold, script_functions};
 pub use model::{Command, FILE, GlobalVar, Manifest, ProvidesMode, derive_id, scaffold_text};
 pub use rules::{
-    normalize_github_repo, valid_global_name, validate, validate_github_repo, validate_id, validate_mode_id, validate_version,
-    validate_website,
+    normalize_github_repo, valid_global_name, validate, validate_github_repo, validate_id, validate_mode_id,
+    validate_version, validate_website,
 };
-pub use service::{ArgCx, ArgHook, FieldHook, ManifestArgs, ManifestCmd, ManifestFields, ManifestService, ManifestState, command_check};
+pub use service::{
+    ArgCx, ArgHook, FieldHook, ManifestArgs, ManifestCmd, ManifestFields, ManifestService, ManifestState,
+    command_check,
+};

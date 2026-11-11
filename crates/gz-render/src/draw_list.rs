@@ -89,7 +89,10 @@ impl Instance {
 pub enum LightKind {
     Point,
     /// `cos_half` is the cosine of the cone's half angle.
-    Spot { direction: Vec3, cos_half: f32 },
+    Spot {
+        direction: Vec3,
+        cos_half: f32,
+    },
 }
 
 /// A light of the scene, drawn in [`crate::ViewMode::GameLighting`] with the game's falloff,
@@ -223,7 +226,14 @@ impl Helpers {
         self.lines.push(Line { a, b, color, depth_tested });
     }
 
-    pub fn shape(&mut self, kind: ShapeKind, transform: Mat4, fill: Option<Color>, wire: Option<Color>, depth_tested: bool) {
+    pub fn shape(
+        &mut self,
+        kind: ShapeKind,
+        transform: Mat4,
+        fill: Option<Color>,
+        wire: Option<Color>,
+        depth_tested: bool,
+    ) {
         self.shapes.push(Shape { kind, transform, fill, wire, depth_tested });
     }
 
@@ -233,14 +243,30 @@ impl Helpers {
     }
 
     /// `DrawLineSphere`: three circles.
-    pub fn sphere(&mut self, center: Vec3, radius: f32, fill: Option<Color>, wire: Option<Color>, depth_tested: bool) {
+    pub fn sphere(
+        &mut self,
+        center: Vec3,
+        radius: f32,
+        fill: Option<Color>,
+        wire: Option<Color>,
+        depth_tested: bool,
+    ) {
         let m = Mat4::from_scale_rotation_translation(Vec3::splat(radius), Quat::IDENTITY, center);
         self.shape(ShapeKind::Sphere, m, fill, wire, depth_tested);
     }
 
     /// `DrawCone`: the apex, the axis, the height and the base radius.
     #[allow(clippy::too_many_arguments)]
-    pub fn cone(&mut self, apex: Vec3, dir: Vec3, height: f32, radius: f32, fill: Option<Color>, wire: Option<Color>, depth_tested: bool) {
+    pub fn cone(
+        &mut self,
+        apex: Vec3,
+        dir: Vec3,
+        height: f32,
+        radius: f32,
+        fill: Option<Color>,
+        wire: Option<Color>,
+        depth_tested: bool,
+    ) {
         let rot = Quat::from_rotation_arc(Vec3::Z, dir.try_normalize().unwrap_or(Vec3::Z));
         let m = Mat4::from_scale_rotation_translation(Vec3::new(radius, radius, height), rot, apex);
         self.shape(ShapeKind::Cone, m, fill, wire, depth_tested);

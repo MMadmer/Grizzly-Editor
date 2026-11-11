@@ -42,7 +42,9 @@ pub fn website_is_module_page(url: &str) -> bool {
         }
         if let Some(p) = starts(p, "forums/topic/") {
             let digits = p.iter().take_while(|c| c.is_ascii_digit()).count();
-            let Some(p) = p.get(digits..).filter(|_| digits > 0).and_then(|p| p.strip_prefix(b"-")) else { return false };
+            let Some(p) = p.get(digits..).filter(|_| digits > 0).and_then(|p| p.strip_prefix(b"-")) else {
+                return false;
+            };
             return segment(p, slug_char).is_some_and(|(_, rest)| page_end(rest));
         }
         return false;

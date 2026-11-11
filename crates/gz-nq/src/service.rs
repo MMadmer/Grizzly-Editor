@@ -25,8 +25,8 @@ use crate::caps::ItemCaps;
 use crate::catalog::{Catalog, SourceFile};
 use crate::doc::{DocCmd, DocOp, DocReply, GraphDoc};
 use crate::index::{self, IndexEntry, IndexSnapshot};
-use crate::pickers::{self, GameIndex, PickerEntry, Pickers, ProjectFiles, ProjectPart};
 pub use crate::pickers::Transition;
+use crate::pickers::{self, GameIndex, PickerEntry, Pickers, ProjectFiles, ProjectPart};
 pub use crate::validate::CharacterBrief;
 use crate::validate::{self, Context, NqProblem};
 
@@ -266,7 +266,9 @@ impl NqService {
     #[must_use]
     pub fn inside(&self, abs: &str) -> bool {
         let k = path_key(abs);
-        k.len() > self.root_key.len() + 1 && k.starts_with(&self.root_key) && k.as_bytes().get(self.root_key.len()) == Some(&b'\\')
+        k.len() > self.root_key.len() + 1
+            && k.starts_with(&self.root_key)
+            && k.as_bytes().get(self.root_key.len()) == Some(&b'\\')
     }
 
     /// The wire form of an absolute path: project-relative with `/`, or itself with `/`
@@ -300,7 +302,9 @@ impl NqService {
         }
         let inside = self.inside(&abs);
         if for_write && !inside {
-            return Err("path is outside the project folder - graphs are written into the project only".into());
+            return Err(
+                "path is outside the project folder - graphs are written into the project only".into()
+            );
         }
         if for_write && !asset::is_graph_path(&abs) {
             return Err("a graph document is a .nqasset (quest) or a .behasset (behaviour graph)".into());
@@ -327,7 +331,8 @@ impl NqService {
     /// kinds and the project's own, in that order (`NqCatalog::Load`).
     pub async fn catalog(&self, editor: &Editor) -> Arc<Catalog> {
         let manifest = self.manifest_now(editor).await;
-        let own = manifest.as_ref().and_then(|m| m.snapshot().manifest().map(|x| x.id.clone())).unwrap_or_default();
+        let own =
+            manifest.as_ref().and_then(|m| m.snapshot().manifest().map(|x| x.id.clone())).unwrap_or_default();
         let link = GameLink::of(editor).ok();
         let game = match &link {
             Some(l) => l.snapshot().await.ok(),
@@ -347,7 +352,10 @@ impl NqService {
         let files = game.map(|(f, _)| f);
         let root = PathBuf::from(&self.root);
         let generation = self.catalog_gen.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-        let built = self.exec.io(move || load_catalog(files.as_deref(), &bundled, &root, &tree, &own, generation)).await;
+        let built = self
+            .exec
+            .io(move || load_catalog(files.as_deref(), &bundled, &root, &tree, &own, generation))
+            .await;
         self.catalog.fresh(&(), rev, move || built).await
     }
 
@@ -375,8 +383,11 @@ impl NqService {
         if let Some(p) = self.pickers.peek_at(&(), rev) {
             return p;
         }
-        let (restrictors, stories) = scene.map_or_else(|| (Vec::new(), Vec::new()), |s| (s.restrictors(), s.stories()));
-        self.pickers.fresh(&(), rev, move || Pickers::compose(game.as_deref(), &project, &restrictors, &stories)).await
+        let (restrictors, stories) =
+            scene.map_or_else(|| (Vec::new(), Vec::new()), |s| (s.restrictors(), s.stories()));
+        self.pickers
+            .fresh(&(), rev, move || Pickers::compose(game.as_deref(), &project, &restrictors, &stories))
+            .await
     }
 
     fn game_rev(&self, _editor: &Editor) -> Rev {
@@ -399,7 +410,12 @@ impl NqService {
             .exec
             .io(move || {
                 let empty = gz_fmt_xml::strings::StringTable::default();
-                let inp = pickers::GameInput { files: &files, ltx: ltx.as_deref(), strings: strings.as_deref().unwrap_or(&empty), transitions: &transitions };
+                let inp = pickers::GameInput {
+                    files: &files,
+                    ltx: ltx.as_deref(),
+                    strings: strings.as_deref().unwrap_or(&empty),
+                    transitions: &transitions,
+                };
                 Some(Arc::new(pickers::build_game(&inp)))
             })
             .await;
@@ -414,7 +430,8 @@ impl NqService {
         }
         let root = PathBuf::from(&self.root);
         let exec = self.exec.clone();
-        let part = self.exec.io(move || pickers::build_project(&read_project_files(&exec, &root, &tree))).await;
+        let part =
+            self.exec.io(move || pickers::build_project(&read_project_files(&exec, &root, &tree))).await;
         self.project_pickers.fresh(&(), rev, move || part).await
     }
 
@@ -429,7 +446,12 @@ impl NqService {
         let built = match ltx {
             None => None,
             Some(ltx) => {
-                let script = self.exec.io(move || files.read("scripts/class_registrator.script").map(|b| decode(&b)).unwrap_or_default()).await;
+                let script = self
+                    .exec
+                    .io(move || {
+                        files.read("scripts/class_registrator.script").map(|b| decode(&b)).unwrap_or_default()
+                    })
+                    .await;
                 Some(Arc::new(ItemCaps::new(ltx, &script)))
             }
         };
@@ -461,8 +483,15 @@ impl NqService {
         let tree = self.tree();
         let mut out: Vec<CharacterBrief> = Vec::new();
         for rel in tree.files_with_extension("npcasset") {
-            let template = tree.entry(&rel).is_some_and(|e| matches!(e.kind, EntryKind::File { asset: Some(AssetKind::CharacterTemplate), .. }));
-            out.push(CharacterBrief { id: crate::text::id_from_name(rel.stem()), template, name: String::new(), file: rel.as_str().to_owned() });
+            let template = tree.entry(&rel).is_some_and(|e| {
+                matches!(e.kind, EntryKind::File { asset: Some(AssetKind::CharacterTemplate), .. })
+            });
+            out.push(CharacterBrief {
+                id: crate::text::id_from_name(rel.stem()),
+                template,
+                name: String::new(),
+                file: rel.as_str().to_owned(),
+            });
         }
         (tree.rev(), Arc::from(out))
     }
@@ -472,7 +501,11 @@ impl NqService {
         match self.manifest_now(editor).await {
             Some(m) => {
                 let (rev, vars) = m.globals();
-                (rev, vars.iter().map(|v| v.name.clone()).collect(), vars.iter().map(|v| (v.name.clone(), v.value.clone())).collect())
+                (
+                    rev,
+                    vars.iter().map(|v| v.name.clone()).collect(),
+                    vars.iter().map(|v| (v.name.clone(), v.value.clone())).collect(),
+                )
             }
             None => (Rev::ZERO, Vec::new(), Vec::new()),
         }
@@ -509,7 +542,10 @@ impl NqService {
         if let Some(s) = self.index.peek_at(&overlay, rev) {
             return s;
         }
-        let rules: Vec<String> = manifest.as_ref().and_then(|m| m.snapshot().manifest().map(|x| x.exclude.clone())).unwrap_or_default();
+        let rules: Vec<String> = manifest
+            .as_ref()
+            .and_then(|m| m.snapshot().manifest().map(|x| x.exclude.clone()))
+            .unwrap_or_default();
         // the graphs of the project are the graphs its build ships
         let mut files: Vec<RelPath> = tree.files_with_extension("nqasset");
         files.extend(tree.files_with_extension("behasset"));
@@ -517,7 +553,11 @@ impl NqService {
         let root_norm = normalize_path(&self.root);
         let mut todo: Vec<ToRead> = Vec::new();
         let mut entries: Vec<IndexEntry> = Vec::new();
-        let dirty: Vec<Arc<DocHandle>> = if overlay { self.docs.lock().iter().filter(|d| d.is_dirty()).cloned().collect() } else { Vec::new() };
+        let dirty: Vec<Arc<DocHandle>> = if overlay {
+            self.docs.lock().iter().filter(|d| d.is_dirty()).cloned().collect()
+        } else {
+            Vec::new()
+        };
         {
             let cache = self.parsed.lock();
             for rel in &files {
@@ -532,7 +572,9 @@ impl NqService {
                     _ => (0, None),
                 };
                 match cache.get(&key) {
-                    Some(c) if c.stamp == stamp && c.catalog == catalog.generation && stamp.1.is_some() => entries.push(c.entry.clone()),
+                    Some(c) if c.stamp == stamp && c.catalog == catalog.generation && stamp.1.is_some() => {
+                        entries.push(c.entry.clone())
+                    }
                     _ => todo.push((rel.as_str().to_owned(), key, rel.to_fs(Path::new(&self.root)), stamp)),
                 }
             }
@@ -645,13 +687,23 @@ impl NqService {
     }
 
     /// Sends one command to a document with the current catalog.
-    pub async fn send(&self, editor: &Editor, doc: &DocHandle, op: DocOp, origin: Origin) -> Result<DocReply, CmdError> {
+    pub async fn send(
+        &self,
+        editor: &Editor,
+        doc: &DocHandle,
+        op: DocOp,
+        origin: Origin,
+    ) -> Result<DocReply, CmdError> {
         let catalog = self.catalog(editor).await;
         doc.store.send(DocCmd { catalog, op }, origin).await
     }
 
     /// Reads a file into a graph with its shape problems (`NqDoc::Load`).
-    async fn load_file(&self, editor: &Editor, p: &DocPath) -> Result<(Graph, Vec<String>, Option<SystemTime>), String> {
+    async fn load_file(
+        &self,
+        editor: &Editor,
+        p: &DocPath,
+    ) -> Result<(Graph, Vec<String>, Option<SystemTime>), String> {
         let catalog = self.catalog(editor).await;
         let abs = p.abs.clone();
         let chunk = asset::base_name(&p.wire);
@@ -677,7 +729,8 @@ impl NqService {
             return Err(format!("file does not exist: {}", p.wire));
         }
         let (graph, shape, time) = self.load_file(editor, &p).await?;
-        let store = Store::spawn("graph", GraphDoc::default(), &self.exec, StoreOptions { history_limit: 200 });
+        let store =
+            Store::spawn("graph", GraphDoc::default(), &self.exec, StoreOptions { history_limit: 200 });
         let catalog = self.catalog(editor).await;
         store
             .send(DocCmd { catalog, op: DocOp::Load { graph, shape, file_time: time } }, Origin::Mcp)
@@ -701,7 +754,10 @@ impl NqService {
             return Err("file does not exist".into());
         }
         let (graph, shape, time) = self.load_file(editor, &p).await?;
-        self.send(editor, doc, DocOp::Load { graph, shape, file_time: time }, Origin::Mcp).await.map(|_| ()).map_err(|e| e.message)
+        self.send(editor, doc, DocOp::Load { graph, shape, file_time: time }, Origin::Mcp)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.message)
     }
 
     /// Closes a document; a dirty one only with `discard` (`NqDocs::Close`).
@@ -734,12 +790,77 @@ impl NqService {
                 if !force && known.is_some() && file_time(&abs) != known {
                     return Err("modified externally".to_owned());
                 }
-                gz_editor::fsx::write_atomic(&abs, text.as_bytes()).map_err(|_| "cannot create file".to_owned())?;
+                gz_editor::fsx::write_atomic(&abs, text.as_bytes())
+                    .map_err(|_| "cannot create file".to_owned())?;
                 Ok(file_time(&abs))
             })
             .await?;
         self.project.tree.mark_fs(&p.abs);
-        self.send(editor, doc, DocOp::Saved { file_time: written }, Origin::Mcp).await.map(|_| ()).map_err(|e| e.message)
+        self.send(editor, doc, DocOp::Saved { file_time: written }, Origin::Mcp)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.message)
+    }
+
+    /// Writes an unsaved document before the project closes (`NqDoc::SaveRescue`): over its file,
+    /// or beside it as `<file>.recovered` when the file changed on disk since it was read or the
+    /// document holds parts it could not read - overwriting either would trade one loss for
+    /// another. Answers where it went.
+    pub async fn save_rescue(&self, editor: &Editor, doc: &DocHandle) -> Result<PathBuf, String> {
+        let p = doc.path();
+        if p.abs.as_os_str().is_empty() {
+            return Err("the document has no path".into());
+        }
+        let snap = doc.store.snapshot();
+        let catalog = self.catalog(editor).await;
+        let text = asset::write(&catalog, &snap.graph);
+        let (known, partial, abs) = (snap.file_time, snap.partial, p.abs.clone());
+        let (written, time, aside) = self
+            .exec
+            .io(move || {
+                let aside = partial || (known.is_some() && file_time(&abs) != known);
+                let mut target = abs.clone().into_os_string();
+                if aside {
+                    target.push(".recovered");
+                }
+                let target = PathBuf::from(target);
+                gz_editor::fsx::write_atomic(&target, text.as_bytes()).map_err(|e| e.to_string())?;
+                Ok::<_, String>((target, file_time(&abs), aside))
+            })
+            .await?;
+        self.project.tree.mark_fs(&written);
+        if !aside {
+            self.send(editor, doc, DocOp::Saved { file_time: time }, Origin::Mcp)
+                .await
+                .map_err(|e| e.message)?;
+        }
+        Ok(written)
+    }
+
+    /// Every dirty document written before the project closes, each one logged as the C++
+    /// `NqDocs::SaveDirty` logs it. Answers how many were written.
+    pub async fn save_dirty(&self, editor: &Editor) -> usize {
+        let mut saved = 0;
+        for d in self.docs().into_iter().filter(|d| d.is_dirty()) {
+            let path = d.path().abs.display().to_string();
+            match self.save_rescue(editor, &d).await {
+                Ok(written) => {
+                    saved += 1;
+                    if written == d.path().abs {
+                        editor.log.info(format!("* [nq] unsaved quest written before it was closed: {path}"));
+                    } else {
+                        editor.log.warn(format!(
+                            "! [nq] {path} changed on disk - the unsaved changes went to {}",
+                            written.display()
+                        ));
+                    }
+                }
+                Err(e) => editor
+                    .log
+                    .warn(format!("! [nq] {path} could NOT be saved ({e}) - the unsaved changes are lost")),
+            }
+        }
+        saved
     }
 
     /// A file or a folder was renamed: open documents follow it (`NqDocs::Retarget`).
@@ -751,14 +872,22 @@ impl NqService {
             let mut p = d.path.write();
             let target = if p.key == was {
                 Some(new_abs.clone())
-            } else if p.key.len() > was.len() && p.key.starts_with(&was) && p.key.as_bytes().get(was.len()) == Some(&b'\\') {
+            } else if p.key.len() > was.len()
+                && p.key.starts_with(&was)
+                && p.key.as_bytes().get(was.len()) == Some(&b'\\')
+            {
                 let abs = normalize_path(&p.abs.to_string_lossy());
                 abs.get(old_abs.len()..).map(|rest| format!("{new_abs}{rest}"))
             } else {
                 None
             };
             if let Some(abs) = target {
-                *p = DocPath { wire: self.wire(&abs), key: path_key(&abs), inside: self.inside(&abs), abs: PathBuf::from(abs) };
+                *p = DocPath {
+                    wire: self.wire(&abs),
+                    key: path_key(&abs),
+                    inside: self.inside(&abs),
+                    abs: PathBuf::from(abs),
+                };
             }
         }
         self.docs_rev.bump();
@@ -787,7 +916,12 @@ impl NqService {
     /// Writes a graph's canonical text to a path of the project and lets the tree know.
     pub async fn write_file(&self, p: &DocPath, text: String) -> Result<(), String> {
         let abs = p.abs.clone();
-        self.exec.io(move || gz_editor::fsx::write_atomic(&abs, text.as_bytes()).map_err(|_| "cannot create file".to_owned())).await?;
+        self.exec
+            .io(move || {
+                gz_editor::fsx::write_atomic(&abs, text.as_bytes())
+                    .map_err(|_| "cannot create file".to_owned())
+            })
+            .await?;
         self.project.tree.mark_fs(&p.abs);
         self.project.tree.refresh().await;
         Ok(())
@@ -804,8 +938,12 @@ impl NqService {
 }
 
 /// What the project's part of the pickers reads: folder and extension.
-const PROJECT_PICKER_FILES: &[(&str, &str)] =
-    &[("spawn/custom_data", "ltx"), ("rawdata/levels", "part"), ("gamedata/configs/gameplay", "xml"), ("gamedata/configs/ui/textures_descr", "xml")];
+const PROJECT_PICKER_FILES: &[(&str, &str)] = &[
+    ("spawn/custom_data", "ltx"),
+    ("rawdata/levels", "part"),
+    ("gamedata/configs/gameplay", "xml"),
+    ("gamedata/configs/ui/textures_descr", "xml"),
+];
 
 /// The stamp of the files below some folders with an extension: their paths, sizes and write
 /// times. It moves only when one of them does - an unrelated file of the project leaves it be.
@@ -820,7 +958,9 @@ fn stamp(tree: &FileTree, dirs: &[(&str, &str)]) -> Rev {
             h = index::hash_bytes(h, rel.key().as_bytes());
             if let EntryKind::File { size, modified, .. } = e.kind {
                 h = index::hash_bytes(h, &size.to_le_bytes());
-                let t = modified.and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+                let t = modified
+                    .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_nanos());
                 h = index::hash_bytes(h, &t.to_le_bytes());
             }
         }
@@ -835,7 +975,11 @@ fn memory_entry(catalog: &Catalog, d: &DocHandle, rel: &str, key: &str) -> Index
         rel: rel.to_owned(),
         key: key.to_owned(),
         graph: Arc::new(snap.graph.clone()),
-        error: if snap.partial { "open document is an incomplete model of a malformed source file".to_owned() } else { String::new() },
+        error: if snap.partial {
+            "open document is an incomplete model of a malformed source file".to_owned()
+        } else {
+            String::new()
+        },
         readable: true,
         complete: !snap.partial,
         memory: true,
@@ -844,7 +988,15 @@ fn memory_entry(catalog: &Catalog, d: &DocHandle, rel: &str, key: &str) -> Index
 }
 
 /// The files of `dir` (project-relative) with an extension, listed by the tree, read and decoded.
-fn read_tree_files(exec: &Executors, root: &Path, tree: &FileTree, dir: &str, ext: &str, name: Option<&str>, max: u64) -> Vec<(String, String)> {
+fn read_tree_files(
+    exec: &Executors,
+    root: &Path,
+    tree: &FileTree,
+    dir: &str,
+    ext: &str,
+    name: Option<&str>,
+    max: u64,
+) -> Vec<(String, String)> {
     let Ok(under) = RelPath::new(dir) else { return Vec::new() };
     let items: Vec<(String, PathBuf)> = tree
         .files_under(&under)
@@ -856,10 +1008,12 @@ fn read_tree_files(exec: &Executors, root: &Path, tree: &FileTree, dir: &str, ex
         })
         .map(|(rel, _)| (rel.as_str().to_owned(), rel.to_fs(root)))
         .collect();
-    exec.par_io(items, |(rel, abs)| std::fs::read(&abs).ok().map(|b| (rel, gz_base::text::decode_guess(&b).into_owned())))
-        .into_iter()
-        .flatten()
-        .collect()
+    exec.par_io(items, |(rel, abs)| {
+        std::fs::read(&abs).ok().map(|b| (rel, gz_base::text::decode_guess(&b).into_owned()))
+    })
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 fn read_project_files(exec: &Executors, root: &Path, tree: &FileTree) -> ProjectFiles {
@@ -867,12 +1021,27 @@ fn read_project_files(exec: &Executors, root: &Path, tree: &FileTree) -> Project
         custom_data: read_tree_files(exec, root, tree, "spawn/custom_data", "ltx", None, 1 << 20),
         spawn_parts: read_tree_files(exec, root, tree, "rawdata/levels", "part", Some("spawn"), 64 << 20),
         gameplay: read_tree_files(exec, root, tree, "gamedata/configs/gameplay", "xml", None, 8 << 20),
-        textures_descr: read_tree_files(exec, root, tree, "gamedata/configs/ui/textures_descr", "xml", None, 8 << 20),
+        textures_descr: read_tree_files(
+            exec,
+            root,
+            tree,
+            "gamedata/configs/ui/textures_descr",
+            "xml",
+            None,
+            8 << 20,
+        ),
     }
 }
 
 /// Gathers and folds the catalog's files in the C++ order. Blocking: the IO pool.
-fn load_catalog(game: Option<&GameFiles>, bundled: &Bundled, root: &Path, tree: &FileTree, own: &str, generation: u32) -> Catalog {
+fn load_catalog(
+    game: Option<&GameFiles>,
+    bundled: &Bundled,
+    root: &Path,
+    tree: &FileTree,
+    own: &str,
+    generation: u32,
+) -> Catalog {
     let mut files: Vec<SourceFile> = Vec::new();
     let mut from_game = false;
     if let Some(g) = game
@@ -885,15 +1054,27 @@ fn load_catalog(game: Option<&GameFiles>, bundled: &Bundled, root: &Path, tree: 
         // extensions shipped inside the game content
         for f in g.find("configs/nq/kinds", "ltx") {
             if let Ok(b) = g.read_ref(f) {
-                files.push(SourceFile { label: format!("game:{}", f.path.replace('/', "\\")), text: decode(&b) });
+                files.push(SourceFile {
+                    label: format!("game:{}", f.path.replace('/', "\\")),
+                    text: decode(&b),
+                });
             }
         }
     }
     if !from_game {
         let path = bundled.path("configs/nq/catalog.ltx");
         match std::fs::read(&path) {
-            Err(_) => return Catalog::assemble(&files, false, Some(format!("bundled catalog not found: {}", path.display())), generation),
-            Ok(b) => files.push(SourceFile { label: "bundled:configs\\nq\\catalog.ltx".into(), text: decode(&b) }),
+            Err(_) => {
+                return Catalog::assemble(
+                    &files,
+                    false,
+                    Some(format!("bundled catalog not found: {}", path.display())),
+                    generation,
+                );
+            }
+            Ok(b) => {
+                files.push(SourceFile { label: "bundled:configs\\nq\\catalog.ltx".into(), text: decode(&b) })
+            }
         }
         let dir = bundled.path("configs/nq/kinds");
         let mut kinds: Vec<PathBuf> = Vec::new();
@@ -901,7 +1082,13 @@ fn load_catalog(game: Option<&GameFiles>, bundled: &Bundled, root: &Path, tree: 
         kinds.sort();
         for k in kinds {
             if let Ok(b) = std::fs::read(&k) {
-                files.push(SourceFile { label: format!("bundled:configs\\nq\\kinds\\{}.ltx", asset::base_name(&k.to_string_lossy())), text: decode(&b) });
+                files.push(SourceFile {
+                    label: format!(
+                        "bundled:configs\\nq\\kinds\\{}.ltx",
+                        asset::base_name(&k.to_string_lossy())
+                    ),
+                    text: decode(&b),
+                });
             }
         }
     }
@@ -917,7 +1104,10 @@ fn load_catalog(game: Option<&GameFiles>, bundled: &Bundled, root: &Path, tree: 
                 }
                 for f in m.find("gamedata/configs/nq/kinds", "ltx") {
                     if let Ok(b) = m.read(f.path) {
-                        files.push(SourceFile { label: format!("{}\\{}\\kinds\\{}", r.folder(), m.id, asset::base_name(f.path)), text: decode(&b) });
+                        files.push(SourceFile {
+                            label: format!("{}\\{}\\kinds\\{}", r.folder(), m.id, asset::base_name(f.path)),
+                            text: decode(&b),
+                        });
                     }
                 }
             }
@@ -929,7 +1119,10 @@ fn load_catalog(game: Option<&GameFiles>, bundled: &Bundled, root: &Path, tree: 
                 continue;
             }
             if let Ok(b) = std::fs::read(rel.to_fs(root)) {
-                files.push(SourceFile { label: format!("project:kinds\\{}.ltx", rel.stem()), text: decode(&b) });
+                files.push(SourceFile {
+                    label: format!("project:kinds\\{}.ltx", rel.stem()),
+                    text: decode(&b),
+                });
             }
         }
     }
@@ -971,11 +1164,38 @@ impl DirtySource for NqDirty {
                 let behaviour = asset::is_behaviour_path(&p.wire);
                 DirtyDoc {
                     kind: (if behaviour { "behaviour" } else { "quest" }).into(),
-                    name: p.abs.file_name().map_or_else(|| p.wire.clone(), |n| n.to_string_lossy().into_owned()),
+                    name: p
+                        .abs
+                        .file_name()
+                        .map_or_else(|| p.wire.clone(), |n| n.to_string_lossy().into_owned()),
                     path: Some(p.wire),
                 }
             })
             .collect()
+    }
+
+    fn save<'a>(&'a self, editor: &'a Arc<Editor>) -> gz_editor::SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(svc) = editor.project_opt().and_then(|s| NqService::get(&s)) else { return Ok(()) };
+            for d in svc.docs().into_iter().filter(|d| d.is_dirty()) {
+                let name = d.path().wire;
+                svc.save(editor, &d, false).await.map_err(|e| format!("{name}: {e}"))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn discard<'a>(&'a self, editor: &'a Arc<Editor>) -> gz_editor::SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(svc) = editor.project_opt().and_then(|s| NqService::get(&s)) else { return Ok(()) };
+            for d in svc.docs().into_iter().filter(|d| d.is_dirty()) {
+                // back to the file; a document never saved has no file to go back to
+                if svc.reload(editor, &d).await.is_err() {
+                    let _ = svc.close(&d.path().wire, true);
+                }
+            }
+            Ok(())
+        })
     }
 }
 

@@ -45,8 +45,8 @@ mod cmd;
 pub mod content;
 pub mod detail_objects;
 pub mod details;
-pub mod dock;
 pub mod doc;
+pub mod dock;
 pub mod import;
 pub mod layout;
 pub mod lists;
@@ -83,7 +83,12 @@ pub fn install(b: &mut ShellBuilder) {
     ] {
         b.panel(PanelDesc { id: SmolStr::new(id), label: SmolStr::new(label), icon, drawer: None });
     }
-    b.panel(PanelDesc { id: SmolStr::new("viewport"), label: SmolStr::new("Viewport"), icon: Icon::Perspective, drawer: None });
+    b.panel(PanelDesc {
+        id: SmolStr::new("viewport"),
+        label: SmolStr::new("Viewport"),
+        icon: Icon::Perspective,
+        drawer: None,
+    });
     menus::install(b);
     status::install(b);
     recovery::install(b);

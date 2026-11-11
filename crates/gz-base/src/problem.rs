@@ -35,7 +35,15 @@ pub struct Problem {
 
 impl Problem {
     pub fn new(code: impl Into<SmolStr>, severity: Severity, message: impl Into<String>) -> Self {
-        Self { code: code.into(), severity, message: message.into(), subject: None, field: None, file: None, line: None }
+        Self {
+            code: code.into(),
+            severity,
+            message: message.into(),
+            subject: None,
+            field: None,
+            file: None,
+            line: None,
+        }
     }
 
     pub fn error(code: impl Into<SmolStr>, message: impl Into<String>) -> Self {

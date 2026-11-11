@@ -34,7 +34,8 @@ use crate::form::writes_to;
 pub const BUILD_TO_FOLDER: &str = "build_to_folder";
 pub const EXPORT_FLAT: &str = "export_flat";
 
-const MISSING_ID: &str = "The module id is missing or invalid. Set it in Mod Settings: a-z, 0-9, _ . and - only.";
+const MISSING_ID: &str =
+    "The module id is missing or invalid. Set it in Mod Settings: a-z, 0-9, _ . and - only.";
 
 /// Who answers the window's questions: a person, or `-nodlg`'s logged answers.
 pub(crate) fn asker(editor: &Editor) -> Asker {
@@ -58,15 +59,25 @@ fn last_result(editor: &Editor, id: &str) -> Option<ResultSpec> {
     if let Some(spec) = editor.services.get::<LastResults>().and_then(|l| l.0.lock().get(id).cloned()) {
         return Some(spec);
     }
-    let manifest = editor.project_opt().and_then(|s| ManifestService::get(&s)).and_then(|svc| svc.snapshot().manifest().cloned()).unwrap_or_default();
+    let manifest = editor
+        .project_opt()
+        .and_then(|s| ManifestService::get(&s))
+        .and_then(|svc| svc.snapshot().manifest().cloned())
+        .unwrap_or_default();
     match id {
         "build_result" | "export_result" => {
             let r = Builds::of(editor).last()?;
-            let flat = std::path::Path::new(&r.path).file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("gamedata_"));
-            let spec = build_report(if flat { BuildKind::Flat } else { BuildKind::ToFolder }, &r, &manifest.id);
+            let flat = std::path::Path::new(&r.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("gamedata_"));
+            let spec =
+                build_report(if flat { BuildKind::Flat } else { BuildKind::ToFolder }, &r, &manifest.id);
             (spec.id == id).then_some(spec)
         }
-        "package_result" => gz_release::Releases::of(editor).last().map(|r| crate::package::package_report(&manifest, &r)),
+        "package_result" => {
+            gz_release::Releases::of(editor).last().map(|r| crate::package::package_report(&manifest, &r))
+        }
         _ => None,
     }
 }
@@ -119,7 +130,10 @@ pub fn job_status_text(editor: &Editor) -> String {
 
 /// Reads the manifest's store (made on first use), then hands its module id to `then` on the UI
 /// thread.
-fn with_manifest_id(editor: &Arc<Editor>, then: impl FnOnce(&Arc<Editor>, Option<String>, &egui::Context) + Send + 'static) {
+fn with_manifest_id(
+    editor: &Arc<Editor>,
+    then: impl FnOnce(&Arc<Editor>, Option<String>, &egui::Context) + Send + 'static,
+) {
     let ed = editor.clone();
     let _task = editor.exec.spawn(async move {
         let id = match ManifestService::of(&ed).await {
@@ -138,7 +152,10 @@ fn with_manifest_id(editor: &Arc<Editor>, then: impl FnOnce(&Arc<Editor>, Option
 pub(crate) fn report_missing_id(editor: &Arc<Editor>, ctx: &egui::Context, title: &str) {
     let mut spec = ResultSpec::new("build_result", title, Tone::Error, MISSING_ID);
     let ed = editor.clone();
-    spec.action = Some(ResultAction { label: "Mod Settings".to_owned(), run: Arc::new(move || call::open_tab(&ed, crate::settings::TAB)) });
+    spec.action = Some(ResultAction {
+        label: "Mod Settings".to_owned(),
+        run: Arc::new(move || call::open_tab(&ed, crate::settings::TAB)),
+    });
     show_result(editor, ctx, spec);
 }
 
@@ -171,7 +188,12 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
     split_lines(&r.warnings, &mut warnings);
     let result_id = if flat { "export_result" } else { "build_result" };
     if !r.ok {
-        let mut spec = ResultSpec::new(result_id, if flat { "Export Failed" } else { "Build Failed" }, Tone::Error, &r.err);
+        let mut spec = ResultSpec::new(
+            result_id,
+            if flat { "Export Failed" } else { "Build Failed" },
+            Tone::Error,
+            &r.err,
+        );
         spec.rows = rows;
         spec.warnings = warnings;
         return spec;
@@ -180,18 +202,24 @@ pub fn build_report(kind: BuildKind, r: &BuildResult, id: &str) -> ResultSpec {
     let headline = match kind {
         BuildKind::IntoGame => {
             rows.push(("Console".to_owned(), format!("xms_enable {id}  /  xms_disable {id}")));
-            format!("The module is in the game: {files}. Added objects reach new games and loaded saves; changes to existing objects need a new game.")
+            format!(
+                "The module is in the game: {files}. Added objects reach new games and loaded saves; changes to existing objects need a new game."
+            )
         }
         BuildKind::Flat => format!("{files} exported as a gamedata folder."),
         BuildKind::ToFolder => format!("The module is built: {files}."),
     };
     let tone = if warnings.is_empty() { Tone::Success } else { Tone::Warning };
-    let mut spec = ResultSpec::new(result_id, if flat { "Export Complete" } else { "Build Complete" }, tone, &headline);
+    let mut spec =
+        ResultSpec::new(result_id, if flat { "Export Complete" } else { "Build Complete" }, tone, &headline);
     spec.rows = rows;
     spec.left_out.clone_from(&r.left_out);
     spec.warnings = warnings;
     let path = r.path.clone();
-    spec.action = Some(ResultAction { label: "Open Folder".to_owned(), run: Arc::new(move || call::open_folder(&path)) });
+    spec.action = Some(ResultAction {
+        label: "Open Folder".to_owned(),
+        run: Arc::new(move || call::open_folder(&path)),
+    });
     spec
 }
 
@@ -225,7 +253,9 @@ pub fn start_build(editor: &Arc<Editor>, kind: BuildKind, target: String, clean:
                 crate::cards::started_from_ui(ed, job);
                 follow_build(ed, job, kind, target, id);
             }
-            Err(e) => call::log_lines(ed, notice(ctx, asker(ed), Tone::Warning, title, &format!("{}.", e.message))),
+            Err(e) => {
+                call::log_lines(ed, notice(ctx, asker(ed), Tone::Warning, title, &format!("{}.", e.message)))
+            }
         }
     });
 }
@@ -241,15 +271,31 @@ fn follow_build(editor: &Arc<Editor>, job: JobId, kind: BuildKind, target: Strin
     });
 }
 
-fn build_ended(editor: &Arc<Editor>, ctx: &egui::Context, kind: BuildKind, target: String, id: &str, r: Option<Arc<BuildResult>>) {
+fn build_ended(
+    editor: &Arc<Editor>,
+    ctx: &egui::Context,
+    kind: BuildKind,
+    target: String,
+    id: &str,
+    r: Option<Arc<BuildResult>>,
+) {
     let flat = kind == BuildKind::Flat;
     let Some(r) = r else {
-        let spec = ResultSpec::new(if flat { "export_result" } else { "build_result" }, if flat { "Export Failed" } else { "Build Failed" }, Tone::Error, "The build ended without an answer.");
+        let spec = ResultSpec::new(
+            if flat { "export_result" } else { "build_result" },
+            if flat { "Export Failed" } else { "Build Failed" },
+            Tone::Error,
+            "The build ended without an answer.",
+        );
         show_result(editor, ctx, spec);
         return;
     };
     if r.cancelled {
-        let text = if flat { "Export stopped: the folder holds the files written so far." } else { "Build stopped: the module stays as it was." };
+        let text = if flat {
+            "Export stopped: the folder holds the files written so far."
+        } else {
+            "Build stopped: the module stays as it was."
+        };
         gz_ui::state::toast(ctx, Tone::Info, text);
         return;
     }
@@ -259,7 +305,9 @@ fn build_ended(editor: &Arc<Editor>, ctx: &egui::Context, kind: BuildKind, targe
             if answer == gz_ui::Answer::Yes {
                 start_build(&ed, kind, target, true);
             } else {
-                post_ui(&ed, |ctx| gz_ui::state::toast(ctx, Tone::Info, "Build cancelled: nothing was deleted."));
+                post_ui(&ed, |ctx| {
+                    gz_ui::state::toast(ctx, Tone::Info, "Build cancelled: nothing was deleted.")
+                });
             }
         });
         call::log_lines(editor, line);
@@ -305,11 +353,16 @@ pub fn request_export(cx: &mut DocCx<'_>, flat: bool) {
             return;
         }
         let dialog = if flat { EXPORT_FLAT } else { BUILD_TO_FOLDER };
-        call::call_then(ed, "ui_dialog", call::args([("action", call::s("open")), ("id", call::s(dialog))]), |reply, ctx| {
-            if !call::ok(reply) {
-                gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
-            }
-        });
+        call::call_then(
+            ed,
+            "ui_dialog",
+            call::args([("action", call::s("open")), ("id", call::s(dialog))]),
+            |reply, ctx| {
+                if !call::ok(reply) {
+                    gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                }
+            },
+        );
     });
 }
 
@@ -325,7 +378,13 @@ struct ExportDialog {
 
 impl ExportDialog {
     fn new(flat: bool) -> Self {
-        Self { flat, open: false, target: String::new(), picked: Arc::new(Mutex::new(None)), asked_store: false }
+        Self {
+            flat,
+            open: false,
+            target: String::new(),
+            picked: Arc::new(Mutex::new(None)),
+            asked_store: false,
+        }
     }
 
     /// Opens it: the last target, or the linked game the first time (`PrepareExport`).
@@ -361,7 +420,11 @@ impl ExportDialog {
         let valid_id = id.as_deref().is_some_and(validate_id);
         let root = game_root(&editor);
         let running = build_running(&editor);
-        let (title, name) = if flat { ("Export Flat Gamedata", "dlg.export_flat") } else { ("Build to Folder", "dlg.build_to_folder") };
+        let (title, name) = if flat {
+            ("Export Flat Gamedata", "dlg.export_flat")
+        } else {
+            ("Build to Folder", "dlg.build_to_folder")
+        };
         let mut start = false;
         let mut cancel = false;
         let mut browse = false;
@@ -430,9 +493,15 @@ impl ExportDialog {
         }
         if browse {
             let slot = self.picked.clone();
-            call::pick_path(&editor, Pick::Folder, if flat { "Export Flat Gamedata to" } else { "Build to Folder" }, &self.target, move |folder, _| {
-                *slot.lock() = Some(folder);
-            });
+            call::pick_path(
+                &editor,
+                Pick::Folder,
+                if flat { "Export Flat Gamedata to" } else { "Build to Folder" },
+                &self.target,
+                move |folder, _| {
+                    *slot.lock() = Some(folder);
+                },
+            );
         }
         if start {
             // the dialog closes when the job starts: the Task Center's card follows it
@@ -451,7 +520,9 @@ pub(crate) fn install(b: &mut ShellBuilder) {
             window: format!("###dlg.{id}").into(),
             needs_project: false,
             open: Box::new(move |cx| {
-                let spec = last_result(cx.editor, id).ok_or_else(|| format!("no {} to show yet: nothing was built this session", id.replace('_', " ")))?;
+                let spec = last_result(cx.editor, id).ok_or_else(|| {
+                    format!("no {} to show yet: nothing was built this session", id.replace('_', " "))
+                })?;
                 // it was logged when it was first shown
                 let _ = result(cx.ctx, Asker::Ui, spec);
                 Ok(())
@@ -464,7 +535,12 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         let (open_state, draw_state) = (state.clone(), state);
         b.dialog(DialogDesc {
             id: (if flat { EXPORT_FLAT } else { BUILD_TO_FOLDER }).into(),
-            window: (if flat { "Export Flat Gamedata###dlg.export_flat" } else { "Build to Folder###dlg.build_to_folder" }).into(),
+            window: (if flat {
+                "Export Flat Gamedata###dlg.export_flat"
+            } else {
+                "Build to Folder###dlg.build_to_folder"
+            })
+            .into(),
             needs_project: true,
             open: Box::new(move |cx| open_state.borrow_mut().open(cx)),
             draw: Box::new(move |ui, cx| draw_state.borrow_mut().draw(ui, cx)),
@@ -478,7 +554,14 @@ mod tests {
 
     #[test]
     fn a_build_into_the_game_names_the_console_commands() {
-        let r = BuildResult { ok: true, files: 3, path: "D:\\G\\modules\\od".into(), warnings: "~ one\n".into(), bake_note: "spawn layer: 2\nWARNING: lost".into(), ..BuildResult::default() };
+        let r = BuildResult {
+            ok: true,
+            files: 3,
+            path: "D:\\G\\modules\\od".into(),
+            warnings: "~ one\n".into(),
+            bake_note: "spawn layer: 2\nWARNING: lost".into(),
+            ..BuildResult::default()
+        };
         let spec = build_report(BuildKind::IntoGame, &r, "od");
         assert_eq!(spec.id, "build_result");
         assert_eq!(spec.title, "Build Complete");
@@ -494,14 +577,24 @@ mod tests {
     fn a_failed_export_says_why() {
         let r = BuildResult { ok: false, err: "the target is a link".into(), ..BuildResult::default() };
         let spec = build_report(BuildKind::Flat, &r, "od");
-        assert_eq!((spec.id.as_str(), spec.title.as_str(), spec.tone), ("export_result", "Export Failed", Tone::Error));
+        assert_eq!(
+            (spec.id.as_str(), spec.title.as_str(), spec.tone),
+            ("export_result", "Export Failed", Tone::Error)
+        );
         assert_eq!(spec.headline, "the target is a link");
         assert!(spec.action.is_none());
     }
 
     #[test]
     fn the_clean_question_cancels_by_default() {
-        let r = BuildResult { ok: false, err: "target already holds a module".into(), path: "D:\\G\\modules\\od".into(), stale_names: vec!["a.txt".into()], stale_count: 12, ..BuildResult::default() };
+        let r = BuildResult {
+            ok: false,
+            err: "target already holds a module".into(),
+            path: "D:\\G\\modules\\od".into(),
+            stale_names: vec!["a.txt".into()],
+            stale_count: 12,
+            ..BuildResult::default()
+        };
         let q = CleanQuestion::of(&r).map(|q| clean_confirm(&q));
         let q = q.as_ref();
         assert_eq!(q.map(|q| q.id.as_str()), Some("clean_target"));

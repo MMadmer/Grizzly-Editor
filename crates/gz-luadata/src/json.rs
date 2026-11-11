@@ -46,7 +46,9 @@ pub fn from_json(j: &serde_json::Value) -> Value {
         serde_json::Value::Bool(b) => Value::Bool(*b),
         serde_json::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
         serde_json::Value::String(s) => Value::from(s.as_str()),
-        serde_json::Value::Array(a) => Value::Table(Table { arr: a.iter().map(from_json).collect(), fields: Vec::new() }),
+        serde_json::Value::Array(a) => {
+            Value::Table(Table { arr: a.iter().map(from_json).collect(), fields: Vec::new() })
+        }
         serde_json::Value::Object(m) => {
             let mut t = Table::new();
             let mut next = 1usize;

@@ -191,7 +191,12 @@ pub fn build_packet(list: &DrawList, view: &View, assets: &Assets) -> FramePacke
 /// helpers and labels. Asks `assets` for whatever is not loaded yet; runs on the caller's rayon
 /// pool when the list is large.
 #[must_use]
-pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibility: Option<&Visibility>) -> FramePacket {
+pub fn build_packet_with(
+    list: &DrawList,
+    view: &View,
+    assets: &Assets,
+    visibility: Option<&Visibility>,
+) -> FramePacket {
     let size = [view.size[0].max(1), view.size[1].max(1)];
     let tick = assets.next_tick();
     let generation = assets.generation();
@@ -227,7 +232,10 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
         let mesh = *mesh_index.get(&inst.mesh)?;
         let local = inst.bounds.or_else(|| info_of(mesh).map(|m| m.bounds)).unwrap_or(Aabb::UNIT);
         let world = local.transformed(&inst.transform);
-        if visibility.is_none() && !inst.flags.contains(InstanceFlags::NO_CULL) && !frustum.intersects_aabb(&world) {
+        if visibility.is_none()
+            && !inst.flags.contains(InstanceFlags::NO_CULL)
+            && !frustum.intersects_aabb(&world)
+        {
             return None;
         }
         let depth = if world.is_empty() { 0.0 } else { (world.center() - eye).dot(forward) };
@@ -237,8 +245,11 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
         Some(v) => v.visible.iter().copied().filter(|i| (*i as usize) < list.instances.len()).collect(),
         None => (0..list.instances.len() as u32).collect(),
     };
-    let seen: Vec<Seen> =
-        if candidates.len() >= PARALLEL { candidates.par_iter().filter_map(|i| cull(*i)).collect() } else { candidates.iter().filter_map(|i| cull(*i)).collect() };
+    let seen: Vec<Seen> = if candidates.len() >= PARALLEL {
+        candidates.par_iter().filter_map(|i| cull(*i)).collect()
+    } else {
+        candidates.iter().filter_map(|i| cull(*i)).collect()
+    };
 
     // the materials, each once
     let mut material_index: FxHashMap<MaterialHandle, u32> = FxHashMap::default();
@@ -260,7 +271,8 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
         let start = part_materials.len();
         if let Some(inst) = list.instances.get(s.index as usize) {
             match info_of(s.mesh) {
-                Some(info) => part_materials.extend(info.submeshes.iter().map(|sub| intern(inst.material.unwrap_or(sub.material)))),
+                Some(info) => part_materials
+                    .extend(info.submeshes.iter().map(|sub| intern(inst.material.unwrap_or(sub.material)))),
                 None => {
                     waiting |= resolved.get(s.mesh as usize).is_some_and(|r| r.1);
                     placeholders += 1;
@@ -296,11 +308,22 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
         };
         let gpu = instance_gpu(&model, inst, bones_at);
         for (sub, &material) in mats.iter().enumerate() {
-            let m = mat_infos.get(material as usize).copied().unwrap_or(crate::assets::MaterialInfo { kind: EditorMaterial::Opaque, two_sided: false });
+            let m = mat_infos
+                .get(material as usize)
+                .copied()
+                .unwrap_or(crate::assets::MaterialInfo { kind: EditorMaterial::Opaque, two_sided: false });
             let two_sided = m.two_sided || inst.flags.contains(InstanceFlags::TWO_SIDED);
             let pipe = MeshPipe::of(m.kind, two_sided, wireframe);
             let pass = if wireframe && m.kind != EditorMaterial::Sky { Pass::Opaque } else { m.kind.pass() };
-            let item = Item { order: pass_order(pass), pipe, material, mesh, sub: sub as u32, depth: s.depth, instance: gpu };
+            let item = Item {
+                order: pass_order(pass),
+                pipe,
+                material,
+                mesh,
+                sub: sub as u32,
+                depth: s.depth,
+                instance: gpu,
+            };
             if pass == Pass::Blended { blended.push(item) } else { items.push(item) }
         }
     }
@@ -329,10 +352,21 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
             // only a run of the same draw within the pass merges
             let in_pass = draws.len() > pass_start;
             match draws.last_mut() {
-                Some(d) if in_pass && d.instances.end == at && (d.pipe, d.material, d.mesh, d.submesh) == (it.pipe, it.material, it.mesh, it.sub) => {
+                Some(d)
+                    if in_pass
+                        && d.instances.end == at
+                        && (d.pipe, d.material, d.mesh, d.submesh)
+                            == (it.pipe, it.material, it.mesh, it.sub) =>
+                {
                     d.instances.end = at + 1;
                 }
-                _ => draws.push(Draw { mesh: it.mesh, submesh: it.sub, material: it.material, pipe: it.pipe, instances: at..at + 1 }),
+                _ => draws.push(Draw {
+                    mesh: it.mesh,
+                    submesh: it.sub,
+                    material: it.material,
+                    pipe: it.pipe,
+                    instances: at..at + 1,
+                }),
             }
         }
         if let Some(e) = ends.get_mut(order as usize) {
@@ -348,7 +382,9 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
     let triangles = draws
         .iter()
         .map(|d| {
-            let tris = info_of(d.mesh).and_then(|i| i.submeshes.get(d.submesh as usize)).map_or(12, |s| u64::from(s.indices.end - s.indices.start) / 3);
+            let tris = info_of(d.mesh)
+                .and_then(|i| i.submeshes.get(d.submesh as usize))
+                .map_or(12, |s| u64::from(s.indices.end - s.indices.start) / 3);
             tris * u64::from(d.instances.end - d.instances.start)
         })
         .sum();
@@ -358,16 +394,26 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
     let mut lights: Vec<LightGpu> = Vec::new();
     let mut lights_in_view = 0;
     if env.is_some() {
-        let mut near: Vec<(f32, &crate::draw_list::Light)> =
-            list.lights.iter().filter(|l| l.range > 0.0 && frustum.intersects_sphere(l.position, l.range)).map(|l| (l.position.distance_squared(eye), l)).collect();
+        let mut near: Vec<(f32, &crate::draw_list::Light)> = list
+            .lights
+            .iter()
+            .filter(|l| l.range > 0.0 && frustum.intersects_sphere(l.position, l.range))
+            .map(|l| (l.position.distance_squared(eye), l))
+            .collect();
         lights_in_view = near.len();
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
         lights.extend(near.iter().take(MAX_LIGHTS).map(|(_, l)| {
             let (dir, cos) = match l.kind {
                 LightKind::Point => (Vec3::ZERO, 0.0),
-                LightKind::Spot { direction, cos_half } => (direction.try_normalize().unwrap_or(Vec3::Z), cos_half.clamp(0.0, 0.9999)),
+                LightKind::Spot { direction, cos_half } => {
+                    (direction.try_normalize().unwrap_or(Vec3::Z), cos_half.clamp(0.0, 0.9999))
+                }
             };
-            LightGpu { pos_range: l.position.extend(l.range).to_array(), color_cos: l.color.extend(cos).to_array(), dir: dir.extend(0.0).to_array() }
+            LightGpu {
+                pos_range: l.position.extend(l.range).to_array(),
+                color_cos: l.color.extend(cos).to_array(),
+                dir: dir.extend(0.0).to_array(),
+            }
         }));
     }
 
@@ -382,7 +428,12 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
         tessellate(&list.helpers, &mut helpers);
         for l in &list.helpers.labels {
             let Some(p) = project(&view_proj, size, l.position) else { continue };
-            if p.x < 0.0 || p.y < 0.0 || p.x > size[0] as f32 || p.y > size[1] as f32 || !(0.0..=1.0).contains(&p.z) {
+            if p.x < 0.0
+                || p.y < 0.0
+                || p.x > size[0] as f32
+                || p.y > size[1] as f32
+                || !(0.0..=1.0).contains(&p.z)
+            {
                 continue;
             }
             let query = (l.depth_tested && label_points.len() < MAX_LABEL_QUERIES).then(|| {
@@ -401,7 +452,9 @@ pub fn build_packet_with(list: &DrawList, view: &View, assets: &Assets, visibili
         }
     }
 
-    let roof = env.and_then(|e| e.roof.clone()).filter(|r| r.cells > 0 && r.heights.len() >= (r.cells as usize).pow(2));
+    let roof = env
+        .and_then(|e| e.roof.clone())
+        .filter(|r| r.cells > 0 && r.heights.len() >= (r.cells as usize).pow(2));
     let id_pass = view.shows(ViewFlags::SELECTION) && any_selected;
     let mode = match (view.mode, env) {
         (ViewMode::GameLighting, None) => ViewMode::Lit,
@@ -490,7 +543,11 @@ fn instance_gpu(model: &Mat4, inst: &Instance, bones_at: u32) -> InstanceGpu {
     let n = if m3.determinant().abs() > 1e-12 { m3.inverse().transpose() } else { m3 };
     InstanceGpu {
         model: model.to_cols_array_2d(),
-        normal: [n.x_axis.extend(0.0).to_array(), n.y_axis.extend(0.0).to_array(), n.z_axis.extend(0.0).to_array()],
+        normal: [
+            n.x_axis.extend(0.0).to_array(),
+            n.y_axis.extend(0.0).to_array(),
+            n.z_axis.extend(0.0).to_array(),
+        ],
         color: inst.tint.to_f32(),
         id: inst.id,
         flags: inst.flags.bits(),
@@ -510,9 +567,16 @@ mod tests {
 
     fn setup() -> (Arc<Assets>, MeshHandle, MeshHandle, MeshHandle) {
         let a = Assets::headless(MaterialTable::default());
-        let boxes = a.add_mesh("box", MeshData::cube(MaterialDesc::textured(EditorMaterial::Opaque, "crate")));
-        let glass = a.add_mesh("glass", MeshData::quad(MaterialDesc::textured(EditorMaterial::Blended, "glass"), Vec2::ONE));
-        let fence = a.add_mesh("fence", MeshData::quad(MaterialDesc::textured(EditorMaterial::AlphaTest, "fence"), Vec2::ONE));
+        let boxes =
+            a.add_mesh("box", MeshData::cube(MaterialDesc::textured(EditorMaterial::Opaque, "crate")));
+        let glass = a.add_mesh(
+            "glass",
+            MeshData::quad(MaterialDesc::textured(EditorMaterial::Blended, "glass"), Vec2::ONE),
+        );
+        let fence = a.add_mesh(
+            "fence",
+            MeshData::quad(MaterialDesc::textured(EditorMaterial::AlphaTest, "fence"), Vec2::ONE),
+        );
         (a, boxes, glass, fence)
     }
 
@@ -582,7 +646,11 @@ mod tests {
         assert_eq!(p.blended.start, p.sky.end);
         assert_eq!(p.blended.end, p.draws.len());
         // the instance data matches its draw
-        let ids: Vec<u32> = p.draws[p.alpha.clone()].iter().flat_map(|d| d.instances.clone()).map(|i| p.instances[i as usize].id).collect();
+        let ids: Vec<u32> = p.draws[p.alpha.clone()]
+            .iter()
+            .flat_map(|d| d.instances.clone())
+            .map(|i| p.instances[i as usize].id)
+            .collect();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&200) && ids.contains(&201));
     }
@@ -617,7 +685,9 @@ mod tests {
         let (a, boxes, _, _) = setup();
         let ghost = a.material(MaterialDesc::color(EditorMaterial::Blended, Color::rgba(255, 0, 0, 128)));
         let mut list = DrawList::new();
-        list.push(Instance::new(boxes, at(0.0, 0.0)).with_material(ghost).with_flags(InstanceFlags::SELECTED));
+        list.push(
+            Instance::new(boxes, at(0.0, 0.0)).with_material(ghost).with_flags(InstanceFlags::SELECTED),
+        );
         let mut missing = Instance::new(a.object("not\\loaded"), at(2.0, 0.0));
         missing.bounds = Some(Aabb::new(Vec3::ZERO, Vec3::new(2.0, 4.0, 2.0)));
         list.push(missing);
@@ -629,7 +699,8 @@ mod tests {
         assert_eq!(p.blended.len(), 1);
         assert!(p.id_pass);
         // the placeholder is scaled to the instance's bounds
-        let ph = p.draws[p.opaque.clone()].iter().find(|d| p.meshes[d.mesh as usize] == a.placeholder()).unwrap();
+        let ph =
+            p.draws[p.opaque.clone()].iter().find(|d| p.meshes[d.mesh as usize] == a.placeholder()).unwrap();
         let m = Mat4::from_cols_array_2d(&p.instances[ph.instances.start as usize].model);
         assert!((m.transform_point3(Vec3::splat(0.5)) - Vec3::new(4.0, 4.0, 2.0)).abs().max_element() < 1e-5);
         // a preview picture leaves out what is hidden in it and draws no selection
@@ -654,7 +725,12 @@ mod tests {
         h.line(Vec3::ZERO, Vec3::X, Color::WHITE, false);
         list.helpers = h;
         for i in 0..200 {
-            list.lights.push(Light { kind: LightKind::Point, position: Vec3::new(0.0, 0.0, i as f32), range: 2.0, color: Vec3::ONE });
+            list.lights.push(Light {
+                kind: LightKind::Point,
+                position: Vec3::new(0.0, 0.0, i as f32),
+                range: 2.0,
+                color: Vec3::ONE,
+            });
         }
         list.environment = Some(crate::draw_list::Environment::default());
         let v = View { mode: ViewMode::GameLighting, ..view() };
@@ -662,7 +738,9 @@ mod tests {
         assert_eq!(p.labels.len(), 2);
         assert_eq!(p.labels[0].query, Some(0));
         assert_eq!(p.labels[1].query, None);
-        assert!((p.labels[0].position[0] - 400.0).abs() < 1e-3 && (p.labels[0].position[1] - 300.0).abs() < 1e-3);
+        assert!(
+            (p.labels[0].position[0] - 400.0).abs() < 1e-3 && (p.labels[0].position[1] - 300.0).abs() < 1e-3
+        );
         assert_eq!(p.label_points.len(), 1);
         assert_eq!(p.lights.len(), MAX_LIGHTS);
         assert!(p.stats.lights_in_view > MAX_LIGHTS);

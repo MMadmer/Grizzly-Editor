@@ -38,7 +38,11 @@ impl SnapAction {
 /// The selected, visible scene objects (`GetQueryObjects(lst, OBJCLASS_SCENEOBJECT, 1, 1, 0)`).
 #[must_use]
 pub fn selected_scene_objects(state: &SceneState) -> Vec<ObjId> {
-    state.of_class(ObjClass::SceneObject).filter(|o| o.flags.visible && state.is_selected(o.id)).map(|o| o.id).collect()
+    state
+        .of_class(ObjClass::SceneObject)
+        .filter(|o| o.flags.visible && state.is_selected(o.id))
+        .map(|o| o.id)
+        .collect()
 }
 
 /// Applies a snap action to the scene's list; `true` when the list or the selection changed.
@@ -96,7 +100,14 @@ pub struct Landing {
 /// whole box swept down (`line == false`, every triangle in the column clipped to the
 /// footprint, the tallest point wins) or one ray from the pivot (`line == true`).
 #[must_use]
-pub fn drop_to_ground(state: &SceneState, lib: &Library, pick: &ScenePick, batch: &[ObjId], align: bool, line: bool) -> Vec<Landing> {
+pub fn drop_to_ground(
+    state: &SceneState,
+    lib: &Library,
+    pick: &ScenePick,
+    batch: &[ObjId],
+    align: bool,
+    line: bool,
+) -> Vec<Landing> {
     let local = |r: &str| lib.cached(r).map(|o| o.bounds);
     let candidates: Vec<(ObjId, Aabb)> = state
         .of_class(ObjClass::SceneObject)
@@ -126,14 +137,19 @@ pub fn drop_to_ground(state: &SceneState, lib: &Library, pick: &ScenePick, batch
         let mut normal = Vec3::Y;
         if line {
             let start = obj.position() + Vec3::new(0.0, EPS_L, 0.0);
-            if let Some(hit) = ray_scene_objects(pick, state, lib, start, Vec3::NEG_Y, DROP_REACH, Some(&floor)) {
+            if let Some(hit) =
+                ray_scene_objects(pick, state, lib, start, Vec3::NEG_Y, DROP_REACH, Some(&floor))
+            {
                 drop = obj.position().y - hit.point.y;
                 if let Some(n) = hit.normal.filter(|n| n.is_finite()) {
                     normal = n;
                 }
             }
         } else {
-            let sweep = Aabb::new(Vec3::new(bx.min.x, bx.min.y - DROP_REACH, bx.min.z), Vec3::new(bx.max.x, bx.min.y + EPS_L, bx.max.z));
+            let sweep = Aabb::new(
+                Vec3::new(bx.min.x, bx.min.y - DROP_REACH, bx.min.z),
+                Vec3::new(bx.max.x, bx.min.y + EPS_L, bx.max.z),
+            );
             let mut best = -f32::MAX;
             for tri in box_triangles(state, lib, &floor, &sweep) {
                 for c in clip_triangle_xz(&tri, bx.min.x, bx.max.x, bx.min.z, bx.max.z) {
@@ -175,8 +191,16 @@ mod tests {
     #[test]
     fn snap_actions_follow_the_selection() {
         let mut s = SceneState::default();
-        let a = s.insert(Object::new(ObjClass::SceneObject, "a", ObjData::SceneObject(SceneObjectData::library("x"))));
-        let b = s.insert(Object::new(ObjClass::SceneObject, "b", ObjData::SceneObject(SceneObjectData::library("x"))));
+        let a = s.insert(Object::new(
+            ObjClass::SceneObject,
+            "a",
+            ObjData::SceneObject(SceneObjectData::library("x")),
+        ));
+        let b = s.insert(Object::new(
+            ObjClass::SceneObject,
+            "b",
+            ObjData::SceneObject(SceneObjectData::library("x")),
+        ));
         s.selection.insert(a);
         assert!(apply_snap(&mut s, SnapAction::SetFromSelection));
         assert_eq!(s.tools.snap, vec![a]);

@@ -157,7 +157,10 @@ impl Minimap {
     /// A world point in box-local pt.
     #[must_use]
     pub fn to_local(&self, w: [f32; 2]) -> Pos2 {
-        pos2(self.fitted.min.x + (w[0] - self.world_min[0]) * self.scale, self.fitted.min.y + (w[1] - self.world_min[1]) * self.scale)
+        pos2(
+            self.fitted.min.x + (w[0] - self.world_min[0]) * self.scale,
+            self.fitted.min.y + (w[1] - self.world_min[1]) * self.scale,
+        )
     }
 
     /// A box-local point (clamped to the fitted area) in world pt.
@@ -168,7 +171,10 @@ impl Minimap {
         }
         let x = local.x.clamp(self.fitted.min.x, self.fitted.max.x);
         let y = local.y.clamp(self.fitted.min.y, self.fitted.max.y);
-        [self.world_min[0] + (x - self.fitted.min.x) / self.scale, self.world_min[1] + (y - self.fitted.min.y) / self.scale]
+        [
+            self.world_min[0] + (x - self.fitted.min.x) / self.scale,
+            self.world_min[1] + (y - self.fitted.min.y) / self.scale,
+        ]
     }
 }
 
@@ -343,7 +349,10 @@ pub fn route_back(boxes: &[[f32; 4]], p0: [f32; 2], p3: [f32; 2], lanes: &mut Ve
     let mut out: Vec<[f32; 2]> = Vec::with_capacity(corners.len() * 5 + 2);
     out.push(p0);
     for k in 1..corners.len().saturating_sub(1) {
-        let (Some(&from), Some(&c), Some(&to)) = (corners.get(k - 1), corners.get(k), corners.get(k + 1)) else { continue };
+        let (Some(&from), Some(&c), Some(&to)) = (corners.get(k - 1), corners.get(k), corners.get(k + 1))
+        else {
+            continue;
+        };
         let inn = dist2(from, c).sqrt();
         let next = dist2(c, to).sqrt();
         let r = BACK_CORNER.min(inn.min(next) * 0.5);
@@ -359,7 +368,10 @@ pub fn route_back(boxes: &[[f32; 4]], p0: [f32; 2], p3: [f32; 2], lanes: &mut Ve
         for step in 0..=4 {
             let f = step as f32 / 4.0;
             let e = 1.0 - f;
-            out.push([e * e * u[0] + 2.0 * e * f * c[0] + f * f * v[0], e * e * u[1] + 2.0 * e * f * c[1] + f * f * v[1]]);
+            out.push([
+                e * e * u[0] + 2.0 * e * f * c[0] + f * f * v[0],
+                e * e * u[1] + 2.0 * e * f * c[1] + f * f * v[1],
+            ]);
         }
     }
     out.push(p3);
@@ -367,7 +379,15 @@ pub fn route_back(boxes: &[[f32; 4]], p0: [f32; 2], p3: [f32; 2], lanes: &mut Ve
 }
 
 /// Builds the link of an edge: a bezier, or a route with its lane.
-pub fn make_link(boxes: &[[f32; 4]], from: u32, to: u32, pin: &str, p0: [f32; 2], p3: [f32; 2], lanes: &mut Vec<Lane>) -> SceneLink {
+pub fn make_link(
+    boxes: &[[f32; 4]],
+    from: u32,
+    to: u32,
+    pin: &str,
+    p0: [f32; 2],
+    p3: [f32; 2],
+    lanes: &mut Vec<Lane>,
+) -> SceneLink {
     let mut l = SceneLink { from, to, pin: SmolStr::new(pin), p0, p3, path: Vec::new(), bmin: p0, bmax: p0 };
     if SceneLink::goes_back(p0, p3) {
         l.path = route_back(boxes, p0, p3, lanes);
@@ -394,9 +414,19 @@ pub struct SceneInput<'a> {
     pub palette: &'a Palette,
 }
 
-fn action_rows(cat: &Catalog, n: &gz_nq::Node, behaviour: bool, rows: usize) -> (Vec<ActionRow>, Option<(bool, usize)>) {
+fn action_rows(
+    cat: &Catalog,
+    n: &gz_nq::Node,
+    behaviour: bool,
+    rows: usize,
+) -> (Vec<ActionRow>, Option<(bool, usize)>) {
     let mut out = Vec::with_capacity(rows);
-    let all = n.on_enter.iter().enumerate().map(|(i, a)| (false, i, a)).chain(n.on_exit.iter().enumerate().map(|(i, a)| (true, i, a)));
+    let all = n
+        .on_enter
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (false, i, a))
+        .chain(n.on_exit.iter().enumerate().map(|(i, a)| (true, i, a)));
     let mut more = None;
     for (r, (exit, index, a)) in all.enumerate() {
         if r >= rows {
@@ -408,7 +438,15 @@ fn action_rows(cat: &Catalog, n: &gz_nq::Node, behaviour: bool, rows: usize) -> 
         if summary == "{}" {
             summary.clear();
         }
-        out.push(ActionRow { exit, index, kind: a.kind.clone(), icon, family: look::family_of(icon), title: look::kind_title(cat, &a.kind, behaviour), summary });
+        out.push(ActionRow {
+            exit,
+            index,
+            kind: a.kind.clone(),
+            icon,
+            family: look::family_of(icon),
+            title: look::kind_title(cat, &a.kind, behaviour),
+            summary,
+        });
     }
     (out, more)
 }
@@ -439,9 +477,15 @@ impl Scene {
             let icon = look::kind_icon(cat, &n.kind);
             let kind = cat.find(&n.kind);
             let once = !trigger && if n.once_set { n.once } else { kind.is_some_and(|k| k.once_default) };
-            let (actions, more_target) = if trigger { (Vec::new(), None) } else { action_rows(cat, n, behaviour, b.action_rows) };
+            let (actions, more_target) =
+                if trigger { (Vec::new(), None) } else { action_rows(cat, n, behaviour, b.action_rows) };
             let summary = lines.first().map_or_else(String::new, |l| {
-                format!("{}{}{}", l.key, if l.cond.is_empty() { ": " } else { " " }, text::clip_utf8(&l.value, 64))
+                format!(
+                    "{}{}{}",
+                    l.key,
+                    if l.cond.is_empty() { ": " } else { " " },
+                    text::clip_utf8(&l.value, 64)
+                )
             });
             let takes_input = !trigger && (n.kind == "flow.join" || g.in_degree(&n.id) == 0);
             index.insert(n.id.clone(), i as u32);
@@ -478,7 +522,15 @@ impl Scene {
                 for t in &p.targets {
                     let Some(&to) = index.get(t) else { continue };
                     let Some(tn) = nodes.get(to as usize) else { continue };
-                    links.push(make_link(&boxes, i as u32, to, &p.name, sn.output_pin(pin), tn.input_pin(), &mut lanes));
+                    links.push(make_link(
+                        &boxes,
+                        i as u32,
+                        to,
+                        &p.name,
+                        sn.output_pin(pin),
+                        tn.input_pin(),
+                        &mut lanes,
+                    ));
                 }
             }
         }
@@ -509,7 +561,8 @@ impl Scene {
         let mut link_cells: FxHashMap<(i32, i32), Vec<u32>> = FxHashMap::default();
         let mut big_links: Vec<u32> = Vec::new();
         for (i, l) in links.iter().enumerate() {
-            let (x0, y0, x1, y1) = (cell_of(l.bmin[0]), cell_of(l.bmin[1]), cell_of(l.bmax[0]), cell_of(l.bmax[1]));
+            let (x0, y0, x1, y1) =
+                (cell_of(l.bmin[0]), cell_of(l.bmin[1]), cell_of(l.bmax[0]), cell_of(l.bmax[1]));
             let cells = (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1);
             if cells > MAX_LINK_CELLS {
                 big_links.push(i as u32);
@@ -524,7 +577,9 @@ impl Scene {
 
         let sorted = |f: &dyn Fn(&[f32; 4]) -> f32, ties_low_first: bool| -> Edges {
             let mut v: Edges = boxes.iter().enumerate().map(|(i, b)| (f(b), i as u32)).collect();
-            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(if ties_low_first { a.1.cmp(&b.1) } else { b.1.cmp(&a.1) }));
+            v.sort_by(|a, b| {
+                a.0.total_cmp(&b.0).then(if ties_low_first { a.1.cmp(&b.1) } else { b.1.cmp(&a.1) })
+            });
             v
         };
         let tops = sorted(&|b| b[1], true);
@@ -564,7 +619,9 @@ impl Scene {
     pub fn nodes_in(&self, r: [f32; 4], out: &mut Vec<u32>) {
         let (x0, y0, x1, y1) = (cell_of(r[0]), cell_of(r[1]), cell_of(r[2]), cell_of(r[3]));
         // a view so far out that it covers more cells than there are nodes: every node
-        if (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1) > self.node_cells.len() as i64 {
+        if (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1)
+            > self.node_cells.len() as i64
+        {
             for v in self.node_cells.values() {
                 out.extend_from_slice(v);
             }
@@ -583,7 +640,9 @@ impl Scene {
     pub fn links_in(&self, r: [f32; 4], out: &mut Vec<u32>) {
         out.extend_from_slice(&self.big_links);
         let (x0, y0, x1, y1) = (cell_of(r[0]), cell_of(r[1]), cell_of(r[2]), cell_of(r[3]));
-        if (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1) > self.link_cells.len() as i64 {
+        if (i64::from(x1) - i64::from(x0) + 1) * (i64::from(y1) - i64::from(y0) + 1)
+            > self.link_cells.len() as i64
+        {
             for v in self.link_cells.values() {
                 out.extend_from_slice(v);
             }
@@ -620,14 +679,23 @@ impl Scene {
 
 /// The trigger (every root without one, the first node without those) and two levels of what
 /// follows it, with the routed edges between them (`FrameAll`'s `keep`).
-fn start_region(g: &Graph, cat: &Catalog, nodes: &[SceneNode], boxes: &[[f32; 4]], links: &[SceneLink], index: &FxHashMap<SmolStr, u32>) -> (Option<[f32; 4]>, Option<u32>) {
+fn start_region(
+    g: &Graph,
+    cat: &Catalog,
+    nodes: &[SceneNode],
+    boxes: &[[f32; 4]],
+    links: &[SceneLink],
+    index: &FxHashMap<SmolStr, u32>,
+) -> (Option<[f32; 4]>, Option<u32>) {
     if nodes.is_empty() {
         return (None, None);
     }
     let mut keep = vec![false; nodes.len()];
-    let mut front: Vec<usize> = (0..nodes.len()).filter(|&i| g.nodes.get(i).is_some_and(|n| cat.is_trigger(&n.kind))).collect();
+    let mut front: Vec<usize> =
+        (0..nodes.len()).filter(|&i| g.nodes.get(i).is_some_and(|n| cat.is_trigger(&n.kind))).collect();
     if front.is_empty() {
-        front = (0..nodes.len()).filter(|&i| g.nodes.get(i).is_some_and(|n| g.in_degree(&n.id) == 0)).collect();
+        front =
+            (0..nodes.len()).filter(|&i| g.nodes.get(i).is_some_and(|n| g.in_degree(&n.id) == 0)).collect();
     }
     if front.is_empty() {
         front.push(0);
@@ -666,7 +734,9 @@ fn start_region(g: &Graph, cat: &Catalog, nodes: &[SceneNode], boxes: &[[f32; 4]
         }
     }
     for l in links {
-        if keep.get(l.from as usize).copied().unwrap_or(false) && keep.get(l.to as usize).copied().unwrap_or(false) {
+        if keep.get(l.from as usize).copied().unwrap_or(false)
+            && keep.get(l.to as usize).copied().unwrap_or(false)
+        {
             for p in &l.path {
                 grow(&mut ext, *p);
             }
@@ -760,13 +830,18 @@ pub fn frame_all(s: &Scene, view: [f32; 2]) -> Framed {
     for z in (gz_nq::doc::ZOOM_FRAME_MIN..=gz_nq::doc::ZOOM_DEFAULT).rev() {
         let k = gz_nq::doc::zoom_of(z);
         if (mx[0] - mn[0]) * k <= view[0] && (mx[1] - mn[1]) * k <= view[1] {
-            return Framed { zoom: z, center: [layout::sane((mn[0] + mx[0]) * 0.5), layout::sane((mn[1] + mx[1]) * 0.5)], status: None };
+            return Framed {
+                zoom: z,
+                center: [layout::sane((mn[0] + mx[0]) * 0.5), layout::sane((mn[1] + mx[1]) * 0.5)],
+                status: None,
+            };
         }
     }
     let k = gz_nq::doc::zoom_of(gz_nq::doc::ZOOM_FRAME_MIN);
     let v = [view[0] / k, view[1] / k];
     let se = s.start_extent.unwrap_or(e);
-    let (kmn, kmx) = ([se[0] - FRAME_MARGIN, se[1] - FRAME_MARGIN], [se[2] + FRAME_MARGIN, se[3] + FRAME_MARGIN]);
+    let (kmn, kmx) =
+        ([se[0] - FRAME_MARGIN, se[1] - FRAME_MARGIN], [se[2] + FRAME_MARGIN, se[3] + FRAME_MARGIN]);
     let a = s.anchor.and_then(|i| s.nodes.get(i as usize));
     let ax = a.map_or((mn[0] + mx[0]) * 0.5, |a| a.pos[0] + a.size[0] * 0.5);
     let ay = a.map_or(mn[1], |a| a.pos[1]);
@@ -776,7 +851,10 @@ pub fn frame_all(s: &Scene, view: [f32; 2]) -> Framed {
     Framed {
         zoom: gz_nq::doc::ZOOM_FRAME_MIN,
         center: [layout::sane(cx), layout::sane(cy)],
-        status: Some(format!("The {} is larger than the view at {pct}%: framed from its start", look::doc_noun(s.behaviour))),
+        status: Some(format!(
+            "The {} is larger than the view at {pct}%: framed from its start",
+            look::doc_noun(s.behaviour)
+        )),
     }
 }
 

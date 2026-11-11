@@ -88,7 +88,9 @@ pub(crate) async fn scan_first(
             } else {
                 "publish again when VirusTotal answers."
             };
-            return Err(format!("{what}. A release of a module in the Mod Browser goes out only with a VirusTotal report of every package: {again}"));
+            return Err(format!(
+                "{what}. A release of a module in the Mod Browser goes out only with a VirusTotal report of every package: {again}"
+            ));
         }
         return Ok(format!(
             "{what}. The Mod Browser catalog did not answer: if this module is in the Mod Browser, it is offered there only once VirusTotal has a report of every package."

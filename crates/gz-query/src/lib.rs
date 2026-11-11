@@ -101,7 +101,8 @@ where
     /// moves while one runs is picked up by the next read.
     pub fn get(&self, key: &K, rev: Rev, compute: impl FnOnce() -> V + Send + 'static) -> Answer<V> {
         let mut slots = self.inner.slots.lock();
-        let slot = slots.entry(key.clone()).or_insert_with(|| Slot { rev: Rev::ZERO, value: None, running: false });
+        let slot =
+            slots.entry(key.clone()).or_insert_with(|| Slot { rev: Rev::ZERO, value: None, running: false });
         if slot.rev == rev
             && let Some(v) = &slot.value
         {

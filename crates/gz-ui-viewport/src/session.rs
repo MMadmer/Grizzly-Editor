@@ -40,7 +40,9 @@ pub fn parse(text: &str) -> FxHashMap<String, Saved> {
     let doc = LtxDoc::parse(text);
     let mut out = FxHashMap::default();
     for s in doc.sections() {
-        if let (Some(hpb), Some(position)) = (doc.get(s, "hpb").and_then(vec3), doc.get(s, "position").and_then(vec3)) {
+        if let (Some(hpb), Some(position)) =
+            (doc.get(s, "hpb").and_then(vec3), doc.get(s, "position").and_then(vec3))
+        {
             out.insert(s.to_lowercase(), Saved { hpb, position });
         }
     }
@@ -68,12 +70,20 @@ mod tests {
     #[test]
     fn cameras_round_trip() {
         let mut m = FxHashMap::default();
-        m.insert("rawdata\\levels\\a.level".to_owned(), Saved { hpb: Vec3::new(0.5, -0.25, 0.0), position: Vec3::new(1.0, 2.0, 3.5) });
+        m.insert(
+            "rawdata\\levels\\a.level".to_owned(),
+            Saved { hpb: Vec3::new(0.5, -0.25, 0.0), position: Vec3::new(1.0, 2.0, 3.5) },
+        );
         let text = write(&m);
         let back = parse(&text);
         let s = back.get("rawdata\\levels\\a.level").copied();
-        assert!(s.is_some_and(|s| (s.position - Vec3::new(1.0, 2.0, 3.5)).length() < 1e-3 && (s.hpb.x - 0.5).abs() < 1e-4));
-        assert_eq!(scene_key(Path::new("C:\\p"), Path::new("C:\\p\\RawData\\Levels\\A.level")), "rawdata\\levels\\a.level");
+        assert!(s.is_some_and(
+            |s| (s.position - Vec3::new(1.0, 2.0, 3.5)).length() < 1e-3 && (s.hpb.x - 0.5).abs() < 1e-4
+        ));
+        assert_eq!(
+            scene_key(Path::new("C:\\p"), Path::new("C:\\p\\RawData\\Levels\\A.level")),
+            "rawdata\\levels\\a.level"
+        );
         assert!(parse("[x]\nhpb = 1, 2\n").is_empty());
     }
 }

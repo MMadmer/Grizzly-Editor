@@ -18,6 +18,10 @@ const POINT_SIZE: u32 = 20;
 /// `EPS_L`.
 const EPS_L: f32 = 0.0001;
 
+/// A vertex of the merged game graph: its level, position, level vertex, types, edges and
+/// death points.
+type MergedVertex = (u8, Vec3, u32, [u8; 4], Vec<(u16, f32)>, Vec<LevelPoint>);
+
 /// `CLevelGraphEditor::build`: the level graph of the AI Map tool's nodes (CoP layout).
 pub fn level_graph(nodes: &[AiMapNode], params: &AiParams, guid: Guid) -> Result<LevelGraph> {
     if nodes.is_empty() {
@@ -77,13 +81,24 @@ pub struct LevelGameGraph {
 /// `CGameGraphBuilder::build_graph`: the graph points on the AI map, each level vertex given to
 /// the nearest of them (the cross table), edges between points whose areas touch with their path
 /// lengths, then every edge a shorter detour makes redundant taken out.
-pub fn build_game_graph(nav: &LevelNav, points: &[GraphPoint], level_name: &str, level_guid: Guid, game_guid: Guid) -> Result<LevelGameGraph> {
+pub fn build_game_graph(
+    nav: &LevelNav,
+    points: &[GraphPoint],
+    level_name: &str,
+    level_guid: Guid,
+    game_guid: Guid,
+) -> Result<LevelGameGraph> {
     let mut log = vec!["Building level game graph".to_owned(), format!("{} nodes loaded", nav.count())];
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut kept: Vec<GraphPoint> = Vec::new();
     for p in points {
         let near = vertices.iter().any(|v| v.point.distance_squared(p.position) < EPS_L);
-        let fmt = |why: &str| format!("! removing graph point [{}][{:.6}][{:.6}][{:.6}] because {why}", p.name, p.position.x, p.position.y, p.position.z);
+        let fmt = |why: &str| {
+            format!(
+                "! removing graph point [{}][{:.6}][{:.6}][{:.6}] because {why}",
+                p.name, p.position.x, p.position.y, p.position.z
+            )
+        };
         if near {
             log.push(fmt("it is too close to the another graph point"));
             continue;
@@ -97,7 +112,12 @@ pub fn build_game_graph(nav: &LevelNav, points: &[GraphPoint], level_name: &str,
             log.push(fmt("it has the same AI node as another graph point"));
             continue;
         }
-        vertices.push(Vertex { point: p.position, level_vertex: node, types: p.locations, edges: Vec::new() });
+        vertices.push(Vertex {
+            point: p.position,
+            level_vertex: node,
+            types: p.locations,
+            edges: Vec::new(),
+        });
         kept.push(p.clone());
     }
     log.push(format!("{} graph points loaded", vertices.len()));
@@ -111,8 +131,7 @@ pub fn build_game_graph(nav: &LevelNav, points: &[GraphPoint], level_name: &str,
     let (results, distances) = cross_distances(nav, &vertices);
     let cell = nav.header.cell_size;
     let mut cells: Vec<u8> = Vec::with_capacity(nav.count() as usize * 6);
-    for i in 0..nav.count() as usize {
-        let g = results[i];
+    for (i, &g) in results.iter().enumerate().take(nav.count() as usize) {
         let d = distances.get(g as usize).and_then(|row| row.get(i)).copied().unwrap_or(u32::MAX);
         cells.extend_from_slice(&(g as u16).to_le_bytes());
         cells.extend_from_slice(&(d as f32 * cell).to_le_bytes());
@@ -140,7 +159,13 @@ pub fn build_game_graph(nav: &LevelNav, points: &[GraphPoint], level_name: &str,
     let graph = assemble(
         &vertices,
         game_guid,
-        vec![GraphLevel { name: level_name.into(), offset: Vec3::ZERO, id: 0, section: "".into(), guid: level_guid }],
+        vec![GraphLevel {
+            name: level_name.into(),
+            offset: Vec3::ZERO,
+            id: 0,
+            section: "".into(),
+            guid: level_guid,
+        }],
         0,
         Vec::new(),
         vec![CrossTable {
@@ -293,7 +318,14 @@ fn optimize(vertices: &mut [Vertex]) {
 
 /// The file form of a graph: edge offsets after the vertex records, death point offsets after
 /// the edges.
-fn assemble(vertices: &[Vertex], guid: Guid, levels: Vec<GraphLevel>, level_id: u8, death: Vec<(u8, Vec<LevelPoint>)>, cross: Vec<CrossTable>) -> Result<GameGraph> {
+fn assemble(
+    vertices: &[Vertex],
+    guid: Guid,
+    levels: Vec<GraphLevel>,
+    level_id: u8,
+    death: Vec<(u8, Vec<LevelPoint>)>,
+    cross: Vec<CrossTable>,
+) -> Result<GameGraph> {
     let count = u32::try_from(vertices.len()).map_err(|_| BuildError::new("too many graph vertices"))?;
     let edges: u32 = vertices.iter().map(|v| v.edges.len() as u32).sum();
     let mut edge_offset = count * VERTEX_SIZE;
@@ -369,13 +401,17 @@ pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<S
     }
     let total = offset;
     // per level: the vertices with their edges renumbered, the death points, the connections
-    let mut merged: Vec<(u8, Vec3, u32, [u8; 4], Vec<(u16, f32)>, Vec<LevelPoint>)> = Vec::new();
+    let mut merged: Vec<MergedVertex> = Vec::new();
     for p in &parts {
         let off = offsets[&p.id];
         let g = &p.graph.graph;
         let cross = g.cross_tables.first();
         for (i, v) in g.vertices.iter().enumerate() {
-            let edges: Vec<(u16, f32)> = g.edges_of(i as u16).iter().map(|e| ((u32::from(e.vertex_id) + off) as u16, e.distance)).collect();
+            let edges: Vec<(u16, f32)> = g
+                .edges_of(i as u16)
+                .iter()
+                .map(|e| ((u32::from(e.vertex_id) + off) as u16, e.distance))
+                .collect();
             let mut nodes: Vec<u32> = Vec::new();
             if let Some(c) = cross {
                 for n in 0..c.level_vertex_count {
@@ -384,11 +420,19 @@ pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<S
                     }
                 }
             }
-            let m = if nodes.len() > 10 { ((0.1 * nodes.len() as f32).floor() as usize).min(255) } else { nodes.len() };
+            let m = if nodes.len() > 10 {
+                ((0.1 * nodes.len() as f32).floor() as usize).min(255)
+            } else {
+                nodes.len()
+            };
             let points = nodes
                 .iter()
                 .take(m)
-                .map(|&n| LevelPoint { point: p.nav.vertex_position(n), level_vertex: n, distance: cross.and_then(|c| c.cell(n)).map_or(0.0, |c| c.1) })
+                .map(|&n| LevelPoint {
+                    point: p.nav.vertex_position(n),
+                    level_vertex: n,
+                    distance: cross.and_then(|c| c.cell(n)).map_or(0.0, |c| c.1),
+                })
                 .collect();
             merged.push((p.id, v.global_point + p.offset, v.level_vertex, v.vertex_types, edges, points));
         }
@@ -396,14 +440,18 @@ pub fn merge_levels(parts: &[LevelPart], guid: Guid) -> Result<(GameGraph, Vec<S
     // interconnection points: each level's points by name, in name order
     for p in &parts {
         let off = offsets[&p.id];
-        let mut by_name: Vec<(&GraphPoint, u32)> = p.graph.points.iter().enumerate().map(|(i, gp)| (gp, i as u32)).collect();
+        let mut by_name: Vec<(&GraphPoint, u32)> =
+            p.graph.points.iter().enumerate().map(|(i, gp)| (gp, i as u32)).collect();
         by_name.sort_by(|a, b| a.0.name.cmp(&b.0.name));
         for (gp, local) in by_name {
             if gp.connection_point.is_empty() {
                 continue;
             }
             let Some(target) = parts.iter().find(|t| t.caption == gp.connection_level) else {
-                log.push(format!("Cannot find level {}. Connection point will not be generated!", gp.connection_level));
+                log.push(format!(
+                    "Cannot find level {}. Connection point will not be generated!",
+                    gp.connection_level
+                ));
                 continue;
             };
             let Some(t_local) = target.graph.points.iter().position(|t| t.name == gp.connection_point) else {
@@ -522,14 +570,24 @@ pub(crate) mod tests {
     }
 
     fn point(name: &str, x: f32, z: f32, level: &str, to: &str) -> GraphPoint {
-        GraphPoint { name: name.into(), position: Vec3::new(x, 0.0, z), locations: [1, 2, 3, 4], connection_level: level.into(), connection_point: to.into() }
+        GraphPoint {
+            name: name.into(),
+            position: Vec3::new(x, 0.0, z),
+            locations: [1, 2, 3, 4],
+            connection_level: level.into(),
+            connection_point: to.into(),
+        }
     }
 
     #[test]
     fn a_level_graph_has_its_cross_table() {
         let lg = grid(6, 2, [1; 16]);
         let nav = LevelNav::new(&lg);
-        let points = vec![point("a", 0.0, 0.0, "", ""), point("b", 5.0, 0.0, "", ""), point("too_close", 0.0, 0.0, "", "")];
+        let points = vec![
+            point("a", 0.0, 0.0, "", ""),
+            point("b", 5.0, 0.0, "", ""),
+            point("too_close", 0.0, 0.0, "", ""),
+        ];
         let g = build_game_graph(&nav, &points, "l01", [1; 16], [2; 16]).unwrap();
         assert_eq!(g.graph.vertices.len(), 2);
         assert_eq!(g.points.len(), 2);
@@ -555,8 +613,24 @@ pub(crate) mod tests {
         let ga = build_game_graph(&na, &pa, "l_a", [1; 16], [2; 16]).unwrap();
         let gb = build_game_graph(&nb, &pb, "l_b", [3; 16], [4; 16]).unwrap();
         let parts = vec![
-            LevelPart { id: 2, name: "l_b".into(), caption: "level_b".into(), section: "level2".into(), offset: Vec3::new(100.0, 0.0, 0.0), graph: gb, nav: nb },
-            LevelPart { id: 1, name: "l_a".into(), caption: "level_a".into(), section: "level1".into(), offset: Vec3::ZERO, graph: ga, nav: na },
+            LevelPart {
+                id: 2,
+                name: "l_b".into(),
+                caption: "level_b".into(),
+                section: "level2".into(),
+                offset: Vec3::new(100.0, 0.0, 0.0),
+                graph: gb,
+                nav: nb,
+            },
+            LevelPart {
+                id: 1,
+                name: "l_a".into(),
+                caption: "level_a".into(),
+                section: "level1".into(),
+                offset: Vec3::ZERO,
+                graph: ga,
+                nav: na,
+            },
         ];
         let (g, log) = merge_levels(&parts, [9; 16]).unwrap();
         assert_eq!(g.vertex_count, 4);

@@ -69,7 +69,12 @@ impl Default for AiParams {
 
 impl AiParams {
     fn read(b: &[u8]) -> Self {
-        Self { patch_size: f32_at(b, 0), test_height: f32_at(b, 4), can_up: f32_at(b, 8), can_down: f32_at(b, 12) }
+        Self {
+            patch_size: f32_at(b, 0),
+            test_height: f32_at(b, 4),
+            can_up: f32_at(b, 8),
+            can_down: f32_at(b, 12),
+        }
     }
 
     fn write(&self, w: &mut Writer) {
@@ -418,7 +423,12 @@ pub const EDITOR_LOW_COVER: u8 = 9;
 /// whatever the stack held.
 // oracle: for Shadow of Chernobyl the C++ writes version 8 into the header and still packs the
 // 23-byte node of version 10, which no game reads; here version 8 gets its own 21-byte node.
-pub fn export_level_graph(nodes: &[AiMapNode], params: &AiParams, guid: [u8; 16], version: u32) -> Result<LevelGraph> {
+pub fn export_level_graph(
+    nodes: &[AiMapNode],
+    params: &AiParams,
+    guid: [u8; 16],
+    version: u32,
+) -> Result<LevelGraph> {
     if version != XRAI_VERSION_COP && version != XRAI_VERSION_SOC {
         return Err(LevelError::Version { what: "AI map export", found: version });
     }
@@ -458,7 +468,7 @@ pub fn export_level_graph(nodes: &[AiMapNode], params: &AiParams, guid: [u8; 16]
 }
 
 /// `CNodeRenumberer`: sorts the nodes by cell (stable) and rewrites the links to match.
-pub fn renumber(nodes: &mut Vec<AiNode>) {
+pub fn renumber(nodes: &mut [AiNode]) {
     let n = nodes.len() as u32;
     let mut sorted: Vec<u32> = (0..n).collect();
     sorted.sort_by_key(|&i| nodes.get(i as usize).map_or(0, |v| v.xz));

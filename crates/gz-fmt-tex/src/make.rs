@@ -27,13 +27,25 @@ pub struct GameTexture {
 ///
 /// The picture's own size is used; the size in the description is not consulted. `normal_map`
 /// is the description's special normal map, for a bump map that names one.
-pub fn make_game_texture(source: &Image, params: &TextureParams, normal_map: Option<&Image>) -> Result<GameTexture> {
+pub fn make_game_texture(
+    source: &Image,
+    params: &TextureParams,
+    normal_map: Option<&Image>,
+) -> Result<GameTexture> {
     source.check()?;
     if params.ty == TextureType::BUMP_MAP {
         let bump = make_bump_textures(source, normal_map, params.bump_virtual_height)?;
-        return Ok(GameTexture { dds: bump.bump, bump_error_dds: Some(bump.error), low_gloss: bump.low_gloss });
+        return Ok(GameTexture {
+            dds: bump.bump,
+            bump_error_dds: Some(bump.error),
+            low_gloss: bump.low_gloss,
+        });
     }
-    Ok(GameTexture { dds: build_dds(source, &params.dds_request()?)?, bump_error_dds: None, low_gloss: false })
+    Ok(GameTexture {
+        dds: build_dds(source, &params.dds_request()?)?,
+        bump_error_dds: None,
+        low_gloss: false,
+    })
 }
 
 /// Whether a source picture has a size the game takes: powers of two, or a cube strip six
@@ -57,7 +69,11 @@ const THUMBNAIL_SIDE: u32 = 256;
 const THUMBNAIL_LIMIT: usize = 256 << 10;
 
 fn opaque_or_alpha(alpha: bool) -> DdsRequest {
-    DdsRequest { encoding: if alpha { DdsEncoding::Dxt5 } else { DdsEncoding::Dxt1 }, mips: true, filter: MipFilter::Box }
+    DdsRequest {
+        encoding: if alpha { DdsEncoding::Dxt5 } else { DdsEncoding::Dxt1 },
+        mips: true,
+        filter: MipFilter::Box,
+    }
 }
 
 /// A module's `thumbnail.dds` (`EditorCatalog::MakeThumbnail`): the middle square of the
@@ -69,7 +85,9 @@ pub fn make_thumbnail_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
         return Err(TexError::BadPixels { width, height, need, got: rgba.len() });
     }
     if width < 16 || height < 16 {
-        return Err(TexError::Invalid(format!("a thumbnail needs a picture of at least 16 x 16 pixels, this one is {width} x {height}")));
+        return Err(TexError::Invalid(format!(
+            "a thumbnail needs a picture of at least 16 x 16 pixels, this one is {width} x {height}"
+        )));
     }
     let (w, h) = (width as i64, height as i64);
     let side = w.min(h);
@@ -86,15 +104,16 @@ pub fn make_thumbnail_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
             let y0 = fy0 as i64;
             let y1 = (y0 + 1).max((fy0 + scale) as i64).min(h);
             let mut alpha = false;
-            for (x, px) in row.chunks_exact_mut(4).enumerate() {
+            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let fx0 = left as f32 + x as f32 * scale;
                 let x0 = fx0 as i64;
                 let x1 = (x0 + 1).max((fx0 + scale) as i64).min(w);
                 let mut sum = [0u32; 4];
                 let mut count = 0u32;
                 for sy in y0..y1 {
-                    let line = rgba.get((sy * w + x0) as usize * 4..(sy * w + x1) as usize * 4).unwrap_or(&[]);
-                    for p in line.chunks_exact(4) {
+                    let line =
+                        rgba.get((sy * w + x0) as usize * 4..(sy * w + x1) as usize * 4).unwrap_or(&[]);
+                    for p in line.as_chunks::<4>().0 {
                         for c in 0..4 {
                             sum[c] += u32::from(p[c]);
                         }
@@ -104,7 +123,12 @@ pub fn make_thumbnail_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
                 let count = count.max(1);
                 let a = sum[3] / count;
                 alpha |= a < 250;
-                px.copy_from_slice(&[(sum[0] / count) as u8, (sum[1] / count) as u8, (sum[2] / count) as u8, a as u8]);
+                px.copy_from_slice(&[
+                    (sum[0] / count) as u8,
+                    (sum[1] / count) as u8,
+                    (sum[2] / count) as u8,
+                    a as u8,
+                ]);
             }
             alpha
         })
@@ -113,7 +137,9 @@ pub fn make_thumbnail_dds(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
     let image = Image { width: THUMBNAIL_SIDE, height: THUMBNAIL_SIDE, rgba: data };
     let dds = build_dds(&image, &opaque_or_alpha(alpha))?;
     if !valid_thumbnail_dds(&dds) {
-        return Err(TexError::Invalid("the compressor wrote a file the game would not take as a thumbnail".into()));
+        return Err(TexError::Invalid(
+            "the compressor wrote a file the game would not take as a thumbnail".into(),
+        ));
     }
     Ok(dds)
 }
@@ -126,8 +152,11 @@ pub fn valid_thumbnail_dds(bytes: &[u8]) -> bool {
     if bytes.len() < 128 || bytes.len() > THUMBNAIL_LIMIT || !bytes.starts_with(b"DDS ") {
         return false;
     }
-    let at = |offset: usize| bytes.get(offset..offset + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-    let (header, height, width, mips, format_size, format_flags) = (at(4), at(12), at(16), at(28), at(76), at(80));
+    let at = |offset: usize| {
+        bytes.get(offset..offset + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let (header, height, width, mips, format_size, format_flags) =
+        (at(4), at(12), at(16), at(28), at(76), at(80));
     if header != 124 || width != 256 || height != 256 || format_size != 32 || format_flags & 0x4 == 0 {
         return false;
     }
@@ -168,7 +197,7 @@ pub fn make_screen_picture_dds(rgba: &[u8], width: u32, height: u32) -> Result<V
         .map(|(y, row)| {
             let sy = y * h / th;
             let mut alpha = false;
-            for (x, px) in row.chunks_exact_mut(4).enumerate() {
+            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let at = (sy * w + x * w / tw) * 4;
                 if let Some(p) = rgba.get(at..at + 4) {
                     alpha |= p[3] < 250;
@@ -198,12 +227,16 @@ pub fn check_compliance(source: &Image, has_alpha: bool) -> Result<(u32, u32)> {
     let mut difference = 0f32;
     let mut maximal = 0f32;
     // summed in pixel order, in single precision, as the editor does
-    for (a, b) in source.rgba.chunks_exact(4).zip(restored.rgba.chunks_exact(4)) {
+    for (a, b) in source.rgba.as_chunks::<4>().0.iter().zip(restored.rgba.as_chunks::<4>().0) {
         let d = |c: usize| {
             let v = F * f32::from(a[c]) - F * f32::from(b[c]);
             v * v
         };
-        let e = if has_alpha { (d(0) + d(1) + d(2) + d(3)).sqrt() * (F * f32::from(a[3])) } else { (d(0) + d(1) + d(2)).sqrt() };
+        let e = if has_alpha {
+            (d(0) + d(1) + d(2) + d(3)).sqrt() * (F * f32::from(a[3]))
+        } else {
+            (d(0) + d(1) + d(2)).sqrt()
+        };
         difference += e;
         maximal = maximal.max(e);
     }
@@ -222,7 +255,7 @@ fn border_pass(pixels: &[u8], w: usize, h: usize, reference: u8) -> Option<Vec<u
         .enumerate()
         .map(|(y, row)| {
             let mut changed = false;
-            for (x, px) in row.chunks_exact_mut(4).enumerate() {
+            for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 if px[3] != 0 {
                     continue;
                 }
@@ -240,8 +273,13 @@ fn border_pass(pixels: &[u8], w: usize, h: usize, reference: u8) -> Option<Vec<u
                         count += 1;
                     }
                 }
-                if count != 0 {
-                    px.copy_from_slice(&[(sum[0] / count) as u8, (sum[1] / count) as u8, (sum[2] / count) as u8, reference]);
+                if let Some(n) = std::num::NonZeroU32::new(count) {
+                    px.copy_from_slice(&[
+                        (sum[0] / n) as u8,
+                        (sum[1] / n) as u8,
+                        (sum[2] / n) as u8,
+                        reference,
+                    ]);
                     changed = true;
                 }
             }
@@ -258,7 +296,7 @@ pub fn apply_borders(source: &Image) -> Result<Image> {
     source.check()?;
     let (w, h) = (source.width as usize, source.height as usize);
     let mut pixels = source.rgba.clone();
-    for p in pixels.chunks_exact_mut(4) {
+    for p in pixels.as_chunks_mut::<4>().0 {
         p[3] = if p[3] > 200 { 0xff } else { 0 };
     }
     for reference in (1..=254u8).rev() {
@@ -268,7 +306,7 @@ pub fn apply_borders(source: &Image) -> Result<Image> {
             None => break,
         }
     }
-    for (p, s) in pixels.chunks_exact_mut(4).zip(source.rgba.chunks_exact(4)) {
+    for (p, s) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(source.rgba.as_chunks::<4>().0) {
         p[3] = s[3];
     }
     Ok(Image { width: source.width, height: source.height, rgba: pixels })
@@ -327,7 +365,7 @@ mod tests {
         }
         let dds = make_thumbnail_dds(&rgba, 48, 16).unwrap();
         let top = read_dds_level(&dds, 0, 0).unwrap();
-        assert!(top.rgba.chunks_exact(4).all(|p| p[0] < 16 && p[1] > 240 && p[2] < 16));
+        assert!(top.rgba.as_chunks::<4>().0.iter().all(|p| p[0] < 16 && p[1] > 240 && p[2] < 16));
     }
 
     #[test]
@@ -384,7 +422,7 @@ mod tests {
     fn the_thumbnail_picture_is_128_square() {
         let px = thumbnail_pixels(&Image::filled(300, 200, [9, 8, 7, 255]).unwrap()).unwrap();
         assert_eq!(px.len(), 128 * 128 * 4);
-        assert!(px.chunks_exact(4).all(|p| p[..3] == [9, 8, 7]));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[..3] == [9, 8, 7]));
         assert!(thumbnail_pixels(&Image::filled(1, 200, [0; 4]).unwrap()).is_err());
     }
 
@@ -411,7 +449,7 @@ mod tests {
         let mut img = Image::filled(5, 5, [0, 0, 0, 0]).unwrap();
         img.rgba[(2 * 5 + 2) * 4..][..4].copy_from_slice(&[200, 10, 10, 255]);
         let out = apply_borders(&img).unwrap();
-        for (i, p) in out.rgba.chunks_exact(4).enumerate() {
+        for (i, p) in out.rgba.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(&p[..3], &[200, 10, 10], "pixel {i}");
             assert_eq!(p[3], img.rgba[i * 4 + 3]);
         }

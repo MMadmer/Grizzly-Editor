@@ -105,7 +105,9 @@ fn resolve_target(args: &Args, root: &str, roster: &Roster) -> Result<String, St
     if let Some(path) = args.text("path") {
         return project_path(root, path);
     }
-    let Some(id) = args.text("id") else { return Err("give 'path' (a .npcasset in the project) or 'id' (a character id)".into()) };
+    let Some(id) = args.text("id") else {
+        return Err("give 'path' (a .npcasset in the project) or 'id' (a character id)".into());
+    };
     match roster.get_raw(id) {
         Some(c) => project_path(root, &c.file),
         None => Err(format!("no character with id '{id}' in the project")),
@@ -132,7 +134,12 @@ pub fn character_json(c: &Character) -> Value {
 }
 
 /// Validates one character on the IO pool.
-async fn validated(ed: &Editor, checker: Checker, c: Character, mut problems: Vec<String>) -> (Character, Vec<String>) {
+async fn validated(
+    ed: &Editor,
+    checker: Checker,
+    c: Character,
+    mut problems: Vec<String>,
+) -> (Character, Vec<String>) {
     ed.exec
         .io(move || {
             checker.validate(&c, &mut problems);
@@ -202,7 +209,9 @@ async fn characters_get(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
 
 async fn characters_write(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let svc = open(&ed).await?;
-    let Some(text) = args.text("text").map(str::to_owned) else { return Err(refuse("missing 'text' (the whole .npcasset body)")) };
+    let Some(text) = args.text("text").map(str::to_owned) else {
+        return Err(refuse("missing 'text' (the whole .npcasset body)"));
+    };
     let roster = svc.fresh_roster().await;
     let root = svc.root().to_owned();
     // where it goes: an explicit path, an existing character's file, or a new file named after
@@ -219,12 +228,17 @@ async fn characters_write(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply
     };
     // a deviation from the C++, which wrote wherever an absolute path pointed
     if !inside(&root, &abs) {
-        return Err(refuse("path is outside the project folder - characters are written into the project only"));
+        return Err(refuse(
+            "path is outside the project folder - characters are written into the project only",
+        ));
     }
     let wire = project_relative(&root, &abs);
     let mut c = parse(&text, base_name(&abs)).map_err(refuse)?;
     let target = PathBuf::from(&abs);
-    ed.exec.io(move || gz_editor::fsx::write_atomic(&target, text.as_bytes())).await.map_err(|_| refuse("cannot create file"))?;
+    ed.exec
+        .io(move || gz_editor::fsx::write_atomic(&target, text.as_bytes()))
+        .await
+        .map_err(|_| refuse("cannot create file"))?;
     mark_folders(&svc, &abs);
 
     // validate what it RESOLVES to, not what the file literally says: a count of 0 is how an
@@ -267,7 +281,9 @@ async fn characters_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Repl
         svc.project().tree.mark_fs(Path::new(dir));
     }
     if !rep.ok() {
-        return Err(refuse(rep.failures.first().map_or_else(|| "delete failed".to_owned(), |f| f.reason.clone())));
+        return Err(refuse(
+            rep.failures.first().map_or_else(|| "delete failed".to_owned(), |f| f.reason.clone()),
+        ));
     }
     svc.project().tree.refresh().await;
     Ok(json!({ "deleted": wire }))
@@ -292,7 +308,12 @@ impl BuildCheck for CharactersCheck {
         "Checking the characters"
     }
 
-    fn check(&self, editor: Arc<Editor>, _session: Arc<ProjectSession>, _walk: Arc<BuildWalk>) -> BoxFuture<'static, Vec<Problem>> {
+    fn check(
+        &self,
+        editor: Arc<Editor>,
+        _session: Arc<ProjectSession>,
+        _walk: Arc<BuildWalk>,
+    ) -> BoxFuture<'static, Vec<Problem>> {
         Box::pin(async move {
             // the roster reads only the files the build ships (`outside_build`)
             let Ok(svc) = Characters::of(&editor).await else { return Vec::new() };
@@ -304,7 +325,8 @@ impl BuildCheck for CharactersCheck {
                     .exec
                     .io(move || {
                         let checker = Checker::unlinked();
-                        let shipped: Vec<_> = all.resolved.iter().filter(|c| !c.is_abstract).cloned().collect();
+                        let shipped: Vec<_> =
+                            all.resolved.iter().filter(|c| !c.is_abstract).cloned().collect();
                         checker.validate_all(&shipped)
                     })
                     .await,

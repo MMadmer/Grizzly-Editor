@@ -166,7 +166,13 @@ fn cp1251(bytes: &[u8]) -> String {
 
 /// The sheet's pixels: the project's `gamedata\textures`, the game's, and for Refined's own
 /// sheet the editor's bundled copy (`Sheet`). Blocking.
-fn sheet_bytes(root: &Path, files: Option<&GameFiles>, bundled_dir: &Path, key: &str, from: SheetFrom) -> Option<Vec<u8>> {
+fn sheet_bytes(
+    root: &Path,
+    files: Option<&GameFiles>,
+    bundled_dir: &Path,
+    key: &str,
+    from: SheetFrom,
+) -> Option<Vec<u8>> {
     let project = root.join("gamedata").join("textures").join(format!("{key}.dds"));
     if project.is_file()
         && let Ok(b) = std::fs::read(&project)
@@ -189,7 +195,11 @@ impl PdaAssets {
     /// The assets of the open project's session, made on first use.
     #[must_use]
     pub fn of_session(session: &ProjectSession) -> Arc<Self> {
-        session.services.get_or_init(|| PdaAssets { root: session.root.clone(), cache: Mutex::new(Cache::default()), ctx: Mutex::new(None) })
+        session.services.get_or_init(|| PdaAssets {
+            root: session.root.clone(),
+            cache: Mutex::new(Cache::default()),
+            ctx: Mutex::new(None),
+        })
     }
 
     /// The window's context: what a decoded sheet is uploaded through.
@@ -266,9 +276,12 @@ impl PdaAssets {
             .io(move || {
                 let mut texts: Vec<String> = Vec::new();
                 if let Some(files) = &files {
-                    let paths: Vec<&str> = files.find("configs/ui/textures_descr", "xml").into_iter().map(|f| f.path).collect();
+                    let paths: Vec<&str> =
+                        files.find("configs/ui/textures_descr", "xml").into_iter().map(|f| f.path).collect();
                     let bytes = exec.io_pool().install(|| files.read_many(&paths));
-                    texts.extend(bytes.into_iter().filter_map(Result::ok).map(|b| gz_fmt_xml::decode(&b).into_owned()));
+                    texts.extend(
+                        bytes.into_iter().filter_map(Result::ok).map(|b| gz_fmt_xml::decode(&b).into_owned()),
+                    );
                 }
                 let game_files = u32::try_from(texts.len()).unwrap_or(u32::MAX);
                 let mut bundled_files = 0;
@@ -279,10 +292,19 @@ impl PdaAssets {
                     bundled_files = 1;
                 }
                 let mut own: Vec<PathBuf> = std::fs::read_dir(&dir)
-                    .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml"))).collect())
+                    .map(|rd| {
+                        rd.filter_map(Result::ok)
+                            .map(|e| e.path())
+                            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("xml")))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 own.sort();
-                texts.extend(own.iter().filter_map(|p| std::fs::read(p).ok()).map(|b| gz_fmt_xml::decode(&b).into_owned()));
+                texts.extend(
+                    own.iter()
+                        .filter_map(|p| std::fs::read(p).ok())
+                        .map(|b| gz_fmt_xml::decode(&b).into_owned()),
+                );
                 let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
                 TexIds { sheets: TextureSheets::build(&refs), game_files, bundled_files }
             })
@@ -312,7 +334,8 @@ impl PdaAssets {
             let bundled_dir = Bundled::of(&ed).path("configs\\pda");
             let root = me.root.clone();
             let k = key.clone();
-            let bytes = ed.exec.io(move || sheet_bytes(&root, files.as_deref(), &bundled_dir, &k, from)).await;
+            let bytes =
+                ed.exec.io(move || sheet_bytes(&root, files.as_deref(), &bundled_dir, &k, from)).await;
             let name = format!("pda:{key}");
             let made = match bytes {
                 Some(bytes) => {
@@ -322,7 +345,12 @@ impl PdaAssets {
                             let size = [usize::try_from(img.width).ok()?, usize::try_from(img.height).ok()?];
                             let color = ColorImage::from_rgba_unmultiplied(size, &img.rgba);
                             let handle = ctx.load_texture(name, color, TextureOptions::LINEAR);
-                            Some(Sheet { id: handle.id(), w: img.width as f32, h: img.height as f32, _handle: handle })
+                            Some(Sheet {
+                                id: handle.id(),
+                                w: img.width as f32,
+                                h: img.height as f32,
+                                _handle: handle,
+                            })
                         })
                         .await
                 }
@@ -518,7 +546,11 @@ impl PdaAssets {
     }
 
     /// A level's map, read now when it is not there yet.
-    pub async fn level_map_wait(self: &Arc<Self>, editor: &Arc<Editor>, level: &str) -> Option<Arc<LevelMap>> {
+    pub async fn level_map_wait(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        level: &str,
+    ) -> Option<Arc<LevelMap>> {
         if level.is_empty() {
             return None;
         }

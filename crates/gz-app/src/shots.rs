@@ -21,15 +21,22 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, CmdEr
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header().map_err(|e| CmdError::internal(format!("png encode failed for {width}x{height}: {e}")))?;
-        writer.write_image_data(rgba).map_err(|e| CmdError::internal(format!("png encode failed for {width}x{height}: {e}")))?;
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| CmdError::internal(format!("png encode failed for {width}x{height}: {e}")))?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|e| CmdError::internal(format!("png encode failed for {width}x{height}: {e}")))?;
     }
     Ok(out)
 }
 
 /// One call, always current: the request is held for the frames it asked for, then pictured.
 async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
-    let link = editor.services.get::<WindowLink>().ok_or_else(|| CmdError::new("no_window", "the editor runs without a window"))?;
+    let link = editor
+        .services
+        .get::<WindowLink>()
+        .ok_or_else(|| CmdError::new("no_window", "the editor runs without a window"))?;
     // the commands that came before this one have to be drawn first: a layout settles in two passes
     let frames = args.u32("frames").unwrap_or(2).clamp(1, 16);
     editor.frames.after(u64::from(frames)).await?;

@@ -39,10 +39,21 @@ async fn link_fields(ed: &Arc<Editor>, project: &Arc<Project>, reason: &str) -> 
 async fn game_link(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let Ok((_, project)) = Project::of(&ed) else {
         let reason = "no project is open";
-        let fields = Map::from_iter([("linked".to_owned(), json!(false)), ("game_root".to_owned(), json!("")), ("reason".to_owned(), json!(reason))]);
+        let fields = Map::from_iter([
+            ("linked".to_owned(), json!(false)),
+            ("game_root".to_owned(), json!("")),
+            ("reason".to_owned(), json!(reason)),
+        ]);
         return Err(refuse(reason).with_data(Value::Object(fields)));
     };
     if let Some(path) = args.text("path").map(paths::to_backslash) {
+        let current = project.game_root();
+        let other = current.is_empty() || !paths::same_path(&current, &paths::trim_trailing(path.clone()));
+        if other && gz_project::ProjectHooks::of(&ed).live_scene(&ed) {
+            let reason = "close or clear the current scene before linking a different game".to_owned();
+            let fields = link_fields(&ed, &project, &reason).await;
+            return Err(refuse(reason).with_data(Value::Object(fields)));
+        }
         return match project.link_game(&path).await {
             Ok(()) => Ok(Value::Object(link_fields(&ed, &project, "").await)),
             Err(reason) => {

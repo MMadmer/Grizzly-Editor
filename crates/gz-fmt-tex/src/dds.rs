@@ -57,7 +57,9 @@ pub enum DdsFormat {
     /// Two channels in blocks (ATI2); read as red and green.
     Bc5,
     /// High dynamic range in blocks; read clamped to 0..1.
-    Bc6h { signed: bool },
+    Bc6h {
+        signed: bool,
+    },
     Bc7,
     /// Uncompressed colour: A8R8G8B8, X8R8G8B8, R8G8B8, R5G6B5, A1R5G5B5, A4R4G4B4 and the like.
     Rgb(PixelMasks),
@@ -68,7 +70,10 @@ pub enum DdsFormat {
     /// Four 16-bit channels.
     Rgba16,
     /// Floating point channels of 16 or 32 bits, one to four of them; read clamped to 0..1.
-    Float { bits: u8, channels: u8 },
+    Float {
+        bits: u8,
+        channels: u8,
+    },
 }
 
 impl DdsFormat {
@@ -77,7 +82,9 @@ impl DdsFormat {
     #[must_use]
     pub fn has_alpha_channel(self) -> bool {
         match self {
-            DdsFormat::Dxt3 | DdsFormat::Dxt5 | DdsFormat::Bc7 | DdsFormat::Alpha(_) | DdsFormat::Rgba16 => true,
+            DdsFormat::Dxt3 | DdsFormat::Dxt5 | DdsFormat::Bc7 | DdsFormat::Alpha(_) | DdsFormat::Rgba16 => {
+                true
+            }
             DdsFormat::Rgb(m) | DdsFormat::Luminance(m) => m.a != 0,
             DdsFormat::Float { channels, .. } => channels == 4,
             _ => false,
@@ -100,9 +107,13 @@ impl DdsFormat {
     /// Bytes one level of this size takes in the file.
     fn level_len(self, width: usize, height: usize) -> usize {
         match self {
-            DdsFormat::Rgb(m) | DdsFormat::Luminance(m) | DdsFormat::Alpha(m) => width * height * (m.bits as usize / 8),
+            DdsFormat::Rgb(m) | DdsFormat::Luminance(m) | DdsFormat::Alpha(m) => {
+                width * height * (m.bits as usize / 8)
+            }
             DdsFormat::Rgba16 => width * height * 8,
-            DdsFormat::Float { bits, channels } => width * height * usize::from(bits / 8) * usize::from(channels),
+            DdsFormat::Float { bits, channels } => {
+                width * height * usize::from(bits / 8) * usize::from(channels)
+            }
             other => other.block().map_or(0, |b| bc::level_bytes(b, width, height)),
         }
     }
@@ -151,7 +162,9 @@ impl DdsInfo {
         if mip >= self.mips {
             return None;
         }
-        let len_of = |m: u32| self.format.level_len(mip_side(self.width, m) as usize, mip_side(self.height, m) as usize);
+        let len_of = |m: u32| {
+            self.format.level_len(mip_side(self.width, m) as usize, mip_side(self.height, m) as usize)
+        };
         let (w, h) = self.level_size(mip);
         let mut at = self.data_at;
         match self.kind {
@@ -180,7 +193,9 @@ impl DdsInfo {
 
     /// Bytes of pixel data the header promises.
     fn data_len(&self) -> Option<usize> {
-        let len_of = |m: u32| self.format.level_len(mip_side(self.width, m) as usize, mip_side(self.height, m) as usize);
+        let len_of = |m: u32| {
+            self.format.level_len(mip_side(self.width, m) as usize, mip_side(self.height, m) as usize)
+        };
         let mut total = 0usize;
         for m in 0..self.mips {
             let count = match self.kind {
@@ -300,7 +315,11 @@ pub fn read_dds_info(bytes: &[u8]) -> Result<DdsInfo> {
                 115 => DdsFormat::Float { bits: 32, channels: 2 },
                 116 => DdsFormat::Float { bits: 32, channels: 4 },
                 _ => {
-                    let name: String = four.to_le_bytes().iter().map(|&c| if c.is_ascii_graphic() { c as char } else { '?' }).collect();
+                    let name: String = four
+                        .to_le_bytes()
+                        .iter()
+                        .map(|&c| if c.is_ascii_graphic() { c as char } else { '?' })
+                        .collect();
                     return Err(TexError::Unsupported(format!("DDS pixel format '{name}'")));
                 }
             },
@@ -316,7 +335,9 @@ pub fn read_dds_info(bytes: &[u8]) -> Result<DdsInfo> {
                 return Err(TexError::Unsupported("DDS pixels without a channel mask".into()));
             }
             DdsFormat::Alpha(masks)
-        } else if pf_flags & DDPF_LUMINANCE != 0 || (g == 0 && b == 0 && pf_flags & DDPF_RGB == 0 && bits <= 16) {
+        } else if pf_flags & DDPF_LUMINANCE != 0
+            || (g == 0 && b == 0 && pf_flags & DDPF_RGB == 0 && bits <= 16)
+        {
             DdsFormat::Luminance(masks)
         } else {
             DdsFormat::Rgb(masks)
@@ -415,7 +436,7 @@ fn decode(format: DdsFormat, data: &[u8], width: usize, height: usize) -> Vec<u8
             let (r, g, b, a) = (Channel::new(m.r), Channel::new(m.g), Channel::new(m.b), Channel::new(m.a));
             let kind = format;
             rows.for_each(|(dst, src)| {
-                for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(px_bytes)) {
+                for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.chunks_exact(px_bytes)) {
                     let mut raw = [0u8; 4];
                     raw[..px_bytes.min(4)].copy_from_slice(&s[..px_bytes.min(4)]);
                     let v = u32::from_le_bytes(raw);
@@ -433,7 +454,7 @@ fn decode(format: DdsFormat, data: &[u8], width: usize, height: usize) -> Vec<u8
             });
         }
         DdsFormat::Rgba16 => rows.for_each(|(dst, src)| {
-            for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(8)) {
+            for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<8>().0) {
                 // the high byte of each little-endian channel
                 d.copy_from_slice(&[s[1], s[3], s[5], s[7]]);
             }
@@ -442,7 +463,7 @@ fn decode(format: DdsFormat, data: &[u8], width: usize, height: usize) -> Vec<u8
             let step = usize::from(bits / 8);
             let channels = usize::from(channels);
             rows.for_each(|(dst, src)| {
-                for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(px_bytes)) {
+                for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.chunks_exact(px_bytes)) {
                     let mut v = [0f32, 0.0, 0.0, 1.0];
                     for (c, raw) in s.chunks_exact(step).take(channels.min(4)).enumerate() {
                         v[c] = if step == 2 {
@@ -455,7 +476,12 @@ fn decode(format: DdsFormat, data: &[u8], width: usize, height: usize) -> Vec<u8
                         v[1] = v[0];
                         v[2] = v[0];
                     }
-                    d.copy_from_slice(&[unit_to_u8(v[0]), unit_to_u8(v[1]), unit_to_u8(v[2]), unit_to_u8(v[3])]);
+                    d.copy_from_slice(&[
+                        unit_to_u8(v[0]),
+                        unit_to_u8(v[1]),
+                        unit_to_u8(v[2]),
+                        unit_to_u8(v[3]),
+                    ]);
                 }
             });
         }
@@ -483,7 +509,10 @@ pub fn read_dds_level(bytes: &[u8], layer: u32, mip: u32) -> Result<Image> {
 pub fn read_dds(bytes: &[u8]) -> Result<Dds> {
     let info = read_dds_info(bytes)?;
     // checked before anything is allocated for a level
-    let need = info.data_len().and_then(|n| n.checked_add(info.data_at)).ok_or(TexError::Truncated { need: usize::MAX })?;
+    let need = info
+        .data_len()
+        .and_then(|n| n.checked_add(info.data_at))
+        .ok_or(TexError::Truncated { need: usize::MAX })?;
     if bytes.len() < need {
         return Err(TexError::Truncated { need: need - bytes.len() });
     }
@@ -536,14 +565,14 @@ impl DdsEncoding {
             DdsEncoding::Rgba8 => px.clone(),
             DdsEncoding::Bgra8 => {
                 let mut out = px.clone();
-                for p in out.chunks_exact_mut(4) {
+                for p in out.as_chunks_mut::<4>().0 {
                     p.swap(0, 2);
                 }
                 out
             }
             DdsEncoding::Rgb8 => {
                 let mut out = Vec::with_capacity(w * h * 3);
-                for p in px.chunks_exact(4) {
+                for p in px.as_chunks::<4>().0 {
                     out.extend_from_slice(&p[..3]);
                 }
                 out
@@ -588,7 +617,12 @@ fn encode_refs(levels: &[&Image], encoding: DdsEncoding) -> Result<Vec<u8>> {
         }
     }
     if levels.len() as u32 > mip_count(base.width, base.height) {
-        return Err(TexError::Invalid(format!("{} x {} has no {} levels", base.width, base.height, levels.len())));
+        return Err(TexError::Invalid(format!(
+            "{} x {} has no {} levels",
+            base.width,
+            base.height,
+            levels.len()
+        )));
     }
 
     // levels side by side, and each level's blocks side by side inside it
@@ -656,7 +690,12 @@ mod tests {
         let mut rgba = Vec::new();
         for y in 0..h {
             for x in 0..w {
-                rgba.extend_from_slice(&[(x * 255 / w.max(2)) as u8, (y * 255 / h.max(2)) as u8, 40, 255 - (x * 9) as u8]);
+                rgba.extend_from_slice(&[
+                    (x * 255 / w.max(2)) as u8,
+                    (y * 255 / h.max(2)) as u8,
+                    40,
+                    255 - (x * 9) as u8,
+                ]);
             }
         }
         Image::new(w, h, rgba).unwrap()
@@ -680,7 +719,9 @@ mod tests {
     #[test]
     fn the_written_header_is_the_editors() {
         let img = gradient(8, 8);
-        let dds = build_dds(&img, &DdsRequest { encoding: DdsEncoding::Dxt1, mips: true, filter: MipFilter::Box }).unwrap();
+        let dds =
+            build_dds(&img, &DdsRequest { encoding: DdsEncoding::Dxt1, mips: true, filter: MipFilter::Box })
+                .unwrap();
         // 8, 4, 2, 1: 4 + 1 + 1 + 1 blocks
         assert_eq!(dds.len(), 128 + 7 * 8);
         assert_eq!(&dds[..8], b"DDS \x7c\0\0\0");
@@ -723,13 +764,22 @@ mod tests {
         let dds = encode_dds(std::slice::from_ref(&img), DdsEncoding::Rgb8).unwrap();
         assert_eq!(dds.len(), 128 + 5 * 3 * 3);
         let back = read_dds_level(&dds, 0, 0).unwrap();
-        assert!(back.rgba.chunks_exact(4).zip(img.rgba.chunks_exact(4)).all(|(a, b)| a[..3] == b[..3] && a[3] == 255));
+        assert!(
+            back.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(img.rgba.as_chunks::<4>().0)
+                .all(|(a, b)| a[..3] == b[..3] && a[3] == 255)
+        );
     }
 
     #[test]
     fn compressed_levels_are_found_one_by_one() {
         let img = gradient(16, 8);
-        let dds = build_dds(&img, &DdsRequest { encoding: DdsEncoding::Dxt5, mips: true, filter: MipFilter::Box }).unwrap();
+        let dds =
+            build_dds(&img, &DdsRequest { encoding: DdsEncoding::Dxt5, mips: true, filter: MipFilter::Box })
+                .unwrap();
         let info = read_dds_info(&dds).unwrap();
         assert_eq!(info.mips, 5);
         assert_eq!(info.level_size(3), (2, 1));
@@ -754,7 +804,8 @@ mod tests {
         assert_eq!(read_dds_level(&dds, 0, 0).unwrap().rgba, [255, 0, 0, 255, 0, 255, 0, 255]);
 
         // A1R5G5B5: opaque blue, transparent white
-        let mut dds = header(2, 1, 0x1007, 0, [DDPF_RGB | DDPF_ALPHAPIXELS, 0, 16, 0x7c00, 0x03e0, 0x001f, 0x8000], 0);
+        let mut dds =
+            header(2, 1, 0x1007, 0, [DDPF_RGB | DDPF_ALPHAPIXELS, 0, 16, 0x7c00, 0x03e0, 0x001f, 0x8000], 0);
         dds.extend_from_slice(&[0x1f, 0x80, 0xff, 0x7f]);
         assert_eq!(read_dds_level(&dds, 0, 0).unwrap().rgba, [0, 0, 255, 255, 255, 255, 255, 0]);
 
@@ -783,7 +834,14 @@ mod tests {
         assert_eq!(cube.layers.len(), 6);
 
         // a 2 x 2 x 2 volume with two levels: two slices, then one
-        let mut dds = header(2, 2, 0x1007 | DDSD_DEPTH | DDSD_MIPMAPCOUNT, 2, [DDPF_RGB, 0, 32, 0xff_0000, 0xff00, 0xff, 0], 0x20_0000);
+        let mut dds = header(
+            2,
+            2,
+            0x1007 | DDSD_DEPTH | DDSD_MIPMAPCOUNT,
+            2,
+            [DDPF_RGB, 0, 32, 0xff_0000, 0xff00, 0xff, 0],
+            0x20_0000,
+        );
         dds[24..28].copy_from_slice(&2u32.to_le_bytes());
         dds.extend_from_slice(&[1u8; 2 * 16 + 4]);
         let volume = read_dds(&dds).unwrap();
@@ -799,7 +857,10 @@ mod tests {
 
         let pf = [DDPF_FOURCC, fourcc(b"DXT1"), 0, 0, 0, 0, 0];
         // a size past the limit
-        assert!(matches!(read_dds_info(&header(1 << 20, 4, 0x1007, 0, pf, 0)), Err(TexError::BadSize { .. })));
+        assert!(matches!(
+            read_dds_info(&header(1 << 20, 4, 0x1007, 0, pf, 0)),
+            Err(TexError::BadSize { .. })
+        ));
         assert!(matches!(read_dds_info(&header(0, 4, 0x1007, 0, pf, 0)), Err(TexError::BadSize { .. })));
         // the data the header promises is not there: nothing is allocated for it
         let big = header(16384, 16384, 0x1007, 0, pf, 0);

@@ -25,7 +25,8 @@ fn is_lower(c: char) -> bool {
 /// The end (byte) of the longest prefix of `text[start..end]` that is at most `room` wide.
 fn fit_end(text: &str, start: usize, end: usize, room: f32, measure: &dyn Fn(&str) -> f32) -> usize {
     let Some(slice) = text.get(start..end) else { return start };
-    let bounds: Vec<usize> = slice.char_indices().map(|(i, _)| start + i).skip(1).chain(std::iter::once(end)).collect();
+    let bounds: Vec<usize> =
+        slice.char_indices().map(|(i, _)| start + i).skip(1).chain(std::iter::once(end)).collect();
     // the number of characters kept: a binary search on the widths, which only grow
     let (mut lo, mut hi) = (0usize, bounds.len());
     while lo < hi {
@@ -42,7 +43,13 @@ fn fit_end(text: &str, start: usize, end: usize, room: f32, measure: &dyn Fn(&st
 
 /// The lines of `text` in `width`. `has_ext`: the name carries an extension that must stay whole.
 #[must_use]
-pub fn caption(text: &str, has_ext: bool, max_lines: usize, width: f32, measure: &dyn Fn(&str) -> f32) -> Caption {
+pub fn caption(
+    text: &str,
+    has_ext: bool,
+    max_lines: usize,
+    width: f32,
+    measure: &dyn Fn(&str) -> f32,
+) -> Caption {
     let mut out = Caption::default();
     let end = text.len();
     // where the extension starts: no line may begin at it or inside it
@@ -99,11 +106,12 @@ pub fn caption(text: &str, has_ext: bool, max_lines: usize, width: f32, measure:
             fit = text.get(start..).and_then(|r| r.chars().next()).map_or(end, |c| start + c.len_utf8());
         }
         let mut brk: Option<usize> = None;
-        let mut chars = text.get(start..fit).unwrap_or("").char_indices().peekable();
-        while let Some((i, c)) = chars.next() {
+        let chars = text.get(start..fit).unwrap_or("").char_indices().peekable();
+        for (i, c) in chars {
             let next = start + i + c.len_utf8();
             let next_char = text.get(next..).and_then(|r| r.chars().next());
-            let breaks = " _-.,".contains(c) || (is_lower(c) && next_char.is_some_and(|n| n.is_ascii_uppercase()));
+            let breaks =
+                " _-.,".contains(c) || (is_lower(c) && next_char.is_some_and(|n| n.is_ascii_uppercase()));
             if next <= fit && next < end && ext.is_none_or(|e| next < e) && breaks {
                 brk = Some(next);
             }

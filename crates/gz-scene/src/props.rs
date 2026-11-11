@@ -12,7 +12,8 @@ use crate::library::Library;
 use crate::math::Vec3;
 use crate::model::{ObjData, Object, SceneState, co};
 use crate::objects::{
-    FV_EMITTER, LT_POINT, LT_SPOT, PointKind, SHAPE_COMMON, SO_USE_SURFACE, SpawnEntity, SurfaceOverride, env_flags, fcolor_get, light_flags,
+    FV_EMITTER, LT_POINT, LT_SPOT, PointKind, SHAPE_COMMON, SO_USE_SURFACE, SpawnEntity, SurfaceOverride,
+    env_flags, fcolor_get, light_flags,
 };
 use crate::tools::{LevelOptions, ToolOpts, ToolPart};
 
@@ -27,13 +28,30 @@ pub enum Kind {
     Choose(SmolStr),
     Bool,
     Flag,
-    Float { min: f32, max: f32, dec: u8 },
+    Float {
+        min: f32,
+        max: f32,
+        dec: u8,
+    },
     /// Radians, shown in degrees.
-    Angle { min: f32, max: f32, dec: u8 },
-    Int { min: i64, max: i64 },
+    Angle {
+        min: f32,
+        max: f32,
+        dec: u8,
+    },
+    Int {
+        min: i64,
+        max: i64,
+    },
     Token(Vec<(SmolStr, i64)>),
-    Vector { min: f32, max: f32, dec: u8 },
-    Angle3 { dec: u8 },
+    Vector {
+        min: f32,
+        max: f32,
+        dec: u8,
+    },
+    Angle3 {
+        dec: u8,
+    },
     /// `0xAARRGGBB`.
     Color,
     /// `Fcolor`.
@@ -87,9 +105,13 @@ impl Row {
                 let s = *v as i64;
                 format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
             }
-            (Kind::Token(items), Val::Num(v)) => items.iter().find(|(_, id)| *id == *v as i64).map(|(n, _)| n.to_string()).unwrap_or_default(),
+            (Kind::Token(items), Val::Num(v)) => {
+                items.iter().find(|(_, id)| *id == *v as i64).map(|(n, _)| n.to_string()).unwrap_or_default()
+            }
             (Kind::Vector { dec, .. }, Val::Vec3(v)) => vec_text(*v, *dec),
-            (Kind::Angle3 { dec }, Val::Vec3(v)) => vec_text(Vec3::new(v.x.to_degrees(), v.y.to_degrees(), v.z.to_degrees()), *dec),
+            (Kind::Angle3 { dec }, Val::Vec3(v)) => {
+                vec_text(Vec3::new(v.x.to_degrees(), v.y.to_degrees(), v.z.to_degrees()), *dec)
+            }
             (Kind::Button(c), _) => c.iter().map(SmolStr::as_str).collect::<Vec<_>>().join(","),
             (Kind::Bool | Kind::Flag | Kind::Canvas | Kind::FColor, _) => String::new(),
             (_, Val::Text(t)) => t.clone(),
@@ -148,9 +170,17 @@ pub struct PropCx<'a> {
 /// `CCustomObject::FillProp`.
 fn custom_rows(pref: &str, o: &Object, out: &mut Vec<Row>) {
     out.push(Row::new(key(pref, "Name"), Kind::Name, Val::Text(o.name.to_string())));
-    out.push(Row::new(key(pref, "Transform\\Position"), Kind::Vector { min: -10000.0, max: 10000.0, dec: 2 }, Val::Vec3(o.position())));
+    out.push(Row::new(
+        key(pref, "Transform\\Position"),
+        Kind::Vector { min: -10000.0, max: 10000.0, dec: 2 },
+        Val::Vec3(o.position()),
+    ));
     out.push(Row::new(key(pref, "Transform\\Rotation"), Kind::Angle3 { dec: 1 }, Val::Vec3(o.rotation())));
-    out.push(Row::new(key(pref, "Transform\\Scale"), Kind::Vector { min: 0.01, max: 10000.0, dec: 2 }, Val::Vec3(o.scale())));
+    out.push(Row::new(
+        key(pref, "Transform\\Scale"),
+        Kind::Vector { min: 0.01, max: 10000.0, dec: 2 },
+        Val::Vec3(o.scale()),
+    ));
     if !o.marks.authored && o.class == ObjClass::SpawnPoint {
         out.push(Row::new(key(pref, "Mod\\Removed from the game"), Kind::Flag, Val::Bool(o.marks.removed)));
     }
@@ -204,9 +234,17 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
             out.push(token(key(pref, "Type"), i64::from(d.kind), LIGHT_TYPES));
             out.push(Row::new(key(pref, "Color"), Kind::FColor, Val::FColor(d.color)));
             out.push(float(key(pref, "Brightness"), d.brightness, -3.0, 3.0, 2));
-            let controls: Vec<(SmolStr, i64)> =
-                state.tools.part(ObjClass::Light).light().map(|l| l.lcontrols.iter().map(|(n, i)| (n.clone(), i64::from(*i))).collect()).unwrap_or_default();
-            out.push(Row::new(key(pref, "Light Control"), Kind::Token(controls), Val::Num(f64::from(d.lcontrol))));
+            let controls: Vec<(SmolStr, i64)> = state
+                .tools
+                .part(ObjClass::Light)
+                .light()
+                .map(|l| l.lcontrols.iter().map(|(n, i)| (n.clone(), i64::from(*i))).collect())
+                .unwrap_or_default();
+            out.push(Row::new(
+                key(pref, "Light Control"),
+                Kind::Token(controls),
+                Val::Num(f64::from(d.lcontrol)),
+            ));
             out.push(flag(key(pref, "Usage\\LightMap"), d.flags, light_flags::AFFECT_STATIC));
             out.push(flag(key(pref, "Usage\\Dynamic"), d.flags, light_flags::AFFECT_DYNAMIC));
             out.push(flag(key(pref, "Usage\\Animated"), d.flags, light_flags::PROCEDURAL));
@@ -217,7 +255,11 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
             out.push(button(key(pref, "Attenuation\\Auto"), "Linear,Quadratic"));
             out.push(Row::new(key(pref, "Attenuation\\Graphic"), Kind::Canvas, Val::None));
             if d.kind == LT_SPOT {
-                out.push(Row::new(key(pref, "Spot R1\\Cone Angle"), Kind::Angle { min: 0.1, max: 120f32.to_radians(), dec: 2 }, Val::Num(f64::from(d.cone))));
+                out.push(Row::new(
+                    key(pref, "Spot R1\\Cone Angle"),
+                    Kind::Angle { min: 0.1, max: 120f32.to_radians(), dec: 2 },
+                    Val::Num(f64::from(d.cone)),
+                ));
                 out.push(choose(key(pref, "Spot R1\\Texture"), "texture", &d.falloff_tex));
             } else {
                 out.push(flag(key(pref, "Fuzzy"), d.flags, light_flags::POINT_FUZZY));
@@ -230,7 +272,11 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
                     if f.shape == 0 {
                         out.push(float(key(pref, "Fuzzy\\Radius"), f.sphere_radius, 0.01, 100.0, 2));
                     } else {
-                        out.push(Row::new(key(pref, "Fuzzy\\Half Dimension"), Kind::Vector { min: 0.01, max: 100.0, dec: 2 }, Val::Vec3(f.box_dim)));
+                        out.push(Row::new(
+                            key(pref, "Fuzzy\\Half Dimension"),
+                            Kind::Vector { min: 0.01, max: 100.0, dec: 2 },
+                            Val::Vec3(f.box_dim),
+                        ));
                     }
                 }
             }
@@ -266,8 +312,16 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
                 ("Pause delta", "Zero - play sound looped.", d.random_pause),
             ] {
                 out.push(caption(key(pref, &format!("Game\\{group}\\Hint")), hint));
-                out.push(Row::new(key(pref, &format!("Game\\{group}\\From")), Kind::Time, Val::Num(f64::from(v[0]))));
-                out.push(Row::new(key(pref, &format!("Game\\{group}\\To")), Kind::Time, Val::Num(f64::from(v[1]))));
+                out.push(Row::new(
+                    key(pref, &format!("Game\\{group}\\From")),
+                    Kind::Time,
+                    Val::Num(f64::from(v[0])),
+                ));
+                out.push(Row::new(
+                    key(pref, &format!("Game\\{group}\\To")),
+                    Kind::Time,
+                    Val::Num(f64::from(v[1])),
+                ));
             }
         }
         ObjData::Particles(d) => {
@@ -295,14 +349,22 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
             out.push(choose(key(pref, "Reference"), "group", &g.reference));
             out.push(button(key(pref, "FreezeObjects"), "Unique,Reference"));
             for m in g.members.iter().filter_map(|m| state.get(*m)) {
-                out.push(flag(format!("{} ({})", key(pref, &m.name), m.class.desc()), m.flags.co, co::IN_GROUP_UNIQUE));
+                out.push(flag(
+                    format!("{} ({})", key(pref, &m.name), m.class.desc()),
+                    m.flags.co,
+                    co::IN_GROUP_UNIQUE,
+                ));
             }
         }
         ObjData::Spawn(d) => {
             custom_rows(pref, o, &mut out);
             if let Some(e) = &d.entity {
                 let section = e.section().to_owned();
-                out.push(choose(key(&key(pref, &section), "Profile (spawn section)"), "spawn_section", &section));
+                out.push(choose(
+                    key(&key(pref, &section), "Profile (spawn section)"),
+                    "spawn_section",
+                    &section,
+                ));
                 match e {
                     SpawnEntity::Decoded(ent) => {
                         for p in ent.properties(cx.entity) {
@@ -310,7 +372,13 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
                         }
                     }
                     SpawnEntity::RawLtx { .. } | SpawnEntity::RawPacket { .. } => {
-                        out.push(caption(key(&key(pref, &section), "Entity"), "kept as read: link the game to edit it").disabled());
+                        out.push(
+                            caption(
+                                key(&key(pref, &section), "Entity"),
+                                "kept as read: link the game to edit it",
+                            )
+                            .disabled(),
+                        );
                     }
                 }
                 if state.meta.level.map_usage & ((1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)) != 0 {
@@ -322,17 +390,31 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
             } else {
                 match d.kind {
                     PointKind::PlayerStart => {
-                        out.push(caption(key(pref, "Player Start\\Starts"), "a new game of the module's mode"));
+                        out.push(caption(
+                            key(pref, "Player Start\\Starts"),
+                            "a new game of the module's mode",
+                        ));
                         out.push(caption(key(pref, "Player Start\\Facing"), "the arrow; rotate to turn it"));
-                        out.push(caption(key(pref, "Player Start\\Rules"), "one per module - Mod > World Rules"));
+                        out.push(caption(
+                            key(pref, "Player Start\\Rules"),
+                            "one per module - Mod > World Rules",
+                        ));
                     }
                     PointKind::RPoint => {
                         if d.rpoint.kind == 2 {
-                            out.push(choose(key(pref, "Respawn Point\\Profile"), "respawn_items", &d.rpoint.profile));
+                            out.push(choose(
+                                key(pref, "Respawn Point\\Profile"),
+                                "respawn_items",
+                                &d.rpoint.profile,
+                            ));
                         } else {
                             out.push(int(key(pref, "Respawn Point\\Team"), i64::from(d.rpoint.team), 0, 7));
                         }
-                        out.push(token(key(pref, "Respawn Point\\Spawn Type"), i64::from(d.rpoint.kind), RPOINT_TYPES));
+                        out.push(token(
+                            key(pref, "Respawn Point\\Spawn Type"),
+                            i64::from(d.rpoint.kind),
+                            RPOINT_TYPES,
+                        ));
                     }
                     PointKind::EnvMod => {
                         let e = &d.env;
@@ -359,7 +441,11 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
                         ] {
                             out.push(flag(key(&p, name), fl, u32::from(bit)));
                             if e.flags & bit != 0 {
-                                out.push(Row::new(key(&p, &format!("{name}\\ ")), Kind::Color, Val::Color(v)));
+                                out.push(Row::new(
+                                    key(&p, &format!("{name}\\ ")),
+                                    Kind::Color,
+                                    Val::Color(v),
+                                ));
                             }
                         }
                     }
@@ -402,7 +488,11 @@ fn order_rows(pref: &str, o: &crate::objects::XmsOrder, out: &mut Vec<Row>) {
         }
         _ => {}
     }
-    out.push(flag(key(pref, "Order\\Hostile to player"), u32::from(o.flags), u32::from(crate::objects::ORDER_HOSTILE)));
+    out.push(flag(
+        key(pref, "Order\\Hostile to player"),
+        u32::from(o.flags),
+        u32::from(crate::objects::ORDER_HOSTILE),
+    ));
 }
 
 fn entity_row(pref: &str, p: &gz_entities::Prop) -> Row {
@@ -411,8 +501,12 @@ fn entity_row(pref: &str, p: &gz_entities::Prop) -> Row {
         (PropKind::U8 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
         (PropKind::U16 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
         (PropKind::U32 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
-        (PropKind::Float { min, max, decimals, .. }, PropValue::Float(v)) => float(k, *v, *min, *max, *decimals),
-        (PropKind::Angle { min, max }, PropValue::Float(v)) => Row::new(k, Kind::Angle { min: *min, max: *max, dec: 2 }, Val::Num(f64::from(*v))),
+        (PropKind::Float { min, max, decimals, .. }, PropValue::Float(v)) => {
+            float(k, *v, *min, *max, *decimals)
+        }
+        (PropKind::Angle { min, max }, PropValue::Float(v)) => {
+            Row::new(k, Kind::Angle { min: *min, max: *max, dec: 2 }, Val::Num(f64::from(*v)))
+        }
         (PropKind::Bool, PropValue::Bool(b)) => Row::new(k, Kind::Bool, Val::Bool(*b)),
         (PropKind::Flag { off, on, .. }, PropValue::Bool(b)) => {
             let caption = match (off, on) {
@@ -424,17 +518,25 @@ fn entity_row(pref: &str, p: &gz_entities::Prop) -> Row {
                 None => Row::new(k, Kind::Flag, Val::Bool(*b)),
             }
         }
-        (PropKind::Token { items, .. }, PropValue::Int(v)) => {
-            Row::new(k, Kind::Token(items.iter().map(|(n, i)| (SmolStr::new(n), i64::from(*i))).collect()), Val::Num(*v as f64))
+        (PropKind::Token { items, .. }, PropValue::Int(v)) => Row::new(
+            k,
+            Kind::Token(items.iter().map(|(n, i)| (SmolStr::new(n), i64::from(*i))).collect()),
+            Val::Num(*v as f64),
+        ),
+        (PropKind::Vec3, PropValue::Vec3(v)) => {
+            Row::new(k, Kind::Vector { min: 0.0, max: 0.0, dec: 2 }, Val::Vec3(Vec3::from(*v)))
         }
-        (PropKind::Vec3, PropValue::Vec3(v)) => Row::new(k, Kind::Vector { min: 0.0, max: 0.0, dec: 2 }, Val::Vec3(Vec3::from(*v))),
         (PropKind::Color, PropValue::Int(v)) => Row::new(k, Kind::Color, Val::Color(*v as u32)),
-        (PropKind::Choose { choose: c, .. }, PropValue::Text(t)) => choose(k, &format!("{c:?}").to_lowercase(), t),
+        (PropKind::Choose { choose: c, .. }, PropValue::Text(t)) => {
+            choose(k, &format!("{c:?}").to_lowercase(), t)
+        }
         (_, PropValue::Text(t)) => text(k, t),
         (_, PropValue::Int(v)) => int(k, *v, 0, 0),
         (_, PropValue::Float(v)) => float(k, *v, 0.0, 0.0, 2),
         (_, PropValue::Bool(b)) => Row::new(k, Kind::Bool, Val::Bool(*b)),
-        (_, PropValue::Vec3(v)) => Row::new(k, Kind::Vector { min: 0.0, max: 0.0, dec: 2 }, Val::Vec3(Vec3::from(*v))),
+        (_, PropValue::Vec3(v)) => {
+            Row::new(k, Kind::Vector { min: 0.0, max: 0.0, dec: 2 }, Val::Vec3(Vec3::from(*v)))
+        }
     };
     if p.read_only {
         r.enabled = false;
@@ -489,14 +591,34 @@ pub fn world_rows(state: &SceneState) -> Vec<Row> {
         text("Scene\\Build options\\Custom data".into(), &lo.bop),
         text("Scene\\Map version".into(), &lo.map_version),
         button("Scene\\Build options\\Quality".into(), "Draft,High,Custom"),
-        en(int("Scene\\Build options\\Lighting\\Hemisphere quality [0-3]".into(), i64::from(lo.light_hemi_quality), 0, 3)),
-        en(int("Scene\\Build options\\Lighting\\Sun shadow quality [0-3]".into(), i64::from(lo.light_sun_quality), 0, 3)),
+        en(int(
+            "Scene\\Build options\\Lighting\\Hemisphere quality [0-3]".into(),
+            i64::from(lo.light_hemi_quality),
+            0,
+            3,
+        )),
+        en(int(
+            "Scene\\Build options\\Lighting\\Sun shadow quality [0-3]".into(),
+            i64::from(lo.light_sun_quality),
+            0,
+            3,
+        )),
         en(float("Scene\\Build options\\Optimizing\\Normal smooth angle".into(), b.sm_angle, 0.0, 180.0, 2)),
         en(float("Scene\\Build options\\Optimizing\\Weld distance (m)".into(), b.weld_distance, 0.0, 1.0, 4)),
-        en(float("Scene\\Build options\\Lighting\\Pixel per meter".into(), b.lm_pixels_per_meter, 0.0, 20.0, 2)),
+        en(float(
+            "Scene\\Build options\\Lighting\\Pixel per meter".into(),
+            b.lm_pixels_per_meter,
+            0.0,
+            20.0,
+            2,
+        )),
         en(int("Scene\\Build options\\Lighting\\Error (LM collapsing)".into(), i64::from(b.lm_rms), 0, 255)),
         en(int("Scene\\Build options\\Lighting\\Error (LM zero)".into(), i64::from(b.lm_rms_zero), 0, 255)),
-        en(token("Scene\\Build options\\Lighting\\Jitter samples".into(), i64::from(b.lm_jitter_samples), JITTER)),
+        en(token(
+            "Scene\\Build options\\Lighting\\Jitter samples".into(),
+            i64::from(b.lm_jitter_samples),
+            JITTER,
+        )),
     ];
     for c in ObjClass::ALL {
         let t = state.tools.part(c);
@@ -505,15 +627,26 @@ pub fn world_rows(state: &SceneState) -> Vec<Row> {
             ObjClass::Light => {
                 if let Some(l) = t.light() {
                     out.push(flag(key(p, "Common\\Sun Shadow\\Visible"), t.flags, 1 << 31));
-                    out.push(Row::new(key(p, "Common\\Sun Shadow\\Altitude"), Kind::Angle { min: -std::f32::consts::FRAC_PI_2, max: 0.0, dec: 2 }, Val::Num(f64::from(l.sun_shadow_dir[0]))));
-                    out.push(Row::new(key(p, "Common\\Sun Shadow\\Longitude"), Kind::Angle { min: 0.0, max: std::f32::consts::TAU, dec: 2 }, Val::Num(f64::from(l.sun_shadow_dir[1]))));
+                    out.push(Row::new(
+                        key(p, "Common\\Sun Shadow\\Altitude"),
+                        Kind::Angle { min: -std::f32::consts::FRAC_PI_2, max: 0.0, dec: 2 },
+                        Val::Num(f64::from(l.sun_shadow_dir[0])),
+                    ));
+                    out.push(Row::new(
+                        key(p, "Common\\Sun Shadow\\Longitude"),
+                        Kind::Angle { min: 0.0, max: std::f32::consts::TAU, dec: 2 },
+                        Val::Num(f64::from(l.sun_shadow_dir[1])),
+                    ));
                     out.push(flag(key(p, "Common\\Controls\\Draw Name"), t.flags, 1 << 30));
                     out.push(caption(key(p, "Common\\Controls\\Count"), &l.lcontrols.len().to_string()));
                     for (n, _) in &l.lcontrols {
                         if matches!(n.as_str(), "$hemi" | "$static" | "$sun") {
                             out.push(caption(key(p, &format!("Common\\Controls\\System\\{n}")), ""));
                         } else {
-                            out.push(button(key(p, &format!("Common\\Controls\\User\\{n}")), "Rename,Remove"));
+                            out.push(button(
+                                key(p, &format!("Common\\Controls\\User\\{n}")),
+                                "Rename,Remove",
+                            ));
                         }
                     }
                 }
@@ -584,8 +717,23 @@ pub fn merge(lists: Vec<Vec<Row>>) -> Vec<MergedRow> {
 
 /// The units a key may end in, `(m)`, and how the value column writes them.
 const KEY_UNITS: &[(&str, &str)] = &[
-    ("m", "m"), ("cm", "cm"), ("km", "km"), ("m/s", "m/s"), ("s", "s"), ("sec", "s"), ("seconds", "s"), ("ms", "ms"), ("min", "min"),
-    ("minutes", "min"), ("deg", "\u{b0}"), ("degrees", "\u{b0}"), ("%", "%"), ("px", "px"), ("fps", "fps"), ("kb", "KB"), ("mb", "MB"),
+    ("m", "m"),
+    ("cm", "cm"),
+    ("km", "km"),
+    ("m/s", "m/s"),
+    ("s", "s"),
+    ("sec", "s"),
+    ("seconds", "s"),
+    ("ms", "ms"),
+    ("min", "min"),
+    ("minutes", "min"),
+    ("deg", "\u{b0}"),
+    ("degrees", "\u{b0}"),
+    ("%", "%"),
+    ("px", "px"),
+    ("fps", "fps"),
+    ("kb", "KB"),
+    ("mb", "MB"),
 ];
 
 fn split_leaf(k: &str) -> (String, Option<&'static str>) {
@@ -632,7 +780,8 @@ pub fn unit_of(r: &Row) -> String {
 #[must_use]
 pub fn help_of(r: &Row) -> String {
     let unit = unit_of(r);
-    let suffix = if unit.is_empty() || unit == "\u{b0}" || unit == "%" { unit.clone() } else { format!(" {unit}") };
+    let suffix =
+        if unit.is_empty() || unit == "\u{b0}" || unit == "%" { unit.clone() } else { format!(" {unit}") };
     let mut help = r.help.clone();
     let range = if let Some(open) = r.key.rfind(" [")
         && r.key.ends_with(']')
@@ -641,9 +790,15 @@ pub fn help_of(r: &Row) -> String {
         format!("Range: {}{suffix}.", &r.key[open + 2..r.key.len() - 1])
     } else {
         match r.kind {
-            Kind::Float { min, max, .. } if min < max => format!("Range: {} to {}{suffix}.", crate::ltx::fmt_g(min), crate::ltx::fmt_g(max)),
+            Kind::Float { min, max, .. } if min < max => {
+                format!("Range: {} to {}{suffix}.", crate::ltx::fmt_g(min), crate::ltx::fmt_g(max))
+            }
             Kind::Angle { min, max, .. } if min < max => {
-                format!("Range: {} to {}{suffix}.", crate::ltx::fmt_g(min.to_degrees()), crate::ltx::fmt_g(max.to_degrees()))
+                format!(
+                    "Range: {} to {}{suffix}.",
+                    crate::ltx::fmt_g(min.to_degrees()),
+                    crate::ltx::fmt_g(max.to_degrees())
+                )
             }
             Kind::Int { min, max } if min < max => format!("Range: {min} to {max}{suffix}."),
             _ => String::new(),
@@ -673,7 +828,10 @@ pub enum Parsed {
     Num(f64),
     Bool(bool),
     Vec3(Vec3),
-    Color { argb: u32, alpha: bool },
+    Color {
+        argb: u32,
+        alpha: bool,
+    },
     Text(String),
     /// A button: the index of its caption.
     Press(usize),
@@ -688,13 +846,16 @@ fn parse_bool(t: &str) -> Option<bool> {
 }
 
 fn parse_vec(t: &str) -> Option<Vec3> {
-    let cleaned: String = t.chars().map(|c| if matches!(c, '{' | '}' | ',' | ';') { ' ' } else { c }).collect();
-    let parts: Vec<f32> = cleaned.split_whitespace().map(|p| p.parse::<f32>()).collect::<Result<_, _>>().ok()?;
+    let cleaned: String =
+        t.chars().map(|c| if matches!(c, '{' | '}' | ',' | ';') { ' ' } else { c }).collect();
+    let parts: Vec<f32> =
+        cleaned.split_whitespace().map(|p| p.parse::<f32>()).collect::<Result<_, _>>().ok()?;
     (parts.len() == 3).then(|| Vec3::new(parts[0], parts[1], parts[2]))
 }
 
 fn parse_color(t: &str) -> Option<(u32, bool)> {
-    let s = t.strip_prefix('#').or_else(|| t.strip_prefix("0x")).or_else(|| t.strip_prefix("0X")).unwrap_or(t);
+    let s =
+        t.strip_prefix('#').or_else(|| t.strip_prefix("0x")).or_else(|| t.strip_prefix("0X")).unwrap_or(t);
     if s.len() != 6 && s.len() != 8 {
         return None;
     }
@@ -731,9 +892,17 @@ pub fn parse(r: &Row, t: &str) -> Result<Parsed, String> {
             }
             let v: f64 = n.parse().map_err(|_| "takes a number".to_owned())?;
             let angle = matches!(r.kind, Kind::Angle { .. });
-            let (lo, hi) = if angle { (f64::from(min.to_degrees()), f64::from(max.to_degrees())) } else { (f64::from(*min), f64::from(*max)) };
+            let (lo, hi) = if angle {
+                (f64::from(min.to_degrees()), f64::from(max.to_degrees()))
+            } else {
+                (f64::from(*min), f64::from(*max))
+            };
             if min < max && (v < lo || v > hi) {
-                return Err(format!("takes a number from {} to {}", crate::ltx::fmt_g(lo as f32), crate::ltx::fmt_g(hi as f32)));
+                return Err(format!(
+                    "takes a number from {} to {}",
+                    crate::ltx::fmt_g(lo as f32),
+                    crate::ltx::fmt_g(hi as f32)
+                ));
             }
             Ok(Parsed::Num(if angle { v.to_radians() } else { v }))
         }
@@ -745,7 +914,9 @@ pub fn parse(r: &Row, t: &str) -> Result<Parsed, String> {
             Ok(Parsed::Num(v.floor()))
         }
         Kind::Time => t.trim().parse::<f64>().map(Parsed::Num).map_err(|_| "takes a number".to_owned()),
-        Kind::Bool | Kind::Flag => parse_bool(t).map(Parsed::Bool).ok_or_else(|| "takes true or false".to_owned()),
+        Kind::Bool | Kind::Flag => {
+            parse_bool(t).map(Parsed::Bool).ok_or_else(|| "takes true or false".to_owned())
+        }
         Kind::Vector { min, max, .. } => {
             let v = parse_vec(t).ok_or_else(|| "takes three numbers: x, y, z".to_owned())?;
             Ok(Parsed::Vec3(if min < max { v.clamp(Vec3::splat(*min), Vec3::splat(*max)) } else { v }))
@@ -755,7 +926,8 @@ pub fn parse(r: &Row, t: &str) -> Result<Parsed, String> {
             Ok(Parsed::Vec3(Vec3::new(v.x.to_radians(), v.y.to_radians(), v.z.to_radians())))
         }
         Kind::Color | Kind::FColor => {
-            let (argb, alpha) = parse_color(t).ok_or_else(|| "takes a colour: #RRGGBB or 0xAARRGGBB".to_owned())?;
+            let (argb, alpha) =
+                parse_color(t).ok_or_else(|| "takes a colour: #RRGGBB or 0xAARRGGBB".to_owned())?;
             Ok(Parsed::Color { argb, alpha })
         }
         Kind::Token(items) => {
@@ -771,6 +943,8 @@ pub fn parse(r: &Row, t: &str) -> Result<Parsed, String> {
 }
 
 /// What setting a row of an object does.
+// one per property set, handed straight to the store: boxing the object would only add a copy
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
     /// The object changed (and nothing else).
@@ -829,7 +1003,13 @@ fn text_of(p: &Parsed) -> String {
 }
 
 /// Sets one row of an object. `entity` is the context the spawn rows set through.
-pub fn set_object(state: &SceneState, o: &Object, k: &str, p: &Parsed, cx: &PropCx<'_>) -> Result<Effect, String> {
+pub fn set_object(
+    state: &SceneState,
+    o: &Object,
+    k: &str,
+    p: &Parsed,
+    cx: &PropCx<'_>,
+) -> Result<Effect, String> {
     let mut n = o.clone();
     match k {
         "Name" | "Way Name" => {
@@ -896,9 +1076,13 @@ pub fn set_object(state: &SceneState, o: &Object, k: &str, p: &Parsed, cx: &Prop
                 let pp = 0.1f32;
                 d.attenuation[0] = 1.0;
                 if matches!(p, Parsed::Press(0)) {
-                    d.attenuation[1] = ((d.brightness - pp - pp * d.range * d.range * d.attenuation[2]) / (pp * d.range)).clamp(0.0, 1.0);
+                    d.attenuation[1] = ((d.brightness - pp - pp * d.range * d.range * d.attenuation[2])
+                        / (pp * d.range))
+                        .clamp(0.0, 1.0);
                 } else {
-                    d.attenuation[2] = ((d.brightness - pp - pp * d.range * d.attenuation[1]) / (pp * d.range * d.range)).clamp(0.0, 1.0);
+                    d.attenuation[2] = ((d.brightness - pp - pp * d.range * d.attenuation[1])
+                        / (pp * d.range * d.range))
+                        .clamp(0.0, 1.0);
                 }
             }
             "Spot R1\\Cone Angle" => d.cone = num(p) as f32,
@@ -1001,7 +1185,11 @@ pub fn set_object(state: &SceneState, o: &Object, k: &str, p: &Parsed, cx: &Prop
                 return Ok(Effect::Objects(vec![m]));
             }
         }
-        ObjData::FogVolume(_) | ObjData::Shape(_) | ObjData::Portal(_) | ObjData::Way(_) | ObjData::Kept(_) => return Err("is no row of this list".into()),
+        ObjData::FogVolume(_)
+        | ObjData::Shape(_)
+        | ObjData::Portal(_)
+        | ObjData::Way(_)
+        | ObjData::Kept(_) => return Err("is no row of this list".into()),
         ObjData::Spawn(d) => {
             if let Some(field) = k.strip_prefix("Order\\") {
                 let o = &mut d.order;
@@ -1012,9 +1200,19 @@ pub fn set_object(state: &SceneState, o: &Object, k: &str, p: &Parsed, cx: &Prop
                     "Target" => o.target = text_of(p).replace("<none>", "").into(),
                     "Radius" => o.radius = num(p) as f32,
                     "Distance" => o.distance = num(p) as f32,
-                    "Run" => o.flags = if on(p) { o.flags | crate::objects::ORDER_RUN } else { o.flags & !crate::objects::ORDER_RUN },
+                    "Run" => {
+                        o.flags = if on(p) {
+                            o.flags | crate::objects::ORDER_RUN
+                        } else {
+                            o.flags & !crate::objects::ORDER_RUN
+                        }
+                    }
                     "Hostile to player" => {
-                        o.flags = if on(p) { o.flags | crate::objects::ORDER_HOSTILE } else { o.flags & !crate::objects::ORDER_HOSTILE }
+                        o.flags = if on(p) {
+                            o.flags | crate::objects::ORDER_HOSTILE
+                        } else {
+                            o.flags & !crate::objects::ORDER_HOSTILE
+                        }
                     }
                     _ => return Err("is no row of this list".into()),
                 }
@@ -1058,7 +1256,11 @@ pub fn set_object(state: &SceneState, o: &Object, k: &str, p: &Parsed, cx: &Prop
                 let Some(SpawnEntity::Decoded(ent)) = &mut d.entity else {
                     return Err("is read-only".into());
                 };
-                let prop = ent.properties(cx.entity).into_iter().find(|x| x.path == k).ok_or("is no row of this list")?;
+                let prop = ent
+                    .properties(cx.entity)
+                    .into_iter()
+                    .find(|x| x.path == k)
+                    .ok_or("is no row of this list")?;
                 let value = match (&prop.kind, p) {
                     (PropKind::Float { .. } | PropKind::Angle { .. }, _) => PropValue::Float(num(p) as f32),
                     (PropKind::Bool | PropKind::Flag { .. }, _) => PropValue::Bool(on(p)),
@@ -1108,13 +1310,17 @@ pub fn set_world(state: &SceneState, k: &str, p: &Parsed) -> Result<(LevelOption
         "Scene\\Build options\\Lighting\\Jitter samples" => b.lm_jitter_samples = num(p) as u32,
         _ => {
             let (desc, rest) = k.split_once('\\').ok_or("is no row of this list")?;
-            let class = ObjClass::ALL.iter().copied().find(|c| c.desc() == desc).ok_or("is no row of this list")?;
+            let class =
+                ObjClass::ALL.iter().copied().find(|c| c.desc() == desc).ok_or("is no row of this list")?;
             let mut t = state.tools.part(class).clone();
             let bit = |r: &str| -> Option<u32> {
                 Some(match (class, r) {
-                    (ObjClass::Light, "Common\\Sun Shadow\\Visible") | (ObjClass::Glow, "Common\\Test Visibility") => 1 << 31,
-                    (ObjClass::Light, "Common\\Controls\\Draw Name") | (ObjClass::Glow, "Common\\Draw Cross") => 1 << 30,
-                    (ObjClass::Portal, "Common\\Draw Simple Model") | (ObjClass::Sector, "Common\\Draw Solid") => 1 << 31,
+                    (ObjClass::Light, "Common\\Sun Shadow\\Visible")
+                    | (ObjClass::Glow, "Common\\Test Visibility") => 1 << 31,
+                    (ObjClass::Light, "Common\\Controls\\Draw Name")
+                    | (ObjClass::Glow, "Common\\Draw Cross") => 1 << 30,
+                    (ObjClass::Portal, "Common\\Draw Simple Model")
+                    | (ObjClass::Sector, "Common\\Draw Solid") => 1 << 31,
                     _ => return None,
                 })
             };
@@ -1166,7 +1372,8 @@ mod tests {
         let (ia, ib) = (s.insert(a), s.insert(b));
         let e = cx();
         let pcx = PropCx { lib: None, entity: &e };
-        let rows = merge(vec![object_rows(&s, s.get(ia).unwrap(), &pcx), object_rows(&s, s.get(ib).unwrap(), &pcx)]);
+        let rows =
+            merge(vec![object_rows(&s, s.get(ia).unwrap(), &pcx), object_rows(&s, s.get(ib).unwrap(), &pcx)]);
         let pos = find(&rows, "Transform\\Position").unwrap();
         assert!(pos.mixed);
         let range = find(&rows, "Range").unwrap();
@@ -1188,7 +1395,9 @@ mod tests {
         assert_eq!(parse(r, "abc"), Err("takes a number".into()));
         assert_eq!(parse(r, "20000"), Err("takes a number from 0.01 to 10000".into()));
         let p = parse(r, "2.5").unwrap();
-        let Effect::Object(o) = set_object(&s, s.get(id).unwrap(), "Radius", &p, &pcx).unwrap() else { panic!() };
+        let Effect::Object(o) = set_object(&s, s.get(id).unwrap(), "Radius", &p, &pcx).unwrap() else {
+            panic!()
+        };
         let ObjData::Glow(g) = &o.data else { panic!() };
         assert_eq!(g.radius, 2.5);
         let pos = &find(&rows, "Position").unwrap().row;
@@ -1201,7 +1410,10 @@ mod tests {
     #[test]
     fn labels_and_units_come_from_the_key() {
         assert_eq!(label_of("Scene\\Build options\\Optimizing\\Weld distance (m)"), "Weld distance");
-        assert_eq!(label_of("Scene\\Build options\\Lighting\\Hemisphere quality [0-3]"), "Hemisphere quality");
+        assert_eq!(
+            label_of("Scene\\Build options\\Lighting\\Hemisphere quality [0-3]"),
+            "Hemisphere quality"
+        );
         let w = world_rows(&SceneState::default());
         let weld = w.iter().find(|r| r.key.ends_with("Weld distance (m)")).unwrap();
         assert_eq!(unit_of(weld), "m");

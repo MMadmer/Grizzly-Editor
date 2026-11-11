@@ -140,7 +140,9 @@ fn visuals(game: Option<&gz_vfs::GameFiles>, project: Option<&Project>) -> Vec<P
                 continue;
             }
             let path = rel.as_str();
-            let Some(stem) = path.get("gamedata/meshes/".len()..path.len().saturating_sub(4)) else { continue };
+            let Some(stem) = path.get("gamedata/meshes/".len()..path.len().saturating_sub(4)) else {
+                continue;
+            };
             let id = stem.replace('/', "\\").to_lowercase();
             if seen.insert(id.clone()) {
                 out.push(PickerEntry { id, name: "the project's".to_owned(), extra: "project".to_owned() });
@@ -152,11 +154,19 @@ fn visuals(game: Option<&gz_vfs::GameFiles>, project: Option<&Project>) -> Vec<P
 }
 
 /// The view of what was read.
-fn build_view(pickers: Option<&Pickers>, categories: Arc<Vec<String>>, visual_list: Vec<PickerEntry>, serial: u64) -> ListsView {
+fn build_view(
+    pickers: Option<&Pickers>,
+    categories: Arc<Vec<String>>,
+    visual_list: Vec<PickerEntry>,
+    serial: u64,
+) -> ListsView {
     let list = |t: PickerType| pickers.map(|p| p.entries(t).to_vec()).unwrap_or_default();
     let communities = list(PickerType::Community);
     let stalker: Vec<PickerEntry> = communities.iter().filter(|e| stalker_community(e)).cloned().collect();
-    let mut ranks: Vec<Rank> = list(PickerType::Rank).into_iter().map(|e| Rank { from: gz_world::model::atoi(&e.extra), entry: e }).collect();
+    let mut ranks: Vec<Rank> = list(PickerType::Rank)
+        .into_iter()
+        .map(|e| Rank { from: gz_world::model::atoi(&e.extra), entry: e })
+        .collect();
     ranks.sort_by_key(|r| r.from);
     ListsView {
         loaded: true,
@@ -233,7 +243,9 @@ impl Lists {
                 Err(_) => Arc::new(Vec::new()),
             };
             let game = match &link {
-                Some(link) if Project::of(&ed).is_ok_and(|(_, p)| !p.game_root().is_empty()) => link.files().await.ok(),
+                Some(link) if Project::of(&ed).is_ok_and(|(_, p)| !p.game_root().is_empty()) => {
+                    link.files().await.ok()
+                }
                 _ => None,
             };
             let project = Project::of(&ed).ok().map(|(_, p)| p);
@@ -288,7 +300,8 @@ mod tests {
 
     #[test]
     fn a_view_without_a_game_is_loaded_and_empty() {
-        let view = build_view(None, Arc::new(Vec::new()), vec![e("actors\\b", "", ""), e("actors\\a", "", "")], 3);
+        let view =
+            build_view(None, Arc::new(Vec::new()), vec![e("actors\\b", "", ""), e("actors\\a", "", "")], 3);
         assert!(view.loaded);
         assert!(!view.linked);
         assert_eq!(view.visuals.entries.len(), 2);

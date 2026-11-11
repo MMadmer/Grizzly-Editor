@@ -203,7 +203,8 @@ impl LevelOptions {
     pub fn read_ltx(r: &IniReader) -> Result<Self, SceneError> {
         let s = "level_options";
         let bad = || SceneError::load(format!("Invalid LTX level options: {}", r.file()));
-        for key in ["version", "level_path", "level_prefix", "bop", "light_hemi_quality", "light_sun_quality"] {
+        for key in ["version", "level_path", "level_prefix", "bop", "light_hemi_quality", "light_sun_quality"]
+        {
             if !r.line_exist(s, key) {
                 return Err(bad());
             }
@@ -213,7 +214,9 @@ impl LevelOptions {
             return Err(bad());
         }
         let build = BuildParams::read_ltx(r).map_err(|_| bad())?;
-        if (version > 0x0B && !r.line_exist(s, "map_version")) || (version > 0x0A && !r.line_exist(s, "game_type")) {
+        if (version > 0x0B && !r.line_exist(s, "map_version"))
+            || (version > 0x0A && !r.line_exist(s, "game_type"))
+        {
             return Err(bad());
         }
         let mut map_usage = 0xffff_u16;
@@ -244,7 +247,11 @@ impl LevelOptions {
             level_path: r.r_string(s, "level_path")?.into(),
             level_prefix: r.r_string(s, "level_prefix")?.into(),
             bop: r.r_string_wb(s, "bop")?,
-            map_version: if version > 0x0B { r.r_string(s, "map_version")?.into() } else { SmolStr::new_static("1.0") },
+            map_version: if version > 0x0B {
+                r.r_string(s, "map_version")?.into()
+            } else {
+                SmolStr::new_static("1.0")
+            },
             light_hemi_quality: r.r_u8(s, "light_hemi_quality")?,
             light_sun_quality: r.r_u8(s, "light_sun_quality")?,
             build,
@@ -258,7 +265,9 @@ impl LevelOptions {
         w.chunk(LO_NAMES, |w| w.w_stringz(&self.level_path));
         w.chunk(LO_PREFIX, |w| w.w_stringz(&self.level_prefix));
         w.chunk(LO_BOP, |w| w.w_stringz(&self.bop));
-        w.chunk(LO_MAP_VER, |w| w.w_stringz(if self.map_version.is_empty() { "1.0" } else { &self.map_version }));
+        w.chunk(LO_MAP_VER, |w| {
+            w.w_stringz(if self.map_version.is_empty() { "1.0" } else { &self.map_version })
+        });
         w.chunk(LO_BP_VERSION, |w| w.w_u32(LEVELOP_BP_VERSION));
         w.chunk(LO_BUILD_PARAMS, |w| self.build.write_bin(w));
         w.chunk(LO_LIGHT_QUALITY, |w| {
@@ -362,7 +371,11 @@ impl Default for LightTool {
         Self {
             sun_shadow_dir: [(-25.0f32).to_radians(), 292.0f32.to_radians()],
             lcontrol_last_idx: 3,
-            lcontrols: vec![(SmolStr::new_static("$static"), 0), (SmolStr::new_static("$hemi"), 1), (SmolStr::new_static("$sun"), 2)],
+            lcontrols: vec![
+                (SmolStr::new_static("$static"), 0),
+                (SmolStr::new_static("$hemi"), 1),
+                (SmolStr::new_static("$sun"), 2),
+            ],
         }
     }
 }
@@ -483,7 +496,12 @@ impl ToolPart {
     fn has_flags(&self) -> bool {
         matches!(
             self.class,
-            ObjClass::Glow | ObjClass::Light | ObjClass::Portal | ObjClass::Sector | ObjClass::SpawnPoint | ObjClass::SceneObject
+            ObjClass::Glow
+                | ObjClass::Light
+                | ObjClass::Portal
+                | ObjClass::Sector
+                | ObjClass::SpawnPoint
+                | ObjClass::SceneObject
         )
     }
 
@@ -557,7 +575,10 @@ impl ToolPart {
         }
         match &mut self.opts {
             ToolOpts::Light(l) => {
-                if !r.line_exist("main", "sun_shadow_dir") || !r.line_exist("main", "lcontrol_last_idx") || !r.section_exist("lcontrols") {
+                if !r.line_exist("main", "sun_shadow_dir")
+                    || !r.line_exist("main", "lcontrol_last_idx")
+                    || !r.section_exist("lcontrols")
+                {
                     return Err(bad("required metadata is missing"));
                 }
                 l.sun_shadow_dir = r.r_fvector2("main", "sun_shadow_dir")?;
@@ -570,7 +591,13 @@ impl ToolPart {
             }
             ToolOpts::Objects(o) => {
                 let s = "appendrandom";
-                for key in ["AppendRandomMinScale", "AppendRandomMaxScale", "AppendRandomMinRotation", "AppendRandomMaxRotation", "AppendRandomObjects_size"] {
+                for key in [
+                    "AppendRandomMinScale",
+                    "AppendRandomMaxScale",
+                    "AppendRandomMinRotation",
+                    "AppendRandomMaxRotation",
+                    "AppendRandomObjects_size",
+                ] {
                     if !r.line_exist(s, key) {
                         return Err(bad("required settings are missing"));
                     }
@@ -723,7 +750,9 @@ impl ToolPart {
         self.kept_chunks = r
             .chunks()
             .filter(|(id, _, _)| !known.contains(id))
-            .map(|(id, compressed, body)| (if compressed { id | gz_chunk::COMPRESSED } else { id }, Blob::from(body)))
+            .map(|(id, compressed, body)| {
+                (if compressed { id | gz_chunk::COMPRESSED } else { id }, Blob::from(body))
+            })
             .collect();
         Ok(())
     }
@@ -833,7 +862,11 @@ pub struct WallmarkPart {
 impl WallmarkPart {
     pub fn read(bytes: &[u8]) -> Result<Self, SceneError> {
         let r = Reader::new(bytes);
-        let v = r.open_chunk(1)?.ok_or_else(|| SceneError::load("Static Wallmark: Unsupported version."))?.reader().r_u16()?;
+        let v = r
+            .open_chunk(1)?
+            .ok_or_else(|| SceneError::load("Static Wallmark: Unsupported version."))?
+            .reader()
+            .r_u16()?;
         if v != 3 && v != 4 {
             return Err(SceneError::load("Static Wallmark: Unsupported version."));
         }
@@ -880,9 +913,15 @@ impl BulkData {
     #[must_use]
     pub fn stream_of(&self, class: ObjClass) -> Vec<u8> {
         match class {
-            ObjClass::AiMap => self.ai_map.as_ref().map_or_else(|| SceneAiMap::default().write(), |a| a.write()),
-            ObjClass::DetailObjects => self.details.as_ref().map_or_else(|| SceneDetails::default().write(), |d| d.write()),
-            ObjClass::Wallmark => self.wallmarks.as_ref().map_or_else(WallmarkPart::empty_stream, |w| w.raw.to_vec()),
+            ObjClass::AiMap => {
+                self.ai_map.as_ref().map_or_else(|| SceneAiMap::default().write(), |a| a.write())
+            }
+            ObjClass::DetailObjects => {
+                self.details.as_ref().map_or_else(|| SceneDetails::default().write(), |d| d.write())
+            }
+            ObjClass::Wallmark => {
+                self.wallmarks.as_ref().map_or_else(WallmarkPart::empty_stream, |w| w.raw.to_vec())
+            }
             _ => Vec::new(),
         }
     }
@@ -928,9 +967,8 @@ mod tests {
 
     #[test]
     fn level_options_round_trip_both_ways() {
-        let mut lo = LevelOptions::default();
-        lo.level_path = "l01_escape".into();
-        lo.bop = "a b".into();
+        let lo =
+            LevelOptions { level_path: "l01_escape".into(), bop: "a b".into(), ..LevelOptions::default() };
         let mut w = IniWriter::new();
         lo.write_ltx(&mut w);
         let r = IniReader::parse(&w.save(), "t").unwrap();

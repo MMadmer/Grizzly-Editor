@@ -16,7 +16,11 @@ pub fn local_eye_toggle(ui: &mut Ui, id: Id, rect: Rect, visible: bool, tip: &st
     let held = resp.is_pointer_button_down_on();
     if ui.is_rect_visible(rect) {
         if hovered || held {
-            ui.painter().rect_filled(rect, CornerRadius::same(metrics::RADIUS), if held { p.pressed } else { p.hover });
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(metrics::RADIUS),
+                if held { p.pressed } else { p.hover },
+            );
         }
         let tone = match (visible, hovered) {
             (true, true) => p.text,
@@ -86,17 +90,38 @@ pub fn local_panel_header(ui: &mut Ui, icon: Icon, name: &str, kind: &str) {
         return;
     }
     let painter = ui.painter();
-    let g = Rect::from_min_size(pos2(rect.min.x + 2.0, rect.center().y - metrics::GLYPH * 0.5), Vec2::splat(metrics::GLYPH));
+    let g = Rect::from_min_size(
+        pos2(rect.min.x + 2.0, rect.center().y - metrics::GLYPH * 0.5),
+        Vec2::splat(metrics::GLYPH),
+    );
     icons::draw(painter, icon, g, p.accent_bright);
     let x = g.max.x + 8.0;
     let kind_w = if kind.is_empty() { 0.0 } else { text::width(&ctx, &Font::Small.id(), kind) + 8.0 };
     let room = (rect.max.x - x - kind_w).max(0.0);
-    let cut = text::paint(painter, &Font::Strong.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, p.text, name, Some(room), Clip::End);
+    let cut = text::paint(
+        painter,
+        &Font::Strong.id(),
+        pos2(x, rect.center().y),
+        Align2::LEFT_CENTER,
+        p.text,
+        name,
+        Some(room),
+        Clip::End,
+    );
     if cut {
         audit::truncated(&ctx, name, name, rect);
     }
     if !kind.is_empty() {
-        text::paint(painter, &Font::Small.id(), pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, p.text_muted, kind, Some(kind_w), Clip::End);
+        text::paint(
+            painter,
+            &Font::Small.id(),
+            pos2(rect.max.x, rect.center().y),
+            Align2::RIGHT_CENTER,
+            p.text_muted,
+            kind,
+            Some(kind_w),
+            Clip::End,
+        );
     }
 }
 
@@ -108,11 +133,25 @@ pub struct TileClick {
 }
 
 /// `DrawTile` of the Tools panel: [icon][label][eye], the active tool filled with the accent.
-pub fn local_tool_tile(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, label: &str, title: &str, active: bool, visible: bool) -> TileClick {
+// every argument is one the caller decides at each call; a struct of them would only rename them
+#[allow(clippy::too_many_arguments)]
+pub fn local_tool_tile(
+    ui: &mut Ui,
+    id: Id,
+    rect: Rect,
+    icon: Icon,
+    label: &str,
+    title: &str,
+    active: bool,
+    visible: bool,
+) -> TileClick {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
     let eye = 18.0;
-    let eye_rect = Rect::from_min_size(pos2((rect.max.x - eye - 2.0).round(), (rect.center().y - eye * 0.5).round()), Vec2::splat(eye));
+    let eye_rect = Rect::from_min_size(
+        pos2((rect.max.x - eye - 2.0).round(), (rect.center().y - eye * 0.5).round()),
+        Vec2::splat(eye),
+    );
     let tile_resp = ui.interact(rect, id, Sense::click());
     // the eye after the tile: the later widget wins the pointer
     let eye_resp = ui.interact(eye_rect, id.with("eye"), Sense::click());
@@ -131,14 +170,30 @@ pub fn local_tool_tile(ui: &mut Ui, id: Id, rect: Rect, icon: Icon, label: &str,
         };
         painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), fill);
         if eye_resp.hovered() {
-            painter.rect_filled(eye_rect, CornerRadius::same(metrics::RADIUS), if active { p.selection_focused } else { p.hover });
+            painter.rect_filled(
+                eye_rect,
+                CornerRadius::same(metrics::RADIUS),
+                if active { p.selection_focused } else { p.hover },
+            );
         }
-        let g = Rect::from_min_size(pos2((rect.min.x + 4.0).round(), (rect.center().y - 8.0).round()), Vec2::splat(16.0));
+        let g = Rect::from_min_size(
+            pos2((rect.min.x + 4.0).round(), (rect.center().y - 8.0).round()),
+            Vec2::splat(16.0),
+        );
         icons::draw(painter, icon, g, if active { p.text } else { p.text_secondary });
         let x = (rect.min.x + 24.0).round();
         let room = (eye_rect.min.x - 2.0 - x).max(0.0);
         let color = if active || visible { p.text } else { p.text_secondary };
-        let cut = text::paint(painter, &Font::Body.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, color, label, Some(room), Clip::End);
+        let cut = text::paint(
+            painter,
+            &Font::Body.id(),
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            color,
+            label,
+            Some(room),
+            Clip::End,
+        );
         if cut {
             audit::truncated(&ctx, label, label, rect);
         }
@@ -166,7 +221,13 @@ pub fn local_thumbnail(ui: &mut Ui, side: f32, icon: Icon, tip: &str) {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        painter.rect(rect, CornerRadius::same(metrics::RADIUS), p.inset, Stroke::new(1.0, p.border_subtle), StrokeKind::Inside);
+        painter.rect(
+            rect,
+            CornerRadius::same(metrics::RADIUS),
+            p.inset,
+            Stroke::new(1.0, p.border_subtle),
+            StrokeKind::Inside,
+        );
         let g = (side * 0.4).clamp(16.0, 32.0);
         icons::draw(painter, icon, Rect::from_center_size(rect.center(), Vec2::splat(g)), p.text_muted);
     }
@@ -177,10 +238,23 @@ pub fn local_thumbnail(ui: &mut Ui, side: f32, icon: Icon, tip: &str) {
 
 /// A Ghost toolbar button with a glyph, a label and a count badge on its corner (the
 /// Outliner's Filters). `checked` lights it.
-pub fn local_badge_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, count: usize, checked: bool) -> Response {
+pub fn local_badge_button(
+    ui: &mut Ui,
+    icon: Icon,
+    label: &str,
+    tip: &str,
+    count: usize,
+    checked: bool,
+) -> Response {
     let p = palette(ui.ctx());
     let ctx = ui.ctx().clone();
-    let resp = Button::new(label).kind(Kind::Ghost).icon(icon).checked(checked).min_size(Vec2::new(0.0, metrics::TOOLBAR_BUTTON)).tip(tip).show(ui);
+    let resp = Button::new(label)
+        .kind(Kind::Ghost)
+        .icon(icon)
+        .checked(checked)
+        .min_size(Vec2::new(0.0, metrics::TOOLBAR_BUTTON))
+        .tip(tip)
+        .show(ui);
     if count > 0 && ui.is_rect_visible(resp.rect) {
         let t = count.to_string();
         let font = Font::Small.id();
@@ -218,15 +292,34 @@ pub fn local_tab(ui: &mut Ui, id: Id, rect: Rect, label: &str, front: bool, clos
     let hovered = resp.hovered() || cross_resp.as_ref().is_some_and(Response::hovered);
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        let fill = if front { p.base } else if hovered { p.hover } else { p.chrome };
+        let fill = if front {
+            p.base
+        } else if hovered {
+            p.hover
+        } else {
+            p.chrome
+        };
         painter.rect_filled(rect, CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, fill);
         if front {
-            painter.rect_filled(Rect::from_min_size(rect.min, Vec2::new(rect.width(), 2.0)), CornerRadius::ZERO, p.accent_bright);
+            painter.rect_filled(
+                Rect::from_min_size(rect.min, Vec2::new(rect.width(), 2.0)),
+                CornerRadius::ZERO,
+                p.accent_bright,
+            );
         }
         let show_cross = closable && (hovered || front);
         let room = rect.width() - 12.0 - if show_cross { 22.0 } else { 6.0 };
         let color = if front { p.text } else { p.text_secondary };
-        let cut = text::paint(painter, &Font::Body.id(), pos2(rect.min.x + 10.0, rect.center().y), Align2::LEFT_CENTER, color, label, Some(room.max(0.0)), Clip::End);
+        let cut = text::paint(
+            painter,
+            &Font::Body.id(),
+            pos2(rect.min.x + 10.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            color,
+            label,
+            Some(room.max(0.0)),
+            Clip::End,
+        );
         if cut {
             audit::truncated(&ctx, label, label, rect);
         }
@@ -234,7 +327,12 @@ pub fn local_tab(ui: &mut Ui, id: Id, rect: Rect, label: &str, front: bool, clos
             if c.hovered() {
                 painter.rect_filled(cross_rect, CornerRadius::same(3), p.pressed);
             }
-            icons::draw(painter, Icon::Close, cross_rect.shrink(3.0), if c.hovered() { p.text } else { p.text_secondary });
+            icons::draw(
+                painter,
+                Icon::Close,
+                cross_rect.shrink(3.0),
+                if c.hovered() { p.text } else { p.text_secondary },
+            );
         }
     }
     audit::control(&ctx, label, true, None, None, rect);
@@ -284,7 +382,8 @@ fn tree_rows(items: &[String], search: &str, open: &rustc_hash::FxHashSet<String
         let parts: Vec<&str> = item.split('\\').collect();
         let Some((leaf, dirs)) = parts.split_last() else { continue };
         // the common prefix with what is open in the stack
-        let common = stack.iter().zip(dirs.iter()).take_while(|(a, b)| a.rsplit('\\').next() == Some(**b)).count();
+        let common =
+            stack.iter().zip(dirs.iter()).take_while(|(a, b)| a.rsplit('\\').next() == Some(**b)).count();
         stack.truncate(common);
         let mut visible = stack.iter().all(|d| searching || open.contains(d));
         for d in dirs.iter().skip(common) {
@@ -309,14 +408,23 @@ fn tree_rows(items: &[String], search: &str, open: &rustc_hash::FxHashSet<String
 /// The tree list of a tool (Object, Spawn, Particles): `\`-separated items as folders and
 /// leaves, filtered by `search`, `height` tall (rows outside the view are not laid out).
 /// Returns the item clicked; `picked` is drawn selected.
-pub fn local_tree_list(ui: &mut Ui, id_salt: &str, items: &Arc<Vec<String>>, search: &str, picked: &str, height: f32) -> Option<String> {
+pub fn local_tree_list(
+    ui: &mut Ui,
+    id_salt: &str,
+    items: &Arc<Vec<String>>,
+    search: &str,
+    picked: &str,
+    height: f32,
+) -> Option<String> {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let id = ui.make_persistent_id(("gz-ui-level.tree", id_salt));
     let open_id = id.with("open");
     let open = ctx.data(|d| d.get_temp::<OpenFolders>(open_id)).unwrap_or_default();
     let mut state = ctx.data(|d| d.get_temp::<TreeState>(id)).unwrap_or_default();
-    let stale = !state.items.as_ref().is_some_and(|i| Arc::ptr_eq(i, items)) || state.search != search || state.open_epoch != open.epoch;
+    let stale = !state.items.as_ref().is_some_and(|i| Arc::ptr_eq(i, items))
+        || state.search != search
+        || state.open_epoch != open.epoch;
     if stale {
         state.rows = Arc::new(tree_rows(items, search, &open.set));
         state.items = Some(items.clone());
@@ -336,14 +444,15 @@ pub fn local_tree_list(ui: &mut Ui, id_salt: &str, items: &Arc<Vec<String>>, sea
         .inner_margin(egui::Margin::same(4))
         .show(ui, |ui| {
             ui.set_width((w - 10.0).max(1.0));
-            egui::ScrollArea::vertical().id_salt(id.with("scroll")).max_height((height - 10.0).max(row_h)).auto_shrink([false, false]).show_rows(
-                ui,
-                row_h,
-                rows.len(),
-                |ui, range| {
+            egui::ScrollArea::vertical()
+                .id_salt(id.with("scroll"))
+                .max_height((height - 10.0).max(row_h))
+                .auto_shrink([false, false])
+                .show_rows(ui, row_h, rows.len(), |ui, range| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     for row in rows.get(range).unwrap_or(&[]) {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::hover());
+                        let (rect, _) =
+                            ui.allocate_exact_size(Vec2::new(ui.available_width(), row_h), Sense::hover());
                         let resp = ui.interact(rect, id.with(("row", row.path.as_str())), Sense::click());
                         let selected = !row.folder && row.path.eq_ignore_ascii_case(picked);
                         let painter = ui.painter();
@@ -360,9 +469,23 @@ pub fn local_tree_list(ui: &mut Ui, id_salt: &str, items: &Arc<Vec<String>>, sea
                         } else {
                             (Icon::Dot, p.text_muted)
                         };
-                        icons::draw(painter, icon, Rect::from_min_size(pos2(x, rect.center().y - 6.0), Vec2::splat(12.0)), color);
+                        icons::draw(
+                            painter,
+                            icon,
+                            Rect::from_min_size(pos2(x, rect.center().y - 6.0), Vec2::splat(12.0)),
+                            color,
+                        );
                         let tx = x + 16.0;
-                        let cut = text::paint(painter, &Font::Body.id(), pos2(tx, rect.center().y), Align2::LEFT_CENTER, if row.folder { p.text_secondary } else { p.text }, leaf, Some((rect.max.x - tx - 4.0).max(0.0)), Clip::End);
+                        let cut = text::paint(
+                            painter,
+                            &Font::Body.id(),
+                            pos2(tx, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            if row.folder { p.text_secondary } else { p.text },
+                            leaf,
+                            Some((rect.max.x - tx - 4.0).max(0.0)),
+                            Clip::End,
+                        );
                         if cut {
                             audit::truncated(&ctx, leaf, leaf, rect);
                         }
@@ -377,8 +500,7 @@ pub fn local_tree_list(ui: &mut Ui, id_salt: &str, items: &Arc<Vec<String>>, sea
                             resp.on_hover_text(row.path.as_str());
                         }
                     }
-                },
-            );
+                });
         });
     if let Some(folder) = toggle
         && search.trim().is_empty()
@@ -395,7 +517,9 @@ pub fn local_tree_list(ui: &mut Ui, id_salt: &str, items: &Arc<Vec<String>>, sea
 
 /// A child `Ui` placed at `rect`, laid out top-down.
 pub fn child_at(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, rect: Rect) -> Ui {
-    let mut child = ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    let mut child = ui.new_child(
+        UiBuilder::new().id_salt(salt).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)),
+    );
     child.set_clip_rect(rect.intersect(ui.clip_rect()));
     child
 }

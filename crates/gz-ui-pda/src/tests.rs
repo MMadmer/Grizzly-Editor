@@ -1,5 +1,8 @@
 use crate::bitmap::{GlyphTable, font_section, font_texture, layout_text, parse_glyphs};
-use crate::gamefile::{Device, FRect, LtxSection, atof, comma_floats, ltx_value, parse_level_map, strip_comments, tag_attr, xml_node};
+use crate::gamefile::{
+    Device, FRect, LtxSection, atof, comma_floats, ltx_value, parse_level_map, strip_comments, tag_attr,
+    xml_node,
+};
 use crate::screens::{default_show, surface_mask, take_files};
 
 #[test]
@@ -15,7 +18,8 @@ fn numbers_read_like_c() {
 
 #[test]
 fn ltx_values_follow_the_c_scan() {
-    let text = "; head\n[base]\nheight = 16 ; comment\n[child]:base\nx = 1\n  [other]\n x = 2\n[child2] x = 3\n";
+    let text =
+        "; head\n[base]\nheight = 16 ; comment\n[child]:base\nx = 1\n  [other]\n x = 2\n[child2] x = 3\n";
     assert_eq!(ltx_value(text, "child", "x").as_deref(), Some("1"));
     // a key the section lacks comes from its parent
     assert_eq!(ltx_value(text, "child", "height").as_deref(), Some("16"));
@@ -118,10 +122,16 @@ fn labels_cut_or_wrap_like_the_game() {
     assert_eq!(two.iter().map(|l| l.cp.clone()).collect::<Vec<_>>(), vec![b"ab".to_vec(), b"b".to_vec()]);
     // words wrap
     let wrapped = layout_text(&t, b"aa bb aa", 50.0, true);
-    assert_eq!(wrapped.iter().map(|l| l.cp.clone()).collect::<Vec<_>>(), vec![b"aa bb".to_vec(), b"aa".to_vec()]);
+    assert_eq!(
+        wrapped.iter().map(|l| l.cp.clone()).collect::<Vec<_>>(),
+        vec![b"aa bb".to_vec(), b"aa".to_vec()]
+    );
     // a word wider than the line breaks where it must
     let long = layout_text(&t, b"aaaaa", 20.0, true);
-    assert_eq!(long.iter().map(|l| l.cp.clone()).collect::<Vec<_>>(), vec![b"aa".to_vec(), b"aa".to_vec(), b"a".to_vec()]);
+    assert_eq!(
+        long.iter().map(|l| l.cp.clone()).collect::<Vec<_>>(),
+        vec![b"aa".to_vec(), b"aa".to_vec(), b"a".to_vec()]
+    );
     // an empty text is one empty line
     assert_eq!(layout_text(&t, b"", 20.0, true).len(), 1);
 }
@@ -131,20 +141,37 @@ fn files_land_where_they_are_dropped() {
     let mut s = gz_screens::Screens::default();
     let mut err = String::new();
     // anything but music on the tab: a screen of its own each, on the tab's surface
-    let sel = take_files(&mut s, &["screens\\night.dds".to_owned(), "screens\\fog.ps".to_owned()], "", -1, false, default_show(1), &mut err);
+    let sel = take_files(
+        &mut s,
+        &["screens\\night.dds".to_owned(), "screens\\fog.ps".to_owned()],
+        "",
+        -1,
+        false,
+        default_show(1),
+        &mut err,
+    );
     assert_eq!(s.screens.len(), 2);
     assert_eq!(s.screens[0].id, "night");
     assert_eq!(s.screens[0].show, surface_mask(1));
     assert_eq!(sel.screen.as_deref(), Some("fog"));
     // music is a track wherever it lands
-    let sel = take_files(&mut s, &["screens\\rain theme.ogg".to_owned()], "night", 0, false, default_show(0), &mut err);
+    let sel = take_files(
+        &mut s,
+        &["screens\\rain theme.ogg".to_owned()],
+        "night",
+        0,
+        false,
+        default_show(0),
+        &mut err,
+    );
     assert_eq!(s.tracks.len(), 1);
     assert_eq!(s.tracks[0].id, "rain_theme");
     assert_eq!(sel.track.as_deref(), Some("rain_theme"));
     // on a layer it replaces the layer's file; on Layers it adds one
     take_files(&mut s, &["screens\\day.dds".to_owned()], "night", 0, false, default_show(0), &mut err);
     assert_eq!(s.screens[0].layers[0].file, "screens\\day.dds");
-    let sel = take_files(&mut s, &["screens\\top.gif".to_owned()], "night", -1, false, default_show(0), &mut err);
+    let sel =
+        take_files(&mut s, &["screens\\top.gif".to_owned()], "night", -1, false, default_show(0), &mut err);
     assert_eq!(s.screens[0].layers.len(), 2);
     assert_eq!(sel.layer, Some(1));
     // the music list takes .ogg files only

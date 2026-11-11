@@ -94,7 +94,9 @@ pub fn thm_kind(bytes: &[u8]) -> Result<ThmKind> {
         (TYPE_OBJECT, THM_OBJECT_VERSION) => Ok(ThmKind::Object),
         (TYPE_OBJECT, THM_GROUP_VERSION) => Ok(ThmKind::Group),
         (TYPE_OBJECT | TYPE_TEXTURE | TYPE_SOUND, _) => Err(TexError::ThmVersion(version)),
-        (other, _) => Err(TexError::Invalid(format!("the thumbnail names a kind the editor does not know: {other}"))),
+        (other, _) => {
+            Err(TexError::Invalid(format!("the thumbnail names a kind the editor does not know: {other}")))
+        }
     }
 }
 
@@ -118,8 +120,13 @@ fn turn_pixels(raw: &[u8]) -> Result<Vec<u8>> {
         return Err(TexError::Truncated { need: THUMB_BYTES - raw.len() });
     }
     let mut out = vec![0u8; THUMB_BYTES];
-    for (dst, src) in out.chunks_exact_mut(THUMB_ROW).zip(raw[..THUMB_BYTES].chunks_exact(THUMB_ROW).rev()) {
-        for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+    for (dst, src) in out
+        .as_chunks_mut::<THUMB_ROW>()
+        .0
+        .iter_mut()
+        .zip(raw[..THUMB_BYTES].as_chunks::<THUMB_ROW>().0.iter().rev())
+    {
+        for (d, s) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
             d[0] = s[2];
             d[1] = s[1];
             d[2] = s[0];
@@ -138,7 +145,12 @@ fn read_pixels(file: &Reader<'_>) -> Result<Option<Vec<u8>>> {
 
 fn write_pixels(w: &mut Writer, pixels: &[u8]) -> Result<()> {
     if pixels.len() != THUMB_BYTES {
-        return Err(TexError::BadPixels { width: THUMB_SIDE, height: THUMB_SIDE, need: THUMB_BYTES, got: pixels.len() });
+        return Err(TexError::BadPixels {
+            width: THUMB_SIDE,
+            height: THUMB_SIDE,
+            need: THUMB_BYTES,
+            got: pixels.len(),
+        });
     }
     w.w_chunk_compressed(THM_CHUNK_DATA, &turn_pixels(pixels)?);
     Ok(())
@@ -238,7 +250,7 @@ mod tests {
 
     fn picture() -> Vec<u8> {
         let mut px = vec![0u8; THUMB_BYTES];
-        for (i, p) in px.chunks_exact_mut(4).enumerate() {
+        for (i, p) in px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             p.copy_from_slice(&[(i % 251) as u8, (i / 128) as u8, 7, 255]);
         }
         px
@@ -248,7 +260,12 @@ mod tests {
     fn a_texture_thm_without_a_picture_is_what_the_editor_writes() {
         let thm = TextureThm {
             pixels: None,
-            params: TextureParams { fmt: TextureFormat::DXT5, width: 512, height: 512, ..TextureParams::default() },
+            params: TextureParams {
+                fmt: TextureFormat::DXT5,
+                width: 512,
+                height: 512,
+                ..TextureParams::default()
+            },
         };
         let bytes = write_texture_thm(&thm).unwrap();
         // version chunk, then the type chunk, then the parameters
@@ -290,7 +307,14 @@ mod tests {
 
     #[test]
     fn a_sound_thm_is_read_through_the_same_door() {
-        let snd = SoundThm { quality: 0.0, min_dist: 1.0, max_dist: 50.0, max_ai_dist: 40.0, base_volume: 0.8, game_type: 3 };
+        let snd = SoundThm {
+            quality: 0.0,
+            min_dist: 1.0,
+            max_dist: 50.0,
+            max_ai_dist: 40.0,
+            base_volume: 0.8,
+            game_type: 3,
+        };
         let bytes = gz_fmt_sound::write_sound_thm(&snd);
         assert_eq!(thm_kind(&bytes).unwrap(), ThmKind::Sound);
         assert_eq!(read_thm(&bytes).unwrap(), Thm::Sound(snd));

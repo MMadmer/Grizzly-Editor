@@ -34,16 +34,20 @@ mod shell;
 mod shots;
 pub mod tabs;
 pub mod tasks;
+mod unsaved;
 mod window;
 
-pub use builder::{DialogDesc, DrawerDesc, LogState, MenuContent, MenuEntry, PageCard, PanelDesc, ShellBuilder, UiCommand};
+pub use builder::{
+    DialogDesc, DrawerDesc, LogState, MenuContent, MenuEntry, PageCard, PanelDesc, ShellBuilder, UiCommand,
+};
 pub use cmds::register;
 pub use doc::{DocCx, Document, Drawer, EditAction, OpenRequest, PanelInfo, PanelOp, ShellRequests, tab_id};
 pub use keys::Chord;
 pub use queue::{UiQueue, no_window, on_ui};
-pub use settings::EditorSettings;
 pub use scroll::{ScrollTo, report_scroll, take_scroll};
+pub use settings::EditorSettings;
 pub use shell::{GrizzlyShell, ShellOptions, ShellState, default_log_state, window_options};
 pub use shots::encode_png;
 pub use tasks::{TaskCard, TaskCardTable};
+pub use unsaved::save_tabs;
 pub use window::{FrameReport, Shell, UserEvent, WindowLink, WindowOptions, run};

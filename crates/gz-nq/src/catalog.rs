@@ -22,15 +22,65 @@ pub const USE_COND: u8 = 8;
 /// The catalog type names: what tells a parameter definition line from a kind attribute that
 /// shares its name (`kTypes`).
 const TYPES: &[&str] = &[
-    "string", "int", "float", "bool", "enum", "text", "duration", "npc_ref", "target_ref", "place", "spawn_spec", "item_list",
-    "loot_spawn", "spawn_section", "item_section", "squad_section", "level", "smart", "story_id", "profile", "community", "info",
-    "var_name", "task_id", "quest_id", "ref_name", "global_name", "signal_name", "spot_type", "relation", "lua", "cases",
-    "cases_cond", "cases_weight", "kill_target", "count_or_all", "value", "cond_list", "node_id", "restrictor", "squad_ref",
-    "object_ref", "objective_id", "role", "way_path", "destination", "role_or_actor", "attack_target", "role_bindings",
-    "behaviour_id", "npc_list", "character_id", "level_changer",
+    "string",
+    "int",
+    "float",
+    "bool",
+    "enum",
+    "text",
+    "duration",
+    "npc_ref",
+    "target_ref",
+    "place",
+    "spawn_spec",
+    "item_list",
+    "loot_spawn",
+    "spawn_section",
+    "item_section",
+    "squad_section",
+    "level",
+    "smart",
+    "story_id",
+    "profile",
+    "community",
+    "info",
+    "var_name",
+    "task_id",
+    "quest_id",
+    "ref_name",
+    "global_name",
+    "signal_name",
+    "spot_type",
+    "relation",
+    "lua",
+    "cases",
+    "cases_cond",
+    "cases_weight",
+    "kill_target",
+    "count_or_all",
+    "value",
+    "cond_list",
+    "node_id",
+    "restrictor",
+    "squad_ref",
+    "object_ref",
+    "objective_id",
+    "role",
+    "way_path",
+    "destination",
+    "role_or_actor",
+    "attack_target",
+    "role_bindings",
+    "behaviour_id",
+    "npc_list",
+    "character_id",
+    "level_changer",
 ];
 
-const ATTRS: &[&str] = &["group", "title", "desc", "use", "docs", "params", "rows", "pins", "wait", "once", "event", "impl", "since", "alias"];
+const ATTRS: &[&str] = &[
+    "group", "title", "desc", "use", "docs", "params", "rows", "pins", "wait", "once", "event", "impl",
+    "since", "alias",
+];
 
 /// Whether a name is a catalog type.
 #[must_use]
@@ -110,7 +160,14 @@ pub struct Kind {
 
 impl Kind {
     fn new(id: &str, source: &str) -> Self {
-        Self { id: id.to_owned(), source: source.to_owned(), in_quest: true, in_behaviour: true, since: 1, ..Self::default() }
+        Self {
+            id: id.to_owned(),
+            source: source.to_owned(),
+            in_quest: true,
+            in_behaviour: true,
+            since: 1,
+            ..Self::default()
+        }
     }
 
     #[must_use]
@@ -401,7 +458,11 @@ impl Catalog {
     /// `quest_catalog`'s reply fields (`McpCatalog`), or the error.
     pub fn to_json(&self) -> Result<Json, String> {
         if !self.loaded() {
-            return Err(if self.error.is_empty() { "catalog not available".to_owned() } else { self.error.clone() });
+            return Err(if self.error.is_empty() {
+                "catalog not available".to_owned()
+            } else {
+                self.error.clone()
+            });
         }
         let kinds: Vec<Json> = self.kinds.iter().map(kind_json).collect();
         Ok(json!({
@@ -452,7 +513,9 @@ fn kind_json(k: &Kind) -> Json {
     o.insert("title".into(), json!(k.title));
     o.insert("desc".into(), json!(k.desc));
     let mut uses = Vec::new();
-    for (bit, name) in [(USE_TRIGGER, "trigger"), (USE_MAIN, "main"), (USE_EXTRA, "extra"), (USE_COND, "cond")] {
+    for (bit, name) in
+        [(USE_TRIGGER, "trigger"), (USE_MAIN, "main"), (USE_EXTRA, "extra"), (USE_COND, "cond")]
+    {
         if k.is(bit) {
             uses.push(name);
         }
@@ -520,8 +583,13 @@ mod tests {
         let start = c.find("trigger.start").map(|k| (k.title.clone(), k.once_default, k.pins.clone()));
         assert_eq!(start, Some(("Quest start".to_owned(), true, vec!["next".to_owned()])));
         assert!(c.is_trigger("trigger.start"));
-        let st = c.find("task.set_text").map(|k| k.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect::<Vec<_>>());
-        assert_eq!(st, Some(vec![("task".to_owned(), "task_id".to_owned()), ("title".to_owned(), "text".to_owned())]));
+        let st = c
+            .find("task.set_text")
+            .map(|k| k.params.iter().map(|p| (p.name.clone(), p.ty.clone())).collect::<Vec<_>>());
+        assert_eq!(
+            st,
+            Some(vec![("task".to_owned(), "task_id".to_owned()), ("title".to_owned(), "text".to_owned())])
+        );
         let rows = c.find("item.spawn").map(|k| k.rows.len());
         assert_eq!(rows, Some(2));
         assert_eq!(c.find("item.spawn").and_then(|k| k.row_param("count")).and_then(|p| p.min), Some(1.0));
@@ -529,7 +597,10 @@ mod tests {
 
     #[test]
     fn later_files_win_and_move_the_kind_last() {
-        let a = SourceFile { label: "a".into(), text: "[nq.x]\ntitle = A\nuse = main\n[nq.y]\nuse = main\n".into() };
+        let a = SourceFile {
+            label: "a".into(),
+            text: "[nq.x]\ntitle = A\nuse = main\n[nq.y]\nuse = main\n".into(),
+        };
         let b = SourceFile { label: "b".into(), text: "[nq.x]\ntitle = B\nuse = extra\n".into() };
         let c = Catalog::assemble(&[a, b], true, None, 1);
         let ids: Vec<&str> = c.kinds().iter().map(|k| k.id.as_str()).collect();

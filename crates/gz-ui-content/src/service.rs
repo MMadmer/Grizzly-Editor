@@ -61,7 +61,12 @@ pub(crate) struct Catalogs {
 
 impl Catalogs {
     pub(crate) fn new(wake: gz_task::Wake) -> Self {
-        Self { slots: Mutex::new(FxHashMap::default()), editor_want: Default::default(), scope: RevCounter::new(), wake }
+        Self {
+            slots: Mutex::new(FxHashMap::default()),
+            editor_want: Default::default(),
+            scope: RevCounter::new(),
+            wake,
+        }
     }
 }
 
@@ -123,7 +128,9 @@ impl Catalogs {
         let mut slots = self.slots.lock();
         let slot = slots.entry(key).or_default();
         let fresh = match &want {
-            Want::Project(_, rev) | Want::Game(_, rev) | Want::Editor(_, _, rev) => slot.rev == *rev && (slot.cat.is_some() || slot.error.is_some()),
+            Want::Project(_, rev) | Want::Game(_, rev) | Want::Editor(_, _, rev) => {
+                slot.rev == *rev && (slot.cat.is_some() || slot.error.is_some())
+            }
             Want::Nothing(why) => {
                 slot.cat = None;
                 slot.error.clone_from(why);
@@ -131,7 +138,9 @@ impl Catalogs {
             }
         };
         // a game not read yet has revision zero: the first read is what mounts it
-        let game_unread = matches!(want, Want::Game(_, rev) if rev == Rev::ZERO) && slot.cat.is_none() && slot.error.is_none();
+        let game_unread = matches!(want, Want::Game(_, rev) if rev == Rev::ZERO)
+            && slot.cat.is_none()
+            && slot.error.is_none();
         if (!fresh || game_unread) && !slot.building {
             slot.building = true;
             let me = self.clone();
@@ -186,14 +195,20 @@ impl Catalogs {
 
     /// The catalog current with the disk: what a command reads. The project's tree first takes
     /// in every change marked so far.
-    pub(crate) async fn fresh(self: &Arc<Self>, editor: &Arc<Editor>, key: CatKey) -> Result<Arc<Catalog>, String> {
+    pub(crate) async fn fresh(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        key: CatKey,
+    ) -> Result<Arc<Catalog>, String> {
         match want_of(editor, self, key) {
             Want::Nothing(why) => Err(why.unwrap_or_else(|| "no project is open".to_owned())),
             Want::Project(project, _) => {
                 project.tree.refresh().await;
                 let snap = project.tree.snapshot();
                 let rev = snap.rev();
-                if let Some(cat) = self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone()) {
+                if let Some(cat) =
+                    self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone())
+                {
                     return Ok(cat);
                 }
                 let cat = editor.exec.cpu(move || Catalog::from_tree(&snap, Source::Project, 0, true)).await;
@@ -201,11 +216,13 @@ impl Catalogs {
                 self.peek(key).ok_or_else(|| "the project could not be listed".to_owned())
             }
             Want::Game(project, _) => {
-                let (files, rev) = editor.exec.io(move || project.game_snapshot()).await.map_err(|e| {
-                    self.store(key, Rev::ZERO, None, Some(e.clone()));
-                    e
-                })?;
-                if let Some(cat) = self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone()) {
+                let (files, rev) =
+                    editor.exec.io(move || project.game_snapshot()).await.inspect_err(|e| {
+                        self.store(key, Rev::ZERO, None, Some(e.clone()));
+                    })?;
+                if let Some(cat) =
+                    self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone())
+                {
                     return Ok(cat);
                 }
                 let cat = editor.exec.cpu(move || Catalog::from_game(files)).await;
@@ -213,7 +230,9 @@ impl Catalogs {
                 self.peek(key).ok_or_else(|| "the game could not be listed".to_owned())
             }
             Want::Editor(root, cat, rev) => {
-                if let Some(found) = self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone()) {
+                if let Some(found) =
+                    self.slots.lock().get(&key).filter(|s| s.rev == rev).and_then(|s| s.cat.clone())
+                {
                     return Ok(found);
                 }
                 let built = editor.exec.io(move || editor_catalog(&root, cat)).await;
@@ -340,6 +359,11 @@ pub(crate) struct Marquee {
     pub base: Vec<Entry>,
 }
 
+/// What follows the pointer while tiles are dragged: the icon, the asset kind, the picture, the
+/// label and how many tiles go.
+pub(crate) type DragIcon =
+    (gz_ui::Icon, Option<gz_project::AssetKind>, Option<crate::pictures::Shown>, String, usize);
+
 /// The view state.
 pub(crate) struct Inner {
     pub loc: Location,
@@ -377,7 +401,7 @@ pub(crate) struct Inner {
     pub listed: Option<(CatKey, Rev)>,
     /// A drag of tiles started here, and what follows the pointer.
     pub drag_started: bool,
-    pub drag_icon: Option<(gz_ui::Icon, Option<gz_project::AssetKind>, Option<crate::pictures::Shown>, String, usize)>,
+    pub drag_icon: Option<DragIcon>,
     /// Where the grid's own menu is up.
     pub grid_menu_at: egui::Pos2,
     /// Open, picked from a menu: run where the frame has the shell's requests.
@@ -477,7 +501,11 @@ impl Inner {
             let size = gz_ui::layout::get(ctx, tile_key, 0.0);
             let default_list = if host == Host::Panel { 1.0 } else { 0.0 };
             let v = self.host_mut(host);
-            v.tile = if size > 0.0 { size.clamp(gz_app::contract::TILE_MIN, gz_app::contract::TILE_MAX) } else { 0.0 };
+            v.tile = if size > 0.0 {
+                size.clamp(gz_app::contract::TILE_MIN, gz_app::contract::TILE_MAX)
+            } else {
+                0.0
+            };
             v.list = gz_ui::layout::get(ctx, list_key, default_list) != 0.0;
         }
         self.sources_pane = gz_ui::layout::get(ctx, "content_browser.sources_pane", 1.0) != 0.0;
@@ -510,7 +538,9 @@ impl Inner {
         remove_scoped(&mut self.forward, project_changed, game);
         remove_scoped(&mut self.favorites, project_changed, game);
         cats.forget_scoped(project_changed);
-        if (self.loc.source == Source::Project && project_changed) || (self.loc.source == Source::Game && game) {
+        if (self.loc.source == Source::Project && project_changed)
+            || (self.loc.source == Source::Game && game)
+        {
             self.loc.folder.clear();
             self.sel.clear();
             self.rename = None;
@@ -526,7 +556,13 @@ impl Inner {
     }
 
     /// Goes to a location (`ApplyLocation`). `record` keeps where it came from in Back.
-    pub fn apply_location(&mut self, mut target: Location, record: bool, cats: &Catalogs, has_project: bool) -> Result<(), String> {
+    pub fn apply_location(
+        &mut self,
+        mut target: Location,
+        record: bool,
+        cats: &Catalogs,
+        has_project: bool,
+    ) -> Result<(), String> {
         target.folder = normalize_folder(&target.folder).map_err(str::to_owned)?;
         if target.category >= CATEGORIES.len() {
             return Err("asset category is out of range".into());
@@ -638,7 +674,12 @@ impl Inner {
     }
 
     /// Adds a favorite (`AddFavorite` + `ValidateFavorite`).
-    pub fn add_favorite(&mut self, mut loc: Location, cats: &Catalogs, has_project: bool) -> Result<(), String> {
+    pub fn add_favorite(
+        &mut self,
+        mut loc: Location,
+        cats: &Catalogs,
+        has_project: bool,
+    ) -> Result<(), String> {
         if loc.category >= CATEGORIES.len() {
             return Err("asset category is out of range".into());
         }
@@ -763,11 +804,17 @@ impl ContentBrowser {
         let key: ViewKey = (cat_key(loc), loc.folder.to_lowercase(), search.to_owned());
         let folder = loc.folder.clone();
         let search = search.to_owned();
-        self.views.get(&key, rev, move || build_view(&catalog, &folder, &search, project.then_some(&rules[..])))
+        self.views
+            .get(&key, rev, move || build_view(&catalog, &folder, &search, project.then_some(&rules[..])))
     }
 
     /// The same, awaited: what a command reads.
-    pub(crate) async fn fresh_view(&self, editor: &Arc<Editor>, loc: &Location, search: &str) -> Result<Arc<View>, String> {
+    pub(crate) async fn fresh_view(
+        &self,
+        editor: &Arc<Editor>,
+        loc: &Location,
+        search: &str,
+    ) -> Result<Arc<View>, String> {
         let key = cat_key(loc);
         let catalog = self.cats.fresh(editor, key).await?;
         let state = self.cats.ensure(editor, key);
@@ -777,17 +824,28 @@ impl ContentBrowser {
         let vkey: ViewKey = (key, loc.folder.to_lowercase(), search.to_owned());
         let folder = loc.folder.clone();
         let search = search.to_owned();
-        Ok(self.views.fresh(&vkey, rev, move || build_view(&catalog, &folder, &search, project.then_some(&rules[..]))).await)
+        Ok(self
+            .views
+            .fresh(&vkey, rev, move || build_view(&catalog, &folder, &search, project.then_some(&rules[..])))
+            .await)
     }
 
     /// The folders the tree veils.
-    pub(crate) fn veils(&self, editor: &Editor, loc: &Location, cat: &CatState) -> Option<Arc<FxHashSet<String>>> {
+    pub(crate) fn veils(
+        &self,
+        editor: &Editor,
+        loc: &Location,
+        cat: &CatState,
+    ) -> Option<Arc<FxHashSet<String>>> {
         if loc.source != Source::Project {
             return None;
         }
         let catalog = cat.cat.clone()?;
         let (rules, rules_rev) = Self::rules(editor);
-        self.veils.get(&cat_key(loc), cat.rev.mix(rules_rev), move || veiled_folders(&catalog, &rules)).value().cloned()
+        self.veils
+            .get(&cat_key(loc), cat.rev.mix(rules_rev), move || veiled_folders(&catalog, &rules))
+            .value()
+            .cloned()
     }
 }
 

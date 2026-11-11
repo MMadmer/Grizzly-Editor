@@ -97,7 +97,12 @@ impl Default for View {
 impl View {
     #[must_use]
     pub fn current(&self) -> ViewState {
-        ViewState { center: self.center, zoom: self.zoom, selection: self.selection.clone(), slot: self.slot.clone() }
+        ViewState {
+            center: self.center,
+            zoom: self.zoom,
+            selection: self.selection.clone(),
+            slot: self.slot.clone(),
+        }
     }
 
     /// Pushes the current view on the back history unless it is the last one (`RememberView`).
@@ -144,7 +149,9 @@ impl View {
         let s = layout::node_size(cat, n);
         let center = [n.pos[0] + s[0] * 0.5, n.pos[1] + s[1] * 0.5];
         let zoom = self.zoom.max(ZOOM_DEFAULT);
-        let same = self.selection.len() == 1 && self.selection.first().is_some_and(|s| s == id) && self.slot.is_empty();
+        let same = self.selection.len() == 1
+            && self.selection.first().is_some_and(|s| s == id)
+            && self.slot.is_empty();
         #[allow(clippy::float_cmp)]
         let moved = center != self.center || zoom != self.zoom;
         if moved || !same {
@@ -171,7 +178,13 @@ pub struct GraphDoc {
 
 impl Default for GraphDoc {
     fn default() -> Self {
-        Self { graph: Graph::default(), shape: Arc::from(Vec::new()), partial: false, file_time: None, view: View::default() }
+        Self {
+            graph: Graph::default(),
+            shape: Arc::from(Vec::new()),
+            partial: false,
+            file_time: None,
+            view: View::default(),
+        }
     }
 }
 
@@ -198,7 +211,10 @@ pub enum ViewOp {
     HistoryBack,
     HistoryForward,
     HistoryClear,
-    Bookmark { node: String, on: bool },
+    Bookmark {
+        node: String,
+        on: bool,
+    },
     BookmarksClear,
     /// +1 or -1.
     BookmarkJump(i32),
@@ -208,7 +224,11 @@ pub enum ViewOp {
     FindClear,
     Minimap(bool),
     /// What the tab drew: its canvas in px, the UI scale, whether the minimap was on screen.
-    Drawn { canvas: Option<[f32; 2]>, dpi: f32, minimap_shown: bool },
+    Drawn {
+        canvas: Option<[f32; 2]>,
+        dpi: f32,
+        minimap_shown: bool,
+    },
     Drawer(SmolStr),
 }
 
@@ -216,7 +236,11 @@ pub enum ViewOp {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DocOp {
     /// The file was read: the history starts over, clean.
-    Load { graph: Graph, shape: Vec<String>, file_time: Option<SystemTime> },
+    Load {
+        graph: Graph,
+        shape: Vec<String>,
+        file_time: Option<SystemTime>,
+    },
     /// `quest_write` on an open document: the whole graph replaced, one undo step.
     Replace(Graph),
     /// `quest_apply`: a list of operations, all or nothing.
@@ -225,17 +249,41 @@ pub enum DocOp {
     Apply(Value),
     AddNode(Node),
     RemoveNodes(Vec<String>),
-    RenameNode { id: String, new_id: String },
-    RenameTask { from: String, to: String, path: String },
-    Connect { from: String, pin: String, to: String },
+    RenameNode {
+        id: String,
+        new_id: String,
+    },
+    RenameTask {
+        from: String,
+        to: String,
+        path: String,
+    },
+    Connect {
+        from: String,
+        pin: String,
+        to: String,
+    },
     /// An empty `to` drops the whole pin, an empty `pin` every pin.
-    Disconnect { from: String, pin: String, to: String },
-    SetPos { id: String, x: f32, y: f32, undo: bool },
-    Layout { only_missing: bool },
+    Disconnect {
+        from: String,
+        pin: String,
+        to: String,
+    },
+    SetPos {
+        id: String,
+        x: f32,
+        y: f32,
+        undo: bool,
+    },
+    Layout {
+        only_missing: bool,
+    },
     Canvas(CanvasOp),
     View(ViewOp),
     /// What is in memory is on disk now.
-    Saved { file_time: Option<SystemTime> },
+    Saved {
+        file_time: Option<SystemTime>,
+    },
 }
 
 /// A command of the document store: the operation and the catalog it is read with.
@@ -380,7 +428,9 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
     }
     match what.as_str() {
         "add_node" => {
-            let Some(nv) = op.get("node") else { return Err("add_node needs node = { id = ..., kind = ..., ... }".into()) };
+            let Some(nv) = op.get("node") else {
+                return Err("add_node needs node = { id = ..., kind = ..., ... }".into());
+            };
             let mut shape = Vec::new();
             let n = asset::node_from_value(cat, nv, &mut shape);
             let n = match n {
@@ -420,8 +470,12 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
         "set_node" => {
             let id = op.get_string("id", "");
             let Some(at) = g.node_index(&id) else { return Err(format!("node '{id}' does not exist")) };
-            let Some(patch) = op.get("patch").filter(|p| p.is_table()) else { return Err("set_node needs patch = { ... }".into()) };
-            let Some(mut n) = g.nodes.get(at).cloned() else { return Err(format!("node '{id}' does not exist")) };
+            let Some(patch) = op.get("patch").filter(|p| p.is_table()) else {
+                return Err("set_node needs patch = { ... }".into());
+            };
+            let Some(mut n) = g.nodes.get(at).cloned() else {
+                return Err(format!("node '{id}' does not exist"));
+            };
             for (k, v) in patch.fields() {
                 match k.as_str() {
                     "id" => return Err("set_node cannot change id - use rename_node".into()),
@@ -447,7 +501,10 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
                     "pos" => {
                         if v.is_table() && v.arr().len() >= 2 {
                             let a = v.arr();
-                            n.pos = [a.first().map_or(0.0, |x| x.to_number(0.0)) as f32, a.get(1).map_or(0.0, |x| x.to_number(0.0)) as f32];
+                            n.pos = [
+                                a.first().map_or(0.0, |x| x.to_number(0.0)) as f32,
+                                a.get(1).map_or(0.0, |x| x.to_number(0.0)) as f32,
+                            ];
                             n.has_pos = true;
                         } else {
                             n.has_pos = false;
@@ -469,7 +526,8 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
             Ok(())
         }
         "connect" | "disconnect" => {
-            let (from, pin, to) = (op.get_string("from", ""), op.get_string("pin", "next"), op.get_string("to", ""));
+            let (from, pin, to) =
+                (op.get_string("from", ""), op.get_string("pin", "next"), op.get_string("to", ""));
             let Some(f) = g.find_node_mut(&from) else { return Err(format!("node '{from}' does not exist")) };
             if what == "connect" {
                 // a missing target or an undeclared pin is a validation problem, not a refusal
@@ -495,13 +553,17 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
                     Some(Err(e)) => return Err(e),
                     None => return Err("add_action needs action = { kind = ..., params = { ... } }".into()),
                 };
-                let Some(at) = slot_index(op, "index", size, true) else { return Err("index out of range (1-based)".into()) };
+                let Some(at) = slot_index(op, "index", size, true) else {
+                    return Err("index out of range (1-based)".into());
+                };
                 if let Some(n) = g.nodes.get_mut(ni) {
                     list_mut(n, exit).insert(at, a);
                 }
                 return Ok(());
             }
-            let Some(at) = slot_index(op, "index", size, false) else { return Err("index out of range (1-based)".into()) };
+            let Some(at) = slot_index(op, "index", size, false) else {
+                return Err("index out of range (1-based)".into());
+            };
             if what == "remove_action" {
                 if let Some(n) = g.nodes.get_mut(ni) {
                     list_mut(n, exit).remove(at);
@@ -512,7 +574,9 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
                 let Some(patch) = op.get("patch").filter(|p| p.is_table()) else {
                     return Err("set_action needs patch = { kind = ..., params = { ... } }".into());
                 };
-                let Some(a) = g.nodes.get_mut(ni).and_then(|n| list_mut(n, exit).get_mut(at)) else { return Err("index out of range (1-based)".into()) };
+                let Some(a) = g.nodes.get_mut(ni).and_then(|n| list_mut(n, exit).get_mut(at)) else {
+                    return Err("index out of range (1-based)".into());
+                };
                 if let Some(k) = patch.get("kind") {
                     match k.as_str() {
                         Some(s) => a.kind = SmolStr::new(s),
@@ -528,7 +592,9 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
                 return Ok(());
             }
             // move_action: to_id / to_slot / to_index, all optional
-            let Some(moving) = g.nodes.get_mut(ni).map(|n| list_mut(n, exit).remove(at)) else { return Err("index out of range (1-based)".into()) };
+            let Some(moving) = g.nodes.get_mut(ni).map(|n| list_mut(n, exit).remove(at)) else {
+                return Err("index out of range (1-based)".into());
+            };
             let target = if op.has("to_id") {
                 match g.node_index(&op.get_string("to_id", "")) {
                     Some(t) => t,
@@ -542,8 +608,11 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
             } else {
                 exit
             };
-            let dsize = g.nodes.get(target).map_or(0, |n| if dst_exit { n.on_exit.len() } else { n.on_enter.len() });
-            let Some(to) = slot_index(op, "to_index", dsize, true) else { return Err("to_index out of range (1-based)".into()) };
+            let dsize =
+                g.nodes.get(target).map_or(0, |n| if dst_exit { n.on_exit.len() } else { n.on_enter.len() });
+            let Some(to) = slot_index(op, "to_index", dsize, true) else {
+                return Err("to_index out of range (1-based)".into());
+            };
             if let Some(n) = g.nodes.get_mut(target) {
                 list_mut(n, dst_exit).insert(to, moving);
             }
@@ -563,13 +632,21 @@ pub fn apply_one(cat: &Catalog, g: &mut Graph, op: &Value) -> Result<(), String>
                         if !v.is_table() {
                             return Err("vars must be a table".into());
                         }
-                        g.vars = v.fields().iter().map(|(name, value)| Var { name: name.to_string(), value: value.clone() }).collect();
+                        g.vars = v
+                            .fields()
+                            .iter()
+                            .map(|(name, value)| Var { name: name.to_string(), value: value.clone() })
+                            .collect();
                     }
                     "tasks" => {
                         if !v.is_table() {
                             return Err("tasks must be a table".into());
                         }
-                        g.tasks = v.fields().iter().map(|(id, tv)| asset::task_from_value(id, tv)).collect::<imbl::Vector<Task>>();
+                        g.tasks = v
+                            .fields()
+                            .iter()
+                            .map(|(id, tv)| asset::task_from_value(id, tv))
+                            .collect::<imbl::Vector<Task>>();
                     }
                     other => return Err(format!("set_quest: unknown field '{other}'")),
                 }
@@ -647,7 +724,11 @@ fn insert_nodes(cat: &Catalog, g: &mut Graph, src: Vec<Node>, place: [f32; 2]) -
     let mut made = Vec::with_capacity(nodes.len());
     for mut n in nodes {
         for p in &mut n.out {
-            p.targets = p.targets.iter().filter_map(|t| remap.iter().find(|(old, _)| old == t).map(|(_, new)| new.clone())).collect();
+            p.targets = p
+                .targets
+                .iter()
+                .filter_map(|t| remap.iter().find(|(old, _)| old == t).map(|(_, new)| new.clone()))
+                .collect();
         }
         if n.has_pos {
             n.pos = [snap(n.pos[0] + place[0]), snap(n.pos[1] + place[1])];
@@ -686,8 +767,11 @@ fn bypass(cat: &Catalog, g: &mut Graph, selection: &[SmolStr]) -> String {
                 }
             }
         }
-        let out: Vec<(SmolStr, SmolStr, SmolStr)> =
-            n.out.iter().flat_map(|p| p.targets.iter().map(|t| (mid.clone(), p.name.clone(), t.clone()))).collect();
+        let out: Vec<(SmolStr, SmolStr, SmolStr)> = n
+            .out
+            .iter()
+            .flat_map(|p| p.targets.iter().map(|t| (mid.clone(), p.name.clone(), t.clone())))
+            .collect();
         if inc.is_empty() && out.is_empty() {
             continue;
         }
@@ -742,7 +826,11 @@ fn dist2(a: [f32; 2], b: [f32; 2]) -> f32 {
 
 /// The selected node reaches for the nearest node it can still be wired to, either way, over
 /// declared pins only (`ConnectNearest`). Returns the edge and the status line.
-fn connect_nearest(cat: &Catalog, g: &Graph, selection: &[SmolStr]) -> (Option<(String, String, String)>, String) {
+fn connect_nearest(
+    cat: &Catalog,
+    g: &Graph,
+    selection: &[SmolStr],
+) -> (Option<(String, String, String)>, String) {
     let [sel] = selection else { return (None, "Q wires one node - select exactly one".into()) };
     let Some(si) = g.node_index(sel) else { return (None, String::new()) };
     struct Geo {
@@ -924,7 +1012,8 @@ impl GraphDoc {
                     [one] => v.bookmarks.iter().position(|b| b == one).map_or(-1, |i| i as i64),
                     _ => -1,
                 };
-                let mut next = if delta < 0 { if current < 0 { len - 1 } else { current - 1 } } else { current + 1 };
+                let mut next =
+                    if delta < 0 { if current < 0 { len - 1 } else { current - 1 } } else { current + 1 };
                 if next < 0 {
                     next = len - 1;
                 }
@@ -957,7 +1046,8 @@ impl GraphDoc {
                 if i >= len {
                     i = 0;
                 }
-                let node = results.get(usize::try_from(i).unwrap_or(0)).map(|r| r.node.clone()).unwrap_or_default();
+                let node =
+                    results.get(usize::try_from(i).unwrap_or(0)).map(|r| r.node.clone()).unwrap_or_default();
                 v.find_node = Some(SmolStr::new(&node));
                 v.frame_node(cat, g, &node);
                 reply.moved = true;
@@ -1087,7 +1177,9 @@ impl State for GraphDoc {
                     return Err(refused(format!("task '{from}' does not exist")));
                 }
                 if declarations != 1 {
-                    return Err(refused(format!("task '{from}' is declared {declarations} times; rename requires exactly one source declaration")));
+                    return Err(refused(format!(
+                        "task '{from}' is declared {declarations} times; rename requires exactly one source declaration"
+                    )));
                 }
                 if from == to {
                     return Err(refused("new task id is unchanged"));
@@ -1096,16 +1188,20 @@ impl State for GraphDoc {
                     return Err(refused(format!("task '{to}' already exists")));
                 }
                 if self.partial {
-                    return Err(refused("task rename refused: the open document is an incomplete model of a malformed source file"));
+                    return Err(refused(
+                        "task rename refused: the open document is an incomplete model of a malformed source file",
+                    ));
                 }
-                let (after, updated) = references::rename_task(&self.graph, cat, &path, &from, &to).map_err(|diags| {
-                    let mut err = String::from("task rename refused because reference coverage is incomplete");
-                    for (i, d) in diags.iter().enumerate() {
-                        err.push_str(if i == 0 { ": " } else { "; " });
-                        err.push_str(&d.text());
-                    }
-                    refused(err)
-                })?;
+                let (after, updated) =
+                    references::rename_task(&self.graph, cat, &path, &from, &to).map_err(|diags| {
+                        let mut err =
+                            String::from("task rename refused because reference coverage is incomplete");
+                        for (i, d) in diags.iter().enumerate() {
+                            err.push_str(if i == 0 { ": " } else { "; " });
+                            err.push_str(&d.text());
+                        }
+                        refused(err)
+                    })?;
                 self.graph = after;
                 reply.count = updated;
                 self.changed(cat);
@@ -1128,7 +1224,9 @@ impl State for GraphDoc {
                 cx.undoable("Connect");
             }
             DocOp::Disconnect { from, pin, to } => {
-                let Some(f) = self.graph.find_node_mut(&from) else { return Err(refused("source node does not exist")) };
+                let Some(f) = self.graph.find_node_mut(&from) else {
+                    return Err(refused("source node does not exist"));
+                };
                 if to.is_empty() {
                     f.out.retain(|p| !(pin.is_empty() || p.name == pin.as_str()));
                 } else {
@@ -1138,7 +1236,9 @@ impl State for GraphDoc {
                 cx.undoable("Disconnect");
             }
             DocOp::SetPos { id, x, y, undo } => {
-                let Some(n) = self.graph.find_node_mut(&id) else { return Err(refused(format!("node '{id}' does not exist"))) };
+                let Some(n) = self.graph.find_node_mut(&id) else {
+                    return Err(refused(format!("node '{id}' does not exist")));
+                };
                 // a drag never goes through the change pass, so the bound is applied here too
                 n.pos = [layout::sane(x), layout::sane(y)];
                 n.has_pos = true;
@@ -1186,7 +1286,8 @@ impl State for GraphDoc {
                             cx.unchanged();
                             return Ok(reply);
                         }
-                        let src: Vec<Node> = selection.iter().filter_map(|id| self.graph.find_node(id).cloned()).collect();
+                        let src: Vec<Node> =
+                            selection.iter().filter_map(|id| self.graph.find_node(id).cloned()).collect();
                         let made = insert_nodes(cat, &mut self.graph, src, [GRID * 2.0, GRID * 2.0]);
                         self.view.selection = made;
                         self.view.slot.clear();
@@ -1239,8 +1340,19 @@ mod tests {
 
     fn cat() -> Catalog {
         use crate::catalog::{Kind, USE_MAIN, USE_TRIGGER};
-        let kind = |id: &str, uses: u8| Kind { id: id.into(), uses, pins: vec!["next".into()], in_quest: true, in_behaviour: true, ..Kind::default() };
-        Catalog::from_kinds(vec![kind("trigger.start", USE_TRIGGER), kind("flow.step", USE_MAIN), kind("flow.end", USE_MAIN)])
+        let kind = |id: &str, uses: u8| Kind {
+            id: id.into(),
+            uses,
+            pins: vec!["next".into()],
+            in_quest: true,
+            in_behaviour: true,
+            ..Kind::default()
+        };
+        Catalog::from_kinds(vec![
+            kind("trigger.start", USE_TRIGGER),
+            kind("flow.step", USE_MAIN),
+            kind("flow.end", USE_MAIN),
+        ])
     }
 
     fn graph() -> Graph {
@@ -1252,7 +1364,15 @@ mod tests {
         let mut b = Node::new("b", "flow.step");
         b.params.set("node", "a");
         let mut cond = Node::new("c", "flow.step");
-        cond.cond.push(asset::Cond { kind: "node_done".into(), params: { let mut p = Value::table(); p.set("node", "a"); p }, negate: false });
+        cond.cond.push(asset::Cond {
+            kind: "node_done".into(),
+            params: {
+                let mut p = Value::table();
+                p.set("node", "a");
+                p
+            },
+            negate: false,
+        });
         for n in [s, a, b, cond] {
             g.nodes.push_back(n);
         }
@@ -1289,9 +1409,15 @@ mod tests {
         assert_eq!(applied, Ok(10));
         assert_eq!(g.id, "q2");
         assert!(g.find_node("a").is_none());
-        assert_eq!(g.find_node("s").and_then(|n| n.targets("next")).map(<[SmolStr]>::to_vec), Some(vec![SmolStr::new("aa")]));
+        assert_eq!(
+            g.find_node("s").and_then(|n| n.targets("next")).map(<[SmolStr]>::to_vec),
+            Some(vec![SmolStr::new("aa")])
+        );
         // a node reference inside a condition follows the rename
-        assert_eq!(g.find_node("c").and_then(|n| n.cond.first()).map(|c| c.params.get_string("node", "")), Some("aa".to_owned()));
+        assert_eq!(
+            g.find_node("c").and_then(|n| n.cond.first()).map(|c| c.params.get_string("node", "")),
+            Some("aa".to_owned())
+        );
         let b = g.find_node("b").cloned().unwrap_or_default();
         assert!(b.once_set && b.once);
         assert_eq!((b.comment.as_str(), b.pos, b.on_exit.len()), ("hi", [16.0, 32.0], 1));
@@ -1307,13 +1433,30 @@ mod tests {
         let c = cat();
         let mut g = graph();
         let before = g.clone();
-        let r = apply_ops(&c, &mut g, &ops(r#"{ { op = "remove_node", id = "a" }, { op = "remove_node", id = "zz" } }"#));
+        let r = apply_ops(
+            &c,
+            &mut g,
+            &ops(r#"{ { op = "remove_node", id = "a" }, { op = "remove_node", id = "zz" } }"#),
+        );
         assert_eq!(r, Err("op #2: node 'zz' does not exist".to_owned()));
         assert_eq!(g, before);
         assert_eq!(apply_one(&c, &mut g, &ops(r#"{ op = "warp" }"#)), Err("unknown op 'warp'".to_owned()));
-        assert_eq!(apply_one(&c, &mut g, &ops(r#"{ op = "set_node", id = "a", patch = { id = "x" } }"#)), Err("set_node cannot change id - use rename_node".to_owned()));
-        assert_eq!(apply_one(&c, &mut g, &ops(r#"{ op = "add_action", id = "a", index = 9, action = { kind = "x" } }"#)), Ok(()));
-        assert_eq!(apply_one(&c, &mut g, &ops(r#"{ op = "remove_action", id = "a", index = 5 }"#)), Err("index out of range (1-based)".to_owned()));
+        assert_eq!(
+            apply_one(&c, &mut g, &ops(r#"{ op = "set_node", id = "a", patch = { id = "x" } }"#)),
+            Err("set_node cannot change id - use rename_node".to_owned())
+        );
+        assert_eq!(
+            apply_one(
+                &c,
+                &mut g,
+                &ops(r#"{ op = "add_action", id = "a", index = 9, action = { kind = "x" } }"#)
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            apply_one(&c, &mut g, &ops(r#"{ op = "remove_action", id = "a", index = 5 }"#)),
+            Err("index out of range (1-based)".to_owned())
+        );
         // removing a node takes the edges into it
         assert_eq!(apply_one(&c, &mut g, &ops(r#"{ op = "remove_node", id = "a" }"#)), Ok(()));
         assert!(g.find_node("s").is_some_and(|n| n.out.is_empty()));
@@ -1327,7 +1470,10 @@ mod tests {
         assert_eq!(can_link(&c, &g, "a", "a"), Err("A node cannot link to itself".to_owned()));
         let status = bypass(&c, &mut g, &[SmolStr::new("a")]);
         assert_eq!(status, "Bypassed: 1 link(s) bridged");
-        assert_eq!(g.find_node("s").and_then(|n| n.targets("next")).map(<[SmolStr]>::to_vec), Some(vec![SmolStr::new("b")]));
+        assert_eq!(
+            g.find_node("s").and_then(|n| n.targets("next")).map(<[SmolStr]>::to_vec),
+            Some(vec![SmolStr::new("b")])
+        );
         assert!(g.find_node("a").is_some_and(|n| n.out.is_empty()));
         layout::run(&c, &mut g, false);
         let copy = g.find_node("b").cloned().unwrap_or_default();
@@ -1345,7 +1491,12 @@ mod tests {
         };
         let exec = rt.exec();
         rt.block_on(async {
-            let store = gz_store::Store::spawn("doc", GraphDoc::default(), &exec, gz_store::StoreOptions { history_limit: 200 });
+            let store = gz_store::Store::spawn(
+                "doc",
+                GraphDoc::default(),
+                &exec,
+                gz_store::StoreOptions { history_limit: 200 },
+            );
             let catalog = Arc::new(cat());
             let send = |op: DocOp| store.send(DocCmd { catalog: catalog.clone(), op }, gz_base::Origin::Mcp);
             assert!(send(DocOp::Load { graph: graph(), shape: Vec::new(), file_time: None }).await.is_ok());

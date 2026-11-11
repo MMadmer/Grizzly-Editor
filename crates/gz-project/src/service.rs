@@ -97,7 +97,12 @@ impl Projects {
     #[must_use]
     pub fn of(editor: &Editor) -> Arc<Projects> {
         editor.services.get_or_init(|| Projects {
-            store: Store::spawn("projects", ListState { list: ProjectList::default() }, &editor.exec, StoreOptions::default()),
+            store: Store::spawn(
+                "projects",
+                ListState { list: ProjectList::default() },
+                &editor.exec,
+                StoreOptions::default(),
+            ),
             file: editor.paths.root.join(list::FILE),
             exec: editor.exec.clone(),
             lock: tokio::sync::Mutex::new(()),
@@ -172,7 +177,9 @@ impl State for FileState {
     fn apply(&mut self, cmd: FileCmd, cx: &mut Apply) -> Result<(), CmdError> {
         let next = match cmd {
             FileCmd::Load(file) => file,
-            FileCmd::Manifest { name, sdk_root, game_root } => self.file.with_manifest(&name, &sdk_root, &game_root),
+            FileCmd::Manifest { name, sdk_root, game_root } => {
+                self.file.with_manifest(&name, &sdk_root, &game_root)
+            }
             FileCmd::GameRoot(root) => self.file.with_game_root(&root),
             FileCmd::LastScene(rel) => self.file.with_last_scene(rel.as_deref()),
             FileCmd::Set { section, key, value } => self.file.with_value(&section, &key, &value),
@@ -305,7 +312,8 @@ impl Project {
     /// Sets a key of `project.ltx` for another area (`[xms] export_target`, ...) and answers
     /// once it is on disk.
     pub async fn set_value(&self, section: &str, key: &str, value: &str) -> Result<(), CmdError> {
-        self.edit(FileCmd::Set { section: section.to_owned(), key: key.to_owned(), value: value.to_owned() }).await
+        self.edit(FileCmd::Set { section: section.to_owned(), key: key.to_owned(), value: value.to_owned() })
+            .await
     }
 
     /// The scene area says which scene is open (`None`: none), once a frame or on a load. A
@@ -363,7 +371,11 @@ impl Project {
         if let Some(problem) = &files.stats().cache_problem {
             self.log.warn(problem.clone());
         }
-        self.log.info(format!("DARF content mounted: {} archives, {} files ({root})", files.archives().len(), files.len()));
+        self.log.info(format!(
+            "DARF content mounted: {} archives, {} files ({root})",
+            files.archives().len(),
+            files.len()
+        ));
         Ok(files)
     }
 
@@ -383,7 +395,11 @@ impl Project {
     }
 
     fn current_game(&self, root: &str) -> Option<(Arc<GameFiles>, Rev)> {
-        self.game.lock().as_ref().filter(|m| m.root.eq_ignore_ascii_case(root)).map(|m| (m.files.clone(), m.rev))
+        self.game
+            .lock()
+            .as_ref()
+            .filter(|m| m.root.eq_ignore_ascii_case(root))
+            .map(|m| (m.files.clone(), m.rev))
     }
 
     /// The linked game's index and its revision, mounted on first need and again when the link
@@ -453,7 +469,9 @@ impl Project {
 #[must_use]
 pub fn project_state(editor: &Editor) -> Value {
     match Project::of(editor) {
-        Ok((_, p)) => json!({ "project_active": true, "project": paths::wire(p.root()), "project_name": p.name() }),
+        Ok((_, p)) => {
+            json!({ "project_active": true, "project": paths::wire(p.root()), "project_name": p.name() })
+        }
         Err(_) => json!({ "project_active": false, "project": "", "project_name": "" }),
     }
 }

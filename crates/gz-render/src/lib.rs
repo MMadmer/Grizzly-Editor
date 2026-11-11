@@ -72,14 +72,14 @@ mod thumbs;
 mod view;
 
 pub use assets::{
-    AssetBytes, AssetLoader, AssetRef, AssetState, AssetStats, Assets, Budgets, MaterialHandle, MeshHandle, MeshKey,
-    TextureHandle,
+    AssetBytes, AssetLoader, AssetRef, AssetState, AssetStats, Assets, Budgets, MaterialHandle, MeshHandle,
+    MeshKey, TextureHandle,
 };
 pub use camera::{Camera, Projection, aspect, frame_fit, pick_ray, project};
 pub use color::Color;
 pub use draw_list::{
-    DrawList, Environment, Helpers, Instance, InstanceFlags, Label, Light, LightKind, Line, RoofMap, Shape, ShapeKind,
-    Visibility,
+    DrawList, Environment, Helpers, Instance, InstanceFlags, Label, Light, LightKind, Line, RoofMap, Shape,
+    ShapeKind, Visibility,
 };
 pub use helpers::LineVertex;
 pub use material::{EditorMaterial, MaterialDesc, MaterialTable, Pass};

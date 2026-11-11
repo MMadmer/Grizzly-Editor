@@ -73,7 +73,11 @@ impl IndexSnapshot {
     /// The ids of one kind (`ProjectIdsOfKind`).
     #[must_use]
     pub fn ids_of_kind(&self, behaviour: bool) -> Vec<String> {
-        self.entries.iter().filter(|e| e.usable() && !e.graph.id.is_empty() && e.behaviour() == behaviour).map(|e| e.graph.id.clone()).collect()
+        self.entries
+            .iter()
+            .filter(|e| e.usable() && !e.graph.id.is_empty() && e.behaviour() == behaviour)
+            .map(|e| e.graph.id.clone())
+            .collect()
     }
 
     #[must_use]
@@ -130,7 +134,16 @@ pub fn fingerprint_text(f: u64) -> String {
 pub fn disk_entry(catalog: &Catalog, rel: &str, key: &str, text: &str) -> IndexEntry {
     let hash = content_hash(text);
     match asset::parse(catalog, text, &asset::base_name(rel)) {
-        Ok(g) => IndexEntry { rel: rel.to_owned(), key: key.to_owned(), graph: Arc::new(g), error: String::new(), readable: true, complete: true, memory: false, content_hash: hash },
+        Ok(g) => IndexEntry {
+            rel: rel.to_owned(),
+            key: key.to_owned(),
+            graph: Arc::new(g),
+            error: String::new(),
+            readable: true,
+            complete: true,
+            memory: false,
+            content_hash: hash,
+        },
         Err(e) => IndexEntry {
             rel: rel.to_owned(),
             key: key.to_owned(),
@@ -261,7 +274,12 @@ pub struct ProjectFind {
 /// diagnostic and makes the answer incomplete.
 #[must_use]
 pub fn find_nodes(snapshot: &IndexSnapshot, catalog: &Catalog, query: &str) -> ProjectFind {
-    let mut out = ProjectFind { complete: true, generation: snapshot.generation, fingerprint: snapshot.fingerprint, ..ProjectFind::default() };
+    let mut out = ProjectFind {
+        complete: true,
+        generation: snapshot.generation,
+        fingerprint: snapshot.fingerprint,
+        ..ProjectFind::default()
+    };
     let terms = parse_query(query);
     let title = |k: &str| catalog.find(k).map_or_else(|| k.to_owned(), |x| x.title.clone());
     for e in &snapshot.entries {
@@ -314,7 +332,10 @@ mod tests {
         g.nodes.push_back(crate::asset::Node::new("other", "flow.step"));
         let title = |k: &str| if k == "dialog.topic" { "Dialog: topic".to_owned() } else { k.to_owned() };
         let hits = find_in_graph(&g, &parse_query("wolf"), &title);
-        assert_eq!(hits.iter().map(|h| (h.node.as_str(), h.matched)).collect::<Vec<_>>(), [("meet_wolf", "id")]);
+        assert_eq!(
+            hits.iter().map(|h| (h.node.as_str(), h.matched)).collect::<Vec<_>>(),
+            [("meet_wolf", "id")]
+        );
         let hits = find_in_graph(&g, &parse_query("dialog:"), &title);
         assert_eq!(hits.first().map(|h| h.matched), Some("kind"));
         let hits = find_in_graph(&g, &parse_query("boar"), &title);

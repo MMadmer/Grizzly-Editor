@@ -78,7 +78,8 @@ fn read_rsrc(file: &mut File) -> Option<Rsrc> {
     let table = opt + opt_size;
     for s in 0..sections {
         let at = table + s * 40;
-        let (vsize, va, raw_size, raw_at) = (le32(&head, at + 8)?, le32(&head, at + 12)?, le32(&head, at + 16)?, le32(&head, at + 20)?);
+        let (vsize, va, raw_size, raw_at) =
+            (le32(&head, at + 8)?, le32(&head, at + 12)?, le32(&head, at + 16)?, le32(&head, at + 20)?);
         if rsrc_rva < va || rsrc_rva >= va.saturating_add(vsize.max(raw_size)) {
             continue;
         }
@@ -111,7 +112,8 @@ pub fn exe_version(path: &Path) -> Option<String> {
     let (data_rva, data_size) = (le32(&rsrc.bytes, data_entry)?, le32(&rsrc.bytes, data_entry + 4)?);
     let data = rsrc.at_rva(data_rva, data_size as usize)?;
     // VS_FIXEDFILEINFO follows the VS_VERSION_INFO key, on a four-byte boundary
-    let fixed = (0..data.len().saturating_sub(16)).step_by(4).find(|&i| le32(data, i) == Some(FIXED_SIGNATURE))?;
+    let fixed =
+        (0..data.len().saturating_sub(16)).step_by(4).find(|&i| le32(data, i) == Some(FIXED_SIGNATURE))?;
     let (ms, ls) = (le32(data, fixed + 8)?, le32(data, fixed + 12)?);
     Some(format!("{}.{}.{}", ms >> 16, ms & 0xFFFF, ls >> 16))
 }

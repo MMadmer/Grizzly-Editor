@@ -7,7 +7,10 @@
 //! - [`show_popup`] / [`take_popup_request`] - a popup asked for by name (MCP `ui_popup`); the
 //!   widget that owns the name opens it on its next frame.
 
-use egui::{Align, Align2, Context, CornerRadius, Frame, Id, Layout, LayerId, Margin, Popup, PopupAnchor, PopupCloseBehavior, PopupKind, Rect, Role, Sense, Stroke, Ui, UiKind, Vec2, WidgetInfo, pos2};
+use egui::{
+    Align, Align2, Context, CornerRadius, Frame, Id, LayerId, Layout, Margin, Popup, PopupAnchor,
+    PopupCloseBehavior, PopupKind, Rect, Role, Sense, Stroke, Ui, UiKind, Vec2, WidgetInfo, pos2,
+};
 
 use crate::audit;
 use crate::button::{keycaps, keycaps_width};
@@ -28,11 +31,13 @@ pub struct MenuItem<'a> {
     pub enabled: bool,
     /// Leads to a deletion: the label in the error colour.
     pub danger: bool,
+    /// The row's hover hint; on a disabled row, why it is off.
+    pub tip: &'a str,
 }
 
 impl Default for MenuItem<'_> {
     fn default() -> Self {
-        Self { icon: Icon::None, keys: "", selected: false, enabled: true, danger: false }
+        Self { icon: Icon::None, keys: "", selected: false, enabled: true, danger: false, tip: "" }
     }
 }
 
@@ -43,7 +48,8 @@ const KEYS_GAP: f32 = 24.0;
 
 /// A menu row. Returns whether it was picked; a picked row closes its menu.
 pub fn menu_item(ui: &mut Ui, label: &str, item: MenuItem<'_>) -> bool {
-    row(ui, label, item, false, "")
+    let tip = item.tip;
+    row(ui, label, item, false, tip)
 }
 
 /// A menu row, optionally with a submenu chevron and a tooltip: the overflow menu's rows.
@@ -66,7 +72,11 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if item.enabled && (resp.hovered() || resp.has_focus()) {
-            painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), if resp.is_pointer_button_down_on() { p.pressed } else { p.hover });
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(metrics::RADIUS),
+                if resp.is_pointer_button_down_on() { p.pressed } else { p.hover },
+            );
         }
         let text_color = if !item.enabled {
             p.text_disabled
@@ -77,7 +87,10 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
         };
         let mut x = rect.min.x + 8.0;
         if has_slot {
-            let glyph = Rect::from_min_size(pos2(x, rect.center().y - metrics::GLYPH * 0.5), Vec2::splat(metrics::GLYPH));
+            let glyph = Rect::from_min_size(
+                pos2(x, rect.center().y - metrics::GLYPH * 0.5),
+                Vec2::splat(metrics::GLYPH),
+            );
             let (icon, color) = match (item.icon, item.selected) {
                 (Icon::None, _) => (Icon::Check, p.accent_bright),
                 (icon, true) => (icon, p.accent_bright),
@@ -89,17 +102,38 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
             x += metrics::GLYPH + 8.0;
         }
         // a menu wider than this row's needs leaves the label whole; a narrower one cuts it
-        let right = rect.max.x - 8.0 - if keys_w > 0.0 { KEYS_GAP + keys_w } else { 0.0 } - if submenu { 16.0 } else { 0.0 };
-        text::paint(painter, &font, pos2(x, rect.center().y), Align2::LEFT_CENTER, text_color, label, Some((right - x).max(0.0)), Clip::End);
+        let right = rect.max.x
+            - 8.0
+            - if keys_w > 0.0 { KEYS_GAP + keys_w } else { 0.0 }
+            - if submenu { 16.0 } else { 0.0 };
+        text::paint(
+            painter,
+            &font,
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            text_color,
+            label,
+            Some((right - x).max(0.0)),
+            Clip::End,
+        );
         if keys_w > 0.0 {
-            keycaps(ui, pos2(rect.max.x - 8.0 - if submenu { 16.0 } else { 0.0 }, rect.center().y), item.keys, item.enabled);
+            keycaps(
+                ui,
+                pos2(rect.max.x - 8.0 - if submenu { 16.0 } else { 0.0 }, rect.center().y),
+                item.keys,
+                item.enabled,
+            );
         }
         if submenu {
-            let chevron = Rect::from_min_size(pos2(rect.max.x - 20.0, rect.center().y - 6.0), Vec2::splat(metrics::GLYPH_STATUS));
+            let chevron = Rect::from_min_size(
+                pos2(rect.max.x - 20.0, rect.center().y - 6.0),
+                Vec2::splat(metrics::GLYPH_STATUS),
+            );
             icons::draw(ui.painter(), Icon::ChevronRight, chevron, p.text_secondary);
         }
     }
-    audit::control(ui.ctx(), label, item.enabled, None, if tip.is_empty() { None } else { Some(tip) }, rect);
+    let said = (!tip.is_empty()).then_some(tip);
+    audit::control(ui.ctx(), label, item.enabled, if item.enabled { None } else { said }, said, rect);
     let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
     let picked = resp.clicked() && item.enabled;
     if picked && (ui.stack().contained_in(UiKind::Menu) || ui.stack().contained_in(UiKind::Popup)) {
@@ -109,7 +143,6 @@ pub(crate) fn row(ui: &mut Ui, label: &str, item: MenuItem<'_>, submenu: bool, t
 }
 
 /// The frame of a menu or popup: overlay fill, the border, 6 pt corners, 4 pt padding.
-#[must_use]
 pub fn popup_frame(ctx: &Context) -> Frame {
     let p = palette(ctx);
     Frame::new()
@@ -131,7 +164,13 @@ pub fn popup_body<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// A menu kept open in egui's memory, under `anchor`. Open it with `Popup::open_id` or
 /// `Popup::toggle_id`; a picked [`menu_item`] closes it, so does a click outside or Esc.
-pub fn menu_popup<R>(ctx: &Context, popup_id: Id, anchor: Rect, layer: LayerId, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+pub fn menu_popup<R>(
+    ctx: &Context,
+    popup_id: Id,
+    anchor: Rect,
+    layer: LayerId,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     Popup::new(popup_id, ctx.clone(), PopupAnchor::ParentRect(anchor), layer)
         .kind(PopupKind::Menu)
         .open_memory(None)

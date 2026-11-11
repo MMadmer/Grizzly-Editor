@@ -70,7 +70,8 @@ pub(crate) fn read_directory(path: &Path) -> io::Result<Vec<ArchEntry>> {
         if key.is_empty() {
             continue;
         }
-        let entry = ArchEntry { path: key.clone(), size: r.size_real, packed: r.size_compressed, offset: r.offset };
+        let entry =
+            ArchEntry { path: key.clone(), size: r.size_real, packed: r.size_compressed, offset: r.offset };
         match at.get(&key) {
             Some(&i) => {
                 if let Some(slot) = out.get_mut(i) {

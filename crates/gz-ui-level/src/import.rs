@@ -55,7 +55,11 @@ fn open(cx: &mut DocCx<'_>) -> Result<(), String> {
         let scenes = if project.is_some() { gz_project::project::base_scenes(&root) } else { Vec::new() };
         let in_project = scenes
             .iter()
-            .map(|n| project.as_ref().is_some_and(|p| p.join("rawdata").join("levels").join(format!("{n}.level")).exists()))
+            .map(|n| {
+                project
+                    .as_ref()
+                    .is_some_and(|p| p.join("rawdata").join("levels").join(format!("{n}.level")).exists())
+            })
             .collect();
         let library = root.join("rawdata").join("levels").display().to_string();
         let st = state_of(&ed);
@@ -77,7 +81,11 @@ fn import(editor: &Arc<Editor>, name: String, there: bool) {
         let Ok(queue) = gz_app::UiQueue::of(&ed) else { return };
         queue.post(move |shell, ctx| match result {
             Ok(_) => {
-                let text_ = if there { format!("Scene '{name}' is in the project already.") } else { format!("Scene '{name}' imported into the project.") };
+                let text_ = if there {
+                    format!("Scene '{name}' is in the project already.")
+                } else {
+                    format!("Scene '{name}' imported into the project.")
+                };
                 state::toast(ctx, Tone::Success, &text_);
                 state_of(&ed).0.lock().open = false;
             }
@@ -168,7 +176,13 @@ fn draw(ui: &mut Ui, cx: &mut DocCx<'_>) {
     );
     do_import |= import_pressed;
     if do_import && !s.pick.is_empty() {
-        let there = s.listed.as_ref().and_then(|l| l.scenes.iter().position(|n| *n == s.pick).and_then(|i| l.in_project.get(i).copied())).unwrap_or(false);
+        let there = s
+            .listed
+            .as_ref()
+            .and_then(|l| {
+                l.scenes.iter().position(|n| *n == s.pick).and_then(|i| l.in_project.get(i).copied())
+            })
+            .unwrap_or(false);
         import(&editor, s.pick.clone(), there);
     }
     if cancel || !open {
@@ -191,7 +205,11 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         order: 0,
         content: gz_app::MenuContent::Custom(Box::new(|ui: &mut Ui, cx: &mut DocCx<'_>| {
             let on = cx.editor.project_opt().is_some();
-            if gz_ui::menu_item(ui, "Import Base Scene...", gz_ui::MenuItem { enabled: on, ..gz_ui::MenuItem::default() }) {
+            if gz_ui::menu_item(
+                ui,
+                "Import Base Scene...",
+                gz_ui::MenuItem { enabled: on, ..gz_ui::MenuItem::default() },
+            ) {
                 cx.requests.dialog("import_base_scene");
             }
         })),

@@ -15,14 +15,16 @@
 //! - [`decode_ogg`] - the sound as interleaved `i16`: [`Pcm`]. [`Pcm::peaks`] is the envelope a
 //!   waveform is drawn from.
 //! - [`SoundThm`], [`read_sound_thm`], [`write_sound_thm`] - the sound's thumbnail file.
-//!
-//! Encoding a `.wav` into Vorbis is not here.
+//! - [`read_wav`], [`encode_game_sound`] - a game sound made from its `.wav`: Vorbis at the
+//!   description's quality, the parameters as its first comment (`MakeGameSound`).
 
+mod encode;
 mod ogg;
 mod params;
 mod pcm;
 mod thm;
 
+pub use encode::{MAX_WAV_FRAMES, Wav, encode_game_sound, read_wav};
 pub use params::{OGG_COMMENT_VERSION, OggParams, read_ogg_params, write_ogg_params};
 pub use pcm::{MAX_DECODED_SAMPLES, OggInfo, Pcm, Peak, decode_ogg, ogg_info};
 pub use thm::{SoundThm, read_sound_thm, write_sound_thm};
@@ -47,6 +49,10 @@ pub enum SoundError {
     Decode(String),
     #[error("the sound is longer than the editor decodes at once")]
     TooLong,
+    #[error("the .wav cannot be read: {0}")]
+    Wav(&'static str),
+    #[error("the sound could not be encoded: {0}")]
+    Encode(String),
 }
 
 pub type Result<T, E = SoundError> = std::result::Result<T, E>;

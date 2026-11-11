@@ -2,7 +2,9 @@
 //! that fits, rotated when only that fits), and the UV remap into it.
 
 use glam::Vec2;
-use gz_fmt_tex::{Image, MipFilterId, TextureFlags, TextureFormat, TextureParams, TextureType, make_game_texture};
+use gz_fmt_tex::{
+    Image, MipFilterId, TextureFlags, TextureFormat, TextureParams, TextureType, make_game_texture,
+};
 
 use crate::{BuildError, Result};
 
@@ -100,7 +102,14 @@ fn try_merge(layer_cnt: usize, images: &[SourceImage], order: &[usize], dw: u32,
 // oracle: the C++ sorts with `area > || longest edge >`, which is no strict ordering; here the
 // pictures are sorted by area, then longest edge, largest first, keeping the order of equals.
 #[must_use]
-pub fn merge_textures(layer_cnt: usize, images: Vec<SourceImage>, w_min: u32, w_max: u32, h_min: u32, h_max: u32) -> Option<Merged> {
+pub fn merge_textures(
+    layer_cnt: usize,
+    images: Vec<SourceImage>,
+    w_min: u32,
+    w_max: u32,
+    h_min: u32,
+    h_max: u32,
+) -> Option<Merged> {
     if images.is_empty() {
         return None;
     }
@@ -130,7 +139,11 @@ pub fn merge_textures(layer_cnt: usize, images: Vec<SourceImage>, w_min: u32, w_
 /// `MergedTextureRemapUV`.
 #[must_use]
 pub fn remap_uv(uv: Vec2, offs: Vec2, scale: Vec2, rotated: bool) -> Vec2 {
-    if rotated { Vec2::new(scale.x * uv.y + offs.x, scale.y * uv.x + offs.y) } else { Vec2::new(scale.x * uv.x + offs.x, scale.y * uv.y + offs.y) }
+    if rotated {
+        Vec2::new(scale.x * uv.y + offs.x, scale.y * uv.x + offs.y)
+    } else {
+        Vec2::new(scale.x * uv.x + offs.x, scale.y * uv.y + offs.y)
+    }
 }
 
 /// `MakeGameTexture` of a merged layer: 32 bit, mip maps, dithered, the advanced filter.

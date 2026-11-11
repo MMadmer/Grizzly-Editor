@@ -50,7 +50,8 @@ pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> boo
     let p = palette(&ctx);
     let id = ui.make_persistent_id(("gz-ui-previews.section", id_salt));
     let mut is_open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(open);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::SECTION_HEADER), Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), metrics::SECTION_HEADER), Sense::hover());
     let resp = ui.interact(rect, id.with("header"), Sense::click());
     if resp.clicked() {
         is_open = !is_open;
@@ -58,11 +59,32 @@ pub fn local_section(ui: &mut Ui, id_salt: &str, title: &str, open: bool) -> boo
     ctx.data_mut(|d| d.insert_temp(id, is_open));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(metrics::RADIUS), if resp.hovered() { p.hover } else { p.raised });
-        let chevron = Rect::from_min_size(pos2(rect.min.x + 6.0, rect.center().y - metrics::GLYPH_STATUS * 0.5), Vec2::splat(metrics::GLYPH_STATUS));
-        icons::draw(painter, if is_open { Icon::ChevronDown } else { Icon::ChevronRight }, chevron, p.text_secondary);
+        painter.rect_filled(
+            rect,
+            CornerRadius::same(metrics::RADIUS),
+            if resp.hovered() { p.hover } else { p.raised },
+        );
+        let chevron = Rect::from_min_size(
+            pos2(rect.min.x + 6.0, rect.center().y - metrics::GLYPH_STATUS * 0.5),
+            Vec2::splat(metrics::GLYPH_STATUS),
+        );
+        icons::draw(
+            painter,
+            if is_open { Icon::ChevronDown } else { Icon::ChevronRight },
+            chevron,
+            p.text_secondary,
+        );
         let x = chevron.max.x + 6.0;
-        text::paint(painter, &Font::Strong.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, p.text, title, Some((rect.max.x - x - 6.0).max(0.0)), Clip::End);
+        text::paint(
+            painter,
+            &Font::Strong.id(),
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            p.text,
+            title,
+            Some((rect.max.x - x - 6.0).max(0.0)),
+            Clip::End,
+        );
     }
     gz_ui::audit::control(&ctx, title, true, None, None, rect);
     is_open
@@ -77,14 +99,37 @@ pub fn local_ends(ui: &mut Ui, left: &str, right: &str) {
     if ui.is_rect_visible(rect) {
         let font = Font::Small.id();
         let half = Some((rect.width() * 0.5 - 4.0).max(0.0));
-        text::paint(ui.painter(), &font, rect.left_center(), Align2::LEFT_CENTER, p.text_muted, left, half, Clip::End);
-        text::paint(ui.painter(), &font, rect.right_center(), Align2::RIGHT_CENTER, p.text_muted, right, half, Clip::End);
+        text::paint(
+            ui.painter(),
+            &font,
+            rect.left_center(),
+            Align2::LEFT_CENTER,
+            p.text_muted,
+            left,
+            half,
+            Clip::End,
+        );
+        text::paint(
+            ui.painter(),
+            &font,
+            rect.right_center(),
+            Align2::RIGHT_CENTER,
+            p.text_muted,
+            right,
+            half,
+            Clip::End,
+        );
     }
 }
 
 /// A 2 pt line of the value colour across a rect: the swatch's and the timeline's frame.
 pub fn local_frame(painter: &Painter, rect: Rect, color: egui::Color32, radius: u8) {
-    painter.rect_stroke(rect, CornerRadius::same(radius), egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        CornerRadius::same(radius),
+        egui::Stroke::new(1.0, color),
+        egui::StrokeKind::Inside,
+    );
 }
 
 /// A texture of the library picked from a searchable list, or None: the chooser of a
@@ -96,20 +141,32 @@ pub fn local_texture_pick(ui: &mut Ui, id_salt: &str, value: &str, names: &[&str
     let mut picked = None;
     let w = ui.available_width();
     let shown = if value.is_empty() { "None" } else { gz_ui::grid::leaf_name(value) };
-    let resp = egui::ComboBox::from_id_salt(("gz-ui-previews.pick.combo", id_salt)).selected_text(shown).width(w).height(320.0).show_ui(ui, |ui| {
-        let mut search = ctx.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
-        gz_ui::SearchField::new(&mut search).id_salt(id_salt).width(gz_ui::units::em(16.0)).show(ui);
-        if gz_ui::menu_item(ui, "None", gz_ui::MenuItem { selected: value.is_empty(), ..gz_ui::MenuItem::default() }) {
-            picked = Some(String::new());
-        }
-        // a few hundred rows at most: the search narrows the rest
-        for name in names.iter().filter(|n| gz_ui::search::matches(&search, n)).take(300) {
-            if gz_ui::menu_item(ui, name, gz_ui::MenuItem { selected: *name == value, ..gz_ui::MenuItem::default() }) {
-                picked = Some((*name).to_owned());
+    let resp = egui::ComboBox::from_id_salt(("gz-ui-previews.pick.combo", id_salt))
+        .selected_text(shown)
+        .width(w)
+        .height(320.0)
+        .show_ui(ui, |ui| {
+            let mut search = ctx.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+            gz_ui::SearchField::new(&mut search).id_salt(id_salt).width(gz_ui::units::em(16.0)).show(ui);
+            if gz_ui::menu_item(
+                ui,
+                "None",
+                gz_ui::MenuItem { selected: value.is_empty(), ..gz_ui::MenuItem::default() },
+            ) {
+                picked = Some(String::new());
             }
-        }
-        ctx.data_mut(|d| d.insert_temp(search_id, search));
-    });
+            // a few hundred rows at most: the search narrows the rest
+            for name in names.iter().filter(|n| gz_ui::search::matches(&search, n)).take(300) {
+                if gz_ui::menu_item(
+                    ui,
+                    name,
+                    gz_ui::MenuItem { selected: *name == value, ..gz_ui::MenuItem::default() },
+                ) {
+                    picked = Some((*name).to_owned());
+                }
+            }
+            ctx.data_mut(|d| d.insert_temp(search_id, search));
+        });
     resp.response.on_hover_text(if value.is_empty() { "None" } else { value });
     picked
 }

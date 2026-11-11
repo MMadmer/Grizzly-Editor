@@ -71,8 +71,11 @@ impl MeshData {
         if vertices.is_empty() || indices.is_empty() || submeshes.is_empty() {
             return Err(RenderError::EmptyMesh);
         }
-        if indices.len() % 3 != 0 {
-            return Err(invalid(format!("the mesh has {} indices, which is no whole number of triangles", indices.len())));
+        if !indices.len().is_multiple_of(3) {
+            return Err(invalid(format!(
+                "the mesh has {} indices, which is no whole number of triangles",
+                indices.len()
+            )));
         }
         let count = u32::try_from(vertices.len()).map_err(|_| invalid("the mesh has too many vertices"))?;
         if let Some(bad) = indices.iter().find(|i| **i >= count) {
@@ -80,7 +83,11 @@ impl MeshData {
         }
         let total = u32::try_from(indices.len()).map_err(|_| invalid("the mesh has too many indices"))?;
         for s in &submeshes {
-            if s.indices.start > s.indices.end || s.indices.end > total || s.indices.start % 3 != 0 || s.indices.end % 3 != 0 {
+            if s.indices.start > s.indices.end
+                || s.indices.end > total
+                || s.indices.start % 3 != 0
+                || s.indices.end % 3 != 0
+            {
                 return Err(invalid(format!("a part of the mesh covers indices {:?} of {total}", s.indices)));
             }
         }
@@ -105,7 +112,7 @@ impl MeshData {
             let start = out.len() as u32;
             seen.clear();
             let tris = self.indices.get(s.indices.start as usize..s.indices.end as usize).unwrap_or(&[]);
-            for t in tris.chunks_exact(3) {
+            for t in tris.as_chunks::<3>().0 {
                 for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
                     if seen.insert((a.min(b), a.max(b))) {
                         out.push(a);
@@ -131,22 +138,38 @@ impl MeshData {
             let skin = if skinned { Some(mesh.skin_vertices(&object.bones, 4, &normals)?) } else { None };
             for sf in &mesh.surf_faces {
                 let Some(part) = parts.get_mut(sf.surface as usize) else {
-                    return Err(invalid(format!("mesh '{}' uses surface {} of {}", mesh.name, sf.surface, object.surfaces.len())));
+                    return Err(invalid(format!(
+                        "mesh '{}' uses surface {} of {}",
+                        mesh.name,
+                        sf.surface,
+                        object.surfaces.len()
+                    )));
                 };
                 weld.clear();
                 for &f in sf.faces.iter() {
                     let Some(face) = mesh.faces.get(f as usize) else {
-                        return Err(invalid(format!("mesh '{}' lists face {f} of {}", mesh.name, mesh.faces.len())));
+                        return Err(invalid(format!(
+                            "mesh '{}' lists face {f} of {}",
+                            mesh.name,
+                            mesh.faces.len()
+                        )));
                     };
                     for (k, fv) in face.v.iter().enumerate() {
                         let corner = f as usize * 3 + k;
                         let Some(p) = mesh.points.get(fv.point as usize).copied() else {
-                            return Err(invalid(format!("mesh '{}' has a face at point {} of {}", mesh.name, fv.point, mesh.points.len())));
+                            return Err(invalid(format!(
+                                "mesh '{}' has a face at point {} of {}",
+                                mesh.name,
+                                fv.point,
+                                mesh.points.len()
+                            )));
                         };
                         let n = normals.get(corner).copied().unwrap_or(Vec3::Y);
                         let uv = mesh.corner_uv(*fv).unwrap_or(Vec2::ZERO);
                         let id = if let Some(skin) = &skin {
-                            let Some(sv) = skin.get(corner) else { return Err(invalid("the skin lost a face corner")) };
+                            let Some(sv) = skin.get(corner) else {
+                                return Err(invalid("the skin lost a face corner"));
+                            };
                             let mut v = MeshVertex::new(sv.offs, sv.norm, sv.uv);
                             let mut weights = [0u8; 4];
                             for (slot, b) in sv.bones.iter().take(4).enumerate() {
@@ -159,7 +182,10 @@ impl MeshData {
                             v.weights = weights;
                             push_vertex(&mut vertices, v)?
                         } else {
-                            let key = (fv.point, [uv.x.to_bits(), uv.y.to_bits(), n.x.to_bits(), n.y.to_bits(), n.z.to_bits()]);
+                            let key = (
+                                fv.point,
+                                [uv.x.to_bits(), uv.y.to_bits(), n.x.to_bits(), n.y.to_bits(), n.z.to_bits()],
+                            );
                             match weld.get(&key) {
                                 Some(id) => *id,
                                 None => {
@@ -183,7 +209,8 @@ impl MeshData {
             let start = indices.len() as u32;
             indices.extend(part);
             let kind = table.classify(&surface.shader);
-            let material = MaterialDesc::textured(kind, &surface.texture).with_two_sided(surface.flags.contains(SurfaceFlags::TWO_SIDED));
+            let material = MaterialDesc::textured(kind, &surface.texture)
+                .with_two_sided(surface.flags.contains(SurfaceFlags::TWO_SIDED));
             submeshes.push(SubMesh { indices: start..indices.len() as u32, material });
         }
         Self::new(vertices, indices, submeshes)
@@ -202,11 +229,14 @@ impl MeshData {
                 Some(w) => w.offset as usize..w.offset as usize + w.num_tris as usize * 3,
                 None => 0..ib.len(),
             };
-            let Some(tris) = ib.get(range) else { return Err(invalid("a slide window of the model lies outside its indices")) };
+            let Some(tris) = ib.get(range) else {
+                return Err(invalid("a slide window of the model lies outside its indices"));
+            };
             if tris.is_empty() {
                 continue;
             }
-            let base = u32::try_from(vertices.len()).map_err(|_| invalid("the model has too many vertices"))?;
+            let base =
+                u32::try_from(vertices.len()).map_err(|_| invalid("the model has too many vertices"))?;
             for src in vb.vertices.iter() {
                 let mut out = MeshVertex::new(src.position, src.normal, src.uv);
                 out.uv2 = src.uv2.to_array();
@@ -228,7 +258,8 @@ impl MeshData {
                 }
                 indices.push(base + u32::from(i));
             }
-            submeshes.push(SubMesh { indices: start..indices.len() as u32, material: visual_material(v, table) });
+            submeshes
+                .push(SubMesh { indices: start..indices.len() as u32, material: visual_material(v, table) });
         }
         if submeshes.is_empty()
             && let Some(facets) = &visual.lod
@@ -238,7 +269,10 @@ impl MeshData {
             for facet in facets.iter() {
                 let base = vertices.len() as u32;
                 let [a, b, c, _] = facet.vertices;
-                let n = (b.position - a.position).cross(c.position - a.position).try_normalize().unwrap_or(Vec3::Y);
+                let n = (b.position - a.position)
+                    .cross(c.position - a.position)
+                    .try_normalize()
+                    .unwrap_or(Vec3::Y);
                 for lv in facet.vertices {
                     vertices.push(MeshVertex::new(lv.position, n, lv.uv));
                 }
@@ -310,13 +344,20 @@ impl MeshData {
     fn built(vertices: Vec<MeshVertex>, indices: Vec<u32>, material: MaterialDesc) -> Self {
         let bounds = Aabb::from_points(vertices.iter().map(|v| Vec3::from_array(v.position)));
         let n = indices.len() as u32;
-        Self { vertices: vertices.into(), indices: indices.into(), submeshes: vec![SubMesh { indices: 0..n, material }], bounds, skinned: false }
+        Self {
+            vertices: vertices.into(),
+            indices: indices.into(),
+            submeshes: vec![SubMesh { indices: 0..n, material }],
+            bounds,
+            skinned: false,
+        }
     }
 
     /// Every vertex coloured (for hand-made helper meshes).
     #[must_use]
     pub fn with_vertex_color(self, color: Color) -> Self {
-        let vertices: Vec<MeshVertex> = self.vertices.iter().map(|v| MeshVertex { color: color.0, ..*v }).collect();
+        let vertices: Vec<MeshVertex> =
+            self.vertices.iter().map(|v| MeshVertex { color: color.0, ..*v }).collect();
         Self { vertices: vertices.into(), ..self }
     }
 }
@@ -328,11 +369,23 @@ fn push_vertex(vertices: &mut Vec<MeshVertex>, v: MeshVertex) -> Result<u32> {
 }
 
 /// A rectangle facing `n`, its top towards `up`, wound clockwise as its front is seen.
-fn quad_into(vertices: &mut Vec<MeshVertex>, indices: &mut Vec<u32>, center: Vec3, n: Vec3, up: Vec3, size: Vec2) {
+fn quad_into(
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+    center: Vec3,
+    n: Vec3,
+    up: Vec3,
+    size: Vec2,
+) {
     let v = up * (size.y * 0.5);
     let u = n.cross(up) * (size.x * 0.5);
     let base = vertices.len() as u32;
-    let corners = [(center - u + v, Vec2::new(0.0, 0.0)), (center + u + v, Vec2::new(1.0, 0.0)), (center + u - v, Vec2::new(1.0, 1.0)), (center - u - v, Vec2::new(0.0, 1.0))];
+    let corners = [
+        (center - u + v, Vec2::new(0.0, 0.0)),
+        (center + u + v, Vec2::new(1.0, 0.0)),
+        (center + u - v, Vec2::new(1.0, 1.0)),
+        (center - u - v, Vec2::new(0.0, 1.0)),
+    ];
     for (p, uv) in corners {
         vertices.push(MeshVertex::new(p, n, uv));
     }
@@ -343,7 +396,8 @@ fn quad_into(vertices: &mut Vec<MeshVertex>, indices: &mut Vec<u32>, center: Vec
 fn visual_material(v: &Visual, table: &MaterialTable) -> MaterialDesc {
     let (texture, shader) = v.texture.as_ref().map_or(("", ""), |(t, s)| (t.as_str(), s.as_str()));
     let kind = table.classify(shader);
-    let kind = if v.kind() == MT::LOD && kind == EditorMaterial::Opaque { EditorMaterial::Tree } else { kind };
+    let kind =
+        if v.kind() == MT::LOD && kind == EditorMaterial::Opaque { EditorMaterial::Tree } else { kind };
     let mut names = texture.split(',').map(str::trim).filter(|t| !t.is_empty());
     let mut m = MaterialDesc::textured(kind, names.next().unwrap_or(""));
     m.detail = names.next().map(texture_key);
@@ -360,7 +414,7 @@ mod tests {
 
     /// Screen-space winding as a camera on the face's normal side sees it: clockwise is front.
     fn clockwise_from_outside(m: &MeshData) -> bool {
-        m.indices.chunks_exact(3).all(|t| {
+        m.indices.as_chunks::<3>().0.iter().all(|t| {
             let p = |i: u32| Vec3::from_array(m.vertices[i as usize].position);
             let n = Vec3::from_array(m.vertices[t[0] as usize].normal);
             let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));

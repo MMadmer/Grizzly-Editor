@@ -72,7 +72,12 @@ pub(crate) fn open_page(ctx: &egui::Context, url: &str, web: &str) {
 
 /// GitHub's own pages (or the QA mock's, `web`) and VirusTotal's report pages.
 pub(crate) fn page_ok(url: &str, web: &str) -> bool {
-    let under = |base: &str| !base.is_empty() && url.len() > base.len() && url.starts_with(base) && url.as_bytes().get(base.len()) == Some(&b'/');
+    let under = |base: &str| {
+        !base.is_empty()
+            && url.len() > base.len()
+            && url.starts_with(base)
+            && url.as_bytes().get(base.len()) == Some(&b'/')
+    };
     under("https://github.com") || under("https://www.virustotal.com/gui/file") || under(web)
 }
 
@@ -120,11 +125,15 @@ pub fn install(b: &mut ShellBuilder) {
     });
 
     let doc_hub = hub.clone();
-    b.document(RELEASES_KIND, move |editor, _req| Ok(Box::new(releases::ReleasesDoc::new(editor, doc_hub.clone()))));
+    b.document(RELEASES_KIND, move |editor, _req| {
+        Ok(Box::new(releases::ReleasesDoc::new(editor, doc_hub.clone())))
+    });
 
     b.command(
-        UiCommand::new(CMD_PUBLISH, "Mod", "Publish Release", Icon::Publish, |cx| cx.requests.dialog(PUBLISH_ID))
-            .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
+        UiCommand::new(CMD_PUBLISH, "Mod", "Publish Release", Icon::Publish, |cx| {
+            cx.requests.dialog(PUBLISH_ID)
+        })
+        .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
     );
     let cmd_hub = hub.clone();
     b.command(
@@ -135,11 +144,17 @@ pub fn install(b: &mut ShellBuilder) {
         .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
     );
     b.command(
-        UiCommand::new(CMD_CATALOG, "Mod", "Submit to Mod Browser", Icon::Globe, |cx| cx.requests.dialog(SUBMIT_ID))
-            .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
+        UiCommand::new(CMD_CATALOG, "Mod", "Submit to Mod Browser", Icon::Globe, |cx| {
+            cx.requests.dialog(SUBMIT_ID)
+        })
+        .enabled(|ed: &Editor, _| ed.project_opt().is_some()),
     );
     // Mod: ... | Package Release..., Publish Release..., Releases | Submit to Mod Browser...
-    for (command, label) in [(CMD_PUBLISH, Some("Publish Release...")), (CMD_RELEASES, None), (CMD_CATALOG, Some("Submit to Mod Browser..."))] {
+    for (command, label) in [
+        (CMD_PUBLISH, Some("Publish Release...")),
+        (CMD_RELEASES, None),
+        (CMD_CATALOG, Some("Submit to Mod Browser...")),
+    ] {
         let (group, order) = gz_ui_mod::mod_menu_slot(command).unwrap_or((3, 9));
         b.menu_entry(MenuEntry {
             menu: SmolStr::new("Mod"),

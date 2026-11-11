@@ -26,7 +26,11 @@ use crate::rules::is_tooling_entry;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
-    File { size: u64, modified: Option<SystemTime>, asset: Option<AssetKind> },
+    File {
+        size: u64,
+        modified: Option<SystemTime>,
+        asset: Option<AssetKind>,
+    },
     Dir,
     /// A junction or a symbolic link: listed, never followed.
     Link,
@@ -85,7 +89,11 @@ fn list_dir(root: &Path, rel: &RelPath) -> Option<Dir> {
             EntryKind::Dir
         } else {
             let head = if asset_kind::needs_head(&it.name) { read_head(&abs.join(&it.name)) } else { None };
-            EntryKind::File { size: it.size, modified: it.meta.modified().ok(), asset: asset_kind::kind_of(&it.name, head.as_deref()) }
+            EntryKind::File {
+                size: it.size,
+                modified: it.meta.modified().ok(),
+                asset: asset_kind::kind_of(&it.name, head.as_deref()),
+            }
         };
         entries.push(Entry { name: SmolStr::new(&it.name), kind });
     }
@@ -111,8 +119,12 @@ fn walk(root: &Path, start: Vec<RelPath>) -> Vec<Arc<Dir>> {
     let mut out = Vec::new();
     let mut frontier = start;
     while !frontier.is_empty() {
-        let listed: Vec<Arc<Dir>> = frontier.par_iter().filter_map(|rel| list_dir(root, rel).map(Arc::new)).collect();
-        frontier = listed.iter().flat_map(|d| d.subdirs().filter_map(|e| child(&d.path, &e.name)).collect::<Vec<_>>()).collect();
+        let listed: Vec<Arc<Dir>> =
+            frontier.par_iter().filter_map(|rel| list_dir(root, rel).map(Arc::new)).collect();
+        frontier = listed
+            .iter()
+            .flat_map(|d| d.subdirs().filter_map(|e| child(&d.path, &e.name)).collect::<Vec<_>>())
+            .collect();
         out.extend(listed);
     }
     out
@@ -197,7 +209,12 @@ impl FileTree {
                 d.entries
                     .iter()
                     .filter(|e| e.is_file())
-                    .filter(|e| e.name.rfind('.').and_then(|i| e.name.get(i + 1..)).is_some_and(|x| x.eq_ignore_ascii_case(ext) && !e.name.starts_with('.')))
+                    .filter(|e| {
+                        e.name
+                            .rfind('.')
+                            .and_then(|i| e.name.get(i + 1..))
+                            .is_some_and(|x| x.eq_ignore_ascii_case(ext) && !e.name.starts_with('.'))
+                    })
                     .filter_map(|e| child(&d.path, &e.name))
                     .collect::<Vec<_>>()
             })
@@ -239,7 +256,8 @@ impl FileTree {
             }
         }
         let targets: Vec<RelPath> = targets.into_iter().collect();
-        let listed: Vec<(RelPath, Option<Dir>)> = targets.par_iter().map(|t| (t.clone(), list_dir(&self.root, t))).collect();
+        let listed: Vec<(RelPath, Option<Dir>)> =
+            targets.par_iter().map(|t| (t.clone(), list_dir(&self.root, t))).collect();
         let mut fresh: Vec<RelPath> = Vec::new();
         for (path, dir) in listed {
             let old = dirs.get(&path).cloned();
@@ -253,7 +271,10 @@ impl FileTree {
                 }
                 Some(dir) => {
                     if let Some(old) = &old {
-                        for gone in old.subdirs().filter(|e| dir.get(&e.name).is_none_or(|n| n.kind != EntryKind::Dir)) {
+                        for gone in old
+                            .subdirs()
+                            .filter(|e| dir.get(&e.name).is_none_or(|n| n.kind != EntryKind::Dir))
+                        {
                             if let Some(p) = child(&path, &gone.name) {
                                 Self::remove_subtree(&mut dirs, &p);
                             }

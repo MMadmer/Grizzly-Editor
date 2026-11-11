@@ -4,21 +4,32 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, CornerRadius, Id, Key, Modifiers, Popup, Pos2, Rect, ScrollArea, Sense, Stroke, Ui, UiBuilder, Vec2, pos2};
+use egui::{
+    Align2, CornerRadius, Id, Key, Modifiers, Popup, Pos2, Rect, ScrollArea, Sense, Stroke, Ui, UiBuilder,
+    Vec2, pos2,
+};
 use gz_app::DocCx;
 use gz_editor::Editor;
 use gz_fmt_tex::TileAlpha;
 use gz_ui::menu::{MenuItem, menu_item, menu_popup, take_popup_request};
 use gz_ui::state::{badge, busy_line, empty_state};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Font, Icon, Kind, NavRowSpec, Palette, Toolbar, ToolbarStyle, icons, metrics, nav_row, palette, units};
+use gz_ui::{
+    Font, Icon, Kind, NavRowSpec, Palette, Toolbar, ToolbarStyle, icons, metrics, nav_row, palette, units,
+};
 use rustc_hash::FxHashSet;
 
 use crate::actions::{self, ADD_ITEMS, BuildToggle};
 use crate::caption;
 use crate::catalog::{Catalog, Node, Picture, View, ViewEntry};
-use crate::local::{local_breadcrumbs, local_checker, local_marquee, local_menu_heading, local_rename_box, local_section, local_tree_row};
-use crate::model::{CATEGORIES, GRID_PAD_Y, Host, LIST_COLUMN_EM, LIST_PICTURE, LIST_ROW, Location, Source, TILE_GAP, TILE_PAD, category, leaf_of, search_active, thousands};
+use crate::local::{
+    local_breadcrumbs, local_checker, local_marquee, local_menu_heading, local_rename_box, local_section,
+    local_tree_row,
+};
+use crate::model::{
+    CATEGORIES, GRID_PAD_Y, Host, LIST_COLUMN_EM, LIST_PICTURE, LIST_ROW, Location, Source, TILE_GAP,
+    TILE_PAD, category, leaf_of, search_active, thousands,
+};
 use crate::pictures::{Bytes, PicKey, Shown};
 use crate::select::Entry;
 use crate::service::{CatState, ContentBrowser, Inner, cat_key, tree_key};
@@ -83,7 +94,16 @@ pub fn content_browser(ui: &mut Ui, cx: &mut DocCx<'_>, host: Host) {
         }
         st.listed = Some((key, cat.rev));
     }
-    let f = Frame { editor: &editor, browser: &browser, ctx: ctx.clone(), host, now, has_project, cat, p: palette(&ctx) };
+    let f = Frame {
+        editor: &editor,
+        browser: &browser,
+        ctx: ctx.clone(),
+        host,
+        now,
+        has_project,
+        cat,
+        p: palette(&ctx),
+    };
     let browser_rect = ui.max_rect();
 
     toolbar(ui, st, &f);
@@ -96,7 +116,12 @@ pub fn content_browser(ui: &mut Ui, cx: &mut DocCx<'_>, host: Host) {
     st.scroll_to_selection = false;
     let gpu = Some((&cx.gpu.device, &cx.gpu.queue));
     let raised = f.p.raised;
-    st.pics.dispatch(&editor, &browser.thumbs, gpu, gz_render::Color::rgb(raised.r(), raised.g(), raised.b()));
+    st.pics.dispatch(
+        &editor,
+        &browser.thumbs,
+        gpu,
+        gz_render::Color::rgb(raised.r(), raised.g(), raised.b()),
+    );
 }
 
 /// What jobs left for the frame: a rename box to open, a rename that landed, a deletion.
@@ -160,9 +185,28 @@ fn nav_result(st: &mut Inner, f: &Frame<'_>, r: Result<(), String>, before: &Loc
 fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     let row_w = ui.available_width();
     let font = Font::Body.id();
-    let crumbs_full: f32 = text::width(&f.ctx, &font, st.loc.root_label()) + 12.0 + st.loc.folder.split('\\').filter(|s| !s.is_empty()).map(|s| 16.0 + text::width(&f.ctx, &font, s) + 12.0).sum::<f32>();
+    let crumbs_full: f32 = text::width(&f.ctx, &font, st.loc.root_label())
+        + 12.0
+        + st.loc
+            .folder
+            .split('\\')
+            .filter(|s| !s.is_empty())
+            .map(|s| 16.0 + text::width(&f.ctx, &font, s) + 12.0)
+            .sum::<f32>();
     let menu_w = |label: &str| 56.0 + text::width(&f.ctx, &font, label);
-    let others = menu_w("Add") + 13.0 + 28.0 * 3.0 + 4.0 + 13.0 + 14.0 + units::em(10.0) + 12.0 + menu_w("View") + 12.0 + 30.0 + menu_w("Favorites") + 8.0;
+    let others = menu_w("Add")
+        + 13.0
+        + 28.0 * 3.0
+        + 4.0
+        + 13.0
+        + 14.0
+        + units::em(10.0)
+        + 12.0
+        + menu_w("View")
+        + 12.0
+        + 30.0
+        + menu_w("Favorites")
+        + 8.0;
     let crumbs_w = (row_w - others).min(crumbs_full).max(units::em(6.0));
 
     let add_off = st.add_blocked(f.has_project);
@@ -172,17 +216,27 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     let favorite = st.find_favorite(&st.loc);
     let can_favorite = favorite.is_some() || st.loc.source != Source::Project || f.has_project;
     let (back, forward, up, star);
-    let (back_on, forward_on, up_on) = (!st.back.is_empty(), !st.forward.is_empty(), !st.loc.folder.is_empty());
+    let (back_on, forward_on, up_on) =
+        (!st.back.is_empty(), !st.forward.is_empty(), !st.loc.folder.is_empty());
     let root_label = st.loc.root_label();
     let folder = st.loc.folder.clone();
     {
         let mut tb = Toolbar::begin(ui, "cb_toolbar", ToolbarStyle::Panel);
         tb.group(3);
-        tb.menu("cb_add", Icon::Plus, "Add", add_off.unwrap_or("A folder or an asset in the folder shown"), Some("cb_add"), add_off.is_none(), |ui| add_menu(ui, add_off, &mut add_pick));
+        tb.menu(
+            "cb_add",
+            Icon::Plus,
+            "Add",
+            add_off.unwrap_or("A folder or an asset in the folder shown"),
+            Some("cb_add"),
+            add_off.is_none(),
+            |ui| add_menu(ui, add_off, &mut add_pick),
+        );
         tb.separator();
         tb.group(4);
         back = tb.action("cb_back", Icon::Back, "", "Back (Alt+Left)", back_on, false, Kind::Ghost);
-        forward = tb.action("cb_forward", Icon::Forward, "", "Forward (Alt+Right)", forward_on, false, Kind::Ghost);
+        forward =
+            tb.action("cb_forward", Icon::Forward, "", "Forward (Alt+Right)", forward_on, false, Kind::Ghost);
         up = tb.action("cb_up", Icon::Up, "", "Parent Folder (Alt+Up)", up_on, false, Kind::Ghost);
         tb.separator();
         tb.group(5);
@@ -191,7 +245,15 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         tb.group(2);
         tb.search(&mut search, "Search", 10.0);
         tb.group(1);
-        tb.menu("cb_view", Icon::ViewOptions, "View", "Tiles or list, tile size, source and the Sources pane", Some("cb_view"), true, |ui| view_menu(ui, st, f));
+        tb.menu(
+            "cb_view",
+            Icon::ViewOptions,
+            "View",
+            "Tiles or list, tile size, source and the Sources pane",
+            Some("cb_view"),
+            true,
+            |ui| view_menu(ui, st, f),
+        );
         tb.group(0);
         star = tb.action(
             "cb_star",
@@ -202,7 +264,15 @@ fn toolbar(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
             favorite.is_some(),
             Kind::Ghost,
         );
-        tb.menu("cb_favorites", Icon::Bookmark, "Favorites", "Favorite folders", Some("cb_favorites"), true, |ui| favorites_menu(ui, st, f));
+        tb.menu(
+            "cb_favorites",
+            Icon::Bookmark,
+            "Favorites",
+            "Favorite folders",
+            Some("cb_favorites"),
+            true,
+            |ui| favorites_menu(ui, st, f),
+        );
         tb.end();
     }
     if search != st.search {
@@ -256,7 +326,11 @@ fn add_menu(ui: &mut Ui, blocked: Option<&str>, pick: &mut Option<usize>) {
             3 => Icon::Character,
             _ => Icon::PdaInterface,
         };
-        if menu_item(ui, label, MenuItem { icon, enabled: blocked.is_none(), ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            label,
+            MenuItem { icon, enabled: blocked.is_none(), tip: blocked.unwrap_or(""), ..MenuItem::default() },
+        ) {
             *pick = Some(i);
         }
     }
@@ -341,7 +415,11 @@ fn refresh(st: &mut Inner, f: &Frame<'_>) {
 fn favorites_menu(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     if st.favorites.is_empty() {
         ui.set_max_width(units::em(18.0));
-        gz_ui::text::status(ui, gz_ui::Tone::Muted, "No favorites yet. The star beside this menu keeps the folder shown.");
+        gz_ui::text::status(
+            ui,
+            gz_ui::Tone::Muted,
+            "No favorites yet. The star beside this menu keeps the folder shown.",
+        );
         return;
     }
     ui.set_min_width(units::em(22.0));
@@ -349,7 +427,13 @@ fn favorites_menu(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     let mut remove: Option<usize> = None;
     for (i, fav) in st.favorites.iter().enumerate() {
         let label = fav.label();
-        let spec = NavRowSpec { icon: Icon::StarFilled, tip: &label, action: Icon::Close, action_tip: "Remove from Favorites", ..NavRowSpec::default() };
+        let spec = NavRowSpec {
+            icon: Icon::StarFilled,
+            tip: &label,
+            action: Icon::Close,
+            action_tip: "Remove from Favorites",
+            ..NavRowSpec::default()
+        };
         let r = nav_row(ui, &format!("cb_fav_menu_{i}"), &label, fav.same(&st.loc), &spec);
         if r.action {
             remove = Some(i);
@@ -363,7 +447,9 @@ fn favorites_menu(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         && let Some(fav) = st.favorites.get(i).cloned()
     {
         let before = st.loc.clone();
-        let r = st.apply_location(fav, true, &f.browser.cats, f.has_project).map_err(|e| format!("The favorite cannot be opened: {e}"));
+        let r = st
+            .apply_location(fav, true, &f.browser.cats, f.has_project)
+            .map_err(|e| format!("The favorite cannot be opened: {e}"));
         nav_result(st, f, r, &before);
         ui.close();
     }
@@ -385,7 +471,11 @@ fn body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>) {
         let split = gz_ui::splitter::splitter(&mut row, "content_browser.sources", true, 160.0, 200.0, 220.0);
         let gap = row.spacing().item_spacing.x;
         let pane = Rect::from_min_size(rect.min, Vec2::new(split.size, rect.height()));
-        let mut pane_ui = row.new_child(UiBuilder::new().id_salt(("cb_sources", f.host.index())).max_rect(pane.shrink2(Vec2::new(0.0, 4.0))));
+        let mut pane_ui = row.new_child(
+            UiBuilder::new()
+                .id_salt(("cb_sources", f.host.index()))
+                .max_rect(pane.shrink2(Vec2::new(0.0, 4.0))),
+        );
         sources(&mut pane_ui, st, f);
         Rect::from_min_max(pos2(pane.max.x + gap, rect.min.y), rect.max)
     } else {
@@ -394,7 +484,10 @@ fn body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>) {
     // what the tiles of a host with no size picked fit: measured here, outside the scrolling grid
     st.host_mut(f.host).grid_h = (grid_rect.height() - GRID_PAD_Y * 2.0).max(0.0);
     row.painter().rect_filled(grid_rect, CornerRadius::ZERO, f.p.inset);
-    let inner = Rect::from_min_max(grid_rect.min + Vec2::new(8.0, GRID_PAD_Y), grid_rect.max - Vec2::new(8.0, GRID_PAD_Y));
+    let inner = Rect::from_min_max(
+        grid_rect.min + Vec2::new(8.0, GRID_PAD_Y),
+        grid_rect.max - Vec2::new(8.0, GRID_PAD_Y),
+    );
     let mut grid = row.new_child(UiBuilder::new().id_salt(("cb_grid", f.host.index())).max_rect(inner));
     grid_body(&mut grid, cx, st, f, grid_rect);
     entry_menu(st, f, row.layer_id());
@@ -424,29 +517,42 @@ fn sources(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
     // a pane that cannot hold six tree rows beside the two headers keeps that room for the tree
     let sections = ui.available_height() >= 28.0 * 2.0 + 22.0 * 6.0;
     let veils = f.browser.veils(f.editor, &st.loc, &f.cat);
-    ScrollArea::vertical().id_salt(("cb_sources_scroll", f.host.index(), st.loc.source.index(), st.loc.category)).auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        if sections {
-            let count = st.favorites.len().to_string();
-            if local_section(ui, &format!("cb_favorites_{}", f.host.index()), "Favorites", !st.favorites.is_empty(), (!st.favorites.is_empty()).then_some(count.as_str())) {
-                if st.favorites.is_empty() {
-                    gz_ui::text::status(ui, gz_ui::Tone::Muted, "The star on the toolbar keeps the folder shown here.");
+    ScrollArea::vertical()
+        .id_salt(("cb_sources_scroll", f.host.index(), st.loc.source.index(), st.loc.category))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if sections {
+                let count = st.favorites.len().to_string();
+                if local_section(
+                    ui,
+                    &format!("cb_favorites_{}", f.host.index()),
+                    "Favorites",
+                    !st.favorites.is_empty(),
+                    (!st.favorites.is_empty()).then_some(count.as_str()),
+                ) {
+                    if st.favorites.is_empty() {
+                        gz_ui::text::status(
+                            ui,
+                            gz_ui::Tone::Muted,
+                            "The star on the toolbar keeps the folder shown here.",
+                        );
+                    }
+                    favorite_rows(ui, st, f);
                 }
-                favorite_rows(ui, st, f);
-            }
-            if local_section(ui, &format!("cb_folders_{}", f.host.index()), "Folders", true, None) {
+                if local_section(ui, &format!("cb_folders_{}", f.host.index()), "Folders", true, None) {
+                    tree(ui, st, f, veils.as_deref());
+                }
+            } else {
+                if !st.favorites.is_empty() {
+                    favorite_rows(ui, st, f);
+                    ui.add_space(3.0);
+                    ui.separator();
+                    ui.add_space(3.0);
+                }
                 tree(ui, st, f, veils.as_deref());
             }
-        } else {
-            if !st.favorites.is_empty() {
-                favorite_rows(ui, st, f);
-                ui.add_space(3.0);
-                ui.separator();
-                ui.add_space(3.0);
-            }
-            tree(ui, st, f, veils.as_deref());
-        }
-    });
+        });
 }
 
 fn favorite_rows(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
@@ -456,7 +562,13 @@ fn favorite_rows(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         let leaf = leaf_of(&fav.folder);
         let name = if leaf.is_empty() { fav.root_label() } else { leaf };
         let tip = fav.label();
-        let spec = NavRowSpec { icon: Icon::StarFilled, tip: &tip, action: Icon::Close, action_tip: "Remove from Favorites", ..NavRowSpec::default() };
+        let spec = NavRowSpec {
+            icon: Icon::StarFilled,
+            tip: &tip,
+            action: Icon::Close,
+            action_tip: "Remove from Favorites",
+            ..NavRowSpec::default()
+        };
         let r = nav_row(ui, &format!("cb_fav_{}_{i}", f.host.index()), name, fav.same(&st.loc), &spec);
         if r.action {
             remove = Some(i);
@@ -468,7 +580,9 @@ fn favorite_rows(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>) {
         st.favorites.remove(i);
     } else if let Some(fav) = open.and_then(|i| st.favorites.get(i).cloned()) {
         let before = st.loc.clone();
-        let r = st.apply_location(fav, true, &f.browser.cats, f.has_project).map_err(|e| format!("The favorite cannot be opened: {e}"));
+        let r = st
+            .apply_location(fav, true, &f.browser.cats, f.has_project)
+            .map_err(|e| format!("The favorite cannot be opened: {e}"));
         nav_result(st, f, r, &before);
     }
 }
@@ -507,13 +621,24 @@ fn tree(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, veils: Option<&FxHashSet<Str
             st.menu = Some((Some(e), at));
             Popup::open_id(&f.ctx, menu_id(f.host));
         }
-        Some(TreeAct::Drop(payload, dst)) => actions::drop_into(f.editor, f.browser, &payload, st.loc.category, &dst),
+        Some(TreeAct::Drop(payload, dst)) => {
+            actions::drop_into(f.editor, f.browser, &payload, st.loc.category, &dst)
+        }
         None => {}
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn tree_node(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, cat: &Catalog, node: &Node, depth: usize, veils: Option<&FxHashSet<String>>, act: &mut Option<TreeAct>) {
+fn tree_node(
+    ui: &mut Ui,
+    st: &mut Inner,
+    f: &Frame<'_>,
+    cat: &Catalog,
+    node: &Node,
+    depth: usize,
+    veils: Option<&FxHashSet<String>>,
+    act: &mut Option<TreeAct>,
+) {
     let root = node.path.is_empty();
     let key = tree_key(&node.path);
     let has_children = !node.children.is_empty();
@@ -525,7 +650,16 @@ fn tree_node(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, cat: &Catalog, node: &N
     let veiled = veils.is_some_and(|v| v.contains(&key));
     let label = if root { st.loc.root_label() } else { node.name.as_str() };
     let id = Id::unique(("cb_tree", f.host.index(), &key));
-    let row = local_tree_row(ui, id, depth, label, open, has_children && !root, st.loc.folder.eq_ignore_ascii_case(&node.path), veiled);
+    let row = local_tree_row(
+        ui,
+        id,
+        depth,
+        label,
+        open,
+        has_children && !root,
+        st.loc.folder.eq_ignore_ascii_case(&node.path),
+        veiled,
+    );
     if row.toggled {
         if open {
             st.tree_open.remove(&key);
@@ -552,7 +686,12 @@ fn tree_node(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, cat: &Catalog, node: &N
     // a drop onto a project folder of the tree moves or copies there
     if st.loc.source == Source::Project {
         if row.response.dnd_hover_payload::<DragPayload>().is_some() {
-            ui.painter().rect_stroke(row.response.rect, CornerRadius::same(3), Stroke::new(1.5, f.p.accent_bright), egui::StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                row.response.rect,
+                CornerRadius::same(3),
+                Stroke::new(1.5, f.p.accent_bright),
+                egui::StrokeKind::Inside,
+            );
         }
         if let Some(payload) = row.response.dnd_release_payload::<DragPayload>() {
             *act = Some(TreeAct::Drop(payload, node.path.to_string()));
@@ -596,7 +735,14 @@ fn grid_body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>, gri
     // Ctrl+wheel sizes the tiles, and the list is the step under the smallest one
     let ctrl = f.ctx.input(|i| i.modifiers.ctrl);
     if ctrl && ui.rect_contains_pointer(grid_rect) {
-        let wheel: f32 = f.ctx.input(|i| i.events.iter().filter_map(|e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).sum());
+        let wheel: f32 = f.ctx.input(|i| {
+            i.events
+                .iter()
+                .filter_map(
+                    |e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None },
+                )
+                .sum()
+        });
         if wheel != 0.0 {
             let host = f.host;
             let size = st.host(host).shown_tile(host);
@@ -609,7 +755,8 @@ fn grid_body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>, gri
             } else if wheel < 0.0 && size <= gz_app::contract::TILE_MIN {
                 v.list = true;
             } else {
-                v.tile = (size + wheel.signum() * 8.0).clamp(gz_app::contract::TILE_MIN, gz_app::contract::TILE_MAX);
+                v.tile = (size + wheel.signum() * 8.0)
+                    .clamp(gz_app::contract::TILE_MIN, gz_app::contract::TILE_MAX);
             }
             st.view_dirty = true;
         }
@@ -623,8 +770,18 @@ fn grid_body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>, gri
         } else {
             let linked = !st.scope.1.is_empty();
             let why = f.cat.error.clone().unwrap_or_default();
-            let text_ = if linked { format!("The linked game could not be read: {why}") } else { "Link the game install to browse its content.".to_owned() };
-            if empty_state(ui, Icon::GameFolder, if linked { "Game content unavailable" } else { "No game linked" }, &text_, Some("Link Game...")) {
+            let text_ = if linked {
+                format!("The linked game could not be read: {why}")
+            } else {
+                "Link the game install to browse its content.".to_owned()
+            };
+            if empty_state(
+                ui,
+                Icon::GameFolder,
+                if linked { "Game content unavailable" } else { "No game linked" },
+                &text_,
+                Some("Link Game..."),
+            ) {
                 actions::link_game(f.editor);
             }
         }
@@ -632,7 +789,10 @@ fn grid_body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>, gri
     }
     if src == Source::Editor && !crate::service::category_has_files(st.loc.category) {
         let c = category(st.loc.category);
-        let text_ = format!("{} live inside {}: there are no files of their own to browse here.", c.caption, c.shared_file);
+        let text_ = format!(
+            "{} live inside {}: there are no files of their own to browse here.",
+            c.caption, c.shared_file
+        );
         empty_state(ui, c.icon, "Inside one shared file", &text_, None);
         return;
     }
@@ -650,9 +810,21 @@ fn grid_body(ui: &mut Ui, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<'_>, gri
     let bg = ui.interact(grid_rect, Id::unique(("cb_grid_bg", f.host.index())), Sense::click_and_drag());
     if view.entries.is_empty() {
         if search_active(&st.search) {
-            empty_state(ui, Icon::Search, "No matches", "Nothing in this folder or below matches the search.", None);
+            empty_state(
+                ui,
+                Icon::Search,
+                "No matches",
+                "Nothing in this folder or below matches the search.",
+                None,
+            );
         } else {
-            empty_state(ui, Icon::FolderOpen, "Empty folder", if src == Source::Project { "Use Add to create a folder or an asset here." } else { "" }, None);
+            empty_state(
+                ui,
+                Icon::FolderOpen,
+                "Empty folder",
+                if src == Source::Project { "Use Add to create a folder or an asset here." } else { "" },
+                None,
+            );
         }
         grid_menu(ui, st, f, &bg, grid_rect);
         return;
@@ -713,7 +885,10 @@ fn marquee(ui: &Ui, st: &mut Inner, bg: &egui::Response) {
         && let Some(at) = bg.interact_pointer_pos()
     {
         let ctrl = ui.input(|i| i.modifiers.ctrl);
-        st.marquee = Some(crate::service::Marquee { start: at, base: if ctrl { st.sel.entries().to_vec() } else { Vec::new() } });
+        st.marquee = Some(crate::service::Marquee {
+            start: at,
+            base: if ctrl { st.sel.entries().to_vec() } else { Vec::new() },
+        });
     }
     let Some(m) = st.marquee.clone() else { return };
     let Some(pointer) = ui.ctx().pointer_latest_pos() else { return };
@@ -752,12 +927,30 @@ fn layout(st: &Inner, f: &Frame<'_>, avail: f32) -> Layout {
         let col = units::em(LIST_COLUMN_EM);
         let per_row = (((avail + TILE_GAP) / (col + TILE_GAP)) as usize).max(1);
         let cell_w = ((avail - TILE_GAP * (per_row - 1) as f32) / per_row as f32).floor().max(1.0);
-        Layout { list, per_row, cell_w, cell_h: LIST_ROW, row_h: LIST_ROW, tile_w, caption_font: Font::Body.id(), caption_line: Font::Body.line() }
+        Layout {
+            list,
+            per_row,
+            cell_w,
+            cell_h: LIST_ROW,
+            row_h: LIST_ROW,
+            tile_w,
+            caption_font: Font::Body.id(),
+            caption_line: Font::Body.line(),
+        }
     } else {
         let per_row = (((avail + TILE_GAP) / (tile_w + TILE_GAP)) as usize).max(1);
         let caption_line = Font::Small.line();
         let cell_h = tile_w + caption_line * 2.0 + TILE_PAD;
-        Layout { list, per_row, cell_w: tile_w, cell_h, row_h: cell_h + TILE_GAP, tile_w, caption_font: Font::Small.id(), caption_line }
+        Layout {
+            list,
+            per_row,
+            cell_w: tile_w,
+            cell_h,
+            row_h: cell_h + TILE_GAP,
+            tile_w,
+            caption_font: Font::Small.id(),
+            caption_line,
+        }
     }
 }
 
@@ -798,10 +991,17 @@ fn tiles(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, view: &Arc<View>, out: &mut
     if let Some(i) = reveal {
         let row = (i / lay.per_row) as f32;
         let hv = st.host(f.host);
-        offset = scroll_into_view(hv.scroll, hv.viewport, row * lay.row_h, row * lay.row_h + lay.cell_h).or(offset);
+        offset = scroll_into_view(hv.scroll, hv.viewport, row * lay.row_h, row * lay.row_h + lay.cell_h)
+            .or(offset);
     }
     let ctrl = f.ctx.input(|i| i.modifiers.ctrl);
-    let mut area = ScrollArea::vertical().id_salt(("cb_tiles", f.host.index())).auto_shrink([false, false]).scroll_source(egui::containers::scroll_area::ScrollSource { mouse_wheel: !ctrl, ..egui::containers::scroll_area::ScrollSource::ALL });
+    let mut area = ScrollArea::vertical()
+        .id_salt(("cb_tiles", f.host.index()))
+        .auto_shrink([false, false])
+        .scroll_source(egui::containers::scroll_area::ScrollSource {
+            mouse_wheel: !ctrl,
+            ..egui::containers::scroll_area::ScrollSource::ALL
+        });
     if let Some(o) = offset {
         area = area.vertical_scroll_offset(o.max(0.0));
     }
@@ -846,7 +1046,16 @@ fn tiles(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, view: &Arc<View>, out: &mut
 
 /// Draws one tile or list row; answers where its rename box goes when it has one.
 #[allow(clippy::too_many_arguments)]
-fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry, cell: Rect, focused: bool, out: &mut GridOut) -> Option<Rect> {
+fn tile(
+    ui: &mut Ui,
+    st: &mut Inner,
+    f: &Frame<'_>,
+    lay: &Layout,
+    ve: &ViewEntry,
+    cell: Rect,
+    focused: bool,
+    out: &mut GridOut,
+) -> Option<Rect> {
     let p = &f.p;
     let path = ve.entry.path.as_str();
     let leaf = leaf_of(path);
@@ -862,9 +1071,15 @@ fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry
 
     // the picture's square: a tile's own, or the one a list row starts with
     let square = if lay.list {
-        Rect::from_min_size(pos2((cell.min.x + 3.0).round(), (cell.min.y + (cell.height() - LIST_PICTURE) * 0.5).round()), Vec2::splat(LIST_PICTURE))
+        Rect::from_min_size(
+            pos2((cell.min.x + 3.0).round(), (cell.min.y + (cell.height() - LIST_PICTURE) * 0.5).round()),
+            Vec2::splat(LIST_PICTURE),
+        )
     } else {
-        Rect::from_min_max(cell.min + Vec2::splat(TILE_PAD), pos2(cell.max.x - TILE_PAD, cell.min.y + lay.tile_w - TILE_PAD))
+        Rect::from_min_max(
+            cell.min + Vec2::splat(TILE_PAD),
+            pos2(cell.max.x - TILE_PAD, cell.min.y + lay.tile_w - TILE_PAD),
+        )
     };
     let mut shown: Option<Shown> = None;
     if visible && ve.picture != Picture::None {
@@ -913,26 +1128,49 @@ fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry
         }
     }
     let text_x = if lay.list { square.max.x + 6.0 } else { cell.min.x + TILE_PAD };
-    let caption_y = if lay.list { (cell.min.y + (cell.height() - lay.caption_line) * 0.5).round() } else { cell.min.y + lay.tile_w };
-    let rename_rect = renaming.then(|| if lay.list { Rect::from_min_max(pos2(text_x, cell.min.y), cell.max) } else { Rect::from_min_size(pos2(cell.min.x, caption_y), Vec2::new(lay.tile_w, metrics::FRAME)) });
+    let caption_y = if lay.list {
+        (cell.min.y + (cell.height() - lay.caption_line) * 0.5).round()
+    } else {
+        cell.min.y + lay.tile_w
+    };
+    let rename_rect = renaming.then(|| {
+        if lay.list {
+            Rect::from_min_max(pos2(text_x, cell.min.y), cell.max)
+        } else {
+            Rect::from_min_size(pos2(cell.min.x, caption_y), Vec2::new(lay.tile_w, metrics::FRAME))
+        }
+    });
     if visible && !renaming {
         let width = if lay.list { (cell.max.x - 4.0 - text_x).max(1.0) } else { lay.tile_w - TILE_PAD * 2.0 };
         let font = lay.caption_font.clone();
         let ctx = f.ctx.clone();
         let measure = |s: &str| text::width(&ctx, &font, s);
-        let cap = caption::caption(name, !ve.entry.folder && own_ext.is_none(), if lay.list { 1 } else { 2 }, width, &measure);
+        let cap = caption::caption(
+            name,
+            !ve.entry.folder && own_ext.is_none(),
+            if lay.list { 1 } else { 2 },
+            width,
+            &measure,
+        );
         let color = if veiled { p.text_muted } else { p.text };
         let painter = ui.painter();
         for (n, line) in cap.lines.iter().enumerate() {
             let y = caption_y + n as f32 * lay.caption_line;
-            let (pos, anchor) = if lay.list { (pos2(text_x, y + lay.caption_line * 0.5), Align2::LEFT_CENTER) } else { (pos2(cell.min.x + TILE_PAD + width * 0.5, y + lay.caption_line * 0.5), Align2::CENTER_CENTER) };
+            let (pos, anchor) = if lay.list {
+                (pos2(text_x, y + lay.caption_line * 0.5), Align2::LEFT_CENTER)
+            } else {
+                (pos2(cell.min.x + TILE_PAD + width * 0.5, y + lay.caption_line * 0.5), Align2::CENTER_CENTER)
+            };
             painter.text(pos, anchor, line, lay.caption_font.clone(), color);
         }
         if cap.truncated
             && let Some(last) = cap.lines.last()
         {
             let n = cap.lines.len() - 1;
-            let r = Rect::from_min_size(pos2(text_x, caption_y + n as f32 * lay.caption_line), Vec2::new(width, lay.caption_line));
+            let r = Rect::from_min_size(
+                pos2(text_x, caption_y + n as f32 * lay.caption_line),
+                Vec2::new(width, lay.caption_line),
+            );
             gz_ui::audit::truncated(&f.ctx, name, last, r);
         }
     }
@@ -957,7 +1195,14 @@ fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry
         let cat = f.cat.cat.clone();
         let payload = DragPayload {
             source: st.loc.source,
-            entries: entries.iter().map(|e| DraggedEntry { path: e.path.to_string(), folder: e.folder, file: cat.as_ref().and_then(|c| c.disk_path(&e.path)) }).collect(),
+            entries: entries
+                .iter()
+                .map(|e| DraggedEntry {
+                    path: e.path.to_string(),
+                    folder: e.folder,
+                    file: cat.as_ref().and_then(|c| c.disk_path(&e.path)),
+                })
+                .collect(),
         };
         resp.dnd_set_drag_payload(payload);
         out.drag = Some(ve.entry.clone());
@@ -966,7 +1211,12 @@ fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry
     // a project folder takes a drop
     if ve.entry.folder && st.loc.source == Source::Project {
         if resp.dnd_hover_payload::<DragPayload>().is_some() && visible {
-            ui.painter().rect_stroke(cell, CornerRadius::same(metrics::RADIUS), Stroke::new(1.5, p.accent_bright), egui::StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                cell,
+                CornerRadius::same(metrics::RADIUS),
+                Stroke::new(1.5, p.accent_bright),
+                egui::StrokeKind::Inside,
+            );
         }
         if let Some(payload) = resp.dnd_release_payload::<DragPayload>() {
             out.drop = Some((payload, path.to_owned()));
@@ -986,7 +1236,9 @@ fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry
                 }
             ));
         }
-        if ve.entry.folder && actions::game_level(st.loc.source, path).is_some_and(|l| path.len() == 7 + l.len()) {
+        if ve.entry.folder
+            && actions::game_level(st.loc.source, path).is_some_and(|l| path.len() == 7 + l.len())
+        {
             tip.push_str("\nA game level: a double click opens the scene it was built from.");
         }
         if let Some(kind) = ve.own {
@@ -994,8 +1246,12 @@ fn tile(ui: &mut Ui, st: &mut Inner, f: &Frame<'_>, lay: &Layout, ve: &ViewEntry
             tip.push_str(crate::icons::own_name(kind));
         }
         match &ve.ship {
-            crate::catalog::Ship::Excluded(rule) => tip.push_str(&format!("\nNot shipped: excluded by '{rule}' in mod.ltx [exclude].")),
-            crate::catalog::Ship::Never if st.loc.source == Source::Project => tip.push_str("\nA source: never shipped."),
+            crate::catalog::Ship::Excluded(rule) => {
+                tip.push_str(&format!("\nNot shipped: excluded by '{rule}' in mod.ltx [exclude]."))
+            }
+            crate::catalog::Ship::Never if st.loc.source == Source::Project => {
+                tip.push_str("\nA source: never shipped.")
+            }
             _ => {}
         }
         resp.on_hover_text(tip);
@@ -1037,20 +1293,32 @@ fn drag_preview(ctx: &egui::Context, st: &mut Inner, f: &Frame<'_>) {
     }
     let Some((glyph, own, shown, name, n)) = st.drag_icon.clone() else { return };
     let Some(at) = ctx.pointer_latest_pos() else { return };
-    egui::Area::new(Id::unique(("cb_drag", f.host.index()))).order(egui::Order::Tooltip).fixed_pos(at + Vec2::new(12.0, 12.0)).interactable(false).show(ctx, |ui| {
-        gz_ui::menu::popup_frame(ctx).show(ui, |ui| {
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
-            match (shown, own) {
-                (Some(s), _) => draw_picture(ui.painter(), s, rect),
-                (None, Some(k)) => icons::draw(ui.painter(), crate::icons::own_icon(k), centred(rect, 40.0), f.p.text),
-                (None, None) => icons::draw(ui.painter(), glyph, centred(rect, 32.0), f.p.text_secondary),
-            }
-            text::label(ui, &name, Font::Body, f.p.text, Clip::Middle);
-            if n > 1 {
-                text::label(ui, &format!("and {} more", n - 1), Font::Small, f.p.text_secondary, Clip::End);
-            }
+    egui::Area::new(Id::unique(("cb_drag", f.host.index())))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(at + Vec2::new(12.0, 12.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            gz_ui::menu::popup_frame(ctx).show(ui, |ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::hover());
+                match (shown, own) {
+                    (Some(s), _) => draw_picture(ui.painter(), s, rect),
+                    (None, Some(k)) => {
+                        icons::draw(ui.painter(), crate::icons::own_icon(k), centred(rect, 40.0), f.p.text)
+                    }
+                    (None, None) => icons::draw(ui.painter(), glyph, centred(rect, 32.0), f.p.text_secondary),
+                }
+                text::label(ui, &name, Font::Body, f.p.text, Clip::Middle);
+                if n > 1 {
+                    text::label(
+                        ui,
+                        &format!("and {} more", n - 1),
+                        Font::Small,
+                        f.p.text_secondary,
+                        Clip::End,
+                    );
+                }
+            });
         });
-    });
 }
 
 // ---- the menus ------------------------------------------------------------------------------------
@@ -1087,7 +1355,16 @@ fn grid_menu(ui: &Ui, st: &mut Inner, f: &Frame<'_>, bg: &egui::Response, grid_r
             add_menu(ui, add_off, &mut add_pick);
             ui.separator();
         }
-        paste = menu_item(ui, "Paste", MenuItem { keys: "Ctrl+V", enabled: blocked.is_none(), ..MenuItem::default() });
+        paste = menu_item(
+            ui,
+            "Paste",
+            MenuItem {
+                keys: "Ctrl+V",
+                enabled: blocked.is_none(),
+                tip: blocked.unwrap_or(""),
+                ..MenuItem::default()
+            },
+        );
         ui.separator();
         all = menu_item(ui, "Select All", MenuItem { keys: "Ctrl+A", ..MenuItem::default() });
         clear = menu_item(ui, "Clear Selection", MenuItem { enabled: has_sel, ..MenuItem::default() });
@@ -1127,7 +1404,8 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
     let count = st.sel.len();
     let writable = st.loc.source == Source::Project;
     let can_paste = actions::paste_blocked(st).is_none();
-    let place_ref = if entry.folder { None } else { actions::placeable_ref(st.loc.source, st.loc.category, &entry.path) };
+    let place_ref =
+        if entry.folder { None } else { actions::placeable_ref(st.loc.source, st.loc.category, &entry.path) };
     let (rules, _) = ContentBrowser::rules(f.editor);
     let toggle = (writable && f.has_project).then(|| actions::build_toggle(&rules, st.sel.entries()));
     let head = if count > 1 { format!("{count} selected") } else { leaf_of(&entry.path).to_owned() };
@@ -1157,22 +1435,87 @@ fn entry_menu(st: &mut Inner, f: &Frame<'_>, layer: egui::LayerId) {
         };
         row(ui, "Open", MenuItem { icon: Icon::Open, keys: "Enter", ..MenuItem::default() }, Pick::Open);
         if !entry.folder {
-            row(ui, "Place in Scene", MenuItem { icon: Icon::Place, enabled: place_ref.is_some(), ..MenuItem::default() }, Pick::Place);
+            row(
+                ui,
+                "Place in Scene",
+                MenuItem { icon: Icon::Place, enabled: place_ref.is_some(), ..MenuItem::default() },
+                Pick::Place,
+            );
         }
         ui.separator();
         row(ui, "Copy", MenuItem { icon: Icon::Copy, keys: "Ctrl+C", ..MenuItem::default() }, Pick::Copy);
-        row(ui, "Cut", MenuItem { icon: Icon::Cut, keys: "Ctrl+X", enabled: writable, ..MenuItem::default() }, Pick::Cut);
-        row(ui, "Paste", MenuItem { icon: Icon::Paste, keys: "Ctrl+V", enabled: can_paste, ..MenuItem::default() }, Pick::Paste);
-        row(ui, "Rename", MenuItem { icon: Icon::Rename, keys: "F2", enabled: writable && count == 1, ..MenuItem::default() }, Pick::Rename);
+        row(
+            ui,
+            "Cut",
+            MenuItem { icon: Icon::Cut, keys: "Ctrl+X", enabled: writable, ..MenuItem::default() },
+            Pick::Cut,
+        );
+        row(
+            ui,
+            "Paste",
+            MenuItem { icon: Icon::Paste, keys: "Ctrl+V", enabled: can_paste, ..MenuItem::default() },
+            Pick::Paste,
+        );
+        row(
+            ui,
+            "Rename",
+            MenuItem {
+                icon: Icon::Rename,
+                keys: "F2",
+                enabled: writable && count == 1,
+                ..MenuItem::default()
+            },
+            Pick::Rename,
+        );
         // the item that asks is quiet, in the error colour; the loud button is the confirmation's
-        row(ui, "Delete...", MenuItem { icon: Icon::Delete, keys: "Del", enabled: writable, danger: true, ..MenuItem::default() }, Pick::Delete);
+        row(
+            ui,
+            "Delete...",
+            MenuItem {
+                icon: Icon::Delete,
+                keys: "Del",
+                enabled: writable,
+                danger: true,
+                ..MenuItem::default()
+            },
+            Pick::Delete,
+        );
         if let Some(t) = &toggle {
             ui.separator();
             match t {
-                BuildToggle::Never => row(ui, "Exclude from Build", MenuItem { icon: Icon::Exclude, enabled: false, ..MenuItem::default() }, Pick::Exclude),
-                BuildToggle::Exclude(_) => row(ui, "Exclude from Build", MenuItem { icon: Icon::Exclude, ..MenuItem::default() }, Pick::Exclude),
-                BuildToggle::Include(_) => row(ui, "Include in Build", MenuItem { icon: Icon::Exclude, ..MenuItem::default() }, Pick::Include),
-                BuildToggle::ByRule(_) => row(ui, "Include in Build", MenuItem { icon: Icon::Exclude, enabled: false, ..MenuItem::default() }, Pick::Include),
+                BuildToggle::Never => row(
+                    ui,
+                    "Exclude from Build",
+                    MenuItem {
+                        icon: Icon::Exclude,
+                        enabled: false,
+                        tip: "The editor's own files never ship: nothing here goes into a build.",
+                        ..MenuItem::default()
+                    },
+                    Pick::Exclude,
+                ),
+                BuildToggle::Exclude(_) => row(
+                    ui,
+                    "Exclude from Build",
+                    MenuItem { icon: Icon::Exclude, ..MenuItem::default() },
+                    Pick::Exclude,
+                ),
+                BuildToggle::Include(_) => row(
+                    ui,
+                    "Include in Build",
+                    MenuItem { icon: Icon::Exclude, ..MenuItem::default() },
+                    Pick::Include,
+                ),
+                BuildToggle::ByRule(rule) => {
+                    let tip =
+                        format!("The rule {rule} of mod.ltx [exclude] leaves it out: include that instead.");
+                    row(
+                        ui,
+                        "Include in Build",
+                        MenuItem { icon: Icon::Exclude, enabled: false, tip: &tip, ..MenuItem::default() },
+                        Pick::Include,
+                    )
+                }
             }
         }
         ui.separator();
@@ -1224,7 +1567,11 @@ fn status_strip(ui: &mut Ui, st: &Inner, f: &Frame<'_>) {
     let painter = ui.painter();
     painter.line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, f.p.border_subtle));
     // the folder shown - or what the search found in it - never the whole source
-    let (folders, files) = f.browser.view(f.editor, &st.loc, &st.search, &f.cat).value().map_or((0, 0), |v| (v.folders, v.files));
+    let (folders, files) = f
+        .browser
+        .view(f.editor, &st.loc, &st.search, &f.cat)
+        .value()
+        .map_or((0, 0), |v| (v.folders, v.files));
     let shown = folders + files;
     let searching = search_active(&st.search);
     let mut line = thousands(shown);
@@ -1239,16 +1586,32 @@ fn status_strip(ui: &mut Ui, st: &Inner, f: &Frame<'_>) {
         line.push_str(&format!("  \u{b7}  {} selected", thousands(selected)));
     }
     if !st.clip.items.is_empty() {
-        line.push_str(&format!("  \u{b7}  {}{}", thousands(st.clip.items.len()), if st.clip.cut { " cut" } else { " on the clipboard" }));
+        line.push_str(&format!(
+            "  \u{b7}  {}{}",
+            thousands(st.clip.items.len()),
+            if st.clip.cut { " cut" } else { " on the clipboard" }
+        ));
     }
     let read_only = st.loc.source.read_only();
     let badge_w = if read_only { text::width(&f.ctx, &Font::Small.id(), "Read only") + 12.0 } else { 0.0 };
-    text::paint(painter, &Font::Small.id(), pos2(rect.min.x + 2.0, rect.center().y), Align2::LEFT_CENTER, f.p.text_secondary, &line, Some((w - badge_w - 14.0).max(0.0)), Clip::End);
+    text::paint(
+        painter,
+        &Font::Small.id(),
+        pos2(rect.min.x + 2.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        f.p.text_secondary,
+        &line,
+        Some((w - badge_w - 14.0).max(0.0)),
+        Clip::End,
+    );
     if read_only {
         let r = Rect::from_min_max(pos2(rect.max.x - badge_w, rect.min.y), rect.max);
-        let mut child = ui.new_child(UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let mut child = ui
+            .new_child(UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
         badge(&mut child, "Read only", gz_ui::Tone::Muted);
-        child.interact(r, Id::unique(("cb_read_only", f.host.index())), Sense::hover()).on_hover_text("Browse, preview and copy out into the project: nothing in this source is changed.");
+        child.interact(r, Id::unique(("cb_read_only", f.host.index())), Sense::hover()).on_hover_text(
+            "Browse, preview and copy out into the project: nothing in this source is changed.",
+        );
     }
 }
 
@@ -1259,6 +1622,10 @@ fn shortcuts(ctx: &egui::Context, cx: &mut DocCx<'_>, st: &mut Inner, f: &Frame<
         && let Some(at) = ctx.input(|i| i.pointer.interact_pos())
     {
         st.focused = rect.contains(at);
+    }
+    // the shell keeps the scene's bindings away while the browser has the keys
+    if st.focused {
+        cx.requests.own_keys(crate::PANEL_ID);
     }
     if let Some(e) = st.pending_open.take() {
         actions::open_entry(cx, st, f.browser, &e, f.has_project);

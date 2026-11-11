@@ -4,10 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gz_base::{RevCounter, Rev, SmolStr};
+use gz_base::{Rev, RevCounter, SmolStr};
 use gz_fmt_level::Bvh;
-use gz_fmt_object::Object as EditObject;
 use gz_fmt_object::MeshFlags;
+use gz_fmt_object::Object as EditObject;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
@@ -28,7 +28,10 @@ pub struct LibraryObject {
 
 impl std::fmt::Debug for LibraryObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LibraryObject").field("name", &self.name).field("tris", &self.tris.len()).finish_non_exhaustive()
+        f.debug_struct("LibraryObject")
+            .field("name", &self.name)
+            .field("tris", &self.tris.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -61,7 +64,11 @@ impl LibraryObject {
     #[must_use]
     pub fn tri(&self, i: u32) -> Option<[Vec3; 3]> {
         let t = self.tris.get(i as usize)?;
-        Some([*self.verts.get(t[0] as usize)?, *self.verts.get(t[1] as usize)?, *self.verts.get(t[2] as usize)?])
+        Some([
+            *self.verts.get(t[0] as usize)?,
+            *self.verts.get(t[1] as usize)?,
+            *self.verts.get(t[2] as usize)?,
+        ])
     }
 }
 
@@ -89,7 +96,12 @@ impl Library {
     /// `roots` in the order they win: the project's `rawdata\objects`, then the editor's.
     #[must_use]
     pub fn new(roots: Vec<PathBuf>) -> Self {
-        Self { roots, cache: Mutex::new(FxHashMap::default()), listing: Mutex::new(None), rev: RevCounter::new() }
+        Self {
+            roots,
+            cache: Mutex::new(FxHashMap::default()),
+            listing: Mutex::new(None),
+            rev: RevCounter::new(),
+        }
     }
 
     /// Moves whenever an object is loaded: what a pick tree over the scene's boxes depends on.

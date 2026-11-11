@@ -84,7 +84,15 @@ impl Shaders {
             let mut cr = c.reader();
             while !cr.eof() {
                 let name = text.r_str(&mut cr)?;
-                out.constants.push((name, [WaveForm::read(&mut cr)?, WaveForm::read(&mut cr)?, WaveForm::read(&mut cr)?, WaveForm::read(&mut cr)?]));
+                out.constants.push((
+                    name,
+                    [
+                        WaveForm::read(&mut cr)?,
+                        WaveForm::read(&mut cr)?,
+                        WaveForm::read(&mut cr)?,
+                        WaveForm::read(&mut cr)?,
+                    ],
+                ));
             }
         }
         if let Some(c) = r.open_chunk(1)? {
@@ -116,7 +124,14 @@ impl Shaders {
                 let computer = fixed_str(d.take(32)?, &mut text)?;
                 let time = d.r_u32()?;
                 let version = d.r_u16()?;
-                out.blenders.push(Blender { class_id, name, computer, time, version, props: body[DESC_SIZE..].to_vec() });
+                out.blenders.push(Blender {
+                    class_id,
+                    name,
+                    computer,
+                    time,
+                    version,
+                    props: body[DESC_SIZE..].to_vec(),
+                });
             }
         }
         out.encoding = text.encoding();
@@ -163,7 +178,7 @@ pub struct ShadersXrlc {
 
 impl ShadersXrlc {
     pub fn read(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() % 144 != 0 {
+        if !bytes.len().is_multiple_of(144) {
             return Err(invalid("shaders_xrlc.xr is not a whole number of shaders"));
         }
         let mut r = Reader::new(bytes);
@@ -171,7 +186,13 @@ impl ShadersXrlc {
         while !r.eof() {
             let mut name_raw = [0u8; 128];
             name_raw.copy_from_slice(r.take(128)?);
-            shaders.push(ShaderXrlc { name_raw, flags: r.r_u32()?, vert_translucency: r.r_f32()?, vert_ambient: r.r_f32()?, lm_density: r.r_f32()? });
+            shaders.push(ShaderXrlc {
+                name_raw,
+                flags: r.r_u32()?,
+                vert_translucency: r.r_f32()?,
+                vert_ambient: r.r_f32()?,
+                lm_density: r.r_f32()?,
+            });
         }
         Ok(Self { shaders })
     }
@@ -230,14 +251,25 @@ mod tests {
         assert_eq!(s.constants[0].1[3].args, [0.5; 4]);
         assert_eq!((s.matrices[0].mode, s.matrices[0].tcm), (2, 3));
         let b = s.blender("DEF_SHADE").unwrap();
-        assert_eq!((b.version, b.time, b.props.as_slice(), b.class_name().as_str()), (3, 7, &b"props"[..], " BLENDER"));
+        assert_eq!(
+            (b.version, b.time, b.props.as_slice(), b.class_name().as_str()),
+            (3, 7, &b"props"[..], " BLENDER")
+        );
     }
 
     #[test]
     fn xrlc_shaders_round_trip() {
         let mut name_raw = [0xCDu8; 128];
         name_raw[..8].copy_from_slice(b"default\0");
-        let lib = ShadersXrlc { shaders: vec![ShaderXrlc { name_raw, flags: 0x37, vert_translucency: 0.5, vert_ambient: 0.0, lm_density: 1.0 }] };
+        let lib = ShadersXrlc {
+            shaders: vec![ShaderXrlc {
+                name_raw,
+                flags: 0x37,
+                vert_translucency: 0.5,
+                vert_ambient: 0.0,
+                lm_density: 1.0,
+            }],
+        };
         let b = lib.write();
         assert_eq!(b.len(), 144);
         let back = ShadersXrlc::read(&b).unwrap();

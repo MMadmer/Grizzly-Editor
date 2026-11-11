@@ -71,7 +71,11 @@ impl Line {
 pub enum Item<'a> {
     Section(&'a str),
     /// `code` is the line without its comment: what the C++ kept of a `[requires]` line.
-    Entry { key: &'a str, value: &'a str, code: &'a str },
+    Entry {
+        key: &'a str,
+        value: &'a str,
+        code: &'a str,
+    },
     Other,
 }
 
@@ -101,7 +105,12 @@ fn classify(raw: &str) -> Kind {
     match text.find('=') {
         Some(at) => {
             let eq = code.start + at;
-            Kind::Entry { key: trim_range(raw, code.start..eq), value: trim_range(raw, eq + 1..code.end), code, eq: true }
+            Kind::Entry {
+                key: trim_range(raw, code.start..eq),
+                value: trim_range(raw, eq + 1..code.end),
+                code,
+                eq: true,
+            }
         }
         None => Kind::Entry { key: code.clone(), value: code.end..code.end, code, eq: false },
     }
@@ -176,7 +185,10 @@ impl ManifestDoc {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let physical = physical_lines(text);
         let eol = physical.iter().map(|l| l.1).find(|e| *e != Eol::None).unwrap_or(Eol::CrLf);
-        let lines = physical.into_iter().map(|(raw, eol)| Line { kind: classify(raw), raw: raw.to_owned(), eol }).collect();
+        let lines = physical
+            .into_iter()
+            .map(|(raw, eol)| Line { kind: classify(raw), raw: raw.to_owned(), eol })
+            .collect();
         Self { lines, eol }
     }
 
@@ -189,7 +201,9 @@ impl ManifestDoc {
     pub fn items(&self) -> impl Iterator<Item = Item<'_>> {
         self.lines.iter().map(|l| match &l.kind {
             Kind::Section(name) => Item::Section(name.as_str()),
-            Kind::Entry { key, value, code, .. } => Item::Entry { key: sub(&l.raw, key), value: sub(&l.raw, value), code: sub(&l.raw, code) },
+            Kind::Entry { key, value, code, .. } => {
+                Item::Entry { key: sub(&l.raw, key), value: sub(&l.raw, value), code: sub(&l.raw, code) }
+            }
             Kind::Other => Item::Other,
         })
     }
@@ -208,7 +222,8 @@ impl ManifestDoc {
     pub fn sections_with_prefix(&self, prefix: &str) -> Vec<&str> {
         let mut out: Vec<&str> = Vec::new();
         for name in self.sections() {
-            let hit = name.len() >= prefix.len() && name.get(..prefix.len()).is_some_and(|h| h.eq_ignore_ascii_case(prefix));
+            let hit = name.len() >= prefix.len()
+                && name.get(..prefix.len()).is_some_and(|h| h.eq_ignore_ascii_case(prefix));
             if hit && !out.iter().any(|o| o.eq_ignore_ascii_case(name)) {
                 out.push(name);
             }
@@ -228,7 +243,11 @@ impl ManifestDoc {
         while let Some(line) = self.lines.get(i) {
             if matches!(&line.kind, Kind::Section(n) if n.eq_ignore_ascii_case(section)) {
                 let start = i + 1;
-                let end = self.lines.get(start..).and_then(|rest| rest.iter().position(|l| matches!(l.kind, Kind::Section(_)))).map_or(self.lines.len(), |n| start + n);
+                let end = self
+                    .lines
+                    .get(start..)
+                    .and_then(|rest| rest.iter().position(|l| matches!(l.kind, Kind::Section(_))))
+                    .map_or(self.lines.len(), |n| start + n);
                 out.push(start..end);
                 i = end;
             } else {
@@ -273,7 +292,7 @@ impl ManifestDoc {
     /// The value of a key as written, the last one when written twice.
     #[must_use]
     pub fn get(&self, section: &str, key: &str) -> Option<&str> {
-        self.section_entries(section).into_iter().filter(|(k, _)| *k == key).last().map(|(_, v)| v)
+        self.section_entries(section).into_iter().rfind(|(k, _)| *k == key).map(|(_, v)| v)
     }
 
     fn line(&self, raw: String) -> Line {
@@ -339,7 +358,8 @@ impl ManifestDoc {
             self.append_section(section);
         }
         let bodies = self.bodies(section);
-        let last_entry = bodies.iter().flat_map(Clone::clone).filter(|&i| self.lines.get(i).is_some_and(Line::is_entry)).last();
+        let last_entry =
+            bodies.iter().flat_map(Clone::clone).rfind(|&i| self.lines.get(i).is_some_and(Line::is_entry));
         match last_entry {
             Some(i) => i + 1,
             None => bodies.last().map_or(self.lines.len(), |b| b.start),
@@ -357,7 +377,11 @@ impl ManifestDoc {
     /// missing section is added at the end.
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
         let value = one_line(value);
-        let existing = self.body_lines(section).into_iter().rev().find(|&i| self.lines.get(i).and_then(Line::key) == Some(key));
+        let existing = self
+            .body_lines(section)
+            .into_iter()
+            .rev()
+            .find(|&i| self.lines.get(i).and_then(Line::key) == Some(key));
         if let Some(i) = existing
             && let Some(line) = self.lines.get_mut(i)
         {
@@ -380,7 +404,10 @@ impl ManifestDoc {
     /// Replaces the first entry whose key matches `key` without ASCII case by `raw`. `false`
     /// when there is none.
     pub fn set_line_ci(&mut self, section: &str, key: &str, raw: &str) -> bool {
-        let found = self.body_lines(section).into_iter().find(|&i| self.lines.get(i).and_then(Line::key).is_some_and(|k| k.eq_ignore_ascii_case(key)));
+        let found = self
+            .body_lines(section)
+            .into_iter()
+            .find(|&i| self.lines.get(i).and_then(Line::key).is_some_and(|k| k.eq_ignore_ascii_case(key)));
         let Some(i) = found else { return false };
         let line = self.line(raw.to_owned());
         if let Some(slot) = self.lines.get_mut(i) {
@@ -399,7 +426,11 @@ impl ManifestDoc {
 
     /// Removes every entry of `section` whose key `pred` accepts. Returns whether one went.
     pub fn remove_where(&mut self, section: &str, pred: impl Fn(&str) -> bool) -> bool {
-        let doomed: Vec<usize> = self.body_lines(section).into_iter().filter(|&i| self.lines.get(i).and_then(Line::key).is_some_and(&pred)).collect();
+        let doomed: Vec<usize> = self
+            .body_lines(section)
+            .into_iter()
+            .filter(|&i| self.lines.get(i).and_then(Line::key).is_some_and(&pred))
+            .collect();
         for &i in doomed.iter().rev() {
             if i < self.lines.len() {
                 self.lines.remove(i);
@@ -458,7 +489,9 @@ impl ManifestDoc {
             let header = body.start.saturating_sub(1);
             let mut end = body.end;
             if end < self.lines.len() {
-                while end > body.start && self.lines.get(end - 1).is_some_and(|l| matches!(l.kind, Kind::Other) && !l.is_blank()) {
+                while end > body.start
+                    && self.lines.get(end - 1).is_some_and(|l| matches!(l.kind, Kind::Other) && !l.is_blank())
+                {
                     end -= 1;
                 }
             }
@@ -480,7 +513,8 @@ impl ManifestDoc {
         if bodies.is_empty() {
             return false;
         }
-        let empty = bodies.iter().flat_map(Clone::clone).all(|i| self.lines.get(i).is_some_and(Line::is_blank));
+        let empty =
+            bodies.iter().flat_map(Clone::clone).all(|i| self.lines.get(i).is_some_and(Line::is_blank));
         empty && self.remove_section(section)
     }
 }
@@ -535,7 +569,11 @@ mod tests {
     fn a_new_key_follows_the_column() {
         let mut doc = ManifestDoc::parse(SAMPLE);
         doc.set("module", "author", "Madmer");
-        assert!(doc.to_string().contains("website     = https://www.moddb.com/mods/demo\r\nauthor      = Madmer\r\n\r\n; what"));
+        assert!(
+            doc.to_string().contains(
+                "website     = https://www.moddb.com/mods/demo\r\nauthor      = Madmer\r\n\r\n; what"
+            )
+        );
         doc.set("update", "github", "Madmer/demo");
         assert!(doc.to_string().ends_with("*.psd\r\n\r\n[update]\r\ngithub      = Madmer/demo\r\n"));
         let mut fresh = ManifestDoc::parse("[module]\nid=x");
@@ -559,13 +597,18 @@ mod tests {
 
     #[test]
     fn removing_and_case_blind_lines() {
-        let mut doc = ManifestDoc::parse("[commands]\nStatus = a.b\nother = c.d\n\n[command.status]\nhelp = x\n");
+        let mut doc =
+            ManifestDoc::parse("[commands]\nStatus = a.b\nother = c.d\n\n[command.status]\nhelp = x\n");
         assert!(doc.set_line_ci("commands", "status", "status          = a.c"));
         assert!(doc.remove_section("COMMAND.STATUS"));
         assert_eq!(doc.to_string(), "[commands]\nstatus          = a.c\nother = c.d\n");
         assert!(doc.remove_where("commands", |k| k.eq_ignore_ascii_case("OTHER")));
         doc.push_line("commands", "next            = e.f");
         assert_eq!(doc.to_string(), "[commands]\nstatus          = a.c\nnext            = e.f\n");
-        assert_eq!(ManifestDoc::parse("[screen.a]\n[track.x]\n[Screen.B]\n[screen.a]\n").sections_with_prefix("screen."), ["screen.a", "Screen.B"]);
+        assert_eq!(
+            ManifestDoc::parse("[screen.a]\n[track.x]\n[Screen.B]\n[screen.a]\n")
+                .sections_with_prefix("screen."),
+            ["screen.a", "Screen.B"]
+        );
     }
 }

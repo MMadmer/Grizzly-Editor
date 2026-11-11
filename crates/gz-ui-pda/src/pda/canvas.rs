@@ -12,7 +12,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::epaint::RectShape;
-use egui::{Color32, CornerRadius, CursorIcon, Event, FontId, Mesh, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2};
+use egui::{
+    Color32, CornerRadius, CursorIcon, Event, FontId, Mesh, MouseWheelUnit, Painter, PointerButton, Pos2,
+    Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2,
+};
 use gz_editor::Editor;
 use gz_pda::{Clock, Hit, ItemBox, Layout, MapSpot, Preview};
 use gz_ui::{Font, Palette, palette};
@@ -85,7 +88,12 @@ fn floor_px(v: f32, ppp: f32) -> f32 {
 #[must_use]
 pub fn clock_now() -> Clock {
     let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    Clock { hour: u32::from(now.hour()), minute: u32::from(now.minute()), day: u32::from(now.day()), month: u32::from(u8::from(now.month())) }
+    Clock {
+        hour: u32::from(now.hour()),
+        minute: u32::from(now.minute()),
+        day: u32::from(now.day()),
+        month: u32::from(u8::from(now.month())),
+    }
 }
 
 // ---- where the device goes ------------------------------------------------------------------
@@ -111,7 +119,10 @@ pub fn device_size(dev: &Device, wide: bool, avail: Vec2, zoom: f32, ppp: f32) -
 /// Where the screen's corner goes for the device to sit in the middle of the canvas.
 fn centred(dev: &Device, wide: bool, p0: Pos2, avail: Vec2, size: Vec2) -> Pos2 {
     let r = dev.rect(wide);
-    pos2(p0.x + avail.x * 0.5 - (r.x1 + r.x2) * 0.5 * size.x / 1024.0, p0.y + avail.y * 0.5 - (r.y1 + r.y2) * 0.5 * size.y / 768.0)
+    pos2(
+        p0.x + avail.x * 0.5 - (r.x1 + r.x2) * 0.5 * size.x / 1024.0,
+        p0.y + avail.y * 0.5 - (r.y1 + r.y2) * 0.5 * size.y / 768.0,
+    )
 }
 
 /// A zoomed device can be dragged around, but some of it always stays in view.
@@ -135,11 +146,27 @@ pub fn place_device(m: &mut Model, dev: &Device, p0: Pos2, avail: Vec2, ppp: f32
         m.pan = Vec2::ZERO;
     }
     let c = centred(dev, wide, p0, avail, size);
-    Geom { origin: pos2(floor_px(c.x + m.pan.x, ppp), floor_px(c.y + m.pan.y, ppp)), kx: size.x / 1024.0, ky: size.y / 768.0, screen: dev.side(wide).noise }
+    Geom {
+        origin: pos2(floor_px(c.x + m.pan.x, ppp), floor_px(c.y + m.pan.y, ppp)),
+        kx: size.x / 1024.0,
+        ky: size.y / 768.0,
+        screen: dev.side(wide).noise,
+    }
 }
 
 /// The wheel zooms about the point under the mouse: that point of the device stays where it is.
-fn zoom_at(m: &mut Model, dev: &Device, g: &Geom, p0: Pos2, avail: Vec2, at: Pos2, factor: f32, ppp: f32) -> Geom {
+// every argument is one the caller decides at each call; a struct of them would only rename them
+#[allow(clippy::too_many_arguments)]
+fn zoom_at(
+    m: &mut Model,
+    dev: &Device,
+    g: &Geom,
+    p0: Pos2,
+    avail: Vec2,
+    at: Pos2,
+    factor: f32,
+    ppp: f32,
+) -> Geom {
     let wide = m.preview.aspect == gz_pda::Aspect::Wide;
     let next = (g.ky * ppp * factor).clamp(ZOOM_MIN, ZOOM_MAX);
     let ux = (at.x - g.origin.x) / g.kx;
@@ -157,7 +184,18 @@ pub fn item_rects(preview: &Preview, g: &Geom) -> (Vec<ItemBox>, Vec<(Rect, bool
     let boxes = preview.boxes();
     let l = &preview.layout;
     let (root, cx, cy) = (g.root(), g.cx(l.canvas_w), g.cy(l.canvas_h));
-    let rects = boxes.iter().map(|b| (Rect::from_min_max(pos2(root.x + b.x0 * cx, root.y + b.y0 * cy), pos2(root.x + b.x1 * cx, root.y + b.y1 * cy)), b.shown)).collect();
+    let rects = boxes
+        .iter()
+        .map(|b| {
+            (
+                Rect::from_min_max(
+                    pos2(root.x + b.x0 * cx, root.y + b.y0 * cy),
+                    pos2(root.x + b.x1 * cx, root.y + b.y1 * cy),
+                ),
+                b.shown,
+            )
+        })
+        .collect();
     (boxes, rects)
 }
 
@@ -244,13 +282,26 @@ impl Draw<'_> {
         let wrap = (r.width() - 24.0).max(Font::Body.line());
         let galley = painter.layout(text.to_owned(), font, self.p.text_secondary, wrap);
         let size = galley.size();
-        let at = pos2(floor_px((r.min.x + r.max.x - size.x) * 0.5, self.ppp), floor_px((r.min.y + r.max.y - size.y) * 0.5, self.ppp));
+        let at = pos2(
+            floor_px((r.min.x + r.max.x - size.x) * 0.5, self.ppp),
+            floor_px((r.min.y + r.max.y - size.y) * 0.5, self.ppp),
+        );
         painter.galley(at, galley, self.p.text_secondary);
     }
 
     /// A label in the game's bitmap font (`DrawLabel`): a text exactly as wide as in the game.
     #[allow(clippy::too_many_arguments)]
-    fn label(&self, painter: &Painter, utf8: &str, font: &str, color: u32, align: char, valign: char, wrap: bool, r: Rect) {
+    fn label(
+        &self,
+        painter: &Painter,
+        utf8: &str,
+        font: &str,
+        color: u32,
+        align: char,
+        valign: char,
+        wrap: bool,
+        r: Rect,
+    ) {
         if utf8.is_empty() || (color >> 24) == 0 {
             return;
         }
@@ -262,7 +313,11 @@ impl Draw<'_> {
             Look::Ready(f) => f,
             Look::Missing => {
                 // no game fonts (no linked game): the editor's own font, sized alike
-                let galley = painter.layout_no_wrap(utf8.to_owned(), FontId::new(12.0 * px, Font::Body.family()), tint);
+                let galley = painter.layout_no_wrap(
+                    utf8.to_owned(),
+                    FontId::new(12.0 * px, Font::Body.family()),
+                    tint,
+                );
                 let ts = galley.size();
                 let x = match align {
                     'c' => (r.min.x + r.max.x - ts.x) * 0.5,
@@ -303,7 +358,11 @@ impl Draw<'_> {
                 if gw > 0.0 && c != b' ' {
                     let gx = font.glyphs.x.get(i).copied().unwrap_or(0.0);
                     let gy = font.glyphs.y.get(i).copied().unwrap_or(0.0);
-                    mesh.add_rect_with_uv(Rect::from_min_max(pos2(x, y), pos2(x + gw * px, y + gh * px)), sheet.uv(gx, gy, gw, gh), tint);
+                    mesh.add_rect_with_uv(
+                        Rect::from_min_max(pos2(x, y), pos2(x + gw * px, y + gh * px)),
+                        sheet.uv(gx, gy, gw, gh),
+                        tint,
+                    );
                 }
                 x += gw * px;
             }
@@ -323,7 +382,10 @@ impl Draw<'_> {
             None => self.tex(painter, &sp.icon, r, sp.color, 0.0),
             Some([x, y, w, hh]) => match self.assets.sheet(self.editor, &sp.icon, SheetFrom::Project) {
                 Look::Ready(s) => {
-                    painter.add(RectShape::filled(r, CornerRadius::ZERO, col(sp.color, 1.0)).with_texture(s.id, s.uv(x, y, w, hh)));
+                    painter.add(
+                        RectShape::filled(r, CornerRadius::ZERO, col(sp.color, 1.0))
+                            .with_texture(s.id, s.uv(x, y, w, hh)),
+                    );
                 }
                 Look::Missing => {
                     painter.rect_filled(r, CornerRadius::ZERO, col(GAME_MISSING_TEXTURE, 1.0));
@@ -333,7 +395,13 @@ impl Draw<'_> {
         }
         if let Some(inner) = &sp.inner {
             let a = pos2(r.min.x + inner.x * k, r.min.y + inner.y * k);
-            self.tex(painter, &inner.icon, Rect::from_min_size(a, Vec2::splat(inner.size * k)), inner.color, 0.0);
+            self.tex(
+                painter,
+                &inner.icon,
+                Rect::from_min_size(a, Vec2::splat(inner.size * k)),
+                inner.color,
+                0.0,
+            );
         }
     }
 
@@ -351,7 +419,10 @@ impl Draw<'_> {
         {
             let [x1, z1, x2, z2] = lm.bound;
             let r = Rect::from_two_pos(v.w2p(x1, z2), v.w2p(x2, z1));
-            painter.add(RectShape::filled(r, CornerRadius::ZERO, Color32::WHITE).with_texture(sheet.id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+            painter.add(
+                RectShape::filled(r, CornerRadius::ZERO, Color32::WHITE)
+                    .with_texture(sheet.id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+            );
             let l = m.preview.layout.clone();
             let s = 11.0 * self.g.ky;
             for mk in &l.markers {
@@ -418,7 +489,14 @@ impl Draw<'_> {
     }
 
     /// One item and what it holds (`DrawItem`).
-    fn item(&mut self, painter: &Painter, m: &mut Model, rects: &[(Rect, bool)], kids: &[Vec<usize>], i: usize) {
+    fn item(
+        &mut self,
+        painter: &Painter,
+        m: &mut Model,
+        rects: &[(Rect, bool)],
+        kids: &[Vec<usize>],
+        i: usize,
+    ) {
         let Some(&(a, shown)) = rects.get(i) else { return };
         if !shown {
             return;
@@ -458,7 +536,10 @@ impl Draw<'_> {
                     let x = if alone || stacked { (w - icon) * 0.5 } else { 12.0 };
                     let y = if stacked { h * 0.5 - icon + 2.0 } else { (h - icon) * 0.5 };
                     let ic = if sel && it.has_icon_selected { it.icon_selected } else { it.icon_color };
-                    let r = Rect::from_min_max(pos2(a.min.x + x * cx, a.min.y + y * cy), pos2(a.min.x + (x + icon) * cx, a.min.y + (y + icon) * cy));
+                    let r = Rect::from_min_max(
+                        pos2(a.min.x + x * cx, a.min.y + y * cy),
+                        pos2(a.min.x + (x + icon) * cx, a.min.y + (y + icon) * cy),
+                    );
                     self.tex(painter, &it.icon, r, ic, 0.0);
                     if !alone && !stacked {
                         text_left = x + icon + 8.0;
@@ -475,8 +556,20 @@ impl Draw<'_> {
                         tc = it.text_hover;
                     }
                     let text = m.preview.format(&it.text, &self.now);
-                    let r = Rect::from_min_max(pos2(a.min.x + l * cx, a.min.y + t * cy), pos2(a.min.x + (w - pad) * cx, a.min.y + h * cy));
-                    self.label(painter, &text, &it.font, tc, it.align, if stacked { 't' } else { it.valign }, it.wrap, r);
+                    let r = Rect::from_min_max(
+                        pos2(a.min.x + l * cx, a.min.y + t * cy),
+                        pos2(a.min.x + (w - pad) * cx, a.min.y + h * cy),
+                    );
+                    self.label(
+                        painter,
+                        &text,
+                        &it.font,
+                        tc,
+                        it.align,
+                        if stacked { 't' } else { it.valign },
+                        it.wrap,
+                        r,
+                    );
                 }
             }
             _ => {}
@@ -517,7 +610,9 @@ impl Draw<'_> {
             ("eptFractionWar", "Faction war"),
         ];
         let title = NAMES.iter().find(|(k, _)| *k == stock).map_or(stock, |(_, t)| t);
-        let note = format!("Stock PDA section: {title} ({stock})\nThe game shows its own screen here; the overlay stays on top.");
+        let note = format!(
+            "Stock PDA section: {title} ({stock})\nThe game shows its own screen here; the overlay stays on top."
+        );
         self.note(painter, r, &note);
     }
 
@@ -575,7 +670,15 @@ fn wheel(ui: &Ui) -> (f32, bool) {
 }
 
 /// Draws the device and the layout into `rect` and handles the mouse there.
-pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets: &Arc<PdaAssets>, editor: &Arc<Editor>, cache: &mut CanvasCache) {
+pub fn draw_canvas(
+    ui: &mut Ui,
+    rect: Rect,
+    m: &mut Model,
+    dev: &Device,
+    assets: &Arc<PdaAssets>,
+    editor: &Arc<Editor>,
+    cache: &mut CanvasCache,
+) {
     let ctx = ui.ctx().clone();
     let ppp = ctx.pixels_per_point();
     let (p0, avail) = (rect.min, rect.size());
@@ -616,7 +719,10 @@ pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets:
     let dr = dev.rect(wide);
     let (da, db) = (g.at(dr.x1, dr.y1), g.at(dr.x2, dr.y2));
     m.device_gap = (da.x - p0.x).min(da.y - p0.y).min(p0.x + avail.x - db.x).min(p0.y + avail.y - db.y);
-    m.screen_edges = u8::from(dr.y1 <= 0.0) | (u8::from(dr.y2 >= 768.0) << 1) | (u8::from(dr.x1 <= 0.0) << 2) | (u8::from(dr.x2 >= 1024.0) << 3);
+    m.screen_edges = u8::from(dr.y1 <= 0.0)
+        | (u8::from(dr.y2 >= 768.0) << 1)
+        | (u8::from(dr.x1 <= 0.0) << 2)
+        | (u8::from(dr.x2 >= 1024.0) << 3);
     m.geom = Some(g);
     m.ppp = ppp;
 
@@ -665,7 +771,8 @@ pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets:
         d.tex(&base, &side.noise_tex, screen, (side.noise_alpha << 24) | 0x00FF_FFFF, 0.0);
     }
     if layout.close {
-        let close = Rect::from_min_max(g.at(side.close.x1, side.close.y1), g.at(side.close.x2, side.close.y2));
+        let close =
+            Rect::from_min_max(g.at(side.close.x1, side.close.y1), g.at(side.close.x2, side.close.y2));
         d.tex(&base, &side.close_tex, close, 0xFFFF_FFFF, 0.0);
     }
     if m.preview.closed {
@@ -675,7 +782,8 @@ pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets:
     // the left button plays the layout
     let now = d.now;
     m.hovered = None;
-    let (pressed_now, released_now, primary_down) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.primary_down()));
+    let (pressed_now, released_now, primary_down) =
+        ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.primary_down()));
     if over && !m.preview.closed && !dragging {
         let hit = match pointer {
             Some(at) => {
@@ -694,7 +802,8 @@ pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets:
             d.hover_hint = m.preview.format(&it.hint, &now);
         }
         if d.hover_hint.is_empty() && item.is_none() && on_edge {
-            "The game's screen ends here. The PDA runs on past it, so the game shows it cut like this.".clone_into(&mut d.hover_hint);
+            "The game's screen ends here. The PDA runs on past it, so the game shows it cut like this."
+                .clone_into(&mut d.hover_hint);
         }
         if pressed_now {
             m.pressed = item;
@@ -708,7 +817,10 @@ pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets:
             m.pressed = None;
         }
         // dragging the map with the left button pans it, the way the game's map does
-        if resp.dragged_by(PointerButton::Primary) && m.pressed.is_none() && let Some(at) = pointer {
+        if resp.dragged_by(PointerButton::Primary)
+            && m.pressed.is_none()
+            && let Some(at) = pointer
+        {
             let delta = resp.drag_delta();
             for (i, &(r, shown)) in rects.iter().enumerate().rev() {
                 if !shown || !r.contains(at) || layout.items.get(i).is_none_or(|it| it.kind != "map") {
@@ -757,9 +869,16 @@ pub fn draw_canvas(ui: &mut Ui, rect: Rect, m: &mut Model, dev: &Device, assets:
             let ts = galley.size();
             let c = pos2(screen.center().x, screen.max.y - 40.0 * g.ky);
             let pad = Vec2::new(12.0, 7.0);
-            let back = Rect::from_min_max(pos2(c.x - ts.x * 0.5 - pad.x, c.y - ts.y * 0.5 - pad.y), pos2(c.x + ts.x * 0.5 + pad.x, c.y + ts.y * 0.5 + pad.y));
+            let back = Rect::from_min_max(
+                pos2(c.x - ts.x * 0.5 - pad.x, c.y - ts.y * 0.5 - pad.y),
+                pos2(c.x + ts.x * 0.5 + pad.x, c.y + ts.y * 0.5 + pad.y),
+            );
             base.rect_filled(back, CornerRadius::same(6), Palette::alpha(d.p.overlay, 0.92));
-            base.galley(pos2(floor_px(c.x - ts.x * 0.5, ppp), floor_px(c.y - ts.y * 0.5, ppp)), galley, d.p.text);
+            base.galley(
+                pos2(floor_px(c.x - ts.x * 0.5, ppp), floor_px(c.y - ts.y * 0.5, ppp)),
+                galley,
+                d.p.text,
+            );
             ctx.request_repaint_after(left);
         }
     }

@@ -6,7 +6,6 @@ use smol_str::SmolStr;
 
 use crate::{Result, invalid};
 
-
 /// `MT`: what a visual is.
 #[allow(non_snake_case)]
 pub mod MT {
@@ -97,7 +96,15 @@ impl Header {
     /// A header of `kind` around a box, its sphere from `Fbox::getsphere`.
     pub(crate) fn around(kind: u8, b: &gz_fmt_object::Aabb) -> Self {
         let (c, r) = b.sphere();
-        Self { format_version: FORMAT_VERSION, kind, shader_id: 0, bb_min: b.min, bb_max: b.max, sphere_center: c, sphere_radius: r }
+        Self {
+            format_version: FORMAT_VERSION,
+            kind,
+            shader_id: 0,
+            bb_min: b.min,
+            bb_max: b.max,
+            sphere_center: c,
+            sphere_radius: r,
+        }
     }
 }
 
@@ -117,7 +124,9 @@ pub struct Desc {
 
 impl Desc {
     pub(crate) fn read(body: &[u8]) -> Result<Self> {
-        Self::parse(body, 8).or_else(|| Self::parse(body, 4)).ok_or_else(|| invalid("the model's description is damaged"))
+        Self::parse(body, 8)
+            .or_else(|| Self::parse(body, 4))
+            .ok_or_else(|| invalid("the model's description is damaged"))
     }
 
     /// The description with times of `time_size` bytes, when that reads the chunk exactly.
@@ -133,7 +142,16 @@ impl Desc {
         let create_time = t(&mut r)?;
         let modif_name = SmolStr::new(r.r_stringz().ok()?);
         let modif_time = t(&mut r)?;
-        r.eof().then_some(Self { source_file, build_name, build_time, create_name, create_time, modif_name, modif_time, time_size })
+        r.eof().then_some(Self {
+            source_file,
+            build_name,
+            build_time,
+            create_name,
+            create_time,
+            modif_name,
+            modif_time,
+            time_size,
+        })
     }
 
     pub(crate) fn write(&self, w: &mut Writer) {

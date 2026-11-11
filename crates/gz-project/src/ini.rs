@@ -5,7 +5,8 @@
 use gz_ltx::LtxDoc;
 
 pub(crate) fn set(doc: &mut LtxDoc, section: &str, key: &str, value: &str) {
-    let has_entries = doc.sections().any(|s| doc.entries(s).next().is_some()) || doc.entries("").next().is_some();
+    let has_entries =
+        doc.sections().any(|s| doc.entries(s).next().is_some()) || doc.entries("").next().is_some();
     if has_entries || doc.has_section(section) {
         doc.set(section, key, value);
         return;

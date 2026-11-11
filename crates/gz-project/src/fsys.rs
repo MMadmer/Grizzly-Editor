@@ -85,7 +85,13 @@ pub(crate) fn list_folder(dir: &Path) -> Result<Vec<DirItem>, u32> {
         let Ok(name) = entry.file_name().into_string() else { continue };
         // on Windows this comes from the listing itself: no file is opened for it
         let meta = entry.metadata().map_err(|e| win32(&e))?;
-        out.push(DirItem { attributes: attributes(&meta), link: is_link(&meta), size: if meta.is_file() { meta.len() } else { 0 }, name, meta });
+        out.push(DirItem {
+            attributes: attributes(&meta),
+            link: is_link(&meta),
+            size: if meta.is_file() { meta.len() } else { 0 },
+            name,
+            meta,
+        });
     }
     Ok(out)
 }

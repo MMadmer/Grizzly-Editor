@@ -68,7 +68,8 @@ pub fn reset_all(ctx: &Context) {
 /// Every key with its value, sorted by key.
 #[must_use]
 pub fn all(ctx: &Context) -> Vec<(SmolStr, f32)> {
-    let mut out: Vec<(SmolStr, f32)> = handle(ctx).0.lock().values.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    let mut out: Vec<(SmolStr, f32)> =
+        handle(ctx).0.lock().values.iter().map(|(k, v)| (k.clone(), *v)).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }

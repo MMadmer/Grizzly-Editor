@@ -71,7 +71,9 @@ pub(crate) async fn run(editor: &Editor, svc: &NqService) -> Report {
     let mut ids: Vec<(String, String, Vec<String>)> = Vec::new();
     for ((rel, problems, unreadable, calls), entry) in checked.into_iter().zip(&env.index.entries) {
         if dirty.contains(&entry.key) {
-            report.log.push(format!("{rel}: ~ has unsaved changes in the editor - the file on disk is what ships"));
+            report
+                .log
+                .push(format!("{rel}: ~ has unsaved changes in the editor - the file on disk is what ships"));
         }
         if let Some(err) = unreadable {
             report.errors += 1;
@@ -124,7 +126,9 @@ pub(crate) async fn run(editor: &Editor, svc: &NqService) -> Report {
         }
         if loops {
             report.errors += 1;
-            report.log.push(format!("{rel}: E113 behaviour graph '{id}' runs itself through the graphs it calls"));
+            report
+                .log
+                .push(format!("{rel}: E113 behaviour graph '{id}' runs itself through the graphs it calls"));
         }
     }
     for line in &report.log {
@@ -145,7 +149,12 @@ impl BuildCheck for GraphCheck {
         "Checking the quests"
     }
 
-    fn check(&self, editor: Arc<Editor>, _session: Arc<ProjectSession>, _walk: Arc<BuildWalk>) -> BoxFuture<'static, Vec<Problem>> {
+    fn check(
+        &self,
+        editor: Arc<Editor>,
+        _session: Arc<ProjectSession>,
+        _walk: Arc<BuildWalk>,
+    ) -> BoxFuture<'static, Vec<Problem>> {
         Box::pin(async move {
             // the graphs the index lists are the graphs of the build: it skips what the build leaves out
             let Ok(svc) = NqService::of(&editor) else { return Vec::new() };

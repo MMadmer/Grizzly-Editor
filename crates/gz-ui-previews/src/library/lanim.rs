@@ -36,19 +36,46 @@ pub struct LanimState {
 
 /// What edits the library.
 pub enum LanimCmd {
-    Load { lib: LightAnims, error: Option<String> },
-    Fps { name: SmolStr, fps: f32 },
-    Frames { name: SmolStr, count: i32 },
-    InsertKey { name: SmolStr, frame: i32, color: u32 },
-    DeleteKey { name: SmolStr, frame: i32 },
-    MoveKey { name: SmolStr, from: i32, to: i32 },
+    Load {
+        lib: LightAnims,
+        error: Option<String>,
+    },
+    Fps {
+        name: SmolStr,
+        fps: f32,
+    },
+    Frames {
+        name: SmolStr,
+        count: i32,
+    },
+    InsertKey {
+        name: SmolStr,
+        frame: i32,
+        color: u32,
+    },
+    DeleteKey {
+        name: SmolStr,
+        frame: i32,
+    },
+    MoveKey {
+        name: SmolStr,
+        from: i32,
+        to: i32,
+    },
     /// A key's colour; edits of one key in a row are one undo step.
-    SetKey { name: SmolStr, frame: i32, color: u32 },
+    SetKey {
+        name: SmolStr,
+        frame: i32,
+        color: u32,
+    },
     Saved,
 }
 
 fn item_mut<'a>(lib: &'a mut LightAnims, name: &str) -> Result<&'a mut LightAnim, CmdError> {
-    lib.items.iter_mut().find(|i| i.name == name).ok_or_else(|| CmdError::not_found(format!("no light animation is named '{name}'")))
+    lib.items
+        .iter_mut()
+        .find(|i| i.name == name)
+        .ok_or_else(|| CmdError::not_found(format!("no light animation is named '{name}'")))
 }
 
 /// `CLAItem::Resize`: growing moves the key at the old end to the new end; shrinking drops the
@@ -65,7 +92,7 @@ pub fn resize(item: &mut LightAnim, count: i32) {
             item.keys.insert(count, c);
         }
     } else {
-        item.keys.retain(|f, _| *f <= count - 1);
+        item.keys.retain(|f, _| *f < count);
         item.frame_count = count;
     }
 }
@@ -174,9 +201,20 @@ pub struct LanimDoc {
 impl LanimDoc {
     #[must_use]
     pub fn new(editor: &Arc<Editor>) -> Self {
-        let store = Store::spawn("light animations", LanimState::default(), &editor.exec, StoreOptions::default());
+        let store =
+            Store::spawn("light animations", LanimState::default(), &editor.exec, StoreOptions::default());
         let file = EditorDirs::of(editor).lanims();
-        let doc = Self { editor: editor.clone(), store, file, list: LibraryList::default(), selected: String::new(), pointer: 0, playing: None, render_alpha: false, pending_count: None };
+        let doc = Self {
+            editor: editor.clone(),
+            store,
+            file,
+            list: LibraryList::default(),
+            selected: String::new(),
+            pointer: 0,
+            playing: None,
+            render_alpha: false,
+            pending_count: None,
+        };
         doc.reload_now();
         doc
     }
@@ -236,7 +274,8 @@ impl LanimDoc {
     fn save_now(&self) {
         let snap = self.store.snapshot();
         let bytes = snap.lib.write();
-        let (store, file, exec, notices) = (self.store.clone(), self.file.clone(), self.editor.exec.clone(), self.editor.clone());
+        let (store, file, exec, notices) =
+            (self.store.clone(), self.file.clone(), self.editor.exec.clone(), self.editor.clone());
         self.editor.exec.spawn(async move {
             let shown = file.clone();
             match exec.io(move || gz_editor::fsx::write_atomic(&file, &bytes)).await {
@@ -248,7 +287,7 @@ impl LanimDoc {
         });
     }
 
-    fn keys<'a>(lib: &'a LightAnims) -> Vec<&'a str> {
+    fn keys(lib: &LightAnims) -> Vec<&str> {
         lib.items.iter().map(|i| i.name.as_str()).collect()
     }
 
@@ -283,7 +322,13 @@ impl LanimDoc {
             self.pointer = ((t * f64::from(fps)).floor() as i32).clamp(0, (item.frame_count - 1).max(0));
             ctx.request_repaint();
         }
-        let facts = format!("{} frames \u{b7} {} fps \u{b7} {:.2} s \u{b7} {} keys", item.frame_count, item.fps, item.frame_count as f32 / item.fps.max(1e-3), item.keys.len());
+        let facts = format!(
+            "{} frames \u{b7} {} fps \u{b7} {:.2} s \u{b7} {} keys",
+            item.frame_count,
+            item.fps,
+            item.frame_count as f32 / item.fps.max(1e-3),
+            item.keys.len()
+        );
         local_heading(ui, &item.name, Clip::Start, &[(&facts, Clip::End)]);
         ui.add_space(8.0);
 
@@ -296,8 +341,19 @@ impl LanimDoc {
             local_checker(ui.painter(), &p, rect.min, rect);
         }
         ui.painter().rect_filled(rect, CornerRadius::same(6), paint_color(argb, self.render_alpha));
-        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
-        let tip = format!("Frame {}: #{:06X}, alpha {}{}", self.pointer, argb & 0xFF_FFFF, argb >> 24, if item.keys.contains_key(&self.pointer) { " (a key)" } else { "" });
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            Stroke::new(1.0, p.border),
+            egui::StrokeKind::Inside,
+        );
+        let tip = format!(
+            "Frame {}: #{:06X}, alpha {}{}",
+            self.pointer,
+            argb & 0xFF_FFFF,
+            argb >> 24,
+            if item.keys.contains_key(&self.pointer) { " (a key)" } else { "" }
+        );
         resp.on_hover_text(tip);
         ui.add_space(12.0);
         self.draw_timeline(ui, item, 40.0);
@@ -336,18 +392,33 @@ impl LanimDoc {
             let argb = item.color_at(frame).unwrap_or(0);
             let x0 = rect.min.x + w * c as f32 / cols as f32;
             let x1 = rect.min.x + w * (c + 1) as f32 / cols as f32;
-            painter.rect_filled(Rect::from_min_max(pos2(x0.floor(), rect.min.y), pos2(x1.floor() + 1.0, strip_b)), CornerRadius::ZERO, paint_color(argb, self.render_alpha));
+            painter.rect_filled(
+                Rect::from_min_max(pos2(x0.floor(), rect.min.y), pos2(x1.floor() + 1.0, strip_b)),
+                CornerRadius::ZERO,
+                paint_color(argb, self.render_alpha),
+            );
         }
-        painter.rect_filled(Rect::from_min_max(pos2(rect.min.x, strip_b), rect.max), CornerRadius::ZERO, p.inset);
+        painter.rect_filled(
+            Rect::from_min_max(pos2(rect.min.x, strip_b), rect.max),
+            CornerRadius::ZERO,
+            p.inset,
+        );
         let step = w / count as f32;
         for f in item.keys.keys() {
             let x = (rect.min.x + (*f as f32 + 0.5) * step + 0.5).floor();
             let c = pos2(x, strip_b + lane * 0.5);
             let r = 3.5;
-            painter.add(Shape::convex_polygon(vec![pos2(c.x, c.y - r), pos2(c.x + r, c.y), pos2(c.x, c.y + r), pos2(c.x - r, c.y)], p.text, Stroke::NONE));
+            painter.add(Shape::convex_polygon(
+                vec![pos2(c.x, c.y - r), pos2(c.x + r, c.y), pos2(c.x, c.y + r), pos2(c.x - r, c.y)],
+                p.text,
+                Stroke::NONE,
+            ));
         }
         let px = (rect.min.x + (self.pointer as f32 + 0.5) * step + 0.5).floor();
-        painter.line_segment([Pos2::new(px, rect.min.y), Pos2::new(px, rect.max.y)], Stroke::new(2.0, p.accent_bright));
+        painter.line_segment(
+            [Pos2::new(px, rect.min.y), Pos2::new(px, rect.max.y)],
+            Stroke::new(2.0, p.accent_bright),
+        );
         painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
         let _ = resp;
         local_ends(ui, "0", &(count - 1).to_string());
@@ -385,7 +456,11 @@ impl LanimDoc {
             self.pointer = next_key(item, self.pointer);
         }
         tb.group(2);
-        let add_tip = if on_key { "There is a key at this frame already" } else { "Add a key at this frame, with the colour the frame has now" };
+        let add_tip = if on_key {
+            "There is a key at this frame already"
+        } else {
+            "Add a key at this frame, with the colour the frame has now"
+        };
         if tb.action("add_key", Icon::Plus, "Add Key", add_tip, !on_key, false, Kind::Ghost) {
             self.add_key(item);
         }
@@ -404,14 +479,36 @@ impl LanimDoc {
         // a key moves one frame at a time, onto the next free frame
         let left = on_key && self.pointer > 0;
         let right = on_key && self.pointer < item.frame_count - 1;
-        if tb.action("key_earlier", Icon::Back, "", if left { "Move this key to the nearest free frame before it" } else { "There is no key here to move" }, left, false, Kind::Ghost)
-            && let Some(to) = (0..self.pointer).rev().find(|f| !item.keys.contains_key(f))
+        if tb.action(
+            "key_earlier",
+            Icon::Back,
+            "",
+            if left {
+                "Move this key to the nearest free frame before it"
+            } else {
+                "There is no key here to move"
+            },
+            left,
+            false,
+            Kind::Ghost,
+        ) && let Some(to) = (0..self.pointer).rev().find(|f| !item.keys.contains_key(f))
         {
             self.post(LanimCmd::MoveKey { name: item.name.clone(), from: self.pointer, to });
             self.pointer = to;
         }
-        if tb.action("key_later", Icon::Forward, "", if right { "Move this key to the nearest free frame after it" } else { "There is no key here to move" }, right, false, Kind::Ghost)
-            && let Some(to) = (self.pointer + 1..item.frame_count).find(|f| !item.keys.contains_key(f))
+        if tb.action(
+            "key_later",
+            Icon::Forward,
+            "",
+            if right {
+                "Move this key to the nearest free frame after it"
+            } else {
+                "There is no key here to move"
+            },
+            right,
+            false,
+            Kind::Ghost,
+        ) && let Some(to) = (self.pointer + 1..item.frame_count).find(|f| !item.keys.contains_key(f))
         {
             self.post(LanimCmd::MoveKey { name: item.name.clone(), from: self.pointer, to });
             self.pointer = to;
@@ -419,7 +516,15 @@ impl LanimDoc {
         tb.spring();
         tb.group(4);
         let play = self.playing.is_some();
-        if tb.action("play", if play { Icon::Stop } else { Icon::Play }, if play { "Stop" } else { "Play" }, if play { "Stop the animation" } else { "Play the animation in real time" }, true, play, Kind::Ghost) {
+        if tb.action(
+            "play",
+            if play { Icon::Stop } else { Icon::Play },
+            if play { "Stop" } else { "Play" },
+            if play { "Stop the animation" } else { "Play the animation in real time" },
+            true,
+            play,
+            Kind::Ghost,
+        ) {
             self.playing = if play { None } else { Some((now, self.pointer)) };
         }
         tb.end();
@@ -449,7 +554,8 @@ impl LanimDoc {
                 if count != before {
                     pending = Some(count.clamp(1, 100_000));
                 }
-                if !r.dragged() && !r.has_focus()
+                if !r.dragged()
+                    && !r.has_focus()
                     && let Some(n) = pending.take()
                     && n != item.frame_count
                 {
@@ -457,15 +563,22 @@ impl LanimDoc {
                 }
             });
             g.section("Current", true, None, |g| {
-                g.row("Frame", "The frame the timeline points at", PropFlags::READ_ONLY, 0, |ui| read_only(ui, &pointer.to_string(), Clip::End));
+                g.row("Frame", "The frame the timeline points at", PropFlags::READ_ONLY, 0, |ui| {
+                    read_only(ui, &pointer.to_string(), Clip::End)
+                });
                 match key {
                     Some(argb) => {
                         g.row("Color", "The key's colour", PropFlags::NONE, 0, |ui| {
                             let mut c = paint_color(argb, false);
                             let r = color(ui, &mut c);
                             if r.changed() {
-                                let rgb = (u32::from(c.r()) << 16) | (u32::from(c.g()) << 8) | u32::from(c.b());
-                                cmds.push(LanimCmd::SetKey { name: name.clone(), frame: pointer, color: (argb & 0xFF00_0000) | rgb });
+                                let rgb =
+                                    (u32::from(c.r()) << 16) | (u32::from(c.g()) << 8) | u32::from(c.b());
+                                cmds.push(LanimCmd::SetKey {
+                                    name: name.clone(),
+                                    frame: pointer,
+                                    color: (argb & 0xFF00_0000) | rgb,
+                                });
                             }
                         });
                         g.row("Alpha", "The key's alpha, 0 to 255", PropFlags::NONE, 0, |ui| {
@@ -473,13 +586,19 @@ impl LanimDoc {
                             let r = integer(ui, &mut a, 1.0, "");
                             if a != (argb >> 24) as i32 {
                                 let a = a.clamp(0, 255) as u32;
-                                cmds.push(LanimCmd::SetKey { name: name.clone(), frame: pointer, color: (a << 24) | (argb & 0xFF_FFFF) });
+                                cmds.push(LanimCmd::SetKey {
+                                    name: name.clone(),
+                                    frame: pointer,
+                                    color: (a << 24) | (argb & 0xFF_FFFF),
+                                });
                             }
                             seal |= r.drag_stopped() || r.lost_focus();
                         });
                     }
                     None => {
-                        g.row("Key", "", PropFlags::READ_ONLY, 0, |ui| read_only(ui, "none at this frame", Clip::End));
+                        g.row("Key", "", PropFlags::READ_ONLY, 0, |ui| {
+                            read_only(ui, "none at this frame", Clip::End)
+                        });
                     }
                 }
             });
@@ -543,7 +662,9 @@ impl LibraryDoc for LanimDoc {
             let item = args.str("item").unwrap_or_default().to_owned();
             let snap = self.store.snapshot();
             let keys = Self::keys(&snap.lib);
-            let Some(at) = find(&keys, &item) else { return Err(format!("no light animation is named or matches '{item}'")) };
+            let Some(at) = find(&keys, &item) else {
+                return Err(format!("no light animation is named or matches '{item}'"));
+            };
             let name = keys.get(at).copied().unwrap_or_default().to_owned();
             self.select(&name);
             if let Some(frame) = args.i64("frame").filter(|f| *f >= 0) {
@@ -582,14 +703,38 @@ impl Document for LanimDoc {
     fn toolbar<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>, cx: &mut DocCx<'_>) {
         let dirty = self.store.is_dirty();
         tb.group(1);
-        if tb.action("save", Icon::Save, "Save", if dirty { "Save the light animation library (lanims.xr)" } else { "No unsaved changes" }, dirty, false, Kind::Ghost) {
+        if tb.action(
+            "save",
+            Icon::Save,
+            "Save",
+            if dirty { "Save the light animation library (lanims.xr)" } else { "No unsaved changes" },
+            dirty,
+            false,
+            Kind::Ghost,
+        ) {
             self.save_now();
         }
-        if tb.action("reload", Icon::Reload, "Reload", "Read the light animation library from disk again", true, false, Kind::Ghost) {
+        if tb.action(
+            "reload",
+            Icon::Reload,
+            "Reload",
+            "Read the light animation library from disk again",
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             self.reload(cx.ctx);
         }
         tb.group(0);
-        if tb.action("alpha", Icon::Eye, "Alpha", "Show the colours' alpha over a checkerboard", true, self.render_alpha, Kind::Ghost) {
+        if tb.action(
+            "alpha",
+            Icon::Eye,
+            "Alpha",
+            "Show the colours' alpha over a checkerboard",
+            true,
+            self.render_alpha,
+            Kind::Ghost,
+        ) {
             self.render_alpha = !self.render_alpha;
         }
     }
@@ -601,13 +746,22 @@ impl Document for LanimDoc {
         let rows = shown(&keys, &|_| true, &self.list.search);
         // only an empty list says where the library is read from
         let empty_text = if snap.loaded && keys.is_empty() {
-            format!("lanims.xr in {} holds no light animation.", folder_text(&self.editor, &EditorDirs::of(&self.editor).gamedata))
+            format!(
+                "lanims.xr in {} holds no light animation.",
+                folder_text(&self.editor, &EditorDirs::of(&self.editor).gamedata)
+            )
         } else {
             String::new()
         };
-        let empty = Empty { title: if snap.loaded { "No light animations" } else { "Reading the library..." }, text: &empty_text, action: None };
+        let empty = Empty {
+            title: if snap.loaded { "No light animations" } else { "Reading the library..." },
+            text: &empty_text,
+            action: None,
+        };
         let selected = self.selected.clone();
-        let out = pane(ui, list_r, "light_animations.list.pane", false, false, |ui| self.list.draw(ui, "light_animations", &keys, &rows, &selected, &empty));
+        let out = pane(ui, list_r, "light_animations.list.pane", false, false, |ui| {
+            self.list.draw(ui, "light_animations", &keys, &rows, &selected, &empty)
+        });
         if let Some(i) = out.picked
             && let Some(name) = keys.get(i)
         {
@@ -623,14 +777,26 @@ impl Document for LanimDoc {
             pane(ui, preview_r, "light_animations.preview", true, false, |ui| match &item {
                 Some(item) => self.draw_preview(ui, item),
                 None => {
-                    state::empty_state(ui, Icon::Light, "No light animation selected", "Pick one in the list to see its colours and edit its keys.", None);
+                    state::empty_state(
+                        ui,
+                        Icon::Light,
+                        "No light animation selected",
+                        "Pick one in the list to see its colours and edit its keys.",
+                        None,
+                    );
                 }
             });
         }
         pane(ui, details_r, "light_animations.details", false, true, |ui| match &item {
             Some(item) => self.draw_properties(ui, item),
             None => {
-                state::empty_state(ui, Icon::Settings, "No properties", "Pick a light animation to edit it.", None);
+                state::empty_state(
+                    ui,
+                    Icon::Settings,
+                    "No properties",
+                    "Pick a light animation to edit it.",
+                    None,
+                );
             }
         });
         ui.allocate_rect(ui.max_rect(), Sense::hover());
@@ -698,7 +864,12 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn item() -> LightAnim {
-        LightAnim { name: "flicker".into(), fps: 15.0, frame_count: 20, keys: BTreeMap::from([(0, 0xff00_0000), (10, 0xffff_ffff), (20, 0xff10_1010)]) }
+        LightAnim {
+            name: "flicker".into(),
+            fps: 15.0,
+            frame_count: 20,
+            keys: BTreeMap::from([(0, 0xff00_0000), (10, 0xffff_ffff), (20, 0xff10_1010)]),
+        }
     }
 
     #[test]

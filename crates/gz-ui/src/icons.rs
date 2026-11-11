@@ -649,7 +649,8 @@ pub fn sheet(ui: &mut Ui, first: usize) {
     let cell_h = big + gap * 2.0 + crate::font::Font::Small.line();
     let cols = ((ui.available_width() / cell_w) as usize).max(1);
     for row in icons.chunks(cols) {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(cols as f32 * cell_w, cell_h), egui::Sense::hover());
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(cols as f32 * cell_w, cell_h), egui::Sense::hover());
         if !ui.is_rect_visible(rect) {
             continue;
         }
@@ -667,13 +668,29 @@ pub fn sheet(ui: &mut Ui, first: usize) {
                 let square = Rect::from_min_size(min, egui::vec2(side, side));
                 if side == big {
                     let unit = side / geometry::GRID;
-                    painter.rect_stroke(square, 0.0, egui::Stroke::new(1.0, p.border.gamma_multiply(0.8)), egui::StrokeKind::Inside);
-                    painter.rect_stroke(square.shrink(unit), 0.0, egui::Stroke::new(1.0, p.border.gamma_multiply(0.35)), egui::StrokeKind::Inside);
+                    painter.rect_stroke(
+                        square,
+                        0.0,
+                        egui::Stroke::new(1.0, p.border.gamma_multiply(0.8)),
+                        egui::StrokeKind::Inside,
+                    );
+                    painter.rect_stroke(
+                        square.shrink(unit),
+                        0.0,
+                        egui::Stroke::new(1.0, p.border.gamma_multiply(0.35)),
+                        egui::StrokeKind::Inside,
+                    );
                 }
                 draw(painter, *icon, square, ink);
                 x += side + gap;
             }
-            painter.text(egui::pos2(x0, base + gap * 0.5), egui::Align2::LEFT_TOP, icon.name(), font.clone(), p.text_muted);
+            painter.text(
+                egui::pos2(x0, base + gap * 0.5),
+                egui::Align2::LEFT_TOP,
+                icon.name(),
+                font.clone(),
+                p.text_muted,
+            );
         }
     }
 }
@@ -738,7 +755,11 @@ mod tests {
         for icon in [Icon::StarFilled, Icon::BookmarkFilled] {
             let g = all.get(icon as usize);
             let fill = g.and_then(|g| g.prims.iter().find(|p| p.kind == PrimKind::Fill).map(|p| (g, *p)));
-            assert!(fill.is_some_and(|(g, p)| g.triangles(&p).len() == (p.count as usize - 2) * 3), "{}", icon.name());
+            assert!(
+                fill.is_some_and(|(g, p)| g.triangles(&p).len() == (p.count as usize - 2) * 3),
+                "{}",
+                icon.name()
+            );
         }
     }
 
@@ -750,7 +771,9 @@ mod tests {
         let tris = ear_clip(&pts);
         assert_eq!(tris.len(), 9);
         let area: f32 = tris
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 let [a, b, c] = [t[0], t[1], t[2]].map(|i| pts[i as usize]);
                 ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5

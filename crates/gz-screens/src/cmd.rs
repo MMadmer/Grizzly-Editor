@@ -15,7 +15,10 @@ use parking_lot::RwLock;
 use serde_json::{Map, Value, json};
 
 use crate::import::{FileKind, file_kind, import, stem};
-use crate::model::{Fit, HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, Layer, MENU, PAUSE, Screen, Screens, Track, atof, sanitize, scan_floats, split};
+use crate::model::{
+    Fit, HIDE_BAR, HIDE_PERCENT, HIDE_STAGE, HIDE_TIP, LOADING, Layer, MENU, PAUSE, Screen, Screens, Track,
+    atof, sanitize, scan_floats, split,
+};
 use crate::validate::validate;
 
 const AREA: &str = "gz-screens";
@@ -42,7 +45,10 @@ impl GameLevels {
         editor.services.get_or_init(Self::default)
     }
 
-    pub fn provide(&self, f: impl Fn(Arc<Editor>) -> BoxFuture<'static, Option<Vec<String>>> + Send + Sync + 'static) {
+    pub fn provide(
+        &self,
+        f: impl Fn(Arc<Editor>) -> BoxFuture<'static, Option<Vec<String>>> + Send + Sync + 'static,
+    ) {
         *self.hook.write() = Some(Arc::new(f));
     }
 
@@ -53,7 +59,12 @@ impl GameLevels {
 }
 
 /// The problems of `s` in the open project (`EditorScreens::Validate`), on the IO pool.
-pub async fn problems(editor: &Arc<Editor>, root: PathBuf, manifest: &Arc<ManifestService>, s: Screens) -> Vec<String> {
+pub async fn problems(
+    editor: &Arc<Editor>,
+    root: PathBuf,
+    manifest: &Arc<ManifestService>,
+    s: Screens,
+) -> Vec<String> {
     let levels = GameLevels::of(editor).levels(editor).await;
     let manifest = manifest.clone();
     editor.exec.io(move || validate(&root, &s, &|rel| manifest.outside_build(rel), levels.as_deref())).await
@@ -76,16 +87,27 @@ impl BuildCheck for ScreensCheck {
         Some("The screens and music have errors:")
     }
 
-    fn check(&self, editor: Arc<Editor>, session: Arc<ProjectSession>, _walk: Arc<BuildWalk>) -> BoxFuture<'static, Vec<Problem>> {
+    fn check(
+        &self,
+        editor: Arc<Editor>,
+        session: Arc<ProjectSession>,
+        _walk: Arc<BuildWalk>,
+    ) -> BoxFuture<'static, Vec<Problem>> {
         Box::pin(async move {
             // screens and music name files of the project: one the module would not hold is a
             // screen the game cannot show
-            let Ok(manifest) = ManifestService::of_session(&editor, &session).await else { return Vec::new() };
+            let Ok(manifest) = ManifestService::of_session(&editor, &session).await else {
+                return Vec::new();
+            };
             let _ = manifest.sync().await;
             let snap = manifest.snapshot();
             let Some(doc) = snap.doc() else { return Vec::new() };
             let s = Screens::parse(doc);
-            problems(&editor, session.root.clone(), &manifest, s).await.iter().map(|l| as_problem(l)).collect()
+            problems(&editor, session.root.clone(), &manifest, s)
+                .await
+                .iter()
+                .map(|l| as_problem(l))
+                .collect()
         })
     }
 }
@@ -126,7 +148,10 @@ fn layer_json(l: &Layer) -> Value {
     o.insert("kind".into(), json!(kind.label()));
     o.insert("fit".into(), json!(l.fit.name()));
     o.insert("opacity".into(), json_number(l.opacity));
-    o.insert("rect".into(), Value::Array(vec![json_number(l.x), json_number(l.y), json_number(l.w), json_number(l.h)]));
+    o.insert(
+        "rect".into(),
+        Value::Array(vec![json_number(l.x), json_number(l.y), json_number(l.w), json_number(l.h)]),
+    );
     o.insert("texture".into(), json!(l.texture));
     o.insert("sound".into(), json!(l.sound));
     Value::Object(o)
@@ -136,7 +161,9 @@ fn layer_json(l: &Layer) -> Value {
 #[must_use]
 pub fn answer(s: &Screens, problems: &[String]) -> Value {
     let side = |i: usize| {
-        let pick = |v: &[bool; 2], yes: &str, no: &str| if v.get(i).copied().unwrap_or(false) { yes.to_owned() } else { no.to_owned() };
+        let pick = |v: &[bool; 2], yes: &str, no: &str| {
+            if v.get(i).copied().unwrap_or(false) { yes.to_owned() } else { no.to_owned() }
+        };
         json!({ "screens": pick(&s.only_screens, "only", "mix"), "music": pick(&s.only_music, "only", "mix"), "end": pick(&s.next_track, "next", "loop") })
     };
     let screens: Vec<Value> = s
@@ -151,7 +178,13 @@ pub fn answer(s: &Screens, problems: &[String]) -> Value {
             o.insert("weight".into(), json_number(d.weight));
             o.insert("music".into(), json!(d.music));
             o.insert("tracks".into(), json!(d.tracks));
-            o.insert("hide".into(), json!(mask_text(d.hide, &[(HIDE_BAR, "bar"), (HIDE_PERCENT, "percent"), (HIDE_STAGE, "stage"), (HIDE_TIP, "tip")])));
+            o.insert(
+                "hide".into(),
+                json!(mask_text(
+                    d.hide,
+                    &[(HIDE_BAR, "bar"), (HIDE_PERCENT, "percent"), (HIDE_STAGE, "stage"), (HIDE_TIP, "tip")]
+                )),
+            );
             o.insert("layers".into(), Value::Array(d.layers.iter().map(layer_json).collect()));
             Value::Object(o)
         })
@@ -239,7 +272,10 @@ fn arg_bool(args: &Args, key: &str) -> Option<bool> {
 
 /// `ParseSurfaces`: every surface named anywhere in the text.
 fn parse_surfaces(text: &str) -> u32 {
-    [("loading", LOADING), ("menu", MENU), ("pause", PAUSE)].into_iter().filter(|(n, _)| text.contains(n)).fold(0, |m, (_, b)| m | b)
+    [("loading", LOADING), ("menu", MENU), ("pause", PAUSE)]
+        .into_iter()
+        .filter(|(n, _)| text.contains(n))
+        .fold(0, |m, (_, b)| m | b)
 }
 
 /// What a screen shows on when a drop makes it: the loading screen, the tab's first surface.
@@ -318,7 +354,10 @@ impl Cx<'_> {
             }
         }
         if let Some(v) = arg(self.args, "hide") {
-            d.hide = [("bar", HIDE_BAR), ("percent", HIDE_PERCENT), ("stage", HIDE_STAGE), ("tip", HIDE_TIP)].into_iter().filter(|(n, _)| v.contains(n)).fold(0, |m, (_, b)| m | b);
+            d.hide = [("bar", HIDE_BAR), ("percent", HIDE_PERCENT), ("stage", HIDE_STAGE), ("tip", HIDE_TIP)]
+                .into_iter()
+                .filter(|(n, _)| v.contains(n))
+                .fold(0, |m, (_, b)| m | b);
         }
         if let Some(v) = arg(self.args, "new_id") {
             let wanted = sanitize(&v);
@@ -376,7 +415,12 @@ impl Cx<'_> {
             match found {
                 None => {
                     let id = s.new_screen_id(&stem(&rel));
-                    s.screens.push(Screen { id, show: DEFAULT_SHOW, layers: vec![Layer { file: rel, ..Layer::default() }], ..Screen::default() });
+                    s.screens.push(Screen {
+                        id,
+                        show: DEFAULT_SHOW,
+                        layers: vec![Layer { file: rel, ..Layer::default() }],
+                        ..Screen::default()
+                    });
                 }
                 Some(d) => match usize::try_from(layer).ok().and_then(|i| d.layers.get_mut(i)) {
                     Some(l) => l.file = rel,
@@ -421,7 +465,10 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
             }
         }
         "screen_add" => {
-            let mut d = Screen { id: s.new_screen_id(if id.is_empty() { "screen" } else { &id }), ..Screen::default() };
+            let mut d = Screen {
+                id: s.new_screen_id(if id.is_empty() { "screen" } else { &id }),
+                ..Screen::default()
+            };
             cx.apply_screen(&mut d, s);
             if arg(cx.args, "file").is_some_and(|v| !v.is_empty()) {
                 let mut l = Layer::default();
@@ -476,7 +523,8 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
                         }
                         _ => {
                             let last = i64::try_from(len - 1).unwrap_or(0);
-                            let to = usize::try_from(arg_int(cx.args, "to", index).clamp(0, last)).unwrap_or(0);
+                            let to =
+                                usize::try_from(arg_int(cx.args, "to", index).clamp(0, last)).unwrap_or(0);
                             let moved = d.layers.remove(k);
                             d.layers.insert(to.min(d.layers.len()), moved);
                         }
@@ -486,7 +534,8 @@ fn run(cx: &mut Cx<'_>, s: &mut Screens) -> Result<(), String> {
             None => cx.err = no_screen(&id),
         },
         "track_add" => {
-            let mut t = Track { id: s.new_track_id(if id.is_empty() { "track" } else { &id }), ..Track::default() };
+            let mut t =
+                Track { id: s.new_track_id(if id.is_empty() { "track" } else { &id }), ..Track::default() };
             cx.apply_track(&mut t);
             if t.file.is_empty() && cx.err.is_empty() {
                 "a track needs a file".clone_into(&mut cx.err);
@@ -556,7 +605,10 @@ async fn screens_set(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
         let Some(doc) = now.doc() else { return Err(refuse("mod.ltx not found in the project")) };
         s.edits(doc)
     };
-    manifest.edit(edits, origin).await.map_err(|e| if e.code == "io" { refuse("can't write mod.ltx") } else { e })?;
+    manifest
+        .edit(edits, origin)
+        .await
+        .map_err(|e| if e.code == "io" { refuse("can't write mod.ltx") } else { e })?;
     let found = problems(&ed, PathBuf::from(project.root()), &manifest, s.clone()).await;
     Ok(answer(&s, &found))
 }

@@ -6,11 +6,16 @@
 
 use std::sync::Arc;
 
-use egui::{Align, Color32, CornerRadius, Layout, PointerButton, Rect, ScrollArea, Sense, Ui, UiBuilder, Vec2, pos2};
+use egui::{
+    Align, Color32, CornerRadius, Layout, PointerButton, Rect, ScrollArea, Sense, Ui, UiBuilder, Vec2, pos2,
+};
 use glam::{Mat4, Vec2 as GVec2, Vec3};
 use gz_app::{Chord, DocCx, Document, OpenRequest, WindowLink};
 use gz_editor::Editor;
-use gz_render::{Camera, Color, DrawList, FramePacket, Instance, InstanceFlags, MeshHandle, Projection, Renderer, View, ViewFlags, ViewMode, build_packet, pick_ray};
+use gz_render::{
+    Camera, Color, DrawList, FramePacket, Instance, InstanceFlags, MeshHandle, Projection, Renderer, View,
+    ViewFlags, ViewMode, build_packet, pick_ray,
+};
 use gz_ui::grid::read_only;
 use gz_ui::splitter::splitter_tail;
 use gz_ui::text::{self, Clip};
@@ -57,7 +62,8 @@ pub struct Orbit {
 impl Orbit {
     #[must_use]
     pub fn new(bounds: &gz_render::Aabb) -> Self {
-        let mut o = Self { yaw: 0.0, pitch: 0.0, distance: 1.0, pan: Vec3::ZERO, center: Vec3::ZERO, radius: 1.0 };
+        let mut o =
+            Self { yaw: 0.0, pitch: 0.0, distance: 1.0, pan: Vec3::ZERO, center: Vec3::ZERO, radius: 1.0 };
         o.reset(bounds);
         o
     }
@@ -101,7 +107,11 @@ impl Orbit {
         let eye = pivot + self.dir() * self.distance;
         let near = (self.distance - self.radius * 2.0).max(0.01);
         let far = self.distance + self.radius * 4.0 + 1.0;
-        Camera::look_at(eye, pivot).with_projection(Projection::Perspective { fov_y: FOV_DEGREES.to_radians(), near, far })
+        Camera::look_at(eye, pivot).with_projection(Projection::Perspective {
+            fov_y: FOV_DEGREES.to_radians(),
+            near,
+            far,
+        })
     }
 
     /// The left button turns the model: `d` points dragged.
@@ -181,14 +191,30 @@ pub fn floor_lines(bounds: &gz_render::Aabb, radius: f32) -> Vec<(Vec3, Vec3, u8
         }
         step = round_step(step * 2.5);
     }
-    let tier = |n: i64| if n == 0 { 2 } else if n % 5 == 0 { 1 } else { 0 };
+    let tier = |n: i64| {
+        if n == 0 {
+            2
+        } else if n % 5 == 0 {
+            1
+        } else {
+            0
+        }
+    };
     let y = bounds.min.y;
     let mut out = Vec::with_capacity(((i1 - i0 + 1) + (k1 - k0 + 1)) as usize);
     for i in i0..=i1 {
-        out.push((Vec3::new(i as f32 * step, y, k0 as f32 * step), Vec3::new(i as f32 * step, y, k1 as f32 * step), tier(i)));
+        out.push((
+            Vec3::new(i as f32 * step, y, k0 as f32 * step),
+            Vec3::new(i as f32 * step, y, k1 as f32 * step),
+            tier(i),
+        ));
     }
     for k in k0..=k1 {
-        out.push((Vec3::new(i0 as f32 * step, y, k as f32 * step), Vec3::new(i1 as f32 * step, y, k as f32 * step), tier(k)));
+        out.push((
+            Vec3::new(i0 as f32 * step, y, k as f32 * step),
+            Vec3::new(i1 as f32 * step, y, k as f32 * step),
+            tier(k),
+        ));
     }
     out
 }
@@ -238,14 +264,21 @@ pub struct ModelDoc {
 
 impl ModelDoc {
     #[must_use]
-    pub fn new(editor: &Arc<Editor>, name: String, source: ModelSource, load: Option<Pending<ModelData>>) -> Self {
+    pub fn new(
+        editor: &Arc<Editor>,
+        name: String,
+        source: ModelSource,
+        load: Option<Pending<ModelData>>,
+    ) -> Self {
         let renderer = editor.services.get::<WindowLink>().and_then(|l| l.gpu()).map(|gpu| {
             let (device, queue) = (gpu.device.clone(), gpu.queue.clone());
             let exec = editor.exec.clone();
             let pools = exec.clone();
             Pending::spawn(&exec, async move {
                 let inner = pools.clone();
-                pools.cpu(move || Renderer::new(device, queue, inner).map(Arc::new).map_err(|e| e.to_string())).await
+                pools
+                    .cpu(move || Renderer::new(device, queue, inner).map(Arc::new).map_err(|e| e.to_string()))
+                    .await
             })
         });
         Self {
@@ -329,7 +362,15 @@ impl ModelDoc {
     }
 
     /// The view asked for over MCP; `None` keeps (`McpView`).
-    pub fn apply_view(&mut self, lighting: Option<usize>, wireframe: Option<bool>, bones: Option<bool>, details: Option<bool>, frame: bool, reset: bool) {
+    pub fn apply_view(
+        &mut self,
+        lighting: Option<usize>,
+        wireframe: Option<bool>,
+        bones: Option<bool>,
+        details: Option<bool>,
+        frame: bool,
+        reset: bool,
+    ) {
         if let Some(l) = lighting {
             self.lighting = l.min(1);
         }
@@ -367,7 +408,8 @@ impl ModelDoc {
         let orbit = self.orbit?;
         let p = palette(ctx);
         let mut list = DrawList::new();
-        let mut inst = Instance::new(mesh, Mat4::IDENTITY).with_flags(InstanceFlags::NO_ID | InstanceFlags::NO_CULL);
+        let mut inst =
+            Instance::new(mesh, Mat4::IDENTITY).with_flags(InstanceFlags::NO_ID | InstanceFlags::NO_CULL);
         inst.bounds = Some(data.bounds);
         if let Some(pose) = &data.pose {
             inst = inst.with_pose(pose.clone());
@@ -421,14 +463,38 @@ impl ModelDoc {
     fn toolbar_items<'a>(&'a mut self, tb: &mut Toolbar<'_, 'a>) {
         let Some(data) = self.shown() else { return };
         tb.group(3);
-        if tb.action("frame", Icon::FrameAll, "Frame", "Frame the model, keeping the angle (F)", true, false, Kind::Ghost) {
+        if tb.action(
+            "frame",
+            Icon::FrameAll,
+            "Frame",
+            "Frame the model, keeping the angle (F)",
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             self.frame_model();
         }
-        if tb.action("reset_view", Icon::Refresh, "Reset View", "Back to the three-quarter view, framed", true, false, Kind::Ghost) {
+        if tb.action(
+            "reset_view",
+            Icon::Refresh,
+            "Reset View",
+            "Back to the three-quarter view, framed",
+            true,
+            false,
+            Kind::Ghost,
+        ) {
             self.reset_view();
         }
         tb.group(2);
-        if tb.action("wireframe", Icon::Wireframe, "Wireframe", "Draw the triangles' edges only", true, self.wireframe, Kind::Ghost) {
+        if tb.action(
+            "wireframe",
+            Icon::Wireframe,
+            "Wireframe",
+            "Draw the triangles' edges only",
+            true,
+            self.wireframe,
+            Kind::Ghost,
+        ) {
             self.wireframe = !self.wireframe;
         }
         let bones = data.bones > 0 && data.object.is_none();
@@ -439,7 +505,15 @@ impl ModelDoc {
         tb.group(5);
         tb.segmented("lighting", "Lighting", &mut self.lighting, &["Studio", "Unlit"], "Studio lights the model from the camera, over a soft ambient; Unlit shows its textures as they are", true);
         tb.group(4);
-        if tb.action("details", Icon::SidebarRight, "Details", "Show what the model is made of beside the viewport", true, self.show_details, Kind::Ghost) {
+        if tb.action(
+            "details",
+            Icon::SidebarRight,
+            "Details",
+            "Show what the model is made of beside the viewport",
+            true,
+            self.show_details,
+            Kind::Ghost,
+        ) {
             self.show_details = !self.show_details;
         }
     }
@@ -450,7 +524,8 @@ impl ModelDoc {
         ui.painter().rect_filled(rect, CornerRadius::ZERO, p.canvas);
         let resp = ui.interact(rect, ui.scope_id().with("model.canvas"), Sense::click_and_drag());
         let ppp = ctx.pixels_per_point();
-        let size = [((rect.width() * ppp).round() as u32).max(1), ((rect.height() * ppp).round() as u32).max(1)];
+        let size =
+            [((rect.width() * ppp).round() as u32).max(1), ((rect.height() * ppp).round() as u32).max(1)];
         if let Some(o) = self.orbit.as_mut() {
             // navigation goes first: the frame rendered next already shows it
             let d = resp.drag_delta();
@@ -475,14 +550,25 @@ impl ModelDoc {
 
         let renderer = self.renderer();
         let Some(renderer) = renderer else {
-            let failed = self.renderer.as_ref().and_then(Pending::get).and_then(|r| r.as_ref().as_ref().err().cloned());
-            let mut child = ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Center)));
+            let failed = self
+                .renderer
+                .as_ref()
+                .and_then(Pending::get)
+                .and_then(|r| r.as_ref().as_ref().err().cloned());
+            let mut child =
+                ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::top_down(Align::Center)));
             match failed {
                 Some(e) => {
                     state::empty_state(&mut child, Icon::Warning, "The viewport cannot be drawn", &e, None);
                 }
                 None if self.renderer.is_none() => {
-                    state::empty_state(&mut child, Icon::Warning, "The viewport cannot be drawn", "The editor runs without a graphics device.", None);
+                    state::empty_state(
+                        &mut child,
+                        Icon::Warning,
+                        "The viewport cannot be drawn",
+                        "The editor runs without a graphics device.",
+                        None,
+                    );
                 }
                 None => state::busy_line(&mut child, "Starting the viewport..."),
             }
@@ -492,7 +578,13 @@ impl ModelDoc {
 
         // a new packet only when what it shows changed, or the assets it waited on arrived
         if let (Some(list), Some(view)) = (self.draw_list(&ctx), self.view_for(&ctx, size)) {
-            let key = ViewKey { orbit: self.orbit.unwrap_or_else(|| Orbit::new(&gz_render::Aabb::EMPTY)), size, mode: self.mode(), bones: self.show_bones, model: self.uploaded };
+            let key = ViewKey {
+                orbit: self.orbit.unwrap_or_else(|| Orbit::new(&gz_render::Aabb::EMPTY)),
+                size,
+                mode: self.mode(),
+                bones: self.show_bones,
+                model: self.uploaded,
+            };
             let stale = self.packet.lock().as_ref().is_some_and(|pk| pk.is_stale(renderer.assets()));
             if self.last_key != Some(key) || stale {
                 self.last_key = Some(key);
@@ -615,7 +707,12 @@ impl ModelDoc {
         let visual = d.is_some_and(|d| d.object.is_none());
         out.insert("bones_shown".into(), json!(self.show_bones && bones > 0 && visual && shown));
         out.insert("panes".into(), json!({ "details": self.show_details && shown, "details_width": if self.show_details { self.details_w.round() } else { 0.0 } }));
-        let textures: Vec<Value> = d.map_or_else(Vec::new, |d| d.textures.iter().map(|t| json!({ "name": crate::paths::json_path_str(&t.name), "from": t.from })).collect());
+        let textures: Vec<Value> = d.map_or_else(Vec::new, |d| {
+            d.textures
+                .iter()
+                .map(|t| json!({ "name": crate::paths::json_path_str(&t.name), "from": t.from }))
+                .collect()
+        });
         out.insert("textures".into(), Value::Array(textures));
         out
     }
@@ -676,7 +773,10 @@ impl Document for ModelDoc {
             let split = splitter_tail(ui, "model.details", true, CANVAS_MIN, SIDE_MIN, DETAILS_W);
             self.details_w = split.size;
             let gap = ui.spacing().item_spacing.x;
-            let canvas = Rect::from_min_max(full.min, pos2((full.max.x - split.size - gap).max(full.min.x + 1.0), full.max.y));
+            let canvas = Rect::from_min_max(
+                full.min,
+                pos2((full.max.x - split.size - gap).max(full.min.x + 1.0), full.max.y),
+            );
             (canvas, Some(Rect::from_min_max(pos2(full.max.x - split.size, full.min.y), full.max)))
         } else {
             self.details_w = 0.0;
@@ -687,27 +787,50 @@ impl Document for ModelDoc {
             None if self.load.is_some() => {
                 let p = palette(&ctx);
                 ui.painter().rect_filled(canvas, CornerRadius::ZERO, p.canvas);
-                let mut child = ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
+                let mut child =
+                    ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
                 state::busy_line(&mut child, &format!("Loading {}...", crate::paths::leaf(&self.name)));
             }
             None => {
                 let p = palette(&ctx);
                 ui.painter().rect_filled(canvas, CornerRadius::ZERO, p.canvas);
-                let mut child = ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
-                state::empty_state(&mut child, Icon::FileModel, "No model", "Double-click a model in the Content Browser to see it here.", None);
+                let mut child =
+                    ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
+                state::empty_state(
+                    &mut child,
+                    Icon::FileModel,
+                    "No model",
+                    "Double-click a model in the Content Browser to see it here.",
+                    None,
+                );
             }
             Some(d) if !d.error.is_empty() => {
                 let p = palette(&ctx);
                 ui.painter().rect_filled(canvas, CornerRadius::ZERO, p.canvas);
-                let mut child = ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
-                state::empty_state(&mut child, Icon::Warning, "This model cannot be shown", &format!("{}: {}", d.name, d.error), None);
+                let mut child =
+                    ui.new_child(UiBuilder::new().max_rect(canvas).layout(Layout::top_down(Align::Center)));
+                state::empty_state(
+                    &mut child,
+                    Icon::Warning,
+                    "This model cannot be shown",
+                    &format!("{}: {}", d.name, d.error),
+                    None,
+                );
             }
             Some(_) => self.draw_viewport(ui, canvas),
         }
 
         if let Some(rect) = details {
-            let mut child = ui.new_child(UiBuilder::new().id_salt("model.details.pane").max_rect(rect.shrink(8.0)).layout(Layout::top_down(Align::Min)));
-            ScrollArea::vertical().id_salt("model.details.scroll").auto_shrink([false, false]).show(&mut child, |ui| self.draw_details(ui));
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .id_salt("model.details.pane")
+                    .max_rect(rect.shrink(8.0))
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            ScrollArea::vertical()
+                .id_salt("model.details.scroll")
+                .auto_shrink([false, false])
+                .show(&mut child, |ui| self.draw_details(ui));
         }
         ui.allocate_rect(full, Sense::hover());
     }

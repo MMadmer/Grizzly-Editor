@@ -92,7 +92,8 @@ pub fn system_font_dir() -> PathBuf {
 impl FontFiles {
     /// The candidates of each face, best first.
     pub const BODY: &'static [&'static str] = &["segoeui.ttf", "tahoma.ttf", "arial.ttf"];
-    pub const STRONG: &'static [&'static str] = &["seguisb.ttf", "segoeuib.ttf", "tahomabd.ttf", "arialbd.ttf"];
+    pub const STRONG: &'static [&'static str] =
+        &["seguisb.ttf", "segoeuib.ttf", "tahomabd.ttf", "arialbd.ttf"];
     pub const MONO: &'static [&'static str] = &["CascadiaMono.ttf", "consola.ttf", "cour.ttf"];
 
     /// Reads the three faces from a folder. Blocking: three file reads.

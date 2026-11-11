@@ -223,7 +223,9 @@ mod tests {
     #[test]
     fn floor_and_ceil_agree_with_the_library_on_ordinary_values() {
         // -0.0 is left out on purpose: the trick reads its sign bit and answers -1 / 1
-        for &v in &[0.0f32, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.999, -2.999, 126.0, 65535.4, -32767.2, 1e6, -1e6] {
+        for &v in
+            &[0.0f32, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.999, -2.999, 126.0, 65535.4, -32767.2, 1e6, -1e6]
+        {
             assert_eq!(i_floor(v), v.floor() as i32, "floor of {v}");
             assert_eq!(i_ceil(v), v.ceil() as i32, "ceil of {v}");
         }

@@ -69,7 +69,8 @@ fn declares_utf8(b: &[u8]) -> bool {
     let head = b.get(..b.len().min(256)).unwrap_or(&[]);
     let lower: Vec<u8> = head.to_ascii_lowercase();
     let Some(at) = lower.windows(5).position(|w| w == b"<?xml") else { return false };
-    let end = lower.get(at..).and_then(|r| r.windows(2).position(|w| w == b"?>")).map_or(lower.len(), |e| at + e);
+    let end =
+        lower.get(at..).and_then(|r| r.windows(2).position(|w| w == b"?>")).map_or(lower.len(), |e| at + e);
     let decl = lower.get(at..end).unwrap_or(&[]);
     decl.windows(5).any(|w| w == b"utf-8") || decl.windows(4).any(|w| w == b"utf8")
 }
@@ -85,6 +86,9 @@ fn name_start(c: char) -> bool {
 fn name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':') || !c.is_ascii()
 }
+
+/// The attributes of a tag as written.
+type Attrs = Vec<(Box<str>, Box<str>)>;
 
 struct Parser<'a> {
     s: &'a str,
@@ -109,7 +113,10 @@ impl<'a> Parser<'a> {
             self.line = 1;
         }
         let end = pos.min(self.s.len());
-        self.line += u32::try_from(self.s.as_bytes().get(self.line_at..end).map_or(0, |r| r.iter().filter(|&&c| c == b'\n').count())).unwrap_or(0);
+        self.line += u32::try_from(
+            self.s.as_bytes().get(self.line_at..end).map_or(0, |r| r.iter().filter(|&&c| c == b'\n').count()),
+        )
+        .unwrap_or(0);
         self.line_at = end;
         self.line
     }
@@ -123,7 +130,15 @@ impl<'a> Parser<'a> {
 
     fn add(&mut self, parent: u32, kind: Kind, value: String, attrs: Vec<(Box<str>, Box<str>)>) -> u32 {
         let id = u32::try_from(self.nodes.len()).unwrap_or(NONE);
-        self.nodes.push(Node { kind, value: value.into(), attrs, parent, first: NONE, last: NONE, next: NONE });
+        self.nodes.push(Node {
+            kind,
+            value: value.into(),
+            attrs,
+            parent,
+            first: NONE,
+            last: NONE,
+            next: NONE,
+        });
         let last = self.nodes.get(parent as usize).map_or(NONE, |p| p.last);
         if let Some(l) = self.nodes.get_mut(last as usize) {
             l.next = id;
@@ -228,8 +243,8 @@ impl<'a> Parser<'a> {
     }
 
     /// Attributes up to `>`, `/>` or `?>`. Returns them and whether the tag closed itself.
-    fn read_attrs(&mut self, tag: &str) -> (Vec<(Box<str>, Box<str>)>, bool) {
-        let mut attrs: Vec<(Box<str>, Box<str>)> = Vec::new();
+    fn read_attrs(&mut self, tag: &str) -> (Attrs, bool) {
+        let mut attrs: Attrs = Vec::new();
         loop {
             self.skip_ws();
             let rest = self.rest();
@@ -283,7 +298,10 @@ impl<'a> Parser<'a> {
             };
             if let Some(slot) = attrs.iter_mut().find(|(k, _)| **k == *name) {
                 // TinyXML takes the second value and stops reading the file here
-                self.warn(at, format!("The attribute '{name}' appears twice in <{tag}>; the last value is kept."));
+                self.warn(
+                    at,
+                    format!("The attribute '{name}' appears twice in <{tag}>; the last value is kept."),
+                );
                 slot.1 = value.into();
             } else {
                 attrs.push((name.into(), value.into()));
@@ -371,7 +389,10 @@ impl<'a> Parser<'a> {
                 let end = body.find('>');
                 let name = end.and_then(|e| body.get(..e)).unwrap_or(body).trim().to_owned();
                 self.pos += 2 + end.map_or(body.len(), |e| e + 1);
-                match stack.iter().rposition(|&e| self.nodes.get(e as usize).is_some_and(|n| *n.value == *name)) {
+                match stack
+                    .iter()
+                    .rposition(|&e| self.nodes.get(e as usize).is_some_and(|n| *n.value == *name))
+                {
                     Some(k) => {
                         if k + 1 != stack.len() {
                             let inner: Vec<String> = stack
@@ -385,7 +406,9 @@ impl<'a> Parser<'a> {
                         }
                         stack.truncate(k);
                     }
-                    None => self.warn(at, format!("The closing tag </{name}> closes nothing; it is ignored.")),
+                    None => {
+                        self.warn(at, format!("The closing tag </{name}> closes nothing; it is ignored."))
+                    }
                 }
                 continue;
             }
@@ -400,7 +423,8 @@ impl<'a> Parser<'a> {
                 continue;
             };
             let (attrs, closed) = self.read_attrs(&name);
-            if stack.is_empty() && self.nodes.iter().skip(1).any(|n| n.parent == 0 && n.kind == Kind::Element) {
+            if stack.is_empty() && self.nodes.iter().skip(1).any(|n| n.parent == 0 && n.kind == Kind::Element)
+            {
                 self.warn(at, format!("A second root element <{name}> follows the first."));
             }
             let id = self.add(parent, Kind::Element, name, attrs);
@@ -547,11 +571,20 @@ impl Document {
 
     /// `SearchForAttribute`: depth first over `start` and its siblings named `tag`.
     #[must_use]
-    pub fn search_for_attribute(&self, start: Option<NodeId>, tag: &str, attr: &str, value: &str) -> Option<NodeId> {
+    pub fn search_for_attribute(
+        &self,
+        start: Option<NodeId>,
+        tag: &str,
+        attr: &str,
+        value: &str,
+    ) -> Option<NodeId> {
         // an explicit stack: hostile nesting must not exhaust the thread's
         let mut stack: Vec<NodeId> = start.into_iter().collect();
         while let Some(node) = stack.pop() {
-            if self.kind(node) == Some(Kind::Element) && self.value(node) == tag && self.attr(Some(node), attr) == Some(value) {
+            if self.kind(node) == Some(Kind::Element)
+                && self.value(node) == tag
+                && self.attr(Some(node), attr) == Some(value)
+            {
                 return Some(node);
             }
             if let Some(next) = self.next_sibling(node, Some(tag)) {
@@ -659,7 +692,10 @@ mod tests {
     #[test]
     fn decodes_by_declaration() {
         assert_eq!(decode(&[0xEF, 0xBB, 0xBF, b'a']), "a");
-        assert_eq!(decode(b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\xd0\x96"), "<?xml version=\"1.0\" encoding=\"utf-8\"?>Ж");
+        assert_eq!(
+            decode(b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\xd0\x96"),
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>Ж"
+        );
         assert_eq!(decode(b"<a>\xc6</a>"), "<a>Ж</a>");
         let d = Document::parse("<?xml encoding=\"utf-8\"?><a>&#1046;</a>");
         assert_eq!(d.read(d.root()), Some("Ж"));

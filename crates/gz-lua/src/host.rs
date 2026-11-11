@@ -174,7 +174,9 @@ fn state_error(e: &mlua::Error) -> LuaError {
 
 impl Slot {
     fn new(limits: &Limits) -> Result<Self, LuaError> {
-        let lua = Lua::new_with(StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::JIT, LuaOptions::default()).map_err(|e| state_error(&e))?;
+        let lua =
+            Lua::new_with(StdLib::STRING | StdLib::TABLE | StdLib::MATH | StdLib::JIT, LuaOptions::default())
+                .map_err(|e| state_error(&e))?;
         // a compiled trace runs no hook: the budget must see every instruction
         let jit: Table = lua.globals().get("jit").map_err(|e| state_error(&e))?;
         let off: Function = jit.get("off").map_err(|e| state_error(&e))?;
@@ -196,7 +198,9 @@ impl Slot {
 
     /// The environment of `script`, loading the script on its first use in this state.
     fn env(&mut self, script: &Script) -> Result<Table, LuaError> {
-        if let Some((_, _, key)) = self.scripts.iter().find(|(rev, text, _)| *rev == script.rev && **text == *script.text) {
+        if let Some((_, _, key)) =
+            self.scripts.iter().find(|(rev, text, _)| *rev == script.rev && **text == *script.text)
+        {
             return self.lua.registry_value::<Table>(key).map_err(|e| state_error(&e));
         }
         let lua = &self.lua;
@@ -223,7 +227,14 @@ impl Slot {
         Ok(env)
     }
 
-    fn call(&mut self, script: &Script, function: &str, args: &[Arg], omit: &[&str], limits: &Limits) -> Result<Value, LuaError> {
+    fn call(
+        &mut self,
+        script: &Script,
+        function: &str,
+        args: &[Arg],
+        omit: &[&str],
+        limits: &Limits,
+    ) -> Result<Value, LuaError> {
         self.budget.store(i64::try_from(limits.instructions).unwrap_or(i64::MAX), Ordering::Relaxed);
         let env = self.env(script)?;
         let lua = &self.lua;
@@ -244,13 +255,15 @@ impl Slot {
                         .set_environment(empty)
                         .into_function()
                         .map_err(|e| LuaError::ArgCompile { index, message: message(&e) })?;
-                    let out: MultiValue = chunk.call(()).map_err(|e| LuaError::ArgRun { index, message: message(&e) })?;
+                    let out: MultiValue =
+                        chunk.call(()).map_err(|e| LuaError::ArgRun { index, message: message(&e) })?;
                     out.into_iter().next().unwrap_or(mlua::Value::Nil)
                 }
             };
             values.push(v);
         }
-        let out: MultiValue = f.call(MultiValue::from_vec(values)).map_err(|e| LuaError::Call(message(&e)))?;
+        let out: MultiValue =
+            f.call(MultiValue::from_vec(values)).map_err(|e| LuaError::Call(message(&e)))?;
         let first = out.into_iter().next().unwrap_or(mlua::Value::Nil);
         from_lua(&first, omit, limits).map_err(LuaError::Result)
     }
@@ -301,7 +314,13 @@ impl LuaHost {
     }
 
     /// [`Self::call`], leaving the keys `omit` of a returned table out.
-    pub fn call_omitting(&self, script: &Script, function: &str, args: &[Arg], omit: &[&str]) -> Result<Value, LuaError> {
+    pub fn call_omitting(
+        &self,
+        script: &Script,
+        function: &str,
+        args: &[Arg],
+        omit: &[&str],
+    ) -> Result<Value, LuaError> {
         let taken = self.idle.lock().pop();
         let mut slot = match taken {
             Some(s) => s,
@@ -310,7 +329,10 @@ impl LuaHost {
         let out = slot.call(script, function, args, omit, &self.limits);
         // a state whose script or function failed may hold anything half done; an argument that
         // did not compile or run left the script alone
-        let reusable = matches!(out, Ok(_) | Err(LuaError::ArgCompile { .. } | LuaError::ArgRun { .. } | LuaError::NoFunction(_)));
+        let reusable = matches!(
+            out,
+            Ok(_) | Err(LuaError::ArgCompile { .. } | LuaError::ArgRun { .. } | LuaError::NoFunction(_))
+        );
         if reusable {
             let mut idle = self.idle.lock();
             if idle.len() < self.keep {

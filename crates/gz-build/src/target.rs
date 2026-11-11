@@ -40,7 +40,8 @@ pub fn inside_game_gamedata(path: &str, game_root: &str) -> bool {
     }
     let guard = format!("{game_root}\\gamedata");
     let n = guard.len();
-    path.get(..n).is_some_and(|h| h.eq_ignore_ascii_case(&guard)) && matches!(path.as_bytes().get(n), None | Some(b'\\'))
+    path.get(..n).is_some_and(|h| h.eq_ignore_ascii_case(&guard))
+        && matches!(path.as_bytes().get(n), None | Some(b'\\'))
 }
 
 /// Where `path` would really be once created: the deepest part of it that exists, resolved,
@@ -73,7 +74,13 @@ pub fn projected_real_path(path: &str) -> Option<String> {
 /// overlay - a module goes to `modules\`, NOT to `mods\`: that one is the folder JSGME manages,
 /// and a module sitting there is a module JSGME offers to copy over the game. Blocking (it
 /// resolves real paths): call it on the IO pool.
-pub fn plan_target(target: &str, id: &str, flat: bool, project_root: &Path, game_root: &str) -> Result<String, String> {
+pub fn plan_target(
+    target: &str,
+    id: &str,
+    flat: bool,
+    project_root: &Path,
+    game_root: &str,
+) -> Result<String, String> {
     let target = normalize_path(target);
     if target.is_empty() {
         return Err("target folder not set".to_owned());
@@ -92,16 +99,25 @@ pub fn plan_target(target: &str, id: &str, flat: bool, project_root: &Path, game
     let known = real_dst.as_ref().zip(real_src.as_ref());
     if std::fs::symlink_metadata(&dst).is_ok_and(|m| m.file_type().is_symlink()) {
         let to = known.map(|(d, _)| format!(" to {d}")).unwrap_or_default();
-        return Err(format!("the target folder is a link{to} - a build replaces it, and would replace what it points at. Remove the link, or build to another folder"));
+        return Err(format!(
+            "the target folder is a link{to} - a build replaces it, and would replace what it points at. Remove the link, or build to another folder"
+        ));
     }
     if let Some((real_dst, real_src)) = known {
         // inside the editor's own scratch is fine - the release stage lives in temp\, and no
         // build walks it
         let scratch = real_dst.len() > real_src.len()
             && paths::same_or_below(real_dst, real_src)
-            && real_dst.get(real_src.len()..).map(|r| r.trim_start_matches('\\')).and_then(|r| r.split('\\').next()).is_some_and(is_editor_only_entry);
-        if (paths::same_or_below(real_dst, real_src) && !scratch) || paths::same_or_below(real_src, real_dst) {
-            return Err(format!("the target folder and the project overlap ({real_dst}) - the build would write into its own sources, or wipe them"));
+            && real_dst
+                .get(real_src.len()..)
+                .map(|r| r.trim_start_matches('\\'))
+                .and_then(|r| r.split('\\').next())
+                .is_some_and(is_editor_only_entry);
+        if (paths::same_or_below(real_dst, real_src) && !scratch) || paths::same_or_below(real_src, real_dst)
+        {
+            return Err(format!(
+                "the target folder and the project overlap ({real_dst}) - the build would write into its own sources, or wipe them"
+            ));
         }
     }
     Ok(dst)
@@ -136,7 +152,11 @@ mod tests {
         let dst = plan_target(&format!("{g}/"), "od", false, &project, &g).unwrap();
         assert_eq!(dst, format!("{g}\\modules\\od"));
         assert_eq!(plan_target(&g, "od", true, &project, &g).unwrap(), format!("{g}\\gamedata_od"));
-        assert!(plan_target(&format!("{g}\\gamedata"), "od", false, &project, &g).unwrap_err().contains("gamedata"));
+        assert!(
+            plan_target(&format!("{g}\\gamedata"), "od", false, &project, &g)
+                .unwrap_err()
+                .contains("gamedata")
+        );
         let inside = plan_target(&p, "od", false, &project, &g).unwrap_err();
         assert!(inside.contains("overlap"), "{inside}");
         assert!(!project.join("modules").exists());
@@ -148,7 +168,10 @@ mod tests {
         // the editor's scratch is fine: the release stage lives there
         assert!(plan_target(&format!("{p}\\temp\\release_stage_1"), "od", false, &project, &g).is_ok());
         assert!(plan_target("", "od", false, &project, &g).unwrap_err().contains("not set"));
-        assert_eq!(plan_target(&"x".repeat(250), "od", false, &project, &g).unwrap_err(), "target path too long");
+        assert_eq!(
+            plan_target(&"x".repeat(250), "od", false, &project, &g).unwrap_err(),
+            "target path too long"
+        );
         fs::remove_dir_all(&base).unwrap();
     }
 }

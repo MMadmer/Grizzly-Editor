@@ -28,7 +28,12 @@ impl ScrollTo {
             _ => match text.strip_prefix("item:") {
                 Some(name) if !name.is_empty() => Some(ScrollTo::Item(name.to_owned())),
                 Some(_) => None,
-                None => text.trim().parse::<f32>().ok().filter(|v| v.is_finite() && *v >= 0.0).map(ScrollTo::Offset),
+                None => text
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .map(ScrollTo::Offset),
             },
         }
     }
@@ -48,7 +53,9 @@ fn board_id() -> Id {
 /// A surface tells where its scroll stands this frame (pt).
 pub fn report_scroll(ctx: &Context, window: &str, y: f32, max_y: f32) {
     let frame = ctx.cumulative_frame_nr();
-    ctx.data_mut(|d| d.get_temp_mut_or_default::<Board>(board_id()).reports.insert(window.to_owned(), (frame, y, max_y)));
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Board>(board_id()).reports.insert(window.to_owned(), (frame, y, max_y))
+    });
 }
 
 /// A surface takes the scroll asked of it, once.

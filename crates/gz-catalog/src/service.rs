@@ -237,7 +237,12 @@ impl Catalog {
 
     /// Starts a job: the checks, the input taken now, then the work. The one path the window and
     /// MCP share.
-    pub async fn start(self: &Arc<Self>, editor: &Arc<Editor>, job: Job, from_ui: bool) -> Result<JobId, String> {
+    pub async fn start(
+        self: &Arc<Self>,
+        editor: &Arc<Editor>,
+        job: Job,
+        from_ui: bool,
+    ) -> Result<JobId, String> {
         if self.running() {
             return Err("a Mod Browser job is running already".to_owned());
         }
@@ -245,7 +250,11 @@ impl Catalog {
         self.drop_stale(editor).await;
         let manifest = ManifestService::of_session(editor, &session).await.map_err(|e| e.message)?;
         manifest.sync().await.map_err(|e| e.message)?;
-        let m = manifest.snapshot().manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
+        let m = manifest
+            .snapshot()
+            .manifest()
+            .ok_or_else(|| "mod.ltx not found in the project".to_owned())?
+            .clone();
         if !gz_mod::validate_id(&m.id) {
             return Err("the module id is missing or invalid (Mod > Mod Settings)".to_owned());
         }
@@ -258,11 +267,19 @@ impl Catalog {
             return Err("not signed in to GitHub: sign in from Mod > Publish Release (MCP: mod_publish action=sign_in or save_token)".to_owned());
         }
         // a withdrawal needs neither key: only the account that owns the listing counts
-        let vt_key = if matches!(job, Job::Submission | Job::Withdraw) { None } else { gh.read_vt_key().await };
+        let vt_key =
+            if matches!(job, Job::Submission | Job::Withdraw) { None } else { gh.read_vt_key().await };
         if matches!(job, Job::Vt | Job::Submit) && vt_key.is_none() {
             return Err("no VirusTotal key: the catalog lists a package only when VirusTotal knows it, and the packages are scanned with your own key - a free account at virustotal.com has one (MCP: mod_catalog action=vt_key)".to_owned());
         }
-        let input = Input { root: session.root.clone(), manifest: m, key, signed_in, token: account.token, vt_key: vt_key.unwrap_or_else(Secret::default) };
+        let input = Input {
+            root: session.root.clone(),
+            manifest: m,
+            key,
+            signed_in,
+            token: account.token,
+            vt_key: vt_key.unwrap_or_else(Secret::default),
+        };
         {
             let mut v = self.view.lock();
             v.job = job;
@@ -312,7 +329,16 @@ impl Catalog {
 
     /// What a job leaves (the worker's end).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn finish(&self, job: Job, input: &Input, cancelled: bool, outcome: &Result<(), String>, check: Check, seen: Checked, standing: Standing) {
+    pub(crate) fn finish(
+        &self,
+        job: Job,
+        input: &Input,
+        cancelled: bool,
+        outcome: &Result<(), String>,
+        check: Check,
+        seen: Checked,
+        standing: Standing,
+    ) {
         let ok = outcome.is_ok();
         let mut v = self.view.lock();
         v.state = if cancelled {
@@ -375,7 +401,12 @@ impl Catalog {
             map.insert("known".to_owned(), Value::Bool(v.submission_read));
             map.insert("listed".to_owned(), Value::Bool(v.listed()));
         }
-        let findings: Vec<Value> = v.check.findings.iter().map(|f| json!({ "level": f.level.name(), "code": f.code, "text": f.text })).collect();
+        let findings: Vec<Value> = v
+            .check
+            .findings
+            .iter()
+            .map(|f| json!({ "level": f.level.name(), "code": f.code, "text": f.text }))
+            .collect();
         json!({
             "catalog": gh.endpoints().catalog_repo,
             "key": {

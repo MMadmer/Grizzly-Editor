@@ -58,7 +58,16 @@ pub fn visual_type_name(kind: u8) -> &'static str {
 /// `IsSupportedVisualType`: the kinds the preview builds.
 #[must_use]
 pub fn supported(kind: u8) -> bool {
-    matches!(kind, MT::NORMAL | MT::HIERRARHY | MT::PROGRESSIVE | MT::SKELETON_ANIM | MT::SKELETON_RIGID | MT::SKELETON_GEOMDEF_PM | MT::SKELETON_GEOMDEF_ST)
+    matches!(
+        kind,
+        MT::NORMAL
+            | MT::HIERRARHY
+            | MT::PROGRESSIVE
+            | MT::SKELETON_ANIM
+            | MT::SKELETON_RIGID
+            | MT::SKELETON_GEOMDEF_PM
+            | MT::SKELETON_GEOMDEF_ST
+    )
 }
 
 /// A material slot of a library object: what it is to whoever has to ship it.
@@ -167,22 +176,35 @@ pub async fn load(editor: Arc<Editor>, name: String, source: ModelSource) -> Mod
         .await;
     let (sources, file, is_object) = found;
     let Some((found, bytes)) = file else {
-        return ModelData::failed(&name, if source == ModelSource::Game { "not found in the linked game install" } else { "file not found" });
+        return ModelData::failed(
+            &name,
+            if source == ModelSource::Game {
+                "not found in the linked game install"
+            } else {
+                "file not found"
+            },
+        );
     };
     let bytes = match bytes {
         Ok(b) if !b.is_empty() => b,
         Ok(_) => return ModelData::failed(&name, "empty block"),
         Err(_) => return ModelData::failed(&name, "cannot open file"),
     };
-    let object_file = is_object || matches!(&found, Found::Project(p) | Found::Editor(p) if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("object")));
+    let object_file = is_object
+        || matches!(&found, Found::Project(p) | Found::Editor(p) if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("object")));
     let n = name.clone();
-    exec.cpu(move || if object_file { from_object(&n, &bytes, sources) } else { from_visual(&n, &bytes, &found, sources) }).await
+    exec.cpu(move || {
+        if object_file { from_object(&n, &bytes, sources) } else { from_visual(&n, &bytes, &found, sources) }
+    })
+    .await
 }
 
 fn from_object(name: &str, bytes: &[u8], sources: Sources) -> ModelData {
     let object = match Object::read(bytes) {
         Ok(o) => o,
-        Err(gz_fmt_object::ObjectError::NotAnObject) => return ModelData::failed(name, "not an .object file"),
+        Err(gz_fmt_object::ObjectError::NotAnObject) => {
+            return ModelData::failed(name, "not an .object file");
+        }
         Err(_) => return ModelData::failed(name, "cannot load object"),
     };
     let mesh = match MeshData::from_object(&object, &MaterialTable::default()) {
@@ -201,7 +223,12 @@ fn from_object(name: &str, bytes: &[u8], sources: Sources) -> ModelData {
         materials: object
             .surfaces
             .iter()
-            .map(|s| Material { name: s.name.to_string(), texture: s.texture.to_string(), shader: s.shader.to_string(), game_mtl: s.game_mtl.to_string() })
+            .map(|s| Material {
+                name: s.name.to_string(),
+                texture: s.texture.to_string(),
+                shader: s.shader.to_string(),
+                game_mtl: s.game_mtl.to_string(),
+            })
             .collect(),
     };
     let pose = mesh.skinned.then(|| object_rest(&object));
@@ -248,7 +275,11 @@ fn pick_motion(motions: &MotionSet) -> Option<usize> {
         return Some(i);
     }
     // a definition without esmFX is a cycle
-    let cycle = motions.defs.iter().find(|d| d.flags & 1 == 0).and_then(|d| motions.motions.iter().position(|m| m.name == d.name));
+    let cycle = motions
+        .defs
+        .iter()
+        .find(|d| d.flags & 1 == 0)
+        .and_then(|d| motions.motions.iter().position(|m| m.name == d.name));
     cycle.or(if motions.motions.is_empty() { None } else { Some(0) })
 }
 
@@ -284,7 +315,9 @@ fn rest_chain(visual: &Visual) -> Vec<XMat4> {
         .bones
         .iter()
         .enumerate()
-        .map(|(i, b)| visual.bones.iter().position(|o| o.name.eq_ignore_ascii_case(&b.parent)).filter(|p| *p != i))
+        .map(|(i, b)| {
+            visual.bones.iter().position(|o| o.name.eq_ignore_ascii_case(&b.parent)).filter(|p| *p != i)
+        })
         .collect();
     let local: Vec<XMat4> = (0..n)
         .map(|i| {
@@ -308,7 +341,12 @@ fn rest_chain(visual: &Visual) -> Vec<XMat4> {
             at = parent.get(i).copied().flatten();
         }
         while let Some(i) = stack.pop() {
-            let up = parent.get(i).copied().flatten().and_then(|p| world.get(p).copied().flatten()).unwrap_or(XMat4::IDENTITY);
+            let up = parent
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|p| world.get(p).copied().flatten())
+                .unwrap_or(XMat4::IDENTITY);
             let own = local.get(i).copied().unwrap_or(XMat4::IDENTITY);
             if let Some(slot) = world.get_mut(i) {
                 *slot = Some(XMat4::mul(&up, &own));
@@ -344,7 +382,13 @@ fn posed_bounds(mesh: &MeshData, pose: Option<&[Mat4]>) -> Aabb {
 
 fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> ModelData {
     // the header is peeked first: a file the reader takes for another kind is no model
-    if bytes.len() < 8 || gz_chunk::Reader::new(bytes).open_chunk(gz_fmt_ogf::chunk::HEADER).ok().flatten().is_none_or(|c| c.bytes().len() != gz_fmt_ogf::Header::SIZE) {
+    if bytes.len() < 8
+        || gz_chunk::Reader::new(bytes)
+            .open_chunk(gz_fmt_ogf::chunk::HEADER)
+            .ok()
+            .flatten()
+            .is_none_or(|c| c.bytes().len() != gz_fmt_ogf::Header::SIZE)
+    {
         return ModelData::failed(name, "not an OGF model");
     }
     let visual = match Visual::read(bytes) {
@@ -352,7 +396,10 @@ fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> Mod
         Err(_) => return ModelData::failed(name, "not an OGF model"),
     };
     if !supported(visual.kind()) {
-        return ModelData::failed(name, &format!("unsupported visual type ({})", visual_type_name(visual.kind())));
+        return ModelData::failed(
+            name,
+            &format!("unsupported visual type ({})", visual_type_name(visual.kind())),
+        );
     }
     let mesh = match MeshData::from_visual(&visual, &MaterialTable::default()) {
         Ok(m) => m,
@@ -367,7 +414,8 @@ fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> Mod
     }
     let bones = visual.bones.len();
     let pose = if bones > 0 {
-        let posed = motions_of(&visual, found, &sources).and_then(|set| pick_motion(&set).and_then(|i| visual_pose(&visual, &set, i, 0.0)));
+        let posed = motions_of(&visual, found, &sources)
+            .and_then(|set| pick_motion(&set).and_then(|i| visual_pose(&visual, &set, i, 0.0)));
         Some(posed.unwrap_or_else(|| vec![Mat4::IDENTITY; bones.max(1)].into()))
     } else if mesh.skinned {
         Some(vec![Mat4::IDENTITY].into())
@@ -384,7 +432,8 @@ fn from_visual(name: &str, bytes: &[u8], found: &Found, sources: Sources) -> Mod
             pose.as_ref().and_then(|p| p.get(i)).map_or(r, |m| m.transform_point3(r))
         };
         for (i, b) in visual.bones.iter().enumerate() {
-            let parent = visual.bones.iter().position(|o| o.name.eq_ignore_ascii_case(&b.parent)).filter(|p| *p != i);
+            let parent =
+                visual.bones.iter().position(|o| o.name.eq_ignore_ascii_case(&b.parent)).filter(|p| *p != i);
             joints.push((at(i), parent.map(at)));
         }
     }
@@ -427,7 +476,11 @@ mod tests {
 
     #[test]
     fn a_file_that_is_no_model_says_so() {
-        let sources = Sources { project: None, dirs: crate::paths::EditorDirs::at(std::path::Path::new("x")), game: None };
+        let sources = Sources {
+            project: None,
+            dirs: crate::paths::EditorDirs::at(std::path::Path::new("x")),
+            game: None,
+        };
         let m = from_visual("a", b"not a model at all", &Found::Editor("a.ogf".into()), sources);
         assert_eq!(m.error, "not an OGF model");
         assert!(!m.shown());

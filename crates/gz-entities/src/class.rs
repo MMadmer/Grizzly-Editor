@@ -354,7 +354,12 @@ const fn engine(clsid: &'static str, class: Class) -> ClassInfo {
     ClassInfo { clsid, class, script_class: "", script: ScriptKind::None }
 }
 
-const fn script(clsid: &'static str, class: Class, script_class: &'static str, script: ScriptKind) -> ClassInfo {
+const fn script(
+    clsid: &'static str,
+    class: Class,
+    script_class: &'static str,
+    script: ScriptKind,
+) -> ClassInfo {
     ClassInfo { clsid, class, script_class, script }
 }
 

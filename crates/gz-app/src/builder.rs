@@ -39,7 +39,13 @@ pub struct UiCommand {
 
 impl UiCommand {
     #[must_use]
-    pub fn new(id: &str, group: &str, label: &str, icon: Icon, run: impl FnMut(&mut DocCx<'_>) + 'static) -> Self {
+    pub fn new(
+        id: &str,
+        group: &str,
+        label: &str,
+        icon: Icon,
+        run: impl FnMut(&mut DocCx<'_>) + 'static,
+    ) -> Self {
         Self {
             id: SmolStr::new(id),
             group: SmolStr::new(group),
@@ -109,6 +115,15 @@ pub struct DrawerDesc {
     pub body: DrawFn,
 }
 
+/// A dialog's opener: `Err` says why it cannot open.
+pub type OpenFn = Box<dyn FnMut(&mut DocCx<'_>) -> Result<(), String>>;
+/// What the status bar reads of the log.
+pub type LogStateFn = Box<dyn Fn(&Editor) -> LogState>;
+/// Shows a project path in the Content Browser.
+pub type RevealFn = Box<dyn FnMut(&str, &mut DocCx<'_>)>;
+/// Rebuilds the layout (`true`: every split too).
+pub type ResetLayoutFn = Box<dyn FnMut(bool, &mut DocCx<'_>)>;
+
 /// A dialog that opens by id (`ui_dialog open`).
 pub struct DialogDesc {
     /// The MCP id: `import_base_scene`, `package_release`, ...
@@ -118,7 +133,7 @@ pub struct DialogDesc {
     /// It opens only with a project.
     pub needs_project: bool,
     /// Asked to open: `Err` says why it cannot.
-    pub open: Box<dyn FnMut(&mut DocCx<'_>) -> Result<(), String>>,
+    pub open: OpenFn,
     /// Drawn every frame (it knows whether it is open), before the kit's queued questions.
     pub draw: DrawFn,
 }
@@ -163,9 +178,9 @@ pub struct ShellBuilder {
     pub(crate) page_cards: Vec<PageCard>,
     pub(crate) dialogs: Vec<DialogDesc>,
     pub(crate) panels: Vec<PanelDesc>,
-    pub(crate) log_state: Option<Box<dyn Fn(&Editor) -> LogState>>,
-    pub(crate) reveal: Option<Box<dyn FnMut(&str, &mut DocCx<'_>)>>,
-    pub(crate) reset_layout: Option<Box<dyn FnMut(bool, &mut DocCx<'_>)>>,
+    pub(crate) log_state: Option<LogStateFn>,
+    pub(crate) reveal: Option<RevealFn>,
+    pub(crate) reset_layout: Option<ResetLayoutFn>,
 }
 
 impl ShellBuilder {
@@ -175,7 +190,12 @@ impl ShellBuilder {
     }
 
     /// The factory of a document kind. A kind registered twice keeps the later factory.
-    pub fn document(&mut self, kind: &str, f: impl FnMut(&std::sync::Arc<Editor>, &crate::OpenRequest) -> Result<Box<dyn crate::Document>, String> + 'static) {
+    pub fn document(
+        &mut self,
+        kind: &str,
+        f: impl FnMut(&std::sync::Arc<Editor>, &crate::OpenRequest) -> Result<Box<dyn crate::Document>, String>
+        + 'static,
+    ) {
         self.factories.insert(SmolStr::new(kind), Box::new(f));
     }
 
@@ -202,13 +222,29 @@ impl ShellBuilder {
     }
 
     /// Rows a contribution draws itself (`gz_ui::menu_item` for each).
-    pub fn menu_custom(&mut self, menu: &str, group: i32, order: i32, draw: impl FnMut(&mut egui::Ui, &mut DocCx<'_>) + 'static) {
-        self.menus.push(MenuEntry { menu: SmolStr::new(menu), submenu: None, group, order, content: MenuContent::Custom(Box::new(draw)) });
+    pub fn menu_custom(
+        &mut self,
+        menu: &str,
+        group: i32,
+        order: i32,
+        draw: impl FnMut(&mut egui::Ui, &mut DocCx<'_>) + 'static,
+    ) {
+        self.menus.push(MenuEntry {
+            menu: SmolStr::new(menu),
+            submenu: None,
+            group,
+            order,
+            content: MenuContent::Custom(Box::new(draw)),
+        });
     }
 
     /// Items at the right end of every toolbar (Build Mod, Publish Release, Releases), lowest
     /// `order` first. Drawn only with a project and never on Preferences.
-    pub fn project_toolbar(&mut self, order: i32, f: impl for<'t> FnMut(&mut Toolbar<'_, 't>, &mut DocCx<'_>) + 'static) {
+    pub fn project_toolbar(
+        &mut self,
+        order: i32,
+        f: impl for<'t> FnMut(&mut Toolbar<'_, 't>, &mut DocCx<'_>) + 'static,
+    ) {
         self.project_toolbar.push((order, Box::new(f)));
     }
 

@@ -63,7 +63,14 @@ pub enum PanelId {
 }
 
 impl PanelId {
-    pub const ALL: [PanelId; 6] = [PanelId::Tools, PanelId::Outliner, PanelId::Details, PanelId::LevelSettings, PanelId::ContentBrowser, PanelId::OutputLog];
+    pub const ALL: [PanelId; 6] = [
+        PanelId::Tools,
+        PanelId::Outliner,
+        PanelId::Details,
+        PanelId::LevelSettings,
+        PanelId::ContentBrowser,
+        PanelId::OutputLog,
+    ];
 
     #[must_use]
     pub fn index(self) -> usize {
@@ -234,7 +241,14 @@ impl DockLayout {
     pub fn built(class: SizeClass, before: Option<&DockLayout>) -> Self {
         let wide = class == SizeClass::Wide;
         let strip = if wide { Some(Slot::Bottom) } else { None };
-        let slot = [Some(Slot::Left), Some(Slot::RightTop), Some(Slot::RightBottom), Some(Slot::RightBottom), strip, strip];
+        let slot = [
+            Some(Slot::Left),
+            Some(Slot::RightTop),
+            Some(Slot::RightBottom),
+            Some(Slot::RightBottom),
+            strip,
+            strip,
+        ];
         let mut open = [true; 6];
         if !wide {
             for p in [PanelId::ContentBrowser, PanelId::OutputLog] {
@@ -246,7 +260,12 @@ impl DockLayout {
             custom: false,
             slot,
             open,
-            front: [Some(PanelId::Tools), Some(PanelId::Outliner), Some(PanelId::Details), if wide { Some(PanelId::ContentBrowser) } else { None }],
+            front: [
+                Some(PanelId::Tools),
+                Some(PanelId::Outliner),
+                Some(PanelId::Details),
+                if wide { Some(PanelId::ContentBrowser) } else { None },
+            ],
         }
     }
 
@@ -363,7 +382,11 @@ impl DockLayout {
             set_if(ctx, &open_key(p), if self.is_open(p) { 1.0 } else { 0.0 });
         }
         for s in Slot::ALL {
-            set_if(ctx, &front_key(s), self.front.get(s.index()).copied().flatten().map_or(0.0, |p| (p.index() + 1) as f32));
+            set_if(
+                ctx,
+                &front_key(s),
+                self.front.get(s.index()).copied().flatten().map_or(0.0, |p| (p.index() + 1) as f32),
+            );
         }
     }
 }
@@ -411,7 +434,9 @@ pub fn reset_sizes(ctx: &Context) {
 pub fn sizes_customised(ctx: &Context, class: SizeClass) -> bool {
     let d = Sizes::of(class);
     let stored = |k: &str| store::has(ctx, k).then(|| store::get(ctx, k, 0.0));
-    size_customised(stored(KEY_LEFT), d.left) || size_customised(stored(KEY_RIGHT), d.right) || size_customised(stored(KEY_BOTTOM), d.bottom)
+    size_customised(stored(KEY_LEFT), d.left)
+        || size_customised(stored(KEY_RIGHT), d.right)
+        || size_customised(stored(KEY_BOTTOM), d.bottom)
         || store::has(ctx, KEY_RIGHT_TOP)
 }
 

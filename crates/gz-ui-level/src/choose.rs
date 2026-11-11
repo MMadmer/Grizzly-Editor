@@ -114,15 +114,24 @@ pub fn draw(ui: &mut Ui, editor: &Arc<Editor>, c: &mut Chooser) -> Outcome {
             SearchField::new(&mut c.search).hint("Search").id_salt("choose_search").show(ui);
             ui.add_space(4.0);
             match &items {
-                None => state::busy_line(ui, &format!("Reading the {}...", c.list.map_or("items", ListKey::noun))),
+                None => {
+                    state::busy_line(ui, &format!("Reading the {}...", c.list.map_or("items", ListKey::noun)))
+                }
                 Some(list) if list.is_empty() => {
-                    state::empty_state(ui, gz_ui::Icon::Search, "Nothing to pick", &format!("No {} were found.", c.list.map_or("items", ListKey::noun)), None);
+                    state::empty_state(
+                        ui,
+                        gz_ui::Icon::Search,
+                        "Nothing to pick",
+                        &format!("No {} were found.", c.list.map_or("items", ListKey::noun)),
+                        None,
+                    );
                 }
                 Some(list) => {
                     let current = c.picked.last().cloned().unwrap_or_default();
                     let h = (ui.available_height() - 40.0).clamp(160.0, 380.0);
                     if let Some(item) = local_tree_list(ui, "choose", list, &c.search, &current, h) {
-                        let again = ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+                        let again =
+                            ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
                         if c.multi {
                             if let Some(i) = c.picked.iter().position(|p| *p == item) {
                                 c.picked.remove(i);
@@ -138,7 +147,13 @@ pub fn draw(ui: &mut Ui, editor: &Arc<Editor>, c: &mut Chooser) -> Outcome {
                     }
                     if c.multi && !c.picked.is_empty() {
                         ui.add_space(4.0);
-                        gz_ui::text::label(ui, &format!("{} picked: {}", c.picked.len(), c.picked.join(", ")), gz_ui::Font::Small, gz_ui::palette(ui.ctx()).text_secondary, Clip::End);
+                        gz_ui::text::label(
+                            ui,
+                            &format!("{} picked: {}", c.picked.len(), c.picked.join(", ")),
+                            gz_ui::Font::Small,
+                            gz_ui::palette(ui.ctx()).text_secondary,
+                            Clip::End,
+                        );
                     }
                 }
             }

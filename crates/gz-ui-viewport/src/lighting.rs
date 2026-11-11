@@ -65,7 +65,8 @@ fn read_sun_dir(doc: &LtxDoc, sect: &str) -> Vec3 {
 
 /// `LoadWeather`: the two sections around the hour blended, around midnight as the game does.
 pub fn weather_at(doc: &LtxDoc, name: &str, hour: f32) -> Result<Weather, String> {
-    let mut keys: Vec<(i32, &str)> = doc.sections().filter_map(|s| section_seconds(s).map(|t| (t, s))).collect();
+    let mut keys: Vec<(i32, &str)> =
+        doc.sections().filter_map(|s| section_seconds(s).map(|t| (t, s))).collect();
     if keys.is_empty() {
         return Err(format!("weather '{name}' has no hh:mm:ss sections"));
     }
@@ -79,7 +80,9 @@ pub fn weather_at(doc: &LtxDoc, name: &str, hour: f32) -> Result<Weather, String
         }
     }
     let b = (a + 1) % keys.len();
-    let (Some(ka), Some(kb)) = (keys.get(a), keys.get(b)) else { return Err(format!("weather '{name}' has no hh:mm:ss sections")) };
+    let (Some(ka), Some(kb)) = (keys.get(a), keys.get(b)) else {
+        return Err(format!("weather '{name}' has no hh:mm:ss sections"));
+    };
     let span = ((kb.0 - ka.0) % day + day) % day;
     let f = if span != 0 { (((want - ka.0) % day + day) % day) as f32 / span as f32 } else { 0.0 };
     let lerp = |key: &str| read_color(doc, ka.1, key).lerp(read_color(doc, kb.1, key), f);
@@ -113,7 +116,7 @@ pub fn default_weather(names: &[String], start_date: Option<&str>, hour: f32) ->
                 day += 1;
             }
             let name = format!("af3_slight_clear_{}", day.rem_euclid(8));
-            if names.iter().any(|n| *n == name) {
+            if names.contains(&name) {
                 return name;
             }
         }
@@ -136,7 +139,15 @@ pub struct GameSettings {
 
 impl Default for GameSettings {
     fn default() -> Self {
-        Self { lumscale_sun: 1.0, lumscale_hemi: 1.0, lumscale_amb: 1.0, tonemap: true, tonemap_middlegray: 1.0, tonemap_lowlum: 0.0001, tonemap_amount: 0.7 }
+        Self {
+            lumscale_sun: 1.0,
+            lumscale_hemi: 1.0,
+            lumscale_amb: 1.0,
+            tonemap: true,
+            tonemap_middlegray: 1.0,
+            tonemap_lowlum: 0.0001,
+            tonemap_amount: 0.7,
+        }
     }
 }
 
@@ -204,13 +215,25 @@ pub struct GameLight {
 
 impl GameLight {
     fn new(kind: &'static str, owner: &str, position: Vec3, range: f32, color: Vec3) -> Self {
-        Self { kind, owner: SmolStr::new(owner), position, range, color, spot_cos: 0.0, direction: Vec3::new(0.0, -1.0, 0.0) }
+        Self {
+            kind,
+            owner: SmolStr::new(owner),
+            position,
+            range,
+            color,
+            spot_cos: 0.0,
+            direction: Vec3::new(0.0, -1.0, 0.0),
+        }
     }
 
     /// The renderer's light.
     #[must_use]
     pub fn render(&self) -> Light {
-        let kind = if self.spot_cos > 0.0 { LightKind::Spot { direction: self.direction, cos_half: self.spot_cos } } else { LightKind::Point };
+        let kind = if self.spot_cos > 0.0 {
+            LightKind::Spot { direction: self.direction, cos_half: self.spot_cos }
+        } else {
+            LightKind::Point
+        };
         Light { kind, position: self.position, range: self.range.max(0.01), color: self.color }
     }
 }
@@ -238,7 +261,11 @@ pub fn anim_color(anims: &gz_fmt_xr::LightAnims, name: &str) -> Option<Vec3> {
 /// lights, every hanging lamp the R2+ renderers draw (and its ambient light), every burning
 /// campfire.
 #[must_use]
-pub fn collect(state: &SceneState, configs: Option<&Ltx>, anims: Option<&gz_fmt_xr::LightAnims>) -> Vec<GameLight> {
+pub fn collect(
+    state: &SceneState,
+    configs: Option<&Ltx>,
+    anims: Option<&gz_fmt_xr::LightAnims>,
+) -> Vec<GameLight> {
     let mut all = Vec::new();
     for o in state.of_class(ObjClass::Light) {
         let ObjData::Light(l) = &o.data else { continue };
@@ -264,7 +291,8 @@ pub fn collect(state: &SceneState, configs: Option<&Ltx>, anims: Option<&gz_fmt_
                 Some(c) => c * lamp.brightness,
                 None => {
                     let c = lamp.color;
-                    Vec3::new(((c >> 16) & 0xff) as f32, ((c >> 8) & 0xff) as f32, (c & 0xff) as f32) / 255.0 * lamp.brightness
+                    Vec3::new(((c >> 16) & 0xff) as f32, ((c >> 8) & 0xff) as f32, (c & 0xff) as f32) / 255.0
+                        * lamp.brightness
                 }
             };
             // the light bone's place is the model's; the editor lights from the lamp's pivot
@@ -275,7 +303,13 @@ pub fn collect(state: &SceneState, configs: Option<&Ltx>, anims: Option<&gz_fmt_
             }
             all.push(main);
             if lamp.flags & lamp_flags::POINT_AMBIENT != 0 && lamp.ambient_radius > 0.0 {
-                all.push(GameLight::new("lamp_ambient", &o.name, o.position(), lamp.ambient_radius, color * lamp.ambient_power));
+                all.push(GameLight::new(
+                    "lamp_ambient",
+                    &o.name,
+                    o.position(),
+                    lamp.ambient_radius,
+                    color * lamp.ambient_power,
+                ));
             }
             continue;
         }
@@ -288,12 +322,21 @@ pub fn collect(state: &SceneState, configs: Option<&Ltx>, anims: Option<&gz_fmt_
         if !cfg.line_exist(section, "idle_light") || !cfg.r_bool(section, "idle_light").unwrap_or(false) {
             continue;
         }
-        let range = if cfg.line_exist(section, "idle_light_range") { cfg.r_float(section, "idle_light_range").unwrap_or(0.0) } else { 0.0 };
+        let range = if cfg.line_exist(section, "idle_light_range") {
+            cfg.r_float(section, "idle_light_range").unwrap_or(0.0)
+        } else {
+            0.0
+        };
         if range <= 0.0 {
             continue;
         }
-        let anim = if cfg.line_exist(section, "idle_light_anim") { cfg.r_string(section, "idle_light_anim").ok() } else { None };
-        let color = anim.and_then(|n| anims.and_then(|a| anim_color(a, n))).unwrap_or(Vec3::new(1.0, 0.6, 0.3));
+        let anim = if cfg.line_exist(section, "idle_light_anim") {
+            cfg.r_string(section, "idle_light_anim").ok()
+        } else {
+            None
+        };
+        let color =
+            anim.and_then(|n| anims.and_then(|a| anim_color(a, n))).unwrap_or(Vec3::new(1.0, 0.6, 0.3));
         let mut position = o.position();
         if cfg.line_exist(section, "idle_light_height") {
             position.y += cfg.r_float(section, "idle_light_height").unwrap_or(0.0);
@@ -307,7 +350,11 @@ pub fn collect(state: &SceneState, configs: Option<&Ltx>, anims: Option<&gz_fmt_
 /// how many there were before the cut.
 #[must_use]
 pub fn gather(all: &[GameLight], frustum: &Frustum, eye: Vec3) -> (Vec<GameLight>, usize) {
-    let mut seen: Vec<GameLight> = all.iter().filter(|l| l.range > 0.0 && frustum.intersects_sphere(l.position, l.range)).cloned().collect();
+    let mut seen: Vec<GameLight> = all
+        .iter()
+        .filter(|l| l.range > 0.0 && frustum.intersects_sphere(l.position, l.range))
+        .cloned()
+        .collect();
     let in_view = seen.len();
     seen.sort_by(|a, b| eye.distance_squared(a.position).total_cmp(&eye.distance_squared(b.position)));
     seen.truncate(MAX_LIGHTS);
@@ -326,7 +373,10 @@ pub fn roof_origin(eye: Vec3) -> [f32; 2] {
 pub fn roof_stale(map: Option<&RoofMap>, eye: Vec3) -> bool {
     let half = ROOF_CELLS as f32 * ROOF_CELL * 0.5;
     match map {
-        Some(m) if m.cells == ROOF_CELLS => (eye.x - (m.origin[0] + half)).abs() >= half * 0.5 || (eye.z - (m.origin[1] + half)).abs() >= half * 0.5,
+        Some(m) if m.cells == ROOF_CELLS => {
+            (eye.x - (m.origin[0] + half)).abs() >= half * 0.5
+                || (eye.z - (m.origin[1] + half)).abs() >= half * 0.5
+        }
         _ => true,
     }
 }
@@ -389,12 +439,21 @@ pub fn bake_roof(state: &SceneState, lib: &Library, eye: Vec3, revision: u64) ->
         .map(|z| {
             (0..cells)
                 .map(|x| {
-                    let s = Vec3::new(origin[0] + (x as f32 + 0.5) * cell, start, origin[1] + (z as f32 + 0.5) * cell);
+                    let s = Vec3::new(
+                        origin[0] + (x as f32 + 0.5) * cell,
+                        start,
+                        origin[1] + (z as f32 + 0.5) * cell,
+                    );
                     let mut dist = reach;
                     if let Some(bucket) = buckets.get(((z / per) * tiles + x / per) as usize) {
                         for i in bucket {
                             let Some(c) = candidates.get(*i) else { continue };
-                            if s.x < c.min.x || s.x > c.max.x || s.z < c.min.z || s.z > c.max.z || start - c.max.y >= dist {
+                            if s.x < c.min.x
+                                || s.x > c.max.x
+                                || s.z < c.min.z
+                                || s.z > c.max.z
+                                || start - c.max.y >= dist
+                            {
                                 continue;
                             }
                             if let Some(hit) = gz_scene::pick::ray_library(&c.lib, &c.object, s, down, dist)
@@ -415,7 +474,13 @@ pub fn bake_roof(state: &SceneState, lib: &Library, eye: Vec3, revision: u64) ->
 
 /// The renderer's environment for a weather, the settings and the exposure.
 #[must_use]
-pub fn environment(w: &Weather, s: &GameSettings, exposure: f32, indoor_hemi: f32, roof: Option<Arc<RoofMap>>) -> Environment {
+pub fn environment(
+    w: &Weather,
+    s: &GameSettings,
+    exposure: f32,
+    indoor_hemi: f32,
+    roof: Option<Arc<RoofMap>>,
+) -> Environment {
     Environment {
         ambient: w.ambient * s.lumscale_amb,
         hemi: w.hemi * s.lumscale_hemi,
@@ -433,7 +498,7 @@ pub fn environment(w: &Weather, s: &GameSettings, exposure: f32, indoor_hemi: f3
 /// `ClearColor`: the fog colour at the exposure, as the background.
 #[must_use]
 pub fn clear_color(w: &Weather, exposure: f32) -> gz_render::Color {
-    let c = |v: f32| ((v * exposure).min(1.0).max(0.0) * 255.0) as u8;
+    let c = |v: f32| ((v * exposure).clamp(0.0, 1.0) * 255.0) as u8;
     gz_render::Color::rgb(c(w.fog_color.x), c(w.fog_color.y), c(w.fog_color.z))
 }
 
@@ -467,7 +532,8 @@ mod tests {
 
     #[test]
     fn the_default_weather_follows_the_moon() {
-        let names: Vec<String> = (0..8).map(|i| format!("af3_slight_clear_{i}")).chain(["w_clear".to_owned()]).collect();
+        let names: Vec<String> =
+            (0..8).map(|i| format!("af3_slight_clear_{i}")).chain(["w_clear".to_owned()]).collect();
         let a = default_weather(&names, Some("12.05.2012"), 22.0);
         assert!(a.starts_with("af3_slight_clear_"));
         assert_eq!(default_weather(&["rain".into(), "w_clear".into()], None, 1.0), "w_clear");
@@ -488,7 +554,9 @@ mod tests {
 
     #[test]
     fn lights_are_cut_to_the_nearest() {
-        let all: Vec<GameLight> = (0..200).map(|i| GameLight::new("level", "l", Vec3::new(0.0, 0.0, 5.0 + i as f32), 2.0, Vec3::ONE)).collect();
+        let all: Vec<GameLight> = (0..200)
+            .map(|i| GameLight::new("level", "l", Vec3::new(0.0, 0.0, 5.0 + i as f32), 2.0, Vec3::ONE))
+            .collect();
         let cam = gz_render::Camera::looking(Vec3::ZERO, Vec3::Z);
         let (drawn, in_view) = gather(&all, &cam.frustum([100, 100]), Vec3::ZERO);
         assert_eq!(in_view, 200);

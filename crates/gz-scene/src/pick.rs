@@ -44,8 +44,11 @@ impl ScenePick {
     #[must_use]
     pub fn build(state: &SceneState, lib: &Library) -> Self {
         let local = |r: &str| lib.cached(r).map(|o| o.bounds);
-        let mut items: Vec<(ObjId, Aabb)> =
-            state.objects.values().filter_map(|o| objects::world_box(state, o, &local).filter(Aabb::is_valid).map(|b| (o.id, b))).collect();
+        let mut items: Vec<(ObjId, Aabb)> = state
+            .objects
+            .values()
+            .filter_map(|o| objects::world_box(state, o, &local).filter(Aabb::is_valid).map(|b| (o.id, b)))
+            .collect();
         let mut nodes = Vec::with_capacity(items.len() * 2 / LEAF + 1);
         if !items.is_empty() {
             let n = items.len();
@@ -136,7 +139,11 @@ impl ScenePick {
             }
             ray_object(state, lib, o, start, dir, range)
         };
-        let hits: Vec<PickHit> = if cands.len() > 32 { cands.par_iter().filter_map(test).collect() } else { cands.iter().filter_map(test).collect() };
+        let hits: Vec<PickHit> = if cands.len() > 32 {
+            cands.par_iter().filter_map(test).collect()
+        } else {
+            cands.iter().filter_map(test).collect()
+        };
         hits.into_iter().min_by(|a, b| a.t.total_cmp(&b.t))
     }
 }
@@ -148,14 +155,26 @@ fn build_node(items: &mut [(ObjId, Aabb)], first: usize, count: usize, nodes: &m
         bounds.merge(b);
     }
     let me = nodes.len();
-    nodes.push(Node { bounds, a: u32::try_from(first).unwrap_or(0), count: u32::try_from(count).unwrap_or(0) });
+    nodes.push(Node {
+        bounds,
+        a: u32::try_from(first).unwrap_or(0),
+        count: u32::try_from(count).unwrap_or(0),
+    });
     if count <= LEAF {
         return;
     }
     let ext = bounds.max - bounds.min;
-    let axis = if ext.x >= ext.y && ext.x >= ext.z { 0 } else if ext.y >= ext.z { 1 } else { 2 };
+    let axis = if ext.x >= ext.y && ext.x >= ext.z {
+        0
+    } else if ext.y >= ext.z {
+        1
+    } else {
+        2
+    };
     let mid = count / 2;
-    slice.select_nth_unstable_by(mid, |a, b| (a.1.min[axis] + a.1.max[axis]).total_cmp(&(b.1.min[axis] + b.1.max[axis])));
+    slice.select_nth_unstable_by(mid, |a, b| {
+        (a.1.min[axis] + a.1.max[axis]).total_cmp(&(b.1.min[axis] + b.1.max[axis]))
+    });
     build_node(items, first, mid, nodes);
     let right = nodes.len();
     build_node(items, first + mid, count - mid, nodes);
@@ -179,12 +198,24 @@ pub fn ray_library(lo: &LibraryObject, obj: &Object, start: Vec3, dir: Vec3, ran
     let hit = bvh.ray_nearest(&ray)?;
     let tri = lo.tri(hit.tri)?;
     let w = [world.transform_tiny(tri[0]), world.transform_tiny(tri[1]), world.transform_tiny(tri[2])];
-    Some(PickHit { id: obj.id, t: hit.t, point: start + dir * hit.t, normal: Some(tri_normal(w[0], w[1], w[2])) })
+    Some(PickHit {
+        id: obj.id,
+        t: hit.t,
+        point: start + dir * hit.t,
+        normal: Some(tri_normal(w[0], w[1], w[2])),
+    })
 }
 
 /// The class's `RayPick`.
 #[must_use]
-pub fn ray_object(state: &SceneState, lib: &Library, o: &Object, start: Vec3, dir: Vec3, range: f32) -> Option<PickHit> {
+pub fn ray_object(
+    state: &SceneState,
+    lib: &Library,
+    o: &Object,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+) -> Option<PickHit> {
     let at = |t: f32| PickHit { id: o.id, t, point: start + dir * t, normal: None };
     let p = o.position();
     match &o.data {
@@ -192,13 +223,17 @@ pub fn ray_object(state: &SceneState, lib: &Library, o: &Object, start: Vec3, di
             let lo: Arc<LibraryObject> = lib.cached(&d.reference)?;
             ray_library(&lo, o, start, dir, range)
         }
-        ObjData::Light(_) | ObjData::SoundSrc(_) => ray_point(start, dir, p, VIS_RADIUS).filter(|t| *t < range).map(at),
+        ObjData::Light(_) | ObjData::SoundSrc(_) => {
+            ray_point(start, dir, p, VIS_RADIUS).filter(|t| *t < range).map(at)
+        }
         ObjData::Glow(g) => ray_point(start, dir, p, g.radius).filter(|t| *t < range).map(at),
         ObjData::Shape(s) => s.ray_pick(&o.xform, start, dir, range).map(at),
         ObjData::SoundEnv(s) => s.shape.ray_pick(&o.xform, start, dir, range).map(at),
         ObjData::FogVolume(s) => s.shape.ray_pick(&o.xform, start, dir, range).map(at),
         ObjData::Way(w) => w.ray_pick(start, dir, range).map(at),
-        ObjData::Particles(_) => ray_box(start, dir, &crate::math::point_box(p, PSOBJECT_SIZE)).filter(|(t, inside)| !inside && *t < range).map(|(t, _)| at(t)),
+        ObjData::Particles(_) => ray_box(start, dir, &crate::math::point_box(p, PSOBJECT_SIZE))
+            .filter(|(t, inside)| !inside && *t < range)
+            .map(|(t, _)| at(t)),
         ObjData::Spawn(sp) => {
             if let Some(a) = &sp.attached {
                 return match &a.data {
@@ -229,7 +264,15 @@ pub fn ray_object(state: &SceneState, lib: &Library, o: &Object, start: Vec3, di
 /// `probe_vertical` and the drop read. Every scene object counts, seen by a camera or not
 /// (`g_RayPickAll`); a hidden one does not. `only` restricts it to a list.
 #[must_use]
-pub fn ray_scene_objects(pick: &ScenePick, state: &SceneState, lib: &Library, start: Vec3, dir: Vec3, range: f32, only: Option<&[ObjId]>) -> Option<PickHit> {
+pub fn ray_scene_objects(
+    pick: &ScenePick,
+    state: &SceneState,
+    lib: &Library,
+    start: Vec3,
+    dir: Vec3,
+    range: f32,
+    only: Option<&[ObjId]>,
+) -> Option<PickHit> {
     pick.ray_pick(state, lib, start, dir, range, &|o: &Object| {
         o.class == ObjClass::SceneObject && o.flags.visible && only.is_none_or(|l| l.contains(&o.id))
     })
@@ -251,7 +294,11 @@ pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb)
         bvh.query_box(&local, &mut found);
         for t in found {
             if let Some(tri) = lo.tri(t) {
-                out.push([world.transform_tiny(tri[0]), world.transform_tiny(tri[1]), world.transform_tiny(tri[2])]);
+                out.push([
+                    world.transform_tiny(tri[0]),
+                    world.transform_tiny(tri[1]),
+                    world.transform_tiny(tri[2]),
+                ]);
             }
         }
     }
@@ -261,8 +308,8 @@ pub fn box_triangles(state: &SceneState, lib: &Library, ids: &[ObjId], b: &Aabb)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::objects::{GlowData, LightData};
     use crate::model::Object;
+    use crate::objects::{GlowData, LightData};
 
     fn seeded(n: usize) -> SceneState {
         let mut s = SceneState::default();
@@ -275,7 +322,11 @@ mod tests {
             let mut o = if i % 2 == 0 {
                 Object::new(ObjClass::Light, &format!("l{i}"), ObjData::Light(LightData::default()))
             } else {
-                Object::new(ObjClass::Glow, &format!("g{i}"), ObjData::Glow(GlowData { radius: 0.2 + next(), ..GlowData::default() }))
+                Object::new(
+                    ObjClass::Glow,
+                    &format!("g{i}"),
+                    ObjData::Glow(GlowData { radius: 0.2 + next(), ..GlowData::default() }),
+                )
             };
             o.xform.position = Vec3::new(next() * 100.0 - 50.0, next() * 10.0, next() * 100.0 - 50.0);
             s.insert(o);
@@ -314,7 +365,10 @@ mod tests {
         let mut want: Vec<ObjId> = s
             .objects
             .values()
-            .filter(|o| objects::world_box(&s, o, &local).is_some_and(|x| (0..3).all(|a| x.min[a] <= b.max[a] && x.max[a] >= b.min[a])))
+            .filter(|o| {
+                objects::world_box(&s, o, &local)
+                    .is_some_and(|x| (0..3).all(|a| x.min[a] <= b.max[a] && x.max[a] >= b.min[a]))
+            })
             .map(|o| o.id)
             .collect();
         want.sort();

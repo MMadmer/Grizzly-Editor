@@ -47,7 +47,8 @@ impl Account {
 /// What a token looks like; keeps a pasted sentence out of the credential store.
 #[must_use]
 pub fn plausible_token(token: &str) -> bool {
-    (20..=255).contains(&token.len()) && token.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    (20..=255).contains(&token.len())
+        && token.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
 /// The variables a token is read from, in order; a QA run reads its own alone.

@@ -10,8 +10,9 @@ use glam::Vec3;
 use gz_chunk::Writer;
 use gz_entities::Settings;
 use gz_fmt_level::{
-    Aabb, BuildAiMap, CForm, EnvModifier, EnvMods, FogGroup, LevelGame, RPoint, SPAWNPOINT_VERSION, StaticParticles, StaticSound, Tri,
-    WayLink, WayObject, WayPoint, i_floor, write_fog_volumes, write_static_particles, write_static_sounds,
+    Aabb, BuildAiMap, CForm, EnvModifier, EnvMods, FogGroup, LevelGame, RPoint, SPAWNPOINT_VERSION,
+    StaticParticles, StaticSound, Tri, WayLink, WayObject, WayPoint, i_floor, write_fog_volumes,
+    write_static_particles, write_static_sounds,
 };
 use gz_fmt_object::{ObjectFlags, SurfaceFlags};
 use gz_scene::math::xform_box;
@@ -94,7 +95,10 @@ fn u32_3f(c: u32) -> Vec3 {
 
 /// A spawn element's packet as `ExportGame` writes it: the entity named, placed and shaped
 /// like the point.
-pub fn export_entity(o: &Object, settings: Option<&(dyn Settings + Sync)>) -> Result<Option<(gz_entities::Entity, bool)>> {
+pub fn export_entity(
+    o: &Object,
+    settings: Option<&(dyn Settings + Sync)>,
+) -> Result<Option<(gz_entities::Entity, bool)>> {
     let ObjData::Spawn(pt) = &o.data else { return Ok(None) };
     let Some(e) = &pt.entity else { return Ok(None) };
     let mut entity = match e {
@@ -187,7 +191,11 @@ pub fn game_files(scene: &SceneState, settings: Option<&(dyn Settings + Sync)>) 
                     }
                     game.ways.push(WayObject {
                         name: o.name.clone(),
-                        points: w.points.iter().map(|p| WayPoint { pos: p.position, flags: p.flags, name: p.name.clone() }).collect(),
+                        points: w
+                            .points
+                            .iter()
+                            .map(|p| WayPoint { pos: p.position, flags: p.flags, name: p.name.clone() })
+                            .collect(),
                         links,
                     });
                 }
@@ -200,7 +208,11 @@ pub fn game_files(scene: &SceneState, settings: Option<&(dyn Settings + Sync)>) 
                     play_time: [(s.play_time[0] * 1000.0) as u32, (s.play_time[1] * 1000.0) as u32],
                     random_pause: [(s.random_pause[0] * 1000.0) as u32, (s.random_pause[1] * 1000.0) as u32],
                 }),
-                ObjData::Particles(p) => particles.push(StaticParticles { game_type: p.game_type, reference: p.reference.clone(), transform: o.world().0 }),
+                ObjData::Particles(p) => particles.push(StaticParticles {
+                    game_type: p.game_type,
+                    reference: p.reference.clone(),
+                    transform: o.world().0,
+                }),
                 _ => {}
             }
         }
@@ -237,7 +249,13 @@ pub fn game_files(scene: &SceneState, settings: Option<&(dyn Settings + Sync)>) 
         for o in g.iter() {
             let ObjData::FogVolume(f) = &o.data else { continue };
             match &mut group {
-                None if f.kind == FV_EMITTER => group = Some(FogGroup { profile: f.profile.clone(), emitter: o.world().0, occluders: Vec::new() }),
+                None if f.kind == FV_EMITTER => {
+                    group = Some(FogGroup {
+                        profile: f.profile.clone(),
+                        emitter: o.world().0,
+                        occluders: Vec::new(),
+                    })
+                }
                 Some(gr) if f.kind == FV_OCCLUSION => gr.occluders.push(o.world().0),
                 _ => {
                     out.log.push("! incorrect fog volumes grouping".to_owned());
@@ -277,7 +295,9 @@ pub fn hom(scene: &SceneState, lib: Lookup<'_>) -> Option<Vec<u8>> {
                 for &f in sf.faces.iter() {
                     let Some(face) = m.faces.get(f as usize) else { continue };
                     for v in face.v {
-                        body.w_vec3(xf.transform_tiny(m.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO)));
+                        body.w_vec3(
+                            xf.transform_tiny(m.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO)),
+                        );
                     }
                     body.w_u32(two);
                 }
@@ -309,16 +329,24 @@ pub fn som(scene: &SceneState, lib: Lookup<'_>, engine: &Engine) -> Result<Optio
             for sf in &m.surf_faces {
                 let Some(s) = lo.object.surfaces.get(sf.surface as usize) else { continue };
                 let Some(id) = engine.material_id(&s.game_mtl) else {
-                    return Err(BuildError::new(format!("Object '{}', surface '{}' contain invalid game material.", lo.name, s.name)));
+                    return Err(BuildError::new(format!(
+                        "Object '{}', surface '{}' contain invalid game material.",
+                        lo.name, s.name
+                    )));
                 };
                 let Some(mtl) = engine.materials.as_ref().and_then(|l| l.by_id(id)) else {
-                    return Err(BuildError::new(format!("Object '{}', surface '{}' contain undefined game material.", lo.name, s.name)));
+                    return Err(BuildError::new(format!(
+                        "Object '{}', surface '{}' contain undefined game material.",
+                        lo.name, s.name
+                    )));
                 };
                 let two = u32::from(s.flags.contains(SurfaceFlags::TWO_SIDED));
                 for &f in sf.faces.iter() {
                     let Some(face) = m.faces.get(f as usize) else { continue };
                     for v in face.v {
-                        body.w_vec3(xf.transform_tiny(m.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO)));
+                        body.w_vec3(
+                            xf.transform_tiny(m.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO)),
+                        );
                     }
                     body.w_u32(two);
                     body.w_f32(mtl.snd_occlusion_factor);
@@ -360,7 +388,8 @@ pub fn scene_stat(stat: &SceneStat) -> (Vec<u8>, Vec<u8>) {
     let (sx, sz) = (stat.sx, stat.sz);
     let max_s = stat.svert.iter().copied().max().unwrap_or(0);
     let max_mu = stat.muvert.iter().copied().max().unwrap_or(0);
-    let (total_s, total_mu): (u64, u64) = (stat.svert.iter().map(|v| u64::from(*v)).sum(), stat.muvert.iter().map(|v| u64::from(*v)).sum());
+    let (total_s, total_mu): (u64, u64) =
+        (stat.svert.iter().map(|v| u64::from(*v)).sum(), stat.muvert.iter().map(|v| u64::from(*v)).sum());
     let scale = |v: u32, max: u32| -> u8 {
         let f = v as f32 / max as f32 * 255.0 + 0.5;
         if f.is_finite() { i_floor(f) as u8 } else { 0 }
@@ -375,7 +404,10 @@ pub fn scene_stat(stat: &SceneStat) -> (Vec<u8>, Vec<u8>) {
             rgba.extend_from_slice(&[r, g, 0, 0]);
         }
     }
-    let tga = gz_fmt_tex::Image::new(sx, sz, rgba).ok().and_then(|i| gz_fmt_tex::write_tga(&i, gz_fmt_tex::TgaDepth::Bgra32).ok()).unwrap_or_default();
+    let tga = gz_fmt_tex::Image::new(sx, sz, rgba)
+        .ok()
+        .and_then(|i| gz_fmt_tex::write_tga(&i, gz_fmt_tex::TgaDepth::Bgra32).ok())
+        .unwrap_or_default();
     let mut txt = String::new();
     let _ = write!(
         txt,
@@ -426,7 +458,11 @@ pub fn collision_form(scene: &SceneState, lib: Lookup<'_>, engine: &Engine) -> O
                     }
                     tris.push(Tri::new(face.v.map(|v| v.point + offs), material, 0));
                     if s.flags.contains(SurfaceFlags::TWO_SIDED) {
-                        tris.push(Tri::new([face.v[2].point + offs, face.v[1].point + offs, face.v[0].point + offs], material, 0));
+                        tris.push(Tri::new(
+                            [face.v[2].point + offs, face.v[1].point + offs, face.v[0].point + offs],
+                            material,
+                            0,
+                        ));
                     }
                 }
             }
@@ -443,6 +479,8 @@ pub fn object_box(o: &Object, lib: Lookup<'_>) -> Option<Aabb> {
 }
 
 /// A shared library lookup over a cache.
-pub fn lookup(lib: Arc<gz_scene::library::Library>) -> impl Fn(&str) -> Option<Arc<gz_scene::library::LibraryObject>> + Sync {
+pub fn lookup(
+    lib: Arc<gz_scene::library::Library>,
+) -> impl Fn(&str) -> Option<Arc<gz_scene::library::LibraryObject>> + Sync {
     move |n: &str| lib.cached(n)
 }

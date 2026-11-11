@@ -110,7 +110,8 @@ impl Walker<'_> {
     fn skip(&mut self, rel: &RelPath, seen: &Seen<'_>, at_root: bool) -> bool {
         let name = seen.name();
         // the manifest is what makes the folder a module - no rule takes it out
-        if at_root && name.eq_ignore_ascii_case(gz_mod::FILE) && matches!(seen, Seen::Tree(e) if e.is_file()) {
+        if at_root && name.eq_ignore_ascii_case(gz_mod::FILE) && matches!(seen, Seen::Tree(e) if e.is_file())
+        {
             return false;
         }
         // the editor's scratch and the sources never ship, and the author knows it
@@ -118,7 +119,10 @@ impl Walker<'_> {
             return true;
         }
         // authoring help beside the patches, not content
-        if name.eq_ignore_ascii_case("_readme.txt") && rel.segments().next().is_some_and(|s| s.eq_ignore_ascii_case("patch")) && rel.depth() > 1 {
+        if name.eq_ignore_ascii_case("_readme.txt")
+            && rel.segments().next().is_some_and(|s| s.eq_ignore_ascii_case("patch"))
+            && rel.depth() > 1
+        {
             return true;
         }
         let folder = match seen {
@@ -132,7 +136,9 @@ impl Walker<'_> {
         let reason = match seen {
             Seen::Tooling(..) => Some(LeftOutReason::Tooling),
             Seen::Tree(e) if e.kind == EntryKind::Link => Some(LeftOutReason::Link),
-            Seen::Tree(_) if exclude_match(self.rules, rel.as_str()).is_some() => Some(LeftOutReason::Excluded),
+            Seen::Tree(_) if exclude_match(self.rules, rel.as_str()).is_some() => {
+                Some(LeftOutReason::Excluded)
+            }
             Seen::Tree(_) if is_tooling_entry(name) => Some(LeftOutReason::Tooling),
             Seen::Tree(_) => None,
         };
@@ -152,7 +158,12 @@ impl Walker<'_> {
         let Some(dir) = self.tree.dir(dir_rel) else { return };
         let dir = dir.clone();
         let extra: &[(SmolStr, bool)] = self.tooling.and_then(|t| t.get(dir_rel)).map_or(&[], Vec::as_slice);
-        let mut items: Vec<Seen<'_>> = dir.entries.iter().map(Seen::Tree).chain(extra.iter().map(|(n, d)| Seen::Tooling(n, *d))).collect();
+        let mut items: Vec<Seen<'_>> = dir
+            .entries
+            .iter()
+            .map(Seen::Tree)
+            .chain(extra.iter().map(|(n, d)| Seen::Tooling(n, *d)))
+            .collect();
         items.sort_by_cached_key(|s| s.name().to_ascii_lowercase());
         let at_root = dir_rel.is_root();
         for seen in items {
@@ -174,9 +185,21 @@ impl Walker<'_> {
 }
 
 impl BuildWalk {
-    fn run(tree: &FileTree, rules: &[String], scope: WalkScope, tooling: Option<&Tooling>) -> (BuildWalk, Vec<RelPath>) {
+    fn run(
+        tree: &FileTree,
+        rules: &[String],
+        scope: WalkScope,
+        tooling: Option<&Tooling>,
+    ) -> (BuildWalk, Vec<RelPath>) {
         let root_len = tree.root().as_os_str().len();
-        let mut w = Walker { tree, rules, root_len, tooling, out: BuildWalk { root: tree.root().to_path_buf(), ..BuildWalk::default() }, entered: Vec::new() };
+        let mut w = Walker {
+            tree,
+            rules,
+            root_len,
+            tooling,
+            out: BuildWalk { root: tree.root().to_path_buf(), ..BuildWalk::default() },
+            entered: Vec::new(),
+        };
         match scope {
             WalkScope::Module => w.walk(&RelPath::root()),
             WalkScope::Gamedata => {
@@ -258,7 +281,16 @@ mod tests {
     fn walks_what_ships_and_says_what_not() {
         let dir = std::env::temp_dir().join(format!("gz-build-walk-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        for d in [".git\\objects", "gamedata\\textures\\qa", "gamedata\\.git", "design", "temp", "rawdata", "patch", "docs"] {
+        for d in [
+            ".git\\objects",
+            "gamedata\\textures\\qa",
+            "gamedata\\.git",
+            "design",
+            "temp",
+            "rawdata",
+            "patch",
+            "docs",
+        ] {
             fs::create_dir_all(dir.join(d)).unwrap();
         }
         for f in [
@@ -282,14 +314,31 @@ mod tests {
         }
         let tree = FileTree::scan(&dir);
         let rules = vec!["design".to_owned(), "*.psd".to_owned(), "docs/".to_owned()];
-        let exec_rt = gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 2 }).unwrap();
+        let exec_rt =
+            gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 2 })
+                .unwrap();
         let exec = exec_rt.exec();
         let walk = BuildWalk::scan(&tree, &rules, WalkScope::Module, &exec);
         let files: Vec<&str> = walk.files.iter().map(|f| f.rel.as_str()).collect();
-        assert_eq!(files, ["gamedata/configs.ltx", "gamedata/textures/qa/a.dds", "LICENSE", "mod.ltx", "patch/fix.ltxp"]);
+        assert_eq!(
+            files,
+            ["gamedata/configs.ltx", "gamedata/textures/qa/a.dds", "LICENSE", "mod.ltx", "patch/fix.ltxp"]
+        );
         assert_eq!(walk.bytes, 5);
         let left = walk.left_out_texts();
-        assert_eq!(left, [".git", ".gitignore", "art.psd", "author.xkey (a key file never ships)", "design", "docs", "gamedata\\.git", "gamedata\\textures\\qa\\Thumbs.db"]);
+        assert_eq!(
+            left,
+            [
+                ".git",
+                ".gitignore",
+                "art.psd",
+                "author.xkey (a key file never ships)",
+                "design",
+                "docs",
+                "gamedata\\.git",
+                "gamedata\\textures\\qa\\Thumbs.db"
+            ]
+        );
 
         let flat = BuildWalk::scan(&tree, &rules, WalkScope::Gamedata, &exec);
         assert_eq!(flat.files.len(), 2);

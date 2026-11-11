@@ -169,13 +169,17 @@ pub fn native_dds(p: &[u8]) -> Option<NativeDds> {
     let mut offset = data;
     for m in 0..mips {
         let (w, h) = ((width >> m).max(1), (height >> m).max(1));
-        let (pitch, rows) = if fi.compressed { (w.div_ceil(4).max(1) * fi.block, h.div_ceil(4).max(1)) } else { (w * fi.block, h) };
+        let (pitch, rows) = if fi.compressed {
+            (w.div_ceil(4).max(1) * fi.block, h.div_ceil(4).max(1))
+        } else {
+            (w * fi.block, h)
+        };
         let len = pitch as usize * rows as usize;
         let Some(level) = p.get(offset..offset + len) else { break };
         let mut level = level.to_vec();
         if code == 88 {
             // X8 is no alpha: the view must not blend by it
-            for px in level.chunks_exact_mut(4) {
+            for px in level.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
         }
@@ -213,7 +217,11 @@ pub fn gpu_bytes(fi: &FormatInfo, width: u32, height: u32, mips: u32) -> u64 {
     (0..mips)
         .map(|m| {
             let (w, h) = (u64::from((width >> m).max(1)), u64::from((height >> m).max(1)));
-            if fi.compressed { w.div_ceil(4) * h.div_ceil(4) * u64::from(fi.block) } else { w * h * u64::from(fi.block) }
+            if fi.compressed {
+                w.div_ceil(4) * h.div_ceil(4) * u64::from(fi.block)
+            } else {
+                w * h * u64::from(fi.block)
+            }
         })
         .sum()
 }
@@ -307,7 +315,11 @@ impl TexFile {
     #[must_use]
     pub fn format_text(&self) -> String {
         let gpu = self.format().map_or_else(|| format!("DXGI format {}", self.dxgi), |f| f.name.to_owned());
-        if self.decoded { format!("{}, decoded to {gpu}", if self.container.is_empty() { "image" } else { self.container }) } else { gpu }
+        if self.decoded {
+            format!("{}, decoded to {gpu}", if self.container.is_empty() { "image" } else { self.container })
+        } else {
+            gpu
+        }
     }
 
     #[must_use]
@@ -317,14 +329,23 @@ impl TexFile {
 }
 
 /// The bytes of a texture of a source, and where they came from.
-fn read(sources: &Sources, name: &str, source: TexSource) -> Option<(Vec<u8>, Option<PathBuf>, String, Origin)> {
+fn read(
+    sources: &Sources,
+    name: &str,
+    source: TexSource,
+) -> Option<(Vec<u8>, Option<PathBuf>, String, Origin)> {
     match source {
         TexSource::Game => {
             let files = sources.game.as_ref()?;
             let f = files.get(name)?;
             let bytes = files.read_ref(f).ok()?;
             match f.source {
-                Source::Loose => Some((bytes, Some(files.game_data().join(f.path.replace('/', "\\"))), String::new(), Origin::GameFolder)),
+                Source::Loose => Some((
+                    bytes,
+                    Some(files.game_data().join(f.path.replace('/', "\\"))),
+                    String::new(),
+                    Origin::GameFolder,
+                )),
                 Source::Archive { .. } => Some((bytes, None, f.path.to_owned(), Origin::GameArchive)),
             }
         }
@@ -336,7 +357,11 @@ fn read(sources: &Sources, name: &str, source: TexSource) -> Option<(Vec<u8>, Op
         TexSource::Editor => {
             // a name without an extension, resolved through the library's folders
             let stem = crate::paths::strip_ext(name);
-            let probes = [(&sources.dirs.game_textures, "dds"), (&sources.dirs.textures, "tga"), (&sources.dirs.textures, "dds")];
+            let probes = [
+                (&sources.dirs.game_textures, "dds"),
+                (&sources.dirs.textures, "tga"),
+                (&sources.dirs.textures, "dds"),
+            ];
             probes.into_iter().find_map(|(dir, ext)| {
                 let path = dir.join(format!("{stem}.{ext}"));
                 if !path.is_file() {
@@ -364,7 +389,8 @@ pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFi
         .exec
         .cpu(move || {
             let size = bytes.len() as u64;
-            let container = container_of(&bytes, file.as_ref().map_or(n.as_str(), |f| f.to_str().unwrap_or(&n)));
+            let container =
+                container_of(&bytes, file.as_ref().map_or(n.as_str(), |f| f.to_str().unwrap_or(&n)));
             let mut t = TexFile::failed(&n, "");
             t.file = file;
             t.archive = archive;
@@ -372,9 +398,18 @@ pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFi
             t.container = container;
             t.file_size = size;
             let bc = gpu.device.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
-            if let Some(native) = native_dds(&bytes).filter(|d| bc || dxgi(d.dxgi).is_some_and(|(f, _)| !f.compressed))
+            if let Some(native) =
+                native_dds(&bytes).filter(|d| bc || dxgi(d.dxgi).is_some_and(|(f, _)| !f.compressed))
                 && let Some((_, format)) = dxgi(native.dxgi)
-                && let Ok(tex) = crate::gpu::upload(&gpu.device, &gpu.queue, "gz-ui-previews texture", format, native.width, native.height, &native.levels)
+                && let Ok(tex) = crate::gpu::upload(
+                    &gpu.device,
+                    &gpu.queue,
+                    "gz-ui-previews texture",
+                    format,
+                    native.width,
+                    native.height,
+                    &native.levels,
+                )
             {
                 t.width = native.width;
                 t.height = native.height;
@@ -394,10 +429,18 @@ pub async fn load(editor: Arc<Editor>, name: String, source: TexSource) -> TexFi
             };
             let img = loaded.image;
             let mut bgra = img.rgba.clone();
-            for px in bgra.chunks_exact_mut(4) {
+            for px in bgra.as_chunks_mut::<4>().0 {
                 px.swap(0, 2);
             }
-            match crate::gpu::upload(&gpu.device, &gpu.queue, "gz-ui-previews texture", wgpu::TextureFormat::Bgra8Unorm, img.width, img.height, &[bgra]) {
+            match crate::gpu::upload(
+                &gpu.device,
+                &gpu.queue,
+                "gz-ui-previews texture",
+                wgpu::TextureFormat::Bgra8Unorm,
+                img.width,
+                img.height,
+                &[bgra],
+            ) {
                 Ok(tex) => {
                     t.width = img.width;
                     t.height = img.height;

@@ -51,7 +51,11 @@ pub struct ManifestState {
 
 impl ManifestState {
     fn of_text(text: Option<String>) -> Self {
-        Self { loaded: text.map(|t| Arc::new(Loaded::new(ManifestDoc::parse(&t)))), serial: 0, from_disk: true }
+        Self {
+            loaded: text.map(|t| Arc::new(Loaded::new(ManifestDoc::parse(&t)))),
+            serial: 0,
+            from_disk: true,
+        }
     }
 
     #[must_use]
@@ -96,7 +100,9 @@ impl State for ManifestState {
     fn apply(&mut self, cmd: ManifestCmd, cx: &mut Apply) -> Result<bool, CmdError> {
         match cmd {
             ManifestCmd::Edit(edits) => {
-                let Some(loaded) = &self.loaded else { return Err(CmdError::new("refused", "mod.ltx not found in the project")) };
+                let Some(loaded) = &self.loaded else {
+                    return Err(CmdError::new("refused", "mod.ltx not found in the project"));
+                };
                 let before = loaded.doc.to_string();
                 let mut doc = loaded.doc.clone();
                 for e in edits {
@@ -162,7 +168,9 @@ fn manifest_entry(tree: &FileTree) -> Option<EntryKind> {
 
 async fn read_text(exec: &Executors, root: &Path) -> Result<Option<String>, CmdError> {
     let root = root.to_path_buf();
-    exec.io(move || read_manifest_file(&root)).await.map_err(|e| CmdError::io(format!("mod.ltx could not be read: {e}")))
+    exec.io(move || read_manifest_file(&root))
+        .await
+        .map_err(|e| CmdError::io(format!("mod.ltx could not be read: {e}")))
 }
 
 impl ManifestService {
@@ -195,7 +203,8 @@ impl ManifestService {
     }
 
     fn new(editor: &Editor, root: &Path, text: Option<String>) -> Self {
-        let store = Store::spawn("manifest", ManifestState::of_text(text), &editor.exec, StoreOptions::default());
+        let store =
+            Store::spawn("manifest", ManifestState::of_text(text), &editor.exec, StoreOptions::default());
         let path = root.join(FILE);
         let log = editor.log.clone();
         let saver = AutoSave::spawn(
@@ -207,7 +216,13 @@ impl ManifestService {
             },
             move |e| log.warn(e.to_owned()),
         );
-        Self { root: root.to_path_buf(), store, saver, exec: editor.exec.clone(), lock: tokio::sync::Mutex::new(()) }
+        Self {
+            root: root.to_path_buf(),
+            store,
+            saver,
+            exec: editor.exec.clone(),
+            lock: tokio::sync::Mutex::new(()),
+        }
     }
 
     /// Follows the project's file tree: when `mod.ltx` moves there, the disk is compared.
@@ -328,7 +343,11 @@ impl Drop for ManifestService {
 
 /// What `mod_commands` and the build ask of the project's console commands: the functions its
 /// scripts define and the problems of `[commands]` (the linked game's other modules included).
-pub async fn command_check(editor: &Editor, session: &ProjectSession, m: &Manifest) -> (Vec<String>, Vec<Problem>) {
+pub async fn command_check(
+    editor: &Editor,
+    session: &ProjectSession,
+    m: &Manifest,
+) -> (Vec<String>, Vec<Problem>) {
     let Some(project) = session.services.get::<Project>() else { return (Vec::new(), Vec::new()) };
     project.tree.refresh().await;
     let tree = project.tree.snapshot();
@@ -342,7 +361,8 @@ pub async fn command_check(editor: &Editor, session: &ProjectSession, m: &Manife
             if m.commands.is_empty() {
                 return (functions, Vec::new());
             }
-            let taken = if game.is_empty() { Vec::new() } else { installed_commands(Path::new(&game), &m.id) };
+            let taken =
+                if game.is_empty() { Vec::new() } else { installed_commands(Path::new(&game), &m.id) };
             let problems = crate::commands::validate_commands(&m, &functions, &taken);
             (functions, problems)
         })
@@ -405,7 +425,11 @@ impl ManifestArgs {
         editor.services.get_or_init(Self::default)
     }
 
-    pub fn provide(&self, arg: &'static str, f: impl Fn(ArgCx) -> BoxFuture<'static, Result<Vec<Edit>, String>> + Send + Sync + 'static) {
+    pub fn provide(
+        &self,
+        arg: &'static str,
+        f: impl Fn(ArgCx) -> BoxFuture<'static, Result<Vec<Edit>, String>> + Send + Sync + 'static,
+    ) {
         let mut hooks = self.hooks.write();
         hooks.retain(|(name, _)| *name != arg);
         hooks.push((arg, Arc::new(f)));
@@ -424,7 +448,9 @@ mod tests {
 
     fn apply(state: &mut ManifestState, cmd: ManifestCmd) -> bool {
         // the store's Apply is private to gz-store; the state's logic is checked through it
-        let rt = gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 1 }).unwrap();
+        let rt =
+            gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 1 })
+                .unwrap();
         let store = Store::spawn("test", state.clone(), &rt.exec(), StoreOptions::default());
         let changed = rt.block_on(store.send(cmd, Origin::Mcp)).unwrap();
         *state = store.snapshot().state.clone();
@@ -441,17 +467,29 @@ mod tests {
         assert!(!apply(&mut s, ManifestCmd::Edit(vec![Edit::set("module", "version", "1.0.0")])));
         // a reload read before the last edit is dropped
         let stale = s.serial - 1;
-        assert!(!apply(&mut s, ManifestCmd::Reload { text: Some("[module]\nid = other\n".into()), serial: stale }));
+        assert!(!apply(
+            &mut s,
+            ManifestCmd::Reload { text: Some("[module]\nid = other\n".into()), serial: stale }
+        ));
         let now = s.serial;
-        assert!(apply(&mut s, ManifestCmd::Reload { text: Some("[module]\nid = other\n".into()), serial: now }));
+        assert!(apply(
+            &mut s,
+            ManifestCmd::Reload { text: Some("[module]\nid = other\n".into()), serial: now }
+        ));
         assert_eq!(s.manifest().unwrap().id, "other");
         assert!(s.from_disk);
         assert!(!apply(&mut s, ManifestCmd::Create(scaffold_text("x"))));
         let mut none = ManifestState::of_text(None);
         let refused = {
-            let rt = gz_task::Runtime::start(gz_task::ExecOptions { async_threads: 1, cpu_threads: 1, io_threads: 1 }).unwrap();
+            let rt = gz_task::Runtime::start(gz_task::ExecOptions {
+                async_threads: 1,
+                cpu_threads: 1,
+                io_threads: 1,
+            })
+            .unwrap();
             let store = Store::spawn("test", none.clone(), &rt.exec(), StoreOptions::default());
-            rt.block_on(store.send(ManifestCmd::Edit(vec![Edit::set("module", "id", "x")]), Origin::Mcp)).is_err()
+            rt.block_on(store.send(ManifestCmd::Edit(vec![Edit::set("module", "id", "x")]), Origin::Mcp))
+                .is_err()
         };
         assert!(refused);
         assert!(apply(&mut none, ManifestCmd::Create(scaffold_text("x"))));

@@ -183,7 +183,10 @@ impl Object {
     /// Reads a `.object` file.
     pub fn read(bytes: &[u8]) -> Result<Object> {
         let file = Reader::new(bytes);
-        let body = file.open_chunk(CHUNK_OBJECT_BODY)?.filter(|c| !c.bytes().is_empty()).ok_or(ObjectError::NotAnObject)?;
+        let body = file
+            .open_chunk(CHUNK_OBJECT_BODY)?
+            .filter(|c| !c.bytes().is_empty())
+            .ok_or(ObjectError::NotAnObject)?;
         let (mut object, encoding) = with_text(|text| Self::read_body(&body.reader(), text))?;
         object.encoding = encoding;
         Ok(object)
@@ -359,11 +362,11 @@ impl Object {
             }
             out.push(s);
         }
-        if form == 1 {
-            if let Some(mut c) = chunk(f, CHUNK_SURFACES_XRLC) {
-                for s in &mut out {
-                    s.shader_xrlc = text.r_str(&mut c)?;
-                }
+        if form == 1
+            && let Some(mut c) = chunk(f, CHUNK_SURFACES_XRLC)
+        {
+            for s in &mut out {
+                s.shader_xrlc = text.r_str(&mut c)?;
             }
         }
         Ok(out)
@@ -497,7 +500,9 @@ impl Object {
     /// The children of a bone, in bone order.
     #[must_use]
     pub fn bone_children(&self, bone: usize) -> Vec<usize> {
-        (0..self.bones.len()).filter(|i| self.bones[*i].parent_id.map(usize::from) == Some(bone) && *i != bone).collect()
+        (0..self.bones.len())
+            .filter(|i| self.bones[*i].parent_id.map(usize::from) == Some(bone) && *i != bone)
+            .collect()
     }
 
     /// `UpdateBox`: the box around the boxes of all meshes.
@@ -542,7 +547,10 @@ impl Object {
             }
         }
         // oracle: with several parentless bones the C++ keeps the tree of the last one only
-        let root = bones.iter().rposition(|b| b.name == root_name && b.parent.is_empty()).or_else(|| find(&bones, &root_name));
+        let root = bones
+            .iter()
+            .rposition(|b| b.name == root_name && b.parent.is_empty())
+            .or_else(|| find(&bones, &root_name));
         let Some(root) = root else {
             self.bones = bones;
             return Err(invalid("The skeleton has no root bone."));
@@ -646,10 +654,16 @@ mod tests {
         mesh.rebuild_vmaps().unwrap();
         o.meshes.push(mesh);
         for (name, parent) in [("root", ""), ("b_leg", "root"), ("a_arm", "root"), ("hand", "a_arm")] {
-            o.bones.push(Bone { name: name.into(), parent: parent.into(), wmap: name.into(), ..Bone::default() });
+            o.bones.push(Bone {
+                name: name.into(),
+                parent: parent.into(),
+                wmap: name.into(),
+                ..Bone::default()
+            });
         }
         o.prepare_bones().unwrap();
-        o.bone_parts.push(BonePart { alias: "all".into(), bones: o.bones.iter().map(|b| b.name.clone()).collect() });
+        o.bone_parts
+            .push(BonePart { alias: "all".into(), bones: o.bones.iter().map(|b| b.name.clone()).collect() });
         let mut m = SMotion { frame_end: 10, ..SMotion::default() };
         m.set_name("idle");
         m.bone_motions.push(BoneMotion { name: "hand".into(), ..BoneMotion::default() });
@@ -685,7 +699,10 @@ mod tests {
         assert_eq!(back.bones, o.bones);
         assert_eq!(back.bone_parts, o.bone_parts);
         assert_eq!(back.user_data, o.user_data);
-        assert_eq!((back.created_by.as_str(), back.created_at, back.modified_at), ("\\\\PC\\author", 1_000_000, 1_000_100));
+        assert_eq!(
+            (back.created_by.as_str(), back.created_at, back.modified_at),
+            ("\\\\PC\\author", 1_000_000, 1_000_100)
+        );
         assert!(back.is_skeleton() && back.is_dynamic() && back.is_animated());
         assert_eq!(back.bounding_box(), Aabb { min: Vec3::ZERO, max: Vec3::ONE });
     }

@@ -108,7 +108,12 @@ pub fn truncated(ctx: &Context, full: &str, shown: &str, rect: Rect) {
     let mut s = h.0.lock();
     if s.wanted {
         let surface = current(&s);
-        s.entries.push(AuditEntry::Truncated { surface, full: full.to_owned(), shown: shown.to_owned(), rect: px(ctx, rect) });
+        s.entries.push(AuditEntry::Truncated {
+            surface,
+            full: full.to_owned(),
+            shown: shown.to_owned(),
+            rect: px(ctx, rect),
+        });
     }
 }
 

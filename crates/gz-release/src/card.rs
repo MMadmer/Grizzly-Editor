@@ -34,7 +34,8 @@ fn read_tables(dir: &Path) -> Vec<Vec<u8>> {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_owned();
-            let xml = name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(".xml"));
+            let xml =
+                name.len() > 4 && name.get(name.len() - 4..).is_some_and(|x| x.eq_ignore_ascii_case(".xml"));
             xml.then(|| (name.to_ascii_lowercase(), e.path()))
         })
         .collect();
@@ -97,7 +98,9 @@ fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 
 /// A display text that could be a string table id: short, no blank, ASCII.
 fn looks_like_id(text: &str) -> bool {
-    !text.is_empty() && text.len() <= 128 && !text.bytes().any(|b| matches!(b, b' ' | b'\t' | b'\n') || b >= 0x80)
+    !text.is_empty()
+        && text.len() <= 128
+        && !text.bytes().any(|b| matches!(b, b' ' | b'\t' | b'\n') || b >= 0x80)
 }
 
 /// The Russian (or the only) text of a display value and the English one, if any.
@@ -156,7 +159,12 @@ fn card_text(out: &mut String, key: &str, tables: &StringTables, value: &str) {
 
 /// The `[card]` section, starting with its blank line (`CardSection`).
 #[must_use]
-pub fn card_section(m: &Manifest, tables: &StringTables, manifest: &CardFile, thumbnail: Option<&CardFile>) -> String {
+pub fn card_section(
+    m: &Manifest,
+    tables: &StringTables,
+    manifest: &CardFile,
+    thumbnail: Option<&CardFile>,
+) -> String {
     let mut out = String::from("\r\n[card]\r\n");
     card_text(&mut out, "name", tables, if m.name.is_empty() { &m.id } else { &m.name });
     card_text(&mut out, "author", tables, &m.author);
@@ -202,7 +210,9 @@ mod tests {
 
     #[test]
     fn the_card_as_the_cpp_writes_it() {
-        let m = manifest("[module]\r\nid = od\r\nname = od_name\r\nauthor = Madmer\r\ndescription = \"Night shifts.\\nA \\\"new\\\" mode.\"\r\nwebsite = https://ap-pro.ru/stuff/x/overnight-delivery-r600/\r\nmode = od_mode\r\ntags = story, quests\r\n\r\n[provides_mode]\r\nid = od_mode\r\ntitle = od_mode_title\r\n");
+        let m = manifest(
+            "[module]\r\nid = od\r\nname = od_name\r\nauthor = Madmer\r\ndescription = \"Night shifts.\\nA \\\"new\\\" mode.\"\r\nwebsite = https://ap-pro.ru/stuff/x/overnight-delivery-r600/\r\nmode = od_mode\r\ntags = story, quests\r\n\r\n[provides_mode]\r\nid = od_mode\r\ntitle = od_mode_title\r\n",
+        );
         let rus = "<string_table>\r\n<string id=\"od_name\">\r\n<text>\u{41d}\u{43e}\u{447}\u{43d}\u{430}\u{44f} \u{434}\u{43e}\u{441}\u{442}\u{430}\u{432}\u{43a}\u{430}</text>\r\n</string>\r\n</string_table>";
         let eng = "<string id=\"od_name\"><text>Overnight Delivery</text></string><string id=\"od_mode_title\"><text>Night\\nShift</text></string>";
         let tables = StringTables::from_texts(vec![rus.as_bytes().to_vec()], vec![eng.as_bytes().to_vec()]);
@@ -230,7 +240,10 @@ mod tests {
         let tables = StringTables::default();
         let mf = CardFile { path: "mod.ltx".into(), size: 1, sha256: "00".into() };
         let mut m = manifest("[module]\r\nid = od\r\n");
-        assert_eq!(card_section(&m, &tables, &mf, None), "\r\n[card]\r\nname        = \"od\"\r\nmode        = plain\r\nmanifest    = mod.ltx, 1, 00\r\n");
+        assert_eq!(
+            card_section(&m, &tables, &mf, None),
+            "\r\n[card]\r\nname        = \"od\"\r\nmode        = plain\r\nmanifest    = mod.ltx, 1, 00\r\n"
+        );
         m.mode = "*".into();
         assert!(card_section(&m, &tables, &mf, None).contains("mode        = plain\r\n"));
         m.mode = "da_story".into();
@@ -239,11 +252,17 @@ mod tests {
         m.provides_modes = vec![ProvidesMode { id: "da_story".into(), title: String::new() }];
         assert!(card_section(&m, &tables, &mf, None).contains("mode        = new da_story\r\n"));
         // an id the tables do not hold stays as written; English alone stands for both
-        let eng = StringTables::from_texts(Vec::new(), vec![b"<string id=\"x\"><text>Only English</text></string>".to_vec()]);
+        let eng = StringTables::from_texts(
+            Vec::new(),
+            vec![b"<string id=\"x\"><text>Only English</text></string>".to_vec()],
+        );
         assert_eq!(resolve(&eng, "x"), ("Only English".to_owned(), "Only English".to_owned()));
         assert_eq!(resolve(&eng, "two words"), ("two words".to_owned(), String::new()));
         // a <text> that belongs to the next string is not this one's
-        let cut = StringTables::from_texts(vec![b"<string id=\"x\"></string><string id=\"y\"><text>Y</text></string>".to_vec()], Vec::new());
+        let cut = StringTables::from_texts(
+            vec![b"<string id=\"x\"></string><string id=\"y\"><text>Y</text></string>".to_vec()],
+            Vec::new(),
+        );
         assert_eq!(cut.lookup("rus", "x"), None);
     }
 }

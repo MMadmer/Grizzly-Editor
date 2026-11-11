@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use gz_fmt_level::{Aabb, XcForm, XcTri, append_cuts, unique_visual_name, VisualsWriter};
+use gz_fmt_level::{Aabb, VisualsWriter, XcForm, XcTri, append_cuts, unique_visual_name};
 use gz_fmt_object::Object as EditObject;
 use gz_fmt_ogf::{ExportOptions, export_static};
 use gz_scene::library::LibraryObject;
@@ -32,7 +32,13 @@ pub struct Collision {
 /// `DoExportXCForm` from the level name on: the scene objects' meshes in world space, a game
 /// material per face from its surface (`materials\default` where the surface names none or a
 /// face is in no surface), over the cut list `existing` holds.
-pub fn collision(scene: &SceneState, selected_only: bool, sector: i64, lib: LibraryLookup<'_>, existing: &[u8]) -> Result<Collision, ExportError> {
+pub fn collision(
+    scene: &SceneState,
+    selected_only: bool,
+    sector: i64,
+    lib: LibraryLookup<'_>,
+    existing: &[u8],
+) -> Result<Collision, ExportError> {
     if !(0..=65535).contains(&sector) {
         return Err(ExportError::new("sector out of u16 range"));
     }
@@ -60,7 +66,12 @@ pub fn collision(scene: &SceneState, selected_only: bool, sector: i64, lib: Libr
             // heap addresses; this walks the surfaces in file order.
             let mut fmtl: Vec<Option<usize>> = vec![None; fc];
             for sf in &mesh.surf_faces {
-                let gm = lo.object.surfaces.get(sf.surface as usize).map(|s| s.game_mtl.as_str()).filter(|g| !g.is_empty());
+                let gm = lo
+                    .object
+                    .surfaces
+                    .get(sf.surface as usize)
+                    .map(|s| s.game_mtl.as_str())
+                    .filter(|g| !g.is_empty());
                 let mi = XcForm::material_index(&mut mtls, gm.unwrap_or("materials\\default"));
                 for face in sf.faces.iter() {
                     if let Some(slot) = fmtl.get_mut(*face as usize) {
@@ -73,7 +84,10 @@ pub fn collision(scene: &SceneState, selected_only: bool, sector: i64, lib: Libr
                     Some(m) => m,
                     None => XcForm::material_index(&mut mtls, "materials\\default"),
                 };
-                tris.push(XcTri { v: [base + face.v[0].point, base + face.v[1].point, base + face.v[2].point], material: mi as u16 });
+                tris.push(XcTri {
+                    v: [base + face.v[0].point, base + face.v[1].point, base + face.v[2].point],
+                    material: mi as u16,
+                });
             }
             used = true;
         }
@@ -112,7 +126,15 @@ pub struct Cut {
 /// `DoExportCut` from the level name on: the objects' world bounds (grown by `grow` metres)
 /// added to the cut list and to the `[cut_N]` hide entries - both ACCUMULATE, and a box already
 /// present (within tolerance) is skipped, so re-exporting the same selection changes nothing.
-pub fn cut(scene: &SceneState, selected_only: bool, overlap: bool, grow: f32, bounds: &dyn Fn(&Object) -> Option<Aabb>, xcform: &[u8], ltx: &str) -> Result<Cut, ExportError> {
+pub fn cut(
+    scene: &SceneState,
+    selected_only: bool,
+    overlap: bool,
+    grow: f32,
+    bounds: &dyn Fn(&Object) -> Option<Aabb>,
+    xcform: &[u8],
+    ltx: &str,
+) -> Result<Cut, ExportError> {
     let mut boxes: Vec<Aabb> = Vec::new();
     for o in scene.of_class(ObjClass::SceneObject) {
         if selected_only && !scene.is_selected(o.id) {
@@ -159,8 +181,15 @@ pub struct VisualOverlay {
 /// `DoExportOGF` from the level name on: every static object exported in world space on a
 /// private copy (the shared library instance is never transformed), in parallel on the pool the
 /// caller runs it in. `build_name` is the C++ `\\computer\user` stamp of a model; [`registry`]
-/// names the files that were written.
-pub fn visuals(scene: &SceneState, selected_only: bool, lib: LibraryLookup<'_>, build_name: &str) -> Result<VisualOverlay, ExportError> {
+/// names the files that were written. `materials`, when the game's are known, refuses a
+/// surface whose material the game lacks.
+pub fn visuals(
+    scene: &SceneState,
+    selected_only: bool,
+    lib: LibraryLookup<'_>,
+    build_name: &str,
+    materials: Option<std::sync::Arc<gz_fmt_xr::GameMaterials>>,
+) -> Result<VisualOverlay, ExportError> {
     let mut out = VisualOverlay::default();
     let mut used: Vec<String> = Vec::new();
     let mut jobs: Vec<(String, EditObject, gz_scene::math::Mat4)> = Vec::new();
@@ -190,7 +219,11 @@ pub fn visuals(scene: &SceneState, selected_only: bool, lib: LibraryLookup<'_>, 
                 m.points = pts.into();
                 m.recompute_bbox();
             }
-            let opts = ExportOptions { source_file: name.as_str().into(), build_name: build_name.into() };
+            let opts = ExportOptions {
+                source_file: name.as_str().into(),
+                build_name: build_name.into(),
+                materials: materials.clone(),
+            };
             let r = export_static(&obj, &opts).map(|e| e.bytes).map_err(|e| e.to_string());
             (name, r)
         })
@@ -232,7 +265,7 @@ pub fn registry(existing: &str, names: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gz_fmt_object::{Face, FaceVert, Mesh, Surface, SurfFaces};
+    use gz_fmt_object::{Face, FaceVert, Mesh, SurfFaces, Surface};
     use gz_scene::math::Vec3;
     use gz_scene::objects::SceneObjectData;
 
@@ -247,16 +280,35 @@ mod tests {
             Vec3::new(0.5, 0.5, 0.5),
             Vec3::new(-0.5, 0.5, 0.5),
         ];
-        let idx: [[u32; 3]; 12] =
-            [[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1], [3, 2, 6], [3, 6, 7], [0, 3, 7], [0, 7, 4], [1, 5, 6], [1, 6, 2]];
-        let faces: Vec<Face> = idx.iter().map(|t| Face { v: t.map(|i| FaceVert { point: i, vmref: 0 }) }).collect();
+        let idx: [[u32; 3]; 12] = [
+            [0, 1, 2],
+            [0, 2, 3],
+            [4, 6, 5],
+            [4, 7, 6],
+            [0, 4, 5],
+            [0, 5, 1],
+            [3, 2, 6],
+            [3, 6, 7],
+            [0, 3, 7],
+            [0, 7, 4],
+            [1, 5, 6],
+            [1, 6, 2],
+        ];
+        let faces: Vec<Face> =
+            idx.iter().map(|t| Face { v: t.map(|i| FaceVert { point: i, vmref: 0 }) }).collect();
         let mut obj = EditObject::default();
-        obj.surfaces.push(Surface { name: "box".into(), game_mtl: "materials\\concrete".into(), ..Surface::default() });
-        let mut mesh = Mesh::default();
-        mesh.points = p.to_vec().into();
-        mesh.faces = faces.into();
+        obj.surfaces.push(Surface {
+            name: "box".into(),
+            game_mtl: "materials\\concrete".into(),
+            ..Surface::default()
+        });
         // the last two faces in no surface: they take the default material
-        mesh.surf_faces = vec![SurfFaces { surface: 0, faces: (0..10u32).collect::<Vec<_>>().into() }];
+        let mesh = Mesh {
+            points: p.to_vec().into(),
+            faces: faces.into(),
+            surf_faces: vec![SurfFaces { surface: 0, faces: (0..10u32).collect::<Vec<_>>().into() }],
+            ..Mesh::default()
+        };
         obj.meshes.push(mesh);
         obj
     }
@@ -265,7 +317,11 @@ mod tests {
     fn a_box_becomes_a_collision_overlay() {
         let lib_obj = Arc::new(LibraryObject::from_object("props\\box", "box.object".into(), unit_box()));
         let mut scene = SceneState::default();
-        let mut o = Object::new(ObjClass::SceneObject, "box", ObjData::SceneObject(SceneObjectData::library("props\\box")));
+        let mut o = Object::new(
+            ObjClass::SceneObject,
+            "box",
+            ObjData::SceneObject(SceneObjectData::library("props\\box")),
+        );
         o.xform.position = Vec3::new(10.0, 0.0, 0.0);
         scene.insert(o);
         let lookup = move |_: &str| Some(lib_obj.clone());
@@ -295,14 +351,22 @@ mod tests {
         with_cut.cuts.push(Aabb::new(Vec3::ZERO, Vec3::ONE));
         let again = collision(&scene, false, 0, &lookup, &with_cut.write()).unwrap();
         assert_eq!(again.form.cuts.len(), 1);
-        assert!(matches!(collision(&scene, true, 0, &lookup, &[]), Err(ExportError(e)) if e == "no triangles collected - select scene objects first"));
-        assert!(matches!(collision(&scene, false, 70000, &lookup, &[]), Err(ExportError(e)) if e == "sector out of u16 range"));
+        assert!(
+            matches!(collision(&scene, true, 0, &lookup, &[]), Err(ExportError(e)) if e == "no triangles collected - select scene objects first")
+        );
+        assert!(
+            matches!(collision(&scene, false, 70000, &lookup, &[]), Err(ExportError(e)) if e == "sector out of u16 range")
+        );
     }
 
     #[test]
     fn cuts_accumulate() {
         let mut scene = SceneState::default();
-        scene.insert(Object::new(ObjClass::SceneObject, "pit", ObjData::SceneObject(SceneObjectData::library("props\\box"))));
+        scene.insert(Object::new(
+            ObjClass::SceneObject,
+            "pit",
+            ObjData::SceneObject(SceneObjectData::library("props\\box")),
+        ));
         let bounds = |_: &Object| Some(Aabb::new(Vec3::splat(-1.0), Vec3::splat(1.0)));
         let first = cut(&scene, false, false, 0.0, &bounds, &[], "").unwrap();
         assert_eq!(first.added, 1);

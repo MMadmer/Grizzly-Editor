@@ -60,7 +60,12 @@ impl Loader for Parsed {
 /// Reads `root` and every file it includes from `source`, and assembles them with the editor's
 /// `CInifile` rules (a missing include is skipped with a warning). `io` runs the reads (the IO
 /// pool); parsing runs on the caller's pool. `missing` is the error when `root` is not there.
-pub fn load_tree(source: &dyn FileSource, root: &str, io: Option<&rayon::ThreadPool>, missing: &str) -> Result<ConfigTree, String> {
+pub fn load_tree(
+    source: &dyn FileSource,
+    root: &str,
+    io: Option<&rayon::ThreadPool>,
+    missing: &str,
+) -> Result<ConfigTree, String> {
     let read = |keys: &[String]| match io {
         Some(pool) => pool.install(|| source.read_keys(keys)),
         None => source.read_keys(keys),
@@ -116,7 +121,10 @@ mod tests {
     #[test]
     fn includes_breadth_first() {
         let src = source(&[
-            ("configs/system.ltx", b"#include \"Weapons\\weapons.ltx\"\n#include \"missing.ltx\"\n[root]\na = 1\n"),
+            (
+                "configs/system.ltx",
+                b"#include \"Weapons\\weapons.ltx\"\n#include \"missing.ltx\"\n[root]\na = 1\n",
+            ),
             ("configs/weapons/weapons.ltx", b"#include \"..\\items\\knife.ltx\"\n[wpn]:root\nb = \xc0\n"),
             ("configs/items/knife.ltx", b"[knife]\nc = 3\n"),
         ]);
@@ -131,12 +139,18 @@ mod tests {
     #[test]
     fn a_missing_root_is_the_callers_error() {
         let src = source(&[]);
-        assert_eq!(load_tree(&src, SYSTEM_LTX, None, "the linked game has no configs\\system.ltx").unwrap_err(), "the linked game has no configs\\system.ltx");
+        assert_eq!(
+            load_tree(&src, SYSTEM_LTX, None, "the linked game has no configs\\system.ltx").unwrap_err(),
+            "the linked game has no configs\\system.ltx"
+        );
     }
 
     #[test]
     fn include_cycles_are_read_once() {
-        let src = source(&[("configs/system.ltx", b"#include \"a.ltx\"\n[s]\n"), ("configs/a.ltx", b"#include \"system.ltx\"\n[t]\n")]);
+        let src = source(&[
+            ("configs/system.ltx", b"#include \"a.ltx\"\n[s]\n"),
+            ("configs/a.ltx", b"#include \"system.ltx\"\n[t]\n"),
+        ]);
         // the engine refuses the loop; discovery itself must end
         assert!(load_tree(&src, SYSTEM_LTX, None, "x").is_err());
     }

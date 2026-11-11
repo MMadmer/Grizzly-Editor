@@ -60,7 +60,12 @@ impl OverlayVisuals {
                     out.visuals.push(VisualEntry { index: n, file: SmolStr::default() });
                     Section::Visual(out.visuals.len() - 1)
                 } else if let Some(n) = name.strip_prefix("cut_").and_then(|n| n.parse().ok()) {
-                    out.cuts.push(CutEntry { index: n, center: Vec3::ZERO, half: Vec3::ZERO, overlap: false });
+                    out.cuts.push(CutEntry {
+                        index: n,
+                        center: Vec3::ZERO,
+                        half: Vec3::ZERO,
+                        overlap: false,
+                    });
                     Section::Cut(out.cuts.len() - 1)
                 } else {
                     Section::None
@@ -102,7 +107,11 @@ pub fn sanitize_file_name(name: &str) -> String {
         if out.len() + c.len_utf8() > 255 {
             break;
         }
-        out.push(if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ') { '_' } else { c });
+        out.push(if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ') {
+            '_'
+        } else {
+            c
+        });
     }
     if out.is_empty() {
         out.push_str("unnamed");
@@ -116,7 +125,7 @@ pub fn unique_visual_name(scene_name: &str, used: &mut Vec<String>) -> String {
     let base = sanitize_file_name(scene_name);
     let mut safe = base.clone();
     let mut dup = 2u32;
-    while used.iter().any(|u| *u == safe) {
+    while used.contains(&safe) {
         // "%.*s_%u" with a precision of 248 bytes
         let mut cut = base.len().min(248);
         while !base.is_char_boundary(cut) {
@@ -389,7 +398,9 @@ mod tests {
         let (text, added) = append_cuts(held, &[b, other], true);
         assert_eq!(added, 1);
         assert!(text.starts_with("[cut_5]\r\nhide = 0, 1 ,1,1,1,2\r\noverlap = true\r\n[cut_2]\r\nhide=9,9,9,1,1,1\r\n\r\n[cut_6]\r\n"));
-        assert!(text.ends_with("hide    = 11.250000,11.250000,11.250000,1.250000,1.250000,1.250000\r\noverlap = true\r\n"));
+        assert!(text.ends_with(
+            "hide    = 11.250000,11.250000,11.250000,1.250000,1.250000,1.250000\r\noverlap = true\r\n"
+        ));
     }
 
     #[test]
@@ -414,7 +425,10 @@ mod tests {
         assert_eq!(scan_cut_index("[cut_x]"), None);
         assert_eq!(scan_cut_index("; [cut_1]"), None);
         assert_eq!(scan_hide("hide=1,2,3,4,5,6"), Some([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
-        assert_eq!(scan_hide(" hide = -1.5 , 2e1 , .5 , 4. , +5 , 6\r"), Some([-1.5, 20.0, 0.5, 4.0, 5.0, 6.0]));
+        assert_eq!(
+            scan_hide(" hide = -1.5 , 2e1 , .5 , 4. , +5 , 6\r"),
+            Some([-1.5, 20.0, 0.5, 4.0, 5.0, 6.0])
+        );
         assert_eq!(scan_hide("hide = 1,2,3,4,5"), None);
         assert_eq!(scan_hide("hides = 1,2,3,4,5,6"), None);
     }

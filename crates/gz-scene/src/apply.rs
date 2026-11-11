@@ -20,9 +20,15 @@ pub enum TransformEdit {
     Rotation(Vec3),
     Scale(Vec3),
     /// `MoveTo`: a position, and with `up` the rotation that stands the object on it.
-    MoveTo { position: Vec3, up: Option<Vec3> },
+    MoveTo {
+        position: Vec3,
+        up: Option<Vec3>,
+    },
     /// A landing computed elsewhere (the drop to ground).
-    Land { position: Vec3, rotation: Option<Vec3> },
+    Land {
+        position: Vec3,
+        rotation: Option<Vec3>,
+    },
 }
 
 /// How a selection command combines with the selection there is.
@@ -56,39 +62,80 @@ pub enum SceneCmd {
     Delete(Vec<ObjId>),
     /// `RemoveSelection(OBJCLASS_DUMMY)`: every selected object not inside a group.
     DeleteSelected,
-    Rename { id: ObjId, name: SmolStr },
+    Rename {
+        id: ObjId,
+        name: SmolStr,
+    },
     /// Transforms, one undo step. `members` moves a group's objects with it (the Details
     /// panel's `NumSet*`); the MCP setters move the group alone, as the C++ ones do.
-    Transform { items: Vec<(ObjId, TransformEdit)>, members: bool, label: String, merge: Option<SmolStr> },
-    Select { ids: Vec<ObjId>, mode: SelectMode },
+    Transform {
+        items: Vec<(ObjId, TransformEdit)>,
+        members: bool,
+        label: String,
+        merge: Option<SmolStr>,
+    },
+    Select {
+        ids: Vec<ObjId>,
+        mode: SelectMode,
+    },
     /// `SelectObjects(flag, cls)`: `None` is every class. Only visible objects are selected.
-    SelectClass { class: Option<ObjClass>, select: bool },
+    SelectClass {
+        class: Option<ObjClass>,
+        select: bool,
+    },
     /// The current target class.
     SetTarget(ObjClass),
     /// `Show`: a hidden object is deselected.
-    Show { ids: Vec<ObjId>, visible: bool },
+    Show {
+        ids: Vec<ObjId>,
+        visible: bool,
+    },
     /// A tool's eye or its read-only switch.
-    ToolFlags { class: ObjClass, visible: Option<bool>, readonly: Option<bool> },
+    ToolFlags {
+        class: ObjClass,
+        visible: Option<bool>,
+        readonly: Option<bool>,
+    },
     /// `GroupObjects`: the selected visible objects not in a group, into a new group.
-    Group { name: SmolStr },
+    Group {
+        name: SmolStr,
+    },
     /// `UngroupObjects` of every selected group.
     Ungroup,
     /// Objects computed from a snapshot with `serial` (a property set, a visual, a bone list).
-    ReplaceObjects { objects: Vec<Object>, serial: u64, label: String },
+    ReplaceObjects {
+        objects: Vec<Object>,
+        serial: u64,
+        label: String,
+    },
     /// The level options and the tools' settings (Level Settings).
-    SetWorld { level: Box<LevelOptions>, tools: Vec<ToolPart>, serial: u64, label: String },
+    SetWorld {
+        level: Box<LevelOptions>,
+        tools: Vec<ToolPart>,
+        serial: u64,
+        label: String,
+    },
     /// `flAuthorPlaced` on the selection; answers how many changed.
     MarkAuthored(bool),
     /// `flBaseRemoved` on the selected spawns that are not authored; answers changed, skipped.
     MarkRemoved(bool),
     /// A stalker's standing order.
-    SetOrder { id: ObjId, order: XmsOrder },
+    SetOrder {
+        id: ObjId,
+        order: XmsOrder,
+    },
     /// The Snap Objects buttons and switches.
-    Snap { action: Option<SnapAction>, use_list: Option<bool>, pick: Option<bool> },
+    Snap {
+        action: Option<SnapAction>,
+        use_list: Option<bool>,
+        pick: Option<bool>,
+    },
     /// New bulk data (an AI map tile, details, wallmarks).
     SetBulk(Box<BulkData>),
     /// The scene is on disk as `file`.
-    Saved { file: PathBuf },
+    Saved {
+        file: PathBuf,
+    },
     /// Marks the content changed without an undo step (a restored recovery snapshot).
     Touch,
 }
@@ -198,12 +245,11 @@ impl SceneState {
         let before = (**self.get(id).ok_or_else(|| missing(id))?).clone();
         let mut after = before.clone();
         apply_edit(&mut after, e);
-        if members
-            && let ObjData::Group(g) = &before.data
-        {
+        if members && let ObjData::Group(g) = &before.data {
             let prev_inv = gz_fmt_object::Mat4::invert_43(&before.xform.matrix());
             let now = after.xform.matrix();
-            let (dr, ds) = (after.xform.rotation - before.xform.rotation, after.xform.scale - before.xform.scale);
+            let (dr, ds) =
+                (after.xform.rotation - before.xform.rotation, after.xform.scale - before.xform.scale);
             for m in g.members.clone() {
                 self.edit_object(m, |mo| {
                     match e {
@@ -226,14 +272,29 @@ impl SceneState {
             .selected_in_order()
             .into_iter()
             .filter(|id| {
-                self.get(*id).is_some_and(|o| o.flags.visible && o.flags.co & co::IN_GROUP == 0 && o.owner.is_none() && o.class != ObjClass::Sector && o.class != ObjClass::Group)
+                self.get(*id).is_some_and(|o| {
+                    o.flags.visible
+                        && o.flags.co & co::IN_GROUP == 0
+                        && o.owner.is_none()
+                        && o.class != ObjClass::Sector
+                        && o.class != ObjClass::Group
+                })
             })
             .collect();
         if ids.is_empty() {
             return Err(CmdError::invalid("Group can't be created."));
         }
-        let pivot = ids.iter().filter_map(|id| self.get(*id)).find(|o| o.class == ObjClass::SceneObject).or_else(|| self.get(ids[0])).map(|o| (o.position(), o.rotation()));
-        let mut g = Object::new(ObjClass::Group, &name, ObjData::Group(GroupData { reference: SmolStr::default(), members: ids.clone() }));
+        let pivot = ids
+            .iter()
+            .filter_map(|id| self.get(*id))
+            .find(|o| o.class == ObjClass::SceneObject)
+            .or_else(|| self.get(ids[0]))
+            .map(|o| (o.position(), o.rotation()));
+        let mut g = Object::new(
+            ObjClass::Group,
+            &name,
+            ObjData::Group(GroupData { reference: SmolStr::default(), members: ids.clone() }),
+        );
         if let Some((p, r)) = pivot {
             g.xform.position = p;
             g.xform.rotation = r;
@@ -252,7 +313,11 @@ impl SceneState {
     }
 
     fn ungroup_selection(&mut self) -> usize {
-        let groups: Vec<ObjId> = self.selected_in_order().into_iter().filter(|id| self.get(*id).is_some_and(|o| o.class == ObjClass::Group)).collect();
+        let groups: Vec<ObjId> = self
+            .selected_in_order()
+            .into_iter()
+            .filter(|id| self.get(*id).is_some_and(|o| o.class == ObjClass::Group))
+            .collect();
         for gid in &groups {
             let Some(g) = self.get(*gid).cloned() else { continue };
             if let ObjData::Group(gd) = &g.data {
@@ -323,7 +388,9 @@ impl State for SceneState {
             SceneCmd::Delete(ids) => {
                 let mut n = 0;
                 for id in ids {
-                    if self.get(id).is_some() && self.tools.part(self.get(id).map_or(ObjClass::Group, |o| o.class)).editable() {
+                    if self.get(id).is_some()
+                        && self.tools.part(self.get(id).map_or(ObjClass::Group, |o| o.class)).editable()
+                    {
                         self.delete(id);
                         n += 1;
                     }
@@ -361,8 +428,12 @@ impl State for SceneState {
             SceneCmd::Transform { items, members, label, merge } => {
                 for (id, e) in &items {
                     if !match e {
-                        TransformEdit::Position(v) | TransformEdit::Rotation(v) | TransformEdit::Scale(v) => v.is_finite(),
-                        TransformEdit::MoveTo { position, .. } | TransformEdit::Land { position, .. } => position.is_finite(),
+                        TransformEdit::Position(v) | TransformEdit::Rotation(v) | TransformEdit::Scale(v) => {
+                            v.is_finite()
+                        }
+                        TransformEdit::MoveTo { position, .. } | TransformEdit::Land { position, .. } => {
+                            position.is_finite()
+                        }
                     } {
                         return Err(CmdError::invalid("non-finite component"));
                     }
@@ -455,7 +526,8 @@ impl State for SceneState {
                 Ok(SceneReply::Count(changed))
             }
             SceneCmd::Group { name } => {
-                let name = if self.name_used(&name) { SmolStr::new(self.gen_name(Some(&name))) } else { name };
+                let name =
+                    if self.name_used(&name) { SmolStr::new(self.gen_name(Some(&name))) } else { name };
                 let id = self.group_selection(name)?;
                 self.bump();
                 cx.undoable("Group");
@@ -628,11 +700,24 @@ mod tests {
     #[test]
     fn place_selects_and_marks_the_author() {
         let t = T::new(SceneState::default());
-        let Ok(SceneReply::Id(id)) = t.send(SceneCmd::Place(Box::new(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default()))))) else { panic!() };
+        let Ok(SceneReply::Id(id)) = t.send(SceneCmd::Place(Box::new(Object::new(
+            ObjClass::Light,
+            "l",
+            ObjData::Light(LightData::default()),
+        )))) else {
+            panic!()
+        };
         let s = t.state();
         assert!(s.is_selected(id));
         assert!(s.get(id).unwrap().marks.authored);
-        assert!(t.send(SceneCmd::Place(Box::new(Object::new(ObjClass::Glow, "l", ObjData::Glow(GlowData::default()))))).is_err());
+        assert!(
+            t.send(SceneCmd::Place(Box::new(Object::new(
+                ObjClass::Glow,
+                "l",
+                ObjData::Glow(GlowData::default())
+            ))))
+            .is_err()
+        );
         assert!(t.store.is_dirty());
     }
 
@@ -641,7 +726,13 @@ mod tests {
         let mut s = SceneState::default();
         let id = s.insert(Object::new(ObjClass::Light, "l", ObjData::Light(LightData::default())));
         let t = T::new(s);
-        t.send(SceneCmd::Transform { items: vec![(id, TransformEdit::Position(Vec3::X))], members: false, label: "Move".into(), merge: None }).unwrap();
+        t.send(SceneCmd::Transform {
+            items: vec![(id, TransformEdit::Position(Vec3::X))],
+            members: false,
+            label: "Move".into(),
+            merge: None,
+        })
+        .unwrap();
         t.send(SceneCmd::Select { ids: vec![id], mode: SelectMode::Set }).unwrap();
         assert_eq!(t.state().get(id).unwrap().position(), Vec3::X);
         assert_eq!(t.rt.block_on(t.store.undo()).as_deref(), Some("Move"));
@@ -661,9 +752,21 @@ mod tests {
         let t = T::new(s);
         let Ok(SceneReply::Id(g)) = t.send(SceneCmd::Group { name: "00".into() }) else { panic!() };
         assert_eq!(t.state().get(a).unwrap().owner, Some(g));
-        t.send(SceneCmd::Transform { items: vec![(g, TransformEdit::Position(Vec3::Y))], members: false, label: "Move".into(), merge: None }).unwrap();
+        t.send(SceneCmd::Transform {
+            items: vec![(g, TransformEdit::Position(Vec3::Y))],
+            members: false,
+            label: "Move".into(),
+            merge: None,
+        })
+        .unwrap();
         assert_eq!(t.state().get(a).unwrap().position(), Vec3::ZERO);
-        t.send(SceneCmd::Transform { items: vec![(g, TransformEdit::Position(Vec3::Y * 2.0))], members: true, label: "Move".into(), merge: None }).unwrap();
+        t.send(SceneCmd::Transform {
+            items: vec![(g, TransformEdit::Position(Vec3::Y * 2.0))],
+            members: true,
+            label: "Move".into(),
+            merge: None,
+        })
+        .unwrap();
         assert!((t.state().get(a).unwrap().position() - Vec3::Y).length() < 1e-5);
         t.send(SceneCmd::Select { ids: vec![g], mode: SelectMode::Set }).unwrap();
         t.send(SceneCmd::DeleteSelected).unwrap();
@@ -679,7 +782,10 @@ mod tests {
         let snap = t.state();
         let o = (**snap.get(id).unwrap()).clone();
         t.send(SceneCmd::Rename { id, name: "m".into() }).unwrap();
-        assert!(t.send(SceneCmd::ReplaceObjects { objects: vec![o], serial: snap.serial, label: "x".into() }).is_err());
+        assert!(
+            t.send(SceneCmd::ReplaceObjects { objects: vec![o], serial: snap.serial, label: "x".into() })
+                .is_err()
+        );
         assert_eq!(t.state().get(id).unwrap().name, "m");
     }
 }

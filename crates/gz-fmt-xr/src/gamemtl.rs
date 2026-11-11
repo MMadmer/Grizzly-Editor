@@ -50,8 +50,12 @@ pub struct GameMaterial {
 }
 
 impl GameMaterial {
-    /// `SGameMtl::flDynamic`.
-    pub const DYNAMIC: u32 = 1 << 3;
+    /// `SGameMtl::flBreakable`.
+    pub const BREAKABLE: u32 = 1 << 0;
+    /// `SGameMtl::flClimable`.
+    pub const CLIMABLE: u32 = 1 << 5;
+    /// `SGameMtl::flDynamic` (`XrGameMaterialLibraryInterface.h`: bit 8).
+    pub const DYNAMIC: u32 = 1 << 8;
 
     #[must_use]
     pub fn is_dynamic(&self) -> bool {
@@ -92,7 +96,9 @@ impl GameMaterials {
         let r = Reader::new(bytes);
         let version = need(&r, CHUNK_VERSION, "version")?.r_u16()?;
         if version != GAMEMTL_VERSION {
-            return Err(invalid(format!("the game materials have version {version}; the game reads version 1")));
+            return Err(invalid(format!(
+                "the game materials have version {version}; the game reads version 1"
+            )));
         }
         let mut a = need(&r, CHUNK_AUTOINC, "counters")?;
         let mut out = Self { material_index: a.r_u32()?, material_pair_index: a.r_u32()?, ..Self::default() };
@@ -110,7 +116,8 @@ impl GameMaterials {
                 let flags = need(&m, MTL_FLAGS, "flags")?.r_u32()?;
                 let mut ph = need(&m, MTL_PHYSICS, "physics")?;
                 let mut fa = need(&m, MTL_FACTORS, "factors")?;
-                let opt = |id: u32| -> Result<Option<f32>> { Ok(m.sub(id)?.map(|mut c| c.r_f32()).transpose()?) };
+                let opt =
+                    |id: u32| -> Result<Option<f32>> { Ok(m.sub(id)?.map(|mut c| c.r_f32()).transpose()?) };
                 let mut mat = GameMaterial {
                     id,
                     name,
@@ -138,7 +145,8 @@ impl GameMaterials {
             for (_, _, body) in list.chunks() {
                 let p = Reader::new(body);
                 let mut pr = need(&p, PAIR_PAIR, "pair")?;
-                let (mtl0, mtl1, id, id_parent, own_props) = (pr.r_u32()?, pr.r_u32()?, pr.r_u32()?, pr.r_u32()?, pr.r_u32()?);
+                let (mtl0, mtl1, id, id_parent, own_props) =
+                    (pr.r_u32()?, pr.r_u32()?, pr.r_u32()?, pr.r_u32()?, pr.r_u32()?);
                 let breaking_sounds = text.r_str(&mut need(&p, PAIR_BREAKING, "breaking sounds")?)?;
                 let step_sounds = text.r_str(&mut need(&p, PAIR_STEP, "step sounds")?)?;
                 let mut c = need(&p, PAIR_COLLIDE, "collision effects")?;
@@ -221,7 +229,10 @@ mod tests {
         let m = GameMaterials::read(&w.into_bytes()).unwrap();
         let wood = m.by_name("Materials\\Wood").unwrap();
         assert!(wood.is_dynamic());
-        assert_eq!((wood.spring, wood.shoot_factor_mp, wood.density_factor, wood.flotation_factor), (2.0, 0.5, Some(7.0), None));
+        assert_eq!(
+            (wood.spring, wood.shoot_factor_mp, wood.density_factor, wood.flotation_factor),
+            (2.0, 0.5, Some(7.0), None)
+        );
         assert_eq!(m.pair(0, 0).map(|p| p.step_sounds.as_str()), Some("step\\wood"));
         let mut bad = Writer::new();
         bad.chunk(CHUNK_VERSION, |w| w.w_u16(2));

@@ -51,8 +51,14 @@ impl Clients {
             api: builder(Duration::from_secs(60)).redirect(redirect::Policy::none()).build().map_err(fail)?,
             // GitHub answers an upload only after it has taken the whole asset in - for a package
             // of a gigabyte that is well past the default minute
-            upload: builder(Duration::from_secs(600)).redirect(redirect::Policy::none()).build().map_err(fail)?,
-            public: builder(Duration::from_secs(60)).redirect(redirect::Policy::limited(10)).build().map_err(fail)?,
+            upload: builder(Duration::from_secs(600))
+                .redirect(redirect::Policy::none())
+                .build()
+                .map_err(fail)?,
+            public: builder(Duration::from_secs(60))
+                .redirect(redirect::Policy::limited(10))
+                .build()
+                .map_err(fail)?,
         })
     }
 }
@@ -62,10 +68,19 @@ pub(crate) type Progress = Arc<dyn Fn(u64, u64) + Send + Sync>;
 
 pub(crate) enum Body {
     None,
-    Bytes { data: Vec<u8>, content_type: &'static str },
+    Bytes {
+        data: Vec<u8>,
+        content_type: &'static str,
+    },
     /// A file streamed from disk, with what goes around it (a multipart form's part headers and
     /// closing boundary).
-    File { path: PathBuf, prefix: Vec<u8>, suffix: Vec<u8>, content_type: String, progress: Option<Progress> },
+    File {
+        path: PathBuf,
+        prefix: Vec<u8>,
+        suffix: Vec<u8>,
+        content_type: String,
+        progress: Option<Progress>,
+    },
 }
 
 /// A request. Not `Debug`: its headers may carry a token.
@@ -106,7 +121,8 @@ impl Request {
     }
 
     pub(crate) fn form(mut self, form: String) -> Self {
-        self.body = Body::Bytes { data: form.into_bytes(), content_type: "application/x-www-form-urlencoded" };
+        self.body =
+            Body::Bytes { data: form.into_bytes(), content_type: "application/x-www-form-urlencoded" };
         self
     }
 }
@@ -149,10 +165,18 @@ fn network_error(e: &reqwest::Error, log: &Log) -> String {
     if chain.contains("certificate") || chain.contains("cert ") {
         return "the server's certificate was not accepted".to_owned();
     }
-    if chain.contains("tls") || chain.contains("ssl") || chain.contains("handshake") || chain.contains("schannel") {
+    if chain.contains("tls")
+        || chain.contains("ssl")
+        || chain.contains("handshake")
+        || chain.contains("schannel")
+    {
         return "the secure connection failed".to_owned();
     }
-    if chain.contains("dns") || chain.contains("resolve") || chain.contains("no such host") || chain.contains("name or service") {
+    if chain.contains("dns")
+        || chain.contains("resolve")
+        || chain.contains("no such host")
+        || chain.contains("name or service")
+    {
         return "no connection: the server's name was not found".to_owned();
     }
     if chain.contains("proxy") {
@@ -179,7 +203,9 @@ struct Upload {
 }
 
 /// The body of a file upload as a stream: the prefix, the file in chunks, the suffix.
-fn upload_stream(up: Upload) -> impl futures::Stream<Item = Result<Vec<u8>, std::io::Error>> + Send + 'static {
+fn upload_stream(
+    up: Upload,
+) -> impl futures::Stream<Item = Result<Vec<u8>, std::io::Error>> + Send + 'static {
     futures::stream::unfold(up, |mut up| async move {
         if let Some(prefix) = up.prefix.take().filter(|p| !p.is_empty()) {
             return Some((Ok(prefix), up));
@@ -189,7 +215,10 @@ fn upload_stream(up: Upload) -> impl futures::Stream<Item = Result<Vec<u8>, std:
             let mut chunk = vec![0u8; want];
             let read = up.file.read(&mut chunk).await;
             return match read {
-                Ok(0) => Some((Err(std::io::Error::other("cannot read the file to upload")), Upload { total: up.sent, ..up })),
+                Ok(0) => Some((
+                    Err(std::io::Error::other("cannot read the file to upload")),
+                    Upload { total: up.sent, ..up },
+                )),
                 Ok(n) => {
                     chunk.truncate(n);
                     up.sent += n as u64;
@@ -220,8 +249,12 @@ async fn exchange(clients: &Clients, log: &Log, rq: Request) -> Response {
         Body::None => {}
         Body::Bytes { data, content_type } => b = b.header(CONTENT_TYPE, content_type).body(data),
         Body::File { path, prefix, suffix, content_type, progress } => {
-            let Ok(file) = tokio::fs::File::open(&path).await else { return Response::fail("cannot read the file to upload") };
-            let Ok(meta) = file.metadata().await else { return Response::fail("cannot read the file to upload") };
+            let Ok(file) = tokio::fs::File::open(&path).await else {
+                return Response::fail("cannot read the file to upload");
+            };
+            let Ok(meta) = file.metadata().await else {
+                return Response::fail("cannot read the file to upload");
+            };
             let total = meta.len();
             let wrapping = (prefix.len() + suffix.len()) as u64;
             // a release asset is under 2 GiB anyway
@@ -229,8 +262,18 @@ async fn exchange(clients: &Clients, log: &Log, rq: Request) -> Response {
                 return Response::fail("the file is too large to upload");
             }
             let length = total + wrapping;
-            let stream = upload_stream(Upload { file, prefix: Some(prefix), suffix: Some(suffix), sent: 0, total, progress });
-            b = b.header(CONTENT_TYPE, content_type).header(CONTENT_LENGTH, length).body(reqwest::Body::wrap_stream(stream));
+            let stream = upload_stream(Upload {
+                file,
+                prefix: Some(prefix),
+                suffix: Some(suffix),
+                sent: 0,
+                total,
+                progress,
+            });
+            b = b
+                .header(CONTENT_TYPE, content_type)
+                .header(CONTENT_LENGTH, length)
+                .body(reqwest::Body::wrap_stream(stream));
         }
     }
     let mut resp = match b.send().await {
@@ -253,7 +296,12 @@ async fn exchange(clients: &Clients, log: &Log, rq: Request) -> Response {
 }
 
 /// Sends a request and waits for its answer, or for the job to be stopped.
-pub(crate) async fn send(clients: &Result<Clients, String>, log: &Log, rq: Request, cancel: &Cancel) -> Response {
+pub(crate) async fn send(
+    clients: &Result<Clients, String>,
+    log: &Log,
+    rq: Request,
+    cancel: &Cancel,
+) -> Response {
     if cancel.is_cancelled() {
         return Response::fail(CANCELLED);
     }

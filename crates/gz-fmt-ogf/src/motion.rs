@@ -101,13 +101,19 @@ pub struct MotionSet {
 }
 
 fn qr(k: [i16; 4]) -> Quat {
-    Quat::from_xyzw(f32::from(k[0]) * KEY_QUANT_I, f32::from(k[1]) * KEY_QUANT_I, f32::from(k[2]) * KEY_QUANT_I, f32::from(k[3]) * KEY_QUANT_I)
+    Quat::from_xyzw(
+        f32::from(k[0]) * KEY_QUANT_I,
+        f32::from(k[1]) * KEY_QUANT_I,
+        f32::from(k[2]) * KEY_QUANT_I,
+        f32::from(k[3]) * KEY_QUANT_I,
+    )
 }
 
 impl BoneMotion {
     fn read(r: &mut Reader<'_>, len: usize) -> Result<Self> {
         let flags = r.r_u8()?;
-        let r4 = |r: &mut Reader<'_>| -> Result<[i16; 4]> { Ok([r.r_i16()?, r.r_i16()?, r.r_i16()?, r.r_i16()?]) };
+        let r4 =
+            |r: &mut Reader<'_>| -> Result<[i16; 4]> { Ok([r.r_i16()?, r.r_i16()?, r.r_i16()?, r.r_i16()?]) };
         let rot = if flags & FL_R_KEY_ABSENT != 0 {
             RotKeys::Constant(r4(r)?)
         } else {
@@ -123,13 +129,19 @@ impl BoneMotion {
                 if len.saturating_mul(6) > r.elapsed() {
                     return Err(invalid("a motion's translation keys are cut short"));
                 }
-                let keys = (0..len).map(|_| Ok([r.r_i16()?, r.r_i16()?, r.r_i16()?])).collect::<Result<Vec<_>>>()?.into();
+                let keys = (0..len)
+                    .map(|_| Ok([r.r_i16()?, r.r_i16()?, r.r_i16()?]))
+                    .collect::<Result<Vec<_>>>()?
+                    .into();
                 TransKeys::Keys16 { crc, keys, size: r.r_vec3()?, init: r.r_vec3()? }
             } else {
                 if len.saturating_mul(3) > r.elapsed() {
                     return Err(invalid("a motion's translation keys are cut short"));
                 }
-                let keys = (0..len).map(|_| Ok([r.r_i8()?, r.r_i8()?, r.r_i8()?])).collect::<Result<Vec<_>>>()?.into();
+                let keys = (0..len)
+                    .map(|_| Ok([r.r_i8()?, r.r_i8()?, r.r_i8()?]))
+                    .collect::<Result<Vec<_>>>()?
+                    .into();
                 TransKeys::Keys8 { crc, keys, size: r.r_vec3()?, init: r.r_vec3()? }
             }
         } else {
@@ -173,19 +185,33 @@ impl BoneMotion {
     fn rotation(&self, frame: usize) -> Quat {
         match &self.rot {
             RotKeys::Constant(k) => qr(*k),
-            RotKeys::Keys { keys, .. } => keys.get(frame % keys.len().max(1)).map_or(Quat::IDENTITY, |k| qr(*k)),
+            RotKeys::Keys { keys, .. } => {
+                keys.get(frame % keys.len().max(1)).map_or(Quat::IDENTITY, |k| qr(*k))
+            }
         }
     }
 
     fn translation(&self, frame: usize) -> Vec3 {
         match &self.trans {
             TransKeys::Constant(t) => *t,
-            TransKeys::Keys8 { keys, size, init, .. } => keys.get(frame % keys.len().max(1)).map_or(*init, |k| {
-                Vec3::new(f32::from(k[0]) * size.x + init.x, f32::from(k[1]) * size.y + init.y, f32::from(k[2]) * size.z + init.z)
-            }),
-            TransKeys::Keys16 { keys, size, init, .. } => keys.get(frame % keys.len().max(1)).map_or(*init, |k| {
-                Vec3::new(f32::from(k[0]) * size.x + init.x, f32::from(k[1]) * size.y + init.y, f32::from(k[2]) * size.z + init.z)
-            }),
+            TransKeys::Keys8 { keys, size, init, .. } => {
+                keys.get(frame % keys.len().max(1)).map_or(*init, |k| {
+                    Vec3::new(
+                        f32::from(k[0]) * size.x + init.x,
+                        f32::from(k[1]) * size.y + init.y,
+                        f32::from(k[2]) * size.z + init.z,
+                    )
+                })
+            }
+            TransKeys::Keys16 { keys, size, init, .. } => {
+                keys.get(frame % keys.len().max(1)).map_or(*init, |k| {
+                    Vec3::new(
+                        f32::from(k[0]) * size.x + init.x,
+                        f32::from(k[1]) * size.y + init.y,
+                        f32::from(k[2]) * size.z + init.z,
+                    )
+                })
+            }
         }
     }
 
@@ -197,9 +223,11 @@ impl BoneMotion {
         let delta = time - frame as f32;
         let rotation = match &self.rot {
             RotKeys::Constant(k) => qr(*k),
-            RotKeys::Keys { .. } => {
-                gz_fmt_object::xmath::slerp(self.rotation(frame), self.rotation(frame + 1), delta.clamp(0.0, 1.0))
-            }
+            RotKeys::Keys { .. } => gz_fmt_object::xmath::slerp(
+                self.rotation(frame),
+                self.rotation(frame + 1),
+                delta.clamp(0.0, 1.0),
+            ),
         };
         let translation = match &self.trans {
             TransKeys::Constant(t) => *t,
@@ -216,7 +244,10 @@ impl MotionMark {
         if n.saturating_mul(8) > r.elapsed() {
             return Err(invalid("a motion mark is cut short"));
         }
-        Ok(Self { name, intervals: (0..n).map(|_| Ok((r.r_f32()?, r.r_f32()?))).collect::<Result<Vec<_>>>()? })
+        Ok(Self {
+            name,
+            intervals: (0..n).map(|_| Ok((r.r_f32()?, r.r_f32()?))).collect::<Result<Vec<_>>>()?,
+        })
     }
 
     fn write(&self, w: &mut Writer) {
@@ -231,13 +262,19 @@ impl MotionMark {
 
 impl MotionSet {
     /// Reads the two chunks. `bone_count` is the model's; `None` takes it from the parts.
-    pub fn read_chunks(params: Option<&[u8]>, motions: Option<&[u8]>, bone_count: Option<usize>) -> Result<Self> {
+    pub fn read_chunks(
+        params: Option<&[u8]>,
+        motions: Option<&[u8]>,
+        bone_count: Option<usize>,
+    ) -> Result<Self> {
         let mut set = MotionSet::default();
         if let Some(body) = params {
             let mut r = Reader::new(body);
             let version = r.r_u16()?;
             if version > SMPARAMS_VERSION {
-                return Err(invalid(format!("the motion parameters have version {version}; the game reads up to 4")));
+                return Err(invalid(format!(
+                    "the motion parameters have version {version}; the game reads up to 4"
+                )));
             }
             set.params_version = Some(version);
             let parts = usize::from(r.r_u16()?);
@@ -247,7 +284,9 @@ impl MotionSet {
                 if n.saturating_mul(5) > r.elapsed() {
                     return Err(invalid("a bone part is cut short"));
                 }
-                let bones = (0..n).map(|_| Ok((SmolStr::new(r.r_stringz()?), r.r_u32()?))).collect::<Result<Vec<_>>>()?;
+                let bones = (0..n)
+                    .map(|_| Ok((SmolStr::new(r.r_stringz()?), r.r_u32()?)))
+                    .collect::<Result<Vec<_>>>()?;
                 set.parts.push(PartDef { name, bones });
             }
             let defs = usize::from(r.r_u16()?);
@@ -292,7 +331,9 @@ impl MotionSet {
                 if bones.saturating_mul(21) > m.elapsed() {
                     return Err(invalid(format!("motion '{name}' is shorter than its bones")));
                 }
-                let bones = (0..bones).map(|_| BoneMotion::read(&mut m, length as usize)).collect::<Result<Vec<_>>>()?;
+                let bones = (0..bones)
+                    .map(|_| BoneMotion::read(&mut m, length as usize))
+                    .collect::<Result<Vec<_>>>()?;
                 set.motions.push(Motion { name, length, bones });
             }
         }
@@ -368,7 +409,10 @@ impl MotionSet {
         let mut out = vec![None; slots];
         for p in &self.parts {
             for (name, idx) in &p.bones {
-                let found = bone_names.iter().position(|b| b.eq_ignore_ascii_case(name)).and_then(|i| u16::try_from(i).ok());
+                let found = bone_names
+                    .iter()
+                    .position(|b| b.eq_ignore_ascii_case(name))
+                    .and_then(|i| u16::try_from(i).ok());
                 if let Some(slot) = out.get_mut(*idx as usize) {
                     *slot = found;
                 }
@@ -403,7 +447,10 @@ pub(crate) mod tests {
         let keys16: Arc<[[i16; 3]]> = Arc::from(vec![[-32767, 0, 0], [32767, 0, 0]]);
         MotionSet {
             params_version: Some(4),
-            parts: vec![PartDef { name: "default".into(), bones: vec![("root".into(), 0), ("arm".into(), 1)] }],
+            parts: vec![PartDef {
+                name: "default".into(),
+                bones: vec![("root".into(), 0), ("arm".into(), 1)],
+            }],
             defs: vec![MotionDef {
                 name: "idle".into(),
                 flags: 0,
@@ -421,10 +468,22 @@ pub(crate) mod tests {
                 bones: vec![
                     BoneMotion {
                         flags: FL_T_KEY_PRESENT | FL_T_KEY_16,
-                        rot: RotKeys::Keys { crc: 0, keys: Arc::from(vec![[0, 0, 0, 32767], [32767, 0, 0, 0]]) },
-                        trans: TransKeys::Keys16 { crc: 0, keys: keys16, size: Vec3::new(1.0 / 32767.0, 0.0, 0.0), init: Vec3::new(1.0, 0.0, 0.0) },
+                        rot: RotKeys::Keys {
+                            crc: 0,
+                            keys: Arc::from(vec![[0, 0, 0, 32767], [32767, 0, 0, 0]]),
+                        },
+                        trans: TransKeys::Keys16 {
+                            crc: 0,
+                            keys: keys16,
+                            size: Vec3::new(1.0 / 32767.0, 0.0, 0.0),
+                            init: Vec3::new(1.0, 0.0, 0.0),
+                        },
                     },
-                    BoneMotion { flags: FL_R_KEY_ABSENT, rot: RotKeys::Constant([0, 0, 0, 32767]), trans: TransKeys::Constant(Vec3::Y) },
+                    BoneMotion {
+                        flags: FL_R_KEY_ABSENT,
+                        rot: RotKeys::Constant([0, 0, 0, 32767]),
+                        trans: TransKeys::Constant(Vec3::Y),
+                    },
                 ],
             }],
         }

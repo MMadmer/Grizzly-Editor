@@ -12,7 +12,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use egui::{Align, ColorImage, Id, Layout, Popup, Rect, ScrollArea, TextureHandle, TextureOptions, Ui, UiBuilder, Vec2, pos2};
+use egui::{
+    Align, ColorImage, Id, Layout, Popup, Rect, ScrollArea, TextureHandle, TextureOptions, Ui, UiBuilder,
+    Vec2, pos2,
+};
 use gz_app::{DocCx, Document, OpenRequest, ShellBuilder};
 use gz_editor::{Editor, Rev, Value, json};
 use gz_game::{GameLink, ModeScan};
@@ -24,18 +27,23 @@ use gz_ui::grid::{Grid, chips, combo, read_only, switch, text_block};
 use gz_ui::list::list;
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
-use gz_ui::{Button, Font, Icon, Kind, NavRowSpec, PropFlags, PropertyGrid, Tone, nav_row, palette, segmented};
+use gz_ui::{
+    Button, Font, Icon, Kind, NavRowSpec, PropFlags, PropertyGrid, Tone, nav_row, palette, segmented,
+};
 use parking_lot::Mutex;
 
 use crate::call::{self, Pick, Picking, args, s};
 use crate::form::{self, Aux, Form, Kind as TargetKind, PAGES, Problem};
-use crate::local::{PickList, PickRow, local_check, local_pick_list, local_picture, local_text_field, local_value_column};
+use crate::local::{
+    PickList, PickRow, local_check, local_pick_list, local_picture, local_text_field, local_value_column,
+};
 
 /// The tab's id and kind.
 pub const TAB: &str = "mod_settings";
 
 /// Each page's icon, in [`PAGES`]' order.
-const PAGE_ICONS: [Icon; 7] = [Icon::Info, Icon::Globe, Icon::Mode, Icon::Relations, Icon::Exclude, Icon::PdaInterface, Icon::Terminal];
+const PAGE_ICONS: [Icon; 7] =
+    [Icon::Info, Icon::Globe, Icon::Mode, Icon::Relations, Icon::Exclude, Icon::PdaInterface, Icon::Terminal];
 
 const ROLE: &str = "mod_settings";
 const LABEL_FRAC: f32 = 0.28;
@@ -44,6 +52,9 @@ const FOOTER_H: f32 = 48.0;
 const NAV_W: f32 = 200.0;
 /// The largest picture read for the preview.
 const PICTURE_READ_LIMIT: u64 = 64 << 20;
+
+/// The project's script functions and the console commands the linked game's modules take.
+type CommandsRead = (Vec<String>, Vec<(String, String)>);
 
 /// A module installed in the linked game, for the Relations pickers.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +69,7 @@ pub struct Installed {
 struct Inbox {
     modes: Option<Arc<ModeScan>>,
     installed: Option<Vec<Installed>>,
-    commands: Option<(Vec<String>, Vec<(String, String)>)>,
+    commands: Option<CommandsRead>,
     tree: Option<(Vec<String>, usize, usize)>,
     picture: Option<(String, Option<ColorImage>)>,
     picture_chosen: Option<String>,
@@ -257,7 +268,8 @@ impl ModSettingsDoc {
         {
             self.picture.loading = false;
             self.picture.unreadable = image.is_none();
-            self.picture.texture = image.map(|img| ctx.load_texture("gz-ui-mod.thumbnail", img, TextureOptions::LINEAR));
+            self.picture.texture =
+                image.map(|img| ctx.load_texture("gz-ui-mod.thumbnail", img, TextureOptions::LINEAR));
         }
         if let Some(path) = chosen {
             self.set_picture(&path);
@@ -323,7 +335,11 @@ impl ModSettingsDoc {
                 .exec
                 .io(move || {
                     let functions = gz_mod::script_functions(&root, &tree, &exclude);
-                    let taken = if game.is_empty() { Vec::new() } else { gz_mod::installed_commands(Path::new(&game), &id) };
+                    let taken = if game.is_empty() {
+                        Vec::new()
+                    } else {
+                        gz_mod::installed_commands(Path::new(&game), &id)
+                    };
                     (functions, taken)
                 })
                 .await;
@@ -343,11 +359,18 @@ impl ModSettingsDoc {
             let data = ed
                 .exec
                 .io(move || {
-                    let mut pda: Vec<String> = tree.files_with_extension("pdaasset").iter().map(gz_editor::RelPath::to_backslash).collect();
+                    let mut pda: Vec<String> = tree
+                        .files_with_extension("pdaasset")
+                        .iter()
+                        .map(gz_editor::RelPath::to_backslash)
+                        .collect();
                     pda.sort_by_key(|p| p.to_ascii_lowercase());
                     let count = |folder: &str, skip: Option<&str>| {
                         gz_editor::RelPath::new(folder).ok().map_or(0, |rel| {
-                            tree.files_under(&rel).iter().filter(|(_, e)| skip.is_none_or(|s| !e.name.eq_ignore_ascii_case(s))).count()
+                            tree.files_under(&rel)
+                                .iter()
+                                .filter(|(_, e)| skip.is_none_or(|s| !e.name.eq_ignore_ascii_case(s)))
+                                .count()
                         })
                     };
                     (pda, count("gamedata", None), count("patch", Some("_readme.txt")))
@@ -360,7 +383,11 @@ impl ModSettingsDoc {
 
     /// Reads the thumbnail for the preview when what it is of changed.
     fn want_picture(&mut self) {
-        let key = if self.thumbnail.is_empty() { String::new() } else { format!("{}\\{}|{}", self.root, self.thumbnail, self.picture.made) };
+        let key = if self.thumbnail.is_empty() {
+            String::new()
+        } else {
+            format!("{}\\{}|{}", self.root, self.thumbnail, self.picture.made)
+        };
         if key == self.picture.key {
             return;
         }
@@ -386,7 +413,8 @@ impl ModSettingsDoc {
         self.picture.making = true;
         let inbox = self.inbox.clone();
         call::call_then(&self.editor, "mod_set_manifest", args([("thumbnail", s(path))]), move |reply, _| {
-            inbox.lock().picture_done = Some(if call::ok(reply) { Ok(()) } else { Err(call::error_text(reply)) });
+            inbox.lock().picture_done =
+                Some(if call::ok(reply) { Ok(()) } else { Err(call::error_text(reply)) });
         });
     }
 
@@ -482,7 +510,9 @@ impl ModSettingsDoc {
             Ok(()) => {
                 self.status.clear();
                 self.failed = None;
-                if let Some(snap) = self.editor.project_opt().and_then(|s| ManifestService::get(&s)).map(|svc| svc.snapshot()) {
+                if let Some(snap) =
+                    self.editor.project_opt().and_then(|s| ManifestService::get(&s)).map(|svc| svc.snapshot())
+                {
                     let fresh = snap.manifest().map(Form::of).unwrap_or_default();
                     self.thumbnail = snap.manifest().map(|m| m.thumbnail.clone()).unwrap_or_default();
                     self.form.follow(&sent, &fresh);
@@ -503,7 +533,10 @@ impl ModSettingsDoc {
         if !self.dirty() || self.saving.is_some() || self.failed.as_ref() == Some(&self.form) {
             return;
         }
-        if ctx.egui_wants_keyboard_input() || ctx.dragged_id().is_some() || form::blocking(&self.problems).0.is_some() {
+        if ctx.egui_wants_keyboard_input()
+            || ctx.dragged_id().is_some()
+            || form::blocking(&self.problems).0.is_some()
+        {
             return;
         }
         let _ = self.save_now();
@@ -714,6 +747,7 @@ impl ModSettingsDoc {
     }
 
     fn mode_page(&mut self, ui: &mut Ui) {
+        let classic = self.base.kind() == Some(TargetKind::Any);
         let Self { form, problems, modes, gated, actions, .. } = self;
         let scan = modes.clone();
         let list: &[gz_game::GameMode] = scan.as_deref().map_or(&[], |m| m.modes.as_slice());
@@ -725,10 +759,16 @@ impl ModSettingsDoc {
                 flags(problems, "target", PropFlags::REQUIRED),
                 0,
                 |ui| {
-                    let labels: Vec<&str> = TargetKind::OFFERED.iter().map(|k| k.label()).collect();
-                    let mut pick = kind.and_then(|k| TargetKind::OFFERED.iter().position(|o| *o == k)).unwrap_or(usize::MAX);
+                    // a classic module (every mode) keeps its choice on show; it is made by
+                    // tools/classic_mod, not picked here
+                    let mut offered: Vec<TargetKind> = TargetKind::OFFERED.to_vec();
+                    if classic {
+                        offered.push(TargetKind::Any);
+                    }
+                    let labels: Vec<&str> = offered.iter().map(|k| k.label()).collect();
+                    let mut pick = kind.and_then(|k| offered.iter().position(|o| *o == k)).unwrap_or(usize::MAX);
                     if segmented(ui, &mut pick, &labels, None)
-                        && let Some(k) = TargetKind::OFFERED.get(pick)
+                        && let Some(k) = offered.get(pick)
                     {
                         form.set_kind(*k, list.first().map(|m| m.id.as_str()));
                     }
@@ -807,7 +847,11 @@ impl ModSettingsDoc {
 
     fn relations_page(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
-        let linked = self.editor.project_opt().and_then(|s| s.services.get::<Project>()).is_some_and(|p| !p.game_root().is_empty());
+        let linked = self
+            .editor
+            .project_opt()
+            .and_then(|s| s.services.get::<Project>())
+            .is_some_and(|p| !p.game_root().is_empty());
         const RELS: [(&str, &str, &str); 4] = [
             ("requires", "Requires", "The game refuses to load this module without these."),
             ("after", "Load After", "These load first; this module's changes go on top of theirs."),
@@ -850,10 +894,16 @@ impl ModSettingsDoc {
                 }
                 // modules this computer does not have: kept, said
                 if linked && installed.is_some() {
-                    let missing: Vec<String> =
-                        relation_lines(form, i).iter().map(|l| form::relation_id(l)).filter(|id| !installed_list.iter().any(|m| m.id == *id)).collect();
+                    let missing: Vec<String> = relation_lines(form, i)
+                        .iter()
+                        .map(|l| form::relation_id(l))
+                        .filter(|id| !installed_list.iter().any(|m| m.id == *id))
+                        .collect();
                     if !missing.is_empty() {
-                        g.message(Tone::Muted, &format!("Not installed in the linked game: {}.", missing.join(", ")));
+                        g.message(
+                            Tone::Muted,
+                            &format!("Not installed in the linked game: {}.", missing.join(", ")),
+                        );
                     }
                 }
                 messages(g, problems, field);
@@ -871,7 +921,8 @@ impl ModSettingsDoc {
             let popup = picker_id(i);
             let focus = self.pick_focus.take_if(|f| *f == popup).is_some();
             let me = form::relation_id(&self.form.id);
-            let taken: Vec<String> = relation_lines(&self.form, i).iter().map(|l| form::relation_id(l)).collect();
+            let taken: Vec<String> =
+                relation_lines(&self.form, i).iter().map(|l| form::relation_id(l)).collect();
             let installed: &[Installed] = self.installed.as_deref().unwrap_or(&[]);
             let empty = if !installed.is_empty() {
                 "No module matches. A module id typed here can be added as it is."
@@ -891,8 +942,16 @@ impl ModSettingsDoc {
                     .map(|(m, label)| PickRow { value: m.id.clone(), label, tip: String::new() })
                     .collect();
                 let typed = form::relation_id(search);
-                if !typed.is_empty() && !installed.iter().any(|m| m.id == typed) && !is_taken(&typed) && validate_id(&typed) {
-                    rows.push(PickRow { value: typed.clone(), label: format!("Add {typed}"), tip: "Not installed in the linked game: the id is taken as typed.".to_owned() });
+                if !typed.is_empty()
+                    && !installed.iter().any(|m| m.id == typed)
+                    && !is_taken(&typed)
+                    && validate_id(&typed)
+                {
+                    rows.push(PickRow {
+                        value: typed.clone(),
+                        label: format!("Add {typed}"),
+                        tip: "Not installed in the linked game: the id is taken as typed.".to_owned(),
+                    });
                 }
                 rows
             });
@@ -1045,7 +1104,10 @@ impl ModSettingsDoc {
             self.actions.push(Action::ReadScripts);
         }
         if self.form.commands.is_empty() {
-            let _ = text::prose(ui, "No commands. A command is a line of [commands] in mod.ltx: the name the player types and the function it calls.");
+            let _ = text::prose(
+                ui,
+                "No commands. A command is a line of [commands] in mod.ltx: the name the player types and the function it calls.",
+            );
         }
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -1064,10 +1126,19 @@ impl ModSettingsDoc {
             let popup = function_picker_id(i);
             let focus = self.pick_focus.take_if(|f| *f == popup).is_some();
             let functions = &self.aux.functions;
-            let empty = if functions.is_empty() { "The project's gamedata\\scripts has no function yet: write one, then pick it here." } else { "No function matches." };
-            let spec = PickList { popup, anchor, layer, hint: "Search the project's functions", empty, focus };
+            let empty = if functions.is_empty() {
+                "The project's gamedata\\scripts has no function yet: write one, then pick it here."
+            } else {
+                "No function matches."
+            };
+            let spec =
+                PickList { popup, anchor, layer, hint: "Search the project's functions", empty, focus };
             let picked = local_pick_list(&ctx, &spec, &mut self.search, |search| {
-                functions.iter().filter(|f| gz_ui::search::matches(search, f)).map(|f| PickRow { value: f.clone(), label: f.clone(), tip: String::new() }).collect()
+                functions
+                    .iter()
+                    .filter(|f| gz_ui::search::matches(search, f))
+                    .map(|f| PickRow { value: f.clone(), label: f.clone(), tip: String::new() })
+                    .collect()
             });
             if let Some(f) = picked
                 && let Some(c) = self.form.commands.get_mut(i)
@@ -1084,25 +1155,44 @@ impl ModSettingsDoc {
             match action {
                 Action::OpenPda(rel) => cx.requests.open(OpenRequest::file("pda", &rel)),
                 Action::CreatePda => {
-                    let safe: String = if self.form.id.is_empty() { "app".to_owned() } else { self.form.id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect() };
+                    let safe: String = if self.form.id.is_empty() {
+                        "app".to_owned()
+                    } else {
+                        self.form
+                            .id
+                            .chars()
+                            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+                            .collect()
+                    };
                     let title = if self.form.name.is_empty() { safe.clone() } else { self.form.name.clone() };
                     let ed = self.editor.clone();
-                    call::call_then(&self.editor, "pda_write", args([("id", s(&safe)), ("title", s(&title)), ("use", Value::Bool(true))]), move |reply, ctx| {
-                        if call::ok(reply) {
-                            call::open_tab(&ed, "pda");
-                        } else {
-                            gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
-                        }
-                    });
+                    call::call_then(
+                        &self.editor,
+                        "pda_write",
+                        args([("id", s(&safe)), ("title", s(&title)), ("use", Value::Bool(true))]),
+                        move |reply, ctx| {
+                            if call::ok(reply) {
+                                call::open_tab(&ed, "pda");
+                            } else {
+                                gz_ui::state::toast(ctx, Tone::Error, &call::error_text(reply));
+                            }
+                        },
+                    );
                 }
                 Action::RescanModes => self.load_modes(true),
                 Action::ReadScripts => self.load_commands(),
                 Action::ChoosePicture => {
                     let inbox = self.inbox.clone();
                     let start = self.root.clone();
-                    call::pick_path(&self.editor, Pick::Picture, "Choose the module's picture", &start, move |path, _| {
-                        inbox.lock().picture_chosen = Some(path);
-                    });
+                    call::pick_path(
+                        &self.editor,
+                        Pick::Picture,
+                        "Choose the module's picture",
+                        &start,
+                        move |path, _| {
+                            inbox.lock().picture_chosen = Some(path);
+                        },
+                    );
                 }
                 Action::RemovePicture => self.set_picture(""),
             }
@@ -1111,15 +1201,23 @@ impl ModSettingsDoc {
 
     fn draw_footer(&self, ui: &mut Ui, rect: Rect) {
         let p = palette(ui.ctx());
-        ui.painter().line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, p.border_subtle));
+        ui.painter()
+            .line_segment([rect.left_top(), rect.right_top()], egui::Stroke::new(1.0, p.border_subtle));
         let (status, tone) = match form::blocking(&self.problems).0 {
-            Some(first) => (format!("{}: {}", PAGES.get(first.page).map_or("", |p| p.label), first.text), Tone::Error),
+            Some(first) => {
+                (format!("{}: {}", PAGES.get(first.page).map_or("", |p| p.label), first.text), Tone::Error)
+            }
             None if !self.status.is_empty() => (self.status.clone(), Tone::Error),
             None if !self.exists => ("No mod.ltx yet: the first edit makes it.".to_owned(), Tone::Muted),
             None => ("Saved to mod.ltx as you edit".to_owned(), Tone::Muted),
         };
         let r = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 4.0), rect.max);
-        let mut child = ui.new_child(UiBuilder::new().id_salt("gz-ui-mod.settings.footer").max_rect(r).layout(Layout::top_down(Align::Min)));
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-mod.settings.footer")
+                .max_rect(r)
+                .layout(Layout::top_down(Align::Min)),
+        );
         let mut tb = gz_ui::Toolbar::begin(&mut child, "mod_settings_footer", gz_ui::ToolbarStyle::Row);
         tb.group(1);
         tb.status(&status, tone);
@@ -1152,7 +1250,13 @@ impl Document for ModSettingsDoc {
         let ctx = ui.ctx().clone();
         self.take_inbox(Some(&ctx));
         if self.editor.project_opt().is_none() {
-            gz_ui::state::empty_state(ui, Icon::Settings, "No project", "Mod Settings edit the mod.ltx of the open project.", None);
+            gz_ui::state::empty_state(
+                ui,
+                Icon::Settings,
+                "No project",
+                "Mod Settings edit the mod.ltx of the open project.",
+                None,
+            );
             return;
         }
         self.sync();
@@ -1167,19 +1271,35 @@ impl Document for ModSettingsDoc {
         let nav_w = NAV_W.min(full.width() * 0.3).max(1.0);
         let body_bottom = (full.max.y - FOOTER_H).max(full.min.y + 1.0);
         let nav = Rect::from_min_max(full.min, pos2(full.min.x + nav_w, body_bottom));
-        let mut left = ui.new_child(UiBuilder::new().id_salt("gz-ui-mod.settings.nav").max_rect(nav).layout(Layout::top_down(Align::Min)));
+        let mut left = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-mod.settings.nav")
+                .max_rect(nav)
+                .layout(Layout::top_down(Align::Min)),
+        );
         self.draw_nav(&mut left, nav_w, nav.height());
 
-        let page = Rect::from_min_max(pos2((nav.max.x + 8.0).min(full.max.x), full.min.y), pos2(full.max.x, body_bottom));
-        let mut right = ui.new_child(UiBuilder::new().id_salt("gz-ui-mod.settings.page").max_rect(page).layout(Layout::top_down(Align::Min)));
-        ScrollArea::vertical().id_salt(("gz-ui-mod.settings.scroll", self.page)).auto_shrink([false, false]).show(&mut right, |ui| {
-            egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
-                let column = ui.available_width().min(em(44.0)).max(1.0);
-                ui.set_max_width(column);
-                ui.set_min_width(column);
-                self.draw_page(ui);
+        let page = Rect::from_min_max(
+            pos2((nav.max.x + 8.0).min(full.max.x), full.min.y),
+            pos2(full.max.x, body_bottom),
+        );
+        let mut right = ui.new_child(
+            UiBuilder::new()
+                .id_salt("gz-ui-mod.settings.page")
+                .max_rect(page)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        ScrollArea::vertical()
+            .id_salt(("gz-ui-mod.settings.scroll", self.page))
+            .auto_shrink([false, false])
+            .show(&mut right, |ui| {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
+                    let column = ui.available_width().min(em(44.0)).max(1.0);
+                    ui.set_max_width(column);
+                    ui.set_min_width(column);
+                    self.draw_page(ui);
+                });
             });
-        });
         let footer = Rect::from_min_max(pos2(full.min.x, body_bottom), full.max);
         self.draw_footer(ui, footer);
         ui.allocate_rect(full, egui::Sense::hover());
@@ -1279,7 +1399,11 @@ fn module_label(installed: &[Installed], id: &str) -> String {
 
 /// A row's flags with Invalid when one of its problems is an error (`RowFlags`).
 fn flags(problems: &[Problem], field: &str, base: PropFlags) -> PropFlags {
-    if problems.iter().any(|p| p.field == field && p.tone == Tone::Error) { base | PropFlags::INVALID } else { base }
+    if problems.iter().any(|p| p.field == field && p.tone == Tone::Error) {
+        base | PropFlags::INVALID
+    } else {
+        base
+    }
 }
 
 /// The sentences of a row's problems under it (`RowMessages`).
@@ -1345,15 +1469,25 @@ mod tests {
     #[test]
     fn the_answer_names_every_page() {
         let v = view_json(false, false, 0, false, &[]);
-        let ids: Vec<&str> = v["pages"].as_array().into_iter().flatten().filter_map(|p| p["id"].as_str()).collect();
-        assert_eq!(ids, ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda", "commands"]);
+        let ids: Vec<&str> =
+            v["pages"].as_array().into_iter().flatten().filter_map(|p| p["id"].as_str()).collect();
+        assert_eq!(
+            ids,
+            ["general", "mod_browser", "game_mode", "relations", "build_contents", "pda", "commands"]
+        );
         assert!(v["pages"].as_array().into_iter().flatten().all(|p| p["state"] == "ok"));
         assert_eq!(v["tab"], "mod_settings");
     }
 
     #[test]
     fn a_page_takes_its_worst_tone() {
-        let p = |tone| Problem { page: form::MODE, field: "mode".into(), tone, blocks: false, text: String::new() };
+        let p = |tone| Problem {
+            page: form::MODE,
+            field: "mode".into(),
+            tone,
+            blocks: false,
+            text: String::new(),
+        };
         let v = view_json(true, true, form::MODE, false, &[p(Tone::Warning), p(Tone::Required)]);
         assert_eq!(v["pages"][form::MODE]["state"], "required");
         assert_eq!(v["problems"][0]["page"], "game_mode");

@@ -19,7 +19,10 @@ use gz_app::{DocCx, OpenRequest};
 use gz_editor::Editor;
 use gz_github::{AccountSource, Github, ReleaseInfo, Secret};
 use gz_mod::ManifestService;
-use gz_publish::{ManageOp, ManageRequest, ManageState, ManageView, PublishOptions, PublishState, Publisher, ReleaseList, tags};
+use gz_publish::{
+    ManageOp, ManageRequest, ManageState, ManageView, PublishOptions, PublishState, Publisher, ReleaseList,
+    tags,
+};
 use gz_ui::dialog::{self, ResultAction, ResultSpec};
 use gz_ui::grid::{read_only, switch, text_block, text_field};
 use gz_ui::text::{self, Clip};
@@ -27,9 +30,9 @@ use gz_ui::{Button, Dialog, DialogSize, Font, Icon, Kind, PropFlags, PropertyGri
 use parking_lot::Mutex;
 use zeroize::Zeroizing;
 
-use gz_ui_mod::KeyLine;
 use crate::local::{local_code, local_secret_row};
 use crate::{asker, open_page, reason};
+use gz_ui_mod::KeyLine;
 
 /// GitHub stops a release body at 125 000 characters; the editor takes 120 000.
 pub(crate) const MAX_NOTES: usize = 120_000;
@@ -121,7 +124,9 @@ pub(crate) fn problems(i: &ProblemInput<'_>) -> (Vec<String>, u8) {
         out.push(format!("The GitHub repository in Mod Settings is not owner/repo: {}.", i.repo));
     }
     if !gz_mod::validate_version(i.version) {
-        out.push("The version in Mod Settings is not valid: 1-4 numbers separated by dots, e.g. 1.2.0.".to_owned());
+        out.push(
+            "The version in Mod Settings is not valid: 1-4 numbers separated by dots, e.g. 1.2.0.".to_owned(),
+        );
     }
     if !out.is_empty() {
         fixes |= FIX_SETTINGS;
@@ -137,12 +142,20 @@ pub(crate) fn problems(i: &ProblemInput<'_>) -> (Vec<String>, u8) {
         out.push(format!("The linked game's version {} is not MAJOR.MINOR.PATCH.", i.requires));
     }
     if i.key_locked {
-        out.push("The author key is locked: give its password below - the release is signed with it.".to_owned());
+        out.push(
+            "The author key is locked: give its password below - the release is signed with it.".to_owned(),
+        );
     }
     if !tags::valid_tag(i.tag) {
-        out.push("The tag takes 1-100 letters, digits, '.', '_' and '-', and starts with neither '-' nor '.'.".to_owned());
+        out.push(
+            "The tag takes 1-100 letters, digits, '.', '_' and '-', and starts with neither '-' nor '.'."
+                .to_owned(),
+        );
     } else if i.clash.found && !i.clash.version {
-        out.push(format!("Tag {} is already published, and a published release is never overwritten: pick another tag.", i.tag));
+        out.push(format!(
+            "Tag {} is already published, and a published release is never overwritten: pick another tag.",
+            i.tag
+        ));
     }
     if i.title.len() > MAX_TITLE {
         out.push("The title is longer than 200 characters.".to_owned());
@@ -195,7 +208,12 @@ fn module_of(editor: &Editor) -> Option<Module> {
     let svc = ManifestService::get(&session)?;
     let snap = svc.snapshot();
     let m = snap.manifest()?;
-    Some(Module { id: m.id.clone(), name: m.name.clone(), repo: m.update_github.clone(), version: m.version.clone() })
+    Some(Module {
+        id: m.id.clone(),
+        name: m.name.clone(),
+        repo: m.update_github.clone(),
+        version: m.version.clone(),
+    })
 }
 
 /// A publish started here, followed to its end for the result dialog.
@@ -331,7 +349,8 @@ impl PublishDialog {
             if let Ok(m) = ManifestService::of_session(&ed, &session).await {
                 let _ = m.sync().await;
             }
-            let game = session.services.get::<gz_project::Project>().map(|p| p.game_root()).unwrap_or_default();
+            let game =
+                session.services.get::<gz_project::Project>().map(|p| p.game_root()).unwrap_or_default();
             let game_version = ed.exec.io(move || gz_release::game_version::linked_game_version(&game)).await;
             let file = tags::deleted_tags_file(&session.root);
             let deleted = ed.exec.io(move || std::fs::read_to_string(file).unwrap_or_default()).await;
@@ -369,7 +388,13 @@ impl PublishDialog {
 
     /// Reads the repository's releases once the dialog is up, and again for another repository
     /// or account.
-    fn ensure_list(&mut self, editor: &Arc<Editor>, repo: &str, account: Option<AccountSource>, view: &ManageView) {
+    fn ensure_list(
+        &mut self,
+        editor: &Arc<Editor>,
+        repo: &str,
+        account: Option<AccountSource>,
+        view: &ManageView,
+    ) {
         let Some(source) = account else { return };
         if source == AccountSource::None || !gz_mod::validate_github_repo(repo) {
             return;
@@ -420,7 +445,12 @@ impl PublishDialog {
         }
         let (_, v) = Publisher::of(editor).sign_json();
         let field = |k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or("").to_owned();
-        self.sign = Sign { state: field("state"), code: field("user_code"), uri: field("verification_uri"), error: field("error") };
+        self.sign = Sign {
+            state: field("state"),
+            code: field("user_code"),
+            uri: field("verification_uri"),
+            error: field("error"),
+        };
         match self.sign.state.as_str() {
             "done" => {
                 self.signing = false;
@@ -486,8 +516,16 @@ impl PublishDialog {
         let view = list.view();
         self.ensure_list(&editor, &module.repo, account.as_ref().map(|a| a.0), &view);
         let reading_list = view.state == ManageState::Running && view.op == ManageOp::List;
-        let reading = reading_list || account.is_none() || game_version.is_none() || read_locked.is_none() || (self.tag_auto && self.tag_for != module.version);
-        let list_failed = if view.state == ManageState::Failed && view.op == ManageOp::List && view.repo == module.repo && !view.error.is_empty() {
+        let reading = reading_list
+            || account.is_none()
+            || game_version.is_none()
+            || read_locked.is_none()
+            || (self.tag_auto && self.tag_for != module.version);
+        let list_failed = if view.state == ManageState::Failed
+            && view.op == ManageOp::List
+            && view.repo == module.repo
+            && !view.error.is_empty()
+        {
             Some(view.error.clone())
         } else {
             list_error.filter(|(repo, _)| *repo == module.repo).map(|(_, e)| e)
@@ -499,7 +537,8 @@ impl PublishDialog {
         if self.key.wants_password() {
             self.key_seen_locked = true;
         }
-        let key_locked = read_locked.unwrap_or(false) && !(self.key_seen_locked && !self.key.wants_password());
+        let key_locked =
+            read_locked.unwrap_or(false) && !(self.key_seen_locked && !self.key.wants_password());
         let (problems, fixes) = problems(&ProblemInput {
             repo: &module.repo,
             version: &module.version,
@@ -511,14 +550,25 @@ impl PublishDialog {
             signed_out: account.is_some() && source == AccountSource::None,
             managing: view.state == ManageState::Running && view.op != ManageOp::List,
         });
-        let replaced = replaced.filter(|(v, _)| *v == module.version).map(|(_, files)| files).unwrap_or_default();
+        let replaced =
+            replaced.filter(|(v, _)| *v == module.version).map(|(_, files)| files).unwrap_or_default();
 
         let mut acts: Vec<Act> = Vec::new();
         let mut open = self.open;
         let ctx = ui.ctx().clone();
-        let status = if reading || !problems.is_empty() { "" } else { "Packages, uploads a draft, checks every file, then publishes." };
+        let status = if reading || !problems.is_empty() {
+            ""
+        } else {
+            "Packages, uploads a draft, checks every file, then publishes."
+        };
         let can = problems.is_empty() && !reading && !self.queued.load(Ordering::Relaxed);
-        let why = problems.first().map_or(if reading { "Reading the releases on GitHub first." } else { "Publishing is starting." }, String::as_str).to_owned();
+        let why = problems
+            .first()
+            .map_or(
+                if reading { "Reading the releases on GitHub first." } else { "Publishing is starting." },
+                String::as_str,
+            )
+            .to_owned();
         let mut publish = false;
         let mut cancel = false;
         Dialog::new("Publish Release", "dlg.publish_release", DialogSize::L).show(
@@ -611,7 +661,8 @@ impl PublishDialog {
         let repo_ok = !module.repo.is_empty() && gz_mod::validate_github_repo(&module.repo);
         let version_ok = gz_mod::validate_version(&module.version) && !clash.version;
         let signed_in = source != AccountSource::None || account.is_none();
-        let tag_wrong = !tags::valid_tag(&self.tag) || (clash.found && !clash.version) || self.title.len() > MAX_TITLE;
+        let tag_wrong =
+            !tags::valid_tag(&self.tag) || (clash.found && !clash.version) || self.title.len() > MAX_TITLE;
         PropertyGrid::new("publish").show(ui, |g| {
             // what goes out in one line, what to say about it, and everything with a good default under More
             let flags = if repo_ok && version_ok { PropFlags::READ_ONLY } else { PropFlags::READ_ONLY | PropFlags::INVALID };
@@ -701,8 +752,16 @@ impl PublishDialog {
             Some((s, detail)) => format!("{} ({detail})", s.text()),
         };
         let help = "Where the GitHub token comes from: an environment variable, the token the editor saved in the Windows Credential Manager, or the GitHub CLI (gh auth login) - in that order.";
-        g.row("Account", help, if signed_in { PropFlags::READ_ONLY } else { PropFlags::REQUIRED }, 0, |ui| read_only(ui, &text_, Clip::End));
-        if device && !signing && g.trailing(Icon::Link, "Sign in with GitHub: opens GitHub in the browser and asks for a one-time code") {
+        g.row("Account", help, if signed_in { PropFlags::READ_ONLY } else { PropFlags::REQUIRED }, 0, |ui| {
+            read_only(ui, &text_, Clip::End)
+        });
+        if device
+            && !signing
+            && g.trailing(
+                Icon::Link,
+                "Sign in with GitHub: opens GitHub in the browser and asks for a one-time code",
+            )
+        {
             acts.push(Act::SignIn);
         }
         if source == AccountSource::Saved && g.trailing(Icon::Unlink, "Forget the token the editor saved") {
@@ -712,9 +771,15 @@ impl PublishDialog {
             g.message(Tone::Error, &self.sign.error);
         }
         if self.signing && self.sign.state == "starting" {
-            g.row("Sign-in", "GitHub hands out a one-time code that is entered on its own page.", PropFlags::NONE, 0, |ui| {
-                gz_ui::state::busy_line(ui, "Contacting GitHub...");
-            });
+            g.row(
+                "Sign-in",
+                "GitHub hands out a one-time code that is entered on its own page.",
+                PropFlags::NONE,
+                0,
+                |ui| {
+                    gz_ui::state::busy_line(ui, "Contacting GitHub...");
+                },
+            );
             if g.trailing(Icon::Close, "Cancel the sign-in") {
                 acts.push(Act::SignStop);
             }
@@ -738,7 +803,10 @@ impl PublishDialog {
         let help = "A personal access token: GitHub > Settings > Developer settings > Fine-grained tokens, this repository, Contents = Read and write. Kept in the Windows Credential Manager - never in the project.";
         let hint = if signed_in { "Replace with a personal access token" } else { "Personal access token" };
         let typed = !self.token.is_empty();
-        if g.row("Token", help, PropFlags::NONE, 0, |ui| local_secret_row(ui, "token", &mut self.token, hint, "Save", typed, "Paste a token first.")) == Some(true) {
+        if g.row("Token", help, PropFlags::NONE, 0, |ui| {
+            local_secret_row(ui, "token", &mut self.token, hint, "Save", typed, "Paste a token first.")
+        }) == Some(true)
+        {
             acts.push(Act::SaveToken);
         }
         if !account_error.is_empty() {
@@ -747,7 +815,17 @@ impl PublishDialog {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn run(&mut self, act: Act, cx: &mut DocCx<'_>, editor: &Arc<Editor>, ctx: &egui::Context, clash: &Clash, web: &str, game_version: Option<&str>, hub_refresh: &mut bool) {
+    fn run(
+        &mut self,
+        act: Act,
+        cx: &mut DocCx<'_>,
+        editor: &Arc<Editor>,
+        ctx: &egui::Context,
+        clash: &Clash,
+        web: &str,
+        game_version: Option<&str>,
+        hub_refresh: &mut bool,
+    ) {
         match act {
             Act::Settings => {
                 self.open = false;
@@ -837,7 +915,13 @@ impl PublishDialog {
                 }
                 if let Some(e) = self.facts.lock().start_error.take() {
                     self.watch = Watch::None;
-                    if let Some(line) = dialog::notice(ctx, asker(editor), Tone::Error, "Publish Release", &format!("Cannot publish the release: {}.", reason(&e))) {
+                    if let Some(line) = dialog::notice(
+                        ctx,
+                        asker(editor),
+                        Tone::Error,
+                        "Publish Release",
+                        &format!("Cannot publish the release: {}.", reason(&e)),
+                    ) {
                         editor.log.info(line);
                     }
                     return;
@@ -881,10 +965,17 @@ impl PublishDialog {
         };
         let mut spec = ResultSpec::new("publish_result", "Publish Release", tone, &headline);
         if job.state == PublishState::Done {
-            spec.rows = vec![("Repository".to_owned(), job.repo.clone()), ("Tag".to_owned(), job.tag.clone()), ("Release page".to_owned(), job.url.clone())];
+            spec.rows = vec![
+                ("Repository".to_owned(), job.repo.clone()),
+                ("Tag".to_owned(), job.tag.clone()),
+                ("Release page".to_owned(), job.url.clone()),
+            ];
             if crate::page_ok(&job.url, &web) {
                 let (ctx2, url) = (ctx.clone(), job.url.clone());
-                spec.action = Some(ResultAction { label: "Open Release Page".to_owned(), run: Arc::new(move || ctx2.open_url(egui::OpenUrl::new_tab(&url))) });
+                spec.action = Some(ResultAction {
+                    label: "Open Release Page".to_owned(),
+                    run: Arc::new(move || ctx2.open_url(egui::OpenUrl::new_tab(&url))),
+                });
             }
         }
         spec.warnings = job.warnings.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect();
@@ -942,8 +1033,18 @@ impl EditDialog {
                 text::label(ui, "Title", Font::Body, p.text_secondary, Clip::End);
                 text_field(ui, &mut self.title);
                 ui.add_space(4.0);
-                text_block(ui, "Notes", "What changed, shown on the release page. Markdown.", &mut self.notes, 12);
-                text::status(ui, Tone::Muted, "The files, the tag and the latest mark of the release stay as they are.");
+                text_block(
+                    ui,
+                    "Notes",
+                    "What changed, shown on the release page. Markdown.",
+                    &mut self.notes,
+                    12,
+                );
+                text::status(
+                    ui,
+                    Tone::Muted,
+                    "The files, the tag and the latest mark of the release stay as they are.",
+                );
                 if too_long {
                     text::status(ui, Tone::Warning, "GitHub takes notes of 120 000 characters at most.");
                 }
@@ -957,7 +1058,13 @@ impl EditDialog {
             },
         );
         if save {
-            let rq = ManageRequest { op: ManageOp::Edit, id: self.target.id, tag: String::new(), title: Some(self.title.clone()), notes: Some(self.notes.clone()) };
+            let rq = ManageRequest {
+                op: ManageOp::Edit,
+                id: self.target.id,
+                tag: String::new(),
+                title: Some(self.title.clone()),
+                notes: Some(self.notes.clone()),
+            };
             let (ed, slot) = (editor.clone(), start_error.clone());
             editor.exec.spawn(async move {
                 let started = ReleaseList::of(&ed).start(&ed, rq).await;
@@ -1063,7 +1170,11 @@ mod tests {
 
     #[test]
     fn a_version_that_is_out_clashes() {
-        let v = view(vec![release(3, "v1.3.0", true), release(2, "v1.2.0-r2", false), release(1, "v1.1.0", false)]);
+        let v = view(vec![
+            release(3, "v1.3.0", true),
+            release(2, "v1.2.0-r2", false),
+            release(1, "v1.1.0", false),
+        ]);
         let c = published_clash(&v, "me/od", "1.2.0", "v1.2.0-r3");
         assert_eq!(c, Clash { found: true, version: true, id: 2, tag: "v1.2.0-r2".to_owned() });
         // a draft of the version is no clash
@@ -1097,7 +1208,14 @@ mod tests {
         assert!(out[3].starts_with("The author key is locked"));
         assert!(out.last().is_some_and(|l| l.starts_with("Not signed in")));
         let none = Clash::default();
-        let ok = ProblemInput { repo: "me/od", requires: "1.4.2", key_locked: false, signed_out: false, clash: &none, ..i };
+        let ok = ProblemInput {
+            repo: "me/od",
+            requires: "1.4.2",
+            key_locked: false,
+            signed_out: false,
+            clash: &none,
+            ..i
+        };
         assert_eq!(problems(&ok), (Vec::new(), 0));
     }
 

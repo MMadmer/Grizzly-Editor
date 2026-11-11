@@ -78,7 +78,10 @@ pub(crate) fn w_str(w: &mut Writer, text: &str, enc: TextEncoding) {
 pub(crate) fn checked_count(r: &Reader<'_>, count: usize, item_size: usize) -> Result<usize> {
     match count.checked_mul(item_size.max(1)) {
         Some(bytes) if bytes <= r.elapsed() => Ok(count),
-        _ => Err(ObjectError::Chunk(ChunkError::Eof { at: r.tell(), wanted: count.saturating_mul(item_size.max(1)) })),
+        _ => Err(ObjectError::Chunk(ChunkError::Eof {
+            at: r.tell(),
+            wanted: count.saturating_mul(item_size.max(1)),
+        })),
     }
 }
 
@@ -104,18 +107,18 @@ pub(crate) fn chunk_u32(r: &Reader<'_>, id: u32) -> Option<u32> {
 
 pub(crate) fn r_f32s(r: &mut Reader<'_>, count: usize) -> Result<Vec<f32>> {
     let bytes = r.take(count.checked_mul(4).ok_or(ChunkError::Eof { at: r.tell(), wanted: usize::MAX })?)?;
-    Ok(bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
 pub(crate) fn r_i32s(r: &mut Reader<'_>, count: usize) -> Result<Vec<i32>> {
     let bytes = r.take(count.checked_mul(4).ok_or(ChunkError::Eof { at: r.tell(), wanted: usize::MAX })?)?;
-    Ok(bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    Ok(bytes.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
 pub(crate) fn r_vec3s(r: &mut Reader<'_>, count: usize) -> Result<Vec<Vec3>> {
     let bytes = r.take(count.checked_mul(12).ok_or(ChunkError::Eof { at: r.tell(), wanted: usize::MAX })?)?;
     let f = |c: &[u8]| f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-    Ok(bytes.chunks_exact(12).map(|c| Vec3::new(f(&c[0..4]), f(&c[4..8]), f(&c[8..12]))).collect())
+    Ok(bytes.as_chunks::<12>().0.iter().map(|c| Vec3::new(f(&c[0..4]), f(&c[4..8]), f(&c[8..12]))).collect())
 }
 
 /// `w_float_q16`: the engine rounds to the nearest step.
@@ -157,7 +160,11 @@ pub(crate) fn w_term_string(w: &mut Writer, text: &str, enc: TextEncoding) {
 
 /// ASCII lower case, what the CRT's `strlwr` does in the "C" locale.
 pub(crate) fn lower(name: &SmolStr) -> SmolStr {
-    if name.bytes().any(|b| b.is_ascii_uppercase()) { SmolStr::new(name.to_ascii_lowercase()) } else { name.clone() }
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        SmolStr::new(name.to_ascii_lowercase())
+    } else {
+        name.clone()
+    }
 }
 
 #[cfg(test)]

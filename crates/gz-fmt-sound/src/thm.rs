@@ -29,7 +29,14 @@ pub struct SoundThm {
 
 impl Default for SoundThm {
     fn default() -> Self {
-        Self { quality: 0.0, min_dist: 1.0, max_dist: 300.0, max_ai_dist: 300.0, base_volume: 1.0, game_type: 0 }
+        Self {
+            quality: 0.0,
+            min_dist: 1.0,
+            max_dist: 300.0,
+            max_ai_dist: 300.0,
+            base_volume: 1.0,
+            game_type: 0,
+        }
     }
 }
 
@@ -86,7 +93,14 @@ mod tests {
 
     #[test]
     fn round_trips_and_has_the_editors_layout() {
-        let thm = SoundThm { quality: 0.3, min_dist: 2.0, max_dist: 80.0, max_ai_dist: 60.0, base_volume: 1.5, game_type: 0x0800_0000 };
+        let thm = SoundThm {
+            quality: 0.3,
+            min_dist: 2.0,
+            max_dist: 80.0,
+            max_ai_dist: 60.0,
+            base_volume: 1.5,
+            game_type: 0x0800_0000,
+        };
         let bytes = write_sound_thm(&thm);
         assert_eq!(bytes.len(), 10 + 12 + 24 + 12 + 12);
         assert_eq!(&bytes[..10], &[0x10, 0x08, 0, 0, 2, 0, 0, 0, 0x14, 0x00]);

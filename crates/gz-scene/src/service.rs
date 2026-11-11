@@ -72,6 +72,27 @@ impl DirtySource for SceneDirty {
             path: snap.meta.file.as_ref().map(|f| f.display().to_string()),
         }]
     }
+
+    fn save<'a>(&'a self, editor: &'a Arc<Editor>) -> gz_editor::SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else {
+                return Ok(());
+            };
+            if !svc.store.is_dirty() {
+                return Ok(());
+            }
+            let snap = svc.store.snapshot();
+            let name = snap.meta.name();
+            // the scene's own save, with its reason when it fails (C++ SettleUnsaved)
+            let Some(file) = snap.meta.file.clone() else {
+                return Err(format!(
+                    "{}: the scene has no file yet: save_scene file=<path> first",
+                    if name.is_empty() { "Untitled scene" } else { &name }
+                ));
+            };
+            save_scene(editor, &svc, file).await.map_err(|e| format!("{name}: {e}"))
+        })
+    }
 }
 
 impl SceneService {
@@ -95,7 +116,10 @@ impl SceneService {
         initial.meta.guid = io::new_guid(root.as_os_str().len() as u64);
         let svc = session.services.get_or_init(|| SceneService {
             store: Store::spawn("scene", initial, &editor.exec, StoreOptions::default()),
-            library: Arc::new(Library::new(vec![root.join("rawdata").join("objects"), editor_root.join("rawdata").join("objects")])),
+            library: Arc::new(Library::new(vec![
+                root.join("rawdata").join("objects"),
+                editor_root.join("rawdata").join("objects"),
+            ])),
             recovery: Arc::new(Recovery::new()),
             pick: Derived::new(editor.exec.clone()),
             load: Mutex::new(LoadStatus { rollback_ok: true, ..LoadStatus::default() }),
@@ -165,11 +189,8 @@ fn start_recovery_timer(editor: &Arc<Editor>, svc: &Arc<SceneService>) {
             let snap = svc.store.snapshot();
             let source = snap.meta.file.as_ref().map(|f| f.display().to_string()).unwrap_or_default();
             let rec = svc.recovery.clone();
-            let result = ed
-                .exec
-                .cpu(move || io::write_undo_stream(&snap, true))
-                .await
-                .map_err(|e| e.to_string());
+            let result =
+                ed.exec.cpu(move || io::write_undo_stream(&snap, true)).await.map_err(|e| e.to_string());
             let saved = match result {
                 Ok(stream) => ed.exec.io(move || rec.save_now(&stream, &source)).await,
                 Err(e) => Err(e),
@@ -218,7 +239,9 @@ pub fn resolve_scene(svc: &SceneService, scene: &str) -> Result<PathBuf, CmdErro
     let leaf = name.rsplit('\\').next().unwrap_or("");
     match leaf.rfind('.') {
         None => name.push_str(".level"),
-        Some(dot) if !leaf[dot..].eq_ignore_ascii_case(".level") => return Err(CmdError::invalid("scene must use the .level extension")),
+        Some(dot) if !leaf[dot..].eq_ignore_ascii_case(".level") => {
+            return Err(CmdError::invalid("scene must use the .level extension"));
+        }
         Some(_) => {}
     }
     let absolute = name.contains(':') || name.starts_with("\\\\");
@@ -230,7 +253,13 @@ pub fn resolve_scene(svc: &SceneService, scene: &str) -> Result<PathBuf, CmdErro
 pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: PathBuf) -> Result<(), String> {
     {
         let mut st = svc.load.lock();
-        *st = LoadStatus { attempted: true, loaded: false, rollback_ok: true, path: file.display().to_string().to_lowercase(), error: String::new() };
+        *st = LoadStatus {
+            attempted: true,
+            loaded: false,
+            rollback_ok: true,
+            path: file.display().to_string().to_lowercase(),
+            error: String::new(),
+        };
     }
     if let Err(e) = svc.recovery.can_replace_scene() {
         svc.load.lock().error = e.clone();
@@ -242,7 +271,11 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
     let job = editor.jobs.start("scene_load", Some("scene"), "Loading the scene", move |ctx| async move {
         ctx.stage("Reading the scene");
         let main_path = f.clone();
-        let main = ctx.exec.io(move || std::fs::read(&main_path)).await.map_err(|e| JobError::new(format!("Cannot open scene file: {} ({e})", f.display())))?;
+        let main = ctx
+            .exec
+            .io(move || std::fs::read(&main_path))
+            .await
+            .map_err(|e| JobError::new(format!("Cannot open scene file: {} ({e})", f.display())))?;
         let kind = io::scene_kind(&main).map_err(JobError::new)?;
         let classes = io::parts_needed(&main, kind);
         ctx.check()?;
@@ -257,7 +290,8 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         let loaded = ctx
             .exec
             .cpu(move || {
-                let st: SyncSettings<'_> = settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
+                let st: SyncSettings<'_> =
+                    settings.as_deref().map(|g| g as &(dyn gz_entities::Settings + Sync));
                 io::parse_scene(&main, &pf, &parts, st)
             })
             .await
@@ -269,7 +303,10 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
             ed.log.warn(w);
         }
         let count = loaded.state.objects.len();
-        s.store.send(SceneCmd::Replace(Box::new(loaded.state), ReplaceKind::Loaded), Origin::Mcp).await.map_err(|e| JobError::new(e.message))?;
+        s.store
+            .send(SceneCmd::Replace(Box::new(loaded.state), ReplaceKind::Loaded), Origin::Mcp)
+            .await
+            .map_err(|e| JobError::new(e.message))?;
         ed.log.info(format!("EScene: {count} objects loaded"));
         Ok(serde_json::json!({ "objects": count }))
     });

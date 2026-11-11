@@ -20,7 +20,10 @@ pub fn target_extent(current: Option<[u32; 2]>, wanted: [u32; 2]) -> [u32; 2] {
     let Some(cur) = current else { return want };
     let off = |w: u32, c: u32| w > c || w + 2 * BUCKET <= c;
     if off(want[0], cur[0]) || off(want[1], cur[1]) {
-        [if off(want[0], cur[0]) { want[0] } else { cur[0] }, if off(want[1], cur[1]) { want[1] } else { cur[1] }]
+        [
+            if off(want[0], cur[0]) { want[0] } else { cur[0] },
+            if off(want[1], cur[1]) { want[1] } else { cur[1] },
+        ]
     } else {
         cur
     }
@@ -41,7 +44,14 @@ pub(crate) struct Targets {
     pub id_bind: wgpu::BindGroup,
 }
 
-fn make(gpu: &Gpu, label: &str, extent: [u32; 2], format: wgpu::TextureFormat, samples: u32, usage: wgpu::TextureUsages) -> wgpu::Texture {
+fn make(
+    gpu: &Gpu,
+    label: &str,
+    extent: [u32; 2],
+    format: wgpu::TextureFormat,
+    samples: u32,
+    usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
     gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: extent[0], height: extent[1], depth_or_array_layers: 1 },
@@ -67,14 +77,26 @@ impl Targets {
             attach | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
         );
         let color_view = view(&color);
-        let msaa_view = (gpu.samples > 1).then(|| view(&make(gpu, "gz-render picture (multisampled)", extent, COLOR_FORMAT, gpu.samples, attach)));
+        let msaa_view = (gpu.samples > 1).then(|| {
+            view(&make(gpu, "gz-render picture (multisampled)", extent, COLOR_FORMAT, gpu.samples, attach))
+        });
         let depth_view = view(&make(gpu, "gz-render depth", extent, DEPTH_FORMAT, gpu.samples, attach));
-        let id_view = view(&make(gpu, "gz-render ids", extent, ID_FORMAT, 1, attach | wgpu::TextureUsages::TEXTURE_BINDING));
+        let id_view = view(&make(
+            gpu,
+            "gz-render ids",
+            extent,
+            ID_FORMAT,
+            1,
+            attach | wgpu::TextureUsages::TEXTURE_BINDING,
+        ));
         let id_depth_view = view(&make(gpu, "gz-render id depth", extent, DEPTH_FORMAT, 1, attach));
         let id_bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gz-render ids"),
             layout: &gpu.id_layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&id_view) }],
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&id_view),
+            }],
         });
         Self { extent, serial, color, color_view, msaa_view, depth_view, id_view, id_depth_view, id_bind }
     }

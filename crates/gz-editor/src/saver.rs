@@ -33,7 +33,12 @@ impl AutoSave {
     /// Starts saving. `render` turns a state into the file it belongs in and its bytes (`None`
     /// when this state has nothing to save); it runs on the IO pool, and a state whose bytes
     /// equal what is on disk is not written again.
-    pub fn spawn<S, R>(exec: &Executors, store: &Store<S>, render: R, on_error: impl Fn(&str) + Send + Sync + 'static) -> Self
+    pub fn spawn<S, R>(
+        exec: &Executors,
+        store: &Store<S>,
+        render: R,
+        on_error: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Self
     where
         S: State,
         R: Fn(&S) -> Option<(PathBuf, Vec<u8>)> + Send + Sync + 'static,

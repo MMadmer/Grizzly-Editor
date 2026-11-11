@@ -172,7 +172,8 @@ impl EcKey {
 
     /// ECDSA over the SHA-256 of `data`: `r || s`.
     pub fn sign(&self, data: &[u8]) -> Result<[u8; 64], String> {
-        let sk = SigningKey::from_slice(self.d.as_slice()).map_err(|_| "the author key is damaged".to_owned())?;
+        let sk =
+            SigningKey::from_slice(self.d.as_slice()).map_err(|_| "the author key is damaged".to_owned())?;
         let sig: Signature = sk.try_sign(data).map_err(|_| "the signature could not be made".to_owned())?;
         Ok(sig.to_bytes().into())
     }
@@ -200,7 +201,10 @@ mod tests {
         s.update(b"bc");
         assert_eq!(s.finish_hex(), sha256_hex(b"abc"));
         // RFC 4231, case 2
-        assert_eq!(b64::hex(&hmac(b"Jefe", b"what do ya want ", b"for nothing?")), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        assert_eq!(
+            b64::hex(&hmac(b"Jefe", b"what do ya want ", b"for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
         // the pbkdf2 crate's own example, cut to 20 bytes
         let k = pbkdf2_64(b"password", b"salt", 1);
         assert_eq!(b64::hex(&k[..20]), "120fb6cffcf8b32c43e7225256c4f837a86548c9");

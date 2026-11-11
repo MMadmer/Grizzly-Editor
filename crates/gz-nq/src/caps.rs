@@ -45,7 +45,14 @@ pub struct Caps {
 
 impl Default for Caps {
     fn default() -> Self {
-        Self { mask: ALL, known: false, mag_size: 0, box_size: 0, ammo_class: Vec::new(), upgrades: Vec::new() }
+        Self {
+            mask: ALL,
+            known: false,
+            mag_size: 0,
+            box_size: 0,
+            ammo_class: Vec::new(),
+            upgrades: Vec::new(),
+        }
     }
 }
 
@@ -269,7 +276,14 @@ impl ItemCaps {
                 }
             }
             None => {
-                if matches!(fam, Family::WeaponMag | Family::WeaponPlain | Family::Wearable | Family::Explosive | Family::Artefact) {
+                if matches!(
+                    fam,
+                    Family::WeaponMag
+                        | Family::WeaponPlain
+                        | Family::Wearable
+                        | Family::Explosive
+                        | Family::Artefact
+                ) {
                     c.mask |= CONDITION;
                 }
             }

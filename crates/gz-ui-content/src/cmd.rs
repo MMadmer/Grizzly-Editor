@@ -33,7 +33,9 @@ fn parse_source(args: &Args) -> Result<Option<Source>, CmdError> {
     match args.get("source") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Source::parse_name(s).map(Some).ok_or_else(|| refuse(SOURCE_ERROR)),
-        Some(Value::Number(n)) => n.as_i64().and_then(Source::from_index).map(Some).ok_or_else(|| refuse(SOURCE_ERROR)),
+        Some(Value::Number(n)) => {
+            n.as_i64().and_then(Source::from_index).map(Some).ok_or_else(|| refuse(SOURCE_ERROR))
+        }
         Some(_) => Err(refuse(SOURCE_ERROR)),
     }
 }
@@ -43,7 +45,12 @@ fn parse_category(args: &Args) -> Result<Option<usize>, CmdError> {
     match args.get("category") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => find_category(s).map(Some).ok_or_else(|| refuse(CATEGORY_ERROR)),
-        Some(Value::Number(n)) => n.as_u64().map(|v| v as usize).filter(|&v| v < CATEGORIES.len()).map(Some).ok_or_else(|| refuse(CATEGORY_ERROR)),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .map(|v| v as usize)
+            .filter(|&v| v < CATEGORIES.len())
+            .map(Some)
+            .ok_or_else(|| refuse(CATEGORY_ERROR)),
         Some(_) => Err(refuse(CATEGORY_ERROR)),
     }
 }
@@ -137,7 +144,18 @@ pub(crate) async fn content_browser_navigation(ed: Arc<Editor>, args: Args, _ori
     let search = args.str("search").map(str::to_owned);
     let pane = args.has("sources_pane").then(|| args.bool("sources_pane").unwrap_or(true));
     let index = args.i64("index").unwrap_or(-1);
-    let known = ["get", "navigate", "back", "forward", "up", "home", "refresh", "favorite_add", "favorite_remove", "favorite_open"];
+    let known = [
+        "get",
+        "navigate",
+        "back",
+        "forward",
+        "up",
+        "home",
+        "refresh",
+        "favorite_add",
+        "favorite_remove",
+        "favorite_open",
+    ];
     if !known.contains(&action.as_str()) {
         return Err(refuse(ACTIONS));
     }
@@ -207,7 +225,8 @@ pub(crate) async fn content_browser_navigation(ed: Arc<Editor>, args: Args, _ori
         let cur = st.loc.clone();
         let outcome = match act.as_str() {
             "navigate" => {
-                let target = Location::new(source.unwrap_or(cur.source), category.unwrap_or(cur.category), &folder);
+                let target =
+                    Location::new(source.unwrap_or(cur.source), category.unwrap_or(cur.category), &folder);
                 st.apply_location(target, true, &cats, has_project)
             }
             "back" => st.go_back(&cats, has_project),
@@ -215,7 +234,8 @@ pub(crate) async fn content_browser_navigation(ed: Arc<Editor>, args: Args, _ori
             "up" => st.go_up(&cats, has_project),
             // the root of the source (and category) named, or of the one shown
             "home" if source.is_some() || category.is_some() => {
-                let target = Location::new(source.unwrap_or(cur.source), category.unwrap_or(cur.category), "");
+                let target =
+                    Location::new(source.unwrap_or(cur.source), category.unwrap_or(cur.category), "");
                 st.apply_location(target, true, &cats, has_project)
             }
             "home" => st.go_home(&cats, has_project),
@@ -280,7 +300,13 @@ struct Found {
     folder: bool,
 }
 
-async fn find_named(ed: &Arc<Editor>, browser: &ContentBrowser, name: &str, source: Source, category: usize) -> Option<Found> {
+async fn find_named(
+    ed: &Arc<Editor>,
+    browser: &ContentBrowser,
+    name: &str,
+    source: Source,
+    category: usize,
+) -> Option<Found> {
     let folder_name = name.trim_end_matches('\\');
     let look = |cat: &crate::catalog::Catalog, by_reference: bool| -> Option<(String, bool)> {
         if let Some(f) = cat.file(name) {
@@ -319,7 +345,9 @@ async fn find_named(ed: &Arc<Editor>, browser: &ContentBrowser, name: &str, sour
 /// `content_browser_open`: an asset or a folder revealed in the browser, optionally opened
 /// (`RevealAsset`).
 pub(crate) async fn content_browser_open(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
-    let Some(raw) = args.text("name") else { return Err(refuse("missing 'name' argument (see list_assets / darf_list)")) };
+    let Some(raw) = args.text("name") else {
+        return Err(refuse("missing 'name' argument (see list_assets / darf_list)"));
+    };
     let mut name = String::with_capacity(raw.len());
     for c in raw.chars() {
         let c = if c == '/' { '\\' } else { c };
@@ -336,7 +364,9 @@ pub(crate) async fn content_browser_open(ed: Arc<Editor>, args: Args, _origin: O
         st.sync_scope(&scope_now.0, &scope_now.1, &browser.cats);
         (src.unwrap_or(st.loc.source), st.loc.category)
     };
-    let Some(found) = find_named(&ed, &browser, &name, source, category).await else { return Err(refuse("asset not found in this source")) };
+    let Some(found) = find_named(&ed, &browser, &name, source, category).await else {
+        return Err(refuse("asset not found in this source"));
+    };
     let has_project = !scope_now.0.is_empty();
     let b = browser.clone();
     let (fsrc, fcat, fpath, ffolder) = (found.source, found.category, found.path.clone(), found.folder);
@@ -358,9 +388,13 @@ pub(crate) async fn content_browser_open(ed: Arc<Editor>, args: Args, _origin: O
     let landed = landed?;
     if open {
         let root = browser.cats.peek(cat_key(&landed)).and_then(|c| c.disk_root.clone());
-        let opens = !found.folder || actions::game_level(found.source, &found.path).is_some_and(|l| found.path.len() == 7 + l.len());
+        let opens = !found.folder
+            || actions::game_level(found.source, &found.path)
+                .is_some_and(|l| found.path.len() == 7 + l.len());
         if opens {
-            actions::open_for_mcp(&ed, found.source, found.category, &found.path, root).await.map_err(refuse)?;
+            actions::open_for_mcp(&ed, found.source, found.category, &found.path, root)
+                .await
+                .map_err(refuse)?;
         }
     }
     let host = make_visible(&ed).await;
@@ -388,7 +422,16 @@ fn selection_reply(st: &Inner, browser: &ContentBrowser, now: u64) -> Value {
     out.insert("folder".into(), json!(st.loc.folder));
     out.insert("count".into(), json!(sel.len()));
     out.insert("selection".into(), sel.iter().map(|e| json!(e.wire())).collect());
-    let own = |e: &Entry| if e.folder { None } else { cat.as_ref().and_then(|c| c.file(&e.path)).and_then(|f| f.asset).or_else(|| gz_project::kind_of(&e.path, None)) };
+    let own = |e: &Entry| {
+        if e.folder {
+            None
+        } else {
+            cat.as_ref()
+                .and_then(|c| c.file(&e.path))
+                .and_then(|f| f.asset)
+                .or_else(|| gz_project::kind_of(&e.path, None))
+        }
+    };
     // the drawn icon of every selected asset of the editor's own kinds
     let mut icons_ = Map::new();
     for e in sel {
@@ -400,7 +443,10 @@ fn selection_reply(st: &Inner, browser: &ContentBrowser, now: u64) -> Value {
     // the vector glyph of every selected entry, what its tile draws while it has no picture
     let mut glyphs = Map::new();
     for e in sel {
-        glyphs.insert(e.wire(), json!(icons::tile_icon(&e.path, e.folder, own(e), st.loc.source, st.loc.category).name()));
+        glyphs.insert(
+            e.wire(),
+            json!(icons::tile_icon(&e.path, e.folder, own(e), st.loc.source, st.loc.category).name()),
+        );
     }
     out.insert("glyphs".into(), Value::Object(glyphs));
     if let Some(r) = &st.rename {
@@ -470,7 +516,9 @@ pub(crate) async fn content_browser_selection(ed: Arc<Editor>, args: Args, _orig
                 }
                 "range" => {
                     let order = view.order();
-                    let Some(anchor) = st.sel.anchor().cloned() else { return Err(refuse("range requires a selected anchor")) };
+                    let Some(anchor) = st.sel.anchor().cloned() else {
+                        return Err(refuse("range requires a selected anchor"));
+                    };
                     if !order.contains(&anchor) {
                         return Err(refuse("selection anchor is not in the complete current view"));
                     }
@@ -517,7 +565,8 @@ pub(crate) async fn content_browser_copy(ed: Arc<Editor>, args: Args, _origin: O
         (cur, target)
     };
     let failed = |files: u64, err: String| refuse(err).with_data(json!({ "files": files }));
-    let differs = target.source != cur.source || (target.source == Source::Editor && target.category != cur.category);
+    let differs =
+        target.source != cur.source || (target.source == Source::Editor && target.category != cur.category);
     if differs {
         prefetch(&ed, &browser, &[cat_key(&target)]).await;
         let b = browser.clone();
@@ -546,7 +595,11 @@ pub(crate) async fn content_browser_copy(ed: Arc<Editor>, args: Args, _origin: O
         list.extend(cat.files_below(&folder).iter().map(|f| f.path.to_string()));
     } else {
         for n in names.split(';').map(|n| n.trim_matches(' ')).filter(|n| !n.is_empty()) {
-            let resolved = if target.source == Source::Editor { cat.find_reference(n).map(|f| f.path.to_string()) } else { cat.file(n).map(|f| f.path.to_string()) };
+            let resolved = if target.source == Source::Editor {
+                cat.find_reference(n).map(|f| f.path.to_string())
+            } else {
+                cat.file(n).map(|f| f.path.to_string())
+            };
             list.push(resolved.unwrap_or_else(|| n.to_owned()));
         }
     }
@@ -560,7 +613,11 @@ pub(crate) async fn content_browser_copy(ed: Arc<Editor>, args: Args, _origin: O
         if let Err((e, _)) = actions::call(&ed, "content_mkdir", &[("path", json!(dst))]).await {
             return Err(failed(0, e));
         }
-        let entries: Vec<Entry> = if folder.is_empty() { list.iter().map(|p| Entry::new(p, false)).collect() } else { vec![Entry::new(&folder, true)] };
+        let entries: Vec<Entry> = if folder.is_empty() {
+            list.iter().map(|p| Entry::new(p, false)).collect()
+        } else {
+            vec![Entry::new(&folder, true)]
+        };
         let clips = actions::clips_of(&entries, &cat);
         let (files, err) = actions::transfer(&ed, target.source, false, clips, &dst).await;
         (files, err.unwrap_or_default())
@@ -570,15 +627,27 @@ pub(crate) async fn content_browser_copy(ed: Arc<Editor>, args: Args, _origin: O
 
 /// No destination: each asset where the engine expects it - a game file under the project's
 /// `gamedata`, a library file with its companions into the folders the library keeps them in.
-async fn mirror(ed: &Arc<Editor>, source: Source, category: usize, list: &[String], overwrite: bool) -> (u64, String) {
+async fn mirror(
+    ed: &Arc<Editor>,
+    source: Source,
+    category: usize,
+    list: &[String],
+    overwrite: bool,
+) -> (u64, String) {
     let (mut files, mut failed, mut last) = (0u64, 0u32, String::new());
     for name in list {
         let mut one = String::new();
         if source == Source::Game {
-            match actions::call(ed, "darf_copy", &[("path", json!(name)), ("overwrite", json!(overwrite))]).await {
+            match actions::call(ed, "darf_copy", &[("path", json!(name)), ("overwrite", json!(overwrite))])
+                .await
+            {
                 Ok(_) => files += 1,
                 Err((e, r)) => {
-                    one = if r.get("exists").and_then(Value::as_bool) == Some(true) && !overwrite { "already exists (pass overwrite)".to_owned() } else { e };
+                    one = if r.get("exists").and_then(Value::as_bool) == Some(true) && !overwrite {
+                        "already exists (pass overwrite)".to_owned()
+                    } else {
+                        e
+                    };
                 }
             }
         } else if crate::model::category(category).lib.is_empty() {
@@ -591,7 +660,12 @@ async fn mirror(ed: &Arc<Editor>, source: Source, category: usize, list: &[Strin
                 one = "no file behind this reference".to_owned();
             }
             for (from, dst) in backing {
-                let pairs = [("src", json!(from.display().to_string())), ("dst", json!(dst)), ("recursive", json!(false)), ("overwrite", json!(overwrite))];
+                let pairs = [
+                    ("src", json!(from.display().to_string())),
+                    ("dst", json!(dst)),
+                    ("recursive", json!(false)),
+                    ("overwrite", json!(overwrite)),
+                ];
                 match actions::call(ed, "content_copy", &pairs).await {
                     Ok(r) => files += r.get("files").and_then(Value::as_u64).unwrap_or(0),
                     Err((e, r)) => {

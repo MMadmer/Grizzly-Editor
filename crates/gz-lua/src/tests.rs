@@ -47,7 +47,8 @@ fn a_chunk_runs_in_an_empty_environment() {
 
 #[test]
 fn values_cross_both_ways() {
-    let s = script("function echo(t) return { n = #t, first = t[1], name = t.name, nested = { t.inner.x } } end");
+    let s =
+        script("function echo(t) return { n = #t, first = t[1], name = t.name, nested = { t.inner.x } } end");
     let mut inner = Table::new();
     inner.fields.push(("x".into(), Value::Number(5.0)));
     let mut t = Table::new();
@@ -66,11 +67,15 @@ fn values_cross_both_ways() {
 fn errors_say_where() {
     let h = host();
     assert!(matches!(h.call(&script("function ("), "f", &[]), Err(LuaError::ScriptCompile(_))));
-    assert!(matches!(h.call(&script("error('boom')"), "f", &[]), Err(LuaError::ScriptRun(m)) if m.contains("boom")));
+    assert!(
+        matches!(h.call(&script("error('boom')"), "f", &[]), Err(LuaError::ScriptRun(m)) if m.contains("boom"))
+    );
     assert!(matches!(h.call(&script("x = 1"), "f", &[]), Err(LuaError::NoFunction(f)) if f == "f"));
     let s = script("function f(x) return x end");
     let bad = Arg::Chunk(Chunk { name: "app".into(), text: "return {".into() });
-    assert!(matches!(h.call(&s, "f", &[bad]), Err(LuaError::ArgCompile { index: 0, message }) if message.starts_with("app:1:")));
+    assert!(
+        matches!(h.call(&s, "f", &[bad]), Err(LuaError::ArgCompile { index: 0, message }) if message.starts_with("app:1:"))
+    );
     let runs = Arg::Chunk(Chunk { name: "app".into(), text: "return nothing.here".into() });
     assert!(matches!(h.call(&s, "f", &[runs]), Err(LuaError::ArgRun { index: 0, .. })));
     let bytecode = Arg::Chunk(Chunk { name: "app".into(), text: "\u{1b}LJ".into() });
@@ -93,7 +98,9 @@ fn the_instruction_limit_stops_a_loop() {
 #[test]
 fn a_state_keeps_its_script_and_omits_keys() {
     let h = host();
-    let s = script("calls = 0\nfunction count() calls = calls + 1 return { calls = calls, state = { big = true } } end");
+    let s = script(
+        "calls = 0\nfunction count() calls = calls + 1 return { calls = calls, state = { big = true } } end",
+    );
     let first = h.call_omitting(&s, "count", &[], &["state"]).unwrap();
     assert!(first.get("state").is_none());
     assert_eq!(h.idle_states(), 1);
@@ -110,7 +117,10 @@ fn the_editors_comments_become_blanks() {
     assert_eq!(vanilla_source("return { a = 1, // note\n b = 2 }"), "return { a = 1,  \n b = 2 }");
     assert_eq!(vanilla_source("return { /* x\ny */ a = 1 }"), "return {   a = 1 }");
     // a string or a Lua comment keeps its slashes
-    assert_eq!(vanilla_source("return { u = \"http://x\", -- a // b\n }"), "return { u = \"http://x\", -- a // b\n }");
+    assert_eq!(
+        vanilla_source("return { u = \"http://x\", -- a // b\n }"),
+        "return { u = \"http://x\", -- a // b\n }"
+    );
     assert_eq!(vanilla_source("return { s = [[/* not */]] }"), "return { s = [[/* not */]] }");
     // the fork's '*' swallows the character after it: '**/' does not close
     assert_eq!(vanilla_source("a /* **/ b */ c"), "a   c");

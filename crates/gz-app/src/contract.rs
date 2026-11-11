@@ -33,7 +33,8 @@ pub const PANELS: [(&str, &str); 7] = [
 pub const WINDOW_START_PAGE: &str = "Start Page###start_page";
 
 /// The drawers over the bottom of any tab.
-pub const DRAWERS: [(&str, &str); 2] = [("content", "Content Drawer###drawer.content"), ("log", "Output Log###drawer.log")];
+pub const DRAWERS: [(&str, &str); 2] =
+    [("content", "Content Drawer###drawer.content"), ("log", "Output Log###drawer.log")];
 
 /// The dialogs `ui_dialog` opens and closes: the MCP id and the window's name.
 pub const DIALOGS: [(&str, &str); 6] = [
@@ -125,7 +126,8 @@ pub const POPUPS: [&str; 15] = [
 ];
 
 /// The caption's menus, in their order; Graph is a graph tab's own, Menu the folded button.
-pub const MENUS: [&str; 11] = ["File", "Edit", "Scene", "Build", "View", "Graph", "Mod", "Libraries", "Window", "Help", "Menu"];
+pub const MENUS: [&str; 11] =
+    ["File", "Edit", "Scene", "Build", "View", "Graph", "Mod", "Libraries", "Window", "Help", "Menu"];
 
 /// The viewport's menus (`viewport:<menu>`).
 pub const VIEWPORT_MENUS: [&str; 7] = ["options", "perspective", "show", "snap", "grid", "scale", "angle"];
@@ -138,7 +140,18 @@ pub const UI_SCALE_MAX: f32 = 2.5;
 pub const THEME_PRESETS: [(&str, &str); 2] = [("grizzly-purple", "Grizzly Purple"), ("graphite", "Graphite")];
 
 /// The content browser's categories.
-pub const CATEGORIES: [&str; 10] = ["Objects", "Levels", "Groups", "Visuals", "Textures", "Textures (raw)", "Particles", "Sounds", "Entities", "Light Anims"];
+pub const CATEGORIES: [&str; 10] = [
+    "Objects",
+    "Levels",
+    "Groups",
+    "Visuals",
+    "Textures",
+    "Textures (raw)",
+    "Particles",
+    "Sounds",
+    "Entities",
+    "Light Anims",
+];
 
 /// The window of a panel, a drawer or a dialog by its MCP id.
 #[must_use]

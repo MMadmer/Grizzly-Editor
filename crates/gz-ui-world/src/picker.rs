@@ -13,7 +13,10 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind, Ui, Vec2, pos2};
+use egui::{
+    Align2, Color32, CornerRadius, Id, Popup, Rect, Response, ScrollArea, Sense, Stroke, StrokeKind, Ui,
+    Vec2, pos2,
+};
 use gz_ui::menu::menu_popup;
 use gz_ui::text::{self, Clip};
 use gz_ui::units::em;
@@ -46,7 +49,10 @@ pub(crate) fn paint_field(ui: &mut Ui, text_: &str, color: Color32, busy: bool) 
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let w = ui.available_width().max(em(3.0));
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, metrics::FRAME), if busy { Sense::hover() } else { Sense::click() });
+    let (rect, resp) = ui.allocate_exact_size(
+        Vec2::new(w, metrics::FRAME),
+        if busy { Sense::hover() } else { Sense::click() },
+    );
     let mut cut = false;
     if ui.is_rect_visible(rect) {
         let radius = CornerRadius::same(metrics::RADIUS);
@@ -54,7 +60,10 @@ pub(crate) fn paint_field(ui: &mut Ui, text_: &str, color: Color32, busy: bool) 
         if resp.has_focus() {
             ui.painter().rect_stroke(rect, radius, Stroke::new(1.0, p.accent_bright), StrokeKind::Inside);
         }
-        let glyph = Rect::from_min_size(pos2(rect.max.x - 8.0 - metrics::GLYPH_STATUS, rect.center().y - metrics::GLYPH_STATUS * 0.5), Vec2::splat(metrics::GLYPH_STATUS));
+        let glyph = Rect::from_min_size(
+            pos2(rect.max.x - 8.0 - metrics::GLYPH_STATUS, rect.center().y - metrics::GLYPH_STATUS * 0.5),
+            Vec2::splat(metrics::GLYPH_STATUS),
+        );
         if busy {
             crate::local::local_spinner_at(&ctx, ui.painter(), glyph);
         } else {
@@ -62,7 +71,16 @@ pub(crate) fn paint_field(ui: &mut Ui, text_: &str, color: Color32, busy: bool) 
         }
         let x = rect.min.x + 8.0;
         let room = (glyph.min.x - 6.0 - x).max(0.0);
-        cut = text::paint(ui.painter(), &Font::Body.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, color, text_, Some(room), Clip::End);
+        cut = text::paint(
+            ui.painter(),
+            &Font::Body.id(),
+            pos2(x, rect.center().y),
+            Align2::LEFT_CENTER,
+            color,
+            text_,
+            Some(room),
+            Clip::End,
+        );
         if cut {
             let (shown, _) = text::ellipsize(&ctx, &Font::Body.id(), text_, room, Clip::End);
             gz_ui::audit::truncated(&ctx, text_, &shown, rect);
@@ -75,7 +93,11 @@ pub(crate) fn paint_field(ui: &mut Ui, text_: &str, color: Color32, busy: bool) 
 fn popup_search(ui: &mut Ui, id: Id, width: f32) -> String {
     let ctx = ui.ctx().clone();
     let mut query = ctx.data(|d| d.get_temp::<String>(id.with("search"))).unwrap_or_default();
-    let field = SearchField::new(&mut query).hint("Type to filter").width(width).id_salt("gz-ui-world.pick_search").show(ui);
+    let field = SearchField::new(&mut query)
+        .hint("Type to filter")
+        .width(width)
+        .id_salt("gz-ui-world.pick_search")
+        .show(ui);
     if ctx.data_mut(|d| d.remove_temp::<bool>(id.with("focus"))).is_some() {
         field.request_focus();
     }
@@ -107,11 +129,23 @@ fn filtered(ctx: &egui::Context, id: Id, list: &Indexed, query: &str) -> Arc<Vec
         .entries
         .iter()
         .enumerate()
-        .filter(|(_, e)| query.trim().is_empty() || gz_ui::search::matches(query, &format!("{} {}", e.id, e.name)))
+        .filter(|(_, e)| {
+            query.trim().is_empty() || gz_ui::search::matches(query, &format!("{} {}", e.id, e.name))
+        })
         .filter_map(|(i, _)| u32::try_from(i).ok())
         .collect();
     let rows = Arc::new(rows);
-    ctx.data_mut(|d| d.insert_temp(key, Filtered { query: query.to_owned(), serial: list.serial, len: list.entries.len(), rows: rows.clone() }));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            key,
+            Filtered {
+                query: query.to_owned(),
+                serial: list.serial,
+                len: list.entries.len(),
+                rows: rows.clone(),
+            },
+        )
+    });
     rows
 }
 
@@ -121,7 +155,15 @@ fn filtered(ctx: &egui::Context, id: Id, list: &Indexed, query: &str) -> Arc<Vec
 /// list is still being read. `salt` tells this field from every other one of the surface.
 /// Returns whether the value changed.
 #[allow(clippy::too_many_arguments)]
-pub fn local_list_picker(ui: &mut Ui, salt: &str, value: &mut String, lookup: &Indexed, rows: &Indexed, none: Option<&str>, busy: bool) -> bool {
+pub fn local_list_picker(
+    ui: &mut Ui,
+    salt: &str,
+    value: &mut String,
+    lookup: &Indexed,
+    rows: &Indexed,
+    none: Option<&str>,
+    busy: bool,
+) -> bool {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let id = popup_id(salt);
@@ -180,16 +222,22 @@ pub fn local_list_picker(ui: &mut Ui, salt: &str, value: &mut String, lookup: &I
             let _ = text::status(ui, Tone::Muted, "Nothing matches.");
             return;
         }
-        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show_rows(ui, MENU_ROW, shown.len(), |ui, range| {
-            for i in range {
-                let Some(e) = shown.get(i).and_then(|r| rows.entries.get(*r as usize)) else { continue };
-                let label = Indexed::label(e);
-                let out = ui.push_id(i, |ui| menu_item(ui, &label, MenuItem { selected: e.id == *value, ..MenuItem::default() }));
-                if out.inner {
-                    picked = Some(e.id.clone());
+        ScrollArea::vertical()
+            .id_salt(id.with("rows"))
+            .max_height(POPUP_H)
+            .auto_shrink([false, true])
+            .show_rows(ui, MENU_ROW, shown.len(), |ui, range| {
+                for i in range {
+                    let Some(e) = shown.get(i).and_then(|r| rows.entries.get(*r as usize)) else { continue };
+                    let label = Indexed::label(e);
+                    let out = ui.push_id(i, |ui| {
+                        menu_item(ui, &label, MenuItem { selected: e.id == *value, ..MenuItem::default() })
+                    });
+                    if out.inner {
+                        picked = Some(e.id.clone());
+                    }
                 }
-            }
-        });
+            });
     });
     match picked {
         Some(v) if v != *value => {
@@ -208,13 +256,26 @@ pub fn local_list_picker(ui: &mut Ui, salt: &str, value: &mut String, lookup: &I
 /// An item of the linked game (or of the project), by its in-game name: the one item picker of
 /// the Characters and World Rules tabs. `none` is the row that clears it (and what an empty
 /// field shows). Returns whether the value changed.
-pub fn item_picker(ui: &mut Ui, salt: &str, value: &mut String, lists: &ListsView, none: Option<&str>) -> bool {
+pub fn item_picker(
+    ui: &mut Ui,
+    salt: &str,
+    value: &mut String,
+    lists: &ListsView,
+    none: Option<&str>,
+) -> bool {
     local_list_picker(ui, salt, value, &lists.items, &lists.items, none, !lists.loaded)
 }
 
 /// A short list with a preview of its own: returns the row picked. `warn` paints the preview in
 /// the warning colour (a value the list does not hold).
-pub fn local_combo(ui: &mut Ui, salt: &str, preview: &str, warn: bool, rows: &[String], selected: Option<usize>) -> Option<usize> {
+pub fn local_combo(
+    ui: &mut Ui,
+    salt: &str,
+    preview: &str,
+    warn: bool,
+    rows: &[String],
+    selected: Option<usize>,
+) -> Option<usize> {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let id = popup_id(salt);
@@ -234,13 +295,25 @@ pub fn local_combo(ui: &mut Ui, salt: &str, preview: &str, warn: bool, rows: &[S
     let mut picked = None;
     let _ = menu_popup(&ctx, id, resp.rect, ui.layer_id(), |ui| {
         ui.set_min_width(width);
-        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show(ui, |ui| {
-            for (i, row) in rows.iter().enumerate() {
-                if ui.push_id(i, |ui| menu_item(ui, row, MenuItem { selected: selected == Some(i), ..MenuItem::default() })).inner {
-                    picked = Some(i);
+        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show(
+            ui,
+            |ui| {
+                for (i, row) in rows.iter().enumerate() {
+                    if ui
+                        .push_id(i, |ui| {
+                            menu_item(
+                                ui,
+                                row,
+                                MenuItem { selected: selected == Some(i), ..MenuItem::default() },
+                            )
+                        })
+                        .inner
+                    {
+                        picked = Some(i);
+                    }
                 }
-            }
-        });
+            },
+        );
     });
     if picked.is_some() {
         Popup::close_id(&ctx, id);
@@ -251,13 +324,28 @@ pub fn local_combo(ui: &mut Ui, salt: &str, preview: &str, warn: bool, rows: &[S
 /// Ticks over the names a list offers: the preview joins what is picked (`none` while nothing
 /// is), the popup ticks each one. A picked name the list does not hold stays, says so and can be
 /// unticked. `busy`: the list is still being read. Returns whether the picks changed.
-pub fn local_multi_combo(ui: &mut Ui, salt: &str, picked: &mut Vec<String>, names: &[String], none: &str, busy: bool) -> bool {
+pub fn local_multi_combo(
+    ui: &mut Ui,
+    salt: &str,
+    picked: &mut Vec<String>,
+    names: &[String],
+    none: &str,
+    busy: bool,
+) -> bool {
     let ctx = ui.ctx().clone();
     let p = palette(&ctx);
     let id = popup_id(salt);
     let preview = if picked.is_empty() { none.to_owned() } else { picked.join(", ") };
-    let (resp, cut) = paint_field(ui, &preview, if picked.is_empty() { p.text_secondary } else { p.text }, busy);
-    gz_ui::audit::control(&ctx, &preview, !busy, busy.then_some("The linked game's lists are being read"), None, resp.rect);
+    let (resp, cut) =
+        paint_field(ui, &preview, if picked.is_empty() { p.text_secondary } else { p.text }, busy);
+    gz_ui::audit::control(
+        &ctx,
+        &preview,
+        !busy,
+        busy.then_some("The linked game's lists are being read"),
+        None,
+        resp.rect,
+    );
     let resp = if cut { resp.on_hover_text(preview.as_str()) } else { resp };
     if resp.clicked() {
         Popup::toggle_id(&ctx, id);
@@ -284,17 +372,20 @@ pub fn local_multi_combo(ui: &mut Ui, salt: &str, picked: &mut Vec<String>, name
                 changed = true;
             }
         };
-        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show(ui, |ui| {
-            for name in names {
-                toggle(ui, name, name);
-            }
-            for name in &unlisted {
-                toggle(ui, name, &format!("{name}  (not in the linked game)"));
-            }
-            if names.is_empty() {
-                let _ = text::status(ui, Tone::Muted, "The linked game lists no trade categories.");
-            }
-        });
+        ScrollArea::vertical().id_salt(id.with("rows")).max_height(POPUP_H).auto_shrink([false, true]).show(
+            ui,
+            |ui| {
+                for name in names {
+                    toggle(ui, name, name);
+                }
+                for name in &unlisted {
+                    toggle(ui, name, &format!("{name}  (not in the linked game)"));
+                }
+                if names.is_empty() {
+                    let _ = text::status(ui, Tone::Muted, "The linked game lists no trade categories.");
+                }
+            },
+        );
     });
     changed
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui_wgpu::RenderState;
 use gz_editor::{Editor, SmolStr};
-use gz_ui::{Icon, Toolbar, Tone};
+use gz_ui::{Icon, Tone, Toolbar};
 
 use crate::keys::Chord;
 
@@ -23,8 +23,16 @@ pub enum EditAction {
 }
 
 impl EditAction {
-    pub const ALL: [EditAction; 8] =
-        [EditAction::Undo, EditAction::Redo, EditAction::Cut, EditAction::Copy, EditAction::Paste, EditAction::Duplicate, EditAction::Delete, EditAction::Find];
+    pub const ALL: [EditAction; 8] = [
+        EditAction::Undo,
+        EditAction::Redo,
+        EditAction::Cut,
+        EditAction::Copy,
+        EditAction::Paste,
+        EditAction::Duplicate,
+        EditAction::Delete,
+        EditAction::Find,
+    ];
 
     #[must_use]
     pub fn name(self) -> &'static str {
@@ -152,6 +160,7 @@ pub(crate) enum Request {
     Exit,
     TaskCard(bool),
     Popup(String),
+    OwnKeys(String),
 }
 
 impl ShellRequests {
@@ -208,6 +217,12 @@ impl ShellRequests {
     pub fn popup(&mut self, name: &str) {
         self.list.push(Request::Popup(name.to_owned()));
     }
+
+    /// A panel that answers its own keys has the focus this frame (the Content Browser, the
+    /// Output Log): the scene's bindings stay away from the next frame's keys.
+    pub fn own_keys(&mut self, who: &str) {
+        self.list.push(Request::OwnKeys(who.to_owned()));
+    }
 }
 
 /// What a document and a contribution are handed while they draw or run.
@@ -244,6 +259,11 @@ pub trait Document {
         true
     }
     fn dirty(&self) -> bool {
+        false
+    }
+    /// The unsaved work is an area's document, which that area reports, saves and discards
+    /// itself (the scene, a graph, the PDA source): the shell does not count it twice.
+    fn dirty_elsewhere(&self) -> bool {
         false
     }
     fn missing(&self) -> bool {

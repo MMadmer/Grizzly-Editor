@@ -30,7 +30,10 @@ const MAX_REQUEST: usize = 64 * 1024 * 1024;
 
 /// How long a request may take, from `GRIZZLY_MCP_REQUEST_TIMEOUT_MS` (three minutes unset).
 fn request_timeout() -> Duration {
-    let ms = std::env::var("GRIZZLY_MCP_REQUEST_TIMEOUT_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(180_000);
+    let ms = std::env::var("GRIZZLY_MCP_REQUEST_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(180_000);
     Duration::from_millis(ms.clamp(1_000, 3_600_000))
 }
 
@@ -76,13 +79,16 @@ async fn connection(editor: Arc<Editor>, stream: TcpStream, timeout: Duration) -
             continue;
         }
         let reply = match parse_request(text) {
-            Ok((cmd, args)) => match tokio::time::timeout(timeout, editor.call(&cmd, args, Origin::Mcp)).await {
-                Ok(reply) => reply,
-                Err(_) => json!({ "ok": false, "error": "editor busy (timeout)" }),
-            },
+            Ok((cmd, args)) => {
+                match tokio::time::timeout(timeout, editor.call(&cmd, args, Origin::Mcp)).await {
+                    Ok(reply) => reply,
+                    Err(_) => json!({ "ok": false, "error": "editor busy (timeout)" }),
+                }
+            }
             Err(error) => json!({ "ok": false, "error": error }),
         };
-        let mut out = serde_json::to_vec(&reply).unwrap_or_else(|_| br#"{"ok":false,"error":"reply could not be encoded"}"#.to_vec());
+        let mut out = serde_json::to_vec(&reply)
+            .unwrap_or_else(|_| br#"{"ok":false,"error":"reply could not be encoded"}"#.to_vec());
         out.push(b'\n');
         write.write_all(&out).await?;
         write.flush().await?;
@@ -91,7 +97,10 @@ async fn connection(editor: Arc<Editor>, stream: TcpStream, timeout: Duration) -
 
 /// Reads through the next `\n`. Returns 0 at the end of the stream; a line over the limit is
 /// an error that closes the connection.
-async fn read_line_limited(read: &mut BufReader<tokio::net::tcp::OwnedReadHalf>, line: &mut Vec<u8>) -> io::Result<usize> {
+async fn read_line_limited(
+    read: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+    line: &mut Vec<u8>,
+) -> io::Result<usize> {
     loop {
         let chunk = read.fill_buf().await?;
         if chunk.is_empty() {

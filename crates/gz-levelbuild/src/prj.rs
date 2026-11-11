@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
 use gz_fmt_level::{
-    Aabb, BuildFace, BuildGlow, BuildLight, BuildLightDynamic, BuildLod, BuildMaterial, BuildParams, BuildProject, BuildTexture,
-    Light, LightControl, LodFace, MuModel, MuReference, Portal, XRCL_CURRENT_VERSION, i_floor,
+    Aabb, BuildFace, BuildGlow, BuildLight, BuildLightDynamic, BuildLod, BuildMaterial, BuildParams,
+    BuildProject, BuildTexture, Light, LightControl, LodFace, MuModel, MuReference, Portal,
+    XRCL_CURRENT_VERSION, i_floor,
 };
 use gz_fmt_object::{Mesh, ObjectFlags, Surface, SurfaceFlags, VMapKind};
 use gz_scene::library::LibraryObject;
@@ -146,7 +147,14 @@ impl Sectors {
             }
             let center = if bbox.is_valid() { (bbox.min + bbox.max) * 0.5 } else { Vec3::ZERO };
             let radius = if bbox.is_valid() { center.distance(bbox.max) } else { 0.0 };
-            list.push(SectorVol { num: i as u16, name: o.name.to_string(), items: s.items.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(), bbox, center, radius });
+            list.push(SectorVol {
+                num: i as u16,
+                name: o.name.to_string(),
+                items: s.items.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+                bbox,
+                center,
+                radius,
+            });
         }
         let default = default.unwrap_or(list.len() as u16);
         Self { list, default }
@@ -154,7 +162,10 @@ impl Sectors {
 
     /// `PortalUtils.FindSector`.
     fn of_mesh(&self, object: &str, mesh: &str) -> u16 {
-        self.list.iter().find(|s| s.items.iter().any(|(o, m)| o == object && m == mesh)).map_or(self.default, |s| s.num)
+        self.list
+            .iter()
+            .find(|s| s.items.iter().any(|(o, m)| o == object && m == mesh))
+            .map_or(self.default, |s| s.num)
     }
 
     /// `CalculateSector`.
@@ -178,11 +189,14 @@ fn reference(o: &Object) -> Option<&str> {
 
 /// `CEditableObject::IsStatic` / `IsMUStatic`.
 fn is_static(o: &gz_fmt_object::Object) -> bool {
-    !o.flags.intersects(ObjectFlags::SOUND_OCCLUDER | ObjectFlags::DYNAMIC | ObjectFlags::HOM | ObjectFlags::MULTIPLE_USAGE)
+    !o.flags.intersects(
+        ObjectFlags::SOUND_OCCLUDER | ObjectFlags::DYNAMIC | ObjectFlags::HOM | ObjectFlags::MULTIPLE_USAGE,
+    )
 }
 
 fn is_mu_static(o: &gz_fmt_object::Object) -> bool {
-    !o.flags.intersects(ObjectFlags::SOUND_OCCLUDER | ObjectFlags::DYNAMIC | ObjectFlags::HOM) && o.flags.contains(ObjectFlags::MULTIPLE_USAGE)
+    !o.flags.intersects(ObjectFlags::SOUND_OCCLUDER | ObjectFlags::DYNAMIC | ObjectFlags::HOM)
+        && o.flags.contains(ObjectFlags::MULTIPLE_USAGE)
 }
 
 /// The surfaces a scene object wears: the library's, with the scene's own shader, compiler
@@ -222,7 +236,10 @@ fn corner_uv(mesh: &Mesh, vmref: u32) -> Vec2 {
             continue;
         }
         let i = pt.index as usize * 2;
-        return Vec2::new(map.values.get(i).copied().unwrap_or(0.0), map.values.get(i + 1).copied().unwrap_or(0.0));
+        return Vec2::new(
+            map.values.get(i).copied().unwrap_or(0.0),
+            map.values.get(i + 1).copied().unwrap_or(0.0),
+        );
     }
     Vec2::ZERO
 }
@@ -297,11 +314,12 @@ impl Builder {
     }
 
     fn find_material(&mut self, m: BuildMaterial) -> u32 {
-        if let Some(i) = self
-            .materials
-            .iter()
-            .position(|x| x.surface == m.surface && x.shader == m.shader && x.shader_xrlc == m.shader_xrlc && x.sector == m.sector)
-        {
+        if let Some(i) = self.materials.iter().position(|x| {
+            x.surface == m.surface
+                && x.shader == m.shader
+                && x.shader_xrlc == m.shader_xrlc
+                && x.sector == m.sector
+        }) {
             return i as u32;
         }
         self.materials.push(m);
@@ -314,15 +332,32 @@ impl Builder {
     }
 
     /// `BuildMaterial(esh_name, csh_name, tx_name, 1, sector, allow_draft)`.
-    fn material_of(&mut self, cx: &Ctx<'_>, esh: &str, csh: &str, tex: &str, sector: u16, allow_draft: bool) -> Result<u32> {
-        let draft = allow_draft && cx.quality == QUALITY_DRAFT && cx.engine.xrlc_flags(csh).is_some_and(|f| f & xrlc_flags::RENDERING != 0);
+    fn material_of(
+        &mut self,
+        cx: &Ctx<'_>,
+        esh: &str,
+        csh: &str,
+        tex: &str,
+        sector: u16,
+        allow_draft: bool,
+    ) -> Result<u32> {
+        let draft = allow_draft
+            && cx.quality == QUALITY_DRAFT
+            && cx.engine.xrlc_flags(csh).is_some_and(|f| f & xrlc_flags::RENDERING != 0);
         let (shader, shader_xrlc) = if draft {
             (self.shader(cx, "def_shaders\\def_vertex")?, self.shader_xrlc(cx, "def_shaders\\def_vertex")?)
         } else {
             (self.shader(cx, esh)?, self.shader_xrlc(cx, csh)?)
         };
         let surface = self.texture(tex)?;
-        Ok(self.find_material(BuildMaterial { surface, shader, shader_xrlc, sector, reserved: 0, internal_max_area: 0 }))
+        Ok(self.find_material(BuildMaterial {
+            surface,
+            shader,
+            shader_xrlc,
+            sector,
+            reserved: 0,
+            internal_max_area: 0,
+        }))
     }
 
     /// `BuildMesh`: the mesh's points through `parent`, its faces per surface; `real` places
@@ -353,7 +388,10 @@ impl Builder {
                 return Err(BuildError::new(format!("Surface: '{}' contains bad game material.", surf.name)));
             };
             let Some(flags) = cx.engine.material_flags(gm_id) else {
-                return Err(BuildError::new(format!("Surface: '{}' contains undefined game material.", surf.name)));
+                return Err(BuildError::new(format!(
+                    "Surface: '{}' contains undefined game material.",
+                    surf.name
+                )));
             };
             if flags & mtl_flags::BREAKABLE != 0 {
                 self.log.push(format!("Surface: '{}' contains breakable game material.", surf.name));
@@ -364,15 +402,23 @@ impl Builder {
                 continue;
             }
             if flags & mtl_flags::DYNAMIC != 0 {
-                return Err(BuildError::new(format!("Surface: '{}' contains non-static game material.", surf.name)));
+                return Err(BuildError::new(format!(
+                    "Surface: '{}' contains non-static game material.",
+                    surf.name
+                )));
             }
             if (surf.fvf & 0xf00) >> 8 != 1 {
-                return Err(BuildError::new(format!("Surface: '{}' contains more than 1 texture refs.", surf.name)));
+                return Err(BuildError::new(format!(
+                    "Surface: '{}' contains more than 1 texture refs.",
+                    surf.name
+                )));
             }
             let mut invalid = 0u32;
             for &fi in sf.faces.iter() {
                 let Some(face) = mesh.faces.get(fi as usize) else { continue };
-                let p = face.v.map(|v| real.transform_tiny(mesh.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO)));
+                let p = face.v.map(|v| {
+                    real.transform_tiny(mesh.points.get(v.point as usize).copied().unwrap_or(Vec3::ZERO))
+                });
                 let a = calc_area(p[0], p[1], p[2]);
                 if !a.is_finite() || a < EPS_S {
                     invalid += 1;
@@ -387,7 +433,8 @@ impl Builder {
                 out.1.push(f);
                 out.2.push(sg & !(1 << 3));
                 if surf.flags.contains(SurfaceFlags::TWO_SIDED) {
-                    let mut b = BuildFace { material: m_id as u16, material_game: gm_id, ..BuildFace::default() };
+                    let mut b =
+                        BuildFace { material: m_id as u16, material_game: gm_id, ..BuildFace::default() };
                     for k in 0..3 {
                         b.v[k] = face.v[2 - k].point + offs;
                         b.t[k] = corner_uv(mesh, face.v[2 - k].vmref);
@@ -397,7 +444,10 @@ impl Builder {
                 }
             }
             if invalid > 0 {
-                self.log.push(format!("!Object '{}' - '{}' has {invalid} invalid face(s). Removed.", object.name, mesh.name));
+                self.log.push(format!(
+                    "!Object '{}' - '{}' has {invalid} invalid face(s). Removed.",
+                    object.name, mesh.name
+                ));
             }
         }
         Ok(())
@@ -410,7 +460,14 @@ impl Builder {
         }
         let surface = self.texture(LEVEL_LODS_TEX_NAME)?;
         let shader = self.shader(cx, LOD_SHADER_NAME)?;
-        let material = self.find_material(BuildMaterial { surface, shader, shader_xrlc: u16::MAX, sector, reserved: 0, internal_max_area: 0 });
+        let material = self.find_material(BuildMaterial {
+            surface,
+            shader,
+            shader_xrlc: u16::MAX,
+            sector,
+            reserved: 0,
+            internal_max_area: 0,
+        });
         let name = lod_texture_name(&lo.name);
         let bb = lo.object.bounding_box();
         let mut lod = BuildLod { material, ..BuildLod::default() };
@@ -452,7 +509,12 @@ fn lod_frame(frame: u32, min: Vec3, max: Vec3) -> ([Vec3; 4], [Vec2; 4]) {
     let tex_h = LOD_IMAGE_SIZE as f32;
     let (hpx, hpy) = (0.5 * (1.0 / tex_w), 0.5 * (1.0 / tex_h));
     let (ox, oy) = (1.0 / tex_w, 1.0 / tex_h);
-    let pos = [Vec3::new(-1.0 + ox, 1.0 - oy, 0.0), Vec3::new(1.0 - ox, 1.0 - oy, 0.0), Vec3::new(1.0 - ox, -1.0 + oy, 0.0), Vec3::new(-1.0 + ox, -1.0 + oy, 0.0)];
+    let pos = [
+        Vec3::new(-1.0 + ox, 1.0 - oy, 0.0),
+        Vec3::new(1.0 - ox, 1.0 - oy, 0.0),
+        Vec3::new(1.0 - ox, -1.0 + oy, 0.0),
+        Vec3::new(-1.0 + ox, -1.0 + oy, 0.0),
+    ];
     let c = (min + max) * 0.5;
     let s = (max - min) * 0.5;
     let r = s.x.max(s.z);
@@ -527,7 +589,8 @@ impl Builder {
                 self.lights_static.push(BuildLight { controller: id, light: light_mul(l, energy) });
             }
         } else {
-            self.lights_static.push(BuildLight { controller: id, light: directional([1.0; 4], Vec3::new(0.0, -1.0, 0.0)) });
+            self.lights_static
+                .push(BuildLight { controller: id, light: directional([1.0; 4], Vec3::new(0.0, -1.0, 0.0)) });
         }
     }
 
@@ -549,7 +612,8 @@ impl Builder {
             let fx = mn_x + x as f32 * da;
             for y in 0..samples {
                 let fy = mn_y + y as f32 * da;
-                self.lights_static.push(BuildLight { controller: id, light: directional([e, e, e, 1.0], set_hp(fy, fx)) });
+                self.lights_static
+                    .push(BuildLight { controller: id, light: directional([e, e, e, 1.0], set_hp(fy, fx)) });
             }
         }
         self.lights_dynamic.push(BuildLightDynamic {
@@ -574,7 +638,12 @@ impl Builder {
         let rot = o.rotation();
         let light = Light {
             kind: e.kind,
-            diffuse: [e.color[0] * e.brightness, e.color[1] * e.brightness, e.color[2] * e.brightness, e.color[3]],
+            diffuse: [
+                e.color[0] * e.brightness,
+                e.color[1] * e.brightness,
+                e.color[2] * e.brightness,
+                e.color[3],
+            ],
             position: o.position(),
             direction: set_hp(rot.y, rot.x),
             range: e.range,
@@ -616,7 +685,12 @@ impl Builder {
             return Err(BuildError::new("Invalid light type."));
         }
         if e.flags & light_flags::AFFECT_STATIC != 0 {
-            let soft = e.fuzzy.as_ref().filter(|_| e.flags & light_flags::POINT_FUZZY != 0).map(|f| f.points.as_slice()).filter(|p| !p.is_empty());
+            let soft = e
+                .fuzzy
+                .as_ref()
+                .filter(|_| e.flags & light_flags::POINT_FUZZY != 0)
+                .map(|f| f.points.as_slice())
+                .filter(|p| !p.is_empty());
             match soft {
                 Some(points) => {
                     let d = light.diffuse;
@@ -625,7 +699,10 @@ impl Builder {
                     let color = [d[0] * k, d[1] * k, d[2] * k, d[3]];
                     let xf = o.world();
                     for p in points {
-                        self.lights_static.push(BuildLight { controller, light: Light { diffuse: color, position: xf.transform_tiny(*p), ..light } });
+                        self.lights_static.push(BuildLight {
+                            controller,
+                            light: Light { diffuse: color, position: xf.transform_tiny(*p), ..light },
+                        });
                     }
                 }
                 None => self.lights_static.push(BuildLight { controller, light }),
@@ -636,7 +713,11 @@ impl Builder {
             for (slot, v) in s.iter_mut().zip(&dyn_sectors) {
                 *slot = *v;
             }
-            self.lights_dynamic.push(BuildLightDynamic { light: BuildLight { controller, light }, sectors: s, sector_count: dyn_sectors.len() as u32 });
+            self.lights_dynamic.push(BuildLightDynamic {
+                light: BuildLight { controller, light },
+                sectors: s,
+                sector_count: dyn_sectors.len() as u32,
+            });
         }
         Ok(())
     }
@@ -648,8 +729,20 @@ impl Builder {
         let surface = self.texture(&g.texture).map_err(|_| fail())?;
         let shader = self.shader(cx, &g.shader).map_err(|_| fail())?;
         let sector = sectors.at(o.position(), g.radius);
-        let material = self.find_material(BuildMaterial { surface, shader, shader_xrlc: u16::MAX, sector, reserved: 0, internal_max_area: 0 });
-        self.glows.push(BuildGlow { pos: o.position(), size: g.radius, flags: u32::from(g.flags & GLOW_FIXED_SIZE != 0), material });
+        let material = self.find_material(BuildMaterial {
+            surface,
+            shader,
+            shader_xrlc: u16::MAX,
+            sector,
+            reserved: 0,
+            internal_max_area: 0,
+        });
+        self.glows.push(BuildGlow {
+            pos: o.position(),
+            size: g.radius,
+            flags: u32::from(g.flags & GLOW_FIXED_SIZE != 0),
+            material,
+        });
         Ok(())
     }
 }
@@ -671,8 +764,14 @@ pub fn level_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
 }
 
 /// `CompileStatic(false)`: the whole scene. `lods` gives a LOD picture by texture name.
-pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSource<'_>) -> Result<Compiled> {
-    let level_box = level_box(scene, lib).ok_or_else(|| BuildError::new("ERROR: Failed to acquire level bounding volume "))?;
+pub fn compile(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    lods: LodSource<'_>,
+) -> Result<Compiled> {
+    let level_box = level_box(scene, lib)
+        .ok_or_else(|| BuildError::new("ERROR: Failed to acquire level bounding volume "))?;
     if scene.objects.is_empty() {
         return Err(BuildError::new("ERROR: Failed static remote build "));
     }
@@ -697,7 +796,9 @@ pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSo
                 ObjClass::Light => b.light(o, &sectors, scene)?,
                 ObjClass::Portal => {
                     if let ObjData::Portal(p) = &o.data {
-                        let num = |name: &str| sectors.list.iter().find(|v| v.name == name).map_or(sectors.default, |v| v.num);
+                        let num = |name: &str| {
+                            sectors.list.iter().find(|v| v.name == name).map_or(sectors.default, |v| v.num)
+                        };
                         b.portals.push(Portal::new(num(&p.front), num(&p.back), &p.vertices));
                     }
                 }
@@ -706,13 +807,20 @@ pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSo
                     let surfaces = object_surfaces(o, &lo);
                     let world = o.world();
                     if is_static(&lo.object) {
-                        let mut out = (std::mem::take(&mut b.verts), std::mem::take(&mut b.faces), std::mem::take(&mut b.smgroups));
+                        let mut out = (
+                            std::mem::take(&mut b.verts),
+                            std::mem::take(&mut b.faces),
+                            std::mem::take(&mut b.smgroups),
+                        );
                         for m in &lo.object.meshes {
                             let sector = sectors.of_mesh(&o.name, &m.name);
                             let r = b.mesh(&cx, &world, &world, o, &lo, &surfaces, m, sector, &mut out);
                             if let Err(e) = r {
                                 b.log.push(e.0.clone());
-                                return Err(BuildError::new(format!("{}\nFailed to build object: '{}'", e.0, o.name)));
+                                return Err(BuildError::new(format!(
+                                    "{}\nFailed to build object: '{}'",
+                                    e.0, o.name
+                                )));
                             }
                             for p in m.points.iter() {
                                 stat.add_svert(world.transform_tiny(*p));
@@ -728,14 +836,41 @@ pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSo
                                 let lod_id = b.lod(&cx, &lo, sector)?.unwrap_or(u16::MAX);
                                 let mut out = (Vec::new(), Vec::new(), Vec::new());
                                 for m in &lo.object.meshes {
-                                    b.mesh(&cx, &Mat4::IDENTITY, &world, o, &lo, &surfaces, m, sector, &mut out)
-                                        .map_err(|e| BuildError::new(format!("{}\nFailed to build object: '{}'", e.0, o.name)))?;
+                                    b.mesh(
+                                        &cx,
+                                        &Mat4::IDENTITY,
+                                        &world,
+                                        o,
+                                        &lo,
+                                        &surfaces,
+                                        m,
+                                        sector,
+                                        &mut out,
+                                    )
+                                    .map_err(|e| {
+                                        BuildError::new(format!(
+                                            "{}\nFailed to build object: '{}'",
+                                            e.0, o.name
+                                        ))
+                                    })?;
                                 }
-                                b.mu_models.push(MuModel { name: lo.name.clone(), verts: out.0, faces: out.1, lod_id, smooth_groups: out.2 });
+                                b.mu_models.push(MuModel {
+                                    name: lo.name.clone(),
+                                    verts: out.0,
+                                    faces: out.1,
+                                    lod_id,
+                                    smooth_groups: out.2,
+                                });
                                 b.mu_models.len() - 1
                             }
                         };
-                        b.mu_refs.push(MuReference { model: model as u32, transform: world.0, flags: 0, sector, reserved: [0; 8] });
+                        b.mu_refs.push(MuReference {
+                            model: model as u32,
+                            transform: world.0,
+                            flags: 0,
+                            sector,
+                            reserved: [0; 8],
+                        });
                         if let Some(m) = b.mu_models.get(model) {
                             for v in &m.verts {
                                 stat.add_muvert(world.transform_tiny(*v));
@@ -755,8 +890,17 @@ pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSo
             for slot in crate::wallmarks::read(&part.raw) {
                 for mark in &slot.marks {
                     let sector = sectors.at(mark.center, mark.radius);
-                    let m_id = b.material_of(&cx, &slot.shader, crate::wallmarks::COMPILER_SHADER, &slot.texture, sector, false).map_or(u16::MAX, |m| m as u16);
-                    for tri in mark.verts.chunks_exact(3) {
+                    let m_id = b
+                        .material_of(
+                            &cx,
+                            &slot.shader,
+                            crate::wallmarks::COMPILER_SHADER,
+                            &slot.texture,
+                            sector,
+                            false,
+                        )
+                        .map_or(u16::MAX, |m| m as u16);
+                    for tri in mark.verts.as_chunks::<3>().0 {
                         let base = b.verts.len() as u32;
                         let mut f = BuildFace { material: m_id, ..BuildFace::default() };
                         for (k, (p, _, t)) in tri.iter().enumerate() {
@@ -778,10 +922,17 @@ pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSo
         let images: Vec<SourceImage> = b
             .lods
             .iter()
-            .map(|(_, name, c, n)| SourceImage { name: name.clone(), w: LOD_IMAGE_SIZE * LOD_SAMPLE_COUNT, h: LOD_IMAGE_SIZE, layers: vec![c.clone(), n.clone()] })
+            .map(|(_, name, c, n)| SourceImage {
+                name: name.clone(),
+                w: LOD_IMAGE_SIZE * LOD_SAMPLE_COUNT,
+                h: LOD_IMAGE_SIZE,
+                layers: vec![c.clone(), n.clone()],
+            })
             .collect();
         let Some(merged) = merge::merge_textures(2, images, 512, 4096, 64, 4096) else {
-            return Err(BuildError::new("Failed to build merged LOD texture. Merged texture more than [4096x4096]."));
+            return Err(BuildError::new(
+                "Failed to build merged LOD texture. Merged texture more than [4096x4096].",
+            ));
         };
         for (k, (lod, ..)) in b.lods.iter_mut().enumerate() {
             let id = merged.remap[k];
@@ -816,10 +967,18 @@ pub fn compile(scene: &SceneState, lib: Lookup<'_>, engine: &Engine, lods: LodSo
         materials: b.materials,
         shaders: b.shaders.iter().map(|s| s.as_str().into()).collect(),
         shaders_xrlc: b.shaders_xrlc.iter().map(|s| s.as_str().into()).collect(),
-        textures: b.textures.iter().map(|t| BuildTexture { name: t.as_str().into(), width: 0, height: 0, has_alpha: 0, reserve: 0 }).collect(),
+        textures: b
+            .textures
+            .iter()
+            .map(|t| BuildTexture { name: t.as_str().into(), width: 0, height: 0, has_alpha: 0, reserve: 0 })
+            .collect(),
         glows: b.glows,
         portals: b.portals,
-        light_controls: b.controls.iter().map(|c| LightControl { name: c.as_str().into(), data: Vec::new() }).collect(),
+        light_controls: b
+            .controls
+            .iter()
+            .map(|c| LightControl { name: c.as_str().into(), data: Vec::new() })
+            .collect(),
         lights_static: b.lights_static,
         lights_dynamic: b.lights_dynamic,
         lods: b.lods.into_iter().map(|(l, ..)| l).collect(),

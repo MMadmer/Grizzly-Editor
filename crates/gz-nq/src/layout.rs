@@ -126,7 +126,11 @@ fn cond_value(catalog: &Catalog, c: &crate::asset::Cond) -> String {
             continue;
         }
         let part = if p.ty == "cond_list" && v.is_table() {
-            v.arr().iter().map(|e| cond_title(catalog, &e.get_string("kind", ""))).collect::<Vec<_>>().join(" or ")
+            v.arr()
+                .iter()
+                .map(|e| cond_title(catalog, &e.get_string("kind", "")))
+                .collect::<Vec<_>>()
+                .join(" or ")
         } else if let Some(b) = v.as_bool() {
             if b { p.name.clone() } else { String::new() }
         } else {
@@ -152,7 +156,10 @@ pub fn cond_key(title: &str, negate: bool) -> String {
     }
     let b = title.as_bytes();
     let mut key = title.to_owned();
-    if b.len() > 1 && b.first().is_some_and(u8::is_ascii_uppercase) && !b.get(1).is_some_and(u8::is_ascii_uppercase) {
+    if b.len() > 1
+        && b.first().is_some_and(u8::is_ascii_uppercase)
+        && !b.get(1).is_some_and(u8::is_ascii_uppercase)
+    {
         key.replace_range(..1, &title.get(..1).unwrap_or("").to_ascii_lowercase());
     }
     format!("Not {key}")
@@ -250,7 +257,8 @@ pub fn node_box(catalog: &Catalog, n: &Node) -> NodeBox {
         y += ACTION_ROW * (b.action_rows + usize::from(b.more)) as f32;
     }
     // a single "next" pin needs no name
-    b.pin_labels = pin_list.len() > 1 || (pin_list.len() == 1 && pin_list.first().is_some_and(|p| p != "next"));
+    b.pin_labels =
+        pin_list.len() > 1 || (pin_list.len() == 1 && pin_list.first().is_some_and(|p| p != "next"));
     if b.pin_labels {
         y += PAD * 0.5;
         b.pins_y = y;
@@ -704,7 +712,8 @@ pub fn run(catalog: &Catalog, q: &mut Graph, only_missing: bool) -> usize {
                 }
                 branches.push(branch);
                 let Some(anchor) = layout.get(branch) else { continue };
-                let side = if anchor.side_count > 0 { anchor.side_sum / anchor.side_count as f32 } else { 0.0 };
+                let side =
+                    if anchor.side_count > 0 { anchor.side_sum / anchor.side_count as f32 } else { 0.0 };
                 min_key = min_key.min(anchor.order_key);
                 max_key = max_key.max(anchor.order_key);
                 min_side = min_side.min(side);
@@ -739,11 +748,16 @@ pub fn run(catalog: &Catalog, q: &mut Graph, only_missing: bool) -> usize {
             p.children.push(i);
         }
     }
-    let keys: Vec<(f32, usize, usize)> = layout.iter().map(|n| (n.order_key, n.layer, n.file_order)).collect();
+    let keys: Vec<(f32, usize, usize)> =
+        layout.iter().map(|n| (n.order_key, n.layer, n.file_order)).collect();
     for n in &mut layout {
         n.children.sort_by(|&a, &b| {
-            let (ka, kb) = (keys.get(a).copied().unwrap_or_default(), keys.get(b).copied().unwrap_or_default());
-            ka.0.partial_cmp(&kb.0).unwrap_or(std::cmp::Ordering::Equal).then(ka.1.cmp(&kb.1)).then(ka.2.cmp(&kb.2))
+            let (ka, kb) =
+                (keys.get(a).copied().unwrap_or_default(), keys.get(b).copied().unwrap_or_default());
+            ka.0.partial_cmp(&kb.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(ka.1.cmp(&kb.1))
+                .then(ka.2.cmp(&kb.2))
         });
     }
 
@@ -871,7 +885,14 @@ mod tests {
     use crate::catalog::{Catalog, Kind, Param, USE_MAIN, USE_TRIGGER};
 
     fn catalog() -> Catalog {
-        let start = Kind { id: "trigger.start".into(), uses: USE_TRIGGER, pins: vec!["next".into()], in_quest: true, in_behaviour: true, ..Kind::default() };
+        let start = Kind {
+            id: "trigger.start".into(),
+            uses: USE_TRIGGER,
+            pins: vec!["next".into()],
+            in_quest: true,
+            in_behaviour: true,
+            ..Kind::default()
+        };
         let topic = Kind {
             id: "dialog.topic".into(),
             uses: USE_MAIN,
@@ -884,7 +905,14 @@ mod tests {
             in_behaviour: true,
             ..Kind::default()
         };
-        let step = Kind { id: "flow.step".into(), uses: USE_MAIN, pins: vec!["next".into()], in_quest: true, in_behaviour: true, ..Kind::default() };
+        let step = Kind {
+            id: "flow.step".into(),
+            uses: USE_MAIN,
+            pins: vec!["next".into()],
+            in_quest: true,
+            in_behaviour: true,
+            ..Kind::default()
+        };
         Catalog::from_kinds(vec![start, topic, step])
     }
 
@@ -913,7 +941,10 @@ mod tests {
             busy.on_enter.push(crate::asset::Action { kind: "x".into(), params: gz_luadata::Value::Nil });
         }
         let b = node_box(&cat, &busy);
-        assert_eq!((b.actions, b.action_rows, b.more, b.actions_y, b.h), (6, 4, true, 34.0, 34.0 + 100.0 + 6.0));
+        assert_eq!(
+            (b.actions, b.action_rows, b.more, b.actions_y, b.h),
+            (6, 4, true, 34.0, 34.0 + 100.0 + 6.0)
+        );
 
         // a trigger runs no actions
         let mut t = Node::new("go", "trigger.start");
@@ -926,7 +957,11 @@ mod tests {
         let cat = Catalog::empty();
         let mut n = Node::new("n", "unknown");
         for k in ["a", "b", "c", "d"] {
-            n.cond.push(crate::asset::Cond { kind: k.into(), params: gz_luadata::Value::Nil, negate: k == "b" });
+            n.cond.push(crate::asset::Cond {
+                kind: k.into(),
+                params: gz_luadata::Value::Nil,
+                negate: k == "b",
+            });
         }
         let l = lines(&cat, &n);
         assert_eq!(l.len(), 3);

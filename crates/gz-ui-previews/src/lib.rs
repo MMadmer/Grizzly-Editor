@@ -83,7 +83,9 @@ fn synchronize_textures(cx: &mut DocCx<'_>) {
         headline: "Synchronize the texture library with the texture sources?".to_owned(),
         items: Vec::new(),
         total: 0,
-        consequence: "The textures whose source changed are converted again: their .dds and .thm files are replaced.".to_owned(),
+        consequence:
+            "The textures whose source changed are converted again: their .dds and .thm files are replaced."
+                .to_owned(),
         action: "Synchronize".to_owned(),
         destructive: false,
     };
@@ -94,28 +96,33 @@ fn synchronize_textures(cx: &mut DocCx<'_>) {
         }
         let dirs = EditorDirs::of(&editor);
         let ed = editor.clone();
-        let started = editor.jobs.start("sync_textures", Some("libraries"), "Synchronizing Textures", move |ctx| async move {
-            let c = ctx.clone();
-            let done = ctx
-                .exec
-                .io(move || {
-                    library::texsync::synchronize_all(&dirs, &c.cancel, |i, n, name| {
-                        c.stage(format!("Synchronizing {name}"));
-                        c.progress(i, n);
+        let started = editor.jobs.start(
+            "sync_textures",
+            Some("libraries"),
+            "Synchronizing Textures",
+            move |ctx| async move {
+                let c = ctx.clone();
+                let done = ctx
+                    .exec
+                    .io(move || {
+                        library::texsync::synchronize_all(&dirs, &c.cancel, |i, n, name| {
+                            c.stage(format!("Synchronizing {name}"));
+                            c.progress(i, n);
+                        })
                     })
-                })
-                .await;
-            library::LibraryLists::of(&ed).textures_rev.bump();
-            match done {
-                Ok((updated, failed)) => {
-                    for f in &failed {
-                        ed.log.error(f.clone());
+                    .await;
+                library::LibraryLists::of(&ed).textures_rev.bump();
+                match done {
+                    Ok((updated, failed)) => {
+                        for f in &failed {
+                            ed.log.error(f.clone());
+                        }
+                        Ok(serde_json::json!({ "updated": updated, "failed": failed }))
                     }
-                    Ok(serde_json::json!({ "updated": updated, "failed": failed }))
+                    Err(e) => Err(gz_task::JobError::new(e)),
                 }
-                Err(e) => Err(gz_task::JobError::new(e)),
-            }
-        });
+            },
+        );
         if let Err(busy) = started {
             editor.notices.error(format!("Synchronize Textures waits: {busy}."));
         }
@@ -195,16 +202,52 @@ pub fn install(b: &mut ShellBuilder) {
     b.document(textures::KIND, textures::factory);
     b.document(sounds::KIND, sounds::factory);
 
-    b.command(UiCommand::new("COMMAND_LIGHTANIM_EDITOR", "Libraries", "Light Animations", Icon::Light, |cx| open_singleton(cx, lanim::KIND)));
-    b.command(UiCommand::new("COMMAND_IMAGE_EDITOR", "Libraries", "Texture Library", Icon::FileTexture, |cx| open_singleton(cx, textures::KIND)));
-    b.command(UiCommand::new("COMMAND_SOUND_EDITOR", "Libraries", "Sound Library", Icon::FileSound, |cx| open_singleton(cx, sounds::KIND)));
+    b.command(UiCommand::new(
+        "COMMAND_LIGHTANIM_EDITOR",
+        "Libraries",
+        "Light Animations",
+        Icon::Light,
+        |cx| open_singleton(cx, lanim::KIND),
+    ));
+    b.command(UiCommand::new(
+        "COMMAND_IMAGE_EDITOR",
+        "Libraries",
+        "Texture Library",
+        Icon::FileTexture,
+        |cx| open_singleton(cx, textures::KIND),
+    ));
+    b.command(UiCommand::new("COMMAND_SOUND_EDITOR", "Libraries", "Sound Library", Icon::FileSound, |cx| {
+        open_singleton(cx, sounds::KIND)
+    }));
     // the library and New Textures share one tab: the library gives way unless it holds
     // unsaved changes, which the shell asks about first
-    b.command(UiCommand::new("COMMAND_CHECK_TEXTURES", "Libraries", "Check New Textures", Icon::Search, |cx| {
-        cx.requests.open(OpenRequest { path: Some("import".to_owned()), arg: Some("import".to_owned()), ..OpenRequest::kind(textures::KIND) });
-    }));
-    b.command(UiCommand::new("COMMAND_REFRESH_TEXTURES", "Libraries", "Synchronize Textures...", Icon::Refresh, synchronize_textures));
-    b.command(UiCommand::new("COMMAND_SYNC_SOUNDS", "Libraries", "Synchronize Sounds...", Icon::Refresh, synchronize_sounds));
+    b.command(UiCommand::new(
+        "COMMAND_CHECK_TEXTURES",
+        "Libraries",
+        "Check New Textures",
+        Icon::Search,
+        |cx| {
+            cx.requests.open(OpenRequest {
+                path: Some("import".to_owned()),
+                arg: Some("import".to_owned()),
+                ..OpenRequest::kind(textures::KIND)
+            });
+        },
+    ));
+    b.command(UiCommand::new(
+        "COMMAND_REFRESH_TEXTURES",
+        "Libraries",
+        "Synchronize Textures...",
+        Icon::Refresh,
+        synchronize_textures,
+    ));
+    b.command(UiCommand::new(
+        "COMMAND_SYNC_SOUNDS",
+        "Libraries",
+        "Synchronize Sounds...",
+        Icon::Refresh,
+        synchronize_sounds,
+    ));
 
     b.menu_item("Libraries", 0, 0, "COMMAND_LIGHTANIM_EDITOR");
     b.menu_item("Libraries", 0, 1, "COMMAND_IMAGE_EDITOR");

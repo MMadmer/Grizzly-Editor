@@ -24,10 +24,15 @@ impl Default for Obb {
 
 impl Obb {
     /// `Fobb::invalidate`.
-    pub const INVALID: Obb = Obb { rotate: [Vec3::X, Vec3::Y, Vec3::Z], translate: Vec3::ZERO, halfsize: Vec3::ZERO };
+    pub const INVALID: Obb =
+        Obb { rotate: [Vec3::X, Vec3::Y, Vec3::Z], translate: Vec3::ZERO, halfsize: Vec3::ZERO };
 
     pub(crate) fn read(r: &mut Reader<'_>) -> Result<Self> {
-        Ok(Self { rotate: [r.r_vec3()?, r.r_vec3()?, r.r_vec3()?], translate: r.r_vec3()?, halfsize: r.r_vec3()? })
+        Ok(Self {
+            rotate: [r.r_vec3()?, r.r_vec3()?, r.r_vec3()?],
+            translate: r.r_vec3()?,
+            halfsize: r.r_vec3()?,
+        })
     }
 
     pub(crate) fn write(&self, w: &mut Writer) {
@@ -173,7 +178,13 @@ pub(crate) fn read_names(body: &[u8]) -> Result<Vec<BoneName>> {
         return Err(crate::invalid(format!("the model states {n} bones and cannot hold them")));
     }
     (0..n)
-        .map(|_| Ok(BoneName { name: SmolStr::new(r.r_stringz()?), parent: SmolStr::new(r.r_stringz()?), obb: Obb::read(&mut r)? }))
+        .map(|_| {
+            Ok(BoneName {
+                name: SmolStr::new(r.r_stringz()?),
+                parent: SmolStr::new(r.r_stringz()?),
+                obb: Obb::read(&mut r)?,
+            })
+        })
         .collect()
 }
 

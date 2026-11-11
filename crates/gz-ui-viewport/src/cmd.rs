@@ -8,8 +8,8 @@ use std::sync::Arc;
 use base64::Engine;
 use glam::Vec3;
 use gz_editor::{Args, ArgsExt, CmdError, Editor, Origin, Registry, Reply, Value, json};
-use gz_scene::{SceneCmd, SceneService};
 use gz_scene::apply::SelectMode;
+use gz_scene::{SceneCmd, SceneService};
 
 use crate::camera::Target;
 use crate::gizmo::{self, GizmoType};
@@ -149,10 +149,13 @@ async fn viewport_navigation(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     let vp = Viewport::of(&ed);
     let view = a.str("view").unwrap_or("");
     let scope = a.str("scope").unwrap_or("");
-    let action = a.str("action").filter(|s| !s.is_empty()).unwrap_or(if view.is_empty() { "get" } else { "set" });
+    let action =
+        a.str("action").filter(|s| !s.is_empty()).unwrap_or(if view.is_empty() { "get" } else { "set" });
     if action.eq_ignore_ascii_case("set") {
         let Some(t) = Target::parse(view) else {
-            return Err(CmdError::invalid("view must be perspective, front, back, left, right, top, or bottom"));
+            return Err(CmdError::invalid(
+                "view must be perspective, front, back, left, right, top, or bottom",
+            ));
         };
         vp.with(|s| s.nav.set_target(t));
         redraw(&ed);
@@ -173,7 +176,10 @@ async fn viewport_navigation(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
 /// bad one changes nothing.
 fn viewport_controls(ed: &Arc<Editor>, a: &Args) -> Reply {
     let vp = Viewport::of(ed);
-    let class = ed.project_opt().and_then(|s| s.services.get::<SceneService>()).map_or(gz_scene::ObjClass::SceneObject, |svc| svc.store.snapshot().tools.target);
+    let class = ed
+        .project_opt()
+        .and_then(|s| s.services.get::<SceneService>())
+        .map_or(gz_scene::ObjClass::SceneObject, |svc| svc.store.snapshot().tools.target);
     let [sup_move, sup_rotate, sup_scale] = gizmo::supports(class);
     let tool_arg = a.str("tool").filter(|t| !t.is_empty());
     let (mut action, mut kind) = vp.read(|s| (s.tool.action, s.tool.gizmo));
@@ -201,13 +207,17 @@ fn viewport_controls(ed: &Arc<Editor>, a: &Args) -> Reply {
             return Err(CmdError::invalid(format!("the {} tool cannot {t} objects", tool_title(class))));
         }
     }
-    let snaps = [("grid", "grid_snap", GizmoType::Move), ("scale", "scale_snap", GizmoType::Scale), ("angle", "angle_snap", GizmoType::Rotate)];
+    let snaps = [
+        ("grid", "grid_snap", GizmoType::Move),
+        ("scale", "scale_snap", GizmoType::Scale),
+        ("angle", "angle_snap", GizmoType::Rotate),
+    ];
     let mut wanted = Vec::with_capacity(3);
     for (name, toggle, k) in snaps {
         let (step, on) = vp.read(|s| (s.step(k), s.snap_on(k)));
         let given = a.f32(name);
         if let Some(v) = given
-            && !(v > 0.0)
+            && v.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
         {
             return Err(CmdError::invalid(format!("{name} must be a step above 0")));
         }
@@ -462,7 +472,10 @@ async fn game_lighting(ed: &Arc<Editor>, a: &Args) -> Reply {
                     Ok(svc) => {
                         let snap = svc.store.snapshot();
                         let data = vp.game_data_for(ed).await;
-                        let lights = ed.exec.cpu(move || lighting::collect(&snap, data.0.as_deref(), data.1.as_deref())).await;
+                        let lights = ed
+                            .exec
+                            .cpu(move || lighting::collect(&snap, data.0.as_deref(), data.1.as_deref()))
+                            .await;
                         lights.iter().map(light_json).collect()
                     }
                     Err(_) => Vec::new(),
@@ -485,7 +498,8 @@ async fn game_lighting(ed: &Arc<Editor>, a: &Args) -> Reply {
 fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
     let settings = gz_app::EditorSettings::of(ed);
     let requested = a.i64("active_idle_fps").unwrap_or(-1);
-    let action = a.str("action").filter(|s| !s.is_empty()).unwrap_or(if requested >= 0 { "set" } else { "get" });
+    let action =
+        a.str("action").filter(|s| !s.is_empty()).unwrap_or(if requested >= 0 { "set" } else { "get" });
     if action.eq_ignore_ascii_case("set") {
         if !(30..=240).contains(&requested) {
             return Err(CmdError::invalid("active_idle_fps must be between 30 and 240"));
@@ -522,7 +536,9 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
 
 async fn screenshot_viewport(ed: &Arc<Editor>) -> Reply {
     let vp = Viewport::of(ed);
-    let image = vp.picture(ed).await.map_err(|e| CmdError::new(&e.code, "viewport RT unavailable").with_data(json!({ "detail": e.message })))?;
+    let image = vp.picture(ed).await.map_err(|e| {
+        CmdError::new(&e.code, "viewport RT unavailable").with_data(json!({ "detail": e.message }))
+    })?;
     let (w, h) = (image.width, image.height);
     let png = ed.exec.cpu(move || gz_app::encode_png(image.width, image.height, &image.rgba)).await?;
     let encoded = ed.exec.cpu(move || base64::engine::general_purpose::STANDARD.encode(png)).await;

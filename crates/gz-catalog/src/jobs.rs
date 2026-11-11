@@ -13,7 +13,8 @@ use gz_github::{Github, IssueKind, Scan, VtPolicy, scan};
 use gz_release::content::{Finding, Level, check_content, content_head, content_need};
 
 use crate::model::{
-    Check, Checked, Input, Release, Standing, read_listing, reason, submission_details, submission_text, vt_level, vt_refusal, withdrawal_details,
+    Check, Checked, Input, Release, Standing, read_listing, reason, submission_details, submission_text,
+    vt_level, vt_refusal, withdrawal_details,
 };
 use crate::service::{Catalog, Job};
 use crate::website::website_is_module_page;
@@ -46,7 +47,8 @@ impl Run {
     async fn fetch_release(&self, input: &Input) -> Result<Release, (u16, String)> {
         let m = &input.manifest;
         let url = self.gh.endpoints().latest_download(&m.update_github, &format!("{}.update.ltx", m.id));
-        let (status, body) = self.gh.fetch_public(&url, 256 << 10, self.cancel()).await.map_err(|e| (0, e))?;
+        let (status, body) =
+            self.gh.fetch_public(&url, 256 << 10, self.cancel()).await.map_err(|e| (0, e))?;
         if status != 200 {
             return Err((status, format!("GitHub answered {status}")));
         }
@@ -55,13 +57,23 @@ impl Run {
 
     /// Section 7, in the order the window lists it. `lookup` asks VirusTotal about the packages;
     /// a submission leaves that to its scan, which follows at once.
-    pub(crate) async fn check(&self, input: &Input, lookup: bool, seen: &mut Checked, standing: &mut Standing) -> Check {
+    pub(crate) async fn check(
+        &self,
+        input: &Input,
+        lookup: bool,
+        seen: &mut Checked,
+        standing: &mut Standing,
+    ) -> Check {
         let mut check = Check::default();
         let m = &input.manifest;
         let key = &input.key;
 
         if !key.exists {
-            check.add(Level::Block, "key", "No author key: create one above - it signs every release.".to_owned());
+            check.add(
+                Level::Block,
+                "key",
+                "No author key: create one above - it signs every release.".to_owned(),
+            );
         } else if !key.error.is_empty() {
             check.add(Level::Block, "key", format!("The author key does not read: {}.", key.error));
         } else {
@@ -70,22 +82,38 @@ impl Run {
 
         let repo_ok = !m.update_github.is_empty() && gz_mod::validate_github_repo(&m.update_github);
         if m.update_github.is_empty() {
-            check.add(Level::Block, "repository", "No GitHub repository in the manifest: set it in Mod > Mod Settings.".to_owned());
+            check.add(
+                Level::Block,
+                "repository",
+                "No GitHub repository in the manifest: set it in Mod > Mod Settings.".to_owned(),
+            );
         } else if !repo_ok {
-            check.add(Level::Block, "repository", format!("The manifest's GitHub repository is not owner/repo: {}.", m.update_github));
+            check.add(
+                Level::Block,
+                "repository",
+                format!("The manifest's GitHub repository is not owner/repo: {}.", m.update_github),
+            );
         } else {
             check.add(Level::Ok, "repository", format!("Repository {}.", m.update_github));
         }
 
         // the submission has to come from the account that owns the repository (7.6)
         if !input.signed_in {
-            check.add(Level::Block, "account", "Not signed in to GitHub: sign in from Mod > Publish Release.".to_owned());
+            check.add(
+                Level::Block,
+                "account",
+                "Not signed in to GitHub: sign in from Mod > Publish Release.".to_owned(),
+            );
         } else {
             self.stage("Reading the GitHub account");
             let owner = owner(&m.update_github);
             match self.gh.account_login(&input.token, self.cancel()).await {
                 Err(err) => {
-                    check.add(Level::Block, "account", format!("The GitHub account could not be read: {}.", reason(&err)));
+                    check.add(
+                        Level::Block,
+                        "account",
+                        format!("The GitHub account could not be read: {}.", reason(&err)),
+                    );
                     self.svc.set_login("");
                 }
                 Ok(login) => {
@@ -136,42 +164,83 @@ impl Run {
             check.url = format!("{}/releases/latest", self.gh.endpoints().repo_page(&m.update_github));
             check.key_id.clone_from(&rel.signer);
             if rel.id != m.id {
-                check.add(Level::Block, "release", format!("The latest release of {} is for {}, not {}.", m.update_github, rel.id, m.id));
+                check.add(
+                    Level::Block,
+                    "release",
+                    format!("The latest release of {} is for {}, not {}.", m.update_github, rel.id, m.id),
+                );
             } else {
                 check.add(Level::Ok, "release", format!("Latest release {}.", rel.version));
             }
             if gz_github::ini::compare_versions(&rel.version, "1.0.0").is_lt() {
-                check.add(Level::Block, "version", format!("Release {} is below 1.0.0: the Mod Browser lists 1.0.0 and later.", rel.version));
+                check.add(
+                    Level::Block,
+                    "version",
+                    format!("Release {} is below 1.0.0: the Mod Browser lists 1.0.0 and later.", rel.version),
+                );
             } else {
                 check.add(Level::Ok, "version", format!("Version {} is 1.0.0 or later.", rel.version));
             }
             if !m.version.is_empty() && gz_github::ini::compare_versions(&m.version, &rel.version).is_ne() {
-                check.add(Level::Note, "manifest_version", format!("mod.ltx says {}; the catalog reads the latest release, {}.", m.version, rel.version));
+                check.add(
+                    Level::Note,
+                    "manifest_version",
+                    format!(
+                        "mod.ltx says {}; the catalog reads the latest release, {}.",
+                        m.version, rel.version
+                    ),
+                );
             }
             if rel.card {
                 check.add(Level::Ok, "card", "The release carries a Mod Browser card.".to_owned());
             } else {
-                check.add(Level::Block, "card", "The latest release has no Mod Browser card: package and publish it with this editor.".to_owned());
+                check.add(
+                    Level::Block,
+                    "card",
+                    "The latest release has no Mod Browser card: package and publish it with this editor."
+                        .to_owned(),
+                );
             }
             check.signed = rel.signed_ok;
             if key.public_key.is_empty() {
-                check.add(Level::Note, "signature", "The signature is checked once there is an author key.".to_owned());
+                check.add(
+                    Level::Note,
+                    "signature",
+                    "The signature is checked once there is an author key.".to_owned(),
+                );
             } else if rel.signed_ok {
                 check.add(Level::Ok, "signature", "Signed with this author key.".to_owned());
             } else if rel.signer.is_empty() {
-                check.add(Level::Block, "signature", "The latest release is not signed: unlock the author key, then publish again.".to_owned());
+                check.add(
+                    Level::Block,
+                    "signature",
+                    "The latest release is not signed: unlock the author key, then publish again.".to_owned(),
+                );
             } else if rel.signer != key.key_id {
-                check.add(Level::Block, "signature", format!("The latest release is signed with another key ({}).", rel.signer));
+                check.add(
+                    Level::Block,
+                    "signature",
+                    format!("The latest release is signed with another key ({}).", rel.signer),
+                );
             } else {
-                check.add(Level::Block, "signature", format!("The release's signature does not verify: {}.", rel.sign_error));
+                check.add(
+                    Level::Block,
+                    "signature",
+                    format!("The release's signature does not verify: {}.", rel.sign_error),
+                );
             }
         }
 
         // the website the Mod Browser shows: the card's; the manifest's while there is no card
-        let website = if have && rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.website.clone() };
+        let website =
+            if have && rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.website.clone() };
         let moddb = website.contains("moddb.com");
         if website.is_empty() {
-            check.add(Level::Block, "website", "No website: the Mod Browser lists a module with its own page on AP-PRO or ModDB.".to_owned());
+            check.add(
+                Level::Block,
+                "website",
+                "No website: the Mod Browser lists a module with its own page on AP-PRO or ModDB.".to_owned(),
+            );
         } else if !website_is_module_page(&website) {
             check.add(
                 Level::Block,
@@ -185,10 +254,21 @@ impl Run {
             match self.gh.fetch_public(&website, 8 << 20, self.cancel()).await {
                 Ok((200, _)) => check.add(Level::Ok, "website", format!("Website {website} answers.")),
                 Ok((403 | 429 | 503, _)) if moddb => {
-                    check.add(Level::Note, "website", "ModDB turns automated requests away: the page cannot be checked automatically.".to_owned());
+                    check.add(
+                        Level::Note,
+                        "website",
+                        "ModDB turns automated requests away: the page cannot be checked automatically."
+                            .to_owned(),
+                    );
                 }
-                Ok((status, _)) => check.add(Level::Block, "website", format!("Website {website} answers HTTP {status}.")),
-                Err(err) => check.add(Level::Note, "website", format!("Website {website} could not be reached: {}.", reason(&err))),
+                Ok((status, _)) => {
+                    check.add(Level::Block, "website", format!("Website {website} answers HTTP {status}."))
+                }
+                Err(err) => check.add(
+                    Level::Note,
+                    "website",
+                    format!("Website {website} could not be reached: {}.", reason(&err)),
+                ),
             }
         }
         if self.cancelled() {
@@ -240,19 +320,32 @@ impl Run {
             if version == "*" {
                 check.add(Level::Block, "catalog", format!("The Mod Browser revoked {}: {why}", m.id));
             } else {
-                check.add(Level::Note, "catalog", format!("The Mod Browser revoked version {version}: {why}"));
+                check.add(
+                    Level::Note,
+                    "catalog",
+                    format!("The Mod Browser revoked version {version}: {why}"),
+                );
             }
         }
 
         let rel = &seen.rel;
         if have && rel.card {
             if rel.thumbnail.is_empty() {
-                check.add(Level::Note, "thumbnail", "No thumbnail: the Mod Browser shows the name's first letter (Mod > Mod Settings).".to_owned());
+                check.add(
+                    Level::Note,
+                    "thumbnail",
+                    "No thumbnail: the Mod Browser shows the name's first letter (Mod > Mod Settings)."
+                        .to_owned(),
+                );
             } else {
                 check.add(Level::Ok, "thumbnail", "Thumbnail.".to_owned());
             }
             if rel.tags.is_empty() {
-                check.add(Level::Note, "tags", "No tags: players who filter by tag will not find it (Mod > Mod Settings).".to_owned());
+                check.add(
+                    Level::Note,
+                    "tags",
+                    "No tags: players who filter by tag will not find it (Mod > Mod Settings).".to_owned(),
+                );
             } else {
                 check.add(Level::Ok, "tags", format!("Tags: {}.", rel.tags));
             }
@@ -264,7 +357,8 @@ impl Run {
         if have && (lookup || no_key) {
             let packages = seen.rel.scan_packages(&input.root);
             let stage = |t: &str| self.stage(t);
-            seen.vt = self.gh.lookup(&packages, input.vt_key.expose(), &seen.policy, self.cancel(), &stage).await;
+            seen.vt =
+                self.gh.lookup(&packages, input.vt_key.expose(), &seen.policy, self.cancel(), &stage).await;
         }
         if have && no_key {
             check.add(Level::Block, "virustotal", NO_VT_KEY.to_owned());
@@ -295,7 +389,8 @@ impl Run {
                 Err(e) => standing.submission_error = e,
             }
             if !self.cancelled()
-                && let Ok(issue) = self.gh.catalog_issue(&m.id, &input.token, IssueKind::Withdrawal, self.cancel()).await
+                && let Ok(issue) =
+                    self.gh.catalog_issue(&m.id, &input.token, IssueKind::Withdrawal, self.cancel()).await
             {
                 standing.withdrawal = issue;
             }
@@ -307,7 +402,8 @@ impl Run {
     /// The content rules over the release's own files, read out of this computer's copy of the
     /// packages - the bytes the descriptor pins, checked by their hashes first.
     async fn check_local_release(&self, input: &Input, rel: &Release, check: &mut Check) {
-        let (root, id, rel, cancel) = (input.root.clone(), input.manifest.id.clone(), rel.clone(), self.cancel().clone());
+        let (root, id, rel, cancel) =
+            (input.root.clone(), input.manifest.id.clone(), rel.clone(), self.cancel().clone());
         let svc = self.svc.clone();
         let stage = move |t: &str| svc.set_stage(t);
         let found = self.exec.io(move || local_release_findings(&root, &id, &rel, &cancel, &stage)).await;
@@ -324,7 +420,10 @@ impl Run {
             Err((status, err)) => {
                 let m = &input.manifest;
                 let err = if status == 404 {
-                    format!("no release to scan: the latest release of {} carries no {}.update.ltx", m.update_github, m.id)
+                    format!(
+                        "no release to scan: the latest release of {} carries no {}.update.ltx",
+                        m.update_github, m.id
+                    )
                 } else {
                     err
                 };
@@ -332,15 +431,27 @@ impl Run {
             }
         };
         self.stage("Reading the Mod Browser catalog");
-        let policy = self.gh.fetch_catalog_index(self.cancel()).await.map_or_else(VtPolicy::default, |i| VtPolicy::read(&i));
+        let policy = self
+            .gh
+            .fetch_catalog_index(self.cancel())
+            .await
+            .map_or_else(VtPolicy::default, |i| VtPolicy::read(&i));
         let stage = |t: &str| self.stage(t);
-        let vt = self.gh.scan(&rel.scan_packages(&input.root), input.vt_key.expose(), &policy, self.cancel(), &stage).await;
+        let vt = self
+            .gh
+            .scan(&rel.scan_packages(&input.root), input.vt_key.expose(), &policy, self.cancel(), &stage)
+            .await;
         let done = if self.cancelled() { Err(gz_github::CANCELLED.to_owned()) } else { Ok(()) };
         (vt, done)
     }
 
     /// `submit`: the check again, the scan, then the issue.
-    pub(crate) async fn submit(&self, input: &Input, seen: &mut Checked, standing: &mut Standing) -> (Check, Result<(), String>) {
+    pub(crate) async fn submit(
+        &self,
+        input: &Input,
+        seen: &mut Checked,
+        standing: &mut Standing,
+    ) -> (Check, Result<(), String>) {
         self.svc.set_step(0);
         let mut check = self.check(input, false, seen, standing).await;
         if self.cancelled() {
@@ -376,11 +487,19 @@ impl Run {
         self.svc.set_step(2);
         let rel = &seen.rel;
         let m = &input.manifest;
-        let website = if rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.website.clone() };
+        let website =
+            if rel.card && !rel.website.is_empty() { rel.website.clone() } else { m.website.clone() };
         let rq = gz_github::CatalogRequest {
             module_id: m.id.clone(),
             file_text: submission_text(m, &input.key, rel, &website),
-            details: submission_details(m, &input.key, seen, &check, &website, &self.gh.endpoints().repo_page(&m.update_github)),
+            details: submission_details(
+                m,
+                &input.key,
+                seen,
+                &check,
+                &website,
+                &self.gh.endpoints().repo_page(&m.update_github),
+            ),
             token: input.token.clone(),
         };
         let stage = |t: &str| self.stage(t);
@@ -409,10 +528,12 @@ impl Run {
     pub(crate) async fn standing(&self, input: &Input, standing: &mut Standing) -> Result<(), String> {
         let id = &input.manifest.id;
         self.stage("Reading the submission");
-        standing.submission = self.gh.catalog_issue(id, &input.token, IssueKind::Submission, self.cancel()).await?;
+        standing.submission =
+            self.gh.catalog_issue(id, &input.token, IssueKind::Submission, self.cancel()).await?;
         standing.submission_read = true;
         self.stage("Reading the withdrawal");
-        standing.withdrawal = self.gh.catalog_issue(id, &input.token, IssueKind::Withdrawal, self.cancel()).await?;
+        standing.withdrawal =
+            self.gh.catalog_issue(id, &input.token, IssueKind::Withdrawal, self.cancel()).await?;
         self.read_listing_now(input, standing).await;
         Ok(())
     }
@@ -421,7 +542,11 @@ impl Run {
     /// editor refuses anyone else before anything is sent, and the catalog checks again by itself.
     pub(crate) async fn withdraw(&self, input: &Input, standing: &mut Standing) -> Result<(), String> {
         let m = &input.manifest;
-        let rq = gz_github::CatalogWithdrawal { module_id: m.id.clone(), details: withdrawal_details(m), token: input.token.clone() };
+        let rq = gz_github::CatalogWithdrawal {
+            module_id: m.id.clone(),
+            details: withdrawal_details(m),
+            token: input.token.clone(),
+        };
         let stage = |t: &str| self.stage(t);
         standing.withdrawal = self.gh.catalog_withdraw(&rq, self.cancel(), &stage).await?;
         drop(rq);
@@ -524,7 +649,13 @@ fn entry_head(file: &mut File, e: &gz_release::zip::Stored, rel_path: &str) -> V
 }
 
 /// The content findings of a release's local copy (`CheckLocalRelease`). Blocking.
-fn local_release_findings(root: &Path, id: &str, rel: &Release, cancel: &Cancel, stage: &dyn Fn(&str)) -> Vec<Finding> {
+fn local_release_findings(
+    root: &Path,
+    id: &str,
+    rel: &Release,
+    cancel: &Cancel,
+    stage: &dyn Fn(&str),
+) -> Vec<Finding> {
     let Some(dir) = local_release_dir(root, id, rel) else {
         return vec![note(format!(
             "Content not checked here: this computer has no copy of release {} (the catalog checks it when it judges the submission).",
@@ -546,7 +677,8 @@ fn local_release_findings(root: &Path, id: &str, rel: &Release, cancel: &Cancel,
                 p.name
             ))];
         }
-        let (Ok(entries), Ok(mut file)) = (gz_release::zip::read_layout(&zip_path), File::open(&zip_path)) else {
+        let (Ok(entries), Ok(mut file)) = (gz_release::zip::read_layout(&zip_path), File::open(&zip_path))
+        else {
             return vec![note(format!("Content not checked here: {} does not open.", p.name))];
         };
         for e in &entries {
@@ -557,7 +689,11 @@ fn local_release_findings(root: &Path, id: &str, rel: &Release, cancel: &Cancel,
                 continue;
             }
             let Some(rel_path) = e.name.strip_prefix(&prefix) else {
-                found.push(Finding { level: Level::Block, code: "content", text: format!("{}: outside modules/{id}/", e.name) });
+                found.push(Finding {
+                    level: Level::Block,
+                    code: "content",
+                    text: format!("{}: outside modules/{id}/", e.name),
+                });
                 continue;
             };
             let head = entry_head(&mut file, e, rel_path);
@@ -567,7 +703,11 @@ fn local_release_findings(root: &Path, id: &str, rel: &Release, cancel: &Cancel,
     }
     let mut out = Vec::with_capacity(found.len() + 1);
     if !found.iter().any(|f| f.level == Level::Block) {
-        out.push(Finding { level: Level::Ok, code: "content", text: format!("Content: {files} file(s) checked, nothing the catalog refuses.") });
+        out.push(Finding {
+            level: Level::Ok,
+            code: "content",
+            text: format!("Content: {files} file(s) checked, nothing the catalog refuses."),
+        });
     }
     out.extend(found);
     out

@@ -44,7 +44,15 @@ pub struct Command {
 
 impl Default for Command {
     fn default() -> Self {
-        Self { name: String::new(), function: String::new(), help: String::new(), args: String::new(), cheat: false, declared: true, extra: Vec::new() }
+        Self {
+            name: String::new(),
+            function: String::new(),
+            help: String::new(),
+            args: String::new(),
+            cheat: false,
+            declared: true,
+            extra: Vec::new(),
+        }
     }
 }
 
@@ -133,7 +141,10 @@ enum Sec {
 }
 
 fn truthy(v: &str) -> bool {
-    v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("on")
+    v.eq_ignore_ascii_case("true")
+        || v == "1"
+        || v.eq_ignore_ascii_case("yes")
+        || v.eq_ignore_ascii_case("on")
 }
 
 impl Manifest {
@@ -164,7 +175,11 @@ impl Manifest {
                             match m.commands.iter().position(|c| c.name.eq_ignore_ascii_case(name)) {
                                 Some(at) => Sec::Command(at),
                                 None => {
-                                    m.commands.push(Command { name: name.to_owned(), declared: false, ..Command::default() });
+                                    m.commands.push(Command {
+                                        name: name.to_owned(),
+                                        declared: false,
+                                        ..Command::default()
+                                    });
                                     Sec::Command(m.commands.len() - 1)
                                 }
                             }
@@ -205,7 +220,9 @@ impl Manifest {
                 }
                 // each `id` line starts a declared mode, `title` fills the last one
                 Sec::Provides => match key {
-                    "id" => m.provides_modes.push(ProvidesMode { id: value.to_owned(), title: String::new() }),
+                    "id" => {
+                        m.provides_modes.push(ProvidesMode { id: value.to_owned(), title: String::new() })
+                    }
                     "title" if !m.provides_modes.is_empty() => {
                         if let Some(last) = m.provides_modes.last_mut() {
                             last.title = value.to_owned();
@@ -232,12 +249,18 @@ impl Manifest {
                     if key.is_empty() {
                         continue;
                     }
-                    if let Some(c) = m.commands.iter_mut().find(|c| !c.declared && c.name.eq_ignore_ascii_case(key)) {
+                    if let Some(c) =
+                        m.commands.iter_mut().find(|c| !c.declared && c.name.eq_ignore_ascii_case(key))
+                    {
                         c.name = key.to_owned();
                         c.function = value.to_owned();
                         c.declared = true;
                     } else {
-                        m.commands.push(Command { name: key.to_owned(), function: value.to_owned(), ..Command::default() });
+                        m.commands.push(Command {
+                            name: key.to_owned(),
+                            function: value.to_owned(),
+                            ..Command::default()
+                        });
                     }
                 }
                 Sec::Command(at) => {
@@ -282,7 +305,12 @@ pub fn derive_id(project_name: &str) -> String {
 #[must_use]
 pub fn scaffold_text(project_name: &str) -> String {
     let mut t = String::from("[module]\r\n");
-    for (key, value) in [("id", derive_id(project_name)), ("name", display_value(project_name, false)), ("version", "1.0.0".to_owned()), ("api", "1".to_owned())] {
+    for (key, value) in [
+        ("id", derive_id(project_name)),
+        ("name", display_value(project_name, false)),
+        ("version", "1.0.0".to_owned()),
+        ("api", "1".to_owned()),
+    ] {
         t.push_str(&format!("{key:<11} = {value}\r\n"));
     }
     t
@@ -309,7 +337,13 @@ mod tests {
         assert_eq!(m.provides_modes, [ProvidesMode { id: "od_mode".into(), title: "od_mode_title".into() }]);
         assert_eq!(m.provides_extra, ["weird = 1"]);
         assert_eq!(m.exclude, ["docs", "*.psd"]);
-        assert_eq!(&*m.vars, [GlobalVar { name: "kills".into(), value: "0".into() }, GlobalVar { name: "met".into(), value: "\"1\"".into() }]);
+        assert_eq!(
+            &*m.vars,
+            [
+                GlobalVar { name: "kills".into(), value: "0".into() },
+                GlobalVar { name: "met".into(), value: "\"1\"".into() }
+            ]
+        );
         assert_eq!(m.pda_layout, "ui\\od.pdaasset");
         // the section read first made the entry; its [commands] line declared it
         assert_eq!(m.commands.len(), 2);
@@ -322,7 +356,10 @@ mod tests {
 
     #[test]
     fn scaffold_is_the_cpp_one() {
-        assert_eq!(scaffold_text("My Mod"), "[module]\r\nid          = my_mod\r\nname        = My Mod\r\nversion     = 1.0.0\r\napi         = 1\r\n");
+        assert_eq!(
+            scaffold_text("My Mod"),
+            "[module]\r\nid          = my_mod\r\nname        = My Mod\r\nversion     = 1.0.0\r\napi         = 1\r\n"
+        );
         assert_eq!(derive_id(""), "unnamed_mod");
         assert_eq!(derive_id("Ночь"), "________");
         let m = Manifest::parse(&ManifestDoc::parse(&scaffold_text("x;y")));

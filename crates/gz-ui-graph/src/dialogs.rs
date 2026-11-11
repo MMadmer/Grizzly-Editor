@@ -21,7 +21,13 @@ fn error_text(reply: &Json) -> String {
 }
 
 /// Runs a command as the window would and keeps its reply for a later frame.
-fn call(editor: &Arc<Editor>, ctx: &egui::Context, name: &'static str, args: Args, slot: Arc<Mutex<Option<Json>>>) {
+fn call(
+    editor: &Arc<Editor>,
+    ctx: &egui::Context,
+    name: &'static str,
+    args: Args,
+    slot: Arc<Mutex<Option<Json>>>,
+) {
     let ed = editor.clone();
     let ctx = ctx.clone();
     let origin = editor.ui_origin();
@@ -76,7 +82,13 @@ impl ProjectFind {
 
     fn search(&mut self, editor: &Arc<Editor>, ctx: &egui::Context) {
         self.busy = true;
-        call(editor, ctx, "quest_project_find", args(&[("query", Json::from(self.query.clone()))]), self.reply.clone());
+        call(
+            editor,
+            ctx,
+            "quest_project_find",
+            args(&[("query", Json::from(self.query.clone()))]),
+            self.reply.clone(),
+        );
     }
 
     fn take_reply(&mut self) {
@@ -93,7 +105,12 @@ impl ProjectFind {
         self.complete = r.get("complete").and_then(Json::as_bool).unwrap_or(true);
         for x in r.get("results").and_then(Json::as_array).into_iter().flatten() {
             let s = |k: &str| x.get(k).and_then(Json::as_str).unwrap_or("").to_owned();
-            self.results.push(FoundRow { path: s("path"), node: s("node"), title: s("title"), source: s("source") });
+            self.results.push(FoundRow {
+                path: s("path"),
+                node: s("node"),
+                title: s("title"),
+                source: s("source"),
+            });
         }
         for d in r.get("diagnostics").and_then(Json::as_array).into_iter().flatten() {
             let s = |k: &str| d.get(k).and_then(Json::as_str).unwrap_or("").to_owned();
@@ -102,7 +119,10 @@ impl ProjectFind {
         let generation = r.get("generation").and_then(Json::as_u64).unwrap_or(0);
         let fingerprint = r.get("fingerprint").and_then(Json::as_str).unwrap_or("");
         self.status = if generation > 0 {
-            format!("{} \u{b7} index generation {generation} \u{b7} fingerprint {fingerprint}", crate::look::plural(self.results.len(), "result", "results"))
+            format!(
+                "{} \u{b7} index generation {generation} \u{b7} fingerprint {fingerprint}",
+                crate::look::plural(self.results.len(), "result", "results")
+            )
         } else {
             String::new()
         };
@@ -128,7 +148,11 @@ impl ProjectFind {
             |ui| {
                 ui.horizontal(|ui| {
                     let w = (ui.available_width() - 104.0).max(gz_ui::units::em(8.0));
-                    let r = gz_ui::SearchField::new(&mut self.query).hint("Find nodes in every graph of the project").min_em(12.0).width(w).show(ui);
+                    let r = gz_ui::SearchField::new(&mut self.query)
+                        .hint("Find nodes in every graph of the project")
+                        .min_em(12.0)
+                        .width(w)
+                        .show(ui);
                     if self.focus {
                         r.request_focus();
                         self.focus = false;
@@ -141,7 +165,11 @@ impl ProjectFind {
                     }
                 });
                 if !self.complete {
-                    gz_ui::text::status(ui, Tone::Warning, "Incomplete: one or more graph files could not be read.");
+                    gz_ui::text::status(
+                        ui,
+                        Tone::Warning,
+                        "Incomplete: one or more graph files could not be read.",
+                    );
                 }
                 if !self.error.is_empty() {
                     gz_ui::text::status(ui, Tone::Error, &self.error);
@@ -150,21 +178,37 @@ impl ProjectFind {
                     gz_ui::state::busy_line(ui, "Searching the project");
                 } else if self.results.is_empty() {
                     if self.error.is_empty() {
-                        gz_ui::text::status(ui, Tone::Muted, if self.query.is_empty() { "Type what to find, then Search." } else { "No node matches." });
+                        gz_ui::text::status(
+                            ui,
+                            Tone::Muted,
+                            if self.query.is_empty() {
+                                "Type what to find, then Search."
+                            } else {
+                                "No node matches."
+                            },
+                        );
                     }
                 } else {
-                    gz_ui::list::list(ui, "gz-ui-graph.project_find", egui::vec2(0.0, 14.0 * 22.0 + 10.0), |l| {
-                        for (i, r) in self.results.iter().enumerate() {
-                            let text_ = format!("{}  \u{b7}  {}  \u{b7}  {}  \u{b7}  {}", r.path, r.node, r.title, r.source);
-                            if l.row(&format!("r{i}"), false, |ui| {
-                                gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::Middle);
-                            })
-                            .clicked()
-                            {
-                                go = Some(i);
+                    gz_ui::list::list(
+                        ui,
+                        "gz-ui-graph.project_find",
+                        egui::vec2(0.0, 14.0 * 22.0 + 10.0),
+                        |l| {
+                            for (i, r) in self.results.iter().enumerate() {
+                                let text_ = format!(
+                                    "{}  \u{b7}  {}  \u{b7}  {}  \u{b7}  {}",
+                                    r.path, r.node, r.title, r.source
+                                );
+                                if l.row(&format!("r{i}"), false, |ui| {
+                                    gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::Middle);
+                                })
+                                .clicked()
+                                {
+                                    go = Some(i);
+                                }
                             }
-                        }
-                    });
+                        },
+                    );
                 }
                 for d in &self.diagnostics {
                     gz_ui::text::status(ui, Tone::Warning, d);
@@ -237,7 +281,14 @@ impl TaskRename {
                 gz_ui::grid::text_field(ui, &mut self.to);
                 ui.add_space(4.0);
                 gz_ui::text::status(ui, Tone::Warning, "This changes the task's runtime and save identity.");
-                gz_ui::text::status(ui, Tone::Muted, &format!("Saves and running quest state recorded under '{}' are not migrated.", self.from));
+                gz_ui::text::status(
+                    ui,
+                    Tone::Muted,
+                    &format!(
+                        "Saves and running quest state recorded under '{}' are not migrated.",
+                        self.from
+                    ),
+                );
                 if !self.error.is_empty() {
                     gz_ui::text::status(ui, Tone::Error, &self.error);
                 }
@@ -299,7 +350,8 @@ impl TaskRefs {
         self.generation = 0;
         self.open = true;
         self.busy = true;
-        let a = args(&[("type", Json::from("task_id")), ("value", Json::from(id)), ("path", Json::from(path))]);
+        let a =
+            args(&[("type", Json::from("task_id")), ("value", Json::from(id)), ("path", Json::from(path))]);
         call(editor, ctx, "quest_references", a, self.reply.clone());
     }
 
@@ -312,7 +364,12 @@ impl TaskRefs {
                 self.generation = r.get("generation").and_then(Json::as_u64).unwrap_or(0);
                 for x in r.get("references").and_then(Json::as_array).into_iter().flatten() {
                     let s = |k: &str| x.get(k).and_then(Json::as_str).unwrap_or("").to_owned();
-                    self.refs.push(RefRow { node: s("node"), slot: s("slot"), kind: s("kind"), param: s("param") });
+                    self.refs.push(RefRow {
+                        node: s("node"),
+                        slot: s("slot"),
+                        kind: s("kind"),
+                        param: s("param"),
+                    });
                 }
                 for d in r.get("diagnostics").and_then(Json::as_array).into_iter().flatten() {
                     self.diagnostics.push(d.get("message").and_then(Json::as_str).unwrap_or("").to_owned());
@@ -328,19 +385,27 @@ impl TaskRefs {
         let p = palette(ui.ctx());
         let mut go = None;
         let close = Cell::new(false);
-        let status = if self.generation > 0 { format!("Index generation {}", self.generation) } else { String::new() };
+        let status =
+            if self.generation > 0 { format!("Index generation {}", self.generation) } else { String::new() };
         let mut open = self.open;
         Dialog::new("Task References", "nq_task_references", DialogSize::M).show(
             ui,
             &mut open,
             |ui| {
-                gz_ui::text::prose(ui, &format!("{} reference(s) to the task '{}'", self.refs.len(), self.id));
+                gz_ui::text::prose(
+                    ui,
+                    &format!("{} reference(s) to the task '{}'", self.refs.len(), self.id),
+                );
                 if self.busy {
                     gz_ui::state::busy_line(ui, "Looking through the project");
                     return;
                 }
                 if !self.complete {
-                    gz_ui::text::status(ui, Tone::Warning, "Incomplete: some content could not be proven safe.");
+                    gz_ui::text::status(
+                        ui,
+                        Tone::Warning,
+                        "Incomplete: some content could not be proven safe.",
+                    );
                 }
                 if !self.error.is_empty() {
                     gz_ui::text::status(ui, Tone::Error, &self.error);
@@ -350,18 +415,24 @@ impl TaskRefs {
                         gz_ui::text::status(ui, Tone::Muted, "No typed references.");
                     }
                 } else {
-                    gz_ui::list::list(ui, "gz-ui-graph.task_refs", egui::vec2(0.0, 12.0 * 22.0 + 10.0), |l| {
-                        for (i, r) in self.refs.iter().enumerate() {
-                            let text_ = format!("{}  \u{b7}  {}  \u{b7}  {}.{}", r.node, r.slot, r.kind, r.param);
-                            if l.row(&format!("ref{i}"), false, |ui| {
-                                gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::End);
-                            })
-                            .clicked()
-                            {
-                                go = Some(i);
+                    gz_ui::list::list(
+                        ui,
+                        "gz-ui-graph.task_refs",
+                        egui::vec2(0.0, 12.0 * 22.0 + 10.0),
+                        |l| {
+                            for (i, r) in self.refs.iter().enumerate() {
+                                let text_ =
+                                    format!("{}  \u{b7}  {}  \u{b7}  {}.{}", r.node, r.slot, r.kind, r.param);
+                                if l.row(&format!("ref{i}"), false, |ui| {
+                                    gz_ui::text::label(ui, &text_, Font::Body, p.text, Clip::End);
+                                })
+                                .clicked()
+                                {
+                                    go = Some(i);
+                                }
                             }
-                        }
-                    });
+                        },
+                    );
                 }
                 for d in &self.diagnostics {
                     gz_ui::text::status(ui, Tone::Warning, d);
@@ -377,7 +448,8 @@ impl TaskRefs {
         self.open = open && !close.get();
         let picked = go.and_then(|i| self.refs.get(i)).map(|r| {
             let base = r.slot.split('/').next().unwrap_or("").to_owned();
-            let slot = if base.starts_with("enter:") || base.starts_with("exit:") { base } else { String::new() };
+            let slot =
+                if base.starts_with("enter:") || base.starts_with("exit:") { base } else { String::new() };
             (r.node.clone(), slot)
         });
         if picked.is_some() {
@@ -409,7 +481,10 @@ pub fn draw_text_edit(ui: &mut egui::Ui, te: &mut TextEdit) {
             let font = if te.code { Font::Mono.id() } else { Font::Body.id() };
             let h = if te.code { 340.0 } else { 220.0 };
             let w = ui.available_width();
-            ui.add_sized(egui::vec2(w, h), egui::TextEdit::multiline(&mut te.text).font(font).code_editor_if(te.code));
+            ui.add_sized(
+                egui::vec2(w, h),
+                egui::TextEdit::multiline(&mut te.text).font(font).code_editor_if(te.code),
+            );
         },
         |f| {
             if status.is_empty() {

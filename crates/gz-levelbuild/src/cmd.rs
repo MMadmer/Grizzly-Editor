@@ -31,7 +31,8 @@ pub const JOB_RUN: &str = "level_run";
 const GROUP_RUN: &str = "game";
 const BUSY: &str = "A compiler or the game is running.";
 /// The game's command line for a scene of the editor (`ClickPlayPC`).
-const PLAY_PARAMS: &str = "-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch";
+const PLAY_PARAMS: &str =
+    "-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch";
 
 /// The commands, as the Level tab's toolbar and Build menu name them (`gz-ui-level`'s
 /// `LEVEL_ACTIONS` and `BUILD_ROWS`).
@@ -57,6 +58,9 @@ pub const COMMANDS: [&str; 19] = [
     "compile_spawn",
 ];
 
+/// Files by name, as a build writes them into the level folder.
+type NamedFiles = Vec<(String, Vec<u8>)>;
+
 /// Registers the commands of [`COMMANDS`], `level_rebuild_status` and `level_build` (the same
 /// commands by `action`, with `status`).
 pub fn register(reg: &mut Registry) {
@@ -72,7 +76,9 @@ pub fn register(reg: &mut Registry) {
 
 /// `{collision, ai_map, game_graph}`: what the scene's edits left for the level builders.
 fn rebuild_status(editor: &Arc<Editor>) -> Reply {
-    let Some(session) = editor.project_opt() else { return Ok(json!({ "collision": false, "ai_map": false, "game_graph": false })) };
+    let Some(session) = editor.project_opt() else {
+        return Ok(json!({ "collision": false, "ai_map": false, "game_graph": false }));
+    };
     let r = match session.services.get::<SceneService>() {
         Some(svc) => LevelBuild::of(&session).rebuild(&svc.store.snapshot()),
         None => service::Rebuild::default(),
@@ -121,17 +127,23 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
                 "compile_geometry" => (Program::XrLc, String::new()),
                 "compile_details" => (Program::XrDo, String::new()),
                 // oracle: the menu's "High" passes `-draft` (`RunXrAI_AIMap(true)`)
-                "compile_aimap" => (Program::XrAi, format!("-f {level} {}", if a.str("mode") == Some("low") { "" } else { "-draft" })),
+                "compile_aimap" => (
+                    Program::XrAi,
+                    format!("-f {level} {}", if a.str("mode") == Some("low") { "" } else { "-draft" }),
+                ),
                 _ => (Program::XrAi, format!("-no_separator_check -s {level} -out all")),
             };
             start_run(editor, &session, program, &level, params)
         }
-        "build_cform" | "build_aimap" | "build_game_graph" | "build_ggraph" | "build_all" | "play" | "play_game" | "make_all" | "make_game"
-        | "make_details" | "make_hom" | "make_som" | "make_aimap" => {
+        "build_cform" | "build_aimap" | "build_game_graph" | "build_ggraph" | "build_all" | "play"
+        | "play_game" | "make_all" | "make_game" | "make_details" | "make_hom" | "make_som"
+        | "make_aimap" => {
             if busy {
                 return Err(CmdError::busy(BUSY));
             }
             let act = action.to_owned();
+            // Play's "Verify Space Restrictors" (the Level toolbar's Play menu)
+            let verify = a.flag("verify_restrictors");
             let (ed, s) = (editor.clone(), session.clone());
             let title = match action {
                 "build_cform" => "Building the collision",
@@ -147,9 +159,15 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             };
             let id = editor
                 .jobs
-                .start(JOB_BUILD, Some(JOB_BUILD), title, move |ctx| async move { run_action(&ed, &s, &act, &ctx).await })
+                .start(JOB_BUILD, Some(JOB_BUILD), title, move |ctx| async move {
+                    run_action(&ed, &s, &act, verify, &ctx).await
+                })
                 .map_err(|b| CmdError::busy(format!("{} is still running", b.title)))?;
-            let info = editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the build job was forgotten"))?;
+            let info = editor
+                .jobs
+                .wait(id)
+                .await
+                .ok_or_else(|| CmdError::internal("the build job was forgotten"))?;
             match info.error {
                 Some(e) => Err(CmdError::invalid(e)),
                 None => Ok(info.result.map(|r| (*r).clone()).unwrap_or(json!({}))),
@@ -185,9 +203,19 @@ fn level_dir(editor: &Editor, level: &str) -> PathBuf {
 }
 
 /// Starts a compiler or the game as the `level_run` job; answers once it started.
-fn start_run(editor: &Arc<Editor>, session: &Arc<ProjectSession>, program: Program, level: &str, params: String) -> Reply {
+fn start_run(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    program: Program,
+    level: &str,
+    params: String,
+) -> Reply {
     let Some(exe) = runs::find_exe(&exe_dirs(editor), program) else {
-        return Err(CmdError::invalid(format!("{} is not there: {} was looked for next to the editor and in Bin\\x64\\Release.", program.title(), program.exe())));
+        return Err(CmdError::invalid(format!(
+            "{} is not there: {} was looked for next to the editor and in Bin\\x64\\Release.",
+            program.title(),
+            program.exe()
+        )));
     };
     let args = runs::arguments(program, level, &params);
     let line = runs::command_line(program, &args);
@@ -245,7 +273,8 @@ async fn inputs(editor: &Arc<Editor>, ctx: &JobCtx) -> Result<Inputs, JobError> 
         async move { gz_game::read_game_or_bundled(&ed, rel).await.ok().map(|(b, _)| b) }
     };
     let (sh, xr, gm) = (read("shaders.xr").await, read("shaders_xrlc.xr").await, read("gamemtl.xr").await);
-    let engine = Arc::new(editor.exec.cpu(move || Engine::read(sh.as_deref(), xr.as_deref(), gm.as_deref())).await);
+    let engine =
+        Arc::new(editor.exec.cpu(move || Engine::read(sh.as_deref(), xr.as_deref(), gm.as_deref())).await);
     let settings = gz_scene::game::settings(editor).await;
     Ok(Inputs { snap, lib: svc.library.clone(), engine, settings })
 }
@@ -275,7 +304,8 @@ fn graph_points(scene: &SceneState, settings: Option<&(dyn Settings + Sync)>) ->
 }
 
 fn guid() -> [u8; 16] {
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let t =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let mut g = [0u8; 16];
     g.copy_from_slice(&(t ^ (u128::from(std::process::id()) << 64)).to_le_bytes());
     g
@@ -298,7 +328,11 @@ async fn ensure_cform(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs) 
 }
 
 /// `EScene::BuildAIMap`: also forgets the game graph.
-async fn ensure_ai(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs) -> Result<Arc<gz_fmt_level::LevelGraph>, JobError> {
+async fn ensure_ai(
+    editor: &Arc<Editor>,
+    lb: &Arc<LevelBuild>,
+    inp: &Inputs,
+) -> Result<Arc<gz_fmt_level::LevelGraph>, JobError> {
     let key = service::ai_key(&inp.snap);
     if let Some(b) = lb.state.lock().level_graph.as_ref().filter(|b| b.key == key) {
         return Ok(b.value.clone());
@@ -323,7 +357,11 @@ async fn ensure_ai(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs) -> 
 }
 
 /// `EScene::BuildGameGraph`.
-async fn ensure_graph(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs) -> Result<Arc<LevelGameGraph>, JobError> {
+async fn ensure_graph(
+    editor: &Arc<Editor>,
+    lb: &Arc<LevelBuild>,
+    inp: &Inputs,
+) -> Result<Arc<LevelGameGraph>, JobError> {
     let lg = ensure_ai(editor, lb, inp).await?;
     let key = service::graph_key(&inp.snap);
     if let Some(b) = lb.state.lock().game_graph.as_ref().filter(|b| b.key == key) {
@@ -354,7 +392,11 @@ async fn ensure_graph(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs) 
     Ok(g)
 }
 
-async fn write_files(editor: &Arc<Editor>, dir: PathBuf, files: Vec<(String, Vec<u8>)>) -> Result<(), JobError> {
+async fn write_files(
+    editor: &Arc<Editor>,
+    dir: PathBuf,
+    files: Vec<(String, Vec<u8>)>,
+) -> Result<(), JobError> {
     editor
         .exec
         .io(move || -> Result<(), String> {
@@ -364,7 +406,8 @@ async fn write_files(editor: &Arc<Editor>, dir: PathBuf, files: Vec<(String, Vec
                 if let Some(parent) = p.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                gz_editor::fsx::write_atomic(&p, &bytes).map_err(|e| format!("Can't write {}: {e}", p.display()))?;
+                gz_editor::fsx::write_atomic(&p, &bytes)
+                    .map_err(|e| format!("Can't write {}: {e}", p.display()))?;
             }
             Ok(())
         })
@@ -378,7 +421,9 @@ async fn lod_pictures(editor: &Arc<Editor>, inp: &Inputs) -> HashMap<String, (Ve
     for o in inp.snap.of_class(ObjClass::SceneObject) {
         let ObjData::SceneObject(d) = &o.data else { continue };
         let Some(lo) = inp.lib.cached(&d.reference) else { continue };
-        if lo.object.flags.contains(ObjectFlags::USING_LOD) && lo.object.flags.contains(ObjectFlags::MULTIPLE_USAGE) {
+        if lo.object.flags.contains(ObjectFlags::USING_LOD)
+            && lo.object.flags.contains(ObjectFlags::MULTIPLE_USAGE)
+        {
             let n = prj::lod_texture_name(&lo.name);
             names.push(format!("{n}_nm"));
             names.push(n);
@@ -413,7 +458,38 @@ async fn textures(editor: &Arc<Editor>, names: Vec<String>) -> HashMap<String, (
 }
 
 /// `SceneBuilder::Compile`: the build project and every file beside it.
-async fn compile_level(editor: &Arc<Editor>, inp: &Inputs, ctx: &JobCtx) -> Result<serde_json::Value, JobError> {
+/// `Scene->Validate` before a build: its lines go to the log, and a scene that fails is not
+/// built (`VERIFY_COMPILE(.., "Validation failed.", "Invalid scene.")`).
+async fn validate_scene(
+    editor: &Arc<Editor>,
+    inp: &Inputs,
+    tests: crate::validate::Tests,
+    ctx: &JobCtx,
+) -> Result<(), JobError> {
+    ctx.stage("Validating the scene");
+    let (snap, lib, engine) = (inp.snap.clone(), inp.lib.clone(), inp.engine.clone());
+    let checked =
+        editor.exec.cpu(move || crate::validate::validate(&snap, &files::lookup(lib), &engine, tests)).await;
+    let (lines, ok) = match checked {
+        Ok(l) => (l, true),
+        Err(l) => (l, false),
+    };
+    for line in &lines {
+        if line.starts_with('*') || line.starts_with('!') {
+            editor.log.warn(line);
+        } else {
+            editor.log.info(line);
+        }
+    }
+    if ok { Ok(()) } else { Err(JobError::new("ERROR: Validation failed. Invalid scene.")) }
+}
+
+async fn compile_level(
+    editor: &Arc<Editor>,
+    inp: &Inputs,
+    ctx: &JobCtx,
+) -> Result<serde_json::Value, JobError> {
+    validate_scene(editor, inp, crate::validate::Tests::BUILD, ctx).await?;
     let level = inp.snap.meta.level.level_path.to_string();
     if level.is_empty() {
         return Err(JobError::new("ERROR: Failed to prepare level path "));
@@ -433,10 +509,11 @@ async fn compile_level(editor: &Arc<Editor>, inp: &Inputs, ctx: &JobCtx) -> Resu
     let detail_textures = Arc::new(textures(editor, detail_names).await);
     ctx.check()?;
     ctx.stage("Compiling the static geometry");
-    let (snap, lib, engine, settings) = (inp.snap.clone(), inp.lib.clone(), inp.engine.clone(), inp.settings.clone());
+    let (snap, lib, engine, settings) =
+        (inp.snap.clone(), inp.lib.clone(), inp.engine.clone(), inp.settings.clone());
     let made = editor
         .exec
-        .cpu(move || -> crate::Result<(Vec<(String, Vec<u8>)>, Vec<String>)> {
+        .cpu(move || -> crate::Result<(NamedFiles, Vec<String>)> {
             let look = files::lookup(lib);
             let lod_src = |n: &str| lods.get(n).cloned();
             let c = prj::compile(&snap, &look, &engine, &lod_src)?;
@@ -464,14 +541,17 @@ async fn compile_level(editor: &Arc<Editor>, inp: &Inputs, ctx: &JobCtx) -> Resu
             match snap.bulk.details.as_ref().filter(|d| !d.model.slots.is_empty()) {
                 Some(d) => {
                     let tex = |n: &str| detail_textures.get(n).cloned();
-                    let (file, dds) = crate::details::export(&d.model, &look, &tex).map_err(|e| crate::BuildError::new(format!("ERROR: Detail Objects export failed. {}", e.0)))?;
+                    let (file, dds) = crate::details::export(&d.model, &look, &tex).map_err(|e| {
+                        crate::BuildError::new(format!("ERROR: Detail Objects export failed. {}", e.0))
+                    })?;
                     out.push(("build.details".to_owned(), file));
                     out.push((format!("{}.dds", crate::details::DETAILS_TEX_NAME), dds));
                     log.push("Process Detail Objects - done.".to_owned());
                 }
                 None => log.push("Process Detail Objects - failed.".to_owned()),
             }
-            let marks = snap.bulk.wallmarks.as_ref().map(|w| crate::wallmarks::read(&w.raw)).unwrap_or_default();
+            let marks =
+                snap.bulk.wallmarks.as_ref().map(|w| crate::wallmarks::read(&w.raw)).unwrap_or_default();
             if marks.is_empty() {
                 log.push("Process Wallmarks - failed.".to_owned());
             } else {
@@ -501,11 +581,20 @@ async fn compile_level(editor: &Arc<Editor>, inp: &Inputs, ctx: &JobCtx) -> Resu
 
 /// `EScene::BuildForPCPlay`: the level must be compiled; the collision, the AI map and the game
 /// graph are made when they are not there; `level.ai.temp` and `editor.spawn` are written.
-async fn build_for_play(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs, ctx: &JobCtx) -> Result<(), JobError> {
+async fn build_for_play(
+    editor: &Arc<Editor>,
+    lb: &Arc<LevelBuild>,
+    inp: &Inputs,
+    verify_restrictors: bool,
+    ctx: &JobCtx,
+) -> Result<(), JobError> {
     let level = inp.snap.meta.level.level_path.to_string();
     let dir = level_dir(editor, &level);
     let d2 = dir.clone();
-    let built = editor.exec.io(move || ["level", "level.ltx", "level.geom", "level.cform"].iter().all(|f| d2.join(f).is_file())).await;
+    let built = editor
+        .exec
+        .io(move || ["level", "level.ltx", "level.geom", "level.cform"].iter().all(|f| d2.join(f).is_file()))
+        .await;
     if !built {
         return Err(JobError::new("Level is not builded!"));
     }
@@ -540,12 +629,17 @@ async fn build_for_play(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs
                     ObjData::Way(w) => Some(Way {
                         name: o.name.to_string(),
                         points: w.points.iter().map(|p| (p.name.to_string(), p.position, p.flags)).collect(),
-                        links: w.points.iter().enumerate().flat_map(|(i, p)| p.links.iter().map(move |(t, pr)| (i as u32, *t, *pr))).collect(),
+                        links: w
+                            .points
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(i, p)| p.links.iter().map(move |(t, pr)| (i as u32, *t, *pr)))
+                            .collect(),
                     }),
                     _ => None,
                 })
                 .collect();
-            spawn::build_spawn(&lv, &nav, &gg.graph, elements, &ways, guid())
+            spawn::build_spawn(&lv, &nav, &gg.graph, elements, &ways, guid(), verify_restrictors)
         })
         .await
         .map_err(|e| {
@@ -556,7 +650,9 @@ async fn build_for_play(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs
         editor.log.info(l);
     }
     let ai_temp = lg.write().map_err(|e| JobError::new(e.to_string()))?;
-    write_files(editor, dir, vec![("level.ai.temp".to_owned(), ai_temp)]).await.map_err(|_| JobError::new("level.ai.temp can't save!\nSee log."))?;
+    write_files(editor, dir, vec![("level.ai.temp".to_owned(), ai_temp)])
+        .await
+        .map_err(|_| JobError::new("level.ai.temp can't save!\nSee log."))?;
     let spawns = editor.paths.root.join("gamedata").join("spawns");
     write_files(editor, spawns, vec![("editor.spawn".to_owned(), built.bytes)]).await?;
     Ok(())
@@ -564,7 +660,15 @@ async fn build_for_play(editor: &Arc<Editor>, lb: &Arc<LevelBuild>, inp: &Inputs
 
 /// `MakeGame`, `MakeDetails`, `MakeHOM`, `MakeSOM`, `MakeAIMap`: one part of the level files,
 /// into the level folder as it is.
-async fn make_part(editor: &Arc<Editor>, inp: &Inputs, action: &str, ctx: &JobCtx) -> Result<serde_json::Value, JobError> {
+async fn make_part(
+    editor: &Arc<Editor>,
+    inp: &Inputs,
+    action: &str,
+    ctx: &JobCtx,
+) -> Result<serde_json::Value, JobError> {
+    if action == "make_game" {
+        validate_scene(editor, inp, crate::validate::Tests::MAKE_GAME, ctx).await?;
+    }
     let level = inp.snap.meta.level.level_path.to_string();
     if level.is_empty() {
         return Err(JobError::new("ERROR: Failed to prepare level path. "));
@@ -579,7 +683,8 @@ async fn make_part(editor: &Arc<Editor>, inp: &Inputs, action: &str, ctx: &JobCt
         Arc::new(HashMap::new())
     };
     ctx.check()?;
-    let (snap, lib, engine, settings, act) = (inp.snap.clone(), inp.lib.clone(), inp.engine.clone(), inp.settings.clone(), action.to_owned());
+    let (snap, lib, engine, settings, act) =
+        (inp.snap.clone(), inp.lib.clone(), inp.engine.clone(), inp.settings.clone(), action.to_owned());
     let made: Vec<(String, Vec<u8>)> = editor
         .exec
         .cpu(move || -> crate::Result<Vec<(String, Vec<u8>)>> {
@@ -587,18 +692,43 @@ async fn make_part(editor: &Arc<Editor>, inp: &Inputs, action: &str, ctx: &JobCt
             Ok(match act.as_str() {
                 "make_game" => {
                     let mut out = vec![("level.ltx".to_owned(), files::level_ltx(&snap, &look))];
-                    out.extend(files::game_files(&snap, sync_settings(&settings))?.files.into_iter().map(|(n, b)| (n.to_owned(), b)));
+                    out.extend(
+                        files::game_files(&snap, sync_settings(&settings))?
+                            .files
+                            .into_iter()
+                            .map(|(n, b)| (n.to_owned(), b)),
+                    );
                     out
                 }
                 "make_details" => {
-                    let d = snap.bulk.details.as_ref().filter(|d| !d.model.slots.is_empty()).ok_or_else(|| crate::BuildError::new("ERROR: Export failed. "))?;
+                    let d = snap
+                        .bulk
+                        .details
+                        .as_ref()
+                        .filter(|d| !d.model.slots.is_empty())
+                        .ok_or_else(|| crate::BuildError::new("ERROR: Export failed. "))?;
                     let tex = |n: &str| detail_textures.get(n).cloned();
                     let (file, dds) = crate::details::export(&d.model, &look, &tex)?;
-                    vec![("build.details".to_owned(), file), (format!("{}.dds", crate::details::DETAILS_TEX_NAME), dds)]
+                    vec![
+                        ("build.details".to_owned(), file),
+                        (format!("{}.dds", crate::details::DETAILS_TEX_NAME), dds),
+                    ]
                 }
-                "make_hom" => vec![("level.hom".to_owned(), files::hom(&snap, &look).ok_or_else(|| crate::BuildError::new("ERROR: Failed to build HOM model. "))?)],
-                "make_som" => vec![("level.som".to_owned(), files::som(&snap, &look, &engine)?.ok_or_else(|| crate::BuildError::new("ERROR: Failed to build SOM model. "))?)],
-                _ => vec![("build.aimap".to_owned(), files::build_aimap(&snap).ok_or_else(|| crate::BuildError::new("ERROR: Failed to build AI-Map. "))?)],
+                "make_hom" => vec![(
+                    "level.hom".to_owned(),
+                    files::hom(&snap, &look)
+                        .ok_or_else(|| crate::BuildError::new("ERROR: Failed to build HOM model. "))?,
+                )],
+                "make_som" => vec![(
+                    "level.som".to_owned(),
+                    files::som(&snap, &look, &engine)?
+                        .ok_or_else(|| crate::BuildError::new("ERROR: Failed to build SOM model. "))?,
+                )],
+                _ => vec![(
+                    "build.aimap".to_owned(),
+                    files::build_aimap(&snap)
+                        .ok_or_else(|| crate::BuildError::new("ERROR: Failed to build AI-Map. "))?,
+                )],
             })
         })
         .await
@@ -609,7 +739,13 @@ async fn make_part(editor: &Arc<Editor>, inp: &Inputs, action: &str, ctx: &JobCt
     Ok(json!({ "level": level, "files": names }))
 }
 
-async fn run_action(editor: &Arc<Editor>, session: &Arc<ProjectSession>, action: &str, ctx: &JobCtx) -> Result<serde_json::Value, JobError> {
+async fn run_action(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    action: &str,
+    verify_restrictors: bool,
+    ctx: &JobCtx,
+) -> Result<serde_json::Value, JobError> {
     let lb = LevelBuild::of(session);
     let inp = inputs(editor, ctx).await?;
     match action {
@@ -635,17 +771,21 @@ async fn run_action(editor: &Arc<Editor>, session: &Arc<ProjectSession>, action:
             editor.log.info("Building OK.");
             Ok(json!({ "build": r }))
         }
-        "make_game" | "make_details" | "make_hom" | "make_som" | "make_aimap" => make_part(editor, &inp, action, ctx).await,
+        "make_game" | "make_details" | "make_hom" | "make_som" | "make_aimap" => {
+            make_part(editor, &inp, action, ctx).await
+        }
         "build_all" => {
             let r = compile_level(editor, &inp, ctx).await?;
             editor.log.info("Building OK.");
             let level = inp.snap.meta.level.level_path.to_string();
-            let started = start_run(editor, session, Program::XrLc, &level, String::new()).map_err(|e| JobError::new(e.message))?;
+            let started = start_run(editor, session, Program::XrLc, &level, String::new())
+                .map_err(|e| JobError::new(e.message))?;
             Ok(json!({ "build": r, "run": started }))
         }
         _ => {
-            build_for_play(editor, &lb, &inp, ctx).await?;
-            let started = start_run(editor, session, Program::Game, "", PLAY_PARAMS.to_owned()).map_err(|e| JobError::new(e.message))?;
+            build_for_play(editor, &lb, &inp, verify_restrictors, ctx).await?;
+            let started = start_run(editor, session, Program::Game, "", PLAY_PARAMS.to_owned())
+                .map_err(|e| JobError::new(e.message))?;
             Ok(json!({ "run": started }))
         }
     }

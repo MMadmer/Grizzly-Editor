@@ -2,7 +2,9 @@
 //! module skeleton a project gets, files that follow a rename, the templates `content_create`
 //! writes and the lists `list_assets` answers.
 
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use gz_editor::{Editor, ProjectSession};
@@ -12,13 +14,20 @@ use rustc_hash::FxHashMap;
 type SessionHook = Arc<dyn Fn(&Arc<Editor>, &Arc<ProjectSession>) + Send + Sync>;
 pub(crate) type ScaffoldHook = Arc<dyn Fn(&Path, &str) -> Result<(), String> + Send + Sync>;
 type RenameHook = Arc<dyn Fn(&Arc<Editor>, &Path, &Path) + Send + Sync>;
+type BeforeCloseHook =
+    Arc<dyn Fn(Arc<Editor>, Arc<ProjectSession>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+type LiveSceneFn = Arc<dyn Fn(&Editor) -> bool + Send + Sync>;
+type FolderFn = Arc<dyn Fn(&Editor) -> Result<String, String> + Send + Sync>;
 
 /// Hooks other areas register in `editor.services`; this crate's open, close, create and rename
 /// call them.
 #[derive(Default)]
 pub struct ProjectHooks {
     open: RwLock<Vec<SessionHook>>,
+    before_close: RwLock<Vec<BeforeCloseHook>>,
     close: RwLock<Vec<SessionHook>>,
+    content_folder: RwLock<Option<FolderFn>>,
+    live_scene: RwLock<Option<LiveSceneFn>>,
     scaffold: RwLock<Vec<ScaffoldHook>>,
     renamed: RwLock<Vec<RenameHook>>,
 }
@@ -34,6 +43,46 @@ impl ProjectHooks {
     /// opening the last scene.
     pub fn on_open(&self, f: impl Fn(&Arc<Editor>, &Arc<ProjectSession>) + Send + Sync + 'static) {
         self.open.write().push(Arc::new(f));
+    }
+
+    /// Runs first when a project closes - before the other close hooks and before anything of
+    /// the session is dropped - and is awaited: what still needs the open scene
+    /// (`preview.png`) is taken here.
+    pub fn on_before_close<F>(
+        &self,
+        f: impl Fn(Arc<Editor>, Arc<ProjectSession>) -> F + Send + Sync + 'static,
+    ) where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.before_close.write().push(Arc::new(move |ed, session| Box::pin(f(ed, session))));
+    }
+
+    /// Where `content_create` makes an asset when the caller names no folder: the folder the
+    /// Content Browser shows (project-relative, `""` the root), or why it cannot (the browser
+    /// shows a source that is not the project). Without a provider: the project root.
+    pub fn provide_content_folder(
+        &self,
+        f: impl Fn(&Editor) -> Result<String, String> + Send + Sync + 'static,
+    ) {
+        *self.content_folder.write() = Some(Arc::new(f));
+    }
+
+    pub(crate) fn content_folder(&self, editor: &Editor) -> Result<String, String> {
+        let f = self.content_folder.read().clone();
+        f.map_or_else(|| Ok(String::new()), |f| f(editor))
+    }
+
+    /// Whether a scene with something in it is open (`EditorProject::SetLiveSceneQuery`): a
+    /// different game is not linked under it.
+    pub fn provide_live_scene(&self, f: impl Fn(&Editor) -> bool + Send + Sync + 'static) {
+        *self.live_scene.write() = Some(Arc::new(f));
+    }
+
+    /// The scene area's answer; `false` without one.
+    #[must_use]
+    pub fn live_scene(&self, editor: &Editor) -> bool {
+        let f = self.live_scene.read().clone();
+        f.is_some_and(|f| f(editor))
     }
 
     /// Runs while the closing project is still open, after its unsaved work was settled.
@@ -58,6 +107,13 @@ impl ProjectHooks {
         let hooks: Vec<SessionHook> = self.open.read().clone();
         for h in hooks {
             h(editor, session);
+        }
+    }
+
+    pub(crate) async fn run_before_close(&self, editor: &Arc<Editor>, session: &Arc<ProjectSession>) {
+        let hooks: Vec<BeforeCloseHook> = self.before_close.read().clone();
+        for h in hooks {
+            h(editor.clone(), session.clone()).await;
         }
     }
 
@@ -94,7 +150,9 @@ impl TemplateKind {
     /// `quest`, `behaviour`, `character` or `pda`, any case.
     #[must_use]
     pub fn parse(kind: &str) -> Option<Self> {
-        [Self::Quest, Self::Behaviour, Self::Character, Self::Pda].into_iter().find(|k| k.key().eq_ignore_ascii_case(kind))
+        [Self::Quest, Self::Behaviour, Self::Character, Self::Pda]
+            .into_iter()
+            .find(|k| k.key().eq_ignore_ascii_case(kind))
     }
 
     #[must_use]
@@ -164,7 +222,11 @@ impl AssetTemplates {
         editor.services.get_or_init(AssetTemplates::default)
     }
 
-    pub fn provide(&self, kind: TemplateKind, f: impl Fn(&TemplateCx<'_>) -> Result<Vec<u8>, String> + Send + Sync + 'static) {
+    pub fn provide(
+        &self,
+        kind: TemplateKind,
+        f: impl Fn(&TemplateCx<'_>) -> Result<Vec<u8>, String> + Send + Sync + 'static,
+    ) {
         self.map.write().insert(kind, Arc::new(f));
     }
 
@@ -174,7 +236,18 @@ impl AssetTemplates {
 }
 
 /// The content browser's categories, in its order, as `list_assets` names them.
-pub const CATEGORIES: [&str; 10] = ["Objects", "Levels", "Groups", "Visuals", "Textures", "Textures (raw)", "Particles", "Sounds", "Entities", "Light Anims"];
+pub const CATEGORIES: [&str; 10] = [
+    "Objects",
+    "Levels",
+    "Groups",
+    "Visuals",
+    "Textures",
+    "Textures (raw)",
+    "Particles",
+    "Sounds",
+    "Entities",
+    "Light Anims",
+];
 
 type ListFn = Arc<dyn Fn(&Editor) -> Vec<String> + Send + Sync>;
 

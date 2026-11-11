@@ -44,7 +44,12 @@ pub(crate) fn from_lua(v: &mlua::Value, omit: &[&str], limits: &Limits) -> Resul
     Ok(convert(v, omit, 0, &mut budget)?.unwrap_or(Value::Nil))
 }
 
-fn convert(v: &mlua::Value, omit: &[&str], depth: usize, budget: &mut Budget<'_>) -> Result<Option<Value>, String> {
+fn convert(
+    v: &mlua::Value,
+    omit: &[&str],
+    depth: usize,
+    budget: &mut Budget<'_>,
+) -> Result<Option<Value>, String> {
     budget.values += 1;
     if budget.values > budget.limits.values {
         return Err(format!("the result holds more than {} values", budget.limits.values));

@@ -11,7 +11,9 @@ use gz_chunk::{Reader, Writer};
 use rayon::prelude::*;
 use smol_str::SmolStr;
 
-use crate::bytes::{f32_at, fits, fixed_str, push_fixed_str, push_vec3s, read_vec3s, u16_at, u32_at, vec3_at};
+use crate::bytes::{
+    f32_at, fits, fixed_str, push_fixed_str, push_vec3s, read_vec3s, u16_at, u32_at, vec3_at,
+};
 use crate::{LevelError, Result};
 
 /// `XRCL_CURRENT_VERSION`: the version the build writes.
@@ -283,8 +285,15 @@ impl Light {
         }
         w.w_vec3(self.position);
         w.w_vec3(self.direction);
-        for v in [self.range, self.falloff, self.attenuation0, self.attenuation1, self.attenuation2, self.theta, self.phi]
-        {
+        for v in [
+            self.range,
+            self.falloff,
+            self.attenuation0,
+            self.attenuation1,
+            self.attenuation2,
+            self.theta,
+            self.phi,
+        ] {
             w.w_f32(v);
         }
     }
@@ -409,9 +418,9 @@ fn read_mu_models(bytes: &[u8]) -> Result<Vec<MuModel>> {
         let face_count = r.r_u32()?;
         // the faces, the lod id and the smoothing groups after them
         let nf = fits(r.elapsed(), u64::from(face_count), FACE as u64 + 4, "multi-usage model faces")?;
-        let faces = r.take(nf * FACE)?.chunks_exact(FACE).map(BuildFace::read).collect();
+        let faces = r.take(nf * FACE)?.as_chunks::<FACE>().0.iter().map(|c| BuildFace::read(c)).collect();
         let lod_id = r.r_u16()?;
-        let smooth_groups = r.take(nf * 4)?.chunks_exact(4).map(|c| u32_at(c, 0)).collect();
+        let smooth_groups = r.take(nf * 4)?.as_chunks::<4>().0.iter().map(|c| u32_at(c, 0)).collect();
         out.push(MuModel { name, verts, faces, lod_id, smooth_groups });
     }
     Ok(out)
@@ -437,7 +446,7 @@ impl BuildProject {
             out.faces = read_faces(c.bytes()).into();
         }
         if let Some(c) = r.open_chunk(chunk::SMOOTH_GROUPS)? {
-            out.smooth_groups = c.bytes().chunks_exact(4).map(|b| u32_at(b, 0)).collect();
+            out.smooth_groups = c.bytes().as_chunks::<4>().0.iter().map(|b| u32_at(b, 0)).collect();
         }
         out.materials = records(&r, chunk::MATERIALS, MATERIAL, |b| BuildMaterial {
             surface: u16_at(b, 0),
@@ -469,7 +478,7 @@ impl BuildProject {
                 let name = SmolStr::new(fixed_str(c.take(64)?));
                 let count = c.r_u32()?;
                 let n = fits(c.elapsed(), u64::from(count), 4, "light controller keys")?;
-                let data = c.take(n * 4)?.chunks_exact(4).map(|b| u32_at(b, 0)).collect();
+                let data = c.take(n * 4)?.as_chunks::<4>().0.iter().map(|b| u32_at(b, 0)).collect();
                 out.light_controls.push(LightControl { name, data });
             }
         }
@@ -508,7 +517,13 @@ impl BuildProject {
             for (i, v) in reserved.iter_mut().enumerate() {
                 *v = u32_at(b, 76 + i * 4);
             }
-            MuReference { model: u32_at(b, 0), transform, flags: u32_at(b, 68), sector: u16_at(b, 72), reserved }
+            MuReference {
+                model: u32_at(b, 0),
+                transform,
+                flags: u32_at(b, 68),
+                sector: u16_at(b, 72),
+                reserved,
+            }
         })?;
         Ok(out)
     }
@@ -544,7 +559,9 @@ impl BuildProject {
                 w.w_u32(m.internal_max_area);
             }
         });
-        for (id, names) in [(chunk::SHADERS_RENDER, &self.shaders), (chunk::SHADERS_COMPILE, &self.shaders_xrlc)] {
+        for (id, names) in
+            [(chunk::SHADERS_RENDER, &self.shaders), (chunk::SHADERS_COMPILE, &self.shaders_xrlc)]
+        {
             w.chunk(id, |w| {
                 let mut raw = Vec::with_capacity(names.len() * SHADER);
                 for name in names {
@@ -680,14 +697,33 @@ mod tests {
             faces: vec![face(0), face(1), face(2)].into(),
             smooth_groups: vec![1, 2, 0xffff_ffff].into(),
             materials: vec![
-                BuildMaterial { surface: 0, shader: 1, shader_xrlc: 0, sector: 3, reserved: 0, internal_max_area: 7 },
+                BuildMaterial {
+                    surface: 0,
+                    shader: 1,
+                    shader_xrlc: 0,
+                    sector: 3,
+                    reserved: 0,
+                    internal_max_area: 7,
+                },
                 BuildMaterial { surface: 1, ..BuildMaterial::default() },
             ],
             shaders: vec!["default".into(), "def_shaders\\def_vertex".into()],
             shaders_xrlc: vec!["default".into()],
             textures: vec![
-                BuildTexture { name: "grnd\\grnd_zemlya".into(), width: 1024, height: 512, has_alpha: 0, reserve: 0 },
-                BuildTexture { name: "trees\\trees_list".into(), width: 256, height: 256, has_alpha: 1, reserve: 0 },
+                BuildTexture {
+                    name: "grnd\\grnd_zemlya".into(),
+                    width: 1024,
+                    height: 512,
+                    has_alpha: 0,
+                    reserve: 0,
+                },
+                BuildTexture {
+                    name: "trees\\trees_list".into(),
+                    width: 256,
+                    height: 256,
+                    has_alpha: 1,
+                    reserve: 0,
+                },
             ],
             glows: vec![BuildGlow { pos: Vec3::Y, size: 0.5, flags: 1, material: 1 }],
             portals: vec![Portal::new(0, 1, &[Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::Z])],
@@ -711,7 +747,12 @@ mod tests {
             }],
             mu_refs: vec![MuReference {
                 model: 0,
-                transform: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [5.0, 6.0, 7.0, 1.0]],
+                transform: [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [5.0, 6.0, 7.0, 1.0],
+                ],
                 flags: 3,
                 sector: 2,
                 reserved: [0; 8],
@@ -724,7 +765,10 @@ mod tests {
         let bytes = project().write();
         let r = Reader::new(&bytes);
         let len = |id: u32| r.sub(id).unwrap().unwrap().len();
-        assert_eq!(r.chunks().map(|c| c.0).collect::<Vec<_>>(), [0, 1, 2, 3, 16, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        assert_eq!(
+            r.chunks().map(|c| c.0).collect::<Vec<_>>(),
+            [0, 1, 2, 3, 16, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        );
         assert_eq!(len(chunk::PARAMETERS), 52);
         assert_eq!(len(chunk::VERTICES), 5 * 12);
         assert_eq!(len(chunk::FACES), 3 * 44);

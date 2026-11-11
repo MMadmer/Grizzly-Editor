@@ -45,7 +45,8 @@ pub fn visual_pose(visual: &Visual, motions: &MotionSet, motion: usize, t: f32) 
             *k = Some(slot);
         }
     }
-    let by_name: FxHashMap<String, usize> = names.iter().enumerate().map(|(i, n)| (n.to_ascii_lowercase(), i)).collect();
+    let by_name: FxHashMap<String, usize> =
+        names.iter().enumerate().map(|(i, n)| (n.to_ascii_lowercase(), i)).collect();
     let parent: Vec<Option<usize>> = visual
         .bones
         .iter()
@@ -91,7 +92,12 @@ fn chain(local: &[XMat4], parent: &[Option<usize>]) -> Vec<XMat4> {
             at = parent.get(i).copied().flatten();
         }
         while let Some(i) = stack.pop() {
-            let up = parent.get(i).copied().flatten().and_then(|p| world.get(p).copied().flatten()).unwrap_or(XMat4::IDENTITY);
+            let up = parent
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|p| world.get(p).copied().flatten())
+                .unwrap_or(XMat4::IDENTITY);
             let own = local.get(i).copied().unwrap_or(XMat4::IDENTITY);
             if let Some(slot) = world.get_mut(i) {
                 *slot = Some(XMat4::mul(&up, &own));

@@ -163,10 +163,10 @@ impl Run<'_> {
                     }
                 }
                 for k in &holes {
-                    if let LVal::Str(s) = k {
-                        if matches!(t.str.get(s), Some(LVal::Other)) {
-                            t.str.remove(s);
-                        }
+                    if let LVal::Str(s) = k
+                        && matches!(t.str.get(s), Some(LVal::Other))
+                    {
+                        t.str.remove(s);
                     }
                 }
                 // then the stores, in the order they were compiled
@@ -174,7 +174,9 @@ impl Run<'_> {
                     let k = self.eval(f.key)?;
                     let v = self.eval(f.val)?;
                     match &k {
-                        LVal::Nil => return Err(RtErr { pc: f.pc, line: f.line, msg: "table index is nil".into() }),
+                        LVal::Nil => {
+                            return Err(RtErr { pc: f.pc, line: f.line, msg: "table index is nil".into() });
+                        }
                         LVal::Num(n) if n.is_nan() => {
                             return Err(RtErr { pc: f.pc, line: f.line, msg: "table index is NaN".into() });
                         }
@@ -208,7 +210,8 @@ impl Run<'_> {
                 let bytes = |s: u32| self.c.syms.get(s as usize).map_or(empty, Vec::as_slice);
                 let mut strs: Vec<(&u32, &LVal)> = t.str.iter().collect();
                 strs.sort_by(|a, b| key_cmp_bytes(bytes(*a.0), bytes(*b.0)));
-                let mut out = Table { arr: Vec::with_capacity(nums.len()), fields: Vec::with_capacity(strs.len()) };
+                let mut out =
+                    Table { arr: Vec::with_capacity(nums.len()), fields: Vec::with_capacity(strs.len()) };
                 for (_, x) in nums {
                     out.arr.push(self.walk(x, depth + 1, steps)?);
                 }

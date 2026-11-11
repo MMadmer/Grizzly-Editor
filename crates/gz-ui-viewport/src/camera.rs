@@ -48,8 +48,17 @@ pub enum Target {
 }
 
 impl Target {
-    pub const ALL: [Target; 7] = [Target::Perspective, Target::Front, Target::Back, Target::Left, Target::Right, Target::Top, Target::Bottom];
-    pub const AXES: [Target; 6] = [Target::Front, Target::Back, Target::Left, Target::Right, Target::Top, Target::Bottom];
+    pub const ALL: [Target; 7] = [
+        Target::Perspective,
+        Target::Front,
+        Target::Back,
+        Target::Left,
+        Target::Right,
+        Target::Top,
+        Target::Bottom,
+    ];
+    pub const AXES: [Target; 6] =
+        [Target::Front, Target::Back, Target::Left, Target::Right, Target::Top, Target::Bottom];
 
     #[must_use]
     pub fn key(self) -> &'static str {
@@ -86,7 +95,9 @@ impl Target {
         if text.eq_ignore_ascii_case("reset") {
             return Some(Target::Perspective);
         }
-        Target::ALL.into_iter().find(|t| text.eq_ignore_ascii_case(t.key()) || text.eq_ignore_ascii_case(t.name()))
+        Target::ALL
+            .into_iter()
+            .find(|t| text.eq_ignore_ascii_case(t.key()) || text.eq_ignore_ascii_case(t.name()))
     }
 
     /// The camera's heading-pitch-bank of an axis view (`ViewFront` ... `ViewBottom`).
@@ -530,7 +541,9 @@ impl Nav {
     fn matches(&self, target: Target) -> bool {
         let Some(want) = target.hpb() else { return true };
         let tol = 0.1f32.to_radians();
-        angle_difference(self.hpb.x, want.x) <= tol && angle_difference(self.hpb.y, want.y) <= tol && angle_difference(self.hpb.z, want.z) <= tol
+        angle_difference(self.hpb.x, want.x) <= tol
+            && angle_difference(self.hpb.y, want.y) <= tol
+            && angle_difference(self.hpb.z, want.z) <= tol
     }
 
     /// `CurrentTarget`: an axis view the camera turned away from is the free view again.
@@ -574,7 +587,6 @@ impl Nav {
         gz_render::pick_ray(&self.camera(), size, pixel)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

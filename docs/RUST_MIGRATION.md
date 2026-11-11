@@ -292,7 +292,9 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 
 **Dependencies.**
 
-- Pure Rust first. The one C dependency is LuaJIT (vendored by `mlua`).
+- Pure Rust first. The C dependencies are two: LuaJIT (vendored by `mlua`) and libvorbis with
+  the aoTuV tunings (vendored by `vorbis_rs`, a safe API) for the game sounds the Sound Library
+  encodes.
 - `cargo-deny` checks licences, advisories and duplicates; the toolchain is pinned in
   `rust-toolchain.toml` (1.99.1, edition 2024).
 - TLS trusts the **Windows certificate store** (schannel or the platform verifier), not a
@@ -331,6 +333,7 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 | minizip | `zip` with parallel deflate |
 | nvtt, ispc_texcomp, stb_image, RedImage | `image`, a DDS codec with BC1/BC3 and mip generation |
 | `XrSound` (OpenAL), Vorbis | a Rust audio output and Vorbis decoder; OGG comments by `gz-fmt-sound` |
+| `ogg_enc` (oggenc + libvorbis) | `vorbis_rs` (libvorbis aoTuV, vendored): VBR at the description's quality, the parameters put in as the first comment by `gz-fmt-sound` |
 | QSlim, WildMagic, FreeMagic | ported with the mesh tools that use them |
 | `tools/mcp/grizzly_mcp.py` | `grizzly-mcp`, tools generated from the command types |
 | `tools/qa/lint_ui_units.py` | the kit's types |

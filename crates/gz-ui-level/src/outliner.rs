@@ -15,7 +15,10 @@ use gz_query::Query;
 use gz_scene::apply::SelectMode;
 use gz_scene::{ObjClass, ObjId, SceneCmd, SceneService, SceneState};
 use gz_ui::text::{self, Clip};
-use gz_ui::{Answer, Asker, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, Tone, audit, icons, menu_item, metrics, palette, state};
+use gz_ui::{
+    Answer, Asker, ConfirmSpec, Dialog, DialogSize, Font, Icon, Kind, MenuItem, SearchField, Tone, audit,
+    icons, menu_item, metrics, palette, state,
+};
 
 use crate::classes;
 use crate::local::{local_badge_button, local_eye_toggle};
@@ -93,7 +96,13 @@ impl Outliner {
     pub fn draw(&mut self, ui: &mut Ui, editor: &Arc<Editor>) {
         let svc = editor.project_opt().and_then(|s| s.services.get::<SceneService>());
         let Some(svc) = svc.filter(|s| s.store.snapshot().valid) else {
-            state::empty_state(ui, Icon::Level, "No scene", "Open or create a scene to see its objects here.", None);
+            state::empty_state(
+                ui,
+                Icon::Level,
+                "No scene",
+                "Open or create a scene to see its objects here.",
+                None,
+            );
             return;
         };
         let snap = svc.store.snapshot();
@@ -106,7 +115,9 @@ impl Outliner {
         // a selection made elsewhere (the viewport, MCP) brings its last row into view
         if listing.selection_sig != self.sel_sig {
             self.sel_sig = listing.selection_sig;
-            if !self.skip_scroll && let Some(last) = listing.last_selected {
+            if !self.skip_scroll
+                && let Some(last) = listing.last_selected
+            {
                 self.reveal(&snap, last);
                 self.scroll_target = Some(last);
             }
@@ -165,13 +176,21 @@ impl Outliner {
             let more_w = metrics::TOOLBAR_BUTTON;
             let w = (ui.available_width() - filters_w - more_w - 12.0).max(gz_ui::units::em(6.0));
             let search_id = "outliner_search";
-            let resp = SearchField::new(&mut self.filter.text).hint("Search").width(w).id_salt(search_id).show(ui);
+            let resp =
+                SearchField::new(&mut self.filter.text).hint("Search").width(w).id_salt(search_id).show(ui);
             if self.focus_search {
                 resp.request_focus();
                 self.focus_search = false;
             }
             // Filters: its menu opens under it, its badge counts what is on
-            let filters = local_badge_button(ui, Icon::Filter, "Filters", "Selected only, visibility, sort and object types", active, active > 0);
+            let filters = local_badge_button(
+                ui,
+                Icon::Filter,
+                "Filters",
+                "Selected only, visibility, sort and object types",
+                active,
+                active > 0,
+            );
             let fid = Id::unique("gz-ui-level.outliner_filters");
             if filters.clicked() {
                 egui::Popup::toggle_id(&ctx, fid);
@@ -180,7 +199,8 @@ impl Outliner {
                 egui::Popup::open_id(&ctx, fid);
             }
             let layer = ui.layer_id();
-            let groups: Vec<(ObjClass, usize)> = listing.map(|l| l.groups.iter().map(|g| (g.class, g.total)).collect()).unwrap_or_default();
+            let groups: Vec<(ObjClass, usize)> =
+                listing.map(|l| l.groups.iter().map(|g| (g.class, g.total)).collect()).unwrap_or_default();
             egui::Popup::new(fid, ctx.clone(), egui::PopupAnchor::ParentRect(filters.rect), layer)
                 .kind(egui::PopupKind::Popup)
                 .open_memory(None)
@@ -191,7 +211,8 @@ impl Outliner {
                     ui.set_width(gz_ui::units::em(24.0));
                     self.filters_menu(ui, &groups);
                 });
-            let more = gz_ui::icon_button(ui, Icon::More, "Layout, and showing or hiding objects", false, true);
+            let more =
+                gz_ui::icon_button(ui, Icon::More, "Layout, and showing or hiding objects", false, true);
             let mid = Id::unique("gz-ui-level.outliner_more");
             if more.clicked() {
                 egui::Popup::toggle_id(&ctx, mid);
@@ -201,10 +222,18 @@ impl Outliner {
             }
             let mut act: Option<(bool, bool)> = None;
             gz_ui::menu::menu_popup(&ctx, mid, more.rect, layer, |ui| {
-                if menu_item(ui, "By Type", MenuItem { selected: !self.filter.hierarchy, ..MenuItem::default() }) {
+                if menu_item(
+                    ui,
+                    "By Type",
+                    MenuItem { selected: !self.filter.hierarchy, ..MenuItem::default() },
+                ) {
                     self.filter.hierarchy = false;
                 }
-                let r = menu_item(ui, "By Hierarchy", MenuItem { selected: self.filter.hierarchy, ..MenuItem::default() });
+                let r = menu_item(
+                    ui,
+                    "By Hierarchy",
+                    MenuItem { selected: self.filter.hierarchy, ..MenuItem::default() },
+                );
                 if r {
                     self.filter.hierarchy = true;
                 }
@@ -229,31 +258,48 @@ impl Outliner {
     fn filters_menu(&mut self, ui: &mut Ui, groups: &[(ObjClass, usize)]) {
         let p = palette(ui.ctx());
         ui.horizontal(|ui| {
-            gz_ui::grid::switch(ui, &mut self.filter.selected_only).on_hover_text("Show only the objects selected in the viewport");
+            gz_ui::grid::switch(ui, &mut self.filter.selected_only)
+                .on_hover_text("Show only the objects selected in the viewport");
             text::label(ui, "Selected Only", Font::Body, p.text, Clip::End);
         });
         ui.add_space(4.0);
         gz_ui::PropertyGrid::new("outliner_filters").label_frac(0.3).show(ui, |g| {
-            g.row("Visibility", "Every object, only the visible ones or only the hidden ones", gz_ui::PropFlags::NONE, 0, |ui| {
-                let mut cur = match self.filter.visibility {
-                    Visibility::All => 0,
-                    Visibility::Visible => 1,
-                    Visibility::Hidden => 2,
-                };
-                if gz_ui::segmented(ui, &mut cur, &["All", "Visible", "Hidden"], None) {
-                    self.filter.visibility = [Visibility::All, Visibility::Visible, Visibility::Hidden].get(cur).copied().unwrap_or_default();
-                }
-            });
-            g.row("Sort", "The order of the objects in each class: as in the scene, or by name", gz_ui::PropFlags::NONE, 0, |ui| {
-                let mut cur = match self.filter.sort {
-                    Sort::Scene => 0,
-                    Sort::Az => 1,
-                    Sort::Za => 2,
-                };
-                if gz_ui::segmented(ui, &mut cur, &["Scene", "A-Z", "Z-A"], None) {
-                    self.filter.sort = [Sort::Scene, Sort::Az, Sort::Za].get(cur).copied().unwrap_or_default();
-                }
-            });
+            g.row(
+                "Visibility",
+                "Every object, only the visible ones or only the hidden ones",
+                gz_ui::PropFlags::NONE,
+                0,
+                |ui| {
+                    let mut cur = match self.filter.visibility {
+                        Visibility::All => 0,
+                        Visibility::Visible => 1,
+                        Visibility::Hidden => 2,
+                    };
+                    if gz_ui::segmented(ui, &mut cur, &["All", "Visible", "Hidden"], None) {
+                        self.filter.visibility = [Visibility::All, Visibility::Visible, Visibility::Hidden]
+                            .get(cur)
+                            .copied()
+                            .unwrap_or_default();
+                    }
+                },
+            );
+            g.row(
+                "Sort",
+                "The order of the objects in each class: as in the scene, or by name",
+                gz_ui::PropFlags::NONE,
+                0,
+                |ui| {
+                    let mut cur = match self.filter.sort {
+                        Sort::Scene => 0,
+                        Sort::Az => 1,
+                        Sort::Za => 2,
+                    };
+                    if gz_ui::segmented(ui, &mut cur, &["Scene", "A-Z", "Z-A"], None) {
+                        self.filter.sort =
+                            [Sort::Scene, Sort::Az, Sort::Za].get(cur).copied().unwrap_or_default();
+                    }
+                },
+            );
         });
         ui.separator();
         ui.horizontal(|ui| {
@@ -280,11 +326,23 @@ impl Outliner {
             });
         }
         ui.separator();
-        gz_ui::text::status(ui, Tone::Muted, "Search: every word has to match, -word leaves those out, \"two words\" match together.");
+        gz_ui::text::status(
+            ui,
+            Tone::Muted,
+            "Search: every word has to match, -word leaves those out, \"two words\" match together.",
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn table(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &Arc<gz_store::Snap<SceneState>>, listing: &Arc<Listing>, body_h: f32) {
+    fn table(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &Arc<gz_store::Snap<SceneState>>,
+        listing: &Arc<Listing>,
+        body_h: f32,
+    ) {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         // the header: the eye, Name, and Type / Owner when the header's menu shows them
@@ -294,15 +352,41 @@ impl Outliner {
         let owner_w = if self.show_owner { (width * 0.25).max(gz_ui::units::em(5.0)) } else { 0.0 };
         if ui.is_rect_visible(head) {
             let painter = ui.painter();
-            painter.line_segment([pos2(head.min.x, head.max.y - 0.5), pos2(head.max.x, head.max.y - 0.5)], egui::Stroke::new(1.0, p.border_subtle));
-            icons::draw(painter, Icon::Eye, Rect::from_center_size(pos2(head.min.x + ROW_H * 0.5, head.center().y), Vec2::splat(ICON)), p.text_muted);
+            painter.line_segment(
+                [pos2(head.min.x, head.max.y - 0.5), pos2(head.max.x, head.max.y - 0.5)],
+                egui::Stroke::new(1.0, p.border_subtle),
+            );
+            icons::draw(
+                painter,
+                Icon::Eye,
+                Rect::from_center_size(pos2(head.min.x + ROW_H * 0.5, head.center().y), Vec2::splat(ICON)),
+                p.text_muted,
+            );
             let font = Font::Small.id();
-            painter.text(pos2(head.min.x + ROW_H + 4.0, head.center().y), Align2::LEFT_CENTER, "Name", font.clone(), p.text_secondary);
+            painter.text(
+                pos2(head.min.x + ROW_H + 4.0, head.center().y),
+                Align2::LEFT_CENTER,
+                "Name",
+                font.clone(),
+                p.text_secondary,
+            );
             if self.show_type {
-                painter.text(pos2(head.max.x - owner_w - type_w + 4.0, head.center().y), Align2::LEFT_CENTER, "Type", font.clone(), p.text_secondary);
+                painter.text(
+                    pos2(head.max.x - owner_w - type_w + 4.0, head.center().y),
+                    Align2::LEFT_CENTER,
+                    "Type",
+                    font.clone(),
+                    p.text_secondary,
+                );
             }
             if self.show_owner {
-                painter.text(pos2(head.max.x - owner_w + 4.0, head.center().y), Align2::LEFT_CENTER, "Owner", font, p.text_secondary);
+                painter.text(
+                    pos2(head.max.x - owner_w + 4.0, head.center().y),
+                    Align2::LEFT_CENTER,
+                    "Owner",
+                    font,
+                    p.text_secondary,
+                );
             }
         }
         head_resp.context_menu(|ui| {
@@ -319,14 +403,19 @@ impl Outliner {
         let rows = &listing.rows;
         let n = rows.len();
         let view_h = (body_h - ROW_H).max(ROW_H);
-        let mut scroll = ScrollArea::vertical().id_salt("gz-ui-level.outliner_rows").max_height(view_h).auto_shrink([false, false]);
+        let mut scroll = ScrollArea::vertical()
+            .id_salt("gz-ui-level.outliner_rows")
+            .max_height(view_h)
+            .auto_shrink([false, false]);
         // ui_scroll and a selection made elsewhere
         let mut target_row = self.scroll_target.take().and_then(|id| listing.row_of(id));
         match gz_app::take_scroll(&ctx, WINDOW) {
             Some(gz_app::ScrollTo::Top) => scroll = scroll.vertical_scroll_offset(0.0),
             Some(gz_app::ScrollTo::Bottom) => scroll = scroll.vertical_scroll_offset(n as f32 * ROW_H),
             Some(gz_app::ScrollTo::Offset(y)) => scroll = scroll.vertical_scroll_offset(y),
-            Some(gz_app::ScrollTo::Item(name)) => target_row = snap.find_relaxed(&name).and_then(|o| listing.row_of(o.id)).or(target_row),
+            Some(gz_app::ScrollTo::Item(name)) => {
+                target_row = snap.find_relaxed(&name).and_then(|o| listing.row_of(o.id)).or(target_row)
+            }
             None => {}
         }
         if let Some(r) = target_row {
@@ -344,10 +433,21 @@ impl Outliner {
             ui.spacing_mut().item_spacing.y = 0.0;
             for i in range {
                 let Some(row) = rows.get(i) else { continue };
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::hover());
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::hover());
                 match row {
                     Row::Class { class, shown, total, open } => {
-                        if self.class_row(ui, svc, snap, rect, *class, *shown, *total, *open, editor.ui_origin()) {
+                        if self.class_row(
+                            ui,
+                            svc,
+                            snap,
+                            rect,
+                            *class,
+                            *shown,
+                            *total,
+                            *open,
+                            editor.ui_origin(),
+                        ) {
                             class_clicks.push(*class);
                         }
                     }
@@ -365,36 +465,87 @@ impl Outliner {
                         // the eye column
                         let eye = Rect::from_min_size(rect.min, Vec2::splat(ROW_H));
                         let vis = o.flags.visible;
-                        if local_eye_toggle(ui, rid.with("eye"), eye, vis, if vis { "Hide in the viewport" } else { "Show in the viewport" }) {
-                            svc.store.post(SceneCmd::Show { ids: vec![*id], visible: !vis }, editor.ui_origin());
+                        if local_eye_toggle(
+                            ui,
+                            rid.with("eye"),
+                            eye,
+                            vis,
+                            if vis { "Hide in the viewport" } else { "Show in the viewport" },
+                        ) {
+                            svc.store
+                                .post(SceneCmd::Show { ids: vec![*id], visible: !vis }, editor.ui_origin());
                         }
                         let tool_visible = snap.tools.part(*class).visible;
                         let mut x = eye.max.x + 4.0 + f32::from((*depth).min(12)) * INDENT;
                         if *children {
                             let er = Rect::from_min_size(pos2(x, rect.min.y), Vec2::new(16.0, ROW_H));
                             let filtering = self.filter.filtering() || !self.filter.hidden.is_empty();
-                            let eresp = ui.interact(er, rid.with("expand"), if filtering { Sense::hover() } else { Sense::click() });
-                            icons::draw(ui.painter(), if *expanded { Icon::ChevronDown } else { Icon::ChevronRight }, Rect::from_center_size(er.center(), Vec2::splat(12.0)), if filtering { p.text_disabled } else { p.text_secondary });
+                            let eresp = ui.interact(
+                                er,
+                                rid.with("expand"),
+                                if filtering { Sense::hover() } else { Sense::click() },
+                            );
+                            icons::draw(
+                                ui.painter(),
+                                if *expanded { Icon::ChevronDown } else { Icon::ChevronRight },
+                                Rect::from_center_size(er.center(), Vec2::splat(12.0)),
+                                if filtering { p.text_disabled } else { p.text_secondary },
+                            );
                             if eresp.clicked() {
                                 expand.push((*id, !*expanded));
                             }
                         }
                         x += 16.0;
                         let dim = !tool_visible || !*direct;
-                        icons::draw(ui.painter(), classes::icon(*class), Rect::from_min_size(pos2(x.round(), (rect.center().y - ICON * 0.5).round()), Vec2::splat(ICON)), if dim { p.text_disabled } else { p.text_secondary });
+                        icons::draw(
+                            ui.painter(),
+                            classes::icon(*class),
+                            Rect::from_min_size(
+                                pos2(x.round(), (rect.center().y - ICON * 0.5).round()),
+                                Vec2::splat(ICON),
+                            ),
+                            if dim { p.text_disabled } else { p.text_secondary },
+                        );
                         x += ICON + 6.0;
                         let right = rect.max.x - type_w - owner_w - 4.0;
-                        let cut = text::paint(ui.painter(), &Font::Body.id(), pos2(x, rect.center().y), Align2::LEFT_CENTER, if dim { p.text_secondary } else { p.text }, &o.name, Some((right - x).max(0.0)), Clip::End);
+                        let cut = text::paint(
+                            ui.painter(),
+                            &Font::Body.id(),
+                            pos2(x, rect.center().y),
+                            Align2::LEFT_CENTER,
+                            if dim { p.text_secondary } else { p.text },
+                            &o.name,
+                            Some((right - x).max(0.0)),
+                            Clip::End,
+                        );
                         if cut {
                             audit::truncated(&ctx, &o.name, &o.name, rect);
                         }
                         if self.show_type {
-                            text::paint(ui.painter(), &Font::Body.id(), pos2(rect.max.x - owner_w - type_w + 4.0, rect.center().y), Align2::LEFT_CENTER, p.text_secondary, classes::title(*class), Some(type_w - 8.0), Clip::End);
+                            text::paint(
+                                ui.painter(),
+                                &Font::Body.id(),
+                                pos2(rect.max.x - owner_w - type_w + 4.0, rect.center().y),
+                                Align2::LEFT_CENTER,
+                                p.text_secondary,
+                                classes::title(*class),
+                                Some(type_w - 8.0),
+                                Clip::End,
+                            );
                         }
                         if self.show_owner
                             && let Some(owner) = o.owner.and_then(|oid| snap.get(oid))
                         {
-                            text::paint(ui.painter(), &Font::Body.id(), pos2(rect.max.x - owner_w + 4.0, rect.center().y), Align2::LEFT_CENTER, p.text_secondary, &owner.name, Some(owner_w - 8.0), Clip::End);
+                            text::paint(
+                                ui.painter(),
+                                &Font::Body.id(),
+                                pos2(rect.max.x - owner_w + 4.0, rect.center().y),
+                                Align2::LEFT_CENTER,
+                                p.text_secondary,
+                                &owner.name,
+                                Some(owner_w - 8.0),
+                                Clip::End,
+                            );
                         }
                         let hidden_tip = !vis && self.filter.hierarchy;
                         let resp = if hidden_tip {
@@ -454,7 +605,18 @@ impl Outliner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn class_row(&mut self, ui: &mut Ui, svc: &Arc<SceneService>, snap: &SceneState, rect: Rect, class: ObjClass, shown: usize, total: usize, open: bool, origin: gz_base::Origin) -> bool {
+    fn class_row(
+        &mut self,
+        ui: &mut Ui,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        rect: Rect,
+        class: ObjClass,
+        shown: usize,
+        total: usize,
+        open: bool,
+        origin: gz_base::Origin,
+    ) -> bool {
         let ctx = ui.ctx().clone();
         let p = palette(&ctx);
         let id = Id::unique(("gz-ui-level.outliner_class", class.id()));
@@ -464,28 +626,64 @@ impl Outliner {
         }
         let visible = snap.tools.part(class).visible;
         let eye = Rect::from_min_size(rect.min, Vec2::splat(ROW_H));
-        if local_eye_toggle(ui, id.with("eye"), eye, visible, if visible { "Hide this class in the viewport" } else { "Show this class in the viewport" }) {
+        if local_eye_toggle(
+            ui,
+            id.with("eye"),
+            eye,
+            visible,
+            if visible { "Hide this class in the viewport" } else { "Show this class in the viewport" },
+        ) {
             svc.store.post(SceneCmd::ToolFlags { class, visible: Some(!visible), readonly: None }, origin);
         }
         let cy = rect.center().y;
         let x0 = eye.max.x + 4.0;
-        icons::draw(ui.painter(), if open { Icon::ChevronDown } else { Icon::ChevronRight }, Rect::from_min_size(pos2(x0, cy - 6.0), Vec2::splat(12.0)), p.text_secondary);
+        icons::draw(
+            ui.painter(),
+            if open { Icon::ChevronDown } else { Icon::ChevronRight },
+            Rect::from_min_size(pos2(x0, cy - 6.0), Vec2::splat(12.0)),
+            p.text_secondary,
+        );
         let x = x0 + 16.0;
-        icons::draw(ui.painter(), classes::icon(class), Rect::from_min_size(pos2(x, cy - ICON * 0.5), Vec2::splat(ICON)), if visible { p.text_secondary } else { p.text_disabled });
+        icons::draw(
+            ui.painter(),
+            classes::icon(class),
+            Rect::from_min_size(pos2(x, cy - ICON * 0.5), Vec2::splat(ICON)),
+            if visible { p.text_secondary } else { p.text_disabled },
+        );
         let tx = x + ICON + 6.0;
         let count = if self.filter.filtering() { format!("{shown} of {total}") } else { total.to_string() };
         let small = Font::Body.id();
         let count_w = text::width(&ctx, &small, &count);
         let title = classes::title(class);
-        text::paint(ui.painter(), &Font::Strong.id(), pos2(tx, cy), Align2::LEFT_CENTER, if visible { p.text } else { p.text_secondary }, title, Some((rect.max.x - tx - count_w - 10.0).max(0.0)), Clip::End);
-        let title_w = text::width(&ctx, &Font::Strong.id(), title).min((rect.max.x - tx - count_w - 10.0).max(0.0));
+        text::paint(
+            ui.painter(),
+            &Font::Strong.id(),
+            pos2(tx, cy),
+            Align2::LEFT_CENTER,
+            if visible { p.text } else { p.text_secondary },
+            title,
+            Some((rect.max.x - tx - count_w - 10.0).max(0.0)),
+            Clip::End,
+        );
+        let title_w =
+            text::width(&ctx, &Font::Strong.id(), title).min((rect.max.x - tx - count_w - 10.0).max(0.0));
         ui.painter().text(pos2(tx + title_w + 6.0, cy), Align2::LEFT_CENTER, count, small, p.text_muted);
         audit::control(&ctx, title, true, None, None, rect);
         resp.clicked()
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn click(&mut self, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, listing: &Listing, row: usize, id: ObjId, mods: egui::Modifiers, double: bool) {
+    fn click(
+        &mut self,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        listing: &Listing,
+        row: usize,
+        id: ObjId,
+        mods: egui::Modifiers,
+        double: bool,
+    ) {
         let Some(o) = snap.get(id) else { return };
         let origin = editor.ui_origin();
         self.skip_scroll = true;
@@ -526,7 +724,14 @@ impl Outliner {
         self.anchor = Some(id);
     }
 
-    fn run_menu(&mut self, ui: &mut Ui, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, m: RowMenu) {
+    fn run_menu(
+        &mut self,
+        ui: &mut Ui,
+        editor: &Arc<Editor>,
+        svc: &Arc<SceneService>,
+        snap: &SceneState,
+        m: RowMenu,
+    ) {
         let origin = editor.ui_origin();
         match m {
             RowMenu::Focus(id) => {
@@ -546,7 +751,13 @@ impl Outliner {
             RowMenu::Toggle(id, visible) => svc.store.post(SceneCmd::Show { ids: vec![id], visible }, origin),
             RowMenu::Rename(id) => {
                 if let Some(o) = snap.get(id) {
-                    self.rename = Some(Rename { id, original: o.name.clone(), buf: o.name.to_string(), error: String::new(), focus: true });
+                    self.rename = Some(Rename {
+                        id,
+                        original: o.name.clone(),
+                        buf: o.name.to_string(),
+                        error: String::new(),
+                        focus: true,
+                    });
                 }
             }
             RowMenu::Delete(id) => ask_delete(ui.ctx(), editor, svc, snap, id),
@@ -558,7 +769,12 @@ impl Outliner {
         let text_ = if listing.shown != listing.total {
             format!("{} of {} objects \u{b7} {} selected", listing.shown, listing.total, listing.selected)
         } else {
-            format!("{} object{} \u{b7} {} selected", listing.total, if listing.total == 1 { "" } else { "s" }, listing.selected)
+            format!(
+                "{} object{} \u{b7} {} selected",
+                listing.total,
+                if listing.total == 1 { "" } else { "s" },
+                listing.selected
+            )
         };
         ui.add_space(2.0);
         text::label(ui, &text_, Font::Small, p.text_muted, Clip::End);
@@ -577,11 +793,21 @@ impl Outliner {
             |ui| {
                 let w = ui.available_width();
                 let id = Id::unique("gz-ui-level.rename_field");
-                let resp = ui.add(egui::TextEdit::singleline(&mut r.buf).id(id).font(Font::Body.id()).margin(egui::Margin::symmetric(8, 4)).desired_width(w).min_size(Vec2::new(w, metrics::FRAME)));
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut r.buf)
+                        .id(id)
+                        .font(Font::Body.id())
+                        .margin(egui::Margin::symmetric(8, 4))
+                        .desired_width(w)
+                        .min_size(Vec2::new(w, metrics::FRAME)),
+                );
                 if r.focus {
                     resp.request_focus();
                     if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
-                        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(r.buf.chars().count()));
+                        let all = egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(r.buf.chars().count()),
+                        );
                         st.cursor.set_char_range(Some(all));
                         st.store(ui.ctx(), id);
                     }
@@ -592,7 +818,13 @@ impl Outliner {
                 }
                 ui.add_space(4.0);
                 if r.error.is_empty() {
-                    text::label(ui, "Names are lower case and unique in the scene.", Font::Small, p.text_muted, Clip::End);
+                    text::label(
+                        ui,
+                        "Names are lower case and unique in the scene.",
+                        Font::Small,
+                        p.text_muted,
+                        Clip::End,
+                    );
                 } else {
                     gz_ui::text::status(ui, Tone::Error, &r.error);
                 }
@@ -659,15 +891,27 @@ fn row_menu(ui: &mut Ui, snap: &SceneState, o: &gz_scene::Object) -> Option<RowM
             out = Some(RowMenu::SelectClass(o.class));
         }
         let vis = o.flags.visible;
-        if menu_item(ui, if vis { "Hide" } else { "Show" }, MenuItem { icon: if vis { Icon::EyeOff } else { Icon::Eye }, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            if vis { "Hide" } else { "Show" },
+            MenuItem { icon: if vis { Icon::EyeOff } else { Icon::Eye }, ..MenuItem::default() },
+        ) {
             out = Some(RowMenu::Toggle(o.id, !vis));
         }
         ui.separator();
         let can_edit = snap.tools.part(o.class).editable() && o.editable();
-        if menu_item(ui, "Rename...", MenuItem { icon: Icon::Rename, enabled: can_edit, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "Rename...",
+            MenuItem { icon: Icon::Rename, enabled: can_edit, ..MenuItem::default() },
+        ) {
             out = Some(RowMenu::Rename(o.id));
         }
-        if menu_item(ui, "Delete...", MenuItem { icon: Icon::Delete, enabled: can_edit, danger: true, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "Delete...",
+            MenuItem { icon: Icon::Delete, enabled: can_edit, danger: true, ..MenuItem::default() },
+        ) {
             out = Some(RowMenu::Delete(o.id));
         }
     });
@@ -686,7 +930,13 @@ pub fn pick(svc: &SceneService, editor: &Editor, snap: &SceneState, id: ObjId) {
 }
 
 /// `AskDelete`: the kit's confirmation names the object; Yes deletes it (Undo brings it back).
-fn ask_delete(ctx: &egui::Context, editor: &Arc<Editor>, svc: &Arc<SceneService>, snap: &SceneState, id: ObjId) {
+fn ask_delete(
+    ctx: &egui::Context,
+    editor: &Arc<Editor>,
+    svc: &Arc<SceneService>,
+    snap: &SceneState,
+    id: ObjId,
+) {
     let Some(o) = snap.get(id) else { return };
     let spec = ConfirmSpec {
         id: "delete_object".into(),
@@ -740,7 +990,12 @@ pub fn plan_show(snap: &SceneState, selected_only: bool, visible: bool) -> (Vec<
 }
 
 /// Sends what [`plan_show`] planned; answers how many objects changed.
-pub fn show_objects(svc: &SceneService, selected_only: bool, visible: bool, origin: gz_base::Origin) -> usize {
+pub fn show_objects(
+    svc: &SceneService,
+    selected_only: bool,
+    visible: bool,
+    origin: gz_base::Origin,
+) -> usize {
     let snap = svc.store.snapshot();
     let (ids, classes) = plan_show(&snap, selected_only, visible);
     let n = ids.len();

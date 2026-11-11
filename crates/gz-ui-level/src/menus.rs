@@ -76,8 +76,12 @@ pub fn run_scene_command(id: &str, editor: &Arc<Editor>, ctx: &Context) {
         "COMMAND_UNDO" => editor.post("undo", Args::new()),
         "COMMAND_REDO" => editor.post("redo", Args::new()),
         "COMMAND_DELETE_SELECTION" => ask_delete_selection(ctx, editor, &svc),
-        "COMMAND_SELECT_ALL" => svc.store.post(SceneCmd::SelectClass { class: Some(class), select: true }, origin),
-        "COMMAND_DESELECT_ALL" => svc.store.post(SceneCmd::SelectClass { class: None, select: false }, origin),
+        "COMMAND_SELECT_ALL" => {
+            svc.store.post(SceneCmd::SelectClass { class: Some(class), select: true }, origin)
+        }
+        "COMMAND_DESELECT_ALL" => {
+            svc.store.post(SceneCmd::SelectClass { class: None, select: false }, origin)
+        }
         "COMMAND_INVERT_SELECTION_ALL" => {
             let ids = snap.of_class(class).filter(|o| o.flags.visible).map(|o| o.id).collect();
             svc.store.post(SceneCmd::Select { ids, mode: SelectMode::Toggle }, origin);
@@ -89,7 +93,12 @@ pub fn run_scene_command(id: &str, editor: &Arc<Editor>, ctx: &Context) {
             }
         }
         "COMMAND_HIDE_UNSEL" => {
-            let ids: Vec<_> = snap.objects.values().filter(|o| o.class.is_object_tool() && o.flags.visible && !snap.is_selected(o.id)).map(|o| o.id).collect();
+            let ids: Vec<_> = snap
+                .objects
+                .values()
+                .filter(|o| o.class.is_object_tool() && o.flags.visible && !snap.is_selected(o.id))
+                .map(|o| o.id)
+                .collect();
             if !ids.is_empty() {
                 svc.store.post(SceneCmd::Show { ids, visible: false }, origin);
             }
@@ -107,16 +116,25 @@ pub fn run_scene_command(id: &str, editor: &Arc<Editor>, ctx: &Context) {
 /// Delete asks first, naming what goes (Edit > Undo brings it back).
 fn ask_delete_selection(ctx: &Context, editor: &Arc<Editor>, svc: &Arc<SceneService>) {
     let snap = svc.store.snapshot();
-    let ids: Vec<_> = snap.selected_in_order().into_iter().filter(|id| snap.get(*id).is_some_and(|o| o.owner.is_none())).collect();
+    let ids: Vec<_> = snap
+        .selected_in_order()
+        .into_iter()
+        .filter(|id| snap.get(*id).is_some_and(|o| o.owner.is_none()))
+        .collect();
     if ids.is_empty() {
         return;
     }
-    let names: Vec<String> = ids.iter().filter_map(|id| snap.get(*id)).take(10).map(|o| o.name.to_string()).collect();
+    let names: Vec<String> =
+        ids.iter().filter_map(|id| snap.get(*id)).take(10).map(|o| o.name.to_string()).collect();
     let one = ids.len() == 1;
     let spec = ConfirmSpec {
         id: "delete_object".into(),
         title: if one { "Delete Object" } else { "Delete Objects" }.into(),
-        headline: if one { "Delete this object from the scene?".into() } else { format!("Delete these {} objects from the scene?", ids.len()) },
+        headline: if one {
+            "Delete this object from the scene?".into()
+        } else {
+            format!("Delete these {} objects from the scene?", ids.len())
+        },
         items: names,
         total: ids.len(),
         consequence: "Edit > Undo brings them back.".into(),
@@ -138,7 +156,10 @@ fn ask_delete_selection(ctx: &Context, editor: &Arc<Editor>, svc: &Arc<SceneServ
 /// The scene's commands for the palette and the Keyboard page.
 pub(crate) fn install(b: &mut ShellBuilder) {
     for (id, group, label, icon, keys) in SCENE_COMMANDS {
-        let mut c = UiCommand::new(id, group, label, icon, move |cx: &mut DocCx<'_>| run_scene_command(id, cx.editor, cx.ctx)).enabled(|editor, active| active == crate::LEVEL && scene(editor).is_some());
+        let mut c = UiCommand::new(id, group, label, icon, move |cx: &mut DocCx<'_>| {
+            run_scene_command(id, cx.editor, cx.ctx)
+        })
+        .enabled(|editor, active| active == crate::LEVEL && scene(editor).is_some());
         if !keys.is_empty() {
             c = c.keys(keys);
         }
@@ -159,7 +180,8 @@ pub fn draw(bar: &mut MenuBar<'_, '_>, cx: &mut DocCx<'_>, maximized: bool) -> M
     let mut picks = MenuPicks::default();
     let has_scene = scene(&editor).is_some();
     bar.menu("Scene", |ui| scene_menu(ui, &editor, &ctx, has_scene));
-    let builds: Vec<&toolbar::LevelAction> = toolbar::LEVEL_ACTIONS.iter().filter(|a| a.group == 1 && editor.registry().has(a.command)).collect();
+    let builds: Vec<&toolbar::LevelAction> =
+        toolbar::LEVEL_ACTIONS.iter().filter(|a| a.group == 1 && editor.registry().has(a.command)).collect();
     let more_builds = BUILD_ROWS.iter().any(|(_, _, c, _)| editor.registry().has(c));
     if !builds.is_empty() || more_builds {
         bar.menu("Build", |ui| build_menu(ui, &editor, &builds));
@@ -167,7 +189,11 @@ pub fn draw(bar: &mut MenuBar<'_, '_>, cx: &mut DocCx<'_>, maximized: bool) -> M
     bar.menu("View", |ui| {
         gz_ui_viewport::view_menu(ui, cx);
         ui.separator();
-        if menu_item(ui, "Maximize Viewport", MenuItem { keys: "F11", selected: maximized, ..MenuItem::default() }) {
+        if menu_item(
+            ui,
+            "Maximize Viewport",
+            MenuItem { keys: "F11", selected: maximized, ..MenuItem::default() },
+        ) {
             picks.maximize = true;
         }
     });
@@ -175,7 +201,16 @@ pub fn draw(bar: &mut MenuBar<'_, '_>, cx: &mut DocCx<'_>, maximized: bool) -> M
 }
 
 #[allow(clippy::too_many_arguments)]
-fn row(ui: &mut Ui, editor: &Arc<Editor>, ctx: &Context, id: &str, label: &str, icon: Icon, default: &str, enabled: bool) {
+fn row(
+    ui: &mut Ui,
+    editor: &Arc<Editor>,
+    ctx: &Context,
+    id: &str,
+    label: &str,
+    icon: Icon,
+    default: &str,
+    enabled: bool,
+) {
     let keys = keys_now(editor, id, default);
     if menu_item(ui, label, MenuItem { icon, keys: &keys, enabled, ..MenuItem::default() }) {
         run_scene_command(id, editor, ctx);
@@ -193,7 +228,9 @@ fn scene_menu(ui: &mut Ui, editor: &Arc<Editor>, ctx: &Context, has_scene: bool)
         mark(editor, false);
     }
     ui.separator();
-    for (id, _, label, icon, keys) in SCENE_COMMANDS.iter().filter(|c| c.1 == "Selection" || c.1 == "Visibility") {
+    for (id, _, label, icon, keys) in
+        SCENE_COMMANDS.iter().filter(|c| c.1 == "Selection" || c.1 == "Visibility")
+    {
         row(ui, editor, ctx, id, label, *icon, keys, has_scene);
     }
     ui.separator();
@@ -213,7 +250,11 @@ fn mark(editor: &Arc<Editor>, mod_content: bool) {
         args.insert("authored".into(), Value::Bool(mod_content));
         let reply = ed.call("mark_authored", args, ed.ui_origin()).await;
         let n = reply.get("changed").and_then(Value::as_u64).unwrap_or(0);
-        ed.log.info(if mod_content { format!("* Mod content: {n} object(s) marked.") } else { format!("* Base level: {n} object(s) unmarked.") });
+        ed.log.info(if mod_content {
+            format!("* Mod content: {n} object(s) marked.")
+        } else {
+            format!("* Base level: {n} object(s) unmarked.")
+        });
     });
 }
 
@@ -225,7 +266,8 @@ fn build_menu(ui: &mut Ui, editor: &Arc<Editor>, builds: &[&toolbar::LevelAction
         }
     }
     for sub in ["Make", "Compile"] {
-        let rows: Vec<_> = BUILD_ROWS.iter().filter(|(s, _, c, _)| *s == sub && editor.registry().has(c)).collect();
+        let rows: Vec<_> =
+            BUILD_ROWS.iter().filter(|(s, _, c, _)| *s == sub && editor.registry().has(c)).collect();
         if rows.is_empty() {
             continue;
         }

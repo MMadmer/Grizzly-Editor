@@ -233,7 +233,9 @@ impl<'a> Reader<'a> {
         match self.find_chunk(id) {
             None => Ok(None),
             Some((body, false)) => Ok(Some(Reader::new(body))),
-            Some((_, true)) => Err(ChunkError::Invalid(format!("chunk {id:#x} is compressed; open it with open_chunk"))),
+            Some((_, true)) => {
+                Err(ChunkError::Invalid(format!("chunk {id:#x} is compressed; open it with open_chunk")))
+            }
         }
     }
 }

@@ -14,7 +14,10 @@
 //! - Popups by name (`menu::show_popup`): `toolbar_overflow:<id>`, `toolbar_split:<id>`, and the
 //!   name a [`Toolbar::menu`] is given.
 
-use egui::{Align, Align2, Color32, Context, CornerRadius, Id, Layout, Popup, Pos2, Rect, Response, RichText, Role, Sense, Stroke, Ui, UiBuilder, Vec2, WidgetInfo, pos2};
+use egui::{
+    Align, Align2, Color32, Context, CornerRadius, Id, Layout, Popup, Pos2, Rect, Response, RichText, Role,
+    Sense, Stroke, Ui, UiBuilder, Vec2, WidgetInfo, pos2,
+};
 
 use crate::audit;
 use crate::button::{Kind, icon_button_sized, segmented};
@@ -242,7 +245,9 @@ pub fn plan(items: &[PlanItem], width: f32, button: f32, style: ToolbarStyle) ->
     let mut before: Vec<Mode> = items.iter().map(|i| i.shown).collect();
     let before_hidden = items.iter().zip(&before).any(|(it, m)| *m == Mode::Hidden && !is_spacer(it.kind));
     let w_before = row_width(items, &mut before, style);
-    if w_before + if before_hidden { overflow } else { 0.0 } <= width && shows(items, &before) > shows(items, &modes) {
+    if w_before + if before_hidden { overflow } else { 0.0 } <= width
+        && shows(items, &before) > shows(items, &modes)
+    {
         modes = before;
         w = w_before;
         any_hidden = before_hidden;
@@ -250,7 +255,11 @@ pub fn plan(items: &[PlanItem], width: f32, button: f32, style: ToolbarStyle) ->
     let mut extra = vec![0.0; items.len()];
     let mut free = width - w - if any_hidden { overflow } else { 0.0 };
     if free > 0.0 {
-        let mut searches = items.iter().zip(&modes).filter(|(it, m)| it.kind == ItemKind::Search && **m != Mode::Hidden).count();
+        let mut searches = items
+            .iter()
+            .zip(&modes)
+            .filter(|(it, m)| it.kind == ItemKind::Search && **m != Mode::Hidden)
+            .count();
         let springs = items.iter().filter(|it| it.kind == ItemKind::Spring).count();
         for ((it, m), e) in items.iter().zip(&modes).zip(extra.iter_mut()) {
             if searches > 0 && it.kind == ItemKind::Search && *m != Mode::Hidden {
@@ -337,17 +346,37 @@ pub struct Toolbar<'u, 'a> {
 }
 
 /// How a toolbar button looks.
-fn look(p: &Palette, kind: Kind, enabled: bool, hovered: bool, pressed: bool, checked: bool) -> (Color32, Color32, Font) {
+fn look(
+    p: &Palette,
+    kind: Kind,
+    enabled: bool,
+    hovered: bool,
+    pressed: bool,
+    checked: bool,
+) -> (Color32, Color32, Font) {
     if !enabled {
-        let fill = if matches!(kind, Kind::Ghost | Kind::GhostDanger) { Color32::TRANSPARENT } else { p.input };
+        let fill =
+            if matches!(kind, Kind::Ghost | Kind::GhostDanger) { Color32::TRANSPARENT } else { p.input };
         return (fill, p.text_disabled, Font::Body);
     }
-    let pick = |rest: Color32, hover: Color32, press: Color32| if pressed { press } else if hovered { hover } else { rest };
+    let pick = |rest: Color32, hover: Color32, press: Color32| {
+        if pressed {
+            press
+        } else if hovered {
+            hover
+        } else {
+            rest
+        }
+    };
     match kind {
         Kind::Secondary => (pick(p.button, p.button_hover, p.pressed), p.text, Font::Body),
         Kind::Primary => (pick(p.primary, p.primary_hover, p.primary_pressed), p.on_fill, Font::Strong),
         Kind::Danger => (pick(p.danger, p.danger_hover, p.danger_pressed), p.on_fill, Font::Strong),
-        Kind::Ghost => (if checked { p.selection_focused } else { pick(Color32::TRANSPARENT, p.hover, p.pressed) }, p.text, Font::Body),
+        Kind::Ghost => (
+            if checked { p.selection_focused } else { pick(Color32::TRANSPARENT, p.hover, p.pressed) },
+            p.text,
+            Font::Body,
+        ),
         Kind::GhostDanger => (pick(Color32::TRANSPARENT, p.hover, p.pressed), p.error, Font::Body),
     }
 }
@@ -375,15 +404,18 @@ fn tool_button(ui: &mut Ui, rect: Rect, id: Id, f: &Face<'_>) -> Response {
     let name = if f.label.is_empty() { if f.title.is_empty() { f.tip } else { f.title } } else { f.label };
     resp.widget_info(|| WidgetInfo::labeled(Role::Button, f.enabled, name));
     if ui.is_rect_visible(rect) {
-        let (fill, color, font) = look(&p, f.kind, f.enabled, resp.hovered(), resp.is_pointer_button_down_on(), f.checked);
+        let (fill, color, font) =
+            look(&p, f.kind, f.enabled, resp.hovered(), resp.is_pointer_button_down_on(), f.checked);
         let painter = ui.painter();
         if fill != Color32::TRANSPARENT {
             painter.rect_filled(rect, f.corners, fill);
         }
         let font_id = font.id();
         let text_w = if f.label.is_empty() { 0.0 } else { text::width(ui.ctx(), &font_id, f.label) };
-        let icon_w = if f.icon == Icon::None { 0.0 } else { f.glyph + if f.label.is_empty() { 0.0 } else { 6.0 } };
-        let caret_w = if f.caret { metrics::GLYPH_STATUS + if text_w + icon_w > 0.0 { 4.0 } else { 0.0 } } else { 0.0 };
+        let icon_w =
+            if f.icon == Icon::None { 0.0 } else { f.glyph + if f.label.is_empty() { 0.0 } else { 6.0 } };
+        let caret_w =
+            if f.caret { metrics::GLYPH_STATUS + if text_w + icon_w > 0.0 { 4.0 } else { 0.0 } } else { 0.0 };
         let mut x = rect.center().x - (icon_w + text_w + caret_w) * 0.5;
         if f.icon != Icon::None {
             let icon_color = if !f.enabled {
@@ -397,7 +429,12 @@ fn tool_button(ui: &mut Ui, rect: Rect, id: Id, f: &Face<'_>) -> Response {
             } else {
                 p.text_secondary
             };
-            icons::draw(painter, f.icon, Rect::from_min_size(pos2(x, rect.center().y - f.glyph * 0.5), Vec2::splat(f.glyph)), icon_color);
+            icons::draw(
+                painter,
+                f.icon,
+                Rect::from_min_size(pos2(x, rect.center().y - f.glyph * 0.5), Vec2::splat(f.glyph)),
+                icon_color,
+            );
             x += icon_w;
         }
         if !f.label.is_empty() {
@@ -405,11 +442,24 @@ fn tool_button(ui: &mut Ui, rect: Rect, id: Id, f: &Face<'_>) -> Response {
             x += text_w;
         }
         if f.caret {
-            let c = Rect::from_min_size(pos2(x + caret_w - metrics::GLYPH_STATUS, rect.center().y - 6.0), Vec2::splat(metrics::GLYPH_STATUS));
-            icons::draw(painter, Icon::ChevronDown, c, if f.enabled { p.text_secondary } else { p.text_disabled });
+            let c = Rect::from_min_size(
+                pos2(x + caret_w - metrics::GLYPH_STATUS, rect.center().y - 6.0),
+                Vec2::splat(metrics::GLYPH_STATUS),
+            );
+            icons::draw(
+                painter,
+                Icon::ChevronDown,
+                c,
+                if f.enabled { p.text_secondary } else { p.text_disabled },
+            );
         }
         if resp.has_focus() {
-            painter.rect_stroke(rect.expand(1.0), CornerRadius::same(metrics::RADIUS + 1), Stroke::new(metrics::FOCUS_RING, p.accent_bright), egui::StrokeKind::Outside);
+            painter.rect_stroke(
+                rect.expand(1.0),
+                CornerRadius::same(metrics::RADIUS + 1),
+                Stroke::new(metrics::FOCUS_RING, p.accent_bright),
+                egui::StrokeKind::Outside,
+            );
         }
     }
     let why = (!f.enabled && !f.tip.is_empty()).then_some(f.tip);
@@ -453,8 +503,15 @@ impl<'u, 'a> Toolbar<'u, 'a> {
             let p = palette(&ctx);
             let top = (height - button) * 0.5 - 2.0;
             for (a, b) in &state.pills {
-                let r = Rect::from_min_max(pos2(origin.x + a, origin.y + top), pos2(origin.x + b, origin.y + height - top));
-                ui.painter().rect_filled(r, CornerRadius::same(metrics::RADIUS_POPUP), p.overlay.gamma_multiply(0.92));
+                let r = Rect::from_min_max(
+                    pos2(origin.x + a, origin.y + top),
+                    pos2(origin.x + b, origin.y + height - top),
+                );
+                ui.painter().rect_filled(
+                    r,
+                    CornerRadius::same(metrics::RADIUS_POPUP),
+                    p.overlay.gamma_multiply(0.92),
+                );
             }
         }
         let n = state.items.len();
@@ -501,7 +558,11 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         item.group = self.group;
         item.priority = self.priority;
         let hint = self.cur_ids.len();
-        let found = if self.state.ids.get(hint) == Some(&id) { Some(hint) } else { self.state.ids.iter().position(|x| *x == id) };
+        let found = if self.state.ids.get(hint) == Some(&id) {
+            Some(hint)
+        } else {
+            self.state.ids.iter().position(|x| *x == id)
+        };
         let mode = found.and_then(|i| self.plan.modes.get(i).copied()).unwrap_or(Mode::Full);
         let extra = found.and_then(|i| self.plan.extra.get(i).copied()).unwrap_or(0.0);
         item.shown = mode;
@@ -543,7 +604,9 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     }
 
     fn child(&mut self, salt: Id, rect: Rect) -> Ui {
-        self.ui.new_child(UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::left_to_right(Align::Center)))
+        self.ui.new_child(
+            UiBuilder::new().id_salt(salt).max_rect(rect).layout(Layout::left_to_right(Align::Center)),
+        )
     }
 
     /// A thin line between items; shown only between two shown items.
@@ -554,7 +617,10 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         if let Some((x, _, _)) = self.place(id, item) {
             let p = palette(&self.ctx);
             let x = x.round() + 0.5;
-            self.ui.painter().line_segment([pos2(x, self.origin.y + 8.0), pos2(x, self.origin.y + self.height - 8.0)], Stroke::new(1.0, p.border));
+            self.ui.painter().line_segment(
+                [pos2(x, self.origin.y + 8.0), pos2(x, self.origin.y + self.height - 8.0)],
+                Stroke::new(1.0, p.border),
+            );
         }
     }
 
@@ -580,7 +646,16 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                     other => p.tone(other),
                 };
                 let y = self.origin.y + self.height * 0.5;
-                text::paint(self.ui.painter(), &Font::Body.id(), pos2(x, y), Align2::LEFT_CENTER, color, text_, Some(w + 0.5), Clip::End);
+                text::paint(
+                    self.ui.painter(),
+                    &Font::Body.id(),
+                    pos2(x, y),
+                    Align2::LEFT_CENTER,
+                    color,
+                    text_,
+                    Some(w + 0.5),
+                    Clip::End,
+                );
             }
             None if self.overflow_open => self.entries.push(Entry::Status { text: text_.to_owned(), tone }),
             None => {}
@@ -590,14 +665,40 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// A button: an icon, a label (folded to the icon when the row is short), its tip; off, the
     /// tip says why. Returns whether it was pressed, here or from the overflow menu.
     #[allow(clippy::too_many_arguments)]
-    pub fn action(&mut self, id_salt: &str, icon: Icon, label: &str, tip: &str, enabled: bool, checked: bool, kind: Kind) -> bool {
+    pub fn action(
+        &mut self,
+        id_salt: &str,
+        icon: Icon,
+        label: &str,
+        tip: &str,
+        enabled: bool,
+        checked: bool,
+        kind: Kind,
+    ) -> bool {
         let id = self.id.with(("action", id_salt));
-        let w_full = if label.is_empty() { self.button } else { button_width(&self.ctx, label, kind, icon != Icon::None, 0.0) };
+        let w_full = if label.is_empty() {
+            self.button
+        } else {
+            button_width(&self.ctx, label, kind, icon != Icon::None, 0.0)
+        };
         let w_icon = if icon == Icon::None { w_full } else { self.button };
-        let item = PlanItem { kind: ItemKind::Action, w_full, w_icon, collapsible: icon != Icon::None && !label.is_empty(), ..PlanItem::default() };
+        let item = PlanItem {
+            kind: ItemKind::Action,
+            w_full,
+            w_icon,
+            collapsible: icon != Icon::None && !label.is_empty(),
+            ..PlanItem::default()
+        };
         let Some((x, w, mode)) = self.place(id, item) else {
             if self.overflow_open {
-                self.entries.push(Entry::Action { id, icon, label: label.to_owned(), tip: tip.to_owned(), enabled, checked });
+                self.entries.push(Entry::Action {
+                    id,
+                    icon,
+                    label: label.to_owned(),
+                    tip: tip.to_owned(),
+                    enabled,
+                    checked,
+                });
             }
             // picked from the overflow menu last frame
             if self.state.pending_click == Some(id) {
@@ -627,19 +728,40 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// opens it by. Off, it keeps its caret and width, its tip says why, and it never opens.
     /// `add` draws the menu's rows while it is open; returns whether it is open.
     #[allow(clippy::too_many_arguments)]
-    pub fn menu(&mut self, id_salt: &str, icon: Icon, label: &str, tip: &str, request: Option<&str>, enabled: bool, add: impl FnOnce(&mut Ui)) -> bool {
+    pub fn menu(
+        &mut self,
+        id_salt: &str,
+        icon: Icon,
+        label: &str,
+        tip: &str,
+        request: Option<&str>,
+        enabled: bool,
+        add: impl FnOnce(&mut Ui),
+    ) -> bool {
         let id = self.id.with(("menu", id_salt));
         let popup_id = id.with("popup");
         let caret = metrics::GLYPH_STATUS + 4.0;
         let w_full = button_width(&self.ctx, label, Kind::Ghost, icon != Icon::None, 0.0) + caret;
         let w_icon = if icon == Icon::None { w_full } else { self.button + caret };
-        let item = PlanItem { kind: ItemKind::Menu, w_full, w_icon, collapsible: icon != Icon::None && !label.is_empty(), ..PlanItem::default() };
+        let item = PlanItem {
+            kind: ItemKind::Menu,
+            w_full,
+            w_icon,
+            collapsible: icon != Icon::None && !label.is_empty(),
+            ..PlanItem::default()
+        };
         let asked = request.is_some_and(|r| take_popup_request(&self.ctx, r));
         let open_now = Popup::is_id_open(&self.ctx, popup_id);
         let anchor = match self.place(id, item) {
             None => {
                 if self.overflow_open {
-                    self.entries.push(Entry::Menu { id, icon, label: label.to_owned(), tip: tip.to_owned(), enabled });
+                    self.entries.push(Entry::Menu {
+                        id,
+                        icon,
+                        label: label.to_owned(),
+                        tip: tip.to_owned(),
+                        enabled,
+                    });
                 }
                 // picked from the overflow menu last frame, or asked for over MCP while it is there
                 if self.state.pending_menu == Some(id) || asked {
@@ -687,20 +809,45 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// plus `<label> Options`. `add` draws the menu's rows while it is open. Returns whether the
     /// action was pressed.
     #[allow(clippy::too_many_arguments)]
-    pub fn split(&mut self, id_salt: &str, icon: Icon, label: &str, tip: &str, enabled: bool, kind: Kind, add: impl FnOnce(&mut Ui)) -> bool {
+    pub fn split(
+        &mut self,
+        id_salt: &str,
+        icon: Icon,
+        label: &str,
+        tip: &str,
+        enabled: bool,
+        kind: Kind,
+        add: impl FnOnce(&mut Ui),
+    ) -> bool {
         let id = self.id.with(("split", id_salt));
         let popup_id = id.with("popup");
         let chevron = 20.0;
         let seam = 1.0;
-        let main_w = if label.is_empty() { self.button } else { button_width(&self.ctx, label, kind, icon != Icon::None, 0.0) };
+        let main_w = if label.is_empty() {
+            self.button
+        } else {
+            button_width(&self.ctx, label, kind, icon != Icon::None, 0.0)
+        };
         let w_full = main_w + seam + chevron;
         let w_icon = if icon == Icon::None { w_full } else { self.button + seam + chevron };
-        let item = PlanItem { kind: ItemKind::Split, w_full, w_icon, collapsible: icon != Icon::None && !label.is_empty(), ..PlanItem::default() };
+        let item = PlanItem {
+            kind: ItemKind::Split,
+            w_full,
+            w_icon,
+            collapsible: icon != Icon::None && !label.is_empty(),
+            ..PlanItem::default()
+        };
         let mut pressed = false;
         let anchor = match self.place(id, item) {
             None => {
                 if self.overflow_open {
-                    self.entries.push(Entry::Split { id, icon, label: label.to_owned(), tip: tip.to_owned(), enabled });
+                    self.entries.push(Entry::Split {
+                        id,
+                        icon,
+                        label: label.to_owned(),
+                        tip: tip.to_owned(),
+                        enabled,
+                    });
                 }
                 if self.state.pending_click == Some(id) {
                     self.state.pending_click = None;
@@ -730,7 +877,8 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                 };
                 pressed = tool_button(self.ui, main, id, &face).clicked() && enabled;
                 // the seam between the halves is the row showing through
-                let more = Rect::from_min_size(pos2(main.max.x + seam, main.min.y), Vec2::new(chevron, self.button));
+                let more =
+                    Rect::from_min_size(pos2(main.max.x + seam, main.min.y), Vec2::new(chevron, self.button));
                 let more_face = Face {
                     icon: Icon::ChevronDown,
                     glyph: metrics::GLYPH_STATUS,
@@ -781,7 +929,15 @@ impl<'u, 'a> Toolbar<'u, 'a> {
     /// One choice out of a few under a caption; in the overflow its choices are radio items
     /// under the caption. Returns whether the choice changed.
     #[allow(clippy::too_many_arguments)]
-    pub fn segmented(&mut self, id_salt: &str, caption: &str, current: &mut usize, labels: &[&str], tip: &str, enabled: bool) -> bool {
+    pub fn segmented(
+        &mut self,
+        id_salt: &str,
+        caption: &str,
+        current: &mut usize,
+        labels: &[&str],
+        tip: &str,
+        enabled: bool,
+    ) -> bool {
         let id = self.id.with(("segmented", id_salt));
         let font = Font::Body.id();
         // the width button::segmented takes at its natural size
@@ -854,7 +1010,9 @@ impl<'u, 'a> Toolbar<'u, 'a> {
             let rect = self.centred(self.origin.x + self.width - self.button, self.button, self.button);
             let open = Popup::is_id_open(&ctx, overflow_id);
             let mut child = self.child(overflow_id.with("button"), rect);
-            if icon_button_sized(&mut child, Icon::Overflow, "More", open, true, self.button, metrics::GLYPH).clicked() {
+            if icon_button_sized(&mut child, Icon::Overflow, "More", open, true, self.button, metrics::GLYPH)
+                .clicked()
+            {
                 Popup::toggle_id(&ctx, overflow_id);
             }
             self.state.overflow_rect = rect;
@@ -870,19 +1028,37 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                     match entry {
                         Entry::Action { id, icon, label, tip, enabled, checked } => {
                             let name = if label.is_empty() { tip.as_str() } else { label.as_str() };
-                            if menu::row(ui, name, MenuItem { icon, selected: checked, enabled, ..MenuItem::default() }, false, &tip) {
+                            if menu::row(
+                                ui,
+                                name,
+                                MenuItem { icon, selected: checked, enabled, ..MenuItem::default() },
+                                false,
+                                &tip,
+                            ) {
                                 click = Some(id);
                             }
                         }
                         Entry::Menu { id, icon, label, tip, enabled } => {
                             let name = if label.is_empty() { tip.as_str() } else { label.as_str() };
-                            if menu::row(ui, name, MenuItem { icon, enabled, ..MenuItem::default() }, true, &tip) {
+                            if menu::row(
+                                ui,
+                                name,
+                                MenuItem { icon, enabled, ..MenuItem::default() },
+                                true,
+                                &tip,
+                            ) {
                                 menu_pick = Some(id);
                             }
                         }
                         Entry::Split { id, icon, label, tip, enabled } => {
                             let name = if label.is_empty() { tip.as_str() } else { label.as_str() };
-                            if menu::row(ui, name, MenuItem { icon, enabled, ..MenuItem::default() }, false, &tip) {
+                            if menu::row(
+                                ui,
+                                name,
+                                MenuItem { icon, enabled, ..MenuItem::default() },
+                                false,
+                                &tip,
+                            ) {
                                 click = Some(id);
                             }
                             let options = format!("{name} Options");
@@ -900,7 +1076,11 @@ impl<'u, 'a> Toolbar<'u, 'a> {
                             let muted = palette(ui.ctx()).text_muted;
                             text::label(ui, &caption, Font::Small, muted, Clip::End);
                             for (k, option) in options.iter().enumerate() {
-                                if menu_item(ui, option, MenuItem { selected: k == current, enabled, ..MenuItem::default() }) {
+                                if menu_item(
+                                    ui,
+                                    option,
+                                    MenuItem { selected: k == current, enabled, ..MenuItem::default() },
+                                ) {
                                     segment = Some((id, k));
                                 }
                             }
@@ -937,7 +1117,10 @@ impl<'u, 'a> Toolbar<'u, 'a> {
             }
             ToolbarStyle::Panel => {
                 let y = self.origin.y + self.height - 0.5;
-                self.ui.painter().line_segment([pos2(self.origin.x, y), pos2(self.origin.x + self.width, y)], Stroke::new(1.0, p.border_subtle));
+                self.ui.painter().line_segment(
+                    [pos2(self.origin.x, y), pos2(self.origin.x + self.width, y)],
+                    Stroke::new(1.0, p.border_subtle),
+                );
             }
             ToolbarStyle::Row => {}
         }
@@ -946,7 +1129,11 @@ impl<'u, 'a> Toolbar<'u, 'a> {
         let row = Rect::from_min_size(self.origin, Vec2::new(self.width, self.height));
         self.ui.allocate_rect(row, Sense::hover());
         if self.x > self.origin.x + self.width + 1.0 {
-            audit::escaped(&ctx, &self.name, Rect::from_min_max(self.origin, pos2(self.x, self.origin.y + self.height)));
+            audit::escaped(
+                &ctx,
+                &self.name,
+                Rect::from_min_max(self.origin, pos2(self.x, self.origin.y + self.height)),
+            );
         }
         self.state.items = std::mem::take(&mut self.cur_items);
         self.state.ids = std::mem::take(&mut self.cur_ids);
@@ -966,7 +1153,15 @@ mod tests {
     use super::{ItemKind, Mode, PlanItem, ToolbarStyle, UNFOLD_SLACK, plan, row_width};
 
     fn action(group: u32, priority: i32, full: f32) -> PlanItem {
-        PlanItem { kind: ItemKind::Action, group, priority, w_full: full, w_icon: 28.0, collapsible: true, shown: Mode::Full }
+        PlanItem {
+            kind: ItemKind::Action,
+            group,
+            priority,
+            w_full: full,
+            w_icon: 28.0,
+            collapsible: true,
+            shown: Mode::Full,
+        }
     }
 
     #[test]
@@ -1026,7 +1221,13 @@ mod tests {
         let items = [
             action(1, 0, 50.0),
             PlanItem { kind: ItemKind::Spring, group: 1, ..PlanItem::default() },
-            PlanItem { kind: ItemKind::Search, group: 1, w_full: 128.0, w_icon: 128.0, ..PlanItem::default() },
+            PlanItem {
+                kind: ItemKind::Search,
+                group: 1,
+                w_full: 128.0,
+                w_icon: 128.0,
+                ..PlanItem::default()
+            },
         ];
         // 50 + 2 + 0 + 2 + 128 = 182 of 500: the search takes 128 more, the spring the rest
         let p = plan(&items, 500.0, 28.0, ToolbarStyle::Row);
@@ -1036,7 +1237,8 @@ mod tests {
 
     #[test]
     fn separators_show_only_between_shown_items() {
-        let sep = PlanItem { kind: ItemKind::Separator, group: 1, w_full: 1.0, w_icon: 1.0, ..PlanItem::default() };
+        let sep =
+            PlanItem { kind: ItemKind::Separator, group: 1, w_full: 1.0, w_icon: 1.0, ..PlanItem::default() };
         let items = [sep, action(1, 0, 50.0), sep, sep, action(1, 0, 50.0), sep];
         let mut modes = vec![Mode::Full; items.len()];
         let w = row_width(&items, &mut modes, ToolbarStyle::Row);

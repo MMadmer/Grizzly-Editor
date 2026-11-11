@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
@@ -76,9 +78,30 @@ pub struct DirtyDoc {
     pub path: Option<String>,
 }
 
-/// How an area says what unsaved work it holds. Asked before anything that would lose it.
+/// What saving or discarding an area's documents comes to.
+pub type SettleFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+
+/// How an area says what unsaved work it holds - asked before anything that would lose it - and
+/// saves or drops it on request (`project_close save=true`, `window_control close save=true`).
 pub trait DirtySource: Send + Sync {
     fn dirty(&self, editor: &Editor) -> Vec<DirtyDoc>;
+
+    /// Writes every document [`Self::dirty`] reports. The error names the document that could
+    /// not be saved and why.
+    fn save<'a>(&'a self, editor: &'a Arc<Editor>) -> SettleFuture<'a> {
+        Box::pin(async move {
+            match self.dirty(editor).first() {
+                Some(d) => Err(format!("{}: it cannot be saved on request", d.name)),
+                None => Ok(()),
+            }
+        })
+    }
+
+    /// Forgets the unsaved changes of every document [`Self::dirty`] reports. What a source does
+    /// not override is dropped with the project.
+    fn discard<'a>(&'a self, _editor: &'a Arc<Editor>) -> SettleFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// The context of the running editor. One per process, shared as `Arc<Editor>`.
@@ -178,7 +201,8 @@ impl Editor {
         self.exec.spawn(async move {
             let reply = this.call(name, args, origin).await;
             if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-                let text = reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned();
+                let text =
+                    reply.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned();
                 this.notices.error(text);
             }
         });
@@ -193,6 +217,31 @@ impl Editor {
     pub fn dirty_docs(&self) -> Vec<DirtyDoc> {
         let sources: Vec<Arc<dyn DirtySource>> = self.dirty.read().clone();
         sources.iter().flat_map(|s| s.dirty(self)).collect()
+    }
+
+    /// Saves every document with unsaved changes, area by area, and answers what was dirty. The
+    /// first save that fails stops it: `Err` names the document and why.
+    pub async fn save_all(self: &Arc<Self>) -> Result<Vec<DirtyDoc>, CmdError> {
+        let before = self.dirty_docs();
+        let sources: Vec<Arc<dyn DirtySource>> = self.dirty.read().clone();
+        for source in &sources {
+            if !source.dirty(self).is_empty() {
+                source.save(self).await.map_err(|e| CmdError::new("save_failed", e))?;
+            }
+        }
+        Ok(before)
+    }
+
+    /// Forgets every unsaved change and answers what was dirty.
+    pub async fn discard_all(self: &Arc<Self>) -> Result<Vec<DirtyDoc>, CmdError> {
+        let before = self.dirty_docs();
+        let sources: Vec<Arc<dyn DirtySource>> = self.dirty.read().clone();
+        for source in &sources {
+            if !source.dirty(self).is_empty() {
+                source.discard(self).await.map_err(|e| CmdError::new("discard_failed", e))?;
+            }
+        }
+        Ok(before)
     }
 
     /// `Err(unsaved)` naming the dirty documents unless there are none or `discard` allows the

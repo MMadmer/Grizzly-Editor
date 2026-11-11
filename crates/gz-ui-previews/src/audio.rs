@@ -65,7 +65,9 @@ impl Player {
             let playing = Arc::new(AtomicBool::new(false));
             let error = Arc::new(Mutex::new(None));
             let (p, e) = (playing.clone(), error.clone());
-            if let Err(err) = std::thread::Builder::new().name("gz-audio".into()).spawn(move || run(&rx, &p, &e, &wake)) {
+            if let Err(err) =
+                std::thread::Builder::new().name("gz-audio".into()).spawn(move || run(&rx, &p, &e, &wake))
+            {
                 log.warn(format!("the audio thread did not start: {err}"));
             }
             Player { tx, playing, error }
@@ -95,10 +97,16 @@ impl Player {
 }
 
 /// The stream, opened when the first sound is played and kept while the thread lives.
-fn open(voice: &Arc<Mutex<Voice>>, playing: &Arc<AtomicBool>, wake: &gz_task::Wake) -> Result<cpal::Stream, String> {
+fn open(
+    voice: &Arc<Mutex<Voice>>,
+    playing: &Arc<AtomicBool>,
+    wake: &gz_task::Wake,
+) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or_else(|| "There is no audio output device.".to_owned())?;
-    let supported = device.default_output_config().map_err(|e| format!("The audio device refused its own settings: {e}"))?;
+    let supported = device
+        .default_output_config()
+        .map_err(|e| format!("The audio device refused its own settings: {e}"))?;
     let format = supported.sample_format();
     let config = supported.config();
     let (rate, channels) = (config.sample_rate, config.channels);
@@ -144,14 +152,21 @@ fn open(voice: &Arc<Mutex<Voice>>, playing: &Arc<AtomicBool>, wake: &gz_task::Wa
                 None,
             )
         }
-        other => return Err(format!("The audio device wants samples as {other}, which the editor does not play.")),
+        other => {
+            return Err(format!("The audio device wants samples as {other}, which the editor does not play."));
+        }
     }
     .map_err(|e| format!("The audio device did not open: {e}"))?;
     stream.play().map_err(|e| format!("The audio device did not start: {e}"))?;
     Ok(stream)
 }
 
-fn run(rx: &Receiver<Msg>, playing: &Arc<AtomicBool>, error: &Arc<Mutex<Option<String>>>, wake: &gz_task::Wake) {
+fn run(
+    rx: &Receiver<Msg>,
+    playing: &Arc<AtomicBool>,
+    error: &Arc<Mutex<Option<String>>>,
+    wake: &gz_task::Wake,
+) {
     let voice = Arc::new(Mutex::new(Voice::default()));
     let mut stream: Option<cpal::Stream> = None;
     while let Ok(msg) = rx.recv() {
