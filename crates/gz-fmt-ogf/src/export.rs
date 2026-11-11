@@ -6,6 +6,12 @@
 //! - both `CalculateTB` bodies are commented out: a static model carries no tangents, a
 //!   skinned one the constructor's (1, 0, 0) and (0, 0, 1);
 //! - the static exporter's VIPM pass returns at once, so it never writes a progressive mesh;
+//!   a skeleton flagged progressive goes through the VIPM pass (`vipm`) instead of the face
+//!   optimiser - over a triangle soup it collapses nothing, and the split comes out with its
+//!   vertices taken last first, its faces newest first through the cheap cache optimiser
+//!   (mode 1), one sliding window;
+//! - the bone boxes are Wild Magic's minimal boxes (`obb::min_box`), a breakable part's
+//!   fragments too;
 //! - the build time of the description is never set (`ctime` only formats it): it is 0.
 
 use glam::{Vec2, Vec3};
@@ -306,16 +312,19 @@ struct SkelSplit {
     faces: Vec<[u16; 3]>,
     used_bones: Vec<u16>,
     bbox: Aabb,
+    /// `m_SWR`: the sliding windows of a progressive split.
+    swr: Vec<crate::vipm::Swr>,
 }
 
 impl SkelSplit {
-    fn add_face(&mut self, v: [&SkelVert; 3], warnings: &mut Vec<String>) -> Result<()> {
+    /// `CSkeletonCollectorPacked::add_face`: false for a degenerate face, which is left out.
+    fn add_face(&mut self, v: [&SkelVert; 3], warnings: &mut Vec<String>) -> Result<bool> {
         if similar(v[0].offs, v[1].offs, EPS)
             || similar(v[0].offs, v[2].offs, EPS)
             || similar(v[1].offs, v[2].offs, EPS)
         {
             warnings.push("Degenerate face found. Removed.".to_owned());
-            return Ok(());
+            return Ok(false);
         }
         if self.verts.len() + 3 > 0xFFFF {
             return Err(fail(format!(
@@ -326,7 +335,26 @@ impl SkelSplit {
         let base = self.verts.len() as u16;
         self.verts.extend(v.iter().map(|x| (*x).clone()));
         self.faces.push([base, base + 1, base + 2]);
-        Ok(())
+        Ok(true)
+    }
+
+    /// `MakeProgressive`: the collapse order (vertices permuted, faces in window order) and
+    /// the sliding windows. When the pass gives nothing the split stays as it is, unoptimised,
+    /// as the C++ leaves it ("Can't make progressive.").
+    fn make_progressive(&mut self, warnings: &mut Vec<String>) {
+        let verts: Vec<(Vec3, Vec2)> = self.verts.iter().map(|v| (v.offs, v.uv)).collect();
+        let Some(r) = crate::vipm::convert(&verts, &self.faces) else {
+            warnings.push("!..Can't make progressive.".to_owned());
+            return;
+        };
+        let source = self.verts.clone();
+        for (i, v) in source.into_iter().enumerate() {
+            if let Some(dst) = r.permute_verts.get(i).and_then(|p| self.verts.get_mut(usize::from(*p))) {
+                *dst = v;
+            }
+        }
+        self.faces = r.indices.as_chunks::<3>().0.to_vec();
+        self.swr = r.swr;
     }
 
     /// `MakeStripify`: the face order of the cache model, then the vertices in first use.
@@ -355,7 +383,8 @@ impl SkelSplit {
     }
 
     fn save(&mut self, w: &mut Writer) {
-        w.chunk(chunk::HEADER, |w| Header::around(MT::SKELETON_GEOMDEF_ST, &self.bbox).write(w));
+        let kind = if self.swr.is_empty() { MT::SKELETON_GEOMDEF_ST } else { MT::SKELETON_GEOMDEF_PM };
+        w.chunk(chunk::HEADER, |w| Header::around(kind, &self.bbox).write(w));
         w.chunk(chunk::TEXTURE, |w| {
             w.w_stringz(&self.texture);
             w.w_stringz(&self.shader);
@@ -413,6 +442,20 @@ impl SkelSplit {
                 f.iter().for_each(|i| w.w_u16(*i));
             }
         });
+        if !self.swr.is_empty() {
+            w.chunk(chunk::SWIDATA, |w| {
+                // 16 reserved bytes, the count, the records
+                for _ in 0..4 {
+                    w.w_u32(0);
+                }
+                w.w_u32(self.swr.len() as u32);
+                for s in &self.swr {
+                    w.w_u32(s.offset);
+                    w.w_u16(s.num_tris);
+                    w.w_u16(s.num_verts);
+                }
+            });
+        }
     }
 }
 
@@ -426,88 +469,6 @@ fn build_groups(obj: &Object, bone: usize, groups: &mut [u16], mut id: u16, last
     for c in obj.bone_children(bone) {
         build_groups(obj, c, groups, id, last);
     }
-}
-
-/// A box around points: the axes of their covariance, the extents along them.
-///
-/// The C++ fits the minimal box with Wild Magic's `MinBox3` (a Powell minimisation seeded by
-/// this same covariance box); the boxes agree in shape, not to the last bit.
-fn bone_obb(points: &[Vec3]) -> Obb {
-    if points.len() < 3 {
-        return Obb::INVALID;
-    }
-    let n = points.len() as f64;
-    let mean = points.iter().fold(glam::DVec3::ZERO, |a, p| a + p.as_dvec3()) / n;
-    let mut c = [[0.0f64; 3]; 3];
-    for p in points {
-        let d = p.as_dvec3() - mean;
-        let d = [d.x, d.y, d.z];
-        for i in 0..3 {
-            for j in 0..3 {
-                c[i][j] += d[i] * d[j] / n;
-            }
-        }
-    }
-    // Jacobi rotations: the eigenvectors of a symmetric 3x3
-    let mut v = [[1.0f64, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-    for _ in 0..32 {
-        let (mut p, mut q, mut off) = (0, 1, 0.0f64);
-        for (i, j) in [(0, 1), (0, 2), (1, 2)] {
-            if c[i][j].abs() > off {
-                off = c[i][j].abs();
-                p = i;
-                q = j;
-            }
-        }
-        if off < 1e-12 {
-            break;
-        }
-        let theta = (c[q][q] - c[p][p]) / (2.0 * c[p][q]);
-        let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
-        let t = if theta == 0.0 { 1.0 } else { t };
-        let cs = 1.0 / (t * t + 1.0).sqrt();
-        let sn = t * cs;
-        for row in c.iter_mut() {
-            let (a, b) = (row[p], row[q]);
-            row[p] = cs * a - sn * b;
-            row[q] = sn * a + cs * b;
-        }
-        let (mut rp, mut rq) = (c[p], c[q]);
-        for (x, y) in rp.iter_mut().zip(rq.iter_mut()) {
-            let (a, b) = (*x, *y);
-            *x = cs * a - sn * b;
-            *y = sn * a + cs * b;
-        }
-        c[p] = rp;
-        c[q] = rq;
-        for row in &mut v {
-            let (a, b) = (row[p], row[q]);
-            row[p] = cs * a - sn * b;
-            row[q] = sn * a + cs * b;
-        }
-    }
-    let axis = |k: usize| glam::DVec3::new(v[0][k], v[1][k], v[2][k]).normalize_or_zero();
-    let (a0, a1) = (axis(0), axis(1));
-    let a2 = a0.cross(a1);
-    let axes = [a0, a1, a2];
-    let mut lo = [f64::MAX; 3];
-    let mut hi = [f64::MIN; 3];
-    for p in points {
-        for k in 0..3 {
-            let d = p.as_dvec3().dot(axes[k]);
-            lo[k] = lo[k].min(d);
-            hi[k] = hi[k].max(d);
-        }
-    }
-    let center = axes[0] * ((lo[0] + hi[0]) * 0.5)
-        + axes[1] * ((lo[1] + hi[1]) * 0.5)
-        + axes[2] * ((lo[2] + hi[2]) * 0.5);
-    let half = glam::DVec3::new((hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5, (hi[2] - lo[2]) * 0.5);
-    // `B.m_rotate.i.crossproduct(j, k); j.crossproduct(k, i)`: re-orthogonalised
-    let (j, k) = (axes[1].as_vec3(), axes[2].as_vec3());
-    let i = j.cross(k);
-    let j = k.cross(i);
-    Obb { rotate: [i, j, k], translate: center.as_vec3(), halfsize: half.as_vec3() }
 }
 
 fn prepare_geometry(
@@ -621,6 +582,7 @@ fn prepare_mesh(
                         faces: Vec::new(),
                         used_bones: Vec::new(),
                         bbox: Aabb::INVALID,
+                        swr: Vec::new(),
                     });
                     splits.len() - 1
                 }
@@ -644,13 +606,15 @@ fn prepare_mesh(
 pub fn export_skeleton(obj: &Object, opts: &ExportOptions, influence: u8) -> Result<Export> {
     let mut warnings = Vec::new();
     let (mut splits, total) = prepare_geometry(obj, influence, &mut warnings)?;
-    if obj.flags.contains(ObjectFlags::PROGRESSIVE) {
-        warnings.push("Progressive skeletons are exported without their sliding windows (VIPM is not ported); the faces are ordered as for a plain one.".to_owned());
-    }
+    let progressive = obj.flags.contains(ObjectFlags::PROGRESSIVE);
     let rest = rest_pose(&obj.bones);
     let mut bone_points: Vec<Vec<Vec3>> = vec![Vec::new(); obj.bones.len()];
     for s in &mut splits {
-        s.stripify();
+        if progressive {
+            s.make_progressive(&mut warnings);
+        } else {
+            s.stripify();
+        }
         for v in &s.verts {
             let b = usize::from(v.bones.first().map_or(0, |b| b.id));
             if let (Some(list), Some(inv)) = (bone_points.get_mut(b), rest.inverse.get(b)) {
@@ -675,7 +639,7 @@ pub fn export_skeleton(obj: &Object, opts: &ExportOptions, influence: u8) -> Res
         .map(|(i, b)| BoneName {
             name: b.name.clone(),
             parent: b.parent.clone(),
-            obb: bone_obb(&bone_points[i]),
+            obb: crate::obb::min_box(&bone_points[i]),
         })
         .collect();
     w.chunk(chunk::S_BONE_NAMES, |w| write_names(&names, w));
@@ -703,6 +667,177 @@ pub fn export_skeleton(obj: &Object, opts: &ExportOptions, influence: u8) -> Res
     if obj.is_animated() {
         write_motions(obj, &mut w, &mut warnings)?;
     }
+    Ok(Export { bytes: w.into_bytes(), warnings })
+}
+
+// ------------------------------------------------------------------ breakable parts
+
+/// A face of a breakable part, in the part's own frame (`SBFace` after `SBPart::prepare`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BreakableFace {
+    pub o: [Vec3; 3],
+    pub n: [Vec3; 3],
+    pub uv: [Vec2; 3],
+    /// The fragment it belongs to.
+    pub bone: u16,
+    pub shader: SmolStr,
+    pub texture: SmolStr,
+    pub two_sided: bool,
+}
+
+/// A fragment of a breakable part (`SBBone`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BreakableBone {
+    pub name: SmolStr,
+    pub parent: SmolStr,
+    pub material: SmolStr,
+    pub offset: Vec3,
+    /// The fragment's area: the engine takes it as the mass.
+    pub area: f32,
+}
+
+/// `SBPart`: what `SBPart::Export` writes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BreakablePart {
+    pub faces: Vec<BreakableFace>,
+    pub bones: Vec<BreakableBone>,
+}
+
+/// `SBoneShape::stBox`, `sfRemoveAfterBreak`, `jtNone`, `SJointIKData::flBreakable`.
+const SHAPE_BOX: u16 = 1;
+const SHAPE_REMOVE_AFTER_BREAK: u16 = 1 << 1;
+const JOINT_NONE: u32 = 4;
+const IK_BREAKABLE: u32 = 1;
+
+/// `SBPart::Export(F, 1)`: the rigid skeleton of a breakable part - one split per shader and
+/// texture, one bone per fragment, each bone a removable box of its points.
+///
+/// The faces are not optimised (the C++ writes them in the order they came); the IK record's
+/// friction, which `SJointIKData::Reset` leaves uninitialised in the C++, is 0 here, as is the
+/// count of degenerate faces a split starts with (also uninitialised there).
+pub fn export_breakable(part: &BreakablePart) -> Result<Export> {
+    if part.bones.len() > 63 {
+        return Err(fail("Breakable object cannot handle more than 63 parts."));
+    }
+    let mut warnings = Vec::new();
+    let mut splits: Vec<(SkelSplit, u32)> = Vec::new();
+    for f in &part.faces {
+        let si = match splits.iter().position(|(s, _)| s.shader == f.shader && s.texture == f.texture) {
+            Some(i) => i,
+            None => {
+                splits.push((
+                    SkelSplit {
+                        shader: f.shader.clone(),
+                        texture: f.texture.clone(),
+                        part: 0,
+                        link_type: 1,
+                        verts: Vec::new(),
+                        faces: Vec::new(),
+                        used_bones: Vec::new(),
+                        bbox: Aabb::INVALID,
+                        swr: Vec::new(),
+                    },
+                    0,
+                ));
+                splits.len() - 1
+            }
+        };
+        let (split, invalid) = &mut splits[si];
+        let mut v: [SkelVert; 3] = std::array::from_fn(|k| SkelVert {
+            offs: f.o[k],
+            norm: f.n[k],
+            uv: f.uv[k],
+            bones: smallvec::smallvec![Bw { id: f.bone, w: 1.0 }],
+        });
+        if !split.add_face([&v[0], &v[1], &v[2]], &mut warnings)? {
+            *invalid += 1;
+        }
+        if f.two_sided {
+            for x in &mut v {
+                x.norm = -x.norm;
+            }
+            // oracle: `add_face` counts the face and the caller counts it again
+            if !split.add_face([&v[0], &v[2], &v[1]], &mut warnings)? {
+                *invalid += 2;
+            }
+        }
+    }
+    let mut bone_points: Vec<Vec<Vec3>> = vec![Vec::new(); part.bones.len()];
+    for (s, invalid) in &splits {
+        if s.verts.is_empty() || s.faces.is_empty() {
+            return Err(fail(format!("Degenerate part found (Texture '{}').", s.texture)));
+        }
+        if *invalid != 0 {
+            warnings.push(format!(
+                "Part [texture '{}'] have {invalid} duplicate(degenerate) face(s).",
+                s.texture
+            ));
+        }
+        for v in &s.verts {
+            let b = usize::from(v.bones.first().map_or(0, |b| b.id));
+            let bone = part.bones.get(b).ok_or_else(|| fail("A face names a fragment the part does not have."))?;
+            if let Some(list) = bone_points.get_mut(b) {
+                list.push(Vec3::new(v.offs.x - bone.offset.x, v.offs.y - bone.offset.y, v.offs.z - bone.offset.z));
+            }
+        }
+    }
+    let mut total = Aabb::INVALID;
+    for (s, _) in &mut splits {
+        s.bbox = Aabb::INVALID;
+        for v in &s.verts {
+            s.bbox.modify(v.offs);
+        }
+        total.merge(&s.bbox);
+    }
+
+    let mut w = Writer::with_capacity(1 << 14);
+    w.chunk(chunk::HEADER, |w| Header::around(MT::SKELETON_RIGID, &total).write(w));
+    w.chunk(chunk::S_DESC, |w| Desc { time_size: 8, ..Desc::default() }.write(w));
+    w.chunk(chunk::CHILDREN, |w| {
+        for (i, (s, _)) in splits.iter_mut().enumerate() {
+            w.chunk(i as u32, |w| s.save(w));
+        }
+    });
+    let boxes: Vec<Obb> = bone_points.iter().map(|p| crate::obb::min_box(p)).collect();
+    let names: Vec<BoneName> = part
+        .bones
+        .iter()
+        .zip(&boxes)
+        .map(|(b, obb)| BoneName { name: b.name.clone(), parent: b.parent.clone(), obb: *obb })
+        .collect();
+    w.chunk(chunk::S_BONE_NAMES, |w| write_names(&names, w));
+    w.chunk(chunk::S_IKDATA, |w| {
+        for (b, obb) in part.bones.iter().zip(&boxes) {
+            let shape = gz_fmt_object::BoneShape {
+                kind: SHAPE_BOX,
+                flags: SHAPE_REMOVE_AFTER_BREAK,
+                box_rotate: obb.rotate.map(|r| r.to_array()),
+                box_translate: obb.translate,
+                box_halfsize: obb.halfsize,
+                ..gz_fmt_object::BoneShape::default()
+            };
+            // `SJointLimit::Reset` is a zero limit: its negation is written, -0
+            let limit = [-0.0f32, -0.0, 1.0, 1.0];
+            BoneIk {
+                version: crate::bones::IKDATA_VERSION,
+                game_mtl: b.material.clone(),
+                shape,
+                joint_type: JOINT_NONE,
+                limits: [limit; 3],
+                spring_factor: 1.0,
+                damping_factor: 1.0,
+                flags: IK_BREAKABLE,
+                break_force: 0.0,
+                break_torque: 0.0,
+                friction: 0.0,
+                rest_rotate: Vec3::ZERO,
+                rest_offset: b.offset,
+                mass: b.area,
+                center_of_mass: obb.translate,
+            }
+            .write(w);
+        }
+    });
     Ok(Export { bytes: w.into_bytes(), warnings })
 }
 
@@ -1146,11 +1281,11 @@ mod tests {
     }
 
     #[test]
-    fn a_covariance_box_holds_its_points() {
+    fn bone_boxes_are_the_minimal_ones() {
         let pts = [Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(2.0, 1.0, 0.5)];
-        let b = bone_obb(&pts);
+        let b = crate::obb::min_box(&pts);
         assert!(b.halfsize.x > 0.0 && b.halfsize.y > 0.0);
-        assert_eq!(bone_obb(&pts[..2]), Obb::INVALID);
+        assert_eq!(crate::obb::min_box(&pts[..2]), Obb::INVALID);
     }
 
     #[test]
@@ -1159,5 +1294,75 @@ mod tests {
         assert_eq!(cvtt(0.9 * 127.0), 114);
         assert_eq!(cvtt(-0.9 * 127.0), -114);
         assert_eq!(cvtt(f32::NAN).clamp(-128, 127), -128);
+    }
+
+    #[test]
+    fn a_progressive_skeleton_carries_its_windows() {
+        // the split is a triangle soup (no welding), so the pass collapses nothing: one window,
+        // the vertices taken last first, no warning about VIPM any more
+        let mut obj = skeleton();
+        obj.flags |= ObjectFlags::PROGRESSIVE;
+        let e = export_skeleton(&obj, &ExportOptions::default(), 4).unwrap();
+        assert!(e.warnings.iter().all(|w| !w.contains("VIPM") && !w.contains("progressive")));
+        let v = Visual::read(&e.bytes).unwrap();
+        let child = &v.children[0];
+        assert_eq!(child.kind(), MT::SKELETON_GEOMDEF_PM);
+        let swi = child.swi.as_ref().unwrap();
+        assert_eq!(swi.reserved, [0; 4]);
+        assert_eq!(swi.windows.len(), 1);
+        assert_eq!((swi.windows[0].offset, swi.windows[0].num_tris, swi.windows[0].num_verts), (0, 2, 6));
+        // the newest face first, its corners renumbered from the last vertex down
+        assert_eq!(child.indices.as_deref(), Some(&[2, 1, 0, 5, 4, 3][..]));
+    }
+
+    #[test]
+    fn a_breakable_part_is_a_rigid_skeleton_of_its_fragments() {
+        let face = |o: [Vec3; 3], bone: u16| BreakableFace {
+            o,
+            n: [Vec3::Y; 3],
+            uv: [Vec2::ZERO, Vec2::X, Vec2::Y],
+            bone,
+            shader: "models\\model".into(),
+            texture: "glass\\a".into(),
+            two_sided: false,
+        };
+        let part = BreakablePart {
+            faces: vec![
+                face([Vec3::ZERO, Vec3::Z, Vec3::X], 0),
+                face([Vec3::X, Vec3::Z, Vec3::new(1.0, 0.0, 1.0)], 0),
+                face([Vec3::new(2.0, 0.0, 0.0), Vec3::new(2.0, 0.0, 1.0), Vec3::new(3.0, 0.0, 0.0)], 1),
+            ],
+            bones: vec![
+                BreakableBone {
+                    name: "0".into(),
+                    parent: "".into(),
+                    material: "materials\\glass".into(),
+                    offset: Vec3::ZERO,
+                    area: 1.0,
+                },
+                BreakableBone {
+                    name: "1".into(),
+                    parent: "0".into(),
+                    material: "materials\\glass".into(),
+                    offset: Vec3::new(2.0, 0.0, 0.0),
+                    area: 0.5,
+                },
+            ],
+        };
+        let e = export_breakable(&part).unwrap();
+        let v = Visual::read(&e.bytes).unwrap();
+        assert_eq!(v.kind(), MT::SKELETON_RIGID);
+        assert_eq!(v.children.len(), 1);
+        assert_eq!(v.children[0].kind(), MT::SKELETON_GEOMDEF_ST);
+        assert_eq!(v.children[0].indices.as_deref(), Some(&[0, 1, 2, 3, 4, 5, 6, 7, 8][..]));
+        assert_eq!(v.bones.iter().map(|b| (b.name.as_str(), b.parent.as_str())).collect::<Vec<_>>(), [("0", ""), ("1", "0")]);
+        assert_eq!(v.ik.len(), 2);
+        let ik = &v.ik[1];
+        assert_eq!((ik.joint_type, ik.flags, ik.shape.kind, ik.shape.flags), (4, 1, 1, 2));
+        assert_eq!(ik.limits[0][0].to_bits(), (-0.0f32).to_bits());
+        assert_eq!((ik.rest_offset, ik.mass), (Vec3::new(2.0, 0.0, 0.0), 0.5));
+        // a fragment's box is fitted to its points relative to its offset
+        assert!(ik.shape.box_translate.abs_diff_eq(Vec3::new(1.0 / 3.0, 0.0, 1.0 / 3.0), 0.35));
+        assert!(export_breakable(&BreakablePart { bones: vec![part.bones[0].clone(); 64], ..part }).is_err());
     }
 }

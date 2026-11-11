@@ -106,6 +106,12 @@ fn spawn_id_offset(p: &[u8]) -> Option<usize> {
     (at + 2 <= p.len()).then_some(at)
 }
 
+/// The offset of the state's size word, right after `m_tSpawnID`.
+pub(crate) fn state_size_offset(p: &[u8]) -> Option<usize> {
+    let at = spawn_id_offset(p)? + 2;
+    (at + 2 <= p.len()).then_some(at)
+}
+
 /// The game vertex range of level 0 and its first vertex.
 fn level_vertices(graph: &GameGraph) -> Option<u16> {
     graph.vertices.iter().position(|v| v.level_id == 0).map(|i| i as u16)

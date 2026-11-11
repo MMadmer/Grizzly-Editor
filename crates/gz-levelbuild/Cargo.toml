@@ -20,6 +20,7 @@ gz-entities.workspace = true
 gz-chunk.workspace = true
 gz-fmt-level.workspace = true
 gz-fmt-object.workspace = true
+gz-fmt-ogf.workspace = true
 gz-fmt-spawn.workspace = true
 gz-fmt-tex.workspace = true
 gz-fmt-xr.workspace = true

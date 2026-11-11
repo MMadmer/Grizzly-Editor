@@ -20,6 +20,8 @@
 //!   multiple-usage objects as models and references (with their LOD quads and the merged
 //!   `level_lods` textures), point lights (soft ones sampled), the hemisphere and the sun,
 //!   glows, portals, light controls. [`prj::Compiled`] carries the scene statistic.
+//! - [`breakable`] - the breakable and climable objects `BuildGame` adds to `level.spawn`
+//!   (`GeometryPartExtractor`: parts, fragments, `meshes\brkbl#N.ogf`).
 //! - [`files`] - `level.ltx`, the game files of `BuildGame` (`level.spawn`, `level_rs.spawn`,
 //!   `level.game`, `level.env_mod`, `level.snd_static`, `level.ps_static`, `level.fog_vol`),
 //!   `level.hom`, `level.som`, `build.aimap`, `level_stat.tga` / `.txt`, the collision form
@@ -60,6 +62,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod breakable;
 mod cmd;
 pub mod details;
 pub mod files;

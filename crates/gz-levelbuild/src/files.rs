@@ -84,6 +84,8 @@ pub fn level_ltx(scene: &SceneState, lib: Lookup<'_>) -> Vec<u8> {
 #[derive(Clone, Debug, Default)]
 pub struct GameFiles {
     pub files: BTreeMap<&'static str, Vec<u8>>,
+    /// The breakable parts' models, `meshes\brkbl#N.ogf` relative to the level folder.
+    pub meshes: Vec<(String, Vec<u8>)>,
     pub log: Vec<String>,
 }
 
@@ -126,9 +128,15 @@ pub fn export_entity(
 }
 
 /// `BuildGame`: the spawn elements' packets (`level.spawn`, the respawned ones in
-/// `level_rs.spawn`), the patrol paths and respawn points (`level.game`), the environment
-/// modifiers, the static sounds and particles, the fog volumes.
-pub fn game_files(scene: &SceneState, settings: Option<&(dyn Settings + Sync)>) -> Result<GameFiles> {
+/// `level_rs.spawn`) - the Scene Object tool's breakable and climable objects first, as the
+/// tools export in class order -, the patrol paths and respawn points (`level.game`), the
+/// environment modifiers, the static sounds and particles, the fog volumes.
+pub fn game_files(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    settings: Option<&(dyn Settings + Sync)>,
+) -> Result<GameFiles> {
     let mut out = GameFiles::default();
     let (mut spawn, mut spawn_rs) = (Writer::new(), Writer::new());
     let (mut n_spawn, mut n_rs) = (0u32, 0u32);
@@ -137,6 +145,24 @@ pub fn game_files(scene: &SceneState, settings: Option<&(dyn Settings + Sync)>) 
     let mut sounds = Vec::new();
     let mut particles = Vec::new();
     for class in ObjClass::ALL {
+        if class == ObjClass::SceneObject {
+            let (ok, made) = crate::breakable::export(scene, lib, engine, settings)?;
+            if !ok {
+                // the export's own lines say why; the C++ showed them before its error
+                let mut text = made.log.join("\n");
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str("ERROR: Failed to build game. ");
+                return Err(BuildError::new(text));
+            }
+            out.log.extend(made.log);
+            for packet in made.spawns {
+                spawn.w_chunk(n_spawn, &packet);
+                n_spawn += 1;
+            }
+            out.meshes = made.meshes;
+        }
         for o in scene.of_class(class) {
             match &o.data {
                 ObjData::Spawn(pt) => {

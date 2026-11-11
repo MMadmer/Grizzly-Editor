@@ -457,6 +457,40 @@ async fn textures(editor: &Arc<Editor>, names: Vec<String>) -> HashMap<String, (
     out
 }
 
+/// The LOD textures the scene's multiple-usage objects need (`lod\lod_x.dds`, `..._nm.dds`):
+/// the path of each under the editor's `gamedata\textures` (the C++ `$game_textures$`) and
+/// whether the linked game or that folder has it.
+async fn lod_texture_files(editor: &Arc<Editor>, inp: &Inputs) -> HashMap<String, (String, bool)> {
+    let mut names: Vec<String> = Vec::new();
+    for o in inp.snap.of_class(ObjClass::SceneObject) {
+        let ObjData::SceneObject(d) = &o.data else { continue };
+        if d.visual_mode() {
+            continue;
+        }
+        let Some(lo) = inp.lib.cached(&d.reference) else { continue };
+        if crate::validate::is_mu_static(&lo) {
+            names.extend(crate::validate::lod_texture_files(&lo.name));
+        }
+    }
+    names.sort();
+    names.dedup();
+    let game = match GameLink::of(editor) {
+        Ok(link) => link.files().await.ok(),
+        Err(_) => None,
+    };
+    let bundled = gz_game::Bundled::of(editor);
+    let mut out = HashMap::new();
+    for n in names {
+        let rel = format!("textures\\{n}");
+        let path = bundled.path(&rel);
+        let in_game = game.as_ref().is_some_and(|f| f.exists(&rel));
+        let p2 = path.clone();
+        let there = in_game || editor.exec.io(move || p2.is_file()).await;
+        out.insert(n, (path.display().to_string(), there));
+    }
+    out
+}
+
 /// `SceneBuilder::Compile`: the build project and every file beside it.
 /// `Scene->Validate` before a build: its lines go to the log, and a scene that fails is not
 /// built (`VERIFY_COMPILE(.., "Validation failed.", "Invalid scene.")`).
@@ -467,9 +501,17 @@ async fn validate_scene(
     ctx: &JobCtx,
 ) -> Result<(), JobError> {
     ctx.stage("Validating the scene");
+    let lods = if tests.full { lod_texture_files(editor, inp).await } else { HashMap::new() };
     let (snap, lib, engine) = (inp.snap.clone(), inp.lib.clone(), inp.engine.clone());
-    let checked =
-        editor.exec.cpu(move || crate::validate::validate(&snap, &files::lookup(lib), &engine, tests)).await;
+    let checked = editor
+        .exec
+        .cpu(move || {
+            let texture = |n: &str| {
+                lods.get(n).cloned().unwrap_or_else(|| (format!("textures\\{n}"), false))
+            };
+            crate::validate::validate(&snap, &lib, &engine, tests, &texture)
+        })
+        .await;
     let (lines, ok) = match checked {
         Ok(l) => (l, true),
         Err(l) => (l, false),
@@ -523,10 +565,11 @@ async fn compile_level(
                 out.push(("level_lods_nm.dds".to_owned(), normal));
             }
             out.push(("level.ltx".to_owned(), files::level_ltx(&snap, &look)));
-            let g = files::game_files(&snap, sync_settings(&settings))?;
+            let g = files::game_files(&snap, &look, &engine, sync_settings(&settings))?;
             for (n, b) in g.files {
                 out.push((n.to_owned(), b));
             }
+            out.extend(g.meshes);
             let (tga, txt) = files::scene_stat(&c.stat);
             out.push(("level_stat.tga".to_owned(), tga));
             out.push(("level_stat.txt".to_owned(), txt));
@@ -685,19 +728,18 @@ async fn make_part(
     ctx.check()?;
     let (snap, lib, engine, settings, act) =
         (inp.snap.clone(), inp.lib.clone(), inp.engine.clone(), inp.settings.clone(), action.to_owned());
-    let made: Vec<(String, Vec<u8>)> = editor
+    let (made, log): (NamedFiles, Vec<String>) = editor
         .exec
-        .cpu(move || -> crate::Result<Vec<(String, Vec<u8>)>> {
+        .cpu(move || -> crate::Result<(NamedFiles, Vec<String>)> {
             let look = files::lookup(lib);
-            Ok(match act.as_str() {
+            let mut log = Vec::new();
+            let made = match act.as_str() {
                 "make_game" => {
                     let mut out = vec![("level.ltx".to_owned(), files::level_ltx(&snap, &look))];
-                    out.extend(
-                        files::game_files(&snap, sync_settings(&settings))?
-                            .files
-                            .into_iter()
-                            .map(|(n, b)| (n.to_owned(), b)),
-                    );
+                    let g = files::game_files(&snap, &look, &engine, sync_settings(&settings))?;
+                    out.extend(g.files.into_iter().map(|(n, b)| (n.to_owned(), b)));
+                    out.extend(g.meshes);
+                    log = g.log;
                     out
                 }
                 "make_details" => {
@@ -729,10 +771,14 @@ async fn make_part(
                     files::build_aimap(&snap)
                         .ok_or_else(|| crate::BuildError::new("ERROR: Failed to build AI-Map. "))?,
                 )],
-            })
+            };
+            Ok((made, log))
         })
         .await
         .map_err(|e| JobError::new(e.0))?;
+    for l in &log {
+        if l.starts_with('!') { editor.log.warn(l) } else { editor.log.info(l) }
+    }
     let names: Vec<String> = made.iter().map(|(n, _)| n.clone()).collect();
     let dir = level_dir(editor, &level);
     write_files(editor, dir, made).await?;

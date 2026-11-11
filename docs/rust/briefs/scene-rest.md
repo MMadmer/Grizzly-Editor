@@ -95,6 +95,18 @@ You own: `crates/gz-scene/**`, `crates/gz-ui-level/**`, `crates/gz-ui-viewport/*
   in the palette and on the Keyboard page.
 - Build > Compile > AI Map > Verify (`CLevelTool::RunXrAI_Verify`), Build > Compile > Spawn >
   All Levels (`RunXrAI_Spawn(false)`).
+- **Breakable and climable objects must work.** `gz-levelbuild/src/breakable.rs` reproduces the
+  C++ of this repository, whose `VCPacked::add_vert`
+  (`Source/Editors/XrECore/Editor/GeometryCollector.cpp`) lost its vertex lookup - the body is
+  the remains of the SDK's welding (`P = 0xffffffff; if (0xffffffff==P)`), so every face is its
+  own part and the build writes errors instead of objects. That is a bug of the fork, not a
+  rule: weld as the SDK did (the header still has the grid: `VMmin`, `VMscale`, `VMeps`, the
+  cell lists - a vertex joins an earlier one `similar` to it found through its cell; a new one
+  is entered into its cell and the cells its `+eps` corner reaches), take the `// oracle:` mark
+  off, and let the scene-level test expect the parts (two boxes of a breakable material sharing
+  no face give two parts). Give `gz-entities` the setter for the climable's material that the
+  build patches into the packet today. Name the difference in STATE.md ("the C++ editor of the
+  branch point writes no breakable objects; the Rust editor does").
 
 **Bindable shell-side commands that are the Level tab's**
 - Show Properties (Enter), Scene Options (Ctrl+O), Show World Outliner, Show Content Browser

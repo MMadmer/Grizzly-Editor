@@ -533,13 +533,15 @@ impl Optimizer {
     }
 }
 
-/// `_OptimiseVertexCoherencyTriList(list, n, 2)`: the faces of `indices` in a cache-friendly
-/// order.
-fn optimise_tri_list(indices: &mut [u16]) {
+/// `_OptimiseVertexCoherencyTriList(list, n, mode)`: the faces of `indices` in a cache-friendly
+/// order. Mode 1 is the cheap one (`LOOKAHEAD` 1, cutoff 4), any other the quality one (5, 16)
+/// - the progressive pass asks for 1, the face optimiser of a plain skeleton for 2.
+pub(crate) fn optimise_tri_list(indices: &mut [u16], mode: u32) {
     let n = indices.len() / 3;
     if n <= 2 {
         return;
     }
+    let (lookahead, cutoff) = if mode == 1 { (1, 4) } else { (5, 16) };
     let biggest = indices.iter().copied().max().map_or(0, usize::from);
     let mut valence = vec![0i32; biggest + 1];
     let mut tris_of = vec![Vec::new(); biggest + 1];
@@ -558,11 +560,11 @@ fn optimise_tri_list(indices: &mut [u16]) {
         slots: (0..n).collect(),
         cache: Cache::new(biggest + 1),
         result: vec![0; n * 3],
-        lookahead: 5,
-        cutoff: 16,
+        lookahead,
+        cutoff,
     };
     o.best_order();
-    indices.copy_from_slice(&o.result);
+    indices[..n * 3].copy_from_slice(&o.result);
 }
 
 /// `D3DX_OptimizeFaces`: `remap[new face] = old face`.
@@ -573,7 +575,7 @@ pub fn optimize_faces(indices: &[u16]) -> Vec<u32> {
         return (0..n as u32).collect();
     }
     let mut tmp = indices[..n * 3].to_vec();
-    optimise_tri_list(&mut tmp);
+    optimise_tri_list(&mut tmp, 2);
     let key = |f: &[u16]| (u64::from(f[0]) << 32) | (u64::from(f[1]) << 16) | u64::from(f[2]);
     let mut lookup: HashMap<u64, VecDeque<u32>> = HashMap::new();
     for (i, f) in indices.as_chunks::<3>().0.iter().enumerate() {

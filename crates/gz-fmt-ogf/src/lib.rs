@@ -9,7 +9,10 @@
 //! motion_set.pose(motion, t) -> Vec<BoneKey>   one motion at time t, as the engine samples it
 //! export_static(&Object, &ExportOptions) -> Vec<u8>   ExportObjectOGF.cpp
 //! export_skeleton(&Object, &ExportOptions, influence) -> Export   ExportSkeleton.cpp
+//!                                           (a progressive one through the VIPM pass, `vipm`)
+//! export_breakable(&BreakablePart) -> Export   SBPart::Export (GeometryPartExtractor.cpp)
 //! export_omf(&Object) -> Vec<u8>         CEditableObject::PrepareOMF
+//! min_box / rapid_box -> Obb             ComputeOBB_WML / ComputeOBB_RAPID
 //! ```
 //!
 //! Vertex data is decoded into one neutral [`Vertex`] (position, normal, tangent, binormal, two
@@ -20,16 +23,22 @@ mod bones;
 mod export;
 mod format;
 mod motion;
+mod obb;
 mod optimize;
 mod vertex;
+mod vipm;
 mod visual;
 
 pub use bones::{BoneIk, BoneName, Obb};
-pub use export::{Export, ExportOptions, export_omf, export_skeleton, export_static};
+pub use export::{
+    BreakableBone, BreakableFace, BreakablePart, Export, ExportOptions, export_breakable, export_omf,
+    export_skeleton, export_static,
+};
 pub use format::{Desc, Header, MT, chunk, crc32};
 pub use motion::{
     BoneKey, BoneMotion, MotionDef, MotionMark, MotionSet, PartDef, RotKeys, TransKeys, read_omf,
 };
+pub use obb::{min_box, rapid_box};
 pub use optimize::{optimize_faces, optimize_vertices};
 pub use vertex::{Vertex, VertexBuffer, VertexFormat};
 pub use visual::{BufferRef, LodFacet, LodVertex, SlideWindow, SlideWindows, TreeDef, Visual};
