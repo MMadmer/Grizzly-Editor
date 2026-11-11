@@ -58,10 +58,16 @@ has no MCP command for it, so settle it from the code and from numbers:
 `frame_pacing` showed frames of 52-73 ms during a build (mean 12-18 ms) and 20 ms at rest; the
 samples say the UI thread is only drawing and presenting while the build's threads hold every
 core. The promise is that the editor's own work never costs a frame.
-- The worker threads of the CPU pool, the IO pool and the job threads run **below normal
-  priority**; the UI thread and whatever presents run at normal. One safe function in `gz-win`
-  (the thread's own priority, `// SAFETY:` as always), called where each pool starts its
-  threads. No `unsafe` anywhere else.
+- **The work takes everything the hardware has** (the user's word): the worker threads of the
+  CPU pool, the IO pool and the async runtime stay at normal priority and the pools keep
+  their sizes (every logical core, and more for IO) - a below-normal build would give way to
+  every other program on the machine. Instead the thread that draws and presents (and the
+  viewport's render thread if it has one) runs **above normal**: one safe function in `gz-win`
+  (the calling thread's priority, `// SAFETY:` as always), called once where that thread
+  starts. No `unsafe` anywhere else.
+- Check that a build really loads every core: the process's CPU time over the build's wall
+  time, against the logical cores, into STATE.md. A stage that runs on one thread while the
+  others wait is a finding: make it parallel.
 - `frame_pacing` tells the frame's own CPU time apart from the wait for the presentation
   (a frame that waited for vsync is not a slow frame).
 - Measure again on the same scene and build, write the numbers into STATE.md, and put a limit
