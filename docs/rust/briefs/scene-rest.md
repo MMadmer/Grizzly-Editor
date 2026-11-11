@@ -95,6 +95,8 @@ You own: `crates/gz-scene/**`, `crates/gz-ui-level/**`, `crates/gz-ui-viewport/*
   in the palette and on the Keyboard page.
 - Build > Compile > AI Map > Verify (`CLevelTool::RunXrAI_Verify`), Build > Compile > Spawn >
   All Levels (`RunXrAI_Spawn(false)`).
+- `gz-levelbuild`'s `files::ai_nodes` unpacks the stored (rounded) nodes; the AI map tool keeps
+  the exact ones: build `build.aimap` from `AiMapPart::all_nodes()` so it equals the C++ file.
 - **Breakable and climable objects must work.** `gz-levelbuild/src/breakable.rs` reproduces the
   C++ of this repository, whose `VCPacked::add_vert`
   (`Source/Editors/XrECore/Editor/GeometryCollector.cpp`) lost its vertex lookup - the body is

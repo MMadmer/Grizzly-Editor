@@ -294,7 +294,7 @@ mod tests {
         let s = 20.0;
         let mut tris = quad(Vec3::new(-s, 0.0, -s), Vec3::new(-s, 0.0, s), Vec3::new(s, 0.0, s), Vec3::new(s, 0.0, -s));
         // a wall at x = 0.5 facing -x
-        tris.extend(quad(Vec3::new(0.5, -1.0, -s), Vec3::new(0.5, 3.0, -s), Vec3::new(0.5, 3.0, s), Vec3::new(0.5, -1.0, s)));
+        tris.extend(quad(Vec3::new(0.5, -1.0, -s), Vec3::new(0.5, -1.0, s), Vec3::new(0.5, 3.0, s), Vec3::new(0.5, 3.0, -s)));
         let n = tris.len();
         let m = CollideModel::from_tris(tris, vec![0; n], vec!["default".into()]);
         let end = Vec3::new(0.7, 0.0, 0.0);

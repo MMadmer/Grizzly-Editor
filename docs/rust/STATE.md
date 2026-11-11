@@ -591,6 +591,63 @@ Brief `briefs/shell-rest.md`. What the shell, the menus and the libraries lacked
 - Existing, not this package's: `COMMAND_TOGGLE_SAFE_RECT` and `COMMAND_SHOW_OBJECTLIST` both
   default to Ctrl+F (the viewport's and the Level menus' tables); the C++ had Ctrl+F and Ctrl+W.
 
+## The AI map, details and wallmark tools
+
+`gz_scene::bulk` (`aimap`, `motion`, `collide`, `details`, `wallmark`, `xr`, `cmd`), the forms in
+`gz-ui-level/src/tools_bulk.rs`, the gestures in `gz-ui-viewport/src/bulktools.rs`.
+
+- Commands `aimap_tool` (state, set, add_nodes, generate, generate_selected, clear, reset_selected,
+  smooth_selected, remove_selected, move_selected, rotate_selected, select_links, select_all,
+  deselect_all, invert_selection, select_nodes, pick, select_box, links, remove_links, invert_links,
+  ignore_material, unignore_material, clear_ignored), `details_tool` (state, set, first_initialize,
+  reinitialize, reinitialize_objects, reinitialize_selected, update_renderer, the selection, pick,
+  select_box, add_objects, remove_objects, set_color, remove_color, clear_slots, clear),
+  `wallmark_tool` (state, set, add, move, pick, select_box, the selection, select_marks,
+  remove_selected); `grizzly_<name>` in `tools.json`. `show=true` makes the tool current.
+- Every change is `SceneCmd::Bulk(BulkEdit)`: new parts computed from a snapshot (refused when the
+  serial moved; `bulk::commit` computes again, four times). `Kind::Step` is an undo step (a brush
+  stroke or a gizmo drag one merged step), `Kind::Selection` moves the serial but is no undo step
+  and leaves nothing unsaved, `Kind::Switches` only the panel's switches (`ToolSettings::bulk`:
+  Ignore Constraints, Auto Link, the link mode, the ignored materials, the detail slots'
+  selection - kept across Undo, not saved).
+- `AiMapPart` now holds the tool's nodes exact (`nodes`, `AiMapNode` tiles of 4096) beside the packed
+  `tiles`; an edit works on a flat `AiWork` and `AiMapPart::from_nodes` shares every tile equal to the
+  old one (packed tiles too while the box and parameters stay). The viewport draws the exact nodes.
+  `gz-levelbuild`'s `files::ai_nodes` still decodes the packed tiles: it should take
+  `AiMapPart::all_nodes()` (exact, as the C++ exports them) - a one-line change for its owner.
+- `WallmarkPart` gained `model: Option<Arc<Wallmarks>>` (the chunk read and written as
+  `LoadStream` / `SaveStream`); every edit writes `raw` again, so the build and the drawing follow.
+- The AI Map and Detail Objects tools keep their own snap lists (names in their parts, the C++
+  `GetSnapList`): `snap::tool_list` / `apply_snap` work on the current tool's list; the Tools
+  panel's Snap Objects section shows it. The wallmarks are laid on the scene's list, used.
+- The generation (`AiWork::generate` / `brush`): the C++ queue order kept; the pure part of each
+  side (the body's slide, the 81 rays) is worked out ahead for 512 queued nodes on every core, then
+  taken in order (`find_node` / registration). A job `aimap_generate` / `details_generate` in group
+  `scene`; Stop keeps what was made (as the C++); a scene that moved meanwhile drops the result.
+  The collision model (`collide::CollideModel`: collision shaders of `shaders_xrlc.xr`, two-sided
+  faces twice, a 2 m XZ grid, queries in model order, the `xrCDB_box` triangle test) is cached per
+  session by the snap objects' transforms and the library revision.
+- Measured headless on a copy of Escape (625k nodes, 3848 objects): Generate Selected from one seed
+  in a 20 x 20 m hole: 11194 nodes in 0.18 s; Generate Full: 1.85M nodes added in 10.7 s (the
+  scene's map had been trimmed; its snap list is 3000+ statics); `progress` answered in 16 ms or less
+  meanwhile. Details over the terrain (801 x 801 slots): First Initialize 1.0 s.
+- Deviations from the C++: Ignored Materials work (the C++ check is commented out; here an ignored
+  material's faces are no ground for a node); Invert of the link pad turns a one-way link round
+  (the C++ swaps the two link slots and links a node to itself); a ray or box select with Ctrl
+  selects (the C++ toggles then sets the flag - kept, `// oracle:`); `MoveSelectedWallmarkTo`
+  (disabled in the C++, and looping) is Ctrl+Place and `wallmark_tool move`; Slow Calculate Mode is
+  kept with the scene but changes nothing (one collision model path); the detail shuffle takes
+  `seed=` or the clock's second once per run (the C++ re-seeds every slot with `time(NULL)`); a
+  detail slot whose faces all fall outside is empty (the C++ leaves allocation garbage); tri order
+  of box queries is the model's / the library's, not OPCODE's, so ties and the stuck push's float
+  sums may differ from the C++ in rare cases; the AI hash follows the box at every edit (the C++
+  refreshed it on snap list changes and frames); Update Renderer is the Show Details switch.
+- The C++ has no random ranges for wallmarks (the brief named them): none here.
+- NOT LOOKED AT: no graphics device could be created while this package was built. Commands were
+  driven headless; to be looked at: each panel, Generate Selected and its nodes, link edits,
+  details reinitialised and drawn, a wallmark placed and drawn, `ui_audit`, `frame_pacing` during
+  a generation. Tests written, not run.
+
 ## Next packages, in dependency order
 
 1. `text` - done.
