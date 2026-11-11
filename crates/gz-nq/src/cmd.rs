@@ -477,7 +477,7 @@ async fn quest_lookup(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
                     doc_entries.push(entry(id, title, e.rel.clone()));
                 }
             }
-            "way_path" => doc_entries = svc.way_paths(),
+            "way_path" => doc_entries = svc.way_paths_ready().await,
             "global_name" => {
                 for (name, value) in svc.global_vars(&ed).await {
                     doc_entries.push(entry(name, value, "mod.ltx [vars]".into()));

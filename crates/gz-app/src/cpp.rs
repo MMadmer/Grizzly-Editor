@@ -715,6 +715,121 @@ pub(crate) fn shell_rows() -> Vec<CppCommand> {
     rows
 }
 
+/// The Keyboard page's names of the commands that take a shortcut, in its order
+/// (`EditorPreferences.cpp` `kCommandNames`): id, group, label.
+pub(crate) const COMMAND_NAMES: &[(&str, &str, &str)] = &[
+    (r#"COMMAND_CLEAR"#, "File", "New Scene"),
+    (r#"COMMAND_LOAD"#, "File", "Open Scene"),
+    (r#"COMMAND_LOAD_FIRSTRECENT"#, "File", "Open Last Scene"),
+    (r#"COMMAND_SAVE."Save""#, "File", "Save"),
+    (r#"COMMAND_SAVE."Save As""#, "File", "Save As"),
+    (r#"COMMAND_FILE_MENU"#, "File", "File Menu"),
+    (r#"COMMAND_EXIT"#, "File", "Quit"),
+    (r#"COMMAND_UNDO"#, "Edit", "Undo"),
+    (r#"COMMAND_REDO"#, "Edit", "Redo"),
+    (r#"COMMAND_CUT"#, "Edit", "Cut"),
+    (r#"COMMAND_COPY"#, "Edit", "Copy"),
+    (r#"COMMAND_PASTE"#, "Edit", "Paste"),
+    (r#"COMMAND_DELETE_SELECTION"#, "Edit", "Delete"),
+    (r#"COMMAND_SHOW_OBJECTLIST"#, "Edit", "Find in World Outliner"),
+    (r#"COMMAND_COMMAND_PALETTE"#, "Edit", "Command Palette"),
+    (r#"COMMAND_EDITOR_PREF"#, "Edit", "Preferences"),
+    (r#"COMMAND_BREAK_LAST_OPERATION"#, "Edit", "Cancel Running Job"),
+    (r#"COMMAND_SELECT_ALL"#, "Selection", "Select All"),
+    (r#"COMMAND_DESELECT_ALL"#, "Selection", "Deselect All"),
+    (r#"COMMAND_INVERT_SELECTION_ALL"#, "Selection", "Invert Selection"),
+    (r#"COMMAND_HIDE_SEL"#, "Visibility", "Hide Selected"),
+    (r#"COMMAND_HIDE_UNSEL"#, "Visibility", "Hide Unselected"),
+    (r#"COMMAND_HIDE_ALL"#, "Visibility", "Hide All"),
+    (r#"COMMAND_GIZMO_MODE."Select""#, "Viewport Tools", "Select"),
+    (r#"COMMAND_CHANGE_ACTION."Add""#, "Viewport Tools", "Place"),
+    (r#"COMMAND_GIZMO_MODE."Move""#, "Viewport Tools", "Move"),
+    (r#"COMMAND_GIZMO_MODE."Rotate""#, "Viewport Tools", "Rotate"),
+    (r#"COMMAND_GIZMO_MODE."Scale""#, "Viewport Tools", "Scale"),
+    (r#"COMMAND_GIZMO_MODE."Cycle""#, "Viewport Tools", "Next Transform Tool"),
+    (r#"COMMAND_CHANGE_ACTION."Select""#, "Viewport Tools", "Stop Placing"),
+    (r#"COMMAND_ZOOM_EXTENTS."Extent""#, "View", "Frame All"),
+    (r#"COMMAND_ZOOM_EXTENTS."Selected""#, "View", "Frame Selection"),
+    (r#"COMMAND_MOVE_CAMERA_TO"#, "View", "Move Camera To"),
+    (r#"COMMAND_TOGGLE_RENDER_WIRE"#, "View", "Wireframe"),
+    (r#"COMMAND_TOGGLE_GRID"#, "View", "Show Grid"),
+    (r#"COMMAND_GRID_SLOT_SIZE."Decrease""#, "View", "Smaller Grid Cells"),
+    (r#"COMMAND_GRID_SLOT_SIZE."Increase""#, "View", "Larger Grid Cells"),
+    (r#"COMMAND_TOGGLE_SAFE_RECT"#, "View", "Show Safe Rect"),
+    (r#"COMMAND_TOGGLE_AIMAP_VISIBILITY"#, "View", "Show AI Map"),
+    (r#"COMMAND_CHANGE_TARGET."Object""#, "Tools Panel", "Object Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Light""#, "Tools Panel", "Light Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Sound Source""#, "Tools Panel", "Sound Source Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Sound Env""#, "Tools Panel", "Sound Environment Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Glow""#, "Tools Panel", "Glow Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Shape""#, "Tools Panel", "Shape Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Spawn Point""#, "Tools Panel", "Spawn Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Way""#, "Tools Panel", "Way Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Way Point""#, "Tools Panel", "Way Tool: Points"),
+    (r#"COMMAND_CHANGE_TARGET."Toggle Way Mode""#, "Tools Panel", "Way Tool: Switch Ways / Points"),
+    (r#"COMMAND_CHANGE_TARGET."Sector""#, "Tools Panel", "Sector Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Portal""#, "Tools Panel", "Portal Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Group""#, "Tools Panel", "Group Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Particle System""#, "Tools Panel", "Particles Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Detail Objects""#, "Tools Panel", "Detail Objects Tool"),
+    (r#"COMMAND_CHANGE_TARGET."AI Map""#, "Tools Panel", "AI Map Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Static Wallmark""#, "Tools Panel", "Wallmark Tool"),
+    (r#"COMMAND_CHANGE_TARGET."Fog Volume""#, "Tools Panel", "Fog Volume Tool"),
+    (r#"COMMAND_DROP_TO_GROUND"#, "Object", "Drop to Ground"),
+    (r#"COMMAND_SIMULATE"#, "Object", "Simulate Physics"),
+    (r#"COMMAND_USE_SIMULATE_POSITIONS"#, "Object", "Apply Simulated Positions"),
+    (r#"COMMAND_BUILD"#, "Make", "Make All"),
+    (r#"COMMAND_MAKE_GAME"#, "Make", "Make Game"),
+    (r#"COMMAND_MAKE_DETAILS"#, "Make", "Make Details"),
+    (r#"COMMAND_MAKE_HOM"#, "Make", "Make HOM"),
+    (r#"COMMAND_MAKE_SOM"#, "Make", "Make SOM"),
+    (r#"COMMAND_MAKE_AIMAP"#, "Make", "Make AI Map"),
+    (r#"COMMAND_MOD_BUILD"#, "Mod", "Build Into Game"),
+    (r#"COMMAND_MOD_EDIT_MANIFEST"#, "Mod", "Mod Settings"),
+    (r#"COMMAND_MOD_CHARACTERS"#, "Mod", "Characters"),
+    (r#"COMMAND_MOD_WORLD"#, "Mod", "World Rules"),
+    (r#"COMMAND_MOD_PDA"#, "Mod", "PDA Interface"),
+    (r#"COMMAND_MOD_PACKAGE"#, "Mod", "Package Release"),
+    (r#"COMMAND_MOD_PUBLISH"#, "Mod", "Publish Release"),
+    (r#"COMMAND_MOD_RELEASES"#, "Mod", "Releases"),
+    (r#"COMMAND_MOD_CATALOG"#, "Mod", "Submit to Mod Browser"),
+    (r#"COMMAND_SHOW_PROPERTIES"#, "Window", "Details"),
+    (r#"COMMAND_OPTIONS"#, "Window", "Details (Scene Options)"),
+    (r#"COMMAND_SHOW_WORLD_OUTLINER"#, "Window", "World Outliner"),
+    (r#"COMMAND_SHOW_CONTENT_BROWSER"#, "Window", "Content Browser"),
+    (r#"COMMAND_RUN_MACRO."Slot #1""#, "Macros", "Run Macro 1"),
+    (r#"COMMAND_RUN_MACRO."Slot #2""#, "Macros", "Run Macro 2"),
+    (r#"COMMAND_RUN_MACRO."Slot #3""#, "Macros", "Run Macro 3"),
+    (r#"COMMAND_RUN_MACRO."Slot #4""#, "Macros", "Run Macro 4"),
+    (r#"COMMAND_RUN_MACRO."Slot #5""#, "Macros", "Run Macro 5"),
+    (r#"COMMAND_RUN_MACRO."Slot #6""#, "Macros", "Run Macro 6"),
+    (r#"COMMAND_RUN_MACRO."Slot #7""#, "Macros", "Run Macro 7"),
+    (r#"COMMAND_RUN_MACRO."Slot #8""#, "Macros", "Run Macro 8"),
+];
+
+/// The group and label `shortcuts` and the Keyboard page show for a sub-command
+/// (`CCustomPreferences::CommandName`): the listed name, or the description's last part with
+/// the parts before it as the group ("General" without one).
+pub(crate) fn command_name(id: &str, desc: &str, sub_desc: &str) -> (String, String) {
+    if let Some((_, group, label)) = COMMAND_NAMES.iter().find(|(i, _, _)| *i == id) {
+        return ((*group).to_owned(), (*label).to_owned());
+    }
+    let mut path = desc.to_owned();
+    if !sub_desc.is_empty() {
+        if !path.is_empty() {
+            path.push('\\');
+        }
+        path.push_str(sub_desc);
+    }
+    match path.rfind('\\') {
+        None => ("General".to_owned(), path),
+        Some(last) => {
+            let group = path.get(..last).unwrap_or("").replace('\\', " \u{b7} ");
+            (group, path.get(last + 1..).unwrap_or("").to_owned())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

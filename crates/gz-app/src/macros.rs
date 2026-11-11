@@ -23,6 +23,9 @@ pub const SLOTS: usize = 8;
 /// How deep a macro may run macros.
 const MAX_DEPTH: usize = 8;
 
+/// The C++ id of `COMMAND_RUN_MACRO`.
+pub(crate) const RUN_MACRO_ID: u32 = 52;
+
 /// The settings key of a slot (`COMMAND_RUN_MACRO."Slot #1"`, 0-based `slot`).
 #[must_use]
 pub fn slot_key(slot: usize) -> String {
@@ -233,7 +236,7 @@ pub(crate) fn rows() -> Vec<CppCommand> {
             "Log Commands",
             Icon::Log,
         ),
-        CppCommand::new(52, "COMMAND_RUN_MACRO", "Run Macro", run).subs(slots).face(
+        CppCommand::new(RUN_MACRO_ID, "COMMAND_RUN_MACRO", "Run Macro", run).subs(slots).face(
             "Macros",
             "Run Macro",
             Icon::Play,

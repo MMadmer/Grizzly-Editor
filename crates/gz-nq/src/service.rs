@@ -55,6 +55,9 @@ pub trait WorldLookup: Send + Sync {
     fn rev(&self) -> Rev;
     fn transitions(&self) -> Vec<Transition>;
     fn patrols(&self) -> Vec<String>;
+    /// Resolves once the linked game's world of the current revision is read: a command that
+    /// lists level changers waits for it, as the C++ read `all.spawn` when asked.
+    fn ready(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
 }
 
 /// Where an open document's file is.
@@ -398,6 +401,9 @@ impl NqService {
         let link = GameLink::of(editor).ok()?;
         let (files, rev) = link.snapshot().await.ok()?;
         let world = self.world_lookup();
+        if let Some(w) = &world {
+            w.ready().await;
+        }
         let key = rev.mix(world.as_ref().map_or(Rev::ZERO, |w| w.rev()));
         if let Some(g) = self.game_pickers.peek_at(&(), key) {
             return g.as_ref().clone();
@@ -456,6 +462,14 @@ impl NqService {
             }
         };
         self.caps.fresh(&(), rev, move || built).await.as_ref().clone()
+    }
+
+    /// [`way_paths`](Self::way_paths) once the linked game's patrols are read.
+    pub async fn way_paths_ready(&self) -> Vec<PickerEntry> {
+        if let Some(w) = self.world_lookup() {
+            w.ready().await;
+        }
+        self.way_paths()
     }
 
     /// The way paths of the open scene, then the linked game's own patrols (`SceneWayPaths`).

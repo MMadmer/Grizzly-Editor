@@ -39,6 +39,9 @@ pub struct AppPaths {
     /// Per-machine scratch of the editor (`_appdata_`).
     pub appdata: PathBuf,
     pub logs: PathBuf,
+    /// What the editor writes about itself: `_projects.ini`, `grizzly_editor.ltx` (and `logs`
+    /// beside them). The data root unless `-home` names another folder.
+    pub home: PathBuf,
 }
 
 #[derive(Clone, Debug, Default)]

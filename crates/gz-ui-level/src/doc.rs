@@ -291,7 +291,7 @@ impl LevelDoc {
         match (&choosing, &self.chooser) {
             (Some(key), None) => {
                 let snap = svc.store.snapshot();
-                self.chooser = details::chooser_for(&snap, &svc.library, key);
+                self.chooser = details::chooser_for(&snap, &svc.library, key, &svc.prop_cx());
                 if self.chooser.is_none() {
                     svc.view.lock().choosing = None;
                 }

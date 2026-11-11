@@ -90,12 +90,17 @@ fn readers(s: &Store<Tally>, n: usize, stop: &Arc<AtomicBool>) -> Vec<std::threa
             std::thread::spawn(move || {
                 let mut last = Rev::ZERO;
                 let mut seen = 0;
-                while !stop.load(Ordering::Relaxed) {
+                // at least one look: on a busy machine the writers may be done before a reader
+                // thread first runs
+                loop {
                     let snap = s.snapshot();
                     assert!(snap.rev >= last, "a revision went back: {:?} after {:?}", snap.rev, last);
                     assert!(consistent(&snap.state), "a reader saw a state no command produced");
                     last = snap.rev;
                     seen += 1;
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
                 }
                 seen
             })

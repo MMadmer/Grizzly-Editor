@@ -281,7 +281,8 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
     };
     let snap = svc.store.snapshot();
     let lib = svc.library.clone();
-    let rows = ed.exec.cpu(move || details::rows(&snap, &lib, t)).await;
+    let ctx = gz_scene::prop_context(&ed).await;
+    let rows = ed.exec.cpu(move || details::rows(&snap, &lib, t, &ctx)).await;
     let f = filter.to_lowercase();
     let visible = rows.iter().filter(|r| f.is_empty() || r.row.key.to_lowercase().contains(&f)).count();
     let limit = a.i64("limit").unwrap_or(200).max(0) as usize;

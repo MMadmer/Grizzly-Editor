@@ -135,6 +135,77 @@ pub fn key_width(section: &str) -> usize {
     }
 }
 
+/// Where the C++ `EditorMod::Save` writes a section; sections it does not know close the file.
+fn section_rank(section: &str) -> usize {
+    let s = section.to_ascii_lowercase();
+    const ORDER: [&str; 11] = [
+        "module",
+        "update",
+        "requires",
+        "order",
+        "conflicts",
+        "provides_mode",
+        "exclude",
+        "world",
+        "start_kit",
+        "vars",
+        "pda",
+    ];
+    if let Some(i) = ORDER.iter().position(|o| *o == s) {
+        return i;
+    }
+    if s == "screens" || s.starts_with("screen.") || s.starts_with("track.") {
+        ORDER.len()
+    } else if s == "commands" {
+        ORDER.len() + 1
+    } else if s.starts_with("command.") {
+        ORDER.len() + 2
+    } else {
+        usize::MAX
+    }
+}
+
+/// Where `Save` writes a key inside its section; `usize::MAX` for a key it writes after the
+/// known ones (an item of the start kit, a line it keeps as it was).
+fn key_rank(section: &str, key: &str) -> usize {
+    let s = section.to_ascii_lowercase();
+    let order: &[&str] = match s.as_str() {
+        "module" => &[
+            "id",
+            "name",
+            "version",
+            "author",
+            "description",
+            "website",
+            "disable_game_updates",
+            "thumbnail",
+            "tags",
+            "api",
+            "mode",
+            "target",
+        ],
+        "update" => &["github"],
+        "order" => &["after", "before"],
+        "provides_mode" => &["id", "title"],
+        "world" => &[
+            "original_npcs",
+            "random_stalkers",
+            "mutants",
+            "npc_quests",
+            "story_quests",
+            "player_choice",
+            "levels",
+            "area",
+            "locked_levels",
+            "locked",
+        ],
+        "start_kit" => &["money", "perks"],
+        _ if s.starts_with("command.") => &["help", "args", "cheat"],
+        _ => &[],
+    };
+    order.iter().position(|o| *o == key).unwrap_or(usize::MAX)
+}
+
 /// `key = value` with the key padded to `width`, as `AppendKey` writes it.
 #[must_use]
 pub fn entry_line(key: &str, value: &str, width: usize) -> String {
@@ -311,8 +382,31 @@ impl ManifestDoc {
         }
     }
 
-    /// Adds an empty section at the end, after a blank line.
+    /// Adds an empty section where the C++ `Save` writes it: before the first section that comes
+    /// after it in that order (with the comment block leaning on that header), else at the end,
+    /// after a blank line.
     fn append_section(&mut self, section: &str) {
+        let rank = section_rank(section);
+        let next =
+            self.lines.iter().position(|l| matches!(&l.kind, Kind::Section(n) if section_rank(n) > rank));
+        if let Some(mut at) = next {
+            while at > 0
+                && self.lines.get(at - 1).is_some_and(|l| matches!(l.kind, Kind::Other) && !l.is_blank())
+            {
+                at -= 1;
+            }
+            let header = self.line(format!("[{section}]"));
+            let blank = self.line(String::new());
+            let lead_blank = at > 0 && self.lines.get(at - 1).is_some_and(|l| !l.is_blank());
+            self.lines.insert(at, blank);
+            self.lines.insert(at, header);
+            if lead_blank {
+                let blank = self.line(String::new());
+                self.lines.insert(at, blank);
+            }
+            self.close_lines();
+            return;
+        }
         if self.lines.last().is_some_and(|l| !l.is_blank()) {
             let blank = self.line(String::new());
             self.lines.push(blank);
@@ -396,7 +490,17 @@ impl ManifestDoc {
             return;
         }
         let raw = Self::shape(self.model_entry(section), key, &value, key_width(section));
-        let at = self.insert_point(section);
+        let mut at = self.insert_point(section);
+        // a key the C++ `Save` writes in a fixed order goes before the first one it writes later
+        let rank = key_rank(section, key);
+        if rank != usize::MAX
+            && let Some(i) = self
+                .body_lines(section)
+                .into_iter()
+                .find(|&i| self.lines.get(i).and_then(Line::key).is_some_and(|k| key_rank(section, k) > rank))
+        {
+            at = i;
+        }
         let line = self.line(raw);
         self.insert(at, line);
     }
@@ -557,6 +661,20 @@ mod tests {
     }
 
     #[test]
+    fn new_keys_and_sections_go_where_the_cpp_save_writes_them() {
+        let text = "[module]\r\nid          = demo\r\nwebsite     = x\r\ntags        = story\r\nmy_key      = 1\r\n\r\n[update]\r\ngithub      = a/b\r\n\r\n; the mode\r\n[provides_mode]\r\nid          = demo\r\n\r\n[custom]\r\nk = v\r\n";
+        let mut doc = ManifestDoc::parse(text);
+        doc.set("module", "disable_game_updates", "true");
+        doc.push_line("requires", "base");
+        doc.set("module", "target", "new");
+        doc.set_lines("vars", &["night           = 0".to_owned()]);
+        assert_eq!(
+            doc.to_string(),
+            "[module]\r\nid          = demo\r\nwebsite     = x\r\ndisable_game_updates = true\r\ntags        = story\r\ntarget      = new\r\nmy_key      = 1\r\n\r\n[update]\r\ngithub      = a/b\r\n\r\n[requires]\r\nbase\r\n\r\n; the mode\r\n[provides_mode]\r\nid          = demo\r\n\r\n[vars]\r\nnight           = 0\r\n\r\n[custom]\r\nk = v\r\n"
+        );
+    }
+
+    #[test]
     fn an_edit_touches_its_line_only() {
         let mut doc = ManifestDoc::parse(SAMPLE);
         doc.set("module", "version", "1.3.0");
@@ -571,11 +689,14 @@ mod tests {
         doc.set("module", "author", "Madmer");
         assert!(
             doc.to_string().contains(
-                "website     = https://www.moddb.com/mods/demo\r\nauthor      = Madmer\r\n\r\n; what"
+                "version     = 1.2.0\r\nauthor      = Madmer\r\nwebsite     = https://www.moddb.com/mods/demo\r\n\r\n; what"
             )
         );
         doc.set("update", "github", "Madmer/demo");
-        assert!(doc.to_string().ends_with("*.psd\r\n\r\n[update]\r\ngithub      = Madmer/demo\r\n"));
+        // before [exclude] and the comment that leans on it, as the C++ `Save` orders them
+        assert!(doc.to_string().contains(
+            "demo\r\n\r\n[update]\r\ngithub      = Madmer/demo\r\n\r\n; what is left out\r\n[exclude]\r\n"
+        ));
         let mut fresh = ManifestDoc::parse("[module]\nid=x");
         fresh.set("module", "api", "1");
         assert_eq!(fresh.to_string(), "[module]\nid=x\napi=1\n");

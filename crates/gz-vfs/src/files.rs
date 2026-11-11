@@ -251,7 +251,8 @@ impl GameFiles {
         let walked: Vec<(String, walk::Walked)> = trees
             .into_par_iter()
             .map(|(key, dir)| {
-                let w = walk::walk(&dir, saved.tree(&key));
+                // the loose game tree keeps every name; a module leaves tooling out
+                let w = walk::walk(&dir, saved.tree(&key), key != "gamedata");
                 (key, w)
             })
             .collect();

@@ -37,7 +37,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = qa_target.MCP
 LAYOUT = os.path.join(REPO, "level_imgui.ini")
 PREFS = os.path.join(REPO, "level.ini")
-PROJECTS = os.path.join(REPO, "_projects.ini")
+PROJECTS = qa_target.projects_ini()
 
 results: list[tuple[bool, str]] = []
 

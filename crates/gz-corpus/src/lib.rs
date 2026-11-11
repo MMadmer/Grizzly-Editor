@@ -157,12 +157,22 @@ fn directory(path: &Path) -> io::Result<Vec<lzo::ArchiveEntry>> {
 /// tooling rule).
 #[must_use]
 pub fn walk(dir: &Path) -> Vec<PathBuf> {
+    walk_with(dir, true)
+}
+
+/// [`walk`] keeping dot-names: the game's own loose `gamedata`, which the editor lists whole.
+#[must_use]
+pub fn walk_all(dir: &Path) -> Vec<PathBuf> {
+    walk_with(dir, false)
+}
+
+fn walk_with(dir: &Path, skip_dot: bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&d) else { continue };
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with('.') {
+            if skip_dot && e.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
             let Ok(t) = e.file_type() else { continue };
@@ -221,7 +231,7 @@ impl Game {
             by_key.insert(e.key.clone(), e.clone());
         }
         let data = root.join("gamedata");
-        for p in walk(&data) {
+        for p in walk_all(&data) {
             let Ok(rel) = p.strip_prefix(&data) else { continue };
             let k = key(&rel.to_string_lossy());
             let size = std::fs::metadata(&p).map_or(0, |m| u32::try_from(m.len()).unwrap_or(u32::MAX));

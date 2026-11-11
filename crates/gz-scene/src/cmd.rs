@@ -126,6 +126,28 @@ pub fn install(editor: &Editor) {
         lib.0.list().as_ref().clone()
     });
     lists.provide("Groups", |ed| library::list_groups(&ed.paths.root.join("rawdata").join("groups")));
+    // the editor's own libraries, as the C++ choosers list them: the effects by name, then the
+    // groups by name (`CPSLibrary` sorts both); the light animations in the file's order
+    lists.provide("Particles", |ed| {
+        let Ok(bytes) = std::fs::read(ed.paths.root.join("gamedata").join("particles.xr")) else {
+            return Vec::new();
+        };
+        let Ok(lib) = gz_fmt_xr::Particles::read(&bytes) else { return Vec::new() };
+        let mut effects: Vec<String> = lib.effects.iter().map(|e| e.name.to_string()).collect();
+        let mut groups: Vec<String> = lib.groups.iter().map(|g| g.name.to_string()).collect();
+        effects.sort_unstable();
+        groups.sort_unstable();
+        effects.extend(groups);
+        effects
+    });
+    lists.provide("Light Anims", |ed| {
+        let Ok(bytes) = std::fs::read(ed.paths.root.join("gamedata").join("lanims.xr")) else {
+            return Vec::new();
+        };
+        gz_fmt_xr::LightAnims::read(&bytes)
+            .map(|lib| lib.items.iter().map(|a| a.name.to_string()).collect())
+            .unwrap_or_default()
+    });
     let hooks = ProjectHooks::of(editor);
     // something placed or unsaved (C++ `ObjCount() || IsUnsaved() || IsModified()`)
     hooks.provide_live_scene(|ed| {
@@ -844,9 +866,7 @@ async fn spawn_set_visual(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
         found
     };
     if !reachable {
-        return Err(CmdError::not_found(
-            "mesh not found in the game or the project (meshes\\\\<visual>.ogf)",
-        ));
+        return Err(CmdError::not_found("mesh not found in the game or the project (meshes\\<visual>.ogf)"));
     }
     let mut e = (*entity).clone();
     e.set(&path, &gz_entities::PropValue::Text(v.clone()), &PropContext::default())
@@ -1116,16 +1136,30 @@ fn target_index(t: &str) -> Result<usize, CmdError> {
 }
 
 /// The rows a target lists now.
-fn rows_of(s: &SceneState, svc: &SceneService, target: usize) -> Vec<props::MergedRow> {
+fn rows_of(s: &SceneState, svc: &SceneService, target: usize, ctx: &PropContext) -> Vec<props::MergedRow> {
     if target == 1 {
-        return props::merge(vec![props::world_rows(s)]);
+        return props::tree_order(props::merge(vec![props::world_rows(s)]));
     }
-    let ctx = PropContext::default();
-    let cx = PropCx { lib: Some(&svc.library), entity: &ctx };
+    let cx = PropCx { lib: Some(&svc.library), entity: ctx };
     let class = s.tools.target;
     let lists: Vec<Vec<props::Row>> =
         s.of_class(class).filter(|o| s.is_selected(o.id)).map(|o| props::object_rows(s, o, &cx)).collect();
-    props::merge(lists)
+    props::tree_order(props::merge(lists))
+}
+
+/// The sheet's lists the configs give (story ids, as the C++ `fp_data` read them; the Spawn
+/// tool's names), read now and kept for the Details panel (`SceneService::prop_cx`).
+pub async fn prop_context(ed: &Arc<Editor>) -> Arc<PropContext> {
+    let mut ctx = crate::game::settings(ed).await.map(|g| g.prop_context()).unwrap_or_default();
+    ctx.profiles = crate::game::spawn_sections(ed)
+        .await
+        .iter()
+        .map(|s| (gz_base::SmolStr::new(&s.section), gz_base::SmolStr::new(&s.group)))
+        .collect();
+    match SceneService::of(ed) {
+        Ok(svc) => svc.set_prop_cx(ctx),
+        Err(_) => Arc::new(ctx),
+    }
 }
 
 async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
@@ -1156,7 +1190,8 @@ async fn property_inspector(ed: Arc<Editor>, a: Args, _o: Origin) -> Reply {
         (v.filter[t].clone(), v.open[t])
     };
     let snap = svc.store.snapshot();
-    let rows = rows_of(&snap, &svc, t);
+    let ctx = prop_context(&ed).await;
+    let rows = rows_of(&snap, &svc, t, &ctx);
     let f = filter.to_lowercase();
     let visible = rows.iter().filter(|r| f.is_empty() || r.row.key.to_lowercase().contains(&f)).count();
     let limit = a.i64("limit").unwrap_or(200).max(0) as usize;
@@ -1193,7 +1228,8 @@ async fn set_row(
     o: Origin,
 ) -> Result<(String, String), CmdError> {
     let snap = svc.store.snapshot();
-    let rows = rows_of(&snap, svc, t);
+    let ctx = prop_context(ed).await;
+    let rows = rows_of(&snap, svc, t, &ctx);
     let target_name = if t == 1 { "world" } else { "selection" };
     let row = props::find(&rows, k)
         .ok_or_else(|| {
@@ -1218,7 +1254,7 @@ async fn set_row(
             crate::edit::set_part_enabled(ed, svc, class, on, o).await?;
         }
         let after = svc.store.snapshot();
-        let rows = rows_of(&after, svc, t);
+        let rows = rows_of(&after, svc, t, &ctx);
         let text = props::find(&rows, &key).map(|m| m.row.text()).unwrap_or_default();
         return Ok((key, text));
     }
@@ -1274,7 +1310,7 @@ async fn set_row(
         }
     }
     let after = svc.store.snapshot();
-    let rows = rows_of(&after, svc, t);
+    let rows = rows_of(&after, svc, t, &ctx);
     let text = props::find(&rows, &key)
         .map(|m| if m.mixed { "(mixed)".to_owned() } else { m.row.text() })
         .unwrap_or_default();
@@ -1304,7 +1340,8 @@ async fn property_choose(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let k = a.text("key").unwrap_or("Visual").to_owned();
     let item = a.str("item").unwrap_or("").to_owned();
     let snap = svc.store.snapshot();
-    let rows = rows_of(&snap, &svc, 0);
+    let ctx = prop_context(&ed).await;
+    let rows = rows_of(&snap, &svc, 0, &ctx);
     let row = props::find(&rows, &k).cloned();
     match action.as_str() {
         "open" => {

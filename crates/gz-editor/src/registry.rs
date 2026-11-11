@@ -118,7 +118,10 @@ pub fn ok_reply(fields: Value) -> Value {
 pub fn error_reply(e: &CmdError) -> Value {
     let mut out = Map::new();
     out.insert("ok".to_owned(), Value::Bool(false));
-    out.insert("error".to_owned(), Value::String(e.message.clone()));
+    // a report (`CmdError::report`) speaks through its fields alone
+    if !(e.code == "report" && e.message.is_empty()) {
+        out.insert("error".to_owned(), Value::String(e.message.clone()));
+    }
     if let Some(Value::Object(data)) = &e.data {
         for (k, v) in data {
             if k != "ok" && k != "error" {

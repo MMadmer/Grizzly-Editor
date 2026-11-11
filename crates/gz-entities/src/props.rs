@@ -212,6 +212,34 @@ pub struct CoverDescription {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PropContext {
     pub smart_covers: BTreeMap<SmolStr, CoverDescription>,
+    /// `fp_data.story_names` / `spawn_story_names`: the `story_ids` and `spawn_story_ids`
+    /// sections (id = name), `NO STORY ID` / `NO SPAWN STORY ID` for -1 added by the reader.
+    pub story_names: BTreeMap<u32, SmolStr>,
+    pub spawn_story_names: BTreeMap<u32, SmolStr>,
+    /// The Spawn tool's name of a section (`SectionToEditor`: its `$spawn` list path).
+    pub profiles: BTreeMap<SmolStr, SmolStr>,
+}
+
+impl PropContext {
+    /// The token lists of the story ids from a game's `story_ids` / `spawn_story_ids` lines.
+    #[must_use]
+    pub fn with_story_names(
+        mut self,
+        story: impl IntoIterator<Item = (String, String)>,
+        spawn: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        // `atoi(N)`: a key that is no number is story id 0
+        let read = |lines: &mut dyn Iterator<Item = (String, String)>, none: &str| {
+            let mut m: BTreeMap<u32, SmolStr> = lines
+                .map(|(k, v)| (k.trim().parse::<i64>().unwrap_or(0) as u32, SmolStr::new(v.trim())))
+                .collect();
+            m.insert(u32::MAX, SmolStr::new(none));
+            m
+        };
+        self.story_names = read(&mut story.into_iter(), "NO STORY ID");
+        self.spawn_story_names = read(&mut spawn.into_iter(), "NO SPAWN STORY ID");
+        self
+    }
 }
 
 impl PropContext {
@@ -259,8 +287,8 @@ const PO_TYPES: &[(&str, u32)] = &[("Box", 0), ("Fixed chain", 1), ("Free chain"
 pub(crate) enum Field {
     #[default]
     None,
-    GameType,
     CustomData,
+    ScriptStory,
     AlifeFlag(u32),
     StoryId,
     SpawnStoryId,
@@ -374,19 +402,17 @@ impl B<'_> {
         self.out.push(Prop { path: path.to_owned(), kind, value, read_only: false, field });
     }
 
-    fn abstract_(&mut self, h: &Header) {
-        self.add_bare(
-            "Game Type",
-            PropKind::GameType { bits: GAME_TYPES },
-            PropValue::Int(i64::from(h.game_type)),
-            Field::GameType,
-        );
-    }
-
-    fn alife(&mut self, h: &Header, o: &Object) {
-        self.abstract_(h);
+    fn alife(&mut self, _h: &Header, o: &Object) {
+        // oracle: `CSE_Abstract::FillProps` has its Game Type row commented out
         let a = &o.alife;
         self.add("Custom data", PropKind::Text, text(&a.ini_string), Field::CustomData);
+        // the address quests use: [story_object] in the custom data, surfaced as its own field
+        self.add(
+            "ALife\\Story ID (script)",
+            PropKind::Text,
+            text(&script_story_of(&a.ini_string)),
+            Field::ScriptStory,
+        );
         let bit = |f: u32| PropValue::Bool(a.flags & f != 0);
         if a.flags & alife_flags::USE_SWITCHES != 0 {
             self.add(
@@ -959,7 +985,8 @@ fn table_props(
 pub(crate) fn list(h: &Header, info: &ClassInfo, o: &Object, ctx: &PropContext) -> Vec<Prop> {
     let mut b = B { out: Vec::with_capacity(32), s: &h.section };
     match info.class {
-        Class::Spectator => b.abstract_(h),
+        // oracle: `CSE_Abstract::FillProps` lists nothing (its Game Type row is commented out)
+        Class::Spectator => {}
         Class::Temporary => {}
         Class::GraphPoint => {
             if let Some(g) = o.graph_point() {
@@ -985,10 +1012,7 @@ pub(crate) fn list(h: &Header, info: &ClassInfo, o: &Object, ctx: &PropContext) 
                 );
             }
         }
-        Class::AbstractVisual => {
-            b.abstract_(h);
-            b.visual(o);
-        }
+        Class::AbstractVisual => b.visual(o),
         Class::DynamicObjectVisual
         | Class::PhSkeletonObject
         | Class::Projector
@@ -1212,6 +1236,60 @@ fn want_bool(p: &Prop, v: &PropValue) -> Result<bool> {
     v.as_bool().ok_or_else(|| EntityError::WrongType { path: p.path.clone(), expected: "true or false" })
 }
 
+/// `ScriptStoryOf`: `[story_object] story_id = <x>` inside the custom data; "" when absent.
+fn script_story_of(ini: &str) -> String {
+    let Some(sec) = ini.find("[story_object]") else { return String::new() };
+    let mut pos = sec + "[story_object]".len();
+    while pos < ini.len() {
+        let eol = ini.get(pos..).and_then(|r| r.find('\n')).map_or(ini.len(), |e| pos + e);
+        let line = ini.get(pos..eol).unwrap_or("");
+        pos = eol + 1;
+        if line.contains('[') {
+            break;
+        }
+        let (key, val) = match line.find('=') {
+            Some(eq) => (line.get(..eq).unwrap_or(""), Some(line.get(eq + 1..).unwrap_or(""))),
+            None => (line, None),
+        };
+        let key = key.trim_start_matches([' ', '\t']).trim_end_matches([' ', '\t', '\r']);
+        match val {
+            // the bare "[story_object] \n id" form
+            None if !key.is_empty() => return key.to_owned(),
+            None => {}
+            Some(v) => {
+                let v = v.trim_start_matches([' ', '\t']).trim_end_matches([' ', '\t', '\r']);
+                if key == "story_id" && !v.is_empty() {
+                    return v.to_owned();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// `WithScriptStory`: the custom data with its `[story_object]` block replaced (removed for an
+/// empty id), everything else as the author wrote it.
+fn with_script_story(ini: &str, id: &str) -> String {
+    let mut text = ini.to_owned();
+    if let Some(mut sec) = text.find("[story_object]") {
+        let end = text.get(sec + 1..).and_then(|r| r.find('[')).map_or(text.len(), |e| sec + 1 + e);
+        text.replace_range(sec..end, "");
+        while sec > 0 && matches!(text.as_bytes().get(sec - 1), Some(b'\n' | b'\r')) {
+            text.remove(sec - 1);
+            sec -= 1;
+        }
+    }
+    if !id.is_empty() {
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push_str("\r\n");
+        }
+        text.push_str("[story_object]\r\nstory_id = ");
+        text.push_str(id);
+        text.push_str("\r\n");
+    }
+    text
+}
+
 fn want_text(p: &Prop, v: &PropValue) -> Result<SmolStr> {
     v.as_text()
         .map(SmolStr::new)
@@ -1261,7 +1339,7 @@ fn set_bit<
 
 /// Writes `value` into the field `prop` edits.
 pub(crate) fn apply(
-    h: &mut Header,
+    _h: &mut Header,
     o: &mut Object,
     prop: &Prop,
     value: &PropValue,
@@ -1271,8 +1349,13 @@ pub(crate) fn apply(
     let p = prop;
     match &p.field {
         Field::None => return Err(EntityError::ReadOnly(p.path.clone())),
-        Field::GameType => h.game_type = clamp_int(p, value)? as u16,
         Field::CustomData => o.alife.ini_string = want_text(p, value)?,
+        Field::ScriptStory => {
+            // spaces inside would split the ini line and quietly change the name
+            let id: String =
+                want_text(p, value)?.chars().map(|c| if c == ' ' || c == '\t' { '_' } else { c }).collect();
+            o.alife.ini_string = SmolStr::new(with_script_story(&o.alife.ini_string, &id));
+        }
         Field::AlifeFlag(bit) => {
             set_bit(&mut o.alife.flags, *bit, want_bool(p, value)?);
             fx.refresh = true;
@@ -1436,7 +1519,9 @@ mod tests {
         assert_eq!(p[0], "stalker\\Money");
         assert_eq!(p[1], "stalker\\Trader\\Infinite ammo");
         assert_eq!(p[2], "stalker\\npc profile");
-        assert_eq!(p[3], "Game Type");
+        // no Game Type row: `CSE_Abstract::FillProps` has it commented out
+        assert_eq!(p[3], "stalker\\Custom data");
+        assert_eq!(p[4], "stalker\\ALife\\Story ID (script)");
         assert!(p.contains(&"stalker\\ALife\\Can switch online".to_owned()));
         assert!(p.contains(&"stalker\\Model\\Visual".to_owned()));
         assert!(p.contains(&"stalker\\Personal\\Health".to_owned()));
@@ -1519,5 +1604,24 @@ mod tests {
         assert_eq!(json["type"], "u16");
         assert_eq!(json["max"], 20);
         assert_eq!(json["value"]["int"], 20);
+    }
+}
+
+#[cfg(test)]
+mod script_story_tests {
+    use super::{script_story_of, with_script_story};
+
+    #[test]
+    fn the_story_object_block_is_read_and_replaced_as_the_cpp_does() {
+        let ini = "[logic]\r\ncfg = a.ltx\r\n[story_object]\r\nstory_id = trader\r\n";
+        assert_eq!(script_story_of(ini), "trader");
+        assert_eq!(script_story_of("[story_object]\nbare_id\n"), "bare_id");
+        assert_eq!(script_story_of("[logic]\r\n"), "");
+        assert_eq!(
+            with_script_story(ini, "boss"),
+            "[logic]\r\ncfg = a.ltx\r\n[story_object]\r\nstory_id = boss\r\n"
+        );
+        assert_eq!(with_script_story(ini, ""), "[logic]\r\ncfg = a.ltx");
+        assert_eq!(with_script_story("", "x"), "[story_object]\r\nstory_id = x\r\n");
     }
 }

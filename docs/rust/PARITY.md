@@ -541,9 +541,209 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 
 | Item | Why |
 |---|---|
-| The answers of the MCP commands beyond key names (types, values, order, error texts) | a running comparison against the C++ editor is outside this read-only brief |
-| The spawn entities' property rows (`gz-entities` against the Dead Air `FillProps`) | a class-by-class compare of `xrServerEntities` was not done here |
+| judged - The answers of the MCP commands beyond key names (types, values, order, error texts) | the differential run compares them value for value: "Commands compared by the differential run" below (94 commands compared, every one equal or equal but for the fields its IGNORE table names; the rest with why not) |
+| judged in part - The spawn entities' property rows (`gz-entities` against the Dead Air `FillProps`) | the run compares the Details rows of `physic_destroyable_object` and `inventory_box` spawns and Level Settings: rows, order (the property tree's), values, help. Fixed: the Game Type row (commented out in the C++), `ALife\Story ID (script)`, story ids by name, the Profile by the Spawn tool's name, the tree order, Level Settings' help and unit. Differs: a spawn's `Model\Animation` is the C++ playback buttons, the Detail Objects rows live on their tool's panel (STATE.md, Differences the differential left). Other classes were not sampled |
 | Read-only versus editable per Details row, and the chooser kinds inside entity rows | only labels and the scene's `choose` lists were compared |
 | Viewport gestures past the key names: box selection with Limited Depth / Back Face Culling, gizmo sensitivities, vertex snap behaviour | needs the editor running |
 | Graph canvas gestures and the Content Browser's drag and drop | labels match; behaviour needs the editor running |
 | Tooltips and help texts | not compared |
+
+## Commands compared by the differential run
+
+Written by `tools/qa/diff_editors.py --write-parity` from the last results of every scenario
+(`Intermediate/diffrun/state.json`); not edited by hand. `equal`: every step of the command
+answered the same on both editors; `equal, ignoring`: the same but for the fields named, each
+with its reason in the script's IGNORE table; `differs`: a step still differs; `not compared`:
+the run never sends it, and why.
+
+| Command | State | Steps | Scenarios |
+|---|---|---|---|
+| `aimap_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `asset_preview` | not compared: window | 0 | - |
+| `camera_get` | not compared: window | 0 | - |
+| `camera_set` | not compared: window | 0 | - |
+| `characters_delete` | equal | 1 | s3_assets |
+| `characters_get` | equal | 88 | s1_reads, s3_assets |
+| `characters_list` | equal | 2 | s1_reads, s3_assets |
+| `characters_view` | not compared: window | 0 | - |
+| `characters_write` | equal | 1 | s3_assets |
+| `command_palette` | not compared: window | 0 | - |
+| `compiler_errors` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `content_browser_copy` | not compared: window | 0 | - |
+| `content_browser_navigation` | not compared: window | 0 | - |
+| `content_browser_open` | not compared: window | 0 | - |
+| `content_browser_selection` | not compared: window | 0 | - |
+| `content_copy` | equal | 6 | s4_content |
+| `content_create` | equal | 5 | s3_assets |
+| `content_delete` | equal | 5 | s4_content |
+| `content_mkdir` | equal | 3 | s4_content |
+| `content_move` | equal | 3 | s4_content |
+| `content_rename` | equal | 4 | s4_content |
+| `darf_copy` | equal | 4 | s4_content |
+| `darf_list` | equal | 2 | s1_reads |
+| `delete_selected` | equal | 1 | s6_scene |
+| `deselect_all` | equal | 2 | s6_scene |
+| `details_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `drop_objects` | not compared: the C++ ray pick skips every object its camera does not see (CSceneObject::RayPick, occ_visible): the answer follows a minimised window's camera | 0 | - |
+| `exec_command` | not compared: runs a row of the C++ command table in the window: test_ui_shell.py | 0 | - |
+| `focus_object` | not compared: window | 0 | - |
+| `fog_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `frame_pacing` | not compared: window | 0 | - |
+| `game_lighting` | not compared: window | 0 | - |
+| `game_link` | equal | 1 | s1_reads |
+| `game_modes` | equal | 1 | s1_reads |
+| `group_thumbnail` | not compared: window | 0 | - |
+| `group_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `jobs` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `level_build` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `level_parts` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `library` | not compared: window | 0 | - |
+| `light_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `list_assets` | equal, ignoring `total` | 10 | s1_reads, s6_scene |
+| `list_commands` | equal, ignoring `commands[].keys`, `commands[].presets[].keys`, `commands[name=...]` | 1 | s1_shell |
+| `list_objects` | equal | 8 | s6_scene |
+| `list_projects` | equal | 1 | s1_reads |
+| `list_spawn_sections` | equal | 3 | s1_reads, s6_scene |
+| `mark_authored` | equal | 2 | s6_scene |
+| `mark_removed` | equal | 2 | s6_scene |
+| `mod_catalog` | not compared: reaches GitHub and VirusTotal: test_mod_catalog.py drives it against the mock | 0 | - |
+| `mod_commands` | equal | 4 | s1_reads, s2_manifest |
+| `mod_exclude` | equal | 3 | s2_manifest |
+| `mod_export` | equal | 4 | s5_builds, s6_scene |
+| `mod_export_cut` | equal | 1 | s6_scene |
+| `mod_export_ogf_probe` | equal | 1 | s6_scene |
+| `mod_export_spawn` | equal, ignoring `missing`, `removed` | 1 | s6_scene |
+| `mod_export_xcform` | equal | 1 | s6_scene |
+| `mod_manifest` | equal | 2 | s1_reads, s2_manifest |
+| `mod_package` | equal, ignoring `index.sha256`, `index.size`, `packages[].sha256`, `packages[].size`, `packed`, `warnings` | 1 | s5_builds |
+| `mod_publish` | not compared: reaches GitHub: test_mod_publish.py drives it against the mock | 0 | - |
+| `mod_releases` | not compared: reaches GitHub: test_mod_publish.py drives it against the mock | 0 | - |
+| `mod_set_manifest` | equal | 12 | s2_manifest |
+| `mod_settings_view` | not compared: window | 0 | - |
+| `object_info` | equal, ignoring `object.visible` | 26 | s6_scene |
+| `object_motion` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `object_set_position` | equal | 1 | s6_scene |
+| `object_set_rotation` | equal | 1 | s6_scene |
+| `object_set_scale` | equal | 1 | s6_scene |
+| `object_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `open_project` | not compared: works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects | 0 | - |
+| `open_scene` | equal | 1 | s6_scene |
+| `outliner_filter` | not compared: window | 0 | - |
+| `outliner_show` | not compared: window | 0 | - |
+| `particles_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `pda_delete` | equal | 1 | s3_assets |
+| `pda_get` | equal | 2 | s1_reads, s3_assets |
+| `pda_list` | equal | 1 | s1_reads |
+| `pda_preview` | not compared: window | 0 | - |
+| `pda_use` | equal | 1 | s3_assets |
+| `pda_validate` | equal | 1 | s1_reads |
+| `pda_write` | equal | 1 | s3_assets |
+| `ping` | equal | 1 | s1_reads |
+| `place_object` | equal | 1 | s6_scene |
+| `place_spawn` | equal | 3 | s6_scene |
+| `place_way` | equal | 2 | s6_scene |
+| `portal_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `preferences` | equal | 1 | s1_reads |
+| `preview_model` | not compared: window | 0 | - |
+| `probe_vertical` | not compared: the C++ ray pick skips every object its camera does not see (CSceneObject::RayPick, occ_visible): the answer follows a minimised window's camera | 0 | - |
+| `progress` | equal | 1 | s1_reads |
+| `project_browser_menu` | not compared: window | 0 | - |
+| `project_close` | not compared: works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects | 0 | - |
+| `project_create` | not compared: works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects | 0 | - |
+| `project_delete` | not compared: works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects | 0 | - |
+| `project_forget` | not compared: works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects | 0 | - |
+| `project_reveal` | not compared: works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects | 0 | - |
+| `property_choose` | not compared: drives the chooser modal: a window (test_properties.py) | 0 | - |
+| `property_inspector` | equal, ignoring `open`, `rows[key=...]`, `total`, `visible` | 7 | s6_scene |
+| `property_set` | equal | 2 | s6_scene |
+| `quest_apply` | equal | 2 | s3_assets |
+| `quest_bookmarks` | not compared: window | 0 | - |
+| `quest_catalog` | equal | 1 | s1_reads |
+| `quest_check_all` | equal | 1 | s1_reads |
+| `quest_close` | equal | 3 | s3_assets |
+| `quest_edit` | equal | 1 | s3_assets |
+| `quest_find` | not compared: window | 0 | - |
+| `quest_get` | equal | 41 | s1_reads, s3_assets |
+| `quest_history` | not compared: window | 0 | - |
+| `quest_layout` | equal | 40 | s1_reads, s3_assets |
+| `quest_list` | equal | 2 | s1_reads, s4_content |
+| `quest_lookup` | equal | 23 | s1_reads, s3_assets |
+| `quest_minimap` | not compared: window | 0 | - |
+| `quest_new` | equal | 2 | s3_assets |
+| `quest_open` | not compared: brings a graph tab up: a window (test_graph_ui.py) | 0 | - |
+| `quest_project_find` | equal, ignoring `fingerprint` | 2 | s1_reads |
+| `quest_redo` | equal | 1 | s3_assets |
+| `quest_references` | equal, ignoring `fingerprint` | 1 | s1_reads |
+| `quest_reload` | not compared: reloads an open graph tab from disk: a window (test_graph_ui.py) | 0 | - |
+| `quest_rename_task` | equal | 1 | s3_assets |
+| `quest_save` | equal | 4 | s3_assets |
+| `quest_undo` | equal | 2 | s3_assets |
+| `quest_validate` | equal | 38 | s1_reads |
+| `quest_view` | not compared: window | 0 | - |
+| `quest_write` | equal | 1 | s3_assets |
+| `recovery` | equal | 1 | s6_scene |
+| `redo` | equal | 1 | s6_scene |
+| `rename_object` | equal | 2 | s6_scene |
+| `rename_objects` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `reset_layout` | not compared: window | 0 | - |
+| `save_scene` | equal | 1 | s6_scene |
+| `scan_walls` | not compared: the C++ ray pick skips every object its camera does not see (CSceneObject::RayPick, occ_visible): the answer follows a minimised window's camera | 0 | - |
+| `scene_edit` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `scene_export_obj` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `scene_info` | equal | 2 | s6_scene |
+| `scene_load_status` | equal | 1 | s6_scene |
+| `scene_new` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `scene_stats` | equal | 2 | s6_scene |
+| `scene_summary` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `scene_tree` | equal, ignoring `tree[].objects[].visible` | 2 | s6_scene |
+| `scene_validate` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `scene_visibility` | equal, ignoring `changed`, `classes[].hidden_objects` | 2 | s6_scene |
+| `screens_get` | equal | 2 | s1_reads, s2_manifest |
+| `screens_set` | equal | 5 | s2_manifest |
+| `screens_view` | not compared: window | 0 | - |
+| `screenshot_editor` | not compared: window | 0 | - |
+| `screenshot_viewport` | not compared: window | 0 | - |
+| `sector_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `select_objects` | equal | 8 | s6_scene |
+| `selection` | equal | 4 | s6_scene |
+| `selection_file` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `shape_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `shortcuts` | equal, ignoring `shortcuts[].keys`, `shortcuts[id=...]` | 2 | s1_shell |
+| `snap_objects` | equal | 3 | s6_scene |
+| `spawn_attach` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `spawn_order` | equal | 4 | s6_scene |
+| `spawn_set_fixed_bones` | equal | 2 | s6_scene |
+| `spawn_set_visual` | equal | 1 | s6_scene |
+| `state` | equal, ignoring `fps`, `ui_scale` | 1 | s1_shell |
+| `texture_preview` | not compared: window | 0 | - |
+| `theme` | not compared: window | 0 | - |
+| `titlebar_info` | not compared: window | 0 | - |
+| `ui_audit` | not compared: window | 0 | - |
+| `ui_contract` | equal | 1 | s1_reads |
+| `ui_dialog` | not compared: window | 0 | - |
+| `ui_drawer` | not compared: window | 0 | - |
+| `ui_list` | not compared: window | 0 | - |
+| `ui_panel` | not compared: window | 0 | - |
+| `ui_popup` | not compared: window | 0 | - |
+| `ui_scale` | not compared: window | 0 | - |
+| `ui_scroll` | not compared: window | 0 | - |
+| `ui_split` | not compared: window | 0 | - |
+| `ui_tab` | not compared: window | 0 | - |
+| `ui_toast` | not compared: window | 0 | - |
+| `undo` | equal | 2 | s6_scene |
+| `view_mode` | not compared: window | 0 | - |
+| `viewport_controls` | not compared: window | 0 | - |
+| `viewport_navigation` | not compared: window | 0 | - |
+| `wallmark_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `way_tool` | not compared: only the Rust editor has it (D13: jobs, the level build, the tools' and the scene's own commands); its crate's tests and the QA suites drive it | 0 | - |
+| `window_control` | not compared: window | 0 | - |
+| `world_get` | equal | 3 | s1_reads, s2_manifest, s6_scene |
+| `world_set` | equal | 12 | s2_manifest |
+| `world_transitions` | equal | 3 | s1_reads |
+| `world_view` | not compared: window | 0 | - |
+
+183 commands: 82 equal, 12 equal with fields ignored, 0 differ, 89 not compared.
+
+Files compared in another form (FILE_RULES): `project/preview.png`, `project/temp/session.ltx`, `temp/out/pkg/darf-overnight-delivery-1.1.0.files`, `temp/out/pkg/darf-overnight-delivery-1.1.0.zip`, `temp/out/pkg/darf-overnight-delivery.update.ltx`.
+
+<!-- end of the differential run's section -->

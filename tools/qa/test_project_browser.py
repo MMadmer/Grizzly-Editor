@@ -61,7 +61,7 @@ import qa_target
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 MCP = qa_target.MCP
-INI = os.path.join(REPO, "_projects.ini")
+INI = qa_target.projects_ini()
 # two cards carry this name (S): as long as a real mod's, so a card that cuts it shows
 TWIN = "QaNested-Long-Delivery"
 

@@ -29,3 +29,6 @@ notify.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 gz-win.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

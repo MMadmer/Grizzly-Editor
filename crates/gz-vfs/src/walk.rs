@@ -77,8 +77,9 @@ fn child(rel: &str, name: &str) -> String {
 }
 
 /// Lists one folder. `None` when it cannot be listed (gone, no access). Hidden entries are
-/// skipped as the engine skips them (`_A_HIDDEN`), and so is tooling.
-pub(crate) fn scan(base: &Path, rel: &str) -> Option<DirRec> {
+/// skipped as the engine skips them (`_A_HIDDEN`), and tooling with `skip_tooling` (a module, as
+/// XMS skips it; the game's own `gamedata` lists it, as the C++ editor's DARF content did).
+pub(crate) fn scan(base: &Path, rel: &str, skip_tooling: bool) -> Option<DirRec> {
     let dir = dir_path(base, rel);
     // the stamp is taken BEFORE the listing: a change while listing makes the record stale
     let mtime = mtime(&std::fs::metadata(&dir).ok()?);
@@ -87,7 +88,7 @@ pub(crate) fn scan(base: &Path, rel: &str) -> Option<DirRec> {
     let mut dirs = Vec::new();
     for e in rd.flatten() {
         let Ok(name) = e.file_name().into_string() else { continue };
-        if is_tooling_entry(&name) {
+        if skip_tooling && is_tooling_entry(&name) {
             continue;
         }
         let Ok(own) = e.metadata() else { continue };
@@ -117,7 +118,7 @@ pub(crate) fn scan(base: &Path, rel: &str) -> Option<DirRec> {
 /// Walks the tree at `base`. A folder of `saved` whose write time is unchanged keeps its record
 /// (one `metadata` call, all of them in parallel); any other folder is listed again. Runs on
 /// the caller's pool.
-pub(crate) fn walk(base: &Path, saved: &[DirRec]) -> Walked {
+pub(crate) fn walk(base: &Path, saved: &[DirRec], skip_tooling: bool) -> Walked {
     let by_rel: FxHashMap<&str, &DirRec> = saved.iter().map(|d| (d.rel.as_str(), d)).collect();
     let valid: FxHashSet<&str> = saved
         .par_iter()
@@ -127,7 +128,7 @@ pub(crate) fn walk(base: &Path, saved: &[DirRec]) -> Walked {
         .map(|d| d.rel.as_str())
         .collect();
     let read = AtomicUsize::new(0);
-    let cx = Cx { base, by_rel: &by_rel, valid: &valid, read: &read };
+    let cx = Cx { base, by_rel: &by_rel, valid: &valid, read: &read, skip_tooling };
     let dirs = cx.visit(String::new(), 0);
     Walked { dirs, checked: saved.len(), read: read.into_inner() }
 }
@@ -137,6 +138,7 @@ struct Cx<'a> {
     by_rel: &'a FxHashMap<&'a str, &'a DirRec>,
     valid: &'a FxHashSet<&'a str>,
     read: &'a AtomicUsize,
+    skip_tooling: bool,
 }
 
 impl Cx<'_> {
@@ -145,7 +147,7 @@ impl Cx<'_> {
             Some(&saved) if self.valid.contains(rel.as_str()) => saved.clone(),
             _ => {
                 self.read.fetch_add(1, Ordering::Relaxed);
-                match scan(self.base, &rel) {
+                match scan(self.base, &rel, self.skip_tooling) {
                     Some(r) => r,
                     None => return Vec::new(),
                 }

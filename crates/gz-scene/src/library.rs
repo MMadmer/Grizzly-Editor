@@ -218,24 +218,8 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
 /// `$groups$` (`rawdata\groups`): the `.group` files Groups lists.
 #[must_use]
 pub fn list_groups(root: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_ext(root, root, "group", &mut out);
-    out.sort();
-    out
-}
-
-fn collect_ext(root: &Path, dir: &Path, ext: &str, out: &mut Vec<String>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect_ext(root, &p, ext, out);
-        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext))
-            && let Ok(rel) = p.with_extension("").strip_prefix(root)
-        {
-            out.push(rel.to_string_lossy().replace('/', "\\"));
-        }
-    }
+    // as `FS.file_list($groups$)`: lower case, in byte order
+    gz_project::editor_file_list(root, "group")
 }
 
 #[cfg(test)]

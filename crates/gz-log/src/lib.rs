@@ -43,6 +43,18 @@ impl Level {
     }
 }
 
+/// A line as the C++ log held it: its level's mark in front (`~ [nq] ...`), unless the text
+/// carries one already.
+#[must_use]
+pub fn marked(level: Level, text: &str) -> String {
+    let mark = level.mark();
+    if mark.is_empty() || ["! ", "~ ", "* "].iter().any(|m| text.starts_with(m)) {
+        text.to_owned()
+    } else {
+        format!("{mark}{text}")
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Record {
     /// Position in the log since the start, for a reader that asks "what is new".

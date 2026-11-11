@@ -118,7 +118,8 @@ fn precedence() {
     game(&t);
     let files = GameFiles::mount(&t.0, &MountOptions::default()).unwrap();
     let paths: Vec<&str> = files.iter().map(|f| f.path).collect();
-    assert_eq!(paths, ["configs/system.ltx", "meshes/a.ogf", "textures/t.dds"]);
+    // the game's own loose tree keeps a tooling name, as the C++ DARF content listed it
+    assert_eq!(paths, [".git/config", "configs/system.ltx", "meshes/a.ogf", "textures/t.dds"]);
     assert_eq!(files.archives().len(), 2);
     assert!(files.skipped().is_empty());
 

@@ -138,6 +138,9 @@ pub enum SceneCmd {
     },
     /// Marks the content changed without an undo step (a restored recovery snapshot).
     Touch,
+    /// The unsaved changes are given up (a close that discards them): the scene no longer counts
+    /// as unsaved work. What closes next drops it with the project.
+    Forget,
     /// An edit of the sector, portal, way, shape, light and fog volume tools.
     ObjTool(Box<crate::objtools::ToolEdit>),
     /// An edit of the AI map, detail objects and wallmark tools.
@@ -921,6 +924,10 @@ impl State for SceneState {
             }
             SceneCmd::Saved { file } => {
                 self.meta.file = Some(file);
+                cx.mark_saved();
+                Ok(SceneReply::None)
+            }
+            SceneCmd::Forget => {
                 cx.mark_saved();
                 Ok(SceneReply::None)
             }

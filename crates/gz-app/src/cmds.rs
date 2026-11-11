@@ -729,7 +729,13 @@ async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Rep
         // without a window there is one thing left of it: closing the editor
         return match action.as_str() {
             "close" => {
-                editor.refuse_unsaved(args.flag("discard"))?;
+                let discard = args.flag("discard");
+                editor.refuse_unsaved(discard)?;
+                // dropped on request (or under -nodlg, as the exit prompt answered there): the
+                // project then closes clean, and its recovery session ends with it, as the C++
+                if discard || editor.flags.unattended {
+                    editor.discard_all().await?;
+                }
                 quit_soon(&editor);
                 Ok(json!({ "closing": true }))
             }
@@ -796,6 +802,10 @@ async fn window_control(editor: Arc<Editor>, args: Args, _origin: Origin) -> Rep
         settled.insert("saved".into(), saved);
     }
     if closing {
+        // the dropped work leaves the stores too, so the project closes clean (recovery included)
+        if discard || unattended {
+            editor.discard_all().await?;
+        }
         quit_soon(&editor);
     } else {
         // the window takes the change at the end of the frame and reports its size on the next
@@ -1135,7 +1145,10 @@ fn face_keys(shell: &ShellState, face: Option<usize>) -> String {
 }
 
 async fn list_commands(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Reply {
-    on_ui(&editor, |shell, _| {
+    // a Run Macro slot's preset carries the file the slot runs, as the C++ sub-command's `p0`
+    let macro_files: Vec<String> =
+        (0..crate::macros::SLOTS).map(|i| crate::macros::slot_file(&editor, i)).collect();
+    on_ui(&editor, move |shell, _| {
         let rows: Vec<Value> = shell
             .parts
             .cpp
@@ -1155,7 +1168,16 @@ async fn list_commands(editor: Arc<Editor>, _args: Args, _origin: Origin) -> Rep
                         .subs
                         .iter()
                         .zip(&r.faces)
-                        .map(|(s, f)| crate::cpp::preset_json(s, &face_keys(shell, *f)))
+                        .enumerate()
+                        .map(|(i, (s, f))| {
+                            let mut preset = crate::cpp::preset_json(s, &face_keys(shell, *f));
+                            if r.cmd.id == crate::macros::RUN_MACRO_ID
+                                && let Some(file) = macro_files.get(i)
+                            {
+                                preset["p1"] = json!(file);
+                            }
+                            preset
+                        })
                         .collect();
                     row.insert("presets".into(), Value::Array(presets));
                 }

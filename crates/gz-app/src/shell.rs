@@ -1559,22 +1559,47 @@ impl ShellState {
     // ---- the Keyboard page's table ---------------------------------------------------------
 
     /// Every command that takes a shortcut: id, "group · label", keys.
+    /// What `shortcuts` lists, as the C++ did: every sub-command of an editable C++ row, in the
+    /// registry's order, then the bindable commands no row has.
     pub(crate) fn shortcut_rows(&self) -> Vec<(String, String, String)> {
-        (0..self.parts.commands.len()).filter_map(|i| self.shortcut_row(i)).collect()
+        self.shortcut_faces().into_iter().filter_map(|i| self.shortcut_row(i)).collect()
+    }
+
+    fn shortcut_faces(&self) -> Vec<usize> {
+        let mut rows: Vec<&crate::cpp::Row> = self.parts.cpp.rows.iter().collect();
+        rows.sort_by_key(|r| r.cmd.id);
+        let bindable = |f: &usize| self.parts.commands.get(*f).is_some_and(|c| c.bindable);
+        let mut out: Vec<usize> =
+            rows.iter().filter(|r| r.cmd.editable).flat_map(|r| r.faces.iter().flatten().copied()).collect();
+        out.retain(bindable);
+        let in_rows: Vec<usize> = rows.iter().flat_map(|r| r.faces.iter().flatten().copied()).collect();
+        out.extend((0..self.parts.commands.len()).filter(|f| bindable(f) && !in_rows.contains(f)));
+        out
+    }
+
+    /// The Keyboard page's name of a face of a C++ row (`CommandName`).
+    fn cpp_name(&self, face: usize) -> Option<(String, String)> {
+        self.parts.cpp.rows.iter().find_map(|r| {
+            let k = r.faces.iter().position(|f| *f == Some(face))?;
+            let sub = r.cmd.subs.get(k)?;
+            let id = crate::cpp::sub_id(&r.cmd.name, &sub.desc);
+            Some(crate::cpp::command_name(&id, &r.cmd.desc, &sub.desc))
+        })
     }
 
     pub(crate) fn shortcut_row(&self, i: usize) -> Option<(String, String, String)> {
         let c = self.parts.commands.get(i).filter(|c| c.bindable)?;
+        let (group, label) = self.cpp_name(i).unwrap_or_else(|| (c.group.to_string(), c.label.to_string()));
         Some((
             c.id.to_string(),
-            format!("{} \u{b7} {}", c.group, c.label),
+            format!("{group} \u{b7} {label}"),
             self.binding(i).map(|k| k.label()).unwrap_or_default(),
         ))
     }
 
     /// A command by its id or by the label the Keyboard page shows.
     pub(crate) fn shortcut_target(&self, name: &str) -> Option<usize> {
-        (0..self.parts.commands.len()).find(|&i| {
+        self.shortcut_faces().into_iter().find(|&i| {
             self.shortcut_row(i).is_some_and(|(id, label, _)| {
                 id.eq_ignore_ascii_case(name) || label.eq_ignore_ascii_case(name)
             })
@@ -1644,7 +1669,8 @@ fn project_linked(editor: &Editor) -> bool {
 #[must_use]
 pub fn default_log_state(editor: &Editor) -> LogState {
     let (errors, warnings) = editor.log.counts();
-    LogState { last: editor.log.last_notable().map(|r| r.text.clone()).unwrap_or_default(), errors, warnings }
+    let last = editor.log.last_notable().map(|r| gz_log::marked(r.level, &r.text)).unwrap_or_default();
+    LogState { last, errors, warnings }
 }
 
 /// The shell's own commands: in the palette and on the Keyboard page.

@@ -201,7 +201,7 @@ impl Inner {
             }
         }
         if serious || (level == LineLevel::Info && notable_note(&text)) {
-            self.last = text.to_string();
+            self.last = gz_log::marked(record.level, &text);
         }
         self.lines.push(Line { text, level, epoch: self.epoch, mark: false, counted });
     }
@@ -543,7 +543,7 @@ mod tests {
         let mut m = Inner::default();
         m.sync(&log);
         assert_eq!((m.errors, m.warnings), (1, 1));
-        assert_eq!(m.last, "broke");
+        assert_eq!(m.last, "! broke", "the line as the C++ log held it");
         // the mark stands before the line that opened the project
         assert!(m.lines.get(1).is_some_and(|l| l.mark && &*l.text == COUNT_MARK));
         m.level = 1;

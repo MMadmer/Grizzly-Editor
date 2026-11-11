@@ -13,6 +13,14 @@ use crate::service::{GameLink, spawn_roster};
 
 const AREA: &str = "gz-game";
 
+/// The `Entities` category of `list_assets`: every section with `$spawn`, in the roster's order
+/// (the C++ chooser walked `pSettings`, whose sections are sorted).
+pub fn install(editor: &Editor) {
+    gz_project::AssetLists::of(editor).provide_async("Entities", |ed: Arc<Editor>| async move {
+        spawn_roster(&ed).await.iter().map(|s| s.section.to_string()).collect()
+    });
+}
+
 pub fn register(reg: &mut Registry) {
     reg.add(AREA, "game_link", game_link);
     reg.add(AREA, "game_modes", game_modes);

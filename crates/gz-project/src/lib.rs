@@ -54,7 +54,9 @@ pub use delete::{
     system_guards,
 };
 pub use gz_vfs::looks_like_game;
-pub use hooks::{AssetLists, AssetTemplates, CATEGORIES, ProjectHooks, TemplateCx, TemplateKind};
+pub use hooks::{
+    AssetLists, AssetTemplates, CATEGORIES, ProjectHooks, TemplateCx, TemplateKind, editor_file_list,
+};
 pub use list::{EntryState, MAX_RECENT, ProjectList, Sort};
 pub use ops::{Failure, FileOps, Report};
 pub use project::{ProjectFile, scene_in_project};

@@ -185,9 +185,9 @@ impl EditorSettings {
         }
     }
 
-    /// The settings of this editor, read on first use from the editor's data root.
+    /// The settings of this editor, read on first use from the editor's home.
     pub fn of(editor: &Editor) -> Arc<EditorSettings> {
-        editor.services.get_or_init(|| EditorSettings::load(&editor.paths.root.join(FILE_NAME)))
+        editor.services.get_or_init(|| EditorSettings::load(&editor.paths.home.join(FILE_NAME)))
     }
 
     #[must_use]

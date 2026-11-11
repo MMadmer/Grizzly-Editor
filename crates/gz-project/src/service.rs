@@ -103,7 +103,7 @@ impl Projects {
                 &editor.exec,
                 StoreOptions::default(),
             ),
-            file: editor.paths.root.join(list::FILE),
+            file: editor.paths.home.join(list::FILE),
             exec: editor.exec.clone(),
             lock: tokio::sync::Mutex::new(()),
         })

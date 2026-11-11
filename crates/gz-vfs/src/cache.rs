@@ -24,7 +24,8 @@ use crate::archive::ArchEntry;
 use crate::walk::DirRec;
 
 const MAGIC: &[u8; 4] = b"GZGI";
-const VERSION: u32 = 1;
+// 2: the game's loose tree keeps tooling names
+const VERSION: u32 = 2;
 
 /// One archive as it was read.
 #[derive(Clone, Debug, PartialEq, Eq)]

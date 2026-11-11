@@ -57,6 +57,12 @@ impl CmdError {
         Self::new("no_project", "no active project")
     }
 
+    /// A command that did not do all it was asked and says so in its own fields alone: the
+    /// reply is `{"ok":false, ...data}` with no `error` (the C++ file operations' report).
+    pub fn report(data: serde_json::Value) -> Self {
+        Self { code: SmolStr::new("report"), message: String::new(), data: Some(data) }
+    }
+
     #[must_use]
     pub fn with_data(mut self, data: serde_json::Value) -> Self {
         self.data = Some(data);

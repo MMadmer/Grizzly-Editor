@@ -27,7 +27,8 @@
 //! each folder by name; a later archive replaces a path an earlier one holds (`Register`), and
 //! the loose tree (`$game_data$`) replaces both. A name ending in a separator is a folder marker
 //! and no file. Hidden entries are skipped as the engine skips them; tooling entries (`.git`,
-//! `Thumbs.db`, ...) as XMS skips them.
+//! `Thumbs.db`, ...) of a module as XMS skips them (the loose `gamedata` keeps them, as the C++
+//! editor's DARF content listed them).
 //!
 //! oracle: an archive's own `[header] entry_point` is ignored, as the C++ editor's DARF mount
 //! ignored it: every archive of a game is relative to `gamedata`.

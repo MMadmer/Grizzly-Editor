@@ -141,6 +141,23 @@ struct Known {
     /// `STATE_Write` added (Call of Pripyat's zones write a time marker the spawn compiler left
     /// in Dead Air's `all.spawn`). The engine skips them by the size word; they are written back.
     tail: Arc<[u8]>,
+    /// The same for a scene's LTX section: the numbered values after the ones its class reads
+    /// (the C++ editor runs the repository's Call of Pripyat scripts, whose zones write a
+    /// `last_spawn_time` byte). Written back after the state.
+    ini_tail: Arc<[SmolStr]>,
+    /// The numbered values a scene section held, until it is changed: written back as they
+    /// were, as `raw_spawn` is for a packet (a value the C++ wrote as a number where this
+    /// layout reads a string keeps its spelling).
+    raw_ini: Option<Arc<[SmolStr]>>,
+}
+
+impl Known {
+    /// Something of the entity changed: what it was read from no longer stands for it.
+    fn touched(&mut self) {
+        self.raw_spawn = None;
+        self.raw_update = None;
+        self.raw_ini = None;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -298,6 +315,8 @@ impl Entity {
                 raw_spawn: None,
                 raw_update: None,
                 tail: Arc::from([]),
+                ini_tail: Arc::from([]),
+                raw_ini: None,
             })),
         })
     }
@@ -381,6 +400,10 @@ impl Entity {
             Some(b) => Arc::from(b.get(r.r_tell()..).unwrap_or(&[])),
             None => Arc::from([]),
         };
+        let ini_tail: Arc<[SmolStr]> = match &raw_ini {
+            Some(values) => Arc::from(values.get(r.r_tell()..).unwrap_or(&[])),
+            None => Arc::from([]),
+        };
 
         // A packet of today's layout must write back to its own bytes, or it is kept as bytes.
         if let Some(b) = &bytes
@@ -411,6 +434,8 @@ impl Entity {
                 raw_spawn: bytes,
                 raw_update: None,
                 tail,
+                ini_tail,
+                raw_ini,
             })),
         })
     }
@@ -489,10 +514,15 @@ impl Entity {
     pub fn to_scene(&self) -> Option<Vec<IniValue>> {
         match &self.inner {
             Inner::Known(k) => {
+                if let Some(raw) = &k.raw_ini {
+                    return Some(raw.iter().map(|v| IniValue::Raw(v.to_string())).collect());
+                }
                 let mut w = new_writer(&k.header, true);
                 write_header(&k.header, &mut w);
                 state_write(&k.object, &k.header, k.info.class, &mut w);
-                w.ini_values()
+                let mut values = w.ini_values()?;
+                values.extend(k.ini_tail.iter().map(|v| IniValue::Raw(v.to_string())));
+                Some(values)
             }
             Inner::Opaque(o) => {
                 let values = o.raw_ini.as_ref()?;
@@ -639,8 +669,7 @@ impl Entity {
     fn header_mut(&mut self) -> Result<&mut Header> {
         match &mut self.inner {
             Inner::Known(k) => {
-                k.raw_spawn = None;
-                k.raw_update = None;
+                k.touched();
                 Ok(&mut k.header)
             }
             Inner::Opaque(o) => {
@@ -656,8 +685,7 @@ impl Entity {
     fn known_mut(&mut self) -> Result<&mut Known> {
         match &mut self.inner {
             Inner::Known(k) => {
-                k.raw_spawn = None;
-                k.raw_update = None;
+                k.touched();
                 Ok(k)
             }
             Inner::Opaque(o) => Err(EntityError::Opaque(o.reason.text())),
@@ -782,8 +810,7 @@ impl Entity {
             return Err(EntityError::ReadOnly(path.to_owned()));
         }
         let effect = props::apply(&mut k.header, &mut k.object, &prop, value, ctx)?;
-        k.raw_spawn = None;
-        k.raw_update = None;
+        k.touched();
         Ok(effect)
     }
 
@@ -801,8 +828,7 @@ impl Entity {
         let before = k.object.script.clone();
         k.object.script.sync_loopholes(&description, &ids);
         if k.object.script != before {
-            k.raw_spawn = None;
-            k.raw_update = None;
+            k.touched();
         }
     }
 }

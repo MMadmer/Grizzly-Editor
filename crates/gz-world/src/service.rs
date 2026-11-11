@@ -93,6 +93,13 @@ impl WorldLookup for Lookup {
     fn patrols(&self) -> Vec<String> {
         self.0.latest().map(|g| g.patrols.clone()).unwrap_or_default()
     }
+
+    fn ready(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        let svc = self.0.clone();
+        Box::pin(async move {
+            svc.game().await;
+        })
+    }
 }
 
 impl WorldService {

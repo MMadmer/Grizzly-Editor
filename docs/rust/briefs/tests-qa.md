@@ -96,7 +96,7 @@ viewport, the editor's process is GONE within two seconds of `window_control clo
 `Grizzly.exe` left in the process list. If a process ever stays, stop and fix that before
 anything else: a process stuck in the GPU driver blocks every later run on the machine.
 
-## A known gap to close first
+## Known gaps to close first
 
 **No window of the operating system opens for a caller who cannot click it.** The kit's
 questions already answer for an MCP caller (`gz_ui::dialog::answer_as`, set by `exec_command`
@@ -109,6 +109,19 @@ path on a thread of its own, as now), which opens nothing and logs one line
 (`~ [dlg suppressed] <title>`) when the editor is unattended or a caller's scope is held; the
 row then answers `refused` with "name the file" over MCP. A test proves no caller is left
 (`rg` in `tools/rust/check.sh`: `rfd::` outside that one file fails).
+
+**Two things the differential run (`tools/qa/diff_editors.py`, STATE.md "The differential
+run") left open:**
+- A spawn point's `Model\Animation` row is playback buttons in the C++ Details panel
+  (`SSpawnData::FillProp`, the visual's motions played in the viewport); the Rust editor
+  plays no spawn animation. Port it: the row, the playback in the viewport, an MCP way to
+  start and stop it, and take its line out of the script's ignore table.
+- The property rows were compared for two spawn classes only. Extend scenario `s6_scene` to
+  place one spawn of EVERY entity class the linked game's sections give (one section per
+  class) and compare `property_inspector` on each; record the oracle once (nothing answers
+  on 28016 unless the author started an editor - then leave this for last and say so), fix
+  what differs in `gz-entities` / `gz-scene`. `diff_editors.py` must end at 0 differences;
+  after your other fixes run it in its default mode (only what changed).
 
 ## Then, once, the things only a whole editor shows
 

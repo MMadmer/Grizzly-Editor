@@ -823,6 +823,89 @@ stay opaque; `internal_light_torch_r2.dds` states a 128-byte header (DirectXTex 
 we); two `.omf` hold the exporter's nameless default part; 7 THMs of Weapons Evolution are damaged and
 220 have chunk sizes that disagree with their content.
 
+## The differential run
+
+Brief `briefs/tests-diff.md`. **`tools/qa/diff_editors.py`** runs the same commands on the C++ editor
+(the oracle) and the Rust one and compares the answers step by step and the two project copies and
+output folders file by file. Seven scenarios (`s1_reads`, `s1_shell` - windowed, minimised: the shell's
+`list_commands`, `shortcuts`, `state` -, `s2_manifest`, `s3_assets`, `s4_content`, `s5_builds`,
+`s6_scene`), 474 steps; copies of Overnight Delivery (plus `docs/nq/examples`) and Test in the system
+temp folder, `export_target` into it.
+
+- **The oracle is recorded once** (`Intermediate/oracle/<scenario>-<key>/`: the steps as expanded,
+  the normalised answers, the watched files after each step, every file's size and SHA-256, the bytes
+  of the changed ones up to 16 MB, a ruled file in its rule's form). The key hashes the scenario's
+  steps and the code that expands them, `LevelEditor.exe`, the source project, the examples and the
+  linked game (engine, `fsgame.ltx`, archives). A scenario keeps one record. The C++ editor starts with
+  no `_projects.ini`, `level.ini`, `level_imgui.ini` (all three put back byte for byte after), as the
+  Rust one does in its fresh home; nothing starts it while 28016 answers.
+- **Only what changed runs**: `Intermediate/diffrun/state.json` keeps each scenario's result with
+  `Grizzly.exe`'s size and write time and the scenario's key. The Rust side runs scenarios side by
+  side (half the cores), each on its own port (28120+), copy and `-home`, headless but `s1_shell`. A
+  failed scenario leaves the Rust copy in `Intermediate/diffrun/<scenario>.rust` and its answers in
+  `<scenario>.rust.json` until its next run.
+- **`-home <dir>`** (`grizzly/src/cli.rs`, `AppPaths::home`): `_projects.ini`, `grizzly_editor.ltx`
+  and `logs\` go there; the data root without it. `qa_target` gives every Rust editor a temp home
+  (`GRIZZLY_QA_HOME` names one), `qa_target.projects_ini()` is the list the target reads.
+- **Times** (this machine): the first full run, oracle recorded on the way, 136.7 s (the C++ side is
+  serial: 7 records, 119 s); a full run with the oracle recorded 27.3 s; nothing changed 0.4 s.
+- `--write-parity` writes PARITY.md's section "Commands compared by the differential run": 183
+  commands, 82 equal, 12 equal with fields ignored, 89 not compared (window, the network, Rust only,
+  the C++ camera, the project list).
+
+Fixed at the cause (the run found them):
+- `gz-project` / `gz-scene` / `gz-game`: `list_assets` Visuals, Textures, Textures (raw), Sounds (the
+  editor's folders, `editor_file_list`), Particles, Light Anims, Entities (async providers:
+  `AssetLists::provide_async`) answered "no enumerator"; Groups lower case in byte order, as `FS`.
+- `gz-vfs`: the game's loose `gamedata` keeps dot-names (`.overlay-manifest.txt`, as the C++ DARF
+  content); a module still leaves tooling out. The saved index is version 2.
+- `gz-mod`: a new key or section goes where the C++ `Save` writes it (`section_rank`, `key_rank`):
+  `[requires]` after `[update]`, `disable_game_updates` after `website`, ...
+- `gz-store` / `gz-editor` / `gz-project`: a file operation's failure report is `{"ok":false, ...}` with
+  no `error` (`CmdError::report`).
+- `gz-entities`: a scene section's numbered values are written back as read until the entity changes
+  (`raw_ini`), and values past the class's fields are kept (`ini_tail`: the repository's Call of Pripyat
+  zone scripts write `last_spawn_time`); `spawn.part` was 9 KB short. The Game Type row is gone
+  (commented out in the C++), `ALife\Story ID (script)` added (`ScriptStoryOf` / `WithScriptStory`).
+- `gz-scene` / `gz-ui-level`: Details and Level Settings rows in the property tree's order
+  (`tree_order`), story ids by name, the Profile by the Spawn tool's name (`PropContext`
+  `story_names` / `profiles`, kept in `SceneService::prop_cx` for the panel), Level Settings' help
+  (`kWorldHelp`) and the smooth angle's unit; `spawn_set_visual`'s error had a doubled backslash.
+- `gz-nq` / `gz-world`: `quest_lookup level_changer` and `way_path` answered empty until `all.spawn`
+  was read: `WorldLookup::ready`.
+- `gz-app`: `shortcuts` lists the C++ table's editable rows in its order under the Keyboard page's
+  names (`COMMAND_NAMES`, `command_name`); a Run Macro preset's `p1` is the slot's file; `progress`
+  `status_line` is the line as the C++ log held it (`gz_log::marked`); `window_control close` with
+  `discard` (or `-nodlg`) drops the work first (`discard_all`; the scene's `DirtySource::discard`,
+  `SceneCmd::Forget`), so recovery ends clean.
+- `gz-store`'s reader stress test looks once before it stops (it failed on a busy machine).
+
+### Differences the differential left
+
+Each is a line of the script's IGNORE / IGNORE_ROWS / NORMALISE / FILE_RULES with its reason; the lead
+decides which enter section 12.
+- `list_commands`: the 35 C++ rows of plumbing or with bodies that do nothing are not listed (PARITY
+  section 1); rows 123-131 and `keys` are additions (D13).
+- `shortcuts`: the Rust editor ships default keys (the repository's `level.ini [shortcuts]`); the C++
+  binds none without a `level.ini` (D3). Its four do-nothing rows are not listed.
+- `list_assets Particles` `total`: the C++ `CPSLibrary::Load` stops at Dead Air's first short
+  `TargetColor` and keeps one group (1035 of 1428).
+- `mod_package` `warnings`: the C++ glues the unsigned-release sentence to the last build warning.
+- `mod_export_spawn` adds `missing` and `removed` (D13).
+- `property_inspector`: a spawn's `Model\Animation` is the C++ playback buttons (`SSpawnData::
+  FillProp`) - the Rust editor plays no spawn animation; the six Detail Objects rows of Level Settings
+  are on the Detail Objects panel and `details_tool`; `Scene\Targets` is in Level Settings (the C++
+  Preferences).
+- A level bound shape counts as visible in the C++ until a viewport frame runs `CEditShape::OnFrame`;
+  the minimised oracle never ran one (`object_info`, `scene_tree`, `scene_visibility`).
+- Not in the tables, kept out of the scenarios: the C++ ray pick skips objects its camera does not see
+  (`CSceneObject::RayPick`, `occ_visible`) - `place_way` snapping, `probe_vertical`, `scan_walls`,
+  `drop_objects` follow a minimised window's camera; the C++ `scene_visibility` refuses a JSON boolean
+  `visible`; the C++ undo stack after a Details edit is not the Rust one (D8).
+- Fields of their nature: the index fingerprint hashes absolute paths; `fps`, `dpi`, `ui_scale`;
+  packages, the index's byte columns and the descriptor's sizes (D4); `preview.png` (D2); the
+  shell's tabs (`temp\session.ltx`).
+
 ## Next packages, in dependency order
 
 1. `text` - done.

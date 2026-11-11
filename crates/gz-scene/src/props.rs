@@ -4,7 +4,7 @@
 //! `UIPropertiesForm::SetValueText` sets them.
 
 use gz_base::SmolStr;
-use gz_entities::{PropContext, PropKind, PropValue};
+use gz_entities::{ListKind, PropContext, PropKind, PropValue};
 
 use crate::apply::TransformEdit;
 use crate::class::ObjClass;
@@ -397,15 +397,19 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
             custom_rows(pref, o, &mut out);
             if let Some(e) = &d.entity {
                 let section = e.section().to_owned();
+                // the Spawn tool's name of the section (`SectionToEditor`), the section itself
+                // while the list is not known
+                let profile =
+                    cx.entity.profiles.get(section.as_str()).map_or(section.as_str(), |p| p.as_str());
                 out.push(choose(
                     key(&key(pref, &section), "Profile (spawn section)"),
                     "spawn_section",
-                    &section,
+                    profile,
                 ));
                 match e {
                     SpawnEntity::Decoded(ent) => {
                         for p in ent.properties(cx.entity) {
-                            out.push(entity_row(pref, &p));
+                            out.push(entity_row(pref, &p, cx.entity));
                         }
                     }
                     SpawnEntity::RawLtx { .. } | SpawnEntity::RawPacket { .. } => {
@@ -532,9 +536,23 @@ fn order_rows(pref: &str, o: &crate::objects::XmsOrder, out: &mut Vec<Row>) {
     ));
 }
 
-fn entity_row(pref: &str, p: &gz_entities::Prop) -> Row {
+fn entity_row(pref: &str, p: &gz_entities::Prop, ctx: &PropContext) -> Row {
     let k = key(pref, &p.path);
+    let story = |names: &std::collections::BTreeMap<u32, SmolStr>, v: i64| {
+        let items = names.iter().map(|(id, n)| (n.clone(), i64::from(*id))).collect();
+        Row::new(k.clone(), Kind::Token(items), Val::Num(v as f64))
+    };
     let mut r = match (&p.kind, &p.value) {
+        (PropKind::ListToken { list: ListKind::StoryIds, .. }, PropValue::Int(v))
+            if !ctx.story_names.is_empty() =>
+        {
+            story(&ctx.story_names, *v)
+        }
+        (PropKind::ListToken { list: ListKind::SpawnStoryIds, .. }, PropValue::Int(v))
+            if !ctx.spawn_story_names.is_empty() =>
+        {
+            story(&ctx.spawn_story_names, *v)
+        }
         (PropKind::U8 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
         (PropKind::U16 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
         (PropKind::U32 { min, max, .. }, PropValue::Int(v)) => int(k, *v, i64::from(*min), i64::from(*max)),
@@ -613,9 +631,51 @@ fn sector_faces(state: &SceneState, lib: Option<&Library>, d: &crate::objects::S
         .sum()
 }
 
-/// `EScene::FillProp`: Level Settings.
+/// What Level Settings says of its rows (`UIWorldPropertiesFrom.cpp` `kWorldHelp`).
+const WORLD_HELP: [(&str, &str); 11] = [
+    ("Scene\\Name", "The scene file this level is saved to."),
+    ("Scene\\Build options\\Level path", "The folder of the built level under the game's levels folder."),
+    ("Scene\\Build options\\Custom data", "Lines the build adds to the level's level.ltx as they are."),
+    (
+        "Scene\\Build options\\Quality",
+        "Draft and High fill in the build options below; Custom lets them be set one by one.",
+    ),
+    (
+        "Scene\\Build options\\Lighting\\Hemisphere quality [0-3]",
+        "How finely the build samples the sky light.",
+    ),
+    ("Scene\\Build options\\Lighting\\Sun shadow quality [0-3]", "How finely the build samples the sun."),
+    ("Scene\\Build options\\Lighting\\Pixel per meter", "Lightmap pixels per metre of surface."),
+    (
+        "Scene\\Build options\\Lighting\\Jitter samples",
+        "Samples per lightmap pixel: more is smoother and slower to build.",
+    ),
+    (
+        "Scene\\Build options\\Optimizing\\Normal smooth angle",
+        "Faces that meet at a smaller angle than this are shaded smooth.",
+    ),
+    ("Scene\\Build options\\Optimizing\\Weld distance (m)", "Vertices closer than this are merged."),
+    ("Scene\\Map version", "The version the level's level.ltx gives in [map_usage]."),
+];
+
+/// Level Settings' rows with a unit of their own (`form->SetUnit`).
+const WORLD_UNITS: [(&str, &str); 1] = [("Scene\\Build options\\Optimizing\\Normal smooth angle", "\u{b0}")];
+
+/// `EScene::FillProp`: Level Settings, with the help Level Settings gives its rows.
 #[must_use]
 pub fn world_rows(state: &SceneState) -> Vec<Row> {
+    let mut out = world_rows_raw(state);
+    for r in &mut out {
+        if r.help.is_empty()
+            && let Some((_, h)) = WORLD_HELP.iter().find(|(k, _)| *k == r.key)
+        {
+            r.help = (*h).to_owned();
+        }
+    }
+    out
+}
+
+fn world_rows_raw(state: &SceneState) -> Vec<Row> {
     let lo = &state.meta.level;
     let b = &lo.build;
     let custom = b.quality == 2;
@@ -733,6 +793,50 @@ pub struct MergedRow {
     pub mixed: bool,
 }
 
+/// The order the C++ property tree shows rows in: inside every folder its own rows first, in
+/// the order they came, then its sub-folders in the order each first came (keys are folders
+/// split at `\`).
+#[must_use]
+pub fn tree_order(rows: Vec<MergedRow>) -> Vec<MergedRow> {
+    #[derive(Default)]
+    struct Node {
+        rows: Vec<usize>,
+        folders: Vec<(String, Node)>,
+    }
+    fn place(node: &mut Node, parts: &[&str], i: usize) {
+        match parts {
+            [] | [_] => node.rows.push(i),
+            [head, rest @ ..] => {
+                let at = match node.folders.iter().position(|(n, _)| n == head) {
+                    Some(at) => at,
+                    None => {
+                        node.folders.push(((*head).to_owned(), Node::default()));
+                        node.folders.len() - 1
+                    }
+                };
+                if let Some((_, child)) = node.folders.get_mut(at) {
+                    place(child, rest, i);
+                }
+            }
+        }
+    }
+    fn flatten(node: &Node, out: &mut Vec<usize>) {
+        out.extend(&node.rows);
+        for (_, child) in &node.folders {
+            flatten(child, out);
+        }
+    }
+    let mut root = Node::default();
+    for (i, r) in rows.iter().enumerate() {
+        let parts: Vec<&str> = r.row.key.split('\\').collect();
+        place(&mut root, &parts, i);
+    }
+    let mut order = Vec::with_capacity(rows.len());
+    flatten(&root, &mut order);
+    let mut slots: Vec<Option<MergedRow>> = rows.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots.get_mut(i).and_then(Option::take)).collect()
+}
+
 /// `AssignItems`: rows of one key over several objects become one row, "mixed" when their
 /// values differ; the order is the first object's, rows the first lacks follow.
 #[must_use]
@@ -823,6 +927,9 @@ pub fn unit_of(r: &Row) -> String {
     }
     if let Some(u) = split_leaf(&r.key).1 {
         return u.to_owned();
+    }
+    if let Some((_, u)) = WORLD_UNITS.iter().find(|(k, _)| *k == r.key) {
+        return (*u).to_owned();
     }
     if matches!(r.kind, Kind::Angle { .. }) { "\u{b0}".to_owned() } else { String::new() }
 }
@@ -1522,6 +1629,7 @@ mod tests {
         assert_eq!(unit_of(weld), "m");
         assert!(!weld.enabled);
         let hemi = w.iter().find(|r| r.key.ends_with("[0-3]")).unwrap();
-        assert_eq!(help_of(hemi), "Range: 0-3.");
+        // the C++ Level Settings' own help, then the range
+        assert_eq!(help_of(hemi), "How finely the build samples the sky light. Range: 0-3.");
     }
 }

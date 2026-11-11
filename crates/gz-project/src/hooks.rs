@@ -250,12 +250,22 @@ pub const CATEGORIES: [&str; 10] = [
 ];
 
 type ListFn = Arc<dyn Fn(&Editor) -> Vec<String> + Send + Sync>;
+type AsyncListFn =
+    Arc<dyn Fn(Arc<Editor>) -> Pin<Box<dyn Future<Output = Vec<String>> + Send>> + Send + Sync>;
+
+/// A provider of one category: work for the IO pool, or a computation that awaits the area's own
+/// queries.
+#[derive(Clone)]
+pub(crate) enum Lister {
+    Io(ListFn),
+    Async(AsyncListFn),
+}
 
 /// The enumerators of the library categories, given by the areas that read them (the object
 /// library, the linked game). `Levels` is this crate's own. A provider runs on the IO pool.
 #[derive(Default)]
 pub struct AssetLists {
-    map: RwLock<FxHashMap<&'static str, ListFn>>,
+    map: RwLock<FxHashMap<&'static str, Lister>>,
 }
 
 impl AssetLists {
@@ -267,13 +277,49 @@ impl AssetLists {
     /// `category` is one of [`CATEGORIES`]; another name is ignored.
     pub fn provide(&self, category: &str, f: impl Fn(&Editor) -> Vec<String> + Send + Sync + 'static) {
         if let Some(name) = CATEGORIES.iter().find(|c| c.eq_ignore_ascii_case(category)) {
-            self.map.write().insert(name, Arc::new(f));
+            self.map.write().insert(name, Lister::Io(Arc::new(f)));
         }
     }
 
-    pub(crate) fn get(&self, category: &str) -> Option<ListFn> {
+    /// As [`provide`](Self::provide), for a list an area computes through its own queries.
+    pub fn provide_async<F>(&self, category: &str, f: impl Fn(Arc<Editor>) -> F + Send + Sync + 'static)
+    where
+        F: Future<Output = Vec<String>> + Send + 'static,
+    {
+        if let Some(name) = CATEGORIES.iter().find(|c| c.eq_ignore_ascii_case(category)) {
+            self.map.write().insert(name, Lister::Async(Arc::new(move |ed| Box::pin(f(ed)))));
+        }
+    }
+
+    pub(crate) fn get(&self, category: &str) -> Option<Lister> {
         self.map.read().get(category).cloned()
     }
+}
+
+/// A library listing as the editor's file system gave it (`FS.file_list` with `FS_ClampExt`):
+/// every file under `root` with the extension `ext` (any case), as its path below `root` without
+/// the extension, lower case, backslashes, in byte order.
+#[must_use]
+pub fn editor_file_list(root: &Path, ext: &str) -> Vec<String> {
+    fn walk(root: &Path, dir: &Path, ext: &str, out: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(kind) = e.file_type() else { continue };
+            if kind.is_dir() {
+                walk(root, &p, ext, out);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext))
+                && let Ok(rel) = p.with_extension("").strip_prefix(root)
+            {
+                out.push(rel.to_string_lossy().replace('/', "\\").to_lowercase());
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, ext, &mut out);
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]
@@ -287,5 +333,18 @@ mod tests {
         assert_eq!(TemplateKind::Quest.leaf(1), "NewQuest.nqasset");
         assert_eq!(TemplateKind::Pda.leaf(3), "NewPda3.pdaasset");
         assert_eq!(TemplateKind::Behaviour.leaf(2), "NewBehaviour2.behasset");
+    }
+
+    #[test]
+    fn file_lists_are_lower_case_in_byte_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("Light_preset")).unwrap();
+        std::fs::create_dir_all(root.join("act")).unwrap();
+        std::fs::write(root.join("Light_preset").join("Lamp.GROUP"), b"").unwrap();
+        std::fs::write(root.join("act").join("a.group"), b"").unwrap();
+        std::fs::write(root.join("act_b.group"), b"").unwrap();
+        std::fs::write(root.join("act").join("skip.txt"), b"").unwrap();
+        assert_eq!(editor_file_list(root, "group"), [r"act\a", "act_b", r"light_preset\lamp"]);
     }
 }

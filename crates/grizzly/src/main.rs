@@ -35,7 +35,8 @@ fn app_paths(cli: &Cli) -> AppPaths {
     let exe_dir =
         std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let root = cli.root.clone().unwrap_or_else(|| find_root(&exe_dir));
-    AppPaths { exe_dir, appdata: root.join("_appdata_"), logs: root.join("logs"), root }
+    let home = cli.home.clone().unwrap_or_else(|| root.clone());
+    AppPaths { exe_dir, appdata: root.join("_appdata_"), logs: home.join("logs"), home, root }
 }
 
 fn main() -> ExitCode {
@@ -117,6 +118,7 @@ fn main() -> ExitCode {
     let flags = Flags { unattended: cli.unattended, headless: cli.headless, qa_github: cli.qa_github };
     let editor = Editor::new(EditorOptions { flags, paths }, exec, log.clone(), registry);
     gz_app::project::set_project_probe(&editor, project_probe);
+    gz_game::install(&editor);
     gz_mod::install(&editor);
     gz_nq::install(&editor);
     gz_release::install(&editor);

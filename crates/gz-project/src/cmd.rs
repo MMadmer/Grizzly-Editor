@@ -10,7 +10,7 @@ use gz_editor::{Args, ArgsExt, CmdError, Editor, ProjectSession, Registry, Reply
 use serde_json::{Map, Value, json};
 
 use crate::delete::{self, DeleteContext, DeleteInfo};
-use crate::hooks::{AssetLists, AssetTemplates, CATEGORIES, ProjectHooks, TemplateCx, TemplateKind};
+use crate::hooks::{AssetLists, AssetTemplates, CATEGORIES, Lister, ProjectHooks, TemplateCx, TemplateKind};
 use crate::list::{self, EntryState};
 use crate::ops::{FileOps, Report};
 use crate::project::{self, ProjectFile};
@@ -588,8 +588,8 @@ fn report_reply(rep: &Report) -> Reply {
     if rep.ok() {
         return Ok(Value::Object(fields));
     }
-    let message = format!("{} {} failed", rep.failed, if rep.failed == 1 { "entry" } else { "entries" });
-    Err(refuse_with(message, fields))
+    // the C++ report has no `error`: `failed` and `errors` say what went wrong
+    Err(CmdError::report(Value::Object(fields)))
 }
 
 #[derive(Clone, Copy)]
@@ -812,14 +812,29 @@ async fn list_assets(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
         },
         None => "Objects",
     };
+    // the C++ choosers of these four list the editor's own folders (fs.ltx `$game_meshes$`,
+    // `$game_textures$`, `$textures$`, `$game_sounds$`), never the project's or the game's
+    let folder = match category {
+        "Visuals" => Some(("gamedata", "meshes", "ogf")),
+        "Textures" => Some(("gamedata", "textures", "dds")),
+        "Textures (raw)" => Some(("rawdata", "textures", "tga")),
+        "Sounds" => Some(("gamedata", "sounds", "ogg")),
+        _ => None,
+    };
     let items = if category == "Levels" {
         level_names(&ed).await
+    } else if let Some((top, dir, ext)) = folder {
+        let dir = ed.paths.root.join(top).join(dir);
+        ed.exec.io(move || crate::hooks::editor_file_list(&dir, ext)).await
     } else {
-        let Some(provider) = AssetLists::of(&ed).get(category) else {
-            return Err(refuse("category has no enumerator in this build"));
-        };
-        let editor = ed.clone();
-        ed.exec.io(move || provider(&editor)).await
+        match AssetLists::of(&ed).get(category) {
+            Some(Lister::Io(provider)) => {
+                let editor = ed.clone();
+                ed.exec.io(move || provider(&editor)).await
+            }
+            Some(Lister::Async(provider)) => provider(ed.clone()).await,
+            None => return Err(refuse("category has no enumerator in this build")),
+        }
     };
     let filter = args.str("filter").unwrap_or_default().to_lowercase();
     let limit = args.i64("limit").unwrap_or(200);

@@ -16,6 +16,9 @@ pub struct Cli {
     pub mcp_port: Option<u16>,
     /// `-root <folder>`: the editor's data root, when it is not found from the executable.
     pub root: Option<PathBuf>,
+    /// `-home <folder>`: where the editor keeps its project list, settings and logs (the data
+    /// root without it). Tests give every editor one of its own.
+    pub home: Option<PathBuf>,
     /// `-log_echo`: also print the log to stderr.
     pub echo: bool,
     /// `-iconsheet`: show every icon of the kit and nothing else.
@@ -47,6 +50,7 @@ impl Cli {
                 "qa_github" => cli.qa_github = true,
                 "mcp_port" | "mcp-port" => cli.mcp_port = it.next().and_then(|v| v.parse().ok()),
                 "root" => cli.root = it.next().map(PathBuf::from),
+                "home" => cli.home = it.next().map(PathBuf::from),
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
                 "dump_commands" => cli.dump_commands = true,

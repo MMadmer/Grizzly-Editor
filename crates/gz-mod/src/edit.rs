@@ -152,7 +152,7 @@ mod tests {
         let out = run(base, edits);
         assert_eq!(
             out,
-            "; Overnight Delivery - the contest mod\r\n[module]\r\nid          = od\r\nname        = \"Overnight; Delivery\" ; working title\r\nversion     = 1.1.0\r\nengine_min  = 1.4\r\n\r\n; my own notes\r\n[budget]\r\nram = 2\r\n\r\n[vars]\r\nkills           = 0\r\n"
+            "; Overnight Delivery - the contest mod\r\n[module]\r\nid          = od\r\nname        = \"Overnight; Delivery\" ; working title\r\nversion     = 1.1.0\r\nengine_min  = 1.4\r\n\r\n[vars]\r\nkills           = 0\r\n\r\n; my own notes\r\n[budget]\r\nram = 2\r\n"
         );
         let m = Manifest::parse(&ManifestDoc::parse(&out));
         assert_eq!(m.name, "Overnight; Delivery");

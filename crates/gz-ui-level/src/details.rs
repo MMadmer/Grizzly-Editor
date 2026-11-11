@@ -83,20 +83,24 @@ pub struct Prepared {
 /// `rows_of` of `gz-scene`'s `property_inspector`: the merged rows of the selected objects of
 /// the target class, or the scene's own.
 #[must_use]
-pub fn rows(state: &SceneState, lib: &gz_scene::library::Library, target: usize) -> Vec<MergedRow> {
+pub fn rows(
+    state: &SceneState,
+    lib: &gz_scene::library::Library,
+    target: usize,
+    ctx: &PropContext,
+) -> Vec<MergedRow> {
     if target == WORLD {
-        return props::merge(vec![props::world_rows(state)]);
+        return props::tree_order(props::merge(vec![props::world_rows(state)]));
     }
-    let ctx = PropContext::default();
-    let cx = PropCx { lib: Some(lib), entity: &ctx };
+    let cx = PropCx { lib: Some(lib), entity: ctx };
     let class = state.tools.target;
-    props::merge(
+    props::tree_order(props::merge(
         state
             .of_class(class)
             .filter(|o| state.is_selected(o.id))
             .map(|o| props::object_rows(state, o, &cx))
             .collect(),
-    )
+    ))
 }
 
 fn insert(nodes: &mut Vec<Node>, path: &[&str], row: MergedRow) {
@@ -136,8 +140,9 @@ pub fn prepare(
     lib: &gz_scene::library::Library,
     target: usize,
     filter: &str,
+    ctx: &PropContext,
 ) -> Prepared {
-    let all = rows(state, lib, target);
+    let all = rows(state, lib, target, ctx);
     let f = filter.to_lowercase();
     let mut nodes = Vec::new();
     let mut visible = 0;
@@ -241,7 +246,7 @@ pub async fn set_value(
 ) -> Result<(), String> {
     let svc = SceneService::of(editor).map_err(|e| e.message)?;
     let snap = svc.store.snapshot();
-    let all = rows(&snap, &svc.library, target);
+    let all = rows(&snap, &svc.library, target, &svc.prop_cx());
     let row = props::find(&all, key).ok_or_else(|| format!("no row '{key}'"))?.clone();
     let k = row.row.key.clone();
     let parsed = props::parse(&row.row, text).map_err(|e| format!("{} {e}", props::label_of(&k)))?;
@@ -387,7 +392,9 @@ impl PropsPanel {
         let rev = snap.rev.mix(svc.library.rev());
         let key = (t, self.search.clone());
         let (s, lib, filter) = (snap.clone(), svc.library.clone(), self.search.clone());
-        let answer = self.query.get(&key, rev, move || prepare(&s, &lib, t, &filter));
+        let ctx = svc.prop_cx();
+        let rev = rev.mix(gz_base::Rev(Arc::as_ptr(&ctx) as usize as u64));
+        let answer = self.query.get(&key, rev, move || prepare(&s, &lib, t, &filter, &ctx));
         let Some(prep) = answer.value().cloned() else {
             state::busy_line(ui, "Reading the properties...");
             return;
@@ -834,8 +841,13 @@ fn draw_row(g: &mut grid::Grid<'_>, r: &MergedRow, depth: u32, cx: &mut RowCx<'_
 /// The row a chooser asked about over MCP (`property_choose action=open`): its label, list and
 /// value.
 #[must_use]
-pub fn chooser_for(state: &SceneState, lib: &gz_scene::library::Library, key: &str) -> Option<Chooser> {
-    let all = rows(state, lib, SELECTION);
+pub fn chooser_for(
+    state: &SceneState,
+    lib: &gz_scene::library::Library,
+    key: &str,
+    ctx: &PropContext,
+) -> Option<Chooser> {
+    let all = rows(state, lib, SELECTION, ctx);
     let r = props::find(&all, key)?;
     let RowKind::Choose(list) = &r.row.kind else { return None };
     let text = r.row.text();

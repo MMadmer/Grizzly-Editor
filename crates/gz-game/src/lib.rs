@@ -36,7 +36,7 @@ mod service;
 pub mod spawn;
 pub mod version;
 
-pub use cmd::register;
+pub use cmd::{install, register};
 pub use configs::{ConfigTree, SYSTEM_LTX};
 pub use modes::{GameMode, ModeScan};
 pub use service::{Bundled, GameError, GameLink, Provenance, read_game_or_bundled, spawn_roster};

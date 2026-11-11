@@ -27,6 +27,25 @@ impl GameSettings {
     pub fn ltx(&self) -> &Ltx {
         &self.ltx
     }
+
+    /// Every line of a section in its order (`r_line`), a line without a value as `(key, "")`.
+    #[must_use]
+    pub fn lines(&self, section: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while let Ok(Some((k, v))) = self.ltx.r_line(section, i) {
+            out.push((k.to_owned(), v.unwrap_or("").to_owned()));
+            i += 1;
+        }
+        out
+    }
+
+    /// The Details sheet's lists that come from the configs: the story ids.
+    #[must_use]
+    pub fn prop_context(&self) -> gz_entities::PropContext {
+        gz_entities::PropContext::default()
+            .with_story_names(self.lines("story_ids"), self.lines("spawn_story_ids"))
+    }
 }
 
 impl Settings for GameSettings {

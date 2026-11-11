@@ -50,6 +50,9 @@ pub struct SceneService {
     /// The project's folder and the editor's.
     pub root: PathBuf,
     pub editor_root: PathBuf,
+    /// The Details sheet's lists from the linked game (story ids, the Spawn tool's names), the
+    /// newest read; `property_inspector` and a scene load read them again.
+    prop_cx: parking_lot::RwLock<Arc<gz_entities::PropContext>>,
 }
 
 /// Makes the dirty source register once per editor.
@@ -93,6 +96,18 @@ impl DirtySource for SceneDirty {
             save_scene(editor, &svc, file).await.map_err(|e| format!("{name}: {e}"))
         })
     }
+
+    fn discard<'a>(&'a self, editor: &'a Arc<Editor>) -> gz_editor::SettleFuture<'a> {
+        Box::pin(async move {
+            let Some(svc) = editor.project_opt().and_then(|s| s.services.get::<SceneService>()) else {
+                return Ok(());
+            };
+            if !svc.store.is_dirty() {
+                return Ok(());
+            }
+            svc.store.send(SceneCmd::Forget, Origin::Mcp).await.map(|_| ()).map_err(|e| e.message)
+        })
+    }
 }
 
 impl SceneService {
@@ -126,9 +141,22 @@ impl SceneService {
             view: Mutex::new(InspectorView::default()),
             root,
             editor_root,
+            prop_cx: parking_lot::RwLock::new(Arc::new(gz_entities::PropContext::default())),
         });
         start_recovery_timer(editor, &svc);
         svc
+    }
+
+    /// The Details sheet's lists as last read.
+    #[must_use]
+    pub fn prop_cx(&self) -> Arc<gz_entities::PropContext> {
+        self.prop_cx.read().clone()
+    }
+
+    pub(crate) fn set_prop_cx(&self, cx: gz_entities::PropContext) -> Arc<gz_entities::PropContext> {
+        let cx = Arc::new(cx);
+        *self.prop_cx.write() = cx.clone();
+        cx
     }
 
     /// The pick tree of the snapshot there is now (built on the CPU pool once per revision of
@@ -285,6 +313,8 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
         ctx.check()?;
         ctx.stage("Reading the game's configs");
         let settings = crate::game::settings(&ed).await;
+        // the Details sheet's lists from the same configs
+        crate::cmd::prop_context(&ed).await;
         ctx.stage("Parsing");
         let pf = f.clone();
         let loaded = ctx
