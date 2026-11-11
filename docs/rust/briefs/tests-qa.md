@@ -69,6 +69,18 @@ image content.
   code 1 on any failure. That is THE way the suites are run from now on.
 - Run a suite, fix, re-run THAT suite. The whole set once at the end.
 
+## The look that was skipped
+
+Several packages were finished while no graphics device could be created on the machine, so
+nobody has SEEN their work. `docs/rust/PLAN_DELTAS.md` ("To verify once a graphics device
+exists") and the reports in `docs/rust/STATE.md` ("The AI map, details and wallmark tools",
+"The scene's rest") list it. Before the suites, look at each item once through
+`tools\rust\run-editor.ps1` on a temp copy of `D:\XFinedProjects\Test`, fix what is wrong, and
+make sure of the exit path first of all: after a run that opened a floating panel and the
+viewport, the editor's process is GONE within two seconds of `window_control close` - no
+`Grizzly.exe` left in the process list. If a process ever stays, stop and fix that before
+anything else: a process stuck in the GPU driver blocks every later run on the machine.
+
 ## Then, once, the things only a whole editor shows
 
 1. **Concurrency** (`tools/qa/test_stress.py`, new, under 30 s): several connections flood

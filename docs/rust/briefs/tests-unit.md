@@ -68,6 +68,32 @@ The format crates have no test that reads real data. Add one integration test pe
   test finishes in under 15 s on a warm cache; if the whole corpus is too big for that, test a
   fixed stride of it (every Nth file by sorted path - deterministic), and say the stride.
 
+## 2a. Concurrency (new tests)
+
+The plan promised model checks for the hand-written synchronisation; what was built composes
+tokio channels and `arc-swap`, so it is held by stress tests instead - short, deterministic
+in what they assert, run by the same `cargo test`:
+- `gz-store`: many tasks post commands while others read snapshots - every reader sees
+  revisions that only grow and a state that is always one a command produced; undo / redo
+  interleaved with edits never lose or double a step; `seal`, merged steps and `mark_saved`
+  under load; a command that panics leaves the last good snapshot and the store alive.
+- `gz-task`: jobs started and cancelled from many threads - a cancelled job stops at its next
+  `check`, `wait` always returns, the snapshot of jobs never shows a finished job as running.
+- `gz-editor`: frame-held requests (`FrameClock::after`) from many connections are each
+  answered exactly once and never before their frame; `AutoSave` under a burst writes the last
+  revision and nothing after `flush`.
+- `gz-query`: the same key asked from many threads computes once per revision.
+Each under 2 s.
+
+## 2b. No test needs a window or a graphics device
+
+A test that creates a wgpu device (in `gz-render`, `gz-ui-*`) must not hang or fail on a
+machine without one - as of this writing no device can be created on this machine at all (a
+dead process is stuck in the GPU driver until a restart). Such a test asks for its device
+through one helper with a 5 s limit and prints `skipped: no graphics device` when there is
+none; everything that can be tested without a device (packets, culling, the particle steps,
+layout, models of panels) is tested without one.
+
 ## 3. Speed of the whole run
 
 - `tools/rust/test.sh` prints each test binary's wall time. Budget: the whole workspace run,
@@ -80,7 +106,13 @@ The format crates have no test that reads real data. Add one integration test pe
 ## 4. What must also stay true
 
 `cargo clippy --workspace --all-targets` clean, `cargo fmt --all` applied, `unsafe` in `gz-win`
-only, and `bash tools/rust/cg.sh build -p grizzly` builds.
+only, and `bash tools/rust/cg.sh build -p grizzly` builds. Put those four into
+`tools/rust/check.sh` (new: exit code 1 when clippy warns, when `cargo fmt --check` differs,
+when `unsafe` appears outside `crates/gz-win` - it prints the count inside - or when
+`Grizzly.exe -dump_commands` lacks a `cmd` of `crates/gz-mcp/tools.json`), and remove the
+workspace dependencies no crate uses (`cargo tree` / a grep of the manifests: `parry3d`,
+`rapier3d`, `loom`, `egui_dock`, `jwalk`, `walkdir`, `schemars`, `zip` were declared for a
+plan that went another way - keep `proptest` only if you use it).
 
 ## How to work
 
