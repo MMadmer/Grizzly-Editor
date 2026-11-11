@@ -1192,7 +1192,8 @@ enum Step {
 
 /// Runs a row of the C++ table - the one `exec_command`, a macro's line and a face run - with
 /// its sub-command (named, or picked by the parameters) and the parameters given over the
-/// sub-command's own. Off the UI thread; what the row does there runs there.
+/// sub-command's own. Off the UI thread; what the row does there runs there. `origin` is who
+/// asked: a caller over MCP has decided, so a question the row raises is answered, never shown.
 pub(crate) async fn exec(
     editor: &Arc<Editor>,
     id: Option<i64>,
@@ -1201,8 +1202,10 @@ pub(crate) async fn exec(
     p1: Option<CommandVar>,
     p2: Option<CommandVar>,
     depth: usize,
+    origin: Origin,
 ) -> Result<Ran, NotRun> {
     let step = on_ui(editor, move |shell, ctx| {
+        let _caller = (origin == Origin::Mcp).then(|| dialog::answer_as(ctx, Asker::Mcp));
         let Some(at) = shell.parts.cpp.find(id, &name) else { return Ok(Err(NotRun::Unknown)) };
         let Some(row) = shell.parts.cpp.rows.get(at) else { return Ok(Err(NotRun::Unknown)) };
         // a sub-command is named by a line (`NAME.Sub(..)`) or by the name (`NAME."Sub"`)
@@ -1255,7 +1258,7 @@ pub(crate) async fn exec(
     Ok(match step {
         Step::Done(r) => r,
         Step::Call(id, name, command, args) => {
-            let reply = editor.call(command, args, editor.ui_origin()).await;
+            let reply = editor.call(command, args, origin).await;
             if reply.get("ok").and_then(Value::as_bool) == Some(true) {
                 Ran { id, name, result: CommandVar::Int(1), refused: None }
             } else {
@@ -1263,7 +1266,7 @@ pub(crate) async fn exec(
                 Ran { id, name, result: CommandVar::Int(0), refused: Some(why) }
             }
         }
-        Step::Task(id, name, task, a, b) => match task(editor.clone(), a, b).await {
+        Step::Task(id, name, task, a, b) => match task(editor.clone(), a, b, origin).await {
             Ok(v) => Ran { id, name, result: v, refused: None },
             Err(why) => Ran { id, name, result: CommandVar::Int(0), refused: Some(why) },
         },
@@ -1272,9 +1275,14 @@ pub(crate) async fn exec(
 
 /// One line of a command list (`ExecuteCommandList`): the first that is unknown or does not
 /// run is the error, in the C++ words.
-pub(crate) async fn exec_line(editor: &Arc<Editor>, line: &crate::macros::Line, depth: usize) -> Result<(), String> {
+pub(crate) async fn exec_line(
+    editor: &Arc<Editor>,
+    line: &crate::macros::Line,
+    depth: usize,
+    origin: Origin,
+) -> Result<(), String> {
     let sub = (!line.sub.is_empty()).then(|| line.sub.clone());
-    match exec(editor, None, line.name.clone(), sub, line.p1.clone(), line.p2.clone(), depth).await {
+    match exec(editor, None, line.name.clone(), sub, line.p1.clone(), line.p2.clone(), depth, origin).await {
         Ok(r) if r.refused.is_none() && r.result != CommandVar::Int(0) => Ok(()),
         Ok(r) => {
             let why = r.refused.map(|w| format!(" - {w}")).unwrap_or_default();
@@ -1294,7 +1302,7 @@ fn param(args: &Args, s: &str, i: &str) -> Option<CommandVar> {
     args.i64(i).filter(|v| *v >= 0).map(|v| CommandVar::Int(u32::try_from(v).unwrap_or(u32::MAX)))
 }
 
-async fn exec_command(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
+async fn exec_command(editor: Arc<Editor>, args: Args, origin: Origin) -> Reply {
     // an escaped "Edit\Undo" may arrive with both slashes
     let name = str_arg(&args, "name").replace("\\\\", "\\");
     let id = args.i64("id").filter(|v| *v >= 0);
@@ -1302,7 +1310,7 @@ async fn exec_command(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply
     if id.is_none() && name.is_empty() {
         return Err(invalid("unknown command - see list_commands"));
     }
-    match exec(&editor, id, name, None, p1, p2, 0).await {
+    match exec(&editor, id, name, None, p1, p2, 0, origin).await {
         Ok(r) => {
             let mut out = Map::new();
             out.insert("id".into(), json!(r.id));

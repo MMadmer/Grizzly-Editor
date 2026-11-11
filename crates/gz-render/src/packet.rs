@@ -184,6 +184,7 @@ struct Seen {
 }
 
 /// A draw before grouping.
+#[derive(Clone)]
 struct Item {
     order: u8,
     pipe: MeshPipe,
@@ -234,7 +235,12 @@ pub fn build_packet_with(
     let eye = view.camera.position;
     let forward = view.camera.forward;
 
-    let env = if view.mode == ViewMode::GameLighting { list.environment.as_ref() } else { None };
+    // the weather is drawn under Game Lighting, and round any view with Environment on
+    let env = if view.mode == ViewMode::GameLighting || (view.style.environment && !wireframe) {
+        list.environment.as_ref()
+    } else {
+        None
+    };
     let sky_def = env.and_then(|e| e.sky.as_ref());
 
     // the meshes, each once; the placeholder last
@@ -377,6 +383,10 @@ pub fn build_packet_with(
                 instance: gpu,
                 dynamic: None,
             };
+            // Edged Faces: the surface's edges once more, over it
+            if view.style.edged && !wireframe && pass != Pass::Blended && m.kind != EditorMaterial::Sky {
+                items.push(Item { pipe: MeshPipe::of(m.kind, two_sided, true), ..item.clone() });
+            }
             if pass == Pass::Blended { blended.push(item) } else { items.push(item) }
         }
     }
@@ -472,6 +482,16 @@ pub fn build_packet_with(
                 sub: sub as u32,
                 batch: bi,
             });
+            if view.style.edged && !wireframe && pass != Pass::Blended && m.kind != EditorMaterial::Sky {
+                batch_parts.push(BatchPart {
+                    order: pass_order(pass),
+                    pipe: MeshPipe::of(m.kind, two_sided, true),
+                    material,
+                    mesh,
+                    sub: sub as u32,
+                    batch: bi,
+                });
+            }
         }
     }
 
@@ -651,6 +671,7 @@ pub fn build_packet_with(
         (ViewMode::GameLighting, None) => ViewMode::Lit,
         (m, _) => m,
     };
+    let st = &view.style;
     let mut flags = 0u32;
     if roof.is_some() {
         flags |= 1;
@@ -660,6 +681,21 @@ pub fn build_packet_with(
     }
     if editor_lights {
         flags |= 8;
+    }
+    if st.flat {
+        flags |= 16;
+    }
+    if !st.textures {
+        flags |= 32;
+    }
+    if st.fog {
+        flags |= 64;
+    }
+    if !st.linear {
+        flags |= 128;
+    }
+    if st.edged && !wireframe {
+        flags |= 256;
     }
     let mut frame = FrameUniform {
         view_proj: view_proj.to_cols_array_2d(),
@@ -681,12 +717,20 @@ pub fn build_packet_with(
         frame.sun_color = e.sun_color.extend(0.0).to_array();
         frame.fog_color = e.fog_color.extend(1.0).to_array();
         frame.fog = [e.fog_near, e.fog_far, 0.0, 0.0];
+        // Fog without Environment is the editor's own; Game Lighting always fogs
         if let Some(r) = &roof {
             frame.roof = [r.origin[0], r.origin[1], 1.0 / r.cell.max(1e-3), r.cells as f32];
         }
         // the background is the weather's fog colour, exposed
         let fog = (e.fog_color * e.exposure).clamp(Vec3::ZERO, Vec3::ONE);
         clear = [f64::from(fog.x), f64::from(fog.y), f64::from(fog.z), 1.0];
+    }
+    // `CToolCustom::GetCurrentFog` without the weather: from 0.1 x 0.85 of the far plane to 0.91
+    // of it, in the tools' fog colour (white)
+    if st.fog && (env.is_none() || (mode != ViewMode::GameLighting && !st.environment)) {
+        let far = view.camera.projection.far();
+        frame.fog = [(1.0 - 0.9) * 0.85 * far, 0.91 * far, 0.0, 0.0];
+        frame.fog_color = [1.0, 1.0, 1.0, 1.0];
     }
 
     let stats = PacketStats {

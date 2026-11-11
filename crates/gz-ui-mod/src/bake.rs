@@ -71,9 +71,14 @@ fn report(command: &str, failed: &str, reply: &Value) -> (ResultSpec, String) {
             rows.push(("Player Starts".into(), num(reply, "starts").to_string()));
             rows.push(("Way paths".into(), num(reply, "paths").to_string()));
             rows.push(("NPC orders".into(), num(reply, "orders").to_string()));
+            rows.push(("Base objects removed".into(), num(reply, "removed").to_string()));
             warnings.extend(count_line(
                 num(reply, "scaled"),
                 "object(s) have a scale other than 1: the spawn layer carries no scale.",
+            ));
+            warnings.extend(count_line(
+                num(reply, "missing"),
+                "object(s) are not baked: their model exists neither in the game nor in the project.",
             ));
             // a stash keeps its ghost model unless the author picks another one
             warnings.extend(count_line(

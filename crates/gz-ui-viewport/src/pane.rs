@@ -220,6 +220,10 @@ impl ViewportPane {
         if self.vp.read(|s| s.nav.flying()) && fly_key(chord.key).is_some() {
             return true;
         }
+        // `TUI::KeyDown`: Esc leaves placing before the command bound to it runs
+        if chord.key == egui::Key::Escape && !chord.ctrl && !chord.shift && !chord.alt {
+            self.vp.with(|s| s.tool.action = crate::service::Action::Select);
+        }
         match keys::act_of(cx.editor, chord) {
             Some(act) => {
                 keys::run(cx.editor, act);
@@ -1315,6 +1319,28 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
         let up = normal_align.then_some(normal);
         let snap = svc.store.snapshot();
         let placed: Option<ObjId> = match class {
+            ObjClass::Group => {
+                // `TUI_ControlGroupAdd`: the Group tool's current library group
+                let Some(reference) = item else {
+                    ed.log.info("Nothing selected.");
+                    return;
+                };
+                let mut args = gz_editor::Args::new();
+                args.insert("action".into(), Value::String("place".into()));
+                args.insert("ref".into(), Value::String(reference.to_string()));
+                for (k, v) in [("x", at.x), ("y", at.y), ("z", at.z)] {
+                    args.insert(k.into(), json!(v));
+                }
+                let reply = ed.call("group_tool", args, origin).await;
+                if reply.get("ok").and_then(Value::as_bool) != Some(true) {
+                    ed.log.error(
+                        reply.get("error").and_then(Value::as_str).unwrap_or("the group could not be placed").to_owned(),
+                    );
+                    return;
+                }
+                let name = reply.get("object").and_then(|o| o.get("name")).and_then(Value::as_str).unwrap_or("");
+                svc.store.snapshot().find(ObjClass::Group, name).map(|o| o.id)
+            }
             ObjClass::SpawnPoint => {
                 let Some(section) = item else {
                     ed.log.info("Nothing selected.");
@@ -1356,6 +1382,21 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                 id
             }
             ObjClass::SceneObject | ObjClass::Particles => {
+                // `TUI_ControlObjectAdd::Start`: Randomize Added Objects picks the object from its
+                // list, and the scale and rotation from its ranges
+                let random = random_append(&snap, class);
+                let mut rng = gz_particles::Rng::new(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(1, |d| d.subsec_nanos() as i32),
+                );
+                let item = match &random {
+                    Some(r) if !r.objects.is_empty() => {
+                        let i = rng.rand_i_max(i32::try_from(r.objects.len()).unwrap_or(i32::MAX)) as usize;
+                        r.objects.get(i).cloned().or(item)
+                    }
+                    _ => item,
+                };
                 let Some(reference) = item else {
                     ed.log.info("Nothing selected.");
                     return;
@@ -1375,6 +1416,26 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
                     })
                 };
                 let mut o = Object::new(class, &snap.gen_name(Some(&reference)), data);
+                if let Some(r) = &random {
+                    if r.flags & gz_scene::tools::FL_APPEND_RANDOM_ROTATION != 0 {
+                        o.xform.rotation = Vec3::new(
+                            rng.rand_f_range(r.min_rotation.x, r.max_rotation.x),
+                            rng.rand_f_range(r.min_rotation.y, r.max_rotation.y),
+                            rng.rand_f_range(r.min_rotation.z, r.max_rotation.z),
+                        );
+                    }
+                    if r.flags & gz_scene::tools::FL_APPEND_RANDOM_SCALE != 0 {
+                        o.xform.scale = if r.flags & gz_scene::tools::FL_APPEND_RANDOM_PROPORTIONAL != 0 {
+                            Vec3::splat(rng.rand_f_range(r.min_scale.x, r.max_scale.x))
+                        } else {
+                            Vec3::new(
+                                rng.rand_f_range(r.min_scale.x, r.max_scale.x),
+                                rng.rand_f_range(r.min_scale.y, r.max_scale.y),
+                                rng.rand_f_range(r.min_scale.z, r.max_scale.z),
+                            )
+                        };
+                    }
+                }
                 stand(&mut o, at, up);
                 send_place(&svc, o, origin).await
             }
@@ -1407,6 +1468,35 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
         }
         ed.exec.wake().ping();
     });
+}
+
+/// The Object tool's Append Random settings while Randomize Added Objects is on.
+struct RandomAppend {
+    flags: u32,
+    objects: Vec<gz_base::SmolStr>,
+    min_scale: Vec3,
+    max_scale: Vec3,
+    min_rotation: Vec3,
+    max_rotation: Vec3,
+}
+
+fn random_append(snap: &gz_scene::SceneState, class: ObjClass) -> Option<RandomAppend> {
+    if class != ObjClass::SceneObject {
+        return None;
+    }
+    let part = snap.tools.part(ObjClass::SceneObject);
+    if part.flags & gz_scene::tools::FL_APPEND_RANDOM == 0 {
+        return None;
+    }
+    let gz_scene::tools::ToolOpts::Objects(o) = &part.opts else { return None };
+    Some(RandomAppend {
+        flags: part.flags,
+        objects: o.objects.clone(),
+        min_scale: o.min_scale,
+        max_scale: o.max_scale,
+        min_rotation: o.min_rotation,
+        max_rotation: o.max_rotation,
+    })
 }
 
 /// `MoveTo(p, n)`: the position, and with a normal the rotation that stands it on the surface.

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use glam::{Vec2 as G2, Vec3, Vec4};
-use gz_editor::{Editor, SmolStr};
+use gz_editor::{Editor, SmolStr, Value};
 use gz_render::Ray;
 use gz_scene::apply::SelectMode;
 use gz_scene::objtools::{self, Ctl, ToolEdit, cmd as tools_cmd, geom, sector, shape, way};
@@ -100,6 +100,10 @@ pub(crate) fn place_press(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b:
         }
         ObjClass::Shape if t.attach_on_click => {
             shape_attach(editor, vp, ray, b);
+            ToolGesture::Done
+        }
+        ObjClass::SpawnPoint if t.spawn_attach => {
+            spawn_attach(editor, vp, ray, b);
             ToolGesture::Done
         }
         _ => ToolGesture::None,
@@ -286,6 +290,43 @@ fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
             }
             Ok(_) => {}
             Err(e) => ed.log.error(e.message),
+        }
+        ed.exec.wake().ping();
+    });
+}
+
+/// The Spawn tool's Attach on Click (`TUI_ControlSpawnAdd::Start`): the object under the mouse
+/// attaches to the one selected spawn point; the switch goes off after one unless Alt is held.
+fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
+    let Some(svc) = svc(editor) else { return };
+    let far = vp.read(|s| s.nav.far);
+    let (ed, vp) = (editor.clone(), vp.clone());
+    let origin = editor.ui_origin();
+    editor.exec.spawn(async move {
+        let (snap, pick) = svc.pick().await;
+        let lib = svc.library.clone();
+        let s = snap.clone();
+        let hit = ed
+            .exec
+            .cpu(move || {
+                pick.ray_pick(&s, &lib, ray.origin, ray.dir, far, &|o: &Object| {
+                    o.class != ObjClass::SpawnPoint && o.flags.visible && s.tools.part(o.class).visible
+                })
+            })
+            .await;
+        let Some(name) = hit.and_then(|h| snap.get(h.id).map(|o| o.name.to_string())) else {
+            ed.log.error("Attach impossible.");
+            return;
+        };
+        let mut a = gz_editor::Args::new();
+        a.insert("action".into(), Value::String("attach".into()));
+        a.insert("object".into(), Value::String(name));
+        let r = ed.call("spawn_attach", a, origin).await;
+        if r.get("ok").and_then(Value::as_bool) != Some(true) {
+            ed.log.error(r.get("error").and_then(Value::as_str).unwrap_or("Attach impossible.").to_owned());
+        } else if !b.alt {
+            let _ = objtools::set_state(&svc, origin, |st| st.spawn_attach = false).await;
+            vp.with(|s| s.tool.action = Action::Select);
         }
         ed.exec.wake().ping();
     });

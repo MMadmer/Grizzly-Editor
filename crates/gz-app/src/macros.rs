@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use gz_editor::Editor;
+use gz_editor::{Editor, Origin};
 use gz_ui::Icon;
 
 use crate::cpp::{CommandVar, CppAction, CppCommand, CppSub};
@@ -108,8 +108,9 @@ impl Drop for Level {
 }
 
 /// Runs a command list: each line through `exec_command`'s path, in order; the first that is
-/// unknown or refused stops the list and is the error.
-pub async fn run_list(editor: &Arc<Editor>, text: &str) -> Result<(), String> {
+/// unknown or refused stops the list and is the error. `origin` is who asked for the list: its
+/// lines answer their questions the same way.
+pub async fn run_list(editor: &Arc<Editor>, text: &str, origin: Origin) -> Result<(), String> {
     let depth = editor.services.get_or_init(Depth::default);
     let level = depth.0.fetch_add(1, Ordering::AcqRel) + 1;
     let _held = Level(depth);
@@ -117,13 +118,13 @@ pub async fn run_list(editor: &Arc<Editor>, text: &str) -> Result<(), String> {
         return Err("Macros run each other too deep.".to_owned());
     }
     for line in parse(text) {
-        crate::cmds::exec_line(editor, &line, level).await?;
+        crate::cmds::exec_line(editor, &line, level, origin).await?;
     }
     Ok(())
 }
 
 /// Reads a macro's file and runs it (`CommandRunMacro` with a file name).
-pub async fn run_file(editor: &Arc<Editor>, name: &str) -> Result<(), String> {
+pub async fn run_file(editor: &Arc<Editor>, name: &str, origin: Origin) -> Result<(), String> {
     let Some(file) = macro_file(editor, name) else {
         return Err(format!("Can't open the macro '{name}'."));
     };
@@ -132,7 +133,7 @@ pub async fn run_file(editor: &Arc<Editor>, name: &str) -> Result<(), String> {
         .io(move || std::fs::read(&file).map(|b| gz_base::text::decode_guess(&b).into_owned()))
         .await
         .map_err(|e| format!("Can't read the macro '{name}': {e}"))?;
-    run_list(editor, &text).await
+    run_list(editor, &text, origin).await
 }
 
 /// The file of a slot (0-based); empty when none is assigned.
@@ -176,16 +177,16 @@ fn slot_of(p: &CommandVar) -> Result<usize, String> {
 
 /// The macro rows of the C++ table.
 pub(crate) fn rows() -> Vec<CppCommand> {
-    let execute = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, _p2| async move {
+    let execute = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, _p2, origin| async move {
         let text = p1.text().ok_or_else(|| "p1s is the command list".to_owned())?.to_owned();
-        run_list(&ed, &text).await.map(|()| CommandVar::Int(1))
+        run_list(&ed, &text, origin).await.map(|()| CommandVar::Int(1))
     });
     let log = CppAction::shell(|cx, p1, _p2| {
         // oracle: `bAllowLogCommands = !_p1`: a 0 turns logging on
         crate::cpp::CommandLog::of(cx.editor).set(!p1.truthy());
         Ok(CommandVar::Int(1))
     });
-    let run = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, _p2| async move {
+    let run = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, _p2, origin| async move {
         let name = match &p1 {
             CommandVar::Str(s) => s.clone(),
             CommandVar::Int(_) => {
@@ -197,9 +198,9 @@ pub(crate) fn rows() -> Vec<CppCommand> {
                 file
             }
         };
-        run_file(&ed, &name).await.map(|()| CommandVar::Int(1))
+        run_file(&ed, &name, origin).await.map(|()| CommandVar::Int(1))
     });
-    let assign_task = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, p2: CommandVar| async move {
+    let assign_task = CppAction::task(|ed: Arc<Editor>, p1: CommandVar, p2: CommandVar, _origin| async move {
         let slot = slot_of(&p1)?;
         let file = match p2 {
             CommandVar::Str(s) => s,

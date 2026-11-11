@@ -50,6 +50,8 @@ pub(crate) struct Input<'a> {
     pub camera: &'a Camera,
     pub size: [u32; 2],
     pub particles: Option<Arc<gz_particles::Library>>,
+    /// Show AI Map.
+    pub ai_map_shown: bool,
 }
 
 /// Adds the extras to the pass's list. `true` while a particle system in view plays: the
@@ -73,7 +75,9 @@ pub(crate) fn extend(extras: &Extras, parts: &Particles, x: &Input<'_>, built: &
         &mut built.list,
     );
     glows(x, built);
-    extras.aimap.lock().draw(x.state, x.assets, eye, built);
+    if x.ai_map_shown {
+        extras.aimap.lock().draw(x.state, x.assets, eye, built);
+    }
     extras.details.lock().draw(
         &draw_details::Pass { state: x.state, lib: x.lib, assets: x.assets, frustum: &frustum, eye, ssa_discard },
         built,

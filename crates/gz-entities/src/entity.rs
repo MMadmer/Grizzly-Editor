@@ -665,6 +665,17 @@ impl Entity {
         Ok(())
     }
 
+    /// A climable object's game material (`CSE_ALifeObjectClimable::material`), what the level
+    /// build gives the ladders it makes (`set_additional_info`).
+    pub fn set_climable_material(&mut self, material: &str) -> Result<()> {
+        let k = self.known_mut()?;
+        if k.info.class != crate::class::Class::Climable {
+            return Err(EntityError::NoProperty("material".to_owned()));
+        }
+        k.object.climable_mut().material = SmolStr::new(material);
+        Ok(())
+    }
+
     /// The graph and level vertex a level build assigns.
     pub fn set_vertices(&mut self, game_vertex: u16, level_vertex: u32, distance: f32) -> Result<()> {
         let k = self.known_mut()?;

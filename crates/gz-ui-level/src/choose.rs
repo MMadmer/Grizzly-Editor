@@ -29,6 +29,8 @@ pub enum Purpose {
     ColorIndexObjects(usize),
     /// A tool command takes the pick as an argument (`aimap_tool action=ignore_material name=`).
     ToolCommand { cmd: &'static str, action: &'static str, arg: &'static str },
+    /// The Random Settings sheet's Objects (several).
+    RandomObjects,
 }
 
 /// One open chooser.

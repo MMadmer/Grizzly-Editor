@@ -90,6 +90,7 @@ impl Thumbs {
         let (device, queue) = (device.clone(), queue.clone());
         let exec = editor.exec.clone();
         let weak: Weak<Editor> = Arc::downgrade(editor);
+        let weak_owner = weak.clone();
         let me = me.clone();
         editor.exec.spawn_cpu(move || {
             match Renderer::new(device, queue, exec.clone()) {
@@ -102,6 +103,16 @@ impl Thumbs {
                         other => Err(format!("{other:?} is not loaded for a thumbnail")),
                     })));
                     *me.renderer.lock() = Some(Arc::new(r));
+                    // the window stops the render thread while its loop still runs
+                    if let Some(editor) = weak_owner.upgrade() {
+                        let owner = me.clone();
+                        gz_app::GpuOwners::of(&editor).on_exit("the Content Browser's renderer", move || {
+                            let taken = owner.renderer.lock().take();
+                            if let Some(r) = taken {
+                                r.shutdown();
+                            }
+                        });
+                    }
                 }
                 Err(e) => *me.failed.lock() = Some(e.to_string()),
             }

@@ -64,6 +64,8 @@ pub struct ObjToolState {
     /// A click of the Shape tool adds a sphere (else a box).
     pub shape_sphere: bool,
     pub attach_on_click: bool,
+    /// The Spawn tool's Attach on Click: a click attaches the object under it to the spawn point.
+    pub spawn_attach: bool,
     pub edit_level_bound: bool,
     /// `m_group_counter` of the fog volumes.
     pub fog_group_counter: u32,
@@ -78,6 +80,7 @@ impl Default for ObjToolState {
             // oracle: `m_SphereMode` is never initialised in the C++; a click adds a box here
             shape_sphere: false,
             attach_on_click: false,
+            spawn_attach: false,
             edit_level_bound: false,
             fog_group_counter: 0,
         }

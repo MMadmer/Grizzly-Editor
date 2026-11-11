@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::BoxFuture;
-use gz_editor::{Args, Editor, SmolStr, Value, json};
+use gz_editor::{Args, Editor, Origin, SmolStr, Value, json};
 use gz_ui::Icon;
 
 use crate::builder::{EnabledFn, UiCommand};
@@ -174,9 +174,10 @@ pub fn sub_id(name: &str, desc: &str) -> SmolStr {
 pub type ArgsFn = Rc<dyn Fn(&CommandVar, &CommandVar) -> Result<Args, String>>;
 /// A function of the window: the answer, or why it refused.
 pub type RunFn = Rc<std::cell::RefCell<dyn FnMut(&mut DocCx<'_>, &CommandVar, &CommandVar) -> Result<CommandVar, String>>>;
-/// Work off the UI thread (a macro): the answer, or why it refused.
-pub type TaskFn =
-    Arc<dyn Fn(Arc<Editor>, CommandVar, CommandVar) -> BoxFuture<'static, Result<CommandVar, String>> + Send + Sync>;
+/// Work off the UI thread (a macro), told who asked for it: the answer, or why it refused.
+pub type TaskFn = Arc<
+    dyn Fn(Arc<Editor>, CommandVar, CommandVar, Origin) -> BoxFuture<'static, Result<CommandVar, String>> + Send + Sync,
+>;
 
 /// Whether a row may run now: `(editor, active tab)`.
 pub type EnabledRc = Rc<dyn Fn(&Editor, &str) -> bool>;
@@ -208,11 +209,11 @@ impl CppAction {
         CppAction::Shell(Rc::new(std::cell::RefCell::new(f)))
     }
 
-    pub fn task<F>(f: impl Fn(Arc<Editor>, CommandVar, CommandVar) -> F + Send + Sync + 'static) -> Self
+    pub fn task<F>(f: impl Fn(Arc<Editor>, CommandVar, CommandVar, Origin) -> F + Send + Sync + 'static) -> Self
     where
         F: std::future::Future<Output = Result<CommandVar, String>> + Send + 'static,
     {
-        CppAction::Task(Arc::new(move |ed, p1, p2| Box::pin(f(ed, p1, p2))))
+        CppAction::Task(Arc::new(move |ed, p1, p2, origin| Box::pin(f(ed, p1, p2, origin))))
     }
 }
 
@@ -448,8 +449,9 @@ fn make_face(cmd: &CppCommand, sub: &CppSub, id: SmolStr) -> UiCommand {
             }
             Outcome::Task(task, a, b) => {
                 let ed = cx.editor.clone();
+                let origin = ed.ui_origin();
                 cx.editor.exec.spawn(async move {
-                    if let Err(why) = task(ed.clone(), a, b).await {
+                    if let Err(why) = task(ed.clone(), a, b, origin).await {
                         ed.notices.error(why);
                     }
                 });

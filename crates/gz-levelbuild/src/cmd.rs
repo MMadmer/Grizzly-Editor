@@ -68,6 +68,8 @@ pub fn register(reg: &mut Registry) {
         reg.add(AREA, name, move |ed, a, o| async move { level_build(&ed, name, &a, o).await });
     }
     reg.add(AREA, "level_rebuild_status", |ed, _a, _o| async move { rebuild_status(&ed) });
+    reg.add(AREA, "scene_validate", |ed, _a, _o| async move { scene_validate(&ed).await });
+    reg.add(AREA, "scene_export_obj", |ed, a, _o| async move { scene_export_obj(&ed, &a).await });
     reg.add(AREA, "level_build", |ed, a, o| async move {
         let action = a.str("action").unwrap_or("status").to_owned();
         level_build(&ed, &action, &a, o).await
@@ -126,11 +128,15 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             let (program, params) = match action {
                 "compile_geometry" => (Program::XrLc, String::new()),
                 "compile_details" => (Program::XrDo, String::new()),
+                // `RunXrAI_Verify`
+                "compile_aimap" if a.str("mode") == Some("verify") => (Program::XrAi, format!("-verify {level}")),
                 // oracle: the menu's "High" passes `-draft` (`RunXrAI_AIMap(true)`)
                 "compile_aimap" => (
                     Program::XrAi,
                     format!("-f {level} {}", if a.str("mode") == Some("low") { "" } else { "-draft" }),
                 ),
+                // `RunXrAI_Spawn(false)`: every level, an empty name
+                _ if a.flag("all_levels") => (Program::XrAi, "-no_separator_check -s  -out all".to_owned()),
                 _ => (Program::XrAi, format!("-no_separator_check -s {level} -out all")),
             };
             start_run(editor, &session, program, &level, params)
@@ -834,5 +840,97 @@ async fn run_action(
                 .map_err(|e| JobError::new(e.message))?;
             Ok(json!({ "run": started }))
         }
+    }
+}
+
+// ---- Scene > Validate, Scene > Export ... as OBJ ---------------------------------------------
+
+/// `scene_validate`: `CommandValidateScene` - `EScene::Validate(true, ...)`, every test, as a job
+/// of the build group. Answers `ok` and the lines it wrote to the log.
+pub(crate) async fn scene_validate(editor: &Arc<Editor>) -> Reply {
+    let ed = editor.clone();
+    let id = editor
+        .jobs
+        .start("scene_validate", Some(JOB_BUILD), "Validating the scene", move |ctx| async move {
+            let inp = inputs(&ed, &ctx).await?;
+            let lods = lod_texture_files(&ed, &inp).await;
+            let (snap, lib, engine) = (inp.snap.clone(), inp.lib.clone(), inp.engine.clone());
+            let checked = ed
+                .exec
+                .cpu(move || {
+                    let texture =
+                        |n: &str| lods.get(n).cloned().unwrap_or_else(|| (format!("textures\\{n}"), false));
+                    crate::validate::validate(&snap, &lib, &engine, crate::validate::Tests::BUILD, &texture)
+                })
+                .await;
+            let (mut lines, ok) = match checked {
+                Ok(l) => (l, true),
+                Err(l) => (l, false),
+            };
+            lines.push(if ok { "Validation OK!" } else { "Validation FAILED!" }.to_owned());
+            for line in &lines {
+                if line.starts_with('*') || line.starts_with('!') {
+                    ed.log.warn(line);
+                } else {
+                    ed.log.info(line);
+                }
+            }
+            Ok(json!({ "ok": ok, "lines": lines }))
+        })
+        .map_err(|b| CmdError::busy(format!("{} is still running", b.title)))?;
+    let info = editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the validation job was forgotten"))?;
+    match info.error {
+        Some(e) => Err(CmdError::invalid(e)),
+        None => Ok(info.result.map(|r| (*r).clone()).unwrap_or(json!({}))),
+    }
+}
+
+/// `scene_export_obj`: `EScene::ExportObj(selected)` - the static geometry of the scene (the
+/// selected objects with `selected=true`) as a Wavefront `.obj` and its `.mtl`, in metres x 100
+/// with Z turned round, as `SaveBuildAsObject` writes them. `file=` names the `.obj` (absolute,
+/// or under the project's `import\`).
+pub(crate) async fn scene_export_obj(editor: &Arc<Editor>, a: &Args) -> Reply {
+    let selected = a.flag("selected");
+    let session = editor.project()?;
+    let raw = PathBuf::from(a.need("file")?.replace('/', "\\"));
+    let file = if raw.is_absolute() { raw } else { session.root.join("import").join(raw) }.with_extension("obj");
+    let ed = editor.clone();
+    let out = file.clone();
+    let id = editor
+        .jobs
+        .start("scene_export_obj", Some(JOB_BUILD), "Exporting the scene as OBJ", move |ctx| async move {
+            let inp = inputs(&ed, &ctx).await?;
+            ctx.stage("Building the geometry");
+            let stem = out.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let (snap, lib, engine) = (inp.snap.clone(), inp.lib.clone(), inp.engine.clone());
+            let made = ed
+                .exec
+                .cpu(move || {
+                    let look = files::lookup(lib);
+                    prj::export_obj(&snap, &look, &engine, selected, &stem)
+                })
+                .await
+                .map_err(|e| JobError::new(e.0))?;
+            ctx.check()?;
+            ctx.stage("Writing the files");
+            let (obj, mtl) = (out.clone(), out.with_extension("mtl"));
+            let objects = made.objects;
+            ed.exec
+                .io(move || -> std::io::Result<()> {
+                    if let Some(d) = obj.parent() {
+                        std::fs::create_dir_all(d)?;
+                    }
+                    std::fs::write(&mtl, made.mtl.as_bytes())?;
+                    std::fs::write(&obj, made.obj.as_bytes())
+                })
+                .await
+                .map_err(|e| JobError::new(format!("the OBJ could not be written: {e}")))?;
+            Ok(json!({ "file": out.display().to_string().replace('\\', "/"), "objects": objects }))
+        })
+        .map_err(|b| CmdError::busy(format!("{} is still running", b.title)))?;
+    let info = editor.jobs.wait(id).await.ok_or_else(|| CmdError::internal("the export job was forgotten"))?;
+    match info.error {
+        Some(e) => Err(CmdError::invalid(e)),
+        None => Ok(info.result.map(|r| (*r).clone()).unwrap_or(json!({}))),
     }
 }

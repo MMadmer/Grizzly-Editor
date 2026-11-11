@@ -62,4 +62,4 @@ pub use shell::{GrizzlyShell, ShellOptions, ShellState, default_log_state, float
 pub use shots::encode_png;
 pub use tasks::{TaskCard, TaskCardTable};
 pub use unsaved::save_tabs;
-pub use window::{FrameReport, Shell, UserEvent, WindowLink, WindowOptions, run};
+pub use window::{FrameReport, GpuOwners, Shell, UserEvent, WindowLink, WindowOptions, run};

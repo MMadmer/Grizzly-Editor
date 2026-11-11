@@ -75,6 +75,30 @@ impl Default for Grid {
     }
 }
 
+/// The View menu's render switches (`psDeviceFlags`, `dwShadeMode`): how surfaces are drawn
+/// besides the view mode.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewStyle {
+    /// `D3DSHADE_FLAT`: one normal per face.
+    pub flat: bool,
+    /// `rsRenderTextures`: off draws every surface white.
+    pub textures: bool,
+    /// `rsFilterLinear`: off samples the nearest texel.
+    pub linear: bool,
+    /// `rsEdgedFaces`: the edges drawn over the surfaces.
+    pub edged: bool,
+    /// `rsFog`: the weather's fog with [`ViewStyle::environment`], the editor's own otherwise.
+    pub fog: bool,
+    /// `rsEnvironment`: the weather's sky and fog colour round the scene in every view mode.
+    pub environment: bool,
+}
+
+impl Default for ViewStyle {
+    fn default() -> Self {
+        Self { flat: false, textures: true, linear: true, edged: false, fog: false, environment: false }
+    }
+}
+
 /// A frame's view.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
@@ -89,6 +113,7 @@ pub struct View {
     pub selection_color: Color,
     /// The colour of edges in [`ViewMode::Wireframe`].
     pub wire_color: Color,
+    pub style: ViewStyle,
 }
 
 impl View {
@@ -105,6 +130,7 @@ impl View {
             grid: Grid::default(),
             selection_color: Color::rgb(255, 176, 48),
             wire_color: Color::rgb(210, 210, 210),
+            style: ViewStyle::default(),
         }
     }
 

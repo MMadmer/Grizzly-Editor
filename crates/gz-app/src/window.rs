@@ -11,10 +11,35 @@
 //! panel shows its window from inside the Level tab's pass), each with the input of its window,
 //! painted on a surface of its own by the one painter. A window is made after the pass that first
 //! asked for it - the pass before it paints nothing - and goes when no pass asks for it any more.
+//!
+//! # Leaving
+//!
+//! A GPU object dropped while the process ends - from a thread-local's destructor, a `static`, a
+//! thread nobody joined - calls into the driver while Windows is unloading it, and the driver can
+//! hang there for good, taking every later attempt of the machine to make a device with it. So
+//! nothing that owns a GPU object lives in a thread-local, a `static` or a detached thread (egui
+//! keeps its immediate-viewport renderer in a thread-local: that one holds the painter only
+//! weakly), and `App::exiting` takes everything down on the UI thread while the event loop is
+//! still alive, in this order:
+//!
+//! 1. the shell writes what it must (session, settings);
+//! 2. the render threads stop: every [`GpuOwners`] hook runs, newest first - a renderer's
+//!    `shutdown` joins its thread, which drops its frame resources and targets on itself;
+//! 3. the shell is dropped: the documents with their renderers, textures and passes;
+//! 4. the device handle other threads were given ([`WindowLink::gpu`]) goes;
+//! 5. the panels' own windows: their surfaces, then the windows;
+//! 6. the painter - the root surface, egui's renderer and with them the device and the queue -,
+//!    then the root window.
+//!
+//! Only then does the loop end. A panic on the way out does not break the order: each step runs
+//! under `catch_unwind`, and while the teardown runs a panic of the UI thread only logs (the
+//! crash hook would end the process half way otherwise).
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use egui::{ImmediateViewport, ViewportId, ViewportIdSet, ViewportInfo};
@@ -132,6 +157,47 @@ impl WindowLink {
     }
 }
 
+/// What owns a GPU object outside the window - a renderer a service keeps, a cache of
+/// textures: each registers how it lets go, and the window runs those hooks, newest first, on
+/// the UI thread while the event loop is still alive (the module's "Leaving").
+#[derive(Default)]
+pub struct GpuOwners {
+    hooks: Mutex<Vec<ExitHook>>,
+}
+
+/// Who registered it, and how it lets go.
+type ExitHook = (&'static str, Box<dyn FnOnce() + Send>);
+
+impl GpuOwners {
+    pub fn of(editor: &Editor) -> Arc<GpuOwners> {
+        editor.services.get_or_init(GpuOwners::default)
+    }
+
+    /// `release` lets the owner's GPU objects go (stops and joins a render thread). It runs once.
+    pub fn on_exit(&self, who: &'static str, release: impl FnOnce() + Send + 'static) {
+        self.hooks.lock().push((who, Box::new(release)));
+    }
+
+    fn take(&self) -> Vec<ExitHook> {
+        std::mem::take(&mut *self.hooks.lock())
+    }
+}
+
+/// The shell put in place of the real one while the window goes: it keeps nothing.
+struct Gone;
+
+impl Shell for Gone {
+    fn init(&mut self, _: &egui::Context, _: &RenderState) {}
+
+    fn frame(&mut self, _: &mut egui::Ui) -> FrameReport {
+        FrameReport::default()
+    }
+
+    fn close_requested(&mut self) -> bool {
+        true
+    }
+}
+
 /// A native window of an egui viewport other than the root.
 struct Extra {
     window: Arc<Window>,
@@ -171,13 +237,22 @@ struct App {
     repaint_at: Arc<Mutex<Option<Instant>>>,
     frame: u64,
     failed: Option<String>,
+    /// The teardown runs: a panic of the UI thread only logs meanwhile.
+    leaving: Arc<AtomicBool>,
 }
 
 /// One pass of an immediate viewport (a panel's own window): its window's input, the pass, the
 /// paint. Without its window yet, the pass still runs - egui wants it - and only its textures
 /// are kept for the next paint.
-fn render_immediate(ctx: &egui::Context, shared: &Rc<RefCell<Shared>>, vp: ImmediateViewport<'_>) {
+fn render_immediate(ctx: &egui::Context, shared: &Weak<RefCell<Shared>>, vp: ImmediateViewport<'_>) {
     let ImmediateViewport { ids, builder, mut viewport_ui_cb } = vp;
+    // the window is going: the pass runs, nothing is painted
+    let Some(shared) = shared.upgrade() else {
+        let raw = egui::RawInput { viewport_id: ids.this, ..Default::default() };
+        let _ = ctx.run_ui(raw, |ui| viewport_ui_cb(ui));
+        return;
+    };
+    let shared = &shared;
     let raw = {
         let Ok(mut sh) = shared.try_borrow_mut() else { return };
         match sh.extra.get_mut(&ids.this) {
@@ -337,7 +412,9 @@ impl App {
         }));
         if self.opts.floating {
             ctx.set_embed_viewports(false);
-            let s = shared.clone();
+            // egui keeps this renderer in a thread-local: it holds the painter weakly, so the
+            // painter never goes with the thread's end
+            let s = Rc::downgrade(&shared);
             egui::Context::set_immediate_viewport_renderer(move |ctx, vp| render_immediate(ctx, &s, vp));
         }
 
@@ -623,19 +700,81 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
-        self.shell.exiting();
-        *self.link.gpu.lock() = None;
-        // the immediate viewports' renderer lives in egui's thread-local and holds the painter:
-        // let it go now, or the device is dropped while the process ends (it hangs there)
-        if self.opts.floating {
-            egui::Context::set_immediate_viewport_renderer(|ctx, vp| {
-                let ImmediateViewport { ids, mut viewport_ui_cb, .. } = vp;
-                let raw = egui::RawInput { viewport_id: ids.this, ..Default::default() };
-                let _ = ctx.run_ui(raw, |ui| viewport_ui_cb(ui));
+        self.leaving.store(true, Ordering::SeqCst);
+        let log = self.editor.log.clone();
+        let step = |what: &str, f: &mut dyn FnMut()| {
+            if catch_unwind(AssertUnwindSafe(f)).is_err() {
+                log.error(format!("leaving: {what} failed; the rest goes on"));
+            }
+        };
+        // 1. what must be written
+        step("the shell's last writes", &mut || self.shell.exiting());
+        // 2. the render threads, newest owner first
+        for (who, release) in GpuOwners::of(&self.editor).take().into_iter().rev() {
+            let mut release = Some(release);
+            step(who, &mut || {
+                if let Some(r) = release.take() {
+                    r();
+                }
             });
         }
-        self.live = None;
+        // 3. the documents and everything they draw with
+        step("the shell", &mut || drop(std::mem::replace(&mut self.shell, Box::new(Gone))));
+        // 4. the device handle given out
+        step("the shared device", &mut || *self.link.gpu.lock() = None);
+        if let Some(live) = self.live.take() {
+            let Live { window, ctx, input, shared, .. } = live;
+            // 5. the panels' own windows: their surfaces first
+            let rt = self.editor.exec.handle().clone();
+            step("the panels' windows", &mut || {
+                if let Ok(mut sh) = shared.try_borrow_mut() {
+                    let ids: Vec<ViewportId> = sh.extra.keys().copied().collect();
+                    for id in ids {
+                        let _ = rt.block_on(sh.painter.set_window(id, None));
+                    }
+                    sh.extra.clear();
+                    let mut root = ViewportIdSet::default();
+                    root.insert(ViewportId::ROOT);
+                    sh.painter.gc_viewports(&root);
+                }
+            });
+            if self.opts.floating {
+                step("the panels' renderer", &mut || {
+                    egui::Context::set_immediate_viewport_renderer(|ctx, vp| {
+                        let ImmediateViewport { ids, mut viewport_ui_cb, .. } = vp;
+                        let raw = egui::RawInput { viewport_id: ids.this, ..Default::default() };
+                        let _ = ctx.run_ui(raw, |ui| viewport_ui_cb(ui));
+                    });
+                });
+            }
+            // 6. the painter (root surface, renderer, device and queue), then the window
+            let mut shared = Some(shared);
+            step("the painter", &mut || drop(shared.take()));
+            let mut rest = Some((input, ctx));
+            step("the input", &mut || drop(rest.take()));
+            let mut window = Some(window);
+            step("the window", &mut || drop(window.take()));
+        }
+        self.leaving.store(false, Ordering::SeqCst);
     }
+}
+
+/// While the window goes a panic of the UI thread only logs, so every step of the teardown runs;
+/// any other panic goes to the hook that was there.
+fn install_leaving_guard(editor: &Editor, leaving: Arc<AtomicBool>) {
+    let previous = std::panic::take_hook();
+    let ui_thread = std::thread::current().id();
+    let log = editor.log.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        if std::thread::current().id() == ui_thread && leaving.load(Ordering::SeqCst) {
+            let at = info
+                .location()
+                .map_or_else(|| "unknown location".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
+            log.error(format!("internal error while leaving at {at}"));
+            return;
+        }
+        previous(info);
+    }));
 }
 
 /// Opens the window and runs the editor's frame loop on the calling thread - the main thread -
@@ -649,6 +788,8 @@ pub fn run(editor: Arc<Editor>, opts: WindowOptions, shell: Box<dyn Shell>) -> R
         let _ = proxy.send_event(UserEvent::Wake);
     });
     let link = editor.services.get_or_init(WindowLink::default);
+    let leaving = Arc::new(AtomicBool::new(false));
+    install_leaving_guard(&editor, leaving.clone());
     let mut app = App {
         editor: editor.clone(),
         link,
@@ -659,6 +800,7 @@ pub fn run(editor: Arc<Editor>, opts: WindowOptions, shell: Box<dyn Shell>) -> R
         repaint_at: Arc::new(Mutex::new(None)),
         frame: 0,
         failed: None,
+        leaving,
     };
     let ran = event_loop.run_app(&mut app);
     // nothing may ping a loop that is gone

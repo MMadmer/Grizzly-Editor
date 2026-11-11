@@ -321,6 +321,27 @@ fn load_part(
     Ok(load)
 }
 
+/// One class's part as read again (`LoadLevelPart`): the tool's data, its objects, a bulk
+/// tool's stream.
+#[derive(Clone, Debug)]
+pub struct PartLoad {
+    pub tool: ToolPart,
+    pub objects: Vec<Loaded>,
+    pub bulk: Option<Vec<u8>>,
+}
+
+/// `EScene::LoadLevelPart`: a class's part files (as [`part_path`] numbers them) checked against
+/// the scene's GUID and read. No file is a part with nothing in it.
+pub fn parse_part(
+    class: ObjClass,
+    files: &[(PathBuf, Vec<u8>)],
+    guid: [u64; 2],
+    settings: SyncSettings<'_>,
+) -> Result<(PartLoad, Vec<String>), SceneError> {
+    let l = load_part(class, files, guid, settings)?;
+    Ok((PartLoad { tool: l.tool, objects: l.objects, bulk: l.bulk }, l.warnings))
+}
+
 /// Reads the scene: `main` is the `.level`, `parts` the part files that exist.
 pub fn parse_scene(
     main: &[u8],

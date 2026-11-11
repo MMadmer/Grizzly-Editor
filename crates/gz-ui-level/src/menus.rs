@@ -13,18 +13,17 @@ use gz_app::{DocCx, EditorSettings, ShellBuilder, UiCommand};
 use gz_editor::{Args, Editor, Value};
 use gz_scene::apply::SelectMode;
 use gz_scene::{SceneCmd, SceneService};
-use gz_ui::{Answer, ConfirmSpec, Icon, MenuItem, menu_item};
+use gz_ui::{Icon, MenuItem, menu_item};
 
 use crate::doc::{Act, post_to_level};
 use crate::toolbar;
-use crate::tools::asker;
 
 /// The scene's commands: id, group, label, icon, default keys.
 pub const SCENE_COMMANDS: [(&str, &str, &str, Icon, &str); 11] = [
     ("COMMAND_UNDO", "Edit", "Undo", Icon::Undo, "Ctrl+Z"),
     ("COMMAND_REDO", "Edit", "Redo", Icon::Redo, "Ctrl+Y"),
     ("COMMAND_DELETE_SELECTION", "Edit", "Delete", Icon::Delete, "Delete"),
-    ("COMMAND_SHOW_OBJECTLIST", "Scene", "Find in World Outliner", Icon::Search, "Ctrl+F"),
+    ("COMMAND_SHOW_OBJECTLIST", "Scene", "Find in World Outliner", Icon::Search, "Ctrl+W"),
     ("COMMAND_SELECT_ALL", "Selection", "Select All", Icon::Select, "Ctrl+A"),
     ("COMMAND_DESELECT_ALL", "Selection", "Unselect All", Icon::Select, ""),
     ("COMMAND_INVERT_SELECTION_ALL", "Selection", "Invert Selection", Icon::Select, "Ctrl+I"),
@@ -35,7 +34,7 @@ pub const SCENE_COMMANDS: [(&str, &str, &str, Icon, &str); 11] = [
 ];
 
 /// The Build menu's rows past the toolbar's builds: submenu, label, command, its argument.
-const BUILD_ROWS: [(&str, &str, &str, &str); 11] = [
+const BUILD_ROWS: [(&str, &str, &str, &str); 13] = [
     ("Make", "Make All...", "make_all", ""),
     ("Make", "Make Game...", "make_game", ""),
     ("Make", "Make Details...", "make_details", ""),
@@ -46,7 +45,9 @@ const BUILD_ROWS: [(&str, &str, &str, &str); 11] = [
     ("Compile", "Detail Object Light", "compile_details", ""),
     ("Compile", "AI Map High", "compile_aimap", "high"),
     ("Compile", "AI Map Low", "compile_aimap", "low"),
-    ("Compile", "Spawn", "compile_spawn", ""),
+    ("Compile", "AI Map Verify", "compile_aimap", "verify"),
+    ("Compile", "Spawn This Level", "compile_spawn", ""),
+    ("Compile", "Spawn All Levels", "compile_spawn", "all"),
 ];
 
 /// What the keys of a command are now: the author's binding, else its default.
@@ -79,81 +80,37 @@ pub fn run_scene_command(id: &str, editor: &Arc<Editor>, ctx: &Context) {
     match id {
         "COMMAND_UNDO" => editor.post("undo", Args::new()),
         "COMMAND_REDO" => editor.post("redo", Args::new()),
-        "COMMAND_DELETE_SELECTION" => ask_delete_selection(ctx, editor, &svc),
+        // `CommandDeleteSelection`: asks nothing, one undo step
+        "COMMAND_DELETE_SELECTION" => svc
+            .store
+            .post(SceneCmd::RemoveSelection { class: Some(class), label: "Delete".into() }, origin),
         "COMMAND_SELECT_ALL" => {
             svc.store.post(SceneCmd::SelectClass { class: Some(class), select: true }, origin)
         }
         "COMMAND_DESELECT_ALL" => {
-            svc.store.post(SceneCmd::SelectClass { class: None, select: false }, origin)
+            svc.store.post(SceneCmd::SelectClass { class: Some(class), select: false }, origin)
         }
         "COMMAND_INVERT_SELECTION_ALL" => {
             let ids = snap.of_class(class).filter(|o| o.flags.visible).map(|o| o.id).collect();
             svc.store.post(SceneCmd::Select { ids, mode: SelectMode::Toggle }, origin);
         }
-        "COMMAND_HIDE_SEL" => {
-            let ids = snap.selected_in_order();
-            if !ids.is_empty() {
-                svc.store.post(SceneCmd::Show { ids, visible: false }, origin);
-            }
-        }
-        "COMMAND_HIDE_UNSEL" => {
+        // `ShowObjects(false, class, ...)`: the selected, the unselected or every object of the class
+        "COMMAND_HIDE_SEL" | "COMMAND_HIDE_UNSEL" | "COMMAND_HIDE_ALL" | "COMMAND_UNHIDE_ALL" => {
+            let visible = id == "COMMAND_UNHIDE_ALL";
             let ids: Vec<_> = snap
-                .objects
-                .values()
-                .filter(|o| o.class.is_object_tool() && o.flags.visible && !snap.is_selected(o.id))
+                .of_class(class)
+                .filter(|o| match id {
+                    "COMMAND_HIDE_SEL" => snap.is_selected(o.id),
+                    "COMMAND_HIDE_UNSEL" => !snap.is_selected(o.id),
+                    _ => true,
+                })
                 .map(|o| o.id)
                 .collect();
             if !ids.is_empty() {
-                svc.store.post(SceneCmd::Show { ids, visible: false }, origin);
+                svc.store.post(SceneCmd::Show { ids, visible }, origin);
             }
         }
-        "COMMAND_HIDE_ALL" => {
-            crate::outliner::show_objects(&svc, false, false, origin);
-        }
-        "COMMAND_UNHIDE_ALL" => {
-            crate::outliner::show_objects(&svc, false, true, origin);
-        }
         _ => {}
-    }
-}
-
-/// Delete asks first, naming what goes (Edit > Undo brings it back).
-fn ask_delete_selection(ctx: &Context, editor: &Arc<Editor>, svc: &Arc<SceneService>) {
-    let snap = svc.store.snapshot();
-    let ids: Vec<_> = snap
-        .selected_in_order()
-        .into_iter()
-        .filter(|id| snap.get(*id).is_some_and(|o| o.owner.is_none()))
-        .collect();
-    if ids.is_empty() {
-        return;
-    }
-    let names: Vec<String> =
-        ids.iter().filter_map(|id| snap.get(*id)).take(10).map(|o| o.name.to_string()).collect();
-    let one = ids.len() == 1;
-    let spec = ConfirmSpec {
-        id: "delete_object".into(),
-        title: if one { "Delete Object" } else { "Delete Objects" }.into(),
-        headline: if one {
-            "Delete this object from the scene?".into()
-        } else {
-            format!("Delete these {} objects from the scene?", ids.len())
-        },
-        items: names,
-        total: ids.len(),
-        consequence: "Edit > Undo brings them back.".into(),
-        action: "Delete".into(),
-        destructive: true,
-    };
-    let store = svc.store.clone();
-    let origin = editor.ui_origin();
-    let line = gz_ui::dialog::confirm(ctx, asker(editor), spec, move |answer| {
-        if answer == Answer::Yes {
-            store.post(SceneCmd::DeleteSelected, origin);
-        }
-    });
-    if let Some(line) = line {
-        editor.log.plain(line);
     }
 }
 
@@ -187,7 +144,7 @@ pub fn draw(bar: &mut MenuBar<'_, '_>, cx: &mut DocCx<'_>, maximized: bool) -> M
     let builds: Vec<&toolbar::LevelAction> =
         toolbar::LEVEL_ACTIONS.iter().filter(|a| a.group == 1 && editor.registry().has(a.command)).collect();
     let more_builds = BUILD_ROWS.iter().any(|(_, _, c, _)| editor.registry().has(c));
-    if !builds.is_empty() || more_builds {
+    if !builds.is_empty() || more_builds || has_scene {
         bar.menu("Build", |ui| build_menu(ui, &editor, &builds));
     }
     bar.menu("View", |ui| {
@@ -222,7 +179,36 @@ fn row(
 }
 
 fn scene_menu(ui: &mut Ui, editor: &Arc<Editor>, ctx: &Context, has_scene: bool) {
-    row(ui, editor, ctx, "COMMAND_SHOW_OBJECTLIST", "Find in World Outliner", Icon::Search, "Ctrl+F", true);
+    let item = |ui: &mut Ui, label: &str, id: &str, enabled: bool| {
+        let keys = keys_now(editor, id, "");
+        menu_item(ui, label, MenuItem { keys: &keys, enabled, ..MenuItem::default() })
+    };
+    if item(ui, "Validate", "COMMAND_VALIDATE_SCENE", has_scene) {
+        crate::level_cmds::validate(editor, ctx);
+    }
+    if item(ui, "Summary Info", "COMMAND_SHOW_SCENE_SUMMARY", has_scene) {
+        crate::level_cmds::summary(editor);
+    }
+    row(ui, editor, ctx, "COMMAND_SHOW_OBJECTLIST", "Find in World Outliner", Icon::Search, "Ctrl+W", true);
+    if item(ui, "Clear Debug Draw", "COMMAND_CLEAR_DEBUG_DRAW", has_scene) {
+        crate::level_cmds::clear_debug_draw(editor);
+    }
+    ui.separator();
+    if item(ui, "Open Selection...", "COMMAND_LOAD_SELECTION", has_scene) {
+        crate::level_cmds::open_selection(editor);
+    }
+    if item(ui, "Save Selection As...", "COMMAND_SAVE_SELECTION", has_scene) {
+        crate::level_cmds::save_selection(editor);
+    }
+    if item(ui, "Export Scene as OBJ...", "", has_scene) {
+        crate::level_cmds::export_obj(editor, false);
+    }
+    if item(ui, "Export Selection as OBJ...", "", has_scene) {
+        crate::level_cmds::export_obj(editor, true);
+    }
+    if item(ui, "Rename Objects After References...", "COMMAND_MULTI_RENAME_OBJECTS", has_scene) {
+        crate::level_cmds::rename_objects(editor, ctx);
+    }
     ui.separator();
     let any = scene(editor).is_some_and(|s| !s.store.snapshot().selection.is_empty());
     if menu_item(ui, "Mark Selection as Mod Content", MenuItem { enabled: any, ..MenuItem::default() }) {
@@ -238,6 +224,12 @@ fn scene_menu(ui: &mut Ui, editor: &Arc<Editor>, ctx: &Context, has_scene: bool)
         row(ui, editor, ctx, id, label, *icon, keys, has_scene);
     }
     ui.separator();
+    // `etfPickAnyClass`: a click selects an object of any class and switches the tool to it
+    let vp = gz_ui_viewport::Viewport::of(editor);
+    let any = vp.read(|s| s.settings.pick_any_class);
+    if menu_item(ui, "Pick Any Class", MenuItem { selected: any, ..MenuItem::default() }) {
+        vp.with(|s| s.settings.pick_any_class = !any);
+    }
     let can = scene(editor).is_some_and(|s| s.recovery.can_snapshot(true).is_ok());
     if menu_item(ui, "Create Recovery Snapshot", MenuItem { enabled: can, ..MenuItem::default() }) {
         let mut args = Args::new();
@@ -280,21 +272,70 @@ fn build_menu(ui: &mut Ui, editor: &Arc<Editor>, builds: &[&toolbar::LevelAction
         }
         local_submenu(ui, sub, Icon::None, !busy, |ui| {
             for (_, label, command, arg) in rows {
-                if menu_item(ui, label, MenuItem::default()) {
+                let id = crate::level_cmds::make_id(command);
+                let keys = id.map(|i| keys_now(editor, i, "")).unwrap_or_default();
+                if menu_item(ui, label, MenuItem { keys: &keys, ..MenuItem::default() }) {
+                    if sub == "Make" {
+                        // `ConfirmLevelBuild`: the level folder named first
+                        crate::level_cmds::ask_make(editor, ui.ctx(), command);
+                        continue;
+                    }
                     let mut args = Args::new();
-                    if !arg.is_empty() {
-                        args.insert("mode".into(), Value::String((*arg).into()));
+                    match *arg {
+                        "" => {}
+                        "all" => {
+                            args.insert("all_levels".into(), Value::Bool(true));
+                        }
+                        a => {
+                            args.insert("mode".into(), Value::String(a.into()));
+                        }
                     }
                     editor.post(command, args);
                 }
             }
         });
     }
+    ui.separator();
+    let has_scene = scene(editor).is_some();
+    if menu_item(ui, "Import Error List...", MenuItem { enabled: has_scene, ..MenuItem::default() }) {
+        crate::level_cmds::import_errors(editor);
+    }
+    if menu_item(ui, "Export Error List...", MenuItem { enabled: has_scene, ..MenuItem::default() }) {
+        crate::level_cmds::export_errors(editor);
+    }
+    if menu_item(ui, "Clear Error List", MenuItem { enabled: has_scene, ..MenuItem::default() }) {
+        crate::level_cmds::clear_debug_draw(editor);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_two_commands_share_a_default_key() {
+        // the scene's, the viewport's, the tools', the builds' and the file commands' defaults
+        let mut keys: Vec<(String, &str)> = Vec::new();
+        for (id, _, _, _, k) in SCENE_COMMANDS {
+            if !k.is_empty() {
+                keys.push((gz_app::Chord::parse(k).map(|c| c.label()).unwrap_or_default(), id));
+            }
+        }
+        for b in gz_ui_viewport::keys::BINDINGS {
+            if let Some(c) = b.keys {
+                keys.push((c.label(), b.id));
+            }
+        }
+        for (id, k) in crate::level_cmds::DEFAULT_KEYS {
+            keys.push((gz_app::Chord::parse(k).map(|c| c.label()).unwrap_or_default(), id));
+        }
+        // a command listed twice (the scene's and the viewport's own row of it) is one command
+        keys.sort();
+        keys.dedup();
+        for w in keys.windows(2) {
+            assert!(w[0].0 != w[1].0, "{} and {} both default to {}", w[0].1, w[1].1, w[0].0);
+        }
+    }
 
     #[test]
     fn command_ids_are_unique() {

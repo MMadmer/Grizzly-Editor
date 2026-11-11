@@ -97,6 +97,7 @@ impl LevelDoc {
                 .on_before_close(|ed, _session| async move { write_preview(&ed).await });
             PreviewOnClose
         });
+        crate::level_cmds::hook_recent(editor);
         Self {
             editor: editor.clone(),
             pane: None,
@@ -333,7 +334,9 @@ impl LevelDoc {
                             ),
                         );
                         args.insert("key".into(), Value::String(key.clone()));
-                        args.insert("value".into(), Value::String(first));
+                        // a multi-select row (a respawn point's profiles) takes the list
+                        let value = if c.multi { items.join(",") } else { first };
+                        args.insert("value".into(), Value::String(value));
                         editor.post("property_set", args);
                     }
                     Purpose::ToolObject if c.multi => crate::tools::add_several(&editor, &items),
@@ -346,6 +349,7 @@ impl LevelDoc {
                             detail_objects::add_objects(ui, &editor, svc, &items);
                         }
                     }
+                    Purpose::RandomObjects => self.tools.set_random_objects(items),
                     Purpose::ToolCommand { cmd, action, arg } => {
                         let mut args = Args::new();
                         args.insert("action".into(), Value::String((*action).into()));
@@ -621,7 +625,12 @@ fn px(r: Rect, ppp: f32) -> [f32; 4] {
 }
 
 /// Save As: the system's save dialog off the UI thread, then `save_scene` with the file.
-fn save_as(editor: &Arc<Editor>, svc: &SceneService) {
+fn save_as(editor: &Arc<Editor>, _svc: &SceneService) {
+    crate::level_cmds::save_as(editor);
+}
+
+#[allow(dead_code)]
+fn save_as_old(editor: &Arc<Editor>, svc: &SceneService) {
     let dir = svc.maps_dir();
     let ed = editor.clone();
     let spawned = std::thread::Builder::new().name("gz-ui-level.save_as".into()).spawn(move || {
@@ -745,6 +754,7 @@ impl Document for LevelDoc {
         }
         self.draw_chooser(ui);
         self.detail_objects.draw(ui, cx.editor, &mut self.chooser);
+        crate::motion_ui::draw(ui, cx.editor);
         self.sync_view();
         self.tick_preview();
         self.sync_recovery(ui.ctx());
@@ -782,7 +792,21 @@ impl Document for LevelDoc {
             EditAction::Redo => "COMMAND_REDO",
             EditAction::Delete => "COMMAND_DELETE_SELECTION",
             EditAction::Find => "COMMAND_SHOW_OBJECTLIST",
-            EditAction::Cut | EditAction::Copy | EditAction::Paste | EditAction::Duplicate => return false,
+            // `UIMainForm::LevelEdit`: the clipboard of scene objects; Duplicate is a copy pasted
+            EditAction::Cut | EditAction::Copy | EditAction::Paste | EditAction::Duplicate => {
+                if run {
+                    crate::level_cmds::edit(
+                        cx.editor,
+                        match action {
+                            EditAction::Cut => "cut",
+                            EditAction::Copy => "copy",
+                            EditAction::Paste => "paste",
+                            _ => "duplicate",
+                        },
+                    );
+                }
+                return self.scene().is_some_and(|s| s.store.snapshot().valid);
+            }
         };
         if run {
             menus::run_scene_command(id, cx.editor, cx.ctx);

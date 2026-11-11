@@ -69,6 +69,8 @@ pub struct ViewOpts {
     pub stats: bool,
     /// `g_SpawnHelpers`.
     pub helpers: bool,
+    /// `ai_map_shown`: Show AI Map (the `\` key).
+    pub ai_map_shown: bool,
     /// View > Render > Quality (`m_ScreenQuality`): the render size over the pane's, 0.25..2.
     /// A session's choice, as in the C++.
     pub quality: f32,
@@ -89,6 +91,7 @@ impl Default for ViewOpts {
             safe_rect: false,
             stats: false,
             helpers: true,
+            ai_map_shown: true,
             quality: 1.0,
         }
     }
@@ -425,8 +428,14 @@ impl Rates {
 impl Viewport {
     /// The viewport of this editor, made on first use.
     pub fn of(editor: &Editor) -> Arc<Viewport> {
-        editor.services.get_or_init(|| Viewport {
-            state: Mutex::new(ViewState::default()),
+        editor.services.get_or_init(|| {
+            let mut state = ViewState::default();
+            // the tool switches as the last session left them
+            if let Some(f) = gz_app::EditorSettings::of(editor).tools_settings() {
+                apply_tool_flags(&mut state.settings, &mut state.tool, f);
+            }
+            Viewport {
+            state: Mutex::new(state),
             rev: AtomicU64::new(1),
             renderer: Mutex::new(None),
             renderer_failed: Mutex::new(false),
@@ -436,6 +445,7 @@ impl Viewport {
             rates: Mutex::new(Rates::default()),
             animating: AtomicBool::new(false),
             anim_tick: AtomicU64::new(0),
+            }
         })
     }
 
@@ -474,7 +484,17 @@ impl Viewport {
         let mut r = self.renderer.lock();
         if r.is_none() && !*self.renderer_failed.lock() {
             match Renderer::new(gpu.device.clone(), gpu.queue.clone(), editor.exec.clone()) {
-                Ok(made) => *r = Some(Arc::new(made)),
+                Ok(made) => {
+                    *r = Some(Arc::new(made));
+                    // the window stops the render thread while its loop still runs
+                    let me = Viewport::of(editor);
+                    gz_app::GpuOwners::of(editor).on_exit("the viewport's renderer", move || {
+                        let taken = me.renderer.lock().take();
+                        if let Some(r) = taken {
+                            r.shutdown();
+                        }
+                    });
+                }
                 Err(e) => {
                     *self.renderer_failed.lock() = true;
                     editor.log.error(format!("the viewport's renderer did not start: {e}"));
@@ -727,6 +747,14 @@ impl Viewport {
         // the particle library is read only for a scene that has particle systems
         let has_particles = snap.as_ref().is_some_and(|s| s.state.count(ObjClass::Particles) > 0);
         let particles = if has_particles { parts.library(editor).await } else { None };
+        // a motion playing: its object where the motion has it now (`AnimationOnFrame`)
+        let posed = snap.as_ref().and_then(|s| motion_pose(editor, &s.state));
+        let playing = posed.is_some();
+        if let Some((_, Some((hpb, at)))) = &posed {
+            let (hpb, at) = (*hpb, *at);
+            self.state_quiet(|s| s.nav.set(hpb, at));
+        }
+        let posed = posed.map(|(st, _)| st);
         let built = editor
             .exec
             .cpu(move || {
@@ -745,6 +773,15 @@ impl Viewport {
                     ViewMode::Unlit
                 };
                 view.flags = ViewFlags::HELPERS | ViewFlags::SELECTION;
+                // View > Render: Shade Mode, Textures, Linear Filtering, Edged Faces; Fog, Environment
+                view.style = gz_render::ViewStyle {
+                    flat: st.view.flat,
+                    textures: st.view.textures,
+                    linear: st.view.filter_linear,
+                    edged: st.view.edged_faces,
+                    fog: st.view.fog,
+                    environment: st.view.environment,
+                };
                 if st.view.grid {
                     view.flags |= ViewFlags::GRID;
                 }
@@ -760,7 +797,7 @@ impl Viewport {
                 let mut gathered: Option<(Vec<GameLight>, usize)> = None;
                 let empty_state = gz_scene::SceneState::default();
                 let empty_lib = gz_scene::library::Library::new(Vec::new());
-                let state = snap.as_ref().map_or(&empty_state, |s| &s.state);
+                let state = posed.as_ref().or(snap.as_ref().map(|s| &s.state)).unwrap_or(&empty_state);
                 let library = lib.as_deref().unwrap_or(&empty_lib);
                 let game = if st.game.active() {
                     if st.game.rebake || lighting::roof_stale(roof.as_deref(), cam.position) {
@@ -790,6 +827,16 @@ impl Viewport {
                 };
                 let opts = DrawOptions { helpers: st.view.helpers && !preview, game };
                 let mut built = draw::build(state, library, &assets, &opts);
+                // Environment outside Game Lighting: the chosen weather's sky and fog colour
+                if st.view.environment && !st.game.active() && st.game.weather_ok {
+                    built.list.environment = Some(lighting::environment(
+                        &st.game.at,
+                        &st.game.settings,
+                        st.game.exposure_now(),
+                        st.game.indoor_hemi,
+                        None,
+                    ));
+                }
                 // the editor's own lighting: the Light tool's lights switched on for the viewport
                 if view.mode == ViewMode::Lit {
                     view.flags |= ViewFlags::SCENE_LIGHTS;
@@ -806,6 +853,7 @@ impl Viewport {
                         camera: &cam,
                         size,
                         particles,
+                        ai_map_shown: st.view.ai_map_shown,
                     },
                     &mut built,
                 );
@@ -822,6 +870,7 @@ impl Viewport {
             })
             .await;
         let (packet, anchor, roof, baked, gathered, animating) = built;
+        let animating = animating || playing;
         self.animating.store(animating, Ordering::Release);
         let log_bake = baked.map(|(ms, count)| (ms, count, roof.as_ref().map(|r| r.origin)));
         self.state_quiet(|s| {
@@ -1094,6 +1143,51 @@ pub(crate) fn real_time(editor: &Editor) -> bool {
 #[derive(Default)]
 struct ReloadSeen(AtomicU64);
 
+/// `ETFlags` bits the viewport keeps (`etfNormalAlign`, `etfOSnap`, `etfVSnap`, `etfASnap`,
+/// `etfMSnap`, `etfPickAnyClass`); the other bits of `tools_settings` are written back as read.
+const ETF_NORMAL_ALIGN: u32 = 1 << 2;
+const ETF_OSNAP: u32 = 1 << 4;
+const ETF_VSNAP: u32 = 1 << 6;
+const ETF_ASNAP: u32 = 1 << 7;
+const ETF_MSNAP: u32 = 1 << 8;
+const ETF_PICK_ANY_CLASS: u32 = 1 << 9;
+const ETF_KEPT: u32 = ETF_NORMAL_ALIGN | ETF_OSNAP | ETF_VSNAP | ETF_ASNAP | ETF_MSNAP | ETF_PICK_ANY_CLASS;
+
+/// The `tools_settings` value last read or written; `u64::MAX` before the first read.
+struct ToolFlagsSeen(AtomicU64);
+
+impl Default for ToolFlagsSeen {
+    fn default() -> Self {
+        Self(AtomicU64::new(u64::MAX))
+    }
+}
+
+fn tool_flags(settings: &Settings, tool: &Tool, rest: u32) -> u32 {
+    let mut f = rest & !ETF_KEPT;
+    for (bit, on) in [
+        (ETF_NORMAL_ALIGN, settings.normal_align),
+        (ETF_OSNAP, settings.object_snap),
+        (ETF_VSNAP, settings.vertex_snap),
+        (ETF_ASNAP, tool.angle_snap),
+        (ETF_MSNAP, tool.grid_snap),
+        (ETF_PICK_ANY_CLASS, settings.pick_any_class),
+    ] {
+        if on {
+            f |= bit;
+        }
+    }
+    f
+}
+
+fn apply_tool_flags(settings: &mut Settings, tool: &mut Tool, f: u32) {
+    settings.normal_align = f & ETF_NORMAL_ALIGN != 0;
+    settings.object_snap = f & ETF_OSNAP != 0;
+    settings.vertex_snap = f & ETF_VSNAP != 0;
+    tool.angle_snap = f & ETF_ASNAP != 0;
+    tool.grid_snap = f & ETF_MSNAP != 0;
+    settings.pick_any_class = f & ETF_PICK_ANY_CLASS != 0;
+}
+
 /// The qualities View > Render > Quality offers.
 pub const QUALITIES: [(f32, &str); 4] = [(0.25, "25%"), (0.5, "50%"), (1.0, "100%"), (2.0, "200%")];
 
@@ -1114,6 +1208,21 @@ impl Viewport {
                     .filter(|n| !n.is_empty());
                 Some(gz_editor::CameraPose { position, level })
             });
+        }
+        // the tool switches live in `[editor_prefs] tools_settings`, as the C++ keeps them
+        let prefs = gz_app::EditorSettings::of(editor);
+        let kept = editor.services.get_or_init(ToolFlagsSeen::default);
+        let mut last = kept.0.load(Ordering::Acquire);
+        if last == u64::MAX {
+            // what `of` started from, so a switch changed before the first frame is written
+            let f = prefs.tools_settings().unwrap_or_else(|| tool_flags(&Settings::default(), &Tool::default(), 0));
+            kept.0.store(u64::from(f), Ordering::Release);
+            last = u64::from(f);
+        }
+        let now = self.read(|s| tool_flags(&s.settings, &s.tool, last as u32));
+        if u64::from(now) != last {
+            prefs.set_tools_settings(now);
+            kept.0.store(u64::from(now), Ordering::Release);
         }
         // Libraries > Reload Textures: a new loader of the same sources drops what was loaded
         let wanted = gz_app::gpu::TextureReload::generation(editor);
@@ -1233,9 +1342,45 @@ pub(crate) fn render_json(editor: &Arc<Editor>) -> gz_editor::Value {
     })
 }
 
+
+/// The scene with a playing motion's object posed where its motion has it now, and the camera
+/// it gives when Camera View is on: `(-r.y, -r.x, -r.z)` from its position.
+fn motion_pose(editor: &Editor, state: &gz_scene::SceneState) -> Option<(gz_scene::SceneState, Option<(Vec3, Vec3)>)> {
+    let session = editor.project_opt()?;
+    let play = (*gz_scene::cmd_edit::MotionPlayback::of(&session).playing.lock())?;
+    let o = state.get(play.id)?;
+    let raw = o.motion.clone()?;
+    let m = raw.model()?;
+    let p = gz_scene::objmotion::params(&m, &raw);
+    let t = gz_scene::cmd_edit::MotionPlayback::time_of(&play, p.min_t, p.max_t);
+    let (pos, rot) = gz_scene::objmotion::pose_at(&m, t);
+    let mut moved = (**o).clone();
+    moved.xform.position = pos;
+    moved.xform.rotation = rot;
+    let cam = (o.co_flags() & gz_scene::objmotion::CAMERA_VIEW != 0).then(|| (Vec3::new(rot.y, rot.x, rot.z), pos));
+    let mut st = state.clone();
+    st.replace(moved);
+    Some((st, cam))
+}
+
 #[cfg(test)]
 mod render_tests {
-    use super::scaled;
+    use super::{Settings, Tool, apply_tool_flags, scaled, tool_flags};
+
+    #[test]
+    fn the_tool_switches_round_trip_and_keep_the_other_bits() {
+        let (mut s, mut t) = (Settings::default(), Tool::default());
+        s.pick_any_class = false;
+        t.angle_snap = true;
+        // etfCSParent and etfGSnap are not the viewport's: they stay as read
+        let f = tool_flags(&s, &t, 1 | 1 << 3 | 1 << 9);
+        assert_eq!(f & 1, 1);
+        assert_eq!(f & (1 << 3), 1 << 3);
+        assert_eq!(f & (1 << 9), 0);
+        let (mut s2, mut t2) = (Settings::default(), Tool::default());
+        apply_tool_flags(&mut s2, &mut t2, f);
+        assert_eq!((s2, t2.angle_snap, t2.grid_snap), (s, true, false));
+    }
 
     #[test]
     fn quality_scales_the_render_size() {

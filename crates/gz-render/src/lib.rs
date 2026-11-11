@@ -97,7 +97,7 @@ pub use skin::{object_pose, object_rest, visual_pose};
 pub use targets::{bucket, target_extent};
 pub use texture::{TexelFormat, TextureData};
 pub use thumbs::ThumbnailCache;
-pub use view::{Grid, View, ViewFlags, ViewMode};
+pub use view::{Grid, View, ViewFlags, ViewMode, ViewStyle};
 
 /// The picture every read-back returns: RGBA8, rows top-down.
 pub use gz_fmt_tex::Image;

@@ -23,6 +23,7 @@ gz-entities.workspace = true
 gz-fmt-object.workspace = true
 gz-fmt-level.workspace = true
 gz-fmt-xr.workspace = true
+gz-fmt-tex.workspace = true
 gz-scene.workspace = true
 gz-render.workspace = true
 gz-chunk.workspace = true

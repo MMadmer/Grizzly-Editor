@@ -414,6 +414,11 @@ async fn thumb_renderer(editor: &Arc<Editor>) -> Result<Arc<Renderer>, String> {
             .exec
             .cpu(move || Renderer::new(device, queue, exec).map(Arc::new).map_err(|e| e.to_string()))
             .await;
+        if let Ok(r) = &made {
+            // the window stops the render thread while its loop still runs
+            let r = r.clone();
+            gz_app::GpuOwners::of(editor).on_exit("the thumbnails' renderer", move || r.shutdown());
+        }
         *slot = Some(made);
     }
     slot.clone().unwrap_or_else(|| Err("the renderer did not start".to_owned()))

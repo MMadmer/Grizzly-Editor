@@ -83,6 +83,9 @@ pub mod apply;
 pub mod bulk;
 pub mod class;
 mod cmd;
+pub mod cmd_edit;
+pub mod debug;
+pub mod edit;
 pub mod game;
 pub mod io;
 pub mod library;
@@ -90,12 +93,15 @@ pub mod ltx;
 pub mod math;
 pub mod model;
 pub mod objects;
+pub mod objmotion;
 pub mod objtools;
 pub mod pick;
 pub mod props;
 pub mod recovery;
+pub mod selection;
 mod service;
 pub mod snap;
+pub mod summary;
 pub mod tools;
 
 pub use apply::{SceneCmd, SceneReply};
@@ -105,7 +111,7 @@ pub use model::{
     BulkData, ModMarks, ObjData, ObjFlags, ObjId, Object, RenderItem, SceneMeta, SceneState, ToolSettings,
     Transform,
 };
-pub use service::{LoadStatus, SceneService};
+pub use service::{LoadStatus, SceneFileHooks, SceneService};
 
 /// Why a scene could not be read or written. The texts are the C++ `SetLoadError` sentences.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

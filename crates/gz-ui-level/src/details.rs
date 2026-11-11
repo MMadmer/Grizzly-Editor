@@ -298,6 +298,10 @@ pub async fn set_value(
 
 /// Sends an edit; a refusal comes back as a toast.
 fn send(editor: &Arc<Editor>, target: usize, c: Commit) {
+    // the motion's buttons that need the frame clock, a file or a sheet
+    if target == SELECTION && crate::motion_ui::press(editor, &c.key, &c.text) {
+        return;
+    }
     let ed = editor.clone();
     let merge = c.live.then(|| SmolStr::new(format!("details:{}", c.key)));
     editor.exec.spawn(async move {
@@ -467,7 +471,26 @@ impl PropsPanel {
                 v.choosing = Some(key.clone());
                 v.chosen.clear();
             }
-            *chooser = Some(Chooser::new(Purpose::Property { target: t, key }, &label, list, &current));
+            // the orders' choosers (`OnFillOrderPaths`, `OnFillOrderTargets`): the scene's ways, and
+            // the player and the story ids of the scene's spawns
+            let items = if key.ends_with("Order\\Look path") || key.ends_with("Order\\Route") {
+                Some(snap.of_class(ObjClass::Way).map(|o| o.name.to_string()).collect::<Vec<_>>())
+            } else if key.ends_with("Order\\Target") {
+                let mut v = vec!["actor".to_owned()];
+                v.extend(scene_story_ids(&snap));
+                Some(v)
+            } else {
+                None
+            };
+            let mut c = Chooser::new(Purpose::Property { target: t, key: key.clone() }, &label, list, &current);
+            if let Some(items) = items {
+                c = c.with_items(items);
+            }
+            // a respawn point's profile takes several
+            if key.ends_with("Respawn Point\\Profile") {
+                c = c.multi();
+            }
+            *chooser = Some(c);
         }
         if let Some((key, label, text)) = open_text {
             let ids =
@@ -821,6 +844,34 @@ pub fn chooser_for(state: &SceneState, lib: &gz_scene::library::Library, key: &s
         ListKey::of_choose(list),
         if text == "<none>" { "" } else { &text },
     ))
+}
+
+/// The story ids of the scene's spawns (`CollectSceneStories`): `story_id = X` under
+/// `[story_object]` of the custom data, or the bare id right under the header.
+fn scene_story_ids(snap: &gz_scene::SceneState) -> Vec<String> {
+    let mut out = Vec::new();
+    for o in snap.of_class(ObjClass::SpawnPoint) {
+        let gz_scene::ObjData::Spawn(sd) = &o.data else { continue };
+        let Some(ini) = sd.entity.as_ref().and_then(|e| e.entity()).and_then(|e| e.custom_data()) else { continue };
+        let Some(at) = ini.find("[story_object]") else { continue };
+        for line in ini[at + "[story_object]".len()..].lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with('[') {
+                break;
+            }
+            match line.split_once('=') {
+                Some((k, v)) if k.trim() == "story_id" => out.push(v.trim().to_owned()),
+                Some(_) => {}
+                None => out.push(line.to_owned()),
+            }
+            break;
+        }
+    }
+    out.retain(|s| !s.is_empty());
+    out
 }
 
 /// Whether the class has a chooser-worthy target: the tools whose selection Details shows.

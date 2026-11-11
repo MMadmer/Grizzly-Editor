@@ -172,6 +172,16 @@ fn shade(world: vec3<f32>, normal: vec3<f32>, front: bool) -> vec3<f32> {
         return vec3<f32>(1.0);
     }
     var n = safe_normalize(normal);
+    // Shade Mode > Flat: the face's own normal
+    if ((frame.mode.z & 16u) != 0u) {
+        let f = cross(dpdx(world), dpdy(world));
+        if (dot(f, f) > 1e-12) {
+            n = normalize(f);
+            if (dot(n, normal) < 0.0) {
+                n = -n;
+            }
+        }
+    }
     // a two-sided surface seen from its back is lit on the side the camera sees
     if (!front) {
         n = -n;
@@ -186,7 +196,8 @@ fn shade(world: vec3<f32>, normal: vec3<f32>, front: bool) -> vec3<f32> {
 }
 
 fn fogged(c: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    if (frame.mode.x != MODE_GAME || frame.fog.y <= frame.fog.x) {
+    let fog_on = frame.mode.x == MODE_GAME || (frame.mode.z & 64u) != 0u;
+    if (!fog_on || frame.fog.y <= frame.fog.x) {
         return c;
     }
     let d = distance(world, frame.camera_pos.xyz);
@@ -195,7 +206,18 @@ fn fogged(c: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 }
 
 fn surface(in: VsOut) -> vec4<f32> {
-    return textureSample(base_tex, samp, in.uv) * material.color * in.color;
+    // Textures off: every surface white
+    if ((frame.mode.z & 32u) != 0u) {
+        return material.color * in.color;
+    }
+    let linear = textureSample(base_tex, samp, in.uv);
+    // Linear Filtering off: the nearest texel of the top level
+    if ((frame.mode.z & 128u) != 0u) {
+        let dims = vec2<f32>(textureDimensions(base_tex, 0));
+        let t = clamp(vec2<i32>(floor(fract(in.uv) * dims)), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
+        return textureLoad(base_tex, t, 0) * material.color * in.color;
+    }
+    return linear * material.color * in.color;
 }
 
 @fragment
@@ -283,7 +305,8 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_wire(in: VsOut) -> @location(0) vec4<f32> {
     let inst = instances[in.inst];
-    if (frame.mode.x != MODE_WIRE) {
+    // Edged Faces: the edges over the surfaces, in the wire colour
+    if (frame.mode.x != MODE_WIRE && (frame.mode.z & 256u) == 0u) {
         return vec4<f32>((material.color * in.color).rgb, 1.0);
     }
     let selected = (inst.flags & INST_SELECTED) != 0u && frame.mode.w != 0u;

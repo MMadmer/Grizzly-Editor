@@ -355,8 +355,19 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
         Act::DeselectAll if crate::bulktools::key(editor, "deselect_all") => {}
         Act::SelectAll if crate::bulktools::key(editor, "select_all") => {}
         Act::InvertSelection if crate::bulktools::key(editor, "invert_selection") => {}
-        Act::Delete => scene_cmd(editor, SceneCmd::DeleteSelected),
-        Act::DeselectAll => scene_cmd(editor, SceneCmd::SelectClass { class: None, select: false }),
+        // `RemoveSelection` / `SelectObjects(false, ..)` of the current tool's class
+        Act::Delete => {
+            if let Ok(svc) = SceneService::of(editor) {
+                let target = svc.store.snapshot().tools.target;
+                svc.store.post(SceneCmd::RemoveSelection { class: Some(target), label: "Delete".into() }, editor.ui_origin());
+            }
+        }
+        Act::DeselectAll => {
+            if let Ok(svc) = SceneService::of(editor) {
+                let target = svc.store.snapshot().tools.target;
+                svc.store.post(SceneCmd::SelectClass { class: Some(target), select: false }, editor.ui_origin());
+            }
+        }
         Act::SelectAll => {
             if let Ok(svc) = SceneService::of(editor) {
                 let target = svc.store.snapshot().tools.target;
@@ -388,12 +399,6 @@ pub fn run(editor: &Arc<Editor>, act: Act) {
         }
     }
     editor.exec.wake().ping();
-}
-
-fn scene_cmd(editor: &Arc<Editor>, cmd: SceneCmd) {
-    if let Ok(svc) = SceneService::of(editor) {
-        svc.store.post(cmd, editor.ui_origin());
-    }
 }
 
 /// Frame All / Frame Selection (`ZoomObject`): the current class's objects, or its selected

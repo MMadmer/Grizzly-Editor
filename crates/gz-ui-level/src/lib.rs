@@ -51,9 +51,11 @@ pub mod doc;
 pub mod dock;
 pub mod import;
 pub mod layout;
+pub mod level_cmds;
 pub mod lists;
 pub mod local;
 pub mod menus;
+mod motion_ui;
 pub mod outliner;
 pub mod outliner_model;
 pub mod recovery;
@@ -94,6 +96,7 @@ pub fn install(b: &mut ShellBuilder) {
         drawer: None,
     });
     menus::install(b);
+    level_cmds::install(b);
     status::install(b);
     recovery::install(b);
     import::install(b);

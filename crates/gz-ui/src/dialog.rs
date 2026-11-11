@@ -192,6 +192,8 @@ struct Shared {
     last: Vec<DialogInfo>,
     close_requests: Vec<String>,
     actions: Vec<Arc<dyn Fn() + Send + Sync>>,
+    /// Who answers every question while a caller's scope is held.
+    caller: Option<Asker>,
 }
 
 #[derive(Clone, Default)]
@@ -984,6 +986,30 @@ fn log_line(tone: Tone, what: &str, text_: &str) -> String {
     format!("{mark} {what}{sep}{text_}")
 }
 
+/// Held while a caller who has decided runs something of the window (an MCP caller's row of the
+/// command table): every question raised through this context meanwhile is that caller's to
+/// answer, whatever asker the code that raises it names. Dropped, each question has its own
+/// asker again.
+#[must_use]
+pub struct CallerScope(Context);
+
+impl Drop for CallerScope {
+    fn drop(&mut self) {
+        handle(&self.0).0.lock().caller = None;
+    }
+}
+
+/// Opens a [`CallerScope`] on the UI thread, for the length of a synchronous run.
+pub fn answer_as(ctx: &Context, caller: Asker) -> CallerScope {
+    handle(ctx).0.lock().caller = Some(caller);
+    CallerScope(ctx.clone())
+}
+
+/// The asker in force: the caller's while its scope is held.
+fn who(ctx: &Context, asker: Asker) -> Asker {
+    handle(ctx).0.lock().caller.unwrap_or(asker)
+}
+
 /// Asks to confirm an action. `Mcp` runs `then(Yes)` before returning, `Unattended` runs
 /// `then(No)`; both return the line to log. `Ui` queues the dialog and returns `None`.
 pub fn confirm(
@@ -993,7 +1019,7 @@ pub fn confirm(
     then: impl FnOnce(Answer) + Send + 'static,
 ) -> Option<String> {
     let what = or(&spec.headline, or(&spec.title, "Confirm")).to_owned();
-    match asker {
+    match who(ctx, asker) {
         Asker::Mcp => {
             then(Answer::Yes);
             Some(format!("* [mcp] {what} -> Yes"))
@@ -1022,7 +1048,7 @@ pub fn unsaved_prompt(
     then: impl FnOnce(Answer) + Send + 'static,
 ) -> Option<String> {
     let joined = what.join(", ");
-    match asker {
+    match who(ctx, asker) {
         Asker::Mcp => {
             then(Answer::Cancel);
             Some(format!("* [mcp] unsaved changes ({joined}) -> Cancel"))
@@ -1053,7 +1079,7 @@ pub fn unsaved_prompt(
 /// opens it.
 pub fn notice(ctx: &Context, asker: Asker, tone: Tone, title: &str, text_: &str) -> Option<String> {
     let line = log_line(tone, title, text_);
-    if asker == Asker::Ui {
+    if who(ctx, asker) == Asker::Ui {
         let fallback = match tone {
             Tone::Error => "Error",
             Tone::Warning => "Warning",
@@ -1079,7 +1105,7 @@ pub fn result(ctx: &Context, asker: Asker, spec: ResultSpec) -> Option<String> {
         lines.push_str("\n~ ");
         lines.push_str(w);
     }
-    if asker == Asker::Ui {
+    if who(ctx, asker) == Asker::Ui {
         let title = or(&spec.title, "Result").to_owned();
         let name = full_name(or(&spec.id, "result"));
         queue(ctx, QKind::Result(spec), title, name, None);

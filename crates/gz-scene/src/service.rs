@@ -342,8 +342,34 @@ pub async fn load_scene(editor: &Arc<Editor>, svc: &Arc<SceneService>, file: Pat
     result
 }
 
+/// Who is told of a scene loaded or saved (`EPrefs->AppendRecentFile`): File > Recent Scene.
+#[derive(Default)]
+pub struct SceneFileHooks {
+    hooks: parking_lot::RwLock<Vec<FileHook>>,
+}
+
+type FileHook = Box<dyn Fn(&Editor, &Path) + Send + Sync>;
+
+impl SceneFileHooks {
+    pub fn of(editor: &Editor) -> Arc<SceneFileHooks> {
+        editor.services.get_or_init(SceneFileHooks::default)
+    }
+
+    /// `f` runs after every scene load and save that succeeded, with the scene's file.
+    pub fn on_file(&self, f: impl Fn(&Editor, &Path) + Send + Sync + 'static) {
+        self.hooks.write().push(Box::new(f));
+    }
+
+    fn fire(&self, editor: &Editor, file: &Path) {
+        for h in self.hooks.read().iter() {
+            h(editor, file);
+        }
+    }
+}
+
 /// `Project::note_scene`: the project's `last_scene` follows the open scene.
 pub(crate) fn note_scene(editor: &Arc<Editor>, svc: &SceneService, file: &Path) {
+    SceneFileHooks::of(editor).fire(editor, file);
     if let Ok((_, project)) = gz_project::Project::of(editor) {
         project.note_scene(RelPath::from_fs(&svc.root, file));
     }

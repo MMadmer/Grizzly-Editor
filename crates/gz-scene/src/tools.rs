@@ -425,6 +425,12 @@ impl Default for ObjectTool {
 
 /// `flAppendRandom`: cleared on every load.
 pub const FL_APPEND_RANDOM: u32 = 1 << 29;
+/// `flAppendRandomScaleProportional`: one random factor for the three axes.
+pub const FL_APPEND_RANDOM_PROPORTIONAL: u32 = 1 << 28;
+/// `flAppendRandomScale`.
+pub const FL_APPEND_RANDOM_SCALE: u32 = 1 << 30;
+/// `flAppendRandomRotation`.
+pub const FL_APPEND_RANDOM_ROTATION: u32 = 1 << 31;
 
 /// The class-specific settings of a tool.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -773,6 +779,8 @@ pub struct ToolSettings {
     pub obj: crate::objtools::ObjToolState,
     /// The switches of the AI map panel and the detail slots' selection (not saved).
     pub bulk: crate::bulk::BulkToolState,
+    /// The compiler's error list the viewport draws (not saved; Build > Import Error List).
+    pub debug: Arc<crate::debug::DebugDraw>,
 }
 
 impl Default for ToolSettings {
@@ -785,6 +793,7 @@ impl Default for ToolSettings {
             snap_pick: false,
             obj: crate::objtools::ObjToolState::default(),
             bulk: crate::bulk::BulkToolState::default(),
+            debug: Arc::new(crate::debug::DebugDraw::default()),
         }
     }
 }

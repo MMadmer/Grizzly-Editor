@@ -514,11 +514,58 @@ pub fn build(state: &SceneState, lib: &Library, assets: &Assets, opts: &DrawOpti
             ObjData::Kept(_) => h.cross(p, VIS_RADIUS, false, Color::rgb(160, 160, 160), true),
         }
     }
+    debug_draw(&mut out.list.helpers, &state.tools.debug);
     if let Some((env, lights)) = &opts.game {
         out.list.environment = Some(env.clone());
         out.list.lights.clone_from(lights);
     }
     out
+}
+
+/// `CToolCustom::Render`: the compiler's error list - points, lines and faces, each with its
+/// crosses and its caption ("P: 3", "L: 0", "F: 12" or the point's own text).
+fn debug_draw(h: &mut gz_render::Helpers, d: &gz_scene::debug::DebugDraw) {
+    // `DrawCross(p, 0.01, ...)`
+    let cross = |h: &mut gz_render::Helpers, p: Vec3, c: Color| h.cross(p, 0.01, false, c, false);
+    let mut n = 0;
+    for pt in &d.points {
+        let c = Color::from_argb(pt.color);
+        let mut text = String::new();
+        if pt.numbered {
+            text = format!("P: {n}");
+            n += 1;
+        }
+        if !pt.descr.is_empty() {
+            text.clone_from(&pt.descr);
+        }
+        cross(h, pt.p, c);
+        if !text.is_empty() {
+            h.label(pt.p, text, c, false);
+        }
+    }
+    let mut n = 0;
+    for l in &d.lines {
+        let c = Color::from_argb(l.color);
+        cross(h, l.p[0], c);
+        cross(h, l.p[1], c);
+        h.line(l.p[0], l.p[1], c, false);
+        if l.numbered {
+            h.label(l.p[0], format!("L: {n}"), c, false);
+            n += 1;
+        }
+    }
+    let mut n = 0;
+    for f in &d.wire_faces {
+        let c = Color::from_argb(f.color);
+        for k in 0..3 {
+            cross(h, f.p[k], c);
+            h.line(f.p[k], f.p[(k + 1) % 3], c, false);
+        }
+        if f.numbered {
+            h.label(f.p[0], format!("F: {n}"), c, false);
+            n += 1;
+        }
+    }
 }
 
 /// Which instances a frustum sees, from the scene's own pick tree: scene objects by the tree's

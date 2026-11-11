@@ -74,7 +74,8 @@ fn tool_name(action: Action, gizmo: GizmoType) -> &'static str {
 }
 
 /// Registers `camera_get`, `camera_set`, `focus_object`, `viewport_navigation`,
-/// `viewport_controls`, `view_mode`, `game_lighting`, `frame_pacing`, `screenshot_viewport`.
+/// `viewport_controls`, `view_mode`, `game_lighting`, `frame_pacing`, `screenshot_viewport`,
+/// `group_thumbnail`.
 pub fn register(reg: &mut Registry) {
     reg.add_sync(AREA, "camera_get", |ed, _a, _o| Ok(json!({ "camera": camera_json(&Viewport::of(ed)) })));
     reg.add(AREA, "camera_set", |ed, a, _o| async move { camera_set(&ed, &a) });
@@ -85,6 +86,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "game_lighting", |ed, a, _o| async move { game_lighting(&ed, &a).await });
     reg.add(AREA, "frame_pacing", |ed, a, _o| async move { frame_pacing(&ed, &a) });
     reg.add(AREA, "screenshot_viewport", |ed, _a, _o| async move { screenshot_viewport(&ed).await });
+    reg.add(AREA, "group_thumbnail", |ed, _a, _o| async move { group_thumbnail(&ed).await });
     reg.add(AREA, "particles_tool", |ed, a, _o| crate::draw_particles::particles_tool(ed, a));
 }
 
@@ -541,6 +543,62 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         "waits": 0,
         "waited_ms": 0.0,
     }))
+}
+
+/// The Group tool's Make Thumbnail (`ESceneGroupTool::MakeThumbnail`): the one selected group
+/// as the viewport shows it - the scene's own pass, without grid, selection or helpers - as the
+/// `.thm` beside its library `.group`, naming the group's objects, its age the group file's.
+/// The C++ writes `$objects$\<scene name>.thm`, where no reader looks; this is where the Groups
+/// chooser reads a group's picture.
+async fn group_thumbnail(ed: &Arc<Editor>) -> Reply {
+    let svc = SceneService::of(ed)?;
+    let snap = svc.store.snapshot();
+    let groups: Vec<_> =
+        snap.of_class(gz_scene::ObjClass::Group).filter(|g| snap.is_selected(g.id)).cloned().collect();
+    let [group] = groups.as_slice() else {
+        return Err(CmdError::invalid("Select 1 GroupObject."));
+    };
+    let gz_scene::ObjData::Group(gd) = &group.data else {
+        return Err(CmdError::invalid("Select 1 GroupObject."));
+    };
+    if gd.reference.is_empty() {
+        return Err(CmdError::invalid(format!("ERROR: '{}' - has empty reference.", group.name)));
+    }
+    let objects: Vec<String> = gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
+    let image = crate::service::capture_preview(ed).await.map_err(|_| CmdError::invalid("Can't make screenshot."))?;
+    let rel = gd.reference.replace('/', "\\");
+    let dir = svc.root.join("rawdata").join("groups");
+    let (group_file, thm_file) = (dir.join(format!("{rel}.group")), dir.join(format!("{rel}.thm")));
+    let thm = thm_file.clone();
+    ed.exec
+        .io(move || -> Result<(), String> {
+            // the middle square of the picture, boxed down to the thumbnail's side
+            let side = image.width.min(image.height).max(1);
+            let (x0, y0) = ((image.width - side) / 2, (image.height - side) / 2);
+            let mut square = Vec::with_capacity((side * side * 4) as usize);
+            for y in y0..y0 + side {
+                let at = ((y * image.width + x0) * 4) as usize;
+                square.extend_from_slice(&image.rgba[at..at + (side * 4) as usize]);
+            }
+            let square = gz_fmt_tex::Image { width: side, height: side, rgba: square };
+            let t = gz_fmt_tex::THUMB_SIDE;
+            let small = gz_fmt_tex::resize(&square, t, t, gz_fmt_tex::MipFilter::Box).map_err(|e| e.to_string())?;
+            let bytes = gz_fmt_tex::write_group_thm(&gz_fmt_tex::GroupThm { pixels: small.rgba, objects })
+                .map_err(|e| e.to_string())?;
+            if let Some(d) = thm.parent() {
+                std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&thm, bytes).map_err(|e| e.to_string())?;
+            if let Ok(age) = std::fs::metadata(&group_file).and_then(|m| m.modified())
+                && let Ok(f) = std::fs::File::options().write(true).open(&thm)
+            {
+                let _ = f.set_modified(age);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| CmdError::io(format!("Can't save thumbnail: {} ({e})", thm_file.display())))?;
+    Ok(json!({ "file": thm_file.display().to_string() }))
 }
 
 async fn screenshot_viewport(ed: &Arc<Editor>) -> Reply {

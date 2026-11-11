@@ -312,6 +312,61 @@ impl EditorSettings {
         s.dirty = true;
     }
 
+    /// File > Recent Scene: `[editor_prefs] recent_files_N`, newest first, as the C++ keeps it.
+    #[must_use]
+    pub fn recent_scenes(&self) -> Vec<String> {
+        let s = self.inner.lock();
+        let mut out: Vec<String> = Vec::new();
+        for i in 0..64 {
+            let Some(v) = s.doc.get("editor_prefs", &format!("recent_files_{i}")) else { continue };
+            let v = gz_ltx::doc::unquote(v).to_owned();
+            if !v.is_empty() && !out.contains(&v) {
+                out.push(v);
+            }
+        }
+        out
+    }
+
+    /// `CCustomPreferences::AppendRecentFile`: `name` goes first, the list keeps fewer than
+    /// `scene_recent_count` entries.
+    pub fn add_recent_scene(&self, name: &str) {
+        let limit = self.pref("scene_recent_count").unwrap_or(10.0).max(0.0) as usize;
+        let mut list = self.recent_scenes();
+        list.retain(|n| n != name);
+        list.insert(0, name.to_owned());
+        // oracle: `while (size >= scene_recent_count) pop_back` keeps one fewer than the count
+        while !list.is_empty() && list.len() >= limit {
+            list.pop();
+        }
+        let mut s = self.inner.lock();
+        for i in 0..64 {
+            let key = format!("recent_files_{i}");
+            match list.get(i) {
+                Some(n) => s.doc.set("editor_prefs", &key, &gz_ltx::doc::quote(n)),
+                None => {
+                    s.doc.remove("editor_prefs", &key);
+                }
+            }
+        }
+        s.dirty = true;
+    }
+
+    /// `[editor_prefs] tools_settings`: the tool switches (`CToolCustom::m_Settings`, `ETFlags`),
+    /// `None` while the file holds none.
+    #[must_use]
+    pub fn tools_settings(&self) -> Option<u32> {
+        let s = self.inner.lock();
+        s.doc.get("editor_prefs", "tools_settings").and_then(|v| v.trim().parse().ok())
+    }
+
+    pub fn set_tools_settings(&self, flags: u32) {
+        let mut s = self.inner.lock();
+        if s.doc.get("editor_prefs", "tools_settings").and_then(|v| v.trim().parse::<u32>().ok()) != Some(flags) {
+            s.doc.set("editor_prefs", "tools_settings", &flags.to_string());
+            s.dirty = true;
+        }
+    }
+
     /// A switch of the View menu kept with the render settings: `mute_sounds`
     /// (`rsMuteSounds`), `real_time` (`rsRenderRealTime`).
     #[must_use]

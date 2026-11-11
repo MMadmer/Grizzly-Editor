@@ -393,11 +393,10 @@ pub fn som(scene: &SceneState, lib: Lookup<'_>, engine: &Engine) -> Result<Optio
 /// The AI Map tool's nodes as the scene holds them.
 #[must_use]
 pub fn ai_nodes(scene: &SceneState) -> Option<(Vec<gz_fmt_level::AiMapNode>, gz_fmt_level::AiParams)> {
+    // the tool's exact nodes, as the C++ exports them (the packed ones are rounded)
     let part = scene.bulk.ai_map.as_ref()?;
-    let mut map = part.header.clone();
-    map.nodes = part.tiles.iter().flat_map(|t| t.iter().copied()).collect::<Vec<_>>().into();
-    let (nodes, _) = map.decode_nodes();
-    (!nodes.is_empty()).then_some((nodes, map.params))
+    let nodes = part.all_nodes();
+    (!nodes.is_empty()).then_some((nodes, part.header.params))
 }
 
 /// `ESceneAIMapTool::Export`: `build.aimap`. `None` for an empty map.

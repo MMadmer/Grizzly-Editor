@@ -7,13 +7,15 @@
 //! become the bones of a rigid skeleton (`meshes\brkbl#N.ogf` beside the level, a
 //! `breakable_object` naming it) or a box shape (`climable_object`).
 //!
+//! Where this differs from the C++ of this repository: its `VCPacked::add_vert` lost its vertex
+//! lookup (the body is what is left of the SDK's welding), so no two faces share a corner, every
+//! face is a part of its own without a neighbour and is refused - the C++ editor of the branch
+//! point writes no breakable or climable object, only "Error face found at pos ..." and "Can't
+//! export invalid part #N" per face. That is a bug of the fork, not a rule: [`VcPacked`] welds as
+//! the SDK did (a 24 x 16 x 24 grid over the tool's box, a corner joins an earlier one within
+//! `EPS_L` found through its cell), so connected faces make parts and the parts export.
+//!
 //! What the C++ does, kept because the files follow it:
-//! - `VCPacked::add_vert` of this editor no longer welds (its hash grid was taken out): every
-//!   face corner is a vertex of its own, so no two faces share one, every face is a part of its
-//!   own, has no neighbour, and `prepare` refuses it ("Error face found at pos ..."). A build
-//!   therefore writes no breakable or climable object, only those errors and "Can't export
-//!   invalid part #N" per face. The rest is ported all the same and runs where parts have
-//!   neighbours.
 //! - The fragments' sizes come from `Random.randI`, the engine's global generator seeded from
 //!   the CPU clock at start and advanced by everything before; here a generator of its own
 //!   starts at 1 (`CRandom`'s default).
@@ -173,19 +175,132 @@ struct Extractor {
     adjs: Vec<Vec<usize>>,
     parts: Vec<Part>,
     face_min: u32,
+    packer: Option<VcPacked>,
+}
+
+/// The SDK's `VCPacked` (`GeometryCollector.cpp`): corners welded within `eps`, looked up
+/// through a grid of 24 x 16 x 24 cells over a box; a new corner is entered into its cell and
+/// the cells its `+VMeps` corner reaches.
+struct VcPacked {
+    verts: Vec<Vec3>,
+    cells: Vec<Vec<u32>>,
+    min: Vec3,
+    scale: Vec3,
+    veps: Vec3,
+    eps: f32,
+    clp: [u32; 3],
+}
+
+/// The engine's `EPS_L`.
+const ENGINE_EPS_L: f32 = 0.001;
+
+impl VcPacked {
+    fn new(bb: &Aabb, eps: f32) -> Self {
+        let clp = [23u32, 15, 23];
+        let scale = bb.max - bb.min;
+        let mut veps = Vec3::new(
+            scale.x / clp[0] as f32 / 2.0,
+            scale.y / clp[1] as f32 / 2.0,
+            scale.z / clp[2] as f32 / 2.0,
+        );
+        for a in 0..3 {
+            if veps[a] >= ENGINE_EPS_L {
+                veps[a] = ENGINE_EPS_L;
+            }
+        }
+        let n = ((clp[0] + 1) * (clp[1] + 1) * (clp[2] + 1)) as usize;
+        Self { verts: Vec::new(), cells: vec![Vec::new(); n], min: bb.min, scale, veps, eps, clp }
+    }
+
+    /// The cell index on one axis: `iFloor`, the `u32` it is stored in clamped to the grid (a
+    /// negative one wraps and ends at the last cell, as in the C++).
+    fn axis(&self, v: f32, a: usize) -> u32 {
+        let f = (v - self.min[a]) / self.scale[a] * self.clp[a] as f32;
+        let i = if f.is_finite() { i_floor(f) } else { 0 };
+        (i as u32).min(self.clp[a])
+    }
+
+    fn cell(&self, x: u32, y: u32, z: u32) -> usize {
+        ((x * (self.clp[1] + 1) + y) * (self.clp[2] + 1) + z) as usize
+    }
+
+    fn similar(a: Vec3, b: Vec3, e: f32) -> bool {
+        (a.x - b.x).abs() < e && (a.y - b.y).abs() < e && (a.z - b.z).abs() < e
+    }
+
+    fn add_vert(&mut self, v: Vec3) -> u32 {
+        let (ix, iy, iz) = (self.axis(v.x, 0), self.axis(v.y, 1), self.axis(v.z, 2));
+        let c = self.cell(ix, iy, iz);
+        if let Some(cell) = self.cells.get(c)
+            && let Some(p) = cell.iter().copied().find(|i| {
+                self.verts.get(*i as usize).is_some_and(|w| Self::similar(*w, v, self.eps))
+            })
+        {
+            return p;
+        }
+        let p = self.verts.len() as u32;
+        self.verts.push(v);
+        let e = v + self.veps;
+        let (ex, ey, ez) = (self.axis(e.x, 0), self.axis(e.y, 1), self.axis(e.z, 2));
+        let mut put = |x: u32, y: u32, z: u32| {
+            let i = ((x * (self.clp[1] + 1) + y) * (self.clp[2] + 1) + z) as usize;
+            if let Some(cell) = self.cells.get_mut(i) {
+                cell.push(p);
+            }
+        };
+        put(ix, iy, iz);
+        if ex != ix {
+            put(ex, iy, iz);
+        }
+        if ey != iy {
+            put(ix, ey, iz);
+        }
+        if ez != iz {
+            put(ix, iy, ez);
+        }
+        if ex != ix && ey != iy {
+            put(ex, ey, iz);
+        }
+        if ex != ix && ez != iz {
+            put(ex, iy, ez);
+        }
+        if ey != iy && ez != iz {
+            put(ix, ey, ez);
+        }
+        if ex != ix && ey != iy && ez != iz {
+            put(ex, ey, ez);
+        }
+        p
+    }
 }
 
 impl Extractor {
     fn new(face_min: u32) -> Self {
-        Self { surfaces: Vec::new(), faces: Vec::new(), verts: 0, adjs: Vec::new(), parts: Vec::new(), face_min }
+        Self {
+            surfaces: Vec::new(),
+            faces: Vec::new(),
+            verts: 0,
+            adjs: Vec::new(),
+            parts: Vec::new(),
+            face_min,
+            packer: None,
+        }
     }
 
-    /// `AppendFace`; `VCPacked::add_vert` hands out a new vertex for every corner.
+    /// `Initialize(bb, eps, ..)`: the welding grid over the tool's box.
+    fn init(&mut self, bb: &Aabb, eps: f32) {
+        self.packer = Some(VcPacked::new(bb, eps));
+    }
+
+    /// `AppendFace`: each corner welded onto an earlier one it is `similar` to.
     fn append_face(&mut self, surf: usize, v: [Vec3; 3], n: [Vec3; 3], uv: [Vec2; 3]) {
         let mut vert_id = [0usize; 3];
-        for id in &mut vert_id {
-            *id = self.verts;
-            self.verts += 1;
+        for (k, id) in vert_id.iter_mut().enumerate() {
+            *id = match self.packer.as_mut() {
+                Some(p) => p.add_vert(v[k]) as usize,
+                None => self.verts,
+            };
+            self.verts = self.verts.max(*id + 1);
         }
         self.faces.push(Face { vert_id, marked: false, adjs: Vec::new(), o: v, n, uv, bone_id: -1, surf });
     }
@@ -599,10 +714,22 @@ fn gather(
     ok
 }
 
-/// `ESceneObjectTool::GetBox`: whether any scene object has a box.
-fn tool_has_box(scene: &SceneState, lib: Lookup<'_>) -> bool {
+/// `ESceneObjectTool::GetBox`: the box of every scene object that has one.
+fn tool_box(scene: &SceneState, lib: Lookup<'_>) -> Option<Aabb> {
     let local = |r: &str| lib(r).map(|o| o.bounds);
-    scene.of_class(ObjClass::SceneObject).any(|o| gz_scene::objects::world_box(scene, o, &local).is_some())
+    let mut bb: Option<Aabb> = None;
+    for o in scene.of_class(ObjClass::SceneObject) {
+        let Some(b) = gz_scene::objects::world_box(scene, o, &local) else { continue };
+        let (lo, hi) = (Vec3::new(b.min.x, b.min.y, b.min.z), Vec3::new(b.max.x, b.max.y, b.max.z));
+        match &mut bb {
+            Some(a) => {
+                a.modify(lo);
+                a.modify(hi);
+            }
+            None => bb = Some(Aabb { min: lo, max: hi }),
+        }
+    }
+    bb
 }
 
 /// An entity of `section`, named and placed.
@@ -626,10 +753,11 @@ fn breakables(
     rng: &mut Random,
     out: &mut Exported,
 ) -> Result<bool> {
-    if !tool_has_box(scene, lib) {
+    let Some(bb) = tool_box(scene, lib) else {
         return Ok(false);
-    }
+    };
     let mut ex = Extractor::new(2);
+    ex.init(&bb, ENGINE_EPS_L);
     let mut ok = gather(scene, lib, engine, mtl_flags::BREAKABLE, false, &mut ex, &mut out.log);
     ex.process(rng, &mut out.log)?;
     if !ok {
@@ -691,27 +819,6 @@ fn orient_to_norm(n: &mut Vec3, rotate: &mut [Vec3; 3], hs: Vec3) -> bool {
     true
 }
 
-/// The climable's material (`set_additional_info`): `gz-entities` writes the class default,
-/// the last string of the state; it is put in its place and the state's size made right.
-fn with_material(packet: Vec<u8>, default: &str, material: &str) -> Option<Vec<u8>> {
-    let (old, _) = gz_base::text::utf8_to_cp1251(default);
-    let (new, _) = gz_base::text::utf8_to_cp1251(material);
-    let tail = old.len() + 1;
-    let cut = packet.len().checked_sub(tail)?;
-    if packet.get(cut..packet.len() - 1)? != &old[..] || packet.last() != Some(&0) {
-        return None;
-    }
-    let at = crate::spawn::state_size_offset(&packet)?;
-    let size = u16::from_le_bytes([*packet.get(at)?, *packet.get(at + 1)?]);
-    let size = usize::from(size).checked_sub(tail)? + new.len() + 1;
-    let mut out = packet;
-    out.truncate(cut);
-    out.extend_from_slice(&new);
-    out.push(0);
-    out.get_mut(at..at + 2)?.copy_from_slice(&u16::try_from(size).ok()?.to_le_bytes());
-    Some(out)
-}
-
 /// `ExportClimableObjects`.
 fn climables(
     scene: &SceneState,
@@ -721,10 +828,11 @@ fn climables(
     rng: &mut Random,
     out: &mut Exported,
 ) -> Result<bool> {
-    if !tool_has_box(scene, lib) {
+    let Some(bb) = tool_box(scene, lib) else {
         return Ok(false);
-    }
+    };
     let mut ex = Extractor::new(i32::MAX as u32);
+    ex.init(&bb, ENGINE_EPS_L);
     let ok = gather(scene, lib, engine, mtl_flags::CLIMABLE, true, &mut ex, &mut out.log);
     ex.process(rng, &mut out.log)?;
     if !ok {
@@ -765,15 +873,10 @@ fn climables(
         let mut e = entity("climable_object", settings, &sn, p.ref_offset, p.ref_rotate)?;
         e.set_shapes(&[shape])
             .map_err(|err| BuildError::new(format!("Can't shape '{sn}': {err}")))?;
-        let packet = e.to_spawn_packet();
-        let default = gz_entities::model::Climable::default().material;
-        let packet = if material == default {
-            packet
-        } else {
-            with_material(packet, &default, &material)
-                .ok_or_else(|| BuildError::new(format!("Can't set the material of '{sn}'.")))?
-        };
-        out.spawns.push(packet);
+        // `set_additional_info`: the material of the faces
+        e.set_climable_material(&material)
+            .map_err(|err| BuildError::new(format!("Can't set the material of '{sn}': {err}")))?;
+        out.spawns.push(e.to_spawn_packet());
     }
     Ok(ok)
 }
@@ -851,7 +954,7 @@ mod tests {
 
     #[test]
     fn two_boxes_without_welding_give_a_part_per_face_none_valid() {
-        // what the C++ build does with any scene: no corner is shared
+        // what the C++ build of this repository does with any scene: no corner is shared
         let mut ex = Extractor::new(2);
         ex.surfaces.push(surf());
         box_faces(&mut ex, Vec3::ZERO, 1.0, false);
@@ -862,6 +965,32 @@ mod tests {
         assert!(ex.parts.iter().all(|p| !p.valid && p.faces.len() == 1));
         assert_eq!(log.len(), 24);
         assert_eq!(log[0], "Error face found at pos: [-1.00,-1.00,-1.00]");
+    }
+
+    #[test]
+    fn welded_corners_make_two_boxes_two_parts() {
+        // the SDK's welding: the corners the faces of a box share are found through the grid
+        let mut ex = Extractor::new(2);
+        ex.init(&Aabb { min: Vec3::new(-1.0, -1.0, -1.0), max: Vec3::new(3.0, 1.0, 1.0) }, ENGINE_EPS_L);
+        ex.surfaces.push(surf());
+        box_faces(&mut ex, Vec3::ZERO, 1.0, false);
+        box_faces(&mut ex, Vec3::new(2.0, 0.0, 0.0), 1.0, false);
+        assert_eq!(ex.verts, 16);
+        let mut log = Vec::new();
+        ex.process(&mut Random(1), &mut log).unwrap();
+        assert!(log.is_empty(), "{log:?}");
+        assert_eq!(ex.parts.len(), 2);
+        assert!(ex.parts.iter().all(|p| p.valid && p.faces.len() == 12));
+    }
+
+    #[test]
+    fn a_corner_near_a_cell_edge_is_found_from_the_next_cell() {
+        let mut v = VcPacked::new(&Aabb { min: Vec3::ZERO, max: Vec3::splat(23.0) }, ENGINE_EPS_L);
+        let a = v.add_vert(Vec3::new(0.9999, 0.5, 0.5));
+        let b = v.add_vert(Vec3::new(1.0003, 0.5, 0.5));
+        let c = v.add_vert(Vec3::new(1.5, 0.5, 0.5));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 
     #[test]
@@ -896,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_of_two_climable_boxes_exports_what_the_cpp_does() {
+    fn a_scene_of_two_climable_boxes_gives_two_parts() {
         use std::path::PathBuf;
         use std::sync::Arc;
 
@@ -970,13 +1099,18 @@ mod tests {
             o.xform.position = Vec3::new(x, 0.0, 0.0);
             scene.insert(o);
         }
-        let (ok, out) = export(&scene, &look, &engine, None).unwrap();
-        // nothing is breakable; every climable face is a part of its own and none is valid, so
-        // nothing reaches the spawn and no entity is made (no configs are needed)
-        assert!(ok);
-        assert!(out.spawns.is_empty() && out.meshes.is_empty());
-        assert_eq!(out.log.iter().filter(|l| l.starts_with("Error face found at pos: [")).count(), 24);
-        assert_eq!(out.log.last().map(String::as_str), Some("Can't export invalid part #23"));
+        // nothing is breakable; the two climable boxes share no face: two parts, both valid
+        let bb = tool_box(&scene, &look).unwrap();
+        let mut ex = Extractor::new(i32::MAX as u32);
+        ex.init(&bb, ENGINE_EPS_L);
+        let mut log = Vec::new();
+        assert!(gather(&scene, &look, &engine, mtl_flags::CLIMABLE, true, &mut ex, &mut log));
+        ex.process(&mut Random(1), &mut log).unwrap();
+        assert_eq!(ex.parts.len(), 2);
+        assert!(ex.parts.iter().all(|p| p.valid && p.faces.len() == 12));
+        // the export reaches the climable objects, which need the game's configs
+        let made = export(&scene, &look, &engine, None);
+        assert!(made.is_err_and(|e| e.0 == "Can't create 'climable_object': the game's configs are not loaded."));
         // a surface whose material the library lacks fails the export
         let empty = Engine { materials: Some(GameMaterials::default()), ..Engine::default() };
         let (ok, out) = export(&scene, &look, &empty, None).unwrap();

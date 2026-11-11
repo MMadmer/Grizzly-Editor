@@ -987,3 +987,186 @@ pub fn compile(
     };
     Ok(Compiled { project, stat, lod_textures, log: b.log })
 }
+
+/// `_splitpath(name, 0, dir, fname, 0)`: the folder (with its last backslash) and the name
+/// without its extension.
+fn split_tex(name: &str) -> (&str, &str) {
+    let cut = name.rfind(['\\', '/']).map_or(0, |i| i + 1);
+    let (dir, file) = name.split_at(cut);
+    let stem = file.rfind('.').map_or(file, |i| &file[..i]);
+    (dir, stem)
+}
+
+/// `IWriter::w_string`: the text and a line end.
+fn w_line(out: &mut String, s: &str) {
+    out.push_str(s);
+    out.push_str("\r\n");
+}
+
+/// `%f`.
+fn f6(v: f32) -> String {
+    format!("{:.6}", f64::from(v))
+}
+
+/// What Scene > Export ... as OBJ writes: the `.obj` text and its `.mtl`.
+#[derive(Clone, Debug)]
+pub struct ObjExport {
+    pub obj: String,
+    pub mtl: String,
+    pub objects: usize,
+}
+
+/// `EScene::ExportObj`: `SceneBuilder::Compile` with `m_save_as_object` - the static and
+/// multiple-usage scene objects (the selected ones with `selected_only`) built into world space
+/// with Z turned round, every multiple-usage object a model of its own - then
+/// `SaveBuildAsObject`. `obj_name` is the `.obj` file's stem (its `mtllib` line).
+pub fn export_obj(
+    scene: &SceneState,
+    lib: Lookup<'_>,
+    engine: &Engine,
+    selected_only: bool,
+    obj_name: &str,
+) -> Result<ObjExport> {
+    let no_lods = |_: &str| None;
+    let cx = Ctx { engine, quality: scene.meta.level.build.quality, lods: &no_lods };
+    let mut b = Builder::default();
+    let sectors = Sectors::new(scene, lib);
+    let mut cv = Mat4::IDENTITY;
+    cv.0[2][2] = -1.0;
+    let mut objects = 0;
+    for o in scene.of_class(ObjClass::SceneObject) {
+        if selected_only && !scene.is_selected(o.id) {
+            continue;
+        }
+        let Some(lo) = reference(o).and_then(lib) else { continue };
+        let surfaces = object_surfaces(o, &lo);
+        let world = o.world();
+        let tm = Mat4::mul(&cv, &Mat4::mul(&Mat4::mul(&cv, &world), &cv));
+        let fail = |e: BuildError| BuildError::new(format!("{}\nFailed to build object: '{}'", e.0, o.name));
+        if is_static(&lo.object) {
+            let mut out = (std::mem::take(&mut b.verts), std::mem::take(&mut b.faces), std::mem::take(&mut b.smgroups));
+            for m in &lo.object.meshes {
+                let sector = sectors.of_mesh(&o.name, &m.name);
+                b.mesh(&cx, &tm, &world, o, &lo, &surfaces, m, sector, &mut out).map_err(fail)?;
+            }
+            (b.verts, b.faces, b.smgroups) = out;
+            objects += 1;
+        } else if is_mu_static(&lo.object) {
+            let first = lo.object.meshes.first().map_or(String::new(), |m| m.name.to_string());
+            let sector = sectors.of_mesh(&o.name, &first);
+            let mut out = (Vec::new(), Vec::new(), Vec::new());
+            for m in &lo.object.meshes {
+                b.mesh(&cx, &tm, &world, o, &lo, &surfaces, m, sector, &mut out).map_err(fail)?;
+            }
+            b.mu_models.push(MuModel {
+                name: lo.name.clone(),
+                verts: out.0,
+                faces: out.1,
+                lod_id: u16::MAX,
+                smooth_groups: out.2,
+            });
+            objects += 1;
+        }
+    }
+    // SaveBuildAsObject
+    let texture_of = |material: u16| -> &str {
+        b.materials
+            .get(usize::from(material))
+            .and_then(|m| b.textures.get(usize::from(m.surface)))
+            .map_or("", String::as_str)
+    };
+    let mut mtl = String::new();
+    for m in &b.materials {
+        let name = b.textures.get(usize::from(m.surface)).map_or("", String::as_str);
+        let (dir, stem) = split_tex(name);
+        w_line(&mut mtl, &format!("newmtl {stem}"));
+        w_line(&mut mtl, "Ka  0 0 0");
+        w_line(&mut mtl, "Kd  1 1 1");
+        w_line(&mut mtl, "Ks  0 0 0");
+        // oracle: the C++ format ends in its own "\n" before the line end
+        w_line(&mut mtl, &format!("map_Kd T:\\\\{dir}\\{stem}.tga\n"));
+    }
+    let mut obj = String::new();
+    let mut faces = String::new();
+    w_line(&mut obj, "# This file uses meters as units for non-parametric coordinates.");
+    w_line(&mut obj, &format!("mtllib {obj_name}.mtl"));
+    w_line(&mut obj, "g default");
+    let v = |out: &mut String, p: &Vec3| {
+        w_line(out, &format!("v {} {} {}", f6(p.x * 100.0), f6(p.y * 100.0), f6(p.z * 100.0)));
+    };
+    let vt = |out: &mut String, f: &BuildFace| {
+        for t in &f.t {
+            w_line(out, &format!("vt {} {}", f6(t.x), f6(1.0 - t.y)));
+        }
+    };
+    for p in &b.verts {
+        v(&mut obj, p);
+    }
+    for f in &b.faces {
+        vt(&mut faces, f);
+    }
+    let mut total_tcs = b.faces.len() * 3;
+    let mut last: Option<&str> = None;
+    for (idx, f) in b.faces.iter().enumerate() {
+        let t = texture_of(f.material);
+        if last != Some(t) {
+            w_line(&mut faces, &format!("usemtl {}", split_tex(t).1));
+            last = Some(t);
+        }
+        w_line(
+            &mut faces,
+            &format!(
+                "f {}/{} {}/{} {}/{}",
+                f.v[0] + 1,
+                idx * 3 + 1,
+                f.v[1] + 1,
+                idx * 3 + 2,
+                f.v[2] + 1,
+                idx * 3 + 3
+            ),
+        );
+    }
+    let mut total_vertices = b.verts.len();
+    for m in &b.mu_models {
+        for p in &m.verts {
+            v(&mut obj, p);
+        }
+        for f in &m.faces {
+            vt(&mut faces, f);
+        }
+        for (fi, f) in m.faces.iter().enumerate() {
+            let t = texture_of(f.material);
+            if last != Some(t) {
+                w_line(&mut faces, &format!("usemtl {}", split_tex(t).1));
+                last = Some(t);
+            }
+            w_line(
+                &mut faces,
+                &format!(
+                    "f {}/{} {}/{} {}/{}",
+                    f.v[0] as usize + 1 + total_vertices,
+                    fi * 3 + 1 + total_tcs,
+                    f.v[1] as usize + 1 + total_vertices,
+                    fi * 3 + 2 + total_tcs,
+                    f.v[2] as usize + 1 + total_vertices,
+                    fi * 3 + 3 + total_tcs
+                ),
+            );
+        }
+        total_tcs += m.faces.len() * 3;
+        total_vertices += m.verts.len();
+    }
+    obj.push_str(&faces);
+    Ok(ObjExport { obj, mtl, objects })
+}
+
+#[cfg(test)]
+mod obj_tests {
+    use super::split_tex;
+
+    #[test]
+    fn a_texture_name_splits_like_splitpath() {
+        assert_eq!(split_tex("ston\\ston_wall1"), ("ston\\", "ston_wall1"));
+        assert_eq!(split_tex("plain"), ("", "plain"));
+    }
+}

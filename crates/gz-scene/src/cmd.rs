@@ -105,6 +105,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "property_inspector", property_inspector);
     reg.add(AREA, "property_set", property_set);
     reg.add(AREA, "property_choose", property_choose);
+    crate::cmd_edit::register(reg);
     crate::objtools::cmd::register(reg);
     crate::bulk::cmd::register(reg);
 }
@@ -442,7 +443,7 @@ async fn set_transform(ed: Arc<Editor>, a: Args, o: Origin, which: u8) -> Reply 
 }
 
 /// Where a placed object lands without a position: ten metres in front of the camera.
-fn in_front(s: &SceneState) -> Vec3 {
+pub(crate) fn in_front(s: &SceneState) -> Vec3 {
     s.meta.camera_pos + direction(s.meta.camera_hpb) * 10.0
 }
 
@@ -1199,6 +1200,26 @@ async fn set_row(
         .clone();
     let key = row.row.key.clone();
     let parsed = props::parse(&row.row, value).map_err(|e| CmdError::invalid(format!("{key} {e}")))?;
+    // Scene\Targets: a part loaded or unloaded, locked or not (`level_parts`)
+    if t == 1
+        && let Some(rest) = key.strip_prefix("Scene\\Targets\\")
+        && let Some((what, desc)) = rest.split_once('\\')
+        && let Some(class) = ObjClass::ALL.iter().copied().find(|c| c.desc() == desc)
+    {
+        let on = matches!(parsed, props::Parsed::Bool(true));
+        if what == "Read Only" {
+            svc.store.send(SceneCmd::ToolFlags { class, visible: None, readonly: Some(on) }, o).await?;
+        } else {
+            if !on {
+                crate::cmd_edit::settle_scene(ed, svc, &gz_editor::Args::new()).await?;
+            }
+            crate::edit::set_part_enabled(ed, svc, class, on, o).await?;
+        }
+        let after = svc.store.snapshot();
+        let rows = rows_of(&after, svc, t);
+        let text = props::find(&rows, &key).map(|m| m.row.text()).unwrap_or_default();
+        return Ok((key, text));
+    }
     if t == 1 {
         let (level, tools) =
             props::set_world(&snap, &key, &parsed).map_err(|e| CmdError::invalid(format!("{key} {e}")))?;

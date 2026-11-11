@@ -81,6 +81,20 @@ viewport, the editor's process is GONE within two seconds of `window_control clo
 `Grizzly.exe` left in the process list. If a process ever stays, stop and fix that before
 anything else: a process stuck in the GPU driver blocks every later run on the machine.
 
+## A known gap to close first
+
+**No window of the operating system opens for a caller who cannot click it.** The kit's
+questions already answer for an MCP caller (`gz_ui::dialog::answer_as`, set by `exec_command`
+around a table row) and under `-nodlg`. The system's file dialog does not: twelve places call
+`rfd::FileDialog` directly (`rg "rfd::" crates`), so `exec_command` on a row that wants a file
+and was given none (Open Scene..., Save As..., Export OBJ, Assign Macro, ...) opens a native
+dialog nobody can answer, and a QA run under `-nodlg` can leave one on the author's screen.
+Make it one kit function every caller uses (the title, filters, folder, save name -> the picked
+path on a thread of its own, as now), which opens nothing and logs one line
+(`~ [dlg suppressed] <title>`) when the editor is unattended or a caller's scope is held; the
+row then answers `refused` with "name the file" over MCP. A test proves no caller is left
+(`rg` in `tools/rust/check.sh`: `rfd::` outside that one file fails).
+
 ## Then, once, the things only a whole editor shows
 
 1. **Concurrency** (`tools/qa/test_stress.py`, new, under 30 s): several connections flood

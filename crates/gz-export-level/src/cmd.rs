@@ -192,6 +192,9 @@ async fn export_spawn(editor: &Arc<Editor>, a: &Args, _o: Origin) -> Reply {
         "starts": r.starts,
         "paths": r.paths,
         "orders": r.orders,
+        // the C++ Bake dialog's "Base objects removed" row and its missing-model warning
+        "missing": r.missing,
+        "removed": r.removed,
         "path": run.path.as_deref().map(json_path).unwrap_or_default(),
         "names": r.names,
         "warnings": r.warnings,

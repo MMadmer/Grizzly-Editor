@@ -29,28 +29,29 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 
 ### Scene and tools
 
-- missing M - Cut / Copy / Paste / Duplicate of scene objects on the Level tab (Edit menu, Ctrl+X/C/V): `LevelEditor/Editor/UI_LevelMain.cpp` `CommandCut` / `CommandCopy` / `CommandPaste`, `EScene::CutSelection` / `CopySelection` / `PasteSelection`; Duplicate = copy + paste in `LevelEditor/UI/UIMainForm.cpp` `UIMainForm::LevelEdit`. Rust `gz-ui-level/src/doc.rs` `edit()` returns false for all four.
-- missing M - Scene > Open Selection... / Save Selection As...: `UI_LevelMain.cpp` `CommandLoadSelection` / `CommandSaveSelection`, `EScene::LoadSelection` / `SaveSelection`.
-- missing M - Scene > Export Scene as OBJ... / Export Selection as OBJ...: `LevelEditor/UI/UIMainMenuForm.cpp` `MenuScene`, `EScene::ExportObj`.
-- missing M - Scene > Summary Info (collect, show as a property sheet, export): `UI_LevelMain.cpp` `CommandClearSceneSummary` / `CommandCollectSceneSummary` / `CommandShowSceneSummary` / `CommandExportSceneSummary`, `LevelEditor/Editor/Scene/SceneSummaryInfo.cpp`.
-- missing S - Scene > Validate on request: `UI_LevelMain.cpp` `CommandValidateScene` -> `EScene::Validate(true, ...)`; Rust runs `gz_levelbuild::validate` only inside a build.
-- missing S - Scene > Pick Any Class toggle: `UIMainMenuForm.cpp` `MenuScene` (`COMMAND_SET_SETTINGS`, `etfPickAnyClass`); the flag exists in `gz-ui-viewport/src/service.rs` `Settings::pick_any_class` with nothing to change it.
-- missing M - Scene > Clear Debug Draw, Build > Import / Export / Clear Error List (the compiler's error points drawn in the viewport): `UI_LevelMain.cpp` `CommandClearDebugDraw`, `CommandImportCompilerError`, `CommandExportCompilerError`, `EScene::LoadCompilerError` / `SaveCompilerError`, `CToolCustom::ClearDebugDraw`.
-- missing S - tool switching as commands with keys (`COMMAND_CHANGE_TARGET`, 18 variants; the repository's `level.ini [shortcuts]` binds 1-9, 0, Ctrl+1..Ctrl+5, Ctrl+8, Ctrl+Q): `CLevelTool::CommandChangeTarget`; Rust switches only by a click on a Tools tile.
-- missing M - Object tool, Surfaces: Reset Selected, Reset All... (`reset_surfaces` confirmation): `LevelEditor/UI/Tools/UIObjectTool.cpp`.
-- missing S - Object tool, Refresh List: `UIObjectTool.cpp`; `gz-ui-level/src/lists.rs` `Lists::refresh` exists and nothing calls it.
-- missing M - Randomize Added Objects is stored but never applied when placing (random object of the list, scale, rotation): `LevelEditor/Editor/Tools/StaticObject/ESceneObjectControls.cpp` (add control `Start`); Rust `gz-ui-viewport/src/pane.rs` `place()` ignores `FL_APPEND_RANDOM`.
-- differs S - Random Settings... shows only the four ranges; the C++ sheet also has the Scale / Rotate switches, Scale\Proportional and the Objects list: `LevelEditor/Editor/Tools/StaticObject/ESceneObjectTools.cpp` (the `Random Append` sheet); Rust `gz-ui-level/src/tools.rs` `RandomSettings`.
-- missing M - Spawn tool, Attached Objects: Attach on Click, Detach From Selected... (`detach_spawn_objects` confirmation): `LevelEditor/UI/Tools/UISpawnTool.cpp`.
-- missing M - Group tool: Make Thumbnail, Save As..., Reload References, Pivot > Center to Group, Align to Object...: `LevelEditor/UI/Tools/UIGroupTool.cpp`.
-- missing M - motion of dynamic scene objects (Flags\Motionable, Motion\Files Import / Export, key commands, playback controls, Auto Key, Camera View, frame range, From / To Time, Speed): `LevelEditor/Editor/Entry/CustomObjectAnimation.cpp` `CCustomObject::AnimationFillProp` (called from `CSceneObject::FillProp` for dynamic objects). Rust keeps the motion chunk raw (`gz-scene/src/objects/mod.rs`) and shows none of it.
-- differs S - Spawn Details choosers that became typed text: Order\Look path and Order\Route (way paths), Order\Target (story ids), Respawn Point\Profile (multi-select): `LevelEditor/Editor/Entry/Spawn/SpawnPoint.cpp` `CSpawnPoint::FillProp` (`smCustom` lists); Rust `gz-ui-level/src/lists.rs` `ListKey::of_choose` knows no `way_path`, `story_id`, `respawn_items`.
-- missing M - per tool Enable (load / unload a level part) and Read Only: `LevelEditor/Editor/Utils/LevelPreferences.cpp` `CLevelPreferences::FillProp` (Scene\Targets), `CLevelTool::CommandEnableTarget` / `CommandReadonlyTarget`, `EScene::LoadLevelPart` / `UnloadLevelPart`. `SceneCmd::ToolFlags` has a `readonly` field nothing sets.
-- missing S - Rename the selected objects after their references (`COMMAND_MULTI_RENAME_OBJECTS`, `rename_objects` confirmation): `CLevelTool::CommandMultiRenameObjects`, `EScene::MultiRenameObjects`.
-- differs S - Hide Selected / Hide Unselected / Hide All / Deselect All: the C++ works on the current tool's class (`CommandHideSel` / `CommandHideUnsel` / `CommandHideAll` / `CommandDeselectAll`); Rust's menu rows work on every class (`gz-ui-level/src/menus.rs` `run_scene_command`, `outliner::show_objects`) while the same keys work on the target class (`gz-ui-viewport/src/keys.rs` `run`).
-- differs S - Edit > Delete asks first while the Delete key does not (`menus.rs` `ask_delete_selection` vs `keys.rs` `Act::Delete`); the C++ `CommandDeleteSelection` asks on neither path.
-- differs S - Esc does not stop placing: `XrECore/Editor/UI_MainCommand.cpp` `TUI::KeyDown` runs `COMMAND_CHANGE_ACTION etaSelect` before the bound command; Rust binds Esc to Deselect All only.
-- differs S - the detail colour-index confirmation id: C++ `clear_colour_indices` (`LevelEditor/UI/UIDOShuffle.cpp`), Rust `clear_color_indices` (`gz-ui-level/src/detail_objects.rs`).
+- closed M - Cut / Copy / Paste / Duplicate of scene objects on the Level tab (Edit menu, Ctrl+X/C/V): `LevelEditor/Editor/UI_LevelMain.cpp` `CommandCut` / `CommandCopy` / `CommandPaste`, `EScene::CutSelection` / `CopySelection` / `PasteSelection`; Duplicate = copy + paste in `LevelEditor/UI/UIMainForm.cpp` `UIMainForm::LevelEdit`. Rust `gz-ui-level/src/doc.rs` `edit()` returns false for all four.
+- closed M - Scene > Open Selection... / Save Selection As...: `UI_LevelMain.cpp` `CommandLoadSelection` / `CommandSaveSelection`, `EScene::LoadSelection` / `SaveSelection`.
+- closed M - Scene > Export Scene as OBJ... / Export Selection as OBJ...: `LevelEditor/UI/UIMainMenuForm.cpp` `MenuScene`, `EScene::ExportObj`.
+- closed M - Scene > Summary Info (collect, show as a property sheet, export): `UI_LevelMain.cpp` `CommandClearSceneSummary` / `CommandCollectSceneSummary` / `CommandShowSceneSummary` / `CommandExportSceneSummary`, `LevelEditor/Editor/Scene/SceneSummaryInfo.cpp`.
+- closed S - Scene > Validate on request: `UI_LevelMain.cpp` `CommandValidateScene` -> `EScene::Validate(true, ...)`; Rust runs `gz_levelbuild::validate` only inside a build.
+- closed S - Scene > Pick Any Class toggle: `UIMainMenuForm.cpp` `MenuScene` (`COMMAND_SET_SETTINGS`, `etfPickAnyClass`); the Scene menu row toggles `gz-ui-viewport/src/service.rs` `Settings::pick_any_class`.
+- closed S - the tool settings (Pick Any Class, Object / Vertex Snap, Normal Align, the move and angle snaps) lived for the session only; the C++ keeps them in `[editor_prefs] tools_settings` (`XrECore/Editor/EditorPreferences.cpp`), and so does the Rust viewport now.
+- closed M - Scene > Clear Debug Draw, Build > Import / Export / Clear Error List (the compiler's error points drawn in the viewport): `UI_LevelMain.cpp` `CommandClearDebugDraw`, `CommandImportCompilerError`, `CommandExportCompilerError`, `EScene::LoadCompilerError` / `SaveCompilerError`, `CToolCustom::ClearDebugDraw`.
+- closed S - tool switching as commands with keys (`COMMAND_CHANGE_TARGET`, 18 variants; the repository's `level.ini [shortcuts]` binds 1-9, 0, Ctrl+1..Ctrl+5, Ctrl+8, Ctrl+Q): `CLevelTool::CommandChangeTarget`; Rust switches only by a click on a Tools tile.
+- closed M - Object tool, Surfaces: Reset Selected, Reset All... (`reset_surfaces` confirmation): `LevelEditor/UI/Tools/UIObjectTool.cpp`.
+- closed S - Object tool, Refresh List: `UIObjectTool.cpp`; `gz-ui-level/src/lists.rs` `Lists::refresh` exists and nothing calls it.
+- closed M - Randomize Added Objects is stored but never applied when placing (random object of the list, scale, rotation): `LevelEditor/Editor/Tools/StaticObject/ESceneObjectControls.cpp` (add control `Start`); Rust `gz-ui-viewport/src/pane.rs` `place()` ignores `FL_APPEND_RANDOM`.
+- closed S - Random Settings... shows only the four ranges; the C++ sheet also has the Scale / Rotate switches, Scale\Proportional and the Objects list: `LevelEditor/Editor/Tools/StaticObject/ESceneObjectTools.cpp` (the `Random Append` sheet); Rust `gz-ui-level/src/tools.rs` `RandomSettings`.
+- closed M - Spawn tool, Attached Objects: Attach on Click, Detach From Selected... (`detach_spawn_objects` confirmation): `LevelEditor/UI/Tools/UISpawnTool.cpp`.
+- closed M - Group tool: Make Thumbnail, Save As..., Reload References, Pivot > Center to Group, Align to Object...: `LevelEditor/UI/Tools/UIGroupTool.cpp`.
+- closed M - motion of dynamic scene objects (Flags\Motionable, Motion\Files Import / Export, key commands, playback controls, Auto Key, Camera View, frame range, From / To Time, Speed): `LevelEditor/Editor/Entry/CustomObjectAnimation.cpp` `CCustomObject::AnimationFillProp` (called from `CSceneObject::FillProp` for dynamic objects). Rust keeps the motion chunk raw (`gz-scene/src/objects/mod.rs`) and shows none of it.
+- closed S - Spawn Details choosers that became typed text: Order\Look path and Order\Route (way paths), Order\Target (story ids), Respawn Point\Profile (multi-select): `LevelEditor/Editor/Entry/Spawn/SpawnPoint.cpp` `CSpawnPoint::FillProp` (`smCustom` lists); Rust `gz-ui-level/src/lists.rs` `ListKey::of_choose` knows no `way_path`, `story_id`, `respawn_items`.
+- closed M - per tool Enable (load / unload a level part) and Read Only: `LevelEditor/Editor/Utils/LevelPreferences.cpp` `CLevelPreferences::FillProp` (Scene\Targets), `CLevelTool::CommandEnableTarget` / `CommandReadonlyTarget`, `EScene::LoadLevelPart` / `UnloadLevelPart`. `SceneCmd::ToolFlags` has a `readonly` field nothing sets.
+- closed S - Rename the selected objects after their references (`COMMAND_MULTI_RENAME_OBJECTS`, `rename_objects` confirmation): `CLevelTool::CommandMultiRenameObjects`, `EScene::MultiRenameObjects`.
+- closed S - Hide Selected / Hide Unselected / Hide All / Deselect All: the C++ works on the current tool's class (`CommandHideSel` / `CommandHideUnsel` / `CommandHideAll` / `CommandDeselectAll`); Rust's menu rows work on every class (`gz-ui-level/src/menus.rs` `run_scene_command`, `outliner::show_objects`) while the same keys work on the target class (`gz-ui-viewport/src/keys.rs` `run`).
+- closed S - Edit > Delete asks first while the Delete key does not (`menus.rs` `ask_delete_selection` vs `keys.rs` `Act::Delete`); the C++ `CommandDeleteSelection` asks on neither path.
+- closed S - Esc does not stop placing: `XrECore/Editor/UI_MainCommand.cpp` `TUI::KeyDown` runs `COMMAND_CHANGE_ACTION etaSelect` before the bound command; Rust binds Esc to Deselect All only.
+- closed S - the detail colour-index confirmation id: C++ `clear_colour_indices` (`LevelEditor/UI/UIDOShuffle.cpp`), Rust `clear_color_indices` (`gz-ui-level/src/detail_objects.rs`).
 
 ### Viewport
 
@@ -58,7 +59,7 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 - closed S - View > Render > Quality 25 / 50 / 100 / 200 %: `DrawViewportOptions` (`UI->SetRenderQuality`).
 - closed S - Fill Mode (Point / Wireframe / Solid), Shade Mode, Edged Faces, Linear Filtering, Textures, Fog, Environment are `view_mode` arguments but not in the View menu or the Options pill (only a Wireframe toggle): `DrawViewportOptions`; Rust `gz-ui-viewport/src/menus.rs` `options_body`.
 - closed S - View > Mute Sounds and Real Time: `DrawViewportOptions` (`rsMuteSounds`, `rsRenderRealTime`), `UI_MainCommand.cpp` `CommandMuteSound`.
-- missing S - Show AI Map toggle (`COMMAND_TOGGLE_AIMAP_VISIBILITY`, the `\` key): `UI_LevelMain.cpp` `CommandToggleAiMapVisibility` (the AI map's drawing itself is in work).
+- closed S - Show AI Map toggle (`COMMAND_TOGGLE_AIMAP_VISIBILITY`, the `\` key): `UI_LevelMain.cpp` `CommandToggleAiMapVisibility` (the AI map's drawing itself is in work).
 
 ### Content Browser
 
@@ -75,10 +76,10 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 ### Mod and build
 
 - closed M - Mod > Bake Scene Layer > Spawn Layer..., Collision Overlay..., Visual Overlay..., Level Cut... (the dialogs; the MCP `mod_export_*` exist): `UIMainMenuForm.cpp` `MenuMod`, `EditorModScene::RequestExportSpawn` / `RequestExportXCForm` / `RequestExportOGF` / `RequestExportCut`. Nobody fills the `BAKE_SCENE_LAYER` slot of `gz-ui-mod/src/menu.rs`.
-- differs S - Build > Make All... / Make Game... / Make Details... / Make HOM... / Make SOM... / Make AI Map... run at once; the C++ asks first, naming the level folder (Make All empties it for good): `UI_LevelMain.cpp` `ConfirmLevelBuild` in `CommandBuild` / `CommandMake*`; Rust `gz-ui-level/src/menus.rs` `build_menu` posts `make_*`, and `gz-levelbuild` `compile_level` wipes the folder.
-- differs S - the Make commands are no `UiCommand`s: no F9 / F5 binding, not in the palette or the Keyboard page: `REGISTER_CMD_SE` of `COMMAND_BUILD` / `COMMAND_MAKE_*`.
-- missing S - Build > Compile > AI Map > Verify (`xrAI -verify`): `LevelEditor/Editor/UI_LevelTools.cpp` `CLevelTool::RunXrAI_Verify`.
-- missing S - Build > Compile > Spawn > All Levels: `CLevelTool::RunXrAI_Spawn(false)`; Rust `compile_spawn` builds this level only.
+- closed S - Build > Make All... / Make Game... / Make Details... / Make HOM... / Make SOM... / Make AI Map... run at once; the C++ asks first, naming the level folder (Make All empties it for good): `UI_LevelMain.cpp` `ConfirmLevelBuild` in `CommandBuild` / `CommandMake*`; Rust `gz-ui-level/src/menus.rs` `build_menu` posts `make_*`, and `gz-levelbuild` `compile_level` wipes the folder.
+- closed S - the Make commands are no `UiCommand`s: no F9 / F5 binding, not in the palette or the Keyboard page: `REGISTER_CMD_SE` of `COMMAND_BUILD` / `COMMAND_MAKE_*`.
+- closed S - Build > Compile > AI Map > Verify (`xrAI -verify`): `LevelEditor/Editor/UI_LevelTools.cpp` `CLevelTool::RunXrAI_Verify`.
+- closed S - Build > Compile > Spawn > All Levels: `CLevelTool::RunXrAI_Spawn(false)`; Rust `compile_spawn` builds this level only.
 - closed S - Mod Settings picture: a chosen picture is applied to `mod.ltx` at once and Remove deletes `thumbnail.dds` at once (no Keep Picture, nothing waits for a Save): `XrECore/Editor/EditorModManifest.cpp` thumbnail row (`s_ThumbPending`, `s_ThumbRemove`, `PickThumbnail`); Rust `gz-ui-mod/src/settings.rs` `set_picture`.
 
 ### Quests
@@ -87,10 +88,10 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 
 ### Shell
 
-- missing S - File > New Scene (Ctrl+N): `UI_LevelMain.cpp` `CommandClear`.
-- missing S - File > Open Scene... (Ctrl+L, the file dialog): `CommandLoad` without a path; Rust opens a scene only from the Content Browser or `open_scene`.
-- missing S - File > Recent Scene, Open Last Scene (Ctrl+R) and the recent list itself: `UIMainMenuForm.cpp` `MenuFile`, `CommandLoadFirstRecent`, `CCustomPreferences::AppendRecentFile` / `scene_recent_list`; Rust has only the `scene_recent_count` preference.
-- missing S - File > Save As... (Ctrl+Shift+S): `CommandSave` with p2 = 1.
+- closed S - File > New Scene (Ctrl+N): `UI_LevelMain.cpp` `CommandClear`.
+- closed S - File > Open Scene... (Ctrl+L, the file dialog): `CommandLoad` without a path; Rust opens a scene only from the Content Browser or `open_scene`.
+- closed S - File > Recent Scene, Open Last Scene (Ctrl+R) and the recent list itself: `UIMainMenuForm.cpp` `MenuFile`, `CommandLoadFirstRecent`, `CCustomPreferences::AppendRecentFile` / `scene_recent_list`; Rust has only the `scene_recent_count` preference.
+- closed S - File > Save As... (Ctrl+Shift+S): `CommandSave` with p2 = 1.
 - closed S - Show Properties (Enter), Scene Options (Ctrl+O), Show World Outliner, Show Content Browser as bindable commands: `CommandShowProperties`, `CommandOptions`, `CommandShowWorldOutliner`, `CommandShowContentBrowser` (the Window menu rows exist).
 - closed S - macros: Run Macro slots 1-8 (Alt+1..Alt+8), Assign Macro, Execute Command List, Log Commands: `UI_MainCommand.cpp` `CommandRunMacro` / `CommandAssignMacro` / `CommandExecuteCommandList` / `CommandLogCommands` (the Keyboard page's order list names the slots, nothing registers them).
 - closed S - grid slot count command: `UI_MainCommand.cpp` `CommandGridNumberOfSlots`.
@@ -117,7 +118,7 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 | Tool panels, commands and gestures of Sector, Portal, Way, Shape, Light, Fog Volume (incl. the Fog Volume tool sheet's VolumeType / profile (ltx), confirmations `remove_default_sector`, `remove_duplicate_portals`, `detach_shapes`) | `briefs/tools-objects.md` |
 | AI Map tool (Generate Full / Selected, Smooth, Reset, Select 0/1/2-Link, Ignore Constraints, Ignored Materials, `clear_ai_map`, `clear_ignored_materials`), Detail Objects generation (First Initialize, Reinitialize All / Objects / Selected, Update Renderer, the tool sheet's Base Texture and Common\Draw * rows), Wallmarks editing (Common\Alignment, Common\Draw Wallmarks) | next package |
 | Particles playing (and the Particles tool's Play / Stop), glows, AI map, details, wallmarks, cube sky in the viewport | `briefs/render-rest.md` |
-| Breakable / climable objects and the rest of `Scene->Validate` in the level build | STATE.md |
+| closed - Breakable / climable objects and the rest of `Scene->Validate` in the level build | STATE.md, "The scene's rest" |
 | VIPM for progressive skeletons | STATE.md |
 | closed - Panels outside the window (`[ui] floating_panels`, `screenshot_editor` `outside`) | STATE.md, "The shell's rest" |
 

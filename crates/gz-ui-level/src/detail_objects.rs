@@ -320,7 +320,7 @@ impl DetailObjects {
             Some(1) => {
                 let n = m.indices.colors.len();
                 let spec = ConfirmSpec {
-                    id: "clear_color_indices".into(),
+                    id: "clear_colour_indices".into(),
                     title: "Clear Colour Indices".into(),
                     headline: "Take every colour index out?".into(),
                     items: vec![format!("{n} colour ind{}", if n == 1 { "ex" } else { "ices" })],

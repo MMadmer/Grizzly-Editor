@@ -4581,6 +4581,10 @@
      "verify_restrictors": {
       "type": "boolean",
       "description": "play / play_game: every space restrictor that asks for it must lie on the AI map (the Play menu's Verify Space Restrictors)"
+     },
+     "all_levels": {
+      "type": "boolean",
+      "description": "compile_spawn: every level of the game (Build > Compile > Spawn > All Levels); compile_aimap takes mode=verify too (xrAI -verify)"
      }
     }
    },
@@ -5208,6 +5212,406 @@
     }
    },
    "cmd": "wallmark_tool"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "Cut, copy, paste or duplicate scene objects"
+   },
+   "cmd": "scene_edit",
+   "description": "Cut, Copy, Paste and Duplicate of the Level tab (Edit menu, Ctrl+X / C / V / D). copy writes the selected objects of the class (default: the current tool's) into a selection file in the project's temp folder and puts the C++ editor's own clipboard record on the system clipboard (CF_XRAY_CLASS_LIST), so either editor pastes it; cut copies, then removes them (one undo step); paste adds what the clipboard names under free names (one undo step, nothing selected, the copied flags kept, as in the C++); duplicate copies and pastes at once. Answers copied / removed / added and the file.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "cut",
+       "copy",
+       "paste",
+       "duplicate"
+      ],
+      "type": "string"
+     },
+     "class": {
+      "type": "string",
+      "description": "a class name (scene_object, light, spawn, ...); default: the current tool"
+     }
+    },
+    "type": "object",
+    "required": [
+     "action"
+    ]
+   },
+   "name": "grizzly_scene_edit"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "Save or open a selection file"
+   },
+   "cmd": "selection_file",
+   "description": "Scene > Save Selection As... / Open Selection...: the selected objects of a class written as a selection file (the C++ EScene::SaveSelection format, byte for byte), or such a file's objects added to the scene (one undo step). file is absolute or relative to the project's rawdata\\\\levels; .level is added without an extension.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "save",
+       "open"
+      ],
+      "type": "string"
+     },
+     "file": {
+      "type": "string"
+     },
+     "class": {
+      "type": "string",
+      "description": "a class name (scene_object, light, spawn, ...); default: the current tool"
+     }
+    },
+    "type": "object",
+    "required": [
+     "action",
+     "file"
+    ]
+   },
+   "name": "grizzly_selection_file"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "Rename objects after their references"
+   },
+   "cmd": "rename_objects",
+   "description": "Each selected object of the class (default: the current tool) takes the next free name made from its reference (CLevelTool::CommandMultiRenameObjects). One undo step; asks nothing. Answers renamed.",
+   "inputSchema": {
+    "properties": {
+     "class": {
+      "type": "string",
+      "description": "a class name (scene_object, light, spawn, ...); default: the current tool"
+     }
+    },
+    "type": "object"
+   },
+   "name": "grizzly_rename_objects"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "The scene's level parts"
+   },
+   "cmd": "level_parts",
+   "description": "Every class's part of the scene: enabled (loaded), readonly, visible, objects. class= with enabled=false unloads the part (not drawn, not saved over: its file stays as it is; unsaved scene work needs save=true or discard=true, or the answer is unsaved); enabled=true reads it again from the scene's file. readonly= locks the part: its objects cannot be changed and its file is not written.",
+   "inputSchema": {
+    "properties": {
+     "class": {
+      "type": "string",
+      "description": "a class name (scene_object, light, spawn, ...); default: the current tool"
+     },
+     "enabled": {
+      "type": "boolean"
+     },
+     "readonly": {
+      "type": "boolean"
+     },
+     "save": {
+      "type": "boolean"
+     },
+     "discard": {
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "name": "grizzly_level_parts"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "readOnlyHint": false,
+    "title": "New scene"
+   },
+   "cmd": "scene_new",
+   "description": "File > New Scene (Ctrl+N): an empty scene without a file, its history new. Unsaved scene work needs save=true or discard=true, or the answer is unsaved.",
+   "inputSchema": {
+    "properties": {
+     "save": {
+      "type": "boolean"
+     },
+     "discard": {
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "name": "grizzly_scene_new"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "Scene summary"
+   },
+   "cmd": "scene_summary",
+   "description": "Scene > Summary Info: action collect (the default; clears, then every tool reports - textures with their format, size, memory and pixel density, the library objects with their faces and surfaces, lights, glows, sectors, portals, sounds) and answers rows [{key, value}] as the sheet shows them | show (the last collected) | export (file=, the C++ text; relative to the project's rawdata\\levels, .txt added) | clear.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "collect",
+       "show",
+       "export",
+       "clear"
+      ],
+      "type": "string"
+     },
+     "file": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "grizzly_scene_summary"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "The compiler's error list"
+   },
+   "cmd": "compiler_errors",
+   "description": "Build > Import / Export / Clear Error List and Scene > Clear Debug Draw: the error points, edges and faces a compiler wrote, drawn in the viewport. action state (the default: points, lines, faces) | import (file=, a compiler's error file; relative to the project's logs) | export (file=, the C++ layout) | clear.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "state",
+       "import",
+       "export",
+       "clear"
+      ],
+      "type": "string"
+     },
+     "file": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "name": "grizzly_compiler_errors"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": true,
+    "title": "Validate the scene"
+   },
+   "cmd": "scene_validate",
+   "description": "Scene > Validate: every check a level build runs before it builds (the tools, sectors and portals, HOM, counts, names, shaders, sounds, particles), as a job. Answers ok and the lines written to the log, ending with 'Validation OK!' or 'Validation FAILED!'.",
+   "inputSchema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "grizzly_scene_validate"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "Export the scene as OBJ"
+   },
+   "cmd": "scene_export_obj",
+   "description": "Scene > Export Scene / Selection as OBJ: the static and multiple-usage scene objects (selected=true: the selected ones) as a Wavefront .obj with its .mtl, in centimetres with Z turned round, as the C++ SaveBuildAsObject writes them. file= is absolute or under the project's import folder.",
+   "inputSchema": {
+    "properties": {
+     "file": {
+      "type": "string"
+     },
+     "selected": {
+      "type": "boolean"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ]
+   },
+   "name": "grizzly_scene_export_obj"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "A dynamic object's motion"
+   },
+   "cmd": "object_motion",
+   "description": "The Motion rows of a dynamic scene object (Details > Flags\\Motionable and Motion). name= the object; action state (the default: motionable, keys, length, start, end, current, auto_key, camera_view, playing) | motionable (on=) | import / export (file=, an .anm; relative to the project's gamedata\\anims) | add_key | delete_key (at the current time) | scale_keys (from, to, scale) | normalize_keys (from, to, speed in m/s) | clamp | first | prev_key | prev_frame | next_frame | next_key | last | play | pause (the object stands where playback stopped) | auto_key (on=) | camera_view (on=) | range (min, max in seconds) | current (t) | key_time (t: the current key moved). Each edit is one undo step; the frame controls of one run merge.",
+   "inputSchema": {
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "action": {
+      "type": "string"
+     },
+     "on": {
+      "type": "boolean"
+     },
+     "file": {
+      "type": "string"
+     },
+     "from": {
+      "type": "number"
+     },
+     "to": {
+      "type": "number"
+     },
+     "scale": {
+      "type": "number"
+     },
+     "speed": {
+      "type": "number"
+     },
+     "min": {
+      "type": "number"
+     },
+     "max": {
+      "type": "number"
+     },
+     "t": {
+      "type": "number"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name"
+    ]
+   },
+   "name": "grizzly_object_motion"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "The Object tool"
+   },
+   "cmd": "object_tool",
+   "description": "The Object tool's Surfaces section: action reset_surfaces gives the visible scene objects (selected=true, the default: the selected ones; false: every one) the surfaces of their reference again. One undo step; asks nothing.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "reset_surfaces"
+      ],
+      "type": "string"
+     },
+     "selected": {
+      "type": "boolean"
+     }
+    },
+    "type": "object",
+    "required": [
+     "action"
+    ]
+   },
+   "name": "grizzly_object_tool"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "A spawn point's attached object"
+   },
+   "cmd": "spawn_attach",
+   "description": "The Spawn tool's Attached Objects: action attach (object= a shape of the scene, spawn= the point or the one selected; the point takes the shape's place, rotation and scale) | detach (the selected points' shapes back into the scene) | on_click (on=: the next click in the viewport attaches what it hits). One undo step each; asks nothing.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "attach",
+       "detach",
+       "on_click"
+      ],
+      "type": "string"
+     },
+     "object": {
+      "type": "string"
+     },
+     "spawn": {
+      "type": "string"
+     },
+     "on": {
+      "type": "boolean"
+     }
+    },
+    "type": "object",
+    "required": [
+     "action"
+    ]
+   },
+   "name": "grizzly_spawn_attach"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "The Group tool"
+   },
+   "cmd": "group_tool",
+   "description": "The Group tool: action center_pivot (every group's pivot to the middle of its objects, as the C++ Center to Group) | align_pivot (object=: the selected groups' pivot to that object of theirs) | save_as (file=: the selected group as a library .group; relative to the project's rawdata\\groups) | reload (Reload References: the selected groups made again from their library .group, each where it stands; a member marked unique stays as it was) | place (ref= a library group, x= y= z= where, ten metres in front of the camera without them: the group added, named after its reference, selected; answers object {name, id}). One undo step for each but save_as.",
+   "inputSchema": {
+    "properties": {
+     "action": {
+      "enum": [
+       "center_pivot",
+       "align_pivot",
+       "save_as",
+       "reload",
+       "place"
+      ],
+      "type": "string"
+     },
+     "object": {
+      "type": "string"
+     },
+     "file": {
+      "type": "string"
+     },
+     "ref": {
+      "type": "string"
+     },
+     "x": {
+      "type": "number"
+     },
+     "y": {
+      "type": "number"
+     },
+     "z": {
+      "type": "number"
+     }
+    },
+    "type": "object",
+    "required": [
+     "action"
+    ]
+   },
+   "name": "grizzly_group_tool"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
+    "title": "Make a group thumbnail"
+   },
+   "cmd": "group_thumbnail",
+   "description": "The Group tool's Make Thumbnail: the one selected group as the viewport shows it (the scene's own pass, no grid, selection or helpers; the middle square, 128 x 128) written as the .thm beside its library .group in the project's rawdata\\groups, naming the group's objects. Needs a window. Answers file.",
+   "inputSchema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "grizzly_group_thumbnail"
   }
  ]
 }

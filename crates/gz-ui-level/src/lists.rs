@@ -28,6 +28,8 @@ pub enum ListKey {
     SoundEnvironments,
     LightAnims,
     BaseScenes,
+    /// `OnFillRespawnItemProfile`: the sections of the game's `mp\\respawn_items.ltx`.
+    RespawnItems,
 }
 
 impl ListKey {
@@ -48,6 +50,7 @@ impl ListKey {
             "game_material" => ListKey::GameMaterials,
             "sound_env" => ListKey::SoundEnvironments,
             "lightanim" => ListKey::LightAnims,
+            "respawn_items" => ListKey::RespawnItems,
             _ => return None,
         })
     }
@@ -68,6 +71,7 @@ impl ListKey {
             ListKey::GameMaterials => "game materials",
             ListKey::SoundEnvironments => "sound environments",
             ListKey::LightAnims => "light animations",
+            ListKey::RespawnItems => "respawn profiles",
             ListKey::BaseScenes => "base scenes",
         }
     }
@@ -258,6 +262,19 @@ async fn read(editor: &Arc<Editor>, key: ListKey) -> Vec<String> {
                 })
                 .await
         }
+        ListKey::RespawnItems => {
+            let Some(bytes) = game_file(editor, "configs\\mp\\respawn_items.ltx").await else { return Vec::new() };
+            let text = gz_base::text::decode_guess(&bytes);
+            text.lines()
+                .filter_map(|l| {
+                    let l = l.trim_start();
+                    let rest = l.strip_prefix('[')?;
+                    let end = rest.find(']')?;
+                    Some(rest[..end].trim().to_owned())
+                })
+                .filter(|s| !s.is_empty())
+                .collect()
+        }
         ListKey::LightAnims => {
             let Some(bytes) = game_file(editor, "lanims.xr").await else { return Vec::new() };
             editor
@@ -280,5 +297,6 @@ mod tests {
     fn chooser_lists() {
         assert_eq!(ListKey::of_choose("object"), Some(ListKey::Objects));
         assert_eq!(ListKey::of_choose("story_id"), None);
+        assert_eq!(ListKey::of_choose("respawn_items"), Some(ListKey::RespawnItems));
     }
 }

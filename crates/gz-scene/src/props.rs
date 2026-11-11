@@ -203,6 +203,36 @@ const ORDER_KINDS: &[(&str, i64)] = &[("None", 0), ("Guard", 1), ("Patrol", 2), 
 const RPOINT_TYPES: &[(&str, i64)] = &[("Actor Spawn", 0), ("Artefact Spawn", 1), ("Item Spawn", 2)];
 const JITTER: &[(&str, i64)] = &[("1 - Low", 1), ("4 - Medium", 4), ("9 - High", 9)];
 
+/// `CCustomObject::AnimationFillProp`.
+fn motion_rows(pref: &str, o: &Object, out: &mut Vec<Row>) {
+    let flags = o.co_flags();
+    out.push(flag(key(pref, "Flags\\Motionable"), flags, co::MOTION));
+    if flags & co::MOTION == 0 {
+        return;
+    }
+    let Some(raw) = o.motion.as_ref() else { return };
+    let Some(m) = raw.model() else {
+        out.push(caption(key(pref, "Motion\\Hint"), "The motion has a version this editor does not read."));
+        return;
+    };
+    let p = crate::objmotion::params(&m, raw);
+    out.push(caption(key(pref, "Motion\\Hint"), "Make KEY only on Parent CS"));
+    out.push(button(key(pref, "Motion\\Files"), "Import,Export"));
+    out.push(button(key(pref, "Motion\\Commands"), "Add Key,Delete Key,Scale Keys...,Normalize Keys...,Clamp"));
+    out.push(button(
+        key(pref, "Motion\\Controls"),
+        "First Frame,Previous Key,Previous Frame,Play,Pause,Next Frame,Next Key,Last Frame",
+    ));
+    out.push(flag(key(pref, "Motion\\Flags\\Auto Key"), flags, crate::objmotion::AUTO_KEY));
+    out.push(flag(key(pref, "Motion\\Flags\\Camera View"), flags, crate::objmotion::CAMERA_VIEW));
+    out.push(float(key(pref, "Motion\\Start Frame (sec)"), p.min_t, -10000.0, p.max_t, 3));
+    out.push(float(key(pref, "Motion\\End Frame (sec)"), p.max_t, p.min_t, 10000.0, 3));
+    out.push(float(key(pref, "Motion\\Current Frame (sec)"), p.t_current, -10000.0, 10000.0, 3));
+    out.push(float(key(pref, "Motion\\Key Time (sec)"), p.t_current, -10000.0, 10000.0, 3));
+    out.push(caption(key(pref, "Motion\\Key Count"), &m.envelopes[0].keys.len().to_string()));
+    out.push(caption(key(pref, "Motion\\Length (sec)"), &format!("{:.2}", crate::objmotion::length(&m).0)));
+}
+
 /// One object's rows, as `FillProp` of its class gives them (`pref` is `""` in Details).
 #[must_use]
 pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> {
@@ -228,6 +258,10 @@ pub fn object_rows(state: &SceneState, o: &Object, cx: &PropCx<'_>) -> Vec<Row> 
                 out.push(choose(key(&p, "Game Mtl"), "game_material", &s.game_mtl));
             }
             out.push(button(key(&key(pref, "Surfaces"), "Action"), "Clear"));
+            // `CSceneObject::FillProp`: a dynamic object moves along a motion
+            if cx.lib.and_then(|l| l.cached(&d.reference)).is_some_and(|l| l.object.is_dynamic()) {
+                motion_rows(pref, o, &mut out);
+            }
         }
         ObjData::Light(d) => {
             custom_rows(pref, o, &mut out);
@@ -620,6 +654,20 @@ pub fn world_rows(state: &SceneState) -> Vec<Row> {
             JITTER,
         )),
     ];
+    // `CLevelPreferences::FillProp` Scene\Targets: each part loaded or not, locked or not
+    let mut by_id = ObjClass::ALL.to_vec();
+    by_id.sort_by_key(|c| c.id());
+    for c in &by_id {
+        let t = state.tools.part(*c);
+        if *c != ObjClass::SceneObject {
+            let mut r = Row::new(key("Scene\\Targets\\Enable", c.desc()), Kind::Flag, Val::Bool(t.enabled));
+            r.help = "Loads this part of the scene; off unloads it.".into();
+            out.push(r);
+        }
+        let mut r = Row::new(key("Scene\\Targets\\Read Only", c.desc()), Kind::Flag, Val::Bool(t.readonly));
+        r.help = "This part of the scene can be looked at, but not changed or saved.".into();
+        out.push(r);
+    }
     for c in ObjClass::ALL {
         let t = state.tools.part(c);
         let p = c.desc();
@@ -1002,6 +1050,42 @@ fn text_of(p: &Parsed) -> String {
     }
 }
 
+/// A motion row as an edit: `Some(None)` for what the row leaves to its caller (Play, Pause,
+/// Import, Export, the two key dialogs).
+fn motion_edit(k: &str, p: &Parsed) -> Result<Option<Option<crate::objmotion::MotionEdit>>, String> {
+    use crate::objmotion::MotionEdit as E;
+    let press = match p {
+        Parsed::Press(i) => Some(*i),
+        _ => None,
+    };
+    Ok(Some(match k {
+        "Flags\\Motionable" => Some(E::Motionable(on(p))),
+        "Motion\\Files" => None,
+        "Motion\\Commands" => match press {
+            Some(0) => Some(E::AddKey),
+            Some(1) => Some(E::DeleteKey),
+            Some(4) => Some(E::Clamp),
+            _ => None,
+        },
+        "Motion\\Controls" => match press {
+            Some(0) => Some(E::FirstFrame),
+            Some(1) => Some(E::PreviousKey),
+            Some(2) => Some(E::PreviousFrame),
+            Some(5) => Some(E::NextFrame),
+            Some(6) => Some(E::NextKey),
+            Some(7) => Some(E::LastFrame),
+            _ => None,
+        },
+        "Motion\\Flags\\Auto Key" => Some(E::AutoKey(on(p))),
+        "Motion\\Flags\\Camera View" => Some(E::CameraView(on(p))),
+        "Motion\\Start Frame (sec)" => Some(E::Range { min_t: Some(num(p) as f32), max_t: None }),
+        "Motion\\End Frame (sec)" => Some(E::Range { min_t: None, max_t: Some(num(p) as f32) }),
+        "Motion\\Current Frame (sec)" => Some(E::Current(num(p) as f32)),
+        "Motion\\Key Time (sec)" => Some(E::KeyTime(num(p) as f32)),
+        _ => return Ok(None),
+    }))
+}
+
 /// Sets one row of an object. `entity` is the context the spawn rows set through.
 pub fn set_object(
     state: &SceneState,
@@ -1032,6 +1116,22 @@ pub fn set_object(
             return Ok(Effect::Object(n));
         }
         _ => {}
+    }
+    if let Some(edit) = motion_edit(k, p)? {
+        // Play, Pause and the files are the caller's: they need the frame clock or a file
+        let Some(edit) = edit else { return Ok(Effect::Nothing) };
+        let e = crate::objmotion::apply(o, &edit)?;
+        n.motion = e.motion;
+        n.set_co_flags(e.flags);
+        if let Some((pos, rot)) = e.pose {
+            return Ok(Effect::Objects(vec![{
+                let mut moved = n.clone();
+                moved.xform.position = pos;
+                moved.xform.rotation = rot;
+                moved
+            }]));
+        }
+        return Ok(Effect::Object(n));
     }
     match &mut n.data {
         ObjData::SceneObject(d) => {

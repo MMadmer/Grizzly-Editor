@@ -95,7 +95,8 @@ struct Shared {
 /// The editor's renderer. Owns the render thread; dropping it stops the thread.
 pub struct Renderer {
     shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    /// Taken by [`Renderer::shutdown`]: the thread is joined once, by whoever stops it first.
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Renderer {
@@ -158,7 +159,7 @@ impl Renderer {
             .name("gz-render".into())
             .spawn(move || render_loop(&worker))
             .map_err(|e| RenderError::Device(format!("the render thread did not start: {e}")))?;
-        Ok(Self { shared, thread: Some(thread) })
+        Ok(Self { shared, thread: Mutex::new(Some(thread)) })
     }
 
     /// The meshes, textures and materials frames draw with.
@@ -198,7 +199,7 @@ impl Renderer {
         let deadline = Instant::now() + timeout;
         let mut done = self.shared.done.lock();
         while done.info.packet < serial {
-            if self.thread.as_ref().is_none_or(JoinHandle::is_finished) {
+            if self.stopped() {
                 return Err(RenderError::Stopped);
             }
             if self.shared.done_cv.wait_until(&mut done, deadline).timed_out() {
@@ -262,13 +263,36 @@ impl Renderer {
     }
 }
 
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        self.shared.mail.lock().quit = true;
+impl Renderer {
+    /// Stops the render thread and waits for it: what it owns on the GPU (its frame resources,
+    /// its targets) is dropped there, on its own thread, before this returns. The window calls it
+    /// for every renderer while the event loop is still alive; other handles of this renderer
+    /// then answer [`RenderError::Stopped`]. Calling it again does nothing.
+    pub fn shutdown(&self) {
+        let captures = {
+            let mut m = self.shared.mail.lock();
+            m.quit = true;
+            m.packet = None;
+            std::mem::take(&mut m.captures)
+        };
+        // a capture nobody will answer is told so at once
+        drop(captures);
         self.shared.mail_cv.notify_all();
-        if let Some(t) = self.thread.take() {
+        let thread = self.thread.lock().take();
+        if let Some(t) = thread {
             let _ = t.join();
         }
+        self.shared.done_cv.notify_all();
+    }
+
+    fn stopped(&self) -> bool {
+        self.thread.lock().as_ref().is_none_or(JoinHandle::is_finished)
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 

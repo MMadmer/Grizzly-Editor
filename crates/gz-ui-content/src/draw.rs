@@ -78,6 +78,13 @@ pub fn content_browser(ui: &mut Ui, cx: &mut DocCx<'_>, host: Host) {
     st.sync_scope(&project_root, &game_root, &browser.cats);
     take_inbox(st, &browser);
     st.pics.begin_frame(&ctx, now);
+    // Libraries > Reload Textures: the tiles' pictures are read again
+    let reload = gz_app::gpu::TextureReload::generation(&editor);
+    let seen_id = egui::Id::unique("gz-ui-content.texture_reload");
+    if ctx.data_mut(|d| d.get_temp::<u64>(seen_id)).is_some_and(|seen| seen != reload) {
+        st.pics.forget_all();
+    }
+    ctx.data_mut(|d| d.insert_temp(seen_id, reload));
     if st.view_dirty {
         st.store_view(&ctx);
     }

@@ -47,6 +47,10 @@ after the test passes and the critic.
   moved (the C++ control was disabled).
 - Points-mode marquee selects the points inside the box (the C++ tool selected every point of
   a picked way).
+- A group's Make Thumbnail writes `<project>\rawdata\groups\<reference>.thm`, where the Groups
+  chooser reads it (the C++ wrote `$objects$\<scene name>.thm`, which nothing reads).
+- The tool switches (snaps, Normal Align, Pick Any Class) are kept between sessions in
+  `[editor_prefs] tools_settings`, as the C++ `ETFlags`.
 - Wire: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a
   path outside the project; `world_set` writes only its section; `mod_publish start` answers in
   one call; `quest_history` adds `undo_steps` / `redo_steps`; the catalogue's additions
@@ -64,3 +68,6 @@ after the test passes and the critic.
 - Generate Full on Escape tripled the node count (625k -> 2.5M): find out whether the C++
   editor gives the same on that scene (by hand in the C++ editor - it has no MCP command for
   it) or whether the port over-generates.
+- From the scene package: the Make question without `-nodlg`, motion playback and Camera View
+  in motion, Random Append placing, Attach on Click, the Reset Surfaces question, the Group
+  tool's Pivot chooser.

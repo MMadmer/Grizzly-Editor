@@ -589,7 +589,7 @@ Brief `briefs/shell-rest.md`. What the shell, the menus and the libraries lacked
   on; it needs a reboot (or a driver reset). The second look - the stretched 100 % picture, a
   second panel out, the exit with the fix - could not be run.
 - Existing, not this package's: `COMMAND_TOGGLE_SAFE_RECT` and `COMMAND_SHOW_OBJECTLIST` both
-  default to Ctrl+F (the viewport's and the Level menus' tables); the C++ had Ctrl+F and Ctrl+W.
+  defaulted to Ctrl+F; closed in "The scene's rest" (Ctrl+W, as the C++).
 
 ## The AI map, details and wallmark tools
 
@@ -613,8 +613,8 @@ Brief `briefs/shell-rest.md`. What the shell, the menus and the libraries lacked
 - `AiMapPart` now holds the tool's nodes exact (`nodes`, `AiMapNode` tiles of 4096) beside the packed
   `tiles`; an edit works on a flat `AiWork` and `AiMapPart::from_nodes` shares every tile equal to the
   old one (packed tiles too while the box and parameters stay). The viewport draws the exact nodes.
-  `gz-levelbuild`'s `files::ai_nodes` still decodes the packed tiles: it should take
-  `AiMapPart::all_nodes()` (exact, as the C++ exports them) - a one-line change for its owner.
+  `gz-levelbuild`'s `files::ai_nodes` takes `AiMapPart::all_nodes()` (exact, as the C++ exports
+  them) since "The scene's rest".
 - `WallmarkPart` gained `model: Option<Arc<Wallmarks>>` (the chunk read and written as
   `LoadStream` / `SaveStream`); every edit writes `raw` again, so the build and the drawing follow.
 - The AI Map and Detail Objects tools keep their own snap lists (names in their parts, the C++
@@ -647,6 +647,82 @@ Brief `briefs/shell-rest.md`. What the shell, the menus and the libraries lacked
   driven headless; to be looked at: each panel, Generate Selected and its nodes, link edits,
   details reinitialised and drawn, a wallmark placed and drawn, `ui_audit`, `frame_pacing` during
   a generation. Tests written, not run.
+
+## The scene's rest
+
+Brief `briefs/scene-rest.md`. New in `gz-scene`: `selection.rs` (the selection stream and the
+`CF_XRAY_CLASS_LIST` clipboard record), `edit.rs` (cut / copy / paste / duplicate, selection files,
+level parts, New Scene), `cmd_edit.rs` (the commands below), `summary.rs`, `debug.rs` (the compiler's
+error list), `objmotion.rs` (object motions); in `gz-ui-level`: `level_cmds.rs` (the C++ command
+rows, the File menu's rows, the dialogs) and `motion_ui.rs`.
+
+- Commands: `scene_edit`, `selection_file`, `rename_objects`, `level_parts`, `scene_new`,
+  `scene_summary`, `compiler_errors`, `scene_validate`, `scene_export_obj`, `object_motion`,
+  `object_tool`, `spawn_attach`, `group_tool` (center_pivot, align_pivot, save_as, reload, place),
+  `group_thumbnail` (gz-ui-viewport: it needs the viewport's pass); `grizzly_level_build` takes
+  `all_levels` and `compile_aimap mode=verify`. All in `tools.json` (191 tools).
+- The C++ command table now holds CHANGE_TARGET (the level.ini keys 1-9, 0, Ctrl+1..5, Ctrl+8,
+  Ctrl+Q), CLEAR / LOAD / SAVE (p2 = Save As) / LOAD_FIRSTRECENT, CUT / COPY / PASTE, LOAD_SEL /
+  SAVE_SEL, MULTI_RENAME_OBJECTS, ENABLE / READONLY / SHOW_TARGET, LOAD / UNLOAD_LEVEL_PART, the
+  four SUMMARY rows, CLEAR_DEBUG_DRAW, IMPORT / EXPORT_COMPILER_ERROR, VALIDATE_SCENE,
+  TOGGLE_AIMAP_VISIBILITY (`\`), BUILD (F9) and the MAKE_* rows (F5 Make Game) behind
+  `ConfirmLevelBuild` (p2 = confirmed). SHOW_OBJECTLIST is Ctrl+W again (it shared Ctrl+F with the
+  safe rect); a test wants no two rows of the Level tables on one default key.
+- Copy writes the selection to `temp\clipXXXX.tmp` and puts the C++ record on the clipboard, so
+  either editor pastes the other's copy. Paste follows the C++: free names, nothing selected, the
+  copied flags kept (so Duplicate leaves the copies unselected).
+- Level parts (Level Settings > Scene\Targets): Enable unloads a class (not drawn, its file not
+  written) and reads it again from the scene's file; Read Only refuses every edit of the class
+  ("The object '...' is read only.") and keeps its file. An unload is not an undo step; Undo after it
+  keeps the class's current load state (`restored()` swaps classes whose `enabled` changed).
+- The recent scenes are `[editor_prefs] recent_files_N` of the editor's settings (`EditorSettings::
+  recent_scenes` / `add_recent_scene`, fed by `SceneFileHooks` on every load and save).
+- Deleting a scene object takes its meshes out of the sectors (a sector left empty goes, as
+  `CSector::DelMesh`). Delete and the Hide / Deselect rows of the menus work on the current tool's
+  class and ask nothing, as the C++; Edit > Delete in the Outliner keeps its question.
+- Motions: Flags\Motionable and the Motion rows of dynamic scene objects; the envelopes are edited as
+  `COMotion` (`objmotion.rs`: keys, scale and normalize, range, the pose at a time), each edit one
+  undo step, the frame controls of one run merged. Playback poses the object in the viewport
+  without changing the scene until Pause; Camera View follows the object during playback only.
+- Breakables: the Rust build welds them on the SDK grid (`VCPacked`, 24 x 16 x 24 cells) and writes
+  one part per connected piece. The C++ fork writes NONE (its extractor is commented out) - a
+  deliberate difference, the breakables used to be broken in this fork.
+- `Validate` on request runs the level build's checks as a job; a summary is collected per class as
+  the C++ does it (Highlight Texture rows are left out: their C++ command does nothing).
+- The Group tool places library groups now (`TUI_ControlGroupAdd`, `PlaceGroup`) - nothing placed
+  a group before. Reload References gives a group its library objects again where it stands (a
+  unique member stays, the others keep their names; the sectors are not touched). Make Thumbnail
+  writes `<project>\rawdata\groups\<reference>.thm` - the C++ writes `$objects$\<scene name>.thm`,
+  where nothing reads it. A library `.group` has an empty reference chunk; it is given the name it
+  was opened by before it is read.
+- The exit path (`gz-app/src/window.rs`, "Leaving"): `GpuOwners` hooks stop the render threads of the
+  viewport, the content browser's thumbnails and the previews' thumbnails before the device goes;
+  every step is caught, and a panic while leaving is logged, not raised.
+- `gz-render`: `ViewStyle` (flat, textures, linear, edged faces, fog, environment) for View >
+  Render; the edged faces draw the wire over the solid pass.
+- Outside the brief's files: `gz-app/src/settings.rs` (the recent list), `gz-app/src/lib.rs` (the
+  `GpuOwners` export), `gz-ui-previews/src/cmd.rs` (its thumbnail renderer's exit hook),
+  `gz-entities` (`set_climable_material`), `gz-ui-viewport/Cargo.toml` (gz-fmt-tex for the group
+  thumbnail). `gz-levelbuild`'s `ai_nodes` reads `AiMapPart::all_nodes()` (the note above).
+- The tool switches (Normal Align, Object / Vertex Snap, the move and angle snaps, Pick Any Class)
+  are kept in `[editor_prefs] tools_settings` as the C++ `ETFlags` (other bits written back as
+  read); before, they lived for the session only.
+- **A table row run over MCP never opens a question** (the lead's fix after the package): `exec`
+  carries the caller's `Origin` (`exec_command` -> the row, a macro's lines, the editor command of
+  a `Call`, a `Task`), and for an MCP caller the row runs inside `gz_ui::dialog::answer_as(ctx,
+  Asker::Mcp)` - a scope in which `confirm`, `unsaved_prompt`, `notice` and `result` answer for the
+  caller whatever asker the code that raises them names (the C++ `FromMcp()`; it wins over
+  `-nodlg`). Seen live: `exec_command COMMAND_MULTI_RENAME_OBJECTS` logs `* [mcp] ... -> Yes`,
+  renames, no modal. The Make question names `<editor>\gamedata\levels\<level>`: that IS
+  `$game_levels$` of the editor's `fsgame.ltx` (`$fs_root$\gamedata\levels`), where the C++
+  builds too - a level build never writes into the linked game.
+- Looked at (windowed, a copy of the Test project): leaving with 0 and 2 panels outside the window,
+  no process left; the File, Edit, Scene and Build menus; Level Settings > Targets; the Summary
+  sheet; edged and flat faces; copy / paste / undo, selection files, part unload and reload, error
+  lists, Validate, OBJ export, motion keys, a library group placed, reloaded and its thumbnail made.
+  `ui_audit` escaped nothing. Still to look at: the Make question without `-nodlg`, motion playback
+  and Camera View in motion, Random Append placing, Attach on Click, the Rename and Reset Surfaces
+  questions, the Group tool's Pivot chooser. Tests written, not run.
 
 ## Next packages, in dependency order
 

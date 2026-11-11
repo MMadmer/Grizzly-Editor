@@ -73,6 +73,12 @@ struct RandomSettings {
     max_scale: [f32; 3],
     min_rot: [f32; 3],
     max_rot: [f32; 3],
+    /// `flAppendRandomScale`, `flAppendRandomScaleProportional`, `flAppendRandomRotation`.
+    scale: bool,
+    proportional: bool,
+    rotate: bool,
+    /// `m_AppendRandomObjects`: what Randomize picks from.
+    objects: Vec<String>,
 }
 
 impl Default for ToolsPanel {
@@ -123,7 +129,7 @@ impl ToolsPanel {
                 self.snap_objects(ui, editor, &svc, &snap);
             },
         );
-        self.draw_random(ui, &svc);
+        self.draw_random(ui, &svc, chooser);
     }
 
     fn tiles(&mut self, ui: &mut Ui, svc: &SceneService, snap: &SceneState, origin: Origin) {
@@ -274,11 +280,19 @@ impl ToolsPanel {
                         Clip::End,
                     );
                 }
-                if local_button_flow(ui, &[LocalButton::new("Browse...", "Pick the object from the library")])
-                    == Some(0)
-                {
-                    *chooser =
-                        Some(Chooser::new(Purpose::ToolObject, "Object", Some(ListKey::Objects), &current));
+                match local_button_flow(
+                    ui,
+                    &[
+                        LocalButton::new("Browse...", "Pick the object from the library"),
+                        LocalButton::new("Refresh List", "Read the object library again"),
+                    ],
+                ) {
+                    Some(0) => {
+                        *chooser =
+                            Some(Chooser::new(Purpose::ToolObject, "Object", Some(ListKey::Objects), &current));
+                    }
+                    Some(1) => crate::lists::Lists::refresh(editor, ListKey::Objects),
+                    _ => {}
                 }
             });
         });
@@ -332,6 +346,10 @@ impl ToolsPanel {
                             max_scale: o.max_scale.to_array(),
                             min_rot: deg(o.min_rotation),
                             max_rot: deg(o.max_rotation),
+                            scale: part.flags & gz_scene::tools::FL_APPEND_RANDOM_SCALE != 0,
+                            proportional: part.flags & gz_scene::tools::FL_APPEND_RANDOM_PROPORTIONAL != 0,
+                            rotate: part.flags & gz_scene::tools::FL_APPEND_RANDOM_ROTATION != 0,
+                            objects: o.objects.iter().map(ToString::to_string).collect(),
                         });
                     }
                 }
@@ -339,6 +357,40 @@ impl ToolsPanel {
             }
         }
         self.select_by_reference(ui, editor, svc, snap, ObjClass::SceneObject, &current, "object");
+        if gz_ui_app::local::local_section(ui, "tool_object_surfaces", "Surfaces", false) {
+            match local_button_flow(
+                ui,
+                &[
+                    LocalButton::new("Reset Selected", "Give the selected objects the surfaces of their reference again"),
+                    LocalButton::new("Reset All...", "Give every object in the level the surfaces of its reference again"),
+                ],
+            ) {
+                Some(0) => tool_call(editor, "object_tool", &[("action", Value::String("reset_surfaces".into())), ("selected", Value::Bool(true))]),
+                Some(1) => {
+                    let count = snap.of_class(ObjClass::SceneObject).filter(|o| o.flags.visible).count();
+                    let spec = gz_ui::ConfirmSpec {
+                        id: "reset_surfaces".into(),
+                        title: "Reset Surfaces".into(),
+                        headline: "Reset the surfaces of every object in the level?".into(),
+                        items: vec![format!("{count} visible scene object{}", if count == 1 { "" } else { "s" })],
+                        total: 1,
+                        consequence: "Surface changes made on these objects in this level are lost.".into(),
+                        action: "Reset All".into(),
+                        destructive: true,
+                    };
+                    let ed = editor.clone();
+                    let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |a| {
+                        if a == gz_ui::Answer::Yes {
+                            tool_call(&ed, "object_tool", &[("action", Value::String("reset_surfaces".into())), ("selected", Value::Bool(false))]);
+                        }
+                    });
+                    if let Some(l) = line {
+                        editor.log.plain(l);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn spawn_tool(
@@ -370,6 +422,54 @@ impl ToolsPanel {
         });
         let section = current.rsplit('\\').next().unwrap_or("").to_owned();
         self.select_by_reference(ui, editor, svc, snap, ObjClass::SpawnPoint, &section, "entry");
+        let attaching = snap.tools.obj.spawn_attach;
+        if gz_ui_app::local::local_section(ui, "tool_spawn_attached", if attaching { "Attached Objects (Attaching)" } else { "Attached Objects" }, false) {
+            ui.horizontal(|ui| {
+                let mut on = attaching;
+                if gz_ui::grid::switch(ui, &mut on)
+                    .on_hover_text("A click on an object in the viewport attaches it to the selected spawn point")
+                    .changed()
+                {
+                    tool_call(editor, "spawn_attach", &[("action", Value::String("on_click".into())), ("on", Value::Bool(on))]);
+                    if on {
+                        gz_ui_viewport::Viewport::of(editor).with(|s| s.tool.action = gz_ui_viewport::Action::Place);
+                    }
+                }
+                text::label(ui, "Attach on Click", Font::Body, palette(ui.ctx()).text, Clip::End);
+            });
+            let holders: Vec<String> = snap
+                .of_class(ObjClass::SpawnPoint)
+                .filter(|o| snap.is_selected(o.id))
+                .filter(|o| matches!(&o.data, gz_scene::ObjData::Spawn(s) if s.attached.is_some()))
+                .map(|o| o.name.to_string())
+                .collect();
+            if local_button_flow(
+                ui,
+                &[LocalButton::new("Detach From Selected...", "Take the attached object off the selected spawn points")
+                    .when(!holders.is_empty(), "No selected spawn point holds an attached object")],
+            ) == Some(0)
+            {
+                let spec = gz_ui::ConfirmSpec {
+                    id: "detach_spawn_objects".into(),
+                    title: "Detach Objects".into(),
+                    headline: "Detach the attached objects from these spawn points?".into(),
+                    total: holders.len(),
+                    items: holders.into_iter().take(10).collect(),
+                    consequence: "Edit > Undo attaches them again.".into(),
+                    action: "Detach".into(),
+                    destructive: true,
+                };
+                let ed = editor.clone();
+                let line = gz_ui::dialog::confirm(ui.ctx(), asker(editor), spec, move |a| {
+                    if a == gz_ui::Answer::Yes {
+                        tool_call(&ed, "spawn_attach", &[("action", Value::String("detach".into()))]);
+                    }
+                });
+                if let Some(l) = line {
+                    editor.log.plain(l);
+                }
+            }
+        }
     }
 
     fn particles_tool(
@@ -433,12 +533,47 @@ impl ToolsPanel {
                         .when(any, "Select the objects first"),
                     LocalButton::new("Ungroup", "Take the selected groups apart")
                         .when(groups, "Select a group first"),
+                    LocalButton::new("Make Thumbnail", "Take the library thumbnail of the selected group from the viewport")
+                        .when(groups, "Select a group first"),
+                    LocalButton::new("Save As...", "Save the selected group to the library").when(groups, "Select a group first"),
                 ],
             ) {
                 Some(0) => svc
                     .store
                     .post(SceneCmd::Group { name: SmolStr::new(snap.gen_name(Some("group"))) }, origin),
                 Some(1) => svc.store.post(SceneCmd::Ungroup, origin),
+                Some(2) => tool_call(editor, "group_thumbnail", &[]),
+                Some(3) => save_group_as(editor, svc, snap),
+                _ => {}
+            }
+        }
+        if gz_ui_app::local::local_section(ui, "tool_group_pivot", "Pivot", false) {
+            let selected_group = snap
+                .selected_in_order()
+                .into_iter()
+                .filter_map(|id| snap.get(id))
+                .find(|o| o.class == ObjClass::Group)
+                .cloned();
+            match local_button_flow(
+                ui,
+                &[
+                    LocalButton::new("Center to Group", "Move the pivot of the groups to the middle of their objects"),
+                    LocalButton::new("Align to Object...", "Move the pivot of the selected group to one of its objects")
+                        .when(selected_group.is_some(), "Select a group first"),
+                ],
+            ) {
+                Some(0) => tool_call(editor, "group_tool", &[("action", Value::String("center_pivot".into()))]),
+                Some(1) => {
+                    if let Some(g) = &selected_group
+                        && let gz_scene::ObjData::Group(gd) = &g.data
+                    {
+                        let members: Vec<String> = gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
+                        *chooser = Some(
+                            Chooser::new(Purpose::ToolCommand { cmd: "group_tool", action: "align_pivot", arg: "object" }, "Object", None, "")
+                                .with_items(members),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -460,6 +595,15 @@ impl ToolsPanel {
                     }
                 });
             });
+            let groups = snap.selected_in_order().iter().any(|id| snap.get(*id).is_some_and(|o| o.class == ObjClass::Group));
+            if local_button_flow(
+                ui,
+                &[LocalButton::new("Reload References", "Read the library groups of the selected groups again")
+                    .when(groups, "Select a group first")],
+            ) == Some(0)
+            {
+                tool_call(editor, "group_tool", &[("action", Value::String("reload".into()))]);
+            }
         }
         self.select_by_reference(ui, editor, svc, snap, ObjClass::Group, &current, "group");
     }
@@ -658,46 +802,66 @@ impl ToolsPanel {
         });
     }
 
-    fn draw_random(&mut self, ui: &mut Ui, svc: &SceneService) {
+    /// The Random Settings sheet's Objects, picked in the chooser.
+    pub(crate) fn set_random_objects(&mut self, items: Vec<String>) {
+        if let Some(r) = self.random.as_mut() {
+            r.objects = items;
+        }
+    }
+
+    /// The `Random Append` sheet (`FillAppendRandomPropertiesBegin`): the Scale and Rotate
+    /// switches, Scale\\Proportional (one factor for the three axes), the ranges, the Objects.
+    fn draw_random(&mut self, ui: &mut Ui, svc: &SceneService, chooser: &mut Option<Chooser>) {
         let Some(r) = self.random.as_mut() else { return };
         let mut open = true;
         let mut ok = false;
         let mut cancel = false;
-        Dialog::new("Random Settings", "dlg.properties", DialogSize::M).show(
+        let mut pick = false;
+        Dialog::new("Random Append", "dlg.properties", DialogSize::M).show(
             ui,
             &mut open,
             |ui| {
                 gz_ui::PropertyGrid::new("dialog").show(ui, |g| {
-                    for (label, help, v, speed) in [
-                        (
-                            "Minimum Scale",
-                            "The smallest scale an added object gets, per axis",
-                            &mut r.min_scale,
-                            0.01,
-                        ),
-                        (
-                            "Maximum Scale",
-                            "The largest scale an added object gets, per axis",
-                            &mut r.max_scale,
-                            0.01,
-                        ),
-                        (
-                            "Minimum Rotation",
-                            "The smallest rotation an added object gets, per axis, in degrees",
-                            &mut r.min_rot,
-                            0.5,
-                        ),
-                        (
-                            "Maximum Rotation",
-                            "The largest rotation an added object gets, per axis, in degrees",
-                            &mut r.max_rot,
-                            0.5,
-                        ),
-                    ] {
-                        g.row(label, help, gz_ui::PropFlags::NONE, 0, |ui| {
-                            gz_ui::grid::vec3_field(ui, label, v, speed)
+                    g.row("Scale", "Each object added gets a random scale", gz_ui::PropFlags::NONE, 0, |ui| {
+                        gz_ui::grid::switch(ui, &mut r.scale);
+                    });
+                    if r.scale {
+                        g.row("Proportional", "One random factor for the three axes", gz_ui::PropFlags::NONE, 1, |ui| {
+                            gz_ui::grid::switch(ui, &mut r.proportional);
+                        });
+                        if r.proportional {
+                            g.row("Minimum", "The smallest scale an added object gets", gz_ui::PropFlags::NONE, 1, |ui| {
+                                ui.add(egui::DragValue::new(&mut r.min_scale[0]).speed(0.001).range(0.001..=1000.0).max_decimals(3));
+                            });
+                            g.row("Maximum", "The largest scale an added object gets", gz_ui::PropFlags::NONE, 1, |ui| {
+                                ui.add(egui::DragValue::new(&mut r.max_scale[0]).speed(0.001).range(0.001..=1000.0).max_decimals(3));
+                            });
+                        } else {
+                            g.row("Minimum", "The smallest scale an added object gets, per axis", gz_ui::PropFlags::NONE, 1, |ui| {
+                                gz_ui::grid::vec3_field(ui, "Scale Minimum", &mut r.min_scale, 0.001)
+                            });
+                            g.row("Maximum", "The largest scale an added object gets, per axis", gz_ui::PropFlags::NONE, 1, |ui| {
+                                gz_ui::grid::vec3_field(ui, "Scale Maximum", &mut r.max_scale, 0.001)
+                            });
+                        }
+                    }
+                    g.row("Rotate", "Each object added gets a random rotation", gz_ui::PropFlags::NONE, 0, |ui| {
+                        gz_ui::grid::switch(ui, &mut r.rotate);
+                    });
+                    if r.rotate {
+                        g.row("Minimum", "The smallest rotation, per axis, in degrees", gz_ui::PropFlags::NONE, 1, |ui| {
+                            gz_ui::grid::vec3_field(ui, "Rotate Minimum", &mut r.min_rot, 0.5)
+                        });
+                        g.row("Maximum", "The largest rotation, per axis, in degrees", gz_ui::PropFlags::NONE, 1, |ui| {
+                            gz_ui::grid::vec3_field(ui, "Rotate Maximum", &mut r.max_rot, 0.5)
                         });
                     }
+                    g.row("Objects", "What Randomize picks the added object from", gz_ui::PropFlags::NONE, 0, |ui| {
+                        let text = r.objects.join(", ");
+                        if gz_ui::grid::pick_field(ui, "random_objects", &text, true) == gz_ui::PickAction::Browse {
+                            pick = true;
+                        }
+                    });
                 });
             },
             |f| {
@@ -709,10 +873,18 @@ impl ToolsPanel {
                 }
             },
         );
+        if pick {
+            *chooser = Some(Chooser::new(Purpose::RandomObjects, "Objects", Some(ListKey::Objects), "").multi());
+        }
         if ok {
             let snap = svc.store.snapshot();
             let mut t = snap.tools.part(ObjClass::SceneObject).clone();
+            let mut set = |bit: u32, on: bool| t.flags = if on { t.flags | bit } else { t.flags & !bit };
+            set(gz_scene::tools::FL_APPEND_RANDOM_SCALE, r.scale);
+            set(gz_scene::tools::FL_APPEND_RANDOM_PROPORTIONAL, r.proportional);
+            set(gz_scene::tools::FL_APPEND_RANDOM_ROTATION, r.rotate);
             if let ToolOpts::Objects(o) = &mut t.opts {
+                o.objects = r.objects.iter().take(32).map(SmolStr::new).collect();
                 let rad = |v: [f32; 3]| {
                     gz_scene::math::Vec3::new(v[0].to_radians(), v[1].to_radians(), v[2].to_radians())
                 };
@@ -832,6 +1004,51 @@ pub fn add_several(editor: &Arc<Editor>, items: &[String]) {
             args.insert(k.into(), Value::from(0.0));
         }
         editor.post("place_object", args);
+    }
+}
+
+
+/// Runs a tool command off the UI thread; its error goes to the notices.
+fn tool_call(editor: &Arc<Editor>, command: &'static str, pairs: &[(&str, Value)]) {
+    let mut a = gz_editor::Args::new();
+    for (k, v) in pairs {
+        a.insert((*k).into(), v.clone());
+    }
+    let ed = editor.clone();
+    editor.exec.spawn(async move {
+        let r = ed.call(command, a, ed.ui_origin()).await;
+        if r.get("ok").and_then(Value::as_bool) != Some(true) {
+            ed.notices.error(r.get("error").and_then(Value::as_str).unwrap_or("The command failed.").to_owned());
+        }
+    });
+}
+
+/// The Group tool's Save As...: the library's `rawdata\\groups` in the system's dialog.
+fn save_group_as(editor: &Arc<Editor>, svc: &SceneService, snap: &SceneState) {
+    let name = snap
+        .selected_in_order()
+        .into_iter()
+        .filter_map(|id| snap.get(id))
+        .find(|o| o.class == ObjClass::Group)
+        .and_then(|g| g.ref_name().map(str::to_owned))
+        .unwrap_or_else(|| "group".to_owned());
+    let dir = svc.root.join("rawdata").join("groups");
+    let leaf = name.rsplit('\\').next().unwrap_or("group").to_owned();
+    let ed = editor.clone();
+    let spawned = std::thread::Builder::new().name("gz-ui-level.save_group".into()).spawn(move || {
+        let _ = std::fs::create_dir_all(&dir);
+        let picked = rfd::FileDialog::new()
+            .set_title("Save Group As")
+            .add_filter("Group", &["group"])
+            .set_directory(&dir)
+            .set_file_name(format!("{leaf}.group"))
+            .save_file();
+        if let Some(f) = picked {
+            tool_call(&ed, "group_tool", &[("action", Value::String("save_as".into())), ("file", Value::String(f.display().to_string()))]);
+        }
+    });
+    if let Err(e) = spawned {
+        editor.log.warn(format!("the save dialog did not open: {e}"));
     }
 }
 
