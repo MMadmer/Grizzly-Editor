@@ -20,6 +20,41 @@ pub enum PathError {
     BadCharacter(String),
 }
 
+/// Why `name` is not ONE file-name component Windows takes as it is, or `None` when it is: no
+/// separator, no `.` or `..`, no drive, no reserved device name (`CON`, `NUL`, `COM1`, ... with
+/// or without an extension), no character a file name may not hold, no trailing dot or space.
+#[must_use]
+pub fn file_name_problem(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("is empty");
+    }
+    if name.contains(['/', '\\']) {
+        return Some("holds a path separator: it names one folder, not a path");
+    }
+    if name == "." || name == ".." {
+        return Some("is no folder name");
+    }
+    if name.contains(':') {
+        return Some("holds a drive or a stream (':')");
+    }
+    if name.chars().any(|c| c < ' ' || matches!(c, '<' | '>' | '"' | '|' | '?' | '*')) {
+        return Some("holds a character no file name may have");
+    }
+    if name.ends_with(['.', ' ']) {
+        return Some("ends with a dot or a space, which Windows drops");
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let reserved =
+        ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].iter().any(|r| stem.eq_ignore_ascii_case(r))
+            || (stem.len() == 4
+                && ["COM", "LPT"].iter().any(|p| stem.get(..3).is_some_and(|h| h.eq_ignore_ascii_case(p)))
+                && stem.as_bytes().get(3).is_some_and(u8::is_ascii_digit));
+    if reserved {
+        return Some("is a name Windows reserves for a device");
+    }
+    None
+}
+
 /// A path below some root. The text keeps the case the author wrote; equality, order and hash
 /// ignore it.
 #[derive(Clone)]
@@ -335,6 +370,35 @@ mod tests {
         assert_eq!(p.parent().unwrap().extension(), None);
         assert_eq!(RelPath::new("route.v2.behasset").unwrap().stem(), "route.v2");
         assert_eq!(RelPath::new("a/b.tga").unwrap().with_extension("dds").as_str(), "a/b.dds");
+    }
+
+    #[test]
+    fn one_file_name_component() {
+        for ok in ["l01_escape", "level", "Агропром", "a.b", "com10", "lpt", "x y"] {
+            assert_eq!(file_name_problem(ok), None, "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "a\\b",
+            "a/b",
+            "..\\..\\x",
+            "C:",
+            "C:\\Windows",
+            "\\\\server\\share",
+            "nul",
+            "CON.txt",
+            "com1",
+            "LPT9.level",
+            "a?b",
+            "a*",
+            "a.",
+            "a ",
+            "tab\t",
+        ] {
+            assert!(file_name_problem(bad).is_some(), "{bad:?}");
+        }
     }
 
     #[test]

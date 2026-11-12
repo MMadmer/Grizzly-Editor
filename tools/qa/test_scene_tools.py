@@ -14,6 +14,8 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
   D  detail objects drawn: a snap list, a detail object list, a base texture, First Initialize, Reinitialize - the
      viewport's picture differs over the ground against the same view with the details hidden
   W  a wallmark of a texture the game has, laid on the ground: the picture differs where it lies, and only there
+  S  a screenshot is current: the scene opened again, ONE screenshot_editor and ONE screenshot_viewport right after it
+     show the scene (the viewport is not flat) and say nothing is pending
 
     python tools/qa/test_scene_tools.py --project <project> [--only R,A,...] [--shots <folder>]
 
@@ -38,7 +40,7 @@ import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MCP = qa_target.MCP
-PHASES = "RAMGPVDW"
+PHASES = "RAMGPVDWS"
 # open ground of Escape east of the village, no tree over it; every phase works round a point of its own
 SPOTS = {"R": (-119.0, -162.0), "A": (-130.0, -147.0), "M": (-100.0, -154.0), "G": (-119.0, -136.0),
          "P": (-101.0, -136.0), "V": (-130.0, -166.0), "D": (-110.0, -190.0), "W": (-110.0, -190.0)}
@@ -467,8 +469,53 @@ def phase_w() -> None:
     mcp("wallmark_tool", action="set", draw=True)
 
 
+def flat(img, box=None) -> float:
+    """The brightness spread (standard deviation) of a picture or of `box` of it: a viewport that drew nothing is one
+    colour."""
+    from PIL import ImageStat
+    part = img.crop(box) if box else img
+    return ImageStat.Stat(part.convert("L")).stddev[0]
+
+
+# where a fresh load of Escape puts the camera; the scene fills most of the view from there
+ESCAPE_VIEW = {"x": 0.0, "y": 3.0, "z": -10.0, "h": 0.0, "p": 0.0, "b": 0.0}
+
+
+def phase_s() -> None:
+    from PIL import Image
+    opened = mcp("open_scene", scene="l01_escape.level", discard=True, timeout=300)
+    check(opened.get("ok"), "S the scene opens again", short(opened))
+    mcp("ui_tab", action="open", id="level")
+    # the view a fresh load of Escape has (the phases before moved it): the picture must be of it
+    mcp("camera_set", **ESCAPE_VIEW)
+    # one call each, nothing waited for in between: the answer holds until the picture is current
+    shot = mcp("screenshot_editor", timeout=60)
+    view = [p for p in mcp("ui_list").get("panels", []) if p.get("id") == "viewport"]
+    rect = view[0].get("rect") if view else None
+    data = base64.b64decode(shot.get("png_base64") or b"")
+    spread = 0.0
+    if data and rect:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        x, y, w, h = rect
+        spread = flat(img, (x + w // 8, y + h // 8, x + w * 7 // 8, y + h * 7 // 8))
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            img.save(os.path.join(SHOTS, "current_editor.png"))
+    check(shot.get("ok") and not shot.get("pending") and spread > 8.0,
+          "S the first screenshot_editor after the load shows the scene in the viewport (spread %.1f)" % spread,
+          short({k: v for k, v in shot.items() if k != "png_base64"}))
+    opened = mcp("open_scene", scene="l01_escape.level", discard=True, timeout=300)
+    mcp("camera_set", **ESCAPE_VIEW)
+    pic = mcp("screenshot_viewport", timeout=60)
+    data = base64.b64decode(pic.get("png_base64") or b"")
+    spread = flat(Image.open(io.BytesIO(data)).convert("RGB")) if data else 0.0
+    check(pic.get("ok") and not pic.get("pending") and spread > 8.0,
+          "S the first screenshot_viewport after the load shows the scene (spread %.1f)" % spread,
+          short({k: v for k, v in pic.items() if k != "png_base64"}))
+
+
 STEPS = {"R": phase_r, "A": phase_a, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,
-         "W": phase_w}
+         "W": phase_w, "S": phase_s}
 
 
 def main() -> int:

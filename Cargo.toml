@@ -111,7 +111,8 @@ reqwest = { version = "0.13", default-features = false, features = ["native-tls"
 # scripting
 mlua = { version = "0.12", features = ["luajit", "vendored", "send"] }
 # presentation
-egui = { version = "0.37", features = ["default_fonts", "rayon", "bytemuck"] }
+# no "rayon": tessellation runs on the drawing thread, never on the global pool a build fills
+egui = { version = "0.37", features = ["default_fonts", "bytemuck"] }
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard", "links"] }
 egui-wgpu = { version = "0.37", default-features = false, features = ["winit"] }
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "parking_lot"] }

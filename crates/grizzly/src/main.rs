@@ -160,8 +160,9 @@ fn main() -> ExitCode {
             shell,
             gz_app::ShellOptions { fonts, iconsheet: cli.iconsheet, ui_scale: cli.ui_scale },
         );
-        startup.finish(&log);
-        if let Err(e) = gz_app::run(editor.clone(), opts, Box::new(shell)) {
+        // the profile runs on to the first frame on the screen
+        startup.set_log(log.clone());
+        if let Err(e) = gz_app::run(editor.clone(), opts, Box::new(shell), Some(Box::new(startup))) {
             log.error(&e);
             runtime.block_on(gz_project::close_project(&editor));
             return ExitCode::from(2);

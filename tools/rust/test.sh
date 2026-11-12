@@ -29,16 +29,20 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# the corpus: this machine's game and projects unless the caller named others
+# the corpus: this machine's game and projects unless the caller named others; with --all every
+# file of it is read (GRIZZLY_TEST_FULL), the default run takes every n-th
+set_here=0
 if [ -z "${GRIZZLY_TEST_GAME+x}" ] && [ -d "D:/Games/Dead Air/database" ]; then
     export GRIZZLY_TEST_GAME="D:/Games/Dead Air"
+    set_here=1
 fi
+[ $all -eq 1 ] && export GRIZZLY_TEST_FULL=1
 if [ -z "${GRIZZLY_TEST_PROJECTS+x}" ]; then
     list=""
     for p in "D:/XFinedProjects/DARF-Overnight-Delivery" "D:/XFinedProjects/Test" "D:/XFinedProjects/WeaponsEvolution"; do
         [ -d "$p" ] && list="${list:+$list;}$p"
     done
-    [ -n "$list" ] && export GRIZZLY_TEST_PROJECTS="$list"
+    [ -n "$list" ] && export GRIZZLY_TEST_PROJECTS="$list" && set_here=1
 fi
 
 now() { date +%s.%N; }
@@ -122,14 +126,19 @@ paste -d'|' Intermediate/test-logs/binaries.txt Intermediate/test-logs/sizes.txt
 run_one() { # name dir exe fp
     local name=$1 dir=$2 exe=$3 fp=$4 log="Intermediate/test-logs/${1//\//__}.log" start code tests secs
     start=$(now)
+    rm -f "$root/$log.skips"
     for attempt in 1 2; do
-        (cd "$dir" && timeout 120 "$exe" > "$root/$log" 2>&1)
+        (cd "$dir" && GRIZZLY_TEST_SKIPS="$root/$log.skips" timeout 120 "$exe" > "$root/$log" 2>&1)
         code=$?
         if [ $code -ne 0 ] && grep -q "os error 32" "$root/$log" && [ $attempt -eq 1 ]; then sleep 1; continue; fi
         break
     done
     secs=$(since "$start")
     tests=$(grep -E '^test result' "$root/$log" | tail -1 | sed -E 's/.* ([0-9]+) passed.*/\1/')
+    # a corpus test that did not read its data says why: shown, never mistaken for a pass
+    if [ -s "$root/$log.skips" ]; then
+        sort -u "$root/$log.skips" | sed "s|^|skipped $name: |"
+    fi
     if [ $code -eq 0 ]; then
         printf 'ok     %-34s %6ss  %s tests\n' "$name" "$secs" "${tests:-0}"
         printf '%s %s %s %s\n' "$name" "$fp" "${tests:-0}" "$secs" > "$root/$log.green"
@@ -143,7 +152,7 @@ run_one() { # name dir exe fp
 
 jobs_max=$(( $(nproc 2>/dev/null || echo 4) / 2 ))
 [ $jobs_max -lt 1 ] && jobs_max=1
-rm -f Intermediate/test-logs/*.green Intermediate/test-logs/*.failed
+rm -f Intermediate/test-logs/*.green Intermediate/test-logs/*.failed Intermediate/test-logs/*.skips
 cached=$(grep -c '^cached|' Intermediate/test-logs/plan.txt)
 ran=$(grep -c '^run|' Intermediate/test-logs/plan.txt)
 grep '^cached|' Intermediate/test-logs/plan.txt | awk -F'|' '{ printf "cached %-34s %s tests\n", $2, $3 }'
@@ -155,7 +164,8 @@ while IFS='|' read -r what name dir exe fp; do
     case "$name" in gz-render|gz-render/*) alone+=("$name|$dir|$exe|$fp"); continue ;; esac
     while [ "$(jobs -rp | wc -l)" -ge $jobs_max ]; do wait -n; done
     run_one "$name" "$dir" "$exe" "$fp" &
-done < Intermediate/test-logs/plan.txt
+# the corpus binaries take longest: they start first, the short ones fill the cores beside them
+done < <(grep '/corpus|' Intermediate/test-logs/plan.txt; grep -v '/corpus|' Intermediate/test-logs/plan.txt)
 wait
 for a in "${alone[@]+"${alone[@]}"}"; do
     IFS='|' read -r name dir exe fp <<< "$a"
@@ -174,6 +184,12 @@ failed=$(find Intermediate/test-logs -name '*.failed' | wc -l)
 mv "$stamps.new" "$stamps"
 
 total_tests=$(awk '{ s += $3 } END { print s + 0 }' "$stamps")
-printf '\nbuild %ss, corpus stamp %ss, run %ss, total %ss: %d binaries run, %d cached, %d failed; %d tests green in all\n' \
-    "$build_secs" "$stamp_secs" "$run_secs" "$(since "$t0")" "$ran" "$cached" "$failed" "$total_tests"
+skips=$(cat Intermediate/test-logs/*.skips 2>/dev/null | wc -l)
+# --all on a machine whose data this script found: a corpus test that skipped did not prove anything
+if [ $all -eq 1 ] && [ $set_here -eq 1 ] && [ "$skips" -gt 0 ]; then
+    echo "FAILED: $skips corpus skip(s) in a full run with the corpus variables set by this script"
+    failed=$((failed + 1))
+fi
+printf '\nbuild %ss, corpus stamp %ss, run %ss, total %ss: %d binaries run, %d cached, %d failed, %d skipped; %d tests green in all\n' \
+    "$build_secs" "$stamp_secs" "$run_secs" "$(since "$t0")" "$ran" "$cached" "$failed" "$skips" "$total_tests"
 [ "$failed" -eq 0 ] || exit 1

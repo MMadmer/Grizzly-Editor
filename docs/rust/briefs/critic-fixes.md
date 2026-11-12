@@ -189,6 +189,10 @@ measure the frame's work during a build again and write the numbers; the limit i
 
 ## 10. A build loads a third of the cores
 
+> Closed early on the user's word (12 Nov): a build of about a second is fast enough. What was
+> already made parallel stays if it is finished and green; the measured stage table goes into
+> STATE.md; no further restructuring for load. The rule stands for long operations.
+
 Measured: a clean build of the reference mod uses 0.24-0.38 of 16 logical cores. The user's
 demand is that the editor's work takes everything the hardware has; an idle core beside a
 serial stage is the fault here, not a busy one. Profile the build by stage (the walk, the

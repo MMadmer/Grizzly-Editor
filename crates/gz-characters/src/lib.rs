@@ -5,7 +5,7 @@
 //!
 //! The C++ specification is `EditorCharacters.h/.cpp` (the model, `Resolve` / `LoadResolved`,
 //! `Validate`, `CheckForBuild`, `Briefs`, `TradeCategories`, the MCP handlers). Its drawing is
-//! the Characters tab, a later package; the tab binds to the RAW stored values ([`text_raw`]).
+//! the Characters tab (`gz-ui-world`), which binds to the RAW stored values ([`text_raw`]).
 //!
 //! # The domain (pure)
 //!

@@ -194,7 +194,8 @@ pub(crate) fn install(b: &mut ShellBuilder) {
     b.dialog(DialogDesc {
         id: SmolStr::new("import_base_scene"),
         window: SmolStr::new("Import Base Scene###dlg.import_base_scene"),
-        needs_project: false,
+        // it imports into the open project: it goes down with the project
+        needs_project: true,
         open: Box::new(open),
         draw: Box::new(draw),
     });

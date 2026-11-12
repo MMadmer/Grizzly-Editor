@@ -36,7 +36,7 @@ use windows::Win32::System::Diagnostics::Debug::{
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId, GetProcessIoCounters,
     GetProcessTimes, GetStartupInfoW, GetThreadPriority, IO_COUNTERS, STARTF_USESHOWWINDOW, STARTUPINFOW,
-    SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL, TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -52,6 +52,8 @@ pub struct ProcessCounters {
     /// Opens, closes, queries: everything that is neither a read nor a write.
     pub other_ops: u64,
     pub read_bytes: u64,
+    /// The CPU time of every thread of the process so far, kernel and user, in seconds.
+    pub cpu_seconds: f64,
 }
 
 impl ProcessCounters {
@@ -90,7 +92,13 @@ pub fn process_counters() -> io::Result<ProcessCounters> {
         write_ops: io_counters.WriteOperationCount,
         other_ops: io_counters.OtherOperationCount,
         read_bytes: io_counters.ReadTransferCount,
+        cpu_seconds: (filetime_ticks(kernel) + filetime_ticks(user)) as f64 / 1e7,
     })
+}
+
+/// A `FILETIME` duration in its 100 ns ticks.
+fn filetime_ticks(t: FILETIME) -> u64 {
+    (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)
 }
 
 /// Whether whoever started the process asked for a minimised window (a shortcut's
@@ -137,6 +145,41 @@ pub fn foreground_is_ours() -> bool {
         }
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         pid == GetCurrentProcessId()
+    }
+}
+
+/// Paints the client area of a window of this thread in one colour (`rgb`): what a window shows
+/// before its graphics device exists, instead of the white or black of an unpainted window.
+/// Answers whether it painted.
+pub fn fill_client(hwnd: isize, rgb: [u8; 3]) -> bool {
+    use windows::Win32::Foundation::{COLORREF, HWND, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        CreateSolidBrush, DeleteObject, FillRect, GetDC, HGDIOBJ, ReleaseDC,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    let color = COLORREF(u32::from(rgb[0]) | (u32::from(rgb[1]) << 8) | (u32::from(rgb[2]) << 16));
+    // SAFETY: the handle is checked to name a window before anything is drawn; the device context
+    // is released and the brush deleted before returning, on every path; `rect` is a live local.
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return false;
+        }
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        let dc = GetDC(Some(hwnd));
+        if dc.is_invalid() {
+            return false;
+        }
+        let brush = CreateSolidBrush(color);
+        let painted = !brush.is_invalid() && FillRect(dc, &rect, brush) != 0;
+        if !brush.is_invalid() {
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+        }
+        ReleaseDC(Some(hwnd), dc);
+        painted
     }
 }
 
@@ -187,7 +230,15 @@ unsafe extern "system" fn fatal_filter(pointers: *const EXCEPTION_POINTERS) -> i
     {
         let _ = dump_to(&file, Some(pointers));
     }
-    std::process::exit(CRASH_EXIT_CODE)
+    // The state is broken: no Rust destructor, `atexit` handler or thread-local teardown may
+    // run on it (`std::process::exit` runs them). The process ends here, as a filter may end it.
+    // SAFETY: the pseudo-handle of this process is always valid; TerminateProcess does not
+    // return when it terminates the calling process.
+    unsafe {
+        let _ = TerminateProcess(GetCurrentProcess(), CRASH_EXIT_CODE as u32);
+    }
+    // only reached when the system refused to end the process: the default handler ends it
+    1
 }
 
 /// From now on an access violation or any other unhandled system exception - a fault inside a
@@ -201,7 +252,8 @@ pub fn install_fatal_exception_dump(path: PathBuf) {
         return;
     }
     // SAFETY: `fatal_filter` has the signature the system expects, never returns into the faulting
-    // code (it exits the process), and stays valid for the life of the process.
+    // code (it terminates the process, or hands the exception to the default handler), and stays
+    // valid for the life of the process.
     unsafe {
         SetUnhandledExceptionFilter(Some(fatal_filter));
     }

@@ -1781,7 +1781,16 @@ impl ShellState {
     fn draw_dialogs(&mut self, _ui: &mut Ui) {
         let ctx = _ui.ctx().clone();
         let ShellState { parts, editor, gpu, active, requests, .. } = self;
+        // a dialog of the project goes down with it: over the Start page there is none to act on
+        let no_project = editor.project_opt().is_none();
         for d in &mut parts.dialogs {
+            if no_project
+                && d.needs_project
+                && let Some((_, name)) = d.window.split_once("###")
+                && gz_ui::dialog::open_dialogs(&ctx).iter().any(|o| o.id == name)
+            {
+                gz_ui::dialog::close_dialog(&ctx, name);
+            }
             (d.draw)(_ui, &mut DocCx { editor, gpu, ctx: &ctx, active_tab: active, requests });
         }
     }

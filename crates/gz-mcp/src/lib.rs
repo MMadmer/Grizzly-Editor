@@ -89,12 +89,7 @@ async fn connection(editor: Arc<Editor>, stream: TcpStream, timeout: Duration) -
             continue;
         }
         let reply = match parse_request(text) {
-            Ok((cmd, args)) => {
-                match tokio::time::timeout(timeout, editor.call(&cmd, args, Origin::Mcp)).await {
-                    Ok(reply) => reply,
-                    Err(_) => json!({ "ok": false, "error": "editor busy (timeout)" }),
-                }
-            }
+            Ok((cmd, args)) => run_request(&editor, cmd, args, timeout).await,
             Err(error) => json!({ "ok": false, "error": error }),
         };
         let mut out = serde_json::to_vec(&reply)
@@ -102,6 +97,19 @@ async fn connection(editor: Arc<Editor>, stream: TcpStream, timeout: Duration) -
         out.push(b'\n');
         write.write_all(&out).await?;
         write.flush().await?;
+    }
+}
+
+/// Runs one command as a task of its own: the caller gets a timeout answer when it takes too
+/// long, and the command runs to its end whatever the connection does - a timeout or a client
+/// that went away never cuts a command that changes state half way.
+async fn run_request(editor: &Arc<Editor>, cmd: String, args: Args, timeout: Duration) -> Value {
+    let ed = editor.clone();
+    let task = editor.exec.spawn(async move { ed.call(&cmd, args, Origin::Mcp).await });
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(reply)) => reply,
+        Ok(Err(_)) => json!({ "ok": false, "error": "internal error: the command did not finish" }),
+        Err(_) => json!({ "ok": false, "error": "editor busy (timeout)" }),
     }
 }
 
@@ -145,5 +153,40 @@ fn parse_request(text: &[u8]) -> Result<(String, Args), String> {
     match map.remove("cmd") {
         Some(Value::String(cmd)) if !cmd.is_empty() => Ok((cmd, map)),
         _ => Err("missing 'cmd'".to_owned()),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn a_command_runs_to_its_end_past_the_timeout() {
+        let rt = gz_task::Runtime::start(gz_task::ExecOptions::default()).unwrap();
+        let (log, _guard) = gz_editor::Log::start(None, false).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        let mut reg = gz_editor::Registry::new();
+        let d2 = done.clone();
+        reg.add("test", "slow_edit", move |_ed, _a, _o| {
+            let d = d2.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                d.store(true, Ordering::Release);
+                Ok(json!({ "edited": true }))
+            }
+        });
+        let editor = Editor::new(gz_editor::EditorOptions::default(), rt.exec(), log, reg);
+        let reply =
+            rt.block_on(run_request(&editor, "slow_edit".into(), Args::new(), Duration::from_millis(50)));
+        assert_eq!(reply["error"], "editor busy (timeout)");
+        assert!(!done.load(Ordering::Acquire));
+        // the caller was answered; the command was not cut: it ends by itself
+        rt.block_on(async { tokio::time::sleep(Duration::from_millis(600)).await });
+        assert!(done.load(Ordering::Acquire), "the command ran to its end");
+        let reply =
+            rt.block_on(run_request(&editor, "slow_edit".into(), Args::new(), Duration::from_secs(5)));
+        assert_eq!(reply["edited"], true);
     }
 }

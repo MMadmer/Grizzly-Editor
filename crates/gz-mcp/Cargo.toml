@@ -14,3 +14,6 @@ workspace = true
 gz-editor.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+gz-task.workspace = true

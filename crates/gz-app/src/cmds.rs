@@ -484,6 +484,19 @@ async fn ui_dialog(editor: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
             let known: Vec<&str> = contract::DIALOGS.iter().map(|(i, _)| *i).collect();
             return Ok(json!({ "dialogs": dialogs_json(shell, ctx), "known": known }));
         }
+        // close without an id: the dialog on top, as Esc closes it
+        let id = if id.is_empty() && action == "close" {
+            if shell.palette_open() {
+                contract::PALETTE_ID.to_owned()
+            } else {
+                match dialog::modal_on_top(ctx) {
+                    Some(d) => dialog_mcp_id(&d.id).to_owned(),
+                    None => return Err(invalid("no dialog is open (ui_dialog action=list names what is)")),
+                }
+            }
+        } else {
+            id
+        };
         if id.is_empty() {
             return Err(invalid("id names the dialog (ui_contract lists them)"));
         }

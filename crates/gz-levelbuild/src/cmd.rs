@@ -125,6 +125,10 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             }
             let svc = SceneService::of(editor)?;
             let level = svc.store.snapshot().meta.level.level_path.to_string();
+            // the compilers write `$game_levels$\<level>` themselves: the same one folder name
+            if !(action == "compile_spawn" && a.flag("all_levels")) {
+                crate::folder::level_folder(&levels_root(editor), &level).map_err(CmdError::invalid)?;
+            }
             let (program, params) = match action {
                 "compile_geometry" => (Program::XrLc, String::new()),
                 "compile_details" => (Program::XrDo, String::new()),
@@ -205,9 +209,24 @@ fn exe_dirs(editor: &Editor) -> Vec<PathBuf> {
     vec![editor.paths.exe_dir.clone(), editor.paths.root.join("Bin").join("x64").join("Release")]
 }
 
-/// `$game_levels$\<level>\`.
-fn level_dir(editor: &Editor, level: &str) -> PathBuf {
-    editor.paths.root.join("gamedata").join("levels").join(level)
+/// The project's `gamedata`: an open project remounts `$game_levels$` and `$game_spawn$` there
+/// (the C++ `EditorProject` mounts), so a level build lands in the project, never in the editor
+/// or the game.
+fn game_out(editor: &Editor) -> PathBuf {
+    match editor.project_opt() {
+        Some(s) => s.root.join("gamedata"),
+        None => editor.paths.root.join("gamedata"),
+    }
+}
+
+/// `$game_levels$`.
+fn levels_root(editor: &Editor) -> PathBuf {
+    game_out(editor).join("levels")
+}
+
+/// `$game_levels$\<level>\`, or the sentence that refuses the level path.
+fn level_dir(editor: &Editor, level: &str) -> Result<PathBuf, JobError> {
+    crate::folder::level_folder(&levels_root(editor), level).map_err(JobError::new)
 }
 
 /// Starts a compiler or the game as the `level_run` job; answers once it started.
@@ -542,10 +561,20 @@ async fn compile_level(
     if level.is_empty() {
         return Err(JobError::new("ERROR: Failed to prepare level path "));
     }
-    let dir = level_dir(editor, &level);
+    let dir = level_dir(editor, &level)?;
     ctx.stage("Preparing the level folder");
-    let d2 = dir.clone();
-    editor.exec.io(move || if d2.is_dir() { gz_build::install::wipe_tree(&d2) } else { 0 }).await;
+    let (d2, base) = (dir.clone(), levels_root(editor));
+    editor
+        .exec
+        .io(move || {
+            crate::folder::check_wipe(&base, &d2)?;
+            if d2.is_dir() {
+                gz_build::install::wipe_tree(&d2);
+            }
+            Ok::<(), String>(())
+        })
+        .await
+        .map_err(JobError::new)?;
     ctx.check()?;
     ctx.stage("Reading the LOD textures");
     let lods = Arc::new(lod_pictures(editor, inp).await);
@@ -638,7 +667,7 @@ async fn build_for_play(
     ctx: &JobCtx,
 ) -> Result<(), JobError> {
     let level = inp.snap.meta.level.level_path.to_string();
-    let dir = level_dir(editor, &level);
+    let dir = level_dir(editor, &level)?;
     let d2 = dir.clone();
     let built = editor
         .exec
@@ -702,7 +731,7 @@ async fn build_for_play(
     write_files(editor, dir, vec![("level.ai.temp".to_owned(), ai_temp)])
         .await
         .map_err(|_| JobError::new("level.ai.temp can't save!\nSee log."))?;
-    let spawns = editor.paths.root.join("gamedata").join("spawns");
+    let spawns = game_out(editor).join("spawns");
     write_files(editor, spawns, vec![("editor.spawn".to_owned(), built.bytes)]).await?;
     Ok(())
 }
@@ -722,6 +751,7 @@ async fn make_part(
     if level.is_empty() {
         return Err(JobError::new("ERROR: Failed to prepare level path. "));
     }
+    let dir = level_dir(editor, &level)?;
     let detail_textures = if action == "make_details" {
         let names = match &inp.snap.bulk.details {
             Some(d) => crate::details::used_textures(&d.model, &files::lookup(inp.lib.clone())),
@@ -786,7 +816,6 @@ async fn make_part(
         if l.starts_with('!') { editor.log.warn(l) } else { editor.log.info(l) }
     }
     let names: Vec<String> = made.iter().map(|(n, _)| n.clone()).collect();
-    let dir = level_dir(editor, &level);
     write_files(editor, dir, made).await?;
     Ok(json!({ "level": level, "files": names }))
 }

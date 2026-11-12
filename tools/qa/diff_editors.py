@@ -29,17 +29,20 @@ the default run takes only what failed or changed.
 from __future__ import annotations
 
 import argparse
+import collections
 import concurrent.futures
 import difflib
 import fnmatch
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -68,7 +71,7 @@ RUST_PORT0 = 28120
 # must leave both its own names there untouched.
 CPP_KEPT = ["_projects.ini", "level.ini", "level_imgui.ini"]
 # Bumped when what a record holds or how the C++ side is run changes.
-ORACLE_FORMAT = 2
+ORACLE_FORMAT = 3
 RUST_KEPT = ["_projects.ini", "grizzly_editor.ltx"]
 
 SOURCES = {
@@ -83,6 +86,7 @@ STEP_TIMEOUT = 120.0
 START_TIMEOUT = 120.0
 CLOSE_TIMEOUT = 60.0
 BLOB_LIMIT = 16 << 20
+LEVEL_BLOB_LIMIT = 1 << 30
 NORMALISE_LIMIT = 8 << 20
 
 # ------------------------------------------------------------------------------------------------
@@ -229,6 +233,30 @@ FILE_RULES: list[tuple[str, str, str]] = [
      "D4: the index states the package's bytes on disk (offset, packed length, method); every other column is compared"),
     ("temp/out/pkg/*.update.ltx", "descriptor_sizes",
      "D4: the descriptor pins the package and the index by size and SHA-256; every other line is compared"),
+    # the level exports' models (s6_scene) and the level build (s7_levelbuild); the rules are the functions
+    # below, STATE.md "For the plan" states them
+    ("*levels/*/overlay.xcform", "cmp_xcform",
+     "D14: the material table in the order a mesh's surface map (keyed by CSurface pointers) meets the surfaces: "
+     "each triangle's material compared by name; header, vertices, corners and cut list byte for byte"),
+    ("*levels/*/visuals/*.ogf", "cmp_ogf",
+     "D14: a world-space model's children (one per surface) and the collision mesh after them come in the order "
+     "of the mesh's surface map, keyed by CSurface pointers (CExportObjectOGF): the children compared as a "
+     "multiset of their bytes, the collision mesh as a multiset of triangles; every other chunk byte for byte"),
+    ("project/gamedata/levels/*/build.prj", "cmp_build_prj",
+     "D14: faces in the order of each mesh's surface map (keyed by CSurface pointers), so the material, shader "
+     "and texture tables in the order faces meet them - compared as sets of what they name; struct padding and "
+     "the fields the C++ never clears (b_face's pad, an unset Flight's fields, the LOD material's reserved and "
+     "area) left out; LOD corners within 2 micrometres, point-light colours within 4 ULP"),
+    ("project/gamedata/levels/*/level.spawn", "cmp_level_spawn",
+     "D10: the Rust build's breakable and climable objects left out (the C++ writes none); a smart cover's "
+     "loopholes in Lua `pairs` order - compared as a set; every other entry byte for byte"),
+    ("project/gamedata/levels/*/meshes/brkbl#*.ogf", "rust_only",
+     "D10: the breakable objects' models, which the C++ build cannot make"),
+    ("project/gamedata/levels/*/level_stat.txt", "cmp_level_stat_txt",
+     "the author's statistic (no compiler and not the game reads it): a vertex a rounding away from a 1 m "
+     "cell's border may land beside it; the maxima within 0.5 %, every other line equal"),
+    ("project/gamedata/levels/*/level_stat.tga", "cmp_level_stat_tga",
+     "the same statistic as a picture: at most one pixel in 10000 differs"),
 ]
 
 # Commands of the catalogue this run never sends, and why (the ledger's "not compared").
@@ -239,7 +267,7 @@ CAMERA = ("the C++ ray pick skips every object its camera does not see (CSceneOb
 PROJECTS = "works on the editor's project list and other projects' folders: test_project_browser.py drives it on throw-away projects"
 NOT_COMPARED: dict[str, str] = {
     **{c: RUST_ONLY for c in (
-        "jobs", "level_build", "sector_tool", "portal_tool", "way_tool", "shape_tool", "light_tool", "fog_tool",
+        "jobs", "sector_tool", "portal_tool", "way_tool", "shape_tool", "light_tool", "fog_tool",
         "aimap_tool", "details_tool", "wallmark_tool", "particles_tool", "scene_edit", "selection_file",
         "rename_objects", "level_parts", "scene_new", "scene_summary", "compiler_errors", "scene_validate",
         "scene_export_obj", "object_motion", "object_tool", "spawn_attach", "group_tool")},
@@ -274,8 +302,18 @@ NETWORK = {
 # {"gen": f} is expanded on the C++ side from the answers so far and recorded with them.
 
 def S(cmd: str, watch: list[str] | None = None, timeout: float | None = None, settle: str = "",
-      **args) -> dict:
+      expect: str = "ok", answer: str = "", cpp: dict | None = None, **args) -> dict:
+    """One step. `expect` is what both editors must answer - "ok" (the work happens) or "refused" (the
+    refusal is the point); anything else fails the scenario, also while the oracle is recorded. `answer`
+    "skip: <why>" compares the files the step wrote and not its answer (the two editors' commands differ:
+    `cpp` names the C++ editor's {cmd, args} for the step)."""
     step: dict = {"cmd": cmd, "args": args}
+    if expect != "ok":
+        step["expect"] = expect
+    if answer:
+        step["answer"] = answer
+    if cpp:
+        step["cpp"] = cpp
     if watch:
         step["watch"] = watch
     if settle:
@@ -376,10 +414,10 @@ S2 = [
     S("mod_set_manifest", watch=M, vars="night=1, qa_flag=true, qa_text=\"hello\""),
     S("mod_set_manifest", watch=M, provides_mode_title="Overnight Delivery QA"),
     S("mod_set_manifest", watch=M, disable_game_updates=True),
-    S("mod_set_manifest", watch=M, tags="story, horror"),
-    S("mod_set_manifest", watch=M, tags="not_a_tag"),
+    S("mod_set_manifest", watch=M, tags="story, horror", expect="refused"),
+    S("mod_set_manifest", watch=M, tags="not_a_tag", expect="refused"),
     S("mod_set_manifest", watch=M, version="1.2.0.1"),
-    S("mod_set_manifest", watch=M, version="not a version"),
+    S("mod_set_manifest", watch=M, version="not a version", expect="refused"),
     S("mod_exclude", watch=M, path="design", excluded=False),
     S("mod_exclude", watch=M, path="*.psd", excluded=True),
     S("mod_exclude", watch=M, path="docs/*.md", excluded=True),
@@ -389,7 +427,7 @@ S2 = [
     S("mod_commands", watch=M, name="qa_cmd", remove=True),
     S("world_set", watch=M, original_npcs=True),
     S("world_set", watch=M, player_choice="random_stalkers,mutants"),
-    S("world_set", watch=M, player_choice="random_stalkers,mutants,npc_quests,story_quests"),
+    S("world_set", watch=M, player_choice="random_stalkers,mutants,npc_quests,story_quests", expect="refused"),
     S("world_set", watch=M, levels="l03_agroprom"),
     S("world_set", watch=M, lock="agr_level_changer_to_garbage", lock_level="l03u_agr_underground"),
     S("world_set", watch=M, unlock="agr_level_changer_to_garbage", unlock_level="l03u_agr_underground"),
@@ -402,7 +440,7 @@ S2 = [
     S("screens_set", watch=M, action="policy", surface="loading", screens="only"),
     S("screens_set", watch=M, action="screen_add", id="qa_screen", surface="loading"),
     S("screens_set", watch=M, action="screen_set", id="qa_screen", levels="l03_agroprom", weight=2),
-    S("screens_set", watch=M, action="track_add", id="qa_track"),
+    S("screens_set", watch=M, action="track_add", id="qa_track", expect="refused"),
     S("screens_set", watch=M, action="screen_remove", id="qa_screen"),
     S("screens_get"),
     S("world_set", watch=M, preset="stock"),
@@ -416,11 +454,18 @@ QUEST_TEXT = """return {
   id = "qa_written",
   title = "QA written",
   activation = "auto",
-  tasks = { { id = "t_main", title = "Main task" } },
+  tasks = {
+    t_main = { title = "Main task", descr = "The task the rename step renames.", type = "additional" },
+  },
   nodes = {
     { id = "start", kind = "trigger.start", out = { next = "step" } },
-    { id = "step", kind = "flow.step", params = { task = "t_main" }, out = { next = "done" } },
-    { id = "done", kind = "flow.end" },
+    { id = "step", kind = "flow.step",
+      on_enter = { { kind = "task.give", params = { task = "t_main" } } },
+      out = { next = "close" } },
+    { id = "close", kind = "flow.step",
+      on_enter = { { kind = "task.complete", params = { task = "t_main" } } },
+      out = { next = "done" } },
+    { id = "done", kind = "flow.end", params = { status = "completed" } },
   },
 }
 """
@@ -492,26 +537,28 @@ S4 = [
     S("content_copy", src="LICENSE", dst="qa_ops/" + U_FOLDER + "/日本の地図.txt", overwrite=True),
     S("content_rename", path="qa_ops/" + U_FOLDER + "/日本の地図.txt", name="Сюжет ✓.txt"),
     S("content_rename", path="qa_ops/" + U_FOLDER + "/Ночная доставка.npcasset", name="Ночной.txt"),
-    S("content_rename", path="qa_ops/" + U_FOLDER + "/Ночная доставка.npcasset", name="Ночной"),
+    S("content_rename", path="qa_ops/" + U_FOLDER + "/Ночной.txt", name="Ночной"),
     S("content_copy", src="quests/side", dst="qa_ops/side_copy", recursive=True),
     S("content_copy", src="quests/side", dst="qa_ops/side_copy2"),
-    S("content_move", src="qa_ops/side_copy/h1_hot_kitchen.nqasset", dst="qa_ops/" + U_FOLDER + "/Доставка.nqasset"),
+    S("content_move", src="qa_ops/side_copy/side/h1_hot_kitchen.nqasset", dst="qa_ops/" + U_FOLDER + "/Доставка.nqasset"),
     S("content_move", src="qa_ops/side_copy", dst="qa_ops/" + U_FOLDER + "/side", recursive=True),
     S("content_rename", path="qa_ops/" + U_FOLDER, name="qa_renamed"),
     S("quest_list"),
     S("darf_copy", path="ai/alife/birthpercentage.efd"),
-    S("darf_copy", path="ai/alife/birthpercentage.efd"),
+    S("darf_copy", path="ai/alife/birthpercentage.efd", expect="refused"),
     S("darf_copy", path="ai/alife/birthpercentage.efd", overwrite=True),
-    S("darf_copy", path="ai/alife/no_such_file.efd"),
-    S("content_delete", path="qa_ops/qa_renamed/side/h2_cold_chain.nqasset"),
-    S("content_delete", path="qa_ops/qa_renamed/side"),
+    S("darf_copy", path="ai/alife/no_such_file.efd", expect="refused"),
+    S("content_delete", path="qa_ops/qa_renamed/side/side_copy/side/h2_cold_chain.nqasset"),
+    S("content_delete", path="qa_ops/qa_renamed/side", expect="refused"),
     S("content_delete", path="qa_ops/qa_renamed/side", recursive=True),
-    S("content_delete", path="qa_ops/nothing_here.txt"),
-    S("content_delete", path=""),
-    S("content_move", src="qa_ops/qa_renamed/Сюжет ✓.txt", dst="../outside.txt"),
+    S("content_delete", path="qa_ops/nothing_here.txt", expect="refused"),
+    S("content_delete", path="", expect="refused"),
+    S("content_move", src="qa_ops/qa_renamed/Сюжет ✓.txt", dst="../outside.txt", expect="refused"),
 ]
 
 S5 = [
+    # an open scene: every build bakes it into the module's spawn\<level>.xspawn first
+    S("open_scene", scene="l03_agroprom.level", timeout=600, settle="viewport"),
     S("mod_export", target="<temp>\\out\\game", timeout=300),
     S("mod_export", target="<temp>\\out\\game", timeout=300),
     S("mod_export", target="<temp>\\out\\flat", flat=True, timeout=300),
@@ -547,7 +594,7 @@ def gen_scene_props(answers: list) -> list[dict]:
                   S("property_set", key=k, value=""), S("object_info", name=name)]
     steps += [S("spawn_set_fixed_bones", name=name, bones=""),
               S("spawn_set_fixed_bones", name=name, bones="link"),
-              S("spawn_set_visual", name=name, visual="dynamics\\door\\no_such_visual"),
+              S("spawn_set_visual", name=name, visual="dynamics\\door\\no_such_visual", expect="refused"),
               S("deselect_all")]
     return steps
 
@@ -570,7 +617,7 @@ def gen_scene_edits(answers: list) -> list[dict]:
         # (CSceneObject::RayPick, occ_visible) - STATE.md, Differences the differential left
         S("place_way", name="qa_patrol", points="-232,-20,-150; -228,-20,-156; -236,-20,-158",
           snap_to_ground=False),
-        S("place_way", name="qa_patrol", points="-200,-20,-140"),
+        S("place_way", name="qa_patrol", points="-200,-20,-140", expect="refused"),
         S("selection"),
         S("scene_info"),
     ]
@@ -584,23 +631,22 @@ def gen_scene_after_place(answers: list) -> list[dict]:
     start, stalker = placed(0), placed(1)
     steps = [
         S("object_set_position", name="qa_static", x=-221.5, y=-19.0, z=-141.25),
-        S("object_set_rotation", name="qa_static", x=0.0, y=45.0, z=0.0),
+        S("object_set_rotation", name="qa_static", x=0.0, y=0.7853982, z=0.0),
         S("object_set_scale", name="qa_static", x=1.5, y=1.5, z=1.5),
         S("object_info", name="qa_static"),
         S("rename_object", name="qa_static", new_name="qa_static_renamed"),
-        S("rename_object", name="qa_static_renamed", new_name="qa_patrol"),
+        S("rename_object", name="qa_static_renamed", new_name="qa_patrol", expect="refused"),
     ]
     if stalker:
         steps += [
             S("spawn_order", name=stalker),
-            S("spawn_order", name=stalker, order="patrol"),
+            S("spawn_order", name=stalker, order="patrol", expect="refused"),
             S("spawn_order", name=stalker, order="patrol", route="qa_patrol", run=True, hostile=True),
             S("object_info", name=stalker),
         ]
     if start:
-        steps.append(S("spawn_order", name=start))
+        steps.append(S("spawn_order", name=start, expect="refused"))
     steps += [
-        S("place_spawn", section="player_start", x=-205.0, y=-20.0, z=-150.0),
         S("world_get"),
         S("select_objects", names="qa_static_renamed"),
         S("delete_selected"),
@@ -608,13 +654,53 @@ def gen_scene_after_place(answers: list) -> list[dict]:
         S("selection"),
         S("scene_stats"),
         S("save_scene", timeout=600),
-        S("mod_export_spawn", selected_only=False, timeout=300),
-        S("mod_export_xcform", timeout=300),
-        S("mod_export_cut", timeout=300),
-        S("mod_export_ogf_probe", timeout=300),
-        S("mod_export", target="<temp>/out/game", timeout=600),
+        S("mod_export_spawn", selected_only=False, timeout=300, watch=[XSPAWN]),
+        # a small static object alone, turned and scaled: the golden files of crates/gz-export-level/tests/data
+        S("place_object", ref=GOLDEN_REF, name="qa_golden", x=-226.0, y=-20.0, z=-146.0),
+        S("object_set_rotation", name="qa_golden", x=0.0, y=0.5, z=0.0),
+        S("object_set_scale", name="qa_golden", x=1.25, y=1.25, z=1.25),
+        S("select_objects", names="qa_golden"),
+        S("mod_export_xcform", timeout=300, watch=[XCFORM]),
+        S("mod_export_cut", timeout=300, watch=[XCFORM, VISUALS_LTX]),
+        S("mod_export_ogf_probe", timeout=300, watch=[VISUALS_LTX, LEVEL_DIR + "/visuals/qa_golden.ogf"]),
+        # one object alone
+        S("select_objects", names="qa_static_renamed"),
+        S("mod_export_xcform", timeout=300, watch=[XCFORM]),
+        S("mod_export_cut", timeout=300, watch=[XCFORM, VISUALS_LTX]),
+        S("mod_export_ogf_probe", timeout=300, watch=[VISUALS_LTX, LEVEL_DIR + "/visuals/qa_static_renamed.ogf"]),
+        S("list_objects", **{"class": "scene_object", "limit": 600}),
+        {"gen": gen_scene_exports},
     ]
     return steps
+
+
+XSPAWN = "spawn/l01_escape.xspawn"
+GOLDEN_REF = "statics\\army_base\\prop_map_02"
+LEVEL_DIR = "levels/l01_escape"
+XCFORM = LEVEL_DIR + "/overlay.xcform"
+VISUALS_LTX = LEVEL_DIR + "/overlay_visuals.ltx"
+# how many of the scene's own static objects the level exports take: real geometry of Escape
+EXPORT_OBJECTS = 40
+
+
+def gen_scene_exports(answers: list) -> list[dict]:
+    """The level exports over real geometry - the first static objects of Escape with the placed one -
+    then the build with the scene baked inside, then a second Player Start that the build refuses (E201)."""
+    listed = last(answers, "list_objects").get("objects", [])
+    names = [o["name"] for o in listed if o.get("name") and not o["name"].lower().startswith("dynamics\\")]
+    pick = ["qa_static_renamed"] + names[:EXPORT_OBJECTS]
+    return [
+        S("select_objects", names=",".join(pick)),
+        S("selection"),
+        S("mod_export_xcform", timeout=300, watch=[XCFORM]),
+        S("mod_export_cut", timeout=300, grow=25, watch=[XCFORM, VISUALS_LTX]),
+        S("mod_export_ogf_probe", timeout=300, watch=[VISUALS_LTX]),
+        S("deselect_all"),
+        S("mod_export", target="<temp>/out/game", timeout=600),
+        S("place_spawn", section="player_start", x=-205.0, y=-20.0, z=-150.0),
+        S("world_get"),
+        S("mod_export", target="<temp>/out/game", timeout=600, expect="refused"),
+    ]
 
 
 def gen_scene_details(answers: list) -> list[dict]:
@@ -713,6 +799,23 @@ S6 = [
     {"gen": gen_scene_class_rows},
 ]
 
+# The level build (Build > Make All, the C++ COMMAND_BUILD: SceneBuilder::Compile) of Escape: every file
+# the editor writes into the level folder itself - build.prj, level.ltx, the game files, the HOM / SOM,
+# build.aimap, the statistic - compared file by file. What the external compilers make of them is not
+# the editor's (section 9: made by the C++ compilers until phase 8).
+S7 = [
+    S("open_scene", scene="l01_escape.level", timeout=900, settle="viewport"),
+    # the one object of Escape that shows an .ogf (visual mode): the C++ SceneBuilder::BuildHOMModel
+    # asserts on it (R_ASSERT(GetReference()) - no .object behind it) and the editor ends; the Rust build
+    # leaves such an object out of every level file. Taken away so the C++ build runs to its end.
+    S("select_objects", names="test_barrel"),
+    S("delete_selected"),
+    S("level_build", action="make_all", timeout=1800,
+      cpp={"cmd": "exec_command", "args": {"name": "COMMAND_BUILD"}},
+      answer="skip: the C++ editor runs the command table's row (exec_command answers its id and result 1), "
+             "the Rust one level_build make_all; what both wrote is compared file by file"),
+]
+
 SCENARIOS: dict[str, dict] = {
     "s1_reads": {"source": "od", "steps": S1},
     "s1_shell": {"source": "od", "steps": S1W, "window": True},
@@ -721,6 +824,7 @@ SCENARIOS: dict[str, dict] = {
     "s4_content": {"source": "od", "steps": S4},
     "s5_builds": {"source": "od", "steps": S5, "qa_github": True},
     "s6_scene": {"source": "test", "steps": S6},
+    "s7_levelbuild": {"source": "test", "steps": S7},
 }
 
 
@@ -773,6 +877,14 @@ def game_stamp() -> str:
     return sha256("\n".join(parts).encode())
 
 
+def cpp_stamp() -> str:
+    """The C++ editor's logic: LevelEditor.exe and every DLL beside it (XrECore.dll, XrEngine.dll, the game's
+    entity factory, ...) - a rebuilt library changes the oracle as much as a rebuilt executable."""
+    folder = os.path.dirname(CPP_EXE)
+    names = [os.path.basename(CPP_EXE)] + sorted(n for n in os.listdir(folder) if n.lower().endswith(".dll"))
+    return sha256("\n".join(f"{n}:{stamp_file(os.path.join(folder, n))}" for n in names).encode())
+
+
 def plain_steps(steps: list[dict]) -> list:
     return [{"gen": s["gen"].__name__} if "gen" in s else s for s in steps]
 
@@ -782,9 +894,10 @@ def gen_sources(name: str) -> str:
     import inspect
     names = sorted({s["gen"].__name__ for s in SCENARIOS[name]["steps"] if "gen" in s})
     if names:
-        names += ["S", "last", "_class_sections"]
+        # the helpers, and the generators a generator's own steps name
+        names += ["S", "last", "_class_sections", "gen_scene_exports"]
     # the data the generators read decides the steps as much as their code
-    data = repr((sorted(NO_SERVER_CLASS), sorted(NO_ENTITY_SECTION)))
+    data = repr((sorted(NO_SERVER_CLASS), sorted(NO_ENTITY_SECTION), XSPAWN, LEVEL_DIR, EXPORT_OBJECTS, GOLDEN_REF))
     return "".join(inspect.getsource(globals()[n]) for n in names) + data
 
 
@@ -792,7 +905,7 @@ def scenario_key(name: str, cache: dict) -> str:
     sc = SCENARIOS[name]
     if "game" not in cache:
         cache["game"] = game_stamp()
-        cache["cpp"] = stamp_file(CPP_EXE)
+        cache["cpp"] = cpp_stamp()
         cache["examples"] = stamp_tree(EXAMPLES)
     src = sc["source"]
     if src not in cache:
@@ -844,6 +957,7 @@ class Side:
         self.project = os.path.join(base, "p", os.path.basename(src))
         self.home = os.path.join(base, "home")
         self.proc: subprocess.Popen | None = None
+        self.watch_blobs: dict[str, bytes] = {}
 
     # -- the copy
 
@@ -852,7 +966,12 @@ class Side:
         src = SOURCES[sc["source"]]
         if os.path.isdir(self.base):
             rmtree(self.base)
-        shutil.copytree(src, self.project, symlinks=True)
+        # THE copy every QA script makes: under the system temp folder, without .git, releases, temp,
+        # logs and backup, its project.ltx naming the copy (refused, exit code 2, anywhere else)
+        qa_target.copy_project(src, self.project)
+        # the copy leaves the source's scratch out; the C++ editor keeps its undo snapshots in the
+        # project's temp folder and has no undo without one
+        os.makedirs(os.path.join(self.project, "temp"), exist_ok=True)
         if sc["source"] == "od":
             dst = os.path.join(self.project, "quests", "examples")
             os.makedirs(dst, exist_ok=True)
@@ -997,11 +1116,28 @@ class Side:
 # ------------------------------------------------------------------------------------------------
 # Running one side of a scenario
 
-def run_steps(side: Side, steps: list[dict], expand: bool, log) -> tuple[list[dict], list[dict], list[dict]]:
-    """Runs the steps; returns the steps run, their answers and their watches (normalised)."""
+def expectation(step: dict, answer: dict) -> str:
+    """Empty when the answer is what the step expects; else the sentence that fails the scenario."""
+    want = step.get("expect", "ok")
+    got = "ok" if answer.get("ok") is True else "refused"
+    if got == want:
+        return ""
+    why = answer.get("error") or answer.get("errors") or ""
+    return f"expected {want}, answered {got}" + (f": {short(why)}" if why else "")
+
+
+# The repository's own gamedata\levels: no level build of either editor may land there (an open project
+# remounts $game_levels$ into the project, EditorProject's kMount).
+REPO_LEVELS = os.path.join(REPO, "gamedata", "levels")
+
+
+def run_steps(side: Side, steps: list[dict], expand: bool, log) -> tuple[list[dict], list[dict], list[dict], list[str]]:
+    """Runs the steps; returns the steps run, their answers, their watches (normalised) and the steps
+    whose answer was not what they expect."""
     done: list[dict] = []
     answers: list[dict] = []
     watches: list[dict] = []
+    unmet: list[str] = []
     pairs: list = []
     queue = list(steps)
     while queue:
@@ -1011,15 +1147,20 @@ def run_steps(side: Side, steps: list[dict], expand: bool, log) -> tuple[list[di
                 raise RuntimeError("a recorded scenario holds an unexpanded step")
             queue[0:0] = step["gen"](pairs)
             continue
-        args = side.subst(step["args"])
+        own = step["cpp"] if side.which == "cpp" and "cpp" in step else step
+        args = side.subst(own["args"])
         t0 = time.monotonic()
         try:
-            answer = mcp(side.port, step["cmd"], args, timeout=step.get("timeout", STEP_TIMEOUT))
+            answer = mcp(side.port, own["cmd"], args, timeout=step.get("timeout", STEP_TIMEOUT))
         except socket.timeout:
             answer = {"ok": False, "error": "<timeout>"}
-            log(f"  ! {side.which} {step['cmd']}: no answer within {step.get('timeout', STEP_TIMEOUT):.0f} s")
+            log(f"  ! {side.which} {own['cmd']}: no answer within {step.get('timeout', STEP_TIMEOUT):.0f} s")
         except (OSError, ValueError) as e:
             answer = {"ok": False, "error": f"<transport: {e}>"}
+        miss = expectation(step, answer)
+        if miss:
+            unmet.append(f"step {len(done) + 1} {step['cmd']}: {miss}")
+            log(f"  ! {side.which} step {len(done) + 1} {step['cmd']}: {miss}")
         # an editor that died fails the run at once, naming the step: every later step would only
         # wait for a refused connection
         if side.proc and side.proc.poll() is not None:
@@ -1032,14 +1173,27 @@ def run_steps(side: Side, steps: list[dict], expand: bool, log) -> tuple[list[di
         w = {}
         for rel in step.get("watch", []):
             data = side.read_norm(os.path.join(side.project, rel))
-            w[rel] = None if data is None else data.decode("utf-8", "surrogateescape")
+            w[rel] = watch_form(side, data)
         done.append(step)
         answers.append(norm)
         watches.append(w)
         pairs.append((step, norm))
         if step.get("settle"):
             side.settle(step["settle"])
-    return done, answers, watches
+    return done, answers, watches, unmet
+
+
+def watch_form(side: "Side", data: bytes | None) -> str | None:
+    """A watched file as the record keeps it: its text, or for a binary file `sha256:<hex>:<size>` with the
+    bytes kept beside the record (Side.watch_blobs)."""
+    if data is None:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        digest = sha256(data)
+        side.watch_blobs[digest] = data
+        return f"sha256:{digest}:{len(data)}"
 
 
 def check_kept(which: str, before: dict[str, bytes | None]) -> list[str]:
@@ -1094,6 +1248,7 @@ def record_oracle(name: str, key: str, base_root: str, log, cache: dict) -> str:
     side = Side(name, "cpp", os.path.join(base_root, name, "cpp"), CPP_PORT, log)
     side.prepare()
     kept = snapshot_kept(CPP_KEPT)
+    levels_there = os.path.isdir(REPO_LEVELS)
     t0 = time.monotonic()
     try:
         # the C++ editor starts as the Rust one does in its fresh home: no project list, no
@@ -1101,13 +1256,18 @@ def record_oracle(name: str, key: str, base_root: str, log, cache: dict) -> str:
         restore_kept({n: None for n in CPP_KEPT})
         side.start()
         log(f"  {name}: C++ editor up in {time.monotonic() - t0:.1f} s")
-        steps, answers, watches = run_steps(side, SCENARIOS[name]["steps"], True, log)
+        steps, answers, watches, unmet = run_steps(side, SCENARIOS[name]["steps"], True, log)
     finally:
         side.close()
         restore_kept(kept)
     bad = check_kept("cpp", kept)
     if bad:
         raise RuntimeError("the C++ editor's own files did not come back: " + ", ".join(bad))
+    if not levels_there and os.path.isdir(REPO_LEVELS):
+        raise RuntimeError(f"the C++ editor wrote into {REPO_LEVELS}: a level build must land in the project")
+    if unmet:
+        # an oracle of steps that did not do their work proves nothing
+        raise RuntimeError("the C++ side did not answer as the steps expect: " + "; ".join(unmet))
     man = side.manifest()
     src = source_manifest(name, cache)
     tmp = rec_dir + ".part"
@@ -1115,11 +1275,17 @@ def record_oracle(name: str, key: str, base_root: str, log, cache: dict) -> str:
         rmtree(tmp)
     os.makedirs(os.path.join(tmp, "blobs"))
     files = {}
+    for digest, data in side.watch_blobs.items():
+        with open(os.path.join(tmp, "blobs", digest), "wb") as f:
+            f.write(data)
     for rel, (size, digest, path) in sorted(man.items()):
         files[rel] = [size, digest]
         rule = file_rule(rel)
-        if rule or (size <= BLOB_LIMIT and src.get(rel) != digest):
-            data = side.read_norm(path) or b""
+        # a level build's files are kept whole whatever their size: a difference is read from them
+        limit = LEVEL_BLOB_LIMIT if rel.startswith("project/gamedata/levels/") else BLOB_LIMIT
+        if rule or (size <= limit and src.get(rel) != digest):
+            data = side.read_norm(path) if size <= NORMALISE_LIMIT else open(path, "rb").read()
+            data = data or b""
             blob = os.path.join(tmp, "blobs", digest)
             if not os.path.exists(blob):
                 with open(blob, "wb") as f:
@@ -1224,6 +1390,329 @@ def diff_json(cmd: str, a, b, path: str, out: list[str], hits: set[str]) -> None
         out.append(f"{path or '<answer>'}: {short(a)} | {short(b)}")
 
 
+# ------------------------------------------------------------------------------------------------
+# The level build's files compared by rule (STATE.md, "For the plan": one rule per file, each with
+# the reason the bytes may differ and the game and the compilers do not care). A rule answers the
+# differences it finds; none means the two files are equal under it.
+
+def _chunks(data: bytes) -> dict[int, bytes]:
+    out, off = {}, 0
+    while off + 8 <= len(data):
+        cid, size = struct.unpack_from("<II", data, off)
+        out[cid] = data[off + 8:off + 8 + size]
+        off += 8 + size
+    return out
+
+
+def _close(a: float, b: float) -> bool:
+    """Equal within FLOAT_ULPS units in the last place of the larger of the two (and of 1.0: a small result
+    of a sum of large terms keeps the terms' absolute rounding)."""
+    scale = max(abs(a), abs(b), 1.0)
+    ulp = 2.0 ** (math.frexp(scale)[1] - 24)
+    return abs(a - b) <= FLOAT_ULPS * ulp
+
+
+# a float the two compilers' code may round differently in its last bits (a point light's colour times
+# its brightness): equal within this many units in the last place
+FLOAT_ULPS = 4
+# a LOD quad's corners and UVs come out of sums of products over the model's box that the two compilers'
+# code rounds differently: within 2 micrometres (16 ULP of 1.0; seen: 8 ULP)
+LOD_TOLERANCE = 2e-6
+# the fields of `Flight` (b_light) that SceneBuilder sets, by D3DLIGHTTYPE; the others are the C++
+# stack's leftovers (`Flight RL;` / `b_light L;` are never cleared): 0 type, 1-4 diffuse, 5-8 specular,
+# 9-12 ambient, 13-15 position, 16-18 direction, 19 range, 20 falloff, 21-23 attenuation, 24 theta, 25 phi
+_LIGHT_SET = {
+    1: {0, 1, 2, 3, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25},  # BuildLight: diffuse.rgb, not .a
+    3: {0, 1, 2, 3, 4, 13, 14, 15, 16, 17, 18},  # BuildSun / BuildHemiLights: type, diffuse, direction
+}
+
+
+def _light_diffs(a: bytes, b: bytes, size: int, label: str) -> list[str]:
+    if len(a) != len(b):
+        return [f"{label}: {len(a) // size} | {len(b) // size} lights"]
+    out = []
+    for n, i in enumerate(range(0, len(a), size)):
+        x, y = a[i:i + size], b[i:i + size]
+        if x[:4] != y[:4]:
+            out.append(f"{label} {n}: controller differs")
+            continue
+        kind = struct.unpack_from("<I", x, 4)[0]
+        fields = _LIGHT_SET.get(kind)
+        if fields is None:
+            if x[:108] != y[:108]:
+                out.append(f"{label} {n}: type {kind} differs")
+            continue
+        for f in sorted(fields):
+            at = 4 + 4 * f
+            if f == 0:
+                same = x[at:at + 4] == y[at:at + 4]
+            else:
+                same = _close(struct.unpack_from("<f", x, at)[0], struct.unpack_from("<f", y, at)[0])
+            if not same:
+                out.append(f"{label} {n}: field {f} differs")
+                break
+        if size == 144:
+            # b_light_dynamic: the sectors in use; the svector's unused slots are not cleared
+            cx, cy = struct.unpack_from("<I", x, 140)[0], struct.unpack_from("<I", y, 140)[0]
+            if cx != cy or x[108:108 + 2 * min(cx, 16)] != y[108:108 + 2 * min(cy, 16)]:
+                out.append(f"{label} {n}: sectors differ")
+        if len(out) > 8:
+            break
+    return out
+
+
+def _prj_tables(t: dict[int, bytes]):
+    shaders = [t[5][i:i + 128].split(b"\0")[0] for i in range(0, len(t[5]), 128)]
+    xrlc = [t[6][i:i + 128].split(b"\0")[0] for i in range(0, len(t[6]), 128)]
+    tex = [(t[7][i:i + 128].split(b"\0")[0], t[7][i + 128:i + 144]) for i in range(0, len(t[7]), 144)]
+    mats = []
+    for i in range(0, len(t[4]), 16):
+        surf, sh, shx, sector, res, _pad, area = struct.unpack_from("<6HI", t[4], i)
+        name = tex[surf] if surf < len(tex) else surf
+        # BuildObjectLOD's `b_material mtl;` is never cleared: reserved and the area are leftovers
+        if name and name[0] == b"level_lods":
+            res, area = 0, 0
+        mats.append((name, shaders[sh] if sh < len(shaders) else sh, xrlc[shx] if shx < len(xrlc) else shx,
+                     sector, res, area))
+    return shaders, xrlc, tex, mats
+
+
+def _face_key(f: bytes, mats, group: bytes):
+    m = struct.unpack_from("<H", f, 36)[0]
+    # the face's material by what it names; the two bytes after it are struct padding (b_face)
+    return f[:36], mats[m] if m < len(mats) else m, f[40:44], group
+
+
+def cmp_build_prj(a: bytes, b: bytes) -> list[str]:
+    ta, tb = _chunks(a), _chunks(b)
+    if sorted(ta) != sorted(tb):
+        return [f"chunks {sorted(ta)} | {sorted(tb)}"]
+    out = []
+    for cid, what in ((0, "version"), (1, "parameters"), (2, "vertices"), (8, "glows"), (9, "portals"),
+                      (10, "light controls"), (15, "multiple-usage references")):
+        if ta[cid] != tb[cid]:
+            out.append(f"{what} differ")
+    sa, xa, xta, ma = _prj_tables(ta)
+    sb, xb, xtb, mb = _prj_tables(tb)
+    # the tables are built in the order faces meet them, and the faces of a mesh come in the order of
+    # its surface map, keyed by CSurface pointers (D14): compared as sets of what they name
+    for name, x, y in (("render shaders", sa, sb), ("compiler shaders", xa, xb), ("textures", xta, xtb),
+                       ("materials", ma, mb)):
+        if collections.Counter(x) != collections.Counter(y):
+            out.append(f"{name} differ as a set")
+    ga = [ta[16][i:i + 4] for i in range(0, len(ta[16]), 4)]
+    gb = [tb[16][i:i + 4] for i in range(0, len(tb[16]), 4)]
+    fa = collections.Counter(_face_key(ta[3][i:i + 44], ma, ga[k] if k < len(ga) else b"")
+                             for k, i in enumerate(range(0, len(ta[3]), 44)))
+    fb = collections.Counter(_face_key(tb[3][i:i + 44], mb, gb[k] if k < len(gb) else b"")
+                             for k, i in enumerate(range(0, len(tb[3]), 44)))
+    if fa != fb:
+        out.append(f"static faces differ as a multiset ({sum((fa - fb).values())} | {sum((fb - fa).values())} unmatched)")
+    out += _light_diffs(ta[11], tb[11], 108, "static light")
+    out += _light_diffs(ta[12], tb[12], 144, "dynamic light")
+    # LOD models in order: the quads' corners and UVs within LOD_TOLERANCE, the material by what it names
+    if len(ta[13]) != len(tb[13]):
+        out.append("LOD model count differs")
+    else:
+        for n, i in enumerate(range(0, len(ta[13]), 644)):
+            va, vb = struct.unpack_from("<160f", ta[13], i), struct.unpack_from("<160f", tb[13], i)
+            la, lb = struct.unpack_from("<I", ta[13], i + 640)[0], struct.unpack_from("<I", tb[13], i + 640)[0]
+            if not all(abs(p - q) <= LOD_TOLERANCE for p, q in zip(va, vb)) or ma[la] != mb[lb]:
+                out.append(f"LOD model {n} differs")
+                break
+    # multiple-usage models in order: name, vertices, LOD, faces as a multiset (the surface map again)
+    def models(raw: bytes, mats):
+        res, o = [], 0
+        while o < len(raw):
+            end = raw.index(b"\0", o)
+            name, o = raw[o:end], end + 1
+            nv = struct.unpack_from("<I", raw, o)[0]
+            verts = raw[o + 4:o + 4 + 12 * nv]
+            o += 4 + 12 * nv
+            nf = struct.unpack_from("<I", raw, o)[0]
+            o += 4
+            faces = [raw[o + 44 * k:o + 44 * k + 44] for k in range(nf)]
+            o += 44 * nf
+            lod = raw[o:o + 2]
+            o += 2
+            groups = [raw[o + 4 * k:o + 4 * k + 4] for k in range(nf)]
+            o += 4 * nf
+            res.append((name, verts, lod, collections.Counter(_face_key(f, mats, g) for f, g in zip(faces, groups))))
+        return res
+    mua, mub = models(ta[14], ma), models(tb[14], mb)
+    if len(mua) != len(mub):
+        out.append("multiple-usage model count differs")
+    else:
+        for x, y in zip(mua, mub):
+            if x != y:
+                out.append(f"multiple-usage model {x[0].decode('cp1251', 'replace')} differs")
+                break
+    return out
+
+
+def _spawn_entries(data: bytes) -> list[tuple[bytes, bytes]]:
+    out, off = [], 0
+    while off + 8 <= len(data):
+        _cid, size = struct.unpack_from("<II", data, off)
+        p = data[off + 8:off + 8 + size]
+        end = p.index(b"\0", 2) if b"\0" in p[2:] else 2
+        out.append((p[2:end], p))
+        off += 8 + size
+    return out
+
+
+def _loopholes(p: bytes, start: int):
+    """se_smart_cover's tail from `start`: a count, then (id, on) pairs to the packet's end."""
+    try:
+        n, o, got = p[start], start + 1, []
+        for _ in range(n):
+            end = p.index(b"\0", o)
+            got.append((p[o:end], p[end + 1]))
+            o = end + 2
+        return got if o == len(p) else None
+    except (IndexError, ValueError):
+        return None
+
+
+def cmp_level_spawn(a: bytes, b: bytes) -> list[str]:
+    ea = _spawn_entries(a)
+    # D10: the breakable and climable objects the Rust build makes (the C++ one wrote errors instead)
+    eb = [e for e in _spawn_entries(b) if e[0] not in (b"breakable_object", b"climable_object")]
+    if len(ea) != len(eb):
+        return [f"{len(ea)} | {len(eb)} entries (without the Rust build's breakable and climable objects)"]
+    out = []
+    for n, ((sa, x), (sb, y)) in enumerate(zip(ea, eb)):
+        if x == y:
+            continue
+        if sa == sb == b"smart_cover" and len(x) == len(y):
+            # se_smart_cover writes its loopholes in the order of Lua's `pairs` over a table keyed by
+            # their ids; the game reads them back into such a table: compared as a set
+            at = next(i for i in range(len(x)) if x[i] != y[i])
+            if any(x[:s] == y[:s] and _loopholes(x, s) is not None
+                   and sorted(_loopholes(x, s)) == sorted(_loopholes(y, s) or []) for s in range(at, max(0, at - 160), -1)):
+                continue
+        out.append(f"entry {n} ({sa.decode('cp1251', 'replace')}) differs")
+        if len(out) > 8:
+            break
+    return out
+
+
+def cmp_level_stat_txt(a: bytes, b: bytes) -> list[str]:
+    # the author's statistic, read by neither the compilers nor the game: a vertex lands in its 1 m
+    # cell by iFloor of a float, and a vertex a rounding away from a cell's border may land beside it
+    la, lb = a.decode("ascii", "replace").splitlines(), b.decode("ascii", "replace").splitlines()
+    if len(la) != len(lb):
+        return ["line count differs"]
+    out = []
+    for x, y in zip(la, lb):
+        if x == y:
+            continue
+        kx, _, vx = x.partition(":")
+        ky, _, vy = y.partition(":")
+        if kx == ky and kx.strip().startswith("Max ") and vx.strip().isdigit() and vy.strip().isdigit() \
+                and abs(int(vx) - int(vy)) <= max(2, int(vx) // 200):
+            continue
+        out.append(f"{x!r} | {y!r}")
+    return out
+
+
+def cmp_level_stat_tga(a: bytes, b: bytes) -> list[str]:
+    if len(a) != len(b) or a[:18] != b[:18]:
+        return ["header or size differs"]
+    pixels = (len(a) - 18) // 4
+    differ = sum(1 for i in range(18, len(a), 4) if a[i:i + 4] != b[i:i + 4]) if a != b else 0
+    # the same statistic as level_stat.txt: cells beside a vertex on a border
+    return [] if differ <= max(1, pixels // 10000) else [f"{differ} of {pixels} pixels differ"]
+
+
+def cmp_ogf(a: bytes, b: bytes) -> list[str]:
+    """An exported world-space .ogf: its children - one per surface - come in the order of the editable
+    object's surface map, keyed by CSurface pointers in the C++ (D14), and the collision mesh follows them.
+    Every other chunk byte for byte, the children as a multiset of their bytes, the collision mesh as a
+    multiset of triangles by their corners."""
+    ta, tb = _chunks(a), _chunks(b)
+    if sorted(ta) != sorted(tb):
+        return [f"chunks {sorted(ta)} | {sorted(tb)}"]
+    out = []
+    for cid in sorted(ta):
+        if cid in (9, 25, 26):
+            continue
+        if ta[cid] != tb[cid]:
+            out.append(f"chunk {cid} differs")
+    if 9 in ta:
+        ca = collections.Counter(_chunks(ta[9]).values())
+        cb = collections.Counter(_chunks(tb[9]).values())
+        if ca != cb:
+            out.append(f"children differ as a set ({sum((ca - cb).values())} | {sum((cb - ca).values())} unmatched)")
+    if 25 in ta and 26 in ta:
+        def tris(t):
+            verts = [t[25][i:i + 12] for i in range(0, len(t[25]), 12)]
+            # the indices are 32-bit, into the vertices of every child one after another
+            idx = struct.unpack_from("<%dI" % (len(t[26]) // 4), t[26])
+            return collections.Counter(tuple(verts[i] if i < len(verts) else i for i in idx[k:k + 3])
+                                       for k in range(0, len(idx) - 2, 3))
+        if tris(ta) != tris(tb):
+            out.append("collision triangles differ as a set")
+    return out
+
+
+def _xcform(data: bytes):
+    """overlay.xcform: the header, the material names, the vertices, the triangles (3 indices, a material, two
+    bytes of padding), the cut boxes."""
+    names, o = [], 16
+    for _ in range(struct.unpack_from("<I", data, 12)[0]):
+        end = data.index(b"\0", o)
+        names.append(data[o:end])
+        o = end + 1
+    nv = struct.unpack_from("<I", data, o)[0]
+    verts = data[o + 4:o + 4 + 12 * nv]
+    o += 4 + 12 * nv
+    nt = struct.unpack_from("<I", data, o)[0]
+    tris = [data[o + 4 + 16 * k:o + 4 + 16 * k + 16] for k in range(nt)]
+    o += 4 + 16 * nt
+    return data[:12], names, verts, tris, data[o:]
+
+
+def cmp_xcform(a: bytes, b: bytes) -> list[str]:
+    """overlay.xcform: the material table is built in the order a mesh's surface map meets the surfaces - keyed by
+    CSurface pointers in the C++ (D14, `// oracle:` in gz-export-level's overlay.rs) - so each triangle's material
+    is compared by its name; the header, the vertices, the triangles' corners and the cut list byte for byte."""
+    try:
+        ha, na, va, ta, ca = _xcform(a)
+        hb, nb, vb, tb, cb = _xcform(b)
+    except (ValueError, struct.error) as e:
+        return [f"does not read: {e}"]
+    out = []
+    if ha != hb:
+        out.append("header differs")
+    if sorted(na) != sorted(nb):
+        out.append("material names differ as a set")
+    if va != vb:
+        out.append("vertices differ")
+    if len(ta) != len(tb):
+        out.append(f"{len(ta)} | {len(tb)} triangles")
+    else:
+        def named(t, names):
+            m = struct.unpack_from("<H", t, 12)[0]
+            return t[:12], names[m] if m < len(names) else m, t[14:16]
+        bad = sum(1 for x, y in zip(ta, tb) if named(x, na) != named(y, nb))
+        if bad:
+            out.append(f"{bad} triangles differ")
+    if ca != cb:
+        out.append("cut list differs")
+    return out
+
+
+CMP = {
+    "cmp_xcform": cmp_xcform,
+    "cmp_ogf": cmp_ogf,
+    "cmp_build_prj": cmp_build_prj,
+    "cmp_level_spawn": cmp_level_spawn,
+    "cmp_level_stat_txt": cmp_level_stat_txt,
+    "cmp_level_stat_tga": cmp_level_stat_tga,
+}
+
+
 def file_form(rule: str, data: bytes) -> bytes:
     if rule == "skip":
         return b""
@@ -1265,6 +1754,14 @@ def file_rule(rel: str) -> tuple[str, str] | None:
 def text_diff(a: bytes | None, b: bytes | None) -> str:
     if a is None or b is None:
         return ""
+    # a large or binary file: where it starts to differ (a line diff of megabytes runs for hours)
+    if len(a) > (1 << 20) or len(b) > (1 << 20) or b"\0" in a[:4096] or b"\0" in b[:4096]:
+        at, n = 0, min(len(a), len(b))
+        while at < n and a[at:at + 65536] == b[at:at + 65536]:
+            at += 65536
+        while at < n and a[at] == b[at]:
+            at += 1
+        return f" (binary: first difference at byte {at} of {len(a)} | {len(b)})"
     la = a.decode("utf-8", "replace").splitlines()
     lb = b.decode("utf-8", "replace").splitlines()
     if la == lb:
@@ -1278,25 +1775,46 @@ def text_diff(a: bytes | None, b: bytes | None) -> str:
     return " " + "; ".join(parts) + more
 
 
-def compare_files(rec_dir: str, rec: dict, side: Side) -> tuple[list[str], set[str]]:
+def compare_files(rec_dir: str, rec: dict, side: Side) -> tuple[list[str], set[str], list[str]]:
+    """The differences, the files equal in their rule's form, and every file the oracle run wrote or
+    changed (its bytes are in the record) that was compared."""
     out: list[str] = []
     hits: set[str] = set()
+    compared: list[str] = []
     mine = side.manifest()
     theirs = rec["files"]
     for rel in sorted(set(theirs) | set(mine)):
         a, b = theirs.get(rel), mine.get(rel)
+        rule = file_rule(rel)
+        if rule and rule[0] == "skip":
+            hits.add(rel)
+            continue
         if a is None:
+            if rule and rule[0] == "rust_only":
+                hits.add(rel)
+                continue
             out.append(f"{rel}: <absent> | {b[0]} bytes")
             continue
         if b is None:
             out.append(f"{rel}: {a[0]} bytes | <absent>")
             continue
+        if file_rule(rel) or os.path.isfile(os.path.join(rec_dir, "blobs", a[1])):
+            compared.append(rel)
         if a[1] == b[1]:
             continue
         blob = os.path.join(rec_dir, "blobs", a[1])
         a_data = open(blob, "rb").read() if os.path.isfile(blob) else None
+        if rule and rule[0] in CMP:
+            if a_data is None:
+                out.append(f"{rel}: the oracle kept no bytes to compare it by its rule")
+                continue
+            found = CMP[rule[0]](a_data, open(b[2], "rb").read())
+            if found:
+                out.append(f"{rel}: by its rule: " + "; ".join(found[:6]))
+            else:
+                hits.add(rel)
+            continue
         b_data = side.read_norm(b[2])
-        rule = file_rule(rel)
         if rule:
             # the record holds a ruled file in its rule's form
             b_data = file_form(rule[0], b_data or b"")
@@ -1307,7 +1825,7 @@ def compare_files(rec_dir: str, rec: dict, side: Side) -> tuple[list[str], set[s
                 out.append(f"{rel}: the oracle kept no bytes to compare it in its rule's form")
                 continue
         out.append(f"{rel}: {a[0]} bytes | {b[0]} bytes{text_diff(a_data, b_data)}")
-    return out, hits
+    return out, hits, compared
 
 
 # ------------------------------------------------------------------------------------------------
@@ -1339,7 +1857,7 @@ def run_rust(name: str, key: str, rec_dir: str, index: int, base_root: str, main
         side.prepare()
         side.start()
         log(f"{name}: Rust editor up in {time.monotonic() - t0:.1f} s")
-        steps, answers, watches = run_steps(side, rec["steps"], False, log)
+        steps, answers, watches, unmet = run_steps(side, rec["steps"], False, log)
     except Exception as e:  # noqa: BLE001 - the report is the point
         side.close()
         result["error"] = repr(e)
@@ -1352,9 +1870,30 @@ def run_rust(name: str, key: str, rec_dir: str, index: int, base_root: str, main
         out: list[str] = []
         hits: set[str] = set()
         CURRENT_ARGS[:] = [f"{k}={v}" for k, v in step["args"].items()]
-        diff_json(step["cmd"], a, b, "", out, hits)
+        # the step must have done what it expects on this side too, whatever the oracle answered
+        miss = expectation(step, b)
+        if miss:
+            out.append(miss)
+        if step.get("answer", "").startswith("skip"):
+            hits.add("<answer: " + step["answer"][:60] + ">")
+        else:
+            diff_json(step["cmd"], a, b, "", out, hits)
         for rel, text in rec["watches"][i].items():
-            if text != watches[i].get(rel):
+            mine = watches[i].get(rel)
+            rule = file_rule("project/" + rel)
+            if (text != mine and rule and rule[0] in CMP and isinstance(text, str) and isinstance(mine, str)
+                    and text.startswith("sha256:") and mine.startswith("sha256:")):
+                # a watched binary file with a rule: compared by it, from the bytes both sides kept
+                theirs_blob = os.path.join(rec_dir, "blobs", text.split(":")[1])
+                mine_bytes = side.watch_blobs.get(mine.split(":")[1])
+                if os.path.isfile(theirs_blob) and mine_bytes is not None:
+                    found = CMP[rule[0]](open(theirs_blob, "rb").read(), mine_bytes)
+                    if not found:
+                        hits.add(rel)
+                        continue
+                    out.append(f"file {rel}: by its rule: " + "; ".join(found[:4]))
+                    continue
+            if text != mine:
                 out.append(f"file {rel}{text_diff(None if text is None else text.encode(), None if watches[i].get(rel) is None else watches[i][rel].encode())}"
                            if text is not None and watches[i].get(rel) is not None
                            else f"file {rel}: {'<absent>' if text is None else 'present'} | {'<absent>' if watches[i].get(rel) is None else 'present'}")
@@ -1367,23 +1906,32 @@ def run_rust(name: str, key: str, rec_dir: str, index: int, base_root: str, main
         result["steps"].append({"cmd": step["cmd"], "same": not out, "ignored": sorted(hits), "diffs": out[:8]})
     with open(os.path.join(RUNS, f"{name}.rust.json"), "w", encoding="utf-8") as f:
         json.dump({"answers": answers, "watches": watches}, f, ensure_ascii=False, indent=1)
-    fdiffs, fhits = compare_files(rec_dir, rec, side)
+    fdiffs, fhits, compared = compare_files(rec_dir, rec, side)
     for d in fdiffs:
         log(f"    FILE DIFF {d}")
     for h in sorted(fhits):
         log(f"    file {h}: same in its rule's form")
+    for c in compared:
+        log(f"    compared {c}")
     result["files"] = fdiffs
     result["file_rules"] = sorted(fhits)
+    result["compared"] = compared
     result["ok"] = differed == 0 and not fdiffs
     result["seconds"] = round(time.monotonic() - t0, 1)
-    log(f"{name}: {len(rec['steps'])} steps, {differed} differ, {len(fdiffs)} files differ, {result['seconds']} s")
-    main_log(f"{name}: {len(rec['steps'])} steps, {differed} differ, {len(fdiffs)} files differ "
-             f"({result['seconds']} s) - details in Intermediate/diffrun/{name}.log")
+    log(f"{name}: {len(rec['steps'])} steps, {differed} differ, {len(compared)} written files compared, "
+        f"{len(fdiffs)} files differ, {result['seconds']} s")
+    main_log(f"{name}: {len(rec['steps'])} steps, {differed} differ, {len(compared)} written files compared, "
+             f"{len(fdiffs)} files differ ({result['seconds']} s) - details in Intermediate/diffrun/{name}.log")
     # a failed scenario leaves the Rust side's copy for a look, until its next run
     kept = os.path.join(RUNS, f"{name}.rust")
     rmtree(kept)
     if not result["ok"]:
         shutil.copytree(side.base, kept, symlinks=True)
+        # the watched binary files as this side wrote them, by their SHA-256
+        os.makedirs(os.path.join(kept, "watch_blobs"), exist_ok=True)
+        for digest, data in side.watch_blobs.items():
+            with open(os.path.join(kept, "watch_blobs", digest), "wb") as f:
+                f.write(data)
     rmtree(side.base)
     return result
 
@@ -1584,10 +2132,12 @@ def main() -> int:
     steps = sum(len(state["scenarios"][n].get("steps", [])) for n in names)
     differ = sum(sum(1 for s in state["scenarios"][n].get("steps", []) if not s["same"]) for n in names)
     files = sum(len(state["scenarios"][n].get("files", [])) for n in names)
+    written = sum(len(state["scenarios"][n].get("compared", [])) for n in names)
     left = our_processes()
     if left:
         main_log("! editors still running: " + "; ".join(left))
-    main_log(f"SUMMARY: {len(names)} scenarios, {steps} steps, {differ} differ, {files} files differ; "
+    main_log(f"SUMMARY: {len(names)} scenarios, {steps} steps, {differ} differ, {written} written files compared, "
+             f"{files} files differ; "
              f"{len(bad)} failed{(' (' + ', '.join(bad) + ')') if bad else ''}; {time.monotonic() - t_start:.1f} s")
     return 1 if bad else 0
 

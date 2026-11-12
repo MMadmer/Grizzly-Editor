@@ -29,7 +29,10 @@ const GLOW_FIXED_SIZE: u16 = 1 << 0;
 /// `ssaDISCARD` of the editor's renderer.
 const SSA_DISCARD: f32 = 4.0;
 
-/// The caches of the extras: an `Editor` service.
+/// The caches of the extras: an `Editor` service. A pass takes a cache out under its lock, draws
+/// with it unlocked - the drawing runs rayon work and calls into the renderer's assets - and puts it
+/// back: no lock is ever held across parallel work (a pool worker waiting for a lock its own stack
+/// holds would stall the pool).
 #[derive(Default)]
 pub struct Extras {
     aimap: Mutex<AiMapCache>,
@@ -79,21 +82,31 @@ pub(crate) fn extend(extras: &Extras, parts: &Particles, x: &Input<'_>, built: &
     );
     glows(x, built);
     if x.ai_map_shown {
-        extras.aimap.lock().draw(x.state, x.assets, eye, built);
+        unlocked(&extras.aimap, |c| c.draw(x.state, x.assets, eye, built));
     }
-    extras.details.lock().draw(
-        &draw_details::Pass {
-            state: x.state,
-            lib: x.lib,
-            assets: x.assets,
-            frustum: &frustum,
-            eye,
-            ssa_discard,
-        },
-        built,
-    );
-    extras.wallmarks.lock().draw(x.state, x.assets, &frustum, eye, ssa_discard / 4.0, built);
+    unlocked(&extras.details, |c| {
+        c.draw(
+            &draw_details::Pass {
+                state: x.state,
+                lib: x.lib,
+                assets: x.assets,
+                frustum: &frustum,
+                eye,
+                ssa_discard,
+            },
+            built,
+        );
+    });
+    unlocked(&extras.wallmarks, |c| c.draw(x.state, x.assets, &frustum, eye, ssa_discard / 4.0, built));
     playing
+}
+
+/// Runs `f` on the cache taken out of its lock, and puts it back: a pass that runs meanwhile finds
+/// an empty cache and builds what it needs itself.
+fn unlocked<T: Default>(cache: &Mutex<T>, f: impl FnOnce(&mut T)) {
+    let mut taken = std::mem::take(&mut *cache.lock());
+    f(&mut taken);
+    *cache.lock() = taken;
 }
 
 /// `CGlow::Render`: the glow's sprite with its texture and shader at its radius - unless the
@@ -153,5 +166,85 @@ fn glows(x: &Input<'_>, built: &mut Built) {
             id: o.id.0,
             flags: InstanceFlags::NO_ID,
         });
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use rayon::prelude::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn a_cache_is_unlocked_while_it_draws() {
+        let cache: Mutex<Vec<u32>> = Mutex::new(vec![1, 2, 3]);
+        unlocked(&cache, |c| {
+            assert!(cache.try_lock().is_some(), "the lock is free while the cache is in use");
+            c.push(4);
+        });
+        assert_eq!(*cache.lock(), [1, 2, 3, 4]);
+    }
+
+    /// Passes built from several threads at once on a two-thread pool, each running parallel work
+    /// with its cache out, while a job on the same pool takes the same caches inside its own
+    /// parallel loop: with a lock held across the parallel work, a worker that steals the other's
+    /// task waits for the lock its own stack holds and the pool stalls (the deadlock the editor's
+    /// stress run found). Bounded: a stall fails the test instead of hanging it.
+    #[test]
+    fn passes_and_a_job_on_the_same_caches_never_stall_the_pool() {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+            let extras = Extras::default();
+            let parts = Particles::default();
+            let state = SceneState::default();
+            let lib = Library::new(Vec::new());
+            let assets = Assets::headless(gz_render::MaterialTable::default());
+            let camera = Camera::look_at(Vec3::new(0.0, 10.0, -10.0), Vec3::ZERO);
+            let input = Input {
+                state: &state,
+                lib: &lib,
+                pick: None,
+                assets: &assets,
+                camera: &camera,
+                size: [64, 64],
+                particles: None,
+                ai_map_shown: true,
+            };
+            std::thread::scope(|s| {
+                for _ in 0..4 {
+                    s.spawn(|| {
+                        for _ in 0..200 {
+                            pool.install(|| {
+                                let mut built = Built::default();
+                                extend(&extras, &parts, &input, &mut built);
+                                // what a cache's drawing does: parallel work with the cache out
+                                unlocked(&extras.details, |_| {
+                                    (0..64).into_par_iter().for_each(|_| {
+                                        unlocked(&extras.details, |_| {});
+                                        drop(parts.state.lock());
+                                    });
+                                });
+                            });
+                        }
+                    });
+                }
+                s.spawn(|| {
+                    for _ in 0..200 {
+                        pool.install(|| {
+                            (0..64).into_par_iter().for_each(|_| {
+                                unlocked(&extras.wallmarks, |_| {});
+                                unlocked(&extras.aimap, |_| {});
+                                drop(parts.state.lock());
+                            });
+                        });
+                    }
+                });
+            });
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(Duration::from_secs(60)).is_ok(), "the pool stalled");
     }
 }

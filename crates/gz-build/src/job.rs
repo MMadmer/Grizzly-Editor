@@ -275,15 +275,62 @@ impl Builds {
 struct Feeder {
     builds: Arc<Builds>,
     ctx: JobCtx,
+    profile: Arc<StageProfile>,
 }
 
 impl Feeder {
     fn feed(&self, f: Feed<'_>) {
+        if let Feed::Stage { text, .. } = &f {
+            self.profile.begin(text);
+        }
         self.builds.feed(f, &self.ctx);
     }
 
     fn stage(&self, step: usize, text: &str) {
         self.feed(Feed::Stage { step, text, bytes: 0, files: 0 });
+    }
+}
+
+/// Where a build's time went: each stage's wall time and the process's CPU time over it (the
+/// share of the cores it kept busy). Written to the log when the build ends.
+#[derive(Default)]
+pub(crate) struct StageProfile {
+    stages: Mutex<Vec<(String, std::time::Instant, f64)>>,
+}
+
+fn process_cpu() -> f64 {
+    gz_win::process_counters().map_or(0.0, |c| c.cpu_seconds)
+}
+
+impl StageProfile {
+    fn begin(&self, name: &str) {
+        let mut s = self.stages.lock();
+        if s.last().is_some_and(|l| l.0 == name) {
+            return;
+        }
+        s.push((name.to_owned(), std::time::Instant::now(), process_cpu()));
+    }
+
+    /// `stage wall s, cpu s (cores)` per stage, and the whole.
+    pub(crate) fn text(&self) -> String {
+        let s = self.stages.lock();
+        let (now, cpu_now) = (std::time::Instant::now(), process_cpu());
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get) as f64;
+        let mut parts = Vec::new();
+        for (i, (name, at, cpu)) in s.iter().enumerate() {
+            let (end, cpu_end) = s.get(i + 1).map_or((now, cpu_now), |n| (n.1, n.2));
+            let wall = end.duration_since(*at).as_secs_f64();
+            let used = (cpu_end - cpu).max(0.0);
+            let load = if wall > 0.0 { used / wall / cores } else { 0.0 };
+            parts.push(format!("{name} {wall:.3} s wall, {used:.3} s cpu ({load:.2} of the cores)"));
+        }
+        if let Some(first) = s.first() {
+            let wall = now.duration_since(first.1).as_secs_f64();
+            let used = (cpu_now - first.2).max(0.0);
+            let load = if wall > 0.0 { used / wall / cores } else { 0.0 };
+            parts.push(format!("whole {wall:.3} s wall, {used:.3} s cpu ({load:.2} of the cores)"));
+        }
+        parts.join("; ")
     }
 }
 
@@ -317,13 +364,14 @@ pub async fn run_build(
 ) -> BuildResult {
     let builds = Builds::of(editor);
     builds.begin(req);
-    let feeder = Feeder { builds: builds.clone(), ctx: ctx.clone() };
+    let feeder = Feeder { builds: builds.clone(), ctx: ctx.clone(), profile: Arc::default() };
     let mut out = BuildResult::default();
     let mut warnings: Vec<String> = Vec::new();
     match build(editor, session, req, &feeder, &mut out, &mut warnings).await {
         Ok(()) => out.ok = true,
         Err(err) => out.err = err,
     }
+    editor.log.info(format!("* [XMS] build stages: {}", feeder.profile.text()));
     out.warnings = warnings.join("\n");
     out.cancelled = !out.ok && out.err == "cancelled";
     builds.end();
@@ -345,71 +393,38 @@ async fn build(
     project.tree.refresh().await;
     still_open(editor, session, ctx)?;
 
+    // The bake of the open scene and the module's checks run at once: the checks read what the
+    // project holds and the scene's own data, never the layer the bake writes, so neither waits
+    // for the other (each is parallel work of its own on the pools). The files are listed again
+    // once the bake has written its layer.
     let checks = BuildChecks::of(editor);
-    if let Some(bake) = checks.bake() {
-        feeder.stage(0, "Baking the scene");
-        out.bake_note = bake(editor.clone(), session.clone()).await;
-        still_open(editor, session, ctx)?;
+    let baking = {
+        let (bake, ed, s) = (checks.bake(), editor.clone(), session.clone());
+        async move {
+            match bake {
+                Some(b) => Some(b(ed, s).await),
+                None => None,
+            }
+        }
+    };
+    if checks.bake().is_some() {
+        feeder.stage(0, "Baking the scene and checking the module");
     }
-
-    feeder.stage(0, "Reading the manifest");
-    let manifest = ManifestService::of_session(editor, session).await.map_err(|e| e.message)?;
-    manifest.sync().await.map_err(|e| e.message)?;
-    let snap = manifest.snapshot();
-    let m = snap.manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
-    feeder.builds.subtitle(format!("{} \u{b7} {}", m.title(), req.target));
-    let own = Verdict::of(&validate(&m), None, true);
-    warnings.extend(own.warnings);
-    if !own.err.is_empty() {
-        return Err(own.err);
+    let (baked, checked) =
+        futures::join!(baking, check_module(editor, session, req, feeder, &project, warnings));
+    if let Some(note) = baked {
+        out.bake_note = note;
     }
+    let (m, dst) = checked?;
+    out.path.clone_from(&dst);
+    still_open(editor, session, ctx)?;
 
     feeder.stage(0, "Listing the files");
+    project.tree.refresh().await;
     let tree = project.tree.snapshot();
     let scope = if flat { WalkScope::Gamedata } else { WalkScope::Module };
     let (rules, walk_tree, exec) = (m.exclude.clone(), tree.clone(), editor.exec.clone());
     let walk = Arc::new(editor.exec.io(move || BuildWalk::scan(&walk_tree, &rules, scope, &exec)).await);
-    still_open(editor, session, ctx)?;
-
-    // the areas, in parallel over the same walk; the first in their order that refuses decides
-    let areas = checks.checks();
-    if !areas.is_empty() {
-        feeder.stage(
-            0,
-            if areas.len() == 1 {
-                areas.first().map_or("Checking the module", |c| c.stage())
-            } else {
-                "Checking the module"
-            },
-        );
-        let found = futures::future::join_all(
-            areas.iter().map(|c| c.check(editor.clone(), session.clone(), walk.clone())),
-        )
-        .await;
-        for (check, problems) in areas.iter().zip(found) {
-            let v = Verdict::of(&problems, check.headline(), false);
-            warnings.extend(v.warnings);
-            if !v.err.is_empty() {
-                return Err(v.err);
-            }
-        }
-        still_open(editor, session, ctx)?;
-    }
-
-    // the game refuses a bad name, a taken one or a function it cannot call
-    feeder.stage(0, "Checking the console commands");
-    let (_, problems) = command_check(editor, session, &m).await;
-    let v = Verdict::of(&problems, None, false);
-    warnings.extend(v.warnings);
-    if !v.err.is_empty() {
-        return Err(v.err);
-    }
-
-    feeder.stage(0, "Checking the target folder");
-    let (target, id, root, game) =
-        (req.target.clone(), m.id.clone(), session.root.clone(), project.game_root());
-    let dst = editor.exec.io(move || plan_target(&target, &id, flat, &root, &game)).await?;
-    out.path.clone_from(&dst);
     still_open(editor, session, ctx)?;
 
     let report = if flat { flat_report(&tree, &m) } else { String::new() };
@@ -485,6 +500,79 @@ async fn build(
         editor.log.warn(e.message);
     }
     Ok(())
+}
+
+/// The module's half of a build's checks: the manifest, the areas' checks over the files the
+/// project holds, the console commands, the target folder. Answers the manifest and the folder
+/// the build writes.
+async fn check_module(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    req: &BuildRequest,
+    feeder: &Feeder,
+    project: &Arc<Project>,
+    warnings: &mut Vec<String>,
+) -> Result<(gz_mod::Manifest, String), String> {
+    let ctx = &feeder.ctx;
+    let flat = req.kind == BuildKind::Flat;
+    let checks = BuildChecks::of(editor);
+    let manifest = ManifestService::of_session(editor, session).await.map_err(|e| e.message)?;
+    manifest.sync().await.map_err(|e| e.message)?;
+    let snap = manifest.snapshot();
+    let m = snap.manifest().ok_or_else(|| "mod.ltx not found in the project".to_owned())?.clone();
+    feeder.builds.subtitle(format!("{} \u{b7} {}", m.title(), req.target));
+    let own = Verdict::of(&validate(&m), None, true);
+    warnings.extend(own.warnings);
+    if !own.err.is_empty() {
+        return Err(own.err);
+    }
+
+    // the files the project holds now: what the areas check
+    let tree = project.tree.snapshot();
+    let scope = if flat { WalkScope::Gamedata } else { WalkScope::Module };
+    let (rules, walk_tree, exec) = (m.exclude.clone(), tree, editor.exec.clone());
+    let walk = Arc::new(editor.exec.io(move || BuildWalk::scan(&walk_tree, &rules, scope, &exec)).await);
+    still_open(editor, session, ctx)?;
+
+    // the areas, in parallel over the same walk; the first in their order that refuses decides
+    let areas = checks.checks();
+    if !areas.is_empty() {
+        if checks.bake().is_none() {
+            feeder.stage(
+                0,
+                if areas.len() == 1 {
+                    areas.first().map_or("Checking the module", |c| c.stage())
+                } else {
+                    "Checking the module"
+                },
+            );
+        }
+        let found = futures::future::join_all(
+            areas.iter().map(|c| c.check(editor.clone(), session.clone(), walk.clone())),
+        )
+        .await;
+        for (check, problems) in areas.iter().zip(found) {
+            let v = Verdict::of(&problems, check.headline(), false);
+            warnings.extend(v.warnings);
+            if !v.err.is_empty() {
+                return Err(v.err);
+            }
+        }
+        still_open(editor, session, ctx)?;
+    }
+
+    // the game refuses a bad name, a taken one or a function it cannot call
+    let (_, problems) = command_check(editor, session, &m).await;
+    let v = Verdict::of(&problems, None, false);
+    warnings.extend(v.warnings);
+    if !v.err.is_empty() {
+        return Err(v.err);
+    }
+
+    let (target, id, root, game) =
+        (req.target.clone(), m.id.clone(), session.root.clone(), project.game_root());
+    let dst = editor.exec.io(move || plan_target(&target, &id, flat, &root, &game)).await?;
+    Ok((m, dst))
 }
 
 #[cfg(test)]

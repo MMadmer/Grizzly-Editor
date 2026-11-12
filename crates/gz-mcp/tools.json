@@ -197,24 +197,45 @@
   },
   {
    "name": "grizzly_open_scene",
-   "description": "Load a scene in the active project (name relative to the project's rawdata/levels, or a full path). Synchronous — big scenes take a while. Unsaved scene changes are preserved unless discard=true is explicit.",
+   "description": "Load a scene in the active project (name relative to the project's rawdata/levels, or a full path). Synchronous - big scenes take a while. With unsaved scene changes it refuses with error 'unsaved'; dropping them is grizzly_open_scene_discard.",
    "inputSchema": {
     "type": "object",
     "properties": {
      "scene": {
       "type": "string",
       "description": "scene file (.level)"
-     },
-     "discard": {
-      "type": "boolean",
-      "description": "explicitly discard unsaved scene changes after the replacement scene validates; default false"
      }
     },
     "required": [
      "scene"
     ]
    },
-   "cmd": "open_scene"
+   "cmd": "open_scene",
+   "annotations": {
+    "destructiveHint": false
+   }
+  },
+  {
+   "name": "grizzly_open_scene_discard",
+   "description": "Load a scene in the active project like grizzly_open_scene and DROP the unsaved changes of the open scene for good once the replacement scene validates. The editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its own side.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "scene": {
+      "type": "string",
+      "description": "scene file (.level)"
+     }
+    },
+    "required": [
+     "scene"
+    ]
+   },
+   "cmd": "open_scene",
+   "annotations": {
+    "destructiveHint": true,
+    "title": "Open a scene and drop unsaved scene work",
+    "readOnlyHint": false
+   }
   },
   {
    "name": "grizzly_list_objects",
@@ -1924,7 +1945,11 @@
      "path"
     ]
    },
-   "cmd": "darf_copy"
+   "cmd": "darf_copy",
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
   },
   {
    "name": "grizzly_content_copy",
@@ -1952,7 +1977,11 @@
      "dst"
     ]
    },
-   "cmd": "content_copy"
+   "cmd": "content_copy",
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
   },
   {
    "name": "grizzly_content_move",
@@ -1980,7 +2009,11 @@
      "dst"
     ]
    },
-   "cmd": "content_move"
+   "cmd": "content_move",
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
   },
   {
    "name": "grizzly_content_delete",
@@ -2000,7 +2033,11 @@
      "path"
     ]
    },
-   "cmd": "content_delete"
+   "cmd": "content_delete",
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
   },
   {
    "name": "grizzly_list_commands",
@@ -2206,7 +2243,11 @@
      }
     }
    },
-   "cmd": "content_browser_copy"
+   "cmd": "content_browser_copy",
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
   },
   {
    "name": "grizzly_scene_stats",
@@ -3118,22 +3159,43 @@
   },
   {
    "name": "grizzly_quest_close",
-   "description": "Close an open quest document. A dirty document answers error 'unsaved' unless discard=true.",
+   "description": "Close an open quest document. A dirty document answers error 'unsaved'; dropping its edits is grizzly_quest_close_discard.",
    "inputSchema": {
     "type": "object",
     "properties": {
      "path": {
       "type": "string"
-     },
-     "discard": {
-      "type": "boolean"
      }
     },
     "required": [
      "path"
     ]
    },
-   "cmd": "quest_close"
+   "cmd": "quest_close",
+   "annotations": {
+    "destructiveHint": false
+   }
+  },
+  {
+   "name": "grizzly_quest_close_discard",
+   "description": "Close an open quest document and DROP its unsaved edits for good. The editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its own side.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ]
+   },
+   "cmd": "quest_close",
+   "annotations": {
+    "destructiveHint": true,
+    "title": "Close a quest and drop its unsaved edits",
+    "readOnlyHint": false
+   }
   },
   {
    "name": "grizzly_quest_get",
@@ -3274,7 +3336,11 @@
      "path"
     ]
    },
-   "cmd": "quest_reload"
+   "cmd": "quest_reload",
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true
+   }
   },
   {
    "name": "grizzly_quest_layout",
@@ -3828,7 +3894,7 @@
   },
   {
    "name": "grizzly_ui_dialog",
-   "description": "The dialogs: action list (default: what is open, and the known ids), open (id: package_release, publish_release, build_to_folder, export_flat, import_base_scene, submit - the way their menu items open them; group_pivot: the Group tool's Align to Object... chooser of the selected group's objects, Select Object###dlg.choose, whose pick is grizzly_group_tool action=align_pivot object=; make_question, rename_question, reset_surfaces_question: the questions a click raises; it comes up when the editor draws next; Mod Settings and Releases are tabs: grizzly_ui_tab), close (id - one of those, a kit dialog's dlg.<name>, or a dialog's window name - the way Esc or its cross does, running nothing). Opening one runs nothing either: its buttons stay the user's, or the matching mod_* tool's.",
+   "description": "The dialogs: action list (default: what is open, and the known ids), open (id: package_release, publish_release, build_to_folder, export_flat, import_base_scene, submit - the way their menu items open them; group_pivot: the Group tool's Align to Object... chooser of the selected group's objects, Select Object###dlg.choose, whose pick is grizzly_group_tool action=align_pivot object=; make_question, rename_question, reset_surfaces_question: the questions a click raises; it comes up when the editor draws next; Mod Settings and Releases are tabs: grizzly_ui_tab), close (no id: the dialog on top, as Esc; id - one of those, a kit dialog's dlg.<name>, or a dialog's window name - the way Esc or its cross does, running nothing). Opening one runs nothing either: its buttons stay the user's, or the matching mod_* tool's.",
    "annotations": {
     "title": "Open or close a dialog",
     "readOnlyHint": false,
@@ -4183,10 +4249,11 @@
   },
   {
    "name": "grizzly_characters_view",
-   "description": "The Characters tab. 'select' (a character id) or 'path' (project-relative .npcasset) opens the tab on that character; 'open': true just opens it; without an argument it only reports. Edits in progress in the tab are settled by save=true or discard=true, otherwise the answer is {ok:false, error:'unsaved', dirty:[id]}. Answers {tab, open, active, selected, file, dirty, count, problems} - problems are the edited character's, resolved against its base like grizzly_characters_write reports them.",
+   "description": "The Characters tab. 'select' (a character id) or 'path' (project-relative .npcasset) opens the tab on that character; 'open': true just opens it; without an argument it only reports. Edits in progress in the tab are settled by save=true (grizzly_characters_view_discard drops them), otherwise the answer is {ok:false, error:'unsaved', dirty:[id]}. Answers {tab, open, active, selected, file, dirty, count, problems} - problems are the edited character's, resolved against its base like grizzly_characters_write reports them.",
    "annotations": {
     "title": "Show a character in the Characters tab",
-    "idempotentHint": true
+    "idempotentHint": true,
+    "destructiveHint": false
    },
    "inputSchema": {
     "type": "object",
@@ -4203,7 +4270,42 @@
      "save": {
       "type": "boolean"
      },
-     "discard": {
+     "show": {
+      "type": "string",
+      "enum": [
+       "base",
+       "visual",
+       "icon",
+       "community",
+       "rank",
+       "dialog",
+       "sells",
+       "buys"
+      ],
+      "description": "puts that picker of the form up to be looked at, never to act; opens the tab"
+     }
+    }
+   },
+   "cmd": "characters_view"
+  },
+  {
+   "name": "grizzly_characters_view_discard",
+   "description": "The Characters tab like grizzly_characters_view, and the edits in progress in the tab are DROPPED for good before it moves. The editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its own side.",
+   "annotations": {
+    "title": "Show a character and drop the tab's unsaved edits",
+    "destructiveHint": true,
+    "readOnlyHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "select": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "open": {
       "type": "boolean"
      },
      "show": {
@@ -4654,7 +4756,9 @@
    "name": "grizzly_level_build",
    "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph / build_all build the open scene's collision, AI map, game graph or all of them and answer when done; make_* writes one part of the level build (make_all the whole build project); compile_geometry / compile_details / compile_aimap / compile_spawn start xrLC, xrDO or xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once the program started; play / play_game build what Play needs and start the game on the scene, play_clean starts the game alone; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
    "annotations": {
-    "title": "Build or run the level"
+    "title": "Build or run the level",
+    "readOnlyHint": false,
+    "destructiveHint": true
    },
    "inputSchema": {
     "type": "object",
@@ -5419,7 +5523,7 @@
     "title": "The scene's level parts"
    },
    "cmd": "level_parts",
-   "description": "Every class's part of the scene: enabled (loaded), readonly, visible, objects. class= with enabled=false unloads the part (not drawn, not saved over: its file stays as it is; unsaved scene work needs save=true or discard=true, or the answer is unsaved); enabled=true reads it again from the scene's file. readonly= locks the part: its objects cannot be changed and its file is not written.",
+   "description": "Every class's part of the scene: enabled (loaded), readonly, visible, objects. class= with enabled=false unloads the part (not drawn, not saved over: its file stays as it is; unsaved scene work needs save=true, or the answer is unsaved; grizzly_level_parts_discard drops it); enabled=true reads it again from the scene's file. readonly= locks the part: its objects cannot be changed and its file is not written.",
    "inputSchema": {
     "properties": {
      "class": {
@@ -5434,9 +5538,6 @@
      },
      "save": {
       "type": "boolean"
-     },
-     "discard": {
-      "type": "boolean"
      }
     },
     "type": "object"
@@ -5447,22 +5548,58 @@
    "annotations": {
     "destructiveHint": true,
     "readOnlyHint": false,
+    "title": "Unload a level part and drop unsaved scene work"
+   },
+   "cmd": "level_parts",
+   "description": "Every class's part of the scene like grizzly_level_parts; unloading a part (class= with enabled=false) DROPS the unsaved scene work for good first. The editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its own side.",
+   "inputSchema": {
+    "properties": {
+     "class": {
+      "type": "string",
+      "description": "a class name (scene_object, light, spawn, ...); default: the current tool"
+     },
+     "enabled": {
+      "type": "boolean"
+     },
+     "readonly": {
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "name": "grizzly_level_parts_discard"
+  },
+  {
+   "annotations": {
+    "destructiveHint": false,
+    "readOnlyHint": false,
     "title": "New scene"
    },
    "cmd": "scene_new",
-   "description": "File > New Scene (Ctrl+N): an empty scene without a file, its history new. Unsaved scene work needs save=true or discard=true, or the answer is unsaved.",
+   "description": "File > New Scene (Ctrl+N): an empty scene without a file, its history new. Unsaved scene work needs save=true, or the answer is unsaved; dropping it is grizzly_scene_new_discard.",
    "inputSchema": {
     "properties": {
      "save": {
-      "type": "boolean"
-     },
-     "discard": {
       "type": "boolean"
      }
     },
     "type": "object"
    },
    "name": "grizzly_scene_new"
+  },
+  {
+   "annotations": {
+    "destructiveHint": true,
+    "readOnlyHint": false,
+    "title": "New scene, dropping unsaved scene work"
+   },
+   "cmd": "scene_new",
+   "description": "File > New Scene (Ctrl+N) like grizzly_scene_new, and the unsaved work of the open scene is DROPPED for good. The editor asks nothing on this path; the tool carries destructiveHint so a client can ask on its own side.",
+   "inputSchema": {
+    "properties": {},
+    "type": "object"
+   },
+   "name": "grizzly_scene_new_discard"
   },
   {
    "annotations": {

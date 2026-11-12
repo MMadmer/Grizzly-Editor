@@ -233,17 +233,42 @@ def run(project: str, shot: str | None) -> None:
         text = io.open(index[0], encoding="utf-8").read() if index else ""
         check(all(w.split(f"modules/{module}/", 1)[1] in text.replace("\\", "/") for w in want),
               "F the file index names them the same way", text[:200])
+
+        if qa_target.RUST:
+            # -------------------------------------------------------------- G: a name from the disk and back
+            # The Rust editor speaks to the file system in UTF-16 alone: no code page is involved, so its log
+            # line about one says nothing. What is checked is the round trip itself, with a name beyond the
+            # Basic Multilingual Plane (a UTF-16 surrogate pair): made on disk behind the editor's back, listed
+            # by the browser under that name, renamed by the editor to another such name, found on disk so.
+            made = "Медведь \U0001F43B.txt"
+            moved = "Медведь \U0001F43B\U0001F332.txt"
+            with open(os.path.join(folder, made), "wb") as f:
+                f.write(b"bear")
+            mcp("content_browser_open", name=f"gamedata/{FOLDER}", source="project")
+            mcp("content_browser_navigation", action="refresh")
+            entry = f"gamedata\\{FOLDER}\\{made}"
+            r = mcp("content_browser_selection", action="select", name=entry)
+            check(r.get("ok") and same(entry, r.get("selection", [])),
+                  "G a name made on disk with a character beyond the BMP is listed under that name",
+                  json.dumps(r, ensure_ascii=False)[:240])
+            mcp("content_browser_selection", action="clear")
+            r = mcp("content_rename", escaped=True, path=f"gamedata/{FOLDER}/{made}", name=moved)
+            on_disk = os.listdir(folder)
+            check(r.get("ok") and moved in on_disk and made not in on_disk,
+                  "G and the editor's rename writes such a name to disk as it is",
+                  json.dumps(r, ensure_ascii=False)[:160] + " disk=" + repr(on_disk))
     finally:
         ed.close()
         for d in (target, pkg):
             qa_target.remove_tree(d)
 
-    # ---------------------------------------------------------------------- G: the process
-    logs = [p for p in glob.glob(qa_target.log_glob())
-            if not p.endswith("_lua.log") and os.path.getmtime(p) >= started]
-    text = io.open(logs[0], encoding="utf-8", errors="replace").read() if logs else ""
-    check("file names: UTF-8" in text, "G the editor ran with UTF-8 as its ANSI code page",
-          "log: " + (logs[0] if logs else "none written since the start"))
+    if not qa_target.RUST:
+        # ------------------------------------------------------------------ G: the process
+        logs = [p for p in glob.glob(qa_target.log_glob())
+                if not p.endswith("_lua.log") and os.path.getmtime(p) >= started]
+        text = io.open(logs[0], encoding="utf-8", errors="replace").read() if logs else ""
+        check("file names: UTF-8" in text, "G the editor ran with UTF-8 as its ANSI code page",
+              "log: " + (logs[0] if logs else "none written since the start"))
 
 
 def main() -> int:

@@ -1452,6 +1452,12 @@ pub(crate) fn state_read(c: &mut ReadCtx<'_, '_>) -> Result<()> {
 
 /// `STATE_Write` of the entity's class, then the script class's fields.
 pub(crate) fn state_write(o: &Object, h: &Header, class: Class, w: &mut NetWriter) {
+    state_write_class(o, h, class, w);
+    o.script.write(w);
+}
+
+/// `STATE_Write` of the entity's class alone, without what its script class adds.
+pub(crate) fn state_write_class(o: &Object, h: &Header, class: Class, w: &mut NetWriter) {
     match class {
         Class::Spectator => {}
         Class::Temporary => w.w_u32(o.temporary().map_or(u32::MAX, |t| t.node_id)),
@@ -1538,5 +1544,4 @@ pub(crate) fn state_write(o: &Object, h: &Header, class: Class, w: &mut NetWrite
         Class::OnlineOfflineGroup => w_squad(o, w),
         Class::SmartCover => w_smart_cover(o, w),
     }
-    o.script.write(w);
 }

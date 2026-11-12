@@ -1029,8 +1029,10 @@ settled since: "What the QA pass left, closed".)
 
 ### Budgets (plan 10.8, measured)
 
-- **The window within 0.3 s of the process start (warm)**: met. The startup profile ends at the first
-  frame 0.12 s after the process was created (the loader before `main` 0.09 s of it).
+- **The window within 0.3 s of the process start (warm)**: the 0.12 s once written here was measured to the
+  wrong point (the profile ended before the window and the device existed; the first frame was 1.0-1.2 s).
+  Measured again since: "The reviewer's findings, closed", 7 - the window shown 0.07 s, the first frame
+  0.96-0.98 s.
 - **File operations of a start**: 383 (30 reads) for a start that opens Test; the C++ editor's 82k.
 - **No UI frame over 16 ms caused by the editor's own work**: measured with `frame_pacing` on Overnight
   Delivery's Agroprom, the window restored to 2160 x 1350 and View > Real Time on: idle mean 6.6 ms, max
@@ -1038,7 +1040,9 @@ settled since: "What the QA pass left, closed".)
   a scene load max 15 ms. A stack sampler on the UI thread found one piece of editor work there - a
   `stat` of the game folder every frame (`game_linked`), fixed (`game_linked_now`); what is left in the
   samples during a build is drawing and wgpu's acquire / present while the build's parallel copy holds
-  the cores and the disk. Not met in the strict sense: frames over 16 ms do occur, idle as well.
+  the cores and the disk. Not met in the strict sense: frames over 16 ms do occur, idle as well. (The
+  cause was found since - tessellation on rayon's global pool and the viewport's renderer made on the UI
+  thread: "The reviewer's findings, closed", 9.)
 - **A rebuild no slower than the C++ job**: the Rust module build of Overnight Delivery with
   `test_build_job`'s 1.1 GB payload takes 1.1 s; the C++ job was not timed on the same data in this pass,
   so the comparison is not made. (Made since: "What the QA pass left, closed" 5 - C++ 4.89 s clean / 4.36 s
@@ -1226,6 +1230,217 @@ Deliberate differences of section 12:
   editor does not list; `run_lifecycle.py` proves the same shutdown with idle clients through the palette
   (`COMMAND_EXIT`).
 - D6: `lint_ui_units.py` is not run.
+
+## The reviewer's findings, closed
+
+The brief `docs/rust/briefs/critic-fixes.md`, 12 Nov. One line per finding: what was done, where its test is.
+
+1. **Level exports and the level build compared for real.** Every step of `tools/qa/diff_editors.py` says what it
+   expects (`ok` unless `expect="refused"`); a step that answers otherwise fails the scenario, while recording the
+   oracle as well. The scenarios do the work now: S2/S4 with a quest the reader takes (named tasks), files that
+   exist for rename / move / delete; S5 opens Agroprom first, so a build bakes ("Scene baked: 346 object(s)");
+   S6 places a golden static (`statics\army_base\prop_map_02`), selects before every export, one Player Start, and
+   exports `overlay.xcform`, the cut and the `.ogf` of the selection and of 40 objects of the scene; S7 runs
+   `level_build make_all` on Escape of Test against the C++ `COMMAND_BUILD` (test_barrel, a visual-mode object the
+   C++ build crashes on, deleted first). Binary outputs are watched as `sha256:<hex>:<size>` and compared by the
+   rules of "For the plan"; the summary counts the files really compared. The oracle's key hashes LevelEditor.exe
+   and every DLL beside it (`ORACLE_FORMAT` 3); a C++ level build that wrote into `<repo>\gamedata\levels` fails the
+   run (`REPO_LEVELS`). Golden tests from the oracle: `crates/gz-export-level/tests/golden.rs` (+ `tests/data`).
+   Rust faults the repaired scenarios found and fixed: the level build wrote into the editor's folder (the C++
+   writes into the project's `gamedata\levels` through its `$game_levels$` mount); `Fbox::xform` was a different
+   algorithm (`gz-scene/src/math.rs` `xform_box`, an exact port); a zone or a smart terrain made in the scene had
+   no editor-script block in its packet (`gz-entities` `write_editor_script`, test
+   `a_new_packet_carries_the_editor_scripts_defaults`).
+   Game suites on Rust output: `Run-ScreensQa.ps1 -Part Descriptions` with the 87 `.npcasset` files the Rust editor
+   shipped in a build of a copy of Overnight Delivery: 31 of 31 checks pass in 39 s, the extra module logs
+   "85 character(s) read" (the other 2 are templates) and no file left out (driver
+   `Intermediate/fix/screens_on_rust.py`; QA root, results folder and the compat-flag value it set removed after).
+   `Run-ModsQa.ps1` cannot take Rust input without a change to the game repository: Updates and Catalog generate
+   every module, descriptor, index and package themselves (`catalog_qa.py`, "an independent second reading of the
+   contract"), and Adopt's `-RealRelease` takes only darf-overnight-delivery's release signed with the key the
+   public catalog lists - a QA run does not sign with the author's private key. `Run-NqQa.ps1 -Scenario Scout`
+   neither: it installs the suite's own `tools\qa\nq\module` (`Set-QaModule -Variant Full`) and has no parameter
+   for another module (only PdaModule takes `-PdaModuleDir`, run by the QA pass).
+2. **The level path guard.** `gz_base::file_name_problem` (one component: no separator, no `.`/`..`, no drive, no
+   reserved name, no trailing dot or space); refused when typed (`gz-scene` props, test
+   `the_level_path_is_one_folder_name`) and by the build (`gz-levelbuild/src/folder.rs` `level_folder`); before a
+   wipe the real path must lie strictly below the levels folder and not be a link (`check_wipe`; tests in
+   `folder.rs`, a junction made with `mklink /J`). Tools: the plain / `_discard` pairs for `open_scene`,
+   `quest_close`, `characters_view`, `level_parts`, `scene_new` (8 discard tools), `destructiveHint` on
+   `level_build`, `content_delete`, `quest_reload`, `content_copy`, `content_move`, `darf_copy`,
+   `content_browser_copy`; bridge tests `only_a_discard_tool_drops_work_and_every_one_is_marked`,
+   `a_discard_tool_sends_discard`.
+3. **No QA run opens a real project.** The guard read first (`qa_target.guard_project` / `copy_project`), every
+   suite that starts an editor goes through it; `diff_editors.py` copies through `copy_project`; the scripts of
+   `tools/mcp` that drive an editor already running (`benchmark_scene_load.py`; `test_server_lifecycle.py` with
+   `--timeout-scene` or a shutdown) refuse unless the editor's open project (`state.project`) and an absolute scene
+   path lie under the system temp folder. `find` before the first run (12 Nov 04:23:21) and after the last:
+   see the end of this section.
+4. **The UI thread waits on no GPU readback.** The capture is polled on a blocking worker (`window.rs` `polls`,
+   joined at exit); the device is made on a thread of its own and the surface on the UI thread with one
+   `block_on` before the first frame; the extras' `set_window` takes `now_or_never`. Test: `test_ui_shell` and
+   the screenshot checks of every suite (`run_all.py`).
+5. **No lock across parallel work in the viewport.** Particles: the systems are taken out of the lock, stepped
+   with `par_iter_mut` and put back (`draw_particles.rs`); AI map, details, wallmarks: the caches are copied out
+   (`draw_extra.rs` `unlocked`). Tests `a_cache_is_unlocked_while_it_draws`,
+   `passes_and_a_job_on_the_same_caches_never_stall_the_pool`.
+6. **The smaller findings.** Frames: a request is answered by a frame that began after it (`frames.rs` `begin`,
+   test `a_frame_under_way_does_not_answer_a_request`). Corpus: skips are printed by `test.sh`
+   (`skipped <binary>: <why>`), `--all` fails on one where the script set the variables and reads every file
+   (`GRIZZLY_TEST_FULL`); the corpus binaries start first. Reading every file found three things the strides
+   had passed by, all settled: an entity read from `all.spawn` got the editor scripts' block when written anew
+   (only one made here or read from a scene does now: `Known::made`); the game's `hk416_shoot.ogg` keeps its
+   first audio packet on the setup header's page, which the parameter writer refused - such packets now get a
+   page of their own (test `audio_on_the_last_header_page_gets_a_page_of_its_own`); two library objects are what
+   the C++ makes of them - `rostok_outside_mp_21.object` has an empty body chunk (`open_chunk` answers null),
+   `artixvakt_simple1.object` a version-1 motion whose envelope parameters every write quantises to 16 bits -
+   and the object corpus test states both rules (its module comment) instead of failing on them; it compares by
+   value first, which took it from 84 s to 14 s. Dialogs: a project's dialog goes down with the project, `ui_dialog close` without `id`
+   closes the one on top (`test_ui_shell` F). `test_unicode_names` G: a name with a character outside the BMP is
+   made on disk, found through the listing, renamed and found on disk again (the constant log check stays for the
+   C++ target only). Publish: one start at a time (`StartClaim`, tests `one_start_at_a_time`,
+   `racing_starts_take_one_claim`). MCP: a command runs to its end past the timeout (test
+   `a_command_runs_to_its_end_past_the_timeout`). Query: a failed revision is not computed again (test
+   `a_read_does_not_compute_a_failed_revision_again`); `fresh` does not cancel ("For the plan"). Crash filter:
+   `TerminateProcess` after the report. Layering: the table in "For the plan". PARITY.md: no row `missing`.
+7. **Start-up measured to the first presented frame.** The profile's milestones `window shown` and `first frame`
+   and the stages between (graphics instance, adapter, device, surface, first frame) are in the log; the window is
+   shown in the theme's background before the device exists; DX12 is asked first, Vulkan only when it fails.
+   Four starts (`tools/qa/probe_start.py`): window shown 0.389 (the first, colder) / 0.070 / 0.071 / 0.077 s,
+   first frame 1.558 / 0.964 / 0.969 / 0.984 s; adapter 0.39-0.58 s, device 0.15-0.18 s, surface 0.28-0.31 s.
+   Test: `test_ui_shell` A fails a warm start whose window was shown later than 0.3 s.
+8. **A screenshot after a scene load is current.** `screenshot_editor` holds for the viewport's pass of the
+   caller's scene revision (`PictureGate`) and for its assets, up to 15 s, then answers `pending`;
+   `screenshot_viewport` alike. The wait takes a finished pass of the caller's revision or a newer one, whatever
+   pass runs meanwhile: while a particle system plays a new pass follows each one, and a wait for a moment with
+   none under way held every picture of Escape for its whole 15 s (seen in the first `run_all` of this pass).
+   Test: `test_scene_tools` S (one shot after the load, the viewport not flat, no `pending`).
+9. **Frames during a build.** egui's `rayon` feature is out (`Cargo.toml`); nothing else on the drawing thread
+   enters a pool (the particles' `par_iter_mut` runs in the pass build on the CPU pool). The worst frame left was
+   not the build's: the Level tab's first frame made the viewport's renderer on the UI thread (412.9 ms); it is
+   made on a thread of its own now (`Viewport::start_renderer`; a command waits for it in `ensure_renderer`, a
+   picture in `current`). Frame work (`frame_pacing`, Real Time on, OD): before, during a build p95 13-73 ms,
+   max 36-218 ms; with `rayon` out, max 18.0-46.5 ms; with the renderer off the UI thread, the Level tab's first
+   1.5 s max 19.2 ms, two builds max 4.9 / 4.6 ms (p95 4.4 / 3.6). `test_build_job` A now also holds the worst
+   frame (`FRAME_WORK_MAX_MS` 64): mean 4.8, p95 10.6, max 31.6 ms.
+10. **Core load of a build** - closed early on the user's word (a build of about a second is fast enough). The bake
+    of the open scene runs beside the module's checks (`gz-build/src/job.rs` `check_module`, `futures::join!`),
+    the files listed again after the bake; the log names every stage (`* [XMS] build stages: ...`). Stages of a
+    clean build of Overnight Delivery (wall s / cores busy):
+
+    | Stage | Before | After |
+    |---|---|---|
+    | bake | 0.301 / 0.38 | 0.658 / 0.37 (bake and checks together) |
+    | checks | 0.381 / 0.35 | (with the bake) |
+    | listing | - | 0.013 |
+    | copy | 0.380 / 0.32 | 0.357 / 0.32 |
+    | whole build | 1.073 s, 5.95 CPU s, 0.35 | 1.030 s, 5.78 CPU s, 0.35 |
+    | rebuild (hard links) | 0.305 | 0.308 |
+
+    Parallel now: the bake beside the checks, the checks by area, the copy by file. Serial and left so: the
+    first use of the linked game's data, which both the bake and the checks wait on, and the copy, bound by the
+    disk (about 3 GB/s).
+
+The final runs of this pass (12 Nov):
+- `bash tools/rust/check.sh`: ok, 19 s (clippy and fmt clean, `unsafe` only in gz-win, every command registered).
+- `bash tools/rust/test.sh --all`: 75 binaries, 1086 tests green, 0 skipped; run 59.6 s, total 62.7 s with every
+  corpus file read (the strided default run stays as it was). The renderer start, the picture wait and the entity
+  flag changed after it; those crates' tests were run again: green.
+- `python tools/qa/diff_editors.py --all`: 8 scenarios, 744 steps, 0 differ; 713 written files compared, 0 differ
+  (s6 the level exports 115, s7 the level build 17, s5 the module builds 497); 32.3 s.
+- `GRIZZLY_QA_TARGET=rust python tools/qa/run_all.py`: 22 of 22 suites pass, wall 122.0 s. The first run of this
+  pass failed 13 (the picture wait and the minimised start above); the two folders its timed-out suites left in
+  the temp folder were removed by hand - a suite ended by force does not clean up after itself.
+- `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 04:23:21'`: nothing, before the
+  first run (04:23:21) and after the last (06:55:27). No Grizzly, LevelEditor, xrEngine or github_mock process
+  left; `D:\Games\Dead Air\_qa\screens` and the screens suite's results folder removed; `<repo>\gamedata\levels`
+  does not exist.
+
+Decisions taken in this pass:
+- A C++ level build writes into the project's `gamedata\levels\<level>` (its `$game_levels$` mount), not
+  `<repo>\gamedata\levels`; the Rust build does the same, and the differential moves each side's output into its
+  record. The `-level_out` flag tried for QA was taken out again: it was not needed.
+- S7 deletes `test_barrel` before Make All: the C++ editor's `BuildHOMModel` asserts on a visual-mode object.
+- The golden `.ogf`'s build-machine name is scrubbed to a fixed one; the test compares by the `.ogf` rule.
+- The frame limit of `test_build_job` A is 64 ms worst, 16 ms mean.
+- A minimised start (the QA harness's `SW_SHOWMINNOACTIVE`) keeps the window out of sight until it is
+  restored, as before this pass: shown iconic, it reported its taskbar button's size and the previews laid out
+  at zero (the first `run_all` of this pass).
+- A game suite runs on Rust output only where it takes outside input (Screens Descriptions); the other two are
+  named with the reason above, not forced.
+
+## For the plan
+
+What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits
+them.
+
+- **Section 9, the comparison rules of the level exports and the level build** (`diff_editors.py` `FILE_RULES`,
+  the `cmp_*` functions). Byte for byte unless named here; no broad ignore:
+  - `overlay.xcform`, the cut: byte for byte except the material table's order (D14: the C++ fills it in the order
+    a mesh's surface map, keyed by `CSurface*`, meets the surfaces); each triangle's material compared by its name.
+    The golden files of a single static are equal byte for byte (`gz-export-level/tests/golden.rs`).
+  - the exported `.ogf`: the children (one per surface) as a multiset of their bytes and the collision mesh as a
+    multiset of triangles, by the same pointer order; every other chunk byte for byte.
+  - `build.prj`: chunks 0, 1, 2, 8, 9, 10 and 15 byte for byte; the material, shader and texture tables as sets of
+    what they name (the faces meet them in pointer order); faces as a multiset with the material resolved to what
+    it names and the smoothing group, `b_face`'s pad left out; the light set by its fields per light type, a point
+    light's colour within 4 ULP (the two compilers round its conversion differently); LOD models in order, corners and UVs within
+    2 micrometres (a different float order in the C++ quad code: 8 ULP seen), the LOD material's `reserved` and
+    `area` left out (never cleared in the C++); an unset `Flight`'s fields left out (uninitialised); MU models
+    per model with their faces as a multiset.
+  - `level.spawn`: the Rust build's breakable and climable entries left out (D10); a smart cover's loopholes as a
+    set (Lua `pairs` order); every other entry byte for byte. `meshes\brkbl#*.ogf`: Rust only (D10).
+  - `level_stat.txt`: every line equal, the maxima within 0.5 % (at least 2): a vertex a rounding away from a 1 m
+    cell's border lands beside it; `level_stat.tga` at most one pixel in 10000. Neither file is read by a compiler
+    or the game.
+  With every file equal under these rules the external compilers get the same input, so phase 6's gate holds by
+  that; no level was compiled from both outputs.
+- **Where a level build writes**: into the open project's `gamedata\levels\<level>` (and `gamedata\spawns`), the
+  folder the C++ editor's `$game_levels$` / `$game_spawn$` mount names - not `<editor>\gamedata\levels` as the plan
+  and the brief said; never into the game.
+- **The level path** is one file-name component (`gz_base::file_name_problem`); a wipe of a level folder needs its
+  real path strictly below the levels folder and no link in its place.
+- **The C++ Make All asserts** (`BuildHOMModel`) on an object in visual mode; the Rust build does not. Recorded,
+  not reproduced.
+- **The UI thread draws and presents.** It waits on no file, no network, no lock a job may hold, no GPU readback
+  and no pipeline compile: the one `block_on` it runs is the surface and the painter before the first frame;
+  the device is made on a thread of its own (a winit window's handle is reachable only from the thread that
+  made it, so the surface is made on the UI thread); the viewport's renderer is made on a thread of its own.
+  No `rayon` feature of egui: tessellation runs on the drawing thread.
+- **Start-up (D7)**: the window is shown at 0.07 s warm; the first frame follows at 0.96-0.98 s, most of it the
+  adapter (0.39-0.58 s) and the surface (0.28-0.31 s) - the driver's. The 0.3 s budget holds for the window,
+  not for the first frame.
+- **Plan 5.4, `fresh`**: a fresh read does not cancel a computation already running; it waits for it and reads
+  again if its revision moved. A `compute` that panics is remembered as failed for its revision.
+- **A new scene-made entity's packet** carries the editor script's block the C++ editor writes (it runs the
+  repository's CoP scripts, where `STATE_Read` returns early in the editor): a `se_zone_*` writes `u8 0`, a smart
+  terrain six `0` bytes and `u16 6`.
+- **The layer table, as `cargo metadata` gives it** (a crate's layer = 1 + the highest of its workspace
+  dependencies):
+
+  | Layer | Crates |
+  |---|---|
+  | 0 | gz-base, gz-luadata, gz-mcp-bridge, gz-win |
+  | 1 | gz-chunk, gz-entities, gz-fmt-xml, gz-log, gz-ltx, gz-lua, gz-task, gz-ui |
+  | 2 | gz-corpus, gz-crash, gz-fmt-level, gz-fmt-object, gz-fmt-sound, gz-fmt-spawn, gz-fmt-xr, gz-query, gz-store, gz-vfs |
+  | 3 | gz-editor, gz-fmt-ogf, gz-fmt-tex, gz-particles |
+  | 4 | gz-app, gz-github, gz-mcp, gz-project, gz-render |
+  | 5 | gz-game, gz-mod, gz-ui-app |
+  | 6 | gz-build, gz-scene, gz-ui-content |
+  | 7 | gz-nq, gz-pda, gz-release, gz-screens, gz-ui-previews, gz-ui-viewport |
+  | 8 | gz-catalog, gz-characters, gz-publish, gz-ui-graph, gz-ui-level, gz-ui-mod, gz-world |
+  | 9 | gz-export-level, gz-ui-pda, gz-ui-release, gz-ui-world |
+  | 10 | gz-levelbuild |
+  | 11 | grizzly |
+
+  `gz-game` depends on `gz-editor` (its services) and `gz-project` (the project holds the game's mount): it is a
+  domain crate above the project, not beside `gz-vfs`. Neither edge is cheap to turn round (the mount and the
+  services are its whole subject), so the table, not the code, changes.
+- **Section 10's rule** stands for long operations: no pool is made smaller or slower for smoothness. A build of
+  about a second is not chased for core load (the user's word, 12 Nov).
+- **The game's suites as proof of section 9**: only `Run-ScreensQa.ps1 -Part Descriptions` takes outside input
+  (`-ExtraCharacters`); `Run-ModsQa.ps1` and `Run-NqQa.ps1 -Scenario Scout` make their own fixtures, so they prove
+  the game's side of the contract, not the editor's output.
 
 ## Next packages, in dependency order
 

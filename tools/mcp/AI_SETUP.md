@@ -260,8 +260,13 @@ same call; reads never switch tabs. The Content Browser and the Output Log also
 slide in over any tab as drawers (`grizzly_ui_drawer`); another tab coming up
 closes the drawer. A project's open tabs are remembered in
 `<project>\temp\session.ltx` and come back when it opens again. Losing unsaved
-work takes one of the three `*_discard` tools, each marked `destructiveHint`;
-every other path refuses with `unsaved` and the list.
+work takes a `*_discard` tool, each marked `destructiveHint` (`grizzly_ui_tab_discard`,
+`grizzly_window_close_discard`, `grizzly_project_close_discard`, `grizzly_open_scene_discard`,
+`grizzly_quest_close_discard`, `grizzly_characters_view_discard`, `grizzly_level_parts_discard`,
+`grizzly_scene_new_discard`); no other tool takes `discard`, and every other path refuses with
+`unsaved` and the list. The tools that delete, replace files or empty a folder
+(`grizzly_level_build`, `grizzly_content_delete`, `grizzly_quest_reload`, the copies and moves
+with `overwrite`) carry `destructiveHint` too.
 
 The caption holds the menus (folded into one Menu button under 1100 pt) and the
 major tabs; under it the active tab's toolbar, which always ends in the project's

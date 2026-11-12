@@ -13,6 +13,33 @@ use crate::window::WindowLink;
 
 const AREA: &str = "window";
 
+/// What a picture of the window holds for besides the UI frames: the viewport's pass of the scene
+/// as the caller's commands left it, with what it draws loaded (the viewport crate fills it in).
+/// It answers what was still pending when its limit ran out.
+type GateFn = Arc<dyn Fn(Arc<Editor>) -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync>;
+
+#[derive(Default)]
+pub struct PictureGate {
+    gate: parking_lot::Mutex<Option<GateFn>>,
+}
+
+impl PictureGate {
+    pub fn of(editor: &Editor) -> Arc<PictureGate> {
+        editor.services.get_or_init(PictureGate::default)
+    }
+
+    pub fn set(
+        &self,
+        gate: impl Fn(Arc<Editor>) -> futures::future::BoxFuture<'static, Vec<String>> + Send + Sync + 'static,
+    ) {
+        *self.gate.lock() = Some(Arc::new(gate));
+    }
+
+    fn get(&self) -> Option<GateFn> {
+        self.gate.lock().clone()
+    }
+}
+
 /// Encodes straight RGBA as a PNG. Fast settings: a screenshot is looked at, not archived.
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, CmdError> {
     let mut out = Vec::with_capacity(rgba.len() / 4);
@@ -59,6 +86,16 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
     // the commands that came before this one have to be drawn first: a layout settles in two passes
     let frames = args.u32("frames").unwrap_or(2).clamp(1, 16);
     editor.frames.after(u64::from(frames)).await?;
+    // the viewport's picture of the scene is part of the frame: held until it is current too,
+    // then two more frames that show it
+    let pending = match PictureGate::of(&editor).get() {
+        Some(gate) => {
+            let pending = gate(editor.clone()).await;
+            editor.frames.after(2).await?;
+            pending
+        }
+        None => Vec::new(),
+    };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     link.capture(move |image| {
@@ -117,6 +154,15 @@ async fn screenshot_editor(editor: Arc<Editor>, args: Args) -> Reply {
         "modal": modal,
         "frame": stamp.frame,
     }))
+    .map(|mut v| {
+        // what the picture still waited for when its limit ran out: never a silent half picture
+        if !pending.is_empty()
+            && let Some(o) = v.as_object_mut()
+        {
+            o.insert("pending".to_owned(), json!(pending));
+        }
+        v
+    })
 }
 
 /// Registers the window's own commands.

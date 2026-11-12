@@ -653,11 +653,16 @@ async fn group_thumbnail(ed: &Arc<Editor>) -> Reply {
 
 async fn screenshot_viewport(ed: &Arc<Editor>) -> Reply {
     let vp = Viewport::of(ed);
-    let image = vp.picture(ed).await.map_err(|e| {
+    let (image, pending) = vp.picture(ed).await.map_err(|e| {
         CmdError::new(&e.code, "viewport RT unavailable").with_data(json!({ "detail": e.message }))
     })?;
     let (w, h) = (image.width, image.height);
     let png = ed.exec.cpu(move || gz_app::encode_png(image.width, image.height, &image.rgba)).await?;
     let encoded = ed.exec.cpu(move || base64::engine::general_purpose::STANDARD.encode(png)).await;
-    Ok(json!({ "png_base64": encoded, "width": w, "height": h }))
+    // what was still loading when the wait ran out: never a silent half picture
+    if pending.is_empty() {
+        Ok(json!({ "png_base64": encoded, "width": w, "height": h }))
+    } else {
+        Ok(json!({ "png_base64": encoded, "width": w, "height": h, "pending": pending }))
+    }
 }

@@ -101,7 +101,7 @@ impl ViewportPane {
     #[must_use]
     pub fn new(editor: &Arc<Editor>, gpu: &egui_wgpu::RenderState) -> Self {
         let vp = Viewport::of(editor);
-        vp.ensure_renderer(editor, gpu);
+        vp.start_renderer(editor, gpu);
         crate::bulktools::provide_axes(editor);
         Self {
             editor: editor.clone(),
@@ -139,7 +139,11 @@ impl ViewportPane {
         self.vp.set_pane([rect.width(), rect.height()], ppp);
         let size =
             [(rect.width() * ppp).round().max(32.0) as u32, (rect.height() * ppp).round().max(32.0) as u32];
-        let renderer = self.vp.ensure_renderer(cx.editor, cx.gpu);
+        let renderer = self.vp.start_renderer(cx.editor, cx.gpu);
+        if renderer.is_none() && self.vp.renderer_starting() {
+            // the renderer starts on a thread of its own: look again soon
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         let canvas_c = Color::rgb(p.canvas.r(), p.canvas.g(), p.canvas.b());
         if self.vp.read(|s| s.size != size || s.background != canvas_c) {
             self.vp.with(|s| {

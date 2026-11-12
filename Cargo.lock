@@ -890,7 +890,6 @@ dependencies = [
  "nohash-hasher",
  "parking_lot 0.12.5",
  "profiling",
- "rayon",
  "self_cell",
  "skrifa",
  "smallvec",
@@ -1636,6 +1635,7 @@ dependencies = [
  "gz-fmt-tex",
  "gz-fmt-xr",
  "gz-game",
+ "gz-project",
  "gz-scene",
  "gz-store",
  "gz-task",
@@ -1695,6 +1695,7 @@ name = "gz-mcp"
 version = "0.1.0"
 dependencies = [
  "gz-editor",
+ "gz-task",
  "serde_json",
  "tokio",
 ]

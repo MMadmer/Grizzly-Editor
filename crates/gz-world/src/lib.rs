@@ -4,7 +4,7 @@
 //! The C++ specification is `EditorWorld.h/.cpp` (the reader of the linked game's `all.spawn`,
 //! `Starts`, `Validate`, the JSON of `[world]` / `[start_kit]`, `GameBaseKit`, the MCP
 //! handlers) and the `[world]` / `[start_kit]` parts of `EditorModManifest.cpp` (`Load`,
-//! `Save`). Its drawing is the World Rules tab, a later package.
+//! `Save`). Its drawing is the World Rules tab (`gz-ui-world`).
 //!
 //! **The game is never written.** The linked game's `all.spawn` is read - its levels, its level
 //! changers, its patrol names - and nothing else; the engine lays a module's world over the

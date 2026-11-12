@@ -229,13 +229,13 @@ fn tool_result(b: &Bridge, name: &str, tool: &Tool, given: &Map<String, Value>) 
         "grizzly_mod_catalog_withdraw" => {
             args.insert("action".into(), json!("withdraw"));
         }
-        // losing unsaved work is only ever these three tools, each marked destructive: the
-        // others cannot pass discard
+        // losing unsaved work is only ever a `*_discard` tool, each marked destructive: no other
+        // tool's schema takes discard
         "grizzly_ui_tab_discard" | "grizzly_window_close_discard" => {
             args.insert("action".into(), json!("close"));
             args.insert("discard".into(), json!(true));
         }
-        "grizzly_project_close_discard" => {
+        n if n.ends_with("_discard") => {
             args.insert("discard".into(), json!(true));
         }
         _ => {}
@@ -488,6 +488,52 @@ mod tests {
             r["content"][0]["text"],
             json!("{\"ok\": false, \"error\": \"grizzly_ping has no argument 'x'; it takes no arguments\"}")
         );
+    }
+
+    #[test]
+    fn only_a_discard_tool_drops_work_and_every_one_is_marked() {
+        let raw: Value = serde_json::from_str(CATALOG).unwrap();
+        let destructive = |t: &Value| t["annotations"]["destructiveHint"].as_bool() == Some(true);
+        let mut discard_tools = 0;
+        for t in raw["tools"].as_array().unwrap() {
+            let name = t["name"].as_str().unwrap();
+            let takes = t["inputSchema"]["properties"].get("discard").is_some();
+            assert!(!takes, "{name}: only a *_discard tool may drop unsaved work, and it takes no 'discard'");
+            if name.ends_with("_discard") {
+                discard_tools += 1;
+                assert!(destructive(t), "{name} carries destructiveHint");
+                let plain = name.trim_end_matches("_discard");
+                let base = raw["tools"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|x| x["name"] == plain || x["cmd"] == t["cmd"]);
+                assert!(base.is_some(), "{name} has a plain form");
+            }
+        }
+        assert_eq!(discard_tools, 8);
+        for name in [
+            "grizzly_level_build",
+            "grizzly_content_delete",
+            "grizzly_quest_reload",
+            "grizzly_project_delete",
+        ] {
+            let t = raw["tools"].as_array().unwrap().iter().find(|t| t["name"] == name).unwrap();
+            assert!(destructive(t), "{name} carries destructiveHint");
+        }
+    }
+
+    #[test]
+    fn a_discard_tool_sends_discard() {
+        let b = bridge();
+        for name in ["grizzly_level_parts_discard", "grizzly_open_scene_discard", "grizzly_scene_new_discard"]
+        {
+            assert!(b.tools.contains_key(name), "{name} is listed");
+        }
+        // the arguments a discard tool sends: no editor answers here, so the call reports the refusal
+        let tool = b.tools.get("grizzly_level_parts").unwrap();
+        let r = tool_result(&b, "grizzly_level_parts", tool, &obj(&[("discard", json!(true))]));
+        assert_eq!(r["isError"], json!(true), "the plain form takes no discard: {r}");
     }
 
     #[test]

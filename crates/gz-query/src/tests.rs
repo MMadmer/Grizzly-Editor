@@ -127,3 +127,46 @@ fn a_panicking_computation_leaves_the_key_usable() {
     assert_eq!(waiting.load(Ordering::SeqCst), 1);
     assert_eq!(q.peek_at(&1, Rev(1)).map(|v| *v), Some(9));
 }
+
+#[test]
+fn a_read_does_not_compute_a_failed_revision_again() {
+    let rt = runtime();
+    let q: Query<u8, u64> = Query::new(rt.exec());
+    let tries = Arc::new(AtomicUsize::new(0));
+    let broken = |tries: &Arc<AtomicUsize>| {
+        let t = tries.clone();
+        move || -> u64 {
+            t.fetch_add(1, Ordering::SeqCst);
+            panic!("broken input")
+        }
+    };
+    // a frame's read starts it once; the panic is remembered for that revision
+    assert!(matches!(q.get(&1, Rev(1), broken(&tries)), Answer::Pending));
+    for _ in 0..200 {
+        if tries.load(Ordering::SeqCst) == 1 && !q.inner.slots.lock().get(&1).is_some_and(|s| s.running) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // every later frame's read of the same revision starts nothing
+    for _ in 0..20 {
+        assert!(matches!(q.get(&1, Rev(1), broken(&tries)), Answer::Pending));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(tries.load(Ordering::SeqCst), 1);
+    // the revision moves: computed again
+    let ok = Arc::new(AtomicUsize::new(0));
+    let o = ok.clone();
+    q.get(&1, Rev(2), move || {
+        o.fetch_add(1, Ordering::SeqCst);
+        7
+    });
+    for _ in 0..200 {
+        if q.peek_at(&1, Rev(2)).is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(q.peek_at(&1, Rev(2)).map(|v| *v), Some(7));
+    assert_eq!(ok.load(Ordering::SeqCst), 1);
+}

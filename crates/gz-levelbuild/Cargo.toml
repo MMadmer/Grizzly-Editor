@@ -26,6 +26,7 @@ gz-fmt-tex.workspace = true
 gz-fmt-xr.workspace = true
 gz-game.workspace = true
 gz-build.workspace = true
+gz-project.workspace = true
 gz-export-level.workspace = true
 glam.workspace = true
 serde.workspace = true

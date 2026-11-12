@@ -3,9 +3,11 @@
 
 import argparse
 import json
+import os
 import socket
 import statistics
 import sys
+import tempfile
 import time
 
 
@@ -27,6 +29,24 @@ def checked_call(host: str, port: int, timeout: float, payload: dict) -> dict:
     if not response.get("ok"):
         raise RuntimeError(response.get("error", f"request failed: {response!r}"))
     return response
+
+
+def under_temp(path: str) -> bool:
+    real = os.path.normcase(os.path.realpath(path))
+    return real.startswith(os.path.normcase(os.path.realpath(tempfile.gettempdir())).rstrip("\\/") + os.sep)
+
+
+def guard(host: str, port: int, timeout: float, scene: str) -> None:
+    """Loads run only on a copy: the editor's open project and the scene must lie under the system temp folder,
+    so an author's project (D:\\XFinedProjects\\...) is never opened or saved by a measurement."""
+    state = checked_call(host, port, timeout, {"cmd": "state"})
+    project = str(state.get("project") or "")
+    # an editor with no project open (still opening the copy it was started on) has none to harm
+    if project and not under_temp(project):
+        raise SystemExit("REFUSED: the editor's open project (%r) is not a copy under the system temp folder "
+                         "(tools/qa/qa_target.copy_project makes one)" % project)
+    if os.path.isabs(scene) and not under_temp(scene):
+        raise SystemExit("REFUSED: %s is not under the system temp folder" % scene)
 
 
 def percentile(samples: list[float], fraction: float) -> float:
@@ -59,6 +79,7 @@ def main() -> int:
         parser.error("--repeats must be positive and --warmup cannot be negative")
 
     checked_call(args.host, args.port, args.timeout, {"cmd": "ping"})
+    guard(args.host, args.port, args.timeout, args.scene)
     load_timings = []
     ready_timings = []
     object_total = 0

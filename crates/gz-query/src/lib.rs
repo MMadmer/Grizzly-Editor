@@ -71,11 +71,14 @@ struct Slot<V> {
     running: bool,
     /// Told when a computation ends: the readers that wait for one instead of starting their own.
     done: Arc<Notify>,
+    /// The revision whose computation panicked: a non-blocking read does not start it again
+    /// (it would panic again, every frame) until the revision moves.
+    failed: Option<Rev>,
 }
 
 impl<V> Slot<V> {
     fn new() -> Self {
-        Self { rev: Rev::ZERO, value: None, running: false, done: Arc::new(Notify::new()) }
+        Self { rev: Rev::ZERO, value: None, running: false, done: Arc::new(Notify::new()), failed: None }
     }
 }
 
@@ -107,9 +110,13 @@ fn finish<K: Eq + Hash, V>(inner: &Inner<K, V>, key: &K, rev: Rev, value: Option
     let mut slots = inner.slots.lock();
     if let Some(slot) = slots.get_mut(key) {
         slot.running = false;
-        if let Some(value) = value {
-            slot.value = Some(value);
-            slot.rev = rev;
+        match value {
+            Some(value) => {
+                slot.value = Some(value);
+                slot.rev = rev;
+                slot.failed = None;
+            }
+            None => slot.failed = Some(rev),
         }
         slot.done.notify_waiters();
     }
@@ -138,7 +145,9 @@ where
             return Answer::Fresh(v.clone());
         }
         let answer = slot.value.clone().map_or(Answer::Pending, Answer::Stale);
-        if !slot.running {
+        // a revision whose computation panicked is not started again by a read that cannot wait:
+        // the reader keeps what there is until the revision moves
+        if !slot.running && slot.failed != Some(rev) {
             slot.running = true;
             let inner = self.inner.clone();
             let key = key.clone();
@@ -155,7 +164,10 @@ where
     /// Awaits the value for `rev`, computing it on the CPU pool when it is missing. Callers that
     /// ask while a computation of the key runs wait for it, so one revision is computed once
     /// however many ask at the same time. A panic in `compute` continues in the caller that
-    /// started it; the others compute again.
+    /// started it; the others compute again (a caller that waits asks for the real thing, a
+    /// command that fails says so), while [`Query::get`] leaves a failed revision alone. A
+    /// revision that moves while a computation runs does not cancel it: the value is kept for the
+    /// revision it was computed for, and the next read of the new revision computes again.
     pub async fn fresh(&self, key: &K, rev: Rev, compute: impl FnOnce() -> V + Send + 'static) -> Arc<V> {
         let mut compute = Some(compute);
         loop {

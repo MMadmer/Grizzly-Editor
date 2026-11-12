@@ -104,16 +104,26 @@ pub fn xform_box(b: &Aabb, m: &Mat4) -> Aabb {
     if !b.is_valid() {
         return Aabb::INVALID;
     }
-    let mut out = Aabb::INVALID;
-    for i in 0..8 {
-        let c = Vec3::new(
-            if i & 1 == 0 { b.min.x } else { b.max.x },
-            if i & 2 == 0 { b.min.y } else { b.max.y },
-            if i & 4 == 0 { b.min.z } else { b.max.z },
-        );
-        out.modify(m.transform_tiny(c));
+    // the C++ way to the bit (a box's bounds are part of the level files): the min corner carried,
+    // then each edge vector (a column of the matrix times the box's size) added to the min or the
+    // max by its sign
+    let edges =
+        [m.row(0) * (b.max.x - b.min.x), m.row(1) * (b.max.y - b.min.y), m.row(2) * (b.max.z - b.min.z)];
+    let mut min = m.transform_tiny(b.min);
+    let mut max = min;
+    for e in edges {
+        for (axis, v) in [e.x, e.y, e.z].into_iter().enumerate() {
+            // `negative`: the sign bit, so -0.0 counts as negative
+            let (lo, hi) = (&mut min, &mut max);
+            let target = if v.is_sign_negative() { lo } else { hi };
+            match axis {
+                0 => target.x += v,
+                1 => target.y += v,
+                _ => target.z += v,
+            }
+        }
     }
-    out
+    Aabb::new(min, max)
 }
 
 /// The box of a point grown by `r` in every direction.

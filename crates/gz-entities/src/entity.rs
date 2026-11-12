@@ -12,7 +12,7 @@ use crate::model::{Object, Shape, Shapes};
 use crate::packet::{IniSource, IniValue, M_SPAWN, M_UPDATE, NetReader, NetWriter, TextEncoding};
 use crate::props::{self, Prop, PropContext, PropValue, SetEffect};
 use crate::settings::Settings;
-use crate::state::{ReadCtx, state_read, state_write};
+use crate::state::{ReadCtx, state_read, state_write, state_write_class};
 use crate::update::{update_read, update_write};
 use crate::{EntityError, Result};
 
@@ -149,6 +149,11 @@ struct Known {
     /// were, as `raw_spawn` is for a packet (a value the C++ wrote as a number where this
     /// layout reads a string keeps its spelling).
     raw_ini: Option<Arc<[SmolStr]>>,
+    /// Made here (`create`) or read from a scene section: the editor's scripts read nothing of
+    /// their part from a scene (`STATE_Read` returns early in the editor), so a packet written anew
+    /// carries the part they write ([`write_editor_script`]). Read from a packet (`all.spawn`), the
+    /// part is written back as read.
+    made: bool,
 }
 
 impl Known {
@@ -294,6 +299,40 @@ fn new_writer(h: &Header, ini: bool) -> NetWriter {
     if ini { NetWriter::with_ini(h.text) } else { NetWriter::new(h.text) }
 }
 
+/// What the editor's own script classes add to a packet the editor writes anew: the C++ editor
+/// runs the repository's scripts (`gamedata\scripts`, Call of Pripyat's), and in the editor
+/// their `STATE_Read` returns at once (`if editor() then return end`), so they write their
+/// defaults whatever the scene holds - the zones `last_spawn_time` absent (`w_u8(0)`), a smart
+/// terrain its empty lists, no base control, no respawn, population 0 and the save marker over
+/// those six bytes. `false`: the class adds what its script model holds.
+fn write_editor_script(info: &ClassInfo, w: &mut NetWriter) -> bool {
+    if info.script_class.starts_with("se_zones.se_zone_") {
+        w.w_u8(0);
+        return true;
+    }
+    if info.script == crate::class::ScriptKind::SmartTerrain {
+        // arriving NPCs, NPC jobs, dead times, base_on_actor_control, respawn_point, population
+        for _ in 0..6 {
+            w.w_u8(0);
+        }
+        w.w_u16(6);
+        return true;
+    }
+    false
+}
+
+/// `STATE_Write` of a packet written anew: the class, then its script's part - as the editor
+/// writes it ([`write_editor_script`]) for an entity made here, as read for one read; answers
+/// whether the editor's block was used.
+fn write_new_state(k: &Known, w: &mut NetWriter) -> bool {
+    state_write_class(&k.object, &k.header, k.info.class, w);
+    if k.made && write_editor_script(k.info, w) {
+        return true;
+    }
+    k.object.script.write(w);
+    false
+}
+
 /// What `from_any` reads from.
 enum Source<'a> {
     Bin(Arc<[u8]>),
@@ -317,6 +356,7 @@ impl Entity {
                 tail: Arc::from([]),
                 ini_tail: Arc::from([]),
                 raw_ini: None,
+                made: true,
             })),
         })
     }
@@ -426,6 +466,7 @@ impl Entity {
                 return Ok(opaque(header, OpaqueReason::Lossy, detail));
             }
         }
+        let made = bytes.is_none();
         Ok(Self {
             inner: Inner::Known(Box::new(Known {
                 header,
@@ -436,6 +477,7 @@ impl Entity {
                 tail,
                 ini_tail,
                 raw_ini,
+                made,
             })),
         })
     }
@@ -470,8 +512,9 @@ impl Entity {
                 }
                 let mut w = new_writer(&k.header, false);
                 let at = write_header(&k.header, &mut w);
-                state_write(&k.object, &k.header, k.info.class, &mut w);
-                w.w(&k.tail);
+                if !write_new_state(k, &mut w) {
+                    w.w(&k.tail);
+                }
                 close_state(&mut w, at);
                 w.into_bytes()
             }
@@ -519,9 +562,11 @@ impl Entity {
                 }
                 let mut w = new_writer(&k.header, true);
                 write_header(&k.header, &mut w);
-                state_write(&k.object, &k.header, k.info.class, &mut w);
+                let editor_block = write_new_state(k, &mut w);
                 let mut values = w.ini_values()?;
-                values.extend(k.ini_tail.iter().map(|v| IniValue::Raw(v.to_string())));
+                if !editor_block {
+                    values.extend(k.ini_tail.iter().map(|v| IniValue::Raw(v.to_string())));
+                }
                 Some(values)
             }
             Inner::Opaque(o) => {
@@ -856,6 +901,28 @@ mod tests {
     use crate::create::fixtures::settings;
     use crate::model::Shape;
     use crate::props::PropContext;
+
+    #[test]
+    fn a_new_packet_carries_the_editor_scripts_defaults() {
+        let s = settings();
+        // se_smart_terrain in the editor: three empty lists, no base control, no respawn,
+        // population 0, the save marker over those six bytes
+        let terrain = Entity::create("smart_terrain", &s).unwrap().to_spawn_packet();
+        assert!(terrain.ends_with(&[0, 0, 0, 0, 0, 0, 6, 0]), "{terrain:?}");
+        // se_zone_anom: no last_spawn_time
+        let zone = Entity::create("anomaly", &s).unwrap();
+        let plain = {
+            let Inner::Known(k) = &zone.inner else { panic!() };
+            let mut w = new_writer(&k.header, false);
+            let at = write_header(&k.header, &mut w);
+            state_write_class(&k.object, &k.header, k.info.class, &mut w);
+            close_state(&mut w, at);
+            w.into_bytes()
+        };
+        let packet = zone.to_spawn_packet();
+        assert_eq!(packet.len(), plain.len() + 1);
+        assert_eq!(packet.last(), Some(&0));
+    }
 
     fn round_trip(section: &str) {
         let s = settings();

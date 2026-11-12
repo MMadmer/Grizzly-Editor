@@ -391,6 +391,9 @@ pub struct Viewport {
     rev: AtomicU64,
     renderer: Mutex<Option<Arc<Renderer>>>,
     renderer_failed: Mutex<bool>,
+    /// The thread that makes the renderer, while it runs.
+    renderer_start: Mutex<Option<std::thread::JoinHandle<()>>>,
+    renderer_starting: AtomicBool,
     build: Mutex<BuildCtl>,
     loader_key: Mutex<Option<(Option<PathBuf>, Rev)>>,
     game_data: Mutex<GameData>,
@@ -399,14 +402,23 @@ pub struct Viewport {
     /// The last pass found a particle system in view playing.
     animating: AtomicBool,
     anim_tick: AtomicU64,
-    /// One pass is built at a time. The extras keep their caches behind locks and fill them
-    /// with rayon work: a second pass queued on the pool would be stolen by a worker waiting
-    /// inside the first, under its lock, and wait for that lock for ever.
-    packet_gate: tokio::sync::Mutex<()>,
     /// A gesture fed over MCP (`viewport_gesture`): the pane takes one step of it a frame.
     pub(crate) gesture: Mutex<Option<crate::gesture::Pending>>,
     /// The tasks the pane's gestures started that have not ended.
     pub(crate) tracked: std::sync::atomic::AtomicUsize,
+}
+
+/// A picture of the window holds for the viewport's pass of the scene, when Level is what it
+/// shows.
+fn set_gate(editor: &Editor) {
+    gz_app::PictureGate::of(editor).set(|ed| {
+        Box::pin(async move {
+            if ed.frames.current().active_tab != "level" {
+                return Vec::new();
+            }
+            Viewport::of(&ed).current(&ed, PICTURE_LIMIT).await
+        })
+    });
 }
 
 /// Frames per second, measured over about half a second.
@@ -456,13 +468,14 @@ impl Viewport {
                 rev: AtomicU64::new(1),
                 renderer: Mutex::new(None),
                 renderer_failed: Mutex::new(false),
+                renderer_start: Mutex::new(None),
+                renderer_starting: AtomicBool::new(false),
                 build: Mutex::new(BuildCtl::default()),
                 loader_key: Mutex::new(None),
                 game_data: Mutex::new(GameData::default()),
                 rates: Mutex::new(Rates::default()),
                 animating: AtomicBool::new(false),
                 anim_tick: AtomicU64::new(0),
-                packet_gate: tokio::sync::Mutex::new(()),
                 gesture: Mutex::new(None),
                 tracked: std::sync::atomic::AtomicUsize::new(0),
             }
@@ -507,29 +520,103 @@ impl Viewport {
         self.renderer.lock().clone()
     }
 
-    /// The renderer on the device the window draws with, made the first time.
-    pub fn ensure_renderer(&self, editor: &Editor, gpu: &egui_wgpu::RenderState) -> Option<Arc<Renderer>> {
-        let mut r = self.renderer.lock();
-        if r.is_none() && !*self.renderer_failed.lock() {
-            match Renderer::new(gpu.device.clone(), gpu.queue.clone(), editor.exec.clone()) {
-                Ok(made) => {
-                    *r = Some(Arc::new(made));
-                    // the window stops the render thread while its loop still runs
-                    let me = Viewport::of(editor);
-                    gz_app::GpuOwners::of(editor).on_exit("the viewport's renderer", move || {
-                        let taken = me.renderer.lock().take();
-                        if let Some(r) = taken {
-                            r.shutdown();
-                        }
-                    });
-                }
-                Err(e) => {
-                    *self.renderer_failed.lock() = true;
-                    editor.log.error(format!("the viewport's renderer did not start: {e}"));
-                }
+    /// The renderer for the UI thread: the first call starts it on a thread of its own and
+    /// answers `None` until it is up. Its pipelines take hundreds of milliseconds to compile
+    /// (412 ms measured on the Level tab's first frame), which no frame waits for.
+    pub fn start_renderer(
+        &self,
+        editor: &Arc<Editor>,
+        gpu: &egui_wgpu::RenderState,
+    ) -> Option<Arc<Renderer>> {
+        if let Some(r) = self.renderer() {
+            return Some(r);
+        }
+        if *self.renderer_failed.lock() || self.renderer_starting.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        let (ed, device, queue) = (editor.clone(), gpu.device.clone(), gpu.queue.clone());
+        let mut start = self.renderer_start.lock();
+        let spawned = std::thread::Builder::new().name("gz-render-start".into()).spawn(move || {
+            let me = Viewport::of(&ed);
+            let made = Renderer::new(device, queue, ed.exec.clone());
+            me.install(&ed, made);
+            me.renderer_starting.store(false, Ordering::Release);
+        });
+        match spawned {
+            Ok(h) => {
+                *start = Some(h);
+                // a picture taken meanwhile waits for it
+                set_gate(editor);
+                // the window's device goes after the start has ended
+                let me = Viewport::of(editor);
+                gz_app::GpuOwners::of(editor)
+                    .on_exit("the viewport's renderer start", move || me.join_start());
+            }
+            Err(e) => {
+                self.renderer_starting.store(false, Ordering::Release);
+                *self.renderer_failed.lock() = true;
+                editor.log.error(format!("the viewport's renderer did not start: {e}"));
             }
         }
-        r.clone()
+        None
+    }
+
+    /// The renderer is being made.
+    pub(crate) fn renderer_starting(&self) -> bool {
+        self.renderer_starting.load(Ordering::Acquire)
+    }
+
+    fn join_start(&self) {
+        let handle = self.renderer_start.lock().take();
+        if let Some(h) = handle {
+            let _ = h.join();
+        }
+    }
+
+    /// The renderer on the device the window draws with, made the first time, for a caller that
+    /// may wait (a command): one the UI thread started is waited for.
+    pub fn ensure_renderer(&self, editor: &Editor, gpu: &egui_wgpu::RenderState) -> Option<Arc<Renderer>> {
+        while self.renderer_starting.load(Ordering::Acquire) {
+            self.join_start();
+            if self.renderer_starting.load(Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        if self.renderer().is_none() && !*self.renderer_failed.lock() {
+            let made = Renderer::new(gpu.device.clone(), gpu.queue.clone(), editor.exec.clone());
+            self.install(editor, made);
+        }
+        self.renderer()
+    }
+
+    /// Keeps a renderer just made (the first one wins), or remembers that it failed.
+    fn install(&self, editor: &Editor, made: gz_render::Result<Renderer>) {
+        let made = match made {
+            Ok(made) => made,
+            Err(e) => {
+                *self.renderer_failed.lock() = true;
+                editor.log.error(format!("the viewport's renderer did not start: {e}"));
+                return;
+            }
+        };
+        {
+            let mut r = self.renderer.lock();
+            if r.is_some() {
+                drop(r);
+                made.shutdown();
+                return;
+            }
+            *r = Some(Arc::new(made));
+        }
+        set_gate(editor);
+        // the window stops the render thread while its loop still runs
+        let me = Viewport::of(editor);
+        gz_app::GpuOwners::of(editor).on_exit("the viewport's renderer", move || {
+            let taken = me.renderer.lock().take();
+            if let Some(r) = taken {
+                r.shutdown();
+            }
+        });
     }
 
     /// The renderer, from the window's device when the pane never drew (a picture asked over
@@ -746,11 +833,10 @@ impl Viewport {
         }
     }
 
-    /// Whether the last pass that reached the renderer drew the scene at `rev` (and none is under way): the gizmo's
-    /// anchor and what the picture shows are of that scene.
+    /// Whether the last pass that reached the renderer drew the scene at `rev` or a newer one: the
+    /// gizmo's anchor and what the picture shows are of that scene.
     pub(crate) fn drawn_scene(&self, rev: Rev) -> bool {
-        let b = self.build.lock();
-        !b.in_flight && b.last.as_ref().is_some_and(|k| k.scene >= rev)
+        self.build.lock().last.as_ref().is_some_and(|k| k.scene >= rev)
     }
 
     /// Waits for the pass being built, if one is: a picture asked over MCP draws the newest
@@ -806,7 +892,6 @@ impl Viewport {
             self.state_quiet(|s| s.nav.set(hpb, at));
         }
         let posed = posed.map(|(st, _)| st);
-        let _one_pass = self.packet_gate.lock().await;
         let anims = crate::spawn_anim::SpawnAnims::of(editor);
         let ed = editor.clone();
         let built = editor
@@ -998,16 +1083,93 @@ impl Viewport {
         data
     }
 
+    /// What a pass of the scene still waits for: the meshes and textures loading (`loading N
+    /// assets`) and placeholders drawn for a mesh still to come.
+    fn pending_of(renderer: &Renderer, packet: Option<&FramePacket>) -> Vec<String> {
+        let mut out = Vec::new();
+        if packet.is_some_and(FramePacket::waiting_on_assets) {
+            out.push("meshes still loading (placeholders drawn)".to_owned());
+        }
+        let loading = renderer.assets().stats().loading;
+        if loading > 0 {
+            out.push(format!("{loading} meshes and textures loading"));
+        }
+        out
+    }
+
+    /// Holds until the window's viewport has shown the scene as the caller's commands left it: the
+    /// pass for the scene's revision built, none under way, nothing it draws still loading, and
+    /// the render thread's frame of it finished - or `limit` ran out. Answers what was still
+    /// pending then (empty: the picture is current). Without a renderer there is nothing to wait for.
+    pub async fn current(self: &Arc<Self>, editor: &Arc<Editor>, limit: Duration) -> Vec<String> {
+        let deadline = Instant::now() + limit;
+        // a renderer the pane started is waited for
+        while self.renderer().is_none() && self.renderer_starting() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+        let Some(renderer) = self.renderer() else {
+            return if self.renderer_starting() {
+                vec!["the viewport's renderer".to_owned()]
+            } else {
+                Vec::new()
+            };
+        };
+        let rev = SceneService::of_opt(editor).map_or(Rev::ZERO, |svc| svc.store.rev());
+        let view = self.rev();
+        // the pass that drew the caller's scene and view: a finished pass of their revisions or
+        // newer ones, whatever runs meanwhile - while a particle system plays a new pass follows
+        // each one
+        let mut drawn: Option<u64> = None;
+        loop {
+            self.request_build(editor);
+            let waiting = {
+                let b = self.build.lock();
+                if drawn.is_none() && b.last.as_ref().is_some_and(|k| k.scene >= rev && k.view >= view) {
+                    drawn = Some(b.serial);
+                }
+                b.packet.clone()
+            };
+            let mut pending = Self::pending_of(&renderer, waiting.as_deref());
+            match drawn {
+                None => pending.insert(0, "the viewport's pass of the scene".to_owned()),
+                Some(serial) if renderer.finished().packet < serial => {
+                    pending.push("the render thread's frame".to_owned());
+                }
+                Some(_) => {}
+            }
+            if pending.is_empty() || Instant::now() >= deadline {
+                return pending;
+            }
+            // the pass after an asset arrived is built from a frame of the pane
+            editor.exec.wake().ping();
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    }
+
     /// Draws the scene now and reads the picture back, cropped to the render size
-    /// (`screenshot_viewport`): a pass of its own, also while Level is hidden.
-    pub async fn picture(self: &Arc<Self>, editor: &Arc<Editor>) -> Result<Image, CmdError> {
+    /// (`screenshot_viewport`): a pass of its own, also while Level is hidden. The pass is built
+    /// again until nothing it draws is still loading (up to `limit`); `pending` says what still
+    /// was when the limit ran out.
+    pub async fn picture(self: &Arc<Self>, editor: &Arc<Editor>) -> Result<(Image, Vec<String>), CmdError> {
         let renderer =
             self.renderer_any(editor).ok_or_else(|| CmdError::new("no_window", "viewport RT unavailable"))?;
         self.settle().await;
-        let packet = self
-            .make_packet(editor, &renderer, false)
-            .await
-            .ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
+        let deadline = Instant::now() + PICTURE_LIMIT;
+        let (packet, pending) = loop {
+            let packet = self
+                .make_packet(editor, &renderer, false)
+                .await
+                .ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
+            let pending = Self::pending_of(&renderer, Some(&packet));
+            if pending.is_empty() || Instant::now() >= deadline {
+                break (packet, pending);
+            }
+            // what the pass asked for loads on the pools: build again once something arrived
+            let generation = renderer.assets().generation();
+            while renderer.assets().generation() == generation && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
         let serial = renderer.submit(packet.clone());
         {
             let mut b = self.build.lock();
@@ -1021,7 +1183,7 @@ impl Viewport {
             .await
             .map_err(|e| CmdError::internal(format!("viewport RT unavailable: {e}")))?;
         editor.exec.wake().ping();
-        Ok(image)
+        Ok((image, pending))
     }
 
     /// Reads the linked game's weather for the hour, its render settings and its weathers, off
@@ -1211,6 +1373,9 @@ struct ReloadSeen(AtomicU64);
 
 /// `ETFlags` bits the viewport keeps (`etfNormalAlign`, `etfOSnap`, `etfVSnap`, `etfASnap`,
 /// `etfMSnap`, `etfPickAnyClass`); the other bits of `tools_settings` are written back as read.
+/// How long a picture waits for what its pass draws to load before it answers with `pending`.
+const PICTURE_LIMIT: Duration = Duration::from_secs(15);
+
 const ETF_NORMAL_ALIGN: u32 = 1 << 2;
 const ETF_OSNAP: u32 = 1 << 4;
 const ETF_VSNAP: u32 = 1 << 6;

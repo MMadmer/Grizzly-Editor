@@ -149,11 +149,13 @@ pub fn read_ogg_params(ogg: &[u8]) -> Result<Option<OggParams>> {
 /// The same `.ogg` with other parameters. Only the comment header changes: its packet is built
 /// again around the new block - the vendor string and any further comments stay - and the pages
 /// that carried the comment and setup headers are written anew. Audio pages are copied; when
-/// the number of header pages changes they are renumbered, with their checksums.
+/// the number of header pages changes they are renumbered, with their checksums. Audio packets
+/// an encoder left on the last header page go on a page of their own after the headers, with
+/// that page's granule.
 pub fn write_ogg_params(ogg: &[u8], params: &OggParams) -> Result<Vec<u8>> {
     let (pages, headers) = headers_of(ogg)?;
-    if !headers.clean {
-        return Err(SoundError::Layout("its header packets share pages with other packets"));
+    if !headers.ident_alone {
+        return Err(SoundError::Layout("its identification header shares its page with other packets"));
     }
     let old = parse_comment_packet(&headers.comment)?;
     let block = params.to_comment();
@@ -171,7 +173,24 @@ pub fn write_ogg_params(ogg: &[u8], params: &OggParams) -> Result<Vec<u8>> {
     out.extend_from_slice(ogg.get(..first.start).unwrap_or(&[]));
 
     // the header pages: ours are replaced, another stream's stay where they are
-    let new_count = ogg::write_pages(&[&packet, &headers.setup], headers.serial, first_sequence, &mut out);
+    let mut new_count =
+        ogg::write_pages(&[&packet, &headers.setup], headers.serial, first_sequence, &mut out);
+    let last =
+        pages.get(headers.last_page).ok_or(SoundError::Damaged("the Vorbis headers are incomplete"))?;
+    if headers.rest_segment < last.lacing.len() {
+        let eos = ogg::flags_of(page_bytes(last)) & 0x04 != 0;
+        let (lacing, body) = (&last.lacing[headers.rest_segment..], &last.body[headers.rest_at..]);
+        ogg::write_page(
+            lacing,
+            body,
+            last.granule,
+            eos,
+            headers.serial,
+            first_sequence.wrapping_add(new_count),
+            &mut out,
+        );
+        new_count += 1;
+    }
     let mut old_count = 0u32;
     let mut cursor = first.start;
     for page in pages.iter().take(headers.last_page + 1).skip(headers.first_page) {
@@ -317,6 +336,46 @@ pub(crate) mod tests {
             assert_eq!(ogg::crc(&copy), stored);
         }
         assert_eq!(pages.last().unwrap().granule, 44100);
+    }
+
+    #[test]
+    fn audio_on_the_last_header_page_gets_a_page_of_its_own() {
+        // the game's hk416_shoot.ogg: the setup packet and the first audio packet share a page
+        let mut ident = b"\x01vorbis".to_vec();
+        ident.extend_from_slice(&[0u8; 23]);
+        let old =
+            OggParams { min_dist: 1.0, max_dist: 30.0, base_volume: 1.0, game_type: 0, max_ai_dist: 30.0 };
+        let comment = build_comment_packet(VENDOR, &[&old.to_comment()]);
+        let mut setup = b"\x05vorbis".to_vec();
+        setup.resize(700, 0x5a);
+        let audio = [0x42u8; 121];
+        let mut file = Vec::new();
+        ogg::write_pages(&[&ident], 0, 0, &mut file);
+        ogg::write_pages(&[&comment, &setup, &audio], 0, 1, &mut file);
+        let mut tail = Vec::new();
+        ogg::write_pages(&[&[0x43u8; 90]], 0, 2, &mut tail);
+        tail[6..14].copy_from_slice(&3840u64.to_le_bytes());
+        ogg::write_renumbered(&tail, 2, &mut file);
+
+        let new =
+            OggParams { min_dist: 3.0, max_dist: 90.0, base_volume: 1.2, game_type: 4, max_ai_dist: 45.0 };
+        let out = write_ogg_params(&file, &new).unwrap();
+        assert_eq!(read_ogg_params(&out).unwrap(), Some(new));
+        let pages = ogg::parse_pages(&out).unwrap();
+        assert_eq!(pages.len(), 4);
+        // the audio packet alone on its page, the granule its page had; the next page renumbered
+        assert_eq!((pages[2].lacing, pages[2].body, pages[2].granule), (&[121u8][..], &audio[..], 0));
+        assert_eq!(out[pages[2].start + 5], 0);
+        for (n, page) in pages.iter().enumerate() {
+            let mut copy = out[page.start..page.start + page.len].to_vec();
+            assert_eq!(ogg::sequence_of(&copy) as usize, n);
+            let stored = u32::from_le_bytes([copy[22], copy[23], copy[24], copy[25]]);
+            copy[22..26].copy_from_slice(&[0; 4]);
+            assert_eq!(ogg::crc(&copy), stored);
+        }
+        assert_eq!((pages[3].granule, pages[3].body), (3840, &[0x43u8; 90][..]));
+        // and the file now written is one the next write leaves as it is
+        assert_eq!(write_ogg_params(&out, &new).unwrap(), out);
     }
 
     #[test]

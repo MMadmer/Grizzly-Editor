@@ -44,6 +44,9 @@ PHASES = "ABCDE"
 # the frame's own work while a build runs, mean over the build's frames: measured 3.5-7.8 ms on the reference mod
 # (STATE.md, "What the QA pass left, closed"); a frame that waited for vsync does not count
 FRAME_WORK_MEAN_MS = 16.0
+# and the worst frame of the build: 18.0-46.5 ms measured once tessellation left rayon's global pool (STATE.md, "The
+# reviewer's findings, closed"); 36-218 ms before, the UI thread asleep in `par_iter`
+FRAME_WORK_MAX_MS = 64.0
 
 results: list[tuple[bool, str]] = []
 
@@ -176,7 +179,8 @@ class Run:
         pacing = mcp("frame_pacing")
         mcp("view_mode", real_time=False)
         work = pacing.get("frame_work_ms") or {}
-        check(pacing.get("sampled_frames", 0) > 0 and work.get("mean", 99.0) < FRAME_WORK_MEAN_MS,
+        check(pacing.get("sampled_frames", 0) > 0 and work.get("mean", 99.0) < FRAME_WORK_MEAN_MS
+              and work.get("max", 999.0) < FRAME_WORK_MAX_MS,
               "A the frames keep their own time during the build (%s frames, work mean %s ms, p95 %s, max %s; wait max %s)"
               % (pacing.get("sampled_frames"), work.get("mean"), work.get("p95"), work.get("max"),
                  (pacing.get("frame_wait_ms") or {}).get("max")), json.dumps(pacing)[:400])

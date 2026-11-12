@@ -10,7 +10,7 @@ pub mod text;
 pub mod units;
 
 pub use origin::Origin;
-pub use path::{GamePath, PathError, ProjectPath, RelPath};
+pub use path::{GamePath, PathError, ProjectPath, RelPath, file_name_problem};
 pub use problem::{Problem, Severity};
 pub use rev::{Rev, RevCounter};
 pub use smol_str::SmolStr;

@@ -1748,6 +1748,9 @@ pub fn window_options(editor: &Editor) -> WindowOptions {
     // read once: both take a restart
     opts.gpu_adapter = settings.gpu_adapter();
     opts.floating = settings.pref("floating_panels").is_some_and(|v| v != 0.0);
+    // what the window shows before its device exists: the theme's background
+    let base = gz_ui::theme::Palette::new(settings.accent()).base;
+    opts.background = [base.r(), base.g(), base.b()];
     opts
 }
 

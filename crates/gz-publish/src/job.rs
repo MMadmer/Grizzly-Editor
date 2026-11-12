@@ -136,8 +136,20 @@ pub struct Publisher {
     packaging_job: Mutex<Option<JobId>>,
     upload_job: Mutex<Option<JobId>>,
     from_ui: AtomicBool,
+    /// A start is between its first check and its job: a second start is refused, never let
+    /// through to overwrite the first one's view.
+    starting: AtomicBool,
     pub(crate) sign: Mutex<SignView>,
     pub(crate) sign_cancel: Mutex<Option<gz_editor::Cancel>>,
+}
+
+/// The one start under way; let go when the start returns, whatever it answered.
+pub(crate) struct StartClaim<'a>(&'a AtomicBool);
+
+impl Drop for StartClaim<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// A job's card in the Task Center (`gz_app::TaskCardTable`, keyed by a std type).
@@ -188,6 +200,18 @@ impl Publisher {
         self.package.lock().clone()
     }
 
+    /// Takes the right to start: `None` while another start is under way or a job runs.
+    pub(crate) fn claim(&self) -> Option<StartClaim<'_>> {
+        if self.starting.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        let claim = StartClaim(&self.starting);
+        if self.running() {
+            return None;
+        }
+        Some(claim)
+    }
+
     /// Asks the running job to stop.
     pub fn cancel(&self, editor: &Editor) {
         if !self.running() {
@@ -234,9 +258,11 @@ impl Publisher {
         from_ui: bool,
     ) -> Result<JobId, String> {
         let session = editor.project().map_err(|e| e.message)?;
-        if self.running() {
+        // one start at a time, taken before the first await: a second start racing this one is
+        // refused instead of resetting the view of the job this one starts
+        let Some(_claim) = self.claim() else {
             return Err("a release is being published already".to_owned());
-        }
+        };
         if ReleaseList::of(editor).running() {
             return Err("the release list is busy - try again in a moment".to_owned());
         }
@@ -672,4 +698,49 @@ pub(crate) fn reply(ok: bool, fields: Value) -> Result<Value, CmdError> {
     let Value::Object(mut map) = fields else { return Err(CmdError::new("failed", "")) };
     let message = map.remove("error").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
     Err(CmdError::new("failed", message).with_data(Value::Object(map)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_start_at_a_time() {
+        let p = Publisher::default();
+        let first = p.claim();
+        assert!(first.is_some());
+        // a second start while the first is between its checks and its job is refused
+        assert!(p.claim().is_none());
+        drop(first);
+        assert!(p.claim().is_some());
+        // a running job refuses a start too, and its view stays as it is
+        p.job.lock().state = PublishState::Uploading;
+        p.job.lock().tag = "v1.0.0".to_owned();
+        assert!(p.claim().is_none());
+        assert_eq!(p.view().tag, "v1.0.0");
+        // the refusal gave the claim back
+        p.job.lock().state = PublishState::Done;
+        assert!(p.claim().is_some());
+    }
+
+    #[test]
+    fn racing_starts_take_one_claim() {
+        let p = Arc::new(Publisher::default());
+        let won = AtomicU64::new(0);
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    barrier.wait();
+                    if let Some(c) = p.claim() {
+                        won.fetch_add(1, Ordering::AcqRel);
+                        // held until every racer has tried
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        drop(c);
+                    }
+                });
+            }
+        });
+        assert_eq!(won.load(Ordering::Acquire), 1);
+    }
 }

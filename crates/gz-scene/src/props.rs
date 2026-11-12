@@ -12,8 +12,8 @@ use crate::library::Library;
 use crate::math::Vec3;
 use crate::model::{ObjData, Object, SceneState, co};
 use crate::objects::{
-    FV_EMITTER, LT_POINT, LT_SPOT, PointKind, SHAPE_COMMON, SO_USE_SURFACE, SpawnEntity, SurfaceOverride,
-    env_flags, fcolor_get, light_flags,
+    LT_POINT, LT_SPOT, PointKind, SHAPE_COMMON, SO_USE_SURFACE, SpawnEntity, SurfaceOverride, env_flags,
+    fcolor_get, light_flags,
 };
 use crate::tools::{LevelOptions, ToolOpts, ToolPart};
 
@@ -203,7 +203,6 @@ pub const SPAWN_ANIMATION_BUTTONS: &str = "First Frame,Play,Pause,Stop,Last Fram
 
 const LIGHT_TYPES: &[(&str, i64)] = &[("Point", LT_POINT as i64)];
 const FUZZY_SHAPES: &[(&str, i64)] = &[("Sphere", 0), ("Box", 1)];
-const FOG_TYPES: &[(&str, i64)] = &[("Emitter", 0), ("Occlusion", 1)];
 const LEVEL_SUB_MAP: &[(&str, i64)] = &[("default", 255), ("#0", 0), ("#1", 1), ("#2", 2), ("#3", 3)];
 const ORDER_KINDS: &[(&str, i64)] = &[("None", 0), ("Guard", 1), ("Patrol", 2), ("Wander", 3), ("Follow", 4)];
 const RPOINT_TYPES: &[(&str, i64)] = &[("Actor Spawn", 0), ("Artefact Spawn", 1), ("Item Spawn", 2)];
@@ -1532,7 +1531,16 @@ pub fn set_world(state: &SceneState, k: &str, p: &Parsed) -> Result<(LevelOption
     let b = &mut lo.build;
     match k {
         "Scene\\Name prefix" => lo.level_prefix = text_of(p).into(),
-        "Scene\\Build options\\Level path" => lo.level_path = text_of(p).into(),
+        "Scene\\Build options\\Level path" => {
+            // the build wipes `gamedata\levels\<this>`: one folder name, never a path
+            let t = text_of(p);
+            if let Some(why) = gz_base::file_name_problem(&t) {
+                return Err(format!(
+                    "{why}: the level path is the name of one folder under the levels folder"
+                ));
+            }
+            lo.level_path = t.into();
+        }
         "Scene\\Build options\\Custom data" => lo.bop = text_of(p),
         "Scene\\Map version" => lo.map_version = text_of(p).into(),
         "Scene\\Build options\\Quality" => {
@@ -1587,13 +1595,6 @@ pub fn sector_argb(c: [f32; 4]) -> u32 {
     fcolor_get(c)
 }
 
-/// The fog volume's emitter type token (kept for the Details panel of a later package).
-#[must_use]
-pub fn fog_types() -> &'static [(&'static str, i64)] {
-    let _ = FV_EMITTER;
-    FOG_TYPES
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1645,6 +1646,18 @@ mod tests {
         let rot = &find(&rows, "Rotation").unwrap().row;
         assert_eq!(rot.text(), "{0.0, 0.0, 0.0}");
         assert_eq!(unit_of(&find(&rows, "Radius").unwrap().row), "");
+    }
+
+    #[test]
+    fn the_level_path_is_one_folder_name() {
+        let s = SceneState::default();
+        let key = "Scene\\Build options\\Level path";
+        for bad in ["..\\..\\Windows", "C:\\Users", "a\\b", "..", "nul", ""] {
+            let err = set_world(&s, key, &Parsed::Text(bad.to_owned())).unwrap_err();
+            assert!(err.contains("one folder"), "{bad:?}: {err}");
+        }
+        let (lo, _) = set_world(&s, key, &Parsed::Text("l01_escape".to_owned())).unwrap();
+        assert_eq!(lo.level_path, "l01_escape");
     }
 
     #[test]

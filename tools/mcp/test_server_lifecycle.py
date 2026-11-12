@@ -14,9 +14,11 @@ import concurrent.futures
 import ctypes
 from ctypes import wintypes
 import json
+import os
 import socket
 import struct
 import sys
+import tempfile
 import threading
 import time
 from typing import Any
@@ -270,9 +272,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def under_temp(path: str) -> bool:
+    real = os.path.normcase(os.path.realpath(path))
+    return real.startswith(os.path.normcase(os.path.realpath(tempfile.gettempdir())).rstrip("\\/") + os.sep)
+
+
+def guard(host: str, port: int, timeout: float, scene: str | None) -> None:
+    """A scene load or a shutdown runs only on a copy: the editor's open project (and an absolute scene path) must
+    lie under the system temp folder, so an author's project is never opened, saved or closed by this test."""
+    # a project still opening shows up within a few seconds: the check waits for it
+    project, end = "", time.monotonic() + 15
+    while not project and time.monotonic() < end:
+        project = str(one_request(host, port, {"cmd": "state"}, timeout).get("project") or "")
+        if not project:
+            time.sleep(0.2)
+    # an editor with no project open has none to harm
+    if project and not under_temp(project):
+        raise SystemExit("REFUSED: the editor's open project (%r) is not a copy under the system temp folder "
+                         "(tools/qa/qa_target.copy_project makes one)" % project)
+    if scene and os.path.isabs(scene) and not under_temp(scene):
+        raise SystemExit("REFUSED: %s is not under the system temp folder" % scene)
+
+
 def main() -> int:
     args = parse_args()
     require_ping(args.host, args.port, args.timeout)
+    if args.timeout_scene or args.shutdown or args.shutdown_via_palette:
+        guard(args.host, args.port, args.timeout, args.timeout_scene)
     test_concurrent_clients(args.host, args.port, args.timeout, args.clients, args.repeats)
     test_disconnects(args.host, args.port, args.timeout, args.disconnects)
     test_json_arguments(args.host, args.port, args.timeout)

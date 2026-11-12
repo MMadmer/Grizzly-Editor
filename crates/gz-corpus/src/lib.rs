@@ -5,9 +5,12 @@
 //! - `GRIZZLY_TEST_PROJECTS`: project folders, separated by `;`;
 //! - the repository itself ([`repo`]).
 //!
-//! Without a variable a corpus test prints `skipped: <variable> is not set` and passes.
-//! `tools/rust/test.sh` sets both. The game is read here independently of `gz-vfs`, so the
-//! corpus test of `gz-vfs` checks it against a second reader.
+//! Without a variable a corpus test prints `skipped: <variable> is not set` and passes; with
+//! `GRIZZLY_TEST_SKIPS` naming a file it also appends that line there, so `tools/rust/test.sh`
+//! (which sets both variables and that file) shows every skip and fails `--all` on one. With
+//! `GRIZZLY_TEST_FULL=1` ([`stride`]) every file is read instead of every n-th (`test.sh --all`).
+//! The game is read here independently of `gz-vfs`, so the corpus test of `gz-vfs` checks it
+//! against a second reader.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -19,13 +22,30 @@ use rayon::prelude::*;
 
 pub const GAME_VAR: &str = "GRIZZLY_TEST_GAME";
 pub const PROJECTS_VAR: &str = "GRIZZLY_TEST_PROJECTS";
+/// A file every skip is appended to, one line each (the test runner reads it).
+pub const SKIPS_VAR: &str = "GRIZZLY_TEST_SKIPS";
+/// `1`: [`stride`] takes every item.
+pub const FULL_VAR: &str = "GRIZZLY_TEST_FULL";
 
 fn var(name: &str) -> Option<String> {
     match std::env::var(name) {
         Ok(v) if !v.trim().is_empty() => Some(v),
         _ => {
-            println!("skipped: {name} is not set");
+            skipped(&format!("{name} is not set"));
             None
+        }
+    }
+}
+
+/// Says that a corpus test did not run, and why: in its output and in the runner's skip file.
+pub fn skipped(why: &str) {
+    println!("skipped: {why}");
+    if let Ok(path) = std::env::var(SKIPS_VAR)
+        && !path.trim().is_empty()
+    {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path.trim()) {
+            let _ = writeln!(f, "{why}");
         }
     }
 }
@@ -317,10 +337,12 @@ impl Game {
     }
 }
 
-/// Every `n`th item, by the order given (sort first: the choice is then deterministic).
+/// Every `n`th item, by the order given (sort first: the choice is then deterministic); every
+/// item with `GRIZZLY_TEST_FULL=1`.
 #[must_use]
 pub fn stride<T>(items: Vec<T>, n: usize) -> Vec<T> {
-    let n = n.max(1);
+    let full = std::env::var(FULL_VAR).is_ok_and(|v| v.trim() == "1");
+    let n = if full { 1 } else { n.max(1) };
     items.into_iter().enumerate().filter(|(i, _)| i % n == 0).map(|(_, t)| t).collect()
 }
 

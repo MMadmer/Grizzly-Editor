@@ -105,9 +105,12 @@ pub(crate) struct Headers {
     /// packets, first and last.
     pub first_page: usize,
     pub last_page: usize,
-    /// The identification packet is alone on the first page, and the setup packet ends its
-    /// page: what the Vorbis mapping requires, and what makes the pages replaceable.
-    pub clean: bool,
+    /// The identification packet is alone on the first page, as the Vorbis mapping requires.
+    pub ident_alone: bool,
+    /// Where the setup packet ended on the last header page: the segment and the body byte after
+    /// it. Audio packets that follow it on that page (an encoder that did not flush) start there.
+    pub rest_segment: usize,
+    pub rest_at: usize,
 }
 
 /// Collects the header packets of the first stream.
@@ -134,9 +137,8 @@ pub(crate) fn read_headers(pages: &[Page<'_>]) -> Result<Headers> {
                 packet.extend_from_slice(part);
             }
             if lace < 255 {
-                let last_segment = seg + 1 == page.lacing.len();
                 match current {
-                    0 => ident_alone = last_segment,
+                    0 => ident_alone = seg + 1 == page.lacing.len(),
                     2 => {
                         let [ident, comment, setup] = packets;
                         return Ok(Headers {
@@ -146,7 +148,9 @@ pub(crate) fn read_headers(pages: &[Page<'_>]) -> Result<Headers> {
                             setup,
                             first_page: first_page.unwrap_or(index),
                             last_page: index,
-                            clean: ident_alone && last_segment,
+                            ident_alone,
+                            rest_segment: seg + 1,
+                            rest_at: at,
                         });
                     }
                     _ => {}
@@ -198,6 +202,37 @@ pub(crate) fn write_pages(packets: &[&[u8]], serial: u32, first_sequence: u32, o
         written += 1;
     }
     written
+}
+
+/// One page of the segments given (whole packets, the last one possibly left open), the way the
+/// file had them: its granule and its end-of-stream mark kept.
+pub(crate) fn write_page(
+    lacing: &[u8],
+    body: &[u8],
+    granule: u64,
+    eos: bool,
+    serial: u32,
+    sequence: u32,
+    out: &mut Vec<u8>,
+) {
+    let page_at = out.len();
+    out.extend_from_slice(b"OggS");
+    out.push(0);
+    out.push(if eos { 0x04 } else { 0 });
+    out.extend_from_slice(&granule.to_le_bytes());
+    out.extend_from_slice(&serial.to_le_bytes());
+    out.extend_from_slice(&sequence.to_le_bytes());
+    out.extend_from_slice(&[0u8; 4]);
+    out.push(lacing.len() as u8);
+    out.extend_from_slice(lacing);
+    out.extend_from_slice(body);
+    let sum = crc(&out[page_at..]);
+    out[page_at + 22..page_at + 26].copy_from_slice(&sum.to_le_bytes());
+}
+
+/// A page's header flags, read from its bytes.
+pub(crate) fn flags_of(page_bytes: &[u8]) -> u8 {
+    page_bytes.get(5).copied().unwrap_or(0)
 }
 
 /// A page's sequence number, read from its bytes.
@@ -255,7 +290,8 @@ pub(crate) mod tests {
         let headers = read_headers(&pages).unwrap();
         assert_eq!(headers.serial, 77);
         assert_eq!((headers.ident, headers.comment, headers.setup), (ident, comment, setup));
-        assert_eq!((headers.first_page, headers.last_page, headers.clean), (1, 2, true));
+        assert_eq!((headers.first_page, headers.last_page, headers.ident_alone), (1, 2, true));
+        assert_eq!(headers.rest_segment, pages[2].lacing.len());
     }
 
     #[test]

@@ -44,8 +44,11 @@ use std::time::{Duration, Instant};
 
 use egui::{ImmediateViewport, ViewportId, ViewportIdSet, ViewportInfo};
 use egui_wgpu::winit::Painter;
-use egui_wgpu::{RenderState, RendererOptions, SurfaceConfig, WgpuConfiguration, WgpuSetupCreateNew};
+use egui_wgpu::{
+    RenderState, RendererOptions, SurfaceConfig, WgpuConfiguration, WgpuSetupCreateNew, WgpuSetupExisting,
+};
 use egui_winit::winit;
+use futures::FutureExt;
 use gz_editor::{Editor, FrameStamp, SmolStr};
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
@@ -60,6 +63,109 @@ use winit::window::{Window, WindowId};
 #[derive(Clone, Copy, Debug)]
 pub enum UserEvent {
     Wake,
+}
+
+/// The start-up profile the window carries on from `main`: its stages up to the first frame on
+/// the screen. Stages may be named from the thread that makes the device.
+pub trait StartProfile: Send {
+    /// Names the stage that begins now.
+    fn stage(&mut self, name: &str);
+    /// Notes how long after the process was created `what` happened ("window shown").
+    fn milestone(&mut self, what: &str);
+    /// Ends the profile and writes it to the log.
+    fn finish(&mut self);
+}
+
+type Profile = Arc<Mutex<Option<Box<dyn StartProfile>>>>;
+
+fn profile_stage(p: &Profile, name: &str) {
+    if let Some(x) = p.lock().as_mut() {
+        x.stage(name);
+    }
+}
+
+/// The device being made off the UI thread, with the window it is for.
+struct Pending {
+    window: Arc<Window>,
+    ctx: egui::Context,
+    rx: std::sync::mpsc::Receiver<Result<WgpuSetupExisting, String>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// The graphics instance, the adapter and the device, made on the device thread (the window's
+/// surface cannot be made there: its handle is the UI thread's). One backend is asked for -
+/// Direct3D 12 - and Vulkan only when that fails: probing every backend costs a start more than
+/// the device itself. The stages go into the start-up profile.
+fn make_device(
+    rt: &tokio::runtime::Handle,
+    opts: &WindowOptions,
+    display: winit::event_loop::OwnedDisplayHandle,
+    log: &gz_log::Log,
+    profile: &Profile,
+) -> Result<WgpuSetupExisting, String> {
+    use egui_wgpu::wgpu;
+    let mut last = String::new();
+    for backend in [wgpu::Backends::DX12, wgpu::Backends::VULKAN] {
+        profile_stage(profile, "Making the graphics instance");
+        let mut setup = WgpuSetupCreateNew::from_display_handle(display.clone());
+        setup.instance_descriptor.backends = backend;
+        let base = setup.device_descriptor.clone();
+        let power = setup.power_preference;
+        let instance = rt.block_on(egui_wgpu::WgpuSetup::CreateNew(setup).new_instance());
+        profile_stage(profile, "Picking the adapter");
+        // View > Render > GPU: the adapter of that name; the system's choice otherwise
+        let adapter = if opts.gpu_adapter.is_empty() {
+            None
+        } else {
+            let adapters = rt.block_on(instance.enumerate_adapters(backend));
+            let found = crate::gpu::pick_adapter(&adapters, &opts.gpu_adapter, None).cloned();
+            if found.is_none() {
+                log.warn(format!(
+                    "the GPU '{}' is not there: the device is made on another one",
+                    opts.gpu_adapter
+                ));
+            }
+            found
+        };
+        let adapter = match adapter {
+            Some(a) => Ok(a),
+            None => rt.block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: power,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+                ..Default::default()
+            })),
+        };
+        let adapter = match adapter {
+            Ok(a) => a,
+            Err(e) => {
+                last = e.to_string();
+                log.warn(format!("no graphics adapter with {backend:?}: {last}"));
+                continue;
+            }
+        };
+        profile_stage(profile, "Making the device");
+        // BC textures go to the GPU as the files hold them when the adapter samples them
+        let mut desc = base(&adapter);
+        desc.required_features |= adapter.features() & wgpu::Features::TEXTURE_COMPRESSION_BC;
+        match rt.block_on(adapter.request_device(&desc)) {
+            Ok((device, queue)) => return Ok(WgpuSetupExisting { instance, adapter, device, queue }),
+            Err(e) => {
+                last = e.to_string();
+                log.warn(format!("the graphics device could not be made with {backend:?}: {last}"));
+            }
+        }
+    }
+    Err(format!("the graphics device could not be created: {last}"))
+}
+
+/// The window's handle for the few Win32 calls `gz-win` makes on it.
+fn hwnd_of(window: &Window) -> Option<isize> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        _ => None,
+    }
 }
 
 /// What one frame tells the window.
@@ -102,6 +208,8 @@ pub struct WindowOptions {
     pub gpu_adapter: String,
     /// egui's viewports become native windows (panels outside the window).
     pub floating: bool,
+    /// The theme's background: what the window shows before its device exists.
+    pub background: [u8; 3],
 }
 
 impl Default for WindowOptions {
@@ -116,6 +224,7 @@ impl Default for WindowOptions {
             icon: None,
             gpu_adapter: String::new(),
             floating: false,
+            background: [0x20, 0x20, 0x25],
         }
     }
 }
@@ -222,7 +331,6 @@ struct Live {
     info: ViewportInfo,
     /// The last size that was not zero: what a minimised window is pictured at.
     size_px: [u32; 2],
-    shown: bool,
 }
 
 struct App {
@@ -231,6 +339,11 @@ struct App {
     opts: WindowOptions,
     shell: Box<dyn Shell>,
     live: Option<Live>,
+    /// The window is up and its device is being made.
+    pending: Option<Pending>,
+    profile: Profile,
+    /// The screenshots' read-backs, polled off the UI thread; joined before the device goes.
+    polls: Vec<tokio::task::JoinHandle<()>>,
     /// A frame is due.
     dirty: bool,
     /// When egui asked to be drawn again.
@@ -295,7 +408,10 @@ fn render_immediate(ctx: &egui::Context, shared: &Weak<RefCell<Shared>>, vp: Imm
 }
 
 impl App {
-    fn create(&mut self, event_loop: &ActiveEventLoop) -> Result<Live, String> {
+    /// The window, on the screen at once in the theme's background, and the thread that makes its
+    /// graphics device: the event loop goes on meanwhile and the first frame follows the device.
+    fn create(&mut self, event_loop: &ActiveEventLoop) -> Result<Pending, String> {
+        profile_stage(&self.profile, "Creating the window");
         let start_minimized = gz_win::started_minimized();
         let mut attrs = Window::default_attributes()
             .with_title(&self.opts.title)
@@ -303,7 +419,7 @@ impl App {
             .with_min_inner_size(LogicalSize::new(self.opts.min_size[0], self.opts.min_size[1]))
             .with_decorations(self.opts.decorations)
             .with_maximized(self.opts.maximized && !start_minimized)
-            // shown after the first frame is painted: no white flash
+            // shown once it is painted in the background colour below: no white flash
             .with_visible(false)
             // QA finds the window by its class
             .with_class_name("Grizzly Editor");
@@ -329,6 +445,20 @@ impl App {
             }
         }
 
+        // on the screen now, in the theme's background, long before the device exists
+        profile_stage(&self.profile, "Showing the window");
+        // a minimised start (a QA harness) stays out of sight, as it always did: an iconic window
+        // reports its taskbar button's size, and nothing would lay out
+        if !start_minimized {
+            window.set_visible(true);
+            if let Some(h) = hwnd_of(&window) {
+                gz_win::fill_client(h, self.opts.background);
+            }
+        }
+        if let Some(p) = self.profile.lock().as_mut() {
+            p.milestone("window shown");
+        }
+
         let ctx = egui::Context::default();
         let repaint_at = self.repaint_at.clone();
         let wake = self.editor.exec.wake().clone();
@@ -337,38 +467,40 @@ impl App {
             wake.ping();
         });
 
-        // BC textures go to the GPU as the files hold them when the adapter samples them
-        let mut setup = WgpuSetupCreateNew::from_display_handle(event_loop.owned_display_handle());
-        let base = setup.device_descriptor.clone();
-        setup.device_descriptor = Arc::new(move |adapter| {
-            let mut desc = base(adapter);
-            desc.required_features |= adapter.features() & egui_wgpu::wgpu::Features::TEXTURE_COMPRESSION_BC;
-            desc
-        });
-        // View > Render > GPU: the adapter of that name, when it can draw into the window
-        if !self.opts.gpu_adapter.is_empty() {
-            let wanted = self.opts.gpu_adapter.clone();
-            let log = self.editor.log.clone();
-            setup.native_adapter_selector = Some(Arc::new(move |adapters, surface| {
-                if let Some(a) = crate::gpu::pick_adapter(adapters, &wanted, surface) {
-                    return Ok(a.clone());
-                }
-                log.warn(format!("the GPU '{wanted}' is not there: the device is made on another one"));
-                adapters
-                    .iter()
-                    .find(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
-                    .cloned()
-                    .ok_or_else(|| "no graphics adapter draws into the window".to_owned())
-            }));
-        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (opts, log, profile) = (self.opts.clone(), self.editor.log.clone(), self.profile.clone());
+        let display = event_loop.owned_display_handle();
+        let rt = self.editor.exec.handle().clone();
+        let wake = self.editor.exec.wake().clone();
+        let thread = std::thread::Builder::new()
+            .name("grizzly-device".to_owned())
+            .spawn(move || {
+                let made = make_device(&rt, &opts, display, &log, &profile);
+                let _ = tx.send(made);
+                wake.ping();
+            })
+            .map_err(|e| format!("the thread that makes the graphics device did not start: {e}"))?;
+        Ok(Pending { window, ctx, rx, thread: Some(thread) })
+    }
+
+    /// The second half of [`App::create`], on the UI thread once the device is there.
+    fn finish_create(&mut self, pending: Pending, device: WgpuSetupExisting) -> Result<Live, String> {
+        let Pending { window, ctx, .. } = pending;
+        // the window's surface and egui's renderer on the device that is there: nothing in it
+        // waits on the GPU, and the one block_on of the UI thread is this, before the first frame
+        profile_stage(&self.profile, "Making the surface");
         let config = WgpuConfiguration {
             surface: SurfaceConfig::LOW_LATENCY,
-            wgpu_setup: setup.into(),
+            wgpu_setup: egui_wgpu::WgpuSetup::Existing(device),
             ..Default::default()
         };
         let rt = self.editor.exec.handle().clone();
-        let mut painter = rt.block_on(Painter::new(ctx.clone(), config, false, RendererOptions::default()));
-        rt.block_on(painter.set_window(ViewportId::ROOT, Some(window.clone())))
+        let (c, w) = (ctx.clone(), window.clone());
+        let painter = rt
+            .block_on(async move {
+                let mut painter = Painter::new(c, config, false, RendererOptions::default()).await;
+                painter.set_window(ViewportId::ROOT, Some(w)).await.map(|()| painter)
+            })
             .map_err(|e| format!("the graphics device could not be created: {e}"))?;
         let gpu =
             painter.render_state().ok_or_else(|| "the graphics device could not be created".to_owned())?;
@@ -379,7 +511,6 @@ impl App {
         }));
         crate::gpu::Gpu::of(&self.editor).set_adapters(crate::gpu::Adapters {
             names: {
-                // one card reports itself once per backend
                 let mut names: Vec<String> = Vec::new();
                 for a in &gpu.available_adapters {
                     let n = a.get_info().name;
@@ -419,9 +550,7 @@ impl App {
         }
 
         let size = window.inner_size();
-        if start_minimized {
-            window.set_minimized(true);
-        }
+        profile_stage(&self.profile, "The first frame");
         Ok(Live {
             window,
             ctx,
@@ -429,13 +558,40 @@ impl App {
             shared,
             info: ViewportInfo::default(),
             size_px: [size.width.max(1), size.height.max(1)],
-            shown: false,
         })
+    }
+
+    /// The device, once its thread is done: the window's state goes on from there.
+    fn poll_device(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(p) = self.pending.as_mut() else { return };
+        let made = match p.rx.try_recv() {
+            Ok(m) => m,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("the graphics device thread ended".to_owned())
+            }
+        };
+        let Some(mut pending) = self.pending.take() else { return };
+        if let Some(t) = pending.thread.take() {
+            let _ = t.join();
+        }
+        match made.and_then(|device| self.finish_create(pending, device)) {
+            Ok(live) => {
+                self.live = Some(live);
+                self.dirty = true;
+            }
+            Err(e) => {
+                self.failed = Some(e);
+                event_loop.exit();
+            }
+        }
     }
 
     fn run_frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(live) = self.live.as_mut() else { return };
         let began = Instant::now();
+        // before anything is read: a request held for frames counts only frames begun after it
+        self.editor.frames.begin();
         self.dirty = false;
         *self.repaint_at.lock() = None;
 
@@ -489,7 +645,7 @@ impl App {
             let mut sh = live.shared.borrow_mut();
             let mut delta = std::mem::take(&mut sh.textures);
             delta.append(std::mem::take(&mut output.textures_delta));
-            let mut waited = sh.painter.paint_and_update_textures(
+            let waited = sh.painter.paint_and_update_textures(
                 ViewportId::ROOT,
                 output.pixels_per_point,
                 clear,
@@ -500,13 +656,16 @@ impl App {
             );
             if capturing && let Some(gpu) = sh.painter.render_state() {
                 // the picture is handed over when the read-back buffer is mapped, which happens
-                // on a poll; no later frame may come to do it
-                let polled = Instant::now();
-                let _ = gpu.device.poll(egui_wgpu::wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(Duration::from_secs(2)),
-                });
-                waited += polled.elapsed().as_secs_f32();
+                // on a poll; no later frame may come to do it, and the UI thread waits on no GPU
+                // read-back: a worker polls
+                let device = gpu.device.clone();
+                self.polls.retain(|h| !h.is_finished());
+                self.polls.push(self.editor.exec.handle().spawn_blocking(move || {
+                    let _ = device.poll(egui_wgpu::wgpu::PollType::Wait {
+                        submission_index: None,
+                        timeout: Some(Duration::from_secs(2)),
+                    });
+                }));
             }
             waited
         };
@@ -529,14 +688,14 @@ impl App {
             *self.link.outside.lock() = outside;
         }
 
-        if !live.shown {
-            live.shown = true;
-            if !gz_win::started_minimized() {
-                live.window.set_visible(true);
-            }
-        }
-
         self.frame += 1;
+        // the first frame is on the screen: the start-up profile ends here
+        if self.frame == 1
+            && let Some(mut p) = self.profile.lock().take()
+        {
+            p.milestone("first frame");
+            p.finish();
+        }
         let total = began.elapsed().as_secs_f32() * 1000.0;
         let wait_ms = (waited * 1000.0).min(total);
         self.editor.frames.publish(FrameStamp {
@@ -582,10 +741,18 @@ impl App {
                     continue;
                 }
             };
-            let rt = editor.exec.handle().clone();
-            if let Err(e) = rt.block_on(sh.painter.set_window(id, Some(window.clone()))) {
-                editor.log.warn(format!("a panel's window could not be drawn into: {e}"));
-                continue;
+            // the device exists: making a surface awaits nothing, so the future ends on its first
+            // poll and the UI thread blocks on nothing
+            match sh.painter.set_window(id, Some(window.clone())).now_or_never() {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    editor.log.warn(format!("a panel's window could not be drawn into: {e}"));
+                    continue;
+                }
+                None => {
+                    editor.log.warn("a panel's window could not be drawn into: its surface was not ready");
+                    continue;
+                }
             }
             let input = egui_winit::State::new(
                 live.ctx.clone(),
@@ -614,14 +781,11 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.live.is_some() {
+        if self.live.is_some() || self.pending.is_some() {
             return;
         }
         match self.create(event_loop) {
-            Ok(live) => {
-                self.live = Some(live);
-                self.dirty = true;
-            }
+            Ok(pending) => self.pending = Some(pending),
             Err(e) => {
                 self.failed = Some(e);
                 event_loop.exit();
@@ -640,6 +804,19 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+        // the device is still being made: the window keeps the theme's background
+        if let Some(p) = &self.pending {
+            match event {
+                WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
+                    if let Some(h) = hwnd_of(&p.window) {
+                        gz_win::fill_client(h, self.opts.background);
+                    }
+                }
+                WindowEvent::CloseRequested => event_loop.exit(),
+                _ => {}
+            }
+            return;
+        }
         let Some(live) = self.live.as_mut() else { return };
         if window_id != live.window.id() {
             // a panel's own window: its input, its size, its close (the panel docks again)
@@ -700,6 +877,7 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.exit();
             return;
         }
+        self.poll_device(event_loop);
         let now = Instant::now();
         let due = *self.repaint_at.lock();
         if due.is_some_and(|at| at <= now) {
@@ -736,17 +914,28 @@ impl ApplicationHandler<UserEvent> for App {
         }
         // 3. the documents and everything they draw with
         step("the shell", &mut || drop(std::mem::replace(&mut self.shell, Box::new(Gone))));
-        // 4. the device handle given out
+        // 4. the device handle given out; the read-backs still polling end first (2 s at most),
+        // and a device still being made is let go on this thread
+        let rt = self.editor.exec.handle().clone();
+        for h in std::mem::take(&mut self.polls) {
+            let _ = rt.block_on(h);
+        }
+        if let Some(mut p) = self.pending.take() {
+            if let Some(t) = p.thread.take() {
+                let _ = t.join();
+            }
+            step("the device being made", &mut || drop(p.rx.try_recv()));
+        }
         step("the shared device", &mut || *self.link.gpu.lock() = None);
         if let Some(live) = self.live.take() {
             let Live { window, ctx, input, shared, .. } = live;
             // 5. the panels' own windows: their surfaces first
-            let rt = self.editor.exec.handle().clone();
             step("the panels' windows", &mut || {
                 if let Ok(mut sh) = shared.try_borrow_mut() {
                     let ids: Vec<ViewportId> = sh.extra.keys().copied().collect();
                     for id in ids {
-                        let _ = rt.block_on(sh.painter.set_window(id, None));
+                        // clearing a surface awaits nothing
+                        let _ = sh.painter.set_window(id, None).now_or_never();
                     }
                     sh.extra.clear();
                     let mut root = ViewportIdSet::default();
@@ -795,7 +984,12 @@ fn install_leaving_guard(editor: &Editor, leaving: Arc<AtomicBool>) {
 
 /// Opens the window and runs the editor's frame loop on the calling thread - the main thread -
 /// until the window closes or the editor is asked to quit.
-pub fn run(editor: Arc<Editor>, opts: WindowOptions, shell: Box<dyn Shell>) -> Result<(), String> {
+pub fn run(
+    editor: Arc<Editor>,
+    opts: WindowOptions,
+    shell: Box<dyn Shell>,
+    profile: Option<Box<dyn StartProfile>>,
+) -> Result<(), String> {
     // this thread draws and presents: it works in bursts and gets its core before the pools,
     // which load every core during a build
     let _ = gz_win::raise_this_thread_priority();
@@ -815,6 +1009,9 @@ pub fn run(editor: Arc<Editor>, opts: WindowOptions, shell: Box<dyn Shell>) -> R
         opts,
         shell,
         live: None,
+        pending: None,
+        profile: Arc::new(Mutex::new(profile)),
+        polls: Vec::new(),
         dirty: true,
         repaint_at: Arc::new(Mutex::new(None)),
         frame: 0,

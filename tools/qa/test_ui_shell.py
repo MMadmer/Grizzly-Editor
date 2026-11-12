@@ -218,6 +218,21 @@ def phase_a(project, shots, ed, before_scale, contract) -> None:
         check(lst.get("size_class") == "wide" and lst.get("start_page") is False, "A a 1500 x 800 pt window is the Wide class",
               short(lst))
         shot(shots, "shell_wide")
+        if qa_target.RUST:
+            # the start-up budget (plan 10.8): the window on the screen within 0.3 s of the process start;
+            # the profile ends at the first frame and says when each happened
+            import glob
+            import re
+            marks = {}
+            for path in glob.glob(qa_target.log_glob()):
+                text = open(path, encoding="utf-8", errors="replace").read()
+                m = re.search(r"startup after the process was created: (.*)", text)
+                if m:
+                    marks = {k.strip(): float(v) for k, v in re.findall(r"([a-z ]+?) ([0-9.]+) s", m.group(1))}
+            shown = marks.get("window shown")
+            check(shown is not None and shown <= 0.3 and "first frame" in marks,
+                  "A the window was on the screen within 0.3 s of the process start (%s s; first frame %s s)"
+                  % (shown, marks.get("first frame")), json.dumps(marks))
 
 
 
@@ -375,6 +390,24 @@ def phase_f(project, shots, ed, before_scale, contract) -> None:
             lst = mcp("ui_list")
             check(cd.get("ok") and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
                   "F it closes over ui_dialog", short(lst))
+            # without an id the dialog on top closes, as Esc closes it
+            mcp("ui_dialog", action="open", id="import_base_scene")
+            mcp("ui_list")
+            top = mcp("ui_dialog", action="close")
+            lst = mcp("ui_list")
+            check(top.get("ok") and top.get("closing") == "import_base_scene"
+                  and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
+                  "F ui_dialog close without an id closes the dialog on top", short(top))
+            # a dialog of the project goes down with it: the Start page shows no Import Base Scene
+            mcp("ui_dialog", action="open", id="import_base_scene")
+            mcp("ui_list")
+            closed = mcp("project_close", discard=True, timeout=120)
+            pic = mcp("screenshot_editor", timeout=60)
+            check(closed.get("ok") and pic.get("ok") and pic.get("modal") is None,
+                  "F Import Base Scene goes down with the project it imports into",
+                  short({k: v for k, v in pic.items() if k != "png_base64"}))
+            back = mcp("open_project", path=project, timeout=300)
+            check(back.get("ok"), "F the project opens again", short(back))
 
 
 

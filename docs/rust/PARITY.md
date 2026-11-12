@@ -1,4 +1,4 @@
-# Parity ledger: what the Rust editor still lacks
+# Parity ledger: the C++ editor against the Rust one
 
 Read-only audit of 2026-11-11 against the C++ editor under `Source/Editors/LevelEditor`,
 `XrECore`, `XrEUI`, `XrEProps` (brief: `docs/rust/briefs/parity-audit.md`). Out of scope by
@@ -21,7 +21,7 @@ Other agents were writing while this was read: `crates/gz-scene/src/objtools/` a
 `crates/gz-particles/` appeared untracked during the audit (the briefs `tools-objects.md` and
 `render-rest.md`); what they add is ledgered as `in work`, not judged.
 
-Counts: 333 items walked - 228 same, 29 differs, 52 missing, 8 in work, 9 dropped, 7 unjudged (ledger rows; a row may group several C++ names).
+Counts: 333 items walked; after the parity work of 2026-11-12 no row is `missing`: every one of the 52 is `same` with where the Rust editor has it, `dropped` (`REFRESH_SOUND_ENV_GEOMETRY`: its C++ body does nothing) or `differs (D18)` (the Targets switches) - see the rows.
 
 ## The list that matters
 
@@ -113,14 +113,8 @@ Every `missing` and `differs` item, by area. Size: S (a day or less), M (days), 
 
 ## In work (known, not re-derived)
 
-| Item | Brief |
-|---|---|
-| Tool panels, commands and gestures of Sector, Portal, Way, Shape, Light, Fog Volume (incl. the Fog Volume tool sheet's VolumeType / profile (ltx), confirmations `remove_default_sector`, `remove_duplicate_portals`, `detach_shapes`) | `briefs/tools-objects.md` |
-| AI Map tool (Generate Full / Selected, Smooth, Reset, Select 0/1/2-Link, Ignore Constraints, Ignored Materials, `clear_ai_map`, `clear_ignored_materials`), Detail Objects generation (First Initialize, Reinitialize All / Objects / Selected, Update Renderer, the tool sheet's Base Texture and Common\Draw * rows), Wallmarks editing (Common\Alignment, Common\Draw Wallmarks) | next package |
-| Particles playing (and the Particles tool's Play / Stop), glows, AI map, details, wallmarks, cube sky in the viewport | `briefs/render-rest.md` |
-| closed - Breakable / climable objects and the rest of `Scene->Validate` in the level build | STATE.md, "The scene's rest" |
-| VIPM for progressive skeletons | STATE.md |
-| closed - Panels outside the window (`[ui] floating_panels`, `screenshot_editor` `outside`) | STATE.md, "The shell's rest" |
+Nothing: every package that was in work is closed (STATE.md, "The object tools", "The AI map, details and
+wallmark tools", "The scene's rest", "The shell's rest", "What the QA pass left, closed").
 
 ## Ledger
 
@@ -148,32 +142,32 @@ that does the same.
 | `COMMAND_TOGGLE_RENDER_WIRE` | wireframe toggle | `COMMAND_TOGGLE_RENDER_WIRE` | same |
 | `COMMAND_TOGGLE_SAFE_RECT`, `COMMAND_TOGGLE_GRID` | safe rect, grid | same ids | same |
 | `COMMAND_GRID_SLOT_SIZE` Decrease / Increase | grid cell size | same ids | same |
-| `COMMAND_GRID_NUMBER_OF_SLOTS` | grid cell count +-2 (`CommandGridNumberOfSlots`) | - (the `grid_cell_count` preference only) | missing |
+| `COMMAND_GRID_NUMBER_OF_SLOTS` | grid cell count +-2 (`CommandGridNumberOfSlots`) | `gz-app/src/cpp.rs` (the grid cell count +-2) | same |
 | `COMMAND_SOUND_EDITOR`, `IMAGE_EDITOR`, `LIGHTANIM_EDITOR` | the three libraries | same ids (`gz-ui-previews/src/lib.rs`) | same |
 | `COMMAND_CHECK_TEXTURES`, `REFRESH_TEXTURES`, `SYNC_SOUNDS` | Check New Textures, Synchronize Textures / Sounds (confirmed) | same ids | same |
-| `COMMAND_RELOAD_TEXTURES` | `EDevice->ReloadTextures` | - | missing |
-| `COMMAND_SHOW_PROPERTIES` | focus Details (Enter) | Window > Details row only | missing |
-| `COMMAND_OPTIONS` | Details of the scene options (Ctrl+O) | Window > Level Settings row only | missing |
-| `COMMAND_MUTE_SOUND` | mutes the scene's sound sources | - | missing |
-| `COMMAND_EXECUTE_COMMAND_LIST`, `LOG_COMMANDS`, `RUN_MACRO` (8 slots), `ASSIGN_MACRO` | macros: a file of commands run by Alt+1..8 | - (`gz-ui-app/src/keyboard.rs` `COMMAND_ORDER` names the slots only) | missing |
-| `COMMAND_CHANGE_TARGET` (18 variants) | switch the active tool, keys | Tools panel tiles only | missing |
-| `COMMAND_ENABLE_TARGET`, `LOAD_LEVEL_PART`, `UNLOAD_LEVEL_PART` | load / unload one class's level part | - | missing |
+| `COMMAND_RELOAD_TEXTURES` | `EDevice->ReloadTextures` | `gz-ui-previews/src/libtools.rs` | same |
+| `COMMAND_SHOW_PROPERTIES` | focus Details (Enter) | `gz-app/src/cpp.rs`, Enter (`gz-ui-app/src/keyboard.rs`) | same |
+| `COMMAND_OPTIONS` | Details of the scene options (Ctrl+O) | `gz-app/src/cpp.rs`, Ctrl+O | same |
+| `COMMAND_MUTE_SOUND` | mutes the scene's sound sources | `gz-ui-previews/src/libtools.rs`, View > Mute Sounds | same |
+| `COMMAND_EXECUTE_COMMAND_LIST`, `LOG_COMMANDS`, `RUN_MACRO` (8 slots), `ASSIGN_MACRO` | macros: a file of commands run by Alt+1..8 | `gz-app/src/macros.rs` (the eight slots, Alt+1..8) | same |
+| `COMMAND_CHANGE_TARGET` (18 variants) | switch the active tool, keys | `gz-ui-level/src/level_cmds.rs` (the 18 variants, their keys) | same |
+| `COMMAND_ENABLE_TARGET`, `LOAD_LEVEL_PART`, `UNLOAD_LEVEL_PART` | load / unload one class's level part | `gz-ui-level/src/level_cmds.rs`, MCP `level_parts` | same |
 | `COMMAND_SHOW_TARGET` | a class's visibility | Outliner class eye, `scene_visibility` (`SceneCmd::ToolFlags`) | same |
-| `COMMAND_READONLY_TARGET` | a class read only | - (`ToolFlags.readonly` never set) | missing |
-| `COMMAND_MULTI_RENAME_OBJECTS` | rename selected after their references (confirmed) | - | missing |
+| `COMMAND_READONLY_TARGET` | a class read only | `gz-ui-level/src/level_cmds.rs`, MCP `level_parts readonly=` | same |
+| `COMMAND_MULTI_RENAME_OBJECTS` | rename selected after their references (confirmed) | `gz-ui-level/src/level_cmds.rs`, MCP `rename_objects` | same |
 | `COMMAND_SHOW_OBJECTLIST` | Find in World Outliner (Ctrl+F) | `COMMAND_SHOW_OBJECTLIST` (`menus.rs`) | same |
-| `COMMAND_LOAD` | open a scene: path, or the file dialog; recent list kept | `open_scene` (MCP, Content Browser); no dialog, no recent list | missing |
+| `COMMAND_LOAD` | open a scene: path, or the file dialog; recent list kept | `gz-ui-level/src/menus.rs` (Open Scene..., the recent list), MCP `open_scene` | same |
 | `COMMAND_SAVE` "Save" | save the scene | shell Ctrl+S, `save_scene`, Level toolbar Save | same |
-| `COMMAND_SAVE` "Save As" | save under a new name | - | missing |
-| `COMMAND_CLEAR` | New Scene | - | missing |
-| `COMMAND_LOAD_FIRSTRECENT` | Open Last Scene | - | missing |
-| `COMMAND_CLEAR_DEBUG_DRAW`, `IMPORT_COMPILER_ERROR`, `EXPORT_COMPILER_ERROR` | the compiler's error list in the viewport | - | missing |
-| `COMMAND_VALIDATE_SCENE` | `EScene::Validate` with every test, on request | `gz_levelbuild::validate` inside builds only | missing |
-| `COMMAND_RELOAD_OBJECTS` | re-read the object library | - (`Library::clear` uncalled) | missing |
-| `COMMAND_CUT`, `COPY`, `PASTE` | the scene clipboard | - | missing |
-| `COMMAND_LOAD_SELECTION`, `SAVE_SELECTION` | scene fragments to / from a file | - | missing |
+| `COMMAND_SAVE` "Save As" | save under a new name | `gz-ui-level/src/level_cmds.rs` (Save As) | same |
+| `COMMAND_CLEAR` | New Scene | `gz-ui-level/src/level_cmds.rs` (New Scene), MCP `scene_new` | same |
+| `COMMAND_LOAD_FIRSTRECENT` | Open Last Scene | `gz-ui-level/src/level_cmds.rs` (Open Last Scene) | same |
+| `COMMAND_CLEAR_DEBUG_DRAW`, `IMPORT_COMPILER_ERROR`, `EXPORT_COMPILER_ERROR` | the compiler's error list in the viewport | `gz-ui-level/src/level_cmds.rs`, MCP `compiler_errors` | same |
+| `COMMAND_VALIDATE_SCENE` | `EScene::Validate` with every test, on request | `gz-ui-level/src/level_cmds.rs`, MCP `scene_validate` | same |
+| `COMMAND_RELOAD_OBJECTS` | re-read the object library | `gz-ui-previews/src/libtools.rs` | same |
+| `COMMAND_CUT`, `COPY`, `PASTE` | the scene clipboard | `gz-ui-level/src/level_cmds.rs`, MCP `scene_edit` | same |
+| `COMMAND_LOAD_SELECTION`, `SAVE_SELECTION` | scene fragments to / from a file | `gz-ui-level/src/level_cmds.rs`, MCP `selection_file` | same |
 | `COMMAND_UNDO`, `REDO` | scene undo / redo | `COMMAND_UNDO` / `COMMAND_REDO` -> `undo` / `redo` | same |
-| `COMMAND_CLEAR/COLLECT/SHOW/EXPORT_SCENE_SUMMARY` | Summary Info | - | missing |
+| `COMMAND_CLEAR/COLLECT/SHOW/EXPORT_SCENE_SUMMARY` | Summary Info | `gz-ui-level/src/level_cmds.rs`, MCP `scene_summary` | same |
 | `COMMAND_BUILD`, `MAKE_GAME`, `MAKE_AIMAP`, `MAKE_DETAILS`, `MAKE_HOM`, `MAKE_SOM` | Make *, each confirmed naming the level folder (`ConfirmLevelBuild`) | `make_all` ... `make_aimap` (MCP, Build > Make rows) without the confirmation and without a `UiCommand` | differs |
 | `COMMAND_INVERT_SELECTION_ALL`, `SELECT_ALL` | of the current class | same ids | same |
 | `COMMAND_DESELECT_ALL` | of the current class | same id; every class | differs |
@@ -181,11 +175,11 @@ that does the same.
 | `COMMAND_HIDE_SEL`, `HIDE_UNSEL`, `HIDE_ALL` | of the current class | same ids; menu = every class, key = target class | differs |
 | (none) | - | `COMMAND_UNHIDE_ALL` "Unhide All" (Rust only) | same (addition) |
 | `COMMAND_SET/ADD_SEL/DEL_SEL/CLEAR/SELECT_SNAP_OBJECTS` | the snap list | `snap_objects` and the Tools panel's snap buttons (`gz-ui-level/src/tools.rs`) | same |
-| `COMMAND_REFRESH_SOUND_ENV_GEOMETRY` | `CLevelSoundManager::RefreshEnvGeometry` | - | missing |
+| `COMMAND_REFRESH_SOUND_ENV_GEOMETRY` | `CLevelSoundManager::RefreshEnvGeometry` | - (the C++ body does nothing: `RefreshEnvGeometry` is commented out) | dropped |
 | `COMMAND_CB_PLACE_ASSET` | place a Content Browser asset (centre / under the cursor / as a visual) | Content Browser Place in Scene, drop on the viewport (`gz-ui-content`, `set_place_item`) | same |
 | `COMMAND_DROP_TO_GROUND` | End: drop the selection | `COMMAND_DROP_TO_GROUND` -> `drop_objects` | same |
-| `COMMAND_SHOW_CONTENT_BROWSER`, `SHOW_WORLD_OUTLINER` | toggle the panels | Window menu rows only | missing |
-| `COMMAND_TOGGLE_AIMAP_VISIBILITY` | show / hide the AI map (`\`) | - | missing |
+| `COMMAND_SHOW_CONTENT_BROWSER`, `SHOW_WORLD_OUTLINER` | toggle the panels | `gz-app/src/cpp.rs` (toggles the panels) | same |
+| `COMMAND_TOGGLE_AIMAP_VISIBILITY` | show / hide the AI map (`\`) | `gz-ui-level/src/level_cmds.rs`, `\` | same |
 | `COMMAND_MOD_BUILD` (Ctrl+B), `MOD_EDIT_MANIFEST`, `MOD_PACKAGE`, `MOD_PUBLISH`, `MOD_RELEASES`, `MOD_CHARACTERS`, `MOD_WORLD`, `MOD_PDA`, `MOD_CATALOG` | the Mod rows | same ids (`gz-ui-mod`, `gz-ui-release`, `gz-ui-world`, `gz-ui-pda`) | same |
 | (none) | - | `COMMAND_MOD_SCREENS`, `COMMAND_MOD_BUILD_TO_FOLDER`, `COMMAND_MOD_EXPORT_FLAT` (Rust only) | same (addition) |
 
@@ -198,57 +192,57 @@ shell's `BUILTINS` and contributions (`gz-app/src/chrome.rs`), `gz-ui-level/src/
 
 | C++ item | What it does | Rust counterpart | State |
 |---|---|---|---|
-| File > New Scene | `COMMAND_CLEAR` | - | missing |
-| File > Open Scene... | `COMMAND_LOAD` file dialog | - | missing |
-| File > Recent Scene > (list) | `COMMAND_LOAD <path>` | - | missing |
+| File > New Scene | `COMMAND_CLEAR` | `gz-ui-level/src/level_cmds.rs` (New Scene), MCP `scene_new` | same |
+| File > Open Scene... | `COMMAND_LOAD` file dialog | `gz-ui-level/src/menus.rs` (the kit's file dialog) | same |
+| File > Recent Scene > (list) | `COMMAND_LOAD <path>` | `gz-ui-level/src/menus.rs` (the recent list) | same |
 | File > Save | the active tab's save | `Builtin::Save` | same |
-| File > Save As... | `COMMAND_SAVE` p2 = 1 | - | missing |
+| File > Save As... | `COMMAND_SAVE` p2 = 1 | `gz-ui-level/src/menus.rs` | same |
 | File > Project > Import Base Scene... | `dlg.import_base_scene` | `gz-ui-level/src/import.rs` | same |
 | File > Project > Open Project Folder / Switch Project... | Explorer / back to the Start page | `Builtin::OpenProjectFolder` / `SwitchProject` | same |
 | File > Quit | `RequestExit` | `Builtin::Quit` | same |
 | Edit > Undo / Redo / Delete / Find | the active tab's action | `Builtin::Edit` | same |
-| Edit > Cut / Copy / Paste / Duplicate | the active tab's action (Level: scene clipboard) | graph tabs: same (`gz-ui-graph/src/tab.rs`); Level: disabled | missing |
+| Edit > Cut / Copy / Paste / Duplicate | the active tab's action (Level: scene clipboard) | graph tabs and Level (`scene_edit`) | same |
 | Edit > Command Palette... / Preferences | palette / Preferences | `Builtin::Palette` / `Preferences` | same |
-| Scene > Validate | `COMMAND_VALIDATE_SCENE` | - | missing |
-| Scene > Summary Info | the three summary commands | - | missing |
+| Scene > Validate | `COMMAND_VALIDATE_SCENE` | `gz-ui-level/src/level_cmds.rs`, MCP `scene_validate` | same |
+| Scene > Summary Info | the three summary commands | `gz-ui-level/src/menus.rs` | same |
 | Scene > Highlight Texture... | `COMMAND_SCENE_HIGHLIGHT_TEXTURE` (returns FALSE) | - | dropped (not reachable: the handler is commented out) |
 | Scene > Find in World Outliner | `COMMAND_SHOW_OBJECTLIST` | same row | same |
-| Scene > Clear Debug Draw | `COMMAND_CLEAR_DEBUG_DRAW` | - | missing |
-| Scene > Open Selection... / Save Selection As... | fragments | - | missing |
-| Scene > Export Scene as OBJ... / Export Selection as OBJ... | `EScene::ExportObj(false / true)` | - | missing |
+| Scene > Clear Debug Draw | `COMMAND_CLEAR_DEBUG_DRAW` | `gz-ui-level/src/level_cmds.rs`, MCP `compiler_errors` | same |
+| Scene > Open Selection... / Save Selection As... | fragments | `gz-ui-level/src/menus.rs` | same |
+| Scene > Export Scene as OBJ... / Export Selection as OBJ... | `EScene::ExportObj(false / true)` | `gz-ui-level/src/menus.rs`, MCP `scene_export_obj` | same |
 | Scene > Mark Selection as Mod Content / as Base Level | `MarkSelection` | `mark_authored` rows | same |
-| Scene > Pick Any Class | `etfPickAnyClass` toggle | - | missing |
+| Scene > Pick Any Class | `etfPickAnyClass` toggle | `gz-ui-level/src/menus.rs` | same |
 | Scene > Create Recovery Snapshot | `EditorRecovery::RequestSnapshot` | `recovery action=snapshot` row | same |
 | (none) | - | Scene > Select All / Unselect All / Invert / Hide * / Unhide All (Rust only) | same (addition) |
 | Build > Make > Make All..., Make Game..., Make Details..., Make HOM..., Make SOM..., Make AI Map... | confirmed builds | `BUILD_ROWS` -> `make_*`, unconfirmed | differs |
 | Build > Compile > Geometry & Light / Detail Object Light | `RunXrLC` / `RunXrDO` | `compile_geometry` / `compile_details` | same |
 | Build > Compile > AI Map > High / Low | `RunXrAI_AIMap(true / false)` | `compile_aimap mode=high/low` | same |
-| Build > Compile > AI Map > Verify | `RunXrAI_Verify` | - | missing |
+| Build > Compile > AI Map > Verify | `RunXrAI_Verify` | `gz-ui-level/src/menus.rs`, `level_build compile_aimap mode=verify` | same |
 | Build > Compile > Spawn > This Level | `RunXrAI_Spawn(true)` | `compile_spawn` "Spawn" | same |
-| Build > Compile > Spawn > All Levels | `RunXrAI_Spawn(false)` | - | missing |
-| Build > Import Error List... / Export Error List... / Clear Error List | compiler errors | - | missing |
+| Build > Compile > Spawn > All Levels | `RunXrAI_Spawn(false)` | `gz-ui-level/src/menus.rs`, `level_build compile_spawn all_levels=` | same |
+| Build > Import Error List... / Export Error List... / Clear Error List | compiler errors | `gz-ui-level/src/menus.rs`, MCP `compiler_errors` | same |
 | (none) | - | Build > the toolbar's builds (Rust only) | same (addition) |
 | Mod > Mod Settings, Characters, World Rules, Screens & Music, PDA Interface | the module's tabs | `MOD_MENU` rows | same |
 | Mod > Build Into Game, Build to Folder..., Export Flat Gamedata... | builds | `MOD_MENU` rows | same |
-| Mod > Bake Scene Layer > Spawn Layer..., Collision Overlay..., Visual Overlay..., Level Cut... | `EditorModScene::Request*` dialogs | - (empty slot) | missing |
+| Mod > Bake Scene Layer > Spawn Layer..., Collision Overlay..., Visual Overlay..., Level Cut... | `EditorModScene::Request*` dialogs | `gz-ui-mod/src/bake.rs` | same |
 | Mod > Package Release..., Publish Release..., Releases, Submit to Mod Browser... | release path | `MOD_MENU` rows | same |
 | Libraries > Light Animations, Texture Library, Sound Library, Check New Textures, Synchronize Textures..., Synchronize Sounds... | libraries | `gz-ui-previews` rows | same |
-| Libraries > Reload Objects | `COMMAND_RELOAD_OBJECTS` | - | missing |
-| Libraries > Reload Textures | `COMMAND_RELOAD_TEXTURES` | - | missing |
-| Libraries > Rewrite Texture Descriptions... | `RewriteThumbnails` | - | missing |
-| Libraries > Refresh Sound Environment Geometry | `COMMAND_REFRESH_SOUND_ENV_GEOMETRY` | - | missing |
+| Libraries > Reload Objects | `COMMAND_RELOAD_OBJECTS` | `gz-ui-previews/src/libtools.rs` | same |
+| Libraries > Reload Textures | `COMMAND_RELOAD_TEXTURES` | `gz-ui-previews/src/libtools.rs` | same |
+| Libraries > Rewrite Texture Descriptions... | `RewriteThumbnails` | `gz-ui-previews/src/libtools.rs` | same |
+| Libraries > Refresh Sound Environment Geometry | `COMMAND_REFRESH_SOUND_ENV_GEOMETRY` | - (the C++ body does nothing: `RefreshEnvGeometry` is commented out) | dropped |
 | Window > Tools, World Outliner, Details, Level Settings, Content Browser, Output Log | `PanelItem` | `Builtin::Panels` over `PanelDesc`s | same |
 | Window > Content Drawer / Log Drawer / the open documents / Reset Layout | drawers, tabs, layout | `Builtin::Drawers` / `Documents` / `ResetLayout` | same |
 | Help > Keyboard Shortcuts / About Grizzly Editor | Keyboard page / notice | `Builtin::KeyboardShortcuts` / `About` | same |
-| View > Render > GPU | adapter + driver hint | - | missing |
-| View > Render > Quality | render scale | - | missing |
+| View > Render > GPU | adapter + driver hint | `gz-ui-viewport/src/menus.rs`, `gz-app/src/gpu.rs` | same |
+| View > Render > Quality | render scale | `gz-ui-viewport/src/menus.rs` | same |
 | View > Render > Fill Mode (Point / Wireframe / Solid) | `dwFillMode` | Wireframe toggle; `view_mode fill=` | differs |
 | View > Render > Shade Mode (Flat / Gouraud) | `dwShadeMode` | `view_mode shade=` only | differs |
 | View > Render > Edged Faces / Linear Filtering / Textures | device flags | `view_mode` only | differs |
 | View > Render > Hardware Rendering | `HW.Caps.bForceGPU_SW` | - | dropped (D2: a render state of the R1 device) |
 | View > Safe Rect / Grid / Lighting / Game Lighting > / Stats | view flags | `options_body`, `game_body` | same |
 | View > Fog / Environment > None, (weather cycles) | `rsFog`, `rsEnvironment` + `SetWeather` | `view_mode fog= environment=` only | differs |
-| View > Mute Sounds / Real Time | `rsMuteSounds` / `rsRenderRealTime` | - | missing |
+| View > Mute Sounds / Real Time | `rsMuteSounds` / `rsRenderRealTime` | `gz-ui-viewport/src/menus.rs` | same |
 | View > Maximize Viewport (F11) | | `menus.rs` row, F11 | same |
 | (none) | - | View > Spawn Helpers (Rust only) | same (addition) |
 
@@ -278,7 +272,7 @@ shell's `BUILTINS` and contributions (`gz-app/src/chrome.rs`), `gz-ui-level/src/
 | Shell chords Ctrl+Shift+P, Ctrl+(Shift+)Tab, Ctrl+F4, Ctrl+Space, Ctrl+`, Ctrl+S, F11 | | `gz-app/src/shell.rs` | same |
 | Camera keys W A S D Q E + Ctrl / Shift (`UI_Camera.cpp`, `UI_ViewportNavigation.cpp`) | | `gz-ui-viewport/src/camera.rs`, `pane.rs` | same |
 | Scene bindings of `kCommandNames` (`EditorPreferences.cpp`) present in Rust: Undo, Redo, Delete, Find, Select All, Deselect All, Invert, Hide Sel / Unsel / All, gizmo modes, Place / Stop Placing, Frame All / Selection, Wireframe, Grid, grid size, Safe Rect, Drop to Ground, the Mod rows, the libraries, Palette, Preferences, Quit, Cancel Running Job | | `SCENE_COMMANDS`, `BINDINGS`, the area `UiCommand`s | same |
-| Bindings New Scene (Ctrl+N), Open Scene (Ctrl+L), Open Last Scene (Ctrl+R), Save As (Ctrl+Shift+S), Cut / Copy / Paste on Level, the 18 tool switches, Show AI Map (`\`), Make All (F9), Make Game (F5), Details (Enter), Scene Options (Ctrl+O), World Outliner, Content Browser, Run Macro 1-8 (Alt+1..8) | | - (no command to bind) | missing |
+| Bindings New Scene (Ctrl+N), Open Scene (Ctrl+L), Open Last Scene (Ctrl+R), Save As (Ctrl+Shift+S), Cut / Copy / Paste on Level, the 18 tool switches, Show AI Map (`\`), Make All (F9), Make Game (F5), Details (Enter), Scene Options (Ctrl+O), World Outliner, Content Browser, Run Macro 1-8 (Alt+1..8) | | the rows above, bound in `gz-ui-app/src/keyboard.rs` | same |
 | File Menu (Alt+F), Move Camera To (Ctrl+Enter), Simulate, Apply Simulated Positions | handlers do nothing | - | dropped (not reachable) |
 | Esc: stop placing, then the bound command (`TUI::KeyDown`) | | Esc = Deselect All only | differs |
 
@@ -475,9 +469,9 @@ the theme / list-category names.
 | `ui_dialog open` ids `package_release`, `build_to_folder`, `export_flat`, `import_base_scene`, `publish_release`, `submit` (`LevelMcp.cpp` `OpenDialog`) | | `contract.rs` dialog table + the owning areas | same |
 | Confirmations `clean_target`, `clear_detail_objects`, `clear_snap_list`, `delete_character`, `delete_object`, `discard_recovery`, `empty_world`, `disable_game_updates`, `nq_overwrite`, `nq_reload`, `pda_revert`, `reload_light_animations`, `replace_release`, `sync_sounds`, `sync_textures`, `delete_release` | | same ids | same |
 | Confirmation `clear_colour_indices` (`UIDOShuffle.cpp`) | | `clear_color_indices` | differs |
-| Confirmations `rename_objects`, `reset_surfaces`, `detach_spawn_objects`, `rewrite_thumbnails` | | - (their actions are missing, see section 1 and the list) | missing |
+| Confirmations `rename_objects`, `reset_surfaces`, `detach_spawn_objects`, `rewrite_thumbnails` | | `gz-ui-level` (`rename_objects`, `reset_surfaces`, `detach_spawn_objects`), `gz-ui-previews/src/libtools.rs` (`rewrite_thumbnails`) | same |
 | Confirmations `make_all`, `make_game`, `make_details`, `make_hom`, `make_som`, `make_aimap` (`ConfirmLevelBuild`) | | - (the builds run unasked) | differs |
-| Confirmations `clear_ai_map`, `clear_ignored_materials`, `remove_default_sector`, `remove_duplicate_portals`, `detach_shapes` | | the AI Map / Sector / Portal / Shape tools | in work |
+| Confirmations `clear_ai_map`, `clear_ignored_materials`, `remove_default_sector`, `remove_duplicate_portals`, `detach_shapes` | | the AI Map / Sector / Portal / Shape tools (`gz-ui-level/src/tools_objects.rs`, `tools_bulk.rs`) | same |
 | Document kinds `level`, `quest:<rel>`, `beh:<rel>`, `pda`, `model`, `texture`, `characters`, `mod_settings`, `world_rules`, `releases`, `preferences`, `light_animations`, `texture_library`, `sound_library`, `screens` | | `gz-app` + the areas' `DocDesc`s | same |
 | Level panels `tools`, `world_outliner`, `details`, `level_settings`, `content_browser`, `output_log`, `viewport`; drawers Content / Log | | `gz-ui-level/src/lib.rs`, `gz-ui-content`, `gz-ui-app/src/log.rs` | same |
 
@@ -490,17 +484,17 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 |---|---|---|---|
 | `CCustomObject::FillProp` (`CustomObjectLE.cpp`: name, transform, flags) | | `gz-scene/src/props.rs` | same |
 | `CSceneObject::FillProp` (Reference chooser, Surfaces: texture / shader / compiler shader / game material choosers, Clear Surface) | | `props.rs` | same |
-| `CCustomObject::AnimationFillProp` (dynamic objects: Motionable, Motion\*) | | - | missing |
+| `CCustomObject::AnimationFillProp` (dynamic objects: Motionable, Motion\*) | | `gz-scene/src/props.rs` (Motionable, Motion rows), MCP `object_motion` | same |
 | `CSpawnPoint::FillProp` (30 labels: entity, Profile (spawn section), env mod, respawn point, player start, `[xms_order]` rows, attached shape) | | `props.rs` | same (labels) |
 | `CSpawnPoint::FillProp` choosers Order\Look path, Order\Route, Order\Target, Respawn Point\Profile (`smCustom`) | pick from lists | typed text (`ListKey::of_choose` -> None) | differs |
 | `CLight::FillProp` (`ELight_props.cpp`, 23 labels), `CGlow::FillProp`, `ESoundSource::FillProp` (17), `ESoundEnvironment::FillProp`, `CEditShape::FillProp`, `CSector::FillProp`, `CPortal::FillProp`, `CWayPoint::FillProp`, `CGroupObject::FillProp`, `EParticlesObject::FillProp` | | `props.rs` | same |
 | `CGlow` "Fixed size", `ESoundSource` "Looped", `ESceneSpawnTool` Common\Show Spawn Type / Trace Visibility | | - | dropped (not reachable: commented out in the C++) |
 | Level Settings: `EScene::FillProp` (`scene.cpp`, 14 labels), the Quality segmented, tool sheets of Light (22), Glow, Sector, Portal (`ESceneLightTools.cpp` ...) | | `gz-ui-level` Level Settings over `props.rs` | same |
-| `ESceneFogVolumeTools::FillProp` VolumeType / profile (ltx) | | (Fog Volume tool) | in work |
-| `ESceneDOTools::FillProp` (Base Texture, Common\Draw *), `ESceneWallmarkTool::FillProp` (Alignment, Draw Wallmarks), `ESceneAIMapTool::FillProp` | | (next package) | in work |
+| `ESceneFogVolumeTools::FillProp` VolumeType / profile (ltx) | | the Fog Volume tool (`gz-ui-level/src/tools_objects.rs` `fog_tool`, MCP `fog_tool`); `EFogVolume::FillPropObjects` is never called in the C++, so Details has no such rows on either side | same |
+| `ESceneDOTools::FillProp` (Base Texture, Common\Draw *), `ESceneWallmarkTool::FillProp` (Alignment, Draw Wallmarks), `ESceneAIMapTool::FillProp` | | the Detail Objects panel and `details_tool` (D18), the Wallmark and AI Map tools (`gz-ui-level/src/tools_bulk.rs`, MCP `wallmark_tool`, `aimap_tool`) | same |
 | Random Append sheet (`ESceneObjectTools.cpp`: Scale, Scale\Proportional, Minimum / Maximum, Rotate, Rotate\Minimum / Maximum, Objects) | | `RandomSettings` dialog: the four ranges only | differs |
-| Scene summary sheet (`SceneSummaryInfo.cpp`) | | - | missing |
-| Texture Library `Cube Map\Smaller Copy` (`UIImageEditorForm.cpp`) | | - | missing |
+| Scene summary sheet (`SceneSummaryInfo.cpp`) | | `gz-ui-level` (Summary Info), MCP `scene_summary` | same |
+| Texture Library `Cube Map\Smaller Copy` (`UIImageEditorForm.cpp`) | | `gz-ui-previews/src/libtools.rs`, `gz-fmt-tex/src/cubemap.rs` | same |
 | Texture / Sound / Light Animation library sheets (`UIImageEditorForm.cpp`, `UISoundEditorForm.cpp`, `UIEditLightAnim.cpp`), the image preview's rows (`UIImagePreview.cpp`: Slices is shown for arrays only) | | `gz-ui-previews` | same |
 | Detail object rows Min / Max Scale, Density, No Waving (`UIDOShuffle.cpp`) | | `gz-ui-level/src/detail_objects.rs` ("Minimum Scale", "Maximum Scale", "Density Factor") | same |
 | `CEditableObject::FillBasicProps` (`EditObjectProps.cpp`), `PDomain::FillProp` (`pDomain.cpp`), the game material editor (`XrGameMaterialLibraryEditors.cpp`) | | - | dropped (not reachable from the level editor: `ActorEditor` / `ParticleEditor` / `ShaderEditor`, section 4) |
@@ -512,10 +506,10 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 |---|---|---|---|
 | `EditorPreferences.cpp` `kPrefHelp` rows (40: General, Viewport, Tools, Objects) | | `gz-ui-app/src/prefs.rs` over `gz-app/src/settings.rs` `PREFS` | same |
 | `LevelPreferences.cpp` Recovery\Enabled / Interval / Delay After Input / Snapshots Kept | | `prefs.rs` Recovery page | same |
-| `LevelPreferences.cpp` Scene\Targets\Enable\<class>, Scene\Targets\Read Only\<class> | | - | missing |
+| `LevelPreferences.cpp` Scene\Targets\Enable\<class>, Scene\Targets\Read Only\<class> | | Level Settings > Targets (`gz-scene/src/props.rs`) | differs (D18) |
 | Keyboard page (`CCustomPreferences::DrawKeyboard`, `UIKeyPressForm`) | | `gz-ui-app/src/keyboard.rs`, `dlg.assign_shortcut` | same |
 | `-project`, `-nodlg`, `-qa_github`, `-iconsheet` | | `grizzly/src/cli.rs` | same |
-| `-uiscale <f>` (`XrUIKit.cpp` `CommandLineScale`) | | - (`ui_scale` over MCP only) | missing |
+| `-uiscale <f>` (`XrUIKit.cpp` `CommandLineScale`) | | `grizzly/src/cli.rs` | same |
 | `-trace`, `-heapcheck`, `-no_ffconst`, `-no_rebind`, `-build` / `-ebuild` (`EDX11Utils.cpp`, `ui_main.cpp`, `device.cpp`) | DX11 device debugging and texture loading | - | dropped (D2: the DX11 / R1 device is gone) |
 | (none) | | `-headless`, `-mcp_port`, `-root`, `-log_echo`, `-dump_commands` (Rust only) | same (addition) |
 | `level.ini` (settings, `[shortcuts]`), `level_imgui.ini` | | `grizzly_editor.ltx` | differs (D3: new files, nothing migrated) |
@@ -525,17 +519,17 @@ source (props of `crates/gz-scene/src/props.rs` and the areas).
 
 ### 9. Stubs in the Rust tree
 
-`rg -n -i "not ported|not yet|later package|not implemented|unsupported here|no settings of its own|TODO|FIXME" crates -g '*.rs'`:
+`rg -n -i "not ported|not yet|later package|not implemented|unsupported here|no settings of its own|TODO|FIXME" crates -g '*.rs'`
+(2026-11-12):
 
 | Hit | Judgement | State |
 |---|---|---|
-| `gz-characters/src/lib.rs:8`, `gz-world/src/lib.rs:7` "a later package" | only words: the tabs exist (`gz-ui-world`) | same |
-| `gz-levelbuild/src/validate.rs:10` "Not ported: the portal test, sector / wallmark shaders, LOD notes, sound library" | real gap, already known | in work |
-| `gz-fmt-ogf/src/export.rs:648` "VIPM is not ported" | real gap, already known | in work |
-| `gz-scene/src/tools.rs:854` "the Wallmark tool's editing tools are a later package" | real gap, already known | in work |
-| `gz-scene/src/props.rs:1350` fog volume token "for a later package" | real gap, already known | in work |
-| `gz-ui-level/src/tools.rs:180` "This tool has no settings of its own." | real for Sector, Portal, Way, Shape, Light, Fog Volume (in work), AI Map, Wallmark (next); right for Sound Source, Sound Environment, Glow (the C++ has no panel for them either) | in work |
-| `gz-github/src/github.rs:140` "Not yet: poll again"; `gz-nq/src/service.rs:554` `todo`; `gz-ui-viewport/src/lighting.rs:24` "not yet scaled" | only words | same |
+| `gz-github/src/github.rs` "Not yet: poll again"; `gz-nq/src/service.rs`, `gz-scene/src/objtools/portal.rs` a variable `todo`; `gz-ui-viewport/src/lighting.rs` "not yet scaled" | only words | same |
+| `gz-ui-level/src/tools.rs` "This tool has no settings of its own." | the fallback for Sound Source, Sound Environment, Glow, Group: the C++ has no panel for them either; every other tool has its panel | same |
+
+The earlier hits (`validate.rs` "Not ported", the VIPM pass, the Wallmark tool, the fog volume token, the
+characters' and world rules' "later package") are gone from the source: the work was done, the unused
+fog volume token removed.
 
 ## Unjudged
 

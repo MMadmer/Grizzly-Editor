@@ -57,8 +57,10 @@
 //!   scene (docs/RUST_MIGRATION.md D1): there is no game
 //!   inside the editor's process.
 //!
-//! The build writes into the editor's own `gamedata\levels\<level>` and `gamedata\spawns` (the
-//! C++ `$game_levels$` / `$game_spawn$`), never into the linked game.
+//! The build writes into the open project's `gamedata\levels\<level>` and `gamedata\spawns` (the
+//! C++ `$game_levels$` / `$game_spawn$`, which `EditorProject` remounts into the project), never
+//! into the editor's folder or the linked game. The level path is one folder name, and the folder is emptied only when it
+//! really lies below the levels folder and is no link ([`folder`]).
 
 #![forbid(unsafe_code)]
 
@@ -66,6 +68,7 @@ pub mod breakable;
 mod cmd;
 pub mod details;
 pub mod files;
+pub mod folder;
 pub mod graph;
 mod hemi;
 pub mod libs;

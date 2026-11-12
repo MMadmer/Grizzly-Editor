@@ -27,10 +27,14 @@ use crate::draw::gm;
 /// A particle object's system.
 struct Entry {
     reference: SmolStr,
-    /// None when the library has no effect or group of that name (`Compile` failed).
+    /// None when the library has no effect or group of that name (`Compile` failed), and while a
+    /// pass steps it outside the lock (`out`).
     system: Option<System>,
     /// What the system was last told it stands at (`UpdateParent`).
     transform: Mat4,
+    /// A pass took the system out to step it: what `status` answers meanwhile (playing,
+    /// particles, group).
+    out: Option<(bool, usize, bool)>,
 }
 
 /// The library of the linked game, per link revision.
@@ -46,7 +50,7 @@ struct LibSlot {
 }
 
 #[derive(Default)]
-struct State {
+pub(crate) struct State {
     /// The library the entries were made from.
     library: Option<Arc<Library>>,
     entries: FxHashMap<ObjId, Entry>,
@@ -60,7 +64,7 @@ pub struct Particles {
     lib: Mutex<LibSlot>,
     /// Held while the library is read: callers that ask meanwhile wait for that read.
     reading: tokio::sync::Mutex<()>,
-    state: Mutex<State>,
+    pub(crate) state: Mutex<State>,
 }
 
 impl Particles {
@@ -165,47 +169,61 @@ pub async fn play(editor: &Arc<Editor>, names: &[String], on: bool) -> Result<Ve
             .collect()
     };
     let mut out = Vec::with_capacity(targets.len());
-    {
+    // under the lock: the entries of the named objects taken out; the systems are made and told
+    // to play or stop without it (calls into the particle crate), then put back under it
+    let mut taken: Vec<(ObjId, Option<Entry>)> = {
         let mut st = parts.state.lock();
         if st.library.as_ref().map(Arc::as_ptr) != library.as_ref().map(Arc::as_ptr) {
             st.entries.clear();
             st.library.clone_from(&library);
         }
-        for (name, obj) in targets {
-            let Some(o) = obj else {
-                out.push(json!({ "name": name, "ok": false, "error": "no particle system of that name" }));
-                continue;
-            };
-            let ObjData::Particles(d) = &o.data else { continue };
-            let entry = st.entries.entry(o.id).or_insert_with(|| Entry {
-                reference: d.reference.clone(),
-                system: None,
-                transform: Mat4::IDENTITY,
-            });
-            if entry.system.is_none() || entry.reference != d.reference {
-                entry.reference = d.reference.clone();
-                entry.system = library.as_ref().and_then(|l| l.create(&d.reference));
-                entry.transform = Mat4::NAN;
-            }
-            let world = gm(&o.world());
-            match &mut entry.system {
-                Some(s) => {
-                    if entry.transform != world {
-                        s.update_parent(&world, Vec3::ZERO, false);
-                        entry.transform = world;
-                    }
-                    if on {
-                        s.play()
-                    } else {
-                        s.stop(true)
-                    }
-                    out.push(json!({ "name": name, "ok": true, "playing": s.is_playing() }));
+        targets.iter().filter_map(|(_, o)| o.as_ref().map(|o| (o.id, st.entries.remove(&o.id)))).collect()
+    };
+    let mut slot = taken.iter_mut();
+    for (name, obj) in targets {
+        let Some(o) = obj else {
+            out.push(json!({ "name": name, "ok": false, "error": "no particle system of that name" }));
+            continue;
+        };
+        let Some((_, held)) = slot.next() else { continue };
+        let ObjData::Particles(d) = &o.data else { continue };
+        let entry = held.get_or_insert_with(|| Entry {
+            reference: d.reference.clone(),
+            system: None,
+            transform: Mat4::IDENTITY,
+            out: None,
+        });
+        if entry.system.is_none() || entry.reference != d.reference {
+            entry.reference = d.reference.clone();
+            entry.system = library.as_ref().and_then(|l| l.create(&d.reference));
+            entry.transform = Mat4::NAN;
+        }
+        let world = gm(&o.world());
+        match &mut entry.system {
+            Some(s) => {
+                if entry.transform != world {
+                    s.update_parent(&world, Vec3::ZERO, false);
+                    entry.transform = world;
                 }
-                None => out.push(json!({
-                    "name": name,
-                    "ok": false,
-                    "error": format!("EParticlesObject: '{}' not found in library", d.reference),
-                })),
+                if on {
+                    s.play()
+                } else {
+                    s.stop(true)
+                }
+                out.push(json!({ "name": name, "ok": true, "playing": s.is_playing() }));
+            }
+            None => out.push(json!({
+                "name": name,
+                "ok": false,
+                "error": format!("EParticlesObject: '{}' not found in library", d.reference),
+            })),
+        }
+    }
+    {
+        let mut st = parts.state.lock();
+        for (id, e) in taken {
+            if let Some(e) = e {
+                st.entries.insert(id, e);
             }
         }
     }
@@ -261,37 +279,45 @@ pub(crate) struct Pass<'a> {
 /// actions follow; gone: dropped), steps the systems that play and whose emitter is in view by
 /// the time since the last pass, and adds their sprites. `true` while a system in view plays.
 pub(crate) fn step_and_draw(parts: &Particles, p: &Pass<'_>, list: &mut DrawList) -> bool {
-    let mut st = parts.state.lock();
-    if st.library.as_ref().map(Arc::as_ptr) != p.library.as_ref().map(Arc::as_ptr) {
-        st.entries.clear();
-        st.library.clone_from(&p.library);
-    }
-    let now = Instant::now();
-    let dt_ms = st.last.map_or(0, |t| now.duration_since(t).as_millis().min(1000) as u32);
-    st.last = Some(now);
-    let State { entries, library, .. } = &mut *st;
-    entries.retain(|id, _| p.state.get(*id).is_some_and(|o| matches!(o.data, ObjData::Particles(_))));
-    let mut active: Vec<(ObjId, &mut System)> = Vec::new();
-    for (id, e) in entries.iter_mut() {
-        let Some(o) = p.state.get(*id) else { continue };
-        let ObjData::Particles(d) = &o.data else { continue };
-        if e.reference != d.reference {
-            e.reference = d.reference.clone();
-            e.system = library.as_ref().and_then(|l| l.create(&d.reference));
-            e.transform = Mat4::NAN;
+    // under the lock: follow the scene and take out the systems that step - no lock is held
+    // across the parallel stepping or the calls into the particle crate and the collider
+    let (dt_ms, mut active) = {
+        let mut st = parts.state.lock();
+        if st.library.as_ref().map(Arc::as_ptr) != p.library.as_ref().map(Arc::as_ptr) {
+            st.entries.clear();
+            st.library.clone_from(&p.library);
         }
-        let Some(s) = e.system.as_mut() else { continue };
-        let world = gm(&o.world());
-        if e.transform != world {
-            s.update_parent(&world, Vec3::ZERO, false);
-            e.transform = world;
+        let now = Instant::now();
+        let dt_ms = st.last.map_or(0, |t| now.duration_since(t).as_millis().min(1000) as u32);
+        st.last = Some(now);
+        let State { entries, library, .. } = &mut *st;
+        entries.retain(|id, _| p.state.get(*id).is_some_and(|o| matches!(o.data, ObjData::Particles(_))));
+        let mut active: Vec<(ObjId, System)> = Vec::new();
+        for (id, e) in entries.iter_mut() {
+            let Some(o) = p.state.get(*id) else { continue };
+            let ObjData::Particles(d) = &o.data else { continue };
+            if e.reference != d.reference {
+                e.reference = d.reference.clone();
+                e.system = library.as_ref().and_then(|l| l.create(&d.reference));
+                e.transform = Mat4::NAN;
+            }
+            let Some(s) = e.system.as_mut() else { continue };
+            let world = gm(&o.world());
+            if e.transform != world {
+                s.update_parent(&world, Vec3::ZERO, false);
+                e.transform = world;
+            }
+            // `OnFrame` and `Render` both ask whether the emitter's box is in view
+            let seen = p.shown && o.flags.visible && p.frustum.intersects_aabb(&emitter_box(o.position()));
+            if seen && s.is_playing() {
+                e.out = Some((true, s.particle_count(), s.is_group()));
+                if let Some(taken) = e.system.take() {
+                    active.push((*id, taken));
+                }
+            }
         }
-        // `OnFrame` and `Render` both ask whether the emitter's box is in view
-        let seen = p.shown && o.flags.visible && p.frustum.intersects_aabb(&emitter_box(o.position()));
-        if seen && s.is_playing() {
-            active.push((*id, s));
-        }
-    }
+        (dt_ms, active)
+    };
     let collider = SceneCollider { state: p.state, lib: p.lib, pick: p.pick };
     active.par_iter_mut().for_each(|(_, s)| s.on_frame(dt_ms, Some(&collider)));
     let table = p.assets.table();
@@ -333,6 +359,17 @@ pub(crate) fn step_and_draw(parts: &Particles, p: &Pass<'_>, list: &mut DrawList
             });
         }
     }
+    // under the lock again: each system back into its entry, unless the entry went or got
+    // another system meanwhile
+    let mut st = parts.state.lock();
+    for (id, s) in active {
+        if let Some(e) = st.entries.get_mut(&id) {
+            e.out = None;
+            if e.system.is_none() {
+                e.system = Some(s);
+            }
+        }
+    }
     playing
 }
 
@@ -346,15 +383,22 @@ fn status(parts: &Particles, state: &SceneState) -> Vec<Value> {
                 ObjData::Particles(d) => d.reference.as_str(),
                 _ => "",
             };
-            let e = st.entries.get(&o.id).and_then(|e| e.system.as_ref());
+            let entry = st.entries.get(&o.id);
+            let e = entry.and_then(|e| e.system.as_ref());
+            // a system a pass is stepping right now answers what it was when taken out
+            let (playing, particles, group) = match (e, entry.and_then(|x| x.out)) {
+                (Some(s), _) => (s.is_playing(), s.particle_count(), s.is_group()),
+                (None, Some(out)) => out,
+                (None, None) => (false, 0, false),
+            };
             json!({
                 "name": o.name.as_str(),
                 "reference": reference,
                 "selected": state.is_selected(o.id),
                 "visible": o.flags.visible,
-                "playing": e.is_some_and(System::is_playing),
-                "particles": e.map_or(0, System::particle_count),
-                "group": e.is_some_and(System::is_group),
+                "playing": playing,
+                "particles": particles,
+                "group": group,
             })
         })
         .collect()
