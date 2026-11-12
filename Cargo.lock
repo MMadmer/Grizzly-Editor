@@ -1241,6 +1241,7 @@ dependencies = [
  "gz-editor",
  "gz-export-level",
  "gz-game",
+ "gz-ico",
  "gz-lc",
  "gz-lc-light",
  "gz-levelbuild",
@@ -1303,6 +1304,7 @@ dependencies = [
  "futures",
  "gz-base",
  "gz-editor",
+ "gz-ico",
  "gz-log",
  "gz-ltx",
  "gz-task",
@@ -1621,6 +1623,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gz-ico"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gz-lc"
 version = "0.1.0"
 dependencies = [
@@ -1745,6 +1754,7 @@ dependencies = [
 name = "gz-mcp-bridge"
 version = "0.1.0"
 dependencies = [
+ "gz-ico",
  "serde_json",
 ]
 

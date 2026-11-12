@@ -35,6 +35,7 @@ gz-corpus = { path = "crates/gz-corpus" }
 gz-ltx = { path = "crates/gz-ltx" }
 gz-luadata = { path = "crates/gz-luadata" }
 gz-chunk = { path = "crates/gz-chunk" }
+gz-ico = { path = "crates/gz-ico" }
 gz-fmt-object = { path = "crates/gz-fmt-object" }
 gz-fmt-ogf = { path = "crates/gz-fmt-ogf" }
 gz-fmt-tex = { path = "crates/gz-fmt-tex" }

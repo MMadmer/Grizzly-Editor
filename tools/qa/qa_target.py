@@ -6,8 +6,8 @@ own (never the author's 28016 or settings):
 
     GRIZZLY_QA_EXE=<path>    another binary - Bin\\x64\\Release\\Grizzly.exe, the release build
     GRIZZLY_QA_PORT=<n>      another port
-    GRIZZLY_QA_TARGET=cpp    the C++ editor of the tag cpp-editor-last (Bin\\x64\\Release\\LevelEditor.exe on
-                             28016): for tools/qa/diff_editors.py's oracle records only - a suite refuses it
+    GRIZZLY_QA_TARGET=cpp    the C++ editor of the tag cpp-editor-last (the kept Bin\\x64\\CppEditor\\LevelEditor.exe
+                             on 28016): for tools/qa/diff_editors.py's oracle records only - a suite refuses it
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def exe() -> str:
         return given
     if RUST:
         return os.path.join(REPO, "Intermediate", "cargo", "debug", "Grizzly.exe")
-    return os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+    return os.path.join(REPO, "Bin", "x64", "CppEditor", "LevelEditor.exe")
 
 
 def projects_ini() -> str:

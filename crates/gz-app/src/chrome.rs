@@ -38,12 +38,16 @@ const EDGE: f32 = 6.0;
 /// Under this width the menus fold into one Menu button.
 pub const FOLD_W: f32 = 1100.0;
 
-const LOGO_PNG: &[u8] = include_bytes!("../../../assets/grizzly-editor-icon.png");
+/// The editor's one icon, the same file the executables carry (`gz_ico::embed`).
+const ICON_ICO: &[u8] = include_bytes!("../../../assets/grizzly-editor-icon.ico");
 
-/// The logo as straight RGBA of `side` x `side`, box-filtered down from the 512 px source.
+/// The logo as straight RGBA of `side` x `side`: the icon's image drawn for that side, or
+/// box-filtered down from the next larger one.
 #[must_use]
 pub fn logo_rgba(side: u32) -> Option<Vec<u8>> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(LOGO_PNG));
+    let images = gz_ico::images(ICON_ICO).ok()?;
+    let image = gz_ico::for_side(&images, side).filter(gz_ico::IcoImage::is_png)?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(image.data));
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()?];

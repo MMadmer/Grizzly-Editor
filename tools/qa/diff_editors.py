@@ -18,9 +18,11 @@ failure (exit code 1).
 The oracle is recorded once: the C++ editor does not change on this branch, so its side of a
 scenario - the steps it ran, its answers, the files it left (size, SHA-256, the bytes of the small
 ones) - is kept in Intermediate/oracle/<scenario>-<key>/. The key hashes the scenario's steps,
-LevelEditor.exe, the source project and the linked game. The C++ editor starts only for a scenario
-without a record, and never when something already answers on its port (that is the author's own
-editor: the run says so and goes on with what needs no new record).
+LevelEditor.exe, the source project and the linked game. The C++ editor (the kept binary
+Bin\\x64\\CppEditor\\LevelEditor.exe of the tag cpp-editor-last; no C++ is left to build it from) starts only
+for a scenario without a record, never when the binary is not there, and never when something already
+answers on its port (that is the author's own editor): in both cases the run says so and goes on with
+what needs no new record.
 
 The Rust side runs the scenarios side by side, each on its own port, copy and home (-home), headless.
 Each scenario's last result is remembered with Grizzly.exe's fingerprint and the scenario's key, so
@@ -63,7 +65,9 @@ PARITY = os.path.join(REPO, "docs", "rust", "PARITY.md")
 PARITY_HEAD = "## Commands compared by the differential run"
 PARITY_END = "<!-- end of the differential run's section -->"
 
-CPP_EXE = os.path.join(REPO, "Bin", "x64", "Release", "LevelEditor.exe")
+# the kept C++ editor of the tag cpp-editor-last, a self-contained copy no build touches; records are made
+# from it only while it is there
+CPP_EXE = os.path.join(REPO, "Bin", "x64", "CppEditor", "LevelEditor.exe")
 # the Rust editor: the debug build, or the binary GRIZZLY_QA_EXE names (Bin\x64\Release\Grizzly.exe, the release one)
 RUST_EXE = os.environ.get("GRIZZLY_QA_EXE") or os.path.join(INTER, "cargo", "debug", "Grizzly.exe")
 CPP_PORT = 28016
@@ -950,8 +954,8 @@ def game_stamp() -> str:
 
 
 # The C++ editor's stamp when it left the repository (the cutover, tag cpp-editor-last): LevelEditor.exe and every
-# DLL beside it as the records were made. Its sources are gone, so it can no longer change; Build.ps1 rebuilds the
-# compilers' libraries beside it (XrCore.dll, XrCDB.dll, ...) from the same sources, which must not invalidate them.
+# DLL beside it as the records were made. Its sources are gone, so it can no longer change, and the records stay
+# valid wherever the binary lies (Bin\x64\CppEditor now).
 CPP_STAMP = "4064068b014fe4f153ed2d7610bc32bc2f28664250e73073464902e295f161a4"
 
 
@@ -2276,6 +2280,10 @@ def main() -> int:
     if cpp_busy:
         main_log(f"something already answers on 127.0.0.1:{CPP_PORT} - the author's own editor; left alone. "
                  f"Without a record, not run: {', '.join(need)}")
+        names = [n for n in names if n not in need]
+        need = []
+    if need and not os.path.isfile(CPP_EXE):
+        main_log(f"no record and no oracle binary to make one ({CPP_EXE} is not there) - not run: {', '.join(need)}")
         names = [n for n in names if n not in need]
         need = []
     events = {n: threading.Event() for n in names}

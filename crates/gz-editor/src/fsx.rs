@@ -189,7 +189,7 @@ mod tests {
             game.join("GAMEDATA").join("new").join("x.ltx"),
             game.join("modules").join("other").join("mod.ltx"),
             game.join("modules").join(".new").join("other"),
-            game.join("bin").join("xrEngine.exe"),
+            game.join("bin").join("fsgame.ltx"),
             game.clone(),
         ] {
             assert!(guard.check(&refused).is_err(), "{}", refused.display());

@@ -30,13 +30,12 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   `rust-toolchain.toml`). **The contract is `docs/RUST_MIGRATION.md`**: the architecture, the contract with the game
   (section 9) and every deliberate difference from the C++ editor (section 12, a difference not listed there is a bug).
   A change of plan is a change of that document first; `docs/rust/STATE.md` says what was built and decided.
-- **The C++ editor left the repository** at the cutover; the last commit that holds it is tagged `cpp-editor-last`
-  (`git show cpp-editor-last:<path>` reads it). Its build, `Bin\x64\Release\LevelEditor.exe` with its DLLs, stays on
-  disk untouched as the oracle `tools/qa/diff_editors.py` recorded from (`Intermediate/oracle`, `GRIZZLY_QA_TARGET=cpp`
-  for a new record and for nothing else).
-- **The only C++ left is the level compilers** (`XrLC`, `XrLCLight`, `xrDO_Light` under `Source/`, built by CMake from
-  `cmake/`), separate processes the editor runs, until phase 8 ports them. `Source/` holds exactly what they build
-  from; their C++ checks plain pointers with the implicit bool conversion (`if (p)`), not `== nullptr`.
+- **No C or C++ is left in the repository.** The C++ editor left at the cutover (tag `cpp-editor-last`), the level
+  compilers in phase 8 (tag `cpp-compilers-last`); `git show <tag>:<path>` reads them, and a Rust comment naming a
+  `Source/...` place means that tag. Their builds stay on disk untouched as the oracles: the editor,
+  `Bin\x64\CppEditor\LevelEditor.exe` with its DLLs, for `tools/qa/diff_editors.py` (`GRIZZLY_QA_TARGET=cpp` for a new
+  record and for nothing else); the compilers, `Bin\x64\CppCompilers`, for `tools/qa/diff_compile.py`. Both tools work
+  from their records under `Intermediate/oracle` and record a new one from those binaries only while they exist.
 - **Layers** (`docs/RUST_MIGRATION.md` section 7): base, formats, the game link, the domain, the presentation. The
   domain crates know no window: everything except the picture runs under `Grizzly.exe -headless`. An area crate is its
   domain plus `service.rs` and `cmd.rs` with one `register(reg)`; a surface crate has one `install(builder)`.
@@ -47,7 +46,8 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **`unsafe` only in `gz-win`** (the Win32 that `std` lacks), every block with a `// SAFETY:` line, and no
   `unsafe impl Send` / `Sync` anywhere. Every other crate is `#![forbid(unsafe_code)]` through the workspace lints.
 - **Four entry points prove a change**: `bash tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, the
-  registry against the catalogue `crates/gz-mcp/tools.json`), `bash tools/rust/test.sh` (only the test binaries that
+  registry against the catalogue `crates/gz-mcp/tools.json`, the text encodings, no test writing a program file, the
+  icon of the release binaries), `bash tools/rust/test.sh` (only the test binaries that
   changed since they were green; `--all` for everything and the whole corpus), `python tools/qa/diff_editors.py` (the
   same commands on both editors, the C++ side from its records), `python tools/qa/run_all.py` (the QA suites side by
   side; `--with-game` adds the one that starts the real game). `GRIZZLY_QA_EXE` points the suites, the differential
@@ -81,16 +81,21 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 ## Build and verification
 
 - Build: `pwsh -NoProfile -File .\Build.ps1` (pwsh 7 strictly — in PowerShell 5.1 a tool's stderr kills the script):
-  the editor in release (`Grizzly.exe`, `grizzly-mcp.exe` and their PDBs, which the crash reports read) and the level
-  compilers, into `Bin\x64\Release`; it says what it built and how long each part took. `-Only editor|compilers`,
-  `-Debug`, `-Out <folder>`, `-Target XrLC`. The everyday build is `bash tools/rust/cg.sh build -p grizzly -p
-  gz-mcp-bridge` (`Intermediate\cargo\debug`).
-- The compilers need a toolset that still has `<hash_map>` (MSVC 14.50, not 14.51: `Build.ps1` enters the developer
-  shell with the newest one that has it) and the newest ninja found (an older one than the one that wrote a build
-  folder drops its `.ninja_log` and rebuilds everything).
+  the editor in release - `Grizzly.exe` (the level compilers are crates of it), `grizzly-mcp.exe`, their PDBs, which
+  the crash reports read, and the third-party notices of `licenses\` - into `Bin\x64\Release`, touching nothing else
+  there; it says what it built and how long it took. `-Debug`, `-Out <folder>`. One build, cargo alone; Visual Studio's
+  C++ workload is needed only for the C compiler of the vendored LuaJIT and libvorbis and the Windows SDK libraries.
+  The everyday build is `bash tools/rust/cg.sh build -p grizzly -p gz-mcp-bridge` (`Intermediate\cargo\debug`).
 - The release profile (`Cargo.toml`): thin LTO, 16 codegen units, the line tables in the PDB beside the executable.
   The executable links ONE C runtime, the DLL one (`crates/grizzly/build.rs`): the vendored LuaJIT is compiled for the
   static one, and with both the release link fails.
+- Both executables carry the editor's one icon, `assets/grizzly-editor-icon.ico`: their `build.rs` compiles it into a
+  resource at build time (`gz-ico`, no tool and no generated file in the tree), and the window and the caption logo
+  draw the same file. `tools/rust/check_icon.py` proves it on the built binaries (a step of `check.sh`).
+- **No test writes a program file** (`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.ps1`, `.msi`, or bytes that
+  start with `MZ`): the author's antivirus reads a fresh unsigned test binary that drops one as malware. A test that
+  needs such a name passes a harmless one to the code under test; a literal that never reaches the disk carries
+  `// program-files: in memory`. `tools/rust/check_test_files.py` holds it (a step of `check.sh`).
 - Test run: `Grizzly.exe -project "<project>" -nodlg` (`-nodlg` = no modals: the logged answers - No for a question,
   OK for a note; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a window, `-home
   <folder>` keeps its project list, settings and logs there (or `GRIZZLY_HOME`), `-mcp_port <n>` listens elsewhere.

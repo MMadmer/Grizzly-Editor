@@ -86,5 +86,41 @@ else
     fi
 fi
 
+# ---- the repository's text, the tests' files, the executables' icon ----
+# - text encodings: no C1 control character or broken UTF-8, cp1251 where the game's parsers read it
+#   (tools/lint/check_encoding.py, the gate the C++ build ran);
+# - no test writes a program file (tools/rust/check_test_files.py);
+# - Grizzly.exe and grizzly-mcp.exe of the release build (Bin/x64/Release, Build.ps1) carry the editor's icon
+#   (tools/rust/check_icon.py), checked when both are built.
+echo "== encoding"
+if python tools/lint/check_encoding.py --quiet; then
+    echo "encoding: clean"
+else
+    echo "encoding: failed (python tools/lint/check_encoding.py --strict lists the files)"
+    bad=1
+fi
+
+echo "== test files"
+if python tools/rust/check_test_files.py crates > Intermediate/check-test-files.txt 2>&1; then
+    echo "test files: no test names a program file or writes MZ"
+else
+    head -20 Intermediate/check-test-files.txt
+    echo "test files: program files in test code (a harmless name, or // program-files: in memory)"
+    bad=1
+fi
+
+echo "== icon"
+release=Bin/x64/Release
+if [ -f "$release/Grizzly.exe" ] && [ -f "$release/grizzly-mcp.exe" ]; then
+    if python tools/rust/check_icon.py "$release/Grizzly.exe" "$release/grizzly-mcp.exe"; then
+        echo "icon: both executables carry the editor's icon"
+    else
+        echo "icon: failed"
+        bad=1
+    fi
+else
+    echo "icon: no release build in $release (pwsh -NoProfile -File ./Build.ps1), not checked"
+fi
+
 [ $bad -eq 0 ] && echo "check: ok" || echo "check: FAILED"
 exit $bad

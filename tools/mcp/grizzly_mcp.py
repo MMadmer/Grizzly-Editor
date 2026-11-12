@@ -25,7 +25,7 @@ CANDIDATES = [
 def main() -> int:
     exe = next((p for p in CANDIDATES if p and os.path.isfile(p)), None)
     if not exe:
-        sys.stderr.write("grizzly-mcp.exe is not built. Build it with: pwsh -NoProfile -File Build.ps1 -Only editor "
+        sys.stderr.write("grizzly-mcp.exe is not built. Build it with: pwsh -NoProfile -File Build.ps1 "
                          "(or set GRIZZLY_MCP_EXE). Looked in:\n  " + "\n  ".join(p for p in CANDIDATES if p) + "\n")
         return 1
     try:

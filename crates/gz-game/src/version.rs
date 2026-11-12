@@ -35,6 +35,7 @@ mod tests {
 
     #[test]
     fn fixed_file_info() {
+        // program-files: in memory
         let mut exe = b"MZ....VS_VERSION_INFO".to_vec();
         // a stray signature without the structure version is no version block
         exe.extend_from_slice(&SIGNATURE);
@@ -44,6 +45,7 @@ mod tests {
         exe.extend_from_slice(&((1u32 << 16) | 4).to_le_bytes());
         exe.extend_from_slice(&((2u32 << 16) | 77).to_le_bytes());
         assert_eq!(exe_version(&exe).as_deref(), Some("1.4.2"));
+        // program-files: in memory
         assert_eq!(exe_version(b"MZ no resources"), None);
         assert_eq!(exe_version(&exe[..exe.len() - 2]), None);
     }

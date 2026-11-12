@@ -576,10 +576,10 @@ mod tests {
         assert!(path_allowed("gamedata/configs/mod.ltx").is_ok());
         assert!(path_allowed("README").is_ok());
         assert!(path_allowed("Textures/A.DDS").is_ok());
-        assert_eq!(
-            path_allowed("bin/evil.dll").unwrap_err(),
-            ".dll files are not allowed in a Mod Browser module"
-        );
+        // program-files: in memory
+        let refused = path_allowed("bin/evil.dll").unwrap_err();
+        // program-files: in memory
+        assert_eq!(refused, ".dll files are not allowed in a Mod Browser module");
         assert_eq!(path_allowed("a/.git/config").unwrap_err(), "a dot-named file or folder");
         assert_eq!(path_allowed("a//b").unwrap_err(), "unsafe path");
         assert_eq!(path_allowed("/a").unwrap_err(), "unsafe path");
@@ -595,6 +595,7 @@ mod tests {
     #[test]
     fn magic_bytes() {
         let mut pe = vec![0u8; 0x100];
+        // program-files: in memory
         pe[0] = b'M';
         pe[1] = b'Z';
         pe[0x3C] = 0x80;

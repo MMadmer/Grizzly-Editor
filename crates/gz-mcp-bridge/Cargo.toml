@@ -16,3 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json.workspace = true
+
+[build-dependencies]
+gz-ico.workspace = true

@@ -51,7 +51,7 @@ impl Rsrc {
     }
 }
 
-fn read_rsrc(file: &mut File) -> Option<Rsrc> {
+fn read_rsrc(file: &mut (impl Read + Seek)) -> Option<Rsrc> {
     let mut head = vec![0u8; 4096];
     let n = file.read(&mut head).ok()?;
     head.truncate(n);
@@ -98,8 +98,12 @@ fn read_rsrc(file: &mut File) -> Option<Rsrc> {
 /// `MAJOR.MINOR.PATCH` of an executable's file version; `None` when it carries none.
 #[must_use]
 pub fn exe_version(path: &Path) -> Option<String> {
-    let mut file = File::open(path).ok()?;
-    let rsrc = read_rsrc(&mut file)?;
+    version_of(&mut File::open(path).ok()?)
+}
+
+/// [`exe_version`] of an executable read from `file`.
+fn version_of(file: &mut (impl Read + Seek)) -> Option<String> {
+    let rsrc = read_rsrc(file)?;
     // the resource tree: type, name, language
     let dir_of = |target: u32| (target & 0x8000_0000 != 0).then_some((target & 0x7FFF_FFFF) as usize);
     let types = dir_of(rsrc.entry(0, Some(RT_VERSION))?)?;
@@ -132,9 +136,10 @@ pub fn linked_game_version(game_root: &str) -> String {
 mod tests {
     use super::*;
 
-    /// A minimal PE32+ with one section holding a version resource.
+    /// A minimal PE32+ with one section holding a version resource, in memory only.
     fn fake_exe(ms: u32, ls: u32) -> Vec<u8> {
         let mut f = vec![0u8; 0x400];
+        // program-files: in memory
         f[0] = b'M';
         f[1] = b'Z';
         f[0x3C] = 0x80;
@@ -178,13 +183,12 @@ mod tests {
 
     #[test]
     fn reads_the_file_version() {
-        let dir = std::env::temp_dir().join(format!("gz-release-ver-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("xrEngine.exe"), fake_exe((1 << 16) | 4, 2 << 16 | 7)).unwrap();
-        assert_eq!(linked_game_version(&dir.to_string_lossy()), "1.4.2");
-        std::fs::write(dir.join("xrEngine.exe"), b"not a program").unwrap();
+        let read = |bytes: Vec<u8>| version_of(&mut std::io::Cursor::new(bytes));
+        assert_eq!(read(fake_exe((1 << 16) | 4, 2 << 16 | 7)).as_deref(), Some("1.4.2"));
+        assert_eq!(read(b"not a program".to_vec()), None);
+        // a game folder without the executable, and no game at all
+        let dir = std::env::temp_dir().join(format!("gz-release-no-game-{}", std::process::id()));
         assert_eq!(linked_game_version(&dir.to_string_lossy()), "");
         assert_eq!(linked_game_version(""), "");
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

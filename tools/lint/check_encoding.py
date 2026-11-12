@@ -32,8 +32,6 @@ import sys
 
 # Third-party trees keep whatever encoding upstream chose; they are not ours to fix.
 SKIP_DIRS = (
-    'sdk/',
-    'source/external/',
     'externals/',
 )
 
