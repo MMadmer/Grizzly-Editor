@@ -130,5 +130,9 @@ else
     echo "icon: no release build in $release (pwsh -NoProfile -File ./Build.ps1), not checked"
 fi
 
+# ---- the third-party notices are what the lock file gives ----
+echo "== notices"
+python tools/rust/notices.py --check || bad=1
+
 [ $bad -eq 0 ] && echo "check: ok" || echo "check: FAILED"
 exit $bad
