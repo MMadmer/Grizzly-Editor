@@ -2492,6 +2492,41 @@ On the final tree, 19:3x - 19:47, the debug build (the measurements the fast bui
 - At the end (19:47): `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 17:54'` - nothing; no
   Grizzly, game or mock process left; no `gzmc_*` folder in the temp folder. Nothing under `Bin\` written.
 
+## The lead's run on the release build, before the final review
+
+12 Nov, 19:49 - 20:02, commit `d0ea0509`, one after another (`Intermediate/final/`, `summary.txt` and a log per
+step), `GRIZZLY_QA_EXE` and `GRIZZLY_LC_EXE` naming `Bin\x64\Release\Grizzly.exe`:
+
+| Step | Result | Time |
+|---|---|---|
+| `Build.ps1` | the two programs, their PDBs, the notices | 230 s |
+| `check.sh` | ok (clippy, fmt, `unsafe`, the registry, encodings, test files, the icon) | 18 s |
+| `test.sh --all` | 78 binaries, 1162 tests green | 69 s |
+| `diff_editors.py --all` | 10 scenarios, 755 steps, 746 written files, 0 differ | 41 s |
+| `diff_compile.py --all` | mp_test, l12u_control_monolith, mp_close_combat, l03u_agr_underground PASS (the release build compiles l12u in 38.4 s, l03u in 22.4 s) | 208 s |
+| `run_all.py --with-game` | 23 suites, 22 passed (`test_play_game` 68.5 s) | 167 s |
+
+Nothing changed under `D:\XFinedProjects` or the game's `modules`; no process of the run left.
+
+**The one failure was a real fault: a dirty quest tab closed without a refusal** (`test_mcp_bridge` E: `ui_tab
+action=close` answered `ok` for a quest edited over MCP, and the edit was gone). A graph tab opened for a document
+that is not open yet loads it on the IO pool into a slot and takes the handle in its next frame; `dirty()`,
+`save_now` and `discard` asked the tab's own copy of the handle. With frames drawn on demand ("After phase 8c") an
+edit over MCP reaches the document before any frame of the tab; the last pass's fix read the slot, which is still
+empty while the tab's own open task has not ended - under the load of 23 suites side by side it had not. The
+service holds the one handle of a path, so the tab now asks it (`GraphTab::shared`: its own handle once a frame took
+it, else `NqService::get_doc`): a close refuses, Save saves, Don't Save reloads, whatever the tab has drawn. On the
+rebuilt release binary `test_mcp_bridge` beside six other suites: 3 of 3 (5 of 5 alone on the debug build).
+
+**`test_stress` kept a connection per request** (5,477 a run): three runs within two minutes, beside the other
+suites, left 15,185 sockets in TIME_WAIT of the machine's 16,384 client ports, and the third run failed with
+WinError 10048 on its own `connect` - the harness's fault, not the editor's. Each of its threads now keeps one
+connection (the server answers any number of requests on one; a connection the server closed is opened again
+once): three runs back to back pass, TIME_WAIT falls during them, and the flood is 18,782 requests a run.
+
+The seven suites after these two fixes ran on the rebuilt release binary; the other sixteen and the four other
+steps ran on the binary before them (`d0ea0509`), which differs in `crates/gz-ui-graph/src/tab.rs` alone.
+
 ## For the plan
 
 What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits

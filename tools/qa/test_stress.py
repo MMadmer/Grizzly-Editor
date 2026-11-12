@@ -38,13 +38,33 @@ def check(ok, text: str, detail: str = "") -> bool:
     return bool(ok)
 
 
+_own = threading.local()
+
+
+def _drop() -> None:
+    s = getattr(_own, "sock", None)
+    _own.sock = None
+    if s is not None:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
 def call(cmd: str, timeout: float = 20.0, **extra) -> tuple[dict | None, float, str]:
-    """One request on a connection of its own: the answer (None when it is no JSON object), the
-    seconds it took, and what went wrong."""
+    """One request on the calling thread's own connection: the answer (None when it is no JSON object), the
+    seconds it took, and what went wrong. Every thread keeps one connection for its requests - the flood is
+    several connections at once, as an agent's clients are; a connection per request (thousands a run) used up
+    the machine's client ports when the suite ran twice in a row (WinError 10048)."""
     payload = dict(cmd=cmd, **extra)
     t0 = time.monotonic()
-    try:
-        with socket.create_connection(qa_target.MCP, timeout=5) as s:
+    buf = b""
+    for attempt in (0, 1):
+        kept = getattr(_own, "sock", None) is not None
+        try:
+            if not kept:
+                _own.sock = socket.create_connection(qa_target.MCP, timeout=5)
+            s = _own.sock
             s.settimeout(timeout)
             s.sendall((json.dumps(payload) + "\n").encode())
             buf = b""
@@ -53,10 +73,21 @@ def call(cmd: str, timeout: float = 20.0, **extra) -> tuple[dict | None, float, 
                 if not chunk:
                     break
                 buf += chunk
-    except socket.timeout:
-        return None, time.monotonic() - t0, "no answer within %.0f s" % timeout
-    except OSError as e:
-        return None, time.monotonic() - t0, "transport: %s" % e
+        except socket.timeout:
+            # its answer may still come: the connection is not used again
+            _drop()
+            return None, time.monotonic() - t0, "no answer within %.0f s" % timeout
+        except OSError as e:
+            _drop()
+            if kept and attempt == 0:
+                continue
+            return None, time.monotonic() - t0, "transport: %s" % e
+        if not buf.endswith(b"\n"):
+            _drop()
+            # the server closed a connection kept from an earlier request: once more on a new one
+            if kept and attempt == 0 and not buf:
+                continue
+        break
     dt = time.monotonic() - t0
     try:
         v = json.loads(buf.decode("utf-8"))

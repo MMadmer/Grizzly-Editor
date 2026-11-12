@@ -281,6 +281,14 @@ impl GraphTab {
         self.pending.load(Ordering::Acquire)
     }
 
+    /// The document whatever this tab has drawn so far: its own handle once a frame took it,
+    /// else the service's. The service holds the one handle of a path, and a command over MCP
+    /// reaches the document before any frame of the tab - so what closes, saves or discards a
+    /// tab never asks the tab's own copy alone.
+    fn shared(&self) -> Option<Arc<DocHandle>> {
+        self.doc.clone().or_else(|| NqService::of(&self.editor).ok()?.get_doc(&self.wire))
+    }
+
     fn take_loaded(&mut self) {
         if self.doc.is_some() {
             return;
@@ -1232,7 +1240,7 @@ impl GraphTab {
 
     /// Saves (`Save`): refused at once when the file changed on disk, else written on the IO pool.
     pub fn save_now(&mut self, ctx: &egui::Context) -> Result<(), String> {
-        let Some(doc) = self.doc.clone() else { return Ok(()) };
+        let Some(doc) = self.shared() else { return Ok(()) };
         if self.data.external {
             self.set_message("Not saved: the file changed on disk", Tone::Warning);
             return Err(
@@ -1496,12 +1504,7 @@ impl Document for GraphTab {
     }
 
     fn dirty(&self) -> bool {
-        // a document loaded since the tab last drew is still in the slot: an edit made over MCP
-        // before that frame counts all the same (frames run only when something asks for one)
-        match &self.doc {
-            Some(d) => d.is_dirty(),
-            None => self.slot.lock().as_ref().is_some_and(|r| r.as_ref().is_ok_and(|d| d.is_dirty())),
-        }
+        self.shared().is_some_and(|d| d.is_dirty())
     }
 
     fn dirty_elsewhere(&self) -> bool {
@@ -2081,7 +2084,7 @@ impl Document for GraphTab {
 
     fn discard(&mut self, _cx: &mut DocCx<'_>) {
         // Don't Save puts the file's content back
-        if let Some(doc) = self.doc.clone() {
+        if let Some(doc) = self.shared() {
             let ed = self.editor.clone();
             let _task = self.editor.exec.spawn(async move {
                 if let Ok(svc) = NqService::of(&ed) {
