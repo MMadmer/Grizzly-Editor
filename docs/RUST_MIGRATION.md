@@ -259,8 +259,13 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - Tooling entries (dot-names, `Thumbs.db`, ...) are filtered in the walk itself - one place
   for the browser, the asset index and the build.
 - Text is UTF-8 inside; cp1251 is converted explicitly where the game's files are read or
-  written. `ProjectPath` and `GamePath` are distinct types, so a game path cannot be written
-  to.
+  written.
+- **The game's own files are never written.** Every writer of the editor - the project's file
+  operations, the module build and the flat export, the level exports, the level build, the
+  release stage, the compilers' stage and Play's game root - passes one guard
+  (`gz_editor::fsx::WriteGuard`) before it writes: nothing under the linked game's root, judged
+  as written and where the path really is, except the module's `modules\<id>` (with its stage
+  in `modules\.new`) and the flat `gamedata_<id>`.
 
 ### 5.10 Errors, crashes, log
 
@@ -384,7 +389,8 @@ held to it by the proof in the last column.
 | `.pdaasset` | `docs/pda/PDA_FORMAT.md` | the game's `xms_pda_layout.script` executed unchanged; `test_pda.py`; game `test_pda_layout.lua` |
 | Screens and music files | game `MODDING.md`, "Screens and music" | `test_screens.py`; game `Run-ScreensQa.ps1` |
 | `.xspawn`, `spawn\custom_data\*.ltx`, `overlay_visuals.ltx` | game `MODDING.md`, "World rules" | byte-equal to the oracle on the Escape scene (`tools/qa/diff_editors.py`, scenario `s6_scene`) |
-| `overlay.xcform`, the cut, AI map and game graph fragments, exported `.ogf` | game `XMS_ARCHITECTURE.md` | equal to the oracle under the rules below (`diff_editors.py`; golden files in `gz-export-level/tests`) |
+| `overlay.xcform`, the cut, exported `.ogf`, the AI map | game `XMS_ARCHITECTURE.md` | equal to the oracle under the rules below (`diff_editors.py`; golden files in `gz-export-level/tests`) |
+| What Play builds: the collision, the game graph, the cross table, `editor.spawn` | engine formats | the game loads the level (`tools/qa/test_play_game.py`: a new game, the player, the level's geometry and collision, synchronised); a unit test holds what the game's loader relies on. The C++ editor has these on toolbar buttons with no command, so there is no oracle record |
 | The installed module (`modules\<id>`, `.new\<id>`, hard links, tooling left out) | this repository's rules, game `xms_core.cpp` | `test_build_job.py`, `test_build_contents.py`; file set and bytes equal to the oracle (`diff_editors.py`, 497 files); one in-game run of the game's `PdaModule` scenario on a module the Rust editor built |
 | Flat export `gamedata_<id>` | - | file set and bytes equal to the oracle |
 | `<id>.update.ltx`, `<id>-<version>.files`, the packages | game `MOD_UPDATES.md` - **frozen** | descriptor and index equal to the oracle except the fields that state bytes on disk; the index read back from the finished archive and each record's range checked (`gz-release`); `test_mod_publish.py` against the mock. The game's `Run-ModsQa.ps1` makes its own releases and takes no outside one, so it proves the game's side only |
@@ -408,10 +414,19 @@ byte unless named here; there is no broad ignore (`diff_editors.py` `FILE_RULES`
   material's `reserved` and `area`, an unset `Flight`).
 - `level.spawn`: the Rust build's breakable and climable entries are extra (D10); a smart
   cover's loopholes as a set (the C++ order is Lua's `pairs`).
+- A portal of `build.prj`: sectors and corner counts equal, corners within 0.1 mm (the corners go
+  onto the portal's plane and back in float with the operations in another order); a portal
+  simplified from more than six corners passes when the two polygons' areas agree within 2 %.
+- `build.details`: a model's UVs up to one shift of its own, and `build_details.dds` tile by
+  tile within DXT5's error - the atlas is packed in an order the C++ takes from string
+  addresses (D14), and the encoder is another.
 - `level_stat.txt` / `.tga`, read by no compiler and not by the game: the maxima within 0.5 %.
 
-With every file equal under these rules the compilers get the same input; no level was compiled
-from both outputs. **A level build writes into the open project** (`gamedata\levels\<level>`,
+Compared this way: Make All on Escape and on `l10_limansk` (79 sectors, 274 portals, 251001
+detail slots, 127 wallmarks), and the Build menu's Make Game, Make AI Map, Make Details, Make
+HOM and Make SOM one at a time. With every file equal under these rules the compilers get the
+same input; the level that Play builds is compiled by the repository's `XrLC` and loaded by the
+game. **A level build writes into the open project** (`gamedata\levels\<level>`,
 `gamedata\spawns`) and never into the game; the level path is one folder name, and a level
 folder is wiped only when its real path lies below the project's levels folder and is no link.
 
@@ -608,7 +623,7 @@ bug.
 
 | # | Difference | Why |
 |---|---|---|
-| D1 | **Play in Editor starts the game.** Play bakes the scene and runs the real game on it as a job, the path Play on PC takes today, instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. |
+| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level with the repository's compilers (from a stage in the project's `temp\compilers`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the executables, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. |
 | D2 | **The viewport is drawn by the editor's own materials**, not by the R1 blenders. | 5.8. What an author judges - geometry, textures, transparency, placement - stays. |
 | D3 | The editor's own settings (window, layout, preferences) live in new files; nothing is migrated. | The editor has not shipped; the existing rule. |
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |
@@ -626,6 +641,7 @@ bug.
 | D16 | Faults of the C++ editor are not repeated: the particle library holds all of Dead Air's `particles.xr` (the C++ `CPSLibrary::Load` stopped at the first short `TargetColor`: 1035 names of 1428); the unsigned-release sentence is a warning of its own (the C++ glued it to the last build warning); `scene_visibility` takes a JSON boolean. | Each was an accident of the code, not a behaviour anyone relied on. |
 | D17 | A ray pick hits the scene whatever the camera sees (`probe_vertical`, `scan_walls`, `drop_objects`, way point snapping). | The C++ `CSceneObject::RayPick` skipped objects outside the camera's view, so an MCP answer depended on where a minimised window happened to look. |
 | D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
+| D23 | Play's game graph is the linked game's graph with the level appended (the game's vertex numbers and graph guid unchanged), the way the game adds a module's level; a scene named like a level the game already has keeps the C++ single-level graph. | Dead Air's own start scripts spawn on fixed vertices of the game's graph; on the C++ editor's one-level graph the game stops there. |
 | D20 | The level path is one folder name; anything else is refused when typed and by the build. | The C++ took any text and concatenated it; a path that leaves the levels folder would be wiped by Make All. |
 | D21 | Make All builds a scene that holds an object in visual mode. | The C++ `BuildHOMModel` asserts on it. |
 | D22 | A shape that Attach on Click detaches from a spawn point gets a free `shape` name. | The C++ appended it nameless. |
