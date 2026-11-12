@@ -512,10 +512,12 @@ fn a_detail_slot_is_lit_at_its_points_and_its_corners_decide_its_objects() {
     let stats = light_details(&scene, &mut slots, None, &Ctl::quiet()).unwrap();
     assert_eq!(stats, DetailStats { lit: 4, empty: 0, no_ground: 0 });
     // the free slots: sun 1 and sky 1 at each of the 225 points, the mean halved: 0.5 is
-    // floor(7.5) = 7 of 15; the roofed one: 0
+    // floor(7.5) = 7 of 15; the roofed one: 0. The two beside the roof have their row of 15
+    // points on the roof's edge: a vertical ray there meets the edge (its origin on the roof's
+    // box face along a still axis, as the C++'s slab test takes it), 210 of 225 lit: 6
     assert_eq!(slots[0].colors(), [7, 7, 0, 0, 0]);
-    assert_eq!(slots[1].colors(), [7, 7, 0, 0, 0]);
-    assert_eq!(slots[2].colors(), [7, 7, 0, 0, 0]);
+    assert_eq!(slots[1].colors(), [6, 6, 0, 0, 0]);
+    assert_eq!(slots[2].colors(), [6, 6, 0, 0, 0]);
     assert_eq!(slots[3].colors(), [0, 0, 0, 0, 0]);
     // a square that holds only the first slot lights only that one
     let (scene, mut slots) = detail_scene();

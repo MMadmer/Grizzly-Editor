@@ -12,8 +12,10 @@
 //! **The cached triangle.** The C++ keeps, per light, the opaque triangle that last stopped a
 //! ray and tests it before the tree; that state lives in the shared light and makes the answer
 //! depend on which texel came first. Here the cache is the worker's ([`LightCache`]) and is
-//! tested with the tree's own triangle test, never for the skipped face, so a cached answer is
-//! the answer the tree would give: the light is the same on any number of threads.
+//! tested with the tree's own box and triangle tests (`ray_triangle`: a hit there is a hit of the
+//! walk, whose box test is monotonic in the box), never for the skipped face, so a cached answer
+//! is the answer the tree would give: the light is the same on any number of threads, whatever
+//! the rays traced before. A cold and a warm cache, in either order, are tested to agree.
 
 use std::ops::ControlFlow;
 
@@ -466,6 +468,83 @@ mod tests {
             culled.trace(&textures, &mut hits, &mut c2, Vec3::new(0.0, 3.0, 0.0), -up, 10.0, None);
         let from_below = culled.trace(&textures, &mut hits, &mut c2, Vec3::ZERO, up, 10.0, None);
         assert!(from_above != from_below, "one side must be culled");
+    }
+
+    /// The cache saves work and never changes an answer: rays traced with a cold cache each, with
+    /// one warm cache in order, and with one warm cache in the reverse order give the same light.
+    /// The rays are the review's case - vertical and horizontal ones through corners and edges of
+    /// a grid, origins on box faces - among oblique ones.
+    #[test]
+    fn a_warm_cache_answers_as_a_cold_one_in_any_order() {
+        // a stack of ceilings and walls on a half-metre grid, some transparent
+        let mut verts = Vec::new();
+        let mut tris = Vec::new();
+        let mut faces = Vec::new();
+        let mut s = 0x9E37_79B9u32;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            s
+        };
+        for i in 0..300u32 {
+            let mut g = || (next() % 13) as f32 * 0.5;
+            let (x, y, z) = (g(), g(), g());
+            let (a, b) = (g() * 0.5 + 0.5, g() * 0.5 + 0.5);
+            let base = verts.len() as u32;
+            match i % 3 {
+                0 => verts.extend([Vec3::new(x, y, z), Vec3::new(x + a, y, z), Vec3::new(x, y, z + b)]),
+                1 => verts.extend([Vec3::new(x, y, z), Vec3::new(x, y + a, z), Vec3::new(x + b, y, z)]),
+                _ => verts.extend([Vec3::new(x, y, z), Vec3::new(x, y, z + a), Vec3::new(x, y + b, z)]),
+            }
+            tris.push([base, base + 1, base + 2]);
+            faces.push(RayFace { face: Some(FaceId(i)), ..face(i % 4 != 0) });
+        }
+        let tex = BuildTexture {
+            width: 2,
+            height: 2,
+            has_alpha: true,
+            surface: Some(vec![0x8000_0000, 0x4000_0000, 0xC000_0000, 0x1000_0000]),
+            ..BuildTexture::default()
+        };
+        let textures = [tex];
+        let model = RayModel::new(&verts, &tris, faces, Opacity::Squared, false).unwrap();
+
+        let mut rays = Vec::new();
+        for (i, p) in verts.iter().enumerate() {
+            let dirs = [Vec3::Y, Vec3::NEG_Y, Vec3::X, Vec3::NEG_Z, Vec3::new(0.3, 0.9, -0.2).normalize()];
+            let d = dirs[i % dirs.len()];
+            let skip = (i % 7 == 0).then_some(FaceId((i / 3) as u32));
+            rays.push((*p - d * 0.5, d, 8.0, skip));
+            rays.push((*p + Vec3::new(0.25, 0.0, 0.0) - d * 0.5, d, 8.0, None));
+        }
+        let cold: Vec<f32> = rays
+            .iter()
+            .map(|&(p, d, r, skip)| {
+                let (mut hits, mut cached) = (Vec::new(), NO_TRI);
+                model.trace(&textures, &mut hits, &mut cached, p, d, r, skip)
+            })
+            .collect();
+        let warm = |order: &mut dyn Iterator<Item = usize>| {
+            let (mut hits, mut cached) = (Vec::new(), NO_TRI);
+            let mut out = vec![f32::NAN; rays.len()];
+            for i in order {
+                let (p, d, r, skip) = rays[i];
+                out[i] = model.trace(&textures, &mut hits, &mut cached, p, d, r, skip);
+            }
+            out
+        };
+        let forward = warm(&mut (0..rays.len()));
+        let backward = warm(&mut (0..rays.len()).rev());
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&forward), bits(&cold), "a warm cache in order");
+        assert_eq!(bits(&backward), bits(&cold), "a warm cache in reverse");
+        let shadowed = cold.iter().filter(|&&x| x == 0.0).count();
+        let partial = cold.iter().filter(|&&x| x > 0.0 && x < 1.0).count();
+        assert!(
+            shadowed > 50 && partial > 20,
+            "{shadowed} shadowed, {partial} partly lit: the test proves little"
+        );
     }
 
     #[test]

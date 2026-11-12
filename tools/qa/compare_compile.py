@@ -37,13 +37,48 @@ Rules (one per chunk; anything else is byte for byte):
                       and sliding windows byte for byte, but in level.geomx the fast path of a visual that is not
                       progressive (D3DX9's D3DXOptimizeFaces, closed code; here Forsyth's linear-speed vertex cache
                       order) as a multiset of triangles by corner positions, with the same vertex positions.
-  lightmaps           each lit texel of every lightmapped triangle sampled in both pages through the triangle's own
-                      lightmap coordinates (deflectors may sit elsewhere in a page): mean absolute error and the 99th
-                      percentile per channel, against bounds set from the C++ run-to-run floor (cpp1 against cpp2).
-  implicit textures   texel by texel (the layout is the texture's own).
+  lightmaps           the same pages on both sides; each texel centre inside every lightmapped triangle sampled in
+                      both pages through the triangle's own lightmap coordinates (deflectors may sit elsewhere in a
+                      page); a FLAT triangle - its coordinates a line or a point, a deflector the light found flat and
+                      shrank (about half of all) - by the texels along its longest side, or the one under it, again
+                      through each side's own coordinates (flat_samples). Mean absolute error and 99th percentile per
+                      channel over all samples, under the bounds below; the flat ones are reported on their own too.
+                      The second picture's colour is the sun once more, which the first picture's alpha holds already
+                      in DXT5's eight levels; the colour is one of four a block shares, so a block of lit and
+                      shadowed texels can lose a shadow there. On 2.r/g/b each side's own disagreement between its two
+                      copies of the sun is the encoder's and is taken off (sun_copy_rule; mp_test's shrunk deflector
+                      at (309, 0): the C++ alpha 0, its colour 33 from the block's colours 123/93/63/33, the Rust 0 in
+                      both - the C++ wrote 0 before its encoder, as its own alpha shows).
+  implicit textures   texel by texel (the layout is the texture's own), under the lightmap bounds.
   recalculation_data_slots.details   the C++ detail compiler's state for its partial relight, read by nothing but
                       its own next run: not written (the resumed light is not ported).
-  level.details       slot by slot: heights, ids and palette byte for byte, the five 4-bit colours within the bounds.
+  level.details       byte for byte (the slots are compared one by one only to say where a difference is).
+  deflectors on other pages   with more than one lightmap page a deflector's size follows its light (compress_Zero,
+                      compress_RMS shrink a layer whose light varies little), so a light difference moves the
+                      deflectors after it to another page and a material on two pages is two visuals (paged): then
+                      the static triangles are compared as one multiset (material without the page, every vertex byte
+                      but the light and the lightmap coordinates), level.geomx's fast paths as one multiset of
+                      triangles by corner positions, the level's header, portals, lights, glows and the sectors'
+                      portals byte for byte; the visuals' split, order and spheres, the hierarchy nodes and the
+                      sectors' root visual follow the visual list and are left out. The light through the matched
+                      triangles: vertex light under the vertex bounds, lightmaps through each side's page.
+
+Recorded (diff_compile.py SCENES) and what stays unproven - CBuild::Run of cpp-compilers-last, phase by phase:
+  Load, build.lights, Optimizing (PreOptimize, CorrectTJunctions), Adaptive HT, Building normals (smoothing groups),
+  collision database (BuildCForm, QSlim), tangent basis, rcast-CFORM model, Resolving materials, UV mapping,
+  Subdividing, LMaps, Vertex light, Merging geometry, Building sectors, Saving: every scene.
+  Portals and several sectors: l12u_control_monolith (26 sectors) and l03u_agr_underground (31). Glows: every scene.
+  LIGHT: Starting MU / Converting MU-models to OGFs (MU models, references, LODs): l03u_agr_underground alone, at
+    4 px/m, one jitter sample, -noise. mp_close_combat's MU models crash XrLC (diff_compile.py EMPTIED); what that
+    run wrote before the crash - build.lights byte for byte, build.cform under its rule (its MU references' ray
+    triangles inside), the implicit textures mean 0.05 / p99 1 - was compared once by hand (STATE.md).
+  LIGHT: Implicit: mp_close_combat_implicit alone, at one jitter sample. Merging lightmaps into two pages: the same.
+    More than two pages: none.
+  Converting to OGFs with progressive static visuals: mp_test, l12u, mp_close_combat_implicit; with -noise: l03u.
+  The detail compiler: mp_close_combat (the Rust build.cform), mp_close_combat_implicit (each side's own).
+  Never recorded: the Draft quality (skips the implicit light and the progressive meshes), -nosun, -nosmg,
+    -no_optimize, -att (linear point lights), -no_invalidefaces and the abort on invalid faces, a level with no
+    sun or with transparent shadow casters measured on their own, more than two lightmap pages. Dropped: -gi, -net (D24).
 """
 from __future__ import annotations
 
@@ -55,19 +90,24 @@ from collections import Counter
 
 import numpy as np
 
-VERSION = 5
+VERSION = 7
 
-# The bounds of the light, per channel in 0..255 steps (mean absolute error, 99th percentile). The C++ compiler's
-# floor (cpp1 against cpp2) is zero; the bounds are what the Rust compiler is allowed to differ in: the DXT5 encoder
-# (the C++ NVTT, here texpresso - a flat 128 decodes as 126 against 128, a third of a 5-bit step, 2.7), another
-# ray-triangle test than Opcode's on grazing and coincident faces, the transparencies multiplied nearest first,
-# Rust's sin/cos/pow. Measured values are in STATE.md.
-LIGHT_MEAN = 3.0
+# The bounds of the light, per channel in 0..255 steps (mean absolute error, 99th percentile), about twice the largest
+# seen over every recorded scene (flat triangles included, the sun-copy rule applied):
+#   lightmaps and implicit textures  seen mean 0.68 (l12u_control_monolith, 1.r), p99 8 (l12u_control_monolith, 1.r
+#                                    and 1.b); the implicit texture 0.02 / 1 (mp_close_combat_implicit)
+#   vertex light, MU models' light   seen mean 0.085 (mp_close_combat_implicit, level.geom), p99 1
+#                                    (l03u_agr_underground, the LODs of the references lit alone)
+#   the detail objects' light        level.details byte for byte on every scene: no bound
+# The C++'s own two runs are the floor: zero but on the shrunk (flat) deflectors, where they differ in one texel of
+# a thousand or less by up to 127 (l03u, l12u, mp_close_combat_implicit) - most likely the cached triangle of the C++ light
+# (xrDeflectorLight.cpp rayTrace, R_Light::tri), which every thread writes. What the bounds allow is the DXT5 encoder
+# (NVTT there, texpresso here: a flat 128 decodes as 126 against 128), another ray-triangle test than Opcode's on
+# grazing and coincident faces, the transparencies multiplied nearest first, Rust's sin/cos/pow.
+LIGHT_MEAN = 1.5
 LIGHT_P99 = 16.0
-VERTEX_MEAN = 2.0
-VERTEX_P99 = 16.0
-DETAIL_MEAN = 0.5
-DETAIL_P99 = 2.0
+VERTEX_MEAN = 0.2
+VERTEX_P99 = 2.0
 
 
 def chunks(data: bytes) -> list[tuple[int, bytes]]:
@@ -469,25 +509,62 @@ def lmap_triangles(level: bytes, geom: bytes) -> list[tuple[str, np.ndarray]]:
     return out
 
 
+FLAT = 1e-9
+
+
+def flat_samples(p: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A triangle whose lightmap coordinates collapse to a line or a point (`p` in texel units, texel centres on
+    the integers): the texels along its longest side, or the one under it, each with the barycentrics of the point
+    that fell into it first. Answers (texels (n, 2), barycentrics (n, 3))."""
+    pairs = [(0, 1), (1, 2), (2, 0)]
+    i, j = max(pairs, key=lambda e: float(np.linalg.norm(p[e[1]] - p[e[0]])))
+    length = float(np.linalg.norm(p[j] - p[i]))
+    if length < 1e-6:
+        bary = np.full((1, 3), 1.0 / 3.0)
+    else:
+        # four points per texel the side crosses: every texel it passes through is met
+        s = np.linspace(0.0, 1.0, int(np.ceil(length * 4)) + 1)
+        bary = np.zeros((len(s), 3))
+        bary[:, i] = 1.0 - s
+        bary[:, j] = s
+    q = bary @ p
+    texels = np.floor(q + 0.5).astype(int)
+    _, first = np.unique(texels, axis=0, return_index=True)
+    first.sort()
+    return texels[first], bary[first]
+
+
 def sample_pages(tris_a, tris_b, pages_a, pages_b):
     """Every texel centre inside each C++ triangle, looked up in the C++ page and, through the same barycentrics, in
-    the Rust one. Answers the two value arrays (n, 8) and the samples' C++ page positions."""
-    va, vb, where = [], [], []
-    for (pa, ta), (pb, tb) in zip(tris_a, tris_b):
-        if pa not in pages_a or pb not in pages_b or ta.shape != tb.shape:
+    the Rust one; a flat triangle (its lightmap coordinates a line or a point) by the texels along it
+    (`flat_samples`). Answers the two value arrays (n, 8), the samples' C++ page positions and which samples came
+    from flat triangles."""
+    pairs = [(pa, t1, pb, t2) for (pa, ta), (pb, tb) in zip(tris_a, tris_b) if ta.shape == tb.shape
+             for t1, t2 in zip(ta, tb)]
+    return sample_pairs(pairs, pages_a, pages_b)
+
+
+def sample_pairs(pairs, pages_a, pages_b):
+    """`sample_pages` over matched triangles: (C++ page, its coordinates, other page, its coordinates)."""
+    va, vb, where, flats = [], [], [], []
+    for pa, t1, pb, t2 in pairs:
+        if pa not in pages_a or pb not in pages_b:
             continue
         A, B = pages_a[pa], pages_b[pb]
         h, w = A.shape[:2]
-        for t1, t2 in zip(ta, tb):
-            p = t1 * np.array([w, h]) - 0.5
+        hb, wb = B.shape[:2]
+        p = t1 * np.array([w, h]) - 0.5
+        v0, v1 = p[1] - p[0], p[2] - p[0]
+        den = v0[0] * v1[1] - v1[0] * v0[1]
+        if abs(den) < FLAT:
+            pts, bary = flat_samples(p)
+            l0, l1, l2 = bary[:, 0], bary[:, 1], bary[:, 2]
+            flat = True
+        else:
             lo = np.floor(p.min(axis=0)).astype(int)
             hi = np.ceil(p.max(axis=0)).astype(int)
             xs, ys = np.meshgrid(np.arange(lo[0], hi[0] + 1), np.arange(lo[1], hi[1] + 1))
             pts = np.stack([xs.ravel(), ys.ravel()], axis=1).astype(np.float64)
-            v0, v1 = p[1] - p[0], p[2] - p[0]
-            den = v0[0] * v1[1] - v1[0] * v0[1]
-            if abs(den) < 1e-9:
-                continue
             d = pts - p[0]
             l1 = (d[:, 0] * v1[1] - v1[0] * d[:, 1]) / den
             l2 = (v0[0] * d[:, 1] - d[:, 0] * v0[1]) / den
@@ -496,18 +573,21 @@ def sample_pages(tris_a, tris_b, pages_a, pages_b):
             if not inside.any():
                 continue
             pts, l0, l1, l2 = pts[inside].astype(int), l0[inside], l1[inside], l2[inside]
-            ok = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] < h)
-            pts, l0, l1, l2 = pts[ok], l0[ok], l1[ok], l2[ok]
-            q = (t2[0][None] * l0[:, None] + t2[1][None] * l1[:, None] + t2[2][None] * l2[:, None])
-            hb, wb = B.shape[:2]
-            qx = np.clip(np.floor(q[:, 0] * wb).astype(int), 0, wb - 1)
-            qy = np.clip(np.floor(q[:, 1] * hb).astype(int), 0, hb - 1)
-            va.append(A[pts[:, 1], pts[:, 0]])
-            vb.append(B[qy, qx])
-            where.append((pa, pts))
+            flat = False
+        ok = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] < h)
+        pts, l0, l1, l2 = pts[ok], l0[ok], l1[ok], l2[ok]
+        if not len(pts):
+            continue
+        q = (t2[0][None] * l0[:, None] + t2[1][None] * l1[:, None] + t2[2][None] * l2[:, None])
+        qx = np.clip(np.floor(q[:, 0] * wb).astype(int), 0, wb - 1)
+        qy = np.clip(np.floor(q[:, 1] * hb).astype(int), 0, hb - 1)
+        va.append(A[pts[:, 1], pts[:, 0]])
+        vb.append(B[qy, qx])
+        where.append((pa, pts))
+        flats.append(np.full(len(pts), flat))
     if not va:
-        return np.zeros((0, 8)), np.zeros((0, 8)), []
-    return np.concatenate(va), np.concatenate(vb), where
+        return np.zeros((0, 8)), np.zeros((0, 8)), [], np.zeros(0, dtype=bool)
+    return np.concatenate(va), np.concatenate(vb), where, np.concatenate(flats)
 
 
 def load_pages(d: str) -> dict[str, np.ndarray]:
@@ -531,14 +611,29 @@ def light_compare(da: str, db: str):
     pa, pb = load_pages(da), load_pages(db)
     if len(ta) != len(tb):
         return None, f"{len(ta)} / {len(tb)} lightmapped visuals", pa, pb, []
-    a, b, where = sample_pages(ta, tb, pa, pb)
-    return (a, b), "", pa, pb, where
+    a, b, where, flat = sample_pages(ta, tb, pa, pb)
+    return (a, b, flat), "", pa, pb, where
 
 
-def channel_stats(a: np.ndarray, b: np.ndarray) -> dict:
+def sun_copy_rule(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """The differences of the samples as judged (n, 8). The second picture's colour is the sun once more (Pack_hemi:
+    the sun in r, g and b), which the first picture's alpha holds already: in DXT5 the alpha is a block of eight
+    levels of its own, the colour one of four colours shared with the block's other texels, so a block holding a
+    lit and a shadowed texel can lose the shadow there (mp_test's flat deflector at (309, 0): the C++ alpha 0, its
+    colour 33 - the encoder's colours 123, 93, 63, 33 - and the Rust 0 in both). On 2.r, 2.g and 2.b each side's own
+    disagreement between its two copies of the sun is the encoder's and is taken off; the rest is judged."""
+    a, b = a.astype(np.int32), b.astype(np.int32)
+    d = np.abs(a - b)
+    for k in (4, 5, 6):
+        own = np.abs(a[:, k] - a[:, 3]) + np.abs(b[:, k] - b[:, 3])
+        d[:, k] = np.maximum(0, d[:, k] - own)
+    return d
+
+
+def channel_stats(a: np.ndarray, b: np.ndarray, d: np.ndarray | None = None) -> dict:
     names = ["1.r", "1.g", "1.b", "1.a(sun)", "2.r", "2.g", "2.b", "2.a(hemi)"]
     out = {}
-    d = np.abs(a.astype(np.int32) - b.astype(np.int32))
+    d = np.abs(a.astype(np.int32) - b.astype(np.int32)) if d is None else d
     for i, n in enumerate(names):
         if d.shape[0] == 0:
             out[n] = {"mean": 0.0, "p99": 0.0, "max": 0}
@@ -700,6 +795,120 @@ def cmp_mu(la: bytes, ga: bytes, lb: bytes, gb: bytes, out: list[str]) -> dict:
 
 # ---------------------------------------------------------------------------------------- the whole
 
+# ---------------------------------------------------------------------------------------- deflectors on other pages
+
+def shader_names(level: bytes) -> list[str]:
+    sh = chunk_map(level).get(2, b"")
+    return [s.decode("cp1251", "replace") for s in sh[4:].split(b"\0")]
+
+
+def without_page(name: str) -> str:
+    return ",".join(p for p in name.split(",") if not p.startswith("lmap#"))
+
+
+def paged(la: bytes, lb: bytes) -> bool:
+    """The two levels hold the same materials but deflectors of some on other lightmap pages: a deflector's size
+    follows its light (compress_Zero / compress_RMS of xrDeflectorLight.cpp shrink a layer whose light varies little),
+    so with more than one page a light difference moves the deflectors after it to the next page, and a material on
+    two pages is two visuals. Then the static geometry is compared as triangles (`paged_compare`)."""
+    na, nb = shader_names(la), shader_names(lb)
+    if na == nb:
+        return False
+    pages = {p for n in na + nb for p in n.split(",") if p.startswith("lmap#")}
+    return len(pages) > 2 and {without_page(n) for n in na} == {without_page(n) for n in nb}
+
+
+def static_triangles(level: bytes, geom: bytes) -> list[dict]:
+    """Every triangle of every visual with a geometry container (static and MU visuals): its key - the material
+    without the page, the corners' vertex bytes but the light and the lightmap coordinates - the corners' light
+    bytes, and for a lightmapped one its page and lightmap coordinates (3, 2)."""
+    names = shader_names(level)
+    buffers, ibs = vbs(geom), ibs_of(geom)
+    out = []
+    for _, v in chunks(chunk_map(level).get(3, b"")):
+        sub = chunk_map(v)
+        h, g = sub.get(1), sub.get(21)
+        if not h or not g:
+            continue
+        sid = struct.unpack_from("<H", h, 2)[0]
+        name = names[sid] if sid < len(names) else ""
+        parts = name.split("/", 1)[-1].split(",")
+        page = next((t[:-2] for t in parts if t.startswith("lmap#") and t.endswith("_1")), None)
+        vb, vs, vc, ib, is_, ic = struct.unpack_from("<6I", g, 0)
+        el, raw = buffers[vb]
+        cols = light_columns(el)
+        lm = next((o for o, t, u, i in el if u == 5 and i == 1), None)
+        skip = set(cols) | (set(range(lm, lm + 4)) if lm is not None else set())
+        rest = [i for i in range(raw.shape[1]) if i not in skip]
+        verts = raw[vs:vs + vc]
+        idx = ibs[ib][is_:is_ + ic].reshape(-1, 3)
+        uv = (verts[:, lm:lm + 4].copy().view("<i2").reshape(-1, 2).astype(np.float64) / 32768.0
+              if lm is not None and page else None)
+        material = without_page(name)
+        for t in idx:
+            out.append({"key": (material,) + tuple(verts[k, rest].tobytes() for k in t),
+                        "light": verts[t][:, cols].astype(np.int32) if cols else None,
+                        "page": page, "uv": uv[t] if uv is not None else None})
+    return out
+
+
+def paged_compare(la: bytes, ga: bytes, lb: bytes, gb: bytes, xa: bytes, xb: bytes, pr: list[str]) -> dict:
+    """The static geometry of two levels whose deflectors sit on other pages: the triangles as a multiset (material,
+    vertices), so the visuals they are split into and their order are left out, and so are the visual tree's
+    hierarchy nodes and the sectors' root visual (both follow the visual list) and the bounding spheres of the visuals
+    (each of its own triangles); level.geomx's fast paths as one multiset of triangles by corner positions. The
+    triangles are matched by their key: their vertex light under the vertex bounds, their lightmap texels through
+    each side's own page and coordinates. Answers the stats and the matched lightmapped triangles."""
+    ta, tb = static_triangles(la, ga), static_triangles(lb, gb)
+    ca, cb = Counter(t["key"] for t in ta), Counter(t["key"] for t in tb)
+    if ca != cb:
+        pr.append(f"level: the static triangles differ ({sum((ca - cb).values())} only in the C++, "
+                  f"{sum((cb - ca).values())} only in the other, of {len(ta)})")
+    by_key: dict = {}
+    for t in tb:
+        by_key.setdefault(t["key"], []).append(t)
+    light, pairs = [], []
+    for t in ta:
+        m = by_key.get(t["key"])
+        if not m:
+            continue
+        u = m.pop(0)
+        if t["light"] is not None and u["light"] is not None and t["light"].shape == u["light"].shape:
+            light.append(t["light"] - u["light"])
+        if t["page"] and u["page"]:
+            pairs.append((t["page"], t["uv"], u["page"], u["uv"]))
+    stats: dict = {"triangles": len(ta), "visuals": [len(chunks(chunk_map(x).get(3, b""))) for x in (la, lb)],
+                   "moved_pages": sum(1 for p, _, q, _ in pairs if p != q)}
+    if light:
+        m, p, x = err_stats(np.concatenate([d.ravel() for d in light]))
+        stats["vertex"] = {"mean": m, "p99": p, "max": x}
+    # the fast paths: every triangle by its corner positions
+    def fast(level: bytes, geomx: bytes) -> Counter:
+        buffers, ibs = vbs(geomx), ibs_of(geomx)
+        out: Counter = Counter()
+        for c in fast_containers(level):
+            if c is None:
+                continue
+            vb, vs, vc, ib, is_, ic = c[0]
+            pos = buffers[vb][1][vs:vs + vc].copy().view("<f4").reshape(-1, 3)
+            for t in ibs[ib][is_:is_ + ic].reshape(-1, 3):
+                out[tuple(sorted(tuple(pos[k].tolist()) for k in t))] += 1
+        return out
+    fa, fb = fast(la, xa), fast(lb, xb)
+    if fa != fb:
+        pr.append(f"level.geomx: the fast paths hold other triangles ({sum((fa - fb).values())} only in the C++, "
+                  f"{sum((fb - fa).values())} only in the other)")
+    # the level's chunks that hold no visual index
+    ma, mb = chunk_map(la), chunk_map(lb)
+    for cid, what in ((1, "header"), (4, "portals"), (6, "lights"), (7, "glows")):
+        if ma.get(cid) != mb.get(cid):
+            pr.append(f"level: chunk {cid} {what} differs")
+    sa, sb = chunk_map(ma.get(8, b"")), chunk_map(mb.get(8, b""))
+    if len(sa) != len(sb) or any(chunk_map(sa[k]).get(1) != chunk_map(sb.get(k, b"")).get(1) for k in sa):
+        pr.append("level: the sectors' portals differ")
+    return {"stats": stats, "pairs": pairs}
+
+
 def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | None) -> dict:
     """One C++ output against another output (the Rust one, or the second C++ run)."""
     res: dict = {"problems": [], "rules": {}, "light": {}, "vertex": {}, "details": {}, "mu": {}}
@@ -713,8 +922,12 @@ def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | No
         pr.append(f"only in the C++ output: {only_a}")
     if only_b:
         pr.append(f"only in the other output: {only_b}")
-    for n in sorted(files_a & files_b):
+    both = files_a & files_b
+    is_paged = {"level", "level.geom", "level.geomx"} <= both and paged(read(da, "level"), read(db, "level"))
+    for n in sorted(both):
         a, b = read(da, n), read(db, n)
+        if is_paged and n in ("level", "level.geom", "level.geomx"):
+            continue
         if n == "build.lights":
             if a != b:
                 pr.append("build.lights differs")
@@ -732,7 +945,11 @@ def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | No
             sets = (read(da, "level"), read(db, "level")) if n == "level.geomx" else None
             cmp_geom(n, a, b, pr, res["vertex"], sets)
         elif n == "level.details":
+            # byte for byte: both detail compilers wrote the same file on every recorded scene; the slots are
+            # compared one by one only to say where they differ
             res["details"] = cmp_details(a, b, pr)
+            if a != b:
+                pr.append(f"level.details differs ({len(a)} / {len(b)} bytes)")
         elif n.startswith("lmap#"):
             continue
         elif n.endswith(".dds"):
@@ -746,13 +963,32 @@ def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | No
             pr.append(f"{n} differs ({len(a)} / {len(b)} bytes)")
     if "level" in files_a & files_b and "level.geom" in files_a & files_b:
         res["mu"] = cmp_mu(read(da, "level"), read(da, "level.geom"), read(db, "level"), read(db, "level.geom"), pr)
-        got, why, pa, pb, where = light_compare(da, db)
+        if is_paged:
+            pg = paged_compare(read(da, "level"), read(da, "level.geom"), read(db, "level"), read(db, "level.geom"),
+                               read(da, "level.geomx"), read(db, "level.geomx"), pr)
+            res["rules"]["visuals"] = "deflectors on other pages: the static triangles as a multiset"
+            res["rules"]["paged"] = pg["stats"]
+            if "vertex" in pg["stats"]:
+                res["vertex"]["level.geom"] = pg["stats"]["vertex"]
+            pa, pb = load_pages(da), load_pages(db)
+            a, b, where, flat = sample_pairs(pg["pairs"], pa, pb)
+            got, why = (a, b, flat), ""
+        else:
+            got, why, pa, pb, where = light_compare(da, db)
         if got is None:
             pr.append("lightmaps: " + why)
         else:
-            a, b = got
-            res["light"]["lightmaps"] = channel_stats(a, b)
+            a, b, flat = got
+            judged = sun_copy_rule(a, b)
+            res["light"]["lightmaps"] = channel_stats(a, b, judged)
+            res["light"]["lightmaps_raw"] = channel_stats(a, b)
             res["light"]["samples"] = int(len(a))
+            res["light"]["flat_samples"] = int(flat.sum())
+            # reported on their own too; judged with the rest
+            res["light"]["lightmaps_flat"] = channel_stats(a[flat], b[flat], judged[flat])
+            res["light"]["pages"] = len(pa)
+            if sorted(pa) != sorted(pb):
+                pr.append(f"lightmap pages: {sorted(pa)} in the C++, {sorted(pb)} in the other")
             if out_dir:
                 res["pictures"] = save_pictures(out_dir, pa, pb, where, a, b)
     return res
@@ -800,9 +1036,6 @@ def judge(res: dict, floor: dict) -> list[str]:
     for n, s in res["light"].items():
         if n.endswith(".dds") and (s["mean"] > LIGHT_MEAN or s["p99"] > LIGHT_P99):
             bad.append(f"{n}: mean {s['mean']:.2f}, p99 {s['p99']:.1f}")
-    for ch, s in res["details"].items():
-        if s["mean"] > DETAIL_MEAN or s["p99"] > DETAIL_P99:
-            bad.append(f"details {ch}: mean {s['mean']:.2f}, p99 {s['p99']:.1f}")
     return bad
 
 

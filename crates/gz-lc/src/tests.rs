@@ -277,3 +277,93 @@ fn the_shuffle_is_a_permutation_drawn_from_rand() {
     MsvcRand::new(1).shuffle(&mut small);
     assert_eq!(small, [0, 1, 3, 2]);
 }
+
+/// A folder under the temp folder for one test, gone when the test ends.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(tag: &str) -> Self {
+        let p = std::env::temp_dir().join(format!("gzlc_test_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        Self(p)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn listing(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                let rel = p.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
+                out.push((rel, std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The level's files take their places together: the pages of an earlier compile go, the input
+/// stays, no stage is left; a move that fails puts every file back as it was.
+#[test]
+fn the_level_files_appear_together_or_not_at_all() {
+    let s = Scratch::new("write");
+    let dir = &s.0;
+    for (n, b) in
+        [("build.prj", "input"), ("level", "old level"), ("lmap#2_1.dds", "old"), ("lmap#2_2.dds", "old")]
+    {
+        std::fs::write(dir.join(n), b).unwrap();
+    }
+    let mut out = crate::Output::default();
+    for (n, b) in
+        [("level", "new level"), ("lmap#1_1.dds", "a"), ("lmap#1_2.dds", "b"), ("terrain\\t.dds", "t")]
+    {
+        out.put(n, b.as_bytes().to_vec());
+    }
+    let mut report = crate::Report::default();
+    crate::write_all(dir, &out, true, &mut report).unwrap();
+    let names: Vec<String> = listing(dir).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["build.prj", "level", "lmap#1_1.dds", "lmap#1_2.dds", "terrain/t.dds"]);
+    assert_eq!(std::fs::read(dir.join("level")).unwrap(), b"new level");
+    assert_eq!(report.files.len(), 4);
+    assert!(!dir.join(crate::STAGE_NEW).exists() && !dir.join(crate::STAGE_OLD).exists());
+
+    // a folder where a file has to go: the move fails half way, the level stays the last one
+    let before = listing(dir);
+    std::fs::create_dir(dir.join("level.geom")).unwrap();
+    let mut out2 = crate::Output::default();
+    for (n, b) in [("level", "third"), ("lmap#1_1.dds", "c"), ("level.geom", "g")] {
+        out2.put(n, b.as_bytes().to_vec());
+    }
+    assert!(crate::write_all(dir, &out2, true, &mut crate::Report::default()).is_err());
+    std::fs::remove_dir(dir.join("level.geom")).unwrap();
+    assert_eq!(listing(dir), before);
+
+    // the detail compiler's one file leaves the level's pages where they are
+    let mut details = crate::Output::default();
+    details.put("level.details", b"d".to_vec());
+    crate::write_all(dir, &details, false, &mut crate::Report::default()).unwrap();
+    let mut with_details = before.clone();
+    with_details.push(("level.details".into(), b"d".to_vec()));
+    with_details.sort();
+    assert_eq!(listing(dir), with_details);
+}
+
+#[test]
+fn the_number_of_threads_is_an_option_of_the_test() {
+    let (o, unknown) = Options::parse(["-threads=1", "-noise"]).unwrap();
+    assert_eq!((o.threads, o.noise, unknown.len()), (Some(1), true, 0));
+    assert!(Options::parse(["-threads=0"]).is_err());
+    assert!(Options::parse(["-threads=x"]).is_err());
+}

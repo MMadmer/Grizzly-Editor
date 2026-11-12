@@ -7,7 +7,7 @@
 
 use std::ops::ControlFlow;
 
-use glam::{Vec3, Vec3A, Vec4};
+use glam::{BVec3A, Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 
@@ -325,36 +325,58 @@ fn compact(sparse: &[Node], used_hint: usize) -> Vec<Node> {
     out
 }
 
+/// A direction component below this is no movement along its axis.
+const STILL: f32 = 1e-30;
+/// How far a box's entry and exit distances are widened: the rounding of the difference, the
+/// reciprocal and the product that make them, a few units in the last place each.
+const WIDEN: f32 = 4e-7;
+
 /// A ray made ready for box tests.
 struct Probe {
     origin: Vec3A,
     dir: Vec3A,
     inv: Vec3A,
+    /// The axes the ray does not move along.
+    still: BVec3A,
     cull: bool,
 }
 
 impl Probe {
     fn new(ray: &Ray) -> Self {
-        // a zero component would make 0 * inf = NaN on a box face: a huge finite slope instead
-        let fix = |d: f32| if d.abs() < 1e-30 { 1e-30f32.copysign(d) } else { d };
-        let d = ray.dir;
+        let d = Vec3A::from(ray.dir);
+        let still = d.abs().cmplt(Vec3A::splat(STILL));
         Self {
             origin: ray.origin.into(),
-            dir: d.into(),
-            inv: Vec3A::new(1.0 / fix(d.x), 1.0 / fix(d.y), 1.0 / fix(d.z)),
+            dir: d,
+            // a still axis takes no reciprocal: 0 * inf would be NaN on a box face
+            inv: Vec3A::ONE / Vec3A::select(still, Vec3A::ONE, d),
+            still,
             cull: ray.cull_back,
         }
     }
 
-    /// Where the ray enters the box, when it meets it before `t_max`.
+    /// Where the ray enters the box, when it meets it before `t_max`. Monotonic in the box: a
+    /// box the ray enters is entered in every box that holds it, which is what makes
+    /// [`ray_triangle`] answer as a walk does.
     #[inline]
     fn enter(&self, node: &Node, t_max: f32) -> Option<f32> {
-        let t0 = (Vec3A::from(node.min) - self.origin) * self.inv;
-        let t1 = (Vec3A::from(node.max) - self.origin) * self.inv;
-        let near = t0.min(t1).max_element().max(0.0);
-        // widened by the rounding of the three operations above, so that a hit on the very
-        // border of a box is never lost
-        let far = (t0.max(t1).min_element() * 1.000_000_4).min(t_max);
+        let (lo, hi) = (Vec3A::from(node.min), Vec3A::from(node.max));
+        // along a still axis the ray is inside the slab for every distance when its origin is,
+        // faces included (the C++ slab test of xrCDB_ray.cpp answers the same through its NaN
+        // filter), and never otherwise
+        if (self.still & (self.origin.cmplt(lo) | self.origin.cmpgt(hi))).any() {
+            return None;
+        }
+        let t0 = (lo - self.origin) * self.inv;
+        let t1 = (hi - self.origin) * self.inv;
+        let near = Vec3A::select(self.still, Vec3A::NEG_INFINITY, t0.min(t1)).max_element();
+        let far = Vec3A::select(self.still, Vec3A::INFINITY, t0.max(t1)).min_element();
+        if far < 0.0 {
+            return None;
+        }
+        // widened by the rounding, so that a hit on the very border of a box is never lost
+        let near = near.max(0.0) * (1.0 - WIDEN);
+        let far = (far * (1.0 + WIDEN)).min(t_max);
         (near <= far).then_some(near)
     }
 
@@ -390,11 +412,17 @@ impl Probe {
 }
 
 /// The test the tree's walks make of one triangle: `(t, u, v)` of a hit with `t` in
-/// `0..=t_max`, `None` for a miss. A caller that keeps a triangle of its own gets the very answer
-/// a walk would give for it.
+/// `0..=t_max`, `None` for a miss. The triangle's own box is tested first, as a walk tests the
+/// boxes that hold it: a hit here is a hit every walk over a tree that holds the triangle finds,
+/// so a caller that keeps a triangle of its own (a cache) only ever saves a walk, never changes
+/// its answer.
 #[must_use]
 pub fn ray_triangle(ray: &Ray, tri: &[Vec3; 3]) -> Option<(f32, f32, f32)> {
-    Probe::new(ray).triangle(tri).filter(|&(t, _, _)| t <= ray.t_max)
+    let probe = Probe::new(ray);
+    let (a, b, c) = (Vec3A::from(tri[0]), Vec3A::from(tri[1]), Vec3A::from(tri[2]));
+    let own = Node { min: a.min(b).min(c).into(), a: 0, max: a.max(b).max(c).into(), count: 1 };
+    probe.enter(&own, ray.t_max)?;
+    probe.triangle(tri).filter(|&(t, _, _)| t <= ray.t_max)
 }
 
 /// Whether a triangle and a box overlap: the separating axis test over the box axes, the
@@ -1053,6 +1081,80 @@ mod tests {
         let mut out = Vec::new();
         empty.query_box(&Aabb::new(Vec3::splat(-1.0), Vec3::splat(1.0)), &mut out);
         assert!(out.is_empty());
+    }
+
+    /// The final review's minimal case (`bvhedge`): a vertical ray through a triangle's corner,
+    /// its origin on the box's far face along a still axis. The triangle test hit it at 5 and
+    /// the walk lost the box (`0 * 1e30 = 0` made the far distance 0).
+    #[test]
+    fn a_still_axis_ray_on_a_box_face_is_inside_the_slab() {
+        let verts = [Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0)];
+        let bvh = Bvh::build(&verts, &[[0, 1, 2]]).unwrap();
+        for (origin, dir) in [
+            (Vec3::new(1.0, 5.0, -1.0), Vec3::NEG_Y),
+            (Vec3::new(-1.0, 5.0, -1.0), Vec3::NEG_Y),
+            (Vec3::new(1.0, 5.0, -1.0), Vec3::new(-0.0, -1.0, -0.0)),
+            (Vec3::new(0.0, -5.0, 1.0), Vec3::Y),
+            (Vec3::new(1.0, -5.0, -1.0), Vec3::new(0.0, 1.0, -0.0)),
+        ] {
+            let ray = Ray::new(origin, dir, 100.0);
+            let tri = [verts[0], verts[1], verts[2]];
+            let own = ray_triangle(&ray, &tri).map(|(t, _, _)| t);
+            assert_eq!(own, Some(5.0), "{origin:?} {dir:?}");
+            assert_eq!(bvh.ray_nearest(&ray).map(|h| h.t), Some(5.0), "{origin:?} {dir:?}");
+            assert!(bvh.ray_any(&ray).is_some());
+            let mut all = Vec::new();
+            bvh.ray_all(&ray, &mut all);
+            assert_eq!(all.len(), 1);
+        }
+        // outside the slab of a still axis by the least step: no box, no hit
+        let beside = Ray::new(Vec3::new(1.0f32.next_up(), 5.0, -1.0), Vec3::NEG_Y, 100.0);
+        assert!(bvh.ray_nearest(&beside).is_none());
+    }
+
+    /// Rays along the axes through every corner and every edge midpoint of a soup on a grid (the
+    /// rays of a vertical probe, an AI map node's height and a hemisphere sample straight up):
+    /// the walks answer as the triangles alone do, and a triangle `ray_triangle` hits is one
+    /// the walk reports.
+    #[test]
+    fn axis_rays_through_corners_and_edges_agree_with_brute_force() {
+        let mut rng = Rng(0x51_7CC1_B727_220A);
+        let mut verts = Vec::new();
+        let mut tris = Vec::new();
+        let grid = |r: &mut Rng| {
+            Vec3::new((r.next() % 21) as f32, (r.next() % 9) as f32, (r.next() % 21) as f32) * 0.5
+        };
+        for _ in 0..400 {
+            let base = verts.len() as u32;
+            verts.extend([grid(&mut rng), grid(&mut rng), grid(&mut rng)]);
+            tris.push([base, base + 1, base + 2]);
+        }
+        let bvh = Bvh::build(&verts, &tris).unwrap();
+        let mut points: Vec<Vec3> = verts.clone();
+        for t in &tris {
+            let [a, b, c] = corners(&verts, t);
+            points.extend([(a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5]);
+        }
+        let dirs = [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z];
+        let (mut hits, mut cases) = (0, 0);
+        for p in &points {
+            for d in dirs {
+                let ray = Ray::new(*p - d * 20.0, d, 100.0);
+                let expect = brute_nearest(&verts, &tris, &ray);
+                assert_eq!(bvh.ray_nearest(&ray).map(|h| h.t), expect.map(|h| h.t), "{p:?} along {d:?}");
+                assert_eq!(bvh.ray_any(&ray).is_some(), expect.is_some(), "{p:?} along {d:?}, any");
+                let mut all = Vec::new();
+                bvh.ray_all(&ray, &mut all);
+                for (id, t) in tris.iter().enumerate() {
+                    if ray_triangle(&ray, &corners(&verts, t)).is_some() {
+                        assert!(all.iter().any(|h| h.tri == id as u32), "{p:?} along {d:?}: triangle {id}");
+                    }
+                }
+                cases += 1;
+                hits += usize::from(expect.is_some());
+            }
+        }
+        assert!(hits > cases / 4, "only {hits} of {cases} rays hit anything: the test proves little");
     }
 
     #[test]

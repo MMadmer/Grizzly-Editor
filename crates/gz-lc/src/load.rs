@@ -67,8 +67,11 @@ impl Sources {
     /// `shaders_xrlc.xr`.
     pub fn shaders(&self) -> Result<Shaders> {
         let path = self.game_data.join("shaders_xrlc.xr");
-        let bytes = std::fs::read(&path).map_err(|e| {
-            Error::Io(format!("The compiler shaders {} could not be read: {e}", path.display()))
+        let bytes = std::fs::read(&path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                Error::Io(format!("The compiler shaders {} are not there.", path.display()))
+            }
+            _ => Error::Io(format!("The compiler shaders {} could not be read: {e}", path.display())),
         })?;
         let list =
             ShadersXrlc::read(&bytes).map_err(|e| Error::Invalid(format!("{}: {e}", path.display())))?;

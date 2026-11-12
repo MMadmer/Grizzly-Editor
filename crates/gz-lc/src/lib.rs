@@ -19,7 +19,9 @@
 //! the savers), `details` (`xrCompileDO`).
 //!
 //! Every phase runs on the caller's rayon pool and gives the same bytes on any number of
-//! threads; nothing here makes a pool or holds a global.
+//! threads and on every run; nothing here holds a global, and nothing makes a pool but the
+//! test's option `-threads=<n>`. The files are written beside the level and moved into place
+//! together at the end.
 
 mod cform;
 mod details;
@@ -90,6 +92,10 @@ pub struct Options {
     pub no_invalid_faces: bool,
     /// `-att`: point lights fall off linearly.
     pub linear: bool,
+    /// `-threads=<n>`: the compile on a pool of its own of `n` threads instead of the caller's.
+    /// No option of the C++; the proof that the result does not depend on the number of threads
+    /// (`tools/qa/diff_compile.py`) compiles on one.
+    pub threads: Option<usize>,
 }
 
 impl Options {
@@ -108,6 +114,14 @@ impl Options {
                 "no_invalidefaces" => o.no_invalid_faces = true,
                 "att" => o.linear = true,
                 "silent" | "o" | "keep_temp_files" => {}
+                t if t.starts_with("threads=") => match t["threads=".len()..].parse::<usize>() {
+                    Ok(n) if n > 0 => o.threads = Some(n),
+                    _ => {
+                        return Err(Error::Refused(format!(
+                            "{a}: the number of threads is a whole number from 1."
+                        )));
+                    }
+                },
                 "gi" => {
                     return Err(Error::Refused(
                         "-gi (the radiosity pass) is not part of this compiler: the lightmaps are lit directly.".into(),
@@ -359,18 +373,140 @@ pub fn compile_project(
 }
 
 fn read(path: &Path) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|e| Error::Io(format!("{} could not be read: {e}", path.display())))
+    std::fs::read(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => Error::Io(format!("{} is not there.", path.display())),
+        _ => Error::Io(format!("{} could not be read: {e}", path.display())),
+    })
 }
 
-fn write_all(dir: &Path, out: &Output, report: &mut Report) -> Result<()> {
-    for (name, bytes) in &out.files {
-        let path = dir.join(name.replace('\\', std::path::MAIN_SEPARATOR_STR));
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| Error::Io(format!("{} could not be made: {e}", parent.display())))?;
+/// A file of chunks is whole: its chunks end to end, the last one ending with the file. The chunk
+/// reader stops at a header that does not fit, so a file cut short would otherwise read as one
+/// that lacks its last chunks.
+fn whole_chunks(name: &str, bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() {
+        return Err(Error::Invalid(format!("{name} is empty.")));
+    }
+    let mut at = 0usize;
+    while at < bytes.len() {
+        let Some(head) = bytes.get(at..at + 8) else {
+            return Err(Error::Invalid(format!(
+                "{name} is cut short: it ends {} bytes into the header of a chunk.",
+                bytes.len() - at
+            )));
+        };
+        let size = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as usize;
+        let left = bytes.len() - at - 8;
+        if size > left {
+            return Err(Error::Invalid(format!(
+                "{name} is cut short: a chunk {at} bytes into it holds {size} bytes and the file ends {left} bytes into it."
+            )));
         }
-        std::fs::write(&path, bytes)
-            .map_err(|e| Error::Io(format!("{} could not be written: {e}", path.display())))?;
+        at += 8 + size;
+    }
+    Ok(())
+}
+
+/// Where a compile writes its files before they take their places, beside them in the level
+/// folder (a dot name: tooling to every walk of the editor), and where the files they replace
+/// wait until the new ones are in.
+const STAGE_NEW: &str = ".lc_new";
+const STAGE_OLD: &str = ".lc_old";
+
+fn io_err(what: &str, path: &Path, e: &std::io::Error) -> Error {
+    Error::Io(format!("{} could not be {what}: {e}", path.display()))
+}
+
+fn rel_path(dir: &Path, name: &str) -> PathBuf {
+    dir.join(name.replace('\\', std::path::MAIN_SEPARATOR_STR))
+}
+
+fn move_file(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| io_err("made", parent, &e))?;
+    }
+    std::fs::rename(from, to).map_err(|e| io_err("moved into place", to, &e))
+}
+
+/// The lightmap pages of an earlier compile this one does not write: they would be a level of
+/// two compiles.
+fn stale_pages(dir: &Path, out: &Output) -> Vec<String> {
+    let Ok(listing) = std::fs::read_dir(dir) else { return Vec::new() };
+    listing
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| {
+            let l = n.to_ascii_lowercase();
+            l.starts_with("lmap#") && (l.ends_with("_1.dds") || l.ends_with("_2.dds"))
+        })
+        .filter(|n| !out.files.iter().any(|(f, _)| f.eq_ignore_ascii_case(n)))
+        .collect()
+}
+
+/// The level's files appear together or not at all: written beside the level into
+/// [`STAGE_NEW`], then the files they replace (and, for the level compile - `pages` -, the
+/// lightmap pages of an earlier compile this one does not write) moved aside into
+/// [`STAGE_OLD`], the new ones moved in, the old ones removed. A compile that fails or is
+/// stopped before this leaves the last level whole; one whose move fails puts the old files
+/// back. The caller's write guard has judged the level folder.
+fn write_all(dir: &Path, out: &Output, pages: bool, report: &mut Report) -> Result<()> {
+    let (new, old) = (dir.join(STAGE_NEW), dir.join(STAGE_OLD));
+    // what a compile that crashed while it moved left behind
+    for d in [&new, &old] {
+        if d.exists() {
+            std::fs::remove_dir_all(d).map_err(|e| io_err("removed", d, &e))?;
+        }
+    }
+    std::fs::create_dir_all(&new).map_err(|e| io_err("made", &new, &e))?;
+    let staged = (|| {
+        for (name, bytes) in &out.files {
+            let path = rel_path(&new, name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| io_err("made", parent, &e))?;
+            }
+            std::fs::write(&path, bytes).map_err(|e| io_err("written", &path, &e))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = staged {
+        let _ = std::fs::remove_dir_all(&new);
+        return Err(e);
+    }
+
+    // the swap: every step that went through is undone when a later one fails
+    let mut aside: Vec<String> = Vec::new();
+    let mut placed: Vec<String> = Vec::new();
+    let stale = if pages { stale_pages(dir, out) } else { Vec::new() };
+    let names = out.files.iter().map(|(n, _)| n.clone()).chain(stale);
+    let swapped = (|| {
+        for name in names {
+            let at = rel_path(dir, &name);
+            if at.is_file() {
+                move_file(&at, &rel_path(&old, &name))?;
+                aside.push(name);
+            }
+        }
+        for (name, _) in &out.files {
+            move_file(&rel_path(&new, name), &rel_path(dir, name))?;
+            placed.push(name.clone());
+        }
+        Ok(())
+    })();
+    if let Err(e) = swapped {
+        for name in placed.iter().rev() {
+            let _ = std::fs::remove_file(rel_path(dir, name));
+        }
+        for name in aside.iter().rev() {
+            let _ = move_file(&rel_path(&old, name), &rel_path(dir, name));
+        }
+        let _ = std::fs::remove_dir_all(&new);
+        let _ = std::fs::remove_dir_all(&old);
+        return Err(e);
+    }
+    // the level is in place: what is left of the stage goes with the next compile if not now
+    let _ = std::fs::remove_dir_all(&new);
+    let _ = std::fs::remove_dir_all(&old);
+    for (name, bytes) in &out.files {
         report.files.push((name.clone(), bytes.len()));
     }
     Ok(())
@@ -379,6 +515,15 @@ fn write_all(dir: &Path, out: &Output, report: &mut Report) -> Result<()> {
 /// `XrLC -f <level>`: the level folder's `build.prj` compiled, the files written beside it
 /// (`build.err` too: the C++ writes it to its logs).
 pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> Result<Report> {
+    if let Some(n) = opts.threads {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .build()
+            .map_err(|e| Error::Invalid(format!("The compiler's {n} threads did not start: {e}")))?;
+        let opts = Options { threads: None, ..opts.clone() };
+        log.msg(format!("* {n} worker threads of its own (-threads={n})"));
+        return pool.install(|| compile(input, &opts, ctl, log));
+    }
     let t = Instant::now();
     log.phase(&format!("Reading project [{}]...", input.level.display()));
     let prj = BuildProject::read(&read(&input.level.join("build.prj"))?)?;
@@ -398,7 +543,7 @@ pub fn compile(input: &Input, opts: &Options, ctl: &Ctl<'_>, log: &mut Log) -> R
         Err(e) => return Err(e),
     };
     let mut report = Report { invalid_faces: out.invalid_faces, ..Report::default() };
-    write_all(&input.level, &out, &mut report)?;
+    write_all(&input.level, &out, true, &mut report)?;
     report.seconds = t.elapsed().as_secs_f64();
     report.lines = std::mem::take(&mut log.lines);
     report.phases = log.phases.clone();
@@ -423,7 +568,8 @@ pub fn compile_details(input: &Input, ctl: &Ctl<'_>, log: &mut Log) -> Result<Re
     let mut out = Output::default();
     out.put("level.details", bytes);
     let mut report = Report::default();
-    write_all(dir, &out, &mut report)?;
+    // the detail compiler writes level.details alone: the level's pages are not its own
+    write_all(dir, &out, false, &mut report)?;
     log.end_phase();
     report.seconds = t.elapsed().as_secs_f64();
     report.lines = std::mem::take(&mut log.lines);

@@ -170,16 +170,22 @@ impl PageMask {
     }
 
     /// `Place_Perpixel`: whether the deflector's texels fit at `(ax, ay)` without meeting a
-    /// placed one. The C++'s SIMD part takes a texel marked exactly `alpha_ref` as free and its
-    /// scalar part as taken; here it is taken everywhere, as the scalar code means.
+    /// placed one. oracle: the C++ tests an upright layer's rows eight texels at a time while
+    /// more than eight are left (`_mm_max_epu8` against `alpha_ref`: a texel marked exactly
+    /// `alpha_ref` counts as free there) and the rest one by one (`>= alpha_ref`: taken);
+    /// a turned layer one by one. The port tests the same way: where a deflector lands decides
+    /// which page the ones after it reach, and with it the level's visuals.
     fn fits(&self, ax: usize, ay: usize, lm: &LmLayer, rotated: bool) -> bool {
         let s_x = lm.width as usize + 2 * BORDER as usize;
         let s_y = lm.height as usize + 2 * BORDER as usize;
         let (rows, cols) = if rotated { (s_x, s_y) } else { (s_y, s_x) };
+        // the columns of the eight-at-a-time part: `for (x = 0; x < s_x - 8; x += 8)`
+        let wide = if rotated || s_x <= 8 { 0 } else { (s_x - 8).div_ceil(8) * 8 };
         for y in 0..rows {
             for x in 0..cols {
                 let m = if rotated { mark(lm, s_x, y, x) } else { mark(lm, s_x, x, y) };
-                if m >= ALPHA_REF && self.at(ax + x, ay + y) != 0 {
+                let taken = if x < wide { m > ALPHA_REF } else { m >= ALPHA_REF };
+                if taken && self.at(ax + x, ay + y) != 0 {
                     return false;
                 }
             }
@@ -360,6 +366,34 @@ mod tests {
         let taken = mask.bits.iter().filter(|&&b| b != 0).count();
         let want: u32 = layers.iter().map(LmLayer::area).sum();
         assert_eq!(taken as u32, want);
+    }
+
+    /// oracle: a texel marked exactly `alpha_ref` is free in the C++'s eight-at-a-time columns
+    /// of an upright layer and taken in the rest (`Place_Perpixel`).
+    #[test]
+    fn a_texel_marked_alpha_ref_is_free_only_in_the_wide_columns() {
+        // a layer of 20 texels to a row with the border: columns 0..16 are tested eight at a time
+        let mut probe = lit(18, 2);
+        let row = probe.width as usize + 2;
+        probe.marker.iter_mut().for_each(|m| *m = 0);
+        let mut mask = PageMask::default();
+        // what is taken: the page's texel (3, 0)
+        mask.bits[3] = 255;
+        if let Some(m) = probe.marker.get_mut(3) {
+            *m = ALPHA_REF;
+        }
+        assert!(mask.fits(0, 0, &probe, false), "column 3 is a wide one: alpha_ref is free there");
+        // turned, the layer's texel (3, 0) lands on the page's (0, 3)
+        let mut turned = PageMask::default();
+        turned.bits[3 * SIDE] = 255;
+        assert!(!turned.fits(0, 0, &probe, true), "a turned layer is tested one by one");
+        let mut mask = PageMask::default();
+        mask.bits[17] = 255;
+        probe.marker.iter_mut().for_each(|m| *m = 0);
+        if let Some(m) = probe.marker.get_mut(17) {
+            *m = ALPHA_REF;
+        }
+        assert!(row == 20 && !mask.fits(0, 0, &probe, false), "column 17 is past the wide ones");
     }
 
     #[test]

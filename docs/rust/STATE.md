@@ -2744,3 +2744,244 @@ them.
 6. `tex-xr`, `ogf`, `spawn-entities` - needed by the scene and the renderer (phases 4-5), and
    `spawn` by the world rules.
 7. The shell and the tabs (phase 3), the scene (4), the renderer (5), the level tools (6).
+
+## The final review, Play and the tests
+
+The brief `docs/rust/briefs/final-play.md`, 12 Nov, branch `grizzly-rust` (HEAD `253a35de` plus the other engineer's
+uncommitted compiler work); nothing committed. Before the first run (21:08:40): `find D:\XFinedProjects
+"D:\Games\Dead Air\modules" -newermt` ten minutes earlier - nothing; no editor on 28016 or a QA port.
+
+**1. Play never destroys what it did not make.** `gz-levelbuild`'s new `play_root.rs`: `check_root` stands in front
+of every Play that names or makes a root - `play`, `play_game`, `play_clean` and the new `play_root` action (makes or
+refreshes the root, starts nothing; what `test_play_game` uses before it writes the root's settings) - before the
+scene is built or a byte written, and `play::prepare` asks it again. The questions are the deletion's: the same
+`Guard`s from `gz_project::system_guards` (the exe's folder and the data root, the user's folders, Windows, Program
+Files, Temp, the linked game, every listed project's game, editor and export target) and the same comparison - is,
+holds, lies inside -, as written and where the path really is (a missing root's real path is its nearest existing
+folder's, resolved); on top, the open project and every listed one as guards taken inside, any folder on the way
+holding `project.ltx` / `mod.ltx` (a project nobody listed), a link, a drive or volume root, a relative path, a file.
+Then the content: a missing or empty folder is made Play's - the marker `play_root.txt` written first -, a folder
+with the marker is Play's, anything else is refused untouched: "<root> is not a Play root: choose an empty folder.
+It holds N entries (...) and no play_root.txt, so Play leaves it as it is."
+- **What Play clears in its root, and nothing else:** `gamedata\` (copied anew; a link in it unlinked), the staged
+  level, the programs the marker lists that the game no longer has, the content latch; it overwrites `fsgame.ltx`
+  and the programs it copies. `appdata\`, `modules\`, the archives' junction and anything an author put there stay.
+  `stage_level` writes only into a marked root.
+- **Every refusal before the disk changes:** the path length is now planned (the game's gamedata, the appdata
+  caches, what a marked root keeps, the staged level, the archives' longest path, the programs) and checked before
+  the root is made.
+- **The default root moved** out of the editor's data root (`_appdata_\play\<project>` lies inside the editor, which
+  the checks refuse): `%LOCALAPPDATA%\GrizzlyPlay\<FNV-1a of the project's path, 8 hex>` (49 characters here; the game
+  takes roots up to about 66). No old root existed on this machine.
+- **What is copied:** the engine, the libraries the game's own runtime list names (`.dead-air-x64\runtime-files.txt`,
+  kept by its installer and updater; without it every `.dll` of the folder), and every library of the folder any of
+  them imports, ordinary or delay-loaded (`pe.rs` reads the import tables, headers only) - never another executable.
+  The import tables matter: `xrEngine.exe` imports `xrRender_R6.dll`, which the list lacks. Before: 76 files, 262.8
+  MB (every `.exe` / `.dll`); now 57 files, 246.1 MB. Left out: the updater, JSGME, DarDelta, both uninstallers (2.9
+  MB - the brief's "250 MB" was the libraries, which the engine needs) and 14 libraries nothing lists or imports
+  (R1-R3, `xrD3D9-Null`, `xrXMLParser`, `lua51`, ...).
+- **Proof:** 12 unit tests (`play_root.rs` 6 - each refusal, the folder listed equal before and after, a junction
+  refused and met where it really is; `play.rs` 4 - the root, the marker, a dropped library removed while an author's
+  file stays, the fallback list, the import closure, every refusal before a change; `pe.rs` 2), no program file
+  written. `test_scene_tools` phase Y: 18 refusals (`play_clean`, `play_root`, `play` × a throw-away project folder,
+  its gamedata, a folder holding a file, a folder inside the open project, the repository, a relative path), the
+  folders listed equal, nothing started; 0.4 s. The reviewer's `play_root_demo.py` rerun on the debug build
+  (`Intermediate/final-play/play_root_demo.out`): refused "it is a project folder", `precious.txt`, `my_level` and
+  the folder's `fsgame.ltx` there, 2.5 s. `tools.json` says what `root=` takes and lists `play_root`.
+
+**2. No test writes a program file - held at run time too.** `check_test_files.py` takes `"cmd"` and `"com"` as
+extensions where they are one (the argument of `with_extension` / `set_extension`: elsewhere they are a JSON key,
+the shell `Command::new` starts, a URL) and says in its header what it cannot see. `tools/rust/watch_programs.py` is
+the net: `test.sh` gives the binaries `TEMP` / `TMP` = a `gztest_*` folder of the run, watched through
+`ReadDirectoryChangesW` (ctypes, recursive, 1 MB buffer, armed - proven by a mark's own event - before the first
+binary starts); a file created, renamed in or written there with a program's extension or an `MZ` head (two bytes,
+read with every sharing flag) fails the run, naming the file and the binaries whose run spans its time; those
+binaries lose their green stamp. An overflowed buffer walks the folder instead. The watcher removes the folder
+(links unlinked, never followed) and reports last. Cost in the run below: 589 events, 0 overflows, 0.81 s of the
+watcher's CPU beside 16 cores, about 0.15 s to arm. The control (`Intermediate/final-play/watch_control.py`): `x.exe`
+written and deleted 1.35 ms later, and an `MZ` file under `y.dat`, both reported, `z.txt` not, the folder gone.
+Where tests write: of the 20 files whose test code writes, every one takes its folder from `tempfile` or
+`env::temp_dir()` (now the watched folder); the crates' `tests/` write nothing; `CARGO_MANIFEST_DIR` is read only.
+After the run `git status` was unchanged and nothing in the repository was newer but the other engineer's files.
+
+**3. A real level in the game.** `test_play_game.py --scene` (default `mp_test`; `SCENES` says what Play needs of
+each): `l03u_agr_underground` - its 301 spawns go, an actor and a graph point stand at its actor graph point, its own
+AI map, the level path `qa_l03u` (a level of the game's name keeps a one-level graph), Custom light at 4 px/m and
+one jitter sample, `-noise`. One run (the first two stopped at the suite's own jitter label), on the debug build
+made at 21:10 from the tree above: PASS 33 / 0, 143.9 s. The compile 32.1 s on 16 threads; the level in 50 s after
+Play: `New game is successfully created!`, `# New player created.`, `connection accepted`, the object space and the
+portals cache built for `qa_l03u`, `Loading HOM`, `level_lods composed`, `geometry level.geom` and `.geomx`, `[ground]
+collision mesh: 332241 triangles, 189300 vertices`, `End of synchronization`, `[ALife]: objects[110]`; no assert, no
+dump, still running when stopped, nothing of the installed game changed (107,624 entries). The log:
+`Intermediate/final-play/l03u/engine.log`.
+
+**Proof (21:13 - 21:25).**
+- `bash tools/rust/check.sh`: FAILED on the other engineer's files only - clippy `manual_is_multiple_of`
+  (`gz-fmt-level/src/build_prj.rs:468`), fmt (`gz-fmt-level/src/bvh.rs`, `gz-lc/src/{details,lib,tests}.rs`,
+  `gz-lc-light/src/ray.rs`); unsafe only in `gz-win`, the registry against the catalogue, encoding, test files, the
+  icon: ok; 36 s.
+- `bash tools/rust/test.sh` (the changed binaries, under the net): 15 run, 63 cached, 1 failed - `gz-lc-light`
+  (`tests.rs:517`, the other engineer's test of their change) -, 1138 tests green; 26.5 s; the net found nothing.
+- `python tools/qa/run_all.py test_scene_tools test_play_game`: 2 / 2, wall 102.6 s (`test_scene_tools` 80 / 80 in
+  15.3 s, `test_play_game` mp_test 36 / 0 in 87.3 s: 57 programs, 246.1 MB, the level in 31 s after Play).
+- At the end (21:25:39) `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 21:08:40'`: nothing.
+  No Grizzly or xrEngine process; no `gzpr_`, `gzpg_`, `gztest_`, `gzcr_` folder in the temp folder (an empty
+  `grizzly_home_*` of the aborted l03u start removed); no `GrizzlyPlay` in the local application data.
+
+Open: `check.sh` and `gz-lc-light` are red on the other engineer's work in progress; `test.sh --all` under the net is
+the lead's run; `docs/RUST_MIGRATION.md` D1 does not name the marker or the default root's place (the lead's
+document).
+
+## The final review, the compiler
+
+The brief `docs/rust/briefs/final-compiler.md`, 12 Nov, 20:53 - 22:1x. Files: `crates/gz-fmt-level` (`bvh.rs`,
+`build_prj.rs`), `crates/gz-lc-light` (`ray.rs`, `lightmap.rs`, `tests.rs`), `crates/gz-lc` (`lib.rs`, `details.rs`,
+`load.rs`, `tests.rs`), `tools/qa/diff_compile.py`, `tools/qa/compare_compile.py`. Before the first run (20:53):
+`find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt` ten minutes earlier - nothing.
+
+### 1. The same bytes on every run and on any number of cores
+
+**What made runs differ.** `Probe::enter` (the BVH's slab test) gave an axis the ray does not move along a slope of
+`1/1e-30`; with the origin exactly on the box's far face that is `0 * 1e30 = 0`, so the box ended at distance 0 and
+was lost. The cached-triangle test of `RayModel::trace` tests no box, so it found the hit the walk lost, and the
+light of a texel depended on which rays its worker had traced before - on how rayon split the work. The vertical
+rays of the hemisphere (Adaptive HT's precalc, every hemisphere sample straight up) through a ceiling triangle's
+corner or edge are exactly that case.
+
+**Now.** An axis with `|d| < 1e-30` is *still*: the ray is inside its slab for every distance when
+`min <= origin <= max` (faces included) and never otherwise, no reciprocal taken; the entry and exit distances are
+widened by 4e-7 each way (the rounding of the difference, the reciprocal and the product). The test is monotonic in
+the box, and `ray_triangle` (the cache's test) now tests the triangle's own box first: a cached hit is a hit of
+every walk over a tree that holds the triangle (each box on its way holds the triangle's box), so the cache only
+saves walks. The C++ (`xrCDB_ray.cpp` `isect_sse`) takes `1/0 = inf` and filters the NaN of `0 * inf` with
+`minps`/`maxps` against infinities: on a still axis it answers inside iff `min <= origin <= max` too - the port now
+answers as it does. Where they still differ the C++ is the less right one: its boxes are `center +- extents` rounded
+(a border hit can be lost) and unwidened, its triangle test takes `0 < t <= range` against the port's
+`0 <= t <= range`, and its cached triangle (`R_Light::tri`) is shared by all threads (below: its two runs differ on
+shrunk deflectors).
+
+**The proof.** Unit tests: `gz-fmt-level` `a_still_axis_ray_on_a_box_face_is_inside_the_slab` (the review's
+`bvhedge`: the triangle test 5.0, the walk now 5.0 too; variants with `-0.0` and both directions; one ulp outside the
+slab: no hit) and `axis_rays_through_corners_and_edges_agree_with_brute_force` (400 triangles on a half-metre grid,
+the six axis directions through every corner and edge midpoint: `ray_nearest` / `ray_any` equal to the triangles
+alone, every `ray_triangle` hit reported by `ray_all`); `gz-lc-light` `a_warm_cache_answers_as_a_cold_one_in_any_order`
+(300 ceilings and walls, some transparent, axis and oblique rays through corners, skipped faces: a cold cache per
+ray, one warm cache forward, one in reverse - the same bits). All three fail on the code before the fix (put back for
+the check, then restored) and pass now. `diff_compile.py` compiles a scene of `TWICE` (mp_test, mp_close_combat,
+l03u; `--all` every scene) a second time and wants every file byte for byte, and compiles mp_test once more with
+`-threads=1` (a new option of `gz_lc::Options`: the compile on a pool of its own) against all 16 threads; a
+difference names the first file and byte. Five runs of l03u on 16 threads with the final binary
+(`Intermediate/final-compiler/repeat.py`): `aea8b2b8b9f3026f` five times, 39.5 - 45.1 s each (before the
+placement fix below, at 21:03, also one hash in five, `716db78f85997ef2`).
+
+**The BVH's other callers** (`rg` over `crates`); every one takes the same `Probe`, so the fault reached each that
+casts an axis-parallel ray from a coordinate a box face can share:
+- `gz-lc-light` `RayModel::trace` - every light ray of both compilers: reached (the review's runs).
+- `gz-scene` `pick::ray_library` through `ray_scene_objects`: `probe_vertical` (+-Y), `place_way`'s snap to ground
+  (-Y), `snap.rs`'s drop to the floor (-Y), `scan_walls` (horizontal rays, the first exactly +Z), the viewport's
+  `lighting.rs` height probes (-Y), the particles' and `draw_extra`'s rays: reached for an object whose rotation keeps
+  the axes (its object-space ray stays axis-parallel) when the probe's x or z equals a box face of its tree - a
+  grid-snapped probe over a grid-snapped object could miss it.
+- `gz-scene` `wallmark::ray_triangle` (wallmarks, and `ai_ground`: the AI tool's node height from the mouse ray,
+  exactly vertical in a top orthographic view), `objtools::geom::pick_mesh` and `mesh_ray_hits` (the portals'
+  sector rays): reachable the same way.
+- `query_box` / `query_sphere` / `query_frustum` (`detail.rs`, `pick.rs`, `wallmark.rs`): no ray - not reached.
+- The AI map's own node height cast (`gz-scene` `bulk/aimap.rs`) uses `collide.rs`'s grid and `xr::ray_tri`, not the
+  BVH: not reached.
+
+`a_detail_slot_is_lit_at_its_points_and_its_corners_decide_its_objects` (gz-lc-light) changed its numbers: the two
+slots beside the test's roof have a row of 15 sample points on the roof's edge, which the old test lost; 210 of 225
+points are lit there now (6 of 15, was 7).
+
+### 2. The comparison
+
+- **Flat triangles are sampled** (`compare_compile.flat_samples`): a lightmapped triangle whose coordinates collapse
+  to a line or a point gives the texels along its longest side (four points a texel, each texel once), or the one
+  under it, through each side's own coordinates, judged with the rest and reported on their own. Samples from flat
+  triangles: mp_test 2009, l12u 43,964, l03u 269,504, mp_close_combat_implicit 42,321.
+- **mp_test's texel (C++ 33, Rust 0): the Rust side is right.** It is `lmap#1` (309, 0), page 2's colour, which is
+  the sun again (`Pack_hemi`: r = g = b = sun). The C++'s own page 1 alpha there - the same sun, in DXT5's eight-level
+  alpha block, endpoints 126 and 0 - is 0, so the C++ wrote 0 before its encoder; page 2's colour block holds
+  123/93/63/33 (four colours a block) and could not keep the 0 beside the block's 126, 90, 73, 55, 38. The rule
+  (`sun_copy_rule`): on 2.r/g/b each side's own disagreement between its two copies of the sun is the encoder's and
+  is taken off, the rest is judged; the raw numbers are reported (`lightmaps_raw`). mp_test's 2.r goes from 2.0 to
+  0.016 (the flat-128 texpresso bias was the same thing), its flat samples' 2.r from 5.1 / 33 to 0.
+- **The two new scenes.** `mp_close_combat_implicit` (the level of mp_close_combat, `light_jitter_samples` 1 at its
+  own 10 px/m, no `-noise`) holds the implicit light and two lightmap pages. XrLC at one sample: 175.5 / 174.6 s wall,
+  622.0 / 610.5 s CPU; xrDO_Light 34.0 / 33.6 s, 45.9 / 46.4 s CPU; the Rust 35.0 s and 4.7 s. Its MU models could not
+  stay: XrLC of the tag crashes on them (exception 0xC0000005, twice at the same log line in "Converting MU-models to
+  OGFs", after the tangent basis of a model part of 7706 vertices; 282.6 / 298.3 s wall, 1302.5 / 1334.1 s CPU), so
+  `diff_compile.EMPTIED` empties build.prj's chunks 13-15 (LODs, models, references) in the input both compilers
+  read. What the crashed run wrote first was compared by hand with the Rust compile of the input with the models
+  (`Intermediate/final-compiler/partial.py`): build.lights byte for byte, build.cform under its rule (the MU
+  references' ray triangles inside), the implicit textures mean 0.046 / 0.039, p99 1, max 20. A denser `mp_test` was
+  tried for the pages and stays one page at 20 and at 40 px/m: every large deflector is clamped to 508 texels
+  (`xrDeflector.cpp`).
+- **What the two pages found.** First 282 visuals against 291. The deflectors' sizes read back from both outputs
+  (`Intermediate/final-compiler/charts.py`): most equal; on every scene some shrunk on one side only (mostly the C++
+  shrinks more: l12u's `crete_walls12` 20 x 16 against 41 x 33, a halving the Rust light did not pass), which moves
+  what comes after them in the page; with one page only coordinates move, with two a deflector changes page, and a
+  material on two pages is two visuals. One part was the port: `Place_Perpixel` tests an upright layer eight texels
+  at a time while more than eight are left, and there a texel marked exactly `alpha_ref` counts as free; the port
+  took it as taken everywhere (a stated difference). It now tests as the C++ does (`lightmap.rs` `fits`, test
+  `a_texel_marked_alpha_ref_is_free_only_in_the_wide_columns`): 288 visuals. The rest follows the light, and its rule
+  is `paged_compare` (compare_compile.py's header): the static triangles as one multiset, matched by key for their
+  light. mp_close_combat_implicit: 132,544 triangles equal, 637 of them on the other page.
+- **The C++'s floor is not zero** once the flat triangles count: its two runs differ on shrunk deflectors - l12u up
+  to 8 on 1.r (mean 0.0001), l03u 12 on the hemisphere (0.0014), mp_close_combat_implicit 127 on the sun (0.0016) -
+  most likely its shared cached triangle.
+- **The bounds** (compare_compile.py, about twice the largest seen, flat triangles included): lightmaps and implicit
+  textures mean 1.5 / p99 16 (seen 0.68 / 8: l12u, 1.r); vertex and MU light 0.2 / 2 (seen 0.085:
+  mp_close_combat_implicit level.geom; p99 1: l03u's LODs lit alone); level.details byte for byte (the 0.5 / 2 bound
+  is gone: seen 0 on both detail scenes). `VERSION` 7.
+
+### 3. The smaller things
+
+- `--refresh-oracle` over a record: the record is made whole in `.part`; the old one is moved to `.old`, the new one
+  takes its place, the old one is removed; a recording that fails leaves the old record and no `.part`
+  (`Intermediate/final-compiler/refresh_test.py`, `record_into` faked: replaced, then a failing one - the old one
+  stays). A C++ run that fails keeps what it wrote and its log under `Intermediate/compile/<scene>/cpp_failed` and
+  says how it ended ("crashed (exception 0x...)", "did not finish within N s", "exited with code N"); it said "did not
+  finish within 1200 s" for a crash at 283 s.
+- `build.prj` is checked whole before it is read (`check_whole`): its chunks end to end, each a chunk of a build
+  project, each array a whole number of records, the seven chunks the C++ opens unchecked present. build.cform,
+  build.lights and build.details are checked the same way (`whole_chunks`), their parse errors name the file, a
+  missing file "is not there". The review's 23 inputs (`Intermediate/final-compiler/bad_inputs.py` on the fast
+  build; `bad_before.out` / `bad_after.out`): none panics; cut in half "build.prj is cut short: its static lights
+  chunk holds 26568 bytes and the file ends 12074 bytes into it.", the last byte missing "...it ends 7 bytes into the
+  header of a chunk.", empty, garbage ("not a build project"), a chunk past the end, a record cut in two ("not a whole
+  number of 80-byte records"), the detail inputs cut short - each says so. Two answers stay: one of the six
+  random-byte files compiles (its 40 bytes fell into light values, vertex and texture coordinates and the slack after
+  texture names - a valid file), and `-bogus` is named and ignored as XrLC ignores it.
+- The level's files appear together: written into `<level>\.lc_new`, the files they replace moved to `.lc_old`, the
+  new ones moved in, the old ones removed; a failing move puts every old file back; the lightmap pages of an earlier
+  level compile that this one does not write go too (the detail compiler's one file leaves them). Test
+  `the_level_files_appear_together_or_not_at_all` (a folder where a file must go makes the move fail half way: the
+  folder is as before). A dot name: tooling to every walk of the editor.
+
+### 4. Proof
+
+Once, at the end, on the fast build of the final tree (`Intermediate\cargoast\Grizzly.exe`):
+- `cg.sh clippy -p gz-fmt-level -p gz-lc-light -p gz-lc --all-targets`: clean; `fmt -- --check`: clean.
+- `cg.sh test -p gz-fmt-level -p gz-lc-light -p gz-lc`: 54 + 1 + 41 + 18 tests green, 16 s with the build.
+- `python tools/qa/diff_compile.py --all`, 21:51 - 22:01, 552 s: mp_test, l12u_control_monolith, mp_close_combat,
+  mp_close_combat_implicit, l03u_agr_underground PASS, every second compile byte for byte, mp_test on one thread
+  byte for byte (18.1 s against 2.3 s). The Rust 2.3 / 52.4 / 11.8 / 39.2 + 5.0 / 31.6 s wall (26 / 629 / 161 / 574 /
+  349 s CPU) against the C++'s 20.1 / 504.8 / 78.4 / 175.5 + 34.0 / 186.8 s wall (11.6 / 1390.7 / 115.4 / 667.9 /
+  688.6 s CPU).
+- Five l03u runs: one hash (above).
+
+### For the plan
+
+- Section 9, the light: "lightmaps within 1.5 / 16, vertex light within 0.2 / 2, the detail objects' light byte for
+  byte. Seen: lightmaps mean 0.68 and p99 8 at most (l12u), flat triangles included; vertex light 0.085 / 1." The
+  second picture's colour is judged less each side's own encoder disagreement with its first picture's alpha.
+- Section 9, "compared this way": add `mp_close_combat_implicit` (the implicit light, two pages, its MU models
+  emptied because XrLC crashes on them) and the rule for deflectors on other pages.
+- Phase 8, "the same result on any number of them": proven by `diff_compile.py` (twice, and one thread against all).
+- A deliberate difference: the BVH answers a still axis as the C++'s slab test does; the C++'s rounded boxes and its
+  shared cached triangle are not ported. `Place_Perpixel`'s eight-at-a-time quirk is ported (no longer a difference).
+- Unproven (compare_compile.py's header, phase by phase): the Draft quality, `-nosun`, `-nosmg`, `-no_optimize`,
+  `-att`, `-no_invalidefaces` and the invalid-face abort, more than two pages, MU models other than l03u's (at 4 px/m,
+  one sample, `-noise`), the implicit light at more than one sample, the nine-sample jitter only through the
+  lightmaps of mp_test and l12u.

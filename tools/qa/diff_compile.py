@@ -1,12 +1,15 @@
 """The level compiler of the editor (gz-lc) against the C++ compilers of the cutover.
 
     python tools/qa/diff_compile.py                 the scenes that failed or changed since the last run
-    python tools/qa/diff_compile.py --all           every scene
+    python tools/qa/diff_compile.py --all           every scene, each compiled twice by the Rust compiler
     python tools/qa/diff_compile.py --scene mp_test one scene
     python tools/qa/diff_compile.py --refresh-oracle   record the C++ side again (and the input)
 
 The oracle is recorded once per scene, keyed by the scene's files, the C++ compilers and the editor's data, under
-Intermediate/oracle/compile-<scene>-<key>/:
+Intermediate/oracle/compile-<scene>-<key>/ (a scene of SOURCE is another scene's level under build options of its
+own, recorded under its own name). A recording is made whole in `<record>.part` and then takes the record's place;
+--refresh-oracle moves an old record of the same key aside and removes it once the new one is in, and a recording
+that fails leaves the old one as it was.
   input/        the build files the Rust editor's Make All wrote (build.prj and the rest) - the ONE input both
                 compilers read
   cpp1/, cpp2/  what XrLC.exe and xrDO_Light.exe wrote in two runs (the second is the C++ run-to-run floor)
@@ -22,6 +25,11 @@ When a record is missing and that folder holds no compiler, the scene fails with
 The Rust compile runs `Grizzly.exe -headless -compile <level folder>` (Intermediate/cargo/fast unless
 GRIZZLY_LC_EXE names another), then `-compile_details`. The comparison is in compare_compile.py; this file runs the
 compilers and records. Everything a run prints goes to Intermediate/compile/run.log as it happens.
+
+The same on every run and on any number of cores: a scene of TWICE (all of them with --all) is compiled a second
+time and every file of the two compiles is wanted byte for byte; ONE_THREAD is compiled once more on one thread
+(`-threads=1`) and wanted byte for byte against the compile on every core. A difference names the first file and
+byte that differ.
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -53,7 +62,11 @@ CPP_BIN = os.path.join(REPO, "Bin", "x64", "CppCompilers")
 RUST_EXE = os.environ.get("GRIZZLY_LC_EXE") or os.path.join(INTER, "cargo", "fast", "Grizzly.exe")
 EDITOR_EXE = os.environ.get("GRIZZLY_QA_EXE") or RUST_EXE
 TEST_PROJECT = r"D:\XFinedProjects\Test"
-SCENES = ["mp_test", "l12u_control_monolith", "mp_close_combat", "l03u_agr_underground"]
+SCENES = ["mp_test", "l12u_control_monolith", "mp_close_combat", "mp_close_combat_implicit", "l03u_agr_underground"]
+# Two lightmap pages come from mp_close_combat_implicit: mp_test stays one page at 20 and at 40 px/m, because every
+# large deflector is clamped to 508 texels a side (xrDeflector.cpp: clamp(dwWidth, 1, 512 - 2 * BORDER)).
+# A scene recorded under a name of its own: the level of another scene under other build options (OPTIONS).
+SOURCE = {"mp_close_combat_implicit": "mp_close_combat"}
 # Scenes proven for the detail compiler alone: XrLC does not finish them within the limit (mp_close_combat's
 # implicit light passes ten minutes), so both detail compilers read the same build.prj, build.details and the
 # Rust compiler's build.cform and build.lights (equal to the C++ ones under the rules of the other scenes).
@@ -63,14 +76,33 @@ DETAILS_ONLY = {"mp_close_combat"}
 # 10 px/m and 9 jitter samples XrLC's LMaps alone took 513 s. Neither option reaches the MU models: the pixels per
 # metre size the deflectors (xrDeflector.cpp), the jitter samples their texels (xrDeflectorLight.cpp); the MU light
 # takes its samples from the quality (xrMU_Model_Calc_lighting.cpp), which stays High.
-OPTIONS = {"l03u_agr_underground": {"light_pixel_per_meter": "4.000000", "light_jitter_samples": "1"}}
+OPTIONS = {"l03u_agr_underground": {"light_pixel_per_meter": "4.000000", "light_jitter_samples": "1"},
+           # the implicit (terrain) light and two lightmap pages, at the scene's own 10 px/m, without -noise (the
+           # static progressive meshes too; its MU models are emptied, EMPTIED). XrLC at the scene's own nine jitter
+           # samples passed ten minutes in "LIGHT: Implicit". The samples are what the implicit pass costs - every
+           # texel of the terrain texture is lit once per sample (xrLight_Implicit.cpp, Jitter_Select) - and the
+           # one setting of the build that reaches it besides the quality (Draft skips it) and the lights; one sample
+           # runs the same code once per texel. The nine-sample pattern is proven by the lightmaps of mp_test and
+           # l12u_control_monolith (the same Jitter_Select).
+           "mp_close_combat_implicit": {"light_jitter_samples": "1"}}
 # Flags both level compilers get for a scene. -noise leaves the static visuals without progressive meshes
 # (xrFlex2OGF.cpp: `if (!b_noise) MakeProgressive`); the MU models keep theirs (xrMU_Model_Calc_ogf.cpp calls it
 # unconditionally). With 4 px/m and one sample XrLC still passed 600 s in "Converting to OGFs" (the static
 # visuals' VIPM, one thread); the static progressive meshes are proven on l12u_control_monolith.
 FLAGS = {"l03u_agr_underground": ["-noise"]}
 # The limit of one C++ run where ten minutes do not hold it: the scene's one recording (two runs) may take forty.
-LIMITS = {"l03u_agr_underground": 1200.0}
+LIMITS = {"l03u_agr_underground": 1200.0, "mp_close_combat_implicit": 1200.0}
+# Chunks of build.prj emptied in the input both compilers read. XrLC of cpp-compilers-last crashes on
+# mp_close_combat's multi-usage models: an access violation in "Converting MU-models to OGFs", right after the
+# tangent basis of a model part of 7706 vertices (calc_ogf, xrMU_Model_Calc_ogf.cpp), at the same log line in two
+# runs, after every light was written. Without the models (14), their references (15) and the LODs they name (13)
+# the implicit light and the two pages are recorded; the MU models stay proven by l03u_agr_underground alone.
+EMPTIED = {"mp_close_combat_implicit": [13, 14, 15]}
+# The scenes whose second Rust compile costs seconds: compiled twice by default and every file of the two compiles
+# wanted byte for byte (--all: every scene). ONE_THREAD, the smallest, is compiled a third time on one thread
+# (-threads=1) and wanted byte for byte against the compile on every core.
+TWICE = {"mp_test", "mp_close_combat", "l03u_agr_underground"}
+ONE_THREAD = "mp_test"
 FORMAT = 3
 CPP_SOURCE = "cpp-compilers-last"
 LIMIT = 600.0
@@ -103,7 +135,13 @@ def stamp(p: str) -> str:
         return "missing"
 
 
+def source_of(scene: str) -> str:
+    return SOURCE.get(scene, scene)
+
+
 def scene_files(scene: str) -> list[tuple[str, str]]:
+    """The files of the scene's level (the source level of a scene recorded under a name of its own)."""
+    scene = source_of(scene)
     root = os.path.join(REPO, "rawdata", "levels")
     out = [(scene + ".level", os.path.join(root, scene + ".level"))]
     base = os.path.join(root, scene)
@@ -117,6 +155,8 @@ def scene_files(scene: str) -> list[tuple[str, str]]:
 
 def key_of(scene: str) -> str:
     parts = {"format": FORMAT, "scene": [f"{r}|{stamp(p)}" for r, p in scene_files(scene)]}
+    if scene in SOURCE:
+        parts["record"] = scene
     if scene in OPTIONS:
         parts["options"] = OPTIONS[scene]
     if scene in FLAGS:
@@ -331,6 +371,20 @@ def mcp(cmd: str, timeout: float = 120.0, **args) -> dict:
     return json.loads(buf.decode("utf-8", "replace") or "{}")
 
 
+def empty_chunks(path: str, ids: list[int]) -> None:
+    """build.prj with the bodies of the given chunks emptied, every other byte as it was."""
+    with open(path, "rb") as f:
+        data = f.read()
+    out, at = bytearray(), 0
+    while at + 8 <= len(data):
+        cid, size = struct.unpack_from("<II", data, at)
+        body = b"" if (cid & 0x7FFFFFFF) in ids else data[at + 8:at + 8 + size]
+        out += struct.pack("<II", cid, len(body)) + body
+        at += 8 + size
+    with open(path, "wb") as f:
+        f.write(bytes(out))
+
+
 def make_input(scene: str, dst: str) -> None:
     """The Rust editor's Make All of the scene in a copy of the Test project: its level folder is the input."""
     work = tempfile.mkdtemp(prefix="gzlc_in_")
@@ -341,8 +395,9 @@ def make_input(scene: str, dst: str) -> None:
             to = os.path.join(project, "rawdata", "levels", *rel.split("/"))
             os.makedirs(os.path.dirname(to), exist_ok=True)
             shutil.copy2(p, to)
+        source = source_of(scene)
         if scene in OPTIONS:
-            lower_options(os.path.join(project, "rawdata", "levels", scene + ".level"), OPTIONS[scene])
+            lower_options(os.path.join(project, "rawdata", "levels", source + ".level"), OPTIONS[scene])
             log(f"  {scene}: build options {OPTIONS[scene]}")
         home = os.path.join(work, "home")
         os.makedirs(home, exist_ok=True)
@@ -364,17 +419,20 @@ def make_input(scene: str, dst: str) -> None:
                 if time.monotonic() > deadline:
                     raise RuntimeError("the editor never opened the project")
                 time.sleep(0.1)
-            a = mcp("open_scene", timeout=300, scene=scene + ".level")
+            a = mcp("open_scene", timeout=300, scene=source + ".level")
             if not a.get("ok"):
                 raise RuntimeError(f"open_scene: {a}")
             a = mcp("level_build", timeout=1800, action="make_all")
             if not a.get("ok"):
                 raise RuntimeError(f"make_all: {a}")
-            level = os.path.join(project, "gamedata", "levels", scene)
+            level = os.path.join(project, "gamedata", "levels", source)
             os.makedirs(dst, exist_ok=True)
             for n in sorted(os.listdir(level)):
                 if os.path.isfile(os.path.join(level, n)):
                     shutil.copy2(os.path.join(level, n), os.path.join(dst, n))
+            if scene in EMPTIED:
+                empty_chunks(os.path.join(dst, "build.prj"), EMPTIED[scene])
+                log(f"  {scene}: build.prj chunks {EMPTIED[scene]} emptied")
             log(f"  input of {scene}: {', '.join(sorted(os.listdir(dst)))}")
         finally:
             try:
@@ -431,7 +489,7 @@ def run_cpp(scene: str, input_dir: str, dst: str, details_only: bool = False) ->
                 shutil.copy2(os.path.join(CPP_BIN, n), os.path.join(bin_dir, n))
         with open(os.path.join(stage, "fsgame.ltx"), "wb") as f:
             f.write(stage_fsgame(stage).encode("cp1251"))
-        level = os.path.join(stage, "gamedata", "levels", scene)
+        level = os.path.join(stage, "gamedata", "levels", source_of(scene))
         shutil.copytree(input_dir, level)
         inputs = {n: sha256_file(os.path.join(input_dir, n)) for n in os.listdir(input_dir)}
         rec: dict = {"runs": {}}
@@ -440,8 +498,9 @@ def run_cpp(scene: str, input_dir: str, dst: str, details_only: bool = False) ->
             if not enabled:
                 continue
             flags = FLAGS.get(scene, []) if exe == "XrLC.exe" else []
-            log(f"  C++ {exe} -f {scene} -silent {' '.join(flags)}")
-            code, w, wall = run_limited([os.path.join(bin_dir, exe), "-f", scene, "-silent", "-flushlog", *flags],
+            log(f"  C++ {exe} -f {source_of(scene)} -silent {' '.join(flags)}")
+            code, w, wall = run_limited([os.path.join(bin_dir, exe), "-f", source_of(scene), "-silent", "-flushlog",
+                                         *flags],
                                         bin_dir, os.path.join(stage, "_appdata_", "logs"),
                                         limit=LIMITS.get(scene, LIMIT))
             cpu = w.samples[-1][1] if w.samples else 0.0
@@ -483,14 +542,47 @@ def our_processes() -> list[str]:
 
 
 def record_oracle(scene: str, key: str) -> str:
+    """The record of the scene made whole in `<record>.part` and then put in the record's place: a record already
+    there (--refresh-oracle) is moved aside first and removed once the new one is in; a recording that fails leaves
+    the old record as it was and no `.part`."""
     rd = record_dir(scene, key)
     tmp = rd + ".part"
     qa_target.remove_tree(tmp)
-    os.makedirs(tmp)
     log(f"{scene}: recording the oracle ({key})")
     if not os.path.isfile(os.path.join(CPP_BIN, "XrLC.exe")):
         raise RuntimeError(f"{scene}: no record under {ORACLE} for this input, and {CPP_BIN} holds no C++ compiler to "
                            f"record one (a build of {CPP_SOURCE}: Build.ps1 of that tag, -Only compilers)")
+    os.makedirs(tmp)
+    try:
+        record_into(scene, key, tmp)
+    except BaseException:
+        qa_target.remove_tree(tmp)
+        raise
+    old = rd + ".old"
+    qa_target.remove_tree(old)
+    if os.path.isdir(rd):
+        os.replace(rd, old)
+    try:
+        os.replace(tmp, rd)
+    except OSError:
+        if os.path.isdir(old):
+            os.replace(old, rd)
+        qa_target.remove_tree(tmp)
+        raise
+    qa_target.remove_tree(old)
+    return rd
+
+
+def ended(code: int | None, limit: float) -> str:
+    """How a C++ run that did not succeed ended, in words."""
+    if code is None:
+        return f"did not finish within {limit:.0f} s"
+    if code < 0 or code > 0x7FFFFFFF:
+        return f"crashed (exception 0x{code & 0xFFFFFFFF:08X})"
+    return f"exited with code {code}"
+
+
+def record_into(scene: str, key: str, tmp: str) -> None:
     make_input(scene, os.path.join(tmp, "input"))
     rec = {"scene": scene, "key": key, "made": time.strftime("%Y-%m-%d %H:%M:%S")}
     rec["input"] = {n: {"size": os.path.getsize(os.path.join(tmp, "input", n)),
@@ -502,17 +594,20 @@ def record_oracle(scene: str, key: str) -> str:
                         for n in os.listdir(os.path.join(tmp, "input"))}
     for tag in ("cpp1", "cpp2"):
         rec[tag] = run_cpp(scene, os.path.join(tmp, "input"), os.path.join(tmp, tag), scene in DETAILS_ONLY)
-        bad = [e for e, r in rec[tag]["runs"].items() if r["exit"] != 0]
+        bad = [(e, r) for e, r in rec[tag]["runs"].items() if r["exit"] != 0]
         if bad:
-            # a C++ run that failed or passed its limit records nothing, and the second run is not started
-            qa_target.remove_tree(tmp)
-            raise RuntimeError(f"{scene}: {', '.join(bad)} did not finish within {LIMITS.get(scene, LIMIT):.0f} s: "
-                               "no oracle")
+            # a C++ run that failed or passed its limit records nothing, and the second run is not started; what it
+            # wrote and its log stay under Intermediate/compile/<scene>/cpp_failed for a look
+            kept = os.path.join(OUT, scene, "cpp_failed")
+            qa_target.remove_tree(kept)
+            shutil.copytree(os.path.join(tmp, tag), kept)
+            with open(os.path.join(kept, "run.json"), "w", encoding="utf-8") as f:
+                json.dump(rec[tag], f, indent=1)
+            how = "; ".join(f"{e} {ended(r['exit'], LIMITS.get(scene, LIMIT))}" for e, r in bad)
+            raise RuntimeError(f"{scene}: {how}: no oracle (what it wrote and its log: {kept})")
     with open(os.path.join(tmp, "record.json"), "w", encoding="utf-8") as f:
         json.dump(rec, f, indent=1)
-    # a record of an earlier input or build stays where it is: records are never deleted here
-    os.replace(tmp, rd)
-    return rd
+    # a record of an earlier input or build stays where it is: only a record of the same key is replaced
 
 
 # ------------------------------------------------------------------------------------------- the Rust side
@@ -530,7 +625,8 @@ def rust_level_files(scene: str, input_dir: str) -> None:
         qa_target.remove_tree(work)
 
 
-def run_rust(scene: str, input_dir: str, dst: str, details: bool = True, level: bool = True) -> dict:
+def run_rust(scene: str, input_dir: str, dst: str, details: bool = True, level: bool = True,
+             extra: tuple[str, ...] = ()) -> dict:
     qa_target.remove_tree(dst)
     shutil.copytree(input_dir, dst)
     rec: dict = {"runs": {}, "exe": RUST_EXE, "exe_stamp": stamp(RUST_EXE)}
@@ -543,11 +639,11 @@ def run_rust(scene: str, input_dir: str, dst: str, details: bool = True, level: 
                 continue
             lines: list = []
             log(f"  Rust {flag} {scene}")
-            flags = FLAGS.get(scene, []) if flag == "-compile" else []
+            flags = [*FLAGS.get(scene, []), *extra] if flag == "-compile" else []
             code, w, wall = run_limited([RUST_EXE, "-headless", "-nodlg", "-root", REPO, "-home", home, flag, dst,
                                          *flags], REPO, None, lines, limit=LIMITS.get(scene, LIMIT))
             cpu = w.samples[-1][1] if w.samples else 0.0
-            log(f"  Rust {flag}: exit {code}, {wall:.1f} s wall, {cpu:.1f} s cpu")
+            log(f"  Rust {flag} {' '.join(flags)}: exit {code}, {wall:.1f} s wall, {cpu:.1f} s cpu")
             rec["runs"][flag] = {"exit": code, "wall": wall, "cpu": w.samples, "lines": lines}
             if code != 0:
                 for _, l in lines[-15:]:
@@ -557,6 +653,54 @@ def run_rust(scene: str, input_dir: str, dst: str, details: bool = True, level: 
     finally:
         qa_target.remove_tree(home)
     return rec
+
+
+def first_difference(a: str, b: str) -> str | None:
+    """Two outputs of the Rust compiler byte for byte: None, or the first file (by name) and offset that differ."""
+    def files(d: str) -> dict[str, str]:
+        out = {}
+        for root, _, names in os.walk(d):
+            for n in names:
+                p = os.path.join(root, n)
+                out[os.path.relpath(p, d).replace("\\", "/")] = p
+        return out
+    fa, fb = files(a), files(b)
+    for name in sorted(set(fa) | set(fb)):
+        if name not in fa or name not in fb:
+            return f"{name} is in one output only"
+        with open(fa[name], "rb") as f:
+            x = f.read()
+        with open(fb[name], "rb") as f:
+            y = f.read()
+        if x != y:
+            at = next((i for i, (p, q) in enumerate(zip(x, y)) if p != q), min(len(x), len(y)))
+            return f"{name} differs from byte {at} on ({len(x)} / {len(y)} bytes)"
+    return None
+
+
+def determinism(scene: str, rd: str, rust_dir: str, every: bool) -> list[str]:
+    """The scene compiled again (TWICE, or every scene with --all) and, for ONE_THREAD, on one thread: each output
+    byte for byte equal to the first compile's."""
+    runs = []
+    if every or scene in TWICE:
+        runs.append(("again", ()))
+    if scene == ONE_THREAD:
+        runs.append(("one thread", ("-threads=1",)))
+    bad = []
+    for what, extra in runs:
+        other = os.path.join(OUT, scene, "rust_" + what.replace(" ", "_"))
+        log(f"{scene}: the Rust compile {what}")
+        r = run_rust(scene, os.path.join(rd, "input"), other, level=scene not in DETAILS_ONLY, extra=extra)
+        if any(x["exit"] != 0 for x in r["runs"].values()):
+            bad.append(f"the Rust compile {what} failed")
+            continue
+        diff = first_difference(rust_dir, other)
+        log(f"  {what}: " + (diff or f"every file byte for byte ({len(r['files'])} written)"))
+        if diff:
+            bad.append(f"the Rust compile {what}: {diff}")
+        else:
+            qa_target.remove_tree(other)
+    return bad
 
 
 # ------------------------------------------------------------------------------------------- main
@@ -597,6 +741,10 @@ def main() -> int:
         ok = all(r["exit"] == 0 for r in rrec["runs"].values())
         if ok and not args.no_compare:
             ok = compare_compile.compare(scene, rd, rec, rust_dir, rrec, os.path.join(OUT, scene), log)
+        if all(r["exit"] == 0 for r in rrec["runs"].values()):
+            for p in determinism(scene, rd, rust_dir, args.all):
+                log("  ! " + p)
+                ok = False
         state[scene] = {"finger": finger, "ok": ok, "when": time.strftime("%Y-%m-%d %H:%M:%S")}
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=1)

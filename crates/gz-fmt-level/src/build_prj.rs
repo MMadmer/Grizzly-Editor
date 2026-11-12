@@ -397,6 +397,89 @@ pub struct BuildProject {
     pub mu_refs: Vec<MuReference>,
 }
 
+/// What a chunk of the file holds, for a sentence about it, and the size of its records when it
+/// is an array of them.
+fn chunk_info(id: u32) -> Option<(&'static str, usize)> {
+    Some(match id {
+        chunk::VERSION => ("version", 4),
+        chunk::PARAMETERS => ("parameters", 1),
+        chunk::VERTICES => ("vertices", 12),
+        chunk::FACES => ("faces", FACE),
+        chunk::MATERIALS => ("materials", MATERIAL),
+        chunk::SHADERS_RENDER => ("shaders", SHADER),
+        chunk::SHADERS_COMPILE => ("compiler shaders", SHADER),
+        chunk::TEXTURES => ("textures", TEXTURE),
+        chunk::GLOWS => ("glows", GLOW),
+        chunk::PORTALS => ("portals", PORTAL),
+        chunk::LIGHT_CONTROL => ("light controllers", 1),
+        chunk::LIGHT_STATIC => ("static lights", LIGHT),
+        chunk::LIGHT_DYNAMIC => ("dynamic lights", LIGHT_DYNAMIC),
+        chunk::LOD_MODELS => ("LOD models", LOD),
+        chunk::MU_MODELS => ("multi-usage models", 1),
+        chunk::MU_REFS => ("multi-usage references", MU_REF),
+        chunk::SMOOTH_GROUPS => ("smoothing groups", 4),
+        _ => return None,
+    })
+}
+
+/// The chunks the C++ compiler cannot do without (`CBuild::Load` opens them unchecked).
+const REQUIRED: [u32; 7] = [
+    chunk::VERSION,
+    chunk::PARAMETERS,
+    chunk::VERTICES,
+    chunk::FACES,
+    chunk::TEXTURES,
+    chunk::LIGHT_CONTROL,
+    chunk::LIGHT_STATIC,
+];
+
+/// The file is chunks of `build.prj` end to end, each whole, the required ones there, every
+/// array a whole number of records. The chunk reader stops at a header that does not fit, so
+/// without this a file cut short would read as a build that has fewer chunks.
+fn check_whole(bytes: &[u8]) -> Result<()> {
+    let bad = |s: String| Err(LevelError::Invalid(s));
+    if bytes.is_empty() {
+        return bad("build.prj is empty.".into());
+    }
+    let mut at = 0usize;
+    let mut seen = Vec::new();
+    while at < bytes.len() {
+        let Some(head) = bytes.get(at..at + 8) else {
+            return bad(format!(
+                "build.prj is cut short: it ends {} bytes into the header of a chunk.",
+                bytes.len() - at
+            ));
+        };
+        let id = u32_at(head, 0) & 0x7fff_ffff;
+        let size = u32_at(head, 4) as usize;
+        let Some((name, record)) = chunk_info(id) else {
+            return bad(if at == 0 {
+                "build.prj is not a build project: it does not start with a chunk of one.".into()
+            } else {
+                format!("build.prj is damaged: {} bytes into it stands no chunk of a build project.", at)
+            });
+        };
+        let left = bytes.len() - at - 8;
+        if size > left {
+            return bad(format!(
+                "build.prj is cut short: its {name} chunk holds {size} bytes and the file ends {left} bytes into it."
+            ));
+        }
+        if !size.is_multiple_of(record) {
+            return bad(format!(
+                "build.prj is damaged: its {name} chunk holds {size} bytes, not a whole number of {record}-byte records."
+            ));
+        }
+        seen.push(id);
+        at += 8 + size;
+    }
+    if let Some(&missing) = REQUIRED.iter().find(|id| !seen.contains(id)) {
+        let name = chunk_info(missing).map_or("", |c| c.0);
+        return bad(format!("build.prj is incomplete: it has no {name} chunk."));
+    }
+    Ok(())
+}
+
 /// The records of a chunk whose body is an array of `size`-byte structs.
 fn records<T>(r: &Reader<'_>, id: u32, size: usize, read: impl Fn(&[u8]) -> T) -> Result<Vec<T>> {
     let Some(chunk) = r.open_chunk(id)? else { return Ok(Vec::new()) };
@@ -427,7 +510,10 @@ fn read_mu_models(bytes: &[u8]) -> Result<Vec<MuModel>> {
 }
 
 impl BuildProject {
+    /// The file; one cut short, damaged or lacking a chunk the compiler needs is refused with a
+    /// sentence saying which.
     pub fn read(bytes: &[u8]) -> Result<Self> {
+        check_whole(bytes)?;
         let r = Reader::new(bytes);
         let version = r.need_chunk(chunk::VERSION)?.reader().r_u32()?;
         if !(17..=XRCL_CURRENT_VERSION).contains(&version) {
@@ -804,6 +890,30 @@ mod tests {
         let mut version = bytes.clone();
         version[8] = 3;
         assert!(matches!(BuildProject::read(&version), Err(LevelError::Version { found: 3, .. })));
+        // cut short anywhere, a chunk missing, a record cut in two, a size past the end: refused
+        // with a sentence, never read as a build with fewer chunks
+        let says = |b: &[u8], what: &str| {
+            let e = BuildProject::read(b).unwrap_err().to_string();
+            assert!(e.contains(what), "{e}");
+        };
+        for cut in [bytes.len() - 1, bytes.len() / 2, 100, 14, 9] {
+            says(&bytes[..cut], "cut short");
+        }
+        says(&bytes[..0], "empty");
+        says(&[0xAB; 64], "not a build project");
+        let mut walk = Reader::new(&bytes).chunks().map(|c| c.2.len() + 8);
+        let first_two = walk.next().unwrap() + walk.next().unwrap();
+        says(&bytes[..first_two], "incomplete");
+        let mut odd = bytes.clone();
+        // the vertices chunk (third) one byte short of whole records, the file still whole
+        let at = first_two + 4;
+        let size = u32::from_le_bytes(odd[at..at + 4].try_into().unwrap());
+        odd[at..at + 4].copy_from_slice(&(size - 1).to_le_bytes());
+        odd.remove(at + 4);
+        says(&odd, "whole number");
+        let mut past = bytes.clone();
+        past[4..8].copy_from_slice(&0x7fff_fff0u32.to_le_bytes());
+        says(&past, "cut short");
         // a multi-usage model that claims the whole address space
         let mut models = Writer::new();
         models.w_stringz("m");
