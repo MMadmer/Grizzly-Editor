@@ -16,6 +16,7 @@
 //! - [`OverlayVisuals`], [`VisualsWriter`], [`append_cuts`], [`sanitize_file_name`],
 //!   [`unique_visual_name`] - the text registry `overlay_visuals.ltx`.
 //! - [`Bvh`] / [`Ray`] / [`RayHit`] - the picking tree: `Bvh::build` (parallel), `ray_nearest`,
+//!   `ray_visit`, [`ray_triangle`] (the walks' own triangle test),
 //!   `ray_any`, `ray_all`, `rays_nearest`, `rays_any`, `query_box`, `query_sphere`,
 //!   `query_frustum`.
 //!
@@ -69,7 +70,7 @@ pub use build_prj::{
     BuildTexture, Light, LightControl, LodFace, MAX_PORTAL_VERTS, MuModel, MuReference, Portal,
     XRCL_CURRENT_VERSION, chunk as build_chunk,
 };
-pub use bvh::{Bvh, Ray, RayHit};
+pub use bvh::{Bvh, Ray, RayHit, ray_triangle};
 pub use cform::{CFORM_VERSION, CForm, Tri};
 pub use collector::{Collector, CollectorPacked};
 pub use details::{

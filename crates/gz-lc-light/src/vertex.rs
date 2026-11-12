@@ -1,0 +1,246 @@
+//! The light of the vertex-lit faces (`xrLightVertex.cpp`, `LightVertex`): every vertex of a
+//! face whose shader asks for vertex light gets the static light and the sun (its hemisphere
+//! was found before and is kept), then the vertices at one point share their light by their
+//! translucency (`g_trans`).
+//!
+//! The C++ registers a vertex into its point's group as its thread finishes it; here the
+//! vertices are lit in parallel and registered in list order, which is the order the C++ has
+//! on one thread.
+
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use glam::Vec3;
+use rayon::prelude::*;
+
+use crate::color::{BaseColor, ColorC};
+use crate::data::{ShaderXrlc, Shaders, shader_of};
+use crate::deflector::LightEnv;
+use crate::math::EPS_L;
+use crate::mesh::VertId;
+use crate::point::{LP_DONT_HEMI, light_point};
+use crate::ray::LightCache;
+use crate::{Ctl, Result};
+
+/// A key of the C++ multimap of points by x: equal keys stay in the order they came.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Key(f32, u32);
+
+impl Eq for Key {}
+
+impl PartialOrd for Key {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+impl Ord for Key {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&o.0).then(self.1.cmp(&o.1))
+    }
+}
+
+/// The groups of vertices at one point (`g_trans`, `mapVert`): a vertex joins the first group
+/// whose first vertex is within `EPS_L` of it, groups ordered by their first vertex's x.
+#[derive(Debug, Default)]
+pub struct TransGroups {
+    map: BTreeMap<Key, usize>,
+    groups: Vec<(Vec3, Vec<u32>)>,
+    seq: u32,
+}
+
+impl TransGroups {
+    fn key(x: f32) -> f32 {
+        // -0 and +0 are one key, as the C++ compares them
+        if x == 0.0 { 0.0 } else { x }
+    }
+
+    /// Adds item `id` at point `p`. With `first_only` it joins the first group it fits
+    /// (`g_trans_register`), otherwise every group it fits (`xrMU_Model::calc_lighting`).
+    pub fn register(&mut self, p: Vec3, id: u32, first_only: bool) {
+        let eps2 = 2.0 * EPS_L;
+        let k = Self::key(p.x);
+        let lo = Key(k - eps2, 0);
+        let hi = Key(k + eps2, u32::MAX);
+        let mut found = false;
+        for (_, &g) in self.map.range(lo..=hi) {
+            let Some((front, list)) = self.groups.get_mut(g) else { continue };
+            if similar(*front, p, EPS_L) {
+                list.push(id);
+                found = true;
+                if first_only {
+                    return;
+                }
+            }
+        }
+        if !found {
+            let g = self.groups.len();
+            self.groups.push((p, vec![id]));
+            self.map.insert(Key(k, self.seq), g);
+            self.seq += 1;
+        }
+    }
+
+    /// The groups in the C++ map order, each a list of items.
+    #[must_use]
+    pub fn in_order(&self) -> Vec<&[u32]> {
+        self.map.values().filter_map(|&g| self.groups.get(g).map(|(_, l)| l.as_slice())).collect()
+    }
+}
+
+fn similar(a: Vec3, b: Vec3, eps: f32) -> bool {
+    (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps
+}
+
+/// The mixed light of a group (`Process all groups`): each vertex goes towards the brightest of
+/// the group by its translucency (`tmp`), and is never darker than it was; `scale` is applied
+/// after (0.5 for an MU model, 1 for the level).
+#[must_use]
+pub fn mix_group(colors: &[ColorC], scale: f32) -> Vec<ColorC> {
+    let mut c = ColorC::default();
+    for v in colors {
+        c.max(v);
+    }
+    colors
+        .iter()
+        .map(|v| {
+            let mut r = ColorC::default();
+            r.lerp(v, &c, v.tmp);
+            r.max(v);
+            if scale != 1.0 {
+                r.mul(scale);
+            }
+            r
+        })
+        .collect()
+}
+
+/// `GetTranslucency`: whether a face of the vertex asks for vertex light, and the mean
+/// translucency of its faces.
+fn translucency(
+    env: &LightEnv<'_>,
+    shaders: &Shaders,
+    materials: &[crate::data::BuildMaterial],
+    v: VertId,
+) -> (bool, f32) {
+    let Some(vx) = env.mesh.vertex(v) else { return (false, 0.0) };
+    let mut vertex_light = false;
+    let mut t = 0.0f32;
+    for f in &vx.adjacents {
+        let Some(face) = env.mesh.face(*f) else { continue };
+        let s = shader_of(face.material, shaders, materials);
+        t += s.vert_translucency;
+        if s.flags & ShaderXrlc::LIGHT_VERTEX != 0 {
+            vertex_light = true;
+        }
+    }
+    (vertex_light, t / vx.adjacents.len() as f32)
+}
+
+/// `LightVertex`: answers the new light of the listed vertices in list order (`None` for one
+/// that keeps its own). The caller writes them back ([`apply_vertex_light`]).
+pub fn light_vertices(
+    env: &LightEnv<'_>,
+    shaders: &Shaders,
+    materials: &[crate::data::BuildMaterial],
+    ctl: &Ctl<'_>,
+) -> Result<Vec<Option<BaseColor>>> {
+    ctl.stage("Calculating...");
+    let verts = env.mesh.vertices();
+    let total = verts.len();
+    let done = AtomicUsize::new(0);
+    let tracer = env.tracer();
+    let flags = env.sun_flag() | LP_DONT_HEMI;
+    let lit: Vec<Option<BaseColor>> = verts
+        .par_iter()
+        .with_min_len(64)
+        .map_init(LightCache::default, |cache, &v| {
+            if ctl.cancelled() {
+                return None;
+            }
+            let (vertex_light, trans) = translucency(env, shaders, materials, v);
+            let vx = env.mesh.vertex(v)?;
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n.is_multiple_of(4096) {
+                ctl.progress(n, total);
+            }
+            if !vertex_light {
+                return None;
+            }
+            let old = vx.c.get();
+            let mut c = ColorC::default();
+            light_point(&tracer, cache, &mut c, vx.p, vx.n, env.lights, flags, None);
+            c.tmp = trans;
+            c.mul(0.5);
+            // the hemisphere found before is kept
+            c.hemi = old.hemi;
+            Some(BaseColor::from_c(&c))
+        })
+        .collect();
+    ctl.check()?;
+
+    ctl.stage("Transluenting...");
+    let mut groups = TransGroups::default();
+    for (i, (v, c)) in verts.iter().zip(&lit).enumerate() {
+        if c.is_some()
+            && let Some(vx) = env.mesh.vertex(*v)
+        {
+            groups.register(vx.p, i as u32, true);
+        }
+    }
+    let mut out = lit;
+    let mixed: Vec<Vec<(u32, BaseColor)>> = groups
+        .in_order()
+        .par_iter()
+        .map(|list| {
+            let colors: Vec<ColorC> = list
+                .iter()
+                .filter_map(|&i| out.get(i as usize).copied().flatten())
+                .map(|c| c.get())
+                .collect();
+            list.iter().copied().zip(mix_group(&colors, 1.0).iter().map(BaseColor::from_c)).collect()
+        })
+        .collect();
+    for (i, c) in mixed.into_iter().flatten() {
+        if let Some(slot) = out.get_mut(i as usize) {
+            *slot = Some(c);
+        }
+    }
+    Ok(out)
+}
+
+/// Writes what [`light_vertices`] answered into the listed vertices.
+pub fn apply_vertex_light(mesh: &mut crate::mesh::Mesh, light: &[Option<BaseColor>]) {
+    let verts = mesh.vertices().to_vec();
+    for (v, c) in verts.iter().zip(light) {
+        if let (Some(c), Some(vx)) = (c, mesh.vertex_mut(*v)) {
+            vx.c = *c;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_vertex_joins_the_first_group_at_its_point() {
+        let mut g = TransGroups::default();
+        g.register(Vec3::new(1.0, 0.0, 0.0), 0, true);
+        g.register(Vec3::new(0.0, 0.0, 0.0), 1, true);
+        g.register(Vec3::new(1.0005, 0.0, 0.0), 2, true);
+        g.register(Vec3::new(1.0, 1.0, 0.0), 3, true);
+        let groups = g.in_order();
+        // by x: the group at 0, then the two at x = 1 in the order they were made
+        assert_eq!(groups, vec![&[1][..], &[0, 2][..], &[3][..]]);
+    }
+
+    #[test]
+    fn a_translucent_vertex_takes_the_light_of_its_neighbours() {
+        let dark = ColorC { rgb: Vec3::ZERO, hemi: 0.0, sun: 0.0, tmp: 0.5 };
+        let bright = ColorC { rgb: Vec3::ONE, hemi: 1.0, sun: 1.0, tmp: 0.0 };
+        let mixed = mix_group(&[dark, bright], 1.0);
+        assert_eq!(mixed[0].rgb, Vec3::splat(0.5));
+        assert_eq!(mixed[1].rgb, Vec3::ONE);
+    }
+}

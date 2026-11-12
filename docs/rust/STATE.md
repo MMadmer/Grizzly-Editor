@@ -84,6 +84,7 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-scene` | done | `SceneState` in one store (objects `OrdMap`, per-class order, names, selection, `ToolSettings`, `BulkData` with the AI map in 4096-node tiles), `SceneCmd` (place, delete, rename, transform batches with the group rules, select, show, tool eyes / read-only, group / ungroup, property replaces checked by `serial`, mod marks, order, snap list, bulk, saved, touch); all 16 classes read / written in LTX and stream (`objects`), the main file + parts (`io`: LTX, binary `.level`, undo / recovery stream, unknown sections / chunks / refused versions kept); `props` (rows, merge, text set, labels / units / help); library, pick tree (`Derived` by scene + library rev), drop / snap, recovery (`backup\recovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
 | `gz-export-level` | done | The module's level layer of `EditorModScene.cpp`, pure over a scene snapshot + gathered disk state (`gather`): `.xspawn` (`op = add/start/remove`, `[path:]`, custom data with `[xms_order]`, fixed bones checked against the OGF, smart cover, lamp, zone shapes, every C++ warning, merge or mirror), `overlay.xcform`, cuts (+ `[cut_N]`), world-space `.ogf` overlay (parallel) + `[v_N]` registry; `%f`/`%g` exactly as UCRT (`cfmt`); `mod_export_spawn`, `mod_export_xcform`, `mod_export_cut`, `mod_export_ogf_probe`; `install` fills `gz-build`'s bake (the mirror pass + its note), `gz-world`'s `SceneStarts` (E201 is `gz-world`'s) and `gz-nq`'s `SceneLookup` (restrictors, story ids, way paths, level). Tests written, not run |
 | `gz-levelbuild` | done | The full level build: `build.prj` (static + MU objects, LODs merged into `level_lods*.dds`, hemi / sun / point lights, glows, portals, sectors, wallmark faces), `level.ltx`, `BuildGame` files, HOM/SOM, `build.aimap`, `build.details` + `build_details.dds`, `level.wallmarks`, scene stat; CForm; level graph, game graph + cross table (`CGameGraphBuilder`), multi-level merge (`CGraphMerger`); `editor.spawn` (spawn constructor, patrols, artefact points, graph embedded); `nav` = the engine's `ILevelGraph` lookups + A*; XrLC / xrDO / xrAI / the game as `tokio::process` jobs (`level_run`, group `game`, Stop = `taskkill /T`); 19 commands named as `gz-ui-level` expects + `level_rebuild_status` + `level_build action=`; the breakable / climable objects of `BuildGame` (`breakable`); the whole `Scene->Validate` (`validate`). Tests written, not run |
+| `gz-lc-light` | done | phase 8a: `XrLCLight` + `xrDO_Light` - the compiler's model (mesh, deflectors, lightmaps, MU models, `xrLC_GlobalData` as `LcGlobalData`), the ray model, the light of lightmaps, vertices, implicit textures, MU models and detail slots; see "Phase 8a" below. 38 tests, run and green |
 | `gz-lua` | done | LuaJIT 2.1 vendored (`mlua` 0.12, JIT off, count hook = instruction budget); `LuaHost` pool of states (one per caller, scripts kept per revision), `Script`, `Arg::{Value, Chunk}` (a text run in an empty env: the asset is the table LuaJIT builds), `call_omitting`; sandbox = base + string/table/math, the C++ reader's 18 globals; `vanilla_source` rewrites the fork's `//` `/* */` comments; tests written, not run |
 | `gz-pda` | done | `evaluate` (gz-luadata check, then the game's `normalize`), `Layout`/`Item`/... read as the C++ read the stack, `preview` block, `template`; `Preview` state machine (pages, vars, log, toasts, rows, scroll, keys, map zoom, boxes / hit test / `visible` in canvas units); `PdaService` (reader and layout `Query`s, W320 textures, list, `[pda] layout`); the build check; `content_create kind=pda` template; `pda_list`, `pda_get`, `pda_write`, `pda_delete`, `pda_use`, `pda_validate`; tests written, not run |
 | `gz-ui-app` | done | the Start page (`ShellBuilder::start_page`: New Project form, Open Folder via `rfd` on a thread of its own, search, Last Opened / Name sort, 232x184 cards with twin parents, previews decoded on the pools through a `Query` keyed by path + write time, `ShowsNoScene`, card menu, `dlg.delete_project` counted off the UI thread), Link Game page card, the Output Log (one body for the drawer and the Level panel `output_log`, cursor over `gz_log::Log`, distinct counting per window from "Project opened:", the `log_state` hook), Preferences (`preferences` tab: 44 rows of `EditorPreferences`/`LevelPreferences`, nav, search, Keyboard page over `shortcuts` with an Assign dialog `dlg.assign_shortcut`); command `project_browser_menu`. Every row is live (`object_flags` and `recovery_*` are in `gz-app`'s `PREFS`, not on the `preferences` wire). Tests written, not run |
@@ -1738,6 +1739,121 @@ Decisions taken in this pass:
   would rebuild all 75 test binaries with thin LTO.
 - What the rules of this pass kept from deletion (`rawdata\*_imgui_default.ini`, `rawdata\ActorEditorLevel.cform`)
   and the root files no section names are left for the lead.
+
+## Phase 8a: the compiler's model and light
+
+`crates/gz-lc-light` (layer 4: `gz-task`, `gz-chunk`, `gz-fmt-level`, `gz-fmt-tex`, `gz-fmt-xr`), 6.9k lines, 38
+tests run green (`cg.sh test -p gz-lc-light`, 0.6 s). Brief: `docs/rust/briefs/lc-light.md`.
+
+**What it holds, module by module (the C++ it ports):**
+
+| Module | C++ |
+|---|---|
+| `math` | `xrCore`'s `iFloor`/`iCeil` (from `gz-fmt-level`), `exact_normalize`, `normalize(_safe)`, `from_bary`, `Fmatrix` (`build_camera`, `transform_tiny/_dir`, 4x3 `invert`, `transpose`), `Fbox2`, `getsphere`, `CRandom` + `random_dir`, `u8_clr`, colours |
+| `color` | `base_color_c`, `base_color` (`fixed16<16>`) |
+| `data` | `Shader_xrLC_LIB`, `post_process_materials`, `shader()`, `b_BuildTexture`, the texture part of `CBuild::Load` / `global_claculation_data::xrLoad` (`prepare_texture`), `HasAlphaChannel` |
+| `light` | `R_Light`, `base_lighting` (`select`), the lights of `CBuild::Load`, `build.lights` read/write |
+| `mesh` | `MeshStructure.h` (`Tvertex`/`Tface`), `DataVertex`/`DataFace`, `base_Vertex`/`base_Face`, `base_basis`, `_TCF`, `xrFace.cpp`, `xrFaceInline.h`, `MeshStaic.cpp`, `calculate_normals.h`, `itterate_adjacents*.h`, `face_smoth_flags.h`, the error writers of `err_save` |
+| `hash2d` | `hash2D` |
+| `layer` | `lm_layer`, the blits of `xrDeflector.cpp`, `ApplyBorders` |
+| `ray` | the product of `CBuild::BuildRapid` (`RapidCollector`, `RcastForm` = `build.cform`), `rayTrace` + `getLastRP_Scale` of both compilers |
+| `point` | `LightPoint` of `xrDeflectorLight.cpp` and of `detail_slot_calculate.cpp` |
+| `deflector` | `xrDeflector.cpp`, `xrDeflectorLight.cpp`, `xrDeflectoL_Direct.cpp`, `Jitter_Select`, `rms_*`, `compress_*`, `CBuild::LMapsLocal` / `CLMThread` |
+| `lightmap` | `Lightmap.cpp` (`Capture`, `Save` less the DDS), `xrPhase_MergeLM.cpp` + `xrPhase_MergeLM_Surface.cpp` + `xrPhase_MergeLM_Rect.h` (XrLC's, ported here as "the packing") |
+| `vertex` | `xrLightVertex.cpp` (and the `g_trans` groups the MU light shares) |
+| `implicit` | `xrLight_Implicit.cpp`, `xrLight_ImplicitDeflector.*`, `xrLight_ImplicitCalcGlobs.*`, `xrLight_ImplicitThread.cpp` |
+| `mu` | `xrMU_Model*.cpp`, `xrMU_Model_Reference*.cpp`, `mu_model_face.*`, `mu_model_light*.cpp`, `fitter.*` |
+| `detail` | `xrDO_Light.cpp`, `compiler.cpp`, `detail_slot_calculate.cpp`, `global_calculation_data.cpp`, `global_slots_data.*` (less the file work), `LightThread.cpp`, `DetailFormat.h`'s slot rules (the slot itself is `gz-fmt-level`'s) |
+| `filter` | `xrImage_Filter.cpp` (no caller in the compilers) |
+| `global` | `xrLC_GlobalData` (`LcGlobalData`) |
+
+The resampler of `xrImage_Resampler.cpp` is `gz_fmt_tex::imf_resample` (already ported, reused); the DDS writer is
+`gz_fmt_tex::encode_dds`; the BVH is `gz_fmt_level::Bvh`, made shareable by two additions that change nothing
+else: `Bvh::ray_visit` (a walk over every hit that can stop) and `ray_triangle` (the walks' own triangle test).
+
+**Not ported:** the network light (D24): `net_*` (38 files), `lcnet_*` (4), `mu_light_net.*`, `xrLightDoNet.*`,
+`xrLightVertexNet.cpp`, `xrLight_ImlicitNet.cpp`, `recalculation.*` (the resumed / partial detail light over files;
+its partial square survives as `light_details(only)`), `lc_net_global_data.*`, `lm_net_global_data.*`,
+`implicit_net_global_data.*`, `detail_net_global_data.*`, `ref_model_net_global_data.*`, `gl_base_cl_data.*`,
+`net_cl_data_prepare.*`, `net_global_data_cleanup.*`, `serialize.*`, `net_stream.*`, `file_compress.*`,
+`net_task*.*`, `light_execute.*`, `lightstab_interface.h`, and the serialisation halves (`read`/`write`) of every
+class. `-gi` radiosity is XrLC's `xrPhase_GI.cpp`; its `LT_SECONDARY` lights are still lit by `light_point`. Also
+gone as infrastructure: `xrThread.*` / `CThreadManager` (rayon), `cl_log.*` and the `clMsg`/`Status`/`Progress`
+log of `xrLC_Light.cpp` (`Ctl`), `tga.*` (`gz_fmt_tex::write_tga`), `xrDXTC.h`, `execute_statistics.*`,
+`vector_clear.h`, `xrIsect.h` (included, never called), `_d3d_extensions.h` (`gz_fmt_level::Light`),
+`ETextureParams.*` (`gz_fmt_tex::TextureParams`), the DLL / exe entries and resources.
+
+**The public API the pipeline (`gz-lc`) calls, against the C++ call it replaces:**
+
+| Rust | C++ |
+|---|---|
+| `LcGlobalData::new(params, shaders, materials, textures, lights)`, `nosun`, `linear` | `create_global_data`, `b_nosun_set`, `initialize` (`-att`) |
+| `LightSet::from_project(controls, statics)`, `RLight::from_flight` | `CBuild::Load`, "Loading lights" |
+| `prepare_texture(raw, thm, TextureUse::Level{..}, load)`, `post_process_materials` | `CBuild::Load`, "Processing textures", "Post-process materials" |
+| `LcGlobalData::load_mesh(&prj)`, `load_mu(&prj)` | `CBuild::Load` vertices, faces, smoothing groups, MU models and references |
+| `Mesh::create_vertex/create_face/set_vertex/destroy_face/destroy_vertex/v_replace/...`, `Mesh::faces_mut()` | `create_vertex`, `create_face`, `SetVertex`, `destroy_*`, `VReplace`, `g_faces()` / `g_vertices()` |
+| `Mesh::verify_face`, `MeshErrors::write_err` | `Face::Verify`, `InvalideFaces`, `CBuild::err_save` |
+| `Mesh::isolate_vertices` | `CBuild::IsolateVertices`, `vertices_isolate_and_pool_reload` |
+| `LcGlobalData::calc_normals(Smoothing)`, `mu_calc_normals` | `CBuild::CalcNormals`, `MU_ModelsCalculateNormals` |
+| `LcGlobalData::light_prepare` | `CBuild::Light_prepare` (`CacheOpacity`, `calc_faceopacity`) |
+| `LcGlobalData::build_rapid(&bounds)` -> `RcastForm` (`.write()` is `build.cform`) | `CBuild::BuildRapid`, `create_rcmodel` |
+| `LightSet::write_build_lights` | `CBuild::Run`, "Saving lights" |
+| `Deflectors::create`, `Deflector::oa_set_normal`, `oa_unwarp`, `oa_place`, `oa_place_all`, `oa_export`, `remap_uv`, `base_material` | `xrPhase_UVmap` / `xrPhase_Subdivide`'s `new CDeflector`, `OA_SetNormal`, `OA_Unwarp`, `OA_Place`, `OA_Export`, `RemapUV`, `GetBaseMaterial` |
+| `LcGlobalData::light_mu(ctl)` | `run_mu_light`, `wait_mu_base`, `wait_mu_secondary` |
+| `LcGlobalData::implicit_lighting(ctl)` -> `ImplicitMap` (`.dds()`) | `ImplicitLighting` (with its two DXT writes) |
+| `LcGlobalData::light_deflectors(ctl)` | `CBuild::LMaps` / `LMapsLocal` |
+| `LcGlobalData::light_vertices(ctl)` | `LightVertex` |
+| `LcGlobalData::merge_lightmaps(ctl)` -> `LightmapPage` (`.dds()`, `.debug_tga()`) | `CBuild::xrPhase_MergeLM` (with `CLightmap::Save`'s DXT writes) |
+| `LcGlobalData::light(ctl)` | `CBuild::Light` |
+| `MuReference::export_cform_game` | `xrMU_Reference::export_cform_game` (`CBuild::BuildCForm`) |
+| `LcGlobalData::has_implicit_lighting`, `shader` | `DataFace::hasImplicitLighting`, `base_Face::Shader` |
+| `RcastForm::read`, `LightSet::read_build_lights`, `DetailScene::new`, `light_details(scene, slots, only, ctl)` | `xrCompileDO`: `gl_data.xrLoad`, `xrLight` / `LightThread` |
+
+`Ctl` is the cancel token and the progress of a job (`Ctl::new(&cancel, &report)`); every long call checks it and
+answers `LcError::Cancelled` when stopped.
+
+**Decisions (each also a line in the code):**
+
+- **Same light on any number of threads.** The C++ keeps, in each `R_Light`, the triangle that last shadowed it -
+  shared state that makes a texel depend on which texel came first, and a data race in vertex, implicit and MU
+  light, which use the global set. Here the cache is the worker's (`LightCache`), tested with the BVH's own
+  triangle test and never for the skipped face, so it only saves time. The transparent hits of a ray are multiplied
+  nearest first (the C++: its tree's order). Proven by `the_same_light_on_one_thread_and_on_eight`: a scene with
+  every light kind, an alpha occluder, MU, implicit, vertex light and details, compiled whole on 1 and 8 threads,
+  equal bytes.
+- **Random numbers from the sample**: the MU model's six jittered normals per vertex come from a `CRandom` seeded by
+  the vertex's world position (the C++: the global `::Random`, shared by its threads). `LT_SECONDARY`'s jitter is
+  dropped: the C++ moves the light and then traces along the direction taken before, so it changes nothing.
+- **Orders the C++ took from pointers or `random_shuffle`** (D14): the deflector list is not shuffled; merge-sort
+  ties stay in list order; the vertex groups (`g_trans`) are filled in list order (the C++: as its threads finish);
+  a vertex's adjacency is sorted by face id; `calc_materials` sorts stably; `export_cform_game` takes faces in model
+  order; the detail ground search takes the box's triangles by index.
+- **Plainly broken C++, the intent ported**: `Shaders::get` of a material without a compiler shader gives the default
+  shader (the C++ indexes the library at 65535); the merge's SIMD placement test took a texel marked exactly 253 as
+  free, the scalar part as taken - taken everywhere; `RunImplicitMultithread` left the last `height % 8` rows unlit -
+  all rows are lit; the detail compiler kept a description's size beside a surface of another size - both compilers
+  take the surface's; `g_trans_register`'s walk back from `end()` read the end node - the window of keys is searched.
+- **Kept as the C++ does it (`// oracle:`)**: `o_test(4, ...)` fits each channel against the model's sun (0 in a
+  model's own light) after the regression took its hemisphere; `Face::Verify` tests the area's validity twice; the
+  `-att` point light ignores its shadow; `U %= dwWidth` takes a negative texel coordinate as unsigned.
+- `build.cform`'s triangle word is the triangle's index (the C++ writes the low half of a face pointer; nobody reads
+  it).
+
+**Proven by the crate's tests** (in `src/tests.rs` unless named): a lit and a shadowed texel of a deflector with the
+values `L_Direct` gives (sun 0.5 -> 1023, sky 0.25 -> 511; 0 and 0 under a roof; 511 on the shadow's edge);
+`LightPoint` through an alpha-tested occluder and an opaque one with the formula worked out from the C++ lines; the
+hemisphere's lights counted by their side; `compress_Zero` of a free floor, its capture into page `lmap#1`, the
+faces' second channel, the 16-ring border of the page, the two DDS; the packing of six deflectors without overlap
+and a turned one (`lightmap.rs`); `compress_RMS` shrinking a gradient and not noise (`deflector.rs`); vertex light on
+a two-triangle floor (attenuation per corner, hemisphere kept, translucency mixed away); the implicit light's alpha;
+an MU model's own light, its reference's and the fit; a 2 x 2 detail slot grid, one slot roofed, and the four
+corner densities of a part deciding its object; the border growth, the rotated blit, the hash grid, the matrix,
+`exact_normalize`, `CRandom`, the regression, the formats `build.lights` and `build.cform`; a stopped compile.
+
+**What waits for the comparison with the C++ compiler's output** (the next pass, on a real `build.prj`): the
+lightmaps and vertex colours within a stated error (the BVH's triangle test is not Opcode's, `sin`/`cos`/`tan`/`pow`
+are Rust's, the transparencies multiply in another order); the page layout (the D14 orders above move deflectors);
+the MU colours (other random directions).
 
 ## For the plan
 

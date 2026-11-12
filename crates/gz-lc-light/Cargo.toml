@@ -1,0 +1,23 @@
+[package]
+name = "gz-lc-light"
+description = "The level compiler's data model and its light: the mesh, deflectors, lightmaps, MU models, the ray model, and the light of lightmaps, vertices, implicit textures, MU models and detail objects (XrLCLight, xrDO_Light)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-task.workspace = true
+gz-chunk.workspace = true
+gz-fmt-level.workspace = true
+gz-fmt-tex.workspace = true
+gz-fmt-xr.workspace = true
+glam.workspace = true
+rayon.workspace = true
+smallvec.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true

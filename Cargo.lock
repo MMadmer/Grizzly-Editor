@@ -1618,6 +1618,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "gz-lc-light"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "gz-chunk",
+ "gz-fmt-level",
+ "gz-fmt-tex",
+ "gz-fmt-xr",
+ "gz-task",
+ "rayon",
+ "smallvec",
+ "smol_str 0.3.7",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gz-levelbuild"
 version = "0.1.0"
 dependencies = [

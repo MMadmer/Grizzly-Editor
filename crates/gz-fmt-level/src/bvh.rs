@@ -5,6 +5,8 @@
 //! caller's pool has; the triangles are copied next to it in leaf order. Every query takes
 //! `&self`, so one tree serves any number of threads.
 
+use std::ops::ControlFlow;
+
 use glam::{Vec3, Vec3A, Vec4};
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -387,6 +389,14 @@ impl Probe {
     }
 }
 
+/// The test the tree's walks make of one triangle: `(t, u, v)` of a hit with `t` in
+/// `0..=t_max`, `None` for a miss. A caller that keeps a triangle of its own gets the very answer
+/// a walk would give for it.
+#[must_use]
+pub fn ray_triangle(ray: &Ray, tri: &[Vec3; 3]) -> Option<(f32, f32, f32)> {
+    Probe::new(ray).triangle(tri).filter(|&(t, _, _)| t <= ray.t_max)
+}
+
 /// Whether a triangle and a box overlap: the separating axis test over the box axes, the
 /// triangle's normal and the nine edge cross products.
 fn tri_box(center: Vec3A, half: Vec3A, tri: &[Vec3; 3]) -> bool {
@@ -660,6 +670,36 @@ impl Bvh {
             }
         }
         None
+    }
+
+    /// Every hit of a ray handed to `visit` as the walk finds it, in no particular order, until
+    /// `visit` breaks. Answers whether it broke.
+    pub fn ray_visit(&self, ray: &Ray, mut visit: impl FnMut(RayHit) -> ControlFlow<()>) -> bool {
+        let probe = Probe::new(ray);
+        let mut stack: SmallVec<[u32; 64]> = SmallVec::new();
+        if !self.nodes.is_empty() {
+            stack.push(0);
+        }
+        while let Some(at) = stack.pop() {
+            let Some(node) = self.nodes.get(at as usize) else { continue };
+            if probe.enter(node, ray.t_max).is_none() {
+                continue;
+            }
+            if node.count > 0 {
+                for (tri, id) in self.leaf(node) {
+                    if let Some((t, u, v)) = probe.triangle(tri)
+                        && t <= ray.t_max
+                        && visit(RayHit { tri: id, t, u, v }).is_break()
+                    {
+                        return true;
+                    }
+                }
+            } else {
+                stack.push(node.a);
+                stack.push(at + 1);
+            }
+        }
+        false
     }
 
     /// Every hit of a ray, in no particular order; `out` is appended to.
