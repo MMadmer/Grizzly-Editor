@@ -1394,6 +1394,8 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "gz-base",
+ "lzo",
+ "lzokay-native",
  "thiserror 2.0.21",
 ]
 
@@ -2294,6 +2296,7 @@ dependencies = [
  "gz-base",
  "gz-chunk",
  "gz-corpus",
+ "lzokay-native",
  "rayon",
  "rustc-hash 2.1.3",
  "thiserror 2.0.21",
@@ -2940,6 +2943,22 @@ checksum = "1db548b001f0b7da416daf0ffae963912bae6cad1799fa9f4eaba09da6dba837"
 dependencies = [
  "cc",
  "which",
+]
+
+[[package]]
+name = "lzo"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1574f8e322bb9d442095896ff66d126e521f5a85ef7d7343a269bb7d6eeb3f0b"
+
+[[package]]
+name = "lzokay-native"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c83fc518c5874790cff277720d646a859d5c88fb2a58c7d7c45782384658ddd"
+dependencies = [
+ "byteorder",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

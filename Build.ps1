@@ -41,7 +41,7 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $from = Join-Path $root "Intermediate\cargo\$(if ($Debug) { 'debug' } else { 'release' })"
 $files = [ordered]@{}
 foreach ($name in 'Grizzly.exe', 'Grizzly.pdb', 'grizzly-mcp.exe', 'grizzly_mcp.pdb') { $files[$name] = Join-Path $from $name }
-foreach ($name in 'THIRD_PARTY_NOTICES.txt', 'LZO_LICENSE.txt') { $files[$name] = Join-Path $root "licenses\$name" }
+$files['THIRD_PARTY_NOTICES.txt'] = Join-Path $root 'licenses\THIRD_PARTY_NOTICES.txt'
 $copied = @()
 foreach ($name in $files.Keys) {
     $src = $files[$name]

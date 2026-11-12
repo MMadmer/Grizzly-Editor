@@ -94,6 +94,9 @@ encoding_rs = "0.8"
 glam = { version = "0.34", features = ["serde", "bytemuck"] }
 base64 = "0.23"
 hex = "0.4"
+# LZO1X: the decoder of the game archives' blocks; the tests' compressor
+lzo = { version = "0.1.4", default-features = false }
+lzokay-native = "0.2.1"
 time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
 # files, media
 notify = "8"

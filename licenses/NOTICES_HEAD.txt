@@ -2,18 +2,15 @@ Grizzly Editor third-party notices
 ==================================
 
 The editor (Grizzly.exe) and its MCP server (grizzly-mcp.exe) contain the
-following third-party code. Build.ps1 puts this file and LZO_LICENSE.txt beside
-them.
+following third-party code. Build.ps1 puts this file beside them.
 
-LZO 2.10
---------
+LZHUF
+-----
 
-Copyright (C) 1996-2017 Markus Franz Xaver Johannes Oberhumer.
-
-The editor carries a port of LZO's LZO1X-1 compressor and its safe
-decompressor (crates/gz-chunk/src/lzo.rs), under GNU GPL version 2 or, at your
-option, any later version. Its source is that file of this repository, and the
-complete license is distributed beside the editor as LZO_LICENSE.txt.
+The editor reads and writes the engine's compressed chunks
+(crates/gz-chunk/src/lzhuf.rs). Their stream format and algorithm are those of
+LZHUF.C (1989): LZSS by Haruhiko Okumura, adaptive Huffman coding by Haruyasu
+Yoshizaki, edited and translated by Kenji Rikitake.
 
 Xiph.org Foundation codecs
 --------------------------

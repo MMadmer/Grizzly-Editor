@@ -1,5 +1,5 @@
 use super::*;
-use gz_chunk::{COMPRESSED, Writer, lzhuf, lzo};
+use gz_chunk::{COMPRESSED, Writer, lzhuf};
 
 struct Temp(PathBuf);
 
@@ -30,7 +30,7 @@ fn archive(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
     let mut body = Vec::new();
     let mut table = Writer::new();
     for (name, bytes, pack) in files {
-        let stored = if *pack { lzo::compress(bytes) } else { bytes.to_vec() };
+        let stored = if *pack { lzokay_native::compress(bytes).unwrap() } else { bytes.to_vec() };
         let offset = 8 + body.len() as u32;
         body.extend_from_slice(&stored);
         let name = gz_base::text::utf8_to_cp1251(name).0.into_owned();

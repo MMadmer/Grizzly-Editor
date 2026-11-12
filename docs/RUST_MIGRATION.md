@@ -328,6 +328,9 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - Pure Rust first. The C dependencies are two: LuaJIT (vendored by `mlua`) and libvorbis with
   the aoTuV tunings (vendored by `vorbis_rs`, a safe API) for the game sounds the Sound Library
   encodes.
+- Nothing under a copyleft-only license is linked. The engine's LZO (GPL) is not ported: the
+  editor only reads LZO blocks (the game's archives), through the `lzo` crate (Apache-2.0),
+  and writes none.
 - The toolchain is pinned in `rust-toolchain.toml` (1.99.1, edition 2024); the workspace
   declares no dependency that no crate uses.
 - TLS trusts the **Windows certificate store** (schannel or the platform verifier), not a
@@ -386,6 +389,7 @@ crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("For the plan").
 | WinHTTP | an async HTTP client on the Windows certificate store |
 | BCrypt (SHA-256, PBKDF2, HMAC, ECDSA P-256) | RustCrypto (`sha2`, `pbkdf2`, `hmac`, `p256`) |
 | minizip | the editor's own zip writer over `flate2`, deflating in parallel; the layout is read back from the finished archive |
+| LZO 2.10 (`rtc_compress` / `rtc_decompress`, GPL) | the `lzo` crate (Apache-2.0) to read the game archives' blocks; the editor writes no LZO block |
 | nvtt, ispc_texcomp, stb_image, RedImage | `image`, a DDS codec with BC1/BC3 and mip generation |
 | `XrSound` (OpenAL), Vorbis | `cpal` for output, `lewton` to decode; OGG comments by `gz-fmt-sound` |
 | `ogg_enc` (oggenc + libvorbis) | `vorbis_rs` (libvorbis aoTuV, vendored): VBR at the description's quality, the parameters put in as the first comment by `gz-fmt-sound` |

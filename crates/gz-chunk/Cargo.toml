@@ -14,3 +14,7 @@ workspace = true
 gz-base.workspace = true
 glam.workspace = true
 thiserror.workspace = true
+lzo.workspace = true
+
+[dev-dependencies]
+lzokay-native.workspace = true

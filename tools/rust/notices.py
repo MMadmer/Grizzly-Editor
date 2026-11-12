@@ -3,8 +3,8 @@
     python tools/rust/notices.py            writes licenses/THIRD_PARTY_NOTICES.txt
     python tools/rust/notices.py --check    exits 1 when the file on disk is not what this would write
 
-The file is `licenses/NOTICES_HEAD.txt` (written by hand: the C code the crates vendor and the LZO port, which no
-manifest describes) followed by every third-party crate in the dependency closure of `grizzly` and `gz-mcp-bridge`
+The file is `licenses/NOTICES_HEAD.txt` (written by hand: the C code the crates vendor and the origin of the LZHUF
+coder, which no manifest describes) followed by every third-party crate in the dependency closure of `grizzly` and `gz-mcp-bridge`
 for Windows - normal dependencies only: a build script's and a proc macro's own dependencies run at build time and
 are not in the programs. Each crate is listed with its version, the license its manifest states and its
 repository; the license files the crates ship follow, each text once with the crates that carry it.
