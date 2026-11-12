@@ -62,7 +62,11 @@ use winit::window::{Window, WindowId};
 /// What wakes the event loop from another thread.
 #[derive(Clone, Copy, Debug)]
 pub enum UserEvent {
+    /// A frame now: something it shows changed.
     Wake,
+    /// egui asked for a frame later (`request_repaint_after`): the loop learns when, and draws
+    /// nothing for it now.
+    Later,
 }
 
 /// The start-up profile the window carries on from `main`: its stages up to the first frame on
@@ -346,6 +350,13 @@ struct App {
     polls: Vec<tokio::task::JoinHandle<()>>,
     /// A frame is due.
     dirty: bool,
+    /// What made the next frame due, for `frame_pacing`'s `ui_frame_causes`: a ping of the
+    /// editor's wake from another thread, an event of the window, egui's own request.
+    woken: bool,
+    input: bool,
+    asked: bool,
+    /// Tells the loop from any thread that egui asked for a later frame.
+    proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     /// When egui asked to be drawn again.
     repaint_at: Arc<Mutex<Option<Instant>>>,
     frame: u64,
@@ -463,9 +474,23 @@ impl App {
         let ctx = egui::Context::default();
         let repaint_at = self.repaint_at.clone();
         let wake = self.editor.exec.wake().clone();
+        let proxy = self.proxy.clone();
         ctx.set_request_repaint_callback(move |info| {
-            *repaint_at.lock() = Some(Instant::now() + info.delay);
-            wake.ping();
+            let when = Instant::now() + info.delay;
+            {
+                // the soonest frame asked for wins until a frame answers it
+                let mut at = repaint_at.lock();
+                if at.is_none_or(|a| when < a) {
+                    *at = Some(when);
+                }
+            }
+            // A frame asked for later is not drawn now: a 100 ms request answered at once (the
+            // status bar's job chip) drew every frame the window could while a job ran
+            if info.delay.is_zero() {
+                wake.ping();
+            } else {
+                let _ = proxy.send_event(UserEvent::Later);
+            }
         });
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -596,6 +621,9 @@ impl App {
         self.dirty = false;
         *self.repaint_at.lock() = None;
 
+        let woken = std::mem::take(&mut self.woken);
+        let input = std::mem::take(&mut self.input);
+        let asked = std::mem::take(&mut self.asked);
         let mut raw = live.input.take_egui_input(&live.window);
         // A minimized editor is drawn the way it looks restored: an undecorated window reports the
         // size of its taskbar button while it is iconic
@@ -617,7 +645,13 @@ impl App {
 
         let shell = &mut self.shell;
         let mut report = FrameReport::default();
-        let mut output = live.ctx.run_ui(raw, |ui| report = shell.frame(ui));
+        let mut causes = Vec::new();
+        let mut output = live.ctx.run_ui(raw, |ui| {
+            causes = ui.ctx().repaint_causes();
+            report = shell.frame(ui);
+        });
+        let pinger = self.editor.exec.wake().take_last();
+        let cause = frame_cause(woken.then_some(pinger), input, asked, &causes);
 
         live.input.handle_platform_output(&live.window, output.platform_output);
 
@@ -707,6 +741,7 @@ impl App {
             height: live.size_px[1],
             work_ms: total - wait_ms,
             wait_ms,
+            cause,
         });
     }
 
@@ -774,6 +809,36 @@ impl App {
     }
 }
 
+/// What a frame was drawn for: egui's own request, named by the line that asked
+/// (`repaint gz-app/src/chrome.rs:1476`), a ping of the editor's wake (a store, a job, a request
+/// held for frames), an event of the window - in that order when several came together.
+fn frame_cause(
+    woken: Option<Option<&'static std::panic::Location<'static>>>,
+    input: bool,
+    asked: bool,
+    causes: &[egui::RepaintCause],
+) -> SmolStr {
+    // the path below `crates/`, or the file's name
+    let short = |file: &str, line: u32| {
+        let file = file.replace('\\', "/");
+        let short = match file.split_once("crates/") {
+            Some((_, rest)) => rest,
+            None => file.rsplit('/').next().unwrap_or(&file),
+        };
+        format!("{short}:{line}")
+    };
+    if asked && let Some(c) = causes.first() {
+        return SmolStr::new(format!("repaint {}", short(c.file, c.line)));
+    }
+    match woken {
+        Some(Some(at)) => SmolStr::new(format!("wake {}", short(at.file(), at.line()))),
+        Some(None) => SmolStr::new_static("wake"),
+        None if asked => SmolStr::new_static("repaint"),
+        None if input => SmolStr::new_static("input"),
+        None => SmolStr::new_static("other"),
+    }
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::ResumeTimeReached { .. }) {
@@ -794,14 +859,18 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _: UserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         // Leaving has to be asked for while a message is being handled: asked from
         // `about_to_wait`, the loop goes to sleep first and leaves at the next message.
         if self.editor.quit_token().is_cancelled() {
             event_loop.exit();
             return;
         }
-        self.dirty = true;
+        // `Later`: `about_to_wait` sets the loop's wait from the time egui asked for
+        if matches!(event, UserEvent::Wake) {
+            self.dirty = true;
+            self.woken = true;
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
@@ -845,6 +914,7 @@ impl ApplicationHandler<UserEvent> for App {
         let response = live.input.on_window_event(&live.window, &event);
         if response.repaint {
             self.dirty = true;
+            self.input = true;
         }
         match event {
             WindowEvent::Resized(size) => {
@@ -883,6 +953,7 @@ impl ApplicationHandler<UserEvent> for App {
         let due = *self.repaint_at.lock();
         if due.is_some_and(|at| at <= now) {
             self.dirty = true;
+            self.asked = true;
         }
         if self.dirty {
             self.run_frame(event_loop);
@@ -994,12 +1065,18 @@ pub fn run(
     // this thread draws and presents: it works in bursts and gets its core before the pools,
     // which load every core during a build
     let _ = gz_win::raise_this_thread_priority();
+    // a window behind others or on another desktop must not slow the pools: Windows' power
+    // throttling cost a level compile beside it 11 - 17 %
+    if !gz_win::keep_full_speed() {
+        editor.log.warn("the editor could not keep its full speed while its window is in the background");
+    }
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(|e| format!("the event loop did not start: {e}"))?;
     let proxy = event_loop.create_proxy();
+    let wake_proxy = proxy.clone();
     editor.exec.wake().set(move || {
-        let _ = proxy.send_event(UserEvent::Wake);
+        let _ = wake_proxy.send_event(UserEvent::Wake);
     });
     let link = editor.services.get_or_init(WindowLink::default);
     let leaving = Arc::new(AtomicBool::new(false));
@@ -1014,6 +1091,10 @@ pub fn run(
         profile: Arc::new(Mutex::new(profile)),
         polls: Vec::new(),
         dirty: true,
+        woken: false,
+        input: false,
+        asked: false,
+        proxy,
         repaint_at: Arc::new(Mutex::new(None)),
         frame: 0,
         failed: None,

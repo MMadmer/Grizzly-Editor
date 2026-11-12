@@ -144,8 +144,13 @@ pub fn status_dot(ui: &mut Ui, tone: Tone, tip: &str) {
     }
 }
 
+/// How often a spinner asks for its next frame: 30 a second turns it smoothly, and a window
+/// that showed one at every frame it could (160 a second) made a level compile beside it 30 %
+/// slower (docs/rust/STATE.md, "After phase 8c: the window while a job runs").
+pub const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+
 /// Paints the spinner centred in `rect`: three quarters of a ring, one turn a second. It is the
-/// one thing of the UI that animates, so it asks for the next frame.
+/// one thing of the UI that animates, so it asks for its next frame ([`SPINNER_FRAME`]).
 pub(crate) fn paint_spinner(ctx: &Context, painter: &Painter, rect: Rect) {
     let p = palette(ctx);
     let side = rect.width().min(rect.height());
@@ -159,7 +164,7 @@ pub(crate) fn paint_spinner(ctx: &Context, painter: &Painter, rect: Rect) {
         })
         .collect();
     painter.add(Shape::line(points, Stroke::new(2.0, p.accent_bright)));
-    ctx.request_repaint();
+    ctx.request_repaint_after(SPINNER_FRAME);
 }
 
 /// A spinner as an item of the row: 16 pt.

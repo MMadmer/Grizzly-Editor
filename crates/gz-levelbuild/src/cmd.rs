@@ -1,7 +1,7 @@
 //! `level_build`: the Level toolbar's builds and runs (`UITopBarForm::DrawLevel`), each a job.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use gz_base::Origin;
@@ -19,15 +19,15 @@ use crate::graph::{self, GraphPoint, LevelGameGraph};
 use crate::libs::Engine;
 use crate::nav::LevelNav;
 use crate::prj;
-use crate::runs::{self, Ended, Program};
-use crate::service::{self, Built, LevelBuild};
+use crate::process::{self, Ended};
+use crate::service::{self, Built, LevelBuild, Running};
 use crate::spawn::{self, Element, Way};
 
 const AREA: &str = "gz-levelbuild";
 /// The job of a build; one at a time.
 pub const JOB_BUILD: &str = "level_build";
-/// The job that holds a compiler or the game while it runs, and its group (the Level tab
-/// greys the builds while either group runs).
+/// The job that holds the level compiler or the game while it runs, and its group (the Level
+/// tab greys the builds while either group runs).
 pub const JOB_RUN: &str = "level_run";
 const GROUP_RUN: &str = "game";
 const BUSY: &str = "A compiler or the game is running.";
@@ -43,7 +43,7 @@ const PLAY_ROOT: &str = "play";
 
 /// The commands, as the Level tab's toolbar and Build menu name them (`gz-ui-level`'s
 /// `LEVEL_ACTIONS` and `BUILD_ROWS`).
-pub const COMMANDS: [&str; 19] = [
+pub const COMMANDS: [&str; 17] = [
     "build_cform",
     "build_aimap",
     "build_game_graph",
@@ -61,8 +61,6 @@ pub const COMMANDS: [&str; 19] = [
     "make_aimap",
     "compile_geometry",
     "compile_details",
-    "compile_aimap",
-    "compile_spawn",
 ];
 
 /// Files by name, as a build writes them into the level folder.
@@ -108,7 +106,7 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             if let Some((_, id)) = *lb.running.lock() {
                 stopped |= editor.jobs.cancel(id);
             }
-            // a compile, xrAI or the game that has not marked itself yet is the group's job
+            // a compile or the game that has not marked itself yet is the group's job
             for group in [JOB_BUILD, GROUP_RUN] {
                 if let Some(job) = editor.jobs.running_in(group) {
                     stopped |= editor.jobs.cancel(job.id);
@@ -167,32 +165,6 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             };
             compile_command(editor, &session, &level, None, a).await
         }
-        "compile_aimap" | "compile_spawn" => {
-            if busy {
-                return Err(CmdError::busy(BUSY));
-            }
-            let svc = SceneService::of(editor)?;
-            let level = svc.store.snapshot().meta.level.level_path.to_string();
-            if !(action == "compile_spawn" && a.flag("all_levels")) {
-                crate::folder::level_folder(&levels_root(editor), &level).map_err(CmdError::invalid)?;
-            }
-            let params = match action {
-                // `RunXrAI_Verify`
-                "compile_aimap" if a.str("mode") == Some("verify") => format!("-verify {level}"),
-                // oracle: the menu's "High" passes `-draft` (`RunXrAI_AIMap(true)`)
-                "compile_aimap" => {
-                    format!("-f {level} {}", if a.str("mode") == Some("low") { "" } else { "-draft" })
-                }
-                // `RunXrAI_Spawn(false)`: every level, an empty name
-                _ if a.flag("all_levels") => "-no_separator_check -s  -out all".to_owned(),
-                _ => format!("-no_separator_check -s {level} -out all"),
-            };
-            let params = match a.text("params").filter(|p| !p.trim().is_empty()) {
-                Some(more) => format!("{params} {more}"),
-                None => params,
-            };
-            start_run(editor, &session, Program::XrAi, params)
-        }
         "build_cform" | "build_aimap" | "build_game_graph" | "build_ggraph" | "build_all" | "play"
         | "play_game" | "make_all" | "make_game" | "make_details" | "make_hom" | "make_som"
         | "make_aimap" => {
@@ -250,14 +222,9 @@ fn status(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> Reply {
         "rebuild": rebuild,
         "needs_rebuild": rebuild.any(),
         "rebuild_text": rebuild.text(),
-        "running": lb.running().map(Program::exe),
+        "running": lb.running().map(Running::name),
         "building": editor.jobs.running_in(JOB_BUILD).map(|j| j.stage),
     }))
-}
-
-/// The folders the executables are looked for in.
-fn exe_dirs(editor: &Editor) -> Vec<PathBuf> {
-    vec![editor.paths.exe_dir.clone(), editor.paths.root.join("Bin").join("x64").join("Release")]
 }
 
 /// The project's `gamedata`: an open project remounts `$game_levels$` and `$game_spawn$` there
@@ -283,25 +250,6 @@ fn levels_root(editor: &Editor) -> PathBuf {
 /// `$game_levels$\<level>\`, or the sentence that refuses the level path.
 fn level_dir(editor: &Editor, level: &str) -> Result<PathBuf, JobError> {
     crate::folder::level_folder(&levels_root(editor), level).map_err(JobError::new)
-}
-
-/// A program the editor's folders do not have.
-fn not_there(program: Program) -> CmdError {
-    CmdError::invalid(format!(
-        "{} is not there: {} was looked for next to the editor and in Bin\\x64\\Release.",
-        program.title(),
-        program.exe()
-    ))
-}
-
-/// Starts a compiler or the game as the `level_run` job; answers once it started.
-fn start_run(editor: &Arc<Editor>, session: &Arc<ProjectSession>, program: Program, params: String) -> Reply {
-    let Some(exe) = runs::find_exe(&exe_dirs(editor), program) else {
-        return Err(not_there(program));
-    };
-    let args = runs::arguments(&params);
-    let cwd = exe.parent().map_or_else(|| editor.paths.exe_dir.clone(), Path::to_path_buf);
-    run_program(editor, session, program, exe, cwd, args)
 }
 
 /// The level compilers on `level`'s folder of the project as the `level_run` job (`parts`: the
@@ -355,13 +303,13 @@ async fn compile_command(
     let id = editor
         .jobs
         .start(JOB_RUN, Some(GROUP_RUN), format!("Compiling {level}"), move |ctx| async move {
-            *lb.running.lock() = Some((Program::Compile, ctx.id));
+            *lb.running.lock() = Some((Running::Compile, ctx.id));
             let r = compile::run(&ed, req, &ctx).await;
             *lb.running.lock() = None;
             r
         })
         .map_err(|_| CmdError::busy(BUSY))?;
-    let started = json!({ "started": Program::Compile.exe(), "level": level, "parts": names, "job": id.0 });
+    let started = json!({ "started": Running::Compile.name(), "level": level, "parts": names, "job": id.0 });
     if a.bool("wait") == Some(false) {
         return Ok(started);
     }
@@ -377,26 +325,25 @@ async fn compile_command(
     }
 }
 
-/// Runs `exe` with `args` in `cwd` as the `level_run` job; answers once it started.
-fn run_program(
+/// Starts the root's engine in the root as the `level_run` job; answers once it started.
+fn start_game(
     editor: &Arc<Editor>,
     session: &Arc<ProjectSession>,
-    program: Program,
-    exe: PathBuf,
-    cwd: PathBuf,
-    args: Vec<String>,
+    root: &crate::play::PlayRoot,
+    params: &str,
 ) -> Reply {
-    let line = runs::command_line(program, &args);
+    let (exe, cwd, args) = (root.exe.clone(), root.root.clone(), process::arguments(params));
+    let line = process::command_line(&exe, &args);
     editor.log.info(format!("* Run {line}."));
     let lb = LevelBuild::of(session);
     let (ed, lb2) = (editor.clone(), lb.clone());
     let id = editor
         .jobs
-        .start(JOB_RUN, Some(GROUP_RUN), format!("Running {}", program.title()), move |ctx| async move {
-            ctx.stage(format!("Running {}", program.exe()));
+        .start(JOB_RUN, Some(GROUP_RUN), "Running the game", move |ctx| async move {
+            ctx.stage("Running the game");
             let c2 = ctx.clone();
             let log = ed.log.clone();
-            let ended = runs::run(&exe, &args, &cwd, &ctx.cancel, move |l| {
+            let ended = process::run(&exe, &args, &cwd, &ctx.cancel, move |l| {
                 c2.stage(l.to_owned());
                 log.info(l);
             })
@@ -412,8 +359,8 @@ fn run_program(
             }
         })
         .map_err(|_| CmdError::busy(BUSY))?;
-    *lb.running.lock() = Some((program, id));
-    Ok(json!({ "started": program.exe(), "command": line }))
+    *lb.running.lock() = Some((Running::Game, id));
+    Ok(json!({ "started": Running::Game.name(), "command": line }))
 }
 
 /// The linked game's folder, or the sentence that says the project has none.
@@ -444,16 +391,6 @@ fn play_place(editor: &Arc<Editor>, session: &Arc<ProjectSession>, a: &Args) -> 
         params: a.text("params").unwrap_or_default().to_owned(),
         guard: write_guard(editor),
     })
-}
-
-/// Starts the root's engine as the `level_run` job, in the root; answers once it started.
-fn start_game(
-    editor: &Arc<Editor>,
-    session: &Arc<ProjectSession>,
-    root: &crate::play::PlayRoot,
-    params: &str,
-) -> Reply {
-    run_program(editor, session, Program::Game, root.exe.clone(), root.root.clone(), runs::arguments(params))
 }
 
 /// What a build reads: the snapshot, the library objects it names, the engine libraries, the

@@ -24,6 +24,9 @@ pub struct FrameStamp {
     /// What the frame waited for the presentation: the swap chain's image (vsync, the frame
     /// latency), the submission, the present.
     pub wait_ms: f32,
+    /// What the frame was drawn for (`frame_pacing`'s `ui_frame_causes`): `repaint <file>:<line>`
+    /// (egui asked, from that line), `wake` (another thread pinged the window), `input`.
+    pub cause: SmolStr,
 }
 
 /// One presented frame's times, kept for `frame_pacing`.
@@ -50,6 +53,8 @@ pub struct FrameClock {
     started: std::sync::atomic::AtomicU64,
     wake: Wake,
     times: parking_lot::Mutex<std::collections::VecDeque<FrameTime>>,
+    /// Every frame's cause, counted since the start.
+    causes: parking_lot::Mutex<std::collections::BTreeMap<SmolStr, u64>>,
 }
 
 impl FrameClock {
@@ -61,6 +66,7 @@ impl FrameClock {
             started: std::sync::atomic::AtomicU64::new(0),
             wake,
             times: parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(KEPT_TIMES)),
+            causes: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -79,6 +85,7 @@ impl FrameClock {
             }
             t.push_back(FrameTime { frame: stamp.frame, work_ms: stamp.work_ms, wait_ms: stamp.wait_ms });
         }
+        *self.causes.lock().entry(stamp.cause.clone()).or_insert(0) += 1;
         self.tx.send_replace(stamp);
     }
 
@@ -87,6 +94,12 @@ impl FrameClock {
     #[must_use]
     pub fn times_after(&self, frame: u64) -> Vec<FrameTime> {
         self.times.lock().iter().filter(|t| t.frame > frame).copied().collect()
+    }
+
+    /// How many frames each cause drew since the start ([`FrameStamp::cause`]).
+    #[must_use]
+    pub fn causes(&self) -> std::collections::BTreeMap<SmolStr, u64> {
+        self.causes.lock().clone()
     }
 
     #[must_use]

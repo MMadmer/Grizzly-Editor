@@ -2326,6 +2326,172 @@ merged tree. `diff_compile.py` reads `Bin\x64\CppCompilers`, as the documents sa
 C++ build went with it: `Source\External\RedImage\intermediate` (129 object files), `Lib\` (the import
 libraries) and `Intermediate\cmake-*` (the CMake build folders).
 
+## After phase 8c: the window while a job runs
+
+The brief `docs/rust/briefs/shell-idle.md`, 12 Nov, branch `grizzly-rust`; nothing committed (the lead commits). Before
+the first run (18:04): `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt` ten minutes earlier - nothing; a
+release build of the lead's ran at the start and had ended before the first measurement (no cargo, rustc, editor or
+game process of anyone's during them; only the idle MCP servers of the desktop app).
+
+### 1. A scene pass only when its picture can change
+
+**What asked for frames.** Three things, found with the frame causes `frame_pacing` answers now (below):
+- **The view state's revision moved on every `Viewport::with`**, whatever the closure changed - and
+  `sync_scene_camera` runs one every frame for the camera pose's save timer. Every UI frame's `BuildKey` differed, so
+  every UI frame built a scene pass; the render thread's finished frame pinged the wake, which drew the next UI frame:
+  a loop at the window's full rate with nothing moving. Measured before (the 17:33 run of the last pass): 1690 frames
+  in 10 idle seconds and 0.95 cores idle; over 4096 frames in every compile window.
+- **The window drew a frame at once for every repaint egui asked for, also for a later one.** The repaint callback
+  (`gz-app`'s `window.rs`) pinged the wake whatever the delay, so the status bar's job chip, which asks for its next
+  frame in 100 ms (`chrome.rs:1476`), drew every frame the window could present while a job ran: 9249 - 11010 UI
+  frames in a 59 - 68 s compile (157 - 161 a second), every one `wake gz-app/src/window.rs:473`, with the scene
+  passes already at 0.
+- **The kit's spinner asked for the very next frame** (`gz-ui`'s `state.rs`), so the Task Center's card (and every
+  busy footer) drew at the full rate too: 11717 UI frames in a 72.9 s compile with the card up, against 54 - 57 s
+  without it.
+
+**What decides a scene pass now** (`gz-ui-viewport`'s `service.rs`): one function, `due(last, now, stale)`, over the
+`BuildKey` of the pass's inputs - the scene's snapshot (objects, selection, the tools' data), the library, the view,
+the assets a pass waited for, the animation tick (only while something in view plays: a particle system, a motion,
+Real Time), a spawn's rig or playback - and the shown packet going stale (a texture reloaded). It answers the first
+input that moved, or nothing: the pane shows the picture it has. The view's revision moves only when what a pass reads
+of it changed: `ViewState::drawn` (the camera and navigation, the view options, the tool and its switches, the
+preferences, the pane's pixel size - scale and size in one -, the theme's canvas, Game Lighting's inputs); `with`
+compares it before and after, so the 93 call sites keep their form. The bookkeeping beside it (the cameras kept per
+scene, the pose's save timer, the status line, Place's picks, the pane's points) and what a pass publishes (the
+anchor, the game lights drawn, the roof map) move nothing. An input outside the view state asks with
+`Viewport::touch()` (Real Time switched, Reload Textures, a spawn's playback) - the three `with(|_| {})` that were
+used for it.
+
+**A job's progress wakes no scene, and draws at a rate of its own.** The repaint callback pings the wake only for a
+frame asked for now; a later one is a `UserEvent::Later` that only sets the loop's `WaitUntil` (the soonest asked
+wins). The status chip so draws ten frames a second, the open card twenty (its own 50 ms), the spinner thirty
+(`gz_ui::state::SPINNER_FRAME`, 33 ms - chosen from the card run above: a spinner at every frame cost the compile
+30 %, one at thirty costs nothing measurable, below). The job's stage and fraction ping as before (the compile's
+`Throttle`, four a second). Nothing was made smaller or slower: no pool lost a thread, no priority changed (the
+drawing thread stays above normal), the compile is never paused.
+
+**What keeps working.** `screenshot_viewport` builds a pass of its own (`Reason::Picture`) as before; `screenshot_editor`
+holds through the picture gate (`Viewport::current`), which asks `request_build` until a pass of the caller's scene and
+view revision was drawn - a change it needs moves an input, so `due` answers it; `preview.png` is a pass of its own
+(`Reason::Preview`); a minimized or covered editor draws its UI frames as before; back on Level the pane shows its last
+target and builds a pass only if something moved meanwhile (a size change is an input); a camera moved during a compile
+is a view change: 6552 passes in the 74 s orbit run below, about 88 a second.
+
+**MCP `frame_pacing`** answers, besides what it did, for the window since its last ask: `window_seconds`,
+`ui_frames`, `ui_frame_causes` (the frames by what drew them, most first: `repaint <file>:<line>` - egui's request, by
+the line that asked first -, `wake <file>:<line>` - the code that pinged the window last, `gz_task::Wake::ping` keeps its
+caller -, `input`), `scene_passes`, `scene_pass_reasons {first, scene, library, view, assets, animation, spawn, stale,
+picture, preview}` and `last_scene_pass {reason, ago_ms}`. Its catalogue entry says so. `gz_editor::FrameStamp` carries
+the frame's `cause`; the frame clock counts them.
+
+**Measurements** (`tools/qa/measure_compile.py`, the fast build, `l12u_control_monolith` on a throw-away copy of Test,
+the editor on a hidden desktop with the Level tab up and a frame asked for every quarter second; 16 cores; the
+numbers in `Intermediate/compile/measure*.json`, the runs' logs beside them):
+
+| Run (editor build) | Editor compile s | Headless s | Ratio | UI frames | Scene passes | Load editor / headless |
+|---|---|---|---|---|---|---|
+| last pass (before) | 80 - 109 | 64 | 1.25 - 1.70 | > 4096 / window | one per frame | 8.3 - 10.3 / - |
+| view fix only, back to back | 59.0, 67.6, 68.2 | 53.9, 54.0, 53.5 | 1.10, 1.25, 1.28 | 9410 - 11010 | 0 | 11.3 - 11.6 / 12.2 |
+| + repaint fix, back to back | 54.0, 59.5, 61.2 | 52.0, 51.3, 51.7 | 1.04, 1.16, 1.18 | 1052 - 1191 | 0 | 11.3 - 11.5 / 12.2 - 12.4 |
+| same, a fresh editor per pair | 50.6, 59.9, 58.0 | 49.6, 51.1, 53.7 | 1.02, 1.17, 1.08 | | 0 | |
+| same, 45 s of nothing before every compile | 55.5, 52.9, 56.0 | 49.3, 47.7, 47.7 | 1.13, 1.11, 1.18 | 1030 - 1090 | 0 | 10.8 - 11.1 / 11.4 - 12.1 |
+| same, the editor `-headless` (no window), cooled | 47.2, - | 46.0, - | 1.03, 0.98 | 0 | 0 | 12.1 / 12.2 |
+| same, the process taken out of power throttling from outside, cooled | 47.9, - | 45.8, - | 1.05, 1.10 | | 0 | 12.1 / 12.3 |
+| **final** (`keep_full_speed` in the editor), one pair | **47.7** | **49.7** | **0.96** | 933 | **0** | **12.3 / 12.7** |
+
+- **Idle** (Level tab, a frame asked every quarter second, 10 s): 99 - 123 UI frames, 0 scene passes, 0.04 - 0.06 cores
+  (before: 1690 frames, 0.95 cores).
+- **Frame work** during the final compile: mean 2.5 ms, p95 3.1, max 6.1, no slow frame. **With the camera orbiting**
+  during a compile (`viewport_gesture` Alt+drags, one step a frame, the whole 74 s compile, the build before the last
+  fix): 11889 UI frames, 6552 scene passes (all `view`), frame work mean 3.1 ms, **p95 3.9**, max 13.3, 0 slow frames;
+  the compile took 73.6 s then (the passes share the pool, as they should while the author moves the camera).
+- **The card up** (Task Center card, its spinner): 72.9 s with the spinner at every frame (11717 frames) - 60.1 s and
+  2241 frames with it at thirty a second (the back-to-back series' fourth compile).
+- **Frame causes during a compile** (final build): `wake gz-editor/src/frames.rs:128` (the harness's `ui_list`, 4 a
+  second) ~ 36 %, `repaint gz-app/src/chrome.rs:1476` (the job chip, 10 a second) ~ 33 %, `wake gz-app/src/queue.rs:56`
+  (the MCP requests' UI queue) ~ 18 %, `wake gz-task/src/jobs.rs:105` (the job's fraction, 4 a second) ~ 12 %.
+
+**What was left after the frames were fixed: Windows' power throttling.** With no scene pass and 20 UI frames a second
+the editor's compile was still 11 - 18 % slower than headless at the same clock (45 s of nothing before every compile,
+the processors' speed 148 - 152 % of base on both sides, `% Processor Performance` sampled through PDH), and the loss
+was in the short serial phases (Optimizing 0.98 s against 0.68, Building normals 0.75 / 0.47, tangent basis 1.96 /
+1.47, Merging geometry 4.8 / 3.9), not in the parallel light (LMaps 20.6 / 18.8). The editor started `-headless`
+compiled like the headless one (1.03, 0.98; every phase equal), and the windowed editor taken out of execution-speed
+throttling from outside (`SetProcessInformation(ProcessPowerThrottling)`, the measure's `--no-throttle`) did too (1.05;
+the phases equal again, load 12.1). Windows had put the process under EcoQoS because its window was not the
+foreground one - here on the measure's hidden desktop; for the author, an editor behind another window or minimised
+while a compile runs. Its threads then run at an efficient, lower speed, and the serial phases on one core show it
+most. **The fix: `gz_win::keep_full_speed()`** (in `gz-win`, the one crate with `unsafe`, with its `// SAFETY:` line:
+the current process's pseudo-handle and a live local of the size passed) opts the process out of execution-speed
+throttling once, from `gz-app`'s `window::run` beside the drawing thread's priority; a failure is a warning in the log.
+No priority is changed and no pool is touched. The headless editor needs none (no window, never throttled in the
+runs).
+
+The measure (`tools/qa/measure_compile.py`) gained `--pairs`, `--fresh`, `--cool N`, `--card`, `--orbit`,
+`--headless-editor`, `--no-throttle`, `--no-headless`, the headless run beside each editor compile (`Grizzly.exe
+-compile <folder>`, its load and peak memory), the phases of both sides, the processors' speed (`clock_percent`), a
+settle before each compile, and the frame causes.
+
+### 2. The door to xrAI goes
+
+`level_build`'s `compile_aimap` / `compile_spawn` and the Build > Compile rows AI Map High / Low / Verify and Spawn
+This Level / All Levels are gone, with `Program::XrAi`, `runs::find_exe`, the executable folders (`exe_dirs`),
+`not_there`, `start_run`, the `mode` and `all_levels` parameters (nothing else read them) and their words in
+`crates/gz-mcp/tools.json` and `docs/UI_DESIGN.md` (`tools/mcp/AI_SETUP.md` named neither). `runs.rs` is now
+`process.rs`, the game alone: `arguments`, `command_line` (the log line, now with the engine's real file name),
+`Ended`, `run`. What holds the `level_run` job is `service::Running { Compile, Game }` (two variants; `level_build
+status` answers `running` as before), and `run_program` became `start_game`. `COMMANDS` has 17 entries, the Build
+menu's rows are 8 (`BUILD_ROWS` lost its argument column: every Compile row is the in-process compile). In lines:
+`cmd.rs` 84 out and 21 in, `menus.rs` 33 / 15, `runs.rs` (141) became `process.rs` (103), `service.rs` 5 / 22 (the
+`Running` enum moved there), `lib.rs` 13 / 12 (the docs), `tools.json` 16 out (the two actions, `mode`,
+`all_levels`, the xrAI words of `params`).
+`rg -i "xrai\.exe|XrAi\b|compile_aimap|compile_spawn" crates tools docs/UI_DESIGN.md` finds one line: the comment of
+`gz-levelbuild`'s `lib.rs` naming xrAI's `CGraphMerger` as the oracle of the game graph merge (kept, as the brief says);
+the `XRAI_VERSION_*` constants stay. `tools/qa/diff_editors.py`'s scenarios and the suites named neither action
+(`rg` over `tools/qa`: nothing before the change).
+
+### 3. A suite never runs against a stale bridge
+
+Both binaries embed `crates/gz-mcp/tools.json` (`include_str!`) and now answer `-catalogue` with one line,
+`catalogue fnv1a64:<16 hex> tools:<n>` - FNV-1a 64 of the embedded bytes and the tool count, worked out only when asked,
+before the editor opens its log (`gz_mcp::catalogue_line`; the bridge's own copy of the 4 lines, `gz-mcp-bridge` has no
+dependency). `tools/qa/catalogue.py <exe>` runs `<exe> -catalogue -dump_commands` with no input (an editor older than
+the flag prints its commands and exits instead of opening; an old bridge reads its empty input and exits), computes
+the same line of the file and answers in one sentence:
+- `...\grizzly-mcp.exe is older than crates/gz-mcp/tools.json (it does not answer -catalogue): build it again - bash
+  tools/rust/cg.sh build -p gz-mcp-bridge` (the debug bridge of 17:56, before this pass);
+- `...\Intermediate\cargo\fast\grizzly-mcp.exe was built from another crates/gz-mcp/tools.json (199 tools, other text):
+  build it again - bash tools/rust/cg.sh build --profile fast -p gz-mcp-bridge` (built before the `frame_pacing` text);
+- the command follows the binary's place: `Bin\x64\*` is `pwsh -NoProfile -File .\Build.ps1` (`-Debug`), a cargo
+  profile folder is `cg.sh build` with that profile.
+`test_mcp_bridge.py` asks it before anything starts and stops with `MCP BRIDGE: STALE - <the sentence>` (exit 2).
+`check.sh`'s registry step asks the same of the editor binary before `-dump_commands` (`registry: stale binary`), and
+its "unchanged since the last pass" shortcut now also needs the catalogue not to be newer than the stamp - before, an
+edited `tools.json` beside an unchanged `GRIZZLY_QA_EXE` passed on the old stamp.
+
+### Proof
+
+On the final tree, 19:3x - 19:47, the debug build (the measurements the fast build):
+- `bash tools/rust/check.sh`: clippy clean, fmt clean (after `cargo fmt --all` on three of my files), `unsafe` only in
+  `gz-win` (29 uses: `keep_full_speed` is the new one), every catalogue command registered, encoding clean, no test
+  writes a program file, the icon in both release binaries; 45 s.
+- `bash tools/rust/test.sh`: 60 binaries run, 18 cached, 0 failed; 1162 tests green; 82 s. New tests:
+  `gz-ui-viewport` `pass_tests` (`due` answers only a moved input; `drawn` ignores the bookkeeping), `gz-mcp` and
+  `gz-mcp-bridge` the catalogue line (FNV-1a 64 reference values, the tool count).
+- `python tools/qa/run_all.py test_ui_shell test_stress test_scene_tools test_previews test_properties
+  test_project_browser test_mcp_bridge`: 6 of 7 at once (36 s); `test_mcp_bridge` failed E there - a quest edited over
+  MCP right after `ui_tab open`, then closed: the graph tab took its loaded document only when it drew, and with
+  frames no longer running all the time its `dirty()` answered from nothing. Fixed in `gz-ui-graph`'s `tab.rs`
+  (`dirty()` also asks a document still waiting in the load slot); then `run_all.py test_mcp_bridge test_ui_shell
+  test_stress` twice: 3 / 3 each (25 s). A third repeat failed `test_stress` with WinError 10048 on the client side
+  (the stress suite's 5470 connections a run, three runs in two minutes: the machine's ephemeral ports in TIME_WAIT),
+  not an editor fault; it passed in the other three runs.
+- The measurements above. **Not met as the brief asks**: three back-to-back pairs within 10 % - the three-pair series
+  ran before the power-throttling fix (1.04 / 1.16 / 1.18); the final binary got one pair (0.96), as the lead decided.
+- At the end (19:47): `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 17:54'` - nothing; no
+  Grizzly, game or mock process left; no `gzmc_*` folder in the temp folder. Nothing under `Bin\` written.
+
 ## For the plan
 
 What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits
@@ -2516,6 +2682,22 @@ them.
   - A rule beside the others: no test writes a program file (`check_test_files.py` in `check.sh`).
   - Section 13 (working rules): `git diff <synced>..main -- Source/Editors docs tools` names a folder that is gone;
     `docs tools crates` is what is left to compare.
+- **After phase 8c: the window while a job runs** (the pass above), the plan should say:
+  - **D26**: "The Build menu has no rows for xrAI: no build makes that program, and the AI map, the game graph and
+    the spawn are built in the editor's process." (`level_build` has no `compile_aimap` / `compile_spawn`.)
+  - **Section 10 / 10.8, drawing on demand**: a scene pass is built only when one of its inputs moved (`due` over the
+    `BuildKey`: scene, library, the view as a pass reads it, assets, animation, spawn; a stale packet); a frame egui asks
+    for later is drawn then, never at once; a job's progress draws ten frames a second (the chip), twenty (the card),
+    thirty (a spinner). Measured: idle 10 frames a second and 0.04 cores (was 169 and 0.95); a compile 20 frames a
+    second and 0 scene passes; frame work p95 3.1 ms, 3.9 with the camera orbiting during a compile.
+  - **Section 10, a rule beside "no pool is made smaller"**: the window process opts out of Windows' execution-speed
+    power throttling (`gz_win::keep_full_speed`): with the window not in front, EcoQoS made a compile 11 - 18 %
+    slower; with the opt-out it is within 5 % of headless (0.96 - 1.05).
+  - **Section 8 / CLAUDE.md's MCP paragraph**: both binaries answer `-catalogue` (`catalogue fnv1a64:<hash>
+    tools:<n>`); `tools/qa/catalogue.py <exe>` is the one stale-binary check, used by `test_mcp_bridge` and
+    `check.sh`'s registry step.
+  - **CLAUDE.md, the four entry points**: `check.sh`'s registry step "fails a binary built from another
+    `tools.json` in one sentence, with its build command".
 
 ## Next packages, in dependency order
 

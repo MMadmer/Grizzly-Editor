@@ -240,7 +240,7 @@ Chrome totals 92 pt:
 **Menus**, in order:
 - **File:** New / Open / Recent Scene, Save, Save As (the second preset of Save, Ctrl+Shift+S), Project ▸ (Import Base Scene..., Open Project Folder, Switch Project...), Quit.
 - **Edit:** Undo, Redo, Cut, Copy, Paste, Duplicate, Delete, Find, Command Palette..., Preferences. These route to the active tab (its `Document::edit`).
-- **Level only:** Scene (Find in World Outliner, Mark Selection as Mod Content / as Base Level, ...); Build (formerly Compile: Make ▸ and Compile ▸; AI Map High calls `RunXrAI_AIMap(true)`); View (`DrawViewportOptions()` plus F11 Maximize Viewport).
+- **Level only:** Scene (Find in World Outliner, Mark Selection as Mod Content / as Base Level, ...); Build (formerly Compile: Make ▸ and Compile ▸ - Geometry & Light, Detail Object Light, both compiled in the editor's process; no row starts a program: the AI map, the game graph and the spawn are built in the editor too); View (`DrawViewportOptions()` plus F11 Maximize Viewport).
 - **Graph only:** Graph (the graph tab's own caption menu).
 - **Mod:** Mod Settings, Characters, World Rules, Screens & Music, PDA Interface | Build Into Game, Build to Folder..., Export Flat Gamedata..., Bake Scene Layer ▸ | Package Release..., Publish Release..., Releases | Submit to Mod Browser....
 - **Libraries** (formerly Editors): Light Animations, Texture Library, Sound Library, Check New Textures, Synchronize Textures / Sounds.... The Minimap Editor stub is removed.
@@ -327,6 +327,7 @@ New and Open move to the File menu (#29).
 - A build answers an MCP caller when it has ended (`FollowsJob`: the handler says `"job_pending":true`, the pump holds the request and asks again with `answer_only`), and every other command goes on meanwhile. `progress action=cancel` stops the jobs beside the editor when no blocking job runs.
 - During a blocking job, `DrawProgressOnly` draws a busy frame: the caption, the status bar, and a dimmed work area with a task card.
 - `PumpProgressRequests` admits `screenshot_editor`.
+- **A job's progress draws at a rate of its own and wakes no scene.** The status chip redraws ten times a second, the open card twenty, a spinner thirty (`gz-ui`'s `SPINNER_FRAME`); a frame egui asks for later is drawn then, never at once (`gz-app`'s `window.rs`). The Level viewport builds a scene pass only when something it shows changed - the camera, the scene's snapshot, the selection, the view options, the pane's size or scale, the theme, an asset that arrived, a gesture, something animating in view (`gz-ui-viewport`'s `service.rs`, `due`); a UI frame that changes none of it shows the picture the pane has. `frame_pacing` counts the two apart (`ui_frames`, `ui_frame_causes`, `scene_passes`, `scene_pass_reasons`).
 
 **Floating windows.**
 - `ViewportsEnable` is off unless the preference "Allow Panels Outside the Window" (General; `[ui] floating_panels`) is set, which takes a restart. With it off, `outside` is empty.

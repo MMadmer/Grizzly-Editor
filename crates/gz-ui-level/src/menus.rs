@@ -33,21 +33,17 @@ pub const SCENE_COMMANDS: [(&str, &str, &str, Icon, &str); 11] = [
     ("COMMAND_UNHIDE_ALL", "Visibility", "Unhide All", Icon::Eye, ""),
 ];
 
-/// The Build menu's rows past the toolbar's builds: submenu, label, command, its argument.
-const BUILD_ROWS: [(&str, &str, &str, &str); 13] = [
-    ("Make", "Make All...", "make_all", ""),
-    ("Make", "Make Game...", "make_game", ""),
-    ("Make", "Make Details...", "make_details", ""),
-    ("Make", "Make HOM...", "make_hom", ""),
-    ("Make", "Make SOM...", "make_som", ""),
-    ("Make", "Make AI Map...", "make_aimap", ""),
-    ("Compile", "Geometry & Light", "compile_geometry", ""),
-    ("Compile", "Detail Object Light", "compile_details", ""),
-    ("Compile", "AI Map High", "compile_aimap", "high"),
-    ("Compile", "AI Map Low", "compile_aimap", "low"),
-    ("Compile", "AI Map Verify", "compile_aimap", "verify"),
-    ("Compile", "Spawn This Level", "compile_spawn", ""),
-    ("Compile", "Spawn All Levels", "compile_spawn", "all"),
+/// The Build menu's rows past the toolbar's builds: submenu, label, command. The AI map, the
+/// game graph and the spawn are built in the editor's process, so no row starts a program.
+const BUILD_ROWS: [(&str, &str, &str); 8] = [
+    ("Make", "Make All...", "make_all"),
+    ("Make", "Make Game...", "make_game"),
+    ("Make", "Make Details...", "make_details"),
+    ("Make", "Make HOM...", "make_hom"),
+    ("Make", "Make SOM...", "make_som"),
+    ("Make", "Make AI Map...", "make_aimap"),
+    ("Compile", "Geometry & Light", "compile_geometry"),
+    ("Compile", "Detail Object Light", "compile_details"),
 ];
 
 /// What the keys of a command are now: the author's binding, else its default.
@@ -143,7 +139,7 @@ pub fn draw(bar: &mut MenuBar<'_, '_>, cx: &mut DocCx<'_>, maximized: bool) -> M
     bar.menu("Scene", |ui| scene_menu(ui, &editor, &ctx, has_scene));
     let builds: Vec<&toolbar::LevelAction> =
         toolbar::LEVEL_ACTIONS.iter().filter(|a| a.group == 1 && editor.registry().has(a.command)).collect();
-    let more_builds = BUILD_ROWS.iter().any(|(_, _, c, _)| editor.registry().has(c));
+    let more_builds = BUILD_ROWS.iter().any(|(_, _, c)| editor.registry().has(c));
     if !builds.is_empty() || more_builds || has_scene {
         bar.menu("Build", |ui| build_menu(ui, &editor, &builds));
     }
@@ -263,7 +259,7 @@ fn build_menu(ui: &mut Ui, editor: &Arc<Editor>, builds: &[&toolbar::LevelAction
     }
     for sub in ["Make", "Compile"] {
         let rows: Vec<_> =
-            BUILD_ROWS.iter().filter(|(s, _, c, _)| *s == sub && editor.registry().has(c)).collect();
+            BUILD_ROWS.iter().filter(|(s, _, c)| *s == sub && editor.registry().has(c)).collect();
         if rows.is_empty() {
             continue;
         }
@@ -271,30 +267,16 @@ fn build_menu(ui: &mut Ui, editor: &Arc<Editor>, builds: &[&toolbar::LevelAction
             ui.separator();
         }
         local_submenu(ui, sub, Icon::None, !busy, |ui| {
-            for (_, label, command, arg) in rows {
+            for (_, label, command) in rows {
                 let id = crate::level_cmds::make_id(command);
                 let keys = id.map(|i| keys_now(editor, i, "")).unwrap_or_default();
                 if menu_item(ui, label, MenuItem { keys: &keys, ..MenuItem::default() }) {
                     if sub == "Make" {
                         // `ConfirmLevelBuild`: the level folder named first
                         crate::level_cmds::ask_make(editor, ui.ctx(), command);
-                        continue;
-                    }
-                    if matches!(*command, "compile_geometry" | "compile_details") {
+                    } else {
                         crate::level_cmds::compile(editor, ui.ctx(), command);
-                        continue;
                     }
-                    let mut args = Args::new();
-                    match *arg {
-                        "" => {}
-                        "all" => {
-                            args.insert("all_levels".into(), Value::Bool(true));
-                        }
-                        a => {
-                            args.insert("mode".into(), Value::String(a.into()));
-                        }
-                    }
-                    editor.post(command, args);
                 }
             }
         });

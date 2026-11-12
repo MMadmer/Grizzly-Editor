@@ -33,6 +33,7 @@ import sys
 import tempfile
 import time
 
+import catalogue
 import qa_target
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -251,8 +252,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", default=r"D:\XFinedProjects\Test")
     args = ap.parse_args()
-    if not os.path.isfile(BRIDGE):
-        print("build the bridge first: bash tools/rust/cg.sh build -p gz-mcp-bridge")
+    # the bridge embeds tools.json when it is built: one older than the file serves other tools
+    why = catalogue.stale(BRIDGE)
+    if why:
+        print("MCP BRIDGE: STALE - " + why, flush=True)
         return 2
     if answers(qa_target.PORT):
         print(qa_target.busy_text())

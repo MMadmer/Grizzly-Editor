@@ -1,47 +1,14 @@
-//! The programs the editor starts as processes of their own (`CLevelTool::RunGame`): started
-//! with the C++ command lines, their output followed line by line, Stop ends the whole process
-//! tree. The level compilers are no programs any more: they run in the editor's process
-//! (`crate::compile`).
+//! The game as a process of its own (`CLevelTool::RunGame`): started with its command line, its
+//! output followed line by line, Stop ends the whole process tree. Nothing else the editor builds
+//! with is a program: the level compilers run in the editor's process (`crate::compile`), and the
+//! AI map, the game graph and the spawn are built there too.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 
 use gz_task::Cancel;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-
-/// What holds the `level_run` job.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Program {
-    /// The level compilers, in process.
-    Compile,
-    /// The AI compiler (`compile_aimap`, `compile_spawn`).
-    XrAi,
-    /// The game.
-    Game,
-}
-
-impl Program {
-    /// The name `level_build status` answers in `running`.
-    #[must_use]
-    pub fn exe(self) -> &'static str {
-        match self {
-            Self::Compile => "gz-lc",
-            Self::XrAi => "xrAI.exe",
-            Self::Game => "Xr3DA.exe",
-        }
-    }
-
-    /// The name the author reads in a message.
-    #[must_use]
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Compile => "the level compiler",
-            Self::XrAi => "the AI compiler (xrAI)",
-            Self::Game => "the game",
-        }
-    }
-}
 
 /// The command line after the executable: the given parameters.
 #[must_use]
@@ -49,22 +16,16 @@ pub fn arguments(params: &str) -> Vec<String> {
     params.split_whitespace().map(str::to_owned).collect()
 }
 
-/// The C++ log line (`* Run xrAI.exe -f l01.`).
+/// The C++ log line's command (`* Run xrEngine.exe -fsltx fsgame.ltx ...`): the executable's
+/// file name and the arguments.
 #[must_use]
-pub fn command_line(program: Program, args: &[String]) -> String {
-    let mut s = program.exe().to_owned();
+pub fn command_line(exe: &Path, args: &[String]) -> String {
+    let mut s = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     for a in args {
         s.push(' ');
         s.push_str(a);
     }
     s
-}
-
-/// The executable in the first folder that has it (the editor's own folder, then
-/// `Bin\x64\Release` under the editor's root).
-#[must_use]
-pub fn find_exe(dirs: &[PathBuf], program: Program) -> Option<PathBuf> {
-    dirs.iter().map(|d| d.join(program.exe())).find(|p| p.is_file())
 }
 
 /// How a run ended.

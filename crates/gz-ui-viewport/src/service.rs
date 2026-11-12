@@ -292,7 +292,27 @@ pub struct ViewState {
     cameras_read: bool,
     saved_pose: Option<Saved>,
     pose_changed: Option<Instant>,
-    pacing: Option<(u64, Instant)>,
+    pacing: Option<(u64, Instant, PassCount, Causes)>,
+}
+
+/// The frame clock's frames by cause (`gz_editor::FrameStamp::cause`).
+type Causes = std::collections::BTreeMap<SmolStr, u64>;
+
+/// What [`Viewport::pacing`] measured since the last ask.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Pacing {
+    pub fps: f64,
+    pub frame_ms: f64,
+    /// The frame the last ask saw; `None` at the first ask.
+    pub since: Option<u64>,
+    pub seconds: f64,
+    /// Scene passes built in that time, and by reason (only the reasons that occurred).
+    pub passes: u64,
+    pub by_reason: Vec<(Reason, u64)>,
+    /// The last pass ever built and when.
+    pub last_pass: Option<(Reason, Instant)>,
+    /// The UI frames in that time by what they were drawn for, the most first.
+    pub causes: Vec<(SmolStr, u64)>,
 }
 
 impl Default for ViewState {
@@ -350,19 +370,165 @@ impl ViewState {
     pub fn aspect(&self) -> f32 {
         if self.size[0] == 0 { 1.0 } else { self.size[1] as f32 / self.size[0] as f32 }
     }
+
+    /// What a scene pass reads of the view state. Two states equal here give the same picture;
+    /// the bookkeeping beside it (the cameras kept per scene and the pose's save timer, the
+    /// status line, Place's picks, the pane's points) and what a pass publishes itself (the
+    /// anchor, the game lights drawn, the roof map) are left out.
+    fn drawn(&self) -> Drawn {
+        let g = &self.game;
+        Drawn {
+            nav: self.nav.clone(),
+            view: self.view.clone(),
+            tool: self.tool,
+            settings: self.settings,
+            prefs: self.prefs,
+            size: self.size,
+            background: self.background,
+            game: GameDrawn {
+                enabled: g.enabled,
+                weather: g.weather.clone(),
+                hour: g.hour,
+                exposure: [g.exposure, g.auto_exposure, g.scene_lum, g.indoor_hemi],
+                at: g.at.clone(),
+                weather_ok: g.weather_ok,
+                settings: g.settings,
+                rebake: g.rebake,
+            },
+        }
+    }
 }
 
-/// What decides whether a new packet is needed.
+/// [`ViewState::drawn`].
+#[derive(PartialEq)]
+struct Drawn {
+    nav: Nav,
+    view: ViewOpts,
+    tool: Tool,
+    settings: Settings,
+    prefs: Prefs,
+    size: [u32; 2],
+    background: Color,
+    game: GameDrawn,
+}
+
+/// What a pass reads of Game Lighting.
+#[derive(PartialEq)]
+struct GameDrawn {
+    enabled: bool,
+    weather: String,
+    hour: f32,
+    exposure: [f32; 4],
+    at: Weather,
+    weather_ok: bool,
+    settings: GameSettings,
+    rebake: bool,
+}
+
+/// What a scene pass is built from: one revision per input. A pass is built when one of them
+/// moved since the last pass ([`due`]) and never otherwise - the pane shows the picture it has.
 #[derive(Clone, Debug, PartialEq)]
 struct BuildKey {
+    /// The scene's snapshot: objects, selection, the tools' data.
     scene: Rev,
     library: Rev,
+    /// The view state as a pass reads it ([`ViewState::drawn`]): the camera, the view options,
+    /// the pane's size and the theme's canvas, Game Lighting; [`Viewport::touch`] for an input
+    /// outside it.
     view: u64,
+    /// The meshes and textures loaded since a pass that drew placeholders.
     assets: u64,
-    /// Moves on every ask while a particle system in view plays: each frame a pass.
+    /// Moves on every ask while something in view animates (a particle system playing, a motion,
+    /// View > Real Time): each frame a pass, only then.
     anim: u64,
     /// A spawn's rig arrived or its playback changed.
     spawn: u64,
+}
+
+/// Why a scene pass was built (`frame_pacing` counts them by this).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reason {
+    /// The first pass of the renderer.
+    First,
+    Scene,
+    Library,
+    View,
+    /// Meshes or textures a pass waited for arrived.
+    Assets,
+    /// Something in view animates.
+    Animation,
+    Spawn,
+    /// A texture the shown picture draws was loaded again.
+    Stale,
+    /// A picture asked over MCP (`screenshot_viewport`, Game Lighting's answer).
+    Picture,
+    /// The project's `preview.png`.
+    Preview,
+}
+
+impl Reason {
+    pub const ALL: [Reason; 10] = [
+        Reason::First,
+        Reason::Scene,
+        Reason::Library,
+        Reason::View,
+        Reason::Assets,
+        Reason::Animation,
+        Reason::Spawn,
+        Reason::Stale,
+        Reason::Picture,
+        Reason::Preview,
+    ];
+
+    #[must_use]
+    pub fn key(self) -> &'static str {
+        match self {
+            Reason::First => "first",
+            Reason::Scene => "scene",
+            Reason::Library => "library",
+            Reason::View => "view",
+            Reason::Assets => "assets",
+            Reason::Animation => "animation",
+            Reason::Spawn => "spawn",
+            Reason::Stale => "stale",
+            Reason::Picture => "picture",
+            Reason::Preview => "preview",
+        }
+    }
+}
+
+/// Whether the pane needs a new pass, and why: the first input of `now` whose revision moved
+/// since `last` was built, or the packet shown going stale. `None`: nothing it shows changed.
+fn due(last: Option<&BuildKey>, now: &BuildKey, stale: bool) -> Option<Reason> {
+    let Some(l) = last else { return Some(Reason::First) };
+    let moved = [
+        (l.scene != now.scene, Reason::Scene),
+        (l.library != now.library, Reason::Library),
+        (l.view != now.view, Reason::View),
+        (l.assets != now.assets, Reason::Assets),
+        (l.anim != now.anim, Reason::Animation),
+        (l.spawn != now.spawn, Reason::Spawn),
+        (stale, Reason::Stale),
+    ];
+    moved.into_iter().find(|(m, _)| *m).map(|(_, r)| r)
+}
+
+/// The passes built since the viewport was made, by [`Reason`], and the last one.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PassCount {
+    pub total: u64,
+    pub by_reason: [u64; Reason::ALL.len()],
+    pub last: Option<(Reason, Instant)>,
+}
+
+impl PassCount {
+    fn add(&mut self, why: Reason) {
+        self.total += 1;
+        if let Some(i) = Reason::ALL.iter().position(|r| *r == why) {
+            self.by_reason[i] += 1;
+        }
+        self.last = Some((why, Instant::now()));
+    }
 }
 
 #[derive(Default)]
@@ -374,6 +540,7 @@ struct BuildCtl {
     serial: u64,
     /// Passes that ended: `settle` waits for the one under way, not for a moment without one.
     finished: u64,
+    passes: PassCount,
 }
 
 /// The game's data Game Lighting reads off the UI thread, per link revision.
@@ -497,11 +664,23 @@ impl Viewport {
         self.animating.load(Ordering::Acquire)
     }
 
-    /// Changes the view state: the next scene pass draws it.
+    /// Changes the view state; when the change reaches what a pass draws
+    /// ([`ViewState::drawn`]), the next scene pass draws it. A change of the bookkeeping alone
+    /// asks for no pass.
     pub fn with<R>(&self, f: impl FnOnce(&mut ViewState) -> R) -> R {
-        let r = f(&mut self.state.lock());
-        self.rev.fetch_add(1, Ordering::AcqRel);
+        let mut s = self.state.lock();
+        let before = s.drawn();
+        let r = f(&mut s);
+        if s.drawn() != before {
+            self.rev.fetch_add(1, Ordering::AcqRel);
+        }
         r
+    }
+
+    /// Asks for a scene pass for an input outside the view state (Real Time switched, the
+    /// textures reloaded, a spawn's playback).
+    pub fn touch(&self) {
+        self.rev.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Reads the view state.
@@ -771,28 +950,28 @@ impl Viewport {
         }
     }
 
-    /// Asks for a scene pass when anything it draws changed. Never blocks: the pass is built on
-    /// the CPU pool and handed to the render thread.
+    /// Asks for a scene pass when anything it draws changed ([`due`]); otherwise the pane keeps
+    /// the picture it has. Never blocks: the pass is built on the CPU pool and handed to the
+    /// render thread.
     pub fn request_build(self: &Arc<Self>, editor: &Arc<Editor>) {
         let Some(renderer) = self.renderer() else { return };
         let key = self.key(editor, &renderer);
-        {
+        let why = {
             let mut b = self.build.lock();
             let stale = b.packet.as_ref().is_some_and(|p| p.is_stale(renderer.assets()));
-            if b.last.as_ref() == Some(&key) && !stale {
-                return;
-            }
+            let Some(why) = due(b.last.as_ref(), &key, stale) else { return };
             if b.in_flight {
                 b.again = true;
                 return;
             }
             b.in_flight = true;
             b.again = false;
-        }
+            why
+        };
         let vp = self.clone();
         let ed = editor.clone();
         editor.exec.spawn(async move {
-            let made = vp.make_packet(&ed, &renderer, false).await;
+            let made = vp.make_packet(&ed, &renderer, false, why).await;
             let again = {
                 let mut b = vp.build.lock();
                 b.in_flight = false;
@@ -859,13 +1038,16 @@ impl Viewport {
     }
 
     /// Builds a packet of the scene as the view stands now (`preview`: the picture of the scene
-    /// alone). Publishes what the pass found: the gizmo's anchor, the lights drawn, the roof map.
+    /// alone), counted under `why`. Publishes what the pass found: the gizmo's anchor, the lights
+    /// drawn, the roof map.
     pub(crate) async fn make_packet(
         self: &Arc<Self>,
         editor: &Arc<Editor>,
         renderer: &Arc<Renderer>,
         preview: bool,
+        why: Reason,
     ) -> Option<Arc<FramePacket>> {
+        self.build.lock().passes.add(why);
         self.sync(editor);
         let game_on = self.read(|s| s.game.active());
         let game_data = if game_on { self.game_data(editor).await } else { GameData::default() };
@@ -1157,7 +1339,7 @@ impl Viewport {
         let deadline = Instant::now() + PICTURE_LIMIT;
         let (packet, pending) = loop {
             let packet = self
-                .make_packet(editor, &renderer, false)
+                .make_packet(editor, &renderer, false, Reason::Picture)
                 .await
                 .ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
             let pending = Self::pending_of(&renderer, &packet);
@@ -1224,21 +1406,36 @@ impl Viewport {
         editor.exec.wake().ping();
     }
 
-    /// `frame_pacing`'s measure: the frames presented between two asks, and the frame the last
-    /// ask saw (`None` at the first).
-    pub(crate) fn pacing(&self, frame: u64) -> (f64, f64, Option<u64>) {
+    /// `frame_pacing`'s measure: the frames presented between two asks, the frame the last ask
+    /// saw (`None` at the first), and the scene passes built since then.
+    pub(crate) fn pacing(&self, frame: u64, causes: Causes) -> Pacing {
         let now = Instant::now();
+        let passes = self.build.lock().passes.clone();
         let mut s = self.state.lock();
-        let out = match s.pacing {
-            Some((f, t)) if frame > f => {
-                let dt = now.duration_since(t).as_secs_f64();
-                let fps = (frame - f) as f64 / dt.max(1e-6);
-                (fps, if fps > 0.0 { 1000.0 / fps } else { 0.0 }, Some(f))
+        let mut out = Pacing { last_pass: passes.last, ..Pacing::default() };
+        if let Some((f, t, before, causes_before)) = &s.pacing {
+            let dt = now.duration_since(*t).as_secs_f64();
+            out.since = Some(*f);
+            out.seconds = dt;
+            if frame > *f {
+                out.fps = (frame - f) as f64 / dt.max(1e-6);
+                out.frame_ms = if out.fps > 0.0 { 1000.0 / out.fps } else { 0.0 };
             }
-            Some((f, _)) => (0.0, 0.0, Some(f)),
-            None => (0.0, 0.0, None),
-        };
-        s.pacing = Some((frame, now));
+            out.passes = passes.total - before.total;
+            for (i, r) in Reason::ALL.iter().enumerate() {
+                let n = passes.by_reason[i] - before.by_reason[i];
+                if n > 0 {
+                    out.by_reason.push((*r, n));
+                }
+            }
+            out.causes = causes
+                .iter()
+                .map(|(k, n)| (k.clone(), n - causes_before.get(k).copied().unwrap_or(0)))
+                .filter(|(_, n)| *n > 0)
+                .collect();
+            out.causes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        }
+        s.pacing = Some((frame, now, passes, causes));
         out
     }
 }
@@ -1331,7 +1528,7 @@ pub async fn capture_preview(editor: &Arc<Editor>) -> Result<Image, String> {
     let vp = Viewport::of(editor);
     let renderer = vp.renderer_any(editor).ok_or_else(|| "the editor runs without a window".to_owned())?;
     let packet = vp
-        .make_packet(editor, &renderer, true)
+        .make_packet(editor, &renderer, true, Reason::Preview)
         .await
         .ok_or_else(|| "the scene could not be drawn".to_owned())?;
     // the packet's own assets may still be loading: give them a moment, as a thumbnail does
@@ -1484,7 +1681,7 @@ impl Viewport {
     /// drawn (a new loader of the same sources).
     pub fn reload_assets(&self, editor: &Editor) {
         *self.loader_key.lock() = None;
-        self.with(|_| {});
+        self.touch();
         editor.exec.wake().ping();
     }
 }
@@ -1499,7 +1696,7 @@ pub fn set_real_time(editor: &Editor, on: bool) {
     let settings = gz_app::EditorSettings::of(editor);
     settings.set_render_flag("real_time", on);
     settings.save_soon(editor);
-    Viewport::of(editor).with(|_| {});
+    Viewport::of(editor).touch();
     editor.exec.wake().ping();
 }
 
@@ -1600,6 +1797,43 @@ fn motion_pose(
     let mut st = state.clone();
     st.replace(moved);
     Some((st, cam))
+}
+
+#[cfg(test)]
+mod pass_tests {
+    use super::{BuildKey, Reason, ViewState, due};
+    use gz_base::Rev;
+
+    fn key() -> BuildKey {
+        BuildKey { scene: Rev::ZERO, library: Rev::ZERO, view: 1, assets: 0, anim: 0, spawn: 0 }
+    }
+
+    #[test]
+    fn a_pass_is_due_only_when_an_input_moved() {
+        let last = key();
+        assert_eq!(due(None, &last, false), Some(Reason::First));
+        assert_eq!(due(Some(&last), &key(), false), None, "nothing moved: the pane keeps its picture");
+        assert_eq!(due(Some(&last), &BuildKey { view: 2, ..key() }, false), Some(Reason::View));
+        assert_eq!(due(Some(&last), &BuildKey { anim: 5, ..key() }, false), Some(Reason::Animation));
+        assert_eq!(due(Some(&last), &BuildKey { spawn: 1, ..key() }, false), Some(Reason::Spawn));
+        assert_eq!(due(Some(&last), &key(), true), Some(Reason::Stale));
+    }
+
+    #[test]
+    fn only_what_a_pass_reads_counts_as_a_change_of_the_view() {
+        let a = ViewState::default();
+        let mut b = a.clone();
+        // the pose's save timer and the status line: bookkeeping, no new picture
+        b.pose_changed = Some(std::time::Instant::now());
+        b.status = Some(("speed".into(), std::time::Instant::now()));
+        b.game.in_view = 7;
+        assert!(a.drawn() == b.drawn());
+        b.nav.position.x += 1.0;
+        assert!(a.drawn() != b.drawn(), "the camera moved");
+        let mut c = a.clone();
+        c.size = [640, 480];
+        assert!(a.drawn() != c.drawn(), "the pane's size");
+    }
 }
 
 #[cfg(test)]

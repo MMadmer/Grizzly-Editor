@@ -9,6 +9,8 @@
 //! - [`write_minidump`], [`install_fatal_exception_dump`] - what a crash leaves behind;
 //! - [`foreground_is_ours`] - whether a window of this process is in front;
 //! - [`raise_this_thread_priority`] - the thread that draws and presents above the pools;
+//! - [`keep_full_speed`] - the process out of Windows' power throttling while its window is
+//!   behind others;
 //! - [`install_caption_hit_test`] - `WM_NCHITTEST` for a window that draws its own caption;
 //! - [`known_folder`], [`free_space`], [`volume_path_name`], [`is_volume_root`] - the user's
 //!   folders and the volumes.
@@ -35,8 +37,10 @@ use windows::Win32::System::Diagnostics::Debug::{
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId, GetProcessIoCounters,
-    GetProcessTimes, GetStartupInfoW, GetThreadPriority, IO_COUNTERS, STARTF_USESHOWWINDOW, STARTUPINFOW,
-    SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL, TerminateProcess,
+    GetProcessTimes, GetStartupInfoW, GetThreadPriority, IO_COUNTERS,
+    PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+    PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, STARTF_USESHOWWINDOW, STARTUPINFOW,
+    SetProcessInformation, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL, TerminateProcess,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -122,6 +126,30 @@ pub fn raise_this_thread_priority() -> bool {
     // SAFETY: the pseudo-handle of the calling thread is always valid and the priority is one of
     // the documented constants; the call changes nothing but this thread's scheduling.
     unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL).is_ok() }
+}
+
+/// Takes this process out of Windows' execution-speed power throttling (EcoQoS): Windows runs
+/// the threads of a process whose window is behind others, minimised or on another desktop at
+/// an efficient, lower speed, and a level compile in the editor's pools then took 11 - 17 %
+/// longer than the same compile headless (docs/rust/STATE.md, "After phase 8c"). No priority
+/// changes. Answers whether it took.
+pub fn keep_full_speed() -> bool {
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    // SAFETY: the pseudo-handle of the current process is always valid; `state` is a live local
+    // of the size passed, read by the call and not kept.
+    unsafe {
+        SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            std::ptr::from_ref(&state).cast(),
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        )
+        .is_ok()
+    }
 }
 
 /// The calling thread's priority (`THREAD_PRIORITY_*`: 0 normal, 1 above normal).

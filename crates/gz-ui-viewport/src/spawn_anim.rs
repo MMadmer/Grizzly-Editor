@@ -342,7 +342,7 @@ pub(crate) async fn spawn_animation(editor: Arc<Editor>, a: Args) -> Reply {
     let action = a.str("action").unwrap_or("state").to_ascii_lowercase();
     if action != "state" {
         anims.press(o.id, of.clone(), rig.as_deref(), &action)?;
-        crate::service::Viewport::of(&editor).with(|_| ());
+        crate::service::Viewport::of(&editor).touch();
         editor.exec.wake().ping();
     }
     let mut out = anims.describe(o.id, &of, rig.as_deref(), loaded);

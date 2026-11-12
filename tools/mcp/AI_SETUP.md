@@ -15,8 +15,11 @@ The Grizzly Editor (`Grizzly.exe`) hosts a local automation endpoint whenever it
   and the level compilers are part of `Grizzly.exe`; `Intermediate\cargo\debug` by
   `bash tools/rust/cg.sh build -p gz-mcp-bridge`).
   Its tools, their descriptions, schemas and annotations and the server's instructions are the
-  catalogue `crates/gz-mcp/tools.json`, word for word. `GRIZZLY_MCP_PORT` points it at
-  another port. `tools/mcp/grizzly_mcp.py`, the Python bridge of the C++ editor, is now a
+  catalogue `crates/gz-mcp/tools.json`, word for word, embedded when it is built: a bridge
+  older than the file serves other tools. `grizzly-mcp.exe -catalogue` (and `Grizzly.exe
+  -catalogue`) prints `catalogue fnv1a64:<hash> tools:<n>` of what it embeds, and
+  `python tools/qa/catalogue.py <exe>` says in one sentence whether that is the file here and how
+  to build it again. `GRIZZLY_MCP_PORT` points it at another port. `tools/mcp/grizzly_mcp.py`, the Python bridge of the C++ editor, is now a
   launcher of the binary (same stdio, same exit code), so a client set up with it keeps working
 
 Scene-load performance can be checked against the same endpoint without an MCP
@@ -177,7 +180,7 @@ launcher; it says so on stderr and exits with 1 when no `grizzly-mcp.exe` is bui
 | `grizzly_list_commands` | the editor's own command registry: every action the menus and shortcuts can perform, as `{id, name, menu, presets}` — the editor's full control surface, and commands added in future builds appear here automatically |
 | `grizzly_exec_command` | execute ANY registry command — the same dispatch menus and shortcuts use. Address by `id`, `COMMAND_*` `name` or menu path; `p1s`/`p2s` pass strings, `p1i`/`p2i` integers. Prefer a dedicated tool when one exists; this is the escape hatch for everything else |
 | `grizzly_theme` | read (`action=get`), persist (`action=set`, `preset=grizzly-purple` or `graphite`) or reset the live editor theme; omitting `action` reads it |
-| `grizzly_frame_pacing` | read live requested/effective frame interval, wait reason/counters and active mode; persist `active_idle_fps` 30..240 (`action=set`) or reset it to 120. PIE/realtime and explicit work are never delayed, and messages/MCP wake the wait immediately |
+| `grizzly_frame_pacing` | read live requested/effective frame interval, wait reason/counters and active mode; persist `active_idle_fps` 30..240 (`action=set`) or reset it to 120. PIE/realtime and explicit work are never delayed, and messages/MCP wake the wait immediately. Between two asks: `ui_frames` and, apart, `scene_passes` with `scene_pass_reasons` and `last_scene_pass` - the viewport builds a pass only when something it shows changed, so a running job's progress builds none |
 | `grizzly_command_palette` | query the ranked Ctrl+Shift+P catalog, open/close the palette, inspect its state, or execute a result. The catalog is the commands of the registry (`kind` `command`, `name` its COMMAND_* id), the Level tab's panels and drawers (`panel`, `drawer`) and the open tabs (`tab`); every result has `label` (what its row shows), `path`, `shortcut` and `id`. A word matches the start of a word of the label first (`log` finds Output Log before Catalog); only what a row shows is searched - label, path, keys -, never the COMMAND_* id (`list_commands` has those). `execute` takes a command's `command`/`subcommand` pair or any result's `id` (`panel:<id>`, `drawer:<id>`, `tab:<id>` bring it up; their `command` is -1) |
 | `grizzly_viewport_navigation` | the viewport's camera views - the axis gizmo at its top right (hidden under 480 pt) and the Perspective pill's menu: six axis views, the free perspective view, Frame All / Frame Selection (`action=frame`) |
 | `grizzly_viewport_controls` | the viewport's right pills: `tool` (`select` / `place` / `move` / `rotate` / `scale`), `grid` / `scale` / `angle` steps and `grid_snap` / `scale_snap` / `angle_snap`, `object_snap`, `vertex_snap`, `normal_align`. Answers `tool`, `grid|scale|angle {on, step}`, the snaps and `supports {move, rotate, scale}`; a transform the active tool cannot do is an error naming the tool |

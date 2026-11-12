@@ -468,7 +468,7 @@ async fn game_lighting(ed: &Arc<Editor>, a: &Args) -> Reply {
         && let Some(rend) = vp.renderer_any(ed)
     {
         vp.settle().await;
-        if let Some(p) = vp.make_packet(ed, &rend, false).await {
+        if let Some(p) = vp.make_packet(ed, &rend, false, crate::service::Reason::Picture).await {
             rend.submit(p);
         }
     }
@@ -527,12 +527,18 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         return Err(CmdError::invalid("action must be get, stats, set, or reset"));
     }
     let stamp = ed.frames.current();
-    let (fps, ms, since) = Viewport::of(ed).pacing(stamp.frame);
+    let p = Viewport::of(ed).pacing(stamp.frame, ed.frames.causes());
+    let (fps, ms, since) = (p.fps, p.frame_ms, p.since);
     let window = ed.frames.has_window();
     let times: Vec<_> = since
         .map(|f| ed.frames.times_after(f).into_iter().filter(|t| t.frame <= stamp.frame).collect())
         .unwrap_or_default();
     let times = frame_times(&times);
+    let by_reason: serde_json::Map<String, Value> =
+        p.by_reason.iter().map(|(r, n)| (r.key().to_owned(), json!(n))).collect();
+    let last_pass = p
+        .last_pass
+        .map(|(r, at)| json!({ "reason": r.key(), "ago_ms": (at.elapsed().as_secs_f64() * 1000.0).round() }));
     Ok(json!({
         "active_idle_fps": settings.pref("active_idle_fps").map_or(120, |v| v as u64),
         "background_poll_ms": 0,
@@ -556,6 +562,13 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         "frame_work_ms": { "mean": times.work_mean, "p95": times.work_p95, "max": times.work_max },
         "frame_wait_ms": { "mean": times.wait_mean, "max": times.wait_max },
         "slow_frames": times.slow,
+        // the window since the last ask: UI frames presented and scene passes built, apart
+        "window_seconds": (p.seconds * 1000.0).round() / 1000.0,
+        "ui_frames": since.map_or(0, |f| stamp.frame.saturating_sub(f)),
+        "ui_frame_causes": p.causes.iter().take(8).map(|(k, n)| json!([k.as_str(), n])).collect::<Vec<_>>(),
+        "scene_passes": p.passes,
+        "scene_pass_reasons": by_reason,
+        "last_scene_pass": last_pass,
     }))
 }
 

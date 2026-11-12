@@ -39,6 +39,13 @@ fn app_paths(cli: &Cli) -> AppPaths {
 fn main() -> ExitCode {
     let mut startup = Startup::begin();
     let cli = Cli::parse(std::env::args());
+    // before the log: a check of the binary writes nothing
+    if cli.catalogue {
+        println!("{}", gz_mcp::catalogue_line());
+        if !cli.dump_commands {
+            return ExitCode::SUCCESS;
+        }
+    }
     let paths = app_paths(&cli);
 
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_owned()).to_lowercase();

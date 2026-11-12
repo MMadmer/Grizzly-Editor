@@ -28,6 +28,9 @@ pub struct Cli {
     pub iconsheet: bool,
     /// `-dump_commands`: print every registered command with its area and exit.
     pub dump_commands: bool,
+    /// `-catalogue`: print the line of the MCP catalogue this build embeds
+    /// (`gz_mcp::catalogue_line`) and exit; with `-dump_commands` the commands follow it.
+    pub catalogue: bool,
     /// `-uiscale <f>`: the UI at a fixed scale (0.5..4), whatever the monitor says.
     pub ui_scale: Option<f32>,
     /// `-uiscale` was given a value outside 0.5..4 or none (`CommandLineScale`'s message).
@@ -68,6 +71,7 @@ impl Cli {
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
                 "dump_commands" => cli.dump_commands = true,
+                "catalogue" => cli.catalogue = true,
                 "compile" | "compile_details" => {
                     let what = if name == "compile" { CompileWhat::Level } else { CompileWhat::Details };
                     if let Some(folder) = it.next() {

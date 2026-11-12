@@ -1496,7 +1496,12 @@ impl Document for GraphTab {
     }
 
     fn dirty(&self) -> bool {
-        self.doc.as_ref().is_some_and(|d| d.is_dirty())
+        // a document loaded since the tab last drew is still in the slot: an edit made over MCP
+        // before that frame counts all the same (frames run only when something asks for one)
+        match &self.doc {
+            Some(d) => d.is_dirty(),
+            None => self.slot.lock().as_ref().is_some_and(|r| r.as_ref().is_ok_and(|d| d.is_dirty())),
+        }
     }
 
     fn dirty_elsewhere(&self) -> bool {

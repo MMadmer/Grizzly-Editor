@@ -22,6 +22,27 @@ use tokio::net::{TcpListener, TcpStream};
 /// each tool maps to. The parity check reads it: every command named here must be registered.
 pub const TOOLS_JSON: &str = include_str!("../tools.json");
 
+/// What `-catalogue` prints: `catalogue fnv1a64:<16 hex> tools:<n>` of the catalogue this build
+/// embeds. The bridge prints the same line of its own copy, so a check tells a binary built
+/// from another `tools.json` from a current one (`tools/qa/catalogue.py`). Worked out only
+/// when asked.
+#[must_use]
+pub fn catalogue_line() -> String {
+    catalogue_line_of(TOOLS_JSON)
+}
+
+/// [`catalogue_line`] of any catalogue text.
+#[must_use]
+pub fn catalogue_line_of(text: &str) -> String {
+    let hash =
+        text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+    let tools = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("tools").and_then(serde_json::Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    format!("catalogue fnv1a64:{hash:016x} tools:{tools}")
+}
+
 /// The port the editor has always listened on.
 pub const DEFAULT_PORT: u16 = 28016;
 
@@ -161,6 +182,17 @@ fn parse_request(text: &[u8]) -> Result<(String, Args), String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn the_catalogue_line_is_fnv1a64_and_the_tool_count() {
+        // FNV-1a 64 of "a" (the reference value; the bridge and tools/qa/catalogue.py agree)
+        assert_eq!(catalogue_line_of(r#"{"tools":[{},{}]}"#).rsplit_once(' ').unwrap().1, "tools:2");
+        assert_eq!(catalogue_line_of("a"), "catalogue fnv1a64:af63dc4c8601ec8c tools:0");
+        assert!(catalogue_line().ends_with(&format!(
+            " tools:{}",
+            serde_json::from_str::<Value>(TOOLS_JSON).unwrap()["tools"].as_array().unwrap().len()
+        )));
+    }
 
     #[test]
     fn a_command_runs_to_its_end_past_the_timeout() {

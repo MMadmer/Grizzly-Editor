@@ -424,7 +424,28 @@ fn handle(b: &Bridge, msg: &Value, out: &mut impl Write) -> io::Result<()> {
     }
 }
 
+/// What `-catalogue` prints, the editor's `gz_mcp::catalogue_line` of this binary's copy:
+/// `catalogue fnv1a64:<16 hex> tools:<n>`. A suite compares it with the file before it drives
+/// the bridge (`tools/qa/catalogue.py`).
+fn catalogue_line() -> String {
+    let hash = fnv1a64(CATALOG);
+    let tools = serde_json::from_str::<Value>(CATALOG)
+        .ok()
+        .and_then(|v| v.get("tools").and_then(Value::as_array).map(Vec::len))
+        .unwrap_or(0);
+    format!("catalogue fnv1a64:{hash:016x} tools:{tools}")
+}
+
+fn fnv1a64(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+}
+
 fn main() -> std::process::ExitCode {
+    // the editor's spelling (one dash or two); every other argument is ignored, as before
+    if std::env::args().skip(1).any(|a| a.trim_start_matches('-').eq_ignore_ascii_case("catalogue")) {
+        println!("{}", catalogue_line());
+        return std::process::ExitCode::SUCCESS;
+    }
     let bridge = match Bridge::load() {
         Ok(b) => b,
         Err(e) => {
@@ -534,6 +555,17 @@ mod tests {
         let tool = b.tools.get("grizzly_level_parts").unwrap();
         let r = tool_result(&b, "grizzly_level_parts", tool, &obj(&[("discard", json!(true))]));
         assert_eq!(r["isError"], json!(true), "the plain form takes no discard: {r}");
+    }
+
+    #[test]
+    fn the_catalogue_line_names_the_tools() {
+        let line = catalogue_line();
+        let raw: Value = serde_json::from_str(CATALOG).unwrap();
+        assert!(line.starts_with("catalogue fnv1a64:"), "{line}");
+        assert!(line.ends_with(&format!(" tools:{}", raw["tools"].as_array().unwrap().len())), "{line}");
+        // FNV-1a 64's reference values (the Python side computes the same)
+        assert_eq!(fnv1a64(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64("a"), 0xaf63_dc4c_8601_ec8c);
     }
 
     #[test]

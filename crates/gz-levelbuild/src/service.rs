@@ -12,7 +12,24 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::graph::LevelGameGraph;
-use crate::runs::Program;
+
+/// What holds the `level_run` job: the level compiler in the editor's process, or the game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Running {
+    Compile,
+    Game,
+}
+
+impl Running {
+    /// The name `level_build status` answers in `running`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Compile => "gz-lc",
+            Self::Game => "Xr3DA.exe",
+        }
+    }
+}
 
 /// What of the scene's derived data is missing or older than the scene: the status bar's
 /// Rebuild chip.
@@ -64,8 +81,8 @@ pub(crate) struct State {
 #[derive(Default)]
 pub struct LevelBuild {
     pub(crate) state: Mutex<State>,
-    /// The compiler or the game that runs, and its job.
-    pub(crate) running: Mutex<Option<(Program, JobId)>>,
+    /// The compile or the game that runs, and its job.
+    pub(crate) running: Mutex<Option<(Running, JobId)>>,
 }
 
 fn fingerprint<'a>(items: impl Iterator<Item = &'a Arc<gz_scene::Object>>) -> u64 {
@@ -115,9 +132,9 @@ impl LevelBuild {
         }
     }
 
-    /// The compiler or the game that runs.
+    /// The compile or the game that runs.
     #[must_use]
-    pub fn running(&self) -> Option<Program> {
+    pub fn running(&self) -> Option<Running> {
         self.running.lock().map(|(p, _)| p)
     }
 }

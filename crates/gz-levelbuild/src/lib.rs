@@ -1,6 +1,6 @@
 //! The full level build of a scene and the runs: the build project for the level compiler, the
-//! game side files, the collision form, the AI map, the game graph, the spawn file, the
-//! compilers and the game as processes.
+//! game side files, the collision form, the AI map, the game graph, the spawn file, the level
+//! compile in the editor's process and the game as a process.
 //!
 //! The C++ specification is `LevelEditor/Editor/Builder/*` (`SceneBuilder`: `CompileStatic`,
 //! `BuildLTX`, `BuildGame`, the HOM / SOM models, the scene statistic, the tools' exports),
@@ -43,21 +43,20 @@
 //! - [`compile`] - the level compilers in the editor's process: `gz_lc::compile` (geometry and
 //!   light) and the detail compile on a level folder of the project, a job on the CPU pool with
 //!   the compiler's phases as its stage, its log in the Output Log, its report as the result.
-//! - [`runs`] - xrAI and the game (`Xr3DA.exe <params>`) as `tokio::process` children: their
-//!   output followed into the job's stage, Stop ends the whole process tree, a missing executable
-//!   is a sentence.
+//! - [`process`] - the game, the one program the editor starts, as a `tokio::process` child: its
+//!   output followed into the job's stage, Stop ends the whole process tree, one that does not
+//!   start is a sentence.
 //! - [`LevelBuild`] (`session.services`) - what is built of the scene and when it went stale
 //!   ([`LevelBuild::rebuild`] answers the status bar's Rebuild chip), the derived data kept in
 //!   memory (collision form, level graph, game graph), the running process.
 //! - [`register`] - one command per Level toolbar button and Build menu row ([`COMMANDS`]:
 //!   `build_cform`, `build_aimap`, `build_game_graph`, `build_all`, `play`, `play_game`,
 //!   `play_clean`, `play_stop`, `reload_configs`, `make_all`, `make_game`, `make_details`,
-//!   `make_hom`, `make_som`, `make_aimap`, `compile_geometry`, `compile_details`,
-//!   `compile_aimap`, `compile_spawn`), `level_compile` (a level folder compiled on its own),
-//!   `level_rebuild_status` (`{collision, ai_map,
-//!   game_graph}` for the Rebuild chip) and `level_build` (the same by `action`, and `status`).
-//!   Every build is the job `level_build` (one at a time) with stages and Stop; a compile, xrAI or
-//!   the game runs as the job `level_run` (group `game`). Play starts the real game on the baked
+//!   `make_hom`, `make_som`, `make_aimap`, `compile_geometry`, `compile_details`),
+//!   `level_compile` (a level folder compiled on its own), `level_rebuild_status` (`{collision,
+//!   ai_map, game_graph}` for the Rebuild chip) and `level_build` (the same by `action`, and
+//!   `status`). Every build is the job `level_build` (one at a time) with stages and Stop; a
+//!   compile or the game runs as the job `level_run` (group `game`). Play starts the real game on the baked
 //!   scene (docs/RUST_MIGRATION.md D1): there is no game
 //!   inside the editor's process.
 //!
@@ -81,14 +80,14 @@ pub mod merge;
 pub mod nav;
 pub mod play;
 pub mod prj;
-pub mod runs;
+pub mod process;
 mod service;
 pub mod spawn;
 pub mod validate;
 pub mod wallmarks;
 
 pub use cmd::{COMMANDS, register};
-pub use service::{LevelBuild, Rebuild};
+pub use service::{LevelBuild, Rebuild, Running};
 
 /// Why a build step stopped. The texts are the C++ messages.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

@@ -1367,7 +1367,7 @@
   },
   {
    "name": "grizzly_frame_pacing",
-   "description": "Read live editor frame-pacing statistics or persist the active idle cap. The idle cap only applies outside Play In Editor and realtime rendering; window messages, redraw work, and MCP requests wake it immediately. action='set' accepts active_idle_fps=30..240, reset restores 120. Each answer also covers the frames presented since the previous ask: sampled_frames, frame_work_ms {mean, p95, max} (the frame's own CPU time: input, the UI pass, tessellation, recording), frame_wait_ms {mean, max} (the wait for the swap chain's image, the submission and the present - a frame that waited for vsync is not a slow frame) and slow_frames (own time over 16.7 ms). Ask once to start a window, once more to read it.",
+   "description": "Read live editor frame-pacing statistics or persist the active idle cap. The idle cap only applies outside Play In Editor and realtime rendering; window messages, redraw work, and MCP requests wake it immediately. action='set' accepts active_idle_fps=30..240, reset restores 120. Each answer also covers the frames presented since the previous ask: sampled_frames, frame_work_ms {mean, p95, max} (the frame's own CPU time: input, the UI pass, tessellation, recording), frame_wait_ms {mean, max} (the wait for the swap chain's image, the submission and the present - a frame that waited for vsync is not a slow frame) and slow_frames (own time over 16.7 ms); window_seconds, ui_frames (the window's frames presented) and, counted apart, scene_passes (the Level viewport's scene passes built - one is built only when something it shows changed: the camera, the scene, the view options, the pane's size, the theme, an asset that arrived, something animating in view - while UI frames that change nothing in it, a job's progress among them, build none) with scene_pass_reasons {first, scene, library, view, assets, animation, spawn, stale, picture, preview: count} and last_scene_pass {reason, ago_ms}, the last pass ever built. Ask once to start a window, once more to read it.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -4754,7 +4754,7 @@
   },
   {
    "name": "grizzly_level_build",
-   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph build the open scene's collision, AI map or game graph and answer when done; build_all makes the whole build and compiles the level in the same job, answering {build, compile}; make_* writes one part of the level build (make_all the whole build project); compile_geometry (the geometry and the light) and compile_details (the detail objects' light) compile the scene's level folder of the project in the editor's process, on every core, as the job level_run (its card in the Task Center; stop stops it) and answer when it ends with {started, level, parts, job, report {level, dir, threads, seconds, parts [{part, seconds, phases [{name, seconds}], files [{name, size}], warnings, invalid_faces}]}} - wait=false answers at once with {started, level, parts, job} and grizzly_jobs follows it; compile compiles a level folder on its own (level=, else the open scene's; the details too when the build wrote build.details, details= decides); params= takes the compiler's flags (-nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att); compile_aimap / compile_spawn start xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once it started; play / play_game build what Play needs and start the linked game on the scene, in a game root of its own (root=, else <appdata>\\play\\<project>, never inside the project or the game: copies of the game's executables, a link to its archives, its loose gamedata with the level and editor.spawn staged into it, an appdata of its own - nothing of the install is written) and answer once the game started, play_clean starts the game alone in that root; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
+   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph build the open scene's collision, AI map or game graph and answer when done; build_all makes the whole build and compiles the level in the same job, answering {build, compile}; make_* writes one part of the level build (make_all the whole build project); compile_geometry (the geometry and the light) and compile_details (the detail objects' light) compile the scene's level folder of the project in the editor's process, on every core, as the job level_run (its card in the Task Center; stop stops it) and answer when it ends with {started, level, parts, job, report {level, dir, threads, seconds, parts [{part, seconds, phases [{name, seconds}], files [{name, size}], warnings, invalid_faces}]}} - wait=false answers at once with {started, level, parts, job} and grizzly_jobs follows it; compile compiles a level folder on its own (level=, else the open scene's; the details too when the build wrote build.details, details= decides); params= takes the compiler's flags (-nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att); play / play_game build what Play needs and start the linked game on the scene, in a game root of its own (root=, else <appdata>\\play\\<project>, never inside the project or the game: copies of the game's executables, a link to its archives, its loose gamedata with the level and editor.spawn staged into it, an appdata of its own - nothing of the install is written) and answer once the game started, play_clean starts the game alone in that root; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
    "annotations": {
     "title": "Build or run the level",
     "readOnlyHint": false,
@@ -4785,26 +4785,12 @@
        "make_aimap",
        "compile",
        "compile_geometry",
-       "compile_details",
-       "compile_aimap",
-       "compile_spawn"
+       "compile_details"
       ]
-     },
-     "mode": {
-      "type": "string",
-      "enum": [
-       "low",
-       "high"
-      ],
-      "description": "compile_aimap only: high (the default) or low"
      },
      "verify_restrictors": {
       "type": "boolean",
       "description": "play / play_game: every space restrictor that asks for it must lie on the AI map (the Play menu's Verify Space Restrictors)"
-     },
-     "all_levels": {
-      "type": "boolean",
-      "description": "compile_spawn: every level of the game (Build > Compile > Spawn > All Levels); compile_aimap takes mode=verify too (xrAI -verify)"
      },
      "root": {
       "type": "string",
@@ -4812,7 +4798,7 @@
      },
      "params": {
       "type": "string",
-      "description": "play / play_game / play_clean: more of the game's command line, after the editor's own; compile / compile_geometry / compile_details: the compiler's flags (-nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att); compile_aimap / compile_spawn: more of xrAI's command line"
+      "description": "play / play_game / play_clean: more of the game's command line, after the editor's own; compile / compile_geometry / compile_details: the compiler's flags (-nosun, -noise, -nosmg, -no_optimize, -no_invalidefaces, -att)"
      },
      "level": {
       "type": "string",

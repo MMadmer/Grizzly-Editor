@@ -4,8 +4,10 @@
 #   - `cargo fmt --check` without a difference;
 #   - `unsafe` in `crates/gz-win` only (the count inside is printed);
 #   - the editor builds, and `Grizzly.exe -dump_commands` registers every `cmd` of
-#     `crates/gz-mcp/tools.json` (checked again only when the executable is newer than its last
-#     pass, kept in Intermediate/check-commands.stamp); GRIZZLY_QA_EXE checks that binary instead.
+#     `crates/gz-mcp/tools.json` (checked again only when the executable or the catalogue is newer
+#     than its last pass, kept in Intermediate/check-commands.stamp); a binary built from another
+#     catalogue fails first, in one sentence with its build command (tools/qa/catalogue.py);
+#     GRIZZLY_QA_EXE checks that binary instead.
 # Exit code 1 when any of them fails.
 set -u
 cd "$(dirname "$0")/../.." || exit 2
@@ -68,8 +70,14 @@ elif [ -z "${GRIZZLY_QA_EXE:-}" ] && ! bash tools/rust/cg.sh build -p grizzly; t
 else
     exe=${GRIZZLY_QA_EXE:-Intermediate/cargo/debug/Grizzly.exe}
     stamp=Intermediate/check-commands.stamp
-    if [ -f "$stamp" ] && [ ! "$exe" -nt "$stamp" ]; then
+    if [ -f "$stamp" ] && [ ! "$exe" -nt "$stamp" ] && [ ! crates/gz-mcp/tools.json -nt "$stamp" ]; then
         echo "registry: unchanged since its last pass"
+    elif ! stale=$(python tools/qa/catalogue.py "$exe"); then
+        # a binary built from another tools.json: the same sentence test_mcp_bridge gives for the bridge
+        echo "$stale"
+        echo "registry: stale binary"
+        rm -f "$stamp"
+        bad=1
     else
         timeout 60 "$exe" -dump_commands > Intermediate/check-commands.txt 2>&1
         missing=$(grep -o '"cmd": *"[^"]*"' crates/gz-mcp/tools.json | sed -E 's/.*"([^"]*)"$/\1/' | sort -u |
