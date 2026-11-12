@@ -50,8 +50,8 @@ pub mod tree;
 pub use asset_kind::{AssetKind, kind_of, own_extension};
 pub use cmd::{close_project, register};
 pub use delete::{
-    DeleteContext, DeleteFailed, DeleteFailure, DeleteInfo, Guard, check_delete, delete_project,
-    system_guards,
+    DeleteContext, DeleteFailed, DeleteFailure, DeleteInfo, Guard, Inside, check_delete, delete_project,
+    projects_inside, system_guards,
 };
 pub use gz_vfs::looks_like_game;
 pub use hooks::{

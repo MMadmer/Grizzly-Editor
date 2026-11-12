@@ -22,7 +22,9 @@ Every gesture goes through viewport_gesture, which feeds the viewport's own inpu
   Y  Play takes no folder it did not make: play_clean, play_root and play name as root= a throw-away project folder
      (its own gamedata, fsgame.ltx, a level), a folder inside it, a folder that holds a file, a folder inside the open
      project, the editor's own folder and a relative path - every one refused before anything is built or written,
-     and a listing of the work folder before and after is equal; no game is started
+     and a listing of the work folder before and after is equal; no game is started. Then a root Play makes
+     itself (play_root in an empty temp folder) gets a project in its gamedata: play_root, play_clean and play
+     refuse it, naming the project, and its listing is unchanged
 
     python tools/qa/test_scene_tools.py --project <project> [--only R,A,...] [--shots <folder>]
 
@@ -628,6 +630,42 @@ def phase_y() -> None:
           "Y the folders are as they were (%d entries listed before and after)" % count, ", ".join(differ[:10]))
     st = mcp("level_build", action="status")
     check(st.get("ok") and not st.get("running") and not st.get("building"), "Y nothing was started", short(st))
+    phase_y_marked()
+
+
+def phase_y_marked() -> None:
+    """A root Play made (it carries play_root.txt) that holds a project inside its gamedata: refused, untouched."""
+    # right in the temp folder: the game takes paths of 255 characters at most
+    root = tempfile.mkdtemp(prefix="gzpr_")
+    try:
+        made = mcp("level_build", action="play_root", root=root, timeout=120)
+        if not check(made.get("ok") and made.get("was") == "empty",
+                     "Y play_root makes Play's root in an empty folder (%s programs)" % made.get("programs"),
+                     short(made)):
+            return
+        again = mcp("level_build", action="play_root", root=root, timeout=120)
+        check(again.get("ok") and again.get("was") == "play_root" and again.get("walked", 0) > 0,
+              "Y the root again: its gamedata walked for a project before it is cleared (%s entries, %s ms)"
+              % (again.get("walked"), again.get("walk_ms")), short(again))
+        nested = os.path.join(root, "gamedata", "mods", "my_mod")
+        os.makedirs(nested)
+        with open(os.path.join(nested, "mod.ltx"), "w") as f:
+            f.write("[module]\nid = my_mod\n")
+        before = tree_of(root)
+        for action in ("play_root", "play_clean", "play"):
+            a = mcp("level_build", action=action, root=root, timeout=60)
+            check(not a.get("ok") and "it holds a project" in str(a.get("error")) and "my_mod" in str(a.get("error")),
+                  "Y level_build %s on a Play root whose gamedata holds a project is refused" % action, short(a))
+        after = tree_of(root)
+        differ = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        check(not differ, "Y the root is as it was (%d entries listed before and after)" % len(before),
+              ", ".join(differ[:10]))
+    finally:
+        link = os.path.join(root, "database")
+        if os.path.lexists(link):
+            # a junction to the game's archives: the link goes, the archives stay
+            os.rmdir(link)
+        qa_target.remove_tree(root)
 
 
 STEPS = {"R": phase_r, "A": phase_a, "M": phase_m, "G": phase_g, "P": phase_p, "V": phase_v, "D": phase_d,

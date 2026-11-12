@@ -18,11 +18,13 @@ use std::path::{Path, PathBuf};
 
 use gz_project::{DeleteContext, Guard, paths};
 
-/// The file that makes a folder Play's: written first when Play makes a root, and the list of
-/// the programs Play copied there (the only files of the root's top Play ever removes).
+/// The file that makes a folder Play's: made first when Play makes a root, then a line for every
+/// entry of the root's top Play writes, before it writes it - the only entries Play ever removes
+/// or overwrites there.
 pub const MARKER: &str = "play_root.txt";
 const MARKER_HEAD: &str = "; A game root made by Play of the level editor. Play clears only what it writes here: the programs\r\n; below, gamedata\\, the staged level; nothing else in this folder is touched.\r\n";
 const PROGRAM_KEY: &str = "program = ";
+const ENTRY_KEY: &str = "entry = ";
 
 /// What a root that passed the checks holds now.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,8 +33,8 @@ pub enum RootState {
     Missing,
     /// An empty folder: Play makes its root in it.
     Empty,
-    /// Play's own root, with the programs its marker lists.
-    Marked { programs: Vec<String> },
+    /// Play's own root, with the programs and the other entries its marker lists.
+    Marked { programs: Vec<String>, entries: Vec<String> },
 }
 
 impl RootState {
@@ -95,13 +97,20 @@ fn volume_root(path: &str) -> bool {
     }
 }
 
-/// The programs a marker lists: plain names only, never a path.
-fn marker_programs(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|l| l.trim().strip_prefix(PROGRAM_KEY.trim_end()))
-        .map(|n| n.trim().to_owned())
-        .filter(|n| plain_name(n))
-        .collect()
+/// The names a marker lists under `key`: plain names only, never a path.
+fn marker_names(text: &str, key: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in text.lines().filter_map(|l| l.trim().strip_prefix(key.trim_end())).map(str::trim) {
+        if plain_name(n) && !out.iter().any(|o| o.eq_ignore_ascii_case(n)) {
+            out.push(n.to_owned());
+        }
+    }
+    out
+}
+
+/// A marker's line for a program (`program = `) or another entry (`entry = `).
+pub(crate) fn marker_line(program: bool, name: &str) -> String {
+    format!("{}{name}\r\n", if program { PROGRAM_KEY } else { ENTRY_KEY })
 }
 
 /// A file name of the root's top: no separator, no `..`, no stream.
@@ -109,15 +118,56 @@ pub(crate) fn plain_name(n: &str) -> bool {
     !n.is_empty() && n != "." && n != ".." && !n.contains(['\\', '/', ':'])
 }
 
-/// The marker's text for `programs`.
-pub(crate) fn marker_text(programs: &[String]) -> String {
+/// The marker's head: what a fresh marker starts with.
+pub(crate) fn marker_head() -> &'static str {
+    MARKER_HEAD
+}
+
+/// The marker's text for `programs` and the other `entries`.
+pub(crate) fn marker_text(programs: &[String], entries: &[String]) -> String {
     let mut out = MARKER_HEAD.to_owned();
     for p in programs {
-        out.push_str(PROGRAM_KEY);
-        out.push_str(p);
-        out.push_str("\r\n");
+        out.push_str(&marker_line(true, p));
+    }
+    for e in entries {
+        out.push_str(&marker_line(false, e));
     }
     out
+}
+
+/// What a marker lists - programs, other entries -, read again (`stage_level`, `prepare`).
+pub(crate) fn read_marker(root: &Path) -> Option<(Vec<String>, Vec<String>)> {
+    let marker = root.join(MARKER);
+    if !fs::symlink_metadata(&marker).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&fs::read(&marker).ok()?).into_owned();
+    Some((marker_names(&text, PROGRAM_KEY), marker_names(&text, ENTRY_KEY)))
+}
+
+/// The projects inside what Play is about to clear of a marked root (its `gamedata`): any
+/// `project.ltx` / `mod.ltx` there refuses the root - the question a project's deletion asks
+/// (`gz_project::projects_inside`; a link is not entered). Answers how many entries it walked.
+pub(crate) fn nothing_to_lose(root: &Path, entries: &[String]) -> Result<u32, String> {
+    let mut walked = 0;
+    for e in entries.iter().filter(|e| e.eq_ignore_ascii_case("gamedata")) {
+        let dir = root.join(e);
+        let Ok(meta) = fs::symlink_metadata(&dir) else { continue };
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            continue;
+        }
+        let inside = gz_project::projects_inside(&dir.to_string_lossy())
+            .map_err(|why| format!("Play cannot clear {}: {why}.", dir.display()))?;
+        walked += inside.files + inside.folders;
+        if let Some(first) = inside.projects.first() {
+            return Err(format!(
+                "Play cannot clear {}: it holds {} - {first}. Move the project out of the game root first.",
+                dir.display(),
+                if inside.total == 1 { "a project".to_owned() } else { format!("{} projects", inside.total) }
+            ));
+        }
+    }
+    Ok(walked)
 }
 
 /// Every check in front of a Play root, and what it holds. Writes nothing.
@@ -181,10 +231,9 @@ pub fn check_root(cx: &DeleteContext, root: &Path) -> Result<RootState, String> 
     if names.is_empty() {
         return Ok(RootState::Empty);
     }
-    let marker = Path::new(&full).join(MARKER);
-    if fs::symlink_metadata(&marker).is_ok_and(|m| m.is_file()) {
-        let text = fs::read(&marker).map_err(|e| format!("{} cannot be read: {e}", marker.display()))?;
-        return Ok(RootState::Marked { programs: marker_programs(&String::from_utf8_lossy(&text)) });
+    if let Some((programs, entries)) = read_marker(Path::new(&full)) {
+        nothing_to_lose(Path::new(&full), &entries)?;
+        return Ok(RootState::Marked { programs, entries });
     }
     names.sort_by_key(|n| n.to_ascii_lowercase());
     let count = names.len();
@@ -196,22 +245,29 @@ pub fn check_root(cx: &DeleteContext, root: &Path) -> Result<RootState, String> 
     ))
 }
 
-/// Where Play makes a project's game root when the caller names none: the user's local
-/// application data, outside the editor's folders (a root may not lie inside the editor), under
-/// a short name of the project's path - the game takes paths of 255 characters at most.
+/// Where Play makes a project's game root when the caller names none, under a short name of the
+/// project's path (the game takes paths of 255 characters at most): an editor started with a home
+/// of its own (`-home`, `GRIZZLY_HOME`) keeps it there, `<home>\play\<id>`, so a run that plays
+/// leaves nothing in the user's profile; the author's editor (no home given) in the user's local
+/// application data, `GrizzlyPlay\<id>` - outside the editor's folders, which a root may not lie in.
 #[must_use]
-pub fn default_root(project: &Path) -> PathBuf {
-    #[cfg(windows)]
-    let base = gz_win::known_folder(gz_win::KnownFolder::LocalAppData);
-    #[cfg(not(windows))]
-    let base: Option<PathBuf> = None;
-    let base = base
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .unwrap_or_else(std::env::temp_dir);
+pub fn default_root(project: &Path, home: Option<&Path>) -> PathBuf {
+    let base = match home {
+        Some(h) => h.join("play"),
+        None => {
+            #[cfg(windows)]
+            let base = gz_win::known_folder(gz_win::KnownFolder::LocalAppData);
+            #[cfg(not(windows))]
+            let base: Option<PathBuf> = None;
+            base.or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+                .unwrap_or_else(std::env::temp_dir)
+                .join("GrizzlyPlay")
+        }
+    };
     // FNV-1a of the project's path: one folder per project, eight characters long
     let key = project.to_string_lossy().replace('/', "\\").to_lowercase();
     let hash = key.bytes().fold(0x811c_9dc5_u32, |h, b| (h ^ u32::from(b)).wrapping_mul(0x0100_0193));
-    base.join("GrizzlyPlay").join(format!("{hash:08x}"))
+    base.join(format!("{hash:08x}"))
 }
 
 #[cfg(test)]
@@ -250,13 +306,35 @@ mod tests {
         assert_eq!(check_root(&cx, &missing).unwrap(), RootState::Missing);
         fs::create_dir_all(&missing).unwrap();
         assert_eq!(check_root(&cx, &missing).unwrap(), RootState::Empty);
-        fs::write(missing.join(MARKER), marker_text(&["engine.bin".to_owned(), "..\\x".to_owned()])).unwrap();
+        let text = marker_text(&["engine.bin".to_owned(), "..\\x".to_owned()], &["gamedata".to_owned()]);
+        fs::write(missing.join(MARKER), text).unwrap();
         fs::create_dir_all(missing.join("gamedata")).unwrap();
         // a marker names plain file names only
         assert_eq!(
             check_root(&cx, &missing).unwrap(),
-            RootState::Marked { programs: vec!["engine.bin".to_owned()] }
+            RootState::Marked {
+                programs: vec!["engine.bin".to_owned()],
+                entries: vec!["gamedata".to_owned()]
+            }
         );
+    }
+
+    #[test]
+    fn a_marked_root_whose_gamedata_holds_a_project_is_refused_and_left_as_it_is() {
+        let base = tempfile::tempdir().unwrap();
+        let cx = DeleteContext::default();
+        let root = base.path().join("play");
+        fs::create_dir_all(root.join("gamedata").join("mods").join("my_mod")).unwrap();
+        fs::write(root.join(MARKER), marker_text(&[], &["gamedata".to_owned()])).unwrap();
+        fs::write(root.join("gamedata").join("mods").join("my_mod").join("mod.ltx"), b"[module]").unwrap();
+        let before = listing(base.path());
+        let why = check_root(&cx, &root).unwrap_err();
+        assert!(why.contains("it holds a project") && why.contains("my_mod"), "{why}");
+        assert_eq!(listing(base.path()), before);
+        // without it the root passes, and the walk says what it read
+        fs::remove_file(root.join("gamedata").join("mods").join("my_mod").join("mod.ltx")).unwrap();
+        assert!(matches!(check_root(&cx, &root).unwrap(), RootState::Marked { .. }));
+        assert_eq!(nothing_to_lose(&root, &["gamedata".to_owned()]).unwrap(), 3);
     }
 
     #[test]
@@ -362,12 +440,21 @@ mod tests {
 
     #[test]
     fn the_default_root_is_short_and_one_per_project() {
-        let a = default_root(Path::new("D:\\XFinedProjects\\Overnight Delivery"));
-        let b = default_root(Path::new("d:/xfinedprojects/overnight delivery"));
-        let c = default_root(Path::new("D:\\XFinedProjects\\Test"));
+        let a = default_root(Path::new("D:\\XFinedProjects\\Overnight Delivery"), None);
+        let b = default_root(Path::new("d:/xfinedprojects/overnight delivery"), None);
+        let c = default_root(Path::new("D:\\XFinedProjects\\Test"), None);
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(a.file_name().unwrap().len(), 8);
         assert!(a.parent().unwrap().ends_with("GrizzlyPlay"));
+    }
+
+    #[test]
+    fn an_editor_with_a_home_of_its_own_plays_under_it() {
+        let home = Path::new("C:\\Temp\\grizzly_home_x");
+        let project = Path::new("D:\\XFinedProjects\\Test");
+        let r = default_root(project, Some(home));
+        assert_eq!(r.parent().unwrap(), home.join("play"));
+        assert_eq!(r.file_name(), default_root(project, None).file_name());
     }
 }

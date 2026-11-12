@@ -411,7 +411,11 @@ async fn play_place(
 ) -> Result<PlayPlace, CmdError> {
     let root = match a.text("root").filter(|r| !r.trim().is_empty()) {
         Some(r) => PathBuf::from(r),
-        None => crate::play_root::default_root(&session.root),
+        // an editor with a home of its own (-home, GRIZZLY_HOME) plays under it
+        None => {
+            let home = (editor.paths.home != editor.paths.root).then_some(editor.paths.home.as_path());
+            crate::play_root::default_root(&session.root, home)
+        }
     };
     let context = Arc::new(play_context(editor).await);
     let (r, cx) = (root.clone(), context.clone());
@@ -432,6 +436,8 @@ fn root_answer(r: &crate::play::PlayRoot) -> serde_json::Value {
         "exe": r.exe.file_name().map(|n| n.to_string_lossy().into_owned()),
         "programs": r.programs.len(),
         "program_bytes": r.program_bytes,
+        "walked": r.walked,
+        "walk_ms": r.walk_ms,
     })
 }
 

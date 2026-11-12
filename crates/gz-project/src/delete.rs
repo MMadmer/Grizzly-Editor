@@ -358,6 +358,39 @@ pub fn check_delete(cx: &DeleteContext, path: &str) -> DeleteInfo {
     info
 }
 
+/// What [`projects_inside`] found below a folder.
+#[derive(Clone, Debug, Default)]
+pub struct Inside {
+    /// The folders that hold `project.ltx` or `mod.ltx` (the first sixteen), the folder itself
+    /// among them when it holds one.
+    pub projects: Vec<String>,
+    pub total: u32,
+    pub files: u32,
+    pub folders: u32,
+}
+
+/// The question [`check_delete`] asks of a project's folder - does it hold another project? -
+/// asked of any folder that is about to be cleared: every folder below `dir`, and `dir` itself,
+/// that holds a manifest. A link is counted, never entered. A folder inside that cannot be listed
+/// is an error: it could hide a project.
+pub fn projects_inside(dir: &str) -> Result<Inside, String> {
+    let dir = paths::to_backslash(dir);
+    let mut info = DeleteInfo::default();
+    let mut scan = Scan { info: &mut info, root: dir.clone(), unreadable: None };
+    if !scan_folder(&mut scan, &dir, false) {
+        let (at, code) = scan.unreadable.unwrap_or_default();
+        return Err(fsys::win32_text(&format!("A folder inside cannot be read: {at}"), code));
+    }
+    let mut out = Inside { files: info.files, folders: info.folders, ..Inside::default() };
+    if list::has_manifest(Path::new(&dir)) {
+        out.projects.push(dir.clone());
+        out.total += 1;
+    }
+    out.total += info.nested_total;
+    out.projects.extend(info.nested.into_iter().take(MAX_NESTED - out.projects.len()));
+    Ok(out)
+}
+
 fn fail_reason(code: u32) -> String {
     let what = match code {
         fsys::ERROR_SHARING_VIOLATION | fsys::ERROR_LOCK_VIOLATION => "in use by another program",
@@ -644,6 +677,20 @@ mod tests {
         fs::remove_dir_all(t.path("Alpha\\sub")).unwrap();
         project(&t, "Alpha\\temp\\release_stage_1");
         assert!(check_delete(&cx, &p).refused.is_none());
+    }
+
+    #[test]
+    fn the_projects_inside_a_folder_about_to_be_cleared_are_found() {
+        let t = Temp::new("inside");
+        fs::create_dir_all(t.path("gamedata\\configs")).unwrap();
+        fs::write(t.path("gamedata\\configs\\system.ltx"), "[x]").unwrap();
+        let none = projects_inside(&t.text("gamedata")).unwrap();
+        assert!(none.projects.is_empty() && none.files == 1 && none.folders == 2, "{none:?}");
+        let nested = project(&t, "gamedata\\mods\\my_mod");
+        let found = projects_inside(&t.text("gamedata")).unwrap();
+        assert_eq!(found.projects, [nested]);
+        fs::write(t.path("gamedata\\project.ltx"), "[project]").unwrap();
+        assert_eq!(projects_inside(&t.text("gamedata")).unwrap().total, 2);
     }
 
     #[test]

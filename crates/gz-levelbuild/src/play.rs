@@ -7,14 +7,19 @@
 //!
 //! What may be a root is [`crate::play_root::check_root`]'s: it is asked before anything else
 //! here, and a root is made only in a missing or empty folder, which then carries the marker
-//! first. What Play writes into its root, and the only things it clears there:
-//! - the marker (`play_root.txt`) with the programs Play copied - a program it listed and no
-//!   longer copies is removed, nothing else of the root's top;
+//! first. Play removes or overwrites an entry of the root's top only when the marker it read at
+//! the check listed it or Play wrote it in this very run: each name is claimed - its line
+//! appended to the marker - before it is written, and a name found there that is neither is a
+//! refusal (a root being made, missing or empty at the check, has nothing removed). What Play
+//! writes into its root, and the only things it clears there:
+//! - the marker (`play_root.txt`), `program = ` and `entry = ` lines - a program it listed and no
+//!   longer copies is removed;
 //! - `fsgame.ltx`, the game's, overwritten;
 //! - `database`, the junction to the game's archives (made once; unlinked, never followed,
 //!   wherever a root is cleared);
-//! - `gamedata\`, the game's loose gamedata copied anew every time (the old copy removed, a link
-//!   in it unlinked), and the staged level in it;
+//! - `gamedata\`, the game's loose gamedata copied anew every time - the old copy removed (a link
+//!   in it unlinked) only when the marker listed it and no `project.ltx` / `mod.ltx` lies inside
+//!   it, walked again right before -, and the staged level in it;
 //! - `appdata\` (logs, saves, screenshots, the player's `user.ltx` and the caches, seeded once and
 //!   never cleared), `modules\` (empty), `.dead-air-x64\` (the content files copied, the latch
 //!   removed).
@@ -40,6 +45,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use gz_project::DeleteContext;
@@ -80,6 +86,10 @@ pub struct PlayRoot {
     pub program_bytes: u64,
     /// What the root was before: `missing`, `empty` or `play_root`.
     pub was: &'static str,
+    /// The entries of the old gamedata walked for a project before it was cleared.
+    pub walked: u32,
+    /// How long that walk took, in milliseconds.
+    pub walk_ms: u64,
 }
 
 /// What a Play prepares: the linked game, the root, what the checks compare with, the longest
@@ -248,8 +258,93 @@ pub fn prepare(input: &PlayInput<'_>) -> Result<PlayRoot, String> {
 
 /// [`prepare`] for a game whose programs are `programs`.
 pub fn prepare_with(input: &PlayInput<'_>, programs: &GamePrograms) -> Result<PlayRoot, String> {
+    let state = play_root::check_root(input.context, input.root)?;
+    prepare_checked(input, programs, &state)
+}
+
+/// The entries of a root's top Play writes besides its programs and the marker.
+const ENTRIES: [&str; 6] = ["fsgame.ltx", "database", "gamedata", "appdata", "modules", CONTENT_DIR];
+
+/// What Play may remove or overwrite in a root: what its marker listed when the root was checked,
+/// and what Play wrote in this very run. A name is claimed - and its line appended to the marker -
+/// before it is written; a name that is there and neither is a refusal, and nothing of it changes.
+struct Claims<'a> {
+    root: &'a Path,
+    ours: Vec<String>,
+    marker: Option<fs::File>,
+}
+
+impl<'a> Claims<'a> {
+    fn open(root: &'a Path, state: &RootState) -> Result<Self, String> {
+        let at = root.join(MARKER);
+        let (ours, marker) = match state {
+            RootState::Marked { programs, entries } => {
+                let marker = fs::OpenOptions::new()
+                    .append(true)
+                    .open(&at)
+                    .map_err(|e| format!("{} cannot be written: {e}", at.display()))?;
+                let ours = programs.iter().chain(entries).map(|n| n.to_ascii_lowercase()).collect();
+                (ours, marker)
+            }
+            RootState::Missing | RootState::Empty => {
+                fs::create_dir_all(root).map_err(|e| format!("{} could not be made: {e}", root.display()))?;
+                // made, never opened: a marker that is there already is not Play's of this run
+                let mut marker =
+                    fs::OpenOptions::new().write(true).create_new(true).open(&at).map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::AlreadyExists {
+                            appeared(root, MARKER)
+                        } else {
+                            format!("{} could not be written: {e}", at.display())
+                        }
+                    })?;
+                marker
+                    .write_all(play_root::marker_head().as_bytes())
+                    .map_err(|e| format!("{} could not be written: {e}", at.display()))?;
+                (Vec::new(), marker)
+            }
+        };
+        let mut ours: Vec<String> = ours;
+        ours.push(MARKER.to_ascii_lowercase());
+        Ok(Self { root, ours, marker: Some(marker) })
+    }
+
+    fn is_ours(&self, name: &str) -> bool {
+        self.ours.iter().any(|o| o.eq_ignore_ascii_case(name))
+    }
+
+    fn claim(&mut self, name: &str, program: bool) -> Result<(), String> {
+        if self.is_ours(name) {
+            return Ok(());
+        }
+        if fs::symlink_metadata(self.root.join(name)).is_ok() {
+            return Err(appeared(self.root, name));
+        }
+        if let Some(m) = self.marker.as_mut() {
+            m.write_all(play_root::marker_line(program, name).as_bytes())
+                .and_then(|()| m.flush())
+                .map_err(|e| format!("{MARKER} could not be written in {}: {e}", self.root.display()))?;
+        }
+        self.ours.push(name.to_ascii_lowercase());
+        Ok(())
+    }
+}
+
+fn appeared(root: &Path, name: &str) -> String {
+    format!(
+        "{name} is in the game root {} and Play did not write it: the root's {MARKER} did not list it when Play checked the root, and this run has not written it. Play leaves it as it is; give Play an empty folder.",
+        root.display()
+    )
+}
+
+/// [`prepare_with`] after [`play_root::check_root`] said what the root holds: everything from
+/// there on, every removal and overwrite limited to what `state`'s marker listed and what this
+/// run writes. Blocking.
+fn prepare_checked(
+    input: &PlayInput<'_>,
+    programs: &GamePrograms,
+    state: &RootState,
+) -> Result<PlayRoot, String> {
     let (game, root) = (input.game, input.root);
-    let state = play_root::check_root(input.context, root)?;
     let engine = engine_of(game, programs).ok_or_else(|| {
         format!("the linked game at {} has no {}", game.display(), programs.engines.join(" or "))
     })?;
@@ -258,49 +353,57 @@ pub fn prepare_with(input: &PlayInput<'_>, programs: &GamePrograms) -> Result<Pl
         return Err(format!("the linked game at {} has no fsgame.ltx", game.display()));
     }
     let copied = programs_of(game, programs, &engine)?;
-    check_path_lengths(root, &planned_longest(input, &state, &copied))?;
+    check_path_lengths(root, &planned_longest(input, state, &copied))?;
+    let (old_programs, old_entries) = match state {
+        RootState::Marked { programs, entries } => (programs.clone(), entries.clone()),
+        RootState::Missing | RootState::Empty => (Vec::new(), Vec::new()),
+    };
+    let listed = |name: &str| old_entries.iter().any(|e| e.eq_ignore_ascii_case(name));
 
-    // from here on the disk changes: the marker first, naming what was and what will be copied
-    let old = match &state {
-        RootState::Marked { programs } => programs.clone(),
-        RootState::Missing | RootState::Empty => Vec::new(),
-    };
-    fs::create_dir_all(root).map_err(|e| format!("{} could not be made: {e}", root.display()))?;
-    let write_marker = |names: &[String]| {
-        fs::write(root.join(MARKER), play_root::marker_text(names))
-            .map_err(|e| format!("{MARKER} could not be written in {}: {e}", root.display()))
-    };
-    let mut both = copied.clone();
-    both.extend(old.iter().filter(|o| !copied.iter().any(|c| c.eq_ignore_ascii_case(o))).cloned());
-    write_marker(&both)?;
+    // from here on the disk changes: the marker first, then each entry claimed before it is written
+    let mut claims = Claims::open(root, state)?;
     let mut bytes = 0;
     for name in &copied {
+        claims.claim(name, true)?;
         let src = game.join(name);
         copy_changed(&src, &root.join(name))?;
         bytes += fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
     }
-    // a program Play copied before and does not now (the game dropped it): Play's own, so it goes
-    for stale in old.iter().filter(|o| !copied.iter().any(|c| c.eq_ignore_ascii_case(o))) {
-        let p = root.join(stale);
+    // a program the marker listed that the game no longer has: Play's own, so it goes
+    let stale: Vec<&String> =
+        old_programs.iter().filter(|o| !copied.iter().any(|c| c.eq_ignore_ascii_case(o))).collect();
+    for name in &stale {
+        let p = root.join(name);
         if fs::symlink_metadata(&p).is_ok_and(|m| m.is_file()) {
             fs::remove_file(&p).map_err(|e| format!("{} could not be removed: {e}", p.display()))?;
         }
     }
-    write_marker(&copied)?;
+    claims.claim("fsgame.ltx", false)?;
     fs::copy(&fsgame, root.join("fsgame.ltx")).map_err(|e| format!("fsgame.ltx could not be copied: {e}"))?;
+    // a junction already there is kept; anything else of that name was refused by the claim
+    claims.claim("database", false)?;
     link_archives(game, root)?;
-    // the loose gamedata as the game has it now; the level is staged into it afterwards
+    // the loose gamedata as the game has it now; the old copy goes only from a root whose marker
+    // listed it at the check, and only when no project lies inside it
+    claims.claim("gamedata", false)?;
     let gamedata = root.join("gamedata");
-    remove_tree(&gamedata);
+    let (mut walked, mut walk_ms) = (0, 0);
+    if listed("gamedata") {
+        let t = std::time::Instant::now();
+        walked = play_root::nothing_to_lose(root, &old_entries)?;
+        walk_ms = u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
+        remove_tree(&gamedata);
+    }
     if game.join("gamedata").is_dir() {
         copy_tree(&game.join("gamedata"), &gamedata)?;
     }
-    // an appdata of its own: the player's settings, the caches once, no save
+    // an appdata of its own: the player's settings, the caches once, no save; nothing in it is
+    // ever removed or overwritten
+    claims.claim("appdata", false)?;
     let appdata = root.join("appdata");
     for d in ["logs", "savedgames", "screenshots"] {
         let _ = fs::create_dir_all(appdata.join(d));
     }
-    // the player's settings once: the root's own are the root's from then on
     let user = game.join("appdata").join("user.ltx");
     if user.is_file() && !appdata.join("user.ltx").exists() {
         fs::copy(&user, appdata.join("user.ltx"))
@@ -318,7 +421,9 @@ pub fn prepare_with(input: &PlayInput<'_>, programs: &GamePrograms) -> Result<Pl
         }
     }
     // no module of the player's: the game root has a modules folder of its own, empty
+    claims.claim("modules", false)?;
     let _ = fs::create_dir_all(root.join("modules"));
+    claims.claim(CONTENT_DIR, false)?;
     let content = root.join(CONTENT_DIR);
     let _ = fs::create_dir_all(&content);
     for f in CONTENT_FILES {
@@ -328,8 +433,21 @@ pub fn prepare_with(input: &PlayInput<'_>, programs: &GamePrograms) -> Result<Pl
         }
     }
     let _ = fs::remove_file(content.join(CONTENT_LATCH));
+    // the marker as the root is now: the programs copied, the entries written
+    drop(claims.marker.take());
+    let entries: Vec<String> = ENTRIES.iter().map(|e| (*e).to_owned()).collect();
+    fs::write(root.join(MARKER), play_root::marker_text(&copied, &entries))
+        .map_err(|e| format!("{MARKER} could not be written in {}: {e}", root.display()))?;
     let exe = root.join(engine.file_name().unwrap_or_default());
-    Ok(PlayRoot { root: root.to_path_buf(), exe, programs: copied, program_bytes: bytes, was: state.name() })
+    Ok(PlayRoot {
+        root: root.to_path_buf(),
+        exe,
+        programs: copied,
+        program_bytes: bytes,
+        was: state.name(),
+        walked,
+        walk_ms,
+    })
 }
 
 /// The longest file path the game takes: `CLocatorAPI::Register` copies every path it indexes into
@@ -432,8 +550,9 @@ pub fn stage_level(
     level_ai: &[u8],
     spawn: &[u8],
 ) -> Result<(), String> {
-    if !fs::symlink_metadata(root.join(MARKER)).is_ok_and(|m| m.is_file()) {
-        return Err(format!("{} is not a Play root: it has no {MARKER}.", root.display()));
+    // only into the gamedata a Play root's marker lists: the copy Play made of the game's
+    if !play_root::read_marker(root).is_some_and(|(_, entries)| entries.iter().any(|e| e == "gamedata")) {
+        return Err(format!("{} is not a Play root: its {MARKER} does not list gamedata.", root.display()));
     }
     if !play_root::plain_name(level) {
         return Err(format!("{level} is not a level name"));
@@ -603,5 +722,79 @@ mod tests {
             stage_level(&work, "qa_level", &level, b"ai", b"spawn").unwrap_err().contains("not a Play root")
         );
         assert!(!work.join("gamedata").join("levels").exists());
+    }
+
+    #[test]
+    fn a_root_that_gained_entries_after_its_check_loses_none_of_them() {
+        let base = tempfile::tempdir().unwrap();
+        let game = game(base.path());
+        let cx = DeleteContext::default();
+        // an empty folder at the check, a gamedata of someone's by the time Play would clear it
+        let root = base.path().join("empty");
+        fs::create_dir_all(&root).unwrap();
+        let state = play_root::check_root(&cx, &root).unwrap();
+        assert_eq!(state, RootState::Empty);
+        fs::create_dir_all(root.join("gamedata")).unwrap();
+        fs::write(root.join("gamedata").join("precious.txt"), b"the author's work").unwrap();
+        let why = prepare_checked(&input(&game, &root, &cx), &PROGRAMS, &state).unwrap_err();
+        assert!(
+            why.contains("gamedata is in the game root") && why.contains("Play did not write it"),
+            "{why}"
+        );
+        assert_eq!(fs::read(root.join("gamedata").join("precious.txt")).unwrap(), b"the author's work");
+        assert_eq!(fs::read_dir(root.join("gamedata")).unwrap().count(), 1);
+        // missing at the check, a library and fsgame.ltx of someone's there now: neither overwritten
+        for (name, text) in
+            [("core.lib", b"someone's library".as_slice()), ("fsgame.ltx", b"someone's".as_slice())]
+        {
+            let root = base.path().join(format!("missing_{name}"));
+            let state = play_root::check_root(&cx, &root).unwrap();
+            assert_eq!(state, RootState::Missing);
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join(name), text).unwrap();
+            let why = prepare_checked(&input(&game, &root, &cx), &PROGRAMS, &state).unwrap_err();
+            assert!(why.contains(&format!("{name} is in the game root")), "{why}");
+            assert_eq!(fs::read(root.join(name)).unwrap(), text);
+        }
+        // a marker that is there by then is no marker of this run
+        let root = base.path().join("marker");
+        let state = play_root::check_root(&cx, &root).unwrap();
+        fs::create_dir_all(root.join("gamedata")).unwrap();
+        fs::write(root.join(MARKER), play_root::marker_text(&[], &["gamedata".to_owned()])).unwrap();
+        fs::write(root.join("gamedata").join("precious.txt"), b"mine").unwrap();
+        assert!(prepare_checked(&input(&game, &root, &cx), &PROGRAMS, &state).unwrap_err().contains(MARKER));
+        assert_eq!(fs::read(root.join("gamedata").join("precious.txt")).unwrap(), b"mine");
+    }
+
+    #[test]
+    fn a_marked_root_loses_only_what_its_marker_lists_and_never_a_project() {
+        let base = tempfile::tempdir().unwrap();
+        let game = game(base.path());
+        let cx = DeleteContext::default();
+        let root = base.path().join("play");
+        prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap();
+        let marker = fs::read_to_string(root.join(MARKER)).unwrap();
+        assert!(marker.contains("entry = gamedata") && marker.contains("entry = fsgame.ltx"), "{marker}");
+        // a project inside the gamedata Play would clear: refused, at the check and in prepare
+        let nested = root.join("gamedata").join("mods").join("my_mod");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("mod.ltx"), b"[module]").unwrap();
+        let why = prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap_err();
+        assert!(why.contains("it holds a project") && why.contains("my_mod"), "{why}");
+        // the project put there after the check: prepare walks again before it clears
+        let (programs, entries) = play_root::read_marker(&root).unwrap();
+        let stale = RootState::Marked { programs, entries };
+        let why = prepare_checked(&input(&game, &root, &cx), &PROGRAMS, &stale).unwrap_err();
+        assert!(why.contains("it holds a project"), "{why}");
+        assert!(nested.join("mod.ltx").is_file());
+        fs::remove_dir_all(root.join("gamedata").join("mods")).unwrap();
+        // a gamedata the marker does not list stays: the root is refused
+        fs::write(root.join(MARKER), play_root::marker_text(&["engine.bin".to_owned()], &[])).unwrap();
+        fs::write(root.join("gamedata").join("precious.txt"), b"mine").unwrap();
+        let why = prepare_with(&input(&game, &root, &cx), &PROGRAMS).unwrap_err();
+        assert!(why.contains("is in the game root") && why.contains("Play did not write it"), "{why}");
+        assert_eq!(fs::read(root.join("gamedata").join("precious.txt")).unwrap(), b"mine");
+        remove_tree(&root);
+        assert!(game.join("database").join("a.db0").is_file());
     }
 }

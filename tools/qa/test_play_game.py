@@ -13,7 +13,9 @@ What it does:
   2. compiles the geometry with the editor's own level compiler, in its process (level_build compile_geometry: a
      job on every core, into the project's level folder; the command answers when it ends, with its report);
   3. makes Play's game root in an empty temp folder of its own (level_build play_root root=; the game takes paths of
-     255 characters at most, and Play takes only a missing or empty folder or one carrying its play_root.txt) - the
+     255 characters at most, and Play takes only a missing or empty folder or one carrying its play_root.txt; without
+     root= an editor with a home of its own, as every suite's, plays in <home>\\play\\<id> - never in the user's
+     profile -, refused naming the path when the home is too deep for the game; the suite names a short root) - the
      engine and the libraries it needs copied, none of the game folder's other programs, a link to the archives -,
      writes the root's own settings, then starts Play: the editor builds the collision, the AI map, the game graph
      (joined onto the linked game's, whose vertex numbers the game's start scripts name) and editor.spawn, stages
