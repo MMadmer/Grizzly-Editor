@@ -1,11 +1,12 @@
 # Grizzly Editor on Rust
 
-Status: built on `grizzly-rust`, before the cutover (phase 7). This document is the contract
-and says what was built; it changes by editing the document first. What every package did, the
-test passes and the reviewer's findings are in `docs/rust/STATE.md`.
+Status: the Rust editor is the editor of the repository - phases 0 to 7 are done; the level
+compilers (phase 8) are still C++. The last commit that holds the C++ editor is the tag
+`cpp-editor-last`. This document is the contract and says what was built; it changes by
+editing the document first. What every package did, the test passes and the reviewer's
+findings are in `docs/rust/STATE.md`.
 
-Branch: `grizzly-rust`, forked from `25f76d13`. Nothing of it reaches `main` before the
-cutover (phase 7).
+Branch: `grizzly-rust`, forked from `25f76d13`; merged into `main` at the cutover.
 
 ## 1. Goal
 
@@ -28,8 +29,8 @@ Three requirements, in this order:
 | I1 | No phase needs a commit in the game repository. A phase that finds it needs one stops, and this document changes first. |
 | I2 | Nothing in the game names the editor (the existing rule, unchanged). |
 | I3 | At the cutover the Rust editor does everything the C++ editor does. Deliberate differences are listed in section 12 and nowhere else. |
-| I4 | The project folder is the interface between the two editors: both open the same project until the cutover, so no file format inside a project changes before it. |
-| I5 | The C++ editor is the oracle. `Source/` is not edited on this branch, so a merge from `main` never conflicts. |
+| I4 | Until the cutover the project folder was the interface between the two editors: both opened the same project, so no file format inside a project changed before it. It stays the contract with every project made before. |
+| I5 | The C++ editor is the oracle. Until the cutover `Source/` was not edited on this branch; since it, the oracle is the built C++ editor on disk (`Bin\x64\Release\LevelEditor.exe`, of the tag `cpp-editor-last`) and its answers recorded under `Intermediate/oracle`, keyed with the stamp it had at the cutover. |
 | I6 | Every crate is `#![forbid(unsafe_code)]` unless section 6 names it. |
 | I7 | The UI thread never waits: no file access, no network, no lock that another thread may hold for longer than a pointer swap, no GPU readback, no pipeline compile. It draws and presents; its one wait is for the surface before the first frame. |
 | I8 | State changes only through commands, and every command is reachable over MCP. |
@@ -594,7 +595,7 @@ Replaces about 12k (the builder, the in-editor AI, the glue).
 Gate: `test_properties`, `test_world`, `tools/mcp/test_server_lifecycle.py`,
 `benchmark_scene_load.py` no slower than the oracle; a level built here loads in the game.
 
-### Phase 7 - The cutover
+### Phase 7 - The cutover (done)
 
 - Every QA suite green against the Rust editor; the parity ledger complete; the game's
   checks that take the editor's output green on it: `run_lua.py test_examples.lua`,
@@ -603,10 +604,12 @@ Gate: `test_properties`, `test_world`, `tools/mcp/test_server_lifecycle.py`,
   `Run-NqQa.ps1 -Scenario Scout` make their own modules and releases: they prove the game's
   side of the contract, not the editor's output.)
 - One commit deletes the C++ editor and the engine libraries only it used. What the
-  compilers still need stays until phase 8.
+  compilers still need stays until phase 8 (found from the build graph of a fresh build:
+  `XrLC`, `XrLCLight`, `xrDO_Light`, `XrDXT`, `XrETools`, `XrQSlim`, `FreeMagic`, `XrCore`,
+  `XrCDB`, `XrAPI` and their third-party code; CMake is the one C++ build).
 - `CLAUDE.md`, `tools/mcp/AI_SETUP.md` and `README.md` are rewritten for the new editor;
-  `Build.ps1` builds it; the default MCP port and the binary name return to the editor's
-  own.
+  `Build.ps1` builds it (and the compilers); the default MCP port is the editor's own, 28016,
+  and the binary is `Grizzly.exe`, beside the built C++ editor rather than over it.
 - The branch merges into `main`.
 
 ### Phase 8 - The compilers
@@ -656,10 +659,13 @@ bug.
 - **Areas flip one at a time.** When an area passes its gate, new work on it lands in Rust
   and the C++ side takes fixes only. Until then a feature lands in C++ and joins the port
   list.
-- **Side by side.** The Rust editor is `Intermediate\cargo\debug\Grizzly.exe` and listens on
-  28017 until the cutover (`-mcp_port` names another; QA uses 28917); the project list is
-  shared, the tab session and the settings are its own. The QA suites pick the editor through
-  `tools/qa/qa_target.py` (`GRIZZLY_QA_TARGET=rust`).
+- **The editor.** `Bin\x64\Release\Grizzly.exe` (`Build.ps1`, the release profile: thin LTO,
+  line tables in a PDB beside it) or `Intermediate\cargo\debug\Grizzly.exe`
+  (`tools/rust/cg.sh build`), listening on 28016 (`-mcp_port` names another; QA uses its own
+  ports and a home of its own per editor). The QA suites take the editor from
+  `tools/qa/qa_target.py`: the Rust editor by default, `GRIZZLY_QA_EXE` another binary; the
+  C++ editor only for the differential's recording. `tools/mcp/grizzly_mcp.py` launches the
+  Rust bridge, so a client set up before the cutover keeps working.
 - **A work package is done** when its code, its commands, its tests and its line of the
   parity ledger are in, and the document that describes its behaviour still tells the
   truth.
