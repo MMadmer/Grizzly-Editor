@@ -27,7 +27,8 @@ GRIZZLY_LC_EXE names another), then `-compile_details`. The comparison is in com
 compilers and records. Everything a run prints goes to Intermediate/compile/run.log as it happens.
 
 The same on every run and on any number of cores: a scene of TWICE (all of them with --all) is compiled a second
-time and every file of the two compiles is wanted byte for byte; ONE_THREAD is compiled once more on one thread
+time and every file of the two compiles is wanted byte for byte; ONE_THREAD (with --all also ONE_THREAD_ALL, the
+scene whose light once differed from run to run) is compiled once more on one thread
 (`-threads=1`) and wanted byte for byte against the compile on every core. A difference names the first file and
 byte that differ.
 """
@@ -103,6 +104,9 @@ EMPTIED = {"mp_close_combat_implicit": [13, 14, 15]}
 # (-threads=1) and wanted byte for byte against the compile on every core.
 TWICE = {"mp_test", "mp_close_combat", "l03u_agr_underground"}
 ONE_THREAD = "mp_test"
+# With --all the scene where the compile once depended on what a thread had traced before is compiled on one
+# thread too (two minutes on the release build): mp_test never showed that fault.
+ONE_THREAD_ALL = "l03u_agr_underground"
 FORMAT = 3
 CPP_SOURCE = "cpp-compilers-last"
 LIMIT = 600.0
@@ -684,7 +688,7 @@ def determinism(scene: str, rd: str, rust_dir: str, every: bool) -> list[str]:
     runs = []
     if every or scene in TWICE:
         runs.append(("again", ()))
-    if scene == ONE_THREAD:
+    if scene == ONE_THREAD or (every and scene == ONE_THREAD_ALL):
         runs.append(("one thread", ("-threads=1",)))
     bad = []
     for what, extra in runs:

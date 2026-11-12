@@ -43,12 +43,13 @@ Rules (one per chunk; anything else is byte for byte):
                       shrank (about half of all) - by the texels along its longest side, or the one under it, again
                       through each side's own coordinates (flat_samples). Mean absolute error and 99th percentile per
                       channel over all samples, under the bounds below; the flat ones are reported on their own too.
-                      The second picture's colour is the sun once more, which the first picture's alpha holds already
-                      in DXT5's eight levels; the colour is one of four a block shares, so a block of lit and
-                      shadowed texels can lose a shadow there. On 2.r/g/b each side's own disagreement between its two
-                      copies of the sun is the encoder's and is taken off (sun_copy_rule; mp_test's shrunk deflector
-                      at (309, 0): the C++ alpha 0, its colour 33 from the block's colours 123/93/63/33, the Rust 0 in
-                      both - the C++ wrote 0 before its encoder, as its own alpha shows).
+                      Every channel is judged as it is. The second picture's colour is the sun once more
+                      (Pack_hemi) and the game reads its green (get_sun: lmh.g of s_hemi); its red and blue are
+                      DXT5's 5-bit channels, where the two encoders round a flat value two steps apart (mp_test:
+                      mean 2.0, p99 2), so those two are held to 3 / 16 (LIGHT_MEAN_5BIT), the others to the
+                      bounds below. (A rule that took each side's own difference between its two copies of the
+                      sun off the second picture's colour was a hidden difference - a black or a noisy second
+                      picture passed it - and is gone.)
   implicit textures   texel by texel (the layout is the texture's own), under the lightmap bounds.
   recalculation_data_slots.details   the C++ detail compiler's state for its partial relight, read by nothing but
                       its own next run: not written (the resumed light is not ported).
@@ -60,7 +61,9 @@ Rules (one per chunk; anything else is byte for byte):
                       but the light and the lightmap coordinates), level.geomx's fast paths as one multiset of
                       triangles by corner positions, the level's header, portals, lights, glows and the sectors'
                       portals byte for byte; the visuals' split, order and spheres, the hierarchy nodes and the
-                      sectors' root visual follow the visual list and are left out. The light through the matched
+                      sectors' root visual follow the visual list and are left out - and with them, under this
+                      rule, the sliding windows of the progressive visuals and which sector a visual belongs to,
+                      which no other check of such a scene holds. The light through the matched
                       triangles: vertex light under the vertex bounds, lightmaps through each side's page.
 
 Recorded (diff_compile.py SCENES) and what stays unproven - CBuild::Run of cpp-compilers-last, phase by phase:
@@ -78,7 +81,10 @@ Recorded (diff_compile.py SCENES) and what stays unproven - CBuild::Run of cpp-c
   The detail compiler: mp_close_combat (the Rust build.cform), mp_close_combat_implicit (each side's own).
   Never recorded: the Draft quality (skips the implicit light and the progressive meshes), -nosun, -nosmg,
     -no_optimize, -att (linear point lights), -no_invalidefaces and the abort on invalid faces, a level with no
-    sun or with transparent shadow casters measured on their own, more than two lightmap pages. Dropped: -gi, -net (D24).
+    sun or with transparent shadow casters measured on their own, more than two lightmap pages; the visual tree
+    (the sectors' visuals, the sliding windows) of a level whose deflectors moved between pages; MU models and
+    the implicit light in one level (the C++ crashes on that scene's MU models and its cause is not known); a
+    level with implicit light loaded by the game. Dropped: -gi, -net (D24).
 """
 from __future__ import annotations
 
@@ -90,12 +96,13 @@ from collections import Counter
 
 import numpy as np
 
-VERSION = 7
+VERSION = 8
 
 # The bounds of the light, per channel in 0..255 steps (mean absolute error, 99th percentile), about twice the largest
-# seen over every recorded scene (flat triangles included, the sun-copy rule applied):
-#   lightmaps and implicit textures  seen mean 0.68 (l12u_control_monolith, 1.r), p99 8 (l12u_control_monolith, 1.r
-#                                    and 1.b); the implicit texture 0.02 / 1 (mp_close_combat_implicit)
+# seen over every recorded scene (flat triangles included, every channel as it is):
+#   lightmaps and implicit textures  seen mean 0.85, p99 12 (mp_close_combat_implicit, 2.g - the sun the game
+#                                    reads), 0.68 / 8 on the first picture (l12u_control_monolith, 1.r); the
+#                                    implicit texture 0.02 / 1 (mp_close_combat_implicit)
 #   vertex light, MU models' light   seen mean 0.085 (mp_close_combat_implicit, level.geom), p99 1
 #                                    (l03u_agr_underground, the LODs of the references lit alone)
 #   the detail objects' light        level.details byte for byte on every scene: no bound
@@ -106,6 +113,10 @@ VERSION = 7
 # grazing and coincident faces, the transparencies multiplied nearest first, Rust's sin/cos/pow.
 LIGHT_MEAN = 1.5
 LIGHT_P99 = 16.0
+# The second picture's red and blue: DXT5's 5-bit colour channels, where NVTT and texpresso round a flat value two
+# steps apart (seen: mean 2.0, p99 2 on mp_test). The game reads that picture's green.
+LIGHT_MEAN_5BIT = 3.0
+FIVE_BIT = ("2.r", "2.b")
 VERTEX_MEAN = 0.2
 VERTEX_P99 = 2.0
 
@@ -615,21 +626,6 @@ def light_compare(da: str, db: str):
     return (a, b, flat), "", pa, pb, where
 
 
-def sun_copy_rule(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """The differences of the samples as judged (n, 8). The second picture's colour is the sun once more (Pack_hemi:
-    the sun in r, g and b), which the first picture's alpha holds already: in DXT5 the alpha is a block of eight
-    levels of its own, the colour one of four colours shared with the block's other texels, so a block holding a
-    lit and a shadowed texel can lose the shadow there (mp_test's flat deflector at (309, 0): the C++ alpha 0, its
-    colour 33 - the encoder's colours 123, 93, 63, 33 - and the Rust 0 in both). On 2.r, 2.g and 2.b each side's own
-    disagreement between its two copies of the sun is the encoder's and is taken off; the rest is judged."""
-    a, b = a.astype(np.int32), b.astype(np.int32)
-    d = np.abs(a - b)
-    for k in (4, 5, 6):
-        own = np.abs(a[:, k] - a[:, 3]) + np.abs(b[:, k] - b[:, 3])
-        d[:, k] = np.maximum(0, d[:, k] - own)
-    return d
-
-
 def channel_stats(a: np.ndarray, b: np.ndarray, d: np.ndarray | None = None) -> dict:
     names = ["1.r", "1.g", "1.b", "1.a(sun)", "2.r", "2.g", "2.b", "2.a(hemi)"]
     out = {}
@@ -979,13 +975,11 @@ def compare_dirs(da: str, db: str, files_a: set, files_b: set, out_dir: str | No
             pr.append("lightmaps: " + why)
         else:
             a, b, flat = got
-            judged = sun_copy_rule(a, b)
-            res["light"]["lightmaps"] = channel_stats(a, b, judged)
-            res["light"]["lightmaps_raw"] = channel_stats(a, b)
+            res["light"]["lightmaps"] = channel_stats(a, b)
             res["light"]["samples"] = int(len(a))
             res["light"]["flat_samples"] = int(flat.sum())
             # reported on their own too; judged with the rest
-            res["light"]["lightmaps_flat"] = channel_stats(a[flat], b[flat], judged[flat])
+            res["light"]["lightmaps_flat"] = channel_stats(a[flat], b[flat])
             res["light"]["pages"] = len(pa)
             if sorted(pa) != sorted(pb):
                 pr.append(f"lightmap pages: {sorted(pa)} in the C++, {sorted(pb)} in the other")
@@ -1028,8 +1022,9 @@ def judge(res: dict, floor: dict) -> list[str]:
             bad.append(f"MU {name} light: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {VERTEX_MEAN}, {VERTEX_P99})")
     lm = res["light"].get("lightmaps", {})
     for ch, s in lm.items():
-        if isinstance(s, dict) and (s["mean"] > LIGHT_MEAN or s["p99"] > LIGHT_P99):
-            bad.append(f"lightmap channel {ch}: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {LIGHT_MEAN}, {LIGHT_P99})")
+        mean_bound = LIGHT_MEAN_5BIT if ch in FIVE_BIT else LIGHT_MEAN
+        if isinstance(s, dict) and (s["mean"] > mean_bound or s["p99"] > LIGHT_P99):
+            bad.append(f"lightmap channel {ch}: mean {s['mean']:.2f}, p99 {s['p99']:.1f} (bounds {mean_bound}, {LIGHT_P99})")
     for n, s in res["vertex"].items():
         if s["mean"] > VERTEX_MEAN or s["p99"] > VERTEX_P99:
             bad.append(f"{n} vertex light: mean {s['mean']:.2f}, p99 {s['p99']:.1f}")

@@ -12,6 +12,10 @@ exists: opened with every sharing flag, two bytes, closed at once: a test's own 
 blocked). A buffer the system could not fill in time (it says so with an empty answer) makes it walk
 the whole folder once instead, and the report says so.
 
+What it cannot see: a file whose NAME is harmless and that is gone before it can be opened - its `MZ`
+head is never read (a program's name is seen however short the file lives); and anything written
+outside this folder. `tools/rust/check_test_files.py` reads the sources for both.
+
 The report has one line per finding, `<unix time>|<path relative to the folder>|<why>`, then
 `events <n>`, `overflows <n>` and `cpu <seconds>` (what the watcher cost). It stops when a file
 named `.stop` appears at the folder's top; with `--remove` it then removes the folder - a link
