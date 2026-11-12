@@ -3026,3 +3026,87 @@ another (`Intermediate/final2/`, `summary.txt` and a log per step):
 | `test_play_game.py --scene l03u_agr_underground` | 33 checks pass: the level in the game 25 s after Play, no dump, the installed game's 107,624 entries unchanged | 83 s |
 
 Nothing changed under `D:\XFinedProjects` or the game's `modules`; no process and no Play root left.
+
+### The reviewer's three holes, closed
+
+The reviewer's `play_root_verify.py` (Intermediate/critic-final) found three; the lead's brief of 12 Nov evening.
+- **A root being made loses nothing.** `prepare` is now `check_root` + `prepare_checked(state)`: every entry of the
+  root's top is claimed before it is written - its `program = ` / `entry = ` line appended to the marker - and a
+  name that is there although the marker read at the check did not list it and this run has not written it is a
+  refusal ("<name> is in the game root ... and Play did not write it ... Play leaves it as it is"). A missing or
+  empty root's marker is made with `create_new`; the old `gamedata` is removed only when the marker listed it; the
+  programs, `fsgame.ltx`, the junction, `appdata`, `modules` and the content folder go through the same claim;
+  `stage_level` writes only into a `gamedata` the marker lists. At the end the marker is rewritten as the root is.
+- **A project inside what Play clears refuses the root.** `gz-project`'s `delete.rs` gained `projects_inside` -
+  `check_delete`'s "holds another project" question asked of any folder (the folder itself too, links counted,
+  never entered, an unreadable folder an error) -; `check_root` asks it of a marked root's `gamedata`, and
+  `prepare_checked` again right before the clear. On a real root (the copied loose gamedata): 681 entries, 3 ms,
+  on the IO pool (`play_root` answers `walked`, `walk_ms`).
+- **The default root follows the home.** An editor with a home of its own (`-home` / `GRIZZLY_HOME`: home not the
+  data root) plays in `<home>\play\<id>`; the author's own in `%LOCALAPPDATA%\GrizzlyPlay\<id>`. A home too deep is
+  the path-length refusal naming the path. `tools.json` and `test_play_game`'s docstring say so.
+
+Proof (22:45 - 23:01, debug build of this tree; nobody else in the Rust tree): unit tests - `play.rs`
+`a_root_that_gained_entries_after_its_check_loses_none_of_them` (an empty root gains `gamedata\precious.txt`, a
+missing one a library or `fsgame.ltx`, or a marker, between the check and the clear: refused, nothing changed),
+`a_marked_root_loses_only_what_its_marker_lists_and_never_a_project`; `play_root.rs`
+`a_marked_root_whose_gamedata_holds_a_project_is_refused_and_left_as_it_is`,
+`an_editor_with_a_home_of_its_own_plays_under_it`; `delete.rs`
+`the_projects_inside_a_folder_about_to_be_cleared_are_found`. The reviewer's script rerun on this build
+(`Intermediate/final-play/play_root_verify.out`): all 15 cases refused, nothing lost, the race (a file 0.12 s into a
+0.4 s prepare) refused with the file there. `test_scene_tools` Y: a root `play_root` made gets
+`gamedata\mods\my_mod\mod.ltx`; `play_root`, `play_clean`, `play` refuse it naming the project, its 3,095 entries
+listed equal.
+- `bash tools/rust/check.sh`: ok (clippy, fmt, unsafe only in `gz-win`, registry, encoding, test files, icon); 37 s.
+- `bash tools/rust/test.sh`: 33 run, 45 cached, 0 failed, 1183 tests green; 47.3 s; the net: 1537 events, 0
+  overflows, 1.89 s of CPU, no finding.
+- `python tools/qa/run_all.py test_scene_tools test_play_game`: 2 / 2, wall 84.5 s (86 / 86 in 22.9 s; 36 / 0 in
+  61.5 s, the level in 18 s after Play).
+- `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 21:08:40'` at 23:01:27: nothing; no
+  `gzpr_` / `gztest_` / `GrizzlyPlay` left (an empty `grizzly_home_*` of the verify script's import removed); the one
+  Grizzly running is the lead's compile on its own home.
+
+## The reviewer's verification of the fixes, closed
+
+The reviewer went over its findings again at `3e643cb5` (scripts and outputs under `Intermediate/critic-final/`):
+Play's root closed for what was reported (fifteen ways round it refused, nothing changed), the compile the same on
+every run (five 16-thread runs of l03u one hash each file; one thread byte for byte equal to sixteen), the licences
+closed (no copyleft-only code linked, the new decoder keeps the old one's contract), the smaller things closed. Its
+verdict: done for the editor and the compiler, with one rule of the proof to replace and three small holes. All four
+are closed:
+
+- **The rule that could not fail** (`compare_compile.py`, `sun_copy_rule`, added in the pass before): it took each
+  side's own difference between its two copies of the sun off the second lightmap picture's colour; by the triangle
+  inequality what was left could never exceed the first picture's alpha difference, so a black, a white or a noisy
+  second picture passed - and that picture's green is the sun the game reads (`get_sun`: `lmh.g`). Gone: every
+  channel is judged as it is. Seen, raw: the second picture's green mean 0.85 / p99 12 at most
+  (mp_close_combat_implicit), under 1.5 / 16; its red and blue, DXT5's 5-bit channels where the two encoders round a
+  flat value two steps apart, mean 2.0 on mp_test and 1.3 on the implicit scene, held to 3 / 16
+  (`LIGHT_MEAN_5BIT`). `python tools/qa/diff_compile.py --all` on the release binary: five scenes PASS, 776 s.
+- **One thread against all on the scene that showed the fault**: with `--all`, l03u_agr_underground is compiled on
+  one thread too (mp_test, the only scene checked that way before, was stable before the fix as well): every file
+  byte for byte, 130 s.
+- **What the paged rule leaves out** (the sliding windows, which sector a visual belongs to) and three more lines
+  of "not proven" (the visual tree of a level whose deflectors moved between pages; MU models and the implicit
+  light in one level; a level with implicit light loaded by the game) are in the tool's header and in the plan's
+  section 9.
+- **Play's root, three holes** ("The final review, Play and the tests", its last part): nothing is removed from a
+  root Play is making (each entry's name goes into the marker before the entry; what the marker did not list and
+  this run did not write is refused untouched); a project anywhere inside what Play would clear refuses the root
+  (`gz_project::delete::projects_inside`, at the check and again before the clear); an editor with a home of its
+  own keeps its default root under that home.
+- **The watcher's limits** are in its header: an `MZ` head under a harmless name that is gone before it can be
+  read, and anything written outside the watched folder, are seen only by the source check.
+
+**The last run** - 12 Nov, 23:03 - 23:20, the release build of `6306a076` (`Intermediate/final3/`): `Build.ps1`
+241 s; `check.sh` ok, 18 s; `test.sh` 1183 tests green (the changed binaries had run under the watcher in the pass
+before; nothing to rerun); `diff_editors.py --all` 755 steps, 746 files, 0 differ, 46 s; the suites the last fixes
+touch - `test_scene_tools`, `test_play_game`, `test_project_browser`, `test_mcp_bridge`, `test_build_job`.
+`test_build_job` failed once there on its frame check (one frame of 95 ms, bound 64) when it started right after
+`test_play_game`; alone it passed three times of three. `run_all.py` now waits for a quiet machine before a suite
+that times something (`settle`: under a tenth of the cores busy for half a second, twenty seconds at most): the
+same five suites in the same order, twice: 5 of 5 both times (the first waited 18 s). Nothing changed under
+`D:\XFinedProjects` or the game's `modules`; no process, no Play root and no temp folder left.
+
+The whole run before it (`Intermediate/final2/`, `7866dfd9`) stands for everything these last commits did not
+touch: `test.sh --all`, the eighteen other suites, the level in the game.

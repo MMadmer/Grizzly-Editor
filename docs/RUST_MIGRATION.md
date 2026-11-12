@@ -473,11 +473,12 @@ runs differ in is known and is the floor. Byte for byte unless named here:
   C++ runs differ, and so do two builds of one source.
 - **The light**, per channel in 0..255 steps as mean absolute error and 99th percentile:
   lightmaps and implicitly lit textures within 1.5 / 16, vertex light within 0.2 / 2 - about
-  twice what was seen (lightmaps 0.68 / 8 on l12u, vertex light 0.085 / 1) - and the detail
+  twice what was seen (lightmaps 0.85 / 12 on the implicit scene's sun, vertex light 0.085 / 1) - and the detail
   objects' light byte for byte. Every lightmapped triangle is sampled through each side's own
   coordinates, the flat ones (a deflector the light found flat shrinks to a texel or a line)
-  along their line or at their texel. The second picture's colour is judged less each side's
-  own encoder disagreement with the first picture's alpha (DXT5 blocks). What the bounds allow
+  along their line or at their texel. Every channel is judged as it is; the second picture's
+  red and blue, DXT5's 5-bit channels where the two encoders round a flat value two steps
+  apart, within 3 / 16 (the game reads that picture's green). What the bounds allow
   is what the port differs in: another DXT5 encoder, another ray-triangle test on grazing
   faces, Rust's `sin` / `cos` / `pow`. A deflector that the light moves to another lightmap
   page takes its triangles along: the static geometry is then compared as one multiset.
@@ -495,13 +496,18 @@ implicit scene one jitter sample, and its MU models are emptied in the input bot
 read, because the C++ compiler crashes converting them. The record names what was set.
 
 Every scene is also compiled twice by the Rust compiler and the bytes must be equal, and the
-smallest on one thread against all (`diff_compile.py`).
+smallest on one thread against all - with `--all` the MU scene too, the one whose light once
+differed from run to run (`diff_compile.py`).
 
 **Not proven against the C++** (no recorded scene exercises it; `compare_compile.py`'s header
 lists it phase by phase): the Draft quality; the flags `-nosun`, `-nosmg`, `-no_optimize`,
 `-att`, `-no_invalidefaces` and the abort on invalid faces; more than two lightmap pages; MU
 models other than l03u's and at other settings than its lowered ones; the implicit light at
-more than one jitter sample; the nine-sample jitter beyond the lightmaps of mp_test and l12u.
+more than one jitter sample; the nine-sample jitter beyond the lightmaps of mp_test and l12u;
+the visual tree (which sector a visual belongs to, the sliding windows) of a level whose
+deflectors moved between lightmap pages; MU models and the implicit light in one level (the C++
+crashes on that scene's MU models and the cause is not known); a level with implicit light
+loaded by the game (the game loaded mp_test and l03u_agr_underground).
 
 Two consequences worth stating:
 
@@ -750,7 +756,7 @@ bug.
 
 | # | Difference | Why |
 |---|---|---|
-| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the engine and the libraries it loads, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module). The root is `%LOCALAPPDATA%\GrizzlyPlay\<id>` or the folder `root=` names, and only a missing or empty folder becomes one: Play writes its marker (`play_root.txt`) there first, clears only a root that carries it and only what it wrote there, and the checks of a project's deletion stand in front of every root (never a project, the editor, a game, a user folder, a drive, a link) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. The root holds COPIES of the executables because the game's content service works in the folder of its engine: it rewrites `.dead-air-x64\content-state.txt` there at every start and starts a level only while the archives are that folder's `database`. Running the installed engine in place needs a change of the game (the content service taking its root from the fs config), which no phase of this plan makes (I1). |
+| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the engine and the libraries it loads, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module). The root is `%LOCALAPPDATA%\GrizzlyPlay\<id>` (`<home>\play\<id>` for an editor started with a home of its own) or the folder `root=` names, and only a missing or empty folder becomes one: Play writes its marker (`play_root.txt`) there first and every entry's name into it before the entry, removes from a root only what its marker listed or this run wrote, and the checks of a project's deletion stand in front of every root (never a project, the editor, a game, a user folder, a drive, a link; no project anywhere inside what it clears) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. The root holds COPIES of the executables because the game's content service works in the folder of its engine: it rewrites `.dead-air-x64\content-state.txt` there at every start and starts a level only while the archives are that folder's `database`. Running the installed engine in place needs a change of the game (the content service taking its root from the fs config), which no phase of this plan makes (I1). |
 | D2 | **The viewport is drawn by the editor's own materials**, not by the R1 blenders. | 5.8. What an author judges - geometry, textures, transparency, placement - stays. |
 | D3 | The editor's own settings (window, layout, preferences) live in new files; nothing is migrated. | The editor has not shipped; the existing rule. |
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |

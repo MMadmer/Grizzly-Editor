@@ -263,6 +263,34 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
     return {"ok": ok, "seconds": round(seconds, 1), "failed": failed, "code": code}
 
 
+def settle(limit: float = 20.0) -> float:
+    """Waits until the machine is quiet - under a tenth of its cores busy for half a second - before a suite that
+    times something. The suites before it leave work behind (folders being removed, a virus scanner reading the
+    files a Play root held): `test_build_job` right after `test_play_game` once met a 95 ms frame that way."""
+    import ctypes
+    from ctypes import wintypes
+
+    def times() -> tuple[int, int]:
+        idle, kernel, user = wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME()
+        ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user))
+
+        def ticks(ft: wintypes.FILETIME) -> int:
+            return (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+        # the kernel time holds the idle time
+        return ticks(idle), ticks(kernel) + ticks(user)
+
+    t0 = time.monotonic()
+    before = times()
+    while time.monotonic() - t0 < limit:
+        time.sleep(0.5)
+        now = times()
+        total = now[1] - before[1]
+        if total <= 0 or 1.0 - (now[0] - before[0]) / total < 0.10:
+            break
+        before = now
+    return time.monotonic() - t0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("suites", nargs="*", help="suites to run (default: all)")
@@ -318,6 +346,7 @@ def main() -> int:
         for f in concurrent.futures.as_completed(futures):
             report(futures[f], f.result())
     for n in alone:
+        settle()
         report(n, run_one(n, extra, lock))
     wall = time.monotonic() - t0
     bad = [n for n, r in results.items() if not r["ok"]]

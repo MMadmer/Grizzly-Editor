@@ -1079,8 +1079,10 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **Play clears only a root it made** (`gz-levelbuild`'s `play_root.rs`): the checks of a project's deletion stand
   in front of every Play root - never a project, the editor, a game, a user folder, a drive or a link, judged as
   written and where the path really is; only a missing or empty folder becomes a root and gets Play's marker
-  (`play_root.txt`) first; a marked root is the only thing Play clears, and only what it wrote there. Every refusal
-  comes before a byte is written or removed.
+  (`play_root.txt`) first, with every entry's name written into it before the entry; Play removes from a root only
+  what its marker listed or this run wrote, and never when a project lies anywhere inside what it would clear. Every
+  refusal comes before a byte is written or removed. An editor started with a home of its own (`-home`) keeps its
+  default root under that home; only the author's own uses `%LOCALAPPDATA%\GrizzlyPlay`.
 - MCP commands show NO confirmations (the caller already decided) and must
   never hang on a modal — the destructive UI path and the programmatic path
   share the implementation, but not the dialog.
