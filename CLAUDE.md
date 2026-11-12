@@ -33,6 +33,12 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **`unsafe` is forbidden** in every crate but the allow-list of section 6, and no `unsafe impl Send` / `Sync` at all. No `static` holding state, no singleton.
 - **State changes through a store's commands only**, every command is reachable over MCP, and the UI thread never waits on a file, the network or a lock.
 - The domain crates know no window: everything except the picture runs under `grizzly --headless`.
+- **Four entry points prove a change**: `tools/rust/check.sh` (clippy, fmt, `unsafe` only in `gz-win`, the registry against the catalogue), `tools/rust/test.sh` (only the test
+  binaries that changed since they were green; `--all` for everything and the whole corpus), `python tools/qa/diff_editors.py` (the same commands on both editors, the C++ side
+  recorded once under `Intermediate/oracle`), `GRIZZLY_QA_TARGET=rust python tools/qa/run_all.py` (the suites side by side). Nothing that already passed is run again to check
+  something new: one crate, one scenario, one suite or one phase (`--only`) while fixing, the four once at the end.
+- **A QA script opens only a copy of a project** under the system temp folder (`qa_target.copy_project`; `guard_project` stops it before an editor starts otherwise). A path
+  under the author's projects is only ever a source to copy from.
 
 ## Mod philosophy
 

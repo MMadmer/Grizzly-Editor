@@ -1,7 +1,8 @@
 # Grizzly Editor on Rust
 
-Status: plan. Until the implementation starts this document is the contract; change it by
-editing the document, not "as you go".
+Status: built on `grizzly-rust`, before the cutover (phase 7). This document is the contract
+and says what was built; it changes by editing the document first. What every package did, the
+test passes and the reviewer's findings are in `docs/rust/STATE.md`.
 
 Branch: `grizzly-rust`, forked from `25f76d13`. Nothing of it reaches `main` before the
 cutover (phase 7).
@@ -30,7 +31,7 @@ Three requirements, in this order:
 | I4 | The project folder is the interface between the two editors: both open the same project until the cutover, so no file format inside a project changes before it. |
 | I5 | The C++ editor is the oracle. `Source/` is not edited on this branch, so a merge from `main` never conflicts. |
 | I6 | Every crate is `#![forbid(unsafe_code)]` unless section 6 names it. |
-| I7 | The UI thread never waits: no file access, no network, no lock that another thread may hold for longer than a pointer swap. |
+| I7 | The UI thread never waits: no file access, no network, no lock that another thread may hold for longer than a pointer swap, no GPU readback, no pipeline compile. It draws and presents; its one wait is for the surface before the first frame. |
 | I8 | State changes only through commands, and every command is reachable over MCP. |
 
 ## 3. Where we start
@@ -102,12 +103,18 @@ Three facts that shape the plan:
 
 | Executor | Runs | Rule |
 |---|---|---|
-| UI thread | the message pump, the egui pass, command emission | reads snapshots with one atomic load; never blocks (I7) |
-| Render thread | owns the surface; takes a frame packet and the UI's draw list, presents | a slow GPU frame delays no input and no command |
+| UI thread | the message pump, the egui pass with its tessellation, command emission, the presentation of the window | reads snapshots with one atomic load; never blocks (I7); runs above normal priority |
+| Render threads | the device is made on a thread of its own; the viewport's renderer, the offscreen passes (thumbnails, previews) and every readback run on theirs | a slow GPU frame of the viewport delays no input and no command |
 | Async runtime (tokio, multi-thread) | store actors, the MCP server, network, timers, job orchestration | no blocking call inside; file work goes to the IO pool |
 | CPU pool (rayon) | data-parallel work: validation, hashing, meshes, culling, layout, compression | pure functions over snapshots |
 | IO pool (bounded) | blocking file operations | sized to overlap latency: a start costs touches, not bytes |
 | Watcher | file change notifications | only bumps revisions; never reads a file |
+
+The pools run at normal priority on every logical core (the IO pool on more): the editor's
+work takes what the hardware has, and no pool is made smaller or slower for smoothness. The
+thread that draws runs above normal instead, so the window gets its slice first. A winit
+window's handle is reachable only from the thread that made it, which is why the surface
+stays with the UI thread.
 
 ### 5.3 Stores, snapshots, commands
 
@@ -161,7 +168,9 @@ kind catalog, pickers, project globals, tile icons, references, validation probl
 computed on the CPU pool.
 
 A query answers at once with `Fresh(value)`, `Stale(previous)` or `Pending`; the UI draws
-what it has and marks it busy. A revision that moves while a query runs cancels it. Nobody
+what it has and marks it busy. A revision that moves while a query runs does not cancel what was started: the reader
+waits for it and reads again. A computation that panics is remembered as failed for its
+revision. Nobody
 calls `Invalidate()`: an input changed, so its revision changed.
 
 ### 5.5 Jobs
@@ -189,6 +198,8 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
   is no nested frame to forbid, because no surface can start one.
 - The window frame (custom caption, hit test, DPI, dropped files) is the one place of UI that
   needs Win32 directly; it lives in `gz-win`.
+- The system's file dialog is one kit function (`gz_ui::file_dialog::pick`): it opens nothing
+  for an MCP caller or under `-nodlg`, and the command answers "name the file".
 
 ### 5.7 MCP
 
@@ -204,11 +215,13 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - The server is a task per connection. Reads answer from snapshots without visiting the UI
   thread; writes go to the store's queue. A command no longer waits for a frame unless its
   contract is a frame.
-- **Frame-held requests keep their contract.** After a present the UI publishes a frame
-  stamp (frame number, active tab, the command revisions it has drawn). `screenshot_editor`,
-  `screenshot_viewport`, `ui_list`, `ui_audit`, `titlebar_info` and the `pending` answers
-  wait for a stamp that covers their own commands. A minimised or background editor draws
-  when such a request asks.
+- **Frame-held requests keep their contract.** `screenshot_editor`, `screenshot_viewport`,
+  `ui_list`, `ui_audit`, `titlebar_info` and the `pending` answers are answered by a frame -
+  of the window and, for the viewport, of its own pass - that STARTED after the request's
+  commands were applied; a frame already in flight does not count. A screenshot also waits
+  until the pass shows the scene revision those commands produced and nothing it asked for is
+  still loading; past a bound it answers what was still pending, never a silent half picture.
+  A minimised or background editor draws when such a request asks.
 - The wire stays what the QA suites speak today (JSON over TCP on 127.0.0.1). The stdio
   bridge becomes a small Rust binary; tool descriptions and the `PLAYER_SAFETY` /
   `WITHDRAW_SAFETY` paragraphs move with it word for word.
@@ -320,16 +333,17 @@ a higher one; layers 0-3 depend on neither egui nor wgpu.
 
 | Layer | Crates |
 |---|---|
-| 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251, `Origin`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win` |
+| 0 Base | `gz-base` (ids, revisions, `Pt`, paths, cp1251, `Origin`), `gz-task` (executors, jobs, cancel), `gz-store`, `gz-query`, `gz-log`, `gz-crash`, `gz-win`, `gz-corpus` (support of the corpus tests) |
 | 1 Formats | `gz-ltx` (lossless: comments, order and spacing survive an edit), `gz-luadata` (declarative Lua, refuses code), `gz-chunk` (chunk streams, LZO), `gz-fmt-object`, `gz-fmt-ogf`, `gz-fmt-tex` (DDS, TGA, THM), `gz-fmt-level` (cform, xcform, AI map, details), `gz-fmt-spawn` (`all.spawn`, game graph, patrols), `gz-entities` (server entity schema and packets), `gz-fmt-xr` (`shaders.xr`, `gamemtl.xr`, `lanims.xr`, `particles.xr`), `gz-fmt-xml`, `gz-fmt-sound` |
-| 2 Game link | `gz-vfs`, `gz-game` (configs, strings, modes, communities, ranks, trade presets, fonts, kind catalog, world), `gz-lua` (host for the game's pure-Lua readers) |
-| 3 Domain | `gz-editor` (the editor's handle: stores, services, the command registry, the frame clock), `gz-project`, `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release` (packages, the index, signing, the VirusTotal scan), `gz-github`, `gz-publish`, `gz-catalog`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-levelbuild` |
+| 2 Game link | `gz-vfs`, `gz-lua` (host for the game's pure-Lua readers) |
+| 3 Domain | `gz-editor` (the editor's handle: stores, services, the command registry, the frame clock), `gz-project`, `gz-game` (configs, strings, modes, communities, ranks, trade presets, fonts, kind catalog, world: it reads the mount the project holds, so it sits above `gz-project`), `gz-mod`, `gz-nq`, `gz-characters`, `gz-pda`, `gz-screens`, `gz-world`, `gz-build`, `gz-release` (packages, the index, signing, the VirusTotal scan), `gz-github`, `gz-publish`, `gz-catalog`, `gz-scene`, `gz-particles`, `gz-export-level`, `gz-levelbuild` |
 | 4 Presentation | `gz-mcp` (the server and the catalogue), `gz-ui` (the kit, icons), `gz-render`, `gz-app` (the window, the shell, the command table), and a crate per surface: `gz-ui-app` (Start page), `gz-ui-content`, `gz-ui-graph`, `gz-ui-level`, `gz-ui-viewport`, `gz-ui-mod`, `gz-ui-pda`, `gz-ui-previews`, `gz-ui-release`, `gz-ui-world` |
 | Binaries | `grizzly` (the editor; `--headless` runs layers 0-3 and MCP without a window), `gz-mcp-bridge` (the stdio bridge `grizzly-mcp`) |
 
 An area crate is its domain plus `service.rs` and `cmd.rs` with one `register(reg)`; a surface
 crate has one `install(builder)`. The scripts that check and test the workspace are
-`tools/rust/check.sh` and `tools/rust/test.sh`; there is no `xtask`.
+`tools/rust/check.sh` and `tools/rust/test.sh`; there is no `xtask`. The exact layer of every
+crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("For the plan").
 
 ## 8. What replaces what
 
@@ -366,18 +380,40 @@ held to it by the proof in the last column.
 |---|---|---|
 | `mod.ltx`, all sections | game `MODDING.md`, `XMS_ARCHITECTURE.md` | lossless round trip over the corpus; equal text after equal commands on both editors |
 | `.nqasset`, `.behasset` | `docs/nq/NQ_FORMAT.md`, game `NQ_RUNTIME.md` | equal text after equal commands; game `run_lua.py test_examples.lua`, `Run-NqQa.ps1` |
-| `.npcasset` | game `MODDING.md`, "A module's characters" | `test_characters.py`; game `Run-ScreensQa.ps1 -Part Descriptions` |
+| `.npcasset` | game `MODDING.md`, "A module's characters" | `test_characters.py`; game `Run-ScreensQa.ps1 -Part Descriptions` on the characters of a module the Rust editor built |
 | `.pdaasset` | `docs/pda/PDA_FORMAT.md` | the game's `xms_pda_layout.script` executed unchanged; `test_pda.py`; game `test_pda_layout.lua` |
 | Screens and music files | game `MODDING.md`, "Screens and music" | `test_screens.py`; game `Run-ScreensQa.ps1` |
-| `.xspawn`, `spawn\custom_data\*.ltx`, `overlay_visuals.ltx` | game `MODDING.md`, "World rules" | byte-equal to the oracle on the reference scenes |
-| `overlay.xcform`, AI map, game graph fragments, exported `.ogf` | game `XMS_ARCHITECTURE.md` | byte-equal where arithmetic allows; otherwise equal within a stated tolerance and loaded by the game |
-| The installed module (`modules\<id>`, `.new\<id>`, hard links, tooling left out) | this repository's rules, game `xms_core.cpp` | `test_build_job.py`, `test_build_contents.py`; game `Run-NqQa.ps1 -Scenario Scout` |
+| `.xspawn`, `spawn\custom_data\*.ltx`, `overlay_visuals.ltx` | game `MODDING.md`, "World rules" | byte-equal to the oracle on the Escape scene (`tools/qa/diff_editors.py`, scenario `s6_scene`) |
+| `overlay.xcform`, the cut, AI map and game graph fragments, exported `.ogf` | game `XMS_ARCHITECTURE.md` | equal to the oracle under the rules below (`diff_editors.py`; golden files in `gz-export-level/tests`) |
+| The installed module (`modules\<id>`, `.new\<id>`, hard links, tooling left out) | this repository's rules, game `xms_core.cpp` | `test_build_job.py`, `test_build_contents.py`; file set and bytes equal to the oracle (`diff_editors.py`, 497 files); one in-game run of the game's `PdaModule` scenario on a module the Rust editor built |
 | Flat export `gamedata_<id>` | - | file set and bytes equal to the oracle |
-| `<id>.update.ltx`, `<id>-<version>.files`, the packages | game `MOD_UPDATES.md` - **frozen** | descriptor and index equal to the oracle except the fields that state bytes on disk; the game's updater installs and updates from a Rust-made release (`Run-ModsQa.ps1`) |
+| `<id>.update.ltx`, `<id>-<version>.files`, the packages | game `MOD_UPDATES.md` - **frozen** | descriptor and index equal to the oracle except the fields that state bytes on disk; the index read back from the finished archive and each record's range checked (`gz-release`); `test_mod_publish.py` against the mock. The game's `Run-ModsQa.ps1` makes its own releases and takes no outside one, so it proves the game's side only |
 | `[card]`, `[signature]`, `author.xkey`, issue bodies, content rules | game `MOD_CATALOG.md` | both ways against the catalog's `xms_catalog.py` and `catalog.py`; `test_mod_catalog.py`; the game verifies the signature |
 | `thumbnail.dds` | game `MOD_CATALOG.md` | format, size and mip chain checked; the game shows it |
 | Reads of the linked game (never written): `all.spawn`, configs, string tables, `textures_descr`, UI XML, fonts, kind catalog, archives | the game's files as they are | pickers and lookups answer as the oracle does (`quest_lookup`, `world_transitions`, `game_modes`, `list_spawn_sections`, ...) |
-| A full level (`level`, `level.geom`, `level.cform`, `all.spawn`) | engine formats | made by the C++ compilers until phase 8 |
+| A full level (`level`, `level.geom`, `level.cform`, `all.spawn`) | engine formats | made by the C++ compilers until phase 8, from the editor's build output (`build.prj`, `level.spawn`, the HOM / SOM, details and AI map files), which equals the C++ editor's under the rules below |
+
+**The rules of "equal to the oracle"** for the level exports and the level build. Byte for
+byte unless named here; there is no broad ignore (`diff_editors.py` `FILE_RULES`):
+
+- `overlay.xcform`, the cut: the material table's order (the C++ fills it in the order a map
+  keyed by `CSurface*` meets the surfaces - D14); each triangle's material is compared by name.
+- An exported `.ogf`: its children (one per surface) as a multiset of their bytes and the
+  collision mesh as a multiset of triangles, for the same pointer order; every other chunk
+  byte for byte.
+- `build.prj`: the material, shader and texture tables as sets of what they name, faces as a
+  multiset with the material resolved (the pad of `b_face` left out); a point light's colour
+  within 4 ULP and a LOD model's corners and UVs within 2 micrometres (the two compilers order
+  the float operations differently); fields the C++ never initialises left out (a LOD
+  material's `reserved` and `area`, an unset `Flight`).
+- `level.spawn`: the Rust build's breakable and climable entries are extra (D10); a smart
+  cover's loopholes as a set (the C++ order is Lua's `pairs`).
+- `level_stat.txt` / `.tga`, read by no compiler and not by the game: the maxima within 0.5 %.
+
+With every file equal under these rules the compilers get the same input; no level was compiled
+from both outputs. **A level build writes into the open project** (`gamedata\levels\<level>`,
+`gamedata\spawns`) and never into the game; the level path is one folder name, and a level
+folder is wiped only when its real path lies below the project's levels folder and is no link.
 
 Two consequences worth stating:
 
@@ -390,14 +426,17 @@ Two consequences worth stating:
 
 1. **The oracle.** The C++ editor at the branch point, driven over MCP.
    `tools/qa/diff_editors.py` runs both editors side by side on copies of one project.
-2. **Golden files** for every row of section 9, and for every format read: parse, write,
-   compare. Parsers also get property tests (parse → write → parse).
+2. **Golden files** for the rows of section 9, and for every format read the corpus: parse,
+   write, compare over the linked game's and the projects' own files. `tools/rust/test.sh`
+   runs only the test binaries that changed since they were green; `--all` runs everything
+   and reads EVERY file of the corpus.
 3. **Differential MCP.** The same command script against both editors; the JSON answers are
    compared, minus a short documented list of fields (timings, pixel rectangles).
 4. **The QA suites, unchanged in what they check.** Their one edit: the editor binary and
    the port become parameters. They run through `tools/qa/run_all.py`, side by side, every
    editor in a home of its own (`-home`), so no run touches the author's project list or
-   settings.
+   settings. **A suite opens only a copy of a project under the system temp folder**
+   (`qa_target.copy_project`; `guard_project` stops it before an editor starts otherwise).
 5. **The game is the judge.** Modules and releases made by the Rust editor go through the
    game's own suites. Runs are short and targeted.
 6. **The parity ledger.** `docs/rust/PARITY.md`, made by a read-only audit of the C++ editor
@@ -407,7 +446,8 @@ Two consequences worth stating:
 7. **Concurrency.** Stress tests of the store, the jobs, the frame clock and the queries in
    the workspace's test run; a stress run of the whole editor: MCP commands flooding from
    several connections while a build, a scene load and UI edits run.
-8. **Budgets**, checked from phase 3 on: the window within 0.3 s of the process start (warm),
+8. **Budgets**, checked from phase 3 on: the window on the screen within 0.3 s of the process
+   start (warm; its first frame follows when the driver has made the device),
    fewer file operations per start than today's 82k, no UI frame over 16 ms caused by the
    editor's own work, a rebuild no slower than the C++ job.
 
@@ -570,18 +610,21 @@ bug.
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |
 | D5 | Clear Sky and Shadow of Chernobyl data are not supported. | Mods target Dead Air Refined strictly. |
 | D6 | The raw-pixel and colour lint is gone. | The kit's types refuse what it searched for. |
-| D7 | No splash window. | The editor's own window is up before one could be. |
+| D7 | No splash window. | The editor's own window is on the screen 0.07 s after the process starts, in the theme's colour; its first frame follows when the graphics device is ready (about a second, most of it the driver's adapter and surface). |
 | D8 | Operations the C++ editor could not undo are one undo step: portal computation, detach, the clears; Edit > Delete and the Delete key ask nothing (the Outliner's Delete still names what goes). | Undo is the previous snapshot, so it costs nothing to offer. |
 | D9 | A classic module keeps `target = any` when its manifest is saved. | The C++ `mod_set_manifest` rewrote it to `existing`, against the project's own rule for classic mods. |
 | D10 | Breakable and climable objects are built. | The fork's `VCPacked::add_vert` lost its welding, so the C++ editor of the branch point writes errors instead; the Rust build welds on the SDK's grid. |
 | D11 | Tools that did nothing in the C++ editor work: the AI Map tool's Ignored Materials leave holes, the link pad's Invert turns a one-way link round, a wallmark can be moved, a marquee in points mode selects the points inside it, a library group is placed by a click. | Each was a commented-out check, a self-link, a disabled control or a missing handler in the C++. |
 | D12 | A group's Make Thumbnail writes `<project>\rawdata\groups\<reference>.thm`. | That is where the Groups chooser reads it; the C++ wrote `$objects$\<scene name>.thm`, which nothing reads. |
-| D13 | The wire adds, never removes: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a path outside the project; `world_set` writes only its section; `mod_publish start` answers in one call; `quest_history` adds `undo_steps` / `redo_steps`; new commands `jobs`, `level_build`, the tool commands (`sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `aimap_tool`, `details_tool`, `wallmark_tool`, `particles_tool`) and the scene's own. | Each closes a hole an agent would otherwise fall into; nothing a C++-era script sends changes meaning. |
+| D13 | The wire adds, never removes: refusals of `game_link` / `game_modes` carry `error`; `characters_write` refuses a path outside the project; `world_set` writes only its section; `mod_publish start` answers in one call; `quest_history` adds `undo_steps` / `redo_steps`; new commands `jobs`, `level_build`, the tool commands (`sector_tool`, `portal_tool`, `way_tool`, `shape_tool`, `light_tool`, `fog_tool`, `aimap_tool`, `details_tool`, `wallmark_tool`, `particles_tool`), the scene's own, `viewport_gesture`, `spawn_animation`, `-home`; a form that discards is a tool of its own with `destructiveHint` (the level tools included). | Each closes a hole an agent would otherwise fall into; nothing a C++-era script sends changes meaning. |
 | D14 | Orders the C++ took from pointer addresses or `rand` are stable. | Section 9: the game does not depend on them, and a stable order makes a build reproducible. |
 | D15 | The command table lists what does something: the 35 C++ rows that are plumbing or whose bodies do nothing are not listed, and the editor ships its default keys. | A row that does nothing is noise for an author and a trap for an agent; the C++ bound no key until a `level.ini` existed. |
 | D16 | Faults of the C++ editor are not repeated: the particle library holds all of Dead Air's `particles.xr` (the C++ `CPSLibrary::Load` stopped at the first short `TargetColor`: 1035 names of 1428); the unsigned-release sentence is a warning of its own (the C++ glued it to the last build warning); `scene_visibility` takes a JSON boolean. | Each was an accident of the code, not a behaviour anyone relied on. |
 | D17 | A ray pick hits the scene whatever the camera sees (`probe_vertical`, `scan_walls`, `drop_objects`, way point snapping). | The C++ `CSceneObject::RayPick` skipped objects outside the camera's view, so an MCP answer depended on where a minimised window happened to look. |
 | D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
+| D20 | The level path is one folder name; anything else is refused when typed and by the build. | The C++ took any text and concatenated it; a path that leaves the levels folder would be wiped by Make All. |
+| D21 | Make All builds a scene that holds an object in visual mode. | The C++ `BuildHOMModel` asserts on it. |
+| D22 | A shape that Attach on Click detaches from a spawn point gets a free `shape` name. | The C++ appended it nameless. |
 | D18 | The six Detail Objects settings live on the Detail Objects panel (and `details_tool`), the tools' Enable / Read Only switches in Level Settings > Targets. | The C++ kept the first in Level Settings and the second in Preferences; UI_DESIGN 1a: one task in one view. |
 
 ## 13. Working rules
