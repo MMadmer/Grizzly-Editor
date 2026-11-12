@@ -354,7 +354,7 @@ crate as `cargo metadata` gives it is in `docs/rust/STATE.md` ("For the plan").
 | `XrEProps` property items and callbacks | a typed property schema per object; the Details panel and `property_*` read the same schema |
 | D3D11 device + R1 blenders | wgpu + editor materials (5.8) |
 | `CLocatorAPI`, `CInifile` | `gz-vfs`, `gz-ltx` |
-| `xr_string`, `shared_str` (5,428 uses) | `String`, interned `Symbol` |
+| `xr_string`, `shared_str` (5,428 uses) | `String`, `SmolStr` for the short names |
 | Opcode (`XrCDB`) | the scene's own BVH with a parallel build (`gz-scene/src/pick.rs`) |
 | ODE (`XrPhysics`: dropped objects, the physics shells of spawn points and previews) | ray casts against that BVH; nothing is simulated in the editor |
 | `XrSE_Factory` + `XrGame.dll` | `gz-entities`: a declarative schema of Dead Air's classes |
