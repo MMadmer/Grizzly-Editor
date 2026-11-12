@@ -619,6 +619,30 @@ results differ in the last bits of floating point, so the gate is the quality of
 against the C++ output and a level the game loads, not equal bytes. After it the repository
 holds no C++.
 
+- **Two crates, no process.** `gz-lc-light` is what `XrLCLight` is: the compiler's data model
+  (vertices, faces, materials, deflectors, lightmaps, MU models), the ray model and the
+  lighting - lightmaps, vertex light, implicit light, MU models, and the detail objects'
+  light of `xrDO_Light`. `gz-lc` is what `XrLC` is: `build.prj` in, the phases of
+  `CBuild::Run` in their order, `level`, `level.geom`, `level.cform` and the lightmaps out.
+  Both are domain crates (no window); the compile is a job of the editor (cancelable, in the
+  Task Center, a command over MCP) and runs the same from `Grizzly.exe -headless`. Play and
+  the level build call it in place of `XrLC.exe` and `xrDO_Light.exe`.
+- **Every core, and the same result on any number of them.** Each phase is data-parallel on
+  the CPU pool - here a compile is minutes, and an idle core is the fault. A texel's jitter
+  comes from the texel, never from a shared generator; reductions run in a fixed order.
+- **Ported as written, with the libraries it leans on**: the tangent basis (NVMeshMender) and
+  the index ordering (NvTriStrip) are ported, not replaced, so that the geometry half can be
+  compared with the C++ compiler's output chunk by chunk.
+- **Dropped**: lighting spread over a network of machines (`-net`, the `net_*` files) and the
+  radiosity pass no option of the editor reaches (`-gi`) - D24.
+- **Gate.** On a small and a middle-sized scene, against what the C++ compilers wrote for the
+  same `build.prj` (recorded once): the geometry half equal chunk by chunk under stated rules
+  of floating point; the lightmaps and vertex colours within a stated error (mean and a high
+  percentile, and looked at side by side); the game loads the level (`test_play_game`); the
+  compile no slower than the C++ one and the lighting near every core.
+- **Then the rest of the C++ goes**: `Source/`, `SDK/`, the CMake files and the compilers'
+  half of `Build.ps1`.
+
 ## 12. Deliberate differences
 
 Everything the Rust editor does differently on purpose. A difference that is not here is a
@@ -644,6 +668,7 @@ bug.
 | D16 | Faults of the C++ editor are not repeated: the particle library holds all of Dead Air's `particles.xr` (the C++ `CPSLibrary::Load` stopped at the first short `TargetColor`: 1035 names of 1428); the unsigned-release sentence is a warning of its own (the C++ glued it to the last build warning); `scene_visibility` takes a JSON boolean. | Each was an accident of the code, not a behaviour anyone relied on. |
 | D17 | A ray pick hits the scene whatever the camera sees (`probe_vertical`, `scan_walls`, `drop_objects`, way point snapping). | The C++ `CSceneObject::RayPick` skipped objects outside the camera's view, so an MCP answer depended on where a minimised window happened to look. |
 | D19 | A spawn point is placed only for a class the game's factory has a server class for, and a new smart cover's hold position time starts at 0. | The C++ placed a spawn point of undefined type for the first and left the second uninitialised. |
+| D24 | The level compilers light on one machine's cores: lighting over a network of machines (`-net`) and the radiosity pass (`-gi`) are not ported. | No option of the editor reaches either, and the cores of one machine do what the network was for. |
 | D23 | Play's game graph is the linked game's graph with the level appended (the game's vertex numbers and graph guid unchanged), the way the game adds a module's level; a scene named like a level the game already has keeps the C++ single-level graph. | Dead Air's own start scripts spawn on fixed vertices of the game's graph; on the C++ editor's one-level graph the game stops there. |
 | D20 | The level path is one folder name; anything else is refused when typed and by the build. | The C++ took any text and concatenated it; a path that leaves the levels folder would be wiped by Make All. |
 | D21 | Make All builds a scene that holds an object in visual mode. | The C++ `BuildHOMModel` asserts on it. |
