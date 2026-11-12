@@ -23,11 +23,16 @@ checked. **You change no file** - you find what is wrong and say exactly where.
 
 ## What to check - go for what would hurt, in this order
 
-1. **The five proofs are true, on the release build.** `pwsh -NoProfile -File .\Build.ps1` made
-   `Bin\x64\Release\Grizzly.exe`; with `GRIZZLY_QA_EXE` and `GRIZZLY_LC_EXE` naming it run, once
-   each: `bash tools/rust/check.sh`, `bash tools/rust/test.sh --all`, `python
-   tools/qa/diff_editors.py --all`, `python tools/qa/diff_compile.py --all`, `python
-   tools/qa/run_all.py --with-game`. Then read HOW the compile comparison passes
+1. **The five proofs are true, on the release build.** The lead ran them on
+   `Bin\x64\Release\Grizzly.exe` (`Build.ps1`; `GRIZZLY_QA_EXE` and `GRIZZLY_LC_EXE` name it):
+   `bash tools/rust/check.sh`, `bash tools/rust/test.sh --all`, `python tools/qa/diff_editors.py
+   --all`, `python tools/qa/diff_compile.py --all`, `python tools/qa/run_all.py --with-game` -
+   STATE.md, "The lead's run on the release build", the logs under `Intermediate/final/`. Do not
+   repeat the lot: check the logs against the claim, and run again what you have a reason to
+   doubt or what your own checks need (each has a mode for one scene, one scenario, one suite).
+   The quest tab fault found there (a dirty tab closed without a refusal once frames were drawn
+   on demand) is one of a kind you should hunt: an answer of a command that depended on a frame
+   having run. Then read HOW the compile comparison passes
    (`tools/qa/compare_compile.py`, `diff_compile.py`): is every rule a real non-difference or a
    hidden one? The light bounds (3 / 16, 2 / 16, 0.5 / 2) against what was seen; `level.cform`
    "within the C++ runs' own spread by half again"; the MU references "reported, not judged" -
