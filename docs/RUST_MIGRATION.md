@@ -335,14 +335,20 @@ run. "One build at a time" stays a rule of the build, not a limit of the system.
 - A `build.rs` only in the two binary crates: `grizzly` (the executable links one C runtime,
   the DLL one; the icon) and `gz-mcp-bridge` (the icon). The icon resource is written from
   `assets/grizzly-editor-icon.ico` by `gz-ico` at build time: no resource compiler runs and
-  nothing generated is in the tree. `licenses/` holds the notices of the C code the editor
-  links and of the LZO port in `gz-chunk`; `Build.ps1` puts them beside the binaries.
+  nothing generated is in the tree. `licenses/THIRD_PARTY_NOTICES.txt` is made from what the
+  two programs link (`tools/rust/notices.py`: `NOTICES_HEAD.txt` for the C code the crates
+  vendor, then every third-party crate of their dependency closure with its license and the
+  license files it ships); `check.sh` fails a file the lock no longer gives, and `Build.ps1`
+  puts it beside the binaries.
 
 **Tests.** No test writes a program file - a name ending in `.exe`, `.dll`, `.com`, `.scr`,
 `.bat`, `.cmd`, `.ps1`, `.msi`, or the bytes of an `MZ` header: a freshly built unsigned test
 binary that writes one reads as a dropper to an antivirus. A test that needs such a name
 passes a harmless one to the code under test; data that never reaches the disk is marked
-`// program-files: in memory`. `tools/rust/check_test_files.py` holds it, a step of `check.sh`.
+`// program-files: in memory`. `tools/rust/check_test_files.py` holds it in the sources, a step of
+`check.sh`; `tools/rust/test.sh` holds it at run time: the test binaries get a temp folder of their
+own, and a file made there with a program's name or an `MZ` head fails the run, even one that
+lives a millisecond (`tools/rust/watch_programs.py`).
 
 ## 7. Workspace
 
@@ -720,7 +726,7 @@ bug.
 
 | # | Difference | Why |
 |---|---|---|
-| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the executables, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. The root holds COPIES of the executables because the game's content service works in the folder of its engine: it rewrites `.dead-air-x64\content-state.txt` there at every start and starts a level only while the archives are that folder's `database`. Running the installed engine in place needs a change of the game (the content service taking its root from the fs config), which no phase of this plan makes (I1). |
+| D1 | **Play in Editor starts the game.** Play bakes the scene, builds the collision, the AI map, the game graph and `editor.spawn`, compiles the level in the editor's process (`gz-lc`) and runs the LINKED game's engine on it as a job, in a game root of its own outside the project (copies of the engine and the libraries it loads, a junction to the archives, a copy of the loose gamedata with the level added, an appdata of its own, no module). The root is `%LOCALAPPDATA%\GrizzlyPlay\<id>` or the folder `root=` names, and only a missing or empty folder becomes one: Play writes its marker (`play_root.txt`) there first, clears only a root that carries it and only what it wrote there, and the checks of a project's deletion stand in front of every root (never a project, the editor, a game, a user folder, a drive, a link) - instead of running a game level inside the editor. | The embedded play needs `XrGame.dll` and the whole engine in the editor's process. The real game shows what a player gets, and its crash no longer takes the editor along. The game's `CLocatorAPI` copies every path into 256 bytes, so Play refuses a game root too deep for it and names the path. The root holds COPIES of the executables because the game's content service works in the folder of its engine: it rewrites `.dead-air-x64\content-state.txt` there at every start and starts a level only while the archives are that folder's `database`. Running the installed engine in place needs a change of the game (the content service taking its root from the fs config), which no phase of this plan makes (I1). |
 | D2 | **The viewport is drawn by the editor's own materials**, not by the R1 blenders. | 5.8. What an author judges - geometry, textures, transparency, placement - stays. |
 | D3 | The editor's own settings (window, layout, preferences) live in new files; nothing is migrated. | The editor has not shipped; the existing rule. |
 | D4 | Signatures and package bytes differ from the C++ editor's for the same input. | Section 9. |

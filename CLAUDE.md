@@ -105,7 +105,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
 - **No test writes a program file** (`.exe`, `.dll`, `.com`, `.scr`, `.bat`, `.cmd`, `.ps1`, `.msi`, or bytes that
   start with `MZ`): the author's antivirus reads a fresh unsigned test binary that drops one as malware. A test that
   needs such a name passes a harmless one to the code under test; a literal that never reaches the disk carries
-  `// program-files: in memory`. `tools/rust/check_test_files.py` holds it (a step of `check.sh`).
+  `// program-files: in memory`. `tools/rust/check_test_files.py` holds it in the sources (a step of `check.sh`),
+  and `tools/rust/test.sh` at run time: the test binaries get a temp folder of their own, and a file made there with a
+  program's name or an `MZ` head fails the run (`tools/rust/watch_programs.py`).
+- `licenses\THIRD_PARTY_NOTICES.txt` is made by `python tools/rust/notices.py` from what the two programs link; a
+  dependency added or removed means running it again (`check.sh` says so).
 - Test run: `Grizzly.exe -project "<project>" -nodlg` (`-nodlg` = no modals: the logged answers - No for a question,
   OK for a note; a crash = symbolised stack + dump + exit code 3). `-headless` runs it without a window, `-home
   <folder>` keeps its project list, settings and logs there (or `GRIZZLY_HOME`), `-mcp_port <n>` listens elsewhere.
@@ -1072,6 +1076,11 @@ Refined STRICTLY and are not required to work on the original Dead Air.
   copy nobody goes back for. One choke point, the content operations of `gz-project`'s `ops.rs`, and it
   refuses the project root. Say so in the wording: "deleted for good", never
   "restorable".
+- **Play clears only a root it made** (`gz-levelbuild`'s `play_root.rs`): the checks of a project's deletion stand
+  in front of every Play root - never a project, the editor, a game, a user folder, a drive or a link, judged as
+  written and where the path really is; only a missing or empty folder becomes a root and gets Play's marker
+  (`play_root.txt`) first; a marked root is the only thing Play clears, and only what it wrote there. Every refusal
+  comes before a byte is written or removed.
 - MCP commands show NO confirmations (the caller already decided) and must
   never hang on a modal — the destructive UI path and the programmatic path
   share the implementation, but not the dialog.
