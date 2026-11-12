@@ -30,9 +30,15 @@ pub const JOB_BUILD: &str = "level_build";
 pub const JOB_RUN: &str = "level_run";
 const GROUP_RUN: &str = "game";
 const BUSY: &str = "A compiler or the game is running.";
-/// The game's command line for a scene of the editor (`ClickPlayPC`).
+/// The game's command line for a scene of the editor (`ClickPlayPC`), after the root's own
+/// `-fsltx fsgame.ltx`.
 const PLAY_PARAMS: &str =
     "-editor_scene -start server(editor/single/alife/new) client(localhost) -nointro -noprefetch";
+/// Where Play builds its game roots when the caller names none: the editor's application data,
+/// a folder per project. Not inside the project: the game started in a root that lies in a
+/// project folder stops in xrCore at its start (seen: a breakpoint, no log line), the same root
+/// moved out of it runs.
+const PLAY_ROOT: &str = "play";
 
 /// The commands, as the Level tab's toolbar and Build menu name them (`gz-ui-level`'s
 /// `LEVEL_ACTIONS` and `BUILD_ROWS`).
@@ -117,7 +123,17 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             if busy {
                 return Err(CmdError::busy(BUSY));
             }
-            start_run(editor, &session, Program::Game, "", String::new())
+            let place = play_place(editor, &session, a)?;
+            let game = PathBuf::from(linked_game(editor)?);
+            let root = editor
+                .exec
+                .io(move || {
+                    place.guard.check(&place.root).map_err(|e| e.to_string())?;
+                    crate::play::prepare(&game, &place.root)
+                })
+                .await
+                .map_err(CmdError::invalid)?;
+            start_game(editor, &session, &root, &format!("-fsltx fsgame.ltx {}", place.params))
         }
         "compile_geometry" | "compile_details" | "compile_aimap" | "compile_spawn" => {
             if busy {
@@ -145,7 +161,31 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
                 _ if a.flag("all_levels") => (Program::XrAi, "-no_separator_check -s  -out all".to_owned()),
                 _ => (Program::XrAi, format!("-no_separator_check -s {level} -out all")),
             };
-            start_run(editor, &session, program, &level, params)
+            let params = match a.text("params").filter(|p| !p.trim().is_empty()) {
+                Some(more) => format!("{params} {more}"),
+                None => params,
+            };
+            let Some(exe) = runs::find_exe(&exe_dirs(editor), program) else {
+                return Err(not_there(program));
+            };
+            // the compiler reads its fsgame.ltx beside the stage: the project's levels are its levels
+            let (bin, editor_root, project) = (
+                exe.parent().map(Path::to_path_buf).unwrap_or_default(),
+                editor.paths.root.clone(),
+                session.root.clone(),
+            );
+            let stage = project.join("temp").join("compilers");
+            let guard = write_guard(editor);
+            let out = editor
+                .exec
+                .io(move || {
+                    guard.check(&stage).map_err(|e| e.to_string())?;
+                    runs::stage_compilers(&bin, &editor_root, &project, &stage)
+                })
+                .await
+                .map_err(CmdError::invalid)?;
+            let args = runs::arguments(program, &level, &params);
+            run_program(editor, &session, program, out.join(program.exe()), out, args)
         }
         "build_cform" | "build_aimap" | "build_game_graph" | "build_ggraph" | "build_all" | "play"
         | "play_game" | "make_all" | "make_game" | "make_details" | "make_hom" | "make_som"
@@ -156,6 +196,11 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             let act = action.to_owned();
             // Play's "Verify Space Restrictors" (the Level toolbar's Play menu)
             let verify = a.flag("verify_restrictors");
+            let place = if matches!(action, "play" | "play_game") {
+                Some(play_place(editor, &session, a)?)
+            } else {
+                None
+            };
             let (ed, s) = (editor.clone(), session.clone());
             let title = match action {
                 "build_cform" => "Building the collision",
@@ -172,7 +217,7 @@ async fn level_build(editor: &Arc<Editor>, action: &str, a: &Args, _o: Origin) -
             let id = editor
                 .jobs
                 .start(JOB_BUILD, Some(JOB_BUILD), title, move |ctx| async move {
-                    run_action(&ed, &s, &act, verify, &ctx).await
+                    run_action(&ed, &s, &act, verify, place, &ctx).await
                 })
                 .map_err(|b| CmdError::busy(format!("{} is still running", b.title)))?;
             let info = editor
@@ -219,6 +264,11 @@ fn game_out(editor: &Editor) -> PathBuf {
     }
 }
 
+/// What every file the level build writes passes: nothing under the linked game.
+fn write_guard(editor: &Editor) -> gz_editor::fsx::WriteGuard {
+    gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default()
+}
+
 /// `$game_levels$`.
 fn levels_root(editor: &Editor) -> PathBuf {
     game_out(editor).join("levels")
@@ -227,6 +277,15 @@ fn levels_root(editor: &Editor) -> PathBuf {
 /// `$game_levels$\<level>\`, or the sentence that refuses the level path.
 fn level_dir(editor: &Editor, level: &str) -> Result<PathBuf, JobError> {
     crate::folder::level_folder(&levels_root(editor), level).map_err(JobError::new)
+}
+
+/// A program the editor's folders do not have.
+fn not_there(program: Program) -> CmdError {
+    CmdError::invalid(format!(
+        "{} is not there: {} was looked for next to the editor and in Bin\\x64\\Release.",
+        program.title(),
+        program.exe()
+    ))
 }
 
 /// Starts a compiler or the game as the `level_run` job; answers once it started.
@@ -238,18 +297,26 @@ fn start_run(
     params: String,
 ) -> Reply {
     let Some(exe) = runs::find_exe(&exe_dirs(editor), program) else {
-        return Err(CmdError::invalid(format!(
-            "{} is not there: {} was looked for next to the editor and in Bin\\x64\\Release.",
-            program.title(),
-            program.exe()
-        )));
+        return Err(not_there(program));
     };
     let args = runs::arguments(program, level, &params);
+    let cwd = exe.parent().map_or_else(|| editor.paths.exe_dir.clone(), Path::to_path_buf);
+    run_program(editor, session, program, exe, cwd, args)
+}
+
+/// Runs `exe` with `args` in `cwd` as the `level_run` job; answers once it started.
+fn run_program(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    program: Program,
+    exe: PathBuf,
+    cwd: PathBuf,
+    args: Vec<String>,
+) -> Reply {
     let line = runs::command_line(program, &args);
     editor.log.info(format!("* Run {line}."));
     let lb = LevelBuild::of(session);
     let (ed, lb2) = (editor.clone(), lb.clone());
-    let cwd = exe.parent().map_or_else(|| editor.paths.exe_dir.clone(), Path::to_path_buf);
     let id = editor
         .jobs
         .start(JOB_RUN, Some(GROUP_RUN), format!("Running {}", program.title()), move |ctx| async move {
@@ -274,6 +341,53 @@ fn start_run(
         .map_err(|_| CmdError::busy(BUSY))?;
     *lb.running.lock() = Some((program, id));
     Ok(json!({ "started": program.exe(), "command": line }))
+}
+
+/// The linked game's folder, or the sentence that says the project has none.
+fn linked_game(editor: &Editor) -> Result<String, CmdError> {
+    let (_, project) = gz_project::Project::of(editor)?;
+    let root = project.game_root();
+    if root.trim().is_empty() {
+        return Err(CmdError::invalid(gz_project::NOT_LINKED));
+    }
+    Ok(root)
+}
+
+/// Where Play runs the game: its root (`root=`, else `<appdata>\play\<project>`), checked by the
+/// project's write guard, and what the caller adds to the command line (`params=`).
+struct PlayPlace {
+    root: PathBuf,
+    params: String,
+    guard: gz_editor::fsx::WriteGuard,
+}
+
+fn play_place(editor: &Arc<Editor>, session: &Arc<ProjectSession>, a: &Args) -> Result<PlayPlace, CmdError> {
+    let root = match a.text("root").filter(|r| !r.trim().is_empty()) {
+        Some(r) => PathBuf::from(r),
+        None => editor.paths.appdata.join(PLAY_ROOT).join(session.root.file_name().unwrap_or_default()),
+    };
+    Ok(PlayPlace {
+        root,
+        params: a.text("params").unwrap_or_default().to_owned(),
+        guard: write_guard(editor),
+    })
+}
+
+/// Starts the root's engine as the `level_run` job, in the root; answers once it started.
+fn start_game(
+    editor: &Arc<Editor>,
+    session: &Arc<ProjectSession>,
+    root: &crate::play::PlayRoot,
+    params: &str,
+) -> Reply {
+    run_program(
+        editor,
+        session,
+        Program::Game,
+        root.exe.clone(),
+        root.root.clone(),
+        runs::arguments(Program::Game, "", params),
+    )
 }
 
 /// What a build reads: the snapshot, the library objects it names, the engine libraries, the
@@ -424,9 +538,11 @@ async fn write_files(
     dir: PathBuf,
     files: Vec<(String, Vec<u8>)>,
 ) -> Result<(), JobError> {
+    let guard = write_guard(editor);
     editor
         .exec
         .io(move || -> Result<(), String> {
+            guard.check(&dir).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to prepare level folders: {e}"))?;
             for (name, bytes) in files {
                 let p = dir.join(&name);
@@ -470,12 +586,15 @@ async fn lod_pictures(editor: &Arc<Editor>, inp: &Inputs) -> HashMap<String, (Ve
     out
 }
 
-/// Textures by name (`textures\<name>.dds` of the game or the editor), as RGBA pixels.
+/// The detail objects' textures by name, as RGBA pixels: `textures\<name>.dds` of the editor's own
+/// `gamedata` - what `CreateMergedTexture` reads from `$game_textures$` on disk, which no project
+/// mount and no game link moves. The linked game's are larger and would not fit the atlas.
 async fn textures(editor: &Arc<Editor>, names: Vec<String>) -> HashMap<String, (Vec<u8>, u32, u32)> {
+    let bundled = gz_game::Bundled::of(editor);
     let mut out = HashMap::new();
     for n in names {
         let rel = format!("textures\\{n}.dds");
-        let Ok((bytes, _)) = gz_game::read_game_or_bundled(editor, &rel).await else { continue };
+        let Some(bytes) = bundled.read(&rel).await else { continue };
         let decoded = editor.exec.cpu(move || gz_fmt_tex::read_dds_level(&bytes, 0, 0).ok()).await;
         if let Some(img) = decoded {
             out.insert(n, (img.rgba, img.width, img.height));
@@ -563,10 +682,11 @@ async fn compile_level(
     }
     let dir = level_dir(editor, &level)?;
     ctx.stage("Preparing the level folder");
-    let (d2, base) = (dir.clone(), levels_root(editor));
+    let (d2, base, guard) = (dir.clone(), levels_root(editor), write_guard(editor));
     editor
         .exec
         .io(move || {
+            guard.check(&d2).map_err(|e| e.to_string())?;
             crate::folder::check_wipe(&base, &d2)?;
             if d2.is_dir() {
                 gz_build::install::wipe_tree(&d2);
@@ -665,7 +785,7 @@ async fn build_for_play(
     inp: &Inputs,
     verify_restrictors: bool,
     ctx: &JobCtx,
-) -> Result<(), JobError> {
+) -> Result<Staged, JobError> {
     let level = inp.snap.meta.level.level_path.to_string();
     let dir = level_dir(editor, &level)?;
     let d2 = dir.clone();
@@ -728,12 +848,20 @@ async fn build_for_play(
         editor.log.info(l);
     }
     let ai_temp = lg.write().map_err(|e| JobError::new(e.to_string()))?;
-    write_files(editor, dir, vec![("level.ai.temp".to_owned(), ai_temp)])
+    write_files(editor, dir.clone(), vec![("level.ai.temp".to_owned(), ai_temp.clone())])
         .await
         .map_err(|_| JobError::new("level.ai.temp can't save!\nSee log."))?;
     let spawns = game_out(editor).join("spawns");
-    write_files(editor, spawns, vec![("editor.spawn".to_owned(), built.bytes)]).await?;
-    Ok(())
+    write_files(editor, spawns, vec![("editor.spawn".to_owned(), built.bytes.clone())]).await?;
+    Ok(Staged { level, dir, ai: ai_temp, spawn: built.bytes })
+}
+
+/// What Play stages into its game root: the level built, its AI map, the spawn.
+struct Staged {
+    level: String,
+    dir: PathBuf,
+    ai: Vec<u8>,
+    spawn: Vec<u8>,
 }
 
 /// `MakeGame`, `MakeDetails`, `MakeHOM`, `MakeSOM`, `MakeAIMap`: one part of the level files,
@@ -825,6 +953,7 @@ async fn run_action(
     session: &Arc<ProjectSession>,
     action: &str,
     verify_restrictors: bool,
+    place: Option<PlayPlace>,
     ctx: &JobCtx,
 ) -> Result<serde_json::Value, JobError> {
     let lb = LevelBuild::of(session);
@@ -864,10 +993,26 @@ async fn run_action(
             Ok(json!({ "build": r, "run": started }))
         }
         _ => {
-            build_for_play(editor, &lb, &inp, verify_restrictors, ctx).await?;
-            let started = start_run(editor, session, Program::Game, "", PLAY_PARAMS.to_owned())
+            let staged = build_for_play(editor, &lb, &inp, verify_restrictors, ctx).await?;
+            let place = place.ok_or_else(|| JobError::new("Play has no game root"))?;
+            ctx.stage("Preparing the game");
+            let game = PathBuf::from(linked_game(editor).map_err(|e| JobError::new(e.message))?);
+            let root = place.root.clone();
+            let guard = place.guard.clone();
+            let ready = editor
+                .exec
+                .io(move || {
+                    guard.check(&root).map_err(|e| e.to_string())?;
+                    let r = crate::play::prepare(&game, &root)?;
+                    crate::play::stage_level(&r.root, &staged.level, &staged.dir, &staged.ai, &staged.spawn)?;
+                    Ok::<_, String>(r)
+                })
+                .await
+                .map_err(JobError::new)?;
+            let params = format!("-fsltx fsgame.ltx {PLAY_PARAMS} {}", place.params);
+            let started = start_game(editor, session, &ready, params.trim_end())
                 .map_err(|e| JobError::new(e.message))?;
-            Ok(json!({ "run": started }))
+            Ok(json!({ "run": started, "root": ready.root.display().to_string().replace('\\', "/") }))
         }
     }
 }
@@ -946,8 +1091,10 @@ pub(crate) async fn scene_export_obj(editor: &Arc<Editor>, a: &Args) -> Reply {
             ctx.stage("Writing the files");
             let (obj, mtl) = (out.clone(), out.with_extension("mtl"));
             let objects = made.objects;
+            let guard = write_guard(&ed);
             ed.exec
                 .io(move || -> std::io::Result<()> {
+                    guard.check(&obj).map_err(std::io::Error::other)?;
                     if let Some(d) = obj.parent() {
                         std::fs::create_dir_all(d)?;
                     }

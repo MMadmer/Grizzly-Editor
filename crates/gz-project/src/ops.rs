@@ -13,6 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::fsys;
 use crate::{asset_kind, paths};
+use gz_editor::fsx::WriteGuard;
 use gz_vfs::GameFiles;
 
 /// The first entries of each detail list a report keeps; the counters stay exact.
@@ -138,6 +139,8 @@ fn ensure_dir_reason(dir: &str) -> Result<(), String> {
 pub struct FileOps<'a> {
     root: &'a str,
     game: &'a (dyn Fn() -> Option<Arc<GameFiles>> + 'a),
+    /// Nothing is written under the linked game's root ([`gz_editor::fsx::WriteGuard`]).
+    guard: WriteGuard,
     /// Every folder an operation wrote into or removed from, absolute: what the file tree
     /// re-lists.
     pub touched: Vec<String>,
@@ -145,8 +148,20 @@ pub struct FileOps<'a> {
 
 impl<'a> FileOps<'a> {
     #[must_use]
-    pub fn new(root: &'a str, game: &'a (dyn Fn() -> Option<Arc<GameFiles>> + 'a)) -> Self {
-        Self { root, game, touched: Vec::new() }
+    pub fn new(
+        root: &'a str,
+        game: &'a (dyn Fn() -> Option<Arc<GameFiles>> + 'a),
+        guard: WriteGuard,
+    ) -> Self {
+        Self { root, game, guard, touched: Vec::new() }
+    }
+
+    /// A path this operation writes, renames or deletes: inside the project and, where it really
+    /// is, not inside the linked game.
+    fn writable(&self, path: &str) -> Result<String, String> {
+        let out = resolve_in_project(self.root, path)?;
+        self.guard.check(Path::new(&out)).map_err(|e| e.to_string())?;
+        Ok(out)
     }
 
     fn touch(&mut self, dir: &str) {
@@ -281,7 +296,7 @@ impl<'a> FileOps<'a> {
     /// Copies `src` (anywhere: the project, the library, the game) into the project FOLDER
     /// `dst_dir`; the entry keeps its own name.
     pub fn copy(&mut self, src: &str, dst_dir: &str, recursive: bool, overwrite: bool, rep: &mut Report) {
-        let dst_root = match resolve_in_project(self.root, dst_dir) {
+        let dst_root = match self.writable(dst_dir) {
             Ok(p) => p,
             Err(e) => return rep.fail(dst_dir, e),
         };
@@ -329,11 +344,11 @@ impl<'a> FileOps<'a> {
         overwrite: bool,
         rep: &mut Report,
     ) {
-        let dst_root = match resolve_in_project(self.root, dst_dir) {
+        let dst_root = match self.writable(dst_dir) {
             Ok(p) => p,
             Err(e) => return rep.fail(dst_dir, e),
         };
-        let from = match resolve_in_project(self.root, src) {
+        let from = match self.writable(src) {
             Ok(p) => p,
             Err(e) => {
                 return rep.fail(
@@ -426,7 +441,7 @@ impl<'a> FileOps<'a> {
 
     /// Deletes a file or folder of the project for good. Never the root itself.
     pub fn delete(&mut self, path: &str, recursive: bool, rep: &mut Report) {
-        let victim = match resolve_in_project(self.root, path) {
+        let victim = match self.writable(path) {
             Ok(p) => p,
             Err(e) => return rep.fail(path, e),
         };
@@ -462,7 +477,7 @@ impl<'a> FileOps<'a> {
     /// Creates a folder (and its missing parents) inside the project; `Ok` with the folder that
     /// now exists. A folder that is there already is what was asked for.
     pub fn mkdir(&mut self, path: &str) -> Result<String, String> {
-        let out = resolve_in_project(self.root, path)?;
+        let out = self.writable(path)?;
         let p = Path::new(&out);
         if fsys::file_exists(p) {
             return Err("a file of that name is already there".into());
@@ -487,7 +502,7 @@ impl<'a> FileOps<'a> {
     /// same extension typed back is fine and another one of the family is refused. A change of
     /// case alone is a rename. `Ok((from, to))`, absolute; equal when nothing changed.
     pub fn rename(&mut self, path: &str, new_name: &str) -> Result<(String, String), String> {
-        let from = resolve_in_project(self.root, path)?;
+        let from = self.writable(path)?;
         let fp = Path::new(&from);
         let is_file = fsys::file_exists(fp);
         if !fsys::dir_exists(fp) && !is_file {
@@ -589,7 +604,7 @@ mod tests {
         fs::write(t.0.join("NewQuest.nqasset"), "return {}").unwrap();
         fs::write(t.0.join("taken.nqasset"), "return {}").unwrap();
         let darf = no_game;
-        let mut ops = FileOps::new(&root, &darf);
+        let mut ops = FileOps::new(&root, &darf, WriteGuard::default());
 
         assert_eq!(
             ops.rename("NewQuest.nqasset", "x.npcasset").unwrap_err(),
@@ -614,6 +629,24 @@ mod tests {
         assert!(names.contains(&"Route.V2.NQASSET".to_owned()));
     }
 
+    /// A project folder inside the linked game: nothing of it is written.
+    #[test]
+    fn nothing_is_written_under_the_linked_game() {
+        let t = Temp::new("guard");
+        fs::create_dir_all(t.0.join("gamedata")).unwrap();
+        fs::write(t.0.join("gamedata").join("a.txt"), "a").unwrap();
+        let root = t.root();
+        let darf = no_game;
+        let mut ops = FileOps::new(&root, &darf, WriteGuard::new(&root, Some("od")));
+        assert!(ops.mkdir("gamedata/new").unwrap_err().contains("linked game's folder"));
+        let mut rep = Report::default();
+        ops.delete("gamedata/a.txt", false, &mut rep);
+        assert_eq!(rep.failed, 1);
+        assert!(t.0.join("gamedata").join("a.txt").is_file());
+        // the module's install target is the exception
+        assert!(ops.mkdir("modules/od").is_ok());
+    }
+
     #[test]
     fn copy_move_delete() {
         let t = Temp::new("copy");
@@ -622,7 +655,7 @@ mod tests {
         fs::write(t.0.join("src\\a.txt"), "a").unwrap();
         fs::write(t.0.join("src\\sub\\b.txt"), "b").unwrap();
         let darf = no_game;
-        let mut ops = FileOps::new(&root, &darf);
+        let mut ops = FileOps::new(&root, &darf, WriteGuard::default());
 
         let mut rep = Report::default();
         ops.copy("src", "dst", true, false, &mut rep);

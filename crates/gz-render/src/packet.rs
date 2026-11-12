@@ -161,6 +161,12 @@ impl FramePacket {
         self.waiting
     }
 
+    /// Whether a texture this packet draws is still loading.
+    #[must_use]
+    pub fn textures_loading(&self, assets: &Assets) -> bool {
+        assets.textures_loading(&self.materials)
+    }
+
     /// Whether a packet built now would draw more: something it waited for has arrived.
     #[must_use]
     pub fn is_stale(&self, assets: &Assets) -> bool {
@@ -252,7 +258,13 @@ pub fn build_packet_with(
             meshes.len() as u32 - 1
         })
     };
-    for inst in &list.instances {
+    let candidates: Vec<u32> = match visibility {
+        Some(v) => v.visible.iter().copied().filter(|i| (*i as usize) < list.instances.len()).collect(),
+        None => (0..list.instances.len() as u32).collect(),
+    };
+    // only what may be drawn is asked for: with the caller's visibility, the meshes outside the view
+    // do not load ahead of the ones in it
+    for inst in candidates.iter().filter_map(|i| list.instances.get(*i as usize)) {
         index_mesh(inst.mesh);
     }
     let batch_meshes: Vec<u32> = list.batches.iter().map(|b| index_mesh(b.mesh)).collect();
@@ -277,10 +289,6 @@ pub fn build_packet_with(
         }
         let depth = if world.is_empty() { 0.0 } else { (world.center() - eye).dot(forward) };
         Some(Seen { index: i, mesh, depth, local })
-    };
-    let candidates: Vec<u32> = match visibility {
-        Some(v) => v.visible.iter().copied().filter(|i| (*i as usize) < list.instances.len()).collect(),
-        None => (0..list.instances.len() as u32).collect(),
     };
     let seen: Vec<Seen> = if candidates.len() >= PARALLEL {
         candidates.par_iter().filter_map(|i| cull(*i)).collect()

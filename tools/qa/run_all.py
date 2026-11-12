@@ -71,6 +71,28 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def remove_tree(path: str) -> bool:
+    """A suite's folders, gone for good: read-only entries too (a copy's git objects), with a few retries for a
+    file an editor lets go of a moment late. Says so when something stayed."""
+    if not path or not os.path.exists(path):
+        return True
+
+    def writable(func, p, _exc):
+        try:
+            os.chmod(p, 0o666)
+            func(p)
+        except OSError:
+            pass
+
+    for _ in range(20):
+        shutil.rmtree(path, onerror=writable)
+        if not os.path.exists(path):
+            return True
+        time.sleep(0.25)
+    print("! %s could not be removed" % path, flush=True)
+    return False
+
+
 def load_state() -> dict:
     try:
         with open(STATE, encoding="utf-8") as f:
@@ -110,8 +132,12 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
     with port_lock:
         port = free_port()
     home = tempfile.mkdtemp(prefix="grizzly_qa_home_")
+    # the suite's temp folder is its own: whatever it makes there (its copies, its homes) goes with it, also when
+    # the suite is ended by its timeout and cleans up nothing itself
+    tmp = tempfile.mkdtemp(prefix="grizzly_qa_tmp_%s_" % name)
     env = dict(os.environ)
-    env.update({"GRIZZLY_QA_TARGET": "rust", "GRIZZLY_QA_PORT": str(port), "GRIZZLY_QA_HOME": home,
+    env.update({"TEMP": tmp, "TMP": tmp,
+                "GRIZZLY_QA_TARGET": "rust", "GRIZZLY_QA_PORT": str(port), "GRIZZLY_QA_HOME": home,
                 # the QA credentials of the Credential Manager are this suite's own: two suites side by
                 # side never take away each other's token or VirusTotal key
                 "GRIZZLY_QA_CREDENTIAL": "%s-%d" % (name.replace("_", "-"), port),
@@ -150,7 +176,13 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
                 code = proc.wait(timeout=30)
         reader.join(timeout=30)
     seconds = time.monotonic() - t0
-    shutil.rmtree(home, ignore_errors=True)
+    remove_tree(home)
+    # what a suite left in its temp folder - all of it, when its timeout ended it
+    left = [os.path.join(tmp, n) for n in os.listdir(tmp)] if os.path.isdir(tmp) else []
+    if left and not timed_out:
+        print("! %s left %d entr%s in its temp folder: removed" % (name, len(left), "y" if len(left) == 1 else "ies"),
+              flush=True)
+    remove_tree(tmp)
     text = "\n".join(lines)
     failed = [line[5:].split("  <- ")[0].strip() for line in lines if line.startswith("FAIL ")]
     if timed_out:

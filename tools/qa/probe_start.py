@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Starts the Rust editor windowed (minimised, never in front) a few times and reads the start-up
+"""Starts the Rust editor windowed (shown, never activated) a few times and reads the start-up
 profile of each start from its log: when the window was shown and when the first frame was on the
 screen, in seconds after the process was created.
 
@@ -58,7 +58,8 @@ def milestones(home: str) -> dict[str, float]:
 def start_once(home: str) -> tuple[dict[str, float], str]:
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
-    startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+    # shown without taking the foreground: a minimised start shows no window ('window minimised')
+    startup.wShowWindow = 4  # SW_SHOWNOACTIVATE
     proc = subprocess.Popen([EXE, "-mcp_port", str(PORT), "-home", home, "-nodlg"], cwd=os.path.dirname(EXE),
                             startupinfo=startup, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:

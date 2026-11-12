@@ -177,9 +177,10 @@ impl SceneService {
         self.root.join("rawdata").join("levels")
     }
 
-    /// Loads every library object the scene names, on the IO pool.
+    /// Loads every library object the scene names, on the IO pool: its scene objects' and its
+    /// detail objects' (`EDetail` loads its own, which a build of the details reads).
     pub async fn prefetch_library(&self, editor: &Editor, state: &SceneState) {
-        let refs: Vec<SmolStr> = state
+        let mut refs: Vec<SmolStr> = state
             .objects
             .values()
             .filter_map(|o| match &o.data {
@@ -187,6 +188,9 @@ impl SceneService {
                 _ => None,
             })
             .collect();
+        if let Some(d) = state.bulk.details.as_ref() {
+            refs.extend(d.model.indices.objects.iter().map(|o| o.reference.clone()));
+        }
         if refs.is_empty() {
             return;
         }

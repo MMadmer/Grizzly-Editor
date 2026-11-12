@@ -4,7 +4,6 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -295,46 +294,6 @@ impl<'de> Deserialize<'de> for RelPath {
         RelPath::new(&raw).map_err(serde::de::Error::custom)
     }
 }
-
-macro_rules! rooted {
-    ($(#[$doc:meta])* $name:ident) => {
-        $(#[$doc])*
-        #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-        #[serde(transparent)]
-        pub struct $name(pub RelPath);
-
-        impl $name {
-            pub fn new(raw: &str) -> Result<Self, PathError> {
-                RelPath::new(raw).map(Self)
-            }
-        }
-        impl Deref for $name {
-            type Target = RelPath;
-            fn deref(&self) -> &RelPath {
-                &self.0
-            }
-        }
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.fmt(f)
-            }
-        }
-        impl From<RelPath> for $name {
-            fn from(p: RelPath) -> Self {
-                Self(p)
-            }
-        }
-    };
-}
-
-rooted!(
-    /// A path inside the open project. The only kind of path the editor writes to.
-    ProjectPath
-);
-rooted!(
-    /// A path inside the linked game. Read-only by type: no writing API takes one.
-    GamePath
-);
 
 #[cfg(test)]
 mod tests {

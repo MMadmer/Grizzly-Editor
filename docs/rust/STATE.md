@@ -1369,6 +1369,123 @@ Decisions taken in this pass:
 - A game suite runs on Rust output only where it takes outside input (Screens Descriptions); the other two are
   named with the reason above, not forced.
 
+## The reviewer's verification, closed
+
+The brief `docs/rust/briefs/play-proof.md`, 12 Nov. Sources checked before the first run: `find D:\XFinedProjects
+"D:\Games\Dead Air\modules" -newermt '2026-11-12 07:07:18'` (ten minutes before the start) - nothing.
+
+**1. The small list.**
+- The start-up profile says what happened: `window shown` or `window minimised` (`gz-app/src/window.rs`).
+  `test_ui_shell` A checks the suite's own minimised start says `window minimised`, and makes one start of its
+  own (no project, a port and home of its own) with `SW_SHOWNOACTIVATE`, shown and never activated: window shown
+  0.119 s, first frame 1.262 s. `tools/qa/probe_start.py` shows its starts the same way.
+- The first picture after a scene load. What it waited for, measured with timings inside the wait: (1) every
+  mesh of the scene, the ones outside the view too - the packet asked the assets for the meshes of all 4252
+  instances, and the wait took the global loading count; (2) the AI map's meshes of every tile the camera's
+  square touched - Escape's 4096-node tiles are strips, so the first pass meshed most of the map (1.44 s), and
+  two passes at once did it twice; (3) on Overnight Delivery's Agroprom, 2666 cell meshes made one by one, three
+  GPU buffers each (0.7 s); (4) the project's preview pass at the moment a scene came up, beside the viewport's
+  first pass. Now: the packet asks for the meshes of what is in view (`build_packet_with` with the caller's
+  visibility); the picture waits for the frame of the caller's pass with nothing it drew still loading
+  (`FrameInfo::pending`, `FramePacket::textures_loading`); the AI map sorts a tile's nodes into 16 m cells once
+  and meshes only the cells the view radius reaches; `Assets::add_meshes` uploads many at once and announces
+  once; a mesh is ONE buffer (indices, edges, vertices); a scene's first preview waits its minute (a close still
+  takes one before it clears); the screenshot's PNG is encoded with one row filter (`Compression::Fastest`) and
+  one frame after the gate instead of two. Numbers: the first `screenshot_editor` after an Escape load 0.92 s
+  (0.47 s of it the renderer's own start in a fresh editor; 0.31 s on a later load; was 3.7 s), `test_ui_tour`
+  29.6 s (was 40-56 s), `test_properties` 4.9 s (was 16 s), `test_scene_tools` S passes (the picture current).
+- `gz-export-level/tests/golden.rs` writes no debug file.
+- `draw_extra.rs`: the caches are `Shared<T>` - the finished cache with a version; a pass draws with its own
+  copy (shallow: the AI map's chunks, the wallmarks and their meshes are `Arc`s) and swaps it in when no other
+  pass finished one meanwhile. A pass never starts from nothing; two passes that meet the same change at the same
+  moment both make it (waiting for the other could stall the pool, the deadlock of the stress run). Tests
+  `a_cache_is_unlocked_while_it_draws`, `a_pass_beside_another_starts_from_the_finished_cache`.
+- The write guard: `gz_editor::fsx::WriteGuard` (made by `Project::write_guard(module)`), the path as written and
+  where it really is (its deepest existing part resolved), refuses anything under the linked game's root but the
+  module's `modules\<id>`, its stage `modules\.new\<id>` / `<id>.old` and the flat `gamedata_<id>`. Passed by the
+  project's file operations (`FileOps::writable`), the module build and flat export (`plan_target`), the level
+  exports (`apply_spawn`, `write_level_file`, the visuals), the level build (`write_files`, the wipe, the OBJ),
+  the release stage and folder (`package.rs`), the compilers' stage and Play's root. `ProjectPath` / `GamePath`
+  are gone (nothing used them). Tests `a_write_under_the_games_gamedata_is_refused`,
+  `a_link_does_not_carry_a_write_into_the_game` (gz-editor), `nothing_is_written_under_the_linked_game`
+  (gz-project), `refusals_before_anything_is_made` (gz-build).
+- `run_all.py` gives every suite a temp folder of its own (`TEMP`/`TMP`) and removes it after, also after a
+  timeout (checked with a suite that sleeps past a 3 s limit: its copy and folder gone).
+
+**2. A level that has everything** - `s8_levelbuild2`: l10_limansk, the smallest of the 35 scenes whose parts
+hold all four (10.2 MB of parts; 79 sectors, 274 portals, 251001 detail slots of 18 objects, 127 wallmarks; the
+only smaller one with sectors, portals and details, l08_yantar, has no wallmark), copied from `rawdata\levels`
+into a copy of Test (`"scenes"` of a scenario: copied by `Side.prepare`, part of the key and the source).
+Make All: 19 written files compared, 0 differ (C++ 10.7 s). Rust faults it found, fixed: the detail objects'
+library objects were never loaded (`prefetch_library` names them now), their textures were read from the
+linked game, which is not what `$game_textures$` names (the editor's own `gamedata\textures`) and did not fit
+the atlas; a portal was written with its raw corners instead of `m_SimplifyVertices` (`prj.rs` runs the load's
+`Update(true)`). Rules added: `build.details`, `build_details.dds`, the portals of `build.prj` ("For the plan").
+
+**3. The Play half** - `s9_play`: the rows of the C++ Build menu's command table on the scene that gives each
+work: Make Game, Make AI Map, Make Details, Make HOM on limansk, Make SOM on Escape (limansk has no sound
+occluder: both refuse it - a C++ row's `result: 0` now counts as a refusal in `expectation`). 9 steps, 14 written
+files compared, 0 differ. The collision, the AI map and the game graph built in memory, `editor.spawn` and the
+start of the game are the C++ top bar's buttons (`ClickCForm`, `ClickAIMap`, `ClickGGraph`, `ClickPlayPC`) with
+no command row and no MCP path: Rust only, proven by the game (below). Play as built could not run: it looked for
+IXRay's `Xr3DA.exe` (not in this repository, and not the linked game's engine), it would have written into the
+project only, and XrLC - run from `Bin\x64\Release` - reads the editor's `fsgame.ltx`, whose levels folder is not
+the project's, so no project's level could be compiled. Now: `compile_*` run the compilers from a stage of the
+project (`temp\compilers`: copies of the executables, an `fsgame.ltx` naming the editor's data and the project's
+levels and spawns; `runs::stage_compilers`, `compiler_fsgame`), `params=` appends to their command line; Play
+(`play`, `play_game`, `play_clean`) runs the linked game's engine in a game root of its own (`root=`, default
+`<appdata>\play\<project>`; `gz-levelbuild/src/play.rs`): copies of the game's executables, a junction to its
+archives, a copy of its loose gamedata with the level folder, `level.ai` (Dead Air's engine reads that name, not
+IXRay's `level.ai.temp`) and `editor.spawn` staged into it, an appdata of its own (the player's `user.ltx` copied
+the first time, the caches once, no save), an empty `modules`, the content manifest copied; the command line is
+`-fsltx fsgame.ltx` + the C++ one + `params=`. Test `a_play_root_mirrors_the_game_and_changes_nothing_of_it`.
+The default root is `<appdata>\play\<project>`, NOT in the project: the game started in a root that lies in a
+project folder stopped in xrCore at its start (breakpoint, 1.4 s, no log line); the same root moved out ran.
+Found on the way: `runs::arguments` dropped every parameter of XrLC / xrDO, so no `-silent` reached XrLC and its
+"Congratulation!" box held the job for ever (XrLC compiles mp_test in 11 s now).
+
+**The in-game load: NOT reached.** `tools/qa/test_play_game.py` (not in `run_all.py`: it starts the game; it
+fails with the reason below) on a copy of Test with mp_test (its MP spawns replaced by an actor and a graph
+point, an AI map of 1840 nodes generated, Make All, XrLC): the editor, on a hidden desktop, builds the collision
+(16 vertices, 24 triangles), the AI map, the game graph (1 vertex), `editor.spawn`, stages the root and starts
+the linked game (`xrEngine.exe`, build 10137) in it. The game reads its configs, runs every script's
+`on_game_start` ("phase time: 3007 ms"), then `* Creating new game...`, `* Loading spawn registry...`, and stops
+22 s after Play in `CSE_ALifeDynamicObject::on_register()` (xrGame `alife_dynamic_object.cpp`, called for the
+actor from `game_sv_Single::Create` <- `xrServer::Connect`): `alife().graph().level()` - the ALife graph
+registry has no current level for the actor, so the actor's graph vertex (`m_tGraphID`) or the level table of
+the spawn's game graph header in the Rust `editor.spawn` is not what the game expects. Not "New game is
+successfully created!". The log is `Intermediate/qa/play_game/engine-crash.log`. Ruled out: the root (the game
+starts in it and loads its scripts), the settings, the caches, the staged level files as a cause at start.
+What it needs: `editor.spawn` compared with one the C++ `CGameSpawnConstructor` writes for the same scene - which
+the C++ editor makes only from its Play on PC button (no command row, no MCP path), so a small C++ harness or a
+hand-run of the C++ editor's button on this scene is the next step; then the actor's graph id against the
+graph's vertices. The equal files of section 3 stand: of the two proofs, the comparison exists, the in-game load
+does not.
+
+The final runs of this pass (12 Nov, 09:20-09:33):
+- `bash tools/rust/check.sh`: ok, 44 s.
+- `bash tools/rust/test.sh --all`: 75 binaries, 1092 tests green, 0 skipped; 147.9 s (build 57.6 s, run 87.8 s).
+- `python tools/qa/diff_editors.py --all`: 10 scenarios, 755 steps, 0 differ; 746 written files compared, 0 differ;
+  164.4 s - every oracle recorded again (the key now names the scenario's scenes; 28016 was free).
+- `GRIZZLY_QA_TARGET=rust python tools/qa/run_all.py`: 22 of 22 pass, wall 107.3 s (ui_tour 38.0 s and
+  properties 7.0 s beside three others; alone 29.6 s and 4.9 s).
+- `find D:\XFinedProjects "D:\Games\Dead Air\modules" -newermt '2026-11-12 07:17:18'` after the last run
+  (09:33:34): nothing. No Grizzly, LevelEditor, xrEngine, XrLC or github_mock process left; the temp copies, the
+  game roots (their archive junctions unlinked first, the game's 43 archives checked there), the probe roots and
+  the compilers' stages removed; `<repo>\gamedata\levels` does not exist; `D:\Games\Dead Air\_qa` as it was.
+- Open: a `grizzly_editor.ltx` with a `[window]` section (written 09:32:27, during `run_all.py`) appeared in the
+  repository root; removed. The suites put `qa_target.KEPT` back only when the file was there before, so a file
+  that was not is left; the suite whose editor wrote it was not identified in this pass.
+
+Decisions taken in this pass:
+- Play's game root copies the game's executables instead of hard-linking them: a link would share a file of the
+  install with whatever the root's removal does (the read-only mark) - 250 MB once per root.
+- The compilers' stage copies 71 MB of `Bin\x64\Release` once per project.
+- The in-game run drives the editor on a hidden desktop (the game repository's
+  `Start-DetachedHiddenDesktopProcess.ps1`, used as it is): the game Play starts inherits it.
+- A test that wrote files named like the editor's compilers was refused execution by the machine's on-access
+  scanner ("Access denied", os error 5, at every relink); the stage's test checks the pure `compiler_fsgame`.
+
 ## For the plan
 
 What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits
@@ -1393,8 +1510,34 @@ them.
   - `level_stat.txt`: every line equal, the maxima within 0.5 % (at least 2): a vertex a rounding away from a 1 m
     cell's border lands beside it; `level_stat.tga` at most one pixel in 10000. Neither file is read by a compiler
     or the game.
+  - `build.prj`'s portals: sectors and corner counts equal, corners within 1e-4 m (the corners go onto the
+    portal's plane and back in float - `Mgc::OrthogonalPlaneFit`, `build_camera` - with the operations in another
+    order; seen 6.1e-5); a portal simplified from more than six corners drops the edge of the smallest triangle
+    each round, and an arch's near-equal triangles fall to that rounding (limansk's portal_0047, eleven corners) -
+    it passes when the two polygons' areas agree within 2 % (seen 0.55 %).
+  - `build.details`: every model's UVs equal up to one shift of its own, everything else byte for byte (D14: the
+    textures go into the atlas in the order of their shared-string addresses, sorted by a comparator that is no
+    strict order).
+  - `build_details.dds`: the header byte for byte; the first level decoded, its 128 px tiles matched one to one,
+    each pair within DXT5's error (alpha mean 1, opaque colour mean 8 per channel; seen 0.25 / 5.3); the smaller
+    levels are filtered across the pictures' borders and follow the packing (D14, and the DXT5 encoder is
+    another: the C++ xrDXT, here gz-fmt-tex).
   With every file equal under these rules the external compilers get the same input, so phase 6's gate holds by
   that; no level was compiled from both outputs.
+- **What the differential run compares of the level build** (section 9, 11): Make All on Escape (`s7`) and on
+  l10_limansk (`s8`: sectors, portals, details, wallmarks), the Build menu's Make Game / AI Map / Details / HOM /
+  SOM one at a time (`s9`). Collision, AI map, game graph, `editor.spawn` and Play are the C++ top bar's buttons
+  with no command row: proven only by the game, and that proof is not reached (`editor.spawn`'s actor has no
+  level in the game's ALife graph registry; "The reviewer's verification, closed", 3).
+- **D1 as built**: Play runs the LINKED game's engine (`xrEngine.exe`) in a game root of its own outside the
+  project (`<appdata>\play\<project>` or `root=`): copies of the executables, a junction to the archives, a copy
+  of the loose gamedata with the level, `level.ai` and `editor.spawn` staged, an appdata of its own, no module.
+  The compilers run from `<project>\temp\compilers` with an `fsgame.ltx` naming the project's levels.
+- **Section 5.9's sentence about `ProjectPath` / `GamePath`** is to be replaced by: "Every writer of the editor -
+  the project's file operations, the module build and the flat export, the level exports, the level build, the
+  release stage, the compilers' stage and Play's game root - passes `gz_editor::fsx::WriteGuard` before it
+  writes: nothing under the linked game's root, judged as written and where the path really is, but the module's
+  `modules\<id>` (with its stage in `modules\.new`) and the flat `gamedata_<id>`."
 - **Where a level build writes**: into the open project's `gamedata\levels\<level>` (and `gamedata\spawns`), the
   folder the C++ editor's `$game_levels$` / `$game_spawn$` mount names - not `<editor>\gamedata\levels` as the plan
   and the brief said; never into the game.

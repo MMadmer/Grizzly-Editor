@@ -599,9 +599,12 @@ fn draw_meshes(ctx: &Ctx<'_>, pass: &mut wgpu::RenderPass<'_>, draws: &[Draw], i
         }
         let key = (Arc::as_ptr(mesh) as usize, wire);
         if key != last_mesh {
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            if mesh.vertices.is_empty() {
+                continue;
+            }
+            pass.set_vertex_buffer(0, mesh.buffer.slice(mesh.vertices.clone()));
             pass.set_index_buffer(
-                if wire { mesh.wire.slice(..) } else { mesh.indices.slice(..) },
+                mesh.buffer.slice(if wire { mesh.wire.clone() } else { mesh.indices.clone() }),
                 wgpu::IndexFormat::Uint32,
             );
             last_mesh = key;

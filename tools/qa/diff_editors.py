@@ -257,6 +257,15 @@ FILE_RULES: list[tuple[str, str, str]] = [
      "cell's border may land beside it; the maxima within 0.5 %, every other line equal"),
     ("project/gamedata/levels/*/level_stat.tga", "cmp_level_stat_tga",
      "the same statistic as a picture: at most one pixel in 10000 differs"),
+    ("project/gamedata/levels/*/build.details", "cmp_build_details",
+     "D14: the detail textures go into build_details.dds in the order of their shared-string addresses (and a "
+     "sort whose comparator is no strict order), so a model's UVs are shifted by where its picture landed: "
+     "every model's UVs equal up to one shift of its own, everything else byte for byte"),
+    ("project/gamedata/levels/*/build_details.dds", "cmp_build_details_dds",
+     "D14 places the pictures (as build.details) and the DXT5 encoder is another (the C++ xrDXT, here "
+     "gz-fmt-tex): the header byte for byte, the first level decoded and its 128 px tiles matched one to one, each "
+     "pair within DXT5's error (alpha mean 1, opaque colour mean 8 per channel); the smaller levels are filtered "
+     "across the pictures' borders and follow the packing"),
 ]
 
 # Commands of the catalogue this run never sends, and why (the ledger's "not compared").
@@ -816,6 +825,47 @@ S7 = [
              "the Rust one level_build make_all; what both wrote is compared file by file"),
 ]
 
+# A level that has everything Escape lacks: the smallest of the repository's 35 scenes whose parts hold
+# sectors, portals, detail objects and wallmarks - l10_limansk (10.2 MB of parts: 79 sectors, 274 portals,
+# 251001 detail slots of 18 objects, 127 wallmarks; l08_yantar, the only smaller scene with sectors,
+# portals and details, has no wallmark). Copied from rawdata\levels into the copy of Test. Make All
+# writes build.details, build_details.dds, level.wallmarks and the sector and portal tables of build.prj.
+SCENE2 = "l10_limansk"
+S8 = [
+    S("open_scene", scene=SCENE2 + ".level", timeout=300, settle="viewport"),
+    S("level_build", action="make_all", timeout=300,
+      cpp={"cmd": "exec_command", "args": {"name": "COMMAND_BUILD"}},
+      answer="skip: the C++ editor runs the command table's row (exec_command answers its id and result 1), "
+             "the Rust one level_build make_all; what both wrote is compared file by file"),
+]
+
+# The Play path's steps both editors have: the rows of the C++ Build menu's command table
+# (UI_LevelMain.cpp: COMMAND_MAKE_GAME, _MAKE_AIMAP, _MAKE_DETAILS, _MAKE_HOM, _MAKE_SOM; Make All is
+# s7 and s8), one at a time into an empty level folder, on the scene that gives each of them work.
+# Collision, AI map, game graph, the editor spawn and the start of the game are the C++ top bar's
+# buttons (UITopBarForm: ClickCForm, ClickAIMap, ClickGGraph, ClickPlayPC) with no command row and no
+# MCP path: the Rust editor alone has them over MCP, and the game loading its Play is their proof
+# (STATE.md, "The reviewer's verification, closed").
+def _make(action: str, row: str) -> dict:
+    return S("level_build", action=action, timeout=300,
+             cpp={"cmd": "exec_command", "args": {"name": row}},
+             answer="skip: the C++ editor runs the command table's row (exec_command answers its id and result 1), "
+                    "the Rust one level_build " + action + "; what both wrote is compared file by file")
+
+
+S9 = [
+    S("open_scene", scene=SCENE2 + ".level", timeout=300, settle="viewport"),
+    _make("make_game", "COMMAND_MAKE_GAME"),
+    _make("make_aimap", "COMMAND_MAKE_AIMAP"),
+    _make("make_details", "COMMAND_MAKE_DETAILS"),
+    _make("make_hom", "COMMAND_MAKE_HOM"),
+    # limansk has no sound occluder (both editors refuse its SOM): Escape's
+    S("open_scene", scene="l01_escape.level", timeout=300, settle="viewport"),
+    S("select_objects", names="test_barrel"),
+    S("delete_selected"),
+    _make("make_som", "COMMAND_MAKE_SOM"),
+]
+
 SCENARIOS: dict[str, dict] = {
     "s1_reads": {"source": "od", "steps": S1},
     "s1_shell": {"source": "od", "steps": S1W, "window": True},
@@ -825,7 +875,28 @@ SCENARIOS: dict[str, dict] = {
     "s5_builds": {"source": "od", "steps": S5, "qa_github": True},
     "s6_scene": {"source": "test", "steps": S6},
     "s7_levelbuild": {"source": "test", "steps": S7},
+    "s8_levelbuild2": {"source": "test", "scenes": [SCENE2], "steps": S8},
+    "s9_play": {"source": "test", "scenes": [SCENE2], "steps": S9},
 }
+
+# The repository's own scenes (the editor's data): a scenario's "scenes" are copied into its copy's
+# rawdata\levels, and they count as part of its source.
+REPO_SCENES = os.path.join(REPO, "rawdata", "levels")
+
+
+def scene_files(name: str) -> list[tuple[str, str]]:
+    """(path under the project, absolute source path) of every file of the scenario's scenes."""
+    out = []
+    for sc in SCENARIOS[name].get("scenes", []):
+        out.append(("rawdata/levels/" + sc + ".level", os.path.join(REPO_SCENES, sc + ".level")))
+        root = os.path.join(REPO_SCENES, sc)
+        for dirpath, dirs, files in os.walk(root):
+            dirs.sort()
+            for n in sorted(files):
+                p = os.path.join(dirpath, n)
+                rel = "rawdata/levels/" + sc + "/" + os.path.relpath(p, root).replace("\\", "/")
+                out.append((rel, p))
+    return out
 
 
 # ------------------------------------------------------------------------------------------------
@@ -910,10 +981,12 @@ def scenario_key(name: str, cache: dict) -> str:
     src = sc["source"]
     if src not in cache:
         cache[src] = stamp_tree(SOURCES[src])
+    scenes = sha256("\n".join(f"{rel}|{stamp_file(p)}" for rel, p in scene_files(name)).encode()) if sc.get("scenes") else ""
     data = json.dumps({"format": ORACLE_FORMAT, "steps": plain_steps(sc["steps"]), "qa_github": sc.get("qa_github", False),
                        "window": sc.get("window", False), "gens": sha256(gen_sources(name).encode()),
                        "cpp": cache["cpp"], "src": cache[src], "game": cache["game"],
-                       "examples": cache["examples"] if src == "od" else ""}, sort_keys=True, ensure_ascii=False)
+                       "examples": cache["examples"] if src == "od" else "", "scenes": scenes},
+                      sort_keys=True, ensure_ascii=False)
     return sha256(data.encode())[:16]
 
 
@@ -972,6 +1045,10 @@ class Side:
         # the copy leaves the source's scratch out; the C++ editor keeps its undo snapshots in the
         # project's temp folder and has no undo without one
         os.makedirs(os.path.join(self.project, "temp"), exist_ok=True)
+        for rel, path in scene_files(self.scenario):
+            dst = os.path.join(self.project, *rel.split("/"))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy2(path, dst)
         if sc["source"] == "od":
             dst = os.path.join(self.project, "quests", "examples")
             os.makedirs(dst, exist_ok=True)
@@ -1116,10 +1193,11 @@ class Side:
 # ------------------------------------------------------------------------------------------------
 # Running one side of a scenario
 
-def expectation(step: dict, answer: dict) -> str:
-    """Empty when the answer is what the step expects; else the sentence that fails the scenario."""
+def expectation(step: dict, answer: dict, row: bool = False) -> str:
+    """Empty when the answer is what the step expects; else the sentence that fails the scenario. A row of
+    the C++ command table (`row`) answers `ok` whatever it did: its `result` 0 is the refusal."""
     want = step.get("expect", "ok")
-    got = "ok" if answer.get("ok") is True else "refused"
+    got = "ok" if answer.get("ok") is True and not (row and answer.get("result") == 0) else "refused"
     if got == want:
         return ""
     why = answer.get("error") or answer.get("errors") or ""
@@ -1157,7 +1235,7 @@ def run_steps(side: Side, steps: list[dict], expand: bool, log) -> tuple[list[di
             log(f"  ! {side.which} {own['cmd']}: no answer within {step.get('timeout', STEP_TIMEOUT):.0f} s")
         except (OSError, ValueError) as e:
             answer = {"ok": False, "error": f"<transport: {e}>"}
-        miss = expectation(step, answer)
+        miss = expectation(step, answer, own["cmd"] == "exec_command")
         if miss:
             unmet.append(f"step {len(done) + 1} {step['cmd']}: {miss}")
             log(f"  ! {side.which} step {len(done) + 1} {step['cmd']}: {miss}")
@@ -1239,7 +1317,11 @@ def source_manifest(name: str, cache: dict) -> dict[str, str]:
                 except OSError:
                     pass
         cache[("srcman", src)] = m
-    return cache[("srcman", src)]
+    m = dict(cache[("srcman", src)])
+    for rel, p in scene_files(name):
+        if os.path.getsize(p) <= BLOB_LIMIT:
+            m["project/" + rel] = sha256(open(p, "rb").read())
+    return m
 
 
 def record_oracle(name: str, key: str, base_root: str, log, cache: dict) -> str:
@@ -1483,15 +1565,120 @@ def _face_key(f: bytes, mats, group: bytes):
     return f[:36], mats[m] if m < len(mats) else m, f[40:44], group
 
 
+# a portal's corners are projected onto its plane and back in float (Mgc::OrthogonalPlaneFit, build_camera)
+# with the operations in another order: within this many metres (seen: 6.1e-5)
+PORTAL_TOLERANCE = 1e-4
+# a portal simplified from more than six corners drops the edge of the smallest triangle each round, and an
+# arch's near-equal triangles fall to the rounding (limansk's portal_0047, eleven corners): such a portal
+# passes when the two polygons' areas agree within 2 % (seen: 0.55 %)
+PORTAL_AREA = 0.02
+
+
+def _polygon_area(v: tuple, n: int) -> float:
+    sx = sy = sz = 0.0
+    for k in range(n):
+        a, b = v[3 * k:3 * k + 3], v[3 * ((k + 1) % n):3 * ((k + 1) % n) + 3]
+        sx += a[1] * b[2] - a[2] * b[1]
+        sy += a[2] * b[0] - a[0] * b[2]
+        sz += a[0] * b[1] - a[1] * b[0]
+    return 0.5 * math.sqrt(sx * sx + sy * sy + sz * sz)
+
+
+def _portal_diffs(a: bytes, b: bytes) -> list[str]:
+    """build.prj's portals (b_portal: two sectors, six corners, the count in use)."""
+    if len(a) != len(b):
+        return [f"{len(a) // 80} | {len(b) // 80} portals"]
+    out = []
+    for n, i in enumerate(range(0, len(a), 80)):
+        x, y = a[i:i + 80], b[i:i + 80]
+        if x == y:
+            continue
+        if x[:4] != y[:4] or x[76:80] != y[76:80]:
+            out.append(f"portal {n}: sectors or corner count differ")
+            continue
+        c = min(6, struct.unpack_from("<I", x, 76)[0])
+        vx, vy = struct.unpack_from("<18f", x, 4), struct.unpack_from("<18f", y, 4)
+        if all(abs(p - q) <= PORTAL_TOLERANCE for p, q in zip(vx[:3 * c], vy[:3 * c])):
+            continue
+        ax, ay = _polygon_area(vx, c), _polygon_area(vy, c)
+        if ax > 0 and abs(ax - ay) <= PORTAL_AREA * ax:
+            continue
+        out.append(f"portal {n}: corners differ")
+        if len(out) > 8:
+            break
+    return out
+
+
+def cmp_build_details(a: bytes, b: bytes) -> list[str]:
+    ta, tb = _chunks(a), _chunks(b)
+    if sorted(ta) != sorted(tb):
+        return [f"chunks {sorted(ta)} | {sorted(tb)}"]
+    out = [f"chunk {c} differs" for c in sorted(ta) if c != 1 and ta[c] != tb[c]]
+
+    def models(raw: bytes):
+        res = []
+        for _cid, m in sorted(_chunks(raw).items()):
+            o = m.index(b"\0")
+            o = m.index(b"\0", o + 1) + 1
+            nv, ni = struct.unpack_from("<II", m, o + 12)
+            head, o = m[:o + 20], o + 20
+            verts = [struct.unpack_from("<5f", m, o + 20 * k) for k in range(nv)]
+            res.append((head, verts, m[o + 20 * nv:]))
+        return res
+    ma, mb = models(ta[1]), models(tb[1])
+    if len(ma) != len(mb):
+        return out + [f"{len(ma)} | {len(mb)} models"]
+    for n, ((ha, va, ia), (hb, vb, ib)) in enumerate(zip(ma, mb)):
+        if ha != hb or ia != ib or len(va) != len(vb) or any(p[:3] != q[:3] for p, q in zip(va, vb)):
+            out.append(f"model {n}: geometry differs")
+            continue
+        if va:
+            du, dv = vb[0][3] - va[0][3], vb[0][4] - va[0][4]
+            if not all(abs(q[3] - p[3] - du) <= 1e-6 and abs(q[4] - p[4] - dv) <= 1e-6 for p, q in zip(va, vb)):
+                out.append(f"model {n}: UVs differ by more than one shift")
+    return out
+
+
+def cmp_build_details_dds(a: bytes, b: bytes) -> list[str]:
+    import numpy as np
+    from PIL import Image
+    if len(a) != len(b) or a[:128] != b[:128]:
+        return ["header or size differs"]
+    pa = np.asarray(Image.open(io.BytesIO(a)).convert("RGBA"), dtype=np.int16)
+    pb = np.asarray(Image.open(io.BytesIO(b)).convert("RGBA"), dtype=np.int16)
+    t = 128
+    h, w = pa.shape[:2]
+    tiles = lambda p: [p[y:y + t, x:x + t] for y in range(0, h, t) for x in range(0, w, t)]  # noqa: E731
+    left = tiles(pa)
+    out = []
+    for n, tile in enumerate(tiles(pb)):
+        found = None
+        for j, other in enumerate(left):
+            alpha = float(np.abs(tile[..., 3] - other[..., 3]).mean())
+            opaque = (tile[..., 3] >= 128) & (other[..., 3] >= 128)
+            colour = float(np.abs(tile[..., :3] - other[..., :3])[opaque].mean()) if opaque.any() else 0.0
+            if alpha <= 1.0 and colour <= 8.0:
+                found = j
+                break
+        if found is None:
+            out.append(f"tile {n} has no match")
+            if len(out) > 8:
+                break
+        else:
+            del left[found]
+    return out
+
+
 def cmp_build_prj(a: bytes, b: bytes) -> list[str]:
     ta, tb = _chunks(a), _chunks(b)
     if sorted(ta) != sorted(tb):
         return [f"chunks {sorted(ta)} | {sorted(tb)}"]
     out = []
-    for cid, what in ((0, "version"), (1, "parameters"), (2, "vertices"), (8, "glows"), (9, "portals"),
+    for cid, what in ((0, "version"), (1, "parameters"), (2, "vertices"), (8, "glows"),
                       (10, "light controls"), (15, "multiple-usage references")):
         if ta[cid] != tb[cid]:
             out.append(f"{what} differ")
+    out += _portal_diffs(ta[9], tb[9])
     sa, xa, xta, ma = _prj_tables(ta)
     sb, xb, xtb, mb = _prj_tables(tb)
     # the tables are built in the order faces meet them, and the faces of a mesh come in the order of
@@ -1710,6 +1897,8 @@ CMP = {
     "cmp_level_spawn": cmp_level_spawn,
     "cmp_level_stat_txt": cmp_level_stat_txt,
     "cmp_level_stat_tga": cmp_level_stat_tga,
+    "cmp_build_details": cmp_build_details,
+    "cmp_build_details_dds": cmp_build_details_dds,
 }
 
 

@@ -799,7 +799,10 @@ pub fn compile(
                         let num = |name: &str| {
                             sectors.list.iter().find(|v| v.name == name).map_or(sectors.default, |v| v.num)
                         };
-                        b.portals.push(Portal::new(num(&p.front), num(&p.back), &p.vertices));
+                        // `BuildPortal` writes `m_SimplifyVertices`, which the load's `Update(true)` made
+                        let simple =
+                            gz_scene::objtools::portal::update(p.clone(), &o.name, None, 0, &mut Vec::new());
+                        b.portals.push(Portal::new(num(&p.front), num(&p.back), &simple.simplified));
                     }
                 }
                 ObjClass::SceneObject => {

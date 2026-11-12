@@ -56,6 +56,8 @@ pub struct FrameInfo {
     /// The packet's labels with the visibility of the depth-tested ones settled.
     pub labels: Arc<[ScreenLabel]>,
     pub stats: PacketStats,
+    /// Something the frame drew was still loading: a texture, or a mesh drawn as a placeholder.
+    pub pending: bool,
     /// The graphics device failed the frame.
     pub error: Option<String>,
 }
@@ -413,6 +415,7 @@ fn render_loop(s: &Shared) {
                     size,
                     labels: labels.into(),
                     stats: packet.stats,
+                    pending: last_pending,
                     error,
                 };
                 d.target = Some(TargetHandle {

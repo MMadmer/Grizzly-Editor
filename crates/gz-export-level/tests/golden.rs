@@ -114,7 +114,6 @@ fn the_visual_overlay_is_the_cpp_one() {
     let made = overlay::visuals(&s, false, &look, BUILD_NAME, None).unwrap();
     assert_eq!(made.files.len(), 1);
     assert_eq!(made.files[0].name, "qa_golden");
-    std::fs::write(std::env::temp_dir().join("gz_golden_rust.ogf"), &made.files[0].bytes).unwrap();
     same_model(&made.files[0].bytes, &data("golden.ogf"));
     let cut = String::from_utf8(data("golden_cut.ltx")).unwrap();
     let ltx = overlay::registry(&cut, &["qa_golden".to_owned()]);

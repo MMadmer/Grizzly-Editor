@@ -78,12 +78,12 @@ gz-base.workspace = true
 
 | Crate | Gives |
 |---|---|
-| `gz-base` | `Rev`, `Pt` / `Px` / `Scale`, `RelPath` / `ProjectPath` / `GamePath`, `Problem` / `Severity`, `Origin`, `SmolStr`, `Blob`, `text::{cp1251_to_utf8, utf8_to_cp1251, fits_cp1251, decode_guess, eq_ci, split_list}` |
+| `gz-base` | `Rev`, `Pt` / `Px` / `Scale`, `RelPath`, `file_name_problem`, `Problem` / `Severity`, `Origin`, `SmolStr`, `Blob`, `text::{cp1251_to_utf8, utf8_to_cp1251, fits_cp1251, decode_guess, eq_ci, split_list}` |
 | `gz-task` | `Executors` (`cpu`, `io`, `par_io`, `par_cpu`, `spawn`), `Cancel`, `Jobs` / `JobCtx`, `Wake` |
 | `gz-store` | `Store<S>`, `State`, `Apply`, `Snap`, `CmdError`, `imbl` |
 | `gz-query` | `Query<K, V>`, `Derived<V>`, `Answer` |
 | `gz-log` | `Log` and the `info!` / `warn!` / `error!` macros (application layer only) |
-| `gz-editor` | `Editor` (pools, log, jobs, frames, notices, services, the open `ProjectSession`), `Registry`, `Args` / `ArgsExt`, `Reply`, `CmdError`, `DirtySource`, `AutoSave`, `fsx::{write_atomic, read_opt, read_text}` |
+| `gz-editor` | `Editor` (pools, log, jobs, frames, notices, services, the open `ProjectSession`), `Registry`, `Args` / `ArgsExt`, `Reply`, `CmdError`, `DirtySource`, `AutoSave`, `fsx::{write_atomic, read_opt, read_text, WriteGuard}` (every writer checks `WriteGuard` - `Project::write_guard` - before it writes) |
 | `gz-chunk` | `Reader`, `Writer`, `Chunk`, `ChunkError`, `lzhuf`, `lzo` |
 | `gz-ltx` | `LtxDoc` (lossless editing), `Ltx` (the engine's resolved view) |
 

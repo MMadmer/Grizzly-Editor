@@ -243,8 +243,8 @@ struct Key {
     snap: Vec<(u32, [f32; 16])>,
 }
 
-/// What the details pass keeps between frames: an `Editor` service.
-#[derive(Default)]
+/// What the details pass keeps between frames: an `Editor` service. A clone shares the slots.
+#[derive(Clone, Default)]
 pub struct DetailCache {
     key: Option<Key>,
     slots: FxHashMap<(i32, i32), Arc<SlotItems>>,

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use gz_editor::fsx::WriteGuard;
 use gz_entities::Settings;
 use gz_scene::objects::PointKind;
 use gz_scene::{ObjClass, ObjData, SceneState};
@@ -175,7 +176,17 @@ pub fn apply_spawn(
     mirror: bool,
     stale: &[PathBuf],
     bake: &SpawnBake,
+    guard: &WriteGuard,
 ) -> Result<(Option<PathBuf>, Vec<String>), String> {
+    let cd_dir = root.join("spawn").join("custom_data");
+    // every folder the pass writes, where it really is: never one of the linked game's
+    let mut folders = vec![root.join("spawn"), cd_dir.clone()];
+    folders
+        .extend(bake.stage.iter().filter_map(|(_, v)| staged_path(root, v).parent().map(Path::to_path_buf)));
+    folders.dedup();
+    for f in &folders {
+        guard.check(f).map_err(|e| e.to_string())?;
+    }
     let mut log = Vec::new();
     if mirror {
         // stale logic files would outlive their ops in a mirror pass
@@ -194,7 +205,6 @@ pub fn apply_spawn(
             ));
         }
     }
-    let cd_dir = root.join("spawn").join("custom_data");
     for (file, text) in &bake.custom_data {
         if write_file(&cd_dir.join(file), text.as_bytes()).is_err() {
             let op =
@@ -228,8 +238,10 @@ pub fn write_level_file(
     rel: &str,
     bytes: &[u8],
     what: &str,
+    guard: &WriteGuard,
 ) -> Result<PathBuf, String> {
     let dir = level_dir(root, level);
+    guard.check(&dir).map_err(|e| e.to_string())?;
     if std::fs::create_dir_all(&dir).is_err() || !dir.is_dir() {
         return Err("can't create the overlay folder".to_owned());
     }

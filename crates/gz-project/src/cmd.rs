@@ -613,7 +613,7 @@ async fn transfer(ed: Arc<Editor>, args: Args, op: Transfer) -> Reply {
         .exec
         .io(move || {
             let game = || p.game_files().ok();
-            let mut ops = FileOps::new(p.root(), &game);
+            let mut ops = FileOps::new(p.root(), &game, p.write_guard(None));
             let mut rep = Report::default();
             for entry in entry_list(&src) {
                 match op {
@@ -652,7 +652,7 @@ async fn content_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let (rep, touched) = ed
         .exec
         .io(move || {
-            let mut ops = FileOps::new(p.root(), &no_game);
+            let mut ops = FileOps::new(p.root(), &no_game, p.write_guard(None));
             let mut rep = Report::default();
             for entry in entry_list(&list) {
                 ops.delete(&entry, recursive, &mut rep);
@@ -675,7 +675,7 @@ async fn content_mkdir(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let (made, touched) = ed
         .exec
         .io(move || {
-            let mut ops = FileOps::new(p.root(), &no_game);
+            let mut ops = FileOps::new(p.root(), &no_game, p.write_guard(None));
             (ops.mkdir(&path), ops.touched)
         })
         .await;
@@ -699,7 +699,7 @@ async fn content_rename(ed: Arc<Editor>, args: Args, _origin: Origin) -> Reply {
     let (renamed, touched) = ed
         .exec
         .io(move || {
-            let mut ops = FileOps::new(p.root(), &no_game);
+            let mut ops = FileOps::new(p.root(), &no_game, p.write_guard(None));
             (ops.rename(&path, &name), ops.touched)
         })
         .await;

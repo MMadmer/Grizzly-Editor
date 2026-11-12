@@ -4,9 +4,9 @@
 //! Map is the current tool.
 //!
 //! The nodes come from `SceneState::bulk` in tiles of 4096, as the tool holds them (exact
-//! positions and planes). A tile is turned into meshes once per revision (the tile's own `Arc`),
-//! cut into 16 m cells so the view radius culls them, and only for tiles the camera comes near - a
-//! map of half a million nodes costs a frame what the cells round the camera cost.
+//! positions and planes). A tile the camera comes near is sorted into 16 m cells once per revision
+//! (the tile's own `Arc`), and a cell gets its mesh when the view radius reaches it - a map of half
+//! a million nodes costs a pass what the cells round the camera cost.
 
 use std::sync::Arc;
 
@@ -111,27 +111,35 @@ pub fn node_quad(n: &Node, patch: f32, out: &mut Vec<MeshVertex>, indices: &mut 
     indices.extend([base + 2, base + 1, base, base, base + 3, base + 2]);
 }
 
-/// A tile's meshes by cell.
-type CellMeshes = Vec<([i32; 2], MeshData)>;
-
 /// One cell's mesh of a tile.
+#[derive(Clone)]
 struct Chunk {
     name: String,
     mesh: MeshHandle,
     bounds: Aabb,
 }
 
+/// The nodes of a tile that fall in one cell, and the box their quads take.
+struct Cell {
+    key: [i32; 2],
+    bounds: Aabb,
+    nodes: Vec<u32>,
+}
+
 /// A tile as it was last seen.
+#[derive(Clone)]
 struct Tile {
     /// The tile's `Arc`: a new one is a new revision.
     key: usize,
     bounds: Option<Aabb>,
-    /// Made when the camera came near.
-    chunks: Option<Vec<Chunk>>,
+    /// The tile's nodes by cell, sorted when the camera first came near.
+    cells: Option<Arc<[Cell]>>,
+    /// The meshes of the cells the camera came near, by cell: only those are ever made.
+    chunks: Arc<FxHashMap<[i32; 2], Chunk>>,
 }
 
-/// What the AI map pass keeps between frames: an `Editor` service.
-#[derive(Default)]
+/// What the AI map pass keeps between frames: an `Editor` service. A clone shares the meshes.
+#[derive(Clone, Default)]
 pub struct AiMapCache {
     tiles: Vec<Tile>,
     /// The map's box and parameters the positions are unpacked over.
@@ -143,26 +151,32 @@ fn header_key(part: &AiMapPart) -> ([f32; 6], [f32; 4]) {
     ([0.0; 6], [p.patch_size, 0.0, 0.0, 0.0])
 }
 
-/// The nodes of a tile cut into cells, each a mesh.
-fn tile_meshes(nodes: &[AiMapNode], part: &AiMapPart, material: &MaterialDesc) -> CellMeshes {
-    let mut cells: FxHashMap<[i32; 2], (Vec<MeshVertex>, Vec<u32>)> = FxHashMap::default();
-    for n in nodes {
-        let node = of_node(n);
-        let key = [(node.pos.x / CELL).floor() as i32, (node.pos.z / CELL).floor() as i32];
-        let (v, i) = cells.entry(key).or_default();
-        node_quad(&node, part.header.params.patch_size, v, i);
+/// A tile's nodes sorted into cells: one pass over them, no mesh made.
+fn tile_cells(nodes: &[AiMapNode], patch: f32) -> Arc<[Cell]> {
+    let mut cells: FxHashMap<[i32; 2], (Aabb, Vec<u32>)> = FxHashMap::default();
+    let half = Vec3::new(patch * 0.5, 0.0, patch * 0.5);
+    for (i, n) in nodes.iter().enumerate() {
+        let key = [(n.pos.x / CELL).floor() as i32, (n.pos.z / CELL).floor() as i32];
+        let (b, list) = cells.entry(key).or_insert_with(|| (Aabb::EMPTY, Vec::new()));
+        b.extend(n.pos - half);
+        b.extend(n.pos + half);
+        list.push(i as u32);
     }
-    let mut out: Vec<([i32; 2], MeshData)> = cells
-        .into_iter()
-        .filter_map(|(k, (v, i))| {
-            let n = i.len() as u32;
-            MeshData::new(v, i, vec![SubMesh { indices: 0..n, material: material.clone() }])
-                .ok()
-                .map(|m| (k, m))
-        })
-        .collect();
-    out.sort_by_key(|(k, _)| *k);
-    out
+    let mut out: Vec<Cell> =
+        cells.into_iter().map(|(key, (bounds, nodes))| Cell { key, bounds, nodes }).collect();
+    out.sort_by_key(|c| c.key);
+    out.into()
+}
+
+/// The mesh of one cell's nodes.
+fn cell_mesh(nodes: &[AiMapNode], cell: &Cell, patch: f32, material: &MaterialDesc) -> Option<MeshData> {
+    let mut v = Vec::with_capacity(cell.nodes.len() * 4);
+    let mut i = Vec::with_capacity(cell.nodes.len() * 6);
+    for n in cell.nodes.iter().filter_map(|&k| nodes.get(k as usize)) {
+        node_quad(&of_node(n), patch, &mut v, &mut i);
+    }
+    let count = i.len() as u32;
+    MeshData::new(v, i, vec![SubMesh { indices: 0..count, material: material.clone() }]).ok()
 }
 
 /// The tile's box from its nodes.
@@ -182,15 +196,18 @@ fn near(b: &Aabb, eye: Vec3, r: f32) -> bool {
 impl AiMapCache {
     fn drop_tile(&mut self, i: usize, assets: &Assets) {
         if let Some(t) = self.tiles.get_mut(i)
-            && let Some(chunks) = t.chunks.take()
+            && !t.chunks.is_empty()
         {
-            for c in chunks {
+            for c in t.chunks.values() {
                 assets.remove_mesh(&c.name);
             }
+            t.chunks = Arc::default();
         }
     }
 
-    /// Adds the nodes round `eye` and the map's box to the frame.
+    /// Adds the nodes round `eye` and the map's box to the frame. Only the cells within the view
+    /// radius get a mesh: a map of half a million nodes costs a pass what the cells round the
+    /// camera cost, the first one after a load as well.
     pub(crate) fn draw(&mut self, state: &SceneState, assets: &Assets, eye: Vec3, built: &mut Built) {
         let part = state.bulk.ai_map.as_ref();
         let tool = state.tools.part(ObjClass::AiMap);
@@ -234,7 +251,7 @@ impl AiMapCache {
                 continue;
             }
             self.drop_tile(i, assets);
-            let tile = Tile { key: k, bounds: tile_bounds(nodes), chunks: None };
+            let tile = Tile { key: k, bounds: tile_bounds(nodes), cells: None, chunks: Arc::default() };
             match self.tiles.get_mut(i) {
                 Some(t) => *t = tile,
                 None => self.tiles.push(tile),
@@ -242,47 +259,97 @@ impl AiMapCache {
         }
         let r = part.header.vis_radius.max(0.0);
         let patch = part.header.params.patch_size;
-        // a tile's nodes reach half a patch past their centres
+        // a cell's quads reach half a patch past its nodes
         let reach = |b: &Aabb| near(b, eye, r + patch);
-        // tiles far from the camera let their meshes go
+        let keep = |b: &Aabb| near(b, eye, 3.0 * r + CELL * 4.0);
+        // tiles far from the camera let their meshes go, near ones the cells far from it
         for i in 0..self.tiles.len() {
-            let far =
-                self.tiles.get(i).and_then(|t| t.bounds).is_none_or(|b| !near(&b, eye, 3.0 * r + CELL * 4.0));
+            let far = self.tiles.get(i).and_then(|t| t.bounds).is_none_or(|b| !keep(&b));
             if far {
                 self.drop_tile(i, assets);
+                continue;
+            }
+            if let Some(t) = self.tiles.get_mut(i)
+                && let Some(cells) = &t.cells
+            {
+                let gone: Vec<[i32; 2]> = cells
+                    .iter()
+                    .filter(|c| t.chunks.contains_key(&c.key) && !keep(&c.bounds))
+                    .map(|c| c.key)
+                    .collect();
+                if !gone.is_empty() {
+                    let chunks = Arc::make_mut(&mut t.chunks);
+                    for k in gone {
+                        if let Some(c) = chunks.remove(&k) {
+                            assets.remove_mesh(&c.name);
+                        }
+                    }
+                }
             }
         }
-        let table = assets.table();
-        let material = MaterialDesc::textured(table.classify(SHADER), TEXTURE).with_two_sided(true);
+        // the tiles the view reaches, sorted into cells once
         let wanted: Vec<usize> = self
             .tiles
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.chunks.is_none() && t.bounds.as_ref().is_some_and(reach))
+            .filter(|(_, t)| t.bounds.as_ref().is_some_and(reach))
             .map(|(i, _)| i)
             .collect();
-        let made: Vec<(usize, CellMeshes)> = wanted
+        let tiles = &self.tiles;
+        let sorted: Vec<(usize, Arc<[Cell]>)> = wanted
             .par_iter()
-            .filter_map(|&i| part.nodes.get(i).map(|nodes| (i, tile_meshes(nodes, part, &material))))
+            .filter(|&&i| tiles.get(i).is_some_and(|t| t.cells.is_none()))
+            .filter_map(|&i| part.nodes.get(i).map(|nodes| (i, tile_cells(nodes, patch))))
             .collect();
-        for (i, meshes) in made {
-            let chunks = meshes
-                .into_iter()
-                .map(|(cell, data)| {
-                    // a name per tile and cell: the same cell made again replaces its mesh
-                    let name = format!("<aimap>/{i}/{}_{}", cell[0], cell[1]);
-                    let bounds = data.bounds;
-                    let mesh = assets.add_mesh(&name, data);
-                    Chunk { name, mesh, bounds }
+        for (i, cells) in sorted {
+            if let Some(t) = self.tiles.get_mut(i) {
+                t.cells = Some(cells);
+            }
+        }
+        // the cells in reach that have no mesh yet
+        let mut todo: Vec<(usize, usize)> = Vec::new();
+        for &i in &wanted {
+            let Some(t) = self.tiles.get(i) else { continue };
+            let Some(cells) = &t.cells else { continue };
+            for (ci, c) in cells.iter().enumerate() {
+                if reach(&c.bounds) && !t.chunks.contains_key(&c.key) {
+                    todo.push((i, ci));
+                }
+            }
+        }
+        if !todo.is_empty() {
+            let table = assets.table();
+            let material = MaterialDesc::textured(table.classify(SHADER), TEXTURE).with_two_sided(true);
+            let tiles = &self.tiles;
+            let made: Vec<(usize, [i32; 2], MeshData)> = todo
+                .par_iter()
+                .filter_map(|&(i, ci)| {
+                    let cell = tiles.get(i)?.cells.as_ref()?.get(ci)?;
+                    let mesh = cell_mesh(part.nodes.get(i)?, cell, patch, &material)?;
+                    Some((i, cell.key, mesh))
                 })
                 .collect();
-            if let Some(t) = self.tiles.get_mut(i) {
-                t.chunks = Some(chunks);
+            // a name per tile and cell: the same cell made again replaces its mesh
+            let named: Vec<(usize, [i32; 2], String, Aabb)> = made
+                .iter()
+                .map(|(i, cell, data)| {
+                    (*i, *cell, format!("<aimap>/{i}/{}_{}", cell[0], cell[1]), data.bounds)
+                })
+                .collect();
+            let handles = assets.add_meshes(
+                made.into_iter()
+                    .zip(&named)
+                    .map(|((_, _, data), (_, _, name, _))| (name.clone(), data))
+                    .collect(),
+            );
+            for ((i, cell, name, bounds), mesh) in named.into_iter().zip(handles) {
+                if let Some(t) = self.tiles.get_mut(i) {
+                    Arc::make_mut(&mut t.chunks).insert(cell, Chunk { name, mesh, bounds });
+                }
             }
         }
         for t in &self.tiles {
-            let Some(chunks) = &t.chunks else { continue };
-            for c in chunks.iter().filter(|c| reach(&c.bounds)) {
+            for c in t.chunks.values().filter(|c| reach(&c.bounds)) {
                 let mut inst = Instance::new(c.mesh, glam::Mat4::IDENTITY).with_flags(InstanceFlags::NO_ID);
                 inst.bounds = Some(c.bounds);
                 built.list.instances.push(inst);

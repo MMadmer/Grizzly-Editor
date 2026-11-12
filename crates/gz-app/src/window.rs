@@ -455,8 +455,9 @@ impl App {
                 gz_win::fill_client(h, self.opts.background);
             }
         }
+        // the profile says which of the two happened: a start-up budget is about a shown window
         if let Some(p) = self.profile.lock().as_mut() {
-            p.milestone("window shown");
+            p.milestone(if start_minimized { "window minimised" } else { "window shown" });
         }
 
         let ctx = egui::Context::default();

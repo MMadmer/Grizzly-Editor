@@ -80,7 +80,8 @@ pub struct LevelDoc {
     discarded: Option<u64>,
     /// The scene's dirty state last frame: a save takes a new preview.
     was_dirty: bool,
-    preview_at: Option<(Instant, Rev)>,
+    /// When the last preview was taken (or the scene came up), of which revision and scene.
+    preview_at: Option<(Instant, Rev, String)>,
     project_rev: Rev,
 }
 
@@ -230,10 +231,16 @@ impl LevelDoc {
         let dirty = svc.store.is_dirty();
         let saved = self.was_dirty && !dirty;
         self.was_dirty = dirty;
-        let due =
-            self.preview_at.is_none_or(|(t, rev)| rev != snap.rev && t.elapsed() >= Duration::from_secs(60));
+        // a scene just come up starts the minute: its preview is a pass of its own, and taken at
+        // once it would build beside the viewport's first pass (a close takes one before it clears)
+        let scene = snap.meta.name();
+        let Some((t, rev, _)) = self.preview_at.clone().filter(|(_, _, s)| *s == scene) else {
+            self.preview_at = Some((Instant::now(), snap.rev, scene));
+            return;
+        };
+        let due = rev != snap.rev && t.elapsed() >= Duration::from_secs(60);
         if saved || due {
-            self.preview_at = Some((Instant::now(), snap.rev));
+            self.preview_at = Some((Instant::now(), snap.rev, scene));
             store_preview(&self.editor);
         }
     }

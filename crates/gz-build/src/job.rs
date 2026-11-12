@@ -571,7 +571,11 @@ async fn check_module(
 
     let (target, id, root, game) =
         (req.target.clone(), m.id.clone(), session.root.clone(), project.game_root());
-    let dst = editor.exec.io(move || plan_target(&target, &id, flat, &root, &game)).await?;
+    let p = project.clone();
+    let dst = editor
+        .exec
+        .io(move || plan_target(&target, &id, flat, &root, &game, &p.write_guard(Some(&id))))
+        .await?;
     Ok((m, dst))
 }
 

@@ -29,15 +29,44 @@ const GLOW_FIXED_SIZE: u16 = 1 << 0;
 /// `ssaDISCARD` of the editor's renderer.
 const SSA_DISCARD: f32 = 4.0;
 
-/// The caches of the extras: an `Editor` service. A pass takes a cache out under its lock, draws
-/// with it unlocked - the drawing runs rayon work and calls into the renderer's assets - and puts it
-/// back: no lock is ever held across parallel work (a pool worker waiting for a lock its own stack
-/// holds would stall the pool).
+/// The caches of the extras: an `Editor` service. No lock is ever held across the drawing - it runs
+/// rayon work and calls into the renderer's assets, and a pool worker waiting for a lock its own
+/// stack holds would stall the pool (see [`Shared`]).
 #[derive(Default)]
 pub struct Extras {
-    aimap: Mutex<AiMapCache>,
-    details: Mutex<DetailCache>,
-    wallmarks: Mutex<WallmarkCache>,
+    aimap: Shared<AiMapCache>,
+    details: Shared<DetailCache>,
+    wallmarks: Shared<WallmarkCache>,
+}
+
+/// A cache passes share: the finished one with its version. A pass draws with its own copy of the
+/// finished cache (a copy shares the meshes and slots, so it costs a few reference counts) and
+/// swaps it in when no other pass finished one meanwhile; a newer one stays. A pass never starts
+/// from nothing and never makes again what a finished pass made; only two passes that meet the
+/// same change at the same moment both make it (waiting for the other could stall the pool).
+#[derive(Default)]
+pub(crate) struct Shared<T> {
+    slot: Mutex<(u64, Arc<T>)>,
+}
+
+impl<T: Clone> Shared<T> {
+    pub(crate) fn with(&self, f: impl FnOnce(&mut T)) {
+        let (version, finished) = {
+            let s = self.slot.lock();
+            (s.0, s.1.clone())
+        };
+        let mut mine = Arc::unwrap_or_clone(finished);
+        f(&mut mine);
+        let mut s = self.slot.lock();
+        if s.0 == version {
+            *s = (version + 1, Arc::new(mine));
+        }
+    }
+
+    #[cfg(test)]
+    fn version(&self) -> u64 {
+        self.slot.lock().0
+    }
 }
 
 impl Extras {
@@ -82,9 +111,9 @@ pub(crate) fn extend(extras: &Extras, parts: &Particles, x: &Input<'_>, built: &
     );
     glows(x, built);
     if x.ai_map_shown {
-        unlocked(&extras.aimap, |c| c.draw(x.state, x.assets, eye, built));
+        extras.aimap.with(|c| c.draw(x.state, x.assets, eye, built));
     }
-    unlocked(&extras.details, |c| {
+    extras.details.with(|c| {
         c.draw(
             &draw_details::Pass {
                 state: x.state,
@@ -97,16 +126,8 @@ pub(crate) fn extend(extras: &Extras, parts: &Particles, x: &Input<'_>, built: &
             built,
         );
     });
-    unlocked(&extras.wallmarks, |c| c.draw(x.state, x.assets, &frustum, eye, ssa_discard / 4.0, built));
+    extras.wallmarks.with(|c| c.draw(x.state, x.assets, &frustum, eye, ssa_discard / 4.0, built));
     playing
-}
-
-/// Runs `f` on the cache taken out of its lock, and puts it back: a pass that runs meanwhile finds
-/// an empty cache and builds what it needs itself.
-fn unlocked<T: Default>(cache: &Mutex<T>, f: impl FnOnce(&mut T)) {
-    let mut taken = std::mem::take(&mut *cache.lock());
-    f(&mut taken);
-    *cache.lock() = taken;
 }
 
 /// `CGlow::Render`: the glow's sprite with its texture and shader at its radius - unless the
@@ -177,14 +198,49 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    fn shared(v: Vec<u32>) -> Shared<Vec<u32>> {
+        Shared { slot: Mutex::new((0, Arc::new(v))) }
+    }
+
     #[test]
     fn a_cache_is_unlocked_while_it_draws() {
-        let cache: Mutex<Vec<u32>> = Mutex::new(vec![1, 2, 3]);
-        unlocked(&cache, |c| {
-            assert!(cache.try_lock().is_some(), "the lock is free while the cache is in use");
+        let cache = shared(vec![1, 2, 3]);
+        cache.with(|c| {
+            assert!(cache.slot.try_lock().is_some(), "the lock is free while the cache is in use");
             c.push(4);
         });
-        assert_eq!(*cache.lock(), [1, 2, 3, 4]);
+        assert_eq!(*cache.slot.lock().1, [1, 2, 3, 4]);
+        assert_eq!(cache.version(), 1);
+    }
+
+    /// A pass that runs while another draws starts from the finished cache, not from nothing, and
+    /// the cache the first one finishes is the one kept: the change is made once.
+    #[test]
+    fn a_pass_beside_another_starts_from_the_finished_cache() {
+        let cache = shared(vec![1, 2, 3]);
+        let mut rebuilt = 0;
+        cache.with(|outer| {
+            cache.with(|inner| {
+                assert_eq!(*inner, [1, 2, 3], "the second pass sees the finished cache");
+                if inner.len() < 4 {
+                    rebuilt += 1;
+                    inner.push(4);
+                }
+            });
+            // the outer pass's copy was taken before; its result is older than the one now in
+            assert_eq!(*outer, [1, 2, 3]);
+            outer.push(9);
+        });
+        assert_eq!(*cache.slot.lock().1, [1, 2, 3, 4], "the newer finished cache stays");
+        assert_eq!(cache.version(), 1);
+        // a later pass finds the change made and rebuilds nothing
+        cache.with(|c| {
+            if c.len() < 4 {
+                rebuilt += 1;
+            }
+        });
+        assert_eq!(rebuilt, 1);
+        assert_eq!(cache.version(), 2);
     }
 
     /// Passes built from several threads at once on a two-thread pool, each running parallel work
@@ -221,9 +277,9 @@ mod tests {
                                 let mut built = Built::default();
                                 extend(&extras, &parts, &input, &mut built);
                                 // what a cache's drawing does: parallel work with the cache out
-                                unlocked(&extras.details, |_| {
+                                extras.details.with(|_| {
                                     (0..64).into_par_iter().for_each(|_| {
-                                        unlocked(&extras.details, |_| {});
+                                        extras.details.with(|_| {});
                                         drop(parts.state.lock());
                                     });
                                 });
@@ -235,8 +291,8 @@ mod tests {
                     for _ in 0..200 {
                         pool.install(|| {
                             (0..64).into_par_iter().for_each(|_| {
-                                unlocked(&extras.wallmarks, |_| {});
-                                unlocked(&extras.aimap, |_| {});
+                                extras.wallmarks.with(|_| {});
+                                extras.aimap.with(|_| {});
                                 drop(parts.state.lock());
                             });
                         });

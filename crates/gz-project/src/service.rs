@@ -293,6 +293,13 @@ impl Project {
         self.store.snapshot().file.game_root().to_owned()
     }
 
+    /// The guard every writer of this project passes: nothing under the linked game's root but
+    /// `module`'s install target and flat export (`None`: nothing at all).
+    #[must_use]
+    pub fn write_guard(&self, module: Option<&str>) -> gz_editor::fsx::WriteGuard {
+        gz_editor::fsx::WriteGuard::new(&self.game_root(), module)
+    }
+
     /// Whether a game is linked and its folder still looks like one. Touches the disk.
     #[must_use]
     pub fn game_linked(&self) -> bool {

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use gz_base::Origin;
 use gz_build::BuildChecks;
+use gz_editor::fsx::WriteGuard;
 use gz_editor::{Args, ArgsExt, CmdError, Editor, ProjectSession, Registry, Reply, json};
 use gz_game::GameLink;
 use gz_scene::library::{Library, LibraryObject};
@@ -67,6 +68,8 @@ fn arg_int(a: &Args, key: &str, default: i64) -> i64 {
 /// The open project, the scene's snapshot and the level an export is for.
 struct Ctx {
     session: Arc<ProjectSession>,
+    /// What every export's writes pass: nothing under the linked game.
+    guard: WriteGuard,
     svc: Arc<SceneService>,
     snap: Arc<Snap<SceneState>>,
     level: String,
@@ -81,7 +84,8 @@ fn ctx(editor: &Arc<Editor>, a: &Args) -> Result<Ctx, CmdError> {
     }
     let level = resolve_level(a.str("level"), &snap.meta.name())
         .ok_or_else(|| CmdError::invalid("no level name - open a scene or pass 'level'"))?;
-    Ok(Ctx { session, svc, snap, level })
+    let guard = gz_project::Project::of(editor).map(|(_, p)| p.write_guard(None)).unwrap_or_default();
+    Ok(Ctx { session, guard, svc, snap, level })
 }
 
 fn log_lines(editor: &Editor, lines: &[String]) {
@@ -154,10 +158,11 @@ async fn run_spawn(
         .map_err(|e| e.0)?;
     let (root, level) = (c.session.root.clone(), c.level.clone());
     let stale = gathered.stale_custom_data;
+    let guard = c.guard.clone();
     let (bake, written) = editor
         .exec
         .io(move || {
-            let r = gather::apply_spawn(&root, &level, mirror, &stale, &bake);
+            let r = gather::apply_spawn(&root, &level, mirror, &stale, &bake, &guard);
             (bake, r)
         })
         .await;
@@ -223,10 +228,12 @@ async fn export_xcform(editor: &Arc<Editor>, a: &Args) -> Reply {
         .await
         .map_err(|e| CmdError::invalid(e.0))?;
     let bytes = made.form.write();
-    let (root, level) = (c.session.root.clone(), c.level.clone());
+    let (root, level, guard) = (c.session.root.clone(), c.level.clone(), c.guard.clone());
     let path = editor
         .exec
-        .io(move || gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform"))
+        .io(move || {
+            gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform", &guard)
+        })
         .await
         .map_err(CmdError::invalid)?;
     editor.log.info(format!(
@@ -272,18 +279,20 @@ async fn export_cut(editor: &Arc<Editor>, a: &Args) -> Reply {
         .map_err(|e| CmdError::invalid(e.0))?;
     let bytes = made.form.write();
     let total = made.form.cuts.len();
-    let (root, level) = (c.session.root.clone(), c.level.clone());
+    let (root, level, guard) = (c.session.root.clone(), c.level.clone(), c.guard.clone());
     let ltx = made.ltx.clone();
     let path = editor
         .exec
         .io(move || -> Result<PathBuf, String> {
-            let p = gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform")?;
+            let p =
+                gather::write_level_file(&root, &level, "overlay.xcform", &bytes, "overlay.xcform", &guard)?;
             gather::write_level_file(
                 &root,
                 &level,
                 "overlay_visuals.ltx",
                 ltx.as_bytes(),
                 "overlay_visuals.ltx",
+                &guard,
             )
             .map_err(|_| "cuts written, but overlay_visuals.ltx is not writable".to_owned())?;
             Ok(p)
@@ -345,13 +354,16 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
         .map(|f| (f.name.clone(), vd.join(format!("{}.ogf", f.name)), f.bytes.clone()))
         .collect();
     let exec = editor.exec.clone();
+    let guard = c.guard.clone();
     let written: Vec<(String, bool)> = editor
         .exec
         .io(move || {
+            guard.check(&vd).map_err(|e| e.to_string())?;
             let _ = std::fs::create_dir_all(&vd);
-            exec.par_io(files, |(n, p, b)| (n, gz_editor::fsx::write_atomic(&p, &b).is_ok()))
+            Ok::<_, String>(exec.par_io(files, |(n, p, b)| (n, gz_editor::fsx::write_atomic(&p, &b).is_ok())))
         })
-        .await;
+        .await
+        .map_err(CmdError::invalid)?;
     let names: Vec<String> = written.iter().filter(|(_, ok)| *ok).map(|(n, _)| n.clone()).collect();
     let skipped_failed = made.skipped_failed + u32::try_from(written.len() - names.len()).unwrap_or(0);
     if names.is_empty() {
@@ -360,11 +372,16 @@ async fn export_ogf(editor: &Arc<Editor>, a: &Args) -> Reply {
         ));
     }
     let ltx = overlay::registry(&registry_text, &names);
+    let guard = c.guard.clone();
     editor
         .exec
-        .io(move || gz_editor::fsx::write_atomic(&ltx_path, ltx.as_bytes()))
+        .io(move || {
+            guard.check(&ltx_path).map_err(|e| e.to_string())?;
+            gz_editor::fsx::write_atomic(&ltx_path, ltx.as_bytes())
+                .map_err(|_| "visuals exported but can't write overlay_visuals.ltx".to_owned())
+        })
         .await
-        .map_err(|_| CmdError::invalid("visuals exported but can't write overlay_visuals.ltx"))?;
+        .map_err(CmdError::invalid)?;
     editor.log.info(format!("* [XMS] visual overlay: {} ogf(s) -> {}", names.len(), visuals_dir.display()));
     Ok(json!({
         "exported": names.len(),
@@ -386,7 +403,9 @@ async fn bake_note(editor: &Arc<Editor>, session: &Arc<ProjectSession>) -> Strin
     if !snap.valid {
         return String::new();
     }
-    let c = Ctx { session: session.clone(), svc, snap, level: level.clone() };
+    let guard =
+        session.services.get::<gz_project::Project>().map(|p| p.write_guard(None)).unwrap_or_default();
+    let c = Ctx { session: session.clone(), guard, svc, snap, level: level.clone() };
     let (mut note, warnings) = match run_spawn(editor, &c, false, None, None, true).await {
         Ok(run) => {
             let r = &run.bake.result;

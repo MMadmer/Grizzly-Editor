@@ -140,20 +140,21 @@ fn mark_mesh(m: &Mark, material: &MaterialDesc) -> Option<MeshData> {
     MeshData::new(verts, (0..n).collect(), vec![SubMesh { indices: 0..n, material: material.clone() }]).ok()
 }
 
-/// What the wallmark pass keeps: the marks read and their meshes, per chunk.
-#[derive(Default)]
+/// What the wallmark pass keeps: the marks read and their meshes, per chunk. A clone shares them.
+#[derive(Clone, Default)]
 pub struct WallmarkCache {
     part: Option<usize>,
-    marks: Wallmarks,
-    meshes: Vec<(String, gz_render::MeshHandle, usize, usize)>,
+    marks: Arc<Wallmarks>,
+    meshes: Arc<[(String, gz_render::MeshHandle, usize, usize)]>,
 }
 
 impl WallmarkCache {
     fn clear(&mut self, assets: &Assets) {
-        for (name, ..) in self.meshes.drain(..) {
-            assets.remove_mesh(&name);
+        for (name, ..) in self.meshes.iter() {
+            assets.remove_mesh(name);
         }
-        self.marks = Wallmarks::default();
+        self.meshes = Arc::from([]);
+        self.marks = Arc::default();
         self.part = None;
     }
 
@@ -177,23 +178,25 @@ impl WallmarkCache {
         if self.part != Some(key) {
             self.clear(assets);
             self.part = Some(key);
-            self.marks = read(&part.raw).unwrap_or_default();
+            self.marks = Arc::new(read(&part.raw).unwrap_or_default());
             let table = assets.table();
+            let mut meshes = Vec::new();
             for (si, slot) in self.marks.slots.iter().enumerate() {
                 let material = MaterialDesc::textured(table.classify(&slot.shader), &slot.texture);
                 for (mi, m) in slot.marks.iter().enumerate() {
                     if let Some(mesh) = mark_mesh(m, &material) {
                         let name = format!("<wallmark>/{si}/{mi}");
                         let h = assets.add_mesh(&name, mesh);
-                        self.meshes.push((name, h, si, mi));
+                        meshes.push((name, h, si, mi));
                     }
                 }
             }
+            self.meshes = Arc::from(meshes);
         }
         if self.marks.flags & DRAW_WALLMARK == 0 {
             return;
         }
-        for (_, mesh, si, mi) in &self.meshes {
+        for (_, mesh, si, mi) in self.meshes.iter() {
             let Some(m) = self.marks.slots.get(*si).and_then(|s| s.marks.get(*mi)) else { continue };
             let (c, r) = m.sphere;
             if !frustum.intersects_sphere(c, r) {

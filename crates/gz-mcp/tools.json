@@ -4754,7 +4754,7 @@
   },
   {
    "name": "grizzly_level_build",
-   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph / build_all build the open scene's collision, AI map, game graph or all of them and answer when done; make_* writes one part of the level build (make_all the whole build project); compile_geometry / compile_details / compile_aimap / compile_spawn start xrLC, xrDO or xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once the program started; play / play_game build what Play needs and start the game on the scene, play_clean starts the game alone; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
+   "description": "The Level tab's builds and runs, each a job of its own. action=status (the default) answers {rebuild {cform, ai_map, game_graph}, needs_rebuild, rebuild_text, running, building}; build_cform / build_aimap / build_game_graph / build_all build the open scene's collision, AI map, game graph or all of them and answer when done; make_* writes one part of the level build (make_all the whole build project); compile_geometry / compile_details / compile_aimap / compile_spawn start xrLC, xrDO or xrAI on the scene's level (compile_aimap takes mode=low for the quick map) and answer once the program started; play / play_game build what Play needs and start the linked game on the scene, in a game root of its own (root=, else <appdata>\\play\\<project>, never inside the project or the game: copies of the game's executables, a link to its archives, its loose gamedata with the level and editor.spawn staged into it, an appdata of its own - nothing of the install is written) and answer once the game started, play_clean starts the game alone in that root; stop or play_stop stops the build and the running program; reload_configs reads the linked game's configs again. One build at a time, and none while a compiler or the game runs.",
    "annotations": {
     "title": "Build or run the level",
     "readOnlyHint": false,
@@ -4804,6 +4804,14 @@
      "all_levels": {
       "type": "boolean",
       "description": "compile_spawn: every level of the game (Build > Compile > Spawn > All Levels); compile_aimap takes mode=verify too (xrAI -verify)"
+     },
+     "root": {
+      "type": "string",
+      "description": "play / play_game / play_clean: the folder the game runs in (default: the editor's <appdata>\\play\\<project>); never one inside the linked game"
+     },
+     "params": {
+      "type": "string",
+      "description": "play / play_game / play_clean: more of the game's command line, after the editor's own"
      }
     }
    },

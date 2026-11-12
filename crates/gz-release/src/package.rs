@@ -303,9 +303,14 @@ async fn package(
     // project; the pid keeps two editors on one project apart
     let stage = root.join("temp").join(format!("release_stage_{}", std::process::id()));
     let (stage_io, temp) = (stage.clone(), root.join("temp"));
+    // the stage and the release folder: never in the linked game
+    let (guard, out_io) = (project.write_guard(None), PathBuf::from(&out_dir));
     let lock = editor
         .exec
         .io(move || {
+            for f in [&stage_io, &out_io] {
+                guard.check(f).map_err(|e| e.to_string())?;
+            }
             remove_dead_stages(&temp, &stage_io);
             let _ = std::fs::create_dir_all(&stage_io);
             if !stage_io.is_dir() {

@@ -3,7 +3,8 @@
 
 What it proves:
   A  the frame reports itself: state and ui_list name the Level tab, the panels, the drawers; ui_contract has the
-     constants QA pins (panels, drawers, dialogs, menus, the palette's id)
+     constants QA pins (panels, drawers, dialogs, menus, the palette's id); the minimised start's profile says
+     'window minimised', and one start of its own that SHOWS the window (not activated) had it within 0.3 s
   B  the caption: 32 pt tall, the window buttons 3 x 46 pt at its right end, the tabs inside the interactive range -
      and Windows agrees: WM_NCHITTEST answers HTCLIENT on a tab and on a window button, HTCAPTION on the drag band
   C  the major tabs: a tool tab opens, Level stays first and pinned (it refuses to close), next/prev cycle, a clean tab
@@ -219,20 +220,78 @@ def phase_a(project, shots, ed, before_scale, contract) -> None:
               short(lst))
         shot(shots, "shell_wide")
         if qa_target.RUST:
-            # the start-up budget (plan 10.8): the window on the screen within 0.3 s of the process start;
-            # the profile ends at the first frame and says when each happened
-            import glob
-            import re
-            marks = {}
-            for path in glob.glob(qa_target.log_glob()):
-                text = open(path, encoding="utf-8", errors="replace").read()
-                m = re.search(r"startup after the process was created: (.*)", text)
-                if m:
-                    marks = {k.strip(): float(v) for k, v in re.findall(r"([a-z ]+?) ([0-9.]+) s", m.group(1))}
+            marks = shown_start()
+            # the suite's own editor starts minimised: its profile says so, and says nothing of a shown window
+            own = start_marks(qa_target.log_glob())
+            check("window minimised" in own and "window shown" not in own,
+                  "A a minimised start's profile says 'window minimised'", json.dumps(own))
+            # the start-up budget (plan 10.8): the window on the screen within 0.3 s of the process start, from a
+            # start that shows it (not activated); the profile ends at the first frame and says when each happened
             shown = marks.get("window shown")
-            check(shown is not None and shown <= 0.3 and "first frame" in marks,
-                  "A the window was on the screen within 0.3 s of the process start (%s s; first frame %s s)"
+            check(shown is not None and shown <= 0.3 and "first frame" in marks and "window minimised" not in marks,
+                  "A a shown window was on the screen within 0.3 s of the process start (%s s; first frame %s s)"
                   % (shown, marks.get("first frame")), json.dumps(marks))
+
+
+def start_marks(pattern: str) -> dict:
+    """The start-up profile's milestones in the logs `pattern` names."""
+    import glob
+    import re
+    marks = {}
+    for path in glob.glob(pattern):
+        text = open(path, encoding="utf-8", errors="replace").read()
+        m = re.search(r"startup after the process was created: (.*)", text)
+        if m:
+            marks = {k.strip(): float(v) for k, v in re.findall(r"([a-z ]+?) ([0-9.]+) s", m.group(1))}
+    return marks
+
+
+def shown_start() -> dict:
+    """One start of an editor of its own (no project, a home and port of its own) whose window is SHOWN without
+    taking the foreground (SW_SHOWNOACTIVATE): what the 0.3 s budget is about. Closed over MCP; its milestones."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    home = tempfile.mkdtemp(prefix="grizzly_shown_")
+    exe = qa_target.exe()
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 4  # SW_SHOWNOACTIVATE
+    proc = subprocess.Popen([exe, "-mcp_port", str(port), "-home", home, "-nodlg"], cwd=os.path.dirname(exe),
+                            startupinfo=startup, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def call(cmd: str, **extra) -> dict:
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as c:
+            c.settimeout(30)
+            c.sendall((json.dumps({"cmd": cmd, **extra}) + "\n").encode())
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = c.recv(1 << 20)
+                if not chunk:
+                    break
+                buf += chunk
+        return json.loads(buf.decode("utf-8") or "{}")
+
+    try:
+        deadline = time.monotonic() + 60
+        marks: dict = {}
+        while time.monotonic() < deadline and proc.poll() is None:
+            marks = start_marks(os.path.join(home, "logs", "grizzly_*.log"))
+            if "first frame" in marks:
+                break
+            time.sleep(0.05)
+        return marks
+    finally:
+        try:
+            call("window_control", action="close", discard=True)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            print("! the shown editor did not leave: ended by force (pid %d)" % proc.pid, flush=True)
+            proc.kill()
+        qa_target.remove_tree(home)
 
 
 

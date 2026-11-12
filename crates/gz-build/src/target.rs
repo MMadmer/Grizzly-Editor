@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use gz_editor::fsx::WriteGuard;
 use gz_project::{is_editor_only_entry, paths};
 
 /// The longest path the C++ editor built (`MAX_PATH`).
@@ -72,14 +73,15 @@ pub fn projected_real_path(path: &str) -> Option<String> {
 
 /// The folder a build writes: `<target>\modules\<id>`, or `<target>\gamedata_<id>` for the flat
 /// overlay - a module goes to `modules\`, NOT to `mods\`: that one is the folder JSGME manages,
-/// and a module sitting there is a module JSGME offers to copy over the game. Blocking (it
-/// resolves real paths): call it on the IO pool.
+/// and a module sitting there is a module JSGME offers to copy over the game. Every folder the
+/// build writes passes `guard`. Blocking (it resolves real paths): call it on the IO pool.
 pub fn plan_target(
     target: &str,
     id: &str,
     flat: bool,
     project_root: &Path,
     game_root: &str,
+    guard: &WriteGuard,
 ) -> Result<String, String> {
     let target = normalize_path(target);
     if target.is_empty() {
@@ -92,6 +94,13 @@ pub fn plan_target(
     let game_root = paths::trim_trailing(paths::to_backslash(game_root));
     if inside_game_gamedata(&dst, &game_root) || inside_game_gamedata(&target, &game_root) {
         return Err("target is inside the game's gamedata - a mod must stay in its own folder (export to the game ROOT: the module goes to <game>\\modules\\<id>)".to_owned());
+    }
+    // the folder itself and, for a module, its stage beside the last build (`install_build`)
+    let stage = Path::new(&dst).parent().map(|p| p.join(".new"));
+    let written = std::iter::once(Path::new(&dst).to_path_buf())
+        .chain(stage.iter().filter(|_| !flat).flat_map(|y| [y.join(id), y.join(format!("{id}.old"))]));
+    for path in written {
+        guard.check(&path).map_err(|e| e.to_string())?;
     }
 
     let real_dst = projected_real_path(&dst);
@@ -129,6 +138,10 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn open() -> WriteGuard {
+        WriteGuard::default()
+    }
+
     #[test]
     fn paths_and_gamedata() {
         assert_eq!(normalize_path("D:/Games//DA/"), "D:\\Games\\DA");
@@ -149,29 +162,38 @@ mod tests {
         fs::create_dir_all(&game).unwrap();
         let (p, g) = (project.to_str().unwrap().to_owned(), game.to_str().unwrap().to_owned());
 
-        let dst = plan_target(&format!("{g}/"), "od", false, &project, &g).unwrap();
+        let dst = plan_target(&format!("{g}/"), "od", false, &project, &g, &open()).unwrap();
         assert_eq!(dst, format!("{g}\\modules\\od"));
-        assert_eq!(plan_target(&g, "od", true, &project, &g).unwrap(), format!("{g}\\gamedata_od"));
+        assert_eq!(plan_target(&g, "od", true, &project, &g, &open()).unwrap(), format!("{g}\\gamedata_od"));
         assert!(
-            plan_target(&format!("{g}\\gamedata"), "od", false, &project, &g)
+            plan_target(&format!("{g}\\gamedata"), "od", false, &project, &g, &open())
                 .unwrap_err()
                 .contains("gamedata")
         );
-        let inside = plan_target(&p, "od", false, &project, &g).unwrap_err();
+        let inside = plan_target(&p, "od", false, &project, &g, &open()).unwrap_err();
         assert!(inside.contains("overlap"), "{inside}");
         assert!(!project.join("modules").exists());
         // the module folder IS the project: a clean build there would wipe it
         let nested = base.join("modules").join("od");
         fs::create_dir_all(nested.join("sub")).unwrap();
-        assert!(plan_target(&base.to_string_lossy(), "od", false, &nested, "").is_err());
-        assert!(plan_target(&base.to_string_lossy(), "od", false, &nested.join("sub"), "").is_err());
+        assert!(plan_target(&base.to_string_lossy(), "od", false, &nested, "", &open()).is_err());
+        assert!(plan_target(&base.to_string_lossy(), "od", false, &nested.join("sub"), "", &open()).is_err());
         // the editor's scratch is fine: the release stage lives there
-        assert!(plan_target(&format!("{p}\\temp\\release_stage_1"), "od", false, &project, &g).is_ok());
-        assert!(plan_target("", "od", false, &project, &g).unwrap_err().contains("not set"));
+        assert!(
+            plan_target(&format!("{p}\\temp\\release_stage_1"), "od", false, &project, &g, &open()).is_ok()
+        );
+        assert!(plan_target("", "od", false, &project, &g, &open()).unwrap_err().contains("not set"));
         assert_eq!(
-            plan_target(&"x".repeat(250), "od", false, &project, &g).unwrap_err(),
+            plan_target(&"x".repeat(250), "od", false, &project, &g, &open()).unwrap_err(),
             "target path too long"
         );
+        // the guard of a project linked to the game: the module's folder, never the game's own
+        let guard = WriteGuard::new(&g, Some("od"));
+        assert!(plan_target(&g, "od", false, &project, &g, &guard).is_ok());
+        assert!(plan_target(&g, "od", true, &project, &g, &guard).is_ok());
+        let deeper = plan_target(&format!("{g}/bin"), "od", false, &project, &g, &guard).unwrap_err();
+        assert!(deeper.contains("linked game's folder"), "{deeper}");
+        assert!(plan_target(&g, "other", false, &project, &g, &guard).is_err());
         fs::remove_dir_all(&base).unwrap();
     }
 }

@@ -267,10 +267,11 @@ async fn characters_delete(ed: Arc<Editor>, args: Args, _origin: Origin) -> Repl
     let (rep, touched) = {
         let root = root.clone();
         let abs = abs.clone();
+        let project = svc.project().clone();
         ed.exec
             .io(move || {
                 let no_game = || -> Option<Arc<gz_vfs::GameFiles>> { None };
-                let mut ops = FileOps::new(&root, &no_game);
+                let mut ops = FileOps::new(&root, &no_game, project.write_guard(None));
                 let mut rep = Report::default();
                 ops.delete(&abs, false, &mut rep);
                 (rep, ops.touched)

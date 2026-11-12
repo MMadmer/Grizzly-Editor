@@ -74,6 +74,7 @@ mod hemi;
 pub mod libs;
 pub mod merge;
 pub mod nav;
+pub mod play;
 pub mod prj;
 pub mod runs;
 mod service;

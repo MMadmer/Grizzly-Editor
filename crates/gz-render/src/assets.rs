@@ -138,10 +138,14 @@ pub(crate) struct SubInfo {
 }
 
 /// A mesh on the GPU.
+/// A mesh on the GPU: ONE buffer holding its indices, its edges and its vertices, in that order -
+/// a buffer is what the device makes slowest, and a pass that hands over thousands of meshes (the
+/// AI map's cells) waits for each.
 pub(crate) struct GpuMesh {
-    pub vertices: wgpu::Buffer,
-    pub indices: wgpu::Buffer,
-    pub wire: wgpu::Buffer,
+    pub buffer: wgpu::Buffer,
+    pub indices: Range<u64>,
+    pub wire: Range<u64>,
+    pub vertices: Range<u64>,
     pub info: Arc<MeshInfo>,
 }
 
@@ -425,6 +429,40 @@ impl Assets {
         h
     }
 
+    /// [`Assets::add_mesh`] for many meshes at once: uploaded side by side on the caller's rayon
+    /// pool, put in place under one lock and announced once (a cell of the AI map each: thousands
+    /// in a pass, which one by one cost the pass most of a second).
+    pub fn add_meshes(&self, meshes: Vec<(String, MeshData)>) -> Vec<MeshHandle> {
+        use rayon::prelude::*;
+        let uploaded: Vec<(String, MeshData, Option<Uploaded>)> = meshes
+            .into_par_iter()
+            .map(|(name, data)| {
+                let up = self.gpu.as_ref().map(|g| upload_mesh(g, &data));
+                (name, data, up)
+            })
+            .collect();
+        let mut inner = self.inner.lock();
+        let mut out = Vec::with_capacity(uploaded.len());
+        for (name, data, up) in uploaded {
+            let h = mesh_slot(&mut inner, MeshKey::Named(name.into()));
+            let ready = finish_mesh_info(&mut inner, &data, up);
+            if let Some(slot) = inner.meshes.get_mut(h.0 as usize) {
+                let old = slot.bytes;
+                slot.state = State::Ready(ready);
+                slot.bytes = data.bytes();
+                slot.pinned = true;
+                slot.version += 1;
+                inner.mesh_bytes = inner.mesh_bytes - old + data.bytes();
+            }
+            out.push(h);
+        }
+        drop(inner);
+        if !out.is_empty() {
+            self.changed();
+        }
+        out
+    }
+
     /// Lets go of a mesh handed over with [`Assets::add_mesh`]: its GPU copy goes, the handle
     /// draws nothing until a mesh of that name is handed over again.
     pub fn remove_mesh(&self, name: &str) {
@@ -585,6 +623,18 @@ impl Assets {
                     })
             })
             .collect()
+    }
+
+    /// Whether a texture of these materials is still loading. Asks for nothing.
+    #[must_use]
+    pub fn textures_loading(&self, handles: &[MaterialHandle]) -> bool {
+        let inner = self.inner.lock();
+        handles.iter().filter_map(|h| inner.materials.get(h.0 as usize)).any(|m| {
+            [m.base, m.detail]
+                .into_iter()
+                .flatten()
+                .any(|t| matches!(inner.textures.get(t.0 as usize).map(|s| &s.state), Some(State::Loading)))
+        })
     }
 
     /// The recorder's look at meshes: the GPU copies, `None` for one gone since the packet was
@@ -832,10 +882,12 @@ fn material_slot(inner: &mut Inner, desc: MaterialDesc) -> MaterialHandle {
     MaterialHandle(id)
 }
 
-type Uploaded = (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer, Vec<Range<u32>>);
+/// The buffer, the byte ranges of the indices, the edges and the vertices in it, the edges' index
+/// range per part.
+type Uploaded = (wgpu::Buffer, [Range<u64>; 3], Vec<Range<u32>>);
 
 fn finish_mesh_info(inner: &mut Inner, data: &MeshData, uploaded: Option<Uploaded>) -> MeshReady {
-    let wires: Vec<Range<u32>> = uploaded.as_ref().map(|u| u.3.clone()).unwrap_or_default();
+    let wires: Vec<Range<u32>> = uploaded.as_ref().map(|u| u.2.clone()).unwrap_or_default();
     let submeshes = data
         .submeshes
         .iter()
@@ -847,8 +899,8 @@ fn finish_mesh_info(inner: &mut Inner, data: &MeshData, uploaded: Option<Uploade
         })
         .collect();
     let info = Arc::new(MeshInfo { bounds: data.bounds, submeshes, skinned: data.skinned });
-    let gpu = uploaded.map(|(vertices, indices, wire, _)| {
-        Arc::new(GpuMesh { vertices, indices, wire, info: info.clone() })
+    let gpu = uploaded.map(|(buffer, [indices, wire, vertices], _)| {
+        Arc::new(GpuMesh { buffer, indices, wire, vertices, info: info.clone() })
     });
     MeshReady { info, gpu }
 }
@@ -856,20 +908,26 @@ fn finish_mesh_info(inner: &mut Inner, data: &MeshData, uploaded: Option<Uploade
 fn upload_mesh(gpu: &AssetGpu, data: &MeshData) -> Uploaded {
     use wgpu::util::DeviceExt;
     let (wire, ranges) = data.wire_indices();
-    let make = |label: &str, contents: &[u8], usage: wgpu::BufferUsages| {
-        gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents,
-            usage,
-        })
-    };
     let wire_bytes: &[u8] = if wire.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&wire) };
-    (
-        make("gz-render mesh vertices", bytemuck::cast_slice(&data.vertices), wgpu::BufferUsages::VERTEX),
-        make("gz-render mesh indices", bytemuck::cast_slice(&data.indices), wgpu::BufferUsages::INDEX),
-        make("gz-render mesh edges", wire_bytes, wgpu::BufferUsages::INDEX),
-        ranges,
-    )
+    let index_bytes: &[u8] =
+        if data.indices.is_empty() { &[0u8; 4] } else { bytemuck::cast_slice(&data.indices) };
+    let vertex_bytes: &[u8] = bytemuck::cast_slice(&data.vertices);
+    // every part starts on 4 bytes: what an index of u32 and a vertex buffer's offset need
+    let (i_len, w_len, v_len) =
+        (index_bytes.len() as u64, wire_bytes.len() as u64, vertex_bytes.len() as u64);
+    let mut contents = Vec::with_capacity((i_len + w_len + v_len) as usize);
+    contents.extend_from_slice(index_bytes);
+    contents.extend_from_slice(wire_bytes);
+    contents.extend_from_slice(vertex_bytes);
+    if contents.is_empty() {
+        contents.extend_from_slice(&[0u8; 4]);
+    }
+    let buffer = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gz-render mesh"),
+        contents: &contents,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX,
+    });
+    (buffer, [0..i_len, i_len..i_len + w_len, i_len + w_len..i_len + w_len + v_len], ranges)
 }
 
 fn upload_texture(gpu: &AssetGpu, data: &TextureData, label: &str) -> Result<Arc<GpuTexture>> {
@@ -1124,6 +1182,7 @@ mod tests {
         let info = got[0].0.clone().unwrap();
         let mats = a.resolve_materials(&[info.submeshes[0].material], 1);
         assert_eq!(mats[0].kind, EditorMaterial::Opaque);
+        assert!(!a.textures_loading(&[info.submeshes[0].material]));
         // nothing can load the texture: it fails rather than waits
         assert!(a.prepare(&DrawList::default(), Duration::from_millis(1)));
     }

@@ -305,7 +305,7 @@ async fn pda_delete(ed: Arc<Editor>, args: Args, origin: Origin) -> Reply {
         .exec
         .io(move || {
             let game = || project.game_files().ok();
-            let mut ops = FileOps::new(&root, &game);
+            let mut ops = FileOps::new(&root, &game, project.write_guard(None));
             let mut rep = Report::default();
             ops.delete(&victim, false, &mut rep);
             (!Path::new(&victim).is_file(), ops.touched)

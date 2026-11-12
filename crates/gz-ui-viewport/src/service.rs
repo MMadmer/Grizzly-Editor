@@ -1083,23 +1083,23 @@ impl Viewport {
         data
     }
 
-    /// What a pass of the scene still waits for: the meshes and textures loading (`loading N
-    /// assets`) and placeholders drawn for a mesh still to come.
-    fn pending_of(renderer: &Renderer, packet: Option<&FramePacket>) -> Vec<String> {
+    /// What a pass of the scene still waits for: placeholders drawn for a mesh still to come and
+    /// textures of what it draws still loading. Assets of what lies outside the view load on
+    /// meanwhile and are not waited for: the picture does not show them.
+    fn pending_of(renderer: &Renderer, packet: &FramePacket) -> Vec<String> {
         let mut out = Vec::new();
-        if packet.is_some_and(FramePacket::waiting_on_assets) {
+        if packet.waiting_on_assets() {
             out.push("meshes still loading (placeholders drawn)".to_owned());
         }
-        let loading = renderer.assets().stats().loading;
-        if loading > 0 {
-            out.push(format!("{loading} meshes and textures loading"));
+        if packet.textures_loading(renderer.assets()) {
+            out.push("textures of the view still loading".to_owned());
         }
         out
     }
 
     /// Holds until the window's viewport has shown the scene as the caller's commands left it: the
-    /// pass for the scene's revision built, none under way, nothing it draws still loading, and
-    /// the render thread's frame of it finished - or `limit` ran out. Answers what was still
+    /// pass for the scene's revision built and a frame of the render thread that drew it (or a
+    /// newer pass) with nothing in view still loading - or `limit` ran out. Answers what was still
     /// pending then (empty: the picture is current). Without a renderer there is nothing to wait for.
     pub async fn current(self: &Arc<Self>, editor: &Arc<Editor>, limit: Duration) -> Vec<String> {
         let deadline = Instant::now() + limit;
@@ -1122,21 +1122,21 @@ impl Viewport {
         let mut drawn: Option<u64> = None;
         loop {
             self.request_build(editor);
-            let waiting = {
+            {
                 let b = self.build.lock();
                 if drawn.is_none() && b.last.as_ref().is_some_and(|k| k.scene >= rev && k.view >= view) {
                     drawn = Some(b.serial);
                 }
-                b.packet.clone()
-            };
-            let mut pending = Self::pending_of(&renderer, waiting.as_deref());
-            match drawn {
-                None => pending.insert(0, "the viewport's pass of the scene".to_owned()),
-                Some(serial) if renderer.finished().packet < serial => {
-                    pending.push("the render thread's frame".to_owned());
-                }
-                Some(_) => {}
             }
+            // the render thread draws a packet again when what it waited for arrives, and a pass
+            // whose placeholders became meshes follows: the newest frame says what is still missing
+            let frame = renderer.finished();
+            let pending = match drawn {
+                None => vec!["the viewport's pass of the scene".to_owned()],
+                Some(serial) if frame.packet < serial => vec!["the render thread's frame".to_owned()],
+                Some(_) if frame.pending => vec!["meshes or textures of the view still loading".to_owned()],
+                Some(_) => Vec::new(),
+            };
             if pending.is_empty() || Instant::now() >= deadline {
                 return pending;
             }
@@ -1160,7 +1160,7 @@ impl Viewport {
                 .make_packet(editor, &renderer, false)
                 .await
                 .ok_or_else(|| CmdError::internal("viewport RT unavailable"))?;
-            let pending = Self::pending_of(&renderer, Some(&packet));
+            let pending = Self::pending_of(&renderer, &packet);
             if pending.is_empty() || Instant::now() >= deadline {
                 break (packet, pending);
             }
