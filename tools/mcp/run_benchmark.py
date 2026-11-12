@@ -111,6 +111,7 @@ def main() -> int:
             cpp_copy = qa_target.copy_project(SOURCE, os.path.join(work, "cpp", "Test"))
             kept = {p: (open(p, "rb").read() if os.path.isfile(p) else None) for p in CPP_KEPT}
             try:
+                qa_target.guard_project(cpp_copy)
                 proc = start([CPP_EXE, "-nodlg", "-project", cpp_copy], os.path.dirname(CPP_EXE), CPP_PORT, 300)
                 try:
                     cpp = bench(CPP_PORT, args.repeats)
@@ -132,6 +133,7 @@ def main() -> int:
         qa_target.mark("C++ numbers")
         rust_copy = qa_target.copy_project(SOURCE, os.path.join(work, "rust", "Test"))
         exe = qa_target.exe()
+        qa_target.guard_project(rust_copy)
         proc = start([exe, *qa_target.ARGS, "-nodlg", "-project", rust_copy], os.path.dirname(exe), qa_target.PORT)
         qa_target.mark("editor start")
         try:
@@ -151,7 +153,7 @@ def main() -> int:
         print("FAIL the benchmark ran: %r" % e, flush=True)
         ok = False
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        qa_target.remove_tree(work)
     print("BENCHMARK: %s" % ("DONE" if ok else "FAILED"), flush=True)
     return 0 if ok else 1
 

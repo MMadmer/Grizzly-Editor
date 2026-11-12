@@ -1117,6 +1117,79 @@ pub fn link_histogram(nodes: &[AiMapNode]) -> [usize; 5] {
     h
 }
 
+/// What a map is made of, to tell a whole terrain flooded from nodes made twice or off the
+/// ground (`aimap_tool action=stats`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MapStats {
+    pub nodes: usize,
+    /// Distinct patches of the XZ grid that hold a node.
+    pub cells: usize,
+    /// Patches that hold more than one node (floors over each other).
+    pub layered_cells: usize,
+    pub max_per_cell: usize,
+    /// Nodes of one patch closer in height than `FindNode`'s 0.05 m: made twice.
+    pub duplicates: usize,
+    /// Nodes whose centre is off the patch grid.
+    pub off_grid: usize,
+    /// Patches over which the model has a face a node can stand on (facing up, 60 degrees at
+    /// most): the most nodes one floor of it gives.
+    pub ground_cells: usize,
+    /// Nodes with no face of the model within half a patch round and a metre above or below.
+    pub off_ground: usize,
+}
+
+/// [`MapStats`] of a map's nodes over the model it was made on.
+#[must_use]
+pub fn stats(nodes: &[AiMapNode], ps: f32, model: Option<&CollideModel>) -> MapStats {
+    use rustc_hash::{FxHashMap, FxHashSet};
+    let key = |v: Vec3| ((v.x / ps).round() as i64, (v.z / ps).round() as i64);
+    let mut by_cell: FxHashMap<(i64, i64), Vec<f32>> = FxHashMap::default();
+    let mut off_grid = 0;
+    for n in nodes {
+        let (kx, kz) = key(n.pos);
+        if (n.pos.x - kx as f32 * ps).abs() > 1e-3 || (n.pos.z - kz as f32 * ps).abs() > 1e-3 {
+            off_grid += 1;
+        }
+        by_cell.entry((kx, kz)).or_default().push(n.pos.y);
+    }
+    let mut out = MapStats { nodes: nodes.len(), cells: by_cell.len(), off_grid, ..MapStats::default() };
+    for ys in by_cell.values_mut() {
+        out.max_per_cell = out.max_per_cell.max(ys.len());
+        if ys.len() > 1 {
+            out.layered_cells += 1;
+            ys.sort_by(f32::total_cmp);
+            out.duplicates += ys.windows(2).filter(|w| (w[1] - w[0]).abs() < 0.05).count();
+        }
+    }
+    let Some(m) = model else { return out };
+    let walkable = deg2rad(60.0).cos();
+    let ground: FxHashSet<(i64, i64)> = m
+        .tris
+        .par_iter()
+        .filter(|t| xr::mknormal(t[0], t[1], t[2]).y >= walkable)
+        .flat_map_iter(|t| {
+            // the patches whose centre the face covers, seen from above
+            let (lo, hi) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2]));
+            let (x0, x1) = ((lo.x / ps).ceil() as i64, (hi.x / ps).floor() as i64);
+            let (z0, z1) = ((lo.z / ps).ceil() as i64, (hi.z / ps).floor() as i64);
+            let t = *t;
+            (x0..=x1).flat_map(move |x| (z0..=z1).map(move |z| (x, z))).filter(move |&(x, z)| {
+                let (px, pz) = (x as f32 * ps, z as f32 * ps);
+                let edge = |a: Vec3, b: Vec3| (b.x - a.x) * (pz - a.z) - (b.z - a.z) * (px - a.x);
+                let (e0, e1, e2) = (edge(t[0], t[1]), edge(t[1], t[2]), edge(t[2], t[0]));
+                (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0) || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0)
+            })
+        })
+        .collect();
+    out.ground_cells = ground.len();
+    let half = Vec3::new(ps / 2.0, 1.0, ps / 2.0);
+    out.off_ground = nodes
+        .par_iter()
+        .filter(|n| m.box_query(&Aabb::new(n.pos - half, n.pos + half), true).is_empty())
+        .count();
+    out
+}
+
 /// The four sides as the panel names them, in the C++ order.
 pub const SIDES: [&str; 4] = ["left", "forward", "right", "back"];
 
@@ -1244,6 +1317,79 @@ mod tests {
         };
         assert!(removed_nodes >= 1);
         assert!(w.nodes.iter().all(|n| n.links.iter().flatten().all(|l| (*l as usize) < w.nodes.len())));
+    }
+
+    /// Both windings: the body meets a wall from either side (`collector_add_face_d` of a
+    /// two-sided surface).
+    fn wall(x: f32, y0: f32, y1: f32, z0: f32, z1: f32) -> Vec<[Vec3; 3]> {
+        let (a, b, c, d) =
+            (Vec3::new(x, y0, z0), Vec3::new(x, y1, z0), Vec3::new(x, y1, z1), Vec3::new(x, y0, z1));
+        vec![[a, b, c], [a, c, d], [c, b, a], [d, c, a]]
+    }
+
+    /// `AddNode` at the seed, then `BuildNodes(false)` (`GenerateMap` without the snap list's
+    /// box work): the nodes, the directed links and the link histogram.
+    fn flood(tris: Vec<[Vec3; 3]>, seed: Vec3) -> (Vec<AiMapNode>, usize, [usize; 5]) {
+        let n = tris.len();
+        let m = model(tris, vec![0; n]);
+        let g = Gen { model: &m, params: AiParams::default(), ignored: vec![false, false] };
+        let mut w = work(Aabb::new(Vec3::new(-3.6, -1.0, -3.6), Vec3::new(3.6, 3.0, 3.6)));
+        assert_eq!(w.add_node(&g, seed, false, false, 1), Ok(1));
+        assert!(!w.generate(&g, false, &|_, _| true).stopped);
+        let links = w.nodes.iter().map(|n| n.links.iter().flatten().count()).sum();
+        let h = link_histogram(&w.nodes);
+        (w.nodes, links, h)
+    }
+
+    /// The numbers follow from `ESceneAIMapTool::CreateNode`, `CanTravel`, `BuildNode` and
+    /// `BuildNodes(bool)` (ESceneAIMapTools_Generate.cpp) with the default parameters: a 0.7 m
+    /// patch, 9 x 9 rays 0.0875 m apart over it, a node only where 70 % of them meet the ground
+    /// (`rc_lim`), the body (radius 0.7 / sqrt 2 = 0.495) slid to the next patch and stopped where
+    /// it touches something, 0.1 m short of it failing. No edge below lies on a ray.
+    #[test]
+    fn generation_counts_follow_the_cpp_algorithm() {
+        let floor = || quad(Vec3::new(-3.6, 0.0, -3.6), 3.6, 3.6);
+
+        // a flat 7.2 m square: centres -2.8..2.8 (9 a side); at 3.5 only 6 of 9 ray columns are
+        // over the floor (66.7 % < 70 %); 2 x 9 x 8 = 144 neighbours, both ways
+        let (nodes, links, h) = flood(floor(), Vec3::new(0.1, 0.0, 0.1));
+        assert_eq!((nodes.len(), links), (81, 288));
+        assert_eq!(h, [0, 0, 4, 28, 49]);
+        let s = stats(&nodes, 0.7, None);
+        assert_eq!((s.cells, s.duplicates, s.off_grid, s.layered_cells), (81, 0, 0, 0));
+
+        // a hole of 2 x 2 m in the middle: the 3 x 3 patches over it see at most 17 rays of the
+        // floor; 144 - 12 among them - 12 to the ring = 120 neighbours
+        let mut holed = quad(Vec3::new(-3.6, 0.0, -3.6), -1.0, 3.6);
+        holed.extend(quad(Vec3::new(1.0, 0.0, -3.6), 3.6, 3.6));
+        holed.extend(quad(Vec3::new(-1.0, 0.0, -3.6), 1.0, -1.0));
+        holed.extend(quad(Vec3::new(-1.0, 0.0, 1.0), 1.0, 3.6));
+        let (nodes, links, h) = flood(holed, Vec3::new(2.1, 0.0, 2.1));
+        assert_eq!((nodes.len(), links), (72, 240));
+        assert_eq!(h, [0, 0, 4, 40, 28]);
+        assert!(nodes.iter().all(|n| n.pos.x.abs() > 1.0 || n.pos.z.abs() > 1.0));
+
+        // a wall at x = 0.35, half way between two columns: the body slid from -0.7 to 0 stops
+        // at -0.145 (0.145 > 0.1), so the column at 0 is never made; 4 columns, 3 x 9 + 4 x 8 = 59
+        let mut walled = floor();
+        walled.extend(wall(0.35, 0.0, 3.0, -3.6, 3.6));
+        let (nodes, links, h) = flood(walled, Vec3::new(-1.4, 0.0, 0.0));
+        assert_eq!((nodes.len(), links), (36, 118));
+        assert_eq!(h, [0, 0, 4, 18, 14]);
+        assert!(nodes.iter().all(|n| n.pos.x < 0.0));
+
+        // a 2 m step (over can_up) at x = 0.35: from below it is the wall above; from the top the
+        // patch past the edge finds no ground within the metre CreateNode looks (its box), so the
+        // upper floor keeps to x = 0.7..2.8
+        let mut stepped = quad(Vec3::new(-3.6, 0.0, -3.6), 0.35, 3.6);
+        stepped.extend(quad(Vec3::new(0.35, 2.0, -3.6), 3.6, 3.6));
+        stepped.extend(wall(0.35, 0.0, 2.0, -3.6, 3.6));
+        let (low, low_links, _) = flood(stepped.clone(), Vec3::new(-1.4, 0.0, 0.0));
+        assert_eq!((low.len(), low_links), (36, 118));
+        assert!(low.iter().all(|n| n.pos.y.abs() < 1e-4 && n.pos.x < 0.0));
+        let (high, high_links, _) = flood(stepped, Vec3::new(1.4, 2.0, 0.0));
+        assert_eq!((high.len(), high_links), (36, 118));
+        assert!(high.iter().all(|n| (n.pos.y - 2.0).abs() < 1e-4 && n.pos.x > 0.5));
     }
 
     #[test]

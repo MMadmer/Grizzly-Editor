@@ -74,6 +74,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
@@ -266,7 +267,7 @@ def main() -> int:
         return 2
     work = tempfile.mkdtemp(prefix="grizzly_propsproj_")
     copy = os.path.join(work, "QaProperties")
-    shutil.copytree(src, copy)
+    qa_target.copy_project(src, copy, ignore=())
     print("running against a copy: " + copy, flush=True)
     # the copy opens its OWN scene: project.ltx names the last one by absolute path
     pl = os.path.join(copy, "project.ltx")
@@ -297,7 +298,7 @@ def main() -> int:
                 f.write(data)
         check(all(open(p, "rb").read() == d for p, d in backups.items()), "F the preferences, the layout and the project list are back")
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"PROPERTIES: DONE {ok}/{len(results)}", flush=True)

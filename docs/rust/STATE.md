@@ -1024,7 +1024,8 @@ named, closed by Cancel). Not seen, for want of data or of a way to click: detai
 drawn (Test has no detail slots or wallmark textures, and First Initialize needs a snap list - "Snap list
 empty!", the C++ text), Random Append placing and Attach on Click (a click in the viewport; no MCP path
 and no synthetic input), the Group tool's Pivot chooser, motion playback with Camera View. Generate Full
-on Escape against the C++: the C++ editor has no MCP command for it - not compared.
+on Escape against the C++: the C++ editor has no MCP command for it - not compared. (All of these were looked at or
+settled since: "What the QA pass left, closed".)
 
 ### Budgets (plan 10.8, measured)
 
@@ -1040,7 +1041,8 @@ on Escape against the C++: the C++ editor has no MCP command for it - not compar
   the cores and the disk. Not met in the strict sense: frames over 16 ms do occur, idle as well.
 - **A rebuild no slower than the C++ job**: the Rust module build of Overnight Delivery with
   `test_build_job`'s 1.1 GB payload takes 1.1 s; the C++ job was not timed on the same data in this pass,
-  so the comparison is not made. The scene load (the benchmark) is 3.9 times faster than the C++ one.
+  so the comparison is not made. (Made since: "What the QA pass left, closed" 5 - C++ 4.89 s clean / 4.36 s
+  rebuild, Rust 0.9-1.2 s / 0.2-0.3 s.) The scene load (the benchmark) is 3.9 times faster than the C++ one.
 
 ### The game as the judge
 
@@ -1055,6 +1057,143 @@ on Escape against the C++: the C++ editor has no MCP command for it - not compar
   isolated QA root. The QA root (`<game>\_qa
 q`, its database junction unlinked first) and the run's
   results folder were removed after; no installed module was touched.
+
+## What the QA pass left, closed
+
+Brief `briefs/qa-rest.md`. Numbers on this machine (16 logical cores, 64 GB).
+
+**1. Every gesture of the viewport has an MCP path.** `viewport_gesture` (`gz-ui-viewport/src/gesture.rs`;
+`grizzly_viewport_gesture` in `tools.json`): `kind` click | double_click | drag | hover, `at` / `to` in viewport points,
+`button`, `mods`, `steps`. A gesture is a queue of frame steps (the pointer arrives, presses, moves, lets go, rests) the
+pane takes one a frame in `ViewportPane::input` in place of the window's pointer - the same code every mouse event runs;
+nothing goes to the operating system. The command answers once the steps were taken, the tasks they started ended (the
+pane's spawns go through `gesture::spawn`, counted in `Viewport::tracked`), the scene store applied what was posted
+(`Store::flush`, new in `gz-store`) and two frames were drawn: `picked`, `deselected`, `selection`, `placed` (name, class,
+reference, transform), `moved` (from / to), `changed` (with `attached`), `removed`, `ai_nodes` / `wallmarks` when they
+changed, `tool`, `camera_moved`, `gizmo` (the pivot and a point on each arrow, in points), `viewport` (its size in
+points), `log`. Refused while a dialog or the palette is up and while another tab than Level is active.
+- Random Append has its MCP path too: `object_tool action=random` (on, objects, scale, proportional, min/max_scale,
+  rotate, min/max_rotation in degrees) - the sheet's settings had none. The Group tool's Group and Ungroup buttons:
+  `group_tool action=group | ungroup`. The Pivot chooser: `ui_dialog open id=group_pivot` (`Select Object###dlg.choose`,
+  through `InspectorView::tool_chooser`, the same `tools::pivot_chooser` the panel's button opens); its pick is
+  `group_tool action=align_pivot object=`. Motion playback and Camera View had their commands (`object_motion play |
+  pause | camera_view`).
+- Looked at on a copy of Test (Escape): a Random Append click (one box of the set, turned and scaled, at the click), Attach
+  on Click (the point takes the shape's place), a marquee, a move drag on the gizmo's X arrow (X alone, one undo step),
+  the Pivot chooser (the group's objects as a tree), Camera View during playback (the camera at the object's pivot).
+- Found and fixed: a point's own sphere that Attach on Click detaches went back into the scene nameless (`EnsureShape`
+  makes it with no name, `gen_name("")` kept it so) - it gets a free `shape` name now (`// oracle:` in `apply.rs`; the C++
+  appends it nameless). `screenshot_viewport` waited up to 2 s whenever passes followed each other (`settle` waited for a
+  moment with no pass in flight): it waits for the pass under way only - every viewport picture costs ~0.2 s instead of
+  2.3 s, in every suite.
+- Not a bug, learned: a frame change of a motion with no key poses the object by the empty motion, at the origin (the
+  C++ does the same); key first, then move.
+
+**2. Details and wallmarks, drawn.** Made over MCP in a copy of Test: the Detail Objects' snap list (the terrain), two
+detail objects (`detail\trava_green`, `detail\trava_black`), a base texture written into the copy (one opaque colour,
+`qa\qa_detail_base`), its colour mapped to both objects, First Initialize (641601 slots), Reinitialize (every slot
+filled); a wallmark of the game's `wm\wm_anarh1` laid on the terrain. Both looked at: grass over the ground, the base
+texture over the terrain in its colour, the poster lying on the ground under the camera. The repository's `det\*`
+textures are the terrain's detail maps (mostly alpha 0): as a base texture they give slots of density 0 and draw black -
+the data, not the editor. Proven by `tools/qa/test_scene_tools.py` (D, W: the picture against the same view without them,
+waiting for the models and textures a pass asked for).
+
+**3. Generate Full: the whole ground flooded, no duplicates.** `aimap_tool action=stats` (`aimap::stats`) tells it apart.
+Escape (snap list 3847 objects, 1808170 collision faces, patch 0.7 m): the model has ground under 2659647 patches
+(1303227 m², facing up within 60 degrees). The scene's own map: 624967 nodes on 624211 patches (305863 m², 23 % of the
+ground), 756 patches with two floors, 3 duplicates and 1 node off the ground - already in the scene's data. Generate
+Full: 2481528 nodes (1856561 added in 16.3 s) on 2473526 patches (93 % of the ground), 7861 patches with floors over each
+other (at most 4), still 3 duplicates and 1 off the ground, none off the grid. The count is the whole terrain flooded from
+the existing nodes - the C++ `BuildNodes(false)` floods everything reachable; the scene's own map was trimmed to the
+playable area. Unit test `generation_counts_follow_the_cpp_algorithm`: a 7.2 m floor 81 nodes / 288 links (histogram 4 /
+28 / 49), a 2 x 2 m hole 72 / 240, a wall half way between two columns 36 / 118, a 2 m step 36 / 118 from below and from
+above - numbers worked out from `CreateNode` (9 x 9 rays, `rc_lim` 0.7), `CanTravel` (the body stops 0.145 short of the
+next patch) and `BuildNodes`; the Rust generation gives exactly them.
+
+**4. The UI frame while a build runs.** On the user's word the pools keep normal priority and every core (CPU pool =
+16, IO pool 32, async 8); the thread that draws and presents (the UI thread, `gz_app::window::run`) and the viewport's
+render thread run ABOVE normal (`gz_win::raise_this_thread_priority`, one `// SAFETY:` call; `this_thread_priority` for
+the test). `frame_pacing` answers, over the frames since its last ask, `sampled_frames`, `frame_work_ms` {mean, p95, max}
+(the frame's own time: input, the UI pass, tessellation, recording), `frame_wait_ms` {mean, max} (the swap chain's image,
+the submission, the present, a capture's poll - `paint_and_update_textures`' own vsync time) and `slow_frames`
+(`FrameClock` keeps 4096 frames' times; `FrameStamp` carries `work_ms` / `wait_ms`).
+- Before (this file, "Budgets"): a whole frame's time only, idle mean 6.6 ms / max 20, during a build mean 12-18 / max
+  52-73. After, same data (Overnight Delivery's Agroprom, 2160 x 1350, Real Time, `test_build_job`'s 1.1 GB payload,
+  `tools/qa/bench_build.py`): idle work mean 3.1-3.7 ms, p95 3.9-6.8, wait mean 8.2-8.7 (vsync); during the clean build
+  work mean 5.0-7.8 ms, p95 13-73, max 36-218, slow frames 2-5 of ~76. The long frames are stalls inside egui's
+  tessellation (20k vertices; 20-90 ms) during which the UI thread was charged no CPU time at all (GetThreadTimes): it is
+  blocked, not working, and only at moments of heavy disk IO (a scene's assets loading, the build's copy). Raising the
+  UI thread changed nothing measurable (A/B, two runs each); free memory 45 GB, so no paging. NOT CLOSED: the cause of
+  those stalls was not found. `test_build_job` A holds the mean: frame work under 16 ms during a build (window shown, not
+  activated, Real Time on; measured 9 ms there).
+- CPU use of a clean build: 5.2-6.7 s of process CPU over 1.03-1.16 s of wall, 0.24-0.38 of 16 cores. The stages: bake of
+  the scene 0.33 s, the module's checks 0.38 s, copy and install 0.3 s; the copy and the reuse check run on the IO pool
+  in parallel, the build is bound by the disk there. Whether the bake and the checks keep all cores busy was not profiled.
+- Found under load and fixed: `Project::game_snapshot` mounted the game under a mutex while the mount's parallel walk
+  ran on the IO pool; a worker waiting inside that walk ran another queued `game_snapshot` and blocked on the lock its
+  own stack held - the editor hung (two editors of a `run_all` at once: a publish stuck in "Checking the module", a quest
+  edit of `test_mcp_bridge`; seen with a stack sampler over dbghelp). No lock is held across a mount now
+  (`put_game_first`: two first callers may mount twice, the first index stays); `refresh_game` and `link_game` likewise.
+
+**5. A rebuild against the C++ job** (`tools/qa/bench_build.py`, reference mod + 24 x 48 MB payload, 228 files, a copy
+in temp each): C++ (`LevelEditor.exe` over 28016, minimised) clean 4.89 s, rebuild with nothing changed 4.36 s; Rust clean
+0.91-1.22 s, rebuild 0.20-0.33 s. The C++ editor's `_projects.ini`, `level.ini`, `level_imgui.ini` came back byte for
+byte.
+
+**6. The suites' time.**
+- `--only <phases>` in `test_mod_catalog` (A-J, W, I), `test_mod_publish` (A-J, R, U, V, K, L, N, M), `test_pda` (A-H),
+  `test_ui_shell` (A-H), `test_build_job` (A-E), `test_previews` (T, M, L, S), `test_scene_tools` (R A M G P V D W),
+  `test_ui_tour` (its issue numbers, as before); `run_all.py <suite> --only ...` passes it on (and notes it in
+  state.json). A phase stands on its own setup: one that needs another's work runs that phase first without its checks
+  (`NEEDS`, shown as `TIME phase X (setup)`). The other suites keep their checks in one run (each under 16 s).
+- `test_mod_publish` and `test_mod_catalog` work on a trimmed copy (`qa_target.TRIMMED`: no rawdata, design, docs,
+  textures - no phase is about a package's size; I gets 6 MB that do not pack, so the throttled upload still meets the
+  cancel); one mock process for the publish run, its switches a `POST /__restart` (new in `tools/qa/github_mock`, the
+  state as a new process has it) instead of ~30 process starts of 0.4 s each; the mock is built once per version of its
+  sources (`Intermediate/qa/mock`, keyed by their hash) instead of on every run; polls at 50 ms; `GRIZZLY_VT_SCAN_WAIT_MS`
+  1.5 s; the device sign-in approved on the first poll. The catalog's pictures are decoded with Pillow when it is there.
+- `test_pda`: the sleeps before pictures only with `--shots`; the waits for the tab to read a file written behind it
+  were sleeps - `pda_preview` reads it before it answers. `test_build_job`: the packaging phase does not pack 96 MB of
+  random payload; start poll 50 ms. `test_ui_tour`: polls at 50 ms. D of `test_build_job` (6.6 s) is the install's own
+  patience for a file held by a scanner (30 x 200 ms) before it refuses a module in use - product behaviour, kept.
+- Alone: `test_mod_publish` 64.0 -> 28.9 s, `test_mod_catalog` 47.7 -> 23.2 s, `test_pda` 21.6 -> 6.5 s,
+  `test_build_job` 26.3 -> 15.0 s, `test_ui_tour` 31.0 -> 20.9 s, `test_ui_shell` 9.6 -> 6.1 s, `test_scene_tools` 10.5 s.
+  The whole set through `run_all.py`: see "The final runs" below.
+- Safety (the lead's order): a suite only ever opens a copy under the system temp folder. `qa_target.copy_project` is the
+  one copy (whole or `trimmed`, export target into temp; it refuses a destination outside temp) and every suite and
+  `tools/mcp/run_*.py`, `diff_editors.py`, `bench_build.py` calls `qa_target.guard_project(<path>)` before `-project` /
+  `open_project`: a path outside temp stops the suite with exit code 2 before an editor starts. `test_mod_publish` opened
+  the source in place until this pass (it restored `mod.ltx` in `finally`); it copies now. `run_all.py` ends a timed-out
+  suite's whole process tree (`taskkill /T`) and names the suite.
+- `tools/rust/cg.sh` prints a test run's failures and counts (it printed only the last line, often blank).
+- Found by the full set under load and fixed: `quest_view` could answer for a tab that came up a moment ago and was not
+  drawn yet (its graph still being read: every pane null, `test_graph_ui` failed one run in three) - it holds until the
+  tab was drawn once (`view_pending`, up to 5 s); `viewport_gesture` answers after a pass of the scene as the gesture
+  left it (`drawn_scene`), so `gizmo` is that pass's anchor.
+
+**The final runs** (2026-11-12, about 03:40-04:05):
+- `tools/rust/check.sh` ok; `tools/rust/test.sh` 1068 tests, all green; `tools/qa/diff_editors.py` 722 steps, 0 differ.
+- `run_all.py`: 22 suites, 21 passed in one go, wall 102.1 s. `test_build_job` failed there: A measured the frames while
+  three other suites ran beside it (work mean 23.6 ms, p95 132, max 572). It times frames, so it is an `alone` suite now,
+  like the others that time something (run after the rest, by itself); alone it passes in 16.0 s (work mean 8.0 ms, p95
+  22.4, max 75.7). The limit (16 ms) stays. Seconds per suite in the parallel run: asset_icons 9.6, project_browser 9.7,
+  ui_shell 11.2, unicode_names 8.7, build_contents 9.8, behaviours 11.0, ui_tour 33.6, characters 17.7, graph_ui 13.4,
+  screens 8.7, world 5.1, pda 12.0, properties 7.2, previews 11.0, mcp_bridge 6.6, scene_tools 19.0, mod_catalog 30.5,
+  mod_publish 38.7, stress 11.7, server_lifecycle 3.5, benchmark 2.6.
+- NOT REACHED: the set under 75 s. Under four suites at once the longest ones stretch (ui_tour 20.9 s alone -> 33.6,
+  publish 28.9 -> 38.7, catalog 23.2 -> 30.5) and the `alone` ones add their own time at the end; the set is bound by
+  those three plus the alone tail, not by the runner. Nothing was cut from their checks to get there.
+- Found by the final runs and fixed: the copies of `test_graph_ui` and `test_behaviours` stayed in temp (`ignore_errors`
+  rmtree cannot remove a copy's read-only git objects). `qa_target.remove_tree` (read-only entries too, a few retries,
+  a warning naming what stayed) is the one removal every suite and `tools/mcp/run_*.py` use now; both suites rerun, their
+  copies gone.
+- The sources, checked with `find -newermt '2026-11-12 03:15'` before and after the final runs: nothing in
+  `D:\XFinedProjects\Test`, `D:\XFinedProjects\WeaponsEvolution` or `D:\Games\Dead Air\modules`. In
+  `D:\XFinedProjects\DARF-Overnight-Delivery` only the `.git` folder's own time (03:37:12) is newer: no entry inside it
+  and no file of the project changed. Since `test_mod_publish` was the one suite that opened that project and it copies
+  now (copies leave `.git` out), the folder's time is not from a suite; the cause was not found.
+- After the runs: no `Grizzly.exe`, `LevelEditor.exe` or `github_mock` of these runs left; the repository's
+  `_projects.ini`, `level.ini`, `level_imgui.ini`, `grizzly_editor.ltx` unchanged (`git status`); the temp copies removed.
 
 ## What the suites could not hold the Rust editor to
 

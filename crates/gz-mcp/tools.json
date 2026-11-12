@@ -1346,7 +1346,7 @@
   },
   {
    "name": "grizzly_frame_pacing",
-   "description": "Read live editor frame-pacing statistics or persist the active idle cap. The idle cap only applies outside Play In Editor and realtime rendering; window messages, redraw work, and MCP requests wake it immediately. action='set' accepts active_idle_fps=30..240, reset restores 120.",
+   "description": "Read live editor frame-pacing statistics or persist the active idle cap. The idle cap only applies outside Play In Editor and realtime rendering; window messages, redraw work, and MCP requests wake it immediately. action='set' accepts active_idle_fps=30..240, reset restores 120. Each answer also covers the frames presented since the previous ask: sampled_frames, frame_work_ms {mean, p95, max} (the frame's own CPU time: input, the UI pass, tessellation, recording), frame_wait_ms {mean, max} (the wait for the swap chain's image, the submission and the present - a frame that waited for vsync is not a slow frame) and slow_frames (own time over 16.7 ms). Ask once to start a window, once more to read it.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -1503,6 +1503,81 @@
     }
    },
    "cmd": "viewport_navigation"
+  },
+  {
+   "name": "grizzly_viewport_gesture",
+   "description": "A gesture of the mouse in the Level viewport, fed where the window's input enters the viewport: the camera, the gizmo, the selection, Place and every tool's click, stroke and marquee take it exactly as they take the mouse (nothing is sent to the operating system). kind click | double_click | drag (at to to, in steps moves, default 8) | hover (the pointer only: the gizmo part under it lights); at / to are [x, y] in points from the viewport's top left (the answer's viewport gives its size; screenshot_viewport's pixels divided by the dpi); button left (default) | right | middle; mods any of ctrl, shift, alt held through it (ctrl+drag is the marquee, alt keeps Place on). Examples: with viewport_controls tool=place, a click adds what the current tool places there (the Object tool's Random Append, the Spawn tool's Attach on Click, a wallmark, an AI node); with tool=move and an object selected, a drag from gizmo.x moves it along X. Answers when every step was taken, the work it started has ended and the frames that show it were drawn: picked, deselected, selected (count), selection, placed [{name, class, reference, position, rotation, scale}], moved [{name, from, to}], changed [{name, attached}], removed, target (the tools' class), ai_nodes / wallmarks (before, after, selected) when they changed, tool, camera_moved, gizmo {tool, pivot, x, y, z} (where the transform gizmo's pivot and the middle of each arrow are, in points; null with no gizmo), viewport [width, height] in points, log (the lines it wrote). Refused while a dialog or the palette is up (modal) and while another tab than Level is active (not_level).",
+   "annotations": {
+    "title": "A mouse gesture in the viewport",
+    "readOnlyHint": false,
+    "destructiveHint": false
+   },
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "click",
+       "double_click",
+       "drag",
+       "hover"
+      ]
+     },
+     "at": {
+      "type": [
+       "array",
+       "string"
+      ],
+      "items": {
+       "type": "number"
+      },
+      "description": "[x, y] in viewport points"
+     },
+     "to": {
+      "type": [
+       "array",
+       "string"
+      ],
+      "items": {
+       "type": "number"
+      },
+      "description": "where a drag ends, [x, y] in points"
+     },
+     "button": {
+      "type": "string",
+      "enum": [
+       "left",
+       "right",
+       "middle"
+      ]
+     },
+     "mods": {
+      "type": [
+       "array",
+       "string"
+      ],
+      "items": {
+       "type": "string",
+       "enum": [
+        "ctrl",
+        "shift",
+        "alt"
+       ]
+      }
+     },
+     "steps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120,
+      "description": "the moves of a drag"
+     }
+    },
+    "required": [
+     "at"
+    ]
+   },
+   "cmd": "viewport_gesture"
   },
   {
    "name": "grizzly_progress",
@@ -3753,7 +3828,7 @@
   },
   {
    "name": "grizzly_ui_dialog",
-   "description": "The dialogs: action list (default: what is open, and the known ids), open (id: package_release, publish_release, build_to_folder, export_flat, import_base_scene, submit - the way their menu items open them; it comes up when the editor draws next; Mod Settings and Releases are tabs: grizzly_ui_tab), close (id - one of those, a kit dialog's dlg.<name>, or a dialog's window name - the way Esc or its cross does, running nothing). Opening one runs nothing either: its buttons stay the user's, or the matching mod_* tool's.",
+   "description": "The dialogs: action list (default: what is open, and the known ids), open (id: package_release, publish_release, build_to_folder, export_flat, import_base_scene, submit - the way their menu items open them; group_pivot: the Group tool's Align to Object... chooser of the selected group's objects, Select Object###dlg.choose, whose pick is grizzly_group_tool action=align_pivot object=; make_question, rename_question, reset_surfaces_question: the questions a click raises; it comes up when the editor draws next; Mod Settings and Releases are tabs: grizzly_ui_tab), close (id - one of those, a kit dialog's dlg.<name>, or a dialog's window name - the way Esc or its cross does, running nothing). Opening one runs nothing either: its buttons stay the user's, or the matching mod_* tool's.",
    "annotations": {
     "title": "Open or close a dialog",
     "readOnlyHint": false,
@@ -4896,7 +4971,7 @@
   },
   {
    "name": "grizzly_aimap_tool",
-   "description": "The AI Map tool: the nodes the game's AI walks on, generated over the tool's snap objects (snap_objects with the AI Map the current tool fills that list). action state (default: nodes, selected, links histogram 0-4, box, params, brush_size, vis_radius, smooth_height, draw_nodes, slow_calculate, ignore_constraints, auto_link, link_mode, ignored_materials, snap_objects) | set (ignore_constraints, auto_link, link_mode add|remove|invert, brush_size 1-100, can_up, can_down, vis_radius, smooth_height, draw_nodes, slow_calculate) | add_nodes (position or positions [[x,y,z],...]: AddNode at each, the brush past brush_size 1; deselect=true first; answers added, nodes, failed) | generate (the flood from the nodes there are over the whole level; selected=true or action generate_selected: from the selected nodes only; a job of the Task Center that answers when it ends: added, nodes, seconds, stopped) | clear | reset_selected | smooth_selected | remove_selected | move_selected (delta) | rotate_selected (axis x|z, angle in degrees) | select_links (links 0-4: only those nodes are selected) | select_all | deselect_all | invert_selection | select_nodes (nodes [indices] or positions, mode set|add|remove|toggle) | pick (start, dir: the node a ray hits; keep=true keeps the selection) | select_box (min, max) | links (side left|forward|right|back|all, or with camera=true away|left|right|towards as the panel's pad; mode add|remove|invert, default the panel's) | remove_links | invert_links | ignore_material (name) | unignore_material (name) | clear_ignored. Every edit is one undo step; a selection alone is none. show=true makes it the current tool first (the Tools panel shows its form).",
+   "description": "The AI Map tool: the nodes the game's AI walks on, generated over the tool's snap objects (snap_objects with the AI Map the current tool fills that list). action stats (what the map is made of over the snap list's model: nodes, cells - patches of the XZ grid with a node -, layered_cells (floors over each other), max_per_cell, duplicates (nodes of one patch closer than FindNode's 0.05 m in height: made twice, should be 0), off_grid, ground_cells / ground_m2 (patches the model has a face to stand on: one floor's worth of nodes), covered_m2, off_ground (nodes with no face within half a patch and a metre), model_faces) | state (default: nodes, selected, links histogram 0-4, box, params, brush_size, vis_radius, smooth_height, draw_nodes, slow_calculate, ignore_constraints, auto_link, link_mode, ignored_materials, snap_objects) | set (ignore_constraints, auto_link, link_mode add|remove|invert, brush_size 1-100, can_up, can_down, vis_radius, smooth_height, draw_nodes, slow_calculate) | add_nodes (position or positions [[x,y,z],...]: AddNode at each, the brush past brush_size 1; deselect=true first; answers added, nodes, failed) | generate (the flood from the nodes there are over the whole level; selected=true or action generate_selected: from the selected nodes only; a job of the Task Center that answers when it ends: added, nodes, seconds, stopped) | clear | reset_selected | smooth_selected | remove_selected | move_selected (delta) | rotate_selected (axis x|z, angle in degrees) | select_links (links 0-4: only those nodes are selected) | select_all | deselect_all | invert_selection | select_nodes (nodes [indices] or positions, mode set|add|remove|toggle) | pick (start, dir: the node a ray hits; keep=true keeps the selection) | select_box (min, max) | links (side left|forward|right|back|all, or with camera=true away|left|right|towards as the panel's pad; mode add|remove|invert, default the panel's) | remove_links | invert_links | ignore_material (name) | unignore_material (name) | clear_ignored. Every edit is one undo step; a selection alone is none. show=true makes it the current tool first (the Tools panel shows its form).",
    "annotations": {
     "title": "The AI Map tool",
     "readOnlyHint": false,
@@ -4909,6 +4984,7 @@
       "type": "string",
       "enum": [
        "state",
+       "stats",
        "set",
        "add_nodes",
        "generate",
@@ -5487,7 +5563,7 @@
     "title": "A dynamic object's motion"
    },
    "cmd": "object_motion",
-   "description": "The Motion rows of a dynamic scene object (Details > Flags\\Motionable and Motion). name= the object; action state (the default: motionable, keys, length, start, end, current, auto_key, camera_view, playing) | motionable (on=) | import / export (file=, an .anm; relative to the project's gamedata\\anims) | add_key | delete_key (at the current time) | scale_keys (from, to, scale) | normalize_keys (from, to, speed in m/s) | clamp | first | prev_key | prev_frame | next_frame | next_key | last | play | pause (the object stands where playback stopped) | auto_key (on=) | camera_view (on=) | range (min, max in seconds) | current (t) | key_time (t: the current key moved). Each edit is one undo step; the frame controls of one run merge.",
+   "description": "The Motion rows of a dynamic scene object (Details > Flags\\Motionable and Motion). name= the object; action state (the default: motionable, keys, length, start, end, current, auto_key, camera_view, playing) | motionable (on=) | import / export (file=, an .anm; relative to the project's gamedata\\anims) | add_key | delete_key (at the current time) | scale_keys (from, to, scale) | normalize_keys (from, to, speed in m/s) | clamp | first | prev_key | prev_frame | next_frame | next_key | last | play | pause (the object stands where playback stopped) | auto_key (on=) | camera_view (on=) | range (min, max in seconds) | current (t) | key_time (t: the current key moved). Each edit is one undo step; the frame controls of one run merge. Playback poses the object in the viewport without changing the scene until pause; with camera_view on the viewport's camera rides on the object while it plays (grizzly_screenshot_viewport shows it).",
    "inputSchema": {
     "properties": {
      "name": {
@@ -5538,17 +5614,73 @@
     "title": "The Object tool"
    },
    "cmd": "object_tool",
-   "description": "The Object tool's Surfaces section: action reset_surfaces gives the visible scene objects (selected=true, the default: the selected ones; false: every one) the surfaces of their reference again. One undo step; asks nothing.",
+   "description": "The Object tool. action reset_surfaces (the Surfaces section) gives the visible scene objects (selected=true, the default: the selected ones; false: every one) the surfaces of their reference again. action random: Add Objects' Randomize Added Objects and the Random Append sheet - on (the switch), objects (the library objects a click of Place picks from, a list, at most 32; each must load), scale / proportional / rotate (the sheet's switches), min_scale / max_scale ([x,y,z] or one number), min_rotation / max_rotation ([x,y,z] in degrees); what is left out keeps its value; answers random {on, objects, scale, proportional, min_scale, max_scale, rotate, min_rotation, max_rotation}. A click with Place in the viewport (grizzly_viewport_gesture) then adds one of the objects with a scale and rotation out of those ranges. One undo step each; asks nothing.",
    "inputSchema": {
     "properties": {
      "action": {
       "enum": [
-       "reset_surfaces"
+       "reset_surfaces",
+       "random"
       ],
       "type": "string"
      },
      "selected": {
       "type": "boolean"
+     },
+     "on": {
+      "type": "boolean",
+      "description": "random: Randomize Added Objects"
+     },
+     "objects": {
+      "type": [
+       "array",
+       "string"
+      ],
+      "items": {
+       "type": "string"
+      },
+      "description": "random: the library objects to pick from"
+     },
+     "scale": {
+      "type": "boolean"
+     },
+     "proportional": {
+      "type": "boolean"
+     },
+     "rotate": {
+      "type": "boolean"
+     },
+     "min_scale": {
+      "description": "[x, y, z] or one number for the three",
+      "type": [
+       "array",
+       "number",
+       "string"
+      ]
+     },
+     "max_scale": {
+      "description": "[x, y, z] or one number for the three",
+      "type": [
+       "array",
+       "number",
+       "string"
+      ]
+     },
+     "min_rotation": {
+      "description": "[x, y, z] in degrees, or one number",
+      "type": [
+       "array",
+       "number",
+       "string"
+      ]
+     },
+     "max_rotation": {
+      "description": "[x, y, z] in degrees, or one number",
+      "type": [
+       "array",
+       "number",
+       "string"
+      ]
      }
     },
     "type": "object",
@@ -5600,11 +5732,13 @@
     "title": "The Group tool"
    },
    "cmd": "group_tool",
-   "description": "The Group tool: action center_pivot (every group's pivot to the middle of its objects, as the C++ Center to Group) | align_pivot (object=: the selected groups' pivot to that object of theirs) | save_as (file=: the selected group as a library .group; relative to the project's rawdata\\groups) | reload (Reload References: the selected groups made again from their library .group, each where it stands; a member marked unique stays as it was) | place (ref= a library group, x= y= z= where, ten metres in front of the camera without them: the group added, named after its reference, selected; answers object {name, id}). One undo step for each but save_as.",
+   "description": "The Group tool: action group (the selected objects into a new group, name= or group_NN; answers object {name, id}, members) | ungroup (the selected groups taken apart) | center_pivot (every group's pivot to the middle of its objects, as the C++ Center to Group) | align_pivot (object=: the selected groups' pivot to that object of theirs) | save_as (file=: the selected group as a library .group; relative to the project's rawdata\\groups) | reload (Reload References: the selected groups made again from their library .group, each where it stands; a member marked unique stays as it was) | place (ref= a library group, x= y= z= where, ten metres in front of the camera without them: the group added, named after its reference, selected; answers object {name, id}). One undo step for each but save_as. The panel's Align to Object... chooser is put up to be looked at with grizzly_ui_dialog action=open id=group_pivot.",
    "inputSchema": {
     "properties": {
      "action": {
       "enum": [
+       "group",
+       "ungroup",
        "center_pivot",
        "align_pivot",
        "save_as",
@@ -5630,6 +5764,10 @@
      },
      "z": {
       "type": "number"
+     },
+     "name": {
+      "type": "string",
+      "description": "group: the new group's name"
      }
     },
     "type": "object",

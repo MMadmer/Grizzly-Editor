@@ -63,6 +63,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 240
@@ -393,7 +394,7 @@ def run(project: str) -> None:
 
     finally:
         ed.close()
-        shutil.rmtree(out_dir, ignore_errors=True)
+        qa_target.remove_tree(out_dir)
 
 
 def main() -> int:
@@ -409,7 +410,7 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_behproj_")
     copy = os.path.join(work, "QaBehaviours")
-    shutil.copytree(src, copy)
+    qa_target.copy_project(src, copy, ignore=())
     os.makedirs(os.path.join(copy, "quests"), exist_ok=True)
     os.makedirs(os.path.join(copy, "npc"), exist_ok=True)
     print("running against a copy: " + copy, flush=True)
@@ -429,7 +430,7 @@ def main() -> int:
             with open(ini, "wb") as f:
                 f.write(ini_backup)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"BEHAVIOURS: DONE {ok}/{len(results)}", flush=True)

@@ -1031,7 +1031,11 @@ impl State for SceneState {
                 // the point's own shape goes back into the scene first (`DetachObject`)
                 if let Some(old) = sd.attached.take() {
                     let mut back = (*old).clone();
-                    back.name = SmolStr::new(self.gen_name(Some(&back.name)));
+                    // oracle: the C++ appends the point's own shape (`EnsureShape` made it with no
+                    // name) as it is - a nameless object nothing can address; it is named as the
+                    // Shape tool names a new one
+                    let base = if back.name.is_empty() { "shape" } else { back.name.as_str() };
+                    back.name = SmolStr::new(self.gen_name(Some(base)));
                     back.owner = None;
                     let id = self.insert(back);
                     if object.is_none() {

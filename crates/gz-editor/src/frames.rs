@@ -18,7 +18,24 @@ pub struct FrameStamp {
     /// The picture's size in pixels.
     pub width: u32,
     pub height: u32,
+    /// The frame's own CPU time: input, the UI pass, tessellation, recording - everything but
+    /// the waits below.
+    pub work_ms: f32,
+    /// What the frame waited for the presentation: the swap chain's image (vsync, the frame
+    /// latency), the submission, the present.
+    pub wait_ms: f32,
 }
+
+/// One presented frame's times, kept for `frame_pacing`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameTime {
+    pub frame: u64,
+    pub work_ms: f32,
+    pub wait_ms: f32,
+}
+
+/// How many frames the clock keeps the times of.
+const KEPT_TIMES: usize = 4096;
 
 /// Lets a request wait for frames.
 ///
@@ -29,18 +46,37 @@ pub struct FrameStamp {
 pub struct FrameClock {
     tx: watch::Sender<FrameStamp>,
     wake: Wake,
+    times: parking_lot::Mutex<std::collections::VecDeque<FrameTime>>,
 }
 
 impl FrameClock {
     #[must_use]
     pub fn new(wake: Wake) -> Self {
         let (tx, _) = watch::channel(FrameStamp::default());
-        Self { tx, wake }
+        Self {
+            tx,
+            wake,
+            times: parking_lot::Mutex::new(std::collections::VecDeque::with_capacity(KEPT_TIMES)),
+        }
     }
 
     /// Called by the window after a frame was presented.
     pub fn publish(&self, stamp: FrameStamp) {
+        {
+            let mut t = self.times.lock();
+            if t.len() == KEPT_TIMES {
+                t.pop_front();
+            }
+            t.push_back(FrameTime { frame: stamp.frame, work_ms: stamp.work_ms, wait_ms: stamp.wait_ms });
+        }
         self.tx.send_replace(stamp);
+    }
+
+    /// The times of the frames presented after `frame` that the clock still keeps (the last
+    /// 4096), oldest first.
+    #[must_use]
+    pub fn times_after(&self, frame: u64) -> Vec<FrameTime> {
+        self.times.lock().iter().filter(|t| t.frame > frame).copied().collect()
     }
 
     #[must_use]

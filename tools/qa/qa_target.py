@@ -63,7 +63,9 @@ def busy_text() -> str:
 # the suite sets ("copy", "editor start", ...; the rest is "checks").
 
 import atexit
+import fnmatch
 import shutil
+import sys
 import time
 
 _T0 = time.monotonic()
@@ -78,10 +80,33 @@ def mark(label: str) -> None:
     _LAST[0] = now
 
 
+def remove_tree(path: str) -> bool:
+    """Removes a suite's temp folder for good: read-only entries too (a copy's git objects, which a plain rmtree
+    leaves behind), with a few retries for a file the editor or a scanner lets go of a moment late. Says so when
+    something stayed."""
+    if not path or not os.path.exists(path):
+        return True
+
+    def writable(func, p, _exc):
+        try:
+            os.chmod(p, 0o666)
+            func(p)
+        except OSError:
+            pass
+
+    for _ in range(20):
+        shutil.rmtree(path, onerror=writable)
+        if not os.path.exists(path):
+            return True
+        time.sleep(0.25)
+    print("WARNING: %s could not be removed" % path, flush=True)
+    return False
+
+
 def _drop_home() -> None:
     # a home this module made for the run goes with it; one named by GRIZZLY_QA_HOME is its owner's
     if RUST and not os.environ.get("GRIZZLY_QA_HOME"):
-        shutil.rmtree(HOME, ignore_errors=True)
+        remove_tree(HOME)
 
 
 atexit.register(_drop_home)
@@ -99,12 +124,47 @@ def _report() -> None:
 atexit.register(_report)
 
 
-def copy_project(src: str, dst: str, ignore=(".git", "releases", "temp", "logs", "backup")) -> str:
-    """Copies a project for a suite: only what a suite needs (no .git, releases, temp, logs,
-    backup unless it names another set), project.ltx naming the copy's own folder, and the
-    export target pointed into the suite's temp folder - never at the game."""
+TEMP = os.path.realpath(tempfile.gettempdir())
+
+# What a trimmed copy leaves out besides `ignore`, by the folder of the copy: what a build does not ship (rawdata,
+# design, docs) and the heavy textures - for a suite none of whose checks is about a package's size.
+TRIMMED = {".": ("rawdata", "design", "docs"), "gamedata": ("textures",)}
+
+
+def in_temp(path: str) -> bool:
+    """Whether a path lies under the system temp folder (real paths: no link leads out of it)."""
+    real = os.path.normcase(os.path.realpath(path))
+    root = os.path.normcase(TEMP)
+    return real.startswith(root.rstrip("\\/") + os.sep)
+
+
+def guard_project(path: str) -> str:
+    """The project a suite is about to open: it must be a copy under the system temp folder. A suite never opens a
+    source project (D:\\XFinedProjects\\...) in place - it stops here with exit code 2 before any editor starts."""
+    if not in_temp(path):
+        print("REFUSED: %s is not under the system temp folder (%s): a suite opens only a copy it made "
+              "(qa_target.copy_project)" % (path, TEMP), flush=True)
+        sys.exit(2)
+    return path
+
+
+def copy_project(src: str, dst: str, ignore=(".git", "releases", "temp", "logs", "backup"), trimmed: bool = False) -> str:
+    """THE way a suite copies a project: into `dst`, which must lie under the system temp folder; only what a suite
+    needs (no .git, releases, temp, logs, backup unless it names another set; with `trimmed` also TRIMMED),
+    project.ltx naming the copy's own folder, and the export target pointed into the suite's temp folder - never at
+    the game. Answers `dst`, checked by guard_project."""
+    guard_project(dst)
     t = time.monotonic()
-    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*ignore))
+    names = set(ignore)
+
+    def skip(d: str, entries: list[str]) -> set[str]:
+        out = {n for n in entries if any(fnmatch.fnmatch(n, p) for p in names)}
+        if trimmed:
+            rel = os.path.relpath(d, src).replace("\\", "/")
+            out |= set(TRIMMED.get(rel, ())) & set(entries)
+        return out
+
+    shutil.copytree(src, dst, ignore=skip)
     pl = os.path.join(dst, "project.ltx")
     if os.path.isfile(pl):
         with open(pl, "rb") as f:

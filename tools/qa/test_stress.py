@@ -163,6 +163,7 @@ def run(project: str, seconds: float, out_dir: str) -> None:
     info = subprocess.STARTUPINFO()
     info.dwFlags = subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+    qa_target.guard_project(project)
     proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe),
                             startupinfo=info)
     try:
@@ -232,7 +233,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - the report is the point
         check(False, "the run finished", repr(exc))
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        qa_target.remove_tree(work)
     ok = sum(1 for good, _ in results if good)
     print(f"STRESS: DONE {ok}/{len(results)}", flush=True)
     return 0 if ok == len(results) else 1

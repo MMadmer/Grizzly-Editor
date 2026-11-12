@@ -55,6 +55,7 @@ def run(work: str, name: str, extra_env: dict, script_args: list[str]) -> bool:
     info.dwFlags = subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 7
     exe = qa_target.exe()
+    qa_target.guard_project(project)
     proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe),
                             env=env, startupinfo=info)
     try:
@@ -104,7 +105,7 @@ def main() -> int:
         ok = run(work, "lifecycle", {"GRIZZLY_MCP_REQUEST_TIMEOUT_MS": "250"},
                  ["--timeout-scene", "l01_escape.level", "--shutdown-via-palette"])
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        qa_target.remove_tree(work)
     print("LIFECYCLE: %s" % ("DONE" if ok else "FAILED"), flush=True)
     return 0 if ok else 1
 

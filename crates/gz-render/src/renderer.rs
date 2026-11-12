@@ -157,7 +157,12 @@ impl Renderer {
         let worker = shared.clone();
         let thread = std::thread::Builder::new()
             .name("gz-render".into())
-            .spawn(move || render_loop(&worker))
+            .spawn(move || {
+                // the picture the window shows: its core before the pools'
+                #[cfg(windows)]
+                let _ = gz_win::raise_this_thread_priority();
+                render_loop(&worker)
+            })
             .map_err(|e| RenderError::Device(format!("the render thread did not start: {e}")))?;
         Ok(Self { shared, thread: Mutex::new(Some(thread)) })
     }

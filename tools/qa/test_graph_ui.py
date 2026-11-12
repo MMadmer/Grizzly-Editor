@@ -126,6 +126,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 240
@@ -396,7 +397,7 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_graphui_")
     copy = os.path.join(work, "QaGraphUi")
-    shutil.copytree(src, copy)
+    qa_target.copy_project(src, copy, ignore=())
     os.makedirs(os.path.join(copy, "quests"), exist_ok=True)
     os.makedirs(os.path.join(copy, "npc"), exist_ok=True)
     print("running against a copy: " + copy, flush=True)
@@ -419,7 +420,7 @@ def main() -> int:
             elif os.path.isfile(path):
                 os.remove(path)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
     same = all(open(p, "rb").read() == kept[p] for p in kept if os.path.isfile(p))
     check(same, "level.ini, level_imgui.ini and _projects.ini are back byte for byte")
 

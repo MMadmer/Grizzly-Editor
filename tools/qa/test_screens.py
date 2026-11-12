@@ -61,6 +61,7 @@ def start_editor(project: str) -> subprocess.Popen:
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+    qa_target.guard_project(project)
     proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
@@ -114,7 +115,7 @@ def main() -> int:
     project = os.path.join(work, "project")
     outside = os.path.join(work, "outside")
     target = os.path.join(work, "game")
-    shutil.copytree(args.project, project, ignore=shutil.ignore_patterns(".git", "releases", "temp", "backup"))
+    qa_target.copy_project(args.project, project, ignore=(".git", "releases", "temp", "backup",))
     os.makedirs(outside)
     os.makedirs(target)
     ltx = os.path.join(project, "project.ltx")
@@ -246,7 +247,7 @@ def main() -> int:
         if projects_before is not None:
             with open(projects_ini, "wb") as f:
                 f.write(projects_before)
-        shutil.rmtree(work, ignore_errors=True)
+        qa_target.remove_tree(work)
 
     failed = [t for ok, t in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} passed")

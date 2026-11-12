@@ -37,6 +37,8 @@ pub struct InspectorView {
     /// `property_choose`: the row whose chooser is open, and the item picked in it.
     pub choosing: Option<String>,
     pub chosen: String,
+    /// A tool's chooser put up over MCP to be looked at (`ui_dialog open id=group_pivot`).
+    pub tool_chooser: Option<String>,
 }
 
 /// The open project's scene.

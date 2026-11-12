@@ -222,7 +222,6 @@ pub struct Project {
     /// Moves whenever another game index takes the place of the last one.
     game_rev: RevCounter,
     /// One mount at a time: two first readers must not read the game twice.
-    mount_lock: Mutex<()>,
     /// `appdata\game_index`: where the game indexes are saved between starts.
     index_dir: PathBuf,
     log: Log,
@@ -258,7 +257,6 @@ impl Project {
             scene: Mutex::new(SceneSlots::default()),
             game: Mutex::new(None),
             game_rev: RevCounter::new(),
-            mount_lock: Mutex::new(()),
             index_dir: editor.paths.appdata.join("game_index"),
             log: editor.log.clone(),
             linked: Arc::new(Mutex::new(None)),
@@ -416,6 +414,17 @@ impl Project {
         rev
     }
 
+    /// Puts an index in place unless one of the same root is there already: that one is kept.
+    fn put_game_first(&self, root: &str, files: Arc<GameFiles>) -> (Arc<GameFiles>, Rev) {
+        let mut game = self.game.lock();
+        if let Some(m) = game.as_ref().filter(|m| m.root.eq_ignore_ascii_case(root)) {
+            return (m.files.clone(), m.rev);
+        }
+        let rev = self.game_rev.bump();
+        *game = Some(GameMount { root: root.to_owned(), files: files.clone(), rev });
+        (files, rev)
+    }
+
     /// The linked game root when it still looks like a game, or [`NOT_LINKED`].
     fn linked_root(&self) -> Result<String, String> {
         let root = self.game_root();
@@ -440,13 +449,13 @@ impl Project {
         if let Some(hit) = self.current_game(&root) {
             return Ok(hit);
         }
-        let _one = self.mount_lock.lock();
-        if let Some(hit) = self.current_game(&root) {
-            return Ok(hit);
-        }
+        // No lock is held across the mount: it runs parallel work on the IO pool, and a worker
+        // waiting inside that work runs other queued jobs - another caller of this function, which
+        // waited on a lock the same thread held further down its stack and never returned (seen as
+        // a hung build under load). Two first callers may mount twice; the first index put in place
+        // is the one both get.
         let files = Arc::new(self.mount(&root, None)?);
-        let rev = self.put_game(&root, files.clone());
-        Ok((files, rev))
+        Ok(self.put_game_first(&root, files))
     }
 
     /// The linked game's index. Blocking, like [`Project::game_snapshot`].
@@ -464,7 +473,7 @@ impl Project {
     /// new index in place. Blocking.
     pub fn refresh_game(&self) -> Result<(Arc<GameFiles>, Rev), String> {
         let root = self.linked_root()?;
-        let _one = self.mount_lock.lock();
+        // no lock across the mount, for the reason game_snapshot gives: the last refresh wins
         let prev = self.current_game(&root).map(|(files, _)| files);
         let files = Arc::new(self.mount(&root, prev.as_deref())?);
         let rev = self.put_game(&root, files.clone());
@@ -483,10 +492,8 @@ impl Project {
         let (p, probe) = (self.clone(), clean.clone());
         let files = self
             .exec
-            .io(move || {
-                let _one = p.mount_lock.lock();
-                p.mount(&probe, None)
-            })
+            // no lock across the mount (game_snapshot says why)
+            .io(move || p.mount(&probe, None))
             .await?;
         self.edit(FileCmd::GameRoot(clean.clone())).await.map_err(|e| e.message)?;
         self.put_game(&clean, Arc::new(files));

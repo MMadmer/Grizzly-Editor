@@ -78,6 +78,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
@@ -354,15 +355,21 @@ def run_sizes(project: str, shots: str | None) -> None:
     mcp("ui_scale", value=1.5)
 
 
-def run(project: str, shots: str | None, sizes: bool) -> None:
+PHASES = "TMLS"
+
+
+def run(project: str, shots: str | None, sizes: bool, only: str = "TML") -> None:
     ed = Editor()
     try:
         ed.start(project)
-        run_texture(project, shots)
-        run_model(shots)
-        run_libraries(shots)
-        if sizes:
-            run_sizes(project, shots)
+        steps = {"T": lambda: run_texture(project, shots), "M": lambda: run_model(shots),
+                 "L": lambda: run_libraries(shots), "S": lambda: run_sizes(project, shots)}
+        for letter in PHASES:
+            # S, every tab at two sizes, runs when --sizes or --only asks for it
+            if letter in only and (letter != "S" or sizes or "S" in only):
+                t0 = time.monotonic()
+                steps[letter]()
+                print("TIME phase %s %.1f s" % (letter, time.monotonic() - t0), flush=True)
     finally:
         ed.close()
 
@@ -373,7 +380,12 @@ def main() -> int:
     ap.add_argument("--shots", help="a folder for the tabs' screenshots")
     ap.add_argument("--sizes", action="store_true", help="also look at every tab at 1707x912 / 1.5 and 1280x720 / 1.0")
     ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
+    ap.add_argument("--only", help="phase letters: T (texture), M (model), L (libraries), S (sizes)")
     args = ap.parse_args()
+    asked = "".join(p for p in (args.only or "TML").replace(",", "").upper() if p.strip())
+    if any(p not in PHASES for p in asked):
+        print("no such phase in %s: %s" % (PHASES, args.only))
+        return 2
 
     src = os.path.abspath(args.project)
     if not os.path.isdir(src):
@@ -385,7 +397,7 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_previews_")
     copy = os.path.join(work, "QaPreviews")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git"))
+    qa_target.copy_project(src, copy, ignore=(".git",))
     print("running against a copy: " + copy, flush=True)
     # the copy's own session would bring the author's tabs back: it starts from none
     session = os.path.join(copy, "temp", "session.ltx")
@@ -414,7 +426,7 @@ def main() -> int:
                 backups[path] = f.read()
 
     try:
-        run(copy, args.shots, args.sizes)
+        run(copy, args.shots, args.sizes, asked)
     except Exception as exc:  # noqa: BLE001 - the report is the point
         check(False, "the run finished", repr(exc))
     finally:
@@ -422,7 +434,7 @@ def main() -> int:
             with open(path, "wb") as f:
                 f.write(data)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"PREVIEWS: DONE {ok}/{len(results)}", flush=True)

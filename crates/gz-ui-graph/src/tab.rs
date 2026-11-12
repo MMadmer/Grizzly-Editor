@@ -519,7 +519,11 @@ impl GraphTab {
 
     #[must_use]
     pub fn view_pending(&self) -> bool {
-        self.view_frames > 0 || self.canvas.frame_pending() || self.ops_pending() > 0
+        // a tab that came up a moment ago and was not drawn yet has no panes to answer
+        self.view_frames > 0
+            || self.canvas.frame_pending()
+            || self.ops_pending() > 0
+            || self.pane_canvas.is_none()
     }
 
     /// Opens the find drawer with the field focused.

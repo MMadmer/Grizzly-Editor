@@ -591,28 +591,8 @@ impl ToolsPanel {
                     tool_call(editor, "group_tool", &[("action", Value::String("center_pivot".into()))])
                 }
                 Some(1) => {
-                    if let Some(g) = &selected_group
-                        && let gz_scene::ObjData::Group(gd) = &g.data
-                    {
-                        let members: Vec<String> = gd
-                            .members
-                            .iter()
-                            .filter_map(|m| snap.get(*m))
-                            .map(|o| o.name.to_string())
-                            .collect();
-                        *chooser = Some(
-                            Chooser::new(
-                                Purpose::ToolCommand {
-                                    cmd: "group_tool",
-                                    action: "align_pivot",
-                                    arg: "object",
-                                },
-                                "Object",
-                                None,
-                                "",
-                            )
-                            .with_items(members),
-                        );
+                    if let Some(c) = pivot_chooser(snap) {
+                        *chooser = Some(c);
                     }
                 }
                 _ => {}
@@ -1015,6 +995,29 @@ impl ToolsPanel {
             self.random = None;
         }
     }
+}
+
+/// The Group tool's Align to Object... chooser: the objects of the first selected group; a pick
+/// moves the selected groups' pivot to it (`group_tool action=align_pivot`). `None` without a
+/// selected group.
+pub(crate) fn pivot_chooser(snap: &gz_scene::SceneState) -> Option<Chooser> {
+    let g = snap
+        .selected_in_order()
+        .into_iter()
+        .filter_map(|id| snap.get(id))
+        .find(|o| o.class == ObjClass::Group)?;
+    let gz_scene::ObjData::Group(gd) = &g.data else { return None };
+    let members: Vec<String> =
+        gd.members.iter().filter_map(|m| snap.get(*m)).map(|o| o.name.to_string()).collect();
+    Some(
+        Chooser::new(
+            Purpose::ToolCommand { cmd: "group_tool", action: "align_pivot", arg: "object" },
+            "Object",
+            None,
+            "",
+        )
+        .with_items(members),
+    )
 }
 
 /// What a tool adds now: kept for the panel, and handed to the viewport's Place (a spawn

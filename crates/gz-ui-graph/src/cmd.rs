@@ -328,17 +328,19 @@ async fn quest_view(ed: Arc<Editor>, args: Args, _o: Origin) -> Reply {
         apply(t, ctx, req)
     })
     .await?;
-    // the answer is the last frame drawn: held until the frames this call changed are drawn
+    // the answer is the last frame drawn: held until the frames this call changed are drawn, and
+    // until a tab that came up a moment ago (its graph still being read) was drawn at all
     if owe > 0 {
         ed.frames.after(u64::from(owe)).await?;
-        for _ in 0..30 {
-            let id3 = id.clone();
-            let pending = gz_app::on_ui(&ed, move |shell, _| Ok(tab_of(shell, &id3)?.view_pending())).await?;
-            if !pending {
-                break;
-            }
-            ed.frames.after(1).await?;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let id3 = id.clone();
+        let pending = gz_app::on_ui(&ed, move |shell, _| Ok(tab_of(shell, &id3)?.view_pending())).await?;
+        if !pending || std::time::Instant::now() > deadline {
+            break;
         }
+        ed.frames.after(1).await?;
     }
     gz_app::on_ui(&ed, move |shell, ctx| {
         let n = graph_tabs(shell);

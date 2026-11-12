@@ -33,7 +33,11 @@ implementation (tools/catalog/xms_catalog.py and catalog.py), never from the edi
   J  the maintainer listing a module of their own the same way; refused and closed, then a new submission; a
      withdrawal of a module the catalog does not hold, or one listed from another account, sends nothing
 
-    python tools/qa/test_mod_catalog.py --project <project> [--shots <folder>]
+    python tools/qa/test_mod_catalog.py --project <project> [--only A,F,...] [--shots <folder>]
+
+The copy is trimmed: no rawdata, design, docs or textures (no phase is about a package's size). Each phase stands on its
+own setup: one that needs another's work (the key of A, the release of E, the submission of H) runs that phase first,
+without its checks, when it was not asked for.
 """
 from __future__ import annotations
 
@@ -104,6 +108,10 @@ xc = None
 cat = None
 
 results: list[tuple[bool, str]] = []
+# a phase run for another's sake records nothing
+QUIET = [False]
+PHASES = "ABCDEFGHWIJ"
+NEEDS = {"C": "B", "D": "AB", "E": "AB", "F": "ABE", "G": "ABE", "H": "ABEG", "W": "ABEGH", "J": "AB"}
 # every MCP answer, for the secret scan
 answers: list[str] = []
 
@@ -113,13 +121,20 @@ class Abort(Exception):
 
 
 def check(ok: bool, text: str, detail: str = "") -> bool:
+    if QUIET[0]:
+        return bool(ok)
     results.append((bool(ok), text))
     print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
     return bool(ok)
 
 
 def phase(name: str, step, *args) -> None:
-    """One phase; a phase that throws is a FAIL of its own and the next one still runs."""
+    """One phase; a phase that throws is a FAIL of its own and the next one still runs. A phase --only left out runs
+    quietly when a phase asked for needs it, and not at all otherwise."""
+    if name not in ONLY[0]:
+        if name not in NEEDED[0]:
+            return
+        QUIET[0] = True
     t0 = time.monotonic()
     try:
         step(*args)
@@ -129,7 +144,13 @@ def phase(name: str, step, *args) -> None:
         traceback.print_exc()
         check(False, "%s ran to its end" % name, repr(exc))
     finally:
-        print("TIME phase %s %.1f s" % (name, time.monotonic() - t0), flush=True)
+        print("TIME phase %s%s %.1f s" % (name, " (setup)" if QUIET[0] else "", time.monotonic() - t0), flush=True)
+        QUIET[0] = False
+
+
+# the phases asked for, and those they need
+ONLY = [PHASES]
+NEEDED = [""]
 
 
 def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
@@ -283,6 +304,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-qa_github", "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), env=env, startupinfo=startup)
         deadline = time.monotonic() + 240
@@ -447,6 +469,17 @@ def window_drawn(data: bytes, modal: dict) -> str:
     """Why the picture does not hold a drawn window where the editor says the modal is - '' when it does: inside
     the picture, and more than a flat fill there (a window has a frame, a title and text)."""
     x, y, w, h = (int(modal.get(k, -1)) for k in ("x", "y", "w", "h"))
+    try:
+        # Pillow decodes a picture in milliseconds; the decoder below is the fallback where it is missing
+        from PIL import Image
+        import io
+        picture = Image.open(io.BytesIO(data))
+        if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > picture.width or y + h > picture.height:
+            return "its rect %s leaves the %dx%d picture" % ([x, y, w, h], picture.width, picture.height)
+        found = picture.crop((x, y, x + w, y + h)).getcolors(16)
+        return "" if found is None else "its rect %s holds %d colour(s): nothing is drawn there" % ([x, y, w, h], len(found))
+    except ImportError:
+        pass
     width, height, bpp, rows = png_rows(data, y + h)
     if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > width or y + h > height:
         return "its rect %s leaves the %dx%d picture" % ([x, y, w, h], width, height)
@@ -840,6 +873,8 @@ class Run:
 
     # ------------------------------------------------------------------------------ run 1: an author
     def author(self) -> None:
+        if not set(ONLY[0] + NEEDED[0]) & set("ABCDEFGHW"):
+            return
         port = free_port()
         mock = Mock(port, self.work, "mock_author", "--catalog-seed", self.seed)
         editor = None
@@ -998,7 +1033,7 @@ class Run:
         check(r.get("ok") and m.get("thumbnail") == "" and os.path.isfile(ready) and
               os.path.isfile(thumb) == (named != "thumbnail.dds"),
               "B clearing deletes thumbnail.dds only when that is the file the key named", f"{short(r)} {named}")
-        shutil.rmtree(os.path.join(self.copy, "art"), ignore_errors=True)
+        qa_target.remove_tree(os.path.join(self.copy, "art"))
 
         r = mcp("mod_set_manifest", thumbnail=opaque)
         check(r.get("ok") and os.path.isfile(thumb), "B the opaque picture again", short(r))
@@ -1064,7 +1099,7 @@ class Run:
                 if os.path.exists(path):
                     os.remove(path)
             for folder in ("bin", "qa_disguised", "qa_keys"):
-                shutil.rmtree(os.path.join(self.copy, folder), ignore_errors=True)
+                qa_target.remove_tree(os.path.join(self.copy, folder))
 
     # ------------------------------------------------------------------------------ D: the signed descriptor
     def descriptor(self) -> None:
@@ -1527,6 +1562,8 @@ class Run:
 
     # ------------------------------------------------------------------------------ run 2 / J: the maintainer
     def maintainer(self) -> None:
+        if "J" not in ONLY[0]:
+            return
         port = free_port()
         # two VirusTotal requests a window (VT_WINDOW_S, the mock's stand-in for VirusTotal's minute):
         # the free API's refusal, met in seconds
@@ -1648,7 +1685,15 @@ def main() -> int:
                         help="the game repository: its tools/catalog holds the reference implementation")
     parser.add_argument("--shots", help="a folder for screenshots of the Submit to Mod Browser window")
     parser.add_argument("--keep", action="store_true", help="keep the throw-away copy, the catalog home and the mock logs")
+    parser.add_argument("--only", help="phase letters, e.g. A,F (%s)" % PHASES)
     args = parser.parse_args()
+    asked = "".join(p for p in (args.only or PHASES).replace(",", "").upper() if p.strip())
+    only = "".join(p for p in PHASES if p in asked)
+    if any(p not in PHASES for p in asked):
+        print("no such phase in %s: %s" % (PHASES, args.only))
+        return 2
+    ONLY[0] = only
+    NEEDED[0] = "".join(sorted({n for p in only for n in NEEDS.get(p, "")} - set(only)))
     # an answer may carry text the console's code page lacks: printed escaped, never a crash of the harness
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(errors="backslashreplace")
@@ -1669,7 +1714,8 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_catalogproj_")
     copy = os.path.join(work, "QaModCatalog")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore", "releases"))
+    # trimmed (qa_target.TRIMMED): no phase is about the size of a package
+    qa_target.copy_project(src, copy, ignore=(".git", ".gitignore", "releases", "temp", "logs", "backup"), trimmed=True)
     print("running against a copy: " + copy, flush=True)
 
     ini = os.path.join(REPO, "_projects.ini")
@@ -1704,7 +1750,7 @@ def main() -> int:
               "Z the editor's layout and preferences files are back as they were")
         check(snapshot(real_home) == real_before, "Z the real Documents\\Grizzly Editor was not touched")
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
         else:
             print("kept: " + work, flush=True)
 

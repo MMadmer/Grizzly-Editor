@@ -75,7 +75,7 @@ fn tool_name(action: Action, gizmo: GizmoType) -> &'static str {
 
 /// Registers `camera_get`, `camera_set`, `focus_object`, `viewport_navigation`,
 /// `viewport_controls`, `view_mode`, `game_lighting`, `frame_pacing`, `screenshot_viewport`,
-/// `group_thumbnail`.
+/// `group_thumbnail`, `particles_tool`, `spawn_animation`, `viewport_gesture`.
 pub fn register(reg: &mut Registry) {
     reg.add_sync(AREA, "camera_get", |ed, _a, _o| Ok(json!({ "camera": camera_json(&Viewport::of(ed)) })));
     reg.add(AREA, "camera_set", |ed, a, _o| async move { camera_set(&ed, &a) });
@@ -89,6 +89,7 @@ pub fn register(reg: &mut Registry) {
     reg.add(AREA, "group_thumbnail", |ed, _a, _o| async move { group_thumbnail(&ed).await });
     reg.add(AREA, "particles_tool", |ed, a, _o| crate::draw_particles::particles_tool(ed, a));
     reg.add(AREA, "spawn_animation", |ed, a, _o| crate::spawn_anim::spawn_animation(ed, a));
+    reg.add(AREA, "viewport_gesture", |ed, a, _o| crate::gesture::viewport_gesture(ed, a));
 }
 
 /// A change made over MCP is drawn: the pane's next frame builds the pass.
@@ -526,8 +527,12 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         return Err(CmdError::invalid("action must be get, stats, set, or reset"));
     }
     let stamp = ed.frames.current();
-    let (fps, ms) = Viewport::of(ed).pacing(stamp.frame);
+    let (fps, ms, since) = Viewport::of(ed).pacing(stamp.frame);
     let window = ed.frames.has_window();
+    let times: Vec<_> = since
+        .map(|f| ed.frames.times_after(f).into_iter().filter(|t| t.frame <= stamp.frame).collect())
+        .unwrap_or_default();
+    let times = frame_times(&times);
     Ok(json!({
         "active_idle_fps": settings.pref("active_idle_fps").map_or(120, |v| v as u64),
         "background_poll_ms": 0,
@@ -545,7 +550,46 @@ fn frame_pacing(ed: &Arc<Editor>, a: &Args) -> Reply {
         "frames": stamp.frame,
         "waits": 0,
         "waited_ms": 0.0,
+        // the frames presented since the last ask: their own CPU time apart from the wait for the
+        // presentation - a frame that waited for vsync is not a slow frame
+        "sampled_frames": times.count,
+        "frame_work_ms": { "mean": times.work_mean, "p95": times.work_p95, "max": times.work_max },
+        "frame_wait_ms": { "mean": times.wait_mean, "max": times.wait_max },
+        "slow_frames": times.slow,
     }))
+}
+
+/// What `frame_pacing` says of the frames since its last ask.
+#[derive(Default)]
+struct FrameTimes {
+    count: usize,
+    work_mean: f64,
+    work_p95: f64,
+    work_max: f64,
+    wait_mean: f64,
+    wait_max: f64,
+    /// Frames whose own work took more than a 60 Hz frame.
+    slow: usize,
+}
+
+fn frame_times(t: &[gz_editor::FrameTime]) -> FrameTimes {
+    if t.is_empty() {
+        return FrameTimes::default();
+    }
+    let ms = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+    let mut work: Vec<f32> = t.iter().map(|x| x.work_ms).collect();
+    work.sort_by(f32::total_cmp);
+    let n = t.len();
+    let mean = |f: &dyn Fn(&gz_editor::FrameTime) -> f32| ms(t.iter().map(f).sum::<f32>() / n as f32);
+    FrameTimes {
+        count: n,
+        work_mean: mean(&|x| x.work_ms),
+        work_p95: ms(work.get((n * 95 / 100).min(n - 1)).copied().unwrap_or(0.0)),
+        work_max: ms(work.last().copied().unwrap_or(0.0)),
+        wait_mean: mean(&|x| x.wait_ms),
+        wait_max: ms(t.iter().map(|x| x.wait_ms).fold(0.0, f32::max)),
+        slow: t.iter().filter(|x| x.work_ms > 1000.0 / 60.0).count(),
+    }
 }
 
 /// The Group tool's Make Thumbnail (`ESceneGroupTool::MakeThumbnail`): the one selected group

@@ -894,10 +894,12 @@ class Side:
             startup = subprocess.STARTUPINFO()
             startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
             startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+            qa_target.guard_project(self.project)
             cmd = [CPP_EXE, "-nodlg", "-project", self.project] + (["-qa_github"] if qa else [])
             self.proc = subprocess.Popen(cmd, cwd=os.path.dirname(CPP_EXE), startupinfo=startup, env=env)
         else:
             window = SCENARIOS[self.scenario].get("window", False)
+            qa_target.guard_project(self.project)
             cmd = [RUST_EXE, "-mcp_port", str(self.port), "-home", self.home, "-nodlg", "-project", self.project]
             cmd += ([] if window else ["-headless"]) + (["-qa_github"] if qa else [])
             startup = subprocess.STARTUPINFO()

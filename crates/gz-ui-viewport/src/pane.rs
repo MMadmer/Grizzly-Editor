@@ -93,6 +93,8 @@ pub struct ViewportPane {
     maximize_asked: bool,
     /// The canvas as last laid out, points.
     rect: Rect,
+    /// Where the gesture fed over MCP had the pointer last frame.
+    fed_at: Option<Pos2>,
 }
 
 impl ViewportPane {
@@ -112,6 +114,7 @@ impl ViewportPane {
             maximized: false,
             maximize_asked: false,
             rect: Rect::NOTHING,
+            fed_at: None,
         }
     }
 
@@ -133,6 +136,7 @@ impl ViewportPane {
             ui.allocate_exact_size(ui.available_size().max(vec2(32.0, 32.0)), Sense::click_and_drag());
         self.rect = rect;
         let ppp = ctx.pixels_per_point();
+        self.vp.set_pane([rect.width(), rect.height()], ppp);
         let size =
             [(rect.width() * ppp).round().max(32.0) as u32, (rect.height() * ppp).round().max(32.0) as u32];
         let renderer = self.vp.ensure_renderer(cx.editor, cx.gpu);
@@ -269,27 +273,50 @@ impl ViewportPane {
     // ---- the mouse ---------------------------------------------------------------------------
 
     fn input(&mut self, ctx: &egui::Context, canvas: &egui::Response, rect: Rect, ppp: f32, size: [u32; 2]) {
-        let (b, pressed, released, delta, pos, wheel, dt) = ctx.input(|i| {
-            let m = i.modifiers;
-            let b = Buttons {
-                left: i.pointer.primary_down(),
-                right: i.pointer.secondary_down(),
-                middle: i.pointer.middle_down(),
-                shift: m.shift,
-                ctrl: m.ctrl || m.command,
-                alt: m.alt,
-            };
-            (
-                b,
-                i.pointer.any_pressed(),
-                i.pointer.any_released(),
-                i.pointer.delta(),
-                i.pointer.latest_pos(),
-                wheel_steps(i),
-                i.stable_dt,
-            )
-        });
-        let over = canvas.hovered();
+        // a gesture fed over MCP (`viewport_gesture`) stands for the mouse while it lasts
+        let fed = self.vp.gesture_step();
+        let (b, pressed, released, delta, pos, wheel, dt, over) = match fed {
+            Some((step, m, last)) => {
+                let at = rect.min + step.at.to_vec2();
+                let delta = self.fed_at.map_or(Vec2::ZERO, |p| at - p);
+                self.fed_at = (!last).then_some(at);
+                if !last {
+                    ctx.request_repaint();
+                }
+                let b = Buttons {
+                    left: step.left,
+                    right: step.right,
+                    middle: step.middle,
+                    shift: m.shift,
+                    ctrl: m.ctrl,
+                    alt: m.alt,
+                };
+                (b, step.pressed, step.released, delta, Some(at), 0.0, ctx.input(|i| i.stable_dt), true)
+            }
+            None => {
+                let (b, pressed, released, delta, pos, wheel, dt) = ctx.input(|i| {
+                    let m = i.modifiers;
+                    let b = Buttons {
+                        left: i.pointer.primary_down(),
+                        right: i.pointer.secondary_down(),
+                        middle: i.pointer.middle_down(),
+                        shift: m.shift,
+                        ctrl: m.ctrl || m.command,
+                        alt: m.alt,
+                    };
+                    (
+                        b,
+                        i.pointer.any_pressed(),
+                        i.pointer.any_released(),
+                        i.pointer.delta(),
+                        i.pointer.latest_pos(),
+                        wheel_steps(i),
+                        i.stable_dt,
+                    )
+                });
+                (b, pressed, released, delta, pos, wheel, dt, canvas.hovered())
+            }
+        };
         let pos = pos.unwrap_or(rect.center());
         // C++: a pointer outside is pinned to the canvas's edge
         let clamped = pos2(pos.x.clamp(rect.min.x, rect.max.x), pos.y.clamp(rect.min.y, rect.max.y));
@@ -1110,7 +1137,7 @@ fn click_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons, 
     let far = vp.read(|s| s.nav.far);
     let ed = editor.clone();
     let origin = ed.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         if !b.ctrl {
             let _ = svc
                 .store
@@ -1159,7 +1186,7 @@ fn marquee_select(editor: &Arc<Editor>, vp: &Arc<Viewport>, size: [u32; 2], a: G
     let Ok(svc) = SceneService::of(editor) else { return };
     let cam = vp.read(|s| s.nav.camera());
     let ed = editor.clone();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let snap = svc.store.snapshot();
         let lib = svc.library.clone();
         let class = snap.tools.target;
@@ -1328,7 +1355,7 @@ fn place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let item = vp.read(|s| s.place.get(&class).cloned());
     let ed = editor.clone();
     let vp = vp.clone();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let Some((at, normal)) = pick_ground(&ed, &svc, ray, object_snap, grid, far).await else { return };
         let origin = ed.ui_origin();
         let up = normal_align.then_some(normal);

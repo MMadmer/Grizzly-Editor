@@ -119,6 +119,7 @@ enum Msg<S: State> {
     Undo(oneshot::Sender<Option<String>>),
     Redo(oneshot::Sender<Option<String>>),
     Seal,
+    Flush(oneshot::Sender<()>),
 }
 
 struct Shared<S> {
@@ -238,6 +239,14 @@ impl<S: State> Store<S> {
         let _ = self.tx.send(Msg::Seal);
     }
 
+    /// Resolves once everything queued before it (`post` included) is applied and published.
+    pub async fn flush(&self) {
+        let (done, rx) = oneshot::channel();
+        if self.tx.send(Msg::Flush(done)).is_ok() {
+            let _ = rx.await;
+        }
+    }
+
     fn closed(&self) -> CmdError {
         CmdError::internal(format!("the {} store is closed", self.shared.name))
     }
@@ -317,6 +326,9 @@ async fn run<S: State>(shared: Arc<Shared<S>>, mut rx: mpsc::UnboundedReceiver<M
                 let _ = done.send(label);
             }
             Msg::Seal => hist.seal(),
+            Msg::Flush(done) => {
+                let _ = done.send(());
+            }
         }
     }
 }

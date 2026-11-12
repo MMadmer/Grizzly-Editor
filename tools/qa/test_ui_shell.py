@@ -19,7 +19,9 @@ What it proves:
      tasks popover while no job runs; the palette ranks the Output Log panel first for 'log' and shows no COMMAND_* id
      as a row's label; opened, it is the modal on top
 
-    python tools/qa/test_ui_shell.py --project <project> [--shots <folder>]
+    python tools/qa/test_ui_shell.py --project <project> [--only A,F,...] [--shots <folder>]
+
+Each phase stands on its own: it sets up the tab, panel or size it looks at.
 
 The ini files the editor writes when it closes (_projects.ini, level.ini, level_imgui.ini) come back byte for byte.
 """
@@ -49,6 +51,9 @@ COMPACT = (1280, 720)    # pt: Compact
 NARROW = (1000, 700)     # pt: under 1100 the caption's menus fold
 
 results: list[tuple[bool, str]] = []
+
+
+PHASES = "ABCDEFGH"
 
 
 def check(ok: bool, text: str, detail: str = "") -> bool:
@@ -87,6 +92,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
@@ -173,12 +179,26 @@ def near(a: float, b: float, tol: float) -> bool:
     return abs(a - b) <= tol
 
 
-def run(project: str, shots: str | None) -> None:
+def run(project: str, shots: str | None, only: str) -> None:
     ed = Editor()
     try:
         ed.start(project)
         before_scale = float(mcp("ui_list").get("ui_scale") or 1.0)
+        contract = mcp("ui_contract")
+        for letter in PHASES:
+            if letter not in only:
+                continue
+            t0 = time.monotonic()
+            try:
+                PHASE[letter](project, shots, ed, before_scale, contract)
+            except Exception as exc:  # noqa: BLE001 - one phase's surprise must not end the others
+                check(False, "%s ran to its end" % letter, repr(exc))
+            print("TIME phase %s %.1f s" % (letter, time.monotonic() - t0), flush=True)
+    finally:
+        ed.close()
 
+
+def phase_a(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ A: the frame reports itself
         st = mcp("state")
         check(st.get("active_tab") == "level" and any(t.get("id") == "level" for t in st.get("tabs", [])),
@@ -199,6 +219,10 @@ def run(project: str, shots: str | None) -> None:
               short(lst))
         shot(shots, "shell_wide")
 
+
+
+def phase_b(project, shots, ed, before_scale, contract) -> None:
+        resize(*WIDE)
         # ------------------------------------------------------------ B: the caption and its hit test
         tb = mcp("titlebar_info")
         dpi = float(tb.get("dpi") or 1.0)
@@ -224,6 +248,9 @@ def run(project: str, shots: str | None) -> None:
             got = hit_test(hwnd, band[2] - 23 * dpi, cy)
             check(got == HTCLIENT, "B the close button takes the mouse (HTCLIENT)", "hit %d" % got)
 
+
+
+def phase_c(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ C: the major tabs
         o = mcp("ui_tab", action="open", kind="characters")
         check(o.get("ok") and (o.get("tab") or {}).get("id") == "characters", "C a tool tab opens and comes up at once", short(o))
@@ -260,6 +287,9 @@ def run(project: str, shots: str | None) -> None:
             with open(os.path.join(project, rel), "rb") as f:
                 check(f.read() == on_disk, "C the discarded edit never reached the file")
 
+
+
+def phase_d(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ D: the drawers over a document
         mcp("ui_tab", action="open", kind="characters")
         for which in ("log", "content"):
@@ -279,6 +309,9 @@ def run(project: str, shots: str | None) -> None:
         mcp("ui_tab", action="activate", id="characters")
         mcp("ui_tab", action="close", id="characters")
 
+
+
+def phase_e(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ E: the Level panels
         mcp("ui_tab", action="activate", id="level")
         for panel in ("world_outliner", "details", "level_settings", "tools"):
@@ -313,6 +346,9 @@ def run(project: str, shots: str | None) -> None:
         check(o.get("active_tab") == "level", "E opening a panel from another tab brings Level up", short(o))
         mcp("ui_tab", action="close", id="characters")
 
+
+
+def phase_f(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ F: a dialog, centred at both sizes
         def centred(tag: str) -> None:
             lst = mcp("ui_list")
@@ -340,6 +376,9 @@ def run(project: str, shots: str | None) -> None:
             check(cd.get("ok") and not any(d.get("id") == "import_base_scene" for d in lst.get("dialogs", [])),
                   "F it closes over ui_dialog", short(lst))
 
+
+
+def phase_g(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ G: folding, size classes, the scale
         resize(*NARROW)
         tb = mcp("titlebar_info")
@@ -365,6 +404,9 @@ def run(project: str, shots: str | None) -> None:
                   "G ui_scale %.1f: the caption is 32 pt at that scale" % scale, short(tb))
         mcp("ui_scale", value=before_scale)
 
+
+
+def phase_h(project, shots, ed, before_scale, contract) -> None:
         # ------------------------------------------------------------ H: menus and the palette
         for menu in ("File", "Edit", "Mod", "Window"):
             p = mcp("ui_popup", show="menu:" + menu)
@@ -401,8 +443,10 @@ def run(project: str, shots: str | None) -> None:
         mcp("ui_tab", action="activate", id="level")
         check(ex.get("ok"), "H a palette row that is a drawer runs over MCP", short(ex))
         mcp("ui_drawer", action="close")
-    finally:
-        ed.close()
+
+
+
+PHASE = {"A": phase_a, "B": phase_b, "C": phase_c, "D": phase_d, "E": phase_e, "F": phase_f, "G": phase_g, "H": phase_h}
 
 
 def main() -> int:
@@ -410,7 +454,12 @@ def main() -> int:
     ap.add_argument("--project", required=True, help="a project to COPY and run against")
     ap.add_argument("--shots", help="a folder for the screenshots")
     ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
+    ap.add_argument("--only", help="phase letters, e.g. B,F (%s)" % PHASES)
     args = ap.parse_args()
+    asked = "".join(p for p in (args.only or PHASES).replace(",", "").upper() if p.strip())
+    if any(p not in PHASES for p in asked):
+        print("no such phase in %s: %s" % (PHASES, args.only))
+        return 2
 
     src = os.path.abspath(args.project)
     if not os.path.isdir(src):
@@ -418,7 +467,7 @@ def main() -> int:
         return 2
     work = tempfile.mkdtemp(prefix="grizzly_shellproj_")
     copy = os.path.join(work, "QaShell")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", "releases", "temp"))
+    qa_target.copy_project(src, copy, ignore=(".git", "releases", "temp",))
     print("running against a copy: " + copy, flush=True)
     # project.ltx names this machine's paths: the copy must name its own folder
     pl = os.path.join(copy, "project.ltx")
@@ -439,7 +488,7 @@ def main() -> int:
         except OSError:
             saved[path] = None
     try:
-        run(copy, args.shots)
+        run(copy, args.shots, asked)
     except Exception as exc:  # noqa: BLE001 - the report is the point
         check(False, "the run finished", repr(exc))
     finally:
@@ -451,7 +500,7 @@ def main() -> int:
                 with open(path, "wb") as f:
                     f.write(data)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
     restored = all((open(p, "rb").read() if os.path.isfile(p) else None) == d for p, d in saved.items())
     check(restored, "the ini files are back byte for byte")
     ok = sum(1 for good, _ in results if good)

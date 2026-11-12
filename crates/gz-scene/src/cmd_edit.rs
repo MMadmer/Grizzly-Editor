@@ -548,14 +548,139 @@ async fn object_motion(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
 
 // ---- the Object, Spawn and Group tools' commands -----------------------------------------------
 
+/// Three numbers: `[x, y, z]` or `"x, y, z"`; one number stands for all three.
+fn vec3_arg(a: &Args, key: &str) -> Result<Option<crate::math::Vec3>, CmdError> {
+    let bad = || CmdError::invalid(format!("'{key}' must be three numbers"));
+    let Some(v) = a.get(key) else { return Ok(None) };
+    let nums: Vec<f32> = match v {
+        Value::Array(xs) => {
+            xs.iter().map(|x| x.as_f64().map(|f| f as f32)).collect::<Option<_>>().ok_or_else(bad)?
+        }
+        Value::String(s) => {
+            s.split(',').map(|p| p.trim().parse::<f32>().ok()).collect::<Option<_>>().ok_or_else(bad)?
+        }
+        Value::Number(n) => vec![n.as_f64().ok_or_else(bad)? as f32],
+        _ => return Err(bad()),
+    };
+    match nums.as_slice() {
+        [x] if x.is_finite() => Ok(Some(crate::math::Vec3::splat(*x))),
+        [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => {
+            Ok(Some(crate::math::Vec3::new(*x, *y, *z)))
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// The Object tool's Randomize Added Objects and its Random Settings, as `object_tool
+/// action=random` answers them (rotations in degrees).
+fn random_json(part: &crate::tools::ToolPart) -> Value {
+    use crate::tools::{
+        FL_APPEND_RANDOM, FL_APPEND_RANDOM_PROPORTIONAL, FL_APPEND_RANDOM_ROTATION, FL_APPEND_RANDOM_SCALE,
+    };
+    let r = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+    let v = |x: crate::math::Vec3| json!([r(x.x), r(x.y), r(x.z)]);
+    let deg = |x: crate::math::Vec3| json!([r(x.x.to_degrees()), r(x.y.to_degrees()), r(x.z.to_degrees())]);
+    let crate::tools::ToolOpts::Objects(o) = &part.opts else { return json!({ "on": false }) };
+    json!({
+        "on": part.flags & FL_APPEND_RANDOM != 0,
+        "objects": o.objects.iter().map(|x| x.as_str()).collect::<Vec<_>>(),
+        "scale": part.flags & FL_APPEND_RANDOM_SCALE != 0,
+        "proportional": part.flags & FL_APPEND_RANDOM_PROPORTIONAL != 0,
+        "min_scale": v(o.min_scale),
+        "max_scale": v(o.max_scale),
+        "rotate": part.flags & FL_APPEND_RANDOM_ROTATION != 0,
+        "min_rotation": deg(o.min_rotation),
+        "max_rotation": deg(o.max_rotation),
+    })
+}
+
+/// `object_tool action=random [on=] [objects=] [scale=] [proportional=] [min_scale=] [max_scale=]
+/// [rotate=] [min_rotation=] [max_rotation=]`: Randomize Added Objects and the Random Append
+/// sheet (`FillAppendRandomProperties`). What is left out keeps its value; rotations are degrees;
+/// `objects` (a list, at most 32) is what a click of Place picks from. One undo step.
+async fn object_random(ed: &Arc<Editor>, svc: &SceneService, a: &Args, o: Origin) -> Reply {
+    use crate::tools::{
+        FL_APPEND_RANDOM, FL_APPEND_RANDOM_PROPORTIONAL, FL_APPEND_RANDOM_ROTATION, FL_APPEND_RANDOM_SCALE,
+    };
+    let snap = svc.store.snapshot();
+    let mut t = snap.tools.part(ObjClass::SceneObject).clone();
+    let before = t.clone();
+    for (key, bit) in [
+        ("on", FL_APPEND_RANDOM),
+        ("scale", FL_APPEND_RANDOM_SCALE),
+        ("proportional", FL_APPEND_RANDOM_PROPORTIONAL),
+        ("rotate", FL_APPEND_RANDOM_ROTATION),
+    ] {
+        if let Some(on) = a.bool(key) {
+            t.flags = if on { t.flags | bit } else { t.flags & !bit };
+        }
+    }
+    let objects: Option<Vec<gz_base::SmolStr>> = match a.get("objects") {
+        None => None,
+        Some(Value::Array(xs)) => {
+            Some(xs.iter().filter_map(Value::as_str).map(gz_base::SmolStr::new).collect())
+        }
+        Some(Value::String(s)) => Some(
+            s.split([',', ';']).map(str::trim).filter(|x| !x.is_empty()).map(gz_base::SmolStr::new).collect(),
+        ),
+        Some(_) => return Err(CmdError::invalid("'objects' must be a list of library objects")),
+    };
+    let (min_s, max_s) = (vec3_arg(a, "min_scale")?, vec3_arg(a, "max_scale")?);
+    let (min_r, max_r) = (vec3_arg(a, "min_rotation")?, vec3_arg(a, "max_rotation")?);
+    if let crate::tools::ToolOpts::Objects(opts) = &mut t.opts {
+        if let Some(list) = objects {
+            // every one has to load: a click would log "Can't load reference object" otherwise
+            for name in &list {
+                let (lib, key) = (svc.library.clone(), crate::library::normalize(name));
+                if ed.exec.io(move || lib.load(&key)).await.is_err() {
+                    return Err(CmdError::not_found(format!("no library object '{name}'")));
+                }
+            }
+            opts.objects = list.into_iter().take(32).collect();
+        }
+        let rad = |v: crate::math::Vec3| {
+            crate::math::Vec3::new(v.x.to_radians(), v.y.to_radians(), v.z.to_radians())
+        };
+        if let Some(v) = min_s {
+            opts.min_scale = v;
+        }
+        if let Some(v) = max_s {
+            opts.max_scale = v;
+        }
+        if let Some(v) = min_r {
+            opts.min_rotation = rad(v);
+        }
+        if let Some(v) = max_r {
+            opts.max_rotation = rad(v);
+        }
+    }
+    if t != before {
+        svc.store
+            .send(
+                SceneCmd::SetWorld {
+                    level: Box::new(snap.meta.level.clone()),
+                    tools: vec![t],
+                    serial: snap.serial,
+                    label: "Random Settings".into(),
+                },
+                o,
+            )
+            .await?;
+    }
+    Ok(json!({ "random": random_json(svc.store.snapshot().state.tools.part(ObjClass::SceneObject)) }))
+}
+
 /// `object_tool action=reset_surfaces [selected=true]`: `UIObjectTool::ClearSurface` - the
 /// visible scene objects (the selected ones with `selected`) wear their reference's surfaces
-/// again. One undo step.
+/// again. One undo step. `action=random`: see [`object_random`].
 async fn object_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let svc = SceneService::of(&ed)?;
     let action = a.need("action")?.to_ascii_lowercase();
+    if action == "random" {
+        return object_random(&ed, &svc, &a, o).await;
+    }
     if action != "reset_surfaces" {
-        return Err(CmdError::invalid(format!("unknown action '{action}' (reset_surfaces)")));
+        return Err(CmdError::invalid(format!("unknown action '{action}' (reset_surfaces, random)")));
     }
     let selected = a.bool("selected").unwrap_or(true);
     let snap = svc.store.snapshot();
@@ -647,6 +772,35 @@ async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let action = a.need("action")?.to_ascii_lowercase();
     let snap = svc.store.snapshot();
     match action.as_str() {
+        // the panel's Group and Ungroup buttons
+        "group" => {
+            if snap.selected_in_order().is_empty() {
+                return Err(CmdError::invalid("No object(s) selected."));
+            }
+            let name = match a.text("name") {
+                Some(n) => n.to_owned(),
+                None => snap.gen_name(Some("group")),
+            };
+            let reply = svc.store.send(SceneCmd::Group { name: name.as_str().into() }, o).await?;
+            let id = match reply {
+                SceneReply::Id(id) => id.0,
+                _ => 0,
+            };
+            let snap = svc.store.snapshot();
+            let members = match snap.get(crate::model::ObjId(id)).map(|g| &g.data) {
+                Some(crate::model::ObjData::Group(g)) => g.members.len(),
+                _ => 0,
+            };
+            Ok(json!({ "object": { "name": name, "id": id }, "members": members }))
+        }
+        "ungroup" => {
+            let n = snap.of_class(ObjClass::Group).filter(|g| snap.is_selected(g.id)).count();
+            if n == 0 {
+                return Err(CmdError::invalid("No group selected."));
+            }
+            svc.store.send(SceneCmd::Ungroup, o).await?;
+            Ok(json!({ "ungrouped": n }))
+        }
         "center_pivot" | "align_pivot" => {
             let target = a.text("object").map(str::to_lowercase);
             if action == "align_pivot" && target.is_none() {
@@ -768,7 +922,7 @@ async fn group_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
             Ok(json!({ "object": { "name": name, "id": id } }))
         }
         other => Err(CmdError::invalid(format!(
-            "unknown action '{other}' (center_pivot, align_pivot, save_as, reload, place)"
+            "unknown action '{other}' (group, ungroup, center_pivot, align_pivot, save_as, reload, place)"
         ))),
     }
 }

@@ -18,6 +18,10 @@
 //
 //	GET  /__state       the releases, tags, upload count and request log
 //	POST /__shutdown
+//	POST /__restart     the request body, a JSON array of command-line arguments,
+//	                    becomes the mock's options and its state starts afresh on the
+//	                    same port, as a new process would (--port is ignored): a
+//	                    harness that needs another switch skips a process start
 //	GET  /__catalog     {"repositories": {"<catalog>": {"branches": {"<name>":
 //	                    {"sha", "message", "files": {path: text},
 //	                    "files_base64": {path: base64}}}}}, "issues": [the issue
@@ -96,6 +100,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -106,26 +111,56 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 )
 
 func main() {
 	cfg := parseArgs(os.Args[1:])
-	m := newMock(cfg)
+	m, err := build(cfg, make(chan struct{}, 1))
+	if err != nil {
+		die("%v", err)
+	}
 
+	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.port)))
+	if err != nil {
+		die("%v", err)
+	}
+	m.port = listener.Addr().(*net.TCPAddr).Port
+	fmt.Printf("{\"port\": %d}\n", m.port)
+
+	h := &holder{current: m}
+	server := &http.Server{Handler: h, ReadHeaderTimeout: socketTimeout, ErrorLog: log.New(io.Discard, "", 0)}
+	go server.Serve(listener)
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+	select {
+	case <-m.stop:
+	case <-interrupt:
+	}
+	listener.Close()
+}
+
+// build makes a mock of the options: the seeds read, the log opened. Every mock of one process
+// shares stop.
+func build(cfg *config, stop chan struct{}) (*mock, error) {
+	m := newMock(cfg)
+	m.stop = stop
 	if cfg.seed != "" {
 		value, err := readJSONFile(cfg.seed)
 		if err == nil {
 			err = m.seedReleases(value)
 		}
 		if err != nil {
-			die("--seed: %v", err)
+			return nil, fmt.Errorf("--seed: %v", err)
 		}
 	}
 	files := map[string][]byte{}
 	if cfg.catalogSeed != "" {
 		var err error
 		if files, err = readTree(cfg.catalogSeed); err != nil {
-			die("--catalog-seed: %v", err)
+			return nil, fmt.Errorf("--catalog-seed: %v", err)
 		}
 	}
 	m.seedCatalog(files)
@@ -136,35 +171,67 @@ func main() {
 			seed, err = readVtSeed(value)
 		}
 		if err != nil {
-			die("--vt-seed: %v", err)
+			return nil, fmt.Errorf("--vt-seed: %v", err)
 		}
 		m.vtApplySeed(seed)
 	}
 	if cfg.log != "" {
 		file, err := os.OpenFile(cfg.log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
-			die("--log: %v", err)
+			return nil, fmt.Errorf("--log: %v", err)
 		}
 		m.logFile = file
 	}
+	return m, nil
+}
 
-	listener, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.port)))
+// holder serves the current mock and swaps in a new one on POST /__restart.
+type holder struct {
+	lock    sync.RWMutex
+	current *mock
+}
+
+func (h *holder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" && strings.Trim(r.URL.Path, "/") == "__restart" {
+		h.restart(w, r)
+		return
+	}
+	h.lock.RLock()
+	m := h.current
+	h.lock.RUnlock()
+	m.ServeHTTP(w, r)
+}
+
+func (h *holder) restart(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(r.Body)
+	var args []string
+	if err == nil {
+		err = json.Unmarshal(raw, &args)
+	}
 	if err != nil {
-		die("%v", err)
+		http.Error(w, "the body must be a JSON array of arguments", http.StatusBadRequest)
+		return
 	}
-	m.port = listener.Addr().(*net.TCPAddr).Port
-	fmt.Printf("{\"port\": %d}\n", m.port)
-
-	server := &http.Server{Handler: m, ReadHeaderTimeout: socketTimeout, ErrorLog: log.New(io.Discard, "", 0)}
-	go server.Serve(listener)
-
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
-	select {
-	case <-m.stop:
-	case <-interrupt:
+	cfg, err := parseArgsChecked(args)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
-	listener.Close()
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	old := h.current
+	m, err := build(cfg, old.stop)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	m.port = old.port
+	if old.logFile != nil {
+		old.logFile.Close()
+	}
+	h.current = m
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, "{\"port\": %d}\n", m.port)
 }
 
 func die(format string, args ...any) {

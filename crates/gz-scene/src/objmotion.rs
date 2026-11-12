@@ -450,7 +450,12 @@ mod tests {
         assert_eq!(nearest_keys(&m, 0.5), (0.0, 1.0));
         // the chunk reads back
         let raw = MotionRaw::from_model(&m, 0.25);
-        assert_eq!(raw.model().unwrap().envelopes[0].keys.len(), 2);
+        let back = raw.model().unwrap();
+        assert_eq!(back.envelopes[0].keys.len(), 2);
+        // and so do the values: the pose half way is between the two keys
+        let (p, r) = pose_at(&back, 0.5);
+        assert!((p - Vec3::new(2.0, 2.0, 2.0)).length() < 1e-3, "{p:?}");
+        assert!((r - Vec3::new(0.1, 0.2, 0.3)).length() < 1e-3, "{r:?}");
     }
 
     #[test]

@@ -4,7 +4,8 @@ editor home, project copy and mock port, with a hard timeout, and each suite's l
 
     python tools/qa/run_all.py                 every suite
     python tools/qa/run_all.py --failed        only the suites that failed last time
-    python tools/qa/run_all.py test_pda ...    the suites named (extra arguments after --)
+    python tools/qa/run_all.py test_pda ...    the suites named (extra arguments after --extra)
+    python tools/qa/run_all.py test_pda --only B,C   only those phases of the suite named
     python tools/qa/run_all.py -j 4            four at a time (default: a quarter of the cores)
 
 Prints `PASS/FAIL <suite> <seconds> <failed checks>` per suite and a total; exit code 1 on any
@@ -42,7 +43,8 @@ SUITES: dict[str, dict] = {
     "test_asset_icons": {"args": ["--project", OD], "timeout": 120},
     "test_unicode_names": {"args": ["--project", OD], "timeout": 120},
     "test_build_contents": {"args": ["--project", OD], "timeout": 180},
-    "test_build_job": {"args": ["--project", OD], "timeout": 180},
+    # it times the UI's frames during a build: alone, like the other suites that time something
+    "test_build_job": {"args": ["--project", OD], "timeout": 180, "alone": True},
     "test_characters": {"args": ["--project", OD], "timeout": 180},
     "test_behaviours": {"args": ["--project", OD], "timeout": 180},
     "test_graph_ui": {"args": ["--project", OD], "timeout": 180},
@@ -50,6 +52,7 @@ SUITES: dict[str, dict] = {
     "test_screens": {"args": ["--project", OD], "timeout": 180},
     "test_world": {"args": ["--project", TEST], "timeout": 180},
     "test_properties": {"args": ["--project", TEST], "timeout": 180},
+    "test_scene_tools": {"args": ["--project", TEST], "timeout": 120},
     "test_previews": {"args": ["--project", OD], "timeout": 180},
     "test_mod_publish": {"args": ["--project", OD], "timeout": 240},
     "test_mod_catalog": {"args": ["--project", OD], "timeout": 300},
@@ -136,8 +139,15 @@ def run_one(name: str, extra: list[str], port_lock: threading.Lock) -> dict:
             code = proc.wait(timeout=spec["timeout"])
         except subprocess.TimeoutExpired:
             timed_out = True
-            proc.kill()
-            code = proc.wait(timeout=30)
+            # the whole tree: the suite's Python, its editor, its mock - none of them may outlive the run
+            tree = subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, text=True)
+            print("! %s timed out after %d s: its process tree was ended (%s)"
+                  % (name, spec["timeout"], (tree.stdout or tree.stderr).strip().replace(chr(10), "; ")[:300]), flush=True)
+            try:
+                code = proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                code = proc.wait(timeout=30)
         reader.join(timeout=30)
     seconds = time.monotonic() - t0
     shutil.rmtree(home, ignore_errors=True)
@@ -157,6 +167,7 @@ def main() -> int:
     ap.add_argument("suites", nargs="*", help="suites to run (default: all)")
     ap.add_argument("--failed", action="store_true", help="only the suites that failed last time")
     ap.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 4))
+    ap.add_argument("--only", help="phases of the one suite named, passed to it as --only")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="arguments for a single suite")
     args = ap.parse_args()
 
@@ -181,7 +192,10 @@ def main() -> int:
         print("Rust editors of an earlier run are still running (pids %s): close them first" % left)
         return 2
     os.makedirs(OUT, exist_ok=True)
-    extra = args.extra if len(names) == 1 else []
+    if args.only and len(names) != 1:
+        print("--only names phases of ONE suite: name it")
+        return 2
+    extra = (["--only", args.only] if args.only else []) + (args.extra if len(names) == 1 else [])
     together = [n for n in names if not SUITES[n].get("alone")]
     alone = [n for n in names if SUITES[n].get("alone")]
     lock = threading.Lock()
@@ -190,7 +204,7 @@ def main() -> int:
 
     def report(n: str, r: dict) -> None:
         results[n] = r
-        state[n] = dict(r, when=time.strftime("%Y-%m-%d %H:%M:%S"))
+        state[n] = dict(r, when=time.strftime("%Y-%m-%d %H:%M:%S"), **({"only": args.only} if args.only else {}))
         save_state(state)
         print("%s %-24s %6.1f s %s" % ("PASS" if r["ok"] else "FAIL", n, r["seconds"],
                                      "; ".join(r["failed"][:6]) + (" ..." if len(r["failed"]) > 6 else "")),

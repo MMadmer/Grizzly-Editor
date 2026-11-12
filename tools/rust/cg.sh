@@ -38,6 +38,8 @@ log="Intermediate/cg-$$.log"
 cargo "$@" > "$log" 2>&1
 code=$?
 grep -E '^(error|warning)' -A 16 "$log" | head -"${CG_LINES:-120}"
+# a test run: its failures and its counts
+grep -E '^test .* FAILED$|panicked at|^test result:' "$log" | head -"${CG_LINES:-120}"
 tail -1 "$log"
 rm -f "$log"
 exit $code

@@ -195,6 +195,33 @@ fn ai_state(s: &SceneState) -> Value {
     })
 }
 
+/// `aimap_tool action=stats`: what the map is made of over the snap list's model - patches with
+/// a node, floors over each other, nodes made twice or off the ground, and the patches the model
+/// gives ground for (one floor's worth of nodes).
+async fn ai_stats(ed: &Arc<Editor>, svc: &Arc<SceneService>) -> Result<Value, CmdError> {
+    let snap = svc.store.snapshot();
+    let nodes = snap.bulk.ai_map.as_ref().map(|a| a.all_nodes()).unwrap_or_default();
+    let ps = snap.bulk.ai_map.as_ref().map_or(0.7, |a| a.header.params.patch_size);
+    let model = if ai_names(&snap).is_empty() { None } else { Some(ai_model(ed, svc).await?) };
+    let m2 = model.clone();
+    let st = ed.exec.cpu(move || aimap::stats(&nodes, ps, m2.as_deref())).await;
+    let area = |cells: usize| (cells as f64 * f64::from(ps) * f64::from(ps)).round();
+    Ok(json!({
+        "nodes": st.nodes,
+        "patch_size": ps,
+        "cells": st.cells,
+        "layered_cells": st.layered_cells,
+        "max_per_cell": st.max_per_cell,
+        "duplicates": st.duplicates,
+        "off_grid": st.off_grid,
+        "ground_cells": if model.is_some() { json!(st.ground_cells) } else { Value::Null },
+        "ground_m2": if model.is_some() { json!(area(st.ground_cells)) } else { Value::Null },
+        "covered_m2": area(st.cells),
+        "off_ground": if model.is_some() { json!(st.off_ground) } else { Value::Null },
+        "model_faces": model.as_ref().map_or(0, |m| m.tris.len()),
+    }))
+}
+
 /// An AI map edit computed on the working copy: `f` edits it and answers the label (`None`:
 /// nothing changed), the kind of change and the reply.
 async fn ai_edit<F>(ed: &Arc<Editor>, svc: &Arc<SceneService>, o: Origin, f: F) -> Result<Value, CmdError>
@@ -493,6 +520,7 @@ async fn aimap_tool(ed: Arc<Editor>, a: Args, o: Origin) -> Reply {
     let action = a.str_or("action", "state").to_owned();
     match action.as_str() {
         "state" => Ok(ai_state(&svc.store.snapshot())),
+        "stats" => ai_stats(&ed, &svc).await,
         "set" => {
             let s = svc.store.snapshot();
             let mode = match a.str("link_mode").or_else(|| a.str("mode")) {

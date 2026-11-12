@@ -29,7 +29,7 @@ pub use camera::{CameraPose, ViewCamera};
 pub use editor::{
     AppPaths, DirtyDoc, DirtySource, Editor, EditorOptions, Flags, ProjectSession, SettleFuture,
 };
-pub use frames::{FrameClock, FrameStamp};
+pub use frames::{FrameClock, FrameStamp, FrameTime};
 pub use notices::{Notice, NoticeKind, Notices};
 pub use registry::{CommandInfo, Registry, Reply, error_reply, ok_reply};
 pub use saver::AutoSave;

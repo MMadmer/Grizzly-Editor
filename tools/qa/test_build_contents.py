@@ -76,6 +76,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 240
@@ -362,7 +363,7 @@ def run(project: str) -> None:
             again = mcp("mod_export", target=target.replace("\\", "/"))
             check(again.get("ok") and os.path.isfile(keep) and not os.path.exists(inner),
                   "F the clean build removes the link and leaves what it pointed at", json.dumps(again)[:200])
-        shutil.rmtree(module, ignore_errors=True)
+        qa_target.remove_tree(module)
         if check(junction(module, linked), "F the module folder itself is a junction"):
             refused = mcp("mod_export", target=target.replace("\\", "/"))
             check(not refused.get("ok") and "link" in str(refused.get("error")) and os.path.isfile(keep),
@@ -402,7 +403,7 @@ def run(project: str) -> None:
     finally:
         ed.close()
         for d in (target, pkg, linked):
-            shutil.rmtree(d, ignore_errors=True)
+            qa_target.remove_tree(d)
 
 
 def main() -> int:
@@ -418,7 +419,7 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_buildproj_")
     copy = os.path.join(work, "QaBuildContents")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore"))
+    qa_target.copy_project(src, copy, ignore=(".git", ".gitignore",))
     print("running against a copy: " + copy, flush=True)
 
     ini = os.path.join(REPO, "_projects.ini")
@@ -436,7 +437,7 @@ def main() -> int:
             with open(ini, "wb") as f:
                 f.write(ini_backup)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"BUILD CONTENTS: DONE {ok}/{len(results)}", flush=True)

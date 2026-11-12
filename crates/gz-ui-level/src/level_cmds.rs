@@ -1130,6 +1130,23 @@ pub(crate) fn install(b: &mut ShellBuilder) {
         }),
         draw: Box::new(|_, _| {}),
     });
+    // the Group tool's Align to Object...: the chooser of the selected group's objects, to be
+    // looked at; `group_tool action=align_pivot object=` is the pick
+    b.dialog(DialogDesc {
+        id: SmolStr::new("group_pivot"),
+        window: SmolStr::new("Select Object###dlg.choose"),
+        needs_project: true,
+        open: Box::new(|cx| {
+            let svc = scene(cx.editor).ok_or_else(|| "no scene is open".to_owned())?;
+            if crate::tools::pivot_chooser(&svc.store.snapshot()).is_none() {
+                return Err("Select a group first".to_owned());
+            }
+            svc.view.lock().tool_chooser = Some("group_pivot".to_owned());
+            cx.editor.exec.wake().ping();
+            Ok(())
+        }),
+        draw: Box::new(|_, _| {}),
+    });
     b.dialog(DialogDesc {
         id: SmolStr::new("scene_summary"),
         window: SmolStr::new("Summary Info###dlg.scene_summary"),

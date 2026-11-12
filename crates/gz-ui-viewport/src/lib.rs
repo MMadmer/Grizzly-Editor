@@ -63,6 +63,7 @@ pub mod draw_details;
 mod draw_extra;
 pub mod draw_particles;
 pub mod draw_wallmarks;
+mod gesture;
 pub mod gizmo;
 pub mod keys;
 pub mod lighting;

@@ -8,6 +8,7 @@
 //! - [`started_minimized`] - whether the launcher asked for a minimised window;
 //! - [`write_minidump`], [`install_fatal_exception_dump`] - what a crash leaves behind;
 //! - [`foreground_is_ours`] - whether a window of this process is in front;
+//! - [`raise_this_thread_priority`] - the thread that draws and presents above the pools;
 //! - [`install_caption_hit_test`] - `WM_NCHITTEST` for a window that draws its own caption;
 //! - [`known_folder`], [`free_space`], [`volume_path_name`], [`is_volume_root`] - the user's
 //!   folders and the volumes.
@@ -33,8 +34,9 @@ use windows::Win32::System::Diagnostics::Debug::{
     MiniDumpWithIndirectlyReferencedMemory, MiniDumpWriteDump, SetUnhandledExceptionFilter,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, GetProcessIoCounters, GetProcessTimes,
-    GetStartupInfoW, IO_COUNTERS, STARTF_USESHOWWINDOW, STARTUPINFOW,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetCurrentThreadId, GetProcessIoCounters,
+    GetProcessTimes, GetStartupInfoW, GetThreadPriority, IO_COUNTERS, STARTF_USESHOWWINDOW, STARTUPINFOW,
+    SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE,
@@ -103,6 +105,22 @@ pub fn started_minimized() -> bool {
     }
     let show = i32::from(info.wShowWindow);
     show == SW_SHOWMINIMIZED.0 || show == SW_MINIMIZE.0 || show == SW_SHOWMINNOACTIVE.0
+}
+
+/// Puts the calling thread above normal priority: the thread that draws and presents the window.
+/// It works in short bursts, so it costs the pools next to nothing and still gets its core first
+/// while they load every core. Answers whether it took.
+pub fn raise_this_thread_priority() -> bool {
+    // SAFETY: the pseudo-handle of the calling thread is always valid and the priority is one of
+    // the documented constants; the call changes nothing but this thread's scheduling.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL).is_ok() }
+}
+
+/// The calling thread's priority (`THREAD_PRIORITY_*`: 0 normal, 1 above normal).
+#[must_use]
+pub fn this_thread_priority() -> i32 {
+    // SAFETY: the pseudo-handle of the calling thread is always valid; the call only reads.
+    unsafe { GetThreadPriority(GetCurrentThread()) }
 }
 
 /// Whether the window in front belongs to this process.
@@ -186,5 +204,17 @@ pub fn install_fatal_exception_dump(path: PathBuf) {
     // code (it exits the process), and stays valid for the life of the process.
     unsafe {
         SetUnhandledExceptionFilter(Some(fatal_filter));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_raised_thread_stays_raised_and_others_stay_normal() {
+        let raised =
+            std::thread::spawn(|| (super::raise_this_thread_priority(), super::this_thread_priority()));
+        assert_eq!(raised.join().ok(), Some((true, 1)));
+        let other = std::thread::spawn(super::this_thread_priority);
+        assert_eq!(other.join().ok(), Some(0));
     }
 }

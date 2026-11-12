@@ -283,6 +283,9 @@ pub struct ViewState {
     pub status: Option<(String, Instant)>,
     /// What is behind the scene: the theme's canvas colour, as the pane last drew it.
     pub background: Color,
+    /// The pane as last laid out: its size in points and the points' pixels (`viewport_gesture`).
+    pub pane_pt: [f32; 2],
+    pub ppp: f32,
     scene_key: Option<String>,
     cameras: FxHashMap<String, Saved>,
     cameras_for: Option<PathBuf>,
@@ -307,6 +310,8 @@ impl Default for ViewState {
             status: None,
             // the kit's token `canvas` (151419) until the pane draws with the theme's
             background: Color::rgb(0x15, 0x14, 0x19),
+            pane_pt: [0.0, 0.0],
+            ppp: 1.0,
             scene_key: None,
             cameras: FxHashMap::default(),
             cameras_for: None,
@@ -367,6 +372,8 @@ struct BuildCtl {
     last: Option<BuildKey>,
     packet: Option<Arc<FramePacket>>,
     serial: u64,
+    /// Passes that ended: `settle` waits for the one under way, not for a moment without one.
+    finished: u64,
 }
 
 /// The game's data Game Lighting reads off the UI thread, per link revision.
@@ -396,6 +403,10 @@ pub struct Viewport {
     /// with rayon work: a second pass queued on the pool would be stolen by a worker waiting
     /// inside the first, under its lock, and wait for that lock for ever.
     packet_gate: tokio::sync::Mutex<()>,
+    /// A gesture fed over MCP (`viewport_gesture`): the pane takes one step of it a frame.
+    pub(crate) gesture: Mutex<Option<crate::gesture::Pending>>,
+    /// The tasks the pane's gestures started that have not ended.
+    pub(crate) tracked: std::sync::atomic::AtomicUsize,
 }
 
 /// Frames per second, measured over about half a second.
@@ -452,8 +463,18 @@ impl Viewport {
                 animating: AtomicBool::new(false),
                 anim_tick: AtomicU64::new(0),
                 packet_gate: tokio::sync::Mutex::new(()),
+                gesture: Mutex::new(None),
+                tracked: std::sync::atomic::AtomicUsize::new(0),
             }
         })
+    }
+
+    /// The pane as it was laid out this frame; no pass is asked for it.
+    pub(crate) fn set_pane(&self, size_pt: [f32; 2], ppp: f32) {
+        self.state_quiet(|s| {
+            s.pane_pt = size_pt;
+            s.ppp = ppp;
+        });
     }
 
     /// Whether the last pass found a particle system in view playing (`frame_pacing`'s
@@ -688,6 +709,7 @@ impl Viewport {
             let again = {
                 let mut b = vp.build.lock();
                 b.in_flight = false;
+                b.finished += 1;
                 if let Some(p) = &made {
                     b.serial = renderer.submit(p.clone());
                     b.packet = Some(p.clone());
@@ -724,13 +746,29 @@ impl Viewport {
         }
     }
 
-    /// Waits until no pass is being built: a picture asked over MCP draws the newest state.
+    /// Whether the last pass that reached the renderer drew the scene at `rev` (and none is under way): the gizmo's
+    /// anchor and what the picture shows are of that scene.
+    pub(crate) fn drawn_scene(&self, rev: Rev) -> bool {
+        let b = self.build.lock();
+        !b.in_flight && b.last.as_ref().is_some_and(|k| k.scene >= rev)
+    }
+
+    /// Waits for the pass being built, if one is: a picture asked over MCP draws the newest
+    /// state. Only that pass - while something plays a new one follows at once, and a wait for a
+    /// moment without any would last its whole limit.
     pub async fn settle(&self) {
-        for _ in 0..200 {
-            if !self.build.lock().in_flight {
+        let started = {
+            let b = self.build.lock();
+            if !b.in_flight {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            b.finished
+        };
+        for _ in 0..400 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if self.build.lock().finished > started {
+                return;
+            }
         }
     }
 
@@ -1024,17 +1062,19 @@ impl Viewport {
         editor.exec.wake().ping();
     }
 
-    /// `frame_pacing`'s measure: the frames presented between two asks.
-    pub(crate) fn pacing(&self, frame: u64) -> (f64, f64) {
+    /// `frame_pacing`'s measure: the frames presented between two asks, and the frame the last
+    /// ask saw (`None` at the first).
+    pub(crate) fn pacing(&self, frame: u64) -> (f64, f64, Option<u64>) {
         let now = Instant::now();
         let mut s = self.state.lock();
         let out = match s.pacing {
             Some((f, t)) if frame > f => {
                 let dt = now.duration_since(t).as_secs_f64();
                 let fps = (frame - f) as f64 / dt.max(1e-6);
-                (fps, if fps > 0.0 { 1000.0 / fps } else { 0.0 })
+                (fps, if fps > 0.0 { 1000.0 / fps } else { 0.0 }, Some(f))
             }
-            _ => (0.0, 0.0),
+            Some((f, _)) => (0.0, 0.0, Some(f)),
+            None => (0.0, 0.0, None),
         };
         s.pacing = Some((frame, now));
         out

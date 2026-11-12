@@ -287,6 +287,11 @@ impl LevelDoc {
     /// The chooser `property_choose` opened over MCP, or that closed under one.
     fn follow_mcp_chooser(&mut self) {
         let Some(svc) = self.scene() else { return };
+        // a tool's chooser asked for over MCP: the one the panel's button opens
+        let tool = svc.view.lock().tool_chooser.take();
+        if tool.as_deref() == Some("group_pivot") && self.chooser.is_none() {
+            self.chooser = crate::tools::pivot_chooser(&svc.store.snapshot());
+        }
         let choosing = svc.view.lock().choosing.clone();
         match (&choosing, &self.chooser) {
             (Some(key), None) => {

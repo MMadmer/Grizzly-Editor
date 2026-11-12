@@ -86,6 +86,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 600
@@ -288,7 +289,7 @@ def main() -> int:
         return 2
     work = tempfile.mkdtemp(prefix="grizzly_iconsproj_")
     copy = os.path.join(work, "QaIcons")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git"))
+    qa_target.copy_project(src, copy, ignore=(".git",))
     print("running against a copy: " + copy, flush=True)
     # project.ltx names this machine's paths: the copy must name its own folder
     pl = os.path.join(copy, "project.ltx")
@@ -316,7 +317,7 @@ def main() -> int:
             with open(ini, "wb") as f:
                 f.write(ini_backup)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
     ok = sum(1 for good, _ in results if good)
     print(f"ASSET ICONS: DONE {ok}/{len(results)}", flush=True)
     return 0 if ok == len(results) else 1

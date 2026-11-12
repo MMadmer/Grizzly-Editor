@@ -1873,6 +1873,7 @@ dependencies = [
  "gz-fmt-ogf",
  "gz-fmt-tex",
  "gz-task",
+ "gz-win",
  "parking_lot 0.13.0",
  "png",
  "rayon",

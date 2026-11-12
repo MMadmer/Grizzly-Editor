@@ -20,7 +20,10 @@ What it proves:
      unsaved (the file untouched) and is never dropped without save= or discard=; a text that
      does not parse shows its line; nothing of the tab spills out of its window (ui_audit)
 
-    python tools/qa/test_pda.py --project <project> [--shots <folder>]
+    python tools/qa/test_pda.py --project <project> [--only A,D,...] [--shots <folder>]
+
+Each phase stands on its own setup: one that needs what another wrote (the template of A, the courier fixture of B,
+C's pickup) runs that phase first, without its checks, when it was not asked for.
 """
 from __future__ import annotations
 
@@ -47,13 +50,30 @@ FIXTURE = os.path.join(HERE, "fixtures", "courier.pdaasset")
 results: list[tuple[bool, str]] = []
 
 
+PHASES = "ABCDHEFG"
+NEEDS = {"C": "AB", "D": "B", "H": "AB", "E": "BC", "F": "BC"}
+# a phase run for another's sake records nothing
+QUIET = [False]
+
+
 def check(ok: bool, text: str, detail: str = "") -> bool:
+    if QUIET[0]:
+        return bool(ok)
     results.append((bool(ok), text))
     print(("PASS " if ok else "FAIL ") + text + (("  <- " + detail) if detail and not ok else ""), flush=True)
     return bool(ok)
 
 
 def mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
+    t0 = time.monotonic()
+    try:
+        return _mcp(cmd, timeout, **extra)
+    finally:
+        if os.environ.get("QA_SLOW") and time.monotonic() - t0 > 0.2:
+            print("SLOW %s %s %.2f s" % (cmd, extra.get("action", ""), time.monotonic() - t0), flush=True)
+
+
+def _mcp(cmd: str, timeout: float = 300.0, **extra) -> dict:
     payload = {"cmd": cmd}
     payload.update(extra)
     with socket.create_connection(MCP, timeout=10) as s:
@@ -79,6 +99,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 600
@@ -138,6 +159,17 @@ def shot(folder: str | None, name: str) -> None:
         with open(path, "wb") as f:
             f.write(base64.b64decode(pic["png_base64"]))
         print("screenshot: " + path, flush=True)
+
+
+def settle(shots: str | None) -> None:
+    """A picture for the operator waits for the preview's fonts and textures; without one nothing waits."""
+    if shots:
+        time.sleep(1.0)
+
+
+def follows() -> dict:
+    """The preview's state: pda_preview reads a file written behind it before it answers, so nothing waits."""
+    return mcp("pda_preview", action="state")
 
 
 def escaped_in_tab() -> list | None:
@@ -227,23 +259,38 @@ def run_tab(project: str, fixture: str, shots: str | None) -> None:
     check(p.get("ok") and p.get("text_dirty") is False, "H save writes the pane's text", json.dumps(p)[:200])
     check(sha(courier) != before, "H and the file has it")
     mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
-    time.sleep(1.5)
-    p = mcp("pda_preview", action="state")
+    p = follows()
     check(p.get("state", {}).get("read") is True and p.get("text_dirty") is False, "H the fixture is back", json.dumps(p)[:200])
 
 
-def run(project: str, shots: str | None) -> None:
+def run(project: str, shots: str | None, only: str) -> None:
     ed = Editor()
     out_dir = tempfile.mkdtemp(prefix="grizzly_pda_")
+    needed = {n for p in only for n in NEEDS.get(p, "")} - set(only)
     try:
         ed.start(project)
         manifest = mcp("mod_manifest")
         module = manifest.get("id", "")
-        check(bool(module), "A the project has a module id", json.dumps(manifest)[:200])
+        check(bool(module), "the project has a module id", json.dumps(manifest)[:200])
         mod_ltx = os.path.join(project, "mod.ltx")
         fixture = read(FIXTURE)
+        broken = fixture.replace('kind = "rect", x = 0, y = 0, w = 960', 'kind = "circle", x = 0, y = 0, w = 960', 1)
+        for letter in PHASES:
+            if letter not in only and letter not in needed:
+                continue
+            QUIET[0] = letter not in only
+            t0 = time.monotonic()
+            try:
+                PHASE[letter](project, shots, module, mod_ltx, fixture, broken, out_dir)
+            finally:
+                print("TIME phase %s%s %.1f s" % (letter, " (setup)" if QUIET[0] else "", time.monotonic() - t0), flush=True)
+                QUIET[0] = False
+    finally:
+        ed.close()
+        qa_target.remove_tree(out_dir)
 
-        # ------------------------------------------------------------ A: a new layout
+
+def phase_a(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         l = mcp("pda_list")
         check(l.get("ok") and l.get("used") == "" and l.get("layouts") == [], "A a fresh project has no PDA layout",
               json.dumps(l)[:300])
@@ -258,7 +305,9 @@ def run(project: str, shots: str | None) -> None:
         pages = [p["id"] for p in w.get("layout", {}).get("pages", [])]
         check(pages == ["home", "map", "journal"], "A the template has home, map and a stock journal", str(pages))
 
-        # ------------------------------------------------------------ B: the reader
+
+
+def phase_b(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         w = mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
         check(w.get("ok") and w.get("errors") == 0 and w.get("warnings") == 0 and not w.get("use_changed"),
               "B the courier fixture reads clean and is not used by itself", json.dumps(w.get("problems"))[:400])
@@ -268,7 +317,6 @@ def run(project: str, shots: str | None) -> None:
         g = mcp("pda_get", path="pda/courier.pdaasset")
         check(g.get("ok") and g.get("text") == fixture and g.get("used") is False, "B pda_get gives the file back", json.dumps(g)[:200])
         check("xms_pda_layout.script" in g.get("reader", ""), "B and names the reader", g.get("reader", ""))
-        broken = fixture.replace('kind = "rect", x = 0, y = 0, w = 960', 'kind = "circle", x = 0, y = 0, w = 960', 1)
         v = mcp("pda_validate", text=broken)
         check(v.get("ok") and v.get("valid") is False and "E305" in codes(v), "B an unknown widget kind is E305", json.dumps(v)[:300])
         v = mcp("pda_validate", text=fixture.replace('page = "map" }', 'page = "nowhere" }', 1))
@@ -281,7 +329,9 @@ def run(project: str, shots: str | None) -> None:
         code = mcp("pda_write", path="pda/code.pdaasset", text="os.execute('calc') return { pda = 1 }")
         check(not code.get("ok"), "B code outside strings is refused", json.dumps(code)[:300])
 
-        # ------------------------------------------------------------ C: the pickup
+
+
+def phase_c(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         u = mcp("pda_use", path="pda/courier.pdaasset")
         check(u.get("ok") and u.get("used") == "pda/courier.pdaasset", "C pda_use picks another layout", json.dumps(u))
         check("pda\\courier.pdaasset" in read(mod_ltx), "C mod.ltx follows")
@@ -297,12 +347,14 @@ def run(project: str, shots: str | None) -> None:
         check(any(p.endswith("courier.pdaasset") for p in listed) and any(p.endswith("qa_app.pdaasset") for p in listed),
               "C pda_list shows both layouts", str(listed))
 
-        # ------------------------------------------------------------ D: the preview
+
+
+def phase_d(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         p = mcp("pda_preview", action="open", path="pda/courier.pdaasset")
         st = p.get("state", {})
         check(p.get("ok") and p.get("open") and st.get("page") == "orders", "D the preview opens on the start page",
               json.dumps(p)[:300])
-        time.sleep(1.5)
+        settle(shots)
         shot(shots, "pda_orders")
         tabs = visible(st, id="tab_orders")
         check(tabs and tabs[0].get("selected") is True, "D the tab of the page is selected", json.dumps(tabs))
@@ -314,7 +366,7 @@ def run(project: str, shots: str | None) -> None:
         check(st.get("vars", {}).get("picked") == "Тушёнка" and visible(st, id="details"),
               "D a row fills its var and opens the overlay", json.dumps(st.get("vars"), ensure_ascii=False))
         check(visible(st, kind="row", selected=True), "D and becomes the list's selection")
-        time.sleep(1.0)
+        settle(shots)
         shot(shots, "pda_details")
         p = mcp("pda_preview", action="click", id="orders", row=2)
         check(p.get("state", {}).get("vars", {}).get("picked") == "Batteries", "D a list row by its number",
@@ -326,7 +378,7 @@ def run(project: str, shots: str | None) -> None:
         st = p.get("state", {})
         check(st.get("page") == "map" and st.get("vars", {}).get("current") == "Тушёнка" and not visible(st, id="details"),
               "D Take: var, overlay hidden, the map page", json.dumps(st, ensure_ascii=False)[:300])
-        time.sleep(1.0)
+        settle(shots)
         shot(shots, "pda_map")
         p = mcp("pda_preview", action="click", id="done")
         st = p.get("state", {})
@@ -348,11 +400,11 @@ def run(project: str, shots: str | None) -> None:
         p = mcp("pda_preview", action="click", id="tab_journal")
         st = p.get("state", {})
         check(st.get("page") == "journal" and st.get("stock") == "eptTasks", "D a stock page shows the stock section")
-        time.sleep(1.0)
+        settle(shots)
         shot(shots, "pda_journal")
         p = mcp("pda_preview", action="aspect", aspect="16:9")
         check(p.get("state", {}).get("aspect") == "16:9", "D the 16:9 device")
-        time.sleep(1.0)
+        settle(shots)
         shot(shots, "pda_wide")
         mcp("pda_preview", action="aspect", aspect="4:3")
         p = mcp("pda_preview", action="reset")
@@ -360,8 +412,7 @@ def run(project: str, shots: str | None) -> None:
         check(st.get("page") == "orders" and st.get("vars", {}).get("current") == "Нет заказа", "D reset: the start page and the declared vars")
         # the tab follows the file
         mcp("pda_write", path="pda/courier.pdaasset", text=fixture.replace('title = "Orders"', 'title = "Deliveries"', 1), use=False)
-        time.sleep(1.5)
-        p = mcp("pda_preview", action="state")
+        p = follows()
         check(p.get("state", {}).get("read") is True, "D the tab re-reads a file written behind it", json.dumps(p)[:200])
         g = mcp("pda_get", path="pda/courier.pdaasset")
         check(any(pg.get("title") == "Deliveries" for pg in g.get("layout", {}).get("pages", [])), "D and the change is there")
@@ -376,7 +427,7 @@ def run(project: str, shots: str | None) -> None:
                                  % (cx, cz, cx, cz + 20, b[0] + 1, b[1] + 1), 1)
         check(marked != fixture, "D the fixture takes preview markers")
         mcp("pda_write", path="pda/courier.pdaasset", text=marked, use=False)
-        time.sleep(1.5)
+        follows()
         mcp("pda_preview", action="reset")
         p = mcp("pda_preview", action="page", page="map")
         spots = p.get("state", {}).get("map", {}).get("spots", [])
@@ -386,12 +437,14 @@ def run(project: str, shots: str | None) -> None:
               "D the map slot lists the player and a marker north of them", json.dumps(spots))
         check(not [s for s in spots if s.get("hint") == "Far"], "D a marker outside the slot is not listed", json.dumps(spots))
         mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
-        time.sleep(1.5)
+        follows()
 
-        # ------------------------------------------------------------ H: the tab
+
+def phase_h(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         run_tab(project, fixture, shots)
 
-        # ------------------------------------------------------------ E: the build
+
+def phase_e(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         ex = mcp("mod_export", target=out_dir)
         check(ex.get("ok"), "E the module builds with its PDA layout", json.dumps(ex)[:300])
         root = os.path.join(out_dir, "modules", module)
@@ -404,7 +457,9 @@ def run(project: str, shots: str | None) -> None:
               json.dumps(ex)[:300])
         mcp("pda_write", path="pda/courier.pdaasset", text=fixture, use=False)
 
-        # ------------------------------------------------------------ F: delete and create
+
+
+def phase_f(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         d = mcp("pda_delete", path="pda/courier.pdaasset")
         check(d.get("ok") and d.get("use_cleared") and not os.path.exists(os.path.join(project, "pda", "courier.pdaasset")),
               "F deleting the used layout deletes the file and clears [pda]", json.dumps(d))
@@ -413,7 +468,9 @@ def run(project: str, shots: str | None) -> None:
         made = c.get("made", "")
         check(c.get("ok") and made.lower().endswith("newpda.pdaasset"), "F Create > PDA Interface makes NewPda", json.dumps(c))
 
-        # ------------------------------------------------------------ G: the bundled copies
+
+
+def phase_g(project, shots, module, mod_ltx, fixture, broken, out_dir) -> None:
         pairs = [
             ("gamedata/configs/pda/xms_pda_layout.script", "packaging/dead-air-x64/compatibility/gamedata/scripts/xms_pda_layout.script"),
             ("gamedata/configs/pda/ui_xms_pda.xml", "packaging/dead-air-x64/compatibility/gamedata/configs/ui/textures_descr/ui_xms_pda.xml"),
@@ -424,9 +481,10 @@ def run(project: str, shots: str | None) -> None:
                 check(os.path.isfile(a) and os.path.isfile(b) and sha(a) == sha(b), "G the bundled " + os.path.basename(mine) + " is the game's")
             fx = os.path.join(GAME_REPO, "tools", "nq", "fixtures", "pda", "courier.pdaasset")
             check(os.path.isfile(fx) and sha(fx) == sha(FIXTURE), "G the fixture is the game repo's")
-    finally:
-        ed.close()
-        shutil.rmtree(out_dir, ignore_errors=True)
+
+
+PHASE = {"A": phase_a, "B": phase_b, "C": phase_c, "D": phase_d, "H": phase_h, "E": phase_e, "F": phase_f,
+         "G": phase_g}
 
 
 def main() -> int:
@@ -434,7 +492,12 @@ def main() -> int:
     ap.add_argument("--project", required=True, help="a project to COPY and run against")
     ap.add_argument("--shots", help="a folder for the preview's screenshots")
     ap.add_argument("--keep", action="store_true", help="keep the throw-away copy")
+    ap.add_argument("--only", help="phase letters, e.g. B,D (%s)" % PHASES)
     args = ap.parse_args()
+    asked = "".join(p for p in (args.only or PHASES).replace(",", "").upper() if p.strip())
+    if any(p not in PHASES for p in asked):
+        print("no such phase in %s: %s" % (PHASES, args.only))
+        return 2
 
     src = os.path.abspath(args.project)
     if not os.path.isdir(src):
@@ -443,7 +506,7 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_pdaproj_")
     copy = os.path.join(work, "QaPda")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git"))
+    qa_target.copy_project(src, copy, ignore=(".git",))
     print("running against a copy: " + copy, flush=True)
     # a project that already names a layout starts from none: the test makes its own
     for folder, _dirs, files in os.walk(copy):
@@ -479,7 +542,7 @@ def main() -> int:
             ini_backup = f.read()
 
     try:
-        run(copy, args.shots)
+        run(copy, args.shots, asked)
     except Exception as exc:  # noqa: BLE001 - the report is the point
         check(False, "the run finished", repr(exc))
     finally:
@@ -487,7 +550,7 @@ def main() -> int:
             with open(ini, "wb") as f:
                 f.write(ini_backup)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"PDA: DONE {ok}/{len(results)}", flush=True)

@@ -115,9 +115,40 @@ func helpText(options []option) string {
 }
 
 // failUsage is argparse's parser.error: the usage and the problem on stderr, exit code 2.
+// usageFailure is what failUsage raises while parseArgsChecked reads a /__restart: the process lives on.
+type usageFailure struct{ problem string }
+
+// checking is set while parseArgsChecked runs; /__restart holds the holder's lock, one at a time.
+var checking bool
+
 func failUsage(options []option, problem string) {
+	if checking {
+		panic(usageFailure{problem})
+	}
 	fmt.Fprintf(os.Stderr, "%s\n%s: error: %s\n", usage(options), programName, problem)
 	os.Exit(2)
+}
+
+// parseArgsChecked reads arguments as parseArgs does, answering a bad one as an error instead of
+// ending the process; --help is refused.
+func parseArgsChecked(arguments []string) (c *config, err error) {
+	for _, a := range arguments {
+		if a == "-h" || a == "--help" {
+			return nil, fmt.Errorf("--help is no option of a restart")
+		}
+	}
+	checking = true
+	defer func() {
+		checking = false
+		if r := recover(); r != nil {
+			f, isUsage := r.(usageFailure)
+			if !isUsage {
+				panic(r)
+			}
+			c, err = nil, fmt.Errorf("%s", f.problem)
+		}
+	}()
+	return parseArgs(arguments), nil
 }
 
 var negativeNumber = regexp.MustCompile(`^-\d+$|^-\d*\.\d+$`)

@@ -119,7 +119,7 @@ pub(crate) fn ai_step(
     let far = vp.read(|v| v.nav.far);
     let (ed, vp, busy, merge) = (editor.clone(), vp.clone(), p.busy.clone(), p.merge.clone());
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let snap = s.store.snapshot();
         s.prefetch_library(&ed, &snap).await;
         let lib = s.library.clone();
@@ -175,7 +175,7 @@ fn mark_place(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) {
     let far = vp.read(|v| v.nav.far);
     let (ed, vp) = (editor.clone(), vp.clone());
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let r = if b.ctrl {
             bulk::mark_move(&ed, &s, origin, ray.origin, ray.dir, far).await
         } else {
@@ -203,7 +203,7 @@ pub(crate) fn click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons, t
     let far = vp.read(|v| v.nav.far);
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let r = match target {
             ObjClass::AiMap => bulk::ai_pick(&ed, &s, origin, ray.origin, ray.dir, far, b.ctrl).await,
             ObjClass::DetailObjects => {
@@ -235,7 +235,7 @@ pub(crate) fn marquee(
     let planes = planes.to_vec();
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let r = match target {
             ObjClass::AiMap => bulk::ai_select_frustum(&ed, &s, origin, planes, true).await,
             ObjClass::DetailObjects => {
@@ -266,7 +266,7 @@ pub(crate) fn move_nodes(
     let Some(s) = svc(editor) else { return };
     let moves: Vec<(u32, Vec3)> = held.iter().map(|(i, p)| (*i, to(*p))).collect();
     let (ed, merge) = (editor.clone(), merge.clone());
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         report(&ed, bulk::ai_move(&ed, &s, origin, moves, Some(merge)).await);
         ed.exec.wake().ping();
     });
@@ -276,7 +276,7 @@ pub(crate) fn move_nodes(
 pub(crate) fn rotate_nodes(editor: &Arc<Editor>, about_x: bool, angle: f32, merge: &SmolStr, origin: Origin) {
     let Some(s) = svc(editor) else { return };
     let (ed, merge) = (editor.clone(), merge.clone());
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         report(&ed, bulk::ai_rotate(&ed, &s, origin, about_x, angle, Some(merge)).await);
         ed.exec.wake().ping();
     });
@@ -291,7 +291,7 @@ pub(crate) fn key(editor: &Arc<Editor>, which: &'static str) -> bool {
     }
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let r = if which == "delete" {
             bulk::remove_selected(&ed, origin).await
         } else {

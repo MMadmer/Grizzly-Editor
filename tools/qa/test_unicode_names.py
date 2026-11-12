@@ -89,6 +89,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 240
@@ -235,7 +236,7 @@ def run(project: str, shot: str | None) -> None:
     finally:
         ed.close()
         for d in (target, pkg):
-            shutil.rmtree(d, ignore_errors=True)
+            qa_target.remove_tree(d)
 
     # ---------------------------------------------------------------------- G: the process
     logs = [p for p in glob.glob(qa_target.log_glob())
@@ -259,7 +260,7 @@ def main() -> int:
 
     work = tempfile.mkdtemp(prefix="grizzly_unicodeproj_")
     copy = os.path.join(work, "QaUnicodeNames")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", ".gitignore"))
+    qa_target.copy_project(src, copy, ignore=(".git", ".gitignore",))
     print("running against a copy: " + copy, flush=True)
 
     ini = os.path.join(REPO, "_projects.ini")
@@ -277,7 +278,7 @@ def main() -> int:
             with open(ini, "wb") as f:
                 f.write(ini_backup)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"UNICODE NAMES: DONE {ok}/{len(results)}", flush=True)

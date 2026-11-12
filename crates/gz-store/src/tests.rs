@@ -309,3 +309,16 @@ fn a_command_that_panics_leaves_the_last_good_snapshot_and_a_live_store() {
     assert_eq!(s.history().undo.len(), 64);
     assert_eq!(rt.block_on(s.send(Cmd::Add(5), Origin::Ui)).unwrap(), ok as u64 + 5);
 }
+
+#[test]
+fn flush_waits_for_every_posted_command() {
+    let rt = runtime();
+    let s = store(&rt, 16);
+    for v in 1..=500u32 {
+        s.post(Cmd::Add(v), Origin::Mcp);
+    }
+    rt.block_on(s.flush());
+    let snap = s.snapshot();
+    assert_eq!(snap.state.log.len(), 500);
+    assert_eq!(snap.state.sum, 500 * 501 / 2);
+}

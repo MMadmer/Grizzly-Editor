@@ -64,6 +64,7 @@ class Editor:
         startup = subprocess.STARTUPINFO()
         startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        qa_target.guard_project(project)
         self.proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project],
                                      cwd=os.path.dirname(exe), startupinfo=startup)
         deadline = time.monotonic() + 240
@@ -505,7 +506,7 @@ def run(project: str) -> None:
 
     finally:
         ed.close()
-        shutil.rmtree(out_dir, ignore_errors=True)
+        qa_target.remove_tree(out_dir)
 
 
 def main() -> int:
@@ -541,7 +542,7 @@ def main() -> int:
             with open(ini, "wb") as f:
                 f.write(ini_backup)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
 
     ok = sum(1 for good, _ in results if good)
     print(f"CHARACTERS: DONE {ok}/{len(results)}", flush=True)

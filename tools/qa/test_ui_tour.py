@@ -451,10 +451,11 @@ def _28(t: Tour):
         raise Skip(short(c))
     b = mcp("project_browser_menu")
     t.shot(28)
+    qa_target.guard_project(t.project)
     back = mcp("open_project", path=t.project, timeout=600)
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline and not mcp("mod_manifest").get("ok"):
-        time.sleep(1)
+        time.sleep(0.05)
     return b.get("ok") and back.get("ok"), short(b)
 
 
@@ -549,6 +550,7 @@ def start_editor(project: str) -> subprocess.Popen:
     startup = subprocess.STARTUPINFO()
     startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+    qa_target.guard_project(project)
     proc = subprocess.Popen([exe, *qa_target.ARGS, "-nodlg", "-project", project], cwd=os.path.dirname(exe), startupinfo=startup)
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
@@ -559,7 +561,7 @@ def start_editor(project: str) -> subprocess.Popen:
             pass
         if proc.poll() is not None:
             raise RuntimeError("the editor exited during startup")
-        time.sleep(1)
+        time.sleep(0.05)
     raise RuntimeError("the editor never opened the project")
 
 
@@ -619,7 +621,7 @@ def main() -> int:
         return 2
     work = tempfile.mkdtemp(prefix="grizzly_tourproj_")
     copy = os.path.join(work, "QaTour")
-    shutil.copytree(src, copy, ignore=shutil.ignore_patterns(".git", "releases", "temp"))
+    qa_target.copy_project(src, copy, ignore=(".git", "releases", "temp",))
     print("running against a copy: " + copy, flush=True)
     pl = os.path.join(copy, "project.ltx")
     if os.path.isfile(pl):
@@ -652,7 +654,7 @@ def main() -> int:
                 with open(path, "wb") as f:
                     f.write(data)
         if not args.keep:
-            shutil.rmtree(work, ignore_errors=True)
+            qa_target.remove_tree(work)
     restored = all((open(p, "rb").read() if os.path.isfile(p) else None) == d for p, d in saved.items())
     passed = sum(1 for r in rows if r[2] == "PASS")
     failed = sum(1 for r in rows if r[2] == "FAIL")

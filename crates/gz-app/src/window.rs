@@ -435,6 +435,7 @@ impl App {
 
     fn run_frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(live) = self.live.as_mut() else { return };
+        let began = Instant::now();
         self.dirty = false;
         *self.repaint_at.lock() = None;
 
@@ -483,11 +484,12 @@ impl App {
 
         let primitives = live.ctx.tessellate(output.shapes, output.pixels_per_point);
         let clear = live.ctx.global_style().visuals.panel_fill.to_normalized_gamma_f32();
-        {
+        // the waits for the swap chain's image, the submission and the present
+        let waited = {
             let mut sh = live.shared.borrow_mut();
             let mut delta = std::mem::take(&mut sh.textures);
             delta.append(std::mem::take(&mut output.textures_delta));
-            sh.painter.paint_and_update_textures(
+            let mut waited = sh.painter.paint_and_update_textures(
                 ViewportId::ROOT,
                 output.pixels_per_point,
                 clear,
@@ -499,12 +501,15 @@ impl App {
             if capturing && let Some(gpu) = sh.painter.render_state() {
                 // the picture is handed over when the read-back buffer is mapped, which happens
                 // on a poll; no later frame may come to do it
+                let polled = Instant::now();
                 let _ = gpu.device.poll(egui_wgpu::wgpu::PollType::Wait {
                     submission_index: None,
                     timeout: Some(Duration::from_secs(2)),
                 });
+                waited += polled.elapsed().as_secs_f32();
             }
-        }
+            waited
+        };
 
         // the viewports of the panels outside: windows made for the new, commands for the
         // others, gone for those no pass asked for
@@ -532,12 +537,16 @@ impl App {
         }
 
         self.frame += 1;
+        let total = began.elapsed().as_secs_f32() * 1000.0;
+        let wait_ms = (waited * 1000.0).min(total);
         self.editor.frames.publish(FrameStamp {
             frame: self.frame,
             active_tab: report.active_tab,
             scale: output.pixels_per_point,
             width: live.size_px[0],
             height: live.size_px[1],
+            work_ms: total - wait_ms,
+            wait_ms,
         });
     }
 
@@ -787,6 +796,9 @@ fn install_leaving_guard(editor: &Editor, leaving: Arc<AtomicBool>) {
 /// Opens the window and runs the editor's frame loop on the calling thread - the main thread -
 /// until the window closes or the editor is asked to quit.
 pub fn run(editor: Arc<Editor>, opts: WindowOptions, shell: Box<dyn Shell>) -> Result<(), String> {
+    // this thread draws and presents: it works in bursts and gets its core before the pools,
+    // which load every core during a build
+    let _ = gz_win::raise_this_thread_priority();
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(|e| format!("the event loop did not start: {e}"))?;

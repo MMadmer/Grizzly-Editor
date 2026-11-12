@@ -128,7 +128,7 @@ pub(crate) fn paint_step(editor: &Arc<Editor>, vp: &Viewport, p: &Paint, ray: Ra
     let far = vp.read(|s| s.nav.far);
     let (ed, busy, add, sector, merge) = (editor.clone(), p.busy.clone(), p.add, p.sector, p.merge.clone());
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let snap = svc.store.snapshot();
         let lib = svc.library.clone();
         let hit = ed.exec.cpu(move || geom::pick_mesh(&snap, &lib, ray.origin, ray.dir, far)).await;
@@ -169,7 +169,7 @@ fn sector_new(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: Buttons, multipl
     let far = vp.read(|s| s.nav.far);
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let snap = svc.store.snapshot();
         let lib = svc.library.clone();
         let Some(h) = ed.exec.cpu(move || geom::pick_mesh(&snap, &lib, ray.origin, ray.dir, far)).await
@@ -223,7 +223,7 @@ pub(crate) fn box_pick_end(editor: &Arc<Editor>, vp: &Viewport, size: [u32; 2], 
     let Some(planes) = rect_planes(&cam, size, a, b) else { return };
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, lib, _| {
             let Some(id) = sector::selected_sector(s)? else {
                 return Ok((objtools::Batch::new("Box Pick", s.serial), gz_editor::Value::Null));
@@ -277,7 +277,7 @@ fn way_add_point(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons)
     });
     let (ed, vp) = (editor.clone(), vp.clone());
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         if let Some((at, _)) = crate::pane::pick_ground(&ed, &svc, ray, object_snap, grid, far).await {
             let r = objtools::commit(&ed, &svc, origin, Ctl::default(), move |s, _, _| {
                 tools_cmd::add_point_batch(s, way_id, at)
@@ -301,7 +301,7 @@ fn shape_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
     let far = vp.read(|s| s.nav.far);
     let (ed, vp) = (editor.clone(), vp.clone());
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
         let s = snap.clone();
@@ -346,7 +346,7 @@ fn spawn_attach(editor: &Arc<Editor>, vp: &Arc<Viewport>, ray: Ray, b: Buttons) 
     let far = vp.read(|s| s.nav.far);
     let (ed, vp) = (editor.clone(), vp.clone());
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let (snap, pick) = svc.pick().await;
         let lib = svc.library.clone();
         let s = snap.clone();
@@ -401,7 +401,7 @@ pub(crate) fn way_point_click(editor: &Arc<Editor>, vp: &Viewport, ray: Ray, b: 
     let any = vp.read(|s| s.settings.pick_any_class);
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let snap = svc.store.snapshot();
         if !b.ctrl {
             if any {
@@ -456,7 +456,7 @@ pub(crate) fn way_points_marquee(editor: &Arc<Editor>, vp: &Viewport, size: [u32
     let Some(planes) = rect_planes(&cam, size, a, b) else { return };
     let ed = editor.clone();
     let origin = editor.ui_origin();
-    editor.exec.spawn(async move {
+    crate::gesture::spawn(editor, async move {
         let snap = svc.store.snapshot();
         for id in objtools::selected_of(&snap, ObjClass::Way) {
             let Some(ObjData::Way(w)) = snap.get(id).map(|o| &o.data) else { continue };

@@ -628,6 +628,7 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
                 print("! an Explorer window on %s may still be open" % p["nested"], flush=True)
 
         # ------------------------------------------------------------------ H: the open project
+        qa_target.guard_project(p["open"])
         o = mcp("open_project", path=p["open"])
         check(o.get("ok"), "H a listed project opens", short(o))
         d = mcp("project_delete", path=p["open"])
@@ -673,11 +674,13 @@ def run(w: Work, shots: str | None, explorer: bool) -> None:
         c = mcp("project_close")
         # a copy of a project names the original's scene: it is never opened, and forgotten on close
         set_last_scene(p["created"], p["scene"])
+        qa_target.guard_project(p["created"])
         o = mcp("open_project", path=p["created"])
         c = mcp("project_close")
         got = last_scene(p["created"])
         check(o.get("ok") and c.get("ok") and got == "",
               "L a scene outside the project is not reopened: last_scene is left empty", repr(got))
+        qa_target.guard_project(p["open"])
         o = mcp("open_project", path=p["open"])
         c = mcp("project_close")
         got = last_scene(p["open"])
