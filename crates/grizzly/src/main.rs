@@ -1,6 +1,7 @@
 //! Grizzly Editor.
 
 mod cli;
+mod compile;
 mod core_cmds;
 mod startup;
 
@@ -59,6 +60,9 @@ fn main() -> ExitCode {
     }
     if cli.bad_ui_scale {
         log.warn("-uiscale wants a scale from 0.5 to 4, e.g. -uiscale 1.5");
+    }
+    if let Some((what, folder, flags)) = &cli.compile {
+        return compile::run(*what, folder, flags, &paths.root, &log);
     }
 
     startup.stage("Starting the workers");

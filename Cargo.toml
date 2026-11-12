@@ -64,6 +64,7 @@ gz-scene = { path = "crates/gz-scene" }
 gz-export-level = { path = "crates/gz-export-level" }
 gz-levelbuild = { path = "crates/gz-levelbuild" }
 gz-lc-light = { path = "crates/gz-lc-light" }
+gz-lc = { path = "crates/gz-lc" }
 gz-editor = { path = "crates/gz-editor" }
 # layer 4
 gz-mcp = { path = "crates/gz-mcp" }

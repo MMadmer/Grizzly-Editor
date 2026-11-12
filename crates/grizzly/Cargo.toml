@@ -50,3 +50,6 @@ gz-ui-viewport = { path = "../gz-ui-viewport" }
 gz-ui-graph = { path = "../gz-ui-graph" }
 gz-ui-world = { path = "../gz-ui-world" }
 serde_json.workspace = true
+gz-lc.workspace = true
+gz-lc-light.workspace = true
+rayon.workspace = true

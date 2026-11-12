@@ -1,0 +1,26 @@
+[package]
+name = "gz-lc"
+description = "The level compiler and the detail compiler's pipeline: build.prj in, the level's files out."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gz-base.workspace = true
+gz-chunk.workspace = true
+gz-fmt-level.workspace = true
+gz-fmt-ogf.workspace = true
+gz-fmt-tex.workspace = true
+gz-fmt-xr.workspace = true
+gz-lc-light.workspace = true
+glam.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+smol_str.workspace = true
+thiserror.workspace = true

@@ -81,6 +81,12 @@ impl LcGlobalData {
     /// `CBuild::Load`'s MU part: the models and the references of `build.prj`.
     pub fn load_mu(&mut self, prj: &BuildProject) -> Result<()> {
         self.mu_models = prj.mu_models.iter().map(MuModel::load).collect::<Result<_>>()?;
+        // the models share one vertex and one face pool, filled model after model
+        let (mut vb, mut fb) = (0u64, 0u64);
+        for m in &mut self.mu_models {
+            m.mesh.rebase_pools(vb, fb);
+            (vb, fb) = m.mesh.pool_ends();
+        }
         self.mu_refs = prj.mu_refs.iter().map(MuReference::load).collect();
         if let Some(r) = self.mu_refs.iter().find(|r| r.model as usize >= self.mu_models.len()) {
             return Err(LcError::Invalid(format!(
@@ -127,8 +133,19 @@ impl LcGlobalData {
     /// `CBuild::MU_ModelsCalculateNormals`.
     pub fn mu_calc_normals(&mut self, smoothing: Smoothing) {
         let angle = self.params.sm_angle;
+        // one after another through the pools they share, as the C++ does
+        let mut vpool = self.mu_models.last().map(|m| m.mesh.vpool.clone()).unwrap_or_default();
+        let mut fpool = self.mu_models.last().map(|m| m.mesh.fpool.clone()).unwrap_or_default();
         for m in &mut self.mu_models {
+            m.mesh.vpool = std::mem::take(&mut vpool);
+            m.mesh.fpool = std::mem::take(&mut fpool);
             m.calc_normals(angle, smoothing);
+            vpool = std::mem::take(&mut m.mesh.vpool);
+            fpool = std::mem::take(&mut m.mesh.fpool);
+        }
+        if let Some(m) = self.mu_models.last_mut() {
+            m.mesh.vpool = vpool;
+            m.mesh.fpool = fpool;
         }
     }
 

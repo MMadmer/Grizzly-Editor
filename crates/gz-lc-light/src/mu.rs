@@ -124,13 +124,15 @@ impl MuModel {
         }
     }
 
-    /// `calc_materials`: the faces sorted by material into runs, the runs of materials that are
-    /// not rendered dropped. The C++ sort is not stable; here faces of one material keep their
-    /// order.
+    /// `calc_materials`: the faces sorted by material into runs (MSVC's `std::sort`, whose order
+    /// of the faces of one material the output follows), the runs of materials that are not
+    /// rendered dropped.
     pub fn calc_materials(&mut self, shaders: &Shaders, materials: &[BuildMaterial]) {
         let mesh = &self.mesh;
         let mut faces = mesh.faces().to_vec();
-        faces.sort_by_key(|&f| mesh.face(f).map_or(0, |x| x.material));
+        crate::crt::sort_by(&mut faces, |&a, &b| {
+            mesh.face(a).map_or(0, |x| x.material) < mesh.face(b).map_or(0, |x| x.material)
+        });
         let mat = |f: FaceId| mesh.face(f).map_or(0, |x| x.material);
         let mut subdivs = Vec::new();
         if let Some(&first) = faces.first() {

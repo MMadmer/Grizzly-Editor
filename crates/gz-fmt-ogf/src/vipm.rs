@@ -198,6 +198,9 @@ struct Pt {
     new_index: u32,
     edges: Vec<usize>,
     tris: Vec<usize>,
+    /// Bumped whenever `edges` or `tris` change: the collapse errors cached for this point
+    /// hold while it stays.
+    stamp: u32,
 }
 
 impl Pt {
@@ -283,6 +286,13 @@ impl Object {
         self.pts.get_mut(p).ok_or(Failed)
     }
 
+    /// The point, for a change of its edges or triangles.
+    fn touch(&mut self, p: usize) -> Result<&mut Pt, Failed> {
+        let pt = self.pts.get_mut(p).ok_or(Failed)?;
+        pt.stamp = pt.stamp.wrapping_add(1);
+        Ok(pt)
+    }
+
     /// The triangle list from its head.
     fn tri_list(&self) -> Vec<usize> {
         let mut out = Vec::new();
@@ -337,8 +347,8 @@ impl Object {
     fn new_edge(&mut self, a: usize, b: usize) -> Result<usize, Failed> {
         let id = self.edges.len();
         self.edges.push(Some(Edge { p: [Some(a), Some(b)], tri12: None, tri21: None }));
-        self.pt_mut(a)?.edges.push(id);
-        self.pt_mut(b)?.edges.push(id);
+        self.touch(a)?.edges.push(id);
+        self.touch(b)?.edges.push(id);
         Ok(id)
     }
 
@@ -365,7 +375,7 @@ impl Object {
         self.tri_next.push(None);
         self.tri_prev.push(None);
         for &v in &p {
-            self.pt_mut(v)?.tris.push(id);
+            self.touch(v)?.tris.push(id);
         }
         for k in 0..3 {
             let (a, b) = (p[k], p[(k + 1) % 3]);
@@ -404,12 +414,12 @@ impl Object {
             if ed.tri12.is_none() && ed.tri21.is_none() {
                 let ed = self.edges.get_mut(e).and_then(Option::take).ok_or(Failed)?;
                 for p in ed.p.into_iter().flatten() {
-                    Self::remove_from(&mut self.pt_mut(p)?.edges, e);
+                    Self::remove_from(&mut self.touch(p)?.edges, e);
                 }
             }
         }
         for p in tri.p {
-            Self::remove_from(&mut self.pt_mut(p)?.tris, t);
+            Self::remove_from(&mut self.touch(p)?.tris, t);
         }
         // `ListDel`
         let (prev, next) = (self.tri_prev[t], self.tri_next[t]);
@@ -443,8 +453,10 @@ impl Object {
         Ok(ok)
     }
 
-    /// `FindCollapseError`: the quadric of the binned point's triangles at the kept point.
-    fn collapse_error(&self, binned: usize, edge: usize) -> Result<f32, Failed> {
+    /// `FindCollapseError(binned, edge, TRUE)` for every edge of the binned point in turn: the
+    /// quadric of its triangles summed once (the C++ caches the sum for the point it saw last)
+    /// and taken at each kept point.
+    fn collapse_errors(&self, binned: usize, out: &mut Vec<f32>) -> Result<(), Failed> {
         let mut sum = Quadric::ZERO;
         for &t in &self.pt(binned)?.tris {
             let p = self.tri(t)?.p;
@@ -452,9 +464,13 @@ impl Object {
                 Quadric::of_triangle(&self.pt(p[0])?.vec5(), &self.pt(p[1])?.vec5(), &self.pt(p[2])?.vec5());
             sum.add(&q);
         }
-        let ed = self.edge(edge)?;
-        let kept = if ed.p[0] == Some(binned) { ed.p[1] } else { ed.p[0] }.ok_or(Failed)?;
-        Ok(sum.evaluate(&self.pt(kept)?.vec5()) as f32)
+        out.clear();
+        for &e in &self.pt(binned)?.edges {
+            let ed = self.edge(e)?;
+            let kept = if ed.p[0] == Some(binned) { ed.p[1] } else { ed.p[0] }.ok_or(Failed)?;
+            out.push(sum.evaluate(&self.pt(kept)?.vec5()) as f32);
+        }
+        Ok(())
     }
 
     fn rotated(&self, t: usize, binned: usize) -> Result<[usize; 3], Failed> {
@@ -599,20 +615,24 @@ impl Object {
         Ok(true)
     }
 
-    /// `CalculateAllCollapses(object, u32(-1), 1.f)`.
-    fn all_collapses(&mut self, tolerance: f32) -> Result<(), Failed> {
+    /// `CalculateAllCollapses(object, max_window, 1.f)`.
+    fn all_collapses(&mut self, tolerance: f32, max_window: u32) -> Result<(), Failed> {
+        // the errors of a point stay what they were until its edges or triangles change (the
+        // positions never do): kept with the stamp they were taken at
+        let mut cache: Vec<(u32, Vec<f32>)> =
+            self.pts.iter().map(|p| (p.stamp.wrapping_sub(1), Vec::new())).collect();
         loop {
             let mut best = (1.0e10f32, None::<(usize, usize)>);
             let mut best_nl = (1.0e10f32, None::<(usize, usize)>);
             let mut average = 0.0f32;
             let mut count = 0i32;
             for p in (0..self.pts.len()).rev() {
-                let edges = self.pt(p)?.edges.clone();
-                if edges.is_empty() {
+                let pt = self.pt(p)?;
+                if pt.edges.is_empty() {
                     continue;
                 }
                 let mut allowed = true;
-                for &e in &edges {
+                for &e in &pt.edges {
                     let ed = self.edge(e)?;
                     if ed.tri12.is_none() || ed.tri21.is_none() {
                         allowed = false;
@@ -623,8 +643,12 @@ impl Object {
                     continue;
                 }
                 let new_level = !self.allowed_for_level(p, self.level)?;
-                for &e in &edges {
-                    let err = self.collapse_error(p, e)?;
+                let slot_cache = cache.get_mut(p).ok_or(Failed)?;
+                if slot_cache.0 != pt.stamp {
+                    self.collapse_errors(p, &mut slot_cache.1)?;
+                    slot_cache.0 = pt.stamp;
+                }
+                for (&e, &err) in pt.edges.iter().zip(&slot_cache.1) {
                     count += 1;
                     average += err;
                     let slot = if new_level { &mut best_nl } else { &mut best };
@@ -641,6 +665,10 @@ impl Object {
             let ed = self.edge(e)?;
             let kept = if ed.p[0] == Some(p) { ed.p[1] } else { ed.p[0] }.ok_or(Failed)?;
             self.create_edge_collapse(p, kept)?;
+            // the level counts as unsigned against the limit, as the C++ compares it
+            if self.level as u32 > max_window {
+                break;
+            }
         }
         Ok(())
     }
@@ -863,6 +891,14 @@ fn optimise(list: &mut AList<u16>, n: usize) -> Result<(), Failed> {
 /// `VIPM_Convert(u32(-1), 1.f, 1)`. `None` where the C++ answers NULL ("Can't make
 /// progressive") or stops on an assertion.
 pub(crate) fn convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]]) -> Option<VipmResult> {
+    vipm_convert(verts, faces, u32::MAX)
+}
+
+/// `VIPM_Convert(max_window, 1.f, 1)` over the given vertices (position and first texture
+/// coordinate) and faces: the collapses stop once the sliding window level passes
+/// `max_window` (the level compiler asks for 25).
+#[must_use]
+pub fn vipm_convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]], max_window: u32) -> Option<VipmResult> {
     let mut o = Object {
         pts: verts
             .iter()
@@ -875,6 +911,7 @@ pub(crate) fn convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]]) -> Option<Vipm
                 new_index: 0,
                 edges: Vec::new(),
                 tris: Vec::new(),
+                stamp: 0,
             })
             .collect(),
         edges: Vec::new(),
@@ -898,7 +935,7 @@ pub(crate) fn convert(verts: &[(Vec3, Vec2)], faces: &[[u16; 3]]) -> Option<Vipm
     if !o.valid().ok()? {
         return None;
     }
-    o.all_collapses(1.0).ok()?;
+    o.all_collapses(1.0, max_window).ok()?;
     o.sliding_windows().ok()
 }
 

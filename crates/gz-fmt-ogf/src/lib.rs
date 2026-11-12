@@ -41,6 +41,7 @@ pub use motion::{
 pub use obb::{min_box, rapid_box};
 pub use optimize::{optimize_faces, optimize_vertices};
 pub use vertex::{Vertex, VertexBuffer, VertexFormat};
+pub use vipm::{Swr, VipmResult, vipm_convert};
 pub use visual::{BufferRef, LodFacet, LodVertex, SlideWindow, SlideWindows, TreeDef, Visual};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]

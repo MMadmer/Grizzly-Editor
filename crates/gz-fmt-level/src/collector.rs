@@ -62,6 +62,11 @@ impl WeldGrid {
 
     /// The first vertex in list order that is similar to `v`.
     fn find(&self, verts: &[Vec3], v: Vec3) -> Option<u32> {
+        self.find_where(verts, v, |_| true)
+    }
+
+    /// The first vertex in list order that is similar to `v` and that `accept` takes.
+    fn find_where(&self, verts: &[Vec3], v: Vec3, accept: impl Fn(u32) -> bool) -> Option<u32> {
         let [cx, cy, cz] = self.cell_of(v);
         let mut best: Option<u32> = None;
         for dx in -1i64..=1 {
@@ -73,7 +78,7 @@ impl WeldGrid {
                         if best.is_some_and(|b| b <= i) {
                             continue;
                         }
-                        if verts.get(i as usize).is_some_and(|p| similar(*p, v, self.eps)) {
+                        if verts.get(i as usize).is_some_and(|p| similar(*p, v, self.eps)) && accept(i) {
                             best = Some(i);
                         }
                     }
@@ -261,6 +266,10 @@ pub struct CollectorPacked {
     vm_scale: Vec3,
     vm_eps: Vec3,
     cells: Vec<Vec<u32>>,
+    /// The same search in cells twice `EPS_L` wide: a cell list of the grid above holds its
+    /// vertices in index order, so its first similar one is the smallest similar index that
+    /// was put into that cell.
+    weld: WeldGrid,
 }
 
 impl CollectorPacked {
@@ -286,6 +295,7 @@ impl CollectorPacked {
                 half_cell(scale.z, CLP_MZ),
             ),
             cells: vec![Vec::new(); ((CLP_MX + 1) * (CLP_MY + 1) * (CLP_MZ + 1)) as usize],
+            weld: WeldGrid::default(),
         }
     }
 
@@ -311,9 +321,28 @@ impl CollectorPacked {
         }
     }
 
+    /// The cells `v_pack` puts a vertex at `p` into: its own and, per axis, the one `vm_eps`
+    /// further.
+    fn put_cells(&self, p: Vec3) -> ((u32, u32, u32), (u32, u32, u32)) {
+        (self.cell(p), self.cell(Vec3::new(p.x + self.vm_eps.x, p.y + self.vm_eps.y, p.z + self.vm_eps.z)))
+    }
+
     fn v_pack(&mut self, v: Vec3) -> u32 {
         let (ix, iy, iz) = self.cell(v);
-        if let Some(list) = self.cells.get(Self::cell_index(ix, iy, iz)) {
+        if v.is_finite() {
+            self.weld.sync(&self.verts, EPS_L);
+            let verts = &self.verts;
+            let this = &*self;
+            let found = self.weld.find_where(verts, v, |i| {
+                verts.get(i as usize).is_some_and(|&p| {
+                    let ((ax, ay, az), (ex, ey, ez)) = this.put_cells(p);
+                    (ix == ax || ix == ex) && (iy == ay || iy == ey) && (iz == az || iz == ez)
+                })
+            });
+            if let Some(i) = found {
+                return i;
+            }
+        } else if let Some(list) = self.cells.get(Self::cell_index(ix, iy, iz)) {
             for &i in list {
                 if self.verts.get(i as usize).is_some_and(|p| similar(*p, v, EPS_L)) {
                     return i;
@@ -387,6 +416,7 @@ impl CollectorPacked {
         for cell in &mut self.cells {
             cell.clear();
         }
+        self.weld = WeldGrid::default();
     }
 
     /// The collected soup as a collision form.
@@ -421,6 +451,38 @@ mod tests {
         }
         verts.push(v);
         (verts.len() - 1) as u32
+    }
+
+    /// The packed collector's weld is its grid's: the first similar vertex of the point's cell
+    /// list, the lists filled as the C++ fills them.
+    #[test]
+    fn packed_welding_matches_the_cell_scan() {
+        let mut rng = Rng(0x2545_F491_4F6C_DD1D);
+        let bb = Aabb { min: Vec3::splat(-10.0), max: Vec3::splat(10.0) };
+        let mut c = CollectorPacked::new(&bb, 0, 0);
+        let mut seen: Vec<Vec3> = Vec::new();
+        for n in 0..20000 {
+            // points on a coarse lattice, nudged within and past the epsilon, some on cell borders
+            let q = |r: &mut Rng| (r.next() % 41) as f32 * 0.5 - 10.0 + (r.unit() - 0.5) * 0.003;
+            let v = if n % 7 == 0 && !seen.is_empty() {
+                seen[(rng.next() % seen.len() as u64) as usize]
+            } else {
+                Vec3::new(q(&mut rng), q(&mut rng), q(&mut rng))
+            };
+            let (ix, iy, iz) = c.cell(v);
+            let expect = c.cells[CollectorPacked::cell_index(ix, iy, iz)]
+                .iter()
+                .copied()
+                .find(|&i| similar(c.verts[i as usize], v, EPS_L));
+            let got = c.v_pack(v);
+            match expect {
+                Some(i) => assert_eq!(got, i),
+                None => assert_eq!(got as usize, c.verts.len() - 1),
+            }
+            if seen.is_empty() || n % 3 == 0 {
+                seen.push(v);
+            }
+        }
     }
 
     #[test]

@@ -300,6 +300,32 @@ pub fn connect_by_edge_flags(start: u32, test: u32, start_edge: u16, test_edge: 
     is_soft_edge(start, start_edge) && is_soft_edge(test, test_edge)
 }
 
+/// `poolSS<T, granularity>` as far as the order of its addresses goes: a freed object is the
+/// first given out again (the free list is a stack), else the next slot after the last; blocks
+/// come at rising addresses. Where the C++ sorts objects by their pointers the compiler sorts by
+/// these, and so meets them in the C++ order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PoolSim {
+    free: Vec<u64>,
+    next: u64,
+}
+
+impl PoolSim {
+    /// `create`.
+    pub fn create(&mut self) -> u64 {
+        self.free.pop().unwrap_or_else(|| {
+            let a = self.next;
+            self.next += 1;
+            a
+        })
+    }
+
+    /// `destroy`.
+    pub fn destroy(&mut self, a: u64) {
+        self.free.push(a);
+    }
+}
+
 /// A mesh: the level's (`g_vertices`, `g_faces`) or an MU model's (`m_vertices`, `m_faces`).
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
@@ -307,6 +333,12 @@ pub struct Mesh {
     faces: Vec<Option<Face>>,
     vert_list: Vec<VertId>,
     face_list: Vec<FaceId>,
+    /// The address of every vertex and face as the C++ pools give them out.
+    vaddr: Vec<u64>,
+    faddr: Vec<u64>,
+    /// The vertex pool (the MU models share one: the caller moves it from model to model).
+    pub vpool: PoolSim,
+    pub fpool: PoolSim,
     /// Whether an invalid face is recorded (`Face::Failure`); an MU model's face records nothing.
     pub log_failures: bool,
     pub errors: MeshErrors,
@@ -369,7 +401,58 @@ impl Mesh {
     pub fn create_vertex_unlisted(&mut self, p: Vec3) -> VertId {
         let id = VertId(self.verts.len() as u32);
         self.verts.push(Some(Vertex { p, adjacents: Vec::with_capacity(4), ..Vertex::default() }));
+        let a = self.vpool.create();
+        self.vaddr.push(a);
         id
+    }
+
+    /// Every address moved up by a base: an MU model loaded after others in the pools they share.
+    pub fn rebase_pools(&mut self, vbase: u64, fbase: u64) {
+        for a in &mut self.vaddr {
+            *a += vbase;
+        }
+        for a in &mut self.faddr {
+            *a += fbase;
+        }
+        self.vpool.next += vbase;
+        self.fpool.next += fbase;
+        for a in &mut self.vpool.free {
+            *a += vbase;
+        }
+        for a in &mut self.fpool.free {
+            *a += fbase;
+        }
+    }
+
+    /// The next fresh slots of the two pools.
+    #[must_use]
+    pub fn pool_ends(&self) -> (u64, u64) {
+        (self.vpool.next, self.fpool.next)
+    }
+
+    /// Where the C++ pool put a vertex (see [`PoolSim`]).
+    #[must_use]
+    pub fn vertex_addr(&self, v: VertId) -> u64 {
+        self.vaddr.get(v.0 as usize).copied().unwrap_or(u64::MAX)
+    }
+
+    /// Where the C++ pool put a face.
+    #[must_use]
+    pub fn face_addr(&self, f: FaceId) -> u64 {
+        self.faddr.get(f.0 as usize).copied().unwrap_or(u64::MAX)
+    }
+
+    /// `vertices_isolate_and_pool_reload`'s pool: every listed vertex made again, in list order,
+    /// in a fresh pool.
+    pub fn reload_vertex_pool(&mut self) {
+        self.vpool = PoolSim::default();
+        for i in 0..self.vert_list.len() {
+            let v = self.vert_list[i];
+            let a = self.vpool.create();
+            if let Some(slot) = self.vaddr.get_mut(v.0 as usize) {
+                *slot = a;
+            }
+        }
     }
 
     /// `create_vertex`: a vertex at `p` with no normal, on the list.
@@ -383,6 +466,8 @@ impl Mesh {
     pub fn create_face_unlisted(&mut self) -> FaceId {
         let id = FaceId(self.faces.len() as u32);
         self.faces.push(Some(Face::default()));
+        let a = self.fpool.create();
+        self.faddr.push(a);
         id
     }
 
@@ -464,6 +549,9 @@ impl Mesh {
             self.face_list.swap_remove(at);
         }
         let Some(face) = self.faces.get_mut(f.0 as usize).and_then(Option::take) else { return };
+        if let Some(&a) = self.faddr.get(f.0 as usize) {
+            self.fpool.destroy(a);
+        }
         for v in face.v {
             self.prep_remove(v, f);
         }
@@ -474,8 +562,11 @@ impl Mesh {
         if unregister && let Some(at) = self.vert_list.iter().position(|&x| x == v) {
             self.vert_list.swap_remove(at);
         }
-        if let Some(slot) = self.verts.get_mut(v.0 as usize) {
-            *slot = None;
+        if let Some(slot) = self.verts.get_mut(v.0 as usize)
+            && slot.take().is_some()
+            && let Some(&a) = self.vaddr.get(v.0 as usize)
+        {
+            self.vpool.destroy(a);
         }
     }
 
@@ -657,14 +748,23 @@ impl Mesh {
     pub fn isolate_vertices(&mut self) -> usize {
         let before = self.vert_list.len();
         let verts = &mut self.verts;
+        let mut gone = Vec::new();
         self.vert_list.retain(|v| {
             let keep =
                 verts.get(v.0 as usize).and_then(Option::as_ref).is_some_and(|x| !x.adjacents.is_empty());
-            if !keep && let Some(slot) = verts.get_mut(v.0 as usize) {
-                *slot = None;
+            if !keep
+                && let Some(slot) = verts.get_mut(v.0 as usize)
+                && slot.take().is_some()
+            {
+                gone.push(*v);
             }
             keep
         });
+        for v in gone {
+            if let Some(&a) = self.vaddr.get(v.0 as usize) {
+                self.vpool.destroy(a);
+            }
+        }
         before - self.vert_list.len()
     }
 
@@ -745,8 +845,10 @@ impl Mesh {
         }
         for i in 0..vcount {
             let Some(&v) = self.vert_list.get(i) else { break };
-            let Some(vx) = self.vertex_mut(v) else { continue };
-            vx.adjacents.sort_unstable();
+            // the C++ sorts a vertex's faces by their addresses
+            let faddr = &self.faddr;
+            let Some(vx) = self.verts.get_mut(v.0 as usize).and_then(Option::as_mut) else { continue };
+            vx.adjacents.sort_unstable_by_key(|f| faddr.get(f.0 as usize).copied().unwrap_or(u64::MAX));
             let adj = vx.adjacents.clone();
             for f in &adj {
                 if let Some(face) = self.face_mut(*f) {

@@ -84,7 +84,8 @@ kept current: a finished package updates its row and adds what it learned.
 | `gz-scene` | done | `SceneState` in one store (objects `OrdMap`, per-class order, names, selection, `ToolSettings`, `BulkData` with the AI map in 4096-node tiles), `SceneCmd` (place, delete, rename, transform batches with the group rules, select, show, tool eyes / read-only, group / ungroup, property replaces checked by `serial`, mod marks, order, snap list, bulk, saved, touch); all 16 classes read / written in LTX and stream (`objects`), the main file + parts (`io`: LTX, binary `.level`, undo / recovery stream, unknown sections / chunks / refused versions kept); `props` (rows, merge, text set, labels / units / help); library, pick tree (`Derived` by scene + library rev), drop / snap, recovery (`backup\recovery`, the C++ manifest); 34 commands, `list_assets` Objects / Groups |
 | `gz-export-level` | done | The module's level layer of `EditorModScene.cpp`, pure over a scene snapshot + gathered disk state (`gather`): `.xspawn` (`op = add/start/remove`, `[path:]`, custom data with `[xms_order]`, fixed bones checked against the OGF, smart cover, lamp, zone shapes, every C++ warning, merge or mirror), `overlay.xcform`, cuts (+ `[cut_N]`), world-space `.ogf` overlay (parallel) + `[v_N]` registry; `%f`/`%g` exactly as UCRT (`cfmt`); `mod_export_spawn`, `mod_export_xcform`, `mod_export_cut`, `mod_export_ogf_probe`; `install` fills `gz-build`'s bake (the mirror pass + its note), `gz-world`'s `SceneStarts` (E201 is `gz-world`'s) and `gz-nq`'s `SceneLookup` (restrictors, story ids, way paths, level). Tests written, not run |
 | `gz-levelbuild` | done | The full level build: `build.prj` (static + MU objects, LODs merged into `level_lods*.dds`, hemi / sun / point lights, glows, portals, sectors, wallmark faces), `level.ltx`, `BuildGame` files, HOM/SOM, `build.aimap`, `build.details` + `build_details.dds`, `level.wallmarks`, scene stat; CForm; level graph, game graph + cross table (`CGameGraphBuilder`), multi-level merge (`CGraphMerger`); `editor.spawn` (spawn constructor, patrols, artefact points, graph embedded); `nav` = the engine's `ILevelGraph` lookups + A*; XrLC / xrDO / xrAI / the game as `tokio::process` jobs (`level_run`, group `game`, Stop = `taskkill /T`); 19 commands named as `gz-ui-level` expects + `level_rebuild_status` + `level_build action=`; the breakable / climable objects of `BuildGame` (`breakable`); the whole `Scene->Validate` (`validate`). Tests written, not run |
-| `gz-lc-light` | done | phase 8a: `XrLCLight` + `xrDO_Light` - the compiler's model (mesh, deflectors, lightmaps, MU models, `xrLC_GlobalData` as `LcGlobalData`), the ray model, the light of lightmaps, vertices, implicit textures, MU models and detail slots; see "Phase 8a" below. 38 tests, run and green |
+| `gz-lc-light` | done | phase 8a: `XrLCLight` + `xrDO_Light` - the compiler's model (mesh, deflectors, lightmaps, MU models, `xrLC_GlobalData` as `LcGlobalData`), the ray model, the light of lightmaps, vertices, implicit textures, MU models and detail slots; see "Phase 8a" below. 39 tests, run and green |
+| `gz-lc` | done | phase 8b: `XrLC`'s `CBuild::Run` whole (the phases, the OGF family, QSlim, NvTriStrip, NVMeshMender, the bounding spheres, the savers) and `xrDO_Light`'s pipeline; `Grizzly.exe -headless -compile <level folder>` / `-compile_details`; proven against the C++ compilers by `tools/qa/diff_compile.py`; see "Phase 8b" below. 16 tests, run and green |
 | `gz-lua` | done | LuaJIT 2.1 vendored (`mlua` 0.12, JIT off, count hook = instruction budget); `LuaHost` pool of states (one per caller, scripts kept per revision), `Script`, `Arg::{Value, Chunk}` (a text run in an empty env: the asset is the table LuaJIT builds), `call_omitting`; sandbox = base + string/table/math, the C++ reader's 18 globals; `vanilla_source` rewrites the fork's `//` `/* */` comments; tests written, not run |
 | `gz-pda` | done | `evaluate` (gz-luadata check, then the game's `normalize`), `Layout`/`Item`/... read as the C++ read the stack, `preview` block, `template`; `Preview` state machine (pages, vars, log, toasts, rows, scroll, keys, map zoom, boxes / hit test / `visible` in canvas units); `PdaService` (reader and layout `Query`s, W320 textures, list, `[pda] layout`); the build check; `content_create kind=pda` template; `pda_list`, `pda_get`, `pda_write`, `pda_delete`, `pda_use`, `pda_validate`; tests written, not run |
 | `gz-ui-app` | done | the Start page (`ShellBuilder::start_page`: New Project form, Open Folder via `rfd` on a thread of its own, search, Last Opened / Name sort, 232x184 cards with twin parents, previews decoded on the pools through a `Query` keyed by path + write time, `ShowsNoScene`, card menu, `dlg.delete_project` counted off the UI thread), Link Game page card, the Output Log (one body for the drawer and the Level panel `output_log`, cursor over `gz_log::Log`, distinct counting per window from "Project opened:", the `log_state` hook), Preferences (`preferences` tab: 44 rows of `EditorPreferences`/`LevelPreferences`, nav, search, Keyboard page over `shortcuts` with an Assign dialog `dlg.assign_shortcut`); command `project_browser_menu`. Every row is live (`object_flags` and `recovery_*` are in `gz-app`'s `PREFS`, not on the `preferences` wire). Tests written, not run |
@@ -1855,10 +1856,172 @@ lightmaps and vertex colours within a stated error (the BVH's triangle test is n
 are Rust's, the transparencies multiply in another order); the page layout (the D14 orders above move deflectors);
 the MU colours (other random directions).
 
+## Phase 8b: the compiler and its proof
+
+`crates/gz-lc` (on `gz-lc-light`, `gz-fmt-level`, `gz-fmt-ogf`, `gz-fmt-tex`, `gz-fmt-xr`, `gz-chunk`), 6.9k lines, 16
+tests run green (`cg.sh test -p gz-lc`, 0.6 s). Brief: `docs/rust/briefs/lc-pipeline.md`. The proof:
+`tools/qa/diff_compile.py` (the runs and the records) and `tools/qa/compare_compile.py` (the rules).
+
+**What it holds (the C++ it ports):**
+
+| Module | C++ |
+|---|---|
+| `lib` | `CBuild::Run` in its order, the `level` header, `Options` (the command line), `compile` / `compile_details`, the phase log of `cl_log.cpp` with each phase's seconds |
+| `load` | `CBuild::Load` (build.prj, the shader library, the textures with their `.thm` on every core), the paths of `fsgame.ltx` |
+| `geom` | `PreOptimize`, `CorrectTJunctions`, `xrPhase_AdaptiveHT` (tesselation, the hemisphere precalc, `u_SmoothVertColors`), `xrPhase_TangentBasis` |
+| `mender` | NVMeshMender (`NVMeshMender.cpp`, the one the build links; `NvMender2002` is dead code) |
+| `cform` | `CBuild::BuildCForm`, `SimplifyCFORM` (`xrOptimizeCFORM_qslim.cpp`) |
+| `qslim` | `XrQSlim`: `MxStdModel`, `MxQSlim`, `MxEdgeQSlim`, `MxHeap`, `MxQuadric3` |
+| `split` | `xrPhase_ResolveMaterials`, `Detach`, `xrPhase_UVmap`, `xrPhase_Subdivide`, `xrPhase_MergeGeometry` |
+| `ogf` | `OGF_Face*.cpp` (`_BuildVertex`, `Optimize`, `MakeProgressive` over `gz-fmt-ogf`'s VIPM, `Stripify`, `CalculateTB`) |
+| `stripify` | `nv_library` NvTriStrip, lists only, `xrStripify` |
+| `vcache` | the face order of D3DX9's `D3DXOptimizeFaces` (closed code): Forsyth's linear-speed vertex cache order |
+| `sphere` | `OGF_Face_Sphere.cpp` (`CalcBounds`), xrCore's miniball, `Mgc::MinSphere` with the UCRT `rand()` stream, MSVC's `std::random_shuffle` |
+| `tree` | `Flex2OGF`, the MU `calc_ogf` / `export_geometry` / `export_ogf`, `BuildSectors`, `SaveTREE`, `SaveSectors`, `SaveLights`, glows, portals, shaders, `level.geom`/`level.geomx` |
+| `details` | `xrCompileDO` over `gz-lc-light`'s detail light |
+
+`Grizzly.exe -headless -nodlg -compile <level folder> [flags]` and `-compile_details <level folder>`: the log the C++
+prints, phase by phase with seconds, on stdout; exit 0 or 1; on the caller's pool of every core
+(`available_parallelism`). The flags of `xrLC.cpp`: `-f` is the folder; `-nosun`, `-noise`, `-nosmg`, `-no_optimize`,
+`-no_invalidefaces`, `-att` are kept; `-silent`, `-o` (the options dialog) and `-keep_temp_files` (QSlim's SMF dumps)
+are taken and change nothing; `-gi` and `-net` are refused with a sentence (D24); any other is named in the log and ignored, as the C++ ignores it. xrDO_Light's
+`-net` the same. Wiring the compile into Play and the level build is the next pass.
+
+**The scenes** (`diff_compile.py` `SCENES`; each C++ run from a stage under `%TEMP%`, `-silent -flushlog`, ten minutes):
+
+- `mp_test` (the Play suite's): XrLC 18.1 / 18.0 s wall, 10.2 / 10.0 s CPU.
+- `l12u_control_monolith`, the middle scene: 410k collision faces, 84,652 subdivisions merged to 641, 749 visuals, 40 lights,
+  sectors and portals. XrLC 261.2 / 260.3 s wall, 992 / 1001 s CPU. The largest scene of `rawdata\levels` XrLC finishes
+  within the limit; it has no MU model.
+- The two smallest scenes with MU models do not finish within the limit: `l03u_agr_underground` (7 MU models, 15 references) passed it in
+  "Building lightmap 0" (its LMaps took 513 s), `mp_close_combat` (MU, LODs, details) in "LIGHT: Implicit". The record
+  refuses an unfinished run and starts no second one. l03u's `build.cform`, written at 25 s, was read from the stage
+  before the end: its 5,661 MU triangles and their records equal the Rust ones byte for byte. The MU OGFs and the MU
+  light are therefore not proven against the C++.
+- `mp_close_combat` for the detail compiler alone (`DETAILS_ONLY`): both detail compilers read the same `build.prj`,
+  `build.details` and the Rust compiler's `build.cform` / `build.lights` (equal to the C++ ones under the rules below
+  on the other scenes). xrDO_Light 74.5 / 74.4 s wall.
+
+**The rules** (`compare_compile.py`'s docstring; everything else byte for byte):
+
+- `build.lights`: byte for byte.
+- `build.cform`: each triangle's last word left out (the C++ writes the low half of a face pointer, the Rust the index);
+  `b_rc_face`'s padding after the material and after `reserved` left out (never set in the C++).
+- `level.cform`: else the triangles as a multiset; else - QSlim re-rates the edges around a contraction in the order
+  of their heap addresses (`MxQSlim.cpp` `apply_contraction`), so ties fall another way and cpp1 and cpp2 differ too
+  (l12u: 383,572 / 383,574 triangles) - the triangle count equal, the triangles one side alone has no more than between
+  the C++ runs (at least 1e-4 of all), every material word's area within 1e-4. l12u: 16 one-sided of 383,572.
+- `level`: chunks 1, 2, 4, 6, 7, 8 byte for byte; visuals sub-chunk by sub-chunk, a progressive visual's fast path with
+  its sliding windows' four `reserved` words left out (never set: cpp1 and cpp2 differ there). l12u: 739 of 749 visuals
+  byte for byte, 10 under this rule. The bounding spheres are byte for byte (the old 1e-4 bound is gone).
+- `level.geom` / `level.geomx`: the header's quality left out (never set in the C++); vertex buffers byte for byte but
+  the light bytes (under the light bounds) and the lightmap coordinates (a deflector the light finds flat shrinks to a
+  texel or two, so a light difference moves the deflectors after it in the page); index buffers and sliding windows
+  byte for byte, but a non-progressive visual's fast path in `level.geomx` as a multiset of triangles by corner
+  positions with the same vertex positions (D3DX9's face order).
+- The lightmaps: every texel inside each lightmapped triangle sampled through each side's own coordinates; the implicit
+  textures texel by texel; `level.details` slot by slot.
+- `recalculation_data_slots.details`: xrDO_Light's state for its own next partial relight; not written (the resumed
+  light is not ported, phase 8a).
+
+**The light bounds** (per channel in 0..255 steps, mean absolute error / 99th percentile): lightmaps 3.0 / 16, vertex
+colours 2.0 / 16, details 0.5 / 2. The floor, cpp1 against cpp2, is zero on every channel of both scenes and on the
+details. What the bounds allow is what the port may differ in: the DXT5 encoder (NVTT in the C++, texpresso here - a flat
+128 decodes as 126 against 128, a third of a 5-bit step), another ray-triangle test than Opcode's on grazing and
+coincident faces, the transparencies multiplied nearest first, Rust's `sin`/`cos`/`pow`. Measured:
+
+| | 1.r | 1.g | 1.b | 1.a sun | 2.r | 2.g | 2.b | 2.a hemi | vertex |
+|---|---|---|---|---|---|---|---|---|---|
+| mp_test | 0 / 0 | 0 / 0 | 0 / 0 | 0.03 / 0 (max 96) | 1.99 / 2 | 0.02 / 0 | 1.99 / 2 | 0.01 / 0 | 0 / 0 |
+| l12u | 0.73 / 8 | 0.63 / 6 | 0.65 / 8 | 0.003 / 0 | 0.01 / 0 | 0.01 / 0 | 0.01 / 0 | 0.24 / 4 | 0.005 / 0 |
+
+mp_test's 2.r / 2.b is the encoder alone (page 2's colour is the sun, flat 128). Its sun's max 96 is the corner under
+the small box: the C++ finds one of four samples of the floor's border texels lit through the seam of two coincident
+walls, the Rust none, and so keeps two of the box's sides as one-texel deflectors where the C++ keeps them lit (24
+lightmap coordinates of 136). `level.details` of mp_close_combat: byte for byte. The pictures
+(`Intermediate/compile/<scene>/pictures`, each page of both sides, the Rust page sampled into the C++ layout and the
+difference x8) were looked at: the same spots, gradients and shadows in the same places, no banding, seam, leak or dark
+border; the difference is a speckle of the red and blue 5-bit steps and the triangles' outermost texels.
+
+**Phase times** (seconds and CPU load, CPU time over wall time; the C++ log is read every 0.1 s, so its phases are
+known to about 0.2 s; a phase only one side names counts with the one before it):
+
+| phase | l12u C++ | load | l12u Rust | load | mp_test C++ | mp_test Rust |
+|---|---|---|---|---|---|---|
+| Optimizing | 0.88 | 0.9 | 0.78 | 3.0 | 0.22 | 0.02 |
+| Adaptive HT | 21.28 | 6.6 | 1.39 | 7.1 | 0.98 | 0.00 |
+| Building normals | 0.66 | 1.0 | 0.52 | 1.0 | 0.22 | 0.00 |
+| Building collision database | 2.06 | 0.9 | 2.03 | 4.2 | 0.33 | 0.00 |
+| Building tangent-basis | 1.88 | 0.9 | 1.39 | 0.9 | 0.22 | 0.00 |
+| Building rcast-CFORM model | 0.99 | 0.7 | 0.70 | 2.2 | 0.22 | 0.00 |
+| Resolving materials | 0.64 | 0.9 | 0.23 | 0.9 | 0.00 | 0.00 |
+| Build UV mapping | 1.31 | 0.9 | 0.66 | 3.5 | 0.22 | 0.00 |
+| Subdividing geometry | 0.98 | 0.9 | 0.17 | 9.9 | 0.22 | 0.00 |
+| LIGHT: LMaps | 115.20 | 5.9 | 21.00 | 13.5 | 7.70 | 1.66 |
+| LIGHT: Vertex | 4.25 | 1.8 | 0.59 | 4.6 | 3.05 | 0.00 |
+| LIGHT: Merging lightmaps (+ Saving) | 30.51 | 1.0 | 17.95 | 12.8 | 0.86 | 0.11 |
+| Merging geometry | 20.67 | 3.2 | 5.72 | 10.1 | 0.22 | 0.00 |
+| Converting to OGFs | 53.61 | 1.0 | 3.95 | 12.3 | 0.88 | 0.02 |
+| Building sectors (+ Saving) | 2.78 | 0.8 | 0.48 | 1.2 | 0.55 | 0.00 |
+| total | 261.22 | 3.8 | 57.76 | 11.3 | 18.09 | 2.16 |
+
+The detail compiler on mp_close_combat: xrDO_Light 74.51 s at load 1.5, the Rust 9.95 s at 13.1. Without a C++ end:
+l03u 137.7 s whole in Rust (LMaps 84 s, merging 34 s) against more than 600 s; mp_close_combat 299 s (the implicit
+light 152 s at 14 cores) against more than 600 s in the C++'s implicit light alone. `compare_compile.phase_table`
+fails a Rust phase or run longer than the C++ one by more than 0.25 s. The C++ sets its own process to idle priority
+in its log loop and lights on six threads, hence its loads.
+
+**What the comparison found and was fixed** (in `gz-lc` unless named):
+
+- The MU and level pools: the C++ sorts vertices, faces, adjacency and edges by address in a dozen places
+  (tesselation, smoothing, `BuildCForm`, the tangent basis, `export_cform_game`, `calc_normals`); `gz-lc-light`'s
+  `PoolSim` gives every vertex and face the address its `poolSS` (LIFO free list) gives, the MU models chained through
+  one pool, `reload_vertex_pool` after the subdivision, the adjacency sorted by it.
+- `random_shuffle` of `LMapsLocal`: the main thread's `rand()` never seeded before it, so the stream is fixed and the
+  page layout follows it (`MsvcRand::shuffle`; this replaces 8a's "the deflector list is not shuffled").
+- MSVC's `std::sort` (`gz-lc-light` `crt.rs`) for `calc_materials`, whose order of equal materials the MU OGFs follow.
+- The tangent basis took two texture coordinates within `EPS_L` as one; `find_same_vertex` uses `fsimilar`'s `EPS`.
+- `ValidateMergeLinearSize`'s `4*c_SS_maxsize/3` is integer arithmetic: 42 m, not 42.67.
+- `MergeGeometry` takes only a volume below `flt_max`.
+- gz-fmt-ogf's VIPM stops at `max_window` (`vipm_convert`), as `CalculateAllCollapses` does.
+- Speed, each the same bytes: the VIPM collapse errors cached per point (the C++ caches the last point's quadric;
+  `gz-fmt-ogf`); the stripify fast path's face order linear-time; `MergeGeometry` by `FaceEqual` key; the UV mapping's
+  face areas taken once; `SimplifyCFORM`'s constraints and every edge rating in parallel, the face marks counted
+  instead of written; `CollectorPacked`'s weld through a hash grid that answers the same first vertex
+  (`gz-fmt-level`, tested against the cell scan); the multiple-edge search in parallel. Converting to OGFs went from
+  97 s to 4 s on l12u, the whole compile from 167 s to 58 s.
+
+**Decisions:**
+
+- D14 as built: an order the C++ takes from its pools or from a fixed `rand` stream is reproduced (above); one it takes
+  from the heap is stated as a rule: QSlim's edges (`xr_new`, here in the order made), and the pool blocks themselves -
+  l03u's C++ face pool put its third block below the first two (the heap reused freed memory), so from there its face
+  order sorts the newest faces first; PoolSim assumes blocks in the order they are made. l12u and mp_test are not
+  touched by it.
+- The MU light runs whole inside "LIGHT: Starting MU" on every core; the C++ starts a thread there and waits for it in
+  "LIGHT: Waiting for MU-thread". On mp_close_combat that is 5.5 s.
+- `build.err` (the invalid-face report) is written into the level folder, beside the files.
+- `xrPhase_AdaptiveHT_qslim.cpp` is commented out in the C++ (the tesselation alone is the phase).
+- The C++ log window is not read for times (its thread answers one message per 200 ms); the compilers run with
+  `-flushlog` and their log file is followed instead.
+
+**Untouched:** `find D:/XFinedProjects "D:/Games/Dead Air/modules" -newermt "2026-11-12 13:27:30"` found nothing
+before the first run (13:37) and nothing after the last (15:48): 0 entries both times. No process of the
+compilers is left, no `gzlc_*` stage under `%TEMP%`; the scratch copies are gone.
+
 ## For the plan
 
 What `docs/RUST_MIGRATION.md` (and CLAUDE.md where named) should say after the reviewer's pass; the lead edits
 them.
+
+- **Phase 8, the gate of the compilers** (phase 8b as built): the proof is `tools/qa/diff_compile.py` with the rules of
+  `compare_compile.py` (listed in "Phase 8b" above); the middle scene is `l12u_control_monolith` (sectors, portals,
+  lights); neither of the two smallest scenes with MU models finishes XrLC within ten minutes, so the MU OGFs and the MU light are proven by
+  `gz-lc-light`'s tests and l03u's `build.cform` only, and the detail compiler on `mp_close_combat` against the
+  Rust-made `build.cform`. The gate's "within ten minutes" or its "MU models" has to give; the plan should say which.
+- **D14** should read: "Orders the C++ takes from its own pools or from a fixed `rand` stream are reproduced; orders
+  from heap addresses are stated as comparison rules." 
+- **Section 9** gains the compile's rules (above), and the light bounds with what they allow.
 
 - **Section 9, the comparison rules of the level exports and the level build** (`diff_editors.py` `FILE_RULES`,
   the `cmp_*` functions). Byte for byte unless named here; no broad ignore:

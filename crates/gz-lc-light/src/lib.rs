@@ -35,6 +35,7 @@
 //! - [`light_details`] / [`slot_light`] - `xrCompileDO`.
 
 mod color;
+pub mod crt;
 mod data;
 mod deflector;
 mod detail;
@@ -78,8 +79,8 @@ pub use light::{
 pub use lightmap::{Lightmap, LightmapPage, PageMask, Rect, merge_lightmaps};
 pub use mesh::{
     BACKFACE_FLAG, Basis, DeflId, EDGE2IDX, EDGE2IDX3, Face, FaceFlags, FaceId, IDX2EDGE, Mesh, MeshErrors,
-    NO_SM_GROUP, NO_VERT, Smoothing, Tcf, VertId, Vertex, area_of, barycentric, connect_by_edge_flags,
-    is_inside, is_soft_edge,
+    NO_SM_GROUP, NO_VERT, PoolSim, Smoothing, Tcf, VertId, Vertex, area_of, barycentric,
+    connect_by_edge_flags, is_inside, is_soft_edge,
 };
 pub use mu::{
     MuEnv, MuModel, MuReference, Subdiv, cache_opacity, light_mu, linear_regression, optimize_parameters,

@@ -34,6 +34,17 @@ pub struct Cli {
     pub bad_ui_scale: bool,
     /// Options nobody knows: named in the log, never fatal.
     pub unknown: Vec<String>,
+    /// `-compile <level folder> [flags]`: the level compiler on the folder's `build.prj`, then
+    /// exit (`-compile_details`: the detail compiler). Every option after the folder is the
+    /// compiler's.
+    pub compile: Option<(CompileWhat, PathBuf, Vec<String>)>,
+}
+
+/// Which compiler `-compile` runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompileWhat {
+    Level,
+    Details,
 }
 
 impl Cli {
@@ -57,6 +68,15 @@ impl Cli {
                 "log_echo" | "log-echo" => cli.echo = true,
                 "iconsheet" => cli.iconsheet = true,
                 "dump_commands" => cli.dump_commands = true,
+                "compile" | "compile_details" => {
+                    let what = if name == "compile" { CompileWhat::Level } else { CompileWhat::Details };
+                    if let Some(folder) = it.next() {
+                        let flags: Vec<String> = it.by_ref().collect();
+                        cli.compile = Some((what, PathBuf::from(folder), flags));
+                    } else {
+                        cli.unknown.push(arg);
+                    }
+                }
                 "uiscale" => match it.next().and_then(|v| v.trim().parse::<f32>().ok()) {
                     Some(v) if (0.5..=4.0).contains(&v) => cli.ui_scale = Some(v),
                     _ => cli.bad_ui_scale = true,
@@ -93,5 +113,15 @@ mod tests {
         assert_eq!(cli(&[]).home(Some("C:/b".into()), root), PathBuf::from("C:/b"));
         assert_eq!(cli(&[]).home(Some("  ".into()), root), root);
         assert_eq!(cli(&[]).home(None, root), root);
+    }
+
+    #[test]
+    fn the_compiler_takes_every_option_after_its_folder() {
+        let c = cli(&["-headless", "-compile", "D:/levels/x", "-nosun", "-noise"]);
+        let (what, folder, flags) = c.compile.unwrap();
+        assert_eq!(what, CompileWhat::Level);
+        assert_eq!(folder, PathBuf::from("D:/levels/x"));
+        assert_eq!(flags, vec!["-nosun".to_owned(), "-noise".to_owned()]);
+        assert!(c.headless);
     }
 }
