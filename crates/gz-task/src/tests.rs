@@ -164,3 +164,25 @@ fn a_request_scope_learns_the_jobs_started_for_it() {
     assert_eq!(scope.ids(), vec![inside, spawned]);
     assert!(!scope.ids().contains(&outside));
 }
+
+#[test]
+fn a_closure_run_on_another_thread_for_a_request_keeps_its_scope() {
+    let rt = runtime();
+    let jobs = Jobs::new(rt.exec());
+    let quick = |_| async { Ok(serde_json::Value::Null) };
+    let scope = crate::JobScope::default();
+    // what the UI thread's queue does: the request's task takes its scope along, the closure
+    // runs later on a thread of its own inside it
+    let taken = rt.block_on(crate::in_scope(scope.clone(), async { crate::current_scope() }));
+    let (j, s) = (jobs.clone(), taken.unwrap());
+    let on_thread = std::thread::spawn(move || {
+        crate::in_scope_sync(s, || {
+            let _enter = rt.exec().handle().enter();
+            j.start("a", None, "A", quick).unwrap()
+        })
+    })
+    .join()
+    .unwrap();
+    assert_eq!(scope.ids(), vec![on_thread]);
+    assert!(crate::current_scope().is_none());
+}

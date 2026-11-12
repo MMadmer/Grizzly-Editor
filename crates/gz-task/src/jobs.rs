@@ -184,8 +184,9 @@ fn now_ms() -> u64 {
 }
 
 /// The jobs one request started: a command run inside [`in_scope`] records here every job it
-/// starts, from its own task and from the tasks it spawns through [`Executors::spawn`]. The MCP
-/// endpoint asks it when a command outlasts the request's timeout.
+/// starts, from its own task, from the tasks it spawns through [`Executors::spawn`] and from a
+/// closure it queues for another thread and runs there inside [`in_scope_sync`] (the UI thread's
+/// queue does). The MCP endpoint asks it when a command outlasts the request's timeout.
 #[derive(Clone, Debug, Default)]
 pub struct JobScope(Arc<Mutex<Vec<JobId>>>);
 
@@ -208,8 +209,15 @@ pub async fn in_scope<F: Future>(scope: JobScope, fut: F) -> F::Output {
     SCOPE.scope(scope, fut).await
 }
 
+/// Runs `f` for a request on a thread that is not the request's task - a closure queued for
+/// the UI thread: every job started inside it is recorded in `scope`.
+pub fn in_scope_sync<R>(scope: JobScope, f: impl FnOnce() -> R) -> R {
+    SCOPE.sync_scope(scope, f)
+}
+
 /// The scope of the task that asks, when it runs for a request.
-pub(crate) fn current_scope() -> Option<JobScope> {
+#[must_use]
+pub fn current_scope() -> Option<JobScope> {
     SCOPE.try_with(Clone::clone).ok()
 }
 

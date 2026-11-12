@@ -49,8 +49,14 @@ impl UiQueue {
             if !*self.open.lock() {
                 return Err(no_window());
             }
+            // the closure works for the request that queued it: a job it starts is that request's
+            let scope = gz_task::current_scope();
             self.jobs.lock().push(Box::new(move |shell, ctx| {
-                let _ = tx.send(f(shell, ctx));
+                let answer = match scope {
+                    Some(scope) => gz_task::in_scope_sync(scope, || f(shell, ctx)),
+                    None => f(shell, ctx),
+                };
+                let _ = tx.send(answer);
             }));
         }
         self.wake.ping();
@@ -63,7 +69,13 @@ impl UiQueue {
         if !*self.open.lock() {
             return;
         }
-        self.jobs.lock().push(Box::new(f));
+        match gz_task::current_scope() {
+            Some(scope) => self
+                .jobs
+                .lock()
+                .push(Box::new(move |shell, ctx| gz_task::in_scope_sync(scope, || f(shell, ctx)))),
+            None => self.jobs.lock().push(Box::new(f)),
+        }
         self.wake.ping();
     }
 
