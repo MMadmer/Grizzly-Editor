@@ -582,7 +582,11 @@ Gate: `test_properties`, `test_world`, `tools/mcp/test_server_lifecycle.py`,
 ### Phase 7 - The cutover
 
 - Every QA suite green against the Rust editor; the parity ledger complete; the game's
-  suites green on its output.
+  checks that take the editor's output green on it: `run_lua.py test_examples.lua`,
+  `test_pda_layout.lua`, `Run-NqQa.ps1 -Scenario PdaModule`, `Run-ScreensQa.ps1 -Part
+  Descriptions`, and a level started by Play loaded by the game. (`Run-ModsQa.ps1` and
+  `Run-NqQa.ps1 -Scenario Scout` make their own modules and releases: they prove the game's
+  side of the contract, not the editor's output.)
 - One commit deletes the C++ editor and the engine libraries only it used. What the
   compilers still need stays until phase 8.
 - `CLAUDE.md`, `tools/mcp/AI_SETUP.md` and `README.md` are rewritten for the new editor;
